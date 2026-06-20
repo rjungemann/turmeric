@@ -1,0 +1,19 @@
+;; return-type-register-class-ok -- positive control for TUR-E0707.
+;; An INTEGER LITERAL returned where a float is declared is a coercion, not a
+;; register-class conflict: it is widened to the float in place (the C codegen
+;; emits `42.0`, not a reinterpreted int), exactly as numeric literals coerce in
+;; argument and binding positions.  Both a plain defn and an instance-method body
+;; exercise the widening; dividing by a fractional float proves the result is a
+;; genuine xmm float (42.0 / 8.0 = 5.25, 7.0 / 2.0 = 3.5), not a truncated int.
+(defn f [] : float 42)
+
+(defclass ToFloat [a]
+  (to-float [x : a] : float))
+(defstruct W [n : int])
+(definstance ToFloat [W]
+  (to-float [x : W] : float 7))
+
+(defn main [] : int
+  (println (/ (f) 8.0))                          ;; 5.25
+  (println (/ (.to-float (make-struct W 0)) 2.0)) ;; 3.5
+  0)

@@ -1,0 +1,11 @@
+;; return-type-register-class-float-struct -- negative control for TUR-E0707.
+;; A function declaring a struct return whose body yields a float crosses the
+;; register-class boundary: the float body is an xmm-register value, while a
+;; struct handle rides the int64 general-purpose carrier.  The nominal-conflict
+;; check (TUR-E0001) tolerates a non-struct body as a carrier bridge, but a
+;; float specifically is a real xmm-vs-GP miscompile, caught here instead.
+(defstruct Pt [x : int y : int])
+
+(defn h [] : Pt 7.1)
+
+(defn main [] : int 0)

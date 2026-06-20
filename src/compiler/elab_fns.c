@@ -2550,6 +2550,39 @@ Expr *elab_defn(Elab *e, const Form *call) {
         return NULL;
     }
 
+    /* float-register-class-returns: reject a body whose register class differs
+     * from the declared return's -- a float (xmm) on one side and a concrete
+     * non-float (int64 GP) on the other.  This is the one carrier-tolerated
+     * return mismatch that is a genuine xmm0-vs-rax miscompile, not a benign
+     * same-register reinterpret.  First exempt the int-literal -> float coercion
+     * (widen the literal in place, mirroring numeric-literal coercion in
+     * argument/binding positions) so it stays a coercion, not a conflict.  Skip
+     * the deferred (lazy) probe, whose body is a nil placeholder, and an inline-C
+     * body, whose value type is fiat (trusted to match the declared return -- it
+     * is elaborated as TY_NIL, not its real register class). */
+    if (!lazy_defer && body && body->kind != EX_INLINE_C) {
+        if (!rc_widen_int_literal_to_float_return(return_kind, body) &&
+            return_type_register_class_conflict(return_kind, body->type)) {
+            Buf gb; buf_init(&gb);
+            type_print(&gb, body->type);
+            buf_putc(&gb, '\0');
+            const char *want = return_struct_def ? return_struct_def->name
+                             : return_adt_def    ? return_adt_def->name
+                             : typekind_to_string(return_kind);
+            diag_emit_with_code(DIAG_ERROR, body->span,
+                TUR_E0707_RETURN_REGISTER_CLASS_MISMATCH,
+                "function '%s' declares return type '%s' but its body returns %s "
+                "-- a float and a non-float live in different register classes "
+                "(xmm vs general-purpose), so this is a register-class miscompile, "
+                "not a tolerable carrier bridge",
+                name_f->as.sym->name, want, gb.data);
+            buf_free(&gb);
+            e->scope = inner.parent;
+            scope_free(&inner);
+            return NULL;
+        }
+    }
+
     /* TY4: reject returning a borrow of a function-local (would dangle).  The
      * inner scope is still current here; binding depths were stamped at
      * creation, so the check only reads the elaborated body. */

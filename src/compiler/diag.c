@@ -187,6 +187,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0704_HANDLER_COMPOSE_UNIMPL:           return "TUR-E0704";
         case TUR_E0705_POLY_CLOSURE_RESULT_TYVAR:        return "TUR-E0705";
         case TUR_E0706_SERIAL_CONTEXT_NOT_CAPTURABLE:    return "TUR-E0706";
+        case TUR_E0707_RETURN_REGISTER_CLASS_MISMATCH:   return "TUR-E0707";
         /* ET4: effect scope errors */
         case TUR_E0250_ROW_VAR_ESCAPES_SCOPE:            return "TUR-E0250";
         case TUR_E0253_EFFECT_NOT_IN_SCOPE:              return "TUR-E0253";
@@ -289,6 +290,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0704") == 0) return TUR_E0704_HANDLER_COMPOSE_UNIMPL;
     if (strcmp(s, "TUR-E0705") == 0) return TUR_E0705_POLY_CLOSURE_RESULT_TYVAR;
     if (strcmp(s, "TUR-E0706") == 0) return TUR_E0706_SERIAL_CONTEXT_NOT_CAPTURABLE;
+    if (strcmp(s, "TUR-E0707") == 0) return TUR_E0707_RETURN_REGISTER_CLASS_MISMATCH;
     /* ET4: effect scope errors */
     if (strcmp(s, "TUR-E0250") == 0) return TUR_E0250_ROW_VAR_ESCAPES_SCOPE;
     if (strcmp(s, "TUR-E0253") == 0) return TUR_E0253_EFFECT_NOT_IN_SCOPE;
@@ -1536,6 +1538,33 @@ static const DiagExplanation diag_explanations_[] = {
       "state into a single Serializable struct passed as a tail call's argument\n"
       "  (do (init) (serial-shift k v) (run-loop state))\n"
       "-- or move the non-capturable work outside the serial-reset boundary.\n",
+    },
+    /* float-register-class-returns */
+    { TUR_E0707_RETURN_REGISTER_CLASS_MISMATCH,
+      "TUR-E0707: return type / body register-class mismatch\n"
+      "\n"
+      "A function's declared return type and the type of its body must occupy\n"
+      "the same machine register class.  `int`, `cstr`, `bool`, opaque handles,\n"
+      "and struct/ADT handles all ride the int64 general-purpose register, so\n"
+      "the ABI tolerates swapping them in the result position -- a no-op bitwise\n"
+      "reinterpret.  A `float`/`float32`/`float64`, by contrast, lives in a\n"
+      "floating-point (xmm) register.  Returning a float where the declared\n"
+      "return is a non-float (or vice versa) is a genuine register-class\n"
+      "miscompile -- the caller reads xmm0 while the callee left the value in\n"
+      "rax (or the reverse).\n"
+      "\n"
+      "Examples triggering this error:\n"
+      "  (defn g [] : int   7.1)   ; float body, int return\n"
+      "  (defn h [] : Pt    7.1)   ; float body, struct return\n"
+      "\n"
+      "Fix: make the body's register class match the declared return -- convert\n"
+      "explicitly with (as int expr) / (as float expr), or correct whichever of\n"
+      "the two annotations is wrong.\n"
+      "\n"
+      "Note: an *integer literal* returned where a float is declared (e.g.\n"
+      "  (defn f [] : float 42)\n"
+      ") is NOT an error -- it is widened to the float in place, exactly as a\n"
+      "numeric literal coerces in argument and binding positions.\n",
     },
 };
 

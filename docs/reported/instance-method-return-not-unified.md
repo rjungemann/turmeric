@@ -12,6 +12,42 @@ severity: Medium. A function body may produce a value of a completely unrelated
 status: PARTIALLY RESOLVED
 ---
 
+## Status: float-vs-non-float register-class returns now rejected (2026-06-20)
+
+The float register-class slice flagged as a candidate follow-up below is now
+fixed for **both** the `defn` and `definstance` paths. A float
+(`float`/`float32`/`float64`) lives in an xmm register while `int` / `cstr` /
+`bool` / opaque / struct / ADT handles all ride the int64 GP register, so a
+float-vs-non-float result is a genuine xmm0-vs-rax miscompile (the same hazard
+the `TUR-E0705` poly-closure guard rejects), not a soundly-tolerable carrier
+bridge. It is now a hard `TUR-E0707`.
+
+- Sibling helper `return_type_register_class_conflict` (`src/compiler/elab_core.c`,
+  declared in `elab_internal.h`): true iff exactly one side is a floating kind
+  and the other is a concrete, register-pinned non-float; tyvar / unknown /
+  never / any sides are tolerated.
+- The int-literal -> float coercion is exempted and widened in place by
+  `rc_widen_int_literal_to_float_return` (an `EX_INT_LIT` body whose declared
+  return is float becomes an `EX_FLOAT_LIT`, so codegen emits `42.0`), mirroring
+  numeric-literal coercion in argument/binding positions.
+- `defn`: checked in `elab_defn` (`src/compiler/elab_fns.c`), after the nominal
+  check, skipping the lazy-probe placeholder and inline-C bodies (fiat TY_NIL).
+- `definstance`: checked in pass 2 (`src/compiler/elab_typeclasses.c`) against a
+  new `InstMethodPass.ret_kind`. Calibrated for the typeclass int64-carrier ABI:
+  a non-float-declared method with a float instance body (e.g. `Num`'s
+  `(add [x y] : int)` for a float32 instance) is the deliberate carrier bridge
+  and stays accepted; only a method that genuinely COMMITS to a float return and
+  whose body yields a concrete non-float is rejected.
+- New code `TUR_E0707_RETURN_REGISTER_CLASS_MISMATCH` (`src/compiler/diag.{h,c}`)
+  with code string, reverse lookup, and a `tur explain TUR-E0707` long-form entry.
+- Fixtures: `errors/return-type-register-class-int-float`,
+  `errors/return-type-register-class-float-int`,
+  `errors/return-type-register-class-float-struct`,
+  `errors/return-type-register-class-instance-float-struct` (negatives), and
+  `return-type-register-class-ok` (positive control locking in the
+  int-literal -> float widening for both a defn and an instance method).
+  `bash tests/run.sh`: 1702 passed, 0 failed.
+
 ## Status: nominal-identity conflicts now rejected (2026-06-20)
 
 The carrier-safe slice of this gap is fixed for **both** the ordinary `defn`
@@ -49,10 +85,11 @@ carrier ABI deliberately unifies their representation:
 - A bare primitive where a nominal struct/ADT/opaque is declared -- the
   carrier-handle bridge (`#{Unsafe}` inline-C and generic carrier code legitimately
   return an int64 handle for a nominal type).
-- Float register-class divergence (`: float` body `42`, `: Pt` body `7.1`) --
-  left tolerated for now; int->float coercion is common, so rejecting it needs a
-  separate, calibrated pass (candidate follow-up: reject float-vs-non-float
-  return only, gated like the existing TUR-E0705 register-class checks).
+
+(Float register-class divergence -- `: float` body returning a non-float, or a
+non-float return with a float body -- was the remaining register-class slice and
+is now **resolved** as `TUR-E0707`; see the status section at the top. Only the
+same-register-class scalar/handle carrier bridges above remain open.)
 
 These are genuinely a carrier-ABI consequence, not an elaboration bug: rejecting
 them at the type level would fight the representation bridges the rest of the

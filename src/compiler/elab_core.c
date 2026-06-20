@@ -1695,6 +1695,40 @@ bool return_type_nominal_conflict(const StructDef *ret_struct,
     return ba != ret_adt;                      /* different ADT, or a struct body */
 }
 
+/* float-register-class-returns: see elab_internal.h. */
+static bool rc_is_float_kind(TypeKind k) {
+    return k == TY_FLOAT || k == TY_FLOAT32 || k == TY_FLOAT64;
+}
+/* A kind whose register class is not yet pinned to a concrete machine class:
+ * a type variable (could resolve to anything), an inferred/unknown placeholder,
+ * the bottom type `!`, or the boxed `any` carrier.  Tolerated on either side --
+ * none is a concrete cross-register-class result. */
+static bool rc_is_unpinned_kind(TypeKind k) {
+    return k == TY_TYVAR || k == TY_UNKNOWN || k == TY_NEVER || k == TY_ANY;
+}
+bool return_type_register_class_conflict(TypeKind declared, Type body) {
+    bool decl_float = rc_is_float_kind(declared);
+    bool body_float = rc_is_float_kind(body.kind);
+    /* Same register class (both float or both non-float): no cross-class clash.
+     * Same-GP-register non-float mismatches (cstr-where-int, bare-int-where-
+     * handle) are the deliberate int64 carrier bridges -- left to a future
+     * carrier-aware return unification, not this register-class check. */
+    if (decl_float == body_float) return false;
+    /* Exactly one side is float (always concrete); the other must be a concrete,
+     * register-pinned non-float to be a true cross-class result. */
+    if (rc_is_unpinned_kind(declared) || rc_is_unpinned_kind(body.kind))
+        return false;
+    return true;
+}
+bool rc_widen_int_literal_to_float_return(TypeKind declared, Expr *body) {
+    if (!body || !rc_is_float_kind(declared) || body->kind != EX_INT_LIT)
+        return false;
+    body->as.f = (double)body->as.i;
+    body->kind = EX_FLOAT_LIT;
+    body->type = type_from_kind(declared);
+    return true;
+}
+
 /* TY4: borrow referent extraction -- see elab_internal.h.
  *
  * Looks through result-position wrappers (do/let/letrec bodies and both `if`

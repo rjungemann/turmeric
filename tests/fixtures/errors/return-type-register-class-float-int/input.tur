@@ -1,0 +1,9 @@
+;; return-type-register-class-float-int -- negative control for TUR-E0707.
+;; A function declaring `: int` whose body yields a float is a cross-register-
+;; class result: the float body lives in an xmm register while the declared int
+;; return is read from a general-purpose register (xmm0 vs rax).  This is a
+;; genuine register-class miscompile, not a tolerable int64-carrier bridge.
+;; Lead with a non-zero fractional literal so the float truncation is visible.
+(defn g [] : int 7.1)
+
+(defn main [] : int 0)

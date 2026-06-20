@@ -2696,6 +2696,10 @@ Expr *elab_definstance(Elab *e, const Form *call) {
          * reject a body that yields a different nominal type.  At most one set. */
         const StructDef *ret_struct;
         const AdtDef    *ret_adt;
+        /* float-register-class-returns: the declared return's TypeKind (after
+         * Phase RT substitution), so pass 2 can reject a float-vs-non-float
+         * (xmm-vs-GP) register-class clash in the method body. */
+        TypeKind         ret_kind;
     } InstMethodPass;
     InstMethodPass *passes = NULL;
     if (tc->n_methods > 0) {
@@ -3540,6 +3544,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         passes[i].arrow_return    = arrow_return;
         passes[i].ret_struct = (return_type.kind == TY_STRUCT) ? return_type.as.struct_.def : NULL;
         passes[i].ret_adt    = (return_type.kind == TY_ADT)    ? return_type.as.adt_.def    : NULL;
+        passes[i].ret_kind   = return_type.kind;
     }
 
     /* Bring the constraint tyvars (e.g. `A` from `[(Eq A)]`) into the
@@ -3693,6 +3698,41 @@ Expr *elab_definstance(Elab *e, const Form *call) {
             buf_putc(&gb, '\0');
             diag_emit_with_code(DIAG_ERROR, method_body->span, TUR_E0001_TYPE_MISMATCH,
                 "instance method '%s' declares return type '%s' but its body returns %s",
+                meth, want, gb.data);
+            buf_free(&gb);
+            return NULL;
+        }
+
+        /* float-register-class-returns: the float-vs-non-float register-class
+         * guard, applied to the instance method body -- but calibrated for the
+         * typeclass int64 carrier ABI.  Typeclass methods routinely declare a
+         * non-float carrier return (e.g. `Num`'s `(add [x y] : int)`) while a
+         * float instance legitimately returns a float; the per-instance emit
+         * path resolves that to the real register class, so a non-float-declared
+         * / float-body method is the deliberate carrier bridge, NOT a miscompile.
+         * Only a method that genuinely COMMITS to a float return (declared float
+         * after Phase RT substitution) and whose body yields a concrete non-float
+         * is a real clash.  inline-C bodies (fiat TY_NIL type) and the
+         * int-literal -> float coercion are exempted as in elab_defn. */
+        bool ret_is_float = (mp->ret_kind == TY_FLOAT ||
+                             mp->ret_kind == TY_FLOAT32 ||
+                             mp->ret_kind == TY_FLOAT64);
+        if (method_body && method_body->kind != EX_INLINE_C && ret_is_float &&
+            !rc_widen_int_literal_to_float_return(mp->ret_kind, method_body) &&
+            return_type_register_class_conflict(mp->ret_kind, method_body->type)) {
+            const char *want = mp->ret_struct ? mp->ret_struct->name
+                             : mp->ret_adt    ? mp->ret_adt->name
+                             : typekind_to_string(mp->ret_kind);
+            const char *meth = (tc->methods[i].name) ? tc->methods[i].name->name : "?";
+            Buf gb; buf_init(&gb);
+            type_print(&gb, method_body->type);
+            buf_putc(&gb, '\0');
+            diag_emit_with_code(DIAG_ERROR, method_body->span,
+                TUR_E0707_RETURN_REGISTER_CLASS_MISMATCH,
+                "instance method '%s' declares return type '%s' but its body "
+                "returns %s -- a float and a non-float live in different register "
+                "classes (xmm vs general-purpose), so this is a register-class "
+                "miscompile, not a tolerable carrier bridge",
                 meth, want, gb.data);
             buf_free(&gb);
             return NULL;
