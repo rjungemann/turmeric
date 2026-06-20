@@ -9,8 +9,33 @@ severity: Medium. Not a miscompile -- it is a real expressiveness gap. The
   matrices as lists. The diagnostic also mis-points (suggests tupleN, which is
   for heterogeneous fixed-arity data, when the user wants a homogeneous float
   list).
-status: OPEN
+status: RESOLVED
 ---
+
+## Resolution
+
+Fix direction 1 (+ 3) landed: the `list` macro is now element-type-polymorphic.
+
+- `stdlib/list.tur`: `list` no longer right-folds into the int-headed `tcons`.
+  It right-folds into the polymorphic `tcons-of` (`list-build__`) and runs a
+  pairwise homogeneity check (`tur-list-homog__` / `list-homog-chain__`,
+  mirroring `vec-of`). So `(list 7.1 2.5)` builds a `(Cons float)` with a real
+  `double` head slot; `(list 1 2 3)` stays a `(Cons int)`; an empty `(list)` is
+  the bare `:int` carrier `0`. A `(Cons A)` result coerces to `:int` in argument
+  position, so `list-length`, `list-eq?`, and the rest of the carrier API keep
+  working unchanged. `list*` was likewise routed through `tcons-of` so a float
+  prefix specializes its head.
+- `src/compiler/elab_call.c`: the tupleN hint now fires on the homogeneity
+  helper `tur-list-homog__` too. With the macro polymorphic, the only remaining
+  `(list ...)` error case is a genuinely heterogeneous literal (e.g.
+  `(list 1 "x" 3.14)`) -- which is exactly when tupleN is the right suggestion,
+  so the secondary "diagnostic mis-points" gap closes naturally.
+- Fixture `tests/fixtures/typed/list-macro-float` locks in float-list literals,
+  float `thead`, float `list*` prepend, and int-list/empty-list compatibility.
+
+This retires the linalg push-loop "Workaround #4": `la-vec-of` / `mat-of` can
+lower a float literal through `(list ...)`. Note `stdlib/list-typed.tur` already
+shipped the typed sibling `list-of` (fix direction 2); both paths now exist.
 
 # `list` macro is wired to int-headed `tcons`, so float-list literals are impossible
 

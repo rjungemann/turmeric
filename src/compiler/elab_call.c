@@ -3690,11 +3690,15 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                                 actual_buf.data);
             buf_free(&expected_buf);
             buf_free(&actual_buf);
-            /* List-macro tuple hint: tcons arg 1 is the element; when it fails
-             * to unify with the expected :int type, the caller is most likely
-             * mixing types in a (list ...) or hand-written (tcons ...) chain.
-             * Suggest tupleN for heterogeneous fixed-arity needs. */
-            if (strcmp(fn_binding->name->name, "tcons") == 0 && i == 0) {
+            /* List-macro tuple hint: a (list ...) literal now routes through
+             * the homogeneity check tur-list-homog__ (params share one type
+             * variable A), so a mixed-type literal fails there -- and that is
+             * the one genuinely-heterogeneous case the tupleN hint is for. The
+             * hand-written int-carrier tcons chain still fails on arg 1, so keep
+             * keying on it too. Suggest tupleN for heterogeneous fixed-arity
+             * needs. */
+            if ((strcmp(fn_binding->name->name, "tcons") == 0 && i == 0) ||
+                strcmp(fn_binding->name->name, "tur-list-homog__") == 0) {
                 diag_emit(DIAG_HELP, args[i]->span,
                           "for heterogeneous fixed-arity collections, "
                           "consider tuple2, tuple3, tuple4, or tuple5 "

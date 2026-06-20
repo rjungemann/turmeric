@@ -1,0 +1,32 @@
+;;
+;; list-macro-float: (list ...) is element-type-polymorphic and routes through
+;; tcons-of, so a homogeneous float literal builds a (Cons float) directly --
+;; the head slot is a real `double`, not an int carrier. This is the float-list
+;; literal that retires the linalg push-loop workaround.
+;;
+
+;; A float list literal type-checks and reports the right length.
+(defn test-float-length [] : int
+  (list-length (list 7.1 2.5 3.25)))
+
+;; The float heads round-trip: thead reads the head cell as a `double`.
+(defn test-float-head [] : float
+  (thead (list 7.1 2.5)))
+
+;; list* prepends a float onto an existing float list.
+(defn test-float-prepend [] : int
+  (list-length (list* 9.5 (list 7.1 2.5))))
+
+;; Int lists still work unchanged (carrier compatibility).
+(defn test-int-length [] : int
+  (list-length (list 1 2 3 4 5)))
+
+;; Empty list is still the carrier 0.
+(defn test-empty [] : bool
+  (tnil? (list)))
+
+(println (test-float-length))
+(println (test-float-head))
+(println (test-float-prepend))
+(println (test-int-length))
+(println (test-empty))
