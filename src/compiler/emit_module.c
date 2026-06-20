@@ -72,11 +72,37 @@ static void inline_c_dedup_free(InlineCDedup *d) {
     d->n = d->cap = 0;
 }
 
+/* Classify a preprocessor directive whose '#' is at p[j]:
+ *   1 = conditional opener (#if / #ifdef / #ifndef)
+ *   2 = conditional closer (#endif)
+ *   0 = any other directive (#include / #define / #pragma / #else / #elif ...)
+ * Leading whitespace between '#' and the keyword is tolerated. */
+static int inline_c_directive_class(const char *p, size_t len, size_t j) {
+    j++;  /* past '#' */
+    while (j < len && (p[j] == ' ' || p[j] == '\t')) j++;
+    if (j + 1 < len && p[j] == 'i' && p[j + 1] == 'f')
+        return 1;  /* if / ifdef / ifndef all begin "if" */
+    if (j + 4 < len && strncmp(p + j, "endif", 5) == 0)
+        return 2;
+    return 0;
+}
+
 /* Scan a file-scope inline-C block and split it into "chunks": one chunk per
  * preprocessor directive (a line starting with '#') and one chunk per
  * top-level declaration (text up to a `;` at brace-depth 0). String and
  * char literals, line comments (`//`) and block comments are passed
  * through verbatim and never split a chunk.
+ *
+ * Exception -- include guards (inline-c-include-guard-dedup): a `#if` / `#ifdef`
+ * / `#ifndef` ... matching `#endif` region (with nesting) is consumed as ONE
+ * atomic chunk, never split at its interior directive lines. Splitting it would
+ * make each bare `#endif` its own chunk; since the per-chunk dedup keys on
+ * normalized text, the 2nd+ identical `#endif` (or `#define`) collides with the
+ * first and is silently dropped, unbalancing the guard and yielding a cc
+ * `unterminated #ifndef` error. Treating the whole guarded region as one chunk
+ * keeps a redundant identical guard block deduping as a unit while preserving
+ * the `#ifndef`/`#endif` pairing; non-identical guard blocks are emitted in
+ * full and the C preprocessor's own guard prevents redefinition.
  *
  * Why: two modules can each emit a file-scope inline-C block that shares a
  * `struct __foo { ... };` declaration but is otherwise different (different
@@ -113,6 +139,73 @@ static void inline_c_split_chunks(const char *p, size_t len,
         size_t chunk_start = i;
         bool   directive   = (p[i] == '#');
         int    brace_depth = 0;
+
+        /* Include-guard region: consume `#if*` ... matching `#endif` (with
+         * nesting) as a single atomic chunk so the interior `#endif`/`#define`
+         * lines are never deduped away individually. */
+        if (directive && inline_c_directive_class(p, len, i) == 1) {
+            int  cond_depth = 0;
+            bool at_line_start = true;
+            while (i < len) {
+                char c = p[i];
+                if (at_line_start) {
+                    size_t j = i;
+                    while (j < len && (p[j] == ' ' || p[j] == '\t')) j++;
+                    if (j < len && p[j] == '#') {
+                        int k = inline_c_directive_class(p, len, j);
+                        if (k == 1) {
+                            cond_depth++;
+                        } else if (k == 2) {
+                            cond_depth--;
+                            if (cond_depth == 0) {
+                                /* End the chunk after this closing #endif line. */
+                                i = j;
+                                while (i < len && p[i] != '\n') i++;
+                                if (i < len) i++;  /* consume the newline */
+                                break;
+                            }
+                        }
+                    }
+                }
+                /* Skip comments/strings so a stray '#', '/', or quote inside
+                 * them is not misread, and track line starts. */
+                if (c == '/' && i + 1 < len && p[i + 1] == '/') {
+                    i += 2;
+                    while (i < len && p[i] != '\n') i++;
+                    at_line_start = false;
+                    continue;
+                }
+                if (c == '/' && i + 1 < len && p[i + 1] == '*') {
+                    i += 2;
+                    while (i + 1 < len && !(p[i] == '*' && p[i + 1] == '/')) i++;
+                    if (i + 1 < len) i += 2;
+                    at_line_start = false;
+                    continue;
+                }
+                if (c == '"') {
+                    i++;
+                    while (i < len && p[i] != '"') {
+                        if (p[i] == '\\' && i + 1 < len) i += 2; else i++;
+                    }
+                    if (i < len) i++;
+                    at_line_start = false;
+                    continue;
+                }
+                if (c == '\'') {
+                    i++;
+                    while (i < len && p[i] != '\'') {
+                        if (p[i] == '\\' && i + 1 < len) i += 2; else i++;
+                    }
+                    if (i < len) i++;
+                    at_line_start = false;
+                    continue;
+                }
+                if (c == '\n') { i++; at_line_start = true; continue; }
+                i++;
+                at_line_start = false;
+            }
+            goto record_chunk;
+        }
 
         while (i < len) {
             char c = p[i];
@@ -161,12 +254,26 @@ static void inline_c_split_chunks(const char *p, size_t len,
                 if (i < len) i++;
                 continue;
             }
+            /* A preprocessor directive at the start of a line (brace depth 0)
+             * begins a fresh chunk: end the current non-directive chunk at the
+             * preceding newline. Without this, a leading comment or declaration
+             * immediately followed by a guard-opening directive on the next line
+             * (the common "license comment then ifndef GUARD" idiom) swallows the
+             * guard opener into a non-directive chunk, so the atomic include-guard
+             * handling above never sees the conditional opener at a chunk start
+             * and the guard gets split and corrupted by the per-chunk dedup. */
+            if (c == '\n' && brace_depth == 0) {
+                size_t j = i + 1;
+                while (j < len && (p[j] == ' ' || p[j] == '\t')) j++;
+                if (j < len && p[j] == '#') { i++; break; }
+            }
             if (c == '{') { brace_depth++; i++; continue; }
             if (c == '}') { if (brace_depth > 0) brace_depth--; i++; continue; }
             if (c == ';' && brace_depth == 0) { i++; break; }
             i++;
         }
 
+    record_chunk: ;
         size_t chunk_len = i - chunk_start;
         /* Trim trailing whitespace from the recorded slice (so chunks
          * normalize cleanly under inline_c_normalize_ws). */
@@ -7638,6 +7745,13 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
         for (uint32_t i = 0; i < hdr_ctx.n_abi_specializations; i++) {
             const EmitAbiSpecialization *spec = &hdr_ctx.abi_specializations[i];
             if (!spec->fn) continue; /* skip borrow specs */
+            /* separate-compilation-prelude-spec-multiple-definition: a spec for a
+             * prelude/stdlib function (no defining module) is emitted `static` in
+             * every .c (see the J3/J4 block in emit_implementation).  Declaring a
+             * non-static prototype here would clash ("static declaration follows
+             * non-static declaration"), so skip the header decl for no-owner specs. */
+            if (!(spec->binding && spec->binding->defining_module_name != NULL))
+                continue;
             buf_puts(out, type_c_name(spec->result_type));
             buf_printf(out, " %s(", spec->clone_name);
             for (uint8_t j = 0; j < spec->n_args; j++) {
@@ -7925,11 +8039,27 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     /* J3/J4: In separate-compilation mode, every spec whose FnDef lives in
      * this module (fn_expr != NULL) is an owned spec: emit with external
      * linkage so other TUs can link to it.  Borrow specs (fn_expr == NULL)
-     * just need the call-site rewrite; their body comes from the owner. */
+     * just need the call-site rewrite; their body comes from the owner.
+     *
+     * separate-compilation-prelude-spec-multiple-definition: a prelude/stdlib
+     * function (e.g. Option's `some?`) is injected as a full FnDef into *every*
+     * project TU, so fn_expr != NULL holds everywhere and each TU would emit the
+     * monomorphized spec (e.g. `some___spec__bool_Option__opaque`) with external
+     * linkage -- a multiple-definition link error.  Such prelude functions have
+     * no defining module recorded (defining_module_name == NULL); the
+     * borrow/owner machinery that hands a spec to a single owning TU also keys on
+     * defining_module_name, so a genuine user spec that needs cross-TU linkage
+     * always carries a non-NULL owner.  Emit the no-owner (prelude) specs as
+     * static -- a link-safe per-TU copy, identical to how the closure/fat runtime
+     * is duplicated above -- and reserve external linkage for specs owned by a
+     * real user module. */
     if (separate_compilation) {
         for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) {
-            if (ctx.abi_specializations[i].fn_expr != NULL)
-                ctx.abi_specializations[i].external_linkage = true;
+            EmitAbiSpecialization *sp = &ctx.abi_specializations[i];
+            if (sp->fn_expr == NULL) continue;  /* borrow spec: unchanged */
+            bool has_owner = (sp->binding &&
+                              sp->binding->defining_module_name != NULL);
+            sp->external_linkage = has_owner;  /* static when no owner module */
         }
     }
 

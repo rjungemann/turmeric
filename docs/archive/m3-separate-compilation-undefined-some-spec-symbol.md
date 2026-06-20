@@ -6,7 +6,37 @@ severity: Low-Medium. Auxiliary `tests/run-flags.sh` only; the default
   the link step with an undefined reference to a monomorphized `some` spec
   symbol, so `-Xseparate-compilation` (or the m3 path it exercises) does not
   emit/define every `some__spec__...` it references across translation units.
-status: OPEN (pre-existing; reproduces on a clean checkout of the branch)
+status: RESOLVED
+---
+
+## Resolution
+
+Root cause: a prelude/stdlib function (here Option's `some?`) is injected as a
+full `FnDef` into *every* project TU, so the J3/J4 ownership check in
+`emit_implementation` (`src/compiler/emit_module.c`) -- which marked every spec
+whose `fn_expr != NULL` as externally linked -- fired in *every* TU. Each TU
+then emitted `some___spec__bool_Option__opaque` with external linkage. Depending
+on the build path this surfaced either as the original *undefined reference* (no
+single owner emitted it) or, by the time of this fix, as *multiple definition*
+(every TU emitted it -- the symptom seen on `frame`/`watch`/`stats`).
+
+The borrow/owner machinery that hands a spec to exactly one owning TU keys on
+`binding->defining_module_name`; a genuine user spec needing cross-TU linkage
+always carries a non-NULL owner, whereas prelude functions have none
+(`defining_module_name == NULL`). Fix:
+
+- In the J3/J4 block, set `external_linkage` only when the spec has an owner
+  module (`defining_module_name != NULL`); no-owner (prelude) specs are emitted
+  `static` -- a link-safe per-TU copy, identical to how the closure/fat runtime
+  is duplicated per TU.
+- In `emit_header`, skip the non-static prototype for no-owner specs so the
+  static definition does not trip "static declaration follows non-static
+  declaration".
+
+Verification: `tests/run-flags.sh` -> 77 passed, 0 failed (the
+`m3-separate-compilation` fixture now PASSES); `tests/run.sh` -> 1724 passed,
+0 failed; `tur build .` on `frame`, `watch`, `stats` link cleanly.
+
 ---
 
 ## Repro
