@@ -231,11 +231,11 @@
 ;;;   (set-eq? set-a set-b)  ; => true
 ;;;
 ;;; Since: Phase TC2
-
 ;; NOTE (Phase 4.1/4.3): carrier-essential -- walks a heterogeneous HAMT via
 ;; tur_hamt_* with no element type available, so it stays inline-C on the int64
 ;; carrier and is an allowed Phase 5 bridge crossing.  See
 ;; docs/upcoming/v2/phase4-carrier-helper-inventory.md.
+
 (defn set-eq? [a : int b : int]
   #{}
   : bool
@@ -331,9 +331,10 @@
   ```)
 ;;; set-hamt -- internal accessor returning the backing HAMT pointer.
 
-(defn set-hamt [s : int] #{} : ptr<void>
+(defn set-hamt [s : int]
+  #{}
+  : ptr<void>
   ```c struct { void *hamt; } *set = (void*)(intptr_t)s; return set->hamt; ```)
-
 ;;; set-eq-loop -- pure-Turmeric structural-equality walk over s1's HAMT.
 ;;;
 ;;; Path A specializes this per A at the `Eq [Set]` dispatch site; the
@@ -353,33 +354,29 @@
 ;;;
 ;;; Since: Phase TCO-Eq-MapSet
 
+
 (defn set-eq-loop [iter : ptr<void> s2-hamt : ptr<void> keyeq : ptr<void>] : bool
   (if (hamt/iter-advance! iter)
-    (let [h (hamt/iter-cur-hash iter)
-          k (hamt/iter-cur-key iter)]
+    (let [h (hamt/iter-cur-hash iter) k (hamt/iter-cur-key iter)]
       (if (hamt/has-dynamic? s2-hamt h k keyeq)
         (set-eq-loop iter s2-hamt keyeq)
         false))
     true))
-
 ;;; set-eq-driver -- allocate the iter box, run set-eq-loop, free.
 ;;;
 ;;; Since: Phase TCO-Eq-MapSet
+
 
 (defn set-eq-driver [s1 : int s2 : int] : bool
   (let [iter   (hamt/iter-alloc (set-hamt s1))
         keyeq  (hamt/keyeq (set-hamt s1))
         result (set-eq-loop iter (set-hamt s2) keyeq)]
-    (do
-      (hamt/iter-destroy! iter)
-      result)))
-
+    (do (hamt/iter-destroy! iter) result)))
 ;;; Eq [Set] -- membership equality using the HAMT structure.
 ;; TCO-Eq-MapSet (pure-turmeric Eq [Map] / Eq [Set] follow-up): the instance
 ;; body now dispatches through the pure-Turmeric `set-eq-loop` (TCO'd inside
 ;; its by-value spec), mirroring `Eq [Vec]` / `Eq [MutableMap]` / `Eq [Map]`.
 ;; The inline-C `set-eq?` / `set-eq-cmp?` pair stays for direct callers.
-
 ;;; set-eq-full -- length-prefixed structural equality (carrier inputs).
 ;;;
 ;;; Pulled out as a single-receiver helper so the `Eq [Set]` instance reads
@@ -388,12 +385,11 @@
 ;;; int carrier level Set values are freely copyable, so threading them
 ;;; through this helper unblocks the length + driver pair.
 
-(defn set-eq-full [s1 : int s2 : int] : bool
-  (and (= (set-count s1) (set-count s2))
-       (set-eq-driver s1 s2)))
 
-(definstance Eq [Set] [(Eq A)]
-  (eq? [x y] (set-eq-full x y)))
+(defn set-eq-full [s1 : int s2 : int] : bool
+  (and (= (set-count s1) (set-count s2)) (set-eq-driver s1 s2)))
+
+(definstance Eq [Set] [(Eq A)] (eq? [x y] (set-eq-full x y)))
 ;;; set-add1 -- insert one element, using it as its own hash.
 ;;;
 ;;; The identity-hash convention the typed Set[A] uses everywhere

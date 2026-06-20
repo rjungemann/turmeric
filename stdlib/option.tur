@@ -24,12 +24,11 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn some [A] [x : A]
+(defn some [A]
+  [x : A]
   #{Construct}
   : (Option A)
-  (make-struct Option
-    :is-some true
-    :value x))
+  (make-struct Option :is-some true :value x))
 ;;; none -- return the none Option[A] (NULL).
 ;;;
 ;;; Returns:
@@ -43,9 +42,7 @@
 (defn none [A]
   #{Construct}
   : (Option A)
-  (make-struct Option
-    :is-some false
-    :value (default-of A)))
+  (make-struct Option :is-some false :value (default-of A)))
 ;;; some? -- check whether an Option[A] contains a value.
 ;;;
 ;;; Parameters:
@@ -60,9 +57,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn some? [A] [o : (Option A)]
-  : bool
-  (.is-some o))
+(defn some? [A] [o : (Option A)] : bool (.is-some o))
 ;;; unwrap -- extract the value from a typed Option[A].
 ;;;
 ;;; Parameters:
@@ -93,7 +88,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn unwrap-or [A] [o : (Option A) dflt : A] : A
+(defn unwrap-or [A]
+  [o : (Option A) dflt : A]
+  : A
   ;; Option none-as-NULL retirement (Track A, step 1.3): by-value `(Option A)`
   ;; receiver.  Pure-Turmeric body reads `.is-some`/`.value` directly; A is
   ;; inferred from `o` or from `dflt`.  The interpreter keeps its
@@ -158,10 +155,10 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn option-map [A B] [o : (Option A) ^fat f : (fn [A] B)] : (Option B)
-  (if (.is-some o)
-    (some (f (.value o)))
-    (none)))
+(defn option-map [A B]
+  [o : (Option A) ^fat f : (fn [A] B)]
+  : (Option B)
+  (if (.is-some o) (some (f (.value o))) (none)))
 ;; Option none-as-NULL retirement (Track A): by-value `(Option A)` receivers.
 ;; Pure-Turmeric body reads `.is-some`/`.value` directly; none (`{is_some=false}`)
 ;; is never deref'd.  The interpreter keeps its `native_option_eq` override.
@@ -180,27 +177,25 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn option-eq? [A] [o1 : (Option A) o2 : (Option A) ^fat cmp-fn : (fn [A A] bool)] : bool
+(defn option-eq? [A]
+  [o1 : (Option A) o2 : (Option A) ^fat cmp-fn : (fn [A A] bool)]
+  : bool
   (if (.is-some o1)
-    (if (.is-some o2)
-      (cmp-fn (.value o1) (.value o2))
-      false)
+    (if (.is-some o2) (cmp-fn (.value o1) (.value o2)) false)
     (not (.is-some o2))))
 ;;; Eq [Option] -- equality using the inner type's Eq instance.
 ;; TC1-17: Phase PTC4 -- constrained Eq instance for Option[A].
 ;; Note: element comparison uses integer equality; correct for all primitive A.
-
 ;; M4c-pre-ext: rewrite to consult by-value fields directly via Eq A,
 ;; mirroring Eq Result/Tuple2/Pair.  `option-eq?` itself stays as a free
 ;; helper for callers that consult it directly via the carrier ABI.  See
 ;; docs/reported/m4c-stdlib-carrier-helpers-block-dispatch-rewrite.md.
+
 (definstance Eq [Option]
   [(Eq A)]
   (eq? [x y]
     (if (= (.is-some x) (.is-some y))
-      (if (.is-some x)
-        (eq? (.value x) (.value y))
-        true)
+      (if (.is-some x) (eq? (.value x) (.value y)) true)
       false)))
 ;; ---------------------------------------------------------------------------
 ;; HKT typeclass instances (stdlib-hkt-consolidation T1)
@@ -220,9 +215,7 @@
 
 (definstance Functor [Option]
   (fmap [container g]
-    (if (some? container)
-      (some (g (.value container)))
-      (none))))
+    (if (some? container) (some (g (.value container))) (none))))
 ;;; Applicative [Option] -- pure wraps in some; ap applies a some function to a
 ;;; some argument (none when either side is none).
 ;;;
@@ -235,9 +228,7 @@
   (pure [x] (some x))
   (ap [ff fa]
     (if (some? ff)
-      (if (some? fa)
-        (some ((.value ff) (.value fa)))
-        (none))
+      (if (some? fa) (some ((.value ff) (.value fa))) (none))
       (none))))
 ;;; Monad [Option] -- bind sequences through some; short-circuits on none.
 ;;;
@@ -247,10 +238,7 @@
 ;;; Since: stdlib-hkt-consolidation T1
 
 (definstance Monad [Option]
-  (bind [ma k]
-    (if (some? ma)
-      (k (.value ma))
-      (none))))
+  (bind [ma k] (if (some? ma) (k (.value ma)) (none))))
 ;;; Alternative [Option] -- empty is none; alt-or picks the first some.
 ;;;
 ;;; Example:
@@ -260,5 +248,4 @@
 
 (definstance Alternative [Option]
   (empty [a] (none))
-  (alt-or [x y]
-    (if (some? x) x y)))
+  (alt-or [x y] (if (some? x) x y)))

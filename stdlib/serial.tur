@@ -386,6 +386,7 @@
 ;;;   A raw :ptr<void> bytes value (see the module note on the raw-buffer surface).
 ;;;
 ;;; Since: end-to-end-monomorphization (M4 bucket-D)
+
 (defn serial-pair-bytes [fst : int snd : int] : ptr<void>
   ```c
   int64_t *buf = (int64_t*)malloc(sizeof(int64_t) + 16);
@@ -395,7 +396,6 @@
   buf[2] = snd;
   return buf;
   ```)
-
 ;;; Serializable [Pair] -- serialize a Pair[A B] as its two int64 element carriers.
 ;;;
 ;;; Layout: [int64 len=16][int64 fst][int64 snd].
@@ -405,8 +405,7 @@
 
 (definstance Serializable [Pair]
   [(Serializable A) (Serializable B)]
-  (serialize [x]
-    (serial-pair-bytes (:: (.fst x) :int) (:: (.snd x) :int)))
+  (serialize [x] (serial-pair-bytes (:: (.fst x) :int) (:: (.snd x) :int)))
   (deserialize [b]
     ```c
     if (!b || ((int64_t*)b)[0] < 16) {

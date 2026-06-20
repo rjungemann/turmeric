@@ -28,7 +28,6 @@
 ;;; abstract `n`).
 ;;;
 ;;; Since: Phase SZ8/P4
-
 ;;; pack-sized -- wrap a phantom-indexed value into a size-hiding existential.
 ;;;
 ;;; Expands to a native `pack` whose witness type is
@@ -51,7 +50,6 @@
 ;;; Since: Phase SZ8/P4
 (defmacro pack-sized [value-expr binder type-expr]
   (list pack value-expr (list exists binder type-expr)))
-
 ;;; open-sized -- bind the hidden size index and the underlying handle.
 ;;;
 ;;; Expands to a native `open` whose binder vector is
@@ -79,5 +77,6 @@
 ;;;     (sized-buf-free buf))
 ;;;
 ;;; Since: Phase SZ8/P4
+
 (defmacro open-sized [packed-expr n-name handle-name & body]
   (cons open (cons packed-expr (cons (vec n-name handle-name) body))))

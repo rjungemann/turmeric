@@ -174,5 +174,4 @@
 ;;; Since: Phase sum-types-either
 
 (definstance Functor [(Either E)]
-  (fmap [container fn]
-    (either-map fn container)))
+  (fmap [container fn] (either-map fn container)))

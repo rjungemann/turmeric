@@ -40,7 +40,8 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-new [K V] []
+(defn mutmap-new [K V]
+  []
   #{}
   : (MutableMap K V)
   ```c
@@ -84,7 +85,8 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-len [K V] [m : (MutableMap K V)]
+(defn mutmap-len [K V]
+  [m : (MutableMap K V)]
   #{}
   : int
   ```c
@@ -109,7 +111,8 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-set! [K V] [m : (MutableMap K V) h : int key : K val : V]
+(defn mutmap-set! [K V]
+  [m : (MutableMap K V) h : int key : K val : V]
   #{}
   : nil
   ```c
@@ -188,7 +191,8 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-get [K V] [m : (MutableMap K V) h : int key : K]
+(defn mutmap-get [K V]
+  [m : (MutableMap K V) h : int key : K]
   #{}
   : V
   ```c
@@ -223,7 +227,8 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-has? [K V] [m : (MutableMap K V) h : int key : K]
+(defn mutmap-has? [K V]
+  [m : (MutableMap K V) h : int key : K]
   #{}
   : bool
   ```c
@@ -259,7 +264,8 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-delete! [K V] [m : (MutableMap K V) h : int key : K]
+(defn mutmap-delete! [K V]
+  [m : (MutableMap K V) h : int key : K]
   #{}
   : bool
   ```c
@@ -297,7 +303,8 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-cap [K V] [m : (MutableMap K V)]
+(defn mutmap-cap [K V]
+  [m : (MutableMap K V)]
   #{}
   : int
   ```c
@@ -320,7 +327,8 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-slot-occupied? [K V] [m : (MutableMap K V) i : int]
+(defn mutmap-slot-occupied? [K V]
+  [m : (MutableMap K V) i : int]
   #{}
   : bool
   ```c
@@ -345,7 +353,8 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-slot-hash [K V] [m : (MutableMap K V) i : int]
+(defn mutmap-slot-hash [K V]
+  [m : (MutableMap K V) i : int]
   #{}
   : int
   ```c
@@ -369,7 +378,8 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-slot-key [K V] [m : (MutableMap K V) i : int]
+(defn mutmap-slot-key [K V]
+  [m : (MutableMap K V) i : int]
   #{}
   : K
   ```c
@@ -393,7 +403,8 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-slot-value [K V] [m : (MutableMap K V) i : int]
+(defn mutmap-slot-value [K V]
+  [m : (MutableMap K V) i : int]
   #{}
   : V
   ```c
@@ -479,15 +490,24 @@
 ;;; Since: Phase F5
 
 (defn mutmap-eq-loop [K V]
-  [m1 : (MutableMap K V) m2 : (MutableMap K V) i : int cap : int
-   ^fat val-cmp : (fn [V V] bool)]
+  [m1
+   : (MutableMap K V)
+   m2
+   : (MutableMap K V)
+   i
+   : int
+   cap
+   : int
+   ^fat
+   val-cmp
+   : (fn [V V] bool)]
   : bool
   (if (= i cap)
     true
     (if (mutmap-slot-occupied? m1 i)
       (if (mutmap-has? m2 (mutmap-slot-hash m1 i) (mutmap-slot-key m1 i))
         (if (val-cmp (mutmap-slot-value m1 i)
-                     (mutmap-get m2 (mutmap-slot-hash m1 i) (mutmap-slot-key m1 i)))
+              (mutmap-get m2 (mutmap-slot-hash m1 i) (mutmap-slot-key m1 i)))
           (mutmap-eq-loop m1 m2 (+ i 1) cap val-cmp)
           false)
         false)
@@ -529,7 +549,8 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn mutmap-free [K V] [m : (MutableMap K V)]
+(defn mutmap-free [K V]
+  [m : (MutableMap K V)]
   #{}
   : void
   ```c
@@ -552,11 +573,14 @@
 ;; (the typed-pointer handle), exactly like `Eq [Vec]`'s `(:: x (Vec A))`.
 ;; The inline-C `mutmap-eq-storage?` / `mutmap-eq?` pair stays for direct and
 ;; abstract callers (stack-safe C loop), just as `vec-eq?` stays for Vec.
+
 (definstance Eq [MutableMap]
   [(Eq V)]
   (eq? [x y]
     (and (= (mutmap-len (:: x (MutableMap K V)))
-            (mutmap-len (:: y (MutableMap K V))))
-         (mutmap-eq-loop (:: x (MutableMap K V)) (:: y (MutableMap K V))
-                         0 (mutmap-cap (:: x (MutableMap K V)))
-                         (fn [a b] (eq? a b))))))
+           (mutmap-len (:: y (MutableMap K V))))
+      (mutmap-eq-loop (:: x (MutableMap K V))
+        (:: y (MutableMap K V))
+        0
+        (mutmap-cap (:: x (MutableMap K V)))
+        (fn [a b] (eq? a b))))))

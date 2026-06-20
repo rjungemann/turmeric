@@ -605,11 +605,11 @@
 ;;;   (map-eq? ma mb (fn [a b] (= a b)))  ; => true
 ;;;
 ;;; Since: Phase TM0
-
 ;; NOTE (Phase 4.1/4.3): carrier-essential -- walks a heterogeneous HAMT via
 ;; tur_hamt_* with no element type available, so it stays inline-C on the int64
 ;; carrier and is an allowed Phase 5 bridge crossing.  See
 ;; docs/upcoming/v2/phase4-carrier-helper-inventory.md.
+
 (defn map-eq-raw? [m1 : int m2 : int ^fat val-cmp]
   #{}
   : bool
@@ -710,7 +710,6 @@
   ;; CRU B-3: val-cmp is a fat closure box; threaded as int64 to the runtime,
   ;; which fat-dispatches it (tur_hamt_eq_dynamic reads slot 0).
   ```c return tur_hamt_eq_dynamic(m1, m2, (int64_t)(intptr_t)val_cmp); ```)
-
 ;;; map-iter-cur-val-as -- typed read of an iter box's current value.
 ;;;
 ;;; The HAMT iter API hands out `ptr<void>` for values; this typed accessor
@@ -718,21 +717,24 @@
 ;;; ascription, no work).  Mirrors `mutmap-slot-value`'s shape so the
 ;;; pure-Turmeric `map-eq-loop` body can compare V-typed values directly.
 
-(defn map-iter-cur-val-as [V] [iter : ptr<void>] #{} : V
-  ```c return (int64_t)(intptr_t)tur_hamt_iter_cur_val((void*)(intptr_t)iter); ```)
 
+(defn map-iter-cur-val-as [V]
+  [iter : ptr<void>]
+  #{}
+  : V
+  ```c return (int64_t)(intptr_t)tur_hamt_iter_cur_val((void*)(intptr_t)iter); ```)
 ;;; map-get-dynamic-as -- typed lookup against m2's hamt, threading m1's
 ;;; stamped key comparator so content-keyed maps (e.g. cstr keys) stay
 ;;; content-correct.  Returns V (cast at the carrier level).  The
 ;;; pure-Turmeric loop calls this *after* hamt/has-dynamic? has confirmed
 ;;; the key is present, so the result is always a live value.
 
+
 (defn map-get-dynamic-as [V]
   [m : ptr<void> hash : int key : ptr<void> keyeq : ptr<void>]
   #{}
   : V
   ```c return (int64_t)(intptr_t)tur_hamt_get_dynamic((void*)(intptr_t)m, hash, (void*)(intptr_t)key, (void*)(intptr_t)keyeq); ```)
-
 ;;; map-eq-loop -- pure-Turmeric structural-equality walk over m1's HAMT.
 ;;;
 ;;; Path A specializes this per (K V) at the `Eq [Map]` dispatch site; the
@@ -756,21 +758,27 @@
 ;;;
 ;;; Since: Phase TCO-Eq-MapSet
 
+
 (defn map-eq-loop [K V]
-  [iter : ptr<void> m2-hamt : ptr<void> keyeq : ptr<void>
-   ^fat val-cmp : (fn [V V] bool)]
+  [iter
+   : ptr<void>
+   m2-hamt
+   : ptr<void>
+   keyeq
+   : ptr<void>
+   ^fat
+   val-cmp
+   : (fn [V V] bool)]
   : bool
   (if (hamt/iter-advance! iter)
-    (let [h (hamt/iter-cur-hash iter)
-          k (hamt/iter-cur-key iter)]
+    (let [h (hamt/iter-cur-hash iter) k (hamt/iter-cur-key iter)]
       (if (hamt/has-dynamic? m2-hamt h k keyeq)
         (if (val-cmp (map-iter-cur-val-as iter)
-                     (map-get-dynamic-as m2-hamt h k keyeq))
+              (map-get-dynamic-as m2-hamt h k keyeq))
           (map-eq-loop iter m2-hamt keyeq val-cmp)
           false)
         false))
     true))
-
 ;;; map-eq-driver -- allocate the iter box, run map-eq-loop, free.
 ;;;
 ;;; Split out from the `Eq [Map]` instance so the instance body is a single
@@ -778,16 +786,14 @@
 ;;;
 ;;; Since: Phase TCO-Eq-MapSet
 
+
 (defn map-eq-driver [K V]
   [m1 (Map K V) m2 (Map K V) ^fat val-cmp : (fn [V V] bool)]
   : bool
   (let [iter   (hamt/iter-alloc (map-hamt m1))
         keyeq  (hamt/keyeq (map-hamt m1))
         result (map-eq-loop iter (map-hamt m2) keyeq val-cmp)]
-    (do
-      (hamt/iter-destroy! iter)
-      result)))
-
+    (do (hamt/iter-destroy! iter) result)))
 ;; TCO-Eq-MapSet (pure-turmeric Eq [Map] / Eq [Set] follow-up): the instance
 ;; body now dispatches through the pure-Turmeric `map-eq-loop` (TCO'd inside
 ;; its by-value spec), mirroring `Eq [Vec]` / `Eq [MutableMap]`.  The Map
@@ -795,12 +801,12 @@
 ;; ascribed inline to `(Map K V)` to recover K/V at the dispatch site.  The
 ;; inline-C `map-eq-raw?` / `map-eq?` / `map-eq-dynamic` triple stays for
 ;; direct / abstract-K-V callers (the same compromise vec-eq? made).
+
 (definstance Eq [Map]
   [(Eq K) (Eq V)]
   (eq? [x y]
     (and (= (map-count (:: x (Map K V))) (map-count (:: y (Map K V))))
-         (map-eq-driver (:: x (Map K V)) (:: y (Map K V))
-                        (fn [a b] (eq? a b))))))
+      (map-eq-driver (:: x (Map K V)) (:: y (Map K V)) (fn [a b] (eq? a b))))))
 ;;; hamt-assoc-each__ -- internal helper for the hamt-of macro.
 ;;;
 ;;; Threads (map-assoc m k v) over the kv-pairs in xs, returning the final

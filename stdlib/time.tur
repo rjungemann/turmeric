@@ -17,18 +17,17 @@
 ;; generated C free of the unused time helpers and its codegen snapshots stable.
 (defmodule time
   (export Time
-          Real-Time
-          Real-Time-free
-          HighRes-Time
-          HighRes-Time-free
-          Mock-Time
-          Mock-Time-free
-          mock-time-set
-          mock-time-get
-          get-time-ms
-          sleep-ms
-          get-cpu-time)
-
+    Real-Time
+    Real-Time-free
+    HighRes-Time
+    HighRes-Time-free
+    Mock-Time
+    Mock-Time-free
+    mock-time-set
+    mock-time-get
+    get-time-ms
+    sleep-ms
+    get-cpu-time)
   ;; File-scope C helpers for the Time-capability constructors below.  The
   ;; now/sleep implementations MUST live at file scope: a Time struct stores
   ;; their addresses and outlives the constructor call, so they cannot be
@@ -71,7 +70,6 @@
       if (__tur_mock_time_singleton) __tur_mock_time_singleton->current_time += ms;
   }
   ```
-
   ;;; Time -- opaque handle to a Time capability struct (now/sleep closures).
   ;;;
   ;;; Created by Real-Time / HighRes-Time / Mock-Time; released by the matching
@@ -79,7 +77,6 @@
   ;;;
   ;;; Since: Phase 16
   (defopaque Time :ptr<void>)
-
   ;;; Real-Time -- create a wall-clock Time capability backed by libc time().
   ;;;
   ;;; Returns:
@@ -101,7 +98,6 @@
     cap->sleep = __tur_real_time_sleep;
     return (int64_t)(intptr_t)cap;
     ```)
-
   ;;; Real-Time-free -- release a Time capability created by Real-Time.
   ;;;
   ;;; Parameters:
@@ -113,7 +109,6 @@
     ```c
     free((void*)(intptr_t)t);
     ```)
-
   ;; ============================================================================
   ;; High-resolution Time implementation
   ;; ============================================================================
@@ -139,7 +134,6 @@
     cap->sleep = __tur_hires_time_sleep;
     return (int64_t)(intptr_t)cap;
     ```)
-
   ;;; HighRes-Time-free -- release a Time capability created by HighRes-Time.
   ;;;
   ;;; Parameters:
@@ -151,7 +145,6 @@
     ```c
     free((void*)(intptr_t)t);
     ```)
-
   ;; ============================================================================
   ;; Mock Time implementation (for testing)
   ;; ============================================================================
@@ -181,7 +174,6 @@
     __tur_mock_time_singleton = cap;
     return (int64_t)(intptr_t)cap;
     ```)
-
   ;;; Mock-Time-free -- release a Time capability created by Mock-Time.
   ;;;
   ;;; Parameters:
@@ -195,7 +187,6 @@
     if (__tur_mock_time_singleton == cap) __tur_mock_time_singleton = NULL;
     free((void*)cap);
     ```)
-
   ;;; mock-time-set -- set the current time on a Mock-Time instance.
   ;;;
   ;;; Parameters:
@@ -212,7 +203,6 @@
     __tur_mock_cap *cap = (__tur_mock_cap *)(intptr_t)t;
     cap->current_time = (int)new_time;
     ```)
-
   ;;; mock-time-get -- read the current time from a Mock-Time instance.
   ;;;
   ;;; Parameters:
@@ -231,7 +221,6 @@
     __tur_mock_cap *cap = (__tur_mock_cap *)(intptr_t)t;
     return cap->current_time;
     ```)
-
   ;; ============================================================================
   ;; Helper functions for direct time operations
   ;; ============================================================================
@@ -250,7 +239,6 @@
     time_t now = time(NULL);
     return (int64_t)now * 1000;  /* full 64-bit ms; (int) here would overflow */
     ```)
-
   ;;; sleep-ms -- suspend execution for a given number of milliseconds.
   ;;;
   ;;; Parameters:
@@ -268,7 +256,6 @@
     struct timespec rem;
     while (nanosleep(&req, &rem) == -1) { req = rem; }
     ```)
-
   ;;; get-cpu-time -- return the current process CPU time in milliseconds.
   ;;;
   ;;; Returns:
