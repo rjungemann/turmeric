@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.21.0` -- Vec migrates to the `:heap` typed-pointer ABI, `-Xsized-types` flips ON by default, M5 by-value twin redirect lands for carrier stdlib accessors, and parametric `:linear` opaques now enforce single-use.
+**Latest release:** `v0.22.0` -- turi interpreter parity reaches the finish line, TCO lands in by-value ABI specs, end-to-end monomorphization (Track A) completes, and a wave of spice-uplift fixes unblock frame, stats, watch, ECS, and StorageOps.
 
 ## What
 

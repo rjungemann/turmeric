@@ -4,47 +4,67 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.22.0] -- 2026-06-20
+
 ### Added
 
-- **`#[used]` attribute -- retain a defn with external C linkage.** A defn whose
-  mangled C symbol is reached only through a raw `extern` reference -- a
-  hand-written cross-module inline-C bridge, or a C-ABI callback taken by
-  address (Arrow release fns, `qsort` comparators, signal handlers) -- is
-  invisible to the Turmeric export/import + call graph. Under separate
-  compilation such a defn was demoted to `static` (and under the single-main
-  whole-program build shortcut its module was dropped entirely, never inlined),
-  so the symbol dangled at link time. Mark it `(defn #[used] name [...] ...)` to
-  keep external linkage and force every project module to be compiled and
-  linked. Unblocks the `frame` spice's `group`/`interop`/`reshape` suites
-  (`__so-take` bridge, Arrow C Data Interface release callbacks). The attribute
-  composes with `#[no-unwind]` in either order.
+- **Turi interpreter parity (Track E closed, #398).** EX_CONS_LIST support
+  in the interpreter (#435) plus 7 turi fixture fixes (#457) bring the
+  tree-walking evaluator to parity with the compiled path.
+- **`#[used]` attribute -- retain a defn with external C linkage (#467).**
+  Keeps defns reachable only via raw `extern` (Arrow release fns, qsort
+  comparators, signal handlers) from being demoted to `static`. Unblocks
+  the `frame` spice's group/interop/reshape suites.
+- **Classic Lisp list surface in stdlib (#470).** `car`/`cdr`/`null?`
+  alongside the existing `head`/`tail`.
+- **Migration diagnostics + guide for legacy `:int`-pointer struct
+  forms (#466).**
+
+### Changed
+
+- **End-to-end monomorphization (Track A) lands (#444).** Carrier->by-value
+  bridging completes across constrained generics, HOFs, existential
+  pack/open, option/result accessors, and tail calls into inline-C ADT
+  helpers. Touches dozens of PRs (#395-#469); audit floor moves to 0
+  carrier deref-copies on the by-value path.
+- **TCO lands in ABI specs.** Eq[Vec]/Eq[Map]/Eq[Set] rewritten as
+  pure-Turmeric TCO'd loops (#400, #424); tail calls now bridge to
+  inline-C carrier-ABI helpers at the return site (#415, #416).
+- **MutableMap retyped to honest `(MutableMap K V)` (#396);** its carrier
+  bridge is retired.
+- **Vec inline-C producers monomorphized to typed pointers** (Track A
+  bucket A follow-ups, #391/#393).
 
 ### Fixed
 
-- **`-lm` is now linked unconditionally, making libm usable from pure spices.**
-  The math library was only appended to the link line when a spice declared a
-  cmake dep (`had_cmake_flags`), so a pure spice referencing libm symbols
-  (`sqrt`/`fabs`/`sin`/`cos`/...) from inline-C had no way to resolve them
-  without forcing a fake cmake-dep just to pull in `-lm`. Both link paths
-  (`tur build <file>` and the project/`--shared` build used by the spice
-  loader) now always append `-lm` last, after any `-l<staticlib>` flags so GNU
-  ld's left-to-right archive resolution still finds the symbols. An unused
-  `-lm` is a harmless no-op on Linux, and on macOS libm lives in libSystem so
-  it is a no-op there too.
-- **File-scope inline-C include guards no longer corrupted by the dedup pass.**
-  A module-prelude inline-C block with two or more preprocessor guards lost its
-  repeated bare `#endif` lines (deduped as identical chunks), and a guard opener
-  preceded by a comment was swallowed -- both yielding `unterminated #ifndef` /
-  `#endif without #if` / spurious redefinitions. Conditional regions are now
-  deduped as atomic units and directives always begin a fresh chunk. Unblocked
-  the `stats` spice build.
-- **Separate-compilation: prelude monomorphized specs emitted `static`.** A
-  prelude function spec (e.g. `some___spec__bool_Option__opaque`) was emitted
-  with external linkage in every TU, causing `multiple definition` link errors
-  (and, in other paths, undefined references). No-owner (prelude) specs are now
-  emitted `static`; external linkage is reserved for specs owned by a real user
-  module. Unblocked the `frame`, `watch`, and `stats` spice builds and fixes the
-  `m3-separate-compilation` flag fixture.
+- **Spice-uplift wave.** Two separate-compilation codegen blockers (#465);
+  prelude monomorphized specs no longer emit `static` with external
+  linkage; file-scope inline-C include guards no longer corrupted by the
+  dedup pass (`stats` spice unblocked); ECS E2d typeclass dispatch gaps
+  closed (#405); StorageOps bounded-wrapper heterogeneous monomorphization
+  gap closed (#447, #448); MutableMap typed-pointer producer
+  monomorphization (#411); `time` importable as a module (#410).
+- **`-lm` is now linked unconditionally (#471),** so pure spices can use
+  libm symbols (`sqrt`/`fabs`/`sin`/...) without a fake cmake-dep.
+- **letrec self-recursive float accumulator no longer collapses to int
+  carrier (#469).**
+- **HKT instance-method spec emitted when consumed by a match scrutinee
+  (#468);** Applicative `ap` preserves fn type through polymorphic
+  constructors (#438); layer-4 by-value `<|>` / selection-body shape
+  (#442).
+- **Closure capture of bindings referenced inside open/pack/dispatch
+  (W3, #464);** letrec carrier self-call typing and fresh `vec-new` arg
+  unification (W1/W2, #463); NULL-deref in `elab_lookup_ctor` on
+  malformed defdata field type (#462).
+- **Existential pack/open of multi-field struct payloads via heap-boxing
+  (#420);** existential `open` dispatch through packed witnesses (#452);
+  by-value struct payload rejected in constrained pack with a clear
+  diagnostic (#455).
+- **Return-type unification: cstr-commit/integer-body (TUR-E0708, #454)
+  and float-vs-non-float register-class (TUR-E0707, #453) mismatches now
+  rejected.**
+- **CT macro evaluator: `map` and nested macros now work in splices
+  (#406).**
 
 ## [0.21.0] -- 2026-06-15
 
