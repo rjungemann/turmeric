@@ -4,6 +4,23 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **File-scope inline-C include guards no longer corrupted by the dedup pass.**
+  A module-prelude inline-C block with two or more preprocessor guards lost its
+  repeated bare `#endif` lines (deduped as identical chunks), and a guard opener
+  preceded by a comment was swallowed -- both yielding `unterminated #ifndef` /
+  `#endif without #if` / spurious redefinitions. Conditional regions are now
+  deduped as atomic units and directives always begin a fresh chunk. Unblocked
+  the `stats` spice build.
+- **Separate-compilation: prelude monomorphized specs emitted `static`.** A
+  prelude function spec (e.g. `some___spec__bool_Option__opaque`) was emitted
+  with external linkage in every TU, causing `multiple definition` link errors
+  (and, in other paths, undefined references). No-owner (prelude) specs are now
+  emitted `static`; external linkage is reserved for specs owned by a real user
+  module. Unblocked the `frame`, `watch`, and `stats` spice builds and fixes the
+  `m3-separate-compilation` flag fixture.
+
 ## [0.21.0] -- 2026-06-15
 
 ### Added
