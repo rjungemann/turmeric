@@ -161,6 +161,15 @@ typedef enum DiagCode {
      * direction is rejected; the reverse (an integer carrier returning a cstr
      * handle) stays a legitimate bridge. */
     TUR_E0708_RETURN_POINTER_SCALAR_MISMATCH,
+    /* carrier-aware-return-unification Phase 2: a genuinely COMMITTED function
+     * (a monomorphic, non-`#{Unsafe}` `defn` -- one that does not participate in
+     * the int64 carrier ABI) declares a concrete integer-family return but its
+     * body yields a concrete `cstr` (a `const char*` string pointer).  This is
+     * the REVERSE of the TUR-E0708 commit direction: a string pointer is never a
+     * valid integer.  It is tolerated for generic / `#{Unsafe}` / typeclass code
+     * (the carrier-handle bridge), but in a committed monomorphic function there
+     * is no carrier to bridge, so it is a real type-erasure bug. */
+    TUR_E0709_RETURN_TYPE_MISMATCH,
     /* Deprecation band (TUR-D####): syntax accepted for backward
      * compatibility but slated for removal.  Emitted as DIAG_WARNING;
      * promoted to DIAG_ERROR under --Werror=deprecated. */

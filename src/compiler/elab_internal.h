@@ -908,39 +908,52 @@ bool rc_widen_int_literal_to_float_return(TypeKind declared, Expr *body);
  * only on the commit-direction conflict. */
 bool return_type_pointer_scalar_conflict(TypeKind declared, Type body);
 
-/* carrier-aware-return-unification Phase 1: classify a return position so the
- * shared dispatcher knows how much to reject.
- *   RET_CLASS_COMMITTED -- the function genuinely commits to a concrete surface
- *     type (today: ordinary `defn`).  The register-class check runs
- *     symmetrically (a float on either side vs a concrete non-float clashes).
- *   RET_CLASS_CARRIER -- the position participates in the int64 carrier ABI
- *     (today: typeclass instance method).  Only the float-COMMIT direction is
- *     flagged; a non-float-declared carrier method with a float instance body
- *     is the deliberate per-instance bridge and is tolerated.
- * Phases 2-3 will widen what COMMITTED rejects and route more positions through
- * the classifier; for Phase 1 the two values reproduce the existing per-site
- * calibration exactly. */
+/* carrier-aware-return-unification Phase 2: the REVERSE pointer-scalar shape --
+ * a concrete integer-family declared return with a concrete `cstr` body.  This
+ * is the carrier-handle bridge the commit-direction helper tolerates, so it is
+ * sound to reject ONLY for a committed position; the dispatcher applies that
+ * gate.  Returns true on the shape match. */
+bool return_type_pointer_scalar_reverse_conflict(TypeKind declared, Type body);
+
+/* carrier-aware-return-unification: classify a return position so the shared
+ * dispatcher knows how much to reject against the int64 carrier ABI.
+ *   RET_CLASS_COMMITTED -- a genuinely committed position: a monomorphic,
+ *     non-`#{Unsafe}` `defn` that does not participate in the carrier.  Rejects
+ *     every concrete ground mismatch: symmetric register-class AND the reverse
+ *     pointer-scalar direction (integer return, cstr body -> TUR-E0709).
+ *   RET_CLASS_CARRIER_FN -- a generic or `#{Unsafe}` `defn`.  Register-class
+ *     stays symmetric (a float never rides the int64 carrier), but the reverse
+ *     pointer-scalar direction is the deliberate carrier-handle bridge and is
+ *     tolerated.
+ *   RET_CLASS_CARRIER_METHOD -- a typeclass instance method.  Full carrier
+ *     tolerance: register-class only in the float-COMMIT direction (a
+ *     non-float-declared method with a float instance body is the per-instance
+ *     bridge) and the reverse pointer-scalar direction tolerated.
+ * Phase 3 will route grounded instance methods to RET_CLASS_COMMITTED. */
 typedef enum {
     RET_CLASS_COMMITTED,
-    RET_CLASS_CARRIER,
+    RET_CLASS_CARRIER_FN,
+    RET_CLASS_CARRIER_METHOD,
 } ReturnClass;
 
 /* Which return-position predicate fired (RET_CONFLICT_NONE = no conflict).  The
  * caller maps each to its site-specific diagnostic (function vs instance
  * method) and error code (NOMINAL -> TUR-E0001, REGISTER_CLASS -> TUR-E0707,
- * POINTER_SCALAR -> TUR-E0708). */
+ * POINTER_SCALAR -> TUR-E0708, TYPE_REVERSE -> TUR-E0709). */
 typedef enum {
     RET_CONFLICT_NONE = 0,
     RET_CONFLICT_NOMINAL,
     RET_CONFLICT_REGISTER_CLASS,
     RET_CONFLICT_POINTER_SCALAR,
+    RET_CONFLICT_TYPE_REVERSE,
 } ReturnConflict;
 
-/* carrier-aware-return-unification Phase 1: single dispatcher over the three
- * return-position predicates above.  Runs nominal -> register-class ->
- * pointer-scalar and returns the first conflict; `cls` gates the register-class
- * check (see ReturnClass).  Callers widen an int-literal -> float body in place
- * with rc_widen_int_literal_to_float_return BEFORE calling, and should skip the
+/* carrier-aware-return-unification: single dispatcher over the return-position
+ * predicates above.  Runs nominal -> register-class -> pointer-scalar (commit)
+ * -> pointer-scalar (reverse) and returns the first conflict; `cls` calibrates
+ * the register-class and reverse-pointer-scalar axes (see ReturnClass).  Callers
+ * widen an int-literal -> float body in place with
+ * rc_widen_int_literal_to_float_return BEFORE calling, and should skip the
  * lazy-probe placeholder and inline-C (fiat TY_NIL) bodies as before. */
 ReturnConflict return_position_conflict(const StructDef *ret_struct,
                                         const AdtDef *ret_adt,

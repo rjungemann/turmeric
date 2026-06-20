@@ -3706,7 +3706,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
             rc_widen_int_literal_to_float_return(mp->ret_kind, method_body);
             ReturnConflict rc = return_position_conflict(
                 mp->ret_struct, mp->ret_adt, mp->ret_kind, method_body->type,
-                RET_CLASS_CARRIER);
+                RET_CLASS_CARRIER_METHOD);
             if (rc != RET_CONFLICT_NONE) {
                 const char *want = mp->ret_struct ? mp->ret_struct->name
                                  : mp->ret_adt    ? mp->ret_adt->name
@@ -3742,6 +3742,10 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                             "not a tolerable carrier bridge",
                             meth, gb.data);
                         break;
+                    /* TYPE_REVERSE (TUR-E0709) is committed-defn-only; an
+                     * instance method is RET_CLASS_CARRIER_METHOD, so the
+                     * dispatcher never returns it here. */
+                    case RET_CONFLICT_TYPE_REVERSE:
                     case RET_CONFLICT_NONE: break;  /* unreachable */
                 }
                 buf_free(&gb);

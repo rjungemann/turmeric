@@ -1749,17 +1749,36 @@ bool return_type_pointer_scalar_conflict(TypeKind declared, Type body) {
     return ps_is_integer_scalar_kind(body.kind);
 }
 
-/* carrier-aware-return-unification Phase 1: single dispatcher over the three
- * return-position predicates -- see elab_internal.h.  Runs them in the
- * established order (nominal -> register-class -> pointer-scalar) and returns
- * the first conflict.  The register-class check is gated by `cls`: a COMMITTED
- * position (today's ordinary `defn`) checks symmetrically -- a float on either
- * side vs a concrete non-float on the other is a clash; a CARRIER position
- * (today's typeclass instance method) only flags the float-commit direction
- * (declared float, concrete non-float body), because a non-float-declared
- * carrier method legitimately returns a float instance value through the int64
- * carrier and is resolved to its real register class per-instance.  The
- * int-literal -> float widening is the caller's pre-step. */
+/* carrier-aware-return-unification Phase 2: the REVERSE pointer-scalar
+ * direction -- a concrete integer-family declared return with a concrete `cstr`
+ * body.  This is the carrier-handle bridge that the commit-direction helper
+ * above deliberately tolerates, so it is sound ONLY for a genuinely committed
+ * position (a monomorphic non-`#{Unsafe}` defn that does not participate in the
+ * carrier).  The dispatcher gates it on RET_CLASS_COMMITTED; the helper itself
+ * just recognises the shape. */
+bool return_type_pointer_scalar_reverse_conflict(TypeKind declared, Type body) {
+    if (!ps_is_integer_scalar_kind(declared)) return false;
+    return body.kind == TY_CSTR;
+}
+
+/* carrier-aware-return-unification: single dispatcher over the return-position
+ * predicates -- see elab_internal.h.  Runs them in the established order
+ * (nominal -> register-class -> pointer-scalar commit -> pointer-scalar reverse)
+ * and returns the first conflict.  `cls` calibrates two axes against the carrier
+ * ABI:
+ *   - Register-class (float-vs-non-float): symmetric for both defn classes
+ *     (a float never rides the int64 carrier, so a float-vs-concrete-non-float
+ *     result is always an xmm-vs-GP miscompile); commit-direction-only
+ *     (declared float) for RET_CLASS_CARRIER_METHOD, where the per-instance emit
+ *     path resolves a non-float-declared / float-body method to its real
+ *     register class.
+ *   - Pointer-scalar REVERSE (integer-declared, cstr body): only RET_CLASS_
+ *     COMMITTED rejects it (Phase 2).  For a generic / `#{Unsafe}` defn
+ *     (RET_CLASS_CARRIER_FN) or an instance method (RET_CLASS_CARRIER_METHOD)
+ *     this is the deliberate carrier-handle bridge and stays accepted.
+ * The commit-direction pointer-scalar (cstr-declared, integer body, TUR-E0708)
+ * and nominal-identity clash (TUR-E0001) are unconditional.  The int-literal ->
+ * float widening is the caller's pre-step. */
 ReturnConflict return_position_conflict(const StructDef *ret_struct,
                                         const AdtDef *ret_adt,
                                         TypeKind ret_kind, Type body,
@@ -1768,15 +1787,23 @@ ReturnConflict return_position_conflict(const StructDef *ret_struct,
         return_type_nominal_conflict(ret_struct, ret_adt, body))
         return RET_CONFLICT_NOMINAL;
 
-    /* COMMITTED checks symmetrically; CARRIER only in the float-commit
-     * direction (declared float).  The predicate itself already tolerates a
-     * same-register-class pair, so the gate only narrows the CARRIER case. */
-    bool check_rc = (cls == RET_CLASS_COMMITTED) || rc_is_float_kind(ret_kind);
-    if (check_rc && return_type_register_class_conflict(ret_kind, body))
+    /* Register-class: commit-direction-only for a typeclass instance method;
+     * symmetric otherwise.  The predicate already tolerates a same-register-class
+     * pair, so the gate only narrows the instance-method case. */
+    bool rc_commit_only = (cls == RET_CLASS_CARRIER_METHOD);
+    if ((!rc_commit_only || rc_is_float_kind(ret_kind)) &&
+        return_type_register_class_conflict(ret_kind, body))
         return RET_CONFLICT_REGISTER_CLASS;
 
     if (return_type_pointer_scalar_conflict(ret_kind, body))
         return RET_CONFLICT_POINTER_SCALAR;
+
+    /* Reverse pointer-scalar: only a genuinely committed position (a monomorphic
+     * non-#{Unsafe} defn) has no carrier to bridge, so only there is a cstr body
+     * under an integer return a real error (TUR-E0709). */
+    if (cls == RET_CLASS_COMMITTED &&
+        return_type_pointer_scalar_reverse_conflict(ret_kind, body))
+        return RET_CONFLICT_TYPE_REVERSE;
 
     return RET_CONFLICT_NONE;
 }

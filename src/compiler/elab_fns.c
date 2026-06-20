@@ -2538,9 +2538,18 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * float coercion is widened in place first so it stays a coercion. */
     if (!lazy_defer && body && body->kind != EX_INLINE_C) {
         rc_widen_int_literal_to_float_return(return_kind, body);
+        /* carrier-aware-return-unification Phase 2: a defn is a genuinely
+         * COMMITTED position only when it does not participate in the int64
+         * carrier ABI -- i.e. it is monomorphic (no type params, implicit ones
+         * included in n_fn_type_params) and not `#{Unsafe}`.  A generic or
+         * `#{Unsafe}` defn is RET_CLASS_CARRIER_FN: it keeps the symmetric
+         * register-class (float) check but tolerates the reverse pointer-scalar
+         * carrier-handle bridge. */
+        ReturnClass ret_cls = (n_fn_type_params == 0 && !fn_declared_unsafe)
+                                  ? RET_CLASS_COMMITTED
+                                  : RET_CLASS_CARRIER_FN;
         ReturnConflict rc = return_position_conflict(
-            return_struct_def, return_adt_def, return_kind, body->type,
-            RET_CLASS_COMMITTED);
+            return_struct_def, return_adt_def, return_kind, body->type, ret_cls);
         if (rc != RET_CONFLICT_NONE) {
             const char *want = return_struct_def ? return_struct_def->name
                              : return_adt_def    ? return_adt_def->name
@@ -2573,6 +2582,15 @@ Expr *elab_defn(Elab *e, const Form *call) {
                         "pointer, so this is a type-erasure bug, not a tolerable "
                         "carrier bridge",
                         name_f->as.sym->name, gb.data);
+                    break;
+                case RET_CONFLICT_TYPE_REVERSE:
+                    diag_emit_with_code(DIAG_ERROR, body->span,
+                        TUR_E0709_RETURN_TYPE_MISMATCH,
+                        "function '%s' declares return type '%s' but its body "
+                        "returns %s -- a string pointer is never a valid integer, "
+                        "and this committed monomorphic function has no carrier to "
+                        "bridge it",
+                        name_f->as.sym->name, want, gb.data);
                     break;
                 case RET_CONFLICT_NONE: break;  /* unreachable */
             }

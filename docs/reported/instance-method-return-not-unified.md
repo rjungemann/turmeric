@@ -12,6 +12,39 @@ severity: Medium. A function body may produce a value of a completely unrelated
 status: PARTIALLY RESOLVED
 ---
 
+## Status: reverse cstr/integer returns now rejected for committed defns (2026-06-20)
+
+The carrier-aware return unification work (see
+`docs/upcoming/v2/carrier-aware-return-unification-plan.md`, Phase 2) now closes
+the REVERSE of the `TUR-E0708` commit direction for the one position where it is
+soundly rejectable: a genuinely **committed** `defn` -- monomorphic
+(`n_fn_type_params == 0`, implicit type params included) and not `#{Unsafe}`, so
+it does not participate in the int64 carrier ABI -- that declares a concrete
+integer-family return but whose body yields a concrete `cstr` is now a hard
+`TUR-E0709`. A string pointer is never a valid integer, and a committed
+monomorphic function has no carrier to bridge it.
+
+- The classification is the mechanism: `elab_defn` tags the position
+  `RET_CLASS_COMMITTED` only for a monomorphic non-`#{Unsafe}` defn;
+  generic / `#{Unsafe}` defns are `RET_CLASS_CARRIER_FN` and instance methods
+  `RET_CLASS_CARRIER_METHOD`, both of which still tolerate the reverse
+  direction (the deliberate carrier-handle bridge). The shared dispatcher
+  `return_position_conflict` (`src/compiler/elab_core.c`) gates the reverse
+  pointer-scalar check (`return_type_pointer_scalar_reverse_conflict`) on
+  `RET_CLASS_COMMITTED`.
+- New code `TUR_E0709_RETURN_TYPE_MISMATCH` (`src/compiler/diag.{h,c}`) with a
+  code string, reverse lookup, and a `tur explain TUR-E0709` long-form entry.
+- Fixtures: `errors/return-type-int-cstr-defn` (negative) and
+  `return-type-int-cstr-carrier-ok` (positive control: a generic defn and an
+  `#{Unsafe}` defn returning a `cstr` under an `int` return are NOT flagged).
+  `bash tests/run.sh`: 1706 passed, 0 failed.
+
+The remaining residue is now just the `int`-vs-`bool` same-integer-class pair
+(both directions) and the carrier-handle bridge for generic / `#{Unsafe}` /
+typeclass code. Rejecting `int`-vs-`bool` soundly needs a carrier-result marker
+(a `TY_INT` body may be a genuine int or a carried `bool`), so it is deferred to
+a Phase 2b slice; this report stays OPEN for it.
+
 ## Status: cstr-commit / integer-body returns now rejected (2026-06-20)
 
 The next carrier-tolerated slice past the nominal and float guards is now fixed

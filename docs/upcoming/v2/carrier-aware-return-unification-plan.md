@@ -1,6 +1,8 @@
 # Full carrier-aware return unification -- plan
 
-**Status:** Phase 0 + Phase 1 landed (behavior-neutral). Phases 2-4 pending.
+**Status:** Phase 0 + Phase 1 (behavior-neutral) + Phase 2 (reverse
+pointer-scalar, `TUR-E0709`) landed. Phases 3-4 pending; the `int`-vs-`bool`
+residue is deferred (see Phase 2 notes).
 **Tracks:** `docs/reported/instance-method-return-not-unified.md` (the open
 residue this plan closes).
 
@@ -99,14 +101,41 @@ fully-grounded instance method -- is `RET_CLASS_COMMITTED`.
   passes `RET_CLASS_CARRIER`, exactly reproducing today's per-site calibration.
   Suite stays at parity, no fixture regen.
 
-### Phase 2 -- turn on `RET_CLASS_COMMITTED` for monomorphic `defn`s (pending)
+### Phase 2 -- turn on `RET_CLASS_COMMITTED` for monomorphic `defn`s (DONE)
 
-A plain `defn` with a concrete (no free tyvar, non-carrier) declared return and
-a non-`#{Unsafe}`, non-carrier-helper body is `RET_CLASS_COMMITTED`. This closes
-the int-vs-bool and reverse-direction residue for ordinary functions, where
-there is no carrier ambiguity. New `TUR-E0709_RETURN_TYPE_MISMATCH` with a
-`tur explain` entry. Expect latent mismatches in the corpus; fix or annotate,
-regen snapshots in the same change.
+A `defn` is classified at the `elab_defn` check site:
+`(n_fn_type_params == 0 && !fn_declared_unsafe) ? RET_CLASS_COMMITTED :
+RET_CLASS_CARRIER_FN`. `n_fn_type_params` includes implicit type params, so any
+generic defn -- explicit or inferred -- is carrier-participating. The
+`ReturnClass` enum grew a third value so the dispatcher can calibrate two axes
+independently:
+
+| Axis | `COMMITTED` | `CARRIER_FN` | `CARRIER_METHOD` |
+|---|---|---|---|
+| register-class (float) | symmetric | symmetric | float-commit only |
+| reverse pointer-scalar (int ret, cstr body) | **rejected** | tolerated | tolerated |
+
+Register-class stays symmetric for both defn classes because a float never rides
+the int64 carrier (a float-vs-concrete-non-float result is always an
+xmm-vs-GP miscompile); only the typeclass per-instance emit path resolves the
+float bridge, so only `CARRIER_METHOD` relaxes it. The reverse pointer-scalar
+direction (`return_type_pointer_scalar_reverse_conflict`) is the
+carrier-handle bridge, sound to reject only where there is no carrier -- a
+committed monomorphic defn -- emitting `TUR-E0709_RETURN_TYPE_MISMATCH` (with a
+`tur explain` entry). Fixtures: `errors/return-type-int-cstr-defn` (negative)
+and `return-type-int-cstr-carrier-ok` (positive control: a generic defn and an
+`#{Unsafe}` defn returning a `cstr` under an `int` return are NOT flagged).
+`bash tests/run.sh`: 1706 passed, 0 failed (no latent mismatches surfaced).
+
+**Deferred: the `int`-vs-`bool` residue.** `:bool` body `42` and the reverse
+`:int` body `(some-bool)` are *not* yet rejected, even for committed defns.
+Returning a `0`/`1` int literal where `: bool` is declared is the idiomatic way
+to write boolean constants, and a `bool`-returning generic call carried as int64
+elaborates with kind `TY_INT`, so a kind-level `int`/`bool` reject would produce
+false positives. Closing this soundly needs a carrier-result marker (knowing a
+`TY_INT` body is a genuine int vs a carried `bool`), which is its own slice
+(Phase 2b) -- the reverse pointer-scalar (`cstr` vs integer) has no such
+ambiguity, hence it went first.
 
 ### Phase 3 -- extend `RET_CLASS_COMMITTED` to grounded instance methods (pending)
 

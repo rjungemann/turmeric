@@ -1,0 +1,17 @@
+;; return-type-int-cstr-carrier-ok -- positive control for TUR-E0709.
+;; The reverse pointer-scalar direction (integer return, cstr body) is rejected
+;; ONLY for a committed monomorphic non-#{Unsafe} defn.  A generic defn and an
+;; #{Unsafe} defn legitimately return a pointer handle through an int64 result
+;; slot -- the deliberate carrier-handle bridge -- so neither is flagged.  Both
+;; are defined (hence elaborated and return-checked) to prove the check tolerates
+;; them; main prints a fixed line and returns 0 without consuming their carrier
+;; results (which would be a bitwise reinterpret, not a real int).
+(defn gbridge [A] [x : A] : int
+  "carried")
+
+(defn ubridge [] #{Unsafe} : int
+  "carried")
+
+(defn main [] : int
+  (println "ok")
+  0)

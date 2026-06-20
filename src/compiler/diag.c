@@ -189,6 +189,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0706_SERIAL_CONTEXT_NOT_CAPTURABLE:    return "TUR-E0706";
         case TUR_E0707_RETURN_REGISTER_CLASS_MISMATCH:   return "TUR-E0707";
         case TUR_E0708_RETURN_POINTER_SCALAR_MISMATCH:   return "TUR-E0708";
+        case TUR_E0709_RETURN_TYPE_MISMATCH:             return "TUR-E0709";
         /* ET4: effect scope errors */
         case TUR_E0250_ROW_VAR_ESCAPES_SCOPE:            return "TUR-E0250";
         case TUR_E0253_EFFECT_NOT_IN_SCOPE:              return "TUR-E0253";
@@ -293,6 +294,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0706") == 0) return TUR_E0706_SERIAL_CONTEXT_NOT_CAPTURABLE;
     if (strcmp(s, "TUR-E0707") == 0) return TUR_E0707_RETURN_REGISTER_CLASS_MISMATCH;
     if (strcmp(s, "TUR-E0708") == 0) return TUR_E0708_RETURN_POINTER_SCALAR_MISMATCH;
+    if (strcmp(s, "TUR-E0709") == 0) return TUR_E0709_RETURN_TYPE_MISMATCH;
     /* ET4: effect scope errors */
     if (strcmp(s, "TUR-E0250") == 0) return TUR_E0250_ROW_VAR_ESCAPES_SCOPE;
     if (strcmp(s, "TUR-E0253") == 0) return TUR_E0253_EFFECT_NOT_IN_SCOPE;
@@ -1593,6 +1595,33 @@ static const DiagExplanation diag_explanations_[] = {
       "declared to return an integer carrier whose body yields a `cstr` handle --\n"
       "is the deliberate int64 carrier-handle bridge (generic and typeclass code\n"
       "routinely passes pointer handles through an int64 result slot) and stays\n"
+      "accepted.\n",
+    },
+    { TUR_E0709_RETURN_TYPE_MISMATCH,
+      "TUR-E0709: committed return type / body type mismatch\n"
+      "\n"
+      "A genuinely *committed* function -- a monomorphic `defn` that is not\n"
+      "`#{Unsafe}` and takes no type parameters, so it does not participate in the\n"
+      "int64 carrier ABI -- declares a concrete integer-family return type (int,\n"
+      "bool, int8/16/32/64, uint8/16/32/64) but its body yields a concrete `cstr`\n"
+      "(a `const char*` string pointer).\n"
+      "\n"
+      "This is the REVERSE of the TUR-E0708 commit direction.  TUR-E0708 rejects an\n"
+      "integer body where `cstr` is declared; TUR-E0709 rejects a `cstr` body where\n"
+      "an integer is declared.  The reverse direction is normally a legitimate\n"
+      "carrier-handle bridge -- generic and typeclass code routinely returns a\n"
+      "pointer handle through an int64 result slot.  But a committed monomorphic\n"
+      "function has no carrier to bridge: the int64 reinterpret the carrier ABI\n"
+      "relies on is absent, so handing back a string pointer where an integer is\n"
+      "declared is a real type-erasure bug.\n"
+      "\n"
+      "Examples triggering this error:\n"
+      "  (defn f [] : int  \"hello\")          ; cstr body, int return\n"
+      "  (defn g [] : bool (name-of x))       ; cstr-typed body, bool return\n"
+      "\n"
+      "Fix: correct the declared return type to `cstr`, or return an integer-typed\n"
+      "value.  If the function is genuinely carrier-participating, mark it\n"
+      "`#{Unsafe}` or give it a type parameter -- the bridge is then intentional and\n"
       "accepted.\n",
     },
 };
