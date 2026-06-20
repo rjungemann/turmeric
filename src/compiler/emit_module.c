@@ -2519,6 +2519,26 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
                 emit_abi_scan_expr(ctx, e->as.reinterpret_.expr, items, n_items);
             }
             break;
+        case EX_MATCH:
+            /* Recurse into the scrutinee + each arm body/guard.  Without this,
+             * an instance-method (or any polymorphic) call reached only through
+             * a match -- the prototypical case is a higher-kinded instance
+             * method whose result is the match scrutinee, e.g.
+             * `(match (fmap e f) (Left l) l (Right r) r)` -- falls off the
+             * monomorphization worklist: the call-name resolver still mints the
+             * carrier-ABI clone name (`__inst_Functor_fmap_Either__ltstruct_gt`)
+             * at the call site, but no spec is interned so neither a forward
+             * decl nor a definition is emitted and the C linker reports the
+             * symbol undefined.  Mirrors the EX_EXISTS_OPEN / EX_HANDLE fixes;
+             * tracked in
+             * docs/reported/hkt-instance-method-match-scrutinee-undefined-symbol.md */
+            emit_abi_scan_expr(ctx, e->as.match_.scrutinee, items, n_items);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                emit_abi_scan_expr(ctx, e->as.match_.arms[i].body, items, n_items);
+                if (e->as.match_.arms[i].guard)
+                    emit_abi_scan_expr(ctx, e->as.match_.arms[i].guard, items, n_items);
+            }
+            break;
         case EX_DICT: {
             /* An EX_DICT node references a per-instance dict singleton by name
              * (emit_expr.c emits `dict_<Class>_<T>_singleton[.method]`).  That

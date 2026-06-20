@@ -1,0 +1,18 @@
+; Regression: the result of a higher-kinded instance method (fmap over Either)
+; consumed by a `match` scrutinee must materialize the carrier-ABI instance
+; specialization, not just resolve its name at the call site.  Previously the
+; spec fell off the monomorphization worklist (emit_abi_scan_expr had no
+; EX_MATCH arm) and the program failed to link with an undefined reference to
+; __inst_Functor_fmap_Either__ltstruct_gt.
+(load "stdlib/either.tur")
+
+(defn inc [x : int] : int (+ x 1))
+
+(defn main [] : int
+  ; fmap over Right runs inc on the payload -> (Right 22); match binds r = 22.
+  (println (match (fmap (Right 21) inc) (Left l) l (Right r) r))
+  ; let-bound container, same path -> 42.
+  (println (let [e (Right 41)] (match (fmap e inc) (Left l) l (Right r) r)))
+  ; fmap over Left is the identity -> (Left 9); match binds l = 9.
+  (println (match (fmap (Left 9) inc) (Left l) l (Right r) r))
+  0)
