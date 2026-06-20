@@ -1,5 +1,20 @@
 # `errors/ecs-defsystem-writes-unauthorized` diagnostic out of sync with spices `main`
 
+> **RESOLVED (2026-06-20).** The fixture was not actually "out of sync" -- its
+> expected `TUR-E0003 unbound symbol 'Vel-write-cap'` diagnostic lives in the
+> `defsystem rogue` body, which the elaborator never reached once the imported
+> `ecs/world` module errored first (`no instance binding for associated type
+> 'Storage'`). `(defmodule ...)` body elaboration bailed on the first erroring
+> form, so the later diagnostics were never emitted. Fixed by adding error
+> recovery to the module-body loop (`elab_module.c` `elab_defmodule` Pass 2:
+> keep going past a NULL form, mirroring the top-level driver) plus a
+> NULL-field-name guard in `elab_method_call` (`elab_typeclasses.c`) that
+> prevents a SEGV when recovery reaches a `.method` on an incompletely
+> elaborated struct. The fixture now emits its expected diagnostic and PASSES
+> with `../turmeric-spices/` present; full suite `1690 passed, 0 failed`. Full
+> write-up:
+> `docs/archive/tourist-captures-reads-back-as-int-carrier-collapse.md`.
+
 **Severity:** Ergonomics / test-sync (not a miscompile). A `requires.spices`
 error fixture pins an expected diagnostic that the current `turmeric-spices`
 `main` no longer produces, so the fixture FAILs whenever the spices checkout is

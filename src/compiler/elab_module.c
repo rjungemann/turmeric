@@ -852,20 +852,38 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
         }
     }
 
-    /* Pass 2: elaborate body forms */
+    /* Pass 2: elaborate body forms.
+     *
+     * On a per-form failure (elab_form returns NULL) record the error but KEEP
+     * GOING, so every bad form in the module surfaces its own diagnostic.  This
+     * mirrors the top-level driver in elaborate_program (elab_toplevel.c), which
+     * sets rc=-1 and continues rather than bailing on the first NULL.  The old
+     * behaviour returned NULL on the FIRST failing form, so a (defmodule ...)
+     * with N independent type errors reported only the first one -- e.g. the
+     * tourist swap_reject_test negative fixture (every defn is a deliberate
+     * swap-rejection probe) emitted only one of its ~20 expected TUR-E0001s, so
+     * a regression at any later probe would slip through unnoticed.  After the
+     * loop a module that had any failure still returns NULL so the caller knows
+     * elaboration failed; only successfully-elaborated forms are kept in body[]. */
     uint32_t n_body = call->as.list.len - body_start;
     Expr **body = (n_body == 0) ? NULL :
         (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
     uint32_t actual_n_body = 0;
+    bool body_had_error = false;
 
     for (uint32_t j = body_start; j < call->as.list.len; j++) {
         Expr *be = elab_form(e, call->as.list.items[j]);
         if (!be) {
-            e->current_module_name = NULL;
-            e->current_module = NULL;
-            return NULL;
+            body_had_error = true;
+            continue;  /* keep going to surface more diagnostics */
         }
         body[actual_n_body++] = be;
+    }
+
+    if (body_had_error) {
+        e->current_module_name = NULL;
+        e->current_module = NULL;
+        return NULL;
     }
 
     mod->body = body;

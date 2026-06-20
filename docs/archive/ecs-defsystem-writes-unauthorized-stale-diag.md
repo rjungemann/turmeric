@@ -6,9 +6,30 @@ severity: Low. A `requires.spices` error-fixture whose expected diagnostic no
   surfaces when the sibling `turmeric-spices` checkout is present (the fixture
   auto-skips otherwise), so it does not affect the default `bash tests/run.sh`
   count in a checkout-less environment.
-status: OPEN, uncovered 2026-06-18 while cloning `turmeric-spices` to complete
-  the Phase 2.1 HKT measurement. Not caused by any compiler change this session
-  (reproduces identically on unmodified HEAD).
+status: RESOLVED 2026-06-20 (uncovered 2026-06-18 while cloning `turmeric-spices`
+  to complete the Phase 2.1 HKT measurement; not caused by any compiler change
+  that session, reproduced identically on then-HEAD).
+---
+
+## RESOLUTION (2026-06-20)
+
+The `expected.diag` was never stale -- the compiler simply was not reaching the
+form that produces it. The fixture's expected `TUR-E0003 unbound symbol
+'Vel-write-cap'` lives in the `defsystem rogue` body. `(defmodule ...)` body
+elaboration bailed out (`return NULL`) on the FIRST erroring form, and an
+imported `ecs/world` module errors first (`no instance binding for associated
+type 'Storage'`), so the main module's `defsystem` body was never elaborated and
+the expected diagnostic never appeared.
+
+Fixed by adding error recovery to the module-body loop
+(`elab_module.c` `elab_defmodule` Pass 2 now keeps going past a NULL form,
+mirroring the top-level driver in `elab_toplevel.c`) plus a NULL-field-name
+guard in `elab_method_call` (`elab_typeclasses.c`) that prevents a SEGV when
+recovery reaches a `.method`/field lookup on an incompletely-elaborated struct.
+The fixture now emits its expected diagnostic and PASSES with
+`../turmeric-spices/` present; full suite `1690 passed, 0 failed`. Full
+write-up: `docs/archive/tourist-captures-reads-back-as-int-carrier-collapse.md`.
+
 ---
 
 # Stale `expected.diag` in `ecs-defsystem-writes-unauthorized`
