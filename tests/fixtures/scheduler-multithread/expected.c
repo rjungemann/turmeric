@@ -2712,14 +2712,6 @@ static bool __inst_Eq_eq_qu_bool(bool x, bool y) {
         return (x) == (y);
 }
 
-typedef struct dict_Eq_bool {
-    bool (*eq_qu)(bool, bool);
-} dict_Eq_bool;
-
-static dict_Eq_bool dict_Eq_bool_singleton = {
-    .eq_qu = __inst_Eq_eq_qu_bool,
-};
-
 static bool __inst_Eq_eq_qu_cstr(const char * x, const char * y) {
         if (x == NULL && y == NULL) return true;
     if (x == NULL || y == NULL) return false;
@@ -2727,133 +2719,45 @@ static bool __inst_Eq_eq_qu_cstr(const char * x, const char * y) {
     
 }
 
-typedef struct dict_Eq_cstr {
-    bool (*eq_qu)(const char *, const char *);
-} dict_Eq_cstr;
-
-static dict_Eq_cstr dict_Eq_cstr_singleton = {
-    .eq_qu = __inst_Eq_eq_qu_cstr,
-};
-
 static bool __inst_Eq_eq_qu_float(double x, double y) {
         return (x) == (y);
 }
-
-typedef struct dict_Eq_float {
-    bool (*eq_qu)(double, double);
-} dict_Eq_float;
-
-static dict_Eq_float dict_Eq_float_singleton = {
-    .eq_qu = __inst_Eq_eq_qu_float,
-};
 
 static bool __inst_Eq_eq_qu_int8(int8_t x, int8_t y) {
         return (x) == (y);
 }
 
-typedef struct dict_Eq_int8 {
-    bool (*eq_qu)(int8_t, int8_t);
-} dict_Eq_int8;
-
-static dict_Eq_int8 dict_Eq_int8_singleton = {
-    .eq_qu = __inst_Eq_eq_qu_int8,
-};
-
 static bool __inst_Eq_eq_qu_int16(int16_t x, int16_t y) {
         return (x) == (y);
 }
-
-typedef struct dict_Eq_int16 {
-    bool (*eq_qu)(int16_t, int16_t);
-} dict_Eq_int16;
-
-static dict_Eq_int16 dict_Eq_int16_singleton = {
-    .eq_qu = __inst_Eq_eq_qu_int16,
-};
 
 static bool __inst_Eq_eq_qu_int32(int32_t x, int32_t y) {
         return (x) == (y);
 }
 
-typedef struct dict_Eq_int32 {
-    bool (*eq_qu)(int32_t, int32_t);
-} dict_Eq_int32;
-
-static dict_Eq_int32 dict_Eq_int32_singleton = {
-    .eq_qu = __inst_Eq_eq_qu_int32,
-};
-
 static bool __inst_Eq_eq_qu_uint8(uint8_t x, uint8_t y) {
         return (x) == (y);
 }
-
-typedef struct dict_Eq_uint8 {
-    bool (*eq_qu)(uint8_t, uint8_t);
-} dict_Eq_uint8;
-
-static dict_Eq_uint8 dict_Eq_uint8_singleton = {
-    .eq_qu = __inst_Eq_eq_qu_uint8,
-};
 
 static bool __inst_Eq_eq_qu_uint16(uint16_t x, uint16_t y) {
         return (x) == (y);
 }
 
-typedef struct dict_Eq_uint16 {
-    bool (*eq_qu)(uint16_t, uint16_t);
-} dict_Eq_uint16;
-
-static dict_Eq_uint16 dict_Eq_uint16_singleton = {
-    .eq_qu = __inst_Eq_eq_qu_uint16,
-};
-
 static bool __inst_Eq_eq_qu_uint32(uint32_t x, uint32_t y) {
         return (x) == (y);
 }
-
-typedef struct dict_Eq_uint32 {
-    bool (*eq_qu)(uint32_t, uint32_t);
-} dict_Eq_uint32;
-
-static dict_Eq_uint32 dict_Eq_uint32_singleton = {
-    .eq_qu = __inst_Eq_eq_qu_uint32,
-};
 
 static bool __inst_Eq_eq_qu_uint64(uint64_t x, uint64_t y) {
         return (x) == (y);
 }
 
-typedef struct dict_Eq_uint64 {
-    bool (*eq_qu)(uint64_t, uint64_t);
-} dict_Eq_uint64;
-
-static dict_Eq_uint64 dict_Eq_uint64_singleton = {
-    .eq_qu = __inst_Eq_eq_qu_uint64,
-};
-
 static bool __inst_Eq_eq_qu_float32(float x, float y) {
         return (x) == (y);
 }
 
-typedef struct dict_Eq_float32 {
-    bool (*eq_qu)(float, float);
-} dict_Eq_float32;
-
-static dict_Eq_float32 dict_Eq_float32_singleton = {
-    .eq_qu = __inst_Eq_eq_qu_float32,
-};
-
 static int64_t __inst_Clone_clone_int(int64_t x) {
         return x;
 }
-
-typedef struct dict_Clone_int {
-    int64_t (*clone)(int64_t);
-} dict_Clone_int;
-
-static dict_Clone_int dict_Clone_int_singleton = {
-    .clone = __inst_Clone_clone_int,
-};
 
 static int64_t __inst_Clone_clone_T(void * x) {
         /* x is void *; allocate a new int64_t cell and copy the stored value. */
@@ -2865,25 +2769,9 @@ static int64_t __inst_Clone_clone_T(void * x) {
     
 }
 
-typedef struct dict_Clone_T {
-    int64_t (*clone)(void *);
-} dict_Clone_T;
-
-static dict_Clone_T dict_Clone_T_singleton = {
-    .clone = __inst_Clone_clone_T,
-};
-
 static int64_t __inst_Hash_hash_int(int64_t x) {
         return x;
 }
-
-typedef struct dict_Hash_int {
-    int64_t (*hash)(int64_t);
-} dict_Hash_int;
-
-static dict_Hash_int dict_Hash_int_singleton = {
-    .hash = __inst_Hash_hash_int,
-};
 
 static int64_t __inst_Hash_hash_bool(bool x) {
         int64_t __t0;
@@ -2895,26 +2783,10 @@ static int64_t __inst_Hash_hash_bool(bool x) {
         return __t0;
 }
 
-typedef struct dict_Hash_bool {
-    int64_t (*hash)(bool);
-} dict_Hash_bool;
-
-static dict_Hash_bool dict_Hash_bool_singleton = {
-    .hash = __inst_Hash_hash_bool,
-};
-
 static int64_t __inst_Hash_hash_cstr(const char * x) {
         return (int64_t)tur_hamt_hash_str(x);
     
 }
-
-typedef struct dict_Hash_cstr {
-    int64_t (*hash)(const char *);
-} dict_Hash_cstr;
-
-static dict_Hash_cstr dict_Hash_cstr_singleton = {
-    .hash = __inst_Hash_hash_cstr,
-};
 
 static int64_t __inst_Hash_hash_float32(float x) {
         union { float f; int32_t i; } u;
@@ -2923,28 +2795,12 @@ static int64_t __inst_Hash_hash_float32(float x) {
     
 }
 
-typedef struct dict_Hash_float32 {
-    int64_t (*hash)(float);
-} dict_Hash_float32;
-
-static dict_Hash_float32 dict_Hash_float32_singleton = {
-    .hash = __inst_Hash_hash_float32,
-};
-
 static int64_t __inst_Hash_hash_float(double x) {
         union { double f; int64_t i; } u;
     u.f = (double)x;
     return u.i;
     
 }
-
-typedef struct dict_Hash_float {
-    int64_t (*hash)(double);
-} dict_Hash_float;
-
-static dict_Hash_float dict_Hash_float_singleton = {
-    .hash = __inst_Hash_hash_float,
-};
 
 static int64_t __inst_MapKey_mk_hybox_int(int64_t x) {
         return x;
@@ -2957,18 +2813,6 @@ static int64_t __inst_MapKey_mk_hycmp_int(int64_t x) {
 static int64_t __inst_MapKey_mk_hyowned_qu_int(int64_t x) {
         return INT64_C(0);
 }
-
-typedef struct dict_MapKey_int {
-    int64_t (*mk_hybox)(int64_t);
-    int64_t (*mk_hycmp)(int64_t);
-    int64_t (*mk_hyowned_qu)(int64_t);
-} dict_MapKey_int;
-
-static dict_MapKey_int dict_MapKey_int_singleton = {
-    .mk_hybox = __inst_MapKey_mk_hybox_int,
-    .mk_hycmp = __inst_MapKey_mk_hycmp_int,
-    .mk_hyowned_qu = __inst_MapKey_mk_hyowned_qu_int,
-};
 
 static int64_t __inst_MapKey_mk_hybox_bool(bool x) {
         int64_t __t1;
@@ -2988,18 +2832,6 @@ static int64_t __inst_MapKey_mk_hyowned_qu_bool(bool x) {
         return INT64_C(0);
 }
 
-typedef struct dict_MapKey_bool {
-    int64_t (*mk_hybox)(bool);
-    int64_t (*mk_hycmp)(bool);
-    int64_t (*mk_hyowned_qu)(bool);
-} dict_MapKey_bool;
-
-static dict_MapKey_bool dict_MapKey_bool_singleton = {
-    .mk_hybox = __inst_MapKey_mk_hybox_bool,
-    .mk_hycmp = __inst_MapKey_mk_hycmp_bool,
-    .mk_hyowned_qu = __inst_MapKey_mk_hyowned_qu_bool,
-};
-
 static int64_t __inst_MapKey_mk_hybox_cstr(const char * x) {
         return (int64_t)(intptr_t)x; 
 }
@@ -3011,18 +2843,6 @@ static int64_t __inst_MapKey_mk_hycmp_cstr(const char * x) {
 static int64_t __inst_MapKey_mk_hyowned_qu_cstr(const char * x) {
         return INT64_C(0);
 }
-
-typedef struct dict_MapKey_cstr {
-    int64_t (*mk_hybox)(const char *);
-    int64_t (*mk_hycmp)(const char *);
-    int64_t (*mk_hyowned_qu)(const char *);
-} dict_MapKey_cstr;
-
-static dict_MapKey_cstr dict_MapKey_cstr_singleton = {
-    .mk_hybox = __inst_MapKey_mk_hybox_cstr,
-    .mk_hycmp = __inst_MapKey_mk_hycmp_cstr,
-    .mk_hyowned_qu = __inst_MapKey_mk_hyowned_qu_cstr,
-};
 
 static int64_t __inst_MapKey_mk_hybox_float32(float x) {
         union { float f; int64_t i; } u; u.i = 0; u.f = x; return u.i; 
@@ -3036,18 +2856,6 @@ static int64_t __inst_MapKey_mk_hyowned_qu_float32(float x) {
         return INT64_C(0);
 }
 
-typedef struct dict_MapKey_float32 {
-    int64_t (*mk_hybox)(float);
-    int64_t (*mk_hycmp)(float);
-    int64_t (*mk_hyowned_qu)(float);
-} dict_MapKey_float32;
-
-static dict_MapKey_float32 dict_MapKey_float32_singleton = {
-    .mk_hybox = __inst_MapKey_mk_hybox_float32,
-    .mk_hycmp = __inst_MapKey_mk_hycmp_float32,
-    .mk_hyowned_qu = __inst_MapKey_mk_hyowned_qu_float32,
-};
-
 static int64_t __inst_MapKey_mk_hybox_float(double x) {
         union { double f; int64_t i; } u; u.f = x; return u.i; 
 }
@@ -3059,18 +2867,6 @@ static int64_t __inst_MapKey_mk_hycmp_float(double x) {
 static int64_t __inst_MapKey_mk_hyowned_qu_float(double x) {
         return INT64_C(0);
 }
-
-typedef struct dict_MapKey_float {
-    int64_t (*mk_hybox)(double);
-    int64_t (*mk_hycmp)(double);
-    int64_t (*mk_hyowned_qu)(double);
-} dict_MapKey_float;
-
-static dict_MapKey_float dict_MapKey_float_singleton = {
-    .mk_hybox = __inst_MapKey_mk_hybox_float,
-    .mk_hycmp = __inst_MapKey_mk_hycmp_float,
-    .mk_hyowned_qu = __inst_MapKey_mk_hyowned_qu_float,
-};
 
 static bool __fn_692(int64_t a, int64_t b) {
         return __inst_Eq_eq_qu_int(a, b);
@@ -3088,14 +2884,6 @@ static bool __inst_Eq_eq_qu_Map(int64_t x, int64_t y) {
         return __t2;
 }
 
-typedef struct dict_Eq_Map {
-    bool (*eq_qu)(int64_t, int64_t);
-} dict_Eq_Map;
-
-static dict_Eq_Map dict_Eq_Map_singleton = {
-    .eq_qu = __inst_Eq_eq_qu_Map,
-};
-
 static bool __fn_728(int64_t a, int64_t b) {
         return __inst_Eq_eq_qu_int(a, b);
 }
@@ -3111,14 +2899,6 @@ static bool __inst_Eq_eq_qu_Vec(int64_t x, int64_t y) {
         }
         return __t5;
 }
-
-typedef struct dict_Eq_Vec {
-    bool (*eq_qu)(int64_t, int64_t);
-} dict_Eq_Vec;
-
-static dict_Eq_Vec dict_Eq_Vec_singleton = {
-    .eq_qu = __inst_Eq_eq_qu_Vec,
-};
 
 static bool __inst_Eq_eq_qu_Option(int64_t x, int64_t y) {
         bool __t8;
@@ -3136,14 +2916,6 @@ static bool __inst_Eq_eq_qu_Option(int64_t x, int64_t y) {
         return __t8;
 }
 
-typedef struct dict_Eq_Option {
-    bool (*eq_qu)(int64_t, int64_t);
-} dict_Eq_Option;
-
-static dict_Eq_Option dict_Eq_Option_singleton = {
-    .eq_qu = __inst_Eq_eq_qu_Option,
-};
-
 static bool __inst_Eq_eq_qu_Result(int64_t x, int64_t y) {
         bool __t10;
         if ((((Result *)(intptr_t)(x))->is_ok) == (((Result *)(intptr_t)(y))->is_ok)) {
@@ -3159,14 +2931,6 @@ static bool __inst_Eq_eq_qu_Result(int64_t x, int64_t y) {
         }
         return __t10;
 }
-
-typedef struct dict_Eq_Result {
-    bool (*eq_qu)(int64_t, int64_t);
-} dict_Eq_Result;
-
-static dict_Eq_Result dict_Eq_Result_singleton = {
-    .eq_qu = __inst_Eq_eq_qu_Result,
-};
 
 static int64_t __inst_MonadError_throw_hyerror_Result__ltstruct_gt(int64_t err) {
         return tur_box_err(err); 
@@ -3187,14 +2951,6 @@ static bool __inst_Eq_eq_qu_Pair(int64_t x, int64_t y) {
         return __t12;
 }
 
-typedef struct dict_Eq_Pair {
-    bool (*eq_qu)(int64_t, int64_t);
-} dict_Eq_Pair;
-
-static dict_Eq_Pair dict_Eq_Pair_singleton = {
-    .eq_qu = __inst_Eq_eq_qu_Pair,
-};
-
 static bool __inst_Eq_eq_qu_Tuple2(int64_t x, int64_t y) {
         bool __t13 = __inst_Eq_eq_qu_int(((Tuple2 *)(intptr_t)(x))->e1, ((Tuple2 *)(intptr_t)(y))->e1);
         if (__t13) {
@@ -3202,14 +2958,6 @@ static bool __inst_Eq_eq_qu_Tuple2(int64_t x, int64_t y) {
         }
         return __t13;
 }
-
-typedef struct dict_Eq_Tuple2 {
-    bool (*eq_qu)(int64_t, int64_t);
-} dict_Eq_Tuple2;
-
-static dict_Eq_Tuple2 dict_Eq_Tuple2_singleton = {
-    .eq_qu = __inst_Eq_eq_qu_Tuple2,
-};
 
 static bool __fn_914(int64_t a, int64_t b) {
         return __inst_Eq_eq_qu_int(a, b);
@@ -3223,25 +2971,9 @@ static bool __inst_Eq_eq_qu_Cons(int64_t x, int64_t y) {
         return list_hyeq_qu(x, y, (int64_t)(intptr_t)(__t15));
 }
 
-typedef struct dict_Eq_Cons {
-    bool (*eq_qu)(int64_t, int64_t);
-} dict_Eq_Cons;
-
-static dict_Eq_Cons dict_Eq_Cons_singleton = {
-    .eq_qu = __inst_Eq_eq_qu_Cons,
-};
-
 static bool __inst_Eq_eq_qu_Set(int64_t x, int64_t y) {
         return set_hyeq_hyfull(x, y);
 }
-
-typedef struct dict_Eq_Set {
-    bool (*eq_qu)(int64_t, int64_t);
-} dict_Eq_Set;
-
-static dict_Eq_Set dict_Eq_Set_singleton = {
-    .eq_qu = __inst_Eq_eq_qu_Set,
-};
 
 static bool __fn_1034(int64_t a, int64_t b) {
         return __inst_Eq_eq_qu_int(a, b);
@@ -3258,14 +2990,6 @@ static bool __inst_Eq_eq_qu_MutableMap(int64_t x, int64_t y) {
         }
         return __t16;
 }
-
-typedef struct dict_Eq_MutableMap {
-    bool (*eq_qu)(int64_t, int64_t);
-} dict_Eq_MutableMap;
-
-static dict_Eq_MutableMap dict_Eq_MutableMap_singleton = {
-    .eq_qu = __inst_Eq_eq_qu_MutableMap,
-};
 
 static void * array_hyget(void * arr, int64_t idx) {
         struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));

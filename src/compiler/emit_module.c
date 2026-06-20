@@ -854,6 +854,21 @@ static void emit_abi_note_carrier_call(EmitCtx *ctx, const Binding *binding) {
     ctx->carrier_call_bindings[ctx->n_carrier_call_bindings++] = binding;
 }
 
+/* Mark a typeclass instance LIVE for dead-instance elimination: a reference to
+ * its dict singleton (EX_DICT dispatch, or an existential witness table that
+ * stores `&dict_<Class>_<T>_singleton`) keeps the dict alive, so its method
+ * bodies must be emitted too.  Recorded by noting a carrier call on every
+ * method binding, which is exactly what emit_instance_is_live /
+ * emit_abi_fn_skip_generic / the emit_stmt.c dict-skip all consult -- so the
+ * dict and its bodies stay in lockstep. */
+static void emit_abi_note_instance_dict_ref(EmitCtx *ctx, const TypeClassInstance *inst) {
+    if (!ctx || !inst || !inst->typeclass) return;
+    for (uint8_t i = 0; i < inst->typeclass->n_methods; i++) {
+        FnDef *m = inst->method_impls[i];
+        if (m && m->binding) emit_abi_note_carrier_call(ctx, m->binding);
+    }
+}
+
 static void emit_abi_record_specialized_call(EmitCtx *ctx, const Expr *call, const char *clone_name) {
     /* M5 Finding 7: also record the active outer spec so the same source-body
      * call recorded under different outer specs (per element type) stays
@@ -2155,6 +2170,15 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
              * monomorphized.  See
              * docs/reported/open-monomorphizes-polymorphic-fn-only-partially.md. */
             emit_abi_scan_expr(ctx, e->as.exists_pack_.value, items, n_items);
+            /* The pack emits a witness table storing `&dict_<Class>_<T>_singleton`
+             * for each constraint witness (emit_expr.c).  Those dict references
+             * keep the witnessed instances alive, so mark them -- otherwise
+             * dead-instance elimination skips a witness's dict and the pack's
+             * `witnesses[i] = &dict_..._singleton` dangles (exg5/ex1c packs). */
+            for (uint8_t wi = 0; wi < e->as.exists_pack_.n_witnesses; wi++) {
+                if (e->as.exists_pack_.witnesses)
+                    emit_abi_note_instance_dict_ref(ctx, e->as.exists_pack_.witnesses[wi]);
+            }
             break;
         case EX_EXISTS_OPEN:
             /* Recurse into both the packed expression and the open body --
@@ -2204,6 +2228,23 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
                 emit_abi_scan_expr(ctx, e->as.reinterpret_.expr, items, n_items);
             }
             break;
+        case EX_DICT: {
+            /* An EX_DICT node references a per-instance dict singleton by name
+             * (emit_expr.c emits `dict_<Class>_<T>_singleton[.method]`).  That
+             * reference is a liveness source for the instance: mark every method
+             * binding as carrier-called so emit_instance_is_live reports the
+             * instance live and BOTH its dict (emit_stmt.c EX_INSTANCE_DEF) and
+             * its method bodies (emit_abi_fn_skip_generic) are emitted in
+             * lockstep.  Without this, a dict-dispatched-but-never-directly-
+             * called instance -- e.g. a `Show`/`Eq` dict handed to a constrained
+             * generic or packed into an existential -- would have its dict
+             * skipped by the dead-instance elimination and the `_singleton`
+             * reference would dangle (`dict_Show_int_singleton undeclared`).
+             * This is the EX_DICT-reference liveness the HKT dead-instance note
+             * (above) anticipated for when indirect dispatch is present. */
+            emit_abi_note_instance_dict_ref(ctx, e->as.dict_.instance);
+            break;
+        }
         default:
             break;
     }
@@ -2647,14 +2688,14 @@ static bool emit_abi_fn_skip_generic(const EmitCtx *ctx, const Expr *e) {
      * (indirect/constrained-poly HKT dispatch keeps the uniform carrier ABI per
      * the M6/M7 carve-out).  Skipping it leaves the dict slot referencing an
      * undeclared symbol (`__inst_Functor_fmap_Option undeclared`). */
-    if (g_m7_hkt_enabled && fd->owner_instance && fd->owner_instance->typeclass) {
+    if (fd->owner_instance && fd->owner_instance->typeclass) {
         TypeClass *tc = fd->owner_instance->typeclass;
         bool is_hkt = false;
         if (tc->type_param_kinds) {
             for (uint8_t i = 0; i < tc->n_type_params; i++)
                 if (tc->type_param_kinds[i] != KIND_STAR) { is_hkt = true; break; }
         }
-        if (is_hkt) {
+        if (g_m7_hkt_enabled && is_hkt) {
             /* Phase 5 carrier-bridge deletion -- dead-instance elimination: an
              * auto-preloaded HKT instance carrier base used to be kept
              * unconditionally (the dict singleton references it).  But when the
@@ -2667,6 +2708,22 @@ static bool emit_abi_fn_skip_generic(const EmitCtx *ctx, const Expr *e) {
              * liveness), which removes the crossing from every fixture that
              * never uses the instance.  A LIVE instance (some method directly
              * called) keeps its base + dict unchanged. */
+            return !emit_instance_is_live(ctx, fd->owner_instance);
+        }
+        if (!is_hkt) {
+            /* Ground (kind-*) class: the per-instance dict singleton
+             * (emit_stmt.c EX_INSTANCE_DEF) references __inst_<Class>_<method>_<T>
+             * in EVERY fn-ptr slot, and -- unlike the HKT path above -- it was
+             * emitted unconditionally.  Keying the method body off the per-method
+             * `emit_abi_has_carrier_call` (the fall-through below) diverges from
+             * the dict's all-or-nothing emission: when the body is dropped but
+             * the dict is kept, the slot references an undeclared symbol -- the
+             * json Decode `__inst_Decode_decode_int undeclared` miscompile, and
+             * the bool sibling of any partially-used ground instance.  Key the
+             * body off the SAME instance-level liveness the dict now uses
+             * (emit_stmt.c skips the dead ground dict in lockstep) so the two
+             * never disagree: a live instance keeps body + dict together; a dead
+             * one drops both. */
             return !emit_instance_is_live(ctx, fd->owner_instance);
         }
     }

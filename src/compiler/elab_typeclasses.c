@@ -4372,6 +4372,15 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                 goto skip_struct_field_lookup;
             }
             for (uint32_t i = 0; i < def->n_fields; i++) {
+                /* A field name can be NULL when `def` is an incompletely
+                 * elaborated struct -- e.g. one whose owning module hit an
+                 * earlier error (a failed associated-type / instance binding)
+                 * and we are now in error-recovery, continuing to elaborate
+                 * later forms.  Pre-guard the strcmp so a partially-populated
+                 * field table degrades to the regular dispatch path (which
+                 * emits a clean diagnostic) instead of SEGV-ing on
+                 * strcmp(NULL, ...).  Mirrors the `!def` bail above. */
+                if (!def->fields[i].name) continue;
                 if (strcmp(def->fields[i].name, method_name) == 0) {
                     /* Found matching field — build EX_GET_FIELD */
                     Type field_type = elab_struct_field_use_type(e, field_owner_type, def, &def->fields[i]);
