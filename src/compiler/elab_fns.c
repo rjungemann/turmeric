@@ -676,12 +676,18 @@ static bool check_no_borrow_escape(const Expr *tail, uint32_t fn_local_depth,
 }
 
 Expr *elab_defn(Elab *e, const Form *call) {
-    /* Phase R5: Check for #[no-unwind] attribute before name */
+    /* Phase R5: Check for #[no-unwind] attribute before name.
+     * #[used]: retain with external C linkage (see Binding.retain_c_linkage).
+     * Both are bare-symbol attributes and may appear in either order. */
     uint32_t name_idx = 1;  /* index of name in items (after 'defn') */
     bool no_unwind = false;
+    bool retain_c_linkage = false;
     Form *name_f = call->as.list.items[name_idx];
-    if (name_f->tag == F_SYM && name_f->as.sym == e->sym_no_unwind_attr) {
-        no_unwind = true;
+    while (name_f->tag == F_SYM &&
+           (name_f->as.sym == e->sym_no_unwind_attr ||
+            name_f->as.sym == e->sym_used_attr)) {
+        if (name_f->as.sym == e->sym_no_unwind_attr) no_unwind = true;
+        else retain_c_linkage = true;
         name_idx++;
         name_f = call->as.list.items[name_idx];
     }
@@ -3201,6 +3207,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
     if (e->bare_fat_spec_active) e->bare_fat_spec_result = b;
     /* Phase R5: Store #[no-unwind] attribute on the binding */
     b->no_unwind = no_unwind;
+    /* #[used]: retain with external C linkage under separate compilation */
+    b->retain_c_linkage = retain_c_linkage;
     b->returns_closure_fn_binding = expr_closure_fn_binding(body);
     b->closure_return_dispatches = expr_closure_return_dispatches(body);
     b->closure_return_dispatches_untyped = expr_closure_return_dispatches_untyped(body);

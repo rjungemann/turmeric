@@ -4,6 +4,21 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`#[used]` attribute -- retain a defn with external C linkage.** A defn whose
+  mangled C symbol is reached only through a raw `extern` reference -- a
+  hand-written cross-module inline-C bridge, or a C-ABI callback taken by
+  address (Arrow release fns, `qsort` comparators, signal handlers) -- is
+  invisible to the Turmeric export/import + call graph. Under separate
+  compilation such a defn was demoted to `static` (and under the single-main
+  whole-program build shortcut its module was dropped entirely, never inlined),
+  so the symbol dangled at link time. Mark it `(defn #[used] name [...] ...)` to
+  keep external linkage and force every project module to be compiled and
+  linked. Unblocks the `frame` spice's `group`/`interop`/`reshape` suites
+  (`__so-take` bridge, Arrow C Data Interface release callbacks). The attribute
+  composes with `#[no-unwind]` in either order.
+
 ### Fixed
 
 - **File-scope inline-C include guards no longer corrupted by the dedup pass.**

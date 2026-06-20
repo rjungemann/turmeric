@@ -511,9 +511,13 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* spice-defn-return-result-kind-mismatch: stdlib defns preloaded into
      * every project-mode TU stay `static` -- otherwise every TU emits an
      * external copy of e.g. `ok-val` and the linker rejects the duplicates. */
+    /* #[used]: a defn reachable only via its mangled C symbol (cross-module
+     * inline-C bridge or by-address C-ABI callback) must keep external linkage
+     * so the raw `extern <mangled>` reference in another TU resolves. */
     bool needs_static = !is_main &&
         !ctx->fn_name_override_external &&
-        !(ctx->separate_compilation && fd->binding->is_exported
+        !(ctx->separate_compilation
+          && (fd->binding->is_exported || fd->binding->retain_c_linkage)
           && !fd->binding->is_from_stdlib);
     if (needs_static) {
         buf_printf(file, "static ");

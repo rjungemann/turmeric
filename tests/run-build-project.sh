@@ -808,6 +808,60 @@ else
     fi
 fi
 
+# dce-inline-c-used-attr: a #[used] defn reached only through its mangled C
+# symbol -- a hand-written cross-module inline-C bridge -- must survive
+# separate-compilation linkage.  app/a's __helper is unexported and never
+# called through the Turmeric graph; app/main reaches it solely via a raw
+# `extern int64_t app__a____helper(...)`.  Without #[used] the helper is
+# demoted to `static` (separate compilation) or dropped entirely (the
+# single-main whole-program shortcut inlines only the entry's Turmeric import
+# closure), and the symbol dangles at link time.  #[used] retains it with
+# external C linkage and forces every project module to be compiled+linked.
+USEDPROJ="$WORK/used-attr"
+mkdir -p "$USEDPROJ/src/app"
+cat > "$USEDPROJ/build.tur" <<'EOF'
+(defpackage tur-used-attr
+  :name    "tur-used-attr"
+  :version "0.1.0"
+  :exports #{
+    "app/main" ["main"]
+    "app/a"    []
+  })
+EOF
+cat > "$USEDPROJ/src/app/a.tur" <<'EOF'
+;; app/a -- a private inline-C helper, NOT exported and never imported.
+;; #[used] retains it with external C linkage for the raw-extern bridge below.
+(defmodule app/a
+  (defn #[used] __helper [x : int] : int
+    ```c
+    return x + 1;
+    ```))
+EOF
+cat > "$USEDPROJ/src/app/main.tur" <<'EOF'
+;; app/main -- reaches app/a's __helper ONLY via its mangled C symbol; there is
+;; no `(import app/a)`, so the Turmeric call graph never touches __helper.
+(defmodule app/main
+  (defn use [x : int] : int
+    ```c
+    extern int64_t app__a____helper(int64_t);
+    return app__a____helper(x);
+    ```)
+  (defn main [] : int (use 41)))
+EOF
+used_out=$(cd "$WORK" && "$TUR" build "$USEDPROJ" -o "$WORK/usedbin" 2>&1)
+used_rc=$?
+if [ $used_rc -ne 0 ]; then
+    fail "build-project-used-attr-c-linkage" "tur build exit=$used_rc: $used_out"
+else
+    "$WORK/usedbin"
+    used_run_rc=$?
+    if [ "$used_run_rc" -eq 42 ]; then
+        pass "build-project-used-attr-c-linkage"
+    else
+        fail "build-project-used-attr-c-linkage" "exit=$used_run_rc (expected 42)"
+    fi
+fi
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

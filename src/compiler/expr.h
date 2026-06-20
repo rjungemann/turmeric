@@ -86,6 +86,14 @@ struct Binding {
     Span          moved_at;
     /* Phase R5: #[no-unwind] attribute on defn */
     bool          no_unwind;
+    /* #[used]: retain this defn with external C linkage under separate
+     * compilation, even when it is unexported and unreachable through the
+     * Turmeric call graph. Needed for defns reached only via their mangled C
+     * symbol -- hand-written cross-module inline-C bridges and C-ABI callbacks
+     * taken by address (Arrow release fns, qsort comparators, signal handlers).
+     * Without it the unexported defn is demoted to `static` and the raw
+     * `extern <mangled>` reference in another TU dangles at link time. */
+    bool          retain_c_linkage;
     /* Phase T25: true if this binding is an algebraic-effect continuation (k in handle cases).
      * Used to detect continuation escape into async blocks at compile time. */
     bool          is_continuation;
