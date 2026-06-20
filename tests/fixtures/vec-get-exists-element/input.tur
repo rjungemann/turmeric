@@ -1,0 +1,25 @@
+; vec-get-existential-element-erased-to-int: reading an existential element
+; out of a `(Vec (exists [a] [(C a)] a))` must yield the existential, not the
+; int64 carrier, so `open` accepts the result WITHOUT a per-read re-ascription.
+;
+; Before the fix, `(vec-get v i)` -- declared `: A` -- collapsed its result to
+; the int64 carrier even when the receiver `v` carried the existential element
+; type, so `open` rejected it ("expected existential value ... got int") until
+; the full `(exists [a] [(Rdr a)] a)` type was restated at the read site.
+(defclass Rdr [a]
+  (rbound [x : a] : int))
+
+(defopaque LinesR :int)
+
+(definstance Rdr [LinesR]
+  (rbound [x : LinesR] : int
+    (:: x :int)))
+
+(defn main [] : int
+  (let [v (:: (vec-new) (Vec (exists [a] [(Rdr a)] a)))]
+    (vec-push! v (pack (:: 7 :LinesR) (exists [a] [(Rdr a)] a)))
+    (vec-push! v (pack (:: 35 :LinesR) (exists [a] [(Rdr a)] a)))
+    ; No per-read ascription: vec-get yields the existential directly.
+    (println (open (vec-get v 0) [a x] (rbound x)))
+    (println (open (vec-get v 1) [a x] (rbound x)))
+    0))

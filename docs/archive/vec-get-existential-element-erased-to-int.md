@@ -9,7 +9,7 @@ severity: Low-Medium. Not a miscompile and not unsound -- the documented
   `(exists [a] [(C a)] a)` type is restated at every read site. This is the
   friction the turmeric-spices `plot` P3 / Track C investigation hit right after
   the by-value-struct-payload pack defect.
-status: reported
+status: resolved
 component: compiler/elab (call result-kind) + stdlib/vec
 affects: turmeric main 0.21.0
 ---
@@ -124,3 +124,42 @@ For the `plot` `AnyRenderer` use case, defining the existential type behind a
 `docs/archive/constrained-exists-pack-struct-payload-bad-cast.md` -- the
 heterogeneous-renderer-vec pattern works end to end today, modulo the
 ascription boilerplate this report tracks.
+
+## Resolution
+
+Fixed in `elab_call_fn` (`src/compiler/elab_call.c`). When the callee's
+declared result is a bare type variable (`vec-get : A`), the call's result
+type is instantiated from the receiver's element type via
+`call_instantiate_type` -- so a `(Vec (exists [a] [(C a)] a))` receiver
+correctly produces the existential as the call result. The bug was the
+immediately-following `result_is_concrete_composite` guard, which only
+preserved the full type for `TY_APP` / `TY_ADT` / `TY_STRUCT` and collapsed
+everything else (including `TY_EXISTS` / `TY_FORALL`) to the int64 carrier.
+An existential's carrier is already pointer-width int64, so collapsing it was
+pure loss -- it erased the `as.forall_.body` payload that `open` must see.
+Adding `TY_EXISTS` and `TY_FORALL` to the guard keeps the instantiated full
+type, so `open` accepts `(vec-get v i)` directly.
+
+With the fix:
+
+- A receiver that carries the existential element type -- whether via an
+  explicit `(:: (vec-new) (Vec (exists ...)))` annotation (the report's
+  example 2, which previously "still: got int") or via the per-read
+  `(:: (vec-get v i) (exists ...))` ascription (the documented workaround) --
+  now reads back the existential with **no** re-ascription needed at the
+  `open`. Regression coverage: `tests/fixtures/vec-get-exists-element/`.
+
+- The fully-bare `(let [v (vec-new)] (vec-push! v ...) (vec-get v 0))` form
+  (example 1, no type information anywhere) still needs the element type pinned
+  on the receiver. The element type of a fresh `vec-new` is not inferred
+  backward from a later `vec-push!` -- `vec-get` reads the int64 carrier for
+  any element type -- so a single `(Vec (exists ...))` annotation on the
+  binding (or a per-read ascription) is fundamental there, not friction this
+  report removes. Backward element inference from `push` into a let-bound Vec
+  is a separate, larger inference change.
+
+Not addressed (minor, optional): the `-Wint-conversion` warning at the
+existential `vec-push!` carrier boundary (`vec_hypush_ex` takes `int64_t` but
+receives a `tur_exists_t` / `void *`). Harmless at runtime (both
+pointer-width); tightening the carrier bridge to thread `tur_exists_t` is fix
+direction 3 above and left as a follow-up to avoid broad codegen churn.
