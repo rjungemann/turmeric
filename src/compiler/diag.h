@@ -144,6 +144,13 @@ typedef enum DiagCode {
      * cannot be reified into a marshalable continuation.  Rejected at codegen
      * instead of silently lowering to a 0 placeholder / __builtin_trap(). */
     TUR_E0706_SERIAL_CONTEXT_NOT_CAPTURABLE,
+    /* float-register-class-returns: a function/instance-method whose declared
+     * return type and body land in DIFFERENT register classes -- a float
+     * (xmm) on one side and a concrete non-float (int64 GP register: int,
+     * cstr, bool, opaque/struct/ADT handle) on the other.  Unlike the
+     * same-register-class carrier bridges the ABI deliberately tolerates,
+     * a float-vs-non-float result is a genuine xmm0-vs-rax miscompile. */
+    TUR_E0707_RETURN_REGISTER_CLASS_MISMATCH,
     /* Deprecation band (TUR-D####): syntax accepted for backward
      * compatibility but slated for removal.  Emitted as DIAG_WARNING;
      * promoted to DIAG_ERROR under --Werror=deprecated. */

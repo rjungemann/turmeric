@@ -869,6 +869,29 @@ Expr *elab_coerce_to_any(Elab *e, Expr *value);
 bool return_type_nominal_conflict(const StructDef *ret_struct,
                                   const AdtDef *ret_adt, Type body);
 
+/* float-register-class-returns: sibling of return_type_nominal_conflict that
+ * catches the one carrier-tolerated return mismatch that is NOT a benign
+ * representation bridge -- a float-vs-non-float clash.  `int`, `cstr`, `bool`,
+ * opaque handles, and struct/ADT handles all share the int64 GP register, so
+ * swapping them in the result position is a no-op reinterpret; a float lives in
+ * an xmm register, so returning a float where the declared return is a concrete
+ * non-float (or vice versa) is a genuine register-class miscompile (xmm0 vs
+ * rax).  Fires only when EXACTLY ONE side is a floating kind (TY_FLOAT*) and the
+ * other is a concrete (register-pinned) non-float; tyvar / unknown / never / any
+ * sides are tolerated (not yet a concrete cross-class result).  `declared` is
+ * the function's declared return TypeKind; `body` is the elaborated body's type.
+ * The int-literal -> float coercion is handled by the caller (it widens the
+ * literal in place) before this check runs. */
+bool return_type_register_class_conflict(TypeKind declared, Type body);
+
+/* float-register-class-returns: if `declared` is a floating kind (TY_FLOAT*)
+ * and `body` is a bare integer literal, widen the literal to that float in
+ * place (mirroring numeric-literal coercion in argument / binding positions)
+ * and return true.  The caller then treats the return as a coercion rather
+ * than a register-class conflict.  Returns false (and leaves `body` untouched)
+ * otherwise. */
+bool rc_widen_int_literal_to_float_return(TypeKind declared, Expr *body);
+
 /* TY4: if `e` is a borrow (&x / &mut x) of a named binding, return that
  * binding (the referent); otherwise NULL.  Used by the borrow-escape check. */
 const Binding *borrow_referent_binding(const Expr *e);

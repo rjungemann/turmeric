@@ -1,0 +1,19 @@
+;; return-type-register-class-instance-float-struct -- negative control for the
+;; TUR-E0707 check wired into definstance pass 2.  A class method that COMMITS to
+;; a concrete float return (`: float`, not the int64 carrier) but whose instance
+;; body yields a struct handle is a genuine xmm-vs-GP register-class clash.
+;;
+;; Contrast: a class method declaring the int64 *carrier* (`: int`) whose float
+;; instance returns a float -- e.g. Num's `(add [x y] : int)` for float32 -- is
+;; the deliberate carrier bridge and stays accepted; only a declared-float
+;; commitment is checked here.
+(defclass ToFloat [a]
+  (to-float [x : a] : float))
+
+(defstruct W [n : int])
+(defstruct Q [z : int])
+
+(definstance ToFloat [W]
+  (to-float [x : W] : float (make-struct Q 1)))
+
+(defn main [] : int 0)

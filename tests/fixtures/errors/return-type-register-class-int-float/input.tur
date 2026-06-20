@@ -1,0 +1,12 @@
+;; return-type-register-class-int-float -- negative control for TUR-E0707.
+;; A function declaring `: float` whose body yields a (non-literal) int is a
+;; cross-register-class result: the declared float rides an xmm register while
+;; the int body sits in a general-purpose register (xmm0 vs rax).  Unlike the
+;; int-literal -> float coercion (which widens in place), a computed int body
+;; cannot be silently reinterpreted as a float, so this is rejected.
+(defn ival [] : int 5)
+
+(defn fbad [] : float
+  (ival))
+
+(defn main [] : int 0)
