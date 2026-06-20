@@ -1749,6 +1749,38 @@ bool return_type_pointer_scalar_conflict(TypeKind declared, Type body) {
     return ps_is_integer_scalar_kind(body.kind);
 }
 
+/* carrier-aware-return-unification Phase 1: single dispatcher over the three
+ * return-position predicates -- see elab_internal.h.  Runs them in the
+ * established order (nominal -> register-class -> pointer-scalar) and returns
+ * the first conflict.  The register-class check is gated by `cls`: a COMMITTED
+ * position (today's ordinary `defn`) checks symmetrically -- a float on either
+ * side vs a concrete non-float on the other is a clash; a CARRIER position
+ * (today's typeclass instance method) only flags the float-commit direction
+ * (declared float, concrete non-float body), because a non-float-declared
+ * carrier method legitimately returns a float instance value through the int64
+ * carrier and is resolved to its real register class per-instance.  The
+ * int-literal -> float widening is the caller's pre-step. */
+ReturnConflict return_position_conflict(const StructDef *ret_struct,
+                                        const AdtDef *ret_adt,
+                                        TypeKind ret_kind, Type body,
+                                        ReturnClass cls) {
+    if ((ret_struct || ret_adt) &&
+        return_type_nominal_conflict(ret_struct, ret_adt, body))
+        return RET_CONFLICT_NOMINAL;
+
+    /* COMMITTED checks symmetrically; CARRIER only in the float-commit
+     * direction (declared float).  The predicate itself already tolerates a
+     * same-register-class pair, so the gate only narrows the CARRIER case. */
+    bool check_rc = (cls == RET_CLASS_COMMITTED) || rc_is_float_kind(ret_kind);
+    if (check_rc && return_type_register_class_conflict(ret_kind, body))
+        return RET_CONFLICT_REGISTER_CLASS;
+
+    if (return_type_pointer_scalar_conflict(ret_kind, body))
+        return RET_CONFLICT_POINTER_SCALAR;
+
+    return RET_CONFLICT_NONE;
+}
+
 /* TY4: borrow referent extraction -- see elab_internal.h.
  *
  * Looks through result-position wrappers (do/let/letrec bodies and both `if`

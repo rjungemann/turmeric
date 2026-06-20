@@ -908,6 +908,45 @@ bool rc_widen_int_literal_to_float_return(TypeKind declared, Expr *body);
  * only on the commit-direction conflict. */
 bool return_type_pointer_scalar_conflict(TypeKind declared, Type body);
 
+/* carrier-aware-return-unification Phase 1: classify a return position so the
+ * shared dispatcher knows how much to reject.
+ *   RET_CLASS_COMMITTED -- the function genuinely commits to a concrete surface
+ *     type (today: ordinary `defn`).  The register-class check runs
+ *     symmetrically (a float on either side vs a concrete non-float clashes).
+ *   RET_CLASS_CARRIER -- the position participates in the int64 carrier ABI
+ *     (today: typeclass instance method).  Only the float-COMMIT direction is
+ *     flagged; a non-float-declared carrier method with a float instance body
+ *     is the deliberate per-instance bridge and is tolerated.
+ * Phases 2-3 will widen what COMMITTED rejects and route more positions through
+ * the classifier; for Phase 1 the two values reproduce the existing per-site
+ * calibration exactly. */
+typedef enum {
+    RET_CLASS_COMMITTED,
+    RET_CLASS_CARRIER,
+} ReturnClass;
+
+/* Which return-position predicate fired (RET_CONFLICT_NONE = no conflict).  The
+ * caller maps each to its site-specific diagnostic (function vs instance
+ * method) and error code (NOMINAL -> TUR-E0001, REGISTER_CLASS -> TUR-E0707,
+ * POINTER_SCALAR -> TUR-E0708). */
+typedef enum {
+    RET_CONFLICT_NONE = 0,
+    RET_CONFLICT_NOMINAL,
+    RET_CONFLICT_REGISTER_CLASS,
+    RET_CONFLICT_POINTER_SCALAR,
+} ReturnConflict;
+
+/* carrier-aware-return-unification Phase 1: single dispatcher over the three
+ * return-position predicates above.  Runs nominal -> register-class ->
+ * pointer-scalar and returns the first conflict; `cls` gates the register-class
+ * check (see ReturnClass).  Callers widen an int-literal -> float body in place
+ * with rc_widen_int_literal_to_float_return BEFORE calling, and should skip the
+ * lazy-probe placeholder and inline-C (fiat TY_NIL) bodies as before. */
+ReturnConflict return_position_conflict(const StructDef *ret_struct,
+                                        const AdtDef *ret_adt,
+                                        TypeKind ret_kind, Type body,
+                                        ReturnClass cls);
+
 /* TY4: if `e` is a borrow (&x / &mut x) of a named binding, return that
  * binding (the referent); otherwise NULL.  Used by the borrow-escape check. */
 const Binding *borrow_referent_binding(const Expr *e);
