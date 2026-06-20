@@ -371,6 +371,9 @@ typedef struct Elab {
     const Symbol *sym_try;           /* (try body (catch ...) ...) */
     /* Phase R5: no-unwind attribute */
     const Symbol *sym_no_unwind_attr;
+    /* #[used] attribute: retain a defn with external C linkage (see
+     * Binding.retain_c_linkage). */
+    const Symbol *sym_used_attr;
     /* Phase M6: (export-as "c_name") attribute for explicit C symbol naming */
     const Symbol *sym_export_as_attr;
     /* M2a (end-to-end-monomorphization-plan): #{Construct} marker on a

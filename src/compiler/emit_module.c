@@ -3259,7 +3259,11 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
          * Result/Option/Pair/Tuple* work.  Force them to `static` even
          * though they are marked exported -- otherwise every spice .c
          * emits external symbols and the linker rejects the duplicates. */
-        if (!ctx->separate_compilation || !fd->binding->is_exported ||
+        /* #[used] (retain_c_linkage): keep external linkage so a raw
+         * `extern <mangled>` reference from another TU resolves -- mirror the
+         * definition's linkage in emit_fns.c so the forward decl agrees. */
+        if (!ctx->separate_compilation ||
+            !(fd->binding->is_exported || fd->binding->retain_c_linkage) ||
             fd->binding->is_from_stdlib) {
             buf_puts(out, "static ");
         }

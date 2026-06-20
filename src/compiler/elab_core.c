@@ -1499,6 +1499,8 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_panic_payload_type = intern_cstr(st, "panic-payload-type");
     /* Phase R5: no-unwind attribute */
     e->sym_no_unwind_attr = intern_cstr(st, "#no-unwind");
+    /* #[used] attribute: retain a defn with external C linkage */
+    e->sym_used_attr = intern_cstr(st, "#used");
     /* Phase M6: (export-as "c_name") attribute head symbol */
     e->sym_export_as_attr = intern_cstr(st, "export-as");
     /* M2a: #{Construct} polymorphic-constructor synthesis marker */
@@ -1714,6 +1716,7 @@ Binding *binding_new(Elab *e, const Symbol *name, Type type,
     b->is_moved = false;  /* Phase 5: move semantics */
     b->moved_at = SPAN_UNKNOWN;
     b->no_unwind = false;  /* Phase R5: #[no-unwind] attribute */
+    b->retain_c_linkage = false;  /* #[used] attribute */
     b->is_exported = false;
     b->defining_module_name = e->current_module_name;
     b->c_export_name = NULL;  /* Phase M6: ^:export-as C name */

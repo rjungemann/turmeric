@@ -1009,11 +1009,14 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                 if (head->as.sym == e.sym_defn) {
                     /* Parse defn declaration without body */
                     if (f->as.list.len >= 3) {
-                        /* Phase R5: skip optional #[no-unwind] attribute */
+                        /* Phase R5: skip optional #[no-unwind] / #[used] bare
+                         * attribute symbols (either order) before the name. */
                         uint32_t name_idx = 1;
-                        if (f->as.list.items[1]->tag == F_SYM &&
-                            f->as.list.items[1]->as.sym == e.sym_no_unwind_attr) {
-                            name_idx = 2;
+                        while ((uint32_t)f->as.list.len > name_idx &&
+                               f->as.list.items[name_idx]->tag == F_SYM &&
+                               (f->as.list.items[name_idx]->as.sym == e.sym_no_unwind_attr ||
+                                f->as.list.items[name_idx]->as.sym == e.sym_used_attr)) {
+                            name_idx++;
                         }
                         /* Phase M6: skip optional (export-as "c_name") attribute */
                         if ((uint32_t)f->as.list.len > name_idx &&

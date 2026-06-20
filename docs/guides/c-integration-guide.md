@@ -451,6 +451,41 @@ for the full table and the demangler. **Inside an inline-C body, prefer the
 mangled name; the splice tracks the live mangler so a future scheme change
 does not silently break your code.
 
+### `#[used]` -- retaining a symbol reached only from C
+
+The compiler keeps a definition with external C linkage when it is reachable
+through the Turmeric export/import + call graph. A defn whose mangled symbol is
+reached **only** through a raw `extern` reference is invisible to that analysis:
+
+- a hand-written cross-module inline-C bridge that calls another module's
+  unexported helper by its mangled name, or
+- a C-ABI callback taken **by address** (an Arrow C Data Interface `release`
+  function, a `qsort` comparator, a signal handler) and stored in a struct
+  field or passed to a C API -- never called from Turmeric.
+
+Such a defn is demoted to `static` under separate compilation (and dropped
+entirely by the single-main whole-program build shortcut, which inlines only
+the entry module's transitive Turmeric imports), so the `extern` reference
+dangles at link time. Mark it `#[used]` to force external linkage and keep its
+module in the build:
+
+```turmeric
+;; sort.tur -- unexported helper reached by a bridge in group.tur
+(defn #[used] __so-take [col : int perm : int n : int] : int
+  ```c
+  ... ```)
+
+;; interop.tur -- C-ABI callback stored by address, never called from Turmeric
+(defn #[used] ip-release-schema [schema : int] : void
+  ```c
+  ... ```)
+```
+
+`#[used]` goes before the name, like `#[no-unwind]`, and the two compose in
+either order: `(defn #[used] #[no-unwind] name [...] ...)`. Prefer the
+`__TUR_CNAME_<source-name>__` splice (above) over hand-spelling the mangled
+name in the `extern` declaration that reaches a `#[used]` symbol.
+
 ### Subprocess / build-step integration
 
 Use `./build/tur build` as a build step that produces an executable, then have

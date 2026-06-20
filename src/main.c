@@ -3417,6 +3417,33 @@ static bool file_has_main_defn(const char *path) {
     return found;
 }
 
+/* Return true if `path` carries a `#[used]` attribute -- a defn explicitly
+ * retained with external C linkage because it is reached only through its
+ * mangled C symbol (cross-module inline-C bridge or by-address C-ABI callback).
+ * The reader admits whitespace between `#[` and the name, so accept that too.
+ * Used to disqualify the single-main whole-program build shortcut: that path
+ * inlines only the entry module's transitive *Turmeric* import closure, so a
+ * sibling module reachable solely via raw extern would be dropped and its
+ * symbol would dangle at link time.  Falling through to separate compilation
+ * compiles and links every project module instead. */
+static bool file_has_used_attr(const char *path) {
+    char *src = NULL;
+    size_t len = 0;
+    if (read_entire_file_quiet(path, &src, &len) != 0) return false;
+    bool found = false;
+    for (size_t i = 0; i + 6 < len && !found; i++) {
+        if (src[i] != '#' || src[i + 1] != '[') continue;
+        size_t j = i + 2;
+        while (j < len && (src[j] == ' ' || src[j] == '\t')) j++;
+        if (j + 4 <= len && strncmp(src + j, "used", 4) == 0) {
+            char next = (j + 4 < len) ? src[j + 4] : '\0';
+            if (next == ' ' || next == '\t' || next == ']') found = true;
+        }
+    }
+    free(src);
+    return found;
+}
+
 /* n_own: number of files at the front of tur_files that belong to the
  * project itself and should be linked into the output.  Dep modules beyond
  * n_own are compiled only to generate headers (so importers can #include
@@ -4054,10 +4081,24 @@ static int cmd_build_project(const char *root, const char *out_path,
         for (int i = 0; i < n_files; i++) {
             if (file_has_main_defn(tur_files[i])) { entry = tur_files[i]; n_main++; }
         }
+        /* #[used] disqualifies the shortcut: a non-entry module retained for C
+         * linkage (raw-extern bridge / by-address callback) is, by construction,
+         * NOT in the entry's Turmeric import closure, so whole-program inlining
+         * would drop it and its mangled symbol would dangle.  Fall through to
+         * separate compilation, which compiles and links every project module. */
+        bool nonentry_used = false;
+        if (n_main == 1) {
+            for (int i = 0; i < n_files; i++) {
+                if (tur_files[i] != entry && file_has_used_attr(tur_files[i])) {
+                    nonentry_used = true;
+                    break;
+                }
+            }
+        }
         /* Reroute only the unambiguous single-main case; a project with more
          * than one `main` falls through to the existing separate-compilation
          * path unchanged (no behavioral regression). */
-        if (n_main == 1) {
+        if (n_main == 1 && !nonentry_used) {
             int    n_rm = 0;
             char **rm   = discover_manifest_reader_macros(entry, &n_rm);
             /* build-output-directory-plan: when no -o was given, anchor the

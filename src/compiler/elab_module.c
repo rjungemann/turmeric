@@ -771,10 +771,14 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
             Form *h = f->as.list.items[0];
             if (h->tag == F_SYM && h->as.sym == e->sym_defn) {
                 if (f->as.list.len >= 3) {
+                    /* Skip optional #[no-unwind] / #[used] bare attribute
+                     * symbols (either order) before the name. */
                     uint32_t name_idx = 1;
-                    if (f->as.list.items[1]->tag == F_SYM &&
-                        f->as.list.items[1]->as.sym == e->sym_no_unwind_attr) {
-                        name_idx = 2;
+                    while ((uint32_t)f->as.list.len > name_idx &&
+                           f->as.list.items[name_idx]->tag == F_SYM &&
+                           (f->as.list.items[name_idx]->as.sym == e->sym_no_unwind_attr ||
+                            f->as.list.items[name_idx]->as.sym == e->sym_used_attr)) {
+                        name_idx++;
                     }
                     if ((uint32_t)f->as.list.len <= name_idx) continue;
                     Form *fn_name_f = f->as.list.items[name_idx];
