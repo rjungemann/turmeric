@@ -21,6 +21,16 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **`-lm` is now linked unconditionally, making libm usable from pure spices.**
+  The math library was only appended to the link line when a spice declared a
+  cmake dep (`had_cmake_flags`), so a pure spice referencing libm symbols
+  (`sqrt`/`fabs`/`sin`/`cos`/...) from inline-C had no way to resolve them
+  without forcing a fake cmake-dep just to pull in `-lm`. Both link paths
+  (`tur build <file>` and the project/`--shared` build used by the spice
+  loader) now always append `-lm` last, after any `-l<staticlib>` flags so GNU
+  ld's left-to-right archive resolution still finds the symbols. An unused
+  `-lm` is a harmless no-op on Linux, and on macOS libm lives in libSystem so
+  it is a no-op there too.
 - **File-scope inline-C include guards no longer corrupted by the dedup pass.**
   A module-prelude inline-C block with two or more preprocessor guards lost its
   repeated bare `#endif` lines (deduped as identical chunks), and a guard opener
