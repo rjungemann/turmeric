@@ -1,0 +1,9 @@
+;; Regression: a defdata constructor with a malformed field type (`int`
+;; instead of the keyword `:int`) emits the field-type diagnostic but used to
+;; leave a partial AdtDef registered with a NULL ctor slot. Referencing the
+;; constructor later then NULL-deref'd in elab_lookup_ctor. The compiler must
+;; report the error and exit cleanly, never crash.
+;; See docs/archive/defdata-malformed-ctor-field-null-deref-in-lookup-ctor.md
+(defdata Acc (MkAcc int))
+(defn mk [n : int] : Acc (MkAcc n))
+(defn main [] : int (let [a (mk 3)] 0))

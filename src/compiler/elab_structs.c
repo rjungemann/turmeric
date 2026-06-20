@@ -2327,8 +2327,15 @@ CtorDef *elab_lookup_ctor(Elab *e, const Symbol *name) {
     for (uint32_t ai = 0; ai < e->n_adt_defs; ai++) {
         AdtDef *adt = e->adt_defs[ai];
         for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
-            if (strcmp(adt->ctors[ci]->name, name->name) == 0) {
-                return adt->ctors[ci];
+            /* A constructor slot can be NULL (with a NULL ->name) when its
+             * defdata bailed early on a malformed field type, leaving the
+             * AdtDef registered with an unfilled slot. Skip such partial
+             * slots so lookups recover cleanly instead of dereferencing
+             * NULL. */
+            CtorDef *ctor = adt->ctors[ci];
+            if (!ctor || !ctor->name) continue;
+            if (strcmp(ctor->name, name->name) == 0) {
+                return ctor;
             }
         }
     }
