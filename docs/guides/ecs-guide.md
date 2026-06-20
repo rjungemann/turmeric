@@ -289,18 +289,147 @@ raylib is on the cmake-deps path.
   wave-parallel runner; consult `spices/ecs/src/ecs/stage.tur` for
   that surface.
 - **Read/write capabilities**: the `defsystem` form in `ecs/system`
-  collects `:reads`/`:writes` masks and uses them for wave grouping.
-  The `:writes` masks are NOT yet enforced as compile-time
-  substructural capabilities; lying about them produces a wrong
-  parallel schedule, not a compile error. See
-  [docs/reported/ecs-defsystem-write-caps-not-enforced.md](../reported/ecs-defsystem-write-caps-not-enforced.md).
+  collects `:reads`/`:writes` vectors and **enforces them at
+  elaboration time** as substructural capabilities. A body that
+  writes a component not listed in `:writes` fails to elaborate with
+  `unbound symbol '<Comp>-write-cap'`. Shipped 2026-06-11 via Phases
+  I1-I6; see
+  [docs/guides/substructural-types-guide.md](substructural-types-guide.md)
+  for the underlying cap machinery.
 - **Aliveness**: runtime, via generation comparison on every
   storage access.
 
+## Sized worlds -- compile-time rectangular iteration
+
+The default `defworld` produces an *unsized* world: every storage
+allocates its own capacity at construction time, and `for-each` walks
+the intersection of the relevant storages by taking a runtime min over
+their capacities (the `__fe-min-cap` probe). It works, but two queries
+against the same world over differently-sized storages can't be
+statically proven rectangular.
+
+The **sized** form moves the capacity into the type. A
+`(GameWorld (Static 1024))` declares once that every dense storage
+inside is sized to 1024, and the SZ8 cross-parameter unifier proves
+rectangularity across them without a runtime probe. Two worlds with
+different capacities are distinct types; the elaborator rejects a
+mixed-capacity `for-each` at compile time with TUR-E0260.
+
+### Declaring a sized world
+
+```turmeric
+;; Monomorphic capacity baked in at the declaration site:
+(defworld GameWorld (Static 1024) [Pos Vel Hp])
+
+;; Polymorphic capacity -- a library shape callers pick a capacity for:
+(defworld [n] GameWorld n [Pos Vel Hp])
+```
+
+The monomorphic form is the ergonomic default for application code
+with a fixed entity budget. The polymorphic form is what reusable
+library worlds use; callers ascribe a concrete `n` at construction.
+The shipped macro is also available as `sized-defworld-mono` (the
+explicit name); plain `defworld` with a `(Static k)` slot resolves to
+the same thing.
+
+Every component storage in a sized world shares the same `n`:
+
+- `(SizedDense n A)` -- `n` slots, slot-indexed. O(n) memory.
+- `(SizedSparse n A)` -- hashmap with key domain `[0, n)`. Memory
+  is data-proportional; `n` is an **id-space bound**, not a
+  storage-cost bound. (This is the one Sparse subtlety to remember.)
+- `(SizedTag n)` -- n-bit bitset. O(n) bits.
+
+### `sized-for-each` -- the load-bearing payoff
+
+```turmeric
+(sized-for-each [p (.pos w) v (.vel w)]
+  (update-position! p v))
+```
+
+Lowers to a loop indexed `0..n` where the bound is the first
+storage's type-level capacity, not a runtime min. Inside the loop body
+the elaborator already knows `i ∈ [0, n)` structurally, so the
+generated accessor codegen elides bounds checks. A mixed-capacity
+invocation fails at elaboration:
+
+```turmeric
+(sized-for-each [p (.pos w-256) v (.vel w-512)]
+  ...)  ;; TUR-E0260: (Static 256) /= (Static 512)
+```
+
+`sized-world-tagged?` / `sized-world-untagged?` are the sized
+analogues of `with` / `without` filters, composing with
+`sized-for-each` via `when` / `unless` in the body.
+
+### Spawn / despawn / generational handles
+
+```turmeric
+(defn sized-spawn  [n] [w : (GameWorld n)]         : (Result Entity WorldFull) ...)
+(defn sized-spawn! [n] [w : (GameWorld n)]         : Entity ...)
+(defn sized-despawn [n] [w : (GameWorld n) e : Entity] : nil ...)
+```
+
+`sized-spawn` is the typed-fallible form -- it returns
+`(err world-full)` when the live-count would exceed `n`. Use it in
+application paths where running out of slots is recoverable.
+`sized-spawn!` panics on full and is meant for benchmark/demo paths
+where the budget is known to fit.
+
+Both return a packed generational `Entity`. Slot reuse is
+invariant-preserving: despawn frees the id, generation bumps on next
+reuse, and a stale handle's generation mismatch makes
+`sized-alive?` return false.
+
+### Cap-gated accessors and systems
+
+`sized-defcomponent-accessors` and `sized-defsystem` mirror their
+unsized counterparts and carry the same substructural cap
+machinery -- `:writes [Pos]` binds a `Pos-write-cap` in body scope and
+the elaborator only exposes `sized-set-Pos!` to that body. Negative
+fixture: `tests/errors/sized-defsystem-undeclared-write.tur`.
+
+A companion macro `sized-defsystem-scheduled` lowers a
+monomorphic-world body to a `System` value runnable on the parallel
+`Stage`, threading the world as a heap-boxed pointer through the
+scheduler's int-carrier interface. Per-world `box-<W>` / `load-<W>`
+helpers stay user-written (a macro cannot splice identifiers into
+inline-C text).
+
+### Resizing a sized world
+
+A sized world cannot grow in place -- the capacity is in the type. To
+grow, allocate a fresh world at the new capacity, copy slots through
+`sized-defworld-copy-into` (generated per world; polymorphic in both
+source and destination capacity), and the existential
+`sized-defworld-world-resize` wrapper packages the
+`(exists [n'] (GameWorld n'))` so callers see a single typed result:
+
+```turmeric
+(let [w' (world-resize-GameWorld w (Static 2048))]
+  ...)  ;; w' : (exists [n] (GameWorld n))
+```
+
+Growing resizes work directly; shrinking aborts before any partial
+state is observable.
+
+### When to reach for sized vs unsized
+
+| Use sized when... | Stick with unsized when... |
+|---|---|
+| The entity budget is known up front (level-fixed, demo-fixed). | The world's size genuinely varies at runtime in ways callers cannot predict. |
+| Multiple `for-each` queries iterate the same storages and you want the runtime probe gone. | You only do one or two queries per frame and the probe cost is invisible. |
+| You want compile-time rejection of cross-world iteration mistakes. | You're prototyping and the type ergonomics get in the way. |
+
+The unsized form remains a fully-supported first-class shape; sized
+is opt-in. Mixed-world projects where most worlds are sized and one
+is bounded-but-mutable (chunk loaders, streaming open worlds) is the
+intended sweet spot.
+
 ## Where to look next
 
-- `../upcoming/ecs-spice-plan.md` -- the long-form plan, including the
-  v2 refinement-typed roadmap (entity-alive!, refinement-typed world
+- `docs/upcoming/v1/ecs-refinement-typed-apis-plan.md` -- the
+  refinement-typed roadmap (entity-alive!, refinement-typed world
   bounds) gated on refinement types landing.
 - `../guides/hkt-guide.md` -- the variadic-HKT-rows mechanism behind
   the row-typed `Query` value.
