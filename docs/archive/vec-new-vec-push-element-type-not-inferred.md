@@ -6,10 +6,25 @@ severity: Low/Medium. Does not block (a one-token ascription at construction is
   verbose for existential element types. Only the `vec-new` + `vec-push!` idiom
   is affected; `vec-of` and a Vec stored in a typed `defstruct` field both
   infer their element type fine.
-status: OPEN
+status: RESOLVED
 reported-by: turmeric-spices Claude (spice-uplift work, branch claude/tender-ramanujan-xm7bgg)
 verified-on: turmeric 0.21.0, this tree (post #452 / #456 / #458)
 ---
+
+## Resolution (2026-06-20)
+
+Fixed in `src/compiler/elab_call.c`: after a saturated generic call, a concrete
+element type is back-propagated onto a *local* let-bound receiver when a sibling
+argument fixes the same callee parameter tyvar (e.g. `(vec-push! rs 10)` pins
+`A := int`).  Scoped to local let bindings (never params/globals), only upgrades
+an unresolved tyvar to a concrete type, skipped inside macro expansion (so the
+`vec-of` push-chain is untouched), and peels the `EX_REINTERPRET` carrier wrap
+so a float/bool element resolves to its true type.  The `(:: (vec-new) (Vec T))`
+ascription is no longer required for the int/float cases.  Regression fixture
+`tests/fixtures/vec-new-push-infer`; suite 1708 passed.  (Aggregate struct/exists
+element pushes remain an independent limitation -- the ascription workaround hits
+the same path -- tracked separately, not part of S4.)
+
 
 # S4 -- `Vec` element type not inferred from `vec-push!`
 

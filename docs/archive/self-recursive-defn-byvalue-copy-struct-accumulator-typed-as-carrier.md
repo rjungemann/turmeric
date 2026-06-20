@@ -8,10 +8,26 @@ severity: Medium. A top-level recursive `defn` that returns / accumulates a
   boundary. An `int` accumulator recurses fine -- the struct return is the
   trigger. Worked around by threading a scalar carrier and building the struct
   once after the loop.
-status: OPEN
+status: RESOLVED
 reported-by: turmeric-spices Claude (spice-uplift work, branch claude/tender-ramanujan-xm7bgg)
 verified-on: turmeric 0.21.0, this tree (post #452 / #456 / #458)
 ---
+
+## Resolution (2026-06-20)
+
+Fixed in `src/compiler/elab_fns.c`.  Root cause: the pass-1 forward declaration
+only recognised primitive return keywords, so a struct/ADT/applied return type
+fell back to `TY_INT` on the forward binding, and a recursive self-call typed as
+the int carrier.  `elab_defn` already early-updates the forward binding's arity
+and arg markers before elaborating the body so self-calls see the real signature;
+this now also propagates `result_kind` and `result_full_type` for struct, ADT,
+and applied returns (mirroring the final `fn_type` construction, scoped to those
+aggregate cases).  Self-calls type as the declared return, so the `if` arms agree
+and no ascription is needed.  Regression fixture
+`tests/fixtures/self-recursive-struct-accumulator`; suite 1710 passed.  The
+scalar-`ptr<void>`-carrier workaround in plot's `__rbb-union-corners!` is no
+longer required.
+
 
 # S6 -- self-recursive `defn` with a by-value `:copy` struct accumulator
 

@@ -8,10 +8,25 @@ severity: Medium. Type-checking passes; the generated C fails to compile.
   `make-struct` from the param's fields. A 2-field register-class struct returns
   fine; the bug shows up once the struct is passed by pointer (>=3 fields and/or
   float fields -> not register-class).
-status: OPEN
+status: RESOLVED
 reported-by: turmeric-spices Claude (spice-uplift work, branch claude/tender-ramanujan-xm7bgg)
 verified-on: turmeric 0.21.0, this tree (post #452 / #456 / #458)
 ---
+
+## Resolution (2026-06-20)
+
+Fixed across `src/compiler/emit_{expr,fns,stmt}.c`.  A new helper
+`pbp_deref_if_struct_value` wraps a by-pointer struct *parameter* in `(*p)` when
+it flows into a by-VALUE struct sink: if-branch result temps (both arms), the
+implicit tail return, explicit `(return ...)`, and let-binding inits.  Field
+access and pbp->pbp call forwarding keep the pointer form and are unaffected
+(they handle pbp explicitly and never call the helper).  Returning a struct
+parameter directly now copies it out, the same as returning a freshly
+`make-struct`'d value.  Regression fixture
+`tests/fixtures/return-byvalue-struct-param` (if branch + bare tail + let); suite
+1711 passed.  The field-by-field `make-struct` rebuild in plot's `bbox-union` is
+no longer required.
+
 
 # S7 -- returning a multi-field `:copy` struct parameter directly
 

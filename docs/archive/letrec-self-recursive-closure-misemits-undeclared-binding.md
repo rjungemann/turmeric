@@ -7,10 +7,24 @@ severity: Medium. Type-checking passes; the failure is purely in codegen.
   `'<name>' undeclared`. Worked around by hoisting to a top-level recursive
   `defn`, so it does not block, but it defeats the whole point of `letrec`
   (self-reference) for the local-loop case.
-status: OPEN
+status: RESOLVED
 reported-by: turmeric-spices Claude (spice-uplift work, branch claude/tender-ramanujan-xm7bgg)
 verified-on: turmeric 0.21.0, this tree (post #452 / #456 / #458)
 ---
+
+## Resolution (2026-06-20)
+
+Fixed in `src/compiler/emit_expr.c`: inside a closure's own lifted body the
+closure box IS the env pointer the thunk already received as its first
+parameter.  When a closure call targets the closure currently being emitted
+(`ctx->closure->fn->binding == thunk_binding`), the recursive self-call now
+passes that raw env param (already a `void *`) as the box instead of the
+outer-scope binding name (`go_NNNN`), which was out of scope inside the lifted C
+function.  Non-self closure calls and the captureless/global self-recursion path
+are unchanged.  Regression fixture `tests/fixtures/letrec-self-recursive-closure`;
+suite 1709 passed.  The top-level-`defn` hoist workaround in plot is no longer
+required.
+
 
 # S5 -- `letrec` self-recursive closure mis-emits in C
 
