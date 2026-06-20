@@ -7,9 +7,14 @@ severity: Medium. A compiler **crash** (ASan NULL-deref SEGV, or a wild deref in
   miscompile of valid code -- but `tur check`/`tur build` should report the
   error and exit, never segfault. Easy to hit from a typo (`:int` written as
   `int`).
-status: OPEN
+status: RESOLVED
 reported-by: Claude (noticed while testing the S6 fix; see docs/archive/self-recursive-call-typed-at-carrier-int.md)
 verified-on: turmeric 0.21.0, this tree (post #459 / #460)
+resolved-by: Null-guard added in `elab_lookup_ctor` (src/compiler/elab_structs.c)
+  -- partial AdtDef slots (`ctors[ci] == NULL`, or a NULL `->name`) are skipped
+  before the `strcmp`, turning the crash into clean error recovery. The two real
+  diagnostics are still emitted and the run exits non-zero. Regression coverage:
+  tests/fixtures/errors/defdata-malformed-ctor-field-type/.
 ---
 
 # Malformed `defdata` field type -> NULL-deref in `elab_lookup_ctor`
