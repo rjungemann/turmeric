@@ -3922,6 +3922,70 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         }
     }
 
+    /* S4 (vec-new + vec-push! forward element inference): a generic call whose
+     * receiver argument is a *local* let-bound EX_VAR with an under-constrained
+     * parameterised type -- e.g. `rs : (Vec A)` from `(vec-new)`, where A was
+     * never pinned -- and a sibling argument that fixes the SAME parameter
+     * tyvar to a concrete type -- e.g. `(vec-push! rs 10)`, whose `val : A` slot
+     * pins A := int -- should resolve the receiver binding's element type.
+     * Without this, `rs` keeps `(Vec A)` and a later `(sum rs)` where
+     * `sum : (Vec int)` fails to unify.  The fix is scoped narrowly: it only
+     * upgrades a local let binding (never a function parameter or global, whose
+     * tyvar may be a genuinely abstract type param), only ever replaces an
+     * unresolved tyvar with a concrete type (never the reverse), and leaves the
+     * current call's own `type_bindings` -- and thus its carrier/relay emission
+     * -- untouched.  It composes off the callee's OWN parameter tyvar names, so
+     * it does not depend on the receiver's tyvar name matching the pusher's. */
+    if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types && n_args > 1 &&
+        e->macro_expand_depth == 0) {
+        /* Map each callee parameter tyvar that a concrete sibling argument
+         * fills (param slot is a bare TY_TYVAR) to that concrete type. */
+        CallTypeBinding fwd[16];
+        uint8_t n_fwd = 0;
+        for (uint32_t i = 0; i < n_args; i++) {
+            uint32_t pidx = fn_binding->closure_fn_binding ? i + 1 : i;
+            if (pidx >= fn_type.as.fn.arity) break;
+            const Type *pf = fn_type.as.fn.arg_full_types[pidx];
+            if (!pf || pf->kind != TY_TYVAR || !pf->as.tyvar_.name || !args[i]) continue;
+            /* The arg-check loop above carrier-wraps a non-int scalar passed at a
+             * tyvar slot (EX_REINTERPRET to TY_INT).  Peel that wrap so the
+             * forwarded element type is the TRUE pushed type (float/bool/cstr),
+             * not the int64 carrier -- otherwise `(Vec float)` is mis-resolved to
+             * `(Vec int)` and the next element conflicts. */
+            Expr *ae = args[i];
+            while (ae && ae->kind == EX_REINTERPRET) ae = ae->as.reinterpret_.expr;
+            Type at = ae ? ae->type : args[i]->type;
+            if (at.kind != TY_UNKNOWN && !call_type_has_named_tyvar(&at)) {
+                uint8_t dummy;
+                if (!call_find_type_binding(fwd, n_fwd, pf->as.tyvar_.name, &dummy) &&
+                    n_fwd < 16) {
+                    fwd[n_fwd].name = pf->as.tyvar_.name;
+                    fwd[n_fwd].type = at;
+                    n_fwd++;
+                }
+            }
+        }
+        if (n_fwd > 0) {
+            for (uint32_t i = 0; i < n_args; i++) {
+                if (!args[i] || args[i]->kind != EX_VAR) continue;
+                Binding *vb = args[i]->as.var.binding;
+                if (!vb || vb->is_global || vb->is_param) continue;
+                if (!call_type_has_named_tyvar(&vb->type)) continue;
+                uint32_t pidx = fn_binding->closure_fn_binding ? i + 1 : i;
+                if (pidx >= fn_type.as.fn.arity) continue;
+                const Type *pf = fn_type.as.fn.arg_full_types[pidx];
+                if (!pf || !call_type_has_named_tyvar(pf)) continue;
+                Type inst = call_instantiate_type(e, pf, fwd, n_fwd);
+                if (!call_type_has_named_tyvar(&inst) && inst.kind == vb->type.kind) {
+                    inst.copy_kind = vb->type.copy_kind;
+                    inst.substruct = vb->type.substruct;
+                    vb->type = inst;
+                    args[i]->type = inst;
+                }
+            }
+        }
+    }
+
     /* generic-return-type-not-inferred-from-context: restore the outer
      * expected-type channel for any subsequent elab (e.g. nested let/do
      * propagation by the caller).  Then, if an outer context constrained
