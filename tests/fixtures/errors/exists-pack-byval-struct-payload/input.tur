@@ -1,0 +1,17 @@
+; A constraint-carrying existential stores its payload in a single int64
+; carrier and dispatches witness methods on it, so a by-value `defstruct`
+; payload is rejected at the pack site (it would otherwise miscompile to
+; `record->value = (int64_t)(struct)`).  The fix is to wrap the value in a
+; carrier-representable shape -- a `defopaque T :int` newtype or a `:ptr<T>`
+; handle.  See docs/reported/constrained-exists-pack-struct-payload-bad-cast.md.
+(defclass Rdr [a]
+  (rbound [x] : int))
+
+(defstruct LinesR [v : int])
+
+(definstance Rdr [LinesR]
+  (rbound [x] (.v x)))
+
+(defn main [] : int
+  (let [e (pack (make-struct LinesR 5) (exists [a] [(Rdr a)] a))]
+    0))
