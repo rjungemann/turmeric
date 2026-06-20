@@ -9,7 +9,7 @@
   (default-of [] 42))
 
 (definstance Default [bool]
-  (default-of [] 1))
+  (default-of [] true))
 
 (defn main [] : int
   (let [i (:: (default-of) int)

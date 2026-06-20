@@ -1,0 +1,12 @@
+;; return-type-int-cstr-defn -- negative control for TUR-E0709.
+;; The REVERSE of the TUR-E0708 commit direction: a genuinely COMMITTED function
+;; (a monomorphic, non-#{Unsafe} defn that does not participate in the int64
+;; carrier ABI) declares a concrete integer return but its body yields a
+;; concrete `cstr` string pointer.  A string is never a valid integer, and a
+;; committed monomorphic function has no carrier to bridge it, so this is a
+;; type-erasure bug -- unlike the generic / #{Unsafe} carrier-handle bridge,
+;; which stays tolerated (see return-type-int-cstr-carrier-ok).
+(defn sbad [] : int
+  "hello")
+
+(defn main [] : int 0)

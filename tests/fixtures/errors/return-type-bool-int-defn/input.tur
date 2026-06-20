@@ -1,0 +1,13 @@
+;; return-type-bool-int-defn -- negative control for TUR-E0709 (bool/integer).
+;; A committed monomorphic non-#{Unsafe} defn declares `: bool` but its body
+;; yields a concrete non-bool integer.  bool and the integer family share the
+;; int64 0/1 carrier, but the language treats them as distinct (binding position
+;; rejects the same swap; boolean constants are true/false, not 0/1), and a
+;; committed function has no carrier to bridge them.  Use a computed int body so
+;; no literal coercion could apply.
+(defn ival [] : int 5)
+
+(defn bbad [] : bool
+  (+ (ival) 1))
+
+(defn main [] : int 0)

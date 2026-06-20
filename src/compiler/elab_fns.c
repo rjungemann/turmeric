@@ -2528,82 +2528,87 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
     }
 
-    /* Gap 1 (instance-method-return-not-unified): reject a body whose actual
-     * type is a DIFFERENT concrete nominal type (struct / opaque / ADT) than
-     * the declared return.  The int64 carrier ABI deliberately lets primitives
-     * and handles share a representation, so the helper tolerates those bridges
-     * and only flags a genuine nominal-identity clash.  Skip the deferred
-     * (lazy) probe, whose body is a nil placeholder. */
-    if (!lazy_defer && body && (return_struct_def || return_adt_def) &&
-        return_type_nominal_conflict(return_struct_def, return_adt_def, body->type)) {
-        const char *want = return_struct_def ? return_struct_def->name
-                                             : return_adt_def->name;
-        Buf gb; buf_init(&gb);
-        type_print(&gb, body->type);
-        buf_putc(&gb, '\0');
-        diag_emit_with_code(DIAG_ERROR, body->span, TUR_E0001_TYPE_MISMATCH,
-            "function '%s' declares return type '%s' but its body returns %s",
-            name_f->as.sym->name, want, gb.data);
-        buf_free(&gb);
-        e->scope = inner.parent;
-        scope_free(&inner);
-        return NULL;
-    }
-
-    /* float-register-class-returns: reject a body whose register class differs
-     * from the declared return's -- a float (xmm) on one side and a concrete
-     * non-float (int64 GP) on the other.  This is the one carrier-tolerated
-     * return mismatch that is a genuine xmm0-vs-rax miscompile, not a benign
-     * same-register reinterpret.  First exempt the int-literal -> float coercion
-     * (widen the literal in place, mirroring numeric-literal coercion in
-     * argument/binding positions) so it stays a coercion, not a conflict.  Skip
-     * the deferred (lazy) probe, whose body is a nil placeholder, and an inline-C
-     * body, whose value type is fiat (trusted to match the declared return -- it
-     * is elaborated as TY_NIL, not its real register class). */
+    /* carrier-aware-return-unification Phase 1: reject a genuine return-position
+     * conflict between the declared return and the elaborated body via the
+     * shared `return_position_conflict` dispatcher (nominal -> register-class ->
+     * pointer-scalar).  An ordinary `defn` is a COMMITTED position: the
+     * register-class check runs symmetrically.  Skip the deferred (lazy) probe,
+     * whose body is a nil placeholder, and inline-C bodies, whose value type is
+     * fiat TY_NIL (trusted to match the declared return).  The int-literal ->
+     * float coercion is widened in place first so it stays a coercion. */
     if (!lazy_defer && body && body->kind != EX_INLINE_C) {
-        if (!rc_widen_int_literal_to_float_return(return_kind, body) &&
-            return_type_register_class_conflict(return_kind, body->type)) {
-            Buf gb; buf_init(&gb);
-            type_print(&gb, body->type);
-            buf_putc(&gb, '\0');
+        rc_widen_int_literal_to_float_return(return_kind, body);
+        /* carrier-aware-return-unification Phase 2: a defn is a genuinely
+         * COMMITTED position only when it does not participate in the int64
+         * carrier ABI -- i.e. it is monomorphic (no type params, implicit ones
+         * included in n_fn_type_params) and not `#{Unsafe}`.  A generic or
+         * `#{Unsafe}` defn is RET_CLASS_CARRIER_FN: it keeps the symmetric
+         * register-class (float) check but tolerates the reverse pointer-scalar
+         * carrier-handle bridge. */
+        ReturnClass ret_cls = (n_fn_type_params == 0 && !fn_declared_unsafe)
+                                  ? RET_CLASS_COMMITTED
+                                  : RET_CLASS_CARRIER_FN;
+        ReturnConflict rc = return_position_conflict(
+            return_struct_def, return_adt_def, return_kind, body->type, ret_cls);
+        if (rc != RET_CONFLICT_NONE) {
             const char *want = return_struct_def ? return_struct_def->name
                              : return_adt_def    ? return_adt_def->name
                              : typekind_to_string(return_kind);
-            diag_emit_with_code(DIAG_ERROR, body->span,
-                TUR_E0707_RETURN_REGISTER_CLASS_MISMATCH,
-                "function '%s' declares return type '%s' but its body returns %s "
-                "-- a float and a non-float live in different register classes "
-                "(xmm vs general-purpose), so this is a register-class miscompile, "
-                "not a tolerable carrier bridge",
-                name_f->as.sym->name, want, gb.data);
+            Buf gb; buf_init(&gb);
+            type_print(&gb, body->type);
+            buf_putc(&gb, '\0');
+            switch (rc) {
+                case RET_CONFLICT_NOMINAL:
+                    diag_emit_with_code(DIAG_ERROR, body->span,
+                        TUR_E0001_TYPE_MISMATCH,
+                        "function '%s' declares return type '%s' but its body "
+                        "returns %s",
+                        name_f->as.sym->name, want, gb.data);
+                    break;
+                case RET_CONFLICT_REGISTER_CLASS:
+                    diag_emit_with_code(DIAG_ERROR, body->span,
+                        TUR_E0707_RETURN_REGISTER_CLASS_MISMATCH,
+                        "function '%s' declares return type '%s' but its body "
+                        "returns %s -- a float and a non-float live in different "
+                        "register classes (xmm vs general-purpose), so this is a "
+                        "register-class miscompile, not a tolerable carrier bridge",
+                        name_f->as.sym->name, want, gb.data);
+                    break;
+                case RET_CONFLICT_POINTER_SCALAR:
+                    diag_emit_with_code(DIAG_ERROR, body->span,
+                        TUR_E0708_RETURN_POINTER_SCALAR_MISMATCH,
+                        "function '%s' declares return type 'cstr' but its body "
+                        "returns %s -- a bare integer is never a valid string "
+                        "pointer, so this is a type-erasure bug, not a tolerable "
+                        "carrier bridge",
+                        name_f->as.sym->name, gb.data);
+                    break;
+                case RET_CONFLICT_TYPE_REVERSE:
+                    diag_emit_with_code(DIAG_ERROR, body->span,
+                        TUR_E0709_RETURN_TYPE_MISMATCH,
+                        "function '%s' declares return type '%s' but its body "
+                        "returns %s -- a string pointer is never a valid integer, "
+                        "and this committed monomorphic function has no carrier to "
+                        "bridge it",
+                        name_f->as.sym->name, want, gb.data);
+                    break;
+                case RET_CONFLICT_BOOL_INTEGER:
+                    diag_emit_with_code(DIAG_ERROR, body->span,
+                        TUR_E0709_RETURN_TYPE_MISMATCH,
+                        "function '%s' declares return type '%s' but its body "
+                        "returns %s -- bool and the integer family are distinct "
+                        "types (boolean constants are true/false, not 0/1), and "
+                        "this committed monomorphic function has no carrier to "
+                        "bridge them",
+                        name_f->as.sym->name, want, gb.data);
+                    break;
+                case RET_CONFLICT_NONE: break;  /* unreachable */
+            }
             buf_free(&gb);
             e->scope = inner.parent;
             scope_free(&inner);
             return NULL;
         }
-    }
-
-    /* pointer-vs-scalar-returns: reject a body that yields a concrete integer
-     * scalar where the declared return commits to `cstr`.  Both ride the int64
-     * GP register, so this slips past the register-class check above, but a bare
-     * integer is never a valid string pointer.  Only the commit direction is
-     * flagged (declared cstr); the reverse is the carrier-handle bridge.  Skip
-     * the lazy probe (nil placeholder) and inline-C bodies (fiat TY_NIL). */
-    if (!lazy_defer && body && body->kind != EX_INLINE_C &&
-        return_type_pointer_scalar_conflict(return_kind, body->type)) {
-        Buf gb; buf_init(&gb);
-        type_print(&gb, body->type);
-        buf_putc(&gb, '\0');
-        diag_emit_with_code(DIAG_ERROR, body->span,
-            TUR_E0708_RETURN_POINTER_SCALAR_MISMATCH,
-            "function '%s' declares return type 'cstr' but its body returns %s "
-            "-- a bare integer is never a valid string pointer, so this is a "
-            "type-erasure bug, not a tolerable carrier bridge",
-            name_f->as.sym->name, gb.data);
-        buf_free(&gb);
-        e->scope = inner.parent;
-        scope_free(&inner);
-        return NULL;
     }
 
     /* TY4: reject returning a borrow of a function-local (would dangle).  The

@@ -1,0 +1,19 @@
+;; return-type-bool-int-carrier-ok -- positive control for TUR-E0709 (bool/int).
+;; The bool-vs-integer return check fires ONLY for a committed monomorphic
+;; non-#{Unsafe} defn.  A committed defn returning a genuine bool (true/false)
+;; is fine; a generic defn and an #{Unsafe} defn returning an int under a `bool`
+;; declaration are the deliberate carrier bridge and stay accepted.  All are
+;; defined (hence elaborated and return-checked); main exercises the committed
+;; happy path and prints a fixed line.
+(defn committed-ok [] : bool
+  true)
+
+(defn gbridge [A] [x : A] : bool
+  42)
+
+(defn ubridge [] #{Unsafe} : bool
+  42)
+
+(defn main [] : int
+  (if (committed-ok) (println "yes") (println "no"))  ;; yes
+  0)

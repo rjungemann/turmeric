@@ -1,0 +1,14 @@
+;; instance-method-return-committed-mismatch -- negative control for Phase 3.
+;; `dval`'s class-declaration return is the class type variable `a`, so for the
+;; `Default[int]` instance it is GROUNDED to a concrete `int` -- a genuine
+;; per-instance commit, as strict as the equivalent defn.  An instance body that
+;; yields a concrete `cstr` is therefore a real TUR-E0709 mismatch, not the
+;; carrier-handle bridge a fixed concrete class-decl slot (e.g. `len : int`)
+;; would tolerate.
+(defclass Default [a]
+  (dval [] : a))
+
+(definstance Default [int]
+  (dval [] "wrong"))
+
+(defn main [] : int 0)

@@ -1,0 +1,22 @@
+;; instance-method-return-committed-ok -- positive control for Phase 3.
+;; Two shapes must both pass:
+;;   1. A class-var-grounded method (`dval : a` -> int for Default[int]) whose
+;;      instance body returns the matching concrete type is COMMITTED and clean.
+;;   2. A method whose class-decl return is a FIXED concrete slot (`len : int`,
+;;      the same for every instance) stays carrier-tolerant: an instance body
+;;      that yields a cstr handle under that int slot is the deliberate bridge
+;;      and is NOT flagged.
+(defclass Default [a]
+  (dval [] : a))
+(definstance Default [int]
+  (dval [] 42))
+
+(defclass Len [a]
+  (len [x : a] : int))
+(defstruct W [n : int])
+(definstance Len [W]
+  (len [x : W] "carried"))   ;; concrete int slot, cstr body -> carrier bridge, tolerated
+
+(defn main [] : int
+  (println (:: (dval) int))   ;; 42
+  0)

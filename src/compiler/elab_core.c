@@ -1749,6 +1749,93 @@ bool return_type_pointer_scalar_conflict(TypeKind declared, Type body) {
     return ps_is_integer_scalar_kind(body.kind);
 }
 
+/* carrier-aware-return-unification Phase 2: the REVERSE pointer-scalar
+ * direction -- a concrete integer-family declared return with a concrete `cstr`
+ * body.  This is the carrier-handle bridge that the commit-direction helper
+ * above deliberately tolerates, so it is sound ONLY for a genuinely committed
+ * position (a monomorphic non-`#{Unsafe}` defn that does not participate in the
+ * carrier).  The dispatcher gates it on RET_CLASS_COMMITTED; the helper itself
+ * just recognises the shape. */
+bool return_type_pointer_scalar_reverse_conflict(TypeKind declared, Type body) {
+    if (!ps_is_integer_scalar_kind(declared)) return false;
+    return body.kind == TY_CSTR;
+}
+
+/* carrier-aware-return-unification Phase 2b: a `bool`-vs-non-bool-integer return
+ * mismatch.  `bool` and the integer family share the int64 0/1 representation,
+ * so the carrier ABI cannot see the swap -- but the language already treats them
+ * as distinct everywhere else (a `(let [b : bool 1] ...)` binding is rejected;
+ * boolean constants are `true`/`false`, not `0`/`1`).  In a genuinely committed
+ * position there is no carrier to bridge, so a `bool` declared with a non-bool
+ * integer body (or the reverse) is a real type mismatch.  Fires iff EXACTLY ONE
+ * side is `bool` and the other is a concrete non-bool integer-family scalar; the
+ * dispatcher gates it on RET_CLASS_COMMITTED. */
+static bool bi_is_nonbool_integer_kind(TypeKind k) {
+    return k != TY_BOOL && ps_is_integer_scalar_kind(k);
+}
+bool return_type_bool_integer_conflict(TypeKind declared, Type body) {
+    bool decl_bool = (declared == TY_BOOL);
+    bool body_bool = (body.kind == TY_BOOL);
+    if (decl_bool == body_bool) return false;  /* both bool / neither: not this */
+    return decl_bool ? bi_is_nonbool_integer_kind(body.kind)
+                     : bi_is_nonbool_integer_kind(declared);
+}
+
+/* carrier-aware-return-unification: single dispatcher over the return-position
+ * predicates -- see elab_internal.h.  Runs them in the established order
+ * (nominal -> register-class -> pointer-scalar commit -> pointer-scalar reverse)
+ * and returns the first conflict.  `cls` calibrates two axes against the carrier
+ * ABI:
+ *   - Register-class (float-vs-non-float): symmetric for both defn classes
+ *     (a float never rides the int64 carrier, so a float-vs-concrete-non-float
+ *     result is always an xmm-vs-GP miscompile); commit-direction-only
+ *     (declared float) for RET_CLASS_CARRIER_METHOD, where the per-instance emit
+ *     path resolves a non-float-declared / float-body method to its real
+ *     register class.
+ *   - Pointer-scalar REVERSE (integer-declared, cstr body): only RET_CLASS_
+ *     COMMITTED rejects it (Phase 2).  For a generic / `#{Unsafe}` defn
+ *     (RET_CLASS_CARRIER_FN) or an instance method (RET_CLASS_CARRIER_METHOD)
+ *     this is the deliberate carrier-handle bridge and stays accepted.
+ * The commit-direction pointer-scalar (cstr-declared, integer body, TUR-E0708)
+ * and nominal-identity clash (TUR-E0001) are unconditional.  The int-literal ->
+ * float widening is the caller's pre-step. */
+ReturnConflict return_position_conflict(const StructDef *ret_struct,
+                                        const AdtDef *ret_adt,
+                                        TypeKind ret_kind, Type body,
+                                        ReturnClass cls) {
+    if ((ret_struct || ret_adt) &&
+        return_type_nominal_conflict(ret_struct, ret_adt, body))
+        return RET_CONFLICT_NOMINAL;
+
+    /* Register-class: commit-direction-only for a typeclass instance method;
+     * symmetric otherwise.  The predicate already tolerates a same-register-class
+     * pair, so the gate only narrows the instance-method case. */
+    bool rc_commit_only = (cls == RET_CLASS_CARRIER_METHOD);
+    if ((!rc_commit_only || rc_is_float_kind(ret_kind)) &&
+        return_type_register_class_conflict(ret_kind, body))
+        return RET_CONFLICT_REGISTER_CLASS;
+
+    if (return_type_pointer_scalar_conflict(ret_kind, body))
+        return RET_CONFLICT_POINTER_SCALAR;
+
+    /* Reverse pointer-scalar: only a genuinely committed position (a monomorphic
+     * non-#{Unsafe} defn) has no carrier to bridge, so only there is a cstr body
+     * under an integer return a real error (TUR-E0709). */
+    if (cls == RET_CLASS_COMMITTED &&
+        return_type_pointer_scalar_reverse_conflict(ret_kind, body))
+        return RET_CONFLICT_TYPE_REVERSE;
+
+    /* bool-vs-integer: likewise committed-only.  `bool` and the integer family
+     * share the int64 0/1 carrier, but the language treats them as distinct
+     * (binding position already rejects the swap), so a committed defn with no
+     * carrier to bridge gets a real mismatch (TUR-E0709). */
+    if (cls == RET_CLASS_COMMITTED &&
+        return_type_bool_integer_conflict(ret_kind, body))
+        return RET_CONFLICT_BOOL_INTEGER;
+
+    return RET_CONFLICT_NONE;
+}
+
 /* TY4: borrow referent extraction -- see elab_internal.h.
  *
  * Looks through result-position wrappers (do/let/letrec bodies and both `if`

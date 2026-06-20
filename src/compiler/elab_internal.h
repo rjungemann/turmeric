@@ -908,6 +908,69 @@ bool rc_widen_int_literal_to_float_return(TypeKind declared, Expr *body);
  * only on the commit-direction conflict. */
 bool return_type_pointer_scalar_conflict(TypeKind declared, Type body);
 
+/* carrier-aware-return-unification Phase 2: the REVERSE pointer-scalar shape --
+ * a concrete integer-family declared return with a concrete `cstr` body.  This
+ * is the carrier-handle bridge the commit-direction helper tolerates, so it is
+ * sound to reject ONLY for a committed position; the dispatcher applies that
+ * gate.  Returns true on the shape match. */
+bool return_type_pointer_scalar_reverse_conflict(TypeKind declared, Type body);
+
+/* carrier-aware-return-unification Phase 2b: a `bool`-vs-non-bool-integer
+ * mismatch -- exactly one of declared / body is `bool` and the other is a
+ * concrete non-bool integer-family scalar.  `bool` and the integer family share
+ * the int64 0/1 carrier, but the language treats them as distinct (binding
+ * position already rejects the swap), so this is sound to reject ONLY for a
+ * committed position; the dispatcher applies that gate.  Returns true on the
+ * shape match. */
+bool return_type_bool_integer_conflict(TypeKind declared, Type body);
+
+/* carrier-aware-return-unification: classify a return position so the shared
+ * dispatcher knows how much to reject against the int64 carrier ABI.
+ *   RET_CLASS_COMMITTED -- a genuinely committed position: a monomorphic,
+ *     non-`#{Unsafe}` `defn` that does not participate in the carrier.  Rejects
+ *     every concrete ground mismatch: symmetric register-class, the reverse
+ *     pointer-scalar direction (integer return, cstr body -> TUR-E0709), AND the
+ *     bool-vs-integer mismatch (both directions -> TUR-E0709).
+ *   RET_CLASS_CARRIER_FN -- a generic or `#{Unsafe}` `defn`.  Register-class
+ *     stays symmetric (a float never rides the int64 carrier), but the reverse
+ *     pointer-scalar direction is the deliberate carrier-handle bridge and is
+ *     tolerated.
+ *   RET_CLASS_CARRIER_METHOD -- a typeclass instance method.  Full carrier
+ *     tolerance: register-class only in the float-COMMIT direction (a
+ *     non-float-declared method with a float instance body is the per-instance
+ *     bridge) and the reverse pointer-scalar direction tolerated.
+ * Phase 3 will route grounded instance methods to RET_CLASS_COMMITTED. */
+typedef enum {
+    RET_CLASS_COMMITTED,
+    RET_CLASS_CARRIER_FN,
+    RET_CLASS_CARRIER_METHOD,
+} ReturnClass;
+
+/* Which return-position predicate fired (RET_CONFLICT_NONE = no conflict).  The
+ * caller maps each to its site-specific diagnostic (function vs instance
+ * method) and error code (NOMINAL -> TUR-E0001, REGISTER_CLASS -> TUR-E0707,
+ * POINTER_SCALAR -> TUR-E0708, TYPE_REVERSE / BOOL_INTEGER -> TUR-E0709). */
+typedef enum {
+    RET_CONFLICT_NONE = 0,
+    RET_CONFLICT_NOMINAL,
+    RET_CONFLICT_REGISTER_CLASS,
+    RET_CONFLICT_POINTER_SCALAR,
+    RET_CONFLICT_TYPE_REVERSE,
+    RET_CONFLICT_BOOL_INTEGER,
+} ReturnConflict;
+
+/* carrier-aware-return-unification: single dispatcher over the return-position
+ * predicates above.  Runs nominal -> register-class -> pointer-scalar (commit)
+ * -> pointer-scalar (reverse) and returns the first conflict; `cls` calibrates
+ * the register-class and reverse-pointer-scalar axes (see ReturnClass).  Callers
+ * widen an int-literal -> float body in place with
+ * rc_widen_int_literal_to_float_return BEFORE calling, and should skip the
+ * lazy-probe placeholder and inline-C (fiat TY_NIL) bodies as before. */
+ReturnConflict return_position_conflict(const StructDef *ret_struct,
+                                        const AdtDef *ret_adt,
+                                        TypeKind ret_kind, Type body,
+                                        ReturnClass cls);
+
 /* TY4: if `e` is a borrow (&x / &mut x) of a named binding, return that
  * binding (the referent); otherwise NULL.  Used by the borrow-escape check. */
 const Binding *borrow_referent_binding(const Expr *e);

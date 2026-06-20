@@ -9,8 +9,115 @@ severity: Medium. A function body may produce a value of a completely unrelated
   `handle` is declared `: Response` can return a non-Response); on
   investigation the same hole exists for ordinary `defn`s, so the root cause is
   the int64 carrier ABI, not instance-method elaboration.
-status: PARTIALLY RESOLVED
+status: RESOLVED -- return-position unification now rejects every soundly-
+  rejectable mismatch (nominal TUR-E0001, float register-class TUR-E0707,
+  cstr-commit + reverse + bool/integer TUR-E0708/E0709) for both ordinary defns
+  and grounded class-var instance methods. What remains accepted is the
+  deliberately-tolerated int64 carrier-handle bridge (generic / `#{Unsafe}` /
+  fixed-concrete-slot / HKT / explicitly-annotated-instance code), which is
+  intended behavior, not an open defect. See
+  docs/upcoming/v2/carrier-aware-return-unification-plan.md for the full design.
 ---
+
+## Status: grounded class-var instance methods now committed (2026-06-20)
+
+The original framing of this report -- "instance methods skip the return check"
+-- is now closed for the soundly-checkable case (Phase 3 of
+`docs/upcoming/v2/carrier-aware-return-unification-plan.md`). An instance method
+whose **class-declaration return was the class type variable**, grounded to a
+concrete (free-tyvar-free) type for this instance, is now classified
+`RET_CLASS_COMMITTED` and is as strict as the equivalent defn: a divergent
+concrete body (cstr-under-integer, bool-vs-integer, distinct nominal, float
+register class) is rejected.
+
+The distinction that keeps this sound: a *fixed concrete* class-decl return
+(`(len [x : a] : int)`, the same `int` for every instance) is a carrier slot, so
+an instance body returning a `cstr` handle there stays the tolerated bridge --
+exactly like the float `(add : int)`/float-body case. Only the class-type-var
+return is a genuine per-instance commit. The classifier therefore keys on
+`ret_was_class_var` (set at the Phase-RT substitution site) AND a grounded
+`ret_full` (no free tyvar, via `m7_type_has_free_tyvar`), so HKT `bind`/`ap`
+returns (`(f b)` with a free element) stay carrier-tolerant.
+
+- Two corpus fixtures returned the int literal `1` as a `bool` from a now-committed
+  instance and were corrected to the real `true` literal (the language already
+  rejects `int`-as-`bool` in binding position).
+- Fixtures: `errors/instance-method-return-committed-mismatch` (negative) and
+  `instance-method-return-committed-ok` (positive control covering both the
+  committed class-var path and the tolerated concrete-slot bridge).
+
+The remaining residue is the carrier-handle bridge for generic / `#{Unsafe}` /
+fixed-concrete-slot / HKT code, plus explicitly-annotated instance returns
+(conservatively left carrier-classified). These are the int64 carrier ABI's
+deliberate, by-design representation bridges -- intended behavior, not an open
+defect -- so with Phase 3 landed this report is **RESOLVED and archived**. The
+status sections below are the per-phase paper trail; each "stays OPEN for X" note
+was accurate when written and X was closed by the following phase.
+
+## Status: bool-vs-integer returns now rejected for committed defns (2026-06-20)
+
+The `int`-vs-`bool` residue called out below as needing "a carrier-aware
+unification" is now closed for committed defns (Phase 2b of
+`docs/upcoming/v2/carrier-aware-return-unification-plan.md`). A committed
+monomorphic non-`#{Unsafe}` defn that declares `: bool` with a non-bool integer
+body -- or `: int` with a `bool` body -- is now a hard `TUR-E0709`.
+
+The earlier "cannot be soundly rejected" framing did not survive investigation:
+Turmeric has real `bool` literals (`true`/`false`), binding position already
+rejects the swap (`(let [b : bool 1] ...)` -> "annotated bool, got int"), and a
+generic instantiation result elaborates as its concrete type (not a carrier
+`int`), so body types are trustworthy in committed positions. Rejecting it in
+committed return position only makes it consistent with binding position.
+
+- `return_type_bool_integer_conflict` (`src/compiler/elab_core.c`): exactly one
+  side `bool`, the other a concrete non-bool integer-family scalar. The shared
+  dispatcher gates it on `RET_CLASS_COMMITTED`, so generic / `#{Unsafe}` defns
+  and instance methods keep tolerating the carrier bridge.
+- Reuses `TUR_E0709_RETURN_TYPE_MISMATCH` (the general committed-mismatch code)
+  with a bool-specific message; the `tur explain TUR-E0709` entry now documents
+  both the cstr/integer and bool/integer cases.
+- Fixtures: `errors/return-type-bool-int-defn`, `errors/return-type-int-bool-defn`
+  (both directions) and `return-type-bool-int-carrier-ok` (positive control: a
+  committed `true` return is fine; generic + `#{Unsafe}` int-under-bool stay
+  accepted). `bash tests/run.sh`: green, zero corpus churn.
+
+The only return-position residue left OPEN is the carrier-handle bridge for
+generic / `#{Unsafe}` / typeclass code (tolerated by design) and the
+instance-method case, which needs the class-var-vs-concrete-slot distinction
+(Phase 3) -- not a kind-level reject. This report stays OPEN for that.
+
+## Status: reverse cstr/integer returns now rejected for committed defns (2026-06-20)
+
+The carrier-aware return unification work (see
+`docs/upcoming/v2/carrier-aware-return-unification-plan.md`, Phase 2) now closes
+the REVERSE of the `TUR-E0708` commit direction for the one position where it is
+soundly rejectable: a genuinely **committed** `defn` -- monomorphic
+(`n_fn_type_params == 0`, implicit type params included) and not `#{Unsafe}`, so
+it does not participate in the int64 carrier ABI -- that declares a concrete
+integer-family return but whose body yields a concrete `cstr` is now a hard
+`TUR-E0709`. A string pointer is never a valid integer, and a committed
+monomorphic function has no carrier to bridge it.
+
+- The classification is the mechanism: `elab_defn` tags the position
+  `RET_CLASS_COMMITTED` only for a monomorphic non-`#{Unsafe}` defn;
+  generic / `#{Unsafe}` defns are `RET_CLASS_CARRIER_FN` and instance methods
+  `RET_CLASS_CARRIER_METHOD`, both of which still tolerate the reverse
+  direction (the deliberate carrier-handle bridge). The shared dispatcher
+  `return_position_conflict` (`src/compiler/elab_core.c`) gates the reverse
+  pointer-scalar check (`return_type_pointer_scalar_reverse_conflict`) on
+  `RET_CLASS_COMMITTED`.
+- New code `TUR_E0709_RETURN_TYPE_MISMATCH` (`src/compiler/diag.{h,c}`) with a
+  code string, reverse lookup, and a `tur explain TUR-E0709` long-form entry.
+- Fixtures: `errors/return-type-int-cstr-defn` (negative) and
+  `return-type-int-cstr-carrier-ok` (positive control: a generic defn and an
+  `#{Unsafe}` defn returning a `cstr` under an `int` return are NOT flagged).
+  `bash tests/run.sh`: 1706 passed, 0 failed.
+
+The remaining residue is now just the `int`-vs-`bool` same-integer-class pair
+(both directions) and the carrier-handle bridge for generic / `#{Unsafe}` /
+typeclass code. Rejecting `int`-vs-`bool` soundly needs a carrier-result marker
+(a `TY_INT` body may be a genuine int or a carried `bool`), so it is deferred to
+a Phase 2b slice; this report stays OPEN for it.
 
 ## Status: cstr-commit / integer-body returns now rejected (2026-06-20)
 

@@ -189,6 +189,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0706_SERIAL_CONTEXT_NOT_CAPTURABLE:    return "TUR-E0706";
         case TUR_E0707_RETURN_REGISTER_CLASS_MISMATCH:   return "TUR-E0707";
         case TUR_E0708_RETURN_POINTER_SCALAR_MISMATCH:   return "TUR-E0708";
+        case TUR_E0709_RETURN_TYPE_MISMATCH:             return "TUR-E0709";
         /* ET4: effect scope errors */
         case TUR_E0250_ROW_VAR_ESCAPES_SCOPE:            return "TUR-E0250";
         case TUR_E0253_EFFECT_NOT_IN_SCOPE:              return "TUR-E0253";
@@ -293,6 +294,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0706") == 0) return TUR_E0706_SERIAL_CONTEXT_NOT_CAPTURABLE;
     if (strcmp(s, "TUR-E0707") == 0) return TUR_E0707_RETURN_REGISTER_CLASS_MISMATCH;
     if (strcmp(s, "TUR-E0708") == 0) return TUR_E0708_RETURN_POINTER_SCALAR_MISMATCH;
+    if (strcmp(s, "TUR-E0709") == 0) return TUR_E0709_RETURN_TYPE_MISMATCH;
     /* ET4: effect scope errors */
     if (strcmp(s, "TUR-E0250") == 0) return TUR_E0250_ROW_VAR_ESCAPES_SCOPE;
     if (strcmp(s, "TUR-E0253") == 0) return TUR_E0253_EFFECT_NOT_IN_SCOPE;
@@ -1594,6 +1596,40 @@ static const DiagExplanation diag_explanations_[] = {
       "is the deliberate int64 carrier-handle bridge (generic and typeclass code\n"
       "routinely passes pointer handles through an int64 result slot) and stays\n"
       "accepted.\n",
+    },
+    { TUR_E0709_RETURN_TYPE_MISMATCH,
+      "TUR-E0709: committed return type / body type mismatch\n"
+      "\n"
+      "A genuinely *committed* function -- a monomorphic `defn` that is not\n"
+      "`#{Unsafe}` and takes no type parameters, so it does not participate in the\n"
+      "int64 carrier ABI -- declares a concrete return type but its body yields a\n"
+      "concrete value of a different, carrier-sharing type.  Two cases are caught:\n"
+      "\n"
+      "  1. cstr-vs-integer (the REVERSE of TUR-E0708): a concrete integer-family\n"
+      "     return (int, bool, int8/16/32/64, uint8/16/32/64) with a `cstr`\n"
+      "     (`const char*` string pointer) body.  A string pointer is never a\n"
+      "     valid integer.\n"
+      "  2. bool-vs-integer: a `bool` return with a non-bool integer body, or the\n"
+      "     reverse.  bool and the integer family share the int64 0/1\n"
+      "     representation, but the language treats them as distinct (a\n"
+      "     `(let [b : bool 1] ...)` binding is rejected; boolean constants are\n"
+      "     `true`/`false`, not `0`/`1`).\n"
+      "\n"
+      "All of these are carrier-sharing reinterprets the carrier ABI cannot see.\n"
+      "Generic / typeclass / `#{Unsafe}` code routinely relies on that bridge, so\n"
+      "the swaps stay accepted there.  But a committed monomorphic function has no\n"
+      "carrier to bridge -- the int64 reinterpret is absent -- so the mismatch is a\n"
+      "real type-erasure bug.\n"
+      "\n"
+      "Examples triggering this error:\n"
+      "  (defn f [] : int  \"hello\")          ; cstr body, int return\n"
+      "  (defn g [] : bool 42)                ; integer body, bool return\n"
+      "  (defn h [x : int] : int (< x 3))     ; bool body, int return\n"
+      "\n"
+      "Fix: correct the declared return type to match the body, or return a value\n"
+      "of the declared type.  If the function is genuinely carrier-participating,\n"
+      "mark it `#{Unsafe}` or give it a type parameter -- the bridge is then\n"
+      "intentional and accepted.\n",
     },
 };
 
