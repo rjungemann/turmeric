@@ -5185,6 +5185,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      e->as.exists_pack_.value->type.as.forall_.n_constraints > 0);
                 int payload_kind_const = payload_is_rc ? 1 /* RCEXP_RC */
                                                        : 0 /* RCEXP_OPAQUE */;
+                /* constrained-byval: a by-value aggregate payload (a bare
+                 * `defstruct` value wider than the int64 carrier) cannot ride
+                 * the scalar `(int64_t)(struct)` cast -- cc rejects it. Mirror
+                 * the unconstrained byval-aggregate path: heap-box a copy and
+                 * store the pointer in `value`. EX_EXISTS_OPEN reads it back
+                 * through the pointer, and the rc-managed record uses a drop
+                 * hook that frees the box (the no-op default would leak it). */
+                Type cpayload_ty =
+                    emit_resolve_type(ctx, e->as.exists_pack_.value->type);
+                bool payload_byval_agg =
+                    exists_payload_is_byval_aggregate(cpayload_ty);
+                const char *exist_drop_fn = payload_byval_agg
+                    ? "tur_existential_drop_byval" : "tur_existential_drop";
                 char *cb_tmp = NULL;
                 char *rec_tmp = fresh_tmp(ctx);
                 if (is_linear) {
@@ -5200,15 +5213,32 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     cb_tmp = fresh_tmp(ctx);
                     indent_buf(body, ctx->indent);
                     buf_printf(body,
-                        "RcControlBlock *%s = rc_cb_alloc_kinded(sizeof(tur_existential_t) + (size_t)%u * sizeof(void *), %d, tur_existential_drop, 1 /* RCK_EXISTENTIAL */, %d);\n",
-                        cb_tmp, (unsigned)n_w, (int)TY_PTR_VOID, payload_kind_const);
+                        "RcControlBlock *%s = rc_cb_alloc_kinded(sizeof(tur_existential_t) + (size_t)%u * sizeof(void *), %d, %s, 1 /* RCK_EXISTENTIAL */, %d);\n",
+                        cb_tmp, (unsigned)n_w, (int)TY_PTR_VOID, exist_drop_fn,
+                        payload_kind_const);
                     indent_buf(body, ctx->indent);
                     buf_printf(body,
                         "tur_existential_t *%s = (tur_existential_t *)(%s->value);\n",
                         rec_tmp, cb_tmp);
                 }
                 indent_buf(body, ctx->indent);
-                if (vk == TY_PTR_VOID || vk == TY_EXISTS || vk == TY_FORALL
+                if (payload_byval_agg) {
+                    /* heap-box the aggregate; store the box pointer in value */
+                    const char *cname = type_struct_value_c_name(cpayload_ty);
+                    char *box = fresh_tmp(ctx);
+                    buf_printf(body, "%s *%s = (%s *)malloc(sizeof(%s));\n",
+                               cname, box, cname, cname);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body,
+                        "if (!%s) { fprintf(stderr, \"pack: out of memory\\n\"); abort(); }\n",
+                        box);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "*%s = %s;\n", box, val);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s->value = (int64_t)(intptr_t)(%s);\n",
+                               rec_tmp, box);
+                    free(box);
+                } else if (vk == TY_PTR_VOID || vk == TY_EXISTS || vk == TY_FORALL
                     || vk == TY_RC || vk == TY_REF || vk == TY_WEAK) {
                     buf_printf(body, "%s->value = (int64_t)(intptr_t)(%s);\n",
                                rec_tmp, val);
@@ -5316,7 +5346,27 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             bool packed_is_byval_aggregate =
                 !packed_is_record
                 && exists_payload_is_byval_aggregate(open_bind_ty);
-            if (packed_is_byval_aggregate) {
+            /* constrained-byval: a constrained existential whose payload is a
+             * by-value aggregate stores a heap-boxed copy and carries the box
+             * pointer in the record's `value` slot (see EX_EXISTS_PACK). Read
+             * the struct back through the record -> box indirection. */
+            bool record_byval_aggregate =
+                packed_is_record
+                && exists_payload_is_byval_aggregate(open_bind_ty);
+            if (record_byval_aggregate) {
+                const char *cname = type_struct_value_c_name(open_bind_ty);
+                if (packed_is_linear_record) {
+                    buf_printf(body,
+                        "%s %s = *(%s *)(intptr_t)((tur_existential_t *)(%s))->value;\n",
+                        cname, var_name, cname, packed_val);
+                } else {
+                    buf_printf(body,
+                        "%s %s = *(%s *)(intptr_t)((tur_existential_t *)((RcControlBlock *)(%s))->value)->value;\n",
+                        cname, var_name, cname, packed_val);
+                }
+                if (e->as.exists_open_.var_binding)
+                    e->as.exists_open_.var_binding->emit_byvalue_carrier_abi = true;
+            } else if (packed_is_byval_aggregate) {
                 const char *cname = type_struct_value_c_name(open_bind_ty);
                 buf_printf(body, "%s %s = *(%s *)(%s);\n",
                            cname, var_name, cname, packed_val);
@@ -5388,6 +5438,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 free(bv);
             }
 
+            /* constrained-byval: a :linear record owns its heap-boxed
+             * aggregate payload; free the box before reclaiming the record
+             * (the rc-managed path frees it via tur_existential_drop_byval). */
+            if (record_byval_aggregate && packed_is_linear_record) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body,
+                    "free((void *)(intptr_t)((tur_existential_t *)(%s))->value);\n",
+                    packed_val);
+            }
             /* EXG6-3: free the bare record now that the (only) open has
              * consumed it.  The linear discipline guarantees this is the
              * single use, so the free is unconditional. */

@@ -1,0 +1,19 @@
+;; constrained-byval: a constraint-carrying existential `(exists [a] [(C a)] a)`
+;; whose payload is a by-value `defstruct` value. The pack must heap-box the
+;; aggregate and carry the pointer in the existential record's `value` slot --
+;; before the fix it emitted `__rec->value = (int64_t)((LinesR){...})`, which cc
+;; rejects with "aggregate value used where an integer was expected".
+;;
+;; See docs/archive/constrained-exists-pack-struct-payload-bad-cast.md.
+
+(defmodule p (export)
+  (defclass Rdr [a] (rbound [x] : int))
+  (defstruct LinesR [v : int])
+  (definstance Rdr [LinesR] (rbound [x] (.v x)))
+  (defn main [] : int
+    ;; Pack a by-value struct behind a constrained existential. The boxed
+    ;; record round-trips through pack (and is rc-dropped at let-scope exit
+    ;; via tur_existential_drop_byval, so the box does not leak).
+    (let [e (pack (make-struct LinesR 5) (exists [a] [(Rdr a)] a))]
+      (println "ok"))
+    0))

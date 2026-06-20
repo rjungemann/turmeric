@@ -49,3 +49,35 @@ already on file and is confirmed accurate.
 - `bash tests/run.sh` (10-min timeout): `summary: 1704 passed, 0 failed`.
 - Diagnostic fires for the report's 1-field repro and the plot 3-field
   `PointsR`; the opaque-over-int dispatch fixture still builds and runs.
+
+## Superseded: heap-box support replaces the diagnostic
+
+Branch: `claude/constrained-exists-pack-struct-cast-a7o5jb`
+
+The `elab_pack` diagnostic above was a *reject*-the-construct resolution. It
+was subsequently replaced by end-to-end **heap-box support** for the by-value
+struct payload -- the construct now compiles and the pack/open record
+round-trips instead of being forbidden:
+
+- `src/compiler/emit_expr.c` (`EX_EXISTS_PACK` / `EX_EXISTS_OPEN`): on the
+  constrained (`n_witnesses > 0`) path, heap-box a by-value aggregate payload
+  (`exists_payload_is_byval_aggregate`) and carry the box pointer in the
+  record's `value` slot; open reads it back through the record -> box
+  indirection (rc-managed and `:linear` paths), freeing the box on the
+  `:linear` path.
+- `src/compiler/emit_module.c`: new `tur_existential_drop_byval` rc drop hook
+  frees the box when the rc-managed record is reclaimed (block stays
+  `RCEXP_OPAQUE`, so the cycle walker never follows the plain box).
+- `src/compiler/elab_types.c` (`elab_pack`): the reject diagnostic was removed.
+- `tests/fixtures/errors/exists-pack-byval-struct-payload/`: removed (the
+  construct is no longer an error).
+- `tests/fixtures/exists-pack-constrained-byval-struct/`: new pass fixture for
+  the report's exact repro.
+
+The dispatch-ABI layer the diagnostic cited is *not* solved by this change --
+witness dispatch on a by-value-struct receiver still assumes the int64 carrier
+ABI and reads garbage. It is now tracked as a focused open report,
+`docs/reported/constrained-exists-open-dispatch-byval-struct-receiver.md`,
+rather than forbidding the whole construct.
+
+Verification: `bash tests/run.sh` (10-min timeout) -- `1704 passed, 0 failed`.

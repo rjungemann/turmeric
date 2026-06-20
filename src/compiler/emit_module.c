@@ -3749,6 +3749,17 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * would otherwise double-free the inline payload. */
     buf_puts(out, "/* EXG1-2: drop hook for constrained-existential rc records */\n");
     buf_puts(out, "static void tur_existential_drop(void *value) { (void)value; }\n");
+    /* constrained-byval: drop hook for a constrained existential whose payload
+     * is a heap-boxed by-value aggregate.  The record's `value` slot holds the
+     * box pointer (laid out by EX_EXISTS_PACK); free it before the inline
+     * record itself is reclaimed (free(cb) in rc_free_queue_drain).  Tagged
+     * RCEXP_OPAQUE, so the cycle walker never follows the box -- it is a plain
+     * malloc, not an rc allocation -- and this is the single teardown path. */
+    buf_puts(out, "/* constrained-byval: drop hook for boxed-aggregate existential payloads */\n");
+    buf_puts(out, "static void tur_existential_drop_byval(void *value) {\n");
+    buf_puts(out, "    tur_existential_t *rec = (tur_existential_t *)value;\n");
+    buf_puts(out, "    if (rec) free((void *)(intptr_t)rec->value);\n");
+    buf_puts(out, "}\n");
     /* Inline STM runtime - Phase 21 with per-TVar locking */
     buf_puts(out, "/* STM types (Phase 21) */\n");
     buf_puts(out, "typedef void *(*stm_fn_t)(void *env);\n");
