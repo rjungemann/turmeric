@@ -1458,6 +1458,23 @@ Expr *elab_letrec(Elab *e, const Form *call) {
                             else if (rl == 4 && memcmp(rn, "void", 4) == 0) ret_kind = TY_NIL;
                             else if (rl == 3 && memcmp(rn, "nil",  3) == 0) ret_kind = TY_NIL;
                             else if (rl == 4 && memcmp(rn, "cstr", 4) == 0) ret_kind = TY_CSTR;
+                            /* W1 follow-on (float carrier): `float` is an inline
+                             * carrier scalar, not a struct/app/ADT, so the override
+                             * block below (which only fires for those kinds) never
+                             * reached it -- a `:float` self-recursive letrec
+                             * collapsed to the int64 carrier exactly like a Box did.
+                             * The self-call then typed `int` (spurious then=float
+                             * else=int mismatch); ascribing the call to `:float` to
+                             * silence that produced an int->double union truncation
+                             * at the carrier-decode site (emit_core.c), so it
+                             * type-checked but returned 0.0 at runtime.  Resolve the
+                             * scalar here, matching the top-level forward-decl pass
+                             * (elab_module.c) and #460's RR1.  `float64` is an alias
+                             * for `float`.  `float32` lives in a separate register
+                             * class (xmm vs gp) and is still policed by the E0707
+                             * guard, so it is left out of this scalar fast-path. */
+                            else if (rl == 5 && memcmp(rn, "float",   5) == 0) ret_kind = TY_FLOAT;
+                            else if (rl == 7 && memcmp(rn, "float64", 7) == 0) ret_kind = TY_FLOAT;
                         }
                     }
                     placeholder = type_fn(arg_kinds, (uint8_t)arity, ret_kind);
