@@ -1124,6 +1124,76 @@ static char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call) {
     if (!have_disp && call->type.kind == TY_TYVAR) {
         disp_ty = call->type; have_disp = true;
     }
+    /* constrained-instance-element-dispatch: the receiver may be a field
+     * extraction from a parametric container whose element type was erased to
+     * the int64 carrier at elaboration -- e.g. `(enc (.value x))` in the body of
+     * `(definstance Enc [Option] [(Enc A)] ...)`, where `(.value x)` has the
+     * struct's type-param `A` as its declared field type but elaborates with the
+     * carrier `int` summary kind.  The genuine dispatch type is that type-param,
+     * which the current spec resolves to a concrete element type (cstr/float/a
+     * struct/...).  Recover it by substituting the spec-resolved receiver's
+     * type-args into the field's declared type, so the inner class-method call
+     * re-dispatches to the right instance per specialization instead of baking in
+     * the carrier `int` representative.  Without this a constrained parametric
+     * instance body silently misdispatches every non-int element type. */
+    if (!have_disp && call->as.call_.n_args >= 1 && call->as.call_.args) {
+        const Expr *recv = call->as.call_.args[0];
+        while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
+        if (recv && recv->kind == EX_GET_FIELD && recv->as.get_field_.struct_expr) {
+            const Expr *se = recv->as.get_field_.struct_expr;
+            /* Resolve the receiver-container's concrete type for THIS spec.  When
+             * the container is a spec parameter (the usual case -- the instance
+             * method's `self`), emit_resolve_type leaves a parametric param type
+             * such as `(Option A)` unsubstituted, so consult the spec's
+             * arg_types[] by matching the binding against fn->params[] (the same
+             * recovery emit_var_spec_arg_type / Path A.2 perform).  Otherwise fall
+             * back to emit_resolve_type. */
+            Type rt;
+            bool have_rt = false;
+            if (se->kind == EX_VAR && se->as.var.binding && ctx->current_abi_specialization->fn) {
+                FnDef *fd = ctx->current_abi_specialization->fn;
+                const EmitAbiSpecialization *aspec = ctx->current_abi_specialization;
+                for (uint8_t pi = 0; pi < fd->n_params && pi < aspec->n_args; pi++) {
+                    if (fd->params[pi] == se->as.var.binding) {
+                        rt = aspec->arg_types[pi];
+                        have_rt = true;
+                        break;
+                    }
+                }
+            }
+            if (!have_rt) rt = emit_resolve_type(ctx, se->type);
+            StructDef *sd = NULL;
+            Type sargs[16];
+            uint8_t sn = 0;
+            uint32_t fidx = recv->as.get_field_.field_idx;
+            if (type_extract_struct_app(&rt, &sd, sargs, &sn) && sd &&
+                fidx < sd->n_fields) {
+                /* Parametric receiver, e.g. `(Option cstr)`: substitute the
+                 * extracted element args into the field's declared type-param. */
+                const StructField *f = &sd->fields[fidx];
+                if (f->full_type && f->full_type->kind == TY_TYVAR) {
+                    Type fr = substitute_struct_app_type(f->full_type, sd, sargs);
+                    if (fr.kind != TY_TYVAR && fr.kind != TY_UNKNOWN) {
+                        disp_ty = fr;
+                        have_disp = true;
+                    }
+                }
+            } else if (rt.kind == TY_STRUCT && rt.as.struct_.def &&
+                       rt.as.struct_.def->n_type_params == 0 &&
+                       fidx < rt.as.struct_.def->n_fields) {
+                /* Monomorphized receiver, e.g. the specialized `Option__cstr`
+                 * struct def: the field already carries its concrete element type,
+                 * but only as the declared full_type (the summary `kind` is still
+                 * the int64 carrier).  Dispatch on full_type when it grounds. */
+                const StructField *f = &rt.as.struct_.def->fields[fidx];
+                if (f->full_type && f->full_type->kind != TY_TYVAR &&
+                    f->full_type->kind != TY_UNKNOWN) {
+                    disp_ty = *f->full_type;
+                    have_disp = true;
+                }
+            }
+        }
+    }
     if (!have_disp) return NULL;
 
     Type resolved = emit_resolve_type(ctx, disp_ty);
