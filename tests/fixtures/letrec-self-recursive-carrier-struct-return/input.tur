@@ -1,0 +1,22 @@
+;; letrec-self-recursive-carrier-struct-return -- W1 regression.
+;; A letrec-bound self-recursive `fn` whose accumulator/return lowers to the
+;; int64 carrier (a :copy struct) must type its own recursive call at the
+;; declared return (Box), not the carrier `int`.  Before the fix, elab_letrec's
+;; Pass A placeholder collapsed every non-scalar return to TY_INT, so the
+;; self-call in the recursive arm of the `if` came back typed `int`, giving a
+;; spurious branch mismatch (then=Box else=int).  This is the letrec analogue of
+;; the top-level-defn case fixed by #460's RR1 block.
+(defstruct Box :copy [lo : int  hi : int])
+
+(defn go-letrec [n : int] : Box
+  (letrec [go (fn [i : int  acc : Box] : Box
+                (if (>= i n)
+                  acc
+                  (go (+ i 1) (make-struct Box (+ (.lo acc) 1) (.hi acc)))))]
+    (go 0 (make-struct Box 10 99))))
+
+(defn main [] : int
+  (let [r (go-letrec 3)]
+    (println (.lo r))
+    (println (.hi r))
+    0))

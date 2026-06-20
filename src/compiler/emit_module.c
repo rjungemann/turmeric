@@ -1161,6 +1161,7 @@ static bool body_has_dispatch_on_app_tyvar(
         case EX_DEF:
             return body_has_dispatch_on_app_tyvar(e->as.def_.init, bindings, n_bindings);
         case EX_LET:
+        case EX_LETREC:  /* shares the as.let_ layout (bindings + body) */
             for (uint32_t i = 0; i < e->as.let_.n; i++)
                 if (body_has_dispatch_on_app_tyvar(e->as.let_.bindings[i].init, bindings, n_bindings))
                     return true;
@@ -2264,6 +2265,12 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
             emit_abi_scan_expr(ctx, e->as.def_.init, items, n_items);
             break;
         case EX_LET:
+        /* EX_LETREC shares the as.let_ layout and must be scanned identically.
+         * Without this, a carrier call that appears only in a letrec body -- e.g.
+         * the `(vec-new)` seed in `(letrec [go (fn ...)] (go 0 (vec-new)))` --
+         * is never registered for emission, so its generic definition is dropped
+         * and the link fails with `undefined reference to vec_hynew`. */
+        case EX_LETREC:
             for (uint32_t i = 0; i < e->as.let_.n; i++) {
                 emit_abi_scan_expr(ctx, e->as.let_.bindings[i].init, items, n_items);
             }
@@ -2522,6 +2529,7 @@ static void emit_abi_trace_expr(const EmitCtx *ctx, const Expr *e) {
             emit_abi_trace_expr(ctx, e->as.def_.init);
             break;
         case EX_LET:
+        case EX_LETREC:  /* shares the as.let_ layout (bindings + body) */
             for (uint32_t i = 0; i < e->as.let_.n; i++)
                 emit_abi_trace_expr(ctx, e->as.let_.bindings[i].init);
             emit_abi_trace_expr(ctx, e->as.let_.body);
@@ -2609,6 +2617,7 @@ static void scan_adt_apps_in_expr(const Expr *e) {
             scan_adt_apps_in_expr(e->as.def_.init);
             break;
         case EX_LET:
+        case EX_LETREC:  /* shares the as.let_ layout (bindings + body) */
             for (uint32_t i = 0; i < e->as.let_.n; i++)
                 scan_adt_apps_in_expr(e->as.let_.bindings[i].init);
             scan_adt_apps_in_expr(e->as.let_.body);
@@ -2713,6 +2722,7 @@ static bool expr_dispatches_tyvar_to_struct_receiver(const Expr *e) {
         case EX_DEF:
             return expr_dispatches_tyvar_to_struct_receiver(e->as.def_.init);
         case EX_LET:
+        case EX_LETREC:  /* shares the as.let_ layout (bindings + body) */
             for (uint32_t i = 0; i < e->as.let_.n; i++)
                 if (expr_dispatches_tyvar_to_struct_receiver(e->as.let_.bindings[i].init))
                     return true;
@@ -2970,6 +2980,7 @@ static bool emit_abi_carrier_relay_walk(EmitCtx *ctx, const Expr *enclosing_fn,
             changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.def_.init, items, n_items);
             break;
         case EX_LET:
+        case EX_LETREC:  /* shares the as.let_ layout (bindings + body) */
             for (uint32_t i = 0; i < e->as.let_.n; i++)
                 changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn,
                                                        e->as.let_.bindings[i].init, items, n_items);
