@@ -2869,6 +2869,19 @@ Expr *elab_open(Elab *e, const Form *call) {
     /* Create binding for v in the open body */
     Binding *v_binding = binding_new(e, val_sym, v_type, false, false, val_name_form->span);
 
+    /* Existential-open witness dispatch: when the scrutinee is a
+     * constraint-carrying existential, record its TY_EXISTS type on the `v`
+     * binding.  A `(.m v ...)` method call in the body whose method belongs to
+     * one of the packed constraint classes then resolves through the record's
+     * runtime witness vtable (elab_method_call) instead of failing as
+     * ambiguous over the erased int64 carrier. */
+    if (packed->type.kind == TY_EXISTS
+            && packed->type.as.forall_.n_constraints > 0) {
+        Type *ex_copy = (Type *)arena_alloc(e->arena, sizeof(Type));
+        *ex_copy = packed->type;
+        v_binding->exists_open_type = ex_copy;
+    }
+
     /* Push a scope with v */
     Scope inner;
     scope_init(&inner, e->scope);

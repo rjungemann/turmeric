@@ -1,0 +1,37 @@
+; Existential `open` dispatch resolves through the packed witness vtable.
+;
+; With >=2 in-scope instances of the constraint class, a `(.method v)` call on
+; an `open`-bound value used to fail as ambiguous because the receiver type is
+; erased to the int64 carrier.  Dispatch now reads the per-constraint witness
+; bundled at the `pack` site, so a heterogeneous collection of values that
+; share a constraint set (but not a concrete type) dispatches correctly --
+; independent of how many instances are in scope.  This is the "AnyRenderer
+; box" pattern: distinct handle kinds sharing one Renderer dictionary.
+(defclass Rdr [a]
+  (rbound [x : a] : int))
+
+(defopaque LinesR  :int)
+(defopaque PointsR :int)
+
+(definstance Rdr [LinesR]
+  (rbound [x : LinesR] (:: x :int)))
+
+(definstance Rdr [PointsR]
+  (rbound [x : PointsR] (+ 100 (:: x :int))))
+
+; Pick a concrete renderer kind by `which`, box it behind the existential, and
+; dispatch `rbound` through the packed witness.  Both arms produce the same
+; `(exists [a] [(Rdr a)] a)` type, so the open site cannot statically know the
+; concrete instance -- it must consult the witness.
+(defn bound-of [which : int] : int
+  (if (= which 0)
+    (open (pack (:: 5 :LinesR)  (exists [a] [(Rdr a)] a)) [a v] (rbound v))
+    (open (pack (:: 7 :PointsR) (exists [a] [(Rdr a)] a)) [a v] (rbound v))))
+
+(defn main [] : int
+  (println (bound-of 0))   ; LinesR  -> 5
+  (println (bound-of 1))   ; PointsR -> 107
+  ; Inline pack/open at the use site dispatches through the witness too.
+  (println (open (pack (:: 3 :LinesR)  (exists [a] [(Rdr a)] a)) [a v] (rbound v)))
+  (println (open (pack (:: 9 :PointsR) (exists [a] [(Rdr a)] a)) [a v] (rbound v)))
+  0)

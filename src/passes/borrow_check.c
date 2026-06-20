@@ -742,6 +742,12 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
         case EX_EXISTS_OPEN:
             if (!borrow_check_expr_recursive(ctx, e->as.exists_open_.packed)) return false;
             return borrow_check_expr_recursive(ctx, e->as.exists_open_.body);
+        case EX_EXISTS_DISPATCH:
+            for (uint32_t i = 0; i < e->as.exists_dispatch_.n_args; i++) {
+                if (!borrow_check_expr_recursive(ctx, e->as.exists_dispatch_.args[i]))
+                    return false;
+            }
+            return true;
         /* Phase G0/G1: ADTs */
         case EX_DEFDATA:
         case EX_DEFGADT:

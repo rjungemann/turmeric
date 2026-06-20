@@ -562,6 +562,16 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.exists_open_.body);
             buf_putc(b, ')');
             break;
+        case EX_EXISTS_DISPATCH:
+            buf_printf(b, "(.%s",
+                       e->as.exists_dispatch_.typeclass
+                           ->methods[e->as.exists_dispatch_.method_idx].name->name);
+            for (uint32_t i = 0; i < e->as.exists_dispatch_.n_args; i++) {
+                buf_putc(b, ' ');
+                expr_print(b, e->as.exists_dispatch_.args[i]);
+            }
+            buf_putc(b, ')');
+            break;
         /* Phase G0: ADTs */
         case EX_DEFDATA:
             buf_printf(b, "(defdata %s)", e->as.defdata_.def->name);

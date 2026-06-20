@@ -6749,6 +6749,72 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         eval_frame_free(ef);
         return r;
     }
+    case EX_EXISTS_DISPATCH: {
+        /* Witness-indirected `open`-site method dispatch.  The compiled path
+         * reads the constraint witness packed into the existential record; the
+         * interpreter erases that record (EX_EXISTS_PACK returns the bare
+         * value), so it re-resolves the instance structurally from the
+         * receiver's runtime concrete type.  This is exact for struct/ADT
+         * payloads; opaque-over-primitive newtypes collapse to their carrier
+         * here, so a heterogeneous opaque collection is a compiled-only
+         * fixture (requires.compiled). */
+        const TypeClass *tc = e->as.exists_dispatch_.typeclass;
+        uint8_t mi = e->as.exists_dispatch_.method_idx;
+        uint32_t na = e->as.exists_dispatch_.n_args;
+        TuriValue *argv = na ? (TuriValue *)malloc(na * sizeof(TuriValue)) : NULL;
+        for (uint32_t i = 0; i < na; i++) {
+            argv[i] = eval_expr(env, frame, e->as.exists_dispatch_.args[i]);
+            if (turi_is_error(argv[i]) || env->returning || env->throwing) {
+                TuriValue r = argv[i]; free(argv); return r;
+            }
+        }
+        TypeClassEnv *tce = (TypeClassEnv *)env->last_tc_env;
+        TypeClassInstance *match = NULL;
+        if (tce && tc) {
+            const char *head = (na > 0) ? turi_struct_name(argv[0]) : NULL;
+            TypeKind prim = TY_UNKNOWN;
+            if (!head && na > 0) {
+                switch (argv[0].tag) {
+                    case TURI_INT:   prim = TY_INT;   break;
+                    case TURI_BOOL:  prim = TY_BOOL;  break;
+                    case TURI_CSTR:  prim = TY_CSTR;  break;
+                    case TURI_FLOAT: prim = TY_FLOAT; break;
+                    case TURI_NIL:   prim = TY_NIL;   break;
+                    default: break;
+                }
+            }
+            for (TypeClassInstance *inst = tce->instances; inst; inst = inst->next) {
+                if (inst->typeclass != tc || inst->n_type_args == 0) continue;
+                if (head) {
+                    const char *ihead =
+                        (inst->type_arg_syms && inst->type_arg_syms[0])
+                            ? inst->type_arg_syms[0]->name : NULL;
+                    if (ihead && strcmp(ihead, head) == 0) { match = inst; break; }
+                } else if (prim != TY_UNKNOWN &&
+                           inst->type_args[0].kind == prim) {
+                    match = inst; break;
+                }
+            }
+            if (!match) {
+                /* Fallback: first instance of the class (single-instance case). */
+                for (TypeClassInstance *inst = tce->instances; inst; inst = inst->next)
+                    if (inst->typeclass == tc) { match = inst; break; }
+            }
+        }
+        if (!match || mi >= match->n_method_impls || !match->method_impls[mi]) {
+            free(argv);
+            return turi_errorf("eval: EX_EXISTS_DISPATCH: no instance for "
+                               "method in class '%s'",
+                               (tc && tc->name) ? tc->name->name : "?");
+        }
+        TuriClosure *cl = (TuriClosure *)malloc(sizeof(TuriClosure));
+        memset(cl, 0, sizeof(*cl));
+        cl->fn = match->method_impls[mi];
+        cl->captured = NULL;
+        TuriValue r = eval_apply(env, cl, argv, na);
+        free(argv);
+        return r;
+    }
 
     /* --- IT0: union inject — tag a value for union type -------------------- */
     case EX_UNION_INJECT:
