@@ -11,7 +11,42 @@ severity: High. Blocks any program that imports a module defining a ground
   it live. Result: the generated C references an undeclared symbol and `cc`
   rejects the TU. This is exactly the json spice's `Decode` failure
   (`'__inst_Decode_decode_int' undeclared here`), 15/15 in `spices/json/tests`.
-status: OPEN
+status: RESOLVED
+---
+
+## RESOLUTION (2026-06-20)
+
+Fixed by extending the HKT dead-instance lockstep to ground (kind-`*`) classes
+and adding the EX_DICT-reference liveness the HKT note had anticipated. Three
+edits in `src/compiler`:
+
+1. `emit_stmt.c` (`EX_INSTANCE_DEF`): the dead-instance dict skip now applies to
+   ground instances too (`eligible = is_hkt ? g_m7_hkt_enabled : true`), keyed
+   on the same `emit_instance_is_live`.
+2. `emit_module.c` (`emit_abi_fn_skip_generic`): a ground instance method's body
+   is now skipped/kept on the SAME instance-level `emit_instance_is_live` the
+   dict uses, so dict and body never disagree (live -> both, dead -> neither).
+3. `emit_module.c` (`emit_abi_scan_expr` + new `emit_abi_note_instance_dict_ref`):
+   an `EX_DICT` dispatch node and an `EX_EXISTS_PACK` witness table both mark
+   their referenced instance(s) live (by noting a carrier call on every method
+   binding). This was required: ground dicts ARE referenced indirectly -- a
+   `Show`/`Eq` dict handed to a constrained generic, or stored in an existential
+   witness table (`witnesses[i] = &dict_Show_int_singleton`) -- so liveness keyed
+   only on direct `__inst_*` calls would have wrongly dropped a referenced dict
+   (`dict_Show_int_singleton undeclared`, hit by exg5/ex1c fixtures).
+
+Net codegen effect: every program previously emitted the full set of auto-loaded
+primitive `Eq`/`Hash`/... dict singletons as dead code; they are now pruned
+unless live. 85 fixture snapshots regenerated (pure deletions, ~23.8k lines).
+Full suite green: `summary: 1690 passed, 0 failed`.
+
+Reproduced and verified compiler-side with a 2-module project (ground class
+`Decode [a]` + int/bool instances): pre-fix `cc` error
+`'__inst_Decode_decode_bool' undeclared`; post-fix builds and runs. The json
+spice itself still needs an end-to-end re-verify with `../turmeric-spices/`
+present (not in this container), but the exact miscompile it reported is fixed
+at the source.
+
 ---
 
 # Ground-class dict singleton outlives its DCE'd instance-method body

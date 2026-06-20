@@ -403,21 +403,39 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             TypeClass *tc = inst->typeclass;
 
             /* Phase 5 carrier-bridge deletion -- dead-instance elimination: skip
-             * the whole dict (struct + singleton) for a DEAD HKT instance, in
-             * lockstep with emit_abi_fn_skip_generic skipping its carrier bases.
-             * An auto-preloaded HKT instance whose methods are never directly
-             * called (and never dict-dispatched -- which never happens in this
-             * codebase) is pure dead code; its `ap`/`fmap`/`bind` carrier bases
-             * carry the ubiquitous `carrier->concrete (Option (fn ...))`
-             * crossing.  Both halves key off emit_instance_is_live so the dict
-             * initializer never references a skipped base (and vice versa).
-             * Restricted to HKT instances (KIND != STAR); ground (kind-*)
-             * instances like Eq are untouched. */
-            if (g_m7_hkt_enabled && tc->type_param_kinds) {
+             * the whole dict (struct + singleton) for a DEAD instance, in
+             * lockstep with emit_abi_fn_skip_generic skipping its method bodies
+             * / carrier bases.  An instance whose methods are never directly
+             * called AND whose dict singleton is never referenced (EX_DICT
+             * dispatch or an existential witness table -- both noted as liveness
+             * in emit_abi_scan_expr) is pure dead code: for HKT instances its
+             * `ap`/`fmap`/`bind` carrier bases carry the ubiquitous
+             * `carrier->concrete (Option (fn ...))` crossing; for ground
+             * (kind-*) instances the dict slot would reference a body that the
+             * body-skip dropped.  Both halves key off emit_instance_is_live so
+             * the dict initializer never references a skipped base/body (and
+             * vice versa).  HKT instances are gated on g_m7_hkt_enabled (legacy
+             * carrier path keeps them); ground instances apply unconditionally. */
+            {
                 bool is_hkt = false;
-                for (uint8_t i = 0; i < tc->n_type_params; i++)
-                    if (tc->type_param_kinds[i] != KIND_STAR) { is_hkt = true; break; }
-                if (is_hkt && !emit_instance_is_live(ctx, inst))
+                if (tc->type_param_kinds) {
+                    for (uint8_t i = 0; i < tc->n_type_params; i++)
+                        if (tc->type_param_kinds[i] != KIND_STAR) { is_hkt = true; break; }
+                }
+                /* Skip the dict (struct + singleton) for a DEAD instance, in
+                 * lockstep with emit_abi_fn_skip_generic (emit_module.c)
+                 * skipping its method bodies.  Both HKT (M7, gated on
+                 * g_m7_hkt_enabled) and ground (kind-*) instances key off the
+                 * same emit_instance_is_live, so the dict initializer never
+                 * references a skipped __inst_<Class>_<method>_<T> body and a
+                 * dead instance contributes neither dict nor body.  Ground
+                 * coverage closes the json Decode
+                 * `__inst_Decode_decode_int undeclared` miscompile (a ground
+                 * dict was previously emitted unconditionally while its body
+                 * could be dropped).  Ground instances like Eq are unaffected
+                 * unless genuinely dead (no method directly called). */
+                bool eligible = is_hkt ? g_m7_hkt_enabled : true;
+                if (eligible && !emit_instance_is_live(ctx, inst))
                     break;  /* skip emitting the dead instance's dict */
             }
 
