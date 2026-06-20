@@ -2189,6 +2189,12 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
             emit_abi_scan_expr(ctx, e->as.exists_open_.packed, items, n_items);
             emit_abi_scan_expr(ctx, e->as.exists_open_.body,   items, n_items);
             break;
+        case EX_EXISTS_DISPATCH:
+            /* Seed any calls nested in the dispatch arguments so polymorphic
+             * helpers used to build them stay on the monomorphization worklist. */
+            for (uint32_t i = 0; i < e->as.exists_dispatch_.n_args; i++)
+                emit_abi_scan_expr(ctx, e->as.exists_dispatch_.args[i], items, n_items);
+            break;
         case EX_HANDLE: {
             /* Recurse into the handle body + each handler case body.
              * Without this, polymorphic helpers reached only through an
@@ -2853,6 +2859,10 @@ static bool emit_abi_carrier_relay_walk(EmitCtx *ctx, const Expr *enclosing_fn,
         case EX_EXISTS_OPEN:
             changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.exists_open_.packed, items, n_items);
             changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.exists_open_.body, items, n_items);
+            break;
+        case EX_EXISTS_DISPATCH:
+            for (uint32_t i = 0; i < e->as.exists_dispatch_.n_args; i++)
+                changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.exists_dispatch_.args[i], items, n_items);
             break;
         case EX_HANDLE: {
             HandleExpr *h = e->as.handle_.handle;

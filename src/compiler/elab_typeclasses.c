@@ -4350,6 +4350,67 @@ Expr *elab_method_call(Elab *e, const Form *call) {
     Expr *obj = elab_form(e, call->as.list.items[1]);
     if (!obj) return NULL;
 
+    /* Existential-open witness dispatch.
+     * When the receiver `v` was bound by `(open e [a v] ...)` over a
+     * constraint-carrying existential, its static type is erased to the int64
+     * carrier, so static instance search would either trivially pick the lone
+     * instance (single in-scope) or fail as ambiguous (>=2 in scope).  Neither
+     * consults the witness packed at the `pack` site.  Resolve instead through
+     * the record's runtime witness vtable: locate the constraint class that
+     * declares this method, find its witness slot, and build an
+     * EX_EXISTS_DISPATCH node that the emitter lowers to an indirect call
+     * through `record->witnesses[slot]`.  This is independent of how many
+     * instances of the class are in scope. */
+    if (obj->kind == EX_VAR && obj->as.var.binding
+            && obj->as.var.binding->exists_open_type) {
+        const Type *ex = obj->as.var.binding->exists_open_type;
+        for (uint8_t ci = 0; ci < ex->as.forall_.n_constraints; ci++) {
+            const TypeClass *tc = ex->as.forall_.constraint_classes[ci];
+            if (!tc) continue;
+            for (uint8_t mi = 0; mi < tc->n_methods; mi++) {
+                if (tc->methods[mi].name->len != method_name_len ||
+                    memcmp(tc->methods[mi].name->name, method_name,
+                           method_name_len) != 0) {
+                    continue;
+                }
+                /* Found the class+method.  Elaborate the receiver and any extra
+                 * args (args[0] is the receiver `v`). */
+                uint32_t n_args = call->as.list.len - 1;
+                Expr **args = (Expr **)arena_alloc(e->arena,
+                                                   n_args * sizeof(Expr *));
+                args[0] = obj;
+                bool args_ok = true;
+                for (uint32_t i = 1; i < n_args; i++) {
+                    args[i] = elab_form(e, call->as.list.items[1 + i]);
+                    if (!args[i]) { args_ok = false; break; }
+                }
+                if (!args_ok) return NULL;
+
+                Type result_type = tc->methods[mi].return_type;
+                if (result_type.kind == TY_UNKNOWN ||
+                    result_type.kind == TY_NIL ||
+                    (result_type.kind == TY_STRUCT &&
+                     result_type.as.struct_.def == NULL) ||
+                    result_type.kind == TY_TYVAR) {
+                    result_type = TYPE_INT;
+                }
+
+                Expr *out = expr_new(e->arena, EX_EXISTS_DISPATCH, result_type,
+                                     call->span);
+                out->as.exists_dispatch_.open_binding = obj->as.var.binding;
+                out->as.exists_dispatch_.typeclass    = tc;
+                out->as.exists_dispatch_.witness_idx  = ci;
+                out->as.exists_dispatch_.method_idx   = mi;
+                out->as.exists_dispatch_.args         = args;
+                out->as.exists_dispatch_.n_args       = n_args;
+                return out;
+            }
+        }
+        /* No constraint class declares this method -- fall through to the
+         * normal dispatch path (which will report no-method or an unrelated
+         * struct-field access). */
+    }
+
     /* Phase 12: EX_GET_FIELD — if the form is exactly (.field s) with no extra
      * args, try to resolve it as a struct field access first. */
     if (call->as.list.len == 2) {

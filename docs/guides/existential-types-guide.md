@@ -181,6 +181,48 @@ through a function parameter erases the constraint info and prevents
 `open` from extracting the boxed value (use the value at the
 construction site for now).
 
+## Heterogeneous dispatch through the packed witness
+
+Method dispatch inside `open` resolves through the constraint witness
+packed at the `pack` site -- *not* by a static instance search over the
+receiver's (erased) type. This is what makes a heterogeneous collection
+of values that share a constraint set but not a concrete type
+dispatchable: the call works the same whether one or many instances of
+the constraint class are in scope.
+
+```turmeric
+(defclass Rdr [a]
+  (rbound [x : a] : int))
+
+(defopaque LinesR  :int)
+(defopaque PointsR :int)
+
+(definstance Rdr [LinesR]  (rbound [x : LinesR]  (:: x :int)))
+(definstance Rdr [PointsR] (rbound [x : PointsR] (+ 100 (:: x :int))))
+
+; Both arms produce the same (exists [a] [(Rdr a)] a) type, so the open
+; site cannot know the concrete instance statically -- it dispatches
+; `rbound` through the witness bundled in the record.
+(defn bound-of [which : int] : int
+  (if (= which 0)
+    (open (pack (:: 5 :LinesR)  (exists [a] [(Rdr a)] a)) [a v] (rbound v))
+    (open (pack (:: 7 :PointsR) (exists [a] [(Rdr a)] a)) [a v] (rbound v))))
+
+; (bound-of 0) => 5    ; LinesR's rbound
+; (bound-of 1) => 107  ; PointsR's rbound (100 + 7)
+```
+
+This is the "AnyRenderer box" pattern: a collection of distinct handle
+kinds sharing one `Renderer` dictionary, each dispatching `bounds` /
+`render` through its own packed witness.
+
+The witness vtable lives in the runtime existential record, so this is a
+compiled-codegen feature. Under the tree-walking interpreter
+(`--interpret`) the record is erased and `open`-site calls re-dispatch
+structurally on the receiver's runtime type; opaque-over-primitive
+newtypes collapse to their carrier there, so a heterogeneous *opaque*
+collection must run through the compiled path.
+
 ## The `stdlib/existential.tur` helpers
 
 The `tur/existential` stdlib module provides two convenience macros for
@@ -229,10 +271,6 @@ required by the elaborator.
   extract the boxed value from the runtime record. Open at the
   construction site, or pass through a binding typed with the full
   existential form.
-- **Heterogeneous-dispatch method calls.** Inside `open`, method
-  dispatch on `v` currently resolves through the inner concrete type's
-  static instance. The full vtable-indirected dispatch through the
-  record's witnesses is reserved for a follow-on patch.
 - **Reclaiming existential records.** Constrained packs allocate a
   `tur_existential_t` on the heap; the deferred memory-management work
   is tracked in [`../existential-gc-plan.md`](../existential-gc-plan.md).

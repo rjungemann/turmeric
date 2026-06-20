@@ -5357,6 +5357,25 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* Suppress unused-variable warning */
             indent_buf(body, ctx->indent);
             buf_printf(body, "(void)%s;\n", var_name);
+
+            /* Existential-open witness dispatch: expose the existential record
+             * pointer under a deterministic name (`__exrec_<v>`) so an
+             * EX_EXISTS_DISPATCH method call in the body can read the packed
+             * witness vtable.  Only constrained records carry witnesses. */
+            if (packed_is_record) {
+                indent_buf(body, ctx->indent);
+                if (packed_is_linear_record) {
+                    buf_printf(body,
+                        "tur_existential_t *__exrec_%s = (tur_existential_t *)(%s);\n",
+                        var_name, packed_val);
+                } else {
+                    buf_printf(body,
+                        "tur_existential_t *__exrec_%s = (tur_existential_t *)((RcControlBlock *)(%s))->value;\n",
+                        var_name, packed_val);
+                }
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "(void)__exrec_%s;\n", var_name);
+            }
             free(var_name);
 
             /* Emit body */
@@ -5382,6 +5401,69 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             indent_buf(body, ctx->indent);
             buf_puts(body, "}\n");
             return nil_result ? atom_nil() : tmp;
+        }
+        /* Existential-open witness dispatch: lower `(.m v args...)` to an
+         * indirect call through the existential record's packed witness vtable.
+         *
+         * The record was exposed by EX_EXISTS_OPEN as `__exrec_<v>`.  Its
+         * `witnesses[witness_idx]` field points at a `dict_<Class>_<T>` struct
+         * -- a flat array of method function pointers in class-declaration
+         * order -- so the method pointer is `((void **)witness)[method_idx]`.
+         * The receiver flows as the int64 carrier (the open binds `v` to the
+         * record's int64 `value`), so the call uses the carrier ABI: each
+         * class-variable-typed parameter is `int64_t`, concrete parameters keep
+         * their declared C type. */
+        case EX_EXISTS_DISPATCH: {
+            const TypeClass *tc = e->as.exists_dispatch_.typeclass;
+            const TypeClassMethod *m =
+                &tc->methods[e->as.exists_dispatch_.method_idx];
+            char *vname = name_for_binding(ctx,
+                              e->as.exists_dispatch_.open_binding);
+
+            /* Build the carrier-ABI signature of the method.  A parameter typed
+             * as the class variable (an abstract tyvar: TY_TYVAR, or TY_STRUCT
+             * with a NULL def) erases to the int64 carrier; anything else keeps
+             * its concrete C type. */
+            Buf sig; buf_init(&sig);
+            for (uint8_t j = 0; j < m->n_params; j++) {
+                if (j > 0) buf_puts(&sig, ", ");
+                Type pt = m->param_types[j];
+                bool is_classvar =
+                    pt.kind == TY_TYVAR ||
+                    (pt.kind == TY_STRUCT && pt.as.struct_.def == NULL);
+                buf_puts(&sig, is_classvar ? "int64_t" : type_c_name(pt));
+            }
+            buf_putc(&sig, '\0');
+
+            const char *ret_c = type_c_name(e->type);
+
+            /* Emit the argument values first so any side effects are ordered. */
+            uint32_t na = e->as.exists_dispatch_.n_args;
+            char **argvals = (char **)malloc(na * sizeof(char *));
+            for (uint32_t i = 0; i < na; i++) {
+                argvals[i] = emit_value(ctx, body, e->as.exists_dispatch_.args[i]);
+            }
+
+            Buf out; buf_init(&out);
+            buf_printf(&out,
+                "((%s (*)(%s))(((void **)(__exrec_%s->witnesses[%u]))[%u]))(",
+                ret_c, sig.data, vname,
+                (unsigned)e->as.exists_dispatch_.witness_idx,
+                (unsigned)e->as.exists_dispatch_.method_idx);
+            for (uint32_t i = 0; i < na; i++) {
+                if (i > 0) buf_puts(&out, ", ");
+                buf_puts(&out, argvals[i]);
+                free(argvals[i]);
+            }
+            buf_putc(&out, ')');
+            buf_putc(&out, '\0');
+
+            free(argvals);
+            free(vname);
+            buf_free(&sig);
+            char *result = strdup(out.data);
+            buf_free(&out);
+            return result;
         }
         /* Phase G0: EX_DEFDATA — nothing to emit in value position (handled in Pass 0) */
         case EX_DEFDATA:

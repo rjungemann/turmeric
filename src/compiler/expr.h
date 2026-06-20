@@ -231,6 +231,14 @@ struct Binding {
      * carrier, not a function pointer).  Only user-named globals are valid
      * source_binding targets. */
     bool                is_lifted_lambda;
+    /* Existential `open` dispatch: when this binding names the `v` of
+     * `(open e [a v] ...)` and `e` is a constraint-carrying existential, this
+     * points at the packed scrutinee's TY_EXISTS type (carrying the constraint
+     * classes, in witness order).  A method call on `v` consults it to resolve
+     * dispatch through the runtime witness vtable rather than failing as
+     * ambiguous over the erased int64 carrier type.  NULL for ordinary
+     * bindings.  See docs/archive/existential-open-witness-dispatch.md. */
+    const struct Type  *exists_open_type;
 };
 
 /* GF1: Generator definition -- one per (gen ...) expression */
@@ -369,6 +377,8 @@ typedef enum ExprKind {
     /* Phase HRT2: Existential types */
     EX_EXISTS_PACK,    /* (pack expr (exists [a] T)) — boxes value as existential */
     EX_EXISTS_OPEN,    /* (open packed [a v] body) — unboxes existential, binds v */
+    EX_EXISTS_DISPATCH,/* method call on an open-bound `v`, resolved at runtime
+                        * through the existential record's packed witness vtable */
     /* Phase G0: Plain ADTs */
     EX_DEFDATA,        /* (defdata Name [:copy] (Ctor1) (Ctor2 T1 T2) ...) */
     EX_MATCH,          /* (match scrutinee (Ctor1 x y) body1 _ default-body) */
@@ -885,6 +895,20 @@ struct Expr {
             struct Binding *var_binding; /* binding for v (the unboxed inner value) */
             struct Expr    *body;        /* the open body expression */
         } exists_open_;
+        /* Existential-open method dispatch: a `(.m v ...)` call whose receiver
+         * `v` was bound by an `open` over a constraint-carrying existential.
+         * The receiver type is erased to the int64 carrier, so the call cannot
+         * pick a static instance; instead it reads the per-constraint witness
+         * vtable bundled in the existential record (located via open_binding)
+         * and calls the method pointer at method_idx through the carrier ABI. */
+        struct {
+            struct Binding   *open_binding; /* the `v` binding of the enclosing open */
+            const TypeClass  *typeclass;    /* the constraint class being dispatched */
+            uint8_t           witness_idx;  /* index into the record's witnesses[] */
+            uint8_t           method_idx;   /* index of the method within the class */
+            struct Expr     **args;         /* call args; args[0] is the receiver `v` */
+            uint32_t          n_args;
+        } exists_dispatch_;
         /* Phase G0: ADT definition */
         struct {
             AdtDef  *def;      /* the ADT being defined */
