@@ -499,6 +499,30 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                     }
                     break;
                 }
+                /* Existential elimination: `(open packed [a v] body)` binds the
+                 * unboxed value `v` locally, so register var_binding as a local
+                 * def (it must never be treated as a free var) and descend into
+                 * both the scrutinee and body so any `let` nested there is
+                 * collected -- mirrors EX_MATCH's arm-binding handling. */
+                case EX_EXISTS_OPEN:
+                    if (cur->as.exists_open_.var_binding) {
+                        if (n_local >= cap_local) {
+                            cap_local = cap_local ? cap_local * 2 : 8;
+                            local_defs = (Binding **)realloc(local_defs,
+                                cap_local * sizeof(Binding *));
+                        }
+                        local_defs[n_local++] = cur->as.exists_open_.var_binding;
+                    }
+                    if (cur->as.exists_open_.packed) ls[lsp++] = cur->as.exists_open_.packed;
+                    if (cur->as.exists_open_.body)   ls[lsp++] = cur->as.exists_open_.body;
+                    break;
+                case EX_EXISTS_PACK:
+                    if (cur->as.exists_pack_.value) ls[lsp++] = cur->as.exists_pack_.value;
+                    break;
+                case EX_EXISTS_DISPATCH:
+                    for (uint32_t i = cur->as.exists_dispatch_.n_args; i > 0; i--)
+                        ls[lsp++] = cur->as.exists_dispatch_.args[i-1];
+                    break;
                 default: break;
             }
         }
@@ -867,6 +891,24 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                 break;
             case EX_POLY_WRAP:
                 if (cur->as.poly_wrap_.inner) stack[sp++] = cur->as.poly_wrap_.inner;
+                break;
+            /* Existential forms.  Without descending here, a variable referenced
+             * only inside an `open` scrutinee (`(open (vec-get rs i) [a v] ...)`),
+             * a `pack` value, or a witness-dispatch arg is never seen as a free
+             * variable -- so the enclosing closure fails to capture it and the
+             * lifted C body references the bare outer local ('rs_NNNN'
+             * undeclared).  The open's `v` binding is registered as a local def
+             * in the pre-pass, so its body references to `v` are filtered out. */
+            case EX_EXISTS_OPEN:
+                if (cur->as.exists_open_.packed) stack[sp++] = cur->as.exists_open_.packed;
+                if (cur->as.exists_open_.body)   stack[sp++] = cur->as.exists_open_.body;
+                break;
+            case EX_EXISTS_PACK:
+                if (cur->as.exists_pack_.value) stack[sp++] = cur->as.exists_pack_.value;
+                break;
+            case EX_EXISTS_DISPATCH:
+                for (uint32_t i = cur->as.exists_dispatch_.n_args; i > 0; i--)
+                    stack[sp++] = cur->as.exists_dispatch_.args[i-1];
                 break;
             default:
                 break;

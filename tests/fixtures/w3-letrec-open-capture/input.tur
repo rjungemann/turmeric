@@ -1,0 +1,50 @@
+; W3: a closure (letrec-recursive or plain let-bound) that captures an outer
+; binding referenced only inside an `open`/`pack`/witness-dispatch must capture
+; that binding by env.  Before the fix, collect_free_vars never descended into
+; the existential forms, so the captured binding (`rs`/`base`/`offset`) was
+; omitted from the closure's capture set and the lifted C body referenced the
+; bare outer local ('rs_NNNN' undeclared).
+(defmodule capexists
+  (defclass Sz [a] (sz [x : a] : int))
+  (defclass Sz2 [a] (cmp [x : a y : int] : int))
+  (defstruct Wm :copy [w : int])
+  (definstance Sz [Wm] (sz [x] (.w x)))
+  (definstance Sz2 [Wm] (cmp [x y] (+ (.w x) y)))
+
+  (defn mk-vec [] : (Vec (exists [a] [(Sz a)] a))
+    (let [v (:: (vec-new) (Vec (exists [a] [(Sz a)] a)))]
+      (vec-push! v (pack (make-struct Wm 5) (exists [a] [(Sz a)] a)))
+      (vec-push! v (pack (make-struct Wm 7) (exists [a] [(Sz a)] a)))
+      v))
+
+  ; letrec self-recursive closure capturing `rs` via the `open` scrutinee
+  (defn total [rs : (Vec (exists [a] [(Sz a)] a))] : int
+    (let [n (vec-len rs)]
+      (letrec [go (fn [i : int acc : int] : int
+                    (if (>= i n) acc
+                      (go (+ i 1) (+ acc (open (vec-get rs i) [a v] (sz v))))))]
+        (go 0 0))))
+
+  ; non-recursive let-bound closure capturing `rs` via the `open` scrutinee
+  (defn sum-first [rs : (Vec (exists [a] [(Sz a)] a))] : int
+    (let [f (fn [i : int] : int (open (vec-get rs i) [a v] (sz v)))]
+      (+ (f 0) (f 1))))
+
+  (defn mk-vec2 [] : (Vec (exists [a] [(Sz2 a)] a))
+    (let [v (:: (vec-new) (Vec (exists [a] [(Sz2 a)] a)))]
+      (vec-push! v (pack (make-struct Wm 9) (exists [a] [(Sz2 a)] a)))
+      v))
+
+  ; capture an outer `offset` referenced only as a witness-dispatch arg
+  (defn total-off [rs : (Vec (exists [a] [(Sz2 a)] a)) offset : int] : int
+    (let [n (vec-len rs)]
+      (letrec [go (fn [i : int acc : int] : int
+                    (if (>= i n) acc
+                      (go (+ i 1) (+ acc (open (vec-get rs i) [a v] (cmp v offset))))))]
+        (go 0 0))))
+
+  (defn main [] : int
+    (println (total (mk-vec)))      ; 5 + 7 = 12
+    (println (sum-first (mk-vec)))  ; 5 + 7 = 12
+    (println (total-off (mk-vec2) 100)) ; 9 + 100 = 109
+    0))
