@@ -8,8 +8,58 @@ severity: Medium. A function body may produce a value of a completely unrelated
   diagnostic. Originally probed as a `definstance` method gap (a handler whose
   `handle` is declared `: Response` can return a non-Response); on
   investigation the same hole exists for ordinary `defn`s, so the root cause is
-  the int64 carrier ABI, not instance-method elaboration. Documented, not fixed.
-status: OPEN
+  the int64 carrier ABI, not instance-method elaboration.
+status: PARTIALLY RESOLVED
+---
+
+## Status: nominal-identity conflicts now rejected (2026-06-20)
+
+The carrier-safe slice of this gap is fixed for **both** the ordinary `defn`
+path and the `definstance` method path: a body whose actual type is a
+**different concrete nominal type** (struct / opaque newtype / ADT, compared by
+def-pointer identity) than the declared return is now a hard `TUR-E0001`. Two
+distinct nominal defs can never share a carrier representation, so this is
+always a real error -- it is the "genuine ground mismatch" the fix direction
+called for, with zero suite regressions.
+
+- Shared helper `return_type_nominal_conflict` (`src/compiler/elab_core.c`,
+  declared in `elab_internal.h`): true iff the declared return is a concrete
+  nominal def and the body yields a *different* concrete nominal. A
+  primitive / opaque-int carrier / tyvar / applied / unknown / inline-C body is
+  tolerated.
+- `defn`: checked in `elab_defn` (`src/compiler/elab_fns.c`) after the body is
+  finalized (skips the lazy-probe placeholder).
+- `definstance`: the declared nominal def (post Phase RT substitution) is
+  stashed on `InstMethodPass` in pass 1 and checked against the elaborated body
+  in pass 2 (`src/compiler/elab_typeclasses.c`), after the arrow-head TY_FN
+  refinement.
+- Fixtures: `errors/return-type-nominal-conflict-defn`,
+  `errors/instance-method-return-nominal-conflict` (negatives), and
+  `return-type-nominal-ok` (positive control that also locks in the tolerated
+  carrier boundary -- a bare int returned where an opaque newtype is declared).
+  `bash tests/run.sh`: 1697 passed, 0 failed.
+
+### What remains OPEN (tolerated by carrier-ABI design)
+
+Width-compatible scalar/handle mismatches are still accepted, because the int64
+carrier ABI deliberately unifies their representation:
+
+- `: cstr` body `42`, `: bool` body `42`, `: int` body `"hello"` -- int / cstr /
+  bool all share the int64 register class.
+- A bare primitive where a nominal struct/ADT/opaque is declared -- the
+  carrier-handle bridge (`#{Unsafe}` inline-C and generic carrier code legitimately
+  return an int64 handle for a nominal type).
+- Float register-class divergence (`: float` body `42`, `: Pt` body `7.1`) --
+  left tolerated for now; int->float coercion is common, so rejecting it needs a
+  separate, calibrated pass (candidate follow-up: reject float-vs-non-float
+  return only, gated like the existing TUR-E0705 register-class checks).
+
+These are genuinely a carrier-ABI consequence, not an elaboration bug: rejecting
+them at the type level would fight the representation bridges the rest of the
+language relies on. A complete fix is a carrier-aware return unification (fix
+directions below) and remains future work; this report stays OPEN for that
+residue.
+
 ---
 
 # Result-position return type is not unified with the body
