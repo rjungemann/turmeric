@@ -10,8 +10,47 @@ severity: Medium. Blocks any program that pattern-matches the *result* of a
   (`tur build <file>`) -- it is NOT separate-compilation-specific, despite the
   run-build-project.sh test framing. Workaround: route the result through a
   by-value consumer (`from-right`/`from-left`) instead of `match`.
-status: OPEN
+status: RESOLVED
 ---
+
+## Resolution
+
+Fixed in `src/compiler/emit_module.c`: the ABI-specialization worklist seeder
+`emit_abi_scan_expr` had no `case EX_MATCH`, so when it reached a `match` node
+it stopped without visiting the scrutinee or any arm body/guard. Any
+instance-method (or other polymorphic) call sitting in a match scrutinee --
+the prototypical case being a higher-kinded instance method whose result is the
+scrutinee, `(match (fmap e f) ...)` -- was never handed to
+`emit_abi_register_call`, so its spec was never interned and neither a forward
+decl nor a definition was emitted. Emit-time call-name resolution still minted
+the carrier-ABI clone name (`__inst_Functor_fmap_Either__ltstruct_gt`) at the
+call site, yielding the dangling undefined reference.
+
+The two other AST walkers in the same file (`emit_abi_trace_expr`,
+`scan_adt_apps_in_expr`) already recursed through `match` correctly; only the
+worklist-seeding walker omitted it. The fix adds the missing `EX_MATCH` arm,
+mirroring the existing `EX_EXISTS_OPEN` / `EX_HANDLE` "reached only through X
+body falls off the worklist" fixes:
+
+```c
+case EX_MATCH:
+    emit_abi_scan_expr(ctx, e->as.match_.scrutinee, items, n_items);
+    for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+        emit_abi_scan_expr(ctx, e->as.match_.arms[i].body, items, n_items);
+        if (e->as.match_.arms[i].guard)
+            emit_abi_scan_expr(ctx, e->as.match_.arms[i].guard, items, n_items);
+    }
+    break;
+```
+
+No change to symbol-name resolution was needed: the name was already identical
+between the `match`-scrutinee and by-value (`from-right`) consumers; only the
+worklist registration was missing.
+
+Regression coverage: `tests/fixtures/hkt-fmap-match-scrutinee/` (whole-program
+path) plus the now-green `build-project-load-higher-kinded-module` and
+`build-project-import-higher-kinded` in `tests/run-build-project.sh`
+(separate-compilation path).
 
 # HKT instance method feeding a `match` scrutinee dangles at link
 
