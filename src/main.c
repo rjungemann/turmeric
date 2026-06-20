@@ -9205,7 +9205,46 @@ static TuriValue native_run_raytracer(TuriEnv *e, TuriValue *a, uint32_t n, void
     return turi_int(checksum);
 }
 
+/* stdlib/time.tur natives.  time.tur's bodies are inline-C (nanosleep, a
+ * __tur_mock_cap singleton struct), which the interpreter cannot run.  The
+ * Mock-Time capability is the only deterministic, printable clock; model it as
+ * a one-word heap cell holding the current mock time (ms).  sleep-ms is a no-op
+ * under --interpret (deterministic; the interpreter has no wall clock to
+ * advance), matching the fixtures that only assert on mock time. */
+static TuriValue native_time_mock_create(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    int64_t *cell = (int64_t *)malloc(sizeof(int64_t));
+    if (!cell) return turi_int(0);
+    cell[0] = 0;
+    return turi_int((int64_t)(intptr_t)cell);
+}
+static TuriValue native_time_mock_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0 && a[0].as_int) free((void *)(intptr_t)a[0].as_int);
+    return turi_nil();
+}
+static TuriValue native_time_mock_set(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n >= 2 && a[0].as_int) ((int64_t *)(intptr_t)a[0].as_int)[0] = a[1].as_int;
+    return turi_nil();
+}
+static TuriValue native_time_mock_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n >= 1 && a[0].as_int) return turi_int(((int64_t *)(intptr_t)a[0].as_int)[0]);
+    return turi_int(0);
+}
+static TuriValue native_time_sleep_ms(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_nil();  /* deterministic no-op under --interpret */
+}
+
 static void wk_register_stdlib_natives(TuriEnv *env) {
+    /* stdlib/time.tur (inline-C; Mock-Time capability + sleep-ms) */
+    turi_env_register_native(env, "Mock-Time",       native_time_mock_create, NULL);
+    turi_env_register_native(env, "Mock-Time-free",  native_time_mock_free,   NULL);
+    turi_env_register_native(env, "mock-time-set",   native_time_mock_set,    NULL);
+    turi_env_register_native(env, "mock-time-get",   native_time_mock_get,    NULL);
+    turi_env_register_native(env, "sleep-ms",        native_time_sleep_ms,    NULL);
     /* Option/some/none */
     turi_env_register_native(env, "some",            native_some,            NULL);
     turi_env_register_native(env, "option-eq?",      native_option_eq,       NULL);
@@ -9218,6 +9257,11 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     /* option.tur names this inline-C op `unwrap-or` (not `option-unwrap-or`); the
      * override only fires when registered under the real function name. */
     turi_env_register_native(env, "unwrap-or",       native_option_unwrap_or,NULL);
+    /* unwrap-or-carrier (option.tur Track A shim) is inline-C with identical
+     * semantics to unwrap-or: extract the carrier Option's value or return the
+     * default.  Register the same native so --interpret does not trip over the
+     * inline-C body. */
+    turi_env_register_native(env, "unwrap-or-carrier",native_option_unwrap_or,NULL);
     turi_env_register_native(env, "option-must",     native_option_must,     NULL);
     turi_env_register_native(env, "option-expect",   native_option_expect,   NULL);
     turi_env_register_native(env, "option-map",      native_option_map,      NULL);
