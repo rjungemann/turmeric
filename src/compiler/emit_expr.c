@@ -2307,9 +2307,25 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 /* This is a closure - emit call to thunk function with closure value as first arg */
                 Binding *thunk_binding = fn_binding->closure_fn_binding;
                 char *thunk_name = raw_name_for_binding(thunk_binding);
-                
-                /* Closure value is the env struct variable. */
-                char *closure_val = name_for_binding(ctx, fn_binding);
+
+                /* Closure value is the env struct variable.
+                 *
+                 * S5 (letrec self-recursive closure): when this call targets the
+                 * closure whose own lifted body is currently being emitted -- i.e.
+                 * a `letrec`-bound `go` calling `go` -- the closure box is NOT the
+                 * outer-scope binding name (which is out of scope inside the lifted
+                 * thunk), it is the current env pointer the thunk already received
+                 * as its first parameter.  Detect the self-call by matching the
+                 * target thunk against the closure being emitted and pass the raw
+                 * env param (already a `void *`) instead. */
+                char *closure_val;
+                if (ctx->closure && ctx->closure->fn &&
+                    ctx->closure->fn->binding == thunk_binding &&
+                    ctx->closure->fn->n_params > 0) {
+                    closure_val = raw_name_for_binding(ctx->closure->fn->params[0]);
+                } else {
+                    closure_val = name_for_binding(ctx, fn_binding);
+                }
 
                 char **arg_strs = (char **)malloc((e->as.call_.n_args + 1) * sizeof(char *));
                 if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }

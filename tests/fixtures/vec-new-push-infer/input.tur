@@ -1,0 +1,23 @@
+;; S4: (vec-new) + (vec-push!) forward element-type inference.
+;;
+;; A fresh (vec-new) binds (Vec A) with an unresolved element tyvar; the first
+;; vec-push! of a concrete element pins A from the pushes, so the binding
+;; matches a concrete (Vec T) parameter with no ascription.  Covers int and
+;; float element types (the float path peels the int64 carrier reinterpret).
+
+(defn sum [v : (Vec int)] : int
+  (sum-go v (vec-len v) 0 0))
+(defn sum-go [v : (Vec int) n : int i : int acc : int] : int
+  (if (>= i n) acc (sum-go v n (+ i 1) (+ acc (vec-get v i)))))
+
+(defn main [] : int
+  (let [ints  (vec-new)
+        flts  (vec-new)]
+    (vec-push! ints 10)
+    (vec-push! ints 20)
+    (vec-push! flts 1.5)
+    (vec-push! flts 2.5)
+    (println (sum ints))
+    (println (vec-len flts))
+    (println (:: (vec-get flts 0) :float))
+    0))
