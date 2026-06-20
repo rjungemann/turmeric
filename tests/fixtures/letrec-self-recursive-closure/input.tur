@@ -1,0 +1,21 @@
+;; S5: a letrec-bound self-recursive *capturing* closure.
+;;
+;; `go` captures `rs` and `n` from the enclosing scope and calls itself.  The
+;; recursive self-call inside the lifted thunk must reuse the current env
+;; pointer (the closure box it already received), not the outer-scope binding
+;; name -- which is out of scope inside the lifted C function and previously
+;; emitted a `'go_NNNN' undeclared` C error.
+
+(defn sum-vec [rs : (Vec int)] : int
+  (let [n (vec-len rs)]
+    (letrec [go (fn [i : int acc : int] : int
+                  (if (>= i n) acc (go (+ i 1) (+ acc (vec-get rs i)))))]
+      (go 0 0))))
+
+(defn main [] : int
+  (let [rs (:: (vec-new) (Vec int))]
+    (vec-push! rs 10)
+    (vec-push! rs 20)
+    (vec-push! rs 12)
+    (println (sum-vec rs))
+    0))
