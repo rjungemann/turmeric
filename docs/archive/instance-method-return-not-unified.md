@@ -9,7 +9,14 @@ severity: Medium. A function body may produce a value of a completely unrelated
   `handle` is declared `: Response` can return a non-Response); on
   investigation the same hole exists for ordinary `defn`s, so the root cause is
   the int64 carrier ABI, not instance-method elaboration.
-status: PARTIALLY RESOLVED
+status: RESOLVED -- return-position unification now rejects every soundly-
+  rejectable mismatch (nominal TUR-E0001, float register-class TUR-E0707,
+  cstr-commit + reverse + bool/integer TUR-E0708/E0709) for both ordinary defns
+  and grounded class-var instance methods. What remains accepted is the
+  deliberately-tolerated int64 carrier-handle bridge (generic / `#{Unsafe}` /
+  fixed-concrete-slot / HKT / explicitly-annotated-instance code), which is
+  intended behavior, not an open defect. See
+  docs/upcoming/v2/carrier-aware-return-unification-plan.md for the full design.
 ---
 
 ## Status: grounded class-var instance methods now committed (2026-06-20)
@@ -40,9 +47,12 @@ returns (`(f b)` with a free element) stay carrier-tolerant.
   committed class-var path and the tolerated concrete-slot bridge).
 
 The remaining residue is the carrier-handle bridge for generic / `#{Unsafe}` /
-fixed-concrete-slot / HKT code (tolerated by design), plus explicitly-annotated
-instance returns (conservatively left carrier-classified). This report stays
-OPEN only for those deliberately-tolerated cases.
+fixed-concrete-slot / HKT code, plus explicitly-annotated instance returns
+(conservatively left carrier-classified). These are the int64 carrier ABI's
+deliberate, by-design representation bridges -- intended behavior, not an open
+defect -- so with Phase 3 landed this report is **RESOLVED and archived**. The
+status sections below are the per-phase paper trail; each "stays OPEN for X" note
+was accurate when written and X was closed by the following phase.
 
 ## Status: bool-vs-integer returns now rejected for committed defns (2026-06-20)
 

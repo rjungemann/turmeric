@@ -2,9 +2,10 @@
 
 **Status:** Phase 0 + Phase 1 (behavior-neutral) + Phase 2 (reverse
 pointer-scalar, `TUR-E0709`) + Phase 2b (`bool`-vs-integer, `TUR-E0709`) +
-Phase 3 (grounded class-var instance methods) landed. Phase 4 pending.
-**Tracks:** `docs/reported/instance-method-return-not-unified.md` (the open
-residue this plan closes).
+Phase 3 (grounded class-var instance methods) + Phase 4 (archive) landed. All
+phases complete.
+**Tracks:** `docs/archive/instance-method-return-not-unified.md` (resolved and
+archived by this work).
 
 ## Background -- the carrier and the residue
 
@@ -201,11 +202,17 @@ unchanged). New fixtures:
 return with a matching body passes; a concrete `len : int` slot with a `cstr`
 body stays tolerated). `bash tests/run.sh`: 1713 passed, 0 failed.
 
-### Phase 4 -- fixtures, docs, archive (pending)
+### Phase 4 -- fixtures, docs, archive (DONE)
 
-Positive controls (carrier bridge still accepted) + negatives for each
-newly-rejected case; regen `tests/fixtures/*/expected.c`; move
-`docs/reported/instance-method-return-not-unified.md` to `docs/archive/`.
+Each phase landed its own positive controls (carrier bridge still accepted) and
+negatives in the same commit, so no separate fixture pass was needed; no
+`expected.c` snapshot regen was required (the new rejections add diagnostics, not
+codegen, and the two churned fixtures had no snapshot). The resolved report
+`instance-method-return-not-unified.md` is moved from `docs/reported/` to
+`docs/archive/` with its status set to RESOLVED -- the only accepted mismatches
+left are the int64 carrier ABI's deliberate by-design bridges (generic /
+`#{Unsafe}` / fixed-concrete-slot / HKT / explicitly-annotated-instance),
+intended behavior rather than an open defect.
 
 ## Out of scope
 
