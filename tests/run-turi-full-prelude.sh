@@ -2,13 +2,18 @@
 # tests/run-turi-full-prelude.sh -- prereq 3c gate: TUR_TURI_FULL_PRELUDE.
 #
 # The interpreter's default prelude covers the typed-stdlib core but carves out
-# contract/mutmap/json/schema (docs/turi-preload-carve-out.txt).  Setting
-# TUR_TURI_FULL_PRELUDE=1 opts into loading those on top of the default prelude
-# so the carved bucket can be iterated/measured under --interpret.  This gate
-# asserts the flag actually toggles a carved module's availability:
+# json/schema (docs/turi-preload-carve-out.txt).  (contract/mutmap have since
+# graduated to the default prelude.)  Setting TUR_TURI_FULL_PRELUDE=1 opts into
+# loading the carved modules on top of the default prelude so the carved bucket
+# can be iterated/measured under --interpret.  This gate asserts the flag
+# actually toggles a carved module's availability.
 #
-#   flag OFF -> `mutmap-new` is unbound  (rc=1, "unknown function")
-#   flag ON  -> `mutmap-new` is defined and runs (rc=0)
+# Probe: `schema/alt` -- a pure-Turmeric defn that lives only in the carved
+# schema.tur (no unconditional native override, unlike e.g. json/null), so it
+# is genuinely flag-sensitive:
+#
+#   flag OFF -> `schema/alt` is unbound  (rc=1, "unknown function")
+#   flag ON  -> `schema/alt` is defined and runs (rc=0)
 #
 # Exit status: 0 if both directions hold, else 1.
 
@@ -21,24 +26,24 @@ TUR="./build/tur"
 export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
 
 prog="$(mktemp -t tur-fullprelude-XXXXXX).tur"
-printf '(defn main [] : int\n  (let [m (mutmap-new)] 0))\n' > "$prog"
+printf '(defn main [] : int\n  (let [s (schema/alt (schema/int) (schema/str))] 0))\n' > "$prog"
 
 fail=0
 
-# Flag OFF: the carved module is not loaded, so mutmap-new is unknown.
+# Flag OFF: the carved module is not loaded, so schema/alt is unknown.
 off_err="$("$TUR" --interpret "$prog" 2>&1 >/dev/null)"; off_rc=$?
 if [ "$off_rc" -eq 0 ]; then
-    echo "FAIL turi-full-prelude -- mutmap-new resolved WITHOUT the flag (default prelude leaked a carved module?)"
+    echo "FAIL turi-full-prelude -- schema/alt resolved WITHOUT the flag (default prelude leaked a carved module?)"
     fail=1
-elif ! printf '%s' "$off_err" | grep -q "mutmap-new"; then
-    echo "FAIL turi-full-prelude -- flag-off error did not mention mutmap-new: $off_err"
+elif ! printf '%s' "$off_err" | grep -q "schema/alt"; then
+    echo "FAIL turi-full-prelude -- flag-off error did not mention schema/alt: $off_err"
     fail=1
 fi
 
-# Flag ON: the carved module loads, so mutmap-new is defined and runs.
+# Flag ON: the carved module loads, so schema/alt is defined and runs.
 on_err="$(TUR_TURI_FULL_PRELUDE=1 "$TUR" --interpret "$prog" 2>&1 >/dev/null)"; on_rc=$?
 if [ "$on_rc" -ne 0 ]; then
-    echo "FAIL turi-full-prelude -- mutmap-new still failed WITH the flag (rc=$on_rc): $on_err"
+    echo "FAIL turi-full-prelude -- schema/alt still failed WITH the flag (rc=$on_rc): $on_err"
     fail=1
 fi
 

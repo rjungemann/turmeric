@@ -3142,8 +3142,7 @@
 
 
 (defn httpd-call [handler : int conn : ptr<void>] : nil
-  (when (not (= handler 0))
-    ((:: handler (fn [ptr<void>] nil)) conn)))
+  (when (not (= handler 0)) ((:: handler (fn [ptr<void>] nil)) conn)))
 ;;; defroute -- macro sugar for (router-add router method pattern handler).
 ;;;
 ;;; Example:
@@ -3290,8 +3289,7 @@
 ;;; in httpd-mw-fold. The caller guards against a null mw, so dispatching the
 ;;; already-fat handle via (:: mw (fn [int] int)) here is safe.
 
-(defn httpd-mw-apply [mw : int cur : int] : int
-  ((:: mw (fn [int] int)) cur))
+(defn httpd-mw-apply [mw : int cur : int] : int ((:: mw (fn [int] int)) cur))
 ;;; httpd-mw-fold -- internal: right-fold a cons-list of fat-closure
 ;;; middlewares over a base handler. Each cell holds a fat closure value of
 ;;; shape (fn [next :int] :ptr<void> ...). Applied right-to-left so the list

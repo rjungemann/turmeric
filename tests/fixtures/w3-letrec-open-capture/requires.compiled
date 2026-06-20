@@ -1,0 +1,10 @@
+Witness-indirected existential `open` dispatch (`(sz v)` / `(cmp v offset)` on
+an `open`-bound value) reads the constraint witness bundled into the runtime
+existential record at the `pack` site -- a compiled-codegen mechanism, the same
+carve-out as exists-open-witness-dispatch. The interpreter erases the
+existential record and re-dispatches structurally on the receiver's runtime
+type, so the packed witness is lost and the `open` body reads the raw int
+carrier (garbage). The W3 fix this fixture guards lives in the COMPILED path
+(collect_free_vars descending into existential forms so the captured outer
+binding lands in the closure capture set); expected.stdout is the compiled
+output. Compiled-only by construction, not an interpreter bug.

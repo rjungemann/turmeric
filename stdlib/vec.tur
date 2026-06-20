@@ -19,7 +19,6 @@
 ;;;   (vec-new)  ; => empty Vec
 ;;;
 ;;; Since: Phase TC1
-
 ;; --- Producer/accessor ABI (end-to-end-monomorphization, Vec typed-pointer
 ;; slice) ---
 ;;
@@ -51,6 +50,7 @@
 ;; through the C-3 carrier reinterpret-cast (emit_carrier_bridge), so
 ;; `(void*)(intptr_t)v` is always valid.  Mutation is visible to all holders
 ;; because the handle is a shared pointer, never a by-value header copy.
+
 
 (defn vec-new [A]
   []
@@ -309,11 +309,11 @@
 
 (defn vec-data-get__ [data : ptr<void> i : int] : int
   ```c return ((int64_t *)(intptr_t)data)[i]; ```)
-
 ;;; vec-data-get-checked__ -- bounds-checked indexed read over a raw data ptr.
 ;; Internal: shared inline-C core for the by-value vec-get-byval (and the
 ;; carrier vec-get, if it ever delegates).  Aborts on out-of-range like
 ;; vec-get.
+
 
 (defn vec-data-get-checked__ [data : ptr<void> i : int len : int] : int
   ```c
@@ -322,7 +322,6 @@
   exit(1);
   return 0;
   ```)
-
 ;;; vec-get-byval -- by-value Vec[A] indexed read (Option C twin of vec-get).
 ;; M5 (end-to-end-monomorphization): the by-value counterpart of vec-get.
 ;; The emitter redirects a `vec-get` call inside a by-value spec body here so
@@ -330,9 +329,11 @@
 ;; carrier.  Dual-ABI: `.data`/`.len` field access lowers direct in a spec
 ;; and derefs through the carrier in the (element-agnostic) base.
 
-(defn vec-get-byval [A] [v : (Vec A) i : int] : A
-  (:: (vec-data-get-checked__ (.data v) i (.len v)) A))
 
+(defn vec-get-byval [A]
+  [v : (Vec A) i : int]
+  : A
+  (:: (vec-data-get-checked__ (.data v) i (.len v)) A))
 ;;; vec-eq-loop -- pure-Turmeric element-wise Vec[A] comparison (TCO'd index loop).
 ;;;
 ;;; Path A specializes this per element type; the self-tail-call lowers to a
@@ -357,14 +358,15 @@
 ;;;   (vec-eq-loop a b 0 (vec-len a) (fn [p q] (eq? p q)))  ; => true
 ;;;
 ;;; Since: Phase M4c (TCO-in-ABI-specs)
-(defn vec-eq-loop [A] [x : (Vec A) y : (Vec A) i : int len : int
-                       ^fat cmp : (fn [A A] bool)] : bool
+
+(defn vec-eq-loop [A]
+  [x : (Vec A) y : (Vec A) i : int len : int ^fat cmp : (fn [A A] bool)]
+  : bool
   (if (= i len)
     true
     (if (cmp (vec-get x i) (vec-get y i))
       (vec-eq-loop x y (+ i 1) len cmp)
       false)))
-
 ;;; Eq [Vec] -- element-wise equality using the element type's Eq instance.
 ;; M4c (TCO-in-ABI-specs): the instance body is now pure Turmeric.  Path A
 ;; specializes `vec-eq-loop` to the concrete element type and the self-tail-
@@ -376,10 +378,13 @@
 ;; struct widening); that no longer holds, and TCO inside ABI specs (gate
 ;; lifted in emit_fns.c) lets the pure-Turmeric body iterate without a
 ;; carrier helper at all.
+
 (definstance Eq [Vec]
   [(Eq A)]
   (eq? [x y]
     (and (= (vec-len (:: x (Vec A))) (vec-len (:: y (Vec A))))
-         (vec-eq-loop (:: x (Vec A)) (:: y (Vec A))
-                      0 (vec-len (:: x (Vec A)))
-                      (fn [a b] (eq? a b))))))
+      (vec-eq-loop (:: x (Vec A))
+        (:: y (Vec A))
+        0
+        (vec-len (:: x (Vec A)))
+        (fn [a b] (eq? a b))))))

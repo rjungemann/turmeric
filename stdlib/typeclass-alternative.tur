@@ -9,4 +9,6 @@
 ;; Alternative -- container with an empty value and a choice combinator.
 ;;   empty  :: f a                 (a is a type witness for dispatch)
 ;;   alt-or :: f a -> f a -> f a   (first-match choice)
-(defclass Alternative [^f] (empty [a] : (f a)) (alt-or [x : (f a) y : (f a)] : (f a)))
+(defclass Alternative [^f]
+  (empty [a] : (f a))
+  (alt-or [x : (f a) y : (f a)] : (f a)))

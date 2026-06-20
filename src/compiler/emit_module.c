@@ -7429,6 +7429,15 @@ int emit_exports_manifest(Buf *out, const Expr *program) {
         FnDef *fd = e->as.fn_def_.fn;
         const Binding *b = fd->binding;
         if (!b->is_exported) continue;
+        /* Stdlib/prelude defns preloaded into every project-mode TU are
+         * emitted with `static` linkage (see emit_fns.c `needs_static`),
+         * so their mangled symbols never land in the shared library's
+         * dynamic symbol table. Listing them here produces a manifest the
+         * spice loader cannot dlsym -- it then rejects the whole library as
+         * "stale exports.manifest". Skip them: the host only binds the
+         * spice's own exports, and the prelude is already linked into the
+         * REPL process. */
+        if (b->is_from_stdlib) continue;
         /* `main` is exempt from module-prefixing and from --shared anyway. */
         if (b->name->len == 4 && memcmp(b->name->name, "main", 4) == 0) continue;
         if (e->type.kind != TY_FN) continue;

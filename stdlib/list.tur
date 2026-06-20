@@ -165,8 +165,7 @@
 (definstance Eq [Cons]
   [(Eq A)]
   (eq? [x y]
-    (list-eq? (:: x :int) (:: y :int)
-              (fn [a b] (eq? (:: a A) (:: b A))))))
+    (list-eq? (:: x :int) (:: y :int) (fn [a b] (eq? (:: a A) (:: b A))))))
 ;;; __cons-fmap -- apply a typed thunk to every head element of a Cons list.
 ;;;
 ;;; Walks the cons chain, allocates a new cell for each node, and writes
@@ -335,6 +334,7 @@
 ;;;   (car (cons 11 (cons 22 (tnil))))  ; => 11
 ;;;
 ;;; Since: Phase TC1
+
 (defn car [l : int] : int (list-head l))
 ;;; cdr -- tail of a cons-built list (classic-Lisp alias for list-tail).
 ;;;
@@ -348,6 +348,7 @@
 ;;;   (car (cdr (cons 11 (cons 22 (tnil)))))  ; => 22
 ;;;
 ;;; Since: Phase TC1
+
 (defn cdr [l : int] : int (list-tail l))
 ;;; null? -- test a cons-built list for emptiness (alias for tnil?).
 ;;;
@@ -362,6 +363,7 @@
 ;;;   (null? (cons 1 (tnil)))    ; => false
 ;;;
 ;;; Since: Phase TC1
+
 (defn null? [l : int] : bool (tnil? l))
 ;;; length -- count the elements of a cons-built list (alias for list-length).
 ;;;
@@ -375,4 +377,5 @@
 ;;;   (length (list 1 2 3))  ; => 3
 ;;;
 ;;; Since: Phase TC1
+
 (defn length [l : int] : int (list-length l))

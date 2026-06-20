@@ -33,13 +33,11 @@
 ;;;   carrier handle to `(Result A B)` and letting the carrier-ABI
 ;;;   codegen take care of the rest).
 
-(defn ok [A B] [x : A]
+(defn ok [A B]
+  [x : A]
   #{Construct}
   : (Result A B)
-  (make-struct Result
-    :is-ok true
-    :ok-val x
-    :err-val (default-of B)))
+  (make-struct Result :is-ok true :ok-val x :err-val (default-of B)))
 ;;; err -- wrap an error value of type B in a Result[A B].
 ;;;
 ;;; Parameters:
@@ -57,13 +55,11 @@
 ;;; Since: Phase TC1 (made polymorphic as Prereq 3, 2026-06-12; same
 ;;;   notes as `ok`).
 
-(defn err [A B] [e : B]
+(defn err [A B]
+  [e : B]
   #{Construct}
   : (Result A B)
-  (make-struct Result
-    :is-ok false
-    :ok-val (default-of A)
-    :err-val e))
+  (make-struct Result :is-ok false :ok-val (default-of A) :err-val e))
 ;;; ok? -- check whether a Result[A B] is ok.
 ;;;
 ;;; Parameters:
@@ -166,14 +162,14 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn result-map [A B E] [r : (Result A E) ^fat f : (fn [A] B)] : (Result B E)
+(defn result-map [A B E]
+  [r : (Result A E) ^fat f : (fn [A] B)]
+  : (Result B E)
   ;; Option/Result none-as-NULL retirement (Track A): by-value `(Result A E)`
   ;; receiver.  Pure-Turmeric body reads `.is-ok`/`.ok-val`/`.err-val` directly
   ;; and rebuilds via the `#{Construct}` ok/err constructors -- no inline-C
   ;; carrier round-trip.  The interpreter keeps its native override.
-  (if (.is-ok r)
-    (ok (f (.ok-val r)))
-    (err (.err-val r))))
+  (if (.is-ok r) (ok (f (.ok-val r))) (err (.err-val r))))
 ;;; result-eq? -- compare two Result[A B] values.
 ;;;
 ;;; Parameters:
@@ -226,12 +222,12 @@
 ;;; Eq [Result] -- equality using the ok and err types' Eq instances.
 ;; TC1-22: Phase PTC4 -- constrained Eq instance for Result[A B].
 ;; Note: element comparison uses integer equality; correct for all primitive A/B.
-
 ;; M4c-pre: rewrite to consult by-value fields directly via Eq A / Eq B,
 ;; mirroring Eq Tuple2 / Eq Pair.  `result-eq?` itself is kept (the
 ;; structural-eq fixture still consults it from the carrier path); only the
 ;; instance body switches off it.  See
 ;; docs/reported/m4c-stdlib-carrier-helpers-block-dispatch-rewrite.md.
+
 (definstance Eq [Result]
   [(Eq A) (Eq B)]
   (eq? [x y]
@@ -330,10 +326,7 @@
 ;;; Since: stdlib-hkt-consolidation T4
 
 (definstance Monad [(Result _ B)]
-  (bind [ma k]
-    (if (.is-ok ma)
-      (k (.ok-val ma))
-      (err (.err-val ma)))))
+  (bind [ma k] (if (.is-ok ma) (k (.ok-val ma)) (err (.err-val ma)))))
 ;;; MonadError [(Result _ B)] -- throw-error builds an err; catch-error runs a
 ;;; handler on the err payload (ok values pass through unchanged).
 ;;;

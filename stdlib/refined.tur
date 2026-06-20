@@ -43,6 +43,7 @@
 ;;; constructor.
 ;;;
 ;;; Since: R1
+
 (defopaque NonEmpty [A] :int)
 ;;; ne-of -- build a NonEmpty by prepending a head to an existing list.
 ;;;
@@ -158,13 +159,13 @@
 ;;;
 ;;; Since: R1
 
-(defn ne-from? [A] [xs : (List A)] : (Option (NonEmpty A))
+(defn ne-from? [A]
+  [xs : (List A)]
+  : (Option (NonEmpty A))
   ;; By-value (Option (NonEmpty A)): the typed (List A) argument is the witness
   ;; that pins A, so downstream ne-head resolves the element type concretely
   ;; instead of leaving a bare tyvar.  No carrier round-trip.
-  (if (list-empty? xs)
-    (none)
-    (some (:: (list->carrier xs) (NonEmpty A)))))
+  (if (list-empty? xs) (none) (some (:: (list->carrier xs) (NonEmpty A)))))
 ;;; ne-unwrap -- recover the NonEmpty payload from a non-none Option.
 ;;;
 ;;; Pair with ne-from? after a some? check; on a none Option this yields a
@@ -182,7 +183,9 @@
 ;;;
 ;;; Since: R1
 
-(defn ne-unwrap [A] [o : (Option (NonEmpty A))] : (NonEmpty A)
+(defn ne-unwrap [A]
+  [o : (Option (NonEmpty A))]
+  : (NonEmpty A)
   ;; By-value (Option (NonEmpty A)): read .value directly (it is the NonEmpty
   ;; payload).  none-case returns the zero NonEmpty -- callers gate on some?.
   (if (some? o) (.value o) (:: 0 (NonEmpty A))))
@@ -235,9 +238,7 @@
   ;; `none__spec__Option__BoundedIdx` and the true arm a matching `some`
   ;; spec, so the ground `(Option BoundedIdx)` return never round-trips
   ;; through the int64 carrier (zero-arg-construct-ground-byvalue-return).
-  (if (or (< i 0) (>= i n))
-    (none)
-    (some (:: i :BoundedIdx))))
+  (if (or (< i 0) (>= i n)) (none) (some (:: i :BoundedIdx))))
 ;;; bidx-unwrap -- recover the BoundedIdx payload from a non-none Option.
 ;;;
 ;;; Pair with bidx-of? after a some? check.
@@ -276,7 +277,10 @@
 ;;;
 ;;; Since: R2
 
-(defn vec-get-checked [A] [v : (Vec A) b : BoundedIdx] : A (vec-get v (bidx->int b)))
+(defn vec-get-checked [A]
+  [v : (Vec A) b : BoundedIdx]
+  : A
+  (vec-get v (bidx->int b)))
 ;;; slice-get-checked -- index a Slice with a proven-in-range BoundedIdx (total).
 ;;;
 ;;; Parameters:
