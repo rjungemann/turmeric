@@ -1,0 +1,24 @@
+;; letrec-self-recursive-carrier-vec-return -- W1 + W2 + letrec-scan regression.
+;; The (Vec T) analogue of the struct W1 case, which exercises three fixes at
+;; once:
+;;   * W1 typing: the letrec self-call `(go ...)` types at (Vec int), not the
+;;     int64 carrier (no `then=(type-app Vec int) else=int` branch mismatch).
+;;   * W2 unification: the fresh `(vec-new)` seed unifies against the concrete
+;;     (Vec int) parameter and monomorphizes cleanly.
+;;   * emit_abi letrec-scan: a carrier call (vec-new) appearing only in a letrec
+;;     body is registered for emission, so the generic definition is not dropped
+;;     (no `undefined reference to vec_hynew` at link).
+(defn build [n : int] : (Vec int)
+  (letrec [go (fn [i : int  acc : (Vec int)] : (Vec int)
+                (if (>= i n)
+                  acc
+                  (do (vec-push! acc i)
+                      (go (+ i 1) acc))))]
+    (go 0 (vec-new))))
+
+(defn main [] : int
+  (let [v (build 4)]
+    (println (vec-len v))
+    (println (vec-get v 0))
+    (println (vec-get v 3))
+    0))

@@ -1461,6 +1461,36 @@ Expr *elab_letrec(Elab *e, const Form *call) {
                         }
                     }
                     placeholder = type_fn(arg_kinds, (uint8_t)arity, ret_kind);
+                    /* W1 (letrec self-recursion): the scalar ret_kind peek
+                     * above resolves only int/bool/void/nil/cstr and collapses
+                     * every other declared return -- a :copy struct, a (Vec T),
+                     * an ADT -- to the int64 carrier (TY_INT).  A self-recursive
+                     * `fn` bound here reads that carrier placeholder when its own
+                     * call inside the body is type-checked (Pass B, below), so the
+                     * recursive call comes back typed `int`; an `if` whose other
+                     * arm is the real return type then fails with a spurious
+                     * branch mismatch (then=Box else=int).  Resolve the declared
+                     * return form fully and stamp the carrier-lowered result onto
+                     * the placeholder, mirroring #460's RR1 fix for top-level
+                     * defn.  Only carrier kinds (struct / type-app / ADT) override
+                     * the scalar fast-path; a bare F_LIST at index 2 is a body
+                     * form (e.g. `(go ...)`), not a return annotation, so the
+                     * F_KEYWORD/F_SYM/F_TYPE_ANN gate skips it. */
+                    if (init_f->as.list.len >= 4) {
+                        Form *ret_form = init_f->as.list.items[2];
+                        if (ret_form->tag == F_KEYWORD ||
+                            ret_form->tag == F_SYM ||
+                            ret_form->tag == F_TYPE_ANN) {
+                            Type *rft = fn_type_from_form(e, ret_form,
+                                                          NULL, NULL, 0);
+                            if (rft && (rft->kind == TY_STRUCT ||
+                                        rft->kind == TY_APP ||
+                                        rft->kind == TY_ADT)) {
+                                placeholder.as.fn.result_kind      = rft->kind;
+                                placeholder.as.fn.result_full_type = rft;
+                            }
+                        }
+                    }
                 }
             }
         }

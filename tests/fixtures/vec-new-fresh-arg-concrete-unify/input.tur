@@ -1,0 +1,17 @@
+;; vec-new-fresh-arg-concrete-unify -- W2 regression.
+;; A bare `(vec-new)` -- a return-only polymorphic value of type (Vec A) whose
+;; element tyvar no argument pins -- passed straight to a concrete (Vec int)
+;; parameter must unify its element tyvar against the parameter (A := int) and
+;; monomorphize, instead of failing with `expected (Vec int), got (Vec A)`.
+;; S4/#461 only back-propagated the element type onto a let-bound vec-push!
+;; receiver pinned by a sibling argument; a fresh (vec-new) with no pusher was
+;; left open.  The empty container soundly inhabits (Vec int) for any element
+;; type, so this forward-flow at argument unification is sound.
+(defn sink [v : (Vec int)] : int
+  (vec-push! v 7)
+  (vec-push! v 8)
+  (vec-len v))
+
+(defn main [] : int
+  (println (sink (vec-new)))
+  0)

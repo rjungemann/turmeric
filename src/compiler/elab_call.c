@@ -152,6 +152,46 @@ static bool type_mentions_tyvar_name(const Type *t, const char *name) {
     }
 }
 
+/* W2: every named tyvar in `t` is absent from each of the call's argument
+ * types.  A return-only polymorphic result (e.g. (vec-new) : (Vec A), where A
+ * appears in no argument) carries no element-typed content, so it parametrically
+ * inhabits a concrete container type at any element type.  A tyvar that DOES
+ * flow in through an argument anchors real content and is not free. */
+static bool w2_tyvars_free_of_args(const Type *t, Expr **cargs, uint32_t cn) {
+    if (!t) return true;
+    switch (t->kind) {
+        case TY_TYVAR:
+            if (t->as.tyvar_.name) {
+                for (uint32_t j = 0; j < cn; j++) {
+                    if (cargs[j] &&
+                        type_mentions_tyvar_name(&cargs[j]->type, t->as.tyvar_.name))
+                        return false;
+                }
+            }
+            return true;
+        case TY_APP:
+            return w2_tyvars_free_of_args(t->as.app.fn, cargs, cn) &&
+                   w2_tyvars_free_of_args(t->as.app.arg, cargs, cn);
+        default:
+            return true;
+    }
+}
+
+/* W2: true when `arg` is a *return-only polymorphic call result* -- a value
+ * whose container/element tyvar is genuinely free because no argument of the
+ * call carries it (a bare (vec-new) : (Vec A), (none) : (Option A), etc.).
+ * Such a value soundly inhabits the concrete container type at any element
+ * type, so forwarding a concrete (Vec int) parameter onto its open tyvar is
+ * sound.  A (Vec A) flowing from an abstract parameter (EX_VAR) or from a call
+ * argument that itself carries A is NOT free and is excluded here, so a
+ * genuinely abstract (Vec A) still fails to match a concrete (Vec int). */
+static bool w2_arg_is_free_poly_call(const Expr *arg) {
+    if (!arg || arg->kind != EX_CALL) return false;
+    if (!call_type_has_named_tyvar(&arg->type)) return false;
+    return w2_tyvars_free_of_args(&arg->type,
+                                  arg->as.call_.args, arg->as.call_.n_args);
+}
+
 static bool call_find_type_binding(CallTypeBinding *bindings, uint8_t n_bindings,
                                    const char *name, uint8_t *out_idx) {
     if (!name) return false;
@@ -3321,6 +3361,45 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                        args[i]->type.kind == TY_APP &&
                        expected_full && expected_full->kind == TY_APP) {
                 arg_ok = type_eq(args[i]->type, *expected_full);
+                /* W2 (fresh empty-container forward unification): the structural
+                 * type_eq above rejects a bare (vec-new) : (Vec A) handed straight
+                 * to a concrete (Vec int) parameter (A != int), even though the
+                 * empty container soundly inhabits (Vec int).  S4/#461 only
+                 * back-propagates the element type onto a let-bound vec-push!
+                 * receiver pinned by a sibling argument; a fresh (vec-new) with no
+                 * pusher leaves the element tyvar open.  When the argument is a
+                 * return-only polymorphic call result (no argument of the call
+                 * carries the tyvar -- so it is genuinely parametric, not an
+                 * abstract (Vec A) parameter the body must keep abstract), unify
+                 * the argument's tyvar against the concrete parameter and accept.
+                 * A scratch binding set keeps the callee's own type_bindings (and
+                 * thus its carrier/relay emission) untouched. */
+                if (!arg_ok && !call_type_has_named_tyvar(expected_full) &&
+                    call_type_has_named_tyvar(&args[i]->type) &&
+                    w2_arg_is_free_poly_call(args[i])) {
+                    CallTypeBinding w2scratch[16];
+                    uint8_t w2n = 0;
+                    if (call_collect_type_bindings(&args[i]->type, *expected_full,
+                                                   w2scratch, &w2n)) {
+                        /* Record the element substitution (e.g. A := int) on the
+                         * (vec-new) call itself so emit monomorphizes it to the
+                         * concrete specialization (vec_new__spec__Vec__int__)
+                         * rather than passing the int64 carrier straight into a
+                         * Vec__int* parameter -- matching the clean codegen the
+                         * (:: (vec-new) (Vec int)) ascription produces and avoiding
+                         * a -Wint-conversion carrier-to-pointer warning.  Only set
+                         * it when the call carries no bindings of its own. */
+                        if (w2n > 0 && !args[i]->as.call_.abi_bindings) {
+                            AbiTypeBinding *saved = (AbiTypeBinding *)arena_alloc(
+                                e->arena, w2n * sizeof(AbiTypeBinding));
+                            for (uint8_t bi = 0; bi < w2n; bi++) saved[bi] = w2scratch[bi];
+                            args[i]->as.call_.abi_bindings   = saved;
+                            args[i]->as.call_.n_abi_bindings = w2n;
+                        }
+                        args[i]->type = *expected_full;
+                        arg_ok = true;
+                    }
+                }
             }
         }
         if (!arg_ok && expected_arg_kind == TY_INT && args[i]->type.kind == TY_FN) {
