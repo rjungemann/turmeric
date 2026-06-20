@@ -3191,6 +3191,14 @@ Expr *elab_defn(Elab *e, const Form *call) {
     fd->constraints.constraints = constraint_list;
     fd->constraints.n_constraints = n_constraints;
     fd->constraints.cap_constraints = n_constraints;
+    /* class-defn-constraint-not-discharged-at-call-site: backlink the
+     * constraint set onto the function's binding so a call site can re-discharge
+     * each `^Class T` obligation at the concrete type its arguments pin.  Only a
+     * constrained defn gets the link; NULL (the memset default) means "no
+     * obligations to check". */
+    if (fd->binding && n_constraints > 0) {
+        fd->binding->fn_constraints = &fd->constraints;
+    }
 
     /* AR9: variadic defn may not have an inline-C body (fixed C signatures only) */
     if (is_variadic && body && body->kind == EX_INLINE_C) {

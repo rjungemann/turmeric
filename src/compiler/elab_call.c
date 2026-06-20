@@ -4180,6 +4180,62 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     if (sz_cross_param_unify(e, call, &fn_type, fn_binding, args, n_args))
         return NULL;
 
+    /* class-defn-constraint-not-discharged-at-call-site: a defn carrying a
+     * typeclass constraint (`^Encode T`, or the `[(Encode T)]` middle-vector
+     * form) is checked abstractly inside its own body, but that obligation must
+     * be RE-discharged at each instantiating call site.  For every constraint
+     * whose type variable is pinned to a concrete type by this call's arguments
+     * (type_bindings), verify a matching instance exists; a missing instance is
+     * a hard error here rather than a deferred emit/link failure or a silently
+     * wrong dispatch.  A constraint whose tyvar is not argument-pinned (resolved
+     * only through the return context, or still abstract because the call sits
+     * inside another generic body) is left to the existing machinery -- the
+     * concrete type is not known here, so there is nothing to discharge yet. */
+    if (fn_binding && fn_binding->fn_constraints &&
+        fn_binding->fn_constraints->n_constraints > 0 && n_type_bindings > 0) {
+        const ConstraintSet *cs = fn_binding->fn_constraints;
+        for (uint8_t ci = 0; ci < cs->n_constraints; ci++) {
+            const TypeConstraint *con = &cs->constraints[ci];
+            if (!con->typeclass || !con->tyvar || !con->tyvar->name) continue;
+            uint8_t bidx = 0;
+            if (!call_find_type_binding(type_bindings, n_type_bindings,
+                                        con->tyvar->name, &bidx)) continue;
+            Type concrete = type_bindings[bidx].type;
+            /* Only discharge against a concrete, ground type.  A tyvar/unknown
+             * binding means the obligation is still abstract (the call is itself
+             * inside a generic body), so defer to that body's own constraint.
+             *
+             * Skip an APPLIED type (`(Dense Pos)`, TY_APP) too: those resolve
+             * against *parametric* instances (`(definstance StorageOps [(Dense
+             * A)] ...)`) whose head is itself a TY_APP, which needs the full
+             * PTC3/PTC4 instance-constraint-satisfaction machinery that the
+             * monomorphization/emit path already runs.  A single-type
+             * `typeclass_env_lookup_instance` here would not unify the parametric
+             * head and would false-positive on a present instance.  Ground
+             * opaque/struct/ADT/primitive receivers (the common case, and the
+             * one the http-handler `^Encode T` defns hit) are matched precisely,
+             * so this only narrows coverage, never miscatches. */
+            if (concrete.kind == TY_TYVAR || concrete.kind == TY_UNKNOWN ||
+                concrete.kind == TY_APP) continue;
+            TypeClassInstance *inst = typeclass_env_lookup_instance(
+                &e->typeclass_env, con->typeclass, &concrete, 1);
+            if (!inst) {
+                Buf tb; buf_init(&tb);
+                type_print(&tb, concrete);
+                buf_putc(&tb, '\0');
+                diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0001_TYPE_MISMATCH,
+                    "no '%s' instance for '%s' in constrained call to '%s': the "
+                    "type bound to '%s' has no %s instance, but '%s' requires one",
+                    con->typeclass->name->name, tb.data,
+                    fn_binding->name ? fn_binding->name->name : "?",
+                    con->tyvar->name, con->typeclass->name->name,
+                    fn_binding->name ? fn_binding->name->name : "?");
+                buf_free(&tb);
+                return NULL;
+            }
+        }
+    }
+
     Expr *out = expr_new(e->arena, EX_CALL, call_result_type, call->span);
     out->as.call_.fn_binding = bound_fn;
     out->as.call_.args = args;

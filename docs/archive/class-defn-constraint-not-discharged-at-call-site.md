@@ -9,10 +9,54 @@ severity: Medium. A `defn` carrying a typeclass constraint (`^Encode T`, or the
   error. Surfaces in the http-handler typeclass work: `json-ok` / `json-request`
   are `^Encode T`-constrained defns, and calling them at a type with no `Encode`
   instance is not flagged at the call site.
-status: OPEN
+status: RESOLVED
 ---
 
 # `^Class T` defn constraints are not discharged at call sites
+
+## Status: RESOLVED (2026-06-20)
+
+Call-site discharge now runs in `elab_call_fn`
+(`src/compiler/elab_call.c`), right before the `EX_CALL` is built. The
+owning FnDef's constraint set is backlinked onto its binding
+(`Binding.fn_constraints`, stamped in `src/compiler/elab_fns.c` next to the
+`fd->constraints` store), so the call site reads it in O(1). For each
+constraint whose type variable is pinned to a concrete type by the call's
+arguments (the existing `type_bindings` substitution), the discharge looks up
+a matching instance via `typeclass_env_lookup_instance` and emits a
+`TUR-E0001` with the class, the offending type, and the callee when none
+exists.
+
+Scope: the discharge fires for **ground** receivers (opaque / struct / ADT /
+primitive) -- the http-handler `^Encode T` case and the report's repro.
+**Applied** receivers (`(Dense Pos)`, `TY_APP`) are deliberately skipped: they
+resolve against *parametric* instances (`(definstance StorageOps [(Dense A)]
+...)`) whose head is itself a `TY_APP`, which needs the full PTC3/PTC4
+instance-constraint-satisfaction machinery the monomorphization/emit path
+already runs; a single-type lookup here would false-positive on a present
+parametric instance (it did, on `typeclass-bounded-wrapper-*-dispatch`, before
+the skip was added). This narrows coverage but never miscatches. A
+constraint whose tyvar is resolved only through the return context, or that is
+still abstract because the call sits inside another generic body, is likewise
+left to the existing machinery.
+
+Validation: minimal repros (single + multi constraint, ground opaque
+receivers) now error at the call site; positive controls (instance present)
+type-check and run; regression fixtures
+`tests/fixtures/errors/constrained-defn-callsite-no-instance/` (negative) and
+`tests/fixtures/constrained-defn-callsite-instance-ok/` (positive, incl. a
+multi-constraint defn) were added; `bash tests/run.sh` is green (1692 passed,
+0 failed).
+
+The dead `constraint_set_satisfied` helper (`typeclass.c:257`) cited below is
+left in place; the call-site discharge uses `typeclass_env_lookup_instance`
+directly because it needs per-constraint tyvar substitution against
+`type_bindings`, which the single-Type helper does not provide (fix direction
+2 below anticipated this).
+
+---
+
+_Original report follows._
 
 ## One-line summary
 

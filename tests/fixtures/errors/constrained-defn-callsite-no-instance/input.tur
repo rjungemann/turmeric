@@ -1,0 +1,17 @@
+;; constrained-defn-callsite-no-instance -- a `^Class T` defn constraint is
+;; checked abstractly in the body, but must be RE-discharged at the
+;; instantiating call site.  `show-it` requires (HasFlag W); HandleNoInst has
+;; no HasFlag instance, so calling (show-it bad) is a hard error at the call
+;; site -- not a deferred emit/link failure.
+;; See docs/archive/class-defn-constraint-not-discharged-at-call-site.md.
+(defclass HasFlag [W] (flag-of [^borrow w] : int))
+(defopaque HandleHas    :int)
+(defopaque HandleNoInst :int)
+(definstance HasFlag [HandleHas] (flag-of [w] (:: w :int)))
+
+(defn show-it [W] [(HasFlag W)] [^borrow w : W] : int
+  (flag-of w))
+
+(defn main [] : int
+  (let [bad (:: 7 :HandleNoInst)]
+    (show-it bad)))

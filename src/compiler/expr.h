@@ -183,6 +183,14 @@ struct Binding {
      * wrap, keeping the two ABI emitters in sync. Set in elab_fns.c when
      * the FnDef is built. */
     bool          body_is_inline_c;
+    /* class-defn-constraint-not-discharged-at-call-site: backlink to the owning
+     * FnDef's typeclass constraint set (`^Encode T`, or the `[(Encode T)]`
+     * middle-vector form), or NULL for a binding with no constraints.  Stamped
+     * by elab_fns.c right after the FnDef stores its constraints, so the call
+     * site (elab_call.c) can re-discharge each obligation against the concrete
+     * type its arguments pin -- the constraint is checked abstractly in the
+     * body but must be re-checked when the defn is instantiated. */
+    const ConstraintSet *fn_constraints;
     /* bare-fat-result-monomorphization-plan (Phase B):
      *
      * bare_fat_result_kind -- on a bare `^fat g` *parameter* binding, the
