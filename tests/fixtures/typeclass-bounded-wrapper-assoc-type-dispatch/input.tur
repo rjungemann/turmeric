@@ -1,0 +1,49 @@
+;; typeclass-bounded-wrapper-assoc-type-dispatch -- gap H follow-up.
+;;
+;; The SINGLE-param + associated-type instance shape:
+;;
+;;   (defclass StorageOps [S] (type Elem : Type) ...)
+;;   (definstance StorageOps [(Dense A)] (type Elem = A) ...)
+;;
+;; A bounded wrapper quantified over `[S] [(StorageOps S)]` used to type-check
+;; but fail to LINK against this shape.  The wrapper's interior dispatch call was
+;; reconstructed from the receiver's head constructor alone
+;; (`__inst_StorageOps_storage_hyhas_qu_Dense`), while the parametric instance is
+;; emitted under the suffix the mangler builds for a `(Dense A)` head -- whose
+;; free tyvar element renders via the legacy `<struct>` token
+;; (`__inst_StorageOps_storage_hyhas_qu_Dense__ltstruct_gt`).  The two names
+;; never met -> undefined reference at `cc`.
+;;
+;; #447 fixed the multi-parameter ground head (`StorageOps [(Dense Pos) Pos]`) by
+;; resolving the authoritative instance-method binding name, but its instance
+;; lookup matched by strict `type_eq`, which a *parametric* head `(Dense A)` can
+;; never satisfy against a concrete receiver `(Dense Pos)`.  The lookup now treats
+;; a free tyvar in the instance head as a wildcard, so `(Dense A)` matches
+;; `(Dense Pos)` and the authoritative symbol is found.
+
+(extern-c printf [^cstr fmt ^int v] : int)
+
+(defopaque Dense [A] :int)
+(defstruct Pos [x : int])
+
+(defn dense-pos [] : (Dense Pos)  ```c return 0; ```)
+
+(defclass StorageOps [S]
+  (type Elem : Type)
+  (storage-get  [^borrow s : S idx : int] : Elem)
+  (storage-has? [^borrow s : S idx : int] : bool))
+
+(definstance StorageOps [(Dense A)]
+  (type Elem = A)
+  (storage-get  [s idx] ```c (void)s; return (int64_t)(idx + 100); ```)
+  (storage-has? [s idx] ```c (void)s; return idx == 7; ```))
+
+;; Bounded wrapper over [S] [(StorageOps S)] -- the reported desync case.
+(defn any-has? [S] [(StorageOps S)] [^borrow s : S idx : int] : bool
+  (storage-has? s idx))
+
+(defn main [] : int
+  (let [d : (Dense Pos)  (dense-pos)]
+    (printf "has7=%d\n" (if (any-has? d 7) 1 0))      ;; 1
+    (printf "has9=%d\n" (if (any-has? d 9) 1 0))      ;; 0
+    0))

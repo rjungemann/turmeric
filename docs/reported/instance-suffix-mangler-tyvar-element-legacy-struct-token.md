@@ -93,6 +93,20 @@ the parametric struct-element round-trip and all existing instances compile and
 run identically), so this is pure cleanup gated only on picking a regen window
 not colliding with in-flight branches.
 
+## Note -- the link-failure manifestation is fixed; this report stays open
+
+The `<struct>`-token suffix once also caused a *link failure*: a bounded
+`[S] [(StorageOps S)]` wrapper over this single-param + associated-type shape
+reconstructed the interior dispatch call as `..._Dense` while the instance was
+emitted under `..._Dense__ltstruct_gt`. That desync is now resolved on the
+*consumption* side -- `emit_concrete_inst_method_name` matches the parametric
+instance head with a free-tyvar wildcard and returns the authoritative symbol,
+so caller and impl agree on whatever spelling the mangler produces (see
+`docs/archive/bounded-wrapper-assoc-type-single-param-name-desync.md`). This
+report remains OPEN: the underlying *cosmetic* coupling (a real tyvar mangled
+as `<struct>`) is untouched and is still the cleanup to retire when a
+snapshot-regen window is affordable.
+
 ## Related
 
 - `docs/reported/storageops-parametric-instance-struct-element-carrier-collapse.md`

@@ -1009,6 +1009,34 @@ static const char *emit_inst_suffix_component(TypeKind k) {
  * bindings); `method_field_name` is the dict's mangled method field.  Returns a
  * malloc'd symbol name, or NULL when no concrete instance of `tc` matches
  * `resolved` (the caller then falls back to single-component reconstruction). */
+/* Gap H follow-up (single-param + associated-type bounded wrapper):
+ * does the concrete dispatch type `concrete` instantiate the instance-head
+ * type-arg `pattern`?  A strict `type_eq` is correct for a ground instance head
+ * (`StorageOps [(Dense Pos) Pos]`), but too strict for a *parametric* head whose
+ * element is a free type variable -- `(definstance StorageOps [(Dense A)] ...)`
+ * has `type_args[0] == TY_APP(Dense, TYVAR A)`, which `type_eq` never equates
+ * with the concrete receiver `TY_APP(Dense, Pos)`.  Treat a TY_TYVAR in the
+ * pattern as a wildcard so `(Dense A)` matches `(Dense Pos)` (head constructors
+ * still compared by identity), letting the authoritative-symbol lookup succeed
+ * instead of falling through to single-component reconstruction (`_Dense`),
+ * which desyncs from the instance's emitted suffix (`_Dense__ltstruct_gt`). */
+static bool emit_inst_head_matches(Type pattern, Type concrete) {
+    if (pattern.kind == TY_TYVAR) return true; /* free element: matches anything */
+    if (type_eq(pattern, concrete)) return true;
+    if (pattern.kind == TY_APP && concrete.kind == TY_APP) {
+        bool fn_ok = (pattern.as.app.fn && concrete.as.app.fn)
+                         ? emit_inst_head_matches(*pattern.as.app.fn,
+                                                  *concrete.as.app.fn)
+                         : pattern.as.app.fn == concrete.as.app.fn;
+        bool arg_ok = (pattern.as.app.arg && concrete.as.app.arg)
+                          ? emit_inst_head_matches(*pattern.as.app.arg,
+                                                   *concrete.as.app.arg)
+                          : pattern.as.app.arg == concrete.as.app.arg;
+        return fn_ok && arg_ok;
+    }
+    return false;
+}
+
 static char *emit_concrete_inst_method_name(EmitCtx *ctx, const TypeClass *tc,
                                             Type resolved,
                                             const char *method_field_name) {
@@ -1031,10 +1059,10 @@ static char *emit_concrete_inst_method_name(EmitCtx *ctx, const TypeClass *tc,
             bool matched = false;
             if (pass == 0) {
                 matched = inst->n_type_args >= 1 &&
-                          type_eq(inst->type_args[0], resolved);
+                          emit_inst_head_matches(inst->type_args[0], resolved);
             } else {
                 for (uint8_t j = 0; j < inst->n_type_args; j++) {
-                    if (type_eq(inst->type_args[j], resolved)) {
+                    if (emit_inst_head_matches(inst->type_args[j], resolved)) {
                         matched = true;
                         break;
                     }
