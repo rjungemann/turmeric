@@ -945,6 +945,57 @@ static Type emit_abi_instantiate_type(const Type *t,
     }
 }
 
+/* nested-construct-byvalue: structurally unify a generic pattern (carrying named
+ * tyvars, e.g. `(Result A B)`) against a concrete type (`Result__Option__cstr__cstr`,
+ * a monomorphized struct, or `(Result (Option cstr) cstr)`) and collect the
+ * tyvar -> concrete bindings.  Used to recover a #{Construct}'s payload arg types
+ * from its (recovered by-value) concrete result, so a nested `(some (ok-val ...))`
+ * built inside a constrained instance body lowers each construct seam to the
+ * right by-value element type instead of the int64 carrier representative. */
+static void emit_abi_unify_collect(const Type *pattern, const Type *concrete,
+                                   AbiTypeBinding *binds, uint8_t *n_binds,
+                                   uint8_t max_binds) {
+    if (!pattern || !concrete || !n_binds || *n_binds >= max_binds) return;
+    if (pattern->kind == TY_TYVAR && pattern->as.tyvar_.name) {
+        for (uint8_t i = 0; i < *n_binds; i++)
+            if (binds[i].name && strcmp(binds[i].name, pattern->as.tyvar_.name) == 0)
+                return;
+        binds[*n_binds].name = pattern->as.tyvar_.name;
+        binds[*n_binds].type = *concrete;
+        (*n_binds)++;
+        return;
+    }
+    if (pattern->kind == TY_APP && concrete->kind == TY_APP) {
+        emit_abi_unify_collect(pattern->as.app.fn, concrete->as.app.fn,
+                               binds, n_binds, max_binds);
+        emit_abi_unify_collect(pattern->as.app.arg, concrete->as.app.arg,
+                               binds, n_binds, max_binds);
+        return;
+    }
+    /* A concrete monomorphized struct (Option__cstr, n_type_params == 0) carries
+     * its element only in field full_types; recover the spine elements via
+     * type_extract_struct_app so a pattern `(Option A)` matched against the
+     * monomorphized `Option__cstr` still binds A -> cstr. */
+    if (pattern->kind == TY_APP && concrete->kind == TY_STRUCT) {
+        Type c = *concrete;
+        StructDef *sd = NULL; Type sargs[16]; uint8_t sn = 0;
+        if (type_extract_struct_app(&c, &sd, sargs, &sn) && sn > 0) {
+            /* Walk the pattern app-spine outermost-first, pairing with sargs. */
+            const Type *p = pattern; uint8_t depth = 0;
+            const Type *pstack[16];
+            while (p && p->kind == TY_APP && depth < 16) {
+                pstack[depth++] = p->as.app.arg;
+                p = p->as.app.fn;
+            }
+            /* pstack is innermost-last; sargs is outermost-first.  Pair index i
+             * of sargs with pstack[depth-1-i]. */
+            for (uint8_t i = 0; i < sn && i < depth; i++)
+                emit_abi_unify_collect(pstack[depth - 1 - i], &sargs[i],
+                                       binds, n_binds, max_binds);
+        }
+    }
+}
+
 static const Expr *emit_abi_find_fn_expr(const Expr **items, uint32_t n_items, const Binding *binding) {
     for (uint32_t i = 0; i < n_items; i++) {
         if (items[i]->kind == EX_FN_DEF && items[i]->as.fn_def_.fn &&
@@ -1544,11 +1595,53 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                                    const Expr **items, uint32_t n_items,
                                    const Type *result_type_override) {
     if (!call || call->kind != EX_CALL || !call->as.call_.fn_binding) return;
+    /* nested-construct-byvalue (Gap #4 liveness): when scanning inside an active
+     * spec, a return/argument-dispatched method call may re-dispatch to a
+     * concrete instance (e.g. `(dec tag)` -> `__inst_Dec_dec_cstr`) at emit time.
+     * Mark that instance live now -- its method binding gets a noted carrier call
+     * -- so emit_instance_is_live keeps it and the emitted spec body's reference
+     * to the re-dispatched callee resolves at link time. */
+    if (ctx->current_abi_specialization && call->as.call_.dict_arg) {
+        FnDef *redisp = emit_reresolve_method_fndef(ctx, call);
+        if (redisp && redisp->binding) {
+            /* emit_reresolve_method_call rewrites this call site to the concrete
+             * instance (`__inst_Dec_dec_Box`) at emit time, so the baked carrier
+             * representative this call's fn_binding points at is replaced.  Note
+             * a carrier call on the re-dispatched method (so its instance stays
+             * live) and skip interning any by-value spec for the representative
+             * binding -- such a spec (`__inst_Dec_dec_int__spec__Box`) would be
+             * dead code, and ill-typed when the representative's inline-C body
+             * (returning the int64 carrier) is cloned under a by-value struct
+             * result. */
+            emit_abi_note_carrier_call(ctx, redisp->binding);
+            return;
+        }
+    }
     /* Option C: a carrier accessor (vec-get) carries its element type in the
      * RETURN position, so the call may have no abi_bindings yet still take a
      * by-value struct receiver inside a spec.  Attempt the by-value twin
      * redirect before the no-bindings early-return below. */
     if (emit_abi_try_byval_twin_redirect(ctx, call, items, n_items)) return;
+    /* nested-construct-byvalue (Gaps #2/#3): when a nested #{Construct} arg was
+     * already resolved top-down from its enclosing construct's by-value payload
+     * field type (the result_type_override recursion below), the normal arg-scan
+     * that reaches it afterwards must NOT re-register it -- its own abi_bindings
+     * collapsed the element to the int64 carrier, and the idempotent record would
+     * OVERWRITE the correct by-value clone name with the carrier one.  A
+     * result_type_override marks the authoritative top-down pass; its absence
+     * marks the normal scan, which defers to any existing recording for this
+     * exact (call, active-outer) pair. */
+    if (!result_type_override && call->as.call_.fn_binding &&
+        call->as.call_.fn_binding->is_construct_template) {
+        const char *cur_outer = ctx->current_abi_specialization
+            ? ctx->current_abi_specialization->clone_name : NULL;
+        for (uint32_t i = 0; i < ctx->n_specialized_calls; i++) {
+            if (ctx->specialized_call_exprs[i] == call &&
+                ctx->specialized_call_outer[i] == cur_outer) {
+                return;
+            }
+        }
+    }
     /* GS5/CS3: elab attaches the named-tyvar substitution to the call when it
      * matters; absence of bindings means there is nothing to specialize. */
     const AbiTypeBinding *bindings = call->as.call_.abi_bindings;
@@ -1918,7 +2011,22 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         bool body_is_construct = fd && fd->body
             && fd->body->kind == EX_MAKE_STRUCT
             && fd->binding && fd->binding->is_construct_template;
-        if (body_is_construct && !borrow_path &&
+        /* nested-construct-byvalue (Gaps #2/#3/#5): a nested #{Construct} arg
+         * whose concrete by-value result type was threaded top-down from the
+         * enclosing construct's recovered payload field type (via
+         * result_type_override).  Use the override directly -- the construct's
+         * own abi_bindings collapsed the element to the int64 carrier, so the
+         * bindings-recovery paths below would mint the wrong element
+         * (Option__int where the enclosing seam wants Option__cstr). */
+        if (body_is_construct && !borrow_path && result_type_override &&
+            result_type.kind == TY_APP &&
+            !type_is_heap_struct(result_type) &&
+            type_has_concrete_codegen_layout(&result_type) &&
+            !emit_abi_type_has_concrete_named_tyvar(&result_type)) {
+            construct_recovered_byvalue = true;
+            abi_changes = true;
+        }
+        if (!construct_recovered_byvalue && body_is_construct && !borrow_path &&
             ctx->current_abi_specialization &&
             ctx->current_abi_specialization->fn) {
             Type spec_ret = ctx->current_abi_specialization->result_type;
@@ -1940,7 +2048,9 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         /* Phase 5 carrier-bridge deletion: monomorphize a #{Construct} at a
          * plain call site whose own bindings (or grounded call->type) resolve to
          * a concrete by-value non-heap struct -- `(some 42)` => `(Option int)`. */
-        if (!construct_recovered_byvalue && body_is_construct && !borrow_path) {
+        if (!construct_recovered_byvalue && body_is_construct && !borrow_path &&
+            !(ctx->abi_scan_suppress_construct_byvalue &&
+              !ctx->current_abi_specialization)) {
             Type recovered = (bindings && n_bindings > 0)
                 ? emit_abi_instantiate_type(&generic_result, bindings,
                                             n_bindings, ctx->type_arena)
@@ -1953,6 +2063,32 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 construct_recovered_byvalue = true;
                 abi_changes = true;
                 emit_abi_note_carrier_call(ctx, fn_binding);
+            }
+        }
+        /* nested-construct-byvalue (Gaps #2/#3): for a by-value-recovered
+         * construct, the payload arg types must come from the concrete result's
+         * element types, not the call's own abi_bindings (which collapsed the
+         * element to the int64 carrier).  Unify the generic result pattern
+         * against the concrete result_type and instantiate each param's generic
+         * type through the recovered bindings, so `ok`'s payload slot becomes
+         * `Option__cstr` (not `Option__int`) and `some`'s becomes `const char *`. */
+        if (construct_recovered_byvalue && fd && !borrow_path) {
+            AbiTypeBinding ub[ABI_TYPE_BINDINGS_MAX]; uint8_t un = 0;
+            emit_abi_unify_collect(&generic_result, &result_type, ub, &un,
+                                   ABI_TYPE_BINDINGS_MAX);
+            if (un > 0) {
+                for (uint8_t i = 0; i < n_spec_args; i++) {
+                    const Type *expected_full =
+                        (fn_binding->type.as.fn.arg_full_types &&
+                         fn_binding->type.as.fn.arg_full_types[i])
+                        ? fn_binding->type.as.fn.arg_full_types[i]
+                        : (i < fd->n_params ? &fd->params[i]->type : NULL);
+                    if (!expected_full) continue;
+                    Type a = emit_abi_instantiate_type(expected_full, ub, un,
+                                                       ctx->type_arena);
+                    if (a.kind != TY_TYVAR && a.kind != TY_UNKNOWN)
+                        arg_types[i] = a;
+                }
             }
         }
     }
@@ -1991,6 +2127,28 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             }
         }
         if (ambiguous) abi_changes = false;
+    }
+    /* nested-construct-byvalue (Gap #1): a single-field accessor body `(.field r)`
+     * over a carrier-ABI parametric struct must consume whatever representation
+     * its argument actually produces.  When the argument is a dictionary-
+     * dispatched typeclass method call (e.g. the inner `(dec tag)` of a Decode
+     * instance body), that call yields the int64 carrier box, NOT a by-value
+     * struct -- so a by-value accessor spec (`ok_val__spec__..._Result__cstr__cstr`)
+     * would be handed an int64 where it expects the struct.  Keep the accessor on
+     * its int64 carrier base (`ok_hyval`); its carried result is then bridged to
+     * the consumer's element type at the enclosing construct seam. */
+    if (abi_changes && !borrow_path && fd && fd->body &&
+        fd->body->kind == EX_GET_FIELD &&
+        n_spec_args == 1 && call->as.call_.n_args == 1 && call->as.call_.args &&
+        type_uses_carrier_abi(arg_types[0])) {
+        const Expr *a0 = call->as.call_.args[0];
+        while (a0 && a0->kind == EX_ASCRIBE) a0 = a0->as.ascribe_.inner;
+        if (a0 && a0->kind == EX_CALL && a0->as.call_.dict_arg) {
+            if (!emit_abi_call_is_generic_relay(ctx, call, items, n_items)) {
+                emit_abi_note_carrier_call(ctx, fn_binding);
+            }
+            return;
+        }
     }
     if (!abi_changes && !instance_changes) {
         if (!borrow_path &&
@@ -2187,6 +2345,27 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * invalidating `spec`; refer to the outer spec by index afterward. */
     uint32_t outer_spec_idx = (uint32_t)(spec - ctx->abi_specializations);
     emit_abi_record_specialized_call(ctx, call, spec->clone_name);
+
+    /* nested-construct-byvalue (Gaps #2/#3): thread each by-value payload field
+     * type down onto a nested #{Construct} argument, so `(ok (some ...))` builds
+     * `Option__cstr` inside `Result__Option__cstr__cstr`.  arg_types[i] already
+     * holds the concrete field type (recovered above from the result); recurse
+     * BEFORE the normal arg-scan reaches the nested construct so the correct
+     * by-value recording is the first one find_matched_abi_spec / emit_call_name
+     * pick for this Expr* under the active spec. */
+    if (construct_recovered_byvalue && !borrow_path && call->as.call_.args) {
+        for (uint32_t i = 0; i < call->as.call_.n_args && i < n_spec_args; i++) {
+            const Expr *arg = call->as.call_.args[i];
+            while (arg && arg->kind == EX_ASCRIBE) arg = arg->as.ascribe_.inner;
+            if (arg && arg->kind == EX_CALL && arg->as.call_.fn_binding &&
+                arg->as.call_.fn_binding->is_construct_template &&
+                arg_types[i].kind == TY_APP &&
+                !type_is_heap_struct(arg_types[i]) &&
+                type_has_concrete_codegen_layout(&arg_types[i])) {
+                emit_abi_register_call(ctx, arg, items, n_items, &arg_types[i]);
+            }
+        }
+    }
 
     /* M7 layer-4 (flag-gated): a by-value HKT instance-method spec replaces the
      * direct dispatch call, so the carrier base method would otherwise be
@@ -2451,9 +2630,29 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
                     ctx->current_abi_specialization->n_bindings,
                     items, n_items);
             }
+            /* nested-construct-byvalue (Gap #5): if this call is a #{Construct}
+             * that stayed on the int64 carrier (no by-value spec recorded for it
+             * under the active outer), suppress by-value promotion of any nested
+             * #{Construct} argument while scanning its args -- the carrier
+             * consumer expects the int64 carrier, not a by-value aggregate. */
+            bool saved_suppress = ctx->abi_scan_suppress_construct_byvalue;
+            if (e->as.call_.fn_binding &&
+                e->as.call_.fn_binding->is_construct_template) {
+                const char *cur_outer = ctx->current_abi_specialization
+                    ? ctx->current_abi_specialization->clone_name : NULL;
+                bool recorded_byvalue = false;
+                for (uint32_t i = 0; i < ctx->n_specialized_calls; i++) {
+                    if (ctx->specialized_call_exprs[i] == e &&
+                        ctx->specialized_call_outer[i] == cur_outer) {
+                        recorded_byvalue = true; break;
+                    }
+                }
+                ctx->abi_scan_suppress_construct_byvalue = !recorded_byvalue;
+            }
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                 emit_abi_scan_expr(ctx, e->as.call_.args[i], items, n_items);
             }
+            ctx->abi_scan_suppress_construct_byvalue = saved_suppress;
             emit_abi_scan_expr(ctx, e->as.call_.fn_expr, items, n_items);
             break;
         }

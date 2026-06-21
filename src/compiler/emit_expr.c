@@ -3081,6 +3081,42 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                              CK_CARRIER, CK_CONCRETE,
                                              matched_spec->arg_types[i]);
                 }
+                /* nested-construct-byvalue (float element): the spec param is an
+                 * inline `double`, but the argument emits the int64 carrier --
+                 * e.g. a constrained-instance accessor (`ok_hyval`) that stayed on
+                 * the carrier for a float element of a decoded Option.  A plain
+                 * C `int64_t -> double` conversion is NUMERIC (4.6e18 instead of
+                 * 3.25); reinterpret the bits via the union bridge instead.  Only
+                 * a generic (tyvar-result) carrier accessor with no by-value spec
+                 * emits the int64 carrier; a concrete `:float`-returning callee
+                 * already yields a `double` and is left untouched. */
+                else if (!needs_fn_cast && matched_spec && emit_arg &&
+                         !expr_is_pbp_param(ctx, emit_arg) &&
+                         (matched_spec->arg_types[i].kind == TY_FLOAT ||
+                          matched_spec->arg_types[i].kind == TY_FLOAT32 ||
+                          matched_spec->arg_types[i].kind == TY_FLOAT64)) {
+                    bool arg_is_carrier_int64 = false;
+                    if (emit_arg->kind == EX_CALL &&
+                        emit_arg->as.call_.fn_binding &&
+                        emit_arg->as.call_.fn_binding->type.kind == TY_FN) {
+                        const EmitAbiSpecialization *as = find_matched_abi_spec(
+                            ctx, emit_arg, emit_arg->as.call_.fn_binding);
+                        if (as) {
+                            arg_is_carrier_int64 = strcmp(
+                                emit_type_c_name(ctx, as->result_type),
+                                "int64_t") == 0;
+                        } else {
+                            arg_is_carrier_int64 =
+                                emit_arg->as.call_.fn_binding->type.as.fn.result_kind
+                                    == TY_TYVAR;
+                        }
+                    }
+                    if (arg_is_carrier_int64) {
+                        raw = emit_carrier_bridge(ctx, body, raw,
+                                                 CK_CARRIER, CK_CONCRETE,
+                                                 matched_spec->arg_types[i]);
+                    }
+                }
                 /* Option none-as-NULL retirement (Track A): a `#{Construct}`
                  * result (`some`/`none`/`ok`/`err`, which stay on the int64
                  * carrier base) passed straight into a PLAIN (non-spec) callee
@@ -4543,7 +4579,20 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                             &n_rt_recovered)
                     && rt_def == def) {
                     have_rt_recovered = true;
-                    if (strcmp(struct_c_name, "int64_t") == 0) {
+                    /* nested-construct-byvalue (Gaps #2/#3): a by-value construct
+                     * spec recovered top-down (some__spec__Option__cstr) stores
+                     * the collapsed element in its bindings (A -> int64_t), so
+                     * emit_resolve_type(e->type) yields the WRONG concrete name
+                     * (Option__int) -- not "int64_t", so the recovery below was
+                     * skipped and the body built the int-element struct.  When
+                     * this make-struct IS the construct spec's own body, trust the
+                     * spec's authoritative result_type name (Option__cstr). */
+                    bool is_construct_body =
+                        ctx->current_abi_specialization->fn &&
+                        ctx->current_abi_specialization->fn->binding &&
+                        ctx->current_abi_specialization->fn->binding->is_construct_template &&
+                        ctx->current_abi_specialization->fn->body == e;
+                    if (strcmp(struct_c_name, "int64_t") == 0 || is_construct_body) {
                         /* For a heap type, recover the by-value header name (not
                          * the pointer name) so the compound literal is valid. */
                         const char *recovered = ms_heap
