@@ -1006,6 +1006,75 @@ static const Expr *emit_abi_find_fn_expr(const Expr **items, uint32_t n_items, c
     return NULL;
 }
 
+/* M6 / gap G6(c): find a CAPTURED closure PASSED as a call argument inside a
+ * generic body whose result type depends on the active spec's tyvars -- e.g. the
+ * recursive `(fn [c : Re] : B (re-cata alg c))` handed to `fmap` inside
+ * `re-cata [B]`.  The existing inner-closure-spec machinery
+ * (`returns_closure_fn_binding`) clones only closures a defn RETURNS; this finds
+ * the PASSED one so it too gets a per-spec clone (so its recursive `re-cata`
+ * call resolves to the active return-spec instead of the int64-carrier base).
+ * Returns the closure's lifted fn binding, or NULL. */
+static Binding *emit_find_passed_spec_closure(const Expr *e,
+        const AbiTypeBinding *bindings, uint8_t n_bindings, Arena *arena) {
+    if (!e) return NULL;
+    switch (e->kind) {
+        case EX_CLOSURE: {
+            struct Closure *cl = e->as.closure_.closure;
+            if (cl && cl->fn && cl->fn->binding &&
+                cl->fn->binding->type.kind == TY_FN) {
+                const Type *rt = cl->fn->binding->type.as.fn.result_full_type;
+                if (rt) {
+                    Type inst = emit_abi_instantiate_type(rt, bindings, n_bindings, arena);
+                    if (inst.kind != rt->kind || !type_eq(inst, *rt))
+                        return cl->fn->binding;
+                }
+            }
+            return NULL;
+        }
+        case EX_CALL: {
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                Binding *r = emit_find_passed_spec_closure(
+                    e->as.call_.args[i], bindings, n_bindings, arena);
+                if (r) return r;
+            }
+            return NULL;
+        }
+        case EX_ASCRIBE:
+            return emit_find_passed_spec_closure(e->as.ascribe_.inner, bindings, n_bindings, arena);
+        case EX_POLY_WRAP:
+            return emit_find_passed_spec_closure(e->as.poly_wrap_.inner, bindings, n_bindings, arena);
+        case EX_FN_TO_FAT:
+            return emit_find_passed_spec_closure(e->as.fn_to_fat_.inner, bindings, n_bindings, arena);
+        case EX_POLY_TO_FAT:
+            return emit_find_passed_spec_closure(e->as.poly_to_fat_.inner, bindings, n_bindings, arena);
+        case EX_LET:
+            return emit_find_passed_spec_closure(e->as.let_.body, bindings, n_bindings, arena);
+        case EX_DO: {
+            for (uint32_t i = 0; i < e->as.do_.n; i++) {
+                Binding *r = emit_find_passed_spec_closure(
+                    e->as.do_.items[i], bindings, n_bindings, arena);
+                if (r) return r;
+            }
+            return NULL;
+        }
+        case EX_IF: {
+            Binding *r = emit_find_passed_spec_closure(e->as.if_.then_, bindings, n_bindings, arena);
+            if (r) return r;
+            return emit_find_passed_spec_closure(e->as.if_.else_or_null, bindings, n_bindings, arena);
+        }
+        case EX_MATCH: {
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                Binding *r = emit_find_passed_spec_closure(
+                    e->as.match_.arms[i].body, bindings, n_bindings, arena);
+                if (r) return r;
+            }
+            return NULL;
+        }
+        default:
+            return NULL;
+    }
+}
+
 static char *emit_abi_clone_name(const Binding *binding, Type result_type, Type *arg_types, uint8_t n_args) {
     Buf name;
     buf_init(&name);
@@ -2192,6 +2261,29 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             result_type = recovered;
         }
     }
+    /* M6 / gap G6(c): a return-only-polymorphic RECURSIVE call inside an active
+     * spec body -- `(re-cata alg c)` in the per-spec closure clone -- has its `B`
+     * result collapsed to the int64 carrier at elab, and `B` is bound only by the
+     * ACTIVE spec (the closure clone's `B -> double`), not by the call's own
+     * bindings.  Recover the concrete PRIMITIVE / register-class result from the
+     * active spec's bindings so the call resolves to the right return-spec
+     * (`re_cata__spec__double`) instead of a spurious int64 sibling whose return
+     * register class (rax vs xmm0) is wrong.  Only fires for a bare-tyvar declared
+     * result still sitting on the carrier; an int element recovers to int (no
+     * change), a float/bool/etc. recovers to its native kind. */
+    if (!result_type_override &&
+        ctx->current_abi_specialization &&
+        ctx->current_abi_specialization->is_passed_closure_clone &&
+        fn_binding->type.as.fn.result_kind == TY_TYVAR &&
+        generic_result.kind == TY_TYVAR &&
+        (result_type.kind == TY_TYVAR || result_type.kind == TY_INT) &&
+        spec_bindings && spec_n_bindings > 0) {
+        Type recovered = emit_abi_instantiate_type(
+            &generic_result, spec_bindings, spec_n_bindings, ctx->type_arena);
+        if (recovered.kind != TY_TYVAR && recovered.kind != TY_INT &&
+            recovered.kind != TY_UNKNOWN)
+            result_type = recovered;
+    }
     /* constrained-defn-monomorphize: when the call's element bindings were
      * re-hydrated from the active spec (above), `call->type` was the elab-
      * collapsed result (`(Cons int)`), so the `result_type` derived from it is
@@ -2204,6 +2296,23 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         Type recovered = emit_abi_instantiate_type(
             &generic_result, bindings, n_bindings, ctx->type_arena);
         if (type_has_concrete_codegen_layout(&recovered))
+            result_type = recovered;
+    }
+    /* M6 / gap G6(c): an HKT instance method (`fmap`) called inside a GENERIC
+     * combinator has its result element ungrounded at elab, so `result_type`
+     * derived from `call->type` is a degenerate / carrier `(f b)`.  Under an
+     * ACTIVE specialization, the call's symbolic element binding (`b -> B`,
+     * attached by elab) was composed through the active spec to `b -> bool`, so
+     * instantiating the method's DECLARED result `(f b)` through the composed
+     * bindings recovers the concrete `(ReF bool)` -- a parametric ADT app.  This
+     * is the producer-side companion of A: it lets the by-value-ADT abi_changes
+     * gate below fire so the inner fmap is monomorphized per element. */
+    if (!result_type_override && g_m7_hkt_enabled && fd && fd->owner_instance &&
+        generic_result.kind == TY_APP && bindings && n_bindings > 0 &&
+        !(result_type.kind == TY_APP && type_app_is_concrete_adt(&result_type))) {
+        Type recovered = emit_abi_instantiate_type(
+            &generic_result, bindings, n_bindings, ctx->type_arena);
+        if (recovered.kind == TY_APP && type_app_is_concrete_adt(&recovered))
             result_type = recovered;
     }
     if (strcmp(type_c_name(generic_result), type_c_name(result_type)) != 0) {
@@ -2236,6 +2345,23 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     bool inner_float = inner_closure && !fn_binding->closure_return_dispatches_untyped &&
         emit_inner_closure_needs_float_spec(inner_closure, bindings, n_bindings);
     if (inner_float) abi_changes = true;
+    /* M6 / gap G6(c): a generic body PASSES a captured closure whose result type
+     * follows the spec's tyvar (the recursive `(fn [c] : B (re-cata alg c))` to
+     * `fmap` inside `re-cata [B]`).  Clone it per spec so its recursive call
+     * resolves to the active return-spec (`re_cata__spec__bool`) -- otherwise the
+     * single shared lifted closure routes the whole recursion through the int64
+     * carrier base and a sub-int64 / non-int64 element silently miscompiles at
+     * nested nodes.  Only fires when no returned-closure spec is already in play. */
+    bool inner_passed = false;
+    if (!inner_closure && !borrow_path && fd && fd->body && bindings && n_bindings > 0) {
+        Binding *passed = emit_find_passed_spec_closure(
+            fd->body, bindings, n_bindings, ctx->type_arena);
+        if (passed) {
+            inner_closure = passed;
+            inner_passed = true;
+            abi_changes = true;
+        }
+    }
     /* end-to-end-monomorphization (M2 completion, primitive-payload Result/
      * Option at the typeclass-dispatch boundary): a #{Construct} constructor
      * whose RESULT is a concrete by-value (non-heap) struct -- e.g.
@@ -2671,7 +2797,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * params / env fields / dispatch typedefs all resolve through
      * emit_resolve_type to the concrete float; the outer spec's EX_CLOSURE
      * construction then stores the clone's thunk + uses its suffixed env. */
-    if (inner_float && inner_closure) {
+    if ((inner_float || inner_passed) && inner_closure) {
         const Expr *inner_expr = emit_abi_find_fn_expr(items, n_items, inner_closure);
         if (inner_expr && inner_expr->kind == EX_FN_DEF && inner_expr->as.fn_def_.fn) {
             FnDef *inner_fd = inner_expr->as.fn_def_.fn;
@@ -2700,9 +2826,11 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 ? emit_abi_instantiate_type(inner_closure->type.as.fn.result_full_type,
                                             bindings, n_bindings, ctx->type_arena)
                 : emit_type_from_kind(inner_closure->type.as.fn.result_kind);
+            uint32_t before_inner = ctx->n_abi_specializations;
             EmitAbiSpecialization *inner_spec = emit_abi_intern_spec(
                 ctx, inner_closure, inner_expr, inner_fd, bindings, n_bindings,
                 inner_args, inner_n, inner_res, NULL);
+            bool inner_is_new = ctx->n_abi_specializations != before_inner;
             /* Build the suffixed env-struct symbol both sites agree on. */
             if (!inner_spec->env_name_override && inner_fd->closure &&
                 inner_fd->closure->env_name) {
@@ -2717,6 +2845,25 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             }
             uint32_t inner_idx = (uint32_t)(inner_spec - ctx->abi_specializations);
             ctx->abi_specializations[outer_spec_idx].inner_closure_spec_idx = (int32_t)inner_idx;
+            if (inner_passed)
+                ctx->abi_specializations[inner_idx].is_passed_closure_clone = true;
+            /* M6 / G6(c): scan the PASSED closure clone's body under its OWN spec
+             * bindings so a recursive call it makes -- `(re-cata alg c)` -- is
+             * registered against the active return-spec (re_cata__spec__bool)
+             * rather than the int64-carrier base.  Only for a freshly-created
+             * inner spec (a dedup'd one was already scanned), so the mutual
+             * recursion terminates. */
+            if (inner_passed && inner_is_new && inner_fd->body) {
+                const EmitAbiSpecialization *saved_c = ctx->current_abi_specialization;
+                bool saved_in = saved_c >= ctx->abi_specializations &&
+                                saved_c < ctx->abi_specializations + ctx->n_abi_specializations;
+                uint32_t saved_ci = saved_in
+                    ? (uint32_t)(saved_c - ctx->abi_specializations) : 0;
+                ctx->current_abi_specialization = &ctx->abi_specializations[inner_idx];
+                emit_abi_scan_expr(ctx, inner_fd->body, items, n_items);
+                ctx->current_abi_specialization = saved_in
+                    ? &ctx->abi_specializations[saved_ci] : saved_c;
+            }
         }
     }
 

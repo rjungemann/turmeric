@@ -1,0 +1,48 @@
+; M6 / gap G6(c): a generic catamorphism `cata = alg . fmap (cata alg) . unroll`
+; over a `:copy` sum functor must monomorphize per carrier `B`.  The recursive
+; `(fn [c] : B (re-cata alg c))` handed to `fmap` is cloned per spec so it
+; recurses into the by-value `re-cata` spec for B; the inner `fmap` is
+; monomorphized so the producer builds `tur_adt_ReF__B` with B-width fields,
+; matching the layout the algebra reads.  Without this a sub-int64 (bool) /
+; non-int64 (float) carrier silently folds wrong at nested nodes -- a DEEP tree
+; is the discriminating probe (a shallow one passes by leaf-child luck).
+(load "stdlib/typeclass-functor.tur")
+
+(defdata ReF :copy [a] (EmptyF) (LitF :int) (AltF a a) (StarF a))
+(defdata Re  :copy (Roll (ReF Re)))
+
+(definstance Functor [ReF]
+  (fmap [c g]
+    (match c
+      (EmptyF)   (EmptyF)
+      (LitF n)   (LitF n)
+      (AltF x y) (AltF (g x) (g y))
+      (StarF x)  (StarF (g x)))))
+
+(defn unroll-re [e : Re] : (ReF Re) (match e (Roll l) (:: l (ReF Re))))
+
+(defn re-cata [B] [alg : (fn [(ReF B)] B) e : Re] : B
+  (alg (:: (fmap (unroll-re e) (fn [c : Re] : B (re-cata alg c))) (ReF B))))
+
+(defn size-alg  [l : (ReF int)]   : int   (match l (EmptyF) 1 (LitF n) 1 (AltF x y) (+ 1 (+ x y)) (StarF x) (+ 1 x)))
+(defn null-alg  [l : (ReF bool)]  : bool  (match l (EmptyF) true (LitF n) false (AltF x y) (or x y) (StarF x) true))
+(defn fsize-alg [l : (ReF float)] : float (match l (EmptyF) 1.5 (LitF n) 1.5 (AltF x y) (+ 1.5 (+ x y)) (StarF x) (+ 1.5 x)))
+
+(defn lit  [n : int] : Re (Roll (LitF n)))
+(defn alt  [x : Re y : Re] : Re (Roll (AltF x y)))
+(defn star [x : Re] : Re (Roll (StarF x)))
+(defn emp  [] : Re (Roll (EmptyF)))
+
+(defn main [] : int
+  (let [;; deep: Alt(Alt(Lit,Empty), Star(Lit)) -- 6 nodes, nested AltF
+        d  (alt (alt (lit 1) (emp)) (star (lit 2)))
+        ;; null DISCRIMINATING on the inner _1: Alt(Lit, Alt(Lit, Empty)) = or false (or false true) = true
+        n1 (alt (lit 1) (alt (lit 2) (emp)))
+        ;; Alt(Lit, Alt(Lit, Lit)) = or false (or false false) = false
+        n2 (alt (lit 1) (alt (lit 2) (lit 3)))]
+    (do
+      (println (re-cata size-alg  d))    ;; 6
+      (println (re-cata null-alg  n1))   ;; true
+      (println (re-cata null-alg  n2))   ;; false
+      (println (re-cata fsize-alg d))    ;; 1.5*6 = 9.0
+      0)))

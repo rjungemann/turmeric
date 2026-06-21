@@ -5607,6 +5607,14 @@ resolved_user_fallback:;
      * substituted result type fully grounds, so an `ap`-style call whose result
      * element cannot be recovered falls back to carrier dispatch. */
     bool m7_byvalue_grounded = false;
+    /* M6 / gap G6(c) recursive combinator: true when the method result element
+     * was bound SYMBOLICALLY to an ungrounded tyvar (the enclosing generic's own
+     * type param, e.g. `b -> B` for `fmap` inside `re-cata [B]`).  The result
+     * does NOT ground here (B is free), but attaching the symbolic binding lets
+     * the emit side compose `b -> B -> bool` once the enclosing generic is
+     * monomorphized.  Kept distinct from m7_byvalue_grounded so the by-value
+     * RESULT TYPE is NOT committed at elab (only the bindings are attached). */
+    bool m7_symbolic_elem = false;
     /* M7 layer-4: is the instance body by-value-expressible (pure-Turmeric)?
      * Computed up front because it gates BOTH the by-value result-type commit
      * below AND the abi_bindings attachment further down -- the two MUST agree.
@@ -5662,6 +5670,48 @@ resolved_user_fallback:;
                     m7_collect_tyvar_bindings(e, cm->param_types[pidx],
                                               args_orig_types[i], m7_bind_names,
                                               m7_bind_types, &m7_nb, 16);
+            }
+            /* M6 / G6(c): the method result `(f b)`'s element `b` is determined by
+             * a CLOSURE argument's RESULT (the fmap/Monad shape: `g : (fn [a] b)`).
+             * When that result is an ungrounded tyvar -- the enclosing generic's
+             * own param `B` in `(defn re-cata [B] ... (fmap recv (fn [c] : B ...)))`
+             * -- m7_collect SKIPPED it (its tyvar-actual skip guards the
+             * Applicative `ap` shape, whose element comes from a wrapped VALUE arg,
+             * not a closure result).  Bind it symbolically (`b -> B`) so emit can
+             * compose it through the enclosing monomorphization.  Tightly gated:
+             * only an APPLIED result whose element tyvar is the RESULT of a
+             * fn-typed param (never `ap`, whose element sits in a value arg). */
+            if (m7_result_is_applied && cm->return_type.as.app.arg &&
+                cm->return_type.as.app.arg->kind == TY_TYVAR &&
+                cm->return_type.as.app.arg->as.tyvar_.name) {
+                const char *belem = cm->return_type.as.app.arg->as.tyvar_.name;
+                bool present = false;
+                for (uint8_t k = 0; k < m7_nb; k++)
+                    if (m7_bind_names[k] &&
+                        strcmp(m7_bind_names[k]->name, belem) == 0) { present = true; break; }
+                if (!present) {
+                    for (uint8_t p = 1; p < cm->n_params; p++) {
+                        const Type *pt = &cm->param_types[p];
+                        if (pt->kind != TY_FN) continue;
+                        const Type *pr = pt->as.fn.result_full_type;
+                        if (!pr || pr->kind != TY_TYVAR || !pr->as.tyvar_.name ||
+                            strcmp(pr->as.tyvar_.name, belem) != 0) continue;
+                        if ((uint32_t)(p - 1) >= n_args) break;
+                        Type at = args_orig_types[p - 1];
+                        if (at.kind != TY_FN) break;
+                        Type ar = at.as.fn.result_full_type
+                            ? *at.as.fn.result_full_type
+                            : type_from_kind(at.as.fn.result_kind);
+                        if (m7_nb < 16) {
+                            m7_bind_names[m7_nb] = symtab_intern(
+                                e->st, strslice(belem, (uint32_t)strlen(belem)));
+                            m7_bind_types[m7_nb] = ar;
+                            m7_nb++;
+                            m7_symbolic_elem = true;
+                        }
+                        break;
+                    }
+                }
             }
             /* M7 partial-app wildcard head: the reconstructed result `(Result b
              * B)` names the FIXED arm with the struct's own param (`B`).  That
@@ -5798,7 +5848,7 @@ resolved_user_fallback:;
          * contradicts the carrier inline-C body.  Gate on the body kind
          * (m7_body_byvalue_ok, computed up front above). */
         if (g_m7_hkt_enabled && is_hkt && m7_body_byvalue_ok &&
-            m7_byvalue_grounded &&
+            (m7_byvalue_grounded || m7_symbolic_elem) &&
             tc->n_type_params >= 1 && tc->type_params[0]) {
             uint8_t total = (uint8_t)(1 + m7_nb + 4);  /* +4: struct-param grounding */
             if (total > ABI_TYPE_BINDINGS_MAX) total = ABI_TYPE_BINDINGS_MAX;
