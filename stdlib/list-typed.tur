@@ -72,3 +72,30 @@
 ;;; Since: end-to-end-monomorphization-plan (Phase 1.1)
 
 (defn list->carrier [A] [xs : (List A)] : int (:: xs :int))
+;;; list-count -- number of elements in a (List A), correct for aggregate A.
+;;;
+;;; The element-aware length for the typed list view. `list-length` (the carrier
+;;; helper) walks the chain at the fixed `{int64 head; int64 tail}` layout and
+;;; segfaults when A is a by-value aggregate; `list-count` recovers the concrete
+;;; `(Cons A)` layout and walks it via the typed `tlength`, so a
+;;; `(List (Option int))` (and any by-value-aggregate element) measures safely.
+;;;
+;;; This relies on phantom-opaque element specialization: although `(List A)`
+;;; lowers to the int64 carrier, the compiler mints a per-element-type clone of
+;;; `list-count` when A is a by-value aggregate, so the inner `(:: ... (Cons A))`
+;;; resolves to the concrete cell layout instead of collapsing to the carrier.
+;;;
+;;; Parameters:
+;;;   xs -- the (List A) to measure
+;;;
+;;; Returns:
+;;;   Integer length (0 for the empty list).
+;;;
+;;; Example:
+;;;   (list-count (list-of 1 2 3))  ; => 3
+;;;
+;;; Since: Phase G4 (carrier<->concrete ABI crossing audit)
+(defn list-count [A] [xs : (List A)] : int
+  (if (list-empty? xs)
+    0
+    (tlength (:: (:: xs :int) (Cons A)))))
