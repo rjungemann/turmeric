@@ -1037,9 +1037,11 @@ static bool emit_inst_head_matches(Type pattern, Type concrete) {
     return false;
 }
 
-static char *emit_concrete_inst_method_name(EmitCtx *ctx, const TypeClass *tc,
-                                            Type resolved,
-                                            const char *method_field_name) {
+/* nested-construct-byvalue: locate the concrete instance-method FnDef whose head
+ * matches `resolved` (shared by the name lookup and the scan-time liveness mark). */
+FnDef *emit_concrete_inst_method_fndef(EmitCtx *ctx, const TypeClass *tc,
+                                       Type resolved,
+                                       const char *method_field_name) {
     if (!ctx || !ctx->program_root || !tc || !method_field_name ||
         method_field_name[0] == '\0') {
         return NULL;
@@ -1047,7 +1049,7 @@ static char *emit_concrete_inst_method_name(EmitCtx *ctx, const TypeClass *tc,
     uint32_t n_items = 0;
     const Expr **items = flatten_program_items(ctx->program_root, &n_items);
     if (!items) return NULL;
-    char *result = NULL;
+    FnDef *result = NULL;
     /* Two passes: prefer a match at the primary (receiver) type-arg position --
      * the conventional argument-dispatch slot -- before falling back to a match
      * at any position, which covers a return-position-only dispatch. */
@@ -1069,25 +1071,57 @@ static char *emit_concrete_inst_method_name(EmitCtx *ctx, const TypeClass *tc,
                 }
             }
             if (!matched) continue;
-            /* Locate the method by its mangled field name and read the impl's
-             * authoritative emitted symbol. */
             for (uint8_t mi = 0;
                  mi < tc->n_methods && mi < inst->n_method_impls; mi++) {
                 if (!tc->methods[mi].name) continue;
                 char field[64];
                 tur_mangle_ident(tc->methods[mi].name->name, field, sizeof(field));
                 if (strcmp(field, method_field_name) != 0) continue;
-                FnDef *impl = inst->method_impls[mi];
-                if (impl && impl->binding && impl->binding->name) {
-                    result = strdup(impl->binding->name->name);
-                    if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
-                }
+                result = inst->method_impls[mi];
                 break;
             }
         }
     }
     free((void *)items);
     return result;
+}
+
+static char *emit_concrete_inst_method_name(EmitCtx *ctx, const TypeClass *tc,
+                                            Type resolved,
+                                            const char *method_field_name) {
+    FnDef *impl = emit_concrete_inst_method_fndef(ctx, tc, resolved,
+                                                  method_field_name);
+    if (impl && impl->binding && impl->binding->name) {
+        char *result = strdup(impl->binding->name->name);
+        if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
+        return result;
+    }
+    return NULL;
+}
+
+/* nested-construct-byvalue: structurally match a class-method's declared result
+ * pattern (e.g. `(Result a cstr)`, carrying the class type var `a`) against the
+ * concrete/ascribed call result (`(Result A cstr)`), returning the subtype at
+ * the position the class var occupies.  Lets a RETURN-dispatch method whose
+ * result is a TY_APP *containing* the class var (not a bare tyvar) recover its
+ * dispatch type from the ascription, then resolve it through the active spec. */
+static bool emit_pattern_extract_classvar(const Type *pattern, const Type *concrete,
+                                          const char *varname, Type *out) {
+    if (!pattern || !concrete || !varname) return false;
+    if (pattern->kind == TY_TYVAR && pattern->as.tyvar_.name &&
+        strcmp(pattern->as.tyvar_.name, varname) == 0) {
+        *out = *concrete;
+        return true;
+    }
+    if (pattern->kind == TY_APP && concrete->kind == TY_APP) {
+        if (emit_pattern_extract_classvar(pattern->as.app.fn, concrete->as.app.fn,
+                                          varname, out))
+            return true;
+        if (emit_pattern_extract_classvar(pattern->as.app.arg, concrete->as.app.arg,
+                                          varname, out))
+            return true;
+    }
+    return false;
 }
 
 /* GHE: re-resolve a typeclass-method call inside a monomorphized constrained
@@ -1097,14 +1131,22 @@ static char *emit_concrete_inst_method_name(EmitCtx *ctx, const TypeClass *tc,
  * __inst_<Class>_<sanitized-method>_<component> name.  Returns NULL when no
  * re-resolution applies (the caller keeps the baked representative callee, which
  * is the TY_INT carrier instance -- correct for the int / base-clone case). */
-static char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call) {
+/* nested-construct-byvalue: shared dispatch-type resolution for a return- or
+ * argument-dispatched typeclass method call inside an active ABI spec.  Returns
+ * the concrete dispatch type (`out_resolved`) and the call's dict (`out_dict`),
+ * or false when no re-resolution applies.  Used by both the emit-time name
+ * rewrite (emit_reresolve_method_call) and the scan-time liveness mark
+ * (emit_reresolve_method_fndef), so the two never disagree about which concrete
+ * instance a constrained-instance body dispatches to. */
+static bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
+                                     Type *out_resolved, const Expr **out_dict) {
     if (!ctx || !ctx->current_abi_specialization || !call ||
         call->kind != EX_CALL) {
-        return NULL;
+        return false;
     }
     const Expr *dict = call->as.call_.dict_arg;
-    if (!dict || dict->kind != EX_DICT || !dict->as.dict_.instance) return NULL;
-    if (dict->as.dict_.method_name[0] == '\0') return NULL;
+    if (!dict || dict->kind != EX_DICT || !dict->as.dict_.instance) return false;
+    if (dict->as.dict_.method_name[0] == '\0') return false;
 
     /* The dispatch type variable is normally the receiver (arg 0): an
      * argument-dispatched constrained-generic call (`(eq? x y)` with `x : A`).
@@ -1123,6 +1165,34 @@ static char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call) {
     }
     if (!have_disp && call->type.kind == TY_TYVAR) {
         disp_ty = call->type; have_disp = true;
+    }
+    /* nested-construct-byvalue (Gap #4): an ascribed return-dispatch method
+     * whose `call->type` is a TY_APP *embedding* the class var -- e.g.
+     * `(:: (dec tag) (Result A cstr))` for `(defclass Dec [a] (dec ... : (Result
+     * a cstr)))` -- never matched the bare-TY_TYVAR check above, so the call kept
+     * the int64-carrier representative instance (`__inst_Dec_dec_int`).  Recover
+     * the dispatch type by matching the class method's declared result pattern
+     * against the ascribed app and reading the subtype at the class-var position;
+     * emit_resolve_type then grounds it through the active spec. */
+    if (!have_disp && call->type.kind == TY_APP) {
+        const TypeClass *tc_d = dict->as.dict_.instance->typeclass;
+        if (tc_d && tc_d->n_type_params >= 1 && tc_d->type_params &&
+            tc_d->type_params[0]) {
+            const char *classvar = tc_d->type_params[0]->name;
+            for (uint8_t mi = 0; mi < tc_d->n_methods; mi++) {
+                const TypeClassMethod *m = &tc_d->methods[mi];
+                if (!m->name || strcmp(m->name->name,
+                                       dict->as.dict_.method_name) != 0)
+                    continue;
+                Type extracted;
+                if (emit_pattern_extract_classvar(&m->return_type, &call->type,
+                                                  classvar, &extracted)) {
+                    disp_ty = extracted;
+                    have_disp = true;
+                }
+                break;
+            }
+        }
     }
     /* constrained-instance-element-dispatch: the receiver may be a field
      * extraction from a parametric container whose element type was erased to
@@ -1194,10 +1264,61 @@ static char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call) {
             }
         }
     }
-    if (!have_disp) return NULL;
+    if (!have_disp) return false;
 
     Type resolved = emit_resolve_type(ctx, disp_ty);
-    if (resolved.kind == TY_TYVAR) return NULL; /* still unbound: keep base/repr */
+    /* nested-construct-byvalue (Gap #4): a constrained parametric instance binds
+     * its constraint var (`(Dec A)` -> tyvar `A`) only implicitly -- the spec's
+     * stored bindings carry just the class var (`a -> (Option cstr)`), not `A`.
+     * When `disp_ty` is that constraint var and the direct spec lookup leaves it
+     * unbound, resolve it the way emit_abi_register_call's augmentation does:
+     * the constraint records a `param_idx` into the receiver's (class-var's)
+     * type-arg list, so extract that element from the class-var binding. */
+    if (resolved.kind == TY_TYVAR && resolved.as.tyvar_.name &&
+        ctx->current_abi_specialization &&
+        ctx->current_abi_specialization->fn &&
+        ctx->current_abi_specialization->fn->owner_instance &&
+        ctx->current_abi_specialization->n_bindings >= 1) {
+        const TypeClassInstance *inst =
+            ctx->current_abi_specialization->fn->owner_instance;
+        Type recv = ctx->current_abi_specialization->bindings[0].type;
+        StructDef *rsd = NULL; Type rargs[16]; uint8_t rn = 0;
+        if (type_extract_struct_app(&recv, &rsd, rargs, &rn)) {
+            for (uint8_t ci = 0; ci < inst->n_type_param_constraints; ci++) {
+                const TypeConstraint *tc_c = &inst->type_param_constraints[ci];
+                if (!tc_c->tyvar || !tc_c->tyvar->name) continue;
+                if (strcmp(tc_c->tyvar->name, resolved.as.tyvar_.name) != 0) continue;
+                if (tc_c->param_idx < 0 || (uint8_t)tc_c->param_idx >= rn) break;
+                resolved = rargs[tc_c->param_idx];
+                break;
+            }
+        }
+    }
+    if (resolved.kind == TY_TYVAR) return false; /* still unbound: keep base/repr */
+    *out_resolved = resolved;
+    *out_dict = dict;
+    return true;
+}
+
+/* nested-construct-byvalue: scan-time companion to emit_reresolve_method_call --
+ * returns the FnDef of the concrete instance method a constrained-instance body
+ * re-dispatches to (e.g. `__inst_Dec_dec_cstr`), so the ABI scan can mark that
+ * instance live.  Without this the re-dispatched callee is referenced by an
+ * emitted spec body but its instance is pruned as dead (undefined reference). */
+FnDef *emit_reresolve_method_fndef(EmitCtx *ctx, const Expr *call) {
+    Type resolved;
+    const Expr *dict = NULL;
+    if (!emit_reresolve_disp_type(ctx, call, &resolved, &dict)) return NULL;
+    const TypeClass *tc = dict->as.dict_.instance->typeclass;
+    if (!tc) return NULL;
+    return emit_concrete_inst_method_fndef(ctx, tc, resolved,
+                                           dict->as.dict_.method_name);
+}
+
+static char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call) {
+    Type resolved;
+    const Expr *dict = NULL;
+    if (!emit_reresolve_disp_type(ctx, call, &resolved, &dict)) return NULL;
 
     /* Gap H: when the concrete instance can be located, use its method impl's
      * authoritative emitted symbol.  This is the only spelling that stays

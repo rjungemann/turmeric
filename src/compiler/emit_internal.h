@@ -239,6 +239,14 @@ typedef struct EmitCtx {
      * call with unresolvable phantom tyvars (KB-022) that needs its carrier
      * fallback emitted. */
     const Expr  *current_scan_fn;
+    /* nested-construct-byvalue (Gap #5): set while the ABI scan descends into the
+     * argument subexpressions of a #{Construct} call that is itself emitting as
+     * the int64 carrier (no by-value spec).  A nested construct argument under
+     * such a carrier consumer must NOT be promoted to a by-value spec, or the
+     * carrier consumer (`ok(int64_t)`) would be handed a by-value aggregate
+     * (`Option__int`).  Gates the Phase-5 construct promotion in
+     * emit_abi_register_call. */
+    bool         abi_scan_suppress_construct_byvalue;
     const char  *fn_name_override;
     /* J3: when true, the clone body being emitted via fn_name_override gets
      * external (not static) linkage -- set alongside fn_name_override. */
@@ -342,6 +350,11 @@ Type fn_body_tail_byvalue_carrier_type(struct EmitCtx *ctx, const struct Expr *e
  * in lockstep.  Defined in emit_module.c. */
 struct TypeClassInstance;
 bool emit_instance_is_live(const struct EmitCtx *ctx, struct TypeClassInstance *inst);
+/* nested-construct-byvalue: the FnDef a constrained-instance body re-dispatches a
+ * return/argument-dispatched method to under the active spec (e.g. the cstr
+ * `dec` impl).  Used by the ABI scan to mark that instance live so the emitted
+ * spec body's reference to it resolves.  Defined in emit_core.c. */
+struct FnDef *emit_reresolve_method_fndef(struct EmitCtx *ctx, const struct Expr *call);
 /* RT/SC5: carrier-return bridge.  A typeclass instance method whose declared
  * return is the dispatch type variable lowers to the int64_t carrier, but its
  * body resolves to a concrete by-value struct for that instance.  When the

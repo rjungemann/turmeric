@@ -1,0 +1,74 @@
+;; nested-construct-byvalue-decode -- the construct/return companion of
+;; constrained-instance-element-dispatch (which covers the READ side).
+;;
+;; Root cause (docs/archive/nested-construct-byvalue-in-constrained-instance-body.md):
+;; the body of `(definstance Dec [Option] [(Dec A)] ...)` builds a nested
+;; `(ok (some (ok-val (:: (dec tag) (Result A cstr)))))`.  Each carrier seam --
+;; the inner return-dispatched `(dec tag)`, the `ok-val` destructure, and the
+;; `some`/`ok` constructs -- independently collapsed the element type `A` to the
+;; int64 carrier representative, so the build failed to compile (carrier int vs.
+;; struct) for cstr / float / value-struct elements, and silently returned `none`
+;; for the pointer-carried element via the helper-delegated form.
+;;
+;; Fix (five emit-time gaps): re-dispatch an ascribed `(:: method (F A))` whose
+;; result is a TY_APP embedding the class var (emit_reresolve_method_call); keep a
+;; carrier-fed accessor on its carrier base; recover each by-value construct seam's
+;; payload type top-down from the enclosing construct's recovered result; gate a
+;; nested construct's by-value promotion on the consumer's ABI; and reinterpret a
+;; carrier int64 into a float element at the construct seam.  Asserts the
+;; round-trip VALUE (not just that it compiles) for int / cstr / float / struct.
+
+(defclass Dec [a] (dec [tag : int] : (Result a cstr)))
+
+(definstance Dec [int]
+  (dec [tag] ```c (void)tag; return tur_box_ok((int64_t)42); ```))
+
+(definstance Dec [cstr]
+  (dec [tag]
+    ```c
+    (void)tag;
+    char *s = (char *)malloc(3);
+    s[0] = 'h'; s[1] = 'i'; s[2] = 0;
+    return tur_box_ok((int64_t)(intptr_t)s);
+    ```))
+
+(definstance Dec [float]
+  (dec [tag]
+    ```c
+    (void)tag;
+    double d = 3.25;
+    int64_t b;
+    __builtin_memcpy(&b, &d, 8);
+    return tur_box_ok(b);
+    ```))
+
+(defstruct Box [n : int])
+
+(definstance Dec [Box]
+  (dec [tag]
+    ```c
+    (void)tag;
+    Box *b = (Box *)malloc(sizeof(Box));
+    b->n = 99;
+    return tur_box_ok((int64_t)(intptr_t)b);
+    ```))
+
+;; Constrained instance: build a (Result (Option A) cstr) from the inner decode.
+(definstance Dec [Option]
+  [(Dec A)]
+  (dec [tag]
+    (ok (some (ok-val (:: (dec tag) (Result A cstr)))))))
+
+(defn show-int [n : int] : void ```c printf("%lld\n", (long long)n); ```)
+(defn show-float [x : float] : void ```c printf("%g\n", (double)x); ```)
+
+(defn main [] : int
+  (let [oi (ok-val (:: (dec 0) (Result (Option int)   cstr)))
+        oc (ok-val (:: (dec 0) (Result (Option cstr)  cstr)))
+        of (ok-val (:: (dec 0) (Result (Option float) cstr)))
+        ob (ok-val (:: (dec 0) (Result (Option Box)   cstr)))]
+    (if (some? oi) (show-int   (unwrap oi)) (println "none-int"))
+    (if (some? oc) (println    (unwrap oc)) (println "none-cstr"))
+    (if (some? of) (show-float (unwrap of)) (println "none-float"))
+    (if (some? ob) (show-int   (.n (unwrap ob))) (println "none-box"))
+    0))

@@ -7,10 +7,10 @@ severity: Medium. Not a silent miscompile in the common case -- the direct form
   blocks `Decode [Option]` (and `Decode` for any container) in turmeric-spices'
   json spice: optional/contained fields can be encoded (Encode [Option] shipped,
   unblocked by #475) but not decoded.
-status: OPEN -- root-caused 2026-06-21 (see "Root cause, confirmed" below). The
-  fix is structural (four distinct carrier boundaries inside one spec body,
-  M4/M7-class) and was NOT attempted in the root-cause session to avoid a
-  half-landed change against the 1442-fixture gate.
+status: RESOLVED 2026-06-21 -- all five gaps fixed (see "Resolution" below).
+  Round-trip fixture `tests/fixtures/nested-construct-byvalue-decode` covers
+  int / cstr / float / value-struct elements; `bash tests/run.sh` is green
+  (1733 passed, 0 failed).
 ---
 
 # Constrained instance body can't build a nested `(Result (Option A) cstr)` for a pointer-carried `A`
@@ -173,7 +173,49 @@ ok     - decode (Option int)  null     -> none
 not ok - decode (Option cstr) present -> some "hi"     ;; reads back as none
 ```
 
-## Fix direction
+## Resolution (2026-06-21)
+
+All five gaps were closed; the minimal repro compiles and round-trips int /
+cstr / float / value-struct elements. The emitted `cstr` spec is now exactly
+the carrier-consistent target below (`ok_hyval` on the carrier, by-value only
+at the `some`/`ok` construct seams). Changes:
+
+- **Gap #4 (re-dispatch)** -- `emit_reresolve_method_call`
+  (`src/compiler/emit_core.c`) now recovers the dispatch type when `call->type`
+  is a `TY_APP` embedding the class var (`(Result A cstr)`), via
+  `emit_pattern_extract_classvar`, and resolves a constraint var (`A`) that the
+  spec carries only implicitly through the instance's `type_param_constraints`
+  + the class-var binding's element. The dispatch-type recovery was factored
+  into `emit_reresolve_disp_type`, shared with a new
+  `emit_reresolve_method_fndef` used by the scan to mark the re-dispatched
+  instance live (otherwise `__inst_Dec_dec_cstr` linked undefined). When a call
+  re-dispatches, the scan skips interning a (dead, ill-typed) by-value spec for
+  the baked carrier representative.
+
+- **Gap #1 (carrier-fed accessor)** -- a single-field accessor body `(.field r)`
+  whose argument is a dictionary-dispatched method call (which yields the int64
+  carrier) is kept on its carrier base (`ok_hyval`) rather than by-value
+  specialized; its int64 result is bridged to the consumer's element type at the
+  construct seam (`src/compiler/emit_module.c`).
+
+- **Gaps #2/#3 (top-down payload type)** -- a by-value-recovered `#{Construct}`
+  now derives its payload arg types from the concrete result via
+  `emit_abi_unify_collect`, and threads each by-value field type down onto a
+  nested construct argument (a `result_type_override` recursion in
+  `emit_abi_register_call`); the normal arg-scan defers to that top-down
+  recording. The construct spec body's `make-struct` trusts the spec's
+  authoritative result struct name (`src/compiler/emit_expr.c`).
+
+- **Gap #5 (consumer-ABI gate)** -- a nested construct under a carrier-emitting
+  consumer construct keeps the int64 carrier; the Phase-5 by-value promotion is
+  suppressed via `abi_scan_suppress_construct_byvalue` set while scanning a
+  carrier construct's args.
+
+- **Float element** -- the carrier int64 is reinterpreted (union bridge) into the
+  `double` element at the construct seam rather than numerically converted
+  (`src/compiler/emit_expr.c`).
+
+## Fix direction (original)
 
 A coherent target lowering for the `cstr` spec (carrier-consistent inner chain,
 by-value only at the construct seams the enclosing spec demands):
