@@ -8,8 +8,13 @@ severity: Medium. Hard C compile error (not a silent miscompile) the moment a
   `(Cons (Option A))` literal, which a JSON `Encode [Cons (Option A)]` / any
   nested-container spice needs. Scalar and `:heap`-pointer elements are fine;
   only by-value aggregates trip it.
-status: OPEN -- found 2026-06-21 by the composition stress matrix in
-  docs/carrier-concrete-abi-crossing-audit-plan.md (gap G1).
+status: RESOLVED 2026-06-21. The dead homogeneity call is now elided in
+  emit_stmt when an argument is a by-value (non-heap) aggregate; the
+  elaboration-time homogeneity check (and its TUR-E0001 on a genuinely
+  heterogeneous list) is unchanged, and scalar/float/cstr/heap-pointer lists
+  keep their existing codegen (zero snapshot churn). Fixture:
+  tests/fixtures/list-homog-byvalue-aggregate-element. `bash tests/run.sh`
+  green (1738 passed, 0 failed). See "Resolution" below.
 ---
 
 # `(list ...)` homogeneity helper collapses to the carrier for by-value aggregate elements
@@ -87,9 +92,51 @@ Alternatively (less preferred, re-introduces a carrier hop):
 The check body is a no-op (`(void)a; (void)b;`), so option 1 only needs the
 *signature* to match the by-value args; there is no body logic to port.
 
-## Validation
+## Resolution (2026-06-21)
 
-When fixed, the repro above compiles and the nested-container cell of the
-stress matrix (`(Cons (Option A))` over int/cstr/float) can be promoted to a
-fixture. Cross-reference: gap G1 in
+Neither fix direction above was taken. Investigation showed the homogeneity
+helper **cannot** be monomorphized the way the container constructors are: it
+has an **inline-C body** (`(void)a; (void)b;`), and an inline-C signature is
+fixed at the carrier -- there is no per-type C body to regenerate. More to the
+point, the call is **dead at runtime**: the homogeneity it enforces is a pure
+elaboration-phase concern (a genuinely heterogeneous list is still rejected
+with `TUR-E0001` during `tur check`, before any emission), and the body does
+nothing. The emitted carrier call was therefore pointless -- and the only
+reason it ever "worked" for scalars is that an int/float/cstr element coerces
+into the int64 carrier (float via an 8-byte bit-cast). A by-value aggregate
+(`Option__int`) cannot, which is the only case that broke.
+
+**Fix (`src/compiler/emit_stmt.c`, `EX_CALL` case).** When the callee is
+`tur-list-homog__` and an argument's resolved type is a by-value (non-`:heap`)
+aggregate (`type_uses_carrier_abi(at) && !type_is_heap_struct(at)`), emit
+nothing -- the element is still constructed once by `list-build__`. Scalar,
+float, cstr, and `:heap`-pointer elements keep coercing into the carrier and
+keep their existing emitted call, so **no existing fixture snapshot churns**.
+This also removes a latent redundant evaluation of every list element (the
+homogeneity chain previously re-emitted each element 2-3 times).
+
+**Fixture.** `tests/fixtures/list-homog-byvalue-aggregate-element` -- a
+3-element `(Cons (Option int))` literal that now constructs and round-trips
+through the typed accessors (`42 / 7 / 100`). `bash tests/run.sh` green
+(1738 passed, 0 failed). Heterogeneous lists are still rejected at elaboration
+(verified: `(list 1 "x")` -> `TUR-E0001`).
+
+### Newly-exposed downstream gaps (NOT this report)
+
+Fixing the homogeneity check let a `(Cons (Option int))` *build*. Two distinct,
+separately-tracked crossings remain before such a list is fully consumable:
+
+- **Generic int-carrier list helpers over a by-value-aggregate head segfault.**
+  `Cons` is `:heap` with `(tail :int)`, so `(:: xs :int)` + `list-length`
+  walks the chain as `{ int64 head; int64 tail; }`. A 16-byte by-value
+  `Option__int` head shifts `tail`, so the generic walk reads a bogus pointer
+  and crashes. The *typed* path (`.head` / ascribed `.tail`) works. Filed:
+  `docs/reported/heap-cons-byvalue-aggregate-head-breaks-int-carrier-list-helpers.md`.
+- **Nested instance-method dispatch on the element (G2).** `(enc @Cons (... (Cons (Option int))))`
+  dispatches `Enc [Cons]`'s `(enc (.head xs))` into `Enc [Option]`, which is
+  gap G2 (`docs/reported/constrained-instance-dispatch-nested-parametric-element-carrier-collapse.md`).
+
+These are why the *original* repro at the top of this report (which used
+`enc @Cons`) still does not fully run -- the homogeneity error was only the
+first of the chain. Cross-reference: gap G1 (now closed) in
 `docs/carrier-concrete-abi-crossing-audit-plan.md`.

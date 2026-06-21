@@ -93,7 +93,7 @@ constrained/parametric/HKT spec body and must consult the recovery routine.
 | 7 | `emit_expr.c:5325` | `EX_ASCRIBE` heap concrete cast | `emit_var_spec_arg_type` | [OK] | M7 |
 | 8 | `emit_core.c:1141`/`1318` | method-call dispatch re-resolution | `emit_reresolve_*` | [OK] for scalar/value-struct/`:heap` single-level | #475-#480 |
 | 9 | `emit_core.c:1308` | scan-time liveness companion | `emit_reresolve_method_fndef` | [OK] | #480 |
-| **G1** | `stdlib/list.tur:196` + poly-defn monomorphizer | `(list ...)` homogeneity helper `tur-list-homog__ [A] [a :A b :A]` | **none** | **[GAP]** | -- |
+| ~~G1~~ | `emit_stmt.c` `EX_CALL` | `(list ...)` homogeneity helper `tur-list-homog__` dead call elided for by-value aggregate args | n/a (elide) | **[FIXED]** | this branch |
 | **G2** | site 8, recursive case | method dispatch where the receiver element is **itself a parametric container** (`(.value x) : (Cons A)`) | partial | **[GAP]** | -- |
 | **G3** | `elab_typeclasses.c` instance-method ABI vs site 6 | instance method whose HEAD is a by-value applied struct (`Enc [(Option cstr)]`) takes the carrier param, but a by-value struct-**field** receiver passes the aggregate | none | **[GAP]** | -- |
 
@@ -134,20 +134,35 @@ constrained-instance-heap-field-dispatch: 42 | 7.1  | "hi"        (Cons over int
 
 Two-level composition breaks:
 
-### G1 -- `(Cons (Option A))`: list-homogeneity helper typed at the carrier
+### G1 -- `(Cons (Option A))`: list-homogeneity helper typed at the carrier -- **FIXED (this branch)**
 
-Building `(:: (list (some 42) (some 7)) (Cons (Option int)))` is a **hard C
+Building `(:: (list (some 42) (some 7)) (Cons (Option int)))` was a **hard C
 compile error**: the homogeneity helper `tur-list-homog__ [A] [a :A b :A]`
-(`stdlib/list.tur:196`) monomorphizes to its **carrier** spec
-`tur_hylist_hyhomog_un_un(int64_t, int64_t)`, but the elements are emitted as
-by-value `some__spec__Option__int(...)` aggregates (`Option__int`):
+(`stdlib/list.tur:196`) emits a single **carrier** C function
+`tur_hylist_hyhomog_un_un(int64_t, int64_t)` (its inline-C body fixes the
+signature at the carrier; it is not monomorphized), but the elements are
+emitted as by-value `some__spec__Option__int(...)` aggregates (`Option__int`):
 
 ```
 incompatible type for argument 1 of 'tur_hylist_hyhomog_un_un'
 note: expected 'int64_t' but argument is of type 'Option__int'
 ```
 
-Filed: `docs/reported/list-homog-helper-carrier-typed-byvalue-aggregate-element.md`
+**Fix:** the call is a compile-time-only homogeneity assertion (a heterogeneous
+list is still rejected with `TUR-E0001` at elaboration) whose inline-C body is a
+no-op -- the emitted runtime call is dead. `emit_stmt.c` now elides it when an
+argument is a by-value (non-`:heap`) aggregate; scalar/float/cstr/heap-pointer
+elements keep their existing carrier-coerced call (zero snapshot churn). The
+list of Options now constructs and round-trips through typed accessors. Fixture:
+`tests/fixtures/list-homog-byvalue-aggregate-element`. Suite green (1738/0).
+
+Resolved report archived at
+`docs/archive/list-homog-helper-carrier-typed-byvalue-aggregate-element.md`.
+Closing G1 exposed two distinct downstream crossings on the same example:
+the int-carrier `list-length` over a by-value-aggregate-headed `:heap` cons
+segfaults (filed:
+`docs/reported/heap-cons-byvalue-aggregate-head-breaks-int-carrier-list-helpers.md`),
+and the nested `enc` dispatch is gap G2.
 
 ### G2 -- `(Option (Cons A))`: inner instance method stays at the carrier signature
 
@@ -198,7 +213,8 @@ under P2.
 
 Crossing sites enumerated, shared recovery routine named, gaps G1/G2 found
 and filed (plus G3, filed independently on `main`). This converts the open
-surface from "unknown number of fish" to a **closeable list**.
+surface from "unknown number of fish" to a **closeable list**. **G1 is now
+closed** (this branch); G2/G3 remain and close together under P2.
 
 ### P1 -- Promote the composition stress matrix to fixtures (on green)
 
@@ -216,15 +232,16 @@ each gap closes -- a fixture is only committed once it PASSES, so the gate
 stays green (per CLAUDE.md). The minimal repros live in the two reported docs
 until then.
 
-### P2 -- Route the remaining sites through the shared recovery (close G1/G2/G3)
+### P2 -- Route the remaining sites through the shared recovery (close G2/G3)
 
-- **G1**: the polymorphic-defn monomorphizer must specialize
-  `tur-list-homog__`'s `A` to the by-value aggregate element type (mint a
-  `tur_hylist_hyhomog__Option__int` spec) instead of falling to the carrier
-  `_un_un` spec -- OR the `(list ...)` lowering must emit the homogeneity
-  args at the carrier ABI to match. Prefer the former (keeps the by-value
-  thread end-to-end). Touch: the poly-defn spec selection in the list-build
-  lowering / `elab_call.c` homogeneity path (`:3708`).
+- **G1**: DONE (this branch). The `tur-list-homog__` call is a dead
+  compile-time-only assertion (the homogeneity it enforces fires at
+  elaboration; its inline-C body is a no-op), so rather than monomorphize it,
+  `emit_stmt.c` elides it for by-value aggregate args. See the FIXED row in the
+  table and the G1 result subsection. Follow-up crossing on the same example
+  (int-carrier `list-length` over a by-value-aggregate-headed `:heap` cons) is
+  filed separately at
+  `docs/reported/heap-cons-byvalue-aggregate-head-breaks-int-carrier-list-helpers.md`.
 - **G2**: the dispatch re-resolver (`emit_reresolve_disp_type`,
   `emit_core.c:1141`) must recurse: when the receiver expression is a field
   extraction whose recovered type is *itself* a parametric container, mint /
