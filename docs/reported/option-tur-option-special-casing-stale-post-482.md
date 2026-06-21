@@ -10,9 +10,38 @@ severity: Medium-high. Two codegen sites still assume the pre-#482
   `T` when `T` embeds an `Option` field (hard C error: "unknown type name 'T'"
   + ok_val type cascade). Blocks `derive-json` over structs with `(Option T)`
   fields in rjungemann/turmeric-spices spices/json.
-status: OPEN -- found 2026-06-21 as a follow-up to #482; verified on `tur` from
-  `main` at 99cc8b3 / post-#482 (v0.22.0). Tracked as gap G5 in
-  docs/carrier-concrete-abi-crossing-audit-plan.md.
+status: OPEN (Site 1 LIKELY RESOLVED, Site 2 OPEN) -- found 2026-06-21 as a
+  follow-up to #482; verified on `tur` from `main` at 99cc8b3 / post-#482
+  (v0.22.0). Tracked as gap G5 in docs/carrier-concrete-abi-crossing-audit-plan.md.
+  UPDATE 2026-06-21: the G9 fix (branch claude/g2-carrier-concrete-abi-audit-3yzkhm)
+  targets exactly Site 1's `tur_option_t *` field-read reconstruction; a
+  self-contained repro of Site 1's mechanism (`Enc [Option]` over a `(Option int)`
+  struct field, dispatched through a typeclass method) now passes. Site 1 is very
+  likely closed, pending verification against the real `json/encode` derive-json
+  (in the absent turmeric-spices sibling). Site 2 (Result__T typedef ordering) is
+  independent and remains open. See "Status update" below.
+---
+
+## Status update (2026-06-21) -- Site 1 likely resolved by the G9 fix
+
+Site 1's defect is the stale `tur_option_t *` reconstruction inserted when an
+`Option` value read from a struct field is passed to a typeclass method. The G9
+fix (`field_read_emits_byvalue_aggregate` in `emit_expr.c`, see
+`docs/archive/constrained-instance-dispatch-parametric-container-element-collapse.md`)
+suppresses exactly that reconstruction: it resolves the field type through the
+receiver's concrete type, recognizes the field read as already a by-value
+aggregate, and skips the carrier->concrete bridge -- so `(.field x)` is passed
+directly as the embedded `Option__T` instead of being cast through
+`(tur_option_t *)(intptr_t)`.
+
+A self-contained reproduction of Site 1's mechanism -- a `(Option int)` struct
+field dispatched through a typeclass method whose instance is `Enc [Option]` --
+now compiles and prints correctly. The original Site 1 repro uses
+`json/encode`'s `Encode`/`Decode` (in the turmeric-spices sibling, not present
+in this checkout), so this report stays open until that exact path is verified.
+**Site 2 (the `Result__T` typedef-emission ordering) is a separate
+topological-sort bug and is NOT addressed by the G9 fix.**
+
 ---
 
 # Option's `tur_option_t` special-casing wasn't updated for #482

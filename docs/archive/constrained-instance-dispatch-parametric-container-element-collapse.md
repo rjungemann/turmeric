@@ -8,9 +8,53 @@ severity: Medium-high. SILENT miscompile / hard C error. `(enc @Cons (:: xs
   `(.head xs)` (a by-value `Option__int`) through the carrier representative
   `__inst_Enc_enc_int(int64_t)`: `error: incompatible type for argument 1 of
   '__inst_Enc_enc_Option'` / `'__inst_Enc_enc_int'`. The mirror of gap G2.
-status: OPEN -- found 2026-06-21 while fixing G2; verified pre-existing
-  (fails identically against the pre-G2 build). Gap G9 in
-  docs/carrier-concrete-abi-crossing-audit-plan.md.
+status: RESOLVED 2026-06-21 (gap G9). Fixed on
+  branch claude/g2-carrier-concrete-abi-audit-3yzkhm; fixture
+  tests/fixtures/constrained-instance-dispatch-parametric-container-element.
+  See "Resolution" below.
+---
+
+## Resolution (2026-06-21)
+
+Fixed. Two layers, both already half-handled by the G2 fix, then completed here:
+
+1. **Witness-side cell width.** The G2 changes (`emit_inst_head_matches` + the
+   nested-instance redirect) already made the single-level `@Cons` witness mint
+   the cell at the real element width -- `Cons__Option__int` (with an embedded
+   `Option__int head`), *not* a collapsed `Cons__int` -- and call the inner
+   Option by-value spec `__inst_Enc_enc_Option__spec__..._Option__int`. So the
+   "element collapses to int" framing in the original report was already cured
+   by G2; what remained was the dispatch argument.
+
+2. **Dispatch arg reconstruction (the actual remaining defect).** The inner
+   `(enc (.head xs))` call passed `(xs)->head` -- already an embedded by-value
+   `Option__int` -- but `(.head xs)`'s *elaborated* type is the erased int64
+   carrier, so the matched-spec arg bridge reconstructed it through a stale
+   `tur_option_t *` carrier cast:
+
+   ```c
+   tur_option_t *__t45 = (tur_option_t *)(intptr_t)((xs)->head);   // aggregate cast to ptr
+   ```
+
+   Fix: `field_read_emits_byvalue_aggregate` (`emit_expr.c`) resolves the field
+   type through the RECEIVER's concrete (active-spec) type rather than the
+   field's erased `e->type`, so a by-value aggregate field read is recognized as
+   already-concrete; the spurious carrier->concrete bridge at the matched-spec
+   dispatch arg is then suppressed and `(xs)->head` is passed directly.
+
+int prints `5`, float prints `7.1` (no miscompile). Fixture
+`tests/fixtures/constrained-instance-dispatch-parametric-container-element`.
+Suite green (1741/0).
+
+**This is the same `tur_option_t *`-reconstruction mechanism as G5 Site 1**
+(`docs/reported/option-tur-option-special-casing-stale-post-482.md`): a
+field-read Option passed to a typeclass method. A self-contained repro of that
+mechanism (`Enc [Option]` over a `(Option int)` struct field, dispatched) now
+passes, so G5 Site 1 is very likely resolved by this same fix -- but the exact
+G5 report exercises `json/encode`'s `derive-json` (in the absent turmeric-spices
+sibling) and G5 Site 2 (a `Result__T` typedef-ordering bug) is independent, so
+G5 stays open pending verification against the real spice.
+
 ---
 
 # `(Cons (Option A))` element collapses to the carrier at the witness, then misdispatches

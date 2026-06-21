@@ -359,6 +359,70 @@ static bool expr_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
     return false;
 }
 
+/* G9 (carrier<->concrete): true when a field read `(.field recv)` materializes
+ * a by-value (non-:heap) aggregate in C -- e.g. `(.head xs)` where xs is a
+ * monomorphized `Cons__Option__int *`, so `(xs)->head` is an embedded
+ * `Option__int` value, NOT the int64 carrier.  Unlike `expr_emits_byvalue_
+ * carrier_abi`, this resolves the field type through the RECEIVER's concrete
+ * type (consulting the active spec's arg_types for a spec-param receiver), so it
+ * still fires when the field's own elaborated `e->type` was erased to the int64
+ * carrier (a parametric `(Cons A)` head field).  Used to suppress a spurious
+ * carrier->concrete reconstruction (the stale `tur_option_t *` cast) at a
+ * dispatch arg that is already the concrete aggregate. */
+static bool field_read_emits_byvalue_aggregate(EmitCtx *ctx, const Expr *e) {
+    if (!ctx || !e || e->kind != EX_GET_FIELD || !e->as.get_field_.struct_expr)
+        return false;
+    const Expr *se = e->as.get_field_.struct_expr;
+    /* Resolve the receiver-container's concrete type for the active spec: a spec
+     * param keeps its erased parametric type, so prefer the spec's arg_types[]
+     * (mirrors emit_reresolve_disp_type / emit_var_spec_arg_type). */
+    Type rt;
+    bool have_rt = false;
+    if (se->kind == EX_VAR && se->as.var.binding &&
+        ctx->current_abi_specialization && ctx->current_abi_specialization->fn) {
+        FnDef *fd = ctx->current_abi_specialization->fn;
+        const EmitAbiSpecialization *aspec = ctx->current_abi_specialization;
+        for (uint8_t pi = 0; pi < fd->n_params && pi < aspec->n_args; pi++) {
+            if (fd->params[pi] == se->as.var.binding) {
+                rt = aspec->arg_types[pi];
+                have_rt = true;
+                break;
+            }
+        }
+    }
+    if (!have_rt) rt = emit_resolve_type(ctx, se->type);
+
+    StructDef *sd = NULL;
+    Type sargs[16];
+    uint8_t sn = 0;
+    uint32_t fidx = e->as.get_field_.field_idx;
+    Type fr;
+    bool fr_owned = false;
+    bool have_fr = false;
+    if (type_extract_struct_app(&rt, &sd, sargs, &sn) && sd && fidx < sd->n_fields) {
+        const StructField *f = &sd->fields[fidx];
+        if (f->full_type && f->full_type->kind == TY_TYVAR) {
+            fr = substitute_struct_app_type(f->full_type, sd, sargs);
+            fr_owned = (fr.kind == TY_APP);
+            have_fr = true;
+        } else if (f->full_type) {
+            fr = *f->full_type;
+            have_fr = true;
+        }
+    } else if (rt.kind == TY_STRUCT && rt.as.struct_.def &&
+               rt.as.struct_.def->n_type_params == 0 &&
+               fidx < rt.as.struct_.def->n_fields) {
+        const StructField *f = &rt.as.struct_.def->fields[fidx];
+        if (f->full_type) { fr = *f->full_type; have_fr = true; }
+    }
+    if (!have_fr) return false;
+
+    bool result = type_uses_carrier_abi(fr) && !type_is_heap_struct(fr) &&
+                  type_has_concrete_codegen_layout(&fr);
+    if (fr_owned) free_struct_app_type(fr);
+    return result;
+}
+
 /* instance-method-return-carrier-bridge: true when the tail leaf/leaves of `e`
  * already emit a *by-value* concrete carrier-ABI aggregate rather than the
  * int64 carrier handle.  Walks the same tail forms as
@@ -3083,6 +3147,11 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     !expr_is_pbp_param(ctx, emit_arg) &&
                     !spec_lowers_to_int64 &&
                     type_kind_is_aggregate(matched_spec->arg_types[i].kind) &&
+                    /* G9: a by-value aggregate field read (`(.head xs)` off a
+                     * monomorphized cell) is ALREADY the concrete aggregate; the
+                     * erased TY_INT below would otherwise reconstruct it through a
+                     * stale `tur_option_t *` carrier cast. */
+                    !field_read_emits_byvalue_aggregate(ctx, emit_arg) &&
                     (emit_arg->type.kind == TY_INT ||
                      (type_kind_is_aggregate(emit_arg->type.kind) &&
                       type_uses_carrier_abi(emit_arg->type) &&
