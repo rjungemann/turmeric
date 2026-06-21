@@ -2162,11 +2162,27 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                         Type *fn_type = (Type *)arena_alloc(e->arena, sizeof(Type));
                         memset(fn_type, 0, sizeof(Type));
                         Binding *ctor_b = scope_lookup(e->scope, ctor_sym);
+                        /* The constructor's kind follows its real arity: a unary
+                         * constructor (Option : * -> *) applied to one arg is a
+                         * fully-applied type of kind *, while a binary one
+                         * (Result : * -> * -> *) applied to one arg is still a
+                         * (* -> *) constructor.  Hardcoding KIND_ARROW2 here
+                         * mis-classified an applied unary head like `(Option cstr)`
+                         * as (* -> *), which then promoted a STAR-declared class
+                         * (e.g. Enc) to higher kind and rejected its other
+                         * fully-applied instances.  Derive the kind from the def's
+                         * n_type_params when known; fall back to the legacy binary
+                         * assumption only for an opaque (def == NULL) constructor. */
                         if (ctor_b && (ctor_b->type.kind == TY_ADT ||
                                        (ctor_b->type.kind == TY_STRUCT &&
                                         ctor_b->type.as.struct_.def))) {
                             *fn_type = ctor_b->type;
-                            fn_type->hkt_kind = KIND_ARROW2;
+                            uint32_t ctor_arity = (ctor_b->type.kind == TY_ADT)
+                                ? ctor_b->type.as.adt_.def->n_type_params
+                                : ctor_b->type.as.struct_.def->n_type_params;
+                            fn_type->hkt_kind = (ctor_arity > 0)
+                                ? kind_for_arity(ctor_arity)
+                                : KIND_ARROW2;
                         } else {
                             fn_type->kind = TY_STRUCT;
                             fn_type->copy_kind = CK_MOVE;
@@ -2180,8 +2196,10 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                         memset(&type_args[i], 0, sizeof(type_args[i]));
                         type_args[i].kind = TY_APP;
                         type_args[i].copy_kind = CK_MOVE;
-                        /* fn of KIND_ARROW2 applied to one arg → KIND_ARROW */
-                        type_args[i].hkt_kind = KIND_ARROW;
+                        /* Result kind = constructor kind with one arg applied
+                         * (ARROW2 -> ARROW for a binary head; ARROW -> STAR for a
+                         * fully-applied unary head). */
+                        type_args[i].hkt_kind = kind_apply_one(fn_type->hkt_kind);
                         type_args[i].as.app.fn  = fn_type;
                         type_args[i].as.app.arg = arg_type_ptr;
                         /* Store constructor sym for name mangling (e.g. "result") */

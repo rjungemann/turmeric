@@ -1,0 +1,24 @@
+; Regression: docs/reported/applied-unary-instance-head-promotes-star-class.md
+;
+; A STAR-declared typeclass (param kind *) must accept BOTH a fully-applied
+; concrete instance head like `[cstr]` AND an applied UNARY constructor head
+; like `[(Option cstr)]` -- the latter is also fully applied (kind *), not a
+; (* -> *) constructor.  Previously the applied-head parser hardcoded the
+; constructor's kind to `* -> * -> *` ("assume binary"), so `(Option cstr)`
+; was mis-classified as kind `* -> *`, which promoted the class to higher
+; kind and then rejected the sibling `[cstr]` instance with a spurious
+; TUR-E0012 kind mismatch.  The constructor kind now follows its real arity.
+
+(defclass Enc [a] (enc [x] : cstr))
+(definstance Enc [cstr] (enc [x] : cstr x))
+; Applied UNARY head: (Option cstr) is fully applied -> kind *, same class.
+(definstance Enc [(Option cstr)] (enc [x] : cstr
+  (if (.is-some x) (enc (.value x)) "null")))
+
+(defn main [] : int
+  (let [o (:: (some "hi") (Option cstr))]
+    (println (enc o)))                 ; hi  -- dispatch to the Option instance
+  (let [o (:: (none) (Option cstr))]
+    (println (enc o)))                 ; null
+  (println (enc "bare"))               ; bare -- dispatch to the cstr instance
+  0)
