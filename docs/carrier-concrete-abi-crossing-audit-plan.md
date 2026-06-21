@@ -76,6 +76,14 @@ The defect is **not** that this routine is wrong. It is that it is invoked
 **ad hoc, one emit site at a time** -- each PR discovers another expression
 context that forgot to consult it.
 
+**Making these routines mandatory chokepoints -- so a new emit site is correct
+by construction instead of being the next fish -- is the structural follow-up
+tracked in
+[docs/carrier-crossing-recovery-routing-plan.md](carrier-crossing-recovery-routing-plan.md).**
+That plan exists precisely so the unification is not lost between one-off gap
+closures (the failure mode that produced this whole audit). Close each gap below
+by *adding to a chokepoint*, not by adding another site-local branch.
+
 ## 3. Crossing-site audit
 
 Every site below is a place where a parametric payload can appear inside a
@@ -99,6 +107,7 @@ constrained/parametric/HKT spec body and must consult the recovery routine.
 | **G4** | int-carrier list helpers (`list-length`, ...) vs `(:: xs :int)` coercion | generic carrier walk of a `:heap` `Cons` whose head is a **by-value aggregate** reads `tail` at the wrong offset and **segfaults** (consumer side of G1) | none | **[GAP]** | -- |
 | **G5** | `Option`'s legacy `tur_option_t` special-casing vs #482 | (S1) a struct-field-read `Option` passed to a typeclass method inserts a stale `tur_option_t *`->aggregate reconstruction (`Option` only; `Pair` is the working control); (S2) `Result__T` typedef emitted before `T` once `T` embeds an `(Option ...)` field | none | **[GAP]** | -- |
 | **G6** | HKT `fmap` closure-thunk + cata result (fn-value spec path) | a generic `cata = alg . fmap (cata alg) . unroll` monomorphizes the recursive closure handed to `fmap` with the wrong per-carrier thunk fn-pointer ABI (cstr -> segfault) and threads the `(:: (fmap ...) (ReF B))` result through the int64 carrier (int/bool -> boxed, wrong `=`) | none | **[GAP]** | -- |
+| **G7** | site 8, return/decode side, sum field | a `defdata`-sum struct field's `(decode ... (Result Cmd cstr))` dispatches to the generic `decode_T` at the ENCLOSING struct's result type instead of the field's `Decode [Cmd]` instance (struct fields resolve right; ADT heads do not) | partial | **[GAP]** | -- |
 
 Sites 1-9 are the fish already caught. **G1, G2, G3, and G4 are the gaps the
 composition stress matrix exposed** (section 5); **G5** is a #482 follow-up
@@ -297,6 +306,38 @@ through an HKT `fmap`. Verified on turmeric 0.22.0, main @ `99cc8b3`
 (build-release). Filed:
 `docs/reported/hkt-fmap-cata-carrier-miscompile.md`.
 
+### G7 -- `defdata` sum as a `derive-json` struct field decodes to the wrong instance (peripheral to #482)
+
+A struct field whose type is a `defdata` sum has its `derive-json` `Decode` body
+dispatch the field decode to the **generic `decode` method specialized at the
+enclosing struct's result type** rather than the field type's own `Decode [Cmd]`
+instance:
+
+```c
+.cmd = ok_val__spec__int64_t_Result__Cmd__cstr(
+         __inst_Decode_decode_T__spec__Result__Event__cstr_int64_t_int64_t(   // (!) decode_T, Event's result
+           doc, json_obj_get(doc, val, "cmd")))
+```
+
+`error: incompatible type for argument 1 of 'ok_val__spec__int64_t_Result__Cmd__cstr'`.
+A nested **struct** field resolves correctly (`__inst_Decode_decode_Point`), so
+this is specific to sum-typed (ADT) fields. Standalone `Decode [Cmd]` works, so
+the instance exists -- it just is not selected from inside another instance's
+body for a sum field.
+
+This is the **return/decode side** of the same dispatch re-resolver as G2/G3
+(`emit_reresolve_disp_type`). The `(decode ... (Result Cmd cstr))` call is
+return-dispatched; its class var is recovered from the ascription by
+`emit_pattern_extract_classvar`. For a struct the recovered `Point` wins; for a
+`defdata` sum the recovered `Cmd` (TY_ADT) does **not** take precedence over the
+enclosing spec's result type, so the call stays on the generic `decode_T`. Fix:
+the ascription-derived dispatch type must win over the enclosing-instance result
+type, and the concrete-instance lookup must match a TY_ADT instance head (not
+only TY_STRUCT) -- per the dispatch-side chokepoint discipline of
+`docs/carrier-crossing-recovery-routing-plan.md`. Verified on `tur` from `main`
+at `99cc8b3` (post-#482). Filed:
+`docs/reported/derive-json-sum-field-decodes-wrong-instance.md`.
+
 ## 6. Plan (phased)
 
 ### P0 -- Audit (this document). DONE.
@@ -304,11 +345,14 @@ through an HKT `fmap`. Verified on turmeric 0.22.0, main @ `99cc8b3`
 Crossing sites enumerated, shared recovery routine named, gaps G1/G2 found
 and filed (plus G3 and G5, filed independently as #482 follow-ups). This
 converts the open surface from "unknown number of fish" to a **closeable
-list**. **G1 is now closed** (this branch); G2/G3/G4/G5/G6 remain and are
+list**. **G1 is now closed** (this branch); G2/G3/G4/G5/G6/G7 remain and are
 tracked as table rows under P2 (G4 is the consumer-side crossing that closing
 G1 exposed; G5 is the Option-specific residual special-casing #482 left stale;
 G6 is the HKT `fmap` closure-thunk/cata-result crossing on the fn-value spec
-path).
+path; G7 is the return/decode-side dispatch gap for a `defdata`-sum struct
+field). The structural follow-up that routes all of these through mandatory
+recovery chokepoints is
+[docs/carrier-crossing-recovery-routing-plan.md](carrier-crossing-recovery-routing-plan.md).
 
 ### P1 -- Promote the composition stress matrix to fixtures (on green)
 
@@ -326,7 +370,11 @@ each gap closes -- a fixture is only committed once it PASSES, so the gate
 stays green (per CLAUDE.md). The minimal repros live in the two reported docs
 until then.
 
-### P2 -- Route the remaining sites through the shared recovery (close G2/G3/G4)
+### P2 -- Route the remaining sites through the shared recovery (close G2-G7)
+
+Each gap closes by *adding to a chokepoint* per
+[docs/carrier-crossing-recovery-routing-plan.md](carrier-crossing-recovery-routing-plan.md),
+not by adding another site-local gated branch.
 
 - **G1**: DONE (this branch). The `tur-list-homog__` call is a dead
   compile-time-only assertion (the homogeneity it enforces fires at
@@ -373,6 +421,15 @@ until then.
   `emit_abi_scan_fn_values` / the `poly-closure-result-specialization` path
   rather than the dispatch re-resolver, so it closes independently of G2/G3/G5;
   pin the cstr/pointer crash first (clearest signal).
+- **G7** (peripheral to #482,
+  `docs/reported/derive-json-sum-field-decodes-wrong-instance.md`): in
+  `emit_reresolve_disp_type`, let an ascription-derived dispatch type
+  (`(Result Cmd cstr)` -> `Cmd`) win over the enclosing instance's result type,
+  and match a TY_ADT instance head in the concrete-instance lookup
+  (`emit_concrete_inst_method_fndef` / `emit_inst_head_matches`), so a sum-typed
+  field selects `Decode [Cmd]` the way a struct field already selects
+  `Decode [Point]`. Same routine as G2/G3 (dispatch side, return/decode
+  direction); a chokepoint fix, not a derive-json-specific patch.
 
 ### P3 -- Audit-as-regression-guard
 
@@ -380,6 +437,13 @@ Keep this table current: any future PR that adds a recovery call site adds a
 row here and a stress-matrix cell, so the audit stays the single source of
 truth for "which crossings are covered." A crossing without a row is a fish
 waiting to be found by a spice -- the exact loop this plan exists to end.
+
+The **runtime enforcement** of this guard is R3/R4 of
+[docs/carrier-crossing-recovery-routing-plan.md](carrier-crossing-recovery-routing-plan.md):
+a Debug-build assertion that a carrier value / method dispatch reaching emission
+with an unresolved parametric param type *without* passing a chokepoint is a
+hard ICE -- turning "forgot to route" from a silent downstream miscompile into a
+local, immediate failure.
 
 ## 7. Validation
 
