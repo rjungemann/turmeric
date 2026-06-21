@@ -98,6 +98,7 @@ constrained/parametric/HKT spec body and must consult the recovery routine.
 | **G3** | `elab_typeclasses.c` instance-method ABI vs site 6 | instance method whose HEAD is a by-value applied struct (`Enc [(Option cstr)]`) takes the carrier param, but a by-value struct-**field** receiver passes the aggregate | none | **[GAP]** | -- |
 | **G4** | int-carrier list helpers (`list-length`, ...) vs `(:: xs :int)` coercion | generic carrier walk of a `:heap` `Cons` whose head is a **by-value aggregate** reads `tail` at the wrong offset and **segfaults** (consumer side of G1) | none | **[GAP]** | -- |
 | **G5** | `Option`'s legacy `tur_option_t` special-casing vs #482 | (S1) a struct-field-read `Option` passed to a typeclass method inserts a stale `tur_option_t *`->aggregate reconstruction (`Option` only; `Pair` is the working control); (S2) `Result__T` typedef emitted before `T` once `T` embeds an `(Option ...)` field | none | **[GAP]** | -- |
+| **G6** | HKT `fmap` closure-thunk + cata result (fn-value spec path) | a generic `cata = alg . fmap (cata alg) . unroll` monomorphizes the recursive closure handed to `fmap` with the wrong per-carrier thunk fn-pointer ABI (cstr -> segfault) and threads the `(:: (fmap ...) (ReF B))` result through the int64 carrier (int/bool -> boxed, wrong `=`) | none | **[GAP]** | -- |
 
 Sites 1-9 are the fish already caught. **G1, G2, G3, and G4 are the gaps the
 composition stress matrix exposed** (section 5); **G5** is a #482 follow-up
@@ -266,6 +267,36 @@ topological-sort gap that #482 exposed, riding along because it blocks the same
 use case. Filed:
 `docs/reported/option-tur-option-special-casing-stale-post-482.md`.
 
+### G6 -- generic `cata` via `Functor` `fmap`: closure-thunk ABI + boxed cata result (spice-filed)
+
+Found by the turmeric-spices Track C U5 regex prototype
+(`spices/regex/src/regex/tree.tur`). The textbook generic catamorphism
+`cata alg = alg . fmap (cata alg) . unroll` over a `Fix`-style sum functor
+type-checks but miscompiles per carrier `B`:
+
+- **cstr (pointer) carrier -> segfault.** The recursive
+  `(fn [c : Re] : B (re-cata alg c))` handed to `fmap` is stored into the
+  thunk's `__fn` slot at the wrong function-pointer type:
+  `__t80->__fn = (tur_thunk_const_char___int64_t_t)..._fn_1061;` -- a
+  `-Wint-conversion` warning, then a crash.
+- **int / bool carrier -> boxed result, wrong equality.** It prints the right
+  value, but `(= 4 (re-cata size-alg e))` is **false** and a `(ReF bool)`
+  algebra folds the wrong branch (`or false true -> false`): the
+  `(:: (fmap ...) (ReF B))` result threads through the int64 carrier (boxed)
+  instead of by value.
+
+Direct structural recursion (no `fmap`) is correct, localizing the defect to
+the `fmap`-driven path. Unlike G2/G3 (dispatch re-resolution over a field-read
+aggregate **value**), G6 lives in the **fn-value / closure-thunk** specialization
+machinery (`emit_abi_scan_fn_values`, the `poly-closure-result-specialization`
+float-spec path): the per-carrier thunk signature must follow `B`, and the cata
+result must be unboxed to `B`'s native representation. The existing
+closure-thunk machinery already special-cases float; G6 is that same problem
+generalized to a pointer (`cstr`) and a sub-int64 (`bool`) carrier, reached
+through an HKT `fmap`. Verified on turmeric 0.22.0, main @ `99cc8b3`
+(build-release). Filed:
+`docs/reported/hkt-fmap-cata-carrier-miscompile.md`.
+
 ## 6. Plan (phased)
 
 ### P0 -- Audit (this document). DONE.
@@ -273,9 +304,11 @@ use case. Filed:
 Crossing sites enumerated, shared recovery routine named, gaps G1/G2 found
 and filed (plus G3 and G5, filed independently as #482 follow-ups). This
 converts the open surface from "unknown number of fish" to a **closeable
-list**. **G1 is now closed** (this branch); G2/G3/G4/G5 remain and are tracked
-as table rows under P2 (G4 is the consumer-side crossing that closing G1
-exposed; G5 is the Option-specific residual special-casing #482 left stale).
+list**. **G1 is now closed** (this branch); G2/G3/G4/G5/G6 remain and are
+tracked as table rows under P2 (G4 is the consumer-side crossing that closing
+G1 exposed; G5 is the Option-specific residual special-casing #482 left stale;
+G6 is the HKT `fmap` closure-thunk/cata-result crossing on the fn-value spec
+path).
 
 ### P1 -- Promote the composition stress matrix to fixtures (on green)
 
@@ -331,6 +364,15 @@ until then.
   Coordinate with G3 (Site 1 is the Option-only caller side of the same
   field-read + typeclass-dispatch boundary); Site 2 is an independent
   typedef-ordering fix.
+- **G6** (spice-filed,
+  `docs/reported/hkt-fmap-cata-carrier-miscompile.md`): route the recursive
+  closure handed to `fmap` through a per-carrier fn-value spec whose thunk
+  fn-pointer signature follows `B` (not the int64 carrier), and unbox the
+  `(:: (fmap ...) (ReF B))` cata result to `B`'s native representation. This is
+  the closure-thunk sibling of the value-ABI gaps -- it touches
+  `emit_abi_scan_fn_values` / the `poly-closure-result-specialization` path
+  rather than the dispatch re-resolver, so it closes independently of G2/G3/G5;
+  pin the cstr/pointer crash first (clearest signal).
 
 ### P3 -- Audit-as-regression-guard
 
