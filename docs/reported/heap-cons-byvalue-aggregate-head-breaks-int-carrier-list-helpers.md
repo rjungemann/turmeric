@@ -106,7 +106,138 @@ v1, with real regression risk to the currently-working typed path -- it is the
 kind of architecturally significant change to confirm direction on before
 undertaking, not a rough edge to patch in passing.
 
+## Monomorphization route (option 2): scope, refined shape, and estimate
+
+### The one shape that actually works
+
+You cannot make the tail recursive (`tail : (Cons A)`): `elab_structs.c`
+(`struct_field_user_type_storage`, ~line 190) **explicitly excludes
+self-referential by-value struct fields** from inline layout, and `:heap` forces
+carrier storage regardless. So the tail link stays `:int`.
+
+The route that works keeps `(tail :int)` but makes the helpers element-aware.
+Crucially, **typed field access already reads the correct offset** -- `(.head xs)`
+and `(.tail xs)` on a value typed `(Cons A)` lower against the concrete
+`Cons__Option__int` layout (this is exactly why the typed path in the
+`list-homog-byvalue-aggregate-element` fixture works while the `:int` carrier walk
+segfaults). So the refined shape is:
+
+1. Re-type the leaf helpers from `[l : int]` to `[A] [xs : (Cons A)]` and
+   **rewrite their bodies in pure Turmeric using `(.head xs)` / `(.tail xs)`,
+   retiring the hand-written inline-C** that casts to
+   `struct { int64_t head; int64_t tail; }`. The compiler already lays out the
+   typed read at the right stride, so `list-length` becomes a plain recursive
+   count over `(.tail xs)` -- no `__TUR_TY_` template needed for these.
+2. `(.tail xs)` yields the field's declared `:int`; re-ascribe it `(:: _ (Cons A))`
+   to keep A threaded through the recursion **without changing the struct**.
+3. Thread A through the remaining pure-Turmeric helpers (`list-eq?`,
+   `__cons-fmap`, `list-concat`, `list-reverse`) and the `Eq [Cons]` instance.
+4. **Stop erasing**: drop `(:: xs :int)` where it feeds a list helper, so the spec
+   keys on the concrete element at the call site.
+
+This is the **same move M4c-pre used** for `Eq Tuple2`/`Eq Pair`/`Eq Result`
+(retire the inline-C carrier helper, consult by-value fields via dispatch) -- see
+the landmines below.
+
+### Estimate
+
+**Medium--large; ~1--2 weeks of careful work.** Not greenfield: the inline-C
+`__TUR_TY_<NAME>__` template mechanism (`emit_core.c:2104`) and the ABI
+specializer exist and are exercised by ~9 fixtures (`inline-c-template-spec`,
+...). The refined shape above mostly *avoids* templating by going pure-Turmeric
+on the leaf helpers (cheaper, per M4c-pre), and the template is the fallback only
+if some helper genuinely can't be expressed without inline-C. The cost is in
+correctness threading and the blast radius across the ~69 `(:: ... :int)`
+coercion sites in stdlib (only ~3 list-specific; the rest are monad/typeclass
+glue in `parsec`/`logic`/`backtrack`/`zipper`/`sized-buf`, relevant only where
+they funnel a *list* through an `:int` state slot).
+
+## Lessons from prior monomorphization false starts (read before starting)
+
+Monomorphization has stalled here repeatedly. The concrete landmines, each from a
+resolved archive doc:
+
+1. **Retire the inline-C carrier helper; don't try to monomorphize it in place.**
+   `docs/archive/m4c-stdlib-carrier-helpers-block-dispatch-rewrite.md`: per-method
+   ABI was blocked because instance bodies delegated to inline-C helpers
+   (`tuple2-eq-carrier?`) that hard-cast `Tuple2 *p = (Tuple2 *)(intptr_t)x`.
+   Re-elaborating the body by-value doesn't help while the helper still declares
+   `int64_t`. The fix (RESOLVED 2026-06-13) rewrote the 3 instance bodies
+   (`stdlib/tuple.tur:473`, `stdlib/pair.tur:111`, `stdlib/result.tur:239`) to
+   read `(.fst x)`/`(.snd x)` directly and **dropped** the carrier helpers. Apply
+   the same to the list helpers: rewrite to typed field access, retire the cast.
+2. **Inline-C bodies are a hard contract to the int64 carrier; forcing a spec on
+   them miscompiles.** `docs/archive/generic-inline-c-struct-arg-monomorphises-to-int64.md`:
+   always-force per-instantiation broke 24 fixtures whose inline-C hand-coded
+   `int64_t *buf = malloc(...)`. The gate was narrowed to only specialize inline-C
+   when a slot is a real `TY_STRUCT` by-value type or the body carries a
+   `__TUR_TY_` template (`emit_module.c:2398`). Don't widen that gate to force the
+   list helpers; rewrite them instead (landmine 1).
+3. **Sibling specs drop silently when AST passes field-copy call nodes.**
+   `docs/archive/m5-eq-vec-byval-rewrite-drops-sibling-specs.md`: rewriting one
+   instance body perturbed the spec worklist and an *unrelated* `thead__spec__int`
+   was never minted because a CPS pass field-copied an `EX_CALL` and dropped
+   `call_.abi_bindings`. Specs key on node identity, not just `(binding,
+   arg_types)`. After rewriting list helpers, verify transitively that other
+   monomorphizations still intern -- diff emitted C / `emit-abi-trace`, don't trust
+   "it compiled."
+4. **Partial monomorphization makes two coexisting ABI views that miscompile.**
+   `docs/archive/sc7-carrier-duality-plan.md`,
+   `docs/archive/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md`: a helper
+   whose *body/result* went by-value while its *dispatch dict slot* stayed int64
+   produced a fn declared `int64_t`, a body returning `Schema__int`, and a call
+   site binding `int64_t` -- three mismatches. Don't monomorphize a list helper's
+   return without the call boundary that consumes it.
+5. **The carrier bridge stays load-bearing for abstract-element dispatch; don't
+   plan to delete it.** `m3-...`: deleting `emit_carrier_bridge` regressed
+   1186 fixtures / 2429 crossings, dominated by `Eq [Cons]`'s carrier base
+   recursing via `(:: t1 (Cons A))` for abstract `A`. The re-ascription in step 2
+   above is exactly that pattern -- it works *with* the bridge present (correct,
+   one bridge crossing per step), so keep the bridge; G4 is not a bridge-deletion
+   task.
+6. **The defect is invisible without a direct concrete-element test.** `m3-...`:
+   the `Eq [Cons]` carrier-base miscompile shipped latent because no fixture
+   exercised `(eq? cons cons)` with concrete elements. Add the
+   `(Cons (Option int))` aggregate-element fixtures **first (red)**, ASan on, and
+   keep the scalar/pointer-element path (`Cons int`, `Cons cstr` -- the bulk of
+   existing usage) green at every step.
+7. **Don't assume "the carrier disappears after we ship this."**
+   `docs/archive/end-to-end-monomorphization-plan.md` (+ `-2.md`, why a second plan
+   was needed) and `m2b-stdlib-migration-blocked-on-carrier-fallback.md`: every
+   attempt to rewrite `ok`/`some`/etc. off the carrier required a whole-call-graph
+   prerequisite (M4 per-method ABI, blocked on HKT elaborator threading) and never
+   landed in isolation -- the generic carrier-fallback emit kept producing
+   `(int64_t){...designated init...}`, which C rejects. Design the list rewrite to
+   work **both** by-value (concrete calls) **and** carrier (abstract dispatch),
+   like `unwrap-or`'s by-value-body-plus-carrier-shim pattern.
+
+### Why list is more tractable than the general case
+
+`docs/archive/phase4-carrier-helper-inventory.md`: after the by-value migration,
+the *genuinely* carrier-essential helpers are the ones walking heterogeneous /
+runtime-erased memory (HAMT `set-eq?`/`map-eq-raw?`). A list is **homogeneous** --
+all elements are one type A -- so once A is threaded (steps 1-2) the carrier cast
+can be retired entirely, exactly as M4c-pre did for the fixed-arity structs. The
+list's only extra difficulty over Tuple2/Pair/Result is the *recursive* `:int`
+tail, handled by the re-ascription in step 2.
+
+### De-risking order
+
+Red aggregate-element fixtures first; convert one leaf helper at a time
+(`list-head`/`list-tail`/`list-length`), then the recursive pure-Turmeric helpers,
+then un-erase call sites module by module (`list-typed` first, the monads last).
+Keep the scalar/pointer-element path green at every step -- it is the existing
+bulk of usage and the regression tripwire. Verify with `emit-abi-trace` (not just
+"it compiled") that sibling specs still intern (landmine 3).
+
 ## Cross-reference
 
 `docs/carrier-concrete-abi-crossing-audit-plan.md` -- downstream of gap G1;
-distinct from gap G2 (nested instance-method dispatch).
+distinct from gap G2 (nested instance-method dispatch). Prior monomorphization
+history: `docs/archive/m4c-stdlib-carrier-helpers-block-dispatch-rewrite.md`,
+`docs/archive/generic-inline-c-struct-arg-monomorphises-to-int64.md`,
+`docs/archive/m5-eq-vec-byval-rewrite-drops-sibling-specs.md`,
+`docs/archive/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md`,
+`docs/archive/sc7-carrier-duality-plan.md`,
+`docs/archive/phase4-carrier-helper-inventory.md`,
+`docs/archive/end-to-end-monomorphization-plan.md` (+ `-2.md`).

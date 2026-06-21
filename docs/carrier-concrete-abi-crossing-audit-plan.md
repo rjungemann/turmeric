@@ -629,6 +629,13 @@ defect, not a carrier crossing).
 - **G4** -- generic int-carrier list helpers over a by-value-aggregate-headed
   `:heap` cons. No small safe fix (box the head -> changes the typed-path
   layout; or monomorphize the list helpers per element -> large). Carrier-family.
+  The report now carries a scoped estimate of the monomorphization route
+  (medium--large, ~1--2 weeks; refined shape = retire the inline-C and rewrite
+  the leaf helpers in pure Turmeric over typed `.head`/`.tail`, re-ascribe the
+  `:int` tail to `(Cons A)`) plus a digest of the prior monomorphization
+  false-starts to avoid (M4c inline-C contract, the inline-C spec gate, silent
+  sibling-spec drops, two-ABI-view miscompiles, the load-bearing carrier bridge):
+  `docs/reported/heap-cons-byvalue-aggregate-head-breaks-int-carrier-list-helpers.md`.
 - **G6 (remaining half)** -- the HKT `fmap` closure-thunk per-carrier ABI. The
   spec-selection half is FIXED (int no longer miscompiles, cstr no longer
   segfaults); the recursive `fmap` closure is still lifted to a single
