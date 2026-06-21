@@ -96,13 +96,18 @@ constrained/parametric/HKT spec body and must consult the recovery routine.
 | ~~G1~~ | `emit_stmt.c` `EX_CALL` | `(list ...)` homogeneity helper `tur-list-homog__` dead call elided for by-value aggregate args | n/a (elide) | **[FIXED]** | this branch |
 | **G2** | site 8, recursive case | method dispatch where the receiver element is **itself a parametric container** (`(.value x) : (Cons A)`) | partial | **[GAP]** | -- |
 | **G3** | `elab_typeclasses.c` instance-method ABI vs site 6 | instance method whose HEAD is a by-value applied struct (`Enc [(Option cstr)]`) takes the carrier param, but a by-value struct-**field** receiver passes the aggregate | none | **[GAP]** | -- |
+| **G4** | int-carrier list helpers (`list-length`, ...) vs `(:: xs :int)` coercion | generic carrier walk of a `:heap` `Cons` whose head is a **by-value aggregate** reads `tail` at the wrong offset and **segfaults** (consumer side of G1) | none | **[GAP]** | -- |
 
-Sites 1-9 are the fish already caught. **G1, G2, and G3 are the gaps the
+Sites 1-9 are the fish already caught. **G1, G2, G3, and G4 are the gaps the
 composition stress matrix exposed** (section 5). G3 was filed independently on
 `main` by the maintainer (`docs/reported/instance-method-byvalue-struct-field-receiver-abi-mismatch.md`,
 #482-era) -- same family, same fix direction; it is the single-level
 struct-field-receiver companion of G2's nested-container dispatch, and the two
-should close together under P2.
+should close together under P2. G4 is the **consumer-side** crossing that
+closing G1 exposed: the same `(Cons (Option int))` value that now *builds*
+segfaults when walked through the generic int-carrier list API. It is tracked
+here as a first-class row -- not buried in prose -- precisely because this
+family of bug, left only as a side note, gets lost and resurfaces.
 
 ## 4. Why composition is the multiplier (the user's HKT/compose intuition)
 
@@ -207,6 +212,26 @@ side, same fix direction (emit the method with the concrete by-value parameter,
 monomorphized per type, and bridge carrier-ABI call sites). Closes with G2
 under P2.
 
+### G4 -- `(Cons (Option int))` consumed via the int-carrier list API: segfault (consumer side of G1)
+
+Exposed by closing G1. `Cons` is `(defstruct Cons :heap [A] (head A) (tail :int))`,
+and the generic int-carrier list helpers walk a chain as a fixed
+`struct { int64_t head; int64_t tail; }`. With a by-value aggregate head the real
+cell is `Cons__Option__int { Option__int head; int64_t tail; }`, so `tail` no
+longer sits at offset 8 -- the carrier walk reads it from inside the head
+aggregate, follows a bogus pointer, and crashes:
+
+```turmeric
+(let [xs (:: (list (some 42) (some 7)) (Cons (Option int)))]
+  (println (list-length (:: xs :int))))   ;; segfault (the list builds; the walk crashes)
+```
+
+The *typed* path (`.head` / ascribed `.tail`) works; only the generic
+`(:: xs :int)`-coerced carrier walk breaks. The producer (`list-build__` via
+`tcons-of`) already specializes the cell; the generic consumer still reads it at
+the carrier layout. Filed:
+`docs/reported/heap-cons-byvalue-aggregate-head-breaks-int-carrier-list-helpers.md`.
+
 ## 6. Plan (phased)
 
 ### P0 -- Audit (this document). DONE.
@@ -214,7 +239,8 @@ under P2.
 Crossing sites enumerated, shared recovery routine named, gaps G1/G2 found
 and filed (plus G3, filed independently on `main`). This converts the open
 surface from "unknown number of fish" to a **closeable list**. **G1 is now
-closed** (this branch); G2/G3 remain and close together under P2.
+closed** (this branch); G2/G3/G4 remain and are tracked as table rows under P2
+(G4 is the consumer-side crossing that closing G1 exposed).
 
 ### P1 -- Promote the composition stress matrix to fixtures (on green)
 
@@ -232,16 +258,21 @@ each gap closes -- a fixture is only committed once it PASSES, so the gate
 stays green (per CLAUDE.md). The minimal repros live in the two reported docs
 until then.
 
-### P2 -- Route the remaining sites through the shared recovery (close G2/G3)
+### P2 -- Route the remaining sites through the shared recovery (close G2/G3/G4)
 
 - **G1**: DONE (this branch). The `tur-list-homog__` call is a dead
   compile-time-only assertion (the homogeneity it enforces fires at
   elaboration; its inline-C body is a no-op), so rather than monomorphize it,
   `emit_stmt.c` elides it for by-value aggregate args. See the FIXED row in the
-  table and the G1 result subsection. Follow-up crossing on the same example
-  (int-carrier `list-length` over a by-value-aggregate-headed `:heap` cons) is
-  filed separately at
-  `docs/reported/heap-cons-byvalue-aggregate-head-breaks-int-carrier-list-helpers.md`.
+  table and the G1 result subsection.
+- **G4** (consumer side of G1,
+  `docs/reported/heap-cons-byvalue-aggregate-head-breaks-int-carrier-list-helpers.md`):
+  either box the by-value aggregate head into the carrier inside `tcons-of` for
+  aggregate elements (cell stays `{ int64 head; int64 tail; }`, one alloc per
+  element) -- the smaller local change -- or monomorphize the int-carrier list
+  helpers per element type at the `(:: xs :int)` coercion point (keeps the
+  by-value thread end-to-end, consistent with P2). Until fixed, the typed
+  accessor path is the supported way to consume such a list.
 - **G2**: the dispatch re-resolver (`emit_reresolve_disp_type`,
   `emit_core.c:1141`) must recurse: when the receiver expression is a field
   extraction whose recovered type is *itself* a parametric container, mint /
