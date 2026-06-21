@@ -30,11 +30,13 @@ You'll start needing it the first time you see a symbol like
   **per-call-site specialization** named `<defn>__spec__<arg-types>`.
 - Constrained-polymorphic functions (those with typeclass dictionaries)
   monomorphize **per dictionary**: one spec per concrete instance.
-- A small **carrier bridge** still exists for a handful of intentional
-  cases (recursive combinator HKT instances; HOFs that close over
-  another HOF's result; consumer-side bridges where typing the producer
+- A small **carrier bridge** still exists for two intentional cases
+  (recursive combinator HKT instances whose closures return an
+  HKT-applied type; consumer-side bridges where typing the producer
   would be churn-for-no-gain). It is documented and load-bearing -- not
-  a migration loose end.
+  a migration loose end. As of 0.22.0 (#444) the by-value path's audit
+  floor is **0 carrier deref-copies**; the Vec and MutableMap element
+  bridges that previously appeared here have been retired.
 
 ## Why monomorphization, not a uniform carrier
 
@@ -116,8 +118,13 @@ If you see one of these in a link error, the usual causes are:
 
 - **Linkage mismatch.** A spec was emitted `static` in one TU and
   declared `extern` in another. The fix lives in the compiler -- file
-  a report. The 0.21.0 "prelude monomorphized specs emitted `static`"
-  changelog entry is the canonical example.
+  a report. The historical example is the prelude-spec linkage story:
+  pre-0.21.0, two TUs referencing the same prelude spec would
+  `multiple definition` link-fail; 0.21.0 worked around it by emitting
+  prelude specs `static` in every referencing TU; 0.22.0 (#444 follow-up)
+  flipped them back to external linkage now that the underlying
+  cross-TU ownership rule is correct. If you see this class of error
+  today, it almost always means a spec is being claimed by two owners.
 - **Missing import.** A module uses a spec that no module in the
   project actually instantiates. Add the import that drives the
   instantiation, or move the call site into the using module.
@@ -129,7 +136,7 @@ If you see one of these in a link error, the usual causes are:
 ## The residual carrier bridge -- what it does, why it stays
 
 Phase 5 of the migration set out to delete the carrier bridge
-entirely. The bridge stays because three classes of crossings are
+entirely. As of 0.22.0 (#444), two classes of crossings remain --
 either intentional, or load-bearing in a way that no method-level fix
 can address:
 
@@ -144,12 +151,17 @@ can address:
    propagating generic-dispatch type information through the entire
    call graph. That's a parser-rewrite unit of work, not a localized
    ABI fix. Until it lands, the closure's return value rides the
-   carrier and a tiny spill shim boxes it.
-3. **Vec/Map element monomorphization residual.** A handful of
-   `Vec<int>` / `Map<...>` element accesses heap-reinterpret as the
-   element type. Benign (the heap layout is a pointer-tagged sum
-   that's the same width on every architecture we target), and the
-   delete-the-bridge work would require touching the heap layout.
+   carrier and a tiny spill shim boxes it. 0.22.0 #438 narrowed this
+   considerably -- Applicative `ap` now preserves fn type through
+   polymorphic constructors -- but the residual continuation case
+   still rides the bridge.
+
+The Vec and MutableMap element bridges that previously sat in this
+section are gone: 0.21.0 #377 migrated Vec to the `:heap` typed-pointer
+ABI (retiring carrier-based `Eq[Vec]`); 0.22.0 #396 retyped
+MutableMap to the honest `(MutableMap K V)` and retired its carrier
+bridge; 0.22.0 #391/#393 monomorphized the Vec inline-C producers to
+typed pointers.
 
 The bridge is now a documented small surface, not an open migration.
 Look for `tur_box_T` / `tur_unbox_T` helpers in the runtime and the
@@ -188,8 +200,8 @@ typechecker probably wants a real type.
 When you hand a Turmeric function pointer to a C library (`qsort`
 comparators, Arrow release callbacks, signal handlers, raylib draw
 callbacks), the mangled spec symbol is what the C side takes. Mark the
-defn `#{used}` so the compiler keeps external linkage and doesn't DCE
-the body:
+defn `#[used]` (shipped 0.22.0, #467) so the compiler keeps external
+linkage and doesn't DCE the body:
 
 ```turmeric
 (defn #[used] compare-ints [a : ptr<void> b : ptr<void>] : int
@@ -210,10 +222,14 @@ Each module compiles independently. Spec emission rules:
 
 - A spec owned by a real user module is emitted with **external
   linkage** in that module and **extern declarations** elsewhere.
-- A spec owned by the prelude (no real owning module) is emitted
-  **`static`** in every TU that references it. This is what the
-  0.21.0 fix established; before the fix, two TUs referencing the same
-  prelude spec would `multiple definition` link-fail.
+- A spec owned by the prelude (no real owning module) is also emitted
+  with **external linkage** as of 0.22.0 (#444 follow-up): the prior
+  0.21.0 workaround that emitted prelude specs `static` in every
+  referencing TU is gone now that the cross-TU ownership rule is
+  correct. The history: pre-0.21.0, two TUs sharing a prelude spec
+  would `multiple definition` link-fail; 0.21.0 patched that by going
+  `static`; 0.22.0 returned them to external linkage with the
+  ownership rule fixed.
 
 If you're maintaining the codegen, the rule of thumb is: the owning
 module is whoever declared the originating defn/instance. If that
@@ -226,9 +242,12 @@ module is the prelude, fall back to `static`.
   `(defn-name, [arg types])` into the spec symbol.
 - **Boundary types.** `TypeKind::Carrier` (`int64_t`) and
   `TypeKind::Concrete` (the real type) are the only two flavors that
-  matter at the C-emit boundary. The `ascribe` op crosses between
-  them when the bridge is involved; outside the bridge, every Concrete
-  stays Concrete.
+  matter at the C-emit boundary. 0.21.0 #368 removed the
+  `EX_ASCRIBE CK_CONCRETE -> CK_CARRIER` bridge; the remaining
+  ascription path goes the other direction (carrier -> concrete return
+  deref for by-value instance methods, landed in 0.21.0 #369 under M5
+  Option C). Outside the documented bridge cases, every Concrete stays
+  Concrete.
 - **HKT specs.** A by-value HKT instance method's spec name encodes
   *both* the constructor and the element type:
   `Functor_fmap__spec__Option__int`. If you see a method spec without
