@@ -1269,6 +1269,22 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                         strslice(psym->name + 2, psym->len - 2));
                     type_params[pi] = bare->name;
                     parsed_type_param_kinds[pi] = KIND_TYPEROW;
+                /* '^^name' marks a kind '* -> * -> *' (binary type constructor)
+                 * parameter; '^name' marks a kind '* -> *' parameter.  Mirrors
+                 * the defclass handling so a higher-kinded defdata param like
+                 * `^f` in (defdata Fix [^f] (Roll (f (Fix f)))) stores the bare
+                 * name `f` (so the body's `f` references resolve) and carries the
+                 * arrow kind (so applying `f` is well-kinded). */
+                } else if (psym->len > 2 && psym->name[0] == '^' && psym->name[1] == '^') {
+                    const Symbol *bare = symtab_intern(e->st,
+                        strslice(psym->name + 2, psym->len - 2));
+                    type_params[pi] = bare->name;
+                    parsed_type_param_kinds[pi] = KIND_ARROW2;
+                } else if (psym->len > 1 && psym->name[0] == '^') {
+                    const Symbol *bare = symtab_intern(e->st,
+                        strslice(psym->name + 1, psym->len - 1));
+                    type_params[pi] = bare->name;
+                    parsed_type_param_kinds[pi] = KIND_ARROW;
                 } else {
                     type_params[pi] = psym->name;
                     parsed_type_param_kinds[pi] = KIND_STAR;
@@ -1375,6 +1391,21 @@ Expr *elab_defdata(Elab *e, const Form *call) {
      * paths to the real definition's file. */
     def->origin_file_id = name_form->span.file_id;
 
+    /* Build a Symbol** view of the (bare) type-param names so that applied-type
+     * constructor fields can be lowered through struct_field_type_from_form,
+     * which matches type parameters by interned Symbol identity.  The names in
+     * def->type_params are already interned, so re-interning yields the same
+     * Symbol* the field forms carry. */
+    const Symbol **tp_syms = NULL;
+    if (n_type_params > 0) {
+        tp_syms = (const Symbol **)arena_alloc(e->arena,
+                                               n_type_params * sizeof(Symbol *));
+        for (uint8_t pi = 0; pi < n_type_params; pi++) {
+            tp_syms[pi] = symtab_intern(e->st,
+                strslice(type_params[pi], (uint32_t)strlen(type_params[pi])));
+        }
+    }
+
     /* Parse each constructor */
     for (uint32_t ci = 0; ci < n_ctors; ci++) {
         Form *ctor_form = call->as.list.items[ctors_start_idx + ci];
@@ -1435,6 +1466,34 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                     continue;
                 }
                 /* Not a recognised type param — fall through to keyword check. */
+            }
+
+            /* Applied type constructor (or other compound type form) in field
+             * position, e.g. (Wrap a), (list JsonNode), (map str a), or the HKT
+             * self-application (f (Fix f)).  Lower it the same way defstruct
+             * lowers applied-type fields: resolve to a full Type (TY_APP/...),
+             * store it as full_type, and derive the C-level storage kind (a heap
+             * pointer / TY_INT for ADT/struct/tyvar/app payloads). */
+            if (ft_form->tag == F_LIST) {
+                Type *t = struct_field_type_from_form(e, ft_form, tp_syms,
+                                                      def->type_param_kinds,
+                                                      n_type_params);
+                if (!t) {
+                    diag_emit(DIAG_ERROR, ft_form->span,
+                              "defdata: could not resolve constructor field type");
+                    return NULL;
+                }
+                TypeKind fkind = TY_UNKNOWN, finner = TY_UNKNOWN;
+                struct_field_storage_from_type(t, &fkind, &finner);
+                if (fkind == TY_UNKNOWN) { fkind = TY_INT; finner = TY_UNKNOWN; }
+                ctor->fields[fi].kind = fkind;
+                ctor->fields[fi].inner_kind = finner;
+                ctor->fields[fi].full_type = t;
+                if (ctor->field_forms) ctor->field_forms[fi] = ft_form;
+                if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
+                    def->needs_drop_glue = true;
+                }
+                continue;
             }
 
             if (ft_form->tag != F_KEYWORD) {
