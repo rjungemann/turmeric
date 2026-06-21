@@ -584,3 +584,36 @@ local, immediate failure.
   their gap closes.
 - Each gap closure flips its repro FAIL->PASS, promotes it to a fixture, and
   moves its report to `docs/archive/`.
+
+### Progress (branch claude/g2-carrier-concrete-abi-audit-3yzkhm)
+
+Closed this branch, suite green at each step (final **1743 passed, 0 failed**):
+
+| Gap | Result | Fixture |
+|---|---|---|
+| G1 | FIXED (prior) | `list-homog-byvalue-aggregate-element` |
+| G2 | FIXED | `constrained-instance-dispatch-nested-parametric-element` |
+| G3 | FIXED | `instance-method-byvalue-struct-field-receiver` |
+| G5 | FIXED* (both sites, self-contained; awaiting real `json/encode`) | `result-over-struct-with-option-field-typedef-order` (+ G9 fixture for S1) |
+| G9 | FIXED | `constrained-instance-dispatch-parametric-container-element` |
+
+Found while closing the above (filed, sequenced): **G9** (mirror of G2),
+**G10** (applied-struct instance-selection conflation -- an instance-keying
+defect, not a carrier crossing).
+
+**Still open**, each a substantial separately-reviewable change and two
+needing the absent turmeric-spices sibling to verify:
+
+- **G4** -- generic int-carrier list helpers over a by-value-aggregate-headed
+  `:heap` cons. No small safe fix (box the head -> changes the typed-path
+  layout; or monomorphize the list helpers per element -> large). Carrier-family.
+- **G6** -- HKT `fmap` closure-thunk per-carrier ABI + boxed cata result.
+  Confirmed still failing (segfault + `-Wint-conversion` on the recursive
+  closure thunk, and `re-cata` specs conflated across carriers). A deep
+  fn-value/closure-specialization change.
+- **G7** -- `defdata`-sum struct field decodes to the wrong instance. The
+  single-level return-dispatch-on-ADT case already works; the bug needs the
+  nested `derive-json` Decode-body structure (in the absent spice).
+- **G10** -- applied-struct instance heads drop the element at instance
+  *registration*, so the lookup cannot distinguish `Enc [(Option cstr)]` from
+  `Enc [(Option int)]`. A deep elaboration (instance-keying) change.
