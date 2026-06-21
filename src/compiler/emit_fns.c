@@ -336,13 +336,21 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
         ? fn_body_tail_byvalue_carrier_type(ctx, e)
         : type_simple(TY_UNKNOWN, CK_COPY);
     if (tail_bv.kind != TY_UNKNOWN) {
-        const char *cty = emit_type_c_name(ctx, tail_bv);
         indent_buf(body, ctx->indent);
-        buf_printf(body,
-            "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
-            "*__tur_ret_p = %s; "
-            "return (int64_t)(intptr_t)__tur_ret_p; }\n",
-            cty, cty, cty, v);
+        if (type_is_heap_struct(tail_bv)) {
+            /* constrained-defn-monomorphize: a `:heap` struct tail (`Cons__A *`)
+             * already fits the int64 carrier as a pointer; cast it rather than
+             * malloc-boxing it (which would double-box into a `Cons__A **`).  See
+             * the matching guard on the non-fat return path in this file. */
+            buf_printf(body, "return (int64_t)(intptr_t)%s;\n", v);
+        } else {
+            const char *cty = emit_type_c_name(ctx, tail_bv);
+            buf_printf(body,
+                "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
+                "*__tur_ret_p = %s; "
+                "return (int64_t)(intptr_t)__tur_ret_p; }\n",
+                cty, cty, cty, v);
+        }
         free(v);
         return;
     }
@@ -1361,12 +1369,23 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * concrete type comes from the matched spec, since the construct's
              * own e->type is collapsed to the int64 carrier. */
             Type src = fn_body_tail_byvalue_carrier_type(ctx, fd->body);
-            const char *cty = emit_type_c_name(ctx, src);
-            buf_printf(file,
-                "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
-                "*__tur_ret_p = %s; "
-                "return (int64_t)(intptr_t)__tur_ret_p; }\n",
-                cty, cty, cty, ret_val);
+            if (type_is_heap_struct(src)) {
+                /* constrained-defn-monomorphize: a `:heap` struct tail (e.g.
+                 * `(Cons A)` built by `tcons-of`) is ALREADY a pointer (`Cons__A *`)
+                 * that fits the int64 carrier directly.  Malloc-boxing it
+                 * double-boxes (the carrier consumer then reads a pointer-to-pointer
+                 * as the cell -> a length-1 / garbage list), the heap-struct mirror
+                 * of the M7 double-box guard above.  Cast the pointer to the carrier
+                 * instead of spilling. */
+                buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
+            } else {
+                const char *cty = emit_type_c_name(ctx, src);
+                buf_printf(file,
+                    "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
+                    "*__tur_ret_p = %s; "
+                    "return (int64_t)(intptr_t)__tur_ret_p; }\n",
+                    cty, cty, cty, ret_val);
+            }
         } else {
             buf_printf(file, "return %s;\n", ret_val);
         }

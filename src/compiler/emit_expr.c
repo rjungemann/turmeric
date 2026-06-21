@@ -3117,6 +3117,47 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                                  matched_spec->arg_types[i]);
                     }
                 }
+                /* constrained-defn-monomorphize (cstr/pointer element): the spec
+                 * param is a concrete pointer-carried scalar (`const char *`), but
+                 * a generic tyvar-result accessor (`ok-val` of a dict-dispatched
+                 * method) emitted the int64 carrier.  Passing the carrier straight
+                 * to a `const char *` param trips -Wint-conversion; reinterpret via
+                 * intptr_t.  Mirrors the float-element branch above; the bits are
+                 * already the pointer, so this is a cast, not a conversion. */
+                else if (!needs_fn_cast && matched_spec && emit_arg &&
+                         !expr_is_pbp_param(ctx, emit_arg) &&
+                         matched_spec->arg_types[i].kind == TY_CSTR) {
+                    bool arg_is_carrier_int64 = false;
+                    if (emit_arg->kind == EX_CALL &&
+                        emit_arg->as.call_.fn_binding &&
+                        emit_arg->as.call_.fn_binding->type.kind == TY_FN) {
+                        const EmitAbiSpecialization *as = find_matched_abi_spec(
+                            ctx, emit_arg, emit_arg->as.call_.fn_binding);
+                        if (as) {
+                            arg_is_carrier_int64 = strcmp(
+                                emit_type_c_name(ctx, as->result_type),
+                                "int64_t") == 0;
+                        } else {
+                            arg_is_carrier_int64 =
+                                emit_arg->as.call_.fn_binding->type.as.fn.result_kind
+                                    == TY_TYVAR;
+                        }
+                    }
+                    if (arg_is_carrier_int64) {
+                        /* The carrier int64 already holds the `const char *`
+                         * pointer bits -- a plain reinterpret cast, NOT the
+                         * heap-struct deref emit_carrier_bridge would emit for an
+                         * aggregate (that derefs the string as a pointer-to-
+                         * pointer -> -Warray-bounds + wrong read). */
+                        const char *cty = emit_type_c_name(ctx, matched_spec->arg_types[i]);
+                        Buf cast; buf_init(&cast);
+                        buf_printf(&cast, "(%s)(intptr_t)(%s)", cty, raw);
+                        buf_putc(&cast, '\0');
+                        free(raw);
+                        raw = strdup(cast.data);
+                        buf_free(&cast);
+                    }
+                }
                 /* Option none-as-NULL retirement (Track A): a `#{Construct}`
                  * result (`some`/`none`/`ok`/`err`, which stay on the int64
                  * carrier base) passed straight into a PLAIN (non-spec) callee
