@@ -7006,6 +7006,20 @@ int emit_program(Buf *out, const Expr *program) {
                         type_codegen_emit_fn_ptr_typedefs(&early_file);
                     }
                 }
+                /* defstruct-field-byvalue-parametric-struct-layout: a field
+                 * whose type is a concrete by-value parametric struct (e.g.
+                 * `(Option cstr)`) is embedded inline as the monomorphized
+                 * aggregate (`Option__cstr`).  That typedef is registered
+                 * on-demand and otherwise flushed AFTER the user struct
+                 * typedefs, so it would be referenced before its definition.
+                 * Register + flush it into early_file here (the `#ifndef`
+                 * guard + `emitted` flag make the later flush a no-op) so the
+                 * embedding struct sees a complete type. */
+                if (f->kind == TY_STRUCT && f->full_type
+                    && f->full_type->kind == TY_APP) {
+                    (void)type_c_name(*f->full_type);  /* register_struct_app */
+                    type_codegen_emit_struct_apps(&early_file);
+                }
             }
             /* Emit: typedef struct Name { fields... } Name; */
             buf_printf(&early_file, "typedef struct %s {\n", def->name);
