@@ -109,6 +109,28 @@
 ;;; Since: Phase TC1
 
 (defn ttail [A] [l : (Cons A)] :int (.tail l))
+;;; tlength -- count the elements of a typed (Cons A) list.
+;;;
+;;; The element-aware sibling of `list-length`. Where `list-length` walks the
+;;; chain as a fixed carrier `struct { int64_t head; int64_t tail; }`, `tlength`
+;;; reads `(.tail xs)` at the concrete `(Cons A)` layout, so it stays correct
+;;; when A is a by-value aggregate (e.g. `(Option int)`) whose head pushes the
+;;; tail link past offset 8 -- the carrier walk segfaults there, this does not.
+;;;
+;;; Parameters:
+;;;   xs -- the (Cons A) list to measure
+;;;
+;;; Returns:
+;;;   Integer length.
+;;;
+;;; Example:
+;;;   (tlength (:: (list (some 1) (some 2)) (Cons (Option int))))  ; => 2
+;;;
+;;; Since: Phase G4 (carrier<->concrete ABI crossing audit)
+(defn tlength [A] [xs : (Cons A)] : int
+  (if (= (:: xs :int) 0)
+    0
+    (+ 1 (tlength (:: (.tail xs) (Cons A))))))
 ;;; list-length -- count the number of elements in a typed list.
 ;;;
 ;;; Parameters:

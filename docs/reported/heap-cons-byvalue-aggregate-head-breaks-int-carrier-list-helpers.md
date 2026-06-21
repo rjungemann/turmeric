@@ -7,12 +7,52 @@ severity: Medium. Runtime segfault (not a compile error). A `(Cons (Option int))
   generic int-carrier list helper such as `(list-length (:: xs :int))` crashes.
   Blocks treating a by-value-aggregate-element list through the `:int`-carrier
   list API (list-length, list-eq?, etc.).
-status: OPEN -- found 2026-06-21 while closing gap G1
+status: PARTIAL -- found 2026-06-21 while closing gap G1
   (docs/carrier-concrete-abi-crossing-audit-plan.md). Exposed once the
-  homogeneity-check fix let such a list construct.
+  homogeneity-check fix let such a list construct. The concrete `(Cons A)`
+  consumer path is FIXED (2026-06-21, branch
+  claude/carrier-concrete-abi-audit-94dbi2) via the element-aware `tlength`
+  walker; the two strictly carrier-erased halves below remain OPEN.
 ---
 
 # `:heap` Cons with a by-value aggregate head breaks the int-carrier list API
+
+## Resolution status (2026-06-21)
+
+**Concrete `(Cons A)` consumer path: FIXED.** The maintainer chose audit Option 2
+(monomorphize, not box the head). `tlength [A] [xs : (Cons A)] : int`
+(`stdlib/list.tur`) is the element-aware sibling of the carrier `list-length`,
+written in pure Turmeric over the typed `(.tail xs)` read (no inline-C). The
+compiler lowers `(.tail xs)` at the concrete `(Cons A)` stride and monomorphizes
+`tlength` per element type, so a by-value aggregate head (`Cons__Option__int`)
+no longer misplaces the tail link. The carrier `list-length` inline-C is left
+untouched for the scalar/pointer bulk (the dual "by-value-body + carrier-shim"
+shape landmine #7 endorses), so all existing callers stay green. Fixture
+`tests/fixtures/list-length-byvalue-aggregate-element`; suite green (1745/0).
+
+**Still OPEN (the two carrier-erased halves this report now tracks):** both lose
+`A` at a point with no runtime type tag, so neither is safely recoverable
+without further compiler work.
+
+1. **Bare `(:: xs :int)` escape-hatch into the carrier helpers.**
+   `(list-length (:: xs :int))` (and `list-head`/`list-tail`/...) still walks the
+   fixed `{int64 head; int64 tail}` layout and segfaults on an aggregate-element
+   list. This is inherent to explicitly erasing a layout-load-bearing element
+   type -- there is no recovery short of a runtime tag or refusing the coercion.
+   The supported route for aggregate elements is the typed `(Cons A)` walker
+   (`tlength`, `thead`, ascribed `.tail`).
+2. **Phantom `(List A)` view collapses (the "typed wrapper collapses too" case
+   below).** `(defopaque List [A] :int)` lowers to `:int`, so a `(List A)` helper
+   is emitted once at the carrier ABI with `A` erased; a layout-dependent op (a
+   typed `list-count`) collapses its inner `(:: ... (Cons A))` back to the generic
+   `Cons *` and segfaults. Confirmed empirically: a `list-count [A] [xs : (List A)]`
+   routing through `tlength` emits a single carrier `list_hycount(int64_t)` whose
+   body calls `tlength(int64_t)` at the generic `Cons *` layout. Fixing it needs
+   the monomorphizer to **specialize phantom-param functions per phantom type
+   arg** -- a distinct, larger feature than the `(Cons A)` walker, tracked here as
+   the remaining work.
+
+The original analysis and the (unchanged) carrier-layout root cause follow.
 
 ## One-line summary
 

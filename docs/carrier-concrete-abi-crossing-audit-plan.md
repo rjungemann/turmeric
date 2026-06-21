@@ -104,7 +104,7 @@ constrained/parametric/HKT spec body and must consult the recovery routine.
 | ~~G1~~ | `emit_stmt.c` `EX_CALL` | `(list ...)` homogeneity helper `tur-list-homog__` dead call elided for by-value aggregate args | n/a (elide) | **[FIXED]** | this branch |
 | ~~G2~~ | site 8, recursive case | method dispatch where the receiver element is **itself a parametric container** (`(.value x) : (Cons A)`): mint the inner instance's by-value spec + route to it | `emit_reresolve_disp_type` + `emit_abi_try_nested_instance_dispatch_redirect` | **[FIXED]** | this branch |
 | ~~G3~~ | `emit_expr.c` `expr_emits_byvalue_carrier_abi` vs site 6 | instance method whose HEAD is a by-value applied struct (`Enc [(Option cstr)]`) takes the carrier param, but a by-value struct-**field** receiver passed the aggregate -- now bridged (spill + address-of) like a local | `expr_emits_byvalue_carrier_abi` (EX_GET_FIELD) + `emit_carrier_bridge` | **[FIXED]** | this branch |
-| **G4** | int-carrier list helpers (`list-length`, ...) vs `(:: xs :int)` coercion | generic carrier walk of a `:heap` `Cons` whose head is a **by-value aggregate** reads `tail` at the wrong offset and **segfaults** (consumer side of G1) | none | **[GAP]** | -- |
+| **G4** | int-carrier list helpers (`list-length`, ...) vs `(:: xs :int)` coercion | generic carrier walk of a `:heap` `Cons` whose head is a **by-value aggregate** reads `tail` at the wrong offset and **segfaults** (consumer side of G1) -- the concrete `(Cons A)` consumer path is now served by the element-aware pure-Turmeric walker `tlength` (no inline-C, walks `(.tail xs)` at the concrete stride); the bare `(:: xs :int)` carrier escape-hatch and the phantom `(List A)` traversal stay carrier-erased (deeper follow-up) | `tlength` (`stdlib/list.tur`, typed `(Cons A)` walker) | **[PARTIAL]** | this branch |
 | ~~G5~~ | `Option`'s legacy `tur_option_t` special-casing vs #482 | (S1) a struct-field-read `Option` passed to a typeclass method inserts a stale `tur_option_t *`->aggregate reconstruction; (S2) `Result__T` typedef emitted before `T` once `T` embeds an `(Option ...)` field -- **BOTH fixed in self-contained repros**, pending real `json/encode` derive-json confirmation | `field_read_emits_byvalue_aggregate` (S1); forward typedef in `emit_registered_struct_app_rec` (S2) | **[FIXED*]** | this branch |
 | **G6** | HKT `fmap` closure-thunk + cata result (fn-value spec path) | a generic `cata = alg . fmap (cata alg) . unroll`: (a) the int call grabbed a return-differentiated sibling (`bool`) spec -- **FIXED** (`emit_spec_result_mismatch`; int now correct, cstr no longer segfaults); (b) the recursive `fmap` closure is shared across carriers with the wrong sub-word thunk ABI -- **still open** (`bool` folds wrong) | spec-selection: `emit_spec_result_mismatch`; closure-thunk: open | **[PARTIAL]** | (a) this branch |
 | ~~G7~~ | site 8, return/decode side, sum field | a `defdata`-sum struct field's `(decode ... (Result Cmd cstr))` dispatched to the generic `decode_T` at the ENCLOSING struct's result type instead of the field's `Decode [Cmd]` instance -- the `EX_ASCRIBE` scan now registers a return-polymorphic dict-less call with the ascription's concrete result as `result_type_override` (instead of the plain inner scan), and the two result-recovery heuristics bail when an override is supplied | `emit_abi_scan_expr` (EX_ASCRIBE) + `result_type_override` | **[FIXED]** | this branch |
@@ -260,7 +260,7 @@ applied-struct instances of one class differing only in the element conflate at
 dispatch -- tracked as gap G10
 (`docs/reported/multiple-applied-struct-instances-same-class-conflate.md`).
 
-### G4 -- `(Cons (Option int))` consumed via the int-carrier list API: segfault (consumer side of G1)
+### G4 -- `(Cons (Option int))` consumed via the int-carrier list API: segfault (consumer side of G1) -- **PARTIAL (this branch)**
 
 Exposed by closing G1. `Cons` is `(defstruct Cons :heap [A] (head A) (tail :int))`,
 and the generic int-carrier list helpers walk a chain as a fixed
@@ -277,7 +277,43 @@ aggregate, follows a bogus pointer, and crashes:
 The *typed* path (`.head` / ascribed `.tail`) works; only the generic
 `(:: xs :int)`-coerced carrier walk breaks. The producer (`list-build__` via
 `tcons-of`) already specializes the cell; the generic consumer still reads it at
-the carrier layout. Filed:
+the carrier layout.
+
+**Fix (audit Option 2, monomorphization direction -- concrete `(Cons A)` consumer
+path):** the element-aware walker `tlength [A] [xs : (Cons A)] : int`
+(`stdlib/list.tur`) is the sibling of the carrier `list-length`, written in **pure
+Turmeric** over the typed `(.tail xs)` read (no inline-C). The compiler lowers
+`(.tail xs)` at the concrete `(Cons A)` stride and monomorphizes `tlength` per
+element type, so a by-value aggregate head no longer misplaces the tail link and
+the scalar/pointer path keeps the identical concrete layout (no allocation, no
+carrier collapse). The G1 example now counts and round-trips correctly:
+
+```turmeric
+(let [xs (:: (list (some 42) (some 7) (some 100)) (Cons (Option int)))]
+  (println (tlength xs)))   ;; 3 -- was a segfault through carrier list-length
+```
+
+Fixture `tests/fixtures/list-length-byvalue-aggregate-element` (Option/int/float
+elements + empty list). Suite green (1745/0).
+
+**Still open (deeper follow-up, narrowed report kept in `docs/reported/`):** two
+strictly carrier-erased crossings cannot be made safe without further compiler
+work, because at those points the element type is erased and there is no runtime
+type tag to recover the stride:
+
+1. The bare `(:: xs :int)` escape-hatch fed to the carrier `list-length`/
+   `list-head`/... still walks at the fixed `{int64 head; int64 tail}` layout.
+   This is inherent to explicitly erasing a layout-load-bearing element type; the
+   supported route for aggregate elements is the typed `(Cons A)` walker.
+2. The phantom `(List A)` view (`stdlib/list-typed.tur`, `(defopaque List [A] :int)`)
+   lowers to `:int`, so a `(List A)` helper is emitted **once at the carrier ABI**
+   with `A` erased -- a layout-dependent op like a typed `list-count` collapses its
+   inner `(:: ... (Cons A))` back to the generic `Cons *` and segfaults. Making the
+   phantom wrapper carry layout needs the monomorphizer to specialize phantom-param
+   functions per phantom type arg (a distinct, larger feature). The concrete
+   `(Cons A)` walker is the route until then.
+
+Report (narrowed to the remaining two):
 `docs/reported/heap-cons-byvalue-aggregate-head-breaks-int-carrier-list-helpers.md`.
 
 ### G5 -- `(Option T)` struct field: `Option`'s `tur_option_t` special-casing not reconciled with #482 (maintainer-filed) -- **BOTH SITES FIXED + VERIFIED (this branch)**
@@ -474,7 +510,10 @@ converts the open surface from "unknown number of fish" to a **closeable
 list**. **G1, G2, G3, G5, G7, G9, and G10 are now closed** (this branch; G5 and
 G7 verified end-to-end against the real `json/encode` derive-json;
 **G6**'s spec-selection half is fixed, its closure-thunk half
-open); **G4 and G6-closure-thunk** remain
+open; **G4**'s concrete `(Cons A)` consumer path is fixed via the element-aware
+`tlength` walker, its carrier-erased halves -- the bare `(:: xs :int)`
+escape-hatch and the phantom `(List A)` traversal -- remain); **G4-carrier-erased
+and G6-closure-thunk** remain
 and are tracked as table rows under P2 (G4 is the consumer-side crossing that
 closing G1 exposed; G5 is the Option-specific residual special-casing #482 left
 stale, now fixed; G6 is the HKT `fmap` closure-thunk/cata-result crossing on the
@@ -515,12 +554,21 @@ not by adding another site-local gated branch.
   table and the G1 result subsection.
 - **G4** (consumer side of G1,
   `docs/reported/heap-cons-byvalue-aggregate-head-breaks-int-carrier-list-helpers.md`):
-  either box the by-value aggregate head into the carrier inside `tcons-of` for
-  aggregate elements (cell stays `{ int64 head; int64 tail; }`, one alloc per
-  element) -- the smaller local change -- or monomorphize the int-carrier list
-  helpers per element type at the `(:: xs :int)` coercion point (keeps the
-  by-value thread end-to-end, consistent with P2). Until fixed, the typed
-  accessor path is the supported way to consume such a list.
+  PARTIAL (this branch). The maintainer chose Option 2 (monomorphize, not box).
+  The concrete `(Cons A)` consumer path is now served by the element-aware walker
+  `tlength [A] [xs : (Cons A)] : int` (`stdlib/list.tur`), written in pure
+  Turmeric over the typed `(.tail xs)` read -- the compiler lowers it at the
+  concrete `(Cons A)` stride and monomorphizes per element type, so a by-value
+  aggregate head no longer misplaces the tail link (the carrier `list-length`
+  inline-C stays untouched for the scalar/pointer bulk, the "by-value-body +
+  carrier-shim" dual pattern landmine #7 endorses). Fixture
+  `tests/fixtures/list-length-byvalue-aggregate-element`. **Still open:** the bare
+  `(:: xs :int)` carrier escape-hatch and the phantom `(List A)` traversal stay
+  carrier-erased -- both lose `A` at a point with no runtime type tag, so the
+  phantom wrapper needs the monomorphizer to specialize phantom-param functions
+  per phantom type arg (a larger, distinct feature). Until then the typed
+  `(Cons A)` walker is the supported way to consume an aggregate-element list. See
+  the PARTIAL row + the G4 result subsection.
 - **G2**: DONE (this branch). The dispatch-type chokepoint
   `emit_reresolve_disp_type` already recovers the parametric-container receiver;
   `emit_abi_try_nested_instance_dispatch_redirect` (`emit_module.c`) mints the
@@ -624,17 +672,37 @@ Found while closing the above (filed, sequenced, then closed): **G9** (mirror of
 G2), **G10** (applied-struct instance-selection conflation -- an instance-keying
 defect, not a carrier crossing).
 
+### Progress (branch claude/carrier-concrete-abi-audit-94dbi2)
+
+Closed the concrete `(Cons A)` consumer path of **G4** (the maintainer chose
+Option 2, monomorphize). Suite green (**1745 passed, 0 failed**):
+
+| Gap | Result | Fixture |
+|---|---|---|
+| G4 | PARTIAL (concrete `(Cons A)` walk fixed via `tlength`; carrier-erased `(:: xs :int)` + phantom `(List A)` halves remain) | `list-length-byvalue-aggregate-element` |
+
+The element-aware walker `tlength [A] [xs : (Cons A)] : int` (`stdlib/list.tur`)
+is the pure-Turmeric sibling of the carrier `list-length`: it walks `(.tail xs)`
+at the concrete `(Cons A)` stride and monomorphizes per element type, so a
+by-value aggregate head (`Cons__Option__int`) no longer misplaces the tail link.
+The carrier `list-length` inline-C is left untouched for the scalar/pointer bulk
+(the dual "by-value-body + carrier-shim" shape landmine #7 endorses), keeping the
+~1740 existing fixtures + 78 stdlib callers green (snapshot churn from the new
+stdlib defn regenerated in the same change).
+
 **Still open**:
 
-- **G4** -- generic int-carrier list helpers over a by-value-aggregate-headed
-  `:heap` cons. No small safe fix (box the head -> changes the typed-path
-  layout; or monomorphize the list helpers per element -> large). Carrier-family.
-  The report now carries a scoped estimate of the monomorphization route
-  (medium--large, ~1--2 weeks; refined shape = retire the inline-C and rewrite
-  the leaf helpers in pure Turmeric over typed `.head`/`.tail`, re-ascribe the
-  `:int` tail to `(Cons A)`) plus a digest of the prior monomorphization
-  false-starts to avoid (M4c inline-C contract, the inline-C spec gate, silent
-  sibling-spec drops, two-ABI-view miscompiles, the load-bearing carrier bridge):
+- **G4 (carrier-erased halves)** -- two crossings that lose `A` at a point with no
+  runtime type tag, so neither is safely recoverable without further compiler
+  work: (1) the bare `(:: xs :int)` escape-hatch fed to the carrier
+  `list-length`/`list-head`/... still walks the fixed `{int64 head; int64 tail}`
+  layout (inherent to erasing a layout-load-bearing element type -- the typed
+  `(Cons A)` walker is the supported route); (2) the phantom `(List A)` view
+  (`(defopaque List [A] :int)`) lowers to `:int`, so a `(List A)` helper is
+  emitted once at the carrier ABI with `A` erased and a layout-dependent op
+  collapses its inner `(:: ... (Cons A))` back to the generic `Cons *` -- making
+  it correct needs the monomorphizer to specialize phantom-param functions per
+  phantom type arg (a distinct, larger feature).
   `docs/reported/heap-cons-byvalue-aggregate-head-breaks-int-carrier-list-helpers.md`.
 - **G6 (remaining half)** -- the HKT `fmap` closure-thunk per-carrier ABI. The
   spec-selection half is FIXED (int no longer miscompiles, cstr no longer
