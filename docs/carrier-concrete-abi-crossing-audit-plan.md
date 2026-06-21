@@ -106,7 +106,7 @@ constrained/parametric/HKT spec body and must consult the recovery routine.
 | ~~G3~~ | `emit_expr.c` `expr_emits_byvalue_carrier_abi` vs site 6 | instance method whose HEAD is a by-value applied struct (`Enc [(Option cstr)]`) takes the carrier param, but a by-value struct-**field** receiver passed the aggregate -- now bridged (spill + address-of) like a local | `expr_emits_byvalue_carrier_abi` (EX_GET_FIELD) + `emit_carrier_bridge` | **[FIXED]** | this branch |
 | ~~G4~~ | int-carrier list helpers (`list-length`, ...) vs `(:: xs :int)` coercion | generic carrier walk of a `:heap` `Cons` whose head is a **by-value aggregate** reads `tail` at the wrong offset and **segfaults** (consumer side of G1) -- both supported consumer paths now correct: the concrete `(Cons A)` walk via the element-aware pure-Turmeric `tlength`, and the phantom `(List A)` view via phantom-opaque element specialization (a per-element clone minted only when the phantom's tyvar is a by-value aggregate, zero churn otherwise). The bare `(:: xs :int)` carrier escape-hatch stays unsafe BY DESIGN (explicit erasure of a layout-bearing element) | `tlength` (`stdlib/list.tur`) + `type_phantom_hides_aggregate` (`emit_module.c`) | **[FIXED]** | this branch |
 | ~~G5~~ | `Option`'s legacy `tur_option_t` special-casing vs #482 | (S1) a struct-field-read `Option` passed to a typeclass method inserts a stale `tur_option_t *`->aggregate reconstruction; (S2) `Result__T` typedef emitted before `T` once `T` embeds an `(Option ...)` field -- **BOTH fixed in self-contained repros**, pending real `json/encode` derive-json confirmation | `field_read_emits_byvalue_aggregate` (S1); forward typedef in `emit_registered_struct_app_rec` (S2) | **[FIXED*]** | this branch |
-| **G6** | HKT `fmap` instance layout (carrier vs by-value) + closure-thunk register class | a generic `cata = alg . fmap (cata alg) . unroll`: (a) the int call grabbed a return-differentiated sibling (`bool`) spec -- **FIXED** (`emit_spec_result_mismatch`; int now correct, cstr no longer segfaults); (b) **sharpened (this branch):** the carrier `Functor` instance `__inst_Functor_fmap_T` builds the int64-field `tur_adt_ReF` but a sub-int64 element reads the narrow by-value `tur_adt_ReF__bool` -- a layout mismatch that reproduces with a *direct* `fmap` (no cata/closure). Fix = mint+select a by-value HKT instance-method spec at the `fmap` call site (M7 layer-4 emit already returns the by-value ADT once a spec is active; the gap is no spec is interned -- elab attaches no result-element binding) -- **still open** | spec-selection: `emit_spec_result_mismatch`; instance layout / by-value HKT spec: open | **[PARTIAL]** | (a) this branch |
+| **G6** | HKT `fmap` instance layout (carrier vs by-value) + closure-thunk register class | a generic `cata = alg . fmap (cata alg) . unroll`: (a) return-differentiated sibling spec -- **FIXED** (`emit_spec_result_mismatch`); (b) **direct `fmap` over a parametric SUM type miscompiled** (carrier `tur_adt_ReF` int64 fields vs by-value `tur_adt_ReF__bool` narrow fields) -- **FIXED (this branch):** by-value HKT instance-method spec now minted for parametric ADT results (`type_app_is_concrete_adt`; `EX_MATCH`/ADT-ctor bodies recognized as by-value-constructible; ctor suffix recovered from the active spec's result family). bool/float/int/cstr round-trip. (c) **recursive cata** (`fmap`'s element is the enclosing generic's ungrounded tyvar; recursive closure lifted to one int64 carrier fn) -- **still open**, needs per-spec cloning of a captured passed closure + symbolic method->generic tyvar binding | (a) `emit_spec_result_mismatch`; (b) `type_app_is_concrete_adt` + `emit_hkt_spec_ctor_suffix`; (c) passed-closure spec clone: open | **[PARTIAL]** | (a)+(b) this branch |
 | ~~G7~~ | site 8, return/decode side, sum field | a `defdata`-sum struct field's `(decode ... (Result Cmd cstr))` dispatched to the generic `decode_T` at the ENCLOSING struct's result type instead of the field's `Decode [Cmd]` instance -- the `EX_ASCRIBE` scan now registers a return-polymorphic dict-less call with the ascription's concrete result as `result_type_override` (instead of the plain inner scan), and the two result-recovery heuristics bail when an override is supplied | `emit_abi_scan_expr` (EX_ASCRIBE) + `result_type_override` | **[FIXED]** | this branch |
 | ~~G9~~ | witness-side, parametric-container element | the MIRROR of G2: a single-level `Enc [Cons]` over `(Cons (Option int))`. G2 already minted the `Cons__Option__int` cell + inner Option by-value spec; the remaining defect was the dispatch arg `(.head xs)` (an embedded `Option__int`) reconstructed via a stale `tur_option_t *` carrier cast | `field_read_emits_byvalue_aggregate` (suppresses the spurious carrier->concrete bridge) | **[FIXED]** | this branch |
 | ~~G10~~ | instance selection, applied-struct heads | two instances of one class over applied structs differing only in the element (`Enc [(Option cstr)]` vs `Enc [(Option int)]`) conflated -- the element-discrimination only treated struct/ADT elements as concrete, ignoring a primitive (cstr vs int) difference (NOT an ABI bug; instance keying) | `typeclass_type_arg_concrete` (primitive elements discriminate) | **[FIXED]** | this branch |
@@ -775,10 +775,50 @@ helper `list-count` (`stdlib/list-typed.tur`).
   inner-closure-spec machinery (today only for closure-*returning* defns) to
   *passed* closures -- a deep closure-lifting change.
 
-### Progress (branch claude/g6-carrier-concrete-abi-audit-pb3gqo)
+### Progress (branch claude/g6-carrier-concrete-abi-audit-pb3gqo) -- M6 HKT-dispatch monomorphization over sum types LANDED
 
-**G6 -- diagnosis sharpened, fix direction and entry points pinned (no code
-change; remaining half still open).** Investigating the "closure-thunk" half
+**M6 core / G6(b) -- FIXED (this branch, suite green 1746/0, zero churn).**
+Implemented by-value HKT instance-method monomorphization for parametric ADT
+(`defdata` sum) results -- the case the existing M7 layer-4 machinery did not
+cover (it handled parametric STRUCTS like Option/Result/Pair). A `Functor [ReF]`
+over a sum, whose method body `match`es the receiver and constructs the result
+family per arm, now mints a per-(f, A) by-value spec so the producer builds the
+same `tur_adt_ReF__<elem>` layout the consumer reads:
+
+- elab (`elab_typeclasses.c`): `m7_body_constructs_byvalue` /
+  `m7_body_returns_byvalue_element` recurse through `EX_MATCH` and accept an ADT
+  constructor call as by-value-constructible.
+- types (`types.c`/`.h`): `type_app_is_concrete_adt`, `type_adt_app_def`.
+- emit (`emit_module.c`): a concrete parametric-ADT HKT instance result is an
+  ABI change -> by-value spec interned.
+- emit (`emit_expr.c`): `emit_hkt_spec_ctor_suffix` recovers the monomorphized
+  ctor suffix from the active spec's result family, so the body emits
+  `ctor_AltF__bool` not the carrier `ctor_AltF`.
+
+Fixture `hkt-fmap-byvalue-sum-element` (bool/float/int/cstr round-trip through a
+DIRECT `fmap`). This closes the direct-`fmap` miscompile (which reproduced with
+no cata/closure).
+
+**G6(c) recursive cata -- still open (deep closure-lifting).** `cata` via `fmap`
+still folds bool/float wrong because inside the GENERIC `re-cata` body `fmap`'s
+element `B` is the enclosing generic's ungrounded tyvar (so no by-value `fmap`
+spec is minted there), and the recursive closure `(fn [c] : B (re-cata alg c))`
+is lifted to ONE int64-carrier `__fn` calling the carrier base `re_hycata`,
+shared across return-specs. Closing it needs three coupled changes: (A) capture
+the symbolic method->generic tyvar binding `b -> B` (which `m7_collect_tyvar_-
+bindings` deliberately SKIPS when the actual is a tyvar, for the Applicative
+`ap` case); (B) reconstruct the by-value result `(ReF bool)` at emit from the
+method's declared `(f b)` instantiated through the composed spec bindings; and
+(C) per-spec clone the CAPTURED closure PASSED as a call argument (the existing
+`inner_closure_spec_idx` machinery clones only closures a generic defn RETURNS),
+resolving the clone's recursive `re-cata` call to the active return-spec. The
+EX_CLOSURE emit already consults `inner_closure_spec_idx` generically, so (C) is
+register-side wiring -- but the set is a research-grade change best landed
+separately from the green core above.
+
+### Earlier note (diagnosis, superseded by the FIXED status above)
+
+Investigating the "closure-thunk" half
 showed it was mischaracterized: the bug is a **`Functor`-instance layout**
 mismatch, not a closure/cata problem. It reproduces with a single *direct*
 `fmap` over a sub-int64 element -- no cata, no recursion, no closure capture:

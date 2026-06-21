@@ -148,6 +148,47 @@ identified; the by-value-HKT-spec minting is the remaining implementation.
 
 ---
 
+## Status update (2026-06-21, branch claude/g6-carrier-concrete-abi-audit-pb3gqo) -- DIRECT-fmap half FIXED (by-value HKT instance monomorphization over sum types); recursive cata half remains
+
+The direct-`fmap` layout half is now **FIXED**. The M7 by-value HKT
+instance-method spec machinery handled parametric STRUCTS (Option/Result/Pair)
+but not parametric ADTs (`defdata` sum types), so a `Functor [ReF]` over a sum
+fell through to the int64-carrier representative. Closed by:
+
+1. **elab** (`elab_typeclasses.c`): `m7_body_constructs_byvalue` /
+   `m7_body_returns_byvalue_element` now recurse through an `EX_MATCH` body and
+   accept an ADT constructor call (`e->as.call_.ctor`) -- the shape of a
+   match-bodied Functor over a sum.
+2. **types** (`types.c`/`.h`): `type_app_is_concrete_adt` + `type_adt_app_def`,
+   distinct from the struct-app predicate the existing machinery used.
+3. **emit register** (`emit_module.c`): an HKT instance method whose result
+   grounds to a concrete parametric ADT app is an ABI change -> a per-(f, A)
+   by-value spec is interned.
+4. **emit ctor** (`emit_expr.c`): a bare-TY_ADT construct inside a by-value HKT
+   spec has its element erased; `emit_hkt_spec_ctor_suffix` recovers the
+   monomorphized ctor suffix from the active spec's result family, so the body
+   emits `ctor_AltF__bool` (matching the consumer's by-value layout) instead of
+   the carrier `ctor_AltF`. `g` is already called at its true result register
+   class, so float/bool/cstr/int all round-trip.
+
+Fixture `tests/fixtures/hkt-fmap-byvalue-sum-element` (bool/float/int/cstr round
+trip through a direct `fmap`). Suite green (1746/0), zero snapshot churn.
+
+**Remaining (recursive cata half).** `cata alg = alg . fmap (cata alg) . unroll`
+still folds `bool`/`float` wrong, because inside the GENERIC `re-cata` body the
+`fmap` result element `B` is an ungrounded tyvar, so (a) no by-value `fmap` spec
+is minted there, and (b) the recursive closure `(fn [c : Re] : B (re-cata alg c))`
+is lifted to a SINGLE top-level `__fn_1047` returning `int64_t` and calling the
+int64-carrier base `re_hycata` -- shared across all return-specs. Closing it
+requires per-spec cloning of a CAPTURED closure PASSED as a call argument (the
+existing inner-closure-spec machinery, `inner_closure_spec_idx`, only clones
+closures a generic defn RETURNS, `returns_closure_fn_binding`), plus resolving
+the clone's recursive `re-cata` call to the active return-spec
+(`re_cata__spec__bool`). That is the deep closure-lifting change the audit plan
+flags; it is independent of the now-fixed direct-`fmap` layout.
+
+---
+
 # Generic catamorphism via `Functor` `fmap` miscompiles per carrier
 
 ## One-line summary
