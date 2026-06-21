@@ -1034,6 +1034,22 @@ static bool emit_inst_head_matches(Type pattern, Type concrete) {
                           : pattern.as.app.arg == concrete.as.app.arg;
         return fn_ok && arg_ok;
     }
+    /* G2 (HKT instance head): an instance written over a bare type constructor
+     * (`definstance Enc [Cons]`, head `Cons` with type params) matches any
+     * concrete application `(Cons X)`.  This mirrors the `__inst_<Class>_<method>
+     * __<Head>` name the suffix-reconstruction fallback already builds, so the
+     * FnDef lookup agrees with the name resolver instead of falling through to
+     * reconstruction.  Without it a nested dispatch on a parametric-container
+     * element cannot find the inner instance's FnDef to mint its by-value spec. */
+    if (pattern.kind == TY_STRUCT && pattern.as.struct_.def &&
+        pattern.as.struct_.def->n_type_params > 0 && concrete.kind == TY_APP) {
+        Type head = concrete;
+        while (head.kind == TY_APP && head.as.app.fn) head = *head.as.app.fn;
+        if (head.kind == TY_STRUCT &&
+            head.as.struct_.def == pattern.as.struct_.def) {
+            return true;
+        }
+    }
     return false;
 }
 
@@ -1138,8 +1154,8 @@ static bool emit_pattern_extract_classvar(const Type *pattern, const Type *concr
  * rewrite (emit_reresolve_method_call) and the scan-time liveness mark
  * (emit_reresolve_method_fndef), so the two never disagree about which concrete
  * instance a constrained-instance body dispatches to. */
-static bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
-                                     Type *out_resolved, const Expr **out_dict) {
+bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
+                              Type *out_resolved, const Expr **out_dict) {
     if (!ctx || !ctx->current_abi_specialization || !call ||
         call->kind != EX_CALL) {
         return false;
@@ -1158,6 +1174,11 @@ static bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
      * (return-dispatch-tyvar-silent-misdispatch.md) */
     Type disp_ty;
     bool have_disp = false;
+    /* `disp_ty` is an owned (malloc'd) TY_APP spine only when it came from the
+     * substitute-struct-app branch below; freed before every return so the
+     * recovered concrete element type does not leak (the compiler/codegen path is
+     * leak-checked).  Exposed by the nested `(Cons int)` element case (G2). */
+    bool disp_ty_owned = false;
     if (call->as.call_.n_args >= 1 && call->as.call_.args) {
         const Expr *recv = call->as.call_.args[0];
         while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
@@ -1246,6 +1267,9 @@ static bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
                     if (fr.kind != TY_TYVAR && fr.kind != TY_UNKNOWN) {
                         disp_ty = fr;
                         have_disp = true;
+                        disp_ty_owned = (fr.kind == TY_APP);
+                    } else {
+                        free_struct_app_type(fr);
                     }
                 }
             } else if (rt.kind == TY_STRUCT && rt.as.struct_.def &&
@@ -1267,6 +1291,9 @@ static bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
     if (!have_disp) return false;
 
     Type resolved = emit_resolve_type(ctx, disp_ty);
+    /* emit_resolve_type produced an arena-backed (or unchanged-scalar) result; the
+     * owned malloc'd `disp_ty` spine is no longer needed. */
+    if (disp_ty_owned) { free_struct_app_type(disp_ty); disp_ty_owned = false; }
     /* nested-construct-byvalue (Gap #4): a constrained parametric instance binds
      * its constraint var (`(Dec A)` -> tyvar `A`) only implicitly -- the spec's
      * stored bindings carry just the class var (`a -> (Option cstr)`), not `A`.
@@ -1455,8 +1482,27 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
     /* GHE: typeclass-method dispatch inside a monomorphized constrained generic
      * takes precedence over the generic-function specialization lookup below. */
     {
-        char *reresolved = emit_reresolve_method_call(ctx, call);
-        if (reresolved) return reresolved;
+        /* G2 (carrier<->concrete nested dispatch): if the ABI scan minted a
+         * per-instantiation by-value spec for this call under the active outer
+         * (emit_abi_try_nested_instance_dispatch_redirect), prefer that recorded
+         * spec over the carrier-base re-resolution -- the recorded clone takes the
+         * concrete container by value (`Cons__int *`), the base takes int64. */
+        const char *active_outer = ctx && ctx->current_abi_specialization
+            ? ctx->current_abi_specialization->clone_name : NULL;
+        bool has_recorded_spec = false;
+        if (ctx) {
+            for (uint32_t i = 0; i < ctx->n_specialized_calls; i++) {
+                if (ctx->specialized_call_exprs[i] == call &&
+                    ctx->specialized_call_outer[i] == active_outer) {
+                    has_recorded_spec = true;
+                    break;
+                }
+            }
+        }
+        if (!has_recorded_spec) {
+            char *reresolved = emit_reresolve_method_call(ctx, call);
+            if (reresolved) return reresolved;
+        }
     }
     if (ctx && call) {
         /* M5 Finding 7: the same source-body call Expr* is recorded once per

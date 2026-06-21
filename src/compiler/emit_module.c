@@ -1591,6 +1591,113 @@ static bool type_is_heap_vec(Type t) {
          strcmp(def->name, "MutableMap") == 0);
 }
 
+/* G2 (carrier<->concrete nested dispatch): a constrained-instance body that
+ * dispatches a class method on a NESTED parametric element -- e.g. `(enc (.value
+ * x))` in `(definstance Enc [Option] [(Enc A)] ...)` where the active spec is
+ * `(Option (Cons int))`, so `(.value x)` is a concrete `(Cons int)` -- must call
+ * the inner instance's PER-INSTANTIATION by-value spec
+ * (`__inst_Enc_enc_Cons__spec__..._Cons__int`, taking `Cons__int *`), not the
+ * generic carrier shim `__inst_Enc_enc_Cons(int64_t)`.  Without this the dispatch
+ * stays pinned to the carrier base and the by-value `(.value x)` is passed where
+ * an int64 is expected -- the `int` case survives by pointer-width luck, the
+ * `float`/by-value-struct case is a silent miscompile.
+ *
+ * The dispatch-type chokepoint (`emit_reresolve_disp_type`) already recovers the
+ * concrete receiver type (`(Cons int)`); this is the registration-side companion
+ * that mints the by-value spec for the re-dispatched instance method and records
+ * the call->spec mapping so the emit side routes to it.  The single-level
+ * (`@Cons` witness) path mints the identical spec via the normal monomorphizer;
+ * `emit_abi_intern_spec` dedupes the two.  Returns true (and records the
+ * redirect) when it fired. */
+static bool emit_abi_try_nested_instance_dispatch_redirect(
+        EmitCtx *ctx, const Expr *call, const Expr **items, uint32_t n_items,
+        FnDef *redisp, const Type *resolved) {
+    if (!redisp || !redisp->binding || !redisp->owner_instance) return false;
+    if (redisp->n_params < 1 || !redisp->body || redisp->closure) return false;
+    if (!resolved || resolved->kind != TY_APP) return false;
+    if (!type_has_concrete_codegen_layout(resolved)) return false;
+
+    Binding *fn_binding = redisp->binding;
+    if (fn_binding->type.kind != TY_FN || !fn_binding->is_global ||
+        fn_binding->closure_fn_binding) {
+        return false;
+    }
+    const Expr *fn_expr = emit_abi_find_fn_expr(items, n_items, fn_binding);
+    if (!fn_expr || !fn_expr->as.fn_def_.fn) return false;
+    FnDef *fd = fn_expr->as.fn_def_.fn;
+    if (fd->closure || !fd->body) return false;
+
+    /* The instance method's receiver param is erased to the bare carrier struct
+     * (`Cons`) at instance elaboration -- the element tyvar `A` is gone from the
+     * param type.  Recover the element bindings {A -> int} from the recovered
+     * concrete receiver `(Cons int)` paired with the HEAD struct's declared
+     * type-param names (which is exactly what the instance body's `(.head xs)`
+     * tyvar reads resolve against). */
+    Type resolved_copy = *resolved;
+    StructDef *rsd = NULL; Type rargs[8]; uint8_t rn = 0;
+    if (!type_extract_struct_app(&resolved_copy, &rsd, rargs, &rn) || !rsd) {
+        return false;
+    }
+    if (rsd->n_type_params != rn || rn == 0) return false;
+    AbiTypeBinding eb[ABI_TYPE_BINDINGS_MAX]; uint8_t enb = 0;
+    for (uint8_t p = 0; p < rn && enb < ABI_TYPE_BINDINGS_MAX; p++) {
+        if (!rsd->type_params[p]) continue;
+        eb[enb].name = rsd->type_params[p];
+        eb[enb].type = rargs[p];
+        enb++;
+    }
+    if (enb == 0) return false;
+
+    /* Build the spec's arg/result types.  arg_types[0] is the concrete container
+     * receiver (`(Cons int)` -> `Cons__int *`); other params (rare for a
+     * single-receiver dispatch method) instantiate their erased declared type
+     * through the element bindings.  The result is the method's already-concrete
+     * declared return. */
+    uint8_t n_spec_args = fd->n_params;
+    if (n_spec_args > MAX_FN_ARITY) return false;
+    Type arg_types[MAX_FN_ARITY];
+    arg_types[0] = *resolved;
+    for (uint8_t i = 1; i < n_spec_args; i++) {
+        arg_types[i] = emit_abi_instantiate_type(&fd->params[i]->type, eb, enb,
+                                                 ctx->type_arena);
+    }
+    /* The receiver slot must end up a concrete by-value layout, else there is no
+     * ABI change and the carrier base is already correct. */
+    if (!type_has_concrete_codegen_layout(&arg_types[0])) return false;
+
+    Type result_type = fn_binding->type.as.fn.result_full_type
+        ? *fn_binding->type.as.fn.result_full_type
+        : emit_type_from_kind(fn_binding->type.as.fn.result_kind);
+    result_type = emit_abi_instantiate_type(&result_type, eb, enb, ctx->type_arena);
+
+    uint32_t before_specs = ctx->n_abi_specializations;
+    EmitAbiSpecialization *spec = emit_abi_intern_spec(
+        ctx, fn_binding, fn_expr, fd, eb, enb, arg_types, n_spec_args,
+        result_type, call);
+    if (!spec || !spec->clone_name) return false;
+    uint32_t outer_spec_idx = (uint32_t)(spec - ctx->abi_specializations);
+    emit_abi_record_specialized_call(ctx, call, spec->clone_name);
+
+    /* Recurse into the freshly-minted spec body so its own inner dispatch
+     * (`(.head xs)` -> `enc`) is scanned and the per-element instances it reaches
+     * stay live -- mirrors the normal monomorphizer's recursion (GHE2). */
+    if (fd->body && ctx->n_abi_specializations != before_specs) {
+        const EmitAbiSpecialization *saved = ctx->current_abi_specialization;
+        bool saved_in_table = saved >= ctx->abi_specializations &&
+            saved < ctx->abi_specializations + ctx->n_abi_specializations;
+        uint32_t saved_idx = saved_in_table
+            ? (uint32_t)(saved - ctx->abi_specializations) : 0;
+        ctx->current_abi_specialization = &ctx->abi_specializations[outer_spec_idx];
+        emit_abi_scan_expr(ctx, fd->body, items, n_items);
+        ctx->current_abi_specialization = saved_in_table
+            ? &ctx->abi_specializations[saved_idx] : saved;
+    }
+    /* Keep the carrier base live too: the instance dict / polymorphic dispatch
+     * still references `__inst_Enc_enc_Cons(int64_t)`. */
+    emit_abi_note_carrier_call(ctx, fn_binding);
+    return true;
+}
+
 static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                                    const Expr **items, uint32_t n_items,
                                    const Type *result_type_override) {
@@ -1602,8 +1709,23 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * -- so emit_instance_is_live keeps it and the emitted spec body's reference
      * to the re-dispatched callee resolves at link time. */
     if (ctx->current_abi_specialization && call->as.call_.dict_arg) {
-        FnDef *redisp = emit_reresolve_method_fndef(ctx, call);
+        Type rresolved = {0}; const Expr *rdict = NULL;
+        FnDef *redisp = NULL;
+        if (emit_reresolve_disp_type(ctx, call, &rresolved, &rdict) && rdict &&
+            rdict->as.dict_.instance && rdict->as.dict_.instance->typeclass) {
+            redisp = emit_concrete_inst_method_fndef(
+                ctx, rdict->as.dict_.instance->typeclass, rresolved,
+                rdict->as.dict_.method_name);
+        }
         if (redisp && redisp->binding) {
+            /* G2: when the re-dispatched instance method is itself parametric and
+             * the recovered receiver is a concrete parametric container, mint its
+             * by-value spec and route the call to it (the carrier base alone would
+             * silently miscompile a by-value/float element). */
+            if (emit_abi_try_nested_instance_dispatch_redirect(
+                    ctx, call, items, n_items, redisp, &rresolved)) {
+                return;
+            }
             /* emit_reresolve_method_call rewrites this call site to the concrete
              * instance (`__inst_Dec_dec_Box`) at emit time, so the baked carrier
              * representative this call's fn_binding points at is replaced.  Note

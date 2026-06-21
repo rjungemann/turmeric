@@ -355,6 +355,21 @@ bool emit_instance_is_live(const struct EmitCtx *ctx, struct TypeClassInstance *
  * `dec` impl).  Used by the ABI scan to mark that instance live so the emitted
  * spec body's reference to it resolves.  Defined in emit_core.c. */
 struct FnDef *emit_reresolve_method_fndef(struct EmitCtx *ctx, const struct Expr *call);
+/* G2 (carrier<->concrete nested dispatch): shared dispatch-type resolver -- given
+ * a typeclass-method call inside an active spec whose receiver/result element was
+ * erased to the carrier, recover the concrete dispatch type (`out_resolved`) and
+ * the call's dict (`out_dict`).  Returns false when no re-resolution applies.
+ * Exposed so emit_module.c's ABI-registration pass can mint a by-value spec for a
+ * redispatched parametric instance method whose receiver is itself a concrete
+ * parametric container.  Defined in emit_core.c. */
+bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
+                              Type *out_resolved, const Expr **out_dict);
+/* G2: the concrete instance-method FnDef a class-method call resolves to for a
+ * given recovered dispatch type (e.g. `__inst_Enc_enc_Cons` for `(Cons int)`).
+ * Defined in emit_core.c. */
+FnDef *emit_concrete_inst_method_fndef(EmitCtx *ctx, const TypeClass *tc,
+                                       Type resolved,
+                                       const char *method_field_name);
 /* RT/SC5: carrier-return bridge.  A typeclass instance method whose declared
  * return is the dispatch type variable lowers to the int64_t carrier, but its
  * body resolves to a concrete by-value struct for that instance.  When the

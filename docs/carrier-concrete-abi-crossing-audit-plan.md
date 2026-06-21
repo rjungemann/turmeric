@@ -102,17 +102,19 @@ constrained/parametric/HKT spec body and must consult the recovery routine.
 | 8 | `emit_core.c:1141`/`1318` | method-call dispatch re-resolution | `emit_reresolve_*` | [OK] for scalar/value-struct/`:heap` single-level | #475-#480 |
 | 9 | `emit_core.c:1308` | scan-time liveness companion | `emit_reresolve_method_fndef` | [OK] | #480 |
 | ~~G1~~ | `emit_stmt.c` `EX_CALL` | `(list ...)` homogeneity helper `tur-list-homog__` dead call elided for by-value aggregate args | n/a (elide) | **[FIXED]** | this branch |
-| **G2** | site 8, recursive case | method dispatch where the receiver element is **itself a parametric container** (`(.value x) : (Cons A)`) | partial | **[GAP]** | -- |
+| ~~G2~~ | site 8, recursive case | method dispatch where the receiver element is **itself a parametric container** (`(.value x) : (Cons A)`): mint the inner instance's by-value spec + route to it | `emit_reresolve_disp_type` + `emit_abi_try_nested_instance_dispatch_redirect` | **[FIXED]** | this branch |
 | **G3** | `elab_typeclasses.c` instance-method ABI vs site 6 | instance method whose HEAD is a by-value applied struct (`Enc [(Option cstr)]`) takes the carrier param, but a by-value struct-**field** receiver passes the aggregate | none | **[GAP]** | -- |
 | **G4** | int-carrier list helpers (`list-length`, ...) vs `(:: xs :int)` coercion | generic carrier walk of a `:heap` `Cons` whose head is a **by-value aggregate** reads `tail` at the wrong offset and **segfaults** (consumer side of G1) | none | **[GAP]** | -- |
 | **G5** | `Option`'s legacy `tur_option_t` special-casing vs #482 | (S1) a struct-field-read `Option` passed to a typeclass method inserts a stale `tur_option_t *`->aggregate reconstruction (`Option` only; `Pair` is the working control); (S2) `Result__T` typedef emitted before `T` once `T` embeds an `(Option ...)` field | none | **[GAP]** | -- |
 | **G6** | HKT `fmap` closure-thunk + cata result (fn-value spec path) | a generic `cata = alg . fmap (cata alg) . unroll` monomorphizes the recursive closure handed to `fmap` with the wrong per-carrier thunk fn-pointer ABI (cstr -> segfault) and threads the `(:: (fmap ...) (ReF B))` result through the int64 carrier (int/bool -> boxed, wrong `=`) | none | **[GAP]** | -- |
 | **G7** | site 8, return/decode side, sum field | a `defdata`-sum struct field's `(decode ... (Result Cmd cstr))` dispatches to the generic `decode_T` at the ENCLOSING struct's result type instead of the field's `Decode [Cmd]` instance (struct fields resolve right; ADT heads do not) | partial | **[GAP]** | -- |
+| **G9** | witness-side, parametric-container element | the MIRROR of G2: a single-level `Enc [Cons]` whose element is itself a parametric container (`(Cons (Option int))`) collapses the element to `int` at the witness (spec named `..._Cons__int`, not `..._Cons__Option__int`) and dispatches the by-value `(.head xs)` on the carrier representative | none | **[GAP]** | -- |
 
 Sites 1-9 are the fish already caught. **G1, G2, G3, and G4 are the gaps the
-composition stress matrix exposed** (section 5); **G5** is a #482 follow-up
-filed by the maintainer (Option-specific residual special-casing, two codegen
-sites). G3 was filed independently on
+composition stress matrix exposed** (section 5); **G1 and G2 are now closed**
+(this branch). **G5** is a #482 follow-up filed by the maintainer
+(Option-specific residual special-casing, two codegen sites); **G9** is the
+witness-side mirror of G2, found while closing it. G3 was filed independently on
 `main` by the maintainer (`docs/reported/instance-method-byvalue-struct-field-receiver-abi-mismatch.md`,
 #482-era) -- same family, same fix direction; it is the single-level
 struct-field-receiver companion of G2's nested-container dispatch, and the two
@@ -182,11 +184,11 @@ segfaults (filed:
 `docs/reported/heap-cons-byvalue-aggregate-head-breaks-int-carrier-list-helpers.md`),
 and the nested `enc` dispatch is gap G2.
 
-### G2 -- `(Option (Cons A))`: inner instance method stays at the carrier signature
+### G2 -- `(Option (Cons A))`: inner instance method stays at the carrier signature -- **FIXED (this branch)**
 
 Encoding `(:: (some (:: (list 7.1 2.5) (Cons float))) (Option (Cons float)))`
-**compiles with a warning and silently miscompiles**. The `Enc [Option]` spec
-body calls `__inst_Enc_enc_Cons((x).value)` where `(x).value` is a concrete
+**compiled with a warning and silently miscompiled**. The `Enc [Option]` spec
+body called `__inst_Enc_enc_Cons((x).value)` where `(x).value` is a concrete
 `Cons__float *`, but the inner instance was **not** re-resolved per element --
 it kept the generic carrier signature `__inst_Enc_enc_Cons(int64_t)`:
 
@@ -197,12 +199,28 @@ note: expected 'int64_t' but argument is of type 'Cons__float *'
 output: 4619679907765970534      (want: 7.1 -- a double's bit pattern read as int64)
 ```
 
-The `int` case prints `42` by luck (pointer width happens to align); the
-`float` case is a denormal-class silent miscompile -- precisely the failure
-mode CLAUDE.md flags. This is the *dispatch-on-nested-element* (encode/read)
-sibling of #480's *nested-construct* (decode/write) fix.
+**Fix:** the dispatch-type chokepoint `emit_reresolve_disp_type` already
+recovered the concrete receiver `(Cons float)`; the gap was (1) the instance-head
+matcher (`emit_inst_head_matches`) not matching a bare type-constructor instance
+head (`Enc [Cons]`) against the applied `(Cons float)`, and (2) no by-value spec
+being minted/routed. `emit_abi_try_nested_instance_dispatch_redirect`
+(`emit_module.c`) now mints the inner instance method's per-instantiation
+by-value spec (`__inst_Enc_enc_Cons__spec__..._Cons__float`, taking
+`Cons__float *`) and records the call so the emit side routes to it; the
+single-level `@Cons` path mints the identical spec and `emit_abi_intern_spec`
+dedupes. A pre-existing owned-clone leak in the field-substitution branch of
+`emit_reresolve_disp_type` (surfacing only once the recovered element is a
+TY_APP) is freed so the leak-checked codegen path stays clean. The float line
+now prints `7.1`; int/float/cstr round-trip. Fixture:
+`tests/fixtures/constrained-instance-dispatch-nested-parametric-element`. Suite
+green (1740/0).
 
-Filed: `docs/reported/constrained-instance-dispatch-nested-parametric-element-carrier-collapse.md`
+Resolved report archived at
+`docs/archive/constrained-instance-dispatch-nested-parametric-element-carrier-collapse.md`.
+Closing G2 confirmed a distinct, still-open **mirror** -- the inner-parametric
+nesting `(Cons (Option A))`, where a single-level `Enc [Cons]` collapses its
+parametric-container element at the witness -- tracked as gap G9
+(`docs/reported/constrained-instance-dispatch-parametric-container-element-collapse.md`).
 
 ### G3 -- `Enc [(Option cstr)]` over a struct field: instance-method param stays at the carrier (maintainer-filed on `main`)
 
@@ -338,6 +356,28 @@ only TY_STRUCT) -- per the dispatch-side chokepoint discipline of
 at `99cc8b3` (post-#482). Filed:
 `docs/reported/derive-json-sum-field-decodes-wrong-instance.md`.
 
+### G9 -- `(Cons (Option A))`: the witness-side mirror of G2 (parametric-container element collapses at the witness)
+
+Surfaced while closing G2. G2 fixed the case where a constrained instance
+*body* dispatches on a parametric-container receiver (`(Option (Cons A))`).
+This is the **mirror**: a single-level `Enc [Cons]` whose *element* is itself a
+parametric container, `(Cons (Option int))`. The `@Cons` witness collapses the
+`(Option int)` element to `int` (the minted spec is named `..._Cons__int`, not
+`..._Cons__Option__int`, with a `Cons__int` cell), so the spec body's
+`(.head xs)` -- a by-value `Option__int` -- is dispatched on the carrier
+representative `__inst_Enc_enc_int(int64_t)`:
+
+```
+error: incompatible type for argument 1 of '__inst_Enc_enc_int'
+note: expected 'int64_t' but argument is of type 'Option__int'
+```
+
+Verified **pre-existing** (fails identically against the pre-G2 build), so G2
+neither caused nor fixed it. It needs the value-side chokepoint
+(`emit_var_spec_arg_type`) to preserve the parametric element through the
+witness binding, then the same dispatch redirect G2 added, one level in. Filed:
+`docs/reported/constrained-instance-dispatch-parametric-container-element-collapse.md`.
+
 ## 6. Plan (phased)
 
 ### P0 -- Audit (this document). DONE.
@@ -345,13 +385,14 @@ at `99cc8b3` (post-#482). Filed:
 Crossing sites enumerated, shared recovery routine named, gaps G1/G2 found
 and filed (plus G3 and G5, filed independently as #482 follow-ups). This
 converts the open surface from "unknown number of fish" to a **closeable
-list**. **G1 is now closed** (this branch); G2/G3/G4/G5/G6/G7 remain and are
-tracked as table rows under P2 (G4 is the consumer-side crossing that closing
-G1 exposed; G5 is the Option-specific residual special-casing #482 left stale;
-G6 is the HKT `fmap` closure-thunk/cata-result crossing on the fn-value spec
-path; G7 is the return/decode-side dispatch gap for a `defdata`-sum struct
-field). The structural follow-up that routes all of these through mandatory
-recovery chokepoints is
+list**. **G1 and G2 are now closed** (this branch); G3/G4/G5/G6/G7/G9 remain
+and are tracked as table rows under P2 (G4 is the consumer-side crossing that
+closing G1 exposed; G5 is the Option-specific residual special-casing #482 left
+stale; G6 is the HKT `fmap` closure-thunk/cata-result crossing on the fn-value
+spec path; G7 is the return/decode-side dispatch gap for a `defdata`-sum struct
+field; G9 is the witness-side mirror of G2, found while closing it). The
+structural follow-up that routes all of these through mandatory recovery
+chokepoints is
 [docs/carrier-crossing-recovery-routing-plan.md](carrier-crossing-recovery-routing-plan.md).
 
 ### P1 -- Promote the composition stress matrix to fixtures (on green)
@@ -365,12 +406,13 @@ organically:
   `Option (Option A)`
 
 The single-level cells already exist (`constrained-instance-element-dispatch`,
-`constrained-instance-heap-field-dispatch`). The nested cells are added as
-each gap closes -- a fixture is only committed once it PASSES, so the gate
-stays green (per CLAUDE.md). The minimal repros live in the two reported docs
-until then.
+`constrained-instance-heap-field-dispatch`); the `Option (Cons A)` nested cell
+is now `constrained-instance-dispatch-nested-parametric-element` (G2). The
+remaining nested cells are added as each gap closes -- a fixture is only
+committed once it PASSES, so the gate stays green (per CLAUDE.md). The minimal
+repros live in the reported docs until then.
 
-### P2 -- Route the remaining sites through the shared recovery (close G2-G7)
+### P2 -- Route the remaining sites through the shared recovery (close G3-G9)
 
 Each gap closes by *adding to a chokepoint* per
 [docs/carrier-crossing-recovery-routing-plan.md](carrier-crossing-recovery-routing-plan.md),
@@ -389,12 +431,15 @@ not by adding another site-local gated branch.
   helpers per element type at the `(:: xs :int)` coercion point (keeps the
   by-value thread end-to-end, consistent with P2). Until fixed, the typed
   accessor path is the supported way to consume such a list.
-- **G2**: the dispatch re-resolver (`emit_reresolve_disp_type`,
-  `emit_core.c:1141`) must recurse: when the receiver expression is a field
-  extraction whose recovered type is *itself* a parametric container, mint /
-  select the per-instantiation inner spec (`__inst_Enc_enc_Cons__spec__Cons__float`)
-  rather than the generic carrier `__inst_Enc_enc_Cons`. This is the natural
-  extension of sites 5+8 to the recursive case.
+- **G2**: DONE (this branch). The dispatch-type chokepoint
+  `emit_reresolve_disp_type` already recovers the parametric-container receiver;
+  `emit_abi_try_nested_instance_dispatch_redirect` (`emit_module.c`) mints the
+  per-instantiation inner spec (`__inst_Enc_enc_Cons__spec__..._Cons__float`,
+  taking `Cons__float *`) and records the call so the emit side routes to it
+  instead of the generic carrier `__inst_Enc_enc_Cons`. `emit_inst_head_matches`
+  now matches a bare type-constructor instance head against the applied type so
+  the FnDef lookup agrees with the name resolver. See the FIXED row + the G2
+  result subsection.
 - **G3** (maintainer-filed,
   `docs/reported/instance-method-byvalue-struct-field-receiver-abi-mismatch.md`):
   the single-level form of the same dispatch-ABI fix -- emit the instance
@@ -430,6 +475,16 @@ not by adding another site-local gated branch.
   field selects `Decode [Cmd]` the way a struct field already selects
   `Decode [Point]`. Same routine as G2/G3 (dispatch side, return/decode
   direction); a chokepoint fix, not a derive-json-specific patch.
+- **G9** (mirror of G2,
+  `docs/reported/constrained-instance-dispatch-parametric-container-element-collapse.md`):
+  the *witness-side* parametric-container element. A single-level `Enc [Cons]`
+  over `(Cons (Option int))` collapses the `(Option int)` element to `int` at
+  the witness (spec `..._Cons__int`, cell `Cons__int`) and dispatches the
+  by-value `(.head xs)` on the carrier. Needs the value-side chokepoint
+  (`emit_var_spec_arg_type`) to preserve the parametric element through the
+  witness binding (so the cell is `Cons__Option__int`) plus the same G2 dispatch
+  redirect one level in. Distinct from G2 (which routes when the *instance body*
+  dispatches on a parametric container, not when the *witness* mints the spec).
 
 ### P3 -- Audit-as-regression-guard
 
