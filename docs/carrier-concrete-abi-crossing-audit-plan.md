@@ -97,9 +97,12 @@ constrained/parametric/HKT spec body and must consult the recovery routine.
 | **G2** | site 8, recursive case | method dispatch where the receiver element is **itself a parametric container** (`(.value x) : (Cons A)`) | partial | **[GAP]** | -- |
 | **G3** | `elab_typeclasses.c` instance-method ABI vs site 6 | instance method whose HEAD is a by-value applied struct (`Enc [(Option cstr)]`) takes the carrier param, but a by-value struct-**field** receiver passes the aggregate | none | **[GAP]** | -- |
 | **G4** | int-carrier list helpers (`list-length`, ...) vs `(:: xs :int)` coercion | generic carrier walk of a `:heap` `Cons` whose head is a **by-value aggregate** reads `tail` at the wrong offset and **segfaults** (consumer side of G1) | none | **[GAP]** | -- |
+| **G5** | `Option`'s legacy `tur_option_t` special-casing vs #482 | (S1) a struct-field-read `Option` passed to a typeclass method inserts a stale `tur_option_t *`->aggregate reconstruction (`Option` only; `Pair` is the working control); (S2) `Result__T` typedef emitted before `T` once `T` embeds an `(Option ...)` field | none | **[GAP]** | -- |
 
 Sites 1-9 are the fish already caught. **G1, G2, G3, and G4 are the gaps the
-composition stress matrix exposed** (section 5). G3 was filed independently on
+composition stress matrix exposed** (section 5); **G5** is a #482 follow-up
+filed by the maintainer (Option-specific residual special-casing, two codegen
+sites). G3 was filed independently on
 `main` by the maintainer (`docs/reported/instance-method-byvalue-struct-field-receiver-abi-mismatch.md`,
 #482-era) -- same family, same fix direction; it is the single-level
 struct-field-receiver companion of G2's nested-container dispatch, and the two
@@ -232,15 +235,47 @@ The *typed* path (`.head` / ascribed `.tail`) works; only the generic
 the carrier layout. Filed:
 `docs/reported/heap-cons-byvalue-aggregate-head-breaks-int-carrier-list-helpers.md`.
 
+### G5 -- `(Option T)` struct field: `Option`'s `tur_option_t` special-casing not reconciled with #482 (maintainer-filed)
+
+Follow-up to #482. The field *layout* is now an embedded `Option__cstr`
+aggregate, but two **Option-specific** codegen paths still assume the old
+"struct field holds an Option as a `tur_option_t *` heap box":
+
+- **Site 1 (typeclass-arg lowering):** a struct-field-read `Option` `(.field x)`
+  passed into a typeclass method (`(encode (:: (.o b) (Option int)))`) inserts a
+  `tur_option_t *`->aggregate reconstruction; post-#482 the field is already an
+  `Option__cstr`, so `(tur_option_t *)(intptr_t)((x).field)` casts an aggregate
+  to a pointer -- `error: aggregate value used where an integer was expected`.
+  An `Option` *local* into the same method, and a field-read `Option` into a
+  *plain* `defn`, both work; the bug is the intersection field-read + typeclass
+  dispatch. `Pair` field-read into `encode` works (no `tur_pair_t *` round-trip),
+  so the reconstruction is hard-wired to `Option`.
+- **Site 2 (type-emission ordering):** once `T` embeds an `(Option ...)` field,
+  the emitter pushes `T` after `Option__cstr` but does **not** push
+  `Result__T` (which embeds `T *`) after `T` -- `error: unknown type name 'T'`
+  plus an `ok_val` int-fallback cascade. The transitive order
+  `Result__T -> T -> Option__cstr` is not honored. The identical struct with a
+  `Pair`/`Cons`/user-struct field orders correctly.
+
+This blocks `derive-json` over structs with `(Option T)` fields in
+rjungemann/turmeric-spices spices/json. Verified on `tur` from `main` at
+`99cc8b3` / post-#482 (v0.22.0). G5's Site 1 is the **Option-only caller side**
+of G3's struct-field-receiver dispatch boundary (G3 is the carrier-param callee
+side, reproducing for any applied-struct head); Site 2 is a typedef
+topological-sort gap that #482 exposed, riding along because it blocks the same
+use case. Filed:
+`docs/reported/option-tur-option-special-casing-stale-post-482.md`.
+
 ## 6. Plan (phased)
 
 ### P0 -- Audit (this document). DONE.
 
 Crossing sites enumerated, shared recovery routine named, gaps G1/G2 found
-and filed (plus G3, filed independently on `main`). This converts the open
-surface from "unknown number of fish" to a **closeable list**. **G1 is now
-closed** (this branch); G2/G3/G4 remain and are tracked as table rows under P2
-(G4 is the consumer-side crossing that closing G1 exposed).
+and filed (plus G3 and G5, filed independently as #482 follow-ups). This
+converts the open surface from "unknown number of fish" to a **closeable
+list**. **G1 is now closed** (this branch); G2/G3/G4/G5 remain and are tracked
+as table rows under P2 (G4 is the consumer-side crossing that closing G1
+exposed; G5 is the Option-specific residual special-casing #482 left stale).
 
 ### P1 -- Promote the composition stress matrix to fixtures (on green)
 
@@ -285,6 +320,17 @@ until then.
   method for a by-value applied-struct head with the concrete by-value
   parameter (`Option__cstr x`) and bridge carrier-ABI call sites (locals) into
   the aggregate. Same code change as G2, minus the recursion; do them together.
+- **G5** (maintainer-filed,
+  `docs/reported/option-tur-option-special-casing-stale-post-482.md`): retire
+  `Option`'s residual `tur_option_t` special-casing. Site 1 -- lower a
+  struct-field-read `Option` passed to a typeclass method as the embedded
+  aggregate (`(x).field`, the `Pair` path) instead of reconstructing through a
+  `tur_option_t *`. Site 2 -- in the typedef emitter, order `Result__T` (and any
+  type embedding `T`/`T *`) after `T` once `T` gains a dependency on an
+  `(Option ...)` aggregate field (transitive `Result__T -> T -> Option__cstr`).
+  Coordinate with G3 (Site 1 is the Option-only caller side of the same
+  field-read + typeclass-dispatch boundary); Site 2 is an independent
+  typedef-ordering fix.
 
 ### P3 -- Audit-as-regression-guard
 
