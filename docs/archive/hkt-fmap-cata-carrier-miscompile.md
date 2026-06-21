@@ -9,16 +9,16 @@ severity: Medium. The textbook generic recursion-schemes `cata`
   warning showing the recursive `fmap` closure thunk stored into the thunk's
   `__fn` slot at the wrong function-pointer type. Direct structural recursion
   (no `fmap`) is correct, so folds must fall back to hand-written recursion.
-status: PARTIAL -- found 2026-06-21 by the turmeric-spices Track C U5 regex
-  prototype (spices/regex/src/regex/tree.tur). Verified on turmeric 0.22.0,
-  main @ 99cc8b3, built from source (build-release). Tracked as gap G6 in
-  docs/carrier-concrete-abi-crossing-audit-plan.md.
-  UPDATE 2026-06-21 (branch claude/g2-carrier-concrete-abi-audit-3yzkhm): the
-  SPEC-SELECTION half is fixed -- the int `(= 4 (re-cata size-alg e))` now
-  returns true (was false), and the cstr case no longer segfaults (prints "L").
-  The remaining CLOSURE-THUNK half (the sub-word `bool` recursive closure shared
-  across carriers) is still open: `null-alg` still folds to false. See
-  "Status update" below.
+status: RESOLVED -- found 2026-06-21 by the turmeric-spices Track C U5 regex
+  prototype (spices/regex/src/regex/tree.tur). Tracked as gap G6 in
+  docs/carrier-concrete-abi-crossing-audit-plan.md. Closed on branch
+  claude/g6-carrier-concrete-abi-audit-pb3gqo by monomorphizing the HKT instance
+  over parametric sum types (direct fmap) AND per-spec cloning the recursive
+  closure passed to fmap (generic catamorphism).  bool/int/float/cstr round-trip
+  over deep trees; suite green (1748/0).  Fixtures hkt-fmap-byvalue-sum-element
+  (direct) and hkt-cata-fmap-byvalue-carrier (recursive).  See the dated status
+  updates below for the spec-selection (A0), direct-fmap-layout, and recursive
+  (A/B/C) sub-fixes.
 ---
 
 ## Status update (2026-06-21) -- spec-selection half fixed; closure-thunk half open
@@ -174,18 +174,30 @@ fell through to the int64-carrier representative. Closed by:
 Fixture `tests/fixtures/hkt-fmap-byvalue-sum-element` (bool/float/int/cstr round
 trip through a direct `fmap`). Suite green (1746/0), zero snapshot churn.
 
-**Remaining (recursive cata half).** `cata alg = alg . fmap (cata alg) . unroll`
-still folds `bool`/`float` wrong, because inside the GENERIC `re-cata` body the
-`fmap` result element `B` is an ungrounded tyvar, so (a) no by-value `fmap` spec
-is minted there, and (b) the recursive closure `(fn [c : Re] : B (re-cata alg c))`
-is lifted to a SINGLE top-level `__fn_1047` returning `int64_t` and calling the
-int64-carrier base `re_hycata` -- shared across all return-specs. Closing it
-requires per-spec cloning of a CAPTURED closure PASSED as a call argument (the
-existing inner-closure-spec machinery, `inner_closure_spec_idx`, only clones
-closures a generic defn RETURNS, `returns_closure_fn_binding`), plus resolving
-the clone's recursive `re-cata` call to the active return-spec
-(`re_cata__spec__bool`). That is the deep closure-lifting change the audit plan
-flags; it is independent of the now-fixed direct-`fmap` layout.
+**Recursive cata half -- ALSO FIXED (this branch).** `cata = alg . fmap (cata
+alg) . unroll` now round-trips `bool`/`int`/`float`/`cstr` over DEEP trees. Three
+coupled changes closed it (suite green 1748/0):
+
+- **A (elab):** inside the generic `re-cata [B]` body the `fmap` result element
+  `B` is ungrounded and `m7_collect_tyvar_bindings` skipped it (its tyvar-actual
+  skip guards Applicative `ap`); a symbolic `b -> B` binding is now attached for
+  the fmap/Monad shape (element = a closure arg's result).
+- **B (emit):** the method's declared `(f b)` is instantiated through the
+  composed spec bindings (`b -> B -> bool`) to recover the concrete `(ReF bool)`,
+  so the by-value `fmap` spec is minted inside `re_cata__spec__bool`.
+- **C (emit):** `emit_find_passed_spec_closure` finds the CAPTURED closure PASSED
+  to the `fmap` call; the existing inner-closure-spec machinery clones it per
+  spec (the EX_CLOSURE emit already redirects via `inner_closure_spec_idx`); the
+  clone body is scanned under its own spec so its recursive `(re-cata alg c)`
+  registers the active return-spec, and a return-only-poly recursive result is
+  recovered from the active spec's bindings (scoped to `is_passed_closure_clone`)
+  so it resolves to `re_cata__spec__double` not a spurious int64 sibling.
+
+A DEEP tree is the discriminating probe: a shallow `Alt(Lit, Empty)` passes by
+leaf-child luck, but `Alt(Lit, Alt(Lit, Empty))` mis-reads the nested `_1` unless
+the whole recursion stays in the by-value `B` world. Fixtures
+`hkt-fmap-byvalue-sum-element` (direct) and `hkt-cata-fmap-byvalue-carrier`
+(recursive, deep + discriminating + float). **G6 fully closed.**
 
 ---
 
