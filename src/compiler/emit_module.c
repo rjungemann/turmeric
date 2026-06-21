@@ -1698,6 +1698,49 @@ static bool emit_abi_try_nested_instance_dispatch_redirect(
     return true;
 }
 
+/* G4 (phantom-opaque element specialization): a phantom opaque such as
+ * `(defopaque List [A] :int)` lowers to the int64 carrier regardless of `A`, so
+ * a parameter typed `(List A)` has the SAME C lowering (`int64_t`) for every
+ * element type -- the `type_c_name` comparison that normally drives spec-minting
+ * sees no change and the function is emitted once with `A` erased.  That is
+ * correct as long as the body never re-projects `A` into a layout-bearing
+ * position; but a body that does (`(:: (:: xs :int) (Cons A))`) collapses the
+ * element back to the generic carrier `Cons *` and miscompiles when `A` is a
+ * by-value aggregate (`(Option int)` -> the `Cons__Option__int` cell, whose tail
+ * link no longer sits at the carrier offset -- the G4 segfault).
+ *
+ * Return true when `t` is a (possibly multiply-applied) opaque carrier hiding a
+ * by-value aggregate among its type arguments -- the narrow case that needs a
+ * per-element spec.  A real concrete container (`(Cons (Option int))`) lowers to
+ * `Cons__Option__int *`, NOT the carrier, so it already drives spec-minting via
+ * `type_c_name` and is excluded here (its head is not opaque).  Scalar/pointer
+ * elements (`(List int)`, `(List cstr)`) carry no aggregate, so they return
+ * false and keep the existing zero-churn carrier emission. */
+static bool type_phantom_hides_aggregate(const Type *t) {
+    if (!t || t->kind != TY_APP) return false;
+    StructDef *def = NULL;
+    Type args[16];
+    uint8_t n_args = 0;
+    if (!type_extract_struct_app(t, &def, args, &n_args) || !def || !def->is_opaque)
+        return false;
+    for (uint8_t i = 0; i < n_args; i++) {
+        if (!type_has_concrete_codegen_layout(&args[i])) continue;
+        /* The element shifts the cell layout only when it is a BY-VALUE aggregate
+         * embedded inline (e.g. `Option__int`) -- a non-opaque, non-:heap struct.
+         * Scalar/pointer elements (int, cstr, float) and :heap handles (Vec, Cons)
+         * occupy the single 8-byte carrier slot, so the carrier walk stays correct
+         * and no spec is needed (keeps the existing zero-churn emission). */
+        StructDef *ed = NULL;
+        Type eargs[16];
+        uint8_t en = 0;
+        if (type_extract_struct_app(&args[i], &ed, eargs, &en) &&
+            ed && !ed->is_opaque && !ed->is_heap) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                                    const Expr **items, uint32_t n_items,
                                    const Type *result_type_override) {
@@ -2079,6 +2122,16 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 arg_types[i] = bindings[0].type;
             }
             if (strcmp(type_c_name(generic_arg), type_c_name(arg_types[i])) != 0) {
+                abi_changes = true;
+            } else if (!type_eq(generic_arg, arg_types[i]) &&
+                       type_phantom_hides_aggregate(&arg_types[i])) {
+                /* G4: the substitution turned a phantom-opaque param's tyvar into
+                 * a by-value aggregate (`(List A)` -> `(List (Option int))`).  The
+                 * C lowering is unchanged (both int64), so the strcmp above missed
+                 * it, but the body re-projects the element and would collapse to
+                 * the carrier layout.  Force a spec so the substituted body is
+                 * emitted; arg_types[i] retains the concrete element so the spec
+                 * dedup keys on it (the carrier C name still emits int64). */
                 abi_changes = true;
             }
         }

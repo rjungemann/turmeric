@@ -1,0 +1,39 @@
+;; list-count-phantom-opaque-aggregate-element -- consume a (List A) phantom-typed
+;; list whose element A is a by-value aggregate through `list-count`, exercising
+;; phantom-opaque element specialization.
+;;
+;; Gap G4 follow-up (docs/archive/heap-cons-byvalue-aggregate-head-breaks-int-carrier-list-helpers.md):
+;; `(defopaque List [A] :int)` lowers to the int64 carrier regardless of A, so a
+;; helper typed `[A] [xs : (List A)]` has the SAME C lowering for every element
+;; and used to be emitted ONCE with A erased -- a layout-dependent body
+;; (`(:: (:: xs :int) (Cons A))`) then collapsed the element back to the generic
+;; `Cons *` and segfaulted when A was a by-value aggregate (`Option__int`).
+;;
+;; Fix: when a phantom-opaque param's tyvar is bound to a by-value aggregate, the
+;; compiler now mints a per-element-type clone of the helper (keyed on the
+;; instantiated `(List (Option int))`, even though it still lowers to int64), so
+;; the inner `(:: ... (Cons A))` resolves to the concrete `Cons__Option__int`
+;; layout. Scalar/pointer elements keep the carrier layout (no spec, no churn).
+
+(defn opt-or [o : (Option int) d : int] : int
+  (if (.is-some o) (.value o) d))
+
+(load "stdlib/list-typed.tur")
+
+(defn main [] : int
+  ;; by-value aggregate element through the phantom (List A) view: the spec path.
+  (let [zs (:: (list (some 9) (some 8) (some 7)) (List (Option int)))]
+    (println (list-count zs)))                     ;; 3
+  ;; scalar element: carrier-compatible, stays on the carrier base (no spec).
+  (let [is (:: (list 1 2 3 4 5) (List int))]
+    (println (list-count is)))                     ;; 5
+  ;; pointer (cstr) element: also carrier-compatible.
+  (let [cs (:: (list "a" "b") (List cstr))]
+    (println (list-count cs)))                     ;; 2
+  ;; float element (non-zero fractional part).
+  (let [fs (:: (list 7.1 2.5 3.25) (List float))]
+    (println (list-count fs)))                     ;; 3
+  ;; empty aggregate list: zero, no walk.
+  (let [es (:: (list-of) (List (Option int)))]
+    (println (list-count es)))                     ;; 0
+  0)
