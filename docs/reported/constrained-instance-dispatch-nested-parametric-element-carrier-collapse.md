@@ -84,6 +84,18 @@ This is the *dispatch-on-nested-element* (encode/read direction) companion of
 #480, which fixed the *construct-of-nested-element* (decode/write direction).
 Same carrier<->concrete machinery, recursive (nested) case.
 
+## Related
+
+`docs/reported/instance-method-byvalue-struct-field-receiver-abi-mismatch.md`
+(filed independently on `main`, #482 era) is the **single-level** form of this
+same defect: an instance whose head is a by-value applied struct
+(`Enc [(Option cstr)]`) takes the carrier parameter while a by-value
+struct-field receiver passes the aggregate. That report and this one are the
+non-nested and nested faces of one dispatch-ABI fix; they should close together
+(see gap G2/G3 and phase P2 in
+`docs/carrier-concrete-abi-crossing-audit-plan.md`). Verified still-open against
+a fresh `origin/main` build on 2026-06-21.
+
 ## Fix directions
 
 In `emit_reresolve_disp_type` (and its scan-time twin

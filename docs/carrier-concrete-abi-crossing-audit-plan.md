@@ -95,9 +95,14 @@ constrained/parametric/HKT spec body and must consult the recovery routine.
 | 9 | `emit_core.c:1308` | scan-time liveness companion | `emit_reresolve_method_fndef` | [OK] | #480 |
 | **G1** | `stdlib/list.tur:196` + poly-defn monomorphizer | `(list ...)` homogeneity helper `tur-list-homog__ [A] [a :A b :A]` | **none** | **[GAP]** | -- |
 | **G2** | site 8, recursive case | method dispatch where the receiver element is **itself a parametric container** (`(.value x) : (Cons A)`) | partial | **[GAP]** | -- |
+| **G3** | `elab_typeclasses.c` instance-method ABI vs site 6 | instance method whose HEAD is a by-value applied struct (`Enc [(Option cstr)]`) takes the carrier param, but a by-value struct-**field** receiver passes the aggregate | none | **[GAP]** | -- |
 
-Sites 1-9 are the fish already caught. **G1 and G2 are the gaps the
-composition stress matrix exposed** (section 5).
+Sites 1-9 are the fish already caught. **G1, G2, and G3 are the gaps the
+composition stress matrix exposed** (section 5). G3 was filed independently on
+`main` by the maintainer (`docs/reported/instance-method-byvalue-struct-field-receiver-abi-mismatch.md`,
+#482-era) -- same family, same fix direction; it is the single-level
+struct-field-receiver companion of G2's nested-container dispatch, and the two
+should close together under P2.
 
 ## 4. Why composition is the multiplier (the user's HKT/compose intuition)
 
@@ -166,13 +171,34 @@ sibling of #480's *nested-construct* (decode/write) fix.
 
 Filed: `docs/reported/constrained-instance-dispatch-nested-parametric-element-carrier-collapse.md`
 
+### G3 -- `Enc [(Option cstr)]` over a struct field: instance-method param stays at the carrier (maintainer-filed on `main`)
+
+Independently surfaced by the maintainer on `main` (PR #482 era) and filed at
+`docs/reported/instance-method-byvalue-struct-field-receiver-abi-mismatch.md`.
+An instance whose head is a by-value applied struct (`Enc [(Option cstr)]`)
+emits its method with the int64 carrier param (`enc(int64_t)`); dispatch over a
+*local* works, but after the #482 field-layout fix a by-value struct **field**
+read (`(.nick r) : Option__cstr`) passes the real aggregate, so:
+
+```
+error: incompatible type for argument 1 of '__inst_Enc_enc_Option_cstr'
+note: expected 'int64_t' but argument is of type 'Option__cstr'
+```
+
+Verified still-open against a fresh `origin/main` build (2026-06-21). This is
+the **single-level struct-field-receiver** companion of G2's nested-container
+dispatch -- same carrier-vs-byvalue defect on the instance-method-receiver ABI
+side, same fix direction (emit the method with the concrete by-value parameter,
+monomorphized per type, and bridge carrier-ABI call sites). Closes with G2
+under P2.
+
 ## 6. Plan (phased)
 
 ### P0 -- Audit (this document). DONE.
 
 Crossing sites enumerated, shared recovery routine named, gaps G1/G2 found
-and filed. This converts the open surface from "unknown number of fish" to a
-**closeable list**.
+and filed (plus G3, filed independently on `main`). This converts the open
+surface from "unknown number of fish" to a **closeable list**.
 
 ### P1 -- Promote the composition stress matrix to fixtures (on green)
 
@@ -190,7 +216,7 @@ each gap closes -- a fixture is only committed once it PASSES, so the gate
 stays green (per CLAUDE.md). The minimal repros live in the two reported docs
 until then.
 
-### P2 -- Route the remaining sites through the shared recovery (close G1/G2)
+### P2 -- Route the remaining sites through the shared recovery (close G1/G2/G3)
 
 - **G1**: the polymorphic-defn monomorphizer must specialize
   `tur-list-homog__`'s `A` to the by-value aggregate element type (mint a
@@ -205,6 +231,12 @@ until then.
   select the per-instantiation inner spec (`__inst_Enc_enc_Cons__spec__Cons__float`)
   rather than the generic carrier `__inst_Enc_enc_Cons`. This is the natural
   extension of sites 5+8 to the recursive case.
+- **G3** (maintainer-filed,
+  `docs/reported/instance-method-byvalue-struct-field-receiver-abi-mismatch.md`):
+  the single-level form of the same dispatch-ABI fix -- emit the instance
+  method for a by-value applied-struct head with the concrete by-value
+  parameter (`Option__cstr x`) and bridge carrier-ABI call sites (locals) into
+  the aggregate. Same code change as G2, minus the recursion; do them together.
 
 ### P3 -- Audit-as-regression-guard
 
