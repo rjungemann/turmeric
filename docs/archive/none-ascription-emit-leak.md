@@ -7,8 +7,26 @@ severity: Low. Compiler-process leak only (88 bytes, process-lifetime), not a
   concrete `(Option T)` fails under LSan, but no current fixture exercises the
   pattern so `bash tests/run.sh` stays green. Found incidentally while fixing
   docs/archive/constrained-instance-element-dispatch.md.
-status: OPEN
+status: RESOLVED
 ---
+
+## Resolution
+
+Root cause was in `type_name` (`src/compiler/types.c`), not the construct
+lowering. The many composite-type cases (`TY_FN`, `TY_APP`, `TY_REF`,
+`TY_EXCEPTION`, `TY_CONT`, `TY_FORALL`, session types, ...) each built a
+transient `Buf tmp`, then `return tur_strdup(tmp.data)` -- leaking both the
+`Buf`'s backing allocation (the 64-byte `grow`) and the strdup'd result (the
+24-byte `tur_strdup`), since callers like `elab_call_head_expr` treat the
+`const char *` return as borrowed and never free it. The `(none) : (Option
+int)` ascription tripped a `TY_APP` "not callable" diagnostic, which is why
+that pattern surfaced it.
+
+Fix: every such case now follows the existing `TY_PTR_VOID` precedent --
+`intern_type_name(tmp.data); buf_free(&tmp);` -- which frees the transient
+buffer and returns a deduped, table-owned (bounded, non-per-call-leaking)
+string. `./build/tur emit-c` of the repro no longer reports any LSan leak;
+`bash tests/run.sh` stays green (1730 passed, 0 failed).
 
 # `(none) : (Option T)` ascription leaks in the emit path
 
