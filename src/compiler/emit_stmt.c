@@ -339,6 +339,28 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             abort();
             return;
         case EX_CALL: {
+            /* G1 (carrier<->concrete crossing audit): `tur-list-homog__` is the
+             * compile-time-only element-homogeneity assertion the `(list ...)`
+             * macro chains over adjacent elements. Its inline-C body is a no-op
+             * (`(void)a;(void)b;`) and the type unification that actually enforces
+             * homogeneity (and emits TUR-E0001 on a mismatch) already ran during
+             * elaboration -- so the emitted runtime call is dead. Its single C
+             * signature takes the int64 carrier; a scalar / heap-pointer element
+             * coerces into that carrier fine (existing snapshots keep the call),
+             * but a by-value aggregate element (e.g. Option__int) cannot, which is
+             * the only case that mismatched. Skip emitting the dead call there;
+             * the element is still constructed once by `list-build__`. */
+            {
+                const Binding *cb = e->as.call_.fn_binding;
+                if (cb && cb->name && cb->name->name &&
+                    strcmp(cb->name->name, "tur-list-homog__") == 0) {
+                    for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                        Type at = emit_resolve_type(ctx, e->as.call_.args[i]->type);
+                        if (type_uses_carrier_abi(at) && !type_is_heap_struct(at))
+                            return;
+                    }
+                }
+            }
             /* Emit as expression statement */
             char *v = emit_value(ctx, body, e);
             indent_buf(body, ctx->indent);
