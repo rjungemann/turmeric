@@ -115,6 +115,13 @@ typedef struct EmitAbiSpecialization {
      * the linked inner-closure-body spec, or -1 when none.  Lets the outer
      * spec body's EX_CLOSURE emit reference the inner clone's name + env. */
     int32_t inner_closure_spec_idx;
+    /* M6 / gap G6(c): true when this spec is the per-spec clone of a CAPTURED
+     * closure PASSED to a generic combinator (the recursive `(fn [c] : B
+     * (re-cata alg c))` handed to `fmap`).  Scopes the return-only-poly result
+     * recovery (recover a recursive call's `B` result from the active spec's
+     * bindings) so it fires only inside such a clone body, not for every
+     * return-poly call. */
+    bool is_passed_closure_clone;
     /* poly-closure-result-specialization: set once this spec's body has been
      * emitted, so the spec emit loop can hoist an inner-closure clone ahead of
      * its outer (so the suffixed env struct lands at file scope) without

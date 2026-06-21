@@ -106,7 +106,7 @@ constrained/parametric/HKT spec body and must consult the recovery routine.
 | ~~G3~~ | `emit_expr.c` `expr_emits_byvalue_carrier_abi` vs site 6 | instance method whose HEAD is a by-value applied struct (`Enc [(Option cstr)]`) takes the carrier param, but a by-value struct-**field** receiver passed the aggregate -- now bridged (spill + address-of) like a local | `expr_emits_byvalue_carrier_abi` (EX_GET_FIELD) + `emit_carrier_bridge` | **[FIXED]** | this branch |
 | ~~G4~~ | int-carrier list helpers (`list-length`, ...) vs `(:: xs :int)` coercion | generic carrier walk of a `:heap` `Cons` whose head is a **by-value aggregate** reads `tail` at the wrong offset and **segfaults** (consumer side of G1) -- both supported consumer paths now correct: the concrete `(Cons A)` walk via the element-aware pure-Turmeric `tlength`, and the phantom `(List A)` view via phantom-opaque element specialization (a per-element clone minted only when the phantom's tyvar is a by-value aggregate, zero churn otherwise). The bare `(:: xs :int)` carrier escape-hatch stays unsafe BY DESIGN (explicit erasure of a layout-bearing element) | `tlength` (`stdlib/list.tur`) + `type_phantom_hides_aggregate` (`emit_module.c`) | **[FIXED]** | this branch |
 | ~~G5~~ | `Option`'s legacy `tur_option_t` special-casing vs #482 | (S1) a struct-field-read `Option` passed to a typeclass method inserts a stale `tur_option_t *`->aggregate reconstruction; (S2) `Result__T` typedef emitted before `T` once `T` embeds an `(Option ...)` field -- **BOTH fixed in self-contained repros**, pending real `json/encode` derive-json confirmation | `field_read_emits_byvalue_aggregate` (S1); forward typedef in `emit_registered_struct_app_rec` (S2) | **[FIXED*]** | this branch |
-| **G6** | HKT `fmap` closure-thunk + cata result (fn-value spec path) | a generic `cata = alg . fmap (cata alg) . unroll`: (a) the int call grabbed a return-differentiated sibling (`bool`) spec -- **FIXED** (`emit_spec_result_mismatch`; int now correct, cstr no longer segfaults); (b) the recursive `fmap` closure is shared across carriers with the wrong sub-word thunk ABI -- **still open** (`bool` folds wrong) | spec-selection: `emit_spec_result_mismatch`; closure-thunk: open | **[PARTIAL]** | (a) this branch |
+| ~~G6~~ | HKT `fmap` instance layout (carrier vs by-value) + recursive closure-thunk register class | a generic `cata = alg . fmap (cata alg) . unroll`: (a) return-differentiated sibling spec (`emit_spec_result_mismatch`); (b) direct `fmap` over a parametric SUM type (carrier `tur_adt_ReF` int64 fields vs by-value `tur_adt_ReF__bool` narrow fields) -- by-value HKT instance-method spec minted for parametric ADT results; (c) recursive cata -- the captured closure passed to `fmap` is cloned per spec so the whole recursion stays in the by-value `B` world. bool/int/float/cstr round-trip over DEEP trees | (a) `emit_spec_result_mismatch`; (b) `type_app_is_concrete_adt` + `emit_hkt_spec_ctor_suffix`; (c) `emit_find_passed_spec_closure` + `is_passed_closure_clone` | **[FIXED]** | this branch |
 | ~~G7~~ | site 8, return/decode side, sum field | a `defdata`-sum struct field's `(decode ... (Result Cmd cstr))` dispatched to the generic `decode_T` at the ENCLOSING struct's result type instead of the field's `Decode [Cmd]` instance -- the `EX_ASCRIBE` scan now registers a return-polymorphic dict-less call with the ascription's concrete result as `result_type_override` (instead of the plain inner scan), and the two result-recovery heuristics bail when an override is supplied | `emit_abi_scan_expr` (EX_ASCRIBE) + `result_type_override` | **[FIXED]** | this branch |
 | ~~G9~~ | witness-side, parametric-container element | the MIRROR of G2: a single-level `Enc [Cons]` over `(Cons (Option int))`. G2 already minted the `Cons__Option__int` cell + inner Option by-value spec; the remaining defect was the dispatch arg `(.head xs)` (an embedded `Option__int`) reconstructed via a stale `tur_option_t *` carrier cast | `field_read_emits_byvalue_aggregate` (suppresses the spurious carrier->concrete bridge) | **[FIXED]** | this branch |
 | ~~G10~~ | instance selection, applied-struct heads | two instances of one class over applied structs differing only in the element (`Enc [(Option cstr)]` vs `Enc [(Option int)]`) conflated -- the element-discrimination only treated struct/ADT elements as concrete, ignoring a primitive (cstr vs int) difference (NOT an ABI bug; instance keying) | `typeclass_type_arg_concrete` (primitive elements discriminate) | **[FIXED]** | this branch |
@@ -395,16 +395,48 @@ type-checks but miscompiles per carrier `B`:
   instead of by value.
 
 Direct structural recursion (no `fmap`) is correct, localizing the defect to
-the `fmap`-driven path. Unlike G2/G3 (dispatch re-resolution over a field-read
-aggregate **value**), G6 lives in the **fn-value / closure-thunk** specialization
-machinery (`emit_abi_scan_fn_values`, the `poly-closure-result-specialization`
-float-spec path): the per-carrier thunk signature must follow `B`, and the cata
-result must be unboxed to `B`'s native representation. The existing
-closure-thunk machinery already special-cases float; G6 is that same problem
-generalized to a pointer (`cstr`) and a sub-int64 (`bool`) carrier, reached
-through an HKT `fmap`. Verified on turmeric 0.22.0, main @ `99cc8b3`
-(build-release). Filed:
-`docs/reported/hkt-fmap-cata-carrier-miscompile.md`.
+the `fmap`-driven path.
+
+**Sharpened (branch claude/g6-carrier-concrete-abi-audit-pb3gqo).** The remaining
+half is NOT a closure/cata problem -- it is a **`Functor`-instance layout**
+problem that reproduces with no cata, no recursion, and no closure capture. A
+single direct `fmap` whose result element is narrower than the int64 carrier is
+already wrong:
+
+```turmeric
+(definstance Functor [ReF] (fmap [c g] (match c ... (AltF x y) (AltF (g x) (g y)) ...)))
+(let [r (:: (fmap (:: (AltF 0 5) (ReF int)) to-bool) (ReF bool))]
+  (match r ... (AltF x y) (if y 100 200) ...))   ;; EXPECT 100 (y=true); ACTUAL 200
+```
+
+Root cause: the instance is emitted once as the int64 **carrier** representative
+`__inst_Functor_fmap_T`, whose body builds `tur_adt_ReF` with `int64_t` union
+fields (`AltF._1` at offset 8); the consumer reads the **by-value** monomorphized
+`tur_adt_ReF__bool` with `bool` fields (`AltF._1` at offset 1). `fmap` writes
+`_1` at offset 8, the reader loads it at offset 1 -> `false`. `int`/`cstr` are
+correct only because they are exactly 8 bytes wide; `bool`/`float` mismatch. (The
+cstr "segfault" and the `-Wint-conversion` thunk cast in the cata example are the
+*float/pointer* register-class facet of the same instance not being
+monomorphized -- the closure `g` is called via the int64 carrier signature.)
+
+The fix is therefore to **monomorphize the HKT instance method per concrete
+result element** so producer and consumer share the ADT layout. The emit side
+already has the by-value HKT instance-method spec machinery (M7 "layer-4",
+`g_m7_hkt_enabled`: `emit_fns.c:566` returns the by-value ADT C name for the
+instance-method return once an ABI spec is active; `emit_module.c:2636` notes the
+carrier base, and `ctor_*__bool` twins already exist). The GAP is that **no
+by-value `fmap` spec is interned/selected** at the `(:: (fmap ...) (ReF bool))`
+call site -- `emit_abi_register_call` (`emit_module.c:1812`) needs
+`call->as.call_.abi_bindings`, and elab does not attach the result-element
+binding (`b -> bool`) to an HKT method call, so it falls through to the carrier
+`__inst_Functor_fmap_T`. The originally-described closure-thunk register-class
+half then falls out for `float` once `g` is finally called at `double` rather
+than via the int64 carrier. Step (1) (elab attaching the binding) touches every
+HKT method call, so it is snapshot/regression sensitive and must be gated to fire
+only for a concrete element that does not round-trip through the int64 carrier
+(`int`/`cstr` stay byte-identical). Verified on turmeric 0.22.0, main @ `99cc8b3`
+(build-release), and re-confirmed on this branch. Filed:
+`docs/archive/hkt-fmap-cata-carrier-miscompile.md`.
 
 ### G7 -- `defdata` sum as a `derive-json` struct field decodes to the wrong instance (peripheral to #482) -- **FIXED + VERIFIED (this branch)**
 
@@ -612,14 +644,27 @@ not by adding another site-local gated branch.
   `User { id : int  nick : (Option cstr) }` derive-json round-trips
   `{"id":7,"nick":"al"}` against the cloned turmeric-spices + yyjson.
 - **G6** (spice-filed,
-  `docs/reported/hkt-fmap-cata-carrier-miscompile.md`): route the recursive
-  closure handed to `fmap` through a per-carrier fn-value spec whose thunk
-  fn-pointer signature follows `B` (not the int64 carrier), and unbox the
-  `(:: (fmap ...) (ReF B))` cata result to `B`'s native representation. This is
-  the closure-thunk sibling of the value-ABI gaps -- it touches
-  `emit_abi_scan_fn_values` / the `poly-closure-result-specialization` path
-  rather than the dispatch re-resolver, so it closes independently of G2/G3/G5;
-  pin the cstr/pointer crash first (clearest signal).
+  `docs/archive/hkt-fmap-cata-carrier-miscompile.md`): **sharpened (this
+  branch)** -- the remaining half is a `Functor`-instance LAYOUT gap, not a
+  closure/cata gap. The carrier representative `__inst_Functor_fmap_T` builds the
+  int64-field `tur_adt_ReF`, but a sub-int64 result element reads the narrow
+  by-value `tur_adt_ReF__bool` -- reproducible with a *direct* `fmap` (no cata,
+  no closure). Fix = mint+select a by-value HKT instance-method spec at the
+  `fmap` call site so the instance is monomorphized per result element: the M7
+  layer-4 emit path (`emit_fns.c:566`, `emit_module.c:2636`) already returns the
+  by-value ADT once an ABI spec is active and the `ctor_*__bool` twins exist; the
+  gap is that no by-value spec is interned because elab attaches no
+  result-element binding (`b -> bool`) to the HKT call, so
+  `emit_abi_register_call` (`emit_module.c:1812`, which requires
+  `call->as.call_.abi_bindings`) never fires. Closing it: (1) elab attaches the
+  HKT method call's concrete result-element binding (gated so `int`/`cstr` stay
+  byte-identical -- it touches every HKT call); (2) `emit_abi_register_call`
+  mints the by-value instance-method spec for a concrete sub-int64 `TY_APP`
+  result; (3) the recursive-closure register-class clone (the original
+  closure-thunk framing) then falls out for `float` because `g` is finally called
+  at `double` rather than via the int64 carrier. Closes independently of
+  G2/G3/G5 (it is the fn-value/instance-layout corner, not the dispatch
+  re-resolver).
 - **G7**: DONE + VERIFIED (this branch,
   `docs/archive/derive-json-sum-field-decodes-wrong-instance.md`). The decode call
   is return-dispatched with no dict_arg, so `emit_reresolve_disp_type`
@@ -677,7 +722,7 @@ Closed this branch, suite green at each step (final **1744 passed, 0 failed**):
 | G2 | FIXED | `constrained-instance-dispatch-nested-parametric-element` |
 | G3 | FIXED | `instance-method-byvalue-struct-field-receiver` |
 | G5 | FIXED (both sites; verified vs real `json/encode`) | `result-over-struct-with-option-field-typedef-order` (+ G9 fixture for S1) |
-| G6 | PARTIAL (spec-selection fixed; closure-thunk open) | -- |
+| G6 | FIXED (direct fmap + recursive cata) | `hkt-fmap-byvalue-sum-element`, `hkt-cata-fmap-byvalue-carrier` |
 | G7 | FIXED (verified vs real `json/encode`) | spice round-trip (needs yyjson) |
 | G9 | FIXED | `constrained-instance-dispatch-parametric-container-element` |
 | G10 | FIXED | `applied-struct-instance-element-discrimination` |
@@ -720,7 +765,7 @@ distinguish it from the carrier base, its body's `(:: ... (Cons A))` resolves to
 emission is byte-identical -- **zero snapshot churn** across the corpus. New
 helper `list-count` (`stdlib/list-typed.tur`).
 
-**Still open**:
+**Closed on a later branch (see below)**:
 
 - **G6 (remaining half)** -- the HKT `fmap` closure-thunk per-carrier ABI. The
   spec-selection half is FIXED (int no longer miscompiles, cstr no longer
@@ -729,3 +774,81 @@ helper `list-count` (`stdlib/list-typed.tur`).
   recursive closure folds wrong. Closing it means generalizing the
   inner-closure-spec machinery (today only for closure-*returning* defns) to
   *passed* closures -- a deep closure-lifting change.
+
+### Progress (branch claude/g6-carrier-concrete-abi-audit-pb3gqo) -- M6 HKT-dispatch monomorphization over sum types LANDED
+
+**M6 core / G6(b) -- FIXED (this branch, suite green 1746/0, zero churn).**
+Implemented by-value HKT instance-method monomorphization for parametric ADT
+(`defdata` sum) results -- the case the existing M7 layer-4 machinery did not
+cover (it handled parametric STRUCTS like Option/Result/Pair). A `Functor [ReF]`
+over a sum, whose method body `match`es the receiver and constructs the result
+family per arm, now mints a per-(f, A) by-value spec so the producer builds the
+same `tur_adt_ReF__<elem>` layout the consumer reads:
+
+- elab (`elab_typeclasses.c`): `m7_body_constructs_byvalue` /
+  `m7_body_returns_byvalue_element` recurse through `EX_MATCH` and accept an ADT
+  constructor call as by-value-constructible.
+- types (`types.c`/`.h`): `type_app_is_concrete_adt`, `type_adt_app_def`.
+- emit (`emit_module.c`): a concrete parametric-ADT HKT instance result is an
+  ABI change -> by-value spec interned.
+- emit (`emit_expr.c`): `emit_hkt_spec_ctor_suffix` recovers the monomorphized
+  ctor suffix from the active spec's result family, so the body emits
+  `ctor_AltF__bool` not the carrier `ctor_AltF`.
+
+Fixture `hkt-fmap-byvalue-sum-element` (bool/float/int/cstr round-trip through a
+DIRECT `fmap`). This closes the direct-`fmap` miscompile (which reproduced with
+no cata/closure).
+
+**G6(c) recursive cata -- ALSO FIXED (this branch, suite green 1748/0).** `cata`
+via `fmap` now round-trips bool/int/float/cstr over DEEP trees. The three coupled
+changes landed:
+
+- **(A)** capture the symbolic method->generic tyvar binding `b -> B` (which
+  `m7_collect_tyvar_bindings` deliberately SKIPS when the actual is a tyvar, for
+  the Applicative `ap` case) -- gated to the fmap/Monad shape (element = a closure
+  arg's result), result type NOT committed by value at elab (only the binding).
+- **(B)** reconstruct the by-value result `(ReF bool)` at emit from the method's
+  declared `(f b)` instantiated through the composed spec bindings, so the
+  by-value `fmap` spec is minted inside `re_cata__spec__bool`.
+- **(C)** per-spec clone the CAPTURED closure PASSED as a call argument
+  (`emit_find_passed_spec_closure`); the existing `inner_closure_spec_idx`
+  machinery + EX_CLOSURE redirect emit the clone; its body is scanned under its
+  own spec so the recursive `(re-cata alg c)` registers the active return-spec,
+  and a return-only-poly recursive result is recovered from the active spec's
+  bindings (scoped to `is_passed_closure_clone`) so it resolves to
+  `re_cata__spec__double` not a spurious int64 sibling.
+
+A DEEP tree is the discriminating probe (a shallow `Alt(Lit, Empty)` passes by
+leaf-child luck). Fixture `hkt-cata-fmap-byvalue-carrier` (deep + discriminating
++ float). The `-Wint-conversion` thunk-cast warnings are gone. **G6 fully
+closed; resolved report archived at
+`docs/archive/hkt-fmap-cata-carrier-miscompile.md`.**
+
+### Earlier note (diagnosis, superseded by the FIXED status above)
+
+Investigating the "closure-thunk" half
+showed it was mischaracterized: the bug is a **`Functor`-instance layout**
+mismatch, not a closure/cata problem. It reproduces with a single *direct*
+`fmap` over a sub-int64 element -- no cata, no recursion, no closure capture:
+
+```turmeric
+(let [r (:: (fmap (:: (AltF 0 5) (ReF int)) to-bool) (ReF bool))]
+  (match r ... (AltF x y) (if y 100 200) ...))   ;; EXPECT 100 (y=true); ACTUAL 200
+```
+
+The carrier representative `__inst_Functor_fmap_T` builds `tur_adt_ReF` with
+`int64_t` union fields (`AltF._1` at offset 8); the `(ReF bool)` reader uses
+`tur_adt_ReF__bool` with `bool` fields (`AltF._1` at offset 1). The write/read
+offsets disagree, so `y` (true, written at offset 8) is read as `false`.
+`int`/`cstr` survive by 8-byte width coincidence; `bool`/`float` do not.
+
+Fix direction (recorded in the report + section 5 + P2): monomorphize the HKT
+instance method per concrete result element. The emit side already has the
+by-value HKT spec machinery (M7 layer-4: `emit_fns.c:566`, `emit_module.c:2636`,
+`ctor_*__bool` twins); the gap is that **no by-value `fmap` spec is interned** at
+the call site because elab attaches no result-element binding to the HKT call
+(`emit_abi_register_call`, `emit_module.c:1812`, requires
+`call->as.call_.abi_bindings`). The implementation is bounded but
+snapshot/regression sensitive (elab change touches every HKT method call), so it
+must be gated to leave `int`/`cstr` byte-identical -- deferred, not landed, this
+branch. Suite untouched (docs-only).

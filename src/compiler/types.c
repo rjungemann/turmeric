@@ -469,6 +469,38 @@ bool type_has_concrete_codegen_layout(const Type *t) {
     }
 }
 
+/* True when `t` is a parametric ADT (`defdata` sum) application all of whose
+ * type arguments have a concrete codegen layout -- e.g. `(ReF bool)`,
+ * `(Cons int)`.  Such a type is monomorphized to a per-element C struct
+ * (`tur_adt_ReF__bool`) whose field WIDTHS follow the element, distinct from the
+ * int64-carrier `tur_adt_ReF`.  The struct-app branch of
+ * type_has_concrete_codegen_layout deliberately rejects ADT apps (its callers
+ * then call type_extract_struct_app), so this is a separate predicate used by
+ * the M7 by-value HKT machinery to recognize a parametric-SUM result/element. */
+bool type_app_is_concrete_adt(const Type *t) {
+    if (!t || t->kind != TY_APP) return false;
+    AdtDef *def = NULL;
+    Type args[16];
+    uint8_t n_args = 0;
+    if (!type_extract_adt_app(t, &def, args, &n_args) || !def) return false;
+    for (uint8_t i = 0; i < n_args; i++) {
+        if (!type_has_concrete_codegen_layout(&args[i])) return false;
+    }
+    return true;
+}
+
+/* The AdtDef at the head of an ADT application (`(ReF bool)` -> ReF's def), or
+ * NULL when `t` is not a parametric ADT application.  Lets emit recover the
+ * constructed family without the static type_extract_adt_app helper. */
+AdtDef *type_adt_app_def(const Type *t) {
+    if (!t || t->kind != TY_APP) return NULL;
+    AdtDef *def = NULL;
+    Type args[16];
+    uint8_t n_args = 0;
+    if (!type_extract_adt_app(t, &def, args, &n_args)) return NULL;
+    return def;
+}
+
 /* SC7 (carrier-duality): a "transparent int newtype" is a parametric struct
  * with a single field declared as a plain int64-width scalar (`:int`) -- e.g.
  * `(defstruct Schema [A] (raw :int))`.  Because the lone field is a concrete
