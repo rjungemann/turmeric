@@ -105,19 +105,20 @@ constrained/parametric/HKT spec body and must consult the recovery routine.
 | ~~G2~~ | site 8, recursive case | method dispatch where the receiver element is **itself a parametric container** (`(.value x) : (Cons A)`): mint the inner instance's by-value spec + route to it | `emit_reresolve_disp_type` + `emit_abi_try_nested_instance_dispatch_redirect` | **[FIXED]** | this branch |
 | ~~G3~~ | `emit_expr.c` `expr_emits_byvalue_carrier_abi` vs site 6 | instance method whose HEAD is a by-value applied struct (`Enc [(Option cstr)]`) takes the carrier param, but a by-value struct-**field** receiver passed the aggregate -- now bridged (spill + address-of) like a local | `expr_emits_byvalue_carrier_abi` (EX_GET_FIELD) + `emit_carrier_bridge` | **[FIXED]** | this branch |
 | **G4** | int-carrier list helpers (`list-length`, ...) vs `(:: xs :int)` coercion | generic carrier walk of a `:heap` `Cons` whose head is a **by-value aggregate** reads `tail` at the wrong offset and **segfaults** (consumer side of G1) | none | **[GAP]** | -- |
-| **G5** | `Option`'s legacy `tur_option_t` special-casing vs #482 | (S1) a struct-field-read `Option` passed to a typeclass method inserts a stale `tur_option_t *`->aggregate reconstruction (`Option` only; `Pair` is the working control) -- **S1 likely closed by the G9 fix** (self-contained repro passes; awaiting real `derive-json` verification); (S2) `Result__T` typedef emitted before `T` once `T` embeds an `(Option ...)` field -- **still open** | `field_read_emits_byvalue_aggregate` (S1); typedef ordering (S2) | **[PARTIAL]** | S1 this branch |
+| ~~G5~~ | `Option`'s legacy `tur_option_t` special-casing vs #482 | (S1) a struct-field-read `Option` passed to a typeclass method inserts a stale `tur_option_t *`->aggregate reconstruction; (S2) `Result__T` typedef emitted before `T` once `T` embeds an `(Option ...)` field -- **BOTH fixed in self-contained repros**, pending real `json/encode` derive-json confirmation | `field_read_emits_byvalue_aggregate` (S1); forward typedef in `emit_registered_struct_app_rec` (S2) | **[FIXED*]** | this branch |
 | **G6** | HKT `fmap` closure-thunk + cata result (fn-value spec path) | a generic `cata = alg . fmap (cata alg) . unroll` monomorphizes the recursive closure handed to `fmap` with the wrong per-carrier thunk fn-pointer ABI (cstr -> segfault) and threads the `(:: (fmap ...) (ReF B))` result through the int64 carrier (int/bool -> boxed, wrong `=`) | none | **[GAP]** | -- |
 | **G7** | site 8, return/decode side, sum field | a `defdata`-sum struct field's `(decode ... (Result Cmd cstr))` dispatches to the generic `decode_T` at the ENCLOSING struct's result type instead of the field's `Decode [Cmd]` instance (struct fields resolve right; ADT heads do not) | partial | **[GAP]** | -- |
 | ~~G9~~ | witness-side, parametric-container element | the MIRROR of G2: a single-level `Enc [Cons]` over `(Cons (Option int))`. G2 already minted the `Cons__Option__int` cell + inner Option by-value spec; the remaining defect was the dispatch arg `(.head xs)` (an embedded `Option__int`) reconstructed via a stale `tur_option_t *` carrier cast | `field_read_emits_byvalue_aggregate` (suppresses the spurious carrier->concrete bridge) | **[FIXED]** | this branch |
 | **G10** | instance selection, applied-struct heads | two instances of one class over applied structs differing only in the element (`Enc [(Option cstr)]` vs `Enc [(Option int)]`) conflate -- the selection key drops the element, so dispatch always runs the last-defined instance (NOT an ABI bug; instance keying) | none | **[GAP]** | -- |
 
 Sites 1-9 are the fish already caught. **G1, G2, G3, and G4 are the gaps the
-composition stress matrix exposed** (section 5); **G1, G2, G3, and G9 are now
-closed** (this branch, G9 also closing **G5 Site 1** in effect). **G5** is a
-#482 follow-up filed by the maintainer (Option-specific residual special-casing,
-two codegen sites; Site 1 done, Site 2 open); **G9** is the witness-side mirror
-of G2 and **G10** the applied-struct instance-selection conflation, both found
-while closing G2/G3. G3 was filed independently on
+composition stress matrix exposed** (section 5); **G1, G2, G3, G5, and G9 are
+now closed** (this branch; G5 closed in self-contained repros, pending real
+`json/encode` derive-json confirmation). **G5** is a #482 follow-up filed by the
+maintainer (Option-specific residual special-casing, two codegen sites, both
+fixed); **G9** is the witness-side mirror of G2 and **G10** the applied-struct
+instance-selection conflation, both found while closing G2/G3. G3 was filed
+independently on
 `main` by the maintainer (`docs/reported/instance-method-byvalue-struct-field-receiver-abi-mismatch.md`,
 #482-era) -- same family, same fix direction; it is the single-level
 struct-field-receiver companion of G2's nested-container dispatch, and the two
@@ -278,7 +279,7 @@ The *typed* path (`.head` / ascribed `.tail`) works; only the generic
 the carrier layout. Filed:
 `docs/reported/heap-cons-byvalue-aggregate-head-breaks-int-carrier-list-helpers.md`.
 
-### G5 -- `(Option T)` struct field: `Option`'s `tur_option_t` special-casing not reconciled with #482 (maintainer-filed)
+### G5 -- `(Option T)` struct field: `Option`'s `tur_option_t` special-casing not reconciled with #482 (maintainer-filed) -- **BOTH SITES FIXED (this branch, self-contained)**
 
 Follow-up to #482. The field *layout* is now an embedded `Option__cstr`
 aggregate, but two **Option-specific** codegen paths still assume the old
@@ -308,6 +309,19 @@ side, reproducing for any applied-struct head); Site 2 is a typedef
 topological-sort gap that #482 exposed, riding along because it blocks the same
 use case. Filed:
 `docs/reported/option-tur-option-special-casing-stale-post-482.md`.
+
+**FIXED (this branch, self-contained repros).** Site 1 is closed by the G9 fix
+(`field_read_emits_byvalue_aggregate` suppresses the `tur_option_t *`
+reconstruction). Site 2 is closed by `emit_registered_struct_app_rec`
+(`types.c`) emitting a guarded forward `typedef struct User User;` when a
+struct-app field references a user struct by pointer, so `Result__User__cstr`
+no longer precedes the `User` typedef (verified-redundant typedef under
+`-std=c99`). Fixture
+`tests/fixtures/result-over-struct-with-option-field-typedef-order`; Site 1's
+mechanism is also covered by the G9 fixture. The report stays open *only* until
+the exact `json/encode` derive-json path is confirmed against the absent
+turmeric-spices sibling (both self-contained reproductions pass; suite green
+1742/0).
 
 ### G6 -- generic `cata` via `Functor` `fmap`: closure-thunk ABI + boxed cata result (spice-filed)
 
@@ -438,9 +452,9 @@ not in the carrier bridge. Filed:
 Crossing sites enumerated, shared recovery routine named, gaps G1/G2 found
 and filed (plus G3 and G5, filed independently as #482 follow-ups). This
 converts the open surface from "unknown number of fish" to a **closeable
-list**. **G1, G2, G3, and G9 are now closed** (this branch), and **G5 Site 1**
-is closed in effect by the G9 fix (awaiting real `derive-json` verification);
-G4/G5-Site-2/G6/G7/G10 remain
+list**. **G1, G2, G3, G5, and G9 are now closed** (this branch; G5's two sites
+fixed in self-contained repros, awaiting real `json/encode` derive-json
+confirmation); G4/G6/G7/G10 remain
 and are tracked as table rows under P2 (G4 is the consumer-side crossing that
 closing G1 exposed; G5 is the Option-specific residual special-casing #482 left
 stale; G6 is the HKT `fmap` closure-thunk/cata-result crossing on the fn-value
@@ -467,7 +481,7 @@ remaining nested cells are added as each gap closes -- a fixture is only
 committed once it PASSES, so the gate stays green (per CLAUDE.md). The minimal
 repros live in the reported docs until then.
 
-### P2 -- Route the remaining sites through the shared recovery (close G4, G5-Site-2, G6, G7, G10)
+### P2 -- Route the remaining sites through the shared recovery (close G4, G6, G7, G10)
 
 Each gap closes by *adding to a chokepoint* per
 [docs/carrier-crossing-recovery-routing-plan.md](carrier-crossing-recovery-routing-plan.md),
@@ -503,15 +517,17 @@ not by adding another site-local gated branch.
   carrier parameter -- the same path a by-value local already used. See the
   FIXED row + the G3 result subsection.
 - **G5** (maintainer-filed,
-  `docs/reported/option-tur-option-special-casing-stale-post-482.md`): retire
-  `Option`'s residual `tur_option_t` special-casing. **Site 1 -- DONE in effect
-  by the G9 fix** (`field_read_emits_byvalue_aggregate` suppresses the
-  `tur_option_t *` reconstruction for a struct-field-read Option passed to a
-  typeclass method; a self-contained repro passes, awaiting real `derive-json`
-  verification before the report is archived). **Site 2 -- still open:** in the
-  typedef emitter, order `Result__T` (and any type embedding `T`/`T *`) after `T`
-  once `T` gains a dependency on an `(Option ...)` aggregate field (transitive
-  `Result__T -> T -> Option__cstr`) -- an independent topological-sort fix.
+  `docs/reported/option-tur-option-special-casing-stale-post-482.md`): both sites
+  DONE in self-contained repros (this branch). **Site 1** -- the G9 fix
+  (`field_read_emits_byvalue_aggregate`) suppresses the `tur_option_t *`
+  reconstruction for a struct-field-read Option passed to a typeclass method.
+  **Site 2** -- `emit_registered_struct_app_rec` (`types.c`) emits a guarded
+  forward `typedef struct User User;` when a struct-app field references a user
+  struct by pointer, so `Result__User__cstr { User *ok_val; }` no longer precedes
+  the `User` typedef (fixture
+  `tests/fixtures/result-over-struct-with-option-field-typedef-order`). The report
+  stays open only until the exact `json/encode` derive-json path is confirmed
+  against the absent turmeric-spices sibling.
 - **G6** (spice-filed,
   `docs/reported/hkt-fmap-cata-carrier-miscompile.md`): route the recursive
   closure handed to `fmap` through a per-carrier fn-value spec whose thunk

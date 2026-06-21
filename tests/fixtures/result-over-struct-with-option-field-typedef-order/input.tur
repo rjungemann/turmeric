@@ -1,0 +1,27 @@
+;; result-over-struct-with-option-field-typedef-order -- G5 Site 2 of
+;; docs/carrier-concrete-abi-crossing-audit-plan.md.
+;;
+;; Once a user struct gains a dependency on an embedded `(Option ...)` aggregate
+;; field (post-#482 it is laid out inline as `Option__cstr`), the struct typedef
+;; is pushed later in the emitted C.  A monomorphized `Result__User__cstr`
+;; (which embeds `User *`) was flushed AHEAD of the `User` typedef -- so the C
+;; named `User` before it was defined: `error: unknown type name 'User'`, plus an
+;; `ok_val` int-fallback cascade.
+;;
+;; Fix: when a struct-app field references a user struct by pointer, emit a
+;; guarded forward `typedef struct User User;` (types.c, emit_registered_struct_
+;; app_rec) so the `User *` reference resolves; the later full typedef is an
+;; accepted redundant typedef under -std=c99.
+
+(defstruct User [id : int  nick : (Option cstr)])
+
+(defn mk [u : User] : (Result User cstr) (ok u))
+
+(defn describe [r : (Result User cstr)] : cstr
+  (if (.is-ok r) "ok" "err"))
+
+(defn main [] : int
+  (let [u (make-struct User 7 (:: (some "al") (Option cstr)))
+        r (mk u)]
+    (println (describe r)))
+  0)

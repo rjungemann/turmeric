@@ -1271,6 +1271,25 @@ static void emit_registered_struct_app_rec(Buf *out, uint32_t idx) {
                     }
                 }
             }
+            /* G5 Site 2 (typedef ordering): a struct-app field that references a
+             * USER struct by pointer (e.g. `Result__User__cstr { User *ok_val; }`)
+             * is flushed -- via the embedding struct's field flush -- ahead of the
+             * user struct typedef itself (which #482 pushes later once it gains an
+             * `(Option ...)` field dependency).  The user struct is NOT in the
+             * struct-app registry, so the TY_APP recursion above cannot emit it.
+             * Emit a guarded forward `typedef struct User User;` so the `User *`
+             * reference resolves; the later full `typedef struct User {...} User;`
+             * is an accepted redundant typedef (verified under -std=c99 -Wall).
+             * Pointer fields only need the name, so the forward decl suffices. */
+            if (resolved.kind == TY_STRUCT && resolved.as.struct_.def &&
+                resolved.as.struct_.def->name &&
+                !resolved.as.struct_.def->is_opaque) {
+                const char *un = resolved.as.struct_.def->name;
+                buf_printf(out, "#ifndef TUR_FWD_%s\n", un);
+                buf_printf(out, "#define TUR_FWD_%s\n", un);
+                buf_printf(out, "typedef struct %s %s;\n", un, un);
+                buf_printf(out, "#endif\n");
+            }
             /* Phase E: emit fn-ptr typedef before the struct that uses it. */
             if (resolved.kind == TY_FN && fn_type_is_concrete_for_ptr(&resolved)) {
                 const char *td = register_fn_ptr_typedef(&resolved);
