@@ -10,8 +10,53 @@ severity: Medium-high. SILENT miscompile, not a hard error. A constrained
   double's bit pattern reinterpreted as int64 (denormal-class garbage); a
   by-value-struct element would fail to compile. Blocks any nested-container
   Encode/Decode (the encode/read sibling of #480's nested-construct fix).
-status: OPEN -- found 2026-06-21 by the composition stress matrix in
-  docs/carrier-concrete-abi-crossing-audit-plan.md (gap G2).
+status: RESOLVED 2026-06-21 (gap G2). Fixed on
+  branch claude/g2-carrier-concrete-abi-audit-3yzkhm; fixture
+  tests/fixtures/constrained-instance-dispatch-nested-parametric-element. See
+  "Resolution" below.
+---
+
+## Resolution (2026-06-21)
+
+Fixed. The dispatch-type chokepoint `emit_reresolve_disp_type`
+(`src/compiler/emit_core.c`) already recovered the concrete receiver
+`(Cons B)`; what was missing was (1) the FnDef lookup matching a bare
+type-constructor instance head (`Enc [Cons]`) against the applied `(Cons B)`,
+and (2) minting + routing to the inner instance's by-value spec.
+
+Changes:
+
+- `emit_inst_head_matches` (`emit_core.c`): a bare type-constructor instance
+  head (`Cons`, with type params) now matches any concrete application
+  `(Cons X)`, mirroring the `__inst_<Class>_<method>__<Head>` name the
+  suffix-reconstruction fallback already builds, so the FnDef lookup agrees with
+  the name resolver.
+- `emit_abi_try_nested_instance_dispatch_redirect` (`emit_module.c`): when an
+  active constrained-instance spec dispatches a class method whose recovered
+  receiver is a concrete parametric container, mint the inner instance method's
+  per-instantiation by-value spec (`__inst_Enc_enc_Cons__spec__..._Cons__int`,
+  taking `Cons__int *`), record the call->spec mapping, and recurse into the
+  spec body (so its own `(.head xs)` dispatch is scanned). The single-level
+  `@Cons` witness path mints the identical spec; `emit_abi_intern_spec` dedupes.
+- `emit_call_name` (`emit_core.c`): prefer a recorded nested-dispatch spec over
+  the carrier-base re-resolution when one exists for the call under the active
+  outer.
+- `emit_reresolve_disp_type` (`emit_core.c`): free the owned `(Cons int)` clone
+  that the field-substitution branch produced (a pre-existing leak that only
+  surfaced once the recovered element was a TY_APP, as in this nested case) so
+  the leak-checked codegen path stays clean.
+
+The float line now prints `7.1`; int/float/cstr all round-trip. Suite green
+(1740/0).
+
+**Distinct, still-open mirror:** the OTHER nesting `(Cons (Option A))` --
+encoding a list whose elements are themselves a parametric container, dispatched
+inside the `Enc [Cons]` body -- is a separate pre-existing gap (the single-level
+`@Cons` witness collapses the `(Option int)` element to `int`, then dispatches
+the inner `enc` on the carrier). It is verified pre-existing (fails identically
+without this fix) and tracked as gap G9 in the audit
+(`docs/reported/constrained-instance-dispatch-parametric-container-element-collapse.md`).
+
 ---
 
 # Nested-parametric-element dispatch collapses to the inner instance's carrier signature

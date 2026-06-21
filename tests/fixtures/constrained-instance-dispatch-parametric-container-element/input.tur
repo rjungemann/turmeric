@@ -1,0 +1,57 @@
+;; constrained-instance-dispatch-parametric-container-element -- the witness-side
+;; mirror of G2.  A single-level `Enc [Cons]` whose ELEMENT is itself a
+;; parametric container, `(Cons (Option A))`, must (1) mint the cell at the real
+;; element width (`Cons__Option__int`, not a collapsed `Cons__int`) and (2)
+;; dispatch the inner `(.head xs)` -- an embedded by-value `Option__A` -- to the
+;; Option instance's by-value spec WITHOUT reconstructing it through a stale
+;; `tur_option_t *` carrier cast.
+;;
+;; Gap G9 of docs/carrier-concrete-abi-crossing-audit-plan.md
+;; (docs/archive/constrained-instance-dispatch-parametric-container-element-collapse.md).
+;; The G2 fix already minted the `Cons__Option__int` cell + the inner Option
+;; by-value spec; the remaining defect was the dispatch ARG: `(.head xs)` is an
+;; embedded `Option__int` aggregate but its elaborated type is the erased int64
+;; carrier, so the bridge reconstructed it via `(tur_option_t *)(intptr_t)
+;; ((xs)->head)` -- casting an aggregate to a pointer.
+;;
+;; Fix: `field_read_emits_byvalue_aggregate` (emit_expr.c) resolves the field
+;; type through the receiver's concrete (spec) type, so a by-value aggregate
+;; field read is recognized as already-concrete and the spurious carrier->
+;; concrete reconstruction is suppressed.  float is the miscompile-prone cell.
+
+(defclass Enc [a] (enc [x] : cstr))
+
+(definstance Enc [int]
+  (enc [x] : cstr
+    ```c
+    char *buf = (char *)malloc(32);
+    snprintf(buf, 32, "%lld", (long long)x);
+    return buf;
+    ```))
+
+(definstance Enc [float]
+  (enc [x] : cstr
+    ```c
+    char *buf = (char *)malloc(32);
+    snprintf(buf, 32, "%g", x);
+    return buf;
+    ```))
+
+(definstance Enc [Option]
+  [(Enc A)]
+  (enc [x] : cstr (if (.is-some x) (enc (.value x)) "null")))
+
+;; element is itself a parametric container (Option A):
+(definstance Enc [Cons]
+  [(Enc A)]
+  (enc [xs] : cstr (enc (.head xs))))
+
+(defn main [] : int
+  (do
+    (println (enc @Cons (:: (list (:: (some 5) (Option int))
+                                  (:: (some 9) (Option int)))
+                            (Cons (Option int)))))
+    (println (enc @Cons (:: (list (:: (some 7.1) (Option float))
+                                  (:: (some 2.5) (Option float)))
+                            (Cons (Option float)))))
+    0))

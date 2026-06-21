@@ -385,6 +385,27 @@ static Expr *arrow_fat_shim(Elab *e, Expr *a) {
     return a;
 }
 
+/* G10: a type argument is "concrete for instance discrimination" when it is a
+ * named struct/ADT OR a concrete primitive (int/cstr/bool/float/...).  Two
+ * instances over the same applied head differing only in a concrete primitive
+ * element -- `Enc [(Option cstr)]` vs `Enc [(Option int)]` -- must be told apart;
+ * the prior check considered only TY_STRUCT/TY_ADT concrete, so a primitive
+ * element difference was ignored and both instances matched any `(Option X)`
+ * receiver (the last-defined silently won).  A tyvar element stays a wildcard
+ * (parametric instances match any element), so it is deliberately NOT concrete. */
+static bool typeclass_type_arg_concrete(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_STRUCT: return t->as.struct_.def != NULL;
+        case TY_ADT:    return t->as.adt_.def != NULL;
+        case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT64: case TY_BOOL: case TY_CSTR: case TY_FLOAT:
+        case TY_FLOAT32: case TY_FLOAT64: case TY_NIL: case TY_PTR_VOID:
+            return true;
+        default: return false;
+    }
+}
+
 /* True when `tc` has an instance whose head is the function arrow (TY_FN).
  * Used to defer a structurally-return-dispatch method (e.g. `comp [f g] : a`,
  * whose untyped params do not mention the class variable) to argument-based
@@ -5124,13 +5145,14 @@ skip_capability_field_lookup:;
                         } else {
                             const Type *oa = obj->type.as.app.arg;
                             const Type *ia = inst->type_args[0].as.app.arg;
-                            bool oa_concrete = oa &&
-                                ((oa->kind == TY_STRUCT && oa->as.struct_.def) ||
-                                 (oa->kind == TY_ADT && oa->as.adt_.def));
-                            bool ia_concrete = ia &&
-                                ((ia->kind == TY_STRUCT && ia->as.struct_.def) ||
-                                 (ia->kind == TY_ADT && ia->as.adt_.def));
-                            if (oa_concrete && ia_concrete && !type_eq(*oa, *ia)) {
+                            /* G10: discriminate on a concrete PRIMITIVE element
+                             * too (cstr vs int), not only struct/ADT elements --
+                             * so `Enc [(Option cstr)]` and `Enc [(Option int)]`
+                             * are not conflated.  A tyvar element stays a
+                             * wildcard. */
+                            if (typeclass_type_arg_concrete(oa) &&
+                                typeclass_type_arg_concrete(ia) &&
+                                !type_eq(*oa, *ia)) {
                                 type_ok = false;
                             }
                         }

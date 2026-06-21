@@ -1,0 +1,35 @@
+;; instance-method-byvalue-struct-field-receiver -- a typeclass instance whose
+;; head is a by-value applied struct (`Enc [(Option cstr)]`) emits its method on
+;; the int64 carrier ABI (a pointer to the aggregate).  Dispatch over a LOCAL of
+;; that type already bridged (spill + address-of); a by-value struct FIELD read
+;; of that type -- which post-#482 reads back as the embedded `Option__cstr`
+;; aggregate -- must get the SAME spill-and-address bridge instead of being
+;; passed by value into the int64 parameter.
+;;
+;; Gap G3 of docs/carrier-concrete-abi-crossing-audit-plan.md
+;; (docs/archive/instance-method-byvalue-struct-field-receiver-abi-mismatch.md):
+;; the call `(enc (.nick r))` emitted `__inst_Enc_enc_Option_cstr((r).nick)`,
+;; passing an `Option__cstr` aggregate to an `int64_t` parameter -- a hard cc
+;; type error.
+;;
+;; Fix: `expr_emits_byvalue_carrier_abi` (emit_expr.c) now recognizes a by-value
+;; (non-heap) aggregate FIELD read as a by-value carrier producer, so the
+;; existing concrete->carrier bridge spills it to a temp and passes its address,
+;; exactly like a local of the same type.
+
+(defclass Enc [a] (enc [x] : cstr))
+
+(definstance Enc [(Option cstr)]
+  (enc [x] : cstr (if (.is-some x) "s" "n")))
+
+(defstruct Rec [nick : (Option cstr)])
+
+(defn main [] : int
+  (let [r  (make-struct Rec (:: (some "al") (Option cstr)))
+        r2 (make-struct Rec (:: (none) (Option cstr)))
+        o  (:: (some "hi") (Option cstr))]
+    (do
+      (println (enc o))           ;; local control      -> "s"
+      (println (enc (.nick r)))   ;; some cstr field     -> "s"
+      (println (enc (.nick r2))))) ;; none cstr field    -> "n"
+  0)

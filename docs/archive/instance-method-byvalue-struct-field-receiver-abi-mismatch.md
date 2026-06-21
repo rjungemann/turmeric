@@ -1,7 +1,10 @@
 ---
 title: Typeclass instance method over a by-value parametric struct takes the int64 carrier, but a by-value struct-field read passes the aggregate -- ABI mismatch
 severity: medium -- blocks composing a container instance (Enc [(Option cstr)]) over a struct FIELD of that type. Dispatch over a *local* of the same type works; only the struct-field receiver path mismatches. Continuation of the carrier-vs-byvalue family (#475/#479/#480/#481), on the instance-method-receiver ABI side.
-status: open
+status: RESOLVED 2026-06-21 (gap G3). Fixed on
+  branch claude/g2-carrier-concrete-abi-audit-3yzkhm; fixture
+  tests/fixtures/instance-method-byvalue-struct-field-receiver. See
+  "Resolution" below.
 discovered: 2026-06-21
 surfaced-by: composing Enc/Encode [(Option cstr)] over a defstruct field, after (a) the by-value parametric-struct field layout fix (struct-field-byvalue-parametric-struct-layout) made `(.field x)` yield the real Option__cstr aggregate and (b) the applied-unary-instance-head kind fix (applied-unary-instance-head-promotes-star-class) let the instance set elaborate. Both predecessors are resolved; this is the next layer they expose.
 ---
@@ -79,3 +82,36 @@ Compiler-side (typeclass instance method ABI vs. by-value aggregate
 materialization).  Unblocks composing `Encode`/`Decode [Option]` over
 `derive-json` struct fields end-to-end in turmeric-spices spices/json (the
 field LAYOUT already works; this is the dispatch-ABI half).
+
+## Resolution (2026-06-21)
+
+Fixed via **option 2** (keep the carrier parameter; bridge the by-value
+struct-field read to the carrier at the dispatch site -- the multi-word
+aggregate is spilled to a temp and its address passed, exactly as a by-value
+LOCAL of the same type already was).
+
+The one-line change is in `expr_emits_byvalue_carrier_abi` (`emit_expr.c`): a
+post-#482 by-value (non-`:heap`) aggregate **field read** (`(.nick r)`, whose
+resolved type is a concrete non-heap struct with a real codegen layout) is now
+recognized as a by-value carrier producer. The existing concrete->carrier bridge
+(`emit_carrier_bridge`) then spills it and passes `(int64_t)(intptr_t)(&tmp)`,
+matching the instance method's `int64_t` parameter (which the body reads back as
+the aggregate pointer). A `:heap` field (Cons/Vec) is excluded -- it is still
+carried as the int64 pointer. The residual `-Wint-conversion` in the instance
+body the report noted is also gone.
+
+The call now emits:
+
+```c
+puts(__inst_Enc_enc_Option_cstr((int64_t)(intptr_t)(&__t43)));   // __t43 = (r).nick
+```
+
+Fixture `tests/fixtures/instance-method-byvalue-struct-field-receiver` (local
+control + some/none cstr field). Suite green (1741/0).
+
+**Distinct, still-open neighbor:** two applied-struct instances of one class
+differing only in the element (`Enc [(Option cstr)]` + `Enc [(Option int)]`)
+conflate at dispatch (the selection key drops the element). Verified
+pre-existing; tracked as gap G10
+(`docs/reported/multiple-applied-struct-instances-same-class-conflate.md`). The
+G3 fixture deliberately uses a single applied-struct instance to avoid it.

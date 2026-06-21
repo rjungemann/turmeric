@@ -67,6 +67,33 @@ static bool type_uses_carrier_in_dispatch(Type t) {
     return type_uses_carrier_abi(t);
 }
 
+/* G6 (partial): a constrained generic differentiated ONLY by its return type
+ * (e.g. `(defn re-cata [B] [alg : (fn [(ReF B)] B) e : Re] : B ...)` specialized
+ * at B=int / bool / cstr) interns sibling specs with identical ARGUMENT types,
+ * differing only in result.  The by-args spec lookup cannot tell them apart, so a
+ * call whose own result is one primitive (int) silently grabbed a sibling spec of
+ * another primitive (bool) -- a wrong-typed result and a `4 == bool`
+ * -Wbool-compare.  When BOTH the call's and the spec's result types are distinct
+ * *primitive* kinds they are genuinely different ABIs and must not match;
+ * aggregate / carrier results (TY_APP/TY_STRUCT/tyvar, disambiguated by the
+ * per-Expr* recording, not here) keep the existing behaviour.  This is the
+ * spec-selection half of gap G6; the closure-thunk-per-carrier half (a sub-word
+ * `bool` recursive closure) remains open. */
+static bool emit_prim_result_kind(TypeKind k) {
+    switch (k) {
+        case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT64: case TY_BOOL: case TY_CSTR: case TY_FLOAT:
+        case TY_FLOAT32: case TY_FLOAT64: case TY_NIL: case TY_PTR_VOID:
+            return true;
+        default: return false;
+    }
+}
+bool emit_spec_result_mismatch(Type call_result, Type spec_result) {
+    return emit_prim_result_kind(call_result.kind) &&
+           emit_prim_result_kind(spec_result.kind) &&
+           call_result.kind != spec_result.kind;
+}
+
 /* KB-004/KB-021: find the ABI specialization (concrete-by-value clone) that an
  * EX_CALL resolves to, or NULL.  Factored out of the EX_CALL emit path so the
  * let-binding type can discover that a call returns a concrete struct by value
@@ -165,6 +192,12 @@ static const EmitAbiSpecialization *find_matched_abi_spec(
     for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
         const EmitAbiSpecialization *spec = &ctx->abi_specializations[si];
         if (spec->binding != fn_binding || spec->n_args != e->as.call_.n_args) continue;
+        /* G6: do not match a return-differentiated sibling spec (e.g. the bool
+         * `re-cata` clone for an int-result call). */
+        if (emit_spec_result_mismatch(emit_resolve_type(ctx, e->type),
+                                      spec->result_type)) {
+            continue;
+        }
         bool args_match = true;
         for (uint32_t ai = 0; ai < e->as.call_.n_args; ai++) {
             const Expr *cur = e->as.call_.args[ai];
@@ -326,6 +359,16 @@ static bool expr_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
         return fn_body_tail_emits_byvalue_carrier_abi(ctx, e);
     if (!type_uses_carrier_abi(e->type)) return false;
     if (e->kind == EX_MAKE_STRUCT) return true;
+    /* G3 (instance-method by-value struct-field receiver): post-#482 a by-value
+     * (non-heap) parametric struct FIELD -- e.g. an `(Option cstr)` field --
+     * reads back as the embedded aggregate (`Option__cstr`), not the int64
+     * carrier handle.  Passing it to a carrier-ABI dispatch needs the same
+     * spill-and-address bridge a by-value local gets.  A `:heap` field (Cons,
+     * Vec) is still carried as the int64 pointer, so it is excluded. */
+    if (e->kind == EX_GET_FIELD) {
+        Type ft = emit_resolve_type(ctx, e->type);
+        return !type_is_heap_struct(ft) && type_has_concrete_codegen_layout(&ft);
+    }
     if (e->kind == EX_VAR)
         return e->as.var.binding && e->as.var.binding->emit_byvalue_carrier_abi;
     if (e->kind == EX_CALL) {
@@ -347,6 +390,70 @@ static bool expr_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
         return call_returns_byvalue_aggregate(ctx, e);
     }
     return false;
+}
+
+/* G9 (carrier<->concrete): true when a field read `(.field recv)` materializes
+ * a by-value (non-:heap) aggregate in C -- e.g. `(.head xs)` where xs is a
+ * monomorphized `Cons__Option__int *`, so `(xs)->head` is an embedded
+ * `Option__int` value, NOT the int64 carrier.  Unlike `expr_emits_byvalue_
+ * carrier_abi`, this resolves the field type through the RECEIVER's concrete
+ * type (consulting the active spec's arg_types for a spec-param receiver), so it
+ * still fires when the field's own elaborated `e->type` was erased to the int64
+ * carrier (a parametric `(Cons A)` head field).  Used to suppress a spurious
+ * carrier->concrete reconstruction (the stale `tur_option_t *` cast) at a
+ * dispatch arg that is already the concrete aggregate. */
+static bool field_read_emits_byvalue_aggregate(EmitCtx *ctx, const Expr *e) {
+    if (!ctx || !e || e->kind != EX_GET_FIELD || !e->as.get_field_.struct_expr)
+        return false;
+    const Expr *se = e->as.get_field_.struct_expr;
+    /* Resolve the receiver-container's concrete type for the active spec: a spec
+     * param keeps its erased parametric type, so prefer the spec's arg_types[]
+     * (mirrors emit_reresolve_disp_type / emit_var_spec_arg_type). */
+    Type rt;
+    bool have_rt = false;
+    if (se->kind == EX_VAR && se->as.var.binding &&
+        ctx->current_abi_specialization && ctx->current_abi_specialization->fn) {
+        FnDef *fd = ctx->current_abi_specialization->fn;
+        const EmitAbiSpecialization *aspec = ctx->current_abi_specialization;
+        for (uint8_t pi = 0; pi < fd->n_params && pi < aspec->n_args; pi++) {
+            if (fd->params[pi] == se->as.var.binding) {
+                rt = aspec->arg_types[pi];
+                have_rt = true;
+                break;
+            }
+        }
+    }
+    if (!have_rt) rt = emit_resolve_type(ctx, se->type);
+
+    StructDef *sd = NULL;
+    Type sargs[16];
+    uint8_t sn = 0;
+    uint32_t fidx = e->as.get_field_.field_idx;
+    Type fr;
+    bool fr_owned = false;
+    bool have_fr = false;
+    if (type_extract_struct_app(&rt, &sd, sargs, &sn) && sd && fidx < sd->n_fields) {
+        const StructField *f = &sd->fields[fidx];
+        if (f->full_type && f->full_type->kind == TY_TYVAR) {
+            fr = substitute_struct_app_type(f->full_type, sd, sargs);
+            fr_owned = (fr.kind == TY_APP);
+            have_fr = true;
+        } else if (f->full_type) {
+            fr = *f->full_type;
+            have_fr = true;
+        }
+    } else if (rt.kind == TY_STRUCT && rt.as.struct_.def &&
+               rt.as.struct_.def->n_type_params == 0 &&
+               fidx < rt.as.struct_.def->n_fields) {
+        const StructField *f = &rt.as.struct_.def->fields[fidx];
+        if (f->full_type) { fr = *f->full_type; have_fr = true; }
+    }
+    if (!have_fr) return false;
+
+    bool result = type_uses_carrier_abi(fr) && !type_is_heap_struct(fr) &&
+                  type_has_concrete_codegen_layout(&fr);
+    if (fr_owned) free_struct_app_type(fr);
+    return result;
 }
 
 /* instance-method-return-carrier-bridge: true when the tail leaf/leaves of `e`
@@ -3073,6 +3180,11 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     !expr_is_pbp_param(ctx, emit_arg) &&
                     !spec_lowers_to_int64 &&
                     type_kind_is_aggregate(matched_spec->arg_types[i].kind) &&
+                    /* G9: a by-value aggregate field read (`(.head xs)` off a
+                     * monomorphized cell) is ALREADY the concrete aggregate; the
+                     * erased TY_INT below would otherwise reconstruct it through a
+                     * stale `tur_option_t *` carrier cast. */
+                    !field_read_emits_byvalue_aggregate(ctx, emit_arg) &&
                     (emit_arg->type.kind == TY_INT ||
                      (type_kind_is_aggregate(emit_arg->type.kind) &&
                       type_uses_carrier_abi(emit_arg->type) &&

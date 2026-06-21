@@ -1,0 +1,30 @@
+;; applied-struct-instance-element-discrimination -- two instances of one class
+;; over applied structs differing ONLY in the element (`Enc [(Option cstr)]` vs
+;; `Enc [(Option int)]`) must be told apart at dispatch.  Previously the
+;; instance-selection element check (elab_typeclasses.c) treated only
+;; TY_STRUCT/TY_ADT elements as concrete, so a primitive element difference
+;; (cstr vs int) was ignored and BOTH instances matched any `(Option X)`
+;; receiver -- the last-defined silently won (a silent misdispatch).
+;;
+;; Gap G10 of docs/carrier-concrete-abi-crossing-audit-plan.md.
+;; Fix: `typeclass_type_arg_concrete` also treats a concrete primitive element
+;; as discriminating (a tyvar element stays a wildcard for parametric instances).
+
+(defclass Enc [a] (enc [x] : cstr))
+
+(definstance Enc [(Option cstr)]
+  (enc [x] : cstr (if (.is-some x) "s" "n")))
+
+(definstance Enc [(Option int)]
+  (enc [x] : cstr (if (.is-some x) "i" "n")))
+
+(defstruct Rec [nick : (Option cstr)  age : (Option int)])
+
+(defn main [] : int
+  (let [r (make-struct Rec (:: (some "al") (Option cstr)) (:: (some 7) (Option int)))]
+    (do
+      (println (enc (:: (some "hi") (Option cstr))))
+      (println (enc (:: (some 9)   (Option int))))
+      (println (enc (.nick r)))
+      (println (enc (.age r)))))
+  0)

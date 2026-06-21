@@ -1,0 +1,65 @@
+;; constrained-instance-dispatch-nested-parametric-element -- a constrained
+;; parametric instance whose element is ITSELF a parametric container must
+;; dispatch the inner class method through the inner instance's
+;; PER-INSTANTIATION by-value spec, not the generic int64 carrier shim.
+;;
+;; Gap G2 of docs/carrier-concrete-abi-crossing-audit-plan.md
+;; (docs/archive/constrained-instance-dispatch-nested-parametric-element-carrier-collapse.md):
+;; in the body of `(definstance Enc [Option] [(Enc A)] (enc (.value x)))`, when
+;; the concrete element `A` is `(Cons B)`, `(.value x)` is a concrete `Cons__B *`
+;; but the inner `(enc (.value x))` baked the generic carrier shim
+;; `__inst_Enc_enc_Cons(int64_t)` -- a `-Wint-conversion` mismatch that survived
+;; for `int` by pointer-width luck and silently miscompiled `float` (a double's
+;; bit pattern read as int64).
+;;
+;; Fix: the dispatch-type chokepoint `emit_reresolve_disp_type` recovers the
+;; concrete receiver `(Cons B)`; the ABI-registration companion
+;; (emit_abi_try_nested_instance_dispatch_redirect) mints the inner instance's
+;; by-value spec (`__inst_Enc_enc_Cons__spec__..._Cons__B`, taking `Cons__B *`)
+;; and records the call so the emit side routes to it. The int/float/cstr cells
+;; all round-trip; the carrier base stays valid for the polymorphic dict path.
+
+(defclass Enc [a] (enc [x] : cstr))
+
+(definstance Enc [int]
+  (enc [x] : cstr
+    ```c
+    char *buf = (char *)malloc(32);
+    snprintf(buf, 32, "%lld", (long long)x);
+    return buf;
+    ```))
+
+(definstance Enc [float]
+  (enc [x] : cstr
+    ```c
+    char *buf = (char *)malloc(32);
+    snprintf(buf, 32, "%g", x);
+    return buf;
+    ```))
+
+(definstance Enc [cstr]
+  (enc [x] : cstr
+    ```c
+    size_t n = strlen((const char *)x) + 3;
+    char *buf = (char *)malloc(n);
+    snprintf(buf, n, "\"%s\"", (const char *)x);
+    return buf;
+    ```))
+
+;; Cons is :heap; extracting the parametric head dispatches per element type.
+(definstance Enc [Cons]
+  [(Enc A)]
+  (enc [xs] : cstr (enc (.head xs))))
+
+;; Option is by-value; its element here is the parametric container (Cons A).
+(definstance Enc [Option]
+  [(Enc A)]
+  (enc [x] : cstr (if (.is-some x) (enc (.value x)) "null")))
+
+(defn main [] : int
+  (do
+    ;; (Option (Cons A)) : outer Option (by-value) -> inner Cons (heap) -> element
+    (println (enc @Option (:: (some (:: (list 42 7)     (Cons int)))   (Option (Cons int)))))
+    (println (enc @Option (:: (some (:: (list 7.1 2.5)  (Cons float))) (Option (Cons float)))))
+    (println (enc @Option (:: (some (:: (list "hi" "x") (Cons cstr)))  (Option (Cons cstr)))))
+    0))

@@ -76,6 +76,14 @@ The defect is **not** that this routine is wrong. It is that it is invoked
 **ad hoc, one emit site at a time** -- each PR discovers another expression
 context that forgot to consult it.
 
+**Making these routines mandatory chokepoints -- so a new emit site is correct
+by construction instead of being the next fish -- is the structural follow-up
+tracked in
+[docs/carrier-crossing-recovery-routing-plan.md](carrier-crossing-recovery-routing-plan.md).**
+That plan exists precisely so the unification is not lost between one-off gap
+closures (the failure mode that produced this whole audit). Close each gap below
+by *adding to a chokepoint*, not by adding another site-local branch.
+
 ## 3. Crossing-site audit
 
 Every site below is a place where a parametric payload can appear inside a
@@ -94,12 +102,24 @@ constrained/parametric/HKT spec body and must consult the recovery routine.
 | 8 | `emit_core.c:1141`/`1318` | method-call dispatch re-resolution | `emit_reresolve_*` | [OK] for scalar/value-struct/`:heap` single-level | #475-#480 |
 | 9 | `emit_core.c:1308` | scan-time liveness companion | `emit_reresolve_method_fndef` | [OK] | #480 |
 | ~~G1~~ | `emit_stmt.c` `EX_CALL` | `(list ...)` homogeneity helper `tur-list-homog__` dead call elided for by-value aggregate args | n/a (elide) | **[FIXED]** | this branch |
-| **G2** | site 8, recursive case | method dispatch where the receiver element is **itself a parametric container** (`(.value x) : (Cons A)`) | partial | **[GAP]** | -- |
-| **G3** | `elab_typeclasses.c` instance-method ABI vs site 6 | instance method whose HEAD is a by-value applied struct (`Enc [(Option cstr)]`) takes the carrier param, but a by-value struct-**field** receiver passes the aggregate | none | **[GAP]** | -- |
+| ~~G2~~ | site 8, recursive case | method dispatch where the receiver element is **itself a parametric container** (`(.value x) : (Cons A)`): mint the inner instance's by-value spec + route to it | `emit_reresolve_disp_type` + `emit_abi_try_nested_instance_dispatch_redirect` | **[FIXED]** | this branch |
+| ~~G3~~ | `emit_expr.c` `expr_emits_byvalue_carrier_abi` vs site 6 | instance method whose HEAD is a by-value applied struct (`Enc [(Option cstr)]`) takes the carrier param, but a by-value struct-**field** receiver passed the aggregate -- now bridged (spill + address-of) like a local | `expr_emits_byvalue_carrier_abi` (EX_GET_FIELD) + `emit_carrier_bridge` | **[FIXED]** | this branch |
 | **G4** | int-carrier list helpers (`list-length`, ...) vs `(:: xs :int)` coercion | generic carrier walk of a `:heap` `Cons` whose head is a **by-value aggregate** reads `tail` at the wrong offset and **segfaults** (consumer side of G1) | none | **[GAP]** | -- |
+| ~~G5~~ | `Option`'s legacy `tur_option_t` special-casing vs #482 | (S1) a struct-field-read `Option` passed to a typeclass method inserts a stale `tur_option_t *`->aggregate reconstruction; (S2) `Result__T` typedef emitted before `T` once `T` embeds an `(Option ...)` field -- **BOTH fixed in self-contained repros**, pending real `json/encode` derive-json confirmation | `field_read_emits_byvalue_aggregate` (S1); forward typedef in `emit_registered_struct_app_rec` (S2) | **[FIXED*]** | this branch |
+| **G6** | HKT `fmap` closure-thunk + cata result (fn-value spec path) | a generic `cata = alg . fmap (cata alg) . unroll`: (a) the int call grabbed a return-differentiated sibling (`bool`) spec -- **FIXED** (`emit_spec_result_mismatch`; int now correct, cstr no longer segfaults); (b) the recursive `fmap` closure is shared across carriers with the wrong sub-word thunk ABI -- **still open** (`bool` folds wrong) | spec-selection: `emit_spec_result_mismatch`; closure-thunk: open | **[PARTIAL]** | (a) this branch |
+| ~~G7~~ | site 8, return/decode side, sum field | a `defdata`-sum struct field's `(decode ... (Result Cmd cstr))` dispatched to the generic `decode_T` at the ENCLOSING struct's result type instead of the field's `Decode [Cmd]` instance -- the `EX_ASCRIBE` scan now registers a return-polymorphic dict-less call with the ascription's concrete result as `result_type_override` (instead of the plain inner scan), and the two result-recovery heuristics bail when an override is supplied | `emit_abi_scan_expr` (EX_ASCRIBE) + `result_type_override` | **[FIXED]** | this branch |
+| ~~G9~~ | witness-side, parametric-container element | the MIRROR of G2: a single-level `Enc [Cons]` over `(Cons (Option int))`. G2 already minted the `Cons__Option__int` cell + inner Option by-value spec; the remaining defect was the dispatch arg `(.head xs)` (an embedded `Option__int`) reconstructed via a stale `tur_option_t *` carrier cast | `field_read_emits_byvalue_aggregate` (suppresses the spurious carrier->concrete bridge) | **[FIXED]** | this branch |
+| ~~G10~~ | instance selection, applied-struct heads | two instances of one class over applied structs differing only in the element (`Enc [(Option cstr)]` vs `Enc [(Option int)]`) conflated -- the element-discrimination only treated struct/ADT elements as concrete, ignoring a primitive (cstr vs int) difference (NOT an ABI bug; instance keying) | `typeclass_type_arg_concrete` (primitive elements discriminate) | **[FIXED]** | this branch |
 
 Sites 1-9 are the fish already caught. **G1, G2, G3, and G4 are the gaps the
-composition stress matrix exposed** (section 5). G3 was filed independently on
+composition stress matrix exposed** (section 5); **G1, G2, G3, G5, G7, G9, and
+G10 are now closed** (this branch; G5 and G7 verified end-to-end against the
+real `json/encode` derive-json; G6 spec-selection half closed). **G5**
+is a #482 follow-up filed by the maintainer (Option-specific residual
+special-casing, two codegen sites, both fixed); **G7** is the return/decode-side
+dispatch gap for a `defdata`-sum struct field (now fixed); **G9** is the witness-side
+mirror of G2 and **G10** the applied-struct instance-selection conflation, both
+found while closing G2/G3 and now both fixed. G3 was filed independently on
 `main` by the maintainer (`docs/reported/instance-method-byvalue-struct-field-receiver-abi-mismatch.md`,
 #482-era) -- same family, same fix direction; it is the single-level
 struct-field-receiver companion of G2's nested-container dispatch, and the two
@@ -169,11 +189,11 @@ segfaults (filed:
 `docs/reported/heap-cons-byvalue-aggregate-head-breaks-int-carrier-list-helpers.md`),
 and the nested `enc` dispatch is gap G2.
 
-### G2 -- `(Option (Cons A))`: inner instance method stays at the carrier signature
+### G2 -- `(Option (Cons A))`: inner instance method stays at the carrier signature -- **FIXED (this branch)**
 
 Encoding `(:: (some (:: (list 7.1 2.5) (Cons float))) (Option (Cons float)))`
-**compiles with a warning and silently miscompiles**. The `Enc [Option]` spec
-body calls `__inst_Enc_enc_Cons((x).value)` where `(x).value` is a concrete
+**compiled with a warning and silently miscompiled**. The `Enc [Option]` spec
+body called `__inst_Enc_enc_Cons((x).value)` where `(x).value` is a concrete
 `Cons__float *`, but the inner instance was **not** re-resolved per element --
 it kept the generic carrier signature `__inst_Enc_enc_Cons(int64_t)`:
 
@@ -184,33 +204,61 @@ note: expected 'int64_t' but argument is of type 'Cons__float *'
 output: 4619679907765970534      (want: 7.1 -- a double's bit pattern read as int64)
 ```
 
-The `int` case prints `42` by luck (pointer width happens to align); the
-`float` case is a denormal-class silent miscompile -- precisely the failure
-mode CLAUDE.md flags. This is the *dispatch-on-nested-element* (encode/read)
-sibling of #480's *nested-construct* (decode/write) fix.
+**Fix:** the dispatch-type chokepoint `emit_reresolve_disp_type` already
+recovered the concrete receiver `(Cons float)`; the gap was (1) the instance-head
+matcher (`emit_inst_head_matches`) not matching a bare type-constructor instance
+head (`Enc [Cons]`) against the applied `(Cons float)`, and (2) no by-value spec
+being minted/routed. `emit_abi_try_nested_instance_dispatch_redirect`
+(`emit_module.c`) now mints the inner instance method's per-instantiation
+by-value spec (`__inst_Enc_enc_Cons__spec__..._Cons__float`, taking
+`Cons__float *`) and records the call so the emit side routes to it; the
+single-level `@Cons` path mints the identical spec and `emit_abi_intern_spec`
+dedupes. A pre-existing owned-clone leak in the field-substitution branch of
+`emit_reresolve_disp_type` (surfacing only once the recovered element is a
+TY_APP) is freed so the leak-checked codegen path stays clean. The float line
+now prints `7.1`; int/float/cstr round-trip. Fixture:
+`tests/fixtures/constrained-instance-dispatch-nested-parametric-element`. Suite
+green (1740/0).
 
-Filed: `docs/reported/constrained-instance-dispatch-nested-parametric-element-carrier-collapse.md`
+Resolved report archived at
+`docs/archive/constrained-instance-dispatch-nested-parametric-element-carrier-collapse.md`.
+Closing G2 confirmed a distinct, still-open **mirror** -- the inner-parametric
+nesting `(Cons (Option A))`, where a single-level `Enc [Cons]` collapses its
+parametric-container element at the witness -- tracked as gap G9
+(`docs/reported/constrained-instance-dispatch-parametric-container-element-collapse.md`).
 
-### G3 -- `Enc [(Option cstr)]` over a struct field: instance-method param stays at the carrier (maintainer-filed on `main`)
+### G3 -- `Enc [(Option cstr)]` over a struct field: instance-method param stays at the carrier (maintainer-filed on `main`) -- **FIXED (this branch)**
 
 Independently surfaced by the maintainer on `main` (PR #482 era) and filed at
-`docs/reported/instance-method-byvalue-struct-field-receiver-abi-mismatch.md`.
+`docs/archive/instance-method-byvalue-struct-field-receiver-abi-mismatch.md`.
 An instance whose head is a by-value applied struct (`Enc [(Option cstr)]`)
 emits its method with the int64 carrier param (`enc(int64_t)`); dispatch over a
 *local* works, but after the #482 field-layout fix a by-value struct **field**
-read (`(.nick r) : Option__cstr`) passes the real aggregate, so:
+read (`(.nick r) : Option__cstr`) passed the real aggregate, so:
 
 ```
 error: incompatible type for argument 1 of '__inst_Enc_enc_Option_cstr'
 note: expected 'int64_t' but argument is of type 'Option__cstr'
 ```
 
-Verified still-open against a fresh `origin/main` build (2026-06-21). This is
-the **single-level struct-field-receiver** companion of G2's nested-container
-dispatch -- same carrier-vs-byvalue defect on the instance-method-receiver ABI
-side, same fix direction (emit the method with the concrete by-value parameter,
-monomorphized per type, and bridge carrier-ABI call sites). Closes with G2
-under P2.
+**Fix (option 2 -- bridge the call site, not the method signature):**
+`expr_emits_byvalue_carrier_abi` (`emit_expr.c`) now recognizes a by-value
+(non-`:heap`) aggregate **field read** as a by-value carrier producer, so the
+existing `emit_carrier_bridge` spills it to a temp and passes
+`(int64_t)(intptr_t)(&tmp)` -- exactly what a by-value *local* of the same type
+already did. The instance method keeps its uniform carrier ABI (so the dict slot
+is unchanged); only the call-site materialization is bridged. A `:heap` field
+stays the int64 pointer. The residual `-Wint-conversion` the report noted is
+also gone. Fixture
+`tests/fixtures/instance-method-byvalue-struct-field-receiver`. Suite green
+(1741/0).
+
+Resolved report archived at
+`docs/archive/instance-method-byvalue-struct-field-receiver-abi-mismatch.md`.
+Writing the fixture surfaced a distinct, still-open neighbor -- two
+applied-struct instances of one class differing only in the element conflate at
+dispatch -- tracked as gap G10
+(`docs/reported/multiple-applied-struct-instances-same-class-conflate.md`).
 
 ### G4 -- `(Cons (Option int))` consumed via the int-carrier list API: segfault (consumer side of G1)
 
@@ -232,15 +280,210 @@ The *typed* path (`.head` / ascribed `.tail`) works; only the generic
 the carrier layout. Filed:
 `docs/reported/heap-cons-byvalue-aggregate-head-breaks-int-carrier-list-helpers.md`.
 
+### G5 -- `(Option T)` struct field: `Option`'s `tur_option_t` special-casing not reconciled with #482 (maintainer-filed) -- **BOTH SITES FIXED + VERIFIED (this branch)**
+
+Follow-up to #482. The field *layout* is now an embedded `Option__cstr`
+aggregate, but two **Option-specific** codegen paths still assume the old
+"struct field holds an Option as a `tur_option_t *` heap box":
+
+- **Site 1 (typeclass-arg lowering):** a struct-field-read `Option` `(.field x)`
+  passed into a typeclass method (`(encode (:: (.o b) (Option int)))`) inserts a
+  `tur_option_t *`->aggregate reconstruction; post-#482 the field is already an
+  `Option__cstr`, so `(tur_option_t *)(intptr_t)((x).field)` casts an aggregate
+  to a pointer -- `error: aggregate value used where an integer was expected`.
+  An `Option` *local* into the same method, and a field-read `Option` into a
+  *plain* `defn`, both work; the bug is the intersection field-read + typeclass
+  dispatch. `Pair` field-read into `encode` works (no `tur_pair_t *` round-trip),
+  so the reconstruction is hard-wired to `Option`.
+- **Site 2 (type-emission ordering):** once `T` embeds an `(Option ...)` field,
+  the emitter pushes `T` after `Option__cstr` but does **not** push
+  `Result__T` (which embeds `T *`) after `T` -- `error: unknown type name 'T'`
+  plus an `ok_val` int-fallback cascade. The transitive order
+  `Result__T -> T -> Option__cstr` is not honored. The identical struct with a
+  `Pair`/`Cons`/user-struct field orders correctly.
+
+This blocks `derive-json` over structs with `(Option T)` fields in
+rjungemann/turmeric-spices spices/json. Verified on `tur` from `main` at
+`99cc8b3` / post-#482 (v0.22.0). G5's Site 1 is the **Option-only caller side**
+of G3's struct-field-receiver dispatch boundary (G3 is the carrier-param callee
+side, reproducing for any applied-struct head); Site 2 is a typedef
+topological-sort gap that #482 exposed, riding along because it blocks the same
+use case. Filed:
+`docs/reported/option-tur-option-special-casing-stale-post-482.md`.
+
+**FIXED (this branch, self-contained repros).** Site 1 is closed by the G9 fix
+(`field_read_emits_byvalue_aggregate` suppresses the `tur_option_t *`
+reconstruction). Site 2 is closed by `emit_registered_struct_app_rec`
+(`types.c`) emitting a guarded forward `typedef struct User User;` when a
+struct-app field references a user struct by pointer, so `Result__User__cstr`
+no longer precedes the `User` typedef (verified-redundant typedef under
+`-std=c99`). Fixture
+`tests/fixtures/result-over-struct-with-option-field-typedef-order`; Site 1's
+mechanism is also covered by the G9 fixture. **Verified end-to-end against the
+real `json/encode` derive-json**: the turmeric-spices sibling was cloned into the
+environment and yyjson built; a `User { id : int  nick : (Option cstr) }`
+derive-json round-trips `{"id":7,"nick":"al"}` -- the emitted C compiles under
+`-std=c99 -Wall`, links against `libturi.a` + yyjson, and runs correctly. Report
+archived: `docs/archive/option-tur-option-special-casing-stale-post-482.md`
+(suite green 1744/0).
+
+### G6 -- generic `cata` via `Functor` `fmap`: closure-thunk ABI + boxed cata result (spice-filed)
+
+Found by the turmeric-spices Track C U5 regex prototype
+(`spices/regex/src/regex/tree.tur`). The textbook generic catamorphism
+`cata alg = alg . fmap (cata alg) . unroll` over a `Fix`-style sum functor
+type-checks but miscompiles per carrier `B`:
+
+- **cstr (pointer) carrier -> segfault.** The recursive
+  `(fn [c : Re] : B (re-cata alg c))` handed to `fmap` is stored into the
+  thunk's `__fn` slot at the wrong function-pointer type:
+  `__t80->__fn = (tur_thunk_const_char___int64_t_t)..._fn_1061;` -- a
+  `-Wint-conversion` warning, then a crash.
+- **int / bool carrier -> boxed result, wrong equality.** It prints the right
+  value, but `(= 4 (re-cata size-alg e))` is **false** and a `(ReF bool)`
+  algebra folds the wrong branch (`or false true -> false`): the
+  `(:: (fmap ...) (ReF B))` result threads through the int64 carrier (boxed)
+  instead of by value.
+
+Direct structural recursion (no `fmap`) is correct, localizing the defect to
+the `fmap`-driven path. Unlike G2/G3 (dispatch re-resolution over a field-read
+aggregate **value**), G6 lives in the **fn-value / closure-thunk** specialization
+machinery (`emit_abi_scan_fn_values`, the `poly-closure-result-specialization`
+float-spec path): the per-carrier thunk signature must follow `B`, and the cata
+result must be unboxed to `B`'s native representation. The existing
+closure-thunk machinery already special-cases float; G6 is that same problem
+generalized to a pointer (`cstr`) and a sub-int64 (`bool`) carrier, reached
+through an HKT `fmap`. Verified on turmeric 0.22.0, main @ `99cc8b3`
+(build-release). Filed:
+`docs/reported/hkt-fmap-cata-carrier-miscompile.md`.
+
+### G7 -- `defdata` sum as a `derive-json` struct field decodes to the wrong instance (peripheral to #482) -- **FIXED + VERIFIED (this branch)**
+
+A struct field whose type is a `defdata` sum has its `derive-json` `Decode` body
+dispatch the field decode to the **generic `decode` method specialized at the
+enclosing struct's result type** rather than the field type's own `Decode [Cmd]`
+instance:
+
+```c
+.cmd = ok_val__spec__int64_t_Result__Cmd__cstr(
+         __inst_Decode_decode_T__spec__Result__Event__cstr_int64_t_int64_t(   // (!) decode_T, Event's result
+           doc, json_obj_get(doc, val, "cmd")))
+```
+
+`error: incompatible type for argument 1 of 'ok_val__spec__int64_t_Result__Cmd__cstr'`.
+A nested **struct** field resolves correctly (`__inst_Decode_decode_Point`), so
+this is specific to sum-typed (ADT) fields. Standalone `Decode [Cmd]` works, so
+the instance exists -- it just is not selected from inside another instance's
+body for a sum field.
+
+This is the **return/decode side** of the same dispatch family. The root cause
+turned out NOT to be `emit_reresolve_disp_type` -- the decode call carries **no
+dict_arg** (it is return-dispatched), so the re-resolver early-returns. The field
+decode `(:: (decode doc val) (Result Cmd cstr))` carries its class var in
+`call->type` (`(Result a cstr)`); inside the enclosing `Decode [Event]` spec, the
+result-recovery heuristics in `emit_abi_register_call` (the `family_elem_rehydrated`
+/ return-tyvar recovery) ground that class var to the **enclosing** element, so
+the call interned + recorded at `decode_T__spec__Result__Event` -- an ill-typed
+sibling whose body is actually the `Cmd` decode.
+
+**FIXED (this branch).** In `emit_abi_scan_expr`'s `EX_ASCRIBE` case: when the
+inner is a return-polymorphic (result mentions a tyvar), dict-less global call
+with a concrete result ascription, register that call with the ascription's
+concrete result as `result_type_override` -- and *instead of* the plain inner
+scan, so only the correct spec is interned + recorded. The two result-recovery
+blocks in `emit_abi_register_call` now also bail when a `result_type_override` is
+supplied, so the concrete result is not clobbered back to the enclosing element.
+The `.cmd` field now decodes via `decode_T__spec__Result__Cmd` (type-consistent
+with its `ok_val__spec__...Result__Cmd` wrapper). **Verified end-to-end against
+the real `json/encode` derive-json** (turmeric-spices cloned, yyjson built): an
+`Event { id : int  cmd : Cmd }` over `{"id":7,"cmd":{"Quit":{}}}` compiles, links,
+and runs -- `(decode doc root) : (Result Event cstr)` yields `ok`. Report
+archived: `docs/archive/derive-json-sum-field-decodes-wrong-instance.md`
+(suite green 1744/0).
+
+### G9 -- `(Cons (Option A))`: the witness-side mirror of G2 (parametric-container element collapses at the witness)
+
+Surfaced while closing G2. G2 fixed the case where a constrained instance
+*body* dispatches on a parametric-container receiver (`(Option (Cons A))`).
+This is the **mirror**: a single-level `Enc [Cons]` whose *element* is itself a
+parametric container, `(Cons (Option int))`. The `@Cons` witness collapses the
+`(Option int)` element to `int` (the minted spec is named `..._Cons__int`, not
+`..._Cons__Option__int`, with a `Cons__int` cell), so the spec body's
+`(.head xs)` -- a by-value `Option__int` -- is dispatched on the carrier
+representative `__inst_Enc_enc_int(int64_t)`:
+
+```
+error: incompatible type for argument 1 of '__inst_Enc_enc_int'
+note: expected 'int64_t' but argument is of type 'Option__int'
+```
+
+Verified **pre-existing** (fails identically against the pre-G2 build), so G2
+neither caused nor fixed it.
+
+**FIXED (this branch).** The G2 changes already minted the `Cons__Option__int`
+cell + the inner Option by-value spec (so the "collapse to int" framing was
+cured by G2); the remaining defect was the dispatch *argument*: `(.head xs)` is
+an embedded by-value `Option__int`, but its elaborated type is the erased int64
+carrier, so the matched-spec arg bridge reconstructed it through a stale
+`(tur_option_t *)(intptr_t)((xs)->head)` cast. `field_read_emits_byvalue_aggregate`
+(`emit_expr.c`) now resolves the field type through the receiver's concrete
+(active-spec) type, recognizes the field read as already-concrete, and suppresses
+the bridge -- `(xs)->head` passes directly. int prints `5`, float `7.1`. Fixture
+`tests/fixtures/constrained-instance-dispatch-parametric-container-element`.
+Resolved report archived at
+`docs/archive/constrained-instance-dispatch-parametric-container-element-collapse.md`.
+This is the **same `tur_option_t *`-reconstruction mechanism as G5 Site 1**, so
+that site is very likely closed too (self-contained repro passes; awaiting real
+`derive-json` verification).
+
+### G10 -- two applied-struct instances of one class conflate (instance selection, not an ABI crossing) -- **FIXED (this branch)**
+
+Surfaced while writing the G3 fixture. Defining `Enc [(Option cstr)]` **and**
+`Enc [(Option int)]` -- two instances of one class whose heads are applied
+structs sharing the constructor `Option` but differing in the element -- and
+dispatching on a concrete `(Option cstr)` vs `(Option int)` selected the
+**same** instance for both (the last defined won):
+
+```turmeric
+(println (enc (:: (some "hi") (Option cstr))))   ;; want "s"
+(println (enc (:: (some 7)   (Option int))))     ;; want "i"
+;; output (pre-fix): i / i   -- both pick Enc [(Option int)]
+```
+
+**Fix:** the method-call instance selection in `elab_typeclasses.c` (NOT the
+`typeclass_env_lookup_instance` path, which this dispatch never reaches)
+discriminated applied-head elements but treated only **TY_STRUCT/TY_ADT** as
+concrete -- so a concrete **primitive** element (`cstr` vs `int`) was ignored
+and both instances matched. A new helper `typeclass_type_arg_concrete` now
+treats a concrete primitive element as discriminating too; a tyvar element stays
+a wildcard so parametric instances (`Enc [Option]`) still match any element.
+Output is now `s` / `i`. Fixture
+`tests/fixtures/applied-struct-instance-element-discrimination` (locals + struct
+fields). Suite green (1743/0). Resolved report archived at
+`docs/archive/multiple-applied-struct-instances-same-class-conflate.md`. This
+also lets the two-instance form of the G3 example (a `Rec` with both
+`(Option cstr)` and `(Option int)` fields) work end to end.
+
 ## 6. Plan (phased)
 
 ### P0 -- Audit (this document). DONE.
 
 Crossing sites enumerated, shared recovery routine named, gaps G1/G2 found
-and filed (plus G3, filed independently on `main`). This converts the open
-surface from "unknown number of fish" to a **closeable list**. **G1 is now
-closed** (this branch); G2/G3/G4 remain and are tracked as table rows under P2
-(G4 is the consumer-side crossing that closing G1 exposed).
+and filed (plus G3 and G5, filed independently as #482 follow-ups). This
+converts the open surface from "unknown number of fish" to a **closeable
+list**. **G1, G2, G3, G5, G7, G9, and G10 are now closed** (this branch; G5 and
+G7 verified end-to-end against the real `json/encode` derive-json;
+**G6**'s spec-selection half is fixed, its closure-thunk half
+open); **G4 and G6-closure-thunk** remain
+and are tracked as table rows under P2 (G4 is the consumer-side crossing that
+closing G1 exposed; G5 is the Option-specific residual special-casing #482 left
+stale, now fixed; G6 is the HKT `fmap` closure-thunk/cata-result crossing on the
+fn-value spec path; G7 was the return/decode-side dispatch gap for a
+`defdata`-sum struct field, now fixed; G9 is the witness-side mirror of G2, found
+while closing it). The
+structural follow-up that routes all of these through mandatory recovery
+chokepoints is
+[docs/carrier-crossing-recovery-routing-plan.md](carrier-crossing-recovery-routing-plan.md).
 
 ### P1 -- Promote the composition stress matrix to fixtures (on green)
 
@@ -253,12 +496,17 @@ organically:
   `Option (Option A)`
 
 The single-level cells already exist (`constrained-instance-element-dispatch`,
-`constrained-instance-heap-field-dispatch`). The nested cells are added as
-each gap closes -- a fixture is only committed once it PASSES, so the gate
-stays green (per CLAUDE.md). The minimal repros live in the two reported docs
-until then.
+`constrained-instance-heap-field-dispatch`); the `Option (Cons A)` nested cell
+is now `constrained-instance-dispatch-nested-parametric-element` (G2). The
+remaining nested cells are added as each gap closes -- a fixture is only
+committed once it PASSES, so the gate stays green (per CLAUDE.md). The minimal
+repros live in the reported docs until then.
 
-### P2 -- Route the remaining sites through the shared recovery (close G2/G3/G4)
+### P2 -- Route the remaining sites through the shared recovery (close G4, G6-closure-thunk)
+
+Each gap closes by *adding to a chokepoint* per
+[docs/carrier-crossing-recovery-routing-plan.md](carrier-crossing-recovery-routing-plan.md),
+not by adding another site-local gated branch.
 
 - **G1**: DONE (this branch). The `tur-list-homog__` call is a dead
   compile-time-only assertion (the homogeneity it enforces fires at
@@ -273,18 +521,67 @@ until then.
   helpers per element type at the `(:: xs :int)` coercion point (keeps the
   by-value thread end-to-end, consistent with P2). Until fixed, the typed
   accessor path is the supported way to consume such a list.
-- **G2**: the dispatch re-resolver (`emit_reresolve_disp_type`,
-  `emit_core.c:1141`) must recurse: when the receiver expression is a field
-  extraction whose recovered type is *itself* a parametric container, mint /
-  select the per-instantiation inner spec (`__inst_Enc_enc_Cons__spec__Cons__float`)
-  rather than the generic carrier `__inst_Enc_enc_Cons`. This is the natural
-  extension of sites 5+8 to the recursive case.
-- **G3** (maintainer-filed,
-  `docs/reported/instance-method-byvalue-struct-field-receiver-abi-mismatch.md`):
-  the single-level form of the same dispatch-ABI fix -- emit the instance
-  method for a by-value applied-struct head with the concrete by-value
-  parameter (`Option__cstr x`) and bridge carrier-ABI call sites (locals) into
-  the aggregate. Same code change as G2, minus the recursion; do them together.
+- **G2**: DONE (this branch). The dispatch-type chokepoint
+  `emit_reresolve_disp_type` already recovers the parametric-container receiver;
+  `emit_abi_try_nested_instance_dispatch_redirect` (`emit_module.c`) mints the
+  per-instantiation inner spec (`__inst_Enc_enc_Cons__spec__..._Cons__float`,
+  taking `Cons__float *`) and records the call so the emit side routes to it
+  instead of the generic carrier `__inst_Enc_enc_Cons`. `emit_inst_head_matches`
+  now matches a bare type-constructor instance head against the applied type so
+  the FnDef lookup agrees with the name resolver. See the FIXED row + the G2
+  result subsection.
+- **G3**: DONE (this branch). Rather than re-emit the instance method with a
+  by-value parameter (which would break the uniform-carrier dict slot), the
+  call-site bridge was extended: `expr_emits_byvalue_carrier_abi`
+  (`emit_expr.c`) recognizes a by-value aggregate field read, so
+  `emit_carrier_bridge` spills it and passes its address into the method's
+  carrier parameter -- the same path a by-value local already used. See the
+  FIXED row + the G3 result subsection.
+- **G5** (maintainer-filed,
+  `docs/archive/option-tur-option-special-casing-stale-post-482.md`): both sites
+  DONE and VERIFIED end-to-end against the real `json/encode` derive-json (this
+  branch). **Site 1** -- the G9 fix (`field_read_emits_byvalue_aggregate`)
+  suppresses the `tur_option_t *` reconstruction for a struct-field-read Option
+  passed to a typeclass method. **Site 2** -- `emit_registered_struct_app_rec`
+  (`types.c`) emits a guarded forward `typedef struct User User;` when a
+  struct-app field references a user struct by pointer, so
+  `Result__User__cstr { User *ok_val; }` no longer precedes the `User` typedef
+  (fixture `tests/fixtures/result-over-struct-with-option-field-typedef-order`). A
+  `User { id : int  nick : (Option cstr) }` derive-json round-trips
+  `{"id":7,"nick":"al"}` against the cloned turmeric-spices + yyjson.
+- **G6** (spice-filed,
+  `docs/reported/hkt-fmap-cata-carrier-miscompile.md`): route the recursive
+  closure handed to `fmap` through a per-carrier fn-value spec whose thunk
+  fn-pointer signature follows `B` (not the int64 carrier), and unbox the
+  `(:: (fmap ...) (ReF B))` cata result to `B`'s native representation. This is
+  the closure-thunk sibling of the value-ABI gaps -- it touches
+  `emit_abi_scan_fn_values` / the `poly-closure-result-specialization` path
+  rather than the dispatch re-resolver, so it closes independently of G2/G3/G5;
+  pin the cstr/pointer crash first (clearest signal).
+- **G7**: DONE + VERIFIED (this branch,
+  `docs/archive/derive-json-sum-field-decodes-wrong-instance.md`). The decode call
+  is return-dispatched with no dict_arg, so `emit_reresolve_disp_type`
+  early-returns; the real fix is in the ABI scan. `emit_abi_scan_expr`'s
+  `EX_ASCRIBE` case now, for a return-polymorphic dict-less global call under a
+  concrete result ascription, registers the call with that ascription as
+  `result_type_override` *instead of* the plain inner scan, and the two
+  result-recovery heuristics in `emit_abi_register_call` bail when an override is
+  supplied -- so the `.cmd` field decodes via `decode_T__spec__Result__Cmd`, not
+  the enclosing `Result__Event` sibling. Verified end-to-end: an
+  `Event { id : int  cmd : Cmd }` over `{"id":7,"cmd":{"Quit":{}}}` decodes to
+  `ok` against the cloned turmeric-spices + yyjson.
+- **G9**: DONE (this branch). G2 already minted the `Cons__Option__int` cell +
+  inner Option by-value spec; the remaining defect was the dispatch arg
+  `(.head xs)` (an embedded `Option__int` whose elaborated type is the erased
+  carrier) being reconstructed via a stale `tur_option_t *` cast.
+  `field_read_emits_byvalue_aggregate` (`emit_expr.c`) resolves the field type
+  through the receiver's concrete type and suppresses that bridge -- the same
+  mechanism that closes G5 Site 1. See the FIXED row + the G9 result subsection.
+- **G10**: DONE (this branch). The method-call instance selection
+  (`elab_typeclasses.c`) now discriminates on a concrete PRIMITIVE element, not
+  only struct/ADT (`typeclass_type_arg_concrete`), so `Enc [(Option cstr)]` and
+  `Enc [(Option int)]` are no longer conflated. A tyvar element stays a wildcard
+  for parametric instances. See the FIXED row + the G10 result subsection.
 
 ### P3 -- Audit-as-regression-guard
 
@@ -293,6 +590,13 @@ row here and a stress-matrix cell, so the audit stays the single source of
 truth for "which crossings are covered." A crossing without a row is a fish
 waiting to be found by a spice -- the exact loop this plan exists to end.
 
+The **runtime enforcement** of this guard is R3/R4 of
+[docs/carrier-crossing-recovery-routing-plan.md](carrier-crossing-recovery-routing-plan.md):
+a Debug-build assertion that a carrier value / method dispatch reaching emission
+with an unresolved parametric param type *without* passing a chokepoint is a
+hard ICE -- turning "forgot to route" from a silent downstream miscompile into a
+local, immediate failure.
+
 ## 7. Validation
 
 - `bash tests/run.sh` (10-minute timeout) must stay green throughout; failing
@@ -300,3 +604,42 @@ waiting to be found by a spice -- the exact loop this plan exists to end.
   their gap closes.
 - Each gap closure flips its repro FAIL->PASS, promotes it to a fixture, and
   moves its report to `docs/archive/`.
+
+### Progress (branch claude/g2-carrier-concrete-abi-audit-3yzkhm)
+
+Closed this branch, suite green at each step (final **1744 passed, 0 failed**):
+
+| Gap | Result | Fixture |
+|---|---|---|
+| G1 | FIXED (prior) | `list-homog-byvalue-aggregate-element` |
+| G2 | FIXED | `constrained-instance-dispatch-nested-parametric-element` |
+| G3 | FIXED | `instance-method-byvalue-struct-field-receiver` |
+| G5 | FIXED (both sites; verified vs real `json/encode`) | `result-over-struct-with-option-field-typedef-order` (+ G9 fixture for S1) |
+| G6 | PARTIAL (spec-selection fixed; closure-thunk open) | -- |
+| G7 | FIXED (verified vs real `json/encode`) | spice round-trip (needs yyjson) |
+| G9 | FIXED | `constrained-instance-dispatch-parametric-container-element` |
+| G10 | FIXED | `applied-struct-instance-element-discrimination` |
+
+Found while closing the above (filed, sequenced, then closed): **G9** (mirror of
+G2), **G10** (applied-struct instance-selection conflation -- an instance-keying
+defect, not a carrier crossing).
+
+**Still open**:
+
+- **G4** -- generic int-carrier list helpers over a by-value-aggregate-headed
+  `:heap` cons. No small safe fix (box the head -> changes the typed-path
+  layout; or monomorphize the list helpers per element -> large). Carrier-family.
+  The report now carries a scoped estimate of the monomorphization route
+  (medium--large, ~1--2 weeks; refined shape = retire the inline-C and rewrite
+  the leaf helpers in pure Turmeric over typed `.head`/`.tail`, re-ascribe the
+  `:int` tail to `(Cons A)`) plus a digest of the prior monomorphization
+  false-starts to avoid (M4c inline-C contract, the inline-C spec gate, silent
+  sibling-spec drops, two-ABI-view miscompiles, the load-bearing carrier bridge):
+  `docs/reported/heap-cons-byvalue-aggregate-head-breaks-int-carrier-list-helpers.md`.
+- **G6 (remaining half)** -- the HKT `fmap` closure-thunk per-carrier ABI. The
+  spec-selection half is FIXED (int no longer miscompiles, cstr no longer
+  segfaults); the recursive `fmap` closure is still lifted to a single
+  int64-returning C function shared across carriers, so a sub-word `bool`
+  recursive closure folds wrong. Closing it means generalizing the
+  inner-closure-spec machinery (today only for closure-*returning* defns) to
+  *passed* closures -- a deep closure-lifting change.
