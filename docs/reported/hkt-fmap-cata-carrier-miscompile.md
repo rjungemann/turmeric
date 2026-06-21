@@ -52,6 +52,102 @@ Root cause split in two:
 
 ---
 
+## Status update (2026-06-21, branch claude/g6-carrier-concrete-abi-audit-pb3gqo) -- the remaining half is NOT cata-specific: the carrier `Functor` instance miscompiles a *direct* `fmap` over any sub-int64 element
+
+The remaining "closure-thunk" half was mischaracterized as a closure/cata
+problem. It is actually a **Functor-instance layout** problem, and it reproduces
+with **no cata, no recursion, and no closure capture** -- a single direct `fmap`
+whose result element is narrower than the int64 carrier is already wrong:
+
+```turmeric
+(load "stdlib/typeclass-functor.tur")
+(defdata ReF :copy [a] (EmptyF) (LitF :int) (AltF a a) (StarF a))
+(definstance Functor [ReF]
+  (fmap [c g]
+    (match c
+      (EmptyF)   (EmptyF)
+      (LitF n)   (LitF n)
+      (AltF x y) (AltF (g x) (g y))
+      (StarF x)  (StarF (g x)))))
+(defn to-bool [x : int] : bool (> x 0))
+(defn main [] : int
+  (let [r (:: (fmap (:: (AltF 0 5) (ReF int)) to-bool) (ReF bool))]
+    ;; x=(0>0)=false, y=(5>0)=true -- print y
+    (println (match r (EmptyF) 0 (LitF n) 1 (AltF x y) (if y 100 200) (StarF x) 3))))
+;; EXPECT 100 (y = true).  ACTUAL: 200 (y read as false).
+```
+
+A `float` element is wrong the same way (and additionally trips the
+`-Wint-conversion` register-class issue on the closure thunk when reached through
+the cata closure). `int` and `cstr` happen to be correct only because they are
+exactly 8 bytes wide, matching the carrier slot.
+
+### Root cause (concrete C, from the repro above)
+
+The `Functor [ReF]` instance is emitted **once**, as the int64 *carrier*
+representative `__inst_Functor_fmap_T`, whose body builds the **carrier** ADT
+`tur_adt_ReF` via `ctor_AltF(int64_t, int64_t)`:
+
+```c
+typedef struct tur_adt_ReF {            // carrier (what fmap BUILDS)
+    int tag;
+    union { ...; struct { int64_t _0; int64_t _1; } AltF; ...; } as;
+} tur_adt_ReF;                          //  -> AltF._1 at offset 8
+```
+
+But the consumer reads the value at the **by-value monomorphized** layout
+`tur_adt_ReF__bool` (because `(ReF bool)` lowers the element field to `bool`):
+
+```c
+typedef struct tur_adt_ReF__bool {      // by-value (what the reader EXPECTS)
+    int tag;
+    union { ...; struct { bool _0; bool _1; } AltF; ...; } as;
+} tur_adt_ReF__bool;                     //  -> AltF._1 at offset 1
+```
+
+`fmap` writes `_1 = true` at offset 8; the `(ReF bool)` reader loads `_1` from
+offset 1 (byte 1 of the int64 `_0 = 0`) and sees `false`. Pure layout mismatch,
+no closure involved. The cata example is just the first place a spice exercised a
+sub-int64 functor element.
+
+### Refined fix direction (subsumes the closure-thunk half)
+
+The real fix is to **monomorphize the HKT instance method per concrete result
+element**, so producer and consumer agree on the ADT layout:
+
+- The emit side **already** has the by-value HKT instance-method spec machinery
+  (M7 "layer-4", `g_m7_hkt_enabled`): `emit_fns.c:566` returns the by-value ADT
+  C name (`tur_adt_ReF__bool`) for the instance-method return *once an ABI spec
+  is active*, and `emit_module.c:2636` notes the carrier base so the dict slot
+  still resolves. The body-construction sites (`ctor_*`) already have by-value
+  twins (`ctor_AltF__bool`).
+- The GAP is that **no by-value `fmap` spec is interned / selected** at the
+  `(:: (fmap ...) (ReF bool))` call site. `emit_abi_register_call`
+  (`emit_module.c:1812`) needs `call->as.call_.abi_bindings` to mint a spec, and
+  elab does not attach the result-element binding (`b -> bool`) to an HKT method
+  call. So the call falls through to the carrier `__inst_Functor_fmap_T`.
+- Closing it: (1) elab attaches the HKT method call's result-element tyvar
+  binding (the `b` in fmap's `(f a) -> (f b)`) when the ascription/context pins
+  it to a concrete type; (2) `emit_abi_register_call` mints the by-value
+  instance-method spec for a concrete sub-int64 `TY_APP` result (the layer-4
+  emit path then produces `__inst_Functor_fmap__spec__...` building
+  `tur_adt_ReF__bool` and calling `g` at its true result register class);
+  (3) the recursive-closure register-class clone (the originally-described
+  closure-thunk half) then falls out for `float` because `g` is finally called
+  at `double` rather than via the int64 carrier.
+
+This is bounded but non-trivial: step (1) touches elaboration of *every* HKT
+method call, so it is snapshot- and regression-sensitive and must be gated to
+fire only when the result element is a concrete type that does not round-trip
+through the int64 carrier (i.e. sub-int64 integer-class or float). `int`/`cstr`
+elements must remain on the carrier path byte-for-byte (zero churn).
+
+**Status:** still OPEN. The diagnosis is sharpened (the bug is the carrier
+Functor-instance layout, reproducible without cata) and the entry points are
+identified; the by-value-HKT-spec minting is the remaining implementation.
+
+---
+
 # Generic catamorphism via `Functor` `fmap` miscompiles per carrier
 
 ## One-line summary
