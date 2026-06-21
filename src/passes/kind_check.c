@@ -140,6 +140,20 @@ static Kind type_effective_kind(Type t) {
                            : KIND_STAR;
             }
             return KIND_ARROW;
+        case TY_ADT:
+            /* Mirror TY_STRUCT: a parametric ADT referenced bare (e.g. `ExprF`
+             * in (definstance Functor [ExprF]) where (defdata ExprF [a] ...))
+             * is a genuine type constructor of kind * -> * (or higher), so it
+             * reports its arity-based kind.  A non-parametric ADT is a
+             * fully-applied type of kind *.  Without this case a bare ADT
+             * constructor fell to the KIND_STAR default and a Functor instance
+             * over it failed kind-check (TUR-E0012). */
+            if (t.as.adt_.def != NULL) {
+                return (t.as.adt_.def->n_type_params > 0)
+                           ? kind_for_arity(t.as.adt_.def->n_type_params)
+                           : KIND_STAR;
+            }
+            return KIND_ARROW;
         case TY_REC:    return KIND_ARROW;  /* Phase HKT-P2 */
         /* KB-027: rc<T> and weak<T> are built-in type constructors of kind
          * '* -> *', so a Functor/Foldable instance on the bare `rc` constructor
@@ -442,8 +456,20 @@ static void kind_infer_from_instances(Arena *a, Expr **items, uint32_t n) {
                     (inst->type_args[i].kind == TY_STRUCT &&
                      inst->type_args[i].as.struct_.def != NULL &&
                      inst->type_args[i].as.struct_.def->n_type_params > 0);
+                /* Same as SC7 for a parametric ADT/GADT: a bare parametric ADT
+                 * (e.g. `Bound` from (defgadt Bound [A] ...)) now reports
+                 * KIND_ARROW so it can satisfy an explicitly higher-kinded class
+                 * (Functor [ExprF]).  But the same name commonly serves as a
+                 * fully-applied / phantom-param type in a STAR-declared class
+                 * (Eq [Bound], Show [Bound]).  It must NOT silently promote a
+                 * STAR class; promotion stays gated on an explicit '^f'
+                 * annotation (handled by the trusted-annotation branch below). */
+                bool parametric_adt_arg =
+                    (inst->type_args[i].kind == TY_ADT &&
+                     inst->type_args[i].as.adt_.def != NULL &&
+                     inst->type_args[i].as.adt_.def->n_type_params > 0);
                 if (!opaque_struct_arg && !builtin_carrier_arg &&
-                        !parametric_struct_arg) {
+                        !parametric_struct_arg && !parametric_adt_arg) {
                     tc->type_param_kinds[i] = arg_kind;
                 }
             }

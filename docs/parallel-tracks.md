@@ -107,7 +107,14 @@ Pure spice-side work; no compiler dependencies.
   remaining U2 targets are `plot` (Renderer class), `json`
   (Encode/Decode -- minimal slice already shipped under P2a, full
   typeclass collapse pending), and `http`/`httpd` (Handler class).
-  U1/U3/U4/U5/U6 still open.
+  U1/U3/U4/U5/U6 still open. **U5 (HKT recursion for ASTs): the `json`
+  target is dropped** -- the json spice is backed by `yyjson`, whose
+  foreign node model (`yyjson_val *`) is incompatible with re-expressing
+  `JsonNode` as `Fix (JsonF a)`; U5 now covers `c-dsl`/`glsl`/`scscm`/
+  `regex`/`template` only. A U5 feasibility pass also surfaced a compiler
+  gap -- `defdata` constructor fields rejected applied type constructors --
+  now **fixed and archived**:
+  [docs/archive/defdata-constructor-field-applied-type-rejected.md](archive/defdata-constructor-field-applied-type-rejected.md).
 
 **Recently landed in turmeric-spices** (since last snapshot):
 

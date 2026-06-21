@@ -140,7 +140,9 @@ design. Json forces every interesting case onto the table:
   instances in the json spice itself; `derive-json` does not try to
   derive over type constructors in v1.
 - Recursive types (`Fix F`) -- defers to the underlying functor's
-  instance; lands with U5's `Fix`-based json AST work.
+  instance. (Note: json itself is not re-expressed as `Fix F` -- it is
+  backed by yyjson; see Phase U5, where the json AST target was dropped as
+  incompatible with the yyjson node model.)
 
 Surface:
 
@@ -539,23 +541,27 @@ codegen IR, regex tree, template tree, S-expression tree) re-express
 the node as `Fix F` so generic fold/map/cata works without per-node
 accessor scaffolding.
 
+**Not a target: `json`.** The json spice is now backed by `yyjson`, whose
+node model is a foreign C tree (`yyjson_val *`) walked through the yyjson
+API. Re-expressing it as `JsonNode = Fix (JsonF a)` would mean abandoning
+yyjson's parser/emitter and re-materializing every document into a native
+`Fix`-tree, which is exactly the cost yyjson exists to avoid. The
+`Fix`-based json AST work is therefore dropped from U5 as incompatible with
+the yyjson backing; json's recursion stays on yyjson's own walk.
+
 Targets:
 
-1. **`json`** -- `JsonNode = Fix (JsonF a)` where
-   `JsonF a = Null | Bool b | Num n | Str s | Arr (list a) | Obj (map str a)`.
-   The current emit path (`spices/json/json__emit.c`) is a manual
-   recursion; a `cata` collapses it.
-2. **`c-dsl`** -- `Expr = Fix ExprF` and `Stmt = Fix StmtF`. The
+1. **`c-dsl`** -- `Expr = Fix ExprF` and `Stmt = Fix StmtF`. The
    pretty-printer (`c_dsl__pp.c`) and codegen (`c_dsl__codegen.c`)
    both become `cata`s; the typedef machinery
    (`c_dsl__typedef.c`/`.h`) stops re-implementing recursion.
-3. **`glsl`** -- same shape as `c-dsl`; share the cata if profitable.
-4. **`scscm`** -- `SExpr = Fix SExprF`. The parser
+2. **`glsl`** -- same shape as `c-dsl`; share the cata if profitable.
+3. **`scscm`** -- `SExpr = Fix SExprF`. The parser
    (`scscm__parser.h`) currently exposes flat accessors per node
    kind; cata replaces the open-coded walks.
-5. **`regex`** -- `Re = Fix ReF` with `ReF a = Lit c | Alt a a |
+4. **`regex`** -- `Re = Fix ReF` with `ReF a = Lit c | Alt a a |
    Concat a a | Star a | ...`. NFA construction is one `cata`.
-6. **`template`** -- node IR via `Fix`; the renderer is a `cata`.
+5. **`template`** -- node IR via `Fix`; the renderer is a `cata`.
 
 Validation: round-trip parse->print on a fixture corpus per spice. No
 codegen-fixture regen for the main turmeric repo (these spices ship
@@ -585,7 +591,7 @@ U1 (handles)        -- independent, ship first
 U2 (typeclass)      -- json instances feed http in U3
 U3 (rows)           -- depends on U1 for postgres/sqlite opaques
 U4 (sized)          -- independent
-U5 (HKT ASTs)       -- json U5 should land before json U2 derives
+U5 (HKT ASTs)       -- json dropped (yyjson backing); c-dsl/glsl/scscm/regex/template
 U6 (variadic)       -- last; smallest
 ```
 

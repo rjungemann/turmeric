@@ -1,0 +1,27 @@
+;; Regression: a defdata constructor field may be an applied type constructor
+;; -- parametric (Box a), a binary type application (Pair2 :cstr a), or the
+;; HKT self-application (f (Fix f)) -- not just a keyword or bare type
+;; variable. Before the fix these were rejected outright with
+;;   "defdata: constructor field type must be a keyword like :int, :bool, :cstr"
+;; See docs/archive/defdata-constructor-field-applied-type-rejected.md.
+
+;; Parametric applied-type field: N carries a (Box a) by value.
+(defdata Box [a] (MkBox a))
+(defdata Nest [a] (N (Box a)))
+
+;; Binary applied-type field: a constructor carries a two-arg type app.
+(defdata Pair2 [k v] (MkPair2 k v))
+(defdata Tagged [a] (Tag (Pair2 :cstr a)))
+
+;; HKT self-application: the by-value typed Fix shape must elaborate.
+(defdata Fix [^f] (Roll (f (Fix f))))
+
+(defn main [] : int
+  (let [n (N (MkBox 7))]
+    (match n
+      (N inner)
+        (match inner
+          (MkBox x)
+            (do
+              (println (:: x :int))
+              0)))))
