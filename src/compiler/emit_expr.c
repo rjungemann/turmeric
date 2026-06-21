@@ -67,6 +67,33 @@ static bool type_uses_carrier_in_dispatch(Type t) {
     return type_uses_carrier_abi(t);
 }
 
+/* G6 (partial): a constrained generic differentiated ONLY by its return type
+ * (e.g. `(defn re-cata [B] [alg : (fn [(ReF B)] B) e : Re] : B ...)` specialized
+ * at B=int / bool / cstr) interns sibling specs with identical ARGUMENT types,
+ * differing only in result.  The by-args spec lookup cannot tell them apart, so a
+ * call whose own result is one primitive (int) silently grabbed a sibling spec of
+ * another primitive (bool) -- a wrong-typed result and a `4 == bool`
+ * -Wbool-compare.  When BOTH the call's and the spec's result types are distinct
+ * *primitive* kinds they are genuinely different ABIs and must not match;
+ * aggregate / carrier results (TY_APP/TY_STRUCT/tyvar, disambiguated by the
+ * per-Expr* recording, not here) keep the existing behaviour.  This is the
+ * spec-selection half of gap G6; the closure-thunk-per-carrier half (a sub-word
+ * `bool` recursive closure) remains open. */
+static bool emit_prim_result_kind(TypeKind k) {
+    switch (k) {
+        case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT64: case TY_BOOL: case TY_CSTR: case TY_FLOAT:
+        case TY_FLOAT32: case TY_FLOAT64: case TY_NIL: case TY_PTR_VOID:
+            return true;
+        default: return false;
+    }
+}
+bool emit_spec_result_mismatch(Type call_result, Type spec_result) {
+    return emit_prim_result_kind(call_result.kind) &&
+           emit_prim_result_kind(spec_result.kind) &&
+           call_result.kind != spec_result.kind;
+}
+
 /* KB-004/KB-021: find the ABI specialization (concrete-by-value clone) that an
  * EX_CALL resolves to, or NULL.  Factored out of the EX_CALL emit path so the
  * let-binding type can discover that a call returns a concrete struct by value
@@ -165,6 +192,12 @@ static const EmitAbiSpecialization *find_matched_abi_spec(
     for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
         const EmitAbiSpecialization *spec = &ctx->abi_specializations[si];
         if (spec->binding != fn_binding || spec->n_args != e->as.call_.n_args) continue;
+        /* G6: do not match a return-differentiated sibling spec (e.g. the bool
+         * `re-cata` clone for an int-result call). */
+        if (emit_spec_result_mismatch(emit_resolve_type(ctx, e->type),
+                                      spec->result_type)) {
+            continue;
+        }
         bool args_match = true;
         for (uint32_t ai = 0; ai < e->as.call_.n_args; ai++) {
             const Expr *cur = e->as.call_.args[ai];

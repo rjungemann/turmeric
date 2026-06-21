@@ -1609,6 +1609,13 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
             for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
                 const EmitAbiSpecialization *spec = &ctx->abi_specializations[si];
                 if (spec->binding != b || spec->n_args != call->as.call_.n_args) continue;
+                /* G6: skip a return-differentiated sibling spec (e.g. the bool
+                 * `re-cata` clone for an int-result call) -- lockstep with
+                 * find_matched_abi_spec's identical guard. */
+                if (emit_spec_result_mismatch(emit_resolve_type(ctx, call->type),
+                                              spec->result_type)) {
+                    continue;
+                }
                 bool args_match = true;
                 for (uint32_t ai = 0; ai < call->as.call_.n_args; ai++) {
                     cur = call->as.call_.args[ai];

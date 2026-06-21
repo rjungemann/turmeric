@@ -106,7 +106,7 @@ constrained/parametric/HKT spec body and must consult the recovery routine.
 | ~~G3~~ | `emit_expr.c` `expr_emits_byvalue_carrier_abi` vs site 6 | instance method whose HEAD is a by-value applied struct (`Enc [(Option cstr)]`) takes the carrier param, but a by-value struct-**field** receiver passed the aggregate -- now bridged (spill + address-of) like a local | `expr_emits_byvalue_carrier_abi` (EX_GET_FIELD) + `emit_carrier_bridge` | **[FIXED]** | this branch |
 | **G4** | int-carrier list helpers (`list-length`, ...) vs `(:: xs :int)` coercion | generic carrier walk of a `:heap` `Cons` whose head is a **by-value aggregate** reads `tail` at the wrong offset and **segfaults** (consumer side of G1) | none | **[GAP]** | -- |
 | ~~G5~~ | `Option`'s legacy `tur_option_t` special-casing vs #482 | (S1) a struct-field-read `Option` passed to a typeclass method inserts a stale `tur_option_t *`->aggregate reconstruction; (S2) `Result__T` typedef emitted before `T` once `T` embeds an `(Option ...)` field -- **BOTH fixed in self-contained repros**, pending real `json/encode` derive-json confirmation | `field_read_emits_byvalue_aggregate` (S1); forward typedef in `emit_registered_struct_app_rec` (S2) | **[FIXED*]** | this branch |
-| **G6** | HKT `fmap` closure-thunk + cata result (fn-value spec path) | a generic `cata = alg . fmap (cata alg) . unroll` monomorphizes the recursive closure handed to `fmap` with the wrong per-carrier thunk fn-pointer ABI (cstr -> segfault) and threads the `(:: (fmap ...) (ReF B))` result through the int64 carrier (int/bool -> boxed, wrong `=`) | none | **[GAP]** | -- |
+| **G6** | HKT `fmap` closure-thunk + cata result (fn-value spec path) | a generic `cata = alg . fmap (cata alg) . unroll`: (a) the int call grabbed a return-differentiated sibling (`bool`) spec -- **FIXED** (`emit_spec_result_mismatch`; int now correct, cstr no longer segfaults); (b) the recursive `fmap` closure is shared across carriers with the wrong sub-word thunk ABI -- **still open** (`bool` folds wrong) | spec-selection: `emit_spec_result_mismatch`; closure-thunk: open | **[PARTIAL]** | (a) this branch |
 | **G7** | site 8, return/decode side, sum field | a `defdata`-sum struct field's `(decode ... (Result Cmd cstr))` dispatches to the generic `decode_T` at the ENCLOSING struct's result type instead of the field's `Decode [Cmd]` instance (struct fields resolve right; ADT heads do not) | partial | **[GAP]** | -- |
 | ~~G9~~ | witness-side, parametric-container element | the MIRROR of G2: a single-level `Enc [Cons]` over `(Cons (Option int))`. G2 already minted the `Cons__Option__int` cell + inner Option by-value spec; the remaining defect was the dispatch arg `(.head xs)` (an embedded `Option__int`) reconstructed via a stale `tur_option_t *` carrier cast | `field_read_emits_byvalue_aggregate` (suppresses the spurious carrier->concrete bridge) | **[FIXED]** | this branch |
 | **G10** | instance selection, applied-struct heads | two instances of one class over applied structs differing only in the element (`Enc [(Option cstr)]` vs `Enc [(Option int)]`) conflate -- the selection key drops the element, so dispatch always runs the last-defined instance (NOT an ABI bug; instance keying) | none | **[GAP]** | -- |
@@ -608,9 +608,12 @@ needing the absent turmeric-spices sibling to verify:
   `:heap` cons. No small safe fix (box the head -> changes the typed-path
   layout; or monomorphize the list helpers per element -> large). Carrier-family.
 - **G6** -- HKT `fmap` closure-thunk per-carrier ABI + boxed cata result.
-  Confirmed still failing (segfault + `-Wint-conversion` on the recursive
-  closure thunk, and `re-cata` specs conflated across carriers). A deep
-  fn-value/closure-specialization change.
+  **PARTIAL:** the spec-selection half is fixed (`emit_spec_result_mismatch` --
+  return-differentiated sibling specs no longer mis-resolve; the int case is no
+  longer a silent miscompile and the cstr case no longer segfaults). The
+  remaining closure-thunk half (the sub-word `bool` recursive closure shared
+  across carriers) is a deep fn-value/closure-specialization change and stays
+  open (`null-alg` folds to false).
 - **G7** -- `defdata`-sum struct field decodes to the wrong instance. The
   single-level return-dispatch-on-ADT case already works; the bug needs the
   nested `derive-json` Decode-body structure (in the absent spice).

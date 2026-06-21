@@ -364,6 +364,10 @@ struct FnDef *emit_reresolve_method_fndef(struct EmitCtx *ctx, const struct Expr
  * parametric container.  Defined in emit_core.c. */
 bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
                               Type *out_resolved, const Expr **out_dict);
+/* G6: true when a call's result type and a candidate spec's result type are
+ * distinct PRIMITIVE kinds -- a return-differentiated sibling spec that the
+ * by-args lookup must not match.  Defined in emit_expr.c. */
+bool emit_spec_result_mismatch(Type call_result, Type spec_result);
 /* G2: the concrete instance-method FnDef a class-method call resolves to for a
  * given recovered dispatch type (e.g. `__inst_Enc_enc_Cons` for `(Cons int)`).
  * Defined in emit_core.c. */

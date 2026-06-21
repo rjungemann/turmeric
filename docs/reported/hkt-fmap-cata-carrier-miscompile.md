@@ -9,10 +9,47 @@ severity: Medium. The textbook generic recursion-schemes `cata`
   warning showing the recursive `fmap` closure thunk stored into the thunk's
   `__fn` slot at the wrong function-pointer type. Direct structural recursion
   (no `fmap`) is correct, so folds must fall back to hand-written recursion.
-status: OPEN -- found 2026-06-21 by the turmeric-spices Track C U5 regex
+status: PARTIAL -- found 2026-06-21 by the turmeric-spices Track C U5 regex
   prototype (spices/regex/src/regex/tree.tur). Verified on turmeric 0.22.0,
   main @ 99cc8b3, built from source (build-release). Tracked as gap G6 in
   docs/carrier-concrete-abi-crossing-audit-plan.md.
+  UPDATE 2026-06-21 (branch claude/g2-carrier-concrete-abi-audit-3yzkhm): the
+  SPEC-SELECTION half is fixed -- the int `(= 4 (re-cata size-alg e))` now
+  returns true (was false), and the cstr case no longer segfaults (prints "L").
+  The remaining CLOSURE-THUNK half (the sub-word `bool` recursive closure shared
+  across carriers) is still open: `null-alg` still folds to false. See
+  "Status update" below.
+---
+
+## Status update (2026-06-21) -- spec-selection half fixed; closure-thunk half open
+
+Root cause split in two:
+
+1. **Spec selection (FIXED).** `re-cata` is a constrained generic differentiated
+   ONLY by its return type `B`; for B=int/bool/cstr it interns sibling specs with
+   identical argument types (`int64_t, int64_t`), differing only in result. The
+   by-args spec lookup (`find_matched_abi_spec` / `emit_call_name`) couldn't tell
+   them apart, so the int `(re-cata size-alg e)` call grabbed the `bool` spec
+   (`re_cata__spec__bool_...`) -- making `(= 4 <bool>)` an always-false
+   `-Wbool-compare`. Fixed by `emit_spec_result_mismatch` (`emit_expr.c`): a
+   by-args match is now rejected when the call's and the spec's result types are
+   distinct primitive kinds. int now prints `4` / `true`; cstr no longer
+   segfaults (prints `L`). Suite green (1743/0).
+
+2. **Closure-thunk per carrier (OPEN).** The recursive closure handed to `fmap`
+   (`(fn [c : Re] : B (re-cata alg c))`) is lifted to a SINGLE C function
+   `__fn_1045` returning `int64_t` and calling the carrier base `re_hycata`,
+   shared across all three specs (the bool/cstr specs merely cast its thunk to a
+   different return type -- the residual `-Wint-conversion`). For a sub-word
+   `bool` carrier this is wrong: `null-alg` over `Alt(Lit, Empty)` should fold to
+   `(or false true) = true` but yields `false`. The fix is to clone the lifted
+   closure per carrier `B` (a `__fn_1045__spec__bool` whose body calls
+   `re_cata__spec__bool` and returns `bool`), generalizing the existing
+   inner-closure float-spec machinery (`emit_inner_closure_needs_float_spec` /
+   `poly-closure-result-specialization`) to sub-word and pointer carriers. cstr
+   "works" today only because a pointer round-trips losslessly through the int64
+   carrier; `bool` does not.
+
 ---
 
 # Generic catamorphism via `Functor` `fmap` miscompiles per carrier
