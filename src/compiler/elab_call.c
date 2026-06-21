@@ -934,10 +934,10 @@ static const Form *sz_recover_type_form(Elab *e, const Expr *x) {
     }
 }
 
-/* SZ8 projection-size recovery: the first parseable Size form among a type-app
- * Form's argument positions (items[1..]), mirroring the template-extraction
- * convention used by sz_cross_param_unify below.  Returns the SizeTerm, or
- * NULL when no argument position parses as a size. */
+/* (sz_first_size_term was retired by sized-types-cross-param-multi-index:
+ * sz_cross_param_unify now walks every index position directly rather than
+ * collapsing a multi-index opaque to its first size term.) */
+#if 0
 static SizeTerm *sz_first_size_term(Elab *e, const Form *tform) {
     if (!tform || tform->tag != F_LIST) return NULL;
     for (uint32_t k = 1; k < tform->as.list.len; k++) {
@@ -947,6 +947,7 @@ static SizeTerm *sz_first_size_term(Elab *e, const Form *tform) {
     }
     return NULL;
 }
+#endif
 
 /* sized-types-cross-param-unification: a function signature that names the
  * same size variable in two or more parameters (e.g. both `xs : (SizedVec n)`
@@ -977,86 +978,99 @@ static bool sz_cross_param_unify(Elab *e, const Form *call,
     for (uint32_t i = 0; i < n_args && i < arity; i++) {
         const Form *pf = fn_type->as.fn.param_type_forms[i];
         if (!pf || pf->tag != F_LIST || pf->as.list.len < 2) continue;
-        /* Find a size-index form in the annotation's argument list (e.g. the
-         * `n` in `(SizedVec n)` or `(Add (Static 1) n)`). */
-        const Form *tmpl_form = NULL;
-        for (uint32_t k = 1; k < pf->as.list.len; k++) {
-            SizeTerm *probe = size_term_from_form(e->arena, pf->as.list.items[k],
-                                                  NULL, NULL);
-            if (probe) { tmpl_form = pf->as.list.items[k]; break; }
-        }
-        if (!tmpl_form) continue;
-        /* Arg's inferred size index (set by sz8_infer_ctor_size_index for
-         * sized-GADT constructor applications). */
         Expr *a = args[i];
-        const SizeTerm *arg_idx = (a && a->kind == EX_CALL)
-                                  ? a->as.call_.size_index : NULL;
-        /* SZ8 non-GADT / projection-size recovery: when the GADT path did not
-         * supply an index, recover one from the argument's declared type Form.
-         * This covers direct calls whose callee declares a Size-carrying return
-         * type (`mk-dense-2 : (Dense (Static 2) A)`), plain variables that flow
-         * a sized value (`let [a (mk-2)] ... a`), and struct field projections
-         * (`(.fst p)` of `p : (Pair2 (Dense (Static 3) A) ..)`).  Closed Size
-         * expressions fold to a constant below; an open template like
-         * `(Dense n A)` yields SZT_VAR, which the substitution table handles. */
-        if (!arg_idx)
-            arg_idx = sz_first_size_term(e, sz_recover_type_form(e, a));
-        if (!arg_idx) continue;  /* un-inferable -> stays polymorphic */
-        /* Case 1: template is a bare size variable -- bind it in subst, or
-         * require equality with the prior binding. */
-        if (tmpl_form->tag == F_SYM) {
-            const char *vname = tmpl_form->as.sym->name;
-            bool found = false;
-            for (uint8_t s = 0; s < n_subst; s++) {
-                if (strcmp(subst[s].name, vname) != 0) continue;
-                found = true;
-                int64_t va, vb;
-                bool ca = size_term_eval(subst[s].bound, &va);
-                bool cb = size_term_eval(arg_idx, &vb);
-                if (ca && cb && va != vb) {
-                    diag_emit_with_code(DIAG_ERROR,
-                        call->as.list.items[1 + i]->span,
-                        TUR_E0260_SIZED_TYPE_MISMATCH,
-                        "sized type mismatch (TUR-E0260): function '%s' "
-                        "shares size variable '%s' across parameters, "
-                        "but argument %u has size %lld while argument %u "
-                        "has size %lld",
-                        (fn_binding && fn_binding->name)
-                            ? fn_binding->name->name : "?",
-                        vname,
-                        (unsigned)(subst[s].arg_idx + 1), (long long)va,
-                        (unsigned)(i + 1), (long long)vb);
-                    return true;
+        /* Recover the argument's declared type Form once; its index positions
+         * line up one-for-one with the parameter template's positions (same
+         * opaque/GADT head), so a multi-index opaque (e.g. `(Mat m n)`) can be
+         * unified position-wise.  This covers direct calls whose callee
+         * declares a Size-carrying return type (`mk-dense-2 : (Dense (Static 2)
+         * A)`), plain variables that flow a sized value (`let [a (mk-2)] .. a`),
+         * and struct field projections. */
+        const Form *af = sz_recover_type_form(e, a);
+        /* GADT-inferred single index (set by sz8_infer_ctor_size_index for
+         * sized-GADT constructor applications, whose recovered return Form is
+         * an OPEN template like `(SizedVec (Add (Static 1) n))`). */
+        const SizeTerm *gadt_idx = (a && a->kind == EX_CALL)
+                                   ? a->as.call_.size_index : NULL;
+        /* Walk EVERY index position of the parameter template, not just the
+         * first.  The single-index case is the degenerate form (one size
+         * position); a multi-index opaque contributes one size binding per
+         * position so a variable shared across parameters is contradicted at
+         * whichever slot it occupies. */
+        for (uint32_t k = 1; k < pf->as.list.len; k++) {
+            const Form *tmpl_form = pf->as.list.items[k];
+            SizeTerm *tmpl_probe = size_term_from_form(e->arena, tmpl_form,
+                                                       NULL, NULL);
+            if (!tmpl_probe) continue;  /* non-size arg (e.g. element type param) */
+            /* Arg's size term at the SAME position.  Prefer the recovered type
+             * Form (covers opaque multi-index + concrete return forms); fall
+             * back to the GADT-inferred index when the recovered term is not a
+             * folded constant (i.e. an open ctor-return template). */
+            const SizeTerm *arg_idx = NULL;
+            if (af && af->tag == F_LIST && k < af->as.list.len)
+                arg_idx = size_term_from_form(e->arena, af->as.list.items[k],
+                                              NULL, NULL);
+            if (gadt_idx) {
+                int64_t tmp;
+                if (!(arg_idx && size_term_eval(arg_idx, &tmp)))
+                    arg_idx = gadt_idx;
+            }
+            if (!arg_idx) continue;  /* un-inferable -> stays polymorphic */
+            /* Case 1: template is a bare size variable -- bind it in subst, or
+             * require equality with the prior binding. */
+            if (tmpl_form->tag == F_SYM) {
+                const char *vname = tmpl_form->as.sym->name;
+                bool found = false;
+                for (uint8_t s = 0; s < n_subst; s++) {
+                    if (strcmp(subst[s].name, vname) != 0) continue;
+                    found = true;
+                    int64_t va, vb;
+                    bool ca = size_term_eval(subst[s].bound, &va);
+                    bool cb = size_term_eval(arg_idx, &vb);
+                    if (ca && cb && va != vb) {
+                        diag_emit_with_code(DIAG_ERROR,
+                            call->as.list.items[1 + i]->span,
+                            TUR_E0260_SIZED_TYPE_MISMATCH,
+                            "sized type mismatch (TUR-E0260): function '%s' "
+                            "shares size variable '%s' across parameters, "
+                            "but argument %u has size %lld while argument %u "
+                            "has size %lld",
+                            (fn_binding && fn_binding->name)
+                                ? fn_binding->name->name : "?",
+                            vname,
+                            (unsigned)(subst[s].arg_idx + 1), (long long)va,
+                            (unsigned)(i + 1), (long long)vb);
+                        return true;
+                    }
+                    break;
                 }
-                break;
+                if (!found && n_subst < 8) {
+                    subst[n_subst].name    = vname;
+                    subst[n_subst].bound   = arg_idx;
+                    subst[n_subst].arg_idx = i;
+                    n_subst++;
+                }
+                continue;
             }
-            if (!found && n_subst < 8) {
-                subst[n_subst].name    = vname;
-                subst[n_subst].bound   = arg_idx;
-                subst[n_subst].arg_idx = i;
-                n_subst++;
+            /* Case 2: template is a closed size expression (no free vars) --
+             * compare by folded value against the arg's inferred index. */
+            int64_t tv, av;
+            if (size_term_eval(tmpl_probe, &tv) &&
+                size_term_eval(arg_idx, &av) && tv != av) {
+                diag_emit_with_code(DIAG_ERROR,
+                    call->as.list.items[1 + i]->span,
+                    TUR_E0260_SIZED_TYPE_MISMATCH,
+                    "sized type mismatch (TUR-E0260): argument %u of '%s' has "
+                    "size %lld but parameter declares size %lld",
+                    (unsigned)(i + 1),
+                    (fn_binding && fn_binding->name)
+                        ? fn_binding->name->name : "?",
+                    (long long)av, (long long)tv);
+                return true;
             }
-            continue;
+            /* Open templates with internal vars: deferred (matches the SZ8
+             * single-parameter polymorphism baseline). */
         }
-        /* Case 2: template is a closed size expression (no free vars) --
-         * compare by folded value against the arg's inferred index. */
-        SizeTerm *tmpl = size_term_from_form(e->arena, tmpl_form, NULL, NULL);
-        int64_t tv, av;
-        if (tmpl && size_term_eval(tmpl, &tv) && size_term_eval(arg_idx, &av) &&
-            tv != av) {
-            diag_emit_with_code(DIAG_ERROR,
-                call->as.list.items[1 + i]->span,
-                TUR_E0260_SIZED_TYPE_MISMATCH,
-                "sized type mismatch (TUR-E0260): argument %u of '%s' has "
-                "size %lld but parameter declares size %lld",
-                (unsigned)(i + 1),
-                (fn_binding && fn_binding->name)
-                    ? fn_binding->name->name : "?",
-                (long long)av, (long long)tv);
-            return true;
-        }
-        /* Open templates with internal vars: deferred (matches the SZ8
-         * single-parameter polymorphism baseline). */
     }
     return false;
 }

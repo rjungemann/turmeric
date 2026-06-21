@@ -1,0 +1,29 @@
+; sized-types-cross-param-unification, multi-index carrier (accept side):
+; a two-index phantom opaque (LaMatN m n) whose shared size variables line
+; up position-wise unifies cleanly.  Companion to
+; errors/sized-matrix-cross-param-reject.
+;
+;   mul : (m x k) * (k x n) -> (m x n)  -- shared inner dim `k`
+;   add : (m x n) + (m x n) -> (m x n)  -- shared full shape `m`,`n`
+;
+; Both call sites pin every index to a Size literal; the call-site inference
+; recovers SZT_CONST per index position from each callee's declared return
+; form and unifies `k` (3 = 3) and `m`/`n` (2 = 2, 3 = 3) without conflict.
+
+(defgadt Size []
+  (Static (int) : (Size))
+  (Add (Size) (Size) : (Size))
+  (Mul (Size) (Size) : (Size)))
+
+(defopaque LaMatN [m n] :int)
+
+(defn mk23 [] : (LaMatN (Static 2) (Static 3)) (:: 0 :LaMatN))
+(defn mk34 [] : (LaMatN (Static 3) (Static 4)) (:: 0 :LaMatN))
+
+(defn mul [m k n] [a : (LaMatN m k) b : (LaMatN k n)] : int 0)
+(defn add [m n] [a : (LaMatN m n) b : (LaMatN m n)] : int 0)
+
+(defn main [] : int
+  (println (mul (mk23) (mk34)))   ; inner 3 = 3: unifies cleanly
+  (println (add (mk23) (mk23)))   ; (2x3) + (2x3): shape matches
+  0)
