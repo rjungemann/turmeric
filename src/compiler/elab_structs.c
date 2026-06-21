@@ -216,13 +216,44 @@ static TypeKind struct_field_user_type_storage(const Binding *tb,
     return TY_INT;
 }
 
+/* defstruct-field-byvalue-parametric-struct-layout: is `t` a concrete,
+ * by-value (non-`:heap`) parametric struct application -- e.g. `(Option cstr)`?
+ * Such a value is an embedded aggregate (`Option__cstr`), NOT the int64 carrier,
+ * so a field of this type must be laid out inline by value just like a bare
+ * nullary by-value struct field.  Heap containers (`(Cons int)`, `(Vec int)`)
+ * are already int64-carried typed pointers and stay on the carrier; opaque
+ * newtypes and transparent-int newtypes also stay int64.  A non-concrete app
+ * (a field `(Option A)` over the owner's own type parameter) has no fixed size
+ * and likewise stays on the carrier. */
+static bool struct_field_app_is_byvalue_struct(const Type *t) {
+    if (!t || t->kind != TY_APP) return false;
+    if (!type_has_concrete_codegen_layout(t)) return false;
+    if (type_is_heap_struct(*t)) return false;
+    if (type_is_transparent_int_newtype(*t)) return false;
+    StructDef *def = NULL;
+    Type args[16];
+    uint8_t n_args = 0;
+    if (!type_extract_struct_app(t, &def, args, &n_args)) return false;
+    return def && !def->is_opaque;
+}
+
 static void struct_field_storage_from_type(const Type *t, TypeKind *out_kind, TypeKind *out_inner) {
     *out_kind = TY_UNKNOWN;
     *out_inner = TY_UNKNOWN;
     if (!t) return;
     switch (t->kind) {
-        case TY_TYVAR:
         case TY_APP:
+            /* defstruct-field-byvalue-parametric-struct-layout: store a concrete
+             * by-value parametric struct (`(Option cstr)`) inline as the embedded
+             * aggregate, matching the value make-struct provides and the `.field`
+             * accessor expects.  Carrier-shaped apps fall through to int64. */
+            if (struct_field_app_is_byvalue_struct(t)) {
+                *out_kind = TY_STRUCT;
+                return;
+            }
+            *out_kind = TY_INT;
+            return;
+        case TY_TYVAR:
         case TY_EXISTS:
         case TY_FORALL:
         case TY_STRUCT:
