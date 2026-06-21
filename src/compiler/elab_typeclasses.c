@@ -1752,6 +1752,21 @@ static bool m7_body_constructs_byvalue(const Expr *e) {
                    m7_body_constructs_byvalue(e->as.do_.items[e->as.do_.n - 1]);
         case EX_LET:
             return m7_body_constructs_byvalue(e->as.let_.body);
+        case EX_MATCH:
+            /* HKT instance bodies are commonly a `match` over the receiver, with
+             * each arm CONSTRUCTING the result family in-body -- e.g.
+             * `(definstance Functor [ReF] (fmap [c g] (match c (EmptyF) (EmptyF)
+             *  (AltF x y) (AltF (g x) (g y)) ...)))`.  Such a body is
+             * by-value-constructible iff every arm's tail is.  Without this arm
+             * the by-value spec is never minted and a sub-int64 / float result
+             * element silently reads the wrong (carrier int64) ADT layout. */
+            if (e->as.match_.n_arms == 0) return false;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (!e->as.match_.arms[i].body ||
+                    !m7_body_constructs_byvalue(e->as.match_.arms[i].body))
+                    return false;
+            }
+            return true;
         case EX_VAR:
             /* Selection / pass-through tail (Alternative `<|>` / `or-else`):
              * the body returns an EXISTING `(f a)` value -- a parameter or local
@@ -1766,6 +1781,13 @@ static bool m7_body_constructs_byvalue(const Expr *e) {
         case EX_CALL:
             if (e->as.call_.fn_binding &&
                 e->as.call_.fn_binding->is_construct_template)
+                return true;
+            /* An ADT constructor call -- `(AltF (g x) (g y))`, `(EmptyF)` -- builds
+             * the result family in-body.  For a by-value (`:copy`) defdata this
+             * constructs the by-value ADT layout (`ctor_*__bool`) per element under
+             * the active spec, so it is by-value-constructible.  This is the shape
+             * of a `match`-bodied `Functor`/`Bifunctor` instance over a sum type. */
+            if (e->as.call_.ctor)
                 return true;
             /* Monadic continuation tail call: a local (parameter) fn returning
              * the applied `(f b)` family by value. */
@@ -1800,6 +1822,16 @@ static bool m7_body_returns_byvalue_element(const Expr *e) {
                    m7_body_returns_byvalue_element(e->as.do_.items[e->as.do_.n - 1]);
         case EX_LET:
             return m7_body_returns_byvalue_element(e->as.let_.body);
+        case EX_MATCH:
+            /* A bare-element body may also `match` the receiver, each arm
+             * READING a scalar element by value (Comonad/Foldable shapes). */
+            if (e->as.match_.n_arms == 0) return false;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (!e->as.match_.arms[i].body ||
+                    !m7_body_returns_byvalue_element(e->as.match_.arms[i].body))
+                    return false;
+            }
+            return true;
         case EX_GET_FIELD:
             /* `(.value w)` -- a scalar field read off the by-value receiver. */
             return true;

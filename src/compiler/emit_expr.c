@@ -1594,6 +1594,28 @@ static bool emit_var_spec_arg_type(EmitCtx *ctx, const Expr *var_expr,
     return false;
 }
 
+/* M7 by-value HKT (gap G6): inside a per-(f, A) by-value instance-method spec
+ * (`__inst_Functor_fmap_T__spec__*`), an ADT constructor call in the body --
+ * `(AltF (g x) (g y))`, `(EmptyF)` -- has its element ERASED to a bare TY_ADT at
+ * instance elaboration, so the normal `type_adt_app_ctor_suffix(e->type)` yields
+ * no suffix and the carrier `ctor_AltF` is emitted (int64 fields) where the
+ * consumer reads the by-value `tur_adt_ReF__bool` (bool fields).  Recover the
+ * monomorphized suffix from the ACTIVE spec's result family: a Functor/Bifunctor
+ * instance body constructs exactly the family the method returns, so the spec's
+ * concrete result element (`(ReF bool)`) names the right ctor variant.  Returns a
+ * malloc'd suffix (caller frees) or NULL when not applicable. */
+static char *emit_hkt_spec_ctor_suffix(EmitCtx *ctx, const Expr *e) {
+    if (!ctx || !ctx->current_abi_specialization || !e ||
+        e->kind != EX_CALL || !e->as.call_.ctor || !e->as.call_.ctor->adt)
+        return NULL;
+    Type sret = emit_resolve_type(ctx, ctx->current_abi_specialization->result_type);
+    if (sret.kind != TY_APP) return NULL;
+    AdtDef *sdef = type_adt_app_def(&sret);
+    if (!sdef || sdef != e->as.call_.ctor->adt) return NULL;
+    if (!type_app_is_concrete_adt(&sret)) return NULL;
+    return type_adt_app_ctor_suffix(sret);
+}
+
 char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     switch (e->kind) {
         case EX_NIL_LIT:  return atom_nil();
@@ -2857,9 +2879,17 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* Phase G0: 0-arg constructor call — emit ctor_Name() */
             if (fn_binding->type.kind == TY_ADT) {
                 char *_mc = mangle_field_name(fn_binding->name->name);
-                /* TS4P2: use per-instance ctor if the call result is a concrete ADT app */
-                char *suffix = (e->type.kind == TY_APP)
-                    ? type_adt_app_ctor_suffix(e->type) : NULL;
+                /* TS4P2: use per-instance ctor if the call result is a concrete ADT app.
+                 * Resolve the construct's type through the active ABI spec first
+                 * (M7 by-value HKT, gap G6): inside `__inst_Functor_fmap_T__spec__*`
+                 * the result `(ReF b)` grounds to `(ReF bool)` only via the spec's
+                 * element bindings -- without this the carrier `ctor_EmptyF` is
+                 * emitted where the consumer reads the by-value `tur_adt_ReF__bool`. */
+                Type rty = emit_resolve_type(ctx, e->type);
+                char *suffix = (rty.kind == TY_APP)
+                    ? type_adt_app_ctor_suffix(rty) : NULL;
+                if (!suffix)
+                    suffix = emit_hkt_spec_ctor_suffix(ctx, e);
                 Buf out; buf_init(&out);
                 if (suffix) {
                     buf_printf(&out, "ctor_%s%s()", _mc, suffix);
@@ -2882,9 +2912,16 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (fn_binding->type.kind == TY_FN &&
                 fn_binding->type.as.fn.result_kind == TY_ADT &&
                 !fn_binding->type.as.fn.result_full_type) {
-                /* TS4P2: choose per-instance ctor name if the result is a concrete ADT app */
-                char *suffix = (e->type.kind == TY_APP)
-                    ? type_adt_app_ctor_suffix(e->type) : NULL;
+                /* TS4P2: choose per-instance ctor name if the result is a concrete ADT app.
+                 * Resolve through the active ABI spec first (M7 by-value HKT, gap
+                 * G6) so `(AltF (g x) (g y)) : (ReF b)` grounds to `(ReF bool)` and
+                 * emits `ctor_AltF__bool`, matching the by-value layout the
+                 * consumer reads instead of the int64-carrier `ctor_AltF`. */
+                Type rty = emit_resolve_type(ctx, e->type);
+                char *suffix = (rty.kind == TY_APP)
+                    ? type_adt_app_ctor_suffix(rty) : NULL;
+                if (!suffix)
+                    suffix = emit_hkt_spec_ctor_suffix(ctx, e);
                 char **arg_strs = (char **)malloc(e->as.call_.n_args * sizeof(char *));
                 if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {

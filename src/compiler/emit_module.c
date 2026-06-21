@@ -2416,6 +2416,25 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             return;
         }
     }
+    /* M7 layer-4 (sum types): the by-value HKT machinery above recognizes a
+     * parametric STRUCT result (Option/Result/Pair) as an ABI change.  A
+     * parametric ADT (`defdata` sum) result -- e.g. `Functor [ReF]` over a sum
+     * type, whose method body `match`es the receiver and CONSTRUCTS the result
+     * family per arm -- also has a per-element monomorphized layout
+     * (`tur_adt_ReF__bool`, field widths following the element) that differs from
+     * the int64-carrier `tur_adt_ReF`.  Without minting a by-value spec the body
+     * builds the carrier ctor (`ctor_AltF`, int64 fields) while the consumer
+     * reads the by-value layout (`tur_adt_ReF__bool`, bool fields) -- a silent
+     * miscompile for any sub-int64 / float element (gap G6).  Treat such a
+     * result as an ABI change so a per-(f, A) by-value spec is interned; the
+     * spec body then resolves its constructs to `ctor_*__bool` under the active
+     * element bindings.  int/cstr elements are 8-byte and layout-identical to the
+     * carrier, but minting a (dedup'd) spec for them is still correct. */
+    if (!abi_changes && g_m7_hkt_enabled && fd && fd->owner_instance &&
+        result_type.kind == TY_APP && type_app_is_concrete_adt(&result_type) &&
+        !emit_abi_type_has_concrete_named_tyvar(&result_type)) {
+        abi_changes = true;
+    }
     if (!abi_changes && !instance_changes) {
         if (!borrow_path &&
             !emit_abi_call_is_generic_relay(ctx, call, items, n_items)) {

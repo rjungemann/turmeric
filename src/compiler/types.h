@@ -1445,6 +1445,12 @@ bool         type_is_heap_struct(Type t);
  * codegen layout -- e.g. `(Vec int)` but not `(Vec A)`.  Gates spec-minting on
  * concrete-only call sites. */
 bool         type_has_concrete_codegen_layout(const Type *t);
+/* True for a parametric ADT (`defdata` sum) application with all-concrete type
+ * args (`(ReF bool)`, `(Cons int)`).  Distinct from the struct-app predicate
+ * above; used by the M7 by-value HKT machinery for parametric SUM results. */
+bool         type_app_is_concrete_adt(const Type *t);
+/* The AdtDef at the head of an ADT application, or NULL if not an ADT app. */
+AdtDef      *type_adt_app_def(const Type *t);
 /* end-to-end-monomorphization: the by-value struct C name (`Vec__int`) for a
  * struct/struct-app, WITHOUT the trailing " *" the heap pointer lowering adds. */
 const char  *type_struct_value_c_name(Type t);

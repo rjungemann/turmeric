@@ -1,0 +1,39 @@
+; M6 / gap G6: a `Functor` instance over a parametric `:copy` sum type, whose
+; method body `match`es the receiver and CONSTRUCTS the result family per arm,
+; must monomorphize per result element.  The int64-carrier instance builds the
+; carrier ADT layout (`tur_adt_ReF`, int64 union fields), but a consumer reads
+; the by-value monomorphized layout (`tur_adt_ReF__bool`, bool fields) -- a
+; silent miscompile for any element narrower than / not the int64 carrier (bool,
+; float, char).  The by-value HKT instance-method spec (mint at the fmap call
+; site, build `ctor_*__<elem>` under the active element binding) fixes it.
+(load "stdlib/typeclass-functor.tur")
+
+(defdata ReF :copy [a] (EmptyF) (LitF :int) (AltF a a) (StarF a))
+
+(definstance Functor [ReF]
+  (fmap [c g]
+    (match c
+      (EmptyF)   (EmptyF)
+      (LitF n)   (LitF n)
+      (AltF x y) (AltF (g x) (g y))
+      (StarF x)  (StarF (g x)))))
+
+(defn to-bool [x : int] : bool (> x 0))
+(defn to-flt  [x : int] : float (+ 0.5 (as float x)))
+(defn dbl     [x : int] : int (* 2 x))
+(defn tag     [x : int] : cstr (if (> x 0) "pos" "nonpos"))
+
+(defn main [] : int
+  ; AltF 0 5 -> fmap -> AltF (g 0) (g 5).  Reading the SECOND child (`y`) is the
+  ; discriminating probe: a carrier-vs-byvalue layout mismatch puts `y` at the
+  ; wrong offset, so `y` silently reads as the first child / zero.
+  (let [b (:: (fmap (:: (AltF 0 5) (ReF int)) to-bool) (ReF bool))
+        f (:: (fmap (:: (AltF 0 5) (ReF int)) to-flt)  (ReF float))
+        i (:: (fmap (:: (AltF 3 5) (ReF int)) dbl)     (ReF int))
+        s (:: (fmap (:: (AltF 0 5) (ReF int)) tag)     (ReF cstr))]
+    (do
+      (println (match b (AltF x y) (if y 100 200) (EmptyF) 0   (LitF n) 1   (StarF x) 3))
+      (println (match f (AltF x y) y              (EmptyF) 0.0 (LitF n) 1.0 (StarF x) 3.0))
+      (println (match i (AltF x y) y              (EmptyF) 0   (LitF n) 1   (StarF x) 3))
+      (println (match s (AltF x y) y              (EmptyF) "e" (LitF n) "l" (StarF x) "s"))
+      0)))
