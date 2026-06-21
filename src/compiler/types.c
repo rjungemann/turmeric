@@ -1493,8 +1493,9 @@ const char *type_name(Type t) {
             type_name_buf(&tmp, type_from_kind(t.as.fn.result_kind));
             buf_puts(&tmp, ")");
             buf_putc(&tmp, '\0');
-            /* This leaks but it's only used for diagnostics. */
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         case TY_REF: {
             /* Build "ref<T>" name */
@@ -1504,7 +1505,9 @@ const char *type_name(Type t) {
             buf_puts(&tmp, type_name(type_from_kind(t.as.ref.inner)));
             buf_puts(&tmp, ">");
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         /* LT3: lref<T> — linear ref */
         case TY_LREF: {
@@ -1514,7 +1517,9 @@ const char *type_name(Type t) {
             buf_puts(&tmp, type_name(type_from_kind(t.as.ref.inner)));
             buf_puts(&tmp, ">");
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         /* Phase 9: rc<T> and weak<T> */
         case TY_RC: {
@@ -1525,7 +1530,9 @@ const char *type_name(Type t) {
             buf_puts(&tmp, type_name(type_from_kind(t.as.rc.inner)));
             buf_puts(&tmp, ">");
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         case TY_WEAK: {
             /* Build "weak<T>" name */
@@ -1535,7 +1542,9 @@ const char *type_name(Type t) {
             buf_puts(&tmp, type_name(type_from_kind(t.as.rc.inner)));
             buf_puts(&tmp, ">");
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         /* Phase 12: Borrow types */
         case TY_REF_IMMUT: {
@@ -1545,7 +1554,9 @@ const char *type_name(Type t) {
             buf_puts(&tmp, "&");
             buf_puts(&tmp, type_name(type_from_kind(t.as.ref_borrow.target)));
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         case TY_REF_MUT: {
             /* Build "&mut T" name */
@@ -1554,7 +1565,9 @@ const char *type_name(Type t) {
             buf_puts(&tmp, "&mut ");
             buf_puts(&tmp, type_name(type_from_kind(t.as.ref_borrow.target)));
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         /* Phase 15: Typeclass types */
         case TY_TYPECLASS:
@@ -1571,7 +1584,9 @@ const char *type_name(Type t) {
             buf_puts(&tmp, type_name(type_from_kind(t.as.exn.payload_type)));
             buf_puts(&tmp, ">");
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         /* Phase 18: Continuation types */
         case TY_CONT: {
@@ -1582,7 +1597,9 @@ const char *type_name(Type t) {
             buf_puts(&tmp, type_name(type_from_kind(t.as.cont.returns)));
             buf_puts(&tmp, ">");
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         case TY_CLONEABLE_CONT: {
             /* Build "cloneable_cont<T>" name */
@@ -1592,7 +1609,9 @@ const char *type_name(Type t) {
             buf_puts(&tmp, type_name(type_from_kind(t.as.cont.returns)));
             buf_puts(&tmp, ">");
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         /* Phase 11: Struct types */
         case TY_STRUCT:
@@ -1610,7 +1629,9 @@ const char *type_name(Type t) {
             buf_puts(&tmp, t.as.app.arg ? type_name(*t.as.app.arg) : "?");
             buf_putc(&tmp, ')');
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         /* Phase HKT-P2: Recursive types */
         case TY_REC:
@@ -1663,7 +1684,9 @@ const char *type_name(Type t) {
             }
             buf_putc(&tmp, ')');
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         /* IT0: Union types — "(T1 | T2 | ...)" */
         case TY_UNION: {
@@ -1680,7 +1703,9 @@ const char *type_name(Type t) {
             }
             buf_putc(&tmp, ')');
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         /* IT2: Intersection types — "(T1 & T2 & ...)" */
         case TY_INTERSECTION: {
@@ -1697,7 +1722,9 @@ const char *type_name(Type t) {
             }
             buf_putc(&tmp, ')');
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         /* Variadic HKT rows: short name "#row{T1 T2 ...}". */
         case TY_TYPEROW: {
@@ -1719,7 +1746,9 @@ const char *type_name(Type t) {
             }
             buf_putc(&tmp, '}');
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         /* ET3/FH4.1: Handler type — "handler<EffectSet, ValueType, ResultType>".
          * EffectSet is the handled row ("A | B" for multi-effect); falls back to
@@ -1738,7 +1767,9 @@ const char *type_name(Type t) {
             buf_puts(&tmp, type_name(type_from_kind(t.as.handler_.result_kind)));
             buf_putc(&tmp, '>');
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         /* CT0: Contract type — "{ x : T | p }" */
         case TY_CONTRACT: {
@@ -1751,7 +1782,9 @@ const char *type_name(Type t) {
                           ? type_name(*t.as.contract_.base_type) : "?");
             buf_puts(&tmp, " | ... }");
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         /* SS0a: Session protocol type names */
         case TY_SESSION: {
@@ -1761,7 +1794,9 @@ const char *type_name(Type t) {
             buf_puts(&tmp, t.as.session_.fst ? type_name(*t.as.session_.fst) : "?");
             buf_puts(&tmp, "]");
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         case TY_SEND: {
             Buf tmp;
@@ -1772,7 +1807,9 @@ const char *type_name(Type t) {
             buf_puts(&tmp, t.as.session_.snd ? type_name(*t.as.session_.snd) : "?");
             buf_puts(&tmp, "]");
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         case TY_RECV: {
             Buf tmp;
@@ -1783,7 +1820,9 @@ const char *type_name(Type t) {
             buf_puts(&tmp, t.as.session_.snd ? type_name(*t.as.session_.snd) : "?");
             buf_puts(&tmp, "]");
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         case TY_CLOSE:
             return "Close";
@@ -1796,7 +1835,9 @@ const char *type_name(Type t) {
             buf_puts(&tmp, t.as.session_.snd ? type_name(*t.as.session_.snd) : "?");
             buf_puts(&tmp, "]");
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         case TY_BRANCH: {
             Buf tmp;
@@ -1807,7 +1848,9 @@ const char *type_name(Type t) {
             buf_puts(&tmp, t.as.session_.snd ? type_name(*t.as.session_.snd) : "?");
             buf_puts(&tmp, "]");
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         case TY_SESSION_REC: {
             Buf tmp;
@@ -1818,7 +1861,9 @@ const char *type_name(Type t) {
             buf_puts(&tmp, t.as.session_.fst ? type_name(*t.as.session_.fst) : "?");
             buf_puts(&tmp, "]");
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         case TY_TIMEOUT: {
             Buf tmp;
@@ -1829,7 +1874,9 @@ const char *type_name(Type t) {
             buf_puts(&tmp, t.as.session_.snd ? type_name(*t.as.session_.snd) : "?");
             buf_puts(&tmp, "]");
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         case TY_SESSION_PAIR: {
             Buf tmp;
@@ -1840,7 +1887,9 @@ const char *type_name(Type t) {
             buf_puts(&tmp, t.as.session_.snd ? type_name(*t.as.session_.snd) : "?");
             buf_puts(&tmp, "]");
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         case TY_SESSION_RECV_PAIR: {
             Buf tmp;
@@ -1851,7 +1900,9 @@ const char *type_name(Type t) {
             buf_puts(&tmp, t.as.session_.snd ? type_name(*t.as.session_.snd) : "?");
             buf_puts(&tmp, "]");
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         case TY_SESSION_OFFER: {
             Buf tmp;
@@ -1862,7 +1913,9 @@ const char *type_name(Type t) {
             buf_puts(&tmp, t.as.session_.snd ? type_name(*t.as.session_.snd) : "?");
             buf_puts(&tmp, "]");
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         /* SS5: Global protocol types */
         case TY_GLOBAL:
@@ -1879,7 +1932,9 @@ const char *type_name(Type t) {
             buf_puts(&tmp, t.as.role_.role_name ? t.as.role_.role_name : "?");
             buf_puts(&tmp, "]");
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         /* DV0: Dynamic var type */
         case TY_DYNVAR: {
@@ -1889,7 +1944,9 @@ const char *type_name(Type t) {
             buf_puts(&tmp, t.as.dynvar_.value_type ? type_name(*t.as.dynvar_.value_type) : "?");
             buf_puts(&tmp, ">");
             buf_putc(&tmp, '\0');
-            return tur_strdup(tmp.data);
+            const char *r = intern_type_name(tmp.data);
+            buf_free(&tmp);
+            return r;
         }
         /* GF1: Generator type */
         case TY_GENERATOR:
