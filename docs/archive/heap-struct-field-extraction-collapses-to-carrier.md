@@ -7,8 +7,14 @@ severity: Medium. Blocks `Encode`/`Decode` for lists (`(Cons A)`) -- every eleme
   as the carrier bit pattern) or as a hard C compile error (`(xs)->head` deref of an
   int64 carrier). Concrete extraction works; only the parametric/constrained context
   breaks.
-status: OPEN -- verified 2026-06-21 on `tur` at `a876773` (compiler identical to
-  `8e8b34f`, post-#475/#476, v0.22.0).
+status: RESOLVED -- fixed 2026-06-21 (branch `claude/serene-hamilton-6l6re8`).
+  The `@TypeName` witness dispatch now records abi_bindings (class var ->
+  receiver `(Cons int)`, constraint var `A -> int`) so a per-element spec is
+  minted; the `:heap` field-deref lowering recovers the monomorphized receiver
+  via the spec arg type and reads `(xs)->head` off the `Cons__A *` pointer; and
+  the carrier base clone casts through the carrier (`((Cons *)(intptr_t)(xs))
+  ->head`) so it stays valid C.  The #475 re-resolver re-dispatches the inner
+  `enc` per element.  Fixture: constrained-instance-heap-field-dispatch.
 ---
 
 # Parametric `:heap` field extraction collapses to the carrier in a constrained instance

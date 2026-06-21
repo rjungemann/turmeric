@@ -9,6 +9,23 @@ static bool type_kind_is_aggregate(TypeKind k) {
     return k == TY_STRUCT || k == TY_ADT || k == TY_APP;
 }
 
+/* heap-struct-field-extraction-collapses-to-carrier: true when `t` still
+ * carries a free type variable -- i.e. it has not been monomorphized by the
+ * active spec.  Used by the :heap field-deref lowering to tell an abstract
+ * carrier receiver (`(Cons A)`, lowered C type int64) apart from a concrete
+ * monomorphized one (`(Cons int)` -> `Cons__int *`). */
+static bool type_contains_unresolved_tyvar(Type t) {
+    switch (t.kind) {
+        case TY_TYVAR:
+            return true;
+        case TY_APP:
+            return (t.as.app.fn && type_contains_unresolved_tyvar(*t.as.app.fn)) ||
+                   (t.as.app.arg && type_contains_unresolved_tyvar(*t.as.app.arg));
+        default:
+            return false;
+    }
+}
+
 /* world-resize / multi-field existential payloads: true when `t` lowers to a
  * by-value C aggregate (`World__int__int__int` etc.) that is WIDER than the
  * single int64 the existential carrier (`tur_exists_t`) holds. Such a payload
@@ -4688,8 +4705,18 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * dichotomy below.  Resolve the receiver type through the active
              * spec so an element-erased / tyvar receiver still classifies. */
             {
-                Type recv_rty = emit_resolve_type(ctx,
-                    e->as.get_field_.struct_expr->type);
+                /* heap-struct-field-extraction-collapses-to-carrier: prefer the
+                 * active spec's concrete arg type for the receiver param, so a
+                 * monomorphized instance-method receiver (`xs : Cons__float *`)
+                 * is recovered as `(Cons float)` rather than the polymorphic
+                 * source `(Cons A)` / bare `Cons` that emit_resolve_type leaves
+                 * unsubstituted -- the same recovery #475 applied to the value-
+                 * struct deref.  Without it the spec clone falls back to the
+                 * generic-layout cast and reads `head` at the int64 carrier. */
+                Type recv_rty;
+                if (!emit_var_spec_arg_type(ctx, e->as.get_field_.struct_expr, &recv_rty))
+                    recv_rty = emit_resolve_type(ctx,
+                        e->as.get_field_.struct_expr->type);
                 if (type_is_heap_struct(recv_rty)) {
                     /* A :heap receiver is a typed pointer (`Vec__int *`) only in
                      * concrete monomorphic positions, where its lowered C type is
@@ -4703,6 +4730,30 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * on whether the lowered receiver type is a pointer. */
                     const char *recv_cn = emit_type_c_name(ctx, recv_rty);
                     bool recv_is_ptr = recv_cn && strchr(recv_cn, '*') != NULL;
+                    /* heap-struct-field-extraction-collapses-to-carrier: an
+                     * abstract receiver `(Cons A)` whose element A is still an
+                     * unresolved tyvar (the carrier base clone, no active spec
+                     * monomorphizing this param) lowers `Cons *` from type_c_name
+                     * -- but the C parameter is actually the int64 carrier, so a
+                     * bare `(xs)->head` derefs an int64_t (a hard cc error).
+                     * Treat an unground app spine as the carrier so it casts
+                     * through `((Cons *)(intptr_t)(xs))->head` instead.  A
+                     * monomorphized spec receiver (`Cons__int *`) has no tyvar
+                     * and keeps the direct pointer deref. */
+                    if (recv_rty.kind == TY_STRUCT && recv_rty.as.struct_.def &&
+                        recv_rty.as.struct_.def->n_type_params > 0) {
+                        /* bare parametric struct head (the abstract class-var
+                         * receiver in the carrier base clone) -- not yet
+                         * monomorphized, so the C param is the int64 carrier. */
+                        recv_is_ptr = false;
+                    }
+                    for (Type ty = recv_rty; ty.kind == TY_APP && ty.as.app.fn; ) {
+                        if (ty.as.app.arg && type_contains_unresolved_tyvar(*ty.as.app.arg)) {
+                            recv_is_ptr = false;
+                            break;
+                        }
+                        ty = *ty.as.app.fn;
+                    }
                     Buf hb; buf_init(&hb);
                     if (recv_is_ptr)
                         buf_printf(&hb, "(%s)->%s", sv, fname);

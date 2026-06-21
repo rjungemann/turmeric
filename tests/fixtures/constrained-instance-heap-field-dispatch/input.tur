@@ -1,0 +1,62 @@
+;; constrained-instance-heap-field-dispatch -- a constrained parametric
+;; instance whose body extracts a type-`A` field from a `:heap` container must
+;; read that field at the element ABI and dispatch the inner class method on
+;; the element type, not on the int64 carrier representative.
+;;
+;; Root cause (docs/archive/heap-struct-field-extraction-collapses-to-carrier.md):
+;; `Cons` is `:heap` (`(defstruct Cons :heap [A] (head A) (tail :int))`), so a
+;; `(Cons A)` is carried as the int64 pointer regardless of `A`.  In the body of
+;; `(definstance Enc [Cons] [(Enc A)] (enc [xs] (enc (.head xs))))` the receiver
+;; `(.head xs)` was erased to that carrier:
+;;   - the `@Cons` witness dispatch attached no abi_bindings, so emit minted no
+;;     per-element spec and fell through to the carrier base clone, whose
+;;     `(xs)->head` dereferenced an int64_t (a hard C compile error); and
+;;   - even with a spec, the head read collapsed to the generic `Cons *` layout
+;;     (head as int64) and the inner `enc` baked in `__inst_Enc_enc_int` for
+;;     every element type -- a silent miscompile for float/cstr.
+;;
+;; Fix: the witness path now records the class var -> receiver `(Cons int)` (plus
+;; the constraint var `A -> int`) so a per-instantiation spec is minted; the
+;; :heap field-deref lowering reads `(xs)->head` off the monomorphized
+;; `Cons__A *` pointer; and the #475 re-resolver re-dispatches the inner `enc`
+;; per element.  The carrier base clone stays valid C by casting through the
+;; carrier (`((Cons *)(intptr_t)(xs))->head`).
+
+(defclass Enc [a] (enc [x] : cstr))
+
+(definstance Enc [int]
+  (enc [x] : cstr
+    ```c
+    char *buf = (char *)malloc(32);
+    snprintf(buf, 32, "%lld", (long long)x);
+    return buf;
+    ```))
+
+(definstance Enc [float]
+  (enc [x] : cstr
+    ```c
+    char *buf = (char *)malloc(32);
+    snprintf(buf, 32, "%g", x);
+    return buf;
+    ```))
+
+(definstance Enc [cstr]
+  (enc [x] : cstr
+    ```c
+    size_t n = strlen((const char *)x) + 3;
+    char *buf = (char *)malloc(n);
+    snprintf(buf, n, "\"%s\"", (const char *)x);
+    return buf;
+    ```))
+
+;; Cons is :heap. Extracting the parametric head must dispatch per element type.
+(definstance Enc [Cons]
+  [(Enc A)]
+  (enc [xs] : cstr (enc (.head xs))))
+
+(defn main [] : int
+  (do
+    (println (enc @Cons (:: (list 42 0)     (Cons int))))
+    (println (enc @Cons (:: (list 7.1 0.0)  (Cons float))))
+    (println (enc @Cons (:: (list "hi" "x") (Cons cstr))))
+    0))
