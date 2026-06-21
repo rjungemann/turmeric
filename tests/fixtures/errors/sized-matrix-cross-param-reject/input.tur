@@ -1,0 +1,30 @@
+; sized-types-cross-param-unification, multi-index carrier: a two-index
+; phantom opaque (LaMatN m n) shares a size variable `k` ACROSS parameters
+; AND across index positions -- mat-mul's inner dimension.  `mul` declares
+; a : (LaMatN m k), b : (LaMatN k n), so `k` is arg1's *second* index and
+; arg2's *first* index.  Passing a (2x3) for a and a (5x4) for b is a static
+; contradiction (k := 3 vs k := 5) and must raise TUR-E0260.
+;
+; This exercises the multi-index generalization of sz_cross_param_unify:
+; the single-index control (errors/sized-cross-param-reject) only has one
+; index position; here the clash lives at index position >= 1, which the
+; first-index-only walk used to miss.  Companion accept fixture:
+; sized-matrix-cross-param-accept.
+
+(defgadt Size []
+  (Static (int) : (Size))
+  (Add (Size) (Size) : (Size))
+  (Mul (Size) (Size) : (Size)))
+
+(defopaque LaMatN [m n] :int)
+
+(defn mk23 [] : (LaMatN (Static 2) (Static 3)) (:: 0 :LaMatN))
+(defn mk54 [] : (LaMatN (Static 5) (Static 4)) (:: 0 :LaMatN))
+
+; mat-mul shape rule: (m x k) * (k x n) -> (m x n); `k` is the shared inner dim.
+(defn mul [m k n] [a : (LaMatN m k) b : (LaMatN k n)] : int 0)
+
+(defn main [] : int
+  ; ERROR: inner dimension 3 != 5 -- `k` cannot unify across a and b.
+  (println (mul (mk23) (mk54)))
+  0)

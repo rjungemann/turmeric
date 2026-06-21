@@ -6,8 +6,30 @@ severity: Medium. Not a miscompile -- it is a missing static check. A single-ind
   the same discipline on a two-index (Mat m n) opaque silently accepts a shape
   mismatch. This blocks the dimension-correct matrix surface that Track C / U4
   wants (mat-mul, transpose, etc.).
-status: OPEN
+status: RESOLVED
 ---
+
+## Resolution
+
+Fixed in `sz_cross_param_unify` (`src/compiler/elab_call.c`): the inner walk
+now iterates **every** index position of each parameter template (positions
+`1..len-1`) instead of stopping at the first parseable size term, and the
+argument's size term is recovered at the **same** position from its declared
+type Form. A size variable shared across parameters is now contradicted at
+whichever index slot it occupies, so `(Mat m k) * (Mat k n)` rejects an inner
+dimension clash and `(Mat m n) + (Mat m n)` rejects a shape clash. The
+GADT-inferred single `size_index` is retained as a fallback for the (open)
+ctor-return-template case; the now-redundant `sz_first_size_term` helper was
+retired (`#if 0`). The single-index path is the degenerate one-position case
+and is unchanged in behavior.
+
+Regression fixtures added:
+- `tests/fixtures/errors/sized-matrix-cross-param-reject` -- (2x3)*(5x4)
+  inner-dim clash -> TUR-E0260 naming `k`.
+- `tests/fixtures/sized-matrix-cross-param-accept` -- (2x3)*(3x4) and
+  (2x3)+(2x3) -> clean.
+
+Full suite green (`bash tests/run.sh`: 1731 passed, 0 failed).
 
 # Multi-index phantom-opaque size variables don't cross-unify (sized matrices)
 
