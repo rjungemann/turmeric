@@ -10,9 +10,45 @@ severity: Medium. A struct field whose type is a `defdata` sum has its
   fields. Hard C error: `incompatible type for argument 1 of
   'ok_val__spec__int64_t_Result__Cmd__cstr'`. Blocks derive-json over structs
   with `defdata`-sum fields.
-status: OPEN -- found 2026-06-21, peripheral to #482. Verified on `tur` from
-  `main` at 99cc8b3 (post-#482). Tracked as gap G7 in
-  docs/carrier-concrete-abi-crossing-audit-plan.md.
+status: RESOLVED 2026-06-21 (gap G7). Fixed on
+  branch claude/g2-carrier-concrete-abi-audit-3yzkhm; VERIFIED end-to-end against
+  the real turmeric-spices json/encode derive-json (compiles, links, and runs:
+  an `Event { cmd : Cmd }` round-trips `{"id":7,"cmd":{"Quit":{}}}`). See
+  "Resolution" below.
+---
+
+## Resolution (2026-06-21)
+
+Fixed and verified against the real `json/encode` derive-json (the
+turmeric-spices sibling was cloned into the environment; `yyjson` built; the
+emitted C compiles, links, and runs correctly -- `(decode doc root) : (Result
+Event cstr)` over `{"id":7,"cmd":{"Quit":{}}}` yields `ok`).
+
+Root cause was NOT in `emit_reresolve_disp_type` (the decode call is
+return-dispatched and carries NO dict_arg, so the re-resolver early-returns).
+The field decode `(:: (decode doc val) (Result Cmd cstr))` carries its class var
+in `call->type` (`(Result a cstr)`); inside the enclosing `Decode [Event]` spec,
+the result-recovery heuristics in `emit_abi_register_call` (the
+`family_elem_rehydrated` / return-tyvar recovery) ground that class var to the
+ENCLOSING element, so the call interned + recorded at `decode_T__spec__Result__
+Event` -- an ill-typed sibling whose body is actually the `Cmd` decode (it
+returns `Result__Cmd` from a `Result__Event` signature).
+
+Fix (`emit_module.c`): when scanning an `EX_ASCRIBE` whose inner is a
+return-polymorphic (result mentions a tyvar), dict-less global call with a
+CONCRETE result ascription, register that call with the ascription's concrete
+result as the `result_type_override` -- and *instead of* the plain inner scan,
+so the correct (and only the correct) spec is interned + recorded. The two
+result-recovery blocks in `emit_abi_register_call` now also bail when a
+`result_type_override` is supplied, so the ascription's concrete result is not
+clobbered back to the enclosing element. The `.cmd` field now decodes via
+`decode_T__spec__Result__Cmd` (type-consistent with its `ok_val__spec__...
+Result__Cmd` wrapper).
+
+Suite green (1744/0). The promotable fixture is a `json` spice test (a
+`derive-json` struct with a `defdata`-sum field, round-tripped) -- it lives in
+the turmeric-spices repo, not the turmeric compiler suite (it needs yyjson).
+
 ---
 
 # A `defdata` sum struct field decodes to the wrong instance

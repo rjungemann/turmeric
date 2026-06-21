@@ -2127,7 +2127,8 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * return-tyvar mapping + spec composition resolved to the concrete
      * type, e.g. A -> Pos).  Without this the result ABI change is invisible
      * and the call stays on the carrier, miscompiling a struct result. */
-    if (fn_binding->type.as.fn.result_kind == TY_TYVAR &&
+    if (!result_type_override &&
+        fn_binding->type.as.fn.result_kind == TY_TYVAR &&
         generic_result.kind == TY_TYVAR &&
         (result_type.kind == TY_TYVAR || result_type.kind == TY_INT) &&
         bindings && n_bindings > 0) {
@@ -2145,8 +2146,8 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * instantiating the callee's DECLARED result (`(Cons A)`) through the
      * re-hydrated bindings, so a `tcons-of`/self-call spec returns `Cons__cstr *`
      * rather than `Cons__int *` (the warning the partial recovery left). */
-    if (family_elem_rehydrated && generic_result.kind == TY_APP &&
-        bindings && n_bindings > 0) {
+    if (!result_type_override && family_elem_rehydrated &&
+        generic_result.kind == TY_APP && bindings && n_bindings > 0) {
         Type recovered = emit_abi_instantiate_type(
             &generic_result, bindings, n_bindings, ctx->type_arena);
         if (type_has_concrete_codegen_layout(&recovered))
@@ -2883,9 +2884,55 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
         case EX_RETURN:
             emit_abi_scan_expr(ctx, e->as.return_.value, items, n_items);
             break;
-        case EX_ASCRIBE:
-            emit_abi_scan_expr(ctx, e->as.ascribe_.inner, items, n_items);
+        case EX_ASCRIBE: {
+            const Expr *inner = e->as.ascribe_.inner;
+            /* G7: a return-dispatched generic call wrapped in a CONCRETE result
+             * ascription -- `(:: (decode doc val) (Result Cmd cstr))` for
+             * `(decode ... : (Result a cstr))` -- carries its class var in
+             * `call->type` (`(Result a cstr)`).  Inside an enclosing instance
+             * spec, the result-recovery grounds that class var to the ENCLOSING
+             * element (`Result__Event`), so a plain scan would intern/record the
+             * call at the wrong sibling spec (an ill-typed `decode_T__spec__
+             * Result__Event` whose body is actually the field type's decode).
+             * Register the call with the ascription's concrete result as the
+             * override so the right (and only the right) spec is interned and
+             * recorded, then scan the call's args; skip the plain inner scan that
+             * would otherwise intern the wrong-element sibling.  Gated tightly:
+             * only inside a spec, a dict-less global call whose declared result
+             * is return-polymorphic (mentions a tyvar), with a concrete
+             * ascription. */
+            bool g7_override =
+                ctx->current_abi_specialization && inner &&
+                inner->kind == EX_CALL && inner->as.call_.fn_binding &&
+                !inner->as.call_.fn_expr && inner->as.call_.dict_arg == NULL &&
+                inner->as.call_.fn_binding->type.kind == TY_FN &&
+                inner->as.call_.fn_binding->type.as.fn.result_full_type &&
+                emit_abi_type_has_named_tyvar(
+                    inner->as.call_.fn_binding->type.as.fn.result_full_type) &&
+                type_has_concrete_codegen_layout(&e->type) &&
+                !emit_abi_type_has_concrete_named_tyvar(&e->type);
+            if (g7_override) {
+                uint32_t before = ctx->n_specialized_calls;
+                emit_abi_register_call(ctx, inner, items, n_items, &e->type);
+                if (!inner->as.call_.fn_expr && inner->as.call_.fn_binding &&
+                    ctx->n_specialized_calls == before &&
+                    !emit_abi_call_is_generic_relay(ctx, inner, items, n_items)) {
+                    emit_abi_note_carrier_call(ctx, inner->as.call_.fn_binding);
+                }
+                if (ctx->current_abi_specialization) {
+                    emit_abi_scan_fn_values(ctx, inner,
+                        ctx->current_abi_specialization->bindings,
+                        ctx->current_abi_specialization->n_bindings,
+                        items, n_items);
+                }
+                for (uint32_t i = 0; i < inner->as.call_.n_args; i++)
+                    emit_abi_scan_expr(ctx, inner->as.call_.args[i], items, n_items);
+                emit_abi_scan_expr(ctx, inner->as.call_.fn_expr, items, n_items);
+            } else {
+                emit_abi_scan_expr(ctx, inner, items, n_items);
+            }
             break;
+        }
         case EX_CAST:
             emit_abi_scan_expr(ctx, e->as.cast_.expr, items, n_items);
             break;

@@ -10,17 +10,31 @@ severity: Medium-high. Two codegen sites still assume the pre-#482
   `T` when `T` embeds an `Option` field (hard C error: "unknown type name 'T'"
   + ok_val type cascade). Blocks `derive-json` over structs with `(Option T)`
   fields in rjungemann/turmeric-spices spices/json.
-status: OPEN pending spice verification -- BOTH SITES FIXED IN SELF-CONTAINED
-  REPROS on branch claude/g2-carrier-concrete-abi-audit-3yzkhm. Site 1 closed by
-  the G9 fix (`field_read_emits_byvalue_aggregate`); Site 2 closed by a
-  forward-typedef fix (`emit_registered_struct_app_rec`, fixture
-  tests/fixtures/result-over-struct-with-option-field-typedef-order). Kept open
-  only until the exact `json/encode` derive-json path is confirmed against the
-  turmeric-spices sibling (absent in this checkout), since the maintainer filed
-  it there. Found 2026-06-21 as a follow-up to #482. See "Status update" below.
+status: RESOLVED 2026-06-21 (gap G5) -- BOTH SITES FIXED on branch
+  claude/g2-carrier-concrete-abi-audit-3yzkhm and VERIFIED end-to-end against the
+  real turmeric-spices `json/encode` derive-json (the sibling was cloned into the
+  environment and yyjson built; the emitted C compiles, links, and runs -- a
+  `User { id : int  nick : (Option cstr) }` round-trips `{"id":7,"nick":"al"}`).
+  Site 1 closed by the G9 fix (`field_read_emits_byvalue_aggregate`); Site 2
+  closed by a forward-typedef fix (`emit_registered_struct_app_rec`, fixture
+  tests/fixtures/result-over-struct-with-option-field-typedef-order). Found
+  2026-06-21 as a follow-up to #482. See "Status update" below.
 ---
 
-## Status update (2026-06-21) -- Site 1 likely resolved by the G9 fix
+## Resolution (2026-06-21) -- BOTH SITES verified against real derive-json
+
+Both sites are fixed and the whole `derive-json`-over-`(Option T)` path was
+verified end-to-end against the real `json/encode` derive-json (the
+turmeric-spices sibling was cloned into the environment, yyjson built): a
+`User { id : int  nick : (Option cstr) }` derive-json round-trips
+`{"id":7,"nick":"al"}` -- the emitted C compiles under `-std=c99 -Wall`, links
+against `libturi.a` + yyjson, and runs correctly. Site 1 (the
+`tur_option_t *` reconstruction on a field-read Option passed into `encode`) is
+gone; Site 2 (the `Result__User` / `User` typedef ordering) resolves via the
+forward typedef. Suite green (1744/0). The promotable round-trip fixture lives
+in the turmeric-spices repo (it needs yyjson), not this compiler suite.
+
+### Status update (2026-06-21) -- Site 1 resolved by the G9 fix
 
 Site 1's defect is the stale `tur_option_t *` reconstruction inserted when an
 `Option` value read from a struct field is passed to a typeclass method. The G9
