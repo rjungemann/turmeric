@@ -64,9 +64,15 @@ The gaps map cleanly onto the two sides:
 
 | Side | Routine | Gaps |
 |---|---|---|
-| Value | `emit_var_spec_arg_type` | G5 (Option field read / type ordering), G4 (consumer-side cons walk) |
-| Dispatch | `emit_reresolve_disp_type` | G2 (nested parametric element), G3 (struct-field receiver), G7 (sum-typed field instance selection) |
+| Value | `emit_var_spec_arg_type` / call-site materialization (`expr_emits_byvalue_carrier_abi` + `emit_carrier_bridge`) | G5 (Option field read / type ordering), G4 (consumer-side cons walk), **G3 DONE** (by-value field-read receiver bridged to the carrier at the call site) |
+| Dispatch | `emit_reresolve_disp_type` | **G2 DONE** (nested parametric element), G7 (sum-typed field instance selection), G9 (witness-side mirror of G2) |
 | Fn-value | (new, parallel axis) | G6 (closure-thunk per carrier + cata result) |
+
+(G3 landed on the value/materialization side, not the dispatch re-resolver: the
+instance method kept its uniform carrier ABI and the by-value field-read
+*receiver* was bridged to the carrier at the call site -- the same path a
+by-value local already used. G10, the applied-struct instance-selection
+conflation, is a keying/mangling defect outside both chokepoints.)
 
 G6 reveals a **third axis** the audit's value-centric framing missed: function
 pointer / closure-thunk ABI. It needs its own chokepoint (the

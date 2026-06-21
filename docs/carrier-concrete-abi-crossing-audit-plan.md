@@ -103,18 +103,20 @@ constrained/parametric/HKT spec body and must consult the recovery routine.
 | 9 | `emit_core.c:1308` | scan-time liveness companion | `emit_reresolve_method_fndef` | [OK] | #480 |
 | ~~G1~~ | `emit_stmt.c` `EX_CALL` | `(list ...)` homogeneity helper `tur-list-homog__` dead call elided for by-value aggregate args | n/a (elide) | **[FIXED]** | this branch |
 | ~~G2~~ | site 8, recursive case | method dispatch where the receiver element is **itself a parametric container** (`(.value x) : (Cons A)`): mint the inner instance's by-value spec + route to it | `emit_reresolve_disp_type` + `emit_abi_try_nested_instance_dispatch_redirect` | **[FIXED]** | this branch |
-| **G3** | `elab_typeclasses.c` instance-method ABI vs site 6 | instance method whose HEAD is a by-value applied struct (`Enc [(Option cstr)]`) takes the carrier param, but a by-value struct-**field** receiver passes the aggregate | none | **[GAP]** | -- |
+| ~~G3~~ | `emit_expr.c` `expr_emits_byvalue_carrier_abi` vs site 6 | instance method whose HEAD is a by-value applied struct (`Enc [(Option cstr)]`) takes the carrier param, but a by-value struct-**field** receiver passed the aggregate -- now bridged (spill + address-of) like a local | `expr_emits_byvalue_carrier_abi` (EX_GET_FIELD) + `emit_carrier_bridge` | **[FIXED]** | this branch |
 | **G4** | int-carrier list helpers (`list-length`, ...) vs `(:: xs :int)` coercion | generic carrier walk of a `:heap` `Cons` whose head is a **by-value aggregate** reads `tail` at the wrong offset and **segfaults** (consumer side of G1) | none | **[GAP]** | -- |
 | **G5** | `Option`'s legacy `tur_option_t` special-casing vs #482 | (S1) a struct-field-read `Option` passed to a typeclass method inserts a stale `tur_option_t *`->aggregate reconstruction (`Option` only; `Pair` is the working control); (S2) `Result__T` typedef emitted before `T` once `T` embeds an `(Option ...)` field | none | **[GAP]** | -- |
 | **G6** | HKT `fmap` closure-thunk + cata result (fn-value spec path) | a generic `cata = alg . fmap (cata alg) . unroll` monomorphizes the recursive closure handed to `fmap` with the wrong per-carrier thunk fn-pointer ABI (cstr -> segfault) and threads the `(:: (fmap ...) (ReF B))` result through the int64 carrier (int/bool -> boxed, wrong `=`) | none | **[GAP]** | -- |
 | **G7** | site 8, return/decode side, sum field | a `defdata`-sum struct field's `(decode ... (Result Cmd cstr))` dispatches to the generic `decode_T` at the ENCLOSING struct's result type instead of the field's `Decode [Cmd]` instance (struct fields resolve right; ADT heads do not) | partial | **[GAP]** | -- |
 | **G9** | witness-side, parametric-container element | the MIRROR of G2: a single-level `Enc [Cons]` whose element is itself a parametric container (`(Cons (Option int))`) collapses the element to `int` at the witness (spec named `..._Cons__int`, not `..._Cons__Option__int`) and dispatches the by-value `(.head xs)` on the carrier representative | none | **[GAP]** | -- |
+| **G10** | instance selection, applied-struct heads | two instances of one class over applied structs differing only in the element (`Enc [(Option cstr)]` vs `Enc [(Option int)]`) conflate -- the selection key drops the element, so dispatch always runs the last-defined instance (NOT an ABI bug; instance keying) | none | **[GAP]** | -- |
 
 Sites 1-9 are the fish already caught. **G1, G2, G3, and G4 are the gaps the
-composition stress matrix exposed** (section 5); **G1 and G2 are now closed**
-(this branch). **G5** is a #482 follow-up filed by the maintainer
+composition stress matrix exposed** (section 5); **G1, G2, and G3 are now
+closed** (this branch). **G5** is a #482 follow-up filed by the maintainer
 (Option-specific residual special-casing, two codegen sites); **G9** is the
-witness-side mirror of G2, found while closing it. G3 was filed independently on
+witness-side mirror of G2 and **G10** the applied-struct instance-selection
+conflation, both found while closing G2/G3. G3 was filed independently on
 `main` by the maintainer (`docs/reported/instance-method-byvalue-struct-field-receiver-abi-mismatch.md`,
 #482-era) -- same family, same fix direction; it is the single-level
 struct-field-receiver companion of G2's nested-container dispatch, and the two
@@ -222,26 +224,38 @@ nesting `(Cons (Option A))`, where a single-level `Enc [Cons]` collapses its
 parametric-container element at the witness -- tracked as gap G9
 (`docs/reported/constrained-instance-dispatch-parametric-container-element-collapse.md`).
 
-### G3 -- `Enc [(Option cstr)]` over a struct field: instance-method param stays at the carrier (maintainer-filed on `main`)
+### G3 -- `Enc [(Option cstr)]` over a struct field: instance-method param stays at the carrier (maintainer-filed on `main`) -- **FIXED (this branch)**
 
 Independently surfaced by the maintainer on `main` (PR #482 era) and filed at
-`docs/reported/instance-method-byvalue-struct-field-receiver-abi-mismatch.md`.
+`docs/archive/instance-method-byvalue-struct-field-receiver-abi-mismatch.md`.
 An instance whose head is a by-value applied struct (`Enc [(Option cstr)]`)
 emits its method with the int64 carrier param (`enc(int64_t)`); dispatch over a
 *local* works, but after the #482 field-layout fix a by-value struct **field**
-read (`(.nick r) : Option__cstr`) passes the real aggregate, so:
+read (`(.nick r) : Option__cstr`) passed the real aggregate, so:
 
 ```
 error: incompatible type for argument 1 of '__inst_Enc_enc_Option_cstr'
 note: expected 'int64_t' but argument is of type 'Option__cstr'
 ```
 
-Verified still-open against a fresh `origin/main` build (2026-06-21). This is
-the **single-level struct-field-receiver** companion of G2's nested-container
-dispatch -- same carrier-vs-byvalue defect on the instance-method-receiver ABI
-side, same fix direction (emit the method with the concrete by-value parameter,
-monomorphized per type, and bridge carrier-ABI call sites). Closes with G2
-under P2.
+**Fix (option 2 -- bridge the call site, not the method signature):**
+`expr_emits_byvalue_carrier_abi` (`emit_expr.c`) now recognizes a by-value
+(non-`:heap`) aggregate **field read** as a by-value carrier producer, so the
+existing `emit_carrier_bridge` spills it to a temp and passes
+`(int64_t)(intptr_t)(&tmp)` -- exactly what a by-value *local* of the same type
+already did. The instance method keeps its uniform carrier ABI (so the dict slot
+is unchanged); only the call-site materialization is bridged. A `:heap` field
+stays the int64 pointer. The residual `-Wint-conversion` the report noted is
+also gone. Fixture
+`tests/fixtures/instance-method-byvalue-struct-field-receiver`. Suite green
+(1741/0).
+
+Resolved report archived at
+`docs/archive/instance-method-byvalue-struct-field-receiver-abi-mismatch.md`.
+Writing the fixture surfaced a distinct, still-open neighbor -- two
+applied-struct instances of one class differing only in the element conflate at
+dispatch -- tracked as gap G10
+(`docs/reported/multiple-applied-struct-instances-same-class-conflate.md`).
 
 ### G4 -- `(Cons (Option int))` consumed via the int-carrier list API: segfault (consumer side of G1)
 
@@ -378,6 +392,31 @@ neither caused nor fixed it. It needs the value-side chokepoint
 witness binding, then the same dispatch redirect G2 added, one level in. Filed:
 `docs/reported/constrained-instance-dispatch-parametric-container-element-collapse.md`.
 
+### G10 -- two applied-struct instances of one class conflate (instance selection, not an ABI crossing)
+
+Surfaced while writing the G3 fixture. Defining `Enc [(Option cstr)]` **and**
+`Enc [(Option int)]` -- two instances of one class whose heads are applied
+structs sharing the constructor `Option` but differing in the element -- and
+dispatching on a concrete `(Option cstr)` vs `(Option int)` selects the **same**
+instance for both (the last defined wins):
+
+```turmeric
+(println (enc (:: (some "hi") (Option cstr))))   ;; want "s"
+(println (enc (:: (some 7)   (Option int))))     ;; want "i"
+;; output: i / i   -- both pick Enc [(Option int)]
+```
+
+Verified **pre-existing** (reproduces without the G3 fix). This is an
+instance-*selection* defect -- the selection key collapses the applied-struct
+head to its constructor and drops the element -- **not** a carrier<->concrete
+ABI/representation crossing. It is tracked here because it shares the
+applied-struct-instance-head surface with G3 (G3's fixture uses a single
+instance to dodge it), but its fix is in instance keying/mangling (likely the
+same root as
+`docs/reported/instance-suffix-mangler-tyvar-element-legacy-struct-token.md`),
+not in the carrier bridge. Filed:
+`docs/reported/multiple-applied-struct-instances-same-class-conflate.md`.
+
 ## 6. Plan (phased)
 
 ### P0 -- Audit (this document). DONE.
@@ -385,7 +424,7 @@ witness binding, then the same dispatch redirect G2 added, one level in. Filed:
 Crossing sites enumerated, shared recovery routine named, gaps G1/G2 found
 and filed (plus G3 and G5, filed independently as #482 follow-ups). This
 converts the open surface from "unknown number of fish" to a **closeable
-list**. **G1 and G2 are now closed** (this branch); G3/G4/G5/G6/G7/G9 remain
+list**. **G1, G2, and G3 are now closed** (this branch); G4/G5/G6/G7/G9/G10 remain
 and are tracked as table rows under P2 (G4 is the consumer-side crossing that
 closing G1 exposed; G5 is the Option-specific residual special-casing #482 left
 stale; G6 is the HKT `fmap` closure-thunk/cata-result crossing on the fn-value
@@ -412,7 +451,7 @@ remaining nested cells are added as each gap closes -- a fixture is only
 committed once it PASSES, so the gate stays green (per CLAUDE.md). The minimal
 repros live in the reported docs until then.
 
-### P2 -- Route the remaining sites through the shared recovery (close G3-G9)
+### P2 -- Route the remaining sites through the shared recovery (close G4-G10)
 
 Each gap closes by *adding to a chokepoint* per
 [docs/carrier-crossing-recovery-routing-plan.md](carrier-crossing-recovery-routing-plan.md),
@@ -440,12 +479,13 @@ not by adding another site-local gated branch.
   now matches a bare type-constructor instance head against the applied type so
   the FnDef lookup agrees with the name resolver. See the FIXED row + the G2
   result subsection.
-- **G3** (maintainer-filed,
-  `docs/reported/instance-method-byvalue-struct-field-receiver-abi-mismatch.md`):
-  the single-level form of the same dispatch-ABI fix -- emit the instance
-  method for a by-value applied-struct head with the concrete by-value
-  parameter (`Option__cstr x`) and bridge carrier-ABI call sites (locals) into
-  the aggregate. Same code change as G2, minus the recursion; do them together.
+- **G3**: DONE (this branch). Rather than re-emit the instance method with a
+  by-value parameter (which would break the uniform-carrier dict slot), the
+  call-site bridge was extended: `expr_emits_byvalue_carrier_abi`
+  (`emit_expr.c`) recognizes a by-value aggregate field read, so
+  `emit_carrier_bridge` spills it and passes its address into the method's
+  carrier parameter -- the same path a by-value local already used. See the
+  FIXED row + the G3 result subsection.
 - **G5** (maintainer-filed,
   `docs/reported/option-tur-option-special-casing-stale-post-482.md`): retire
   `Option`'s residual `tur_option_t` special-casing. Site 1 -- lower a
@@ -485,6 +525,15 @@ not by adding another site-local gated branch.
   witness binding (so the cell is `Cons__Option__int`) plus the same G2 dispatch
   redirect one level in. Distinct from G2 (which routes when the *instance body*
   dispatches on a parametric container, not when the *witness* mints the spec).
+- **G10** (instance selection, NOT an ABI crossing,
+  `docs/reported/multiple-applied-struct-instances-same-class-conflate.md`):
+  two instances of one class over applied structs differing only in the element
+  conflate at dispatch. Fix is in instance keying/mangling (include the element
+  type in the selection key / dict-singleton name), likely the same root as
+  `docs/reported/instance-suffix-mangler-tyvar-element-legacy-struct-token.md`.
+  Tracked alongside the audit because it surfaced writing the G3 fixture and
+  shares the applied-struct-instance-head surface, but it is an instance-
+  *selection* defect, not a carrier bridge.
 
 ### P3 -- Audit-as-regression-guard
 

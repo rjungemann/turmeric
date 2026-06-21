@@ -326,6 +326,16 @@ static bool expr_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
         return fn_body_tail_emits_byvalue_carrier_abi(ctx, e);
     if (!type_uses_carrier_abi(e->type)) return false;
     if (e->kind == EX_MAKE_STRUCT) return true;
+    /* G3 (instance-method by-value struct-field receiver): post-#482 a by-value
+     * (non-heap) parametric struct FIELD -- e.g. an `(Option cstr)` field --
+     * reads back as the embedded aggregate (`Option__cstr`), not the int64
+     * carrier handle.  Passing it to a carrier-ABI dispatch needs the same
+     * spill-and-address bridge a by-value local gets.  A `:heap` field (Cons,
+     * Vec) is still carried as the int64 pointer, so it is excluded. */
+    if (e->kind == EX_GET_FIELD) {
+        Type ft = emit_resolve_type(ctx, e->type);
+        return !type_is_heap_struct(ft) && type_has_concrete_codegen_layout(&ft);
+    }
     if (e->kind == EX_VAR)
         return e->as.var.binding && e->as.var.binding->emit_byvalue_carrier_abi;
     if (e->kind == EX_CALL) {
