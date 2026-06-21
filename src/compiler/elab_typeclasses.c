@@ -4438,6 +4438,53 @@ Expr *elab_method_call(Elab *e, const Form *call) {
             out_w->as.call_.args       = call_args_w;
             out_w->as.call_.n_args     = n_args_w + 1;
             out_w->as.call_.dict_arg   = dict_w;
+            /* heap-struct-field-extraction-collapses-to-carrier: a `@TypeName`
+             * witness call pins the instance but never recorded abi_bindings, so
+             * emit_abi_register_call had nothing to specialize and the call fell
+             * through to the int64-carrier base clone.  For a :heap container
+             * (`(Cons int)`) that base clone derefs `(xs)->head` on the int64
+             * carrier -- a hard C compile error -- and bakes the int element
+             * instance for every A.  Mirror the receiver-dispatch path's M4c
+             * Path A binding population (elab_method_call below, ~line 5627):
+             * bind the class var to the witness receiver's concrete type and the
+             * instance head's own tyvars (the constraint var `A`) to the
+             * receiver's element types, so a per-instantiation by-value/heap spec
+             * is minted and the inner `(enc (.head xs))` re-dispatches per
+             * element.  HKT classes keep the uniform-carrier dispatch. */
+            if (witness_inst && witness_inst->typeclass &&
+                out_w->as.call_.fn_binding != NULL) {
+                TypeClass *wtc = witness_inst->typeclass;
+                bool w_is_hkt = false;
+                if (wtc->type_param_kinds) {
+                    for (uint8_t i = 0; i < wtc->n_type_params; i++)
+                        if (wtc->type_param_kinds[i] != KIND_STAR) { w_is_hkt = true; break; }
+                }
+                bool recv_parametric =
+                    obj_w->type.kind == TY_APP ||
+                    (obj_w->type.kind == TY_STRUCT && obj_w->type.as.struct_.def &&
+                     obj_w->type.as.struct_.def->n_type_params > 0);
+                if (!w_is_hkt && wtc->n_type_params == 1 && wtc->type_params[0] &&
+                    recv_parametric) {
+                    const Symbol *hb_names[ABI_TYPE_BINDINGS_MAX];
+                    Type hb_types[ABI_TYPE_BINDINGS_MAX];
+                    uint8_t hb_n = 0;
+                    if (witness_inst->n_type_args >= 1)
+                        m7_collect_tyvar_bindings(e, witness_inst->type_args[0],
+                                                  obj_w->type, hb_names, hb_types,
+                                                  &hb_n, ABI_TYPE_BINDINGS_MAX - 1);
+                    uint8_t total = (uint8_t)(1 + hb_n);
+                    AbiTypeBinding *bindings = (AbiTypeBinding *)arena_alloc(
+                        e->arena, total * sizeof(AbiTypeBinding));
+                    bindings[0].name = wtc->type_params[0]->name;
+                    bindings[0].type = obj_w->type;
+                    for (uint8_t k = 0; k < hb_n; k++) {
+                        bindings[1 + k].name = hb_names[k]->name;
+                        bindings[1 + k].type = hb_types[k];
+                    }
+                    out_w->as.call_.abi_bindings = bindings;
+                    out_w->as.call_.n_abi_bindings = total;
+                }
+            }
             return out_w;
 
         } else if (any_inst_for_method) {

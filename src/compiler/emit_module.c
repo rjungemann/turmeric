@@ -1254,6 +1254,35 @@ static bool body_has_dispatch_on_app_tyvar(
                 }
             }
         }
+        /* heap-struct-field-extraction-collapses-to-carrier: the dispatch
+         * receiver may be a field extraction `(.head xs)` from a parametric
+         * (often :heap) container whose element type was erased to the int64
+         * carrier at elaboration -- e.g. `(enc (.head xs))` in the body of
+         * `(definstance Enc [Cons] [(Enc A)] ...)`.  The receiver's own type is
+         * the carrier (TY_INT), so the bare-TY_TYVAR check above never fires,
+         * and because a :heap container carries as int64 regardless of element
+         * type the C ABI looks unchanged (`abi_changes` stays false).  Detect
+         * the container being a class-var param bound to a concrete TY_APP so a
+         * per-element spec is interned -- without it the carrier base clone
+         * bakes in the int representative (`__inst_Enc_enc_int`) and derefs the
+         * head at the wrong ABI for every other element type.  The companion
+         * #475 re-resolver (emit_reresolve_method_call) then re-dispatches the
+         * inner call inside the minted spec. */
+        if (recv && recv->kind == EX_GET_FIELD &&
+            recv->as.get_field_.struct_expr) {
+            const Expr *cont = recv->as.get_field_.struct_expr;
+            while (cont && cont->kind == EX_ASCRIBE)
+                cont = cont->as.ascribe_.inner;
+            if (cont && cont->type.kind == TY_TYVAR && cont->type.as.tyvar_.name) {
+                for (uint8_t i = 0; i < n_bindings; i++) {
+                    if (bindings[i].name &&
+                        strcmp(bindings[i].name, cont->type.as.tyvar_.name) == 0 &&
+                        bindings[i].type.kind == TY_APP) {
+                        return true;
+                    }
+                }
+            }
+        }
     }
     switch (e->kind) {
         case EX_PROGRAM:
