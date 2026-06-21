@@ -7,9 +7,34 @@ severity: Medium. Defining `Enc [(Option cstr)]` and `Enc [(Option int)]`
   SAME instance for both (the last-defined wins) -- a silent misdispatch. A
   single applied-struct instance works (see gap G3). Not a carrier/ABI bug: the
   instance *selection* loses the element, so the wrong method body runs.
-status: OPEN -- found 2026-06-21 while writing the G3 fixture; verified
-  pre-existing (reproduces identically without the G3 fix). Tracked as gap G10
-  in docs/carrier-concrete-abi-crossing-audit-plan.md.
+status: RESOLVED 2026-06-21 (gap G10). Fixed on
+  branch claude/g2-carrier-concrete-abi-audit-3yzkhm; fixture
+  tests/fixtures/applied-struct-instance-element-discrimination. See
+  "Resolution" below.
+---
+
+## Resolution (2026-06-21)
+
+Fixed. The defect was NOT in `typeclass_env_lookup_instance` (the call's
+dispatch never routes through it) but in the **method-call instance selection**
+in `elab_typeclasses.c` (the `(.method obj)` / `(enc obj)` resolver). Its
+applied-head element-discrimination compared the receiver's and instance's first
+app arg, but only treated **TY_STRUCT / TY_ADT** elements as "concrete." A
+concrete **primitive** element (`cstr` vs `int`) failed that test, so the
+element difference was ignored and both `Enc [(Option cstr)]` and
+`Enc [(Option int)]` matched any `(Option X)` receiver -- the last-defined
+silently won.
+
+Fix: a new helper `typeclass_type_arg_concrete` treats a concrete primitive
+element (int/cstr/bool/float/...) as discriminating in addition to struct/ADT
+elements; a tyvar element stays a wildcard so parametric instances
+(`Enc [Option]`) still match any element. Two instances differing only in a
+primitive element are now told apart, for both local and struct-field receivers.
+
+`g3multi` now prints `s` / `i` (was `i` / `i`). Fixture
+`tests/fixtures/applied-struct-instance-element-discrimination` (locals + struct
+fields, both elements). Suite green (1743/0).
+
 ---
 
 # Applied-struct instances of one class keyed only by head constructor

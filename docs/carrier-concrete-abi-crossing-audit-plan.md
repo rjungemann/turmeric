@@ -109,16 +109,16 @@ constrained/parametric/HKT spec body and must consult the recovery routine.
 | **G6** | HKT `fmap` closure-thunk + cata result (fn-value spec path) | a generic `cata = alg . fmap (cata alg) . unroll`: (a) the int call grabbed a return-differentiated sibling (`bool`) spec -- **FIXED** (`emit_spec_result_mismatch`; int now correct, cstr no longer segfaults); (b) the recursive `fmap` closure is shared across carriers with the wrong sub-word thunk ABI -- **still open** (`bool` folds wrong) | spec-selection: `emit_spec_result_mismatch`; closure-thunk: open | **[PARTIAL]** | (a) this branch |
 | **G7** | site 8, return/decode side, sum field | a `defdata`-sum struct field's `(decode ... (Result Cmd cstr))` dispatches to the generic `decode_T` at the ENCLOSING struct's result type instead of the field's `Decode [Cmd]` instance (struct fields resolve right; ADT heads do not) | partial | **[GAP]** | -- |
 | ~~G9~~ | witness-side, parametric-container element | the MIRROR of G2: a single-level `Enc [Cons]` over `(Cons (Option int))`. G2 already minted the `Cons__Option__int` cell + inner Option by-value spec; the remaining defect was the dispatch arg `(.head xs)` (an embedded `Option__int`) reconstructed via a stale `tur_option_t *` carrier cast | `field_read_emits_byvalue_aggregate` (suppresses the spurious carrier->concrete bridge) | **[FIXED]** | this branch |
-| **G10** | instance selection, applied-struct heads | two instances of one class over applied structs differing only in the element (`Enc [(Option cstr)]` vs `Enc [(Option int)]`) conflate -- the selection key drops the element, so dispatch always runs the last-defined instance (NOT an ABI bug; instance keying) | none | **[GAP]** | -- |
+| ~~G10~~ | instance selection, applied-struct heads | two instances of one class over applied structs differing only in the element (`Enc [(Option cstr)]` vs `Enc [(Option int)]`) conflated -- the element-discrimination only treated struct/ADT elements as concrete, ignoring a primitive (cstr vs int) difference (NOT an ABI bug; instance keying) | `typeclass_type_arg_concrete` (primitive elements discriminate) | **[FIXED]** | this branch |
 
 Sites 1-9 are the fish already caught. **G1, G2, G3, and G4 are the gaps the
-composition stress matrix exposed** (section 5); **G1, G2, G3, G5, and G9 are
-now closed** (this branch; G5 closed in self-contained repros, pending real
-`json/encode` derive-json confirmation). **G5** is a #482 follow-up filed by the
-maintainer (Option-specific residual special-casing, two codegen sites, both
-fixed); **G9** is the witness-side mirror of G2 and **G10** the applied-struct
-instance-selection conflation, both found while closing G2/G3. G3 was filed
-independently on
+composition stress matrix exposed** (section 5); **G1, G2, G3, G5, G9, and G10
+are now closed** (this branch; G5 closed in self-contained repros, pending real
+`json/encode` derive-json confirmation; G6 spec-selection half closed). **G5**
+is a #482 follow-up filed by the maintainer (Option-specific residual
+special-casing, two codegen sites, both fixed); **G9** is the witness-side
+mirror of G2 and **G10** the applied-struct instance-selection conflation, both
+found while closing G2/G3 and now both fixed. G3 was filed independently on
 `main` by the maintainer (`docs/reported/instance-method-byvalue-struct-field-receiver-abi-mismatch.md`,
 #482-era) -- same family, same fix direction; it is the single-level
 struct-field-receiver companion of G2's nested-container dispatch, and the two
@@ -420,30 +420,33 @@ This is the **same `tur_option_t *`-reconstruction mechanism as G5 Site 1**, so
 that site is very likely closed too (self-contained repro passes; awaiting real
 `derive-json` verification).
 
-### G10 -- two applied-struct instances of one class conflate (instance selection, not an ABI crossing)
+### G10 -- two applied-struct instances of one class conflate (instance selection, not an ABI crossing) -- **FIXED (this branch)**
 
 Surfaced while writing the G3 fixture. Defining `Enc [(Option cstr)]` **and**
 `Enc [(Option int)]` -- two instances of one class whose heads are applied
 structs sharing the constructor `Option` but differing in the element -- and
-dispatching on a concrete `(Option cstr)` vs `(Option int)` selects the **same**
-instance for both (the last defined wins):
+dispatching on a concrete `(Option cstr)` vs `(Option int)` selected the
+**same** instance for both (the last defined won):
 
 ```turmeric
 (println (enc (:: (some "hi") (Option cstr))))   ;; want "s"
 (println (enc (:: (some 7)   (Option int))))     ;; want "i"
-;; output: i / i   -- both pick Enc [(Option int)]
+;; output (pre-fix): i / i   -- both pick Enc [(Option int)]
 ```
 
-Verified **pre-existing** (reproduces without the G3 fix). This is an
-instance-*selection* defect -- the selection key collapses the applied-struct
-head to its constructor and drops the element -- **not** a carrier<->concrete
-ABI/representation crossing. It is tracked here because it shares the
-applied-struct-instance-head surface with G3 (G3's fixture uses a single
-instance to dodge it), but its fix is in instance keying/mangling (likely the
-same root as
-`docs/reported/instance-suffix-mangler-tyvar-element-legacy-struct-token.md`),
-not in the carrier bridge. Filed:
-`docs/reported/multiple-applied-struct-instances-same-class-conflate.md`.
+**Fix:** the method-call instance selection in `elab_typeclasses.c` (NOT the
+`typeclass_env_lookup_instance` path, which this dispatch never reaches)
+discriminated applied-head elements but treated only **TY_STRUCT/TY_ADT** as
+concrete -- so a concrete **primitive** element (`cstr` vs `int`) was ignored
+and both instances matched. A new helper `typeclass_type_arg_concrete` now
+treats a concrete primitive element as discriminating too; a tyvar element stays
+a wildcard so parametric instances (`Enc [Option]`) still match any element.
+Output is now `s` / `i`. Fixture
+`tests/fixtures/applied-struct-instance-element-discrimination` (locals + struct
+fields). Suite green (1743/0). Resolved report archived at
+`docs/archive/multiple-applied-struct-instances-same-class-conflate.md`. This
+also lets the two-instance form of the G3 example (a `Rec` with both
+`(Option cstr)` and `(Option int)` fields) work end to end.
 
 ## 6. Plan (phased)
 
@@ -452,9 +455,10 @@ not in the carrier bridge. Filed:
 Crossing sites enumerated, shared recovery routine named, gaps G1/G2 found
 and filed (plus G3 and G5, filed independently as #482 follow-ups). This
 converts the open surface from "unknown number of fish" to a **closeable
-list**. **G1, G2, G3, G5, and G9 are now closed** (this branch; G5's two sites
-fixed in self-contained repros, awaiting real `json/encode` derive-json
-confirmation); G4/G6/G7/G10 remain
+list**. **G1, G2, G3, G5, G9, and G10 are now closed** (this branch; G5's two
+sites fixed in self-contained repros, awaiting real `json/encode` derive-json
+confirmation; **G6**'s spec-selection half is fixed, its closure-thunk half
+open); **G4, G6-closure-thunk, and G7** remain
 and are tracked as table rows under P2 (G4 is the consumer-side crossing that
 closing G1 exposed; G5 is the Option-specific residual special-casing #482 left
 stale; G6 is the HKT `fmap` closure-thunk/cata-result crossing on the fn-value
@@ -481,7 +485,7 @@ remaining nested cells are added as each gap closes -- a fixture is only
 committed once it PASSES, so the gate stays green (per CLAUDE.md). The minimal
 repros live in the reported docs until then.
 
-### P2 -- Route the remaining sites through the shared recovery (close G4, G6, G7, G10)
+### P2 -- Route the remaining sites through the shared recovery (close G4, G6-closure-thunk, G7)
 
 Each gap closes by *adding to a chokepoint* per
 [docs/carrier-crossing-recovery-routing-plan.md](carrier-crossing-recovery-routing-plan.md),
@@ -553,15 +557,11 @@ not by adding another site-local gated branch.
   `field_read_emits_byvalue_aggregate` (`emit_expr.c`) resolves the field type
   through the receiver's concrete type and suppresses that bridge -- the same
   mechanism that closes G5 Site 1. See the FIXED row + the G9 result subsection.
-- **G10** (instance selection, NOT an ABI crossing,
-  `docs/reported/multiple-applied-struct-instances-same-class-conflate.md`):
-  two instances of one class over applied structs differing only in the element
-  conflate at dispatch. Fix is in instance keying/mangling (include the element
-  type in the selection key / dict-singleton name), likely the same root as
-  `docs/reported/instance-suffix-mangler-tyvar-element-legacy-struct-token.md`.
-  Tracked alongside the audit because it surfaced writing the G3 fixture and
-  shares the applied-struct-instance-head surface, but it is an instance-
-  *selection* defect, not a carrier bridge.
+- **G10**: DONE (this branch). The method-call instance selection
+  (`elab_typeclasses.c`) now discriminates on a concrete PRIMITIVE element, not
+  only struct/ADT (`typeclass_type_arg_concrete`), so `Enc [(Option cstr)]` and
+  `Enc [(Option int)]` are no longer conflated. A tyvar element stays a wildcard
+  for parametric instances. See the FIXED row + the G10 result subsection.
 
 ### P3 -- Audit-as-regression-guard
 
@@ -595,28 +595,27 @@ Closed this branch, suite green at each step (final **1743 passed, 0 failed**):
 | G2 | FIXED | `constrained-instance-dispatch-nested-parametric-element` |
 | G3 | FIXED | `instance-method-byvalue-struct-field-receiver` |
 | G5 | FIXED* (both sites, self-contained; awaiting real `json/encode`) | `result-over-struct-with-option-field-typedef-order` (+ G9 fixture for S1) |
+| G6 | PARTIAL (spec-selection fixed; closure-thunk open) | -- |
 | G9 | FIXED | `constrained-instance-dispatch-parametric-container-element` |
+| G10 | FIXED | `applied-struct-instance-element-discrimination` |
 
-Found while closing the above (filed, sequenced): **G9** (mirror of G2),
-**G10** (applied-struct instance-selection conflation -- an instance-keying
+Found while closing the above (filed, sequenced, then closed): **G9** (mirror of
+G2), **G10** (applied-struct instance-selection conflation -- an instance-keying
 defect, not a carrier crossing).
 
-**Still open**, each a substantial separately-reviewable change and two
-needing the absent turmeric-spices sibling to verify:
+**Still open**:
 
 - **G4** -- generic int-carrier list helpers over a by-value-aggregate-headed
   `:heap` cons. No small safe fix (box the head -> changes the typed-path
   layout; or monomorphize the list helpers per element -> large). Carrier-family.
-- **G6** -- HKT `fmap` closure-thunk per-carrier ABI + boxed cata result.
-  **PARTIAL:** the spec-selection half is fixed (`emit_spec_result_mismatch` --
-  return-differentiated sibling specs no longer mis-resolve; the int case is no
-  longer a silent miscompile and the cstr case no longer segfaults). The
-  remaining closure-thunk half (the sub-word `bool` recursive closure shared
-  across carriers) is a deep fn-value/closure-specialization change and stays
-  open (`null-alg` folds to false).
+- **G6 (remaining half)** -- the HKT `fmap` closure-thunk per-carrier ABI. The
+  spec-selection half is FIXED (int no longer miscompiles, cstr no longer
+  segfaults); the recursive `fmap` closure is still lifted to a single
+  int64-returning C function shared across carriers, so a sub-word `bool`
+  recursive closure folds wrong. Closing it means generalizing the
+  inner-closure-spec machinery (today only for closure-*returning* defns) to
+  *passed* closures -- a deep closure-lifting change.
 - **G7** -- `defdata`-sum struct field decodes to the wrong instance. The
   single-level return-dispatch-on-ADT case already works; the bug needs the
-  nested `derive-json` Decode-body structure (in the absent spice).
-- **G10** -- applied-struct instance heads drop the element at instance
-  *registration*, so the lookup cannot distinguish `Enc [(Option cstr)]` from
-  `Enc [(Option int)]`. A deep elaboration (instance-keying) change.
+  nested `derive-json` Decode-body structure (in the absent turmeric-spices
+  sibling), so it cannot be reproduced or verified in this checkout.
