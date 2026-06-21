@@ -1646,6 +1646,82 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * matters; absence of bindings means there is nothing to specialize. */
     const AbiTypeBinding *bindings = call->as.call_.abi_bindings;
     uint8_t n_bindings = call->as.call_.n_abi_bindings;
+
+    /* constrained-defn-monomorphize: a constrained generic defn whose RETURN type
+     * is a parametric container -- `(defn rec [A] [(C A)] ... : (Cons A) ...
+     * (tcons-of <elem> (rec ...)))`, and a wrapper `(defn wrap [A] [(C A)] ...
+     * : (Cons A) (rec ...))` -- builds/forwards the container inside its own spec
+     * body.  Elab loses the element type for the inner generic calls (the result
+     * is return-only-polymorphic, or the head came through a bare-tyvar accessor
+     * like `ok-val` whose result collapses to the int64 carrier), leaving the
+     * `(Cons cstr)` spec body building `Cons__int`.  Recover the element from the
+     * ENCLOSING spec, which already knows it (it dispatches `one` to the cstr
+     * instance):
+     *   1. The callee's declared result is the SAME parametric family the active
+     *      spec returns (`(Cons A)` vs `(Cons cstr)`) and elab left this call with
+     *      NO bindings (return-only-poly self-call / wrapper forward).  Synthesize
+     *      `{A -> cstr}` from the spec's result element.
+     *   2. The call HAS bindings but a tyvar's TYPE collapsed to the carrier while
+     *      its NAME survives (`tcons-of`'s head `A=int64_t`).  Re-hydrate by name
+     *      from the active spec's concrete binding for that name.
+     * Both key on the active spec's element (its result family / tyvar names), so
+     * a genuinely-different element elsewhere in the body is untouched. */
+    AbiTypeBinding rehydrated[ABI_TYPE_BINDINGS_MAX];
+    bool family_elem_rehydrated = false;
+    if (ctx->current_abi_specialization &&
+        ctx->current_abi_specialization->n_bindings > 0) {
+        const EmitAbiSpecialization *aspec = ctx->current_abi_specialization;
+        if (!bindings || n_bindings == 0) {
+            /* (1) family recovery from the spec's parametric result. */
+            Binding *cb = call->as.call_.fn_binding;
+            Type spec_res = aspec->result_type;
+            Type callee_res = (cb && cb->type.kind == TY_FN &&
+                               cb->type.as.fn.result_full_type)
+                ? *cb->type.as.fn.result_full_type
+                : type_simple(TY_UNKNOWN, CK_COPY);
+            StructDef *sd1 = NULL, *sd2 = NULL;
+            Type e1[16], e2[16];
+            uint8_t n1 = 0, n2 = 0;
+            if (type_extract_struct_app(&spec_res, &sd1, e1, &n1) &&
+                type_extract_struct_app(&callee_res, &sd2, e2, &n2) &&
+                sd1 && sd1 == sd2 && n1 == n2 && n1 > 0) {
+                uint8_t nb = 0;
+                for (uint8_t k = 0; k < n1 && nb < ABI_TYPE_BINDINGS_MAX; k++) {
+                    if (e2[k].kind == TY_TYVAR && e2[k].as.tyvar_.name &&
+                        type_has_concrete_codegen_layout(&e1[k])) {
+                        rehydrated[nb].name = e2[k].as.tyvar_.name;
+                        rehydrated[nb].type = e1[k];
+                        nb++;
+                    }
+                }
+                if (nb > 0) {
+                    bindings = rehydrated;
+                    n_bindings = nb;
+                    family_elem_rehydrated = true;
+                }
+            }
+        } else if (n_bindings <= ABI_TYPE_BINDINGS_MAX) {
+            /* (2) re-hydrate carrier-collapsed bindings by name. */
+            bool any = false;
+            for (uint8_t i = 0; i < n_bindings; i++) {
+                rehydrated[i] = bindings[i];
+                if (bindings[i].name &&
+                    strcmp(type_c_name(bindings[i].type), "int64_t") == 0) {
+                    for (uint8_t j = 0; j < aspec->n_bindings; j++) {
+                        if (aspec->bindings[j].name &&
+                            strcmp(aspec->bindings[j].name, bindings[i].name) == 0 &&
+                            strcmp(type_c_name(aspec->bindings[j].type), "int64_t") != 0) {
+                            rehydrated[i].type = aspec->bindings[j].type;
+                            any = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (any) { bindings = rehydrated; family_elem_rehydrated = true; }
+        }
+    }
+
     if (!bindings || n_bindings == 0) {
         /* M7 layer-4 (flag-gated): a 0-arg `#{Construct}` (`(none)`) in an HKT
          * instance-method body has no abi_bindings of its own, but when scanned
@@ -1939,6 +2015,20 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             !type_uses_carrier_abi(recovered)) {
             result_type = recovered;
         }
+    }
+    /* constrained-defn-monomorphize: when the call's element bindings were
+     * re-hydrated from the active spec (above), `call->type` was the elab-
+     * collapsed result (`(Cons int)`), so the `result_type` derived from it is
+     * still on the carrier element.  Recover the concrete result by
+     * instantiating the callee's DECLARED result (`(Cons A)`) through the
+     * re-hydrated bindings, so a `tcons-of`/self-call spec returns `Cons__cstr *`
+     * rather than `Cons__int *` (the warning the partial recovery left). */
+    if (family_elem_rehydrated && generic_result.kind == TY_APP &&
+        bindings && n_bindings > 0) {
+        Type recovered = emit_abi_instantiate_type(
+            &generic_result, bindings, n_bindings, ctx->type_arena);
+        if (type_has_concrete_codegen_layout(&recovered))
+            result_type = recovered;
     }
     if (strcmp(type_c_name(generic_result), type_c_name(result_type)) != 0) {
         abi_changes = true;

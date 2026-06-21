@@ -1,0 +1,36 @@
+;; constrained-defn-cons-return-monomorphize: a constrained, self-recursive
+;; generic defn whose RETURN type is a parametric heap container `(Cons A)` --
+;; the mirror of `Encode [Cons]`'s decode side -- must monomorphize per element
+;; type, so the recursive self-call, the return carrier, and the `tcons-of`
+;; constructor all agree on the element ABI. Before the fix the carrier base
+;; double-boxed the `(Cons A)` pointer (length-1 / garbage list) and the
+;; cstr/float specs kept building `Cons__int` internally.
+;;
+;; Regression for docs/archive/constrained-defn-cons-return-not-monomorphized.md.
+(defclass C [a] (one [i : int] : (Result a cstr)))
+(definstance C [int]   (one [i] (ok i)))
+(definstance C [cstr]  (one [i] (ok "v")))
+(definstance C [float] (one [i] (ok 2.5)))
+
+;; self-recursive constrained walk that builds a (Cons A)
+(defn rec [A] [(C A)] [i : int n : int] : (Cons A)
+  (if (>= i n) (:: (tnil) (Cons A))
+    (tcons-of (ok-val (:: (one i) (Result A cstr)))
+              (:: (rec (+ i 1) n) (Cons A)))))
+
+;; a constrained generic that WRAPS the walk (a public decode-list shape)
+(defn wrap [A] [(C A)] [n : int] : (Cons A) (rec 0 n))
+
+(defn main [] : int
+  ;; list-length over int / cstr / float, called directly
+  (println (list-length (:: (rec 0 3) (Cons int))))     ;; 3
+  (println (list-length (:: (rec 0 3) (Cons cstr))))    ;; 3
+  (println (list-length (:: (rec 0 5) (Cons float))))   ;; 5
+  ;; and through the one-level constrained wrapper
+  (println (list-length (:: (wrap 4) (Cons int))))      ;; 4
+  (println (list-length (:: (wrap 2) (Cons cstr))))     ;; 2
+  (println (list-length (:: (wrap 6) (Cons float))))    ;; 6
+  ;; thead recovers the element value with the right ABI
+  (println (thead (:: (rec 0 2) (Cons cstr))))          ;; v
+  (println (thead (:: (rec 0 2) (Cons float))))         ;; 2.5
+  0)
