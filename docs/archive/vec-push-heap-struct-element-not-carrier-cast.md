@@ -93,4 +93,5 @@ expression therefore stores an address into a stack temporary -- the inherent
 semantics of crossing a by-value aggregate through the heap-container carrier,
 not introduced by this fix. Within-scope use (the common case, and the fixture)
 is correct. A general lifetime fix (heap-promoting by-value aggregate elements)
-is out of scope here.
+is out of scope here and is tracked as an open finding:
+`docs/reported/vec-push-byvalue-aggregate-element-stores-dangling-stack-address.md`.
