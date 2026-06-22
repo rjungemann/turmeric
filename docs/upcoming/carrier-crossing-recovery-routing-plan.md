@@ -80,6 +80,14 @@ chokepoints are now self-validating via a Debug-only "forgot to route" ICE
 | `emit_module.c` `emit_call_dispatches_on_spec_tyvar` tyvar identification | MIGRATED | inline copy deleted; now calls `emit_dispatch_tyvar` |
 | `emit_core.c` constraint-var resolution tail | NOT MERGED (by design) | differs from `emit_ground_constraint_var` (param_idx<0 + concreteness gating); merge would change instance selection |
 | `emit_module.c:2164` scan-time dispatch recovery | ALREADY ROUTED | calls `emit_reresolve_disp_type`; redirect helpers consume its result |
+
+### R0 inventory -- fn-value (closure-thunk) axis
+
+| Site | Status | Note |
+|---|---|---|
+| `emit_module.c` `emit_abi_scan_fn_values` signature derivation | ROUTED (delegates to `emit_abi_fn_value_signature`) | the named third-axis chokepoint |
+| `emit_module.c` poly-closure inner-clone derivation (Stage B+C) | NOT ROUTED (by design) | env-aware (param 0 = env ptr); specialize decision already made upstream, computes no `abi_changes` |
+| `emit_module.c` `emit_abi_register_call` arg/result `abi_changes` block | NOT ROUTED (by design) | layered M4c Path A.1 + G4 phantom + borrow-path cases; sharing would change behavior |
 - **R3 -- Debug-build "forgot to route" ICE.** DONE (chokepoint
   postcondition form). `emit_abi_assert_routed_concrete` (`emit_core.c`,
   declared in `emit_internal.h`) is a Debug-only gate the two value/dispatch
@@ -98,14 +106,25 @@ chokepoints are now self-validating via a Debug-only "forgot to route" ICE
   audit table lives in the archived plan with all rows `[FIXED]`; not
   maintained as a live PR-gate; no review checklist enforces "new
   crossing => new row."
-- **Fn-value third axis (G6 motivated).** Acknowledged in the plan;
-  recent fixes (PRs #487, #499-#503) added more point-patches to
-  `emit_abi_scan_fn_values` / closure-thunk paths without a dedicated
-  chokepoint routine.
+- **Fn-value third axis (G6 motivated).** STARTED. The axis now has its
+  named chokepoint: `emit_abi_fn_value_signature` (`emit_module.c`) derives a
+  passed/captured function value's specialized arg/result types (instantiated
+  through the outer spec bindings) and whether the specialization changes the
+  C ABI -- the fn-value analogue of the value/dispatch chokepoints, with the
+  thunk signature following the carrier `B` and never the int64 default.
+  `emit_abi_scan_fn_values` routes through it. The closure-thunk inner-clone
+  derivation (the poly-closure-result-specialization Stage B+C block) stays
+  separate **by design**: it is env-aware (param 0 is the env pointer) and the
+  specialize decision is already made upstream (`inner_float`/`inner_passed`/
+  `inner_dispatch`), so it computes no `abi_changes` and would not fit the
+  chokepoint's signature without adding special-casing.
 
-**Net:** the plan remains accurate and unstarted; the case for it is
-stronger now that G2-G10 closed in the exact patch-pile style the plan
-calls out.
+**Net:** the plan is no longer unstarted -- the value, dispatch, and fn-value
+axes each now have a single named recovery chokepoint, the R3 "forgot to
+route" ICE gate enforces their postconditions in Debug, and the ad-hoc
+value/dispatch recovery copies have been migrated onto the shared routines.
+What remains is the deeper R2 branch-collapse (where it can be done without
+changing behavior) and R4's audit-table-as-PR-gate.
 
 ## Why this plan exists (read first)
 
