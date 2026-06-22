@@ -359,6 +359,24 @@ static bool expr_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
     if (e->kind == EX_IF || e->kind == EX_DO ||
         e->kind == EX_LET || e->kind == EX_LETREC)
         return fn_body_tail_emits_byvalue_carrier_abi(ctx, e);
+    /* EX_CALL is checked BEFORE the e->type carrier guard: a return-only-poly
+     * accessor (`ok-val`/`some`/...) has its declared result collapsed to the
+     * int64 *scalar* (TY_INT) at elab, so the `type_uses_carrier_abi(e->type)`
+     * guard below would wrongly reject it even when its matched by-value spec
+     * resolves the result to a concrete aggregate (`Option__int`).  Consult the
+     * spec directly so a generic loop's `(vec-push! acc (ok-val r))` heap-promotes
+     * the by-value element instead of passing it raw into the int64 carrier slot. */
+    if (e->kind == EX_CALL) {
+        const EmitAbiSpecialization *spec =
+            find_matched_abi_spec(ctx, e, e->as.call_.fn_binding);
+        if (spec) {
+            Type sr = emit_resolve_type(ctx, spec->result_type);
+            return type_uses_carrier_abi(sr) &&
+                   strcmp(emit_type_c_name(ctx, sr), "int64_t") != 0;
+        }
+        if (!type_uses_carrier_abi(e->type)) return false;
+        return call_returns_byvalue_aggregate(ctx, e);
+    }
     if (!type_uses_carrier_abi(e->type)) return false;
     if (e->kind == EX_MAKE_STRUCT) return true;
     /* G3 (instance-method by-value struct-field receiver): post-#482 a by-value
@@ -373,24 +391,6 @@ static bool expr_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
     }
     if (e->kind == EX_VAR)
         return e->as.var.binding && e->as.var.binding->emit_byvalue_carrier_abi;
-    if (e->kind == EX_CALL) {
-        const EmitAbiSpecialization *spec =
-            find_matched_abi_spec(ctx, e, e->as.call_.fn_binding);
-        if (spec) {
-            /* option-consumer-retype-byvalue step 2: a spec's result_type is
-             * stored as the (possibly still-parametric) declared return -- e.g.
-             * a pure-Turmeric `option-map` spec whose `(fn [A] B)` closure left
-             * `B` unresolved keeps `(Option B)` as its return Type, which IS a
-             * carrier-ABI kind (TY_APP) yet c-names to `int64_t` and is returned
-             * as the bare carrier handle.  Such a spec is NOT a by-value producer:
-             * treat it as by-value only when its resolved return c-names to a
-             * concrete aggregate, not to the int64 carrier. */
-            Type sr = emit_resolve_type(ctx, spec->result_type);
-            return type_uses_carrier_abi(sr) &&
-                   strcmp(emit_type_c_name(ctx, sr), "int64_t") != 0;
-        }
-        return call_returns_byvalue_aggregate(ctx, e);
-    }
     return false;
 }
 
@@ -3312,10 +3312,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * bridge would carry (int64_t)(intptr_t)(&tmp), a stack
                          * address that dangles once this frame returns.  Use the
                          * escaping variant so a by-value aggregate element is
-                         * heap-promoted (malloc + copy) instead of address-of'd. */
+                         * heap-promoted (malloc + copy) instead of address-of'd.
+                         *
+                         * Bridge with the value's REAL by-value type, not
+                         * `emit_arg->type`: a return-only-poly accessor (`ok-val`)
+                         * has its elab type collapsed to the int64 scalar, so
+                         * spilling at `emit_arg->type` would declare an `int64_t`
+                         * temp and copy an `Option__int` into it.  The matched
+                         * spec's resolved result is the source of truth. */
+                        Type bridge_ty = fn_body_tail_byvalue_carrier_type(ctx, emit_arg);
+                        if (bridge_ty.kind == TY_UNKNOWN) bridge_ty = emit_arg->type;
                         raw = emit_carrier_bridge_escaping(ctx, body, raw,
                                                            CK_CONCRETE, CK_CARRIER,
-                                                           emit_arg->type);
+                                                           bridge_ty);
                     }
                 }
                 /* ACB (KB-004): when a specialized call expects a concrete aggregate
