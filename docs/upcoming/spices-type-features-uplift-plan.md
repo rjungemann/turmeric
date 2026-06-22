@@ -571,7 +571,10 @@ their own tests).
 
 ### Phase U6 -- Typed variadic builders
 
-**Status as of 2026-06-22: PARTIAL. 1 of 2 targets shipped (c-dsl).**
+**Status as of 2026-06-22: COMPLETE.** c-dsl shipped end to end -- both
+typedef builders and function builders/declarations. Phase closed per
+the "rubric is satisfied with c-dsl alone, ship one and close" note.
+`valkey` per-command builder remains an optional follow-up.
 
 **Goal:** the few "builder API" spices that take heterogeneous tag-erased
 arg lists today move to typed `& xs : T` with one instance per builder
@@ -582,21 +585,33 @@ Targets:
 1. **`valkey`** -- per-command builder takes `& args : ValkeyArg` where
    `ValkeyArg` is an opaque sum so a wrong-kind arg is a type error,
    not a `WRONGTYPE` response.
-2. **`c-dsl` function/struct builders** -- DONE 2026-06-22. `c-field`
-   returns `CField`, `c-param` returns `CParam` (both `defopaque :int`
-   newtypes layout-equal to the underlying formatted cstr).
-   `c-defstruct` / `c-defunion` are variadic `[name : cstr & fields :
-   CField] : cstr`; `c-defn` / `c-defn-static` / `c-defn-inline` are
-   variadic `[name : cstr ret : cstr body : cstr & params : CParam] :
-   cstr`. The variadic typed-rest identity check rejects a bare cstr at
-   the elaborator (`error: variadic call to 'c-defstruct': rest arg 0
-   has wrong type (expected CField, got cstr)`). Unwrap accessors
-   `cfield->cstr` / `cparam->cstr` exported for ad-hoc test/comparison
-   use.
+2. **`c-dsl` builders** -- DONE 2026-06-22.
+   - **Constructors** wrap as defopaque newtypes (all `:int`,
+     layout-equal to the formatted cstr): `c-field -> CField`,
+     `c-param -> CParam`, `c-enum-variant -> CEnumVariant`,
+     `c-type-ref -> CTypeRef`.
+   - **Typedef builders** become variadic:
+     `c-defstruct [name : cstr & fields : CField] : cstr`,
+     `c-defunion  [name : cstr & fields : CField] : cstr`,
+     `c-defenum   [name : cstr & variants : CEnumVariant] : cstr`.
+   - **Function builders** become variadic:
+     `c-defn`/`c-defn-static`/`c-defn-inline`
+     `[name : cstr ret : cstr body : cstr & params : CParam] : cstr`
+     (params slot moved last because variadic must trail).
+   - **Forward declarations** become variadic:
+     `c-declare`/`c-extern`
+     `[ret : cstr name : cstr & params : CTypeRef] : cstr`.
+   - The variadic typed-rest identity check rejects a bare cstr at the
+     elaborator (`error: variadic call to 'c-defstruct': rest arg 0
+     has wrong type (expected CField, got cstr)`).
+   - Unwrap accessors `cfield->cstr` / `cparam->cstr` /
+     `cenum-variant->cstr` / `ctype-ref->cstr` exported for ad-hoc
+     test/comparison use.
 
-This phase is small; the rubric is satisfied with c-dsl alone.
-valkey's variadic per-command builder remains open but is not a
-blocker.
+This phase is small; the rubric is satisfied with c-dsl alone. The
+phase is closed. `valkey`'s variadic per-command builder remains an
+optional follow-up (would need a `ValkeyArg` sum-type design before it
+buys real safety -- not a blocker).
 
 ## Sequencing and dependencies
 
