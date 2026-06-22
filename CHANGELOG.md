@@ -4,6 +4,54 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.23.0] -- 2026-06-22
+
+### Added
+
+- **Track C / U3 advances to 2/4.** sqlite TStmt landed end to end.
+- **Track C / U6 closes.** Typed variadic c-dsl builders finished; v2 plan
+  filed for the valkey follow-up.
+
+### Changed
+
+- **`(list ...)` is element-type polymorphic via `tcons-of` (#473, #488).**
+  Float heads and other non-int elements now flow through the classic
+  list surface without ascription.
+- **Applied type constructors accepted in `defdata` constructor fields
+  (#483).**
+
+### Fixed
+
+- **Carrier<->by-value bridging across constrained-generic instance
+  dispatch (#490, #491, #493-#495, #497, #503, #504).** Ascribed and
+  no-int-instance paths, float reinterpretation, by-value field access
+  through ascribed receivers, return-dispatched by-value-struct method
+  elements specialized into generic loops, struct-headed applied-instance
+  matching, and unascribed carrier-helper reads in constrained instances
+  all resolved.
+- **HKT cata over function-typed carriers (#489, #499).** Fn result
+  threading and match-arm payload capture fixed; segfault when the
+  function carrier's argument is itself a function eliminated.
+- **Captureless algebra arms and letrec self-capture under fat closures
+  (#500-#502).** Mixed fn/value carrier env-struct collisions carved;
+  captureless arms no longer thicken through fat-closure carriers;
+  letrec self referenced from a nested closure now captures correctly.
+- **By-value parametric struct field layout (#481, #482).** Fields embed
+  the aggregate; constrained generics returning parametric containers
+  monomorphize correctly.
+- **Nested generic by-value construct in constrained instance bodies
+  (#480);** parametric `:heap` struct field extraction no longer
+  collapses to the carrier (#479); recursive `(Cons A)` specs no longer
+  hijacked by carrier-erasure ascription (#498); control-form result
+  temps thread the by-value carrier-ABI aggregate (#492).
+- **Multi-index opaque cross-parameter unification for sized matrices
+  (#476).**
+- **Constrained instance method dispatch on pointer-carried element
+  types (#475).**
+- **`type_name` emit-path leak on composite type diagnostics (#477).**
+- **CI: fmt bootstrap, REPL spice loading, and turi gates greened up
+  (#474).**
+
 ## [0.22.0] -- 2026-06-20
 
 ### Added

@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.22.0` -- turi interpreter parity reaches the finish line, TCO lands in by-value ABI specs, end-to-end monomorphization (Track A) completes, and a wave of spice-uplift fixes unblock frame, stats, watch, ECS, and StorageOps.
+**Latest release:** `v0.23.0` -- a deep wave of carrier<->by-value ABI bridging fixes lands across constrained-generic instance dispatch, HKT cata, and parametric struct layout; Track C / U3 (sqlite TStmt) and U6 (typed variadic c-dsl builders) close.
 
 ## What
 
