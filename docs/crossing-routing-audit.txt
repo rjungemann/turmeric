@@ -1,0 +1,18 @@
+# crossing-routing-audit.txt -- R4 registry of carrier<->concrete recovery
+# chokepoint call sites (docs/upcoming/carrier-crossing-recovery-routing-
+# plan.md).  Generated/checked by tools/check_crossing_routing.py.
+#
+# Format: <routine> <file.c> <call-site-count>.  Regenerate with
+#   python3 tools/check_crossing_routing.py --update
+# and add a matching row to the audit tables in the plan doc.
+emit_abi_assert_routed_concrete emit_core.c 1
+emit_abi_assert_routed_concrete emit_expr.c 1
+emit_abi_fn_value_signature emit_module.c 1
+emit_dispatch_tyvar emit_core.c 1
+emit_dispatch_tyvar emit_module.c 1
+emit_reresolve_disp_type emit_core.c 2
+emit_reresolve_disp_type emit_module.c 1
+emit_spec_arg_type_for_binding emit_core.c 1
+emit_spec_arg_type_for_binding emit_expr.c 3
+emit_spec_arg_type_for_binding emit_module.c 1
+emit_var_spec_arg_type emit_expr.c 9

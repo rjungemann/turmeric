@@ -1155,19 +1155,9 @@ static bool emit_call_dispatches_on_spec_tyvar(const Expr *call, FnDef *fd,
     const Expr *dict = call->as.call_.dict_arg;
     if (!dict || dict->kind != EX_DICT || !dict->as.dict_.instance) return false;
     if (dict->as.dict_.method_name[0] == '\0') return false;
-    const char *tvname = NULL;
-    if (call->as.call_.n_args >= 1 && call->as.call_.args) {
-        const Expr *recv = call->as.call_.args[0];
-        for (const Expr *a = recv; a && a->kind == EX_ASCRIBE;
-             a = a->as.ascribe_.inner) {
-            if (a->type.kind == TY_TYVAR) { tvname = a->type.as.tyvar_.name; break; }
-        }
-        if (!tvname) {
-            while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
-            if (recv && recv->type.kind == TY_TYVAR) tvname = recv->type.as.tyvar_.name;
-        }
-    }
-    if (!tvname && call->type.kind == TY_TYVAR) tvname = call->type.as.tyvar_.name;
+    Type dt;
+    if (!emit_dispatch_tyvar(call, &dt) || dt.kind != TY_TYVAR) return false;
+    const char *tvname = dt.as.tyvar_.name;
     if (!tvname) return false;
     return emit_abi_binding_is_concrete(bindings, n_bindings, tvname) ||
            emit_constraint_var_grounds_concrete(fd, bindings, n_bindings, tvname);
@@ -1847,14 +1837,8 @@ static bool emit_abi_try_byval_twin_redirect(EmitCtx *ctx, const Expr *call,
          * for a plain constrained-poly defn spec (where the receiver elab type
          * is `(Vec A)` and instantiates cleanly). */
         const Expr *av = call->as.call_.args[i];
-        if (av && av->kind == EX_VAR && av->as.var.binding && aspec->fn) {
-            for (uint8_t pi = 0; pi < aspec->fn->n_params && pi < aspec->n_args; pi++) {
-                if (aspec->fn->params[pi] == av->as.var.binding) {
-                    at = aspec->arg_types[pi];
-                    break;
-                }
-            }
-        }
+        if (av && av->kind == EX_VAR)
+            emit_spec_arg_type_for_binding(ctx, av->as.var.binding, &at);
         twin_args[i] = at;
         if (i == 0) resolved_recv = at;
     }
@@ -3380,6 +3364,48 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
  * time, atom_var resolves the value reference to the child clone (see
  * emit_core.c).  The instance selection inside the child body is handled by the
  * already-landed CGI method-call re-resolution. */
+/* G6 fn-value chokepoint (carrier-crossing-recovery-routing-plan, third axis):
+ * given a global function VALUE `vb`/`vfd` passed to or captured by a generic
+ * combinator, and the outer spec's `bindings`, derive the value-fn's specialized
+ * arg/result types by instantiating its declared full types through those
+ * bindings (writing them into `out_args`/`out_result`), and return whether the
+ * specialization actually changes the C ABI vs. the carrier.
+ *
+ * This is the function-pointer/closure-thunk analogue of the value-side
+ * (`emit_spec_arg_type_for_binding`) and dispatch-side (`emit_reresolve_disp_type`)
+ * chokepoints: the thunk signature follows the carrier element `B`, never the
+ * int64 default.  A `false` result means the carrier clone is already correct
+ * (no fresh spec needed).  Routing every fn-value site through here keeps a new
+ * closure-thunk emit site correct by construction instead of re-deriving the
+ * instantiate-and-compare idiom inline. */
+static bool emit_abi_fn_value_signature(EmitCtx *ctx, const Binding *vb,
+        FnDef *vfd, const AbiTypeBinding *bindings, uint8_t n_bindings,
+        Type *out_args, uint8_t *out_nargs, Type *out_result) {
+    bool abi_changes = false;
+    uint8_t v_nargs = vfd->n_params;
+    for (uint8_t a = 0; a < v_nargs; a++) {
+        const Type *full = (vb->type.as.fn.arg_full_types &&
+                            vb->type.as.fn.arg_full_types[a])
+            ? vb->type.as.fn.arg_full_types[a]
+            : &vfd->params[a]->type;
+        Type generic_arg = full ? *full : vfd->param_types[a];
+        out_args[a] = full
+            ? emit_abi_instantiate_type(full, bindings, n_bindings, ctx->type_arena)
+            : vfd->param_types[a];
+        if (strcmp(type_c_name(generic_arg), type_c_name(out_args[a])) != 0)
+            abi_changes = true;
+    }
+    Type v_generic_result = vb->type.as.fn.result_full_type
+        ? *vb->type.as.fn.result_full_type
+        : emit_type_from_kind(vb->type.as.fn.result_kind);
+    *out_result = emit_abi_instantiate_type(&v_generic_result, bindings,
+                                            n_bindings, ctx->type_arena);
+    if (strcmp(type_c_name(v_generic_result), type_c_name(*out_result)) != 0)
+        abi_changes = true;
+    *out_nargs = v_nargs;
+    return abi_changes;
+}
+
 static void emit_abi_scan_fn_values(EmitCtx *ctx, const Expr *call,
                                     const AbiTypeBinding *bindings, uint8_t n_bindings,
                                     const Expr **items, uint32_t n_items) {
@@ -3403,32 +3429,14 @@ static void emit_abi_scan_fn_values(EmitCtx *ctx, const Expr *call,
          * matching comment.  Drop the no-marker bail; the `if (!abi_changes)
          * continue;` below already handles the int-carried case. */
 
-        /* Derive the value-fn's specialized arg/result types by instantiating
-         * its full types through the outer bindings.  Only proceed when this
-         * actually changes the ABI (i.e. the value-fn is generic in one of the
-         * outer tyvars); otherwise the carrier clone is already correct. */
-        bool abi_changes = false;
+        /* Derive the value-fn's specialized arg/result types and whether the
+         * specialization actually changes the ABI (the G6 fn-value chokepoint).
+         * Only proceed when it does; otherwise the carrier clone is correct. */
         Type v_args[MAX_FN_ARITY];
-        uint8_t v_nargs = vfd->n_params;
-        for (uint8_t a = 0; a < v_nargs; a++) {
-            const Type *full = (vb->type.as.fn.arg_full_types &&
-                                vb->type.as.fn.arg_full_types[a])
-                ? vb->type.as.fn.arg_full_types[a]
-                : &vfd->params[a]->type;
-            Type generic_arg = full ? *full : vfd->param_types[a];
-            v_args[a] = full
-                ? emit_abi_instantiate_type(full, bindings, n_bindings, ctx->type_arena)
-                : vfd->param_types[a];
-            if (strcmp(type_c_name(generic_arg), type_c_name(v_args[a])) != 0)
-                abi_changes = true;
-        }
-        Type v_generic_result = vb->type.as.fn.result_full_type
-            ? *vb->type.as.fn.result_full_type
-            : emit_type_from_kind(vb->type.as.fn.result_kind);
-        Type v_result = emit_abi_instantiate_type(&v_generic_result, bindings,
-                                                  n_bindings, ctx->type_arena);
-        if (strcmp(type_c_name(v_generic_result), type_c_name(v_result)) != 0)
-            abi_changes = true;
+        uint8_t v_nargs;
+        Type v_result;
+        bool abi_changes = emit_abi_fn_value_signature(
+            ctx, vb, vfd, bindings, n_bindings, v_args, &v_nargs, &v_result);
         if (!abi_changes) continue;
 
         /* Per-instantiation monomorphization: skip inline-C bodies without

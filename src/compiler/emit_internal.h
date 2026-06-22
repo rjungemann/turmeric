@@ -390,6 +390,30 @@ struct FnDef *emit_reresolve_method_fndef(struct EmitCtx *ctx, const struct Expr
  * parametric container.  Defined in emit_core.c. */
 bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
                               Type *out_resolved, const Expr **out_dict);
+/* R2 (carrier-crossing-recovery-routing-plan): shared first-stage dispatch-tyvar
+ * identification -- writes the TY_TYVAR a typeclass-method call dispatches on
+ * (ascribed receiver, bare receiver, or result type) into *out, or returns false
+ * when the call carries no dispatch tyvar.  The single spelling both the emit-time
+ * chokepoint and the scan-time predicate consult.  Defined in emit_core.c. */
+bool emit_dispatch_tyvar(const Expr *call, Type *out);
+/* Value-side chokepoint core (carrier<->concrete): given a binding that is a
+ * parameter of the active ABI specialization, recover its monomorphized concrete
+ * type from `current_abi_specialization->arg_types[]`.  Returns false when there
+ * is no active spec or the binding is not one of its params.  This is the single
+ * sanctioned `params[pi] == b -> arg_types[pi]` recovery; every emit site that
+ * needs a spec-param's concrete type must route through it (directly, or via
+ * emit_var_spec_arg_type for an EX_VAR) instead of re-rolling the loop locally.
+ * Defined in emit_expr.c. */
+bool emit_spec_arg_type_for_binding(EmitCtx *ctx, const struct Binding *b,
+                                    Type *out);
+/* R3 chokepoint gate (carrier-crossing-recovery-routing-plan): assert a type
+ * recovered by a carrier<->concrete recovery chokepoint is concrete before it
+ * flows into code emission.  A leftover parametric param (TY_TYVAR in the spine)
+ * is a 'forgot to route' hole -- a hard `tur` ICE in Debug (compiled out under
+ * NDEBUG/Release; `TUR_ABI_NO_ROUTE_ICE=1` downgrades it to a warning).  Defined
+ * in emit_core.c. */
+void emit_abi_assert_routed_concrete(EmitCtx *ctx, const Type *recovered,
+                                     const char *site, bool deep);
 /* G6: true when a call's result type and a candidate spec's result type are
  * distinct PRIMITIVE kinds -- a return-differentiated sibling spec that the
  * by-args lookup must not match.  Defined in emit_expr.c. */

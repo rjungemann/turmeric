@@ -16,43 +16,121 @@ status: OPEN -- proposed. Sequenced after the audit's P1 (stress-matrix
 
 ## Status (verified 2026-06-22)
 
-**NOT STARTED -- proposal only.** Filed today (commit `fbd0a94d`) as the
-structural follow-up to the now-archived
-`carrier-concrete-abi-crossing-audit-plan.md`. All audit gaps (G2-G10)
-closed via the old per-site patch approach *before* this plan landed, so
-no chokepoint-routing work has been done yet and the patch-pile has grown.
+**IN PROGRESS.** Filed (commit `fbd0a94d`) as the structural follow-up to
+the now-archived `carrier-concrete-abi-crossing-audit-plan.md`. All audit
+gaps (G2-G10) closed via the old per-site patch approach *before* this plan
+landed. Two structural slices now landed: the value-side recovery idiom is
+consolidated behind a single shared routine (R0/R2 below), and the two
+chokepoints are now self-validating via a Debug-only "forgot to route" ICE
+(R3 below).
 
-- **R0 -- Inventory of un-routed sites.** NOT STARTED. No audit table, no
-  PR. Ad-hoc `arg_types[]` / `emit_resolve_type` lookups remain across
-  `emit_module.c` (e.g. `:2161, :2541, :2906, :3540`), `emit_core.c`,
-  `emit_expr.c`.
-- **R1 -- Make the chokepoints total.** NOT STARTED as a folding pass.
-  `emit_var_spec_arg_type` (`emit_expr.c:1651`) and
-  `emit_reresolve_disp_type` (`emit_core.c:1157`) have been *extended*,
+- **R0 -- Inventory of un-routed sites.** DONE for the value side (see the
+  "R0 inventory" table below). The dominant un-routed pattern was the
+  hand-rolled `for pi: if fd->params[pi] == b -> arg_types[pi]` recovery --
+  the value-side chokepoint logic copied inline at 6 sites. Dispatch-side
+  and fn-value-side inventory still open.
+- **R1 -- Make the chokepoints total.** STARTED. The dispatch-tyvar
+  *identification* walk (ascribed receiver / bare receiver / result type)
+  was duplicated verbatim in the emit-time chokepoint
+  (`emit_reresolve_disp_type`) and the scan-time predicate
+  (`emit_call_dispatches_on_spec_tyvar`); it is now one shared routine,
+  `emit_dispatch_tyvar` (`emit_core.c`, declared in `emit_internal.h`), that
+  both consult, so they can no longer disagree about which position carries
+  the dispatch variable. The chokepoint's constraint-var resolution *tail*
+  and `emit_ground_constraint_var` remain separate **by design**: the latter
+  handles a `param_idx < 0` direct-`type_arg` case and gates on result
+  concreteness that the chokepoint deliberately omits, so merging them would
+  change instance selection (a behavior change, not a refactor).
+  `emit_var_spec_arg_type` (`emit_expr.c`) and
+  `emit_reresolve_disp_type` (`emit_core.c`) have otherwise been *extended*,
   but every G2-G10 fix landed as a sibling branch beside them: G2 via
   `emit_abi_try_nested_instance_dispatch_redirect` (`emit_module.c:1960`,
   PRs #493/#495); G3 via call-site bridge in
   `expr_emits_byvalue_carrier_abi` (`emit_expr.c:382`, PR #497); G4 via
   per-element phantom clone (PR #486); G5/G7/G9 via local site fixes
   (PRs #482, #498, #494); G6 via the new fn-value axis (PRs #487-#502).
-- **R2 -- Migrate ad-hoc sites onto chokepoints.** NOT STARTED. No
-  deletions of gated branches; gap-tagged comments still grow
-  (`emit_module.c`: 24, `emit_expr.c`: 27, `emit_core.c`: 4 occurrences
-  of `G[0-9]`).
-- **R3 -- Debug-build "forgot to route" ICE.** NOT STARTED. No
-  assertion exists (`grep "ICE\|assert.*chokepoint"` empty).
-- **R4 -- Audit-table-as-regression-guard.** PARTIALLY INHERITED. The
-  audit table lives in the archived plan with all rows `[FIXED]`; not
-  maintained as a live PR-gate; no review checklist enforces "new
-  crossing => new row."
-- **Fn-value third axis (G6 motivated).** Acknowledged in the plan;
-  recent fixes (PRs #487, #499-#503) added more point-patches to
-  `emit_abi_scan_fn_values` / closure-thunk paths without a dedicated
-  chokepoint routine.
+- **R2 -- Migrate ad-hoc sites onto chokepoints.** STARTED (value side).
+  The value-side `params[pi] -> arg_types[pi]` recovery now lives in one
+  exported routine, `emit_spec_arg_type_for_binding` (`emit_expr.c`,
+  declared in `emit_internal.h`). `emit_var_spec_arg_type` delegates to it,
+  and the four ad-hoc inline copies were deleted and routed through it:
+  `field_read_emits_byvalue_aggregate` (`emit_expr.c`),
+  `emit_reresolve_disp_type` (`emit_core.c`), the M4c Path A.2 by-value
+  field-access override (`emit_expr.c`), and the instance-method twin-arg
+  resolver (`emit_module.c`). Behavior-preserving: full suite 1765 passed,
+  0 failed, zero fixture churn. Dispatch-side branch deletions not yet done.
 
-**Net:** the plan remains accurate and unstarted; the case for it is
-stronger now that G2-G10 closed in the exact patch-pile style the plan
-calls out.
+### R0 inventory -- value-side recovery (`params[pi] -> arg_types[pi]`)
+
+| Site | Status | Note |
+|---|---|---|
+| `emit_expr.c` `emit_var_spec_arg_type` | ROUTED (is the chokepoint; now delegates to `emit_spec_arg_type_for_binding`) | -- |
+| `emit_expr.c` `field_read_emits_byvalue_aggregate` (G9) | MIGRATED | inline copy deleted |
+| `emit_core.c` `emit_reresolve_disp_type` field-receiver recovery | MIGRATED | inline copy deleted |
+| `emit_expr.c` M4c Path A.2 by-value field-access override | MIGRATED | inline copy deleted |
+| `emit_module.c` instance-method twin-arg resolver (Gap 1) | MIGRATED | inline copy deleted |
+| `emit_fns.c:910` carrier-payload param index | EXCLUDED | wants the param *index*, not its type -- different routine |
+| `emit_effects.c:211` `ctx->fn_params[pi]` | EXCLUDED | different array (effect-handler params), not spec `arg_types[]` |
+
+### R0 inventory -- dispatch-side recovery
+
+| Site | Status | Note |
+|---|---|---|
+| `emit_core.c` `emit_reresolve_disp_type` dispatch-tyvar identification | ROUTED (delegates to `emit_dispatch_tyvar`) | -- |
+| `emit_module.c` `emit_call_dispatches_on_spec_tyvar` tyvar identification | MIGRATED | inline copy deleted; now calls `emit_dispatch_tyvar` |
+| `emit_core.c` constraint-var resolution tail | NOT MERGED (by design) | differs from `emit_ground_constraint_var` (param_idx<0 + concreteness gating); merge would change instance selection |
+| `emit_module.c:2164` scan-time dispatch recovery | ALREADY ROUTED | calls `emit_reresolve_disp_type`; redirect helpers consume its result |
+
+### R0 inventory -- fn-value (closure-thunk) axis
+
+| Site | Status | Note |
+|---|---|---|
+| `emit_module.c` `emit_abi_scan_fn_values` signature derivation | ROUTED (delegates to `emit_abi_fn_value_signature`) | the named third-axis chokepoint |
+| `emit_module.c` poly-closure inner-clone derivation (Stage B+C) | NOT ROUTED (by design) | env-aware (param 0 = env ptr); specialize decision already made upstream, computes no `abi_changes` |
+| `emit_module.c` `emit_abi_register_call` arg/result `abi_changes` block | NOT ROUTED (by design) | layered M4c Path A.1 + G4 phantom + borrow-path cases; sharing would change behavior |
+- **R3 -- Debug-build "forgot to route" ICE.** DONE (chokepoint
+  postcondition form). `emit_abi_assert_routed_concrete` (`emit_core.c`,
+  declared in `emit_internal.h`) is a Debug-only gate the two value/dispatch
+  chokepoints now call on their success paths: a recovery routine that
+  returns a non-concrete type (a leftover parametric param where a concrete
+  representation is required) is a hard `tur` ICE in Debug, compiled out
+  under `NDEBUG`/Release, with `TUR_ABI_NO_ROUTE_ICE=1` as an escape hatch.
+  Strictness is per side (calibrated against all 1765 fixtures): the value
+  side fires only on a *bare* `TY_TYVAR` (a `(Option A)`-style container whose
+  element legitimately rides the carrier is fine); the dispatch side requires
+  the whole resolved spine be tyvar-free (any tyvar would mis-select the
+  `__inst_*`). Suite stays 1765 passed, 0 failed; the abort path is verified
+  (forcing the strict check on the value side aborts `emit-c` on the
+  `option_map`/`err_val` carrier specs).
+- **R4 -- Audit-table-as-regression-guard.** DONE (static enforcement).
+  The audit registry `docs/crossing-routing-audit.txt` lists every
+  chokepoint call site as `<routine> <file.c> <count>`, and
+  `tools/check_crossing_routing.py` (wired into `tests/run.sh` next to the
+  turi-parity ratchets, opt-out `TUR_SKIP_PARITY_CHECK=1`) fails the suite
+  when a new chokepoint call site appears without a registry row, a count
+  drifts, or a registry entry goes stale. Regenerate with
+  `python3 tools/check_crossing_routing.py --update` and add the matching
+  row to the R0 inventory tables here. This is the documentation/CI half of
+  the gate; R3's ICE is its runtime half.
+- **Fn-value third axis (G6 motivated).** STARTED. The axis now has its
+  named chokepoint: `emit_abi_fn_value_signature` (`emit_module.c`) derives a
+  passed/captured function value's specialized arg/result types (instantiated
+  through the outer spec bindings) and whether the specialization changes the
+  C ABI -- the fn-value analogue of the value/dispatch chokepoints, with the
+  thunk signature following the carrier `B` and never the int64 default.
+  `emit_abi_scan_fn_values` routes through it. The closure-thunk inner-clone
+  derivation (the poly-closure-result-specialization Stage B+C block) stays
+  separate **by design**: it is env-aware (param 0 is the env pointer) and the
+  specialize decision is already made upstream (`inner_float`/`inner_passed`/
+  `inner_dispatch`), so it computes no `abi_changes` and would not fit the
+  chokepoint's signature without adding special-casing.
+
+**Net:** the plan is no longer unstarted -- the value, dispatch, and fn-value
+axes each now have a single named recovery chokepoint, the R3 "forgot to
+route" ICE gate enforces their postconditions in Debug, and the ad-hoc
+value/dispatch recovery copies have been migrated onto the shared routines.
+What remains is the deeper R2 branch-collapse (where it can be done without
+changing behavior) and R4's audit-table-as-PR-gate.
 
 ## Why this plan exists (read first)
 
@@ -169,6 +247,22 @@ The audit table is the single source of truth for "which crossings are routed."
 Any PR adding a recovery call site adds a row + a stress-matrix cell. A crossing
 without a row fails review. This plan's R3 assertion is the runtime enforcement
 of R4's documentation.
+
+**Landed.** The single source of truth is now machine-readable and enforced:
+
+- `docs/crossing-routing-audit.txt` -- the registry, one
+  `<routine> <file.c> <call-site-count>` line per routed crossing.
+- `tools/check_crossing_routing.py` -- enumerates the chokepoint call sites in
+  `src/compiler/*.c` (definitions and prototypes excluded) and diffs them
+  against the registry; `--update` regenerates it.
+- `tests/run.sh` runs the check (with `--quiet`) alongside the turi-parity
+  ratchets, so a crossing that forgot its row fails the suite, not just review.
+  Opt out with `TUR_SKIP_PARITY_CHECK=1`.
+
+The sanctioned chokepoints it tracks: `emit_spec_arg_type_for_binding` /
+`emit_var_spec_arg_type` (value), `emit_reresolve_disp_type` /
+`emit_dispatch_tyvar` (dispatch), `emit_abi_fn_value_signature` (fn-value), and
+`emit_abi_assert_routed_concrete` (the R3 gate the call sites lean on).
 
 ## Risks / why this wasn't done already
 
