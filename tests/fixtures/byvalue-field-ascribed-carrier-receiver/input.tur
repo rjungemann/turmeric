@@ -1,0 +1,29 @@
+; Regression: docs/reported/byvalue-field-access-through-ascribed-carrier-receiver.md
+;
+; A by-value parametric struct instance method that reads a field through an
+; *ascribed* receiver -- `(.snd (:: x (Duo cstr int)))` -- must cast the int64
+; carrier through the struct layout `((Duo *)(intptr_t)x)->snd`, exactly as the
+; bare-receiver control `(.snd x)` does.  Previously the carrier classification
+; keyed only on a bare EX_VAR receiver, so the EX_ASCRIBE wrapper made it emit a
+; direct `(x).snd` against the int64 carrier -- a hard C compiler error.  The
+; ascribed and bare receivers are paired here so both stay green, and the
+; asserted output is the by-value field value (snd = 7), not merely that it
+; compiles.
+
+(defstruct Duo [a b] (fst :a) (snd :b))
+
+; Ascribed-receiver path (the regressed case).
+(defclass TagA [a] (tga [x] : int))
+(definstance TagA [(Duo cstr int)]
+  (tga [x] (.snd (:: x (Duo cstr int)))))
+
+; Bare-receiver control (always worked).
+(defclass TagB [a] (tgb [x] : int))
+(definstance TagB [(Duo cstr int)]
+  (tgb [x] (.snd x)))
+
+(defn main [] : int
+  (let [p (:: (make-struct Duo "k" 7) (Duo cstr int))]
+    (println (tga p))      ; 7  -- ascribed receiver reads snd through carrier
+    (println (tgb p)))     ; 7  -- bare receiver control
+  0)

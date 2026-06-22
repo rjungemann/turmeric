@@ -5086,6 +5086,20 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * Phase D: for pass-by-ptr params (const T*), use -> instead of . */
             char *sv = emit_value(ctx, body, e->as.get_field_.struct_expr);
             StructDef *def = e->as.get_field_.def;
+            /* byvalue-field-access-through-ascribed-carrier-receiver: a field
+             * read off an *ascribed* receiver -- `(.snd (:: x (Duo cstr int)))`
+             * -- wraps the param in one or more EX_ASCRIBE nodes (erased at
+             * codegen).  The carrier-vs-by-value classification below keys on
+             * the receiver being a bare EX_VAR param (its binding's
+             * `emit_byvalue_carrier_abi` flag, and its presence in the active
+             * spec's arg_types[]).  Strip the ascription wrappers so the param
+             * binding is visible -- otherwise the receiver looks like a non-VAR
+             * expression, `through_carrier` stays false, and an int64 carrier
+             * gets a direct `(x).snd` (invalid C).  The ascribed type itself is
+             * still carried by `struct_expr->type` / the resolved `def`. */
+            const Expr *recv_expr = e->as.get_field_.struct_expr;
+            while (recv_expr->kind == EX_ASCRIBE)
+                recv_expr = recv_expr->as.ascribe_.inner;
             /* SC7: a transparent int newtype IS its single field -- the access
              * is the identity (the value already holds the int64 payload). */
             if (type_is_transparent_int_newtype(e->as.get_field_.struct_expr->type)) {
@@ -5108,7 +5122,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * struct deref.  Without it the spec clone falls back to the
                  * generic-layout cast and reads `head` at the int64 carrier. */
                 Type recv_rty;
-                if (!emit_var_spec_arg_type(ctx, e->as.get_field_.struct_expr, &recv_rty))
+                if (!emit_var_spec_arg_type(ctx, recv_expr, &recv_rty))
                     recv_rty = emit_resolve_type(ctx,
                         e->as.get_field_.struct_expr->type);
                 if (type_is_heap_struct(recv_rty)) {
@@ -5181,9 +5195,9 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * value-struct payloads -- flag true) keeps direct field access. */
             if (!through_rc && !through_carrier && def->n_type_params > 0
                 && e->as.get_field_.struct_expr->type.kind == TY_APP
-                && e->as.get_field_.struct_expr->kind == EX_VAR
-                && e->as.get_field_.struct_expr->as.var.binding
-                && !e->as.get_field_.struct_expr->as.var.binding->emit_byvalue_carrier_abi) {
+                && recv_expr->kind == EX_VAR
+                && recv_expr->as.var.binding
+                && !recv_expr->as.var.binding->emit_byvalue_carrier_abi) {
                 through_carrier = true;
             }
             /* M4c Path A.2 (docs/upcoming/m4c-execution-plan.md): inside an
@@ -5199,8 +5213,8 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 && ctx->current_abi_specialization
                 && ctx->current_abi_specialization->fn
                 && ctx->current_abi_specialization->fn->owner_instance
-                && e->as.get_field_.struct_expr->kind == EX_VAR) {
-                Binding *recv_b = e->as.get_field_.struct_expr->as.var.binding;
+                && recv_expr->kind == EX_VAR) {
+                Binding *recv_b = recv_expr->as.var.binding;
                 FnDef *fd = ctx->current_abi_specialization->fn;
                 for (uint8_t pi = 0; pi < fd->n_params
                                      && pi < ctx->current_abi_specialization->n_args; pi++) {
@@ -5221,7 +5235,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
             }
             bool through_pbp = !through_rc && !through_carrier
-                && expr_is_pbp_param(ctx, e->as.get_field_.struct_expr);
+                && expr_is_pbp_param(ctx, recv_expr);
             /* Direction (1) of polymorphic-ok-in-typeclass-instance-method-...:
              * for Result__T__B / Option__T whose parametric field landed on a
              * value-struct, the field slot is a heap pointer (`T *`) not the
@@ -5242,7 +5256,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * value-struct element field is mistaken for the scalar
                  * carrier (the by-value field deref below never fires). */
                 Type rt;
-                if (!emit_var_spec_arg_type(ctx, e->as.get_field_.struct_expr, &rt))
+                if (!emit_var_spec_arg_type(ctx, recv_expr, &rt))
                     rt = emit_resolve_type(ctx, e->as.get_field_.struct_expr->type);
                 Type field_resolved = e->type;
                 /* substitute_struct_app_type returns a TY_APP result whose spine

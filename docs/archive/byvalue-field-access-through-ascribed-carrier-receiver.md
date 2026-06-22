@@ -1,5 +1,16 @@
 # By-value struct field access through an ascription-wrapped carrier receiver emits an uncast `.field` (broken C)
 
+> **RESOLVED 2026-06-22.** `EX_GET_FIELD` in `src/compiler/emit_expr.c` now
+> strips leading `EX_ASCRIBE` wrappers from the receiver before the
+> carrier-vs-by-value classification tests (the `EX_VAR`/binding checks at
+> ~5182 and ~5202, the `expr_is_pbp_param` test, and the two
+> `emit_var_spec_arg_type` recovery sites at ~5111/~5245 all key on the
+> unwrapped receiver `recv_expr`). An ascribed receiver
+> `(.snd (:: x (Duo cstr int)))` now casts the int64 carrier through the struct
+> layout (`((Duo *)(intptr_t)(x))->snd`) like the bare-receiver path. Regression
+> fixture: `tests/fixtures/byvalue-field-ascribed-carrier-receiver/` (pairs the
+> ascribed body with the bare control, asserting the by-value field value).
+
 Repo: rjungemann/turmeric
 Found by: follow-up to docs/reported/kind-star-instance-two-param-type-cannot-bind-constraint-var.md
 Verified on: turmeric 0.22.0, main built from source (build-release)
