@@ -1647,6 +1647,12 @@ bool emit_spec_arg_type_for_binding(EmitCtx *ctx, const struct Binding *b,
     for (uint8_t pi = 0; pi < fd->n_params && pi < aspec->n_args; pi++) {
         if (fd->params[pi] == b) {
             *out = aspec->arg_types[pi];
+            /* R3 gate: a spec's monomorphized arg type must be concrete.  A
+             * leftover parametric param here means the value crossing would fall
+             * back to the int64 carrier where a concrete representation is
+             * required -- the routing hole this asserts away. */
+            emit_abi_assert_routed_concrete(ctx, out,
+                                            "emit_spec_arg_type_for_binding", false);
             return true;
         }
     }

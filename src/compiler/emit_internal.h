@@ -400,6 +400,14 @@ bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
  * Defined in emit_expr.c. */
 bool emit_spec_arg_type_for_binding(EmitCtx *ctx, const struct Binding *b,
                                     Type *out);
+/* R3 chokepoint gate (carrier-crossing-recovery-routing-plan): assert a type
+ * recovered by a carrier<->concrete recovery chokepoint is concrete before it
+ * flows into code emission.  A leftover parametric param (TY_TYVAR in the spine)
+ * is a 'forgot to route' hole -- a hard `tur` ICE in Debug (compiled out under
+ * NDEBUG/Release; `TUR_ABI_NO_ROUTE_ICE=1` downgrades it to a warning).  Defined
+ * in emit_core.c. */
+void emit_abi_assert_routed_concrete(EmitCtx *ctx, const Type *recovered,
+                                     const char *site, bool deep);
 /* G6: true when a call's result type and a candidate spec's result type are
  * distinct PRIMITIVE kinds -- a return-differentiated sibling spec that the
  * by-args lookup must not match.  Defined in emit_expr.c. */

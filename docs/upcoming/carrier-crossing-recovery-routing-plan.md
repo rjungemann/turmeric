@@ -19,8 +19,10 @@ status: OPEN -- proposed. Sequenced after the audit's P1 (stress-matrix
 **IN PROGRESS.** Filed (commit `fbd0a94d`) as the structural follow-up to
 the now-archived `carrier-concrete-abi-crossing-audit-plan.md`. All audit
 gaps (G2-G10) closed via the old per-site patch approach *before* this plan
-landed. First structural slice now landed: the value-side recovery idiom is
-consolidated behind a single shared routine (see R0/R2 below).
+landed. Two structural slices now landed: the value-side recovery idiom is
+consolidated behind a single shared routine (R0/R2 below), and the two
+chokepoints are now self-validating via a Debug-only "forgot to route" ICE
+(R3 below).
 
 - **R0 -- Inventory of un-routed sites.** DONE for the value side (see the
   "R0 inventory" table below). The dominant un-routed pattern was the
@@ -58,8 +60,20 @@ consolidated behind a single shared routine (see R0/R2 below).
 | `emit_module.c` instance-method twin-arg resolver (Gap 1) | MIGRATED | inline copy deleted |
 | `emit_fns.c:910` carrier-payload param index | EXCLUDED | wants the param *index*, not its type -- different routine |
 | `emit_effects.c:211` `ctx->fn_params[pi]` | EXCLUDED | different array (effect-handler params), not spec `arg_types[]` |
-- **R3 -- Debug-build "forgot to route" ICE.** NOT STARTED. No
-  assertion exists (`grep "ICE\|assert.*chokepoint"` empty).
+- **R3 -- Debug-build "forgot to route" ICE.** DONE (chokepoint
+  postcondition form). `emit_abi_assert_routed_concrete` (`emit_core.c`,
+  declared in `emit_internal.h`) is a Debug-only gate the two value/dispatch
+  chokepoints now call on their success paths: a recovery routine that
+  returns a non-concrete type (a leftover parametric param where a concrete
+  representation is required) is a hard `tur` ICE in Debug, compiled out
+  under `NDEBUG`/Release, with `TUR_ABI_NO_ROUTE_ICE=1` as an escape hatch.
+  Strictness is per side (calibrated against all 1765 fixtures): the value
+  side fires only on a *bare* `TY_TYVAR` (a `(Option A)`-style container whose
+  element legitimately rides the carrier is fine); the dispatch side requires
+  the whole resolved spine be tyvar-free (any tyvar would mis-select the
+  `__inst_*`). Suite stays 1765 passed, 0 failed; the abort path is verified
+  (forcing the strict check on the value side aborts `emit-c` on the
+  `option_map`/`err_val` carrier specs).
 - **R4 -- Audit-table-as-regression-guard.** PARTIALLY INHERITED. The
   audit table lives in the archived plan with all rows `[FIXED]`; not
   maintained as a live PR-gate; no review checklist enforces "new

@@ -101,6 +101,74 @@ static bool emit_find_abi_binding(const EmitAbiSpecialization *spec,
     return false;
 }
 
+#ifndef NDEBUG
+/* R3 (carrier-crossing-recovery-routing-plan): does this type's structural spine
+ * still carry an unresolved parametric param (a TY_TYVAR)?  A recovered concrete
+ * type that answers `true` is the exact signature of a carrier<->concrete crossing
+ * whose monomorphization was not fully recovered -- the silent-miscompile defect
+ * the routing chokepoints exist to prevent.  Debug-only (the only caller, the R3
+ * gate, is compiled out under NDEBUG). */
+static bool type_spine_has_tyvar(const Type *t, int depth) {
+    if (!t || depth > 8) return false;
+    if (t->kind == TY_TYVAR) return true;
+    if (t->kind == TY_APP)
+        return type_spine_has_tyvar(t->as.app.fn, depth + 1) ||
+               type_spine_has_tyvar(t->as.app.arg, depth + 1);
+    return false;
+}
+#endif
+
+/* R3 chokepoint gate: assert that a type recovered by a carrier<->concrete
+ * recovery chokepoint is concrete *enough* before it flows into code emission.
+ * A leftover parametric param means the crossing was mis-routed -- the value or
+ * dispatch would silently fall back to the int64 carrier where a concrete
+ * representation was required, surfacing later as a downstream miscompile.  This
+ * flips that into an immediate, local `tur` ICE.
+ *
+ * `deep` selects the strictness, which differs by side:
+ *   - false (value side): a recovered value type may be a TY_APP container whose
+ *     element legitimately rides the carrier (e.g. `(Option A)` inside an
+ *     option_map spec), so only a *bare* TY_TYVAR -- a param type that is wholly
+ *     unresolved -- is a routing hole.
+ *   - true (dispatch side): the recovered type SELECTS a concrete `__inst_*`, so
+ *     any tyvar anywhere in its spine would mis-select; the whole spine must be
+ *     tyvar-free.
+ *
+ * Debug-only (compiled out under NDEBUG / Release).  The `TUR_ABI_NO_ROUTE_ICE`
+ * environment escape hatch downgrades the ICE to a one-line warning, so an
+ * in-flight migration that knowingly trips the invariant can still produce
+ * output while it is being fixed. */
+void emit_abi_assert_routed_concrete(EmitCtx *ctx, const Type *recovered,
+                                     const char *site, bool deep) {
+#ifndef NDEBUG
+    if (!recovered) return;
+    bool unrouted = deep ? type_spine_has_tyvar(recovered, 0)
+                         : (recovered->kind == TY_TYVAR);
+    if (!unrouted) return;
+    const EmitAbiSpecialization *spec = ctx ? ctx->current_abi_specialization : NULL;
+    const char *spec_name = (spec && spec->clone_name) ? spec->clone_name : "?";
+    if (getenv("TUR_ABI_NO_ROUTE_ICE")) {
+        fprintf(stderr, "tur: warning: carrier<->concrete crossing not routed to "
+                "a concrete type at %s (spec %s, type kind %d); downgraded by "
+                "TUR_ABI_NO_ROUTE_ICE\n", site, spec_name, (int)recovered->kind);
+        return;
+    }
+    fprintf(stderr,
+            "tur: internal error (ICE): carrier<->concrete crossing reached code "
+            "emission with an unresolved parametric param at %s.\n"
+            "  active spec : %s\n"
+            "  type kind   : %d (a recovery chokepoint returned a non-concrete "
+            "type)\n"
+            "This is a 'forgot to route' routing hole "
+            "(docs/upcoming/carrier-crossing-recovery-routing-plan.md, R3).\n"
+            "Set TUR_ABI_NO_ROUTE_ICE=1 to downgrade to a warning while fixing.\n",
+            site, spec_name, (int)recovered->kind);
+    abort();
+#else
+    (void)ctx; (void)recovered; (void)site; (void)deep;
+#endif
+}
+
 Type emit_resolve_type(EmitCtx *ctx, Type t) {
     const EmitAbiSpecialization *spec = ctx ? ctx->current_abi_specialization : NULL;
     if (!spec) return t;
@@ -1371,6 +1439,10 @@ bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
         }
     }
     if (resolved.kind == TY_TYVAR) return false; /* still unbound: keep base/repr */
+    /* R3 gate: a successful re-resolution must yield a concrete dispatch type.
+     * A TY_APP whose spine still carries a tyvar would silently select the
+     * carrier-representative `__inst_*` -- the routing hole this asserts away. */
+    emit_abi_assert_routed_concrete(ctx, &resolved, "emit_reresolve_disp_type", true);
     *out_resolved = resolved;
     *out_dict = dict;
     return true;
