@@ -429,7 +429,7 @@ no in-tree caller remains.
 
 ### Phase U3 -- Row-typed schemas
 
-**Status as of 2026-06-22: PARTIAL. 1 of 4 targets shipped (frame).**
+**Status as of 2026-06-22: PARTIAL. 2 of 4 targets shipped (frame, sqlite).**
 
 **Goal:** carry "what's in this row/header/column-set" at the type
 level using the same `#row{...}` phantom machinery the `Query` value
@@ -439,12 +439,25 @@ Targets:
 
 1. **`frame`** -- DONE. `Frame` carries `#row{...}` phantom in
    `src/frame/typed.tur:52`. Static row drives schema membership.
-2. **`postgres`/`sqlite`** -- OPEN. Result/Stmt opaques exist (U1) but
-   carry no row type parameters yet. `Result<#row{col1:t1 col2:t2}>`
-   and `Stmt<#row{p1:t1 ...} #row{c1:t1 ...}>` still to land.
-3. **`http`/`httpd`** -- OPEN. `Request`/`Response` are plain opaques
+2. **`sqlite`** -- DONE 2026-06-22.
+   `(defstruct TStmt [^&params ^&cols] (handle :int))` in
+   `src/sqlite/typed.tur` mirrors `frame/typed`'s pattern: phantom row
+   parameters for bind shape *and* result-column shape, both kind-`[*]`,
+   both erased at codegen. Typed binds (`tstmt-bind-int/real/text/null`),
+   step / reset / finalize, and column accessors
+   (`tcol-count/name/int/real/text/type`) delegate to the existing
+   `sqlite/stmt` and `sqlite/row` surface. Row-polymorphic smoke green
+   under default `tur test`; a concrete `#row{...}` literal call site
+   rejects the wrong row at `TUR-E0001` under `-Xdata-literals`.
+   Open follow-ups (called out in the new file's header): linear-aware
+   typed wrap (currently the `Stmt` linear gate is bypassed when wrapping
+   to int), a typed `Col t` newtype, and a static bind/col index
+   refinement (`i : (BoundedIdx n)` against the row's width).
+3. **`postgres`** -- OPEN. Result opaque exists (U1) but carries no row
+   parameter yet. Same shape as sqlite's `TStmt` would slot in.
+4. **`http`/`httpd`** -- OPEN. `Request`/`Response` are plain opaques
    in `src/httpd/types.tur:19,27` -- no header-row phantom yet.
-4. **`json`** -- PARTIAL. `Encode`/`Decode` typeclasses present (U2#3)
+5. **`json`** -- PARTIAL. `Encode`/`Decode` typeclasses present (U2#3)
    but object shapes are not yet row-typed; a decoder for
    `#row{name:Str age:Int}` rejecting missing keys at the boundary is
    still future work.
