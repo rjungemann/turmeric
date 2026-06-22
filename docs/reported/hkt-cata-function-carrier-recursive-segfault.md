@@ -103,9 +103,14 @@ failed; the value-carrier cata (`B = int`) and #489's
 
 ## Remaining OPEN residuals
 
-Two narrower gaps in the same area are NOT fixed here:
+Two narrower gaps in the same area. Residual (b) is now FIXED (2026-06-22);
+residual (a) is carved into its own report and remains open.
 
-### (a) Captureless algebra arm stays thin through the carrier (Bug B)
+### (a) Captureless algebra arm stays thin through the carrier (Bug B) -- OPEN
+
+> Now tracked as its own report:
+> `docs/reported/captureless-algebra-arm-thin-through-carrier.md`. Summary kept
+> here for context.
 
 An algebra arm that returns a *captureless* closure -- e.g. a variable-lookup
 node `(VarF i) (fn [env : int] : int env)` in an environment-passing
@@ -137,17 +142,22 @@ original "Bug B" (thin captureless lambda -> fat box at the carrier boundary)
 and is a broader closure-ABI uniformity change. Affects environment-passing
 interpreters / variable-lookup nodes specifically.
 
-### (b) Mixed fn-carrier + value-carrier cata: spec-name collision
+### (b) Mixed fn-carrier + value-carrier cata: spec-name collision -- FIXED 2026-06-22
 
 A program that folds the *same* `Expr`/`Fix` with both a function carrier
 (`fn-alg : (fn [(ExprF (fn [int] int))] (fn [int] int))`) and a value carrier
-(`size-alg : (fn [(ExprF int)] int)`) fails to *compile*: both `cata`
-specializations mangle their carrier `B` to the int64 carrier and emit a
+(`size-alg : (fn [(ExprF int)] int)`) failed to *compile*: both `cata`
+specializations mangled their carrier `B` to the int64 carrier and emitted a
 colliding env struct (`struct __env_NNNN__spec__int64_t` defined twice with
-different `__fn` field types). Pre-existing (reproduces identically before this
-branch's fix), independent of the runtime dispatch bug above. Fix direction:
-disambiguate the per-spec env-struct/spec name by the carrier's full type (or
-its fat-ness), not just its int64 carrier mangling.
+different `__fn` field types).
+
+**Fixed:** `emit_abi_clone_name` already disambiguates colliding clone names
+with a `__h<n>` suffix (Gap H); the env-struct override site
+(`src/compiler/emit_module.c`) now mirrors that -- when the base env name
+collides with another spec's `env_name_override`, it appends the same
+deterministic `__h<n>` discriminator. Non-colliding names are untouched, so no
+snapshot churn. Pinned by `tests/fixtures/hkt-cata-mixed-fn-value-carrier`
+(prints `7` then `2`). `bash tests/run.sh` => 1761 passed, 0 failed.
 
 ## Impact / workaround
 

@@ -79,8 +79,8 @@ the folded child matcher `mx` explicitly:
    itself a function) is being demoted, and the second parameter (`cstr`)
    is being narrowed too.
 
-2. **Spec collision on `__env_1068__spec__bool`** -- two distinct
-   definitions emitted in the same TU, one with a thin
+2. **Spec collision on `__env_1068__spec__bool`** -- FIXED 2026-06-22.
+   Two distinct definitions were emitted in the same TU, one with a fat
    `tur_thunk_bool_int64_t_t __fn` field, one with `int64_t __fn`:
 
    ```c
@@ -91,9 +91,18 @@ the folded child matcher `mx` explicitly:
    struct __env_1068__spec__bool { int64_t __fn; int64_t alg; };
    ```
 
-   Looks like the same closure environment is being specialized twice with
-   different ABIs for the embedded `__fn` slot (thin vs. fat), and both
-   emit at the same C name.
+   The same closure environment was specialized twice with different ABIs for
+   the embedded `__fn` slot (thin vs. fat) under one C name -- the carrier `B`
+   lowers to the int64 carrier for both, so the env-struct name collapsed.
+
+   **Fixed** by the same disambiguator as hkt-cata residual (b): the env-struct
+   override site (`src/compiler/emit_module.c`) now appends a deterministic
+   `__h<n>` suffix when the base env name collides with another spec's
+   `env_name_override`, mirroring `emit_abi_clone_name`'s Gap H. With Edge 2
+   resolved, the matcher-as-cata shape now *compiles*; at runtime it reaches a
+   separate, still-open residual -- the captureless arm `(LitF n) (fn [s] true)`
+   crosses the carrier as a thin pointer and segfaults. That is tracked by
+   `docs/reported/captureless-algebra-arm-thin-through-carrier.md`.
 
 ## Minimal repro
 
@@ -110,12 +119,10 @@ emit.
   captured by an inner closure that references it from inside its body.
   Same shape as #494/#496-class capture fixes but for `letrec` self
   through one further closure layer.
-- **Edge 2:** at the closure-spec mangler, ensure a function-typed
-  parameter materializes the env struct's `__fn` field as the fat thunk
-  type (`tur_thunk_*`), not as `int64_t`, when the same env layout is
-  reachable via both a fat and a thin code path. The redefinition is a
-  symptom -- the underlying issue is a missing thin/fat consolidation
-  before naming.
+- **Edge 2:** FIXED 2026-06-22 -- the env-struct name now carries a `__h<n>`
+  disambiguator when two specs collapse to the same base name (see above). The
+  redefinition is gone; what remains after it is the captureless-thin-arm
+  segfault, tracked separately.
 
 Until both edges are addressed, the regex matcher stays direct structural
 recursion (currently 14/14 green at
