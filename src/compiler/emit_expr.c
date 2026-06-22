@@ -717,6 +717,22 @@ void emit_temp_decl(EmitCtx *ctx, Buf *body, Type type, const char *name, const 
  * tail leaves are the producers); `type` is the temp's static type. */
 static void emit_control_result_temp_decl(EmitCtx *ctx, Buf *body, Type type,
                                           const Expr *tail_expr, const char *name) {
+    /* generic-instance-result-byvalue-struct-okarm: when the control form's tail
+     * produces a *by-value* concrete carrier-ABI aggregate -- e.g. a generic
+     * instance method whose tail re-wraps into `(Result (Option int) cstr)` via
+     * specialized `ok`/`err` clones -- declare the temp as that by-value struct,
+     * NOT the int64 carrier.  emit_if_value already takes this branch via
+     * fn_body_tail_byvalue_carrier_type; a wrapping `let`/`do` whose body is that
+     * `if` must agree, or its int64 carrier slot is assigned the by-value struct
+     * (`incompatible types ... int64_t ... Result__Option__int__cstr`, a hard cc
+     * error).  This walker recovers the type from the matched ABI spec, so it
+     * fires even when the construct call's own `e->type` was collapsed to the
+     * carrier (where fn_body_tail_emits_byvalue_carrier_abi bails early). */
+    Type bv = fn_body_tail_byvalue_carrier_type(ctx, tail_expr);
+    if (bv.kind != TY_UNKNOWN) {
+        emit_temp_decl(ctx, body, bv, name, NULL);
+        return;
+    }
     if (type_uses_carrier_abi(emit_resolve_type(ctx, type)) &&
         fn_body_tail_is_carrier_producer(tail_expr) &&
         !fn_body_tail_emits_byvalue_carrier_abi(ctx, tail_expr)) {
