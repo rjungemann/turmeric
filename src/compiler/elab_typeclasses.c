@@ -1957,6 +1957,49 @@ static bool m7_type_has_free_tyvar(Type t) {
     }
 }
 
+/* Parse a single instance-head argument form into a Type.  A primitive type
+ * keyword (`int`, `cstr`, ...) or a known struct/ADT name resolves to its
+ * concrete type; any other bare name is treated as a head *type variable*
+ * (e.g. `V` in `(Map cstr V)`), recorded as a named TY_TYVAR so its identity
+ * survives to the dispatch site where it unifies against the receiver's
+ * matching slot.  Mirrors the inline arg parser in the single-`_` partial-
+ * application path.  Returns false (after emitting a diagnostic) when the form
+ * is not a symbol or keyword. */
+static bool parse_instance_head_arg(Elab *e, const Form *f, Type *out) {
+    if (f->tag != F_SYM && f->tag != F_KEYWORD) {
+        diag_emit(DIAG_ERROR, f->span,
+                  "type application argument must be a type keyword or symbol");
+        return false;
+    }
+    const Symbol *akw = f->as.sym;
+    if (akw->len == 3 && memcmp(akw->name, "int", 3) == 0) {
+        *out = TYPE_INT; return true;
+    }
+    if (akw->len == 4 && memcmp(akw->name, "bool", 4) == 0) {
+        *out = TYPE_BOOL; return true;
+    }
+    if (akw->len == 4 && memcmp(akw->name, "cstr", 4) == 0) {
+        *out = TYPE_CSTR; return true;
+    }
+    if ((akw->len == 4 && memcmp(akw->name, "void", 4) == 0) ||
+        (akw->len == 3 && memcmp(akw->name, "nil", 3) == 0)) {
+        *out = TYPE_NIL; return true;
+    }
+    TypeKind ank = typekind_from_symbol(akw->name);
+    if (ank != TY_UNKNOWN) {
+        *out = type_simple(ank, CK_COPY); return true;
+    }
+    Binding *asb = scope_lookup(e->scope, akw);
+    if (asb && asb->type.kind == TY_STRUCT && asb->type.as.struct_.def) {
+        *out = asb->type; return true;
+    }
+    if (asb && asb->type.kind == TY_ADT && asb->type.as.adt_.def) {
+        *out = asb->type; return true;
+    }
+    *out = type_tyvar_named(akw->name);
+    return true;
+}
+
 /* Elaborate (definstance ClassName [type-args...] (method1 [args...] body...) ...)
  *
  * Defines an instance of a typeclass for concrete types.
@@ -2121,13 +2164,81 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                            && h1->as.sym == us;
                             bool h2_hole = (h2->tag == F_SYM || h2->tag == F_KEYWORD)
                                            && h2->as.sym == us;
+                            /* Fully-applied 2-parameter head `(Ctor a b)` with NO
+                             * `_` hole: BOTH arguments are bound -- each a concrete
+                             * type or a head type variable (e.g. `cstr` and `V` in
+                             * `(Map cstr V)`).  Build a nested, fully-applied TY_APP
+                             * -- app(app(Ctor, a), b) -- of kind *, so a kind-*
+                             * class stays kind * while a head tyvar binds to the
+                             * receiver's matching slot at dispatch
+                             * (m7_collect_tyvar_bindings unifies the nested head
+                             * against the concrete receiver).  This is the kind-*
+                             * counterpart to the single-`_` partial-application
+                             * path below, which serves kind-(* -> *) classes.  See
+                             * docs/reported/kind-star-instance-two-param-type-cannot-bind-constraint-var.md */
+                            if (!h1_hole && !h2_hole) {
+                                if (ctor_form->tag != F_SYM &&
+                                    ctor_form->tag != F_KEYWORD) {
+                                    diag_emit(DIAG_ERROR, ctor_form->span,
+                                              "type application constructor must be a symbol");
+                                    return NULL;
+                                }
+                                const Symbol *ctor_sym2 = ctor_form->as.sym;
+                                Type a0, a1;
+                                if (!parse_instance_head_arg(e, h1, &a0)) return NULL;
+                                if (!parse_instance_head_arg(e, h2, &a1)) return NULL;
+                                /* Constructor fn type carries its real def +
+                                 * arity-derived kind (so dispatch matching and the
+                                 * orphan check see the right constructor identity);
+                                 * an unresolved ctor falls back to an opaque binary
+                                 * constructor. */
+                                Type *fn_type = (Type *)arena_alloc(e->arena, sizeof(Type));
+                                memset(fn_type, 0, sizeof(Type));
+                                Binding *ctor_b2 = scope_lookup(e->scope, ctor_sym2);
+                                if (ctor_b2 && (ctor_b2->type.kind == TY_ADT ||
+                                                (ctor_b2->type.kind == TY_STRUCT &&
+                                                 ctor_b2->type.as.struct_.def))) {
+                                    *fn_type = ctor_b2->type;
+                                    uint32_t ca = (ctor_b2->type.kind == TY_ADT)
+                                        ? ctor_b2->type.as.adt_.def->n_type_params
+                                        : ctor_b2->type.as.struct_.def->n_type_params;
+                                    fn_type->hkt_kind = (ca > 0)
+                                        ? kind_for_arity(ca) : KIND_ARROW2;
+                                } else {
+                                    fn_type->kind = TY_STRUCT;
+                                    fn_type->copy_kind = CK_MOVE;
+                                    fn_type->hkt_kind = KIND_ARROW2;
+                                    fn_type->as.struct_.def = NULL;
+                                }
+                                /* inner = app(Ctor, a0);  outer = app(inner, a1).
+                                 * Each application steps the kind one rung down the
+                                 * ladder, so a binary (ARROW2) constructor applied
+                                 * to two args lands at kind * -- keeping a kind-*
+                                 * class from being promoted to higher kind. */
+                                Type *a0p = (Type *)arena_alloc(e->arena, sizeof(Type));
+                                *a0p = a0;
+                                Type *a1p = (Type *)arena_alloc(e->arena, sizeof(Type));
+                                *a1p = a1;
+                                Type *inner = (Type *)arena_alloc(e->arena, sizeof(Type));
+                                memset(inner, 0, sizeof(Type));
+                                inner->kind = TY_APP;
+                                inner->copy_kind = CK_MOVE;
+                                inner->hkt_kind = kind_apply_one(fn_type->hkt_kind);
+                                inner->as.app.fn = fn_type;
+                                inner->as.app.arg = a0p;
+                                memset(&type_args[i], 0, sizeof(type_args[i]));
+                                type_args[i].kind = TY_APP;
+                                type_args[i].copy_kind = CK_MOVE;
+                                type_args[i].hkt_kind = kind_apply_one(inner->hkt_kind);
+                                type_args[i].as.app.fn = inner;
+                                type_args[i].as.app.arg = a1p;
+                                type_arg_syms[i] = ctor_sym2;
+                                continue;
+                            }
                             if (h1_hole == h2_hole) {
                                 diag_emit(DIAG_ERROR, arg->span,
-                                          h1_hole
-                                            ? "instance head has two '_' holes; exactly "
-                                              "one parameter may be left free (e.g. (Result _ B))"
-                                            : "instance head must mark the free parameter "
-                                              "with exactly one '_' (e.g. (Result _ B))");
+                                          "instance head has two '_' holes; exactly "
+                                          "one parameter may be left free (e.g. (Result _ B))");
                                 return NULL;
                             }
                             /* The fixed (non-hole) arm is the type argument. */
