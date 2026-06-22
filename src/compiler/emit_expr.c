@@ -2935,6 +2935,20 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         arg = arg->as.reinterpret_.expr;
                     }
                     arg_strs[i] = emit_value(ctx, body, arg);
+                    /* hkt-cata-function-carrier: an EX_FN_TO_FAT shim (a thin fn
+                     * boxed into a fat closure for a parametric ADT field, see
+                     * elab_call.c) emits a `void *` box.  The constructor lowers
+                     * the field to the int64 carrier, so cast the box to int64_t
+                     * (a pure reinterpret) -- otherwise the void* is passed to
+                     * the int64_t ctor param with a -Wint-conversion warning. */
+                    if (arg && arg->kind == EX_FN_TO_FAT) {
+                        Buf c; buf_init(&c);
+                        buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
+                        buf_putc(&c, '\0');
+                        free(arg_strs[i]);
+                        arg_strs[i] = strdup(c.data);
+                        buf_free(&c);
+                    }
                 }
                 char *_mc = mangle_field_name(fn_binding->name->name);
                 Buf out; buf_init(&out);

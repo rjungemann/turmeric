@@ -12,16 +12,26 @@ the *generic* `cata` driver still mis-dispatches the function carrier at
 runtime. A clean direct-recursion workaround exists, so this is an ergonomics
 gap, not a blocker.
 
-## Status
+## Status -- ALL THREE LAYERS FIXED (see below for the residual)
 
-This finding has **three layers**. Two are fixed on this branch; one remains
-open.
+This finding had **three layers**. All three are now fixed.
 
 | Layer | What | Status |
 | --- | --- | --- |
-| Bug 0 | `(cata fn-alg e)` typed `int`, "not callable" | **FIXED** (this branch) |
-| Bug A | fn-typed `match`-arm payload not captured by an inner closure | **FIXED** (this branch) |
-| Bug C | a fn value crossing the generic int64 carrier boundary dispatches *thin*, not *fat* -> SIGSEGV | **OPEN** |
+| Bug 0 | `(cata fn-alg e)` typed `int`, "not callable" | **FIXED** (#489) |
+| Bug A | fn-typed `match`-arm payload not captured by an inner closure | **FIXED** (#489) |
+| Bug C | a fn value crossing the generic int64 carrier boundary dispatches *thin*, not *fat* -> SIGSEGV | **FIXED** (the recursive fn-carrier fix) |
+
+The Bug C runtime fix (chained slot-0 fat-dispatch of a carrier-recovered
+result, uniform fat-boxing of fn values in parametric ADT fields, and fat
+dispatch of fn-typed match-arm payloads) is documented, with its repro and the
+two **remaining open residuals**, in
+[hkt-cata-function-carrier-recursive-segfault.md](hkt-cata-function-carrier-recursive-segfault.md):
+
+- a captureless algebra arm (e.g. a variable-lookup `(fn [env] env)`) still
+  crosses the carrier *thin* (the report's "Bug B"); and
+- a program mixing a fn-carrier and a value-carrier `cata` over the same `Fix`
+  hits a pre-existing per-spec env-struct name collision.
 
 A sibling closure-ABI gap (Bug B, thin captureless lambda -> fat
 `tur_poly_fn_t` coercion) is described under "Related" below.

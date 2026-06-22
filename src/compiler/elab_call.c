@@ -736,6 +736,27 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
          * returns a bare fn reference, e.g. ((pick) 5) -> inc) the head
          * resolves to NULL here and stays a thin pointer call. */
         tmp_b->closure_fn_binding = expr_closure_fn_binding(source_expr);
+        /* hkt-cata-function-carrier: the head is the result of a generic call
+         * whose DECLARED result is a bare type variable -- e.g.
+         * `(cata fn-alg e)` for `(defn cata [B] ... : B)` with B := (fn [int]
+         * int).  The TY_FN was recovered from the int64 carrier (Bug 0, #489).
+         * Any function value that crosses a generic carrier is a uniform fat
+         * box: a bare thin fn passed into a tyvar parameter / parametric ADT
+         * field is boxed via EX_FN_TO_FAT, and a closure-returning algebra
+         * hands back a heap { thunk, env... } box.  So the chained application
+         * MUST dispatch through slot 0, not as a thin pointer (which jumps into
+         * the env block -> SIGSEGV).  There is no single named thunk to route
+         * through -- the callee body returns `(alg ...)`, whose value is
+         * reconstructed from the carrier and (for a match-returning algebra) is
+         * a distinct lambda per arm -- so closure_fn_binding stays NULL;
+         * instead mark the head temp's fn type `boxed` so emit takes the
+         * runtime slot-0 fat-dispatch path (ER2, emit_expr.c). */
+        if (!tmp_b->closure_fn_binding &&
+            source_expr->as.call_.fn_binding &&
+            source_expr->as.call_.fn_binding->type.kind == TY_FN &&
+            source_expr->as.call_.fn_binding->type.as.fn.result_kind == TY_TYVAR) {
+            tmp_b->type.as.fn.boxed = true;
+        }
     } else if (head_kind == TY_FN && source_expr &&
                source_expr->type.kind == TY_PTR_VOID) {
         /* aggregate-return-fat-box-ascription: a :ptr<void> fat-closure box
@@ -1865,6 +1886,40 @@ Expr *elab_call(Elab *e, Form *call) {
                         param_bindings[n_bound].type = concrete;
                         n_bound++;
                     }
+                }
+
+                /* hkt-cata-function-carrier: a concrete (statically TY_FN)
+                 * function value stored into a PARAMETRIC ADT field (one
+                 * declared as a bare type variable, e.g. `a` in
+                 * `(defdata ExprF [a] (AddF a a))`) must be boxed into a uniform
+                 * fat closure.  The constructor lowers the field to the int64
+                 * carrier, so the TY_TYVAR auto-shim in the arg loop does not
+                 * fire here -- without this a captureless lambda stored in
+                 * `(AddF f g)` stays a thin fn pointer, and the match-arm
+                 * extraction (marked is_fat) would fat-dispatch a thin pointer,
+                 * jumping into code as if it were an env block -> SIGSEGV.
+                 * A *carrier-erased* fn value -- a fold's `(g x)` recursion
+                 * result inside a generic `fmap`/`cata` body, elaborated as the
+                 * int64 carrier (TY_INT) because the carrier type B is still an
+                 * unbound tyvar -- is NOT statically TY_FN, so the TY_FN gate
+                 * skips it: it is already a fat box (the algebra returns
+                 * closures) and must not be double-boxed.  A capturing closure
+                 * value (TY_PTR_VOID) and an already-boxed TY_FN are likewise
+                 * left untouched.  Mirrors the ^fat auto-shim arity bound (<=5). */
+                for (uint32_t fi = 0; fi < ctor->n_fields && fi < n_call_args; fi++) {
+                    const Type *ft = ctor->fields[fi].full_type;
+                    if (!ft || ft->kind != TY_TYVAR) continue;
+                    Expr *fa = call_expr->as.call_.args[fi];
+                    if (!fa || fa->type.kind != TY_FN || fa->type.as.fn.boxed)
+                        continue;
+                    uint8_t inner_arity = fa->type.as.fn.arity;
+                    if (inner_arity < 1 || inner_arity > 5) continue;
+                    Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *bt = fa->type;
+                    bt->as.fn.boxed = true;
+                    Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, *bt, fa->span);
+                    shim->as.fn_to_fat_.inner = fa;
+                    call_expr->as.call_.args[fi] = shim;
                 }
 
                 /* TS4P1: Build TY_APP result type for per-use-site ADT monomorphisation.
