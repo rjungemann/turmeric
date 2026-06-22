@@ -118,8 +118,16 @@ Pure spice-side work; no compiler dependencies.
   - **U2 (typeclass collapse): COMPLETE -- all 4 targets shipped** --
     ansi `Color` (PR #18), plot `Backend`, json `Encode`/`Decode` (+
     `derive-json`), httpd `Handler` (PR #23/#24).
-  - **U3 (row-typed schemas): 1 of 4** -- frame done; postgres/sqlite,
-    httpd, and json object-shape rows open.
+  - **U3 (row-typed schemas): 2 of 4** -- frame + sqlite done; postgres,
+    httpd, and json object-shape rows open. sqlite landed 2026-06-22:
+    `TStmt [^&params ^&cols]` phantom-row newtype over the raw :int
+    handle in `sqlite/typed.tur` (mirrors frame's pattern); typed binds
+    + col accessors delegate to existing `sqlite/stmt` and `sqlite/row`.
+    Row-polymorphic smoke green under default `tur test`; concrete
+    `#row{...}` mismatch verified by hand as `TUR-E0001` under
+    `-Xdata-literals`. Linear-aware typed wrap, a `Col t` newtype, and a
+    static bind/col index refinement are explicit follow-ups in the new
+    file's header.
   - **U4 (sized types): 1 of 4** -- linalg `LaVecN`/`LaMatN` shipped
     (PR #27, 2026-06-20); rtaudio/wav, raylib Image, c-dsl arrays open.
   - **U5 (Fix-based ASTs): 1 of 5** -- regex shipped as `Roll (ReF Re)`
