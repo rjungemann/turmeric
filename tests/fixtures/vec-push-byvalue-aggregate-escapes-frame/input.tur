@@ -1,0 +1,40 @@
+;; vec-push-byvalue-aggregate-escapes-frame: pushing a by-value aggregate
+;; element (`(Option int)` -> by-value `Option__int`) into a heap `Vec` that
+;; OUTLIVES the producing frame must not store a dangling stack address.
+;;
+;; Before the fix
+;; (docs/archive/vec-push-byvalue-aggregate-element-stores-dangling-stack-address.md),
+;; the concrete->carrier bridge spilled each element to a stack local and
+;; carried `(int64_t)(intptr_t)(&tmp)`.  Correct for an immediate consumer, but
+;; for a `Vec` returned from `build-vec` the stored pointers dangle the moment
+;; `build-vec`'s frame returns -- read back in `main` they alias reclaimed
+;; stack.  Works "by luck" at -O0; a deep intervening call clobbers the slot.
+;;
+;; The fix heap-promotes the by-value aggregate element (malloc + copy) at the
+;; vec-push! carrier boundary, so the element outlives the container.  This
+;; fixture builds the Vec in a child frame, RETURNS it, then runs a deep
+;; recursive call to clobber the reclaimed stack BEFORE reading the elements
+;; back -- so a dangling-address regression reads garbage, not 5 / 99.
+
+(defn build-vec [] : int
+  (let [vo (:: (vec-new) (Vec (Option int)))]
+    (vec-push! vo (:: (some 5)  (Option int)))
+    (vec-push! vo (:: (some 99) (Option int)))
+    (:: vo :int)))
+
+;; Deep recursion to overwrite build-vec's reclaimed frame with fresh garbage.
+(defn clobber [n : int acc : int] : int
+  (if (= n 0)
+    acc
+    (clobber (- n 1) (+ acc n))))
+
+(defn main [] : int
+  (let [vo (:: (build-vec) (Vec (Option int)))]
+    ;; Clobber the reclaimed stack between produce and read.
+    (let [junk (clobber 4096 0)]
+      (let [a (:: (vec-get vo 0) (Option int))
+            b (:: (vec-get vo 1) (Option int))]
+        (println (if (.is-some a) (.value a) -1))    ;; wants 5
+        (println (if (.is-some b) (.value b) -1))    ;; wants 99
+        (+ junk 0)))
+    0))
