@@ -390,6 +390,12 @@ struct FnDef *emit_reresolve_method_fndef(struct EmitCtx *ctx, const struct Expr
  * parametric container.  Defined in emit_core.c. */
 bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
                               Type *out_resolved, const Expr **out_dict);
+/* R2 (carrier-crossing-recovery-routing-plan): shared first-stage dispatch-tyvar
+ * identification -- writes the TY_TYVAR a typeclass-method call dispatches on
+ * (ascribed receiver, bare receiver, or result type) into *out, or returns false
+ * when the call carries no dispatch tyvar.  The single spelling both the emit-time
+ * chokepoint and the scan-time predicate consult.  Defined in emit_core.c. */
+bool emit_dispatch_tyvar(const Expr *call, Type *out);
 /* Value-side chokepoint core (carrier<->concrete): given a binding that is a
  * parameter of the active ABI specialization, recover its monomorphized concrete
  * type from `current_abi_specialization->arg_types[]`.  Returns false when there

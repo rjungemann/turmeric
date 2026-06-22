@@ -29,9 +29,20 @@ chokepoints are now self-validating via a Debug-only "forgot to route" ICE
   hand-rolled `for pi: if fd->params[pi] == b -> arg_types[pi]` recovery --
   the value-side chokepoint logic copied inline at 6 sites. Dispatch-side
   and fn-value-side inventory still open.
-- **R1 -- Make the chokepoints total.** NOT STARTED as a folding pass.
+- **R1 -- Make the chokepoints total.** STARTED. The dispatch-tyvar
+  *identification* walk (ascribed receiver / bare receiver / result type)
+  was duplicated verbatim in the emit-time chokepoint
+  (`emit_reresolve_disp_type`) and the scan-time predicate
+  (`emit_call_dispatches_on_spec_tyvar`); it is now one shared routine,
+  `emit_dispatch_tyvar` (`emit_core.c`, declared in `emit_internal.h`), that
+  both consult, so they can no longer disagree about which position carries
+  the dispatch variable. The chokepoint's constraint-var resolution *tail*
+  and `emit_ground_constraint_var` remain separate **by design**: the latter
+  handles a `param_idx < 0` direct-`type_arg` case and gates on result
+  concreteness that the chokepoint deliberately omits, so merging them would
+  change instance selection (a behavior change, not a refactor).
   `emit_var_spec_arg_type` (`emit_expr.c`) and
-  `emit_reresolve_disp_type` (`emit_core.c:1157`) have been *extended*,
+  `emit_reresolve_disp_type` (`emit_core.c`) have otherwise been *extended*,
   but every G2-G10 fix landed as a sibling branch beside them: G2 via
   `emit_abi_try_nested_instance_dispatch_redirect` (`emit_module.c:1960`,
   PRs #493/#495); G3 via call-site bridge in
@@ -60,6 +71,15 @@ chokepoints are now self-validating via a Debug-only "forgot to route" ICE
 | `emit_module.c` instance-method twin-arg resolver (Gap 1) | MIGRATED | inline copy deleted |
 | `emit_fns.c:910` carrier-payload param index | EXCLUDED | wants the param *index*, not its type -- different routine |
 | `emit_effects.c:211` `ctx->fn_params[pi]` | EXCLUDED | different array (effect-handler params), not spec `arg_types[]` |
+
+### R0 inventory -- dispatch-side recovery
+
+| Site | Status | Note |
+|---|---|---|
+| `emit_core.c` `emit_reresolve_disp_type` dispatch-tyvar identification | ROUTED (delegates to `emit_dispatch_tyvar`) | -- |
+| `emit_module.c` `emit_call_dispatches_on_spec_tyvar` tyvar identification | MIGRATED | inline copy deleted; now calls `emit_dispatch_tyvar` |
+| `emit_core.c` constraint-var resolution tail | NOT MERGED (by design) | differs from `emit_ground_constraint_var` (param_idx<0 + concreteness gating); merge would change instance selection |
+| `emit_module.c:2164` scan-time dispatch recovery | ALREADY ROUTED | calls `emit_reresolve_disp_type`; redirect helpers consume its result |
 - **R3 -- Debug-build "forgot to route" ICE.** DONE (chokepoint
   postcondition form). `emit_abi_assert_routed_concrete` (`emit_core.c`,
   declared in `emit_internal.h`) is a Debug-only gate the two value/dispatch

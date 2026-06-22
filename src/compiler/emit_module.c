@@ -1155,19 +1155,9 @@ static bool emit_call_dispatches_on_spec_tyvar(const Expr *call, FnDef *fd,
     const Expr *dict = call->as.call_.dict_arg;
     if (!dict || dict->kind != EX_DICT || !dict->as.dict_.instance) return false;
     if (dict->as.dict_.method_name[0] == '\0') return false;
-    const char *tvname = NULL;
-    if (call->as.call_.n_args >= 1 && call->as.call_.args) {
-        const Expr *recv = call->as.call_.args[0];
-        for (const Expr *a = recv; a && a->kind == EX_ASCRIBE;
-             a = a->as.ascribe_.inner) {
-            if (a->type.kind == TY_TYVAR) { tvname = a->type.as.tyvar_.name; break; }
-        }
-        if (!tvname) {
-            while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
-            if (recv && recv->type.kind == TY_TYVAR) tvname = recv->type.as.tyvar_.name;
-        }
-    }
-    if (!tvname && call->type.kind == TY_TYVAR) tvname = call->type.as.tyvar_.name;
+    Type dt;
+    if (!emit_dispatch_tyvar(call, &dt) || dt.kind != TY_TYVAR) return false;
+    const char *tvname = dt.as.tyvar_.name;
     if (!tvname) return false;
     return emit_abi_binding_is_concrete(bindings, n_bindings, tvname) ||
            emit_constraint_var_grounds_concrete(fd, bindings, n_bindings, tvname);

@@ -1222,6 +1222,37 @@ static bool emit_pattern_extract_classvar(const Type *pattern, const Type *concr
  * rewrite (emit_reresolve_method_call) and the scan-time liveness mark
  * (emit_reresolve_method_fndef), so the two never disagree about which concrete
  * instance a constrained-instance body dispatches to. */
+/* R2 (carrier-crossing-recovery-routing-plan): shared first-stage dispatch-tyvar
+ * identification.  A typeclass-method call carries its dispatch type variable in
+ * one of three places, checked in priority order:
+ *   1. an explicit ascription-to-tyvar on the receiver -- `(enc (:: e A))`, the
+ *      documented carrier-helper element-read idiom (captured BEFORE stripping
+ *      ascriptions, so the inner int-carrier type is not read instead);
+ *   2. the bare receiver (arg 0) once ascriptions are stripped -- the ordinary
+ *      argument-dispatched `(eq? x y)` with `x : A`;
+ *   3. the call's own result type -- a return-dispatch method whose class var
+ *      appears only in the result (`(:: (deserialize b) A)`).
+ * Writes the identified TY_TYVAR into *out and returns true, or returns false
+ * when no dispatch tyvar is present (a concrete receiver/result already baked the
+ * right instance at elaboration).  Both the emit-time chokepoint
+ * (emit_reresolve_disp_type) and the scan-time predicate
+ * (emit_call_dispatches_on_spec_tyvar) route through here so they never disagree
+ * about which position carries the dispatch variable. */
+bool emit_dispatch_tyvar(const Expr *call, Type *out) {
+    if (!call || call->kind != EX_CALL) return false;
+    if (call->as.call_.n_args >= 1 && call->as.call_.args) {
+        const Expr *recv = call->as.call_.args[0];
+        for (const Expr *a = recv; a && a->kind == EX_ASCRIBE;
+             a = a->as.ascribe_.inner) {
+            if (a->type.kind == TY_TYVAR) { *out = a->type; return true; }
+        }
+        while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
+        if (recv && recv->type.kind == TY_TYVAR) { *out = recv->type; return true; }
+    }
+    if (call->type.kind == TY_TYVAR) { *out = call->type; return true; }
+    return false;
+}
+
 bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
                               Type *out_resolved, const Expr **out_dict) {
     if (!ctx || !ctx->current_abi_specialization || !call ||
@@ -1232,45 +1263,17 @@ bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
     if (!dict || dict->kind != EX_DICT || !dict->as.dict_.instance) return false;
     if (dict->as.dict_.method_name[0] == '\0') return false;
 
-    /* The dispatch type variable is normally the receiver (arg 0): an
-     * argument-dispatched constrained-generic call (`(eq? x y)` with `x : A`).
-     * For a RETURN-dispatch method (`(:: (deserialize b) A)`, where the class
-     * var appears only in the result) there is no tyvar argument -- the call's
-     * *result* type carries the abstract tyvar instead.  Pick whichever is a
-     * type variable.  A concrete receiver/result already baked the correct
-     * instance at elaboration, so we only act on a genuine tyvar.
-     * (return-dispatch-tyvar-silent-misdispatch.md) */
+    /* The dispatch type variable is the receiver, the ascribed receiver, or the
+     * call's result type (see emit_dispatch_tyvar).  A concrete receiver/result
+     * already baked the correct instance at elaboration, so we only act on a
+     * genuine tyvar.  (return-dispatch-tyvar-silent-misdispatch.md) */
     Type disp_ty;
-    bool have_disp = false;
+    bool have_disp = emit_dispatch_tyvar(call, &disp_ty);
     /* `disp_ty` is an owned (malloc'd) TY_APP spine only when it came from the
      * substitute-struct-app branch below; freed before every return so the
      * recovered concrete element type does not leak (the compiler/codegen path is
      * leak-checked).  Exposed by the nested `(Cons int)` element case (G2). */
     bool disp_ty_owned = false;
-    if (call->as.call_.n_args >= 1 && call->as.call_.args) {
-        const Expr *recv = call->as.call_.args[0];
-        /* constrained-generic-instance-element-dispatch: an explicit ascription
-         * to the constraint tyvar -- `(enc (:: (vec-get v i) A))` -- is the
-         * documented idiom (stdlib vec-of docstring) for recovering the element
-         * type of a carrier helper (vec-get/list-head/...) whose `:A` return
-         * collapses to the int64 carrier.  The ASCRIBE node carries the tyvar `A`,
-         * but its inner expression is the int-carrier call; stripping ascriptions
-         * first (below) would read that carrier `int` and bake the int instance.
-         * Capture an ascription-to-tyvar before stripping so the element call
-         * re-dispatches per specialization -- matching the field-extraction path
-         * (constrained-instance-element-dispatch) for `(.value x)`. */
-        for (const Expr *a = recv; a && a->kind == EX_ASCRIBE;
-             a = a->as.ascribe_.inner) {
-            if (a->type.kind == TY_TYVAR) { disp_ty = a->type; have_disp = true; break; }
-        }
-        while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
-        if (!have_disp && recv && recv->type.kind == TY_TYVAR) {
-            disp_ty = recv->type; have_disp = true;
-        }
-    }
-    if (!have_disp && call->type.kind == TY_TYVAR) {
-        disp_ty = call->type; have_disp = true;
-    }
     /* nested-construct-byvalue (Gap #4): an ascribed return-dispatch method
      * whose `call->type` is a TY_APP *embedding* the class var -- e.g.
      * `(:: (dec tag) (Result A cstr))` for `(defclass Dec [a] (dec ... : (Result
