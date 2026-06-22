@@ -2935,6 +2935,20 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         arg = arg->as.reinterpret_.expr;
                     }
                     arg_strs[i] = emit_value(ctx, body, arg);
+                    /* hkt-cata-function-carrier: an EX_FN_TO_FAT shim (a thin fn
+                     * boxed into a fat closure for a parametric ADT field, see
+                     * elab_call.c) emits a `void *` box.  The constructor lowers
+                     * the field to the int64 carrier, so cast the box to int64_t
+                     * (a pure reinterpret) -- otherwise the void* is passed to
+                     * the int64_t ctor param with a -Wint-conversion warning. */
+                    if (arg && arg->kind == EX_FN_TO_FAT) {
+                        Buf c; buf_init(&c);
+                        buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
+                        buf_putc(&c, '\0');
+                        free(arg_strs[i]);
+                        arg_strs[i] = strdup(c.data);
+                        buf_free(&c);
+                    }
                 }
                 char *_mc = mangle_field_name(fn_binding->name->name);
                 Buf out; buf_init(&out);
@@ -3008,6 +3022,27 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         inner_r = emit_resolve_type(ctx, asc_inner->type);
                     if (type_is_heap_struct(inner_r) &&
                         type_has_concrete_codegen_layout(&inner_r)) {
+                        preserve_ascribe_for_bridge = true;
+                    }
+                }
+                /* constrained-generic-dispatch-float-element: keep an
+                 * `(:: (vec-get v i) A)` ascription intact when the element
+                 * tyvar `A` resolves (through the active spec) to a FLOAT width
+                 * over an int64 carrier inner.  Stripping it would hand the raw
+                 * int64 carrier bits to a `double` parameter -- a NUMERIC
+                 * int64->double conversion (1.5 -> 4.6e18), not the bit
+                 * reinterpret the concrete `(:: ... :float)` form performs.
+                 * Preserving the wrapper routes it through the EX_ASCRIBE emit,
+                 * which bridges carrier->concrete for the float case. */
+                if (!preserve_ascribe_for_bridge && arg_expr &&
+                    arg_expr->kind == EX_ASCRIBE &&
+                    arg_expr->type.kind == TY_TYVAR &&
+                    arg_expr->as.ascribe_.inner &&
+                    arg_expr->as.ascribe_.inner->type.kind == TY_INT &&
+                    ctx->current_abi_specialization) {
+                    Type rtv = emit_resolve_type(ctx, arg_expr->type);
+                    if (rtv.kind == TY_FLOAT || rtv.kind == TY_FLOAT32 ||
+                        rtv.kind == TY_FLOAT64) {
                         preserve_ascribe_for_bridge = true;
                     }
                 }
@@ -5406,6 +5441,31 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  e->type.as.struct_.def->is_opaque) ||
                 (e->type.kind == TY_STRUCT && e->type.as.struct_.def == NULL) ||
                 e->type.kind == TY_TYVAR;
+            /* constrained-generic-dispatch-float-element: `(:: (vec-get v i) A)`
+             * -- the documented carrier-helper ascription idiom -- recovers the
+             * element type `A` for dispatch, but when `A` monomorphizes to a
+             * FLOAT width the int64 carrier read from `vec-get` must be
+             * bit-reinterpreted to a `double`, exactly as the concrete
+             * `(:: ... :float)` ascription is via the method-arg bridge.  Treated
+             * as a pure tyvar relabel (ascribe_to_opaque), the raw int64 bits
+             * flowed through unreinterpreted, so a `1.5` element arrived as its
+             * int64 bit pattern (4.6e18) inside the dispatched method.  A plain
+             * C int64->double assignment is a NUMERIC conversion, not a
+             * reinterpret, so resolve the tyvar through the active spec and, when
+             * it grounds to a float width over an int64 carrier inner, bridge
+             * carrier->concrete here.  (int/bool/cstr/struct elements need no
+             * reinterpret -- their carrier bits ARE the value -- so only the
+             * float widths take this path.) */
+            if (e->type.kind == TY_TYVAR &&
+                e->as.ascribe_.inner->type.kind == TY_INT &&
+                ctx->current_abi_specialization) {
+                Type rtv = emit_resolve_type(ctx, e->type);
+                if (rtv.kind == TY_FLOAT || rtv.kind == TY_FLOAT32 ||
+                    rtv.kind == TY_FLOAT64) {
+                    return emit_carrier_bridge(ctx, body, inner_val,
+                                               CK_CARRIER, CK_CONCRETE, rtv);
+                }
+            }
             if (!ascribe_to_opaque &&
                 e->as.ascribe_.inner->type.kind == TY_INT &&
                 type_kind_is_aggregate(e->type.kind) &&

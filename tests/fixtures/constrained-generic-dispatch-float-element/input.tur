@@ -1,0 +1,37 @@
+;; constrained-generic-dispatch-float-element -- a FLOAT element read through
+;; the documented carrier-helper ascription idiom `(:: (vec-get v i) A)` inside
+;; a constrained generic must arrive as its concrete double value, not as its
+;; raw int64 carrier bit pattern.
+;;
+;; Follow-up to #490: the constrained-generic element re-resolver picks the
+;; right instance (Tag[float], InUnit[float]) for a float element, but the
+;; element VALUE arrived bit-mangled -- `(:: (vec-get v i) A)` with A = float
+;; was treated as a pure tyvar relabel, so the int64 carrier flowed into the
+;; double parameter via a NUMERIC int64->double conversion (1.5 -> 4.6e18)
+;; instead of the bit reinterpret the concrete `(:: ... :float)` form performs.
+;; int/bool/cstr/struct elements need no reinterpret (their carrier bits ARE
+;; the value); only the float widths take the reinterpret path.
+;;
+;; Fix (emit_expr.c, EX_ASCRIBE): when the ascription target tyvar resolves to
+;; a float width over an int64 carrier inner, bridge carrier->concrete (and
+;; preserve the ascription wrapper so the bridge is reached).
+
+(defclass InUnit [a] (in-unit? [x] : bool))
+(definstance InUnit [float] (in-unit? [x] (if (> x 1.0) (< x 2.0) false)))
+
+;; generic helper: read a float element via (:: e A), call the method
+(defn in-unit-vec? [A] [(InUnit A)] [v : (Vec A)] : bool
+  (in-unit? (:: (vec-get v 0) A)))
+
+(defn main [] : int
+  (let [v1 (:: (vec-new) (Vec float))
+        v2 (:: (vec-new) (Vec float))]
+    (vec-push! v1 1.5)
+    (vec-push! v2 3.25)
+    ;; generic path: value must reinterpret as 1.5 / 3.25, not the bit pattern
+    (if (in-unit-vec? v1) (println "generic-v1: true") (println "generic-v1: false"))
+    (if (in-unit-vec? v2) (println "generic-v2: true") (println "generic-v2: false"))
+    ;; direct concrete-ascription path: the control that already worked
+    (if (in-unit? (:: (vec-get v1 0) :float))
+        (println "direct-v1: true") (println "direct-v1: false"))
+    0))

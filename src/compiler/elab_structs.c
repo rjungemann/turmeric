@@ -3180,6 +3180,21 @@ Expr *elab_match(Elab *e, const Form *call) {
                 Binding *fb = binding_new(e, var_form->as.sym, ftype, false, false,
                                           var_form->span);
                 fb->is_match_binding = true;
+                /* hkt-cata-function-carrier: a TY_FN value stored in a
+                 * PARAMETRIC ADT field (one declared as a bare type variable,
+                 * e.g. `a` in `(defdata ExprF [a] (AddF a a))`) is uniformly a
+                 * fat box -- a thin fn passed into a tyvar field is boxed via
+                 * EX_FN_TO_FAT at construction (elab_call.c ~3310), and a
+                 * closure value is already a fat box.  Mark the extracted match
+                 * binding `boxed` so an application `(f env)` fat-dispatches
+                 * through slot 0 (ER2, emit_expr.c) instead of jumping into the
+                 * box as thin code -> SIGSEGV.  A concrete (non-tyvar) TY_FN
+                 * field is NOT auto-boxed at construction, so it stays thin. */
+                if (fb->type.kind == TY_FN &&
+                    ctor->fields[bi].full_type &&
+                    ctor->fields[bi].full_type->kind == TY_TYVAR) {
+                    fb->is_fat = true;
+                }
                 /* LT1: Propagate linearity from the field's type to its binding */
                 if (g_linear_enabled && ftype.copy_kind == CK_LINEAR) {
                     fb->is_linear = true;

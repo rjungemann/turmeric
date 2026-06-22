@@ -1,0 +1,52 @@
+;; hkt-cata-fn-carrier-recursive -- a generic catamorphism whose carrier B is
+;; itself a FUNCTION type, threaded recursively through fmap, returns a callable
+;; closure.  (Follow-up to #489: Bug C, the runtime crash.)
+;;
+;; cata alg = alg . fmap (cata alg) . unroll over a by-value Fix
+;; (Expr = Roll (ExprF Expr)) with B = (fn [int] int): each node folds to an
+;; env->int function.  Before the fix, `(cata fn-alg e)` type-checked and
+;; compiled but SEGFAULTED -- the fn-carrier cata result (a fat closure box)
+;; crossed the generic int64 carrier boundary and was applied as a THIN function
+;; pointer (a jump into the env block), and the captured AddF match-arm payloads
+;; f/g (themselves fat boxes recovered from the carrier) were dispatched thin too.
+;;
+;; Fix (hkt-cata-function-carrier): the chained application of a generic call
+;; whose declared result is a bare tyvar dispatches fat (slot 0); a concrete
+;; function value stored into a parametric ADT field is boxed uniformly at
+;; construction (EX_FN_TO_FAT); and a function-typed match-arm payload extracted
+;; from a parametric field is fat-dispatched (is_fat).
+
+(load "stdlib/typeclass-functor.tur")
+
+(defdata ExprF :copy [a] (LitF :int) (AddF a a))
+(defdata Expr  :copy (Roll (ExprF Expr)))
+
+(definstance Functor [ExprF]
+  (fmap [c g]
+    (match c
+      (LitF n)   (LitF n)
+      (AddF x y) (AddF (g x) (g y)))))
+
+(defn unroll-e [e : Expr] : (ExprF Expr)
+  (match e (Roll l) (:: l (ExprF Expr))))
+
+;; generic catamorphism, carrier B
+(defn cata [B] [alg : (fn [(ExprF B)] B)  e : Expr] : B
+  (alg (:: (fmap (unroll-e e) (fn [c : Expr] : B (cata alg c))) (ExprF B))))
+
+;; carrier B = (fn [int] int): each node folds to an env->int function
+(defn fn-alg [l : (ExprF (fn [int] int))] : (fn [int] int)
+  (match l
+    (LitF n)   (fn [env : int] : int n)
+    (AddF f g) (fn [env : int] : int (+ (f env) (g env)))))
+
+(defn lit [n : int] : Expr (Roll (LitF n)))
+(defn add [x : Expr y : Expr] : Expr (Roll (AddF x y)))
+
+(defn main [] : int
+  (do
+    ;; (3 + 4) = 7
+    (println ((cata fn-alg (add (lit 3) (lit 4))) 0))
+    ;; ((3 + 4) + 5) = 12 -- deeper recursion
+    (println ((cata fn-alg (add (add (lit 3) (lit 4)) (lit 5))) 0))
+    0))
