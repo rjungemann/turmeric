@@ -3395,6 +3395,17 @@ Expr *elab_fn(Elab *e, const Form *call) {
         return NULL;
     }
 
+    /* Edge 1: snapshot and clear the active letrec self-exclude group at entry.
+     * This `fn` IS the letrec init's top-level lambda iff elab_letrec set the
+     * group right before calling us; a direct self/mutual call in our own body
+     * must therefore be excluded from capture (handled by recursion machinery).
+     * Clearing it immediately means any NESTED closure inside this body sees an
+     * empty group and so captures the letrec-bound value through its env. */
+    Binding **letrec_self_group   = e->letrec_self_group;
+    uint32_t  n_letrec_self_group = e->letrec_self_group_n;
+    e->letrec_self_group   = NULL;
+    e->letrec_self_group_n = 0;
+
     const Symbol *fn_type_params[8];
     Kind fn_type_param_kinds[8];
     uint8_t n_fn_type_params = 0;
@@ -3885,7 +3896,9 @@ Expr *elab_fn(Elab *e, const Form *call) {
     /* Phase 3: Capture analysis - collect free variables in the body */
     /* We need to do this before popping the scope */
     uint32_t n_captures = 0;
-    Binding **captures = collect_free_vars(body, params, n_params, &n_captures);
+    Binding **captures = collect_free_vars(body, params, n_params,
+                                           letrec_self_group, n_letrec_self_group,
+                                           &n_captures);
 
     /* Pop scope */
     e->scope = inner.parent;

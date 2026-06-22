@@ -1,0 +1,54 @@
+; Edge 1 (hkt-matcher-cata-fnarg-on-toplevel-defn-and-env-struct-collision):
+; a `letrec`-bound `self` referenced from inside a NESTED closure (the natural
+; StarF / backtracking-matcher shape) must be captured by that inner closure's
+; env.  Before the fix, collect_free_vars' EX_CALL gate excluded every
+; letrec/named-let self binding (to leave direct self-recursion to the recursion
+; machinery), so a `self` reached only from a nested closure was dropped from
+; the inner capture set and the lifted C body referenced the bare outer local
+; `self_NNNN` ('self_NNNN' undeclared).
+;
+; Two shapes are guarded:
+;   * `walk` -- `self` is a REAL closure (it also captures the outer `limit`),
+;     so the inner closure captures `self`'s env box (its own env pointer at
+;     emit time, mirroring the S5 self-*call* rule).
+;   * `countdown` -- `self` is captureless, so it is lifted as a directly
+;     callable global; the eager nested-closure capture is stripped at emit and
+;     the call resolves to the global C symbol (no bogus env slot).
+(defmodule letrecnested
+  (defn empty? [s : cstr] : bool
+    ```c
+    return (s == NULL || s[0] == '\0');
+    ```)
+  (defn drop1 [s : cstr] : cstr
+    ```c
+    if (s == NULL || s[0] == '\0') return s;
+    return s + 1;
+    ```)
+
+  ; self is a real closure: it captures `limit`.  The nested `(fn [s2] (self s2))`
+  ; references self and so must capture it by env.
+  (defn make-walk [limit : int] : (fn [cstr] bool)
+    (letrec [self (fn [s : cstr] : bool
+                    (if (empty? s)
+                      true
+                      (let [step (fn [s2 : cstr] : bool (self s2))]
+                        (if (= limit 0) false (step (drop1 s))))))]
+      self))
+
+  ; self is captureless -> lifted as a global; the nested closure that names it
+  ; resolves to the global C symbol after the emit-side strip.
+  (defn countdown [start : int] : int
+    (letrec [self (fn [n : int] : int
+                    (if (= n 0)
+                      0
+                      (let [step (fn [m : int] : int (self m))]
+                        (+ n (step (- n 1))))))]
+      (self start)))
+
+  (defn main [] : int
+    (let [w (make-walk 100)]
+      (println (if (w "abcde") 1 0))  ; consumes all 5 chars -> true  -> 1
+      (println (if (w "") 1 0))       ; empty -> true                 -> 1
+      (println (countdown 5))         ; 5+4+3+2+1+0                    -> 15
+      (println (countdown 0))         ; 0                             -> 0
+      0)))

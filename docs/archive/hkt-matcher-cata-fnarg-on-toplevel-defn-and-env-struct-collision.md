@@ -8,6 +8,15 @@ in `turmeric-spices/spices/regex/src/regex/tree.tur`. `re-matches?` remains
 direct structural recursion. Value folds (`re-size`, `re-nullable?`,
 `re->str`) and the matcher itself are unaffected.
 
+**Status: RESOLVED 2026-06-22.** Edge 2 was fixed earlier (env-struct
+disambiguator, see below). Edge 1 -- the `letrec`-self capture across a nested
+closure -- is now fixed too (see the Edge 1 resolution note). The remaining
+runtime residual (a captureless algebra arm crossing the int64 carrier *thin*)
+is tracked separately in
+`docs/reported/captureless-algebra-arm-thin-through-carrier.md`; it is the
+same fat-vs-thin carrier-dispatch cluster as Bug B/Bug C of
+`hkt-cata-function-carrier-recursive-segfault`, not a `letrec` capture bug.
+
 ## Context
 
 #499 fixed the cata-application-site case where the carrier `B` has a
@@ -47,6 +56,42 @@ __t25 = regex__tree____fn_1158((void *)(intptr_t)(self_1149),
 The outer letrec-bound `self` is reachable from the inner `(fn [s2] ...)`
 closure body, but `collect_free_vars` is not picking it up across that
 inner-closure boundary.
+
+### Edge 1 -- FIXED 2026-06-22
+
+Root cause: `collect_free_vars`' `EX_CALL` free-var gate
+(`src/compiler/elab_core.c`) deliberately excluded *every* `letrec`/named-let
+self binding -- the `is_param`/`is_match_binding`-only accept list from #499 --
+so that a direct self/mutual recursive call stayed with the recursion machinery
+(captureless-global lifting, or the S5 env-ptr self-call). That exclusion was
+too broad: a `self` reached only from a *nested* closure is a genuine free
+variable of that inner closure and must be captured by env.
+
+Fix (mirrors #494/#496-class capture fixes, plus an S5-style emit rule):
+
+- `src/compiler/expr.h`: new `Binding.is_letrec_binding` flag, set on every
+  `letrec`/named-let group member in `elab_letrec` Pass A
+  (`src/compiler/elab_forms.c`).
+- `src/compiler/elab_core.c`: the `EX_CALL` gate now also accepts a `TY_FN`
+  call head that `is_letrec_binding`. A new **self-exclude set** (the active
+  letrec group, threaded through `Elab.letrec_self_group` and snapshotted +
+  cleared at `elab_fn` entry) keeps a *direct* self/mutual call in the init's
+  own top-level body out of the capture set, while a reference from a nested
+  closure -- which sees an empty group -- is captured. The `EX_CLOSURE`
+  transitive fold honours the same exclude set so the closure the letrec binds
+  `self` to does not capture *itself* (its value is its own env pointer).
+- `src/compiler/emit_expr.c`: when a nested closure's captured binding is the
+  very closure currently being emitted (`captured->closure_fn_binding ==
+  ctx->closure->fn->binding`), store its own env pointer in the inner env slot
+  (the S5 self-*call* rule applied to a self-*capture*). A letrec member that
+  turned out captureless (lifted as a directly-callable global) is stripped
+  from the env struct / build / `capture_env_access`
+  (`src/compiler/emit_core.c`) and reached by its C symbol instead -- globals
+  are never legitimately captured elsewhere, so this is otherwise a no-op.
+
+Regression fixture: `tests/fixtures/letrec-self-in-nested-closure` (the
+real-closure-capture `walk` shape and the captureless-global `countdown`
+shape). Full `bash tests/run.sh`: 1762 passed, 0 failed.
 
 ## Edge 2 -- env-struct redefinition collision when the letrec is hoisted
 
@@ -115,15 +160,21 @@ emit.
 
 ## Fix direction
 
-- **Edge 1:** extend `collect_free_vars` so the letrec-bound name is
-  captured by an inner closure that references it from inside its body.
-  Same shape as #494/#496-class capture fixes but for `letrec` self
-  through one further closure layer.
+- **Edge 1:** FIXED 2026-06-22 -- `collect_free_vars` now captures a
+  `letrec`-bound name referenced from a nested closure, gated by a new
+  `is_letrec_binding` flag plus a self-exclude set so direct self/mutual
+  recursion still goes to the recursion machinery; emit stores the enclosing
+  closure's own env pointer in the inner env slot (and strips a captureless
+  member that became a global). See the "Edge 1 -- FIXED" note above.
 - **Edge 2:** FIXED 2026-06-22 -- the env-struct name now carries a `__h<n>`
   disambiguator when two specs collapse to the same base name (see above). The
   redefinition is gone; what remains after it is the captureless-thin-arm
   segfault, tracked separately.
 
-Until both edges are addressed, the regex matcher stays direct structural
-recursion (currently 14/14 green at
-`turmeric-spices/spices/regex/tests/tree_test.tur`).
+Both edges are now addressed. The matcher-as-cata shape *compiles and runs*
+for the `letrec`-self-through-nested-closure case; the residual that keeps the
+full spice-side `(re-cata match-alg e)` from landing is the captureless-arm
+thin-carrier segfault tracked in
+`docs/reported/captureless-algebra-arm-thin-through-carrier.md`. Until that
+lands, the regex matcher stays direct structural recursion (currently 14/14
+green at `turmeric-spices/spices/regex/tests/tree_test.tur`).

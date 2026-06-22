@@ -987,7 +987,7 @@ Expr *elab_handle(Elab *e, const Form *call) {
                 hparams[j] = cases[i].param_bindings[j];
             hparams[cases[i].n_params] = kb;
             uint32_t n_caps = 0;
-            Binding **caps = collect_free_vars(cases[i].body, hparams, n_hparams, &n_caps);
+            Binding **caps = collect_free_vars(cases[i].body, hparams, n_hparams, NULL, 0, &n_caps);
             for (uint32_t ci = 0; ci < n_caps; ci++) {
                 CopyKind ck = caps[ci]->type.copy_kind;
                 if (ck == CK_UNIQUE || ck == CK_LINEAR) {
@@ -1221,7 +1221,7 @@ Expr *elab_handler_lit(Elab *e, const Form *call) {
             hparams[j] = cases[0].param_bindings[j];
         hparams[cases[0].n_params] = kb;
         uint32_t n_caps = 0;
-        Binding **caps = collect_free_vars(cases[0].body, hparams, n_hparams, &n_caps);
+        Binding **caps = collect_free_vars(cases[0].body, hparams, n_hparams, NULL, 0, &n_caps);
         for (uint32_t ci = 0; ci < n_caps; ci++) {
             CopyKind ck = caps[ci]->type.copy_kind;
             if (ck == CK_UNIQUE || ck == CK_LINEAR) {

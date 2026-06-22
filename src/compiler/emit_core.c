@@ -1691,7 +1691,13 @@ static char *capture_env_access(EmitCtx *ctx, const Binding *b) {
     /* Phase 3: captured binding in a closure thunk -> env_var_name->field. */
     if (!env && ctx->closure && ctx->env_var_name) {
         for (uint8_t i = 0; i < ctx->closure->n_captures; i++) {
-            if (ctx->closure->captures[i] == b) { env = ctx->env_var_name; break; }
+            if (ctx->closure->captures[i] == b) {
+                /* Edge 1: an eagerly-captured letrec member that resolved to a
+                 * captureless global has no env field (see emit_expr.c); let it
+                 * fall through to its C symbol rather than a bogus env slot. */
+                if (b->is_global) break;
+                env = ctx->env_var_name; break;
+            }
         }
     }
     /* Phase 4 v1: captured binding in a defer thunk -> env_var_name->field. */
