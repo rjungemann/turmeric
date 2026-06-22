@@ -4324,12 +4324,23 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
          * `as.forall_.body` payload that `open` (and every existential op) must
          * see, forcing a per-read `(:: ... (exists ...))` re-ascription.  Keep
          * the full type for the same reason as the composites above. */
+        /* hkt-cata-function-typed-carrier-not-threaded: a function-typed
+         * carrier (a fold whose B is itself `(fn ...)` -- a CPS matcher, an
+         * environment-passing interpreter, a `Doc = (fn ...)` pretty-printer)
+         * resolves the bare-tyvar result to a TY_FN.  A function value is
+         * pointer-width and already inhabits the int64 carrier register class
+         * (rax, not xmm0), exactly like the TY_APP/struct/ADT composites above,
+         * so collapsing it to int is pure loss: it erases the arg/result
+         * payload the call site needs to APPLY the returned function, and the
+         * application fails with "expression in call head has type `int`, which
+         * is not callable".  Keep the full TY_FN for the same reason. */
         bool result_is_concrete_composite =
             (result_type.kind == TY_APP) ||
             (result_type.kind == TY_ADT && result_type.as.adt_.def) ||
             (result_type.kind == TY_STRUCT && result_type.as.struct_.def) ||
             (result_type.kind == TY_EXISTS) ||
-            (result_type.kind == TY_FORALL);
+            (result_type.kind == TY_FORALL) ||
+            (result_type.kind == TY_FN);
         if (!result_is_concrete_composite) {
             call_result_type = TYPE_INT;
             wrap_generic_result = (result_type.kind != TY_INT);
