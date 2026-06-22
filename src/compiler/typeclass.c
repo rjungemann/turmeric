@@ -166,7 +166,31 @@ TypeClassInstance *typeclass_env_lookup_instance(const TypeClassEnv *env,
                  * HasSchema[User] vs HasSchema[Post]). */
                 eff_struct_def = type_args[i].as.struct_.def;
             }
-            if (inst->type_args[i].kind != eff_kind) {
+            /* Normalize the INSTANCE head the same way as the query head above.
+             * An instance declared with a (partially/fully) applied head -- e.g.
+             * `[(Option A)]` -- stores its type_arg as TY_APP(Option, ...),
+             * whereas a bare head -- `[Vec]` -- stores it as TY_STRUCT.  Walk a
+             * struct-headed TY_APP instance down to its TY_STRUCT constructor so
+             * a concrete query like (Option int) (normalized to TY_STRUCT Option
+             * above) matches it.  Without this symmetry a NESTED-container
+             * constraint discharge -- the `(C (Option int))` required by a
+             * `(Vec (Option int))` receiver against a `C [Vec] [(C A)]` instance
+             * -- fails: the query side is TY_STRUCT while the instance side is
+             * the raw TY_APP, so the kinds never line up and dispatch reports a
+             * spurious TUR_E0020 ambiguity. */
+            TypeKind inst_eff_kind = inst->type_args[i].kind;
+            const StructDef *inst_eff_struct_def = NULL;
+            if (inst_eff_kind == TY_APP) {
+                const Type *ihead = &inst->type_args[i];
+                while (ihead && ihead->kind == TY_APP) ihead = ihead->as.app.fn;
+                if (ihead && ihead->kind == TY_STRUCT) {
+                    inst_eff_kind = TY_STRUCT;
+                    inst_eff_struct_def = ihead->as.struct_.def;
+                }
+            } else if (inst_eff_kind == TY_STRUCT) {
+                inst_eff_struct_def = inst->type_args[i].as.struct_.def;
+            }
+            if (inst_eff_kind != eff_kind) {
                 match = false;
                 break;
             }
@@ -175,9 +199,9 @@ TypeClassInstance *typeclass_env_lookup_instance(const TypeClassEnv *env,
              * etc.).  Without this, Eq[TY_APP(Vec, int)] would match
              * Eq[Map] because both have type_args[0].kind == TY_STRUCT. */
             if (eff_struct_def &&
-                inst->type_args[i].kind == TY_STRUCT &&
-                inst->type_args[i].as.struct_.def != NULL &&
-                inst->type_args[i].as.struct_.def != eff_struct_def) {
+                inst_eff_kind == TY_STRUCT &&
+                inst_eff_struct_def != NULL &&
+                inst_eff_struct_def != eff_struct_def) {
                 match = false;
                 break;
             }

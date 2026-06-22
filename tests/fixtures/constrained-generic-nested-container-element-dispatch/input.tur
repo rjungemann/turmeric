@@ -1,0 +1,45 @@
+;; constrained-generic-nested-container-element-dispatch -- a constrained
+;; parametric instance must dispatch its class method on an element type that is
+;; ITSELF a container, routing through the `(C A)` constraint to that
+;; container's own instance (e.g. C[Option] for A = (Option int)).
+;;
+;; Root cause (docs/archive/constrained-generic-dispatch-container-typed-element-ambiguous.md):
+;; an instance head declared applied -- `[(Option A)]` -- stores its type_arg as
+;; TY_APP(Option, ...), whereas a bare head -- `[Cons]`/`[Vec]` -- stores it as
+;; TY_STRUCT.  typeclass_env_lookup_instance normalized only the QUERY type's
+;; TY_APP head down to its TY_STRUCT constructor, comparing it against the
+;; instance's raw TY_APP kind.  So discharging the `(C (Option int))` constraint
+;; required by a `(Cons (Option int))` receiver against the `C[Cons] [(C A)]`
+;; instance failed (TY_STRUCT query != TY_APP instance), the instance was
+;; demoted to a name-only fallback, and dispatch reported a spurious
+;; TUR_E0020_AMBIGUOUS_DISPATCH.
+;;
+;; Fix: normalize the instance head the same way as the query head, so a
+;; struct-headed TY_APP instance ((Option A)) matches a struct-normalized query
+;; ((Option int)).  The flat element case ((Cons int)) already worked because a
+;; plain `int` element is TY_INT, never a TY_APP.
+
+(defclass Tag [a] (tag [x] : int))
+(definstance Tag [int] (tag [x] 7))
+
+;; container instance whose element A may itself be a container; the +100 lets
+;; us prove the Option instance actually ran (vs a baked int representative).
+(definstance Tag [(Option A)] [(Tag A)]
+  (tag [x] (if (.is-some x) (+ 100 (tag (.value x))) 0)))
+
+;; per-element helper over a (Cons A); recovers A via the ascription idiom.
+(defn tag-head [A] [(Tag A)] [c : (Cons A)] : int
+  (tag (:: (.head c) A)))
+
+;; outer container instance over Cons; element A is the nested (Option int).
+(definstance Tag [Cons] [(Tag A)]
+  (tag [x] (+ 1000 (let [c (:: x (Cons A))] (tag-head c)))))
+
+(defn main [] : int
+  ;; flat element: Cons of int -> 1000 + 7 = 1007
+  (let [flat (:: (list 5) (Cons int))]
+    (println (tag flat)))
+  ;; nested element: Cons of (Option int) -> 1000 + 100 + 7 = 1107
+  (let [nested (:: (list (:: (some 5) (Option int))) (Cons (Option int)))]
+    (println (tag nested)))
+  0)
