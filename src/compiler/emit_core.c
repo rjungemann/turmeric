@@ -1304,6 +1304,48 @@ bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
             }
         }
     }
+    /* unascribed-carrier-helper-read-collapses-element-tyvar: the receiver may be
+     * an UNASCRIBED generic carrier-helper read -- `(tag (vec-get v i))` -- whose
+     * declared `:A` return collapses to the int64 carrier at elaboration, so
+     * neither the bare-tyvar receiver check nor the ascription-to-tyvar branch
+     * above fires (the call's elaborated type is `TY_INT`).  Recover the element
+     * tyvar from the callee's own signature: a carrier helper's `result_full_type`
+     * is its type-param `R`, and `R` also appears inside one of its parameters'
+     * declared full types (`v : (Vec R)`).  Find that parameter, structurally
+     * match its declared full type against the ACTUAL argument's type, and read
+     * the subtype at `R`'s position -- e.g. matching `(Vec R)` against the actual
+     * `(Vec A)` yields the constraint var `A`.  The downstream
+     * `emit_resolve_type` + constraint-var `param_idx` grounding then resolves it
+     * per specialization, matching the documented `(:: e A)` ascription idiom
+     * without requiring the explicit ascription. */
+    if (!have_disp && call->as.call_.n_args >= 1 && call->as.call_.args) {
+        const Expr *recv = call->as.call_.args[0];
+        while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
+        if (recv && recv->kind == EX_CALL && recv->as.call_.fn_binding &&
+            recv->as.call_.args) {
+            const Type *ft = &recv->as.call_.fn_binding->type;
+            if (ft->kind == TY_FN && ft->as.fn.arg_full_types &&
+                ft->as.fn.result_full_type &&
+                ft->as.fn.result_full_type->kind == TY_TYVAR &&
+                ft->as.fn.result_full_type->as.tyvar_.name) {
+                const char *rname = ft->as.fn.result_full_type->as.tyvar_.name;
+                uint8_t np = ft->as.fn.arity;
+                for (uint8_t pi = 0;
+                     pi < np && pi < recv->as.call_.n_args; pi++) {
+                    const Type *pft = ft->as.fn.arg_full_types[pi];
+                    const Expr *ae = recv->as.call_.args[pi];
+                    if (!pft || !ae) continue;
+                    Type extracted;
+                    if (emit_pattern_extract_classvar(pft, &ae->type, rname,
+                                                      &extracted)) {
+                        disp_ty = extracted;
+                        have_disp = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
     if (!have_disp) return false;
 
     Type resolved = emit_resolve_type(ctx, disp_ty);
