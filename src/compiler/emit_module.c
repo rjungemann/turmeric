@@ -3229,7 +3229,22 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
                 emit_abi_type_has_named_tyvar(
                     inner->as.call_.fn_binding->type.as.fn.result_full_type) &&
                 type_has_concrete_codegen_layout(&e->type) &&
-                !emit_abi_type_has_concrete_named_tyvar(&e->type);
+                !emit_abi_type_has_concrete_named_tyvar(&e->type) &&
+                /* A `(:: (f ...) :int)` that erases a parametric/heap result
+                 * (e.g. `(Cons A)`) down to its int64 carrier is NOT a concrete
+                 * monomorphization target -- it is a carrier coercion (here, to
+                 * feed a `t : int` cons tail in a self-recursive list builder).
+                 * Treating it as a G7 concrete override re-resolves the
+                 * recursive call to the int-carrier spec (`Cons__int`) instead
+                 * of the enclosing spec's element type, dropping every element
+                 * past the head (round-trip-list cstr/float arrays:
+                 * docs/reported/recursive-constrained-generic-carrier-ascription-loses-element-spec.md).
+                 * Only fire G7 when the ascription preserves the result's
+                 * parametric shape (both TY_APP), not when it collapses a
+                 * parametric application down to a bare scalar carrier. */
+                !(inner->as.call_.fn_binding->type.as.fn.result_full_type->kind
+                      == TY_APP &&
+                  e->type.kind != TY_APP);
             if (g7_override) {
                 uint32_t before = ctx->n_specialized_calls;
                 emit_abi_register_call(ctx, inner, items, n_items, &e->type);
