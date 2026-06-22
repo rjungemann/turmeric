@@ -1,0 +1,35 @@
+;; hkt-cata-captureless-fn-carrier-arm -- a closure-returning algebra whose
+;; result is the closure carrier B = (fn [int] int) boxes its CAPTURING arms
+;; (LitF captures n, AddF captures f/g) as fat closure boxes but used to emit
+;; the CAPTURELESS variable-lookup arm (VarF -> (fn [env] env)) as a bare thin
+;; fn pointer.  The carrier-crossing caller fat-dispatches every arm, so the
+;; thin arm was read as a fat box (slot-0 of a code address) and jumped into
+;; -> SIGSEGV.  The fix boxes the thin arm uniformly fat.  This is an
+;; environment-passing interpreter as one cata; eval (var 0) under env 100 = 100.
+;; See docs/archive/captureless-algebra-arm-thin-through-carrier.md.
+(load "stdlib/typeclass-functor.tur")
+(defdata ExprF :copy [a] (LitF :int) (VarF :int) (AddF a a))
+(defdata Expr  :copy (Roll (ExprF Expr)))
+(definstance Functor [ExprF]
+  (fmap [c g]
+    (match c
+      (LitF n)   (LitF n)
+      (VarF i)   (VarF i)
+      (AddF x y) (AddF (g x) (g y)))))
+(defn unroll-e [e : Expr] : (ExprF Expr)
+  (match e (Roll l) (:: l (ExprF Expr))))
+(defn cata [B] [alg : (fn [(ExprF B)] B)  e : Expr] : B
+  (alg (:: (fmap (unroll-e e) (fn [c : Expr] : B (cata alg c))) (ExprF B))))
+(defn eval-alg [l : (ExprF (fn [int] int))] : (fn [int] int)
+  (match l
+    (LitF n)   (fn [env : int] : int n)
+    (VarF i)   (fn [env : int] : int env)
+    (AddF f g) (fn [env : int] : int (+ (f env) (g env)))))
+(defn lit [n : int] : Expr (Roll (LitF n)))
+(defn var [i : int] : Expr (Roll (VarF i)))
+(defn add [x : Expr y : Expr] : Expr (Roll (AddF x y)))
+(defn main [] : int
+  (do (println ((cata eval-alg (var 0)) 100))
+      (println ((cata eval-alg (lit 5)) 100))
+      (println ((cata eval-alg (add (var 0) (lit 7))) 100))
+      0))
