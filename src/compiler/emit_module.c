@@ -2939,6 +2939,49 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 buf_puts(&en, "__spec__");
                 append_sanitized_c_token(&en, type_c_name(inner_res));
                 buf_putc(&en, '\0');
+                /* hkt-cata-mixed-carrier-env-collision: the carrier `B` lowers to
+                 * the int64 carrier (`type_c_name` -> `int64_t`) for BOTH a fat
+                 * function carrier (`B = (fn [int] int)`, whose env's `__fn` slot
+                 * is a `tur_thunk_*`) and a plain value carrier (`B = int`, whose
+                 * `__fn` is a bare `int64_t`).  The two specs are genuinely
+                 * distinct (type_eq kept them apart and emit_abi_clone_name
+                 * already gave them distinct `__h<n>` clone names), but this
+                 * env-struct name collapses both to `__env_N__spec__int64_t`, so
+                 * the two struct definitions redefine each other in the same TU.
+                 * Mirror the Gap H clone-name disambiguator here: when the base
+                 * env name collides with another spec's already-assigned
+                 * env_name_override, append `__h<n>` (deterministic in intern
+                 * order, so it reproduces across the header/impl emit passes).
+                 * No effect on non-colliding names -> existing snapshots are
+                 * untouched. */
+                bool en_collides = false;
+                for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
+                    EmitAbiSpecialization *os = &ctx->abi_specializations[i];
+                    if (os == inner_spec || !os->env_name_override) continue;
+                    if (strcmp(os->env_name_override->name, en.data) == 0) {
+                        en_collides = true;
+                        break;
+                    }
+                }
+                if (en_collides) {
+                    char *base = strdup(en.data);
+                    if (!base) { fprintf(stderr, "tur: oom\n"); abort(); }
+                    for (uint32_t n = 1; en_collides; n++) {
+                        en.len = 0;
+                        buf_printf(&en, "%s__h%u", base, n);
+                        buf_putc(&en, '\0');
+                        en_collides = false;
+                        for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
+                            EmitAbiSpecialization *os = &ctx->abi_specializations[i];
+                            if (os == inner_spec || !os->env_name_override) continue;
+                            if (strcmp(os->env_name_override->name, en.data) == 0) {
+                                en_collides = true;
+                                break;
+                            }
+                        }
+                    }
+                    free(base);
+                }
                 inner_spec->env_name_override =
                     emit_arena_symbol(ctx->type_arena, en.data);
                 buf_free(&en);
