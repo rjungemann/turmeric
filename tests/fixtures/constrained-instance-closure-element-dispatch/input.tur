@@ -1,0 +1,44 @@
+;; constrained-instance-closure-element-dispatch -- a constrained generic
+;; instance body whose per-element class-method call lives INSIDE a lambda-lifted
+;; fold/accumulator closure (the natural `(letrec [go (fn ...)] (go ...))` shape)
+;; must re-dispatch the element call per element type, not bake the carrier
+;; representative instance (`__inst_Tag_tag_int`) the elaborator captured.
+;;
+;; Before the fix: the lifted closure `__fn_N` was emitted once at file scope with
+;; the spec context unset, so the re-dispatch machinery never fired and every
+;; `Vec` element type ran the int instance -- a silent wrong result (the bool/float
+;; vectors printed as if every element tagged to 1).
+;;
+;; Fix: docs/archive/constrained-instance-element-dispatch-leaks-into-lifted-closures.md
+;; -- such a closure is cloned once per enclosing element-type spec
+;; (emit_module.c: inner_dispatch / emit_find_dispatch_spec_closure), the clone
+;; body grounds the constraint var `A` to the concrete element so its `tag` call
+;; re-dispatches, and both the recursive self-call and the enclosing spec's direct
+;; invocation target the clone.  Multiple element types in one program stay
+;; distinct (the clone signature is an identical int64 carrier, so the specs are
+;; kept apart by their element bindings + the Gap H `__h<n>` name disambiguator).
+
+(defclass Tag [a] (tag [x] : int))
+(definstance Tag [int]   (tag [x] 1))
+(definstance Tag [bool]  (tag [x] 2))
+(definstance Tag [float] (tag [x] 7))
+
+(definstance Tag [Vec] [(Tag A)]
+  (tag [x]
+    (let [v (:: x (Vec A))  n (vec-len v)]
+      (letrec [go (fn [i : int  acc : int] : int
+                    (if (>= i n) acc
+                      (go (+ i 1) (+ acc (tag (:: (vec-get v i) A))))))]
+        (go 0 0)))))
+
+(defn main [] : int
+  (let [vb (:: (vec-new) (Vec bool))
+        vf (:: (vec-new) (Vec float))
+        vi (:: (vec-new) (Vec int))]
+    (vec-push! vb true) (vec-push! vb false)
+    (vec-push! vf 1.5) (vec-push! vf 2.5) (vec-push! vf 3.5)
+    (vec-push! vi 9) (vec-push! vi 9)
+    (println (tag vb))   ;; 4  = 2 + 2 via Tag[bool]
+    (println (tag vf))   ;; 21 = 7 + 7 + 7 via Tag[float]
+    (println (tag vi)))  ;; 2  = 1 + 1 via Tag[int]
+  0)
