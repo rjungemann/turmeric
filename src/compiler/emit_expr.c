@@ -3066,6 +3066,16 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             char *fn_name = emit_call_name(ctx, e, fn_binding);
             const EmitAbiSpecialization *matched_spec =
                 find_matched_abi_spec(ctx, e, fn_binding);
+            /* unascribed-carrier-helper-read-collapses-element-tyvar: a
+             * constrained-instance element call may re-dispatch to a different
+             * concrete instance than the elab-baked representative -- e.g. the
+             * float spec of `Enc [Vec]` re-resolves to `enc_float(double)` even
+             * though `fn_binding` is the baked `enc_cstr(const char *)`.  The
+             * carrier-scalar cast below must follow that ACTUAL callee's param
+             * ABI, so consult the re-resolved FnDef (NULL when the call is not
+             * re-dispatched, e.g. the carrier base clone, where the baked binding
+             * is what gets emitted). */
+            FnDef *reresolved_callee = emit_reresolve_method_fndef(ctx, e);
             char **arg_strs = (char **)malloc(e->as.call_.n_args * sizeof(char *));
             if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
@@ -3175,6 +3185,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * int->pointer mismatch in C.  NULL = use the int64_t/void*
                  * carrier cast as before. */
                 const char *fn_cast_typedef = NULL;
+                /* unascribed-carrier-helper-read-collapses-element-tyvar: non-NULL
+                 * (a concrete scalar pointer C type, e.g. "const char *") when the
+                 * carrier int64 must be reinterpreted to a non-void pointer param. */
+                const char *scalar_carrier_cty = NULL;
                 /* Phase P3: TY_INT (int64_t) arg passed to a TY_PTR_VOID (void*) param
                  * requires (void*)(intptr_t) coercion. Occurs when persistent-map
                  * lowering passes a map handle (int64_t) to hamt/count etc. */
@@ -3196,6 +3210,26 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         (_pk == TY_PTR_VOID || _pk == TY_RC || _pk == TY_REF || _pk == TY_WEAK)) {
                         needs_fn_cast = true;
                         cast_to_void_ptr = true;
+                    }
+                    /* unascribed-carrier-helper-read-collapses-element-tyvar: the
+                     * carrier base clone of a constrained instance whose
+                     * representative is a non-int scalar (e.g. `Enc [cstr]` when no
+                     * `Enc [int]` exists) dispatches the element call to that
+                     * representative method -- `__inst_Enc_enc_cstr(const char *)` --
+                     * but the element read comes through the int64 carrier
+                     * (`vec-get`'s erased `:A`).  Passing the carrier int64 to the
+                     * `const char *` (TY_CSTR) param trips -Wint-conversion.  Bridge
+                     * it through the param's own C type via intptr_t: the base clone
+                     * is a representative placeholder (only the per-element ABI
+                     * specializations are ever called with real data), so the
+                     * reinterpret only needs to be valid C. */
+                    else if ((_emit_is_int || _arg_is_int) && _pk == TY_CSTR &&
+                             (!reresolved_callee ||
+                              (param_idx < reresolved_callee->n_params &&
+                               reresolved_callee->param_types &&
+                               reresolved_callee->param_types[param_idx].kind == TY_CSTR))) {
+                        needs_fn_cast = true;
+                        scalar_carrier_cty = type_c_name(emit_type_from_kind(_pk));
                     }
                 }
                 if (needs_fn_cast && fn_binding->type.kind == TY_FN) {
@@ -3250,6 +3284,12 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * existing (no-cast) handling. */
                         needs_fn_cast = true;
                         cast_to_void_ptr = false;
+                    } else if (pk == TY_CSTR && scalar_carrier_cty) {
+                        /* unascribed-carrier-helper-read-collapses-element-tyvar:
+                         * keep the carrier-int64 -> const char* reinterpret set
+                         * above (the scalar_carrier_cty emission path), rather than
+                         * falling through to the no-cast default. */
+                        needs_fn_cast = true;
                     } else {
                         needs_fn_cast = false;
                     }
@@ -3275,6 +3315,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * `R (*)(A...)` typedef (a captureless fn's C name
                          * decays to a function pointer of that exact shape). */
                         buf_printf(&cast, "(%s)(%s)", fn_cast_typedef, raw);
+                    } else if (scalar_carrier_cty) {
+                        /* carrier int64 -> concrete scalar pointer (e.g.
+                         * `const char *`) reinterpret via intptr_t. */
+                        buf_printf(&cast, "(%s)(intptr_t)(%s)", scalar_carrier_cty, raw);
                     } else if (cast_to_void_ptr) {
                         buf_printf(&cast, "(void *)(intptr_t)(%s)", raw);
                     } else {

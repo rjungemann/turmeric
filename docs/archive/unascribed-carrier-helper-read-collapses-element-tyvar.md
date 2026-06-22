@@ -120,8 +120,20 @@ the existing constraint-var `param_idx` machinery.
 Both changes are guarded on the recovered element being an abstract tyvar, so
 they only engage inside a constrained generic instance body (where the
 container's element is the constraint var). A concrete carrier read is
-unaffected. The residual `-Wint-conversion` warning on the dead carrier base
-clone is pre-existing and identical to the ascribed fixture
-(`constrained-generic-instance-vec-element-dispatch`) -- not a regression.
+unaffected.
+
+A third change cleans up the carrier-crossing on the dispatched element
+argument. The carrier base clone (and the matching-instance specs) of a
+constrained instance whose representative is a non-int scalar pass the element
+through the int64 carrier (`vec-get`'s erased `:A`) into a method whose param is
+a concrete scalar pointer -- `__inst_Enc_enc_cstr(const char *)` -- which tripped
+`-Wint-conversion`. `emit_expr.c` (the direct-call arg path) now reinterprets the
+carrier int64 to the param's own C type via `intptr_t` when the **actually
+emitted** callee's param is `TY_CSTR`. The emitted callee is read from the
+re-resolved FnDef (`emit_reresolve_method_fndef`), not the elab-baked
+representative, so a sibling spec that re-dispatches to a differently-typed
+instance (e.g. `enc_float(double)` in the float spec) is left to its own
+int->double conversion rather than mis-cast to `const char *`. This warning was
+pre-existing -- the ascribed fixture emitted it too -- and is now gone from both.
 
 Pinned by `tests/fixtures/constrained-generic-instance-vec-element-unascribed/`.
