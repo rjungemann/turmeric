@@ -46,6 +46,14 @@ struct Binding {
     bool          is_mut;
     bool          is_global;     /* top-level def vs. local let */
     bool          is_param;      /* function/extern parameter binding */
+    /* True when this binding was introduced by destructuring an ADT
+     * constructor pattern in a `match` arm (e.g. `f`/`g` in `(AddF f g)`).
+     * collect_free_vars uses it to capture a function-typed match-arm payload
+     * invoked as a callee inside an inner closure -- the same env-capture a
+     * function-typed parameter gets -- without also capturing a letrec/named-let
+     * self-recursive fn binding (which is neither param nor match binding).
+     * See hkt-cata-function-typed-carrier-not-threaded. */
+    bool          is_match_binding;
     uint32_t      id;            /* unique within the program */
     Span          span;
     /* TY4: lexical scope depth at declaration (0 = outermost). Stamped by

@@ -2730,6 +2730,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                 pat->bindings = (Binding **)arena_alloc(e->arena, sizeof(Binding *));
                 Binding *fb = binding_new(e, var_form->as.sym, arm_type,
                                           false, false, var_form->span);
+                fb->is_match_binding = true;
                 if (arm_type.copy_kind == CK_LINEAR) fb->is_linear = true;
                 pat->bindings[0] = fb;
                 Scope arm_scope;
@@ -3178,6 +3179,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                 }
                 Binding *fb = binding_new(e, var_form->as.sym, ftype, false, false,
                                           var_form->span);
+                fb->is_match_binding = true;
                 /* LT1: Propagate linearity from the field's type to its binding */
                 if (g_linear_enabled && ftype.copy_kind == CK_LINEAR) {
                     fb->is_linear = true;

@@ -630,14 +630,30 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                      cur->as.call_.fn_binding->type.kind == TY_PTR_VOID ||
                      (cur->as.call_.fn_binding->type.kind == TY_FN &&
                       cur->as.call_.fn_binding->is_param) ||
+                     (cur->as.call_.fn_binding->type.kind == TY_FN &&
+                      cur->as.call_.fn_binding->is_match_binding) ||
                      cur->as.call_.fn_binding->is_fat ||
                      cur->as.call_.is_poly_call)) {
-                    /* TY_FN param: a typed fn PARAMETER (`g : (fn [a] b)`)
-                     * invoked as the callee `(g x)` inside an inner closure must
-                     * be captured by env; otherwise the lifted closure references
-                     * the local `g` at file scope ('g' undeclared).  Restricted to
-                     * `is_param` so a letrec/named-let self-recursive TY_FN
-                     * binding (lifted as a global, handled by the recursion
+                    /* TY_FN local value: a function-typed binding invoked as the
+                     * callee `(g x)` inside an inner closure must be captured by
+                     * env; otherwise the lifted closure references the local `g`
+                     * at file scope ('g' undeclared).  Two forms qualify:
+                     *
+                     *  - a typed fn PARAMETER (`g : (fn [a] b)`), and
+                     *  - a `match`-arm payload binding destructured over a
+                     *    function-typed carrier (`(AddF f g)` where the ADT's
+                     *    element type is `(fn ...)`).
+                     *
+                     * hkt-cata-function-typed-carrier-not-threaded: the original
+                     * `is_param`-only gate dropped the match-arm case, so a fold
+                     * whose carrier is `(fn ...)` (a CPS matcher / environment-
+                     * passing interpreter algebra) lifted its `(fn [env] (+ (f
+                     * env) (g env)))` lambda THIN -- f/g were never added to the
+                     * env, and the generated C referenced undeclared locals.
+                     *
+                     * Both forms are gated by `is_param` / `is_match_binding`
+                     * precisely so a letrec/named-let self-recursive TY_FN binding
+                     * (which is neither, and is handled by the recursion
                      * machinery) is NOT wrongly captured. */
                     /* Restrict to bindings that hold a closure VALUE.  Four
                      * forms qualify: a let-bound closure (closure_fn_binding),

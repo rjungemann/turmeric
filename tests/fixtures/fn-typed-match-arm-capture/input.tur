@@ -1,0 +1,27 @@
+; hkt-cata-function-typed-carrier-not-threaded (Bug A): a lambda that captures
+; a FUNCTION-typed `match`-arm payload binding (`f`/`g` in `(AddF f g)` over a
+; `(fn ...)` carrier) must be lifted as a *fat* closure that captures f/g by env
+; -- not thin.  Before the fix, collect_free_vars' EX_CALL gate only captured a
+; TY_FN call head when it was a parameter (is_param), dropping the match-arm
+; case; the lifted lambda referenced undeclared `f`/`g` at file scope.  The int
+; payload variant (x/y captured by value) always worked; the discriminator was
+; the captured binding's type, which is why the fn-typed case regressed.
+(load "stdlib/typeclass-functor.tur")
+
+(defdata ExprF :copy [a] (LitF :int) (AddF a a))
+
+; An algebra producing a per-node `(fn [int] int)`: each arm returns a closure
+; that captures its (function-typed, for AddF) payload bindings.
+(defn fn-alg [l : (ExprF (fn [int] int))] : (fn [int] int)
+  (match l
+    (LitF n)   (fn [env : int] : int n)
+    (AddF f g) (fn [env : int] : int (+ (f env) (g env)))))
+
+(defn main [] : int
+  (let [lit3 (fn [e : int] : int 3)
+        lit4 (fn [e : int] : int 4)
+        node (:: (AddF lit3 lit4) (ExprF (fn [int] int)))
+        h    (fn-alg node)]
+    (do
+      (println (h 0))   ; (+ 3 4) = 7
+      0)))
