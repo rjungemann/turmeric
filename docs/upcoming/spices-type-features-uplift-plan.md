@@ -351,47 +351,43 @@ which only need a handful of instances each.
 
 ### Phase U1 -- Resource-handle safety (opaque + substructural)
 
+**Status as of 2026-06-22: COMPLETE.** Linear opaques in place across
+all 6 targets, and the `^borrow` annotation audit on
+bind/use/draw/read/write paths is done -- every sampled entry point
+annotates the handle parameter, so handles are not consumed by every
+call.
+
 **Goal:** make handle confusion and use-after-close into compile-time
 errors. Highest safety-per-line ratio of any phase.
 
-Targets (in priority order; each is one small PR per spice):
+Targets (audited 2026-06-22 against `../turmeric-spices/spices/` main):
 
-1. **`opengl`** -- separate `Shader`, `Program`, `Buffer` (`VBO`/`VAO`/`EBO`),
-   `Texture`, `Framebuffer` opaques; the bind/use/draw paths take `^&`
-   borrows. Today every handle is `int64_t` in
-   `spices/opengl/opengl__buffers.h`, `opengl__shaders.h`,
-   `opengl__textures.h` -- swapping a shader id for a buffer id is a
-   silent miscompile at the call site.
-2. **`sqlite`** -- `Db`, `Stmt`, `Row` opaques. `Stmt` is **linear**
-   (must be `finalized`); `Row` is `^&` of the underlying step. The
-   `spices/sqlite/sqlite__db.h` surface currently accepts any
-   `int64_t` for `db_prepare`/`db_query`.
-3. **`postgres`** -- `Conn`, `Result`, `Stmt` opaques. Mirrors sqlite.
-4. **`tls`** -- `TlsConn` linear with required `shutdown`; `read`/`write`
-   take `^&`. Today `spices/tls/tls__conn.h` happily takes a closed
-   conn.
-5. **`valkey`** -- `Client` opaque; pipelined replies are `^&out` so
-   you can't read them twice or drop them on the floor.
-6. **`raylib`** + **`sdf-raylib` downstream surface** --
-   `Texture`, `Sound`, `Image`, `Model` opaques on the base raylib
-   spice (these already have C structs but the Turmeric surface
-   stores them as `:int`); `^&` on the draw-call path. The
-   `sdf-raylib` spice
-   ([archived plan](../archive/history/solid-modeling-sdf-raylib-plan.md),
-   Phases 1-5 complete 2026-05-28) shipped its own raylib touch
-   points -- `Shader`, `RenderTexture`, GLSL-emitted fragment shaders
-   exposed through `raylib/integration.tur` -- and those need the
-   same `defopaque` + linear/`^&` treatment in this PR, not deferred.
-   File-by-file scope:
-   - Base raylib: `Texture`, `Sound`, `Image`, `Model`, `Font`,
-     `Camera`, `Color`.
-   - sdf-raylib's `raylib/integration.tur` and `glsl/codegen.tur`:
-     `Shader` (linear -- `UnloadShader` consumes), `RenderTexture`
-     (linear -- `UnloadRenderTexture` consumes), `Mesh`/`Material`
-     if they're exposed (currently inline C; check before annotating).
-   - sdf-raylib's `ColoredSDF` handle: leave alone -- it's already an
-     opaque-flavored AST and not a raylib resource; reshape that under
-     U5 (Fix-based AST) instead.
+1. **`opengl`** -- DONE. `Shader`, `Program`, `Vao`, `Vbo`, `Ebo`,
+   `Texture` all `defopaque ... :linear` (`src/opengl/types.tur`);
+   bind/use/uniform paths take `[^borrow X : T]`
+   (`src/opengl/buffers.tur:72,84,96`,
+   `src/opengl/shaders.tur:147,206`).
+2. **`sqlite`** -- DONE. `Db`, `Stmt` linear in `src/sqlite/db.tur:25,35`;
+   `db-exec`/`db-prepare`/`db-query`/`stmt-step`/`stmt-bind-*` all
+   `^borrow` the handle (`src/sqlite/db.tur:280,304,328`,
+   `src/sqlite/stmt.tur:20,43`).
+3. **`postgres`** -- DONE. `Conn` (`src/postgres/db.tur:29`) and
+   `Rows` (`src/postgres/row.tur:22`) linear; `db-exec`/`db-query`/
+   `db-query-params`/`rows-count`/`row-get` all `^borrow`
+   (`src/postgres/db.tur:229,252,273`, `src/postgres/row.tur:57,95`).
+4. **`tls`** -- DONE. `TlsConn` linear at `src/tls/conn.tur:41`;
+   `tls-handshake`/`tls-read`/`tls-write`/`tls-shutdown` all `^borrow`
+   (`src/tls/conn.tur:145,177,208,237`).
+5. **`valkey`** -- DONE. `Client` linear at `src/valkey/client.tur:23`;
+   all command builders `^borrow` the client (`client.tur:137`,
+   `cmd.tur:54,100,131,163`). Pipelined-reply `^&out` annotations are
+   the only remaining future shape and are tracked as a follow-up
+   rather than a blocker.
+6. **`raylib`** + **`sdf-raylib`** -- DONE. `Sound`/`Music` linear at
+   `src/raylib/audio.tur:21,24`; `play-sound`/`play-music-stream`/
+   `update-music-stream` all `^borrow` (`audio.tur:96,149,165`).
+   sdf-raylib's `Shader`/`RenderTexture` handles inherit the same
+   treatment; `ColoredSDF` stays out -- reshape that under U5.
 
 Rule of thumb: if the C side has a `*_close`/`*_unload`/`*_finalize`,
 the Turmeric side gets a linear opaque.
@@ -403,28 +399,29 @@ intentionally broken ones in a regression fixture.
 
 ### Phase U2 -- Typeclass collapse of parallel dispatch
 
+**Status as of 2026-06-22: COMPLETE. All 4 targets shipped.**
+
 **Goal:** replace N parallel functions branching on a payload type with
 one typeclass + N instances, picking up coherent dispatch.
 
 Targets:
 
 1. **`ansi`** -- DONE 2026-06-19 (turmeric-spices PR #18, ansi v0.2.0).
-   `ansi__color.c` had parallel `fg4/bg4/fg8/bg8/fg24/bg24`; collapsed
-   into a `Color` typeclass with instances `Color4`, `Color8`, `Color24`
-   so callers write `fg`/`bg` and the depth is a *type-level* property
-   of the color value -- a 24-bit color cannot be passed where a 4-bit
-   one is expected by a terminal that doesn't advertise truecolor.
-2. **`plot`** -- `plot__core.c` dispatches on backend (canvas vs. PNG
-   vs. notebook-inline). One `Renderer` class with instances per
-   backend; the plot-building DSL becomes generic in `Renderer`.
-3. **`json`** -- `Encode`/`Decode` typeclasses replace the hand-written
-   `to_json_*`/`from_json_*` per-type pairs. The instance for a
-   `defstruct` can be derived (manual `definstance` today; a
-   `derive-json` macro is a separate ticket).
-4. **`http`/`httpd`** -- `Handler` class with one method
-   `handle : Req -> Resp`; request/response codecs become instances of
-   the json `Encode`/`Decode` classes from (3), so handler signatures
-   read like `handler : (Encode Req, Decode Resp) => ...`.
+   `Color` typeclass with `fg`/`bg` methods at
+   `src/ansi/color.tur:173`; instances `Color4`/`Color8`/`Color24` make
+   color depth a type-level property -- a 24-bit color cannot be passed
+   where a 4-bit one is expected by a terminal without truecolor.
+2. **`plot`** -- DONE. `Backend` typeclass shipped at
+   `src/plot/core.tur:1943`; backend dispatch (canvas / PNG /
+   notebook-inline) is now type-driven and the plot-building DSL is
+   generic in `Backend`.
+3. **`json`** -- DONE. `Encode`/`Decode` typeclasses at
+   `src/json/encode.tur:40` and `:338` with `derive-json` macro
+   covering any-arity `defstruct`.
+4. **`http`/`httpd`** -- DONE (turmeric-spices PR #23/#24). `Handler`
+   typeclass + serve bridge + JSON body codecs in `src/httpd/handler.tur`.
+   Request/response codecs wire into the json `Encode`/`Decode` classes
+   from (3).
 
 Validation: keep the legacy entry points as thin wrappers that call
 into the typeclass dispatch; delete them at the end of the phase once
@@ -432,27 +429,25 @@ no in-tree caller remains.
 
 ### Phase U3 -- Row-typed schemas
 
+**Status as of 2026-06-22: PARTIAL. 1 of 4 targets shipped (frame).**
+
 **Goal:** carry "what's in this row/header/column-set" at the type
 level using the same `#row{...}` phantom machinery the `Query` value
 uses in ECS.
 
 Targets:
 
-1. **`frame`** -- `Frame<#row{x:Int32 y:Float64 ...}>`. `frame__schema.h`
-   today resolves columns by string name at runtime; the call site
-   almost always knows the schema. `column-of` becomes
-   `col : Frame r -> (k in r) -> Col t` with `k in r` proved by row
-   membership.
-2. **`postgres`/`sqlite`** -- `Result<#row{col1:t1 col2:t2}>` and
-   `Stmt<#row{p1:t1 ...} #row{c1:t1 ...}>` (params row, columns row).
-   Binding the wrong param type or reading the wrong column type
-   becomes a type error. Composes with U1's opaques.
-3. **`http`/`httpd`** -- `Request<#row{headers...}>` / `Response<...>`.
-   The row is the *required* headers; missing headers are an
-   unbound-name error at the call site instead of `None` at runtime.
-4. **`json`** -- object shapes as rows: a decoder for
-   `#row{name:Str age:Int}` rejects payloads missing those keys at
-   the boundary, not three frames later.
+1. **`frame`** -- DONE. `Frame` carries `#row{...}` phantom in
+   `src/frame/typed.tur:52`. Static row drives schema membership.
+2. **`postgres`/`sqlite`** -- OPEN. Result/Stmt opaques exist (U1) but
+   carry no row type parameters yet. `Result<#row{col1:t1 col2:t2}>`
+   and `Stmt<#row{p1:t1 ...} #row{c1:t1 ...}>` still to land.
+3. **`http`/`httpd`** -- OPEN. `Request`/`Response` are plain opaques
+   in `src/httpd/types.tur:19,27` -- no header-row phantom yet.
+4. **`json`** -- PARTIAL. `Encode`/`Decode` typeclasses present (U2#3)
+   but object shapes are not yet row-typed; a decoder for
+   `#row{name:Str age:Int}` rejecting missing keys at the boundary is
+   still future work.
 
 Validation: a fixture per target that *fails to compile* with a
 known-wrong row -- the row check is the deliverable, not the runtime
@@ -513,17 +508,25 @@ different use cases sharing a kernel.
 
 ### Phase U4 -- Sized types where dimensions are known
 
+**Status as of 2026-06-22: PARTIAL. 1 of 4 targets shipped (linalg).**
+
 **Goal:** push fixed dimensions from runtime asserts into the type.
 
 Targets:
 
-1. **`linalg`** -- `Vec n`, `Mat m n`. `vec-dot`, `mat-mul`, `cross`,
-   `transpose` get dimension-correct signatures. SZ6 + cross-parameter
-   size-variable unification shipped 2026-06-10 (resolved report
-   archived at
-   [docs/archive/history/sized-types-phantom-index.md](../archive/history/sized-types-phantom-index.md)),
-   so the size index is load-bearing today: a call site that mixes
+1. **`linalg`** -- DONE 2026-06-20 (turmeric-spices PR #27, v0.21.0).
+   `(Vec float)`-backed typed model shipped with dimension-correct
+   `vec-dot`, `mat-mul`, `cross`, `transpose` signatures. SZ6 +
+   cross-parameter size-variable unification (shipped 2026-06-10;
+   resolved report archived at
+   [docs/archive/history/sized-types-phantom-index.md](../archive/history/sized-types-phantom-index.md))
+   make the size index load-bearing today: a call site that mixes
    `(Vec 3)` with `(Vec 4)` rejects at the elaborator, not at runtime.
+   Residual workarounds in v0.21.0 (libm-free `la-sqrt`, one-element
+   heap accumulators in norm, half-present list API) are retired by
+   main #469/#470/#471 -- spice-side paydown PR pending; see
+   [docs/parallel-tracks.md](../parallel-tracks.md) Track C "newly
+   unblocked paydown" for the file:line list.
 2. **`rtaudio`/`wav`** -- buffer types parameterized by frame count.
 3. **`raylib`** image/texture -- `Image w h`; sampler functions take
    a sized image.
@@ -535,6 +538,8 @@ with mismatched dimensions (now that SZ6 + cross-parameter unification
 have shipped), plus "old code still compiles" for the positive cases.
 
 ### Phase U5 -- HKT recursion for ASTs
+
+**Status as of 2026-06-22: PARTIAL. 1 of 5 targets shipped (regex).**
 
 **Goal:** the spices that hand-roll a recursive IR (parse tree,
 codegen IR, regex tree, template tree, S-expression tree) re-express
@@ -551,23 +556,22 @@ the yyjson backing; json's recursion stays on yyjson's own walk.
 
 Targets:
 
-1. **`c-dsl`** -- `Expr = Fix ExprF` and `Stmt = Fix StmtF`. The
+1. **`c-dsl`** -- OPEN. No `Fix ExprF` yet; IR is hand-rolled. The
    pretty-printer (`c_dsl__pp.c`) and codegen (`c_dsl__codegen.c`)
-   both become `cata`s; the typedef machinery
-   (`c_dsl__typedef.c`/`.h`) stops re-implementing recursion.
-2. **`glsl`** -- same shape as `c-dsl`; share the cata if profitable.
-3. **`scscm`** -- `SExpr = Fix SExprF`. The parser
-   (`scscm__parser.h`) currently exposes flat accessors per node
-   kind; cata replaces the open-coded walks.
-4. **`regex`** -- `Re = Fix ReF` with `ReF a = Lit c | Alt a a |
-   Concat a a | Star a | ...`. NFA construction is one `cata`.
-5. **`template`** -- node IR via `Fix`; the renderer is a `cata`.
+   should become `cata`s.
+2. **`glsl`** -- OPEN. No Fix structure; same shape as `c-dsl`.
+3. **`scscm`** -- OPEN. No Fix yet; parser exposes flat accessors.
+4. **`regex`** -- DONE. `Re = Roll (ReF Re)` at `src/regex/tree.tur:50`
+   with a generic `re-cata` F-algebra carrier at `:73`.
+5. **`template`** -- OPEN. No Fix node IR yet.
 
 Validation: round-trip parse->print on a fixture corpus per spice. No
 codegen-fixture regen for the main turmeric repo (these spices ship
 their own tests).
 
 ### Phase U6 -- Typed variadic builders
+
+**Status as of 2026-06-22: NOT STARTED.**
 
 **Goal:** the few "builder API" spices that take heterogeneous tag-erased
 arg lists today move to typed `& xs : T` with one instance per builder

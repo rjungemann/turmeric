@@ -1,11 +1,15 @@
 # Parallel Tracks -- Open Plans and Reports
 
-Snapshot: 2026-06-20 (post-PR #471; post turmeric-spices PR #27 linalg
-v0.21.0 land; Track C "newly unblocked paydown" note added below for the
-linalg workarounds that main #469/#470/#471 retire). Prior snapshot
-2026-06-19 (post-PR #433; post turmeric-spices PR #15 sized-scheduler
-direction-1 land; post M7 layer-4 emit land +
-Functor-`fmap` element-type generality). **Track A is complete:
+Snapshot: 2026-06-21 (post-PRs #493/#494/#495/#496/#497 -- further
+by-value / element-dispatch / kind-* / ascribed-carrier fixes that
+extend the post-monomorphization smoothing; two Track-C-adjacent
+reports archived 2026-06-21: kind-star 2-param instance head and
+match-on-applied parametric ADT). Prior snapshot 2026-06-20 (post-PR
+#471; post turmeric-spices PR #27 linalg v0.21.0 land; Track C "newly
+unblocked paydown" note for the linalg workarounds that main
+#469/#470/#471 retire). Earlier snapshot 2026-06-19 (post-PR #433; post
+turmeric-spices PR #15 sized-scheduler direction-1 land; post M7
+layer-4 emit land + Functor-`fmap` element-type generality). **Track A is complete:
 end-to-end monomorphization landed; the small residual ABI bridge is
 intentional and necessary, with no further work to be done.** All Track A
 reports are resolved and archived (see Track A below).
@@ -102,18 +106,29 @@ Pure spice-side work; no compiler dependencies.
 
 - [spices-type-features-uplift-plan](upcoming/spices-type-features-uplift-plan.md)
   -- phased per-spice uplift (rows, typeclasses, sized types where they
-  pay rent). Independent across spices. **U2 target 1 (ansi Color
-  typeclass collapse) landed 2026-06-19** as turmeric-spices PR #18;
-  remaining U2 targets are `plot` (Renderer class), `json`
-  (Encode/Decode -- minimal slice already shipped under P2a, full
-  typeclass collapse pending), and `http`/`httpd` (Handler class).
-  U1/U3/U4/U5/U6 still open. **U5 (HKT recursion for ASTs): the `json`
-  target is dropped** -- the json spice is backed by `yyjson`, whose
-  foreign node model (`yyjson_val *`) is incompatible with re-expressing
-  `JsonNode` as `Fix (JsonF a)`; U5 now covers `c-dsl`/`glsl`/`scscm`/
-  `regex`/`template` only. A U5 feasibility pass also surfaced a compiler
-  gap -- `defdata` constructor fields rejected applied type constructors --
-  now **fixed and archived**:
+  pay rent). Independent across spices. **Audit 2026-06-22 against the
+  actual spice tree** revealed the plan was significantly out of date;
+  the doc has been resynced. Current state:
+  - **U1 (handles + linear): COMPLETE** -- opengl, sqlite, postgres,
+    tls, valkey, raylib all carry `defopaque ... :linear`, AND the
+    `^borrow` audit on bind/use/draw/read/write paths is done
+    (verified 2026-06-22 against turmeric-spices main). Only future
+    shape is valkey pipelined-reply `^&out`, tracked as follow-up
+    rather than a blocker.
+  - **U2 (typeclass collapse): COMPLETE -- all 4 targets shipped** --
+    ansi `Color` (PR #18), plot `Backend`, json `Encode`/`Decode` (+
+    `derive-json`), httpd `Handler` (PR #23/#24).
+  - **U3 (row-typed schemas): 1 of 4** -- frame done; postgres/sqlite,
+    httpd, and json object-shape rows open.
+  - **U4 (sized types): 1 of 4** -- linalg `LaVecN`/`LaMatN` shipped
+    (PR #27, 2026-06-20); rtaudio/wav, raylib Image, c-dsl arrays open.
+  - **U5 (Fix-based ASTs): 1 of 5** -- regex shipped as `Roll (ReF Re)`
+    with re-cata; c-dsl, glsl, scscm, template open. **json target
+    dropped** -- yyjson backing incompatible with `Fix (JsonF a)`.
+  - **U6 (typed variadic builders): not started.**
+  A U5 feasibility pass also surfaced a compiler gap -- `defdata`
+  constructor fields rejected applied type constructors -- now **fixed
+  and archived**:
   [docs/archive/defdata-constructor-field-applied-type-rejected.md](archive/defdata-constructor-field-applied-type-rejected.md).
 
 **Recently landed in turmeric-spices** (since last snapshot):
@@ -151,6 +166,15 @@ green):
   addresses linalg workaround #4 (the half-present list API); float
   list literals (`list-macro-tcons-int-headed-no-float-list-literal`)
   remain open.
+
+**Further compiler smoothing landed 2026-06-21 (PRs #493-#497):** five
+post-monomorphization fixes that retire residual rough edges around
+by-value field access, element dispatch, and applied instance heads --
+all relevant to the spice uplift surface (rows + typeclasses + nested
+containers). Two adjacent reports archived in the same window
+(kind-star 2-param instance head fixed by #496;
+match-on-applied parametric ADT fixed by #493). Spice-side paydown
+opportunities from these have not yet been audited.
 
 Owner action: this is a spice-side PR against `rjungemann/turmeric-spices`
 (outside this session's repo scope); the analysis + a verified
