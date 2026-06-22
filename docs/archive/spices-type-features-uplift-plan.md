@@ -2,9 +2,44 @@
 title: Spices Type-Features Uplift Plan
 category: Planning
 description: A staged pass over the existing spices (everything outside `ecs/` and `ecs-raylib/`) to apply the typeclass / row / substructural / opaque-newtype / sized-type / HKT machinery that the ECS work proved out.
+status: COMPLETE 2026-06-22 -- archived. U1/U2/U6 fully shipped; U3/U4/U5
+  shipped to the "rubric is satisfied" mark with residual per-target work
+  carved into successor plans (U5 c-dsl/glsl -> own plan) or tracked as
+  optional follow-ups in the spices that own them. No further phase-level
+  work tracked here.
 ---
 
 # Spices Type-Features Uplift -- Plan
+
+## Final status (2026-06-22) -- COMPLETE / archived
+
+| Phase | Status | Notes |
+|---|---|---|
+| U1 -- handles + linear | COMPLETE | All 6 targets shipped (opengl, sqlite, postgres, tls, valkey, raylib + sdf-raylib). `^borrow` audit done. valkey pipelined-reply `^&out` is an optional future shape, not phase work. |
+| U2 -- typeclass collapse | COMPLETE | All 4 targets shipped (ansi `Color`, plot `Backend`, json `Encode`/`Decode` + `derive-json`, httpd `Handler`). |
+| U3 -- row-typed schemas | COMPLETE to rubric | frame + sqlite shipped; postgres/httpd/json object-shape rows left as per-spice follow-ups -- each is a single-target uplift that does not need the phase scaffolding. |
+| U4 -- sized types | COMPLETE to rubric | linalg shipped (PR #27, v0.21.0); rtaudio/wav, raylib Image, c-dsl array follow-ups left to their owning spices -- the SZ6+cross-param unification machinery they need is in place. |
+| U5 -- Fix-encoded ASTs | COMPLETE to rubric | regex shipped; json dropped (yyjson backing); c-dsl + glsl carved out into [u5-c-dsl-glsl-fix-encoded-ir-plan.md](../upcoming/u5-c-dsl-glsl-fix-encoded-ir-plan.md); scscm/template are per-spice follow-ups. |
+| U6 -- typed variadic builders | COMPLETE | c-dsl shipped end-to-end. valkey per-command builder remains an optional follow-up. |
+| P0 -- typed-field rows | DONE 2026-06-12 | |
+| P1 -- `:writes` enforcement | DONE | |
+| P2a -- `derive-json` | DONE | Encode + Decode + any-arity defstruct. |
+| P2b -- general `derive` | OPEN -- follow-up | Not phase work; tracked separately when a second class wants it. |
+| P3 -- SZ6 sized index | DONE 2026-06-10 | |
+| P4 -- `match-fix` sugar | OPEN -- follow-up | Ergonomics only; U5 carve-out plan ships without it. |
+| P5 -- negative-fixture harness | OPEN -- follow-up | Validation upgrade; not blocking. |
+| P6 -- FFI shim convention | OPEN -- follow-up | Hygiene only; U1 shipped without it. |
+
+The unshipped residuals are not tracked as continuing phase work -- each
+is a single-target uplift on a single spice (or a sugar/hygiene
+follow-up) that doesn't need the multi-phase scaffolding this plan
+provided. The U5 c-dsl/glsl carve-out is the only follow-up that
+warrants its own plan; the rest land directly in their owning spice or
+as a tagged TODO in the relevant report.
+
+---
+
+(Original plan body preserved below for the historical record.)
 
 ## Goal
 
@@ -538,7 +573,7 @@ Targets:
    Residual workarounds in v0.21.0 (libm-free `la-sqrt`, one-element
    heap accumulators in norm, half-present list API) are retired by
    main #469/#470/#471 -- spice-side paydown PR pending; see
-   [docs/parallel-tracks.md](../parallel-tracks.md) Track C "newly
+   [docs/archive/parallel-tracks.md](parallel-tracks.md) Track C "newly
    unblocked paydown" for the file:line list.
 2. **`rtaudio`/`wav`** -- buffer types parameterized by frame count.
 3. **`raylib`** image/texture -- `Image w h`; sampler functions take
@@ -552,12 +587,11 @@ have shipped), plus "old code still compiles" for the positive cases.
 
 ### Phase U5 -- HKT recursion for ASTs
 
-**Status as of 2026-06-22: PARTIAL. 1 of 5 targets shipped (regex).**
+**Status as of 2026-06-22: PARTIAL. 1 of 3 targets shipped (regex).**
 
 **Goal:** the spices that hand-roll a recursive IR (parse tree,
-codegen IR, regex tree, template tree, S-expression tree) re-express
-the node as `Fix F` so generic fold/map/cata works without per-node
-accessor scaffolding.
+template tree, S-expression tree) re-express the node as `Fix F` so
+generic fold/map/cata works without per-node accessor scaffolding.
 
 **Not a target: `json`.** The json spice is now backed by `yyjson`, whose
 node model is a foreign C tree (`yyjson_val *`) walked through the yyjson
@@ -567,16 +601,21 @@ yyjson's parser/emitter and re-materializing every document into a native
 `Fix`-based json AST work is therefore dropped from U5 as incompatible with
 the yyjson backing; json's recursion stays on yyjson's own walk.
 
+**Carved out: `c-dsl` and `glsl`.** Both spices want the same functor
+shape (typed expression / statement / decl trees over a C-family
+grammar) and share enough design space -- precedence-threaded
+pretty-print, multi-category IR, P4 `match-fix` interaction -- that
+they are tracked in their own plan:
+[u5-c-dsl-glsl-fix-encoded-ir-plan.md](../upcoming/u5-c-dsl-glsl-fix-encoded-ir-plan.md).
+Ship status from that plan flows back into U5's overall completeness
+count.
+
 Targets:
 
-1. **`c-dsl`** -- OPEN. No `Fix ExprF` yet; IR is hand-rolled. The
-   pretty-printer (`c_dsl__pp.c`) and codegen (`c_dsl__codegen.c`)
-   should become `cata`s.
-2. **`glsl`** -- OPEN. No Fix structure; same shape as `c-dsl`.
-3. **`scscm`** -- OPEN. No Fix yet; parser exposes flat accessors.
-4. **`regex`** -- DONE. `Re = Roll (ReF Re)` at `src/regex/tree.tur:50`
+1. **`scscm`** -- OPEN. No Fix yet; parser exposes flat accessors.
+2. **`regex`** -- DONE. `Re = Roll (ReF Re)` at `src/regex/tree.tur:50`
    with a generic `re-cata` F-algebra carrier at `:73`.
-5. **`template`** -- OPEN. No Fix node IR yet.
+3. **`template`** -- OPEN. No Fix node IR yet.
 
 Validation: round-trip parse->print on a fixture corpus per spice. No
 codegen-fixture regen for the main turmeric repo (these spices ship
@@ -633,7 +672,7 @@ U1 (handles)        -- independent, ship first
 U2 (typeclass)      -- json instances feed http in U3
 U3 (rows)           -- depends on U1 for postgres/sqlite opaques
 U4 (sized)          -- independent
-U5 (HKT ASTs)       -- json dropped (yyjson backing); c-dsl/glsl/scscm/regex/template
+U5 (HKT ASTs)       -- json dropped (yyjson backing); c-dsl/glsl carved out (own plan); scscm/regex/template
 U6 (variadic)       -- last; smallest
 ```
 

@@ -6,6 +6,12 @@
 closure). Direct structural recursion is a working alternative (shipping in
 regex/tree).
 
+**Status: RESOLVED 2026-06-22 -- archived.** Canonical repro FIXED (PR #489
+era); residual (a) captureless-arm carved into its own report and fixed by
+PR #501 (`docs/archive/captureless-algebra-arm-thin-through-carrier.md`);
+residual (b) mixed fn/value carrier env-struct collision fixed by PR #500.
+Nothing remains open.
+
 ## Status: the canonical repro is FIXED (this branch)
 
 #489 fixed the fn-typed match-arm payload *capture* (its fixture

@@ -6,6 +6,44 @@ description: Replicate the Vec producer-monomorphization slice (commit "monomorp
 
 # Map/Set Typed-Pointer Producer Slice -- Plan
 
+## Status (verified 2026-06-22)
+
+**Plan recommendation followed -- in intended steady state.** Map/Set
+producer-typing deferred (awaiting M4 dict-ABI); MutableMap opportunistic
+win landed.
+
+- **TL;DR / Recommendation (defer Map/Set, do MutableMap now):**
+  Honored. `src/compiler/emit_module.c:1913-1924` `type_is_heap_vec`
+  allow-list is `{"Vec", "MutableMap"}` only -- Map/Set deliberately
+  excluded.
+- **Step 1 (generalize predicate to `type_is_heap_collection`):**
+  Partial / scoped. Predicate kept name but extended to MutableMap
+  (`emit_module.c:1922-1923`); Map/Set not added. Done as recommended.
+- **Step 2 (carrier-force K/V element slots):** N/A for Map/Set
+  (predicate doesn't fire). For MutableMap, validated by in-tree
+  fixtures + `tce3-map-cstr-val` reference.
+- **Step 3 (`__TUR_RET__` on heap-returning producers):**
+  - **Map (`stdlib/map.tur`):** NOT started. Lines 49, 79, 104, 138,
+    182, 258 still emit `return (int64_t)(intptr_t)...`. Zero
+    `__TUR_RET__` matches.
+  - **Set (`stdlib/set.tur`):** NOT started. Lines 30, 55, 80, 147,
+    183, 219 still `(int64_t)(intptr_t)`. Zero `__TUR_RET__` matches.
+  - **MutableMap (`stdlib/mutmap.tur`):** DONE. `mutmap-new` at line
+    73 returns through `__TUR_RET__`.
+- **Step 4 (signature/bridge plumbing already generic):** Confirmed --
+  unchanged.
+- **MutableMap section ("the one worth doing now"):** Shipped as commit
+  `4e7a8f77` "Fix MutableMap typed-pointer producer monomorphization
+  (#411)" (2026-06-17), with prior plumbing in `e73c872f` (#397) and
+  `9bb66e5a` (#391, Vec slice).
+- **Validation harness / Risks / Out-of-scope / North star:** unchanged
+  -- gated on M4 dict-ABI; no Map/Set regen window opened.
+
+**Net:** no new work required against this plan until M4 makes typed
+Map/Set consumers exist.
+
+---
+
 This is **step 3** of the M3 -> M7 sequencing in
 [docs/reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md](../../reported/m3-carrier-bridge-deletion-blocked-on-typeclass-abi.md):
 replicate the **Vec producer slice** (commit `600e859`, "monomorphize Vec

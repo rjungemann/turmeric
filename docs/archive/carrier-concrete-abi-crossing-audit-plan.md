@@ -9,7 +9,11 @@ description: The recent run of spice-fix PRs (#437-#481) are not independent
   shared recovery routine they should all route through, classifies which are
   covered, and sequences the remaining work. It also records two NEW bugs found
   PROACTIVELY by a composition stress matrix rather than reactively by a spice.
-status: OPEN -- audit produced; routing + stress-matrix promotion sequenced below
+status: COMPLETE 2026-06-22 -- archived. G1-G10 all FIXED (every audit-table
+  row crossed out; every per-gap report archived). P0/P1/P2 done; P3
+  (audit-as-regression-guard) is a steady-state process, not bounded work.
+  The structural follow-up (making the recovery routines mandatory
+  chokepoints) is carved into `carrier-crossing-recovery-routing-plan.md`.
 ---
 
 # Carrier <-> Concrete ABI crossing audit + unification plan

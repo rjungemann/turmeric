@@ -6,6 +6,46 @@ description: The plan for the last ~102 carrier-bridge crossings (24 fixtures), 
 
 # Closure-Result Monomorphization -- Execution Plan
 
+## Status (verified 2026-06-22) -- CLOSED / re-scoped
+
+The bind/ap by-value grounding shipped (architectural parity with
+fmap/bimap/pure, suite green at 1688/0), but the "delete the bridge / 0
+crossings" objective is moved to the parent
+`end-to-end-monomorphization-plan`. The bridge stays -- load-bearing and
+functionally free. Remaining 102 crossings (24 fixtures) are deliberate
+carrier-ABI regression coverage + Vec/MutableMap heap reinterprets.
+
+- **Phase 0 (poly_fn-return-ABI fix + regression fixture):** LANDED then
+  REVERTED in place. Commit `d2658450` (PR #443) landed on 2026-06-19;
+  bridge subsequently removed once Phase 2 grounding made the path
+  reachable -- see `src/compiler/emit_expr.c:2478-2481` ("An earlier
+  revision bridged carrier->concrete here... produced a wild-pointer
+  deref"). Planned `tests/fixtures/poly-fn-aggregate-result/` was never
+  created. Phase 0 is moot post-construct-monomorphization.
+- **Phase 1 (typed closure-result thunks, gated emission, fat-shim
+  extension):** SUPERSEDED, not done as designed. Post
+  construct-monomorphization, `make_poly_wrapper` already returns the
+  by-value aggregate directly and `ensure_aggregate_spill_shim`
+  excludes carrier-ABI aggregates. No `tur_thunk_*_t` typedef extension
+  shipped; the by-value cast path in `emit_expr.c:2483-2492`
+  (`phase_f_concrete`) is what's used.
+- **Phase 2 (mint/route by-value bind/ap against typed continuations):**
+  PARTIALLY DONE -- `bind` shipped, `ap` not. Grounding fix at
+  `src/compiler/elab_fns.c:4020-4051`; `m7_body_constructs_byvalue` +
+  `m7_byvalue_grounded` at `src/compiler/elab_typeclasses.c:1741, 5810,
+  5967, 6052`. `bind` (and any aggregate-returning-continuation method)
+  now mints by-value `__spec` clones with no arg spill. `ap`'s
+  function-in-container case (`ff : (f (fn a b))`) NOT addressed.
+- **Phase 3 (sweep to zero / delete bridge / fixture regen / archive):**
+  NOT PURSUED, by decision. `emit_carrier_bridge` and bridge predicates
+  still live (61 hits in `src/compiler/`); `TUR_M3_AUDIT` machinery
+  still active at `src/compiler/emit_core.c:3029`. Crossing count
+  102 -> 102. Plan not archived; parent
+  `end-to-end-monomorphization-plan` likewise still under
+  `docs/upcoming/`.
+
+---
+
 > **UPDATE (2026-06-19, execution attempt).** The bind/ap grounding gap was
 > root-caused and fixed, and `bind` (plus every aggregate-returning-continuation
 > method) now monomorphizes to a by-value `__spec` clone exactly like

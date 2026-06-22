@@ -1,7 +1,7 @@
 ---
 title: Routing carrier <-> concrete crossings through shared recovery chokepoints -- retiring the per-site patch pile
 category: Planning -- ABI / Codegen (carrier<->concrete unification, structural)
-description: The crossing audit (carrier-concrete-abi-crossing-audit-plan.md)
+description: The crossing audit (docs/archive/carrier-concrete-abi-crossing-audit-plan.md -- archived 2026-06-22, all gaps closed)
   converted an open-ended bug stream into a closeable list, but each gap is
   still being closed the way the prior 45 were -- a narrowly-gated branch added
   next to the last one. This plan is the structural counterpart: make the two
@@ -14,9 +14,49 @@ status: OPEN -- proposed. Sequenced after the audit's P1 (stress-matrix
 
 # Routing carrier <-> concrete crossings through shared recovery chokepoints
 
+## Status (verified 2026-06-22)
+
+**NOT STARTED -- proposal only.** Filed today (commit `fbd0a94d`) as the
+structural follow-up to the now-archived
+`carrier-concrete-abi-crossing-audit-plan.md`. All audit gaps (G2-G10)
+closed via the old per-site patch approach *before* this plan landed, so
+no chokepoint-routing work has been done yet and the patch-pile has grown.
+
+- **R0 -- Inventory of un-routed sites.** NOT STARTED. No audit table, no
+  PR. Ad-hoc `arg_types[]` / `emit_resolve_type` lookups remain across
+  `emit_module.c` (e.g. `:2161, :2541, :2906, :3540`), `emit_core.c`,
+  `emit_expr.c`.
+- **R1 -- Make the chokepoints total.** NOT STARTED as a folding pass.
+  `emit_var_spec_arg_type` (`emit_expr.c:1651`) and
+  `emit_reresolve_disp_type` (`emit_core.c:1157`) have been *extended*,
+  but every G2-G10 fix landed as a sibling branch beside them: G2 via
+  `emit_abi_try_nested_instance_dispatch_redirect` (`emit_module.c:1960`,
+  PRs #493/#495); G3 via call-site bridge in
+  `expr_emits_byvalue_carrier_abi` (`emit_expr.c:382`, PR #497); G4 via
+  per-element phantom clone (PR #486); G5/G7/G9 via local site fixes
+  (PRs #482, #498, #494); G6 via the new fn-value axis (PRs #487-#502).
+- **R2 -- Migrate ad-hoc sites onto chokepoints.** NOT STARTED. No
+  deletions of gated branches; gap-tagged comments still grow
+  (`emit_module.c`: 24, `emit_expr.c`: 27, `emit_core.c`: 4 occurrences
+  of `G[0-9]`).
+- **R3 -- Debug-build "forgot to route" ICE.** NOT STARTED. No
+  assertion exists (`grep "ICE\|assert.*chokepoint"` empty).
+- **R4 -- Audit-table-as-regression-guard.** PARTIALLY INHERITED. The
+  audit table lives in the archived plan with all rows `[FIXED]`; not
+  maintained as a live PR-gate; no review checklist enforces "new
+  crossing => new row."
+- **Fn-value third axis (G6 motivated).** Acknowledged in the plan;
+  recent fixes (PRs #487, #499-#503) added more point-patches to
+  `emit_abi_scan_fn_values` / closure-thunk paths without a dedicated
+  chokepoint routine.
+
+**Net:** the plan remains accurate and unstarted; the case for it is
+stronger now that G2-G10 closed in the exact patch-pile style the plan
+calls out.
+
 ## Why this plan exists (read first)
 
-`docs/carrier-concrete-abi-crossing-audit-plan.md` did the hard diagnostic
+`docs/archive/carrier-concrete-abi-crossing-audit-plan.md` (archived 2026-06-22, every gap closed) did the hard diagnostic
 work: it named the **one defect** (a parametric payload riding the int64
 carrier where a concrete representation was required), enumerated the crossing
 sites, and named the **two shared recovery routines** they should all consult.

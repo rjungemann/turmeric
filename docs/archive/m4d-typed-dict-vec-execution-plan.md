@@ -6,6 +6,49 @@ description: The concrete plan for the dominant residual M3 audit bucket -- the 
 
 # M4d -- Typed/Conditional Dict Emit for Eq[Vec] -- Execution Plan
 
+## Status (verified 2026-06-22) -- effectively superseded
+
+**Audit-reducing intent of M4d is complete.** The "80 `Vec int` carrier
+crossings" framing was retired in-plan on 2026-06-17 (post #400). What
+the plan called for as Phase 1 shipped via a single-pass
+`emit_instance_is_live` liveness gate rather than the two-pass post-emit
+DCE the doc concluded was the only robust route.
+
+- **#400 (TCO'd by-value `Eq [Vec]`)** -- DONE. Commit `6f381cc4`. The
+  `Eq[Vec]` carrier base no longer carries any `Vec int` crossing.
+  Floor recorded at 34/10 by `7b03c65c` ("Track A: record post-#400
+  bridge-audit floor (60 -> 34, zero deref-copies)"). Floor
+  documented in `web/dist/client/docs/monomorphization-audit.md:22-50`.
+- **Phase 1 (conditional dict + carrier-base emission):** DONE via
+  different mechanism than sketched. `emit_instance_is_live` at
+  `src/compiler/emit_module.c:4149` is the liveness oracle; dict-emit
+  gate at `src/compiler/emit_stmt.c:464-466` (covers both HKT (gated on
+  `g_m7_hkt_enabled`) and ground/kind-* instances unconditionally);
+  carrier-base body-skip at `emit_module.c:4221` / `:4237` inside
+  `emit_abi_fn_skip_generic`. The doc's two-pass post-emit DCE was NOT
+  taken; instead liveness is the union of `emit_abi_has_carrier_call`
+  plus EX_DICT/witness liveness.
+- **Phase 2a (typed comparator parameter):** NOT TAKEN. Plan's own
+  2026-06-17 update proved 2a only relocates the cast.
+- **Phase 2b (accept comparator cast as permanent type-erased
+  boundary):** DONE (as a decision). 22 `Vec int` casts documented as
+  permanent in `monomorphization-audit.md:30-37`.
+- **Phase 3 (re-audit + bridge down-scope):** DONE for the non-HKT
+  collection-Eq cascade. Audit floor 34/10, all permanent by-design
+  boundaries. `emit_carrier_bridge` still alive (~15 call sites in
+  `emit_expr.c`) only on documented type-erased boundaries.
+
+**Open remainders (low-priority):** the two-pass post-emit DCE (lines
+223-274) was never implemented; current single-pass coverage handles
+audit-reducing cases but the deeper code-size cleanup (e.g. dropping
+`defn-basic`'s 93 dead `__inst_*` references) is still on the table as
+an optional coordinated-regen window.
+
+**Recommendation:** archive this plan -- working line moved to the parent
+monomorphization audit doc and is tracked there.
+
+---
+
 > **STATUS UPDATE 2026-06-17 (post-#400 -- read this first).** #400 (the
 > pure-Turmeric TCO'd `Eq [Vec]` rewrite) **moved the by-value loop into the
 > `__spec`** and left the int64 **carrier base** delegating to the carrier

@@ -6,6 +6,49 @@ description: The HKT dispatch design pass for end-to-end-monomorphization-plan.m
 
 # HKT class dispatch -- options tradeoff
 
+## Status (verified 2026-06-22)
+
+**Recommendation adopted and substantially landed.** Option 1 (full
+per-`(f, A)` monomorphization) is now the default HKT dispatch path;
+Track A of the parent end-to-end monomorphization plan was marked
+complete and archived.
+
+- **Parent plan archived as complete.** Commit `08be4661` (2026-06-19,
+  "docs: mark Track A (end-to-end monomorphization) complete") moved
+  `end-to-end-monomorphization-plan.md` from `docs/upcoming/` to
+  `docs/archive/`, and resolved/archived all 7 Track A reports
+  (including `kleisli-k-apply-raw-B-uninferable` and
+  `polymorphic-float-carrier-ascription-value-cast` -- the two reports
+  this tradeoff cited as motivating disqualification of Option 2).
+- **Option 1 is the runtime default.** `src/runtime/globals.c:101-105`
+  sets `g_m7_hkt_enabled = true`: "the by-value HKT path is the
+  default. `TUR_M7_HKT=0` opts back out to the legacy carrier path."
+  Gate read at `src/main.c:11543-11546`.
+- **By-value HKT emit machinery landed (M7 layer-4).** Commits
+  `62fce7fe` (elaborator element-type threading), `c6f44463` (by-value
+  HKT instance-method emit + kind-threading), `d2938ce6` (Applicative
+  `ap`), `53211f75` (Alternative `<|>`), plus per-body by-value-construct
+  guard `m7_body_constructs_byvalue` in
+  `src/compiler/elab_typeclasses.c:1727-1801`.
+- **Option 2 (carrier dict) explicitly rejected and being deleted.**
+  Commit `d42bd2c8` "M5 D.4: Delete EX_ASCRIBE CK_CONCRETE->CK_CARRIER
+  bridge."
+- **Acceptance criteria mostly met.** `hkt-*` fixture count up to 73
+  (was ~21); by-value-specific coverage in
+  `hkt-fmap-byvalue-sum-element`, `hkt-partial-app-wildcard-byvalue`,
+  `hkt-cata-fmap-byvalue-carrier`. Source-side call sites unchanged
+  (criterion 1); HKT method results flow through by-value specs
+  (criterion 2). `TUR_M3_AUDIT` plumbing still at
+  `src/compiler/emit_core.c:3029`.
+- **Residual work is stabilization, not a path change.** PRs #475-#504
+  close narrow carrier<->concrete crossing bugs (ascribed receivers,
+  lifted closures, function-typed carriers). Structural follow-up
+  tracked in `docs/upcoming/carrier-crossing-recovery-routing-plan.md`.
+- **Open item:** the "elaborator clone-count probe" to convert the
+  low-tens bound into an exact figure does not appear in the tree.
+
+---
+
 **Snapshot:** 2026-06-18. Measured against `stdlib/` and a fresh
 `../turmeric-spices/` checkout (depth-1 clone).
 

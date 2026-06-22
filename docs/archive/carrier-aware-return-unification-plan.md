@@ -1,9 +1,38 @@
 # Full carrier-aware return unification -- plan
 
-**Status:** Phase 0 + Phase 1 (behavior-neutral) + Phase 2 (reverse
-pointer-scalar, `TUR-E0709`) + Phase 2b (`bool`-vs-integer, `TUR-E0709`) +
-Phase 3 (grounded class-var instance methods) + Phase 4 (archive) landed. All
-phases complete.
+**Status (verified 2026-06-22):** All phases complete; ready for archive.
+
+- **Phase 0** -- declared-Type threaded: `InstMethodPass.ret_full` at
+  `src/compiler/elab_typeclasses.c:3758`; `ret_was_class_var` field at
+  `elab_typeclasses.c:2895-2896`.
+- **Phase 1** -- unified dispatcher `return_position_conflict` at
+  `src/compiler/elab_core.c:1888`; call sites collapsed at
+  `elab_fns.c:2666-2684` and `elab_typeclasses.c:3921` (commit `b6b532d5`,
+  PR #459).
+- **Phase 2** -- `RET_CLASS_COMMITTED` for monomorphic defns + reverse
+  pointer-scalar `TUR-E0709`: classifier at `elab_fns.c:2682-2683`;
+  helper `return_type_pointer_scalar_reverse_conflict` at
+  `elab_core.c:1845`, gate at `elab_core.c:1910`. Fixtures:
+  `errors/return-type-int-cstr-defn/` + `return-type-int-cstr-carrier-ok/`.
+- **Phase 2b** -- `bool`-vs-integer `TUR-E0709`: helper at
+  `elab_core.c:1862`, gate at `elab_core.c:1918`. Fixtures:
+  `errors/return-type-bool-int-defn/`, `errors/return-type-int-bool-defn/`,
+  `return-type-bool-int-carrier-ok/`.
+- **Phase 3** -- grounded class-var instance methods: `ret_was_class_var`
+  set at `elab_typeclasses.c:3096`, reset on annotation override at
+  `:3202`; commit-classification via `m7_type_has_free_tyvar` at
+  `:3918-3920`; instance switch emits `TUR-E0709` at `:3959-3960`.
+  Fixtures: `errors/instance-method-return-committed-mismatch/` +
+  `instance-method-return-committed-ok/`.
+- **Phase 4** -- report relocated to
+  `docs/archive/history/instance-method-return-not-unified.md`.
+
+Out of scope (unchanged): `bind`/`ap` closure-result monomorphization
+deferred to `docs/upcoming/v2/m7-phase5-carrier-bridge-audit.md`; those
+positions intentionally remain `RET_CLASS_CARRIER`.
+
+**Recommendation:** archive this plan to `docs/archive/`.
+
 **Tracks:** `docs/archive/instance-method-return-not-unified.md` (resolved and
 archived by this work).
 

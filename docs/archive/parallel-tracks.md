@@ -1,5 +1,32 @@
 # Parallel Tracks -- Open Plans and Reports
 
+## ARCHIVED 2026-06-22 -- materially complete
+
+All three tracks have reached the point where the remaining work no
+longer benefits from a multi-track index:
+
+- **Track A (compiler ABI / end-to-end monomorphization):** complete
+  2026-06-19. The residual ABI bridge is intentional and necessary;
+  every report archived.
+- **Track B (ECS spice -- sized worlds + scheduler):** at-rest.
+  Direction 1 shipped (spices PR #15); direction 2's gating
+  dependency (gap-H world-type polymorphism) is unblocked by Track A
+  but is itself the next implementation question, tracked in
+  `ecs-spice-plan.md`. The `StorageOps` routing follow-up is gated on
+  struct-element projection and tracked there too. No cross-track
+  coordination remains.
+- **Track C (spices type-features uplift):** complete to the rubric
+  2026-06-22; the parent plan is archived alongside this file. The
+  U5 c-dsl/glsl carve-out continues in
+  `docs/upcoming/u5-c-dsl-glsl-fix-encoded-ir-plan.md`.
+
+Newly discovered work goes directly under `docs/upcoming/` or
+`docs/reported/` per the CLAUDE.md rules, not into this index.
+
+---
+
+(Original snapshot preserved below for the historical record.)
+
 Snapshot: 2026-06-21 (post-PRs #493/#494/#495/#496/#497 -- further
 by-value / element-dispatch / kind-* / ascribed-carrier fixes that
 extend the post-monomorphization smoothing; two Track-C-adjacent
@@ -104,7 +131,7 @@ Pure spice-side work; no compiler dependencies.
 
 **Open work:**
 
-- [spices-type-features-uplift-plan](upcoming/spices-type-features-uplift-plan.md)
+- [spices-type-features-uplift-plan](spices-type-features-uplift-plan.md) (archived 2026-06-22 alongside this file)
   -- phased per-spice uplift (rows, typeclasses, sized types where they
   pay rent). Independent across spices. **Audit 2026-06-22 against the
   actual spice tree** revealed the plan was significantly out of date;
