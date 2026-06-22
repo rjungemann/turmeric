@@ -39,6 +39,18 @@ if [ "${TUR_SKIP_PARITY_CHECK:-0}" != "1" ] && command -v python3 >/dev/null 2>&
     fi
 fi
 
+# R4 (carrier-crossing-recovery-routing-plan): the audit registry is the single
+# source of truth for which carrier<->concrete crossings are routed.  A new
+# chokepoint call site that forgot its audit row (or a drifted/stale registry)
+# fails here.  Independent of the turi-parity ratchets above so it still runs
+# when those are skipped or unrelated.  Opt out with TUR_SKIP_CROSSING_CHECK=1.
+if [ "${TUR_SKIP_CROSSING_CHECK:-0}" != "1" ] && command -v python3 >/dev/null 2>&1; then
+    if ! python3 tools/check_crossing_routing.py --quiet; then
+        echo "tests: crossing-routing audit check failed (see above); aborting." >&2
+        exit 1
+    fi
+fi
+
 PASS=0
 FAIL=0
 FAILED=()

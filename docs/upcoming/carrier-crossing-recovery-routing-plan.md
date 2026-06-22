@@ -102,10 +102,16 @@ chokepoints are now self-validating via a Debug-only "forgot to route" ICE
   `__inst_*`). Suite stays 1765 passed, 0 failed; the abort path is verified
   (forcing the strict check on the value side aborts `emit-c` on the
   `option_map`/`err_val` carrier specs).
-- **R4 -- Audit-table-as-regression-guard.** PARTIALLY INHERITED. The
-  audit table lives in the archived plan with all rows `[FIXED]`; not
-  maintained as a live PR-gate; no review checklist enforces "new
-  crossing => new row."
+- **R4 -- Audit-table-as-regression-guard.** DONE (static enforcement).
+  The audit registry `docs/crossing-routing-audit.txt` lists every
+  chokepoint call site as `<routine> <file.c> <count>`, and
+  `tools/check_crossing_routing.py` (wired into `tests/run.sh` next to the
+  turi-parity ratchets, opt-out `TUR_SKIP_PARITY_CHECK=1`) fails the suite
+  when a new chokepoint call site appears without a registry row, a count
+  drifts, or a registry entry goes stale. Regenerate with
+  `python3 tools/check_crossing_routing.py --update` and add the matching
+  row to the R0 inventory tables here. This is the documentation/CI half of
+  the gate; R3's ICE is its runtime half.
 - **Fn-value third axis (G6 motivated).** STARTED. The axis now has its
   named chokepoint: `emit_abi_fn_value_signature` (`emit_module.c`) derives a
   passed/captured function value's specialized arg/result types (instantiated
@@ -241,6 +247,22 @@ The audit table is the single source of truth for "which crossings are routed."
 Any PR adding a recovery call site adds a row + a stress-matrix cell. A crossing
 without a row fails review. This plan's R3 assertion is the runtime enforcement
 of R4's documentation.
+
+**Landed.** The single source of truth is now machine-readable and enforced:
+
+- `docs/crossing-routing-audit.txt` -- the registry, one
+  `<routine> <file.c> <call-site-count>` line per routed crossing.
+- `tools/check_crossing_routing.py` -- enumerates the chokepoint call sites in
+  `src/compiler/*.c` (definitions and prototypes excluded) and diffs them
+  against the registry; `--update` regenerates it.
+- `tests/run.sh` runs the check (with `--quiet`) alongside the turi-parity
+  ratchets, so a crossing that forgot its row fails the suite, not just review.
+  Opt out with `TUR_SKIP_PARITY_CHECK=1`.
+
+The sanctioned chokepoints it tracks: `emit_spec_arg_type_for_binding` /
+`emit_var_spec_arg_type` (value), `emit_reresolve_disp_type` /
+`emit_dispatch_tyvar` (dispatch), `emit_abi_fn_value_signature` (fn-value), and
+`emit_abi_assert_routed_concrete` (the R3 gate the call sites lean on).
 
 ## Risks / why this wasn't done already
 
