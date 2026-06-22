@@ -5005,6 +5005,17 @@ skip_capability_field_lookup:;
     if (obj_is_abstract_tyvar) {
         TypeClassInstance *carrier_inst = NULL;
         FnDef *carrier_method = NULL;
+        /* constrained-generic-instance-element-dispatch: when no `int` instance
+         * exists, fall back to any *carrier-compatible scalar* instance as the
+         * representative (e.g. `Enc [cstr]` for a json `Encode [Vec]` whose only
+         * scalar instances are cstr/float).  Such a scalar rides the int64
+         * carrier, so the polymorphic base clone stays valid C; emit-side
+         * re-resolution (emit_reresolve_method_call) then specializes the inner
+         * element call to the concrete A per ABI specialization.  Without this
+         * representative the dispatch fell through to the generic search and a
+         * tyvar receiver with >1 name-matching instance reported TUR_E0020. */
+        TypeClassInstance *scalar_inst = NULL;
+        FnDef *scalar_method = NULL;
         for (TypeClassInstance *inst = e->typeclass_env.instances;
              inst != NULL && !carrier_inst; inst = inst->next) {
             for (uint8_t i = 0; i < inst->typeclass->n_methods; i++) {
@@ -5016,9 +5027,30 @@ skip_capability_field_lookup:;
                 if (inst->n_type_args > 0 && inst->type_args[0].kind == TY_INT) {
                     carrier_inst = inst;
                     carrier_method = inst->method_impls[i];
+                } else if (!scalar_inst && inst->n_type_args > 0) {
+                    /* A scalar that fits the int64 carrier slot (pointer-or-word
+                     * sized): cstr/bool/nil/sized-int.  Floats and aggregates do
+                     * not ride the carrier and would make the base clone ill-typed,
+                     * so they are not eligible representatives. */
+                    TypeKind itk = inst->type_args[0].kind;
+                    bool carrier_scalar =
+                        (itk == TY_CSTR || itk == TY_BOOL || itk == TY_NIL ||
+                         itk == TY_PTR_VOID || itk == TY_SYM ||
+                         itk == TY_INT8 || itk == TY_INT16 || itk == TY_INT32 ||
+                         itk == TY_INT64 ||
+                         itk == TY_UINT8 || itk == TY_UINT16 || itk == TY_UINT32 ||
+                         itk == TY_UINT64);
+                    if (carrier_scalar) {
+                        scalar_inst = inst;
+                        scalar_method = inst->method_impls[i];
+                    }
                 }
                 break; /* one method match per instance */
             }
+        }
+        if (!carrier_inst && scalar_inst) {
+            carrier_inst = scalar_inst;
+            carrier_method = scalar_method;
         }
         if (carrier_inst) {
             best_method = carrier_method;
@@ -5026,9 +5058,10 @@ skip_capability_field_lookup:;
             exact_match_found = true;
             goto found_method;
         }
-        /* No int instance for this class: fall through to the generic search
-         * (keeps prior behavior for classes without a carrier-compatible
-         * instance; such a constrained generic would still need a fix). */
+        /* No carrier-compatible instance for this class: fall through to the
+         * generic search (keeps prior behavior for classes without a
+         * carrier-compatible instance; such a constrained generic would still
+         * need a fix). */
     }
 
     /* Determine the effective constructor kind from the obj type. */

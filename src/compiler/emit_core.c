@@ -1181,8 +1181,24 @@ bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
     bool disp_ty_owned = false;
     if (call->as.call_.n_args >= 1 && call->as.call_.args) {
         const Expr *recv = call->as.call_.args[0];
+        /* constrained-generic-instance-element-dispatch: an explicit ascription
+         * to the constraint tyvar -- `(enc (:: (vec-get v i) A))` -- is the
+         * documented idiom (stdlib vec-of docstring) for recovering the element
+         * type of a carrier helper (vec-get/list-head/...) whose `:A` return
+         * collapses to the int64 carrier.  The ASCRIBE node carries the tyvar `A`,
+         * but its inner expression is the int-carrier call; stripping ascriptions
+         * first (below) would read that carrier `int` and bake the int instance.
+         * Capture an ascription-to-tyvar before stripping so the element call
+         * re-dispatches per specialization -- matching the field-extraction path
+         * (constrained-instance-element-dispatch) for `(.value x)`. */
+        for (const Expr *a = recv; a && a->kind == EX_ASCRIBE;
+             a = a->as.ascribe_.inner) {
+            if (a->type.kind == TY_TYVAR) { disp_ty = a->type; have_disp = true; break; }
+        }
         while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
-        if (recv && recv->type.kind == TY_TYVAR) { disp_ty = recv->type; have_disp = true; }
+        if (!have_disp && recv && recv->type.kind == TY_TYVAR) {
+            disp_ty = recv->type; have_disp = true;
+        }
     }
     if (!have_disp && call->type.kind == TY_TYVAR) {
         disp_ty = call->type; have_disp = true;
