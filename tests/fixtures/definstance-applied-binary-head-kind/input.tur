@@ -1,0 +1,34 @@
+; Regression: docs/reported/kind-star-instance-two-param-type-cannot-bind-constraint-var.md
+;
+; A STAR-declared typeclass (param kind *) must accept a FULLY-APPLIED
+; 2-parameter instance head that fixes one type argument and binds the other to
+; a constraint variable -- e.g. `(Map cstr V)` -- while keeping the class at
+; kind * so its primitive instances (`[int]`, `[cstr]`) still type-check.
+;
+; Previously the only 3-element head form required exactly one `_` hole.  That
+; hole form is for kind-(* -> *) classes: `(Map _ V)` parses as a TY_APP of
+; kind `* -> *`, which promotes a STAR-declared class to higher kind and then
+; rejects the sibling `[int]`/`[cstr]` instances with TUR-E0012.  A no-hole
+; `(Map cstr V)` was rejected outright ("must mark the free parameter with
+; exactly one '_'").  Now a no-hole, fully-applied head parses as a nested,
+; kind-* type application -- app(app(Map, cstr), V) -- so the class stays kind *
+; and `V` binds to the value slot.
+
+(defclass Tag [a] (tg [x] : int))
+(definstance Tag [int]  (tg [x] 10))
+(definstance Tag [cstr] (tg [x] 20))
+
+; Fully-applied 2-param head: fixes the key arm (cstr), binds V to the value
+; arm via the `(Tag V)` constraint.  The class stays kind *.
+(definstance Tag [(Map cstr V)] [(Tag V)]
+  (tg [x] (let [m (:: x (Map cstr V))] 42)))
+
+(defn main [] : int
+  ; Primitive instances still dispatch -> the class stayed kind *.
+  (println (tg 5))      ; 10
+  (println (tg "x"))    ; 20
+  ; The 2-param-head instance is selected for a Map receiver.
+  (let [m (:: (map-assoc (:: (map-new) (Map cstr cstr)) "k" "v")
+              (Map cstr cstr))]
+    (println (tg m)))   ; 42
+  0)
