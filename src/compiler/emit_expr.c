@@ -3011,6 +3011,27 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         preserve_ascribe_for_bridge = true;
                     }
                 }
+                /* constrained-generic-dispatch-float-element: keep an
+                 * `(:: (vec-get v i) A)` ascription intact when the element
+                 * tyvar `A` resolves (through the active spec) to a FLOAT width
+                 * over an int64 carrier inner.  Stripping it would hand the raw
+                 * int64 carrier bits to a `double` parameter -- a NUMERIC
+                 * int64->double conversion (1.5 -> 4.6e18), not the bit
+                 * reinterpret the concrete `(:: ... :float)` form performs.
+                 * Preserving the wrapper routes it through the EX_ASCRIBE emit,
+                 * which bridges carrier->concrete for the float case. */
+                if (!preserve_ascribe_for_bridge && arg_expr &&
+                    arg_expr->kind == EX_ASCRIBE &&
+                    arg_expr->type.kind == TY_TYVAR &&
+                    arg_expr->as.ascribe_.inner &&
+                    arg_expr->as.ascribe_.inner->type.kind == TY_INT &&
+                    ctx->current_abi_specialization) {
+                    Type rtv = emit_resolve_type(ctx, arg_expr->type);
+                    if (rtv.kind == TY_FLOAT || rtv.kind == TY_FLOAT32 ||
+                        rtv.kind == TY_FLOAT64) {
+                        preserve_ascribe_for_bridge = true;
+                    }
+                }
                 if (!preserve_ascribe_for_bridge) {
                     while (arg_expr && arg_expr->kind == EX_ASCRIBE) arg_expr = arg_expr->as.ascribe_.inner;
                 }
@@ -5406,6 +5427,31 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  e->type.as.struct_.def->is_opaque) ||
                 (e->type.kind == TY_STRUCT && e->type.as.struct_.def == NULL) ||
                 e->type.kind == TY_TYVAR;
+            /* constrained-generic-dispatch-float-element: `(:: (vec-get v i) A)`
+             * -- the documented carrier-helper ascription idiom -- recovers the
+             * element type `A` for dispatch, but when `A` monomorphizes to a
+             * FLOAT width the int64 carrier read from `vec-get` must be
+             * bit-reinterpreted to a `double`, exactly as the concrete
+             * `(:: ... :float)` ascription is via the method-arg bridge.  Treated
+             * as a pure tyvar relabel (ascribe_to_opaque), the raw int64 bits
+             * flowed through unreinterpreted, so a `1.5` element arrived as its
+             * int64 bit pattern (4.6e18) inside the dispatched method.  A plain
+             * C int64->double assignment is a NUMERIC conversion, not a
+             * reinterpret, so resolve the tyvar through the active spec and, when
+             * it grounds to a float width over an int64 carrier inner, bridge
+             * carrier->concrete here.  (int/bool/cstr/struct elements need no
+             * reinterpret -- their carrier bits ARE the value -- so only the
+             * float widths take this path.) */
+            if (e->type.kind == TY_TYVAR &&
+                e->as.ascribe_.inner->type.kind == TY_INT &&
+                ctx->current_abi_specialization) {
+                Type rtv = emit_resolve_type(ctx, e->type);
+                if (rtv.kind == TY_FLOAT || rtv.kind == TY_FLOAT32 ||
+                    rtv.kind == TY_FLOAT64) {
+                    return emit_carrier_bridge(ctx, body, inner_val,
+                                               CK_CARRIER, CK_CONCRETE, rtv);
+                }
+            }
             if (!ascribe_to_opaque &&
                 e->as.ascribe_.inner->type.kind == TY_INT &&
                 type_kind_is_aggregate(e->type.kind) &&
