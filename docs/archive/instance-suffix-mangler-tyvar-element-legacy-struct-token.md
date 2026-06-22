@@ -12,7 +12,15 @@ severity: Low. Cosmetic / maintainability. `build_inst_type_suffix` keys every
   keep the change surgical the mangler now special-cases a `TY_TYVAR` head-arg
   back to the legacy `"<struct>"` token. It works and is uniqueness-safe, but it
   is a representation/identifier coupling smell worth retiring.
-status: OPEN
+status: RESOLVED 2026-06-22. The special-case is retired: `build_inst_type_suffix`
+  (`src/compiler/elab_typeclasses.c`, TY_APP arm) now renders a `TY_TYVAR`
+  head-arg honestly via `type_name` (`"tyvar"`) instead of pinning it to the
+  legacy `"<struct>"` token, and the ~86 cosmetically-affected
+  `fixtures/*/expected.c` snapshots were regenerated in the same commit. The
+  whole diff is purely the `__ltstruct_gt` -> `_tyvar` rename (verified: 0
+  changed lines contain neither token; every function body byte-identical), so
+  the behavioural surface is unchanged. `bash tests/run.sh` => 1760 passed, 0
+  failed. See `docs/archive/history/instance-suffix-mangler-tyvar-element-legacy-struct-token.md`.
 ---
 
 # Instance mangler pins a named tyvar element to the legacy `<struct>` token

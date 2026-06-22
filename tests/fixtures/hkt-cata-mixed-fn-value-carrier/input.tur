@@ -1,0 +1,30 @@
+;; hkt-cata-mixed-fn-value-carrier -- folding one Expr/Fix with BOTH a
+;; function carrier (cata fn-alg : B = (fn [int] int)) and a value carrier
+;; (cata size-alg : B = int) must not collide.  Both specs lower B to the
+;; int64 carrier, so the per-spec env struct used to be emitted twice as
+;; __env_N__spec__int64_t (thin __fn vs fat tur_thunk __fn) and redefine
+;; each other.  Expect: 7 (3+4 applied to env 0), then 2 (leaf count).
+(load "stdlib/typeclass-functor.tur")
+(defdata ExprF :copy [a] (LitF :int) (AddF a a))
+(defdata Expr  :copy (Roll (ExprF Expr)))
+(definstance Functor [ExprF]
+  (fmap [c g]
+    (match c
+      (LitF n)   (LitF n)
+      (AddF x y) (AddF (g x) (g y)))))
+(defn unroll-e [e : Expr] : (ExprF Expr)
+  (match e (Roll l) (:: l (ExprF Expr))))
+(defn cata [B] [alg : (fn [(ExprF B)] B)  e : Expr] : B
+  (alg (:: (fmap (unroll-e e) (fn [c : Expr] : B (cata alg c))) (ExprF B))))
+(defn fn-alg [l : (ExprF (fn [int] int))] : (fn [int] int)
+  (match l
+    (LitF n)   (fn [env : int] : int n)
+    (AddF f g) (fn [env : int] : int (+ (f env) (g env)))))
+(defn size-alg [l : (ExprF int)] : int
+  (match l (LitF n) 1 (AddF x y) (+ x y)))
+(defn lit [n : int] : Expr (Roll (LitF n)))
+(defn add [x : Expr y : Expr] : Expr (Roll (AddF x y)))
+(defn main [] : int
+  (do (println ((cata fn-alg (add (lit 3) (lit 4))) 0))
+      (println (cata size-alg (add (lit 3) (lit 4))))
+      0))

@@ -8,7 +8,19 @@ severity: Low. Auxiliary harness only; the default `tests/run.sh` gate and
   assertions fail: `mutmap-new` resolves with the default prelude, and the
   TUR_TURI_FULL_PRELUDE=yes path is reported as wrongly enabling the full
   prelude.
-status: OPEN (pre-existing; reproduces on a clean checkout of the branch)
+status: RESOLVED 2026-06-22. The gate harness was rewritten (in #474, "green
+  up ... turi gates") to probe `schema/alt` -- a pure-Turmeric defn that lives
+  only in the still-carved `schema.tur` -- instead of the original `mutmap-new`
+  probe. `contract`/`mutmap` have since graduated into the *default* prelude by
+  design, so the old probe was testing a name that is correctly always-reachable
+  now. With the corrected probe all three directions hold against `tur` built
+  from this branch: flag OFF -> `schema/alt` unbound (rc=1, error mentions
+  `schema/alt`); `TUR_TURI_FULL_PRELUDE=1` -> defined and runs (rc=0);
+  `TUR_TURI_FULL_PRELUDE=yes` -> NOT enabled (rc=1), because
+  `turi_full_prelude_enabled()` (`src/main.c:4971`) does a strict
+  `strcmp(e,"1")==0`. `bash tests/run-turi-full-prelude.sh` => `PASS
+  turi-full-prelude`. See
+  `docs/archive/history/turi-full-prelude-default-leaks-carved-module.md`.
 ---
 
 ## Repro

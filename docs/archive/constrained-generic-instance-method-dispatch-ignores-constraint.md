@@ -4,8 +4,16 @@ Severity: High for the feature (constrained generic container typeclass
 instances -- `Encode`/`Decode` for `[Vec]`, `[Option]`, `[Map]`); does not
 affect existing single-type instances.
 
-Status: **mostly resolved** (the documented-idiom path now dispatches
-correctly; two residual sub-cases remain -- see "Remaining limitations").
+Status: **RESOLVED 2026-06-22** -- the headline defect (the documented-idiom
+ascription path dispatching to the baked representative instead of the element
+instance) is fixed and pinned by
+`tests/fixtures/constrained-generic-instance-vec-element-dispatch/` (re-verified
+green on this branch: prints `2`, `hello`, `F`). The two residual sub-cases are
+each tracked by their own dedicated reports (still OPEN), so this umbrella is
+archived rather than left parked:
+
+- `docs/reported/constrained-instance-element-dispatch-leaks-into-lifted-closures.md`
+- `docs/reported/unascribed-carrier-helper-read-collapses-element-tyvar.md`
 
 ## Summary
 

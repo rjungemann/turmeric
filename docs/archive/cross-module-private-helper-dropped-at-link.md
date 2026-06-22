@@ -10,12 +10,26 @@ severity: Medium. Three `frame` spice test files fail at the C link step
   problem, not a typing one. Blocks a fully-green `frame` suite against
   tip-of-main `tur`, and will surface as a red CI job (CI builds `tur` from
   turmeric main).
-status: OPEN -- found 2026-06-21 by the turmeric-spices `frame` suite. Verified
-  on `tur` from `main` at 99cc8b32 (post #479-#483, v0.22.0 + 11 commits).
-  Pre-existing; unrelated to the U3 `frame/typed` work (those files moved aside,
-  the 3 failures persisted). Sibling of #465/#467 (separate-compilation /
-  mangled-symbol retention), NOT a member of the carrier<->concrete ABI crossing
-  audit.
+status: RESOLVED 2026-06-22 -- MISDIAGNOSED; NOT a turmeric defect. The symbol is
+  NOT dropped/DCE'd: `frame/sort/__so-take` is emitted normally as
+  `static int64_t frame__sort___un_unso_hytake(...)` (verified -- it is a real
+  definition in the emitted TU, reached by sort.tur's own callers). The link
+  failure is a STALE HAND-SPELLED MANGLED NAME in the spice's inline-C bridge:
+  group.tur/filter.tur declare `extern int64_t frame__sort____so_take(...)`, but
+  the live, self-consistent mangler escapes a literal `_` as `_un` and `-` as
+  `_hy` (`src/compiler/mangle.c:11-21`, last touched #457 -- unchanged since),
+  so `frame/sort/__so-take` mangles to `frame__sort___un_unso_hytake`, never
+  `frame__sort____so_take`. The bridge calls a name that was never emitted under
+  this scheme. Same class for the `frame/interop` `__ip_*` Arrow release
+  callbacks (hand-spelled by-address C-ABI names). The turmeric-side mechanisms
+  are sound: `#[used]` (#467) controls linkage, and the `__TUR_CNAME_<name>__`
+  splice reproduces the live mangler -- the c-integration guide already warns
+  against hand-spelling mangled names for exactly this reason. The fix is
+  spice-side and belongs in turmeric-spices, not turmeric. Verified: exporting
+  `__so-take` from `frame/sort` and replacing the two inline-C bridges with a
+  normal `(__so-take col perm n)` call makes `reshape_test` (12/12) and
+  `group_test` (7/7) pass against this branch's `tur`. See
+  `docs/archive/history/cross-module-private-helper-dropped-at-link.md`.
 ---
 
 # Cross-module private helper dropped at the C link step

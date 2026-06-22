@@ -5,7 +5,20 @@ severity: Medium. Blocks httpd's `concurrent_test` (httpd otherwise 4/5 green),
   but the root cause is resolution, not a missing/renamed builtin. No
   compiler-side rename happened: `thread-spawn-fn` exists, unchanged, in
   `stdlib/thread.tur` and resolves correctly when that module is in scope.
-status: OPEN
+status: RESOLVED 2026-06-22 -- not a turmeric defect; spice applied the
+  recommended fix. Re-verified against this branch's `tur` with a fresh
+  turmeric-spices clone: (1) `thread-spawn-fn` is still defined and exported by
+  `stdlib/thread.tur:49`; (2) the report's probe holds exactly -- without a
+  load the name is unresolved, and after `(load "stdlib/thread.tur")` it
+  resolves (the next diagnostic is the expected "unsafe function ... requires an
+  enclosing (unsafe ...)" check, proving resolution succeeded); (3) httpd's
+  `concurrent_test.tur` now opens with an explicit `(load "stdlib/thread.tur")`
+  whose comment cites this report, so the original `unknown function
+  'thread-spawn-fn'` symptom is gone. `concurrent_test` currently fails for an
+  UNRELATED reason -- a missing vendored `yyjson.h` (JSON dep) reached far past
+  thread resolution -- which is a spice build-config matter, not this report.
+  No turmeric change required. See
+  `docs/archive/history/thread-spawn-fn-not-removed-stdlib-thread-needs-resolution.md`.
 ---
 
 # `thread-spawn-fn` still exists; the httpd failure is module resolution
