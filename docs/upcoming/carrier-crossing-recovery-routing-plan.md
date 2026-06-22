@@ -16,18 +16,19 @@ status: OPEN -- proposed. Sequenced after the audit's P1 (stress-matrix
 
 ## Status (verified 2026-06-22)
 
-**NOT STARTED -- proposal only.** Filed today (commit `fbd0a94d`) as the
-structural follow-up to the now-archived
-`carrier-concrete-abi-crossing-audit-plan.md`. All audit gaps (G2-G10)
-closed via the old per-site patch approach *before* this plan landed, so
-no chokepoint-routing work has been done yet and the patch-pile has grown.
+**IN PROGRESS.** Filed (commit `fbd0a94d`) as the structural follow-up to
+the now-archived `carrier-concrete-abi-crossing-audit-plan.md`. All audit
+gaps (G2-G10) closed via the old per-site patch approach *before* this plan
+landed. First structural slice now landed: the value-side recovery idiom is
+consolidated behind a single shared routine (see R0/R2 below).
 
-- **R0 -- Inventory of un-routed sites.** NOT STARTED. No audit table, no
-  PR. Ad-hoc `arg_types[]` / `emit_resolve_type` lookups remain across
-  `emit_module.c` (e.g. `:2161, :2541, :2906, :3540`), `emit_core.c`,
-  `emit_expr.c`.
+- **R0 -- Inventory of un-routed sites.** DONE for the value side (see the
+  "R0 inventory" table below). The dominant un-routed pattern was the
+  hand-rolled `for pi: if fd->params[pi] == b -> arg_types[pi]` recovery --
+  the value-side chokepoint logic copied inline at 6 sites. Dispatch-side
+  and fn-value-side inventory still open.
 - **R1 -- Make the chokepoints total.** NOT STARTED as a folding pass.
-  `emit_var_spec_arg_type` (`emit_expr.c:1651`) and
+  `emit_var_spec_arg_type` (`emit_expr.c`) and
   `emit_reresolve_disp_type` (`emit_core.c:1157`) have been *extended*,
   but every G2-G10 fix landed as a sibling branch beside them: G2 via
   `emit_abi_try_nested_instance_dispatch_redirect` (`emit_module.c:1960`,
@@ -35,10 +36,28 @@ no chokepoint-routing work has been done yet and the patch-pile has grown.
   `expr_emits_byvalue_carrier_abi` (`emit_expr.c:382`, PR #497); G4 via
   per-element phantom clone (PR #486); G5/G7/G9 via local site fixes
   (PRs #482, #498, #494); G6 via the new fn-value axis (PRs #487-#502).
-- **R2 -- Migrate ad-hoc sites onto chokepoints.** NOT STARTED. No
-  deletions of gated branches; gap-tagged comments still grow
-  (`emit_module.c`: 24, `emit_expr.c`: 27, `emit_core.c`: 4 occurrences
-  of `G[0-9]`).
+- **R2 -- Migrate ad-hoc sites onto chokepoints.** STARTED (value side).
+  The value-side `params[pi] -> arg_types[pi]` recovery now lives in one
+  exported routine, `emit_spec_arg_type_for_binding` (`emit_expr.c`,
+  declared in `emit_internal.h`). `emit_var_spec_arg_type` delegates to it,
+  and the four ad-hoc inline copies were deleted and routed through it:
+  `field_read_emits_byvalue_aggregate` (`emit_expr.c`),
+  `emit_reresolve_disp_type` (`emit_core.c`), the M4c Path A.2 by-value
+  field-access override (`emit_expr.c`), and the instance-method twin-arg
+  resolver (`emit_module.c`). Behavior-preserving: full suite 1765 passed,
+  0 failed, zero fixture churn. Dispatch-side branch deletions not yet done.
+
+### R0 inventory -- value-side recovery (`params[pi] -> arg_types[pi]`)
+
+| Site | Status | Note |
+|---|---|---|
+| `emit_expr.c` `emit_var_spec_arg_type` | ROUTED (is the chokepoint; now delegates to `emit_spec_arg_type_for_binding`) | -- |
+| `emit_expr.c` `field_read_emits_byvalue_aggregate` (G9) | MIGRATED | inline copy deleted |
+| `emit_core.c` `emit_reresolve_disp_type` field-receiver recovery | MIGRATED | inline copy deleted |
+| `emit_expr.c` M4c Path A.2 by-value field-access override | MIGRATED | inline copy deleted |
+| `emit_module.c` instance-method twin-arg resolver (Gap 1) | MIGRATED | inline copy deleted |
+| `emit_fns.c:910` carrier-payload param index | EXCLUDED | wants the param *index*, not its type -- different routine |
+| `emit_effects.c:211` `ctx->fn_params[pi]` | EXCLUDED | different array (effect-handler params), not spec `arg_types[]` |
 - **R3 -- Debug-build "forgot to route" ICE.** NOT STARTED. No
   assertion exists (`grep "ICE\|assert.*chokepoint"` empty).
 - **R4 -- Audit-table-as-regression-guard.** PARTIALLY INHERITED. The

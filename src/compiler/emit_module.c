@@ -1847,14 +1847,8 @@ static bool emit_abi_try_byval_twin_redirect(EmitCtx *ctx, const Expr *call,
          * for a plain constrained-poly defn spec (where the receiver elab type
          * is `(Vec A)` and instantiates cleanly). */
         const Expr *av = call->as.call_.args[i];
-        if (av && av->kind == EX_VAR && av->as.var.binding && aspec->fn) {
-            for (uint8_t pi = 0; pi < aspec->fn->n_params && pi < aspec->n_args; pi++) {
-                if (aspec->fn->params[pi] == av->as.var.binding) {
-                    at = aspec->arg_types[pi];
-                    break;
-                }
-            }
-        }
+        if (av && av->kind == EX_VAR)
+            emit_spec_arg_type_for_binding(ctx, av->as.var.binding, &at);
         twin_args[i] = at;
         if (i == 0) resolved_recv = at;
     }

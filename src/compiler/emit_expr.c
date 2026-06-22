@@ -413,18 +413,8 @@ static bool field_read_emits_byvalue_aggregate(EmitCtx *ctx, const Expr *e) {
      * (mirrors emit_reresolve_disp_type / emit_var_spec_arg_type). */
     Type rt;
     bool have_rt = false;
-    if (se->kind == EX_VAR && se->as.var.binding &&
-        ctx->current_abi_specialization && ctx->current_abi_specialization->fn) {
-        FnDef *fd = ctx->current_abi_specialization->fn;
-        const EmitAbiSpecialization *aspec = ctx->current_abi_specialization;
-        for (uint8_t pi = 0; pi < fd->n_params && pi < aspec->n_args; pi++) {
-            if (fd->params[pi] == se->as.var.binding) {
-                rt = aspec->arg_types[pi];
-                have_rt = true;
-                break;
-            }
-        }
-    }
+    if (se->kind == EX_VAR)
+        have_rt = emit_spec_arg_type_for_binding(ctx, se->as.var.binding, &rt);
     if (!have_rt) rt = emit_resolve_type(ctx, se->type);
 
     StructDef *sd = NULL;
@@ -1648,12 +1638,11 @@ static bool expr_is_pbp_param(EmitCtx *ctx, const Expr *struct_expr) {
  * uses for `.field` access (emit_expr.c §4249).  Returns true and writes the
  * concrete arg type into *out when the var is such a spec param; false
  * otherwise (caller falls back to emit_resolve_type). */
-static bool emit_var_spec_arg_type(EmitCtx *ctx, const Expr *var_expr,
-                                   Type *out) {
-    if (!ctx || !var_expr || var_expr->kind != EX_VAR) return false;
-    Binding *b = var_expr->as.var.binding;
+bool emit_spec_arg_type_for_binding(EmitCtx *ctx, const struct Binding *b,
+                                    Type *out) {
+    if (!ctx || !b) return false;
     const EmitAbiSpecialization *aspec = ctx->current_abi_specialization;
-    if (!b || !aspec || !aspec->fn) return false;
+    if (!aspec || !aspec->fn) return false;
     FnDef *fd = aspec->fn;
     for (uint8_t pi = 0; pi < fd->n_params && pi < aspec->n_args; pi++) {
         if (fd->params[pi] == b) {
@@ -1662,6 +1651,12 @@ static bool emit_var_spec_arg_type(EmitCtx *ctx, const Expr *var_expr,
         }
     }
     return false;
+}
+
+static bool emit_var_spec_arg_type(EmitCtx *ctx, const Expr *var_expr,
+                                   Type *out) {
+    if (!ctx || !var_expr || var_expr->kind != EX_VAR) return false;
+    return emit_spec_arg_type_for_binding(ctx, var_expr->as.var.binding, out);
 }
 
 /* M7 by-value HKT (gap G6): inside a per-(f, A) by-value instance-method spec
@@ -5333,23 +5328,18 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 && ctx->current_abi_specialization->fn
                 && ctx->current_abi_specialization->fn->owner_instance
                 && recv_expr->kind == EX_VAR) {
-                Binding *recv_b = recv_expr->as.var.binding;
-                FnDef *fd = ctx->current_abi_specialization->fn;
-                for (uint8_t pi = 0; pi < fd->n_params
-                                     && pi < ctx->current_abi_specialization->n_args; pi++) {
-                    if (fd->params[pi] == recv_b) {
-                        Type spec_arg = ctx->current_abi_specialization->arg_types[pi];
-                        StructDef *sa_def = NULL;
-                        Type sa_args[16]; uint8_t sa_n = 0;
-                        if (type_extract_struct_app(&spec_arg, &sa_def, sa_args, &sa_n)
-                            && sa_def && sa_def == def) {
-                            through_carrier = false;
-                        } else if (spec_arg.kind == TY_STRUCT && spec_arg.as.struct_.def
-                                   && !spec_arg.as.struct_.def->is_opaque
-                                   && spec_arg.as.struct_.def->n_type_params == 0) {
-                            through_carrier = false;
-                        }
-                        break;
+                Type spec_arg;
+                if (emit_spec_arg_type_for_binding(ctx, recv_expr->as.var.binding,
+                                                   &spec_arg)) {
+                    StructDef *sa_def = NULL;
+                    Type sa_args[16]; uint8_t sa_n = 0;
+                    if (type_extract_struct_app(&spec_arg, &sa_def, sa_args, &sa_n)
+                        && sa_def && sa_def == def) {
+                        through_carrier = false;
+                    } else if (spec_arg.kind == TY_STRUCT && spec_arg.as.struct_.def
+                               && !spec_arg.as.struct_.def->is_opaque
+                               && spec_arg.as.struct_.def->n_type_params == 0) {
+                        through_carrier = false;
                     }
                 }
             }

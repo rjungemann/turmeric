@@ -390,6 +390,16 @@ struct FnDef *emit_reresolve_method_fndef(struct EmitCtx *ctx, const struct Expr
  * parametric container.  Defined in emit_core.c. */
 bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
                               Type *out_resolved, const Expr **out_dict);
+/* Value-side chokepoint core (carrier<->concrete): given a binding that is a
+ * parameter of the active ABI specialization, recover its monomorphized concrete
+ * type from `current_abi_specialization->arg_types[]`.  Returns false when there
+ * is no active spec or the binding is not one of its params.  This is the single
+ * sanctioned `params[pi] == b -> arg_types[pi]` recovery; every emit site that
+ * needs a spec-param's concrete type must route through it (directly, or via
+ * emit_var_spec_arg_type for an EX_VAR) instead of re-rolling the loop locally.
+ * Defined in emit_expr.c. */
+bool emit_spec_arg_type_for_binding(EmitCtx *ctx, const struct Binding *b,
+                                    Type *out);
 /* G6: true when a call's result type and a candidate spec's result type are
  * distinct PRIMITIVE kinds -- a return-differentiated sibling spec that the
  * by-args lookup must not match.  Defined in emit_expr.c. */

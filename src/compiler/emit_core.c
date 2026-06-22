@@ -1257,17 +1257,8 @@ bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
              * back to emit_resolve_type. */
             Type rt;
             bool have_rt = false;
-            if (se->kind == EX_VAR && se->as.var.binding && ctx->current_abi_specialization->fn) {
-                FnDef *fd = ctx->current_abi_specialization->fn;
-                const EmitAbiSpecialization *aspec = ctx->current_abi_specialization;
-                for (uint8_t pi = 0; pi < fd->n_params && pi < aspec->n_args; pi++) {
-                    if (fd->params[pi] == se->as.var.binding) {
-                        rt = aspec->arg_types[pi];
-                        have_rt = true;
-                        break;
-                    }
-                }
-            }
+            if (se->kind == EX_VAR)
+                have_rt = emit_spec_arg_type_for_binding(ctx, se->as.var.binding, &rt);
             if (!have_rt) rt = emit_resolve_type(ctx, se->type);
             StructDef *sd = NULL;
             Type sargs[16];
