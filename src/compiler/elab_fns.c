@@ -3554,6 +3554,30 @@ Expr *elab_fn(Elab *e, const Form *call) {
                 fn_type_has_named_tyvar(ann)) {
                 param_full_types[n_params - 1] = ann;
             }
+            /* hkt-cata-function-arg (producer side): this lambda is being
+             * elaborated as the value of an expected function type whose
+             * argument at this position is ITSELF a function -- i.e. the lambda
+             * is a function-typed carrier B = (fn [(fn ...) ...] ...), the value
+             * an algebra arm folds to.  Such a carrier value is only ever
+             * fat-dispatched (through the generic catamorphism / match-arm
+             * carrier binding), and a capturing closure flows into this
+             * function-typed slot, so the argument must cross the boundary as a
+             * uniform fat box and be fat-dispatched here.  Mark the param
+             * is_fat so (k ...) reads slot 0 instead of calling the fat box's
+             * address as a thin function pointer -> SIGSEGV.  Symmetric with
+             * the call-site arg_fat marking in elab_call.c.  Gated on the
+             * expected arg being a (non-cfnptr) function type so an ordinary
+             * fn-typed param of a non-carrier lambda is untouched. */
+            if (ann->kind == TY_FN && !ann->as.fn.cfnptr &&
+                e->expected_type && e->expected_type->kind == TY_FN &&
+                (n_params - 1) < e->expected_type->as.fn.arity &&
+                e->expected_type->as.fn.arg_full_types) {
+                Type *exp_arg =
+                    e->expected_type->as.fn.arg_full_types[n_params - 1];
+                if (exp_arg && exp_arg->kind == TY_FN && !exp_arg->as.fn.cfnptr) {
+                    params[n_params - 1]->is_fat = true;
+                }
+            }
             continue;
         }
         /* LT0 (CC4.4): ^linear marks the next param linear (exactly-once). */

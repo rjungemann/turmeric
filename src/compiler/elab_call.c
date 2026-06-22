@@ -756,6 +756,25 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
             source_expr->as.call_.fn_binding->type.kind == TY_FN &&
             source_expr->as.call_.fn_binding->type.as.fn.result_kind == TY_TYVAR) {
             tmp_b->type.as.fn.boxed = true;
+            /* hkt-cata-function-arg: the carrier B is itself a function whose
+             * own argument is a function -- B = (fn [(fn [int] int) int] int).
+             * The carrier result is fat-dispatched (boxed, above), so every
+             * function value flowing into one of its function-typed argument
+             * slots must cross the boundary as a uniform fat box too: the
+             * dispatcher passes that slot as an opaque int64 and the callee
+             * fat-dispatches it (see the matching producer-side fat marking in
+             * elab_fn).  Mark each function-typed argument of the carrier fn
+             * type `arg_fat`, so the call-site auto-shim boxes a bare/thin fn
+             * argument via EX_FN_TO_FAT instead of passing a raw thin pointer
+             * the callee then mis-dispatches -> SIGSEGV. */
+            if (tmp_b->type.as.fn.arg_full_types) {
+                for (uint8_t ai = 0; ai < tmp_b->type.as.fn.arity; ai++) {
+                    Type *aft = tmp_b->type.as.fn.arg_full_types[ai];
+                    if ((aft && aft->kind == TY_FN && !aft->as.fn.cfnptr) ||
+                        (!aft && tmp_b->type.as.fn.arg_kinds[ai] == TY_FN))
+                        tmp_b->type.as.fn.arg_fat[ai] = true;
+                }
+            }
         }
     } else if (head_kind == TY_FN && source_expr &&
                source_expr->type.kind == TY_PTR_VOID) {
