@@ -1,0 +1,55 @@
+;; hkt-cata-fn-arg-carrier -- a generic catamorphism whose carrier B is itself a
+;; function type WHOSE OWN ARGUMENT is a function: B = (fn [(fn [int] int) int]
+;; int).  This is the CPS / continuation-passing fold ("matcher is one cata")
+;; form.  (Follow-up to the fn-CARRIER fix: #489 / hkt-cata-fn-carrier-recursive
+;; gave the carrier RESULT the fat-closure ABI; here the carrier's function-typed
+;; ARGUMENT needs the same treatment.)
+;;
+;; Before the fix, `(cata alg e)` type-checked and compiled (with an
+;; int-from-pointer warning) but SEGFAULTED at runtime: at the carrier-result
+;; application site the function-typed argument (the continuation `k`) was passed
+;; THIN (cast to int64_t) instead of as a fat closure box, while a sibling
+;; capturing closure flowing into the same `k` slot was a fat box -- the callee
+;; then dispatched a fat box as a raw function pointer and jumped into the env.
+;;
+;; Fix (hkt-cata-function-arg): a function-typed argument of a fat-dispatched
+;; carrier function crosses the boundary as a uniform fat box -- the call site
+;; boxes a bare/thin fn argument (arg_fat) and the producer (the algebra arm's
+;; returned closure) fat-dispatches its function-typed parameter.
+
+(load "stdlib/typeclass-functor.tur")
+
+(defdata ExprF :copy [a] (LitF :int) (AddF a a))
+(defdata Expr  :copy (Roll (ExprF Expr)))
+
+(definstance Functor [ExprF]
+  (fmap [c g]
+    (match c
+      (LitF n)   (LitF n)
+      (AddF x y) (AddF (g x) (g y)))))
+
+(defn unroll-e [e : Expr] : (ExprF Expr) (match e (Roll l) l))
+
+;; generic catamorphism, carrier B
+(defn cata [B] [alg : (fn [(ExprF B)] B) e : Expr] : B
+  (alg (:: (fmap (unroll-e e) (fn [c : Expr] : B (cata alg c))) (ExprF B))))
+
+(defn lit [n : int] : Expr (Roll (LitF n)))
+(defn add [x : Expr y : Expr] : Expr (Roll (AddF x y)))
+
+;; carrier B = (fn [(fn [int] int) int] int): the first arg is ITSELF a function
+;; (a continuation).  Each node folds to a CPS summation step.
+(defn alg [l : (ExprF (fn [(fn [int] int) int] int))]
+         : (fn [(fn [int] int) int] int)
+  (match l
+    (LitF n)   (fn [k : (fn [int] int) s : int] : int (k (+ s n)))
+    (AddF x y) (fn [k : (fn [int] int) s : int] : int
+                 (x (fn [s2 : int] : int (y k s2)) s))))
+
+(defn main [] : int
+  (do
+    ;; (3 + 4) = 7
+    (println ((cata alg (add (lit 3) (lit 4))) (fn [r : int] : int r) 0))
+    ;; ((3 + 4) + 5) = 12 -- deeper recursion through the fn-arg carrier
+    (println ((cata alg (add (add (lit 3) (lit 4)) (lit 5))) (fn [r : int] : int r) 0))
+    0))

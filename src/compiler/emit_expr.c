@@ -2834,8 +2834,26 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         bool var_is_int64_carrier =
                             arg && arg->kind == EX_VAR && arg->as.var.binding &&
                             arg->as.var.binding->is_fat;
+                        /* hkt-cata-function-arg: the mirror of the bridge above.
+                         * When the carrier's function-typed argument slot lowers
+                         * to the int64_t carrier (a non-boxed declared fn type)
+                         * but the argument VALUE is a fat closure box -- a freshly
+                         * auto-shimmed bare fn (EX_FN_TO_FAT), a capturing closure
+                         * (EX_CLOSURE), or any :ptr<void>/boxed-fn value -- it is
+                         * emitted as a `void *`.  Passing it straight into the
+                         * int64_t slot trips -Wint-conversion; coerce it through
+                         * (int64_t)(intptr_t) so the box pointer lands in the
+                         * carrier slot cleanly. */
+                        bool arg_is_fat_box =
+                            arg && (arg->kind == EX_FN_TO_FAT ||
+                                    arg->kind == EX_CLOSURE ||
+                                    arg->type.kind == TY_PTR_VOID ||
+                                    (arg->type.kind == TY_FN &&
+                                     arg->type.as.fn.boxed));
                         if (slot_is_ptr && var_is_int64_carrier) {
                             buf_printf(&out, ", (void *)(intptr_t)(%s)", arg_strs[i]);
+                        } else if (!slot_is_ptr && arg_is_fat_box) {
+                            buf_printf(&out, ", (int64_t)(intptr_t)(%s)", arg_strs[i]);
                         } else {
                             buf_printf(&out, ", %s", arg_strs[i]);
                         }
