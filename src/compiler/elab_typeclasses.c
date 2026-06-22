@@ -4495,6 +4495,65 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
     return out;
 }
 
+/* unascribed-carrier-helper-read-collapses-element-tyvar: structurally match a
+ * carrier helper's declared parameter type (carrying the helper's type-param
+ * `R`) against the actual argument type, returning the subtype at `R`'s
+ * position.  Mirror of emit_core.c:emit_pattern_extract_classvar for the elab
+ * side. */
+static bool tc_pattern_extract_var(const Type *pattern, const Type *concrete,
+                                   const char *varname, Type *out) {
+    if (!pattern || !concrete || !varname) return false;
+    if (pattern->kind == TY_TYVAR && pattern->as.tyvar_.name &&
+        strcmp(pattern->as.tyvar_.name, varname) == 0) {
+        *out = *concrete;
+        return true;
+    }
+    if (pattern->kind == TY_APP && concrete->kind == TY_APP) {
+        if (tc_pattern_extract_var(pattern->as.app.fn, concrete->as.app.fn,
+                                   varname, out))
+            return true;
+        if (tc_pattern_extract_var(pattern->as.app.arg, concrete->as.app.arg,
+                                   varname, out))
+            return true;
+    }
+    return false;
+}
+
+/* unascribed-carrier-helper-read-collapses-element-tyvar: true when `obj` is an
+ * UNASCRIBED generic carrier-helper read used as a class-method receiver --
+ * `(tag (vec-get v i))` -- whose recovered element type is still an abstract
+ * tyvar.  Such a receiver arises inside a constrained generic instance body,
+ * where the container's element is the constraint var; the helper's `:A` return
+ * collapses to the int64 carrier (TY_INT) at elaboration, so without this it
+ * would match a fixed `int` instance (silent mis-dispatch) or, with no `int`
+ * instance, report TUR_E0020.  Treating it as an abstract-tyvar receiver routes
+ * it to the carrier representative + dict tagging, and emit-side re-resolution
+ * (emit_reresolve_disp_type) specializes the element call per ABI specialization
+ * -- the same outcome the documented `(:: e A)` ascription idiom already gets. */
+static bool obj_is_unascribed_carrier_elem(const Expr *obj) {
+    while (obj && obj->kind == EX_ASCRIBE) obj = obj->as.ascribe_.inner;
+    if (!obj || obj->kind != EX_CALL || !obj->as.call_.fn_binding ||
+        !obj->as.call_.args)
+        return false;
+    const Type *ft = &obj->as.call_.fn_binding->type;
+    if (ft->kind != TY_FN || !ft->as.fn.arg_full_types ||
+        !ft->as.fn.result_full_type ||
+        ft->as.fn.result_full_type->kind != TY_TYVAR ||
+        !ft->as.fn.result_full_type->as.tyvar_.name)
+        return false;
+    const char *rname = ft->as.fn.result_full_type->as.tyvar_.name;
+    uint8_t np = ft->as.fn.arity;
+    for (uint8_t pi = 0; pi < np && pi < obj->as.call_.n_args; pi++) {
+        const Type *pft = ft->as.fn.arg_full_types[pi];
+        const Expr *ae = obj->as.call_.args[pi];
+        if (!pft || !ae) continue;
+        Type extracted;
+        if (tc_pattern_extract_var(pft, &ae->type, rname, &extracted))
+            return extracted.kind == TY_TYVAR;
+    }
+    return false;
+}
+
 Expr *elab_method_call(Elab *e, const Form *call) {
     /* call is (.method obj arg1 arg2 ...)
      * call->as.list.items[0] is the symbol .method
@@ -5109,7 +5168,8 @@ skip_capability_field_lookup:;
      * silent miscompile that SIGSEGV'd at runtime. */
     bool obj_is_abstract_tyvar =
         obj->type.kind == TY_TYVAR ||
-        (obj->type.kind == TY_STRUCT && obj->type.as.struct_.def == NULL);
+        (obj->type.kind == TY_STRUCT && obj->type.as.struct_.def == NULL) ||
+        obj_is_unascribed_carrier_elem(obj);
     if (obj_is_abstract_tyvar) {
         TypeClassInstance *carrier_inst = NULL;
         FnDef *carrier_method = NULL;

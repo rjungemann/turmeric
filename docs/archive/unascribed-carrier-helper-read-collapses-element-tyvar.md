@@ -2,6 +2,13 @@
 
 Severity: Low (a documented ascription idiom works around it; ergonomics only).
 
+Status: **RESOLVED 2026-06-22.** The unascribed form `(tag (vec-get v i))` now
+dispatches on the element type exactly like the documented `(:: (vec-get v i)
+A)` ascription. Pinned by
+`tests/fixtures/constrained-generic-instance-vec-element-unascribed/` (prints
+`1`, `2`, `hello`, `F`). Full suite green: `1762 passed, 0 failed`. See
+"Resolution" at the bottom.
+
 ## Summary
 
 Inside a constrained generic instance -- `(definstance C [Vec] [(C A)] ...)` --
@@ -73,3 +80,48 @@ such full-type channel.
   class-method receiver is an unascribed carrier-helper read whose declared
   return is a type-param under a constrained instance, so the silent
   mis-dispatch becomes visible.
+
+## Resolution
+
+Took the first fix direction, but without adding a new `EX_CALL` field: the
+callee's `EX_CALL` already retains its `fn_binding`, whose `TY_FN` type carries
+both `result_full_type` (the carrier helper's own type-param `R`, e.g. `A` for
+`vec-get`'s `:A`) and `arg_full_types[]` (every parameter's declared full type,
+including the parametric `(Vec R)`). That is the same channel
+`StructField.full_type` provides for the `(.value x)` struct-field analog --
+recovered on demand at the two dispatch sites instead of stored on a new field.
+
+A shared recovery shape was added at both sites: find the parameter whose
+declared full type mentions the result tyvar `R`, structurally match it against
+the **actual** argument's type, and read the subtype at `R`'s position. For
+`(tag (vec-get v 0))` with `v : (Vec A)`, matching `(Vec R)` against `(Vec A)`
+yields the constraint var `A`, which then grounds per ABI specialization through
+the existing constraint-var `param_idx` machinery.
+
+1. **emit side** -- `emit_reresolve_disp_type` (`src/compiler/emit_core.c`): a
+   new branch (parallel to the `EX_GET_FIELD` recovery) fires when the receiver
+   is an unascribed `EX_CALL` whose callee `result_full_type` is a bare
+   `TY_TYVAR`. It recovers the element tyvar via `emit_pattern_extract_classvar`
+   against the actual arg type; the downstream `emit_resolve_type` +
+   constraint-var grounding then re-dispatches the element call to the concrete
+   `A` per spec. This handles the emit-side mis-dispatch (silent wrong instance
+   with an `int` instance in scope).
+
+2. **elab side** -- `elab_method_call` (`src/compiler/elab_typeclasses.c`): the
+   `obj_is_abstract_tyvar` test now also returns true for an unascribed
+   carrier-helper receiver whose recovered element is still a `TY_TYVAR`
+   (`obj_is_unascribed_carrier_elem` + local `tc_pattern_extract_var`). This
+   routes it to the carrier-compatible representative + dict tagging, so a
+   constrained instance with **no** `int` instance (only `cstr`/`float`) no
+   longer reports `TUR_E0020` at elaboration -- it defers to the emit-side
+   re-resolution above, exactly as the documented `(:: e A)` ascription path
+   already did.
+
+Both changes are guarded on the recovered element being an abstract tyvar, so
+they only engage inside a constrained generic instance body (where the
+container's element is the constraint var). A concrete carrier read is
+unaffected. The residual `-Wint-conversion` warning on the dead carrier base
+clone is pre-existing and identical to the ascribed fixture
+(`constrained-generic-instance-vec-element-dispatch`) -- not a regression.
+
+Pinned by `tests/fixtures/constrained-generic-instance-vec-element-unascribed/`.
