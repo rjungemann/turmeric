@@ -1,0 +1,60 @@
+;; recursive-constrained-generic-carrier-ascription-element-dispatch -- a
+;; self-recursive constrained generic returning `(Cons A)` whose recursive call
+;; result is ascribed to the `:int` carrier (to feed `tcons-of`'s `t : int`)
+;; must keep specializing the recursive call on the ENCLOSING element type A,
+;; not collapse it to the int-carrier spec (`Cons__int`).
+;;
+;; Root cause (docs/reported/recursive-constrained-generic-carrier-ascription-loses-element-spec.md):
+;; the G7 concrete-result override in emit_module.c treated the carrier-erasure
+;; ascription `(:: (rep ...) :int)` as a concrete monomorphization target, so the
+;; `cstr`/`float` specs of `rep` recursed into `rep__spec__Cons__int__`. Element
+;; [0] decoded under the right instance but every element past the head was built
+;; by the int spec -- a 2-element `(Cons cstr)` round-tripped as `["a",null]`,
+;; a `(Cons float)` as `[1.5,0]` (the json round-trip-list spice test, 2/4).
+;;
+;; Fix: G7 only fires when the ascription preserves the result's parametric shape
+;; (both TY_APP); a `(Cons A)` -> bare `:int` carrier collapse no longer hijacks
+;; the recursive spec, so it inherits the enclosing spec's A.
+
+(defn str-concat [a : cstr b : cstr] : cstr
+  ```c
+  size_t na = strlen((const char*)a), nb = strlen((const char*)b);
+  char *buf = (char*)malloc(na + nb + 1);
+  memcpy(buf, a, na); memcpy(buf + na, b, nb); buf[na+nb] = '\0';
+  return buf;
+  ```)
+
+(defclass Sh [a] (sh [x : a] : cstr))
+
+(definstance Sh [int]
+  (sh [x : int] : cstr
+    ```c char *b=(char*)malloc(32); snprintf(b,32,"%lld",(long long)x); return b; ```))
+
+(definstance Sh [float]
+  (sh [x : float] : cstr
+    ```c char *b=(char*)malloc(32); snprintf(b,32,"%g",x); return b; ```))
+
+(definstance Sh [cstr]
+  (sh [x : cstr] : cstr
+    ```c size_t n=strlen((const char*)x)+3; char *b=(char*)malloc(n);
+         snprintf(b,n,"\"%s\"",(const char*)x); return b; ```))
+
+;; Build a `(Cons A)` of n copies of x. The recursive RESULT is ascribed to the
+;; :int carrier to satisfy tcons-of's `t : int` -- the trigger.
+(defn rep [A] [x : A  n : int] : (Cons A)
+  (if (= n 0)
+    (:: (tnil) (Cons A))
+    (tcons-of x (:: (rep x (- n 1)) :int))))
+
+;; Show every element via its own Sh instance -- proves element [1..] dispatch.
+(defn show-all [A] [(Sh A)] [xs : (Cons A)] : cstr
+  (if (tnil? (:: xs :int))
+    "]"
+    (str-concat (sh (:: (.head xs) A))
+                (str-concat "," (show-all (:: (.tail xs) (Cons A)))))))
+
+(defn main [] : int
+  (println (str-concat "[" (show-all (:: (rep 7    3) (Cons int)))))
+  (println (str-concat "[" (show-all (:: (rep 1.5  3) (Cons float)))))
+  (println (str-concat "[" (show-all (:: (rep "a"  3) (Cons cstr)))))
+  0)
