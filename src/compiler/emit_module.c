@@ -1660,6 +1660,22 @@ static bool type_is_heap_vec(Type t) {
          strcmp(def->name, "MutableMap") == 0);
 }
 
+/* Does Type `t` mention the named type variable?  Local mirror of
+ * elab_typeclasses.c's rt_type_mentions_tyvar (static there) used by the
+ * return-dispatch detector below. */
+static bool emit_type_mentions_tyvar(const Type *t, const char *name) {
+    if (!t || !name) return false;
+    switch (t->kind) {
+        case TY_TYVAR:
+            return t->as.tyvar_.name && strcmp(t->as.tyvar_.name, name) == 0;
+        case TY_APP:
+            return emit_type_mentions_tyvar(t->as.app.fn, name) ||
+                   emit_type_mentions_tyvar(t->as.app.arg, name);
+        default:
+            return false;
+    }
+}
+
 /* G2 (carrier<->concrete nested dispatch): a constrained-instance body that
  * dispatches a class method on a NESTED parametric element -- e.g. `(enc (.value
  * x))` in `(definstance Enc [Option] [(Enc A)] ...)` where the active spec is
@@ -1717,27 +1733,92 @@ static bool emit_abi_try_nested_instance_dispatch_redirect(
     }
     if (enb == 0) return false;
 
-    /* Build the spec's arg/result types.  arg_types[0] is the concrete container
-     * receiver (`(Cons int)` -> `Cons__int *`); other params (rare for a
-     * single-receiver dispatch method) instantiate their erased declared type
-     * through the element bindings.  The result is the method's already-concrete
-     * declared return. */
+    /* A return-dispatched method (e.g. `Dec`/`dec [seed : int] : (Result a cstr)`)
+     * selects its instance from the expected RESULT, not from param 0.  Its
+     * parameters carry no class tyvar, so param 0 is NOT the receiver and must
+     * not be forced to `resolved` -- doing so types `seed` as `Option__int` and
+     * miscompiles (the re-dispatch then passes an `Option__int` where the inner
+     * `int` instance expects `int64_t`).  Locate the class method behind `redisp`
+     * (parallel arrays: instance->method_impls[k] <-> typeclass->methods[k]) to
+     * tell which dispatch shape this is. */
+    const TypeClassInstance *oinst = redisp->owner_instance;
+    const TypeClass *otc = oinst->typeclass;
+    const TypeClassMethod *omethod = NULL;
+    for (uint8_t k = 0; otc && k < otc->n_methods && k < oinst->n_method_impls; k++) {
+        if (oinst->method_impls[k] == redisp) {
+            omethod = &otc->methods[k];
+            break;
+        }
+    }
+    /* Identify the return-dispatched class type variable (the one that appears in
+     * the method's return type but in no parameter).  For such a method the
+     * concrete result family is obtained by substituting that class variable with
+     * the resolved dispatch type (`a := (Option int)` -> `(Result (Option int)
+     * cstr)`) -- NOT through the element bindings, which key the inner container
+     * param and collapse the result to the int64 carrier. */
+    const char *ret_disp_var = NULL;
+    if (omethod) {
+        for (uint8_t ti = 0; ti < otc->n_type_params; ti++) {
+            const Symbol *tp = otc->type_params[ti];
+            if (!tp || !tp->name) continue;
+            if (!emit_type_mentions_tyvar(&omethod->return_type, tp->name)) continue;
+            bool in_param = false;
+            for (uint8_t pi = 0; pi < omethod->n_params; pi++) {
+                if (emit_type_mentions_tyvar(&omethod->param_types[pi], tp->name)) {
+                    in_param = true;
+                    break;
+                }
+            }
+            if (!in_param) { ret_disp_var = tp->name; break; }
+        }
+    }
+    bool return_dispatch = (ret_disp_var != NULL);
+
+    /* Build the spec's arg/result types.  For a receiver-dispatched method
+     * arg_types[0] is the concrete container receiver (`(Cons int)` ->
+     * `Cons__int *`); for a return-dispatched method EVERY parameter (including
+     * 0) keeps its own declared type instantiated through the element bindings --
+     * its params carry no class tyvar, so param 0 is NOT the receiver and must not
+     * be forced to `resolved`.  Other params instantiate their erased declared
+     * type through the element bindings. */
     uint8_t n_spec_args = fd->n_params;
     if (n_spec_args > MAX_FN_ARITY) return false;
     Type arg_types[MAX_FN_ARITY];
-    arg_types[0] = *resolved;
-    for (uint8_t i = 1; i < n_spec_args; i++) {
-        arg_types[i] = emit_abi_instantiate_type(&fd->params[i]->type, eb, enb,
-                                                 ctx->type_arena);
+    for (uint8_t i = 0; i < n_spec_args; i++) {
+        if (i == 0 && !return_dispatch) {
+            arg_types[0] = *resolved;
+        } else {
+            arg_types[i] = emit_abi_instantiate_type(&fd->params[i]->type, eb, enb,
+                                                     ctx->type_arena);
+        }
     }
-    /* The receiver slot must end up a concrete by-value layout, else there is no
-     * ABI change and the carrier base is already correct. */
-    if (!type_has_concrete_codegen_layout(&arg_types[0])) return false;
 
-    Type result_type = fn_binding->type.as.fn.result_full_type
-        ? *fn_binding->type.as.fn.result_full_type
-        : emit_type_from_kind(fn_binding->type.as.fn.result_kind);
-    result_type = emit_abi_instantiate_type(&result_type, eb, enb, ctx->type_arena);
+    Type result_type;
+    if (return_dispatch) {
+        /* a := resolved into the CLASS method's declared return.  This yields the
+         * concrete by-value family (`(Result (Option int) cstr)`) the call site
+         * expects, instead of the carrier-collapsed instance binding result. */
+        AbiTypeBinding rb[1];
+        rb[0].name = ret_disp_var;
+        rb[0].type = *resolved;
+        result_type = emit_abi_instantiate_type(&omethod->return_type, rb, 1,
+                                                ctx->type_arena);
+    } else {
+        result_type = fn_binding->type.as.fn.result_full_type
+            ? *fn_binding->type.as.fn.result_full_type
+            : emit_type_from_kind(fn_binding->type.as.fn.result_kind);
+        result_type = emit_abi_instantiate_type(&result_type, eb, enb, ctx->type_arena);
+    }
+
+    /* There must be a concrete by-value layout to specialize on, else there is no
+     * ABI change and the carrier base is already correct.  For a receiver
+     * dispatch that layout is in arg_types[0]; for a return dispatch it is in the
+     * (instantiated) result type. */
+    if (return_dispatch) {
+        if (!type_has_concrete_codegen_layout(&result_type)) return false;
+    } else if (!type_has_concrete_codegen_layout(&arg_types[0])) {
+        return false;
+    }
 
     uint32_t before_specs = ctx->n_abi_specializations;
     EmitAbiSpecialization *spec = emit_abi_intern_spec(
@@ -2256,8 +2337,27 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         bindings && n_bindings > 0) {
         Type recovered = emit_abi_instantiate_type(
             &generic_result, bindings, n_bindings, ctx->type_arena);
-        if (recovered.kind == TY_STRUCT && recovered.as.struct_.def &&
-            !type_uses_carrier_abi(recovered)) {
+        /* The recovered element may be a plain by-value struct (`Pos`) or a
+         * parametric application that lowers to a by-value aggregate layout
+         * (`(Option int)` -> `Option__int`).  Both must un-collapse the carrier.
+         * The TY_APP / carrier-ABI-aggregate case was previously missed: a
+         * `(Option int)` is a *by-value carrier-ABI* aggregate (`type_uses_-
+         * carrier_abi` is true for it), so the original `!type_uses_carrier_abi`
+         * gate rejected it and the generic loop's `(ok-val r)` accessor kept
+         * returning the int64 carrier even though its body produced the by-value
+         * `Option__int` (the cc "incompatible types when returning Option__int"
+         * error).  Accept any concrete by-value aggregate -- excluding :heap
+         * structs (pointer-carried, already fine on the carrier) and the bare
+         * int64 carrier. */
+        const char *rec_c = emit_type_c_name(ctx, recovered);
+        bool recovered_byvalue =
+            (recovered.kind == TY_STRUCT && recovered.as.struct_.def &&
+             !type_uses_carrier_abi(recovered)) ||
+            ((recovered.kind == TY_APP || recovered.kind == TY_STRUCT) &&
+             type_has_concrete_codegen_layout(&recovered) &&
+             !type_is_heap_struct(recovered) &&
+             rec_c && strcmp(rec_c, "int64_t") != 0);
+        if (recovered_byvalue) {
             result_type = recovered;
         }
     }

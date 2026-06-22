@@ -1,0 +1,57 @@
+;; constrained-loop-vec-push-byvalue-result-element -- a generic constrained loop
+;; that (a) obtains a value of the constraint type A by unwrapping a
+;; return-dispatched method result -- `(ok-val (:: (dec i) (Result A cstr)))` --
+;; and (b) `vec-push!`es it into a `(Vec A)`, specialized at a BY-VALUE struct
+;; element `A = (Option int)`.
+;;
+;; Regression (docs/archive/generic-loop-vec-push-byvalue-struct-element-from-result.md):
+;; three independent emit-side defects ganged up only for the by-value-struct
+;; element intersection (scalar and :heap elements were fine):
+;;   1. The nested-instance redirect assumed param 0 was the dispatch receiver,
+;;      so it typed `dec`'s `seed : int` as the instance type `Option__int` (Dec
+;;      is RETURN-dispatched; seed is always int).
+;;   2. The return-only-poly accessor `ok-val` kept the int64 carrier result for a
+;;      by-value (carrier-ABI) aggregate element, mismatching its by-value body.
+;;   3. The `vec-push!` carrier bridge spilled at the accessor's collapsed int64
+;;      type instead of the real by-value `Option__int`, declaring an int64 temp.
+;;
+;; Expected: the loop decodes each index, pushes the by-value Option into the
+;; vector, and the readback recovers the stored values.
+
+(defclass Dec [a] (dec [seed : int] : (Result a cstr)))
+
+(definstance Dec [int]
+  (dec [seed] (:: (ok seed) (Result int cstr))))
+
+(definstance Dec [Option] [(Dec A)]
+  (dec [seed]
+    (let [r (:: (dec seed) (Result A cstr))]
+      (if (.is-ok r)
+        (:: (ok (some (ok-val r))) (Result (Option A) cstr))
+        (:: (err (err-val r)) (Result (Option A) cstr))))))
+
+;; generic loop: decode element i as A, push ok-val into (Vec A)
+(defn build [A] [(Dec A)] [n : int  i : int  acc : (Vec A)] : (Result (Vec A) cstr)
+  (if (>= i n)
+    (:: (ok acc) (Result (Vec A) cstr))
+    (let [r (:: (dec i) (Result A cstr))]
+      (if (.is-ok r)
+        (do (vec-push! acc (ok-val r)) (build n (+ i 1) acc))
+        (:: (err (err-val r)) (Result (Vec A) cstr))))))
+
+;; recover the inner int of the by-value (Option int) stored at index `idx`.
+(defn elem-at [v : (Vec (Option int)) idx : int] : int
+  (let [o (:: (vec-get v idx) (Option int))]
+    (if (.is-some o) (.value o) (- 0 1))))
+
+(defn main [] : int
+  (let [r (:: (build 3 0 (:: (vec-new) (Vec (Option int))))
+              (Result (Vec (Option int)) cstr))]
+    (if (.is-ok r)
+      (let [v (:: (ok-val r) (Vec (Option int)))]
+        (println (vec-len v))      ;; 3
+        (println (elem-at v 0))    ;; 0
+        (println (elem-at v 1))    ;; 1
+        (println (elem-at v 2)))   ;; 2
+      (println "err"))
+    0))
