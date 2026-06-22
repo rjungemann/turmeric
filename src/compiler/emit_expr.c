@@ -2522,7 +2522,31 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (fn_binding->closure_fn_binding) {
                 /* This is a closure - emit call to thunk function with closure value as first arg */
                 Binding *thunk_binding = fn_binding->closure_fn_binding;
-                char *thunk_name = raw_name_for_binding(thunk_binding);
+                /* constrained-instance-element-dispatch-in-closures: a per-spec
+                 * clone of a fold/accumulator closure (`__fn_N__spec__...`) must be
+                 * targeted instead of the shared base `__fn_N` (which bakes the
+                 * carrier representative element instance) at two call sites:
+                 *   1. the closure's own recursive self-call, emitted while the
+                 *      clone body is active (fn_name_override set, current spec
+                 *      bound to this very closure binding); and
+                 *   2. the ENCLOSING instance-method spec's direct invocation of
+                 *      the closure (`(go 0 0)`), emitted while the outer spec is
+                 *      active and links to the clone via inner_closure_spec_idx.
+                 * Mirrors the EX_CLOSURE construction's thunk_sym_override. */
+                char *thunk_name = NULL;
+                if (ctx->fn_name_override && ctx->current_abi_specialization &&
+                    ctx->current_abi_specialization->binding == thunk_binding) {
+                    thunk_name = strdup(ctx->fn_name_override);
+                } else if (ctx->current_abi_specialization &&
+                           ctx->current_abi_specialization->inner_closure_spec_idx >= 0) {
+                    const EmitAbiSpecialization *_isp =
+                        &ctx->abi_specializations[
+                            ctx->current_abi_specialization->inner_closure_spec_idx];
+                    if (_isp->binding == thunk_binding && _isp->clone_name)
+                        thunk_name = strdup(_isp->clone_name);
+                }
+                if (!thunk_name) thunk_name = raw_name_for_binding(thunk_binding);
+                if (!thunk_name) { fprintf(stderr, "tur: oom\n"); abort(); }
 
                 /* Closure value is the env struct variable.
                  *

@@ -76,3 +76,39 @@ type.
 The scan-time companion (`emit_reresolve_method_fndef`) that marks the
 re-dispatched instance live must be extended the same way so the concrete
 element instance is not pruned as dead.
+
+## Resolution (2026-06-22)
+
+Fixed via fix direction 2 -- re-emit such closures once per enclosing
+element-type specialization. New machinery in `emit_module.c`:
+
+- `emit_find_dispatch_spec_closure` / `emit_subtree_dispatches_on_spec_tyvar`
+  detect a lambda-lifted closure embedded in a constrained-instance body whose
+  own body dispatches a typeclass method on a tyvar that the active spec grounds
+  to a concrete element (the documented `(tag (:: (vec-get v i) A))` idiom). The
+  walker descends into `let`/`letrec` bindings (where the closure literal lives)
+  and `EX_BUILTIN` args (where the `(+ acc (tag ...))` accumulator nests).
+- `emit_abi_register_call` grows an `inner_dispatch` branch parallel to the
+  existing `inner_passed` (M6/G6c) path: it interns a per-spec clone of the
+  closure, linked to the outer spec via `inner_closure_spec_idx`. The clone's
+  bindings are augmented with the grounded constraint var (`A -> bool`) -- the
+  outer spec binds only the class var (`a -> Vec__bool`), and the clone's
+  `spec->fn` is the closure (no `owner_instance`), so the re-resolver's
+  `param_idx` recovery cannot fire inside it; binding `A` directly lets
+  `emit_resolve_type(A)` ground the element call.
+- `emit_abi_intern_spec` gained a `match_bindings` flag so distinct-element
+  clones (identical int64 carrier signature, differing only in element binding)
+  stay distinct specs instead of deduping into one; the existing Gap H
+  `__h<n>` clone-name disambiguator then gives them distinct C names.
+- `emit_expr.c` retargets both the closure's recursive self-call (clone body
+  active, `fn_name_override` set) and the enclosing spec's direct invocation
+  (`(go 0 0)`, linked via `inner_closure_spec_idx`) to the clone, mirroring the
+  EX_CLOSURE construction's existing `thunk_sym_override`.
+
+Scan-time liveness is handled by scanning the clone body under its own spec
+(the `inner_passed || inner_dispatch` scan), so `emit_abi_register_call`'s
+reresolve-liveness mark keeps the concrete element instance live.
+
+Regression test: `tests/fixtures/constrained-instance-closure-element-dispatch`
+(bool/float/int `Vec` elements through one fold-closure instance body -> 4, 21,
+2). Full suite green (1762 passed, 0 failed).

@@ -1075,6 +1075,249 @@ static Binding *emit_find_passed_spec_closure(const Expr *e,
     }
 }
 
+/* constrained-instance-element-dispatch-in-closures: does `bindings` map `name`
+ * to a concrete (non-tyvar) type?  A constrained-instance method body that reads
+ * its element through the constraint var `A` re-dispatches per element type only
+ * when the active spec grounds `A` to something concrete (bool/float/a struct);
+ * an unbound/carrier `A` keeps the representative instance, so cloning would be a
+ * pointless duplicate. */
+static bool emit_abi_binding_is_concrete(const AbiTypeBinding *bindings,
+                                         uint8_t n_bindings, const char *name) {
+    if (!name) return false;
+    for (uint8_t i = 0; i < n_bindings; i++) {
+        if (bindings[i].name && strcmp(bindings[i].name, name) == 0) {
+            return bindings[i].type.kind != TY_TYVAR &&
+                   bindings[i].type.kind != TY_UNKNOWN;
+        }
+    }
+    return false;
+}
+
+/* constrained-instance-element-dispatch-in-closures: does the instance's
+ * constraint var `tvname` (e.g. `A` in `(definstance Tag [Vec] [(Tag A)] ...)`)
+ * ground to a concrete element type under the active spec?  The spec binds only
+ * the CLASS var (`a -> Vec__bool`), not the constraint var; the constraint
+ * records a `param_idx` into the class var's type-arg list, exactly as
+ * emit_reresolve_disp_type's tail recovers it.  Returns true when the recovered
+ * element is concrete (so the per-element re-dispatch differs from the carrier
+ * representative), false otherwise. */
+static bool emit_ground_constraint_var(FnDef *fd,
+        const AbiTypeBinding *bindings, uint8_t n_bindings, const char *tvname,
+        Type *out) {
+    if (!fd || !fd->owner_instance || !tvname || n_bindings < 1) return false;
+    const TypeClassInstance *inst = fd->owner_instance;
+    for (uint8_t ci = 0; ci < inst->n_type_param_constraints; ci++) {
+        const TypeConstraint *tc = &inst->type_param_constraints[ci];
+        if (!tc->tyvar || !tc->tyvar->name) continue;
+        if (strcmp(tc->tyvar->name, tvname) != 0) continue;
+        if (tc->param_idx < 0) {
+            if (tc->type_arg.kind != TY_TYVAR && tc->type_arg.kind != TY_UNKNOWN) {
+                if (out) *out = tc->type_arg;
+                return true;
+            }
+            return false;
+        }
+        Type recv = bindings[0].type;
+        StructDef *rsd = NULL; Type rargs[16]; uint8_t rn = 0;
+        if (type_extract_struct_app(&recv, &rsd, rargs, &rn) &&
+            (uint8_t)tc->param_idx < rn) {
+            Type g = rargs[tc->param_idx];
+            if (g.kind != TY_TYVAR && g.kind != TY_UNKNOWN) {
+                if (out) *out = g;
+                return true;
+            }
+        }
+        return false;
+    }
+    return false;
+}
+
+static bool emit_constraint_var_grounds_concrete(FnDef *fd,
+        const AbiTypeBinding *bindings, uint8_t n_bindings, const char *tvname) {
+    return emit_ground_constraint_var(fd, bindings, n_bindings, tvname, NULL);
+}
+
+/* constrained-instance-element-dispatch-in-closures: does this call dispatch a
+ * typeclass method on a tyvar that the active constrained-instance spec grounds
+ * to a concrete element?  Mirrors emit_reresolve_disp_type's dispatch-tyvar
+ * identification -- an ascription to the constraint var (`(tag (:: (vec-get v i)
+ * A))`, the documented element-read idiom), a bare-tyvar receiver, or a
+ * return-dispatch whose result is the tyvar -- as a pure predicate (no EmitCtx).
+ * The tyvar is accepted when the spec binds it directly to a concrete type OR it
+ * is an instance constraint var that grounds concretely (the usual case: the
+ * spec binds only the class var and the element comes via `param_idx`).  Used to
+ * decide whether a lifted closure embedded in a constrained-instance body must be
+ * re-emitted per element-type spec so its element call re-dispatches instead of
+ * baking the carrier representative. */
+static bool emit_call_dispatches_on_spec_tyvar(const Expr *call, FnDef *fd,
+        const AbiTypeBinding *bindings, uint8_t n_bindings) {
+    if (!call || call->kind != EX_CALL) return false;
+    const Expr *dict = call->as.call_.dict_arg;
+    if (!dict || dict->kind != EX_DICT || !dict->as.dict_.instance) return false;
+    if (dict->as.dict_.method_name[0] == '\0') return false;
+    const char *tvname = NULL;
+    if (call->as.call_.n_args >= 1 && call->as.call_.args) {
+        const Expr *recv = call->as.call_.args[0];
+        for (const Expr *a = recv; a && a->kind == EX_ASCRIBE;
+             a = a->as.ascribe_.inner) {
+            if (a->type.kind == TY_TYVAR) { tvname = a->type.as.tyvar_.name; break; }
+        }
+        if (!tvname) {
+            while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
+            if (recv && recv->type.kind == TY_TYVAR) tvname = recv->type.as.tyvar_.name;
+        }
+    }
+    if (!tvname && call->type.kind == TY_TYVAR) tvname = call->type.as.tyvar_.name;
+    if (!tvname) return false;
+    return emit_abi_binding_is_concrete(bindings, n_bindings, tvname) ||
+           emit_constraint_var_grounds_concrete(fd, bindings, n_bindings, tvname);
+}
+
+/* constrained-instance-element-dispatch-in-closures: does any sub-call of `e`
+ * dispatch a typeclass method on a spec-grounded tyvar (see above)?  Walks the
+ * common body shapes a fold/accumulator closure produces. */
+static bool emit_subtree_dispatches_on_spec_tyvar(const Expr *e, FnDef *fd,
+        const AbiTypeBinding *bindings, uint8_t n_bindings) {
+    if (!e) return false;
+    if (emit_call_dispatches_on_spec_tyvar(e, fd, bindings, n_bindings)) return true;
+    switch (e->kind) {
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (emit_subtree_dispatches_on_spec_tyvar(e->as.call_.args[i],
+                                                          fd, bindings, n_bindings))
+                    return true;
+            return emit_subtree_dispatches_on_spec_tyvar(e->as.call_.fn_expr,
+                                                         fd, bindings, n_bindings);
+        case EX_ASCRIBE:
+            return emit_subtree_dispatches_on_spec_tyvar(e->as.ascribe_.inner,
+                                                         fd, bindings, n_bindings);
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (emit_subtree_dispatches_on_spec_tyvar(e->as.let_.bindings[i].init,
+                                                          fd, bindings, n_bindings))
+                    return true;
+            return emit_subtree_dispatches_on_spec_tyvar(e->as.let_.body,
+                                                         fd, bindings, n_bindings);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (emit_subtree_dispatches_on_spec_tyvar(e->as.do_.items[i],
+                                                          fd, bindings, n_bindings))
+                    return true;
+            return false;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (emit_subtree_dispatches_on_spec_tyvar(e->as.builtin.args[i],
+                                                          fd, bindings, n_bindings))
+                    return true;
+            return false;
+        case EX_IF:
+            return emit_subtree_dispatches_on_spec_tyvar(e->as.if_.cond, fd, bindings, n_bindings) ||
+                   emit_subtree_dispatches_on_spec_tyvar(e->as.if_.then_, fd, bindings, n_bindings) ||
+                   emit_subtree_dispatches_on_spec_tyvar(e->as.if_.else_or_null, fd, bindings, n_bindings);
+        case EX_WHILE:
+            return emit_subtree_dispatches_on_spec_tyvar(e->as.while_.cond, fd, bindings, n_bindings) ||
+                   emit_subtree_dispatches_on_spec_tyvar(e->as.while_.body, fd, bindings, n_bindings);
+        case EX_MATCH:
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                if (emit_subtree_dispatches_on_spec_tyvar(e->as.match_.arms[i].body,
+                                                          fd, bindings, n_bindings))
+                    return true;
+            return false;
+        case EX_RETURN:
+            return emit_subtree_dispatches_on_spec_tyvar(e->as.return_.value, fd, bindings, n_bindings);
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                if (emit_subtree_dispatches_on_spec_tyvar(e->as.make_struct_.field_values[i],
+                                                          fd, bindings, n_bindings))
+                    return true;
+            return false;
+        case EX_GET_FIELD:
+            return emit_subtree_dispatches_on_spec_tyvar(e->as.get_field_.struct_expr, fd, bindings, n_bindings);
+        case EX_SET_FIELD:
+            return emit_subtree_dispatches_on_spec_tyvar(e->as.set_field_.receiver, fd, bindings, n_bindings) ||
+                   emit_subtree_dispatches_on_spec_tyvar(e->as.set_field_.value, fd, bindings, n_bindings);
+        default:
+            return false;
+    }
+}
+
+/* constrained-instance-element-dispatch-in-closures: find a lambda-lifted closure
+ * embedded in a constrained-instance method body whose own body dispatches a
+ * typeclass method on a spec-bound tyvar -- the natural fold/accumulator shape
+ * `(letrec [go (fn [...] ... (tag (:: (vec-get v i) A)) ...)] (go ...))`.  The
+ * existing inner-closure-spec machinery clones closures a defn RETURNS
+ * (returns_closure_fn_binding) or PASSES (emit_find_passed_spec_closure); this
+ * finds the one CAPTURED-and-invoked in place, so it too gets a per-spec clone
+ * whose element call re-dispatches to the concrete instance instead of baking the
+ * shared carrier representative.  Returns the closure's lifted fn binding, or
+ * NULL.  Walks into let/letrec bindings (where the closure literal lives), unlike
+ * emit_find_passed_spec_closure which only inspects call arguments. */
+static Binding *emit_find_dispatch_spec_closure(const Expr *e, FnDef *fd,
+        const AbiTypeBinding *bindings, uint8_t n_bindings) {
+    if (!e) return NULL;
+    switch (e->kind) {
+        case EX_CLOSURE: {
+            struct Closure *cl = e->as.closure_.closure;
+            if (cl && cl->fn && cl->fn->binding && cl->fn->body &&
+                cl->fn->binding->type.kind == TY_FN &&
+                emit_subtree_dispatches_on_spec_tyvar(cl->fn->body, fd, bindings, n_bindings))
+                return cl->fn->binding;
+            return NULL;
+        }
+        case EX_CALL: {
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                Binding *r = emit_find_dispatch_spec_closure(
+                    e->as.call_.args[i], fd, bindings, n_bindings);
+                if (r) return r;
+            }
+            return emit_find_dispatch_spec_closure(e->as.call_.fn_expr, fd, bindings, n_bindings);
+        }
+        case EX_ASCRIBE:
+            return emit_find_dispatch_spec_closure(e->as.ascribe_.inner, fd, bindings, n_bindings);
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                Binding *r = emit_find_dispatch_spec_closure(
+                    e->as.let_.bindings[i].init, fd, bindings, n_bindings);
+                if (r) return r;
+            }
+            return emit_find_dispatch_spec_closure(e->as.let_.body, fd, bindings, n_bindings);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++) {
+                Binding *r = emit_find_dispatch_spec_closure(
+                    e->as.do_.items[i], fd, bindings, n_bindings);
+                if (r) return r;
+            }
+            return NULL;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++) {
+                Binding *r = emit_find_dispatch_spec_closure(
+                    e->as.builtin.args[i], fd, bindings, n_bindings);
+                if (r) return r;
+            }
+            return NULL;
+        case EX_IF: {
+            Binding *r = emit_find_dispatch_spec_closure(e->as.if_.then_, fd, bindings, n_bindings);
+            if (r) return r;
+            r = emit_find_dispatch_spec_closure(e->as.if_.else_or_null, fd, bindings, n_bindings);
+            if (r) return r;
+            return emit_find_dispatch_spec_closure(e->as.if_.cond, fd, bindings, n_bindings);
+        }
+        case EX_MATCH:
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                Binding *r = emit_find_dispatch_spec_closure(
+                    e->as.match_.arms[i].body, fd, bindings, n_bindings);
+                if (r) return r;
+            }
+            return NULL;
+        case EX_RETURN:
+            return emit_find_dispatch_spec_closure(e->as.return_.value, fd, bindings, n_bindings);
+        default:
+            return NULL;
+    }
+}
+
 static char *emit_abi_clone_name(const Binding *binding, Type result_type, Type *arg_types, uint8_t n_args) {
     Buf name;
     buf_init(&name);
@@ -1103,7 +1346,7 @@ static EmitAbiSpecialization *emit_abi_intern_spec(
         EmitCtx *ctx, Binding *fn_binding, const Expr *fn_expr, FnDef *fd,
         const AbiTypeBinding *bindings, uint8_t n_bindings,
         const Type *arg_types, uint8_t n_spec_args, Type result_type,
-        const Expr *call_expr) {
+        const Expr *call_expr, bool match_bindings) {
     for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
         EmitAbiSpecialization *spec = &ctx->abi_specializations[i];
         if (spec->binding != fn_binding || spec->n_args != n_spec_args ||
@@ -1115,6 +1358,26 @@ static EmitAbiSpecialization *emit_abi_intern_spec(
             if (!type_eq(spec->arg_types[ai], arg_types[ai])) {
                 args_match = false;
                 break;
+            }
+        }
+        /* constrained-instance-element-dispatch-in-closures: a dispatch clone's C
+         * signature (int64_t carrier) is identical across element types, so two
+         * clones that differ ONLY in their element binding (A->bool vs A->float)
+         * have matching binding/args/result and would dedup into one body --
+         * collapsing every element type onto whichever was emitted first.  When
+         * the caller asks to match bindings, also require the type bindings to be
+         * equal so distinct-element clones stay distinct specs (the Gap H
+         * clone-name disambiguator below then gives them `__h<n>` suffixes). */
+        if (args_match && match_bindings) {
+            if (spec->n_bindings != n_bindings) { args_match = false; }
+            for (uint8_t bi = 0; args_match && bi < n_bindings; bi++) {
+                const char *an = spec->bindings[bi].name;
+                const char *bn = bindings[bi].name;
+                if ((an == NULL) != (bn == NULL) ||
+                    (an && bn && strcmp(an, bn) != 0) ||
+                    !type_eq(spec->bindings[bi].type, bindings[bi].type)) {
+                    args_match = false;
+                }
             }
         }
         if (args_match) return spec;
@@ -1625,7 +1888,7 @@ static bool emit_abi_try_byval_twin_redirect(EmitCtx *ctx, const Expr *call,
         twin_result = emit_abi_instantiate_type(&twin_result, sb, snb, ctx->type_arena);
 
     EmitAbiSpecialization *tw = emit_abi_intern_spec(ctx, twin_binding, twin_fe, twin_fd,
-        twin_b, twin_nb, twin_args, nargs, twin_result, call);
+        twin_b, twin_nb, twin_args, nargs, twin_result, call, false);
     if (!tw || !tw->clone_name) return false;
     emit_abi_record_specialized_call(ctx, call, tw->clone_name);
     return true;
@@ -1823,7 +2086,7 @@ static bool emit_abi_try_nested_instance_dispatch_redirect(
     uint32_t before_specs = ctx->n_abi_specializations;
     EmitAbiSpecialization *spec = emit_abi_intern_spec(
         ctx, fn_binding, fn_expr, fd, eb, enb, arg_types, n_spec_args,
-        result_type, call);
+        result_type, call, false);
     if (!spec || !spec->clone_name) return false;
     uint32_t outer_spec_idx = (uint32_t)(spec - ctx->abi_specializations);
     emit_abi_record_specialized_call(ctx, call, spec->clone_name);
@@ -2462,6 +2725,26 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             abi_changes = true;
         }
     }
+    /* constrained-instance-element-dispatch-in-closures: a constrained generic
+     * instance body whose per-element class-method call lives INSIDE a
+     * lambda-lifted fold/accumulator closure (`(letrec [go (fn ... (tag (:: ...
+     * A)) ...)] (go ...))`).  The lifted closure is emitted once at file scope
+     * with `current_abi_specialization` unset, so the re-dispatch machinery never
+     * fires and the carrier representative (`__inst_Tag_tag_int`) the elaborator
+     * baked survives into every element-type spec -- a silent wrong result.  Find
+     * the closure and clone it per outer spec (mirroring the inner_passed path)
+     * so its element call grounds `A` to the concrete element instance.  Only
+     * fires when no returned/passed closure spec is already in play. */
+    bool inner_dispatch = false;
+    if (!inner_closure && !borrow_path && fd && fd->body && fd->owner_instance &&
+        bindings && n_bindings > 0) {
+        Binding *disp = emit_find_dispatch_spec_closure(fd->body, fd, bindings, n_bindings);
+        if (disp) {
+            inner_closure = disp;
+            inner_dispatch = true;
+            abi_changes = true;
+        }
+    }
     /* end-to-end-monomorphization (M2 completion, primitive-payload Result/
      * Option at the typeclass-dispatch boundary): a #{Construct} constructor
      * whose RESULT is a concrete by-value (non-heap) struct -- e.g.
@@ -2851,7 +3134,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     uint32_t before_specs = ctx->n_abi_specializations;
     EmitAbiSpecialization *spec = emit_abi_intern_spec(
         ctx, fn_binding, fn_expr, fd, bindings, n_bindings,
-        arg_types, n_spec_args, result_type, call);
+        arg_types, n_spec_args, result_type, call, false);
     /* Interning the inner-closure spec below may realloc abi_specializations,
      * invalidating `spec`; refer to the outer spec by index afterward. */
     uint32_t outer_spec_idx = (uint32_t)(spec - ctx->abi_specializations);
@@ -2897,7 +3180,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * params / env fields / dispatch typedefs all resolve through
      * emit_resolve_type to the concrete float; the outer spec's EX_CLOSURE
      * construction then stores the clone's thunk + uses its suffixed env. */
-    if ((inner_float || inner_passed) && inner_closure) {
+    if ((inner_float || inner_passed || inner_dispatch) && inner_closure) {
         const Expr *inner_expr = emit_abi_find_fn_expr(items, n_items, inner_closure);
         if (inner_expr && inner_expr->kind == EX_FN_DEF && inner_expr->as.fn_def_.fn) {
             FnDef *inner_fd = inner_expr->as.fn_def_.fn;
@@ -2926,14 +3209,58 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 ? emit_abi_instantiate_type(inner_closure->type.as.fn.result_full_type,
                                             bindings, n_bindings, ctx->type_arena)
                 : emit_type_from_kind(inner_closure->type.as.fn.result_kind);
+            /* constrained-instance-element-dispatch-in-closures: the outer spec
+             * binds only the CLASS var (`a -> Vec__bool`); the closure body
+             * dispatches on the CONSTRAINT var (`A`), which the re-resolver
+             * normally recovers from the instance's `param_idx`.  But the inner
+             * clone's spec->fn is the lifted closure (owner_instance == NULL), so
+             * that recovery cannot fire inside the clone.  Ground each instance
+             * constraint var to its concrete element here and add it directly to
+             * the clone's bindings, so emit_resolve_type(A) -> the element type and
+             * the element call re-dispatches to the right instance. */
+            AbiTypeBinding inner_bindings[ABI_TYPE_BINDINGS_MAX];
+            uint8_t inner_nb = n_bindings;
+            for (uint8_t i = 0; i < n_bindings && i < ABI_TYPE_BINDINGS_MAX; i++)
+                inner_bindings[i] = bindings[i];
+            if (inner_dispatch && fd && fd->owner_instance) {
+                const TypeClassInstance *cinst = fd->owner_instance;
+                for (uint8_t ci = 0; ci < cinst->n_type_param_constraints &&
+                                     inner_nb < ABI_TYPE_BINDINGS_MAX; ci++) {
+                    const TypeConstraint *tc = &cinst->type_param_constraints[ci];
+                    if (!tc->tyvar || !tc->tyvar->name) continue;
+                    /* skip if already bound (don't shadow a direct class-var bind) */
+                    bool already = false;
+                    for (uint8_t bi = 0; bi < inner_nb; bi++)
+                        if (inner_bindings[bi].name &&
+                            strcmp(inner_bindings[bi].name, tc->tyvar->name) == 0) {
+                            already = true; break;
+                        }
+                    if (already) continue;
+                    Type g;
+                    if (emit_ground_constraint_var(fd, bindings, n_bindings,
+                                                   tc->tyvar->name, &g)) {
+                        inner_bindings[inner_nb].name = tc->tyvar->name;
+                        inner_bindings[inner_nb].type = g;
+                        inner_nb++;
+                    }
+                }
+            }
+            const AbiTypeBinding *spec_in_bindings = inner_dispatch ? inner_bindings : bindings;
+            uint8_t spec_in_nb = inner_dispatch ? inner_nb : n_bindings;
             uint32_t before_inner = ctx->n_abi_specializations;
             EmitAbiSpecialization *inner_spec = emit_abi_intern_spec(
-                ctx, inner_closure, inner_expr, inner_fd, bindings, n_bindings,
-                inner_args, inner_n, inner_res, NULL);
+                ctx, inner_closure, inner_expr, inner_fd, spec_in_bindings, spec_in_nb,
+                inner_args, inner_n, inner_res, NULL, inner_dispatch);
             bool inner_is_new = ctx->n_abi_specializations != before_inner;
-            /* Build the suffixed env-struct symbol both sites agree on. */
-            if (!inner_spec->env_name_override && inner_fd->closure &&
-                inner_fd->closure->env_name) {
+            /* Build the suffixed env-struct symbol both sites agree on.
+             * constrained-instance-element-dispatch-in-closures: an inner_dispatch
+             * clone keeps the SAME C signature and env layout as its base -- only
+             * the baked element instance inside the body differs -- so it reuses
+             * the base env struct (no suffixed override).  Suffixing it would emit
+             * a redundant identical struct; sharing keeps the base `__env_N` and
+             * snapshots minimal. */
+            if (!inner_dispatch && !inner_spec->env_name_override &&
+                inner_fd->closure && inner_fd->closure->env_name) {
                 Buf en; buf_init(&en);
                 buf_puts(&en, inner_fd->closure->env_name->name);
                 buf_puts(&en, "__spec__");
@@ -2996,7 +3323,12 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
              * rather than the int64-carrier base.  Only for a freshly-created
              * inner spec (a dedup'd one was already scanned), so the mutual
              * recursion terminates. */
-            if (inner_passed && inner_is_new && inner_fd->body) {
+            /* constrained-instance-element-dispatch-in-closures: scan the clone
+             * body under its own spec so the element call `(tag (:: ... A))` is
+             * re-dispatched at scan time (emit_abi_register_call's reresolve
+             * liveness mark), keeping the concrete element instance
+             * (`__inst_Tag_tag_bool`) live instead of pruned as dead. */
+            if ((inner_passed || inner_dispatch) && inner_is_new && inner_fd->body) {
                 const EmitAbiSpecialization *saved_c = ctx->current_abi_specialization;
                 bool saved_in = saved_c >= ctx->abi_specializations &&
                                 saved_c < ctx->abi_specializations + ctx->n_abi_specializations;
@@ -3121,7 +3453,7 @@ static void emit_abi_scan_fn_values(EmitCtx *ctx, const Expr *call,
         uint32_t before = ctx->n_abi_specializations;
         EmitAbiSpecialization *child = emit_abi_intern_spec(
             ctx, vb, vfn_expr, vfd, bindings, n_bindings,
-            v_args, v_nargs, v_result, NULL);
+            v_args, v_nargs, v_result, NULL, false);
         /* Newly created: recurse into the clone body so nested fn-values
          * specialize too.  (Already-interned specs were scanned when created.) */
         if (ctx->n_abi_specializations != before) {
