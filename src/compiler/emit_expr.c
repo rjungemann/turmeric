@@ -3951,6 +3951,14 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
                 for (uint8_t i = 0; i < closure->n_captures; i++) {
                     Binding *captured = closure->captures[i];
+                    /* Edge 1: a letrec/named-let member referenced from a nested
+                     * closure is captured eagerly (its globalness is unknown when
+                     * collect_free_vars runs), but if it turned out captureless it
+                     * is lifted as a directly-callable global with no env -- emit
+                     * no field for it (it is reached by its C symbol, not a slot).
+                     * Globals are never legitimately captured elsewhere, so this
+                     * only affects that one case. */
+                    if (captured && captured->is_global) continue;
                     char *field = raw_name_for_binding(captured);
                     /* A captured function value (fat closure or bare fn ptr) is
                      * carried as the int64_t fn-ABI carrier -- the same C type
@@ -4006,8 +4014,33 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             for (uint8_t i = 0; i < closure->n_captures; i++) {
                 Binding *captured = closure->captures[i];
-                char *cn = name_for_binding(ctx, captured);
+                /* Edge 1: skip an eagerly-captured letrec member that became a
+                 * captureless global (see the env-struct emission above) -- it
+                 * has no env field and is reached by its C symbol directly. */
+                if (captured && captured->is_global) continue;
                 char *field = raw_name_for_binding(captured);
+                /* Edge 1 (hkt-matcher-cata-...): when a NESTED closure captures
+                 * the letrec self binding -- i.e. `captured` is bound to the very
+                 * closure whose body we are emitting right now -- its runtime
+                 * value is this closure's own env box, reachable here only as the
+                 * env pointer the thunk received as its first parameter (the
+                 * outer-scope `self_NNNN` local is out of scope inside the lifted
+                 * thunk).  Store that env pointer (mirrors the S5 self-*call*
+                 * box-name rule).  The capture field is the int64_t fn carrier, so
+                 * bridge the `void *` env pointer through intptr_t. */
+                if (ctx->closure && ctx->closure->fn &&
+                    captured->closure_fn_binding &&
+                    captured->closure_fn_binding == ctx->closure->fn->binding &&
+                    ctx->closure->fn->n_params > 0) {
+                    char *envp = raw_name_for_binding(ctx->closure->fn->params[0]);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s->%s = (int64_t)(intptr_t)%s;\n",
+                               fat_tmp, field, envp);
+                    free(envp);
+                    free(field);
+                    continue;
+                }
+                char *cn = name_for_binding(ctx, captured);
                 indent_buf(body, ctx->indent);
                 /* B5: a captured struct/ADT that is a pass-by-pointer parameter
                  * of the *enclosing* function arrives as `const T *`, but the

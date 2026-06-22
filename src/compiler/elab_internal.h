@@ -596,6 +596,15 @@ typedef struct Elab {
      * elab_fn/elab_defn).  check_cloneable_capture stops here so bindings
      * from outer function scopes are not falsely flagged as needing Clone. */
     struct Scope    *fn_entry_outer_scope;
+    /* Edge 1 (hkt-matcher-cata-...): the binding group of the `letrec`/named-let
+     * init currently being lifted.  Set by elab_letrec immediately around each
+     * init's elaboration and snapshotted+cleared at elab_fn entry, so the
+     * init's OWN top-level fn excludes the group (a direct self/mutual call is
+     * recursion, handled by the recursion machinery / env-ptr), while a NESTED
+     * closure inside the init sees an empty group and therefore captures the
+     * letrec-bound value through its env.  NULL/0 when not in a letrec init. */
+    struct Binding **letrec_self_group;
+    uint32_t         letrec_self_group_n;
     /* Phase 21: tracks nesting depth of serial-reset for detecting
      * serial-shift outside any serial-reset boundary. */
     int              serial_reset_depth;
@@ -813,7 +822,7 @@ bool scope_add_borrow(Scope *s, Binding *binding, BorrowKind kind, Span span);
 void scope_add(Scope *s, Binding *b);
 Binding *scope_lookup(Scope *s, const Symbol *name);
 Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
-    uint32_t *n_out);
+    Binding **self_exclude, uint32_t n_self_exclude, uint32_t *n_out);
 void elab_register_file_def(Elab *e, Expr *def_expr);
 int elab_expand_module_loads(Elab *e, Arena *arena, SymbolTable *st,
                              Form *const *forms, uint32_t nforms,

@@ -335,6 +335,7 @@ Binding *scope_lookup(Scope *s, const Symbol *name) {
 /* Phase 3: Collect free variables in an expression that are not in the given
  * param bindings. Returns a malloc'd list of captured Binding pointers. */
 Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
+                                  Binding **self_exclude, uint32_t n_self_exclude,
                                   uint32_t *n_out) {
     /* Pre-pass: collect all bindings introduced by `let` forms anywhere within
      * this expression.  These are locally defined — they must never be treated
@@ -632,6 +633,8 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                       cur->as.call_.fn_binding->is_param) ||
                      (cur->as.call_.fn_binding->type.kind == TY_FN &&
                       cur->as.call_.fn_binding->is_match_binding) ||
+                     (cur->as.call_.fn_binding->type.kind == TY_FN &&
+                      cur->as.call_.fn_binding->is_letrec_binding) ||
                      cur->as.call_.fn_binding->is_fat ||
                      cur->as.call_.is_poly_call)) {
                     /* TY_FN local value: a function-typed binding invoked as the
@@ -671,7 +674,18 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                     for (uint8_t i = 0; i < n_params; i++) {
                         if (params[i] == fb) { fb_is_param = true; break; }
                     }
-                    if (!fb_is_param && !fb->is_global) {
+                    /* Edge 1: a letrec/named-let group member called *directly*
+                     * from the init's own top-level body is recursion, not a
+                     * capture -- the recursion machinery (captureless global
+                     * lifting, or the S5 env-ptr self-call) handles it.  Skip
+                     * any fn_binding that is in the active self-exclude group.
+                     * A reference from a NESTED closure passes an empty group
+                     * (cleared at elab_fn entry), so it is captured normally. */
+                    bool fb_is_self_excluded = false;
+                    for (uint32_t i = 0; i < n_self_exclude; i++) {
+                        if (self_exclude[i] == fb) { fb_is_self_excluded = true; break; }
+                    }
+                    if (!fb_is_param && !fb->is_global && !fb_is_self_excluded) {
                         bool fb_is_local = false;
                         for (uint32_t i = 0; i < n_local; i++) {
                             if (local_defs[i] == fb) { fb_is_local = true; break; }
@@ -723,6 +737,17 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                             if (params[i] == icap) { is_param = true; break; }
                         }
                         if (is_param) continue;
+                        /* Edge 1: a nested closure that captured a letrec self
+                         * binding must NOT forward that capture up into the
+                         * very closure the letrec binds it to (this scope IS
+                         * that closure -- it provides the value via its own env
+                         * pointer at emit time, not via a capture slot, so a
+                         * self-referential env is avoided). */
+                        bool is_self_excluded = false;
+                        for (uint32_t i = 0; i < n_self_exclude; i++) {
+                            if (self_exclude[i] == icap) { is_self_excluded = true; break; }
+                        }
+                        if (is_self_excluded) continue;
                         bool is_local = false;
                         for (uint32_t i = 0; i < n_local; i++) {
                             if (local_defs[i] == icap) { is_local = true; break; }

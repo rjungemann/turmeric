@@ -54,6 +54,15 @@ struct Binding {
      * self-recursive fn binding (which is neither param nor match binding).
      * See hkt-cata-function-typed-carrier-not-threaded. */
     bool          is_match_binding;
+    /* True when this binding was introduced by a `letrec`/named-let binding
+     * group.  collect_free_vars uses it (together with the active
+     * `letrec_self_group` exclusion set) to capture a letrec-bound fn that is
+     * invoked as a callee from inside a NESTED closure -- which must reach the
+     * outer closure value through its env -- while still leaving a *direct*
+     * self/mutual-recursive call in the init's own top-level body to the
+     * recursion machinery (it is excluded, never captured).  See
+     * hkt-matcher-cata-fnarg-on-toplevel-defn-and-env-struct-collision (Edge 1). */
+    bool          is_letrec_binding;
     uint32_t      id;            /* unique within the program */
     Span          span;
     /* TY4: lexical scope depth at declaration (0 = outermost). Stamped by

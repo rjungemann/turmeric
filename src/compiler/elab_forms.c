@@ -987,7 +987,7 @@ Expr *elab_let(Elab *e, const Form *call) {
                         /* Capture analysis for defer body */
                         /* Collect free variables in the defer body (the drop! call references the binding) */
                         uint32_t n_free = 0;
-                        Binding **free_vars = collect_free_vars(drop_call, NULL, 0, &n_free);
+                        Binding **free_vars = collect_free_vars(drop_call, NULL, 0, NULL, 0, &n_free);
                         
                         Binding **captures = NULL;
                         uint8_t n_captures = 0;
@@ -1100,7 +1100,7 @@ Expr *elab_let(Elab *e, const Form *call) {
                     
                     /* Capture analysis */
                     uint32_t n_free = 0;
-                    Binding **free_vars = collect_free_vars(rc_drop_expr, NULL, 0, &n_free);
+                    Binding **free_vars = collect_free_vars(rc_drop_expr, NULL, 0, NULL, 0, &n_free);
                     
                     Binding **captures = NULL;
                     uint8_t n_captures = 0;
@@ -1513,6 +1513,11 @@ Expr *elab_letrec(Elab *e, const Form *call) {
         }
         Binding *b = binding_new(e, entries[k].name, placeholder,
                                  false, false, entries[k].span);
+        /* Edge 1: mark every letrec/named-let group member so collect_free_vars
+         * recognizes a call to it (gate accept) and the active self-exclude
+         * group can keep a direct self/mutual recursive call out of the capture
+         * set while a nested-closure reference is captured. */
+        b->is_letrec_binding = true;
         scope_add(&inner, b);
         pre_b[k] = b;
     }
@@ -1526,7 +1531,17 @@ Expr *elab_letrec(Elab *e, const Form *call) {
         if (!binds) { fprintf(stderr, "tur: oom\n"); abort(); }
     }
     for (uint32_t k = 0; k < n_entries && rc == 0; k++) {
+        /* Edge 1: publish the whole group as the self-exclude set just for this
+         * init's elaboration.  elab_fn snapshots+clears it on entry (so only the
+         * init's own top-level lambda excludes the group; nested closures see an
+         * empty group).  pre_b is the group array and stays live through Pass B.
+         * Cleared right after so it never leaks into the body (Pass C) or into a
+         * sibling value init -- a lambda there must capture group members. */
+        e->letrec_self_group   = pre_b;
+        e->letrec_self_group_n = n_entries;
         Expr *init = elab_form(e, entries[k].init_form);
+        e->letrec_self_group   = NULL;
+        e->letrec_self_group_n = 0;
         if (!init) { rc = -1; break; }
         /* Patch the pre-registered binding with the real type. */
         pre_b[k]->type = init->type;
@@ -2560,7 +2575,7 @@ Expr *elab_defer(Elab *e, const Form *call) {
     /* Collect free variables in the defer body - pass empty params
      * so all non-global bindings are captured */
     uint32_t n_free = 0;
-    Binding **free_vars = collect_free_vars(body, NULL, 0, &n_free);
+    Binding **free_vars = collect_free_vars(body, NULL, 0, NULL, 0, &n_free);
     
     if (n_free > 0) {
         /* Store captures in the defer expression (arena-allocated, lives for compilation) */
@@ -2950,7 +2965,7 @@ Expr *elab_gen(Elab *e, const Form *call) {
 
     /* Collect free variables (captures) from the elaborated body */
     uint32_t n_caps = 0;
-    Binding **caps = collect_free_vars(body_expr, NULL, 0, &n_caps);
+    Binding **caps = collect_free_vars(body_expr, NULL, 0, NULL, 0, &n_caps);
     def->captures   = caps ? (Binding **)arena_alloc(e->arena, n_caps * sizeof(Binding *)) : NULL;
     if (def->captures && caps)
         memcpy(def->captures, caps, n_caps * sizeof(Binding *));
