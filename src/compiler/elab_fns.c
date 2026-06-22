@@ -675,6 +675,97 @@ static bool check_no_borrow_escape(const Expr *tail, uint32_t fn_local_depth,
     }
 }
 
+/* captureless-algebra-arm-thin-through-carrier: classify a function's
+ * tail/return leaves by closure representation.  Returns a bitmask: bit 0 set
+ * iff some tail leaf is a *thin* bare fn pointer (an EX_VAR of non-boxed TY_FN
+ * -- a captureless lifted lambda or a bare defn reference), bit 1 set iff some
+ * tail leaf is a *fat* closure box (EX_CLOSURE / EX_FN_TO_FAT, or any boxed
+ * TY_FN value).  A function returning the closure carrier whose leaves are
+ * *mixed* (both bits set) returns a non-uniform value: the carrier-crossing
+ * caller fat-dispatches every leaf, so a thin-pointer arm is read as a fat box
+ * (slot-0 of a code address) and jumped into -> SIGSEGV.  Walks through
+ * tail-position structure only (do/if/let/match/ascribe). */
+static unsigned fn_tail_fn_leaf_kinds(const Expr *x) {
+    if (!x) return 0;
+    switch (x->kind) {
+        case EX_DO:
+            return x->as.do_.n > 0
+                       ? fn_tail_fn_leaf_kinds(x->as.do_.items[x->as.do_.n - 1])
+                       : 0;
+        case EX_IF:
+            return fn_tail_fn_leaf_kinds(x->as.if_.then_) |
+                   (x->as.if_.else_or_null
+                        ? fn_tail_fn_leaf_kinds(x->as.if_.else_or_null)
+                        : 0);
+        case EX_LET:
+        case EX_LETREC:
+            return fn_tail_fn_leaf_kinds(x->as.let_.body);
+        case EX_ASCRIBE:
+            return fn_tail_fn_leaf_kinds(x->as.ascribe_.inner);
+        case EX_MATCH: {
+            unsigned acc = 0;
+            for (uint32_t i = 0; i < x->as.match_.n_arms; i++)
+                acc |= fn_tail_fn_leaf_kinds(x->as.match_.arms[i].body);
+            return acc;
+        }
+        case EX_CLOSURE:
+        case EX_FN_TO_FAT:
+            return 2u;  /* fat box */
+        case EX_VAR:
+            if (x->type.kind == TY_FN)
+                return x->type.as.fn.boxed ? 2u : 1u;  /* boxed=fat, bare=thin */
+            return 0;
+        default:
+            if (x->type.kind == TY_FN && x->type.as.fn.boxed)
+                return 2u;
+            return 0;
+    }
+}
+
+/* captureless-algebra-arm-thin-through-carrier: rewrite every *thin* bare-fn
+ * tail leaf (an EX_VAR of non-boxed TY_FN) into a fat closure box via
+ * EX_FN_TO_FAT, in place at *slot.  Applied only when the body is known to be
+ * mixed (see fn_tail_fn_leaf_kinds), so the function's closure-carrier result
+ * is uniformly fat across all return leaves and a fat-dispatch consumer reads a
+ * valid { thunk, ... } layout on every arm.  Symmetric with the ^fat-result
+ * auto-shim and the parametric-ADT-field shim in elab_call.c. */
+static void elab_box_thin_fn_tail_leaves(Elab *e, Expr **slot) {
+    Expr *x = *slot;
+    if (!x) return;
+    switch (x->kind) {
+        case EX_DO:
+            if (x->as.do_.n > 0)
+                elab_box_thin_fn_tail_leaves(e, &x->as.do_.items[x->as.do_.n - 1]);
+            return;
+        case EX_IF:
+            elab_box_thin_fn_tail_leaves(e, &x->as.if_.then_);
+            if (x->as.if_.else_or_null)
+                elab_box_thin_fn_tail_leaves(e, &x->as.if_.else_or_null);
+            return;
+        case EX_LET:
+        case EX_LETREC:
+            elab_box_thin_fn_tail_leaves(e, &x->as.let_.body);
+            return;
+        case EX_ASCRIBE:
+            elab_box_thin_fn_tail_leaves(e, &x->as.ascribe_.inner);
+            return;
+        case EX_MATCH:
+            for (uint32_t i = 0; i < x->as.match_.n_arms; i++)
+                elab_box_thin_fn_tail_leaves(e, &x->as.match_.arms[i].body);
+            return;
+        default:
+            break;
+    }
+    if (x->kind == EX_VAR && x->type.kind == TY_FN && !x->type.as.fn.boxed &&
+        x->type.as.fn.arity >= 1 && x->type.as.fn.arity <= 5) {
+        Type bt = x->type;
+        bt.as.fn.boxed = true;
+        Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, bt, x->span);
+        shim->as.fn_to_fat_.inner = x;
+        *slot = shim;
+    }
+}
+
 Expr *elab_defn(Elab *e, const Form *call) {
     /* Phase R5: Check for #[no-unwind] attribute before name.
      * #[used]: retain with external C linkage (see Binding.retain_c_linkage).
@@ -3254,6 +3345,28 @@ Expr *elab_defn(Elab *e, const Form *call) {
     b->is_construct_template = defn_has_construct_attr;
     /* M5 residual-straddle: propagate #{ByVal} marker */
     b->prefer_byvalue_spec = defn_has_byval_attr;
+
+    /* captureless-algebra-arm-thin-through-carrier: when a function returns the
+     * closure carrier (declared result type is a function type) and its tail
+     * leaves mix fat closure boxes (capturing arms) with thin bare fn pointers
+     * (captureless arms), box the thin arms so every return leaf is uniformly
+     * fat.  The carrier-crossing caller fat-dispatches the result, so a thin
+     * arm left bare would be read as a fat box and jumped into -> SIGSEGV.
+     * Gated on the mix: an all-thin (uniformly captureless) body stays thin and
+     * is correctly thin-callable; only a fat/thin mix is non-uniform. */
+    {
+        bool result_is_fn =
+            (return_fn_type != NULL) ||
+            (fn_type.as.fn.result_full_type &&
+             fn_type.as.fn.result_full_type->kind == TY_FN) ||
+            (fn_type.as.fn.result_kind == TY_FN);
+        if (result_is_fn && body) {
+            unsigned leaves = fn_tail_fn_leaf_kinds(body);
+            if ((leaves & 1u) && (leaves & 2u)) {
+                elab_box_thin_fn_tail_leaves(e, &body);
+            }
+        }
+    }
 
     /* Build FnDef */
     FnDef *fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));

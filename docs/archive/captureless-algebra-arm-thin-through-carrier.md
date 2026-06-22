@@ -6,12 +6,33 @@ severity: Low-Medium. Blocks an environment-passing "interpreter as one cata"
   env)` node). Direct structural recursion is a working alternative (shipping in
   regex/tree's `re-matches?`). `tur check` is clean; the program compiles and
   segfaults at runtime.
-status: OPEN -- carved out of
+status: RESOLVED 2026-06-22 -- captureless fn tail leaves are now boxed
+  uniformly fat in `elab_defn` (src/compiler/elab_fns.c). Regression fixture
+  `tests/fixtures/hkt-cata-captureless-fn-carrier-arm`. Carved out of
   `docs/reported/hkt-cata-function-carrier-recursive-segfault.md` (its residual
-  "(a) Captureless algebra arm stays thin through the carrier (Bug B)") into its
-  own report on 2026-06-22, now that that report's sibling residual (b)
-  (mixed fn/value carrier spec-name collision) is fixed. Verified still
-  reproducing on this branch's `tur`.
+  "(a) Captureless algebra arm stays thin through the carrier (Bug B)").
+---
+
+## Resolution (2026-06-22)
+
+`elab_defn` now runs a closure-ABI uniformity pass over the function body's
+tail/return leaves when the declared result type is a function type (the
+closure carrier). `fn_tail_fn_leaf_kinds` classifies the leaves: a *fat* leaf
+is an `EX_CLOSURE` / `EX_FN_TO_FAT` (or any boxed `TY_FN` value); a *thin* leaf
+is an `EX_VAR` of non-boxed `TY_FN` -- a captureless lifted lambda or a bare
+defn reference. When the body is *mixed* (at least one fat and one thin leaf),
+`elab_box_thin_fn_tail_leaves` wraps each thin leaf in `EX_FN_TO_FAT`, so every
+return leaf lowers to a uniform fat box `{ thunk, ... }`. A carrier-crossing
+caller that fat-dispatches the result then reads a valid layout on every arm
+instead of jumping into a code address.
+
+An all-thin (uniformly captureless) body is left untouched -- it is correctly
+thin-callable and must not be force-boxed. The shim only fires on the
+fat/thin mix, which is the non-uniform shape that segfaults.
+
+Walking the emitted C for the repro confirms the `VarF` arm now emits
+`{ __tur_fatshim1, __fn_1059 }` rather than the bare `__t49 = __fn_1059;`.
+
 ---
 
 # Captureless algebra arm stays thin through a fat carrier
