@@ -7442,6 +7442,7 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.n_carrier_call_bindings = 0;
     ctx.cap_carrier_call_bindings = 0;
     ctx.current_abi_specialization = NULL;
+    ctx.abi_scan_suppress_construct_byvalue = false;
     ctx.current_scan_fn = NULL;
     ctx.fn_name_override = NULL;
     ctx.fn_name_override_external = false;  /* J3: must match fn_name_override */
@@ -8851,6 +8852,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     ctx.n_carrier_call_bindings = 0;
     ctx.cap_carrier_call_bindings = 0;
     ctx.current_abi_specialization = NULL;
+    ctx.abi_scan_suppress_construct_byvalue = false;
     ctx.current_scan_fn = NULL;
     ctx.fn_name_override = NULL;
     ctx.fn_name_override_external = false;  /* J3 */

@@ -125,7 +125,15 @@ Pure spice-side work; no compiler dependencies.
   - **U5 (Fix-based ASTs): 1 of 5** -- regex shipped as `Roll (ReF Re)`
     with re-cata; c-dsl, glsl, scscm, template open. **json target
     dropped** -- yyjson backing incompatible with `Fix (JsonF a)`.
-  - **U6 (typed variadic builders): not started.**
+  - **U6 (typed variadic builders): 1 of 2** -- c-dsl shipped: `c-field`
+    returns `CField`, `c-param` returns `CParam`, and `c-defstruct` /
+    `c-defunion` / `c-defn` / `c-defn-static` / `c-defn-inline` are now
+    variadic with `& fields : CField` / `& params : CParam`. The variadic
+    rest-arg identity check rejects a bare cstr at the elaborator
+    ("variadic call to 'c-defstruct': rest arg 0 has wrong type
+    (expected CField, got cstr)") -- so a wrong-kind field is a compile
+    error, not a downstream string-comparison surprise. `valkey` per-cmd
+    builder still open.
   A U5 feasibility pass also surfaced a compiler gap -- `defdata`
   constructor fields rejected applied type constructors -- now **fixed
   and archived**:

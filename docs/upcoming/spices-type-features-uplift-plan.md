@@ -571,7 +571,7 @@ their own tests).
 
 ### Phase U6 -- Typed variadic builders
 
-**Status as of 2026-06-22: NOT STARTED.**
+**Status as of 2026-06-22: PARTIAL. 1 of 2 targets shipped (c-dsl).**
 
 **Goal:** the few "builder API" spices that take heterogeneous tag-erased
 arg lists today move to typed `& xs : T` with one instance per builder
@@ -582,11 +582,21 @@ Targets:
 1. **`valkey`** -- per-command builder takes `& args : ValkeyArg` where
    `ValkeyArg` is an opaque sum so a wrong-kind arg is a type error,
    not a `WRONGTYPE` response.
-2. **`c-dsl` function/struct builders** -- `& fields : CField` /
-   `& params : CParam`.
+2. **`c-dsl` function/struct builders** -- DONE 2026-06-22. `c-field`
+   returns `CField`, `c-param` returns `CParam` (both `defopaque :int`
+   newtypes layout-equal to the underlying formatted cstr).
+   `c-defstruct` / `c-defunion` are variadic `[name : cstr & fields :
+   CField] : cstr`; `c-defn` / `c-defn-static` / `c-defn-inline` are
+   variadic `[name : cstr ret : cstr body : cstr & params : CParam] :
+   cstr`. The variadic typed-rest identity check rejects a bare cstr at
+   the elaborator (`error: variadic call to 'c-defstruct': rest arg 0
+   has wrong type (expected CField, got cstr)`). Unwrap accessors
+   `cfield->cstr` / `cparam->cstr` exported for ad-hoc test/comparison
+   use.
 
-This phase is small; if the rubric only justifies one target, ship
-that one and close the phase.
+This phase is small; the rubric is satisfied with c-dsl alone.
+valkey's variadic per-command builder remains open but is not a
+blocker.
 
 ## Sequencing and dependencies
 
