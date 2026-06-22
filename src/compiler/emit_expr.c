@@ -345,6 +345,8 @@ static const char *emit_binding_repr_c_name(EmitCtx *ctx, Type binding_ty,
  * carrier value must not.  By-value producers are: a struct constructor literal
  * (EX_MAKE_STRUCT), a var/param declared by-value (tracked on the binding), and
  * a call resolving to a concrete-by-value ABI specialization. */
+static bool emit_var_spec_arg_type(EmitCtx *ctx, const Expr *var_expr, Type *out);
+
 static bool expr_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
     while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
     if (!e) return false;
@@ -868,8 +870,34 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * (int64_t)(intptr_t) coercion -- otherwise clang rejects the
              * implicit pointer-to-int conversion under -Wint-conversion. */
             TypeKind init_kind = e->as.let_.bindings[i].init->type.kind;
+            /* vec-push-heap-struct-element-not-carrier-cast (read side): a
+             * carrier (int64_t) binding whose initialiser emits a POINTER-
+             * represented value -- e.g. `(let [c (:: x (Cons A))] ...)` inside a
+             * specialized instance body, where the spec receiver `x` lowers to a
+             * `Cons__Option__int *` heap pointer -- needs the pointer->carrier
+             * reinterpret, else `int64_t c = x` trips -Wint-conversion.  A
+             * pointer->intptr_t->int64_t cast is always valid and is a no-op for
+             * a value that is already the int64 carrier (whose declared
+             * carrier-ABI type may still c-name to a pointer), so this only
+             * tightens codegen; a by-value aggregate init c-names without a `*`
+             * and is left to the by-value binding declaration above. */
+            /* The ascription node's own type is erased to the int64 carrier, so
+             * peek through ascriptions to an inner spec param and resolve its
+             * concrete type via the active ABI spec -- otherwise `(:: x (Cons A))`
+             * resolves only to the abstract carrier (c-name int64_t) and the
+             * pointer-repr check below misses it. */
+            Type init_ty_r = emit_resolve_type(ctx, e->as.let_.bindings[i].init->type);
+            {
+                const Expr *iexpr = e->as.let_.bindings[i].init;
+                while (iexpr && iexpr->kind == EX_ASCRIBE) iexpr = iexpr->as.ascribe_.inner;
+                Type spec_ty;
+                if (iexpr && emit_var_spec_arg_type(ctx, iexpr, &spec_ty))
+                    init_ty_r = spec_ty;
+            }
+            const char *init_cn = emit_type_c_name(ctx, init_ty_r);
+            bool init_is_ptr_repr = init_cn && strchr(init_cn, '*') != NULL;
             if (strcmp(bind_c, "int64_t") == 0 &&
-                (init_kind == TY_FN || init_kind == TY_PTR_VOID)) {
+                (init_kind == TY_FN || init_kind == TY_PTR_VOID || init_is_ptr_repr)) {
                 buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n", bind_c, bn, iv);
             } else {
                 buf_printf(body, "%s %s = %s;\n", bind_c, bn, iv);
@@ -1010,8 +1038,34 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * (int64_t)(intptr_t) coercion -- otherwise clang rejects the
              * implicit pointer-to-int conversion under -Wint-conversion. */
             TypeKind init_kind = e->as.let_.bindings[i].init->type.kind;
+            /* vec-push-heap-struct-element-not-carrier-cast (read side): a
+             * carrier (int64_t) binding whose initialiser emits a POINTER-
+             * represented value -- e.g. `(let [c (:: x (Cons A))] ...)` inside a
+             * specialized instance body, where the spec receiver `x` lowers to a
+             * `Cons__Option__int *` heap pointer -- needs the pointer->carrier
+             * reinterpret, else `int64_t c = x` trips -Wint-conversion.  A
+             * pointer->intptr_t->int64_t cast is always valid and is a no-op for
+             * a value that is already the int64 carrier (whose declared
+             * carrier-ABI type may still c-name to a pointer), so this only
+             * tightens codegen; a by-value aggregate init c-names without a `*`
+             * and is left to the by-value binding declaration above. */
+            /* The ascription node's own type is erased to the int64 carrier, so
+             * peek through ascriptions to an inner spec param and resolve its
+             * concrete type via the active ABI spec -- otherwise `(:: x (Cons A))`
+             * resolves only to the abstract carrier (c-name int64_t) and the
+             * pointer-repr check below misses it. */
+            Type init_ty_r = emit_resolve_type(ctx, e->as.let_.bindings[i].init->type);
+            {
+                const Expr *iexpr = e->as.let_.bindings[i].init;
+                while (iexpr && iexpr->kind == EX_ASCRIBE) iexpr = iexpr->as.ascribe_.inner;
+                Type spec_ty;
+                if (iexpr && emit_var_spec_arg_type(ctx, iexpr, &spec_ty))
+                    init_ty_r = spec_ty;
+            }
+            const char *init_cn = emit_type_c_name(ctx, init_ty_r);
+            bool init_is_ptr_repr = init_cn && strchr(init_cn, '*') != NULL;
             if (strcmp(bind_c, "int64_t") == 0 &&
-                (init_kind == TY_FN || init_kind == TY_PTR_VOID)) {
+                (init_kind == TY_FN || init_kind == TY_PTR_VOID || init_is_ptr_repr)) {
                 buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n", bind_c, bn, iv);
             } else {
                 buf_printf(body, "%s %s = %s;\n", bind_c, bn, iv);
@@ -3206,6 +3260,38 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     free(raw);
                     raw = strdup(cast.data);
                     buf_free(&cast);
+                }
+                /* vec-push-heap-struct-element-not-carrier-cast: the symmetric
+                 * direction of the ACB bridge below.  When the callee param is a
+                 * polymorphic tyvar that lowers to the int64 carrier -- an
+                 * inline-C body keeps `val` typed `int64_t` for every A
+                 * (`vec-push! [A] [v : (Vec A) val : A]`), and an unspecialized
+                 * generic body likewise -- but the ARGUMENT emits a CONCRETE
+                 * carrier-ABI value (a by-value parametric struct such as
+                 * `(:: (some 5) (Option int))` -> `Option__int`, a nested heap
+                 * container `(Vec int)` -> `Vec__int *`, or any concrete
+                 * `*__spec__*` result), the value must be bridged to the
+                 * carrier.  emit_carrier_bridge picks the right form per
+                 * representation (aggregate spill-and-address, pointer
+                 * reinterpret, inline-scalar union).  The receiver `(Vec A)`
+                 * already rides the carrier; without this an element value of a
+                 * nested parametric type (`(Vec (Option int))`) reaches the
+                 * `int64_t` slot uncast and trips an incompatible-type /
+                 * -Wint-conversion cc error.  A matched concrete spec resolves A
+                 * to the element's real C type and keeps its own
+                 * (carrier->concrete) bridges, so it is excluded here. */
+                if (!needs_fn_cast && fn_binding->type.kind == TY_FN && emit_arg &&
+                    expr_emits_byvalue_carrier_abi(ctx, emit_arg)) {
+                    uint8_t n_fnparams = fn_binding->type.as.fn.arity;
+                    uint8_t param_idx = (i < n_fnparams) ? i
+                        : (uint32_t)(n_fnparams > 0 ? n_fnparams - 1 : 0);
+                    TypeKind pk = fn_binding->type.as.fn.arg_kinds[param_idx];
+                    if ((pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS) &&
+                        (fn_binding->body_is_inline_c || !matched_spec)) {
+                        raw = emit_carrier_bridge(ctx, body, raw,
+                                                  CK_CONCRETE, CK_CARRIER,
+                                                  emit_arg->type);
+                    }
                 }
                 /* ACB (KB-004): when a specialized call expects a concrete aggregate
                  * argument but the emitted value is a carrier (int64_t), bridge it

@@ -1,0 +1,35 @@
+;; vec-push-heap-struct-element-carrier-cast -- pushing a parametric :heap
+;; struct value (or a nested heap container) into a Vec must bridge the value to
+;; the int64 element carrier.  No typeclasses are involved; this is purely a
+;; codegen concern.
+;;
+;; Root cause (docs/archive/history/vec-push-heap-struct-element-not-carrier-cast.md):
+;; `vec-push! [A] [v : (Vec A) val : A]` has an inline-C body, so `val` is the
+;; int64 carrier for every A.  When the argument emits a CONCRETE carrier-ABI
+;; value -- a by-value `(Option int)` from `some`, or a `(Vec int)` heap pointer
+;; -- the call site passed it to the `int64_t` slot uncast: a hard
+;; incompatible-type cc error for the by-value struct, a -Wint-conversion warning
+;; for the heap pointer.  The symmetric read side -- binding a carrier let var to
+;; a heap-pointer spec receiver, `(let [c (:: x (Cons A))] ...)` -- warned the
+;; same way.  Fix: bridge the value argument (and the carrier let-binding init)
+;; through the concrete->carrier reinterpret.
+
+(defn main [] : int
+  ;; A Vec whose element is a parametric :heap struct (Option int).
+  (let [vo (:: (vec-new) (Vec (Option int)))]
+    (vec-push! vo (:: (some 5) (Option int)))
+    (vec-push! vo (:: (none) (Option int)))
+    (let [a (:: (vec-get vo 0) (Option int))
+          b (:: (vec-get vo 1) (Option int))]
+      (println (if (.is-some a) (.value a) -1))    ;; 5
+      (println (if (.is-some b) (.value b) -1))))  ;; -1 (none)
+  ;; A Vec whose element is itself a heap container (Vec int).
+  (let [outer (:: (vec-new) (Vec (Vec int)))
+        inner (:: (vec-new) (Vec int))]
+    (vec-push! inner 11)
+    (vec-push! inner 22)
+    (vec-push! outer inner)
+    (let [got (:: (vec-get outer 0) (Vec int))]
+      (println (vec-get got 0))    ;; 11
+      (println (vec-get got 1))))  ;; 22
+  0)

@@ -94,11 +94,9 @@ named newtype with its own instance) is no longer required for dispatch.
 ## Related / still open
 
 The report's *literal* repro used `(Vec (Option int))` plus `vec-push!` of a
-`:heap` struct value. Dispatch there is also fixed, but building that exact
-program trips a SEPARATE, pre-existing codegen defect unrelated to typeclasses
-(pushing a `:heap` parametric-struct value into a `Vec` does not cast the
-struct pointer to the int64 carrier). That defect reproduces with zero
-typeclasses and is filed under
-`docs/reported/vec-push-heap-struct-element-not-carrier-cast.md`. The
-constraint-dispatch fix here is verified with the `(Cons ...)` shape, which the
-json encode path actually uses.
+parametric-struct value. Dispatch there is also fixed, and the SEPARATE,
+pre-existing codegen defect it tripped (pushing a parametric-struct or nested
+heap-container value into a `Vec` did not bridge the value to the int64 element
+carrier) has since been resolved too -- see
+`docs/archive/vec-push-heap-struct-element-not-carrier-cast.md`. With both
+fixes the literal `(Vec (Option int))` repro builds and runs.
