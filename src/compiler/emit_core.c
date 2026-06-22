@@ -3207,6 +3207,54 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
     return result;
 }
 
+char *emit_carrier_bridge_escaping(EmitCtx *ctx, Buf *body,
+                                   char *src_str,
+                                   CarrierKind src_ck, CarrierKind sink_ck,
+                                   Type concrete_ty) {
+    /* Only the CK_CONCRETE -> CK_CARRIER aggregate spill differs from the
+     * standard bridge; everything else is byte-for-byte identical, so delegate.
+     *  - src_ck == sink_ck: no crossing.
+     *  - carrier->concrete: a read-back, never takes an address.
+     *  - :heap struct: the pointer IS the carrier (shared by identity).
+     *  - inline scalar: a union reinterpret, no address taken.
+     *  - pointer-sized leaf (cstr/ptr<void>/int*): already int64-compatible,
+     *    no address taken. */
+    if (src_ck != CK_CONCRETE || sink_ck != CK_CARRIER ||
+        type_is_heap_struct(concrete_ty) ||
+        carrier_is_inline(concrete_ty.kind)) {
+        return emit_carrier_bridge(ctx, body, src_str, src_ck, sink_ck,
+                                   concrete_ty);
+    }
+    switch (concrete_ty.kind) {
+        case TY_CSTR: case TY_PTR_VOID:
+        case TY_INT:  case TY_INT64: case TY_UINT64:
+            return emit_carrier_bridge(ctx, body, src_str, src_ck, sink_ck,
+                                       concrete_ty);
+        default: break;
+    }
+
+    /* By-value aggregate flowing into an escaping heap container: heap-promote
+     * instead of spilling to a stack local.  malloc a copy and carry the heap
+     * pointer; the element now outlives the producing frame, and the
+     * carrier->concrete reader (which derefs the pointer) is unchanged. */
+    const char *cname = emit_type_c_name(ctx, concrete_ty);
+    char *tmp = fresh_tmp(ctx);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s *%s = (%s *)malloc(sizeof(%s));\n",
+               cname, tmp, cname, cname);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "*%s = %s;\n", tmp, src_str);
+
+    Buf out;
+    buf_init(&out);
+    buf_printf(&out, "(int64_t)(intptr_t)(%s)", tmp);
+    free(tmp);
+    free(src_str);
+    char *result = strdup(out.data);
+    buf_free(&out);
+    return result;
+}
+
 /* ============================================================================
  * SYM1 (runtime-symbols-plan): per-TU interned-symbol codegen registry.
  *

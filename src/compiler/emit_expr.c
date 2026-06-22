@@ -3304,9 +3304,18 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     TypeKind pk = fn_binding->type.as.fn.arg_kinds[param_idx];
                     if ((pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS) &&
                         (fn_binding->body_is_inline_c || !matched_spec)) {
-                        raw = emit_carrier_bridge(ctx, body, raw,
-                                                  CK_CONCRETE, CK_CARRIER,
-                                                  emit_arg->type);
+                        /* vec-push-byvalue-aggregate-element-stores-dangling-
+                         * stack-address: this carrier sink is a heap container
+                         * insert (vec-push! / map-set! / set-add!, all inline-C
+                         * `val : A` carriers) -- the stored element OUTLIVES the
+                         * push expression and the producing frame.  The default
+                         * bridge would carry (int64_t)(intptr_t)(&tmp), a stack
+                         * address that dangles once this frame returns.  Use the
+                         * escaping variant so a by-value aggregate element is
+                         * heap-promoted (malloc + copy) instead of address-of'd. */
+                        raw = emit_carrier_bridge_escaping(ctx, body, raw,
+                                                           CK_CONCRETE, CK_CARRIER,
+                                                           emit_arg->type);
                     }
                 }
                 /* ACB (KB-004): when a specialized call expects a concrete aggregate

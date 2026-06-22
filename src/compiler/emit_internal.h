@@ -314,6 +314,25 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                           CarrierKind src_ck, CarrierKind sink_ck,
                           Type concrete_ty);
 
+/* Like emit_carrier_bridge, but for a CK_CONCRETE -> CK_CARRIER crossing whose
+ * carrier value is STORED in a heap container that outlives the current
+ * expression (e.g. vec-push! / map-set! / set-add! of a by-value aggregate
+ * element).  The default bridge spills a by-value aggregate to a stack local
+ * and carries (int64_t)(intptr_t)(&tmp) -- a DANGLING address once the
+ * producing frame returns (see
+ * docs/archive/vec-push-byvalue-aggregate-element-stores-dangling-stack-address.md).
+ * Here the aggregate is instead heap-promoted: a malloc'd copy is made and the
+ * heap pointer is carried, matching how :heap structs are already carried (the
+ * reader reconstructs by deref, unchanged).  Every other crossing -- inline
+ * scalar, heap-struct pointer reinterpret, pointer-sized leaf, or the
+ * carrier->concrete direction -- delegates to emit_carrier_bridge unchanged.
+ *
+ * Ownership: consumes src_str (frees it when wrapping). */
+char *emit_carrier_bridge_escaping(EmitCtx *ctx, Buf *body,
+                                   char *src_str,
+                                   CarrierKind src_ck, CarrierKind sink_ck,
+                                   Type concrete_ty);
+
 /* ------------ emit_core.c: helpers, naming, atoms, builtins ------------ */
 /* SS2: Perform __TUR_CAP_N__ / __TUR_VAL_N__ substitution on an InlineC node.
  * Evaluates val_exprs[N] into temp vars; returns a malloc'd substituted string. */

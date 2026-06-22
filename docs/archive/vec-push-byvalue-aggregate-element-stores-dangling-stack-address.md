@@ -1,5 +1,22 @@
 # pushing a by-value aggregate element into a heap container stores a dangling stack address
 
+> **RESOLVED** (fix direction 1: heap-promote). The vec-push! carrier
+> boundary now routes a by-value aggregate element through
+> `emit_carrier_bridge_escaping` (`src/compiler/emit_core.c`) instead of the
+> plain `emit_carrier_bridge`. The escaping variant `malloc`s a copy of the
+> aggregate and carries the heap pointer, so the element outlives the
+> producing frame; the carrier->concrete reader (a pointer deref) is
+> unchanged. Every non-aggregate crossing (inline scalar, heap-struct pointer
+> reinterpret, pointer-sized leaf, carrier->concrete) delegates to the
+> standard bridge, so the immediate-consumer fast path is untouched and only
+> escaping container inserts pay the allocation. Call site:
+> `src/compiler/emit_expr.c` (the `vec-push-heap-struct-element-not-carrier-cast`
+> block). Regression test:
+> `tests/fixtures/vec-push-byvalue-aggregate-escapes-frame/` returns the Vec
+> from a child frame and runs a deep recursive call to clobber the reclaimed
+> stack before reading the elements back -- a dangling-address regression
+> would read garbage instead of 5 / 99.
+
 Repo: rjungemann/turmeric
 Found by: the vec-push! carrier-cast fix
   (docs/archive/vec-push-heap-struct-element-not-carrier-cast.md) -- this is the
