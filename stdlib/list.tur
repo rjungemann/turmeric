@@ -15,27 +15,31 @@
 (defstruct Cons :heap [A] (head A) (tail :int))
 ;;; tcons -- prepend a value to a typed list.
 ;;;
+;;; Element-generic: the head slot specializes to A's concrete C layout, so a
+;;; float head builds a `double`-headed cell -- matching what `(list ...)` and
+;;; `tcons-of` produce. Builds the cell with `make-struct Cons` (the same body
+;;; as `tcons-of`) rather than an int-only inline-C builder, so
+;;; `(tcons 1.5 (tnil))` type-checks just like `(list 1.5 ...)` does.
+;;;
 ;;; Parameters:
 ;;;   h -- head element of type A
 ;;;   t -- tail list (another typed list or tnil)
 ;;;
 ;;; Returns:
-;;;   A new List[A] (cons cell) with h at the front.
+;;;   A new (Cons A) cell with h at the front. The head slot is laid out as A's
+;;;   concrete C type (e.g. a `double` field for a float head), exactly like
+;;;   `tcons-of`. A (Cons A) carrier coerces to the :int carrier in argument
+;;;   position, so the result still composes with the list-head/list-tail
+;;;   walkers and the carrier-level list helpers (nest (tcons x (tcons ...))
+;;;   just like before).
 ;;;
 ;;; Example:
-;;;   (tcons 1 (tcons 2 (tnil)))  ; => [1, 2]
+;;;   (tcons 1 (tcons 2 (tnil)))    ; => (Cons int)    [1, 2]
+;;;   (tcons 1.5 (tnil))            ; => (Cons float)  double-headed cell
 ;;;
 ;;; Since: Phase TC1
 
-(defn tcons [h : int t : int]
-  #{}
-  : int
-  ```c
-  struct { int64_t head; int64_t tail; } *cell = malloc(sizeof(*cell));
-  cell->head = h;
-  cell->tail = t;
-  return (int64_t)(intptr_t)cell;
-  ```)
+(defn tcons [A] [h : A t : int] : (Cons A) (make-struct Cons :head h :tail t))
 ;;; tcons-of -- typed Cons[A] constructor with a typed head slot.
 ;;;
 ;;; Parameters:
@@ -207,7 +211,10 @@
 (defn __cons-fmap [cell : int ^fat f] : int
   (if (tnil? cell)
     0
-    (tcons (f (list-head cell)) (__cons-fmap (list-tail cell) f))))
+    ;; tcons returns (Cons A); bind it to an :int local so the if's two branches
+    ;; share the carrier type and the emitted C stays -Wint-conversion-clean.
+    (let [out (:: (tcons (f (list-head cell)) (__cons-fmap (list-tail cell) f)) :int)]
+      out)))
 ;;; tur-list-homog__ -- internal: compile-time element homogeneity check.
 ;;;
 ;;; Both parameters share the single type variable A, so a call with two
@@ -340,7 +347,12 @@
 ;;; Since: List literal macro
 
 (defn list-concat [l1 : int l2 : int] : int
-  (if (tnil? l1) l2 (tcons (list-head l1) (list-concat (list-tail l1) l2))))
+  (if (tnil? l1)
+    l2
+    ;; tcons returns (Cons A); bind it to an :int local so both if branches
+    ;; share the carrier type and the emitted C stays -Wint-conversion-clean.
+    (let [out (:: (tcons (list-head l1) (list-concat (list-tail l1) l2)) :int)]
+      out)))
 ;;; car -- head of a cons-built list (classic-Lisp alias for list-head).
 ;;;
 ;;; Pairs with the surviving `cons` builtin so the classic constructor +
