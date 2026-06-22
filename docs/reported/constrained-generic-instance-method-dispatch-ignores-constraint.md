@@ -93,18 +93,16 @@ Both fixes are additive: case 2 only changes programs that previously emitted
 
 ## Remaining limitations (open)
 
-* **Element call nested in a lifted closure.** When the element call sits
-  inside a `letrec`/`fn` closure (e.g. a `go` accumulator loop), the closure is
-  lambda-lifted to a single top-level function emitted once and NOT
-  re-specialized per the enclosing instance method's ABI specialization, so the
-  baked representative instance leaks through. Fix direction: thread the active
-  outer specialization's tyvar bindings into closures defined within a
-  constrained-instance method body, or re-emit such closures per specialization.
+Tracked as dedicated reports:
 
-* **Unascribed carrier-helper reads.** `(tag (vec-get v i))` without the `(:: e
-  A)` ascription still mis-dispatches: the `:A` return collapses to the int64
-  carrier at elaboration and the tyvar is unrecoverable at emit. Ascription is
-  the documented idiom and is required here. Fix direction: preserve the
-  instantiated type-param tyvar on a generic carrier call's result instead of
-  summarizing it to the carrier kind, so both elab dispatch and emit
-  re-resolution see the element tyvar without an explicit ascription.
+* **Element call nested in a lifted closure** -- the per-element call inside a
+  `letrec`/`fn` accumulator loop is emitted in a lambda-lifted function that is
+  not re-specialized per the enclosing instance specialization, so the baked
+  representative leaks through. See
+  `docs/reported/constrained-instance-element-dispatch-leaks-into-lifted-closures.md`.
+
+* **Unascribed carrier-helper reads** -- `(tag (vec-get v i))` without the
+  `(:: e A)` ascription mis-dispatches because the `:A` return collapses to the
+  int64 carrier at elaboration. Ascription is the documented idiom and is
+  required here. See
+  `docs/reported/unascribed-carrier-helper-read-collapses-element-tyvar.md`.
