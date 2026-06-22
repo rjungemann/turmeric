@@ -1631,17 +1631,14 @@ static bool build_inst_type_suffix(const Type *type_args,
                 }
                 if (type_args[j].as.app.arg) {
                     const Type *aarg = type_args[j].as.app.arg;
-                    /* ECS E2d-P6: a parametric instance head's element is now a
-                     * NAMED TY_TYVAR (`A` in `(Dense A)`) where it used to be a
-                     * nameless null-def TY_STRUCT.  Render it with the legacy
-                     * abstract-struct token so the instance's mangled suffix
-                     * (and every emitted symbol/dict name keyed off it) stays
-                     * byte-identical across the representation change -- the
-                     * naming is only needed for the type-level projection, not
-                     * the C identifier.  A concrete element keeps its real
-                     * name. */
-                    const char *n = (aarg->kind == TY_TYVAR)
-                                        ? "<struct>" : type_name(*aarg);
+                    /* ECS E2d-P6: a parametric instance head's element is a
+                     * NAMED TY_TYVAR (`A` in `(Dense A)`).  Render it honestly
+                     * via type_name (`"tyvar"`); the C identifier only has to be
+                     * unique per instance and stable, and the element name half
+                     * is normalized so two declarations of the same parametric
+                     * instance that pick different tyvar letters still mangle
+                     * identically.  A concrete element keeps its real name. */
+                    const char *n = type_name(*aarg);
                     if (n) arg_part = n;
                 }
                 char mctor[64], marg[64];

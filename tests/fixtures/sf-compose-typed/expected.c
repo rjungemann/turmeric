@@ -2564,8 +2564,8 @@ static bool __fn_733(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Vec(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Option(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Result(int64_t, int64_t);
-static int64_t __inst_MonadError_throw_hyerror_Result__ltstruct_gt(int64_t);
-static int64_t __inst_MonadError_catch_hyerror_Result__ltstruct_gt(int64_t, tur_poly_fn_t);
+static int64_t __inst_MonadError_throw_hyerror_Result_tyvar(int64_t);
+static int64_t __inst_MonadError_catch_hyerror_Result_tyvar(int64_t, tur_poly_fn_t);
 static bool __inst_Eq_eq_qu_Pair(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Tuple2(int64_t, int64_t);
 static bool __fn_920(int64_t, int64_t);
@@ -3008,11 +3008,11 @@ static bool __inst_Eq_eq_qu_Result(int64_t x, int64_t y) {
         return __t10;
 }
 
-static int64_t __inst_MonadError_throw_hyerror_Result__ltstruct_gt(int64_t err) {
+static int64_t __inst_MonadError_throw_hyerror_Result_tyvar(int64_t err) {
         return tur_box_err(err); 
 }
 
-static int64_t __inst_MonadError_catch_hyerror_Result__ltstruct_gt(int64_t ma, tur_poly_fn_t handler) {
+static int64_t __inst_MonadError_catch_hyerror_Result_tyvar(int64_t ma, tur_poly_fn_t handler) {
         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)(intptr_t)ma;
     if (!r || r->is_ok) return ma;
     return handler.fn(handler.env, r->err_val);
