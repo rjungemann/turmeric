@@ -1,5 +1,0 @@
-;; ST2 E0100: ref<T> let binding inferred as linear under -Xsubstructural.
-;; The ref is never consumed -- must be explicitly dropped.
-(defn main [] : int
-  (let [r (ref 42)]
-    0))

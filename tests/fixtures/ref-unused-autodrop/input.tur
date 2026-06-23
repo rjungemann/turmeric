@@ -1,0 +1,12 @@
+;; Theme 1 (ref<T> deref/auto-drop): a freshly-allocated ref<T> let binding
+;; that is never explicitly consumed AUTO-DROPS at scope exit. It is no longer
+;; a TUR-E0100 "linear value dropped without being consumed" error -- the
+;; injected scope-exit (drop! r) is the single ownership discharge.
+;;
+;; (This fixture was formerly errors/substructural-ref-infer-let-dropped, which
+;; asserted the opposite under the opt-in -Xsubstructural discipline. With
+;; always-on linear checking the auto-drop model -- consistent with rc<T> --
+;; replaces the must-explicitly-drop rule for ref<T> let bindings.)
+(defn main [] : int
+  (let [r (ref 42)]
+    0))
