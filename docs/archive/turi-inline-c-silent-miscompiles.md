@@ -120,4 +120,4 @@ does.
 
 Filed while executing TI8.b/W2. The carve mechanism skips these under turi; this
 report keeps the silent-miscompile evaluator bug visible for W4. See
-[docs/upcoming/v1/turi-interpreter-gap-closure-plan.md](../upcoming/v1/turi-interpreter-gap-closure-plan.md).
+[docs/archive/turi-interpreter-gap-closure-plan.md](turi-interpreter-gap-closure-plan.md).
