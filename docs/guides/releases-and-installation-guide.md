@@ -246,6 +246,16 @@ are referenced by relative paths at compile time). Mount your project with
 The release pipeline lives at `.github/workflows/release.yml` and is
 triggered automatically on `git push` of any tag matching `v*`.
 
+The `/cut-minor-release` and `/cut-major-release` skills drive the full
+flow with preconditions and confirmations. One of those preconditions is
+the **experiment-expiry gate**: before bumping `VERSION`, the skill runs
+`tur experiments --json` and refuses to proceed if any registry entry's
+`expires_at` is at or before the version being cut. The release author must
+first **graduate** the expiring experiment (delete its row in
+`src/runtime/experiments.c`; the feature becomes always-on) or **shelve** it,
+in a separate reviewed PR. An empty registry passes the gate trivially. See
+[experimental-flags-guide.md](experimental-flags-guide.md#expiry-policy).
+
 ### Steps
 
 1. Bump the version in `VERSION` (the single source of truth -- read by

@@ -123,6 +123,7 @@ set(TUR_CORE_SOURCES
     runtime/ffi_dispatch_thunk.c
     runtime/cps_rt.c
     runtime/cps_prompt.c
+    runtime/experiments.c
     runtime/gc.c
     runtime/globals.c
     runtime/hamt.c

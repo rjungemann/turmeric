@@ -191,6 +191,29 @@ If you need to read argument N in a self-contained benchmark file that does not 
 stdlib, define local `head`/`tail`/`cstr->parse-int` stubs as inline-C at the top of
 the file -- the interpreter will override them with stdlib natives automatically.
 
+## Experimental Compiler Features -- STRICT RULE
+
+New **in-flight** compiler features (half-built, semantics in flux, or
+carrying a known cost we are not ready to impose on everyone) ship behind
+`--enable=<name>`, **never gateless until graduation**. Concretely:
+
+- Add one row to `EXPERIMENTS[]` in `src/runtime/experiments.c` with **every
+  descriptor field** populated -- `name`, `summary`, `plan_path`,
+  `introduced`, `expires_at`, `lifecycle`, and an `opt_global` pointing at a
+  `g_opt_<name>` bool the feature's elaboration reads. No partial rows.
+- Write a plan in `docs/upcoming/` and point `plan_path` at it.
+- Call `experiment_warn_if_used("<name>")` from the feature's elaboration
+  entry point so the lifecycle warning (TUR-W0060/W0061) fires.
+- `expires_at` is a hard contract -- the release-cut skills refuse to bump
+  past it until the entry is graduated (deleted; feature goes always-on) or
+  shelved.
+
+This does **not** apply to diagnostic strictness (`--strict-effects`, ...),
+codegen/operator knobs (`--dump-*`, `--emit-abi-trace`), build-system options
+(`--build-dir`, `-I`), or already-shipping partial features that went
+always-on at their current level. See
+[docs/guides/experimental-flags-guide.md](docs/guides/experimental-flags-guide.md).
+
 ## Build System
 
 The main turmeric compiler is built with CMake directly. Once `tur` is on

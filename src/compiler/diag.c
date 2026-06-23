@@ -249,6 +249,10 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0600_DYNVAR_NO_EARMUFFS:        return "TUR-W0600";
         /* Deprecation band */
         case TUR_D0001_FN_TYPE_COLON:             return "TUR-D0001";
+        /* XF: experimental-flag mechanism */
+        case TUR_E0310_UNKNOWN_EXPERIMENT:        return "TUR-E0310";
+        case TUR_W0060_EXPERIMENTAL_PROTOTYPE:    return "TUR-W0060";
+        case TUR_W0061_EXPERIMENTAL_BETA:         return "TUR-W0061";
         default:                          return "";
     }
 }
@@ -350,6 +354,10 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0600") == 0) return TUR_W0600_DYNVAR_NO_EARMUFFS;
     /* Deprecation band */
     if (strcmp(s, "TUR-D0001") == 0) return TUR_D0001_FN_TYPE_COLON;
+    /* XF: experimental-flag mechanism */
+    if (strcmp(s, "TUR-E0310") == 0) return TUR_E0310_UNKNOWN_EXPERIMENT;
+    if (strcmp(s, "TUR-W0060") == 0) return TUR_W0060_EXPERIMENTAL_PROTOTYPE;
+    if (strcmp(s, "TUR-W0061") == 0) return TUR_W0061_EXPERIMENTAL_BETA;
     return DIAG_CODE_NONE;
 }
 
@@ -1519,6 +1527,44 @@ static const DiagExplanation diag_explanations_[] = {
       "only the *inner* types inside (fn ...) lose theirs.  Run\n"
       "tools/rewrite_fn_type_colons.py to migrate a tree automatically.\n"
       "Promoted to an error under --Werror=deprecated.\n",
+    },
+    /* XF (experimental-flag-mechanism-plan): unknown --enable= name */
+    { TUR_E0310_UNKNOWN_EXPERIMENT,
+      "TUR-E0310: unknown experiment\n"
+      "\n"
+      "`--enable=<name>` (or a `:experiments [...]` entry in build.tur) named an\n"
+      "experiment that is not in the compiler's registry.  Unknown names are a\n"
+      "hard error -- not a warning -- so typos surface immediately rather than\n"
+      "silently doing nothing.\n"
+      "\n"
+      "Fix: run `tur experiments` to see the exact set of recognized names, then\n"
+      "correct the spelling (or drop the flag if the feature has graduated and no\n"
+      "longer needs a gate).\n",
+    },
+    /* XF: prototype experimental feature in use */
+    { TUR_W0060_EXPERIMENTAL_PROTOTYPE,
+      "TUR-W0060: experimental feature (prototype) in use\n"
+      "\n"
+      "You enabled an experiment whose lifecycle is `prototype`: its algorithm or\n"
+      "surface still changes between releases, so breaking changes are likely.\n"
+      "The warning fires once per compile at the first use site.\n"
+      "\n"
+      "This is expected when you opt in with `--enable=<name>`.  To proceed\n"
+      "anyway, keep the flag; the feature works, it is just not stable.  Do NOT\n"
+      "depend on the surface from a published spice yet.  The project's own CI\n"
+      "silences this with --allow-experimental; spice users should not.\n",
+    },
+    /* XF: beta experimental feature in use */
+    { TUR_W0061_EXPERIMENTAL_BETA,
+      "TUR-W0061: experimental feature (beta) in use\n"
+      "\n"
+      "You enabled an experiment whose lifecycle is `beta`: the surface is frozen\n"
+      "and soaking for one release cycle before it graduates to always-on.  The\n"
+      "warning names the version it graduates in and fires once per compile.\n"
+      "\n"
+      "When the feature graduates the flag becomes an accept-and-warn no-op, so\n"
+      "code written against the beta surface keeps compiling.  The project's own\n"
+      "CI silences this with --allow-experimental; spice users should not.\n",
     },
     /* serial-shift-unsupported-context-miscompile */
     { TUR_E0706_SERIAL_CONTEXT_NOT_CAPTURABLE,

@@ -178,6 +178,15 @@ typedef enum DiagCode {
      * marks the param/result slots as types.  Drop the colon:
      * (fn [:int] :int) -> (fn [int] int). */
     TUR_D0001_FN_TYPE_COLON,
+    /* XF (experimental-flag-mechanism-plan): the `--enable=<name>` surface.
+     * E0310 fires at CLI/manifest parse on an unknown experiment name;
+     * W0060/W0061 fire once per compile at the first use site of an enabled
+     * prototype/beta experiment.  W0060/W0061 are emitted directly to stderr
+     * by experiment_warn_if_used (mirroring TUR-W0050), not through diag_emit;
+     * they are registered here only so `tur explain` can describe them. */
+    TUR_E0310_UNKNOWN_EXPERIMENT,
+    TUR_W0060_EXPERIMENTAL_PROTOTYPE,
+    TUR_W0061_EXPERIMENTAL_BETA,
 } DiagCode;
 
 typedef enum DiagLevel {
