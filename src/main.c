@@ -4098,10 +4098,21 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
  * `:spices` dep's src/), merges in any user `-I` dirs (which take priority),
  * and builds the whole module set.  Mirrors the project resolution `tur run`
  * and the test runner already perform. */
-static int cmd_build_project(const char *root, const char *out_path,
+static int cmd_build_project(const char *root_in, const char *out_path,
                              bool shared, const char *manifest_path,
                              const char **user_inc, int n_user_inc,
                              const char *cli_build_dir) {
+    /* Resolve `root_in` to an absolute path so transitive-dep walking can
+     * climb out via `:path "../sibling"` references.  When `tur build .` is
+     * run from a spice directory, `root_in` is "." and the dep-resolution
+     * fallback walks up cannot reach the actual sibling.  realpath() fixes
+     * that with no behavioral change for already-absolute callers. */
+    char root_buf[4096];
+    const char *root = root_in;
+    if (root_in && root_in[0] != '/') {
+        if (realpath(root_in, root_buf)) root = root_buf;
+    }
+
     int n_files = 0;
     char **tur_files = collect_project_src_files(root, &n_files);
     if (!tur_files || n_files == 0) {
