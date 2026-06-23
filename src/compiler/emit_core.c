@@ -3506,8 +3506,6 @@ const char *sym_codegen_register(const Symbol *sym) {
  * program.  In single-file / emit-c mode (`external_weak` false) the records
  * stay `static`, keeping the output self-contained. */
 void sym_codegen_emit(Buf *out, bool external_weak) {
-    extern bool g_symbols_enabled;
-    if (g_n_sym_records == 0 && !g_symbols_enabled) return;
     buf_puts(out,
         "/* SYM1 (runtime-symbols-plan): interned runtime symbol records. */\n"
         "#ifndef TUR_SYM_DEFINED\n"

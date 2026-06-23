@@ -192,8 +192,7 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
              * annotation), where size_term_from_form recovers it for SZ8
              * cross-parameter unification.  Mirrors the same lifting added to
              * type_expr_from_form's type-app loop. */
-            if (g_sized_types_enabled &&
-                    arg_form->tag == F_LIST &&
+            if (arg_form->tag == F_LIST &&
                     arg_form->as.list.len >= 1 &&
                     arg_form->as.list.items[0]->tag == F_SYM) {
                 const char *op = arg_form->as.list.items[0]->as.sym->name;
@@ -1520,11 +1519,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 params[n_params - 1]->type = *ann;
                 /* IT1: For union-typed parameters, store full type in param_poly_types
                  * so it propagates into arg_full_types for subtyping checks at call sites. */
-                if (g_union_types_enabled && ann->kind == TY_UNION) {
+                if (ann->kind == TY_UNION) {
                     param_poly_types[n_params - 1] = ann;
                 }
                 /* IT2: For intersection-typed parameters, same propagation. */
-                if (g_intersection_types_enabled && ann->kind == TY_INTERSECTION) {
+                if (ann->kind == TY_INTERSECTION) {
                     param_poly_types[n_params - 1] = ann;
                 }
                 /* PH1.1: For handler-typed parameters, store the full type so
@@ -1532,7 +1531,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                  * arg_full_types at the call site, enabling row-precise
                  * argument checking (PH1.2) and a precise mismatch diagnostic
                  * (PH1.3) instead of a kind-only handler<?, ?, ?> comparison. */
-                if (g_effect_types_enabled && ann->kind == TY_HANDLER) {
+                if (ann->kind == TY_HANDLER) {
                     param_poly_types[n_params - 1] = ann;
                 }
                 /* GS2: preserve full applied struct parameter types so call
@@ -1546,13 +1545,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 }
             }
             /* LT3: Propagate linearity from the type annotation (e.g., [p : (lref int)]) */
-            if (g_linear_enabled && params[n_params - 1]->type.copy_kind == CK_LINEAR) {
+            if (params[n_params - 1]->type.copy_kind == CK_LINEAR) {
                 params[n_params - 1]->is_linear = true;
             }
-            /* ST2: Under -Xsubstructural, ref<T> params without an explicit discipline
-             * annotation are inferred as SK_LINEAR. */
-            if (g_substructural_enabled
-                    && !params[n_params - 1]->is_linear
+            /* ST2: ref<T> params without an explicit discipline annotation are
+             * inferred as SK_LINEAR. */
+            if (!params[n_params - 1]->is_linear
                     && !params[n_params - 1]->is_affine
                     && !params[n_params - 1]->is_relevant
                     && params[n_params - 1]->type.kind == TY_REF) {
@@ -1560,7 +1558,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 params[n_params - 1]->type.substruct = SK_LINEAR;
             }
             /* UT0: Propagate uniqueness from the type annotation */
-            if (g_unique_enabled && next_param_unique) {
+            if (next_param_unique) {
                 params[n_params - 1]->is_unique = true;
                 params[n_params - 1]->type.copy_kind = CK_UNIQUE;
                 next_param_unique = false;
@@ -1652,7 +1650,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 /* :ref and :lref params need substructural handling (see below) */
                 if (_kw_kind == TY_REF) {
                     params[n_params - 1]->type = type_ref(TY_INT);
-                    if (g_substructural_enabled && !params[n_params - 1]->is_linear
+                    if (!params[n_params - 1]->is_linear
                             && !params[n_params - 1]->is_affine
                             && !params[n_params - 1]->is_relevant) {
                         params[n_params - 1]->is_linear = true;
@@ -1660,7 +1658,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     }
                 } else if (_kw_kind == TY_LREF) {
                     params[n_params - 1]->type = type_lref(TY_INT);
-                    if (g_linear_enabled) params[n_params - 1]->is_linear = true;
+                    params[n_params - 1]->is_linear = true;
                 }
             } else if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
                 param_kinds[n_params - 1] = TY_INT;
@@ -1691,9 +1689,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 /* Phase 5: :ref keyword — owning heap pointer (inner type unknown, use int) */
                 param_kinds[n_params - 1] = TY_REF;
                 params[n_params - 1]->type = type_ref(TY_INT);
-                /* ST2: Under -Xsubstructural, :ref params without an explicit discipline
-                 * annotation are inferred as SK_LINEAR. */
-                if (g_substructural_enabled && !params[n_params - 1]->is_linear
+                /* ST2: :ref params without an explicit discipline annotation are
+                 * inferred as SK_LINEAR. */
+                if (!params[n_params - 1]->is_linear
                         && !params[n_params - 1]->is_affine
                         && !params[n_params - 1]->is_relevant) {
                     params[n_params - 1]->is_linear = true;
@@ -1704,7 +1702,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 param_kinds[n_params - 1] = TY_LREF;
                 params[n_params - 1]->type = type_lref(TY_INT);
                 /* Mark as linear: lref<T> is always exactly-once */
-                if (g_linear_enabled) params[n_params - 1]->is_linear = true;
+                params[n_params - 1]->is_linear = true;
             } else if (kw->len == 3 && memcmp(kw->name, "set", 3) == 0) {
                 /* Phase X3: set type annotation */
                 Type set_type = { .kind = TY_SET, .copy_kind = CK_MOVE };
@@ -2081,7 +2079,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     /* SS3a: Capture full session return type so callers see the complete
                      * protocol type (e.g. Session[Rec[self, ...]]) rather than a bare
                      * TY_SESSION shell with a NULL protocol pointer. */
-                    if (g_sessions_enabled && (ann->kind == TY_SESSION || ann->kind == TY_ROLE)) {
+                    if (ann->kind == TY_SESSION || ann->kind == TY_ROLE) {
                         return_session_type = ann;
                     }
                     /* PTC4: capture full TY_APP return type so dispatch can extract elem types. */
@@ -2756,7 +2754,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* CT1: Inject contract checks into body.
      * Determine whether to emit checks based on build mode. */
     {
-        bool should_check = g_contracts_enabled;
+        bool should_check = true;
 #ifdef NDEBUG
         if (!g_keep_contracts_in_release) should_check = false;
 #endif
@@ -2925,7 +2923,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * its own linear parameter. See linear-ffi fixture for the call-site model. */
     bool lt1_param_fail = false;
     bool body_is_inline_c = (body && body->kind == EX_INLINE_C);
-    if (g_linear_enabled && body && !body_is_inline_c) {
+    if (body && !body_is_inline_c) {
         for (uint8_t _li = 0; _li < n_params; _li++) {
             /* LB1: a ^borrow parameter is non-consuming -- the caller retains
              * ownership and the borrow auto-releases at scope exit -- so it
@@ -2944,7 +2942,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
             if (params[_li]->is_linear && !params[_li]->is_linear_consumed && !params[_li]->is_moved) {
                 /* SS0b: Session channels get a distinct error code.
                  * SS1: include the current protocol state in the message. */
-                if (g_sessions_enabled && params[_li]->type.kind == TY_SESSION) {
+                if (params[_li]->type.kind == TY_SESSION) {
                     Type *proto = params[_li]->type.as.session_.fst;
                     diag_emit_with_code(DIAG_ERROR, params[_li]->span,
                                         TUR_E0211_SESSION_DROPPED,
@@ -2965,7 +2963,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
 
     /* ST1: At function scope exit, verify all relevant params were used at least once */
     bool st1_param_fail = false;
-    if (g_substructural_enabled && body) {
+    if (body) {
         for (uint8_t _li = 0; _li < n_params; _li++) {
             if (params[_li]->is_relevant && params[_li]->usage_state == USAGE_UNUSED
                     && !params[_li]->is_moved) {
@@ -2992,7 +2990,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
         return_kind = body->type.kind;
         /* SS7: propagate full TY_ROLE type from body so callers see the correct
          * current_step (the step after the body's last session operation). */
-        if (g_sessions_enabled && body->type.kind == TY_ROLE && !return_session_type) {
+        if (body->type.kind == TY_ROLE && !return_session_type) {
             Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
             *rft = body->type;
             return_session_type = rft;
@@ -3248,7 +3246,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * elaboration can re-extract size-index templates without walking back
      * through FnDef.  NULL entries (params with no list-form annotation) are
      * fine -- the call-site walk just skips them. */
-    if (g_sized_types_enabled && n_params > 0) {
+    if (n_params > 0) {
         const Form **ptf = (const Form **)arena_alloc(
             e->arena, n_params * sizeof(const Form *));
         bool any = false;
@@ -3265,9 +3263,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * are the canonical case for opaque-carrier size literals.  NULL when no
      * compound return annotation was captured -- the call site then falls
      * back to the existing CtorDef-based path for sized GADT constructors. */
-    if (g_sized_types_enabled) {
-        fn_type.as.fn.result_type_form = return_type_form_kept;
-    }
+    fn_type.as.fn.result_type_form = return_type_form_kept;
 
     /* Create/update binding for the function.
      * Reuse pass-1 forward bindings in place so subsequent lookups observe
@@ -3764,7 +3760,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
                 param_full_types[n_params] = exp_full;
             }
         }
-        if (g_linear_enabled && next_param_linear) {
+        if (next_param_linear) {
             b->is_linear = true;
             next_param_linear = false;
         }
@@ -3997,7 +3993,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
     /* LT1 (call-cc-completion CC4.4): at lambda scope exit, verify every ^linear
      * param was consumed.  A ^linear continuation handed to (call/cc (fn [^linear
      * k] ...)) that is never invoked is a dropped linear value (TUR-E0100). */
-    if (g_linear_enabled && body) {
+    if (body) {
         for (uint8_t _li = 0; _li < n_params; _li++) {
             /* LB1: ^borrow params are non-consuming; they carry no consumption
              * obligation (see the defn-scope LT1 check above). */

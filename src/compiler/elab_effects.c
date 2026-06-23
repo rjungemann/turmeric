@@ -1084,11 +1084,6 @@ Expr *elab_handle(Elab *e, const Form *call) {
  * carrying the effect name, value/result kinds, and continuation discipline.
  */
 Expr *elab_handler_lit(Elab *e, const Form *call) {
-    if (!g_effect_types_enabled) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "'handler' value literal requires -Xeffect-types");
-        return NULL;
-    }
     /* (handler (E [params] k) body) -- head + header + body = 3 items. */
     if (call->as.list.len != 3) {
         diag_emit(DIAG_ERROR, call->span,
@@ -1278,11 +1273,6 @@ Expr *elab_handler_lit(Elab *e, const Form *call) {
  * body's type (the answer type T).  hv must be a TY_HANDLER value.
  */
 Expr *elab_with_handler(Elab *e, const Form *call) {
-    if (!g_effect_types_enabled) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "(with-handler hv body) value application requires -Xeffect-types");
-        return NULL;
-    }
     /* hv first so we know which effects to mark handled while elaborating body. */
     Expr *hv = elab_form(e, call->as.list.items[1]);
     if (!hv) return NULL;
@@ -1317,11 +1307,6 @@ Expr *elab_with_handler(Elab *e, const Form *call) {
  * concatenation of h1's and h2's tables (h1 outer, per FH0.1).
  */
 Expr *elab_compose_handlers(Elab *e, const Form *call) {
-    if (!g_effect_types_enabled) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "'compose-handlers' requires -Xeffect-types");
-        return NULL;
-    }
     if (call->as.list.len != 3) {
         diag_emit(DIAG_ERROR, call->span,
                   "(compose-handlers h1 h2) requires exactly two arguments");

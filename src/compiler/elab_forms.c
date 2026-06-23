@@ -605,7 +605,7 @@ Expr *elab_let(Elab *e, const Form *call) {
          *     is caught (TUR_E0200).
          * (b) When a ^unique binding is transferred (moved), propagate is_unique
          *     to the destination so uniqueness is preserved through rebinding. */
-        if (g_unique_enabled && init->kind == EX_VAR) {
+        if (init->kind == EX_VAR) {
             Binding *src = init->as.var.binding;
             if (!src->is_unique && type_is_copy(src->type)) {
                 /* CK_COPY binding copied into new name — record alias */
@@ -685,7 +685,7 @@ Expr *elab_let(Elab *e, const Form *call) {
             }
         }
         /* UT1: Propagate is_unique through ownership transfer (let [y x] where x is ^unique) */
-        if (g_unique_enabled && !is_unique_ann &&
+        if (!is_unique_ann &&
             init->kind == EX_VAR && init->as.var.binding->is_unique) {
             b->is_unique = true;
             /* copy_kind is already CK_UNIQUE, inherited from init->type */
@@ -696,20 +696,19 @@ Expr *elab_let(Elab *e, const Form *call) {
          * ^unique annotation, promote the type-level uniqueness signal onto the
          * binding so the UT1 alias / use-after-consume checks (TUR-E0200 /
          * TUR-E0201) apply.  This makes hand-annotating ^unique unnecessary in
-         * the common "let-bind a unique factory result" shape.  Gated on
-         * -Xunique-types, so by-value/default builds are unaffected.
+         * the common "let-bind a unique factory result" shape.
          *
          * A borrowed ref obtained from `ref/from-rc` shares the rc's payload and
          * is intentionally excluded -- it is a non-owning view, not a unique
          * owner, and marking it unique would reject legitimate re-reads. */
-        if (g_unique_enabled && !is_unique_ann && !b->is_unique &&
+        if (!is_unique_ann && !b->is_unique &&
             ty_is_unique(init->type) &&
             init->kind != EX_REF_FROM_RC) {
             b->is_unique = true;
             b->type.copy_kind = CK_UNIQUE;
         }
         /* ST1: Propagate affine/relevant through ownership transfer (let [y x] where x is ^affine/^relevant) */
-        if (g_substructural_enabled && !is_affine_ann && !is_relevant_ann &&
+        if (!is_affine_ann && !is_relevant_ann &&
                 init->kind == EX_VAR) {
             Binding *src = init->as.var.binding;
             if (src->is_affine) {
@@ -724,7 +723,7 @@ Expr *elab_let(Elab *e, const Form *call) {
         /* ST3: Propagate affine/relevant through expression type (e.g. from must-use macro
          * returning an EX_LET whose type carries SK_RELEVANT). Only fires when not already
          * set by the EX_VAR propagation above. */
-        if (g_substructural_enabled && !is_affine_ann && !is_relevant_ann &&
+        if (!is_affine_ann && !is_relevant_ann &&
                 !b->is_affine && !b->is_relevant && init->kind != EX_VAR) {
             if (init->type.substruct == SK_RELEVANT) {
                 b->is_relevant = true;
@@ -734,9 +733,9 @@ Expr *elab_let(Elab *e, const Form *call) {
                 b->type.substruct = SK_AFFINE;
             }
         }
-        /* ST2: Under -Xsubstructural, ref<T> bindings are inferred as SK_LINEAR
-         * unless an explicit substructural annotation is already present. */
-        if (g_substructural_enabled && !is_linear_ann && !is_affine_ann && !is_relevant_ann
+        /* ST2: ref<T> bindings are inferred as SK_LINEAR unless an explicit
+         * substructural annotation is already present. */
+        if (!is_linear_ann && !is_affine_ann && !is_relevant_ann
                 && !b->is_linear && init && init->type.kind == TY_REF) {
             b->is_linear = true;
             b->type.substruct = SK_LINEAR;
@@ -1163,7 +1162,7 @@ Expr *elab_let(Elab *e, const Form *call) {
     }
 
     /* LT1: At scope exit, verify all linear bindings were consumed */
-    if (g_linear_enabled && rc == 0) {
+    if (rc == 0) {
         for (uint32_t k = 0; k < n_binds; k++) {
             Binding *lb = binds[k].binding;
             if (lb->is_linear && !lb->is_linear_consumed && !lb->is_moved) {
@@ -1177,7 +1176,7 @@ Expr *elab_let(Elab *e, const Form *call) {
     }
 
     /* ST1: At scope exit, verify all relevant bindings were used at least once */
-    if (g_substructural_enabled && rc == 0) {
+    if (rc == 0) {
         for (uint32_t k = 0; k < n_binds; k++) {
             Binding *lb = binds[k].binding;
             if (lb->is_relevant && lb->usage_state == USAGE_UNUSED && !lb->is_moved) {
@@ -1969,9 +1968,7 @@ Expr *elab_if(Elab *e, const Form *call) {
     Binding **lin_bindings = NULL;
     bool *lin_before = NULL;
     uint32_t n_lin = 0;
-    if (g_linear_enabled) {
-        n_lin = linear_state_snapshot_bindings(e->scope, &lin_bindings, &lin_before);
-    }
+    n_lin = linear_state_snapshot_bindings(e->scope, &lin_bindings, &lin_before);
 
     Expr *then_ = elab_form(e, then_form);
     if (!then_) {
@@ -1985,7 +1982,7 @@ Expr *elab_if(Elab *e, const Form *call) {
 
     /* LT1: Capture linear consumption state after then-branch. */
     bool *lin_then = NULL;
-    if (g_linear_enabled && n_lin > 0) {
+    if (n_lin > 0) {
         lin_then = linear_state_capture_current(lin_bindings, n_lin);
     }
 
@@ -1993,7 +1990,7 @@ Expr *elab_if(Elab *e, const Form *call) {
     move_state_restore(move_bindings, before_states, n_move_bindings);
 
     /* LT1: Rewind linear consumption state before elaborating else branch. */
-    if (g_linear_enabled && n_lin > 0) {
+    if (n_lin > 0) {
         linear_state_restore(lin_bindings, lin_before, n_lin);
     }
 
@@ -2036,7 +2033,7 @@ Expr *elab_if(Elab *e, const Form *call) {
                         (else_->kind == EX_PANIC_WITH);
 
         /* LT1: Capture linear state after else, check for branch mismatch, merge. */
-        if (g_linear_enabled && n_lin > 0) {
+        if (n_lin > 0) {
             bool *lin_else = linear_state_capture_current(lin_bindings, n_lin);
             bool lin_ok = true;
             for (uint32_t i = 0; i < n_lin; i++) {
@@ -2135,8 +2132,8 @@ Expr *elab_if(Elab *e, const Form *call) {
              * it cannot be treated as uniquely owned).  Adopt the non-unique
              * arm's copy_kind so a downstream let does not infer uniqueness
              * (UT2).  The user can re-annotate `^unique` to force the stricter
-             * discipline.  Gated on -Xunique-types. */
-            if (g_unique_enabled) {
+             * discipline. */
+            {
                 bool then_uniq = ty_is_unique(then_->type);
                 bool else_uniq = ty_is_unique(else_->type);
                 if (then_uniq && !else_uniq)
@@ -2150,7 +2147,7 @@ Expr *elab_if(Elab *e, const Form *call) {
         move_state_restore(move_bindings, before_states, n_move_bindings);
         /* LT1: Without else, then-branch linear consumption is not guaranteed;
          * restore to the pre-if state so scope-exit checking fires if needed. */
-        if (g_linear_enabled && n_lin > 0) {
+        if (n_lin > 0) {
             linear_state_restore(lin_bindings, lin_before, n_lin);
         }
     }

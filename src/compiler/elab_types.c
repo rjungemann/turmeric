@@ -475,14 +475,6 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             } else if (k == TY_UNKNOWN && sym->len == 9 && memcmp(sym->name, "ptr<void>", 9) == 0) {
                 k = TY_PTR_VOID;
             }
-            /* IT4: gate `any` behind the feature flags here as well, so the
-             * spaced annotation form (`x : any`) routes through the same
-             * check as the compact `:any` keyword form below. */
-            if (k == TY_ANY && !g_union_types_enabled && !g_intersection_types_enabled) {
-                diag_emit(DIAG_ERROR, form->span,
-                          "'any' type requires -Xunion-types or -Xintersection-types");
-                return NULL;
-            }
             if (k != TY_UNKNOWN) {
                 Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *t = type_from_kind(k);
@@ -501,13 +493,8 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             }
         }
         
-        /* IT4: any — top type.  Available when -Xunion-types or -Xintersection-types is on. */
+        /* IT4: any — top type. */
         if (sym->len == 3 && memcmp(sym->name, "any", 3) == 0) {
-            if (!g_union_types_enabled && !g_intersection_types_enabled) {
-                diag_emit(DIAG_ERROR, form->span,
-                          "'any' type requires -Xunion-types or -Xintersection-types");
-                return NULL;
-            }
             Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
             memset(t, 0, sizeof(Type));
             t->kind     = TY_ANY;
@@ -517,7 +504,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
         }
 
         /* SS0b: Close — terminal session protocol (bare symbol, no arguments) */
-        if (g_sessions_enabled && sym == e->sym_session_Close) {
+        if (sym == e->sym_session_Close) {
             Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
             *t = type_close();
             return t;
@@ -526,7 +513,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
         /* SS3a: bare Rec label reference -- resolve to back-reference sentinel.
          * When we encounter a bare symbol that matches an active Rec binder label,
          * return a TY_SESSION_REC node with fst=NULL (sentinel for recursive call). */
-        if (g_sessions_enabled && e->rec_depth > 0) {
+        if (e->rec_depth > 0) {
             for (uint8_t ri = 0; ri < e->rec_depth; ri++) {
                 if (e->rec_labels[ri] == sym) {
                     /* Return a sentinel TY_SESSION_REC with fst=NULL to indicate
@@ -718,11 +705,6 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 }
             }
             if (has_pipe) {
-                if (!g_union_types_enabled) {
-                    diag_emit(DIAG_ERROR, form->span,
-                              "union type syntax requires -Xunion-types; found '|' in type expression");
-                    return NULL;
-                }
                 /* Count non-pipe member forms */
                 uint8_t n_members = 0;
                 for (uint32_t uk = 0; uk < form->as.list.len; uk++) {
@@ -767,11 +749,6 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 }
             }
             if (has_amp) {
-                if (!g_intersection_types_enabled) {
-                    diag_emit(DIAG_ERROR, form->span,
-                              "intersection type syntax requires -Xintersection-types; found '&' in type expression");
-                    return NULL;
-                }
                 /* Count non-ampersand member forms */
                 uint8_t n_members = 0;
                 for (uint32_t uk = 0; uk < form->as.list.len; uk++) {
@@ -820,11 +797,6 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
         /* ET3-A: (handler EffectName ValueType ResultType) type expression */
         if (form->as.list.len == 4 && form->as.list.items[0]->tag == F_SYM
                 && form->as.list.items[0]->as.sym == e->sym_handler_type) {
-            if (!g_effect_types_enabled) {
-                diag_emit(DIAG_ERROR, form->span,
-                          "'handler' type expression requires -Xeffect-types");
-                return NULL;
-            }
             Form *eff_f = form->as.list.items[1];
             Form *val_f = form->as.list.items[2];
             Form *res_f = form->as.list.items[3];
@@ -1462,9 +1434,8 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             return fn_t;
         }
 
-        /* SS0b: Session type constructors (-Xsessions) */
-        if (g_sessions_enabled
-                && form->as.list.len >= 2
+        /* SS0b: Session type constructors */
+        if (form->as.list.len >= 2
                 && form->as.list.items[0]->tag == F_SYM) {
             const Symbol *head_sym = form->as.list.items[0]->as.sym;
 
@@ -1749,8 +1720,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
              * `(SizedVec (Static 0))`) are stored as raw Forms and consulted
              * separately -- this extends the same treatment to defopaque /
              * defstruct phantom indices and to function return-type slots. */
-            if (g_sized_types_enabled &&
-                    arg_form->tag == F_LIST &&
+            if (arg_form->tag == F_LIST &&
                     arg_form->as.list.len >= 1 &&
                     arg_form->as.list.items[0]->tag == F_SYM) {
                 const char *op = arg_form->as.list.items[0]->as.sym->name;
@@ -1932,12 +1902,6 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
         /* `:int`, `:bool`, etc. — treat the keyword name as a primitive type lookup */
         const Symbol *sym = form->as.sym;
         TypeKind k = typekind_from_symbol(sym->name);
-        /* IT4: gate `any` behind the feature flags */
-        if (k == TY_ANY && !g_union_types_enabled && !g_intersection_types_enabled) {
-            diag_emit(DIAG_ERROR, form->span,
-                      "'any' type requires -Xunion-types or -Xintersection-types");
-            return NULL;
-        }
         if (k != TY_UNKNOWN) {
             Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
             *t = type_from_kind(k);

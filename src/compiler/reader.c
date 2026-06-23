@@ -1109,9 +1109,8 @@ static Form *try_read_data_literal(Reader *r) {
 /* via json/type + json/get-*.  This is the same node tree json/decode       */
 /* produces, so #json(...) is a compile-time-validated json/decode. The      */
 /* emitted forms are elaborated by the normal typechecker; json.tur is       */
-/* auto-loaded when -Xjson-reader is on so the constructors resolve.         */
+/* auto-loaded so the constructors resolve.                                  */
 /* Errors: TUR-E0270 (malformed JSON), TUR-E0271 (unexpected EOF).           */
-/* Gated behind -Xjson-reader (g_json_reader_enabled).                       */
 /* ------------------------------------------------------------------------ */
 
 static Form *json_read_value(Reader *r);
@@ -1548,7 +1547,7 @@ static Form *try_read_json(Reader *r) {
  *
  * Unlike #json(...), the inner is an ordinary Turmeric expression (a :cstr at
  * runtime), read with the normal reader -- no JSON sub-parser is involved.
- * Gated on -Xschema-reader (g_schema_reader_enabled).  The panic-on-violation
+ * The panic-on-violation
  * #json-str<T> is implemented here; the Result-returning #json-str?<T> and the
  * file-reading #json-file<T> remain future work (a clear diagnostic is emitted
  * for the '?' form). */
@@ -2778,24 +2777,24 @@ static Form *read_form(Reader *r) {
     if (c == '#' && peek2(r) == 'r' && peek3(r) == '{') {
         return read_range_literal(r);
     }
-    /* DL0: data literals #map{...} / #set{...} (opt-in via -Xdata-literals).
+    /* DL0: data literals #map{...} / #set{...}.
      * Placed after #{ and #s( so effect rows and #s(...) sets win; the helper
      * returns NULL without consuming when the input is not a data literal. */
-    if (c == '#' && g_data_literals_enabled) {
+    if (c == '#') {
         Form *m = try_read_data_literal(r);
         if (m || r->error) return m;
     }
-    /* JR0: #json(...) compile-time JSON reader macro (opt-in via -Xjson-reader).
+    /* JR0: #json(...) compile-time JSON reader macro.
      * Placed alongside the data-literal dispatch; the helper returns NULL
      * without consuming when the input is not a #json( form. */
-    /* RD2: #json-str<T>(...) typed-decode reader family (opt-in via
-     * -Xschema-reader).  Checked before #json so the more specific prefix
-     * wins.  Returns NULL without consuming for non-#json-str input. */
-    if (c == '#' && g_schema_reader_enabled) {
+    /* RD2: #json-str<T>(...) typed-decode reader family.  Checked before
+     * #json so the more specific prefix wins.  Returns NULL without
+     * consuming for non-#json-str input. */
+    if (c == '#') {
         Form *m = try_read_json_str(r);
         if (m || r->error) return m;
     }
-    if (c == '#' && g_json_reader_enabled) {
+    if (c == '#') {
         Form *m = try_read_json(r);
         if (m || r->error) return m;
     }
@@ -2824,12 +2823,9 @@ static Form *read_form(Reader *r) {
     if (c == '[') {
         Form *v = read_seq(r, '[', ']', F_VEC, "unterminated vector (missing ']')");
         /* TCE: a fused `:T` element-type suffix (`[]:int`) pins the vec's
-         * element type.  Gated on -Xdata-literals since a `[...]` value
-         * literal is itself flag-gated; binding vectors are unaffected
-         * because their ']' is never immediately followed by ':'. */
-        if (g_data_literals_enabled)
-            return maybe_container_type_suffix(r, v, "Vec");
-        return v;
+         * element type.  Binding vectors are unaffected because their ']' is
+         * never immediately followed by ':'. */
+        return maybe_container_type_suffix(r, v, "Vec");
     }
     if (c == ')' || c == ']' || c == '}') {
         Span s = span_point(r);

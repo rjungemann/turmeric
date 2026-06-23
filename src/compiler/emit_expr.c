@@ -6202,8 +6202,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* SS2: Session offer match -- TY_SESSION_OFFER scrutinee.
              * The scrutinee emits a tur_session_recv_tag() call (returns int64_t tag).
              * Each arm binds the channel pointer to its arm variable. */
-            if (g_sessions_enabled &&
-                e->as.match_.scrutinee->type.kind == TY_SESSION_OFFER) {
+            if (e->as.match_.scrutinee->type.kind == TY_SESSION_OFFER) {
                 const Expr *scrut = e->as.match_.scrutinee;
                 bool nil_result = (e->type.kind == TY_NIL);
                 char *tmp = NULL;

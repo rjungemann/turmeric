@@ -111,8 +111,7 @@ Expr *elab_deref(Elab *e, const Form *call) {
      * (a) leaked the allocation and (b) made a following (drop! r) a
      * use-after-consume error.  Restricted to TY_REF so lref<T> borrows and
      * &T/&mut T references keep their existing (consuming) behavior. */
-    if (g_linear_enabled &&
-        inner->kind == EX_VAR &&
+    if (inner->kind == EX_VAR &&
         inner->as.var.binding &&
         inner->as.var.binding->is_linear &&
         !inner->as.var.binding->is_nonowning_ref &&
@@ -192,7 +191,7 @@ Expr *elab_rc_of(Elab *e, const Form *call) {
     if (!inner) return NULL;
 
     /* LT1: Reject wrapping a linear value in rc<T> */
-    if (g_linear_enabled && inner->type.copy_kind == CK_LINEAR) {
+    if (inner->type.copy_kind == CK_LINEAR) {
         const char *val_name = (inner->kind == EX_VAR)
             ? inner->as.var.binding->name->name : "linear value";
         diag_emit_with_code(DIAG_ERROR, call->span,
@@ -204,7 +203,7 @@ Expr *elab_rc_of(Elab *e, const Form *call) {
     }
 
     /* UT1: Reject wrapping a unique value in rc<T> */
-    if (g_unique_enabled && inner->kind == EX_VAR &&
+    if (inner->kind == EX_VAR &&
         inner->as.var.binding->is_unique) {
         diag_emit_with_code(DIAG_ERROR, call->span,
                             TUR_E0202_UNIQUE_IN_RC,

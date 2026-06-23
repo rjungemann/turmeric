@@ -40,12 +40,6 @@ DynVarEntry *dynvar_lookup(const Elab *e, const Symbol *name) {
  * On success registers a DynVarEntry and returns EX_DEFDYNAMIC (nil at runtime).
  */
 Expr *elab_defdynamic(Elab *e, const Form *call) {
-    if (!g_dynvar_enabled) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "defdynamic requires -Xdynamic-vars");
-        return NULL;
-    }
-
     /* Minimum shape: (defdynamic *name* :type root-expr) — 4 items */
     if (call->as.list.len < 4) {
         diag_emit(DIAG_ERROR, call->span,
@@ -201,12 +195,6 @@ static void dynvar_pop_active(Elab *e, const Symbol *name) {
  * Result type is the result type of body.
  */
 Expr *elab_binding(Elab *e, const Form *call) {
-    if (!g_dynvar_enabled) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "binding requires -Xdynamic-vars");
-        return NULL;
-    }
-
     /* Minimum: (binding [pairs...] body) -- 3 items */
     if (call->as.list.len < 3) {
         diag_emit(DIAG_ERROR, call->span,

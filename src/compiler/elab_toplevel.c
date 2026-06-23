@@ -172,12 +172,11 @@ static Form *dl_build_call(Elab *e, Span span, const char *head,
  * reader (TUR-E0282) guarantees the key is one of these three forms. */
 static Form *dl_normalize_map_key(Elab *e, Form *key) {
     if (key->tag == F_INT) return key;
-    /* SYM3 (runtime-symbols-plan): under -Xsymbols a keyword key is a
-     * first-class :Sym value -- pass the F_KEYWORD through so the map is keyed
-     * by Sym (pointer-identity, via Hash[Sym] / MapKey[Sym]) instead of
-     * decaying to a content-hashed cstr.  Without the flag the legacy
-     * hamt/hash-str lowering below is unchanged. */
-    if (key->tag == F_KEYWORD && g_symbols_enabled) return key;
+    /* SYM3 (runtime-symbols-plan): a keyword key is a first-class :Sym value
+     * -- pass the F_KEYWORD through so the map is keyed by Sym
+     * (pointer-identity, via Hash[Sym] / MapKey[Sym]) instead of decaying to a
+     * content-hashed cstr. */
+    if (key->tag == F_KEYWORD) return key;
     Form *str;
     if (key->tag == F_KEYWORD) {
         str = form_str(e->arena, key->span, key->as.sym->name,
@@ -344,20 +343,16 @@ Expr *elab_form(Elab *e, Form *f) {
             return out;
         }
         case F_KEYWORD:
-            /* SYM0 (runtime-symbols-plan): under -Xsymbols, a keyword in
-             * expression position is a first-class :Sym literal whose runtime
-             * value is a pointer-identity-equal interned symbol.  Without the
-             * flag it remains a hard error (its only legal uses are syntactic:
-             * type annotations, :refer/:as, struct-field selectors, ADT tags --
-             * all consumed by earlier passes before reaching elab_form). */
-            if (g_symbols_enabled) {
+            /* SYM0 (runtime-symbols-plan): a keyword in expression position is a
+             * first-class :Sym literal whose runtime value is a
+             * pointer-identity-equal interned symbol.  (Its other uses are
+             * syntactic: type annotations, :refer/:as, struct-field selectors,
+             * ADT tags -- all consumed by earlier passes before elab_form.) */
+            {
                 Expr *out = expr_new(e->arena, EX_SYM_LIT, TYPE_SYM, f->span);
                 out->as.sym_lit_.sym = f->as.sym;
                 return out;
             }
-            diag_emit(DIAG_ERROR, f->span,
-                      "keyword in expression position requires -Xsymbols");
-            return NULL;
         case F_SYM: {
             /* M1: Use elab_lookup_sym for visibility + qualified name resolution */
             bool sym_qual_err = false;
@@ -395,7 +390,7 @@ Expr *elab_form(Elab *e, Form *f) {
                 return NULL;
             }
             /* UT1: Check for use-after-consume of a unique binding (more specific than generic move) */
-            if (g_unique_enabled && b->is_unique && b->is_moved) {
+            if (b->is_unique && b->is_moved) {
                 diag_emit_with_code(DIAG_ERROR, f->span,
                                     TUR_E0201_UNIQUE_COPY,
                                     "cannot copy unique value '%s' -- "
@@ -408,7 +403,7 @@ Expr *elab_form(Elab *e, Form *f) {
                 return NULL;
             }
             /* LT1: Check for use-after-consume of a linear binding */
-            if (g_linear_enabled && b->is_linear) {
+            if (b->is_linear) {
                 if (b->is_linear_consumed) {
                     diag_emit_with_code(DIAG_ERROR, f->span,
                                         TUR_E0101_LINEAR_USE_AFTER_CONSUME,
@@ -422,23 +417,21 @@ Expr *elab_form(Elab *e, Form *f) {
             /* ST1: Substructural usage tracking.
              * ^affine: may not be used more than once (TUR_E0150).
              * ^relevant: must be used at least once; duplicates are fine. */
-            if (g_substructural_enabled) {
-                if (b->is_affine && !b->is_continuation) {
-                    /* Continuation affine checks are handled by cont_check_double_use
-                     * (LC2) to emit continuation-specific error codes instead of E0150. */
-                    if (b->usage_state >= USAGE_USED_ONCE) {
-                        diag_emit_with_code(DIAG_ERROR, f->span,
-                                            TUR_E0150_AFFINE_USED_TWICE,
-                                            "affine value '%s' used more than once",
-                                            b->name->name);
-                        return NULL;
-                    }
-                    b->usage_state = USAGE_USED_ONCE;
-                } else if (b->is_relevant && !b->is_continuation) {
-                    /* Continuation relevant checks are handled by the LC2 drop check. */
-                    b->usage_state = (b->usage_state == USAGE_UNUSED) ? USAGE_USED_ONCE
-                                                                       : USAGE_USED_MANY;
+            if (b->is_affine && !b->is_continuation) {
+                /* Continuation affine checks are handled by cont_check_double_use
+                 * (LC2) to emit continuation-specific error codes instead of E0150. */
+                if (b->usage_state >= USAGE_USED_ONCE) {
+                    diag_emit_with_code(DIAG_ERROR, f->span,
+                                        TUR_E0150_AFFINE_USED_TWICE,
+                                        "affine value '%s' used more than once",
+                                        b->name->name);
+                    return NULL;
                 }
+                b->usage_state = USAGE_USED_ONCE;
+            } else if (b->is_relevant && !b->is_continuation) {
+                /* Continuation relevant checks are handled by the LC2 drop check. */
+                b->usage_state = (b->usage_state == USAGE_UNUSED) ? USAGE_USED_ONCE
+                                                                   : USAGE_USED_MANY;
             }
             /* DV1: If the binding is a dynamic var, emit a dynvar-read node.
              * The result type is the var's value type, not TY_DYNVAR. */
@@ -467,14 +460,11 @@ Expr *elab_form(Elab *e, Form *f) {
              * binding form), a [...] vector lowers to (vec-of ...).  Binding
              * forms (defn/fn/let/loop/...) grab their F_VEC slot before it ever
              * reaches elab_form, so reaching here means expression position. */
-            if (g_data_literals_enabled) {
+            {
                 Form *call = dl_build_call(e, f->span, "vec-of",
                                            f->as.list.items, f->as.list.len);
                 return elab_form(e, call);
             }
-            diag_emit(DIAG_ERROR, f->span,
-                      "phase 1: vector literals are only allowed in let bindings");
-            return NULL;
         case F_MAP:
             diag_emit(DIAG_ERROR, f->span,
                       "phase 1: map literals are parsed but not yet supported by elaboration");
@@ -1011,7 +1001,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         bool is_defopaque = (head->as.sym == e.sym_defopaque);
         if (!is_defstruct && !is_defdata && !is_defgadt && !is_defopaque) continue;
         /* range-gadt-typeclass-migration-plan A1: GADTs are registered
-         * unconditionally now that g_gadt_enabled defaults true. */
+         * unconditionally. */
         Form *name_f = f->as.list.items[1];
         if (!name_f || name_f->tag != F_SYM) continue;
         const Symbol *type_name = name_f->as.sym;
