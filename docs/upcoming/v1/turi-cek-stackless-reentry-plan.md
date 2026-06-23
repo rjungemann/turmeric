@@ -6,6 +6,70 @@ description: Eliminate the last source of unbounded C recursion in the tree-walk
 
 # Turi stackless native re-entry (full CEK / driver-CPS) -- Plan
 
+## Status update -- 2026-06-23 (N4 audit -- guard stays)
+
+**N4's audit ran; the guard does NOT retire yet.** N4 is "audit + retire the
+guard," gated hard on the audit proving no program-internal synchronous native
+re-entry remains on an *unbounded* (recursion-depth-scaling) path. The plan
+assumed N3 would convert the whole receiver set; N3 instead deferred the
+longjmp receivers to N3b/N4, and N3b converted only the abortive shift's
+*driver* path. So the audit was run now to get ground truth before removing
+anything. **It is not airtight -- two receivers still C-recurse with program
+depth -- so the guard, `eval_depth`, and `TURI_EVAL_FRAME_BYTES` all stay.**
+
+Method (the plan's "grep + probe"): the F5 guard trips at `max_eval_depth`
+(~500-800 on an 8 MB stack = `rlimit * 3/5 / 9472`). A depth-5000 probe through
+a path trips "recursion limit exceeded" iff that path adds a C frame per level;
+a heap-bounded path runs clean. Each residual `turi_call` re-entry site
+(`grep turi_call src/turi/eval.c`) was probed and/or classified:
+
+**Unbounded -- block guard retirement (both PROVEN to trip the guard at 5000):**
+
+- `eval_abortive_shift` (`eval.c:1381`). A `(shift f _)` inside an
+  `eval_expr`'d `(reset BODY)` body: `eval_reset_boundary` runs `BODY` via
+  `eval_expr` (not the driver), so the shift takes the synchronous path, and
+  every enclosing `(reset ...)` adds an `eval_reset_boundary` setjmp C frame.
+  N3b's driver `EX_SHIFT` case only fires when the shift is reached as a
+  *driven* fn-body tail; a shift under an `eval_expr`'d reset body is untouched.
+  Repro: `(defn f [n] (if (= n 0) 0 (reset (+ 1 (shift (fn [v] (f (- n 1))) 0))))) (f 5000)`.
+- `eval_callcc_escape` (`eval.c:1856`). Each `(call/cc f)` sets up a setjmp
+  escape pad and `turi_call`s `f`; nesting adds a C frame per level. Repro:
+  `(defn g [n] (if (= n 0) 0 (call/cc (fn [k] (+ 1 (g (- n 1))))))) (g 5000)`.
+
+The underlying blocker for both is the **setjmp/longjmp boundary itself**:
+`reset`, the abortive `shift`, and `call/cc` each establish a live C frame
+(`eval_reset_boundary` / `eval_callcc_escape`) that must persist as the
+longjmp target, so delimited-control nesting maps 1:1 onto C-stack depth.
+
+**Bounded -- acceptable once the above are cleared (single application per
+invocation, do NOT scale with recursion):**
+
+- `ts_cont_resume` (`eval.c:1537`): folds at most `TS_MAX_CTX_FRAMES` (64)
+  captured frames per resume; the restricted capture grammar (arith / 1-2-arg
+  call frames) has no recursion construct, so nesting is shallow in practice.
+- `ts_capture_and_run` no-shift path (`eval.c:1826`) and the synchronous
+  `EX_TVAR_MODIFY` (`eval.c:7514`): one receiver application each; STM
+  transactions / capturing resets do not deeply self-nest.
+- Show dispatch `turi_try_show` (`eval.c:8079`): applied once per top-level
+  auto-show; a nested-struct `show` recurses through the user impl's *driven*
+  `.show` method calls (heap-bounded), never through a second `turi_try_show`.
+- Public `turi_call` (`eval.c:7896`): embedder contract -- stays synchronous by
+  design (a single embedder-initiated frame is bounded, matching tur's "C stack
+  for ordinary calls").
+
+**What N4 still needs before the guard can drop.** The two blockers are exactly
+the setjmp/longjmp boundaries, so the missing primitive is a driver
+**unwind-to-boundary**: model `EX_RESET` / `EX_CALLCC` (and the serial/cloneable
+resets) as work-stack boundary frames (a `DK_RESET` / `DK_ESCAPE` marker, no
+setjmp), and turn the abortive `shift` / `(k v)` escape into a work-stack
+*unwind* to that marker rather than a `longjmp`. That folds delimited-control
+nesting onto the heap the same way DC's `DK_PROMPT` folds effect handlers, and
+reconciles the two control substrates (the plan's stated N5 tie-in). It is a
+focused but non-trivial change -- a new resume-protocol capability (the current
+`NativeResume.resume` cannot reach the driver's `st`/`len` to unwind) -- and is
+the right next sub-phase, not a blind one-shot edit. Until it lands the guard is
+load-bearing and stays. No code changed in this step; this is the audit record.
+
 ## Status update -- 2026-06-23 (N3b)
 
 **N3b has landed (abortive shift -- the first of the deferred longjmp
