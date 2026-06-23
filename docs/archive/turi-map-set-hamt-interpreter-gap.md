@@ -86,7 +86,7 @@ memory-safety bug already filed separately
 
 This report is the umbrella tracking entry for the family; the set-count
 overflow has its own report, and the design discussion lives in
-[docs/upcoming/v1/turi-interpreter-gap-closure-plan.md](../upcoming/v1/turi-interpreter-gap-closure-plan.md)
+[docs/archive/turi-interpreter-gap-closure-plan.md](turi-interpreter-gap-closure-plan.md)
 (W1b).
 
 ## Minimal repro
