@@ -40,9 +40,15 @@ Residual / still open:
 - **TI1.5/1.6/1.7 (`EX_HANDLER_LIT`/`COMPOSE_HANDLERS`/`OR_ELSE`/`CHECK`)** --
   `HANDLER_LIT`/`COMPOSE_HANDLERS` shipped under TI6; `OR_ELSE`/`CHECK` ride
   with TI4 STM.
-- **TI2 generators (`EX_GEN*`/`EX_YIELD`)** -- check whether these have case
-  arms or are in the carve-out; not visible in the trimmed carve-out file
-  excerpt above.
+- **TI2 generators (`EX_GEN*`/`EX_YIELD`) -- LANDED.** All four kinds
+  (`EX_GEN`, `EX_YIELD`, `EX_GEN_NEXT`, `EX_GEN_DONE`) have case arms in
+  `src/turi/eval.c` (fiber-backed coroutine strategy -- the plan's recommended
+  option 1). 7 `gen-*` fixtures pass under `tur --interpret`
+  (`gen-basic`/`gen-collect`/`gen-done`/`gen-for-each`/`gen-nested-turi`/
+  `gen-nth`/`gen-yield-star`); the 4 that wrap the `gen-next` `ptr<void>`
+  result in hand-rolled inline-C (`gen-early-return`/`gen-if-branch`/
+  `gen-nested`/`gen-range`) are auto-carved by the harness as TI7 user
+  inline-C. See the TI2 phase section below.
 - **TI10 Tier B (turi-closure-aware HAMT for user `MapKey`/value comparators)**
   -- still a future item; Tier A covers every scalar-keyed map fixture.
 - **TI9 parity matrix guide** (`docs/guides/turi-parity-guide.md`) -- not
@@ -52,8 +58,9 @@ Residual / still open:
   several linked reports have moved from `docs/reported/` to
   `docs/archive/history/` -- relink before reopening.
 
-With the flip landed, this plan is ready to move from `docs/upcoming/v1/` to
-`docs/archive/` once TI2/TI9 either land or are formally carved.
+With the flip and TI2 landed, this plan is ready to move from
+`docs/upcoming/v1/` to `docs/archive/` once TI9 either lands or is formally
+carved.
 
 ---
 > **Type:** Interpreter / Test Infra / Docs
@@ -447,41 +454,68 @@ self-contained than the plan's "quick wins" framing implies:
 
 ---
 
-## Phase TI2 -- Generators
+## Phase TI2 -- Generators -- **LANDED**
 
 The compiler emits `EX_GEN` (generator constructor), `EX_GEN_NEXT`,
-`EX_GEN_DONE`, and `EX_YIELD` for `(gen ...)` and `for*`-style loops.
-Today these are unhandled.
+`EX_GEN_DONE`, and `EX_YIELD` for `(gen ...)` and `for*`-style loops. All
+four now have case arms in `src/turi/eval.c`.
 
-### Implementation
+### Implementation (shipped -- strategy 1, fiber-backed)
 
-Two viable strategies:
+The plan weighed two strategies:
 
 1. **Fiber-backed.** Use the `ucontext` machinery already in
    `src/turi/fiber.c` (Phase S7) to run each generator body on its own
    stack; `yield` swaps back to the caller, `next` swaps in. Cheap to
    write because the swap primitives exist; cost is per-generator
    stack allocation.
-2. **CPS-rewrite at elaboration.** The compiler already has a CPS
-   pipeline (`docs/upcoming/cps-transform-plan.md`). Reuse it to flatten
-   the generator body into an explicit state machine, then evaluate
-   that state machine in the interpreter without stack juggling.
+2. **CPS-rewrite at elaboration.** Reuse the CPS pipeline
+   (`docs/upcoming/cps-transform-plan.md`) to flatten the generator body
+   into an explicit state machine. Requires CPS-transform to land first.
 
-**Recommendation:** (1). Strategy 2 requires CPS-transform to land
-first; the fiber strategy is self-contained.
+Strategy **(1)** shipped (self-contained; no CPS dependency):
+
+- `EX_GEN` allocates a `TuriGen { gen_ctx; caller_ctx; stack; ... }` and a
+  fresh child frame (intentionally not freed -- a generator may outlive its
+  creating scope, like a closure capture). The body runs lazily; the
+  coroutine context is set up on the first `gen-next`.
+- `EX_YIELD` stores the yielded value in `g->box` and `swapcontext`s back to
+  the caller; the body resumes in place on the next advance. `(yield)` outside
+  a generator body is a clean interpreter error.
+- `EX_GEN_NEXT` drives the coroutine (`gen_advance`) and returns a `ptr<void>`
+  carrier (NULL = exhausted), matching the compiled ABI.
+- `EX_GEN_DONE` reads `g->done`, which flips true only after a `gen-next`
+  drives the body past its last `yield` -- so `(while (not (gen-done? g)) ...)`
+  terminates identically under both backends.
+- WASM/Emscripten uses the `emscripten_fiber_*` path already wired in
+  `src/turi/fiber.c`.
+
+Because the fiber stacks and `TuriGen` records are process-lifetime (never
+freed -- standard for the tree-walker), the `gen-*` fixtures interpret under
+`ASAN_OPTIONS=detect_leaks=0`, which is how `tests/run-turi.sh` already runs
+the interpreter.
 
 ### Tests
 
-- `tests/fixtures/gen-basic/` -- yields 1..3, sums.
-- `tests/fixtures/gen-done/` -- finite generator, `gen/done?` is true.
-- `tests/fixtures/gen-nested/` -- generator yielding generators.
-- `tests/fixtures/gen-defer/` -- defer thunks fire when the generator
-  is dropped without being exhausted.
+7 `gen-*` fixtures pass under `tur --interpret` via the stdlib `gen.tur`
+native helpers (`gen-some?` / `gen-unwrap`): `gen-basic` (yields 1..3, sums),
+`gen-collect`, `gen-done`, `gen-for-each`, `gen-nested-turi`, `gen-nth`,
+`gen-yield-star`. They run automatically under the post-flip
+`tests/run-turi.sh` (no allowlist).
+
+The 4 `gen-*` fixtures that consume the `gen-next` `ptr<void>` result through
+hand-rolled inline-C (`ptr-some?` / `ptr-unwrap`) -- `gen-early-return`,
+`gen-if-branch`, `gen-nested`, `gen-range` -- are **auto-carved** by the
+harness as TI7 user inline-C (the tree-walker cannot run a user ` ```c ` body).
+They still validate on the compiled path under `tests/run.sh`. Programs that
+want to run under `turi` should consume generators through the stdlib helpers,
+not raw pointer inline-C.
 
 ### Doc
 
-Update `docs/guides/generators-guide.md` to remove any "interpreter
-support TBD" caveats.
+`docs/guides/generators-guide.md` carries an "Interpreter (turi) support"
+section documenting the fiber-backed execution model and the user-inline-C
+carve-out -- no "interpreter support TBD" caveats remain.
 
 ---
 
