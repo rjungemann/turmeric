@@ -69,12 +69,16 @@ correctly:
 - `route-call-handler` (in `dsl.tur`) calls the handler as a bare code
   pointer, with no env arg.
 
-**Unresolved contradiction to verify (Phase 0):**
+**Unresolved contradiction (Phase 0 — RESOLVED 2026-06-23):**
 
 - Archived `docs/archive/httpd-middleware-plan.md:55` claims `EX_CATCH_UNWIND`
-  passes `NULL` env. The survey reports it now uses `TUR_APPLY0` correctly.
-  Either the archive is stale or the survey misread. **Verify before
-  closing.**
+  passes `NULL` env. The survey reported it now uses `TUR_APPLY0` correctly.
+  **Phase 0 verified: archive was right.** `tur_catch_unwind_box` itself
+  dispatches correctly (`TUR_APPLY0`, `emit_module.c:5721`), but
+  `catch_thunk_to_fat` in `elab_concurrent.c:349` auto-shims a capturing
+  closure through `EX_FN_TO_FAT`, which double-boxes the already-fat closure
+  and drops the env. A minimal repro SEGVs. Carried into Phase 2 as a
+  prerequisite fix. See `docs/reported/catch-unwind-drops-captures-segv.md`.
 
 ## Scope
 

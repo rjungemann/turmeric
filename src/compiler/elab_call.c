@@ -3300,10 +3300,13 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                     }
                     buf_putc(&cap, '\0');
                     diag_emit(DIAG_ERROR, args[i]->span,
-                        "argument %u of '%s' is a capturing closure, but the "
-                        "parameter is a C function pointer (c-fn) and cannot "
-                        "carry an environment%s%s. Pass a captureless function "
-                        "(one with no free variables) or an extern-c declaration.",
+                        "TUR-E0295: argument %u of '%s' is a capturing closure, "
+                        "but the parameter is a C function pointer (c-fn) and "
+                        "cannot carry an environment%s%s. Captured values would "
+                        "be silently dropped at the c-fn boundary. Pass a "
+                        "captureless function (no free variables), change the "
+                        "parameter type from (c-fn ...) to (fn ...), or hoist "
+                        "the captures out.",
                         i + 1, fn_binding->name->name,
                         cap.data[0] ? "; captures: " : "", cap.data);
                     buf_free(&cap);
