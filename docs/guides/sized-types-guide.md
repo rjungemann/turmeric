@@ -18,17 +18,35 @@ Sized types are enabled with the `-Xsized-types` compiler flag, which implies
 tur -Xsized-types build sized-program.tur
 ```
 
-> **Runtime vs. static checking.** Today the size index is a *phantom*: every
-> `SizedVec` constructor returns the same type regardless of length, and size
-> equality/compatibility (`size-eq?`, `size-compat?`, `size-assert-eq!`,
-> `sized-matrix-assert-shape!`) is checked at **run time** by evaluating both
-> sizes and comparing them. The one compile-time error today catches an
-> `int`-vs-`Size` kind mismatch, not an unequal *dimension*. Lifting size
-> indices to the type level so that a length-`n` vector's type mentions `n` and
-> a dimension mismatch is a **static** (compile-time) error is in progress --
-> see [sized-types-completion-plan.md](../sized-types-completion-plan.md)
-> (phases SZ6–SZ9). Where this guide describes a check as "compile-time", read
-> it as the goal state; the shipped behavior is noted inline.
+> **Static checking.** Size indices are lifted to the type level: a
+> length-`n` vector's type mentions `n`, and a dimension mismatch whose sizes
+> are statically known is a **compile-time** error (`TUR-E0260`), not just a
+> runtime assertion. This covers the cases that matter in practice:
+>
+> - **Cross-parameter unification.** A signature that names the same size
+>   variable in two or more parameters -- e.g.
+>   `(defn pairwise-sum [xs : (SizedVec n) ys : (SizedVec n)] ...)` -- unifies
+>   `n` across all the slots. Passing a length-2 vector for `xs` and a
+>   length-3 vector for `ys` is rejected at compile time. Multi-index
+>   carriers (`(LaMatN m n)`) unify per-index position.
+> - **Propagation through wrappers.** A `defstruct`/`defopaque` field whose
+>   type carries a size index keeps it: projecting `(.fst p)` and `(.snd p)`
+>   into a shared-`n` callee recovers each field's static size and rejects a
+>   mismatch.
+> - **Polymorphic helpers.** A function over `(SizedVec n)` whose body re-wraps
+>   or threads the value preserves the index without per-call re-annotation.
+>
+> Where both sides of a comparison fold to a known constant, the check fires
+> statically. The runtime predicates/assertions (`size-eq?`, `size-compat?`,
+> `size-assert-eq!`, `sized-matrix-assert-shape!`) remain the fall-through for
+> the genuinely dynamic cases: a size that is only known at run time (read from
+> input, computed by non-constant arithmetic) or an open size expression with
+> free variables that cannot be folded. Size arithmetic on indices (`+`, `*`
+> for concat-typed vectors) is also a runtime check today. The historical
+> roll-out is recorded in the
+> archived [sized-types-completion-plan.md](../archive/history/sized-types-completion-plan.md)
+> (phases SZ6–SZ9) and
+> [sized-types-cross-param-unification-plan.md](../archive/history/sized-types-cross-param-unification-plan.md).
 
 ## Table of Contents
 
@@ -272,9 +290,37 @@ let [n read-length()]              ; n is a runtime value
   size-assert-eq!(size-static(n) size-static(4))
 ```
 
-Folding currently covers `Static`/`Add`/`Mul` (and the `size-static`/`size-add`/
-`size-mul` value forms) at the assertion call site itself; sizes that arrive
-through a wrapper function fall back to the runtime check.
+Folding covers `Static`/`Add`/`Mul` (and the `size-static`/`size-add`/
+`size-mul` value forms) at the assertion call site itself. Sizes that arrive
+through a wrapper function still fall back to the runtime check *for the
+assertion forms above*; the **type-index** path (below) does propagate through
+wrappers, so the more common dimension checks are caught statically.
+
+### Cross-parameter unification and index propagation
+
+Beyond the assertion forms, the elaborator unifies size **indices** carried in
+parameter and field types:
+
+```turmeric
+; both parameters share `n`; a 2-vs-3 call is a COMPILE-TIME TUR-E0260:
+(defn pairwise-sum [xs : (SizedVec n) ys : (SizedVec n)] : int ...)
+
+(pairwise-sum (SVCons 1 (SVCons 2 (SVNil)))            ; n := 2
+              (SVCons 10 (SVCons 20 (SVCons 30 (SVNil)))))  ; n := 3 -> TUR-E0260
+```
+
+The same unification recovers indices across multi-index carriers
+(`(LaMatN m n)` -- the shared inner dimension of a matrix multiply), through
+`defstruct`/`defopaque` field projections (`(.fst p)` / `(.snd p)` into a
+shared-`n` callee), and through length-polymorphic helpers whose body re-wraps
+or threads the value. None of these require per-call re-annotation. The
+[fixtures under `tests/fixtures/sized-*`](../../tests/fixtures) exercise each
+case (accept + reject).
+
+The boundary is the same as for the assertion forms: an index that is only
+known at run time, or an open size expression with free variables that cannot
+be folded to a constant, stays polymorphic and falls through to the runtime
+predicates.
 
 ---
 

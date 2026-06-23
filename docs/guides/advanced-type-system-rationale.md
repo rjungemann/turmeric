@@ -224,13 +224,17 @@ Pattern matching on unions is exhaustive-checked: the elaborator requires a
 Sized types (`-Xsized-types`, which implies `-Xgadt` and is built on the GADT
 infrastructure) track container dimensions as type-level compile-time integers.
 
-> **Implementation status.** The example below is the *goal*: a dimension
-> mismatch caught at compile time. The shipped SZ0–SZ4 layer provides the
-> `Size` GADT, `SizedVec`, sized buffers/matrices/bitvecs, and the
-> `-Xsized-types` flag, but size checking is currently a **runtime** assertion
-> (the size index is still a phantom). Lifting it to a **static** check is
-> tracked in [sized-types-completion-plan.md](../sized-types-completion-plan.md)
-> (phases SZ6–SZ9).
+> **Implementation status.** The example below is shipped behavior: a
+> dimension mismatch whose sizes are statically known is caught at compile
+> time (`TUR-E0260`). The `Size` GADT, `SizedVec`, sized
+> buffers/matrices/bitvecs, and the (now default-on) `-Xsized-types` flag are
+> all in place, and the size index is lifted to the type level -- it unifies
+> across parameters, through `defstruct`/`defopaque` wrappers, and through
+> polymorphic helpers. Sizes only known at run time fall back to runtime
+> assertions. See the archived
+> [sized-types-completion-plan.md](../archive/history/sized-types-completion-plan.md)
+> (SZ6–SZ9) and
+> [sized-types-cross-param-unification-plan.md](../archive/history/sized-types-cross-param-unification-plan.md).
 
 ```turmeric
 ;; Matrix multiplication: dimensions must be compatible.

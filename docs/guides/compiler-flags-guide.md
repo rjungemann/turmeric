@@ -29,7 +29,7 @@ between flags.
 | `-Xsessions` | ✅ Complete (SS0–SS8) | Session types; `Session[P]`; `Send`/`Recv`/`Close`/`Choose`/`Branch`/`Rec`/`Timeout`; `make-session`; `defprotocol`; multi-party `Role`/`make-protocol`/`send-to`/`recv-from` | `-Xsubstructural` |
 | `-Xdynamic-vars` | ✅ Complete (DV0–DV4) | Dynamic vars; `defdynamic`; `binding`; dynamic-var `set!`; `spawn-conveying`; stdlib common vars (`*log-level*`, `*locale*`, etc.) | -- |
 | `-Xcallcc` | 🚫 Deprecated no-op | `call/cc` / `escape` are now real, sound, and **enabled by default** (undelimited capture on the CPS substrate). The flag prints a deprecation warning and has no effect; `TUR-E0700`/`TUR-E0701` are retired. | -- |
-| `-Xsized-types` | ⚠️ Partial (SZ0–SZ4) | Sized types over the `Size` GADT (`SizedVec`, `sized-buf`, `sized-matrix`, `sized-bits`); flag exists and implies `-Xgadt`; size checking is **runtime** today, static checking in progress (see [sized-types-completion-plan.md](../sized-types-completion-plan.md)) | `-Xgadt` |
+| `-Xsized-types` | ✅ Complete (SZ0–SZ9) | Sized types over the `Size` GADT (`SizedVec`, `sized-buf`, `sized-matrix`, `sized-bits`); enabled by default (flag is a deprecated no-op, still implies `-Xgadt`); static size checking with `TUR-E0260` for statically-known mismatches, runtime assertions for dynamic sizes | `-Xgadt` |
 
 **Always-on (no flag).** Higher-kinded types (`^f`/`^^f`, kind `* -> *`),
 higher-ranked types (`forall` inside argument positions; rank-2/rank-3), and
@@ -418,19 +418,23 @@ support it needs.
 tur -Xsized-types build sized-program.tur
 ```
 
-**Status (SZ0–SZ4):** The runtime layer ships -- `Size`, `SizedVec`, and the
-matrix/bitvec/buffer wrappers, plus the `-Xsized-types` flag itself. Size
-checking is currently a **runtime** assertion (`size-assert-eq!`,
-`sized-matrix-assert-shape!` reduce to `(= (size-eval s1) (size-eval s2))`).
-**Static** (type-level) size checking -- where a length-`n` vector's type
-mentions `n` and a dimension mismatch is a compile-time error -- is in
-progress; see [sized-types-completion-plan.md](../sized-types-completion-plan.md)
-(phases SZ6–SZ9).
+**Status (Complete, SZ0–SZ9):** The flag is now a **deprecated no-op** --
+sized types are enabled by default (SZ4+), so `-Xsized-types` only still
+implies `-Xgadt` for back-compat. The runtime layer (`Size`, `SizedVec`, the
+matrix/bitvec/buffer wrappers) ships, and **static** (type-level) size
+checking is in place: a length-`n` vector's type mentions `n`, and a
+dimension mismatch whose sizes fold to constants is a compile-time error
+(`TUR-E0260`). This covers cross-parameter unification
+(`(defn dot [a : (SizedVec n) b : (SizedVec n)] ...)`), propagation through
+`defstruct`/`defopaque` wrappers and field projections, and length-polymorphic
+helpers. The runtime assertions (`size-assert-eq!`,
+`sized-matrix-assert-shape!`) remain the fall-through for sizes that are only
+known at run time or are open expressions that cannot be folded.
 
 **Implies:** `-Xgadt`
 
 **See also:** [sized-types-guide.md](sized-types-guide.md),
-[sized-types-completion-plan.md](../sized-types-completion-plan.md)
+[archive/history/sized-types-completion-plan.md](../archive/history/sized-types-completion-plan.md)
 
 ---
 
@@ -550,5 +554,5 @@ turc -Xsubstructural -Xunion-types -Xintersection-types -Xeffect-types myfile.tu
 | `-Xcontracts` | CT phases | ✅ Complete (on by default) |
 | `-Xsessions` | SS0–SS8 | ✅ Complete |
 | `-Xdynamic-vars` | DV0–DV4 | ✅ Complete |
-| `-Xsized-types` | SZ0–SZ4 | ⚠️ Partial (runtime layer + flag; static checking SZ6–SZ9 in progress) |
+| `-Xsized-types` | SZ0–SZ9 | ✅ Complete (default-on no-op; static checking via `TUR-E0260`, runtime fallback for dynamic sizes) |
 | HKT / HRT / impredicative *(no flag)* | -- | ✅ Complete (always on) |
