@@ -1568,6 +1568,65 @@ static TuriValue ts_cont_resume(TuriEnv *env, TuriCont *c, int64_t w) {
     return turi_int(v);
 }
 
+/* SR N4 Slice 5: work-stack fold of a continuation resume.  ContFoldState holds
+ * the continuation, the current frame index (folding innermost-first, frames[0]
+ * outermost so i runs n-1..0), and the running int accumulator. */
+typedef struct { TuriCont *c; int32_t i; int64_t v; } ContFoldState;
+
+/* Advance the fold from s->i downward: apply pure arith frames to s->v in place,
+ * stopping at the first call frame (which must be applied on the work-stack).
+ * Returns 0 = done (s->v is final); 1 = a call frame at s->i needs applying,
+ * with fn / args (malloc'd, freed by the driver's have_apply path) / n_out
+ * filled; 2 = error (err set).  Mirrors ts_cont_resume's per-frame logic. */
+static int cont_fold_advance(ContFoldState *s, TuriValue *fn, TuriValue **args,
+                             uint32_t *n_out, TuriValue *err) {
+    while (s->i >= 0) {
+        TsFrame *fr = &s->c->frames[s->i];
+        if (fr->kind == 0) {
+            int64_t e0 = fr->env, v = s->v;
+            switch (fr->op) {
+            case '+': v = e0 + v; break;
+            case '*': v = e0 * v; break;
+            case '-': v = (fr->hole_index == 0) ? (v - e0) : (e0 - v); break;
+            case '/':
+                if (fr->hole_index == 0) {
+                    if (e0 == 0) { *err = turi_error("eval: cont resume: division by zero"); return 2; }
+                    v = v / e0;
+                } else {
+                    if (v == 0) { *err = turi_error("eval: cont resume: division by zero"); return 2; }
+                    v = e0 / v;
+                }
+                break;
+            default: *err = turi_errorf("eval: cont resume: bad op '%c'", fr->op); return 2;
+            }
+            s->v = v; s->i--; continue;
+        }
+        /* call frame: build args exactly as ts_cont_resume does. */
+        uint32_t   na = fr->n_args;
+        TuriValue *a  = (TuriValue *)malloc(2 * sizeof(TuriValue));
+        if (fr->ignore_value) {
+            if (na >= 1) { a[0] = fr->env_val; na = 1; }
+        } else if (na == 1) {
+            a[0] = turi_int(s->v);
+        } else if (fr->hole_index == 0) {
+            a[0] = turi_int(s->v); a[1] = fr->env_val;
+        } else {
+            a[0] = fr->env_val; a[1] = turi_int(s->v);
+        }
+        *fn = fr->fn; *args = a; *n_out = na;
+        return 1;
+    }
+    return 0;
+}
+
+/* True for the continuation-resume builtins the driver folds on the work-stack
+ * (DK_CONT_FOLD).  Clone / marshal / drop stay on the synchronous path. */
+static bool is_cont_resume_builtin(const BuiltinSpec *spec) {
+    const char *name = spec && spec->c_op ? spec->c_op : "";
+    return strcmp(name, "tur_cloneable_cont_resume") == 0 ||
+           strcmp(name, "tur_serial_cont_resume") == 0;
+}
+
 /* Dispatch the continuation-resume / clone / marshal builtins (BS_FUNC_CALL
  * with a tur_*_cont_* c_op).  Returns true and sets *out when handled.  The
  * handle is an int64 boxing a TuriCont*; serialize/deserialize round-trip
@@ -4118,6 +4177,14 @@ typedef enum {
                       * handle k.  Invoking (k v) raises env->aborting with
                       * abort_target = this boundary, unwinding the work-stack
                       * here.  Keeps call/cc nesting on the heap. */
+    DK_CONT_FOLD,    /* SR N4 Slice 5: folding a serial/cloneable continuation
+                      * resume on the work-stack.  aux = ContFoldState* (the
+                      * continuation, current frame index, accumulator).  Each
+                      * captured call frame is applied via the have_apply channel
+                      * and the result returns here, which advances past pure
+                      * arith frames and re-requests the next call frame -- so a
+                      * resumed frame that itself resumes folds onto the heap
+                      * instead of C-recursing through ts_cont_resume's turi_call. */
 } DriveKind;
 
 typedef struct {
@@ -5776,6 +5843,26 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     cur = turi_bool(true);  len--;   /* all operands truthy */
                 } else if (spec->shape == BS_OR_SC) {
                     cur = turi_bool(false); len--;   /* no operand truthy */
+                } else if (is_cont_resume_builtin(spec)) {
+                    /* SR N4 Slice 5: fold the continuation resume on the
+                     * work-stack instead of synchronously in ts_cont_resume, so a
+                     * resumed frame that itself resumes folds onto the heap.
+                     * Reuse this slot as a DK_CONT_FOLD; apply the first call
+                     * frame via have_apply (pure arith frames fold in place). */
+                    TuriCont *c = (n >= 1 && acc[0].as_int)
+                                ? (TuriCont *)(intptr_t)acc[0].as_int : NULL;
+                    int64_t w = (n >= 2) ? acc[1].as_int : 0;
+                    free(acc);
+                    if (!c) { cur = turi_int(0); len--; break; }
+                    ContFoldState *s = (ContFoldState *)malloc(sizeof(ContFoldState));
+                    s->c = c; s->i = (int32_t)c->n - 1; s->v = w;
+                    TuriValue ffn, *fargs, ferr; uint32_t fn_n;
+                    int rc = cont_fold_advance(s, &ffn, &fargs, &fn_n, &ferr);
+                    if (rc == 2) { cur = ferr; free(s); len--; break; }
+                    if (rc == 0) { cur = turi_int(s->v); free(s); len--; break; }
+                    top->kind = DK_CONT_FOLD; top->aux = s;   /* reuse this slot */
+                    apply_fn = ffn; apply_args = fargs; apply_n = fn_n;
+                    have_apply = true;   /* result returns to this DK_CONT_FOLD */
                 } else {
                     cur = eval_builtin(env, spec, acc, n);
                     free(acc); len--;
@@ -5841,6 +5928,32 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 free(nr);
                 cur = out;
                 len--;   /* pop; propagate the native's value */
+                break;
+            }
+            case DK_CONT_FOLD: {
+                /* SR N4 Slice 5: the call frame at s->i was applied, producing
+                 * `cur`.  Fold it into the accumulator (unless an ignore-value
+                 * do-tail frame), advance past pure arith frames, and re-request
+                 * the next call frame in this same slot (so the fold stays O(1)
+                 * on the work-stack); when no frames remain the resume value is
+                 * turi_int(s->v). */
+                ContFoldState *s = (ContFoldState *)top->aux;
+                if (signaled) { free(s); len--; break; }
+                TsFrame *fr = &s->c->frames[s->i];   /* the just-applied frame */
+                if (!fr->ignore_value) {
+                    if (cur.tag != TURI_INT) {
+                        cur = turi_errorf("eval: cont call frame returned non-int (tag %d)", cur.tag);
+                        free(s); len--; break;
+                    }
+                    s->v = cur.as_int;
+                }
+                s->i--;
+                TuriValue ffn, *fargs, ferr; uint32_t fn_n;
+                int rc = cont_fold_advance(s, &ffn, &fargs, &fn_n, &ferr);
+                if (rc == 2) { cur = ferr; free(s); len--; break; }
+                if (rc == 0) { cur = turi_int(s->v); free(s); len--; break; }
+                apply_fn = ffn; apply_args = fargs; apply_n = fn_n;
+                have_apply = true;   /* re-request; result returns to this slot */
                 break;
             }
             }

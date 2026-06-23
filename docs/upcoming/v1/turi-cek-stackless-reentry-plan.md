@@ -6,6 +6,37 @@ description: Eliminate the last source of unbounded C recursion in the tree-walk
 
 # Turi stackless native re-entry (full CEK / driver-CPS) -- Plan
 
+## Status update -- 2026-06-23 (N4 Slice 5 -- continuation resume fold on the work-stack)
+
+**The primary continuation resume (`(k v)` / `tur_cloneable_cont_resume`) now
+folds on the work-stack -- recursive resumes are heap-bounded.** Fifth slice.
+
+- New `DK_CONT_FOLD` DriveKind + `ContFoldState` (continuation, current frame
+  index, int accumulator) + `cont_fold_advance` (applies pure arith frames in
+  place, stops at each call frame for the driver to apply).
+- The driver's builtin-completion (`DK_BUILTIN_ARG`) intercepts the cont-resume
+  builtins (`is_cont_resume_builtin`): instead of the synchronous
+  `ts_cont_resume`, it reuses the slot as `DK_CONT_FOLD` and applies each
+  captured call frame via the `have_apply` channel; the result returns to
+  `DK_CONT_FOLD`, which folds it in and re-requests the next frame in the same
+  slot. A resumed frame whose function itself resumes another continuation thus
+  folds onto the heap instead of C-recursing through `ts_cont_resume`'s
+  `turi_call`.
+
+Result: a recursive-resume probe (a continuation whose captured frame calls a
+function that captures + resumes again) runs at 200000 heap-bounded (was
+recursion-limit at ~500); `cloneable-multi-resume` still prints 10, 20. New
+`tur_eval_tco` regression `re-go 200000`. `bash tests/run.sh` (1783/0), eval/
+effects/continuation/tco ctests (14/14), `eval-tco` (15/15), `run-turi` baseline
+(23).
+
+**Guard still cannot retire -- residual synchronous `ts_cont_resume` sites.**
+`native_resume_cont` (the `resume-cont!` workflow API) still folds synchronously
+and C-recurses on nested resumes (confirmed: still trips at 5000); the in-capture
+`is_pure` fold is also synchronous (but could not be driven recursive in
+probing). Routing `resume-cont!` through `DK_CONT_FOLD` is Slice 6; the bounded
+single re-entries (Show, sync `tvar/modify`, embedder `turi_call`) do not block.
+
 ## Status update -- 2026-06-23 (N4 Slice 4 -- capturing-shift receiver on the work-stack)
 
 **The capturing serial/cloneable shift receiver now runs on the work-stack --

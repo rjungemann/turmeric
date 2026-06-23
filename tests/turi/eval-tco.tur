@@ -160,3 +160,16 @@
   (serial-reset
     (+ 1 (serial-shift (fn [k] (if (= n 0) 0 (cap-rec (- n 1)))) 0))))
 (println (cap-rec 200000))
+
+;; --- Test 14 (SR N4 Slice 5): recursive continuation RESUME heap-bounded -----
+;; A continuation captured by cloneable-shift is resumed; its captured frame
+;; calls a function that captures + resumes another continuation.  Before Slice 5
+;; ts_cont_resume applied each captured frame via a synchronous turi_call, so
+;; this nested-resume C-recursed and tripped the guard at ~500.  The driver now
+;; folds the resume on the work-stack (DK_CONT_FOLD), re-requesting each call
+;; frame, so it is heap-bounded.  re-go N folds down to 0.
+(defn re-step [x :int] :int (if (= x 0) 0 (re-go (- x 1))))
+(defn re-go [n :int] :int
+  (let [k (cloneable-reset (re-step (cloneable-shift (fn [kk] kk) 0)))]
+    (tur_cloneable_cont_resume k n)))
+(println (re-go 200000))
