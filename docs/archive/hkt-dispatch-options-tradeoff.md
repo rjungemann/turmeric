@@ -6,12 +6,15 @@ description: The HKT dispatch design pass for end-to-end-monomorphization-plan.m
 
 # HKT class dispatch -- options tradeoff
 
-## Status (verified 2026-06-22)
+## Status (resolved 2026-06-23 -- archived)
 
-**Recommendation adopted and substantially landed.** Option 1 (full
-per-`(f, A)` monomorphization) is now the default HKT dispatch path;
-Track A of the parent end-to-end monomorphization plan was marked
-complete and archived.
+**Resolved -- recommendation adopted and landed.** Option 1 (full
+per-`(f, A)` monomorphization) is the default HKT dispatch path; Track A
+of the parent end-to-end monomorphization plan is complete and archived.
+This design pass has served its purpose (it chose Option 1 and pinned the
+Phase 3 acceptance criteria, all of which are now met or tracked in
+their own follow-ups), so it moves to the archive alongside the parent
+plan.
 
 - **Parent plan archived as complete.** Commit `08be4661` (2026-06-19,
   "docs: mark Track A (end-to-end monomorphization) complete") moved
@@ -44,8 +47,11 @@ complete and archived.
   close narrow carrier<->concrete crossing bugs (ascribed receivers,
   lifted closures, function-typed carriers). Structural follow-up
   tracked in `docs/archive/carrier-crossing-recovery-routing-plan.md`.
-- **Open item:** the "elaborator clone-count probe" to convert the
-  low-tens bound into an exact figure does not appear in the tree.
+- **Non-blocking residual:** the "elaborator clone-count probe" to
+  convert the low-tens bound into an exact figure was never built. It is
+  not on the v1 track -- the measured bound was sufficient to choose
+  Option 1, which has since landed -- so it does not hold up archiving
+  this design pass.
 
 ---
 
@@ -53,7 +59,8 @@ complete and archived.
 `../turmeric-spices/` checkout (depth-1 clone).
 
 This is the Phase 2.1 deliverable (measurement) + the Phase 2.2 recommendation
-of [`end-to-end-monomorphization-plan.md`](../end-to-end-monomorphization-plan.md).
+of [`end-to-end-monomorphization-plan.md`](end-to-end-monomorphization-plan.md)
+(also archived).
 
 ## 2.1 -- Measured HKT surface
 
@@ -194,10 +201,10 @@ time Phase 3 begins (the surface may have grown). The bound is sufficient to
 
 ## Cross-references
 
-- [`end-to-end-monomorphization-plan.md`](../end-to-end-monomorphization-plan.md)
-  Phases 2-3.
-- `docs/reported/kleisli-k-apply-raw-B-uninferable.md` (kind-`*` `Category`
+- [`end-to-end-monomorphization-plan.md`](end-to-end-monomorphization-plan.md)
+  Phases 2-3 (archived).
+- `docs/archive/history/kleisli-k-apply-raw-B-uninferable.md` (kind-`*` `Category`
   blocks the Kleisli arrow's element type -- a concrete instance of why HKT
-  dispatch is needed; Phase 1.4 is gated on this work).
-- `docs/reported/polymorphic-float-carrier-ascription-value-cast.md` (the
+  dispatch is needed; Phase 1.4 was gated on this work).
+- `docs/archive/history/polymorphic-float-carrier-ascription-value-cast.md` (the
   carrier-erasure mis-cast class option 2 would perpetuate).
