@@ -1,0 +1,11 @@
+;;; member-b deliberately omits any :spices entry for member-a -- it
+;;; relies on the workspace :members resolution to reach member-a.  The
+;;; transitive resolver must still seed member-a's :cmake-deps from the
+;;; enclosing workspace's :members list.
+(defpackage member-b
+  :name    "member-b"
+  :version "0.1.0"
+  :cmake-deps #{
+    "fakelib" #{:url "https://example.invalid/fakelib.git"
+                :ref "v2.0.0"}
+  })
