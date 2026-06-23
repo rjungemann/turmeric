@@ -24,22 +24,30 @@
 (defn null-ptr [] : ptr<void>
   ```c return NULL; ```)
 
+;; Borrow a Chan and hand back its raw ptr<void> representation without
+;; consuming the linear handle.  A linear Chan cannot be aliased across two
+;; fiber closures, so main keeps sole ownership of `ch` (freeing it once at the
+;; end) and lends this non-linear raw pointer to both fibers instead.
+(defn chan-raw [^borrow ch : Chan] : ptr<void>
+  ```c return (void *)ch; ```)
+
 (defn main [] : int
   (let [r   (reactor-new)
         g   (local-fiber-group-new r)
-        ch  (chan-new 4)]
+        ch  (chan-new 4)
+        chp (chan-raw ch)]
     ;; Receiver: park until a value arrives.  local-park-chan (tur/reactor) is
-    ;; not yet handle-typed (Tier 2), so the Chan is unwrapped to its ptr<void>
-    ;; representation inline -- the (:: ch :ptr<void>) ascription is the closure's
-    ;; only use of ch and must still be captured by env.
+    ;; not yet handle-typed (Tier 2), so it takes the channel's ptr<void>
+    ;; representation -- the borrowed raw pointer `chp`, captured by env.
     (local-spawn g
       (fn [user] : nil
-        (print-got (local-park-chan g (:: ch :ptr<void>))))
+        (print-got (local-park-chan g chp)))
       (null-ptr))
-    ;; Sender: send then wake so the poll returns and the bridge fires.
+    ;; Sender: send then wake so the poll returns and the bridge fires.  The
+    ;; raw pointer is reinterpreted back to a Chan for the (borrowing) send.
     (local-spawn g
       (fn [user] : nil
-        (chan-send ch 99)
+        (chan-send (:: chp Chan) 99)
         (print-sent 99)
         (reactor-wake r))
       (null-ptr))
