@@ -141,6 +141,64 @@ Rules:
 
 ---
 
+## Uniqueness inference
+
+You do not have to hand-write `^unique` on a let-binding whose initializer is
+already a uniquely-owned value. The elaborator infers uniqueness from the
+initializer's type (`CK_UNIQUE` -- e.g. a `ref<T>` factory result or a call that
+returns `^unique`) and applies the same alias / use-after-consume checks:
+
+```turmeric
+(defn make-ref [n : int] : ref
+  (ref/from-rc (rc/of n)))
+
+(defn example [] : unit
+  (let [r (make-ref 42)]   ;; inferred ^unique -- no annotation needed
+    (use-once r)
+    (use-once r)))          ;; ERROR TUR-E0201: 'r' already consumed
+```
+
+```sweet-exp
+defn make-ref [n : int] : ref
+  ref/from-rc(rc/of(n))
+
+defn example [] : unit
+  let [r make-ref(42)]     ;; inferred ^unique -- no annotation needed
+    use-once(r)
+    use-once(r)             ;; ERROR TUR-E0201: 'r' already consumed
+```
+
+At an `if`/`match` join the uniqueness of the two arms is combined: two unique
+arms join to unique, but a unique arm joined with a shared arm downgrades to
+shared (a safe weakening -- the result may be aliased through the shared arm).
+Re-annotate `^unique` on the binding to force the stricter discipline.
+
+---
+
+## Common patterns
+
+`stdlib/unique.tur` (auto-loaded under `-Xunique-types`) captures the recurring
+linear-resource shapes so you stop open-coding the manual annotations:
+
+| Form | Use |
+|---|---|
+| `(with-unique [name init] body...)` | Scope a `^unique` binding over a body without writing the annotation |
+| `(consume x f)` | Thread a unique `x` through a single transforming call `(f x)` |
+| `(replace old new)` | Displace a unique value, returning the old one (value-semantics `mem::replace` stand-in) |
+
+```turmeric
+;; Instead of hand-rolling (let [^unique buf (make-buf)] ...):
+(with-unique [buf (make-buf)]
+  (consume buf buf-finish))      ;; ownership threaded into buf-finish
+```
+
+```sweet-exp
+with-unique [buf make-buf()]
+  consume(buf buf-finish)        ;; ownership threaded into buf-finish
+```
+
+---
+
 ## Interaction with `rc<T>`
 
 Wrapping a `^unique` value inside `rc<T>` is forbidden -- shared reference counting

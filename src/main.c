@@ -728,6 +728,12 @@ static int compile_to_c(const char *path, Buf *out_c,
          * (skipped below otherwise) so default builds and their codegen
          * snapshots are unaffected. */
         "sym.tur",
+        /* UT3 (uniqueness-types-ut2-ut3-plan): unique.tur provides the
+         * with-unique / consume / replace pattern forms over the ^unique
+         * discipline.  Only auto-loaded under -Xunique-types (skipped below
+         * otherwise) so default builds and their codegen snapshots are
+         * unaffected. */
+        "unique.tur",
         /* Phase T19-C/D stdlib files (mutex, rwlock, condvar, sync, thread, chan,
          * atomic) are NOT auto-loaded here to avoid polluting every program's
          * generated C and invalidating codegen snapshots.  They are library files
@@ -767,6 +773,9 @@ static int compile_to_c(const char *path, Buf *out_c,
             continue;
         /* SYM4: sym.tur is only auto-loaded under -Xsymbols (see array). */
         if (!g_symbols_enabled && strcmp(stdlib_files[i], "sym.tur") == 0)
+            continue;
+        /* UT3: unique.tur is only auto-loaded under -Xunique-types (see array). */
+        if (!g_unique_enabled && strcmp(stdlib_files[i], "unique.tur") == 0)
             continue;
         /* RD: schema.tur is only auto-loaded under -Xschema-reader (see array). */
         if (!g_schema_reader_enabled && strcmp(stdlib_files[i], "schema.tur") == 0)

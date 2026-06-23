@@ -18,3 +18,4 @@
 
 json.tur    -- reader-backed (-Xdata-literals/-Xjson gated); preloaded only behind the same -X flag as the compiled path, not unconditionally.
 schema.tur  -- reader-backed (-X gated) and depends on json.tur; same conditional-preload story as json.tur.
+unique.tur  -- uniqueness pattern forms (with-unique/consume/replace), gated on -Xunique-types; preloaded only behind that same -X flag in the compiled path, not unconditionally in the interpreter.

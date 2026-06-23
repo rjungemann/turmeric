@@ -1,0 +1,14 @@
+;; UT2: uniqueness inference fires without an explicit ^unique annotation.
+;; `r` is a ref<T> factory result (CK_UNIQUE); consuming it twice is rejected
+;; with TUR-E0201 even though the binding was never hand-annotated ^unique.
+(defn make-ref [n : int] : ref
+  (ref/from-rc (rc/of n)))
+
+(defn use-ref [^unique r : ref] : int
+  1)
+
+(defn main [] : int
+  (let [r (make-ref 7)]
+    (use-ref r)
+    (use-ref r))
+  0)

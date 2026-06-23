@@ -1,0 +1,11 @@
+;; UT2 (phi join): when both arms of an if are unique, the join is unique.
+;; `r` (inferred from `a`/`b`, both ^unique) may be consumed at most once.
+(defn use1 [^unique x : int] : int 1)
+
+(defn main [] : int
+  (let [^unique a 1
+        ^unique b 2]
+    (let [r (if (> 1 0) a b)]
+      (use1 r)
+      (use1 r)))
+  0)

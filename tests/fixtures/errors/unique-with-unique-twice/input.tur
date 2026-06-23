@@ -1,0 +1,8 @@
+;; UT3: with-unique binds ^unique, so consuming it twice is rejected (E0201).
+(defn use-once [^unique x : int] : int x)
+
+(defn main [] : int
+  (with-unique [u 7]
+    (use-once u)
+    (use-once u))
+  0)
