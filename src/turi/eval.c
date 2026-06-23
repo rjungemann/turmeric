@@ -4027,6 +4027,11 @@ typedef enum {
     DK_CALL_RET,     /* EX_CALL (T3.2b): non-tail turi-body callee, body in the loop */
     DK_PROMPT,       /* EX_HANDLE (DC): delimited-control prompt; aux = HandleExpr*,
                       * frame = handler lexical frame, index = active flag (1/0). */
+    DK_NATIVE_RESUME,/* SR (turi-cek-stackless-reentry): a native/special-form HOF
+                      * suspended onto the work-stack while the driver applies a
+                      * closure on its behalf.  aux = NativeResume* (resume fn +
+                      * opaque state).  Sits beneath the application it requested,
+                      * the structural twin of tur's DKK_FRAME. */
 } DriveKind;
 
 typedef struct {
@@ -4155,6 +4160,50 @@ static TuriValue turi_ws_cont_val(TuriWsCont *wc) {
     TuriEffectCont *c = (TuriEffectCont *)calloc(1, sizeof(TuriEffectCont));
     c->ws = wc;
     return turi_effect_cont(c);
+}
+
+/* -------------------------------------------------------------------------
+ * SR (turi-cek-stackless-reentry-plan): native re-entry as a work-stack
+ * resume continuation.
+ *
+ * A re-entrant native / special form that must apply a closure stops calling
+ * back through the C stack (turi_call -> eval_apply -> eval_drive_ex on a fresh
+ * C frame).  Instead it requests the application from the driver: it pushes a
+ * DK_NATIVE_RESUME frame carrying (state, resume), and asks the driver to apply
+ * the closure on the work-stack beneath it.  When the application completes the
+ * driver calls `resume(env, state, applied, &done, &out)`:
+ *   - `*out`  is the value this resume yields,
+ *   - `*done` is currently always true (single-shot; N2+ extends to loops where
+ *     resume re-requests the next application and the slot is reused).
+ * The native's C frame no longer spans the callback, so the callback's own
+ * recursion is heap-bounded on the work-stack rather than nesting C frames.
+ * ---------------------------------------------------------------------- */
+typedef TuriValue (*TuriNativeResumeFn)(TuriEnv *env, void *state,
+                                        TuriValue applied, bool *done,
+                                        TuriValue *out);
+typedef struct {
+    TuriNativeResumeFn resume;
+    void              *state;
+} NativeResume;
+
+/* tvar/modify (SR N1 conversion target): state captured between the read and
+ * the commit that straddle the user fn application. */
+typedef struct { TuriTVar *tv; int64_t old; } TvarModifyState;
+
+/* resume for tvar/modify: `applied` is fn(old).  Commit it to the write-log and
+ * yield the OLD value (read-modify-write returns the prior value). */
+static TuriValue tvar_modify_resume(TuriEnv *env, void *state, TuriValue applied,
+                                    bool *done, TuriValue *out) {
+    TvarModifyState *s = (TvarModifyState *)state;
+    *done = true;
+    if (turi_is_error(applied) || env->returning || env->throwing) {
+        *out = applied;                       /* fn signalled: propagate, no commit */
+    } else {
+        stm_log_write(g_stm_tx, s->tv, applied.as_int);
+        *out = turi_int(s->old);
+    }
+    free(s);
+    return *out;
 }
 
 /* Conservative "does evaluating e synchronously perform an effect?" -- returns
@@ -4468,7 +4517,70 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
         tail = true;
     }
 
+    /* SR: pending closure-application request from a DK_NATIVE_RESUME native.
+     * When set, the loop dispatches the application of `apply_fn` to the
+     * heap-owned `apply_args` onto the work-stack (feeding the DK_NATIVE_RESUME
+     * frame already pushed beneath it) before resuming ordinary descent. */
+    bool        have_apply = false;
+    TuriValue   apply_fn   = turi_nil();
+    TuriValue  *apply_args = NULL;
+    uint32_t    apply_n    = 0;
+
     for (;;) {
+        if (have_apply) {
+            /* Apply `apply_fn` to apply_args[0..apply_n).  The result returns to
+             * the DK_NATIVE_RESUME frame beneath, so this is ALWAYS a non-tail
+             * application (never reuse the enclosing activation's DK_CALL_RET). */
+            have_apply = false;
+            TuriValue  clv = apply_fn;
+            TuriValue *acc = apply_args;
+            uint32_t   n   = apply_n;
+            apply_args = NULL;
+            if (clv.tag != TURI_CLOSURE || !clv.as_closure) {
+                cur = turi_error("eval: native-resume apply: not a closure");
+                free(acc); descending = false; continue;
+            }
+            TuriClosure *cl = clv.as_closure;
+            FnDef       *fn = (FnDef *)cl->fn;
+            bool foldable = !cl->native && fn && fn->body &&
+                            fn->body->kind != EX_INLINE_C;
+            if (!foldable) {
+                /* Leaf (native / inline-C): dispatched synchronously via
+                 * eval_apply, exactly as the DK_CALL_ARG leaf path does. */
+                cur = eval_apply(env, cl, acc, n);
+                free(acc); descending = false; continue;
+            }
+            uint32_t param_offset     = cl->skip_env_param ? 1u : 0u;
+            uint32_t effective_params = (uint32_t)fn->n_params - param_offset;
+            if (effective_params != n) {
+                cur = turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
+                                  fn->binding ? fn->binding->name->name : "<fn>",
+                                  (unsigned)effective_params, (unsigned)n);
+                free(acc); descending = false; continue;
+            }
+            if (env->step_fuel_limit > 0) {
+                if (env->step_fuel == 0) {
+                    cur = turi_error("eval: step fuel exhausted");
+                    free(acc); descending = false; continue;
+                }
+                env->step_fuel--;
+            }
+            EvalFrame *call_frame = eval_frame_new((EvalFrame *)cl->captured);
+            for (uint32_t i = 0; i < n; i++)
+                frame_bind(call_frame,
+                           fn->params[param_offset + i]->name->name, acc[i]);
+            free(acc);
+            DRIVE_PUSH(((DriveCont){ .kind = DK_CALL_RET, .frame = call_frame,
+                                     .aux = env->defer_stack,
+                                     .saved_module  = env->current_module,
+                                     .was_returning = env->returning,
+                                     .was_no_unwind = env->in_no_unwind }));
+            env->current_module = cl->module;
+            env->returning      = false;
+            env->in_no_unwind   = fn->binding && fn->binding->no_unwind;
+            control = fn->body; cf = call_frame; tail = true; descending = true;
+            continue;
+        }
         if (descending) {
             switch (control->kind) {
             case EX_IF:
@@ -4839,6 +4951,39 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 cur = v; descending = false;
                 break;
             }
+            case EX_TVAR_MODIFY: {
+                /* SR N1: read-modify-write via the work-stack resume protocol.
+                 * Read old, then ask the driver to apply fn(old) -- when it
+                 * completes, tvar_modify_resume commits the result and yields
+                 * old.  The user fn no longer runs on a re-entrant C frame; its
+                 * own recursion folds onto the work-stack.  (eval_expr_impl keeps
+                 * a synchronous EX_TVAR_MODIFY for non-driver callers.) */
+                if (!g_stm_tx) {
+                    cur = turi_error("eval: tvar/modify used outside of an atomically block");
+                    descending = false; break;
+                }
+                TuriValue err = turi_nil();
+                TuriTVar *tv = stm_eval_tvar(env, cf, control->as.tvar_modify_.tvar, &err);
+                if (!tv) { cur = err; descending = false; break; }
+                TuriValue fn = eval_expr(env, cf, control->as.tvar_modify_.fn);
+                if (turi_is_error(fn) || env->returning || env->throwing) {
+                    cur = fn; descending = false; break;
+                }
+                int64_t old = stm_read(g_stm_tx, tv);
+                TvarModifyState *s = (TvarModifyState *)malloc(sizeof(TvarModifyState));
+                s->tv = tv; s->old = old;
+                NativeResume *nr = (NativeResume *)malloc(sizeof(NativeResume));
+                nr->resume = tvar_modify_resume; nr->state = s;
+                DRIVE_PUSH(((DriveCont){ .kind = DK_NATIVE_RESUME, .aux = nr }));
+                apply_fn   = fn;
+                apply_args = (TuriValue *)malloc(sizeof(TuriValue));
+                apply_args[0] = turi_int(old);
+                apply_n    = 1;
+                have_apply = true;
+                /* descending stays true; the have_apply branch at the loop top
+                 * dispatches the application next iteration. */
+                break;
+            }
             default:
                 /* Black box: evaluate any other kind via the recursive path. */
                 cur = eval_expr(env, cf, control);
@@ -5156,6 +5301,22 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 env->current_module = top->saved_module;
                 env->in_no_unwind   = top->was_no_unwind;
                 len--;   /* pop; propagate cur (value or signal) */
+                break;
+            }
+            case DK_NATIVE_RESUME: {
+                /* SR: the requested application produced `cur`.  Hand it to the
+                 * native's resume callback, which yields the native's value in
+                 * `out` (and, single-shot for N1, sets done=true).  The resume
+                 * also handles a signalled `cur` (it propagates without
+                 * committing).  N2+ will re-request another application here when
+                 * done == false, reusing this slot for loop natives. */
+                NativeResume *nr = (NativeResume *)top->aux;
+                bool      done = true;
+                TuriValue out  = turi_nil();
+                nr->resume(env, nr->state, cur, &done, &out);
+                free(nr);
+                cur = out;
+                len--;   /* pop; propagate the native's value */
                 break;
             }
             }
