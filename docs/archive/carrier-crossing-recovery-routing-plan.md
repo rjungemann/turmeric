@@ -8,20 +8,24 @@ description: The crossing audit (docs/archive/carrier-concrete-abi-crossing-audi
   shared recovery routines MANDATORY chokepoints every crossing passes through,
   so a new emit site is correct by construction instead of being the next fish.
   It exists so the unification work is not lost between one-off gap closures.
-status: OPEN -- proposed. Sequenced after the audit's P1 (stress-matrix
-  fixtures) and interleaved with P2 (gap closures G2-G7).
+status: RESOLVED -- archived 2026-06-23. All R0-R4 structural pieces
+  landed; the actionable dispatch-side collapse is done and the only
+  remaining items are by-design exclusions documented in the inventory.
 ---
 
 # Routing carrier <-> concrete crossings through shared recovery chokepoints
 
-## Status (verified 2026-06-22, post-PR #505)
+## Status (RESOLVED, archived 2026-06-23; structural status verified post-PR #505)
 
-**LARGELY LANDED.** All R0-R4 structural pieces are in place: the value,
+**LANDED.** All R0-R4 structural pieces are in place: the value,
 dispatch, and fn-value axes each have a single named chokepoint, the
-value-side ad-hoc copies are migrated, the R3 Debug-only ICE is wired,
-and R4's static registry + CI check ship in `tests/run.sh`. What remains
-is the dispatch-side branch collapse and the by-design exclusions called
-out in the inventory.
+value-side ad-hoc copies are migrated, the dispatch-side constraint-var
+mapping is collapsed onto the shared `emit_abi_constraint_var_bindings`
+kernel, the R3 Debug-only ICE is wired, and R4's static registry + CI
+check ship in `tests/run.sh`. The only remaining items are by-design
+exclusions called out in the inventory (the `emit_abi_register_call`
+`abi_changes` arg/result block and the fn-value inner-clone derivation),
+which would change behavior if merged -- so this plan is closed.
 
 - **R0 -- Inventory.** DONE for value side; dispatch and fn-value axes
   inventoried with by-design exclusions documented. Tables below match

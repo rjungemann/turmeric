@@ -1,5 +1,5 @@
 # crossing-routing-audit.txt -- R4 registry of carrier<->concrete recovery
-# chokepoint call sites (docs/upcoming/carrier-crossing-recovery-routing-
+# chokepoint call sites (docs/archive/carrier-crossing-recovery-routing-
 # plan.md).  Generated/checked by tools/check_crossing_routing.py.
 #
 # Format: <routine> <file.c> <call-site-count>.  Regenerate with

@@ -160,7 +160,7 @@ void emit_abi_assert_routed_concrete(EmitCtx *ctx, const Type *recovered,
             "  type kind   : %d (a recovery chokepoint returned a non-concrete "
             "type)\n"
             "This is a 'forgot to route' routing hole "
-            "(docs/upcoming/carrier-crossing-recovery-routing-plan.md, R3).\n"
+            "(docs/archive/carrier-crossing-recovery-routing-plan.md, R3).\n"
             "Set TUR_ABI_NO_ROUTE_ICE=1 to downgrade to a warning while fixing.\n",
             site, spec_name, (int)recovered->kind);
     abort();
