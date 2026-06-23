@@ -30,6 +30,9 @@ TypeClass *typeclass_env_register_typeclass(TypeClassEnv *env, const Symbol *nam
     tc->n_methods = 0;
     tc->assoc_type_names = NULL;
     tc->n_assoc_types = 0;
+    tc->has_fundep = false;
+    tc->fundep_from_mask = 0;
+    tc->fundep_to_mask = 0;
     tc->from_stdlib = false;
     tc->next = env->typeclasses;
     env->typeclasses = tc;
@@ -95,15 +98,41 @@ TypeClass *typeclass_env_find_assoc_type(const TypeClassEnv *env,
 const Type *typeclass_env_resolve_assoc_type(const TypeClassEnv *env,
                                              const Symbol *assoc_name,
                                              const Type *type_arg) {
+    return typeclass_env_resolve_assoc_type_n(env, assoc_name, type_arg, 1);
+}
+
+/* assoc-types-2 (MP4): N-ary projection resolver.  Matches the instance whose
+ * arity is `n_type_args` and whose every type arg is structurally equal to the
+ * corresponding projection-site type.  The single-arg path (n == 1) is the
+ * default and stays the fast common case. */
+const Type *typeclass_env_resolve_assoc_type_n(const TypeClassEnv *env,
+                                               const Symbol *assoc_name,
+                                               const Type *type_args,
+                                               uint8_t n_type_args) {
     uint8_t assoc_idx = 0;
     TypeClass *tc = typeclass_env_find_assoc_type(env, assoc_name, &assoc_idx);
-    if (!tc || !type_arg) return NULL;
+    if (!tc || !type_args || n_type_args == 0) return NULL;
+    TypeClassInstance *inst =
+        typeclass_env_lookup_instance_exact(env, tc, type_args, n_type_args);
+    if (!inst) return NULL;
+    if (assoc_idx >= inst->n_assoc_types || !inst->assoc_types) return NULL;
+    return &inst->assoc_types[assoc_idx];
+}
+
+/* assoc-types-2 (MP1): N-ary exact structural instance lookup. */
+TypeClassInstance *typeclass_env_lookup_instance_exact(const TypeClassEnv *env,
+                                                       const TypeClass *typeclass,
+                                                       const Type *type_args,
+                                                       uint8_t n_type_args) {
+    if (!typeclass || !type_args || n_type_args == 0) return NULL;
     for (TypeClassInstance *inst = env->instances; inst != NULL; inst = inst->next) {
-        if (inst->typeclass != tc) continue;
-        if (inst->n_type_args != 1 || !inst->type_args) continue;
-        if (!type_eq(inst->type_args[0], *type_arg)) continue;
-        if (assoc_idx >= inst->n_assoc_types || !inst->assoc_types) return NULL;
-        return &inst->assoc_types[assoc_idx];
+        if (inst->typeclass != typeclass) continue;
+        if (inst->n_type_args != n_type_args || !inst->type_args) continue;
+        bool all_eq = true;
+        for (uint8_t i = 0; i < n_type_args; i++) {
+            if (!type_eq(inst->type_args[i], type_args[i])) { all_eq = false; break; }
+        }
+        if (all_eq) return inst;
     }
     return NULL;
 }

@@ -3070,7 +3070,7 @@ static double add_hy1(double);
 static double call_hyf(int64_t, double);
 static bool some___spec__bool_Option__opaque(Option__opaque);
 static Cons__int * tcons__spec__Cons__int___int64_t_int64_t(int64_t, int64_t);
-static void * _____spec__void___int64_t_size_t(int64_t, int64_t);
+static void * _____spec__void___int64_t_int64_t(int64_t, int64_t);
 static double __fn_1277__spec__double_void___double(void *, double);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
@@ -6224,7 +6224,7 @@ int main(int argc, char **argv) {
             __t101[0] = (int64_t)(intptr_t)__tur_fatshim_double_double;
             __t101[1] = (int64_t)(intptr_t)scale_hy2;
             void *__t102 = __t101;
-            void * h1_1491 = _____spec__void___int64_t_size_t((int64_t)(intptr_t)(__t100), (int64_t)(intptr_t)(__t102));
+            void * h1_1491 = _____spec__void___int64_t_int64_t((int64_t)(intptr_t)(__t100), (int64_t)(intptr_t)(__t102));
             (void)h1_1491;
             printf("%g\n", (double)(call_hyf((int64_t)(intptr_t)(h1_1491), 3.0)));
             printf("%g\n", (double)(call_hyf((int64_t)(intptr_t)(h1_1491), 4.0)));
@@ -6250,7 +6250,7 @@ static double __fn_1277__spec__double_void___double(void * __env_p_1280, double 
         return (*( tur_thunk_double_double_t *)((void *)(intptr_t)(__env___env_1279__spec__double->gv)))((void *)(intptr_t)(__env___env_1279__spec__double->gv), (*( tur_thunk_double_double_t *)((void *)(intptr_t)(__env___env_1279__spec__double->fv)))((void *)(intptr_t)(__env___env_1279__spec__double->fv), x));
 }
 
-static void * _____spec__void___int64_t_size_t(int64_t f, int64_t g) {
+static void * _____spec__void___int64_t_int64_t(int64_t f, int64_t g) {
         void * __t105;
         {
             int64_t fv = (int64_t)(intptr_t)(f);

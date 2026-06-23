@@ -157,14 +157,27 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
          * so resolve the projection here too.  Fires only when `head` is a
          * declared associated type member, leaving every ordinary application
          * unchanged. */
-        if (form->as.list.len == 2) {
+        if (form->as.list.len >= 2) {
             uint8_t assoc_idx;
             if (typeclass_env_find_assoc_type(&e->typeclass_env, head, &assoc_idx)) {
-                Type *arg_t = fn_type_from_form(e, form->as.list.items[1],
+                /* assoc-types-2 (MP4): collect N projection arguments for a
+                 * multi-parameter class; `(Elem (Vec int))` is the n == 1 path. */
+                uint8_t n_args = (uint8_t)(form->as.list.len - 1);
+                Type arg_buf[MAX_FN_ARITY];
+                if (n_args > MAX_FN_ARITY) {
+                    diag_emit(DIAG_ERROR, form->span,
+                              "associated type '%s' projected over too many arguments",
+                              head->name);
+                    return NULL;
+                }
+                for (uint8_t i = 0; i < n_args; i++) {
+                    Type *a = fn_type_from_form(e, form->as.list.items[i + 1],
                                                 type_params, type_param_kinds, n_type_params);
-                if (!arg_t) return NULL;
-                const Type *bound = typeclass_env_resolve_assoc_type(
-                    &e->typeclass_env, head, arg_t);
+                    if (!a) return NULL;
+                    arg_buf[i] = *a;
+                }
+                const Type *bound = typeclass_env_resolve_assoc_type_n(
+                    &e->typeclass_env, head, arg_buf, n_args);
                 if (!bound) {
                     diag_emit(DIAG_ERROR, form->span,
                               "no instance binding for associated type '%s' at this type",

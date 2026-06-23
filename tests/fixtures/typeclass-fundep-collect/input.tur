@@ -1,0 +1,37 @@
+;; typeclass-fundep-collect -- assoc-types-2 Part A / MP2 + MP3.
+;;
+;; A two-parameter class with a functional dependency `| (s -> e)`: the
+;; storage parameter `s` determines the element parameter `e`.  The element
+;; appears only in the method's RETURN position, so dispatch must be keyed off
+;; the determining argument `s` and read `e` off the matched instance (MP3),
+;; rather than failing to find an instance from the return-only `e`.  Two
+;; storage backends `(Dense Pos)` / `(Sparse Vel)` dispatch to their own
+;; instance and return the right by-value element struct.
+
+(extern-c printf [^cstr fmt ^int v] : int)
+
+(defopaque Dense  [A] :int)
+(defopaque Sparse [A] :int)
+(defstruct Pos [x : int])
+(defstruct Vel [y : int])
+
+(defn dense-pos  [] : (Dense Pos)   ```c return 0; ```)
+(defn sparse-vel [] : (Sparse Vel)  ```c return 0; ```)
+
+(defclass StorageOps [s e] | (s -> e)
+  (sop-get [^borrow self : s idx : int] : e))
+
+(definstance StorageOps [(Dense Pos) Pos]
+  (sop-get [self idx] ```c (void)self; Pos r; r.x = (int64_t)(idx + 100); return r; ```))
+
+(definstance StorageOps [(Sparse Vel) Vel]
+  (sop-get [self idx] ```c (void)self; Vel r; r.y = (int64_t)(idx + 200); return r; ```))
+
+(defn main [] : int
+  (let [d : (Dense Pos)  (dense-pos)
+        v : (Sparse Vel) (sparse-vel)
+        p : Pos          (sop-get d 7)
+        q : Vel          (sop-get v 9)]
+    (printf "pos.x=%lld\n" (.x p))
+    (printf "vel.y=%lld\n" (.y q))
+    0))

@@ -6,20 +6,71 @@ description: The two pieces left out of the minimal associated-types milestone -
 
 # Typeclass Associated Types -- Follow-up Plan
 
-> **Status:** Not started. The single-parameter, type-level associated-types
-> milestone has shipped (see "Background" below); this plan covers the two
-> pieces explicitly left out of scope.
+> **Status:** Landed (2026-06-23). Part B (value-level projection, VP0--VP3)
+> had already shipped via the ECS E2d-P6 work; this pass completed Part A
+> (multi-parameter classes, functional dependencies, multi-param projection).
+> See "What landed" below.
 >
 > **Prerequisites:** the associated-types milestone
 > (`docs/reported/typeclass-associated-types-missing.md`, resolved) and the
 > existing per-type-parameter constraint infrastructure (`TypeConstraint`,
 > `param_idx`, `tyvar`; Phase PTC1--PTC6, Phase RT).
 >
-> **Flag:** `-Xassoc-types-2`. Both parts are gated behind one flag so the work
-> can land incrementally without disturbing existing dispatch. The flag implies
-> nothing else; the shipped (unflagged) single-param associated types stay on.
+> **Flag:** The plan originally proposed gating behind `-Xassoc-types-2`. That
+> gate was **dropped as unnecessary**: the codebase has deprecated the `-X`
+> flag family (they are silently accepted, see `is_known_deprecated_x_flag` in
+> `src/main.c`), and every change here is purely additive -- multi-param
+> projection only resolves forms that previously errored, and fundep coherence
+> only fires for classes that declare a `| (...)` clause (no existing class
+> does). Nothing pre-existing changes behavior, so no flag is needed.
 >
-> **Last updated:** 2026-06-11
+> **Last updated:** 2026-06-23
+
+---
+
+## What landed (2026-06-23)
+
+Part A is complete; Part B was already in place (ECS E2d-P6).
+
+| Phase | Status | Where |
+|---|---|---|
+| MP0 N-ary instance heads | pre-existing (E2d-P6) | `elab_typeclasses.c` combining loop + `build_inst_type_suffix` |
+| MP1 N-ary exact lookup | **landed** | `typeclass_env_lookup_instance_exact` (`typeclass.c`) |
+| MP2 fundep storage + parse | **landed** | `TypeClass.{has_fundep,fundep_from_mask,fundep_to_mask}` (`typeclass.h`); `| (from -> to)` parse in `elab_defclass` |
+| MP3 fundep-driven inference | **landed** (via return-dispatch) | existing Phase RT path; verified by `typeclass-fundep-collect` |
+| MP4 multi-param projection | **landed** | `typeclass_env_resolve_assoc_type_n` + both parser hooks accept `(Name T1 .. Tn)` |
+| MP5 coherence check | **landed** | "functional dependency violated" at `definstance` |
+| VP0--VP3 value projection | pre-existing (E2d-P6) | `elab_typeclasses.c`, `emit_*.c` |
+
+Surface delivered:
+
+```turmeric
+;; Functional dependency: storage s determines element e.
+(defclass StorageOps [s e] | (s -> e)
+  (sop-get [^borrow self : s idx : int] : e))
+;; Two instances sharing an `s` but disagreeing on `e` are now rejected.
+
+;; Multi-parameter associated-type projection.
+(defclass Collect [c e]
+  (type Acc : Type)
+  (collect-empty [self : c] : int))
+(defn bump [x : (Acc (Vec int) int)] : int (+ x 1))   ;; (Acc c e) resolves
+```
+
+Fixtures: `tests/fixtures/typeclass-fundep-collect`,
+`tests/fixtures/assoc-type-multiparam-projection`,
+`tests/fixtures/errors/typeclass-fundep-violated`.
+
+Not done (deferred, low demand):
+
+- **MP5 implicit fundep for associated types** (Open Question 3): each
+  single-output associated type could be treated as an implicit fundep target.
+  Explicit fundeps over type parameters are implemented; the implicit-from-
+  assoc-type unification is left for when a concrete consumer needs it.
+- **VP4 default methods that mention an associated type** (Open Question 1):
+  still per the recommendation -- left to reject/specialise on demand.
+- **Multiple fundeps per class** (Open Question 2): v1 stores a single
+  `from -> to`; widen the masks to an array only on demand.
 
 ---
 

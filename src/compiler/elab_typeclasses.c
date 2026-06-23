@@ -1345,7 +1345,80 @@ Expr *elab_defclass(Elab *e, const Form *call) {
             methods_start = 3;
         }
     }
-    
+
+    /* assoc-types-2 (Part A / MP2): optional functional-dependency clause
+     * `| (from... -> to...)` immediately after the type-param vector.  The `|`
+     * is a bare symbol; the following form is a parenthesized list with a `->`
+     * separating the determining (from) names from the determined (to) names.
+     * Example: (defclass Collect [c e] | (c -> e) ...).  A class with no `|`
+     * clause has has_fundep == false (every parameter must be fixed at the
+     * dispatch site). */
+    bool     fundep_has       = false;
+    uint16_t fundep_from_mask = 0;
+    uint16_t fundep_to_mask   = 0;
+    if (methods_start < call->as.list.len) {
+        Form *bar = call->as.list.items[methods_start];
+        if (bar->tag == F_SYM && strcmp(bar->as.sym->name, "|") == 0) {
+            if (methods_start + 1 >= call->as.list.len ||
+                call->as.list.items[methods_start + 1]->tag != F_LIST) {
+                diag_emit(DIAG_ERROR, bar->span,
+                          "functional dependency '|' must be followed by a "
+                          "(from... -> to...) list");
+                return NULL;
+            }
+            Form *fd = call->as.list.items[methods_start + 1];
+            /* Locate the '->' separator within the fundep list. */
+            int arrow_at = -1;
+            for (uint32_t i = 0; i < fd->as.list.len; i++) {
+                Form *t = fd->as.list.items[i];
+                if (t->tag == F_SYM && strcmp(t->as.sym->name, "->") == 0) {
+                    arrow_at = (int)i;
+                    break;
+                }
+            }
+            if (arrow_at < 0) {
+                diag_emit(DIAG_ERROR, fd->span,
+                          "functional dependency requires '->' (e.g. (c -> e))");
+                return NULL;
+            }
+            /* Map a fundep name to its type-parameter index, setting the bit. */
+            for (uint32_t i = 0; i < fd->as.list.len; i++) {
+                if ((int)i == arrow_at) continue;
+                Form *t = fd->as.list.items[i];
+                if (t->tag != F_SYM) {
+                    diag_emit(DIAG_ERROR, t->span,
+                              "functional dependency entries must be type-parameter names");
+                    return NULL;
+                }
+                int idx = -1;
+                for (uint8_t p = 0; p < n_type_params; p++) {
+                    if (type_params[p] && type_params[p] == t->as.sym) { idx = p; break; }
+                }
+                if (idx < 0) {
+                    diag_emit(DIAG_ERROR, t->span,
+                              "functional dependency names unknown type parameter '%s'",
+                              t->as.sym->name);
+                    return NULL;
+                }
+                if ((int)i < arrow_at) fundep_from_mask |= (uint16_t)(1u << idx);
+                else                   fundep_to_mask   |= (uint16_t)(1u << idx);
+            }
+            if (fundep_from_mask == 0 || fundep_to_mask == 0) {
+                diag_emit(DIAG_ERROR, fd->span,
+                          "functional dependency needs at least one parameter on "
+                          "each side of '->'");
+                return NULL;
+            }
+            if (fundep_from_mask & fundep_to_mask) {
+                diag_emit(DIAG_ERROR, fd->span,
+                          "functional dependency 'from' and 'to' parameters must be disjoint");
+                return NULL;
+            }
+            fundep_has = true;
+            methods_start += 2;
+        }
+    }
+
     /* Parse methods */
     TypeClassMethod *methods = NULL;
     uint8_t n_methods = 0;
@@ -1550,6 +1623,10 @@ Expr *elab_defclass(Elab *e, const Form *call) {
     tc->n_methods         = n_methods;
     tc->assoc_type_names  = n_assoc_types > 0 ? assoc_type_names : NULL;
     tc->n_assoc_types     = n_assoc_types;
+    /* assoc-types-2 (MP2): record the functional dependency (if any). */
+    tc->has_fundep        = fundep_has;
+    tc->fundep_from_mask  = fundep_from_mask;
+    tc->fundep_to_mask    = fundep_to_mask;
     /* Phase HKT-P4: record the file that defined this typeclass. */
     tc->origin_file_id    = call->span.file_id;
     /* method-vs-defn clash check: a class registered during stdlib auto-load is
@@ -2768,6 +2845,36 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         if (strcmp(prev_suffix, inst_type_suffix) == 0) {
             /* Already have this exact instance; emit nothing further. */
             return e_nil(e, call->span);
+        }
+    }
+
+    /* assoc-types-2 (Part A / MP5): functional-dependency coherence.  When the
+     * class declares `| (from -> to)`, two instances that agree on every `from`
+     * parameter must agree on every `to` parameter -- otherwise `to` is not
+     * functionally determined by `from`.  Reject the new instance if an existing
+     * one shares its `from` projection but disagrees on `to`.  (An exact
+     * duplicate would already have been swallowed by the idempotent guard
+     * above, so any match reaching here is a genuine conflict.) */
+    if (tc->has_fundep && n_type_args == tc->n_type_params) {
+        for (TypeClassInstance *prev = e->typeclass_env.instances; prev; prev = prev->next) {
+            if (prev->typeclass != tc || prev->n_type_args != n_type_args) continue;
+            bool from_eq = true;
+            for (uint8_t i = 0; i < n_type_args; i++) {
+                if (!(tc->fundep_from_mask & (uint16_t)(1u << i))) continue;
+                if (!type_eq(prev->type_args[i], type_args[i])) { from_eq = false; break; }
+            }
+            if (!from_eq) continue;
+            for (uint8_t i = 0; i < n_type_args; i++) {
+                if (!(tc->fundep_to_mask & (uint16_t)(1u << i))) continue;
+                if (!type_eq(prev->type_args[i], type_args[i])) {
+                    diag_emit(DIAG_ERROR, call->span,
+                              "functional dependency violated: '%s' already has an "
+                              "instance with this determining type but a different "
+                              "determined type",
+                              tc_name->name);
+                    return NULL;
+                }
+            }
         }
     }
 
