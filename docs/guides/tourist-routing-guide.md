@@ -285,5 +285,9 @@ tourist's function-composition middleware model.
 | `passes! & statuses :int` | `tourist/routing` | status-list `:int` | For `cascade-with!` only |
 | `req-full-path ctx :int` | `tourist/param` | `:cstr` | Original path, unstripped |
 
-See also: [web-stack-guide.md](web-stack-guide.md) for the broader
-tourist/httpd/template overview.
+See also:
+
+- [tourist-session-guide.md](tourist-session-guide.md) -- cookie-backed
+  sessions with swappable storage (memory, file).
+- [web-stack-guide.md](web-stack-guide.md) -- the broader
+  tourist/httpd/template overview.

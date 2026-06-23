@@ -299,6 +299,211 @@ raylib is on the cmake-deps path.
 - **Aliveness**: runtime, via generation comparison on every
   storage access.
 
+## Cross-world systems
+
+Some workloads do not fit inside a single world. Render extraction wants
+the simulation's components projected into a separate render world so
+the renderer never sees fields it is not supposed to read. Client-side
+prediction reconciles an authoritative server world against a locally
+predicted one. Save/snapshot pipelines copy live state into a frozen
+world before serialising. The `ecs/xsystem`, `ecs/xstage`, and
+`ecs/xmirror` modules ship the v1 surface for these two-world shapes:
+`defxsystem` declares a system that touches *two* worlds with paired
+`:reads-from` / `:writes-to` clauses, `defmirror` is the one-line
+shorthand for "copy one component verbatim between matching slots", and
+`XStage` schedules them with a (world, component) conflict key so
+non-conflicting cross-world systems coalesce into one parallel wave.
+
+### `defxsystem` -- two-world systems
+
+`defxsystem` takes two world bindings, then -- per world, in
+declaration order -- a `:reads-from <w> [...]` clause paired with a
+`:writes-to <w> [...]` clause. Every world the system touches therefore
+appears in exactly one read set and exactly one write set; the
+well-formedness rule holds by construction:
+
+```turmeric
+(defxsystem extract-renderables
+  [sim SimWorld  ren RenderWorld]
+  :reads-from  sim [Pos]
+  :writes-to   sim []
+  :reads-from  ren []
+  :writes-to   ren [RenderPos]
+  (do
+    (set-RenderPos! ren-RenderPos-write-cap ren 0
+      (:: (:: (get-Pos sim-Pos-read-cap sim 0) :int) :RenderPos))
+    (set-RenderPos! ren-RenderPos-write-cap ren 1
+      (:: (:: (get-Pos sim-Pos-read-cap sim 1) :int) :RenderPos))))
+```
+
+The macro expands to three top-level definitions: an `extract-renderables-impl`
+that takes the two typed worlds `^borrow`, an `extract-renderables-fn`
+that unboxes two `:int` carriers via `load-SimWorld` / `load-RenderWorld`
+and calls `-impl`, and an `extract-renderables` value of type `XSystem`
+that bundles the four per-world read/write masks with `-fn`. The
+`load-<WType>` helpers are user-written (same convention
+`sized-defsystem-scheduled` uses), and a matching `box-<WType>` is what
+the caller invokes to lift a world into the `:int` slot the scheduler
+threads through.
+
+Inside the body, every `:reads-from <w> [C ...]` puts a binding
+`<w>-<C>-read-cap : (XReadCap <WType> C)` in scope, and every
+`:writes-to <w> [C ...]` puts a `<w>-<C>-write-cap : (XWriteCap <WType> C)`
+in scope. The cap types pin the world: a `set-RenderPos!` accessor minted
+for `RenderWorld` rejects a `SimWorld`-keyed write-cap at elaboration
+time, so the body cannot write into the world it only declared as
+`:reads-from`. Write-caps are linear and the macro auto-consumes them at
+body end, so user code never calls `use-cap!` by hand.
+
+Each component `C` referenced still needs its world-local `C-cid`
+binding in scope at the call site, exactly as single-world `defsystem`
+requires. The same `C-cid` value can be reused across worlds because the
+conflict key is `(world-id, cid)` -- the world identity is what
+discriminates the lock target.
+
+### `defmirror` -- one-component cross-world copy
+
+`defmirror` is the render-extract one-liner. It lowers to a single
+`defxsystem` whose body loops `i` over `0..count-1`, copying
+`From@src[i]` into `To@dst[i]` through an `:int` round-trip:
+
+```turmeric
+(defmirror mirror-pos
+  [sim SimWorld  ren RenderWorld]
+  :count 2
+  :from  Pos
+  :to    RenderPos)
+```
+
+The source and destination components are named separately so the two
+worlds keep distinct types (`Pos` on `sim`, `RenderPos` on `ren`); both
+must be int-carried. The generated system declares
+`:reads-from sim [Pos]` and `:writes-to ren [RenderPos]`, so the cap
+discipline still applies -- `defmirror` cannot smuggle a write past the
+mask, it only saves the keystrokes. For non-trivial projections, or for
+several components in one pass, write the `defxsystem` directly.
+
+### `XStage` -- parallel scheduling across worlds
+
+A `BoundXSystem` is an `XSystem` resolved against concrete world
+identities (`w0-id`, `w1-id`) and boxed world handles. `bind-xsystem`
+threads both pairs in; a single-world system passes `w1-id = -1` and
+`w1 = 0` to leave slot 1 empty:
+
+```turmeric
+(let [sp (box-SimWorld sim)
+      rp (box-RenderWorld ren)
+      xs (xstage-new)
+      ws (bind-xsystem extract-renderables 0 sp 1 rp)]
+  (xstage-add! xs ws)
+  (xstage-run! xs)
+  ...
+  (xstage-free! xs))
+```
+
+`xstage-run!` recomputes a conflict-free wave partition on first run
+(and after any `xstage-add!`), then runs waves sequentially with the
+systems inside each wave running concurrently on pthreads. The
+**conflict key is `(world-id, component-bit)`**, which is the v1
+single-world rule lifted point-wise over the set of worlds a system
+touches. Two systems conflict iff there is *some* world they both touch
+where one's writes overlap the other's reads-or-writes. Worlds touched
+by only one of them are independent lock targets and never conflict.
+
+The practical payoff is that two systems writing the *same* component
+in *different* worlds coalesce into a single wave, while two writing
+the *same* `(world, component)` are forced into separate waves:
+
+```turmeric
+;; writeSim writes Pos in world 0, writeRen writes Pos in world 1.
+(xstage-add! xs writeSim)
+(xstage-add! xs writeRen)
+(xstage-run! xs)
+(xstage-n-waves xs)   ;; => 1  (different worlds, no conflict)
+
+;; writeRen and writeRen2 both write Pos in world 1.
+(xstage-add! ys writeRen)
+(xstage-add! ys writeRen2)
+(xstage-n-waves ys)   ;; => 2  (same world+component, forced apart)
+```
+
+`xstage-has-cycle?` is the static well-formedness check the cross-world
+plan calls for. It builds the producer-to-consumer edge set
+(`S -> T` when `T` reads a `(world, component)` `S` writes) and reports
+whether the result contains a cycle. A cyclic cross-world stage cannot
+be linearised by any wave order; split it with a sequencing barrier
+(run the offending systems in separate, sequenced stages) instead. Run
+the check once at startup before entering the simulation loop.
+
+### Capability typing across worlds
+
+`XReadCap` and `XWriteCap` (from `ecs/xcap`) are world-keyed analogues
+of the single-world caps. The two-parameter type `(XWriteCap W C)` is
+what lets the elaborator distinguish a `SimWorld` Pos-write from a
+`RenderWorld` Pos-write even though both occupy the same component bit.
+The single-world `defsystem` discipline still holds inside each world's
+slot: `:writes-to` is linear and the cap is auto-consumed at body end,
+so an undeclared write fails with the same
+`unbound symbol '<W>-<C>-write-cap'` shape called out in
+[substructural-types-guide](substructural-types-guide.md).
+
+### Plumbing: world boxes and component-id bindings
+
+A cross-world setup needs three pieces of glue per world type, all
+user-written today (a macro cannot splice identifiers into inline-C
+text):
+
+- `(defn box-<W> [w : <W>] : int ...)` -- malloc-copy the world struct
+  and return the `:int` carrier the scheduler threads.
+- `(defn load-<W> [wp : int] : <W> ...)` -- dereference the carrier
+  back into the typed world inside the per-slot run-fn.
+- `(defn free-<W>-box [wp : int] : nil ...)` -- free the malloc'd box
+  after the last `xstage-run!`.
+
+Plus a `(def <C>-cid <n>)` per component, per world. See
+`tests/xworld-extract.tur` in the ecs spice for the canonical shape.
+
+### Worked example: minimal extract pipeline
+
+```turmeric
+(sized-defworld-mono SimWorld    (Static 8) [Pos])
+(sized-defcomponent-accessors-xmono SimWorld Pos)
+
+(sized-defworld-mono RenderWorld (Static 8) [RenderPos])
+(sized-defcomponent-accessors-xmono RenderWorld RenderPos)
+
+(def Pos-cid       0)
+(def RenderPos-cid 0)
+
+;; box-/load-/free- helpers for each world type elided -- see plumbing above.
+
+(defmirror mirror-pos
+  [sim SimWorld  ren RenderWorld]
+  :count 8
+  :from  Pos
+  :to    RenderPos)
+
+(defn run-frame [sim : SimWorld ren : RenderWorld] : nil
+  (let [sp (box-SimWorld sim)
+        rp (box-RenderWorld ren)
+        xs (xstage-new)]
+    (xstage-add! xs (bind-xsystem mirror-pos 0 sp 1 rp))
+    (when (xstage-has-cycle? xs)
+      (panic "cross-world stage has a cycle -- split with a barrier"))
+    (xstage-run! xs)
+    (xstage-free! xs)
+    (free-SimWorld-box   sp)
+    (free-RenderWorld-box rp)))
+```
+
+In a real simulation loop the `XStage` is built once at startup, the
+`xstage-has-cycle?` check runs once, and `xstage-run!` is called per
+frame; only the world boxes flip per frame as the sim/render state
+advances.
+
+For the shipped plan and motivation, see
+[docs/archive/history/ecs-cross-world-systems-plan.md](../archive/history/ecs-cross-world-systems-plan.md).
+
 ## Sized worlds -- compile-time rectangular iteration
 
 The default `defworld` produces an *unsized* world: every storage
