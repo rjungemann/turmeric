@@ -694,6 +694,36 @@ typedef struct {
     uint32_t       boundary_out;
 } LoadExpandCtx;
 
+/* Normalize a (load "path") path into a stable dedup key. realpath() collapses
+ * an absolute auto-load path (`/abs/.../stdlib/json.tur`) and a cwd-relative
+ * user load (`stdlib/json.tur`) onto the same canonical string, so an explicit
+ * re-load of an already-auto-loaded stdlib module is recognised as a duplicate
+ * and skipped rather than re-spliced (which would collide with the auto-loaded
+ * defns -- the "already defined by an auto-loaded stdlib module" hard error).
+ * Falls back to the literal path when realpath() fails (e.g. an off-tree script
+ * whose cwd-relative `stdlib/...` does not resolve until the stdlib fallback). */
+static const Symbol *load_path_key(SymbolTable *st, const char *path) {
+    char resolved[4096];
+    if (realpath(path, resolved) != NULL)
+        return intern_cstr(st, resolved);
+    return intern_cstr(st, path);
+}
+
+/* Add a path key to the compilation-global load-visited set (idempotently). */
+static void load_dedup_register(Elab *e, const Symbol *key) {
+    for (uint32_t k = 0; k < e->n_load_expanded_paths; k++)
+        if (e->load_expanded_paths[k] == key) return;
+    if (e->n_load_expanded_paths >= e->cap_load_expanded_paths) {
+        e->cap_load_expanded_paths = e->cap_load_expanded_paths
+                                         ? e->cap_load_expanded_paths * 2 : 8;
+        e->load_expanded_paths = (const Symbol **)realloc(
+            (void *)e->load_expanded_paths,
+            e->cap_load_expanded_paths * sizeof(const Symbol *));
+        if (!e->load_expanded_paths) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    e->load_expanded_paths[e->n_load_expanded_paths++] = key;
+}
+
 static void load_expand_emit(LoadExpandCtx *lx, Arena *arena, Form *f) {
     if (lx->out_n >= lx->out_cap) {
         lx->out_cap = lx->out_cap ? lx->out_cap * 2 : 16;
@@ -769,25 +799,21 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
         char path_buf[4096];
         memcpy(path_buf, path_f->as.s.p, plen);
         path_buf[plen] = '\0';
-        const Symbol *key = intern_cstr(st, path_buf);
+        const Symbol *key = load_path_key(st, path_buf);
         /* The visited set is compilation-global (on the Elab) so a path the
          * entry already spliced is not re-spliced when an imported module loads
-         * it too -- and vice versa. See load_expanded_paths in elab_internal.h. */
+         * it too -- and vice versa. It is also seeded with the auto-loaded
+         * stdlib files (see elaborate_program), so an explicit `(load
+         * "stdlib/json.tur")` of a module that is already auto-loaded is a
+         * no-op rather than a redefinition error. See load_expanded_paths in
+         * elab_internal.h. */
         bool already = false;
         for (uint32_t k = 0; k < e->n_load_expanded_paths; k++) {
             if (e->load_expanded_paths[k] == key) { already = true; break; }
         }
         if (already) continue;  /* idempotent: a path is expanded at most once */
-        if (e->n_load_expanded_paths >= e->cap_load_expanded_paths) {
-            e->cap_load_expanded_paths = e->cap_load_expanded_paths
-                                             ? e->cap_load_expanded_paths * 2 : 8;
-            e->load_expanded_paths = (const Symbol **)realloc(
-                (void *)e->load_expanded_paths,
-                e->cap_load_expanded_paths * sizeof(const Symbol *));
-            if (!e->load_expanded_paths) { fprintf(stderr, "tur: oom\n"); abort(); }
-        }
         /* Mark visited BEFORE recursing so a self/cyclic load is skipped. */
-        e->load_expanded_paths[e->n_load_expanded_paths++] = key;
+        load_dedup_register(e, key);
 
         char *src_raw = NULL;
         size_t src_len = 0;
@@ -916,6 +942,27 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     builtins_init(st);
 
     int rc = 0;
+
+    /* Seed the load-visited set with the auto-loaded stdlib files. main.c
+     * pre-splices the stdlib forms[0..stdlib_prefix) directly (not as `(load
+     * ...)` forms), so they never pass through the dedup below. Registering
+     * their canonical paths here makes a later explicit `(load
+     * "stdlib/json.tur")` of an already-auto-loaded module (json/schema are
+     * unconditionally auto-loaded since the -X reader flags became no-ops) a
+     * no-op instead of a "already defined by an auto-loaded stdlib module"
+     * collision. Distinct file_ids in the stdlib region map 1:1 to the
+     * auto-loaded source files. */
+    {
+        uint16_t seen_file = (uint16_t)-1;
+        for (uint32_t i = 0; i < stdlib_prefix && i < nforms; i++) {
+            uint16_t fid = forms[i]->span.file_id;
+            if (fid == seen_file) continue;  /* runs are contiguous per file */
+            seen_file = fid;
+            const SourceFile *sf = diag_source_file(fid);
+            if (sf && sf->path)
+                load_dedup_register(&e, load_path_key(st, sf->path));
+        }
+    }
 
     /* Phase M: (load "path") preprocessing.
      * Expand all top-level (load "path") forms in place, depth-first and in

@@ -2770,6 +2770,14 @@ static Form *read_form(Reader *r) {
     if (c == '#' && peek2(r) == 's' && peek3(r) == '(') {
         return read_set(r);
     }
+    /* RR0: Range literal #r{...}.  Checked BEFORE try_read_data_literal: that
+     * helper's unknown-tag detector (TUR-E0283) greedily claims any `#<ident>{`
+     * shape not in its table, which includes `#r{`.  When data literals were an
+     * opt-in -X flag this was harmless (the helper was unreachable by default),
+     * but with the flag now always-on the range dispatch must win first. */
+    if (c == '#' && peek2(r) == 'r' && peek3(r) == '{') {
+        return read_range_literal(r);
+    }
     /* DL0: data literals #map{...} / #set{...} (opt-in via -Xdata-literals).
      * Placed after #{ and #s( so effect rows and #s(...) sets win; the helper
      * returns NULL without consuming when the input is not a data literal. */
@@ -2790,10 +2798,6 @@ static Form *read_form(Reader *r) {
     if (c == '#' && g_json_reader_enabled) {
         Form *m = try_read_json(r);
         if (m || r->error) return m;
-    }
-    /* RR0: Range literal #r{...} */
-    if (c == '#' && peek2(r) == 'r' && peek3(r) == '{') {
-        return read_range_literal(r);
     }
     /* Phase R5: Attribute syntax #[...] */
     if (c == '#' && peek2(r) == '[') {
