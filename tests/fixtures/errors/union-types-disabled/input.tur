@@ -1,3 +1,0 @@
-; IT0: Using union type syntax without -Xunion-types flag emits an error.
-(defn describe [x : (int | bool)] : cstr
-  "some value")

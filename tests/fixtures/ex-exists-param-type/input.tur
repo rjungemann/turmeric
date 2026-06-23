@@ -15,11 +15,11 @@
     return (const char *)buf;
     ```))
 
-(defn consume [e : (exists [a] [(Show a)] a)] : int
+(defn use-ex [e : (exists [a] [(Show a)] a)] : int
   (open e [_ v]
     (println (.show v)))
   0)
 
 (defn main [] : int
-  (consume (pack 42 (exists [a] [(Show a)] a)))
+  (use-ex (pack 42 (exists [a] [(Show a)] a)))
   0)

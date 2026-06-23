@@ -3416,6 +3416,14 @@ Expr *elab_match(Elab *e, const Form *call) {
         free(match_lin_before);
         free(match_lin_bindings);
         if (!lin_ok) { free(covered); return NULL; }
+    } else if (g_linear_enabled) {
+        /* linear_state_snapshot_bindings always allocates its buffers (cap=16),
+         * even when the outer scope holds no linear bindings (n_match_lin == 0).
+         * The merge block above only frees them when n_match_lin > 0, so free
+         * the snapshot here to avoid a LeakSanitizer-visible leak on every match
+         * elaborated with -Xlinear-types and no outer linear bindings. */
+        free(match_lin_before);
+        free(match_lin_bindings);
     }
 
     /* Exhaustiveness check */
@@ -3745,8 +3753,16 @@ Expr *elab_borrow_immut(Elab *e, const Form *call) {
         if (!scope_add_borrow(e->scope, target, BK_IMMUT, call->span)) {
             return NULL; /* Error already emitted */
         }
+        /* LT1: a borrow is a non-consuming read.  Elaborating the inner
+         * EX_VAR above marked the linear binding consumed (the generic
+         * EX_VAR path consumes on use); undo it so a later move/drop/consume
+         * of the owner is still valid.  With substructural/linear checking
+         * now always-on, omitting this turns `(& r)` ... `(drop! r)` into a
+         * spurious use-after-consume (TUR-E0101). */
+        if (g_linear_enabled && target->is_linear)
+            target->is_linear_consumed = false;
     }
-    
+
     /* Phase U: Borrowing from ptr<void> requires an unsafe context. */
     if (inner->type.kind == TY_PTR_VOID && e->unsafe_depth == 0) {
         diag_emit(DIAG_ERROR, call->span,
@@ -3807,6 +3823,10 @@ Expr *elab_borrow_mut(Elab *e, const Form *call) {
         if (!scope_add_borrow(e->scope, target, BK_MUT, call->span)) {
             return NULL; /* Error already emitted */
         }
+        /* LT1: a mutable borrow is also a non-consuming read -- undo the
+         * linear-consume the inner EX_VAR applied (see elab_borrow_immut). */
+        if (g_linear_enabled && target->is_linear)
+            target->is_linear_consumed = false;
     }
     
     /* Phase U: Borrowing from ptr<void> requires an unsafe context. */

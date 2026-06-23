@@ -1,7 +1,6 @@
 ;; DL3: #map{:k (+ 1 2)} evaluates the value slot.
+;; SYM3: keyword keys are first-class :Sym values -- look them up by keyword.
 (defn run [] : int
-  (let [m #map{:k (+ 1 2) :j (* 4 5)}
-        kk (hamt/hash-str "k")
-        kj (hamt/hash-str "j")]
-    (+ (map-get m kk) (map-get m kj))))
+  (let [m #map{:k (+ 1 2) :j (* 4 5)}]
+    (+ (:: (map-get m :k) :int) (:: (map-get m :j) :int))))
 (println (run))

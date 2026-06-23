@@ -1,10 +1,10 @@
 ;; DL3: nested literals -- a vec of maps, and a map whose value is a set.
+;; SYM3: keyword keys are first-class :Sym values -- look them up by keyword.
 (defn vec-of-maps [] : int
   (let [v [#map{:k 1} #map{:k 2}]]
     (vec-len v)))
 (defn map-with-set [] : int
-  (let [m #map{:tags #set{1 2 3}}
-        kt (hamt/hash-str "tags")]
-    (set-count (map-get m kt))))
+  (let [m #map{:tags #set{1 2 3}}]
+    (set-count (map-get m :tags))))
 (println (vec-of-maps))
 (println (map-with-set))
