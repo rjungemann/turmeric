@@ -14,51 +14,66 @@ status: OPEN -- proposed. Sequenced after the audit's P1 (stress-matrix
 
 # Routing carrier <-> concrete crossings through shared recovery chokepoints
 
-## Status (verified 2026-06-22)
+## Status (verified 2026-06-22, post-PR #505)
 
-**IN PROGRESS.** Filed (commit `fbd0a94d`) as the structural follow-up to
-the now-archived `carrier-concrete-abi-crossing-audit-plan.md`. All audit
-gaps (G2-G10) closed via the old per-site patch approach *before* this plan
-landed. Two structural slices now landed: the value-side recovery idiom is
-consolidated behind a single shared routine (R0/R2 below), and the two
-chokepoints are now self-validating via a Debug-only "forgot to route" ICE
-(R3 below).
+**LARGELY LANDED.** All R0-R4 structural pieces are in place: the value,
+dispatch, and fn-value axes each have a single named chokepoint, the
+value-side ad-hoc copies are migrated, the R3 Debug-only ICE is wired,
+and R4's static registry + CI check ship in `tests/run.sh`. What remains
+is the dispatch-side branch collapse and the by-design exclusions called
+out in the inventory.
 
-- **R0 -- Inventory of un-routed sites.** DONE for the value side (see the
-  "R0 inventory" table below). The dominant un-routed pattern was the
-  hand-rolled `for pi: if fd->params[pi] == b -> arg_types[pi]` recovery --
-  the value-side chokepoint logic copied inline at 6 sites. Dispatch-side
-  and fn-value-side inventory still open.
-- **R1 -- Make the chokepoints total.** STARTED. The dispatch-tyvar
-  *identification* walk (ascribed receiver / bare receiver / result type)
-  was duplicated verbatim in the emit-time chokepoint
-  (`emit_reresolve_disp_type`) and the scan-time predicate
-  (`emit_call_dispatches_on_spec_tyvar`); it is now one shared routine,
-  `emit_dispatch_tyvar` (`emit_core.c`, declared in `emit_internal.h`), that
-  both consult, so they can no longer disagree about which position carries
-  the dispatch variable. The chokepoint's constraint-var resolution *tail*
-  and `emit_ground_constraint_var` remain separate **by design**: the latter
-  handles a `param_idx < 0` direct-`type_arg` case and gates on result
-  concreteness that the chokepoint deliberately omits, so merging them would
-  change instance selection (a behavior change, not a refactor).
-  `emit_var_spec_arg_type` (`emit_expr.c`) and
-  `emit_reresolve_disp_type` (`emit_core.c`) have otherwise been *extended*,
-  but every G2-G10 fix landed as a sibling branch beside them: G2 via
-  `emit_abi_try_nested_instance_dispatch_redirect` (`emit_module.c:1960`,
-  PRs #493/#495); G3 via call-site bridge in
-  `expr_emits_byvalue_carrier_abi` (`emit_expr.c:382`, PR #497); G4 via
-  per-element phantom clone (PR #486); G5/G7/G9 via local site fixes
-  (PRs #482, #498, #494); G6 via the new fn-value axis (PRs #487-#502).
-- **R2 -- Migrate ad-hoc sites onto chokepoints.** STARTED (value side).
-  The value-side `params[pi] -> arg_types[pi]` recovery now lives in one
-  exported routine, `emit_spec_arg_type_for_binding` (`emit_expr.c`,
-  declared in `emit_internal.h`). `emit_var_spec_arg_type` delegates to it,
-  and the four ad-hoc inline copies were deleted and routed through it:
-  `field_read_emits_byvalue_aggregate` (`emit_expr.c`),
-  `emit_reresolve_disp_type` (`emit_core.c`), the M4c Path A.2 by-value
-  field-access override (`emit_expr.c`), and the instance-method twin-arg
-  resolver (`emit_module.c`). Behavior-preserving: full suite 1765 passed,
-  0 failed, zero fixture churn. Dispatch-side branch deletions not yet done.
+- **R0 -- Inventory.** DONE for value side; dispatch and fn-value axes
+  inventoried with by-design exclusions documented. Tables below match
+  current code.
+- **R1 -- Chokepoints total.** DONE for the dispatch-tyvar identification
+  walk: `emit_dispatch_tyvar` at `src/compiler/emit_core.c:1241`
+  (decl `emit_internal.h:398`), consulted by `emit_reresolve_disp_type`
+  (`emit_core.c:1271`) and `emit_call_dispatches_on_spec_tyvar`
+  (`emit_module.c:1159`). Constraint-var tail vs.
+  `emit_ground_constraint_var` deliberately not merged (would change
+  instance selection).
+- **R2 -- Migrate ad-hoc sites.** Value side DONE in commit `ae0d1ad5`
+  (PR #505): `emit_spec_arg_type_for_binding` at `emit_expr.c:1641`
+  (decl `emit_internal.h:407`); `emit_var_spec_arg_type`
+  (`emit_expr.c:1662`) delegates. Migrated callers verified:
+  `field_read_emits_byvalue_aggregate` (`emit_expr.c:417`),
+  `emit_reresolve_disp_type` field-receiver tail (`emit_core.c:1332`),
+  M4c Path A.2 override (`emit_expr.c:5338`), instance-method twin-arg
+  resolver (`emit_module.c:1841`). Registry shows 6 call sites across
+  emit_core/emit_expr/emit_module. **Still open:** dispatch-side branch
+  collapse in `emit_abi_register_call` and the stacked special cases in
+  `emit_reresolve_disp_type` (the original R2 endgame); fn-value
+  `abi_changes` block excluded by design.
+- **R3 -- Debug "forgot to route" ICE.** DONE.
+  `emit_abi_assert_routed_concrete` at `src/compiler/emit_core.c:141`
+  (decl `emit_internal.h:415`), called from value chokepoint
+  (`emit_expr.c:1654`) and dispatch chokepoint (`emit_core.c:1448`).
+  Registry confirms 2 call sites. `TUR_ABI_NO_ROUTE_ICE=1` escape hatch
+  present. Strictness calibrated per-side (value: bare `TY_TYVAR` only;
+  dispatch: whole resolved spine tyvar-free).
+- **R4 -- Audit registry + CI gate.** DONE.
+  `docs/crossing-routing-audit.txt` (11 routine/file rows) and
+  `tools/check_crossing_routing.py` exist; wired into `tests/run.sh:48`
+  behind `TUR_SKIP_PARITY_CHECK=1` opt-out.
+- **Fn-value third axis.** STARTED. `emit_abi_fn_value_signature` at
+  `src/compiler/emit_module.c:3381`, called from
+  `emit_abi_scan_fn_values` (`emit_module.c:3438`). Inner-clone
+  derivation and `emit_abi_register_call` arg/result block remain
+  by-design unrouted.
+
+**Open items not yet addressed by R0-R4:**
+
+1. Dispatch-side R2 branch deletions in `emit_abi_register_call` and
+   the stacked per-bug branches in `emit_reresolve_disp_type` (the
+   structural payoff of the plan -- not yet collected).
+2. End-state per the "Validation" section: per-bug gated branches gone
+   and audit table free of `[GAP]` rows -- not yet realized.
+3. Suite status: PR #505 reported 1765 passed / 0 failed.
+
+Recent relevant commits: `ae0d1ad5` (R2 value-side migration),
+`3a8e4df7`, `5332f0c1`, `738fe342`, `52b8823e` (gap-closure PRs the
+plan was filed against).
 
 ### R0 inventory -- value-side recovery (`params[pi] -> arg_types[pi]`)
 
@@ -88,49 +103,6 @@ chokepoints are now self-validating via a Debug-only "forgot to route" ICE
 | `emit_module.c` `emit_abi_scan_fn_values` signature derivation | ROUTED (delegates to `emit_abi_fn_value_signature`) | the named third-axis chokepoint |
 | `emit_module.c` poly-closure inner-clone derivation (Stage B+C) | NOT ROUTED (by design) | env-aware (param 0 = env ptr); specialize decision already made upstream, computes no `abi_changes` |
 | `emit_module.c` `emit_abi_register_call` arg/result `abi_changes` block | NOT ROUTED (by design) | layered M4c Path A.1 + G4 phantom + borrow-path cases; sharing would change behavior |
-- **R3 -- Debug-build "forgot to route" ICE.** DONE (chokepoint
-  postcondition form). `emit_abi_assert_routed_concrete` (`emit_core.c`,
-  declared in `emit_internal.h`) is a Debug-only gate the two value/dispatch
-  chokepoints now call on their success paths: a recovery routine that
-  returns a non-concrete type (a leftover parametric param where a concrete
-  representation is required) is a hard `tur` ICE in Debug, compiled out
-  under `NDEBUG`/Release, with `TUR_ABI_NO_ROUTE_ICE=1` as an escape hatch.
-  Strictness is per side (calibrated against all 1765 fixtures): the value
-  side fires only on a *bare* `TY_TYVAR` (a `(Option A)`-style container whose
-  element legitimately rides the carrier is fine); the dispatch side requires
-  the whole resolved spine be tyvar-free (any tyvar would mis-select the
-  `__inst_*`). Suite stays 1765 passed, 0 failed; the abort path is verified
-  (forcing the strict check on the value side aborts `emit-c` on the
-  `option_map`/`err_val` carrier specs).
-- **R4 -- Audit-table-as-regression-guard.** DONE (static enforcement).
-  The audit registry `docs/crossing-routing-audit.txt` lists every
-  chokepoint call site as `<routine> <file.c> <count>`, and
-  `tools/check_crossing_routing.py` (wired into `tests/run.sh` next to the
-  turi-parity ratchets, opt-out `TUR_SKIP_PARITY_CHECK=1`) fails the suite
-  when a new chokepoint call site appears without a registry row, a count
-  drifts, or a registry entry goes stale. Regenerate with
-  `python3 tools/check_crossing_routing.py --update` and add the matching
-  row to the R0 inventory tables here. This is the documentation/CI half of
-  the gate; R3's ICE is its runtime half.
-- **Fn-value third axis (G6 motivated).** STARTED. The axis now has its
-  named chokepoint: `emit_abi_fn_value_signature` (`emit_module.c`) derives a
-  passed/captured function value's specialized arg/result types (instantiated
-  through the outer spec bindings) and whether the specialization changes the
-  C ABI -- the fn-value analogue of the value/dispatch chokepoints, with the
-  thunk signature following the carrier `B` and never the int64 default.
-  `emit_abi_scan_fn_values` routes through it. The closure-thunk inner-clone
-  derivation (the poly-closure-result-specialization Stage B+C block) stays
-  separate **by design**: it is env-aware (param 0 is the env pointer) and the
-  specialize decision is already made upstream (`inner_float`/`inner_passed`/
-  `inner_dispatch`), so it computes no `abi_changes` and would not fit the
-  chokepoint's signature without adding special-casing.
-
-**Net:** the plan is no longer unstarted -- the value, dispatch, and fn-value
-axes each now have a single named recovery chokepoint, the R3 "forgot to
-route" ICE gate enforces their postconditions in Debug, and the ad-hoc
-value/dispatch recovery copies have been migrated onto the shared routines.
-What remains is the deeper R2 branch-collapse (where it can be done without
-changing behavior) and R4's audit-table-as-PR-gate.
 
 ## Why this plan exists (read first)
 
