@@ -1,9 +1,29 @@
 ---
-status: open
+status: resolved
 severity: medium
 discovered: 2026-06-23
 discovered-by: completing parametric-defstruct-fn-field-gaps (residual)
+resolved: 2026-06-23
 ---
+
+## Resolution
+
+Fixed in `src/compiler/elab_structs.c` by teaching the two struct
+type-parameter walks to descend through a fn-typed field:
+
+- `struct_field_collect_type_args` gained a `TY_FN` case that unifies each
+  declared arg/result slot (which may be a tyvar) against the supplied
+  function value's corresponding slot, so e.g. `A` in `(run (fn [A] A))`
+  infers from `inc`'s `(fn [int] int)`, and `S`/`A` in a `Lens` infer from
+  `name-get`/`name-put` instead of defaulting to `int`.
+- `struct_field_instantiate_type` gained a matching `TY_FN` case so the
+  field's instantiated use-type substitutes the inferred args back into the
+  fn signature (validation + codegen), rather than leaving the tyvars (which
+  rendered/lowered as a bare `int` carrier).
+
+Both Repro A and Repro B now construct, type-check, and run end-to-end with
+no ascription. Covered by
+`tests/fixtures/make-struct-parametric-fn-field-infer`.
 
 # make-struct can't infer a parametric struct's type args from fn-typed fields
 

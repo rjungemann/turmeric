@@ -423,6 +423,40 @@ static Type struct_field_instantiate_type(Elab *e, const StructDef *def, const T
             Type arg = struct_field_instantiate_type(e, def, t->as.app.arg, type_args);
             return type_app(e->arena, fn, arg, (Span){0});
         }
+        case TY_FN: {
+            /* make-struct-parametric-fn-field-inference: substitute struct type
+             * parameters that appear inside a fn-typed field's signature, so the
+             * field's instantiated use-type (validation + codegen) reflects the
+             * inferred args rather than leaving the tyvars (which render/lower as
+             * a bare int carrier). */
+            Type out = *t;
+            uint8_t arity = t->as.fn.arity;
+            struct Type **new_args = arity
+                ? (struct Type **)arena_alloc(e->arena, arity * sizeof(struct Type *))
+                : NULL;
+            for (uint8_t i = 0; i < arity; i++) {
+                Type slot = (t->as.fn.arg_full_types && t->as.fn.arg_full_types[i])
+                    ? *t->as.fn.arg_full_types[i]
+                    : type_from_kind(t->as.fn.arg_kinds[i]);
+                Type inst = struct_field_instantiate_type(e, def, &slot, type_args);
+                out.as.fn.arg_kinds[i] = inst.kind;
+                struct Type *boxed = (struct Type *)arena_alloc(e->arena, sizeof(Type));
+                *boxed = inst;
+                new_args[i] = boxed;
+            }
+            out.as.fn.arg_full_types = new_args;
+            {
+                Type rslot = t->as.fn.result_full_type
+                    ? *t->as.fn.result_full_type
+                    : type_from_kind(t->as.fn.result_kind);
+                Type rinst = struct_field_instantiate_type(e, def, &rslot, type_args);
+                out.as.fn.result_kind = rinst.kind;
+                struct Type *rboxed = (struct Type *)arena_alloc(e->arena, sizeof(Type));
+                *rboxed = rinst;
+                out.as.fn.result_full_type = rboxed;
+            }
+            return out;
+        }
         case TY_UNION: {
             uint8_t n = t->as.union_.n_members;
             Type **members = (Type **)arena_alloc(e->arena, (n ? n : 1) * sizeof(Type *));
@@ -472,6 +506,35 @@ static bool struct_field_collect_type_args(const StructDef *def, const Type *exp
                                                   type_args, have_type_args) &&
                    struct_field_collect_type_args(def, expected->as.app.arg, *actual.as.app.arg,
                                                   type_args, have_type_args);
+        case TY_FN: {
+            /* make-struct-parametric-fn-field-inference: a struct type parameter
+             * may appear only inside a fn-typed field (e.g. `(run (fn [A] A))`).
+             * Descend into the declared fn type and unify each arg/result slot
+             * (which may be a tyvar) against the supplied function value's
+             * corresponding slot, so `A` infers from `inc`'s `(fn [int] int)`. */
+            if (actual.kind != TY_FN) return false;
+            if (expected->as.fn.arity != actual.as.fn.arity) return false;
+            for (uint8_t i = 0; i < expected->as.fn.arity; i++) {
+                Type exp_arg = (expected->as.fn.arg_full_types && expected->as.fn.arg_full_types[i])
+                    ? *expected->as.fn.arg_full_types[i]
+                    : type_from_kind(expected->as.fn.arg_kinds[i]);
+                Type act_arg = (actual.as.fn.arg_full_types && actual.as.fn.arg_full_types[i])
+                    ? *actual.as.fn.arg_full_types[i]
+                    : type_from_kind(actual.as.fn.arg_kinds[i]);
+                if (!struct_field_collect_type_args(def, &exp_arg, act_arg,
+                                                    type_args, have_type_args)) {
+                    return false;
+                }
+            }
+            Type exp_res = expected->as.fn.result_full_type
+                ? *expected->as.fn.result_full_type
+                : type_from_kind(expected->as.fn.result_kind);
+            Type act_res = actual.as.fn.result_full_type
+                ? *actual.as.fn.result_full_type
+                : type_from_kind(actual.as.fn.result_kind);
+            return struct_field_collect_type_args(def, &exp_res, act_res,
+                                                  type_args, have_type_args);
+        }
         case TY_UNION:
         case TY_INTERSECTION:
             return type_eq(*expected, actual);
