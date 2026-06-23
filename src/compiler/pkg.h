@@ -108,6 +108,15 @@ typedef struct PkgManifest {
     int          n_c_flags;
     char       **link_libs;
     int          n_link_libs;
+    /* spices-c-sources-plan: auxiliary hand-written C sources vendored into
+     * the spice (e.g. KissFFT, stb_image). Paths are stored as written in
+     * build.tur (relative to the manifest dir) and compiled + linked into the
+     * consuming binary. c_includes are -I dirs (also manifest-relative) made
+     * visible to both the aux C compile and the spice's own inline-C. */
+    char       **c_sources;
+    int          n_c_sources;
+    char       **c_includes;
+    int          n_c_includes;
     bool         no_stdlib;
     /* RM4: reader-macro files loaded implicitly for every source file in
      * this spice. Paths are stored as written in build.tur (relative to

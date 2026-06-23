@@ -304,6 +304,82 @@ static bool parse_str_vec(const Form *f, char ***out, int *n_out) {
     return true;
 }
 
+/* spices-c-sources-plan: parse + validate a :c-sources / :c-includes vector.
+ * Each entry must be a manifest-relative path (absolute paths rejected); for
+ * sources (require_c_ext) the extension must be .c/.cc/.cpp and the file must
+ * exist, for includes the directory must exist. Any failing entry emits a
+ * DIAG_ERROR carrying that entry's span. Valid entries are stored verbatim
+ * (as written in build.tur) so the build can re-resolve them relative to the
+ * manifest dir. */
+static bool parse_c_path_vec(const Form *f, const char *manifest_dir,
+                             const char *what, bool require_c_ext,
+                             char ***out, int *n_out) {
+    *out   = NULL;
+    *n_out = 0;
+    if (!f) return true;
+    if (f->tag != F_VEC && f->tag != F_LIST && f->tag != F_STR) {
+        report_non_map(f, what); /* close enough: "expected a vector" */
+        return false;
+    }
+    /* Normalise a bare string to a one-element list view. */
+    const Form *single[1] = { f };
+    const Form *const *items;
+    uint32_t n;
+    if (f->tag == F_STR) {
+        items = single;
+        n     = 1;
+    } else {
+        items = (const Form *const *)f->as.list.items;
+        n     = f->as.list.len;
+    }
+    *out = (char **)malloc((n ? n : 1) * sizeof(char *));
+    if (!*out) return false;
+    for (uint32_t i = 0; i < n; i++) {
+        const Form *entry = items[i];
+        if (!entry || entry->tag != F_STR) continue;
+        char *p = ss_dup(entry->as.s);
+        if (!p) continue;
+        bool ok = true;
+        if (p[0] == '/') {
+            diag_emit(DIAG_ERROR, entry->span,
+                      "build.tur: %s entry '%s' must be a relative path "
+                      "(absolute paths are not allowed)", what, p);
+            ok = false;
+        }
+        if (ok && require_c_ext) {
+            const char *dot = strrchr(p, '.');
+            if (!dot || !(strcmp(dot, ".c")   == 0 ||
+                          strcmp(dot, ".cc")  == 0 ||
+                          strcmp(dot, ".cpp") == 0)) {
+                diag_emit(DIAG_ERROR, entry->span,
+                          "build.tur: %s entry '%s' must have a .c, .cc, or "
+                          ".cpp extension", what, p);
+                ok = false;
+            }
+        }
+        if (ok && manifest_dir) {
+            char full[4096];
+            snprintf(full, sizeof(full), "%s/%s", manifest_dir, p);
+            struct stat stbuf;
+            bool exists = (stat(full, &stbuf) == 0);
+            bool right_kind = exists && (require_c_ext ? S_ISREG(stbuf.st_mode)
+                                                       : S_ISDIR(stbuf.st_mode));
+            if (!right_kind) {
+                diag_emit(DIAG_ERROR, entry->span,
+                          "build.tur: %s entry '%s' not found (resolved to '%s')",
+                          what, p, full);
+                ok = false;
+            }
+        }
+        if (ok) {
+            (*out)[(*n_out)++] = p;
+        } else {
+            free(p);
+        }
+    }
+    return true;
+}
+
 /* Parse the :exports field. Accepts either form:
  *   - a map  #{ "mod/name" [sym ...] ... }  -- the canonical spice form; the
  *     module-name keys are captured (the per-module symbol vectors are not
@@ -545,9 +621,21 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
                 const Form *cf = map_get_kw(vf, "c-flags");
                 const Form *lf = map_get_kw(vf, "link-libs");
                 const Form *nf = map_get_kw(vf, "no-stdlib");
+                const Form *sf = map_get_kw(vf, "c-sources");
+                const Form *if_ = map_get_kw(vf, "c-includes");
                 parse_str_vec(cf, &out->c_flags,   &out->n_c_flags);
                 parse_str_vec(lf, &out->link_libs,  &out->n_link_libs);
                 out->no_stdlib = form_bool_val(nf);
+                /* spices-c-sources-plan: validate vendored sources/includes
+                 * against the manifest directory (the dir holding build.tur). */
+                char mdir[4096];
+                snprintf(mdir, sizeof(mdir), "%s", path);
+                char *slash = strrchr(mdir, '/');
+                if (slash) *slash = '\0'; else snprintf(mdir, sizeof(mdir), ".");
+                parse_c_path_vec(sf,  mdir, ":c-sources",  true,
+                                 &out->c_sources,  &out->n_c_sources);
+                parse_c_path_vec(if_, mdir, ":c-includes", false,
+                                 &out->c_includes, &out->n_c_includes);
             } else if (vf) {
                 report_non_map(vf, ":build-opts");
             }
@@ -644,13 +732,30 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
         fprintf(f, "  }\n");
     }
 
-    if (m->n_c_flags > 0 || m->n_link_libs > 0 || m->no_stdlib) {
-        fprintf(f, "\n  :build-opts {\n");
+    if (m->n_c_flags > 0 || m->n_link_libs > 0 || m->no_stdlib ||
+        m->n_c_sources > 0 || m->n_c_includes > 0) {
+        fprintf(f, "\n  :build-opts #{\n");
         if (m->n_c_flags > 0) {
             fprintf(f, "    :c-flags [");
             for (int i = 0; i < m->n_c_flags; i++) {
                 if (i) fprintf(f, " ");
                 fprintf(f, "\"%s\"", m->c_flags[i]);
+            }
+            fprintf(f, "]\n");
+        }
+        if (m->n_c_includes > 0) {
+            fprintf(f, "    :c-includes [");
+            for (int i = 0; i < m->n_c_includes; i++) {
+                if (i) fprintf(f, " ");
+                fprintf(f, "\"%s\"", m->c_includes[i]);
+            }
+            fprintf(f, "]\n");
+        }
+        if (m->n_c_sources > 0) {
+            fprintf(f, "    :c-sources [");
+            for (int i = 0; i < m->n_c_sources; i++) {
+                if (i) fprintf(f, " ");
+                fprintf(f, "\"%s\"", m->c_sources[i]);
             }
             fprintf(f, "]\n");
         }
@@ -745,6 +850,10 @@ void pkg_manifest_free(PkgManifest *m) {
     free(m->c_flags);
     for (int i = 0; i < m->n_link_libs; i++) free(m->link_libs[i]);
     free(m->link_libs);
+    for (int i = 0; i < m->n_c_sources;  i++) free(m->c_sources[i]);
+    free(m->c_sources);
+    for (int i = 0; i < m->n_c_includes; i++) free(m->c_includes[i]);
+    free(m->c_includes);
     for (int i = 0; i < m->n_reader_macros; i++) free(m->reader_macros[i]);
     free(m->reader_macros);
     for (int i = 0; i < m->n_bins; i++) {

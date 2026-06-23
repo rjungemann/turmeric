@@ -1,0 +1,13 @@
+(defmodule main
+  ;; vendor_value is defined in aux-c-vendor's vendored c/vendor.c, linked in
+  ;; via cross-spice :c-sources propagation. Forward-declared here rather than
+  ;; via the dep's private header (dep :c-includes are an implementation
+  ;; detail). The binary exits 7.
+  (defn vendor-value [] #{Unsafe} : int
+    ```c
+    extern int vendor_value(void);
+    return vendor_value();
+    ```)
+
+  (defn main [] : int
+    (unsafe (vendor-value))))

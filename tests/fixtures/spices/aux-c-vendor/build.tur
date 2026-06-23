@@ -1,0 +1,8 @@
+;; spices-c-sources-plan cross-spice fixture: a vendor spice that ships a
+;; hand-written C source and no .tur of its own. Consumed by consumer-of-aux,
+;; whose build links this vendored .c via :c-sources propagation.
+(defpackage aux-c-vendor
+  :name "aux-c-vendor"
+  :build-opts #{
+    :c-sources ["c/vendor.c"]
+  })

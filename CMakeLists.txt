@@ -84,6 +84,12 @@ add_test(
   COMMAND bash tests/spice-resolver-tests.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Spice-level auxiliary C sources: :c-sources / :c-includes (spices-c-sources-plan).
+add_test(
+  NAME tur_spice_c_sources_tests
+  COMMAND bash tests/spice-c-sources-tests.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 add_test(
   NAME tur_flags_tests
   COMMAND bash tests/run-flags.sh

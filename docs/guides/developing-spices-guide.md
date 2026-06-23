@@ -110,7 +110,7 @@ defpackage tur-mylib
 | `:exports` | Yes (library) | Map of module path to exported symbol names |
 | `:spices` | If needed | Turmeric package dependencies |
 | `:cmake-deps` | If needed | C/C++ library dependencies |
-| `:build-opts` | Rarely | Extra C compiler flags or additional link libs |
+| `:build-opts` | Rarely | `:c-flags` / `:link-libs`, plus `:c-sources` / `:c-includes` for [vendored C](#vendoring-c-sources-c-sources--c-includes) |
 
 ---
 
@@ -572,6 +572,83 @@ in the manifest.
 For the full `:cmake-deps` field reference, the generated `SpiceDeps.cmake`
 format, the `spice-deps-manifest.json` schema, and hash locking, see the
 [CMake/CPM integration notes](../archive/cmake-cpm-integration-plan.md).
+
+---
+
+## Vendoring C Sources (`:c-sources` / `:c-includes`)
+
+`:cmake-deps` is the right tool for a real native library that already has a
+CMake (or system-package) presence. But some C is too small for that ceremony:
+a single-file header library (`stb_image`, `miniaudio`), a four-file FFT
+(KissFFT), a hand-tuned kernel. For those, **vendor the `.c` straight into the
+spice** and let the spice build compile and link it -- no CMake, no fetch step.
+
+Add two keys under `:build-opts`:
+
+```turmeric
+(defpackage tur-signal
+  :name "tur-signal"
+  :build-opts #{
+    :c-includes ["c/kissfft"]            ;; -I dirs (manifest-relative)
+    :c-sources  ["c/kissfft/kiss_fft.c"  ;; .c files compiled + linked
+                 "c/kissfft/kiss_fftr.c"
+                 "c/glue/fft_shim.c"]
+  }
+  :exports #{ "signal/fft" [fft-forward fft-inverse] })
+```
+
+### Rules
+
+- **Manifest-relative paths only.** Both `:c-sources` and `:c-includes` resolve
+  relative to the directory holding `build.tur`. An absolute path is a hard
+  error -- if you need a system include path, declare a `:link-libs` /
+  `:cmake-deps` dependency instead.
+- **Validated at manifest load.** Each `:c-sources` entry must exist on disk and
+  end in `.c`, `.cc`, or `.cpp`; each `:c-includes` entry must be an existing
+  directory. A typo fails the build immediately with a diagnostic pointing at
+  the offending entry, not with an opaque `cc` error later.
+- **`:c-includes` reach the spice's own C only.** The `-I` dirs are visible both
+  to the vendored `.c` and to inline-C blocks in this spice's `.tur` modules
+  (so an inline-C block can `#include "kissfft/kiss_fftr.h"`). They are **not**
+  exported to consumers -- vendored headers are an implementation detail.
+- **`:c-sources` propagate across `:spices` deps.** If spice B vendors a `.c`
+  and spice A depends on B, building A links B's vendored sources into A's
+  binary automatically. Consumers see B only through its `.tur` exports, so a
+  consumer's inline-C should `extern`-declare any vendored symbol it calls
+  rather than relying on B's private headers.
+- **C++ is accepted but not auto-configured.** `.cc` / `.cpp` entries are
+  allowed (some vendor libraries are C++ wearing a C name), but the build does
+  not switch to a C++ driver for you -- add `-x c++` to `:c-flags` if needed.
+- **No platform conditionals.** Every listed source is compiled on every
+  platform; gate platform-specific code with `#ifdef` inside the source, as
+  vendor libraries already do.
+
+### Layout: vendored C goes under `c/`, never `src/`
+
+The manifest-driven build walks `src/` looking for `.tur` modules; do not put
+`.c` files there. Keep vendored C in its own `c/` tree:
+
+```
+tur-signal/
+  build.tur
+  src/
+    signal/fft.tur        ;; .tur modules (walked by the build)
+  c/
+    kissfft/
+      kiss_fft.c          ;; vendored sources (listed in :c-sources)
+      kiss_fft.h          ;; vendored headers (dir listed in :c-includes)
+    glue/
+      fft_shim.c
+```
+
+### When to reach for this vs `:cmake-deps`
+
+Vendor a `.c` when the library is **small, single-purpose, and has no native
+package-manager presence** -- you would otherwise be copy-pasting a header into
+an inline-C block anyway. Reach for `:cmake-deps` when the library is large,
+has its own build system, or is commonly installed system-wide (where
+`:prefer-system` saves a source build). If a library needs CMake or autotools
+to configure itself, it is not a vendoring candidate.
 
 ---
 

@@ -1,0 +1,8 @@
+;; spices-c-sources-plan cross-spice fixture: depends on aux-c-vendor via
+;; :path. Building this spice must pull aux-c-vendor's vendored .c into the
+;; link line so the inline-C call to vendor_value() resolves.
+(defpackage consumer-of-aux
+  :name "consumer-of-aux"
+  :spices #{
+    "aux-c-vendor" #{:path "../aux-c-vendor"}
+  })
