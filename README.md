@@ -38,6 +38,21 @@ The image builds `tur` from the local source tree. See
 [installation guide](docs/guides/releases-and-installation-guide.md) for
 alternative Linux install paths (prebuilt binaries, build-from-source).
 
+**Version manager (`tvm`):**
+
+To install, switch between, and pin multiple Turmeric releases per-shell
+(the `nvm`/`rustup` model), use the bundled Turmeric Version Manager:
+
+```sh
+sh tvm/install.sh        # bootstrap into ~/.tvm and wire up your shell rc
+tvm install 0.23.1       # download + verify + cache a prebuilt release
+tvm use 0.23.1           # activate it for this shell
+tvm alias default 0.23.1 # make it the default for new shells
+```
+
+See [`tvm/README.md`](tvm/README.md) for the full command set
+(`ls`, `ls-remote`, `which`, `run`, `--build`, `.tur-version` auto-switch).
+
 **GitHub Codespaces:**
 
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/rjungemann/turmeric)
