@@ -1323,7 +1323,7 @@ def render_module_page(module, out_dir, brand='stdlib'):
 
     content += '</div>\n'
 
-    page = _html_header(f'tur/{html_module.escape(mod_name)} | Turmeric API')
+    page = _html_header(f'{html_module.escape(mod_name)} | Turmeric API')
     page += '<div class="page-layout">\n'
     page += sidebar
     page += content
