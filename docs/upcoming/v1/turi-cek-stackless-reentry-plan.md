@@ -6,6 +6,54 @@ description: Eliminate the last source of unbounded C recursion in the tree-walk
 
 # Turi stackless native re-entry (full CEK / driver-CPS) -- Plan
 
+## Status update -- 2026-06-23 (N3b)
+
+**N3b has landed (abortive shift -- the first of the deferred longjmp
+receivers).** N3 carved the longjmp-based delimited-control receivers out to
+N3b/N4; this lands the cleanest of them. The abortive `(shift f body)` /
+`(shift0 f body)` no longer applies its receiver `f(body)` on a re-entrant C
+frame via `turi_call` -- when the shift is reached **on the driver** (its
+enclosing fn body is being driven, e.g. a `(shift ...)`-tailed thunk called
+inside a reset), the application now folds onto the work-stack:
+
+- New driver descending case for `EX_SHIFT` / `EX_SHIFT0` (mirrors N1's
+  `EX_TVAR_MODIFY`): evaluate `body` and the receiver, push a
+  `DK_NATIVE_RESUME` carrying `abortive_shift_resume`, and request `f(body)` on
+  the work-stack.
+- `abortive_shift_resume(applied)` aborts to the nearest `PROMPT_PLAIN` reset
+  boundary with the result (`b->result = applied; longjmp(b->jmp, 1)`), or
+  propagates a signalled receiver result without aborting. The longjmp
+  abandons the driver work-stack exactly as the pre-SR synchronous path (which
+  longjmped out of the black-box `eval_expr`) did -- no new leak, and `nr` is
+  freed on the abort path since the `DK_NATIVE_RESUME` handler's `free(nr)`
+  never runs.
+- `eval_expr_impl` keeps its synchronous `EX_SHIFT`/`EX_SHIFT0` (via
+  `eval_abortive_shift`) for non-driver callers -- same split as
+  `tvar/modify`.
+- Safety is unchanged: `EX_SHIFT` already falls to `ws_capturable`'s
+  conservative `default` (-> `!ws_has_perform` -> false), so a shift never
+  lands in a capturable `DK_PROMPT` slice -- a `DK_NATIVE_RESUME` from a shift
+  can never be cloned, exactly as for `tvar/modify`.
+
+This is **list-reduction toward N4, not a heap-bounding win** -- abortive
+shift applies its receiver once per invocation (bounded), so it was never a
+source of unbounded recursion; the conversion removes two program-internal
+synchronous `turi_call` re-entry sites that N4's audit must clear. The
+receiver's own body recursion was already heap-bounded (its body is driven
+either way); the new `tur_eval_tco` regression (`shift-thunk 50000`, a
+deep-non-tail receiver folded through the driven shift) confirms correctness of
+the driver path. `bash tests/run.sh` (1783/0), eval/sandbox/STM/effects/tco
+ctests, and the `run-turi` baseline failure set (23, unchanged) are all green.
+
+**Still deferred to N4:** the serial/cloneable shift receivers
+(`ts_cont_resume`), `call/cc`-escape (`eval_callcc_escape`), and `Show`
+dispatch (`turi_try_show`). The serial/cloneable and call/cc paths remain
+entangled with the runtime context-reification + escape-pad longjmp machinery;
+`Show` is invoked from C print machinery rather than the driver loop (it would
+need the print path driven to benefit, and is the one item with genuine
+unbounded potential -- nested-struct `show` recursion). The guard stays until
+N4 clears these.
+
 ## Status update -- 2026-06-23 (N3)
 
 **N3 has landed (the unbounded black-box forms; the longjmp shift/Show

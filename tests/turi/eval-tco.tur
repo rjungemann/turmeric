@@ -93,3 +93,19 @@
     0
     (return (+ n (ret-sum (- n 1))))))
 (println (ret-sum 60000))
+
+;; --- Test 9 (SR N3b): abortive shift reached through a driven fn body ------
+;; `shift-thunk`'s body is `(shift f n)` in tail position, so applying it
+;; (`(shift-thunk 50000)`) drives EX_SHIFT in eval_drive_ex.  Before SR N3b the
+;; driver black-boxed the shift through eval_expr, which applied the receiver f
+;; on a re-entrant C frame (turi_call); the driver now models it
+;; (DK_NATIVE_RESUME + abortive_shift_resume), so f(body) folds onto the
+;; work-stack and then aborts to the reset boundary.  The receiver here does
+;; deep non-tail recursion (`deep-shift v`), proving the callback is heap-bounded
+;; through the driven shift; the enclosing `(+ 100 ...)` is discarded by the
+;; abort.  deep-shift 50000 = 50000.
+(defn deep-shift [n :int] :int
+  (if (= n 0) 0 (+ 1 (deep-shift (- n 1)))))
+(defn shift-thunk [n :int] :int
+  (shift (fn [v :int] (deep-shift v)) n))
+(println (reset (+ 100 (shift-thunk 50000))))

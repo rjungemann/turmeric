@@ -4213,6 +4213,41 @@ static TuriValue tvar_modify_resume(TuriEnv *env, void *state, TuriValue applied
     return *out;
 }
 
+/* abortive shift (SR N3b conversion target): the receiver application f(body)
+ * runs on the work-stack, then the result aborts to the nearest plain reset
+ * boundary.  `form` names the operator for the out-of-boundary diagnostic; `nr`
+ * is the enclosing DK_NATIVE_RESUME's request record, freed on the abort path
+ * (where the longjmp prevents the driver's handler from freeing it). */
+typedef struct { const char *form; void *nr; } AbortiveShiftState;
+
+/* resume for shift/shift0: `applied` is f(body).  If the receiver signalled,
+ * propagate without aborting; otherwise stash the value in the matching reset
+ * boundary and longjmp to it (the boundary's setjmp lives below this driver
+ * frame -- abandoning the work-stack is correct for an abortive shift, and
+ * mirrors the pre-SR synchronous path that longjmped out of the black-box
+ * eval_expr). */
+static TuriValue abortive_shift_resume(TuriEnv *env, void *state, TuriValue applied,
+                                       bool *done, TuriValue *out) {
+    AbortiveShiftState *s = (AbortiveShiftState *)state;
+    *done = true;
+    if (turi_is_error(applied) || env->returning || env->throwing) {
+        *out = applied;     /* receiver signalled: nr freed by the DK handler */
+        free(s);
+        return *out;
+    }
+    TuriResetBoundary *b = reset_find(PROMPT_PLAIN);
+    if (!b) {
+        *out = turi_errorf("eval: %s used outside of any reset boundary", s->form);
+        free(s);            /* nr freed by the DK handler (we return normally) */
+        return *out;
+    }
+    b->result = applied;
+    free(s->nr);            /* longjmp skips the DK handler's free(nr) */
+    free(s);
+    longjmp(b->jmp, 1);
+    return turi_nil();      /* unreachable */
+}
+
 /* Extract field `e->as.get_field_.field_idx` from an already-resolved receiver
  * value `sv` (an EX_GET_FIELD whose struct_expr has been evaluated).  Shared by
  * eval_expr_impl's recursive EX_GET_FIELD and the driver's DK_GET_FIELD
@@ -5176,6 +5211,40 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 have_apply = true;
                 /* descending stays true; the have_apply branch at the loop top
                  * dispatches the application next iteration. */
+                break;
+            }
+            case EX_SHIFT:
+            case EX_SHIFT0: {
+                /* SR N3b: abortive (shift f body) / (shift0 f body) via the
+                 * work-stack resume protocol.  Evaluate body and the receiver,
+                 * then ask the driver to apply f(body) on the work-stack;
+                 * abortive_shift_resume aborts to the nearest plain reset
+                 * boundary with the result (or propagates a signalled result).
+                 * The receiver no longer runs on a re-entrant C frame -- it
+                 * folds onto the work-stack like any application.  (eval_expr_impl
+                 * keeps a synchronous EX_SHIFT/EX_SHIFT0 for non-driver callers.) */
+                bool        is0  = control->kind == EX_SHIFT0;
+                const Expr *kfn  = is0 ? control->as.shift0_.k_fn : control->as.shift_.k_fn;
+                const Expr *body = is0 ? control->as.shift0_.body : control->as.shift_.body;
+                TuriValue v = eval_expr(env, cf, body);
+                if (turi_is_error(v) || env->returning || env->throwing) {
+                    cur = v; descending = false; break;
+                }
+                TuriValue fn = eval_expr(env, cf, kfn);
+                if (turi_is_error(fn) || env->returning || env->throwing) {
+                    cur = fn; descending = false; break;
+                }
+                AbortiveShiftState *s = (AbortiveShiftState *)malloc(sizeof(AbortiveShiftState));
+                s->form = is0 ? "shift0" : "shift";
+                NativeResume *nr = (NativeResume *)malloc(sizeof(NativeResume));
+                nr->resume = abortive_shift_resume; nr->state = s;
+                s->nr = nr;
+                DRIVE_PUSH(((DriveCont){ .kind = DK_NATIVE_RESUME, .aux = nr }));
+                apply_fn   = fn;
+                apply_args = (TuriValue *)malloc(sizeof(TuriValue));
+                apply_args[0] = v;
+                apply_n    = 1;
+                have_apply = true;
                 break;
             }
             default: {
