@@ -1491,6 +1491,7 @@ static int cmd_build(const char *input, const char *out_path,
                      const char **reader_macro_paths,
                      int n_reader_macro_paths);
 static char *find_project_root(const char *start);
+static void collect_spice_aux_c(const char *root, Buf *includes, Buf *sources);
 
 /* build-output-directory-plan: ensure_dir(path) creates a directory tree with
  * mkdir -p semantics.  Returns 0 on success (or if the directory already
@@ -1846,6 +1847,12 @@ static int cmd_build(const char *input, const char *out_path,
     /* Collect cmake dep flags from cmake/spice-deps-manifest.json if present */
     Buf cmake_flags;
     buf_init(&cmake_flags);
+    /* spices-c-sources-plan: the enclosing spice's :c-includes (as -I, visible
+     * to inline-C in the generated TU) and :c-sources (vendored .c, compiled
+     * as extra translation units and linked in). Resolved relative to the
+     * manifest dir found by walking up from the input file. */
+    Buf aux_includes; buf_init(&aux_includes);
+    Buf aux_sources;  buf_init(&aux_sources);
     {
         /* Walk up from the input file's directory to find project root.
          * Resolve to an absolute path first -- find_project_root walks via
@@ -1872,6 +1879,7 @@ static int cmd_build(const char *input, const char *out_path,
                 pkg_cmake_manifest_append_cc_flags(&cmake_manifest, &cmake_flags);
                 pkg_cmake_manifest_free(&cmake_manifest);
             }
+            collect_spice_aux_c(proj_root, &aux_includes, &aux_sources);
             free(proj_root);
         }
     }
@@ -2039,6 +2047,13 @@ static int cmd_build(const char *input, const char *out_path,
     Buf cmd;
     buf_init(&cmd);
     buf_printf(&cmd, "%s %s -o %s %s", cc, cc_flags, out_path, tmpl);
+    /* spices-c-sources-plan: vendored include dirs (-I) early so inline-C in
+     * the generated TU can find its private headers; vendored sources before
+     * the autolink/-lm flags so they can resolve against them. */
+    if (aux_includes.len > 0) buf_puts(&cmd, aux_includes.data);
+    if (aux_sources.len  > 0) buf_puts(&cmd, aux_sources.data);
+    buf_free(&aux_includes);
+    buf_free(&aux_sources);
     /* Append any __tur_autolink__ flags discovered in the generated C. */
     if (autolink.len > 0) buf_printf(&cmd, " %s", autolink.data);
     buf_free(&autolink);
@@ -2743,6 +2758,69 @@ static void resolve_include_dirs_from_manifest(const char *root,
 
     *out_dirs = dirs;
     *out_n    = n;
+}
+
+/* spices-c-sources-plan: collect a project's vendored C build inputs into two
+ * command-line fragments (caller inits/frees the Bufs):
+ *   - `includes`: -I flags. The project's OWN :c-includes (private to the
+ *     spice) plus, for each :spices dep, that dep's :c-includes -- the latter
+ *     are required so the dep's vendored .c can find its own headers when
+ *     compiled in the same cc invocation. Dep includes are an implementation
+ *     detail; consumers should not rely on them being visible to their .tur
+ *     inline-C, even though source-level aggregation makes them so here.
+ *   - `sources`: absolute paths to the project's own :c-sources AND each
+ *     :spices dep's :c-sources, so a consumer of a vendor spice links the
+ *     vendor's hand-written C into the final binary.
+ * g_no_auto_spice disables manifest discovery entirely (matching every other
+ * auto-spice convenience). */
+static void collect_spice_aux_c(const char *root, Buf *includes, Buf *sources) {
+    if (g_no_auto_spice || !root) return;
+    char mp[4096];
+    if (!pkg_resolve_manifest_path(root, mp, sizeof(mp))) return;
+    PkgManifest m; memset(&m, 0, sizeof(m));
+    if (!pkg_manifest_read(mp, &m)) return;
+
+    for (int i = 0; i < m.n_c_includes; i++)
+        buf_printf(includes, " -I%s/%s", root, m.c_includes[i]);
+    for (int i = 0; i < m.n_c_sources; i++)
+        buf_printf(sources, " %s/%s", root, m.c_sources[i]);
+
+    /* Propagate each :spices dep's :c-sources (resolved to the dep root). The
+     * dep-dir resolution mirrors resolve_include_dirs_from_manifest above. */
+    char spices_dir[4096];
+    snprintf(spices_dir, sizeof(spices_dir), "%s/spices", root);
+    for (int i = 0; i < m.n_spices; i++) {
+        const PkgSpice *s = &m.spices[i];
+        char dep_dir[4096];
+        char *ws_path = s->path ? NULL
+                                : pkg_workspace_member_path(root, s->name);
+        if (ws_path) {
+            snprintf(dep_dir, sizeof(dep_dir), "%s", ws_path);
+            free(ws_path);
+        } else if (s->path) {
+            snprintf(dep_dir, sizeof(dep_dir), "%s/%s", root, s->path);
+        } else if (s->ref) {
+            snprintf(dep_dir, sizeof(dep_dir), "%s/%s-%s",
+                     spices_dir, s->name, s->ref);
+        } else {
+            snprintf(dep_dir, sizeof(dep_dir), "%s/%s", spices_dir, s->name);
+        }
+        if (s->subdir) {
+            char tmp[4096];
+            snprintf(tmp, sizeof(tmp), "%s/%s", dep_dir, s->subdir);
+            snprintf(dep_dir, sizeof(dep_dir), "%s", tmp);
+        }
+        char dmp[4096];
+        if (!pkg_resolve_manifest_path(dep_dir, dmp, sizeof(dmp))) continue;
+        PkgManifest dm; memset(&dm, 0, sizeof(dm));
+        if (!pkg_manifest_read(dmp, &dm)) continue;
+        for (int j = 0; j < dm.n_c_sources; j++)
+            buf_printf(sources, " %s/%s", dep_dir, dm.c_sources[j]);
+        for (int j = 0; j < dm.n_c_includes; j++)
+            buf_printf(includes, " -I%s/%s", dep_dir, dm.c_includes[j]);
+        pkg_manifest_free(&dm);
+    }
+    pkg_manifest_free(&m);
 }
 
 /* Resolve a project's include search path by walking up from `dir` to find
@@ -3876,9 +3954,27 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
         }
     }
 
+    /* spices-c-sources-plan: collect the project manifest's :c-includes (as
+     * -I flags, visible to both the aux .c compile and the spice's inline-C)
+     * and :c-sources (vendored hand-written C, compiled as additional
+     * translation units and linked into this binary). Paths are resolved
+     * relative to the manifest directory. */
+    Buf aux_includes; buf_init(&aux_includes);
+    Buf aux_sources;  buf_init(&aux_sources);
+    {
+        char *proj_root = find_project_root(dir);
+        if (proj_root) {
+            collect_spice_aux_c(proj_root, &aux_includes, &aux_sources);
+            free(proj_root);
+        }
+    }
+
     Buf cmd;
     buf_init(&cmd);
     buf_printf(&cmd, "%s %s", cc, cc_flags);
+    /* Vendored C include dirs come early so both the generated module .c
+     * (carrying inline-C) and the aux .c sources can find their headers. */
+    if (aux_includes.len > 0) buf_puts(&cmd, aux_includes.data);
     /* RP0: shared-library link gets -fPIC -shared and skips _main.c.
      * Position-independent code is required on Linux/macOS for symbols
      * loaded via dlopen; -shared tells the driver to emit a .so/.dylib
@@ -3904,6 +4000,12 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
     for (int i = 0; i < n_own; i++) {
         buf_printf(&cmd, " %s", c_files[i]);
     }
+    /* spices-c-sources-plan: vendored .c sources compiled alongside the
+     * spice's own translation units, before -lm so they can resolve math
+     * symbols against it. */
+    if (aux_sources.len > 0) buf_puts(&cmd, aux_sources.data);
+    buf_free(&aux_includes);
+    buf_free(&aux_sources);
     /* Append cmake dep flags (-I/-L/-l). */
     if (cmake_flags.len > 0) buf_puts(&cmd, cmake_flags.data);
     buf_free(&cmake_flags);
@@ -4009,6 +4111,26 @@ static int cmd_build_project(const char *root, const char *out_path,
     /* Deterministic order so generated artifacts and the ABI cache are
      * reproducible across runs. */
     qsort(tur_files, (size_t)n_files, sizeof(char *), compare_cstr_ptrs);
+
+    /* spices-c-sources-plan: validate the manifest up front. A manifest that
+     * fails to parse -- e.g. an invalid :c-sources entry (missing file, wrong
+     * extension, absolute path) -- is a hard build error, not a silently
+     * ignored read. Doing this here means the parser's diagnostics translate
+     * into a failed build (non-zero exit) instead of the build proceeding as
+     * though the offending keys were absent. */
+    {
+        char mpath[4096];
+        if (pkg_resolve_manifest_path(root, mpath, sizeof(mpath))) {
+            PkgManifest vm; memset(&vm, 0, sizeof(vm));
+            bool vok = pkg_manifest_read(mpath, &vm);
+            pkg_manifest_free(&vm);
+            if (!vok) {
+                fprintf(stderr, "tur: invalid manifest '%s'\n", mpath);
+                free_tur_files(tur_files, n_files);
+                return 1;
+            }
+        }
+    }
 
     /* Auto-detect library mode: if no source file defines a `main` entry
      * point, build as a shared library (.so) rather than an executable.

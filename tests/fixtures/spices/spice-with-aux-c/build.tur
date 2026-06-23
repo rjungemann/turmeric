@@ -1,0 +1,10 @@
+;; spices-c-sources-plan happy fixture: a spice that vendors a hand-written
+;; C source (c/answer.c) plus a private header dir (c/inc). The header is used
+;; by both the aux .c and an inline-C block in src/main.tur, exercising the
+;; :c-includes -I injection and the :c-sources compile + link.
+(defpackage spice-with-aux-c
+  :name "spice-with-aux-c"
+  :build-opts #{
+    :c-includes ["c/inc"]
+    :c-sources  ["c/answer.c"]
+  })

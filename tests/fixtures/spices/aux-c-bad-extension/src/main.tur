@@ -1,0 +1,2 @@
+(defmodule main
+  (defn main [] : int 0))

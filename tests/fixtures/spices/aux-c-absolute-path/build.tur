@@ -1,0 +1,7 @@
+;; spices-c-sources-plan error fixture: :c-sources uses an absolute path, which
+;; is rejected -- vendored sources must be manifest-relative. DIAG_ERROR.
+(defpackage aux-c-absolute-path
+  :name "aux-c-absolute-path"
+  :build-opts #{
+    :c-sources ["/etc/hosts.c"]
+  })

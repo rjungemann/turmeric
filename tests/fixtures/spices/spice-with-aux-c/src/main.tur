@@ -1,0 +1,13 @@
+(defmodule main
+  ;; The inline-C block #includes the private vendored header, which is only
+  ;; reachable because :c-includes ["c/inc"] adds -Ic/inc to this compile. The
+  ;; symbol aux_answer is defined in the vendored c/answer.c, linked in via
+  ;; :c-sources. The binary therefore exits 42.
+  (defn aux-answer [] #{Unsafe} : int
+    ```c
+    #include "answer.h"
+    return aux_answer();
+    ```)
+
+  (defn main [] : int
+    (unsafe (aux-answer))))
