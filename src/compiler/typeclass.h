@@ -63,6 +63,15 @@ struct TypeClass {
      * Parallel to length n_assoc_types; NULL when the class declares none. */
     const Symbol **assoc_type_names;
     uint8_t        n_assoc_types;
+    /* assoc-types-2 (Part A / MP2): a single functional dependency declared with
+     * the `| (from... -> to...)` clause after the type-param vector.  The masks
+     * are bitsets over type-parameter indices (bit i set => param i participates).
+     * `has_fundep` is false when no `|` clause is present (every parameter must
+     * then be fixed at the dispatch site).  v1 stores at most one fundep; widen
+     * to an array only on demand (see plan Open Question 2). */
+    bool     has_fundep;
+    uint16_t fundep_from_mask;
+    uint16_t fundep_to_mask;
     /* Phase HKT-P4: file that defined this typeclass (for orphan instance check).
      * file_id mirrors Span.file_id; 0 means unknown/builtin. */
     uint16_t origin_file_id;
@@ -157,6 +166,30 @@ TypeClass *typeclass_env_find_assoc_type(const TypeClassEnv *env,
 const Type *typeclass_env_resolve_assoc_type(const TypeClassEnv *env,
                                              const Symbol *assoc_name,
                                              const Type *type_arg);
+
+/* assoc-types-2 (Part A / MP4): N-ary form of the projection resolver.  For an
+ * N-parameter class, the projection `(AssocName T1 T2 ... Tn)` matches the
+ * instance whose `n_type_args == n` and whose every type arg is `type_eq` to
+ * the corresponding `type_args[i]`.  The single-arg `typeclass_env_resolve_
+ * assoc_type` is the n == 1 special case and delegates here.  Returns NULL when
+ * no class declares `assoc_name`, no instance matches all n args, or the
+ * matched instance left the member unbound. */
+const Type *typeclass_env_resolve_assoc_type_n(const TypeClassEnv *env,
+                                               const Symbol *assoc_name,
+                                               const Type *type_args,
+                                               uint8_t n_type_args);
+
+/* assoc-types-2 (Part A / MP1): N-ary *exact* instance lookup.  Unlike
+ * typeclass_env_lookup_instance (kind-erased, first-match), this matches all
+ * `n_type_args` arguments by precise structural equality (`type_eq`), so it
+ * disambiguates distinct instances of the same constructor (Collect [(Vec int)
+ * int] vs Collect [(Vec cstr) cstr]).  Returns the matching instance or NULL.
+ * Does not consult type-parameter constraints -- it is a precise structural
+ * matcher, the substrate for fundep propagation and multi-param projection. */
+TypeClassInstance *typeclass_env_lookup_instance_exact(const TypeClassEnv *env,
+                                                       const TypeClass *typeclass,
+                                                       const Type *type_args,
+                                                       uint8_t n_type_args);
 
 /* Look up instances for a typeclass and type arguments */
 TypeClassInstance *typeclass_env_lookup_instance(const TypeClassEnv *env,

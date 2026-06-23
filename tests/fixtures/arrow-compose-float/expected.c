@@ -3071,7 +3071,7 @@ static double add_hy15(double);
 static double call_hyf(int64_t, double);
 static bool some___spec__bool_Option__opaque(Option__opaque);
 static Cons__int * tcons__spec__Cons__int___int64_t_int64_t(int64_t, int64_t);
-static void * _____spec__void___int64_t_size_t(int64_t, int64_t);
+static void * _____spec__void___int64_t_int64_t(int64_t, int64_t);
 static double __fn_1278__spec__double_void___double(void *, double);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
@@ -6229,7 +6229,7 @@ int main(int argc, char **argv) {
             __t101[0] = (int64_t)(intptr_t)__tur_fatshim_double_double;
             __t101[1] = (int64_t)(intptr_t)scale_hy2;
             void *__t102 = __t101;
-            void * h_1493 = _____spec__void___int64_t_size_t((int64_t)(intptr_t)(__t100), (int64_t)(intptr_t)(__t102));
+            void * h_1493 = _____spec__void___int64_t_int64_t((int64_t)(intptr_t)(__t100), (int64_t)(intptr_t)(__t102));
             (void)h_1493;
             int64_t *__t103 = (int64_t *)malloc(2 * sizeof(int64_t));
             __t103[0] = (int64_t)(intptr_t)__tur_fatshim_double_double;
@@ -6239,7 +6239,7 @@ int main(int argc, char **argv) {
             __t105[0] = (int64_t)(intptr_t)__tur_fatshim_double_double;
             __t105[1] = (int64_t)(intptr_t)scale_hy2;
             void *__t106 = __t105;
-            void * h3_1494 = _____spec__void___int64_t_size_t((int64_t)(intptr_t)(__t104), (int64_t)(intptr_t)(__t106));
+            void * h3_1494 = _____spec__void___int64_t_int64_t((int64_t)(intptr_t)(__t104), (int64_t)(intptr_t)(__t106));
             (void)h3_1494;
             printf("%g\n", (double)(call_hyf((int64_t)(intptr_t)(h_1493), 3.0)));
             printf("%g\n", (double)(call_hyf((int64_t)(intptr_t)(h_1493), 0.25)));
@@ -6266,7 +6266,7 @@ static double __fn_1278__spec__double_void___double(void * __env_p_1281, double 
         return (*( tur_thunk_double_double_t *)((void *)(intptr_t)(__env___env_1280__spec__double->gv)))((void *)(intptr_t)(__env___env_1280__spec__double->gv), (*( tur_thunk_double_double_t *)((void *)(intptr_t)(__env___env_1280__spec__double->fv)))((void *)(intptr_t)(__env___env_1280__spec__double->fv), x));
 }
 
-static void * _____spec__void___int64_t_size_t(int64_t f, int64_t g) {
+static void * _____spec__void___int64_t_int64_t(int64_t f, int64_t g) {
         void * __t109;
         {
             int64_t fv = (int64_t)(intptr_t)(f);

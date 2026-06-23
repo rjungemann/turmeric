@@ -1,0 +1,36 @@
+;; assoc-type-multiparam-projection -- assoc-types-2 Part A / MP1 + MP4.
+;;
+;; A two-parameter class `Collect [c e]` carries an associated type `Acc`.
+;; The projection `(Acc c e)` over BOTH class parameters resolves to the
+;; per-instance binding via an exact N-ary structural match
+;; (typeclass_env_lookup_instance_exact): the `(Vec int) int` instance and the
+;; `(Vec cstr) cstr` instance bind `Acc` to distinct types, and each projection
+;; site picks the right one.  Before MP4 the resolver hard-required a single
+;; type argument and a multi-param projection errored with "no instance
+;; binding for associated type".
+
+(defclass Collect [c e]
+  (type Acc : Type)
+  (collect-empty [self : c] : int))
+
+(definstance Collect [(Vec int) int]
+  (type Acc = int)
+  (collect-empty [self] 0))
+
+(definstance Collect [(Vec cstr) cstr]
+  (type Acc = cstr)
+  (collect-empty [self] 0))
+
+;; Projection in annotation position over a 2-parameter class.
+(defn bump-acc-int [x : (Acc (Vec int) int)] : int
+  (+ x 1))
+
+(defn echo-acc-cstr [x : (Acc (Vec cstr) cstr)] : cstr
+  x)
+
+(defn main [] : int
+  (println (echo-acc-cstr "hello"))
+  (if (= (bump-acc-int 41) 42)
+    (println "int-acc-ok")
+    (println "int-acc-bad"))
+  0)

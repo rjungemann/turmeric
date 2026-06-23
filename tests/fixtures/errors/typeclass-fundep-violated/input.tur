@@ -1,0 +1,18 @@
+;; typeclass-fundep-violated -- assoc-types-2 Part A / MP5.
+;;
+;; The class declares `| (c -> e)`, so the determining `c` must pin a single
+;; `e`.  Two instances share the same `c` (Box int) but bind different `e`
+;; (int vs cstr), which breaks the functional dependency.  Registering the
+;; second instance must be rejected at definstance.
+(defopaque Box [A] :int)
+
+(defclass Collect [c e] | (c -> e)
+  (cinsert [self : c x : e] : c))
+
+(definstance Collect [(Box int) int]
+  (cinsert [self x] ```c (void)x; return self; ```))
+
+(definstance Collect [(Box int) cstr]
+  (cinsert [self x] ```c (void)x; return self; ```))
+
+(defn main [] : int 0)
