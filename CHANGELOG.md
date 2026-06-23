@@ -4,6 +4,44 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.24.0] -- 2026-06-23
+
+### Changed
+
+- **All 16 `-X` feature flags are now accept-and-warn no-ops; every
+  gated feature is on by default (#TBD).** The flags
+  (`-Xlinear`, `-Xsubstructural`, `-Xunique-types`, `-Xgadt`,
+  `-Xunion-types`, `-Xintersection-types`, `-Xeffect-types`,
+  `-Xcontracts`, `-Xsessions`, `-Xdynamic-vars`, `-Xcallcc`,
+  `-Xsized-types`, `-Xdata-literals`, `-Xjson-reader`,
+  `-Xschema-reader`, `-Xsymbols`) are still recognized for source
+  compatibility, but each one emits `TUR-W0050` and otherwise does
+  nothing. Existing `build.tur` files and CI invocations keep
+  compiling unchanged. See
+  [`docs/guides/compiler-flags-guide.md`](docs/guides/compiler-flags-guide.md)
+  for the removal list and
+  [`docs/upcoming/v1/drop-x-flags-plan.md`](docs/upcoming/v1/drop-x-flags-plan.md)
+  for the plan.
+- **`--strict-effects` no longer auto-on with effect types.** When
+  `-Xeffect-types` was a real flag, passing it also enabled
+  `--strict-effects`. Effect typing is now always on, but
+  `--strict-effects` stays opt-in -- code without explicit `forall [e]`
+  annotations no longer gets the nudge unless you pass
+  `--strict-effects` explicitly.
+- **Partial features go always-on at their current completion level.**
+  `-Xunique-types` (UT0--UT3) and `-Xsized-types` (SZ0--SZ9; static
+  checking covers folded-constant sizes, runtime assertions cover
+  open-expression sizes) now light up for every program. Existing
+  not-yet-shipped-bit diagnostics (`TUR-E0260`, etc.) continue to fire
+  unchanged.
+
+### Internal
+
+- 283 fixture `flags` files containing only `-X` tokens deleted; the
+  rewritten `docs/guides/compiler-flags-guide.md` is now a short
+  diagnostic-flag reference plus a "Removed Feature Flags" pointer
+  table.
+
 ## [0.23.3] -- 2026-06-23
 
 ### Deprecated

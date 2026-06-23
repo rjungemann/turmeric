@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.23.3` -- deprecation notice: all `-X` feature flags become accept-and-warn no-ops in 0.24.0 (every gated feature will be unconditionally on).
+**Latest release:** `v0.24.0` -- all `-X` feature flags are now accept-and-warn no-ops; every previously-gated language feature is unconditionally on.
 
 ## What
 
