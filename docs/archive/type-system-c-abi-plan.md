@@ -1,6 +1,12 @@
 # Plan: Type System C-ABI Surface (typed fn-ptrs + inline-C result builder)
 
-> **Status:** Partial -- TC1-TC4 landed (typed `(c-fn [A...] B)` surface is live; consumed by `tourist-session/store.tur` and `rtmidi/in.tur`'s callback). TC5-TC9 still pending (no `tur_ok_int`/`tur_err_int` runtime helpers, no `tur_result.h`, rtmidi pilot not migrated -- `midi-in-new` still returns `ptr<void>`).
+> **Status:** Archived as the typed-`(c-fn ...)` half (TC0-TC4) -- which
+> is what this plan actually delivered. TC5-TC9 (inline-C result/option
+> helpers, docs, audit edits, rtmidi pilot, umbrella tracking) were
+> split out into `docs/upcoming/type-system-c-abi-followups-plan.md`
+> and are tracked there. The typed `(c-fn [A...] B)` surface is live
+> and consumed by `tourist-session/store.tur` and `rtmidi/in.tur`'s
+> callback site.
 > **Last Updated:** 2026-06-23
 > **Type:** Compiler + stdlib
 > **Triggers:**
