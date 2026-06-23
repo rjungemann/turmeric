@@ -303,6 +303,16 @@ static Type *struct_field_type_from_form(Elab *e, const Form *form,
             head == e->sym_forall_u || head == e->sym_exists_u) {
             return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
         }
+        /* parametric-defstruct-fn-field-gaps (Gap 1): a fn-typed field
+         * `(fn [A...] R)` / `(c-fn [A...] R)` / `(-> A... R)` is a function
+         * type, not a type-application.  Without this dispatch the generic
+         * type-app loop below recurses into the `[A...]` param vector and
+         * mis-parses it as a TupleN literal (a 1-arg fn hits the "tuple type
+         * must have 2 to 8 element types" error).  type_expr_from_form has
+         * the real fn-type parser; route there directly. */
+        if (head == e->sym_fn || head == e->sym_c_fn || head == e->sym_arrow) {
+            return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
+        }
         bool has_pipe = false, has_amp = false;
         for (uint32_t i = 0; i < form->as.list.len; i++) {
             Form *item = form->as.list.items[i];

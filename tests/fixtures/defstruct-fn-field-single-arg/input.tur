@@ -1,0 +1,19 @@
+;; parametric-defstruct-fn-field-gaps Gap 1 + Gap 2:
+;; A single-arg fn-typed field `(fn [A] A)` must parse as a function type,
+;; not mis-parse the 1-element `[A]` arg vector as a TupleN literal.  The
+;; struct's own type params `[S A]` must also be in scope inside the field's
+;; fn type (a 2-arg fn field over `[S A]` previously failed a kind check).
+;; (The `::` ascription supplies the type args make-struct cannot yet infer
+;; from a tyvar that appears only inside a fn-typed field -- that polymorphic
+;; inference is tracked as deeper monomorphization work.)
+(defstruct Endo [A] (run (fn [A] A)))
+(defstruct Lens [S A] (op (fn [S A] S)))
+
+(defn inc [x : int] : int (+ x 1))
+
+(defn apply-endo [e : (Endo int)] : int ((.run e) 41))
+
+(defn main [] : int
+  (let [e (:: (make-struct Endo inc) (Endo int))]
+    (println (apply-endo e)))
+  0)

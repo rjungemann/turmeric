@@ -1,0 +1,25 @@
+;; parametric-defstruct-fn-field-gaps Gap 4:
+;; A monomorphic struct whose fn-typed fields mention struct/cstr arg and
+;; result types is stored as the int64_t carrier (it is not all-primitive,
+;; so it never reaches the typed `tur_fnptr_..._t` path).  A call through
+;; such a field must bridge the int64_t carrier to the typed C function
+;; pointer with an (intptr_t) cast instead of warning/erroring under
+;; -Wint-conversion.
+(defstruct Person :copy [name : cstr age : int])
+(defstruct Lens :copy
+  [get (fn [Person] cstr)
+   put (fn [Person cstr] Person)])
+
+(defn person-name [p : Person] : cstr (.name p))
+(defn person-set-name [p : Person n : cstr] : Person
+  (make-struct Person n (.age p)))
+
+(defn view [l : Lens p : Person] : cstr ((.get l) p))
+(defn set-name [l : Lens p : Person n : cstr] : Person ((.put l) p n))
+
+(defn main [] : int
+  (let [l (make-struct Lens person-name person-set-name)
+        alice (make-struct Person "alice" 30)]
+    (println (view l alice))
+    (println (.name (set-name l alice "bob"))))
+  0)

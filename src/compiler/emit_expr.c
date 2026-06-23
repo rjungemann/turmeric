@@ -668,20 +668,35 @@ void emit_temp_decl(EmitCtx *ctx, Buf *body, Type type, const char *name, const 
      * (emit_type_c_name -> "void *"), not as a thin function pointer, which
      * would mistype the box.  Only a *bare* TY_FN temp is a function pointer. */
     if (type.kind == TY_FN && !type.as.fn.boxed) {
-        buf_printf(body, "%s (*%s)(",
-                   type_c_name(emit_type_from_kind(type.as.fn.result_kind)), name);
+        const char *ret_c = type_c_name(emit_type_from_kind(type.as.fn.result_kind));
+        /* Build the `(A0, A1, ...)` parameter list once so it can be reused for
+         * both the declarator and the initializer cast. */
+        Buf argbuf; buf_init(&argbuf);
         if (type.as.fn.arity == 0) {
-            buf_puts(body, "void");
+            buf_puts(&argbuf, "void");
         } else {
             for (uint8_t i = 0; i < type.as.fn.arity; i++) {
-                if (i > 0) buf_puts(body, ", ");
-                buf_printf(body, "%s",
-                           type_c_name(emit_type_from_kind(type.as.fn.arg_kinds[i])));
+                if (i > 0) buf_puts(&argbuf, ", ");
+                buf_puts(&argbuf,
+                         type_c_name(emit_type_from_kind(type.as.fn.arg_kinds[i])));
             }
         }
-        buf_puts(body, ")");
-        if (init_or_null) buf_printf(body, " = %s", init_or_null);
+        buf_putc(&argbuf, '\0');
+        buf_printf(body, "%s (*%s)(%s)", ret_c, name, argbuf.data);
+        if (init_or_null) {
+            /* parametric-defstruct-fn-field-gaps (Gap 4): when a fn-typed
+             * struct field carries a non-primitive arg/result (a struct or
+             * cstr), it is stored as the int64_t carrier rather than a typed
+             * `tur_fnptr_..._t`.  Reading it into this typed function-pointer
+             * temp would then be an int64_t -> fn-pointer init (a
+             * -Wint-conversion warning / hard error under -Werror).  Bridge
+             * through (intptr_t) and cast to the exact function-pointer type,
+             * matching the typed-field call sites elsewhere. */
+            buf_printf(body, " = (%s (*)(%s))(intptr_t)(%s)",
+                       ret_c, argbuf.data, init_or_null);
+        }
         buf_puts(body, ";\n");
+        buf_free(&argbuf);
         return;
     }
 
@@ -844,14 +859,23 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n", bn, iv);
         } else if (b->type.kind == TY_FN) {
             /* For function pointer types, emit: <result> (*<name>)(<args...>) = <init>; */
-            buf_printf(body, "%s (*%s)(",
-                       type_c_name(emit_type_from_kind(b->type.as.fn.result_kind)), bn);
+            const char *ret_c = type_c_name(emit_type_from_kind(b->type.as.fn.result_kind));
+            Buf argbuf; buf_init(&argbuf);
             for (uint8_t j = 0; j < b->type.as.fn.arity; j++) {
-                if (j > 0) buf_puts(body, ", ");
-                buf_printf(body, "%s",
-                           type_c_name(emit_type_from_kind(b->type.as.fn.arg_kinds[j])));
+                if (j > 0) buf_puts(&argbuf, ", ");
+                buf_puts(&argbuf,
+                         type_c_name(emit_type_from_kind(b->type.as.fn.arg_kinds[j])));
             }
-            buf_printf(body, ") = %s;\n", iv);
+            buf_putc(&argbuf, '\0');
+            /* parametric-defstruct-fn-field-gaps (Gap 4): the initializer may be
+             * the int64_t carrier (a fn-typed struct field whose non-primitive
+             * arg/result kept it off the typed `tur_fnptr_..._t` path).  Bridge
+             * through (intptr_t) and cast to the exact function-pointer type so
+             * the assignment is not an int64_t -> fn-pointer init
+             * (-Wint-conversion / hard error under -Werror). */
+            buf_printf(body, "%s (*%s)(%s) = (%s (*)(%s))(intptr_t)(%s);\n",
+                       ret_c, bn, argbuf.data, ret_c, argbuf.data, iv);
+            buf_free(&argbuf);
         } else if (b->is_poly_fn) {
             /* Phase HRT4: let-bound poly fn alias — declare as tur_poly_fn_t. */
             buf_printf(body, "tur_poly_fn_t %s = %s;\n", bn, iv);
