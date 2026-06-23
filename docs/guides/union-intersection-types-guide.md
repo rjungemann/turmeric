@@ -319,10 +319,21 @@ directly; floats are stored by their bit pattern so no precision is lost.
 
 ---
 
-## ADTs as Union Sugar (Deferred)
+## ADTs and Unions (interop via `any`, not a desugar)
 
-`(defdata Option [a] (none | (some a)))` desugaring to a union type is tracked in
-the GADT plan (Phase G4). It requires both `-Xgadt` and `-Xunion-types`.
+An early plan proposed desugaring `defdata` into a union type internally so the
+two share one code path. That internal unification is **not pursued**: the union
+machinery is monomorphic, closed, and non-recursive, while every `defdata` in
+the tree is parametric (`Either [L R]`), higher-kinded (`Fix [^f]`,
+`Free [^f a]`), recursive, or a GADT (`Nat`). Lowering those onto today's union
+representation would mean rebuilding parametric/HKT/recursive/GADT sum-type
+support on top of unions -- a far larger change with no user-visible payoff.
+
+The user-facing goal that desugar was meant to deliver -- ADT values
+participating in union-style dispatch -- **already ships** through the `any` top
+type. An ADT value widens to `any` (boxing codegen), reports its kind via
+`type-of` (`"adt"`), and lands back in `match` through a checked `cast`. See the
+`defdata-as-union` and `any-box-adt` fixtures.
 
 ---
 
@@ -432,7 +443,7 @@ The following IT4 items are not yet implemented:
 |---|---|
 | Tagged union C codegen | General `struct { int tag; union { A a; B b; } data; }` emission for `(A \| B)` unions (the `any` top type ships via `tur_tagged_t`) |
 | Per-name `type-of`/`cast` granularity | `type-of` reports `"struct"`/`"adt"`, not the specific struct/ADT name; `cast` checks at that same granularity |
-| ADT-as-union sugar | `defdata` desugaring to union (tracked in GADT plan G4) |
+| ADT-as-union sugar | Not pursued -- infeasible against monomorphic unions (defdata is parametric/HKT/recursive/GADT). ADTs already interoperate with unions via `any` boxing; see [ADTs and Unions](#adts-and-unions-interop-via-any-not-a-desugar). |
 | Instance intersection on unions | Deferred failure during instance resolution may be hard to diagnose |
 
 ---

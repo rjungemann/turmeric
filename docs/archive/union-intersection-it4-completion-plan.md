@@ -1,10 +1,55 @@
 # Union / Intersection Types -- IT4 Deferred Items Plan
 
+## Resolution (2026-06-23)
+
+**Status: closed.** Items A and B shipped; item C is not pursued.
+
+- **A -- `any` boxing codegen: DONE.** Every payload kind round-trips through
+  `any` -- immediates ride the carrier, floats by bit pattern, cstr/ptr/ADT by
+  pointer, by-value structs heap-boxed. (`any-box-*` fixtures.)
+- **B -- `cast` / `type-of`: DONE.** `(cast x T)` is a checked downcast that
+  panics on a tag mismatch; `(type-of x)` reports the stored value's kind.
+  Granularity is per-*kind* (`"adt"`, `"struct"`), not per-name -- per-name
+  granularity is the one genuinely-deferred IT4 item and is tracked in the
+  guide's [Deferred](../guides/union-intersection-types-guide.md#deferred)
+  section, not here.
+- **C -- defdata-to-union desugar: NOT PURSUED (infeasible + no payoff).**
+  The premise -- "with GADTs always-on it's just a desugar pass" -- does not
+  hold. The union machinery is monomorphic, closed, and non-recursive, while
+  **every** `defdata`/`defgadt` in the tree is parametric (`Either [L R]`),
+  higher-kinded (`Fix [^f]`, `Free [^f a]`), recursive, or a GADT (`Nat`).
+  Lowering those onto today's union representation would require rebuilding
+  parametric/HKT/recursive/GADT sum-type support on top of unions -- a far
+  larger change that would break all 12 stdlib ADT modules and the ADT/GADT
+  fixture suite (the by-value gate). The non-goal at the bottom of this plan
+  already excluded GADTs; the parametric/HKT/recursive plain-`defdata` users
+  are the same wall.
+
+  Crucially, **C's user-facing goal already ships without the desugar**: ADT
+  values participate in union-style dispatch through the `any` top type (item
+  A's boxing). The `defdata-as-union` fixture demonstrates a `defdata` value
+  that pattern-matches *and* round-trips through `any` with `type-of` + checked
+  `cast` back into `match`. So the desugar would have been a pure internal
+  code-path merge with zero behavioral change -- not worth the risk on the one
+  track to v1.
+
+The flag status in
+[compiler-flags-guide.md](../guides/compiler-flags-guide.md) stays
+"Substantial (IT0--IT4)" rather than "Complete": per-name `type-of`/`cast`
+granularity, general tagged-union struct codegen, and union instance-
+intersection diagnosis remain legitimately deferred. The guide's
+[ADTs and Unions](../guides/union-intersection-types-guide.md#adts-and-unions-interop-via-any-not-a-desugar)
+section records the C decision.
+
+The original plan text follows unchanged for the record.
+
+---
+
 ## Context
 
 `-Xunion-types` and `-Xintersection-types` shipped IT0–IT4 substantially.
 The original plan
-([archive/history/intersection-union-types-plan.md](../../archive/history/intersection-union-types-plan.md))
+([archive/history/intersection-union-types-plan.md](history/intersection-union-types-plan.md))
 marks IT4 as "partial" and lists three deferred items at line 212–220:
 
 1. **Boxing codegen for `any`-typed pointer-sized payloads.** Today
@@ -160,7 +205,7 @@ case stays bit-identical.
 
 ## See also
 
-- [archive/history/intersection-union-types-plan.md](../../archive/history/intersection-union-types-plan.md) -- IT0–IT4 origin plan; this plan closes its lines 212–220 deferred bullets.
-- [archive/history/gadts-plan.md](../../archive/history/gadts-plan.md) -- G4 stretch row that named ADT-as-union sugar.
-- [drop-x-flags-plan.md](drop-x-flags-plan.md) -- coordinates the flag graduation.
-- [docs/guides/union-intersection-types-guide.md](../../guides/union-intersection-types-guide.md) -- user-facing reference.
+- [archive/history/intersection-union-types-plan.md](history/intersection-union-types-plan.md) -- IT0–IT4 origin plan; this plan closes its lines 212–220 deferred bullets.
+- [archive/gadts-plan.md](gadts-plan.md) -- G4 stretch row that named ADT-as-union sugar.
+- [drop-x-flags-plan.md](../upcoming/v1/drop-x-flags-plan.md) -- coordinates the flag graduation.
+- [docs/guides/union-intersection-types-guide.md](../guides/union-intersection-types-guide.md) -- user-facing reference.
