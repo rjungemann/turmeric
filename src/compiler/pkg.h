@@ -309,8 +309,16 @@ char *pkg_workspace_member_path(const char *project_dir, const char *dep_name);
  * does not break).  *out_n is the count.  Caller must free with
  * pkg_cmake_deps_free.  Returns true on success (including the no-deps
  * case where *out_n stays 0). */
+/* `include_workspace_siblings`: when true, the walk also seeds the worklist
+ * with every workspace sibling member (matching the historical "any sibling
+ * is implicitly importable" rule used by `tur run`).  When false, only the
+ * manifest's own `:spices` closure contributes -- the narrower semantic
+ * `tur build .` wants so it doesn't accidentally try to configure cmake-deps
+ * from unrelated workspace members.  See
+ * docs/archive/tur-build-cmake-deps-workspace-overreach.md. */
 bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
                                        const PkgManifest *root_manifest,
+                                       bool               include_workspace_siblings,
                                        PkgCmakeDep      **out_deps,
                                        int               *out_n);
 

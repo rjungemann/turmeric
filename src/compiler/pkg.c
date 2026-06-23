@@ -2056,11 +2056,13 @@ static char *resolve_spice_dep_dir(const char *root_project_dir,
     char dep_dir[4096];
     char *ws = s->path ? NULL
                        : pkg_workspace_member_path(root_project_dir, s->name);
+    bool from_path = false;
     if (ws) {
         snprintf(dep_dir, sizeof(dep_dir), "%s", ws);
         free(ws);
     } else if (s->path) {
         snprintf(dep_dir, sizeof(dep_dir), "%s/%s", root_project_dir, s->path);
+        from_path = true;
     } else if (s->ref) {
         snprintf(dep_dir, sizeof(dep_dir), "%s/spices/%s-%s",
                  root_project_dir, s->name, s->ref);
@@ -2068,7 +2070,13 @@ static char *resolve_spice_dep_dir(const char *root_project_dir,
         snprintf(dep_dir, sizeof(dep_dir), "%s/spices/%s",
                  root_project_dir, s->name);
     }
-    if (s->subdir) {
+    /* `:subdir` describes the sub-path inside a URL-fetched repo (e.g. a
+     * monorepo's `spices/<name>`).  When the entry is `:path`-based the
+     * path already points at the on-disk package root, so appending the
+     * subdir lands somewhere that does not exist (the same shape bit
+     * resolve_include_dirs_from_manifest had to grow ancestor-walking to
+     * work around).  Only join when we did NOT come from `:path`. */
+    if (s->subdir && !from_path) {
         char tmp[4096];
         snprintf(tmp, sizeof(tmp), "%s/%s", dep_dir, s->subdir);
         snprintf(dep_dir, sizeof(dep_dir), "%s", tmp);
@@ -2223,6 +2231,7 @@ static char **collect_workspace_sibling_dirs(const char *project_dir,
 
 bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
                                        const PkgManifest *root_manifest,
+                                       bool               include_workspace_siblings,
                                        PkgCmakeDep      **out_deps,
                                        int               *out_n) {
     *out_deps = NULL;
@@ -2310,8 +2319,13 @@ bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
      * must participate in the build too.  Each seeded dir is walked exactly
      * like a :spices entry (its build.tur read, :cmake-deps unioned, its own
      * :spices enqueued); the visited set dedups any overlap with the :spices
-     * seeds above. */
-    {
+     * seeds above.
+     *
+     * Skipped when `include_workspace_siblings` is false (the `tur build .`
+     * caller), since `tur build` does not transparently link in workspace
+     * siblings the way `tur run` does -- it sticks to the declared :spices
+     * closure.  See docs/archive/tur-build-cmake-deps-workspace-overreach.md. */
+    if (include_workspace_siblings) {
         int    n_sib   = 0;
         char **sib_dirs = collect_workspace_sibling_dirs(root_project_dir,
                                                          &n_sib);
@@ -4207,6 +4221,7 @@ int cmd_pkg_fetch(int argc, char **argv) {
     PkgCmakeDep *fetch_deps   = NULL;
     int          n_fetch_deps = 0;
     if (!pkg_collect_transitive_cmake_deps(".", &m,
+                                           /*include_workspace_siblings=*/true,
                                            &fetch_deps, &n_fetch_deps)) {
         fprintf(stderr,
                 "spice: transitive cmake-deps resolution failed\n");

@@ -3203,6 +3203,7 @@ static int cmd_run(int argc, char **argv) {
     PkgCmakeDep *closure_deps = NULL;
     int          n_closure_deps = 0;
     if (!pkg_collect_transitive_cmake_deps(root, &m,
+                                           /*include_workspace_siblings=*/true,
                                            &closure_deps, &n_closure_deps)) {
         fprintf(stderr, "tur run: transitive cmake-deps resolution failed\n");
         pkg_lock_free(&lock);
@@ -4142,6 +4143,63 @@ static int cmd_build_project(const char *root_in, const char *out_path,
                 fprintf(stderr, "tur: invalid manifest '%s'\n", mpath);
                 free_tur_files(tur_files, n_files);
                 return 1;
+            }
+        }
+    }
+
+    /* Transitive cmake-deps autobuild.  Walks the manifest's `:spices`
+     * closure (but NOT every workspace sibling -- see
+     * docs/archive/tur-build-cmake-deps-workspace-overreach.md) and gen +
+     * builds the union of their `:cmake-deps` into `<root>/cmake/`, mirroring
+     * what cmd_run does for `tur run`.  Without this, a spice that imports
+     * the json modules (which pull in yyjson) generates headers fine but
+     * fails at cc with `yyjson.h not found`.  Skipped when
+     * `cmake/CMakeLists.txt` already exists so reruns are cheap. */
+    {
+        char mpath[4096];
+        if (pkg_resolve_manifest_path(root, mpath, sizeof(mpath))) {
+            PkgManifest dm; memset(&dm, 0, sizeof(dm));
+            if (pkg_manifest_read(mpath, &dm)) {
+                PkgCmakeDep *closure = NULL;
+                int n_closure = 0;
+                if (pkg_collect_transitive_cmake_deps(
+                        root, &dm,
+                        /*include_workspace_siblings=*/false,
+                        &closure, &n_closure)
+                    && n_closure > 0) {
+                    char cmake_lists[4096];
+                    snprintf(cmake_lists, sizeof(cmake_lists),
+                             "%s/cmake/CMakeLists.txt", root);
+                    struct stat _cmst;
+                    bool already_built = (stat(cmake_lists, &_cmst) == 0);
+                    if (!already_built) {
+                        char lock_path[4096];
+                        snprintf(lock_path, sizeof(lock_path),
+                                 "%s/tur.lock", root);
+                        PkgLockFile lock;
+                        memset(&lock, 0, sizeof(lock));
+                        lock.format_version = 1;
+                        pkg_lock_read(lock_path, &lock);
+                        PkgManifest mu = dm;
+                        mu.cmake_deps   = closure;
+                        mu.n_cmake_deps = n_closure;
+                        if (pkg_gen_cmake_deps(root, &mu)
+                            && pkg_cmake_build(root, &mu, &lock, NULL)) {
+                            pkg_lock_write(lock_path, &lock);
+                        } else {
+                            fprintf(stderr,
+                                "tur build: cmake dependency build failed\n");
+                            pkg_cmake_deps_free(closure, n_closure);
+                            pkg_lock_free(&lock);
+                            pkg_manifest_free(&dm);
+                            free_tur_files(tur_files, n_files);
+                            return 1;
+                        }
+                        pkg_lock_free(&lock);
+                    }
+                }
+                pkg_cmake_deps_free(closure, n_closure);
+                pkg_manifest_free(&dm);
             }
         }
     }

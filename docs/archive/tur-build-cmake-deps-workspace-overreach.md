@@ -1,9 +1,38 @@
 ---
-status: open
+status: resolved
+resolved: 2026-06-23
 severity: medium
 discovered: 2026-06-23
 discovered-by: tourist-build-investigation
+fix: pkg.c include_workspace_siblings flag + cmd_build_project cmake-deps autobuild
 ---
+
+## Resolution (2026-06-23)
+
+Implemented the two-step fix from the original "Fix direction" sketch:
+
+1. **`pkg_collect_transitive_cmake_deps` gained an
+   `include_workspace_siblings` bool.**  `cmd_run` passes `true` (preserving
+   the historical "any sibling is implicitly importable" rule); the new
+   `cmd_build_project` autobuild passes `false` so the closure stays inside
+   the manifest's declared `:spices`.
+2. **`cmd_build_project` now runs the cmake-deps autobuild** after
+   manifest validation but before `cmd_build_multi_files`, mirroring
+   `cmd_run`'s block.  Skips when `<root>/cmake/CMakeLists.txt` already
+   exists.
+3. **`resolve_spice_dep_dir` (pkg.c) was fixed for `:path + :subdir`.**
+   The walk silently dropped `:path "../httpd"` + `:subdir "spices/httpd"`
+   deps because it joined them (`tourist/../httpd/spices/httpd`, which
+   does not exist); `:subdir` is the sub-path inside a URL-fetched repo
+   and is meaningless when `:path` is already on-disk.  The fix only joins
+   when the entry was NOT `:path`-based -- same shape the
+   `resolve_include_dirs_from_manifest` fallback walking handled earlier.
+
+Verified: `tur build .` on `../turmeric-spices/spices/tourist` now
+configures and builds `yyjson` + `mbedtls` into tourist's `cmake/`
+subproject and successfully links the final `libtur-tourist.so` -- no
+manual `tur run` or sibling `tur build` step needed.  Main suite: +1
+pass / 0 regressions (1607/183 vs 1606/183).
 
 # `tur build .` cmake-deps transitive walk over-reaches workspace siblings
 
