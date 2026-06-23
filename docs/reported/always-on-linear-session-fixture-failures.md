@@ -84,3 +84,113 @@ handle abstract protocol parameters.
 Fix direction: teach the session-op resolver to accept a `SChan (SRecv ...)`
 type-application with tyvar leaves (treat it parametrically), or defer the
 protocol-shape check until monomorphization.
+
+## Recon notes (2026-06-23) -- answered questions and prereqs
+
+A pre-implementation read of the relevant elaborator code. Each theme has
+answers that are present in the code today plus prereq groundwork that
+does *not* require the design call itself.
+
+### Theme 1 -- ref<T> deref/auto-drop
+
+Answered:
+
+- **Existing infrastructure for "skip auto-drop if explicit drop! ran"
+  already exists.** `is_binding_consumed()` in `src/compiler/elab_core.c:1150`
+  detects `(drop! b)`, `(rc/drop b)`, and `(ref/from-rc b)` calls and is
+  already wired into auto-drop injection at `elab_forms.c:952,980,1081,1105`.
+  A non-consuming-deref fix can plug into the same path -- the
+  coordination point already exists; what's missing is making deref
+  *not* set `is_linear_consumed` in the EX_VAR walk
+  (`elab_toplevel.c:420`).
+- **The "~15 fixtures" claim is conservative.** `ref-*` fixtures using `@`
+  (deref): `ref-basic`, `ref-deref`, `ref-explicit-drop`,
+  `ref-if-branch-move-suppression`, `ref-in-closure`, `ref-move`,
+  `ref-nested`, `ref-return`, `ref-return-early-branch` -- 9 ref fixtures
+  plus the `rc-auto-drop-*` cluster. A precise audit (which depend on
+  deref-as-consumption vs. which survive a non-consuming deref) is
+  prereq #1.
+- **`::` reinterpret is a separate consumption site** from deref and must
+  be tracked alongside any deref-semantics change. Check `elab_memory.c`
+  before claiming a fix is complete.
+
+Prereqs (no design call needed):
+
+1. Audit each `@`-using ref fixture: classify "depends on deref-consuming"
+   vs. "survives non-consuming deref" by inspecting whether the body has
+   a follow-up explicit `drop!`/`rc/drop` or relies on scope-exit auto-drop.
+2. Confirm `::` reinterpret shares the EX_VAR consumption path (or doesn't)
+   so any fix is coordinated.
+3. Add a fixture that asserts the double-free case (auto-drop + explicit
+   `drop!`) is rejected today, so the future fix has a regression anchor.
+
+### Theme 2 -- channels captured into multiple closures
+
+Answered:
+
+- **The consuming site is `binding_mark_moved()` in `elab_sessions.c:273`
+  (send) and `:328` (recv)**, not the closure-capture itself. The closure
+  capture path uses `collect_free_vars()` (`elab_fns.c:4018`) but does
+  not currently mark linear bindings consumed -- the report's diagnosis
+  ("closure capture itself is the consuming move") is worth re-verifying
+  against this finding.
+- **`rc/clone` is fully implemented** at `elab_memory.c:215-244` and
+  registered in `builtins.c:157`. An `rc<Chan>` wrapper is a viable
+  workaround path with no new compiler work.
+- **Precedent for sharing a channel safely exists:**
+  `tests/fixtures/producer-consumer/input.tur:89-96` shares a channel
+  across threads by wrapping it in a thread-arg struct as `ptr<void>`.
+  Both failing fixtures could adopt this shape today as a holding
+  pattern.
+- **Multishot handlers already reject capturing linear values**
+  (`elab_effects.c:1215-1234`, TUR-E0500). Either fn closures already do
+  the same check (then the report's diagnosis is right and the fix is at
+  capture time) or they don't (then the report's diagnosis is wrong and
+  the consume is at first use inside the body). This is the single most
+  load-bearing question to resolve before designing the fix.
+
+Prereqs:
+
+1. Determine empirically whether the failure fires at *capture time* or
+   *first-use time* -- e.g. add a `(local-spawn g (fn [_] : nil 0))`
+   that captures `ch` but never uses it; observe whether the error
+   fires.
+2. Prototype `(rc/clone ch)` per fiber in `schan-worker-pool` to confirm
+   Rc-wrapped channels solve the case end-to-end.
+3. Add the `producer-consumer`-style ptr<void> workaround to one of the
+   two failing fixtures so the suite count drops to 4 while the design
+   call is pending.
+
+### Theme 3 -- recv on abstract-typed SChan
+
+Answered:
+
+- **All session ops route through one chokepoint:** `session_protocol_of()`
+  at `elab_sessions.c:231-245` rejects anything that isn't `TY_SESSION`.
+  `send`, `recv`, `close`, `offer`, `choose_left`, `choose_right` all
+  call it (`:260,315,391,430,467,516`). Relaxing the check at this single
+  site fixes all six ops in parallel -- the blast radius is narrower
+  than the report implies.
+- **Monomorphization is a separate emission-time pass**, not interleaved
+  with elaboration -- so "defer until monomorphization" requires either
+  threaded state or a second pass. The cheaper fix is to accept
+  `TY_APP(... TY_TYVAR ...)` at the existing site and let
+  monomorphization re-check on instantiation.
+- **Minimal repro is already isolated** in
+  `generic-relay-aggregate-result/input.tur:17-23` -- a forwarder
+  `fwd [T R] [c : (SChan (SRecv T R))]` calling `(recv c)`. A reduced
+  fixture (just the forwarder, no aggregate) would shrink the diff for
+  the fix.
+
+Prereqs:
+
+1. Reduce `generic-relay-aggregate-result` to a single-defn repro so the
+   fix's regression test is minimal.
+2. Add a parallel reduced fixture for `send` on an abstract `SChan
+   (SSend T R)`; if a future fix only patches `recv`, this asserts the
+   sibling ops are addressed at the same time (since they share the
+   chokepoint, this should be free).
+3. Verify monomorphization currently re-elaborates the body at concrete
+   types (so the deferred concrete-shape check actually runs); if it
+   doesn't, the "defer" strategy is unsound and the parametric-accept
+   path is the only viable one.
