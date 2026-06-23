@@ -1,0 +1,9 @@
+;; UT2 (phi downgrade): an if-join of a unique arm and a shared arm is shared.
+;; `u` is ^unique, but `5` is an ordinary (shared) int, so the join `r` is
+;; inferred shared -- not unique -- and may be read more than once.
+(defn main [] : int
+  (let [^unique u 42]
+    (let [r (if (> 1 0) u 5)]
+      (println r)
+      (println r)))
+  0)

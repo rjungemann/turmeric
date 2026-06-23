@@ -1,0 +1,8 @@
+;; UT3: consume threads a unique value through a single transforming call.
+(defn triple [n : int] : int
+  (* n 3))
+
+(defn main [] : int
+  (let [^unique u 14]
+    (println (consume u triple)))
+  0)

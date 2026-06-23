@@ -1,0 +1,9 @@
+;; UT3: with-unique scopes a ^unique binding without a hand-written annotation.
+;; `u` is checked under the at-most-one-reference discipline across the body.
+(defn use-once [^unique x : int] : int
+  (* x 2))
+
+(defn main [] : int
+  (with-unique [u 21]
+    (println (use-once u)))
+  0)

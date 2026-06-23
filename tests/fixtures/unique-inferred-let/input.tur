@@ -1,0 +1,13 @@
+;; UT2: uniqueness inference. `r` is bound to a ref<T> factory result with no
+;; explicit ^unique annotation, yet the binding is inferred uniquely owned
+;; (ref<T> is CK_UNIQUE).  Consuming it exactly once is fine.
+(defn make-ref [n : int] : ref
+  (ref/from-rc (rc/of n)))
+
+(defn use-ref [^unique r : ref] : int
+  7)
+
+(defn main [] : int
+  (let [r (make-ref 100)]
+    (println (use-ref r)))
+  0)

@@ -20,7 +20,7 @@ between flags.
 |---|---|---|---|
 | `-Xlinear` | ✅ Complete | `^linear` annotation; `CK_LINEAR` capability kind; linearity tracking in elaborator | -- |
 | `-Xsubstructural` | ✅ Complete | `^linear`, `^affine`, `^relevant` capability kinds; full substructural framework | `-Xlinear` |
-| `-Xunique-types` | ✅ Partial (UT0–UT1) | Uniqueness types; `CK_UNIQUE`; `ref<T>` as an explicit unique type | -- |
+| `-Xunique-types` | ✅ Complete (UT0–UT3) | Uniqueness types; `CK_UNIQUE`; `ref<T>` as an explicit unique type; uniqueness inference on let-bindings; `with-unique`/`consume`/`replace` stdlib forms | -- |
 | `-Xgadt` | 🚫 Deprecated no-op | `defgadt`; GADT constructor return-type annotations; skolem refinement in `match` arms; `Equal`/`coerce`/`sym`/`trans` in stdlib -- all now **enabled by default**. The flag prints a deprecation warning and has no effect. | -- |
 | `-Xunion-types` | ✅ Substantial (IT0–IT4) | Union types `(A \| B)`; `any` top type; `(cast x T)`; `(type-of x)`; union pattern matching; typeclass dispatch on unions | -- |
 | `-Xintersection-types` | ✅ Substantial (IT0–IT4) | Intersection types `(A & B)`; typeclass intersection constraints | -- |
@@ -122,8 +122,10 @@ checker but not represented as a named type property. With this flag, `^unique`
 annotations are accepted and the elaborator checks that no two live bindings
 refer to the same unique value.
 
-**Status note:** UT0–UT1 are complete. UT2–UT3 (inference, stdlib patterns)
-are deferred.
+**Status note:** UT0–UT3 are complete. Uniqueness is inferred on let-bindings
+whose initializer is uniquely owned (no hand-written `^unique` required -- UT2),
+and the `with-unique` / `consume` / `replace` pattern forms ship in
+`stdlib/unique.tur` (auto-loaded under this flag -- UT3).
 
 **See also:** [uniqueness-types-guide.md](uniqueness-types-guide.md)
 
@@ -542,7 +544,7 @@ turc -Xsubstructural -Xunion-types -Xintersection-types -Xeffect-types myfile.tu
 |---|---|---|
 | `-Xlinear` | LT0–LT4 | ✅ Complete |
 | `-Xsubstructural` | ST0–ST3 | ✅ Complete |
-| `-Xunique-types` | UT0–UT1 | ✅ Partial (UT2–UT3 deferred) |
+| `-Xunique-types` | UT0–UT3 | ✅ Complete |
 | `-Xgadt` | G0–G4 | 🚫 Deprecated no-op (GADTs enabled by default) |
 | `-Xunion-types` | IT0–IT4 | ✅ Substantial (some IT4 items deferred) |
 | `-Xintersection-types` | IT0–IT4 | ✅ Substantial |

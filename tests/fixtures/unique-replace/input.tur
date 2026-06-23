@@ -1,0 +1,5 @@
+;; UT3: replace consumes the unique `old` and returns it as the displaced value.
+(defn main [] : int
+  (let [^unique current 42]
+    (println (replace current 99)))
+  0)

@@ -690,6 +690,24 @@ Expr *elab_let(Elab *e, const Form *call) {
             b->is_unique = true;
             /* copy_kind is already CK_UNIQUE, inherited from init->type */
         }
+        /* UT2: Infer uniqueness from the initializer's type.  When the RHS is a
+         * uniquely-owned value (CK_UNIQUE -- e.g. a ref<T> factory result or a
+         * call whose return type is ^unique) and the binding carries no explicit
+         * ^unique annotation, promote the type-level uniqueness signal onto the
+         * binding so the UT1 alias / use-after-consume checks (TUR-E0200 /
+         * TUR-E0201) apply.  This makes hand-annotating ^unique unnecessary in
+         * the common "let-bind a unique factory result" shape.  Gated on
+         * -Xunique-types, so by-value/default builds are unaffected.
+         *
+         * A borrowed ref obtained from `ref/from-rc` shares the rc's payload and
+         * is intentionally excluded -- it is a non-owning view, not a unique
+         * owner, and marking it unique would reject legitimate re-reads. */
+        if (g_unique_enabled && !is_unique_ann && !b->is_unique &&
+            ty_is_unique(init->type) &&
+            init->kind != EX_REF_FROM_RC) {
+            b->is_unique = true;
+            b->type.copy_kind = CK_UNIQUE;
+        }
         /* ST1: Propagate affine/relevant through ownership transfer (let [y x] where x is ^affine/^relevant) */
         if (g_substructural_enabled && !is_affine_ann && !is_relevant_ann &&
                 init->kind == EX_VAR) {
@@ -2090,6 +2108,22 @@ Expr *elab_if(Elab *e, const Form *call) {
             return NULL;
         } else {
             result_t = then_->type;
+            /* UT2 (U3): phi downgrade at an if/match join.  The join of two
+             * arms that agree on type but disagree on uniqueness is *shared*:
+             * unique ∧ unique → unique, but unique ∧ shared → shared (a safe
+             * weakening -- the result may be aliased through the shared arm, so
+             * it cannot be treated as uniquely owned).  Adopt the non-unique
+             * arm's copy_kind so a downstream let does not infer uniqueness
+             * (UT2).  The user can re-annotate `^unique` to force the stricter
+             * discipline.  Gated on -Xunique-types. */
+            if (g_unique_enabled) {
+                bool then_uniq = ty_is_unique(then_->type);
+                bool else_uniq = ty_is_unique(else_->type);
+                if (then_uniq && !else_uniq)
+                    result_t.copy_kind = else_->type.copy_kind;
+                else if (!then_uniq && else_uniq)
+                    result_t.copy_kind = then_->type.copy_kind;
+            }
         }
     } else {
         /* Without else, then-branch moves are not guaranteed after the if. */
