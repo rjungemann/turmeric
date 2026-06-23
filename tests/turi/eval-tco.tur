@@ -123,3 +123,16 @@
     0
     (reset (+ 1 (shift (fn [v :int] (nest-sh (- n 1))) 0)))))
 (println (nest-sh 200000))
+
+;; --- Test 11 (SR N4 Slice 2): deeply NESTED call/cc is heap-bounded --------
+;; Each level is its own (call/cc (fn [k] (+ 1 (g (- n 1))))) returning normally
+;; (the escape k is never invoked).  Before SR N4 Slice 2 the call/cc boundary
+;; was a setjmp escape pad (eval_callcc_escape), so this nesting C-recursed and
+;; tripped the guard at ~500.  The driver now models it on the work-stack
+;; (DK_ESCAPE) and (k v) unwinds via env->aborting, so it folds onto the heap.
+;; nest-cc N adds 1 per level: nest-cc 200000 = 200000.
+(defn nest-cc [n :int] :int
+  (if (= n 0)
+    0
+    (call/cc (fn [k] (+ 1 (nest-cc (- n 1)))))))
+(println (nest-cc 200000))

@@ -131,6 +131,11 @@ typedef struct TuriEnv {
     bool        aborting;
     TuriValue   abort_value;
     int         abort_prompt_kind;
+    /* SR N4 Slice 2: when non-NULL, the abort is a call/cc *escape* targeting
+     * this specific boundary (a TuriEscapeBoundary*), matched by pointer rather
+     * than by abort_prompt_kind; reset boundaries pass it through.  NULL for a
+     * plain shift abort (matched by prompt kind). */
+    void       *abort_target;
     /* SB3: step-fuel resource limit (0 in both fields = unlimited) */
     uint64_t    step_fuel;        /* remaining fuel units; decremented each eval step */
     uint64_t    step_fuel_limit;  /* initial limit set by turi_env_set_fuel */

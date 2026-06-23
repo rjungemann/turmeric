@@ -6,6 +6,47 @@ description: Eliminate the last source of unbounded C recursion in the tree-walk
 
 # Turi stackless native re-entry (full CEK / driver-CPS) -- Plan
 
+## Status update -- 2026-06-23 (N4 Slice 2 -- call/cc on a work-stack escape)
+
+**`call/cc`/escape is now a work-stack boundary, not a setjmp escape pad --
+nested `call/cc` is heap-bounded.** Second slice of the unwind-to-boundary
+conversion; reuses Slice 1's abort signal with a target pointer.
+
+- The abort signal gained `env->abort_target` (a `void*`): NULL = a plain shift
+  abort (matched by `abort_prompt_kind`); non-NULL = a `call/cc` *escape*
+  targeting a specific `TuriEscapeBoundary*` (matched by pointer). Reset
+  boundaries pass an escape through (`reset_consume_abort` now also requires
+  `abort_target == NULL`); the shift-abort sites set `abort_target = NULL`.
+- New `DK_ESCAPE` DriveKind: a `(call/cc f)` reached on the driver registers a
+  heap `TuriEscapeBoundary`, pushes `DK_ESCAPE`, and applies `f` with the
+  boundary pointer as its handle `k` -- **no setjmp**. `tur_escape_resume`
+  (`(k v)`) raises `env->aborting` with `abort_target = b` instead of
+  longjmp-ing; the signal unwinds the work-stack to the matching `DK_ESCAPE`,
+  which restores saved state and delivers the value. `eval_callcc_escape` (the
+  non-driver path) is de-setjmp'd the same way (checks the signal after
+  `turi_call`).
+- Because escape and shift share the one signal + propagation, an escape unwinds
+  cleanly past intervening resets / DC handlers, and a shift abort unwinds past
+  intervening call/cc boundaries -- each pops + frees its frame on the way.
+
+Result: `(defn g [n] (if (= n 0) 0 (call/cc (fn [k] (+ 1 (g (- n 1)))))))` runs
+`(g 200000)` heap-bounded (was recursion-limit at ~500); an escape invoked 3000
+frames deep (`(+ 5 (call/cc (fn [k] (loop 3000 -> (k 99)))))` => 104) unwinds
+heap-bounded. New `tur_eval_tco` regression `nest-cc 200000`. `bash tests/run.sh`
+(1783/0), all eval/effects/continuation/tco ctests (14/14), `eval-tco` (11/11),
+`run-turi` baseline (23, no delimited-control regression).
+
+**Found (pre-existing, filed):** a `call/cc` escape continuation passed through
+a `:cont`-typed parameter mis-lowers `(k v)` to a delimited cont-resume instead
+of an upward escape (returns the value normally rather than escaping). Elab-level
+(`elab_call.c` `TY_CONT`), independent of this runtime change. See
+`docs/reported/callcc-escape-through-cont-param-misslowers.md`.
+
+**Remaining for the guard to retire (Slice 3):** serial/cloneable resets still
+use the (de-setjmp'd but still C-framed) `eval_reset_boundary` per level and the
+bounded `ts_cont_resume` / `ts_capture_and_run` turi_call re-entries; Show /
+sync-tvar-modify are bounded single re-entries. Audit + retire next.
+
 ## Status update -- 2026-06-23 (N4 Slice 1 -- plain reset/shift on a work-stack abort)
 
 **The plain `reset`/`shift` boundary is now a work-stack frame, not a

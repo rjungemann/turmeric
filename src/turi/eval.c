@@ -1354,7 +1354,8 @@ static TuriResetBoundary *reset_find(TuriPromptKind kind) {
  * abort passing through a serial boundary) is left set to propagate outward. */
 static inline TuriValue reset_consume_abort(TuriEnv *env, const TuriResetBoundary *b,
                                             TuriValue v) {
-    if (env->aborting && env->abort_prompt_kind == (int)b->kind) {
+    if (env->aborting && env->abort_target == NULL &&
+        env->abort_prompt_kind == (int)b->kind) {
         env->aborting      = false;
         env->eval_depth    = b->saved_depth;
         env->handler_stack = b->saved_handler_stack;
@@ -1408,6 +1409,7 @@ static TuriValue eval_abortive_shift(TuriEnv *env, EvalFrame *frame,
     env->aborting          = true;
     env->abort_value       = r;
     env->abort_prompt_kind = (int)PROMPT_PLAIN;
+    env->abort_target      = NULL;   /* prompt-kind abort, not an escape */
     return r;
 }
 
@@ -1594,12 +1596,17 @@ static bool ts_try_cont_builtin(TuriEnv *env, const BuiltinSpec *spec,
     }
     if (strcmp(name, "tur_cloneable_cont_drop") == 0) { *out = turi_nil(); return true; }
     if (strcmp(name, "tur_escape_resume") == 0) {
-        /* (k v) on an escape continuation: longjmp back to the call/cc landing
-         * pad with v.  Does not return. */
+        /* (k v) on an escape continuation: SR N4 Slice 2 raises the work-stack
+         * abort signal targeting this specific call/cc boundary (matched by
+         * pointer), unwinding up to its DK_ESCAPE / eval_callcc_escape instead
+         * of longjmp-ing -- so call/cc nesting stays on the heap. */
         if (n < 2 || args[0].as_int == 0) { *out = turi_int(0); return true; }
         TuriEscapeBoundary *b = (TuriEscapeBoundary *)(intptr_t)args[0].as_int;
-        b->result = args[1];
-        longjmp(b->jmp, 1);
+        env->aborting          = true;
+        env->abort_value       = args[1];
+        env->abort_target      = (void *)b;
+        *out = args[1];
+        return true;
     }
     return false;
 }
@@ -1873,16 +1880,20 @@ static TuriValue eval_callcc_escape(TuriEnv *env, EvalFrame *frame,
     b.saved_handler_stack = env->handler_stack;
     b.saved_defer_stack   = env->defer_stack;
 
-    if (setjmp(b.jmp) == 0) {
-        TuriValue kval = turi_int((int64_t)(intptr_t)&b);
-        return turi_call(env, fn, &kval, 1);   /* f returned without escaping */
+    /* SR N4 Slice 2: no setjmp.  Run f with the boundary pointer as its handle
+     * k; if f invokes (k v) it raises env->aborting with abort_target == &b,
+     * which propagates back through turi_call to here. */
+    TuriValue kval = turi_int((int64_t)(intptr_t)&b);
+    TuriValue r = turi_call(env, fn, &kval, 1);
+    if (env->aborting && env->abort_target == (void *)&b) {
+        env->aborting      = false;
+        env->abort_target  = NULL;
+        env->eval_depth    = b.saved_depth;
+        env->handler_stack = b.saved_handler_stack;
+        env->defer_stack   = b.saved_defer_stack;
+        return env->abort_value;
     }
-    /* (k v) longjmp'd here.  Restore the env state the unwound frames would
-     * otherwise have left dangling (mirrors eval_reset_boundary). */
-    env->eval_depth    = b.saved_depth;
-    env->handler_stack = b.saved_handler_stack;
-    env->defer_stack   = b.saved_defer_stack;
-    return b.result;
+    return r;   /* f returned normally, or another signal passes through */
 }
 
 /* stdlib/workflow.tur save-cont! -- serialise a serial continuation to "bytes".
@@ -4068,6 +4079,12 @@ typedef enum {
                       * consumes it (matching prompt kind) or lets it pass.  This
                       * keeps reset/shift nesting on the heap, not one C frame per
                       * reset (the F5-guard blocker). */
+    DK_ESCAPE,       /* SR N4 Slice 2: a (call/cc f) escape boundary on the
+                      * work-stack (no setjmp).  aux = heap TuriEscapeBoundary*;
+                      * f is applied beneath it with the boundary pointer as its
+                      * handle k.  Invoking (k v) raises env->aborting with
+                      * abort_target = this boundary, unwinding the work-stack
+                      * here.  Keeps call/cc nesting on the heap. */
 } DriveKind;
 
 typedef struct {
@@ -4270,6 +4287,7 @@ static TuriValue abortive_shift_resume(TuriEnv *env, void *state, TuriValue appl
     env->aborting          = true;
     env->abort_value       = applied;
     env->abort_prompt_kind = (int)PROMPT_PLAIN;
+    env->abort_target      = NULL;   /* prompt-kind abort, not an escape */
     *out = applied;
     free(s);
     return *out;
@@ -5261,6 +5279,33 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 tail = false;   /* body is non-tail: DK_RESET must see its value */
                 break;          /* keep descending */
             }
+            case EX_CALLCC: {
+                /* SR N4 Slice 2: model the (call/cc f) escape boundary on the
+                 * work-stack (no setjmp), so nested call/cc folds onto the heap.
+                 * Apply f with a heap boundary pointer as its handle k beneath a
+                 * DK_ESCAPE frame; invoking (k v) raises env->aborting targeting
+                 * this boundary and unwinds the work-stack to DK_ESCAPE. */
+                TuriValue fn = eval_expr(env, cf, control->as.callcc_.fn);
+                if (turi_is_error(fn) || env->returning || env->throwing || env->aborting) {
+                    cur = fn; descending = false; break;
+                }
+                if (fn.tag != TURI_CLOSURE) {
+                    cur = turi_errorf("eval: call/cc expects a function, got tag %d", fn.tag);
+                    descending = false; break;
+                }
+                TuriEscapeBoundary *b = (TuriEscapeBoundary *)malloc(sizeof(TuriEscapeBoundary));
+                b->result              = turi_nil();
+                b->saved_depth         = env->eval_depth;
+                b->saved_handler_stack = env->handler_stack;
+                b->saved_defer_stack   = env->defer_stack;
+                DRIVE_PUSH(((DriveCont){ .kind = DK_ESCAPE, .aux = b }));
+                apply_fn   = fn;
+                apply_args = (TuriValue *)malloc(sizeof(TuriValue));
+                apply_args[0] = turi_int((int64_t)(intptr_t)b);
+                apply_n    = 1;
+                have_apply = true;
+                break;
+            }
             case EX_SHIFT:
             case EX_SHIFT0: {
                 /* SR N3b: abortive (shift f body) / (shift0 f body) via the
@@ -5340,6 +5385,25 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 TuriResetBoundary *b = (TuriResetBoundary *)top->aux;
                 g_reset_stack = b->prev;
                 cur = reset_consume_abort(env, b, cur);
+                free(b);
+                len--;
+                break;
+            }
+            case DK_ESCAPE: {
+                /* SR N4 Slice 2: f produced `cur` (its normal value), or an
+                 * escape/other signal passed through.  Consume a matching escape
+                 * (abort_target == this boundary): deliver the escape value and
+                 * restore saved env state.  A non-matching abort (a shift abort,
+                 * or an escape to an outer call/cc) propagates unchanged. */
+                TuriEscapeBoundary *b = (TuriEscapeBoundary *)top->aux;
+                if (env->aborting && env->abort_target == (void *)b) {
+                    env->aborting      = false;
+                    env->abort_target  = NULL;
+                    cur                = env->abort_value;
+                    env->eval_depth    = b->saved_depth;
+                    env->handler_stack = b->saved_handler_stack;
+                    env->defer_stack   = b->saved_defer_stack;
+                }
                 free(b);
                 len--;
                 break;
