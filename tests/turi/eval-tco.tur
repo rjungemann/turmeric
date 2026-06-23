@@ -72,3 +72,24 @@
     0
     (+ n (.v (make-struct Box (fld-sum (- n 1)))))))
 (println (fld-sum 99999))
+
+;; --- Test 7 (SR N3): recursion through a type ascription `::` -------------
+;; The recursive call is the operand of a `(:: ... :int)` ascription, another
+;; single-operand black-box form.  Before SR N3 the ascription black-boxed its
+;; operand through eval_expr; the driver now models it (DK_UNARY), folding the
+;; operand onto the work-stack.  asc-sum 80000 = 80000*80001/2 = 3200040000.
+(defn asc-sum [n :int] :int
+  (if (= n 0)
+    0
+    (+ n (:: (asc-sum (- n 1)) :int))))
+(println (asc-sum 80000))
+
+;; --- Test 8 (SR N3): recursion through (return ...) ----------------------
+;; The recursive call is the operand of a `(return ...)`; the call boundary
+;; consumes the returning flag, so the enclosing `+` still accumulates.  Modeled
+;; by DK_UNARY too.  ret-sum 60000 = 60000*60001/2 = 1800030000.
+(defn ret-sum [n :int] :int
+  (if (= n 0)
+    0
+    (return (+ n (ret-sum (- n 1))))))
+(println (ret-sum 60000))

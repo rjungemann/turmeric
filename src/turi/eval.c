@@ -4027,6 +4027,9 @@ typedef enum {
     DK_CALL_RET,     /* EX_CALL (T3.2b): non-tail turi-body callee, body in the loop */
     DK_PROMPT,       /* EX_HANDLE (DC): delimited-control prompt; aux = HandleExpr*,
                       * frame = handler lexical frame, index = active flag (1/0). */
+    DK_UNARY,        /* SR N3: single-operand black-box form (cast/ascribe/return/
+                      * set/transparent shim); expr = the form, applied via
+                      * eval_unary_post when the operand value returns. */
     DK_GET_FIELD,    /* SR N2: EX_GET_FIELD receiver evaluated on the work-stack;
                       * expr = the EX_GET_FIELD, applied via get_field_extract when
                       * the receiver value returns.  Folds recursion that flows
@@ -4244,6 +4247,146 @@ static TuriValue get_field_extract(const Expr *e, TuriValue sv) {
         return turi_errorf("eval: field index %u out of bounds (%u fields)",
                            idx, sv.as_struct->n_fields);
     return sv.as_struct->fields[idx];
+}
+
+/* SR N3: single-operand "black box" forms.  A family of expression kinds that
+ * evaluate exactly one inner sub-expression and then either transform the value
+ * (cast / reinterpret / ascribe / return / set) or pass it through unchanged
+ * (the compiler-inserted transparent shims poly-wrap / fn-to-fat / ref / borrow
+ * / exists-pack / union-inject).  eval_drive_ex routed all of them through the
+ * recursive eval_expr `default:` path, so recursion threaded through the inner
+ * operand C-recursed (e.g. `(:: (f ...) :int)` / `(return (+ n (f ...)))`).
+ * Modeling them in the driver (DK_UNARY) folds the operand onto the work-stack.
+ *
+ * unary_operand returns the inner sub-expression to descend (NULL for a bare
+ * `(return)` with no value -- the caller runs the post directly on nil).
+ * eval_unary_post applies the form's post-operand logic to the resolved value,
+ * shared with eval_expr_impl so the two paths cannot diverge. */
+static bool unary_operand(const Expr *e, const Expr **operand) {
+    switch (e->kind) {
+    case EX_CAST:         *operand = e->as.cast_.expr;          return true;
+    case EX_REINTERPRET:  *operand = e->as.reinterpret_.expr;   return true;
+    case EX_ASCRIBE:      *operand = e->as.ascribe_.inner;      return true;
+    case EX_RETURN:       *operand = e->as.return_.value;       return true; /* NULLABLE */
+    case EX_SET:          *operand = e->as.set_.value;          return true;
+    case EX_POLY_WRAP:    *operand = e->as.poly_wrap_.inner;    return true;
+    case EX_FN_TO_FAT:    *operand = e->as.fn_to_fat_.inner;    return true;
+    case EX_POLY_TO_FAT:  *operand = e->as.poly_to_fat_.inner;  return true;
+    case EX_BORROW_IMMUT: *operand = e->as.borrow_immut_.expr;  return true;
+    case EX_RC_FROM_REF:  *operand = e->as.rc_from_ref_.expr;   return true;
+    case EX_REF:          *operand = e->as.ref_.expr;           return true;
+    case EX_EXISTS_PACK:  *operand = e->as.exists_pack_.value;  return true;
+    case EX_UNION_INJECT: *operand = e->as.union_inject_.value; return true;
+    default: return false;
+    }
+}
+
+/* Apply the post-operand logic of a single-operand form whose inner expression
+ * has already evaluated to `v` (assumed non-signalled; callers check
+ * error/returning/throwing first).  Transparent shims fall through to `return
+ * v`. */
+static TuriValue eval_unary_post(TuriEnv *env, EvalFrame *frame,
+                                 const Expr *e, TuriValue v) {
+    switch (e->kind) {
+    case EX_CAST:
+        switch (e->as.cast_.target_kind) {
+        case TY_INT:
+        case TY_INT64:
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int(v.as_int);
+            return turi_int(0);
+        case TY_INT8:
+            if (v.tag == TURI_FLOAT) return turi_int((int8_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int8_t)v.as_int);
+            return turi_int(0);
+        case TY_INT16:
+            if (v.tag == TURI_FLOAT) return turi_int((int16_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int16_t)v.as_int);
+            return turi_int(0);
+        case TY_INT32:
+            if (v.tag == TURI_FLOAT) return turi_int((int32_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int32_t)v.as_int);
+            return turi_int(0);
+        case TY_UINT8:
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint8_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int64_t)(uint8_t)v.as_int);
+            return turi_int(0);
+        case TY_UINT16:
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint16_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int64_t)(uint16_t)v.as_int);
+            return turi_int(0);
+        case TY_UINT32:
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint32_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int64_t)(uint32_t)v.as_int);
+            return turi_int(0);
+        case TY_UINT64:
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint64_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int64_t)(uint64_t)v.as_int);
+            return turi_int(0);
+        case TY_FLOAT:
+        case TY_FLOAT64:
+            if (v.tag == TURI_INT)   return turi_float((double)v.as_int);
+            if (v.tag == TURI_FLOAT) return turi_float(v.as_float);
+            return turi_float(0.0);
+        case TY_FLOAT32:
+            if (v.tag == TURI_INT)   return turi_float((double)(float)v.as_int);
+            if (v.tag == TURI_FLOAT) return turi_float((double)(float)v.as_float);
+            return turi_float(0.0);
+        case TY_BOOL:
+            if (v.tag == TURI_INT)   return turi_bool(v.as_int != 0);
+            return turi_bool(false);
+        default:
+            return v;
+        }
+    case EX_REINTERPRET:
+        if ((e->type.kind == TY_FLOAT || e->type.kind == TY_FLOAT64) &&
+            v.tag == TURI_INT) {
+            union { int64_t i; double d; } u; u.i = v.as_int;
+            return turi_float(u.d);
+        }
+        return v;
+    case EX_ASCRIBE:
+        switch (e->type.kind) {
+        case TY_BOOL:
+            if (v.tag == TURI_INT) return turi_bool(v.as_int != 0);
+            return v;
+        case TY_FLOAT: case TY_FLOAT64:
+            if (v.tag == TURI_INT) {
+                union { int64_t i; double d; } u; u.i = v.as_int;
+                return turi_float(u.d);
+            }
+            return v;
+        case TY_FLOAT32:
+            if (v.tag == TURI_INT) return turi_float((double)v.as_int);
+            return v;
+        case TY_INT: case TY_INT64:
+            if (v.tag == TURI_FLOAT) {
+                union { int64_t i; double d; } u; u.d = v.as_float;
+                return turi_int(u.i);
+            }
+            return v;
+        case TY_INT8: case TY_INT16: case TY_INT32:
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)v.as_float);
+            return v;
+        case TY_CSTR:
+            if (v.tag == TURI_INT) return turi_cstr((const char *)(intptr_t)v.as_int);
+            return v;
+        default:
+            return v;
+        }
+    case EX_RETURN:
+        env->returning    = true;
+        env->return_value = v;
+        return v;
+    case EX_SET: {
+        const char *name = e->as.set_.target->name->name;
+        if (!eval_frame_update(frame, name, v))
+            turi_env_set(env, name, v);
+        return turi_nil();
+    }
+    default:   /* transparent shims: value passes through unchanged */
+        return v;
+    }
 }
 
 /* Conservative "does evaluating e synchronously perform an effect?" -- returns
@@ -5035,11 +5178,29 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * dispatches the application next iteration. */
                 break;
             }
-            default:
+            default: {
+                /* SR N3: single-operand black-box forms descend their operand on
+                 * the work-stack (DK_UNARY), so recursion threaded through a
+                 * cast/ascribe/return/set/transparent-shim stays heap-bounded. */
+                const Expr *operand = NULL;
+                if (unary_operand(control, &operand)) {
+                    if (!operand) {
+                        /* bare (return) with no value: nil, post runs directly. */
+                        cur = eval_unary_post(env, cf, control, turi_nil());
+                        descending = false;
+                        break;
+                    }
+                    DRIVE_PUSH(((DriveCont){ .kind = DK_UNARY, .expr = control,
+                                             .frame = cf }));
+                    control = operand;
+                    tail = false;   /* operand is non-tail */
+                    break;          /* keep descending */
+                }
                 /* Black box: evaluate any other kind via the recursive path. */
                 cur = eval_expr(env, cf, control);
                 descending = false;
                 break;
+            }
             }
         } else {
             /* Returning `cur` to the frame on top of the work-stack.  Each
@@ -5362,6 +5523,14 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 len--;
                 break;
             }
+            case DK_UNARY: {
+                /* SR N3: the operand evaluated to `cur`; apply the form's
+                 * post-operand logic.  On a control signal propagate untouched. */
+                if (signaled) { len--; break; }
+                cur = eval_unary_post(env, top->frame, top->expr, cur);
+                len--;
+                break;
+            }
             case DK_NATIVE_RESUME: {
                 /* SR: the requested application produced `cur`.  Hand it to the
                  * native's resume callback, which yields the native's value in
@@ -5661,11 +5830,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_SET: {
         TuriValue v = eval_expr(env, frame, e->as.set_.value);
         if (turi_is_error(v) || env->returning || env->throwing) return v;
-        const char *name = e->as.set_.target->name->name;
-        if (!eval_frame_update(frame, name, v)) {
-            turi_env_set(env, name, v);
-        }
-        return turi_nil();
+        return eval_unary_post(env, frame, e, v);   /* SR N3: writes the binding */
     }
 
     /* --- Def (top-level binding) ---------------------------------------- */
@@ -5799,9 +5964,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             v = eval_expr(env, frame, e->as.return_.value);
             if (turi_is_error(v)) return v;
         }
-        env->returning    = true;
-        env->return_value = v;
-        return v;
+        return eval_unary_post(env, frame, e, v);   /* SR N3: sets returning */
     }
 
     /* --- Typeclass/instance definitions — no runtime action -------------- */
@@ -6470,57 +6633,11 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* --- Phase N: numeric type cast ---------------------------------------- */
     case EX_CAST: {
+        /* SR N3: post-operand coercion shared with the driver via
+         * eval_unary_post (DK_UNARY). */
         TuriValue v = eval_expr(env, frame, e->as.cast_.expr);
         if (turi_is_error(v) || env->returning || env->throwing) return v;
-        switch (e->as.cast_.target_kind) {
-        case TY_INT:
-        case TY_INT64:
-            if (v.tag == TURI_FLOAT) return turi_int((int64_t)v.as_float);
-            if (v.tag == TURI_INT)   return turi_int(v.as_int);
-            return turi_int(0);
-        case TY_INT8:
-            if (v.tag == TURI_FLOAT) return turi_int((int8_t)(int64_t)v.as_float);
-            if (v.tag == TURI_INT)   return turi_int((int8_t)v.as_int);
-            return turi_int(0);
-        case TY_INT16:
-            if (v.tag == TURI_FLOAT) return turi_int((int16_t)(int64_t)v.as_float);
-            if (v.tag == TURI_INT)   return turi_int((int16_t)v.as_int);
-            return turi_int(0);
-        case TY_INT32:
-            if (v.tag == TURI_FLOAT) return turi_int((int32_t)(int64_t)v.as_float);
-            if (v.tag == TURI_INT)   return turi_int((int32_t)v.as_int);
-            return turi_int(0);
-        case TY_UINT8:
-            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint8_t)(int64_t)v.as_float);
-            if (v.tag == TURI_INT)   return turi_int((int64_t)(uint8_t)v.as_int);
-            return turi_int(0);
-        case TY_UINT16:
-            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint16_t)(int64_t)v.as_float);
-            if (v.tag == TURI_INT)   return turi_int((int64_t)(uint16_t)v.as_int);
-            return turi_int(0);
-        case TY_UINT32:
-            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint32_t)(int64_t)v.as_float);
-            if (v.tag == TURI_INT)   return turi_int((int64_t)(uint32_t)v.as_int);
-            return turi_int(0);
-        case TY_UINT64:
-            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint64_t)(int64_t)v.as_float);
-            if (v.tag == TURI_INT)   return turi_int((int64_t)(uint64_t)v.as_int);
-            return turi_int(0);
-        case TY_FLOAT:
-        case TY_FLOAT64:
-            if (v.tag == TURI_INT)   return turi_float((double)v.as_int);
-            if (v.tag == TURI_FLOAT) return turi_float(v.as_float);
-            return turi_float(0.0);
-        case TY_FLOAT32:
-            if (v.tag == TURI_INT)   return turi_float((double)(float)v.as_int);
-            if (v.tag == TURI_FLOAT) return turi_float((double)(float)v.as_float);
-            return turi_float(0.0);
-        case TY_BOOL:
-            if (v.tag == TURI_INT)   return turi_bool(v.as_int != 0);
-            return turi_bool(false);
-        default:
-            return v;
-        }
+        return eval_unary_post(env, frame, e, v);
     }
     case EX_REINTERPRET: {
         /* A same-size scalar bit-reinterpret on the compiled path (raw int64
@@ -6548,12 +6665,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * transparent too.  i32<->f32 and same-tag ascriptions stay transparent. */
         TuriValue v = eval_expr(env, frame, e->as.reinterpret_.expr);
         if (turi_is_error(v) || env->returning || env->throwing) return v;
-        if ((e->type.kind == TY_FLOAT || e->type.kind == TY_FLOAT64) &&
-            v.tag == TURI_INT) {
-            union { int64_t i; double d; } u; u.i = v.as_int;
-            return turi_float(u.d);
-        }
-        return v;
+        return eval_unary_post(env, frame, e, v);   /* SR N3: shared with DK_UNARY */
     }
 
     /* --- Phase 2: type ascription is transparent at runtime, except that it
@@ -6565,48 +6677,17 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
      * primitive coercions, but only when the tag actually mismatches so struct/
      * closure/ADT ascriptions stay transparent. */
     case EX_ASCRIBE: {
-        TuriValue v = eval_expr(env, frame, e->as.ascribe_.inner);
-        if (turi_is_error(v) || env->returning || env->throwing) return v;
         /* `::` is a representation assertion, NOT a numeric conversion (that is
          * EX_CAST / explicit int->float).  On the compiled path the carrier word
          * is reinterpreted bit-for-bit to the ascribed type -- so an int64 that
          * carries a double's bits (e.g. a type-erased Map[int float] value read
          * back as :float, or a char* read back as :cstr) must REINTERPRET, not
-         * convert.  The previous numeric coercion here diverged from the
-         * compiled path ((:: 7 :float) gave 7 under --interpret but 3.45e-323
-         * compiled).  Act only on a tag mismatch so struct/closure/ADT
-         * ascriptions stay transparent. */
-        switch (e->type.kind) {
-        case TY_BOOL:
-            if (v.tag == TURI_INT) return turi_bool(v.as_int != 0);
-            return v;
-        case TY_FLOAT: case TY_FLOAT64:
-            if (v.tag == TURI_INT) {
-                union { int64_t i; double d; } u; u.i = v.as_int;
-                return turi_float(u.d);
-            }
-            return v;
-        case TY_FLOAT32:
-            /* The compiled float32 ascription numeric-converts the carrier
-             * (unlike float64); keep parity with it. */
-            if (v.tag == TURI_INT) return turi_float((double)v.as_int);
-            return v;
-        case TY_INT: case TY_INT64:
-            if (v.tag == TURI_FLOAT) {
-                union { int64_t i; double d; } u; u.d = v.as_float;
-                return turi_int(u.i);
-            }
-            return v;
-        case TY_INT8: case TY_INT16: case TY_INT32:
-            if (v.tag == TURI_FLOAT) return turi_int((int64_t)v.as_float);
-            return v;
-        case TY_CSTR:
-            /* int64 carrier holds a char*; reinterpret so println shows text. */
-            if (v.tag == TURI_INT) return turi_cstr((const char *)(intptr_t)v.as_int);
-            return v;
-        default:
-            return v;
-        }
+         * convert.  The coercion (shared with the driver via eval_unary_post /
+         * DK_UNARY) acts only on a tag mismatch so struct/closure/ADT ascriptions
+         * stay transparent. */
+        TuriValue v = eval_expr(env, frame, e->as.ascribe_.inner);
+        if (turi_is_error(v) || env->returning || env->throwing) return v;
+        return eval_unary_post(env, frame, e, v);
     }
 
     /* --- Phase N: poly wrap is transparent in the interpreter -------------- */

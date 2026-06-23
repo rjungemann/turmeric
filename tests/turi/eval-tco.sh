@@ -36,6 +36,8 @@ check_line "even? 1000 = true (done)"      "done"
 check_line "fact-tc 5 1 = 120"             "120"
 check_line "count-zero 100000 = 0"         "0"
 check_line "fld-sum 99999 = 4999950000 (SR N2 get-field heap-bounded)" "4999950000"
+check_line "asc-sum 80000 = 3200040000 (SR N3 ascription heap-bounded)" "3200040000"
+check_line "ret-sum 60000 = 1800030000 (SR N3 return heap-bounded)" "1800030000"
 
 echo ""
 echo "$PASS passed, $FAIL failed"

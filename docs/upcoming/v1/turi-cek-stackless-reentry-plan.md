@@ -6,6 +6,54 @@ description: Eliminate the last source of unbounded C recursion in the tree-walk
 
 # Turi stackless native re-entry (full CEK / driver-CPS) -- Plan
 
+## Status update -- 2026-06-23 (N3)
+
+**N3 has landed (the unbounded black-box forms; the longjmp shift/Show
+receivers are deferred -- see below).** Following N2's finding, the remaining
+program-internal C-recursion that scales with program depth is the rest of the
+driver's single-operand black-box `default:` forms -- the same shape as
+get-field. Confirmed by probe: deep non-tail recursion threaded through a type
+ascription (`(:: (f ...) :int)`), an explicit cast, a `(return ...)`, or a
+`(set! x ...)` all tripped the `eval_depth` guard at ~hundreds of levels, while
+the same recursion through a builtin arg or an ordinary call arg folds fine.
+
+N3 models the whole single-operand family in the driver via one generic
+`DK_UNARY` continuation:
+
+- New `DK_UNARY` `DriveKind`: descend the form's single operand on the
+  work-stack (non-tail), then apply the form's post-operand logic when the value
+  returns.
+- `unary_operand(e)` returns the operand sub-expression (NULL for a bare
+  `(return)`); `eval_unary_post(env, frame, e, v)` applies the post logic. Both
+  cover the **transform** forms (`EX_CAST`, `EX_REINTERPRET`, `EX_ASCRIBE`,
+  `EX_RETURN`, `EX_SET`) and the compiler-inserted **transparent** shims
+  (`EX_POLY_WRAP`, `EX_FN_TO_FAT`, `EX_POLY_TO_FAT`, `EX_BORROW_IMMUT`,
+  `EX_RC_FROM_REF`, `EX_REF`, `EX_EXISTS_PACK`, `EX_UNION_INJECT`).
+- The cast/reinterpret/ascribe/return/set post-logic was moved into
+  `eval_unary_post` and `eval_expr_impl`'s five cases now call it, so the
+  recursive and driver paths share one copy and cannot diverge.
+- Safety mirrors N2: any unary form whose operand may perform is non-capturable
+  (`ws_has_perform` is conservative for these kinds), so a `DK_UNARY` never
+  lands in a captured continuation slice -- no clone/capture interaction.
+
+Result: deep recursion through `::`/cast/return/set is now heap-bounded (was
+"recursion limit exceeded"). New `tur_eval_tco` regressions: `asc-sum 80000`
+(ascription) and `ret-sum 60000` (return). `bash tests/run.sh` (1780/0),
+eval/sandbox/STM ctests, and the `run-turi` baseline failure set (23,
+byte-identical) all unchanged.
+
+**Deferred to N3b / N4:** the longjmp-based delimited-control receivers the plan
+originally named for N3 -- the abortive shift (`eval_abortive_shift`), the
+serial/cloneable shift receivers, the `TsFrame` continuation replay
+(`ts_cont_resume`), call/cc-escape, and `Show` dispatch. These apply their
+receiver/closure **once** per invocation (bounded per call, not scaling with
+program recursion depth), and they are entangled with the longjmp reset-boundary
+machinery -- converting them to the work-stack means reconciling that path with
+DC's `DK_PROMPT` capture, a large change with little heap-bounding payoff. They
+remain synchronous `turi_call` re-entries and so must still be eliminated before
+N4 retires the guard, but they are not a source of unbounded recursion today.
+The guard stays until that N4 audit is airtight.
+
 ## Status update -- 2026-06-23 (N2)
 
 **N2 has landed.** The plan's original N2 target (the inline-C `^fat`/`TUR_APPLY*`
