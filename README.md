@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.23.0` -- a deep wave of carrier<->by-value ABI bridging fixes lands across constrained-generic instance dispatch, HKT cata, and parametric struct layout; Track C / U3 (sqlite TStmt) and U6 (typed variadic c-dsl builders) close.
+**Latest release:** `v0.23.1` -- value-side carrier<->concrete recovery routed through one chokepoint (#505); Try Turmeric web REPL output fixed.
 
 ## What
 

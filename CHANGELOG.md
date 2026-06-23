@@ -4,6 +4,16 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.23.1] -- 2026-06-22
+
+### Fixed
+
+- **Route value-side carrier<->concrete recovery through one chokepoint
+  (#505).** Consolidates the value-side recovery paths so remaining
+  carrier-crossing edge cases land on a single, audited transition rather
+  than ad-hoc per-site rewrites.
+- **Fix output in Try Turmeric (web REPL).**
+
 ## [0.23.0] -- 2026-06-22
 
 ### Added
