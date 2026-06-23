@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.24.1` -- `ref<T>` values now auto-drop on scope exit, and spice manifests can declare vendored C sources (`:c-sources` / `:c-includes`).
+**Latest release:** `v0.24.2` -- dead `-X` feature-flag guards removed following the v0.24.0 always-on switch; the flag symbols stay exported for ABI compatibility.
 
 ## What
 

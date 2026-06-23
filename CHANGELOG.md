@@ -4,6 +4,22 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.24.2] -- 2026-06-23
+
+### Changed
+
+- **Dead `-X` feature-flag guards removed (#520).** Now that every
+  gated feature is always-on (v0.24.0), the trivially-true
+  `if (g_*_enabled)` guards in elab/emit have been unwrapped and the
+  dead `if (!g_*_enabled)` branches deleted. The
+  `extern bool g_*_enabled` symbols stay defined in `globals.c`, so
+  any external code linking against them keeps working.
+
+### Docs
+
+- Added the experimental-flag-mechanism plan under
+  `docs/upcoming/v1/` and refreshed the bundled web/WASM build.
+
 ## [0.24.1] -- 2026-06-23
 
 ### Added
