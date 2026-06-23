@@ -396,6 +396,23 @@ bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
  * when the call carries no dispatch tyvar.  The single spelling both the emit-time
  * chokepoint and the scan-time predicate consult.  Defined in emit_core.c. */
 bool emit_dispatch_tyvar(const Expr *call, Type *out);
+/* R2 (carrier-crossing-recovery-routing-plan): shared constraint-var resolution.
+ * Given an instance's `type_param_constraints` and the receiver (class-var)
+ * container's type-args (outermost-first) in `elems[0..n_elems)`, map each
+ * `where (Class tyvar)` constraint to its concrete element: the constraint's
+ * `param_idx` indexes the receiver's type-arg list (e.g. `(Eq A)` with
+ * param_idx 0 against receiver elems `[int]` yields `A -> int`).  Constraints
+ * with param_idx < 0 (direct type_arg), a NULL tyvar, or an out-of-range
+ * param_idx are skipped.  Writes up to `cap` (name,type) bindings into `out`
+ * and returns the count.  The param_idx convention lives here so the dispatch
+ * chokepoint's constraint-var tail (which matches one entry by name) and
+ * emit_abi_register_call's binding augmentation never re-derive it apart.
+ * Each caller keeps its own receiver extraction (struct-strict vs any-TY_APP),
+ * which is load-bearing for instance selection; only the mapping is shared.
+ * Defined in emit_core.c. */
+uint8_t emit_abi_constraint_var_bindings(const struct TypeClassInstance *inst,
+                                         const Type *elems, uint8_t n_elems,
+                                         AbiTypeBinding *out, uint8_t cap);
 /* Value-side chokepoint core (carrier<->concrete): given a binding that is a
  * parameter of the active ABI specialization, recover its monomorphized concrete
  * type from `current_abi_specialization->arg_types[]`.  Returns false when there

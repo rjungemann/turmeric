@@ -8,20 +8,24 @@ description: The crossing audit (docs/archive/carrier-concrete-abi-crossing-audi
   shared recovery routines MANDATORY chokepoints every crossing passes through,
   so a new emit site is correct by construction instead of being the next fish.
   It exists so the unification work is not lost between one-off gap closures.
-status: OPEN -- proposed. Sequenced after the audit's P1 (stress-matrix
-  fixtures) and interleaved with P2 (gap closures G2-G7).
+status: RESOLVED -- archived 2026-06-23. All R0-R4 structural pieces
+  landed; the actionable dispatch-side collapse is done and the only
+  remaining items are by-design exclusions documented in the inventory.
 ---
 
 # Routing carrier <-> concrete crossings through shared recovery chokepoints
 
-## Status (verified 2026-06-22, post-PR #505)
+## Status (RESOLVED, archived 2026-06-23; structural status verified post-PR #505)
 
-**LARGELY LANDED.** All R0-R4 structural pieces are in place: the value,
+**LANDED.** All R0-R4 structural pieces are in place: the value,
 dispatch, and fn-value axes each have a single named chokepoint, the
-value-side ad-hoc copies are migrated, the R3 Debug-only ICE is wired,
-and R4's static registry + CI check ship in `tests/run.sh`. What remains
-is the dispatch-side branch collapse and the by-design exclusions called
-out in the inventory.
+value-side ad-hoc copies are migrated, the dispatch-side constraint-var
+mapping is collapsed onto the shared `emit_abi_constraint_var_bindings`
+kernel, the R3 Debug-only ICE is wired, and R4's static registry + CI
+check ship in `tests/run.sh`. The only remaining items are by-design
+exclusions called out in the inventory (the `emit_abi_register_call`
+`abi_changes` arg/result block and the fn-value inner-clone derivation),
+which would change behavior if merged -- so this plan is closed.
 
 - **R0 -- Inventory.** DONE for value side; dispatch and fn-value axes
   inventoried with by-design exclusions documented. Tables below match
@@ -41,10 +45,19 @@ out in the inventory.
   `emit_reresolve_disp_type` field-receiver tail (`emit_core.c:1332`),
   M4c Path A.2 override (`emit_expr.c:5338`), instance-method twin-arg
   resolver (`emit_module.c:1841`). Registry shows 6 call sites across
-  emit_core/emit_expr/emit_module. **Still open:** dispatch-side branch
-  collapse in `emit_abi_register_call` and the stacked special cases in
-  `emit_reresolve_disp_type` (the original R2 endgame); fn-value
-  `abi_changes` block excluded by design.
+  emit_core/emit_expr/emit_module. **Dispatch side advanced:** the
+  constraint-var `param_idx`->element mapping that
+  `emit_reresolve_disp_type`'s tail and `emit_abi_register_call`'s
+  binding augmentation each open-coded is now a single shared kernel,
+  `emit_abi_constraint_var_bindings` (`emit_core.c`, tracked chokepoint;
+  registry rows `emit_core.c 1` + `emit_module.c 1`). Each caller keeps
+  its own receiver extraction (struct-strict vs. any-TY_APP) -- that
+  difference is load-bearing for instance selection -- so only the
+  mapping collapsed; snapshot-stable (1765/0). **Still open:** the
+  remaining `emit_abi_register_call` `abi_changes` arg/result block
+  (excluded by design) and the per-bug recovery branches *inside*
+  `emit_reresolve_disp_type` (these are the R1-totalized routine body,
+  legitimately internal, not call-site duplication).
 - **R3 -- Debug "forgot to route" ICE.** DONE.
   `emit_abi_assert_routed_concrete` at `src/compiler/emit_core.c:141`
   (decl `emit_internal.h:415`), called from value chokepoint
@@ -64,9 +77,14 @@ out in the inventory.
 
 **Open items not yet addressed by R0-R4:**
 
-1. Dispatch-side R2 branch deletions in `emit_abi_register_call` and
-   the stacked per-bug branches in `emit_reresolve_disp_type` (the
-   structural payoff of the plan -- not yet collected).
+1. Dispatch-side R2: the constraint-var `param_idx`->element mapping is
+   now collapsed onto the shared `emit_abi_constraint_var_bindings`
+   kernel (both `emit_reresolve_disp_type`'s tail and
+   `emit_abi_register_call`'s augmentation route through it). What
+   remains is the `emit_abi_register_call` `abi_changes` arg/result
+   block, which the R0 inventory marks excluded by design (layered M4c
+   Path A.1 + G4 phantom + borrow-path cases; sharing would change
+   behavior).
 2. End-state per the "Validation" section: per-bug gated branches gone
    and audit table free of `[GAP]` rows -- not yet realized.
 3. Suite status: PR #505 reported 1765 passed / 0 failed.
@@ -93,7 +111,9 @@ plan was filed against).
 |---|---|---|
 | `emit_core.c` `emit_reresolve_disp_type` dispatch-tyvar identification | ROUTED (delegates to `emit_dispatch_tyvar`) | -- |
 | `emit_module.c` `emit_call_dispatches_on_spec_tyvar` tyvar identification | MIGRATED | inline copy deleted; now calls `emit_dispatch_tyvar` |
-| `emit_core.c` constraint-var resolution tail | NOT MERGED (by design) | differs from `emit_ground_constraint_var` (param_idx<0 + concreteness gating); merge would change instance selection |
+| `emit_core.c` constraint-var resolution tail (`param_idx`->elem) | MIGRATED | param_idx->element mapping routed through shared `emit_abi_constraint_var_bindings`; struct-strict extraction stays site-local |
+| `emit_module.c` `emit_abi_register_call` constraint-binding augmentation | MIGRATED | same `param_idx`->element kernel; any-TY_APP extraction stays site-local |
+| `emit_core.c`/`emit_module.c` constraint-var vs. `emit_ground_constraint_var` | NOT MERGED (by design) | `emit_ground_constraint_var` differs (param_idx<0 + concreteness gating); merge would change instance selection |
 | `emit_module.c:2164` scan-time dispatch recovery | ALREADY ROUTED | calls `emit_reresolve_disp_type`; redirect helpers consume its result |
 
 ### R0 inventory -- fn-value (closure-thunk) axis
@@ -233,7 +253,8 @@ of R4's documentation.
 
 The sanctioned chokepoints it tracks: `emit_spec_arg_type_for_binding` /
 `emit_var_spec_arg_type` (value), `emit_reresolve_disp_type` /
-`emit_dispatch_tyvar` (dispatch), `emit_abi_fn_value_signature` (fn-value), and
+`emit_dispatch_tyvar` / `emit_abi_constraint_var_bindings` (dispatch),
+`emit_abi_fn_value_signature` (fn-value), and
 `emit_abi_assert_routed_concrete` (the R3 gate the call sites lean on).
 
 ## Risks / why this wasn't done already

@@ -43,7 +43,7 @@ complete and archived.
 - **Residual work is stabilization, not a path change.** PRs #475-#504
   close narrow carrier<->concrete crossing bugs (ascribed receivers,
   lifted closures, function-typed carriers). Structural follow-up
-  tracked in `docs/upcoming/carrier-crossing-recovery-routing-plan.md`.
+  tracked in `docs/archive/carrier-crossing-recovery-routing-plan.md`.
 - **Open item:** the "elaborator clone-count probe" to convert the
   low-tens bound into an exact figure does not appear in the tree.
 

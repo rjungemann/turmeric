@@ -2350,15 +2350,12 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 }
                 uint8_t naug = aspec->n_bindings;
                 for (uint8_t k = 0; k < naug; k++) spec_bindings_aug[k] = aspec->bindings[k];
-                for (uint8_t c = 0; c < inst->n_type_param_constraints &&
-                                    naug < ABI_TYPE_BINDINGS_MAX; c++) {
-                    const TypeConstraint *tcst = &inst->type_param_constraints[c];
-                    if (tcst->param_idx < 0 || !tcst->tyvar) continue;
-                    if ((uint8_t)tcst->param_idx >= n_elem) continue;
-                    spec_bindings_aug[naug].name = tcst->tyvar->name;
-                    spec_bindings_aug[naug].type = elem_buf[tcst->param_idx];
-                    naug++;
-                }
+                /* Route the param_idx->element mapping through the shared
+                 * chokepoint kernel (any-TY_APP extraction into elem_buf stays
+                 * here, outermost-first); it appends one binding per constraint. */
+                naug += emit_abi_constraint_var_bindings(
+                    inst, elem_buf, n_elem, spec_bindings_aug + naug,
+                    (uint8_t)(ABI_TYPE_BINDINGS_MAX - naug));
                 /* M5 (multi-param struct instance): the constraint loop above
                  * only resolves CONSTRAINED type-ctor params (e.g. V via
                  * `Eq V`).  A multi-param struct instance (e.g. MutableMap
