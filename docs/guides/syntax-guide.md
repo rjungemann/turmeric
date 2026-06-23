@@ -78,13 +78,12 @@ Turmeric has four bracketed containers, each legal in specific positions:
 | Form | Syntax | Where it is legal |
 |---|---|---|
 | List | `(f x y)` | everywhere -- the universal form |
-| Vector | `[a b c]` | binding position (`let`/`defn` params); expression position under `-Xdata-literals` |
-| Map literal | `#map{:k v}` | expression position under `-Xdata-literals` |
-| Set literal | `#set{a b}` | expression position under `-Xdata-literals` |
+| Vector | `[a b c]` | binding position (`let`/`defn` params); expression position |
+| Map literal | `#map{:k v}` | expression position |
+| Set literal | `#set{a b}` | expression position |
 
 In binding position `[...]` is a *binding spec* (parameter list or `let`
-bindings). In expression position, under `-Xdata-literals`, `[...]` lowers to
-`(vec-of ...)`. See the
+bindings). In expression position, `[...]` lowers to `(vec-of ...)`. See the
 [Data Literals Guide](data-literals-guide.md) for the literal collection
 semantics.
 
@@ -363,8 +362,8 @@ let [hyp sqrt({*(a a) + *(b b)})] hyp
 
 ### Data literals inside sweet-exp
 
-The `#map{...}`, `#set{...}`, and `[...]` literals (under `-Xdata-literals`)
-work transparently inside sweet-exp -- the reader dispatch sits below the
+The `#map{...}`, `#set{...}`, and `[...]` literals work transparently inside
+sweet-exp -- the reader dispatch sits below the
 sweet-exp layer, so neoteric and curly-infix compose inside a literal. See the
 [Data Literals Guide](data-literals-guide.md) for the full semantics.
 
@@ -434,9 +433,9 @@ gloss.
 | Side-effect guard | `(when c ...)` | `when c` + indent | one-armed conditional |
 | Counted loop | `(for i 0 n ...)` | `for i 0 n ...` | range iteration |
 | Sequence | `(do a b)` | `do` + indent | evaluate in order |
-| Vector literal | `[a b c]` | `[a b c]` | growable array (`-Xdata-literals`) |
-| Map literal | `#map{:k v}` | `#map{:k v}` | HAMT map (`-Xdata-literals`) |
-| Set literal | `#set{a b}` | `#set{a b}` | set (`-Xdata-literals`) |
+| Vector literal | `[a b c]` | `[a b c]` | growable array |
+| Map literal | `#map{:k v}` | `#map{:k v}` | HAMT map |
+| Set literal | `#set{a b}` | `#set{a b}` | set |
 
 ### Where to go deeper
 
@@ -495,6 +494,6 @@ A short list of pitfalls newcomers hit:
 5. **Expecting `#lang sweet-exp` to enable neoteric in a plain file.** Without
    the directive (or a `.tur.sweet` extension) the reader stays in s-expression
    mode and indentation is insignificant.
-6. **Using `[...]` as a value without `-Xdata-literals`.** In expression
-   position a bare vector literal needs the flag; otherwise `[...]` is only a
-   binding spec.
+6. **Mixing up `[...]` positions.** `[...]` is a value (lowers to `vec-of`)
+   in expression position and a binding spec (parameter list / `let` bindings)
+   in binding position -- the context determines which.

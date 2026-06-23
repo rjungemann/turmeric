@@ -5453,6 +5453,30 @@ static int cmd_repl(bool watch_mode) {
  * fixture.
  * --------------------------------------------------------------------------- */
 
+/* drop-x-flags-plan: every -X<name> below is an accept-and-warn no-op as
+ * of v0.24.0.  The flags are still recognized for one full minor line so
+ * downstream build.tur files keep compiling unchanged; each one emits
+ * TUR-W0050 instead of enabling anything.  The features themselves are
+ * unconditionally on (see src/runtime/globals.c). */
+static bool is_known_deprecated_x_flag(const char *s) {
+    static const char *const names[] = {
+        "-Xlinear", "-Xsubstructural", "-Xunique-types", "-Xgadt",
+        "-Xunion-types", "-Xintersection-types", "-Xeffect-types",
+        "-Xcontracts", "-Xsessions", "-Xdynamic-vars", "-Xcallcc",
+        "-Xsized-types", "-Xdata-literals", "-Xjson-reader",
+        "-Xschema-reader", "-Xsymbols",
+    };
+    for (size_t k = 0; k < sizeof(names) / sizeof(names[0]); k++) {
+        if (strcmp(s, names[k]) == 0) return true;
+    }
+    return false;
+}
+
+static void warn_deprecated_x_flag(const char *name) {
+    fprintf(stderr, "warning [TUR-W0050]: %s is no longer needed; "
+                    "the feature is on by default\n", name);
+}
+
 /* Apply flags string (e.g. "-Xgadt -Xlinear") to global compiler flags. */
 static void wk_apply_flags(const char *flags_str) {
     if (!flags_str || !*flags_str) return;
@@ -5461,22 +5485,7 @@ static void wk_apply_flags(const char *flags_str) {
     copy[sizeof(copy) - 1] = '\0';
     char *tok = strtok(copy, " \t");
     while (tok) {
-        if      (strcmp(tok, "-Xgadt")             == 0) { /* range-gadt-typeclass-migration-plan A1: deprecated no-op (GADTs are enabled by default) */ }
-        else if (strcmp(tok, "-Xdata-literals")     == 0) g_data_literals_enabled = true;
-        else if (strcmp(tok, "-Xjson-reader")       == 0) g_json_reader_enabled = true;
-        else if (strcmp(tok, "-Xschema-reader")     == 0) { g_schema_reader_enabled = true; g_json_reader_enabled = true; }
-        else if (strcmp(tok, "-Xsized-types")       == 0) { /* sized-types-default-on: deprecated no-op (sized types are enabled by default) */ }
-        else if (strcmp(tok, "-Xlinear")            == 0) g_linear_enabled           = true;
-        else if (strcmp(tok, "-Xunique-types")      == 0) g_unique_enabled           = true;
-        else if (strcmp(tok, "-Xsubstructural")     == 0) { g_substructural_enabled = true; g_linear_enabled = true; }
-        else if (strcmp(tok, "-Xunion-types")       == 0) g_union_types_enabled      = true;
-        else if (strcmp(tok, "-Xintersection-types")== 0) g_intersection_types_enabled = true;
-        else if (strcmp(tok, "-Xeffect-types")      == 0) { g_effect_types_enabled   = true; g_strict_effects = true; }
-        else if (strcmp(tok, "-Xcontracts")         == 0) g_contracts_enabled        = true;
-        else if (strcmp(tok, "-Xsessions")          == 0) { g_sessions_enabled = true; g_substructural_enabled = true; g_linear_enabled = true; }
-        else if (strcmp(tok, "-Xdynamic-vars")      == 0) g_dynvar_enabled           = true;
-        else if (strcmp(tok, "-Xsymbols")           == 0) g_symbols_enabled          = true;
-        else if (strcmp(tok, "-Xcallcc")            == 0) { /* call-cc-completion CC5: deprecated no-op (call/cc/escape are now real + ungated) */ }
+        if      (is_known_deprecated_x_flag(tok))             { /* TUR-W0050: silently accept in worker; fixtures get cleaned up separately. */ }
         else if (strcmp(tok, "--unsafe-stats")      == 0) { g_lint_unsafe_enabled = true; g_unsafe_stats_enabled = true; }
         else if (strcmp(tok, "--strict-effects")    == 0) g_strict_effects           = true;
         else if (strcmp(tok, "--dump-effects")      == 0) g_dump_effects             = true;
@@ -11039,20 +11048,12 @@ static int usage(void) {
         "  --no-warn-unused-result          disable --warn-unused-result (Phase R6)\n"
         "  --lint-panic                     lint panic/must! usage (Phase R6)\n"
         "  --no-contracts                   strip contract checks; predicates not evaluated (Phase C2)\n"
-        "  -Xeffect-types                   enable full effect typing: TY_HANDLER, ET4 checks (ET4)\n"
-        "  -Xgadt                           DEPRECATED no-op; defgadt syntax and GADT type checking are enabled by default (G1-G4)\n"
-        "  -Xsized-types                    DEPRECATED no-op; sized types are enabled by default (SZ4+)\n"
         "  --dump-sizes                     print inferred size index per sized-GADT constructor (SZ8)\n"
-        "  -Xlinear                         enable linear type checking (LT0-LT4)\n"
-        "  -Xunique-types                   enable uniqueness type checking (UT0-UT3)\n"
-        "  -Xsubstructural                  enable substructural type checking (ST0-ST3; implies -Xlinear)\n"
-        "  -Xsessions                       enable session type syntax and checking (SS0-SS2; implies -Xsubstructural)\n"
-        "  -Xunion-types                    enable union type syntax: (A | B | C) (IT0-IT1)\n"
-        "  -Xintersection-types             enable intersection type syntax: (A & B & C) (IT2)\n"
-        "  -Xcontracts                      enable contract checks (default in debug builds) (CT3)\n"
         "  --keep-contracts                 retain contract checks in release builds (CT3)\n"
-        "  -Xdynamic-vars                   enable dynamic var syntax: (defdynamic *name* :type val) (DV0+)\n"
-        "  -Xcallcc                         DEPRECATED no-op; call/cc / escape are now real and enabled by default (CPS substrate)\n");
+        "  -X<name>                         recognized for backwards compatibility; all language\n"
+        "                                   features previously gated by -X flags are now on by default.\n"
+        "                                   Each -X<name> emits TUR-W0050 and is otherwise ignored.\n"
+        "                                   See docs/guides/compiler-flags-guide.md for the removal list.\n");
     list_external_subcommands();
     return 64;
 }
@@ -11812,143 +11813,11 @@ int main(int argc, char **argv) {
             }
             argc--;
             i--;
-        } else if (strcmp(argv[i], "-Xeffect-types") == 0) {
-            /* ET4: enable full effect typing (TY_HANDLER, handler typing, ET4 checks) */
-            g_effect_types_enabled = true;
-            g_strict_effects = true;  /* -Xeffect-types implies --strict-effects */
-            for (int j = i; j < argc - 1; j++) {
-                argv[j] = argv[j + 1];
-            }
-            argc--;
-            i--;
-        } else if (strcmp(argv[i], "-Xgadt") == 0) {
-            /* range-gadt-typeclass-migration-plan A1: -Xgadt is a deprecated
-             * no-op. defgadt syntax and GADT pattern matching are enabled by
-             * default (g_gadt_enabled defaults true); the token is still
-             * accepted for source compatibility, mirroring -Xcallcc. */
-            fprintf(stderr, "warning: -Xgadt is deprecated and has no effect; "
-                            "GADTs are enabled by default\n");
-            for (int j = i; j < argc - 1; j++) {
-                argv[j] = argv[j + 1];
-            }
-            argc--;
-            i--;
-        } else if (strcmp(argv[i], "-Xdata-literals") == 0) {
-            /* DL0: enable map/vec/set data literal syntax */
-            g_data_literals_enabled = true;
-            for (int j = i; j < argc - 1; j++) {
-                argv[j] = argv[j + 1];
-            }
-            argc--;
-            i--;
-        } else if (strcmp(argv[i], "-Xjson-reader") == 0) {
-            /* JR0: enable the #json(...) compile-time reader macro */
-            g_json_reader_enabled = true;
-            for (int j = i; j < argc - 1; j++) {
-                argv[j] = argv[j + 1];
-            }
-            argc--;
-            i--;
-        } else if (strcmp(argv[i], "-Xschema-reader") == 0) {
-            /* RD: enable the #json-str<T>(...) typed-decode reader family.
-             * Implies -Xjson-reader and auto-loads schema.tur. */
-            g_schema_reader_enabled = true;
-            g_json_reader_enabled = true;
-            for (int j = i; j < argc - 1; j++) {
-                argv[j] = argv[j + 1];
-            }
-            argc--;
-            i--;
-        } else if (strcmp(argv[i], "-Xsized-types") == 0) {
-            /* sized-types-default-on: deprecated no-op (sized types are
-             * enabled by default). Strip the flag so it doesn't reach later
-             * argument-position logic, mirroring -Xgadt. */
-            for (int j = i; j < argc - 1; j++) {
-                argv[j] = argv[j + 1];
-            }
-            argc--;
-            i--;
-        } else if (strcmp(argv[i], "-Xlinear") == 0) {
-            /* LT0: enable linear type checking */
-            g_linear_enabled = true;
-            for (int j = i; j < argc - 1; j++) {
-                argv[j] = argv[j + 1];
-            }
-            argc--;
-            i--;
-        } else if (strcmp(argv[i], "-Xunique-types") == 0) {
-            /* UT0: enable uniqueness type checking */
-            g_unique_enabled = true;
-            for (int j = i; j < argc - 1; j++) {
-                argv[j] = argv[j + 1];
-            }
-            argc--;
-            i--;
-        } else if (strcmp(argv[i], "-Xsubstructural") == 0) {
-            /* ST0: enable substructural type checking (implies -Xlinear) */
-            g_substructural_enabled = true;
-            g_linear_enabled = true;
-            for (int j = i; j < argc - 1; j++) {
-                argv[j] = argv[j + 1];
-            }
-            argc--;
-            i--;
-        } else if (strcmp(argv[i], "-Xsessions") == 0) {
-            /* SS0a: enable session type syntax and checking (implies -Xsubstructural, -Xlinear) */
-            g_sessions_enabled = true;
-            g_substructural_enabled = true;
-            g_linear_enabled = true;
-            for (int j = i; j < argc - 1; j++) {
-                argv[j] = argv[j + 1];
-            }
-            argc--;
-            i--;
-        } else if (strcmp(argv[i], "-Xdynamic-vars") == 0) {
-            /* DV0: enable dynamic var syntax and checking */
-            g_dynvar_enabled = true;
-            for (int j = i; j < argc - 1; j++) {
-                argv[j] = argv[j + 1];
-            }
-            argc--;
-            i--;
-        } else if (strcmp(argv[i], "-Xsymbols") == 0) {
-            /* SYM0: enable first-class runtime symbol (:Sym) values */
-            g_symbols_enabled = true;
-            for (int j = i; j < argc - 1; j++) {
-                argv[j] = argv[j + 1];
-            }
-            argc--;
-            i--;
-        } else if (strcmp(argv[i], "-Xcallcc") == 0) {
-            /* call-cc-completion (CC5): -Xcallcc is a deprecated no-op for one
-             * release.  call/cc / escape are now real, sound, and ungated on the
-             * CPS substrate (cps-transform-plan CPS5.3/CPS6). */
-            fprintf(stderr, "warning: -Xcallcc is deprecated and has no effect; "
-                            "call/cc and escape are now enabled by default\n");
-            for (int j = i; j < argc - 1; j++) {
-                argv[j] = argv[j + 1];
-            }
-            argc--;
-            i--;
-        } else if (strcmp(argv[i], "-Xunion-types") == 0) {
-            /* IT0: enable union type syntax and checking */
-            g_union_types_enabled = true;
-            for (int j = i; j < argc - 1; j++) {
-                argv[j] = argv[j + 1];
-            }
-            argc--;
-            i--;
-        } else if (strcmp(argv[i], "-Xintersection-types") == 0) {
-            /* IT2: enable intersection type syntax */
-            g_intersection_types_enabled = true;
-            for (int j = i; j < argc - 1; j++) {
-                argv[j] = argv[j + 1];
-            }
-            argc--;
-            i--;
-        } else if (strcmp(argv[i], "-Xcontracts") == 0) {
-            /* CT3: explicitly enable contract checks (already on by default in debug) */
-            g_contracts_enabled = true;
+        } else if (is_known_deprecated_x_flag(argv[i])) {
+            /* drop-x-flags-plan: every -X<name> is an accept-and-warn no-op
+             * as of v0.24.0.  TUR-W0050 emitted; the underlying feature is
+             * always on (see src/runtime/globals.c). */
+            warn_deprecated_x_flag(argv[i]);
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

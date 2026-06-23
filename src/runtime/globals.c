@@ -78,19 +78,18 @@ bool g_uses_cons = false;
  * (still accepted, mirroring the -Xcallcc graduation). */
 bool g_gadt_enabled = true;
 
-/* DL0 (data-literals-plan): -Xdata-literals flag — enable map/vec/set data
- * literal syntax (#map{...}, #set{...}, and [...] in expression position).
- * Opt-in; off by default so programs that don't use the syntax are unaffected. */
-bool g_data_literals_enabled = false;
+/* drop-x-flags-plan (v0.24.0): -Xdata-literals is now an accept-and-warn
+ * no-op; data-literal syntax (#map{...}, #set{...}, [...] in expression
+ * position) is unconditionally on. */
+bool g_data_literals_enabled = true;
 
-/* JR0 (json-reader-macro-plan): -Xjson-reader flag — enable the #json(...)
- * compile-time reader macro that parses a verbatim JSON blob and emits the
- * equivalent Turmeric S-expression (hamt-of / vec-of / literals).
- * Opt-in; off by default so programs that don't use the syntax are unaffected. */
-bool g_json_reader_enabled = false;
+/* drop-x-flags-plan (v0.24.0): -Xjson-reader is now an accept-and-warn
+ * no-op; the #json(...) reader macro is unconditionally on. */
+bool g_json_reader_enabled = true;
 
-/* RD: -Xschema-reader — enable #json-str<T>(...) typed-decode reader macros. */
-bool g_schema_reader_enabled = false;
+/* drop-x-flags-plan (v0.24.0): -Xschema-reader is now an accept-and-warn
+ * no-op; #json-str<T>(...) typed-decode readers are unconditionally on. */
+bool g_schema_reader_enabled = true;
 
 /* Phase SZ4: -Xsized-types — was opt-in; now ON by default. Sized types are
  * mature: stdlib uses (Static n) (stdlib/sized*.tur), the tur-ecs spice
@@ -122,40 +121,43 @@ bool g_emit_abi_trace = false;
 /* ER6: --lint-effects flag */
 bool g_lint_effects = false;
 
-/* LT0: -Xlinear flag — enable linear type checking */
-bool g_linear_enabled = false;
+bool g_linear_enabled = true;
 
-/* UT0: -Xunique-types flag -- enable uniqueness type checking */
-bool g_unique_enabled = false;
+bool g_unique_enabled = true;
 
-/* ST0: -Xsubstructural flag — enable substructural type checking (implies -Xlinear) */
-bool g_substructural_enabled = false;
+bool g_substructural_enabled = true;
 
-/* IT0: -Xunion-types flag — enable union type syntax and checking */
-bool g_union_types_enabled = false;
+/* drop-x-flags-plan (v0.24.0): -Xunion-types is now an accept-and-warn
+ * no-op; union type syntax and checking is unconditionally on. */
+bool g_union_types_enabled = true;
 
-/* IT2: -Xintersection-types flag — enable intersection type syntax */
-bool g_intersection_types_enabled = false;
+/* drop-x-flags-plan (v0.24.0): -Xintersection-types is now an
+ * accept-and-warn no-op; intersection type syntax is unconditionally on. */
+bool g_intersection_types_enabled = true;
 
-/* ET4: -Xeffect-types flag — enable full effect typing */
-bool g_effect_types_enabled = false;  /* ET4: -Xeffect-types */
+/* drop-x-flags-plan (v0.24.0): -Xeffect-types is now an accept-and-warn
+ * no-op; full effect typing (ET0-ET4, LC0-LC3, MS0-MS4) is unconditionally
+ * on.  Note: --strict-effects stays opt-in -- always-on effect types do
+ * NOT imply always-on strict warnings. */
+bool g_effect_types_enabled = true;
 
 /* CT3: Contract checking configuration */
 bool g_contracts_enabled = true;          /* contracts always active by default */
 bool g_keep_contracts_in_release = false; /* --keep-contracts: retain in release builds */
 
-/* SS0a: -Xsessions flag — enable session type syntax and checking */
-bool g_sessions_enabled = false;
+bool g_sessions_enabled = true;
 
-/* DV0: -Xdynamic-vars flag — enable dynamic var syntax and checking */
-bool g_dynvar_enabled = false;
+/* drop-x-flags-plan (v0.24.0): -Xdynamic-vars is now an accept-and-warn
+ * no-op; dynamic var syntax and checking is unconditionally on. */
+bool g_dynvar_enabled = true;
 
-/* CF4: -Xcallcc flag — unlock the experimental (unsound) call/cc / escape
- * desugar.  Default off. */
-bool g_callcc_enabled = false;
+/* drop-x-flags-plan (v0.24.0): -Xcallcc is now an accept-and-warn no-op;
+ * call/cc / escape are real and unconditionally on (CPS substrate). */
+bool g_callcc_enabled = true;
 
-/* SYM0: -Xsymbols flag — enable first-class runtime symbol (:Sym) values. */
-bool g_symbols_enabled = false;
+/* drop-x-flags-plan (v0.24.0): -Xsymbols is now an accept-and-warn no-op;
+ * first-class runtime symbol (:Sym) values are unconditionally on. */
+bool g_symbols_enabled = true;
 
 /* INT-2: --interpret mode — true when running tur --interpret. */
 bool g_interpret_mode = false;

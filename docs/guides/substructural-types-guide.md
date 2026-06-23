@@ -6,8 +6,8 @@ description: `^linear`, `^affine`, `^relevant` type disciplines
 
 # Substructural Types in Turmeric
 
-Turmeric supports three substructural type disciplines via the `-Xsubstructural` flag.
-Each discipline restricts which structural rules a value may use:
+Turmeric supports three substructural type disciplines. Each discipline
+restricts which structural rules a value may use:
 
 | Annotation   | May be dropped | May be duplicated | Summary                    |
 |--------------|---------------|-------------------|----------------------------|
@@ -16,13 +16,7 @@ Each discipline restricts which structural rules a value may use:
 | `^relevant`  | No            | Yes               | Used at least once         |
 | (none)       | Yes           | Yes               | No restrictions (default)  |
 
-Enable the system with:
-
-```sh
-tur build -Xsubstructural myfile.tur
-```
-
-`-Xsubstructural` implies `-Xlinear`.
+These disciplines are enabled by default; no flag is required.
 
 ---
 
@@ -53,9 +47,9 @@ defn copy-file [src dst : cstr] : unit
     close-file(fh)
 ```
 
-Under `-Xsubstructural`, `ref<T>` bindings are automatically inferred as `^linear`
-unless another annotation is present. You must explicitly `(drop! r)` or consume
-the ref -- it will not be silently freed.
+`ref<T>` bindings are automatically inferred as `^linear` unless another
+annotation is present. You must explicitly `(drop! r)` or consume the ref --
+it will not be silently freed.
 
 ### `^affine` -- use at most once
 
@@ -167,7 +161,6 @@ Wraps `expr` so that the binding holding its value is inferred as `^relevant`.
 The bound value must be used at least once before its scope exits.
 
 ```turmeric
-;; Under -Xsubstructural:
 (let [r (must-use (acquire-resource))]
   (process r)   ;; OK -- ^relevant allows duplication
   (process r))
@@ -178,7 +171,6 @@ The bound value must be used at least once before its scope exits.
 ```
 
 ```sweet-exp
-;; Under -Xsubstructural:
 let [r must-use(acquire-resource())]
   process(r)   ;; OK -- ^relevant allows duplication
   process(r)
@@ -192,17 +184,15 @@ let [r must-use(acquire-resource())]
 
 Scoped resource binding -- equivalent to `(let [name init] body...)`.
 Useful to signal intent that `name` is a resource to be consumed within `body`.
-When combined with `-Xsubstructural` and a `ref<T>` init, the binding is inferred
-as `^linear` and must be explicitly consumed (via `(drop! name)` or a consuming call).
+With a `ref<T>` init, the binding is inferred as `^linear` and must be
+explicitly consumed (via `(drop! name)` or a consuming call).
 
 ```turmeric
-;; Under -Xsubstructural:
 (with-resource [r (ref 42)]
   (drop! r))    ;; must consume the linear ref
 ```
 
 ```sweet-exp
-;; Under -Xsubstructural:
 with-resource [r ref(42)]
   drop!(r)    ;; must consume the linear ref
 ```
@@ -228,9 +218,9 @@ and fix suggestions.
 
 ### `ref<T>` and linear inference
 
-Under `-Xsubstructural`, all `ref<T>` let bindings and `:ref` parameters are
-automatically inferred as `^linear`. You do not need an explicit `^linear`
-annotation -- but you must explicitly consume the ref.
+All `ref<T>` let bindings and `:ref` parameters are automatically inferred
+as `^linear`. You do not need an explicit `^linear` annotation -- but you
+must explicitly consume the ref.
 
 ```turmeric
 (defn consume [r : ref] : int

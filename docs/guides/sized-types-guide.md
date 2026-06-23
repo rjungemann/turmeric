@@ -1,7 +1,7 @@
 ---
 title: Sized Types
 category: Type System
-description: Tracking data-structure sizes in the type system for memory layout, stack allocation, and type-safe array operations (`-Xsized-types`)
+description: Tracking data-structure sizes in the type system for memory layout, stack allocation, and type-safe array operations
 ---
 
 # Sized Types in Turmeric
@@ -11,12 +11,7 @@ memory layout verification, stack allocation of fixed-size buffers, type-safe
 array operations, and FFI structs that carry size annotations through Turmeric
 wrappers.
 
-Sized types are enabled with the `-Xsized-types` compiler flag, which implies
-`-Xgadt` (the sized layer is built on the GADT machinery):
-
-```sh
-tur -Xsized-types build sized-program.tur
-```
+Sized types are enabled by default; the layer is built on the GADT machinery.
 
 > **Static checking.** Size indices are lifted to the type level: a
 > length-`n` vector's type mentions `n`, and a dimension mismatch whose sizes
@@ -250,9 +245,8 @@ size-assert-eq!(size-static(4) size-static(5))
 
 ### Static checking (SZ7)
 
-Under `-Xsized-types`, `size-assert-eq!` and `size-assert-le!` are checked
-**statically** when both of their size arguments reduce to compile-time
-constants -- the `Size` expression is folded at elaboration and compared:
+`size-assert-eq!` and `size-assert-le!` are checked **statically** when both
+of their size arguments reduce to compile-time constants -- the `Size` expression is folded at elaboration and compared:
 
 ```turmeric
 ; COMPILE-TIME error TUR-E0260 (no runtime check is emitted):
@@ -385,7 +379,7 @@ defgadt SizedVec [n]
 ; (SVCons _ (SVCons _ (SVNil))) infers (SizedVec 2)
 ```
 
-Pass `--dump-sizes` (with `-Xsized-types`) to print the inferred index for each
+Pass `--dump-sizes` to print the inferred index for each
 constructor application:
 
 ```

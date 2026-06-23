@@ -63,8 +63,8 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[async-await-guide.md](async-await-guide.md)** -- Async/await with fibers and delimited continuations
 - **[stm-guide.md](stm-guide.md)** -- Software transactional memory -- API reference and mechanics
 - **[stm-tutorial.md](stm-tutorial.md)** -- STM tutorial: concepts, patterns, and worked examples
-- **[session-types-guide.md](session-types-guide.md)** -- Session types: type-safe binary and multi-party protocols (`-Xsessions`)
-- **[dynamic-vars-guide.md](dynamic-vars-guide.md)** -- Dynamic vars: thread-local, dynamically-scoped mutable cells (`-Xdynamic-vars`)
+- **[session-types-guide.md](session-types-guide.md)** -- Session types: type-safe binary and multi-party protocols
+- **[dynamic-vars-guide.md](dynamic-vars-guide.md)** -- Dynamic vars: thread-local, dynamically-scoped mutable cells
 
 ## Advanced Control Flow
 
@@ -102,7 +102,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[gadts-guide.md](gadts-guide.md)** -- GADTs: `defgadt`, type refinement, equality witnesses, union types, gradual typing
 - **[gadts-cookbook.md](gadts-cookbook.md)** -- GADTs cookbook: practical patterns and recipes
 - **[union-intersection-types-guide.md](union-intersection-types-guide.md)** -- Union (`A | B`) and intersection (`A & B`) types, `any`, gradual typing
-- **[sized-types-guide.md](sized-types-guide.md)** -- Sized types: compile-time size tracking, stack allocation, `SizedBuf`, `SizedMatrix`, `SizedBitVec` (`-Xsized-types`)
+- **[sized-types-guide.md](sized-types-guide.md)** -- Sized types: compile-time size tracking, stack allocation, `SizedBuf`, `SizedMatrix`, `SizedBitVec`
 
 ### Functional Abstractions
 

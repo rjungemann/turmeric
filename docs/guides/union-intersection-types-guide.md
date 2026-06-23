@@ -6,31 +6,17 @@ description: Union (`A | B`) and intersection (`A & B`) types, `any`, gradual ty
 
 # Union and Intersection Types Guide
 
-> **Feature flags:** `-Xunion-types` and `-Xintersection-types`
->
-> IT0--IT4 are complete. As of TY2, `any` boxing codegen, the checked `cast`,
-> and `type-of` ship for every payload kind (int/bool/float/nil/cstr/ptr, ADTs,
-> and heap-boxed structs). The remaining deferred item is general
-> `struct { int tag; union { ... } }` tagged-union C emission. See
-> [Deferred](#deferred) below.
+> **Status:** IT0--IT4 are complete. As of TY2, `any` boxing codegen, the
+> checked `cast`, and `type-of` ship for every payload kind
+> (int/bool/float/nil/cstr/ptr, ADTs, and heap-boxed structs). The remaining
+> deferred item is general `struct { int tag; union { ... } }` tagged-union
+> C emission. See [Deferred](#deferred) below.
 
 Union types (`A | B`) and intersection types (`A & B`) extend the Turmeric type system with
 structural type combinations. Together they enable gradual typing, flexible APIs, and
 type-safe duck typing without wrapper ADTs.
 
----
-
-## Enabling
-
-Both features are gated behind separate flags:
-
-```sh
-turc -Xunion-types          myfile.tur   # union types only
-turc -Xintersection-types   myfile.tur   # intersection types only
-turc -Xunion-types -Xintersection-types  # both
-```
-
-The `any` type is available when either flag is active.
+Both features, along with the `any` type, are enabled by default; no flag is required.
 
 ---
 

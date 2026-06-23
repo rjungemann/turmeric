@@ -6,8 +6,8 @@ description: Compile-time #json(...) reader macro and runtime tur/json library f
 
 # JSON in Turmeric: the `#json(...)` reader macro and `tur/json`
 
-> **Status:** the `#json(...)` reader macro is experimental, opt-in behind
-> `-Xjson-reader`. The runtime `tur/json` library is stable.
+> **Status:** the `#json(...)` reader macro and the runtime `tur/json`
+> library are both shipping.
 
 Turmeric handles JSON two ways:
 
@@ -23,14 +23,6 @@ Because both produce the *same* node tree, `#json(...)` is effectively a
 `json/decode` whose input is validated by the compiler.
 
 ## The `#json(...)` reader macro
-
-Enable it with the `-Xjson-reader` flag:
-
-```sh
-tur -Xjson-reader build   src/app.tur
-tur -Xjson-reader emit-c  src/app.tur
-tur -Xjson-reader run     src/app.tur
-```
 
 The macro uses round parens as the outer fence, so a top-level object reads
 without a doubled brace and a top-level array has no doubled bracket:
@@ -135,7 +127,7 @@ The `#json<Type>(...)` form wraps its node tree in an ascription
 `(:: <node> Type)`. For a literal blob this is a compile-time type check on the
 node's own representation; the typed-decode path lives in the `tur/schema`
 reader family `#json-str<T>(expr)`, which desugars to
-`(:: (decode! (json/decode expr)) T)` under `-Xschema-reader`. See the
+`(:: (decode! (json/decode expr)) T)`. See the
 [schema guide](schema-guide.md) for `HasSchema` and typed decoding.
 
 ## Runtime JSON: `tur/json`

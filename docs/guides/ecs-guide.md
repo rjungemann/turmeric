@@ -183,7 +183,7 @@ over the variadic form for back-compat with E1' code.
 
 For systems whose signature wants to name the precise component set
 at the type level, the spice exposes a row-typed `Query` value
-(requires `-Xdata-literals` for the `#row{...}` reader form):
+(using the `#row{...}` reader form):
 
 ```turmeric
 (defstruct Query [^&in ^&out] (world :int))   ; from ecs/query

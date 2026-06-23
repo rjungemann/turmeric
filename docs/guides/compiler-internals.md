@@ -181,15 +181,15 @@ Compound types:
 | `TY_STRUCT` | user-defined struct |
 | `TY_ADT` | algebraic data type (sum type) |
 | `TY_GADT` | generalized ADT with per-constructor types |
-| `TY_UNION` | union type `(A \| B)` (opt-in `-Xunion-types`) |
-| `TY_INTERSECTION` | intersection type `(A & B)` (opt-in) |
+| `TY_UNION` | union type `(A \| B)` |
+| `TY_INTERSECTION` | intersection type `(A & B)` |
 | `TY_FN` | function type |
 | `TY_TYVAR` | type variable (for generics, GADTs) |
 | `TY_FORALL` | rank-2+ quantified type |
 | `TY_EXISTS` | existential type |
 | `TY_APP` | type application `F<A>` |
 | `TY_CON` | type constructor |
-| `TY_HANDLER` | effect handler type (opt-in `-Xeffect-types`) |
+| `TY_HANDLER` | effect handler type |
 
 Ownership modifiers: `CopyKind` (`CK_UNIQUE`, `CK_COPY`, `CK_LINEAR`,
 `CK_MULTISHOT`) and `SubstructKind` (`SK_STRUCTURAL`, `SK_AFFINE`,
@@ -332,7 +332,7 @@ Ownership, move, and borrow analysis (Phase 14). Validates that:
 - Moved values are not used after a move.
 - Borrowed references do not outlive the owned value.
 - Mutable borrows are exclusive.
-- Linear values are consumed exactly once (when `-Xlinear` is enabled).
+- Linear values are consumed exactly once.
 - Effect handler case bodies do not capture borrow-typed variables from the
   enclosing scope.
 

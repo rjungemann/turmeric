@@ -7,10 +7,8 @@ description: GADTs cookbook: practical patterns and recipes
 # GADTs Cookbook
 
 Practical patterns for using Generalized Algebraic Data Types (GADTs) in
-Turmeric. GADTs are enabled by default -- the historical `-Xgadt` flag is
-still accepted as a deprecated no-op. The combined examples below pair GADTs
-with `-Xunion-types`, which is still flag-gated; that is the only `-X` flag
-required for any pattern in this cookbook.
+Turmeric. GADTs, union types, and every other type-system feature shown in
+this cookbook are enabled by default; no `-X` flags are required.
 
 ---
 
@@ -376,8 +374,8 @@ defn main [] :int
 
 ## GADT + Union Types Together
 
-GADTs and union types (`-Xgadt -Xunion-types`) can be combined. A function
-can accept either a GADT value or a plain value through a union type:
+GADTs and union types can be combined. A function can accept either a GADT
+value or a plain value through a union type:
 
 ```turmeric
 ; A typed tag for int-or-bool dispatch
@@ -399,7 +397,7 @@ can accept either a GADT value or a plain value through a union type:
 
 (defn main [] : int
   (println (accept-either (IntTag)))   ; 0
-  (println (accept-either 42))          ; 42 -- requires -Xunion-types
+  (println (accept-either 42))          ; 42
   0)
 ```
 

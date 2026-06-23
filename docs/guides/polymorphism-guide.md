@@ -247,8 +247,7 @@ defgadt GVec [a]
 **Reach for ADTs** for everyday sum types. **Reach for GADTs** when a
 constructor needs to *prove* something about its type parameter (a tagless
 interpreter, a length-indexed vector, a type-safe AST). Full treatment in
-[gadts-guide.md](gadts-guide.md) and the [gadts-cookbook.md](gadts-cookbook.md);
-enable with `-Xgadt`.
+[gadts-guide.md](gadts-guide.md) and the [gadts-cookbook.md](gadts-cookbook.md).
 
 ---
 
@@ -279,8 +278,8 @@ defn describe [x : (int | cstr | bool)] : cstr
 
 **Reach for unions** at FFI/JSON boundaries and for gradual typing. **Reach
 for intersections** when you want a value that simultaneously satisfies
-several typeclass constraints. Enable with `-Xunion-types` /
-`-Xintersection-types`. See [union-intersection-types-guide.md](union-intersection-types-guide.md).
+several typeclass constraints. See
+[union-intersection-types-guide.md](union-intersection-types-guide.md).
 
 ---
 

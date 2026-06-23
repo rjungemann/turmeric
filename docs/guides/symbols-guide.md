@@ -1,27 +1,25 @@
 ---
 title: Symbols Guide
 category: Language Features
-description: First-class runtime symbols (:Sym type) with compile-time interning and optional dynamic str->sym table, enabled by -Xsymbols
+description: First-class runtime symbols (:Sym type) with compile-time interning and optional dynamic str->sym table
 ---
 
 # Runtime Symbols: `:Sym`
 
-> **Status:** experimental, opt-in behind `-Xsymbols`. All phases (SYM0--SYM6)
-> are implemented: the `:Sym` type, per-TU codegen, cross-TU interning,
-> map-literal + typeclass integration, the stdlib surface, and the opt-in
-> dynamic `str->sym` intern table.
+> **Status:** shipping. All phases (SYM0--SYM6) are implemented: the `:Sym`
+> type, per-TU codegen, cross-TU interning, map-literal + typeclass
+> integration, the stdlib surface, and the opt-in dynamic `str->sym` intern
+> table.
 
 Turmeric's `:foo` keyword syntax has always parsed cleanly and interned its
 name at read time, but in *expression position* a keyword had no value and no
-type. With `-Xsymbols`, `:foo` becomes a first-class expression of type
-`:Sym` whose runtime value is a unique, deduplicated pointer into `.rodata`.
+type. `:foo` is now a first-class expression of type `:Sym` whose runtime
+value is a unique, deduplicated pointer into `.rodata`.
 
 ```turmeric
-;; tur run -Xsymbols / tur build -Xsymbols
 (println (sym->str :hello))   ; => hello
 ```
 ```sweet-exp
-;; tur run -Xsymbols / tur build -Xsymbols
 println(sym->str(:hello))
 ; => hello
 ```
@@ -61,20 +59,15 @@ just within a single file. Single-file `emit-c` output keeps the records
 ## Expression position vs. syntactic position
 
 Adding a runtime value for `:foo` does **not** change any of its existing
-syntactic uses. These are consumed by earlier elaborator passes and behave
-identically with or without `-Xsymbols`:
+syntactic uses. These are consumed by earlier elaborator passes:
 
 - Type annotations: `:int`, `:cstr`, `:Sym`
 - Import directives: `:refer [...]`, `:as foo`
 - Struct field selectors: `(:name p)`
 - `:else` in `cond`/`case`
 
-The only behavioral change is in **expression position**, where `:foo` was
-previously a hard error. Without the flag it still is:
-
-```
-error: keyword in expression position requires -Xsymbols
-```
+The behavioral addition is in **expression position**, where `:foo` was
+previously a hard error and now evaluates to a `:Sym` value.
 
 ## The `:Sym` type
 
@@ -95,8 +88,7 @@ defn label [tag :Sym] :cstr
 
 ## Stdlib surface (`stdlib/sym.tur`)
 
-`sym.tur` is auto-loaded into the global namespace **only** under `-Xsymbols`
-(so default builds and their codegen snapshots are unaffected). It provides:
+`sym.tur` is auto-loaded into the global namespace. It provides:
 
 | Function | Signature | Notes |
 |---|---|---|
@@ -119,8 +111,8 @@ sym=?(:a :b)
 
 ## Equality, hashing, and maps
 
-Under `-Xsymbols`, `:Sym` participates in the `Eq`, `Hash`, and `MapKey`
-typeclasses (instances live in `stdlib/sym.tur`, auto-loaded with the flag):
+`:Sym` participates in the `Eq`, `Hash`, and `MapKey` typeclasses (instances
+live in `stdlib/sym.tur`):
 
 ```turmeric
 (eq? :foo :foo)   ; => true   (pointer identity)
@@ -136,8 +128,8 @@ hash(:foo)
 ; precomputed field load
 ```
 
-With `-Xdata-literals` as well, a keyword key in a map literal is a
-first-class `:Sym` key rather than a content-hashed string:
+A keyword key in a map literal is a first-class `:Sym` key rather than a
+content-hashed string:
 
 ```turmeric no-check
 (let [m #map{:foo 10 :bar 20}]
@@ -154,8 +146,7 @@ let [m #map{:foo 10 :bar 20}]
 
 The map is keyed by `Sym` pointer identity (via `Hash[Sym]` + `MapKey[Sym]`),
 so lookups are pointer comparisons with the precomputed hash -- no string
-work. Without `-Xsymbols`, keyword map keys keep the legacy content-hashed
-lowering, and string keys (`#map{"foo" 1}`) are unchanged in either mode.
+work. String keys (`#map{"foo" 1}`) keep their hash-by-content lowering.
 
 ## Dynamic interning: `str->sym` (opt-in)
 

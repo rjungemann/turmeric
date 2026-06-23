@@ -1,12 +1,10 @@
 ---
 title: Data Literals Guide
 category: Language Basics
-description: Compact literal syntax for maps, vecs, and sets using #map{...}, #set{...}, and [...] with -Xdata-literals
+description: Compact literal syntax for maps, vecs, and sets using #map{...}, #set{...}, and [...]
 ---
 
 # Data Literals: `#map{...}`, `#set{...}`, and `[...]`
-
-> **Status:** experimental, opt-in behind `-Xdata-literals`.
 
 Turmeric's data literals give map, vec, and set construction a compact
 literal syntax whose slot values are ordinary expressions, evaluated at
@@ -23,20 +21,6 @@ def payload #map{:name name :age {age + 1} :active 1}
 def points [make-point(0 0) make-point(1 1) origin]
 def small #set{1 2 3}
 ```
-
-## Enabling the feature
-
-The syntax is gated behind a flag so programs that don't use it are
-completely unaffected:
-
-```sh
-tur -Xdata-literals build   src/app.tur
-tur -Xdata-literals emit-c  src/app.tur
-tur -Xdata-literals run     src/app.tur
-```
-
-Without the flag, `#map{` / `#set{` are not recognized and a bare `[...]`
-in expression position keeps its pre-existing meaning (a binding spec only).
 
 ## The three forms
 
@@ -96,13 +80,12 @@ normalizes to a content hash); string keys are compared by content (two
 distinct pointers with equal text are one key). See
 [`#map{...}` keys](#map-keys) below.
 
-> **`-Xsymbols`:** with the runtime-symbols flag also enabled, a keyword key
-> is a first-class `:Sym` value rather than a content-hashed string -- the map
-> is keyed by `Sym` pointer identity via `Hash[Sym]` / `MapKey[Sym]`. See
-> [the symbols guide](symbols-guide.md). Without `-Xsymbols` the legacy
-> content-hash lowering above is unchanged. Aggregate (multi-word struct/ADT) *key*
-types must supply their own `MapKey` instance; *values* may be any type
-(scalars, floats, and heap handles like `Vec[A]` all ride the int64 carrier).
+> **Keyword keys:** a keyword key is a first-class `:Sym` value rather than
+> a content-hashed string -- the map is keyed by `Sym` pointer identity via
+> `Hash[Sym]` / `MapKey[Sym]`. See [the symbols guide](symbols-guide.md).
+> Aggregate (multi-word struct/ADT) *key* types must supply their own
+> `MapKey` instance; *values* may be any type (scalars, floats, and heap
+> handles like `Vec[A]` all ride the int64 carrier).
 
 Slots are arbitrary expressions -- variable references, calls, nested
 literals -- and the normal typechecker handles them.

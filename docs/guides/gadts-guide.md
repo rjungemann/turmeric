@@ -454,11 +454,10 @@ default`).
 
 ---
 
-## Union Types and Gradual Typing (`-Xunion-types`)
+## Union Types and Gradual Typing
 
 Turmeric also supports structural union types as a complement to GADTs.
-Enable them with `-Xunion-types`. Union types and GADTs are independent
-features that can be used together.
+Union types and GADTs are independent features that can be used together.
 
 ### Declaring a union parameter
 
@@ -616,9 +615,9 @@ defn print-as-int [x : any] :int
   `(defn equal-cong [^f eq : (Equal a b)] : (Equal (f a) (f b)) ...)` uses
   kind-`* -> *` type variables (HKT Phase G4).
 
-- **Implicit union widening** is supported with `-Xunion-types`. A value of
-  type `A` can be passed where `(A | B)` is expected; the compiler inserts
-  tag injection automatically (Phase IT4).
+- **Implicit union widening** is supported. A value of type `A` can be passed
+  where `(A | B)` is expected; the compiler inserts tag injection
+  automatically (Phase IT4).
 
 ---
 
@@ -648,13 +647,13 @@ defn print-as-int [x : any] :int
 ; coerce a value using an equality proof
 (coerce (Refl) some-value)
 
-; Union type dispatch  (requires -Xunion-types)
+; Union type dispatch
 (defn describe [x : (int | bool)] : int
   (match x
     (n : int)  0
     (b : bool) 1))
 
-; Gradual typing  (requires -Xunion-types)
+; Gradual typing
 (defn show-type [x : any] : int
   (println (type-of x))
   0)
@@ -687,7 +686,7 @@ defgadt Equal [a b]
 ; coerce a value using an equality proof
 coerce((Refl) some-value)
 
-; Union type dispatch  (requires -Xunion-types)
+; Union type dispatch
 defn describe [x : (int | bool)] :int
   match x
     (n : int)
@@ -695,7 +694,7 @@ defn describe [x : (int | bool)] :int
     (b : bool)
     1
 
-; Gradual typing  (requires -Xunion-types)
+; Gradual typing
 defn show-type [x : any] :int
   println(type-of(x))
   0

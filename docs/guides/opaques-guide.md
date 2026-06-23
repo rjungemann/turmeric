@@ -48,8 +48,7 @@ casts to/from the real pointer type internally).
    an array index, a hash, or a serial number. The consumer sees only the
    accessor functions you choose to export.
 4. **Attaching a substructural discipline.** Adding `:linear` or
-   `:affine` (under `-Xlinear` / `-Xsubstructural`) makes the handle
-   *exactly-once* or *at-most-once* -- the checker enforces that a
+   `:affine` makes the handle *exactly-once* or *at-most-once* -- the checker enforces that a
    `Chan :linear` is consumed by exactly one `chan-free` call, ruling
    out leaks and double-frees.
 
@@ -74,9 +73,9 @@ handle. Without it the opaque is freely copyable (`is_copy = true`); with
 `:linear` or `:affine` it becomes a resource the checker tracks for
 single use.
 
-The substructural attributes only kick in under `-Xlinear` /
-`-Xsubstructural`. The C ABI is identical either way -- the handle still
-lowers to `int64_t`. See
+The C ABI of a substructurally-marked opaque is identical to a freely
+copyable one -- the handle still lowers to `int64_t`; only the
+elaborator's usage tracking changes. See
 [substructural-types-guide.md](substructural-types-guide.md) for the
 discipline; see
 [uniqueness-types-guide.md](uniqueness-types-guide.md) for the
@@ -172,8 +171,7 @@ three sites where the compiler collapses high-level types to the carrier.
 ## Substructural opaques
 
 Adding `:linear` or `:affine` flips two checker bits on the underlying
-`StructDef` (`is_copy = false`, `is_linear` / `is_affine = true`). Under
-`-Xlinear`:
+`StructDef` (`is_copy = false`, `is_linear` / `is_affine = true`):
 
 - A `:linear` handle must be consumed exactly once. Letting it go out of
   scope or copying it is `TUR-E0100`; using it twice is `TUR-E0101`.
@@ -183,11 +181,6 @@ Adding `:linear` or `:affine` flips two checker bits on the underlying
   so they observe the handle without consuming it. Only the
   `*-free`/`-close`/`-shutdown` operation does the actual consume. See
   `stdlib/chan.tur` for a worked example.
-
-If you don't pass `-Xlinear`, the attribute is recorded but inert -- the
-type is freely copyable in practice. That makes it safe to ship a
-substructural opaque in a library and let consumers opt in to the
-discipline at compile time.
 
 ## Inheriting an opaque
 

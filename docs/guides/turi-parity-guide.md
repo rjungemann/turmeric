@@ -70,15 +70,15 @@ concurrency).
 | Async / futures | OK | OK | synchronously-completed bodies settle their future; native future cells |
 | Dynamic variables | OK | OK | dynamic-scope binding stack in the interpreter |
 | Panic / catch / `catch-panic-of` | OK | OK | TI5; panic payloads preserved |
-| Sessions (`make-session`, `close`) | OK | partial | `-Xsessions` builtins lower to inline-C the tree-walker cannot run (`session-close` carved) |
+| Sessions (`make-session`, `close`) | OK | partial | session builtins lower to inline-C the tree-walker cannot run (`session-close` carved) |
 | Sized primitives (`i8`..`i64`, floats) | OK | OK | carrier ascription bit-reinterprets correctly |
-| Symbols (`:Sym`, `-Xsymbols`) | OK | OK | interned `const Symbol *`; native `sym=?`/`sym->str` overrides |
+| Symbols (`:Sym`) | OK | OK | interned `const Symbol *`; native `sym=?`/`sym->str` overrides |
 | Maps / sets / HAMT (scalar keys) | OK | OK | native `tur_hamt_*` overrides |
 | Maps with content keys (turi-closure comparator) | OK | OK | `map_turi_eq_tramp` routes through `tur_hamt_*_eq_ctx` |
 | Maps with content keys (inline-C comparator) | OK | none | the comparator body is raw inline-C; fails cleanly, not silently |
 | Sweet-exp / neoteric / curly-infix | OK | OK | reader layer sits below both back ends |
 | Data literals (`#map{}`, `#set{}`, `[...]`) | OK | OK | reader dispatch shared |
-| `#json(...)` / `#json-str<T>(...)` readers | OK | OK | native json/schema overrides (load behind `-Xjson-reader`/`-Xschema-reader`) |
+| `#json(...)` / `#json-str<T>(...)` readers | OK | OK | native json/schema overrides |
 | Inline-C (`#{Unsafe}` ```c bodies) | OK | none | permanent carve-out; see [Carve-outs](#documented-carve-outs) |
 | WASM async | OK | n/a | the interpreter has no WASM target |
 

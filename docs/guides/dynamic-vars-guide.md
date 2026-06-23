@@ -10,8 +10,6 @@ Dynamic vars are typed, thread-local, dynamically-scoped mutable cells.
 They let you pass implicit context (log level, locale, request ID) through
 deep call chains without threading an explicit parameter everywhere.
 
-Enable with the `-Xdynamic-vars` compiler flag.
-
 ## Quick Start
 
 ```turmeric

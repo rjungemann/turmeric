@@ -10,11 +10,7 @@ Uniqueness types enforce the **at-most-one-reference** discipline: a value with 
 has at most one live reference at any point. Unlike linear types (`^linear`, which enforce
 exactly-once usage), a unique value may be dropped freely -- it just cannot be aliased.
 
-Enable uniqueness checking with:
-
-```sh
-tur build -Xunique-types myfile.tur
-```
+Uniqueness checking is enabled by default; no flag is required.
 
 ---
 
@@ -89,8 +85,8 @@ defn pipeline [^unique buf : Buffer] : ^unique Buffer
 
 ## Alias prevention
 
-Under `-Xunique-types`, creating a second binding that refers to the same unique
-value is a compile-time error.
+Creating a second binding that refers to the same unique value is a
+compile-time error.
 
 ```turmeric
 (defn modify [^unique ^mut x : int] : unit
@@ -177,8 +173,7 @@ Re-annotate `^unique` on the binding to force the stricter discipline.
 
 ## Common patterns
 
-`stdlib/unique.tur` (auto-loaded under `-Xunique-types`) captures the recurring
-linear-resource shapes so you stop open-coding the manual annotations:
+`stdlib/unique.tur` (auto-loaded) captures the recurring linear-resource shapes so you stop open-coding the manual annotations:
 
 | Form | Use |
 |---|---|
@@ -231,10 +226,10 @@ fix suggestions.
 
 | Feature | Relationship |
 |---|---|
-| `ref<T>` | Internally `CK_UNIQUE`; `-Xunique-types` makes the constraint explicit |
+| `ref<T>` | Internally `CK_UNIQUE`; `^unique` makes the constraint explicit |
 | `&mut T` | Temporary unique borrow; `^unique` is a permanent ownership transfer |
 | `^linear` | Orthogonal: linear controls usage count; unique controls alias count |
-| `^affine` | `^affine` (via `-Xsubstructural`) restricts duplication but not aliasing |
+| `^affine` | `^affine` restricts duplication but not aliasing |
 | `rc<T>` | Explicitly non-unique -- wrapping a `^unique` value is rejected |
 
 ---

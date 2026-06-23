@@ -296,8 +296,7 @@ error (`no instance 'HasSchema T'`).
 
 ## The `#json-str<T>(...)` reader macro
 
-Under `-Xschema-reader` (which implies `-Xjson-reader` and auto-loads
-`json.tur` + `schema.tur`), `#json-str<T>(expr)` desugars to
+`#json-str<T>(expr)` desugars to
 `(:: (decode! (json/decode expr)) T)` -- a one-liner from a runtime JSON
 `:cstr` to a typed value:
 

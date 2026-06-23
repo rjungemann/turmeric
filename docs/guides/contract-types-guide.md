@@ -6,8 +6,8 @@ description: Contract types: `{ x : T | p }`, `:pre`/`:post` annotations, FFI co
 
 # Contract Types Guide
 
-> Contract types are gated behind `-Xcontracts`. For the runtime contract macros
-> (`assert!`, `require!`, `ensure!`, `invariant!`), see [Error Handling Guide](error-handling-guide.md).
+> For the runtime contract macros (`assert!`, `require!`, `ensure!`,
+> `invariant!`), see [Error Handling Guide](error-handling-guide.md).
 
 Contract types add **runtime-checked predicates** to types as a first-class language feature.
 A contract type `{ x : T | p }` represents values of type `T` that satisfy predicate `p`,
@@ -242,17 +242,13 @@ with-contract-handler my-handler
 
 ---
 
-## Feature Flag and Build Modes
+## Build Modes
 
-Enable contract types with the `-Xcontracts` flag:
-
-```sh
-turc -Xcontracts myfile.tur
-```
+Contract types are enabled by default.
 
 | Build | Contracts |
 |---|---|
-| `just build` (debug) | Always active, regardless of `-Xcontracts` |
+| `just build` (debug) | Always active |
 | `just release` | Stripped by default |
 | `just release` with `--keep-contracts` | Retained (safety-critical code) |
 

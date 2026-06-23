@@ -12,8 +12,8 @@ description: Model protocols as types, whether the protocol has two participants
 > and the broader session-types story is here.
 
 Turmeric supports session types -- a type discipline that statically verifies
-communication protocols between concurrent processes. The feature is enabled with
-the `-Xsessions` compiler flag.
+communication protocols between concurrent processes. The feature is enabled
+by default; no compiler flag is required.
 
 ## Table of Contents
 
@@ -479,8 +479,8 @@ error [TUR-E0001]: function 'schan-close' arg 1:
   got (type-app SChan (type-app (type-app SRecv int) SClose))
 ```
 
-`SChan` is `:linear`, so under `-Xlinear` the protocol additionally cannot be
-*replayed* -- each step consumes its handle exactly once.
+`SChan` is `:linear`, so the protocol additionally cannot be *replayed* --
+each step consumes its handle exactly once.
 
 Runnable examples: `tests/fixtures/schan-roundtrip` (single round trip),
 `tests/fixtures/schan-worker-pool` (a request/response served by worker threads

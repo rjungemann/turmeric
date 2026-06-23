@@ -29,12 +29,11 @@ Every advanced type system feature was measured against four tests:
 concrete use cases from actual Turmeric programs. One with Low complexity can
 ship even if demand is speculative.
 
-> **A note on flags.** Most features below are gated behind an `-X`
-> experimental flag (`-Xlinear`, `-Xsubstructural`, `-Xunique-types`,
-> `-Xsessions`, `-Xeffect-types`, `-Xgadt`, `-Xunion-types`,
-> `-Xintersection-types`, `-Xcontracts`, `-Xdynamic-vars`). Higher-kinded
-> types / higher-ranked types and existential types are the exceptions:
-> they are enabled by default and have no `-X` flag.
+> **A note on flags.** All features described below are enabled by default
+> in the compiler -- there is no opt-in flag to set. Historical `-X`
+> experimental flags (e.g. `-Xlinear`, `-Xsessions`, `-Xeffect-types`) are
+> still accepted on the command line for backward compatibility but emit a
+> deprecation warning and have no effect.
 
 ---
 
@@ -71,9 +70,9 @@ the exactly-once guarantee.
 
 ### Composability
 
-`-Xsubstructural` implies `-Xlinear`. `-Xsessions` implies `-Xlinear` (session
-channels are linear). The three flags form a coherent dependency chain rather
-than independent features.
+Substructural types build on linear types, and session types in turn build on
+linear types (session channels are linear). The three form a coherent
+dependency chain rather than independent features.
 
 Substructural types interact cleanly with typeclasses: a method declared with
 `^linear` parameters requires all instances to match that discipline. The
@@ -84,8 +83,7 @@ elaborator enforces this at instance declaration time.
 ## Session types
 
 Session types describe communication protocols in the type system: which party
-sends what, in which order, and whether the channel branches. They are enabled
-by `-Xsessions`.
+sends what, in which order, and whether the channel branches.
 
 ```turmeric
 (deftype EchoProto []
@@ -126,8 +124,7 @@ abandons a live linear channel.
 
 Turmeric's algebraic effects (Phase 19) were untyped in their first iteration:
 any function could perform any effect, and the type system did not track which
-effects a computation used. Effect types (`-Xeffect-types`) make effect rows
-first-class.
+effects a computation used. Effect types make effect rows first-class.
 
 ```turmeric
 ;; Typed: this function may perform Io and nothing else.
@@ -200,8 +197,7 @@ defn log-and-save [^Serializable ^Printable x :a] :unit
 
 ### Why these features fit
 
-Union types (`-Xunion-types`) and intersection types (`-Xintersection-types`) are
-the right tool for gradual typing: code at system boundaries -- FFI, plugin
+Union types and intersection types are the right tool for gradual typing: code at system boundaries -- FFI, plugin
 APIs, configuration parsers -- benefits from the ability to say "this could be
 any of these concrete types" without giving up type safety inside the boundary.
 
@@ -221,14 +217,13 @@ Pattern matching on unions is exhaustive-checked: the elaborator requires a
 
 ## Sized types
 
-Sized types (`-Xsized-types`, which implies `-Xgadt` and is built on the GADT
-infrastructure) track container dimensions as type-level compile-time integers.
+Sized types (built on the GADT infrastructure) track container dimensions
+as type-level compile-time integers.
 
 > **Implementation status.** The example below is shipped behavior: a
 > dimension mismatch whose sizes are statically known is caught at compile
 > time (`TUR-E0260`). The `Size` GADT, `SizedVec`, sized
-> buffers/matrices/bitvecs, and the (now default-on) `-Xsized-types` flag are
-> all in place, and the size index is lifted to the type level -- it unifies
+> buffers/matrices/bitvecs are all in place, and the size index is lifted to the type level -- it unifies
 > across parameters, through `defstruct`/`defopaque` wrappers, and through
 > polymorphic helpers. Sizes only known at run time fall back to runtime
 > assertions. See the archived
@@ -282,7 +277,7 @@ elaborator machinery beyond what G0--G4 already built.
 
 ## Contract types
 
-Contract types (`-Xcontracts`) attach runtime-checked predicates to types and
+Contract types attach runtime-checked predicates to types and
 function boundaries.
 
 ```turmeric no-check
