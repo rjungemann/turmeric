@@ -5279,6 +5279,36 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 tail = false;   /* body is non-tail: DK_RESET must see its value */
                 break;          /* keep descending */
             }
+            case EX_SERIAL_RESET:
+            case EX_CLONEABLE_RESET: {
+                /* SR N4 Slice 3: a serial-/cloneable-reset whose body does NOT
+                 * reach its capturing shift is just a prompt boundary -- model it
+                 * on the work-stack (DK_RESET, kind PROMPT_SERIAL/CLONEABLE) so
+                 * nested resets fold onto the heap.  The capturing path
+                 * (ts_capture_and_run, reached only when the body performs the
+                 * matching shift) reifies the delimited context once per reset --
+                 * bounded -- so it stays a black box via eval_expr. */
+                bool        is_clone = control->kind == EX_CLONEABLE_RESET;
+                const Expr *body = is_clone ? control->as.cloneable_reset_.body
+                                            : control->as.serial_reset_.body;
+                ExprKind    sk   = is_clone ? EX_CLONEABLE_SHIFT : EX_SERIAL_SHIFT;
+                if (ts_reaches_shift(body, sk)) {
+                    cur = eval_expr(env, cf, control);
+                    descending = false; break;
+                }
+                TuriResetBoundary *b = (TuriResetBoundary *)malloc(sizeof(TuriResetBoundary));
+                b->kind                = is_clone ? PROMPT_CLONEABLE : PROMPT_SERIAL;
+                b->result              = turi_nil();
+                b->saved_depth         = env->eval_depth;
+                b->saved_handler_stack = env->handler_stack;
+                b->saved_defer_stack   = env->defer_stack;
+                b->prev                = g_reset_stack;
+                g_reset_stack = b;
+                DRIVE_PUSH(((DriveCont){ .kind = DK_RESET, .aux = b }));
+                control = body;
+                tail = false;
+                break;
+            }
             case EX_CALLCC: {
                 /* SR N4 Slice 2: model the (call/cc f) escape boundary on the
                  * work-stack (no setjmp), so nested call/cc folds onto the heap.

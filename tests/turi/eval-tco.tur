@@ -136,3 +136,15 @@
     0
     (call/cc (fn [k] (+ 1 (nest-cc (- n 1)))))))
 (println (nest-cc 200000))
+
+;; --- Test 12 (SR N4 Slice 3): nested serial/cloneable reset heap-bounded ----
+;; A serial-/cloneable-reset whose body does not reach its capturing shift is a
+;; plain prompt boundary; the driver models it on the work-stack (DK_RESET with
+;; PROMPT_SERIAL/CLONEABLE) instead of the eval_reset_boundary C frame, so deep
+;; nesting folds onto the heap (was: recursion limit at ~500).
+(defn nest-cl [n :int] :int
+  (if (= n 0) 0 (cloneable-reset (+ 1 (nest-cl (- n 1))))))
+(println (nest-cl 200000))
+(defn nest-se [n :int] :int
+  (if (= n 0) 0 (serial-reset (+ 1 (nest-se (- n 1))))))
+(println (nest-se 200000))

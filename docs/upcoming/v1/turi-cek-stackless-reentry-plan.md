@@ -6,6 +6,39 @@ description: Eliminate the last source of unbounded C recursion in the tree-walk
 
 # Turi stackless native re-entry (full CEK / driver-CPS) -- Plan
 
+## Status update -- 2026-06-23 (N4 Slice 3 -- serial/cloneable reset on the work-stack)
+
+**A serial-/cloneable-reset whose body does not reach its capturing shift is now
+a work-stack boundary -- that nesting is heap-bounded.** Third slice; reuses
+`DK_RESET` with `PROMPT_SERIAL`/`PROMPT_CLONEABLE`.
+
+- New driver cases for `EX_SERIAL_RESET` / `EX_CLONEABLE_RESET`: if the body
+  reaches the matching `serial-shift`/`cloneable-shift` (`ts_reaches_shift`),
+  black-box it via `eval_expr` (the capturing path, `ts_capture_and_run`, reifies
+  the delimited context once -- see the remaining blocker below). Otherwise push
+  a `DK_RESET` of the boundary's prompt kind and drive the body, so deeply-nested
+  no-shift resets fold onto the heap instead of one `eval_reset_boundary` C frame
+  per level. No abort ever targets these kinds, so `DK_RESET` just unlinks +
+  frees + propagates the body value for them.
+
+Result: `(defn g [n] (if (= n 0) 0 (cloneable-reset (+ 1 (g (- n 1))))))` and the
+`serial-reset` analog run `(g 200000)` heap-bounded (was recursion-limit at
+~500); the capturing `cloneable-shift` path still resolves (`test-basic` => 15,
+passthrough => 42). New `tur_eval_tco` regressions `nest-cl`/`nest-se` 200000.
+`bash tests/run.sh` (1783/0), eval/effects/continuation/tco ctests (14/14),
+`eval-tco` (13/13), `run-turi` baseline (23, clean).
+
+**Guard still cannot retire -- one unbounded blocker remains (Slice 4).** The
+*capturing* serial/cloneable path (`ts_capture_and_run`, `src/turi/eval.c`) runs
+its receiver via a synchronous `turi_call`; when that receiver recursively
+triggers another capturing reset it C-recurses. Confirmed:
+`(defn f [n] (serial-reset (+ 1 (serial-shift (fn [k] (if (= n 0) 0 (f (- n 1)))) 0))))`
+still trips the guard at 5000. Converting `ts_capture_and_run` / `ts_cont_resume`
+to the work-stack (the context-reification + multishot-resume machinery) is the
+last step before the guard, `eval_depth`, and `TURI_EVAL_FRAME_BYTES` retire.
+The bounded single re-entries (Show, sync `tvar/modify`, embedder `turi_call`)
+are acceptable and do not block.
+
 ## Status update -- 2026-06-23 (N4 Slice 2 -- call/cc on a work-stack escape)
 
 **`call/cc`/escape is now a work-stack boundary, not a setjmp escape pad --
