@@ -1,0 +1,37 @@
+; C4: a defdata value pattern-matches AND reaches `any`'s machinery.
+;
+; This is the user-facing contract that the "defdata-as-union" item was meant
+; to deliver: an ADT value dispatches via `match`, and the *same* value
+; round-trips through the `any` top type with `type-of` + checked `cast`,
+; landing back in `match`. The boxing/cast/type-of path (IT4 items A+B) is what
+; backs this -- ADTs interoperate with unions through `any` without a separate
+; defdata-to-union desugar.
+
+(defdata Expr
+  (Lit :int)
+  (Neg :int)
+  (Add :int))
+
+; Direct match over a defdata value -- exhaustive, no `any` involved.
+(defn eval-shallow [e : Expr] : int
+  (match e
+    (Lit n) n
+    (Neg n) (- 0 n)
+    (Add n) (+ n n)))
+
+; Widen the ADT to `any` (boxing codegen, IT4-A).
+(defn box-expr [e : Expr] : any
+  e)
+
+(defn main [] : int
+  (let [a (Lit 7)
+        b (Neg 5)]
+    (println (eval-shallow a))          ; 7
+    (println (eval-shallow b))          ; -5
+    ; Round-trip through `any`: type-of reports kind granularity ("adt"),
+    ; then a checked cast lands the value back in `match`.
+    (let [boxed (box-expr (Add 21))]
+      (println (type-of boxed))         ; adt
+      (let [back (cast boxed Expr)]
+        (println (eval-shallow back))))) ; 42
+  0)
