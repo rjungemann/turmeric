@@ -6,7 +6,114 @@ description: Eliminate the last source of unbounded C recursion in the tree-walk
 
 # Turi stackless native re-entry (full CEK / driver-CPS) -- Plan
 
-## Status update -- 2026-06-22
+## Status update -- 2026-06-23 (N3)
+
+**N3 has landed (the unbounded black-box forms; the longjmp shift/Show
+receivers are deferred -- see below).** Following N2's finding, the remaining
+program-internal C-recursion that scales with program depth is the rest of the
+driver's single-operand black-box `default:` forms -- the same shape as
+get-field. Confirmed by probe: deep non-tail recursion threaded through a type
+ascription (`(:: (f ...) :int)`), an explicit cast, a `(return ...)`, or a
+`(set! x ...)` all tripped the `eval_depth` guard at ~hundreds of levels, while
+the same recursion through a builtin arg or an ordinary call arg folds fine.
+
+N3 models the whole single-operand family in the driver via one generic
+`DK_UNARY` continuation:
+
+- New `DK_UNARY` `DriveKind`: descend the form's single operand on the
+  work-stack (non-tail), then apply the form's post-operand logic when the value
+  returns.
+- `unary_operand(e)` returns the operand sub-expression (NULL for a bare
+  `(return)`); `eval_unary_post(env, frame, e, v)` applies the post logic. Both
+  cover the **transform** forms (`EX_CAST`, `EX_REINTERPRET`, `EX_ASCRIBE`,
+  `EX_RETURN`, `EX_SET`) and the compiler-inserted **transparent** shims
+  (`EX_POLY_WRAP`, `EX_FN_TO_FAT`, `EX_POLY_TO_FAT`, `EX_BORROW_IMMUT`,
+  `EX_RC_FROM_REF`, `EX_REF`, `EX_EXISTS_PACK`, `EX_UNION_INJECT`).
+- The cast/reinterpret/ascribe/return/set post-logic was moved into
+  `eval_unary_post` and `eval_expr_impl`'s five cases now call it, so the
+  recursive and driver paths share one copy and cannot diverge.
+- Safety mirrors N2: any unary form whose operand may perform is non-capturable
+  (`ws_has_perform` is conservative for these kinds), so a `DK_UNARY` never
+  lands in a captured continuation slice -- no clone/capture interaction.
+
+Result: deep recursion through `::`/cast/return/set is now heap-bounded (was
+"recursion limit exceeded"). New `tur_eval_tco` regressions: `asc-sum 80000`
+(ascription) and `ret-sum 60000` (return). `bash tests/run.sh` (1780/0),
+eval/sandbox/STM ctests, and the `run-turi` baseline failure set (23,
+byte-identical) all unchanged.
+
+**Deferred to N3b / N4:** the longjmp-based delimited-control receivers the plan
+originally named for N3 -- the abortive shift (`eval_abortive_shift`), the
+serial/cloneable shift receivers, the `TsFrame` continuation replay
+(`ts_cont_resume`), call/cc-escape, and `Show` dispatch. These apply their
+receiver/closure **once** per invocation (bounded per call, not scaling with
+program recursion depth), and they are entangled with the longjmp reset-boundary
+machinery -- converting them to the work-stack means reconciling that path with
+DC's `DK_PROMPT` capture, a large change with little heap-bounding payoff. They
+remain synchronous `turi_call` re-entries and so must still be eliminated before
+N4 retires the guard, but they are not a source of unbounded recursion today.
+The guard stays until that N4 audit is airtight.
+
+## Status update -- 2026-06-23 (N2)
+
+**N2 has landed.** The plan's original N2 target (the inline-C `^fat`/`TUR_APPLY*`
+HOF apply, e.g. a native `option-map`) no longer exists in the interpreter:
+`option-map` & co. migrated to pure-Turmeric bodies (Track A), and inline-C
+function-pointer apply is an unsupported TI7 carve-out under `--interpret`. So
+the *current* residual unbounded C-recursion is not native HOF re-entry but the
+driver's black-box `default:` forms -- concretely **`EX_GET_FIELD`** (field
+accessors like `.value`/`.is-some`/`.v`), which `eval_drive_ex` routed through
+`eval_expr`, black-boxing the receiver's whole subtree. Because the canonical
+HOF idiom unwraps its result through a field accessor
+(`(.value (option-map (some n) callback))`), recursion threaded through that
+accessor C-recursed and tripped the `eval_depth` guard at ~hundreds of levels.
+
+N2 moves that recursion onto the heap by modeling `EX_GET_FIELD` in the driver:
+
+- New `DK_GET_FIELD` `DriveKind`: descend the receiver on the work-stack
+  (non-tail), then apply the field extraction when its value returns.
+- Field-extraction logic (the int64-carrier ABI + TuriStruct cases) factored
+  into a shared `get_field_extract(e, sv)` used by both `eval_expr_impl`'s
+  recursive `EX_GET_FIELD` and the new `DK_GET_FIELD` continuation.
+- `ws_capturable` is left conservative (a get-field whose receiver may perform
+  still forces the fiber path), so a `DK_GET_FIELD` never coexists with a
+  capturable `DK_PROMPT` slice -- no clone/capture interaction.
+
+Result: the option-map self-recursion probe now runs **heap-bounded at 1e6**
+with the guard never tripping (was: "recursion limit exceeded" at ~hundreds of
+levels). New regression test in `tests/turi/eval-tco.{tur,sh}` (`fld-sum 99999`,
+the `tur_eval_tco` ctest) -- verified to FAIL on the pre-N2 binary and pass now.
+`bash tests/run.sh` (1780/0), eval/sandbox/STM ctests, and the `run-turi`
+baseline failure set (23, byte-identical) are all unchanged. The `eval_depth`
+guard stays (retires in N4); this phase used an ordinary driver continuation,
+not the `DK_NATIVE_RESUME` protocol -- get-field is a pure receiver-then-extract
+form, no native re-entry involved.
+
+## Status update -- 2026-06-23
+
+**N1 (protocol scaffold) has landed.** The work-stack resume protocol is in
+place and the first re-entrant site is converted end to end:
+
+- `DK_NATIVE_RESUME` `DriveKind` added (`src/turi/eval.c`), carrying a
+  `NativeResume{resume, state}` -- the structural twin of tur's `DKK_FRAME`.
+- The driver gained a `have_apply` request channel at the top of
+  `eval_drive_ex`'s loop: a native pushes `DK_NATIVE_RESUME`, sets
+  `apply_fn`/`apply_args`, and the driver applies the closure on the work-stack
+  (folding a turi-body callback into a fresh `DK_CALL_RET`, leaf natives via the
+  existing synchronous `eval_apply`), then calls `resume(...)` to yield the
+  native's value. Single-shot for now (`done` always true); N2 extends it to
+  loop natives that re-request the next application in the reused slot.
+- `tvar/modify` is converted: `EX_TVAR_MODIFY` is now handled directly in the
+  driver's descending switch (read old -> request `fn(old)` -> commit + yield
+  old in `tvar_modify_resume`), so the user fn no longer runs on a re-entrant C
+  frame. `eval_expr_impl` keeps its synchronous `EX_TVAR_MODIFY` for non-driver
+  callers (the public `turi_call` contract is untouched).
+- **No guard change** (per the phase plan). New regression fixture
+  `tests/fixtures/stm-tvar-modify-turi/` exercises the foldable path under the
+  interpreter, including a deeply-recursive callback that folds onto the heap
+  work-stack. `bash tests/run.sh` (1779/0) and the eval/sandbox/STM ctests are
+  green; `bash tests/run-turi.sh` baseline-failure set is unchanged (23, all
+  pre-existing list/vec/unique/typed mismatches, none STM).
 
 **Both prerequisite plans have landed and been archived:**
 
@@ -17,18 +124,24 @@ description: Eliminate the last source of unbounded C recursion in the tree-walk
   -- **landed 2026-06-14** on the driver work-stack (exactly the substrate this
   plan extends). The five `interp-continuation` fixtures are un-carved.
 
-**SR itself has not started.** Spot-check 2026-06-22 of the residual
-machinery this plan retires:
+**SR is in progress: N1 landed (see above); N2-N5 remain.** Residual machinery
+this plan still retires (unchanged by N1, which deliberately left the guard in
+place):
 
-- `env->eval_depth` increment + check still live at `src/turi/eval.c:5311-5317`
-  and `:5339-5343`.
-- `TURI_EVAL_FRAME_BYTES` (= 9472) and `turi_default_max_eval_depth` still
-  live at `src/turi/env.c:52,61`.
-- No `DK_NATIVE_RESUME` `DriveKind` and no `TURI_TAG_APPLY_REQUEST` channel
-  exist in `eval.c` -- N1's protocol scaffold is still TODO.
-- The line/symbol references in this plan have drifted (F5's guard moved from
-  the originally-cited `:4451` to `:5311`); the phase structure (N1-N5) and
-  the diagnosis stand. Re-grep `eval_depth`/`turi_call` before starting N1.
+- `env->eval_depth` increment + check still live in `eval_apply` and
+  `eval_expr` (re-grep `eval_depth`; line numbers drift). The guard stays until
+  N4's audit proves no program-internal synchronous native re-entry remains.
+- `TURI_EVAL_FRAME_BYTES` and `turi_default_max_eval_depth` still live in
+  `src/turi/env.c`.
+- The work-stack request channel is a driver-local `have_apply` flag rather
+  than a `TURI_TAG_APPLY_REQUEST` return tag -- this keeps `eval_apply`'s
+  signature untouched and is sufficient for the special-form (`tvar/modify`)
+  conversion; N2's inline-C `^fat`/`TUR_APPLY*` path may still motivate the
+  return-tag form, since those natives yield from inside `eval_apply`'s leaf
+  dispatch rather than from the descending switch.
+- The line/symbol references elsewhere in this plan predate N1 and have
+  drifted; the phase structure (N1-N5) and the diagnosis stand. Re-grep
+  `eval_depth`/`turi_call`/`DK_NATIVE_RESUME` before starting N2.
 
 With DC done, SR is now the **next** interpreter-recursion step rather than a
 sequenced follow-up; N5 in particular still describes accurately the residual

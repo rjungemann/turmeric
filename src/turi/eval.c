@@ -4027,6 +4027,18 @@ typedef enum {
     DK_CALL_RET,     /* EX_CALL (T3.2b): non-tail turi-body callee, body in the loop */
     DK_PROMPT,       /* EX_HANDLE (DC): delimited-control prompt; aux = HandleExpr*,
                       * frame = handler lexical frame, index = active flag (1/0). */
+    DK_UNARY,        /* SR N3: single-operand black-box form (cast/ascribe/return/
+                      * set/transparent shim); expr = the form, applied via
+                      * eval_unary_post when the operand value returns. */
+    DK_GET_FIELD,    /* SR N2: EX_GET_FIELD receiver evaluated on the work-stack;
+                      * expr = the EX_GET_FIELD, applied via get_field_extract when
+                      * the receiver value returns.  Folds recursion that flows
+                      * through a field accessor (e.g. option-map's .value). */
+    DK_NATIVE_RESUME,/* SR (turi-cek-stackless-reentry): a native/special-form HOF
+                      * suspended onto the work-stack while the driver applies a
+                      * closure on its behalf.  aux = NativeResume* (resume fn +
+                      * opaque state).  Sits beneath the application it requested,
+                      * the structural twin of tur's DKK_FRAME. */
 } DriveKind;
 
 typedef struct {
@@ -4155,6 +4167,226 @@ static TuriValue turi_ws_cont_val(TuriWsCont *wc) {
     TuriEffectCont *c = (TuriEffectCont *)calloc(1, sizeof(TuriEffectCont));
     c->ws = wc;
     return turi_effect_cont(c);
+}
+
+/* -------------------------------------------------------------------------
+ * SR (turi-cek-stackless-reentry-plan): native re-entry as a work-stack
+ * resume continuation.
+ *
+ * A re-entrant native / special form that must apply a closure stops calling
+ * back through the C stack (turi_call -> eval_apply -> eval_drive_ex on a fresh
+ * C frame).  Instead it requests the application from the driver: it pushes a
+ * DK_NATIVE_RESUME frame carrying (state, resume), and asks the driver to apply
+ * the closure on the work-stack beneath it.  When the application completes the
+ * driver calls `resume(env, state, applied, &done, &out)`:
+ *   - `*out`  is the value this resume yields,
+ *   - `*done` is currently always true (single-shot; N2+ extends to loops where
+ *     resume re-requests the next application and the slot is reused).
+ * The native's C frame no longer spans the callback, so the callback's own
+ * recursion is heap-bounded on the work-stack rather than nesting C frames.
+ * ---------------------------------------------------------------------- */
+typedef TuriValue (*TuriNativeResumeFn)(TuriEnv *env, void *state,
+                                        TuriValue applied, bool *done,
+                                        TuriValue *out);
+typedef struct {
+    TuriNativeResumeFn resume;
+    void              *state;
+} NativeResume;
+
+/* tvar/modify (SR N1 conversion target): state captured between the read and
+ * the commit that straddle the user fn application. */
+typedef struct { TuriTVar *tv; int64_t old; } TvarModifyState;
+
+/* resume for tvar/modify: `applied` is fn(old).  Commit it to the write-log and
+ * yield the OLD value (read-modify-write returns the prior value). */
+static TuriValue tvar_modify_resume(TuriEnv *env, void *state, TuriValue applied,
+                                    bool *done, TuriValue *out) {
+    TvarModifyState *s = (TvarModifyState *)state;
+    *done = true;
+    if (turi_is_error(applied) || env->returning || env->throwing) {
+        *out = applied;                       /* fn signalled: propagate, no commit */
+    } else {
+        stm_log_write(g_stm_tx, s->tv, applied.as_int);
+        *out = turi_int(s->old);
+    }
+    free(s);
+    return *out;
+}
+
+/* Extract field `e->as.get_field_.field_idx` from an already-resolved receiver
+ * value `sv` (an EX_GET_FIELD whose struct_expr has been evaluated).  Shared by
+ * eval_expr_impl's recursive EX_GET_FIELD and the driver's DK_GET_FIELD
+ * continuation so the work-stack path folds the receiver instead of black-boxing
+ * it through eval_expr (SR N2).  Handles both the int64 carrier ABI (Option /
+ * Result flowing as :int, incl. the NULL "none"/err-less carrier) and a real
+ * TuriStruct. */
+static TuriValue get_field_extract(const Expr *e, TuriValue sv) {
+    uint32_t idx = e->as.get_field_.field_idx;
+    if (sv.tag == TURI_INT) {
+        if (sv.as_int == 0) {
+            /* NULL carrier: a none Option / err-less Result.  A field read is the
+             * by-value body's tag probe; hand back the field type's zero. */
+            switch (e->type.kind) {
+            case TY_BOOL: return turi_bool(false);
+            case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32: return turi_float(0.0);
+            default: return turi_int(0);
+            }
+        }
+        int64_t w = ((int64_t *)(intptr_t)sv.as_int)[idx];
+        switch (e->type.kind) {
+        case TY_BOOL:  return turi_bool(w != 0);
+        case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32: {
+            double d; memcpy(&d, &w, sizeof(d)); return turi_float(d);
+        }
+        default: return turi_int(w);
+        }
+    }
+    if (sv.tag != TURI_STRUCT)
+        return turi_errorf("eval: field access on non-struct (tag %d)", sv.tag);
+    if (idx >= sv.as_struct->n_fields)
+        return turi_errorf("eval: field index %u out of bounds (%u fields)",
+                           idx, sv.as_struct->n_fields);
+    return sv.as_struct->fields[idx];
+}
+
+/* SR N3: single-operand "black box" forms.  A family of expression kinds that
+ * evaluate exactly one inner sub-expression and then either transform the value
+ * (cast / reinterpret / ascribe / return / set) or pass it through unchanged
+ * (the compiler-inserted transparent shims poly-wrap / fn-to-fat / ref / borrow
+ * / exists-pack / union-inject).  eval_drive_ex routed all of them through the
+ * recursive eval_expr `default:` path, so recursion threaded through the inner
+ * operand C-recursed (e.g. `(:: (f ...) :int)` / `(return (+ n (f ...)))`).
+ * Modeling them in the driver (DK_UNARY) folds the operand onto the work-stack.
+ *
+ * unary_operand returns the inner sub-expression to descend (NULL for a bare
+ * `(return)` with no value -- the caller runs the post directly on nil).
+ * eval_unary_post applies the form's post-operand logic to the resolved value,
+ * shared with eval_expr_impl so the two paths cannot diverge. */
+static bool unary_operand(const Expr *e, const Expr **operand) {
+    switch (e->kind) {
+    case EX_CAST:         *operand = e->as.cast_.expr;          return true;
+    case EX_REINTERPRET:  *operand = e->as.reinterpret_.expr;   return true;
+    case EX_ASCRIBE:      *operand = e->as.ascribe_.inner;      return true;
+    case EX_RETURN:       *operand = e->as.return_.value;       return true; /* NULLABLE */
+    case EX_SET:          *operand = e->as.set_.value;          return true;
+    case EX_POLY_WRAP:    *operand = e->as.poly_wrap_.inner;    return true;
+    case EX_FN_TO_FAT:    *operand = e->as.fn_to_fat_.inner;    return true;
+    case EX_POLY_TO_FAT:  *operand = e->as.poly_to_fat_.inner;  return true;
+    case EX_BORROW_IMMUT: *operand = e->as.borrow_immut_.expr;  return true;
+    case EX_RC_FROM_REF:  *operand = e->as.rc_from_ref_.expr;   return true;
+    case EX_REF:          *operand = e->as.ref_.expr;           return true;
+    case EX_EXISTS_PACK:  *operand = e->as.exists_pack_.value;  return true;
+    case EX_UNION_INJECT: *operand = e->as.union_inject_.value; return true;
+    default: return false;
+    }
+}
+
+/* Apply the post-operand logic of a single-operand form whose inner expression
+ * has already evaluated to `v` (assumed non-signalled; callers check
+ * error/returning/throwing first).  Transparent shims fall through to `return
+ * v`. */
+static TuriValue eval_unary_post(TuriEnv *env, EvalFrame *frame,
+                                 const Expr *e, TuriValue v) {
+    switch (e->kind) {
+    case EX_CAST:
+        switch (e->as.cast_.target_kind) {
+        case TY_INT:
+        case TY_INT64:
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int(v.as_int);
+            return turi_int(0);
+        case TY_INT8:
+            if (v.tag == TURI_FLOAT) return turi_int((int8_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int8_t)v.as_int);
+            return turi_int(0);
+        case TY_INT16:
+            if (v.tag == TURI_FLOAT) return turi_int((int16_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int16_t)v.as_int);
+            return turi_int(0);
+        case TY_INT32:
+            if (v.tag == TURI_FLOAT) return turi_int((int32_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int32_t)v.as_int);
+            return turi_int(0);
+        case TY_UINT8:
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint8_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int64_t)(uint8_t)v.as_int);
+            return turi_int(0);
+        case TY_UINT16:
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint16_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int64_t)(uint16_t)v.as_int);
+            return turi_int(0);
+        case TY_UINT32:
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint32_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int64_t)(uint32_t)v.as_int);
+            return turi_int(0);
+        case TY_UINT64:
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint64_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int64_t)(uint64_t)v.as_int);
+            return turi_int(0);
+        case TY_FLOAT:
+        case TY_FLOAT64:
+            if (v.tag == TURI_INT)   return turi_float((double)v.as_int);
+            if (v.tag == TURI_FLOAT) return turi_float(v.as_float);
+            return turi_float(0.0);
+        case TY_FLOAT32:
+            if (v.tag == TURI_INT)   return turi_float((double)(float)v.as_int);
+            if (v.tag == TURI_FLOAT) return turi_float((double)(float)v.as_float);
+            return turi_float(0.0);
+        case TY_BOOL:
+            if (v.tag == TURI_INT)   return turi_bool(v.as_int != 0);
+            return turi_bool(false);
+        default:
+            return v;
+        }
+    case EX_REINTERPRET:
+        if ((e->type.kind == TY_FLOAT || e->type.kind == TY_FLOAT64) &&
+            v.tag == TURI_INT) {
+            union { int64_t i; double d; } u; u.i = v.as_int;
+            return turi_float(u.d);
+        }
+        return v;
+    case EX_ASCRIBE:
+        switch (e->type.kind) {
+        case TY_BOOL:
+            if (v.tag == TURI_INT) return turi_bool(v.as_int != 0);
+            return v;
+        case TY_FLOAT: case TY_FLOAT64:
+            if (v.tag == TURI_INT) {
+                union { int64_t i; double d; } u; u.i = v.as_int;
+                return turi_float(u.d);
+            }
+            return v;
+        case TY_FLOAT32:
+            if (v.tag == TURI_INT) return turi_float((double)v.as_int);
+            return v;
+        case TY_INT: case TY_INT64:
+            if (v.tag == TURI_FLOAT) {
+                union { int64_t i; double d; } u; u.d = v.as_float;
+                return turi_int(u.i);
+            }
+            return v;
+        case TY_INT8: case TY_INT16: case TY_INT32:
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)v.as_float);
+            return v;
+        case TY_CSTR:
+            if (v.tag == TURI_INT) return turi_cstr((const char *)(intptr_t)v.as_int);
+            return v;
+        default:
+            return v;
+        }
+    case EX_RETURN:
+        env->returning    = true;
+        env->return_value = v;
+        return v;
+    case EX_SET: {
+        const char *name = e->as.set_.target->name->name;
+        if (!eval_frame_update(frame, name, v))
+            turi_env_set(env, name, v);
+        return turi_nil();
+    }
+    default:   /* transparent shims: value passes through unchanged */
+        return v;
+    }
 }
 
 /* Conservative "does evaluating e synchronously perform an effect?" -- returns
@@ -4468,7 +4700,70 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
         tail = true;
     }
 
+    /* SR: pending closure-application request from a DK_NATIVE_RESUME native.
+     * When set, the loop dispatches the application of `apply_fn` to the
+     * heap-owned `apply_args` onto the work-stack (feeding the DK_NATIVE_RESUME
+     * frame already pushed beneath it) before resuming ordinary descent. */
+    bool        have_apply = false;
+    TuriValue   apply_fn   = turi_nil();
+    TuriValue  *apply_args = NULL;
+    uint32_t    apply_n    = 0;
+
     for (;;) {
+        if (have_apply) {
+            /* Apply `apply_fn` to apply_args[0..apply_n).  The result returns to
+             * the DK_NATIVE_RESUME frame beneath, so this is ALWAYS a non-tail
+             * application (never reuse the enclosing activation's DK_CALL_RET). */
+            have_apply = false;
+            TuriValue  clv = apply_fn;
+            TuriValue *acc = apply_args;
+            uint32_t   n   = apply_n;
+            apply_args = NULL;
+            if (clv.tag != TURI_CLOSURE || !clv.as_closure) {
+                cur = turi_error("eval: native-resume apply: not a closure");
+                free(acc); descending = false; continue;
+            }
+            TuriClosure *cl = clv.as_closure;
+            FnDef       *fn = (FnDef *)cl->fn;
+            bool foldable = !cl->native && fn && fn->body &&
+                            fn->body->kind != EX_INLINE_C;
+            if (!foldable) {
+                /* Leaf (native / inline-C): dispatched synchronously via
+                 * eval_apply, exactly as the DK_CALL_ARG leaf path does. */
+                cur = eval_apply(env, cl, acc, n);
+                free(acc); descending = false; continue;
+            }
+            uint32_t param_offset     = cl->skip_env_param ? 1u : 0u;
+            uint32_t effective_params = (uint32_t)fn->n_params - param_offset;
+            if (effective_params != n) {
+                cur = turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
+                                  fn->binding ? fn->binding->name->name : "<fn>",
+                                  (unsigned)effective_params, (unsigned)n);
+                free(acc); descending = false; continue;
+            }
+            if (env->step_fuel_limit > 0) {
+                if (env->step_fuel == 0) {
+                    cur = turi_error("eval: step fuel exhausted");
+                    free(acc); descending = false; continue;
+                }
+                env->step_fuel--;
+            }
+            EvalFrame *call_frame = eval_frame_new((EvalFrame *)cl->captured);
+            for (uint32_t i = 0; i < n; i++)
+                frame_bind(call_frame,
+                           fn->params[param_offset + i]->name->name, acc[i]);
+            free(acc);
+            DRIVE_PUSH(((DriveCont){ .kind = DK_CALL_RET, .frame = call_frame,
+                                     .aux = env->defer_stack,
+                                     .saved_module  = env->current_module,
+                                     .was_returning = env->returning,
+                                     .was_no_unwind = env->in_no_unwind }));
+            env->current_module = cl->module;
+            env->returning      = false;
+            env->in_no_unwind   = fn->binding && fn->binding->no_unwind;
+            control = fn->body; cf = call_frame; tail = true; descending = true;
+            continue;
+        }
         if (descending) {
             switch (control->kind) {
             case EX_IF:
@@ -4839,11 +5134,73 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 cur = v; descending = false;
                 break;
             }
-            default:
+            case EX_GET_FIELD: {
+                /* SR N2: descend the receiver on the work-stack (non-tail) so
+                 * recursion threaded through a field accessor stays heap-bounded
+                 * -- the option-map/.value blocker.  DK_GET_FIELD applies the
+                 * field extraction when the receiver value returns. */
+                DRIVE_PUSH(((DriveCont){ .kind = DK_GET_FIELD, .expr = control,
+                                         .frame = cf }));
+                control = control->as.get_field_.struct_expr;
+                tail = false;   /* receiver is non-tail */
+                break;          /* keep descending */
+            }
+            case EX_TVAR_MODIFY: {
+                /* SR N1: read-modify-write via the work-stack resume protocol.
+                 * Read old, then ask the driver to apply fn(old) -- when it
+                 * completes, tvar_modify_resume commits the result and yields
+                 * old.  The user fn no longer runs on a re-entrant C frame; its
+                 * own recursion folds onto the work-stack.  (eval_expr_impl keeps
+                 * a synchronous EX_TVAR_MODIFY for non-driver callers.) */
+                if (!g_stm_tx) {
+                    cur = turi_error("eval: tvar/modify used outside of an atomically block");
+                    descending = false; break;
+                }
+                TuriValue err = turi_nil();
+                TuriTVar *tv = stm_eval_tvar(env, cf, control->as.tvar_modify_.tvar, &err);
+                if (!tv) { cur = err; descending = false; break; }
+                TuriValue fn = eval_expr(env, cf, control->as.tvar_modify_.fn);
+                if (turi_is_error(fn) || env->returning || env->throwing) {
+                    cur = fn; descending = false; break;
+                }
+                int64_t old = stm_read(g_stm_tx, tv);
+                TvarModifyState *s = (TvarModifyState *)malloc(sizeof(TvarModifyState));
+                s->tv = tv; s->old = old;
+                NativeResume *nr = (NativeResume *)malloc(sizeof(NativeResume));
+                nr->resume = tvar_modify_resume; nr->state = s;
+                DRIVE_PUSH(((DriveCont){ .kind = DK_NATIVE_RESUME, .aux = nr }));
+                apply_fn   = fn;
+                apply_args = (TuriValue *)malloc(sizeof(TuriValue));
+                apply_args[0] = turi_int(old);
+                apply_n    = 1;
+                have_apply = true;
+                /* descending stays true; the have_apply branch at the loop top
+                 * dispatches the application next iteration. */
+                break;
+            }
+            default: {
+                /* SR N3: single-operand black-box forms descend their operand on
+                 * the work-stack (DK_UNARY), so recursion threaded through a
+                 * cast/ascribe/return/set/transparent-shim stays heap-bounded. */
+                const Expr *operand = NULL;
+                if (unary_operand(control, &operand)) {
+                    if (!operand) {
+                        /* bare (return) with no value: nil, post runs directly. */
+                        cur = eval_unary_post(env, cf, control, turi_nil());
+                        descending = false;
+                        break;
+                    }
+                    DRIVE_PUSH(((DriveCont){ .kind = DK_UNARY, .expr = control,
+                                             .frame = cf }));
+                    control = operand;
+                    tail = false;   /* operand is non-tail */
+                    break;          /* keep descending */
+                }
                 /* Black box: evaluate any other kind via the recursive path. */
                 cur = eval_expr(env, cf, control);
                 descending = false;
                 break;
+            }
             }
         } else {
             /* Returning `cur` to the frame on top of the work-stack.  Each
@@ -5158,6 +5515,38 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 len--;   /* pop; propagate cur (value or signal) */
                 break;
             }
+            case DK_GET_FIELD: {
+                /* SR N2: the receiver evaluated to `cur`; extract the field.
+                 * On a control signal (error/return/throw) propagate untouched. */
+                if (signaled) { len--; break; }
+                cur = get_field_extract(top->expr, cur);
+                len--;
+                break;
+            }
+            case DK_UNARY: {
+                /* SR N3: the operand evaluated to `cur`; apply the form's
+                 * post-operand logic.  On a control signal propagate untouched. */
+                if (signaled) { len--; break; }
+                cur = eval_unary_post(env, top->frame, top->expr, cur);
+                len--;
+                break;
+            }
+            case DK_NATIVE_RESUME: {
+                /* SR: the requested application produced `cur`.  Hand it to the
+                 * native's resume callback, which yields the native's value in
+                 * `out` (and, single-shot for N1, sets done=true).  The resume
+                 * also handles a signalled `cur` (it propagates without
+                 * committing).  N2+ will re-request another application here when
+                 * done == false, reusing this slot for loop natives. */
+                NativeResume *nr = (NativeResume *)top->aux;
+                bool      done = true;
+                TuriValue out  = turi_nil();
+                nr->resume(env, nr->state, cur, &done, &out);
+                free(nr);
+                cur = out;
+                len--;   /* pop; propagate the native's value */
+                break;
+            }
             }
         }
     }
@@ -5441,11 +5830,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_SET: {
         TuriValue v = eval_expr(env, frame, e->as.set_.value);
         if (turi_is_error(v) || env->returning || env->throwing) return v;
-        const char *name = e->as.set_.target->name->name;
-        if (!eval_frame_update(frame, name, v)) {
-            turi_env_set(env, name, v);
-        }
-        return turi_nil();
+        return eval_unary_post(env, frame, e, v);   /* SR N3: writes the binding */
     }
 
     /* --- Def (top-level binding) ---------------------------------------- */
@@ -5579,9 +5964,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             v = eval_expr(env, frame, e->as.return_.value);
             if (turi_is_error(v)) return v;
         }
-        env->returning    = true;
-        env->return_value = v;
-        return v;
+        return eval_unary_post(env, frame, e, v);   /* SR N3: sets returning */
     }
 
     /* --- Typeclass/instance definitions — no runtime action -------------- */
@@ -5711,48 +6094,17 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
 
     case EX_GET_FIELD: {
-        TuriValue sv = eval_expr(env, frame, e->as.get_field_.struct_expr);
-        if (turi_is_error(sv) || env->returning || env->throwing) return sv;
-        uint32_t idx = e->as.get_field_.field_idx;
         /* W1b: a struct can reach a field access via the int64 carrier ABI
          * rather than as a TuriStruct -- e.g. a Result that flowed as :int and
          * was ascribed back to (Result A B) with `(:: carrier ...)`.  The
          * carrier is a pointer to an int64[n] box laid out one word per field
-         * (this is how native ok/err/result-map build a Result), so read word
-         * idx and tag it by the field's static type.  This is what lets
-         * result.tur's field-access accessors (ok-val/err-val/...) work on the
-         * native box, not just on make-struct TuriStructs. */
-        if (sv.tag == TURI_INT) {
-            if (sv.as_int == 0) {
-                /* A null carrier is how a `none` Option / err-less Result flows
-                 * through the carrier ABI (none = NULL).  Reading a field of it
-                 * is the by-value body's tag probe -- `(.is-some o)` on a none,
-                 * `(.is-ok r)` on a 0-carrier -- which the compiled path answers
-                 * from a zeroed `{0}` struct.  Mirror that: hand back the field
-                 * type's zero (false / 0.0 / 0) instead of erroring, so a none
-                 * carrier reads as "tag = false" rather than a null deref. */
-                switch (e->type.kind) {
-                case TY_BOOL: return turi_bool(false);
-                case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32: return turi_float(0.0);
-                default: return turi_int(0);
-                }
-            }
-            int64_t w = ((int64_t *)(intptr_t)sv.as_int)[idx];
-            switch (e->type.kind) {
-            case TY_BOOL:  return turi_bool(w != 0);
-            case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32: {
-                /* carrier stores the raw bits of the field */
-                double d; memcpy(&d, &w, sizeof(d)); return turi_float(d);
-            }
-            default: return turi_int(w);
-            }
-        }
-        if (sv.tag != TURI_STRUCT)
-            return turi_errorf("eval: field access on non-struct (tag %d)", sv.tag);
-        if (idx >= sv.as_struct->n_fields)
-            return turi_errorf("eval: field index %u out of bounds (%u fields)",
-                               idx, sv.as_struct->n_fields);
-        return sv.as_struct->fields[idx];
+         * (this is how native ok/err/result-map build a Result); get_field_extract
+         * reads word idx and tags it by the field's static type, which is what
+         * lets result.tur's accessors (ok-val/err-val/...) work on the native
+         * box, not just on make-struct TuriStructs.  (Driver path: DK_GET_FIELD.) */
+        TuriValue sv = eval_expr(env, frame, e->as.get_field_.struct_expr);
+        if (turi_is_error(sv) || env->returning || env->throwing) return sv;
+        return get_field_extract(e, sv);
     }
 
     /* --- Phase DS3: (set! (.field s) v) — struct field write ------------- */
@@ -6281,57 +6633,11 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* --- Phase N: numeric type cast ---------------------------------------- */
     case EX_CAST: {
+        /* SR N3: post-operand coercion shared with the driver via
+         * eval_unary_post (DK_UNARY). */
         TuriValue v = eval_expr(env, frame, e->as.cast_.expr);
         if (turi_is_error(v) || env->returning || env->throwing) return v;
-        switch (e->as.cast_.target_kind) {
-        case TY_INT:
-        case TY_INT64:
-            if (v.tag == TURI_FLOAT) return turi_int((int64_t)v.as_float);
-            if (v.tag == TURI_INT)   return turi_int(v.as_int);
-            return turi_int(0);
-        case TY_INT8:
-            if (v.tag == TURI_FLOAT) return turi_int((int8_t)(int64_t)v.as_float);
-            if (v.tag == TURI_INT)   return turi_int((int8_t)v.as_int);
-            return turi_int(0);
-        case TY_INT16:
-            if (v.tag == TURI_FLOAT) return turi_int((int16_t)(int64_t)v.as_float);
-            if (v.tag == TURI_INT)   return turi_int((int16_t)v.as_int);
-            return turi_int(0);
-        case TY_INT32:
-            if (v.tag == TURI_FLOAT) return turi_int((int32_t)(int64_t)v.as_float);
-            if (v.tag == TURI_INT)   return turi_int((int32_t)v.as_int);
-            return turi_int(0);
-        case TY_UINT8:
-            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint8_t)(int64_t)v.as_float);
-            if (v.tag == TURI_INT)   return turi_int((int64_t)(uint8_t)v.as_int);
-            return turi_int(0);
-        case TY_UINT16:
-            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint16_t)(int64_t)v.as_float);
-            if (v.tag == TURI_INT)   return turi_int((int64_t)(uint16_t)v.as_int);
-            return turi_int(0);
-        case TY_UINT32:
-            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint32_t)(int64_t)v.as_float);
-            if (v.tag == TURI_INT)   return turi_int((int64_t)(uint32_t)v.as_int);
-            return turi_int(0);
-        case TY_UINT64:
-            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint64_t)(int64_t)v.as_float);
-            if (v.tag == TURI_INT)   return turi_int((int64_t)(uint64_t)v.as_int);
-            return turi_int(0);
-        case TY_FLOAT:
-        case TY_FLOAT64:
-            if (v.tag == TURI_INT)   return turi_float((double)v.as_int);
-            if (v.tag == TURI_FLOAT) return turi_float(v.as_float);
-            return turi_float(0.0);
-        case TY_FLOAT32:
-            if (v.tag == TURI_INT)   return turi_float((double)(float)v.as_int);
-            if (v.tag == TURI_FLOAT) return turi_float((double)(float)v.as_float);
-            return turi_float(0.0);
-        case TY_BOOL:
-            if (v.tag == TURI_INT)   return turi_bool(v.as_int != 0);
-            return turi_bool(false);
-        default:
-            return v;
-        }
+        return eval_unary_post(env, frame, e, v);
     }
     case EX_REINTERPRET: {
         /* A same-size scalar bit-reinterpret on the compiled path (raw int64
@@ -6359,12 +6665,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * transparent too.  i32<->f32 and same-tag ascriptions stay transparent. */
         TuriValue v = eval_expr(env, frame, e->as.reinterpret_.expr);
         if (turi_is_error(v) || env->returning || env->throwing) return v;
-        if ((e->type.kind == TY_FLOAT || e->type.kind == TY_FLOAT64) &&
-            v.tag == TURI_INT) {
-            union { int64_t i; double d; } u; u.i = v.as_int;
-            return turi_float(u.d);
-        }
-        return v;
+        return eval_unary_post(env, frame, e, v);   /* SR N3: shared with DK_UNARY */
     }
 
     /* --- Phase 2: type ascription is transparent at runtime, except that it
@@ -6376,48 +6677,17 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
      * primitive coercions, but only when the tag actually mismatches so struct/
      * closure/ADT ascriptions stay transparent. */
     case EX_ASCRIBE: {
-        TuriValue v = eval_expr(env, frame, e->as.ascribe_.inner);
-        if (turi_is_error(v) || env->returning || env->throwing) return v;
         /* `::` is a representation assertion, NOT a numeric conversion (that is
          * EX_CAST / explicit int->float).  On the compiled path the carrier word
          * is reinterpreted bit-for-bit to the ascribed type -- so an int64 that
          * carries a double's bits (e.g. a type-erased Map[int float] value read
          * back as :float, or a char* read back as :cstr) must REINTERPRET, not
-         * convert.  The previous numeric coercion here diverged from the
-         * compiled path ((:: 7 :float) gave 7 under --interpret but 3.45e-323
-         * compiled).  Act only on a tag mismatch so struct/closure/ADT
-         * ascriptions stay transparent. */
-        switch (e->type.kind) {
-        case TY_BOOL:
-            if (v.tag == TURI_INT) return turi_bool(v.as_int != 0);
-            return v;
-        case TY_FLOAT: case TY_FLOAT64:
-            if (v.tag == TURI_INT) {
-                union { int64_t i; double d; } u; u.i = v.as_int;
-                return turi_float(u.d);
-            }
-            return v;
-        case TY_FLOAT32:
-            /* The compiled float32 ascription numeric-converts the carrier
-             * (unlike float64); keep parity with it. */
-            if (v.tag == TURI_INT) return turi_float((double)v.as_int);
-            return v;
-        case TY_INT: case TY_INT64:
-            if (v.tag == TURI_FLOAT) {
-                union { int64_t i; double d; } u; u.d = v.as_float;
-                return turi_int(u.i);
-            }
-            return v;
-        case TY_INT8: case TY_INT16: case TY_INT32:
-            if (v.tag == TURI_FLOAT) return turi_int((int64_t)v.as_float);
-            return v;
-        case TY_CSTR:
-            /* int64 carrier holds a char*; reinterpret so println shows text. */
-            if (v.tag == TURI_INT) return turi_cstr((const char *)(intptr_t)v.as_int);
-            return v;
-        default:
-            return v;
-        }
+         * convert.  The coercion (shared with the driver via eval_unary_post /
+         * DK_UNARY) acts only on a tag mismatch so struct/closure/ADT ascriptions
+         * stay transparent. */
+        TuriValue v = eval_expr(env, frame, e->as.ascribe_.inner);
+        if (turi_is_error(v) || env->returning || env->throwing) return v;
+        return eval_unary_post(env, frame, e, v);
     }
 
     /* --- Phase N: poly wrap is transparent in the interpreter -------------- */

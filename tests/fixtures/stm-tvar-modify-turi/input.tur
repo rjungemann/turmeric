@@ -1,0 +1,24 @@
+;; SR (turi-cek-stackless-reentry-plan) N1 regression guard.
+;;
+;; tvar/modify applies a PURE TURI closure (not inline-C), so under the
+;; tree-walking interpreter it exercises the work-stack resume protocol
+;; (DK_NATIVE_RESUME + the have_apply dispatch in eval_drive_ex) rather than a
+;; synchronous turi_call on a re-entrant C frame.  The deeply-recursive `addn`
+;; callback proves the application folds onto the heap work-stack.
+;;
+;; Values round-trip through tvar (boxed as ptr), so each step is observed via
+;; tvar/cas, which returns a printable bool -- same trick as stm-cas.
+
+(defn add5 [x : int] : int (+ x 5))
+
+(defn addn [x : int] : int
+  (if (< x 30) (addn (+ x 1)) x))
+
+(defn main [] : int
+  (let [tv (tvar/new 5)]
+    ;; add5: 5 -> 10, cas confirms 10
+    (println (atomically (stm (tvar/modify tv add5) (tvar/cas tv 10 10))))   ; true
+    ;; recursive callback: 10 -> 30, cas confirms 30
+    (println (atomically (stm (tvar/modify tv addn) (tvar/cas tv 30 30))))   ; true
+    (println (atomically (stm (tvar/cas tv 99 99)))))                        ; false
+  0)
