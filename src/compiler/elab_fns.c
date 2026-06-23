@@ -2935,6 +2935,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
              * would spuriously report TUR-E0100, even though inline-C-bodied
              * borrow accessors are already exempt via body_is_inline_c. */
             if (params[_li]->is_borrow) continue;
+            /* UT0: a ^unique parameter is affine (at-most-once), not linear
+             * (exactly-once) -- dropping it without consuming is legal.  A
+             * ref<T> param annotated ^unique can otherwise also pick up the
+             * implicit ST2 linear inference; the explicit uniqueness annotation
+             * wins, so exempt it from the linear must-consume obligation. */
+            if (params[_li]->is_unique) continue;
             if (params[_li]->is_linear && !params[_li]->is_linear_consumed && !params[_li]->is_moved) {
                 /* SS0b: Session channels get a distinct error code.
                  * SS1: include the current protocol state in the message. */
