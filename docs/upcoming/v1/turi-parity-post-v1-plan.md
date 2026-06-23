@@ -8,8 +8,8 @@
 ## Status update -- 2026-06-22
 
 Verified from the tree + `docs/artifacts/turi-carve-out.txt` (the live carve-out
-file; the plan references `docs/turi-carve-out.txt` -- the script reads the
-`artifacts/` path):
+file; the script + downstream references have been re-pointed at
+`docs/artifacts/turi-carve-out.txt` so the parity ratchet finds it again):
 
 - **TI8.b harness flip -- LANDED.** `tests/run-turi.sh` has had
   `TURI_FIXTURES_DEFAULT` deleted; the harness runs every fixture under
@@ -757,7 +757,7 @@ The foundational correctness fix and the CI ratchet shipped:
 
 - **`tools/check_turi_parity.py`** (new) diffs the `EX_*` enumerators in
   `src/compiler/expr.h` against the `case EX_*:` arms in `src/turi/eval.c`.
-  Any unhandled kind that is not listed in **`docs/turi-carve-out.txt`** (new,
+  Any unhandled kind that is not listed in **`docs/artifacts/turi-carve-out.txt`** (new,
   6 entries with rationale) fails the check; a stale carve-out (a kind that is
   actually handled, or a nonexistent kind) also fails, keeping the list honest.
   Wired into `tests/run.sh` as a pre-test gate (opt out with

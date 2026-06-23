@@ -3,7 +3,7 @@
 
 The tree-walking interpreter (src/turi/eval.c) should be able to evaluate every
 EX_* expression kind the compiler can emit (src/compiler/expr.h), modulo a small
-set of documented carve-outs listed in docs/turi-carve-out.txt.
+set of documented carve-outs listed in docs/artifacts/turi-carve-out.txt.
 
 This script enforces that invariant so the parity gap cannot silently grow:
 
@@ -28,7 +28,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXPR_H = os.path.join(ROOT, "src", "compiler", "expr.h")
 EVAL_C = os.path.join(ROOT, "src", "turi", "eval.c")
-CARVE_OUT = os.path.join(ROOT, "docs", "turi-carve-out.txt")
+CARVE_OUT = os.path.join(ROOT, "docs", "artifacts", "turi-carve-out.txt")
 
 
 def read(path):
@@ -55,7 +55,7 @@ def handled_kinds():
 
 
 def carve_outs():
-    """Map of carved-out EX_* -> rationale from docs/turi-carve-out.txt.
+    """Map of carved-out EX_* -> rationale from docs/artifacts/turi-carve-out.txt.
 
     Format: one `EX_NAME -- rationale` per line; blank lines and `#` comments
     are ignored.
@@ -98,17 +98,17 @@ def main():
         if uncovered:
             print("\nUnhandled EX_* kinds with no carve-out entry "
                   "(add a `case` arm in src/turi/eval.c, or document the\n"
-                  "carve-out in docs/turi-carve-out.txt):", file=sys.stderr)
+                  "carve-out in docs/artifacts/turi-carve-out.txt):", file=sys.stderr)
             for k in uncovered:
                 print(f"  - {k}", file=sys.stderr)
         if stale_handled:
             print("\nStale carve-out entries (these kinds ARE handled now -- "
-                  "remove them from docs/turi-carve-out.txt):", file=sys.stderr)
+                  "remove them from docs/artifacts/turi-carve-out.txt):", file=sys.stderr)
             for k in stale_handled:
                 print(f"  - {k}", file=sys.stderr)
         if stale_unknown:
             print("\nUnknown carve-out entries (no such EX_* enumerator -- "
-                  "fix the name in docs/turi-carve-out.txt):", file=sys.stderr)
+                  "fix the name in docs/artifacts/turi-carve-out.txt):", file=sys.stderr)
             for k in stale_unknown:
                 print(f"  - {k}", file=sys.stderr)
         return 1

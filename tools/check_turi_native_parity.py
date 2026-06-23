@@ -26,7 +26,7 @@ This script:
   4. A carve-out entry for a module that is NO LONGER a gap (now preloaded), or
      that names a module the compiled path does not auto-load, is stale and
      also fails -- keeping the list honest, same discipline as
-     docs/turi-carve-out.txt.
+     docs/artifacts/turi-carve-out.txt.
   5. With --worklist, prints the public names each gap module would contribute
      to the interpreter once preloaded (the concrete preload work list).
 

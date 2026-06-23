@@ -579,7 +579,7 @@ Definition of done = W5 merged with `run-turi.sh` green at denylist default.
   -- the 31 allowlist reconciliation + the probe + the defmodule fix writeup.
 - [docs/archive/history/turi-harness-compiles-instead-of-interpreting.md](history/turi-harness-compiles-instead-of-interpreting.md)
   -- the resolved root blocker.
-- [docs/turi-carve-out.txt](../turi-carve-out.txt) -- EX_* carve-out list the
+- [docs/artifacts/turi-carve-out.txt](../artifacts/turi-carve-out.txt) -- EX_* carve-out list the
   ratchet enforces.
 - `src/main.c` `cmd_eval` (`:4801`), `compile_to_c` prelude (`:646`),
   `wk_eval_fixture` (`:6671`) -- the three prelude sites to unify in W1.
