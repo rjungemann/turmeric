@@ -7,12 +7,11 @@ linear/uniqueness/session checking and a pattern the fixture relies on.
 **Severity:** low-medium (5 fixtures; the systemic regressions from the flag
 flip are already fixed -- by-value suite is at 1768 passed, 5 failed).
 
-> **Status (2026-06-23):** Themes 2 and 3 are **resolved** (see the
-> per-theme "Resolution" notes below); the by-value suite is at **1771
-> passed, 2 failed**, the 2 remaining being theme 1 (`ref-explicit-drop`,
-> `ref-if-branch-move-suppression`). Theme 1 is still open. This report
-> stays in `docs/reported/` until theme 1 lands, at which point the whole
-> file moves to `docs/archive/`.
+> **Status (2026-06-23):** All three themes are **resolved** -- themes 2
+> and 3 in PR #518 (explicit channel sharing; abstract-typed session ops),
+> theme 1 in PR #519 (ref<T> deref/auto-drop). See the per-theme
+> "Resolution" notes below. By-value suite is at **1773 passed, 0 failed**.
+> Archived now that all three have landed.
 
 These are grouped because they share a root theme: a discipline that used to
 be opt-in (`-Xlinear`/`-Xsubstructural`/`-Xsessions`) now runs on programs
@@ -50,6 +49,51 @@ auto-drop and an explicit `(drop! r)` must not both fire (double free).
 This is a coordinated change across deref / scope-exit linear check /
 auto-drop injection / `drop!`. Attempting only the deref half regresses
 `ref-basic`, `ref-deref`, `ref-move`, `rc-auto-drop-*`, etc.
+
+### RESOLVED (2026-06-23) -- adopted the auto-drop model for `ref<T>`
+
+The fix implements the "auto-drop counts as the single consumption" direction.
+A `ref<T>` let binding now behaves like `rc<T>`: ownership is discharged exactly
+once at scope exit, by an injected `(defer (drop! r))` when the ref is neither
+moved nor explicitly consumed. Concretely:
+
+- **Non-consuming deref** (`src/compiler/elab_memory.c`, `elab_deref`): for an
+  *owning* `ref<T>` (`TY_REF`, `is_linear`, not `is_nonowning_ref`), deref
+  un-marks the `is_linear_consumed` flag the generic `EX_VAR` walk set, so the
+  read does not satisfy/burn the must-consume obligation. A later `(drop! r)`
+  is therefore legal (fixes `ref-explicit-drop`). `lref<T>` / `&T` / `&mut T`
+  derefs are untouched (restricted to `TY_REF`).
+- **Auto-drop re-enabled for linear refs** (`elab_forms.c` let auto-drop):
+  the `!is_linear` skip is removed; the guard is now `!is_moved &&
+  !is_linear_consumed && !is_binding_consumed(...)`. The `!is_linear_consumed`
+  clause keeps a ref consumed by a non-`drop!` path (e.g. `(return r)`, a tail
+  move) from also auto-dropping -- no double-free / no freeing an escaping ref.
+  When an auto-drop *is* injected, the binding is marked
+  `is_linear_consumed = true` so the LT1 scope-exit check (`E0100`) treats the
+  obligation as met (so `(let [tmp r] 0)` in a dead branch no longer errors --
+  fixes `ref-if-branch-move-suppression`; the existing no-else move/linear
+  state restore already suppresses the conditional move of `r`).
+- **`is_nonowning_ref` flag** (`expr.h`, set in `elab_forms.c`): a ref from
+  `ref/from-rc` shares the rc payload and must NOT auto-drop. It keeps the
+  *consuming* deref so it still satisfies linearity without a drop (prevents a
+  regression in `rc-auto-drop-test`'s `(let [r (ref/from-rc x)] (deref r))`).
+
+Consequence -- **`E0100` retired for unused `ref<T>` let bindings**: an
+untouched fresh ref now auto-drops instead of erroring. The negative fixture
+`errors/substructural-ref-infer-let-dropped` (which asserted the old opt-in
+`-Xsubstructural` behavior) was converted to the positive fixture
+`ref-unused-autodrop`. **Ref *parameters* are unchanged** -- a never-consumed
+`ref<T>` param still reports `E0100` at function exit (params do not get the
+let auto-drop), so `errors/substructural-ref-infer-param-dropped` stays green.
+This param/let asymmetry is intentional for now (no fixture derefs a ref param
+without consuming it); revisit if a function-exit auto-drop for ref params is
+wanted.
+
+Not done here (out of Theme 1 scope): `::` reinterpret on a `ref<T>` was left
+consuming. No Theme 1 fixture reinterprets a ref, and the `::`-on-channel case
+is a Theme 2 concern; touching it risks the channel fixtures. The `EX_VAR`
+consumption path is shared between deref and reinterpret, so a future
+reinterpret change can reuse the same `is_nonowning_ref` gate.
 
 ## 2. Linear channels aliased / shared across closures
 

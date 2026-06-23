@@ -834,20 +834,32 @@ Expr *elab_let(Elab *e, const Form *call) {
             }
         }
         
+        /* Theme 1: mark a ref obtained from `ref/from-rc` as non-owning so
+         * elab_deref leaves its deref consuming (it shares the rc payload and
+         * cannot auto-drop -- see Binding.is_nonowning_ref). */
+        if (b->type.kind == TY_REF && init && init->kind == EX_REF_FROM_RC) {
+            b->is_nonowning_ref = true;
+        }
+
         binds[n_binds].binding = b;
         binds[n_binds].init = init;
         binding_moved_during_init[n_binds] = false; /* new binding, not yet moved during init */
         n_binds++;
     }
 
-    /* Phase 5: Check if any binding is a ref and needs auto-defer drop */
+    /* Phase 5: Check if any binding is a ref and needs auto-defer drop.
+     * Theme 1 (ref<T> deref/auto-drop): linear refs participate in auto-drop
+     * too -- the injected (defer (drop! r)) is the single ownership discharge
+     * at scope exit.  The precise per-binding filtering (moved / explicitly
+     * consumed / consumed-by-use) happens in the count + injection loops below
+     * where the elaborated body is available; here we only decide whether to
+     * wrap the body in a `do` so defers can be appended, so over-detecting a
+     * ref that ends up not needing a drop is harmless (n_refs == 0 -> no-op). */
     bool has_ref_bindings = false;
     for (uint32_t k = 0; k < n_binds; k++) {
         /* Skip refs that come from ref/from-rc - they don't own the data */
-        /* ST2: Skip refs that are marked linear — LT1 scope-exit check handles those */
         if (binds[k].binding->type.kind == TY_REF &&
-            binds[k].init->kind != EX_REF_FROM_RC &&
-            !binds[k].binding->is_linear) {
+            binds[k].init->kind != EX_REF_FROM_RC) {
             has_ref_bindings = true;
             break;
         }
@@ -943,12 +955,15 @@ Expr *elab_let(Elab *e, const Form *call) {
             for (uint32_t k = 0; k < n_binds; k++) {
                 /* Skip refs that come from ref/from-rc - they don't own the data */
                 /* Skip refs that were moved during init or body elaboration - avoid use-after-move defer */
-                /* ST2: Skip linear refs — LT1 scope-exit check enforces they are consumed explicitly */
+                /* Theme 1: a linear ref consumed by a non-drop path (e.g. `(return r)`
+                 * or a tail move) has is_linear_consumed set and must NOT also auto-drop
+                 * -- that would double-free / free an escaping ref.  A deref'd ref has
+                 * been un-marked (see elab_deref) so it still auto-drops here. */
                 if (binds[k].binding->type.kind == TY_REF &&
                     binds[k].init->kind != EX_REF_FROM_RC &&
                     !binding_moved_during_init[k] &&
                     !binds[k].binding->is_moved &&
-                    !binds[k].binding->is_linear &&
+                    !binds[k].binding->is_linear_consumed &&
                     !is_binding_consumed(body, binds[k].binding)) {
                     n_refs++;
                 }
@@ -971,13 +986,18 @@ Expr *elab_let(Elab *e, const Form *call) {
                 for (uint32_t k = 0; k < n_binds; k++) {
                     /* Skip refs that come from ref/from-rc - they don't own the data */
                     /* Skip refs moved during init or body elaboration - avoid use-after-move defer */
-                    /* ST2: Skip linear refs — they must be consumed explicitly; LT1 enforces this */
+                    /* Theme 1: mirror the count-loop guard (see above). */
                     if (binds[k].binding->type.kind == TY_REF &&
                         binds[k].init->kind != EX_REF_FROM_RC &&
                         !binding_moved_during_init[k] &&
                         !binds[k].binding->is_moved &&
-                        !binds[k].binding->is_linear &&
+                        !binds[k].binding->is_linear_consumed &&
                         !is_binding_consumed(body, binds[k].binding)) {
+                        /* Theme 1: the injected auto-drop IS this linear ref's single
+                         * ownership discharge -- mark it consumed so the LT1 scope-exit
+                         * check (below) treats the must-consume obligation as satisfied
+                         * rather than reporting TUR-E0100. */
+                        binds[k].binding->is_linear_consumed = true;
                         /* Create (defer (drop! binding_name)) expression */
                         /* Create a variable reference to the binding */
                         Expr *var_expr = expr_new(e->arena, EX_VAR, binds[k].binding->type, call->span);

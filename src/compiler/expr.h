@@ -125,6 +125,13 @@ struct Binding {
     bool          is_linear;
     /* LT1: whether the linear value has been consumed (moved/used) */
     bool          is_linear_consumed;
+    /* Theme 1 (ref<T> deref/auto-drop): true when this ref binding is a
+     * non-owning view obtained from `ref/from-rc` -- it shares the rc's
+     * payload and must NOT auto-drop.  Such a ref relies on deref being a
+     * consumption (it cannot be discharged any other way), so elab_deref
+     * leaves it consuming; owning refs (fresh `(ref ...)` or moved) get the
+     * non-consuming deref + scope-exit auto-drop instead. */
+    bool          is_nonowning_ref;
     /* LB1: ^borrow -- whether this parameter borrows (reads without consuming)
      * its linear/affine argument.  A non-consuming accessor (fs/tmpfile-path,
      * mutex-lock, ...) declares its handle param ^borrow so a later consuming

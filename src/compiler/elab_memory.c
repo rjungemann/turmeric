@@ -101,6 +101,25 @@ Expr *elab_deref(Elab *e, const Form *call) {
         result_type = TYPE_PTR_VOID;
     }
     
+    /* Theme 1 (ref<T> deref/auto-drop): deref of a ref<T> is NON-consuming.
+     * The generic EX_VAR walk (elab_toplevel.c) marks a linear binding consumed
+     * on every use; for a ref<T> we read *through* the handle without taking
+     * ownership, so undo that mark.  Ownership is discharged exactly once at
+     * scope exit -- either by an explicit (drop! r)/(rc/drop ...)/(ref/from-rc
+     * ...) or by the auto-drop injected in elab_let.  Leaving deref consuming
+     * forced the must-consume obligation to be met by the read itself, which
+     * (a) leaked the allocation and (b) made a following (drop! r) a
+     * use-after-consume error.  Restricted to TY_REF so lref<T> borrows and
+     * &T/&mut T references keep their existing (consuming) behavior. */
+    if (g_linear_enabled &&
+        inner->kind == EX_VAR &&
+        inner->as.var.binding &&
+        inner->as.var.binding->is_linear &&
+        !inner->as.var.binding->is_nonowning_ref &&
+        inner->type.kind == TY_REF) {
+        inner->as.var.binding->is_linear_consumed = false;
+    }
+
     /* Create EX_DEREF expression */
     Expr *out = expr_new(e->arena, EX_DEREF, result_type, call->span);
     out->as.deref_.expr = inner;

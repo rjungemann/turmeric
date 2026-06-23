@@ -2987,6 +2987,21 @@ static int64_t replace(int64_t, int64_t);
 static bool some___spec__bool_Option__opaque(Option__opaque);
 static Cons__int * tcons__spec__Cons__int___int64_t_int64_t(int64_t, int64_t);
 
+struct __defer_env_60 {void * outer; };
+
+struct __defer_env_57 {void * inner; };
+
+static void __defer_61(void *__env) {
+    struct __defer_env_60 *__e = (struct __defer_env_60 *)__env;
+    free(__e->outer);
+}
+
+static void __defer_58(void *__env) {
+    struct __defer_env_57 *__e = (struct __defer_env_57 *)__env;
+    free(__e->inner);
+}
+
+
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
         return (x) == (y);
 }
@@ -5524,19 +5539,29 @@ int main(int argc, char **argv) {
             *((int64_t *)__t51) = INT64_C(10);
             void * outer_1243 = __t51;
             (void)outer_1243;
+            tur_frame __frame_52;
+            tur_frame_init(&__frame_52, NULL);
             {
-                void * __t52 = malloc(sizeof(int64_t));
-                *((int64_t *)__t52) = INT64_C(20);
-                void * inner_1244 = __t52;
+                void * __t53 = malloc(sizeof(int64_t));
+                *((int64_t *)__t53) = INT64_C(20);
+                void * inner_1244 = __t53;
                 (void)inner_1244;
-                int64_t __t53 = *((int64_t *)inner_1244);
-                printf("%lld\n", (long long)(__t53));
-                int64_t __t54 = *((int64_t *)outer_1243);
-                printf("%lld\n", (long long)(__t54));
+                tur_frame __frame_54;
+                tur_frame_init(&__frame_54, &__frame_52);
+                int64_t __t55 = *((int64_t *)inner_1244);
+                printf("%lld\n", (long long)(__t55));
+                int64_t __t56 = *((int64_t *)outer_1243);
+                printf("%lld\n", (long long)(__t56));
+                struct __defer_env_57 __t59 = {.inner = inner_1244};
+                tur_frame_push_defer(&__frame_54, __defer_58, &__t59);
+                tur_frame_fire_lifo(&__frame_54);
             }
-            int64_t __t55;
-            __t55 = INT64_C(0);
-            __t50 = __t55;
+            struct __defer_env_60 __t62 = {.outer = outer_1243};
+            tur_frame_push_defer(&__frame_52, __defer_61, &__t62);
+            int64_t __t63;
+            __t63 = INT64_C(0);
+            tur_frame_fire_lifo(&__frame_52);
+            __t50 = __t63;
         }
         return (int)__t50;
 }
@@ -5546,9 +5571,9 @@ static bool some___spec__bool_Option__opaque(Option__opaque o) {
 }
 
 static Cons__int * tcons__spec__Cons__int___int64_t_int64_t(int64_t h, int64_t t) {
-        Cons__int *__t56 = (Cons__int *)malloc(sizeof(Cons__int));
-        *__t56 = (Cons__int){.head = h, .tail = t};
-        return __t56;
+        Cons__int *__t64 = (Cons__int *)malloc(sizeof(Cons__int));
+        *__t64 = (Cons__int){.head = h, .tail = t};
+        return __t64;
 }
 
 
