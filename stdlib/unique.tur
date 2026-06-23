@@ -8,12 +8,16 @@
 ;;; annotations stay in one place.
 ;;;
 ;;; Auto-loaded only under `-Xunique-types`; default (by-value) builds and their
-;;; codegen snapshots are unaffected.  This is a bare definition file (no
-;;; `defmodule` wrapper) so the macro stays globally visible from user code
-;;; without an explicit import -- the same convention as stdlib/math.tur.
+;;; codegen snapshots are unaffected.  Wrapped in `(defmodule tur/unique ...)`:
+;;; the auto-load boundary is re-anchored after `(load ...)` expansion, so the
+;;; last auto-loaded stdlib module's exported macros (`with-unique`) are promoted
+;;; to global visibility alongside its defns -- no explicit import needed from
+;;; user code.  See docs/archive/autoload-defmodule-macro-not-promoted.md.
 ;;;
 ;;; Since: UT3
 ;; Uniqueness-type pattern forms.
+(defmodule tur/unique
+  (export with-unique consume replace)
 
 ;;; with-unique -- scope a uniquely-owned binding over a body.
 ;;;
@@ -81,3 +85,4 @@
 ;;; Since: UT3
 (defn replace [A] [^unique old : A new : A] : A
   old)
+) ; end (defmodule tur/unique ...)
