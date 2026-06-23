@@ -59,7 +59,8 @@ concurrency).
 | HKT (Functor/Monad/...) | OK | OK | stdlib instances preloaded; one library (logic.tur miniKanren) is carved |
 | Refinement types | OK | OK | checked by the shared elaborator |
 | Effects + handlers (one-shot) | OK | OK | `perform`/`handle`/`with-handler`, `EX_WITH_HANDLER`, `EX_SELECT` |
-| Continuations -- multishot / escaping / nested | OK | **partial** | see [Continuations](#continuations-the-one-real-feature-gap) below |
+| Continuations -- multishot / escaping / nested | OK | OK | heap-owned `TuriWsCont` on the driver work-stack (landed 2026-06-14) |
+| Continuation captured *through* a native HOF callback | OK | **partial** | errors cleanly; lifted by SR -- see [Continuations](#continuations-captured-continuation-re-entry-through-native-hofs) below |
 | `call/cc` / `escape` (one-shot upward) | OK | OK | `eval_callcc_escape`, setjmp/longjmp landing pad |
 | `shift`/`reset`/`shift0` (abortive) | OK | OK | TI3.1 |
 | serial / cloneable `shift` (context-capturing) | OK | OK | `EX_SERIAL_RESET` / `EX_CLONEABLE_RESET` reify the context (TI3.2) |
@@ -83,42 +84,47 @@ concurrency).
 
 ---
 
-## Continuations -- the one real feature gap
+## Continuations -- captured-continuation re-entry through native HOFs
 
-The interpreter's effect-handler/continuation machinery (`src/turi/eval.c`,
-fiber path) is **one-shot and single-frame**: a captured continuation is backed
-by a single `ucontext` fiber whose lifetime is tied to the enclosing `handle`
-frame and which is consumed on first resume. Three capabilities the compiled
-path implements correctly therefore fail under `--interpret`:
+Multishot resume, escaping continuations, and resume through nested handlers
+**all work under `--interpret` today**. They landed 2026-06-14
+([turi-interpreter-delimited-control-plan.md](../archive/turi-interpreter-delimited-control-plan.md)):
+capturable handles run on the driver work-stack as a heap-owned `TuriWsCont`
+continuation (the turi analog of `tur`'s heap `DK` chain), captured between the
+`perform` and the matching `DK_PROMPT`. Because the continuation is heap-owned
+and clonable, it survives the `handle` frame (escaping `k`), can be re-entered
+more than once (multishot, by cloning the captured slice per resume), and
+re-installs the enclosing handlers on resume (nested). The ucontext-fiber path
+is kept only as a fallback for black-boxed performs (`while`/`try`/`async`/
+native-HOF bodies). The five formerly-carved fixtures
+(`fh-multishot-value`, `multishot-copy-capture`, `multishot-handler`,
+`effect-capture-k`, `effect-handler-capture-nested`) are un-carved and pass.
 
-| Capability | Symptom under turi |
-| --- | --- |
-| Multishot resume (`^multishot k` resumed more than once) | SIGABRT |
-| Resume after the `handle` block returned (escaping `k`) | heap-use-after-free |
-| Resume *through* nested handlers | wrong error (`unhandled effect: ...`) |
-
-These are crashes / clean errors, **not** silent miscompiles. The five affected
-fixtures (`fh-multishot-value`, `multishot-copy-capture`, `multishot-handler`,
-`effect-capture-k`, `effect-handler-capture-nested`) are carved
-`requires.tur-only` (reason `interp-continuation`) and still pass compiled. The
-fix needs a heap-owned, clonable continuation that carries its prompt/handler
-stack; it is sequenced behind the explicit-stack evaluator. See
-[the delimited-control plan](../upcoming/v1/turi-interpreter-delimited-control-plan.md),
-the [trampoline plan](../upcoming/v1/turi-eval-trampoline-plan.md), and the
-[root-cause report](../archive/history/turi-interpreter-delimited-control-gaps.md).
+The **one residual** continuation gap: capturing a continuation *through a
+native / inline-C higher-order-function callback* (a native HOF that re-applies
+a closure via `turi_call` on a live C frame). That case errors **cleanly** (no
+crash, no silent miscompile) -- the tree-walker cannot capture across a native
+C frame. Lifting it is the subject of
+[turi-cek-stackless-reentry-plan.md](../upcoming/v1/turi-cek-stackless-reentry-plan.md)
+(SR), which reifies the native callback onto the driver work-stack as an
+explicit resume continuation. Root-cause history:
+[the delimited-control gaps report](../archive/history/turi-interpreter-delimited-control-gaps.md)
+(RESOLVED).
 
 One-shot effects/handlers, `call/cc`/`escape`, abortive and context-capturing
-`shift`/`reset`, and serializable/cloneable continuations all work today -- only
-re-entering or relocating a *captured* continuation is affected.
+`shift`/`reset`, serializable/cloneable continuations, and multishot/escaping/
+nested resume all work today -- only capturing *through a native HOF frame*
+remains.
 
 ---
 
 ## Documented carve-outs
 
 These are interpreter limitations **by design**, codified in
-`docs/turi-carve-out.txt` (EX_* kinds) and `docs/turi-preload-carve-out.txt`
-(unloaded modules), and ratcheted by `tools/check_turi_parity.py` /
-`tools/check_turi_native_parity.py` so they cannot drift silently.
+`docs/artifacts/turi-carve-out.txt` (EX_* kinds) and
+`docs/artifacts/turi-preload-carve-out.txt` (unloaded modules), and ratcheted by
+`tools/check_turi_parity.py` / `tools/check_turi_native_parity.py` so they
+cannot drift silently.
 
 - **Inline-C (`EX_INLINE_C`).** A `#{Unsafe}` ```c body declares a fixed C
   signature the tree-walker cannot execute. The escape hatch is the native
@@ -132,10 +138,8 @@ These are interpreter limitations **by design**, codified in
 - **WASM async.** No WASM target exists in the interpreter; `n/a`, not a gap.
 - **`EX_CPS_CONT_APP`.** A CPS-pipeline node the elaborator never emits (the
   interpreter stops at elaboration), so there is nothing to evaluate -- carved
-  as unreachable, not unimplemented.
-- **`EX_CONS_LIST`.** Bare cons-list literals only appear paired with user
-  inline-C that walks `__tur_cons_cell`; landing the case arm usefully needs
-  native cons ops, not just the arm. Carved with that rationale.
+  as unreachable, not unimplemented. This is the **only** carved `EX_*` kind
+  (`tools/check_turi_parity.py` reports 116/117 handled, 1 carved, 0 gaps).
 - **Module preload gap.** `json.tur` and `schema.tur` are reader-gated: the
   interpreter loads them only behind `-Xjson-reader` / `-Xschema-reader` (or
   `TUR_TURI_FULL_PRELUDE=1`), matching the compiled auto-load set on demand.
@@ -166,8 +170,8 @@ test leg -- not for production hot loops. When throughput matters, `tur build`
    ```
 
    `check_turi_parity.py` reports `N/M EX_* kinds handled, K carved out, 0 gaps`.
-   Every unhandled kind must appear in `docs/turi-carve-out.txt` with a
-   rationale, and every carve-out entry that is actually handled is flagged
+   Every unhandled kind must appear in `docs/artifacts/turi-carve-out.txt` with
+   a rationale, and every carve-out entry that is actually handled is flagged
    stale -- so the file and the matrix above stay honest.
 
 2. **Try it directly:**
@@ -189,5 +193,5 @@ test leg -- not for production hot loops. When throughput matters, `tur build`
 
 - [eval-api.md](eval-api.md) -- the libturi C embedding API and sandboxing surface.
 - [repl.md](repl.md) / [repl-tutorial.md](repl-tutorial.md) -- the interactive interpreter.
-- `docs/turi-carve-out.txt` / `docs/turi-preload-carve-out.txt` -- the machine-checked carve-out lists.
-- [turi-parity-post-v1-plan.md](../upcoming/turi-parity-post-v1-plan.md) -- the phased plan behind this matrix.
+- `docs/artifacts/turi-carve-out.txt` / `docs/artifacts/turi-preload-carve-out.txt` -- the machine-checked carve-out lists.
+- [turi-parity-post-v1-plan.md](../archive/turi-parity-post-v1-plan.md) -- the phased plan behind this matrix (archived; all phases landed).
