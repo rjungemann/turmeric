@@ -148,3 +148,9 @@ extern bool g_werror_deprecated;
  * warnings to errors so a strict build can gate against unannotated narrow
  * parameters reaching inline-C bodies. */
 extern bool g_werror_inline_c_narrow_params;
+
+/* XF1 (experimental-flag-mechanism-plan): --allow-experimental suppresses the
+ * per-use TUR-W006x experimental-feature warnings.  Deliberately ugly --
+ * intended for the Turmeric project's own CI matrix; spice users should not
+ * set it.  Read by experiment_warn_if_used in src/runtime/experiments.c. */
+extern bool g_allow_experimental;

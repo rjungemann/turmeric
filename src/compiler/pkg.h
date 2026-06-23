@@ -139,6 +139,12 @@ typedef struct PkgManifest {
     /* build-output-directory-plan: relative path (from the manifest dir) for
      * generated artifacts. NULL = use the default (`<manifest-dir>/build`). */
     char        *build_dir;
+    /* XF1 (experimental-flag-mechanism-plan): names from a top-level
+     * :experiments [...] list. Each is a kebab-case experiment name (stored
+     * without any leading ':'); merged with the CLI --enable= set at build
+     * time (CLI wins on conflict). An unknown name is a hard TUR-E0310 error. */
+    char       **experiments;
+    int          n_experiments;
 } PkgManifest;
 
 /* ------------------------------------------------------------------ */

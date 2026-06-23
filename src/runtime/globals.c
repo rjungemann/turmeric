@@ -170,3 +170,8 @@ bool g_werror_deprecated = false;
 /* Phase C: --Werror=inline-c-narrow-params promotes narrow-param-in-inline-C
  * warnings to errors. */
 bool g_werror_inline_c_narrow_params = false;
+
+/* XF1 (experimental-flag-mechanism-plan): --allow-experimental suppresses the
+ * TUR-W006x experimental-feature warnings.  Default off; intended only for the
+ * Turmeric project's own CI matrix runs. */
+bool g_allow_experimental = false;

@@ -304,6 +304,30 @@ static bool parse_str_vec(const Form *f, char ***out, int *n_out) {
     return true;
 }
 
+/* XF1 (experimental-flag-mechanism-plan): parse a :experiments [...] list.
+ * Entries may be keywords (:fancy-rows), symbols (fancy-rows), or strings
+ * ("fancy-rows"); the bare kebab-case name (no leading ':') is stored. */
+static bool parse_experiments(const Form *f, char ***out, int *n_out) {
+    *out   = NULL;
+    *n_out = 0;
+    if (!f) return true;
+    if (f->tag != F_VEC && f->tag != F_LIST) {
+        report_non_map(f, ":experiments"); /* close enough: "expected a vector" */
+        return false;
+    }
+    const FormList *fl = &f->as.list;
+    *out = (char **)malloc(fl->len * sizeof(char *));
+    if (!*out) return false;
+    for (uint32_t i = 0; i < fl->len; i++) {
+        const Form *it = fl->items[i];
+        if (it->tag == F_KEYWORD || it->tag == F_SYM)
+            (*out)[(*n_out)++] = tur_strdup(it->as.sym->name);
+        else if (it->tag == F_STR)
+            (*out)[(*n_out)++] = ss_dup(it->as.s);
+    }
+    return true;
+}
+
 /* spices-c-sources-plan: parse + validate a :c-sources / :c-includes vector.
  * Each entry must be a manifest-relative path (absolute paths rejected); for
  * sources (require_c_ext) the extension must be .c/.cc/.cpp and the file must
@@ -577,6 +601,9 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
         } else if (strcmp(kw, "build-dir") == 0) {
             /* build-output-directory-plan: relative path for build artifacts. */
             out->build_dir = form_str_dup(vf);
+        } else if (strcmp(kw, "experiments") == 0) {
+            /* XF1: opt-in experimental features for this spice. */
+            parse_experiments(vf, &out->experiments, &out->n_experiments);
         } else if (strcmp(kw, "reader-macros") == 0) {
             /* RM4: vector of paths to reader-macro definition files. */
             parse_str_vec(vf, &out->reader_macros, &out->n_reader_macros);
@@ -792,6 +819,16 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
         fprintf(f, "]\n");
     }
 
+    if (m->n_experiments > 0) {
+        /* XF1: write experiment names as keywords, the canonical manifest form. */
+        fprintf(f, "\n  :experiments [");
+        for (int i = 0; i < m->n_experiments; i++) {
+            if (i) fprintf(f, " ");
+            fprintf(f, ":%s", m->experiments[i]);
+        }
+        fprintf(f, "]\n");
+    }
+
     if (m->n_bins > 0) {
         fprintf(f, "\n  :bin #{\n");
         for (int i = 0; i < m->n_bins; i++) {
@@ -864,6 +901,8 @@ void pkg_manifest_free(PkgManifest *m) {
     free(m->bin_paths);
     for (int i = 0; i < m->n_members; i++) free(m->members[i]);
     free(m->members);
+    for (int i = 0; i < m->n_experiments; i++) free(m->experiments[i]);
+    free(m->experiments);
     free(m->build_dir);
     memset(m, 0, sizeof(*m));
 }

@@ -1,9 +1,27 @@
 # Experimental Feature Flag Mechanism Plan (XF0--XF6)
 
-> **Status:** Not started. Successor to the now-retired `-X<name>` surface
-> ([../drop-x-flags-plan.md](../drop-x-flags-plan.md)). Design only --
-> no flags ship under this mechanism until a concrete experimental feature
-> requests one.
+> **Status:** Mechanism implemented (XF0--XF4, XF6); `EXPERIMENTS[]` ships
+> **empty** per the design constraint below. Successor to the now-retired
+> `-X<name>` surface ([../drop-x-flags-plan.md](../drop-x-flags-plan.md)).
+> Design only -- no flags ship under this mechanism until a concrete
+> experimental feature requests one.
+>
+> **XF5 (first real consumer) is deferred.** Its named consumer
+> (cross-parameter sized-type unification) already shipped and is default-on,
+> so there is nothing to "migrate" -- gating it would regress the
+> `sized-cross-param-*` fixtures. See
+> [../../reported/experimental-flag-xf5-stale-premise.md](../../reported/experimental-flag-xf5-stale-premise.md).
+> A genuinely-new candidate (size-index arithmetic) is noted there.
+>
+> **What shipped:** `src/runtime/experiments.{h,c}` (registry +
+> `experiment_enable`/`_is_enabled`/`_warn_if_used`/`_reset_warnings`),
+> `--enable=<a,b,c>` + `--allow-experimental` CLI parsing and the
+> `:experiments [...]` manifest key (CLI wins on conflict), the `TUR-E0310`
+> unknown-experiment error and `TUR-W0060`/`TUR-W0061` lifecycle warnings
+> (all three explainable via `tur explain`), the `tur experiments`
+> subcommand (`--json`), release-cut expiry enforcement in the
+> `/cut-minor-release` + `/cut-major-release` skills, and
+> [../../guides/experimental-flags-guide.md](../../guides/experimental-flags-guide.md).
 >
 > **Prerequisites:** Drop-`-X`-flags cut shipped (0.24.0 -- all 16 legacy
 > flags are accept-and-warn no-ops; the implies-graph is gone; help text

@@ -45,6 +45,12 @@ release planned to reject the flag entirely; the recognizer stays for the
 entire v0.24.x line. A v1.0+ cleanup may eventually retire the recognizer
 with its own deprecation window.
 
+> **Note.** The `-X<name>` prefix is retired for good -- none of the 16
+> names above will be reused. For genuinely **experimental** features in
+> v1+ (the kind that are half-built, in-flux, or carry a known cost), the
+> replacement surface is `--enable=<name>` with a built-in expiry policy.
+> See [experimental-flags-guide.md](experimental-flags-guide.md).
+
 ### Behavior changes worth knowing
 
 - **`--strict-effects` no longer auto-on with effect types.** When

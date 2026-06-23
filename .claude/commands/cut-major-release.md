@@ -34,9 +34,33 @@ Run these in parallel and report findings before proceeding:
    to the user before proceeding.
 6. `git log v<OLD>..HEAD --oneline` -- there must be at least one
    commit since the last tag. If zero, refuse to release.
+7. **Experiment expiry gate (XF4, experimental-flag-mechanism-plan).**
+   Every entry in the experimental-feature registry carries a hard
+   `expires_at` version. Before bumping VERSION, list the registry and
+   refuse the cut if any entry expires at or before the NEW version while
+   still present:
+
+   ```sh
+   ./build/tur experiments --json   # build first if ./build/tur is stale
+   ```
+
+   Parse the JSON array. For each entry, compare its `expires_at`
+   (MAJOR.MINOR.PATCH, numeric per-component) against the NEW version from
+   Step 1. If `expires_at <= NEW`, the experiment has reached its expiry
+   and MUST be resolved before the cut can proceed -- in a **separate PR**,
+   the release author either **graduates** it (delete the row from
+   `src/runtime/experiments.c`; the feature becomes always-on, its
+   `opt_global` bool staying `true`) or **shelves** it (remove the row and
+   the feature). A major bump crosses far more expiry boundaries than a
+   minor, so expect this gate to fire; resolve each entry before cutting.
+
+   Report the offending entries (name + expires_at) and stop. Do not edit
+   `experiments.c` yourself as part of the release. An empty registry
+   passes trivially.
 
 If any check fails, stop and report. Do not proceed without the user
-explicitly overriding.
+explicitly overriding. The experiment-expiry gate (check 7) must NOT be
+overridden by bumping past it -- resolve the entry first.
 
 ## Step 1: Compute the new version
 
@@ -232,3 +256,6 @@ End by reporting:
 - Refuse to amend a commit that has already been pushed.
 - Refuse to cut a major release when there are no actual breaking
   changes since the previous tag -- suggest `/cut-minor-release` instead.
+- Refuse to cut a release while any registry experiment's `expires_at` is
+  `<=` the new version (precondition 7). The entry must be graduated or
+  shelved in a separate, reviewed PR first.

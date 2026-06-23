@@ -65,6 +65,7 @@
 #include "justrun.h"
 /* Global configuration variables — defined in globals.c */
 #include "globals.h"
+#include "experiments.h"  /* XF1: --enable=<name> experimental-flag registry */
 /* LSP server */
 #include "lsp/lsp.h"
 #include "lsp/lsp_sym.h"
@@ -609,6 +610,7 @@ static int compile_to_c(const char *path, Buf *out_c,
      * compile -- the stale `had_error_` short-circuits the `diag_had_error()`
      * gate below. */
     diag_reset();
+    experiment_reset_warnings();  /* XF2: once-per-compile TUR-W006x dedup */
 
     SourceFile file = {0};
     file.path = path;
@@ -988,6 +990,7 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
      * in-process, so a stale `had_error_` from an earlier module would
      * otherwise short-circuit every later module's `diag_had_error()` gate. */
     diag_reset();
+    experiment_reset_warnings();  /* XF2: once-per-compile TUR-W006x dedup */
 
     SourceFile file = {0};
     file.path = path;
@@ -1084,6 +1087,7 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
      * in-process, so a stale `had_error_` from an earlier module would
      * otherwise short-circuit every later module's `diag_had_error()` gate. */
     diag_reset();
+    experiment_reset_warnings();  /* XF2: once-per-compile TUR-W006x dedup */
 
     SourceFile file = {0};
     file.path = path;
@@ -2211,6 +2215,23 @@ static char *find_spice_root(const char *file_path) {
     return NULL;
 }
 
+/* XF1 (experimental-flag-mechanism-plan): merge an enclosing spice's
+ * :experiments [...] into the active experiment set.  CLI --enable= has
+ * already run (and wins on conflict).  An unknown name in the manifest is a
+ * hard configuration error: emit TUR-E0310 and abort, the same "typos surface
+ * immediately" contract the CLI path enforces. */
+static void apply_manifest_experiments(const PkgManifest *m) {
+    for (int i = 0; i < m->n_experiments; i++) {
+        if (!experiment_enable(m->experiments[i], XF_SRC_MANIFEST)) {
+            fprintf(stderr,
+                    "error [TUR-E0310]: unknown experiment '%s' in build.tur "
+                    ":experiments; run 'tur experiments' for the list\n",
+                    m->experiments[i]);
+            exit(2);
+        }
+    }
+}
+
 static char **discover_manifest_reader_macros(const char *input_path,
                                               int *n_out) {
     *n_out = 0;
@@ -2226,6 +2247,7 @@ static char **discover_manifest_reader_macros(const char *input_path,
     memset(&m, 0, sizeof(m));
     char **out = NULL;
     if (pkg_manifest_read(mp, &m)) {
+        apply_manifest_experiments(&m);
         out = resolve_manifest_reader_macros(sroot, &m, n_out);
     }
     pkg_manifest_free(&m);
@@ -5583,6 +5605,33 @@ static void warn_deprecated_x_flag(const char *name) {
                     "the feature is on by default\n", name);
 }
 
+/* XF1 (experimental-flag-mechanism-plan): enable each comma-separated name in
+ * a `--enable=<a,b,c>` value (or a manifest :experiments list).  An unknown
+ * name is a hard error (TUR-E0310) so typos surface immediately.  Returns
+ * true on success, false (after printing TUR-E0310) on the first unknown
+ * name. `src` records the origin for the `tur experiments` source column. */
+static bool enable_experiment_list(const char *list, ExperimentSource src) {
+    if (!list || !*list) return true;
+    char copy[1024];
+    strncpy(copy, list, sizeof(copy) - 1);
+    copy[sizeof(copy) - 1] = '\0';
+    char *tok = strtok(copy, ",");
+    while (tok) {
+        /* trim leading whitespace */
+        while (*tok == ' ' || *tok == '\t') tok++;
+        if (*tok) {
+            if (!experiment_enable(tok, src)) {
+                fprintf(stderr,
+                        "error [TUR-E0310]: unknown experiment '%s'; "
+                        "run 'tur experiments' for the list\n", tok);
+                return false;
+            }
+        }
+        tok = strtok(NULL, ",");
+    }
+    return true;
+}
+
 /* Apply flags string (e.g. "-Xgadt -Xlinear") to global compiler flags. */
 static void wk_apply_flags(const char *flags_str) {
     if (!flags_str || !*flags_str) return;
@@ -5611,6 +5660,12 @@ static void wk_apply_flags(const char *flags_str) {
         else if (strcmp(tok, "--lint-inline-c-unsafe") == 0) g_lint_inline_c_unsafe = true;
         else if (strcmp(tok, "--Werror=inline-c-narrow-params") == 0 ||
                  strcmp(tok, "-Werror=inline-c-narrow-params") == 0) g_werror_inline_c_narrow_params = true;
+        else if (strcmp(tok, "--allow-experimental") == 0) g_allow_experimental = true;
+        else if (strncmp(tok, "--enable=", 9) == 0) {
+            /* XF1: parent already validated the names (TUR-E0310); the worker
+             * just re-applies them so gated features elaborate identically. */
+            (void)enable_experiment_list(tok + 9, XF_SRC_CLI);
+        }
         tok = strtok(NULL, " \t");
     }
 }
@@ -11546,6 +11601,99 @@ static bool looks_like_diag_code_(const char *s) {
     return true;
 }
 
+/* XF3 (experimental-flag-mechanism-plan): `tur experiments` -- list the
+ * EXPERIMENTS[] registry.  This is the single source of truth; guides and the
+ * docs site are generated from it, not maintained by hand. */
+static const char *xf_lifecycle_str(ExperimentLifecycle lc) {
+    return lc == XF_LIFECYCLE_BETA ? "beta" : "prototype";
+}
+
+static const char *xf_source_str(ExperimentSource src) {
+    switch (src) {
+        case XF_SRC_CLI:      return "cli";
+        case XF_SRC_MANIFEST: return "manifest";
+        default:              return "-";
+    }
+}
+
+/* Minimal JSON string escape (the registry fields are ASCII path/identifier
+ * strings, but quote/backslash are handled for robustness). */
+static void xf_json_puts(FILE *f, const char *s) {
+    fputc('"', f);
+    for (const char *p = s ? s : ""; *p; p++) {
+        if (*p == '"' || *p == '\\') fputc('\\', f);
+        fputc(*p, f);
+    }
+    fputc('"', f);
+}
+
+static int cmd_experiments(int argc, char **argv) {
+    /* `--json` is consumed by the global flag pass before dispatch (it sets
+     * use_json_output); honour both that and a local --json for robustness. */
+    bool json = use_json_output;
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--json") == 0) {
+            json = true;
+        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            printf("usage:\n  tur experiments [--json]\n\n"
+                   "List the compiler's experimental features (the --enable=<name>\n"
+                   "registry).  --json emits the machine-readable form the docs site\n"
+                   "consumes.\n");
+            return 0;
+        } else {
+            fprintf(stderr, "tur experiments: unexpected argument '%s'\n", argv[i]);
+            return 2;
+        }
+    }
+
+    size_t n = experiment_count();
+
+    if (json) {
+        printf("[");
+        for (size_t i = 0; i < n; i++) {
+            const ExperimentDescriptor *d = experiment_at(i);
+            if (i) printf(",");
+            printf("\n  {");
+            printf("\"name\":");        xf_json_puts(stdout, d->name);
+            printf(",\"summary\":");    xf_json_puts(stdout, d->summary);
+            printf(",\"lifecycle\":");  xf_json_puts(stdout, xf_lifecycle_str(d->lifecycle));
+            printf(",\"introduced\":"); xf_json_puts(stdout, d->introduced);
+            printf(",\"expires_at\":"); xf_json_puts(stdout, d->expires_at);
+            printf(",\"plan\":");       xf_json_puts(stdout, d->plan_path);
+            printf(",\"enabled\":%s",   experiment_is_enabled(d->name) ? "true" : "false");
+            printf(",\"source\":");     xf_json_puts(stdout, xf_source_str(experiment_source_at(i)));
+            printf("}");
+        }
+        printf("%s]\n", n ? "\n" : "");
+        return 0;
+    }
+
+    if (n == 0) {
+        printf("No experimental features are registered.\n\n"
+               "The --enable=<name> mechanism is in place, but no feature is\n"
+               "gated behind it right now.  See "
+               "docs/guides/experimental-flags-guide.md.\n");
+        return 0;
+    }
+
+    printf("%-22s %-9s %-10s %-10s %-9s %s\n",
+           "NAME", "LIFECYCLE", "INTRODUCED", "EXPIRES", "ENABLED", "PLAN");
+    for (size_t i = 0; i < n; i++) {
+        const ExperimentDescriptor *d = experiment_at(i);
+        char enabled[24];
+        if (experiment_is_enabled(d->name))
+            snprintf(enabled, sizeof(enabled), "yes(%s)",
+                     xf_source_str(experiment_source_at(i)));
+        else
+            snprintf(enabled, sizeof(enabled), "no");
+        printf("%-22s %-9s %-10s %-10s %-9s %s\n",
+               d->name, xf_lifecycle_str(d->lifecycle), d->introduced,
+               d->expires_at, enabled, d->plan_path);
+    }
+    printf("\n%zu experimental feature%s registered.\n", n, n == 1 ? "" : "s");
+    return 0;
+}
+
 static int cmd_explain(const char *code) {
     /* Phase HKT-P5: If the argument looks like a diagnostic code (TUR-E####),
      * look it up in the explanation table instead of compiling a snippet. */
@@ -11932,6 +12080,24 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--keep-contracts") == 0) {
             /* CT3: keep contract checks in release builds */
             g_keep_contracts_in_release = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strncmp(argv[i], "--enable=", 9) == 0) {
+            /* XF1: opt in to one or more experimental features (comma list).
+             * An unknown name is a hard TUR-E0310 error. */
+            if (!enable_experiment_list(argv[i] + 9, XF_SRC_CLI)) return 2;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--allow-experimental") == 0) {
+            /* XF1: suppress TUR-W006x.  Intended for the Turmeric project's
+             * own CI matrix; spice users should not set this. */
+            g_allow_experimental = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }
@@ -12451,6 +12617,9 @@ int main(int argc, char **argv) {
         return cmd_pkg_list(argc, argv);
     if (strcmp(cmd, "upgrade") == 0)
         return cmd_pkg_upgrade(argc, argv);
+    /* XF3: experimental-feature registry listing */
+    if (strcmp(cmd, "experiments") == 0)
+        return cmd_experiments(argc, argv);
 
     /* GS-M2: subcommand fallthrough — `tur foo bar` execs `tur-foo bar`
      * from $PATH when "foo" isn't a built-in. Built-ins always win.
