@@ -66,7 +66,7 @@ which would change behavior if merged -- so this plan is closed.
   present. Strictness calibrated per-side (value: bare `TY_TYVAR` only;
   dispatch: whole resolved spine tyvar-free).
 - **R4 -- Audit registry + CI gate.** DONE.
-  `docs/crossing-routing-audit.txt` (11 routine/file rows) and
+  `docs/artifacts/crossing-routing-audit.txt` (11 routine/file rows) and
   `tools/check_crossing_routing.py` exist; wired into `tests/run.sh:48`
   behind `TUR_SKIP_PARITY_CHECK=1` opt-out.
 - **Fn-value third axis.** STARTED. `emit_abi_fn_value_signature` at
@@ -242,7 +242,7 @@ of R4's documentation.
 
 **Landed.** The single source of truth is now machine-readable and enforced:
 
-- `docs/crossing-routing-audit.txt` -- the registry, one
+- `docs/artifacts/crossing-routing-audit.txt` -- the registry, one
   `<routine> <file.c> <call-site-count>` line per routed crossing.
 - `tools/check_crossing_routing.py` -- enumerates the chokepoint call sites in
   `src/compiler/*.c` (definitions and prototypes excluded) and diffs them

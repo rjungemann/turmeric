@@ -13,7 +13,7 @@ It works like check_turi_parity.py:
   1. Enumerate every call site of the sanctioned recovery chokepoints in
      src/compiler/*.c (definitions and comments excluded).
   2. Compare the (routine, file, count) triples against the audit registry
-     docs/crossing-routing-audit.txt.
+     docs/artifacts/crossing-routing-audit.txt.
   3. Any new call site (a crossing that forgot its row), a changed count, or a
      stale registry entry fails the check.
 
@@ -35,7 +35,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 COMPILER_DIR = os.path.join(ROOT, "src", "compiler")
-REGISTRY = os.path.join(ROOT, "docs", "crossing-routing-audit.txt")
+REGISTRY = os.path.join(ROOT, "docs", "artifacts", "crossing-routing-audit.txt")
 
 # The sanctioned carrier<->concrete recovery chokepoints.  Every call site of
 # these is a routed crossing and must be accounted for in the registry.
