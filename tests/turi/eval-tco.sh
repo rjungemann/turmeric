@@ -43,6 +43,7 @@ check_line "nest-sh 200000 = 0 (SR N4 nested reset/shift heap-bounded)" "0"
 check_line "nest-cc 200000 = 200000 (SR N4 Slice 2 nested call/cc heap-bounded)" "200000"
 check_line "nest-cl 200000 = 200000 (SR N4 Slice 3 nested cloneable-reset bounded)" "200000"
 check_line "nest-se 200000 = 200000 (SR N4 Slice 3 nested serial-reset bounded)" "200000"
+check_line "cap-rec 200000 = 0 (SR N4 Slice 4 recursive capturing shift bounded)" "0"
 
 echo ""
 echo "$PASS passed, $FAIL failed"

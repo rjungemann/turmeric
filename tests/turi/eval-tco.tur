@@ -148,3 +148,15 @@
 (defn nest-se [n :int] :int
   (if (= n 0) 0 (serial-reset (+ 1 (nest-se (- n 1))))))
 (println (nest-se 200000))
+
+;; --- Test 13 (SR N4 Slice 4): recursive CAPTURING serial-shift heap-bounded -
+;; The shift receiver recursively triggers another capturing serial-reset.
+;; Before Slice 4 the receiver ran on a re-entrant C frame (ts_capture_and_run's
+;; turi_call), so this C-recursed and tripped the guard at ~500.  The driver now
+;; reifies the context (bounded) and applies the receiver on the work-stack
+;; (DK_NATIVE_RESUME), folding the recursion onto the heap.  Each level aborts
+;; into the shift (the +1 is discarded by the capture), so cap-rec N = 0.
+(defn cap-rec [n :int] :int
+  (serial-reset
+    (+ 1 (serial-shift (fn [k] (if (= n 0) 0 (cap-rec (- n 1)))) 0))))
+(println (cap-rec 200000))

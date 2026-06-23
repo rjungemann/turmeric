@@ -1634,12 +1634,28 @@ static TuriValue ts_not_capturable(bool serial, Span span) {
                       "(unsupported delimited-context shape)");
 }
 
+/* SR N4 Slice 4: when the driver evaluates a capturing serial/cloneable reset it
+ * passes a non-NULL `deferred` so the receiver application is moved onto the
+ * work-stack (instead of the synchronous turi_call that C-recurses when the
+ * receiver recursively triggers another capturing reset).  ts_capture_and_run
+ * fills it with the reified continuation + receiver + the let-frames to free
+ * after the receiver runs, and returns without applying; the driver then applies
+ * the receiver via DK_NATIVE_RESUME (serial_receiver_resume frees the frames).
+ * NULL `deferred` keeps the synchronous behaviour for non-driver callers. */
+typedef struct {
+    bool        active;       /* set when the receiver application was deferred */
+    TuriCont   *cont;         /* the reified continuation handle */
+    TuriValue   receiver;     /* the shift receiver closure */
+    EvalFrame **let_frames;   /* heap copy of capture-time let frames (or NULL) */
+    uint32_t    n_let;        /* freed after the receiver runs */
+} TsDeferredReceiver;
+
 /* Evaluate (serial-reset BODY) / (cloneable-reset BODY) when BODY performs the
  * matching capturing shift: reify the delimited context, hand the receiver a
  * resumable continuation, and return the receiver's value as the reset value. */
 static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
                                     const Expr *body, ExprKind shift_kind,
-                                    bool serial) {
+                                    bool serial, TsDeferredReceiver *deferred) {
     TsFrame     frames[TS_MAX_CTX_FRAMES];
     uint32_t    n = 0;
     EvalFrame  *let_frames[TS_MAX_CTX_FRAMES];
@@ -1850,6 +1866,23 @@ static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
             if (turi_is_error(fn) || fn.tag != TURI_CLOSURE) {
                 result = turi_is_error(fn) ? fn
                        : turi_error("eval: shift receiver is not a function");
+            } else if (deferred) {
+                /* SR N4 Slice 4: hand the receiver application to the driver.
+                 * Transfer let-frame ownership (freed by serial_receiver_resume
+                 * after the receiver runs -- the receiver closure may capture a
+                 * let frame, so they must outlive it). */
+                deferred->active   = true;
+                deferred->cont     = cont;
+                deferred->receiver = fn;
+                deferred->n_let    = n_let;
+                deferred->let_frames = NULL;
+                if (n_let) {
+                    deferred->let_frames =
+                        (EvalFrame **)malloc(n_let * sizeof(EvalFrame *));
+                    memcpy(deferred->let_frames, let_frames,
+                           n_let * sizeof(EvalFrame *));
+                }
+                return turi_nil();   /* sentinel; caller checks deferred->active */
             } else {
                 TuriValue kval = turi_int((int64_t)(intptr_t)cont);
                 result = turi_call(env, fn, &kval, 1);
@@ -4293,6 +4326,26 @@ static TuriValue abortive_shift_resume(TuriEnv *env, void *state, TuriValue appl
     return *out;
 }
 
+/* SR N4 Slice 4: state for a deferred capturing-shift receiver application --
+ * the capture-time let frames to free once the receiver completes. */
+typedef struct { EvalFrame **let_frames; uint32_t n_let; } SerialReceiverState;
+
+/* resume for a capturing serial/cloneable shift: the receiver's value IS the
+ * reset's value, so just pass `applied` through; then free the capture-time let
+ * frames (kept alive across the receiver, which may close over one of them). */
+static TuriValue serial_receiver_resume(TuriEnv *env, void *state, TuriValue applied,
+                                        bool *done, TuriValue *out) {
+    (void)env;
+    SerialReceiverState *s = (SerialReceiverState *)state;
+    *done = true;
+    *out  = applied;
+    for (int32_t i = (int32_t)s->n_let - 1; i >= 0; i--)
+        eval_frame_free(s->let_frames[i]);
+    free(s->let_frames);
+    free(s);
+    return applied;
+}
+
 /* Extract field `e->as.get_field_.field_idx` from an already-resolved receiver
  * value `sv` (an EX_GET_FIELD whose struct_expr has been evaluated).  Shared by
  * eval_expr_impl's recursive EX_GET_FIELD and the driver's DK_GET_FIELD
@@ -5293,8 +5346,26 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                                             : control->as.serial_reset_.body;
                 ExprKind    sk   = is_clone ? EX_CLONEABLE_SHIFT : EX_SERIAL_SHIFT;
                 if (ts_reaches_shift(body, sk)) {
-                    cur = eval_expr(env, cf, control);
-                    descending = false; break;
+                    /* SR N4 Slice 4: reify the context here (bounded), then apply
+                     * the shift receiver on the work-stack so a receiver that
+                     * recursively triggers another capturing reset folds onto the
+                     * heap instead of C-recursing through turi_call. */
+                    TsDeferredReceiver d; d.active = false;
+                    TuriValue rv = ts_capture_and_run(env, cf, body, sk,
+                                                      /*serial=*/!is_clone, &d);
+                    if (!d.active) { cur = rv; descending = false; break; }
+                    SerialReceiverState *s =
+                        (SerialReceiverState *)malloc(sizeof(SerialReceiverState));
+                    s->let_frames = d.let_frames; s->n_let = d.n_let;
+                    NativeResume *nr = (NativeResume *)malloc(sizeof(NativeResume));
+                    nr->resume = serial_receiver_resume; nr->state = s;
+                    DRIVE_PUSH(((DriveCont){ .kind = DK_NATIVE_RESUME, .aux = nr }));
+                    apply_fn   = d.receiver;
+                    apply_args = (TuriValue *)malloc(sizeof(TuriValue));
+                    apply_args[0] = turi_int((int64_t)(intptr_t)d.cont);
+                    apply_n    = 1;
+                    have_apply = true;
+                    break;
                 }
                 TuriResetBoundary *b = (TuriResetBoundary *)malloc(sizeof(TuriResetBoundary));
                 b->kind                = is_clone ? PROMPT_CLONEABLE : PROMPT_SERIAL;
@@ -7521,14 +7592,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_SERIAL_RESET:
         if (ts_reaches_shift(e->as.serial_reset_.body, EX_SERIAL_SHIFT))
             return ts_capture_and_run(env, frame, e->as.serial_reset_.body,
-                                      EX_SERIAL_SHIFT, /*serial=*/true);
+                                      EX_SERIAL_SHIFT, /*serial=*/true, NULL);
         return eval_reset_boundary(env, frame, e->as.serial_reset_.body,
                                    PROMPT_SERIAL);
 
     case EX_CLONEABLE_RESET:
         if (ts_reaches_shift(e->as.cloneable_reset_.body, EX_CLONEABLE_SHIFT))
             return ts_capture_and_run(env, frame, e->as.cloneable_reset_.body,
-                                      EX_CLONEABLE_SHIFT, /*serial=*/false);
+                                      EX_CLONEABLE_SHIFT, /*serial=*/false, NULL);
         return eval_reset_boundary(env, frame, e->as.cloneable_reset_.body,
                                    PROMPT_CLONEABLE);
 

@@ -6,6 +6,36 @@ description: Eliminate the last source of unbounded C recursion in the tree-walk
 
 # Turi stackless native re-entry (full CEK / driver-CPS) -- Plan
 
+## Status update -- 2026-06-23 (N4 Slice 4 -- capturing-shift receiver on the work-stack)
+
+**The capturing serial/cloneable shift receiver now runs on the work-stack --
+recursive capturing shifts are heap-bounded.** Fourth slice.
+
+`ts_capture_and_run` gained a `TsDeferredReceiver*` out-param. The context
+reification (the bounded <=64-frame grammar walk) is unchanged, but when a driver
+caller passes it, the receiver application is **not** run via the synchronous
+`turi_call`; instead the reified continuation + receiver + capture-time
+let-frames are handed back, and the driver applies the receiver via
+`DK_NATIVE_RESUME` (`serial_receiver_resume` passes the value through and frees
+the let-frames afterward -- the receiver may close over one of them, so they
+outlive it). Non-driver callers pass NULL and keep the synchronous path.
+
+Result: `(defn f [n] (serial-reset (+ 1 (serial-shift (fn [k] (if (= n 0) 0 (f (- n 1)))) 0))))`
+runs `(f 200000)` heap-bounded (was recursion-limit at ~500); the capturing
+basic case still resolves (`cloneable-basic` => 15, 42). New `tur_eval_tco`
+regression `cap-rec 200000`. `bash tests/run.sh` (1783/0), eval/effects/
+continuation/tco ctests (14/14), `eval-tco` (14/14), `run-turi` baseline (23).
+
+**Guard STILL cannot retire -- one bounded-but-nestable blocker remains (Slice
+5).** `ts_cont_resume` (the serial/cloneable continuation *resume* fold) still
+applies each captured call-frame via a synchronous `turi_call`; when a resumed
+frame's function recursively resumes another continuation it C-recurses.
+Confirmed: a recursive-resume probe
+(`(let [k (cloneable-reset (step (cloneable-shift (fn [kk] kk) 0)))] (resume k (rec ...)))`)
+still trips the guard at 5000. Converting that loop to the work-stack (the
+"loop native" `DK_NATIVE_RESUME` re-request pattern, intercepted at the driver's
+cont-resume builtin dispatch) is the final step before the guard retires.
+
 ## Status update -- 2026-06-23 (N4 Slice 3 -- serial/cloneable reset on the work-stack)
 
 **A serial-/cloneable-reset whose body does not reach its capturing shift is now
