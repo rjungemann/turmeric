@@ -678,6 +678,20 @@ typedef struct {
     Form         **out;        /* accumulated, fully-expanded form list */
     uint32_t       out_n, out_cap;
     int            rc;         /* -1 on any load error */
+    /* Boundary tracking: the first `boundary_in` top-level INPUT forms are the
+     * auto-loaded stdlib prefix. (load ...) expansion can splice in or elide
+     * forms, so the stdlib region occupies a different number of OUTPUT slots
+     * than its input count. `track_boundary` is set only on the outermost call
+     * (whose loop index ranges over genuine top-level forms); when the loop
+     * reaches input index `boundary_in`, `boundary_out` records how many output
+     * forms the stdlib region produced -- the corrected stdlib_prefix. Without
+     * this, the post-load stdlib boundary stays at the stale input count, and
+     * the last auto-loaded defmodule's members fall past it (so the
+     * stdlib macro-promotion sweep never reaches them).  See
+     * docs/reported/autoload-defmodule-macro-not-promoted.md. */
+    bool           track_boundary;
+    uint32_t       boundary_in;
+    uint32_t       boundary_out;
 } LoadExpandCtx;
 
 static void load_expand_emit(LoadExpandCtx *lx, Arena *arena, Form *f) {
@@ -704,6 +718,10 @@ static void load_expand_emit(LoadExpandCtx *lx, Arena *arena, Form *f) {
 static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
                               SymbolTable *st, Form *const *forms, uint32_t nforms) {
     for (uint32_t i = 0; i < nforms; i++) {
+        /* Record the corrected stdlib boundary the moment the outer walk
+         * crosses the last stdlib input form (before emitting any user form). */
+        if (lx->track_boundary && i == lx->boundary_in)
+            lx->boundary_out = lx->out_n;
         Form *f = forms[i];
 
         /* Option A: descend into a (defmodule ...) body so a `(load "path")`
@@ -909,12 +927,24 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         LoadExpandCtx lx = {0};
         lx.out_cap = nforms + 16;
         lx.out = (Form **)arena_alloc(arena, lx.out_cap * sizeof(Form *));
+        lx.track_boundary = (stdlib_prefix > 0);
+        lx.boundary_in    = stdlib_prefix;
+        lx.boundary_out   = stdlib_prefix; /* default if the loop never crosses it */
         load_expand_forms(&lx, &e, arena, st, forms, nforms);
         if (lx.rc != 0) rc = lx.rc;
+        /* If the boundary sat at the very end (no user forms), the loop never
+         * reached an index == boundary_in, so the post-expansion stdlib region
+         * is everything emitted. */
+        if (lx.track_boundary && stdlib_prefix >= nforms)
+            lx.boundary_out = lx.out_n;
         /* Replace forms/nforms with the expanded list for the rest of
          * elaborate_program.  Cast away const since we're in our own copy. */
         forms = (Form *const *)lx.out;
         nforms = lx.out_n;
+        /* Re-anchor the stdlib boundary onto the expanded form stream so the
+         * stdlib promotion sweep and in_stdlib_load window line up with where
+         * the auto-loaded forms actually landed. */
+        if (lx.track_boundary) stdlib_prefix = lx.boundary_out;
     }
 
     Expr **items = (nforms == 0) ? NULL :

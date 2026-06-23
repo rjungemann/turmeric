@@ -2,6 +2,25 @@
 
 **Severity:** low (workaround available)
 
+**Status:** RESOLVED -- fix direction (a). The auto-load `stdlib_prefix`
+boundary was a stale *input*-form count: `load_expand_forms`
+(`src/compiler/elab_toplevel.c`) splices/elides forms for every `(load ...)`,
+so the stdlib region occupies a different number of *output* slots than its
+input count. The last auto-loaded file's members therefore landed past the
+stale boundary, and the macro-promotion sweep (fired at `i+1 == stdlib_prefix`)
+ran before that file's `defmodule` was elaborated -- its exported macros never
+reached `defining_module_name = NULL`. Exported *defns* stayed visible because
+`elab_lookup_sym` honors `is_exported` directly; exported *macros* require
+`elab_lookup_macro` to see `defining_module_name == NULL`, hence the asymmetry.
+
+Fix: `LoadExpandCtx` now records the post-expansion output position where the
+stdlib input boundary falls (`boundary_out`), and `elaborate_program`
+re-anchors `stdlib_prefix` onto the expanded stream. The `in_stdlib_load`
+window and the promotion sweep then line up with where the auto-loaded forms
+actually landed. `stdlib/unique.tur` was converted back to a
+`(defmodule tur/unique ...)` wrapper so the existing `unique-*` fixtures
+exercise the promoted-macro path as a regression test.
+
 ## Summary
 
 When a stdlib file in `stdlib_files[]` (src/main.c, the compiled-path auto-load
