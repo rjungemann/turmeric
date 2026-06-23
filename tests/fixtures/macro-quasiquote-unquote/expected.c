@@ -5525,7 +5525,7 @@ int main(int argc, char **argv) {
         }
         int64_t __t50;
         {
-            int64_t (*add5)(int64_t) = __fn_1244;
+            int64_t (*add5)(int64_t) = (int64_t (*)(int64_t))(intptr_t)(__fn_1244);
             (void)add5;
             printf("%lld\n", (long long)(((int64_t (*)(int64_t))(intptr_t)add5)(INT64_C(10))));
             int64_t __t51;
