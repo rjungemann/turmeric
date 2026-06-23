@@ -52,6 +52,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 
 ## Getting Started
 
+- **[releases-and-installation-guide.md](releases-and-installation-guide.md)** -- Install `tur`: the `tvm` version manager, prebuilt binaries, Homebrew, Docker, and build-from-source; plus what's in a release tarball
 - **[syntax-guide.md](syntax-guide.md)** -- How to read and write Turmeric: s-expression and sweet-expression syntax, indentation, and a form cheat sheet
 - **[quickstart.md](quickstart.md)** -- Prose introduction: expressions, functions, control flow, Option, Result, collections, closures, structs, and algebraic effects
 - **[repl-tutorial.md](repl-tutorial.md)** -- 22-step interactive tutorial to follow at `tur repl` or the web REPL

@@ -18,9 +18,40 @@ This guide covers two audiences:
 
 ## Installing Turmeric
 
-There are four supported paths today.
+There are five supported paths today. If you expect to switch between
+releases (bisecting a regression, matching a spice's required version),
+the version manager (Option 1) automates the manual prebuilt-binary dance
+of Option 2.
 
-### Option 1: Prebuilt binary from GitHub Releases
+### Option 1: Version manager (`tvm`)
+
+The bundled [Turmeric Version Manager](../../tvm/README.md) installs,
+caches, and switches between releases per-shell -- the `nvm`/`rustup`
+model. Bootstrap it once from a checkout:
+
+```sh
+sh tvm/install.sh        # installs into ~/.tvm and wires up your shell rc
+```
+
+Then, in a new shell:
+
+```sh
+tvm install 0.23.1       # download + SHA-256 verify + cache a prebuilt release
+tvm use 0.23.1           # activate it for this shell
+tvm alias default 0.23.1 # make it the default for new shells
+tvm ls-remote            # list versions available to download
+tvm run 0.17.0 --version # one-shot invoke without switching (great for bisects)
+```
+
+`tvm install` consumes the same GitHub Release tarballs described in
+Option 2, verifies them against the release's `sha256sums.txt`, and
+extracts each version under `~/.tvm/versions/<v>/`. When no prebuilt
+asset exists for a tag (older than the prebuild matrix, or an
+unpublished platform), `tvm install --build <v>` falls back to a CMake
+source build. See [`tvm/README.md`](../../tvm/README.md) for the full
+command set, including `.tur-version` auto-switching.
+
+### Option 2: Prebuilt binary from GitHub Releases
 
 For every tag matching `v*` pushed to the repository, a
 [GitHub Release](https://github.com/rjungemann/turmeric/releases) is
@@ -60,9 +91,9 @@ xattr -d com.apple.quarantine ~/.local/turmeric/tur
 ```
 
 There is no precompiled Intel-Mac (`macos-x86_64`) tarball. Intel-Mac
-users should use Option 2 or Option 3.
+users should use Option 3 or Option 4.
 
-### Option 2: Homebrew (source build)
+### Option 3: Homebrew (source build)
 
 ```sh
 brew install --HEAD rjungemann/turmeric
@@ -83,7 +114,7 @@ There is currently no stable (versioned) Homebrew formula -- only
 `--HEAD`. A pinned `url`/`sha256` stanza will be added once a stable
 release line is established.
 
-### Option 3: Building from source
+### Option 4: Building from source
 
 ```sh
 git clone https://github.com/rjungemann/turmeric.git
@@ -160,7 +191,7 @@ This is a known limitation, tracked in
 resolved, the `--interpret` and library-embedding paths are the
 fully-supported uses of a downloaded release.
 
-### Option 4: Docker
+### Option 5: Docker
 
 The repository ships a [`Dockerfile`](../../Dockerfile) that builds `tur` from
 the local source tree and packages it into a self-contained Ubuntu 22.04 image.

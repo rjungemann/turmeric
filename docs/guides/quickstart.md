@@ -23,6 +23,11 @@ By the end you will have seen: expressions, functions, conditionals, recursion,
 **Web REPL:** open the Try Turmeric page in your browser -- no installation
 needed.
 
+**Don't have `tur` yet?** Install it with the version manager
+(`sh tvm/install.sh` then `tvm install 0.23.1 && tvm use 0.23.1`), or see
+the [Releases and Installation guide](releases-and-installation-guide.md)
+for Homebrew, prebuilt binaries, Docker, and build-from-source.
+
 ---
 
 ## Expressions and naming
