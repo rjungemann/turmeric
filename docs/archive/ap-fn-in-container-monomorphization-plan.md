@@ -153,3 +153,107 @@ Concretely the open work is:
   as a by-value `__spec` clone.
 - Suite-wide `TUR_M3_AUDIT=1` sweep: no new crossings introduced; the
   `ap` carrier base becomes unreferenced for live instances.
+
+## Resolution (2026-06-23) -- the by-value `ap` path already landed; this
+## execution adds the missing regression coverage + disposition, then archives
+
+The implementation work Phases 1-2 describe is **already present in the
+tree** -- it landed (after this plan and its parent were written) with the
+carrier-crossing-recovery-routing chokepoint work (the `#503`-`#505`
+"route value-side carrier<->concrete recovery through one chokepoint"
+series). Attempt #1's failure mode in the archived parent -- the minted
+`__inst_Applicative_ap_Option__spec__Option__int_Option__opaque_Option__int`
+mismatching the call site (`cc: incompatible type for argument 1`) -- is
+gone: the `(some f)` construction now produces `Option__opaque`
+consistently, so the call site and the spec signature agree.
+
+Empirically (all verified by build+run at this commit):
+
+- A genuinely-typed `ff : (Option (fn [int] int))` (NOT erased to int)
+  routes `ap` to a by-value `__spec` clone, never the carrier base:
+  `__inst_Applicative_ap_Option__spec__Option__int_Option__opaque_Option__int(Option__opaque, Option__int)`.
+- It works for a **capturing** closure (`(some (fn [x] (+ x bump)))`), a
+  **non-capturing** top-level fn (`(some inc1)`), and **short-circuits**
+  on a `none` function side or `none` argument side.
+- The result `(Option b)` **grounds from the function element's result
+  type `b`**, not its argument: a `(fn [float] float)` element grounds the
+  spec to `Option__float` (`__spec__Option__float_Option__opaque_Option__float`),
+  returning the correct by-value `Option__float`.
+
+### The as-built representation (the answer to Phase 0)
+
+This is candidate **(a)** -- the existing `Option__<elem>` struct axis --
+with `elem = opaque`, i.e. a `void *` slot. There is no separate
+`Option_Fn__<R>__<A>` shape and no new typed-thunk-element struct.
+
+- **ABI shape.** `Option (fn a b)` lowers by value to
+  `Option__opaque { bool is_some; void *value; }`. The `value` slot holds
+  the wrapped function's **closure environment pointer** (`void *`), whose
+  first field is the typed thunk pointer `tur_thunk_<R>_<A>_t` (the
+  fat-closure env layout). A non-capturing top-level fn flows through the
+  same env-pointer convention.
+- **Construct.** `(some f)` for `f : (fn a b)` lowers to
+  `some__spec__Option__opaque_void__(env_ptr)` -- store the env pointer in
+  the opaque slot. No carrier box.
+- **Destructure / invoke** (inside the by-value `ap __spec` body). Read
+  `(ff).value` as the env pointer, recover the thunk via
+  `*(tur_thunk_<R>_<A>_t *)env`, and call `thunk(env, (fa).value)` through
+  the typed signature -- no carrier box/unbox in the spec body. This is the
+  `phase_f_concrete` invocation at `src/compiler/emit_expr.c:2483-2493`,
+  the same typed-cast pattern the by-value `bind` spec uses.
+- **Name mangling.**
+  `__inst_Applicative_ap_Option__spec__<resultOption>_<ffOption>_<faOption>`,
+  e.g. `..._Option__int_Option__opaque_Option__int`.
+- **Fat-shim interaction.** None added. `make_poly_wrapper` returns the
+  by-value aggregate directly and `ensure_aggregate_spill_shim` excludes
+  carrier-ABI aggregates (see the comment at `emit_expr.c:2470-2482`), so
+  the typed cast matches the wrapper's real return ABI.
+- **Why this satisfies the `make_poly_wrapper`-bridge constraint
+  (`emit_expr.c:2478-2481`).** The wrapped value is a plain env *word*, and
+  the thunk is invoked through the typed cast at the monomorphic call site
+  inside the spec -- the bridge that earlier "produced a wild-pointer
+  deref" is never re-introduced at construct/destructure.
+
+### Residual boundaries (Phase 3 honesty)
+
+Per the parent plan's net-neutral finding, this work does **not** drive
+crossings to zero, and that is expected:
+
+1. **One `carrier->concrete (Option (fn ...))` crossing remains** at the
+   `(some f)` construction site (extracting the fat closure's env into the
+   opaque slot). This is the inherent fat-closure-into-single-word boxing,
+   not removable without a fat container ABI -- out of scope, and exactly
+   the net-neutral the parent documented.
+2. **The `ap` carrier base `__inst_Applicative_ap_Option(int64_t,
+   int64_t)` stays emitted** because the `Applicative` dict's `.ap` slot
+   references it. This is a **legitimately type-erased boundary**: a dict is
+   the polymorphic-dispatch indirection point and must hold the
+   uniform-carrier function pointer. Statically-resolved `ap` calls at a
+   typed fn-in-container no longer reach it.
+
+### What this execution added
+
+- `tests/fixtures/hkt-ap-fn-in-container/` -- the regression coverage the
+  parent plan explicitly noted was missing ("There is no fixture
+  exercising `ap` with a by-value fn-in-container"). It exercises all five
+  cases above and asserts the by-value result values. Sibling
+  `hkt-stdlib-option-result-instances` keeps its deliberate `(:: (fn ...)
+  int)` erasure (carrier-base regression coverage); the new fixture is the
+  by-value counterpart.
+- `bash tests/run.sh` green at **1766 passed, 0 failed** with the new
+  fixture (run with `TUR_SKIP_PARITY_CHECK=1`; see note below).
+
+> **Pre-existing, unrelated gate note.** The TI8 turi-parity ratchet in
+> `tests/run.sh` aborts before fixtures on a clean tree (and on
+> `origin/main`): `EX_CPS_CONT_APP` is in `src/compiler/expr.h` but has no
+> `case` arm in `src/turi/eval.c` and `docs/turi-carve-out.txt` does not
+> exist. This is an in-flight gap in the CPS/turi-parity track, not
+> introduced or touched by this `ap` work, and the documented opt-out
+> (`TUR_SKIP_PARITY_CHECK=1`) is the intended escape hatch. Flagging it so
+> the maintainer can land the carve-out / eval arm on that track.
+
+### Disposition
+
+No compiler change is needed for `ap` by-value monomorphization -- it is
+done. The non-goals (zero crossings, deleting the carrier bridge, other
+Applicative methods) stand. This plan is resolved and archived.
