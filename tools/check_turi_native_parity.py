@@ -20,7 +20,7 @@ This script:
   1. Parses both module lists out of src/main.c.
   2. Computes GAP = compiled-auto-load - interpreter-prelude.
   3. Requires every GAP module to carry a one-line rationale in
-     docs/turi-preload-carve-out.txt.  An undocumented gap fails the build
+     docs/artifacts/turi-preload-carve-out.txt.  An undocumented gap fails the build
      (someone widened the compiled auto-load without teaching the interpreter,
      or without consciously carving it out).
   4. A carve-out entry for a module that is NO LONGER a gap (now preloaded), or
@@ -45,7 +45,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MAIN_C = os.path.join(ROOT, "src", "main.c")
 STDLIB = os.path.join(ROOT, "stdlib")
-CARVE_OUT = os.path.join(ROOT, "docs", "turi-preload-carve-out.txt")
+CARVE_OUT = os.path.join(ROOT, "docs", "artifacts", "turi-preload-carve-out.txt")
 
 
 def read(path):
@@ -107,7 +107,7 @@ def module_public_names(basename):
 
 
 def carve_outs():
-    """Map of carved-out module -> rationale from docs/turi-preload-carve-out.txt.
+    """Map of carved-out module -> rationale from docs/artifacts/turi-preload-carve-out.txt.
     Format: one `module.tur -- rationale` per line; blank / `#` lines ignored."""
     if not os.path.isfile(CARVE_OUT):
         return {}
@@ -139,7 +139,7 @@ def main(argv):
     for m in undocumented:
         errors.append(
             "preload gap %r is not in the interpreter prelude and has no "
-            "carve-out rationale in docs/turi-preload-carve-out.txt" % m
+            "carve-out rationale in docs/artifacts/turi-preload-carve-out.txt" % m
         )
 
     # (4) stale carve-outs: entry for a module that is no longer a gap.
@@ -153,7 +153,7 @@ def main(argv):
         elif m not in gapset:
             errors.append(
                 "stale carve-out %r: it is now in the interpreter prelude "
-                "(remove it from docs/turi-preload-carve-out.txt)" % m
+                "(remove it from docs/artifacts/turi-preload-carve-out.txt)" % m
             )
 
     if errors:

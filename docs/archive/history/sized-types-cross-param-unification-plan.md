@@ -1,5 +1,18 @@
 # Sized Types -- Cross-Parameter Unification Plan
 
+> **Status: RESOLVED (archived).** S1 (cross-parameter unification), S2
+> (propagation through `defstruct`/`defopaque` wrappers and field
+> projections), and S3 (index-preserving polymorphic helpers) are all
+> implemented; the elaborator emits `TUR-E0260` on statically-known
+> cross-parameter / wrapper / projection size mismatches and falls back to
+> the runtime predicates for genuinely dynamic sizes. Coverage lives in
+> `tests/fixtures/sized-*` and `tests/fixtures/errors/sized-*` (accept +
+> reject, including the multi-index `LaMatN` carrier and struct-field-share
+> cases). Docs D1/D2 updated (`sized-types-guide.md`,
+> `compiler-flags-guide.md`, `advanced-type-system-rationale.md`); D3 was a
+> no-op -- the `parametric-type-abi-matrix.md` never carried the "cross-
+> parameter unification deferred" SZ9 row the plan anticipated.
+
 ## Context
 
 The sized-types implementation closed SZ0–SZ9 under the now-archived
@@ -166,5 +179,5 @@ must emit `TUR-E0260` at compile time, not run.
 - [archive/history/sized-types-plan.md](../../archive/history/sized-types-plan.md) -- SZ0–SZ3 runtime layer (already shipped).
 - [archive/history/sized-types-index-spec.md](../../archive/history/sized-types-index-spec.md) -- `SizeTerm` spec; unchanged by this plan.
 - [archive/sized-multi-index-cross-param-no-unify.md](../../archive/sized-multi-index-cross-param-no-unify.md) -- the resolved bug report that named this gap.
-- [drop-x-flags-plan.md](drop-x-flags-plan.md) -- coordinates the flag graduation; this plan removes the last reason `-Xsized-types` still says "Partial" in the guide.
+- [drop-x-flags-plan.md](../../upcoming/v1/drop-x-flags-plan.md) -- coordinates the flag graduation; this plan removes the last reason `-Xsized-types` still says "Partial" in the guide.
 - [docs/guides/sized-types-guide.md](../../guides/sized-types-guide.md) -- user-facing reference.

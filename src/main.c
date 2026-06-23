@@ -5216,7 +5216,7 @@ static int cmd_eval(const char *path, bool use_color,
      * prelude above covers the typed-stdlib core; when TUR_TURI_FULL_PRELUDE=1
      * the interpreter ADDITIONALLY loads the modules the compiled path
      * auto-loads but the interpreter carves out
-     * (docs/turi-preload-carve-out.txt): json, schema.  This makes the
+     * (docs/artifacts/turi-preload-carve-out.txt): json, schema.  This makes the
      * interpreter prelude match the compiled auto-load set so the carved bucket
      * can be iterated/measured fixture-by-fixture under --interpret, without
      * committing the extra parse/elab cost to every run.  Off by default; loaded
