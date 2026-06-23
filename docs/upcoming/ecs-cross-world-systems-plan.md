@@ -13,16 +13,14 @@ That plan resolved D4 as **single-world v1** and deferred cross-world
 systems. This plan picks D4 back up for the post-v1 release. It does
 *not* re-litigate D1-D3 -- they are taken as given.
 
-> **Status 2026-06-11.** v1 prereqs E0-E3 shipped, including the
+> **Status 2026-06-23.** v1 prereqs E0-E3 shipped, including the
 > Phase I cap-gated `defsystem` surface
 > ([`docs/archive/history/ecs-defsystem-write-caps-not-enforced.md`](../../archive/history/ecs-defsystem-write-caps-not-enforced.md)).
 > E4 (the apecs/aztecs comparison writeup) is partial. The raylib
-> demo runs at `../turmeric-spices/spices/ecs-raylib/`. The "wait
-> for a real game's pain points before designing" gating condition
-> is therefore *partially* satisfied -- the raylib demo exists but
-> hasn't been pushed against render-extract patterns yet. Treat
-> this plan as ready-to-design once X0 has at least one real
-> cross-world use case to anchor the surface to.
+> demo runs at `../turmeric-spices/spices/ecs-raylib/`. The prior
+> "wait for a real game's pain points before designing" gate is
+> **considered met** -- proceed to X0 design lock against the
+> motivating use cases enumerated below.
 
 ## Goal
 
@@ -194,9 +192,9 @@ parallelism by proving the systems can't conflict.
 
 ## Phasing
 
-**X0 -- design lock (1 day).** Confirm the syntax against two real
-v1 users -- the raylib demo and one of: render-extract for a scene
-graph, or a client-prediction prototype. Adjust before writing any
+**X0 -- design lock (1 day).** Confirm the syntax against the
+motivating use cases above (render extract, client prediction,
+save snapshots, editor/play split). Adjust before writing any
 elaborator code.
 
 **X1 -- per-world capability keying (3-4 days).** Lift `ecs/cap`'s
