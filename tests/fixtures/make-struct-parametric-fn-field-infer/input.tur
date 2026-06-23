@@ -1,0 +1,28 @@
+;; make-struct-parametric-fn-field-inference:
+;; make-struct on a *parametric* struct must infer the struct's type
+;; parameters even when a parameter appears only inside a fn-typed field.
+;; The inference walk descends into the declared TY_FN and unifies each
+;; arg/result slot against the supplied function value's signature, and the
+;; field's instantiated use-type substitutes those tyvars back in.
+
+;; Repro A -- tyvar appears only inside a fn field; A infers from `inc`.
+(defstruct Endo [A] (run (fn [A] A)))
+(defn inc [x : int] : int (+ x 1))
+
+;; Repro B -- multi-param Lens; S/A infer from get/put rather than default int.
+(defstruct Lens [S A]
+  (get (fn [S] A))
+  (put (fn [S A] S)))
+(defstruct Person :copy [name : cstr age : int])
+(defn name-get [p : Person] : cstr (.name p))
+(defn name-put [p : Person n : cstr] : Person
+  (make-struct Person n (.age p)))
+
+(defn main [] : int
+  (let [e  (make-struct Endo inc)
+        l  (make-struct Lens name-get name-put)
+        p  (make-struct Person "alice" 30)
+        p2 ((.put l) p "bob")]
+    (println ((.get l) p2))     ;; bob   -- put threaded a new name through
+    (println ((.get l) p))      ;; alice -- original untouched
+    ((.run e) 41)))             ;; exit 42 -- Endo's inferred fn field invoked
