@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.23.1` -- value-side carrier<->concrete recovery routed through one chokepoint (#505); Try Turmeric web REPL output fixed.
+**Latest release:** `v0.23.2` -- Turmeric Version Manager (`tvm`) for installing and switching between releases (#511); uniqueness-type inference + stdlib patterns (#513).
 
 ## What
 

@@ -4,6 +4,34 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.23.2] -- 2026-06-23
+
+### Added
+
+- **Turmeric Version Manager (`tvm`) (#511).** Install, use, and switch
+  between Turmeric releases from the command line.
+- **Uniqueness types: UT2 inference + UT3 stdlib patterns (#513).**
+  Inference for uniqueness annotations plus stdlib coverage of the
+  common patterns.
+
+### Changed
+
+- **R2 dispatch-side constraint-var mapping collapsed to a shared kernel
+  (#508).** One audited mapping path instead of per-site variants.
+
+### Fixed
+
+- **`ap` fn-in-container by-value monomorphization (#507).** Regression
+  coverage added; plan archived.
+
+### Internal
+
+- **IT4 close-out: `defdata`-as-union fixture; stale parity-check path
+  fixed (#514).**
+- **Sized-types marked complete; docs and plans archived (#512).**
+- Archived turi-parity-post-v1, HKT dispatch options tradeoff, and
+  turi-interpreter-gap-closure plans (#506, #509, #510).
+
 ## [0.23.1] -- 2026-06-22
 
 ### Fixed
