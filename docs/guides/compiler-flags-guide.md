@@ -10,6 +10,13 @@ This guide covers every `-X` feature flag and diagnostic flag accepted by
 `turc` / `tur`, with status, what each enables, and the dependency graph
 between flags.
 
+> **Deprecation notice (0.23.3).** Every `-X` feature flag listed below
+> becomes an accept-and-warn no-op in **0.24.0** -- the gated features are
+> all unconditionally on, and `-X<name>` will emit `TUR-W0050` instead of
+> enabling anything. Existing `build.tur` files and CI invocations that
+> pass `-X` flags continue to work without modification. See
+> `docs/upcoming/v1/drop-x-flags-plan.md` for the full plan.
+
 ---
 
 ## Quick Reference

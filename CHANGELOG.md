@@ -4,6 +4,19 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.23.3] -- 2026-06-23
+
+### Deprecated
+
+- **All `-X` feature flags will become accept-and-warn no-ops in the next
+  minor release (0.24.0).** Every feature currently gated behind an `-X`
+  flag will be unconditionally on; `-X<name>` will still be recognized for
+  one full minor line and emit `TUR-W0050` instead. Downstream `build.tur`
+  files that pass `-X` flags will continue to compile without modification.
+  See `docs/guides/compiler-flags-guide.md` and
+  `docs/upcoming/v1/drop-x-flags-plan.md` for the full removal list and
+  rationale.
+
 ## [0.23.2] -- 2026-06-23
 
 ### Added

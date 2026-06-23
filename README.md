@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.23.2` -- Turmeric Version Manager (`tvm`) for installing and switching between releases (#511); uniqueness-type inference + stdlib patterns (#513).
+**Latest release:** `v0.23.3` -- deprecation notice: all `-X` feature flags become accept-and-warn no-ops in 0.24.0 (every gated feature will be unconditionally on).
 
 ## What
 
