@@ -469,11 +469,11 @@ defn barrier-wait [barrier]
           retry()
 ```
 
-## Limitations (v1)
+## Limitations
 
-- **No nested transactions:** Calling `atomically` inside `atomically` raises an error. (Haskell allows this; Turmeric v2+ may support it.)
+- **No nested transactions:** Calling `atomically` inside `atomically` raises an error. (Haskell allows this; Turmeric does not.)
 - **No interactive transactions:** Transactions must be pure (no I/O); side effects inside `atomically` may occur multiple times on retry.
-- **Performance:** Lock-based implementation (v1); wait-free or lock-free variants planned for v2+.
+- **Performance:** Lock-based implementation; wait-free or lock-free variants are a future direction.
 
 ## Example: Concurrent Merge Sort
 

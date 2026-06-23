@@ -1,15 +1,13 @@
 ---
 title: Contract Types Guide
 category: Error Handling
-description: Contract types: `{ x : T | p }`, `:pre`/`:post` annotations, FFI contracts (planned v4)
+description: Contract types: `{ x : T | p }`, `:pre`/`:post` annotations, FFI contracts
 ---
 
 # Contract Types Guide
 
-> **Status:** Not yet implemented -- requires `-Xcontracts` flag (planned for v4).
->
-> For runtime contract macros available today (`assert!`, `require!`, `ensure!`, `invariant!`),
-> see [Error Handling Guide](error-handling-guide.md).
+> Contract types are gated behind `-Xcontracts`. For the runtime contract macros
+> (`assert!`, `require!`, `ensure!`, `invariant!`), see [Error Handling Guide](error-handling-guide.md).
 
 Contract types add **runtime-checked predicates** to types as a first-class language feature.
 A contract type `{ x : T | p }` represents values of type `T` that satisfy predicate `p`,

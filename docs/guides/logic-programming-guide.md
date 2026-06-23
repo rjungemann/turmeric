@@ -10,7 +10,7 @@ Implementing miniKanren-style logic programming and constraint solving using clo
 
 ## Overview
 
-Turmeric v2 will support **multi-shot (cloneable) continuations**, enabling backtracking computation. This guide covers the design, use cases, and integration with Turmeric's ownership model.
+Turmeric supports **multi-shot (cloneable) continuations**, enabling backtracking computation. This guide covers the design, use cases, and integration with Turmeric's ownership model.
 
 ## Motivation
 
@@ -24,11 +24,9 @@ Backtracking enables a declarative programming style where the system **automati
 | **Probabilistic Programming** | Bayesian inference | Explore multiple execution paths |
 | **Game AI** | Move exploration | Try strategies, backtrack on failure |
 
-### Current vs. Future
+### One-shot vs. cloneable
 
-**Phase 18 (v1):** Continuations are **one-shot**. Calling `continue k v` consumes `k`, matching Turmeric's ownership model but preventing backtracking.
-
-**Phase 20+ (v2):** **Cloneable continuations** enable multi-shot by requiring all captured values to implement a `Clone` trait.
+Plain delimited continuations are **one-shot**: calling `continue k v` consumes `k`, matching Turmeric's ownership model but preventing backtracking. **Cloneable continuations** enable multi-shot by requiring all captured values to implement a `Clone` trait.
 
 ## Core Abstraction: Cloneable Continuations
 

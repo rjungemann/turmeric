@@ -363,13 +363,13 @@ atomically
     register-commit-defer(nil log-fn)
 ```
 
-## Limitations (v1)
+## Limitations
 
 - **No nested `atomically`:** Calling `atomically` inside `atomically` is an error. Compose by calling `tvar/read`/`tvar/write` directly in nested functions -- they share the caller's transaction context.
 - **Read set limit:** 256 TVars per transaction.
 - **Write set limit:** 128 TVars per transaction.
 - **Defer limit:** 32 defers per transaction.
-- **Global lock (v1):** Phase 20 uses a single global mutex; per-TVar fine-grained locking arrives in Phase 21.
+- **Global lock:** Commits serialize through a single global mutex; per-TVar fine-grained locking is a future direction.
 
 ## Quick Reference
 

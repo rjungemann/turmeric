@@ -10,7 +10,7 @@ Save and resume computations across process boundaries using serializable contin
 
 ## Overview
 
-Turmeric v2 will support **serializable continuations**, enabling suspended computations to be marshalled to bytes, persisted to disk or sent over a network, then resumed in a fresh process. This enables:
+Turmeric supports **serializable continuations**, enabling suspended computations to be marshalled to bytes, persisted to disk or sent over a network, then resumed in a fresh process. This enables:
 
 - Persistent multi-step workflows (pause and resume days later)
 - Distributed task migration (send half-finished computation to another node)
@@ -21,7 +21,7 @@ Turmeric v2 will support **serializable continuations**, enabling suspended comp
 
 ## Core Concept
 
-Phase 18's delimited continuations reify the call stack as a heap-allocated closure chain. Each frame is a struct on the heap. Serialization traverses this chain, emitting a stable encoding, then reconstructs on load.
+Delimited continuations reify the call stack as a heap-allocated closure chain. Each frame is a struct on the heap. Serialization traverses this chain, emitting a stable encoding, then reconstructs on load.
 
 ```turmeric
 ;; Capture a continuation

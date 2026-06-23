@@ -68,9 +68,7 @@ A **fiber** is a user-space thread (lightweight thread) that:
 
 ### Scheduling
 
-**v1 (Phase 20):** Single-threaded scheduler -- all fibers run on one OS thread. Simpler; no data races.
-
-**v2 (Phase 21+):** Multi-threaded scheduler -- fibers run on a thread pool. Higher throughput.
+The scheduler is single-threaded: all fibers run on one OS thread, avoiding data races. A multi-threaded scheduler (fibers on a thread pool) is a future direction.
 
 ## Design Decisions
 
@@ -116,7 +114,7 @@ reset
 
 ### Comparison to Threads
 
-| Feature | Threads (Phase 19) | Async/Await (Phase 20) |
+| Feature | Threads | Async/Await |
 |---------|-------------------|----------------------|
 | **Model** | OS-level 1:1 threads | User-space fibers |
 | **Overhead** | ~10-100μs per thread | ~1μs per fiber |
@@ -206,8 +204,7 @@ inline `(async (fn [] ...))` closure must be `Send`. Non-Send types include:
 
 The compiler enforces this conservatively: **any binding in scope at the
 `await`** is treated as live, whether or not it is actually used after the
-await. This is a 1.0 limitation tracked in Phase CF6 of
-[control-flow-completeness-plan.md](../control-flow-completeness-plan.md).
+await.
 
 ```turmeric no-check
 ;; ERROR TUR-E0022: rc<int> is not Send
