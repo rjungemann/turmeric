@@ -1,0 +1,52 @@
+;; ap-fn-in-container-monomorphization: exercise Applicative `ap` with a
+;; genuine by-value function-in-container argument `ff : (Option (fn [a] b))`.
+;;
+;; The sibling fixture hkt-stdlib-option-result-instances ascribes the wrapped
+;; function to `int` (`(:: (fn ...) int)`), erasing the fn structure so `ff`
+;; collapses to `(Option int)` and `ap` stays on its carrier base.  Here the
+;; `(Option (fn [int] int))` / `(Option (fn [float] float))` type is preserved,
+;; so `ap` monomorphizes to a by-value `__spec` clone that invokes the wrapped
+;; thunk through its typed signature (no carrier box/unbox in the spec body) and
+;; grounds the result `(Option b)` from the function element's result type `b`.
+;; See docs/archive/ap-fn-in-container-monomorphization-plan.md.
+
+(defn inc1 [x : int] : int (+ x 1))
+
+;; int-carrier extractors (Option = { bool is_some; int64_t value; })
+(defn opt-val [o : int] : int
+  ```c struct { bool is_some; int64_t value; } *p = (void*)(intptr_t)o;
+       return (p && p->is_some) ? p->value : -999; ```)
+(defn opt-some? [o : int] : int
+  ```c struct { bool is_some; int64_t value; } *p = (void*)(intptr_t)o;
+       return (p && p->is_some) ? 1 : 0; ```)
+
+;; float-carrier extractor (Option = { bool is_some; double value; }), scaled to
+;; an int so the result-type-grounding case stays printable without float I/O.
+(defn opt-fval-x100 [o : int] : int
+  ```c struct { bool is_some; double value; } *p = (void*)(intptr_t)o;
+       return (p && p->is_some) ? (int64_t)(p->value * 100.0) : -999; ```)
+
+(defn main [] : int
+  ;; capturing closure wrapped in some: ap applies it by value
+  (let [bump 1
+        ff (:: (some (fn [x : int] : int (+ x bump))) (Option (fn [int] int)))
+        fa (:: (some 41) (Option int))]
+    (println (opt-val (ap ff fa))))                                   ; 42
+  ;; non-capturing top-level fn wrapped in some
+  (let [ff (:: (some inc1) (Option (fn [int] int)))
+        fa (:: (some 5) (Option int))]
+    (println (opt-val (ap ff fa))))                                   ; 6
+  ;; none on the function side short-circuits to none
+  (let [ff (:: (none) (Option (fn [int] int)))
+        fa (:: (some 41) (Option int))]
+    (println (opt-some? (ap ff fa))))                                 ; 0
+  ;; none on the argument side short-circuits to none
+  (let [ff (:: (some inc1) (Option (fn [int] int)))
+        fa (:: (none) (Option int))]
+    (println (opt-some? (ap ff fa))))                                 ; 0
+  ;; differing result type: fn is (float -> float), so the result Option grounds
+  ;; to (Option float) from the function element's result, not its argument.
+  (let [ff (:: (some (fn [x : float] : float (+ x 0.5))) (Option (fn [float] float)))
+        fa (:: (some 41.25) (Option float))]
+    (println (opt-fval-x100 (ap ff fa))))                            ; 4175
+  0)
