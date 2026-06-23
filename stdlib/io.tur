@@ -395,7 +395,7 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
 ;;;
 ;;; Since: LT4
 
-(defn file-handle-ok? [fh : FileHandle] : bool
+(defn file-handle-ok? [^borrow fh : FileHandle] : bool
   ```c
   return fh.ptr != NULL;
   ```)
@@ -414,7 +414,7 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
 ;;;
 ;;; Since: LT4
 
-(defn file-read [fh : FileHandle buf : ptr<void> len : int] : int
+(defn file-read [^borrow fh : FileHandle buf : ptr<void> len : int] : int
   ```c
   if (!fh.ptr) return -1;
   return (int)fread(buf, 1, len, (FILE*)fh.ptr);
