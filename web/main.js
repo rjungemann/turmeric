@@ -745,11 +745,13 @@ async function initEditor() {
  * @param {string} promptHtml  HTML for the prompt prefix (e.g. '<span ...>></span>')
  * @param {boolean} showTiming Whether to call updateExecTime and show the loading indicator
  */
-async function executeCode(source, promptHtml, showTiming = false) {
+async function executeCode(source, promptHtml, showTiming = false, echoSource = true) {
     const consoleLoading = showTiming ? document.getElementById('console-loading') : null;
     if (consoleLoading) consoleLoading.style.display = 'flex';
 
-    appendToConsole(`${promptHtml} ${escapeHtml(source)}`);
+    if (echoSource) {
+        appendToConsole(`${promptHtml} ${escapeHtml(source)}`);
+    }
 
     try {
         const startTime = performance.now();
@@ -787,7 +789,7 @@ async function runCode() {
         appendToConsole('<span class="console-error">Error: No code to evaluate</span>');
         return;
     }
-    await executeCode(code, '<span class="console-prompt">></span>', true);
+    await executeCode(code, '', true, false);
 }
 
 /**
