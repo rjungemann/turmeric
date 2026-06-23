@@ -4,6 +4,29 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.24.1] -- 2026-06-23
+
+### Added
+
+- **`ref<T>` auto-drop on scope exit (#519).** Affine `ref<T>` values
+  are now automatically dropped when they go out of scope, removing
+  the manual `(drop! r)` boilerplate previously required.
+- **`TurChannel` session type runtime in codegen preamble (#517).**
+  Session-typed channels now have their supporting runtime emitted as
+  part of the standard codegen preamble.
+- **Spice-level vendored C sources via `:c-sources` / `:c-includes`
+  (#516).** `build.tur` manifests can now declare bundled C source
+  files and include directories that build with the spice.
+
+### Fixed
+
+- **Auto-loaded `defmodule` stdlib macros now promoted to global
+  visibility (#515).** Macros defined inside auto-loaded stdlib
+  modules are visible at the use site without manual re-import.
+- **Always-on session/linear fixtures (#518).** Fixture failures that
+  surfaced when session types and linearity went always-on are
+  resolved.
+
 ## [0.24.0] -- 2026-06-23
 
 ### Changed

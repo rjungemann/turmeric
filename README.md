@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.24.0` -- all `-X` feature flags are now accept-and-warn no-ops; every previously-gated language feature is unconditionally on.
+**Latest release:** `v0.24.1` -- `ref<T>` values now auto-drop on scope exit, and spice manifests can declare vendored C sources (`:c-sources` / `:c-includes`).
 
 ## What
 
