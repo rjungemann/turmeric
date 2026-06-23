@@ -1524,21 +1524,38 @@ Expr *elab_call(Elab *e, Form *call) {
     /* Phase HRT2: existential types */
     if (name == e->sym_pack) return elab_pack(e, call);
     if (name == e->sym_open) return elab_open(e, call);
-    /* SS0b: Session channel operations (-Xsessions) */
+    /* SS0b: Session channel operations (-Xsessions, now always-on).
+     *
+     * always-on-linear-session-fixture-failures (theme 3): with sessions
+     * unconditionally enabled, the value-level ops `send`/`recv`/`close`/...
+     * are no longer behind an opt-in flag, so they intercept calls in
+     * programs that never use session types.  A program is free to define
+     * its own ordinary function named `recv` (e.g. a generic channel
+     * forwarder over a user `defopaque SChan`); that user binding must win
+     * over the keyword.  Gate each value-level op on `!scope_lookup` so a
+     * shadowing user/global binding falls through to normal call resolution
+     * -- the same shadowing discipline already applied to `handler-type`
+     * (above) and `default-of` (below).  Session ops dispatch by pure symbol
+     * identity and have no backing binding, so `scope_lookup` only ever
+     * matches a *user* definition of the name.  The definition/constructor
+     * forms (`defprotocol`, `make-protocol`, `make-session`) are not
+     * function-like and are left unconditional. */
     if (g_sessions_enabled) {
         if (name == e->sym_defprotocol)   return elab_defprotocol(e, call);
         if (name == e->sym_make_protocol) return elab_make_protocol(e, call);
-        if (name == e->sym_send_to)       return elab_send_to(e, call);
-        if (name == e->sym_recv_from)     return elab_recv_from(e, call);
         if (name == e->sym_make_session)  return elab_session_make(e, call);
-        if (name == e->sym_send)          return elab_session_send(e, call);
-        if (name == e->sym_recv)          return elab_session_recv(e, call);
-        /* SS5: close handles both TY_SESSION (binary) and TY_ROLE (multi-party) */
-        if (name == e->sym_close)         return elab_session_close(e, call);
-        if (name == e->sym_offer)         return elab_session_offer(e, call);
-        if (name == e->sym_choose_left)   return elab_session_choose_left(e, call);
-        if (name == e->sym_choose_right)  return elab_session_choose_right(e, call);
-        if (name == e->sym_recv_timeout)  return elab_session_recv_timeout(e, call);
+        if (!scope_lookup(e->scope, name)) {
+            if (name == e->sym_send_to)       return elab_send_to(e, call);
+            if (name == e->sym_recv_from)     return elab_recv_from(e, call);
+            if (name == e->sym_send)          return elab_session_send(e, call);
+            if (name == e->sym_recv)          return elab_session_recv(e, call);
+            /* SS5: close handles both TY_SESSION (binary) and TY_ROLE (multi-party) */
+            if (name == e->sym_close)         return elab_session_close(e, call);
+            if (name == e->sym_offer)         return elab_session_offer(e, call);
+            if (name == e->sym_choose_left)   return elab_session_choose_left(e, call);
+            if (name == e->sym_choose_right)  return elab_session_choose_right(e, call);
+            if (name == e->sym_recv_timeout)  return elab_session_recv_timeout(e, call);
+        }
     }
     /* Phase R2: Panic */
     if (name == e->sym_panic) return elab_panic(e, call);

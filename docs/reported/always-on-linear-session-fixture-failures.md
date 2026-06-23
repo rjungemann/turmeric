@@ -7,6 +7,13 @@ linear/uniqueness/session checking and a pattern the fixture relies on.
 **Severity:** low-medium (5 fixtures; the systemic regressions from the flag
 flip are already fixed -- by-value suite is at 1768 passed, 5 failed).
 
+> **Status (2026-06-23):** Themes 2 and 3 are **resolved** (see the
+> per-theme "Resolution" notes below); the by-value suite is at **1771
+> passed, 2 failed**, the 2 remaining being theme 1 (`ref-explicit-drop`,
+> `ref-if-branch-move-suppression`). Theme 1 is still open. This report
+> stays in `docs/reported/` until theme 1 lands, at which point the whole
+> file moves to `docs/archive/`.
+
 These are grouped because they share a root theme: a discipline that used to
 be opt-in (`-Xlinear`/`-Xsubstructural`/`-Xsessions`) now runs on programs
 that were written without it, and the existing escape hatches do not cover
@@ -66,6 +73,31 @@ Fix direction: either give channel handles shared (rc-like) ownership so they
 can be captured by multiple fibers, or rewrite the fixtures to share via an
 explicit rc/clone. Design call.
 
+**Resolution (2026-06-23):** taken the "rewrite the fixtures to share
+explicitly" path -- no compiler change. The recon below confirmed the
+consuming site is the `::` reinterpret to `ptr<void>` (used to extract the
+raw handle for the worker/closure), not the closure capture itself. Both
+fixtures now extract the non-linear raw `ptr<void>` *once* (consuming the
+fresh linear temp) and reconstruct each owner's own linear handle from that
+raw pointer, so the single underlying channel is freed exactly once by its
+owning side:
+
+- `reactor-fibers-park-chan`: a new borrowing helper
+  `(defn chan-raw [^borrow ch : Chan] : ptr<void>)` yields the raw pointer
+  without consuming `ch`. Main retains sole ownership of `ch` (and frees it
+  once); both fiber closures capture the non-linear `chp` instead. The sender
+  reinterprets `chp` back to a `Chan` for the borrowing `chan-send`.
+- `schan-worker-pool`: `client-call` extracts `rq-raw`/`rs-raw` before
+  building its own linear handles and hands the raw pointers to the worker
+  via `arg`. Each side's non-owning terminal `SClose` handle is discarded
+  with a `(:: handle :int)` reinterpret -- this consumes the must-use linear
+  obligation without emitting a second free.
+
+This is the idiom the report's prereq #3 endorsed; it keeps both fixtures
+exercising real send/recv/close over worker threads. The deeper "shared
+(rc-like) channel ownership" design call is no longer blocking the suite and
+can be taken on its own schedule.
+
 ## 3. `recv` on a session channel with still-abstract type parameters
 
 Fixture: `generic-relay-aggregate-result`.
@@ -84,6 +116,28 @@ handle abstract protocol parameters.
 Fix direction: teach the session-op resolver to accept a `SChan (SRecv ...)`
 type-application with tyvar leaves (treat it parametrically), or defer the
 protocol-shape check until monomorphization.
+
+**Resolution (2026-06-23):** the original diagnosis was off. `SChan`/`SRecv`
+here are the fixture's own `defopaque` types, *not* the builtin session
+constructors -- the value `c` is never a `TY_SESSION`, so no amount of
+parametric-protocol leniency in `session_protocol_of()` would (or should)
+match it. The real cause is **dispatch precedence**: with `-Xsessions` now
+always-on, the value-level keyword `recv` (and `send`/`close`/`offer`/...)
+unconditionally intercepts the call at `elab_call.c` before a user-defined
+`(defn recv ...)` of the same name can resolve. The user's forwarder calls
+its own `recv`, but the session keyword shadowed it.
+
+Fix (`src/compiler/elab_call.c`): gate the value-level session ops on
+`!scope_lookup(e->scope, name)`, so a shadowing user/global binding falls
+through to normal call resolution. This is the exact shadowing discipline
+already used for `handler-type` and `default-of` in the same dispatcher.
+Session ops dispatch by pure symbol identity (no backing binding), so
+`scope_lookup` only ever matches a *user* definition -- existing session
+fixtures (which never shadow these names) are unaffected (69/69 session +
+channel fixtures still green). The definition/constructor forms
+(`defprotocol`, `make-protocol`, `make-session`) are left unconditional.
+One-site change; covers all six value-level ops at once, exactly as the
+recon predicted.
 
 ## Recon notes (2026-06-23) -- answered questions and prereqs
 
