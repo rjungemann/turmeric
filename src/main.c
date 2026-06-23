@@ -2676,6 +2676,31 @@ static char **collect_project_src_files(const char *root, int *n_out) {
  * *out_dirs is a heap array of strdup'd dirs (*out_n entries); the caller
  * frees each string and the array.  Shared by `tur run`, `tur test`, and
  * `tur build <dir>` so all three resolve the include path identically. */
+/* spice-include-dirs-transitive: recurse one level into each dep's manifest
+ * and add its :spices' src/ dirs too.  Walking only direct deps left tourist
+ * unable to resolve `thread-pool/pool` (httpd's dep), even with the workspace
+ * `:members` declaring it -- imports from one spice into another silently
+ * dropped at the first hop.  The visited set is path-keyed to dedupe shared
+ * deps across multiple parents (e.g. httpd + template both pulling json) and
+ * to prevent cycles.  Capacity grows as we go since transitive width is not
+ * bounded by m->n_spices. */
+static bool include_dir_seen(const char **dirs, int n, const char *cand) {
+    for (int i = 0; i < n; i++)
+        if (dirs[i] && strcmp(dirs[i], cand) == 0) return true;
+    return false;
+}
+
+static void grow_include_dirs(const char ***dirs, int *cap, int need) {
+    if (need <= *cap) return;
+    int new_cap = *cap ? *cap * 2 : 8;
+    while (new_cap < need) new_cap *= 2;
+    *dirs = (const char **)realloc(*dirs, (size_t)new_cap * sizeof(char *));
+    *cap = new_cap;
+}
+
+static void collect_dep_dirs_recursive(const char *root, const PkgManifest *m,
+                                       const char ***dirs, int *n, int *cap);
+
 static void resolve_include_dirs_from_manifest(const char *root,
                                                const PkgManifest *m,
                                                bool include_own_src,
@@ -2684,11 +2709,11 @@ static void resolve_include_dirs_from_manifest(const char *root,
     *out_dirs = NULL;
     *out_n    = 0;
 
-    int cap = (include_own_src ? 1 : 0) + m->n_spices;
-    if (cap < 1) cap = 1;
-    const char **dirs = (const char **)malloc((size_t)cap * sizeof(char *));
-    if (!dirs) return;
+    int cap = 0;
+    const char **dirs = NULL;
     int n = 0;
+    grow_include_dirs(&dirs, &cap, (include_own_src ? 1 : 0) + m->n_spices + 8);
+    if (!dirs) return;
 
     if (include_own_src) {
         char own_src[4096];
@@ -2698,6 +2723,16 @@ static void resolve_include_dirs_from_manifest(const char *root,
             dirs[n++] = strdup(own_src);
     }
 
+    collect_dep_dirs_recursive(root, m, &dirs, &n, &cap);
+
+    *out_dirs = dirs;
+    *out_n    = n;
+}
+
+/* Walk every :spices entry in m, resolve its on-disk dir, push its src/ (or
+ * dep_dir) into *dirs (deduped), then recurse into the dep's own manifest. */
+static void collect_dep_dirs_recursive(const char *root, const PkgManifest *m,
+                                       const char ***dirs, int *n, int *cap) {
     char spices_dir[4096];
     snprintf(spices_dir, sizeof(spices_dir), "%s/spices", root);
     for (int i = 0; i < m->n_spices; i++) {
@@ -2735,6 +2770,18 @@ static void resolve_include_dirs_from_manifest(const char *root,
         else if (stat(dep_dir, &ss) == 0 && S_ISDIR(ss.st_mode))
             chosen = dep_dir;
 
+        /* `resolved_root` is the dep's true on-disk package root, used both
+         * for manifest lookup (the recursion's `root`) and for choosing which
+         * include path to push when src/ is not directly present. */
+        char resolved_root[4096];
+        resolved_root[0] = '\0';
+        if (chosen) {
+            /* dep_dir/src exists OR dep_dir itself exists; the package root is
+             * dep_dir.  If chosen == src_sub, strip the trailing "/src" so the
+             * manifest read targets dep_dir, not its src/. */
+            strncpy(resolved_root, dep_dir, sizeof(resolved_root) - 1);
+            resolved_root[sizeof(resolved_root) - 1] = '\0';
+        }
         bool fallback_added = false;
         if (!chosen && s->subdir) {
             char ancestor[4096];
@@ -2748,7 +2795,12 @@ static void resolve_include_dirs_from_manifest(const char *root,
                 snprintf(sib_src, sizeof(sib_src),
                          "%s/%s/src", ancestor, s->subdir);
                 if (stat(sib_src, &ss) == 0 && S_ISDIR(ss.st_mode)) {
-                    dirs[n++] = strdup(sib_src);
+                    grow_include_dirs(dirs, cap, *n + 1);
+                    if (!include_dir_seen(*dirs, *n, sib_src))
+                        (*dirs)[(*n)++] = strdup(sib_src);
+                    snprintf(resolved_root, sizeof(resolved_root),
+                             "%s/%s", ancestor, s->subdir);
+                    chosen = NULL;
                     fallback_added = true;
                     break;
                 }
@@ -2756,18 +2808,35 @@ static void resolve_include_dirs_from_manifest(const char *root,
                 snprintf(sib_dir, sizeof(sib_dir),
                          "%s/%s", ancestor, s->subdir);
                 if (stat(sib_dir, &ss) == 0 && S_ISDIR(ss.st_mode)) {
-                    dirs[n++] = strdup(sib_dir);
+                    grow_include_dirs(dirs, cap, *n + 1);
+                    if (!include_dir_seen(*dirs, *n, sib_dir))
+                        (*dirs)[(*n)++] = strdup(sib_dir);
+                    strncpy(resolved_root, sib_dir, sizeof(resolved_root) - 1);
+                    resolved_root[sizeof(resolved_root) - 1] = '\0';
+                    chosen = NULL;
                     fallback_added = true;
                     break;
                 }
             }
         }
-        if (fallback_added) continue;
-        if (chosen) dirs[n++] = strdup(chosen);
-    }
+        if (chosen) {
+            grow_include_dirs(dirs, cap, *n + 1);
+            if (!include_dir_seen(*dirs, *n, chosen))
+                (*dirs)[(*n)++] = strdup(chosen);
+        }
 
-    *out_dirs = dirs;
-    *out_n    = n;
+        /* Recurse into the dep's own manifest so its :spices contribute their
+         * src/ too.  Use `resolved_root` (the real on-disk package root) for
+         * manifest lookup; `dep_dir` may have :subdir appended to a :path,
+         * yielding a non-existent path when both are set together. */
+        if (!resolved_root[0]) continue;
+        char dmp[4096];
+        if (!pkg_resolve_manifest_path(resolved_root, dmp, sizeof(dmp))) continue;
+        PkgManifest dm; memset(&dm, 0, sizeof(dm));
+        if (!pkg_manifest_read(dmp, &dm)) continue;
+        collect_dep_dirs_recursive(resolved_root, &dm, dirs, n, cap);
+        pkg_manifest_free(&dm);
+    }
 }
 
 /* spices-c-sources-plan: collect a project's vendored C build inputs into two

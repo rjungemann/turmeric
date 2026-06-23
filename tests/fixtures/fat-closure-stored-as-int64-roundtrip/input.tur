@@ -1,0 +1,21 @@
+;; fat-closure ABI audit Phase 4 (2026-06-23): a fat-closure handle that
+;; round-trips through an int64_t carrier slot and is invoked later via
+;; TUR_APPLY1 must preserve its captured environment.  This is the canonical
+;; shape used by tourist's __tourist_route { ...; int64_t handler; }: a
+;; (fn ...) parameter is narrowed to :int for storage, then dispatched
+;; through the fat-closure protocol when the request fires.  If anything in
+;; the chain (codegen, narrowing helper, dispatch macro) silently drops the
+;; env, the captured value collapses to 0 and the test fails loudly.
+
+(defn call-via-int [stored : int x : int] : int
+  ```c
+  return TUR_APPLY1(stored, (int64_t)x);
+  ```)
+
+(defn main [] : int
+  (let [k       7
+        handler (fn [x : int] : int (+ x k))   ;; captures k -> fat box
+        slot    (:: handler :int)]             ;; narrow box ptr to int carrier
+    (println (call-via-int slot 5))            ;; 12
+    (println (call-via-int slot 100)))         ;; 107
+  0)
