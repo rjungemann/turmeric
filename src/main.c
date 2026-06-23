@@ -588,6 +588,123 @@ int tur_collect_symbols(const char *path, LspSymbol *out, int cap,
  * `(reader-macros/define ...)` definition files that are preloaded into
  * the reader's macro registry before the entry file is parsed. Typically
  * derived from the project's `build.tur :reader-macros [...]` entry. */
+/* Auto-loaded stdlib files.  Shared by compile_to_c (single-file) and
+ * compile_to_h / compile_to_implementation (project-mode multi-file) so
+ * spice code in `tur build .` sees `Cons`, `tnil?`, `Option`, etc. without
+ * explicit imports -- matching single-file semantics.  Each TU embeds its
+ * own static copy of stdlib defns; emit_module.c's
+ * `is_from_stdlib`-aware paths static-ify them per TU so multi-TU links
+ * don't see duplicate symbols. */
+static const char *const g_stdlib_autoload_files[] = {
+    "macros.tur",
+    "safe.tur",
+    "contract.tur",
+    "hamt.tur",
+    "typeclass-eq.tur",
+    "typeclass-functor.tur",
+    "typeclass-clone.tur",
+    "typeclass-hash.tur",
+    "typeclass-applicative.tur",
+    "typeclass-alternative.tur",
+    "typeclass-monad.tur",
+    "typeclass-monaderror.tur",
+    "typeclass-bifunctor.tur",
+    "map.tur",
+    "vec.tur",
+    "slice.tur",
+    "option.tur",
+    "result.tur",
+    "pair.tur",
+    "tuple.tur",
+    "list.tur",
+    "grid.tur",
+    "zipper.tur",
+    "set.tur",
+    "mutmap.tur",
+    "json.tur",
+    "schema.tur",
+    "sym.tur",
+    "unique.tur",
+    NULL
+};
+
+/* Read every stdlib file in g_stdlib_autoload_files into `arena`/`st`, then
+ * prepend the resulting forms onto `*forms_in_out` (growing the array via a
+ * fresh arena allocation).  Updates `*nforms_in_out` and the running
+ * `*file_id_in_out` counter.  Returns the count of prepended stdlib forms
+ * (which the caller passes to `elaborate_program` as `stdlib_prefix`) so the
+ * elab loop can bracket those forms with `in_stdlib_load = true` and the
+ * binding records get `is_from_stdlib` set -- the same flag the
+ * separate-compilation emit path keys off to static-ify stdlib defns per
+ * TU.  `entry_path` is the user-visible input file: used by the suffix-skip
+ * rule for `--no-auto-stdlib` builds where the entry file IS one of the
+ * stdlib files (everything from that file onward is skipped). */
+static uint32_t prepend_stdlib_forms(Arena *arena, SymbolTable *st,
+                                     const char *entry_path,
+                                     Form ***forms_in_out,
+                                     uint32_t *nforms_in_out,
+                                     uint8_t *file_id_in_out) {
+    int no_stdlib_skip_from = -1;
+    if (g_no_auto_stdlib) {
+        const char *input_base = basename_of(entry_path);
+        for (int j = 0; g_stdlib_autoload_files[j] != NULL; j++) {
+            if (strcmp(input_base, g_stdlib_autoload_files[j]) == 0) {
+                no_stdlib_skip_from = j;
+                break;
+            }
+        }
+    }
+
+    uint32_t total = 0;
+    Form **all = NULL;
+    for (int i = 0; g_stdlib_autoload_files[i] != NULL; i++) {
+        if (no_stdlib_skip_from >= 0 && i >= no_stdlib_skip_from) continue;
+        char path_buf[4096];
+        tur_stdlib_path(g_stdlib_autoload_files[i], path_buf, sizeof(path_buf));
+        char *stdlib_src = NULL;
+        size_t stdlib_len = 0;
+        if (read_entire_file_quiet(path_buf, &stdlib_src, &stdlib_len) != 0)
+            continue;
+
+        char *src_copy = (char *)arena_alloc(arena, stdlib_len);
+        memcpy(src_copy, stdlib_src, stdlib_len);
+        char *path_copy = (char *)arena_alloc(arena, strlen(path_buf) + 1);
+        memcpy(path_copy, path_buf, strlen(path_buf) + 1);
+
+        SourceFile *stdlib_file = (SourceFile *)arena_alloc(arena, sizeof(SourceFile));
+        *stdlib_file = (SourceFile){0};
+        stdlib_file->path = path_copy;
+        stdlib_file->src = src_copy;
+        stdlib_file->len = stdlib_len;
+        stdlib_file->file_id = (*file_id_in_out)++;
+        stdlib_file->reader_type = READER_TURMERIC;
+        diag_register_file(stdlib_file);
+
+        uint32_t n = 0;
+        Form **fs = read_all(arena, st, stdlib_file, &n);
+        if (fs && n > 0) {
+            Form **new_all = (Form **)arena_alloc(arena,
+                (total + n) * sizeof(Form *));
+            for (uint32_t j = 0; j < total; j++) new_all[j] = all[j];
+            for (uint32_t j = 0; j < n; j++) new_all[total + j] = fs[j];
+            all = new_all;
+            total += n;
+        }
+        free(stdlib_src);
+    }
+
+    if (all && total > 0) {
+        Form **out = (Form **)arena_alloc(arena,
+            (*nforms_in_out + total) * sizeof(Form *));
+        for (uint32_t i = 0; i < total; i++) out[i] = all[i];
+        for (uint32_t i = 0; i < *nforms_in_out; i++)
+            out[total + i] = (*forms_in_out)[i];
+        *forms_in_out = out;
+        *nforms_in_out += total;
+    }
+    return total;
+}
+
 static int compile_to_c(const char *path, Buf *out_c,
                          const char **include_dirs, int n_include_dirs,
                          const char **reader_macro_paths,
@@ -648,189 +765,14 @@ static int compile_to_c(const char *path, Buf *out_c,
     Form **forms = read_all_with_registry(&arena, &st, &file,
                                           &reader_macros_reg, &nforms);
 
-    /* Phase 7: Load standard library files */
-    /* For now, load them in a specific order to ensure dependencies are met */
-    /* Note: option, result, slice, str, vec, test use inline C with malloc/free
-     * which causes type mismatches when compiled into every file.
-     * They're deferred until Phase 11 when :ptr<T> support is added.
-     * For Phase 7, we load only macros.tur which contains when/unless macros. */
-    /* Basenames only — resolved at use time via $TUR_STDLIB_DIR (else "stdlib"). */
-    const char *stdlib_files[] = {
-        "macros.tur",
-        "safe.tur",
-        /* args.tur is NOT auto-loaded to avoid injecting ~400 lines of args
-         * parser stubs into every compiled program.  Load it explicitly with
-         * (load "stdlib/args.tur") when args/spec-* functions are needed. */
-        /* Phase C1: runtime contracts - auto-load contract.tur for assert!/require!/ensure!/invariant! */
-        "contract.tur",
-        /* Phase P3: HAMT lowering - auto-load hamt.tur. */
-        "hamt.tur",
-        /* "gen.tur" - GF2 generator stdlib; not auto-loaded to avoid polluting
-         * all programs.  Load explicitly with (load "stdlib/gen.tur"). */
-        /* "vec.tur" - has typeclass dependencies, not auto-loaded */
-        /* Phase PTC4: typeclass-eq.tur defines only the Eq class skeleton so that
-         * typed-collection definstances (Eq[Vec], Eq[Map], etc.) have Eq in scope.
-         * The full typeclass.tur (with all primitive instances) remains on-demand. */
-        "typeclass-eq.tur",
-        /* Phase TS5: typeclass-functor.tur defines the Functor class stub so that
-         * rc.tur and other typed-collection modules can declare
-         * (definstance Functor [...]) without importing typeclass.tur. */
-        "typeclass-functor.tur",
-        /* Phase B1: typeclass-clone.tur defines the Clone class stub so that
-         * ref.tur can declare (definstance Clone [...]) without importing
-         * typeclass.tur. */
-        "typeclass-clone.tur",
-        /* Phase GHE0: typeclass-hash.tur declares the Hash class stub plus its
-         * primitive instances (int/bool/cstr/float32) so that map.tur and the
-         * #map{...}/hamt-of lowering can resolve (Hash K) constraints for
-         * content-keyed maps without importing typeclass.tur.  Loaded before
-         * map.tur, which conceptually requires Hash[K]. */
-        "typeclass-hash.tur",
-        /* stdlib-hkt-consolidation T1: Applicative / Alternative / Monad /
-         * Bifunctor class stubs preloaded (before option.tur / result.tur) so
-         * those type modules can declare their HKT instances without importing
-         * the full typeclass.tur. defclass is idempotent, so loading the full
-         * typeclass.tur on demand coexists with these stubs. Preloaded classes
-         * emit no code into a program that never uses them. */
-        "typeclass-applicative.tur",
-        "typeclass-alternative.tur",
-        "typeclass-monad.tur",
-        /* stdlib-hkt-consolidation T4: MonadError stub for the ok-biased
-         * Result instances (throw-error / catch-error). */
-        "typeclass-monaderror.tur",
-        "typeclass-bifunctor.tur",
-        /* Phase TM0/TC1/TC2/F5: typed parameterized collection stdlib files
-         * (now under unprefixed module names). */
-        "map.tur",
-        "vec.tur",
-        "slice.tur",
-        "option.tur",
-        "result.tur",
-        "pair.tur",
-        /* Phase TP1: N-ary tuple stdlib (Tuple2..Tuple5). */
-        "tuple.tur",
-        "list.tur",
-        "grid.tur",
-        "zipper.tur",
-        "set.tur",
-        /* Phase F5 (cross-plan-followups): mutable open-addressed hash table. */
-        "mutmap.tur",
-        /* JR0 (json-reader-macro-plan): json.tur backs the #json(...) reader
-         * macro's tagged-node lowering.  Only loaded when -Xjson-reader is on
-         * (skipped below otherwise) so default builds and their codegen
-         * snapshots are unaffected. */
-        "json.tur",
-        /* RD (return-type-dispatch-and-schema plan): schema.tur backs the
-         * #json-str<T>(...) reader family's decode! lowering.  Only loaded
-         * when -Xschema-reader is on (skipped below otherwise) so default
-         * builds and their codegen snapshots are unaffected. */
-        "schema.tur",
-        /* SYM4 (runtime-symbols-plan): sym.tur provides sym->str / sym=? over the
-         * first-class :Sym runtime type.  Only auto-loaded under -Xsymbols
-         * (skipped below otherwise) so default builds and their codegen
-         * snapshots are unaffected. */
-        "sym.tur",
-        /* UT3 (uniqueness-types-ut2-ut3-plan): unique.tur provides the
-         * with-unique / consume / replace pattern forms over the ^unique
-         * discipline.  Only auto-loaded under -Xunique-types (skipped below
-         * otherwise) so default builds and their codegen snapshots are
-         * unaffected. */
-        "unique.tur",
-        /* Phase T19-C/D stdlib files (mutex, rwlock, condvar, sync, thread, chan,
-         * atomic) are NOT auto-loaded here to avoid polluting every program's
-         * generated C and invalidating codegen snapshots.  They are library files
-         * usable via `tur build <dir>` when placed next to user code, matching the
-         * pattern established by stdlib/atomic.tur.  An explicit `require` or
-         * module mechanism (planned post-T21) will provide auto-loading later. */
-        NULL
-    };
-
-    uint32_t total_stdlib_forms = 0;
-    Form **all_stdlib_forms = NULL;
+    /* Phase 7: prepend stdlib autoload forms.  Shared with compile_to_h via
+     * prepend_stdlib_forms so project-mode builds see the same stdlib API
+     * (Cons / Option / Result / typeclass stubs / etc.) that single-file
+     * builds do.  See docs/archive/project-mode-no-stdlib-autoload.md. */
     uint8_t file_id = 1;
-
-    /* Suffix-skip: when --no-auto-stdlib is set, pre-compute the index of the
-     * input file in stdlib_files[].  The auto-load loop then skips that entry
-     * and all subsequent entries.  Files before it still load so the input
-     * file's transitive dependencies are available.  -1 means no skip. */
-    int no_stdlib_skip_from = -1;
-    if (g_no_auto_stdlib) {
-        const char *input_base = basename_of(path);
-        for (int j = 0; stdlib_files[j] != NULL; j++) {
-            if (strcmp(input_base, stdlib_files[j]) == 0) {
-                no_stdlib_skip_from = j;
-                break;
-            }
-        }
-    }
-
-    for (int i = 0; stdlib_files[i] != NULL; i++) {
-        /* Suffix-skip: skip this file and all subsequent auto-loads when the
-         * input file IS one of the auto-loaded ones.  Earlier entries still
-         * load so the input's transitive dependencies resolve. */
-        if (no_stdlib_skip_from >= 0 && i >= no_stdlib_skip_from)
-            continue;
-        char path_buf[4096];
-        tur_stdlib_path(stdlib_files[i], path_buf, sizeof(path_buf));
-        char *stdlib_src = NULL;
-        size_t stdlib_len = 0;
-        /* SN2: use the quiet reader so a missing stdlib file does not
-         * spam stderr on every invocation.  If the stdlib root is
-         * mis-configured the downstream compile will fail with an
-         * actionable error (missing symbols / module not found). */
-        if (read_entire_file_quiet(path_buf, &stdlib_src, &stdlib_len) == 0) {
-            /* strdup the source so it lives in the arena and won't be freed prematurely */
-            char *src_copy = (char *)arena_alloc(&arena, stdlib_len);
-            memcpy(src_copy, stdlib_src, stdlib_len);
-
-            /* Path also needs to live in the arena since SourceFile stores a pointer. */
-            char *path_copy = (char *)arena_alloc(&arena, strlen(path_buf) + 1);
-            memcpy(path_copy, path_buf, strlen(path_buf) + 1);
-
-            /* Allocate a fresh SourceFile per stdlib file — each must have its
-             * own stable arena address since diag and reader store pointers.  */
-            SourceFile *stdlib_file = (SourceFile *)arena_alloc(&arena, sizeof(SourceFile));
-            *stdlib_file = (SourceFile){0};
-            stdlib_file->path = path_copy;
-            stdlib_file->src = src_copy;
-            stdlib_file->len = stdlib_len;
-            stdlib_file->file_id = file_id++;
-            stdlib_file->reader_type = READER_TURMERIC;  /* Stdlib is always plain s-exprs */
-            diag_register_file(stdlib_file);
-
-            uint32_t stdlib_nforms = 0;
-            Form **stdlib_forms = read_all(&arena, &st, stdlib_file, &stdlib_nforms);
-
-            if (stdlib_forms && stdlib_nforms > 0) {
-                /* Append to all_stdlib_forms */
-                Form **new_all = (Form **)arena_alloc(&arena, 
-                    (total_stdlib_forms + stdlib_nforms) * sizeof(Form *));
-                for (uint32_t j = 0; j < total_stdlib_forms; j++) {
-                    new_all[j] = all_stdlib_forms[j];
-                }
-                for (uint32_t j = 0; j < stdlib_nforms; j++) {
-                    new_all[total_stdlib_forms + j] = stdlib_forms[j];
-                }
-                all_stdlib_forms = new_all;
-                total_stdlib_forms += stdlib_nforms;
-            }
-            free(stdlib_src);
-        }
-    }
-    
-    /* Prepend stdlib forms to user forms */
-    if (all_stdlib_forms && total_stdlib_forms > 0) {
-        Form **all_forms = (Form **)arena_alloc(&arena, 
-            (nforms + total_stdlib_forms) * sizeof(Form *));
-        for (uint32_t i = 0; i < total_stdlib_forms; i++) {
-            all_forms[i] = all_stdlib_forms[i];
-        }
-        for (uint32_t i = 0; i < nforms; i++) {
-            all_forms[total_stdlib_forms + i] = forms[i];
-        }
-        forms = all_forms;
-        nforms += total_stdlib_forms;
-    }
+    uint32_t total_stdlib_forms = prepend_stdlib_forms(&arena, &st, path,
+                                                       &forms, &nforms,
+                                                       &file_id);
 
     int rc = 0;
     if (!forms || diag_had_error()) {
@@ -886,38 +828,19 @@ static Form **load_project_prelude(Arena *arena, SymbolTable *st,
                                     uint32_t *stdlib_count_out) {
     *stdlib_count_out = 0;
 
-    static const char *prelude_files[] = {
-        "macros.tur",
-        /* spice-defn-return-result-kind-mismatch: also preload the typed
-         * parametric stdlib so that project-mode (build/emit-h/emit-c-to-dir)
-         * has Result/Option/Pair/Tuple/etc. registered with their proper
-         * arrow kinds. Without this, a spice declaring `: (Result A B)` at
-         * defn return-type position hits TUR-E0012 because Result resolves
-         * through the "unknown name -> opaque struct, kind *" fallback.
-         *
-         * Codegen note: bindings created during this prelude window are
-         * marked `is_from_stdlib`. emit_implementation already skips
-         * non-exported stdlib bindings; exported ones (`ok`, `ok-val`,
-         * `make-struct Result ...`) are static-or-inline-C wrappers so
-         * link-safe duplication mirrors how `emit_closure_fat_runtime`
-         * already emits its fixed runtime per module .c. */
-        "safe.tur",
-        "hamt.tur",
-        "typeclass-eq.tur",
-        "typeclass-functor.tur",
-        "typeclass-clone.tur",
-        "typeclass-hash.tur",
-        "typeclass-applicative.tur",
-        "typeclass-alternative.tur",
-        "typeclass-monad.tur",
-        "typeclass-monaderror.tur",
-        "typeclass-bifunctor.tur",
-        "option.tur",
-        "result.tur",
-        "pair.tur",
-        "tuple.tur",
-        NULL
-    };
+    /* The prelude IS the project-mode stdlib auto-load: every file the
+     * single-file compile_to_c path loads (g_stdlib_autoload_files) is
+     * preloaded here in the same order, so `(Cons A)` / `tnil?` /
+     * `Option`/`Result` etc. are visible inside spice defmodule bodies
+     * built via `tur build .` without explicit imports.  See
+     * docs/archive/project-mode-no-stdlib-autoload.md.
+     *
+     * Codegen note: bindings created during this prelude window are
+     * marked `is_from_stdlib`. emit_implementation skips non-exported
+     * stdlib bindings; exported ones (`ok`, `ok-val`,
+     * `make-struct Result ...`) are static-or-inline-C wrappers so the
+     * per-TU duplication mirrors `emit_closure_fat_runtime`. */
+    const char *const *prelude_files = g_stdlib_autoload_files;
 
     uint32_t total = 0;
     Form **all = NULL;
@@ -1059,6 +982,7 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
     free(src);
     return rc;
 }
+/* compile_to_implementation follows. */
 
 /* Compile a .tur file to a C implementation (.c). Returns 0 on success.
  * RP1: when `out_manifest` is non-NULL, append one exports.manifest line

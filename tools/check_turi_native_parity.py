@@ -70,7 +70,7 @@ def _module_array(src, header_regex):
 
 def compiled_autoload():
     src = read(MAIN_C)
-    return _module_array(src, r"const char\s*\*stdlib_files\[\]")
+    return _module_array(src, r"static const char\s*\*const g_stdlib_autoload_files\[\]")
 
 
 def interpreter_prelude():

@@ -1,9 +1,30 @@
 ---
-status: open
+status: resolved
+resolved: 2026-06-23
 severity: high
 discovered: 2026-06-23
 discovered-by: tourist-build-investigation
+fix: src/main.c g_stdlib_autoload_files + load_project_prelude
 ---
+
+## Resolution (2026-06-23)
+
+Implemented fix-sketch option 1 with a twist: rather than adding stdlib
+loading to `compile_to_h`, the simpler shape was to lift `stdlib_files[]`
+to file scope as `g_stdlib_autoload_files[]` and point the already-existing
+`load_project_prelude` (which compile_to_h / compile_to_implementation
+already call) at the same array.
+
+So project-mode now preloads the same 29 stdlib files single-file mode
+does. Bindings carry `is_from_stdlib`, which `emit_module.c:9044` keys off
+to emit each stdlib defn as `static` per TU — no duplicate-symbol link
+errors. Main suite delta: 0 regressions (1606/183 → 1606/183).
+
+Verified: the report's minimal repro builds clean (`tur build .` on a spice
+using `(Cons A)` / `tnil?` in a `defmodule`); `../turmeric-spices/spices/json`
+builds clean too. Tourist still has separate downstream issues
+(`tls.tur` compile error in httpd, transitive header generation not
+chained) — outside this report's scope.
 
 # Project-mode (`tur build .`) does not auto-load stdlib
 
