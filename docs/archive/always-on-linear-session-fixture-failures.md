@@ -7,11 +7,11 @@ linear/uniqueness/session checking and a pattern the fixture relies on.
 **Severity:** low-medium (5 fixtures; the systemic regressions from the flag
 flip are already fixed -- by-value suite is at 1768 passed, 5 failed).
 
-> **Status (2026-06-23):** All three themes are now **resolved** -- themes
-> 2 and 3 in PR #518 (explicit channel sharing; abstract-typed session
-> ops), theme 1 here (ref<T> deref/auto-drop). See the per-theme
-> "Resolution" notes below. With all three landed this report is ready to
-> move to `docs/archive/`.
+> **Status (2026-06-23):** All three themes are **resolved** -- themes 2
+> and 3 in PR #518 (explicit channel sharing; abstract-typed session ops),
+> theme 1 in PR #519 (ref<T> deref/auto-drop). See the per-theme
+> "Resolution" notes below. By-value suite is at **1773 passed, 0 failed**.
+> Archived now that all three have landed.
 
 These are grouped because they share a root theme: a discipline that used to
 be opt-in (`-Xlinear`/`-Xsubstructural`/`-Xsessions`) now runs on programs
