@@ -295,3 +295,5 @@ manually) can write to.
 - [httpd-tls-guide.md](httpd-tls-guide.md) -- HTTPS termination via `tur-tls`
 - [reactor-guide.md](reactor-guide.md) -- the event loop the listener runs on
 - [threading-guide.md](threading-guide.md) -- the `Mutex<Queue>` worker dispatch primitive
+- `turmeric-spices/spices/ws-client/` -- client-side WebSocket spice (shipped, v0.1.0)
+- [websocket-server-plan.md](../upcoming/v1/websocket-server-plan.md) -- `ws-server` spice plan; upgrades an httpd connection to a WebSocket session

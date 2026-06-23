@@ -277,6 +277,7 @@ dispatch to `tls-write`/`tls-read` vs. plain `send`/`recv` accordingly.
 
 ## See Also
 
-- [websocket-server-plan.md](websocket-server-plan.md) -- server-side WebSocket upgrade
+- [websocket-server-plan.md](../upcoming/v1/websocket-server-plan.md) -- server-side WebSocket upgrade (`ws-server` spice; planned)
+- `turmeric-spices/spices/ws-client/` -- shipped client-side spice (v0.1.0)
 - [httpd-guide.md](../guides/httpd-guide.md) -- HTTP/1.1 server
 - [httpd-tls-guide.md](../guides/httpd-tls-guide.md) -- TLS layer
