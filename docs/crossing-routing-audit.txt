@@ -7,6 +7,8 @@
 # and add a matching row to the audit tables in the plan doc.
 emit_abi_assert_routed_concrete emit_core.c 1
 emit_abi_assert_routed_concrete emit_expr.c 1
+emit_abi_constraint_var_bindings emit_core.c 1
+emit_abi_constraint_var_bindings emit_module.c 1
 emit_abi_fn_value_signature emit_module.c 1
 emit_dispatch_tyvar emit_core.c 1
 emit_dispatch_tyvar emit_module.c 1

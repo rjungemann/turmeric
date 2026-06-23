@@ -46,6 +46,7 @@ CHOKEPOINTS = [
     # dispatch side
     "emit_reresolve_disp_type",
     "emit_dispatch_tyvar",
+    "emit_abi_constraint_var_bindings",
     # fn-value side
     "emit_abi_fn_value_signature",
     # R3 gate (the runtime enforcement these call sites lean on)

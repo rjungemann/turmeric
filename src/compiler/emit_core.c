@@ -1253,6 +1253,22 @@ bool emit_dispatch_tyvar(const Expr *call, Type *out) {
     return false;
 }
 
+uint8_t emit_abi_constraint_var_bindings(const TypeClassInstance *inst,
+                                         const Type *elems, uint8_t n_elems,
+                                         AbiTypeBinding *out, uint8_t cap) {
+    if (!inst || !elems || !out) return 0;
+    uint8_t n = 0;
+    for (uint8_t ci = 0; ci < inst->n_type_param_constraints && n < cap; ci++) {
+        const TypeConstraint *tc = &inst->type_param_constraints[ci];
+        if (!tc->tyvar || !tc->tyvar->name) continue;
+        if (tc->param_idx < 0 || (uint8_t)tc->param_idx >= n_elems) continue;
+        out[n].name = tc->tyvar->name;
+        out[n].type = elems[tc->param_idx];
+        n++;
+    }
+    return n;
+}
+
 bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
                               Type *out_resolved, const Expr **out_dict) {
     if (!ctx || !ctx->current_abi_specialization || !call ||
@@ -1431,13 +1447,18 @@ bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
         Type recv = ctx->current_abi_specialization->bindings[0].type;
         StructDef *rsd = NULL; Type rargs[16]; uint8_t rn = 0;
         if (type_extract_struct_app(&recv, &rsd, rargs, &rn)) {
-            for (uint8_t ci = 0; ci < inst->n_type_param_constraints; ci++) {
-                const TypeConstraint *tc_c = &inst->type_param_constraints[ci];
-                if (!tc_c->tyvar || !tc_c->tyvar->name) continue;
-                if (strcmp(tc_c->tyvar->name, resolved.as.tyvar_.name) != 0) continue;
-                if (tc_c->param_idx < 0 || (uint8_t)tc_c->param_idx >= rn) break;
-                resolved = rargs[tc_c->param_idx];
-                break;
+            /* Route the param_idx->element mapping through the shared chokepoint
+             * kernel (struct-strict extraction stays here), then pick the entry
+             * naming this still-unbound constraint var. */
+            AbiTypeBinding cb[ABI_TYPE_BINDINGS_MAX];
+            uint8_t ncb = emit_abi_constraint_var_bindings(inst, rargs, rn, cb,
+                                                           ABI_TYPE_BINDINGS_MAX);
+            for (uint8_t ci = 0; ci < ncb; ci++) {
+                if (cb[ci].name &&
+                    strcmp(cb[ci].name, resolved.as.tyvar_.name) == 0) {
+                    resolved = cb[ci].type;
+                    break;
+                }
             }
         }
     }
