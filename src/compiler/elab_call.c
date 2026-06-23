@@ -827,7 +827,6 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
  * known, returns false so the call elaborates normally and the existing runtime
  * assertion guards it -- the checker never silently accepts (SZ7.3). */
 static bool sz7_static_size_violation(Elab *e, const Form *call, const Symbol *name) {
-    if (!g_sized_types_enabled) return false;
     const char *fn = name->name;
     bool is_eq = (strcmp(fn, "size-assert-eq!") == 0);
     bool is_le = (strcmp(fn, "size-assert-le!") == 0);
@@ -867,7 +866,7 @@ static bool sz7_static_size_violation(Elab *e, const Form *call, const Symbol *n
  * Inference is purely additive metadata -- erased in codegen. */
 static SizeTerm *sz8_infer_ctor_size_index(Elab *e, const CtorDef *ctor,
                                            Expr *call_expr) {
-    if (!g_sized_types_enabled || !ctor || !ctor->adt || !ctor->adt->is_gadt)
+    if (!ctor || !ctor->adt || !ctor->adt->is_gadt)
         return NULL;
     const AdtDef *adt = ctor->adt;
     const Form *rt = ctor->result_type_form;
@@ -908,7 +907,7 @@ static SizeTerm *sz8_infer_ctor_size_index(Elab *e, const CtorDef *ctor,
 /* SZ8: true when `ctor` is a size-indexed GADT constructor (its return type
  * carries a Size expression in some argument position). */
 static bool sz8_ctor_is_sized(Elab *e, const CtorDef *ctor) {
-    if (!g_sized_types_enabled || !ctor || !ctor->adt || !ctor->adt->is_gadt)
+    if (!ctor || !ctor->adt || !ctor->adt->is_gadt)
         return false;
     const Form *rt = ctor->result_type_form;
     if (!rt || rt->tag != F_LIST || rt->as.list.len < 2) return false;
@@ -1005,7 +1004,6 @@ static SizeTerm *sz_first_size_term(Elab *e, const Form *tform) {
 static bool sz_cross_param_unify(Elab *e, const Form *call,
                                  const Type *fn_type, Binding *fn_binding,
                                  Expr **args, uint32_t n_args) {
-    if (!g_sized_types_enabled) return false;
     if (!fn_type || fn_type->kind != TY_FN) return false;
     if (!fn_type->as.fn.param_type_forms) return false;
     /* Skip closure-thunk hidden-env shift; the param_type_forms array was
@@ -1540,22 +1538,20 @@ Expr *elab_call(Elab *e, Form *call) {
      * matches a *user* definition of the name.  The definition/constructor
      * forms (`defprotocol`, `make-protocol`, `make-session`) are not
      * function-like and are left unconditional. */
-    if (g_sessions_enabled) {
-        if (name == e->sym_defprotocol)   return elab_defprotocol(e, call);
-        if (name == e->sym_make_protocol) return elab_make_protocol(e, call);
-        if (name == e->sym_make_session)  return elab_session_make(e, call);
-        if (!scope_lookup(e->scope, name)) {
-            if (name == e->sym_send_to)       return elab_send_to(e, call);
-            if (name == e->sym_recv_from)     return elab_recv_from(e, call);
-            if (name == e->sym_send)          return elab_session_send(e, call);
-            if (name == e->sym_recv)          return elab_session_recv(e, call);
-            /* SS5: close handles both TY_SESSION (binary) and TY_ROLE (multi-party) */
-            if (name == e->sym_close)         return elab_session_close(e, call);
-            if (name == e->sym_offer)         return elab_session_offer(e, call);
-            if (name == e->sym_choose_left)   return elab_session_choose_left(e, call);
-            if (name == e->sym_choose_right)  return elab_session_choose_right(e, call);
-            if (name == e->sym_recv_timeout)  return elab_session_recv_timeout(e, call);
-        }
+    if (name == e->sym_defprotocol)   return elab_defprotocol(e, call);
+    if (name == e->sym_make_protocol) return elab_make_protocol(e, call);
+    if (name == e->sym_make_session)  return elab_session_make(e, call);
+    if (!scope_lookup(e->scope, name)) {
+        if (name == e->sym_send_to)       return elab_send_to(e, call);
+        if (name == e->sym_recv_from)     return elab_recv_from(e, call);
+        if (name == e->sym_send)          return elab_session_send(e, call);
+        if (name == e->sym_recv)          return elab_session_recv(e, call);
+        /* SS5: close handles both TY_SESSION (binary) and TY_ROLE (multi-party) */
+        if (name == e->sym_close)         return elab_session_close(e, call);
+        if (name == e->sym_offer)         return elab_session_offer(e, call);
+        if (name == e->sym_choose_left)   return elab_session_choose_left(e, call);
+        if (name == e->sym_choose_right)  return elab_session_choose_right(e, call);
+        if (name == e->sym_recv_timeout)  return elab_session_recv_timeout(e, call);
     }
     /* Phase R2: Panic */
     if (name == e->sym_panic) return elab_panic(e, call);
@@ -2061,7 +2057,7 @@ Expr *elab_call(Elab *e, Form *call) {
          * builtins never take unique ownership, so don't consume them. */
         if (args[i]->kind == EX_VAR && type_is_move(args[i]->as.var.binding->type)) {
             Binding *arg_b2 = args[i]->as.var.binding;
-            bool arg_is_unique_mut = g_unique_enabled && arg_b2->is_unique && arg_b2->is_mut;
+            bool arg_is_unique_mut = arg_b2->is_unique && arg_b2->is_mut;
             if (!arg_is_unique_mut) {
                 binding_mark_moved(arg_b2, args[i]->span);
             }
@@ -2835,7 +2831,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
          * by hand (below), bypassing the shared var-use consumption path, so
          * account for linearity here: invoking a ^linear k marks it consumed, and
          * a second invocation is a use-after-consume (TUR-E0101). */
-        if (g_linear_enabled && fn_binding->is_linear) {
+        if (fn_binding->is_linear) {
             if (fn_binding->is_linear_consumed) {
                 diag_emit_with_code(DIAG_ERROR, call->span,
                                     TUR_E0101_LINEAR_USE_AFTER_CONSUME,
@@ -3597,7 +3593,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         }
         /* IT4: Union type subtyping — accept a value of type A where (A | B) is expected.
          * Wrap the argument with EX_UNION_INJECT so emit.c produces TUR_TAG(idx, val). */
-        if (!arg_ok && g_union_types_enabled && expected_arg_kind == TY_UNION) {
+        if (!arg_ok && expected_arg_kind == TY_UNION) {
             uint32_t fn_arg_idx3 = i;
             if (fn_binding->closure_fn_binding) fn_arg_idx3 = i + 1;
             if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types &&
@@ -3625,13 +3621,13 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             }
         }
         /* IT1: Widening — accept a member type where the expected union matches. */
-        if (!arg_ok && g_union_types_enabled && args[i]->type.kind == TY_UNION &&
+        if (!arg_ok && args[i]->type.kind == TY_UNION &&
             expected_arg_kind == TY_UNION) {
             arg_ok = (args[i]->type.kind == expected_arg_kind);
         }
         /* IT3: Intersection elimination — accept a value of intersection type (A & B)
          * where any single member type is expected.  (A & B) <: A and (A & B) <: B. */
-        if (!arg_ok && g_intersection_types_enabled &&
+        if (!arg_ok &&
             args[i]->type.kind == TY_INTERSECTION) {
             Type *isect_t = &args[i]->type;
             for (uint8_t im = 0; im < isect_t->as.intersection_.n_members; im++) {
@@ -3644,7 +3640,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         }
         /* IT3: Intersection introduction check — function expects (A & B), arg must
          * satisfy all members.  Emit TUR_E0351 for the first unsatisfied member. */
-        if (!arg_ok && g_intersection_types_enabled && expected_arg_kind == TY_INTERSECTION) {
+        if (!arg_ok && expected_arg_kind == TY_INTERSECTION) {
             uint32_t fn_arg_idx5 = fn_binding->closure_fn_binding ? i + 1 : i;
             if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types &&
                 fn_arg_idx5 < fn_type.as.fn.arity) {
@@ -3699,8 +3695,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
          * Wrap with EX_UNION_INJECT (via the shared coercion helper) using the
          * TypeKind of the value as the tag, so (type-of) and (cast) can retrieve
          * it at runtime.  TY2.2: by-value structs are heap-boxed by the helper. */
-        if (!arg_ok && (g_union_types_enabled || g_intersection_types_enabled) &&
-            expected_arg_kind == TY_ANY) {
+        if (!arg_ok && expected_arg_kind == TY_ANY) {
             arg_ok = true;
             args[i] = elab_coerce_to_any(e, args[i]);
         }
@@ -3709,7 +3704,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
          * verify that their arg_linear flags match.  This catches attempts to
          * pass a (-> T R) function where (-> ^linear T R) is required (or vice
          * versa) in higher-order call positions. */
-        if (arg_ok && g_linear_enabled &&
+        if (arg_ok &&
             expected_arg_kind == TY_FN && args[i]->type.kind == TY_FN) {
             uint32_t fn_arg_idx_lt2 = fn_binding->closure_fn_binding ? i + 1 : i;
             if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types &&
@@ -3741,7 +3736,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
          * value/result kinds must be compatible (FH4.1 relation: set-equality +
          * TY_UNKNOWN wildcards). The declared handler type is threaded into
          * arg_full_types by PH1.1. */
-        if (arg_ok && g_effect_types_enabled &&
+        if (arg_ok &&
             expected_arg_kind == TY_HANDLER && args[i]->type.kind == TY_HANDLER) {
             uint32_t fn_arg_idx_h = fn_binding->closure_fn_binding ? i + 1 : i;
             if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types &&
@@ -3757,8 +3752,8 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             /* Phase 8: Enhanced type mismatch with error code */
             /* IT1: Use union-specific error code when union type is involved */
             DiagCode err_code = TUR_E0001_TYPE_MISMATCH;
-            if (g_union_types_enabled && (expected_arg_kind == TY_UNION ||
-                                           args[i]->type.kind == TY_UNION)) {
+            if (expected_arg_kind == TY_UNION ||
+                args[i]->type.kind == TY_UNION) {
                 err_code = TUR_E0300_UNION_TYPE_MISMATCH;
             }
             /* Compute expected type for the diagnostic.
@@ -4095,7 +4090,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         }
 
         /* UT1: TUR_E0200 -- reject aliased value passed to ^unique parameter */
-        if (g_unique_enabled && fn_type.kind == TY_FN &&
+        if (fn_type.kind == TY_FN &&
             i < fn_type.as.fn.arity && fn_type.as.fn.arg_unique[i] &&
             args[i]->kind == EX_VAR) {
             Binding *arg_b = args[i]->as.var.binding;
@@ -4118,7 +4113,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         /* UT2: Reject argument passed to ^unique ^mut param when active borrows exist.
          * A ^unique ^mut parameter requires exclusive mutable access; any live borrow
          * (&T or &mut T) on the same binding would violate that guarantee. */
-        if (g_unique_enabled && fn_type.kind == TY_FN &&
+        if (fn_type.kind == TY_FN &&
             i < fn_type.as.fn.arity && fn_type.as.fn.arg_unique_mut[i] &&
             args[i]->kind == EX_VAR) {
             Binding *arg_b = args[i]->as.var.binding;
@@ -4141,9 +4136,9 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
          *    since the binding is a mutable unique cell that may be freely read. */
         if (args[i]->kind == EX_VAR && type_is_move(args[i]->as.var.binding->type)) {
             Binding *arg_b2 = args[i]->as.var.binding;
-            bool param_is_unique_mut = g_unique_enabled && fn_type.kind == TY_FN &&
+            bool param_is_unique_mut = fn_type.kind == TY_FN &&
                 i < fn_type.as.fn.arity && fn_type.as.fn.arg_unique_mut[i];
-            bool arg_is_unique_mut = g_unique_enabled && arg_b2->is_unique && arg_b2->is_mut;
+            bool arg_is_unique_mut = arg_b2->is_unique && arg_b2->is_mut;
             /* LB1: a ^borrow parameter reads its argument without taking
              * ownership, so it must NOT move (poison) the binding -- otherwise a
              * move-typed (e.g. :affine) handle could not be read by a borrowing
@@ -4174,12 +4169,12 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             if (fn_borrow_idx < fn_type.as.fn.arity &&
                     fn_type.as.fn.arg_borrow[fn_borrow_idx]) {
                 Binding *arg_b3 = args[i]->as.var.binding;
-                if (g_linear_enabled && arg_b3->is_linear) {
+                if (arg_b3->is_linear) {
                     arg_b3->is_linear_consumed = false;
                 }
                 /* Substructural affine: undo the single use the var-use path
                  * recorded so the borrow does not spend the at-most-once budget. */
-                if (g_substructural_enabled && arg_b3->is_affine
+                if (arg_b3->is_affine
                         && arg_b3->usage_state == USAGE_USED_ONCE) {
                     arg_b3->usage_state = USAGE_UNUSED;
                 }

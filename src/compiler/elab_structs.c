@@ -903,7 +903,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
                     }
                 }
             }
-            if (g_linear_enabled && is_copy && typekind_default_copy_kind(fkind) == CK_LINEAR) {
+            if (is_copy && typekind_default_copy_kind(fkind) == CK_LINEAR) {
                 diag_emit_with_code(DIAG_ERROR, field_type_form->span,
                                     TUR_E0102_LINEAR_COPY,
                                     "cannot copy linear field '%s' -- "
@@ -1011,7 +1011,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
             /* LT1: E0102 -- linear fields cannot appear in :copy structs.
              * A field of type lref<T> (CK_LINEAR) makes the struct non-copyable,
              * which is incompatible with :copy semantics. :move structs may hold lref<T>. */
-            if (g_linear_enabled && is_copy && typekind_default_copy_kind(fkind) == CK_LINEAR) {
+            if (is_copy && typekind_default_copy_kind(fkind) == CK_LINEAR) {
                 diag_emit_with_code(DIAG_ERROR, field_type_form->span,
                                     TUR_E0102_LINEAR_COPY,
                                     "cannot copy linear field '%s' -- "
@@ -1957,9 +1957,8 @@ static Type *adt_field_type_from_form(Arena *arena, const Form *ft_form,
  * Codegen is identical to defdata (tagged union).
  */
 Expr *elab_defgadt(Elab *e, const Form *call) {
-    /* range-gadt-typeclass-migration-plan A1: GADTs are enabled by default
-     * (g_gadt_enabled defaults true), so the former -Xgadt gate is gone.
-     * -Xsized-types still implies GADTs; both are on unconditionally now. */
+    /* range-gadt-typeclass-migration-plan A1: GADTs are enabled by default,
+     * so the former -Xgadt gate is gone. */
     if (call->as.list.len < 3) {
         diag_emit(DIAG_ERROR, call->span,
                   "defgadt requires a name, type-params, and constructors: "
@@ -2402,7 +2401,7 @@ Expr *elab_coerce(Elab *e, const Form *call) {
      * Reinterpreting a Session endpoint at a different protocol step would
      * strand the linear resource; the Equal witness is insufficient to make
      * this safe without full protocol equality checking (SS3+). */
-    if (g_sessions_enabled && x->type.kind == TY_SESSION) {
+    if (x->type.kind == TY_SESSION) {
         diag_emit(DIAG_ERROR, call->span,
                   "coerce cannot reinterpret a session channel endpoint; "
                   "use session operations (send/recv/close/...) to advance the protocol");
@@ -2531,7 +2530,7 @@ Expr *elab_match(Elab *e, const Form *call) {
     /* IT1: Union type match — when scrutinee is TY_UNION, handle type-narrowing patterns.
      * Pattern syntax: (varname : TypeName) or bare _ / variable for wildcard.
      * Returns early via the union match path. */
-    if (g_union_types_enabled && scrutinee->type.kind == TY_UNION) {
+    if (scrutinee->type.kind == TY_UNION) {
         Type *union_t = &scrutinee->type;
         uint8_t n_members = union_t->as.union_.n_members;
 
@@ -2678,7 +2677,7 @@ Expr *elab_match(Elab *e, const Form *call) {
     /* SS2: Session offer match — when scrutinee is TY_SESSION_OFFER, handle
      * Left/Right branch patterns.  The scrutinee carries the tag as int64_t
      * and keeps the channel pointer in val_exprs[0] for arm binding. */
-    if (g_sessions_enabled && scrutinee->type.kind == TY_SESSION_OFFER) {
+    if (scrutinee->type.kind == TY_SESSION_OFFER) {
         MatchArm *arms = (MatchArm *)arena_alloc(e->arena, n_arms * sizeof(MatchArm));
         Type result_type = TYPE_UNKNOWN;
         const Symbol *sym_left  = intern_cstr(e->st, "Left");
@@ -2934,13 +2933,11 @@ Expr *elab_match(Elab *e, const Form *call) {
     uint32_t n_match_lin = 0;
     bool **arm_lin_states = NULL;
     bool *arm_diverges = NULL;
-    if (g_linear_enabled) {
-        n_match_lin = linear_state_snapshot_bindings(e->scope, &match_lin_bindings,
-                                                     &match_lin_before);
-        if (n_match_lin > 0) {
-            arm_lin_states = (bool **)calloc(n_arms, sizeof(bool *));
-            arm_diverges   = (bool  *)calloc(n_arms, sizeof(bool));
-        }
+    n_match_lin = linear_state_snapshot_bindings(e->scope, &match_lin_bindings,
+                                                 &match_lin_before);
+    if (n_match_lin > 0) {
+        arm_lin_states = (bool **)calloc(n_arms, sizeof(bool *));
+        arm_diverges   = (bool  *)calloc(n_arms, sizeof(bool));
     }
 
     for (uint32_t ai = 0; ai < n_arms; ai++) {
@@ -2971,7 +2968,7 @@ Expr *elab_match(Elab *e, const Form *call) {
             }
             /* No new scope needed; elaborate body directly */
             /* LT1: Restore outer linear state before this arm's body. */
-            if (g_linear_enabled && n_match_lin > 0) {
+            if (n_match_lin > 0) {
                 linear_state_restore(match_lin_bindings, match_lin_before, n_match_lin);
             }
             bool _s_wc = e->in_match_arm; e->in_match_arm = true;
@@ -2979,7 +2976,7 @@ Expr *elab_match(Elab *e, const Form *call) {
             e->in_match_arm = _s_wc;
             if (!body) { free(covered); return NULL; }
             /* LT1: Capture outer linear state after this arm's body. */
-            if (g_linear_enabled && n_match_lin > 0) {
+            if (n_match_lin > 0) {
                 arm_lin_states[ai] = linear_state_capture_current(match_lin_bindings, n_match_lin);
                 arm_diverges[ai] = (body->type.kind == TY_NEVER) ||
                                    (body->kind == EX_RETURN) ||
@@ -3196,7 +3193,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                     fb->is_fat = true;
                 }
                 /* LT1: Propagate linearity from the field's type to its binding */
-                if (g_linear_enabled && ftype.copy_kind == CK_LINEAR) {
+                if (ftype.copy_kind == CK_LINEAR) {
                     fb->is_linear = true;
                 }
                 scope_add(&arm_scope, fb);
@@ -3204,7 +3201,7 @@ Expr *elab_match(Elab *e, const Form *call) {
             }
 
             /* LT1: Restore outer linear state before this arm's body. */
-            if (g_linear_enabled && n_match_lin > 0) {
+            if (n_match_lin > 0) {
                 linear_state_restore(match_lin_bindings, match_lin_before, n_match_lin);
             }
             bool _s_ctor = e->in_match_arm; e->in_match_arm = true;
@@ -3240,7 +3237,7 @@ Expr *elab_match(Elab *e, const Form *call) {
             e->g2_current_ctor = saved_ctor;
             /* LT1: Verify all linear field bindings in this arm were consumed */
             bool lt1_arm_fail = false;
-            if (g_linear_enabled && body) {
+            if (body) {
                 for (uint32_t bi2 = 0; bi2 < n_bindings; bi2++) {
                     Binding *fb2 = pat->bindings[bi2];
                     if (fb2->is_linear && !fb2->is_linear_consumed && !fb2->is_moved) {
@@ -3254,7 +3251,7 @@ Expr *elab_match(Elab *e, const Form *call) {
             }
             /* ST1: Verify all relevant field bindings in this arm were used */
             bool st1_arm_fail = false;
-            if (g_substructural_enabled && body) {
+            if (body) {
                 for (uint32_t bi2 = 0; bi2 < n_bindings; bi2++) {
                     Binding *fb2 = pat->bindings[bi2];
                     if (fb2->is_relevant && fb2->usage_state == USAGE_UNUSED && !fb2->is_moved) {
@@ -3364,7 +3361,7 @@ Expr *elab_match(Elab *e, const Form *call) {
             arms[ai].guard = guard_expr;
             if (result_type.kind == TY_UNKNOWN) result_type = body->type;
             /* LT1: Capture outer linear state after this arm's body. */
-            if (g_linear_enabled && n_match_lin > 0) {
+            if (n_match_lin > 0) {
                 arm_lin_states[ai] = linear_state_capture_current(match_lin_bindings, n_match_lin);
                 arm_diverges[ai] = (body->type.kind == TY_NEVER) ||
                                    (body->kind == EX_RETURN) ||
@@ -3380,7 +3377,7 @@ Expr *elab_match(Elab *e, const Form *call) {
     }
 
     /* LT1: Verify consistent outer-scope linear consumption across match arms */
-    if (g_linear_enabled && n_match_lin > 0 && arm_lin_states) {
+    if (n_match_lin > 0 && arm_lin_states) {
         /* Find the first non-diverging arm as the reference. */
         int ref_ai = -1;
         for (uint32_t ai = 0; ai < n_arms; ai++) {
@@ -3416,12 +3413,12 @@ Expr *elab_match(Elab *e, const Form *call) {
         free(match_lin_before);
         free(match_lin_bindings);
         if (!lin_ok) { free(covered); return NULL; }
-    } else if (g_linear_enabled) {
+    } else {
         /* linear_state_snapshot_bindings always allocates its buffers (cap=16),
          * even when the outer scope holds no linear bindings (n_match_lin == 0).
          * The merge block above only frees them when n_match_lin > 0, so free
          * the snapshot here to avoid a LeakSanitizer-visible leak on every match
-         * elaborated with -Xlinear-types and no outer linear bindings. */
+         * with no outer linear bindings. */
         free(match_lin_before);
         free(match_lin_bindings);
     }
@@ -3759,7 +3756,7 @@ Expr *elab_borrow_immut(Elab *e, const Form *call) {
          * of the owner is still valid.  With substructural/linear checking
          * now always-on, omitting this turns `(& r)` ... `(drop! r)` into a
          * spurious use-after-consume (TUR-E0101). */
-        if (g_linear_enabled && target->is_linear)
+        if (target->is_linear)
             target->is_linear_consumed = false;
     }
 
@@ -3825,7 +3822,7 @@ Expr *elab_borrow_mut(Elab *e, const Form *call) {
         }
         /* LT1: a mutable borrow is also a non-consuming read -- undo the
          * linear-consume the inner EX_VAR applied (see elab_borrow_immut). */
-        if (g_linear_enabled && target->is_linear)
+        if (target->is_linear)
             target->is_linear_consumed = false;
     }
     

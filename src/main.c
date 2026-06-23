@@ -768,18 +768,6 @@ static int compile_to_c(const char *path, Buf *out_c,
          * load so the input's transitive dependencies resolve. */
         if (no_stdlib_skip_from >= 0 && i >= no_stdlib_skip_from)
             continue;
-        /* JR0: json.tur is only auto-loaded under -Xjson-reader (see array). */
-        if (!g_json_reader_enabled && strcmp(stdlib_files[i], "json.tur") == 0)
-            continue;
-        /* SYM4: sym.tur is only auto-loaded under -Xsymbols (see array). */
-        if (!g_symbols_enabled && strcmp(stdlib_files[i], "sym.tur") == 0)
-            continue;
-        /* UT3: unique.tur is only auto-loaded under -Xunique-types (see array). */
-        if (!g_unique_enabled && strcmp(stdlib_files[i], "unique.tur") == 0)
-            continue;
-        /* RD: schema.tur is only auto-loaded under -Xschema-reader (see array). */
-        if (!g_schema_reader_enabled && strcmp(stdlib_files[i], "schema.tur") == 0)
-            continue;
         char path_buf[4096];
         tur_stdlib_path(stdlib_files[i], path_buf, sizeof(path_buf));
         char *stdlib_src = NULL;
@@ -5331,13 +5319,11 @@ static int cmd_eval(const char *path, bool use_color,
             buf_write(&src, pb, strlen(pb));
             buf_write(&src, "\")\n", 3);
         }
-        if (g_symbols_enabled) {
-            char pb[4096];
-            tur_stdlib_path("sym.tur", pb, sizeof(pb));
-            buf_write(&src, "(load \"", 7);
-            buf_write(&src, pb, strlen(pb));
-            buf_write(&src, "\")\n", 3);
-        }
+        char pb[4096];
+        tur_stdlib_path("sym.tur", pb, sizeof(pb));
+        buf_write(&src, "(load \"", 7);
+        buf_write(&src, pb, strlen(pb));
+        buf_write(&src, "\")\n", 3);
         buf_putc(&src, '\0');  /* turi_eval calls strlen; NUL-terminate */
         TuriValue sv = turi_eval(env, src.data);
         (void)sv;
@@ -5371,13 +5357,13 @@ static int cmd_eval(const char *path, bool use_color,
             buf_free(&src);
         }
     }
-    /* JR0 (turi-json-schema-interpreter-plan, Layer 1): -Xjson-reader auto-loads
-     * json.tur so the #json(...) reader-macro lowering's json node
-     * constructors (and json/encode|decode|type|get accessors) resolve under
-     * --interpret.  The loaded inline-C bodies are overridden by the layout-exact
-     * natives registered in wk_register_json_natives below.  Skipped when the
-     * opt-in full prelude already loaded json.tur (avoids a redefinition). */
-    if (g_json_reader_enabled && !turi_full_prelude_enabled()) {
+    /* JR0 (turi-json-schema-interpreter-plan, Layer 1): auto-load json.tur so
+     * the #json(...) reader-macro lowering's json node constructors (and
+     * json/encode|decode|type|get accessors) resolve under --interpret.  The
+     * loaded inline-C bodies are overridden by the layout-exact natives
+     * registered in wk_register_json_natives below.  Skipped when the opt-in
+     * full prelude already loaded json.tur (avoids a redefinition). */
+    if (!turi_full_prelude_enabled()) {
         char pb[4096];
         tur_stdlib_path("json.tur", pb, sizeof(pb));
         char load_form[4200];
@@ -5385,12 +5371,11 @@ static int cmd_eval(const char *path, bool use_color,
         TuriValue sv = turi_eval(env, load_form);
         (void)sv;
     }
-    /* RD (Layer 2): -Xschema-reader (which also sets g_json_reader_enabled)
-     * auto-loads schema.tur on top of json.tur so the #json-str<T>(...) typed
-     * decode reader family resolves; the inline-C schema engine is overridden by
-     * wk_register_schema_natives below.  Skipped when the full prelude already
-     * loaded schema.tur. */
-    if (g_schema_reader_enabled && !turi_full_prelude_enabled()) {
+    /* RD (Layer 2): auto-load schema.tur on top of json.tur so the
+     * #json-str<T>(...) typed decode reader family resolves; the inline-C
+     * schema engine is overridden by wk_register_schema_natives below.  Skipped
+     * when the full prelude already loaded schema.tur. */
+    if (!turi_full_prelude_enabled()) {
         char pb[4096];
         tur_stdlib_path("schema.tur", pb, sizeof(pb));
         char load_form[4200];
@@ -5445,9 +5430,8 @@ static int cmd_eval(const char *path, bool use_color,
     wk_register_proc_fs_natives(env);
     /* R1: serial.tur Serializable int/bool instances (loaded on demand). */
     wk_register_serial_natives(env);
-    /* SYM (turi): first-class :Sym ops, only when -Xsymbols loaded sym.tur. */
-    if (g_symbols_enabled)
-        wk_register_sym_natives(env);
+    /* SYM (turi): first-class :Sym ops over the auto-loaded sym.tur. */
+    wk_register_sym_natives(env);
     /* SEQ (turi): lazy-Seq bridges over turi_call + generator advance.  The seq
      * modules are loaded on demand by user code; the natives override the
      * inline-C bodies. */
@@ -11947,7 +11931,6 @@ int main(int argc, char **argv) {
             i--;
         } else if (strcmp(argv[i], "--keep-contracts") == 0) {
             /* CT3: keep contract checks in release builds */
-            g_contracts_enabled = true;
             g_keep_contracts_in_release = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];

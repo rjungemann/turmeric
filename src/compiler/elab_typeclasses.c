@@ -4880,7 +4880,7 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                      * binding as moved so a second extraction of the same field triggers
                      * TUR_E0005 (use-after-move).  :linear struct receivers are already
                      * handled by the F_SYM is_linear_consumed path above. */
-                    if (g_linear_enabled && def->fields[i].kind == TY_LREF &&
+                    if (def->fields[i].kind == TY_LREF &&
                             obj->kind == EX_VAR && type_is_move(obj->as.var.binding->type)) {
                         binding_mark_moved(obj->as.var.binding, call->span);
                     }
