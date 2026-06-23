@@ -6,6 +6,41 @@ description: Eliminate the last source of unbounded C recursion in the tree-walk
 
 # Turi stackless native re-entry (full CEK / driver-CPS) -- Plan
 
+## Status update -- 2026-06-23 (N2)
+
+**N2 has landed.** The plan's original N2 target (the inline-C `^fat`/`TUR_APPLY*`
+HOF apply, e.g. a native `option-map`) no longer exists in the interpreter:
+`option-map` & co. migrated to pure-Turmeric bodies (Track A), and inline-C
+function-pointer apply is an unsupported TI7 carve-out under `--interpret`. So
+the *current* residual unbounded C-recursion is not native HOF re-entry but the
+driver's black-box `default:` forms -- concretely **`EX_GET_FIELD`** (field
+accessors like `.value`/`.is-some`/`.v`), which `eval_drive_ex` routed through
+`eval_expr`, black-boxing the receiver's whole subtree. Because the canonical
+HOF idiom unwraps its result through a field accessor
+(`(.value (option-map (some n) callback))`), recursion threaded through that
+accessor C-recursed and tripped the `eval_depth` guard at ~hundreds of levels.
+
+N2 moves that recursion onto the heap by modeling `EX_GET_FIELD` in the driver:
+
+- New `DK_GET_FIELD` `DriveKind`: descend the receiver on the work-stack
+  (non-tail), then apply the field extraction when its value returns.
+- Field-extraction logic (the int64-carrier ABI + TuriStruct cases) factored
+  into a shared `get_field_extract(e, sv)` used by both `eval_expr_impl`'s
+  recursive `EX_GET_FIELD` and the new `DK_GET_FIELD` continuation.
+- `ws_capturable` is left conservative (a get-field whose receiver may perform
+  still forces the fiber path), so a `DK_GET_FIELD` never coexists with a
+  capturable `DK_PROMPT` slice -- no clone/capture interaction.
+
+Result: the option-map self-recursion probe now runs **heap-bounded at 1e6**
+with the guard never tripping (was: "recursion limit exceeded" at ~hundreds of
+levels). New regression test in `tests/turi/eval-tco.{tur,sh}` (`fld-sum 99999`,
+the `tur_eval_tco` ctest) -- verified to FAIL on the pre-N2 binary and pass now.
+`bash tests/run.sh` (1780/0), eval/sandbox/STM ctests, and the `run-turi`
+baseline failure set (23, byte-identical) are all unchanged. The `eval_depth`
+guard stays (retires in N4); this phase used an ordinary driver continuation,
+not the `DK_NATIVE_RESUME` protocol -- get-field is a pure receiver-then-extract
+form, no native re-entry involved.
+
 ## Status update -- 2026-06-23
 
 **N1 (protocol scaffold) has landed.** The work-stack resume protocol is in

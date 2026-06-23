@@ -4027,6 +4027,10 @@ typedef enum {
     DK_CALL_RET,     /* EX_CALL (T3.2b): non-tail turi-body callee, body in the loop */
     DK_PROMPT,       /* EX_HANDLE (DC): delimited-control prompt; aux = HandleExpr*,
                       * frame = handler lexical frame, index = active flag (1/0). */
+    DK_GET_FIELD,    /* SR N2: EX_GET_FIELD receiver evaluated on the work-stack;
+                      * expr = the EX_GET_FIELD, applied via get_field_extract when
+                      * the receiver value returns.  Folds recursion that flows
+                      * through a field accessor (e.g. option-map's .value). */
     DK_NATIVE_RESUME,/* SR (turi-cek-stackless-reentry): a native/special-form HOF
                       * suspended onto the work-stack while the driver applies a
                       * closure on its behalf.  aux = NativeResume* (resume fn +
@@ -4204,6 +4208,42 @@ static TuriValue tvar_modify_resume(TuriEnv *env, void *state, TuriValue applied
     }
     free(s);
     return *out;
+}
+
+/* Extract field `e->as.get_field_.field_idx` from an already-resolved receiver
+ * value `sv` (an EX_GET_FIELD whose struct_expr has been evaluated).  Shared by
+ * eval_expr_impl's recursive EX_GET_FIELD and the driver's DK_GET_FIELD
+ * continuation so the work-stack path folds the receiver instead of black-boxing
+ * it through eval_expr (SR N2).  Handles both the int64 carrier ABI (Option /
+ * Result flowing as :int, incl. the NULL "none"/err-less carrier) and a real
+ * TuriStruct. */
+static TuriValue get_field_extract(const Expr *e, TuriValue sv) {
+    uint32_t idx = e->as.get_field_.field_idx;
+    if (sv.tag == TURI_INT) {
+        if (sv.as_int == 0) {
+            /* NULL carrier: a none Option / err-less Result.  A field read is the
+             * by-value body's tag probe; hand back the field type's zero. */
+            switch (e->type.kind) {
+            case TY_BOOL: return turi_bool(false);
+            case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32: return turi_float(0.0);
+            default: return turi_int(0);
+            }
+        }
+        int64_t w = ((int64_t *)(intptr_t)sv.as_int)[idx];
+        switch (e->type.kind) {
+        case TY_BOOL:  return turi_bool(w != 0);
+        case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32: {
+            double d; memcpy(&d, &w, sizeof(d)); return turi_float(d);
+        }
+        default: return turi_int(w);
+        }
+    }
+    if (sv.tag != TURI_STRUCT)
+        return turi_errorf("eval: field access on non-struct (tag %d)", sv.tag);
+    if (idx >= sv.as_struct->n_fields)
+        return turi_errorf("eval: field index %u out of bounds (%u fields)",
+                           idx, sv.as_struct->n_fields);
+    return sv.as_struct->fields[idx];
 }
 
 /* Conservative "does evaluating e synchronously perform an effect?" -- returns
@@ -4951,6 +4991,17 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 cur = v; descending = false;
                 break;
             }
+            case EX_GET_FIELD: {
+                /* SR N2: descend the receiver on the work-stack (non-tail) so
+                 * recursion threaded through a field accessor stays heap-bounded
+                 * -- the option-map/.value blocker.  DK_GET_FIELD applies the
+                 * field extraction when the receiver value returns. */
+                DRIVE_PUSH(((DriveCont){ .kind = DK_GET_FIELD, .expr = control,
+                                         .frame = cf }));
+                control = control->as.get_field_.struct_expr;
+                tail = false;   /* receiver is non-tail */
+                break;          /* keep descending */
+            }
             case EX_TVAR_MODIFY: {
                 /* SR N1: read-modify-write via the work-stack resume protocol.
                  * Read old, then ask the driver to apply fn(old) -- when it
@@ -5301,6 +5352,14 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 env->current_module = top->saved_module;
                 env->in_no_unwind   = top->was_no_unwind;
                 len--;   /* pop; propagate cur (value or signal) */
+                break;
+            }
+            case DK_GET_FIELD: {
+                /* SR N2: the receiver evaluated to `cur`; extract the field.
+                 * On a control signal (error/return/throw) propagate untouched. */
+                if (signaled) { len--; break; }
+                cur = get_field_extract(top->expr, cur);
+                len--;
                 break;
             }
             case DK_NATIVE_RESUME: {
@@ -5872,48 +5931,17 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
 
     case EX_GET_FIELD: {
-        TuriValue sv = eval_expr(env, frame, e->as.get_field_.struct_expr);
-        if (turi_is_error(sv) || env->returning || env->throwing) return sv;
-        uint32_t idx = e->as.get_field_.field_idx;
         /* W1b: a struct can reach a field access via the int64 carrier ABI
          * rather than as a TuriStruct -- e.g. a Result that flowed as :int and
          * was ascribed back to (Result A B) with `(:: carrier ...)`.  The
          * carrier is a pointer to an int64[n] box laid out one word per field
-         * (this is how native ok/err/result-map build a Result), so read word
-         * idx and tag it by the field's static type.  This is what lets
-         * result.tur's field-access accessors (ok-val/err-val/...) work on the
-         * native box, not just on make-struct TuriStructs. */
-        if (sv.tag == TURI_INT) {
-            if (sv.as_int == 0) {
-                /* A null carrier is how a `none` Option / err-less Result flows
-                 * through the carrier ABI (none = NULL).  Reading a field of it
-                 * is the by-value body's tag probe -- `(.is-some o)` on a none,
-                 * `(.is-ok r)` on a 0-carrier -- which the compiled path answers
-                 * from a zeroed `{0}` struct.  Mirror that: hand back the field
-                 * type's zero (false / 0.0 / 0) instead of erroring, so a none
-                 * carrier reads as "tag = false" rather than a null deref. */
-                switch (e->type.kind) {
-                case TY_BOOL: return turi_bool(false);
-                case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32: return turi_float(0.0);
-                default: return turi_int(0);
-                }
-            }
-            int64_t w = ((int64_t *)(intptr_t)sv.as_int)[idx];
-            switch (e->type.kind) {
-            case TY_BOOL:  return turi_bool(w != 0);
-            case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32: {
-                /* carrier stores the raw bits of the field */
-                double d; memcpy(&d, &w, sizeof(d)); return turi_float(d);
-            }
-            default: return turi_int(w);
-            }
-        }
-        if (sv.tag != TURI_STRUCT)
-            return turi_errorf("eval: field access on non-struct (tag %d)", sv.tag);
-        if (idx >= sv.as_struct->n_fields)
-            return turi_errorf("eval: field index %u out of bounds (%u fields)",
-                               idx, sv.as_struct->n_fields);
-        return sv.as_struct->fields[idx];
+         * (this is how native ok/err/result-map build a Result); get_field_extract
+         * reads word idx and tags it by the field's static type, which is what
+         * lets result.tur's accessors (ok-val/err-val/...) work on the native
+         * box, not just on make-struct TuriStructs.  (Driver path: DK_GET_FIELD.) */
+        TuriValue sv = eval_expr(env, frame, e->as.get_field_.struct_expr);
+        if (turi_is_error(sv) || env->returning || env->throwing) return sv;
+        return get_field_extract(e, sv);
     }
 
     /* --- Phase DS3: (set! (.field s) v) — struct field write ------------- */

@@ -58,3 +58,17 @@
       (count-zero (- n 1)))))
 
 (println (count-zero 100000))
+
+;; --- Test 6 (SR N2): recursion threaded through a field accessor ----------
+;; The recursive call sits inside the operand of a `.v` field access
+;; (`(.v (make-struct Box (fld-sum ...)))`).  Before SR N2 the field accessor
+;; black-boxed its whole operand through eval_expr, so this deep non-tail
+;; recursion C-recursed and tripped the eval_depth guard; the driver now models
+;; EX_GET_FIELD (DK_GET_FIELD), folding the receiver onto the heap work-stack,
+;; so it is heap-bounded.  fld-sum 99999 = 99999*100000/2 = 4999950000.
+(defstruct Box [v :int])
+(defn fld-sum [n :int] :int
+  (if (= n 0)
+    0
+    (+ n (.v (make-struct Box (fld-sum (- n 1)))))))
+(println (fld-sum 99999))
