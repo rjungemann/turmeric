@@ -2,7 +2,7 @@
 # tests/run-turi-full-prelude.sh -- prereq 3c gate: TUR_TURI_FULL_PRELUDE.
 #
 # The interpreter's default prelude covers the typed-stdlib core but carves out
-# json/schema (docs/turi-preload-carve-out.txt).  (contract/mutmap have since
+# json/schema (docs/artifacts/turi-preload-carve-out.txt).  (contract/mutmap have since
 # graduated to the default prelude.)  Setting TUR_TURI_FULL_PRELUDE=1 opts into
 # loading the carved modules on top of the default prelude so the carved bucket
 # can be iterated/measured under --interpret.  This gate asserts the flag
