@@ -1,7 +1,8 @@
 ---
-status: proposed
+status: phases-0-3-landed
 owner: unassigned
 created: 2026-06-23
+updated: 2026-06-23
 ---
 
 # Fat-closure / `c-fn` ABI audit and paydown
@@ -71,14 +72,15 @@ correctly:
 
 **Unresolved contradiction (Phase 0 — RESOLVED 2026-06-23):**
 
-- Archived `docs/archive/httpd-middleware-plan.md:55` claims `EX_CATCH_UNWIND`
-  passes `NULL` env. The survey reported it now uses `TUR_APPLY0` correctly.
-  **Phase 0 verified: archive was right.** `tur_catch_unwind_box` itself
-  dispatches correctly (`TUR_APPLY0`, `emit_module.c:5721`), but
-  `catch_thunk_to_fat` in `elab_concurrent.c:349` auto-shims a capturing
-  closure through `EX_FN_TO_FAT`, which double-boxes the already-fat closure
-  and drops the env. A minimal repro SEGVs. Carried into Phase 2 as a
-  prerequisite fix. See `docs/reported/catch-unwind-drops-captures-segv.md`.
+- Archived `docs/archive/httpd-middleware-plan.md:55` claimed `EX_CATCH_UNWIND`
+  passes `NULL` env. **Phase 0 verified: archive was right; survey was wrong.**
+  Root cause: `catch_thunk_to_fat` in `elab_concurrent.c:349` was wrapping a
+  capturing closure (`TY_FN { boxed: true }`) through `EX_FN_TO_FAT`, which
+  double-boxed the already-fat closure and dropped the env.
+  **Fixed 2026-06-23**: guard the auto-shim on `!thunk->type.as.fn.boxed`;
+  capturing closures pass through to `TUR_APPLY0` unchanged. Regression
+  fixture: `tests/fixtures/panic-catch-unwind-captures/`. See archived
+  report: `docs/archive/catch-unwind-drops-captures-segv.md`.
 
 ## Scope
 

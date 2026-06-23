@@ -35,7 +35,12 @@
 ;;; thread-spawn-fn -- spawn a new OS thread calling fn-ptr with arg.
 ;;;
 ;;; Parameters:
-;;;   fn-ptr -- C function pointer of type void *(*)(void *)
+;;;   fn-ptr -- C function pointer of type void *(*)(void *).
+;;;             Must carry no environment -- captures are forbidden. The
+;;;             pthread_create boundary stores fn-ptr as a raw C function
+;;;             pointer; a captured value would be silently dropped.
+;;;             Wrap state into arg, or use the higher-level (thread-spawn
+;;;             (fn [] ...)) form which boxes the closure for you.
 ;;;   arg    -- opaque argument forwarded to fn-ptr
 ;;;
 ;;; Returns:

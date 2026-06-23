@@ -1,9 +1,21 @@
 ---
-status: open
+status: resolved
+resolved: 2026-06-23
 severity: high
 discovered: 2026-06-23
 discovered-by: fat-closure-abi-audit-plan Phase 0
+fix: src/compiler/elab_concurrent.c catch_thunk_to_fat
 ---
+
+## Resolution (2026-06-23)
+
+`catch_thunk_to_fat` was wrapping every `TY_FN` thunk through `EX_FN_TO_FAT`,
+including capturing closures whose type is `TY_FN { boxed: true }`. A boxed
+TY_FN already places its lifted thunk at slot 0 of the env box, so wrapping
+it again produced a `{ __tur_fatshim0, env_ptr }` outer box whose
+`__tur_fatshim0` read slot 1 as a bare fn pointer and jumped to the env
+pointer. Fix: only auto-shim when `!thunk->type.as.fn.boxed`. Regression
+locked in by `tests/fixtures/panic-catch-unwind-captures/`.
 
 # `catch-unwind` SEGVs when its thunk captures locals
 

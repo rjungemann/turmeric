@@ -343,11 +343,16 @@ static Type catch_unwind_result_type(Elab *e, Span span) {
 
 /* Phase R2: ensure the catch-unwind thunk is a fat closure so the runtime
  * helper can invoke it through the standard closure protocol (TUR_APPLY0).
- * A bare non-capturing (fn [] ...) has type TY_FN (a raw C function pointer);
- * auto-shim it into a { fatshim0, orig } box via EX_FN_TO_FAT.  A capturing
- * closure already carries TY_PTR_VOID (a fat handle) and passes through. */
+ * A bare non-capturing (fn [] ...) has type TY_FN with as.fn.boxed=false (a
+ * raw C function pointer); auto-shim it into a { fatshim0, orig } box via
+ * EX_FN_TO_FAT.  A capturing closure has TY_FN with as.fn.boxed=true (a fat
+ * handle whose layout already places the thunk at slot 0); pass it through
+ * unchanged so TUR_APPLY0 dispatches to the lifted thunk with the env box
+ * as its first argument.  Double-boxing a capturing closure through
+ * EX_FN_TO_FAT here previously dropped the env and segfaulted -- see
+ * docs/reported/catch-unwind-drops-captures-segv.md. */
 static Expr *catch_thunk_to_fat(Elab *e, Expr *thunk) {
-    if (thunk && thunk->type.kind == TY_FN) {
+    if (thunk && thunk->type.kind == TY_FN && !thunk->type.as.fn.boxed) {
         Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, TYPE_PTR_VOID, thunk->span);
         shim->as.fn_to_fat_.inner = thunk;
         return shim;

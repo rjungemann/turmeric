@@ -111,7 +111,12 @@
 ;;;
 ;;; Parameters:
 ;;;   name    -- test name string
-;;;   test-fn -- no-argument callback returning 1 on pass, 0 on fail
+;;;   test-fn -- no-argument callback returning 1 on pass, 0 on fail.
+;;;              Must carry no environment -- captures are forbidden. The
+;;;              runtime stores test-fn as a bare C function pointer and
+;;;              calls it directly; a captured value would be silently
+;;;              dropped at the storage boundary. Pass a top-level defn,
+;;;              or a (fn ...) literal with no free variables.
 ;;;
 ;;; Returns:
 ;;;   Non-zero on successful registration.

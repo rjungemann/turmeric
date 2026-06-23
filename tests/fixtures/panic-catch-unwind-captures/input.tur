@@ -1,0 +1,17 @@
+;;; Phase R2 regression (fat-closure ABI audit, 2026-06-23): a catch-unwind
+;;; thunk that captures a local must observe the captured value after the
+;;; boundary returns. Locks in that catch_thunk_to_fat does NOT auto-shim a
+;;; capturing closure (boxed TY_FN) -- doing so double-boxed the env and
+;;; SEGV'd the program. See docs/reported/catch-unwind-drops-captures-segv.md
+;;; (resolved).
+(defn report [n : int] : int
+  (if (= n 42)
+    (println "captured-survived")
+    (println "captured-dropped"))
+  0)
+
+(defn main [] : int
+  (let [captured 42
+        _        (catch-unwind (fn [] : int (report captured)))]
+    (println "done"))
+  0)
