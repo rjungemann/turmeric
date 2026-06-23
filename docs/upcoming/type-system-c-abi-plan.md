@@ -1,7 +1,7 @@
 # Plan: Type System C-ABI Surface (typed fn-ptrs + inline-C result builder)
 
-> **Status:** Draft
-> **Last Updated:** 2026-06-14
+> **Status:** Partial -- TC1-TC4 landed (typed `(c-fn [A...] B)` surface is live; consumed by `tourist-session/store.tur` and `rtmidi/in.tur`'s callback). TC5-TC9 still pending (no `tur_ok_int`/`tur_err_int` runtime helpers, no `tur_result.h`, rtmidi pilot not migrated -- `midi-in-new` still returns `ptr<void>`).
+> **Last Updated:** 2026-06-23
 > **Type:** Compiler + stdlib
 > **Triggers:**
 >   - `docs/reported/spices-int-stand-in-audit-2026-06-14.md` (the audit)
@@ -443,15 +443,15 @@ and *with* the middleware reshape, not on its own.
 
 | Phase | Title | Status |
 |---|---|---|
-| TC0 | Confirm scope with user | Pending |
-| TC1 | `TY_CFNPTR` kind + plumbing | Pending |
-| TC2 | Parser for `(c-fn [A...] B)` | Pending |
-| TC3 | Elaborator: defn -> c-fnptr conversion + diagnostics | Pending |
-| TC4 | Codegen: typedef emission + call lowering | Pending |
+| TC0 | Confirm scope with user | Done |
+| TC1 | `TY_CFNPTR` kind + plumbing | Done |
+| TC2 | Parser for `(c-fn [A...] B)` | Done |
+| TC3 | Elaborator: defn -> c-fnptr conversion + diagnostics | Done |
+| TC4 | Codegen: typedef emission + call lowering | Done |
 | TC5 | Runtime: `tur_ok_*` / `tur_err_*` / `tur_some_*` / `tur_none` + header | Pending |
 | TC6 | Documentation: guide + opaques cross-ref | Pending |
 | TC7 | Audit / CLAUDE.md updates | Pending |
-| TC8 | Pilot on rtmidi (exemplar v0.2.0) | Pending |
+| TC8 | Pilot on rtmidi (exemplar v0.2.0) | Pending (callback site already uses `(c-fn ...)`; `midi-in-new` still returns `ptr<void>`) |
 | TC9 | Umbrella tracking for per-spice migration | Pending |
 
 ---

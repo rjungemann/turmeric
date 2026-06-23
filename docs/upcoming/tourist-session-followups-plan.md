@@ -6,6 +6,8 @@ description: Sign cookies, add `session-rotate!` for fixation defense, ship the 
 
 # `tur-tourist-session` Followups -- Plan
 
+> **Status:** Not started (as of 2026-06-23). `tourist-session/src/session/` has no `hmac.tur`, `csrf.tur`, or `serde.tur`; `SessionConfig` carries no `signing-key`; `session-rotate!` is not exported; the `tourist-session-valkey` sibling spice does not exist. S0/R0/V0/C0 all still pending.
+
 ## Context
 
 `tourist-session` v0.1.0 shipped as part of the v0.24.0 release. It

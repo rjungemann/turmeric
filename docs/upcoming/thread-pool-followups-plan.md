@@ -6,6 +6,8 @@ description: Wrap the raw `ptr<void>` pool handle in a `defopaque` with linear d
 
 # `thread-pool` Followups -- Plan
 
+> **Status:** Not started (as of 2026-06-23). `thread-pool/src/thread-pool/pool.tur` still exposes `pool-new`/`pool-submit`/`pool-stop` over `ptr<void>`; no `Pool`/`Pool<T>` opaque, no `Future<R>`, no `with-pool` macro, no `pool-try-submit`. None of the new modules (`future.tur`, `parallel.tur`, `scope.tur`) exist yet.
+
 ## Context
 
 `thread-pool` v0.1.0 shipped with v0.24.0. The user-facing guide is
