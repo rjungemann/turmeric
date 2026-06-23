@@ -1,7 +1,9 @@
 # Turmeric Version Manager (`tvm`) Plan
 
-> **Status:** Proposed -- not started.
-> **Last Updated:** 2026-06-22
+> **Status:** In progress -- Phases 1-3 landed in `tvm/`, plus the Phase 5
+> ergonomics (`--activate`, completion, `doctor`). Phase 4 (nightly channel
+> CI plumbing) remains. See `tvm/README.md` and `tvm/tests/run.sh`.
+> **Last Updated:** 2026-06-23
 > **Type:** tooling / distribution
 > **Modeled after:** `nvm` (Node Version Manager), with cues from `rustup` and `pyenv`.
 
@@ -188,7 +190,7 @@ atomically renames into place.
 
 ## Phases
 
-### Phase 1 -- MVP: install + use + ls
+### Phase 1 -- MVP: install + use + ls  *(landed in `tvm/tvm.sh`)*
 
 - `tvm.sh` shell entry point (zsh + bash; fish via a tiny wrapper).
 - `tvm install <v>` -- download from GitHub Releases, verify SHA,
@@ -204,7 +206,7 @@ Acceptance: a fresh-installed `tvm` can `install 0.23.1`, `use 0.23.1`,
 and `tur --version` reports `0.23.1`, on macOS (arm64) and Linux
 (x86_64).
 
-### Phase 2 -- ergonomics
+### Phase 2 -- ergonomics  *(landed: alias, .tur-version auto, which, run, exec)*
 
 - `tvm alias default <v>` and `tvm alias lts <v>`.
 - `.tur-version` file detection with `tvm auto on/off`.
@@ -214,7 +216,7 @@ and `tur --version` reports `0.23.1`, on macOS (arm64) and Linux
 - `tvm exec <v> -- <cmd...>` -- run an arbitrary command with that
   version on `PATH`.
 
-### Phase 3 -- build-from-source fallback
+### Phase 3 -- build-from-source fallback  *(landed: `tvm install --build`)*
 
 - `tvm install --build <ref>` -- when no prebuilt asset exists, clone
   `turmeric-lang/turmeric` at the given tag/branch/SHA, run the
@@ -225,7 +227,7 @@ and `tur --version` reports `0.23.1`, on macOS (arm64) and Linux
 - Be explicit in `tvm ls` that a version is source-built (`*` suffix
   or similar).
 
-### Phase 4 -- nightlies and channels
+### Phase 4 -- nightlies and channels  *(pending: needs net-new CI workflow)*
 
 - A scheduled CI job in `rjungemann/turmeric` uploads `nightly`
   artifacts to a known release tag (e.g. `nightly-latest`). The
@@ -235,7 +237,7 @@ and `tur --version` reports `0.23.1`, on macOS (arm64) and Linux
   and stores it as `nightly-YYYY-MM-DD`.
 - `tvm install nightly@2026-06-20` pins a specific dated nightly.
 
-### Phase 5 -- ecosystem integration
+### Phase 5 -- ecosystem integration  *(partial: `--activate`, completion, `doctor` landed)*
 
 - `tvm install --activate` -- combines install + `use` + `alias
   default`; mirrors `rustup install --default`.
