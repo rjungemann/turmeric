@@ -369,7 +369,7 @@ Post-v0.20.0 sweep (2026-06-12):
 - **[turi-harness-compiles-instead-of-interpreting.md](history/turi-harness-compiles-instead-of-interpreting.md)** -- `tests/run-turi.sh` now runs fixtures with `tur --interpret` (TI8); harness green at 122 passed
 - **[turi-inline-c-accessor-miscompiles-boolean-returns.md](history/turi-inline-c-accessor-miscompiles-boolean-returns.md)** -- `ic_exec_accessor` now refuses negated/disjunctive boolean returns rather than silently inverting them (TI8.b/W4)
 - **[turi-native-set-count-layout-overflow.md](history/turi-native-set-count-layout-overflow.md)** -- `native_set_*` shims rewritten over `{void* hamt}`; `set.tur` joined the prelude; HAMT-backed `#set{}` literals now safe under `--interpret` (TI8.b/W1b)
-- **[turi-select-needs-channel-primitives.md](history/turi-select-needs-channel-primitives.md)** -- `(select ...)` carve-out documented in [eval-api.md](../guides/eval-api.md); real native-channel `EX_SELECT` interpretation tracked in `docs/upcoming/v1/turi-parity-post-v1-plan.md`
+- **[turi-select-needs-channel-primitives.md](history/turi-select-needs-channel-primitives.md)** -- `(select ...)` carve-out documented in [eval-api.md](../guides/eval-api.md); real native-channel `EX_SELECT` interpretation tracked in `docs/archive/turi-parity-post-v1-plan.md`
 
 Earlier additions:
 

@@ -11,13 +11,19 @@
 > first-class handlers), TI7 (carve-outs codified), TI8 (CI ratchet +
 > allowlist->denylist flip), TI9 (parity matrix guide), and TI10 (turi-closure-
 > aware HAMT, Tiers A+B). The two CI ratchets pass clean
-> (`check_turi_parity.py`: 115/116 EX_* handled, 1 carved, 0 gaps;
+> (`check_turi_parity.py`: 116/117 EX_* handled, 1 carved, 0 gaps;
 > `check_turi_native_parity.py`: 0 uncarved native gaps), and the turi harness is
 > green at **1212 passed, 0 failed, 416 skipped** (all 416 are permanent
 > user-inline-C carve-outs). Residual surface is exactly the documented,
 > intentional carve-outs: `EX_CPS_CONT_APP` (never emitted by the elaborator),
-> user inline-C (`docs/turi-carve-out.txt`), and WASM async (`src/turi/fiber.c`).
-> This plan is retained as the historical record; the published parity matrix is
+> user inline-C (`docs/artifacts/turi-carve-out.txt`), and WASM async
+> (`src/turi/fiber.c`). The one remaining interpreter *recursion* item --
+> capturing a continuation *through a native HOF callback* (multishot/escaping/
+> nested resume all landed 2026-06-14 on the driver work-stack) -- errors
+> cleanly and continues under
+> [turi-cek-stackless-reentry-plan.md](../upcoming/v1/turi-cek-stackless-reentry-plan.md)
+> (SR), out of scope here. This plan is retained as the historical record; the
+> published parity matrix is
 > [docs/guides/turi-parity-guide.md](../guides/turi-parity-guide.md).
 
 ---
