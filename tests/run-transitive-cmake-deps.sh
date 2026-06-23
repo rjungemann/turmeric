@@ -81,6 +81,32 @@ else
     pass "transitive-cmake-deps-conflict-detected"
 fi
 
+# ---------------------------------------------------------------------------
+# 3. Workspace member seeding (workspace-transitive-native-deps-plan):
+#    member-b does NOT list member-a in :spices, reaching it only through
+#    the workspace :members resolution.  The transitive resolver must seed
+#    member-a's :cmake-deps from :members; because both members declare the
+#    same-named "fakelib" with different :refs, building member-b must emit
+#    the conflict diagnostic.  Before the fix member-b saw only its own dep
+#    and `tur fetch` succeeded (no conflict) -- this asserts the new seeding.
+WMD_SRC="tests/fixtures/workspace-member-cmake-deps"
+WMD_DIR="$WORK/wmd"
+cp -r "$WMD_SRC" "$WMD_DIR"
+(
+    cd "$WMD_DIR/member-b" || exit 3
+    "$TUR_ABS" fetch >fetch.log 2>&1
+)
+wmd_rc=$?
+if [ "$wmd_rc" -eq 0 ]; then
+    fail "workspace-member-cmake-deps-seed" \
+         "expected non-zero exit (sibling dep should conflict); got rc=$wmd_rc, log=$(cat "$WMD_DIR/member-b/fetch.log")"
+elif ! grep -q 'conflicting :cmake-deps for "fakelib"' "$WMD_DIR/member-b/fetch.log"; then
+    fail "workspace-member-cmake-deps-seed" \
+         "missing conflict diagnostic (sibling :cmake-deps not seeded from :members); got: $(cat "$WMD_DIR/member-b/fetch.log")"
+else
+    pass "workspace-member-cmake-deps-seed"
+fi
+
 echo
 echo "transitive-cmake-deps: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

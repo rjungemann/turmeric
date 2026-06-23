@@ -1,5 +1,32 @@
 # Workspace transitive native-deps across `:members`
 
+## Status: RESOLVED
+
+`pkg_collect_transitive_cmake_deps` now seeds its walk from the enclosing
+workspace's `:members` siblings in addition to the root manifest's `:spices`.
+A new static helper `collect_workspace_sibling_dirs` (in
+`src/compiler/pkg.c`) walks up to the enclosing workspace, confirms the root
+project is itself a listed member, and returns the directories of the *other*
+members; each is pushed onto the same worklist the `:spices` walk uses (the
+visited set dedups any overlap). This mirrors the unconditional
+workspace-sibling `src/` resolution already done by
+`auto_append_spice_includes` in `src/main.c`: because any sibling member's
+modules are importable without an explicit `:spices` entry, any sibling's
+`:cmake-deps` must participate in the build too.
+
+Open question resolved in favor of seeding **all** workspace members (not only
+those a sibling explicitly depends on via `:spices`), to stay consistent with
+the include-path resolver, which already adds every sibling's `src/`
+unconditionally. (The "only when declared" alternative is already covered by
+the pre-existing `:spices` traversal, so it would have been a no-op.)
+
+Regression coverage: `tests/fixtures/workspace-member-cmake-deps/` plus a new
+`workspace-member-cmake-deps-seed` case in
+`tests/run-transitive-cmake-deps.sh` -- two members that do NOT list each
+other in `:spices` declare the same-named `:cmake-deps` with different
+`:ref`; building `member-b` must seed `member-a`'s dep from `:members` and
+emit the conflict diagnostic.
+
 ## Summary
 
 `pkg_collect_transitive_cmake_deps` does not currently seed itself from a

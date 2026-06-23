@@ -2097,6 +2097,91 @@ static bool append_cmake_dep_with_conflict_check(PkgCmakeDep **out_deps,
     return true;
 }
 
+/* Discover the on-disk directories of the *other* members of the workspace
+ * enclosing `project_dir`, if any.  Walks parents looking for a `build.tur`
+ * that declares `:members` containing `project_dir` itself, then returns the
+ * absolute path of every sibling member (excluding `project_dir`).
+ *
+ * This mirrors the workspace-sibling `src/` resolution in main.c's
+ * auto_append_spice_includes: any sibling member's modules are importable
+ * from `project_dir` without an explicit `:spices` entry, so any sibling's
+ * native (`:cmake-deps`) contributions must participate in the build too.
+ *
+ * Returns a heap-allocated array of `char *` (caller frees each entry and the
+ * array) and sets *out_n; returns NULL with *out_n = 0 when `project_dir` is
+ * not part of any workspace. */
+static char **collect_workspace_sibling_dirs(const char *project_dir,
+                                             int *out_n) {
+    *out_n = 0;
+    if (!project_dir) return NULL;
+
+    char real_root[4096];
+    if (realpath(project_dir, real_root) == NULL) return NULL;
+
+    char anc[4096];
+    size_t rlen = strlen(real_root);
+    if (rlen + 1 > sizeof(anc)) return NULL;
+    memcpy(anc, real_root, rlen + 1);
+
+    for (int up = 0; up < PKG_WORKSPACE_WALK_MAX; up++) {
+        char *last = strrchr(anc, '/');
+        if (!last || last == anc) break;
+        *last = '\0';
+
+        char ws_manifest[4096];
+        if (!pkg_resolve_manifest_path(anc, ws_manifest, sizeof(ws_manifest)))
+            continue;
+
+        PkgManifest wm;
+        memset(&wm, 0, sizeof(wm));
+        if (!pkg_manifest_read(ws_manifest, &wm)) continue;
+
+        if (wm.n_members <= 0) {
+            /* Any build.tur (workspace or not) terminates the walk. */
+            pkg_manifest_free(&wm);
+            break;
+        }
+
+        /* Confirm project_dir is itself a listed member of this candidate
+         * workspace before treating its siblings as contributors. */
+        const char *self_member = NULL;
+        for (int i = 0; i < wm.n_members; i++) {
+            char mp[4096];
+            int mn = snprintf(mp, sizeof(mp), "%s/%s", anc, wm.members[i]);
+            if (mn <= 0 || (size_t)mn >= sizeof(mp)) continue;
+            char real_mp[4096];
+            if (realpath(mp, real_mp) == NULL) continue;
+            if (strcmp(real_mp, real_root) == 0) {
+                self_member = wm.members[i];
+                break;
+            }
+        }
+        if (!self_member) {
+            pkg_manifest_free(&wm);
+            break;
+        }
+
+        char **dirs = (char **)calloc((size_t)wm.n_members, sizeof(char *));
+        if (!dirs) { pkg_manifest_free(&wm); return NULL; }
+        int n = 0;
+        for (int i = 0; i < wm.n_members; i++) {
+            if (strcmp(wm.members[i], self_member) == 0) continue;
+            char member_dir[4096];
+            int mn = snprintf(member_dir, sizeof(member_dir),
+                              "%s/%s", anc, wm.members[i]);
+            if (mn <= 0 || (size_t)mn >= sizeof(member_dir)) continue;
+            struct stat ss;
+            if (stat(member_dir, &ss) != 0 || !S_ISDIR(ss.st_mode)) continue;
+            dirs[n++] = tur_strdup(member_dir);
+        }
+        pkg_manifest_free(&wm);
+        if (n == 0) { free(dirs); return NULL; }
+        *out_n = n;
+        return dirs;
+    }
+    return NULL;
+}
+
 bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
                                        const PkgManifest *root_manifest,
                                        PkgCmakeDep      **out_deps,
@@ -2178,6 +2263,24 @@ bool pkg_collect_transitive_cmake_deps(const char        *root_project_dir,
         if (!sib_dir) continue;
         GROW_WORK_TO(n_work + 1);
         worklist[n_work++] = sib_dir;
+    }
+
+    /* Seed: the enclosing workspace's *other* members.  A sibling member's
+     * modules are importable from the root spice without an explicit :spices
+     * entry (see auto_append_spice_includes in main.c), so its :cmake-deps
+     * must participate in the build too.  Each seeded dir is walked exactly
+     * like a :spices entry (its build.tur read, :cmake-deps unioned, its own
+     * :spices enqueued); the visited set dedups any overlap with the :spices
+     * seeds above. */
+    {
+        int    n_sib   = 0;
+        char **sib_dirs = collect_workspace_sibling_dirs(root_project_dir,
+                                                         &n_sib);
+        for (int i = 0; i < n_sib; i++) {
+            GROW_WORK_TO(n_work + 1);
+            worklist[n_work++] = sib_dirs[i];  /* ownership moves to worklist */
+        }
+        free(sib_dirs);
     }
 
     while (n_work > 0) {
