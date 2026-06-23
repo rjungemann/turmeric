@@ -6,6 +6,34 @@ description: Eliminate the last source of unbounded C recursion in the tree-walk
 
 # Turi stackless native re-entry (full CEK / driver-CPS) -- Plan
 
+## Status update -- 2026-06-22
+
+**Both prerequisite plans have landed and been archived:**
+
+- [turi-cek-frame-reuse-tco-plan.md](../../archive/turi-cek-frame-reuse-tco-plan.md)
+  (F1-F5) -- landed; this plan was always the follow-up that retires F5's
+  guard.
+- [turi-interpreter-delimited-control-plan.md](../../archive/turi-interpreter-delimited-control-plan.md)
+  -- **landed 2026-06-14** on the driver work-stack (exactly the substrate this
+  plan extends). The five `interp-continuation` fixtures are un-carved.
+
+**SR itself has not started.** Spot-check 2026-06-22 of the residual
+machinery this plan retires:
+
+- `env->eval_depth` increment + check still live at `src/turi/eval.c:5311-5317`
+  and `:5339-5343`.
+- `TURI_EVAL_FRAME_BYTES` (= 9472) and `turi_default_max_eval_depth` still
+  live at `src/turi/env.c:52,61`.
+- No `DK_NATIVE_RESUME` `DriveKind` and no `TURI_TAG_APPLY_REQUEST` channel
+  exist in `eval.c` -- N1's protocol scaffold is still TODO.
+- The line/symbol references in this plan have drifted (F5's guard moved from
+  the originally-cited `:4451` to `:5311`); the phase structure (N1-N5) and
+  the diagnosis stand. Re-grep `eval_depth`/`turi_call` before starting N1.
+
+With DC done, SR is now the **next** interpreter-recursion step rather than a
+sequenced follow-up; N5 in particular still describes accurately the residual
+"continuation captured *through* a native HOF" case DC carved out.
+
 ## Status and scope
 
 After [turi-cek-frame-reuse-tco-plan.md](turi-cek-frame-reuse-tco-plan.md)

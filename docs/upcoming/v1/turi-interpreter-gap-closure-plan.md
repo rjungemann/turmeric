@@ -1,13 +1,42 @@
 # turi Interpreter Gap-Closure Plan (TI8.b execution detail)
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-06-11
+> **Status:** **W5 FLIP LANDED -- plan effectively complete** (2026-06-22 audit)
+> **Last Updated:** 2026-06-22
 > **Type:** Interpreter / Test Infra
 > **Scope:** post-v1 -- the remaining work to flip `tests/run-turi.sh` from a
 > curated allowlist to a denylist (every fixture runs under `tur --interpret`
 > minus documented carve-outs).
 > **Parent:** [turi-parity-post-v1-plan.md](turi-parity-post-v1-plan.md) Phase TI8.b
 > **Companion report:** [docs/archive/history/turi-harness-flip-reconciliation.md](../../archive/history/turi-harness-flip-reconciliation.md)
+
+---
+
+## Status update -- 2026-06-22
+
+**The W5 flip has landed.** `tests/run-turi.sh` has had `TURI_FIXTURES_DEFAULT`
+**deleted** -- the harness header now reads "the full allowlist -> denylist flip
+(TI8.b/W5) has LANDED: the hand-curated TURI_FIXTURES_DEFAULT is gone and the
+harness defaults" to running **every** fixture under `--interpret`, gated only
+by the `requires.{compiled,tur-only,dedicated-runner,spices}` markers and the
+inline-C auto-carve. The KB-001 allowlist-gap workaround comment has been
+retired (`tests/run-turi.sh:6-16,92-99,199,253-256`).
+
+That was the plan's stated definition of done. What remains in this document is
+historical narrative + a few open per-type W1b/W4 follow-ups that did not block
+the flip (they ship as `requires.tur-only` carve-outs with tracking reports).
+
+**Bug-report links are stale.** `docs/reported/` is empty as of 2026-06-22 --
+every report referenced below (`turi-pure-turi-silent-miscompiles.md`,
+`turi-inline-c-silent-miscompiles.md`, `turi-map-set-hamt-interpreter-gap.md`,
+`turi-error-fixture-diag-divergences.md`, `turi-native-set-count-layout-overflow.md`,
+`turi-capturing-shift-unimplemented.md`, the `history/` accessor-miscompile note)
+has moved to `docs/archive/history/`. Update the relative links if any of these
+follow-ups is reopened.
+
+A snapshot of this plan from 2026-06-14 lives at
+`docs/archive/history/turi-interpreter-gap-closure-plan.md`; this live copy
+should be moved to `docs/archive/` once the residual W1b/W4 follow-ups are
+either landed or carved with current tracking reports.
 
 ---
 

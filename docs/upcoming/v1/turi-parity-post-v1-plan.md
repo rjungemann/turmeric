@@ -1,7 +1,61 @@
 # turi ↔ tur Parity (post-v1) Plan
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-06-10
+> **Status:** Most phases landed -- TI8.b (harness flip) and TI10 Tier A both
+> shipped; TI3.2 (capturing shift), `EX_CALLCC`, `EX_SYM_LIT`, `EX_CONS_LIST`
+> all closed since 2026-06-12. The plan is in residual-cleanup mode.
+> **Last Updated:** 2026-06-22
+
+## Status update -- 2026-06-22
+
+Verified from the tree + `docs/artifacts/turi-carve-out.txt` (the live carve-out
+file; the plan references `docs/turi-carve-out.txt` -- the script reads the
+`artifacts/` path):
+
+- **TI8.b harness flip -- LANDED.** `tests/run-turi.sh` has had
+  `TURI_FIXTURES_DEFAULT` deleted; the harness runs every fixture under
+  `--interpret` minus `requires.{compiled,tur-only,dedicated-runner,spices}`
+  and the inline-C auto-carve. See
+  [turi-interpreter-gap-closure-plan.md](turi-interpreter-gap-closure-plan.md)
+  (W5).
+- **TI3.2 context-capturing shift -- LANDED.** `EX_SERIAL_RESET` /
+  `EX_CLONEABLE_RESET` reify the delimited context (`ts_capture_and_run` in
+  `src/turi/eval.c`); `EX_SERIAL_SHIFT` / `EX_CLONEABLE_SHIFT` no longer need
+  carve-outs.
+- **`EX_CALLCC` -- LANDED.** `eval_callcc_escape` in `eval.c` implements a
+  one-shot upward escape via setjmp/longjmp; `(k v)` sugar lowers in elab to
+  `tur_escape_resume`. Only `EX_CPS_CONT_APP` remains carved (the elaborator
+  never emits it; interpreter stops at elaboration).
+- **TI1.2 `EX_SYM_LIT` -- LANDED.** Stable `const Symbol *` interned in
+  `env->st`; sym.tur natives registered via `wk_register_sym_natives` in
+  `src/main.c`.
+- **TI1.3 `EX_CONS_LIST` -- LANDED.** Variadic `& rest` tail builds the
+  `{head; tail}` chain matching the codegen ABI; stdlib `head`/`tail`/`cons`
+  accessors still hit the inline-C carve-out.
+- **TI10 Tier A -- LANDED** (already documented in this plan).
+- **TI5 panic payloads, TI6 with-handler, TI4 STM, TI1.1/1.4** -- already
+  marked LANDED.
+
+Residual / still open:
+
+- **TI1.5/1.6/1.7 (`EX_HANDLER_LIT`/`COMPOSE_HANDLERS`/`OR_ELSE`/`CHECK`)** --
+  `HANDLER_LIT`/`COMPOSE_HANDLERS` shipped under TI6; `OR_ELSE`/`CHECK` ride
+  with TI4 STM.
+- **TI2 generators (`EX_GEN*`/`EX_YIELD`)** -- check whether these have case
+  arms or are in the carve-out; not visible in the trimmed carve-out file
+  excerpt above.
+- **TI10 Tier B (turi-closure-aware HAMT for user `MapKey`/value comparators)**
+  -- still a future item; Tier A covers every scalar-keyed map fixture.
+- **TI9 parity matrix guide** (`docs/guides/turi-parity-guide.md`) -- not
+  verified in this audit; check whether it has been authored.
+- **TI8.b residual W1b/W4 carve-outs** -- tracked in
+  [turi-interpreter-gap-closure-plan.md](turi-interpreter-gap-closure-plan.md);
+  several linked reports have moved from `docs/reported/` to
+  `docs/archive/history/` -- relink before reopening.
+
+With the flip landed, this plan is ready to move from `docs/upcoming/v1/` to
+`docs/archive/` once TI2/TI9 either land or are formally carved.
+
+---
 > **Type:** Interpreter / Test Infra / Docs
 > **Scope:** post-v1 -- not blocking the v1 release
 
