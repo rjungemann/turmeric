@@ -6,6 +6,40 @@ description: Eliminate the last source of unbounded C recursion in the tree-walk
 
 # Turi stackless native re-entry (full CEK / driver-CPS) -- Plan
 
+## Status update -- 2026-06-23 (N4 partial -- drive reset bodies)
+
+**Safe partial progress on N4: reset bodies are now driven, so a lexical
+`(shift ...)` inside a `(reset ...)` body takes N3b's work-stack path instead
+of a synchronous `eval_abortive_shift`.** Chosen over the full guard-retiring
+boundary conversion (deferred; see the audit below) because that change is
+pervasive and high-risk, while this one is contained and on the N4 path.
+
+`eval_reset_boundary` now evaluates the body via `eval_drive` (the explicit-
+stack entry) rather than `eval_expr`. The setjmp boundary is unchanged -- the
+abortive shift still longjmps to it -- but a shift reached at a driven position
+in the body now hits the driver's `EX_SHIFT` case (`DK_NATIVE_RESUME` +
+`abortive_shift_resume`), folding the receiver application onto the work-stack.
+Before this, the common pattern `(reset (+ k (shift f _)))` ran the shift
+through `eval_expr_impl`'s synchronous `eval_abortive_shift` (a `turi_call`
+re-entry); now it does not. This is a concrete reduction of the synchronous
+native-re-entry surface the N4 audit enumerated, with no boundary-machinery
+change.
+
+Scope/limits: this does **not** retire the guard. Every `(reset ...)` still
+establishes one `eval_reset_boundary` setjmp C frame, so deep *nesting* of
+resets/shifts still maps onto the C stack (the audit's unbounded blocker is
+unchanged); and a shift reached through an `eval_expr` black-box inside the
+body still uses the synchronous path + longjmp. It is the foundational
+prerequisite for the eventual work-stack boundary conversion (that conversion
+needs the body driven so the abort can become a work-stack unwind). The serial/
+cloneable no-shift fallback shares `eval_reset_boundary`, so it benefits too.
+
+Validation: `bash tests/run.sh` (1783/0, compiled path untouched), eval/
+sandbox/STM/effects/continuation/tco ctests (14/14), `eval-tco` (9/9), and the
+`run-turi` baseline failure set (23, no delimited-control fixture among them)
+all green. Probe: `(reset (+ 100 (shift (fn [v] (deep v)) 50000)))` returns
+50000 with the receiver folded heap-bounded through the driven shift.
+
 ## Status update -- 2026-06-23 (N4 audit -- guard stays)
 
 **N4's audit ran; the guard does NOT retire yet.** N4 is "audit + retire the

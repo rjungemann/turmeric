@@ -447,6 +447,10 @@ static TuriValue recover_carrier_closure(TuriValue fn_val, const Binding *b) {
 
 /* Early forward declaration (needed by fire_defers_to_mark below) */
 static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e);
+/* Explicit-stack entry (defined far below); eval_reset_boundary drives the
+ * reset body through it so a lexical (shift ...) inside takes the work-stack
+ * EX_SHIFT path (SR N3b) instead of a synchronous eval_abortive_shift. */
+static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e);
 
 /* -------------------------------------------------------------------------
  * Phase S4: Struct, throw, and defer runtime types
@@ -1356,7 +1360,12 @@ static TuriValue eval_reset_boundary(TuriEnv *env, EvalFrame *frame,
     g_reset_stack = &b;
 
     if (setjmp(b.jmp) == 0) {
-        TuriValue v = eval_expr(env, frame, body);
+        /* Drive the body on the work-stack: a lexical (shift f _) in the body
+         * then takes the driver's EX_SHIFT case (SR N3b -> DK_NATIVE_RESUME),
+         * folding the receiver application onto the work-stack instead of the
+         * synchronous eval_abortive_shift turi_call.  The abort still longjmps
+         * to this setjmp boundary, so the boundary itself is unchanged. */
+        TuriValue v = eval_drive(env, frame, body);
         g_reset_stack = b.prev;
         return v;
     }
