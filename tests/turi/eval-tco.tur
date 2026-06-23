@@ -109,3 +109,17 @@
 (defn shift-thunk [n :int] :int
   (shift (fn [v :int] (deep-shift v)) n))
 (println (reset (+ 100 (shift-thunk 50000))))
+
+;; --- Test 10 (SR N4): deeply NESTED reset/shift is heap-bounded -----------
+;; Each level establishes its own (reset (+ 1 (shift ...))) and aborts to it.
+;; Before SR N4 the reset boundary was a setjmp C frame (eval_reset_boundary),
+;; so this nesting C-recursed and tripped the eval_depth guard at ~500 levels.
+;; The driver now models the reset boundary on the work-stack (DK_RESET) and the
+;; abortive shift unwinds via the env->aborting signal instead of longjmp, so the
+;; nesting folds onto the heap.  Each level's shift aborts (discarding the +1),
+;; so nest-sh N = 0 for all N.
+(defn nest-sh [n :int] :int
+  (if (= n 0)
+    0
+    (reset (+ 1 (shift (fn [v :int] (nest-sh (- n 1))) 0)))))
+(println (nest-sh 200000))

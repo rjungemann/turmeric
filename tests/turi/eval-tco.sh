@@ -39,6 +39,7 @@ check_line "fld-sum 99999 = 4999950000 (SR N2 get-field heap-bounded)" "49999500
 check_line "asc-sum 80000 = 3200040000 (SR N3 ascription heap-bounded)" "3200040000"
 check_line "ret-sum 60000 = 1800030000 (SR N3 return heap-bounded)" "1800030000"
 check_line "shift-thunk 50000 = 50000 (SR N3b abortive shift driven)" "50000"
+check_line "nest-sh 200000 = 0 (SR N4 nested reset/shift heap-bounded)" "0"
 
 echo ""
 echo "$PASS passed, $FAIL failed"

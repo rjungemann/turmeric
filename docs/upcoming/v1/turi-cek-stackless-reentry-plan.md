@@ -6,6 +6,52 @@ description: Eliminate the last source of unbounded C recursion in the tree-walk
 
 # Turi stackless native re-entry (full CEK / driver-CPS) -- Plan
 
+## Status update -- 2026-06-23 (N4 Slice 1 -- plain reset/shift on a work-stack abort)
+
+**The plain `reset`/`shift` boundary is now a work-stack frame, not a
+setjmp/longjmp pad -- nested `reset`/`shift` is heap-bounded.** This is the
+first slice of the unwind-to-boundary conversion that lets the guard eventually
+retire (call/cc and serial/cloneable follow in later slices).
+
+Mechanism -- an abortive shift raises a **work-stack abort signal** instead of
+longjmp-ing:
+
+- New env signal `env->aborting` (+ `abort_value`, `abort_prompt_kind`), a
+  separate flag deliberately **orthogonal to `throwing`** (so try/catch,
+  catch-unwind, fibers, and generators are untouched -- verified: a `try/catch`
+  around an aborting shift does **not** catch it). It propagates exactly like
+  `throwing`: one `replace_all` added `|| env->aborting` to the 94
+  `returning || throwing` short-circuit guards, plus the `eval_expr` entry
+  short-circuit and the driver's `signaled` test.
+- New `DK_RESET` DriveKind: a `(reset ...)` reached on the driver registers a
+  heap `TuriResetBoundary` on `g_reset_stack`, pushes `DK_RESET`, and drives the
+  body beneath it -- **no setjmp, no C frame per reset**. When the body value
+  returns, `DK_RESET` consumes a matching abort (delivers `abort_value`, restores
+  saved `eval_depth`/`handler_stack`/`defer_stack`) or lets a non-matching abort
+  / other signal propagate. `reset_consume_abort` is shared with
+  `eval_reset_boundary` (the non-driver path, also de-setjmp'd).
+- The abortive shift (`eval_abortive_shift` and `abortive_shift_resume`) sets
+  the signal and returns; `reset_find(PROMPT_PLAIN)` still gates the
+  out-of-boundary error.
+- Defer/handler unwind matches `throw`: `DK_CALL_RET` fires the leaked-scope
+  defer chain by-scope on abort, `DK_LET_BODY` leaves its defers for that chain,
+  and an abort cleanly discards an intervening DC `DK_PROMPT` handler (verified:
+  a `shift` inside a `handle` inside a `reset` aborts to the reset, discarding
+  the handler).
+
+Result: `(defn f [n] (if (= n 0) 0 (reset (+ 1 (shift (fn [v] (f (- n 1))) 0)))))`
+now runs `(f 200000)` heap-bounded (was "recursion limit exceeded" at ~500).
+New `tur_eval_tco` regression `nest-sh 200000`. **Guard NOT yet retired** --
+`call/cc` (its own setjmp escape pad, `eval_callcc_escape`) still C-recurses
+(confirmed: still trips at 5000); serial/cloneable resets still use the
+(now-de-setjmp'd) `eval_reset_boundary` C frame per level. Those are Slices 2-3.
+
+Validation: `bash tests/run.sh` (1783/0, compiled path untouched), eval/
+sandbox/STM/effects/continuation/tco/async ctests (14/14), `eval-tco` (10/10),
+`run-turi` baseline (23, no delimited-control fixture regressed). Edge cases
+probed green: shift-outside-reset error, try/catch-doesn't-catch-abort, shift0,
+abort-through-DC-handler, normal perform/handle inside reset.
+
 ## Status update -- 2026-06-23 (N4 partial -- drive reset bodies)
 
 **Safe partial progress on N4: reset bodies are now driven, so a lexical
