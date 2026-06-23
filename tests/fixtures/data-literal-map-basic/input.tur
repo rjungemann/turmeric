@@ -1,14 +1,14 @@
 ;; DL3: #map{:a 1 :b 2} round-trips through map-count / map-get.
+;; SYM3: keyword keys are first-class :Sym values, so look them up with the
+;; keyword directly (not a content hash).
 (defn count- [] : int
   (map-count #map{:a 1 :b 2}))
 (defn get-a [] : int
-  (let [m #map{:a 1 :b 2}
-        k (hamt/hash-str "a")]
-    (map-get m k)))
+  (let [m #map{:a 1 :b 2}]
+    (:: (map-get m :a) :int)))
 (defn get-b [] : int
-  (let [m #map{:a 1 :b 2}
-        k (hamt/hash-str "b")]
-    (map-get m k)))
+  (let [m #map{:a 1 :b 2}]
+    (:: (map-get m :b) :int)))
 (println (count-))
 (println (get-a))
 (println (get-b))
