@@ -1,5 +1,19 @@
 # turi value-pool: residual un-pooled escaping allocations
 
+**Status:** RESOLVED. Both residual sites are now pooled / tracked:
+
+1. The inline-C emulation helpers (`ic_exec_constructor`,
+   `ic_exec_snprintf_fmt`, `ic_exec_switch_string`, `ic_exec_accessor`,
+   `ic_format_snprintf_call`, `ic_snprintf_cond_branch`) take `env` and
+   bump-allocate their escaping payloads from the value pool via
+   `turi_val_alloc` instead of raw `malloc` (`src/turi/eval.c`).
+2. Coroutine execution stacks (fiber + generator) are registered on the env
+   via `turi_env_track_coro_stack` and `munmap`/`free`d in `turi_sched_free`
+   (called from `turi_env_free`) -- an intrusive `TuriCoroStack` list on
+   `TuriEnv` (`src/turi/{env.h,fiber.c,eval.c}`). The env-teardown leak
+   harness (`tests/turi/env-teardown.c`) now drives a generator so the
+   alloc/track/reclaim path runs under ASan.
+
 **Severity:** low (follow-up to a landed change; not a correctness bug).
 
 After Phase 1 of `turi-env-owned-value-arena-pool-plan` (env-owned
