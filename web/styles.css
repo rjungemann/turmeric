@@ -1380,19 +1380,19 @@ pre {
 }
 
 @media (max-width: 600px) {
-    /* Icon-only buttons; Run keeps its label. Preserve the vertical
-       padding so icon buttons match the Run button's height. */
-    .editor-actions .btn:not(#run-btn) {
+    /* Icon-only buttons; Run keeps its label. The Examples <select>
+       carries the .btn class too, so explicitly exclude it -- it has
+       no icon, and font-size:0 would collapse it to a sliver. */
+    .editor-actions .btn:not(#run-btn):not(.select) {
         font-size: 0;
         padding-left: 6px;
         padding-right: 6px;
     }
-    .editor-actions .btn:not(#run-btn) svg {
+    .editor-actions .btn:not(#run-btn):not(.select) svg {
         margin: 0;
     }
-    /* The Examples <select> stays text-labeled (icons would lose meaning
-       on the option list) and uses a touch-friendly hit target. 16px
-       font also keeps iOS from auto-zooming on tap. */
+    /* Touch-friendly Examples dropdown. 16px font also keeps iOS from
+       auto-zooming on tap. */
     .editor-actions .select {
         font-size: 16px;
         max-width: none;
