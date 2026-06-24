@@ -957,6 +957,27 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
     return out;
 }
 
+/* used-attr-whole-program: force a module to be loaded (and thus emitted)
+ * even though no `(import)` reaches it.  This retains a `#[used]` defn that is
+ * reached only through its raw mangled C symbol -- a hand-written cross-module
+ * inline-C bridge or by-address C-ABI callback -- on the single-file /
+ * whole-program build path (`tur build <file>`, `tur run <file>`, `tur test`),
+ * which inlines only the entry's Turmeric import closure and would otherwise
+ * drop the module.  Loading is idempotent (elab_load_module dedups by name),
+ * so force-loading an already-imported module is a no-op; and because no
+ * `:refer` is applied, none of the module's names enter the entry's scope --
+ * its module-private defns are simply registered for file-scope emission, just
+ * as an ordinary `(import ...)` of the module would do.  No-op under separate
+ * compilation (every project module is compiled and linked there already). */
+void elab_force_load_module(Elab *e, const char *module_name) {
+    if (!e || !module_name || !*module_name) return;
+    if (e->separate_compilation) return;
+    const Symbol *sym =
+        symtab_intern(e->st, strslice(module_name, (uint32_t)strlen(module_name)));
+    Span span = {0, 0, 0, 0, 0, 0};
+    (void)elab_load_module(e, sym, span);
+}
+
 /* M1: Resolve a symbol with module visibility and qualified name support.
  * Returns the binding on success.
  * Returns NULL with *had_error = false: symbol not found, caller emits "unbound".

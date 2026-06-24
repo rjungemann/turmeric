@@ -69,4 +69,18 @@ typedef struct Ls2ResolverCtx {
 void                  ls2_resolver_ctx_set(const Ls2ResolverCtx *ctx);
 const Ls2ResolverCtx *ls2_resolver_ctx_active(void);
 
+/* used-attr-whole-program: per-compile list of module names to force-load
+ * during whole-program elaboration so a `#[used]` defn reached only via a raw
+ * mangled C symbol (no `(import)`) is still emitted.  Set by main.c's
+ * compile_to_c around the elaborate_program call and cleared after; NULL/0
+ * elsewhere (REPL, eval, separate compilation), where the force-load is inert.
+ * Module names are slash-separated (e.g. "app/a"), matching `(import ...)`. */
+typedef struct UsedModulesCtx {
+    const char **modules;
+    int          n;
+} UsedModulesCtx;
+
+void                  used_modules_ctx_set(const UsedModulesCtx *ctx);
+const UsedModulesCtx *used_modules_ctx_active(void);
+
 #endif
