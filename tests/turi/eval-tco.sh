@@ -47,6 +47,7 @@ check_line "cap-rec 200000 = 0 (SR N4 Slice 4 recursive capturing shift bounded)
 check_line "re-go 200000 = 0 (SR N4 Slice 5 recursive resume heap-bounded)" "0"
 check_line "rc-go 200000 = 0 (SR N4 Slice 6 recursive resume-cont! heap-bounded)" "0"
 check_line "ip-go 200000 = 0 (SR N4 Slice 7 recursive is_pure fold heap-bounded)" "0"
+check_line "tin 200000 = 0 (driver-coverage shift inside try body heap-bounded)" "0"
 
 echo ""
 echo "$PASS passed, $FAIL failed"

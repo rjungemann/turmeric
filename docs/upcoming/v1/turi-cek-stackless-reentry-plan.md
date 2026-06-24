@@ -25,28 +25,50 @@ guard (each was recursion-limit at ~500 before its slice). New `tur_eval_tco`
 regression `ip-go 200000`. `bash tests/run.sh` (1783/0), eval/effects/
 continuation/tco ctests (14/14), `eval-tco` (17/17), `run-turi` baseline (23).
 
-**Guard retirement (N4 proper) -- BLOCKED by a separate workstream; guard
-stays.** Probed the residual non-driver paths and they DO scale: a control
-operator nested inside an `eval_expr` *black-box form* takes the synchronous
-non-driver path and C-recurses. Confirmed both still trip at 5000:
+## Status update -- 2026-06-24 (driver-coverage -- try/catch driven; guard assessment)
 
-- `(reset (+ 1 (try (shift (fn [v] (rec (- n 1))) 0) (catch e 0))))` -- the
-  `shift` sits in a `try` body, which the driver black-boxes to `eval_expr`, so
-  it reaches `eval_abortive_shift` (non-driver) and `turi_call`s the receiver.
-- `(try (call/cc (fn [k] (+ 1 (rec (- n 1))))) (catch e 0))` -- same shape via
-  `eval_callcc_escape`.
+Took on the driver-coverage workstream that gates `eval_depth` deletion.
 
-The root cause is no longer in SR's scope: it is the driver not yet modeling the
-remaining special forms (`EX_TRY_CATCH`, `EX_WHILE`, `EX_STM`, ...), so a control
-operator *inside* one of them never reaches the driver's work-stack cases.
-SR has now heap-bounded **every delimited-control recursion that flows through a
-driven position** (Slices 1-7); fully deleting the `eval_depth` guard requires
-driving those black-box forms too (the trampoline / driver-coverage workstream),
-after which control operators inside them would use the same work-stack paths.
-Until then the guard remains load-bearing for the black-box-nested case and the
-bounded single re-entries (Show, sync `tvar/modify`, embedder `turi_call`). **SR
-N4's native-re-entry conversion is complete; the guard's deletion is gated on
-driver coverage of the residual forms, tracked as the next step.**
+**`try`/`catch` is now driven** (`DK_TRY_BODY` / `DK_TRY_CATCH`; non-driver
+`eval_expr_impl` delegates to `eval_drive`), so a control operator inside a try
+body reaches the work-stack instead of the synchronous non-driver path. The two
+confirmed blockers from the prior assessment are gone:
+`(reset (+ 1 (try (shift ... ) (catch [e] 0))))` and the call/cc analog now run
+heap-bounded.
+
+**Then probed the rest -- and found the retirement premise needs correcting.**
+The remaining forms that still trip the guard are NOT the "control operator
+inside a black box" class; they are *genuinely C-scoped boundary forms* whose own
+nesting C-recurses: `catch-unwind` (a setjmp panic boundary + thunk `turi_call`),
+`atomically` (STM transaction), `async`/`await`/`handle` (fibers). Crucially,
+**the compiled path C-recurses on these too** -- `(rec (catch-unwind (fn [] (+ 1
+(rec (- n 1))))))` SIGSEGVs the compiled binary at 200000. So these forms are
+C-stack-scoped by design, in both the interpreter and the compiled output.
+
+**Measured guard scoping after this work (all at 1,000,000 deep, no guard
+fire):** tail recursion, non-tail recursion, `reset`/`shift` delimited control,
+and `try`/`catch`-wrapped recursion. The guard now fires *only* when C-stack
+depth is genuinely high -- i.e. for the C-scoped boundary forms -- because the
+folded call path and the work-stack control forms do not grow `eval_depth`.
+
+**Recommendation: do NOT delete `eval_depth`; it is now correctly scoped.** The
+SR + try/catch work achieved the real goal -- the guard no longer fires for
+ordinary recursion, delimited control, or try/catch (heap-bounded to 1M+). It
+remains a graceful C-stack-overflow backstop for `catch-unwind` / `atomically` /
+`async`, which the compiled path *crashes* on. Deleting the guard would trade
+that graceful "recursion limit exceeded" for a SIGSEGV that merely matches the
+compiled crash, with zero heap-bounding benefit. Heap-bounding those forms in the
+interpreter is possible (a work-stack panic signal like `env->aborting`, STM
+retry on the work-stack, a fiber redesign) but is a large per-subsystem effort
+that would make the interpreter strictly *exceed* compiled capabilities -- a
+semantic mismatch -- for the rare case of nesting transactions/panic-boundaries
+thousands deep. Recommend leaving it for now; the guard is no longer the blunt
+"all recursion" limit it was -- it is a precise C-stack backstop.
+
+(Supersedes the prior "gated on driving the residual black-box forms" note:
+`try`/`catch` -- the one common heap-boundable black-box form -- is now driven;
+the rest, `catch-unwind` / `atomically` / `async`, are C-scoped in both the
+interpreter and the compiled output, so the guard is the right tool for them.)
 
 ## Status update -- 2026-06-24 (N4 Slice 6 -- resume-cont! folds on the work-stack)
 

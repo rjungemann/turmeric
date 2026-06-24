@@ -196,3 +196,14 @@
 (defn ip-go [n :int] :int
   (cloneable-reset (ip-step (if (> n 0) 1 (cloneable-shift (fn [k] 0) 0)) n)))
 (println (ip-go 200000))
+
+;; --- Test 17 (driver-coverage): control operator inside a try body ----------
+;; A (shift ...) inside a (try ...) body: before try/catch was driven, the try
+;; black-boxed to eval_expr and the shift took the synchronous non-driver path
+;; (eval_abortive_shift -> turi_call receiver), C-recursing.  EX_TRY_CATCH is now
+;; a driver case (DK_TRY_BODY / DK_TRY_CATCH), so the shift reaches the work-stack
+;; and the receiver recursion folds onto the heap.  tin N aborts each level -> 0.
+(defn tin [n :int] :int
+  (if (= n 0) 0
+    (reset (+ 1 (try (shift (fn [v :int] (tin (- n 1))) 0) (catch [e] 0))))))
+(println (tin 200000))
