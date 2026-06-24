@@ -6417,7 +6417,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (e->as.match_.arms[ai].guard) { has_any_guard = true; break; }
             }
 
-            if (has_any_guard) {
+            /* CONV-S2: a single-variant flat-product ADT has no `tag` word, so it
+             * cannot be dispatched with a `switch (__scrut->tag)`.  Route it
+             * through the if-chain path (which never reads the tag for these
+             * types -- see the ctor-arm header below) so the sole arm is entered
+             * unconditionally.  The single variant makes the match trivially
+             * exhaustive, so first-arm-wins is correct. */
+            bool adt_flat = adt_is_flat_product(adt);
+
+            if (has_any_guard || adt_flat) {
                 /* Phase G4: Emit as if-chain with goto for guard fallthrough */
                 char *end_label = fresh_tmp(ctx);
                 indent_buf(body, ctx->indent);
@@ -6434,7 +6442,9 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     MatchPattern *pat = &arm->pattern;
 
                     indent_buf(body, ctx->indent);
-                    if (pat->is_wildcard || pat->is_var) {
+                    if (pat->is_wildcard || pat->is_var || adt_flat) {
+                        /* No tag word on a flat single-variant ADT: the sole
+                         * constructor arm is entered unconditionally. */
                         buf_puts(body, "{\n");
                     } else {
                         buf_printf(body, "if (__scrut->tag == %u) {\n", pat->ctor->tag);

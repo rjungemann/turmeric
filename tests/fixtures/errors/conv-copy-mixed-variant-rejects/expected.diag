@@ -1,1 +1,1 @@
-:copy type 'Handle' cannot contain non-copy field 'box' of variant 'Shared'
+cannot contain non-copy field 'o' of variant 'B'

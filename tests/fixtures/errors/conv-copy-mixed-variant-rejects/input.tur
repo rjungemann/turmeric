@@ -1,9 +1,9 @@
-;; CONV-S5 (struct/ADT convergence): a :copy ADT must have every variant's
-;; payload be copy-compatible.  Variant `Shared` carries an rc<int> (an owning,
-;; move-only pointer), so the type cannot be :copy.  The diagnostic pinpoints
-;; the offending field and variant.
-(defdata Handle :copy
-  (Owned  [n : int])
-  (Shared [box : rc<int>]))
+;; CONV-S5 (struct/ADT convergence): a :copy ADT requires every variant's
+;; payload to be copy-compatible.  Variant 'B' carries an `rc<int>` (a
+;; move-only, refcounted ownership field), so the :copy annotation is rejected
+;; with a diagnostic that pinpoints both the offending field and its variant.
+(defdata Mixed :copy
+  (A [x : int])
+  (B [o : rc<int>]))
 
 (defn main [] : int 0)

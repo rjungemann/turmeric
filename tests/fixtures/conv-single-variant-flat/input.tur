@@ -1,0 +1,18 @@
+;; CONV-S2 (struct/ADT convergence): a single-variant, non-GADT ADT is a
+;; product, so codegen specializes it to a FLAT layout -- no `int tag` word in
+;; the typedef, no tag store in the constructor, and no tag test in `match`.
+;; The expected.c snapshot locks this representation in: a `grep tag` over the
+;; generated `tur_adt_S` typedef / `ctor_S` body / the match must come up empty.
+;; Multi-variant ADTs keep their tagged union (see conv-multi-variant-tagged).
+
+(defdata S
+  (S [a : int b : int]))
+
+(defn sum [s] : int
+  (match s
+    (S a b) (+ a b)))
+
+(defn main [] : int
+  (let [s (S :a 10 :b 32)]
+    (println (sum s))            ; 42
+    0))

@@ -22,17 +22,49 @@ green):
 - **CONV-S7 (partial) -- docs.** Record variants and match-on-struct are
   documented in the sum-types and structs guides.
 
-**Deferred** (a dedicated effort -- a deep representation change; structs are
-by-value flat C structs while ADTs are heap-pointer tagged unions, and
-match/field/ctor/ABI codegen all branch on that):
+**CONV-S2 (contained) -- landed.** Single-variant, non-GADT ADTs now codegen
+to a *flat product* layout: the `tur_adt_<Name>` typedef carries no `int tag`
+word, the per-constructor allocator stores no tag, and `match` enters the sole
+arm unconditionally (no `switch (__scrut->tag)`). Multi-variant ADTs and GADTs
+(whose tag may drive return-type refinement) keep the tagged-union layout
+unchanged. The gate is a single predicate, `adt_is_flat_product()`
+([`types.h`](../../src/compiler/types.h)), shared by every tag-emitting and
+tag-reading codegen site so the typedef, constructors, and match stay in
+lockstep:
 
-- **CONV-S2 -- flat-layout codegen for single-variant ADTs** (byte-identical
-  to `defstruct`).
-- **CONV-S1 -- `defstruct` lowers to a single-variant `defdata`** (depends on
-  S2, else every struct pays a tag-word cost).
-- **CONV-S4 (`with` half)** -- needs field access on a narrowed/single-variant
-  ADT value, which rides on the S2 codegen.
-- **CONV-S6 -- diagnostic wording pass** -- best done once S1/S2 settle.
+- typedef + ctor emission -- `emit_adt_typedef_and_ctors`
+  ([`emit_module.c`](../../src/compiler/emit_module.c)), the early-file path in
+  the same file, and the monomorphized ADT-app emitter
+  ([`types.c`](../../src/compiler/types.c) `emit_registered_adt_app_rec`).
+- match emission -- the if-chain path in
+  ([`emit_expr.c`](../../src/compiler/emit_expr.c)) is reused for flat ADTs
+  with the tag test dropped.
+
+This is the *contained* reading of CONV-S2: the single-variant ADT is flat
+(no tag word, no discriminant load) but still flows through the heap-pointer
+int64 carrier ABI -- it is **not** yet byte-identical to a by-value
+`defstruct` (that requires CONV-S1's representation merge, below). Fixtures:
+`conv-single-variant-flat` (snapshot: tagless layout), `conv-multi-variant-tagged`
+(snapshot: tag preserved), `errors/conv-copy-mixed-variant-rejects` (CONV-S5).
+
+**Deferred -- the full representation merge** (a dedicated effort; structs are
+by-value flat C structs while ADTs are heap-pointer carriers, and
+field/ctor/ABI codegen all branch on that):
+
+- **CONV-S1 -- `defstruct` lowers to a single-variant `defdata`.** With CONV-S2
+  the tag-word cost is gone, but a true merge still has to make single-variant
+  ADTs flow *by value* (today they are heap-pointer int64 carriers) so the
+  lowered struct is byte-identical -- touching the ABI, monomorphization,
+  drop-glue, and ~57 `defdata` fixtures.
+- **Field access on a narrowed/single-variant record variant** (`(.field v)` /
+  `(. v field)`). CONV-S0 documented this but only match-binding shipped;
+  `(.x p)` on a single-variant record ADT still resolves through the accessor-
+  as-typeclass-method path and errors. Needed before CONV-S4(`with`).
+- **CONV-S4 (`with` half)** -- `elab_with`
+  ([`elab_structs.c`](../../src/compiler/elab_structs.c)) requires a `StructDef`
+  source today; lifting it to single-variant record ADTs rides on the field-
+  access item above.
+- **CONV-S6 -- diagnostic wording pass** -- best done once the merge settles.
 
 ## Context
 
