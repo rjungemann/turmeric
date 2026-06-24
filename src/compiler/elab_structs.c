@@ -1721,6 +1721,27 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                 return NULL;
             }
             ctor->fields[fi].name = rec_field_names ? rec_field_names[fi]->name : NULL;
+
+            /* CONV-S5: a :copy ADT requires every variant's payload to be
+             * copy-compatible.  A non-copy field (rc/ref/weak/lref ownership)
+             * makes the value move-only, which contradicts :copy.  Reject it
+             * here, pinpointing the offending field and variant. */
+            if (def->is_copy &&
+                !typekind_is_copy_for_struct(ctor->fields[fi].kind)) {
+                const char *fdesc = ctor->fields[fi].name;
+                if (fdesc) {
+                    diag_emit(DIAG_ERROR, field_type_forms[fi]->span,
+                              "defdata: :copy type '%s' cannot contain non-copy "
+                              "field '%s' of variant '%s'",
+                              def->name, fdesc, ctor->name);
+                } else {
+                    diag_emit(DIAG_ERROR, field_type_forms[fi]->span,
+                              "defdata: :copy type '%s' cannot contain non-copy "
+                              "field %u of variant '%s'",
+                              def->name, fi, ctor->name);
+                }
+                return NULL;
+            }
         }
 
         def->ctors[ci] = ctor;
