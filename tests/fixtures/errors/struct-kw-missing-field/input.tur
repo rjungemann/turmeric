@@ -1,0 +1,3 @@
+(defstruct Person :copy [name : cstr age : int])
+(defn main [] : int
+  (let [p (Person :name "Bob")] 0))

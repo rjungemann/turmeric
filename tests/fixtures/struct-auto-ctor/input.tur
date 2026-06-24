@@ -1,0 +1,18 @@
+;; CTOR-V0: defstruct auto-binds a value-namespace constructor `Person` such
+;; that (Person "Bob" 40) is equivalent to (make-struct Person "Bob" 40).
+;; The struct name still resolves as a type in annotations (value/type
+;; namespaces are distinct).
+
+(defstruct Person :copy [name : cstr age : int])
+
+(defn show-person [p : Person] : void
+  (println (.name p))
+  (println (.age p)))
+
+(defn main [] : int
+  (let [a (Person "Bob" 40)
+        b (make-struct Person "Bob" 40)]
+    ;; Auto-bound ctor and make-struct produce the same value.
+    (show-person a)
+    (show-person b)
+    0))

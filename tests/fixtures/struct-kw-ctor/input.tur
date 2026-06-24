@@ -1,0 +1,18 @@
+;; KW-V0: keyword construction for both make-struct and the auto-bound
+;; constructor.  Keyword order is free; the elaborator reorders into the
+;; declared field positions.
+
+(defstruct Person :copy [name : cstr age : int])
+
+(defn show-person [p : Person] : void
+  (println (.name p))
+  (println (.age p)))
+
+(defn main [] : int
+  (let [a (make-struct Person :age 40 :name "Bob")   ; make-struct, reversed
+        b (Person :name "Alice" :age 41)              ; auto-ctor, in order
+        c (Person :age 42 :name "Carol")]             ; auto-ctor, reversed
+    (show-person a)
+    (show-person b)
+    (show-person c)
+    0))

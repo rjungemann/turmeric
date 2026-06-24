@@ -333,6 +333,12 @@ typedef struct StructDef {
      * Only meaningful for non-parameterized structs (n_type_params == 0); for generic
      * structs the per-instantiation RegisteredStructApp.pass_by_ptr flag is used. */
     bool        pass_by_ptr;
+    /* struct-ergonomics CTOR-V0: when set (via the :no-auto-ctor defstruct
+     * annotation) the elaborator does NOT auto-bind a value-namespace
+     * constructor function for this struct, and `(Name ...)` call syntax is
+     * not routed to make-struct.  Escape hatch for the rare case where the
+     * struct name is already bound as a value elsewhere. */
+    bool        no_auto_ctor;
 } StructDef;
 
 /* Phase 11: canonical default copy-kind by kind (typeclass path is primary; this
