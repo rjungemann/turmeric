@@ -4,6 +4,43 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.25.0] -- 2026-06-23
+
+### Removed
+
+- **`throw` / `try` / `catch` deleted.** The Phase S4 exception forms
+  are gone end-to-end: elab arms (`elab_throw`, `elab_try_catch`),
+  `EX_THROW` / `EX_TRY_CATCH` IR enum tags and struct members, codegen
+  arms in `emit_expr.c` / `emit_stmt.c`, the borrow-check arm, the
+  interpreter eval cases plus the `DK_TRY_BODY` / `DK_TRY_CATCH`
+  driver continuations, `turi_native_throw` / `make_throw_val`, and
+  the `TUR-D0002` deprecation warning. Use `result<T,E>` for
+  recoverable failures and `panic` / `catch-unwind` for unrecoverable
+  ones. Runtime helpers (`tur_panic_with`, `tur_catch_unwind`, the
+  `setjmp`/`longjmp` plumbing) stay -- they're load-bearing for
+  `panic`. See
+  [`docs/archive/throw-deprecation-plan.md`](docs/archive/throw-deprecation-plan.md).
+
+### Changed
+
+- **Interpreter fiber rejection now flows through a new
+  `TURI_REJECTION` value tag.** `(await ...)`, `with-timeout`, and
+  `task-cancel` produce `TURI_REJECTION` instead of throwing; callers
+  observe rejections with `(error? r)` / `(error-message r)` instead
+  of `(try ... (catch [e] ...))`. The new tag is distinct from
+  `TURI_ERROR` so binding a rejection in `(let [r (await ...)] ...)`
+  does not trigger the interpreter's universal error short-circuit.
+
+### Fixed
+
+- **Opaque / struct tyvar binding lost through closure arg position
+  (#530).** Type-variable bindings for opaque newtypes and structs
+  now survive being threaded through a closure argument position.
+- **Typed inline lambdas as macro arguments now splice verbatim
+  (#529).** Typed `(fn [...] ...)` literals passed to a macro are
+  preserved through quasiquote expansion instead of being re-parsed
+  as raw symbols.
+
 ## [0.24.3] -- 2026-06-23
 
 ### Added

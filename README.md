@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.24.3` -- STM finished on TL2 fine-grained locking; stackless delimited control and `call/cc` move onto the work-stack; new `--enable=<name>` experimental feature-flag mechanism.
+**Latest release:** `v0.25.0` -- `throw` / `try` / `catch` removed end-to-end; interpreter fiber rejection now flows through a new `TURI_REJECTION` value observed via `(error? r)` / `(error-message r)`; opaque/struct tyvar + typed-inline-lambda macro fixes.
 
 ## What
 
