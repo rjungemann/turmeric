@@ -72,10 +72,10 @@ its own PR; tick when the spice no longer hand-rolls the struct.
 |---|---|---|
 | ~~rtmidi~~ | core.tur, in.tur, out.tur | **done** (v0.2.0, exemplar) |
 | ~~json~~ | parse.tur, patch.tur (encode.tur uses `__errs-*`, out of scope) | **done** (v0.2.0) |
-| notebook | format.tur | pending |
+| ~~notebook~~ | format.tur (helpers re-routed; `:int` surface kept -- see notes) | **done** (v0.2.0) |
 | ~~osc~~ | client.tur, server.tur | **done** (v0.3.0) |
-| plot | core.tur | pending |
-| plutovg | canvas.tur, font.tur, paint.tur, path.tur, surface.tur | pending |
+| ~~plot~~ | core.tur (helpers re-routed; `:ptr<void>` surface kept -- see notes) | **done** (v0.4.0) |
+| ~~plutovg~~ | canvas.tur, font.tur, paint.tur, path.tur, surface.tur | **done** (v0.2.0) |
 | ~~png~~ | reader.tur, writer.tur | **done** (v0.2.0) |
 | ~~postgres~~ | db.tur, notify.tur, stmt.tur (+ row.tur extractor) | **done** (v0.4.0) |
 | ~~rtaudio~~ | core.tur, stream.tur | **done** (v0.3.0) |
