@@ -73,6 +73,46 @@ inseparable, so the type checker forces you to handle every case.
 
 Constructors become ordinary callables: `(Left 3)`, `(Right "ok")`.
 
+### Record-style variants (named fields)
+
+A variant's payload can be a *named-field block* instead of positional
+payloads -- the same `[name : type ...]` shape `defstruct` uses. This is the
+sum-of-records form (Rust's `enum Foo { Bar { x: int, y: int } }`):
+
+```turmeric
+(defdata Shape :copy
+  (Circle [radius : float])
+  (Rect   [w : float h : float])
+  (Square [side : float]))
+```
+
+A record-style variant constructs **positionally** or **by keyword** (order
+free), exactly like a struct:
+
+```turmeric
+(Circle 2.0)               ; positional
+(Rect :h 4.0 :w 3.0)       ; keyword, reordered
+```
+
+and `match` binds its fields **by position or by name**:
+
+```turmeric
+(match s
+  (Circle r)          (* 2.0 (* 3.14 r))     ; positional
+  (Rect :h hv :w wv)  (* 2.0 (+ wv hv))       ; by-name, reordered
+  (Square side)       (* 4.0 side))
+```
+
+Positional and record styles can mix across the variants of one `defdata`;
+each variant commits to a single style. A positional variant still uses
+keyword payload types (`(Circle :float)`); a record variant uses the bare
+struct field syntax (`[radius : float]`).
+
+`:copy` traverses every variant: a `:copy` sum whose payload includes an
+owning pointer (`rc<T>`, `ref<T>`, `weak<T>`) is rejected, naming the
+offending field and variant -- the same rule `defstruct :copy` enforces,
+lifted across the sum.
+
 ## Pattern matching: `match`
 
 `match` dispatches on the constructor and binds each payload:
