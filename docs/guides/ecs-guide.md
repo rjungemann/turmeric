@@ -531,7 +531,21 @@ bodies reflect the concrete world's C struct name via the
 `__TUR_TY_W__` template marker, so a per-world inline-C block is no
 longer needed.
 
-Plus a `(def <C>-cid <n>)` per component, per world. See
+Plus a `(def <C>-cid <n>)` per component, per world. As of GEN-V0 the
+numbered constants are also macro-emitted:
+
+```turmeric
+(import ecs/world :refer [defcomponent-cids])
+
+(defcomponent-cids [Pos])           ;; emits (def Pos-cid 0)
+(defcomponent-cids [RenderPos])     ;; emits (def RenderPos-cid 0)
+```
+
+Cids are per-world, so two distinct worlds may legitimately assign `0`
+to different components -- the scheduler keys conflict on `(world, cid)`
+rather than `cid` alone. Numbering is stable per `:components` order;
+reordering an existing list is a breaking change to any external
+consumer of cid numbers. See `tests/defcomponent-cids.tur` and
 `tests/xworld-defbox.tur` in the ecs spice for the canonical shape;
 `tests/xworld-extract.tur` shows the legacy hand-rolled trio.
 
@@ -544,8 +558,8 @@ Plus a `(def <C>-cid <n>)` per component, per world. See
 (sized-defworld-mono RenderWorld (Static 8) [RenderPos])
 (sized-defcomponent-accessors-xmono RenderWorld RenderPos)
 
-(def Pos-cid       0)
-(def RenderPos-cid 0)
+(defcomponent-cids [Pos])
+(defcomponent-cids [RenderPos])
 
 ;; box-/load-/free- helpers for each world type elided -- see plumbing above.
 
