@@ -122,9 +122,21 @@ What is still missing -- and what TC5 here delivers -- is:
   all seven against the stdlib accessors (`ok?`/`err?`/`ok-val`/`err-val`/
   `some?`/`unwrap`).
 
-- [ ] **TC6** -- Documentation:
+- [x] **TC6** -- Documentation:
   `docs/guides/inline-c-results-guide.md` with a worked rtmidi-shaped
   example; cross-ref from `docs/guides/opaques-guide.md`.
+  **Landed:** new guide covers the full helper table (typed
+  `tur_ok_ptr`/`tur_err_int`/`tur_some_ptr`/`tur_none` plus the
+  carrier-level `tur_box_*` and the inspectors), a worked rtmidi
+  `MidiIn` `(Result MidiIn int)` constructor, the `_Static_assert`
+  layout guard, the two anti-patterns it replaces, and the
+  `_int`/`_ptr`-only limitation. Cross-referenced from
+  `opaques-guide.md` (inline-C/ABI section + See also) and registered in
+  the guides `README.md`. Also reconciled the stale
+  `c-integration-guide.md` "Returning result/option" section, which
+  documented non-existent `tur_ok`/`tur_err`/`tur_some` names and falsely
+  claimed there were no `_int`/`_ptr` variants -- it now uses the real
+  builder names and points at the new guide.
 
 - [ ] **TC7** -- Update the audit
   (`docs/reported/spices-int-stand-in-audit-2026-06-14.md`) and the

@@ -168,6 +168,13 @@ This uniform `int64_t` carrier is the same mechanism described in
 [type-erasure-guide.md](type-erasure-guide.md); opaques are one of the
 three sites where the compiler collapses high-level types to the carrier.
 
+When the constructor is **fallible** -- it acquires the handle in C and
+can fail -- hand back a typed `(Result Handle E)` / `(Option Handle)`
+rather than the bare opaque, built with the preamble helpers
+`tur_ok_ptr` / `tur_err_int` / `tur_some_ptr` / `tur_none`. See
+[inline-c-results-guide.md](inline-c-results-guide.md) for the worked
+pattern.
+
 ## Substructural opaques
 
 Adding `:linear` or `:affine` flips two checker bits on the underlying
