@@ -106,11 +106,21 @@ What is still missing -- and what TC5 here delivers -- is:
 
 ## Implementation phases
 
-- [ ] **TC5** -- Runtime helpers: `tur_ok_int`, `tur_err_int`,
+- [x] **TC5** -- Runtime helpers: `tur_ok_int`, `tur_err_int`,
   `tur_ok_ptr`, `tur_err_ptr`, `tur_some_int`, `tur_some_ptr`,
   `tur_none`. Decide on shape (open question 1 below). Static_assert
   cross-check against `stdlib/result.tur` / `stdlib/option.tur` layout.
   Fixture: `tests/fixtures/inline-c-result-builder/`.
+  **Landed (shape a):** the seven helpers are emitted alongside the
+  existing `tur_box_*` statics in `emit_closure_fat_runtime`
+  (`src/compiler/emit_module.c`). `_int` variants take an `int64_t`
+  payload directly; `_ptr` variants take a `void *` and widen it through
+  `intptr_t` so the inline-C author never hand-writes the cast;
+  `tur_none()` is the function companion to the `TUR_NONE` macro. A
+  `_Static_assert` pair pins `tur_option_t` / `tur_result_box_t` to the
+  `2*int64`/`3*int64` byte layout shared with stdlib. Fixture exercises
+  all seven against the stdlib accessors (`ok?`/`err?`/`ok-val`/`err-val`/
+  `some?`/`unwrap`).
 
 - [ ] **TC6** -- Documentation:
   `docs/guides/inline-c-results-guide.md` with a worked rtmidi-shaped

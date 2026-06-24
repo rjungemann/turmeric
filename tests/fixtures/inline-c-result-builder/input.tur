@@ -1,0 +1,86 @@
+;; TC5 (type-system-c-abi-followups-plan) -- typed inline-C result/option
+;; builders.  The predecessor plan's fixture (inline-c-typed-result-option)
+;; built typed Result/Option values with the raw tur_box_* helpers, hand-casting
+;; pointer payloads with `(int64_t)(intptr_t)h`.  TC5 adds the _int / _ptr
+;; suffixed builders so the inline-C author never writes that cast: tur_ok_ptr /
+;; tur_err_ptr / tur_some_ptr take a `void *` and widen it; tur_ok_int /
+;; tur_err_int / tur_some_int take an int64_t payload directly; tur_none() is the
+;; function-call companion to TUR_NONE.  Every value shares the canonical
+;; Result/Option heap layout, so it flows straight into the stdlib accessors
+;; (ok?, err?, ok-val, err-val, some?, unwrap).
+
+(defopaque Device :ptr<void>)
+
+;; open-device : id -> (Result Device int)
+;;   ptr payload via tur_ok_ptr (no hand cast); int err code via tur_err_int.
+(defn open-device [id : int] : (Result Device int)
+  ```c
+  #include <stdlib.h>
+  if (id < 0) return tur_err_int(22);
+  int64_t *h = (int64_t *)malloc(sizeof(int64_t));
+  *h = 1000 + id;
+  return tur_ok_ptr(h);
+  ```)
+
+;; classify : n -> (Result int int)   ok payload via tur_ok_int (n doubled),
+;;   err payload via tur_err_int (the rejected n) for negatives.
+(defn classify [n : int] : (Result int int)
+  ```c
+  if (n < 0) return tur_err_int(n);
+  return tur_ok_int(n * 2);
+  ```)
+
+;; device-tag : read the int stashed behind the opaque Device handle.
+(defn device-tag [d : Device] : int
+  ```c return (int)*(int64_t *)(intptr_t)d; ```)
+
+;; device-free : release a Device handle.
+(defn device-free [d : Device] : void
+  ```c free((void *)(intptr_t)d); ```)
+
+;; maybe-open : id -> (Option Device)   tur_none() for a negative id,
+;;   tur_some_ptr for the allocated handle.
+(defn maybe-open [id : int] : (Option Device)
+  ```c
+  #include <stdlib.h>
+  if (id < 0) return tur_none();
+  int64_t *h = (int64_t *)malloc(sizeof(int64_t));
+  *h = 2000 + id;
+  return tur_some_ptr(h);
+  ```)
+
+;; maybe-int : n -> (Option int)   tur_none() for zero, tur_some_int otherwise.
+(defn maybe-int [n : int] : (Option int)
+  ```c
+  if (n == 0) return tur_none();
+  return tur_some_int(n + 1);
+  ```)
+
+(defn main [] : int
+  (do
+    ;; ptr-payload Result built in C, inspected by stdlib accessors
+    (let [r (open-device 7)]
+      (do
+        (println (ok? r))                 ;; true
+        (println (device-tag (ok-val r))) ;; 1007
+        (device-free (ok-val r))))
+    (let [e (open-device -1)]
+      (do
+        (println (err? e))                ;; true
+        (println (err-val e))))           ;; 22
+    ;; int-payload Result built in C
+    (let [c (classify 21)]
+      (println (ok-val c)))               ;; 42
+    (let [c (classify -5)]
+      (println (err-val c)))              ;; -5
+    ;; ptr-payload Option built in C
+    (let [o (maybe-open 5)]
+      (do
+        (println (some? o))               ;; true
+        (println (device-tag (unwrap o))) ;; 2005
+        (device-free (unwrap o))))
+    (println (some? (maybe-open -1)))     ;; false
+    ;; int-payload Option built in C
+    (println (unwrap (maybe-int 9)))      ;; 10
+    (println (some? (maybe-int 0)))       ;; false
+    0))
