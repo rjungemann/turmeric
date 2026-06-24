@@ -807,6 +807,8 @@ static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
     return true;
 }
 
+static bool expr_is_pbp_param(EmitCtx *ctx, const Expr *struct_expr);
+
 static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Phase 3/4: Check if body contains return or throw first */
     bool body_has_return_or_throw = expr_contains_return_or_throw(e->as.let_.body);
@@ -950,7 +952,23 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             const char *init_cn = emit_type_c_name(ctx, init_ty_r);
             bool init_is_ptr_repr = init_cn && strchr(init_cn, '*') != NULL;
-            if (strcmp(bind_c, "int64_t") == 0 &&
+            /* let-bind-passbyptr-struct-param-invalid-initializer: a struct
+             * parameter whose fields sum to > 16 bytes arrives via the
+             * by-pointer ABI (`const T *`), but the let binding is declared
+             * by value (`bind_c` is the bare struct, no `*`).  A direct
+             * `T g = t;` initialiser is then a pointer->struct mismatch that
+             * `cc` rejects.  Dereference the pbp param (`T g = *t;`) so the
+             * by-value local is initialised from the pointed-to struct -- the
+             * same receiver handling EX_GET_FIELD already applies via
+             * `expr_is_pbp_param`.  A pointer-represented binding (carrier /
+             * :heap, `bind_c` contains `*`) keeps the bare alias. */
+            bool bind_is_ptr_repr = strchr(bind_c, '*') != NULL;
+            bool init_is_pbp = expr_is_pbp_param(ctx,
+                                                 e->as.let_.bindings[i].init);
+            if (init_is_pbp && !bind_is_ptr_repr &&
+                strcmp(bind_c, "int64_t") != 0) {
+                buf_printf(body, "%s %s = *(%s);\n", bind_c, bn, iv);
+            } else if (strcmp(bind_c, "int64_t") == 0 &&
                 (init_kind == TY_FN || init_kind == TY_PTR_VOID || init_is_ptr_repr)) {
                 buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n", bind_c, bn, iv);
             } else {
@@ -1118,7 +1136,23 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             const char *init_cn = emit_type_c_name(ctx, init_ty_r);
             bool init_is_ptr_repr = init_cn && strchr(init_cn, '*') != NULL;
-            if (strcmp(bind_c, "int64_t") == 0 &&
+            /* let-bind-passbyptr-struct-param-invalid-initializer: a struct
+             * parameter whose fields sum to > 16 bytes arrives via the
+             * by-pointer ABI (`const T *`), but the let binding is declared
+             * by value (`bind_c` is the bare struct, no `*`).  A direct
+             * `T g = t;` initialiser is then a pointer->struct mismatch that
+             * `cc` rejects.  Dereference the pbp param (`T g = *t;`) so the
+             * by-value local is initialised from the pointed-to struct -- the
+             * same receiver handling EX_GET_FIELD already applies via
+             * `expr_is_pbp_param`.  A pointer-represented binding (carrier /
+             * :heap, `bind_c` contains `*`) keeps the bare alias. */
+            bool bind_is_ptr_repr = strchr(bind_c, '*') != NULL;
+            bool init_is_pbp = expr_is_pbp_param(ctx,
+                                                 e->as.let_.bindings[i].init);
+            if (init_is_pbp && !bind_is_ptr_repr &&
+                strcmp(bind_c, "int64_t") != 0) {
+                buf_printf(body, "%s %s = *(%s);\n", bind_c, bn, iv);
+            } else if (strcmp(bind_c, "int64_t") == 0 &&
                 (init_kind == TY_FN || init_kind == TY_PTR_VOID || init_is_ptr_repr)) {
                 buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n", bind_c, bn, iv);
             } else {

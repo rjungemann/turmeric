@@ -1,5 +1,14 @@
 # `let`-binding a by-pointer struct parameter emits an invalid C initializer
 
+**Status:** RESOLVED. The `let`/`letrec` binding codegen in
+`src/compiler/emit_expr.c` (`emit_let_value` / `emit_letrec_value`) now
+detects when the initializer is a by-pointer struct parameter
+(`expr_is_pbp_param`) bound to a by-value local, and dereferences it
+(`T g = *(t);`) instead of emitting the pointer->struct mismatch `T g = t;`.
+The deref is gated on the binding being by value (`bind_c` has no `*` and is
+not the int64 carrier), mirroring the EX_GET_FIELD receiver handling.
+Regression fixture: `tests/fixtures/let-bind-byptr-struct-param/`.
+
 **Severity:** low (narrow; pre-existing, independent of struct/ADT convergence)
 
 ## Summary
