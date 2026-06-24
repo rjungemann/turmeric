@@ -316,19 +316,17 @@ non-conflicting cross-world systems coalesce into one parallel wave.
 
 ### `defxsystem` -- two-world systems
 
-`defxsystem` takes two world bindings, then -- per world, in
-declaration order -- a `:reads-from <w> [...]` clause paired with a
-`:writes-to <w> [...]` clause. Every world the system touches therefore
-appears in exactly one read set and exactly one write set; the
-well-formedness rule holds by construction:
+`defxsystem` takes two world bindings, then a sequence of
+`:reads-from <w> [...]` / `:writes-to <w> [...]` clauses in any order.
+A world that only reads (or only writes) simply omits the empty side;
+every declared world must appear in at least one clause (a binding
+listed but never read or written is rejected at compile time):
 
 ```turmeric
 (defxsystem extract-renderables
   [sim SimWorld  ren RenderWorld]
-  :reads-from  sim [Pos]
-  :writes-to   sim []
-  :reads-from  ren []
-  :writes-to   ren [RenderPos]
+  :reads-from sim [Pos]
+  :writes-to  ren [RenderPos]
   (do
     (set-RenderPos! ren-RenderPos-write-cap ren 0
       (:: (:: (get-Pos sim-Pos-read-cap sim 0) :int) :RenderPos))
@@ -360,6 +358,50 @@ binding in scope at the call site, exactly as single-world `defsystem`
 requires. The same `C-cid` value can be reused across worlds because the
 conflict key is `(world-id, cid)` -- the world identity is what
 discriminates the lock target.
+
+### Three or more worlds
+
+`defxsystem` is not limited to two worlds. List as many world bindings
+as the pipeline needs; the per-`(world, component)` lock model is
+identical, only the bookkeeping arity grows. The motivating shape is a
+snapshot -> predicted -> render pipeline: read the authoritative state,
+write a predicted view and a render view in one pass.
+
+```turmeric
+(import ecs/xsystem :refer [defxsystem])
+(import ecs/xstage  :refer [bind-xsystem-n xstage-add-n!
+                            xstage-new xstage-run!])
+
+(defxsystem project
+  [auth AuthWorld  pred PredWorld  ren RenderWorld]
+  :reads-from auth [Pos]
+  :writes-to  pred [PredPos]
+  :writes-to  ren  [RenderPos]
+  (do
+    (set-PredPos!   pred-PredPos-write-cap   pred 0
+      (:: (:: (get-Pos auth-Pos-read-cap auth 0) :int) :PredPos))
+    (set-RenderPos! ren-RenderPos-write-cap  ren  0
+      (:: (:: (get-Pos auth-Pos-read-cap auth 0) :int) :RenderPos))))
+```
+
+A three-or-more-world system is bound with **`bind-xsystem-n`** -- one
+`world-id handle` pair per slot, in declaration order -- and added with
+**`xstage-add-n!`**:
+
+```turmeric
+(let [xs (xstage-new)
+      bs (bind-xsystem-n project  0 auth-ptr  1 pred-ptr  2 render-ptr)]
+  (xstage-add-n! xs bs)
+  (xstage-run! xs))
+```
+
+The same conflict, wave, and cycle logic applies across every slot:
+two `project` bindings that share the `pred` world both write
+`(pred, PredPos)`, so they serialise into two waves; bound to disjoint
+worlds they coalesce into one. The two-world surface (`bind-xsystem` /
+`xstage-add!`) is unchanged and remains the right tool for exactly two
+worlds; `bind-xsystem-n` / `xstage-add-n!` are the N-world
+generalisation (`N >= 3`).
 
 ### `defmirror` -- cross-world copy shorthand
 
@@ -469,19 +511,29 @@ so an undeclared write fails with the same
 
 ### Plumbing: world boxes and component-id bindings
 
-A cross-world setup needs three pieces of glue per world type, all
-user-written today (a macro cannot splice identifiers into inline-C
-text):
+A cross-world setup needs three pieces of glue per world type. As of
+GEN-V0, a single macro emits the trio:
 
-- `(defn box-<W> [w : <W>] : int ...)` -- malloc-copy the world struct
-  and return the `:int` carrier the scheduler threads.
-- `(defn load-<W> [wp : int] : <W> ...)` -- dereference the carrier
-  back into the typed world inside the per-slot run-fn.
-- `(defn free-<W>-box [wp : int] : nil ...)` -- free the malloc'd box
-  after the last `xstage-run!`.
+```turmeric
+(import ecs/xworld :refer [defworld-box-helpers])
+
+(sized-defworld-mono SimWorld (Static 8) [Pos])
+(defworld-box-helpers SimWorld)
+;; emits:
+;;   (defn box-SimWorld      [w  : SimWorld] : int      ...)
+;;   (defn load-SimWorld     [wp : int]      : SimWorld ...)
+;;   (defn free-SimWorld-box [wp : int]      : nil      ...)
+```
+
+Each helper is a thin wrapper over the polymorphic `box-world` /
+`load-world` / `free-world-box` defined in `ecs/xworld`; the inline-C
+bodies reflect the concrete world's C struct name via the
+`__TUR_TY_W__` template marker, so a per-world inline-C block is no
+longer needed.
 
 Plus a `(def <C>-cid <n>)` per component, per world. See
-`tests/xworld-extract.tur` in the ecs spice for the canonical shape.
+`tests/xworld-defbox.tur` in the ecs spice for the canonical shape;
+`tests/xworld-extract.tur` shows the legacy hand-rolled trio.
 
 ### Worked example: minimal extract pipeline
 
