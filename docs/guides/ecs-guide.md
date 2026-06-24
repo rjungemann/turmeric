@@ -361,11 +361,14 @@ requires. The same `C-cid` value can be reused across worlds because the
 conflict key is `(world-id, cid)` -- the world identity is what
 discriminates the lock target.
 
-### `defmirror` -- one-component cross-world copy
+### `defmirror` -- cross-world copy shorthand
 
 `defmirror` is the render-extract one-liner. It lowers to a single
-`defxsystem` whose body loops `i` over `0..count-1`, copying
-`From@src[i]` into `To@dst[i]` through an `:int` round-trip:
+`defxsystem` whose body loops `i` over `0..count-1`, copying each
+declared source component into its target component through an `:int`
+round-trip.
+
+**Single component (asymmetric names):**
 
 ```turmeric
 (defmirror mirror-pos
@@ -375,13 +378,30 @@ discriminates the lock target.
   :to    RenderPos)
 ```
 
-The source and destination components are named separately so the two
-worlds keep distinct types (`Pos` on `sim`, `RenderPos` on `ren`); both
-must be int-carried. The generated system declares
-`:reads-from sim [Pos]` and `:writes-to ren [RenderPos]`, so the cap
-discipline still applies -- `defmirror` cannot smuggle a write past the
-mask, it only saves the keystrokes. For non-trivial projections, or for
-several components in one pass, write the `defxsystem` directly.
+**Multiple components in one pass (MULTI-MIR-V0):**
+
+```turmeric
+(defmirror extract-renderables
+  [sim SimWorld  ren RenderWorld]
+  :count 1024
+  :components [[Pos RPos] [Sprite RSprite] [Color RColor]])
+```
+
+Each `:components` entry is a `[SrcC DstC]` pair (`:component <entry>`
+is sugar for the one-element list). The generated system declares
+`:reads-from sim [Pos Sprite Color]` and
+`:writes-to ren [RPos RSprite RColor]` -- one read cap and one write
+cap per component -- so the cap discipline still applies and the
+scheduler sees the multi-component mirror as a single system holding
+the full bundle of read/write targets. Users who want independent
+scheduling per component should keep separate `defmirror`s.
+
+Source and destination component names must be **distinct** because
+`sized-defcomponent-accessors-xmono` mints `set-<C>!` / `get-<C>` at
+the global function-name layer. Use distinct names per world (`Pos` on
+`sim`, `RPos` on `ren`) so the accessors do not collide. For a
+non-trivial projection or a body that does more than copy, write the
+`defxsystem` directly.
 
 ### `XStage` -- parallel scheduling across worlds
 
