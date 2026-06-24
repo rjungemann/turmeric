@@ -73,6 +73,8 @@
 #include "lsp/lsp_docs.h"
 /* MCP server */
 #include "lsp/mcp.h"
+/* DAP server (debugger Phase 3) */
+#include "turi/dap.h"
 
 #ifndef TUR_VERSION
 #define TUR_VERSION "unknown"
@@ -5297,12 +5299,22 @@ static TuriValue native_contract_check_inv(TuriEnv *env, TuriValue *args,
 static TuriValue native_contract_enabled(TuriEnv *env, TuriValue *args,
                                           uint32_t n, void *ud);
 
+/* Debugger Phase 3: optional hook fired by cmd_eval (in debug mode) once the
+ * interpreter env + debugger are constructed but before the program is armed
+ * and run.  The DAP launch path uses it to flush staged breakpoints and install
+ * the DAP pause / condition handlers.  NULL for the plain `tur debug` REPL. */
+typedef struct {
+    void (*on_ready)(TuriEnv *env, void *ud);
+    void  *ud;
+} EvalHooks;
+
 /* Phase S0: tur repl — interactive read-eval-print loop. */
 /* Phase INT-1: run a .tur file through the tree-walking interpreter.
  * extra_argv/extra_argc are the arguments after the file path, exposed
  * to the script as *args* (a cons-cell list of C-string pointers). */
-static int cmd_eval(const char *path, bool use_color,
-                    char **extra_argv, int extra_argc, bool debug) {
+static int cmd_eval_h(const char *path, bool use_color,
+                      char **extra_argv, int extra_argc, bool debug,
+                      const EvalHooks *hooks) {
     g_interpret_mode = true;
     turi_init(use_color);
     TuriEnv *env = turi_env_new();
@@ -5675,6 +5687,10 @@ static int cmd_eval(const char *path, bool use_color,
     turi_debug_register_break_builtin(env);
     if (debug)
         turi_debug_enable(env, stdin, stdout);
+    /* Phase 3 (DAP): now that the env + debugger exist, let the embedder stage
+     * breakpoints and install its pause handler before any program node runs. */
+    if (debug && hooks && hooks->on_ready)
+        hooks->on_ready(env, hooks->ud);
     TuriValue result;
     if (debug) {
         /* Under the debugger the user file is brought in via `(load "path")`
@@ -5728,6 +5744,35 @@ static int cmd_eval(const char *path, bool use_color,
     }
     turi_env_free(env);
     return rc;
+}
+
+/* Back-compat wrapper: the common case with no embedder hooks. */
+static int cmd_eval(const char *path, bool use_color,
+                    char **extra_argv, int extra_argc, bool debug) {
+    return cmd_eval_h(path, use_color, extra_argv, extra_argc, debug, NULL);
+}
+
+/* Debugger Phase 3: DAP launch glue.  The DAP server calls dap_launch_cb once
+ * the client has finished configuration; it runs the program under the
+ * interpreter debugger (cmd_eval_h, debug mode) and wires the DAP pause /
+ * conditional handlers in via the on_ready hook before the program is armed. */
+static void dap_on_ready_cb(TuriEnv *env, void *ud) {
+    dap_begin_session(ud, env);   /* ud is the opaque DapState* */
+}
+
+static int dap_launch_cb(const char *program, char **args, int n_args,
+                         void *state, void *ud) {
+    (void)ud;
+    EvalHooks hooks = { dap_on_ready_cb, state };
+    /* use_color=false: stdout is the (captured) debuggee channel; diagnostics go
+     * to stderr without colour, matching `tur lsp` / `tur mcp`. */
+    return cmd_eval_h(program, /*use_color=*/false, args, n_args,
+                      /*debug=*/true, &hooks);
+}
+
+static int cmd_dap(void) {
+    diag_init(false);   /* no color -- stdout is reserved for JSON-RPC */
+    return dap_server_run(STDIN_FILENO, STDOUT_FILENO, dap_launch_cb, NULL);
 }
 
 /* E3: tur eval '<expr>' — evaluate an inline expression and print result. */
@@ -11258,7 +11303,7 @@ static void list_external_subcommands(void) {
     static const char *const builtins[] = {
         "build", "emit-c", "emit-h", "emit-cmake", "run", "repl", "worker",
         "eval", "doc", "explain", "test", "check", "format", "fmt",
-        "parse-check", "audit-spans", "debug",
+        "parse-check", "audit-spans", "debug", "dap",
         "init", "add", "add-cmake", "fetch",
         "install", "uninstall", "list", "upgrade",
         NULL,
@@ -11356,6 +11401,7 @@ static int usage(void) {
         "  tur worker                        persistent fixture evaluator (Tier 3, reads dirs from stdin)\n"
         "  tur --interpret <file.tur>        run a file through the tree-walking interpreter\n"
         "  tur debug <file.tur>              run a file under the interactive debugger\n"
+        "  tur dap                           Debug Adapter Protocol server (JSON-RPC/stdio) for editors\n"
         "  tur eval '<expr>'                 evaluate an inline expression\n"
         "  tur doc <symbol>                  print documentation for a builtin or special form\n"
         "  tur explain <TUR-E####|snippet>   explain a diagnostic code or snippet errors\n"
@@ -12578,6 +12624,10 @@ int main(int argc, char **argv) {
         diag_init(false);   /* no color -- stdout is reserved for JSON-RPC */
         mcp_server_run(STDIN_FILENO, STDOUT_FILENO);
         return 0;
+    }
+    /* Debugger Phase 3: DAP server over the interpreter (JSON-RPC / stdio). */
+    if (strcmp(cmd, "dap") == 0) {
+        return cmd_dap();
     }
     if (strcmp(cmd, "build") == 0) {
         const char *input = NULL;

@@ -28,6 +28,9 @@ set(TURI_EVAL_SOURCES
     turi/env.c
     turi/fiber.c
     turi/eval.c
+    # dap.c -- Debug Adapter Protocol server (debugger Phase 3), a thin shell
+    # over the Phase 2 interpreter debugger's control API in eval.c.
+    turi/dap.c
     turi/repl.c
     # RP3: REPL spice-image loader. Walks up to build.tur, dlopens
     # .tur-repl-cache/lib.so, primes a symbol map from exports.manifest.

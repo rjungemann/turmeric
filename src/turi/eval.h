@@ -86,6 +86,85 @@ void turi_debug_disable(TuriEnv *env);
 void turi_debug_register_break_builtin(TuriEnv *env);
 
 /* ---------------------------------------------------------------------------
+ * Debugger Phase 3: control surface for the DAP server
+ *
+ * The Debug Adapter Protocol server (src/turi/dap.c) drives the very same
+ * TuriDebugger as the Phase 2 text REPL, but through a typed control API rather
+ * than a line-oriented command loop.  When the debugger pauses it invokes a
+ * registered pause handler (the DAP server's stop dispatcher) instead of the
+ * built-in REPL; the handler inspects frames / locals and issues one resume
+ * (continue / step) via the calls below.
+ * --------------------------------------------------------------------------- */
+
+/* Why the program paused, reported to the pause handler. */
+typedef enum {
+    TURI_DBG_STOP_ENTRY,       /* first node after arming (stopOnEntry) */
+    TURI_DBG_STOP_BREAKPOINT,  /* a line breakpoint was hit */
+    TURI_DBG_STOP_STEP,        /* a step (in/over/out) predicate fired */
+    TURI_DBG_STOP_PAUSE,       /* the (break) builtin forced a pause */
+} TuriDbgStop;
+
+/* One activation frame, innermost = index 0. */
+typedef struct {
+    const char *fn_name;     /* function owning the frame (interned; never freed) */
+    const char *file_path;   /* full source path, or "" if unknown */
+    uint32_t    line;        /* 1-based source line of the executing node */
+    uint32_t    col;         /* 1-based source column (col_start) */
+    uint32_t    end_line;    /* 1-based; == line for single-line spans */
+    uint32_t    end_col;     /* 1-based, exclusive */
+} TuriDbgFrame;
+
+/* Pause handler: invoked while the eval loop is suspended at a node.  It must
+ * issue exactly one resume (turi_debug_resume_*) before returning; returning
+ * without one is treated as a continue. */
+typedef void (*TuriDbgPauseFn)(TuriEnv *env, TuriDbgStop reason, void *ud);
+
+/* Install (or, with NULL, clear) the pause handler.  With one set, a stop calls
+ * cb(env, reason, ud) instead of the Phase 2 text REPL. */
+void turi_debug_set_pause_handler(TuriEnv *env, TuriDbgPauseFn cb, void *ud);
+
+/* Conditional-breakpoint hook.  When a line breakpoint carrying a non-empty
+ * condition string matches, the debugger calls cb(env, condition, ud) and stops
+ * only if it returns true.  With no hook installed, conditions are ignored
+ * (the breakpoint always fires). */
+typedef bool (*TuriDbgCondFn)(TuriEnv *env, const char *condition, void *ud);
+void turi_debug_set_cond_handler(TuriEnv *env, TuriDbgCondFn cb, void *ud);
+
+/* Breakpoint-table management for the DAP setBreakpoints request. */
+void turi_debug_clear_breakpoints(TuriEnv *env);
+void turi_debug_clear_breakpoints_for_file(TuriEnv *env, const char *basename);
+/* Add a line breakpoint (basename match; pass "" to match any file).  `cond`
+ * may be NULL / "" for an unconditional breakpoint.  Returns the 1-based
+ * breakpoint id, or -1 if the table is full. */
+int  turi_debug_add_breakpoint(TuriEnv *env, const char *basename, uint32_t line,
+                               const char *cond);
+
+/* Resume controls -- call exactly one from inside the pause handler. */
+void turi_debug_resume_continue(TuriEnv *env);
+void turi_debug_resume_step_in(TuriEnv *env);
+void turi_debug_resume_step_over(TuriEnv *env);
+void turi_debug_resume_step_out(TuriEnv *env);
+
+/* Number of live activation frames (capped at the backtrace storage limit). */
+int  turi_debug_frame_count(TuriEnv *env);
+/* Fill *out for frame `idx` (0 = innermost).  Returns false if idx is out of
+ * range. */
+bool turi_debug_frame_at(TuriEnv *env, int idx, TuriDbgFrame *out);
+
+/* Enumerate the locals visible in frame `idx`, innermost binding first, each
+ * passed to cb as (name, value-repr, ud).  Shadowed outer bindings are
+ * suppressed. */
+void turi_debug_frame_locals(TuriEnv *env, int idx,
+                             void (*cb)(const char *name, const char *repr,
+                                        void *ud),
+                             void *ud);
+
+/* Resolve a single name in frame `idx` (locals then globals) and render its
+ * value into out_repr.  Returns false if no such binding is in scope. */
+bool turi_debug_eval_name(TuriEnv *env, int idx, const char *name,
+                          char *out_repr, size_t cap);
+
+/* ---------------------------------------------------------------------------
  * SB3 / SB4: Sandbox resource-limit and capability API
  * --------------------------------------------------------------------------- */
 

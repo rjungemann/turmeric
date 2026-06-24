@@ -98,6 +98,18 @@ non-debugger interp runs.
 
 ### Phase 3 -- DAP server over the interpreter
 
+**Status: landed.** Write-up in
+[debugger-dap-phase3.md](./debugger-dap-phase3.md). `tur dap` speaks the Debug
+Adapter Protocol (JSON-RPC 2.0 / stdio, the same transport as `tur lsp`) as a
+thin shell over Phase 2's debugger. Phase 2's `TuriDebugger` gained a typed
+control API (`turi_debug_*` in `src/turi/eval.h`): a pause handler that replaces
+the text REPL on a stop, resume controls, breakpoint-table management, and
+frame / locals / evaluate introspection. The server (`src/turi/dap.c`) maps DAP
+requests onto that API; the `tur_dap` ctest target
+(`tests/run-dap.sh` + `tests/dap-driver.py`) drives a scripted JSON-RPC session
+over `tests/fixtures/dap/`. A VS Code extension stub ships in
+[editors/vscode-turmeric/](../../editors/vscode-turmeric/).
+
 **Outcome:** VS Code, Neovim DAP, and any other DAP client can attach to a
 turmeric program running under the interpreter and get full breakpoint /
 step / locals UI.
@@ -111,7 +123,11 @@ step / locals UI.
 
 **Exit criteria:** screenshot/demo of VS Code stepping through a turmeric
 program, inspecting locals (including structs, options, results), and
-hitting a conditional breakpoint.
+hitting a conditional breakpoint. *(Demonstrated by the `tur_dap` regression's
+transcript: a scripted client steps through the fixture, inspects per-frame
+locals + `evaluate`, and hits a conditional breakpoint that fires only when
+`i == 3`. Struct / option / result locals render inline via the value printer;
+expandable trees are deferred -- see the Phase 3 write-up.)*
 
 **Risk:** low-medium. DAP is well-documented but verbose; the work is
 mechanical once Phase 2 exposes the right primitives.
