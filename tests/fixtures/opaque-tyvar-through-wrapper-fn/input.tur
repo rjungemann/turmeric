@@ -1,0 +1,23 @@
+;; Regression: a concrete user `defopaque` must be accepted as a generic
+;; value parameter `item : T` when the same tyvar `T` is also bound through
+;; a wrapper opaque argument `(Box T)`.  Previously the closure carrying `T`
+;; (`(fn [T] void)`) dropped the opaque's nominal identity to a def-less
+;; struct placeholder, so `(b-sub b (tag-of 9))` failed with
+;; `expected tyvar, got Tag`.  Builtin/primitive carriers were unaffected,
+;; which is why only nominal `defopaque`/struct payloads tripped it.
+(defmodule wt
+  (export main)
+  (defopaque Box [T] :ptr<void> :linear)
+  (defopaque Tag :int)
+  (defn tag-of [n : int] : Tag ```c return n; ```)
+  (defn tag-val [t : Tag] : int ```c return (int64_t)t; ```)
+  (defn b-new  [T] [^fat cb : (fn [T] void)] : (Box T) ```c return (void*)(intptr_t)cb; ```)
+  (defn b-sub  [T] [^borrow b : (Box T) item : T] : void ```c (void)b; (void)item; ```)
+  (defn b-free [T] [b : (Box T)] : void ```c (void)b; ```)
+  (defn main [] : int
+    (let [b (b-new (fn [t : Tag] : void nil))]
+      (do
+        (b-sub b (tag-of 9))
+        (b-free b)
+        (println (tag-val (tag-of 9)))
+        0))))
