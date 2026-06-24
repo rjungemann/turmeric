@@ -76,9 +76,9 @@ its own PR; tick when the spice no longer hand-rolls the struct.
 | ~~osc~~ | client.tur, server.tur | **done** (v0.3.0) |
 | plot | core.tur | pending |
 | plutovg | canvas.tur, font.tur, paint.tur, path.tur, surface.tur | pending |
-| png | reader.tur, writer.tur | pending |
+| ~~png~~ | reader.tur, writer.tur | **done** (v0.2.0) |
 | postgres | db.tur, notify.tur, stmt.tur | pending |
-| rtaudio | core.tur, stream.tur | pending |
+| ~~rtaudio~~ | core.tur, stream.tur | **done** (v0.3.0) |
 | sqlite | db.tur | pending |
 | ~~template~~ | render.tur | **done** (v0.2.0) |
 | valkey | client.tur, cmd.tur, pubsub.tur | pending |
