@@ -5302,7 +5302,7 @@ static TuriValue native_contract_enabled(TuriEnv *env, TuriValue *args,
  * extra_argv/extra_argc are the arguments after the file path, exposed
  * to the script as *args* (a cons-cell list of C-string pointers). */
 static int cmd_eval(const char *path, bool use_color,
-                    char **extra_argv, int extra_argc) {
+                    char **extra_argv, int extra_argc, bool debug) {
     g_interpret_mode = true;
     turi_init(use_color);
     TuriEnv *env = turi_env_new();
@@ -5665,7 +5665,30 @@ static int cmd_eval(const char *path, bool use_color,
             env->module_base_dir = dpath;
         }
     }
-    TuriValue result = turi_eval_file(env, path);
+    /* Debugger Phase 2: attach the debugger before top-level eval so the
+     * (break) builtin resolves while the file is read; it stays UNARMED so
+     * prelude + top-level forms run without stopping.  We arm it right before
+     * main() below. */
+    /* The (break) builtin is always available under the interpreter: a no-op
+     * with no debugger attached, a pause trigger under `tur debug`.  Register
+     * it before top-level eval so `(break)` resolves either way. */
+    turi_debug_register_break_builtin(env);
+    if (debug)
+        turi_debug_enable(env, stdin, stdout);
+    TuriValue result;
+    if (debug) {
+        /* Under the debugger the user file is brought in via `(load "path")`
+         * rather than turi_eval_file's concatenate-into-<eval> path: a loaded
+         * file gets its own file_id and keeps its real path + 1-based line
+         * numbers, so breakpoints (`break <line>`), source listings, and stack
+         * frames resolve against the user's source instead of the synthetic
+         * <eval> blob (which would offset every line by the preloaded prelude). */
+        char load_form[4200];
+        snprintf(load_form, sizeof load_form, "(load \"%s\")", path);
+        result = turi_eval(env, load_form);
+    } else {
+        result = turi_eval_file(env, path);
+    }
     int rc = 0;
     if (turi_is_error(result)) {
         const char *msg = turi_error_message(result);
@@ -5678,6 +5701,7 @@ static int cmd_eval(const char *path, bool use_color,
     } else {
         TuriValue main_fn = turi_env_get(env, "main");
         if (main_fn.tag == TURI_CLOSURE) {
+            if (debug) turi_debug_arm(env);
             TuriValue r = turi_call(env, main_fn, NULL, 0);
             /* A runtime error (or uncaught throw) raised while running main was
              * previously swallowed -- main exited non-zero with no message.
@@ -11234,7 +11258,7 @@ static void list_external_subcommands(void) {
     static const char *const builtins[] = {
         "build", "emit-c", "emit-h", "emit-cmake", "run", "repl", "worker",
         "eval", "doc", "explain", "test", "check", "format", "fmt",
-        "parse-check", "audit-spans",
+        "parse-check", "audit-spans", "debug",
         "init", "add", "add-cmake", "fetch",
         "install", "uninstall", "list", "upgrade",
         NULL,
@@ -11331,6 +11355,7 @@ static int usage(void) {
         "  tur repl                          interactive REPL (Phase S1)\n"
         "  tur worker                        persistent fixture evaluator (Tier 3, reads dirs from stdin)\n"
         "  tur --interpret <file.tur>        run a file through the tree-walking interpreter\n"
+        "  tur debug <file.tur>              run a file under the interactive debugger\n"
         "  tur eval '<expr>'                 evaluate an inline expression\n"
         "  tur doc <symbol>                  print documentation for a builtin or special form\n"
         "  tur explain <TUR-E####|snippet>   explain a diagnostic code or snippet errors\n"
@@ -12733,7 +12758,24 @@ int main(int argc, char **argv) {
             fprintf(stderr, "tur: --interpret requires a file argument\n");
             return usage();
         }
-        return cmd_eval(argv[2], !no_color && stderr_is_tty(), argv + 3, argc - 3);
+        return cmd_eval(argv[2], !no_color && stderr_is_tty(), argv + 3, argc - 3,
+                        /*debug=*/false);
+    }
+    /* Debugger Phase 2: `tur debug <file.tur> [args...]` -- run a file through
+     * the tree-walking interpreter under the interactive debugger.  Drops into
+     * a command REPL at program entry; commands are read from stdin (so a
+     * script can drive it).  See docs/upcoming/debugger-plan.md (Phase 2). */
+    if (strcmp(cmd, "debug") == 0) {
+        if (argc < 3 || strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0) {
+            fprintf(stderr,
+                "usage:\n  tur debug <file.tur> [args...]\n"
+                "\nDrops into an interactive debugger (break/step/next/finish/\n"
+                "backtrace/locals/print/list/continue). Type 'help' at the\n"
+                "(tur-dbg) prompt for the full command list.\n");
+            return argc < 3 ? 1 : 0;
+        }
+        return cmd_eval(argv[2], !no_color && stderr_is_tty(), argv + 3, argc - 3,
+                        /*debug=*/true);
     }
     /* E3: tur eval '<expr>' or tur eval --file <file> */
     if (strcmp(cmd, "eval") == 0) {
@@ -12753,7 +12795,7 @@ int main(int argc, char **argv) {
         if (!src) return usage_eval();
         bool use_color = !no_color && stderr_is_tty();
         if (is_file)
-            return cmd_eval(src, use_color, NULL, 0);
+            return cmd_eval(src, use_color, NULL, 0, /*debug=*/false);
         return cmd_eval_expr(src, use_color);
     }
     /* E5: tur doc <symbol> */

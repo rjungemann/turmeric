@@ -1,0 +1,16 @@
+;; Debugger Phase 2 regression fixture.
+;; Driven by tests/run-debugger.sh under `tur debug`; the dedicated-runner
+;; marker keeps tests/run.sh from compiling/running it natively (the (break)
+;; builtin and the debug REPL only exist on the interpreter path).
+
+(defn add [a : int b : int] : int
+  (let [s (+ a b)]
+    s))
+
+(defn main [] : int
+  (let [x 3
+        y 4
+        z (add x y)]
+    (break)
+    (println "done")
+    z))

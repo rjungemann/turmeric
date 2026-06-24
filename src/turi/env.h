@@ -228,6 +228,12 @@ typedef struct TuriEnv {
      * Both are borrowed Symbol/strdup'd strings with env (or longer) lifetime. */
     const void *defining_mod;     /* const DefModule* — opaque to avoid expr.h dep */
     const char *current_module;   /* owning module of the running closure, or NULL */
+    /* Debugger Phase 2: when non-NULL, the eval loop yields to the interactive
+     * debugger REPL on breakpoint / step. Allocated by turi_debug_enable,
+     * reclaimed by turi_debug_disable / turi_env_free. Opaque (TuriDebugger* is
+     * internal to turi/eval.c). A plain NULL check on the eval hot path keeps
+     * non-debugger interp runs free of any per-node cost. */
+    void       *debugger;
 } TuriEnv;
 
 /* Create a new unrestricted environment. */

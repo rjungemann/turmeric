@@ -70,6 +70,16 @@ add_test(
   COMMAND bash tests/check-span-coverage.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# debugger Phase 2: the interactive interpreter debugger (`tur debug`). Drives a
+# scripted session (break / step / next / finish / backtrace / locals / print /
+# (break) builtin / continue) over a fixture and asserts the output. The fixture
+# carries requires.dedicated-runner so tests/run.sh skips it (debug is an
+# interpreter-only path). See docs/upcoming/debugger-plan.md.
+add_test(
+  NAME tur_debugger
+  COMMAND bash tests/run-debugger.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # HttpdConn single-definition invariant: no inline-C block may reintroduce a
 # local redeclaration of the consolidated httpd connection structs.
 add_test(

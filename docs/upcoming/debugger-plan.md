@@ -61,6 +61,15 @@ that round-trips through elaboration.
 
 ### Phase 2 -- Interpreter debugger (CLI)
 
+**Status: landed.** Write-up in
+[debugger-interpreter-phase2.md](./debugger-interpreter-phase2.md). `tur debug
+<file>` drops into a `(tur-dbg)` REPL with break / step / next / finish /
+continue / backtrace / locals / print / list / quit and the `(break)` builtin.
+The eval-loop hooks live in `src/turi/eval.c` behind a single `env->debugger`
+pointer (a NULL check on the hot path, so non-debugger interp runs are
+unaffected); the `tur_debugger` ctest target (`tests/run-debugger.sh`) drives a
+scripted session over `tests/fixtures/debugger/` and asserts the output.
+
 **Outcome:** `tur debug <file>` drops into a debugger REPL with break,
 step (in/over/out), continue, backtrace, locals/args inspection, and a
 `(break)` builtin that triggers a breakpoint from source.
