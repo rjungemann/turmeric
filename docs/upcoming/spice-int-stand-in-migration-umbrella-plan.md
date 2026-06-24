@@ -77,11 +77,11 @@ its own PR; tick when the spice no longer hand-rolls the struct.
 | plot | core.tur | pending |
 | plutovg | canvas.tur, font.tur, paint.tur, path.tur, surface.tur | pending |
 | ~~png~~ | reader.tur, writer.tur | **done** (v0.2.0) |
-| postgres | db.tur, notify.tur, stmt.tur | pending |
+| ~~postgres~~ | db.tur, notify.tur, stmt.tur (+ row.tur extractor) | **done** (v0.4.0) |
 | ~~rtaudio~~ | core.tur, stream.tur | **done** (v0.3.0) |
 | ~~sqlite~~ | db.tur | **done** (v0.3.0) |
 | ~~template~~ | render.tur | **done** (v0.2.0) |
-| valkey | client.tur, cmd.tur, pubsub.tur | pending |
+| ~~valkey~~ | client.tur, cmd.tur, pubsub.tur (+ reply.tur extractor) | **done** (v0.6.0) |
 | ~~wav~~ | info.tur, reader.tur, writer.tur | **done** (v0.2.0) |
 
 13 spices, 27 source files. Migrations are independent; land them
