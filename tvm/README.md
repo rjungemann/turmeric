@@ -10,6 +10,11 @@ It is intentionally close to `nvm` in spirit -- if you know
 See [`docs/upcoming/v1/tur-version-manager-plan.md`](../docs/upcoming/v1/tur-version-manager-plan.md)
 for the design rationale.
 
+> **Already on `mise` or `asdf`?** You don't need `tvm`. The
+> [`asdf-turmeric`](https://github.com/rjungemann/asdf-turmeric) plugin
+> consumes the same release artifacts and integrates with both tools --
+> see [docs/guides/mise-asdf-guide.md](../docs/guides/mise-asdf-guide.md).
+
 ## Install
 
 From a checkout of this repo:
