@@ -6,6 +6,33 @@ description: Auto-bound struct constructors, keyword-argument construction for b
 
 # Struct Ergonomics -- Plan
 
+## Status: RESOLVED (currying split off)
+
+Shipped in commit `cd6ada5` (`Struct ergonomics: auto-bound constructor,
+keyword args, with update`):
+
+- **CTOR-V0** -- auto-bound constructor. `(Name args...)` is routed to
+  `make-struct` in `elab_call` (positional + keyword). `:no-auto-ctor` opts
+  out. Routing only fires when the name's nearest binding is the struct itself,
+  so a same-named ADT constructor / local / user `defn` still wins.
+- **KW-V0** -- keyword construction (already present on `make-struct`),
+  extended with explicit mixed-form detection (`TUR-E0299`) and a conservative
+  cstr<->numeric field-type guard for non-parametric structs.
+- **WITH-V0** -- `(with src [field value ...])` as the `elab_with` special form
+  (`:copy` only; diagnostics `TUR-E0296`/`E0297`/`E0298`).
+- **DOC-V0** -- structs guide updated.
+- Fixtures: `struct-auto-ctor`, `struct-kw-ctor`, `struct-with-copy`, plus seven
+  `errors/` fixtures. Full suite green.
+
+**Deferred:** constructor **currying**. It is blocked by a pre-existing engine
+limitation -- by-value struct results do not survive the type-erased closure
+ABI -- documented in
+[`docs/reported/struct-return-through-closure-loses-type.md`](../reported/struct-return-through-closure-loses-type.md)
+and now tracked by its own plan,
+[`docs/upcoming/struct-constructor-currying-plan.md`](../upcoming/struct-constructor-currying-plan.md).
+The "curried application works" goal in this document is superseded by that
+plan.
+
 ## Context
 
 Constructing and updating structs today is more verbose than it needs to

@@ -1,0 +1,8 @@
+;; WITH-V0: `with` is rejected on a non-:copy (move-only) struct, since copying
+;; the unchanged fields out of the source would consume it.
+(defstruct Acct [balance : int])
+
+(defn main [] : int
+  (let [a (make-struct Acct 100)
+        b (with a [balance 50])]
+    0))

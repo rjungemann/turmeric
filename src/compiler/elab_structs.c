@@ -5,7 +5,7 @@
 static void parse_struct_field_type(const char *tname, uint32_t tlen,
     TypeKind *out_kind, TypeKind *out_inner);
 static bool typekind_is_copy_for_struct(TypeKind k);
-static Binding *scope_lookup_type_def(Scope *s, const Symbol *name);
+/* Exposed (declared in elab_internal.h) for CTOR-V0 struct-name call routing. */
 static bool elab_is_forward_type(Elab *e, const Symbol *sym);
 static Type gadt_resolve_type_from_form(Elab *e, const AdtDef *gadt, const Form *f,
     const SkolemEnv *senv);
@@ -101,7 +101,7 @@ static bool typekind_is_copy_for_struct(TypeKind k) {
  * bindings for one with kind TY_STRUCT or TY_ADT.  Needed because a constructor
  * with the same name as its type (e.g. (defdata Expr (Expr :ExprNode))) shadows
  * the type binding with a TY_FN constructor binding. */
-static Binding *scope_lookup_type_def(Scope *s, const Symbol *name) {
+Binding *scope_lookup_type_def(Scope *s, const Symbol *name) {
     for (Scope *cur = s; cur; cur = cur->parent) {
         for (uint32_t i = cur->n; i > 0; i--) {
             Binding *b = cur->bindings[i - 1];
@@ -625,6 +625,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
     bool is_copy = false;
     bool is_linear = false;
     bool is_heap = false;
+    bool no_auto_ctor = false; /* CTOR-V0 */
     uint32_t fields_start_idx = 2;
 
     while (fields_start_idx < call->as.list.len) {
@@ -640,6 +641,9 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         } else if (kw_form->as.sym == e->kw_heap) {
             /* end-to-end-monomorphization: typed-pointer ABI (Vec/Map/Set/...). */
             is_heap = true;
+        } else if (kw_form->as.sym == e->kw_no_auto_ctor) {
+            /* CTOR-V0: opt out of the auto-bound value-namespace constructor. */
+            no_auto_ctor = true;
         } else {
             break;
         }
@@ -872,6 +876,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         def->is_copy = is_copy;
         def->is_linear = is_linear; /* LT4 */
         def->is_heap = is_heap;
+        def->no_auto_ctor = no_auto_ctor; /* CTOR-V0 */
         def->needs_drop_glue = false;
         def->origin_file_id = call->span.file_id;
         /* Phase TM0 */
@@ -889,6 +894,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         def->is_copy = is_copy;
         def->is_linear = is_linear; /* LT4 */
         def->is_heap = is_heap;
+        def->no_auto_ctor = no_auto_ctor; /* CTOR-V0 */
         /* Phase HKT-P4: record the file that defined this struct. */
         def->origin_file_id = call->span.file_id;
         /* Phase TM0 */
@@ -1156,6 +1162,15 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         }
         def->pass_by_ptr = (_d_total > 16);
     }
+
+    /* CTOR-V0: the auto-bound constructor is provided by routing `(Name args...)`
+     * call syntax to make-struct in elab_call (positional and keyword), rather
+     * than by synthesizing a `defn` named after the struct.  A same-named value
+     * binding was found to interfere with typeclass-instance ABI/dispatch over
+     * the struct, and currying a struct-returning constructor cannot work anyway
+     * (by-value struct results do not survive the type-erased closure ABI -- see
+     * docs/reported/struct-return-through-closure-loses-type.md).  Routing keeps
+     * the ergonomic call form without those costs. */
 
     /* Return EX_DEF with struct_def populated.
      * Registration in global scope and elab registry was done above (RF0). */
@@ -3590,8 +3605,11 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* Look up the struct binding */
-    Binding *struct_binding = scope_lookup(e->scope, name_form->as.sym);
+    /* Look up the struct binding.  CTOR-V0: use scope_lookup_type_def (which
+     * filters for TY_STRUCT/TY_ADT, newest-first) rather than a bare
+     * scope_lookup, so a same-named auto-bound constructor (TY_FN, in the value
+     * namespace) does not shadow the struct type binding we need here. */
+    Binding *struct_binding = scope_lookup_type_def(e->scope, name_form->as.sym);
     if (!struct_binding || struct_binding->type.kind != TY_STRUCT) {
         diag_emit(DIAG_ERROR, name_form->span,
                   "make-struct: '%s' is not a defined struct type",
@@ -3636,8 +3654,10 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
             Form *vf = call->as.list.items[2 + p * 2 + 1];
             if (kw->tag != F_KEYWORD) {
                 diag_emit(DIAG_ERROR, kw->span,
-                          "make-struct '%s': expected :field-name, got non-keyword form",
-                          def->name);
+                          "TUR-E0299: make-struct '%s': cannot mix positional and "
+                          "keyword arguments -- use all positional (%s v1 v2 ...) or "
+                          "all keyword (%s :f1 v1 :f2 v2 ...)",
+                          def->name, def->name, def->name);
                 return NULL;
             }
             const char *kname = kw->as.sym->name;
@@ -3671,6 +3691,20 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
             }
         }
     } else {
+        /* KW-V0: a stray keyword anywhere in an otherwise-positional call is a
+         * mixed-form error (the leading arg was positional, so this is not the
+         * keyword path).  Catch it explicitly rather than letting it surface as
+         * a confusing arity mismatch. */
+        for (uint32_t a = 0; a < n_given; a++) {
+            if (call->as.list.items[2 + a]->tag == F_KEYWORD) {
+                diag_emit(DIAG_ERROR, call->as.list.items[2 + a]->span,
+                          "TUR-E0299: make-struct '%s': cannot mix positional and "
+                          "keyword arguments -- use all positional (%s v1 v2 ...) or "
+                          "all keyword (%s :f1 v1 :f2 v2 ...)",
+                          def->name, def->name, def->name);
+                return NULL;
+            }
+        }
         if (n_given != def->n_fields) {
             diag_emit(DIAG_ERROR, call->span,
                       "make-struct '%s': expected %u field value(s), got %u",
@@ -3775,6 +3809,36 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
                           type_name(expected), type_name(field_values[i]->type));
                 return NULL;
             }
+        } else {
+            /* Scalar fields carry no full_type, so the strict type_eq path above
+             * skips them.  Historically that left a hole: a cstr value silently
+             * stored into an int field (or vice versa) reinterpreted the pointer
+             * bits as a number.  Catch that unambiguous cross-class mismatch --
+             * a numeric field given a string value, or a string field given a
+             * numeric value -- while still permitting numeric->numeric coercion
+             * (int literal into an int8/float field, etc.) which existing call
+             * sites rely on. */
+            TypeKind want = def->fields[i].kind;
+            TypeKind got  = field_values[i]->type.kind;
+            /* Only for non-parametric structs: a parametric field's stored kind
+             * is the int64 *carrier* for its type variable, into which a cstr
+             * (A := cstr) is legitimately bridged -- the guard must not fire
+             * there.  Concrete (non-parametric) fields have no such carrier. */
+            if (def->n_type_params == 0 &&
+                got != TY_PTR_VOID && got != TY_UNKNOWN && want != TY_UNKNOWN) {
+                bool want_str = (want == TY_CSTR);
+                bool got_str  = (got == TY_CSTR);
+                bool want_num = typekind_is_numeric(want);
+                bool got_num  = typekind_is_numeric(got);
+                if ((want_str && got_num) || (want_num && got_str)) {
+                    diag_emit(DIAG_ERROR, value_forms[i]->span,
+                              "make-struct '%s': field '%s' expects %s, got %s",
+                              def->name, def->fields[i].name,
+                              type_name(type_from_kind(want)),
+                              type_name(field_values[i]->type));
+                    return NULL;
+                }
+            }
         }
     }
     Type result_type = type_struct(def);
@@ -3790,6 +3854,145 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
     out->as.make_struct_.field_values = field_values;
     out->as.make_struct_.n_fields = def->n_fields;
     return out;
+}
+
+/* WITH-V0: functional struct update.
+ *
+ * Syntax: (with src [field0 val0 field1 val1 ...])
+ *
+ * Returns a new struct of the same type as `src` with the listed fields
+ * overridden and every other field copied from `src`.  Only valid on :copy
+ * structs (copying the unchanged fields out of a move-only source would
+ * consume it).  Lowers to:
+ *
+ *   (let [G src]
+ *     (make-struct Name <f0> <f1> ...))   ; <fi> = override value or (.fi G)
+ *
+ * Reusing make-struct gives field-order independence, per-field type checking
+ * (the same diagnostic the positional constructor produces), and parametric
+ * type inference for free.
+ */
+Expr *elab_with(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "with requires a source value and an override vector: "
+                  "(with src [field value ...])");
+        return NULL;
+    }
+    Form *src_form = call->as.list.items[1];
+    Form *ovr_form = call->as.list.items[2];
+    if (ovr_form->tag != F_VEC) {
+        diag_emit(DIAG_ERROR, ovr_form->span,
+                  "with: override list must be a vector [field value ...]");
+        return NULL;
+    }
+    if ((ovr_form->as.list.len % 2u) != 0u) {
+        diag_emit(DIAG_ERROR, ovr_form->span,
+                  "with: override list must have an even number of forms "
+                  "([field value ...] pairs)");
+        return NULL;
+    }
+
+    /* Elaborate the source once to learn its struct type.  This Expr is used
+     * only for type detection and is discarded; the let binding below
+     * re-elaborates src_form so it is evaluated exactly once at runtime. */
+    Expr *src = elab_form(e, src_form);
+    if (!src) return NULL;
+    Type st = src->type;
+    while (st.kind == TY_APP && st.as.app.fn) st = *st.as.app.fn; /* parametric head */
+    if (st.kind != TY_STRUCT || !st.as.struct_.def) {
+        diag_emit(DIAG_ERROR, src_form->span,
+                  "with: source must be a struct value, got %s",
+                  type_name(src->type));
+        return NULL;
+    }
+    StructDef *def = st.as.struct_.def;
+    if (!def->is_copy) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "TUR-E0296: with requires a :copy struct -- '%s' is move-only, "
+                  "so copying its unchanged fields out of the source would consume "
+                  "it. Declare it `(defstruct %s :copy ...)` to use with.",
+                  def->name, def->name);
+        return NULL;
+    }
+
+    /* Map each override field name to its declared field index. */
+    Form **ovr_val = (Form **)arena_alloc(e->arena,
+        (def->n_fields ? def->n_fields : 1) * sizeof(Form *));
+    for (uint32_t i = 0; i < def->n_fields; i++) ovr_val[i] = NULL;
+    uint32_t n_pairs = ovr_form->as.list.len / 2u;
+    for (uint32_t p = 0; p < n_pairs; p++) {
+        Form *fname = ovr_form->as.list.items[p * 2u];
+        Form *fval  = ovr_form->as.list.items[p * 2u + 1u];
+        if (fname->tag != F_SYM) {
+            diag_emit(DIAG_ERROR, fname->span,
+                      "with: override field must be a bare field-name symbol");
+            return NULL;
+        }
+        const char *kn = fname->as.sym->name;
+        uint32_t klen = fname->as.sym->len;
+        uint32_t fi = UINT32_MAX;
+        for (uint32_t i = 0; i < def->n_fields; i++) {
+            const char *dn = def->fields[i].name;
+            if (dn && strlen(dn) == klen && memcmp(dn, kn, klen) == 0) { fi = i; break; }
+        }
+        if (fi == UINT32_MAX) {
+            diag_emit(DIAG_ERROR, fname->span,
+                      "TUR-E0297: with unknown field '%s' for struct '%s'",
+                      kn, def->name);
+            return NULL;
+        }
+        if (ovr_val[fi]) {
+            diag_emit(DIAG_ERROR, fname->span,
+                      "TUR-E0298: with duplicate override field '%s'", kn);
+            return NULL;
+        }
+        ovr_val[fi] = fval;
+    }
+
+    /* Build the lowered (let [G src] (make-struct Name ...)) form. */
+    Span sp = call->span;
+    char g_name[32];
+    snprintf(g_name, sizeof(g_name), "__with_%u", e->next_id++);
+    const Symbol *g_sym = symtab_intern(e->st, strslice(g_name, (uint32_t)strlen(g_name)));
+    Form *g_form = form_sym(e->arena, sp, g_sym);
+
+    const Symbol *def_name_sym = symtab_intern(e->st,
+        strslice(def->name, (uint32_t)strlen(def->name)));
+
+    uint32_t ms_n = 2u + def->n_fields;
+    Form **ms = (Form **)arena_alloc(e->arena, ms_n * sizeof(Form *));
+    ms[0] = form_sym(e->arena, sp, e->sym_make_struct);
+    ms[1] = form_sym(e->arena, sp, def_name_sym);
+    for (uint32_t i = 0; i < def->n_fields; i++) {
+        if (ovr_val[i]) {
+            ms[2u + i] = ovr_val[i];
+        } else {
+            /* non-overridden field: (.fieldname G) */
+            char acc[160];
+            int al = snprintf(acc, sizeof(acc), ".%s", def->fields[i].name);
+            const Symbol *acc_sym = symtab_intern(e->st,
+                strslice(acc, (al > 0 ? (uint32_t)al : 0)));
+            Form *ai[2];
+            ai[0] = form_sym(e->arena, sp, acc_sym);
+            ai[1] = g_form;
+            ms[2u + i] = form_list(e->arena, sp, ai, 2);
+        }
+    }
+    Form *ms_form = form_list(e->arena, sp, ms, ms_n);
+
+    Form *bind_items[2];
+    bind_items[0] = g_form;
+    bind_items[1] = src_form;
+    Form *bind_vec = form_vec(e->arena, sp, bind_items, 2);
+
+    Form *let_items[3];
+    let_items[0] = form_sym(e->arena, sp, e->sym_let);
+    let_items[1] = bind_vec;
+    let_items[2] = ms_form;
+    Form *let_form = form_list(e->arena, sp, let_items, 3);
+
+    return elab_form(e, let_form);
 }
 
 /* Elaborate (& expr) - create an immutable borrow

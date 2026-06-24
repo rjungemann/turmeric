@@ -1472,6 +1472,48 @@ Expr *elab_call(Elab *e, Form *call) {
     /* Phase 11: defstruct */
     if (name == e->sym_defstruct) return elab_defstruct(e, call);
     if (name == e->sym_make_struct) return elab_make_struct(e, call);
+    /* WITH-V0: functional struct update.  Gated on `!scope_lookup` so a user
+     * binding named `with` still wins (mirrors the session-op shadowing rule). */
+    if (name == e->sym_with && !scope_lookup(e->scope, name))
+        return elab_with(e, call);
+    /* CTOR-V0: auto-bound struct constructor call syntax `(Name args...)`.
+     * When `name` resolves to a struct type binding -- disambiguated from value
+     * bindings by scope_lookup_type_def, which filters TY_STRUCT/TY_ADT -- the
+     * call is rewritten to `(make-struct Name args...)`.  This covers both the
+     * positional form `(Name a b)` and the keyword form `(Name :f v ...)`
+     * (make-struct reorders keyword pairs into field order and diagnoses
+     * missing/unknown/duplicate/mixed args).  `:no-auto-ctor` opts out, leaving
+     * `(Name ...)` to resolve as an ordinary -- and here, non-callable -- value.
+     *
+     * Currying a constructor is intentionally NOT provided: a by-value struct
+     * result cannot flow through the type-erased closure ABI (see
+     * docs/reported/struct-return-through-closure-loses-type.md), so an
+     * under-applied constructor could never be completed usefully. */
+    {
+        Binding *struct_b = scope_lookup_type_def(e->scope, name);
+        /* Only route when the NEAREST binding for `name` (in any namespace) is
+         * itself this struct binding.  This makes anything that shadows the
+         * struct name win instead: a local value (`(let [Point f] (Point ...))`),
+         * a user `defn`, and -- crucially -- an ADT constructor that happens to
+         * share a name with an (often stdlib) struct, e.g. a user `(defdata List
+         * (Cons :int :List))` whose `Cons` must not be hijacked by stdlib's
+         * `Cons` struct.  scope_lookup_type_def only matches TY_STRUCT/TY_ADT, so
+         * `Cons` resolves there to the struct while `scope_lookup` resolves to the
+         * newer constructor; requiring identity lets the constructor win. */
+        Binding *nearest = scope_lookup(e->scope, name);
+        if (nearest && nearest == struct_b && struct_b->type.kind == TY_STRUCT &&
+            struct_b->type.as.struct_.def &&
+            !struct_b->type.as.struct_.def->no_auto_ctor) {
+            uint32_t mn = call->as.list.len + 1u;
+            Form **mi = (Form **)arena_alloc(e->arena, mn * sizeof(Form *));
+            mi[0] = form_sym(e->arena, head->span, e->sym_make_struct);
+            mi[1] = head; /* struct name symbol */
+            for (uint32_t i = 1; i < call->as.list.len; i++)
+                mi[i + 1u] = call->as.list.items[i];
+            Form *ms = form_list(e->arena, call->span, mi, mn);
+            return elab_make_struct(e, ms);
+        }
+    }
     /* M2b: (default-of T) is a builtin zero-value form, BUT a user program may
      * legitimately declare a typeclass method named `default-of` (the canonical
      * return-position-only dispatch example).  When such a class is in scope,

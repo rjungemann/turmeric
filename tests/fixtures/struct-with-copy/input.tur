@@ -1,0 +1,21 @@
+;; WITH-V0: (with src [field value ...]) returns a new struct with the listed
+;; fields overridden and the rest copied from src.  Only valid on :copy
+;; structs.  Multi-field override and free override order are exercised.
+
+(defstruct Person :copy [name : cstr age : int active : int])
+
+(defn show-person [p : Person] : void
+  (println (.name p))
+  (println (.age p))
+  (println (.active p)))
+
+(defn main [] : int
+  (let [p (Person "Bob" 40 1)
+        q (with p [name "Alice"])                 ; single-field override
+        r (with p [active 0 age 41])              ; multi-field, reordered
+        s (with q [age 99])]                      ; chained with on a derived value
+    (show-person p)
+    (show-person q)
+    (show-person r)
+    (show-person s)
+    0))

@@ -1393,6 +1393,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_handle = intern_cstr(st, "handle");
     e->sym_try_with = intern_cstr(st, "try-with");
     e->sym_with_handler = intern_cstr(st, "with-handler");
+    e->sym_with = intern_cstr(st, "with"); /* WITH-V0 */
     e->sym_resume = intern_cstr(st, "resume");
     e->sym_discontinue = intern_cstr(st, "discontinue");
     e->sym_k = intern_cstr(st, "k");
@@ -1467,6 +1468,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->kw_linear = intern_cstr(st, "linear"); /* LT4 */
     e->kw_affine = intern_cstr(st, "affine");
     e->kw_heap = intern_cstr(st, "heap");
+    e->kw_no_auto_ctor = intern_cstr(st, "no-auto-ctor"); /* CTOR-V0 opt-out */
     /* Phase 11: struct registry */
     e->struct_defs = NULL;
     e->n_struct_defs = 0;

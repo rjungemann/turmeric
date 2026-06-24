@@ -269,6 +269,7 @@ typedef struct Elab {
     const Symbol *sym_handle;     /* handle */
     const Symbol *sym_try_with;   /* try-with (sugar for handle) */
     const Symbol *sym_with_handler; /* with-handler (sugar for handle; async-friendly alias) */
+    const Symbol *sym_with;         /* WITH-V0: (with src [field value ...]) functional struct update */
     const Symbol *sym_resume;     /* resume */
     const Symbol *sym_discontinue;/* discontinue */
     const Symbol *sym_k;          /* continuation parameter name k */
@@ -325,6 +326,7 @@ typedef struct Elab {
     const Symbol *kw_linear;      /* LT4: :linear keyword for defstruct (exactly-once) */
     const Symbol *kw_affine;      /* :affine keyword for defopaque (at-most-once) */
     const Symbol *kw_heap;        /* :heap keyword for defstruct (typed-pointer ABI) */
+    const Symbol *kw_no_auto_ctor;/* CTOR-V0: :no-auto-ctor keyword for defstruct */
     /* Phase 12: Borrow traits */
     const Symbol *sym_borrow;      /* & symbol for immutable borrow */
     const Symbol *sym_borrow_mut;  /* &mut for mutable borrow */
@@ -1125,6 +1127,7 @@ Expr *elab_coerce(Elab *e, const Form *call);
 CtorDef *elab_lookup_ctor(Elab *e, const Symbol *name);
 Expr *elab_match(Elab *e, const Form *call);
 Expr *elab_make_struct(Elab *e, const Form *call);
+Expr *elab_with(Elab *e, const Form *call); /* WITH-V0 */
 Expr *elab_default_of(Elab *e, const Form *call);  /* M2b */
 bool elab_struct_type_extract_args(const Type *t, const StructDef *def, Type *out_args);
 Type elab_struct_field_use_type(Elab *e, const Type *container_type,
@@ -1161,6 +1164,9 @@ Type *fn_type_from_form(Elab *e, const Form *form,
  * arena-allocated Type* (TY_ADT or TY_STRUCT) when found, else NULL.
  * Prefers GADTs over structs when both share a name, per the MF4 design. */
 Type *elab_lookup_type_by_name(Elab *e, const Symbol *name);
+/* CTOR-V0: scope-aware lookup that returns the nearest TY_STRUCT/TY_ADT binding
+ * for `name` (skipping shadowing value bindings of other kinds), or NULL. */
+Binding *scope_lookup_type_def(struct Scope *s, const Symbol *name);
 /* Variadic HKT rows: validate a type-application argument's kind against the
  * constructor's positional parameter kind (row concern only). arg_index is
  * 0-based. Returns false and emits TUR-E0012 on a row/non-row mismatch. */

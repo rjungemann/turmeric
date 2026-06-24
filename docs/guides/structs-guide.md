@@ -140,6 +140,87 @@ let [px make-struct(Pixel 255u8 128u8 64u8 255u8)]
 The argument count must exactly match the field count; a mismatch is a
 compile-time error.
 
+### Auto-bound constructor
+
+Every `defstruct` also binds the struct name as a **constructor function** in
+the value namespace, so you can drop the `make-struct` keyword entirely:
+
+```turmeric
+(defstruct Point :copy [x : int y : int])
+
+(let [p (Point 3 4)]          ; identical to (make-struct Point 3 4)
+  ...)
+```
+
+```sweet-exp
+let [p Point(3 4)]
+  ...
+```
+
+The struct name lives in the *type* namespace and the constructor in the
+*value* namespace, so `Point` still works as a type annotation (`p : Point`)
+with no conflict. If the struct name is already bound as a value elsewhere,
+opt out with `:no-auto-ctor`; construction then goes only through
+`make-struct`:
+
+```turmeric
+(defstruct Point :copy :no-auto-ctor [x : int y : int])
+;; (Point 3 4) is now an error; use (make-struct Point 3 4)
+```
+
+> Note: a constructor cannot be **curried** -- a by-value struct result cannot
+> flow through Turmeric's closure ABI, so an under-applied constructor could
+> never be completed. Always pass all fields in one call (positionally or by
+> keyword).
+
+### Keyword arguments
+
+Both `make-struct` and the auto-bound constructor accept `:field value` pairs.
+Keyword order is free; the elaborator reorders into declared-field order:
+
+```turmeric
+(defstruct Person :copy [name : cstr age : int])
+
+(Person :name "Bob" :age 40)            ; auto-bound ctor, keyword form
+(make-struct Person :age 40 :name "Bob") ; make-struct, reversed order
+```
+
+```sweet-exp
+Person(:name "Bob" :age 40)
+```
+
+Keyword construction is checked strictly: every field must be supplied
+(`TUR-E0292`), an unknown field (`TUR-E0294`) or a duplicate field
+(`TUR-E0293`) is an error, and positional and keyword forms cannot be mixed in
+one call (`TUR-E0299`). Use one form or the other.
+
+### Functional update with `with`
+
+`with` returns a **new** struct value with some fields overridden and the rest
+copied from a source value. It is only valid on `:copy` structs (copying the
+unchanged fields out of a move-only source would consume it):
+
+```turmeric
+(defstruct Person :copy [name : cstr age : int active : int])
+
+(let [p (Person "Bob" 40 1)
+      q (with p [name "Alice"])        ; => Person "Alice" 40 1
+      r (with p [active 0 age 41])]    ; override order is free
+  ...)
+```
+
+```sweet-exp
+let [p Person("Bob" 40 1)
+     q with(p [name "Alice"])]
+  ...
+```
+
+`with` lowers to a constructor call that takes the listed fields from the
+override list and every other field from the source, so override values are
+type-checked exactly as the constructor would check them. Applying `with` to a
+non-`:copy` struct is rejected (`TUR-E0296`), as are unknown (`TUR-E0297`) and
+duplicate (`TUR-E0298`) override fields.
+
 ---
 
 ## Accessing fields
