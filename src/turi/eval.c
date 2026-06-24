@@ -216,6 +216,14 @@ static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e);
 static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
                              TuriValue *args, uint32_t n_args);
 
+/* Debugger Phase 2: eval-loop hooks (no-ops unless a debugger is attached).
+ * Defined near the end of this file, after the value printer they rely on. */
+static void turi_dbg_before_node(TuriEnv *env, EvalFrame *frame,
+                                  const Expr *e, bool from_driver);
+static void turi_dbg_push(TuriEnv *env, const FnDef *fn, EvalFrame *cf);
+static void turi_dbg_pop(TuriEnv *env);
+static void turi_dbg_set_top(TuriEnv *env, const FnDef *fn, EvalFrame *cf);
+
 #if defined(__APPLE__)
 #  pragma clang diagnostic push
 #  pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -4282,6 +4290,7 @@ typedef struct {
     const char *saved_module;   /* env->current_module to restore at chain end */
     bool        was_returning;  /* env->returning at activation entry */
     bool        was_no_unwind;  /* env->in_no_unwind at activation entry */
+    const void *dbg_fn;         /* debugger Phase 2: const FnDef* of the activation */
 } DriveSeed;
 
 /* -------------------------------------------------------------------------
@@ -4967,6 +4976,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                                  .saved_module  = seed->saved_module,
                                  .was_returning = seed->was_returning,
                                  .was_no_unwind = seed->was_no_unwind }));
+        if (env->debugger) turi_dbg_push(env, (const FnDef *)seed->dbg_fn, frame);
         tail = true;
     }
 
@@ -5044,6 +5054,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                                      .saved_module  = env->current_module,
                                      .was_returning = env->returning,
                                      .was_no_unwind = env->in_no_unwind }));
+            if (env->debugger) turi_dbg_push(env, fn, call_frame);
             env->current_module = cl->module;
             env->returning      = false;
             env->in_no_unwind   = fn->binding && fn->binding->no_unwind;
@@ -5051,6 +5062,11 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
             continue;
         }
         if (descending) {
+            /* Debugger Phase 2: control nodes the driver folds (nested if / do /
+             * let / call / match bodies) never pass through eval_expr, so the
+             * per-node check is mirrored here. */
+            if (env->debugger)
+                turi_dbg_before_node(env, cf, control, /*from_driver=*/true);
             switch (control->kind) {
             case EX_IF:
                 DRIVE_PUSH(((DriveCont){ .kind = DK_IF_BRANCH, .expr = control,
@@ -5889,6 +5905,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     ret->was_no_unwind = env->in_no_unwind;        /* = caller's */
                     env->returning      = false;
                     env->in_no_unwind   = fn->binding && fn->binding->no_unwind;
+                    /* Debugger Phase 2: a tail call replaces the current activation
+                     * in place (TCO), so retarget the top stack frame rather than
+                     * pushing -- keeping backtrace depth O(1) like the runtime. */
+                    if (env->debugger) turi_dbg_set_top(env, fn, call_frame);
                     len--;  /* pop DK_CALL_ARG; ret is now st[len-1] */
                     control = fn->body; cf = call_frame; tail = true; descending = true;
                     break;
@@ -5904,6 +5924,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 top->saved_module  = env->current_module;
                 top->was_returning = env->returning;
                 top->was_no_unwind = env->in_no_unwind;
+                if (env->debugger) turi_dbg_push(env, fn, call_frame);
                 env->current_module = cl->module;
                 env->returning      = false;
                 env->in_no_unwind   = fn->binding && fn->binding->no_unwind;
@@ -5938,6 +5959,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     ret = cur;
                 }
                 env->current_module = top->saved_module;
+                if (env->debugger) turi_dbg_pop(env);
                 cur = ret; len--;   /* pop; propagate the call's value */
                 break;
             }
@@ -6195,6 +6217,7 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
         .saved_module  = env->current_module,
         .was_returning = env->returning,
         .was_no_unwind = env->in_no_unwind,
+        .dbg_fn        = fn,
     };
     env->current_module = cl->module;
     env->returning      = false;
@@ -6242,6 +6265,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e);
 
 static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     if (!e) return turi_nil();
+    /* Debugger Phase 2: per-node breakpoint / step check.  A single NULL-pointer
+     * load when no debugger is attached -- no measurable cost on plain runs. */
+    if (env->debugger) turi_dbg_before_node(env, frame, e, /*from_driver=*/false);
     if (env->returning) return env->return_value;
     if (env->throwing)  return env->throw_value;
     if (env->aborting)  return env->abort_value;   /* SR N4: abort in flight */
@@ -8405,6 +8431,457 @@ static void turi_value_repr_d(char *buf, size_t cap, TuriValue v, int depth) {
 
 void turi_value_repr(char *buf, size_t cap, TuriValue v) {
     turi_value_repr_d(buf, cap, v, 4);
+}
+
+/* =========================================================================
+ * Debugger Phase 2 -- interactive interpreter debugger
+ *
+ * See docs/upcoming/debugger-plan.md (Phase 2).  A TuriDebugger is attached to
+ * a TuriEnv by turi_debug_enable(); the eval loop then calls turi_dbg_before_node
+ * before each AST node and turi_dbg_push/pop around each turi-body activation.
+ * On a breakpoint or a satisfied step predicate the loop yields to a small
+ * command REPL (dbg_repl) reading from dbg->in and writing to dbg->out.
+ *
+ * Stepping is line-granular: STEP_IN stops at the next node on a different
+ * source line; STEP_OVER additionally requires the call depth to be <= the
+ * depth we stepped from (so a call on the current line is run to completion);
+ * STEP_OUT stops once the depth drops below the stepped-from depth.
+ * ========================================================================= */
+
+#define DBG_MAX_BPS     64
+#define DBG_MAX_FRAMES  512   /* backtrace storage cap; depth() still counts past it */
+
+typedef enum {
+    DBG_STEP_NONE = 0,  /* run freely; only breakpoints / (break) stop us */
+    DBG_STEP_IN,        /* stop at the next line, any depth */
+    DBG_STEP_OVER,      /* stop at the next line at depth <= step_depth */
+    DBG_STEP_OUT,       /* stop once depth < step_depth */
+} DbgStep;
+
+typedef struct {
+    char     file[128];  /* basename matched against a node's source file */
+    uint32_t line;
+} DbgBreakpoint;
+
+typedef struct {
+    const char *fn_name;  /* function owning this activation (points into sym storage) */
+    EvalFrame  *cf;       /* its lexical frame (updated while this frame is active) */
+    Span        cur;      /* span of the node currently executing in this frame */
+} DbgStackFrame;
+
+typedef struct TuriDebugger {
+    FILE          *in;
+    FILE          *out;
+    bool           armed;        /* false until turi_debug_arm(): no node stops */
+    bool           in_repl;      /* reentrancy guard while the command loop runs */
+    bool           break_now;    /* (break) builtin: stop at the next located node */
+    DbgStep        step;
+    int            depth;        /* live call depth (turi-body activations) */
+    int            step_depth;   /* depth recorded at the last stop */
+    uint16_t       stop_file;    /* file_id of the last stop (for line_changed) */
+    uint32_t       stop_line;    /* source line of the last stop */
+    uint16_t       prev_file;    /* file_id of the previously executed node */
+    uint32_t       prev_line;    /* line of the previously executed node (for bp entry) */
+    const Expr    *skip_node;    /* dedup: node hooked by eval_expr, skip its driver re-hook */
+    DbgBreakpoint  bps[DBG_MAX_BPS];
+    int            n_bps;
+    DbgStackFrame  frames[DBG_MAX_FRAMES];
+} TuriDebugger;
+
+/* Last path component of a source path (no allocation). */
+static const char *dbg_basename(const char *path) {
+    if (!path) return "";
+    const char *slash = strrchr(path, '/');
+    return slash ? slash + 1 : path;
+}
+
+/* -------- call-stack maintenance (invoked from the driver) ---------------- */
+
+static void turi_dbg_push(TuriEnv *env, const FnDef *fn, EvalFrame *cf) {
+    TuriDebugger *dbg = (TuriDebugger *)env->debugger;
+    if (!dbg) return;
+    if (dbg->depth >= 0 && dbg->depth < DBG_MAX_FRAMES) {
+        DbgStackFrame *f = &dbg->frames[dbg->depth];
+        f->fn_name = (fn && fn->binding && fn->binding->name)
+                       ? fn->binding->name->name : "<fn>";
+        f->cf  = cf;
+        f->cur = SPAN_UNKNOWN;
+    }
+    dbg->depth++;
+}
+
+static void turi_dbg_pop(TuriEnv *env) {
+    TuriDebugger *dbg = (TuriDebugger *)env->debugger;
+    if (!dbg) return;
+    if (dbg->depth > 0) dbg->depth--;
+}
+
+static void turi_dbg_set_top(TuriEnv *env, const FnDef *fn, EvalFrame *cf) {
+    TuriDebugger *dbg = (TuriDebugger *)env->debugger;
+    if (!dbg) return;
+    int top = dbg->depth - 1;
+    if (top >= 0 && top < DBG_MAX_FRAMES) {
+        DbgStackFrame *f = &dbg->frames[top];
+        f->fn_name = (fn && fn->binding && fn->binding->name)
+                       ? fn->binding->name->name : "<fn>";
+        f->cf  = cf;
+        f->cur = SPAN_UNKNOWN;
+    }
+}
+
+/* -------- source listing -------------------------------------------------- */
+
+/* Print the source line `line` of file_id `fid` (1-based), prefixed with
+ * `marker`.  Best-effort: silently does nothing when the file is unreadable. */
+static void dbg_print_source_line(TuriDebugger *dbg, uint16_t fid,
+                                  uint32_t line, const char *marker) {
+    const char *path = diag_file_path(fid);
+    if (!path || line == 0) return;
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    char buf[1024];
+    uint32_t cur = 0;
+    while (fgets(buf, sizeof buf, f)) {
+        cur++;
+        if (cur == line) {
+            size_t n = strlen(buf);
+            while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) buf[--n] = '\0';
+            fprintf(dbg->out, "%s%u\t%s\n", marker, line, buf);
+            break;
+        }
+    }
+    fclose(f);
+}
+
+/* List a window of `radius` lines on either side of `line`. */
+static void dbg_list_source(TuriDebugger *dbg, uint16_t fid,
+                            uint32_t line, uint32_t radius) {
+    if (line == 0) { fprintf(dbg->out, "no source location\n"); return; }
+    uint32_t lo = (line > radius) ? line - radius : 1;
+    uint32_t hi = line + radius;
+    for (uint32_t l = lo; l <= hi; l++)
+        dbg_print_source_line(dbg, fid, l, l == line ? "=> " : "   ");
+}
+
+/* -------- inspection ------------------------------------------------------ */
+
+/* Print every lexically-visible binding reachable from `frame`, innermost
+ * first, suppressing names already shown (shadowed outer bindings). */
+static void dbg_print_locals(TuriEnv *env, TuriDebugger *dbg, EvalFrame *frame) {
+    (void)env;
+    const char *seen[256];
+    int n_seen = 0;
+    int shown  = 0;
+    for (EvalFrame *f = frame; f; f = f->parent) {
+        for (EvalBinding *b = f->bindings; b; b = b->next) {
+            bool dup = false;
+            for (int i = 0; i < n_seen; i++)
+                if (strcmp(seen[i], b->name) == 0) { dup = true; break; }
+            if (dup) continue;
+            if (n_seen < 256) seen[n_seen++] = b->name;
+            char repr[256];
+            turi_value_repr(repr, sizeof repr, b->value);
+            fprintf(dbg->out, "  %s = %s\n", b->name, repr);
+            shown++;
+        }
+    }
+    if (shown == 0) fprintf(dbg->out, "  (no locals in scope)\n");
+}
+
+/* Print a single binding by name, resolving through the frame chain then the
+ * globals (mirrors eval_lookup's order). */
+static void dbg_print_var(TuriEnv *env, TuriDebugger *dbg, EvalFrame *frame,
+                          const char *name) {
+    for (EvalFrame *f = frame; f; f = f->parent)
+        for (EvalBinding *b = f->bindings; b; b = b->next)
+            if (strcmp(b->name, name) == 0) {
+                char repr[256];
+                turi_value_repr(repr, sizeof repr, b->value);
+                fprintf(dbg->out, "%s = %s\n", name, repr);
+                return;
+            }
+    TuriValue g = turi_env_get(env, name);
+    if (!turi_is_error(g)) {
+        char repr[256];
+        turi_value_repr(repr, sizeof repr, g);
+        fprintf(dbg->out, "%s = %s\n", name, repr);
+        return;
+    }
+    fprintf(dbg->out, "no binding named '%s' in scope\n", name);
+}
+
+static void dbg_print_backtrace(TuriDebugger *dbg) {
+    int top = dbg->depth;
+    if (top > DBG_MAX_FRAMES) top = DBG_MAX_FRAMES;
+    if (top <= 0) { fprintf(dbg->out, "  (no frames)\n"); return; }
+    for (int i = top - 1; i >= 0; i--) {
+        DbgStackFrame *f = &dbg->frames[i];
+        const char *path = dbg_basename(diag_file_path(f->cur.file_id));
+        fprintf(dbg->out, "  #%-2d %s  at %s:%u\n",
+                top - 1 - i, f->fn_name ? f->fn_name : "<fn>",
+                path[0] ? path : "?", f->cur.line);
+    }
+}
+
+/* -------- breakpoints ----------------------------------------------------- */
+
+static bool dbg_bp_match(TuriDebugger *dbg, Span s) {
+    if (dbg->n_bps == 0 || s.line == 0) return false;
+    const char *base = dbg_basename(diag_file_path(s.file_id));
+    for (int i = 0; i < dbg->n_bps; i++) {
+        if (dbg->bps[i].line != s.line) continue;
+        if (dbg->bps[i].file[0] == '\0' ||
+            strcmp(dbg->bps[i].file, base) == 0)
+            return true;
+    }
+    return false;
+}
+
+/* Parse "<line>" or "<file>:<line>" into a breakpoint and record it. */
+static void dbg_add_breakpoint(TuriDebugger *dbg, const char *arg) {
+    if (dbg->n_bps >= DBG_MAX_BPS) {
+        fprintf(dbg->out, "breakpoint table full (max %d)\n", DBG_MAX_BPS);
+        return;
+    }
+    DbgBreakpoint bp = {{0}, 0};
+    const char *colon = strrchr(arg, ':');
+    if (colon) {
+        size_t flen = (size_t)(colon - arg);
+        if (flen >= sizeof bp.file) flen = sizeof bp.file - 1;
+        memcpy(bp.file, arg, flen);
+        bp.file[flen] = '\0';
+        bp.line = (uint32_t)strtoul(colon + 1, NULL, 10);
+    } else {
+        bp.line = (uint32_t)strtoul(arg, NULL, 10);
+    }
+    if (bp.line == 0) { fprintf(dbg->out, "bad breakpoint: '%s'\n", arg); return; }
+    dbg->bps[dbg->n_bps++] = bp;
+    fprintf(dbg->out, "breakpoint %d set at %s%s%u\n",
+            dbg->n_bps, bp.file, bp.file[0] ? ":" : "", bp.line);
+}
+
+static void dbg_delete_breakpoint(TuriDebugger *dbg, const char *arg) {
+    if (!arg || !*arg) { dbg->n_bps = 0; fprintf(dbg->out, "all breakpoints cleared\n"); return; }
+    int idx = atoi(arg);
+    if (idx < 1 || idx > dbg->n_bps) { fprintf(dbg->out, "no breakpoint %s\n", arg); return; }
+    for (int i = idx - 1; i < dbg->n_bps - 1; i++) dbg->bps[i] = dbg->bps[i + 1];
+    dbg->n_bps--;
+    fprintf(dbg->out, "breakpoint %d deleted\n", idx);
+}
+
+static void dbg_print_help(TuriDebugger *dbg) {
+    fprintf(dbg->out,
+        "commands:\n"
+        "  break <line> | break <file>:<line>   set a breakpoint   (b)\n"
+        "  delete [n]                            clear breakpoint n (all if omitted)\n"
+        "  continue                              run to next breakpoint    (c)\n"
+        "  step                                  step into / next line     (s)\n"
+        "  next                                  step over calls           (n)\n"
+        "  finish                                run until current fn returns (fin)\n"
+        "  backtrace                             print the call stack    (bt, where)\n"
+        "  locals                                print all locals in scope (l)\n"
+        "  print <name>                          print one binding         (p)\n"
+        "  list                                  show source around here   (ls)\n"
+        "  quit                                  abort the program         (q)\n"
+        "  help                                  this message              (h)\n");
+}
+
+/* -------- the command REPL ------------------------------------------------ */
+
+/* Read commands until one resumes execution (continue / step / next / finish)
+ * or aborts (quit).  `frame` is the lexical frame of the stopped node `e`. */
+static void dbg_repl(TuriEnv *env, TuriDebugger *dbg, EvalFrame *frame,
+                     const Expr *e) {
+    Span s = e->span;
+    const char *path = dbg_basename(diag_file_path(s.file_id));
+    fprintf(dbg->out, "\nstopped at %s:%u\n", path[0] ? path : "?", s.line);
+    dbg_print_source_line(dbg, s.file_id, s.line, "=> ");
+
+    char line[512];
+    for (;;) {
+        fprintf(dbg->out, "(tur-dbg) ");
+        fflush(dbg->out);
+        if (!fgets(line, sizeof line, dbg->in)) {
+            /* EOF on the command stream: detach and let the program finish. */
+            dbg->armed = false;
+            dbg->step  = DBG_STEP_NONE;
+            return;
+        }
+        /* split into command + rest */
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        char *cmd = p;
+        while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') p++;
+        if (*p) { *p = '\0'; p++; }
+        while (*p == ' ' || *p == '\t') p++;
+        char *arg = p;
+        size_t an = strlen(arg);
+        while (an > 0 && (arg[an - 1] == '\n' || arg[an - 1] == '\r' ||
+                          arg[an - 1] == ' '  || arg[an - 1] == '\t')) arg[--an] = '\0';
+
+        if (*cmd == '\0') continue;  /* blank line: re-prompt */
+
+        if (!strcmp(cmd, "continue") || !strcmp(cmd, "c")) {
+            dbg->step = DBG_STEP_NONE; return;
+        }
+        if (!strcmp(cmd, "step") || !strcmp(cmd, "s")) {
+            dbg->step = DBG_STEP_IN; dbg->step_depth = dbg->depth;
+            dbg->stop_file = s.file_id; dbg->stop_line = s.line; return;
+        }
+        if (!strcmp(cmd, "next") || !strcmp(cmd, "n")) {
+            dbg->step = DBG_STEP_OVER; dbg->step_depth = dbg->depth;
+            dbg->stop_file = s.file_id; dbg->stop_line = s.line; return;
+        }
+        if (!strcmp(cmd, "finish") || !strcmp(cmd, "fin") || !strcmp(cmd, "out")) {
+            dbg->step = DBG_STEP_OUT; dbg->step_depth = dbg->depth;
+            dbg->stop_file = s.file_id; dbg->stop_line = s.line; return;
+        }
+        if (!strcmp(cmd, "break") || !strcmp(cmd, "b")) {
+            if (*arg) dbg_add_breakpoint(dbg, arg);
+            else fprintf(dbg->out, "usage: break <line> | break <file>:<line>\n");
+            continue;
+        }
+        if (!strcmp(cmd, "delete") || !strcmp(cmd, "d")) {
+            dbg_delete_breakpoint(dbg, arg); continue;
+        }
+        if (!strcmp(cmd, "backtrace") || !strcmp(cmd, "bt") || !strcmp(cmd, "where")) {
+            dbg_print_backtrace(dbg); continue;
+        }
+        if (!strcmp(cmd, "locals") || !strcmp(cmd, "l")) {
+            dbg_print_locals(env, dbg, frame); continue;
+        }
+        if (!strcmp(cmd, "print") || !strcmp(cmd, "p")) {
+            if (*arg) dbg_print_var(env, dbg, frame, arg);
+            else fprintf(dbg->out, "usage: print <name>\n");
+            continue;
+        }
+        if (!strcmp(cmd, "list") || !strcmp(cmd, "ls")) {
+            dbg_list_source(dbg, s.file_id, s.line, 3); continue;
+        }
+        if (!strcmp(cmd, "help") || !strcmp(cmd, "h") || !strcmp(cmd, "?")) {
+            dbg_print_help(dbg); continue;
+        }
+        if (!strcmp(cmd, "quit") || !strcmp(cmd, "q")) {
+            fprintf(dbg->out, "aborting\n");
+            fflush(dbg->out);
+            turi_run_pending_defers(env);
+            _exit(0);
+        }
+        fprintf(dbg->out, "unknown command '%s' (try 'help')\n", cmd);
+    }
+}
+
+/* -------- the per-node hook ----------------------------------------------- */
+
+static bool dbg_line_changed(TuriDebugger *dbg, Span s) {
+    return s.line != dbg->stop_line || s.file_id != dbg->stop_file;
+}
+
+static void turi_dbg_before_node(TuriEnv *env, EvalFrame *frame,
+                                 const Expr *e, bool from_driver) {
+    TuriDebugger *dbg = (TuriDebugger *)env->debugger;
+    if (!dbg || dbg->in_repl || !e) return;
+
+    /* Dedup: eval_expr hooks a node, then immediately dispatches the
+     * driver-folded kinds (let/if/do/program/call/match) to eval_drive, which
+     * would re-hook the very same node.  Mark it on the eval_expr pass and
+     * swallow the driver's duplicate. */
+    if (from_driver) {
+        if (e == dbg->skip_node) { dbg->skip_node = NULL; return; }
+    } else {
+        switch (e->kind) {
+        case EX_LET: case EX_LETREC: case EX_IF: case EX_DO:
+        case EX_PROGRAM: case EX_CALL: case EX_MATCH:
+            dbg->skip_node = e; break;
+        default: break;
+        }
+    }
+
+    Span s = e->span;
+    if (s.line == 0) return;  /* synthetic / span-less node: never a stop point */
+
+    /* Keep the active frame's current location fresh for the backtrace. */
+    if (dbg->depth > 0 && dbg->depth <= DBG_MAX_FRAMES)
+        dbg->frames[dbg->depth - 1].cur = s;
+
+    if (!dbg->armed) { dbg->prev_file = s.file_id; dbg->prev_line = s.line; return; }
+
+    /* A line breakpoint fires only on *entry* to the line (a transition from a
+     * different source line), not once per node that shares the line. */
+    bool line_entry = (s.line != dbg->prev_line || s.file_id != dbg->prev_file);
+
+    bool hit = false;
+    if (dbg->break_now) { dbg->break_now = false; hit = true; }
+    else if (line_entry && dbg_bp_match(dbg, s)) hit = true;
+    else {
+        switch (dbg->step) {
+        case DBG_STEP_IN:   hit = dbg_line_changed(dbg, s); break;
+        case DBG_STEP_OVER: hit = dbg_line_changed(dbg, s) &&
+                                  dbg->depth <= dbg->step_depth; break;
+        case DBG_STEP_OUT:  hit = dbg->depth < dbg->step_depth; break;
+        case DBG_STEP_NONE: default: break;
+        }
+    }
+
+    /* Record this node's line as "previous" for the next entry test.  Done
+     * before any REPL so a same-line node after resuming does not re-trigger. */
+    dbg->prev_file = s.file_id;
+    dbg->prev_line = s.line;
+
+    if (!hit) return;
+
+    dbg->in_repl = true;
+    dbg_repl(env, dbg, frame, e);
+    dbg->in_repl   = false;
+    dbg->stop_file = s.file_id;
+    dbg->stop_line = s.line;
+}
+
+/* -------- (break) builtin ------------------------------------------------- */
+
+/* (break) -- force the debugger to pause at the next located node.  A no-op
+ * when no debugger is attached, so a program peppered with (break) still runs
+ * normally under plain `tur --interpret`. */
+static TuriValue native_dbg_break(TuriEnv *env, TuriValue *args, uint32_t n,
+                                  void *ud) {
+    (void)args; (void)n; (void)ud;
+    TuriDebugger *dbg = (TuriDebugger *)env->debugger;
+    if (dbg && dbg->armed) dbg->break_now = true;
+    return turi_nil();
+}
+
+/* -------- public API ------------------------------------------------------ */
+
+void turi_debug_register_break_builtin(TuriEnv *env) {
+    if (!env) return;
+    turi_env_register_native(env, "break", native_dbg_break, NULL);
+}
+
+void turi_debug_enable(TuriEnv *env, FILE *in, FILE *out) {
+    if (!env || env->debugger) return;
+    TuriDebugger *dbg = (TuriDebugger *)calloc(1, sizeof(TuriDebugger));
+    if (!dbg) return;
+    dbg->in   = in  ? in  : stdin;
+    dbg->out  = out ? out : stdout;
+    dbg->step = DBG_STEP_NONE;
+    env->debugger = dbg;
+    /* Register the (break) builtin so source-driven breakpoints resolve. */
+    turi_debug_register_break_builtin(env);
+}
+
+void turi_debug_arm(TuriEnv *env) {
+    if (!env || !env->debugger) return;
+    TuriDebugger *dbg = (TuriDebugger *)env->debugger;
+    dbg->armed     = true;
+    dbg->step      = DBG_STEP_IN;   /* stop at the first located node (entry) */
+    dbg->stop_file = 0;
+    dbg->stop_line = 0;
+}
+
+void turi_debug_disable(TuriEnv *env) {
+    if (!env || !env->debugger) return;
+    free(env->debugger);
+    env->debugger = NULL;
 }
 
 /* -------------------------------------------------------------------------

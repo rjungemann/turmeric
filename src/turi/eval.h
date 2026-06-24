@@ -1,6 +1,8 @@
 #ifndef TURI_EVAL_H
 #define TURI_EVAL_H
 
+#include <stdio.h>
+
 #include "env.h"
 #include "fiber.h"
 #include "value.h"
@@ -56,6 +58,32 @@ const char *turi_try_show(TuriEnv *env, TuriValue val);
  * Returns a heap-allocated C string (caller must free() it), or NULL when
  * the type_tag is not a known heap-pointer type. */
 const char *turi_show_result(TuriEnv *env, TuriValue val, const char *type_tag);
+
+/* ---------------------------------------------------------------------------
+ * Debugger Phase 2: interactive interpreter debugger
+ * --------------------------------------------------------------------------- */
+
+/* Attach an interactive debugger to env.  After this call the eval loop checks
+ * each AST node against the breakpoint table / step predicate and, on a hit,
+ * yields to a command REPL on `in` (commands) / `out` (prompts + listings).
+ * Pass NULL for in/out to use stdin/stdout.  Also registers the `(break)`
+ * builtin (an explicit source-driven breakpoint).  Idempotent: a second call
+ * is a no-op.  The debugger starts UNARMED -- no node will stop until
+ * turi_debug_arm() is called, so prelude/top-level loading runs uninterrupted. */
+void turi_debug_enable(TuriEnv *env, FILE *in, FILE *out);
+
+/* Arm the attached debugger so it stops at the first eval node it sees (the
+ * program-entry stop).  Call right before running the program (e.g. main). */
+void turi_debug_arm(TuriEnv *env);
+
+/* Detach and free the debugger (no-op if none attached). */
+void turi_debug_disable(TuriEnv *env);
+
+/* Register the `(break)` builtin without attaching a debugger.  With no
+ * debugger present it is a no-op (returns nil), so a program containing
+ * `(break)` runs unchanged under plain `tur --interpret`; under `tur debug`
+ * the same call forces a pause.  turi_debug_enable also registers it. */
+void turi_debug_register_break_builtin(TuriEnv *env);
 
 /* ---------------------------------------------------------------------------
  * SB3 / SB4: Sandbox resource-limit and capability API

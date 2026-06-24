@@ -204,6 +204,11 @@ void turi_env_free(TuriEnv *env) {
         env->retired_spice_images = NULL;
     }
 
+    /* Debugger Phase 2: drop any attached debugger state. */
+    if (env->debugger) {
+        turi_debug_disable(env);
+    }
+
     /* Phase S7: free async scheduler state */
     turi_sched_free(env);
 
