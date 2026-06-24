@@ -2,12 +2,24 @@
 
 **Severity:** low (codegen-snapshot fragility; no observed runtime miscompile)
 
-**Status:** open as of v0.25.0. No `type_make`/zeroing helper has been
-introduced; `c_num_spelling` is still set only on the paths in
-`elab_types.c:481`/`:1922` and read by `type_c_name`
-(`src/compiler/types.c:2448`). The snapshots regenerated alongside
-assoc-types-2 remain correct for the current arena layout, so the latent
-fragility has not resurfaced -- but the root cause is unchanged.
+**Status:** RESOLVED. The root cause was the bare `Type t;` declaration in
+the inline `Type` constructors in `src/compiler/types.h` -- `type_fn`,
+`type_ref`, `type_lref`, `type_rc`, `type_rc_struct`, `type_weak`,
+`type_ref_immut`, `type_ref_mut`, `type_typeclass`, `type_typeclass_inst`,
+`type_exception`, and `type_cloneable_cont` -- which set fields individually
+and never touched `c_num_spelling` (nor, in some cases, `hkt_kind` /
+`substruct`). A `Type` produced by `type_fn` (the `>>>` lambda's captured
+fat-pointer carrier in the repro) therefore read back a stale, layout-sensitive
+`c_num_spelling` byte that `type_c_name` (`src/compiler/types.c:2448`) honored,
+leaking a spurious `size_t`/`ptrdiff_t` spelling.
+
+Fix: every one of those constructors now zero-initializes via `Type t = {0};`.
+Because `CNUM_DEFAULT == 0` and `KIND_STAR == 0`, the zero default *is* the
+correct default for every field, so `c_num_spelling` reliably reads
+`CNUM_DEFAULT` (and the previously-uninitialized `hkt_kind`/`substruct` paths
+get their correct defaults too). The two affected snapshots stay at the correct
+`int64_t` spelling regardless of arena layout, and the full suite is green
+(1786 passed, 0 failed).
 
 ## Summary
 
