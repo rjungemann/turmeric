@@ -4,6 +4,37 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.25.1] -- 2026-06-24
+
+### Added
+
+- **Typed inline-C Result/Option builders.** New preamble helpers
+  `tur_ok_ptr` / `tur_ok_int` / `tur_err_ptr` / `tur_err_int` /
+  `tur_some_ptr` / `tur_some_int` / `tur_none` let an inline-C body
+  return real `(Result T E)` / `(Option T)` values that flow straight
+  into stdlib `ok?` / `ok-val` / `some?` / `unwrap` -- no hand-rolled
+  struct, no `:ptr<void>` escape hatch, and no `(int64_t)(intptr_t)`
+  cast at the call site. The `_int` and `_ptr` suffixes spell out the
+  payload's cast direction; a `_Static_assert` pair pins the
+  Result/Option byte layout to the stdlib shape. New guide:
+  [`docs/guides/inline-c-results-guide.md`](docs/guides/inline-c-results-guide.md).
+- **Struct ergonomics: auto-bound constructor, keyword args, with-update
+  (#535).** `defstruct` now generates an auto-bound constructor; struct
+  literals accept keyword arguments; new `with` form copies a struct
+  with selected fields replaced.
+
+### Fixed
+
+- **Parametric struct fn-field call-through carrier-ptr ABI mismatch
+  (#534).** Calling a function-typed field on a parametric struct no
+  longer trips the carrier-vs-by-value ABI seam.
+- **`(. obj field args)` receiver-first dot routing (#533).** Method-style
+  dot syntax now routes through the receiver type's method table even
+  when arguments follow the field name.
+- **Honor `#[used]` on single-file / whole-program build path (#532).**
+  The `#[used]` attribute is no longer dropped when the build is invoked
+  on a single file or in whole-program mode.
+
 ## [0.25.0] -- 2026-06-23
 
 ### Removed

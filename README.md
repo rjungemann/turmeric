@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.25.0` -- `throw` / `try` / `catch` removed end-to-end; interpreter fiber rejection now flows through a new `TURI_REJECTION` value observed via `(error? r)` / `(error-message r)`; opaque/struct tyvar + typed-inline-lambda macro fixes.
+**Latest release:** `v0.25.1` -- typed inline-C `Result` / `Option` builders (`tur_ok_ptr`, `tur_err_int`, ...) for fallible C constructors, plus struct ergonomics (auto-bound constructor, keyword args, `with` update).
 
 ## What
 
