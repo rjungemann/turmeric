@@ -25,14 +25,28 @@ guard (each was recursion-limit at ~500 before its slice). New `tur_eval_tco`
 regression `ip-go 200000`. `bash tests/run.sh` (1783/0), eval/effects/
 continuation/tco ctests (14/14), `eval-tco` (17/17), `run-turi` baseline (23).
 
-**Guard retirement (N4 proper) -- remaining check.** No *driver-reached*
-delimited-control form re-enters synchronously now. The residual synchronous
-re-entries are the non-driver `eval_expr` paths (`eval_abortive_shift`,
-`eval_callcc_escape`, `ts_capture_and_run(deferred=NULL)`, `is_pure`
-`ts_cont_resume`) reached only when a control form sits inside an `eval_expr`
-black box, plus the bounded single re-entries (Show, sync `tvar/modify`, embedder
-`turi_call`). Whether any of those can be driven to scale C-stack depth is the
-last thing to settle before deleting the `eval_depth` guard.
+**Guard retirement (N4 proper) -- BLOCKED by a separate workstream; guard
+stays.** Probed the residual non-driver paths and they DO scale: a control
+operator nested inside an `eval_expr` *black-box form* takes the synchronous
+non-driver path and C-recurses. Confirmed both still trip at 5000:
+
+- `(reset (+ 1 (try (shift (fn [v] (rec (- n 1))) 0) (catch e 0))))` -- the
+  `shift` sits in a `try` body, which the driver black-boxes to `eval_expr`, so
+  it reaches `eval_abortive_shift` (non-driver) and `turi_call`s the receiver.
+- `(try (call/cc (fn [k] (+ 1 (rec (- n 1))))) (catch e 0))` -- same shape via
+  `eval_callcc_escape`.
+
+The root cause is no longer in SR's scope: it is the driver not yet modeling the
+remaining special forms (`EX_TRY_CATCH`, `EX_WHILE`, `EX_STM`, ...), so a control
+operator *inside* one of them never reaches the driver's work-stack cases.
+SR has now heap-bounded **every delimited-control recursion that flows through a
+driven position** (Slices 1-7); fully deleting the `eval_depth` guard requires
+driving those black-box forms too (the trampoline / driver-coverage workstream),
+after which control operators inside them would use the same work-stack paths.
+Until then the guard remains load-bearing for the black-box-nested case and the
+bounded single re-entries (Show, sync `tvar/modify`, embedder `turi_call`). **SR
+N4's native-re-entry conversion is complete; the guard's deletion is gated on
+driver coverage of the residual forms, tracked as the next step.**
 
 ## Status update -- 2026-06-24 (N4 Slice 6 -- resume-cont! folds on the work-stack)
 
