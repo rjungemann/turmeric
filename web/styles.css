@@ -1298,22 +1298,91 @@ pre {
  * ========================================================================== */
 
 @media (max-width: 1024px) {
+    html, body {
+        overflow: hidden;
+        height: 100dvh;
+        min-height: 0;
+    }
+
+    #app {
+        height: 100dvh;
+    }
+
+    .main {
+        flex: 1 1 auto;
+        min-height: 0;
+    }
+
     .repl-container {
-        flex-direction: column;
+        display: grid;
+        grid-template-rows: var(--split, 1fr) 1fr;
+        grid-template-columns: 1fr;
+        height: 100%;
+        min-height: 0;
+        flex: 1 1 auto;
+        gap: 0;
+    }
+
+    .editor-pane {
+        min-height: 0;
+        min-width: 0;
+        overflow: hidden;
+        border-right: none;
+        border-bottom: 1px solid var(--border-mid);
     }
 
     .console-pane {
         width: 100%;
-        flex: 1;
         min-height: 0;
+        min-width: 0;
+        overflow: hidden;
     }
 
-    .editor-pane {
-        flex: 1;
-        min-height: 0;
-        border-right: none;
-        border-bottom: 1px solid var(--border-mid);
+    /* Hide doc panel by default on mobile; promoted via JS later. */
+    .doc-pane { display: none !important; }
+
+    /* Footer would otherwise consume scarce vertical space. */
+    .footer { display: none; }
+
+    /* Horizontally scrollable editor header */
+    .editor-header {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overflow-y: hidden;
+        scroll-snap-type: x proximity;
+        scrollbar-width: none;
+        overscroll-behavior-x: contain;
+        -webkit-overflow-scrolling: touch;
     }
+    .editor-header::-webkit-scrollbar { display: none; }
+    .editor-tabs,
+    .editor-actions { flex-shrink: 0; }
+    .editor-actions { margin-left: 0; }
+
+    .editor-header.has-overflow {
+        mask-image: linear-gradient(to right, transparent 0, black 16px, black calc(100% - 16px), transparent 100%);
+        -webkit-mask-image: linear-gradient(to right, transparent 0, black 16px, black calc(100% - 16px), transparent 100%);
+    }
+
+    .editor-header[data-dragging="1"] { cursor: grabbing; }
+    .editor-header[data-dragging="1"] * { pointer-events: none; }
+}
+
+@media (max-width: 1024px) and (display-mode: standalone) {
+    site-nav, .footer { display: none; }
+    #app { padding-top: 0; }
+}
+
+@media (max-width: 600px) {
+    /* Icon-only buttons; Run keeps its label. */
+    .editor-actions .btn:not(#run-btn) {
+        font-size: 0;
+        padding: 0 6px;
+    }
+    .editor-actions .btn:not(#run-btn) svg {
+        margin: 0;
+    }
+    .editor-actions .select { max-width: 110px; font-size: 11px; }
 }
 
 @media (max-width: 768px) {
