@@ -4670,12 +4670,61 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                   "method call requires (.method obj arg1 ...)");
         return NULL;
     }
-    
+
+    /* Clojure-style receiver-first sugar: `(. obj field args...)` where the
+     * head is the bare `.` symbol (length 1) and the field name is a separate
+     * symbol.  Desugar to `(.field obj args...)` so the joined-form paths below
+     * (struct field access, function-typed field call-through, typeclass
+     * dispatch) all apply uniformly.  Without this rewrite the head `.` yields
+     * an empty method name and dispatch fails with "no typeclass method found
+     * for ''" (docs/reported/dot-method-call-misroutes-to-typeclass.md). */
+    if (call->as.list.items[0]->tag == F_SYM &&
+        call->as.list.items[0]->as.sym->len == 1 &&
+        call->as.list.items[0]->as.sym->name[0] == '.') {
+        if (call->as.list.len < 3 || call->as.list.items[2]->tag != F_SYM) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "(. obj field args...) requires a field-name symbol, "
+                      "e.g. (. p age) or (. lens get s)");
+            return NULL;
+        }
+        const Symbol *field_sym = call->as.list.items[2]->as.sym;
+        char dotbuf[160];
+        int dotlen = snprintf(dotbuf, sizeof(dotbuf), ".%.*s",
+                              (int)field_sym->len, field_sym->name);
+        if (dotlen <= 0 || (size_t)dotlen >= sizeof(dotbuf)) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "(. obj field ...) field name too long");
+            return NULL;
+        }
+        const Symbol *dot_sym =
+            symtab_intern(e->st, strslice(dotbuf, (uint32_t)dotlen));
+        /* New list: [.field, obj, args...] = [.field, items[1], items[3..]]. */
+        uint32_t n_items = call->as.list.len - 1;
+        Form **items = (Form **)arena_alloc(e->arena, n_items * sizeof(Form *));
+        items[0] = form_sym(e->arena, call->as.list.items[2]->span, dot_sym);
+        items[1] = call->as.list.items[1];
+        for (uint32_t i = 3; i < call->as.list.len; i++)
+            items[i - 1] = call->as.list.items[i];
+        Form *dotcall = form_list(e->arena, call->span, items, n_items);
+        return elab_method_call(e, dotcall);
+    }
+
     /* Parse method name from the symbol (skip the leading '.') */
     Form *head = call->as.list.items[0];
     const Symbol *method_sym = head->as.sym;
     const char *method_name = method_sym->name + 1;  /* Skip '.' */
     uint32_t method_name_len = method_sym->len - 1;
+
+    /* A bare `.` head (now handled by the receiver-first desugaring above)
+     * leaves an empty method name; any other route here with an empty name is
+     * a malformed call.  Reject it with a clear message rather than letting the
+     * empty name reach the "no typeclass method found for ''" diagnostic. */
+    if (method_name_len == 0) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "method call requires a field/method name after '.', "
+                  "e.g. (.field obj) or (. obj field)");
+        return NULL;
+    }
 
     /* Phase D1: Type witness @TypeName at call sites.
      * The reader converts @TypeName into (deref TypeName), so we detect
@@ -5056,8 +5105,28 @@ skip_struct_field_lookup:;
                         if (!args[j]) return NULL;
                     }
 
-                    /* Build indirect EX_CALL through fn_expr */
-                    Expr *call_out = expr_new(e->arena, EX_CALL, TYPE_INT, call->span);
+                    /* Build indirect EX_CALL through fn_expr.  Type the call by
+                     * the field's declared return type so the result is not
+                     * collapsed to :int (which mis-dispatched downstream calls
+                     * like (println (.get b p)) through the int instance and
+                     * printed the cstr pointer as a raw integer).  See
+                     * docs/reported/dot-method-call-misroutes-to-typeclass.md
+                     * (issue #3). */
+                    Type result_type = TYPE_INT;
+                    if (field_type.kind == TY_FN) {
+                        Type rt = field_type.as.fn.result_full_type
+                                      ? *field_type.as.fn.result_full_type
+                                      : type_from_kind(field_type.as.fn.result_kind);
+                        /* Only adopt a concrete result type.  A bare `fn` field
+                         * (no declared signature) leaves the result kind void/
+                         * unknown; typing the call by it would emit a `void`
+                         * temp.  Keep the int64 carrier in that case -- the
+                         * prior behaviour -- and only refine when the field
+                         * declares a real return type (e.g. (fn [S] cstr)). */
+                        if (rt.kind != TY_UNKNOWN && rt.kind != TY_NIL)
+                            result_type = rt;
+                    }
+                    Expr *call_out = expr_new(e->arena, EX_CALL, result_type, call->span);
                     call_out->as.call_.fn_binding = NULL;
                     call_out->as.call_.fn_expr = get_field;
                     call_out->as.call_.args = args;

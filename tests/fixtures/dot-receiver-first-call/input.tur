@@ -1,0 +1,26 @@
+;; Clojure-style receiver-first dot sugar: (. obj field args...)
+;;
+;; (. obj field)        desugars to (.field obj)        -- struct field read
+;; (. obj field args)   desugars to (.field obj args)   -- function-field call
+;;
+;; Regression for docs/archive/dot-method-call-misroutes-to-typeclass.md:
+;; the bare `.` head previously routed through typeclass dispatch with an
+;; empty method name ("no typeclass method found for ''").
+
+(defstruct Person :copy
+  [name : cstr age : int])
+
+(defn name-get [p : Person] : cstr
+  (.name p))
+
+(defstruct Box
+  [get (fn [Person] cstr)])
+
+(defn main [] : int
+  (let [p (make-struct Person "Bob" 40)
+        b (make-struct Box name-get)]
+    ;; receiver-first field read
+    (println (. p name))
+    ;; receiver-first function-typed field call-through: ((.get b) p)
+    (println (. b get p))
+    (. p age)))

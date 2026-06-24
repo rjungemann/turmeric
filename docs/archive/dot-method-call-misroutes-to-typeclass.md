@@ -4,8 +4,40 @@
 for any struct whose field is function-typed; user-facing diagnostic is also
 malformed)
 
-**Status:** open. Reproduced on a `Lens`/`Person` toy at the REPL; produces a
-diagnostic that names no method and explains nothing.
+**Status:** RESOLVED (routing + diagnostic + result-typing). Reproduced on a
+`Lens`/`Person` toy at the REPL; produced a diagnostic that named no method.
+
+## Resolution
+
+Fixed in `src/compiler/elab_typeclasses.c` (`elab_method_call`):
+
+1. **Dispatch misroute (#1)** -- the bare `.` head form `(. obj field args...)`
+   was never desugared, so the head symbol `.` yielded an empty method name and
+   fell straight into typeclass dispatch. Added a receiver-first desugaring at
+   the top of `elab_method_call`: `(. obj field args...)` -> `(.field obj args...)`,
+   after which the existing joined-form paths (struct field read, function-typed
+   field call-through, typeclass dispatch) all apply uniformly.
+2. **Empty name in diagnostic (#2)** -- added an explicit guard that rejects an
+   empty method name with a clear message before it can reach the
+   "no typeclass method found for ''" formatter.
+3. **Call-through for function-typed fields (#3)** -- the capability-field
+   call-through already built the indirect call `((.field obj) args)`, but typed
+   its result as `:int`, so `(println (.get b p))` mis-dispatched the `cstr`
+   result through the int instance and printed the pointer as a raw integer. The
+   call is now typed by the field's declared return type (when concrete; bare
+   `fn` fields keep the int64 carrier to avoid emitting a `void` temp).
+   Semantics: `.field` auto-applies trailing args for function-typed fields,
+   matching Clojure's `(. obj method args)`.
+
+Regression fixture: `tests/fixtures/dot-receiver-first-call`.
+
+**Carved out:** the *parametric* `Lens`/`Person` repro below still fails to
+compile, but for an unrelated, pre-existing reason (a parametric struct stores
+its `(fn [S] A)` field via the `int64_t` carrier, and the call site passes a
+concrete struct value without bridging). That is independent of dot routing --
+it reproduces identically with the joined `(.get l p)` form -- and is tracked
+separately in
+`docs/reported/parametric-struct-fn-field-call-passes-concrete-arg-to-carrier-ptr.md`.
 
 ## Summary
 
