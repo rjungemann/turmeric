@@ -6,7 +6,25 @@ description: Sign cookies, add `session-rotate!` for fixation defense, ship the 
 
 # `tur-tourist-session` Followups -- Plan
 
-> **Status:** Not started (as of 2026-06-23). `tourist-session/src/session/` has no `hmac.tur`, `csrf.tur`, or `serde.tur`; `SessionConfig` carries no `signing-key`; `session-rotate!` is not exported; the `tourist-session-valkey` sibling spice does not exist. S0/R0/V0/C0 all still pending.
+> **Status:** Done (S0 + R0 + V0 + C0 all landed; archived
+> 2026-06-23). `tourist-session/src/session/` now carries `hmac.tur`
+> (HMAC-SHA256 + constant-time compare), `serde.tur` (per-session JSON
+> shared between memory/file/valkey stores), and `csrf.tur`
+> (`csrf-token` / `csrf-check` / `csrf-mw`). `SessionConfig` carries a
+> `signing-key : cstr` slot with `with-signing-key` setter; `cookie.tur`
+> signs on serialize and verifies on parse (mismatch falls through to
+> the unknown-ID path). `session-rotate!` is exported from
+> `session/ctx`, backed by a `__rotate-from` slot on the per-request
+> state and a flush-time save-new + delete-old + Set-Cookie path in
+> `session/mw.tur`. The `tourist-session-valkey` sibling spice exists at
+> `../turmeric-spices/spices/tourist-session-valkey/` with
+> `valkey-store-new` routing the three `Store` slots through
+> `cmd-get` / `cmd-set` + `cmd-expire` / `cmd-del`. Test coverage in
+> `tourist-session/tests/session/`:
+> `cookie_signing_test.tur`, `rotate_test.tur`, `csrf_test.tur`,
+> `serde_test.tur` (plus the existing `cookie_test.tur` /
+> `integration_test.tur` / store tests). The C0 stretch shipped along
+> with the load-bearing three.
 
 ## Context
 

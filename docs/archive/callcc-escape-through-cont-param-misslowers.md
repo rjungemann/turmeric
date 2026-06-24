@@ -4,9 +4,15 @@
 combination -- passing a `call/cc`/`escape` continuation out of its lexical
 scope through a typed parameter).
 
-**Status:** open. Pre-existing; surfaced while validating SR N4 Slice 2
-(`call/cc` on the work-stack). Independent of that runtime change -- the defect
-is in elaboration.
+**Status:** RESOLVED in v0.25.0 (CC4 flavored continuations, landed with SR N4
+in PR #527, commit bfa307ec). The fix took the proposed "flavor bit on
+`TY_CONT`" direction: `ContFlavor` (`src/compiler/types.h:1276`) carries
+`CONT_CLONEABLE` / `CONT_ESCAPE` / `CONT_SERIAL` through `:cont` /
+`:escape-cont` / `:serial-cont` annotations, and `elab_call.c:2858` dispatches
+`(k v)` to `tur_escape_resume` / `tur_serial_cont_resume` /
+`tur_cloneable_cont_resume` based on the flavor. The original repro now
+type-checks by spelling the parameter `:escape-cont` instead of `:cont`, and
+`tests/fixtures/cont-flavors` exercises all three flavors end-to-end.
 
 ## Summary
 

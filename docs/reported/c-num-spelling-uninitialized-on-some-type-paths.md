@@ -2,6 +2,13 @@
 
 **Severity:** low (codegen-snapshot fragility; no observed runtime miscompile)
 
+**Status:** open as of v0.25.0. No `type_make`/zeroing helper has been
+introduced; `c_num_spelling` is still set only on the paths in
+`elab_types.c:481`/`:1922` and read by `type_c_name`
+(`src/compiler/types.c:2448`). The snapshots regenerated alongside
+assoc-types-2 remain correct for the current arena layout, so the latent
+fragility has not resurfaced -- but the root cause is unchanged.
+
 ## Summary
 
 `Type.c_num_spelling` (the `CNumSpelling` byte that makes an integer carrier

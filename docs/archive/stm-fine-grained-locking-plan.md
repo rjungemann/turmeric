@@ -1,5 +1,31 @@
 # STM Fine-Grained Locking Plan
 
+**Status (2026-06-23):** Done; archived. `tur`-side rewrite landed
+(F1-F12). `src/runtime/stm.h` exposes the TL2 shape described in Design:
+`STM_State` carries a monotonic `version_clock`, a global `retry_lock`
+/ `retry_cond`, and the bucket array; `STM_LockBucket` carries a
+`commit_seq`; `STM_Transaction` carries `read_stamp` + `aborted`; `TVar`
+is down to `{type, value, version}` with the dead `lock` / `cond` /
+`lock_bucket` / `next_in_bucket` / `global_lock` / `parent` fields
+removed. The header comment block (stm.h:6-18) documents the TL2 read
+path, abort channel, and per-bucket `commit_seq` retry filter, so the
+"Phase 20 / Phase 21" scaffolding is gone (F12). Commit-defers fire in
+the locked region (G7), the bucket hash shifts past alignment bits (G8
+/ F2b), and the `tur_atomically` retry loop treats mid-body aborts as
+restart-the-closure (G9 / F7b).
+
+**F0 resolved as "punt `turi`".** The tree-walking interpreter
+(`src/turi/eval.c` `TuriTVar { value; version }` around line 2088)
+keeps its single-mutex STM. F11's conditional divergence note is
+already in the guides: `docs/guides/stm-guide.md:383-392`
+("Compiled vs interpreted") explains that `turi` is single-threaded so
+it never contends and observes the same isolation as an uncontended
+TL2 transaction, plus the one practical wrinkle (`retry` with no
+progress blocks under `tur`, errors under `turi`).
+`docs/guides/stm-tutorial.md:478` carries the same note in shorter
+form. F13 itself stays unscheduled; the divergence is documented, not
+hidden.
+
 ## Context
 
 The user-facing guides (`stm-guide.md`, `stm-tutorial.md`) describe the STM

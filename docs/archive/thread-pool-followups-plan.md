@@ -6,7 +6,23 @@ description: Wrap the raw `ptr<void>` pool handle in a `defopaque` with linear d
 
 # `thread-pool` Followups -- Plan
 
-> **Status:** Not started (as of 2026-06-23). `thread-pool/src/thread-pool/pool.tur` still exposes `pool-new`/`pool-submit`/`pool-stop` over `ptr<void>`; no `Pool`/`Pool<T>` opaque, no `Future<R>`, no `with-pool` macro, no `pool-try-submit`. None of the new modules (`future.tur`, `parallel.tur`, `scope.tur`) exist yet.
+> **Status:** Done (TY-V0 + WORK-V0 + FUT-V0 + SCOPE-V0 + TRY-V0 all
+> landed; archived 2026-06-23). `thread-pool/src/thread-pool/pool.tur`
+> now exports a parametric `(defopaque Pool [T] :ptr<void> :linear)`
+> with typed `pool-new` / `pool-submit` / `pool-stop` (consuming the
+> linear handle), plus `pool-new-raw` / `pool-submit-raw` /
+> `pool-stop-raw` as the documented C-interop hatch over a plain
+> `ptr<void>` callback. Backpressure ships: `pool-try-submit` returns
+> `(Result Unit FullError)`; `pool-pending` / `pool-workers` /
+> `pool-queue-cap` read the ring fields. `Future<R>` lives in
+> `future.tur` with `pool-submit-future` / `future-await` /
+> `future-try` / `future-cancel` over a refcounted heap cell, and
+> `parallel.tur` ships the `pool-map` convenience built on top.
+> `scope.tur` provides the `with-pool` macro that consumes the linear
+> handle on any exit path. Tests:
+> `tests/thread-pool/{test_pool,future,pool_map,try_submit,with_pool}.tur`
+> and the negative `tests/compile-fail/{forgotten-stop,double-stop,wrong-item-type}.tur`
+> harness (with its own `run.sh`).
 
 ## Context
 

@@ -1,5 +1,13 @@
 # XF5 of the experimental-flag plan names an already-shipped feature
 
+**Status:** RESOLVED. The plan has been archived
+(`docs/archive/experimental-flag-mechanism-plan.md`) with a deferral note at
+the top explicitly acknowledging that XF5's named consumer
+(cross-parameter sized-type unification) is already default-on and that XF5
+will not be executed against it. The mechanism (XF0--XF4, XF6) shipped with
+an empty `EXPERIMENTS[]` registry (`src/runtime/experiments.c`), exactly as
+the fix-directions section recommended; no fixtures changed.
+
 **Summary:** `docs/upcoming/v1/experimental-flag-mechanism-plan.md` Phase XF5
 ("First real consumer") proposes migrating *cross-parameter sized-type
 unification* onto `--enable=sized-cross-param` as the first occupant of the

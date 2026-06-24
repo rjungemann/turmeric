@@ -1,9 +1,20 @@
 # valkey typed variadic per-command builder -- plan
 
-**Status:** Not started. Optional Track C / U6 follow-up. **Not a phase
-blocker** -- U6 closed in c-dsl (turmeric-spices 45873c2 / `c269f23`); this
-plan exists so the valkey side is a designed pickup rather than a vague
-"someday."
+**Status:** Done (P0 + P1 + P2 all landed). Optional Track C / U6
+follow-up; U6 itself closed in c-dsl (turmeric-spices 45873c2 / `c269f23`).
+The valkey side now also carries the typed variadic surface end to end:
+`spices/valkey/src/valkey/cmd.tur` exports `ValkeyArg` with `VkStr` /
+`VkInt` / `VkBytes` variants, smart constructors `vk-str` / `vk-int` /
+`vk-bytes`, and the variadic `cmd [^borrow c : Client command : cstr
+& args : ValkeyArg] : ptr<void>` forwarding to a fixed-arity
+`__cmd-impl` that walks the cons list and dispatches on the runtime tag
+into hiredis's `redisCommandArgv` (binary-safe via `argvlen[]`). The
+README example block uses the new surface, and
+`spices/valkey/tests/valkey/cmd_test.tur` exercises construction of all
+three variants. P3 ("retire the cons-list `cmd`") is N/A -- there is no
+cons-list `cmd` left to retire; the typed surface is the only surface.
+
+Archived 2026-06-23.
 
 **Tracks:** rjungemann/turmeric `docs/parallel-tracks.md` Track C / U6;
 rjungemann/turmeric `docs/upcoming/spices-type-features-uplift-plan.md`
