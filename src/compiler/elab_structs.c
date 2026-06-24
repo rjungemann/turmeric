@@ -1320,10 +1320,103 @@ void elab_register_adt_def(Elab *e, AdtDef *def) {
     e->adt_defs[e->n_adt_defs++] = def;
 }
 
+/* CONV-S0 (struct/ADT convergence): resolve a single constructor field-type
+ * form into ctor->fields[fi] (kind/inner_kind/full_type) and ctor->field_forms[fi].
+ * Shared by positional-style variants (`(Just :int)`) and record-style variants
+ * (`(Circle [radius : float])`); the record path also sets ctor->fields[fi].name.
+ * Returns false (diag already emitted) on an unresolvable field type. */
+static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
+                               Form *ft_form, const Symbol **tp_syms,
+                               uint32_t n_type_params, bool record_style) {
+    ctor->fields[fi].full_type = NULL;
+    if (ctor->field_forms) ctor->field_forms[fi] = NULL;
+
+    /* TP1: a bare symbol (non-keyword) may be a declared type parameter.
+     * E.g. `a` in `(defdata Opt2 [a] (Yep a))`. */
+    {
+        Type *tv = adt_field_type_from_form(e->arena, ft_form,
+                                            def->type_params,
+                                            def->n_type_params);
+        if (tv) {
+            ctor->fields[fi].kind = TY_INT;
+            ctor->fields[fi].inner_kind = TY_UNKNOWN;
+            ctor->fields[fi].full_type = tv;
+            return true;
+        }
+    }
+
+    /* Applied type constructor or other compound type form in field position. */
+    if (ft_form->tag == F_LIST) {
+        Type *t = struct_field_type_from_form(e, ft_form, tp_syms,
+                                              def->type_param_kinds,
+                                              n_type_params);
+        if (!t) {
+            diag_emit(DIAG_ERROR, ft_form->span,
+                      "defdata: could not resolve constructor field type");
+            return false;
+        }
+        TypeKind fkind = TY_UNKNOWN, finner = TY_UNKNOWN;
+        struct_field_storage_from_type(t, &fkind, &finner);
+        if (fkind == TY_UNKNOWN) { fkind = TY_INT; finner = TY_UNKNOWN; }
+        ctor->fields[fi].kind = fkind;
+        ctor->fields[fi].inner_kind = finner;
+        ctor->fields[fi].full_type = t;
+        if (ctor->field_forms) ctor->field_forms[fi] = ft_form;
+        if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
+            def->needs_drop_glue = true;
+        }
+        return true;
+    }
+
+    /* Positional variants require keyword type names (`:int`); record-style
+     * variants (CONV-S0) also accept bare symbol type names (`int`), mirroring
+     * defstruct field syntax. */
+    bool ok_tag = (ft_form->tag == F_KEYWORD) ||
+                  (record_style && ft_form->tag == F_SYM);
+    if (!ok_tag) {
+        diag_emit(DIAG_ERROR, ft_form->span,
+                  "defdata: constructor field type must be a keyword like :int, :bool, :cstr");
+        return false;
+    }
+    const char *tname = ft_form->as.sym->name;
+    uint32_t tlen = ft_form->as.sym->len;
+    TypeKind fkind, finner;
+    parse_struct_field_type(tname, tlen, &fkind, &finner);
+    if (fkind == TY_UNKNOWN) {
+        /* Phase RF0: fall back to user-defined type lookup. */
+        const Symbol *type_sym = symtab_intern(e->st, strslice(tname, tlen));
+        Binding *tb = scope_lookup_type_def(e->scope, type_sym);
+        if (tb && (tb->type.kind == TY_STRUCT || tb->type.kind == TY_ADT)) {
+            fkind = TY_INT;
+            finner = TY_UNKNOWN;
+        } else {
+            diag_emit(DIAG_ERROR, ft_form->span,
+                      "defdata: field has unrecognized type :%s", tname);
+            return false;
+        }
+    }
+    ctor->fields[fi].kind = fkind;
+    ctor->fields[fi].inner_kind = finner;
+    if (ctor->field_forms) ctor->field_forms[fi] = ft_form;
+    if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
+        def->needs_drop_glue = true;
+    }
+    return true;
+}
+
+/* CONV-S0: a constructor form is record-style when its sole payload is a
+ * vector, e.g. `(Circle [radius : float])`.  The vector holds `name : type`
+ * pairs exactly like the old-style defstruct field list. */
+static bool ctor_form_is_record(const Form *ctor_form) {
+    return ctor_form->as.list.len == 2 &&
+           ctor_form->as.list.items[1]->tag == F_VEC;
+}
+
 /* Phase G0: defdata — define a sum type (ADT)
  * Syntax: (defdata Name [:copy]
  *           (Ctor1)
- *           (Ctor2 :T1 :T2)
+ *           (Ctor2 :T1 :T2)               ; positional-style variant
+ *           (Ctor3 [a : int b : cstr])    ; CONV-S0 record-style variant
  *           ...)
  */
 Expr *elab_defdata(Elab *e, const Form *call) {
@@ -1546,105 +1639,108 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         }
         const Symbol *ctor_name = ctor_name_form->as.sym;
 
-        uint32_t n_fields = ctor_form->as.list.len - 1;
+        /* CONV-S0: detect record-style variant `(Ctor [a : T b : U ...])`. */
+        bool is_record = ctor_form_is_record(ctor_form);
+        Form *rec_vec = is_record ? ctor_form->as.list.items[1] : NULL;
+
         CtorDef *ctor = (CtorDef *)arena_alloc(e->arena, sizeof(CtorDef));
         ctor->name = ctor_name->name;
+        ctor->adt = def;
+        ctor->tag = ci;
+        ctor->result_type_form = NULL; /* Phase G1: NULL for defdata */
+        ctor->is_record = is_record;
+
+        uint32_t n_fields;
+        /* Names parallel to fields[], populated for record-style variants. */
+        const Symbol **rec_field_names = NULL;
+        /* Type forms (one per field) to resolve, gathered uniformly for both
+         * styles so the field-resolution loop below is shared. */
+        Form **field_type_forms = NULL;
+
+        if (is_record) {
+            /* Vector holds `name : type` pairs.  The reader collapses `: T`
+             * into an F_TYPE_ANN node, so items alternate name, type, name, ...
+             * Count name/type pairs first. */
+            uint32_t n_items = rec_vec->as.list.len;
+            if (n_items == 0) {
+                diag_emit(DIAG_ERROR, rec_vec->span,
+                          "defdata: record-style variant '%s' field list cannot be empty",
+                          ctor_name->name);
+                return NULL;
+            }
+            if (n_items % 2 != 0) {
+                diag_emit(DIAG_ERROR, rec_vec->span,
+                          "defdata: record-style variant '%s' field list must be "
+                          "[name : type ...] pairs", ctor_name->name);
+                return NULL;
+            }
+            n_fields = n_items / 2;
+            rec_field_names = (const Symbol **)arena_alloc(e->arena,
+                                  n_fields * sizeof(Symbol *));
+            field_type_forms = (Form **)arena_alloc(e->arena,
+                                  n_fields * sizeof(Form *));
+            for (uint32_t fi = 0; fi < n_fields; fi++) {
+                Form *name_f = rec_vec->as.list.items[fi * 2];
+                Form *type_f = rec_vec->as.list.items[fi * 2 + 1];
+                if (name_f->tag != F_SYM) {
+                    diag_emit(DIAG_ERROR, name_f->span,
+                              "defdata: record-style variant '%s' expected a field "
+                              "name symbol", ctor_name->name);
+                    return NULL;
+                }
+                rec_field_names[fi] = name_f->as.sym;
+                /* Unwrap `: T` (F_TYPE_ANN) to the bare type form. */
+                if (type_f->tag == F_TYPE_ANN)
+                    type_f = type_f->as.list.items[0];
+                field_type_forms[fi] = type_f;
+            }
+        } else {
+            n_fields = ctor_form->as.list.len - 1;
+            if (n_fields > 0) {
+                field_type_forms = (Form **)arena_alloc(e->arena,
+                                       n_fields * sizeof(Form *));
+                for (uint32_t fi = 0; fi < n_fields; fi++)
+                    field_type_forms[fi] = ctor_form->as.list.items[1 + fi];
+            }
+        }
+
         ctor->n_fields = n_fields;
         ctor->fields = n_fields > 0
             ? (CtorField *)arena_alloc(e->arena, n_fields * sizeof(CtorField))
             : NULL;
-        ctor->adt = def;
-        ctor->tag = ci;
-        ctor->result_type_form = NULL; /* Phase G1: NULL for defdata */
-        /* F6-1 (cross-plan-followups): stash the raw field-type forms for
-         * defdata ctors too (was previously NULL).  Without this, pattern
-         * extraction at match time can only recover the C-level TypeKind
-         * (TY_INT for ADT-typed fields), which makes a nested `match
-         * inner ...` fail with "scrutinee must be an ADT type, got int". */
+        /* F6-1 (cross-plan-followups): stash the raw field-type forms so pattern
+         * extraction at match time can recover the declared ADT/struct type. */
         ctor->field_forms = n_fields > 0
             ? (const struct Form **)arena_alloc(e->arena, n_fields * sizeof(const Form *))
             : NULL;
 
-        /* Parse field types */
+        /* Parse field types (shared between positional and record styles). */
         for (uint32_t fi = 0; fi < n_fields; fi++) {
-            Form *ft_form = ctor_form->as.list.items[1 + fi];
-            ctor->fields[fi].full_type = NULL;
-            if (ctor->field_forms) ctor->field_forms[fi] = NULL;
-
-            /* TP1: a bare symbol (non-keyword) may be a declared type parameter.
-             * E.g. `a` in `(defdata Opt2 [a] (Yep a))`.  Accept it as a TY_INT
-             * carrier and record a TY_TYVAR node in full_type for future phases. */
-            {
-                Type *tv = adt_field_type_from_form(e->arena, ft_form,
-                                                    def->type_params,
-                                                    def->n_type_params);
-                if (tv) {
-                    ctor->fields[fi].kind = TY_INT;
-                    ctor->fields[fi].inner_kind = TY_UNKNOWN;
-                    ctor->fields[fi].full_type = tv;
-                    continue;
-                }
-                /* Not a recognised type param — fall through to keyword check. */
-            }
-
-            /* Applied type constructor (or other compound type form) in field
-             * position, e.g. (Wrap a), (list JsonNode), (map str a), or the HKT
-             * self-application (f (Fix f)).  Lower it the same way defstruct
-             * lowers applied-type fields: resolve to a full Type (TY_APP/...),
-             * store it as full_type, and derive the C-level storage kind (a heap
-             * pointer / TY_INT for ADT/struct/tyvar/app payloads). */
-            if (ft_form->tag == F_LIST) {
-                Type *t = struct_field_type_from_form(e, ft_form, tp_syms,
-                                                      def->type_param_kinds,
-                                                      n_type_params);
-                if (!t) {
-                    diag_emit(DIAG_ERROR, ft_form->span,
-                              "defdata: could not resolve constructor field type");
-                    return NULL;
-                }
-                TypeKind fkind = TY_UNKNOWN, finner = TY_UNKNOWN;
-                struct_field_storage_from_type(t, &fkind, &finner);
-                if (fkind == TY_UNKNOWN) { fkind = TY_INT; finner = TY_UNKNOWN; }
-                ctor->fields[fi].kind = fkind;
-                ctor->fields[fi].inner_kind = finner;
-                ctor->fields[fi].full_type = t;
-                if (ctor->field_forms) ctor->field_forms[fi] = ft_form;
-                if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
-                    def->needs_drop_glue = true;
-                }
-                continue;
-            }
-
-            if (ft_form->tag != F_KEYWORD) {
-                diag_emit(DIAG_ERROR, ft_form->span,
-                          "defdata: constructor field type must be a keyword like :int, :bool, :cstr");
+            if (!resolve_ctor_field(e, def, ctor, fi, field_type_forms[fi],
+                                    tp_syms, n_type_params, is_record)) {
                 return NULL;
             }
-            const char *tname = ft_form->as.sym->name;
-            uint32_t tlen = ft_form->as.sym->len;
-            TypeKind fkind, finner;
-            parse_struct_field_type(tname, tlen, &fkind, &finner);
-            if (fkind == TY_UNKNOWN) {
-                /* Phase RF0: fall back to user-defined type lookup.
-                 * All struct/ADT values are heap-allocated int64_t pointers. */
-                const Symbol *type_sym = symtab_intern(e->st, strslice(tname, tlen));
-                Binding *tb = scope_lookup_type_def(e->scope, type_sym);
-                if (tb && (tb->type.kind == TY_STRUCT || tb->type.kind == TY_ADT)) {
-                    fkind = TY_INT;
-                    finner = TY_UNKNOWN;
+            ctor->fields[fi].name = rec_field_names ? rec_field_names[fi]->name : NULL;
+
+            /* CONV-S5: a :copy ADT requires every variant's payload to be
+             * copy-compatible.  A non-copy field (rc/ref/weak/lref ownership)
+             * makes the value move-only, which contradicts :copy.  Reject it
+             * here, pinpointing the offending field and variant. */
+            if (def->is_copy &&
+                !typekind_is_copy_for_struct(ctor->fields[fi].kind)) {
+                const char *fdesc = ctor->fields[fi].name;
+                if (fdesc) {
+                    diag_emit(DIAG_ERROR, field_type_forms[fi]->span,
+                              "defdata: :copy type '%s' cannot contain non-copy "
+                              "field '%s' of variant '%s'",
+                              def->name, fdesc, ctor->name);
                 } else {
-                    diag_emit(DIAG_ERROR, ft_form->span,
-                              "defdata: field has unrecognized type :%s", tname);
-                    return NULL;
+                    diag_emit(DIAG_ERROR, field_type_forms[fi]->span,
+                              "defdata: :copy type '%s' cannot contain non-copy "
+                              "field %u of variant '%s'",
+                              def->name, fi, ctor->name);
                 }
-            }
-            ctor->fields[fi].kind = fkind;
-            ctor->fields[fi].inner_kind = finner;
-            /* F6-1: also stash the raw form so match extraction can
-             * recover the declared ADT/struct type. */
-            if (ctor->field_forms) ctor->field_forms[fi] = ft_form;
-            if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
-                def->needs_drop_glue = true;
+                return NULL;
             }
         }
 
@@ -2396,6 +2492,7 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
         ctor->adt = def;
         ctor->tag = ci;
         ctor->result_type_form = return_type_form;
+        ctor->is_record = false; /* CONV-S0: GADT variants are positional-only */
         /* Phase G2: store raw field-type annotation forms for per-arm resolution */
         ctor->field_forms = n_fields > 0
             ? (const struct Form **)arena_alloc(e->arena, n_fields * sizeof(const Form *))
@@ -2406,6 +2503,7 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
             TypeKind fkind = gadt_field_typekind_from_form(ft_form);
             ctor->fields[fi].kind = fkind;
             ctor->fields[fi].inner_kind = TY_UNKNOWN;
+            ctor->fields[fi].name = NULL; /* CONV-S0: positional */
             /* TP2: populate full_type when the field references a declared type
              * parameter (e.g. `a` in `(MkBox a : (Box a))`).  The C-level kind
              * stays TY_INT; full_type is elaboration-only. */
@@ -2519,6 +2617,134 @@ CtorDef *elab_lookup_ctor(Elab *e, const Symbol *name) {
     return NULL;
 }
 
+/* CONV-S3: desugar `(match s (Struct f0 f1 ...) body)` into a sequential let
+ * over the existing field accessors and elaborate it.  `pat_idx` is the index
+ * of the sole arm's pattern in `call`; `sd` is the matched struct.  Returns the
+ * elaborated let, or NULL after emitting a diagnostic. */
+static Expr *elab_struct_match_desugar(Elab *e, const Form *call,
+                                       uint32_t pat_idx, bool has_guard,
+                                       StructDef *sd) {
+    Form *pat_form = call->as.list.items[pat_idx];
+    if (has_guard) {
+        diag_emit(DIAG_ERROR, pat_form->span,
+                  "match on struct '%s': when-guards are not supported in a "
+                  "single-variant struct match", sd->name);
+        return NULL;
+    }
+    Form *body_form = call->as.list.items[pat_idx + 1];
+    Form *scrut_form = call->as.list.items[1];
+
+    /* Resolve one binding-variable form per struct field (or NULL = ignore). */
+    Form **field_vars = (Form **)arena_alloc(e->arena,
+                            (sd->n_fields ? sd->n_fields : 1) * sizeof(Form *));
+    for (uint32_t i = 0; i < sd->n_fields; i++) field_vars[i] = NULL;
+
+    uint32_t n_items = pat_form->as.list.len - 1; /* exclude struct name head */
+    bool by_name = (n_items >= 1 && pat_form->as.list.items[1]->tag == F_KEYWORD);
+
+    if (by_name) {
+        if (n_items % 2 != 0) {
+            diag_emit(DIAG_ERROR, pat_form->span,
+                      "match on struct '%s': by-name pattern must be "
+                      ":field var pairs", sd->name);
+            return NULL;
+        }
+        for (uint32_t pi = 0; pi < n_items / 2; pi++) {
+            Form *kw = pat_form->as.list.items[1 + pi * 2];
+            Form *var = pat_form->as.list.items[2 + pi * 2];
+            if (kw->tag != F_KEYWORD || var->tag != F_SYM) {
+                diag_emit(DIAG_ERROR, kw->span,
+                          "match on struct '%s': by-name pattern must be "
+                          ":field var pairs", sd->name);
+                return NULL;
+            }
+            int fidx = -1;
+            for (uint32_t i = 0; i < sd->n_fields; i++) {
+                if (sd->fields[i].name &&
+                    strcmp(sd->fields[i].name, kw->as.sym->name) == 0) {
+                    fidx = (int)i; break;
+                }
+            }
+            if (fidx < 0) {
+                diag_emit(DIAG_ERROR, kw->span,
+                          "match on struct '%s': no field '%s'",
+                          sd->name, kw->as.sym->name);
+                return NULL;
+            }
+            if (field_vars[fidx]) {
+                diag_emit(DIAG_ERROR, kw->span,
+                          "match on struct '%s': field '%s' bound more than once",
+                          sd->name, kw->as.sym->name);
+                return NULL;
+            }
+            field_vars[fidx] = var;
+        }
+    } else {
+        if (n_items != sd->n_fields) {
+            diag_emit(DIAG_ERROR, pat_form->span,
+                      "match on struct '%s' expects %u field(s), got %u",
+                      sd->name, sd->n_fields, n_items);
+            return NULL;
+        }
+        for (uint32_t i = 0; i < sd->n_fields; i++)
+            field_vars[i] = pat_form->as.list.items[1 + i];
+    }
+
+    /* Receiver for the field reads.  When the scrutinee is already a bare
+     * variable we read fields directly off it (field projection is a borrow,
+     * not a move, so multiple reads are fine) -- this avoids copying the struct
+     * into a temp, which the by-pointer struct ABI does not support in a let
+     * binder.  For a compound scrutinee we bind it to a fresh temp so it is
+     * evaluated exactly once. */
+    bool scrut_is_var = (scrut_form->tag == F_SYM);
+    Form *recv_form = scrut_form;
+    const Symbol *wildcard = intern_cstr(e->st, "_");
+    uint32_t cap = 2 + sd->n_fields * 2;
+    Form **bind_items = (Form **)arena_alloc(e->arena, cap * sizeof(Form *));
+    uint32_t bn = 0;
+    if (!scrut_is_var) {
+        char gbuf[64];
+        snprintf(gbuf, sizeof(gbuf), "__tur_smatch_%u", e->next_gensym_id++);
+        const Symbol *g_sym = symtab_intern(e->st, strslice(gbuf, (uint32_t)strlen(gbuf)));
+        recv_form = form_sym(e->arena, pat_form->span, g_sym);
+        bind_items[bn++] = recv_form;
+        bind_items[bn++] = scrut_form;
+    }
+    for (uint32_t i = 0; i < sd->n_fields; i++) {
+        Form *var = field_vars[i];
+        if (!var || (var->tag == F_SYM && var->as.sym == wildcard)) continue;
+        char dotbuf[160];
+        int dl = snprintf(dotbuf, sizeof(dotbuf), ".%s", sd->fields[i].name);
+        if (dl <= 0 || (size_t)dl >= sizeof(dotbuf)) {
+            diag_emit(DIAG_ERROR, pat_form->span,
+                      "match on struct '%s': field name too long", sd->name);
+            return NULL;
+        }
+        const Symbol *dot_sym = symtab_intern(e->st, strslice(dotbuf, (uint32_t)dl));
+        Form *acc_items[2];
+        acc_items[0] = form_sym(e->arena, pat_form->span, dot_sym);
+        acc_items[1] = recv_form;
+        Form *acc = form_list(e->arena, pat_form->span, acc_items, 2);
+        bind_items[bn++] = var;
+        bind_items[bn++] = acc;
+    }
+
+    /* A struct match that binds no fields (e.g. all `_`) still must elaborate
+     * the body; with a bare-var scrutinee there are zero bindings, so emit a
+     * trivial `(let [] body)` -- or just the body.  An empty let vector is
+     * valid. */
+    Form *bind_vec = form_vec(e->arena, pat_form->span, bind_items, bn);
+
+    /* (let <bind_vec> body) */
+    const Symbol *let_sym = intern_cstr(e->st, "let");
+    Form *let_items[3];
+    let_items[0] = form_sym(e->arena, call->span, let_sym);
+    let_items[1] = bind_vec;
+    let_items[2] = body_form;
+    Form *let_form = form_list(e->arena, call->span, let_items, 3);
+    return elab_form(e, let_form);
+}
+
 /* Phase G0: match expression
  * Syntax: (match scrutinee
  *   (Ctor1 x y) body1
@@ -2609,6 +2835,33 @@ Expr *elab_match(Elab *e, const Form *call) {
         diag_emit(DIAG_ERROR, call->span,
                   "match requires at least one arm: (match scrutinee pattern body)");
         return NULL;
+    }
+
+    /* CONV-S3 (struct/ADT convergence): `match` on a struct value.
+     * A struct is the single-variant case of a tagged union, so
+     * `(match s (Person name age) body)` is trivially exhaustive.  We detect
+     * it syntactically -- the sole arm's pattern head names a struct type --
+     * and desugar to a `let` over the existing field accessors, reusing all
+     * struct field-access codegen and exhaustiveness-by-construction.  The
+     * scrutinee is elaborated exactly once (inside the generated let), so move
+     * and linear tracking are unaffected.  Positional `(Person name age)` and
+     * by-name `(Person :name n :age a)` binding are both accepted. */
+    if (n_arms == 1) {
+        Form *pat0 = call->as.list.items[arm_start[0]];
+        if (pat0->tag == F_LIST && pat0->as.list.len >= 1 &&
+            pat0->as.list.items[0]->tag == F_SYM &&
+            !elab_lookup_ctor(e, pat0->as.list.items[0]->as.sym)) {
+            const Symbol *head_sym = pat0->as.list.items[0]->as.sym;
+            Binding *tb = scope_lookup_type_def(e->scope, head_sym);
+            if (tb && tb->type.kind == TY_STRUCT && tb->type.as.struct_.def) {
+                Expr *de = elab_struct_match_desugar(e, call, arm_start[0],
+                                                     arm_has_guard[0],
+                                                     tb->type.as.struct_.def);
+                if (de) return de;
+                /* de == NULL: a diagnostic was already emitted -> propagate. */
+                return NULL;
+            }
+        }
     }
 
     /* Elaborate scrutinee */
@@ -3113,6 +3366,72 @@ Expr *elab_match(Elab *e, const Form *call) {
                           "match: '%s' is not a constructor of '%s'",
                           ctor_sym->name, adt->name);
                 free(covered); return NULL;
+            }
+
+            /* CONV-S0: by-name binding for record-style variants.
+             * `(Circle :radius r)` binds field `radius` to `r`.  We rewrite the
+             * pattern into the equivalent positional form (reordered to field
+             * order) so the positional binding loop below is unchanged.  All
+             * fields must be listed exactly once; order is free. */
+            if (pat_form->as.list.len >= 2 &&
+                pat_form->as.list.items[1]->tag == F_KEYWORD) {
+                if (!ctor->is_record) {
+                    diag_emit(DIAG_ERROR, pat_form->span,
+                              "match: constructor '%s' is positional; by-name "
+                              "binding (`:field var`) requires a record-style variant",
+                              ctor->name);
+                    free(covered); return NULL;
+                }
+                uint32_t n_pairs = (pat_form->as.list.len - 1);
+                if (n_pairs % 2 != 0) {
+                    diag_emit(DIAG_ERROR, pat_form->span,
+                              "match: by-name pattern for '%s' must be "
+                              "`:field var` pairs", ctor->name);
+                    free(covered); return NULL;
+                }
+                n_pairs /= 2;
+                if (n_pairs != ctor->n_fields) {
+                    diag_emit(DIAG_ERROR, pat_form->span,
+                              "match: by-name pattern for '%s' must bind all %u "
+                              "fields, got %u", ctor->name, ctor->n_fields, n_pairs);
+                    free(covered); return NULL;
+                }
+                Form **pos_items = (Form **)arena_alloc(e->arena,
+                                       (ctor->n_fields + 1) * sizeof(Form *));
+                pos_items[0] = ctor_name_form;
+                for (uint32_t fi = 0; fi < ctor->n_fields; fi++) pos_items[fi + 1] = NULL;
+                for (uint32_t pi = 0; pi < n_pairs; pi++) {
+                    Form *kw = pat_form->as.list.items[1 + pi * 2];
+                    Form *var = pat_form->as.list.items[2 + pi * 2];
+                    if (kw->tag != F_KEYWORD || var->tag != F_SYM) {
+                        diag_emit(DIAG_ERROR, kw->span,
+                                  "match: by-name pattern for '%s' must be "
+                                  "`:field var` pairs", ctor->name);
+                        free(covered); return NULL;
+                    }
+                    int fidx = -1;
+                    for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                        if (ctor->fields[fi].name &&
+                            strcmp(ctor->fields[fi].name, kw->as.sym->name) == 0) {
+                            fidx = (int)fi; break;
+                        }
+                    }
+                    if (fidx < 0) {
+                        diag_emit(DIAG_ERROR, kw->span,
+                                  "match: '%s' is not a field of variant '%s'",
+                                  kw->as.sym->name, ctor->name);
+                        free(covered); return NULL;
+                    }
+                    if (pos_items[fidx + 1]) {
+                        diag_emit(DIAG_ERROR, kw->span,
+                                  "match: field '%s' bound more than once in "
+                                  "pattern for '%s'", kw->as.sym->name, ctor->name);
+                        free(covered); return NULL;
+                    }
+                    pos_items[fidx + 1] = var;
+                }
+                pat_form = form_list(e->arena, pat_form->span, pos_items,
+                                     ctor->n_fields + 1);
             }
 
             uint32_t n_bindings = pat_form->as.list.len - 1;

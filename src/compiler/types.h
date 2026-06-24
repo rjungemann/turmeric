@@ -201,6 +201,12 @@ typedef struct CtorField {
      * tooling / future type-inference phases can inspect the parameter name.
      * The runtime representation is always TY_INT (int64_t carrier). */
     struct Type *full_type;
+    /* CONV-S0 (struct/ADT convergence): field name for record-style variants,
+     * declared as `(Circle [radius : float])`.  NULL for positional-style
+     * variants (`(Just :int)`), where fields are anonymous.  When non-NULL the
+     * name backs field access `(.radius v)` and by-name match binding, exactly
+     * like a struct field.  Interned/NUL-terminated. */
+    const char *name;
 } CtorField;
 
 /* Phase SZ6: Type-level size index term.
@@ -258,6 +264,11 @@ typedef struct CtorDef {
      * field_forms[i] is the type-annotation form for field i.
      * NULL for plain defdata constructors. */
     const struct Form **field_forms;
+    /* CONV-S0 (struct/ADT convergence): true when this constructor was
+     * declared record-style -- `(Circle [radius : float])` -- so its fields
+     * carry names (CtorField.name) and support field access / by-name match
+     * binding.  False for positional-style variants (`(Just :int)`). */
+    bool is_record;
 } CtorDef;
 
 /* Phase G0: ADT (sum type) descriptor */

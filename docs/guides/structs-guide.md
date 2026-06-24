@@ -258,6 +258,34 @@ defn distance-sq [p] :int
   {{.x(p) * .x(p)} + {.y(p) * .y(p)}}
 ```
 
+### Destructuring with `match`
+
+A struct is the single-variant case of a tagged union, so `match` takes one
+apart too -- the sole pattern names the struct and binds its fields. A
+single-variant match is trivially exhaustive (no catch-all needed):
+
+```turmeric
+(defstruct Person :copy [name : cstr age : int])
+
+(let [p (make-struct Person "Ada" 36)]
+  (match p
+    (Person name age)        ; positional binding
+      (println name)))
+
+(match p
+  (Person :age a :name n)    ; by-name binding, order free
+    (println a))
+
+(match p
+  (Person _ age)             ; `_` ignores a field
+    (println age))
+```
+
+This is the same surface as matching a record-style `defdata` variant; see
+[Sum Types](sum-types-guide.md#record-style-variants-named-fields). Use
+`.fieldname` for a single read and `match` when you want several fields bound
+at once.
+
 ---
 
 ## Borrowing fields

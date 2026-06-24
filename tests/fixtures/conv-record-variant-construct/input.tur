@@ -1,0 +1,25 @@
+;; CONV-S0 / CONV-S4 (struct/ADT convergence): record-style ADT variants.
+;; A variant whose payload is a `[name : type ...]` block constructs
+;; positionally OR by keyword (`:field value`, order free), just like a struct.
+
+(defdata Shape
+  (Circle [radius : float])
+  (Rect   [w : float h : float])
+  (Empty))
+
+(defn describe [s] : float
+  (match s
+    (Circle r)  r
+    (Rect w h)  (* w h)
+    (Empty)     0.0))
+
+(defn main [] : int
+  (let [c (Circle :radius 2.5)         ; keyword construction
+        r (Rect :h 4.0 :w 3.0)         ; keyword, reordered
+        e (Empty)
+        c2 (Circle 1.5)]               ; positional still works
+    (println (describe c))
+    (println (describe r))
+    (println (describe e))
+    (println (describe c2))
+    0))

@@ -1,0 +1,17 @@
+;; CONV-S4 (struct/ADT convergence): keyword construction for a record-style
+;; variant works identically to keyword construction for a struct -- order is
+;; free and every field must be supplied exactly once.
+
+(defdata Point :copy
+  (Point [x : int y : int z : int]))
+
+(defn sum3 [p] : int
+  (match p
+    (Point a b c) (+ a (+ b c))))
+
+(defn main [] : int
+  (let [p  (Point :x 1 :y 2 :z 3)
+        p2 (Point :z 30 :x 10 :y 20)]   ; reordered keywords
+    (println (sum3 p))
+    (println (sum3 p2))
+    0))
