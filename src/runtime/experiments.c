@@ -5,10 +5,9 @@
  *
  * The EXPERIMENTS[] table below is the single source of truth: `tur
  * experiments`, `tur --help`, the docs site, and the release-cut script all
- * read it, and nothing restates the list.  It is intentionally EMPTY -- no
- * feature ships behind this mechanism until a concrete experiment requests a
- * gate.  When one does, add a row with all seven fields populated and point
- * `opt_global` at a `g_opt_<name>` bool the feature's elaboration reads.
+ * read it, and nothing restates the list.  To add a feature, append a row with
+ * all seven fields populated and point `opt_global` at a `g_opt_<name>` bool the
+ * feature's elaboration reads (keep the trailing `{ 0 }` sentinel last).
  *
  * Shape of a future entry (do not uncomment -- illustrative only):
  *
@@ -23,13 +22,26 @@
  *   };
  */
 #include "experiments.h"
+#include "globals.h"   /* g_opt_<name> enable bits */
 
 #include <stdio.h>
 #include <string.h>
 
 /* The registry.  Empty by design (see file header). */
 static const ExperimentDescriptor EXPERIMENTS[] = {
-    /* populated as features land */
+    /* CONV-S1: lower a simple leaf-scalar `defstruct` to a single-variant record
+     * `defadt`, so structs flow through the by-value ADT path -- the first slice
+     * of the struct/ADT convergence lowering.  In flux: currently only
+     * leaf-scalar (no rc/ref/ptr/struct/ADT/fn fields), non-parametric,
+     * non-heap, non-linear structs lower; everything else still elaborates as a
+     * struct. */
+    { "defstruct-as-defadt",
+      "lower simple leaf-scalar defstructs to single-variant record defadts",
+      "docs/upcoming/defstruct-as-defadt-plan.md",
+      "0.25.1",                  /* introduced */
+      "0.30.0",                  /* expires_at (hard contract; release-cut enforced) */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_defstruct_as_defadt },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

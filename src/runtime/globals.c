@@ -175,3 +175,6 @@ bool g_werror_inline_c_narrow_params = false;
  * TUR-W006x experimental-feature warnings.  Default off; intended only for the
  * Turmeric project's own CI matrix runs. */
 bool g_allow_experimental = false;
+
+/* CONV-S1 (defstruct-as-defadt experiment) enable bit; see globals.h. */
+bool g_opt_defstruct_as_defadt = false;
