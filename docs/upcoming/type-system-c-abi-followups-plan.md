@@ -138,11 +138,23 @@ What is still missing -- and what TC5 here delivers -- is:
   claimed there were no `_int`/`_ptr` variants -- it now uses the real
   builder names and points at the new guide.
 
-- [ ] **TC7** -- Update the audit
+- [x] **TC7** -- Update the audit
   (`docs/reported/spices-int-stand-in-audit-2026-06-14.md`) and the
   CLAUDE.md gate footnote: S1 and S3 move from "blocked on language
   pre-work" to "ready to mechanically apply." The strict rule itself
   stays in force.
+  **Landed (state had moved on):** the audit was already archived to
+  `docs/archive/` with every S1/S3 row marked *fixed*, and the
+  "blocked on language pre-work" caveat the predecessor plan slated for
+  CLAUDE.md was never actually added there -- so there was no literal
+  footnote to delete. Honoured the intent instead: (1) added an
+  "Inline-C constructor half unblocked (2026-06-24, TC5/TC6)" note to the
+  archived audit's Phase 3, recording that with the typed builders +
+  guide landed, every remaining S3-style "build a result inside inline-C"
+  site is ready to mechanically apply, not blocked; (2) added a paragraph
+  to the CLAUDE.md "No Lazy `:int` Stand-Ins" rule stating that returning
+  `result`/`option` from inline-C is first-class (no `:int` escape
+  hatch), pointing at the new guide. The strict rule stays in force.
 
 - [ ] **TC8** -- Pilot on rtmidi. Land a clean rtmidi v0.2.0 with
   `MidiIn` / `MidiOut` / `MidiCallback` opaques and
