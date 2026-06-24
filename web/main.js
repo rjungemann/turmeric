@@ -92,6 +92,95 @@ println $ sum-squares 3 4
 };
 
 // ============================================================================
+// Local State Persistence
+// ============================================================================
+
+const STORAGE_KEYS = {
+    buffer:  'tur.try.buffer.v1',
+    cursor:  'tur.try.cursor.v1',
+    scroll:  'tur.try.scroll.v1',
+    consol:  'tur.try.console.v1',
+};
+
+const MAX_CONSOLE_LINES = 200;
+
+let storageDisabled = false;
+let consoleLog = [];
+
+function safeRead(key) {
+    if (storageDisabled) return null;
+    try {
+        const raw = localStorage.getItem(key);
+        return raw == null ? null : JSON.parse(raw);
+    } catch {
+        return null;
+    }
+}
+
+function safeWrite(key, value) {
+    if (storageDisabled) return;
+    try {
+        localStorage.setItem(key, JSON.stringify(value));
+    } catch (e) {
+        if (e && (e.name === 'QuotaExceededError' || e.code === 22)) {
+            storageDisabled = true;
+            console.warn('Try Turmeric: localStorage quota exceeded; persistence disabled for this session.');
+        }
+    }
+}
+
+function isTutorialMode() {
+    try {
+        return new URLSearchParams(window.location.search).has('tutorial');
+    } catch {
+        return false;
+    }
+}
+
+function hasUrlHashCode() {
+    try {
+        const hash = window.location.hash.slice(1);
+        return new URLSearchParams(hash).has('code');
+    } catch {
+        return false;
+    }
+}
+
+function debounce(fn, ms) {
+    let t = null;
+    return (...args) => {
+        clearTimeout(t);
+        t = setTimeout(() => fn(...args), ms);
+    };
+}
+
+function hydrateConsole() {
+    const saved = safeRead(STORAGE_KEYS.consol);
+    if (!Array.isArray(saved) || saved.length === 0) return;
+    const consoleEl = document.getElementById('console');
+    if (!consoleEl) return;
+    consoleEl.innerHTML = '';
+    for (const line of saved) {
+        if (typeof line === 'string') {
+            consoleEl.insertAdjacentHTML('beforeend', line + '<br>');
+        }
+    }
+    consoleLog = saved.slice(-MAX_CONSOLE_LINES);
+    consoleEl.scrollTop = consoleEl.scrollHeight;
+}
+
+function resetWorkspace() {
+    if (!confirm('Reset workspace? This clears the editor buffer, console, and saved layout.')) return;
+    try {
+        for (const key of Object.values(STORAGE_KEYS)) localStorage.removeItem(key);
+        localStorage.removeItem('tur.try.split.h.v1');
+        localStorage.removeItem('tur.try.split.v.v1');
+    } catch {}
+    window.location.hash = '';
+    window.location.reload();
+}
+
+// ============================================================================
 // Utility Functions
 // ============================================================================
 
@@ -126,7 +215,16 @@ function appendToConsole(html) {
     const consoleEl = document.getElementById('console');
     consoleEl.insertAdjacentHTML('beforeend', html + '<br>');
     consoleEl.scrollTop = consoleEl.scrollHeight;
+    consoleLog.push(html);
+    if (consoleLog.length > MAX_CONSOLE_LINES) {
+        consoleLog.splice(0, consoleLog.length - MAX_CONSOLE_LINES);
+    }
+    schedulePersistConsole();
 }
+
+const schedulePersistConsole = debounce(() => {
+    safeWrite(STORAGE_KEYS.consol, consoleLog);
+}, 500);
 
 /**
  * Clear the console
@@ -135,6 +233,8 @@ function clearConsole() {
     const consoleEl = document.getElementById('console');
     consoleEl.innerHTML = '';
     consoleOutput = [];
+    consoleLog = [];
+    safeWrite(STORAGE_KEYS.consol, []);
 }
 
 /**
@@ -689,14 +789,49 @@ async function initEditor() {
     // Expose editor for smoke tests
     window._turiEditor = editor;
 
-    // Update cursor position on cursor change
-    editor.onDidChangeCursorPosition(() => updateCursorPosition());
-    
-    // Update URL hash on content change (debounced)
-    let debounceTimer;
+    // Hydrate from localStorage. Priority order:
+    //   1. URL hash share-link (handled later in loadFromUrlHash)
+    //   2. localStorage
+    //   3. Default example (already set as initial value)
+    // Tutorial mode bypasses hydration so step content isn't stomped.
+    if (!isTutorialMode() && !hasUrlHashCode()) {
+        const savedBuffer = safeRead(STORAGE_KEYS.buffer);
+        if (typeof savedBuffer === 'string') {
+            editor.setValue(savedBuffer);
+        }
+        const savedCursor = safeRead(STORAGE_KEYS.cursor);
+        if (savedCursor && typeof savedCursor.lineNumber === 'number') {
+            try { editor.setPosition(savedCursor); } catch {}
+        }
+        const savedScroll = safeRead(STORAGE_KEYS.scroll);
+        if (typeof savedScroll === 'number') {
+            try { editor.setScrollTop(savedScroll); } catch {}
+        }
+    }
+    hydrateConsole();
+
+    // Update cursor position on cursor change + persist
+    const persistCursor = debounce(() => {
+        const pos = editor.getPosition();
+        if (pos) safeWrite(STORAGE_KEYS.cursor, { lineNumber: pos.lineNumber, column: pos.column });
+    }, 500);
+    editor.onDidChangeCursorPosition(() => { updateCursorPosition(); persistCursor(); });
+
+    // Persist scroll position
+    const persistScroll = debounce(() => {
+        safeWrite(STORAGE_KEYS.scroll, editor.getScrollTop());
+    }, 500);
+    editor.onDidScrollChange(persistScroll);
+
+    // Update URL hash on content change (debounced) + persist buffer.
+    const persistBuffer = debounce(() => {
+        safeWrite(STORAGE_KEYS.buffer, editor.getValue());
+    }, 250);
+    let urlHashTimer;
     editor.onDidChangeModelContent(() => {
-        clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(updateUrlHash, 1000);
+        persistBuffer();
+        clearTimeout(urlHashTimer);
+        urlHashTimer = setTimeout(updateUrlHash, 1000);
     });
     
     // Handle Ctrl+Enter to run code
@@ -911,8 +1046,14 @@ function initEventListeners() {
     // Run button
     document.getElementById('run-btn')?.addEventListener('click', runCode);
     
-    // Clear button
-    document.getElementById('clear-btn')?.addEventListener('click', clearEditor);
+    // Clear button (Shift+click = reset full workspace)
+    document.getElementById('clear-btn')?.addEventListener('click', (e) => {
+        if (e.shiftKey) {
+            resetWorkspace();
+        } else {
+            clearEditor();
+        }
+    });
 
     // Format button
     document.getElementById('format-btn')?.addEventListener('click', formatCode);
@@ -1416,6 +1557,7 @@ window.turmericApp = {
     loadExample,
     shareCode,
     resetWasm,
+    resetWorkspace,
     showDocPanel,
     hideDocPanel,
     wasmDocLookup,
