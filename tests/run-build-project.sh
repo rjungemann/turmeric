@@ -862,6 +862,28 @@ else
     fi
 fi
 
+# used-attr-whole-program: the SAME project, built single-file / whole-program
+# (the `tur build <file>` / `tur run <file>` / `tur test` path) rather than
+# `tur build <project>`.  That path inlines only the entry's Turmeric import
+# closure, so app/a's #[used] __helper -- reached only via a raw mangled
+# `extern` from app/main, with no `(import app/a)` -- used to be dropped and
+# dangle at link.  cmd_build now scans the -I search dirs for #[used] modules
+# and force-loads them into the whole-program TU, so the extern resolves.
+wp_out=$(cd "$WORK" && "$TUR" build "$USEDPROJ/src/app/main.tur" \
+            -I "$USEDPROJ/src" -o "$WORK/usedwpbin" 2>&1)
+wp_rc=$?
+if [ $wp_rc -ne 0 ]; then
+    fail "build-file-used-attr-whole-program" "tur build exit=$wp_rc: $wp_out"
+else
+    "$WORK/usedwpbin"
+    wp_run_rc=$?
+    if [ "$wp_run_rc" -eq 42 ]; then
+        pass "build-file-used-attr-whole-program"
+    else
+        fail "build-file-used-attr-whole-program" "exit=$wp_run_rc (expected 42)"
+    fi
+fi
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

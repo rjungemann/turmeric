@@ -822,6 +822,9 @@ Binding *scope_lookup(Scope *s, const Symbol *name);
 Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
     Binding **self_exclude, uint32_t n_self_exclude, uint32_t *n_out);
 void elab_register_file_def(Elab *e, Expr *def_expr);
+/* used-attr-whole-program: force-load a module by name so its defns are
+ * emitted on the single-file/whole-program path even with no `(import)`. */
+void elab_force_load_module(Elab *e, const char *module_name);
 int elab_expand_module_loads(Elab *e, Arena *arena, SymbolTable *st,
                              Form *const *forms, uint32_t nforms,
                              Form ***out_forms, uint32_t *out_n);

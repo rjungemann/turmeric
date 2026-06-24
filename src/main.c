@@ -1408,6 +1408,14 @@ static int cmd_build(const char *input, const char *out_path,
                      int n_reader_macro_paths);
 static char *find_project_root(const char *start);
 static void collect_spice_aux_c(const char *root, Buf *includes, Buf *sources);
+/* used-attr-whole-program: collect slash-separated names of -I-reachable
+ * modules carrying a #[used] attribute, so cmd_build can force-load them into
+ * the whole-program TU (defined after collect_tur_recursive/file_has_used_attr
+ * below). Caller frees via free_tur_files. */
+static char **collect_used_attr_modules(const char *entry_path,
+                                        const char **include_dirs,
+                                        int n_include_dirs, int *n_out);
+static void free_tur_files(char **files, int n);
 
 /* build-output-directory-plan: ensure_dir(path) creates a directory tree with
  * mkdir -p semantics.  Returns 0 on success (or if the directory already
@@ -1672,8 +1680,23 @@ static int cmd_build(const char *input, const char *out_path,
                      int n_reader_macro_paths) {
     Buf csrc;
     buf_init(&csrc);
+    /* used-attr-whole-program: this single-file/whole-program path inlines only
+     * the entry's Turmeric import closure, so a #[used] defn in a sibling
+     * module reached only via a raw mangled C symbol (no `(import)`) would be
+     * dropped and dangle at link time -- unlike `tur build <project>`, which
+     * falls back to separate compilation.  Scan the -I search dirs for such
+     * modules and publish them so elaborate_program force-loads (and thus
+     * emits) them.  Scoped to the build path (not check/emit-c) so inspection
+     * output and snapshots are unaffected. */
+    int n_used_mods = 0;
+    char **used_mods = collect_used_attr_modules(input, include_dirs,
+                                                 n_include_dirs, &n_used_mods);
+    UsedModulesCtx used_ctx = { (const char **)used_mods, n_used_mods };
+    if (n_used_mods > 0) used_modules_ctx_set(&used_ctx);
     int rc = compile_to_c(input, &csrc, include_dirs, n_include_dirs,
                           reader_macro_paths, n_reader_macro_paths);
+    if (n_used_mods > 0) used_modules_ctx_set(NULL);
+    free_tur_files(used_mods, n_used_mods);
     if (rc != 0) { buf_free(&csrc); return rc; }
 
     /* Write generated C to a deterministic path so ccache can cache the result
@@ -3536,6 +3559,74 @@ static bool file_has_used_attr(const char *path) {
     }
     free(src);
     return found;
+}
+
+/* used-attr-whole-program: scan each -I module-search dir for `.tur` modules
+ * that carry a #[used] attribute and return their slash-separated module names
+ * (path relative to the include dir, sans ".tur").  cmd_build force-loads
+ * these on the single-file/whole-program path so a #[used] defn reached only
+ * via a raw mangled C symbol (no `(import)`) is still emitted -- the same
+ * retention `tur build <project>` gets from its separate-compilation fallback.
+ *
+ * The entry file's own module is excluded (it is elaborated as the program's
+ * top-level forms; force-loading it as a module would double-define it).
+ * #[used] is rare, so the common case is a cheap read-and-no-match per `.tur`
+ * file; realpath is only paid for the few files that actually match.
+ * Heap array; free via free_tur_files. */
+static char **collect_used_attr_modules(const char *entry_path,
+                                        const char **include_dirs,
+                                        int n_include_dirs, int *n_out) {
+    *n_out = 0;
+    if (!include_dirs || n_include_dirs <= 0) return NULL;
+    char *entry_real = (entry_path && entry_path[0]) ? realpath(entry_path, NULL)
+                                                     : NULL;
+    char **names = NULL;
+    int n = 0, cap = 0;
+    for (int i = 0; i < n_include_dirs; i++) {
+        const char *dir = include_dirs[i];
+        if (!dir || !*dir) continue;
+        char **files = NULL;
+        int nf = 0, capf = 0;
+        collect_tur_recursive(dir, &files, &nf, &capf);
+        size_t dlen = strlen(dir);
+        for (int j = 0; j < nf; j++) {
+            if (!file_has_used_attr(files[j])) continue;
+            /* Exclude the entry's own module (compare canonical paths). */
+            if (entry_real) {
+                char *fr = realpath(files[j], NULL);
+                bool is_entry = (fr && strcmp(fr, entry_real) == 0);
+                free(fr);
+                if (is_entry) continue;
+            }
+            /* Module name = path relative to the include dir, minus ".tur". */
+            const char *rel = files[j];
+            if (strncmp(rel, dir, dlen) == 0 && rel[dlen] == '/')
+                rel += dlen + 1;
+            else
+                rel = basename_of(files[j]);
+            size_t rlen = strlen(rel);
+            if (rlen > 4 && strcmp(rel + rlen - 4, ".tur") == 0) rlen -= 4;
+            if (rlen == 0) continue;
+            char *mod = (char *)malloc(rlen + 1);
+            if (!mod) { fprintf(stderr, "tur: oom\n"); abort(); }
+            memcpy(mod, rel, rlen);
+            mod[rlen] = '\0';
+            bool dup = false;
+            for (int k = 0; k < n; k++)
+                if (strcmp(names[k], mod) == 0) { dup = true; break; }
+            if (dup) { free(mod); continue; }
+            if (n >= cap) {
+                cap = cap ? cap * 2 : 4;
+                names = (char **)realloc(names, (size_t)cap * sizeof(char *));
+                if (!names) { fprintf(stderr, "tur: oom\n"); abort(); }
+            }
+            names[n++] = mod;
+        }
+        free_tur_files(files, nf);
+    }
+    free(entry_real);
+    *n_out = n;
+    return names;
 }
 
 /* n_own: number of files at the front of tur_files that belong to the

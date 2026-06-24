@@ -25,14 +25,18 @@ Largely a **misdiagnosis**, with one narrow genuine gap.
   Turmeric-unreachable defn is retained and links as a same-TU `static`
   (verified by repro).
 - The **only** real gap: a `#[used]` defn reached *only* via a raw mangled
-  `extern` from a sibling that is **not** `(import)`ed is dropped on the
+  `extern` from a sibling that is **not** `(import)`ed was dropped on the
   single-file / whole-program path (`tur test`, `tur run <file>`, `tur build
-  <file>`), because that path lacks the `file_has_used_attr` ->
+  <file>`), because that path lacked the `file_has_used_attr` ->
   separate-compilation fallback that `tur build <project>` has. This is the
   legacy raw-extern pattern the C-integration guide already discourages, so
-  guide-following spice code (which `import`s its modules) does not hit it.
-  Filed as an open report:
-  `docs/reported/used-attr-not-honored-in-single-file-whole-program.md`.
+  guide-following spice code (which `import`s its modules) did not hit it.
+  **FIXED 2026-06-24** (v0.25.0): `cmd_build` now scans the `-I` search dirs for
+  `#[used]`-bearing modules and force-loads them into the whole-program TU so
+  the extern resolves. See
+  `docs/archive/used-attr-not-honored-in-single-file-whole-program.md` and the
+  `build-file-used-attr-whole-program` regression test in
+  `tests/run-build-project.sh`.
 
 ## 2. "Fix inline-C binding visibility codegen (watch)"
 

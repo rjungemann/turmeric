@@ -662,6 +662,20 @@ const Ls2ResolverCtx *ls2_resolver_ctx_active(void) {
     return g_ls2_resolver_ctx;
 }
 
+/* used-attr-whole-program: file-scope holder for the active force-load list,
+ * mirroring the LS2 context above.  Set by main.c around compile_to_c; read
+ * after the main elaboration pass to retain unimported #[used] modules.
+ * Single-threaded usage. */
+static const UsedModulesCtx *g_used_modules_ctx;
+
+void used_modules_ctx_set(const UsedModulesCtx *ctx) {
+    g_used_modules_ctx = ctx;
+}
+
+const UsedModulesCtx *used_modules_ctx_active(void) {
+    return g_used_modules_ctx;
+}
+
 /* Phase M: (load "path") expansion -- shared visited set + output accumulator
  * threaded through a depth-first, in-order recursive walk. */
 typedef struct {
@@ -1311,6 +1325,22 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                     m->defining_module_name = NULL;
                 }
             }
+        }
+    }
+
+    /* used-attr-whole-program: force-load any #[used]-bearing modules that the
+     * entry reaches only via a raw mangled C symbol (no `(import)`), so their
+     * defns are emitted into this single TU and the extern resolves at link
+     * time.  Runs after the main pass (an already-imported module is deduped)
+     * and before the file-scope prepend below (so the loaded module's
+     * EX_DEFMODULE, registered via elab_register_file_def during the load, is
+     * picked up).  Inert under separate compilation and when no list is set. */
+    if (rc == 0) {
+        const UsedModulesCtx *umc = used_modules_ctx_active();
+        if (umc && umc->modules && !separate_compilation) {
+            for (int i = 0; i < umc->n; i++)
+                elab_force_load_module(&e, umc->modules[i]);
+            if (diag_had_error()) rc = -1;
         }
     }
 
