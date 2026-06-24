@@ -1391,12 +1391,15 @@ pre {
     .editor-actions .btn:not(#run-btn):not(.select) svg {
         margin: 0;
     }
-    /* Touch-friendly Examples dropdown. 16px font also keeps iOS from
-       auto-zooming on tap. */
+    /* iOS shows a native picker on <select> tap rather than zooming,
+       so we can drop back to a body-text-sized font. Width is left to
+       fit-content so "Examples" never gets truncated; the editor
+       header scrolls horizontally to accommodate. */
     .editor-actions .select {
-        font-size: 16px;
+        font-size: 13px;
         max-width: none;
-        padding: 5px 8px;
+        width: auto;
+        padding: 5px 10px;
     }
 }
 
