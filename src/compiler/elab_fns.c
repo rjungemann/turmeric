@@ -3689,7 +3689,20 @@ Expr *elab_fn(Elab *e, const Form *call) {
             if (!ann) return NULL;
             param_kinds[n_params - 1] = ann->kind;
             params[n_params - 1]->type = *ann;
+            /* Record the full type whenever the annotation carries information
+             * its bare TypeKind cannot reconstruct.  TY_APP / TY_TYVAR / TY_FN
+             * and any named-tyvar-bearing type obviously qualify, but so do
+             * nominal TY_STRUCT / TY_ADT (and opaque newtypes, which lower to
+             * TY_STRUCT): type_from_kind(TY_STRUCT) yields a def-less placeholder,
+             * losing the nominal identity.  Without the full type on the
+             * closure's arg_full_types, a generic callee binding its type
+             * parameter through this closure's argument position (e.g. T in
+             * `(fn [T] void)`) falls back to that def-less placeholder, so a
+             * later bare `item : T` value parameter fails to unify against the
+             * real opaque/struct type.  Recording it keeps the nominal identity
+             * intact across the binding. */
             if (ann->kind == TY_APP || ann->kind == TY_TYVAR || ann->kind == TY_FN ||
+                ann->kind == TY_STRUCT || ann->kind == TY_ADT ||
                 fn_type_has_named_tyvar(ann)) {
                 param_full_types[n_params - 1] = ann;
             }
