@@ -502,22 +502,6 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.serial_shift_.body);
             buf_putc(b, ')');
             break;
-        /* Phase S4: throw / try-catch */
-        case EX_THROW:
-            buf_puts(b, "(throw ");
-            expr_print(b, e->as.throw_.value);
-            buf_putc(b, ')');
-            break;
-        case EX_TRY_CATCH:
-            buf_puts(b, "(try ");
-            expr_print(b, e->as.try_catch_.body);
-            for (uint32_t i = 0; i < e->as.try_catch_.n_catches; i++) {
-                buf_puts(b, " (catch _ ");
-                expr_print(b, e->as.try_catch_.catch_handlers[i]);
-                buf_puts(b, ")");
-            }
-            buf_putc(b, ')');
-            break;
         case EX_SET_LIT:
             buf_puts(b, "#s(");
             for (uint32_t i = 0; i < e->as.set_lit_.n; i++) {

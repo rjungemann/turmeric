@@ -6,10 +6,23 @@ description: Retire the Phase S4 `throw` / `try` / `catch` forms in favor of `re
 
 # `throw` / `try` / `catch` Deprecation -- Plan
 
-> **Status:** Not started (as of 2026-06-23). The Phase S4 forms still
-> elaborate, codegen, and run -- but the language's prevailing error story
-> is `result<T,E>` + `panic`, and the only stdlib consumer is one
-> `assert-throws!` helper in `stdlib/test.tur`.
+> **Status: Shipped (2026-06-23).** All five steps landed in v0.24.x:
+>
+> - DEPR-W0 (warning TUR-D0002) -- shipped in 8bda2676 (v0.24.3)
+> - DEPR-M0 (migrate `assert-throws!`) -- same commit
+> - DEPR-F0 (park the legacy fixture as `_legacy-throw/`) -- same commit
+> - DEPR-R0 (interpreter fiber rejection on `TURI_REJECTION` values
+>   instead of throws) -- bfbaddec
+> - DEPR-D0 (delete the `throw` / `try` / `catch` front end, the legacy
+>   fixtures, `turi_native_throw` / `make_throw_val`, and TUR-D0002) --
+>   the commit alongside this archival.
+>
+> Runtime helpers `tur_panic_with` / `tur_catch_unwind` and the
+> `setjmp`/`longjmp` plumbing in `emit_module.c` remain in place --
+> they are load-bearing for `panic` / `catch-unwind`, which continue
+> to ship. `env->throwing` / `env->throw_value` stay as never-set
+> scratch slots threaded through the interpreter's signal-propagation
+> machinery; no path produces a TURI_THROW value after D0.
 
 ## Context
 

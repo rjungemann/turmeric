@@ -1558,8 +1558,6 @@ Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_panic_with) return elab_panic_with(e, call);
     if (name == e->sym_catch_unwind) return elab_catch_unwind(e, call);
     if (name == e->sym_catch_panic_of) return elab_catch_panic_of(e, call);
-    if (name == e->sym_throw) return elab_throw(e, call);
-    if (name == e->sym_try)   return elab_try_catch(e, call);
     if (name == e->sym_panic_payload_type) return elab_panic_payload_type(e, call);
     if (name == e->sym_panic_payload_value) return elab_panic_payload_value(e, call);
     if (name == e->sym_panic_payload_file) return elab_panic_payload_file(e, call);

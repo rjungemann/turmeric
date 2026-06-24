@@ -397,8 +397,6 @@ typedef enum ExprKind {
     /* Phase 21: Serializable continuations */
     EX_SERIAL_RESET,   /* (serial-reset body) - establish serializable continuation boundary */
     EX_SERIAL_SHIFT,   /* (serial-shift k body) - capture serializable continuation */
-    EX_THROW,       /* (throw expr) - raise catchable exception; type is TY_NEVER */
-    EX_TRY_CATCH,   /* (try body (catch [bind] handler) ...) - catch block */
     /* Phase X3: Set literal */
     EX_SET_LIT,        /* #s(e1 e2 ...) - set literal */
     /* Phase HRT1: Rank-2 higher-ranked types */
@@ -881,14 +879,6 @@ struct Expr {
             Expr *k_fn;   /* function receiving the serial continuation */
             Expr *body;   /* body expression */
         } serial_shift_;
-        /* Phase S4: throw / try-catch */
-        struct { Expr *value; }                                             throw_;
-        struct {
-            Expr      *body;
-            Binding  **catch_bindings;   /* NULL entry = unnamed catch */
-            Expr     **catch_handlers;
-            uint32_t   n_catches;
-        }                                                                   try_catch_;
         /* Phase HRT1: Higher-ranked types */
         struct {
             struct Expr    *inner;           /* the fn/closure being wrapped */

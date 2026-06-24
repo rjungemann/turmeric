@@ -123,10 +123,8 @@ TuriValue turi_future_poll_val(TuriFuture *f);
 /* Start an async sleep for ms milliseconds; returns TURI_FUTURE → nil. */
 TuriValue turi_sleep_async(TuriEnv *env, uint64_t ms);
 
-/* Throw a catchable exception from a native (TuriNativeFn) function.
- * Sets env->throwing and env->throw_value; the native should return
- * turi_nil() immediately after calling this. */
-void turi_native_throw(TuriEnv *env, const char *msg);
+/* DEPR-D0: turi_native_throw deleted with the (throw)/(try)/(catch) front
+ * end; no callers remain.  See docs/upcoming/throw-deprecation-plan.md. */
 
 /* Fire all remaining top-level/module-level deferred actions.
  * Call after turi_call(main) to honour module-level (defer ...) forms. */

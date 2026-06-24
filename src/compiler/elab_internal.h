@@ -367,8 +367,6 @@ typedef struct Elab {
     const Symbol *sym_panic_with;
     const Symbol *sym_catch_unwind;
     const Symbol *sym_catch_panic_of;
-    const Symbol *sym_throw;         /* (throw expr) */
-    const Symbol *sym_try;           /* (try body (catch ...) ...) */
     /* Phase R5: no-unwind attribute */
     const Symbol *sym_no_unwind_attr;
     /* #[used] attribute: retain a defn with external C linkage (see
@@ -1194,8 +1192,6 @@ Expr *elab_panic(Elab *e, const Form *call);
 Expr *elab_panic_with(Elab *e, const Form *call);
 Expr *elab_catch_unwind(Elab *e, const Form *call);
 Expr *elab_catch_panic_of(Elab *e, const Form *call);
-Expr *elab_throw(Elab *e, const Form *call);
-Expr *elab_try_catch(Elab *e, const Form *call);
 Expr *elab_panic_payload_type(Elab *e, const Form *call);
 Expr *elab_panic_payload_value(Elab *e, const Form *call);
 Expr *elab_panic_payload_file(Elab *e, const Form *call);

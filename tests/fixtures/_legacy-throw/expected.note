@@ -1,8 +1,0 @@
-This fixture exercises the deprecated `throw` / `try` / `catch`
-forms (Phase S4).  It is retained during the
-throw-deprecation-plan deprecation window so the compiled paths
-keep getting test coverage while users migrate to `panic` /
-`catch-unwind` and `result<T,E>`.
-
-Will be deleted alongside DEPR-D0 (front-end deletion).  See
-docs/upcoming/throw-deprecation-plan.md.

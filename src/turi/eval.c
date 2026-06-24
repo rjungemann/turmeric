@@ -589,26 +589,10 @@ static TuriValue adt_ctor_native(TuriEnv *env, TuriValue *args, uint32_t n, void
     return make_struct_val(ctor->name, n, args);
 }
 
-/* Full definition of TuriThrow (forward-declared in value.h). */
-struct TuriThrow {
-    TuriValue   value;      /* the thrown Turmeric value */
-    TypeKind    type_kind;  /* type hint for typed catch clauses */
-};
-
-static TuriValue make_throw_val(TuriValue v, TypeKind tk) {
-    TuriThrow *t = (TuriThrow *)malloc(sizeof(TuriThrow));
-    t->value     = v;
-    t->type_kind = tk;
-    return turi_throw_val(t);
-}
-
-/* Throw a catchable exception from a native (TuriNativeFn) function.
- * The native should return turi_nil() immediately after calling this. */
-void turi_native_throw(TuriEnv *env, const char *msg) {
-    TuriValue tv  = make_throw_val(turi_cstr(msg), TY_UNKNOWN);
-    env->throwing    = true;
-    env->throw_value = tv;
-}
+/* DEPR-D0: TuriThrow / make_throw_val / turi_native_throw deleted.  The
+ * env->throwing / env->throw_value scratch slots remain wired through the
+ * interpreter as never-set signals; no path produces a TURI_THROW value
+ * after R0+D0.  See docs/upcoming/throw-deprecation-plan.md. */
 
 /* Defer item: body expression + snapshot frame of captured values.
  *
@@ -1325,10 +1309,6 @@ static TuriValue gen_advance(TuriEnv *env, TuriGen *g) {
         /* Body finished while we were swapped in. */
         if (g->had_error) {
             g->had_error = false;
-            if (g->error_val.tag == TURI_THROW) {
-                env->throwing    = true;
-                env->throw_value = g->error_val;
-            }
             return g->error_val;
         }
         return turi_int(0); /* NULL: exhausted */
@@ -4266,16 +4246,6 @@ typedef enum {
                       * arith frames and re-requests the next call frame -- so a
                       * resumed frame that itself resumes folds onto the heap
                       * instead of C-recursing through ts_cont_resume's turi_call. */
-    DK_TRY_BODY,     /* Driver-coverage: a (try BODY (catch [b] H)...) whose body
-                      * is driven beneath it.  expr = the try; frame = lexical env;
-                      * was_returning/last = saved throwing/throw_value.  On
-                      * return, a throw with a catch clause transitions this slot
-                      * to DK_TRY_CATCH and drives the handler; other signals (incl.
-                      * abort/return) propagate.  Lets a control operator in a try
-                      * body reach the work-stack instead of eval_abortive_shift. */
-    DK_TRY_CATCH,    /* Driver-coverage: the catch handler is driven beneath this;
-                      * frame = the catch frame to free.  Propagates the handler's
-                      * value / signal. */
 } DriveKind;
 
 typedef struct {
@@ -5598,25 +5568,6 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 have_apply = true;
                 break;
             }
-            case EX_TRY_CATCH: {
-                /* Driver-coverage: drive the try body on the work-stack so a
-                 * control operator (shift / call/cc / ...) inside it reaches the
-                 * driver's work-stack cases instead of the synchronous non-driver
-                 * path.  Save + clear throwing so a throw in the body is detected
-                 * fresh; DK_TRY_BODY decides catch-or-propagate on return. */
-                DriveCont dc;
-                dc.kind          = DK_TRY_BODY;
-                dc.expr          = control;
-                dc.frame         = cf;
-                dc.was_returning = env->throwing;      /* saved_throwing */
-                dc.last          = env->throw_value;    /* saved_throw_val */
-                dc.tail          = tail;                /* catch handler inherits */
-                env->throwing = false;
-                DRIVE_PUSH(dc);
-                control = control->as.try_catch_.body;
-                tail = false;   /* body non-tail: DK_TRY_BODY must see a throw */
-                break;          /* keep descending */
-            }
             case EX_SHIFT:
             case EX_SHIFT0: {
                 /* SR N3b: abortive (shift f body) / (shift0 f body) via the
@@ -5697,45 +5648,6 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 g_reset_stack = b->prev;
                 cur = reset_consume_abort(env, b, cur);
                 free(b);
-                len--;
-                break;
-            }
-            case DK_TRY_BODY: {
-                /* Driver-coverage: the try body produced `cur`.  A throw with a
-                 * catch clause is caught here (bind the value, drive the handler);
-                 * any other signal (abort / return / error / unmatched throw)
-                 * propagates -- matching the recursive EX_TRY_CATCH exactly. */
-                const Expr *te  = top->expr;
-                EvalFrame  *tf  = top->frame;
-                if (env->throwing && te->as.try_catch_.n_catches > 0) {
-                    TuriValue thrown = env->throw_value;
-                    env->throwing = false;            /* catch consumes the throw */
-                    EvalFrame *ccf = eval_frame_new(tf);
-                    if (te->as.try_catch_.catch_bindings[0]) {
-                        TuriValue caught_val = thrown;
-                        if (thrown.tag == TURI_THROW && thrown.as_throw)
-                            caught_val = thrown.as_throw->value;
-                        frame_bind(ccf, te->as.try_catch_.catch_bindings[0]->name->name,
-                                   caught_val);
-                    }
-                    /* Reuse this slot as DK_TRY_CATCH and drive the handler. */
-                    top->kind  = DK_TRY_CATCH;
-                    top->frame = ccf;
-                    control = te->as.try_catch_.catch_handlers[0];
-                    cf = ccf; tail = top->tail; descending = true;
-                    break;
-                }
-                if (!env->throwing) {   /* no throw: restore saved throwing state */
-                    env->throwing    = top->was_returning;
-                    env->throw_value = top->last;
-                }
-                len--;   /* pop; propagate cur (value, abort/return, or rethrow) */
-                break;
-            }
-            case DK_TRY_CATCH: {
-                /* Driver-coverage: the catch handler produced `cur` (or a
-                 * signal).  Free the catch frame and propagate. */
-                eval_frame_free(top->frame);
                 len--;
                 break;
             }
@@ -7147,23 +7059,6 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         }
     }
 
-    /* Phase S4: throw / try-catch */
-    case EX_THROW: {
-        TuriValue val = eval_expr(env, frame, e->as.throw_.value);
-        if (turi_is_error(val) || env->returning || env->throwing || env->aborting) return val;
-        /* Box the value as a TURI_THROW */
-        TuriValue tv = make_throw_val(val, TY_UNKNOWN);
-        env->throwing    = true;
-        env->throw_value = tv;
-        return tv;
-    }
-    case EX_TRY_CATCH:
-        /* Driver-coverage: delegated to the explicit-stack driver (DK_TRY_BODY /
-         * DK_TRY_CATCH), so a control operator (shift / call/cc / ...) inside the
-         * try body reaches the work-stack instead of the synchronous non-driver
-         * path.  Semantics match the former inline version. */
-        return eval_drive(env, frame, e);
-
     /* --- Phase H §1: typeclass dictionary — return method closure ---------- */
     case EX_DICT: {
         TypeClassInstance *inst = e->as.dict_.instance;
@@ -8310,14 +8205,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src,
         }                                                                     \
         if (env->throwing) {                                                  \
             env->throwing = false;                                            \
-            TuriValue _tv = env->throw_value;                                \
-            if (_tv.tag == TURI_THROW && _tv.as_throw) {                     \
-                TuriValue _inner = _tv.as_throw->value;                      \
-                if (_inner.tag == TURI_CSTR && _inner.as_cstr)               \
-                    last = turi_errorf("uncaught exception: %s",             \
-                                       _inner.as_cstr);                      \
-                else last = turi_error("uncaught exception");                 \
-            } else last = turi_error("uncaught exception");                   \
+            last = turi_error("uncaught exception");                          \
             goto eval_done;                                                   \
         }                                                                     \
         if (turi_is_error(last)) goto eval_done;                             \

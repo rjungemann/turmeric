@@ -1535,8 +1535,6 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_panic_with = intern_cstr(st, "panic-with");
     e->sym_catch_unwind = intern_cstr(st, "catch-unwind");
     e->sym_catch_panic_of = intern_cstr(st, "catch-panic-of");
-    e->sym_throw = intern_cstr(st, "throw");
-    e->sym_try   = intern_cstr(st, "try");
     e->sym_panic_payload_type = intern_cstr(st, "panic-payload-type");
     /* Phase R5: no-unwind attribute */
     e->sym_no_unwind_attr = intern_cstr(st, "#no-unwind");

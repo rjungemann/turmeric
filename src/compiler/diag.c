@@ -249,7 +249,6 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0600_DYNVAR_NO_EARMUFFS:        return "TUR-W0600";
         /* Deprecation band */
         case TUR_D0001_FN_TYPE_COLON:             return "TUR-D0001";
-        case TUR_D0002_THROW_TRY_DEPRECATED:      return "TUR-D0002";
         /* XF: experimental-flag mechanism */
         case TUR_E0310_UNKNOWN_EXPERIMENT:        return "TUR-E0310";
         case TUR_W0060_EXPERIMENTAL_PROTOTYPE:    return "TUR-W0060";
@@ -355,7 +354,6 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0600") == 0) return TUR_W0600_DYNVAR_NO_EARMUFFS;
     /* Deprecation band */
     if (strcmp(s, "TUR-D0001") == 0) return TUR_D0001_FN_TYPE_COLON;
-    if (strcmp(s, "TUR-D0002") == 0) return TUR_D0002_THROW_TRY_DEPRECATED;
     /* XF: experimental-flag mechanism */
     if (strcmp(s, "TUR-E0310") == 0) return TUR_E0310_UNKNOWN_EXPERIMENT;
     if (strcmp(s, "TUR-W0060") == 0) return TUR_W0060_EXPERIMENTAL_PROTOTYPE;
@@ -1529,27 +1527,6 @@ static const DiagExplanation diag_explanations_[] = {
       "only the *inner* types inside (fn ...) lose theirs.  Run\n"
       "tools/rewrite_fn_type_colons.py to migrate a tree automatically.\n"
       "Promoted to an error under --Werror=deprecated.\n",
-    },
-    /* throw-deprecation-plan: use of `throw` / `try` / `catch` */
-    { TUR_D0002_THROW_TRY_DEPRECATED,
-      "TUR-D0002: `throw` / `try` / `catch` are deprecated\n"
-      "\n"
-      "The Phase S4 exception forms `throw`, `try`, and `catch` are being\n"
-      "retired.  The prevailing error story in Turmeric is:\n"
-      "\n"
-      "  * `result<T,E>` (stdlib/result.tur) for recoverable failures, and\n"
-      "  * `panic` + `catch-unwind` (stdlib/panic.tur) for unrecoverable\n"
-      "    failures that need a recovery boundary.\n"
-      "\n"
-      "`throw` erases the error type into a single dynamic channel that\n"
-      "every new pass (borrow, sized, session, effects) has to model.  A\n"
-      "typed `result<T,E>` keeps the error in the type system; a `panic`\n"
-      "caught by `catch-unwind` gives a recovery boundary without the\n"
-      "language-level exception channel.\n"
-      "\n"
-      "The forms still compile and run during the deprecation window so\n"
-      "callers have time to migrate.  See\n"
-      "docs/upcoming/throw-deprecation-plan.md.\n",
     },
     /* XF (experimental-flag-mechanism-plan): unknown --enable= name */
     { TUR_E0310_UNKNOWN_EXPERIMENT,
