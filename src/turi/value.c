@@ -1,4 +1,6 @@
 #include "value.h"
+#include "env.h"     /* TuriEnv layout + value_arena (turi-env-owned-value-arena-pool-plan) */
+#include "arena.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -7,8 +9,49 @@
 
 /* TuriClosure is an incomplete type here; value.c only uses it as a pointer. */
 
+/* ---------------------------------------------------------------------------
+ * Env-owned value-payload pool
+ * --------------------------------------------------------------------------- */
+
+void *turi_val_alloc(TuriEnv *env, size_t n) {
+    return arena_alloc(&env->value_arena, n);
+}
+
+void *turi_val_calloc(TuriEnv *env, size_t n) {
+    void *p = arena_alloc(&env->value_arena, n);
+    if (n) memset(p, 0, n);
+    return p;
+}
+
+char *turi_val_strdup(TuriEnv *env, const char *s) {
+    if (!s) return NULL;
+    return arena_strdup(&env->value_arena, s, strlen(s));
+}
+
+/* Process-global fallback pool for the env-less error/rejection constructors.
+ * Lazily initialised on first use; reclaimed by turi_val_global_pool_free,
+ * which turi_env_free calls (single-env embedding pattern). */
+static Arena g_turi_val_pool;
+static bool  g_turi_val_pool_init = false;
+
+char *turi_val_strdup_global(const char *s) {
+    if (!s) return NULL;
+    if (!g_turi_val_pool_init) {
+        arena_init(&g_turi_val_pool, 0);
+        g_turi_val_pool_init = true;
+    }
+    return arena_strdup(&g_turi_val_pool, s, strlen(s));
+}
+
+void turi_val_global_pool_free(void) {
+    if (g_turi_val_pool_init) {
+        arena_free(&g_turi_val_pool);
+        g_turi_val_pool_init = false;
+    }
+}
+
 TuriValue turi_error(const char *msg) {
-    return (TuriValue){TURI_ERROR, .as_error = strdup(msg)};
+    return (TuriValue){TURI_ERROR, .as_error = turi_val_strdup_global(msg)};
 }
 
 TuriValue turi_errorf(const char *fmt, ...) {
@@ -17,11 +60,11 @@ TuriValue turi_errorf(const char *fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    return (TuriValue){TURI_ERROR, .as_error = strdup(buf)};
+    return (TuriValue){TURI_ERROR, .as_error = turi_val_strdup_global(buf)};
 }
 
 TuriValue turi_rejection(const char *msg) {
-    return (TuriValue){TURI_REJECTION, .as_error = strdup(msg ? msg : "")};
+    return (TuriValue){TURI_REJECTION, .as_error = turi_val_strdup_global(msg ? msg : "")};
 }
 
 void turi_print_value(FILE *out, TuriValue v) {

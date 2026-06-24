@@ -146,6 +146,9 @@ TuriEnv *turi_env_new(void) {
     TuriEnv *env = (TuriEnv *)calloc(1, sizeof(TuriEnv));
     if (!env) return NULL;
     arena_init(&env->sym_arena, 0);
+    /* turi-env-owned-value-arena-pool-plan: value-payload pool. Init before any
+     * builtin registration, which allocates native closures from it. */
+    arena_init(&env->value_arena, 0);
     symtab_init(&env->st, &env->sym_arena);
     buf_init(&env->src_acc);
     env->max_eval_depth = (uint32_t)turi_default_max_eval_depth();
@@ -212,6 +215,13 @@ void turi_env_free(TuriEnv *env) {
         free(node);
         node = next;
     }
+
+    /* turi-env-owned-value-arena-pool-plan: reclaim all escaping value payloads
+     * (closures, structs, captured frames/bindings, cons cells, ...) in one
+     * shot, plus the process-global fallback pool the error/rejection
+     * constructors use (the env adopts it on free; single-env pattern). */
+    arena_free(&env->value_arena);
+    turi_val_global_pool_free();
 
     /* Free global bindings */
     EnvBinding *b = env->globals;

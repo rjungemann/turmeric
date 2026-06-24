@@ -129,7 +129,7 @@ static TuriValue native_resume_cont(TuriEnv *env, TuriValue *args, uint32_t n, v
  * Declared in eval.h; implemented here because TuriClosure is internal. */
 void turi_env_register_native(TuriEnv *env, const char *name,
                                TuriNativeFn fn, void *ud) {
-    TuriClosure *cl = (TuriClosure *)calloc(1, sizeof(TuriClosure));
+    TuriClosure *cl = (TuriClosure *)turi_val_calloc(env, sizeof(TuriClosure));
     cl->fn        = NULL;
     cl->captured  = NULL;
     cl->native    = fn;
@@ -364,8 +364,11 @@ struct EvalFrame {
     TyvarBind    *tyvars;   /* generic-dict tyvar substitutions (usually NULL) */
 };
 
-static EvalFrame *eval_frame_new(EvalFrame *parent) {
-    EvalFrame *f = (EvalFrame *)malloc(sizeof(EvalFrame));
+static EvalFrame *eval_frame_new(TuriEnv *env, EvalFrame *parent) {
+    /* Escaping payload: a closure can capture this frame and outlive the scope
+     * that created it, so frames live in env's value pool (reclaimed by
+     * turi_env_free) -- eval_frame_free stays a no-op. */
+    EvalFrame *f = (EvalFrame *)turi_val_alloc(env, sizeof(EvalFrame));
     f->bindings = NULL;
     f->parent   = parent;
     f->tyvars   = NULL;
@@ -390,8 +393,10 @@ static void eval_frame_free(EvalFrame *f) {
     (void)f;
 }
 
-static void frame_bind(EvalFrame *f, const char *name, TuriValue value) {
-    EvalBinding *b = (EvalBinding *)malloc(sizeof(EvalBinding));
+static void frame_bind(TuriEnv *env, EvalFrame *f, const char *name, TuriValue value) {
+    /* Escaping payload: bindings hang off a frame a closure may capture, so they
+     * live in env's value pool (reclaimed by turi_env_free). */
+    EvalBinding *b = (EvalBinding *)turi_val_alloc(env, sizeof(EvalBinding));
     b->name  = name;
     b->value = value;
     b->next  = f->bindings;
@@ -500,12 +505,15 @@ struct TuriStruct {
     StructDef   *def;      /* compiler's struct definition (for field name lookup); may be NULL */
 };
 
-static TuriValue make_struct_val_def(const char *name, uint32_t n, TuriValue *fields, StructDef *def) {
-    TuriStruct *s = (TuriStruct *)malloc(sizeof(TuriStruct));
+static TuriValue make_struct_val_def(TuriEnv *env, const char *name, uint32_t n, TuriValue *fields, StructDef *def) {
+    /* Escaping payload: the TuriStruct + its fields array are returned and may
+     * be captured/stored, so they live in env's value pool (reclaimed by
+     * turi_env_free), never individually freed. */
+    TuriStruct *s = (TuriStruct *)turi_val_alloc(env, sizeof(TuriStruct));
     s->name     = name;
     s->n_fields = n;
     s->def      = def;
-    s->fields   = (TuriValue *)malloc(n * sizeof(TuriValue));
+    s->fields   = n ? (TuriValue *)turi_val_alloc(env, n * sizeof(TuriValue)) : NULL;
     for (uint32_t i = 0; i < n; i++) s->fields[i] = fields[i];
     return turi_struct_val(s);
 }
@@ -515,7 +523,7 @@ static TuriValue make_struct_val_def(const char *name, uint32_t n, TuriValue *fi
  * fields collapse to the int64 carrier 0; floats to 0.0; and a struct T to a
  * TuriStruct with every field recursively zeroed, so `(.field (default-of T))`
  * reads a real zero instead of failing with "field access on null carrier". */
-static TuriValue turi_default_of(const Type *t) {
+static TuriValue turi_default_of(TuriEnv *env, const Type *t) {
     if (!t) return turi_int(0);
     switch (t->kind) {
         case TY_FLOAT32: case TY_FLOAT64: return turi_float(0.0);
@@ -532,16 +540,16 @@ static TuriValue turi_default_of(const Type *t) {
     uint8_t    nargs = 0;
     if (type_extract_struct_app(t, &def, args, &nargs) && def) {
         uint32_t nf = def->n_fields;
-        if (nf == 0) return make_struct_val_def(def->name, 0, NULL, def);
+        if (nf == 0) return make_struct_val_def(env, def->name, 0, NULL, def);
         TuriValue *fields = (TuriValue *)malloc((size_t)nf * sizeof(TuriValue));
         if (!fields) return turi_int(0);
         for (uint32_t i = 0; i < nf; i++) {
             StructField *f = &def->fields[i];
             Type ft = f->full_type ? *f->full_type : (Type){ .kind = f->kind };
             Type resolved = (nargs > 0) ? substitute_struct_app_type(&ft, def, args) : ft;
-            fields[i] = turi_default_of(&resolved);
+            fields[i] = turi_default_of(env, &resolved);
         }
-        TuriValue v = make_struct_val_def(def->name, nf, fields, def);
+        TuriValue v = make_struct_val_def(env, def->name, nf, fields, def);
         free(fields);
         return v;
     }
@@ -565,12 +573,12 @@ const char *turi_struct_name(TuriValue v) {
     return NULL;
 }
 
-TuriValue turi_make_struct(const char *name, TuriValue *fields, uint32_t n) {
-    return make_struct_val_def(name, n, fields, NULL);
+TuriValue turi_make_struct(TuriEnv *env, const char *name, TuriValue *fields, uint32_t n) {
+    return make_struct_val_def(env, name, n, fields, NULL);
 }
 
-static TuriValue make_struct_val(const char *name, uint32_t n, TuriValue *fields) {
-    return make_struct_val_def(name, n, fields, NULL);
+static TuriValue make_struct_val(TuriEnv *env, const char *name, uint32_t n, TuriValue *fields) {
+    return make_struct_val_def(env, name, n, fields, NULL);
 }
 
 /* panic? : (val) -> bool — true if val is the (panic) struct from catch-unwind */
@@ -584,9 +592,8 @@ static TuriValue native_panic_pred(TuriEnv *env, TuriValue *args, uint32_t n, vo
 
 /* Native callback for ADT constructors registered by EX_DEFDATA/EX_DEFGADT. */
 static TuriValue adt_ctor_native(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
-    (void)env;
     CtorDef *ctor = (CtorDef *)ud;
-    return make_struct_val(ctor->name, n, args);
+    return make_struct_val(env, ctor->name, n, args);
 }
 
 /* DEPR-D0: TuriThrow / make_throw_val / turi_native_throw deleted.  The
@@ -793,9 +800,9 @@ typedef struct TuriPanicPayload {
 
 /* Build the 3-int Result box { is_ok, ok_val, err_val } the native ok/err
  * helpers also use, in its Ok shape. */
-static TuriValue turi_ok_result_box(int64_t ok_val) {
-    int64_t *box = (int64_t *)malloc(3 * sizeof(int64_t));
-    if (!box) return turi_error("eval: catch: oom");
+static TuriValue turi_ok_result_box(TuriEnv *env, int64_t ok_val) {
+    /* Escaping payload: the box is returned as a Result carrier. */
+    int64_t *box = (int64_t *)turi_val_alloc(env, 3 * sizeof(int64_t));
     box[0] = 1; box[1] = ok_val; box[2] = 0;
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)box;
     return v;
@@ -804,15 +811,15 @@ static TuriValue turi_ok_result_box(int64_t ok_val) {
 /* Build the Err shape of the Result box, with err_val pointing at a heap
  * TuriPanicPayload snapshotted from the env's in-flight panic fields. */
 static TuriValue turi_err_result_box(TuriEnv *env) {
-    TuriPanicPayload *pp = (TuriPanicPayload *)malloc(sizeof(TuriPanicPayload));
-    if (!pp) return turi_error("eval: catch: oom");
+    /* Escaping payload: the payload + box are returned as a Result carrier and
+     * read back by the panic-payload-* accessors; pool-owned, never freed. */
+    TuriPanicPayload *pp = (TuriPanicPayload *)turi_val_alloc(env, sizeof(TuriPanicPayload));
     pp->type_tag = env->catch_panic_type;
     pp->value    = env->catch_panic_value;
     pp->file     = env->catch_panic_file
-                   ? strdup(env->catch_panic_file) : NULL;
+                   ? turi_val_strdup(env, env->catch_panic_file) : NULL;
     pp->line     = env->catch_panic_line;
-    int64_t *box = (int64_t *)malloc(3 * sizeof(int64_t));
-    if (!box) { free(pp); return turi_error("eval: catch: oom"); }
+    int64_t *box = (int64_t *)turi_val_alloc(env, 3 * sizeof(int64_t));
     box[0] = 0; box[1] = 0; box[2] = (int64_t)(intptr_t)pp;
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)box;
     return v;
@@ -1018,12 +1025,12 @@ static TuriValue eval_handle_inner(TuriEnv *env, EvalFrame *frame,
     }
 
     /* Bind params and k in a new frame. */
-    EvalFrame *hframe = eval_frame_new(frame);
+    EvalFrame *hframe = eval_frame_new(env, frame);
     for (uint8_t i = 0; i < matched->n_params && i < cont->n_perf_args; i++) {
         const char *pname = matched->param_bindings[i]->name->name;
-        frame_bind(hframe, pname, cont->perf_args[i]);
+        frame_bind(env, hframe, pname, cont->perf_args[i]);
     }
-    frame_bind(hframe, matched->k_binding->name->name, turi_effect_cont(cont));
+    frame_bind(env, hframe, matched->k_binding->name->name, turi_effect_cont(cont));
 
     TuriValue result = eval_expr(env, hframe, matched->body);
     eval_frame_free(hframe);
@@ -1526,11 +1533,13 @@ static bool ts_arith_op(const char *op) {
            (op[0] == '+' || op[0] == '-' || op[0] == '*' || op[0] == '/');
 }
 
-static TuriCont *ts_cont_copy(const TuriCont *c) {
-    TuriCont *d = (TuriCont *)malloc(sizeof(TuriCont));
+static TuriCont *ts_cont_copy(TuriEnv *env, const TuriCont *c) {
+    /* Escaping payload: the copy is boxed as an int continuation handle and
+     * returned (multi-shot); pool-owned, never freed. */
+    TuriCont *d = (TuriCont *)turi_val_alloc(env, sizeof(TuriCont));
     d->n = c->n;
     d->serial = c->serial;
-    d->frames = (TsFrame *)malloc(sizeof(TsFrame) * (c->n ? c->n : 1));
+    d->frames = (TsFrame *)turi_val_alloc(env, sizeof(TsFrame) * (c->n ? c->n : 1));
     if (c->n) memcpy(d->frames, c->frames, sizeof(TsFrame) * c->n);
     return d;
 }
@@ -1685,7 +1694,7 @@ static bool ts_try_cont_builtin(TuriEnv *env, const BuiltinSpec *spec,
         strcmp(name, "tur_serial_cont_deserialize") == 0) {
         if (n < 1 || args[0].as_int == 0) { *out = turi_int(0); return true; }
         TuriCont *c = (TuriCont *)(intptr_t)args[0].as_int;
-        *out = turi_int((int64_t)(intptr_t)ts_cont_copy(c));
+        *out = turi_int((int64_t)(intptr_t)ts_cont_copy(env, c));
         return true;
     }
     if (strcmp(name, "tur_cloneable_cont_drop") == 0) { *out = turi_nil(); return true; }
@@ -1782,7 +1791,7 @@ static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
             break;
         }
         if (cur->kind == EX_LET) {
-            EvalFrame *nf = eval_frame_new(cur_frame);
+            EvalFrame *nf = eval_frame_new(env, cur_frame);
             let_frames[n_let++] = nf;
             bool err = false;
             for (uint32_t i = 0; i < cur->as.let_.n; i++) {
@@ -1790,7 +1799,7 @@ static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
                 if (turi_is_error(v) || env->returning || env->throwing || env->aborting) {
                     result = v; done = true; err = true; break;
                 }
-                frame_bind(nf, cur->as.let_.bindings[i].binding->name->name, v);
+                frame_bind(env, nf, cur->as.let_.bindings[i].binding->name->name, v);
             }
             if (err) break;
             cur_frame = nf;
@@ -1951,9 +1960,10 @@ static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
                  * context call frame that recursively triggers another capturing
                  * reset folds onto the heap.  Same let-frame ownership transfer
                  * as the receiver case (a captured frame fn may close over one). */
-                TuriCont *hc = (TuriCont *)malloc(sizeof(TuriCont));
+                /* Escaping payload: cont stored in deferred->cont, never freed. */
+                TuriCont *hc = (TuriCont *)turi_val_alloc(env, sizeof(TuriCont));
                 hc->n = n; hc->serial = serial;
-                hc->frames = (TsFrame *)malloc(sizeof(TsFrame) * (n ? n : 1));
+                hc->frames = (TsFrame *)turi_val_alloc(env, sizeof(TsFrame) * (n ? n : 1));
                 if (n) memcpy(hc->frames, frames, sizeof(TsFrame) * n);
                 deferred->active   = true;
                 deferred->is_fold  = true;
@@ -1973,11 +1983,12 @@ static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
                 result = ts_cont_resume(env, &c, pure_val.as_int);
             }
         } else {
-            /* shift found: build a heap cont, call the receiver with it. */
-            TuriCont *cont = (TuriCont *)malloc(sizeof(TuriCont));
+            /* shift found: build a heap cont, call the receiver with it.
+             * Escaping payload: handed to the receiver as a handle, never freed. */
+            TuriCont *cont = (TuriCont *)turi_val_alloc(env, sizeof(TuriCont));
             cont->n = n;
             cont->serial = serial;
-            cont->frames = (TsFrame *)malloc(sizeof(TsFrame) * (n ? n : 1));
+            cont->frames = (TsFrame *)turi_val_alloc(env, sizeof(TsFrame) * (n ? n : 1));
             if (n) memcpy(cont->frames, frames, sizeof(TsFrame) * n);
             const Expr *kfn = (shift_kind == EX_SERIAL_SHIFT)
                 ? shift->as.serial_shift_.k_fn
@@ -2054,7 +2065,7 @@ static TuriValue eval_callcc_escape(TuriEnv *env, EvalFrame *frame,
 static TuriValue native_save_cont(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1 || args[0].as_int == 0) return turi_int(0);
-    return turi_int((int64_t)(intptr_t)ts_cont_copy((TuriCont *)(intptr_t)args[0].as_int));
+    return turi_int((int64_t)(intptr_t)ts_cont_copy(env, (TuriCont *)(intptr_t)args[0].as_int));
 }
 
 /* stdlib/workflow.tur resume-cont! -- rebuild the chain from bytes and resume. */
@@ -2332,9 +2343,9 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
         const char *op = spec->c_op;
         if (op && strcmp(op, "!") == 0) return turi_bool(!args[0].as_bool);
         if (op && strcmp(op, "&") == 0) {
-            /* ptr-of: emulate &var by boxing the value into a heap cell */
-            int64_t *cell = (int64_t *)malloc(sizeof(int64_t));
-            if (!cell) return turi_nil();
+            /* ptr-of: emulate &var by boxing the value into a pool cell that
+             * escapes as an int carrier (reclaimed at turi_env_free). */
+            int64_t *cell = (int64_t *)turi_val_alloc(env, sizeof(int64_t));
             *cell = args[0].as_int;
             TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)cell;
             return v;
@@ -4152,7 +4163,7 @@ static TuriValue gde_reresolve_method(TuriEnv *env, const Expr *dict_arg,
         san[olen] = '\0';
         if (strcmp(mang, mname) != 0 && strcmp(san, mname) != 0) continue;
         if (mi >= match->n_method_impls || !match->method_impls[mi]) return turi_nil();
-        TuriClosure *cl = (TuriClosure *)malloc(sizeof(TuriClosure));
+        TuriClosure *cl = (TuriClosure *)turi_val_alloc(env, sizeof(TuriClosure));
         memset(cl, 0, sizeof(*cl));
         cl->fn       = match->method_impls[mi];
         cl->captured = NULL;
@@ -4164,7 +4175,7 @@ static TuriValue gde_reresolve_method(TuriEnv *env, const Expr *dict_arg,
 /* Record the concrete type substitutions a call site pins onto the callee's
  * tyvars (its abi_bindings), resolving any still-abstract tyvar through the
  * caller's own substitution so nested generics compose. */
-static void frame_record_abi(EvalFrame *callee, EvalFrame *caller, const Expr *call) {
+static void frame_record_abi(TuriEnv *env, EvalFrame *callee, EvalFrame *caller, const Expr *call) {
     for (uint8_t i = 0; i < call->as.call_.n_abi_bindings; i++) {
         AbiTypeBinding *ab = &call->as.call_.abi_bindings[i];
         if (!ab->name) continue;
@@ -4174,7 +4185,7 @@ static void frame_record_abi(EvalFrame *callee, EvalFrame *caller, const Expr *c
             if (frame_lookup_tyvar(caller, t.as.tyvar_.name, &r)) t = r;
         }
         if (t.kind == TY_TYVAR) continue;  /* still abstract: nothing to pin */
-        TyvarBind *tb = (TyvarBind *)malloc(sizeof(TyvarBind));
+        TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
         tb->name = ab->name;
         tb->type = t;
         tb->next = callee->tyvars;
@@ -4305,8 +4316,8 @@ struct TuriWsCont {
 
 /* Shallow-copy a frame's bindings into a fresh frame (parent set by caller).
  * Bindings are re-linked most-recent-first to preserve shadowing order. */
-static EvalFrame *clone_frame_bindings(EvalFrame *src, EvalFrame *parent) {
-    EvalFrame *nf = (EvalFrame *)malloc(sizeof(EvalFrame));
+static EvalFrame *clone_frame_bindings(TuriEnv *env, EvalFrame *src, EvalFrame *parent) {
+    EvalFrame *nf = (EvalFrame *)turi_val_alloc(env, sizeof(EvalFrame));
     nf->parent = parent;
     nf->bindings = NULL;
     /* Collect src bindings (head-first) then re-prepend in reverse to preserve
@@ -4317,7 +4328,7 @@ static EvalFrame *clone_frame_bindings(EvalFrame *src, EvalFrame *parent) {
         EvalBinding **arr = (EvalBinding **)malloc(n * sizeof(EvalBinding *));
         size_t i = 0;
         for (EvalBinding *b = src->bindings; b; b = b->next) arr[i++] = b;
-        for (size_t j = n; j-- > 0; ) frame_bind(nf, arr[j]->name, arr[j]->value);
+        for (size_t j = n; j-- > 0; ) frame_bind(env, nf, arr[j]->name, arr[j]->value);
         free(arr);
     }
     return nf;
@@ -4328,7 +4339,7 @@ static EvalFrame *clone_frame_bindings(EvalFrame *src, EvalFrame *parent) {
  * `.frame` pointing at an owned frame is remapped to its clone; per-frame heap
  * arg accumulators (BUILTIN_ARG/CALL_ARG/MAKE_STRUCT) are duplicated so the two
  * runs never share mutable state.  `out` must hold `n` DriveConts. */
-static void clone_ws_slice(const DriveCont *src, size_t n, DriveCont *out) {
+static void clone_ws_slice(TuriEnv *env, const DriveCont *src, size_t n, DriveCont *out) {
     /* Map owned source frames -> clones. */
     EvalFrame *keys[64]; EvalFrame *vals[64]; size_t nmap = 0;
     for (size_t i = 0; i < n; i++) {
@@ -4336,7 +4347,7 @@ static void clone_ws_slice(const DriveCont *src, size_t n, DriveCont *out) {
         if ((k == DK_LET_BIND || k == DK_LET_BODY || k == DK_MATCH_BODY ||
              k == DK_CALL_RET) && src[i].frame && nmap < 64) {
             keys[nmap] = src[i].frame;
-            vals[nmap] = clone_frame_bindings(src[i].frame, src[i].frame->parent);
+            vals[nmap] = clone_frame_bindings(env, src[i].frame, src[i].frame->parent);
             nmap++;
         }
     }
@@ -4370,8 +4381,9 @@ static void clone_ws_slice(const DriveCont *src, size_t n, DriveCont *out) {
 
 /* Wrap a work-stack continuation in a TURI_EFFECT_CONT value (discriminated by
  * the ws pointer being non-NULL). */
-static TuriValue turi_ws_cont_val(TuriWsCont *wc) {
-    TuriEffectCont *c = (TuriEffectCont *)calloc(1, sizeof(TuriEffectCont));
+static TuriValue turi_ws_cont_val(TuriEnv *env, TuriWsCont *wc) {
+    /* Escaping payload: wraps a work-stack continuation in a returned value. */
+    TuriEffectCont *c = (TuriEffectCont *)turi_val_calloc(env, sizeof(TuriEffectCont));
     c->ws = wc;
     return turi_effect_cont(c);
 }
@@ -4832,7 +4844,7 @@ static int eval_match_resolve(TuriEnv *env, EvalFrame *frame, const Expr *e,
         EvalFrame    *arm_frame = NULL;
 
         if (pat->is_wildcard) {
-            matched = true; arm_frame = eval_frame_new(frame);
+            matched = true; arm_frame = eval_frame_new(env, frame);
         } else if (pat->is_var && pat->union_member_idx >= 0) {
             bool tag_ok = false;
             if (pat->n_bindings >= 1 && pat->bindings[0]) {
@@ -4852,8 +4864,8 @@ static int eval_match_resolve(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 tag_ok = true;
             }
             if (tag_ok) {
-                matched = true; arm_frame = eval_frame_new(frame);
-                if (pat->var_sym) frame_bind(arm_frame, pat->var_sym->name, val);
+                matched = true; arm_frame = eval_frame_new(env, frame);
+                if (pat->var_sym) frame_bind(env, arm_frame, pat->var_sym->name, val);
             }
         } else if (pat->is_literal) {
             switch (pat->lit_kind) {
@@ -4865,19 +4877,19 @@ static int eval_match_resolve(TuriEnv *env, EvalFrame *frame, const Expr *e,
             case F_NIL:   matched = (val.tag == TURI_NIL); break;
             default: break;
             }
-            if (matched) arm_frame = eval_frame_new(frame);
+            if (matched) arm_frame = eval_frame_new(env, frame);
         } else if (pat->is_var) {
-            matched = true; arm_frame = eval_frame_new(frame);
-            frame_bind(arm_frame, pat->var_sym->name, val);
+            matched = true; arm_frame = eval_frame_new(env, frame);
+            frame_bind(env, arm_frame, pat->var_sym->name, val);
         } else {
             CtorDef *ctor = pat->ctor;
             if (ctor && val.tag == TURI_STRUCT &&
                 strcmp(val.as_struct->name, ctor->name) == 0) {
-                matched = true; arm_frame = eval_frame_new(frame);
+                matched = true; arm_frame = eval_frame_new(env, frame);
                 for (uint32_t bi = 0; bi < pat->n_bindings; bi++) {
                     Binding *b = pat->bindings[bi];
                     if (b && bi < val.as_struct->n_fields)
-                        frame_bind(arm_frame, b->name->name, val.as_struct->fields[bi]);
+                        frame_bind(env, arm_frame, b->name->name, val.as_struct->fields[bi]);
                 }
             }
         }
@@ -5025,9 +5037,9 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 }
                 env->step_fuel--;
             }
-            EvalFrame *call_frame = eval_frame_new((EvalFrame *)cl->captured);
+            EvalFrame *call_frame = eval_frame_new(env, (EvalFrame *)cl->captured);
             for (uint32_t i = 0; i < n; i++)
-                frame_bind(call_frame,
+                frame_bind(env, call_frame,
                            fn->params[param_offset + i]->name->name, acc[i]);
             free(acc);
             DRIVE_PUSH(((DriveCont){ .kind = DK_CALL_RET, .frame = call_frame,
@@ -5081,11 +5093,11 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
             case EX_LETREC: {
                 /* Owns a fresh frame; bindings then body run in it.  EX_LETREC
                  * pre-binds every name to nil so RHS closures see each other. */
-                EvalFrame *nf = eval_frame_new(cf);
+                EvalFrame *nf = eval_frame_new(env, cf);
                 uint32_t   n  = control->as.let_.n;
                 if (control->kind == EX_LETREC) {
                     for (uint32_t i = 0; i < n; i++)
-                        frame_bind(nf,
+                        frame_bind(env, nf,
                             control->as.let_.bindings[i].binding->name->name,
                             turi_nil());
                 }
@@ -5117,7 +5129,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 uint32_t n = control->as.make_struct_.n_fields;
                 if (n == 0) {
                     StructDef *sd = control->as.make_struct_.def;
-                    cur = make_struct_val_def(sd ? sd->name : "<struct>", 0, NULL, sd);
+                    cur = make_struct_val_def(env, sd ? sd->name : "<struct>", 0, NULL, sd);
                     descending = false;
                     break;
                 }
@@ -5287,8 +5299,8 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 TuriHandlerVal *hv = hvv.as_handler;
                 /* Heap-own the HandleExpr + cases: a captured continuation may
                  * outlive this driver frame, so they cannot live on the C stack. */
-                HandleExpr *h = (HandleExpr *)malloc(sizeof(HandleExpr));
-                HandleCase *cs = (HandleCase *)malloc((size_t)hv->n_cases * sizeof(HandleCase));
+                HandleExpr *h = (HandleExpr *)turi_val_alloc(env, sizeof(HandleExpr));
+                HandleCase *cs = (HandleCase *)turi_val_alloc(env, (size_t)hv->n_cases * sizeof(HandleCase));
                 for (uint8_t i = 0; i < hv->n_cases; i++) cs[i] = *hv->cases[i];
                 h->body = control->as.with_handler_.body;
                 h->cases = cs; h->n_cases = hv->n_cases;
@@ -5345,10 +5357,11 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 }
                 /* Capture the slice st[pidx+1 .. len-1] as a heap continuation. */
                 size_t nf = (len - 1) - (size_t)pidx;
-                TuriWsCont *wc = (TuriWsCont *)calloc(1, sizeof(TuriWsCont));
+                /* Escaping payload: bound as the multishot k; pool-owned. */
+                TuriWsCont *wc = (TuriWsCont *)turi_val_calloc(env, sizeof(TuriWsCont));
                 wc->n_frames = nf;
                 if (nf) {
-                    wc->frames = (DriveCont *)malloc(nf * sizeof(DriveCont));
+                    wc->frames = (DriveCont *)turi_val_alloc(env, nf * sizeof(DriveCont));
                     memcpy(wc->frames, &st[pidx + 1], nf * sizeof(DriveCont));
                 }
                 wc->handler        = (HandleExpr *)st[pidx].aux;
@@ -5360,10 +5373,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * becomes the handle's value (received by DK_PROMPT@pidx). */
                 len = (size_t)pidx + 1;
                 st[pidx].index = 0;   /* disable while its own case body runs */
-                EvalFrame *hf = eval_frame_new(st[pidx].frame);
+                EvalFrame *hf = eval_frame_new(env, st[pidx].frame);
                 for (uint8_t i = 0; i < matched->n_params && i < n; i++)
-                    frame_bind(hf, matched->param_bindings[i]->name->name, pargs[i]);
-                frame_bind(hf, matched->k_binding->name->name, turi_ws_cont_val(wc));
+                    frame_bind(env, hf, matched->param_bindings[i]->name->name, pargs[i]);
+                frame_bind(env, hf, matched->k_binding->name->name, turi_ws_cont_val(env, wc));
                 env->current_module = st[pidx].saved_module;
                 env->in_no_unwind   = st[pidx].was_no_unwind;
                 control = matched->body; cf = hf; tail = st[pidx].tail;
@@ -5400,7 +5413,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                                          .was_no_unwind = env->in_no_unwind }));
                 if (wc->n_frames) {
                     DriveCont *clone = (DriveCont *)malloc(wc->n_frames * sizeof(DriveCont));
-                    clone_ws_slice(wc->frames, wc->n_frames, clone);
+                    clone_ws_slice(env, wc->frames, wc->n_frames, clone);
                     for (size_t i = 0; i < wc->n_frames; i++)
                         DRIVE_PUSH(clone[i]);
                     free(clone);
@@ -5730,14 +5743,14 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                      * resolve by name (mirrors the recursive EX_LETREC case). */
                     if (cur.tag == TURI_CLOSURE && cur.as_closure &&
                         cur.as_closure->captured == NULL) {
-                        TuriClosure *copy = (TuriClosure *)malloc(sizeof(TuriClosure));
+                        TuriClosure *copy = (TuriClosure *)turi_val_alloc(env, sizeof(TuriClosure));
                         *copy = *cur.as_closure;
                         copy->captured = nf;
                         cur = turi_closure(copy);
                     }
                     eval_frame_update(nf, nm, cur);
                 } else {
-                    frame_bind(nf, nm, cur);
+                    frame_bind(env, nf, nm, cur);
                 }
                 top->index++;
                 if (top->index < n) {
@@ -5839,16 +5852,16 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     }
                     env->step_fuel--;
                 }
-                EvalFrame *call_frame = eval_frame_new((EvalFrame *)cl->captured);
+                EvalFrame *call_frame = eval_frame_new(env, (EvalFrame *)cl->captured);
                 for (uint32_t i = 0; i < n; i++)
-                    frame_bind(call_frame,
+                    frame_bind(env, call_frame,
                                fn->params[param_offset + i]->name->name, acc[i]);
                 free(acc);
                 /* generic-dict-dispatch: pin this call's concrete tyvar
                  * substitutions onto the callee frame so a baked-representative
                  * method call inside the body can re-resolve its instance. */
                 if (top->expr->as.call_.n_abi_bindings > 0)
-                    frame_record_abi(call_frame, top->frame, top->expr);
+                    frame_record_abi(env, call_frame, top->frame, top->expr);
 
                 if (top->tail) {
                     /* F3: tail call -- REUSE the enclosing activation's
@@ -5987,7 +6000,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 } else {
                     StructDef *sd = me->as.make_struct_.def;
                     /* make_struct_val_def copies the fields, so free after. */
-                    cur = make_struct_val_def(sd ? sd->name : "<struct>",
+                    cur = make_struct_val_def(env, sd ? sd->name : "<struct>",
                                               n, fields, sd);
                     free(fields);
                     len--;  /* pop; keep returning the struct value */
@@ -6176,9 +6189,9 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
     /* Turi body: prologue (build call frame, bind args, publish callee state),
      * then drive the body in tail position with an activation seed so its tail
      * calls reuse this activation's DK_CALL_RET. */
-    EvalFrame *call_frame = eval_frame_new((EvalFrame *)cl->captured);
+    EvalFrame *call_frame = eval_frame_new(env, (EvalFrame *)cl->captured);
     for (uint32_t i = 0; i < n_args; i++)
-        frame_bind(call_frame, fn->params[param_offset + i]->name->name, args[i]);
+        frame_bind(env, call_frame, fn->params[param_offset + i]->name->name, args[i]);
 
     DriveSeed seed = {
         .defer_mark    = (DeferItem *)env->defer_stack,
@@ -6274,7 +6287,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * actually evaluates fits in TURI_INT/FLOAT/NIL/BOOL with a zero
          * bit-pattern.  Match the result type's broad kind to pick the
          * carrier; default to integer zero (a NULL pointer also fits). */
-        return turi_default_of(&e->type);
+        return turi_default_of(env, &e->type);
     }
 
     case EX_CSTR_LIT: {
@@ -6411,7 +6424,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 return existing; /* keep native override */
             }
         }
-        TuriClosure *cl = (TuriClosure *)malloc(sizeof(TuriClosure));
+        TuriClosure *cl = (TuriClosure *)turi_val_alloc(env, sizeof(TuriClosure));
         memset(cl, 0, sizeof(*cl)); /* zero native/skip_env_param/native_ud */
         cl->fn       = fndef;
         cl->captured = NULL; /* top-level defn has no captured environment */
@@ -6448,7 +6461,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* --- Anonymous function (fn) ---------------------------------------- */
     case EX_FN: {
-        TuriClosure *cl = (TuriClosure *)malloc(sizeof(TuriClosure));
+        TuriClosure *cl = (TuriClosure *)turi_val_alloc(env, sizeof(TuriClosure));
         memset(cl, 0, sizeof(*cl));
         cl->fn       = e->as.fn_.fn;
         cl->captured = frame; /* capture lexical scope */
@@ -6457,7 +6470,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* --- Closure with captured variables (fn with captures) --------------- */
     case EX_CLOSURE: {
-        TuriClosure *cl = (TuriClosure *)malloc(sizeof(TuriClosure));
+        TuriClosure *cl = (TuriClosure *)turi_val_alloc(env, sizeof(TuriClosure));
         memset(cl, 0, sizeof(*cl));
         cl->fn             = e->as.closure_.closure->fn;
         cl->captured       = frame; /* interpreter uses lexical frame */
@@ -6531,12 +6544,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         /* Build a sorted, deduplicated int64_t set stored as {int64_t *items, int64_t n}.
          * Represented as TURI_INT (opaque pointer) matching tur_set_t layout. */
         uint32_t raw_n = e->as.set_lit_.n;
-        int64_t *raw = raw_n ? (int64_t*)malloc(raw_n * sizeof(int64_t)) : NULL;
+        /* Escaping payload: items + set struct are returned as a set carrier;
+         * pool-owned (never individually freed). */
+        int64_t *raw = raw_n ? (int64_t*)turi_val_alloc(env, raw_n * sizeof(int64_t)) : NULL;
         uint32_t k = 0;
         for (uint32_t si = 0; si < raw_n; si++) {
             TuriValue iv = eval_expr(env, frame, e->as.set_lit_.items[si]);
             if (turi_is_error(iv) || env->returning || env->throwing || env->aborting) {
-                free(raw); return iv;
+                return iv;
             }
             raw[k++] = iv.as_int;
         }
@@ -6555,11 +6570,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             if (uniq == 0 || raw[uniq-1] != raw[i]) raw[uniq++] = raw[i];
         }
         /* Allocate set struct: {int64_t *items; int64_t n} */
-        int64_t *s = (int64_t*)malloc(2 * sizeof(int64_t));
-        if (!s) { free(raw); return turi_nil(); }
+        int64_t *s = (int64_t*)turi_val_alloc(env, 2 * sizeof(int64_t));
         s[0] = uniq ? (int64_t)(intptr_t)raw : 0;
         s[1] = (int64_t)uniq;
-        if (uniq == 0) free(raw);
         TuriValue sv = {0}; sv.tag = TURI_INT; sv.as_int = (int64_t)(intptr_t)s;
         return sv;
     }
@@ -6584,23 +6597,11 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         for (int32_t i = (int32_t)cn - 1; i >= 0; i--) {
             TuriValue iv = eval_expr(env, frame, e->as.cons_list_.items[i]);
             if (turi_is_error(iv) || env->returning || env->throwing || env->aborting) {
-                /* Unwind the partial chain so an aborted build leaks nothing. */
-                while (tail) {
-                    int64_t *c = (int64_t *)(intptr_t)tail;
-                    tail = c[1];
-                    free(c);
-                }
+                /* Partial chain is pool-owned; reclaimed at turi_env_free. */
                 return iv;
             }
-            int64_t *cell = (int64_t *)malloc(2 * sizeof(int64_t));
-            if (!cell) {
-                while (tail) {
-                    int64_t *c = (int64_t *)(intptr_t)tail;
-                    tail = c[1];
-                    free(c);
-                }
-                return turi_error("eval: out of memory (cons-list)");
-            }
+            /* Escaping payload: cons cells form the returned chain; pool-owned. */
+            int64_t *cell = (int64_t *)turi_val_alloc(env, 2 * sizeof(int64_t));
             cell[0] = iv.as_int;  /* head: raw value carrier */
             cell[1] = tail;       /* tail: previously-built cell (or nil) */
             tail = (int64_t)(intptr_t)cell;
@@ -6654,11 +6655,11 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     /* (defer body) — register body to fire at enclosing function exit. */
     case EX_DEFER: {
         /* Snapshot the captured bindings at defer-call time. */
-        EvalFrame *snap = eval_frame_new(NULL);
+        EvalFrame *snap = eval_frame_new(env, NULL);
         for (uint8_t i = 0; i < e->as.defer_.n_captures; i++) {
             Binding *b = e->as.defer_.captures[i];
             TuriValue v = eval_lookup(env, frame, b->name->name);
-            frame_bind(snap, b->name->name, v);
+            frame_bind(env, snap, b->name->name, v);
         }
         DeferItem *item = (DeferItem *)malloc(sizeof(DeferItem));
         item->body     = e->as.defer_.body;
@@ -6775,10 +6776,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     /* (handler (E [params] k) body) — build a detached handler value (TI6). */
     case EX_HANDLER_LIT: {
         const HandleExpr *h = e->as.handler_lit_.handle;
-        TuriHandlerVal *hv = (TuriHandlerVal *)calloc(1, sizeof(TuriHandlerVal));
-        if (!hv) return turi_error("eval: out of memory (handler value)");
+        /* Escaping payload: a first-class handler value is returned; pool-owned. */
+        TuriHandlerVal *hv = (TuriHandlerVal *)turi_val_calloc(env, sizeof(TuriHandlerVal));
         if (h->n_cases > TURI_MAX_HANDLER_CASES) {
-            free(hv);
             return turi_errorf("eval: handler has too many cases (%u)", h->n_cases);
         }
         hv->n_cases = h->n_cases;
@@ -6798,8 +6798,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriHandlerVal *a = v1.as_handler, *b = v2.as_handler;
         if ((uint32_t)a->n_cases + b->n_cases > TURI_MAX_HANDLER_CASES)
             return turi_error("eval: composed handler has too many cases");
-        TuriHandlerVal *hv = (TuriHandlerVal *)calloc(1, sizeof(TuriHandlerVal));
-        if (!hv) return turi_error("eval: out of memory (composed handler)");
+        TuriHandlerVal *hv = (TuriHandlerVal *)turi_val_calloc(env, sizeof(TuriHandlerVal));
         for (uint8_t i = 0; i < a->n_cases; i++) hv->cases[hv->n_cases++] = a->cases[i];
         for (uint8_t i = 0; i < b->n_cases; i++) hv->cases[hv->n_cases++] = b->cases[i];
         return turi_handler_val(hv);
@@ -6957,8 +6956,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         }
 
         /* Allocate and initialise the fiber struct. */
-        TuriFiber *fiber = (TuriFiber *)calloc(1, sizeof(TuriFiber));
-        if (!fiber) { return turi_error("eval: out of memory (async fiber)"); }
+        /* Escaping payload: a fiber is linked into the scheduler/future and lives
+         * until env teardown; pool-owned (its stack stays mmap/malloc below). */
+        TuriFiber *fiber = (TuriFiber *)turi_val_calloc(env, sizeof(TuriFiber));
 
         fiber->own_future    = f;
         f->owner             = fiber;
@@ -6973,13 +6973,11 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                                     PROT_READ | PROT_WRITE,
                                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (fiber->stack == MAP_FAILED) {
-            free(fiber);
             return turi_error("eval: mmap failed for async fiber stack");
         }
 #else
         fiber->stack = (char *)malloc(TURI_ASYNC_STACK_SIZE);
         if (!fiber->stack) {
-            free(fiber);
             return turi_error("eval: malloc failed for async fiber stack");
         }
 #endif
@@ -7083,7 +7081,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             /* Found matching method. */
             if (mi >= inst->n_method_impls || !inst->method_impls[mi]) break;
             FnDef *impl = inst->method_impls[mi];
-            TuriClosure *cl = (TuriClosure *)malloc(sizeof(TuriClosure));
+            TuriClosure *cl = (TuriClosure *)turi_val_alloc(env, sizeof(TuriClosure));
             memset(cl, 0, sizeof(*cl));
             cl->fn       = impl;
             cl->captured = NULL;
@@ -7273,7 +7271,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
              * Result-box layout { is_ok, ok_val, err_val } that the native
              * ok/err/ok?/err? helpers produce and read, so the value composes
              * with ok?/err?/ok-val just like any other Result (Phase R2). */
-            return turi_ok_result_box(result.as_int);
+            return turi_ok_result_box(env, result.as_int);
         } else {
             /* A panic was caught — restore env and return (err payload).  TI5:
              * the err slot carries a boxed TuriPanicPayload so panic-payload-*
@@ -7315,7 +7313,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             env->catch_jmp = prev_jmp;
             if (turi_is_error(result) || env->returning || env->throwing || env->aborting)
                 return result;
-            return turi_ok_result_box(result.as_int);
+            return turi_ok_result_box(env, result.as_int);
         } else {
             /* A panic reached this boundary.  Restore the saved control state
              * (the payload fields in env still describe the in-flight panic). */
@@ -7386,13 +7384,13 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * that ref/from-rc's uniqueness check consults (see EX_REF_FROM_RC). */
         TuriValue v = eval_expr(env, frame, e->as.rc_of_.expr);
         if (turi_is_error(v) || env->returning || env->throwing || env->aborting) return v;
-        int64_t *cnt = (int64_t *)malloc(2 * sizeof(int64_t));
+        int64_t *cnt = (int64_t *)turi_val_alloc(env, 2 * sizeof(int64_t));
         cnt[0] = 1; /* strong */
         cnt[1] = 0; /* weak */
         TuriValue fields[2];
         fields[0] = turi_int((int64_t)(intptr_t)cnt); /* pointer-as-int */
         fields[1] = v;
-        return make_struct_val("__rc", 2, fields);
+        return make_struct_val(env, "__rc", 2, fields);
     }
     case EX_RC_CLONE: {
         if (e->as.rc_clone_.elide)
@@ -7510,7 +7508,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue _wuv = eval_expr(env, frame, e->as.weak_upgrade_.expr);
         if (turi_is_error(_wuv) || env->returning || env->throwing || env->aborting) return _wuv;
         /* In the interpreter all weak refs are always valid; wrap in some(value). */
-        return make_struct_val("some", 1, &_wuv);
+        return make_struct_val(env, "some", 1, &_wuv);
     }
     case EX_WEAK_PRED:
         return turi_bool(true);
@@ -7521,9 +7519,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_EXISTS_OPEN: {
         TuriValue packed = eval_expr(env, frame, e->as.exists_open_.packed);
         if (turi_is_error(packed) || env->returning || env->throwing || env->aborting) return packed;
-        EvalFrame *ef = eval_frame_new(frame);
+        EvalFrame *ef = eval_frame_new(env, frame);
         if (e->as.exists_open_.var_binding)
-            frame_bind(ef, e->as.exists_open_.var_binding->name->name, packed);
+            frame_bind(env, ef, e->as.exists_open_.var_binding->name->name, packed);
         TuriValue r = eval_expr(env, ef, e->as.exists_open_.body);
         eval_frame_free(ef);
         return r;
@@ -7586,7 +7584,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                                "method in class '%s'",
                                (tc && tc->name) ? tc->name->name : "?");
         }
-        TuriClosure *cl = (TuriClosure *)malloc(sizeof(TuriClosure));
+        TuriClosure *cl = (TuriClosure *)turi_val_alloc(env, sizeof(TuriClosure));
         memset(cl, 0, sizeof(*cl));
         cl->fn = match->method_impls[mi];
         cl->captured = NULL;
@@ -7685,14 +7683,15 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     /* (gen [] body) -- construct a lazy generator coroutine. */
     case EX_GEN: {
         const GenDef *def = e->as.gen_.def;
-        TuriGen *g = (TuriGen *)calloc(1, sizeof(TuriGen));
-        if (!g) return turi_error("eval: out of memory (generator)");
+        /* Escaping payload: a generator value is returned and may outlive the
+         * creating scope; pool-owned (its coroutine stack stays mmap/malloc). */
+        TuriGen *g = (TuriGen *)turi_val_calloc(env, sizeof(TuriGen));
         g->env     = env;
         g->body    = def->body;
         /* The body resolves its captures through a fresh child of the creating
          * frame; like a closure, this frame is intentionally not freed (the
          * generator may outlive the creating scope). */
-        g->frame   = eval_frame_new(frame);
+        g->frame   = eval_frame_new(env, frame);
         g->started = false;
         g->done    = false;
         return turi_gen_val(g);
@@ -7830,8 +7829,8 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_TVAR_NEW: {
         TuriValue init = eval_expr(env, frame, e->as.tvar_new_.init);
         if (turi_is_error(init) || env->returning || env->throwing || env->aborting) return init;
-        TuriTVar *tv = (TuriTVar *)calloc(1, sizeof(TuriTVar));
-        if (!tv) return turi_error("eval: tvar/new: out of memory");
+        /* Escaping payload: the tvar is returned as an int carrier; pool-owned. */
+        TuriTVar *tv = (TuriTVar *)turi_val_calloc(env, sizeof(TuriTVar));
         tv->value   = init.as_int;
         tv->version = 1;
         return turi_int((int64_t)(intptr_t)tv);

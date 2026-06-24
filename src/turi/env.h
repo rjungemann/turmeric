@@ -107,6 +107,13 @@ typedef struct TuriEnv {
     Buf         src_acc;         /* Accumulated prior source text */
     uint32_t    prior_toplevel;  /* Count of top-level exprs from prior evals */
     ArenaNode  *eval_arenas;     /* Linked list of per-call arenas (never freed) */
+    /* turi-env-owned-value-arena-pool-plan: a dedicated pool for TuriValue heap
+     * payloads (closures, structs, captured frames/bindings, cons cells, ...),
+     * distinct from eval_arenas (which holds AST/elaboration memory). Created in
+     * turi_env_new, reclaimed wholesale in turi_env_free, so an embedding host
+     * gets leak-clean teardown. Allocate from it via the turi_val_* helpers in
+     * value.h. The Arena chains its own slabs, so one is enough. */
+    Arena       value_arena;
     EnvBinding *globals;         /* Global name→TuriValue map (linked list) */
     bool        sandboxed;       /* Deprecated alias: true when caps == TURI_CAP_NONE */
     TuriCaps    caps;            /* SB4: capability bitmask (TURI_CAP_ALL = unrestricted) */
