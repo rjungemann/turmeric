@@ -2617,6 +2617,134 @@ CtorDef *elab_lookup_ctor(Elab *e, const Symbol *name) {
     return NULL;
 }
 
+/* CONV-S3: desugar `(match s (Struct f0 f1 ...) body)` into a sequential let
+ * over the existing field accessors and elaborate it.  `pat_idx` is the index
+ * of the sole arm's pattern in `call`; `sd` is the matched struct.  Returns the
+ * elaborated let, or NULL after emitting a diagnostic. */
+static Expr *elab_struct_match_desugar(Elab *e, const Form *call,
+                                       uint32_t pat_idx, bool has_guard,
+                                       StructDef *sd) {
+    Form *pat_form = call->as.list.items[pat_idx];
+    if (has_guard) {
+        diag_emit(DIAG_ERROR, pat_form->span,
+                  "match on struct '%s': when-guards are not supported in a "
+                  "single-variant struct match", sd->name);
+        return NULL;
+    }
+    Form *body_form = call->as.list.items[pat_idx + 1];
+    Form *scrut_form = call->as.list.items[1];
+
+    /* Resolve one binding-variable form per struct field (or NULL = ignore). */
+    Form **field_vars = (Form **)arena_alloc(e->arena,
+                            (sd->n_fields ? sd->n_fields : 1) * sizeof(Form *));
+    for (uint32_t i = 0; i < sd->n_fields; i++) field_vars[i] = NULL;
+
+    uint32_t n_items = pat_form->as.list.len - 1; /* exclude struct name head */
+    bool by_name = (n_items >= 1 && pat_form->as.list.items[1]->tag == F_KEYWORD);
+
+    if (by_name) {
+        if (n_items % 2 != 0) {
+            diag_emit(DIAG_ERROR, pat_form->span,
+                      "match on struct '%s': by-name pattern must be "
+                      ":field var pairs", sd->name);
+            return NULL;
+        }
+        for (uint32_t pi = 0; pi < n_items / 2; pi++) {
+            Form *kw = pat_form->as.list.items[1 + pi * 2];
+            Form *var = pat_form->as.list.items[2 + pi * 2];
+            if (kw->tag != F_KEYWORD || var->tag != F_SYM) {
+                diag_emit(DIAG_ERROR, kw->span,
+                          "match on struct '%s': by-name pattern must be "
+                          ":field var pairs", sd->name);
+                return NULL;
+            }
+            int fidx = -1;
+            for (uint32_t i = 0; i < sd->n_fields; i++) {
+                if (sd->fields[i].name &&
+                    strcmp(sd->fields[i].name, kw->as.sym->name) == 0) {
+                    fidx = (int)i; break;
+                }
+            }
+            if (fidx < 0) {
+                diag_emit(DIAG_ERROR, kw->span,
+                          "match on struct '%s': no field '%s'",
+                          sd->name, kw->as.sym->name);
+                return NULL;
+            }
+            if (field_vars[fidx]) {
+                diag_emit(DIAG_ERROR, kw->span,
+                          "match on struct '%s': field '%s' bound more than once",
+                          sd->name, kw->as.sym->name);
+                return NULL;
+            }
+            field_vars[fidx] = var;
+        }
+    } else {
+        if (n_items != sd->n_fields) {
+            diag_emit(DIAG_ERROR, pat_form->span,
+                      "match on struct '%s' expects %u field(s), got %u",
+                      sd->name, sd->n_fields, n_items);
+            return NULL;
+        }
+        for (uint32_t i = 0; i < sd->n_fields; i++)
+            field_vars[i] = pat_form->as.list.items[1 + i];
+    }
+
+    /* Receiver for the field reads.  When the scrutinee is already a bare
+     * variable we read fields directly off it (field projection is a borrow,
+     * not a move, so multiple reads are fine) -- this avoids copying the struct
+     * into a temp, which the by-pointer struct ABI does not support in a let
+     * binder.  For a compound scrutinee we bind it to a fresh temp so it is
+     * evaluated exactly once. */
+    bool scrut_is_var = (scrut_form->tag == F_SYM);
+    Form *recv_form = scrut_form;
+    const Symbol *wildcard = intern_cstr(e->st, "_");
+    uint32_t cap = 2 + sd->n_fields * 2;
+    Form **bind_items = (Form **)arena_alloc(e->arena, cap * sizeof(Form *));
+    uint32_t bn = 0;
+    if (!scrut_is_var) {
+        char gbuf[64];
+        snprintf(gbuf, sizeof(gbuf), "__tur_smatch_%u", e->next_gensym_id++);
+        const Symbol *g_sym = symtab_intern(e->st, strslice(gbuf, (uint32_t)strlen(gbuf)));
+        recv_form = form_sym(e->arena, pat_form->span, g_sym);
+        bind_items[bn++] = recv_form;
+        bind_items[bn++] = scrut_form;
+    }
+    for (uint32_t i = 0; i < sd->n_fields; i++) {
+        Form *var = field_vars[i];
+        if (!var || (var->tag == F_SYM && var->as.sym == wildcard)) continue;
+        char dotbuf[160];
+        int dl = snprintf(dotbuf, sizeof(dotbuf), ".%s", sd->fields[i].name);
+        if (dl <= 0 || (size_t)dl >= sizeof(dotbuf)) {
+            diag_emit(DIAG_ERROR, pat_form->span,
+                      "match on struct '%s': field name too long", sd->name);
+            return NULL;
+        }
+        const Symbol *dot_sym = symtab_intern(e->st, strslice(dotbuf, (uint32_t)dl));
+        Form *acc_items[2];
+        acc_items[0] = form_sym(e->arena, pat_form->span, dot_sym);
+        acc_items[1] = recv_form;
+        Form *acc = form_list(e->arena, pat_form->span, acc_items, 2);
+        bind_items[bn++] = var;
+        bind_items[bn++] = acc;
+    }
+
+    /* A struct match that binds no fields (e.g. all `_`) still must elaborate
+     * the body; with a bare-var scrutinee there are zero bindings, so emit a
+     * trivial `(let [] body)` -- or just the body.  An empty let vector is
+     * valid. */
+    Form *bind_vec = form_vec(e->arena, pat_form->span, bind_items, bn);
+
+    /* (let <bind_vec> body) */
+    const Symbol *let_sym = intern_cstr(e->st, "let");
+    Form *let_items[3];
+    let_items[0] = form_sym(e->arena, call->span, let_sym);
+    let_items[1] = bind_vec;
+    let_items[2] = body_form;
+    Form *let_form = form_list(e->arena, call->span, let_items, 3);
+    return elab_form(e, let_form);
+}
+
 /* Phase G0: match expression
  * Syntax: (match scrutinee
  *   (Ctor1 x y) body1
@@ -2707,6 +2835,33 @@ Expr *elab_match(Elab *e, const Form *call) {
         diag_emit(DIAG_ERROR, call->span,
                   "match requires at least one arm: (match scrutinee pattern body)");
         return NULL;
+    }
+
+    /* CONV-S3 (struct/ADT convergence): `match` on a struct value.
+     * A struct is the single-variant case of a tagged union, so
+     * `(match s (Person name age) body)` is trivially exhaustive.  We detect
+     * it syntactically -- the sole arm's pattern head names a struct type --
+     * and desugar to a `let` over the existing field accessors, reusing all
+     * struct field-access codegen and exhaustiveness-by-construction.  The
+     * scrutinee is elaborated exactly once (inside the generated let), so move
+     * and linear tracking are unaffected.  Positional `(Person name age)` and
+     * by-name `(Person :name n :age a)` binding are both accepted. */
+    if (n_arms == 1) {
+        Form *pat0 = call->as.list.items[arm_start[0]];
+        if (pat0->tag == F_LIST && pat0->as.list.len >= 1 &&
+            pat0->as.list.items[0]->tag == F_SYM &&
+            !elab_lookup_ctor(e, pat0->as.list.items[0]->as.sym)) {
+            const Symbol *head_sym = pat0->as.list.items[0]->as.sym;
+            Binding *tb = scope_lookup_type_def(e->scope, head_sym);
+            if (tb && tb->type.kind == TY_STRUCT && tb->type.as.struct_.def) {
+                Expr *de = elab_struct_match_desugar(e, call, arm_start[0],
+                                                     arm_has_guard[0],
+                                                     tb->type.as.struct_.def);
+                if (de) return de;
+                /* de == NULL: a diagnostic was already emitted -> propagate. */
+                return NULL;
+            }
+        }
     }
 
     /* Elaborate scrutinee */

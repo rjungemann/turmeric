@@ -1,0 +1,7 @@
+;; CONV-S3: a positional struct-match pattern must list every field.
+(defstruct Person :copy [name : cstr age : int])
+(defn main [] : int
+  (let [p (make-struct Person "Bob" 40)]
+    (match p
+      (Person name) (println name))
+    0))

@@ -1,0 +1,29 @@
+;; CONV-S3 (struct/ADT convergence): `match` accepts a struct value because a
+;; struct is the single-variant case of a tagged union.  The sole-variant name
+;; is the struct name; binding works positionally, by name, and with `_` to
+;; ignore a field.  Single-variant matches are trivially exhaustive.
+
+(defstruct Person :copy [name : cstr age : int])
+(defstruct Triple :copy [a : int b : int c : int])
+
+(defn show-person [p : Person] : int
+  (match p
+    (Person name age)
+      (do (println name) age)))
+
+(defn show-by-name [p : Person] : int
+  (match p
+    (Person :age a :name n)
+      (do (println n) a)))
+
+(defn ac-sum [t : Triple] : int
+  (match t
+    (Triple a _ c) (+ a c)))     ; ignore the middle field
+
+(defn main [] : int
+  (let [p (make-struct Person "Ada" 36)
+        t (make-struct Triple 10 20 30)]
+    (println (show-person p))
+    (println (show-by-name p))
+    (println (ac-sum t))
+    0))
