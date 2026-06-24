@@ -2140,11 +2140,22 @@ Expr *elab_call(Elab *e, Form *call) {
              * registered in TuriEnv (e.g. async scheduler functions) are
              * callable without a compile-time declaration.
              * The binding is NOT added to any scope so future lookups don't
-             * find a TYPE_INT entry and route through elab_call_fn. */
-            Binding *dyn_b = binding_new(e, name, TYPE_INT, false, false, head->span);
-            Expr *var_expr = expr_new(e->arena, EX_VAR, TYPE_INT, head->span);
+             * find a TYPE_INT entry and route through elab_call_fn.
+             *
+             * Known interpreter natives whose return type is not :int get
+             * explicit typing here so callers (e.g. `(if (error? r) ...)`)
+             * see the right type at the call site.  Add new entries
+             * sparingly -- a stdlib declaration is preferred when one fits. */
+            Type dispatch_result = TYPE_INT;
+            const char *nm = name->name;
+            if (nm) {
+                if      (strcmp(nm, "error?") == 0)        dispatch_result = TYPE_BOOL;
+                else if (strcmp(nm, "error-message") == 0) dispatch_result = TYPE_CSTR;
+            }
+            Binding *dyn_b = binding_new(e, name, dispatch_result, false, false, head->span);
+            Expr *var_expr = expr_new(e->arena, EX_VAR, dispatch_result, head->span);
             var_expr->as.var.binding = dyn_b;
-            Expr *out = expr_new(e->arena, EX_CALL, TYPE_INT, call->span);
+            Expr *out = expr_new(e->arena, EX_CALL, dispatch_result, call->span);
             out->as.call_.fn_binding = NULL;
             out->as.call_.fn_expr    = var_expr;
             out->as.call_.args       = args;

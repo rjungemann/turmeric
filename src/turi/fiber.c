@@ -300,7 +300,7 @@ void turi_task_cancel(TuriEnv *env, TuriFuture *f) {
     if (!f) return;
     TuriFiber *owner = f->owner;
     if (owner) owner->cancelled = true;
-    turi_future_reject(env, f, turi_error("task cancelled"));
+    turi_future_reject(env, f, turi_rejection("task cancelled"));
 }
 
 bool turi_fiber_is_cancelled(TuriEnv *env) {
@@ -315,9 +315,13 @@ TuriValue turi_await_future(TuriEnv *env, TuriFuture *f) {
     /* If already settled, return immediately. */
     if (f->state == TURI_FUTURE_RESOLVED) return f->result;
     if (f->state == TURI_FUTURE_REJECTED) {
-        /* Re-raise the error: either it's a TURI_ERROR or we wrap it. */
-        if (turi_is_error(f->result)) return f->result;
-        return turi_errorf("async task rejected");
+        /* Surface as a TURI_REJECTION value the caller can observe via
+         * (error? r) -- distinct from TURI_ERROR so binding it does not
+         * trigger the interpreter's universal error short-circuit. */
+        if (turi_is_rejection(f->result)) return f->result;
+        if (turi_is_error(f->result))
+            return turi_rejection(turi_error_message(f->result));
+        return turi_rejection("async task rejected");
     }
 
     /* Run event loop until the future settles. */
@@ -358,18 +362,13 @@ TuriValue turi_await_future(TuriEnv *env, TuriFuture *f) {
     }
 
     if (f->state == TURI_FUTURE_RESOLVED) return f->result;
-    /* Rejected: re-throw so try/catch can catch it. */
-    if (f->result.tag == TURI_THROW) {
-        env->throwing    = true;
-        env->throw_value = f->result;
-        return f->result;
-    }
-    if (turi_is_error(f->result)) {
-        turi_native_throw(env, turi_error_message(f->result));
-        return env->throw_value;
-    }
-    turi_native_throw(env, "async task rejected");
-    return env->throw_value;
+    /* Rejected mid-event-loop: mirror the entry-rejection branch above and
+     * surface a TURI_REJECTION value -- callers observe via (error? r) /
+     * (error-message r).  No throw channel. */
+    if (turi_is_rejection(f->result)) return f->result;
+    if (turi_is_error(f->result))
+        return turi_rejection(turi_error_message(f->result));
+    return turi_rejection("async task rejected");
 }
 
 /* -------------------------------------------------------------------------
@@ -417,9 +416,10 @@ void turi_run_event_loop(TuriEnv *env) {
     for (TuriFuture *f = env->all_futures; f; f = f->next_alloc) {
         if (f->state == TURI_FUTURE_REJECTED && !f->reported && !f->wakers) {
             f->reported = true;
-            fprintf(stderr, "warning: unhandled async task error: %s\n",
-                    turi_is_error(f->result) ? turi_error_message(f->result)
-                                             : "<rejected>");
+            const char *msg = "<rejected>";
+            if (turi_is_rejection(f->result) || turi_is_error(f->result))
+                msg = f->result.as_error ? f->result.as_error : msg;
+            fprintf(stderr, "warning: unhandled async task error: %s\n", msg);
         }
     }
 }
@@ -549,10 +549,10 @@ static TuriValue native_with_timeout(TuriEnv *env, TuriValue *args, uint32_t n,
         if (turi_is_error(task->result)) return task->result;
         return turi_error("async task rejected");
     }
-    /* Timer fired first: cancel the timed-out task, then throw timeout. */
+    /* Timer fired first: cancel the timed-out task, then surface a
+     * TURI_REJECTION("timeout") -- callers observe via (error? r). */
     turi_task_cancel(env, task);
-    turi_native_throw(env, "timeout");
-    return turi_nil();
+    return turi_rejection("timeout");
 }
 
 /* task-cancelled? : () -> bool */

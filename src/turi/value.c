@@ -20,6 +20,10 @@ TuriValue turi_errorf(const char *fmt, ...) {
     return (TuriValue){TURI_ERROR, .as_error = strdup(buf)};
 }
 
+TuriValue turi_rejection(const char *msg) {
+    return (TuriValue){TURI_REJECTION, .as_error = strdup(msg ? msg : "")};
+}
+
 void turi_print_value(FILE *out, TuriValue v) {
     switch (v.tag) {
     case TURI_NIL:
@@ -68,6 +72,9 @@ void turi_print_value(FILE *out, TuriValue v) {
         break;
     case TURI_HANDLER:
         fprintf(out, "#<handler>");
+        break;
+    case TURI_REJECTION:
+        fprintf(out, "#<rejection: %s>", v.as_error ? v.as_error : "");
         break;
     }
 }

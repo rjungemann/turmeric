@@ -3,6 +3,10 @@
 ;;   slept
 ;;   42
 ;;   timeout
+;;
+;; Post DEPR-R0 (throw-deprecation-plan): with-timeout returns a
+;; TURI_ERROR("timeout") on timer-first instead of throwing; callers
+;; observe via (error? r) / (error-message r).
 
 ;; --- Test 1: sleep-async suspends and resumes after delay -----------------
 (await (sleep-async 20))
@@ -18,8 +22,7 @@
 ;; --- Test 3: with-timeout fires when task takes too long -----------------
 ;; (We simulate a slow task with a long sleep-async; timeout fires first.)
 (let [slow-task (async (fn [] :int (do (await (sleep-async 5000)) 99)))]
-  (try
-    (let [result (with-timeout 50 slow-task)]
-      (println "should-not-reach"))
-    (catch [e]
-      (println "timeout"))))
+  (let [result (with-timeout 50 slow-task)]
+    (if (error? result)
+      (println (error-message result))
+      (println "should-not-reach"))))

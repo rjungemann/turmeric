@@ -32,6 +32,13 @@ typedef enum TuriTag {
     TURI_STRUCT_TYPE,    /* struct type descriptor: as_cstr holds the name */
     TURI_GEN,            /* generator instance: TuriGen* (Phase TI2) */
     TURI_HANDLER,        /* first-class handler value: TuriHandlerVal* (TI6) */
+    TURI_REJECTION,      /* async-task rejection: as_error holds message.
+                          * Distinct from TURI_ERROR so the universal
+                          * turi_is_error short-circuit does NOT propagate
+                          * a rejected future value out of `(let [r (await
+                          * ...)] ...)` -- callers observe it via (error?
+                          * r) / (error-message r) and keep evaluating.
+                          * (DEPR-R0; throw-deprecation-plan) */
 } TuriTag;
 
 typedef struct TuriValue {
@@ -86,8 +93,13 @@ static inline bool turi_is_throw(TuriValue v) { return v.tag == TURI_THROW; }
 TuriValue turi_error(const char *msg);
 TuriValue turi_errorf(const char *fmt, ...);
 
+/* Create a rejection value (message is strdup'd).  Distinct from
+ * turi_error so the interpreter does not short-circuit through it. */
+TuriValue turi_rejection(const char *msg);
+
 /* Predicates */
 static inline bool turi_is_error(TuriValue v)   { return v.tag == TURI_ERROR; }
+static inline bool turi_is_rejection(TuriValue v) { return v.tag == TURI_REJECTION; }
 
 /* A value is truthy if it is not nil and not false */
 static inline bool turi_is_truthy(TuriValue v) {

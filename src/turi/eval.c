@@ -156,6 +156,35 @@ static TuriValue native_gen_none(TuriEnv *env, TuriValue *args, uint32_t n, void
     return turi_int(0);
 }
 
+/* (error msg) -- construct a TURI_REJECTION value.  Surfaces async-task
+ * rejections without going through the deprecated (throw ...) form.  Distinct
+ * from TURI_ERROR so the interpreter's universal turi_is_error short-circuit
+ * does NOT propagate the value out of `(let [r (await ...)] ...)` -- callers
+ * keep evaluating and observe the rejection via (error? r). */
+static TuriValue native_error_ctor(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_rejection("<error>");
+    if (args[0].tag == TURI_CSTR)      return turi_rejection(args[0].as_cstr ? args[0].as_cstr : "<error>");
+    if (args[0].tag == TURI_REJECTION) return args[0];
+    if (args[0].tag == TURI_ERROR)     return turi_rejection(args[0].as_error ? args[0].as_error : "<error>");
+    return turi_rejection("<error>");
+}
+
+/* (error? v) -- true if v is a rejection value. */
+static TuriValue native_error_pred(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_bool(false);
+    return turi_bool(args[0].tag == TURI_REJECTION);
+}
+
+/* (error-message v) -- extract the message from a rejection value, or "" if
+ * the value is not a rejection. */
+static TuriValue native_error_message(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || args[0].tag != TURI_REJECTION) return turi_cstr("");
+    return turi_cstr(args[0].as_error ? args[0].as_error : "");
+}
+
 /* Register eval-layer native builtins (struct-aware predicates, etc.).
  * Called from turi_env_new after async builtins are registered. */
 void turi_eval_register_builtins(TuriEnv *env) {
@@ -169,6 +198,11 @@ void turi_eval_register_builtins(TuriEnv *env) {
     turi_env_register_native(env, "gen-some?",  native_gen_some,   NULL);
     turi_env_register_native(env, "gen-unwrap", native_gen_unwrap, NULL);
     turi_env_register_native(env, "gen-none",   native_gen_none,   NULL);
+    /* Error-value primitives: build/inspect TURI_ERROR values without going
+     * through the deprecated (throw ...) channel. */
+    turi_env_register_native(env, "error",         native_error_ctor,    NULL);
+    turi_env_register_native(env, "error?",        native_error_pred,    NULL);
+    turi_env_register_native(env, "error-message", native_error_message, NULL);
 }
 
 /* -------------------------------------------------------------------------
@@ -196,12 +230,13 @@ static void async_fiber_thunk(void) {
     /* Settle the fiber's own future. */
     if (fiber->cancelled) {
         turi_future_reject(env, fiber->own_future,
-                           turi_error("task cancelled"));
+                           turi_rejection("task cancelled"));
     } else if (env->throwing) {
         TuriValue err = env->throw_value;
         env->throwing = false;
         turi_future_reject(env, fiber->own_future, err);
-    } else if (turi_is_error(result)) {
+    } else if (turi_is_rejection(result) || turi_is_error(result)) {
+        /* (error "boom") in the async body -- DEPR-R0. */
         turi_future_reject(env, fiber->own_future, result);
     } else {
         if (env->returning) {
@@ -7071,20 +7106,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
         TuriFuture *f = fv.as_future;
 
-        /* Already settled? */
+        /* Already settled?  DEPR-R0 (throw-deprecation-plan): surface
+         * rejections as TURI_REJECTION values rather than throwing. */
         if (f->state == TURI_FUTURE_RESOLVED) return f->result;
         if (f->state == TURI_FUTURE_REJECTED) {
-            if (f->result.tag == TURI_THROW) {
-                env->throwing    = true;
-                env->throw_value = f->result;
-                return f->result;
-            }
-            if (turi_is_error(f->result)) {
-                env->throwing    = true;
-                env->throw_value = make_throw_val(f->result, TY_UNKNOWN);
-                return env->throw_value;
-            }
-            return turi_error("eval: await: future rejected");
+            if (turi_is_rejection(f->result)) return f->result;
+            if (turi_is_error(f->result))
+                return turi_rejection(turi_error_message(f->result));
+            return turi_rejection("future rejected");
         }
 
         /* Pending: check if we are inside an async fiber. */
@@ -7102,20 +7131,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 #if defined(__APPLE__)
 #  pragma clang diagnostic pop
 #endif
-            /* Resumed: future has settled. */
+            /* Resumed: future has settled.  DEPR-R0: see the already-
+             * settled branch above; same rejection surfacing here. */
             if (f->state == TURI_FUTURE_RESOLVED) return f->result;
             if (f->state == TURI_FUTURE_REJECTED) {
-                if (f->result.tag == TURI_THROW) {
-                    env->throwing    = true;
-                    env->throw_value = f->result;
-                    return f->result;
-                }
-                if (turi_is_error(f->result)) {
-                    env->throwing    = true;
-                    env->throw_value = make_throw_val(f->result, TY_UNKNOWN);
-                    return env->throw_value;
-                }
-                return turi_error("eval: await: future rejected");
+                if (turi_is_rejection(f->result)) return f->result;
+                if (turi_is_error(f->result))
+                    return turi_rejection(turi_error_message(f->result));
+                return turi_rejection("future rejected");
             }
             return turi_error("eval: await: unexpected future state");
         } else {
@@ -8487,6 +8510,9 @@ static void turi_value_repr_d(char *buf, size_t cap, TuriValue v, int depth) {
         break;
     case TURI_HANDLER:
         snprintf(buf, cap, "#<handler>");
+        break;
+    case TURI_REJECTION:
+        snprintf(buf, cap, "#<rejection: %s>", v.as_error ? v.as_error : "");
         break;
     }
 }

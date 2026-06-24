@@ -1,20 +1,25 @@
-;; Phase S7: exception propagation through async boundaries.
+;; Phase S7: error propagation through async boundaries.
 ;; Expected stdout:
-;;   caught: boom
+;;   caught:
+;;   boom
 ;;   42
+;;
+;; Post DEPR-R0 (throw-deprecation-plan): async-body errors surface as
+;; TURI_ERROR values that the awaiter observes via (error? r) /
+;; (error-message r) -- no (throw)/(try)/(catch) involved.
 
-;; --- Test 1: exception in async body propagates through await -------------
-(try
-  (await (async (fn [] :int (throw "boom"))))
-  (catch [e :cstr]
-    (do (println "caught:") (println e))))
+;; --- Test 1: error in async body propagates through await ------------------
+(let [r (await (async (fn [] :int (error "boom"))))]
+  (if (error? r)
+    (do (println "caught:") (println (error-message r)))
+    (println r)))
 
 ;; --- Test 2: successful async task prints its value -----------------------
 (defn might-fail [fail :bool] :int
-  (if fail (throw "error") 42))
+  (if fail (error "error") 42))
 
 (let [task (async (fn [] :int (might-fail false)))]
-  (try
-    (println (await task))
-    (catch [e :cstr]
-      (println "unexpected-error"))))
+  (let [r (await task)]
+    (if (error? r)
+      (println "unexpected-error")
+      (println r))))
