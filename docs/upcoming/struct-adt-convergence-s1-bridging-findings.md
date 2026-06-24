@@ -253,9 +253,70 @@ be made consistent.
    untouched and stays B4's concern.
 4. **B4 -- reconcile with M7 by-value HKT.** Bring the recursive/HKT carriers
    (`Re`, `Expr`) onto the unified by-value path without double-handling.
-5. **CONV-S1 proper -- lower `defstruct` to `defadt`.** Only after B1-B4 is the
-   representation byte-identical enough to make the lowering a true no-op; then
-   regenerate the ~57 `defdata` snapshots in the same change.
+   **INVESTIGATED; NOT LANDED -- deliberately deferred (suite stays green on the
+   B3 leaf gate).** Widening the gate to the full predicate (`adt_is_flat_product
+   && n_type_params == 0`, i.e. admitting the recursive non-parametric `Re`/`Expr`)
+   was spiked. With B3's crossings in place it produces **exactly one crossing**,
+   9 identical `cc` errors, all of the form:
+
+   ```c
+   ctor_AltF__int(((int64_t (*)(void*, tur_adt_Re))g.fn)(g.env, x_1263), ...)
+   //                              ^^^^^^^^^^ expects by-value Re; x_1263 is int64
+   ```
+
+   A user closure `g : (fn [Re] B)` is invoked inside a generic `fmap` spec
+   through the fat-closure ABI; the closure's fat function-pointer cast now spells
+   the param `tur_adt_Re` (by-value), but the carrier `fmap` spec hands it the
+   int64 the parametric `ReF` field stores. This is the closure/HKT crossing
+   (Crossing 3) and it lands squarely in the **M7 by-value-HKT machinery**, which
+   the emitted C shows is genuinely multi-representation:
+   - `ctor_AltF` (carrier int64 fields), `ctor_AltF__Re(tur_adt_Re, tur_adt_Re)`
+     (a by-value monomorphisation), plus `__int` / `__bool` / `__float` specs;
+   - a `tur_adt_ReF__Re` typedef that stores `Re` **inline by value**, alongside
+     the carrier `ReF` whose `a` field is int64;
+   - multiple `fmap` specs that disagree on the field representation -- one casts
+     the closure to `(void*, int64_t)` (fine), another to `(void*, tur_adt_Re)`
+     (the break).
+
+   **Why no localized bridge was forced.** The "obvious" fix -- unbox `x_1263`
+   (`*(tur_adt_Re *)(intptr_t)x_1263`) at the fat-closure application
+   (`emit_expr.c` phase-F-concrete path, ~2402) -- is only correct if that int64
+   is a heap-boxed `Re`, which depends on *which* `ReF` spec feeds the value; the
+   `ReF__Re` path stores `Re` inline (no box) while the carrier path boxes. Guessing
+   wrong dereferences a non-pointer. The codebase already records a prior
+   wild-pointer deref at this very application site from exactly this class of
+   carrier->concrete assumption (`emit_expr.c:2397-2400`). Forcing a bridge here
+   would trade a `cc` error for a latent segfault.
+
+   **Recommended path (concrete hypothesis for the next session).** B4 is not a
+   localized bridge; it requires M7 to commit to a *single* representation for a
+   parametric-ADT field instantiated at a by-value ADT (`a = Re` inside `ReF`).
+   The most promising direction: make the **fat-closure ABI carry a by-value-ADT
+   parameter as the int64 carrier uniformly** -- box at closure creation / arg
+   pass, unbox at thunk entry -- so the cast is always `(void*, int64_t)` and the
+   `ReF__Re` inline-storage path and the carrier `ReF` path agree on a boxed `Re`.
+   That is an M7-owned change and should be sequenced with (or after) M7's
+   by-value-HKT graduation, not bolted on underneath it.
+
+   **Boundary decision.** Until then the **B3 leaf gate is the principled CONV-S1
+   boundary**: aggregate-bearing / recursive products keep the carrier ABI. This
+   does not block "CONV-S1 proper" (below): a real `defstruct` never has a
+   functor-applied-to-self field (`(ExprF Expr)`) -- recursive structs reference
+   themselves through `rc<Self>` / `ref<Self>` pointer fields, which are carriers,
+   not inline aggregates -- so `defstruct -> defadt` lowering targets exactly the
+   leaf-and-pointer-field products the gate already flips. B4 widens coverage to
+   the HKT fixed-point fixtures; it is not a prerequisite for lowering real
+   structs.
+5. **CONV-S1 proper -- lower `defstruct` to `defadt`.** The lowering needs the
+   representation byte-identical for the products a `defstruct` actually produces
+   -- single-variant, non-GADT, non-parametric, fields scalar or pointer
+   (`rc`/`ref`/`ptr`) or nested struct/ADT. Per the B4 boundary decision this is
+   the **leaf-and-pointer-field** subset the B3 gate already flips (extended to
+   pointer/rc fields as needed); B4 (HKT fixed-points) is NOT a prerequisite,
+   since `defstruct` cannot express a functor-applied-to-self field. Sequence:
+   extend the gate to admit pointer/`rc`/`ref` fields (verify green), then lower
+   `defstruct` to `defadt` and regenerate the ~57 `defdata` snapshots in the same
+   change.
 
 Each of B1-B4 is independently testable and keeps `bash tests/run.sh`
 (timeout 600000) green; the gate flip (B3) is the only step that should move any
