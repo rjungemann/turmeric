@@ -6,6 +6,34 @@ description: Eliminate the last source of unbounded C recursion in the tree-walk
 
 # Turi stackless native re-entry (full CEK / driver-CPS) -- Plan
 
+## Status update -- 2026-06-24 (N4 Slice 7 -- is_pure capture fold on the work-stack)
+
+**The in-capture `is_pure` fold now runs on the work-stack -- every natural
+delimited-control recursion is heap-bounded.** Seventh slice.
+
+`TsDeferredReceiver` gained an `is_fold` mode. When a capturing reset's body
+takes a pure (non-shift) arm at runtime, `ts_capture_and_run` (driver caller)
+now hands back the reified context + pure value instead of folding it
+synchronously; the driver pushes a `DK_NATIVE_RESUME` (to free the capture
+let-frames afterward) and folds via `DK_CONT_FOLD`. So a context call frame that
+recursively triggers another capturing reset folds onto the heap.
+
+**Audit: all seven delimited-control recursion shapes run at 300000
+heap-bounded** -- `reset`/`shift`, `call/cc`, serial/cloneable reset, capturing
+receiver, `(k v)` resume, `resume-cont!`, and the `is_pure` fold -- none trip the
+guard (each was recursion-limit at ~500 before its slice). New `tur_eval_tco`
+regression `ip-go 200000`. `bash tests/run.sh` (1783/0), eval/effects/
+continuation/tco ctests (14/14), `eval-tco` (17/17), `run-turi` baseline (23).
+
+**Guard retirement (N4 proper) -- remaining check.** No *driver-reached*
+delimited-control form re-enters synchronously now. The residual synchronous
+re-entries are the non-driver `eval_expr` paths (`eval_abortive_shift`,
+`eval_callcc_escape`, `ts_capture_and_run(deferred=NULL)`, `is_pure`
+`ts_cont_resume`) reached only when a control form sits inside an `eval_expr`
+black box, plus the bounded single re-entries (Show, sync `tvar/modify`, embedder
+`turi_call`). Whether any of those can be driven to scale C-stack depth is the
+last thing to settle before deleting the `eval_depth` guard.
+
 ## Status update -- 2026-06-24 (N4 Slice 6 -- resume-cont! folds on the work-stack)
 
 **`resume-cont!` (the workflow save/resume native) now folds on the work-stack

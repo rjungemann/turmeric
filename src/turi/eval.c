@@ -1722,11 +1722,14 @@ static TuriValue ts_not_capturable(bool serial, Span span) {
  * the receiver via DK_NATIVE_RESUME (serial_receiver_resume frees the frames).
  * NULL `deferred` keeps the synchronous behaviour for non-driver callers. */
 typedef struct {
-    bool        active;       /* set when the receiver application was deferred */
+    bool        active;       /* set when work was deferred to the driver */
+    bool        is_fold;      /* true = is_pure fold (apply context to fold_w);
+                               * false = apply the shift receiver to `cont` */
+    int64_t     fold_w;       /* is_fold: the pure terminal value to resume with */
     TuriCont   *cont;         /* the reified continuation handle */
-    TuriValue   receiver;     /* the shift receiver closure */
+    TuriValue   receiver;     /* the shift receiver closure (when !is_fold) */
     EvalFrame **let_frames;   /* heap copy of capture-time let frames (or NULL) */
-    uint32_t    n_let;        /* freed after the receiver runs */
+    uint32_t    n_let;        /* freed after the deferred work runs */
 } TsDeferredReceiver;
 
 /* Evaluate (serial-reset BODY) / (cloneable-reset BODY) when BODY performs the
@@ -1927,6 +1930,29 @@ static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
         if (is_pure) {
             if (n == 0 || pure_val.tag != TURI_INT) {
                 result = pure_val;   /* empty context, or non-int passthrough */
+            } else if (deferred) {
+                /* SR N4 Slice 7: defer the is_pure fold (apply the reified
+                 * context to pure_val) to the driver's DK_CONT_FOLD, so a
+                 * context call frame that recursively triggers another capturing
+                 * reset folds onto the heap.  Same let-frame ownership transfer
+                 * as the receiver case (a captured frame fn may close over one). */
+                TuriCont *hc = (TuriCont *)malloc(sizeof(TuriCont));
+                hc->n = n; hc->serial = serial;
+                hc->frames = (TsFrame *)malloc(sizeof(TsFrame) * (n ? n : 1));
+                if (n) memcpy(hc->frames, frames, sizeof(TsFrame) * n);
+                deferred->active   = true;
+                deferred->is_fold  = true;
+                deferred->fold_w   = pure_val.as_int;
+                deferred->cont     = hc;
+                deferred->n_let    = n_let;
+                deferred->let_frames = NULL;
+                if (n_let) {
+                    deferred->let_frames =
+                        (EvalFrame **)malloc(n_let * sizeof(EvalFrame *));
+                    memcpy(deferred->let_frames, let_frames,
+                           n_let * sizeof(EvalFrame *));
+                }
+                return turi_nil();   /* sentinel; caller checks deferred->active */
             } else {
                 TuriCont c = { frames, n, serial };
                 result = ts_cont_resume(env, &c, pure_val.as_int);
@@ -5453,16 +5479,33 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                      * the shift receiver on the work-stack so a receiver that
                      * recursively triggers another capturing reset folds onto the
                      * heap instead of C-recursing through turi_call. */
-                    TsDeferredReceiver d; d.active = false;
+                    TsDeferredReceiver d; d.active = false; d.is_fold = false;
                     TuriValue rv = ts_capture_and_run(env, cf, body, sk,
                                                       /*serial=*/!is_clone, &d);
                     if (!d.active) { cur = rv; descending = false; break; }
+                    /* Free the capture let-frames after the deferred work runs
+                     * (a captured frame fn / the receiver may close over one), so
+                     * push a DK_NATIVE_RESUME beneath that frees them and passes
+                     * the value through. */
                     SerialReceiverState *s =
                         (SerialReceiverState *)malloc(sizeof(SerialReceiverState));
                     s->let_frames = d.let_frames; s->n_let = d.n_let;
                     NativeResume *nr = (NativeResume *)malloc(sizeof(NativeResume));
                     nr->resume = serial_receiver_resume; nr->state = s;
                     DRIVE_PUSH(((DriveCont){ .kind = DK_NATIVE_RESUME, .aux = nr }));
+                    if (d.is_fold) {
+                        /* SR N4 Slice 7: is_pure -- fold the reified context over
+                         * the pure value on the work-stack (DK_CONT_FOLD). */
+                        ContFoldState *fs; TuriValue val, ffn, *fargs; uint32_t fn_n;
+                        int rc = cont_fold_begin(d.cont, d.fold_w, &fs, &val,
+                                                 &ffn, &fargs, &fn_n);
+                        if (rc != 1) { cur = val; descending = false; break; }
+                        DRIVE_PUSH(((DriveCont){ .kind = DK_CONT_FOLD, .aux = fs }));
+                        apply_fn = ffn; apply_args = fargs; apply_n = fn_n;
+                        have_apply = true;
+                        break;
+                    }
+                    /* SR N4 Slice 4: apply the shift receiver on the work-stack. */
                     apply_fn   = d.receiver;
                     apply_args = (TuriValue *)malloc(sizeof(TuriValue));
                     apply_args[0] = turi_int((int64_t)(intptr_t)d.cont);

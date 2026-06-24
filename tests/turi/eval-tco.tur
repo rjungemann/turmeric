@@ -184,3 +184,15 @@
   (let [k (cloneable-reset (rc-step (cloneable-shift (fn [kk] kk) 0)))]
     (resume-cont! (save-cont! k) n)))
 (println (rc-go 200000))
+
+;; --- Test 16 (SR N4 Slice 7): recursive is_pure capture fold heap-bounded ----
+;; When a capturing reset's body takes a pure (non-shift) arm at runtime, the
+;; reified context is applied to that pure value via a fold.  Here the context is
+;; a call frame `(ip-step _ n)` whose function recurses into another capturing
+;; reset.  Before Slice 7 that fold ran synchronously in ts_cont_resume and
+;; C-recursed; the driver now folds it on the work-stack (DK_CONT_FOLD).
+;; ip-go N folds down to 0.
+(defn ip-step [unused :int n :int] :int (if (= n 0) 0 (ip-go (- n 1))))
+(defn ip-go [n :int] :int
+  (cloneable-reset (ip-step (if (> n 0) 1 (cloneable-shift (fn [k] 0) 0)) n)))
+(println (ip-go 200000))
