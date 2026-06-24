@@ -1,6 +1,6 @@
 ---
 title: Tur New Guide
-category: Tools and IDE
+category: CLI Tools
 description: Scaffold a new Turmeric spice (library or binary) with standard layout, build manifest, tests, and optional CI
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: Symbols Guide
-category: Language Features
+category: Language Basics
 description: First-class runtime symbols (:Sym type) with compile-time interning and optional dynamic str->sym table
 ---
 

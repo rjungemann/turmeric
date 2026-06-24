@@ -1,6 +1,6 @@
 ---
 title: Building for the Web with Emscripten
-category: Tutorials and Examples
+category: Tutorials
 description: Compile a Turmeric project to WebAssembly and run it in a browser
 ---
 

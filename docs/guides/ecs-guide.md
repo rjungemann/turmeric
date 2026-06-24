@@ -1,6 +1,6 @@
 ---
 title: ECS Guide
-category: Guide
+category: Data Structures and Libraries
 description: Building games and simulations with `tur-ecs` and the `tur-ecs-raylib` companion -- components, queries, systems, the row-typed Query value, and the standard 2D rendering loop.
 ---
 

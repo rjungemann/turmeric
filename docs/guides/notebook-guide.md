@@ -1,6 +1,6 @@
 ---
 title: Notebook Guide
-category: Tools and IDE
+category: Editor and IDE
 description: Literate-programming .tur.md notebooks with tur-notebook -- TUI interface, HTML export, and scripted exec mode
 ---
 

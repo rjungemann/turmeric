@@ -1,6 +1,6 @@
 ---
 title: HTTPS with stdlib/httpd + tur-tls
-category: Networking
+category: Networking and Web
 description: How to terminate TLS on an httpd-new server using the tur-tls spice
 ---
 

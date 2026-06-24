@@ -1,6 +1,6 @@
 ---
 title: Vim Guide
-category: Tools and IDE
+category: Editor and IDE
 description: Vim / Neovim syntax highlighting installation and configuration
 ---
 

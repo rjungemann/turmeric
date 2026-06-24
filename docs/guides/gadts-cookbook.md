@@ -1,6 +1,6 @@
 ---
 title: GADTs Cookbook
-category: Type System
+category: Advanced Types
 description: GADTs cookbook: practical patterns and recipes
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: Cellular Automata with Comonads
-category: Tutorials and Examples
+category: Tutorials
 description: Cellular automata with comonads
 ---
 

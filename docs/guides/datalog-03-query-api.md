@@ -1,6 +1,6 @@
 ---
 title: Datalog Tutorial Pt. 3: Query API
-category: Datalog
+category: Tutorials
 description: Create a database and a query system to go with it
 ---
 

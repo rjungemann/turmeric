@@ -1,6 +1,6 @@
 ---
 title: VS Code Extension
-category: Tools and IDE
+category: Editor and IDE
 description: VS Code extension installation and configuration
 ---
 

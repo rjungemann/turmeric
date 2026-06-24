@@ -1,6 +1,6 @@
 ---
 title: Snake Game Tutorial
-category: Tutorials and Examples
+category: Tutorials
 description: Building the snake game example
 ---
 

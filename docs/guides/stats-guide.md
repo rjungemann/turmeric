@@ -1,6 +1,6 @@
 ---
 title: tur-stats Guide
-category: Data & Libraries
+category: Data Structures and Libraries
 description: Statistics spice for Turmeric -- descriptive stats, probability distributions, hypothesis tests, OLS regression, and resampling on dataframes
 ---
 

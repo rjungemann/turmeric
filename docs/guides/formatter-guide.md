@@ -1,6 +1,6 @@
 ---
 title: Formatter Guide
-category: Tools and IDE
+category: Editor and IDE
 description: `tur format` CLI and web REPL Format button
 ---
 

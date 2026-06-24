@@ -1,6 +1,6 @@
 ---
 title: State Machines Guide
-category: Other
+category: Advanced Control Flow
 description: Five different approaches to modeling state machines in turmeric
 ---
 

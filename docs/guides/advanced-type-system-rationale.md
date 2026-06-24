@@ -1,6 +1,6 @@
 ---
 title: Advanced Type System -- Design Rationale
-category: Type System
+category: Advanced Types
 description: Why Turmeric chose the type system features it did, and why dependent and refinement types were correctly deferred
 ---
 

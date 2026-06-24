@@ -1,6 +1,6 @@
 ---
 title: Compiler Internals
-category: Internals
+category: Compiler Internals
 description: End-to-end walkthrough of the tur compiler pipeline and source layout in src/, aimed at contributors extending the type system or adding new passes
 ---
 

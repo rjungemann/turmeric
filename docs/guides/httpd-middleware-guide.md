@@ -1,6 +1,6 @@
 ---
 title: HTTP Middleware Catalog (stdlib/httpd)
-category: Networking
+category: Networking and Web
 description: Reference for the shipped httpd middleware -- logging, CORS, basic auth, JSON, cookies, multipart, body-size, rate-limit, static files -- plus the request-attribute side channel and the composition helpers.
 ---
 

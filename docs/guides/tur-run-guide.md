@@ -1,6 +1,6 @@
 ---
 title: Tur Run Guide
-category: Tools and IDE
+category: CLI Tools
 description: Built-in Justfile-compatible task runner for building, testing, and managing Turmeric projects without installing just
 ---
 

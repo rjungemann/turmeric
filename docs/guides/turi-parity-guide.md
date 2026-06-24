@@ -1,6 +1,6 @@
 ---
 title: turi <-> tur Parity Guide
-category: Reference
+category: Compiler Internals
 description: Feature-by-feature parity matrix between the compiled Turmeric path (tur) and the tree-walking interpreter (turi), the documented carve-outs, and how to check whether a given feature is interpretable.
 ---
 

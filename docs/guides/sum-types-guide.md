@@ -1,6 +1,6 @@
 ---
 title: Sum Types and `Either`
-category: Language
+category: Language Basics
 description: Declaring binary and n-ary sum types with `defdata`, pattern matching with `match`, exhaustiveness behaviour and the `#{NonExhaustive}` opt-out, the FFI layout, and the stdlib `Either` module.
 ---
 

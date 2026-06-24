@@ -1,6 +1,6 @@
 ---
 title: Datalog Tutorial Pt. 2: Minimal Implementation
-category: Datalog
+category: Tutorials
 description: Create a database and a query system to go with it
 ---
 

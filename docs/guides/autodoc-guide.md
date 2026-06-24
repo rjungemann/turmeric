@@ -1,6 +1,6 @@
 ---
 title: Autodoc Guide
-category: Tooling
+category: CLI Tools
 description: Writing `;;;` docstrings and generating API docs with `tools/gendocs.py`
 ---
 

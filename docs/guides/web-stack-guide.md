@@ -1,6 +1,6 @@
 ---
 title: Web Stack Guide
-category: Spices and Libraries
+category: Networking and Web
 description: Building HTTP servers with tur-httpd, tur-template, and tur-tourist -- the composable web stack for Turmeric
 ---
 

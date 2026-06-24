@@ -1,6 +1,6 @@
 ---
 title: Session Types Guide
-category: Other
+category: Concurrency and Async
 description: Model protocols as types, whether the protocol has two participants, or more
 ---
 

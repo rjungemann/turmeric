@@ -1,6 +1,6 @@
 ---
 title: Custom Effects Tutorial
-category: Tutorials and Examples
+category: Tutorials
 description: Writing custom effects
 ---
 

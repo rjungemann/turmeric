@@ -1,6 +1,6 @@
 ---
 title: Datalog Tutorial Pt. 4: Indexing
-category: Datalog
+category: Tutorials
 description: Create a database and a query system to go with it
 ---
 

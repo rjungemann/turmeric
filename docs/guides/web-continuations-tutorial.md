@@ -1,6 +1,6 @@
 ---
 title: Web Continuations Tutorial
-category: Tutorials and Examples
+category: Tutorials
 description: Multi-page web forms using serializable continuations (guestbook example)
 ---
 

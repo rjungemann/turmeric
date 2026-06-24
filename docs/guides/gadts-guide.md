@@ -1,6 +1,6 @@
 ---
 title: GADTs -- A Practical Guide
-category: Type System
+category: Advanced Types
 description: GADTs: `defgadt`, type refinement, equality witnesses, union types, gradual typing
 ---
 

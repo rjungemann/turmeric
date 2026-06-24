@@ -1,6 +1,6 @@
 ---
 title: tur-watch Guide
-category: Spices and Libraries
+category: CLI Tools
 description: Cross-platform filesystem watching with debounce and coalescing for CLI tools
 ---
 

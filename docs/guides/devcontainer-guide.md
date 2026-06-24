@@ -1,6 +1,6 @@
 ---
 title: Dev Container
-category: Tools and IDE
+category: Editor and IDE
 description: Running Turmeric development in a devcontainer from VS Code or the CLI
 ---
 

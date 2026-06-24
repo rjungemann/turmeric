@@ -1,6 +1,6 @@
 ---
 title: Performance Guide
-category: Language Features
+category: Performance
 description: Writing fast Turmeric programs -- numerical computation, data structures, string processing, concurrency, memory, recursion, I/O, and benchmarking methodology
 ---
 

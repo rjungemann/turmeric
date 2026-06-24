@@ -1,6 +1,6 @@
 ---
 title: Language Server (LSP) Guide
-category: Tools and IDE
+category: Editor and IDE
 description: Configuring editors to use the Turmeric language server for diagnostics
 ---
 

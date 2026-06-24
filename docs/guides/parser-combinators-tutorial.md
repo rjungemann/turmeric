@@ -1,6 +1,6 @@
 ---
 title: Parser Combinators Tutorial
-category: Parsing
+category: Tutorials
 description: Build parser combinators from scratch on top of the backtracking (list) monad
 ---
 

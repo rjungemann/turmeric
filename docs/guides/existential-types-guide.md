@@ -1,6 +1,6 @@
 ---
 title: Existential Types
-category: Type System
+category: Advanced Types
 description: Existential types: pack/open, typeclass constraints, hiding concrete types behind opaque boundaries
 ---
 

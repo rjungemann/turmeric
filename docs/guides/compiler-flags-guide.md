@@ -1,6 +1,6 @@
 ---
 title: Compiler Flags
-category: Tools and IDE
+category: CLI Tools
 description: Diagnostic and debug flags accepted by `tur`; list of removed `-X` feature flags
 ---
 

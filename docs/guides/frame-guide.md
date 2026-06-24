@@ -1,6 +1,6 @@
 ---
 title: Frame Guide
-category: Data & Libraries
+category: Data Structures and Libraries
 description: In-memory columnar dataframes with tur-frame -- building, querying, joining, and exporting via the Arrow C Data Interface
 ---
 

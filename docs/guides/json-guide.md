@@ -1,6 +1,6 @@
 ---
 title: JSON Guide
-category: Data & Libraries
+category: Data Structures and Libraries
 description: Compile-time #json(...) reader macro and runtime tur/json library for parsing and serializing JSON
 ---
 
