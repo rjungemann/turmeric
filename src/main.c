@@ -54,6 +54,7 @@
 #include "pass.h"         /* Phase P19-1: pass scheduling */
 #include "reader.h"
 #include "reader_macros.h"
+#include "span_audit.h"  /* debugger Phase 1: breakpoint-span coverage audit */
 #include "symbols.h"
 /* Phase S0: eval API for tur repl */
 #include "turi/eval.h"
@@ -103,6 +104,12 @@ static const char *basename_of(const char *path) {
 /* Global configuration variables — defined in globals.c (part of tur_core) */
 /* Phase HKT-P6: --dump-kinds flag: print kind annotations after kind-check */
 static bool g_dump_kinds = false;
+
+/* debugger Phase 1: `tur audit-spans` mode.  When set, run_core_passes stops
+ * after PASS_ELABORATE and audits the program for breakpoint-eligible nodes
+ * lacking a usable source span; the hole count lands in g_audit_span_holes. */
+static bool g_audit_spans = false;
+static int  g_audit_span_holes = 0;
 
 /* Helper to detect language and adjust source for #lang directive */
 static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len,
@@ -365,6 +372,14 @@ static int run_core_passes(PassContext *ctx) {
             /* Phase HKT-P6: verify kind info is preserved after elaboration */
             assert(kind_verify_program(ctx->prog) && "Kind info cleared after PASS_ELABORATE");
 #endif
+            /* debugger Phase 1: audit breakpoint-span coverage on the freshly
+             * elaborated tree, before any transform pass introduces synthetic
+             * (legitimately span-less) nodes.  Stop the pipeline afterwards --
+             * audit mode never emits. */
+            if (g_audit_spans) {
+                g_audit_span_holes = span_audit_program(ctx->prog, stdout);
+                return 0;
+            }
             break;
         case PASS_KIND_CHECK:
             /* Phase HKT H0: kind inference and validation pass (v1 stub). */
@@ -795,7 +810,13 @@ static int compile_to_c(const char *path, Buf *out_c,
          * may have succeeded even when borrow-check reports errors. */
         if (g_collect_syms_out && ctx.prog)
             collect_symbols_from_prog(ctx.prog);
-        if (rc == 0 && emit_program(out_c, ctx.prog) != 0) {
+        if (g_audit_spans) {
+            /* Audit-only mode: never emit.  A clean audit is rc 0; remaining
+             * holes surface as rc 3 (distinct from rc 1 = elaboration failure,
+             * rc 2 = file error) so harnesses can tell "audited, found holes"
+             * apart from "could not audit". */
+            if (rc == 0 && g_audit_span_holes > 0) rc = 3;
+        } else if (rc == 0 && emit_program(out_c, ctx.prog) != 0) {
             rc = 1;
         }
     }
@@ -11213,7 +11234,7 @@ static void list_external_subcommands(void) {
     static const char *const builtins[] = {
         "build", "emit-c", "emit-h", "emit-cmake", "run", "repl", "worker",
         "eval", "doc", "explain", "test", "check", "format", "fmt",
-        "parse-check",
+        "parse-check", "audit-spans",
         "init", "add", "add-cmake", "fetch",
         "install", "uninstall", "list", "upgrade",
         NULL,
@@ -12468,6 +12489,59 @@ int main(int argc, char **argv) {
         for (int i = 0; i < n_ck_owned; i++) free(ck_owned[i]);
         free(ck_owned);
         free(check_inc);
+        return rc;
+    }
+    if (strcmp(cmd, "audit-spans") == 0) {
+        /* debugger Phase 1: elaborate <file> and report breakpoint-eligible
+         * AST nodes (top-level forms, defns, let forms, call sites) that lack
+         * a usable source span.  Auto-discovers the enclosing spice src/ and
+         * -I flags exactly like `tur check`, so intra-spice imports resolve.
+         * Exit codes: 0 = clean, 3 = holes found, 1 = could not elaborate,
+         * 2 = file error. */
+        char       **as_inc = NULL;
+        int          n_as_inc = parse_include_flags(argc, argv, 2, &as_inc);
+        if (n_as_inc < 0) { free(as_inc); return usage_check(); }
+        const char *input = NULL;
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+                free(as_inc); return usage_check();
+            }
+            int c;
+            if (is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
+            if (strcmp(argv[i], "--no-auto-spice") == 0) continue;
+            if (strcmp(argv[i], "--no-auto-stdlib") == 0) {
+                g_no_auto_stdlib = true;
+                continue;
+            }
+            if (argv[i][0] != '-') {
+                if (input) { free(as_inc); return usage_check(); }
+                input = argv[i];
+                continue;
+            }
+            free(as_inc); return usage_check();
+        }
+        if (!input) { free(as_inc); return usage_check(); }
+        char **as_owned = NULL; int n_as_owned = 0;
+        Ls2ResolverCtx as_ls2 = {0};
+        auto_append_spice_includes(input, &as_inc, &n_as_inc,
+                                   &as_owned, &n_as_owned, &as_ls2);
+        ls2_resolver_ctx_set(&as_ls2);
+        int rm_n = 0;
+        char **rm_p = discover_manifest_reader_macros(input, &rm_n);
+        Buf out;
+        buf_init(&out);
+        g_audit_spans = true;
+        g_audit_span_holes = 0;
+        int rc = compile_to_c(input, &out, (const char **)as_inc, n_as_inc,
+                              (const char **)rm_p, rm_n);
+        g_audit_spans = false;
+        buf_free(&out);
+        ls2_resolver_ctx_set(NULL);
+        ls2_resolver_ctx_dispose(&as_ls2);
+        free_reader_macro_paths(rm_p, rm_n);
+        for (int i = 0; i < n_as_owned; i++) free(as_owned[i]);
+        free(as_owned);
+        free(as_inc);
         return rc;
     }
     if (strcmp(cmd, "lsp") == 0) {

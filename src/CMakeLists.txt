@@ -90,6 +90,7 @@ set(TUR_CORE_SOURCES
     compiler/fmt.c
     compiler/mangle.c
     compiler/forms.c
+    compiler/span_audit.c
     compiler/pkg.c
     compiler/justrun.c
     compiler/global.c

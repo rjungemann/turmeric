@@ -32,6 +32,15 @@ early (against the interpreter) while the native side ramps.
 
 ### Phase 1 -- Source spans audit
 
+**Status: landed.** Audit write-up + the span-coverage gate are in
+[debugger-spans-audit.md](./debugger-spans-audit.md). `tur audit-spans <file>`
+walks the post-elaboration tree and reports breakpoint-eligible nodes (defn,
+let form, call site, top-level form) lacking a usable span; the
+`tur_span_coverage` ctest target (`tests/check-span-coverage.sh`) gates the
+whole fixture suite (1434 clean / 0 holes). The interpreter `Value`/closure
+span field and emitted-C `#line` directives are deferred to Phases 2 and 4
+respectively (their consumers).
+
 **Outcome:** every AST node that can be a breakpoint target or stack frame
 carries `{file, line, col, end_line, end_col}` through elaboration and into
 both the interpreter's eval nodes and the C emitter.
