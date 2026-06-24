@@ -1976,6 +1976,70 @@ Expr *elab_call(Elab *e, Form *call) {
         }
     }
 
+    /* CONV-S4 (struct/ADT convergence): keyword construction for record-style
+     * variants -- `(Circle :radius 2.0)` reorders to the positional call
+     * `(Circle 2.0)`.  Mirrors make-struct keyword construction (KW-V0).  Only
+     * fires for a record-style ctor whose first argument is a keyword; the
+     * rewritten positional form then flows through the normal ctor paths below. */
+    if (fn_binding && call->as.list.len >= 2 &&
+        call->as.list.items[1]->tag == F_KEYWORD &&
+        (fn_binding->type.kind == TY_ADT ||
+         (fn_binding->type.kind == TY_FN &&
+          fn_binding->type.as.fn.result_kind == TY_ADT))) {
+        CtorDef *kwctor = elab_lookup_ctor(e, name);
+        if (kwctor && kwctor->is_record) {
+            uint32_t n_args = call->as.list.len - 1;
+            if (n_args % 2 != 0) {
+                diag_emit(DIAG_ERROR, call->span,
+                          "constructor '%s': keyword construction needs "
+                          ":field value pairs", kwctor->name);
+                return NULL;
+            }
+            uint32_t n_pairs = n_args / 2;
+            if (n_pairs != kwctor->n_fields) {
+                diag_emit(DIAG_ERROR, call->span,
+                          "constructor '%s' expects %u fields, got %u keyword "
+                          "argument(s)", kwctor->name, kwctor->n_fields, n_pairs);
+                return NULL;
+            }
+            Form **pos_items = (Form **)arena_alloc(e->arena,
+                                   (kwctor->n_fields + 1) * sizeof(Form *));
+            pos_items[0] = call->as.list.items[0];
+            for (uint32_t fi = 0; fi < kwctor->n_fields; fi++) pos_items[fi + 1] = NULL;
+            for (uint32_t pi = 0; pi < n_pairs; pi++) {
+                Form *kw = call->as.list.items[1 + pi * 2];
+                Form *val = call->as.list.items[2 + pi * 2];
+                if (kw->tag != F_KEYWORD) {
+                    diag_emit(DIAG_ERROR, kw->span,
+                              "constructor '%s': cannot mix positional and "
+                              "keyword arguments", kwctor->name);
+                    return NULL;
+                }
+                int fidx = -1;
+                for (uint32_t fi = 0; fi < kwctor->n_fields; fi++) {
+                    if (kwctor->fields[fi].name &&
+                        strcmp(kwctor->fields[fi].name, kw->as.sym->name) == 0) {
+                        fidx = (int)fi; break;
+                    }
+                }
+                if (fidx < 0) {
+                    diag_emit(DIAG_ERROR, kw->span,
+                              "constructor '%s' has no field '%s'",
+                              kwctor->name, kw->as.sym->name);
+                    return NULL;
+                }
+                if (pos_items[fidx + 1]) {
+                    diag_emit(DIAG_ERROR, kw->span,
+                              "constructor '%s': field '%s' given more than once",
+                              kwctor->name, kw->as.sym->name);
+                    return NULL;
+                }
+                pos_items[fidx + 1] = val;
+            }
+            call = form_list(e->arena, call->span, pos_items, kwctor->n_fields + 1);
+        }
+    }
+
     /* Phase G0: constructor call — (Ctor) or (Ctor :T1 ...) */
     if (fn_binding && fn_binding->type.kind == TY_ADT) {
         /* 0-arg constructor */

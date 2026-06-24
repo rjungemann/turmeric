@@ -1,0 +1,5 @@
+;; CONV-S4: keyword construction rejects an unknown field name, naming the
+;; offending keyword and the constructor.
+(defdata Shape (Circle [radius : float]))
+(defn main [] : int
+  (let [c (Circle :diameter 2.0)] 0))
