@@ -156,15 +156,38 @@ What is still missing -- and what TC5 here delivers -- is:
   `result`/`option` from inline-C is first-class (no `:int` escape
   hatch), pointing at the new guide. The strict rule stays in force.
 
-- [ ] **TC8** -- Pilot on rtmidi. Land a clean rtmidi v0.2.0 with
+- [x] **TC8** -- Pilot on rtmidi. Land a clean rtmidi v0.2.0 with
   `MidiIn` / `MidiOut` / `MidiCallback` opaques and
   `result<MidiIn, int>` / `result<MidiOut, int>` returns from inline-C
   constructors. Remove the `__ok` / `__err` hand-rolled struct patterns
   in rtmidi.
+  **Landed (2026-06-24):** rtmidi v0.2.0 in `../turmeric-spices/spices/rtmidi/`
+  no longer hand-rolls the canonical Result struct. `midi-in-new` /
+  `midi-out-new` return real `(Result MidiIn int)` / `(Result MidiOut int)`
+  built with `tur_ok_ptr` / `tur_err_int` directly in inline-C; the
+  fallible operations in `rtmidi/in` / `rtmidi/out` (open / open-virtual /
+  send) return `(Result int int)` the same way. The `__ok` / `__err`
+  helpers and the `midi-in-of` / `midi-out-of` extractors are gone --
+  callers read the handle out with stdlib `ok-val`. `build.tur` :exports
+  drops the extractor names; README quick start uses the typed shape.
+  `MidiCallback` did not need a new opaque -- the callback parameter is
+  already typed `(c-fn [float ptr<const-u8> usize ptr<void>] void)`,
+  which is what the predecessor plan's typed-c-fn (TC1-TC4) shipped for
+  exactly this site.
+  Pre-flight `git grep midi-in-new midi-out-new` across `turmeric/` +
+  `turmeric-spices/`: only the rtmidi spice itself, its README, and the
+  generated `web/dist/client/doc-names.json` reference these constructors
+  -- no out-of-tree consumer needed updating.
 
-- [ ] **TC9** -- Open the spice migration umbrella tracking doc and
+- [x] **TC9** -- Open the spice migration umbrella tracking doc and
   unblock the audit's per-spice fix-up work. List each audit site, link
   to the rtmidi pilot PR as the exemplar.
+  **Landed:** `docs/upcoming/spice-int-stand-in-migration-umbrella-plan.md`
+  tracks the 13 remaining spices (27 source files) that still hand-roll
+  `__ok` / `__err` helpers (identified by `grep -l 'defn __ok\|defn __err'`
+  across `../turmeric-spices/spices/*/src/`), gives the per-spice
+  migration recipe, and points at rtmidi v0.2.0 as the exemplar. Each
+  row is independent; v1 does not gate on the list closing.
 
 ---
 
