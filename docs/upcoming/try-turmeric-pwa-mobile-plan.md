@@ -80,12 +80,43 @@ Right now `@media (max-width: 1024px)` stacks panes vertically and lets
 the page scroll. On phones we want a fixed-viewport split: editor (top)
 + console (bottom), nothing else scrolls.
 
+The UI must **fill the entire mobile viewport** and **never scroll the
+page itself** -- the editor pane and console pane scroll internally,
+but the outer document does not. The *only* exception is when the
+soft keyboard is shown: the viewport shrinks (via
+`interactive-widget=resizes-content`), and any necessary scroll-into-view
+that the OS performs to keep the caret visible is allowed. As soon as
+the keyboard hides, the layout returns to the fixed-viewport split.
+
 ### 2.1 Viewport
 
 - Update the meta viewport in `web/try/index.html` to:
   `<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">`
 - Use `100dvh` (dynamic viewport height) for the app shell so the iOS URL
   bar collapsing doesn't reveal page chrome below the console.
+
+### 2.1a Suppress iOS focus-zoom
+
+Tapping into Monaco (or the REPL input) on iOS Safari triggers an
+auto-zoom-to-input whenever the focused element's computed `font-size`
+is below 16px. Once zoomed, the page also gains horizontal scroll --
+two regressions for the price of one. Both must be prevented:
+
+- Monaco's editor font is 13px today. Override the
+  `.monaco-editor .inputarea` (the hidden textarea that actually
+  receives focus) to `font-size: 16px` inside the mobile media query.
+  This does **not** affect rendered code (Monaco draws its own glyphs);
+  it only affects the invisible textarea iOS reads to decide whether
+  to zoom.
+- The visible REPL input (`#repl-input`) and the doc-search input
+  (`#doc-search`) must also be `font-size: 16px` on mobile for the
+  same reason.
+- Do **not** disable user zoom via `maximum-scale=1` or
+  `user-scalable=no` -- that is an accessibility footgun. Fixing the
+  font-size on focused inputs is enough.
+- After applying, verify on a real iOS device: tapping the editor must
+  keep `visualViewport.scale === 1` and must not introduce horizontal
+  scroll on the document.
 
 ### 2.2 Layout changes (`web/styles.css`)
 

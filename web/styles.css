@@ -1374,15 +1374,38 @@ pre {
 }
 
 @media (max-width: 600px) {
-    /* Icon-only buttons; Run keeps its label. */
+    /* Icon-only buttons; Run keeps its label. Preserve the vertical
+       padding so icon buttons match the Run button's height. */
     .editor-actions .btn:not(#run-btn) {
         font-size: 0;
-        padding: 0 6px;
+        padding-left: 6px;
+        padding-right: 6px;
     }
     .editor-actions .btn:not(#run-btn) svg {
         margin: 0;
     }
     .editor-actions .select { max-width: 110px; font-size: 11px; }
+}
+
+/* Monaco's on-screen-keyboard widget overlaps the editor surface on
+   touch devices; the system soft keyboard already handles input. */
+.monaco-editor .iPadShowKeyboard { display: none !important; }
+
+/* iOS Safari auto-zooms onto any focused input whose computed
+   font-size is below 16px, which also introduces horizontal page
+   scroll. Monaco's rendered code is unaffected -- Monaco paints its
+   own glyphs -- so the override on `.inputarea` only changes the
+   hidden textarea that iOS reads to make the zoom decision.
+
+   Apply on touch / coarse-pointer devices regardless of viewport
+   width, since a small phone may briefly render above the 1024px
+   breakpoint when the URL bar collapses. */
+@media (pointer: coarse), (max-width: 1024px) {
+    .monaco-editor .inputarea,
+    #repl-input,
+    #doc-search {
+        font-size: 16px !important;
+    }
 }
 
 @media (max-width: 768px) {
