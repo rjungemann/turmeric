@@ -616,6 +616,29 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
             diag_emit(DIAG_ERROR, params_f->span, "compile-time fn params must be a vector or list");
             return ct_value_form(form_nil(env->elab->arena, f->span));
         }
+        /* A compile-time fn (the kind applied at expansion time, e.g. inside a
+         * compile-time `map`) takes only bare-symbol params and no return-type
+         * annotation. A typed inline lambda -- `(fn [x : int] : void ...)` --
+         * reaches this evaluator only when it is threaded through as data (an
+         * argument value spliced via `~`/`~@`), where it is inert runtime AST
+         * that must be spliced verbatim, not validated under compile-time fn
+         * rules. Detect that shape (a type-annotated parameter, or a return
+         * type annotation) and return the form untouched.
+         * docs/reported/macro-typed-inline-lambda-arg.md */
+        {
+            bool runtime_lambda = false;
+            for (uint32_t i = 0; i < params_f->as.list.len; i++) {
+                if (params_f->as.list.items[i]->tag != F_SYM) { runtime_lambda = true; break; }
+            }
+            /* `(fn PARAMS : RET BODY...)`: a return-type annotation sits right
+             * after the param vector as an F_TYPE_ANN (spaced `: T`) or
+             * F_KEYWORD (fused `:T`). A body form is never either of those. */
+            if (!runtime_lambda && f->as.list.len >= 4) {
+                Form *after = f->as.list.items[2];
+                if (after->tag == F_TYPE_ANN || after->tag == F_KEYWORD) runtime_lambda = true;
+            }
+            if (runtime_lambda) return ct_value_form(f);
+        }
         uint32_t n_total = params_f->as.list.len;
         Form **params = (Form **)arena_alloc(env->elab->arena, n_total * sizeof(Form *));
         uint32_t n_fixed = 0;
