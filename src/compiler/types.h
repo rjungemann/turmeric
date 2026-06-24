@@ -911,7 +911,7 @@ static inline Type type_ptr(struct Type *inner) {
 
 /* Phase 5: ref<T> type constructor */
 static inline Type type_ref(TypeKind inner) {
-    Type t;
+    Type t = {0};
     t.kind = TY_REF;
     t.copy_kind = CK_UNIQUE;  /* ref<T> is uniquely owned (UT0) */
     t.as.ref.inner = inner;
@@ -921,7 +921,7 @@ static inline Type type_ref(TypeKind inner) {
 
 /* LT3: lref<T> type constructor — linear owning pointer */
 static inline Type type_lref(TypeKind inner) {
-    Type t;
+    Type t = {0};
     t.kind = TY_LREF;
     t.copy_kind = CK_LINEAR;    /* lref<T> is exactly-once */
     t.substruct  = SK_LINEAR;   /* ST0: lref<T> has the linear substructural discipline */
@@ -1061,7 +1061,7 @@ static inline Type type_session_offer(struct Type *left_type, struct Type *right
 
 /* Phase 9: rc<T> type constructor */
 static inline Type type_rc(TypeKind inner) {
-    Type t;
+    Type t = {0};
     t.kind = TY_RC;
     t.copy_kind = CK_MOVE;  /* rc<T> is move-only by default */
     t.as.rc.inner = inner;
@@ -1073,7 +1073,7 @@ static inline Type type_rc(TypeKind inner) {
 /* Phase DS3: rc<Struct> with the struct def carried alongside so that
  * field access through the rc can resolve the layout. */
 static inline Type type_rc_struct(struct StructDef *def) {
-    Type t;
+    Type t = {0};
     t.kind = TY_RC;
     t.copy_kind = CK_MOVE;
     t.as.rc.inner = TY_STRUCT;
@@ -1084,7 +1084,7 @@ static inline Type type_rc_struct(struct StructDef *def) {
 
 /* Phase 9: weak<T> type constructor */
 static inline Type type_weak(TypeKind inner) {
-    Type t;
+    Type t = {0};
     t.kind = TY_WEAK;
     t.copy_kind = CK_MOVE;  /* weak<T> is move-only */
     t.as.rc.inner = inner;  /* Reuse the same field as rc */
@@ -1095,7 +1095,7 @@ static inline Type type_weak(TypeKind inner) {
 
 /* Construct a function type from TypeKinds. */
 static inline Type type_fn(TypeKind arg_kinds[], uint8_t arity, TypeKind result_kind) {
-    Type t;
+    Type t = {0};
     t.kind = TY_FN;
     t.copy_kind = typekind_default_copy_kind(TY_FN);
     t.n_lifetimes = 0;
@@ -1133,7 +1133,7 @@ static inline Type type_fn(TypeKind arg_kinds[], uint8_t arity, TypeKind result_
 /* Phase 12: Borrow type constructors */
 /* &T - immutable borrow */
 static inline Type type_ref_immut(TypeKind target) {
-    Type t;
+    Type t = {0};
     t.kind = TY_REF_IMMUT;
     t.copy_kind = CK_COPY;  /* Borrows are copyable (they're just pointers) */
     t.as.ref_borrow.target = target;
@@ -1143,7 +1143,7 @@ static inline Type type_ref_immut(TypeKind target) {
 
 /* &mut T - mutable borrow */
 static inline Type type_ref_mut(TypeKind target) {
-    Type t;
+    Type t = {0};
     t.kind = TY_REF_MUT;
     t.copy_kind = CK_MOVE;  /* Mutable borrows are move-only (exclusive access) */
     t.as.ref_borrow.target = target;
@@ -1175,7 +1175,7 @@ static inline Type type_ref_mut_lifetime(TypeKind target, LifetimeId lifetime) {
 /* Phase 15: Typeclass type constructors */
 /* Create a typeclass type (e.g., Eq, Ord) */
 static inline Type type_typeclass(TypeClass *tc) {
-    Type t;
+    Type t = {0};
     t.kind = TY_TYPECLASS;
     t.copy_kind = CK_COPY;  /* Typeclasses are copyable */
     t.n_lifetimes = 0;
@@ -1187,7 +1187,7 @@ static inline Type type_typeclass(TypeClass *tc) {
 
 /* Create a typeclass instance type */
 static inline Type type_typeclass_inst(TypeClassInstance *inst) {
-    Type t;
+    Type t = {0};
     t.kind = TY_TYPECLASS_INST;
     t.copy_kind = CK_COPY;  /* Typeclass instances are copyable */
     t.n_lifetimes = 0;
@@ -1262,7 +1262,7 @@ Type type_typerow_canonical(Arena *a, Type x);
 /* Phase 17: Exception type constructor */
 /* Create an exception type wrapping a payload of the given type */
 static inline Type type_exception(TypeKind payload_type) {
-    Type t;
+    Type t = {0};
     t.kind = TY_EXCEPTION;
     t.copy_kind = CK_MOVE;  /* Exceptions are move-only (one-shot) */
     t.n_lifetimes = 0;
@@ -1305,7 +1305,7 @@ static inline int cont_flavor_from_name(const char *n) {
 /* Phase B2: Cloneable continuation type constructor */
 /* Create a cloneable continuation type cloneable_cont<T> that returns T */
 static inline Type type_cloneable_cont(TypeKind returns) {
-    Type t;
+    Type t = {0};
     t.kind = TY_CLONEABLE_CONT;
     t.copy_kind = CK_COPY;  /* Cloneable continuations can be copied (multi-shot) */
     t.n_lifetimes = 0;
