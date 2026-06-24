@@ -4,10 +4,34 @@
 call-through for any *parametric* struct whose field type mentions the
 struct's own type parameters; non-parametric fn-fields work fine)
 
-**Status:** open. Split out of
+**Status:** RESOLVED. Split out of
 `docs/archive/dot-method-call-misroutes-to-typeclass.md` (issue #3 tail) --
 the dot *routing* and result-typing are fixed there; this is the remaining,
 independent carrier-ABI defect surfaced once routing worked.
+
+## Resolution
+
+Fixed in the fn-field call-through emit (`src/compiler/emit_expr.c`, the
+indirect capability-field call branch). `register_fn_ptr_typedef` returns a
+typedef for `(fn [S] A)` because the field's kinds are erased to the int64
+carrier -- so `is_typed_fn_field` was set, and the emitter took the
+direct-call path that passes the concrete `Person` argument straight through a
+`tur_fnptr_int64_t_int64_t_t` (int64-parameter) pointer. We now detect that
+the field's fn `full_type` is written over type variables (new helper
+`fn_field_full_type_mentions_tyvar`, which inspects `arg_full_types` /
+`result_full_type` for a `TY_TYVAR`) and, in that case, clear
+`is_typed_fn_field`. The call then falls to the intptr_t-cast path, which
+specialises the pointer to the call's concrete arg/result C types:
+
+```
+puts(((const char * (*)(Person))(intptr_t)((l_1251).get))(p_1250));
+```
+
+Both the joined `(.get l p)` and receiver-first `(. l get p)` forms now call
+through correctly, and the struct-returning `put` field
+(`(.put l p "Alice")`) round-trips. Regression fixture:
+`tests/fixtures/dot-parametric-fn-field-call`. Full suite green
+(1788 passed, 0 failed).
 
 ## Summary
 

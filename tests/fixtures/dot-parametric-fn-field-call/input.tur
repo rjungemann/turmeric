@@ -1,0 +1,33 @@
+;; Parametric struct function-field call-through.
+;;
+;; Regression for
+;; docs/archive/parametric-struct-fn-field-call-passes-concrete-arg-to-carrier-ptr.md:
+;; calling a fn-typed field whose signature is written over the struct's own
+;; type parameters (`get : (fn [S] A)`, `put : (fn [S A] S)` on a parametric
+;; `(defstruct Lens [S A] ...)`) used to emit a direct call through the carrier-
+;; typed function pointer, passing a concrete `Person` to an `int64_t`
+;; parameter -- a hard `cc` type error.  The call site must specialise the
+;; pointer to the receiver's concrete arg/result types.
+
+(defstruct Lens [S A]
+  (get (fn [S] A))
+  (put (fn [S A] S)))
+
+(defstruct Person :copy
+  [name : cstr age : int])
+
+(defn name-get [p : Person] : cstr
+  (.name p))
+
+(defn name-put [p : Person n : cstr] : Person
+  (make-struct Person n (.age p)))
+
+(defn main [] : int
+  (let [p  (make-struct Person "Bob" 40)
+        l  (make-struct Lens name-get name-put)
+        p2 (.put l p "Alice")]
+    ;; joined-form function-field call: (.get l p)
+    (println (.get l p))
+    ;; receiver-first function-field call: (. l get p2)
+    (println (. l get p2))
+    (.age p2)))
