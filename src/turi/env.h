@@ -69,6 +69,17 @@ typedef struct ArenaNode {
     struct ArenaNode *next;
 } ArenaNode;
 
+/* turi-value-pool-residual-sites: a coroutine execution stack (fiber/generator).
+ * These back a ucontext_t, so they must be mmap'd (native) / malloc'd (WASM) at
+ * a stable address rather than bump-allocated from the value pool. Each one is
+ * tracked here so turi_env_free can munmap/free it instead of leaking it for the
+ * process lifetime. The node itself is pool-allocated (reclaimed with the env). */
+typedef struct TuriCoroStack {
+    void                 *base;   /* mmap/malloc base pointer of the stack */
+    size_t                size;   /* byte length (needed for munmap) */
+    struct TuriCoroStack *next;
+} TuriCoroStack;
+
 /* SB4: Capability bits -- controls which operations are permitted in a
  * sandboxed environment.  TURI_CAP_ALL grants every capability (unrestricted).
  * TURI_CAP_NONE grants nothing (fully sandboxed). */
@@ -161,6 +172,9 @@ typedef struct TuriEnv {
     TuriTimer  *timers_head;        /* sorted timer list (ascending deadline) */
     TuriIoPending *io_pending_head; /* pending non-blocking I/O entries */
     uint32_t    io_pending_count;
+    /* turi-value-pool-residual-sites: coroutine execution stacks (fiber +
+     * generator), tracked so turi_env_free reclaims them. */
+    TuriCoroStack *coro_stacks;
     /* All allocated futures (linked list for bulk free in turi_env_free) */
     TuriFuture *all_futures;
     /* Pipe fds for the built-in test I/O pipe (S7.7 tests) */
@@ -225,6 +239,12 @@ TuriEnv *turi_env_new_sandboxed(void);
 /* Free all resources owned by env. Any closures captured from it become
  * dangling after this call. */
 void turi_env_free(TuriEnv *env);
+
+/* turi-value-pool-residual-sites: register a coroutine execution stack (a
+ * fiber's or generator's mmap'd/malloc'd stack) so it is reclaimed by
+ * turi_env_free instead of leaking for the process lifetime. The node is
+ * allocated from the env value pool; `base`/`size` are the dealloc args. */
+void turi_env_track_coro_stack(TuriEnv *env, void *base, size_t size);
 
 /* Look up a global binding by name.  Returns TURI_ERROR if not found. */
 TuriValue turi_env_get(TuriEnv *env, const char *name);

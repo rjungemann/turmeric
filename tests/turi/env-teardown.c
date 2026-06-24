@@ -41,6 +41,26 @@ static const char *SCRIPT =
     "     (f 10)\n"
     "     (add1 99)))\n";
 
+/* turi-value-pool-residual-sites: drive a generator so its coroutine stack is
+ * allocated (mmap/malloc, outside the value pool) and tracked on the env, then
+ * reclaimed by turi_env_free.  Under ASan this catches a use-after-free of the
+ * pool-allocated tracking node or a double-free in the teardown walk; the mmap
+ * region itself is not LSan-tracked, so this is a soundness check, not a leak
+ * assertion.  Sums 1+2+3 = 6. */
+static const char *GEN_SCRIPT =
+    "(load \"stdlib/gen.tur\")\n"
+    "(let [g        (gen []\n"
+    "                 (yield 1)\n"
+    "                 (yield 2)\n"
+    "                 (yield 3))\n"
+    "      ^mut sum 0]\n"
+    "  (while (not (gen-done? g))\n"
+    "    (let [v (gen-next g)]\n"
+    "      (if (gen-some? v)\n"
+    "        (set! sum (+ sum (gen-unwrap v)))\n"
+    "        (set! sum sum))))\n"
+    "  sum)\n";
+
 int main(void) {
     turi_init(false);
 
@@ -77,6 +97,16 @@ int main(void) {
                         i, fr.tag, (long long)fr.as_int);
                 failures++;
             }
+        }
+
+        /* Drive a generator: allocates + tracks + (on free) reclaims a
+         * coroutine stack (turi-value-pool-residual-sites). */
+        TuriValue gv = turi_eval(env, GEN_SCRIPT);
+        if (gv.tag != TURI_INT || gv.as_int != 6) {
+            fprintf(stderr, "FAIL [iter %d]: generator drive => tag %d val %lld "
+                            "(expected int 6)\n",
+                    i, gv.tag, (long long)gv.as_int);
+            failures++;
         }
 
         /* Produce and observe an error value (global-pool string). */

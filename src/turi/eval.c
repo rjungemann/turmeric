@@ -1274,6 +1274,8 @@ static TuriValue gen_advance(TuriEnv *env, TuriGen *g) {
             g->done = true;
             return turi_error("eval: mmap failed for generator stack");
         }
+        /* turi-value-pool-residual-sites: track for reclaim in turi_env_free. */
+        turi_env_track_coro_stack(g->env, g->stack, GEN_STACK_SIZE);
 #  if defined(__APPLE__)
 #    pragma clang diagnostic push
 #    pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -1290,6 +1292,8 @@ static TuriValue gen_advance(TuriEnv *env, TuriGen *g) {
 #else
         g->stack = (char *)malloc(GEN_STACK_SIZE);
         if (!g->stack) { g->done = true; return turi_error("eval: malloc failed for generator stack"); }
+        /* turi-value-pool-residual-sites: track for reclaim in turi_env_free. */
+        turi_env_track_coro_stack(g->env, g->stack, GEN_STACK_SIZE);
         getcontext(&g->caller_ctx);
         emscripten_fiber_init(&g->gen_ctx.fiber, gen_body_thunk, g,
                               g->stack, GEN_STACK_SIZE,
@@ -2877,7 +2881,7 @@ static bool ic_has_standalone_free(const char *body) {
 }
 
 /* Execute switch-case string: switch(arg0) { case V: return "str"; ... } */
-static TuriValue ic_exec_switch_string(const char *body,
+static TuriValue ic_exec_switch_string(TuriEnv *env, const char *body,
                                         TuriValue *args, uint32_t n_args) {
     if (n_args < 1) return turi_nil();
     int64_t sel = args[0].as_int;
@@ -2899,8 +2903,7 @@ static TuriValue ic_exec_switch_string(const char *body,
                     const char *se = ss;
                     while (*se && *se!='"') { if(*se=='\\') se++; se++; }
                     if (v == sel) {
-                        char *buf = (char*)malloc((size_t)(se-ss)+1);
-                        if (!buf) return turi_nil();
+                        char *buf = (char*)turi_val_alloc(env, (size_t)(se-ss)+1);
                         memcpy(buf, ss, (size_t)(se-ss));
                         buf[se-ss] = '\0';
                         return turi_cstr(buf);
@@ -2926,8 +2929,7 @@ static TuriValue ic_exec_switch_string(const char *body,
         } else { while (*p && *p!=';' && *p!='}') p++; if(*p==';') p++; }
     }
     if (default_str) {
-        char *buf = (char*)malloc(default_len+1);
-        if (!buf) return turi_nil();
+        char *buf = (char*)turi_val_alloc(env, default_len+1);
         memcpy(buf, default_str, default_len); buf[default_len] = '\0';
         return turi_cstr(buf);
     }
@@ -3058,7 +3060,7 @@ static int ic_constructor_leading_guard(const char *body, const char *limit,
     return 0;
 }
 
-static TuriValue ic_exec_constructor(const char *body,
+static TuriValue ic_exec_constructor(TuriEnv *env, const char *body,
                                       TuriValue *args, uint32_t n_args,
                                       FnDef *fn, uint32_t param_offset) {
     /* Special case: string fat-pointer constructor (->p and ->len via strlen/while) */
@@ -3067,8 +3069,7 @@ static TuriValue ic_exec_constructor(const char *body,
         const char *cstr = (args[0].tag==TURI_CSTR) ? args[0].as_cstr
                                                      : (const char*)(intptr_t)args[0].as_int;
         size_t len = cstr ? strlen(cstr) : 0;
-        int64_t *s = (int64_t*)malloc(2*sizeof(int64_t));
-        if (!s) return turi_nil();
+        int64_t *s = (int64_t*)turi_val_alloc(env, 2*sizeof(int64_t));
         s[0] = (int64_t)(intptr_t)cstr; s[1] = (int64_t)len;
         TuriValue v={0}; v.tag=TURI_INT; v.as_int=(int64_t)(intptr_t)s; return v;
     }
@@ -3215,15 +3216,14 @@ static TuriValue ic_exec_constructor(const char *body,
     }
 
     if (n_fields==0) return turi_nil();
-    int64_t *mem = (int64_t*)malloc((size_t)n_fields*sizeof(int64_t));
-    if (!mem) return turi_nil();
+    int64_t *mem = (int64_t*)turi_val_alloc(env, (size_t)n_fields*sizeof(int64_t));
     for (int i=0;i<n_fields;i++) mem[i]=field_vals[i];
     TuriValue v={0}; v.tag=TURI_INT; v.as_int=(int64_t)(intptr_t)mem; return v;
 }
 
 /* Execute accessor: cast arg to ptr, return field[idx].
  * fn is used to check the declared return type. */
-static TuriValue ic_exec_accessor(const char *body,
+static TuriValue ic_exec_accessor(TuriEnv *env, const char *body,
                                    TuriValue *args, uint32_t n_args,
                                    FnDef *fn) {
     if (n_args < 1) return turi_nil();
@@ -3496,9 +3496,8 @@ static TuriValue ic_exec_accessor(const char *body,
             if(*q=='"') {
                 const char *se=q+1;
                 while(*se&&*se!='"') { if(*se=='\\') se++; se++; }
-                char *buf=(char*)malloc((size_t)(se-(q+1))+1);
-                if (!buf) return turi_nil();
                 size_t slen=(size_t)(se-(q+1));
+                char *buf=(char*)turi_val_alloc(env, slen+1);
                 memcpy(buf,q+1,slen); buf[slen]='\0';
                 return turi_cstr(buf);
             }
@@ -3537,7 +3536,7 @@ static bool ic_fmt_has_float_conv(const char *fmt) {
     return false;
 }
 
-static TuriValue ic_format_snprintf_call(const char *fp,
+static TuriValue ic_format_snprintf_call(TuriEnv *env, const char *fp,
                                          const char *bufvar, int bvlen,
                                          TuriValue *args, uint32_t n_args,
                                          FnDef *fn, uint32_t param_offset,
@@ -3604,8 +3603,7 @@ static TuriValue ic_format_snprintf_call(const char *fp,
         default: return turi_nil();
     }
     if(rlen<0) return turi_nil();
-    char *out=(char*)malloc((size_t)rlen+1);
-    if(!out) return turi_nil();
+    char *out=(char*)turi_val_alloc(env, (size_t)rlen+1);
     memcpy(out,result_buf,(size_t)rlen+1);
     TuriValue rv={0}; rv.tag=TURI_CSTR; rv.as_cstr=out; return rv;
 }
@@ -3614,7 +3612,7 @@ static TuriValue ic_format_snprintf_call(const char *fp,
  * evaluating COND and formatting only the live branch's snprintf. Returns the
  * formatted cstr, or turi_nil() if no such guarded snprintf pair is found (the
  * caller then falls back to the linear first-match scan). */
-static TuriValue ic_snprintf_cond_branch(const char *body,
+static TuriValue ic_snprintf_cond_branch(TuriEnv *env, const char *body,
                                          const char *bufvar, int bvlen,
                                          TuriValue *args, uint32_t n_args,
                                          FnDef *fn, uint32_t param_offset) {
@@ -3651,14 +3649,14 @@ static TuriValue ic_snprintf_cond_branch(const char *body,
             chosen_sf = strstr(e + 4, "snprintf(");
             if (!chosen_sf) { p += 2; continue; }
         }
-        TuriValue rv = ic_format_snprintf_call(chosen_sf, bufvar, bvlen, args, n_args, fn, param_offset, body);
+        TuriValue rv = ic_format_snprintf_call(env, chosen_sf, bufvar, bvlen, args, n_args, fn, param_offset, body);
         if (rv.tag == TURI_CSTR) return rv;
         p += 2;
     }
     return turi_nil();
 }
 
-static TuriValue ic_exec_snprintf_fmt(const char *body,
+static TuriValue ic_exec_snprintf_fmt(TuriEnv *env, const char *body,
                                        TuriValue *args, uint32_t n_args,
                                        FnDef *fn, uint32_t param_offset) {
     /* Step 1: Find buffer variable name by scanning all return statements for
@@ -3767,8 +3765,7 @@ static TuriValue ic_exec_snprintf_fmt(const char *body,
         }
         if (negate ? (cond_val==0) : (cond_val!=0)) {
             size_t elen = (size_t)(se-ss);
-            char *buf = (char*)malloc(elen+1);
-            if (!buf) return turi_nil();
+            char *buf = (char*)turi_val_alloc(env, elen+1);
             memcpy(buf, ss, elen); buf[elen] = '\0';
             TuriValue rv={0}; rv.tag=TURI_CSTR; rv.as_cstr=buf; return rv;
         }
@@ -3785,14 +3782,14 @@ static TuriValue ic_exec_snprintf_fmt(const char *body,
      * try to resolve a guarding if/else and format only the live branch; fall
      * back to the linear "first matching snprintf" scan otherwise. */
     {
-        TuriValue cond = ic_snprintf_cond_branch(body, bufvar, bvlen, args, n_args, fn, param_offset);
+        TuriValue cond = ic_snprintf_cond_branch(env, body, bufvar, bvlen, args, n_args, fn, param_offset);
         if (cond.tag == TURI_CSTR) return cond;
     }
     const char *sp = body;
     while (*sp) {
         const char *fp = strstr(sp, "snprintf(");
         if (!fp) break;
-        TuriValue rv = ic_format_snprintf_call(fp, bufvar, bvlen, args, n_args, fn, param_offset, body);
+        TuriValue rv = ic_format_snprintf_call(env, fp, bufvar, bvlen, args, n_args, fn, param_offset, body);
         if (rv.tag == TURI_CSTR) return rv;
         sp=fp+1;
     }
@@ -3978,7 +3975,7 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
                                       TuriValue *args, uint32_t n_args,
                                       FnDef *fn, uint32_t param_offset,
                                       TuriValue *out) {
-    (void)env; (void)blen;
+    (void)blen;
     if (!body || !*body) return false;
 
     bool has_malloc = strstr(body,"malloc(") || strstr(body,"calloc(");
@@ -3998,7 +3995,7 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
 
     /* Pattern 2: Switch-case string */
     if (has_switch && strstr(body,"return \"") && !has_fptr) {
-        *out = ic_exec_switch_string(body, args, n_args);
+        *out = ic_exec_switch_string(env, body, args, n_args);
         return ic_claim("switch-string", fn, out);
     }
 
@@ -4012,19 +4009,19 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
 
     /* Pattern 4a: snprintf formatter (malloc + snprintf + return cstr, no arrow in return) */
     if (has_malloc && !has_fptr && strstr(body,"snprintf(")) {
-        TuriValue r = ic_exec_snprintf_fmt(body, args, n_args, fn, param_offset);
+        TuriValue r = ic_exec_snprintf_fmt(env, body, args, n_args, fn, param_offset);
         if (r.tag != TURI_NIL) { *out = r; return ic_claim("snprintf", fn, out); }
     }
 
     /* Pattern 4: Constructor (malloc + arrow or index assignments, no fptr cast) */
     if (has_malloc && !has_fptr) {
-        TuriValue r = ic_exec_constructor(body, args, n_args, fn, param_offset);
+        TuriValue r = ic_exec_constructor(env, body, args, n_args, fn, param_offset);
         if (r.tag != TURI_NIL) { *out = r; return ic_claim("constructor", fn, out); }
     }
 
     /* Pattern 5: Accessor (no malloc, has arrow, has return) */
     if (!has_malloc && has_return && !has_fptr) {
-        TuriValue r = ic_exec_accessor(body, args, n_args, fn);
+        TuriValue r = ic_exec_accessor(env, body, args, n_args, fn);
         if (r.tag != TURI_NIL) { *out = r; return ic_claim("accessor", fn, out); }
     }
 
@@ -6981,6 +6978,8 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             return turi_error("eval: malloc failed for async fiber stack");
         }
 #endif
+        /* turi-value-pool-residual-sites: track for reclaim in turi_env_free. */
+        turi_env_track_coro_stack(env, fiber->stack, TURI_ASYNC_STACK_SIZE);
 
 #if !defined(__EMSCRIPTEN__) && defined(__APPLE__)
 #  pragma clang diagnostic push

@@ -822,8 +822,21 @@ void turi_sched_init(TuriEnv *env) {
     env->io_pending_head  = NULL;
     env->io_pending_count = 0;
     env->all_futures      = NULL;
+    env->coro_stacks      = NULL;
     env->test_pipe_rfd    = -1;
     env->test_pipe_wfd    = -1;
+}
+
+/* turi-value-pool-residual-sites: track a coroutine stack for bulk reclaim in
+ * turi_sched_free.  The node lives in the value pool (freed with the env); the
+ * base pointer is munmap/free'd in the teardown walk below. */
+void turi_env_track_coro_stack(TuriEnv *env, void *base, size_t size) {
+    if (!base) return;
+    TuriCoroStack *node = (TuriCoroStack *)turi_val_alloc(env, sizeof(TuriCoroStack));
+    node->base = base;
+    node->size = size;
+    node->next = env->coro_stacks;
+    env->coro_stacks = node;
 }
 
 void turi_sched_free(TuriEnv *env) {
@@ -859,4 +872,23 @@ void turi_sched_free(TuriEnv *env) {
     if (env->test_pipe_rfd >= 0) { close(env->test_pipe_rfd); env->test_pipe_rfd = -1; }
     if (env->test_pipe_wfd >= 0) { close(env->test_pipe_wfd); env->test_pipe_wfd = -1; }
 #endif
+
+    /* turi-value-pool-residual-sites: reclaim coroutine execution stacks.
+     * These were mmap'd (native) / malloc'd (WASM) outside the value pool so
+     * they could back a ucontext_t; release them with the matching dealloc.
+     * Runs before turi_env_free reclaims the value pool, so the nodes (which
+     * live in that pool) are still valid here. */
+    TuriCoroStack *cs = env->coro_stacks;
+    while (cs) {
+        TuriCoroStack *next = cs->next;
+        if (cs->base) {
+#ifndef __EMSCRIPTEN__
+            munmap(cs->base, cs->size);
+#else
+            free(cs->base);
+#endif
+        }
+        cs = next;
+    }
+    env->coro_stacks = NULL;
 }
