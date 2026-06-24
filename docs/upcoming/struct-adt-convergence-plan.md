@@ -6,6 +6,34 @@ description: Unify structs and ADTs by treating `defstruct S [...]` as sugar for
 
 # Struct / ADT Convergence -- Plan
 
+## Implementation status (2026-06-24)
+
+The **surface-level** convergence has landed (each step tested, full suite
+green):
+
+- **CONV-S0 -- record-style `defdata` variants.** `(Circle [radius : float])`
+  parses, constructs positionally, and `match`-binds by position or by name.
+- **CONV-S4 (keyword half) -- keyword construction.** `(Circle :radius 2.0)`,
+  reordering free, mirrors `make-struct` KW-V0.
+- **CONV-S3 -- `match` on struct values.** Desugars a struct scrutinee to a
+  `let` over the existing field accessors (no match-emit change).
+- **CONV-S5 -- `:copy` traverses ADT variants.** A `:copy` sum with a
+  non-copy field is rejected, pinpointing the field and variant.
+- **CONV-S7 (partial) -- docs.** Record variants and match-on-struct are
+  documented in the sum-types and structs guides.
+
+**Deferred** (a dedicated effort -- a deep representation change; structs are
+by-value flat C structs while ADTs are heap-pointer tagged unions, and
+match/field/ctor/ABI codegen all branch on that):
+
+- **CONV-S2 -- flat-layout codegen for single-variant ADTs** (byte-identical
+  to `defstruct`).
+- **CONV-S1 -- `defstruct` lowers to a single-variant `defdata`** (depends on
+  S2, else every struct pays a tag-word cost).
+- **CONV-S4 (`with` half)** -- needs field access on a narrowed/single-variant
+  ADT value, which rides on the S2 codegen.
+- **CONV-S6 -- diagnostic wording pass** -- best done once S1/S2 settle.
+
 ## Context
 
 Today Turmeric has two parallel notions of product-shaped data:
