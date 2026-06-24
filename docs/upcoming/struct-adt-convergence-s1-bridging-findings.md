@@ -202,6 +202,21 @@ be made consistent.
    it is now an explicit B3 prerequisite (below), not a free side effect.
 2. **B2 -- untyped-param refinement.** Propagate match-scrutinee ADT types to
    untyped param bindings. Still gate-off; verify no carrier fixture moves.
+   **LANDED (gate off).** `elab_match` ([`elab_structs.c`](../../src/compiler/elab_structs.c),
+   the ADT-inference patch site, ~3240) now writes the inferred ADT back onto the
+   scrutinee's binding when that binding still carries the int64 default (an
+   untyped param) -- never over an explicit annotation. The signature realiser
+   ([`elab_fns.c`](../../src/compiler/elab_fns.c) param_types loop) runs after the
+   body, so it preserves that refined ADT type for the parameter instead of
+   collapsing it back to `type_from_kind(TY_INT)`; the second (`fn`/lambda)
+   realiser already copies `params[i]->type` and picks it up for free. With the
+   gate off `type_c_name(TY_ADT)` is `int64_t`, so the emitted signature is
+   unchanged -- `bash tests/run.sh` stays **1813 passed, 0 failed, zero churn**.
+   The gate-on smoke test dropped the residue from 8 to 6 genuine build failures:
+   **`conv-kw-record-variant` now passes** and **`conv-single-variant-flat` now
+   builds and runs** (its only gate-on delta is a snapshot drift that B3's gate
+   flip will regenerate). The remaining failures are exactly the field-store
+   crossing (`gadt-adt-skolem`, B3) and the five closure/HKT crossings (B4).
 3. **B3 -- flip the gate for non-recursive, non-HKT products.** Turn on
    `adt_is_byvalue_product` for the simple cases (S, Point, Box/Foo). First wire
    the **field-store crossing** (box a by-value ADT arg into a carrier ctor field

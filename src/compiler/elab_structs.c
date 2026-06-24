@@ -3238,6 +3238,21 @@ Expr *elab_match(Elab *e, const Form *call) {
             if (inferred_adt) {
                 /* Patch the scrutinee type to the inferred ADT */
                 scrutinee->type = type_adt(inferred_adt);
+                /* CONV-S1/B2: when the scrutinee is a bare variable whose binding
+                 * still carries the int64 default (an untyped param defaulted to
+                 * TY_INT), propagate the inferred ADT back onto the binding.  The
+                 * signature realiser (elab_fns.c) runs AFTER the body, so it picks
+                 * this up and gives the param its ADT type -- making the parameter
+                 * and the match body agree on the representation once the by-value
+                 * gate flips.  Matching a value with constructor patterns proves it
+                 * IS that ADT, so this never mis-types a genuine int.  No-op for
+                 * emitted C while the gate is off (type_c_name(TY_ADT) is int64_t).
+                 * Only refine a still-default TY_INT binding -- never an explicit
+                 * annotation, which already carries its own type kind. */
+                if (scrutinee->kind == EX_VAR && scrutinee->as.var.binding &&
+                    scrutinee->as.var.binding->type.kind == TY_INT) {
+                    scrutinee->as.var.binding->type = type_adt(inferred_adt);
+                }
             } else {
                 diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
                           "match: scrutinee must be an ADT type, got %s",
