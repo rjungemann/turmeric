@@ -4,6 +4,49 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.24.3] -- 2026-06-23
+
+### Added
+
+- **STM finished on TL2 fine-grained locking (#528).** The half-built
+  per-TVar-mutex commit path is replaced with a complete TL2
+  (Transactional Locking II) discipline in both the reference runtime
+  and the inline-emitted runtime compiled programs use. Reads are
+  lock-free with version revalidation; commits lock only the stripe
+  buckets covering the write set, bump a global version clock, and
+  publish writes under a per-TVar lock bit. `retry()` parks on a
+  bucket-filtered cond. New `stm-stress` (8 threads x 500 contended
+  increments, TSan-clean) and `stm-retry-wakeup` fixtures.
+- **Stackless delimited control and `call/cc` on the work-stack
+  (#526, #527).** Heap-bound single-operand black-box forms (N3) and
+  stackless `shift`/`shift0`/`call/cc` (N4) move off the re-entrant C
+  frame onto the driver work-stack, removing two synchronous
+  `turi_call` re-entry sites.
+- **Experimental feature flag mechanism (`--enable=<name>`) (#524).**
+  New `EXPERIMENTS[]` registry in `src/runtime/experiments.c` with
+  `name`, `summary`, `plan_path`, `introduced`, `expires_at`,
+  `lifecycle`, and `opt_global` fields; lifecycle warnings TUR-W0060
+  and TUR-W0061 fire on use. See
+  [`docs/guides/experimental-flags-guide.md`](docs/guides/experimental-flags-guide.md).
+
+### Changed
+
+- **`try`/`catch`/`throw` deprecated.** Use sites emit a deprecation
+  note pointing at result/option-based error handling. The legacy
+  fixture is parked under `_legacy-throw/`.
+
+### Fixed
+
+- **Parametric `defstruct` + fn-typed field gaps (#523, #525).** Type
+  arguments for parametric structs are now inferred from fn-typed
+  fields, closing the remaining defstruct holes.
+- **Multi-param projection + functional dependencies for associated
+  types (#522).** Assoc-types-2 Part A lands; multi-parameter
+  projection composes with fundeps.
+- **Workspace `:members` seed transitive cmake-deps (#521).** Enclosing
+  workspace member lists now feed transitive cmake dependencies on
+  spice builds.
+
 ## [0.24.2] -- 2026-06-23
 
 ### Changed

@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.24.2` -- dead `-X` feature-flag guards removed following the v0.24.0 always-on switch; the flag symbols stay exported for ABI compatibility.
+**Latest release:** `v0.24.3` -- STM finished on TL2 fine-grained locking; stackless delimited control and `call/cc` move onto the work-stack; new `--enable=<name>` experimental feature-flag mechanism.
 
 ## What
 
