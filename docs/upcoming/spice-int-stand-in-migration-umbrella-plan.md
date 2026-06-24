@@ -73,14 +73,14 @@ its own PR; tick when the spice no longer hand-rolls the struct.
 | ~~rtmidi~~ | core.tur, in.tur, out.tur | **done** (v0.2.0, exemplar) |
 | json | encode.tur, parse.tur, patch.tur | pending |
 | notebook | format.tur | pending |
-| osc | client.tur, server.tur | pending |
+| ~~osc~~ | client.tur, server.tur | **done** (v0.3.0) |
 | plot | core.tur | pending |
 | plutovg | canvas.tur, font.tur, paint.tur, path.tur, surface.tur | pending |
 | png | reader.tur, writer.tur | pending |
 | postgres | db.tur, notify.tur, stmt.tur | pending |
 | rtaudio | core.tur, stream.tur | pending |
 | sqlite | db.tur | pending |
-| template | render.tur | pending |
+| ~~template~~ | render.tur | **done** (v0.2.0) |
 | valkey | client.tur, cmd.tur, pubsub.tur | pending |
 | wav | info.tur, reader.tur, writer.tur | pending |
 
