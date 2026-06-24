@@ -82,7 +82,7 @@ its own PR; tick when the spice no longer hand-rolls the struct.
 | sqlite | db.tur | pending |
 | ~~template~~ | render.tur | **done** (v0.2.0) |
 | valkey | client.tur, cmd.tur, pubsub.tur | pending |
-| wav | info.tur, reader.tur, writer.tur | pending |
+| ~~wav~~ | info.tur, reader.tur, writer.tur | **done** (v0.2.0) |
 
 13 spices, 27 source files. Migrations are independent; land them
 opportunistically rather than as a single sweep -- the v1 track does not
