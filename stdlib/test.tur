@@ -71,21 +71,32 @@
 
 (defn assert-nil [x] : bool
   (if (= x 0) true (do (println "Assertion failed: expected nil") false)))
-;; Assert that invoking the callback throws an error.
-;; `thunk` must be a no-arg callback bridged through ptr<void>.
-;;; assert-error -- assert that calling thunk raises an error; return false if it does not.
+;; Assert that invoking the callback raises a panic.
+;; `thunk` must be a no-arg callback bridged through ptr<void>.  The
+;; thunk is run inside (catch-unwind ...) so a `(panic ...)` (or any
+;; longjmp through the global Panic frame) is caught and counted as
+;; the expected failure.  Plain non-panic errors -- e.g. a thunk that
+;; returns a Result `(err ...)` value -- do NOT satisfy this helper;
+;; pass a thunk that panics.
+;;; assert-error -- assert that calling thunk raises a panic; return false if it does not.
 ;;;
 ;;; Parameters:
-;;;   thunk -- no-argument callback pointer; expected to throw when called
+;;;   thunk -- no-argument callback pointer; expected to panic when called
 ;;;
 ;;; Returns:
-;;;   true if thunk raised an error, false if it returned normally.
+;;;   true if thunk raised a panic (caught via catch-unwind), false
+;;;   if it returned normally.
 ;;;
 ;;; Example:
-;;;   (assert-error (fn [] (error "boom")))  ; => true
+;;;   (assert-error (fn [] : int (panic "boom")))  ; => true
+
+(defn assert-error-result-is-err? [r : int] #{Unsafe} : bool
+  ```c
+  return !tur_is_ok(r);
+  ```)
 
 (defn assert-error [^fat thunk] : bool
-  (if (= (try (do (thunk) 0) (catch [e] 1)) 1)
+  (if (unsafe (assert-error-result-is-err? (catch-unwind thunk)))
     true
     (do (println "Assertion failed: expected error") false)))
 ;; Run a single test result and print marker output.

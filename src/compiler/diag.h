@@ -178,6 +178,13 @@ typedef enum DiagCode {
      * marks the param/result slots as types.  Drop the colon:
      * (fn [:int] :int) -> (fn [int] int). */
     TUR_D0001_FN_TYPE_COLON,
+    /* throw-deprecation-plan: the Phase S4 exception forms
+     * `throw` / `try` / `catch` are deprecated in favor of
+     * `result<T,E>` for recoverable errors and `panic` /
+     * `catch-unwind` for unrecoverable ones.  Emitted once per
+     * elaboration of `(throw ...)` or `(try ...)`; the forms still
+     * compile and run during the deprecation window. */
+    TUR_D0002_THROW_TRY_DEPRECATED,
     /* XF (experimental-flag-mechanism-plan): the `--enable=<name>` surface.
      * E0310 fires at CLI/manifest parse on an unknown experiment name;
      * W0060/W0061 fire once per compile at the first use site of an enabled

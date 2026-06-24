@@ -416,6 +416,10 @@ Expr *elab_throw(Elab *e, const Form *call) {
         diag_emit(DIAG_ERROR, call->span, "throw: expected exactly one argument");
         return NULL;
     }
+    diag_emit_with_code(DIAG_WARNING, call->span, TUR_D0002_THROW_TRY_DEPRECATED,
+                        "`throw` is deprecated; use `panic` (for unrecoverable failure) "
+                        "or `result<T,E>` (for recoverable failure) instead. "
+                        "See docs/upcoming/throw-deprecation-plan.md");
     Expr *val = elab_form(e, call->as.list.items[1]);
     if (!val) return NULL;
     Expr *out = expr_new(e->arena, EX_THROW, TYPE_NEVER, call->span);
@@ -432,6 +436,10 @@ Expr *elab_try_catch(Elab *e, const Form *call) {
         diag_emit(DIAG_ERROR, call->span, "try: expected body");
         return NULL;
     }
+    diag_emit_with_code(DIAG_WARNING, call->span, TUR_D0002_THROW_TRY_DEPRECATED,
+                        "`try` / `catch` are deprecated; use `catch-unwind` "
+                        "(for panic recovery) or `result<T,E>` (for recoverable "
+                        "failure) instead. See docs/upcoming/throw-deprecation-plan.md");
     /* Elaborate the body */
     Expr *body = elab_form(e, call->as.list.items[1]);
     if (!body) return NULL;

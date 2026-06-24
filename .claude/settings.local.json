@@ -5,7 +5,8 @@
       "Bash(wc -l /Users/rjungemann/Projects/turmeric2/src/*.c /Users/rjungemann/Projects/turmeric2/stdlib/*.tur)",
       "Bash(grep -l \"Eq\" /Users/rjungemann/Projects/turmeric2/tests/*.tur)",
       "Bash(find /Users/rjungemann/Projects/turmeric2/tests -type f -name \"*.tur\" -exec grep -l \"eq\\\\|Eq\" {} \\\\;)",
-      "Bash(xargs cat *)"
+      "Bash(xargs cat *)",
+      "Bash(bash tests/run-turi.sh)"
     ]
   }
 }

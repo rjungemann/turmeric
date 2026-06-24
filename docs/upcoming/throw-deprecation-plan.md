@@ -244,6 +244,32 @@ the error type into a single dynamic channel, which is exactly what
 
 ### DEPR-R0 -- Internalize interpreter fiber-rejection throws (~1-2 days)
 
+> **Hidden dependency (2026-06-23 follow-up).** An attempt at this
+> step revealed two interpreter fixtures whose contract relies on
+> throw-through-await semantics that the plan did not account for:
+>
+> - `tests/turi/eval-async-error.tur` -- catches an async-body
+>   `(throw "boom")` with a top-level `(try (await ...) (catch [e
+>   :cstr] ...))`.
+> - `tests/turi/eval-async-timeout.tur` -- catches the `with-timeout`
+>   throw via the same `(try ... (catch))` shape.
+>
+> Both fixtures `(catch [e :cstr])` and inspect the bound message.
+> The interpreter exposes no `error?` / `error-message` native that
+> would let the new TURI_ERROR-returning shape carry the message
+> through to user code, so the fixture migration is larger than the
+> "harmonize two branches" framing in this section. Doing R0 cleanly
+> needs:
+>
+> 1. an interpreter-level predicate + accessor for TURI_ERROR values
+>    (e.g. `(error? v)` / `(error-message v)`), then
+> 2. the fixtures rewritten to `(let [r (await ...)] (if (error? r)
+>    ...))`, then
+> 3. the fiber.c branch changes below.
+>
+> Until that surface lands, R0 stays deferred. W0/M0/F0 above are
+> independent and can ship now.
+
 The research collapsed this from "redesign the awaiter contract"
 into "harmonize two branches of one function." The compiled path
 needs no work.
