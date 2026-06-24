@@ -1370,7 +1370,13 @@ pre {
 
 @media (max-width: 1024px) and (display-mode: standalone) {
     site-nav, .footer { display: none; }
-    #app { padding-top: 0; }
+    /* black-translucent status bar overlays the page; reserve the
+       safe-area inset so the editor's first line isn't tucked under
+       the clock and battery indicator. */
+    #app {
+        padding-top: env(safe-area-inset-top, 0px);
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
 }
 
 @media (max-width: 600px) {
