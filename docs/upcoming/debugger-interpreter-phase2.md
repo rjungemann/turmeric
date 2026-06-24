@@ -119,7 +119,9 @@ blob.
 
 - DAP server / editor integration -- Phase 3.
 - Native (`emit-C`) debugging -- Phases 4-5.
-- Conditional breakpoints (`break <line> if <expr>`): the command grammar
-  reserves room for it, but evaluating an arbitrary expression in the paused
-  frame's lexical scope is deferred. `print <name>` covers single-binding
-  inspection in the meantime.
+- Conditional breakpoints (`break <line> if <expr>`): evaluating an arbitrary
+  expression in the paused frame's lexical scope is deferred to the in-frame
+  expression evaluator ([debugger-inframe-eval-plan.md](./debugger-inframe-eval-plan.md)).
+  `print <name>` covers single-binding inspection in the meantime. (Phase 3's
+  DAP server adds a `<name> <op> <literal>` conditional shim on top of this,
+  which the split-out plan generalizes.)

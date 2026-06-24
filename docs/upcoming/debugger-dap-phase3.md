@@ -71,8 +71,8 @@ resolved in the innermost frame and its rendered value compared to the literal
 (string compare for `==`/`!=`, numeric for the ordered operators). A condition
 that does not parse, or names a binding not in scope, falls back to "stop" so a
 condition we cannot evaluate never silently swallows a breakpoint. Full
-expression conditions wait on the same in-frame expression evaluator Phase 2
-deferred.
+expression conditions wait on the in-frame expression evaluator, now tracked in
+its own plan: [debugger-inframe-eval-plan.md](./debugger-inframe-eval-plan.md).
 
 ## How it works
 
@@ -146,5 +146,5 @@ the one caveat.
 - Expandable structured variables -- structs / options / results render inline
   as a string rather than an expandable tree (their `variablesReference` is 0).
 - Full-expression breakpoint conditions and `evaluate` of arbitrary expressions
-  (only single-name resolution + simple comparison conditions today), pending
-  the in-frame expression evaluator Phase 2 deferred.
+  (only single-name resolution + simple comparison conditions today). Tracked in
+  its own plan: [debugger-inframe-eval-plan.md](./debugger-inframe-eval-plan.md).

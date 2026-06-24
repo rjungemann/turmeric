@@ -167,12 +167,30 @@ CodeLLDB / lldb-dap. Avoid emitting DWARF directly from the Turmeric
 compiler -- Rust's experience is that even with "correct" variant-part
 DWARF, you still need the printers, so skip the multi-month detour.
 
+### In-frame expression evaluator (cross-cutting; split-out plan)
+
+Split into its own plan:
+[debugger-inframe-eval-plan.md](./debugger-inframe-eval-plan.md).
+
+Not a sequential phase -- a cross-cutting enhancement to the Phase 2 / 3
+interpreter track. Both phases ship a *narrow shim* for evaluating in a paused
+frame: Phase 2's `print <name>` and Phase 3's `evaluate`/hover resolve a single
+binding, and DAP conditional breakpoints accept only `<name> <op> <literal>`.
+The split-out plan generalizes that to evaluating an **arbitrary Turmeric
+expression** in a paused frame's lexical scope, which unlocks full-expression
+conditional breakpoints (`break <line> if <expr>`) and arbitrary `evaluate`.
+The hard part is recovering enough type information from the paused frame's
+runtime values to re-elaborate a fresh expression against them.
+
 ## Dependencies between phases
 
 - Phase 2 depends on Phase 1.
 - Phase 3 depends on Phase 2.
 - Phase 4 depends on Phase 1 only (parallel with 2/3).
 - Phase 5 depends on Phase 4.
+- The in-frame expression evaluator (split-out plan) depends on Phase 2 and
+  Phase 3; it supersedes the single-name / simple-comparison shims those phases
+  shipped.
 
 So Phase 1 + Phase 4 can land in parallel with the 2 -> 3 interpreter track.
 
