@@ -161,21 +161,12 @@ fallback bump-pool reachable from a single process-global the env adopts on
 
 ### Phase 2 (optional) -- bound a single long-lived env
 
-Phase 1 makes teardown clean but does not shrink a never-destroyed env. To bound
-a notebook-kernel-style host, add a two-region scheme:
-
-- a **permanent** value pool for payloads reachable from `globals` / live host
-  handles;
-- a **scratch** value pool reset (`arena_reset`, not freed) at each top-level
-  eval boundary.
-
-Values are scratch-allocated by default; a value that **escapes** the top-level
-eval (assigned into a global, returned to the host, captured by a surviving
-closure) is **promoted** -- deep-copied into the permanent pool -- before the
-scratch region is reset. Promotion needs an escape walk over the result + any
-newly-bound globals, with cycle handling (closures can be cyclic via letrec).
-This is real complexity and is why it is deferred; Phase 1 stands alone and
-delivers goal (1) and (2) without it.
+Phase 1 makes teardown clean but does not shrink a never-destroyed env. The
+optional two-region (scratch/permanent + escape-promotion) follow-up that bounds
+a notebook-kernel-style host was split into its own plan:
+`docs/upcoming/turi-value-pool-scratch-promotion-plan.md`. It is deferred
+(only matters for the immortal-env host pattern); Phase 1 stands alone and
+delivers goals (1) and (2) without it.
 
 ## API / behavior changes
 
