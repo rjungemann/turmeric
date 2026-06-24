@@ -89,6 +89,31 @@ static inline TuriValue turi_handler_val(TuriHandlerVal *h) {
 }
 static inline bool turi_is_throw(TuriValue v) { return v.tag == TURI_THROW; }
 
+/* ---------------------------------------------------------------------------
+ * Env-owned value-payload pool (turi-env-owned-value-arena-pool-plan)
+ *
+ * All heap payloads that *escape* an eval -- closures, structs, captured
+ * frames/bindings, cons cells, boxes, ... -- are bump-allocated from the env's
+ * value_arena instead of raw libc, so turi_env_free reclaims them en masse.
+ * Pool memory is NEVER individually freed: do not pass a turi_val_* pointer to
+ * free().  Transients that are explicitly freed within one C call keep using
+ * malloc/free.
+ * --------------------------------------------------------------------------- */
+
+/* Bump-allocate n uninitialised bytes from env's value pool. */
+void *turi_val_alloc(TuriEnv *env, size_t n);
+/* Bump-allocate n zeroed bytes from env's value pool. */
+void *turi_val_calloc(TuriEnv *env, size_t n);
+/* Copy s into env's value pool (returns NULL when s is NULL). */
+char *turi_val_strdup(TuriEnv *env, const char *s);
+
+/* Env-less fallback pool for the error/rejection constructors below, whose
+ * signatures carry no env.  Backed by a process-global arena that turi_env_free
+ * adopts and reclaims (the single-env embedding pattern the plan targets). */
+char *turi_val_strdup_global(const char *s);
+/* Reclaim the process-global fallback pool.  Called from turi_env_free. */
+void  turi_val_global_pool_free(void);
+
 /* Create an error value (message is strdup'd) */
 TuriValue turi_error(const char *msg);
 TuriValue turi_errorf(const char *fmt, ...);

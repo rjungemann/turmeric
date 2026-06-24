@@ -6301,7 +6301,7 @@ static TuriValue native_ok(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     TuriValue payload = (n > 0) ? a[0] : turi_int(0);
     if (wk_result_payload_is_heap(payload)) {
         TuriValue fields[3] = { turi_bool(true), payload, turi_int(0) };
-        return turi_make_struct("Result", fields, 3);
+        return turi_make_struct(env, "Result", fields, 3);
     }
     int64_t *r = (int64_t *)malloc(3 * sizeof(int64_t));
     if (!r) return turi_nil();
@@ -6313,7 +6313,7 @@ static TuriValue native_err(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     TuriValue payload = (n > 0) ? a[0] : turi_int(0);
     if (wk_result_payload_is_heap(payload)) {
         TuriValue fields[3] = { turi_bool(false), turi_int(0), payload };
-        return turi_make_struct("Result", fields, 3);
+        return turi_make_struct(env, "Result", fields, 3);
     }
     int64_t *r = (int64_t *)malloc(3 * sizeof(int64_t));
     if (!r) return turi_nil();
@@ -8730,16 +8730,16 @@ static TuriValue native_str_to_int_checked(TuriEnv *env, TuriValue *a, uint32_t 
     const char *cs = (n >= 1) ? (const char *)(intptr_t)a[0].as_int : NULL;
     if (!cs || *cs == '\0') {
         TuriValue f[1] = { turi_int(0) };           /* empty -> Left 0 */
-        return turi_make_struct("Left", f, 1);
+        return turi_make_struct(env, "Left", f, 1);
     }
     char *end = NULL;
     long long v = strtoll(cs, &end, 10);
     if (end == cs || *end != '\0') {
         TuriValue f[1] = { turi_int(1) };           /* garbage -> Left 1 */
-        return turi_make_struct("Left", f, 1);
+        return turi_make_struct(env, "Left", f, 1);
     }
     TuriValue f[1] = { turi_int((int64_t)v) };
-    return turi_make_struct("Right", f, 1);
+    return turi_make_struct(env, "Right", f, 1);
 }
 
 /* Grid (stdlib/grid.tur) natives.  grid.tur's ops are inline-C over a

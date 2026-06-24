@@ -333,6 +333,24 @@ set_target_properties(tur_eval_basic PROPERTIES
 )
 
 # ---------------------------------------------------------------------------
+# turi-env-owned-value-arena-pool-plan: env-teardown leak harness
+# ---------------------------------------------------------------------------
+add_executable(tur_env_teardown ${CMAKE_SOURCE_DIR}/tests/turi/env-teardown.c)
+target_include_directories(tur_env_teardown PRIVATE ${TUR_INCLUDE_DIRS})
+target_link_libraries(tur_env_teardown PRIVATE libturi)
+target_compile_options(tur_env_teardown PRIVATE
+    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_env_teardown PRIVATE -pthread
+    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+)
+set_target_properties(tur_env_teardown PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
 # SB0: tur_eval_sandbox -- sandboxed environment test harness
 # ---------------------------------------------------------------------------
 add_executable(tur_eval_sandbox ${CMAKE_SOURCE_DIR}/tests/turi/sandbox-eval.c)

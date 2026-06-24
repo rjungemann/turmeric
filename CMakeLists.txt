@@ -324,6 +324,19 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_eval_sandbox"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# turi-env-owned-value-arena-pool-plan: env-teardown leak harness. Unlike the
+# other turi targets (which default detect_leaks=0 because the interpreter
+# never frees its process-lifetime closures), this one runs with leak
+# detection FORCED ON -- a create/eval/free cycle must leave zero
+# turi-attributable live allocations once the value pool is reclaimed.
+add_test(
+  NAME tur_env_teardown
+  COMMAND "${CMAKE_BINARY_DIR}/tur_env_teardown"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_env_teardown PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=1"
+)
 add_test(
   NAME tur_codegen_reinterpret
   COMMAND "${CMAKE_BINARY_DIR}/tur_codegen_reinterpret"
@@ -465,7 +478,7 @@ set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
                      tur_eval_async_basic tur_eval_async_composition
                      tur_eval_async_effects tur_eval_async_timeout
                      tur_eval_async_cancel tur_eval_async_error tur_eval_async_io
-                     tur_eval_stm
+                     tur_eval_stm tur_env_teardown
   PROPERTIES DEPENDS tur
 )
 

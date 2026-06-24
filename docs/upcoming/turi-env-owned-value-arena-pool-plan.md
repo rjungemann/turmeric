@@ -1,6 +1,43 @@
 # Plan: env-owned value-arena pool for the turi interpreter
 
-**Status:** proposal (not started). **Area:** `src/turi/` (tree-walking interpreter).
+**Status:** Phase 1 LANDED; Phase 2 deferred (optional). **Area:** `src/turi/` (tree-walking interpreter).
+
+## Phase 1 -- landed
+
+Implemented as designed below:
+
+- `TuriEnv` gained an env-owned `Arena value_arena` (`env.h`), created in
+  `turi_env_new` and reclaimed in `turi_env_free`, plus a process-global
+  fallback pool the env adopts on free for the env-less error/rejection
+  constructors. Allocators: `turi_val_alloc` / `turi_val_calloc` /
+  `turi_val_strdup` (env) and `turi_val_strdup_global` (`value.c`/`value.h`).
+- Escaping payloads routed through the pool: error/rejection strings; every
+  retained `TuriClosure`; `TuriStruct` + fields (env threaded through
+  `make_struct_val_def` / `make_struct_val` / `turi_default_of` /
+  `turi_make_struct`); captured `EvalFrame` + `EvalBinding` (env threaded
+  through `eval_frame_new` / `frame_bind` / `clone_frame_bindings` /
+  `clone_ws_slice`); `TyvarBind`; the catch/panic Result boxes + payload;
+  first-class handler values; ADT/set/cons-list payloads; the rc control block;
+  `ptr-of` boxes; and the delimited-control / generator / STM-tvar / async-fiber
+  structs (`TuriCont`, `TuriWsCont`, `TuriEffectCont`, `TuriGen`, `TuriTVar`,
+  `TuriFiber`, `HandleExpr`/`HandleCase`). Guard-path `free()`s on now-pooled
+  pointers were dropped; driver-freed transients (scratch arg/field
+  accumulators, continuation/effect-handle stacks, defer items) were left on
+  `malloc`/`free`.
+- New leak-on regression gate: `tests/turi/env-teardown.c` +
+  `tur_env_teardown` ctest (forces `ASAN_OPTIONS=detect_leaks=1`) +
+  `tests/run-turi-env-teardown.sh`. Loops new/eval/free over a script that
+  builds closures, structs, ADTs, and error values and asserts zero leaks.
+- Validation: `tests/run.sh` 1788/0; `tests/run-turi.sh` matches baseline
+  (no new failures); the teardown gate is leak-clean.
+
+Known remaining residue (NOT covered by Phase 1, follow-up): the inline-C
+emulation buffers in `ic_exec_*` (env-less helpers, only reachable via the
+TI7 inline-C carve-out) and the mmap/malloc coroutine *stacks* backing fibers
+and generators (the structs are pooled; their large stacks are not, and mmap
+is untracked by LSan). See `docs/reported/turi-value-pool-residual-sites.md`.
+
+**Area:** `src/turi/` (tree-walking interpreter).
 **Goal:** make `turi_env_free` reclaim *all* memory an evaluation produces, so an
 embedding C host can deallocate an interpreter session in one shot instead of
 relying on process exit.
