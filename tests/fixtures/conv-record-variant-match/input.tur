@@ -1,0 +1,25 @@
+;; CONV-S0: pattern match binds record-variant fields by position and by name.
+;; `(Rect w h)` binds positionally; `(Rect :h hv :w wv)` binds by field name
+;; (order free).  Both forms coexist across arms.
+
+(defdata Shape :copy
+  (Circle [radius : float])
+  (Rect   [w : float h : float]))
+
+(defn perimeter [s] : float
+  (match s
+    (Circle r)          (* 2.0 (* 3.14 r))
+    (Rect :h hv :w wv)  (* 2.0 (+ wv hv))))   ; by-name, reordered
+
+(defn widthish [s] : float
+  (match s
+    (Circle radius)  radius
+    (Rect w h)       w))                       ; positional
+
+(defn main [] : int
+  (let [c (Circle 1.0)
+        r (Rect 3.0 5.0)]
+    (println (perimeter r))
+    (println (widthish r))
+    (println (widthish c))
+    0))

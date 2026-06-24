@@ -1,0 +1,23 @@
+;; CONV-S0 (struct/ADT convergence): record-style ADT variants.
+;; A variant whose payload is a `[name : type ...]` block constructs
+;; positionally, exactly like a positional-style variant.
+
+(defdata Shape
+  (Circle [radius : float])
+  (Rect   [w : float h : float])
+  (Empty))
+
+(defn describe [s] : float
+  (match s
+    (Circle r)  r
+    (Rect w h)  (* w h)
+    (Empty)     0.0))
+
+(defn main [] : int
+  (let [c (Circle 2.5)
+        r (Rect 3.0 4.0)
+        e (Empty)]
+    (println (describe c))
+    (println (describe r))
+    (println (describe e))
+    0))
