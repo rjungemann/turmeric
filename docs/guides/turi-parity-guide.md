@@ -105,9 +105,9 @@ native / inline-C higher-order-function callback* (a native HOF that re-applies
 a closure via `turi_call` on a live C frame). That case errors **cleanly** (no
 crash, no silent miscompile) -- the tree-walker cannot capture across a native
 C frame. Lifting it is the subject of
-[turi-cek-stackless-reentry-plan.md](../upcoming/v1/turi-cek-stackless-reentry-plan.md)
-(SR), which reifies the native callback onto the driver work-stack as an
-explicit resume continuation. Root-cause history:
+[turi-cek-stackless-reentry-plan.md](../archive/turi-cek-stackless-reentry-plan.md)
+(SR, concluded + archived), which reifies the native callback onto the driver
+work-stack as an explicit resume continuation. Root-cause history:
 [the delimited-control gaps report](../archive/history/turi-interpreter-delimited-control-gaps.md)
 (RESOLVED).
 

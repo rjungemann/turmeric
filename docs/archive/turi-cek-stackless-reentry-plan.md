@@ -6,6 +6,24 @@ description: Eliminate the last source of unbounded C recursion in the tree-walk
 
 # Turi stackless native re-entry (full CEK / driver-CPS) -- Plan
 
+> **CONCLUDED & ARCHIVED (2026-06-24).** The native-re-entry conversion this plan
+> set out to do is complete: every recursion that flows through a driven position
+> -- ordinary tail/non-tail calls, the full delimited-control surface
+> (`reset`/`shift`, `call/cc`, serial/cloneable reset + resume, `resume-cont!`,
+> the `is_pure` capture fold), and `try`/`catch` -- is heap-bounded (measured:
+> 1,000,000 deep, no guard fire). No synchronous native HOF re-entry remains on a
+> driven path.
+>
+> The one thing this plan named as its finish line -- *deleting* the `eval_depth`
+> guard -- is intentionally **not** done. The guard now fires only for the
+> genuinely C-scoped boundary forms (`catch-unwind`, `atomically`, `async`),
+> which the compiled backend also C-recurses on (and SIGSEGVs). Heap-bounding
+> those is real but separate work, broken out into
+> `docs/upcoming/v1/turi-c-scoped-forms-heap-bounding-plan.md`; the guard stays
+> as a precise C-stack-overflow backstop until that lands. See the
+> driver-coverage status update below for the full assessment.
+
+
 ## Status update -- 2026-06-24 (N4 Slice 7 -- is_pure capture fold on the work-stack)
 
 **The in-capture `is_pure` fold now runs on the work-stack -- every natural
