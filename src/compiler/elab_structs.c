@@ -4175,6 +4175,103 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
     return out;
 }
 
+/* CONV-S4: functional update for a single-variant record ADT.  Mirrors the
+ * struct lowering in elab_with, but constructs through the auto-bound variant
+ * constructor `Ctor`:
+ *
+ *   (let [G src] (Ctor <f0> <f1> ...))   ; <fi> = override value or (.field G)
+ *
+ * The ctor is positional in declared field order, so each unchanged field is
+ * filled by `(.field G)` (which now resolves on a single-variant record ADT,
+ * see the dot-accessor handler in elab_typeclasses.c). */
+static Expr *elab_with_record_adt(Elab *e, const Form *call,
+                                  const Form *src_form, const Form *ovr_form,
+                                  const CtorDef *ctor) {
+    Span sp = call->span;
+    if (!ctor->adt->is_copy) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "TUR-E0296: with requires a :copy type -- '%s' is move-only, "
+                  "so copying its unchanged fields out of the source would "
+                  "consume it. Declare it `(defdata %s :copy ...)` to use with.",
+                  ctor->adt->name, ctor->adt->name);
+        return NULL;
+    }
+
+    /* Map each override field name to its declared field index. */
+    Form **ovr_val = (Form **)arena_alloc(e->arena,
+        (ctor->n_fields ? ctor->n_fields : 1) * sizeof(Form *));
+    for (uint32_t i = 0; i < ctor->n_fields; i++) ovr_val[i] = NULL;
+    uint32_t n_pairs = ovr_form->as.list.len / 2u;
+    for (uint32_t p = 0; p < n_pairs; p++) {
+        Form *fname = ovr_form->as.list.items[p * 2u];
+        Form *fval  = ovr_form->as.list.items[p * 2u + 1u];
+        if (fname->tag != F_SYM) {
+            diag_emit(DIAG_ERROR, fname->span,
+                      "with: override field must be a bare field-name symbol");
+            return NULL;
+        }
+        const char *kn = fname->as.sym->name;
+        uint32_t klen = fname->as.sym->len;
+        uint32_t fi = UINT32_MAX;
+        for (uint32_t i = 0; i < ctor->n_fields; i++) {
+            const char *dn = ctor->fields[i].name;
+            if (dn && strlen(dn) == klen && memcmp(dn, kn, klen) == 0) { fi = i; break; }
+        }
+        if (fi == UINT32_MAX) {
+            diag_emit(DIAG_ERROR, fname->span,
+                      "TUR-E0297: with unknown field '%s' for variant '%s'",
+                      kn, ctor->name);
+            return NULL;
+        }
+        if (ovr_val[fi]) {
+            diag_emit(DIAG_ERROR, fname->span,
+                      "TUR-E0298: with duplicate override field '%s'", kn);
+            return NULL;
+        }
+        ovr_val[fi] = fval;
+    }
+
+    /* Build (let [G src] (Ctor <f0> ...)). */
+    char g_name[32];
+    snprintf(g_name, sizeof(g_name), "__with_%u", e->next_id++);
+    const Symbol *g_sym = symtab_intern(e->st, strslice(g_name, (uint32_t)strlen(g_name)));
+    Form *g_form = form_sym(e->arena, sp, g_sym);
+
+    const Symbol *ctor_sym = symtab_intern(e->st,
+        strslice(ctor->name, (uint32_t)strlen(ctor->name)));
+
+    uint32_t cc_n = 1u + ctor->n_fields;
+    Form **cc = (Form **)arena_alloc(e->arena, (cc_n ? cc_n : 1) * sizeof(Form *));
+    cc[0] = form_sym(e->arena, sp, ctor_sym);
+    for (uint32_t i = 0; i < ctor->n_fields; i++) {
+        if (ovr_val[i]) {
+            cc[1u + i] = ovr_val[i];
+        } else {
+            char acc[160];
+            int al = snprintf(acc, sizeof(acc), ".%s", ctor->fields[i].name);
+            const Symbol *acc_sym = symtab_intern(e->st,
+                strslice(acc, (al > 0 ? (uint32_t)al : 0)));
+            Form *ai[2];
+            ai[0] = form_sym(e->arena, sp, acc_sym);
+            ai[1] = g_form;
+            cc[1u + i] = form_list(e->arena, sp, ai, 2);
+        }
+    }
+    Form *ctor_call = form_list(e->arena, sp, cc, cc_n);
+
+    Form *bind_items[2];
+    bind_items[0] = g_form;
+    bind_items[1] = (Form *)src_form;
+    Form *bind_vec = form_vec(e->arena, sp, bind_items, 2);
+
+    Form *let_items[3];
+    let_items[0] = form_sym(e->arena, sp, e->sym_let);
+    let_items[1] = bind_vec;
+    let_items[2] = ctor_call;
+    Form *let_form = form_list(e->arena, sp, let_items, 3);
+    return elab_form(e, let_form);
+}
+
 /* WITH-V0: functional struct update.
  *
  * Syntax: (with src [field0 val0 field1 val1 ...])
@@ -4219,6 +4316,19 @@ Expr *elab_with(Elab *e, const Form *call) {
     if (!src) return NULL;
     Type st = src->type;
     while (st.kind == TY_APP && st.as.app.fn) st = *st.as.app.fn; /* parametric head */
+    /* CONV-S4 (struct/ADT convergence): a single-variant record ADT is a
+     * product, so `with` updates it exactly like a struct.  Lower to
+     * `(let [G src] (Ctor <f0> <f1> ...))` where each `<fi>` is the override
+     * value or `(.field G)` for unchanged fields -- the same shape the struct
+     * path below uses, but constructing through the auto-bound variant
+     * constructor instead of make-struct.  Field-order independence,
+     * per-field type checking, and inference all come from reusing the ctor. */
+    if (st.kind == TY_ADT && st.as.adt_.def &&
+        adt_is_flat_product(st.as.adt_.def) &&
+        st.as.adt_.def->n_ctors == 1 && st.as.adt_.def->ctors[0]->is_record) {
+        return elab_with_record_adt(e, call, src_form, ovr_form,
+                                    st.as.adt_.def->ctors[0]);
+    }
     if (st.kind != TY_STRUCT || !st.as.struct_.def) {
         diag_emit(DIAG_ERROR, src_form->span,
                   "with: source must be a struct value, got %s",

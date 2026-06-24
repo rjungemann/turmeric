@@ -5093,6 +5093,26 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * valid C even though the C parameter type is int64_t.
              * Phase D: for pass-by-ptr params (const T*), use -> instead of . */
             char *sv = emit_value(ctx, body, e->as.get_field_.struct_expr);
+            /* CONV-S0/S4: receiver is a single-variant record ADT (def == NULL).
+             * The value is the heap-pointer int64 carrier; read the field out of
+             * the sole variant's union member.  The flat-product typedef has no
+             * tag word but keeps `union { struct { ... } Ctor; } as`, so the
+             * `->as.Ctor._<idx>` path is unchanged from the tagged case. */
+            if (!e->as.get_field_.def && e->as.get_field_.adt_def) {
+                const AdtDef *adt = e->as.get_field_.adt_def;
+                const CtorDef *ctor = e->as.get_field_.adt_ctor;
+                char *adt_mn = mangle_field_name(adt->name);
+                char *mctor  = mangle_field_name(ctor->name);
+                const char *cty = type_c_name(e->type);
+                Buf hb; buf_init(&hb);
+                buf_printf(&hb, "(%s)((tur_adt_%s *)(intptr_t)(%s))->as.%s._%u",
+                           cty, adt_mn, sv, mctor, e->as.get_field_.field_idx);
+                buf_putc(&hb, '\0');
+                free(sv); free(adt_mn); free(mctor);
+                char *r = strdup(hb.data);
+                buf_free(&hb);
+                return r;
+            }
             StructDef *def = e->as.get_field_.def;
             /* byvalue-field-access-through-ascribed-carrier-receiver: a field
              * read off an *ascribed* receiver -- `(.snd (:: x (Duo cstr int)))`
@@ -6417,7 +6437,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (e->as.match_.arms[ai].guard) { has_any_guard = true; break; }
             }
 
-            if (has_any_guard) {
+            /* CONV-S2: a single-variant flat-product ADT has no `tag` word, so it
+             * cannot be dispatched with a `switch (__scrut->tag)`.  Route it
+             * through the if-chain path (which never reads the tag for these
+             * types -- see the ctor-arm header below) so the sole arm is entered
+             * unconditionally.  The single variant makes the match trivially
+             * exhaustive, so first-arm-wins is correct. */
+            bool adt_flat = adt_is_flat_product(adt);
+
+            if (has_any_guard || adt_flat) {
                 /* Phase G4: Emit as if-chain with goto for guard fallthrough */
                 char *end_label = fresh_tmp(ctx);
                 indent_buf(body, ctx->indent);
@@ -6434,7 +6462,9 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     MatchPattern *pat = &arm->pattern;
 
                     indent_buf(body, ctx->indent);
-                    if (pat->is_wildcard || pat->is_var) {
+                    if (pat->is_wildcard || pat->is_var || adt_flat) {
+                        /* No tag word on a flat single-variant ADT: the sole
+                         * constructor arm is entered unconditionally. */
                         buf_puts(body, "{\n");
                     } else {
                         buf_printf(body, "if (__scrut->tag == %u) {\n", pat->ctor->tag);

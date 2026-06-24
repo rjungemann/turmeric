@@ -5047,6 +5047,39 @@ Expr *elab_method_call(Elab *e, const Form *call) {
             /* In Phase PTC4, this allows (.method obj) to dispatch to typeclass
              * methods even when obj is a struct that doesn't have that field. */
         }
+        /* CONV-S0/S4: field access on a single-variant record ADT.  A
+         * single-variant, non-GADT ADT whose sole constructor is record-style
+         * is a product, so `(.field v)` / `(. v field)` reads the named field
+         * directly -- the same surface a struct exposes (a struct *is* this
+         * case).  Unwrap a parametric TY_APP head to its base ADT first. */
+        {
+            const Type *adt_base = field_owner_type;
+            while (adt_base && adt_base->kind == TY_APP && adt_base->as.app.fn)
+                adt_base = adt_base->as.app.fn;
+            if (adt_base && adt_base->kind == TY_ADT && adt_base->as.adt_.def) {
+                const AdtDef *adt = adt_base->as.adt_.def;
+                if (adt_is_flat_product(adt) && adt->n_ctors == 1 &&
+                    adt->ctors[0]->is_record) {
+                    const CtorDef *ctor = adt->ctors[0];
+                    for (uint32_t i = 0; i < ctor->n_fields; i++) {
+                        if (!ctor->fields[i].name) continue;
+                        if (strcmp(ctor->fields[i].name, method_name) == 0) {
+                            Type ftype = ctor->fields[i].full_type
+                                ? *ctor->fields[i].full_type
+                                : type_from_kind(ctor->fields[i].kind);
+                            Expr *out = expr_new(e->arena, EX_GET_FIELD, ftype,
+                                                 call->span);
+                            out->as.get_field_.struct_expr = obj;
+                            out->as.get_field_.field_idx = i;
+                            out->as.get_field_.def = NULL;
+                            out->as.get_field_.adt_def = adt;
+                            out->as.get_field_.adt_ctor = ctor;
+                            return out;
+                        }
+                    }
+                }
+            }
+        }
 skip_struct_field_lookup:;
     }
 

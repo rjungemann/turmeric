@@ -1414,8 +1414,9 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
      * Per-instantiation include guard keyed on the mangled name. */
     buf_printf(out, "#ifndef TUR_TY_%s\n", adt_inst_name);
     buf_printf(out, "#define TUR_TY_%s\n", adt_inst_name);
+    bool flat = adt_is_flat_product(def);
     buf_printf(out, "typedef struct %s {\n", adt_inst_name);
-    buf_printf(out, "    int tag;\n");
+    if (!flat) buf_printf(out, "    int tag;\n");
     buf_printf(out, "    union {\n");
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
         CtorDef *ctor = def->ctors[ci];
@@ -1468,7 +1469,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
         buf_printf(out, ") {\n");
         buf_printf(out, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
                    adt_inst_name, adt_inst_name, adt_inst_name);
-        buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
+        if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             buf_printf(out, "    __r->as.%s._%u = _%u;\n", mctor, fi, fi);
         }

@@ -4693,8 +4693,9 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
         snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", _mn);
         free(_mn);
     }
+    bool flat = adt_is_flat_product(def);
     buf_printf(out, "typedef struct %s {\n", adt_c_name);
-    buf_printf(out, "    int tag;\n");
+    if (!flat) buf_printf(out, "    int tag;\n");
     buf_printf(out, "    union {\n");
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
         CtorDef *ctor = def->ctors[ci];
@@ -4767,7 +4768,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
         buf_printf(out, ") {\n");
         buf_printf(out, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
                    adt_c_name, adt_c_name, adt_c_name);
-        buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
+        if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             buf_printf(out, "    __r->as.%s._%u = _%u;\n", mctor, fi, fi);
         }
@@ -8081,8 +8082,9 @@ int emit_program(Buf *out, const Expr *program) {
                 snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", _mn);
                 free(_mn);
             }
+            bool flat = adt_is_flat_product(def);
             buf_printf(&early_file, "typedef struct %s {\n", adt_c_name);
-            buf_printf(&early_file, "    int tag;\n");
+            if (!flat) buf_printf(&early_file, "    int tag;\n");
             buf_printf(&early_file, "    union {\n");
             for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
                 CtorDef *ctor = def->ctors[ci];
@@ -8155,7 +8157,7 @@ int emit_program(Buf *out, const Expr *program) {
                 buf_printf(&early_file, ") {\n");
                 buf_printf(&early_file, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
                            adt_c_name, adt_c_name, adt_c_name);
-                buf_printf(&early_file, "    __r->tag = %u;\n", ctor->tag);
+                if (!flat) buf_printf(&early_file, "    __r->tag = %u;\n", ctor->tag);
                 for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                     buf_printf(&early_file, "    __r->as.%s._%u = _%u;\n",
                                mctor, fi, fi);

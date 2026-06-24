@@ -291,6 +291,18 @@ typedef struct AdtDef {
     uint16_t    origin_file_id;
 } AdtDef;
 
+/* CONV-S2 (struct/ADT convergence): a single-variant, non-GADT ADT is
+ * representationally a product (one named/positional payload, no choice of
+ * variant), so codegen specializes it to a flat layout -- no `int tag` word in
+ * the typedef, no tag store in the constructor, and no tag test in `match`.
+ * Multi-variant ADTs and GADTs (whose tag may drive return-type refinement)
+ * keep the tagged-union representation.  Every codegen site that would emit or
+ * read the tag word for an ADT gates on this predicate so the typedef, the
+ * constructors, and the match sites stay in lockstep. */
+static inline bool adt_is_flat_product(const AdtDef *def) {
+    return def && def->n_ctors == 1 && !def->is_gadt;
+}
+
 /* Phase 11: Struct field descriptor.
  * Stored inline in StructDef.fields[]. */
 typedef struct StructField {
