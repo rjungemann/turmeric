@@ -47,23 +47,37 @@ int64 carrier ABI -- it is **not** yet byte-identical to a by-value
 `conv-single-variant-flat` (snapshot: tagless layout), `conv-multi-variant-tagged`
 (snapshot: tag preserved), `errors/conv-copy-mixed-variant-rejects` (CONV-S5).
 
+**Field access + CONV-S4(`with`) on single-variant record ADTs -- landed.**
+A single-variant, non-GADT record ADT now exposes the full struct surface:
+
+- **Field access** -- `(.field v)` and `(. v field)` resolve against the sole
+  variant's named fields. The dot-accessor handler in
+  ([`elab_typeclasses.c`](../../src/compiler/elab_typeclasses.c)) gained an ADT
+  branch alongside the `TY_STRUCT` one; it builds an `EX_GET_FIELD` whose `def`
+  is NULL and whose `adt_def`/`adt_ctor` carry the variant, and emit
+  ([`emit_expr.c`](../../src/compiler/emit_expr.c)) reads
+  `((tur_adt_X *)v)->as.Ctor._<idx>`. (A typed receiver is required, exactly as
+  for structs.)
+- **`with`** -- `elab_with_record_adt`
+  ([`elab_structs.c`](../../src/compiler/elab_structs.c)) lowers
+  `(with v [f val ...])` to `(let [G v] (Ctor <f0> ...))`, filling unchanged
+  fields with `(.field G)`; it requires a `:copy` type, mirroring the struct
+  path. Fixture: `conv-with-record-variant`.
+
 **Deferred -- the full representation merge** (a dedicated effort; structs are
 by-value flat C structs while ADTs are heap-pointer carriers, and
-field/ctor/ABI codegen all branch on that):
+ctor/ABI codegen all branch on that):
 
 - **CONV-S1 -- `defstruct` lowers to a single-variant `defdata`.** With CONV-S2
   the tag-word cost is gone, but a true merge still has to make single-variant
   ADTs flow *by value* (today they are heap-pointer int64 carriers) so the
   lowered struct is byte-identical -- touching the ABI, monomorphization,
   drop-glue, and ~57 `defdata` fixtures.
-- **Field access on a narrowed/single-variant record variant** (`(.field v)` /
-  `(. v field)`). CONV-S0 documented this but only match-binding shipped;
-  `(.x p)` on a single-variant record ADT still resolves through the accessor-
-  as-typeclass-method path and errors. Needed before CONV-S4(`with`).
-- **CONV-S4 (`with` half)** -- `elab_with`
-  ([`elab_structs.c`](../../src/compiler/elab_structs.c)) requires a `StructDef`
-  source today; lifting it to single-variant record ADTs rides on the field-
-  access item above.
+- **`with` on a *narrowed* multi-variant ADT.** The single-variant case landed
+  above; `(with v [...])` inside a `match` arm that narrowed a multi-variant
+  ADT to one record variant needs variant narrowing in the type system (the
+  arm scrutinee still has the full ADT type today) and stays out of scope, as
+  the plan's "Open questions" note.
 - **CONV-S6 -- diagnostic wording pass** -- best done once the merge settles.
 
 ## Context

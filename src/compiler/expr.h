@@ -860,7 +860,12 @@ struct Expr {
 
         /* Phase 11: Struct operations */
         struct { StructDef *def; Expr **field_values; uint32_t n_fields; } make_struct_; /* (make-struct Name v1...) */
-        struct { Expr *struct_expr; uint32_t field_idx; StructDef *def; } get_field_; /* (.field s) - field read */
+        struct { Expr *struct_expr; uint32_t field_idx; StructDef *def;
+                 /* CONV-S0/S4: when the receiver is a single-variant record ADT
+                  * (not a struct), `def` is NULL and these carry the sole
+                  * variant; codegen reads `((tur_adt_X *)v)->as.Ctor._<idx>`. */
+                 const struct AdtDef *adt_def; const struct CtorDef *adt_ctor;
+               } get_field_; /* (.field s) - field read */
         /* Phase DS3: (set! (.field s) v) - struct field write.  receiver_is_rc
          * is true when the receiver expression is rc<Struct> (auto-deref); in
          * that case codegen casts through the rc-block's value pointer. */

@@ -1,0 +1,21 @@
+;; CONV-S0 / CONV-S4 (struct/ADT convergence): a single-variant record ADT is a
+;; product, so it exposes the full struct surface -- direct field access via
+;; `(.field v)` and `(. v field)`, and functional update via `with`.  `with`
+;; lowers to `(let [G src] (Ctor <f> ...))`, filling unchanged fields with
+;; `(.field G)` and overriding the listed ones; it requires a :copy type, just
+;; as it does for structs.
+
+(defdata Point :copy
+  (Point [x : int y : int]))
+
+(defn sum [p : Point] : int
+  (+ (.x p) (. p y)))            ; both accessor spellings on a record variant
+
+(defn main [] : int
+  (let [p  (Point :x 1 :y 2)
+        q  (with p [x 10])       ; override one field, copy the rest
+        r  (with p [x 100 y 200])]
+    (println (sum p))            ; 3
+    (println (sum q))            ; 12
+    (println (sum r))            ; 300
+    0))
