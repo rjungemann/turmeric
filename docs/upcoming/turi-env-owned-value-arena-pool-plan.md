@@ -1,0 +1,197 @@
+# Plan: env-owned value-arena pool for the turi interpreter
+
+**Status:** proposal (not started). **Area:** `src/turi/` (tree-walking interpreter).
+**Goal:** make `turi_env_free` reclaim *all* memory an evaluation produces, so an
+embedding C host can deallocate an interpreter session in one shot instead of
+relying on process exit.
+
+## Background -- the current memory model
+
+turi is intentionally "never-free" at the value level: it allocates `TuriValue`
+payloads with raw `malloc`/`calloc`/`strdup` and leans on process exit to
+reclaim them. The harnesses that drive it default to
+`ASAN_OPTIONS=detect_leaks=0` for this reason.
+
+What `TuriEnv` (`src/turi/env.h:104`) already *owns* and what
+`turi_env_free` (`src/turi/env.c`) already reclaims in bulk:
+
+- `eval_arenas` -- a linked list of per-call `Arena`s (`ArenaNode`,
+  `env.h:67-70`) holding elaborated ASTs / `elaborate_program` output and most
+  per-call working memory. Freed node-by-node with `arena_free`.
+- `sym_arena` + `SymbolTable`, the `globals` list + `globals_ht` slots, the
+  async scheduler (`turi_sched_free`), dlopen'd spice images, `src_acc`.
+
+What is **not** owned by the env and therefore leaks across `turi_env_free`
+(the "ambient" residue) -- all raw heap, no central registry:
+
+- error / rejection strings: `strdup` in `src/turi/value.c:11,20,24`.
+- `TuriClosure`: ~10 `malloc`/`calloc` sites in `eval.c` (132, 4155, 5733,
+  6414, 6451, 6460, 7086, 7589, 8461, ...).
+- `TuriStruct` + its `fields` array: `eval.c:504,508,536`; ADT/record field
+  arrays, boxes, cons cells, accumulator arrays (797, 814, 1621, 2336, 3207,
+  4363, 5126, 5150, 5212, ...).
+
+Note `eval.c` already issues ~78 `free` calls: genuinely transient buffers
+(finished continuation/generator stacks, scratch arg arrays) are freed inline
+today. Those are **not** the leak; the leak is the escaping/untracked payloads
+above.
+
+## Goals
+
+1. After `turi_env_free(env)`, the process holds **zero** turi-attributable live
+   allocations (verifiable under LeakSanitizer with `detect_leaks=1`).
+2. Enable the clean embedding pattern: a host creates a `TuriEnv` per unit of
+   work, evaluates, reads results out, then `turi_env_free`s -- reclaiming
+   everything, repeatable in a long-lived process with no growth across units.
+3. No change to interpreter semantics or to the value representation visible to
+   host code (`TuriValue` stays a tagged union passed by value).
+
+## Non-goals
+
+- Bounding peak memory **within a single long-lived env** (a notebook kernel
+  sharing one env across thousands of cells). Phase 1 makes teardown clean but
+  an immortal env still grows; see Phase 2 for the optional bound.
+- Reference counting or a tracing GC. That is a larger ownership-model change,
+  out of scope here.
+- Touching the compiled/codegen path, which is already leak-clean and
+  leak-checked.
+
+## Design
+
+### Phase 1 -- route value payloads through an env-owned pool
+
+Add a dedicated arena pool on `TuriEnv` for value-level allocations, distinct
+from `eval_arenas` (which holds AST/elaboration memory with its own lifetime):
+
+```c
+/* env.h, inside TuriEnv */
+ArenaNode *value_arenas;   /* pool for TuriValue heap payloads; freed in
+                            * turi_env_free, like eval_arenas */
+```
+
+Provide a small allocation API in `value.c` that all payload sites call instead
+of raw libc:
+
+```c
+/* value.h */
+void  *turi_val_alloc(TuriEnv *env, size_t n);          /* arena bump */
+char  *turi_val_strdup(TuriEnv *env, const char *s);    /* arena copy */
+TuriClosure *turi_val_closure(TuriEnv *env);            /* zeroed closure */
+TuriStruct  *turi_val_struct(TuriEnv *env, uint32_t nfields);
+```
+
+Each grabs from the tail `value_arenas` node, chaining a fresh arena when the
+current one is exhausted (mirror the existing `eval_arenas` growth logic). The
+pool is created in `turi_env_new` and torn down in `turi_env_free`:
+
+```c
+/* turi_env_free, alongside the existing eval_arenas loop */
+ArenaNode *vn = env->value_arenas;
+while (vn) { ArenaNode *next = vn->next; arena_free(&vn->arena); free(vn); vn = next; }
+env->value_arenas = NULL;
+```
+
+### Migration: which allocations move, which stay
+
+| Allocation | Today | After |
+|---|---|---|
+| error/rejection strings (`value.c:11,20,24`) | `strdup` | `turi_val_strdup(env, ...)` |
+| `TuriClosure` (eval.c) | `malloc`/`calloc` | `turi_val_closure(env)` |
+| `TuriStruct` + `fields` (eval.c) | `malloc` | `turi_val_struct(env, n)` |
+| ADT/record/box/cons/accumulator payloads | `malloc` | `turi_val_alloc(env, n)` |
+| continuation/generator stacks (mmap/large) | `malloc`/`mmap` + inline `free` | **unchanged** |
+| scratch arg arrays freed inline before return | `malloc` + inline `free` | **unchanged** |
+
+The rule: things that **escape** (could end up in a global, a closure capture, a
+return value, or the host's hands) move to the pool. Things that are provably
+**transient within one C call** and already explicitly freed stay as
+`malloc`/`free` -- arenas cannot free individuals, so keeping bounded transients
+out of the pool preserves today's steady-state behavior inside long evals.
+
+### Interaction with the existing inline `free`s
+
+Any inline `free(p)` whose `p` now comes from the pool must be deleted (freeing
+an arena pointer is a bug). Audit the ~78 `free` sites in `eval.c`: a `free`
+that targets a migrated payload type is removed; a `free` of an unmigrated
+transient stays. This audit is the bulk of the review surface and the main risk
+(see Risks).
+
+`turi_val_alloc` must require a non-NULL `env`. A few payload sites today have no
+`env` in scope (e.g. `turi_error(const char *)` in `value.c` is env-less by
+signature). Thread `env` to them, or, where that is too invasive, keep a tiny
+fallback bump-pool reachable from a single process-global the env adopts on
+`turi_env_free`. Prefer threading `env`; it keeps ownership honest.
+
+### Phase 2 (optional) -- bound a single long-lived env
+
+Phase 1 makes teardown clean but does not shrink a never-destroyed env. To bound
+a notebook-kernel-style host, add a two-region scheme:
+
+- a **permanent** value pool for payloads reachable from `globals` / live host
+  handles;
+- a **scratch** value pool reset (`arena_reset`, not freed) at each top-level
+  eval boundary.
+
+Values are scratch-allocated by default; a value that **escapes** the top-level
+eval (assigned into a global, returned to the host, captured by a surviving
+closure) is **promoted** -- deep-copied into the permanent pool -- before the
+scratch region is reset. Promotion needs an escape walk over the result + any
+newly-bound globals, with cycle handling (closures can be cyclic via letrec).
+This is real complexity and is why it is deferred; Phase 1 stands alone and
+delivers goal (1) and (2) without it.
+
+## API / behavior changes
+
+- New: `turi_val_*` allocators (internal to `src/turi/`).
+- Changed: `turi_env_free` additionally frees `value_arenas` (and, Phase 2, both
+  regions). No signature change; existing embedders get clean teardown for free.
+- Unchanged: `TuriValue`, `turi_env_new`, `turi_eval_*`, value semantics, and
+  the host-visible lifetime contract ("values valid until `turi_env_free`",
+  `eval.h:19`) -- now literally true rather than true-modulo-leaks.
+
+## Testing
+
+- New harness `tests/run-turi-env-teardown.sh`: in one process, loop N times
+  { `turi_env_new`; evaluate a script that builds closures, structs, ADTs, and
+  raises caught errors; read a result; `turi_env_free`; }. Run under
+  `ASAN_OPTIONS=detect_leaks=1` and assert **zero** leaks -- the inverse of the
+  current `detect_leaks=0` default, now achievable.
+- Flip the turi ctest targets (`tur_turi_*`, `tur_flags_*`) to
+  `detect_leaks=1` once Phase 1 lands, or add a dedicated leak-on variant so the
+  property does not regress. Keep the legacy `detect_leaks=0` default only for
+  paths that intentionally exit without `turi_env_free` (one-shot CLI eval).
+- Re-run the full suite (`bash tests/run.sh`, 10-min timeout) -- value-path
+  changes touch every interpreter fixture.
+
+## Risks
+
+- **Over-eager `free` removal / double-free.** The inline-`free` audit is the
+  sharp edge: delete a `free` of a still-malloc'd transient and you reintroduce
+  a leak; keep a `free` of a now-arena pointer and you crash. Mitigate by
+  migrating one payload kind at a time, each with a leak-on test run.
+- **Per-call growth regression (Phase 1 only).** Long-running single evals that
+  produced many short-lived values used to free them inline; pooling defers
+  reclamation to `turi_env_free`. Acceptable for the per-unit-env pattern;
+  Phase 2 addresses the immortal-env case.
+- **Env threading churn.** Some payload sites lack `env`; threading it reaches
+  into several call chains. Bounded but wide.
+- **Arena alignment/size for `TuriStruct` flexible field arrays** -- ensure
+  `turi_val_struct` returns suitably aligned, contiguous storage.
+
+## Alternatives considered
+
+- **Per-value refcounting** -- precise and bounds long-lived envs, but turi
+  aliases values freely (env slots, captures, returns, continuations); retro-
+  fitting correct inc/dec across every site is far larger and bug-prone.
+- **Tracing GC** -- best peak-memory story, largest effort; needs a precise root
+  set over env globals, the work-stack, handler/defer stacks, and fibers.
+- **Status quo + `detect_leaks=0`** -- zero work, but leaves teardown leaky and
+  blocks any embedder that wants a clean long-lived host process.
+
+## Recommendation
+
+Land **Phase 1** (env-owned `value_arenas` + `turi_val_*` + the `free` audit):
+it is self-contained, makes `turi_env_free` leak-clean, and unlocks the clean
+per-unit-env embedding pattern with a leak-on regression test. Treat **Phase 2**
+(scratch/permanent regions + escape promotion) as a follow-up only if a
+single-immortal-env host (e.g. a notebook kernel) becomes a real requirement.
