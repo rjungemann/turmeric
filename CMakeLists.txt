@@ -62,6 +62,14 @@ add_test(
   COMMAND bash tests/check-span-unknown.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# debugger Phase 1: breakpoint-span coverage gate. Every fixture's elaborated
+# AST must carry a usable source span on each breakpoint-eligible node (defn,
+# let form, call site, top-level form). See docs/upcoming/debugger-plan.md.
+add_test(
+  NAME tur_span_coverage
+  COMMAND bash tests/check-span-coverage.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # HttpdConn single-definition invariant: no inline-C block may reintroduce a
 # local redeclaration of the consolidated httpd connection structs.
 add_test(
