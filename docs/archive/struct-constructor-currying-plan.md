@@ -6,6 +6,15 @@ description: Let an under-applied struct constructor (and, more generally, any i
 
 # Struct Constructor Currying -- Plan
 
+> **Status: DONE.** All goals (CURRY-V0, V1, V2, DOC) landed. The reported
+> finding is resolved and archived at
+> `docs/archive/struct-return-through-closure-loses-type.md`, with the per-fix
+> paper trail at `docs/archive/history/struct-return-through-closure-loses-type.md`.
+> Constructor currying (`((Person "Bob") 40)`), struct/ADT-returning lambdas,
+> and partial application of struct/ADT-returning functions all work; the full
+> suite is green. Parameterized-struct constructor currying remains out of scope
+> (the synthesizer declines; full application via make-struct still works).
+
 ## Context
 
 `struct-ergonomics-plan` (now archived) landed the auto-bound constructor,

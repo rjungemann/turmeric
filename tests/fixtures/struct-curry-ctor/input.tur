@@ -1,0 +1,16 @@
+; struct-return-through-closure-loses-type (CURRY-V2): an under-applied
+; positional struct constructor curries into a closure that completes to the
+; struct, both chained directly and stored in a let.  Field access on the
+; result resolves (the by-value struct survives the closure ABI).
+
+(defstruct Person :copy [name : cstr age : int])
+
+(defn main [] : int
+  (let [chained ((Person "Ada") 36)
+        mk      (Person "Bob")
+        stored  (mk 40)
+        full    (Person "Cy" 22)]
+    (println (.name chained))
+    (println (.name stored))
+    (println (.name full))
+    0))

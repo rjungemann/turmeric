@@ -1314,6 +1314,99 @@ static bool lint_is_panic_site(const char *nm, bool *is_unwrap_out) {
         strcmp(nm, "invariant!") == 0     || strcmp(nm, "invariant-msg!") == 0;
 }
 
+/* struct-return-through-closure-loses-type (CURRY-V2): synthesize (once, cached
+ * at global scope) a real backing constructor function for a non-generic struct,
+ * so an under-applied positional `(Name a)` can partial-apply into a closure that
+ * completes to the struct.  The function is named `__ctor_<Name>` (never `Name`,
+ * so it cannot clash with the struct's type binding or its typeclass-instance
+ * ABI -- the failure that made the archived plan drop a same-named value
+ * binding).  Its body is `(make-struct Name p0 p1 ...)`, elaborated through the
+ * normal make-struct path; with CURRY-V0/V1 the by-value struct result flows
+ * through the closure ABI correctly.  Returns NULL when currying cannot be
+ * offered (parameterized struct -- partial type inference is out of scope here).
+ */
+static Binding *synthesize_struct_ctor(Elab *e, Binding *struct_b, Span span) {
+    StructDef *def = struct_b->type.as.struct_.def;
+    if (!def || def->n_fields == 0) return NULL;
+    /* Parameterized structs need type-arg inference across a partial argument
+     * set; leave them on the full-application make-struct path. */
+    if (def->n_type_params > 0) return NULL;
+
+    char ctor_name[160];
+    int cnl = snprintf(ctor_name, sizeof(ctor_name), "__ctor_%s", def->name);
+    const Symbol *ctor_sym = symtab_intern(e->st, strslice(ctor_name, (cnl > 0 ? (uint32_t)cnl : 0)));
+
+    /* Cached? Reuse the previously-synthesized binding. */
+    Binding *cached = scope_lookup(&e->global, ctor_sym);
+    if (cached && cached->type.kind == TY_FN) return cached;
+
+    uint32_t n = def->n_fields;
+    if (n > MAX_FN_ARITY) return NULL;
+
+    /* Build params typed by each field's use-type, and the make-struct body
+     * Form `(make-struct Name p0 ...)` referencing them by symbol. */
+    Binding **params = (Binding **)arena_alloc(e->arena, n * sizeof(Binding *));
+    Type *param_types = (Type *)arena_alloc(e->arena, n * sizeof(Type));
+    TypeKind arg_kinds[MAX_FN_ARITY];
+    Form **ms_items = (Form **)arena_alloc(e->arena, (n + 2u) * sizeof(Form *));
+    ms_items[0] = form_sym(e->arena, span, e->sym_make_struct);
+    ms_items[1] = form_sym(e->arena, span,
+                           symtab_intern(e->st, strslice(def->name, (uint32_t)strlen(def->name))));
+    for (uint32_t i = 0; i < n; i++) {
+        char pn[32];
+        int pnl = snprintf(pn, sizeof(pn), "__ctorp%u_%u", e->next_id++, i);
+        const Symbol *psym = symtab_intern(e->st, strslice(pn, (pnl > 0 ? (uint32_t)pnl : 0)));
+        Type pt = elab_struct_field_use_type(e, NULL, def, &def->fields[i]);
+        Binding *pb = binding_new(e, psym, pt, false, false, span);
+        params[i] = pb;
+        param_types[i] = pt;
+        arg_kinds[i] = pt.kind;
+        ms_items[2u + i] = form_sym(e->arena, span, psym);
+    }
+    Form *body_form = form_list(e->arena, span, ms_items, n + 2u);
+
+    /* Elaborate the body with the params in an inner scope. */
+    Scope inner;
+    scope_init(&inner, &e->global);
+    Scope *saved_scope = e->scope;
+    e->scope = &inner;
+    for (uint32_t i = 0; i < n; i++) scope_add(&inner, params[i]);
+    Expr *body = elab_form(e, body_form);
+    e->scope = saved_scope;
+    scope_free(&inner);
+    if (!body) return NULL;
+
+    /* fn_type: (field0 .. fieldN) -> Struct, carrying the full struct result
+     * type so emit lowers the C return type to the by-value struct. */
+    Type fn_type = type_fn(arg_kinds, (uint8_t)n, TY_STRUCT);
+    Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *rft = struct_b->type;
+    fn_type.as.fn.result_full_type = rft;
+
+    Binding *ctor_b = binding_new(e, ctor_sym, fn_type, false, true, span);
+    scope_add(&e->global, ctor_b);
+
+    FnDef *fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
+    memset(fd, 0, sizeof(FnDef));
+    fd->binding = ctor_b;
+    fd->params = params;
+    fd->n_params = (uint8_t)n;
+    fd->param_types = param_types;
+    fd->body = body;
+    fd->is_variadic = false;
+    fd->inferred_effect_row = NULL;
+    fd->closure = NULL;
+    constraint_set_init(&fd->constraints);
+    lifetime_context_init(&fd->lifetime_ctx);
+    fd->return_type = struct_b->type;
+
+    Expr *fn_def_expr = expr_new(e->arena, EX_FN_DEF, fn_type, span);
+    fn_def_expr->as.fn_def_.fn = fd;
+    elab_register_file_def(e, fn_def_expr);
+
+    return ctor_b;
+}
+
 Expr *elab_call(Elab *e, Form *call) {
     /* Already established: call->tag == F_LIST and len >= 1. */
     Form *head = call->as.list.items[0];
@@ -1485,10 +1578,13 @@ Expr *elab_call(Elab *e, Form *call) {
      * missing/unknown/duplicate/mixed args).  `:no-auto-ctor` opts out, leaving
      * `(Name ...)` to resolve as an ordinary -- and here, non-callable -- value.
      *
-     * Currying a constructor is intentionally NOT provided: a by-value struct
-     * result cannot flow through the type-erased closure ABI (see
-     * docs/reported/struct-return-through-closure-loses-type.md), so an
-     * under-applied constructor could never be completed usefully. */
+     * CURRY-V2 (struct-return-through-closure-loses-type, now resolved): an
+     * under-applied *positional* constructor curries -- `(Name a)` for a
+     * 2-field struct partial-applies a synthesized backing constructor and
+     * yields a closure that completes to the struct.  The by-value struct
+     * result now flows through the closure ABI (CURRY-V0/V1).  Full
+     * applications and the keyword form keep the direct make-struct fast path;
+     * parameterized structs decline currying (the synthesizer returns NULL). */
     {
         Binding *struct_b = scope_lookup_type_def(e->scope, name);
         /* Only route when the NEAREST binding for `name` (in any namespace) is
@@ -1504,6 +1600,29 @@ Expr *elab_call(Elab *e, Form *call) {
         if (nearest && nearest == struct_b && struct_b->type.kind == TY_STRUCT &&
             struct_b->type.as.struct_.def &&
             !struct_b->type.as.struct_.def->no_auto_ctor) {
+            StructDef *cdef = struct_b->type.as.struct_.def;
+            uint32_t n_given = call->as.list.len - 1u;
+            bool positional = (n_given == 0 ||
+                               call->as.list.items[1]->tag != F_KEYWORD);
+            /* struct-return-through-closure-loses-type (CURRY-V2): an
+             * under-applied *positional* constructor call curries -- it
+             * partial-applies a synthesized backing constructor function and
+             * yields a closure that completes to the struct.  Full applications
+             * and any keyword form keep the direct make-struct fast path. */
+            if (positional && n_given >= 1 && n_given < cdef->n_fields) {
+                Binding *ctor_b = synthesize_struct_ctor(e, struct_b, call->span);
+                if (ctor_b) {
+                    Expr **pa_args = (Expr **)arena_alloc(e->arena, n_given * sizeof(Expr *));
+                    for (uint32_t i = 0; i < n_given; i++) {
+                        pa_args[i] = elab_form(e, call->as.list.items[1 + i]);
+                        if (!pa_args[i]) return NULL;
+                    }
+                    return elab_partial_apply(e, call, ctor_b, ctor_b->type,
+                                              pa_args, n_given);
+                }
+                /* synthesis declined (e.g. parameterized struct): fall through
+                 * to make-struct, which reports the arity mismatch. */
+            }
             uint32_t mn = call->as.list.len + 1u;
             Form **mi = (Form **)arena_alloc(e->arena, mn * sizeof(Form *));
             mi[0] = form_sym(e->arena, head->span, e->sym_make_struct);
@@ -2040,7 +2159,12 @@ Expr *elab_call(Elab *e, Form *call) {
          * has already instantiated the call's result from the argument types --
          * clobbering it with the uninstantiated tyvar would erase that. */
         Expr *call_expr = elab_call_fn(e, call, fn_binding);
-        if (call_expr && fn_binding->type.as.fn.result_full_type &&
+        /* struct-return-through-closure-loses-type: only patch a genuine full
+         * application (whose result really is the ADT carrier).  An
+         * under-applied call returns a closure value (TY_PTR_VOID); patching it
+         * to the ADT result type would mis-type the closure as the aggregate. */
+        if (call_expr && call_expr->type.kind == TY_ADT &&
+            fn_binding->type.as.fn.result_full_type &&
             fn_binding->type.as.fn.result_full_type->kind == TY_ADT) {
             call_expr->type = *fn_binding->type.as.fn.result_full_type;
         }
@@ -2061,7 +2185,14 @@ Expr *elab_call(Elab *e, Form *call) {
          * instantiated result type; overwriting it with the bare tyvar would
          * discard the per-call-site substitution.  See
          * docs/reported/parameterized-defopaque.md. */
-        if (call_expr && fn_binding->type.kind == TY_FN &&
+        /* struct-return-through-closure-loses-type: gate on the call result
+         * actually being the struct carrier.  An under-applied call returns a
+         * closure value (TY_PTR_VOID); patching it to the struct result type
+         * would mis-type the closure as the by-value struct (so a later
+         * application is mis-routed -- e.g. CTOR-V0 sees the binding as a struct
+         * name).  A full application's result kind is already TY_STRUCT here. */
+        if (call_expr && call_expr->type.kind == TY_STRUCT &&
+            fn_binding->type.kind == TY_FN &&
             fn_binding->type.as.fn.result_kind == TY_STRUCT &&
             fn_binding->type.as.fn.result_full_type &&
             fn_binding->type.as.fn.result_full_type->kind == TY_STRUCT) {
@@ -2071,7 +2202,9 @@ Expr *elab_call(Elab *e, Form *call) {
          * forall_ payload so `open` (and any other downstream consumer
          * that dereferences `as.forall_.body`) sees a populated struct
          * instead of a zero-initialised type_from_kind() shell. */
-        if (call_expr && fn_binding->type.kind == TY_FN &&
+        if (call_expr &&
+            (call_expr->type.kind == TY_EXISTS || call_expr->type.kind == TY_FORALL) &&
+            fn_binding->type.kind == TY_FN &&
             (fn_binding->type.as.fn.result_kind == TY_EXISTS ||
              fn_binding->type.as.fn.result_kind == TY_FORALL) &&
             fn_binding->type.as.fn.result_full_type) {
@@ -2423,7 +2556,20 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
         }
     }
 
-    Type body_result_type = type_from_kind(result_kind);
+    /* struct-return-through-closure-loses-type (CURRY-V1): when the underlying
+     * function returns a by-value aggregate (struct/ADT), the inner call -- and
+     * therefore the thunk's body -- must carry the FULL result type, with its
+     * StructDef/AdtDef, not the def-less type_from_kind(result_kind).  Otherwise
+     * emit lowers the thunk's C return type to the int64 carrier (a nameless
+     * struct kind lowers to int64_t) while the body returns the real struct by
+     * value -- a hard C compile error ("returning Person but int64_t expected").
+     * The thunk is invoked through its typed `tur_thunk_<R>_..._t` slot, so a
+     * by-value struct return round-trips correctly with no boxing. */
+    Type body_result_type = (fn_type.as.fn.result_full_type &&
+                             (fn_type.as.fn.result_full_type->kind == TY_STRUCT ||
+                              fn_type.as.fn.result_full_type->kind == TY_ADT))
+                            ? *fn_type.as.fn.result_full_type
+                            : type_from_kind(result_kind);
     Expr *inner_call = expr_new(e->arena, EX_CALL, body_result_type, call->span);
     inner_call->as.call_.fn_binding = fn_binding;
     inner_call->as.call_.args = call_args;

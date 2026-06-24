@@ -1,0 +1,13 @@
+; struct-return-through-closure-loses-type (CURRY-V0/V1): partial application of
+; a named struct-returning function yields a closure; completing it produces the
+; by-value struct, type intact for field access.
+
+(defstruct Person :copy [name : cstr age : int])
+
+(defn mkp [n : cstr a : int] : Person (make-struct Person n a))
+
+(defn main [] : int
+  (let [f (mkp "Bob")
+        p (f 40)]
+    (println (.name p))
+    0))
