@@ -1,0 +1,14 @@
+; struct-return-through-closure-loses-type (CURRY-V0/V1): a lambda whose
+; declared return type is a by-value struct can be called indirectly (stored in
+; a let, or applied immediately) and the struct result keeps its type so a
+; following field access resolves.
+
+(defstruct Person :copy [name : cstr age : int])
+
+(defn main [] : int
+  (let [f      (fn [a : int] : Person (make-struct Person "Bob" a))
+        stored (f 40)
+        direct ((fn [a : int] : Person (make-struct Person "Ada" a)) 7)]
+    (println (.name stored))
+    (println (.name direct))
+    0))

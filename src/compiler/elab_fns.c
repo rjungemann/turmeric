@@ -3899,9 +3899,61 @@ Expr *elab_fn(Elab *e, const Form *call) {
             } else if (kw->len == 1 && memcmp(kw->name, "!", 1) == 0) {
                 return_kind = TY_NEVER;
             } else {
-                return_kind = TY_TYVAR;
-                return_full_type = (Type *)arena_alloc(e->arena, sizeof(Type));
-                *return_full_type = type_tyvar_named(kw->name);
+                /* struct-return-through-closure-loses-type (CURRY-V0): a bare
+                 * single-symbol return type that names a struct or ADT must
+                 * resolve to that nominal type and carry it on the lambda's
+                 * fn_type (result_full_type), exactly as elab_defn does.
+                 * Without this, `(fn [..] : Person ..)` left the return type as
+                 * a TY_TYVAR named "Person", so the lifted thunk returned the
+                 * int64 carrier and the value's struct type was lost at the
+                 * call site -- a following (.field ...) could not resolve. */
+                bool resolved_nominal = false;
+                /* defalias table (mirror elab_defn's TA1 ladder) */
+                {
+                    const Symbol *ksym = symtab_intern(e->st, strslice(kw->name, kw->len));
+                    for (uint32_t ai = 0; ai < e->n_type_aliases; ai++) {
+                        if (e->type_alias_names[ai] == ksym) {
+                            return_kind = e->type_alias_kinds[ai];
+                            resolved_nominal = true;
+                            break;
+                        }
+                    }
+                }
+                /* ADT name */
+                if (!resolved_nominal) {
+                    for (uint32_t ai = 0; ai < e->n_adt_defs; ai++) {
+                        if (strcmp(e->adt_defs[ai]->name, kw->name) == 0) {
+                            return_kind = TY_ADT;
+                            return_full_type = (Type *)arena_alloc(e->arena, sizeof(Type));
+                            *return_full_type = type_adt(e->adt_defs[ai]);
+                            resolved_nominal = true;
+                            break;
+                        }
+                    }
+                }
+                /* struct name */
+                if (!resolved_nominal) {
+                    for (uint32_t si = 0; si < e->n_struct_defs; si++) {
+                        if (strcmp(e->struct_defs[si]->name, kw->name) == 0) {
+                            StructDef *sd = e->struct_defs[si];
+                            return_kind = TY_STRUCT;
+                            return_full_type = (Type *)arena_alloc(e->arena, sizeof(Type));
+                            memset(return_full_type, 0, sizeof(Type));
+                            return_full_type->kind = TY_STRUCT;
+                            return_full_type->copy_kind = sd->is_linear ? CK_LINEAR
+                                                        : (sd->is_copy ? CK_COPY : CK_MOVE);
+                            return_full_type->hkt_kind = KIND_STAR;
+                            return_full_type->as.struct_.def = sd;
+                            resolved_nominal = true;
+                            break;
+                        }
+                    }
+                }
+                if (!resolved_nominal) {
+                    return_kind = TY_TYVAR;
+                    return_full_type = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *return_full_type = type_tyvar_named(kw->name);
+                }
             }
             body_start++;
         } else if (ret_f->tag == F_TYPE_ANN) {

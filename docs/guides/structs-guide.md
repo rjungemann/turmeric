@@ -168,10 +168,12 @@ opt out with `:no-auto-ctor`; construction then goes only through
 ;; (Point 3 4) is now an error; use (make-struct Point 3 4)
 ```
 
-> Note: a constructor cannot be **curried** -- a by-value struct result cannot
-> flow through Turmeric's closure ABI, so an under-applied constructor could
-> never be completed. Always pass all fields in one call (positionally or by
-> keyword).
+> Note: an under-applied **positional** constructor curries. `(Point 3)` on a
+> two-field struct returns a closure expecting the remaining field, and
+> `((Point 3) 4)` -- or `(let [mk (Point 3)] (mk 4))` -- yields the `Point`,
+> with field access working on the result. By-value struct results now flow
+> through the closure ABI (this was previously a known limitation). The
+> *keyword* form does not curry: a keyword call must supply every field.
 
 ### Keyword arguments
 

@@ -1,5 +1,36 @@
 # By-value struct results do not survive the type-erased closure ABI
 
+**Status:** RESOLVED. By-value struct (and ADT) results now flow through the
+closure / partial-application / first-class-function path with their type
+intact. Both repros below run correctly, constructor currying is enabled, and
+the full suite is green (`bash tests/run.sh`).
+
+Fix summary (see CURRY-V0/V1/V2 in
+`docs/archive/history/struct-return-through-closure-loses-type.md`):
+
+- **CURRY-V0 (elaboration).** A lambda's bare single-symbol return type that
+  names a struct/ADT now resolves to that nominal type and is carried on the
+  lambda's `fn_type.result_full_type` (`elab_fn`, `src/compiler/elab_fns.c`) --
+  it previously degraded to a `TY_TYVAR`. And the three result-type patches in
+  `elab_call` (struct / ADT / exists-forall) now fire only on a genuine full
+  application (the call result is the carrier kind), not on an under-applied
+  call whose result is a closure value -- otherwise a partial application was
+  mis-typed as the aggregate (so a stored `f` was even mistaken for a struct
+  *name* by CTOR-V0).
+- **CURRY-V1 (codegen).** `elab_partial_apply`'s thunk body now carries the full
+  struct/ADT result `Type` (with its def) instead of `type_from_kind`, so emit
+  lowers the thunk's C return type to the by-value struct rather than the
+  def-less `int64_t` carrier. The thunk is invoked through its typed
+  `tur_thunk_<R>_..._t` slot, so the by-value result round-trips without boxing.
+- **CURRY-V2 (constructor currying).** An under-applied *positional* `(Name a)`
+  partial-applies a synthesized, cached `__ctor_<Name>` backing function (body
+  `(make-struct Name ...)`); full applications and the keyword form keep the
+  direct make-struct fast path; parameterized structs decline currying.
+
+Fixtures: `tests/fixtures/{lambda-returns-struct,struct-returning-fn-as-value,struct-curry-ctor}/`.
+
+---
+
 **Severity:** medium (blocks currying/first-class use of struct-returning functions).
 
 A function whose result is a by-value struct cannot be called *indirectly*
