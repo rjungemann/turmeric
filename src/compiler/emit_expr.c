@@ -26,6 +26,30 @@ static bool type_contains_unresolved_tyvar(Type t) {
     }
 }
 
+/* parametric-struct-fn-field-call-passes-concrete-arg-to-carrier-ptr: true when
+ * a struct field's fn `full_type` is written over type variables (its arg or
+ * result full types mention a TY_TYVAR), e.g. `get : (fn [S] A)` on a parametric
+ * `(defstruct Lens [S A] ...)`.  Such a field lowers its kinds to the int64
+ * carrier, so register_fn_ptr_typedef hands back the carrier typedef rather than
+ * the concrete signature the receiver instantiates -- a direct call through it
+ * would pass concrete args to int64 params.  The caller uses this to force the
+ * intptr_t-cast call path, which specialises the pointer to the call's concrete
+ * arg/result C types. */
+static bool fn_field_full_type_mentions_tyvar(const Type *fn_type) {
+    if (!fn_type || fn_type->kind != TY_FN) return false;
+    if (fn_type->as.fn.result_full_type &&
+            type_contains_unresolved_tyvar(*fn_type->as.fn.result_full_type))
+        return true;
+    if (fn_type->as.fn.arg_full_types) {
+        for (uint8_t i = 0; i < fn_type->as.fn.arity; i++) {
+            if (fn_type->as.fn.arg_full_types[i] &&
+                    type_contains_unresolved_tyvar(*fn_type->as.fn.arg_full_types[i]))
+                return true;
+        }
+    }
+    return false;
+}
+
 /* world-resize / multi-field existential payloads: true when `t` lowers to a
  * by-value C aggregate (`World__int__int__int` etc.) that is WIDER than the
  * single int64 the existential carrier (`tur_exists_t`) holds. Such a payload
@@ -2106,6 +2130,21 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             gf_field->full_type->kind == TY_FN) {
                         is_typed_fn_field =
                             (register_fn_ptr_typedef(gf_field->full_type) != NULL);
+                        /* parametric-struct-fn-field-call-passes-concrete-arg-to-
+                         * carrier-ptr: when the owning struct is parametric and the
+                         * field's fn signature is written over the struct's own type
+                         * parameters (e.g. `get : (fn [S] A)` on `(defstruct Lens
+                         * [S A] ...)`), the kinds are erased to the int64 carrier, so
+                         * register_fn_ptr_typedef yields the *carrier* typedef
+                         * (`tur_fnptr_int64_t_int64_t_t`), NOT the concrete signature
+                         * the receiver instantiates to.  A direct call through that
+                         * carrier-typed pointer passes the concrete arg (a `Person`)
+                         * to an `int64_t` parameter -- a hard `cc` type error.  Treat
+                         * it as untyped so the intptr_t-cast path below specialises
+                         * the pointer to the call's concrete arg/result C types. */
+                        if (is_typed_fn_field &&
+                                fn_field_full_type_mentions_tyvar(gf_field->full_type))
+                            is_typed_fn_field = false;
                     }
                 }
                 /* M4-rest (end-to-end-monomorphization-plan): a typeclass
