@@ -303,6 +303,30 @@ static inline bool adt_is_flat_product(const AdtDef *def) {
     return def && def->n_ctors == 1 && !def->is_gadt;
 }
 
+/* CONV-S1: a single-variant, non-GADT, NON-PARAMETRIC flat product can flow
+ * *by value* -- a flat `tur_adt_<Name>` C aggregate passed/returned/stored
+ * directly, rather than through the int64 heap-pointer carrier.  This is the
+ * representational prerequisite for lowering `defstruct` to `defadt`.
+ *
+ * Parametric flat ADTs (stdlib `Fix`, the functor `ReF [a]`, ...) keep the
+ * carrier ABI -- matching how unspecialised parametric structs already behave;
+ * their concrete monomorphic by-value layout is the M7 by-value-HKT path's job.
+ *
+ * DORMANT in CONV-S1/B1.  The box/unbox bridge and the representation-keyed
+ * `match` / field-access dispatch land first as a *no-op*: every by-value arm
+ * in the emitter is guarded by this predicate, which currently returns false,
+ * so the existing int64-carrier path is taken and the emitted C stays
+ * byte-identical (the suite proves it green with zero snapshot churn).
+ * CONV-S1/B3 flips the gate by replacing the body with:
+ *
+ *     return adt_is_flat_product(def) && def->n_type_params == 0;
+ *
+ * See docs/upcoming/struct-adt-convergence-s1-bridging-findings.md. */
+static inline bool adt_is_byvalue_product(const AdtDef *def) {
+    (void)def;
+    return false;  /* CONV-S1/B3 flips this gate; see comment above. */
+}
+
 /* Phase 11: Struct field descriptor.
  * Stored inline in StructDef.fields[]. */
 typedef struct StructField {
@@ -1460,6 +1484,9 @@ void         type_codegen_reset_adt_apps(void);
 void         type_codegen_emit_adt_apps(Buf *out);
 const char  *type_register_adt_app(Type t);
 char        *type_adt_app_ctor_suffix(Type t);
+/* CONV-S1: stable interned C typedef name (`tur_adt_<mangled>`) for the by-value
+ * representation of a non-parametric flat-product ADT.  See types.c. */
+const char  *adt_byval_c_name(const AdtDef *def);
 /* Phase E: Typed function-pointer typedef registry for unboxed fn struct fields. */
 const char  *register_fn_ptr_typedef(const Type *fn_type);
 void         type_codegen_reset_fn_ptr_typedefs(void);

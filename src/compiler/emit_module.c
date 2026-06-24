@@ -4694,6 +4694,10 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
         free(_mn);
     }
     bool flat = adt_is_flat_product(def);
+    /* CONV-S1: a non-parametric flat product is returned/passed by value (a flat
+     * `tur_adt_<Name>` aggregate) rather than through the int64 heap carrier.
+     * Gated (dormant until B3); see adt_is_byvalue_product.  byval implies flat. */
+    bool byval = adt_is_byvalue_product(def);
     buf_printf(out, "typedef struct %s {\n", adt_c_name);
     if (!flat) buf_printf(out, "    int tag;\n");
     buf_printf(out, "    union {\n");
@@ -4737,7 +4741,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
         CtorDef *ctor = def->ctors[ci];
         char *mctor = mangle_field_name(ctor->name);
-        buf_printf(out, "static int64_t ctor_%s(", mctor);
+        buf_printf(out, "static %s ctor_%s(", byval ? adt_c_name : "int64_t", mctor);
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             if (fi > 0) buf_puts(out, ", ");
             const char *ctype;
@@ -4766,13 +4770,23 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
             buf_printf(out, "%s _%u", ctype, fi);
         }
         buf_printf(out, ") {\n");
-        buf_printf(out, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
-                   adt_c_name, adt_c_name, adt_c_name);
-        if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
-        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-            buf_printf(out, "    __r->as.%s._%u = _%u;\n", mctor, fi, fi);
+        if (byval) {
+            /* CONV-S1: build and return the flat aggregate by value -- no heap
+             * box, no tag (byval implies single-variant flat product). */
+            buf_printf(out, "    %s __r;\n", adt_c_name);
+            for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                buf_printf(out, "    __r.as.%s._%u = _%u;\n", mctor, fi, fi);
+            }
+            buf_printf(out, "    return __r;\n");
+        } else {
+            buf_printf(out, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
+                       adt_c_name, adt_c_name, adt_c_name);
+            if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
+            for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                buf_printf(out, "    __r->as.%s._%u = _%u;\n", mctor, fi, fi);
+            }
+            buf_printf(out, "    return (int64_t)(intptr_t)__r;\n");
         }
-        buf_printf(out, "    return (int64_t)(intptr_t)__r;\n");
         buf_printf(out, "}\n\n");
         free(mctor);
     }
@@ -8083,6 +8097,9 @@ int emit_program(Buf *out, const Expr *program) {
                 free(_mn);
             }
             bool flat = adt_is_flat_product(def);
+            /* CONV-S1: by-value flat product (gated, dormant until B3) -- mirror
+             * of emit_adt_typedef_and_ctors.  byval implies flat. */
+            bool byval = adt_is_byvalue_product(def);
             buf_printf(&early_file, "typedef struct %s {\n", adt_c_name);
             if (!flat) buf_printf(&early_file, "    int tag;\n");
             buf_printf(&early_file, "    union {\n");
@@ -8126,7 +8143,8 @@ int emit_program(Buf *out, const Expr *program) {
             for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
                 CtorDef *ctor = def->ctors[ci];
                 char *mctor = mangle_field_name(ctor->name);
-                buf_printf(&early_file, "static int64_t ctor_%s(", mctor);
+                buf_printf(&early_file, "static %s ctor_%s(",
+                           byval ? adt_c_name : "int64_t", mctor);
                 for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                     if (fi > 0) buf_puts(&early_file, ", ");
                     const char *ctype;
@@ -8155,14 +8173,24 @@ int emit_program(Buf *out, const Expr *program) {
                     buf_printf(&early_file, "%s _%u", ctype, fi);
                 }
                 buf_printf(&early_file, ") {\n");
-                buf_printf(&early_file, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
-                           adt_c_name, adt_c_name, adt_c_name);
-                if (!flat) buf_printf(&early_file, "    __r->tag = %u;\n", ctor->tag);
-                for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-                    buf_printf(&early_file, "    __r->as.%s._%u = _%u;\n",
-                               mctor, fi, fi);
+                if (byval) {
+                    /* CONV-S1: return the flat aggregate by value -- no heap box. */
+                    buf_printf(&early_file, "    %s __r;\n", adt_c_name);
+                    for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                        buf_printf(&early_file, "    __r.as.%s._%u = _%u;\n",
+                                   mctor, fi, fi);
+                    }
+                    buf_printf(&early_file, "    return __r;\n");
+                } else {
+                    buf_printf(&early_file, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
+                               adt_c_name, adt_c_name, adt_c_name);
+                    if (!flat) buf_printf(&early_file, "    __r->tag = %u;\n", ctor->tag);
+                    for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                        buf_printf(&early_file, "    __r->as.%s._%u = _%u;\n",
+                                   mctor, fi, fi);
+                    }
+                    buf_printf(&early_file, "    return (int64_t)(intptr_t)__r;\n");
                 }
-                buf_printf(&early_file, "    return (int64_t)(intptr_t)__r;\n");
                 buf_printf(&early_file, "}\n\n");
                 free(mctor);
             }

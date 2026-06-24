@@ -176,11 +176,38 @@ be made consistent.
    byval<->carrier box/unbox for ADTs and make `match`/field-access key on the
    value's C representation. Land it with the by-value gate **off** (no ADT
    flips yet) so it is a no-op refactor that the suite proves green.
+   **LANDED (gate off).** The gated by-value core is in place behind
+   `adt_is_byvalue_product(def)` ([`types.h`](../../src/compiler/types.h), a
+   single predicate currently hard-`false`): `type_c_name(TY_ADT)` returns the
+   interned `adt_byval_c_name(def)`; `type_uses_carrier_abi` reports a by-value
+   ADT as a non-carrier concrete aggregate (so it spills/boxes/derefs through the
+   existing generic `emit_carrier_bridge`, emit_core.c:3105/3343 -- **no new
+   per-type primitive is needed**); both constructor emitters
+   (emit_module.c:`emit_adt_typedef_and_ctors` and the early-file mirror) return
+   the flat aggregate by value; and `match` (if-chain) plus field-access bind the
+   scrutinee as an aggregate and read fields with `.`. With the gate off the
+   emitted C is byte-identical -- `bash tests/run.sh` is **1813 passed, 0 failed,
+   zero snapshot churn**. A temporary gate-on smoke test reproduced **exactly the
+   8 spike failures** above (no more, no less), confirming the core is faithful
+   and the residue is precisely the three crossings.
+
+   **Remaining B1 wiring (carried into B3): the field-store crossing is NOT yet
+   auto-covered.** The smoke test showed `gadt-adt-skolem` still fails under
+   gate-on: a by-value `Foo` passed into the `int64` field slot of carrier-GADT
+   `Box` is handed straight to the `int64` ctor param with no box. The generic
+   bridge *primitive* now applies to ADTs, but it is not *invoked* at the ctor-arg
+   store (emit_expr.c N-arg ctor call, ~2944) nor at the `match` field-bind read
+   for a byval-in-carrier field. Wiring that invocation runs through code shared
+   by every ctor call, so it was deferred rather than risk the gate-off no-op;
+   it is now an explicit B3 prerequisite (below), not a free side effect.
 2. **B2 -- untyped-param refinement.** Propagate match-scrutinee ADT types to
    untyped param bindings. Still gate-off; verify no carrier fixture moves.
 3. **B3 -- flip the gate for non-recursive, non-HKT products.** Turn on
-   `adt_is_byvalue_product` for the simple cases (S, Point, Box/Foo). The
-   `gadt-adt-skolem` field crossing is covered by B1's box/unbox.
+   `adt_is_byvalue_product` for the simple cases (S, Point, Box/Foo). First wire
+   the **field-store crossing** (box a by-value ADT arg into a carrier ctor field
+   via `emit_carrier_bridge`, and unbox at the carrier field-bind read) -- the
+   B1 smoke test proved this does not happen automatically -- so `gadt-adt-skolem`
+   goes green as the gate flips.
 4. **B4 -- reconcile with M7 by-value HKT.** Bring the recursive/HKT carriers
    (`Re`, `Expr`) onto the unified by-value path without double-handling.
 5. **CONV-S1 proper -- lower `defstruct` to `defadt`.** Only after B1-B4 is the

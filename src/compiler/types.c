@@ -2441,6 +2441,31 @@ static const char *heap_ptr_c_name(const char *base) {
     return r;
 }
 
+/* CONV-S1: the stable C typedef name (`tur_adt_<mangled>`) for the BY-VALUE
+ * representation of a non-parametric flat-product ADT.  Mirrors the name the
+ * emitters build for the base typedef (emit_module.c:emit_adt_typedef_and_ctors)
+ * -- `tur_adt_` + mangle_field_name(def->name) -- so signatures, constructors,
+ * `match`, and field-access all agree on one spelling.  The mangler (replace any
+ * non `[A-Za-z0-9_]` byte with `_`) is replicated inline here so the type layer
+ * does not have to reach up into the emit layer; the result is interned (same
+ * stable, leak-checked storage heap_ptr_c_name uses) so type_c_name can return a
+ * stable `const char *`.  Dormant in CONV-S1/B1 -- only reached once
+ * adt_is_byvalue_product() is flipped on. */
+const char *adt_byval_c_name(const AdtDef *def) {
+    Buf b; buf_init(&b);
+    buf_puts(&b, "tur_adt_");
+    for (const char *p = def->name; *p; p++) {
+        char c = *p;
+        bool ident = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                     (c >= '0' && c <= '9') || c == '_';
+        buf_putc(&b, ident ? c : '_');
+    }
+    buf_putc(&b, '\0');
+    const char *r = intern_type_name(b.data);
+    buf_free(&b);
+    return r;
+}
+
 const char *type_c_name(Type t) {
     /* c-fn-ptr-element-and-size-precision-gap fix: a precise FFI spelling on an
      * integer carrier overrides the by-TypeKind name.  Only set on full Types
@@ -2569,8 +2594,13 @@ const char *type_c_name(Type t) {
             if (t.as.struct_.def->is_heap)
                 return heap_ptr_c_name(t.as.struct_.def->name);
             return t.as.struct_.def->name;
-        /* Phase G0: ADT types are passed as int64_t (opaque heap pointer) */
+        /* Phase G0: ADT types are passed as int64_t (opaque heap pointer).
+         * CONV-S1: a non-parametric flat-product ADT flows by value -- its C type
+         * is the flat `tur_adt_<Name>` aggregate, not the int64 carrier.  Gated
+         * (dormant until B3); see adt_is_byvalue_product. */
         case TY_ADT:
+            if (adt_is_byvalue_product(t.as.adt_.def))
+                return adt_byval_c_name(t.as.adt_.def);
             return "int64_t";
         /* Phase G2: unresolved type variable — treated as int64_t at codegen level */
         case TY_TYVAR:

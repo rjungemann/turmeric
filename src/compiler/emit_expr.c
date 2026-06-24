@@ -5139,8 +5139,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 char *mctor  = mangle_field_name(ctor->name);
                 const char *cty = type_c_name(e->type);
                 Buf hb; buf_init(&hb);
-                buf_printf(&hb, "(%s)((tur_adt_%s *)(intptr_t)(%s))->as.%s._%u",
-                           cty, adt_mn, sv, mctor, e->as.get_field_.field_idx);
+                if (adt_is_byvalue_product(adt)) {
+                    /* CONV-S1: by-value receiver -- read the field directly off the
+                     * aggregate, no carrier pointer deref.  Gated (dormant until B3). */
+                    buf_printf(&hb, "(%s)(%s).as.%s._%u",
+                               cty, sv, mctor, e->as.get_field_.field_idx);
+                } else {
+                    buf_printf(&hb, "(%s)((tur_adt_%s *)(intptr_t)(%s))->as.%s._%u",
+                               cty, adt_mn, sv, mctor, e->as.get_field_.field_idx);
+                }
                 buf_putc(&hb, '\0');
                 free(sv); free(adt_mn); free(mctor);
                 char *r = strdup(hb.data);
@@ -6478,6 +6485,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * unconditionally.  The single variant makes the match trivially
              * exhaustive, so first-arm-wins is correct. */
             bool adt_flat = adt_is_flat_product(adt);
+            /* CONV-S1: a by-value flat product binds its scrutinee as an aggregate
+             * (no carrier pointer) and reads fields with `.`.  Gated (dormant until
+             * B3); byval implies flat, so it always takes the if-chain path below. */
+            bool adt_byval = adt_is_byvalue_product(adt);
 
             if (has_any_guard || adt_flat) {
                 /* Phase G4: Emit as if-chain with goto for guard fallthrough */
@@ -6487,8 +6498,13 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 ctx->indent += 4;
 
                 indent_buf(body, ctx->indent);
-                buf_printf(body, "%s *__scrut = (%s *)(intptr_t)(%s);\n",
-                           adt_c_name, adt_c_name, scrut_val);
+                if (adt_byval) {
+                    /* CONV-S1: scrutinee is a by-value aggregate -- bind directly. */
+                    buf_printf(body, "%s __scrut = (%s);\n", adt_c_name, scrut_val);
+                } else {
+                    buf_printf(body, "%s *__scrut = (%s *)(intptr_t)(%s);\n",
+                               adt_c_name, adt_c_name, scrut_val);
+                }
                 free(scrut_val);
 
                 for (uint32_t ai = 0; ai < e->as.match_.n_arms; ai++) {
@@ -6513,8 +6529,11 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             const char *ctype = type_c_name(fb->type);
                             char *bname = name_for_binding(ctx, fb);
                             indent_buf(body, ctx->indent);
-                            buf_printf(body, "%s %s = (%s)__scrut->as.%s._%u;\n",
-                                       ctype, bname, ctype, _mctor, bi);
+                            /* CONV-S1: by-value scrutinee reads fields with `.`,
+                             * carrier scrutinee with `->`. */
+                            buf_printf(body, "%s %s = (%s)__scrut%sas.%s._%u;\n",
+                                       ctype, bname, ctype, adt_byval ? "." : "->",
+                                       _mctor, bi);
                             free(bname);
                         }
                         free(_mctor);
