@@ -173,3 +173,14 @@
   (let [k (cloneable-reset (re-step (cloneable-shift (fn [kk] kk) 0)))]
     (tur_cloneable_cont_resume k n)))
 (println (re-go 200000))
+
+;; --- Test 15 (SR N4 Slice 6): recursive resume-cont! heap-bounded -----------
+;; Same as Slice 5 but via the resume-cont!/save-cont! workflow native rather
+;; than the tur_cloneable_cont_resume builtin.  Before Slice 6 native_resume_cont
+;; folded synchronously in ts_cont_resume and C-recursed on nested resumes; the
+;; driver now routes it through DK_CONT_FOLD too.  rc-go N folds down to 0.
+(defn rc-step [x :int] :int (if (= x 0) 0 (rc-go (- x 1))))
+(defn rc-go [n :int] :int
+  (let [k (cloneable-reset (rc-step (cloneable-shift (fn [kk] kk) 0)))]
+    (resume-cont! (save-cont! k) n)))
+(println (rc-go 200000))

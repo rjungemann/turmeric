@@ -1627,6 +1627,26 @@ static bool is_cont_resume_builtin(const BuiltinSpec *spec) {
            strcmp(name, "tur_serial_cont_resume") == 0;
 }
 
+/* Begin a work-stack continuation fold of `c` resumed with `w`.  Returns
+ *   0 = completed with no call frames (*out_val is the result),
+ *   1 = a fold is in progress (out_state allocated; fn / args / n_out is the
+ *       first call frame for the driver to apply via have_apply),
+ *   2 = error (out_val set).
+ * Shared by the cont-resume builtin and the resume-cont! native interceptions. */
+static int cont_fold_begin(TuriCont *c, int64_t w, ContFoldState **out_state,
+                           TuriValue *out_val, TuriValue *fn, TuriValue **args,
+                           uint32_t *n_out) {
+    if (!c) { *out_val = turi_int(0); return 0; }
+    ContFoldState *s = (ContFoldState *)malloc(sizeof(ContFoldState));
+    s->c = c; s->i = (int32_t)c->n - 1; s->v = w;
+    TuriValue err;
+    int rc = cont_fold_advance(s, fn, args, n_out, &err);
+    if (rc == 2) { *out_val = err; free(s); return 2; }
+    if (rc == 0) { *out_val = turi_int(s->v); free(s); return 0; }
+    *out_state = s;
+    return 1;
+}
+
 /* Dispatch the continuation-resume / clone / marshal builtins (BS_FUNC_CALL
  * with a tur_*_cont_* c_op).  Returns true and sets *out when handled.  The
  * handle is an int64 boxing a TuriCont*; serialize/deserialize round-trip
@@ -4928,6 +4948,22 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
             bool foldable = !cl->native && fn && fn->body &&
                             fn->body->kind != EX_INLINE_C;
             if (!foldable) {
+                if (cl->native == native_resume_cont) {
+                    /* SR N4 Slice 6: a fold-requested application that is itself
+                     * resume-cont! -- start a nested fold on the work-stack
+                     * (push a fresh DK_CONT_FOLD above the requester). */
+                    TuriCont *c = (n >= 1 && acc[0].as_int)
+                                ? (TuriCont *)(intptr_t)acc[0].as_int : NULL;
+                    int64_t w = (n >= 2) ? acc[1].as_int : 0;
+                    free(acc);
+                    ContFoldState *s; TuriValue val, ffn, *fargs; uint32_t fn_n;
+                    int rc = cont_fold_begin(c, w, &s, &val, &ffn, &fargs, &fn_n);
+                    if (rc != 1) { cur = val; descending = false; continue; }
+                    DRIVE_PUSH(((DriveCont){ .kind = DK_CONT_FOLD, .aux = s }));
+                    apply_fn = ffn; apply_args = fargs; apply_n = fn_n;
+                    have_apply = true;
+                    continue;
+                }
                 /* Leaf (native / inline-C): dispatched synchronously via
                  * eval_apply, exactly as the DK_CALL_ARG leaf path does. */
                 cur = eval_apply(env, cl, acc, n);
@@ -5707,6 +5743,21 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 bool foldable = !cl->native && fn && fn->body &&
                                 fn->body->kind != EX_INLINE_C;
                 if (!foldable) {
+                    if (cl->native == native_resume_cont) {
+                        /* SR N4 Slice 6: fold resume-cont! on the work-stack like
+                         * the cont-resume builtin (args: cont handle, value). */
+                        TuriCont *c = (n >= 1 && acc[0].as_int)
+                                    ? (TuriCont *)(intptr_t)acc[0].as_int : NULL;
+                        int64_t w = (n >= 2) ? acc[1].as_int : 0;
+                        free(acc);
+                        ContFoldState *s; TuriValue val, ffn, *fargs; uint32_t fn_n;
+                        int rc = cont_fold_begin(c, w, &s, &val, &ffn, &fargs, &fn_n);
+                        if (rc != 1) { cur = val; len--; break; }
+                        top->kind = DK_CONT_FOLD; top->aux = s;
+                        apply_fn = ffn; apply_args = fargs; apply_n = fn_n;
+                        have_apply = true;
+                        break;
+                    }
                     /* Leaf: native / inline-C, dispatched inside eval_apply
                      * (no driver re-entry).  eval_apply copies args, so free. */
                     cur = eval_apply(env, cl, acc, n);
@@ -5853,13 +5904,9 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                                 ? (TuriCont *)(intptr_t)acc[0].as_int : NULL;
                     int64_t w = (n >= 2) ? acc[1].as_int : 0;
                     free(acc);
-                    if (!c) { cur = turi_int(0); len--; break; }
-                    ContFoldState *s = (ContFoldState *)malloc(sizeof(ContFoldState));
-                    s->c = c; s->i = (int32_t)c->n - 1; s->v = w;
-                    TuriValue ffn, *fargs, ferr; uint32_t fn_n;
-                    int rc = cont_fold_advance(s, &ffn, &fargs, &fn_n, &ferr);
-                    if (rc == 2) { cur = ferr; free(s); len--; break; }
-                    if (rc == 0) { cur = turi_int(s->v); free(s); len--; break; }
+                    ContFoldState *s; TuriValue val, ffn, *fargs; uint32_t fn_n;
+                    int rc = cont_fold_begin(c, w, &s, &val, &ffn, &fargs, &fn_n);
+                    if (rc != 1) { cur = val; len--; break; }   /* done / error */
                     top->kind = DK_CONT_FOLD; top->aux = s;   /* reuse this slot */
                     apply_fn = ffn; apply_args = fargs; apply_n = fn_n;
                     have_apply = true;   /* result returns to this DK_CONT_FOLD */
@@ -5939,14 +5986,15 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * turi_int(s->v). */
                 ContFoldState *s = (ContFoldState *)top->aux;
                 if (signaled) { free(s); len--; break; }
-                TsFrame *fr = &s->c->frames[s->i];   /* the just-applied frame */
-                if (!fr->ignore_value) {
-                    if (cur.tag != TURI_INT) {
-                        cur = turi_errorf("eval: cont call frame returned non-int (tag %d)", cur.tag);
-                        free(s); len--; break;
-                    }
-                    s->v = cur.as_int;
+                /* The frame's result becomes the new accumulator (ts_cont_resume
+                 * sets v = r for every call frame -- ignore_value only controls
+                 * whether the resume value is passed as an *argument*, handled in
+                 * cont_fold_advance, not whether the result updates v). */
+                if (cur.tag != TURI_INT) {
+                    cur = turi_errorf("eval: cont call frame returned non-int (tag %d)", cur.tag);
+                    free(s); len--; break;
                 }
+                s->v = cur.as_int;
                 s->i--;
                 TuriValue ffn, *fargs, ferr; uint32_t fn_n;
                 int rc = cont_fold_advance(s, &ffn, &fargs, &fn_n, &ferr);

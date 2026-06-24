@@ -6,6 +6,41 @@ description: Eliminate the last source of unbounded C recursion in the tree-walk
 
 # Turi stackless native re-entry (full CEK / driver-CPS) -- Plan
 
+## Status update -- 2026-06-24 (N4 Slice 6 -- resume-cont! folds on the work-stack)
+
+**`resume-cont!` (the workflow save/resume native) now folds on the work-stack
+too.** Sixth slice; routes `native_resume_cont` through the Slice-5
+`DK_CONT_FOLD` machinery.
+
+- `cont_fold_begin` factors the fold start (used by the builtin and native
+  interceptions). The driver's two leaf-native dispatch points (the
+  `DK_CALL_ARG` leaf and the `have_apply` leaf) detect `cl->native ==
+  native_resume_cont` and start a `DK_CONT_FOLD` instead of the synchronous
+  `ts_cont_resume`, so a `resume-cont!` whose resumed frame recursively
+  resume-cont!s again folds onto the heap.
+- Fixed a `DK_CONT_FOLD` accumulator bug surfaced here: ts_cont_resume sets
+  `v = r` for **every** call frame (ignore_value only controls whether the
+  resume value is passed as an *argument*); the fold handler now matches that
+  instead of skipping the update for ignore_value frames.
+
+Result: a recursive `resume-cont!` probe runs at 200000 heap-bounded (was
+recursion-limit at ~500). New `tur_eval_tco` regression `rc-go 200000`. **Also a
+correctness win:** the do-tail capture fixtures `serial-context-do` /
+`serial-context-do-cfg` now produce the same values under the interpreter as the
+compiled path (7/14/7, 50/140/0) instead of the previously-divergent 0s; their
+stale `turi.stdout` baselines are updated to match `expected.stdout`.
+`bash tests/run.sh` (1783/0), eval/effects/continuation/tco ctests (14/14),
+`eval-tco` (16/16), `run-turi` baseline (23).
+
+**One blocker remains for guard retirement (Slice 7).** The in-capture
+`is_pure` fold (`ts_capture_and_run` applying the captured context to a pure
+terminal via a synchronous `ts_cont_resume`) C-recurses when a context call
+frame recursively triggers another capturing reset -- confirmed trips at 5000
+with `(cloneable-reset (recur-step (if COND PURE (cloneable-shift ...)) n))`.
+Deferring that fold to `DK_CONT_FOLD` (freeing the capture let-frames after, via
+a `DK_NATIVE_RESUME` beneath) is Slice 7, the final conversion before the guard,
+`eval_depth`, and `TURI_EVAL_FRAME_BYTES` retire.
+
 ## Status update -- 2026-06-23 (N4 Slice 5 -- continuation resume fold on the work-stack)
 
 **The primary continuation resume (`(k v)` / `tur_cloneable_cont_resume`) now
