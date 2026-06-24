@@ -308,24 +308,15 @@ static inline bool adt_is_flat_product(const AdtDef *def) {
  * directly, rather than through the int64 heap-pointer carrier.  This is the
  * representational prerequisite for lowering `defstruct` to `defadt`.
  *
- * Parametric flat ADTs (stdlib `Fix`, the functor `ReF [a]`, ...) keep the
- * carrier ABI -- matching how unspecialised parametric structs already behave;
+ * LIVE as of CONV-S1/B3, gated to "leaf" products (every field a scalar) so the
+ * recursive HKT carriers stay on the carrier path until B4.  Parametric flat
+ * ADTs (stdlib `Fix`, the functor `ReF [a]`, ...) also keep the carrier ABI --
  * their concrete monomorphic by-value layout is the M7 by-value-HKT path's job.
  *
- * DORMANT in CONV-S1/B1.  The box/unbox bridge and the representation-keyed
- * `match` / field-access dispatch land first as a *no-op*: every by-value arm
- * in the emitter is guarded by this predicate, which currently returns false,
- * so the existing int64-carrier path is taken and the emitted C stays
- * byte-identical (the suite proves it green with zero snapshot churn).
- * CONV-S1/B3 flips the gate by replacing the body with:
- *
- *     return adt_is_flat_product(def) && def->n_type_params == 0;
- *
- * See docs/upcoming/struct-adt-convergence-s1-bridging-findings.md. */
-static inline bool adt_is_byvalue_product(const AdtDef *def) {
-    (void)def;
-    return false;  /* CONV-S1/B3 flips this gate; see comment above. */
-}
+ * Defined in types.c (needs the complete `struct Type` to inspect ctor field
+ * full_types, which are only forward-declared here).  See the definition and
+ * docs/upcoming/struct-adt-convergence-s1-bridging-findings.md for the gate. */
+bool adt_is_byvalue_product(const AdtDef *def);
 
 /* Phase 11: Struct field descriptor.
  * Stored inline in StructDef.fields[]. */

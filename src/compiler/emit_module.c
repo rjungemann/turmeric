@@ -4696,7 +4696,8 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
     bool flat = adt_is_flat_product(def);
     /* CONV-S1: a non-parametric flat product is returned/passed by value (a flat
      * `tur_adt_<Name>` aggregate) rather than through the int64 heap carrier.
-     * Gated (dormant until B3); see adt_is_byvalue_product.  byval implies flat. */
+     * Gated by adt_is_byvalue_product (LIVE for leaf products as of B3).  byval
+     * implies flat. */
     bool byval = adt_is_byvalue_product(def);
     buf_printf(out, "typedef struct %s {\n", adt_c_name);
     if (!flat) buf_printf(out, "    int tag;\n");
@@ -8097,8 +8098,8 @@ int emit_program(Buf *out, const Expr *program) {
                 free(_mn);
             }
             bool flat = adt_is_flat_product(def);
-            /* CONV-S1: by-value flat product (gated, dormant until B3) -- mirror
-             * of emit_adt_typedef_and_ctors.  byval implies flat. */
+            /* CONV-S1: by-value flat product (LIVE for leaf products as of B3) --
+             * mirror of emit_adt_typedef_and_ctors.  byval implies flat. */
             bool byval = adt_is_byvalue_product(def);
             buf_printf(&early_file, "typedef struct %s {\n", adt_c_name);
             if (!flat) buf_printf(&early_file, "    int tag;\n");

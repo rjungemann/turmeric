@@ -418,6 +418,18 @@ static bool expr_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
     return false;
 }
 
+/* CONV-S1/B3: true when `t` resolves to a by-value ADT (a flat aggregate, not the
+ * int64 carrier).  Such a value crossing into an int64 carrier field slot (a
+ * carrier ADT/GADT constructor field) must be boxed (malloc + copy) on the way in
+ * and unboxed (deref) on the way out -- the byval<->carrier field crossing.  ADT
+ * fields are always stored as int64 in the tagged-union typedef, so a by-value
+ * child is never stored inline; the box/unbox bridge is mandatory at the seam. */
+static bool emit_type_is_byvalue_adt(EmitCtx *ctx, Type t) {
+    Type r = emit_resolve_type(ctx, t);
+    return r.kind == TY_ADT && r.as.adt_.def &&
+           adt_is_byvalue_product(r.as.adt_.def);
+}
+
 /* G9 (carrier<->concrete): true when a field read `(.field recv)` materializes
  * a by-value (non-:heap) aggregate in C -- e.g. `(.head xs)` where xs is a
  * monomorphized `Cons__Option__int *`, so `(xs)->head` is an embedded
@@ -2968,6 +2980,29 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         arg_strs[i] = strdup(c.data);
                         buf_free(&c);
                     }
+                    /* CONV-S1/B3: a by-value ADT argument flowing into a carrier
+                     * constructor's int64 field slot must be boxed (heap copy ->
+                     * int64) -- the field-store crossing.  Only for the plain
+                     * (non-suffixed) carrier ctor; a monomorphised per-instance
+                     * ctor (suffix != NULL, the M7 HKT path) takes the concrete
+                     * type directly and is B4's concern.  ADT fields are always
+                     * int64 in the typedef, so a by-value child is never inlined. */
+                    if (!suffix && arg && emit_type_is_byvalue_adt(ctx, arg->type)) {
+                        const char *cn = type_c_name(emit_resolve_type(ctx, arg->type));
+                        char *tmp = fresh_tmp(ctx);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "%s *%s = (%s *)malloc(sizeof(%s));\n",
+                                   cn, tmp, cn, cn);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "*%s = (%s);\n", tmp, arg_strs[i]);
+                        Buf c; buf_init(&c);
+                        buf_printf(&c, "(int64_t)(intptr_t)%s", tmp);
+                        buf_putc(&c, '\0');
+                        free(arg_strs[i]);
+                        arg_strs[i] = strdup(c.data);
+                        buf_free(&c);
+                        free(tmp);
+                    }
                 }
                 char *_mc = mangle_field_name(fn_binding->name->name);
                 Buf out; buf_init(&out);
@@ -5141,7 +5176,8 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 Buf hb; buf_init(&hb);
                 if (adt_is_byvalue_product(adt)) {
                     /* CONV-S1: by-value receiver -- read the field directly off the
-                     * aggregate, no carrier pointer deref.  Gated (dormant until B3). */
+                     * aggregate, no carrier pointer deref.  Gated by
+                     * adt_is_byvalue_product (LIVE for leaf products as of B3). */
                     buf_printf(&hb, "(%s)(%s).as.%s._%u",
                                cty, sv, mctor, e->as.get_field_.field_idx);
                 } else {
@@ -6486,8 +6522,9 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * exhaustive, so first-arm-wins is correct. */
             bool adt_flat = adt_is_flat_product(adt);
             /* CONV-S1: a by-value flat product binds its scrutinee as an aggregate
-             * (no carrier pointer) and reads fields with `.`.  Gated (dormant until
-             * B3); byval implies flat, so it always takes the if-chain path below. */
+             * (no carrier pointer) and reads fields with `.`.  Gated by
+             * adt_is_byvalue_product (LIVE for leaf products as of B3); byval
+             * implies flat, so it always takes the if-chain path below. */
             bool adt_byval = adt_is_byvalue_product(adt);
 
             if (has_any_guard || adt_flat) {
@@ -6530,10 +6567,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             char *bname = name_for_binding(ctx, fb);
                             indent_buf(body, ctx->indent);
                             /* CONV-S1: by-value scrutinee reads fields with `.`,
-                             * carrier scrutinee with `->`. */
-                            buf_printf(body, "%s %s = (%s)__scrut%sas.%s._%u;\n",
-                                       ctype, bname, ctype, adt_byval ? "." : "->",
-                                       _mctor, bi);
+                             * carrier scrutinee with `->`.  B3: a by-value ADT
+                             * field is stored boxed (int64 heap pointer) -- unbox
+                             * it by deref. */
+                            if (emit_type_is_byvalue_adt(ctx, fb->type)) {
+                                buf_printf(body,
+                                    "%s %s = *(%s *)(intptr_t)(__scrut%sas.%s._%u);\n",
+                                    ctype, bname, ctype, adt_byval ? "." : "->",
+                                    _mctor, bi);
+                            } else {
+                                buf_printf(body, "%s %s = (%s)__scrut%sas.%s._%u;\n",
+                                           ctype, bname, ctype, adt_byval ? "." : "->",
+                                           _mctor, bi);
+                            }
                             free(bname);
                         }
                         free(_mctor);
@@ -6626,8 +6672,17 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             /* Use name_for_binding to get the canonical C name */
                             char *bname = name_for_binding(ctx, fb);
                             indent_buf(body, ctx->indent);
-                            buf_printf(body, "%s %s = (%s)__scrut->as.%s._%u;\n",
-                                       ctype, bname, ctype, _mctor, bi);
+                            /* CONV-S1/B3: a by-value ADT field is stored boxed
+                             * (int64 heap pointer) in the carrier tagged union;
+                             * unbox it by deref. */
+                            if (emit_type_is_byvalue_adt(ctx, fb->type)) {
+                                buf_printf(body,
+                                    "%s %s = *(%s *)(intptr_t)(__scrut->as.%s._%u);\n",
+                                    ctype, bname, ctype, _mctor, bi);
+                            } else {
+                                buf_printf(body, "%s %s = (%s)__scrut->as.%s._%u;\n",
+                                           ctype, bname, ctype, _mctor, bi);
+                            }
                             free(bname);
                         }
                         free(_mctor);

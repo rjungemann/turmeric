@@ -344,8 +344,8 @@ bool type_uses_carrier_abi(Type t) {
     if (type_is_transparent_int_newtype(t)) return false;
     /* CONV-S1: a non-parametric flat-product ADT flows by value -- it is a
      * concrete aggregate, NOT a carrier, so it spills/boxes/derefs through the
-     * same emit_carrier_bridge machinery a by-value struct uses.  Gated (dormant
-     * until B3); see adt_is_byvalue_product. */
+     * same emit_carrier_bridge machinery a by-value struct uses.  Gated by
+     * adt_is_byvalue_product (LIVE for leaf products as of B3). */
     if (t.kind == TY_ADT && adt_is_byvalue_product(t.as.adt_.def)) return false;
     if (t.kind == TY_APP || t.kind == TY_ADT) return true;
     if (t.kind == TY_STRUCT && t.as.struct_.def &&

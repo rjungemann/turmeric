@@ -223,6 +223,34 @@ be made consistent.
    via `emit_carrier_bridge`, and unbox at the carrier field-bind read) -- the
    B1 smoke test proved this does not happen automatically -- so `gadt-adt-skolem`
    goes green as the gate flips.
+   **LANDED (gate LIVE).** This is the first step that turns by-value on. Two
+   refinements from the original sketch:
+   - **Gate = leaf products, not the full predicate.** `adt_is_byvalue_product`
+     ([`types.c`](../../src/compiler/types.c)) is now `adt_is_flat_product &&
+     n_type_params == 0 && every field a scalar`. The "leaf" clause is the cheap,
+     correct stand-in for "non-recursive": a recursive carrier's self-reference
+     rides in a ctor field whose storage `kind` is collapsed to the int64 carrier
+     (TY_INT) but whose `full_type` is the real `(ExprF Expr)` TY_APP -- so the
+     gate inspects `full_type`, and `Expr`/`Re` (and any aggregate-bearing
+     product) stay on the carrier path. A precise transitive-recursion check can
+     widen this later once every crossing is wired; leaf is deliberately
+     conservative and needs no caching. (The predicate moved from a `types.h`
+     inline to a `types.c` function because it must dereference `full_type`, and
+     `struct Type` is only forward-declared at that point in the header.)
+   - **Field-store crossing wired by hand, not via the struct bridge.** A
+     by-value ADT argument into a plain (non-suffixed) carrier constructor's int64
+     field is boxed inline (malloc + copy -> int64) at the N-arg ctor call
+     ([`emit_expr.c`](../../src/compiler/emit_expr.c)); the match field-bind (both
+     the if-chain and switch paths) unboxes a by-value-ADT field by deref
+     (`*(tur_adt_X *)(intptr_t)(__scrut->as.Ctor._i)`). A new
+     `emit_type_is_byvalue_adt` helper is the single representation gate for both
+     sides. With this, `gadt-adt-skolem` (by-value `Foo` stored in carrier-GADT
+     `Box`) goes green.
+   Result: `bash tests/run.sh` is **1813 passed, 0 failed** with the gate LIVE.
+   Exactly one snapshot moved -- `conv-single-variant-flat` -- now showing the
+   by-value `ctor_S` (returns the aggregate, no malloc), `sum(tur_adt_S)`, and a
+   `tur_adt_S __scrut = (s)` match. The monomorphised-ctor (suffix) HKT path is
+   untouched and stays B4's concern.
 4. **B4 -- reconcile with M7 by-value HKT.** Bring the recursive/HKT carriers
    (`Re`, `Expr`) onto the unified by-value path without double-handling.
 5. **CONV-S1 proper -- lower `defstruct` to `defadt`.** Only after B1-B4 is the

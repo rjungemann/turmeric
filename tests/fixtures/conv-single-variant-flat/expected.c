@@ -2711,11 +2711,11 @@ typedef struct tur_adt_S {
     } as;
 } tur_adt_S;
 
-static int64_t ctor_S(int64_t _0, int64_t _1) {
-    tur_adt_S *__r = (tur_adt_S *)malloc(sizeof(tur_adt_S));
-    __r->as.S._0 = _0;
-    __r->as.S._1 = _1;
-    return (int64_t)(intptr_t)__r;
+static tur_adt_S ctor_S(int64_t _0, int64_t _1) {
+    tur_adt_S __r;
+    __r.as.S._0 = _0;
+    __r.as.S._1 = _1;
+    return __r;
 }
 
 
@@ -3067,7 +3067,7 @@ static const char * sym_hy_gtstr(const struct __tur_sym *);
 static bool sym_eq_qu(const struct __tur_sym *, const struct __tur_sym *);
 static int64_t consume(int64_t, int64_t);
 static int64_t replace(int64_t, int64_t);
-static int64_t sum(int64_t);
+static int64_t sum(tur_adt_S);
 static bool some___spec__bool_Option__opaque(Option__opaque);
 static Cons__int * tcons__spec__Cons__int___int64_t_int64_t(int64_t, int64_t);
 
@@ -5592,13 +5592,13 @@ static int64_t replace(int64_t old, int64_t new) {
         return old;
 }
 
-static int64_t sum(int64_t s) {
+static int64_t sum(tur_adt_S s) {
         int64_t __t50 = 0;
         {
-            tur_adt_S *__scrut = (tur_adt_S *)(intptr_t)(s);
+            tur_adt_S __scrut = (s);
             {
-                int64_t a_1247 = (int64_t)__scrut->as.S._0;
-                int64_t b_1248 = (int64_t)__scrut->as.S._1;
+                int64_t a_1247 = (int64_t)__scrut.as.S._0;
+                int64_t b_1248 = (int64_t)__scrut.as.S._1;
                 __t50 = (a_1247) + (b_1248);
                 goto ____t51;
             }
@@ -5619,7 +5619,7 @@ int main(int argc, char **argv) {
         }
         int64_t __t52;
         {
-            int64_t s_1249 = ctor_S(INT64_C(10), INT64_C(32));
+            tur_adt_S s_1249 = ctor_S(INT64_C(10), INT64_C(32));
             (void)s_1249;
             printf("%lld\n", (long long)(sum(s_1249)));
             int64_t __t53;

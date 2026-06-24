@@ -2449,8 +2449,38 @@ static const char *heap_ptr_c_name(const char *base) {
  * non `[A-Za-z0-9_]` byte with `_`) is replicated inline here so the type layer
  * does not have to reach up into the emit layer; the result is interned (same
  * stable, leak-checked storage heap_ptr_c_name uses) so type_c_name can return a
- * stable `const char *`.  Dormant in CONV-S1/B1 -- only reached once
- * adt_is_byvalue_product() is flipped on. */
+ * stable `const char *`.  Reached for every leaf product now that
+ * adt_is_byvalue_product() is LIVE (CONV-S1/B3). */
+/* CONV-S1/B3: gate the by-value ADT representation.  A single-variant, non-GADT,
+ * NON-parametric flat product flows by value -- BUT only when it is a "leaf":
+ * every field a scalar (int/bool/float/cstr/ptr/...).  A field that is itself an
+ * aggregate (ADT / type-application / struct / type variable) is stored as an
+ * int64 carrier in the tagged-union typedef -- its storage `kind` is collapsed to
+ * TY_INT, so the real type lives in `full_type` (e.g. `(ExprF Expr)` reads as
+ * kind TY_INT with a TY_APP full_type).  Such an aggregate child would need the
+ * byval<->carrier field bridge on both sides; the recursive HKT carriers
+ * (Expr = (Roll (ExprF Expr)), Re = (Roll (ReF Re))) are exactly that non-leaf
+ * case and stay on the carrier path until B4.  Deliberately conservative -- a
+ * precise transitive recursion check can widen this to non-recursive
+ * aggregate-bearing products later, once every crossing is wired. */
+bool adt_is_byvalue_product(const AdtDef *def) {
+    if (!adt_is_flat_product(def) || def->n_type_params != 0) return false;
+    const CtorDef *c = def->ctors[0];
+    for (uint32_t i = 0; i < c->n_fields; i++) {
+        const CtorField *f = &c->fields[i];
+        if (f->full_type) {
+            TypeKind fk = f->full_type->kind;
+            if (fk == TY_ADT || fk == TY_APP || fk == TY_STRUCT ||
+                fk == TY_TYVAR || fk == TY_FORALL || fk == TY_EXISTS)
+                return false;
+        }
+        TypeKind k = f->kind;
+        if (k == TY_ADT || k == TY_APP || k == TY_STRUCT || k == TY_TYVAR)
+            return false;
+    }
+    return true;
+}
+
 const char *adt_byval_c_name(const AdtDef *def) {
     Buf b; buf_init(&b);
     buf_puts(&b, "tur_adt_");
@@ -2597,7 +2627,7 @@ const char *type_c_name(Type t) {
         /* Phase G0: ADT types are passed as int64_t (opaque heap pointer).
          * CONV-S1: a non-parametric flat-product ADT flows by value -- its C type
          * is the flat `tur_adt_<Name>` aggregate, not the int64 carrier.  Gated
-         * (dormant until B3); see adt_is_byvalue_product. */
+         * by adt_is_byvalue_product (LIVE for leaf products as of B3). */
         case TY_ADT:
             if (adt_is_byvalue_product(t.as.adt_.def))
                 return adt_byval_c_name(t.as.adt_.def);
