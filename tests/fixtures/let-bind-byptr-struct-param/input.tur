@@ -1,0 +1,19 @@
+;; let-bind-byptr-struct-param -- regression for let-binding a by-pointer
+;; struct *parameter* directly.  A struct whose fields sum to > 16 bytes is
+;; passed as `const T *`; binding it to a let variable declared by value must
+;; dereference (`T g = *t;`), not assign the pointer to a by-value temp.
+(defstruct Triple :copy [a : int b : int c : int])  ;; 24 bytes -> by-pointer
+
+(defn f [t : Triple] : int
+  (let [g t]                                          ;; direct pbp-param bind
+    (.a g)))
+
+(defn sum2 [t : Triple] : int                         ;; two binds off one pbp param
+  (let [u t
+        v t]
+    (+ (.b u) (.c v))))
+
+(defn main [] : int
+  (println (f (make-struct Triple 1 2 3)))            ;; => 1
+  (println (sum2 (make-struct Triple 10 20 30)))      ;; => 50
+  0)
