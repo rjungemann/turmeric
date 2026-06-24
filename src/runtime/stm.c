@@ -1,13 +1,13 @@
-/* stm.c - Software Transactional Memory (Phase 20-21)
+/* stm.c - Software Transactional Memory (TL2)
  *
- * Haskell-style STM implementation.
- * 
- * Phase 20 (v1): Global lock implementation - kept for backwards compatibility
- * Phase 21 (v2): Per-TVar fine-grained locking with lock ordering
+ * Transactional Locking II: optimistic, lock-free reads validated against a
+ * global version clock; commit publishes the write set under striped bucket
+ * locks with a per-TVar lock bit so concurrent readers never observe a
+ * half-applied commit. See stm.h for the full protocol description.
  *
- * This implementation uses per-TVar pthread_mutex_t locks with lock ordering
- * to prevent deadlocks. TVars are grouped into lock buckets (lock stripping)
- * to reduce memory overhead.
+ * Version stamps and the global clock are accessed with the __atomic builtins
+ * (GCC/Clang); the low bit of a TVar version is the commit lock flag, so
+ * committed stamps are always even and advance by 2.
  */
 
 #include "stm.h"
@@ -20,7 +20,8 @@
 #include "platform.h"
 
 /* Global STM state */
-static STM_State global_stm_state = { .global_lock = PTHREAD_MUTEX_INITIALIZER };
+static STM_State global_stm_state;
+static pthread_once_t stm_once = PTHREAD_ONCE_INIT;
 
 /* Thread-local current transaction */
 static TUR_THREAD_LOCAL STM_Transaction *current_tx = NULL;
@@ -29,14 +30,18 @@ static TUR_THREAD_LOCAL STM_Transaction *current_tx = NULL;
  * Initialization
  * ============================================================================ */
 
-static void tur_stm_init_buckets(void) {
+static void stm_do_init(void) {
+    __atomic_store_n(&global_stm_state.version_clock, (uint64_t)0, __ATOMIC_RELEASE);
+    pthread_mutex_init(&global_stm_state.retry_lock, NULL);
+    pthread_cond_init(&global_stm_state.retry_cond, NULL);
     for (int i = 0; i < STM_NUM_LOCK_BUCKETS; i++) {
         pthread_mutex_init(&global_stm_state.lock_buckets[i].lock, NULL);
-        global_stm_state.lock_buckets[i].tvars = NULL;
+        global_stm_state.lock_buckets[i].commit_seq = 0;
     }
 }
 
 STM_State *tur_stm_state(void) {
+    pthread_once(&stm_once, stm_do_init);
     return &global_stm_state;
 }
 
@@ -49,86 +54,79 @@ void tur_stm_set_current_tx(STM_Transaction *tx) {
 }
 
 void tur_stm_init(void) {
-    tur_stm_init_buckets();
+    pthread_once(&stm_once, stm_do_init);
 }
 
 /* ============================================================================
  * TVar operations
  * ============================================================================ */
 
-/* Hash a TVar pointer to a lock bucket index */
-static uint8_t tvar_to_bucket(TVar *tv) {
+/* Hash a TVar pointer to a lock bucket index. Shift past the malloc alignment
+ * bits so striping isn't degenerate. */
+static unsigned tvar_to_bucket(TVar *tv) {
     uintptr_t addr = (uintptr_t)tv;
-    return (uint8_t)(addr % STM_NUM_LOCK_BUCKETS);
+    return (unsigned)((addr >> 4) & (STM_NUM_LOCK_BUCKETS - 1));
 }
 
 TVar *tur_tvar_new(TypeInfo *type, void *initial_value) {
+    tur_stm_init();
     TVar *tv = (TVar *)malloc(sizeof(TVar));
     if (!tv) return NULL;
     tv->type = type;
     tv->value = initial_value;
-    tv->version = 1;
-    pthread_mutex_init(&tv->lock, NULL);
-    pthread_cond_init(&tv->cond, NULL);
-    tv->lock_bucket = tvar_to_bucket(tv);
-    tv->next_in_bucket = NULL;
-
-    /* Add to lock bucket list */
-    STM_LockBucket *bucket = &global_stm_state.lock_buckets[tv->lock_bucket];
-    pthread_mutex_lock(&bucket->lock);
-    tv->next_in_bucket = bucket->tvars;
-    bucket->tvars = tv;
-    pthread_mutex_unlock(&bucket->lock);
-
+    /* Version 0 == even (unlocked), committed at the dawn of time. */
+    __atomic_store_n(&tv->version, (uint64_t)0, __ATOMIC_RELEASE);
     return tv;
 }
 
 void tur_tvar_free(TVar *tv) {
     if (!tv) return;
-
-    /* Remove from lock bucket list */
-    STM_LockBucket *bucket = &global_stm_state.lock_buckets[tv->lock_bucket];
+    /* Serialize against any concurrent committer publishing to this stripe so
+     * the free can't race a commit that still holds the bucket lock. */
+    STM_State *st = tur_stm_state();
+    STM_LockBucket *bucket = &st->lock_buckets[tvar_to_bucket(tv)];
     pthread_mutex_lock(&bucket->lock);
-    TVar **p = &bucket->tvars;
-    while (*p) {
-        if (*p == tv) {
-            *p = tv->next_in_bucket;
-            break;
-        }
-        p = &(*p)->next_in_bucket;
-    }
     pthread_mutex_unlock(&bucket->lock);
-
-    pthread_cond_destroy(&tv->cond);
-    pthread_mutex_destroy(&tv->lock);
     free(tv);
 }
 
 void *tur_tvar_read(STM_Transaction *tx, TVar *tv) {
     if (!tx || !tv) return NULL;
 
-    /* Check if in write set first - reads to our own writes should return new value */
+    /* Reads to our own buffered writes return the new value. */
     for (int i = 0; i < tx->write_count; i++) {
         if (tx->write_set[i] == tv) {
             return tx->new_values[i];
         }
     }
 
-    /* Record the read in the transaction's read set */
-    if (tx->read_count < STM_MAX_READ_SET) {
-        /* Check if already in read set */
-        for (int i = 0; i < tx->read_count; i++) {
-            if (tx->read_set[i] == tv) {
-                break;
-            }
-        }
-        /* New read - record it */
-        tx->read_set[tx->read_count] = tv;
-        tx->read_versions[tx->read_count] = tv->version;
-        tx->read_count++;
+    /* TL2 lock-free read: snapshot version, load value, re-check version. */
+    uint64_t v1 = __atomic_load_n(&tv->version, __ATOMIC_ACQUIRE);
+    if ((v1 & 1u) || v1 > tx->read_stamp) {
+        tx->aborted = true;
+        return NULL;
+    }
+    void *val = __atomic_load_n(&tv->value, __ATOMIC_ACQUIRE);
+    uint64_t v2 = __atomic_load_n(&tv->version, __ATOMIC_ACQUIRE);
+    if (v1 != v2) {
+        tx->aborted = true;
+        return NULL;
     }
 
-    return tv->value;
+    /* Record the read (once) in the read set. */
+    if (tx->read_count < STM_MAX_READ_SET) {
+        bool seen = false;
+        for (int i = 0; i < tx->read_count; i++) {
+            if (tx->read_set[i] == tv) { seen = true; break; }
+        }
+        if (!seen) {
+            tx->read_set[tx->read_count] = tv;
+            tx->read_versions[tx->read_count] = v1;
+            tx->read_count++;
+        }
+    }
+
+    return val;
 }
 
 void tur_tvar_write(STM_Transaction *tx, TVar *tv, void *value) {
@@ -142,18 +140,10 @@ void tur_tvar_write(STM_Transaction *tx, TVar *tv, void *value) {
         }
     }
 
-    /* Check if in read set - move to write set */
-    for (int i = 0; i < tx->read_count; i++) {
-        if (tx->read_set[i] == tv) {
-            /* Remove from read set */
-            for (int j = i; j < tx->read_count - 1; j++) {
-                tx->read_set[j] = tx->read_set[j + 1];
-                tx->read_versions[j] = tx->read_versions[j + 1];
-            }
-            tx->read_count--;
-            break;
-        }
-    }
+    /* A read-then-write keeps its read-set entry: the recorded version is the
+     * dependency the commit must still validate, or a concurrent committer's
+     * update to this same TVar would be silently lost. (A write with no prior
+     * read is a blind write and never enters the read set.) */
 
     /* Add to write set */
     if (tx->write_count < STM_MAX_WRITE_SET) {
@@ -194,7 +184,7 @@ bool tur_tvar_cas(STM_Transaction *tx, TVar *tv, void *old_value, void *new_valu
 }
 
 /* ============================================================================
- * Lock ordering (Phase 21)
+ * Lock ordering
  * ============================================================================ */
 
 /* Compare TVars by address for lock ordering */
@@ -206,13 +196,8 @@ int tur_stm_lock_cmp(const void *a, const void *b) {
     return 0;
 }
 
-/* Sort write set by TVar address for lock ordering */
-static void tur_stm_sort_write_set(STM_Transaction *tx) {
-    qsort(tx->write_set, tx->write_count, sizeof(TVar *), tur_stm_lock_cmp);
-}
-
 /* ============================================================================
- * Transaction validation and commit (Phase 21 - per-TVar locking)
+ * Transaction validation and commit (TL2)
  * ============================================================================ */
 
 bool tur_stm_validate(STM_Transaction *tx) {
@@ -220,53 +205,94 @@ bool tur_stm_validate(STM_Transaction *tx) {
 
     for (int i = 0; i < tx->read_count; i++) {
         TVar *tv = tx->read_set[i];
-        if (tv->version != tx->read_versions[i]) {
-            return false;  /* Version changed - validation failed */
+        uint64_t cur = __atomic_load_n(&tv->version, __ATOMIC_ACQUIRE);
+        if ((cur & 1u) || cur != tx->read_versions[i]) {
+            return false;  /* locked by a committer or version changed */
         }
     }
     return true;
 }
 
+/* Collect the distinct bucket indices covering the write set, sorted ascending
+ * (insertion sort over a small array). Returns the count. */
+static int stm_collect_write_buckets(STM_Transaction *tx, unsigned *idxs) {
+    int n = 0;
+    for (int i = 0; i < tx->write_count; i++) {
+        unsigned bi = tvar_to_bucket(tx->write_set[i]);
+        bool seen = false;
+        for (int j = 0; j < n; j++) {
+            if (idxs[j] == bi) { seen = true; break; }
+        }
+        if (!seen) idxs[n++] = bi;
+    }
+    for (int i = 1; i < n; i++) {
+        unsigned k = idxs[i];
+        int j = i - 1;
+        while (j >= 0 && idxs[j] > k) { idxs[j + 1] = idxs[j]; j--; }
+        idxs[j + 1] = k;
+    }
+    return n;
+}
+
 bool tur_stm_commit(STM_Transaction *tx) {
     if (!tx) return false;
 
-    /* Sort write set by address for lock ordering */
-    tur_stm_sort_write_set(tx);
+    STM_State *st = tur_stm_state();
 
-    /* Acquire locks on all write-set TVars in address order */
-    for (int i = 0; i < tx->write_count; i++) {
-        TVar *tv = tx->write_set[i];
-        pthread_mutex_lock(&tv->lock);
+    /* Lock the buckets covering the write set, in bucket-index order. */
+    unsigned idxs[STM_MAX_WRITE_SET];
+    int nidx = stm_collect_write_buckets(tx, idxs);
+    for (int i = 0; i < nidx; i++) {
+        pthread_mutex_lock(&st->lock_buckets[idxs[i]].lock);
     }
 
-    /* Validate read set with locks held */
-    if (!tur_stm_validate(tx)) {
-        /* Validation failed - unlock and retry */
-        for (int i = 0; i < tx->write_count; i++) {
-            pthread_mutex_unlock(&tx->write_set[i]->lock);
+    /* Advance the global clock; wv is the new even version for our writes. */
+    uint64_t wv = __atomic_add_fetch(&st->version_clock, (uint64_t)2, __ATOMIC_ACQ_REL);
+
+    /* Re-validate the whole read set, including read-then-written TVars (we
+     * hold their bucket locks, so the only way the version moved is a committer
+     * that finished before us -- which is exactly the conflict we must catch). */
+    for (int i = 0; i < tx->read_count; i++) {
+        TVar *tv = tx->read_set[i];
+        uint64_t cur = __atomic_load_n(&tv->version, __ATOMIC_ACQUIRE);
+        if ((cur & 1u) || cur != tx->read_versions[i]) {
+            for (int k = nidx - 1; k >= 0; k--) {
+                pthread_mutex_unlock(&st->lock_buckets[idxs[k]].lock);
+            }
+            return false;  /* conflict; caller retries the closure */
         }
-        return false;
     }
 
-    /* Apply writes */
+    /* Publish writes: mark locked (odd), store value, store new version (even).
+     * A concurrent lock-free reader sees the odd stamp and aborts. */
     for (int i = 0; i < tx->write_count; i++) {
         TVar *tv = tx->write_set[i];
-        tv->value = tx->new_values[i];
-        tv->version++;
-    }
-
-    /* Notify waiters on all written TVars */
-    for (int i = 0; i < tx->write_count; i++) {
-        TVar *tv = tx->write_set[i];
-        pthread_cond_broadcast(&tv->cond);
+        uint64_t locked = __atomic_load_n(&tv->version, __ATOMIC_RELAXED) | 1u;
+        __atomic_store_n(&tv->version, locked, __ATOMIC_RELEASE);
+        __atomic_store_n(&tv->value, tx->new_values[i], __ATOMIC_RELEASE);
+        __atomic_store_n(&tv->version, wv, __ATOMIC_RELEASE);
     }
 
     tx->committed = true;
 
-    /* Release locks in reverse order */
-    for (int i = tx->write_count - 1; i >= 0; i--) {
-        pthread_mutex_unlock(&tx->write_set[i]->lock);
+    /* Fire commit defers inside the locked region so observers that wake on the
+     * commit see a fully-committed state. */
+    tur_stm_fire_commit_defers(tx);
+
+    /* Advance the touched buckets' commit_seq (drives the retry filter). */
+    for (int i = 0; i < nidx; i++) {
+        __atomic_add_fetch(&st->lock_buckets[idxs[i]].commit_seq, (uint64_t)1, __ATOMIC_ACQ_REL);
     }
+
+    /* Release bucket locks in reverse order. */
+    for (int i = nidx - 1; i >= 0; i--) {
+        pthread_mutex_unlock(&st->lock_buckets[idxs[i]].lock);
+    }
+
+    /* Wake any parked retriers; the per-bucket filter sorts out who re-runs. */
+    pthread_mutex_lock(&st->retry_lock);
+    pthread_cond_broadcast(&st->retry_cond);
+    pthread_mutex_unlock(&st->retry_lock);
 
     return true;
 }
@@ -282,39 +308,53 @@ void tur_stm_abort(STM_Transaction *tx) {
 }
 
 /* ============================================================================
- * Retry with per-TVar condition variables (Phase 21)
+ * Retry: global cond + per-bucket commit_seq filter
  * ============================================================================ */
 
 void tur_stm_retry(STM_Transaction *tx) {
     if (!tx) return;
+    /* The actual parking happens in tur_atomically once the body has populated
+     * the read set; here we just request it. */
     tx->retry_requested = true;
+}
 
-    /* Add transaction to wait queues of all read TVars */
+/* Park the calling thread until a bucket covering the read set commits. */
+static void stm_park(STM_State *st, STM_Transaction *tx) {
+    unsigned idxs[STM_MAX_READ_SET];
+    uint64_t seqs[STM_MAX_READ_SET];
+    int n = 0;
     for (int i = 0; i < tx->read_count; i++) {
-        TVar *tv = tx->read_set[i];
-        /* Lock the TVar and add to wait queue */
-        pthread_mutex_lock(&tv->lock);
-        /* In v1, we just set the retry flag */
-        /* A full implementation would maintain a per-TVar waiter list */
-        pthread_mutex_unlock(&tv->lock);
-    }
-
-    /* Block on the first TVar's condition variable (simplified for v1) */
-    if (tx->read_count > 0) {
-        TVar *tv = tx->read_set[0];
-        pthread_mutex_lock(&tv->lock);
-        while (tx->retry_requested) {
-            pthread_cond_wait(&tv->cond, &tv->lock);
+        unsigned bi = tvar_to_bucket(tx->read_set[i]);
+        bool seen = false;
+        for (int j = 0; j < n; j++) {
+            if (idxs[j] == bi) { seen = true; break; }
         }
-        pthread_mutex_unlock(&tv->lock);
+        if (!seen) {
+            idxs[n] = bi;
+            seqs[n] = __atomic_load_n(&st->lock_buckets[bi].commit_seq, __ATOMIC_ACQUIRE);
+            n++;
+        }
     }
+    if (n == 0) return;  /* nothing read -> retry would deadlock; let caller spin */
+
+    pthread_mutex_lock(&st->retry_lock);
+    for (;;) {
+        bool advanced = false;
+        for (int i = 0; i < n; i++) {
+            uint64_t cur = __atomic_load_n(&st->lock_buckets[idxs[i]].commit_seq, __ATOMIC_ACQUIRE);
+            if (cur != seqs[i]) { advanced = true; break; }
+        }
+        if (advanced) break;
+        pthread_cond_wait(&st->retry_cond, &st->retry_lock);
+    }
+    pthread_mutex_unlock(&st->retry_lock);
 }
 
 void tur_stm_check(bool condition) {
     if (!condition) {
         STM_Transaction *tx = tur_stm_current_tx();
         if (tx) {
-            tur_stm_abort(tx);
+            tur_stm_retry(tx);
         }
     }
 }
@@ -326,47 +366,43 @@ void tur_stm_check(bool condition) {
 void *tur_atomically(stm_fn_t fn, void *env) {
     if (!fn) return NULL;
 
-    STM_Transaction *tx = NULL;
+    STM_State *st = tur_stm_state();
+    STM_Transaction *tx = tur_stm_new_transaction();
+    if (!tx) return NULL;
     STM_Transaction *prev_tx = tur_stm_current_tx();
 
     while (true) {
-        /* Create a new transaction */
-        tx = tur_stm_new_transaction();
-        if (!tx) return NULL;
-
-        /* Set as current transaction */
+        /* Begin: reset the log and snapshot the global clock. */
+        tx->read_count = 0;
+        tx->write_count = 0;
+        tx->retry_requested = false;
+        tx->aborted = false;
+        tx->committed = false;
+        tx->read_stamp = __atomic_load_n(&st->version_clock, __ATOMIC_ACQUIRE);
         tur_stm_set_current_tx(tx);
 
-        /* Execute the transaction body */
+        /* Execute the transaction body. */
         fn(env);
 
-        /* Check if retry was requested */
+        /* retry / check-false: park on the read set, then re-run. */
         if (tx->retry_requested) {
-            /* Retry was requested - clean up and retry */
             tur_stm_set_current_tx(prev_tx);
-            /* Clear retry flag for next attempt */
-            tx->retry_requested = false;
-            tur_stm_free_transaction(tx);
-            tx = NULL;
+            stm_park(st, tx);
             continue;
         }
 
-        /* Check if aborted (via check or exception) */
+        /* Read conflict observed mid-body: restart immediately. */
         if (tx->aborted) {
             tur_stm_set_current_tx(prev_tx);
-            tur_stm_free_transaction(tx);
-            return NULL;
+            continue;
         }
 
-        /* Try to commit */
+        /* Try to commit. */
         bool success = tur_stm_commit(tx);
-
-        /* Restore previous transaction */
         tur_stm_set_current_tx(prev_tx);
 
         if (success) {
             void *ret = NULL;
-            /* Return the result from the last write or a default */
             if (tx->write_count > 0) {
                 ret = tx->new_values[tx->write_count - 1];
             }
@@ -374,9 +410,7 @@ void *tur_atomically(stm_fn_t fn, void *env) {
             return ret;
         }
 
-        /* Commit failed - retry */
-        tur_stm_free_transaction(tx);
-        tx = NULL;
+        /* Commit validation failed - retry from the top. */
     }
 }
 
@@ -431,13 +465,6 @@ void tur_stm_fire_abort_defers(STM_Transaction *tx) {
 STM_Transaction *tur_stm_new_transaction(void) {
     STM_Transaction *tx = (STM_Transaction *)calloc(1, sizeof(STM_Transaction));
     if (!tx) return NULL;
-    tx->read_count = 0;
-    tx->write_count = 0;
-    tx->defer_count = 0;
-    tx->retry_requested = false;
-    tx->aborted = false;
-    tx->committed = false;
-    tx->parent = NULL;
     return tx;
 }
 

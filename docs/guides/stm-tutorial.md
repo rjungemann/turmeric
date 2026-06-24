@@ -472,8 +472,10 @@ defn barrier-wait [barrier]
 ## Limitations
 
 - **No nested transactions:** Calling `atomically` inside `atomically` raises an error. (Haskell allows this; Turmeric does not.)
-- **No interactive transactions:** Transactions must be pure (no I/O); side effects inside `atomically` may occur multiple times on retry.
-- **Performance:** Lock-based implementation; wait-free or lock-free variants are a future direction.
+- **No interactive transactions:** Transactions must be pure (no I/O); side effects inside `atomically` may occur multiple times on retry. Defer commit-time work with the on-commit defer API instead.
+- **Pointee immutability:** A TVar's optimistic read check protects the stored pointer, not the bytes it points at. Boxed multi-word payloads (structs, vectors, HAMT nodes) must be treated as immutable after publication -- writers allocate a fresh payload and swap the pointer rather than mutating in place.
+- **Fixed-size sets:** 256 reads, 128 writes, 32 defers per transaction.
+- **Concurrency model:** The compiled runtime commits with TL2 (Transactional Locking II) -- optimistic lock-free reads validated against a global version clock, with striped per-bucket commit locks -- not a single global lock; lock-free/wait-free variants remain out of scope. The interpreter is single-threaded, so it never contends: it observes the same isolation as an uncontended compiled transaction.
 
 ## Example: Concurrent Merge Sort
 

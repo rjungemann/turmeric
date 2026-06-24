@@ -1,0 +1,99 @@
+;; stm-stress -- contended STM counter under TL2.
+;;
+;; 8 threads each run 500 transactions that read-modify-write a single shared
+;; TVar.  Because every increment goes through `atomically`, the TL2 commit path
+;; (bucket lock + read-set revalidation + retry) must serialize them, so the
+;; final value is exactly 8 * 500 = 4000 with no lost updates.  A broken commit
+;; or read-validation path would drop increments and print a smaller number.
+;;
+;; Deterministic output (4000), so it runs in the default suite; the TSan suite
+;; exercises the same fixture to prove the read/commit fast paths are race-free.
+
+;; Boxed-int helper: increment a ptr<void>-boxed int by one.
+(defn add1 [x : ptr] : ptr
+  ```c
+  return (void *)(intptr_t)((int64_t)(intptr_t)x + 1);
+  ```)
+
+;; Free a TVar cell (TL2 TVars are plain {value, version}, no inner resources).
+(defn tvar-free [p : ptr] : nil
+  ```c
+  free(p);
+  ```)
+
+;; Read a ptr<void>-boxed int back to a machine int for printing.
+(defn ptr->int [x : ptr] : int
+  ```c
+  return (int64_t)(intptr_t)x;
+  ```)
+
+;; Read the committed value of a TVar outside contention (single-shot tx).
+(defn tvar-get [counter : ptr] : ptr
+  (atomically (stm (tvar/read counter))))
+
+;; Worker loop: perform n contended increments on the shared counter.
+(defn worker-loop [counter : ptr n : int] : int
+  (if (= n 0)
+    0
+    (do
+      (atomically (stm (tvar/modify counter add1)))
+      (worker-loop counter (- n 1)))))
+
+;; Decode the worker arg struct { TVar* counter; int64 iters }.
+(defn arg-counter [arg : ptr<void>] : ptr
+  ```c
+  typedef struct { void *counter; int64_t iters; } SSArg;
+  return ((SSArg *)arg)->counter;
+  ```)
+
+(defn arg-iters [arg : ptr<void>] : int
+  ```c
+  typedef struct { void *counter; int64_t iters; } SSArg;
+  return (int64_t)((SSArg *)arg)->iters;
+  ```)
+
+;; pthread entry point: run iters contended increments, then return the arg.
+(defn worker [arg : ptr<void>] : ptr<void>
+  (do
+    (worker-loop (arg-counter arg) (arg-iters arg))
+    arg))
+
+;; Spawn n threads, each with its own arg struct (freed in join).
+(defn spawn-all [fn-ptr : ptr<void> counter : ptr n : int iters : int] : ptr<void>
+  ```c
+  typedef struct { void *counter; int64_t iters; } SSArg;
+  pthread_t **handles = (pthread_t **)malloc((size_t)n * sizeof(pthread_t *));
+  if (!handles) { fprintf(stderr, "spawn-all: oom\n"); abort(); }
+  int64_t i;
+  for (i = 0; i < n; i++) {
+      SSArg *a = (SSArg *)malloc(sizeof(SSArg));
+      if (!a) { fprintf(stderr, "spawn-all: arg oom\n"); abort(); }
+      a->counter = (void *)counter;
+      a->iters   = (int64_t)iters;
+      pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+      if (!t) { fprintf(stderr, "spawn-all: thread oom\n"); abort(); }
+      pthread_create(t, NULL, (void *(*)(void *))fn_ptr, (void *)a);
+      handles[i] = t;
+  }
+  return (void *)handles;
+  ```)
+
+(defn join-all [handles : ptr<void> n : int] : nil
+  ```c
+  pthread_t **hs = (pthread_t **)handles;
+  int64_t i;
+  for (i = 0; i < n; i++) {
+      void *ret;
+      pthread_join(*hs[i], &ret);
+      free(hs[i]);
+  }
+  free(hs);
+  ```)
+
+(defn main [] : int
+  (let [counter (tvar/new 0)]
+    (let [handles (spawn-all worker counter 8 500)]
+      (join-all handles 8))
+    (println (ptr->int (tvar-get counter)))   ;; 4000
+    (tvar-free counter))
+  0)

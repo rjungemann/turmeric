@@ -1,0 +1,65 @@
+;; stm-retry-wakeup -- blocking `retry` woken by another thread's commit.
+;;
+;; A consumer thread runs `(check (nonzero? flag))`, which requests a retry and
+;; parks (no busy-spin) until a committer touches the bucket it read.  The main
+;; thread sleeps, then commits flag := 42.  The commit advances the bucket's
+;; commit_seq and broadcasts the global retry cond, waking the parked consumer,
+;; which re-runs, passes the check, and prints 42.
+;;
+;; This exercises the per-bucket commit_seq wakeup filter (G2/G3 in the plan):
+;; a retry that misses its wakeup would hang (caught by the 10s fixture timeout).
+
+(defn nonzero? [x : ptr] : bool
+  ```c
+  return x != NULL;
+  ```)
+
+(defn ptr->int [x : ptr] : int
+  ```c
+  return (int64_t)(intptr_t)x;
+  ```)
+
+(defn tvar-free [p : ptr] : nil
+  ```c
+  free(p);
+  ```)
+
+(defn sleep-ms [ms : int] : nil
+  ```c
+  struct timespec ts;
+  ts.tv_sec  = (time_t)(ms / 1000);
+  ts.tv_nsec = (long)((ms % 1000) * 1000000L);
+  nanosleep(&ts, NULL);
+  ```)
+
+;; pthread entry point: arg is the shared flag TVar pointer.
+(defn consumer [arg : ptr<void>] : ptr<void>
+  (let [v (atomically (stm (check (nonzero? (tvar/read arg)))
+                           (tvar/read arg)))]
+    (println (ptr->int v))
+    arg))
+
+(defn spawn-consumer [fn-ptr : ptr<void> flag : ptr] : ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  if (!t) { fprintf(stderr, "spawn: oom\n"); abort(); }
+  pthread_create(t, NULL, (void *(*)(void *))fn_ptr, (void *)flag);
+  return (void *)t;
+  ```)
+
+(defn join1 [t : ptr<void>] : nil
+  ```c
+  pthread_t *tt = (pthread_t *)t;
+  void *ret;
+  pthread_join(*tt, &ret);
+  free(tt);
+  ```)
+
+(defn main [] : int
+  (let [flag (tvar/new 0)
+        t    (spawn-consumer consumer flag)]
+    (sleep-ms 50)
+    (atomically (stm (tvar/write flag 42)))
+    (join1 t)
+    (tvar-free flag))
+  0)
