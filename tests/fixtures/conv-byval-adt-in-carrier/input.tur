@@ -1,0 +1,22 @@
+;; CONV-S1/B3 regression: a by-value ADT (Pt, float fields) stored in a CARRIER
+;; multi-variant ADT (Shape) must be boxed at the constructor store and unboxed
+;; at the match field-bind.  Covers a single-field carrier variant (Dot) and a
+;; multi-field one (Seg), with non-integer float payloads so truncation/round
+;; bugs would show.
+(defdata Pt (Pt [x : float y : float]))
+
+(defdata Shape
+  (Dot [p : Pt])
+  (Seg [a : Pt b : Pt]))
+
+(defn first-x [s : Shape] : float
+  (match s
+    (Dot p)   (match p (Pt x y) x)
+    (Seg a b) (match a (Pt x y) x)))
+
+(defn main [] : int
+  (let [d (Dot (Pt 7.1 2.0))
+        s (Seg (Pt 3.25 0.0) (Pt 9.0 9.0))]
+    (println (first-x d))
+    (println (first-x s))
+    0))

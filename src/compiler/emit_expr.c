@@ -6501,8 +6501,14 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 tmp = fresh_tmp(ctx);
                 indent_buf(body, ctx->indent);
                 /* Initialize to zero to silence -Wsometimes-uninitialized; exhaustiveness
-                 * is guaranteed by the elaborator so the default branch is unreachable. */
-                buf_printf(body, "%s %s = 0;\n", type_c_name(e->type), tmp);
+                 * is guaranteed by the elaborator so the default branch is unreachable.
+                 * CONV-S1/B3: a by-value ADT result is a C aggregate -- it cannot be
+                 * scalar-initialised with `0` (invalid initializer), so use `{0}`. */
+                if (e->type.kind == TY_ADT &&
+                    adt_is_byvalue_product(e->type.as.adt_.def))
+                    buf_printf(body, "%s %s = {0};\n", type_c_name(e->type), tmp);
+                else
+                    buf_printf(body, "%s %s = 0;\n", type_c_name(e->type), tmp);
             }
 
             /* Emit scrutinee */

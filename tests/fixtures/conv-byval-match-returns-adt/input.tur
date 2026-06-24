@@ -1,0 +1,21 @@
+;; CONV-S1/B3 regression: a `match` whose RESULT type is a by-value ADT must
+;; initialise its result temp with `{0}` (a C aggregate), not the scalar `0`
+;; (an invalid initializer).  `bump` returns Rec from a match arm that
+;; reconstructs it; the mixed cstr/float/bool/int fields must all round-trip
+;; through the by-value constructor, match, and field binds.
+(defdata Rec
+  (Rec [name : cstr ratio : float on : bool count : int]))
+
+(defn bump [r : Rec] : Rec
+  (match r
+    (Rec n f b c) (Rec n f b (+ c 1))))
+
+(defn main [] : int
+  (let [r  (Rec "hi" 7.1 true 3)
+        r2 (bump r)]
+    (match r2
+      (Rec n f b c)
+      (do
+        (println n)
+        (println c)
+        0))))
