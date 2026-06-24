@@ -106,21 +106,55 @@ What is still missing -- and what TC5 here delivers -- is:
 
 ## Implementation phases
 
-- [ ] **TC5** -- Runtime helpers: `tur_ok_int`, `tur_err_int`,
+- [x] **TC5** -- Runtime helpers: `tur_ok_int`, `tur_err_int`,
   `tur_ok_ptr`, `tur_err_ptr`, `tur_some_int`, `tur_some_ptr`,
   `tur_none`. Decide on shape (open question 1 below). Static_assert
   cross-check against `stdlib/result.tur` / `stdlib/option.tur` layout.
   Fixture: `tests/fixtures/inline-c-result-builder/`.
+  **Landed (shape a):** the seven helpers are emitted alongside the
+  existing `tur_box_*` statics in `emit_closure_fat_runtime`
+  (`src/compiler/emit_module.c`). `_int` variants take an `int64_t`
+  payload directly; `_ptr` variants take a `void *` and widen it through
+  `intptr_t` so the inline-C author never hand-writes the cast;
+  `tur_none()` is the function companion to the `TUR_NONE` macro. A
+  `_Static_assert` pair pins `tur_option_t` / `tur_result_box_t` to the
+  `2*int64`/`3*int64` byte layout shared with stdlib. Fixture exercises
+  all seven against the stdlib accessors (`ok?`/`err?`/`ok-val`/`err-val`/
+  `some?`/`unwrap`).
 
-- [ ] **TC6** -- Documentation:
+- [x] **TC6** -- Documentation:
   `docs/guides/inline-c-results-guide.md` with a worked rtmidi-shaped
   example; cross-ref from `docs/guides/opaques-guide.md`.
+  **Landed:** new guide covers the full helper table (typed
+  `tur_ok_ptr`/`tur_err_int`/`tur_some_ptr`/`tur_none` plus the
+  carrier-level `tur_box_*` and the inspectors), a worked rtmidi
+  `MidiIn` `(Result MidiIn int)` constructor, the `_Static_assert`
+  layout guard, the two anti-patterns it replaces, and the
+  `_int`/`_ptr`-only limitation. Cross-referenced from
+  `opaques-guide.md` (inline-C/ABI section + See also) and registered in
+  the guides `README.md`. Also reconciled the stale
+  `c-integration-guide.md` "Returning result/option" section, which
+  documented non-existent `tur_ok`/`tur_err`/`tur_some` names and falsely
+  claimed there were no `_int`/`_ptr` variants -- it now uses the real
+  builder names and points at the new guide.
 
-- [ ] **TC7** -- Update the audit
+- [x] **TC7** -- Update the audit
   (`docs/reported/spices-int-stand-in-audit-2026-06-14.md`) and the
   CLAUDE.md gate footnote: S1 and S3 move from "blocked on language
   pre-work" to "ready to mechanically apply." The strict rule itself
   stays in force.
+  **Landed (state had moved on):** the audit was already archived to
+  `docs/archive/` with every S1/S3 row marked *fixed*, and the
+  "blocked on language pre-work" caveat the predecessor plan slated for
+  CLAUDE.md was never actually added there -- so there was no literal
+  footnote to delete. Honoured the intent instead: (1) added an
+  "Inline-C constructor half unblocked (2026-06-24, TC5/TC6)" note to the
+  archived audit's Phase 3, recording that with the typed builders +
+  guide landed, every remaining S3-style "build a result inside inline-C"
+  site is ready to mechanically apply, not blocked; (2) added a paragraph
+  to the CLAUDE.md "No Lazy `:int` Stand-Ins" rule stating that returning
+  `result`/`option` from inline-C is first-class (no `:int` escape
+  hatch), pointing at the new guide. The strict rule stays in force.
 
 - [ ] **TC8** -- Pilot on rtmidi. Land a clean rtmidi v0.2.0 with
   `MidiIn` / `MidiOut` / `MidiCallback` opaques and

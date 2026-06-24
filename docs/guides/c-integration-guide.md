@@ -364,39 +364,37 @@ return type is a real `(Result Handle E)` or `(Option Handle)`, **not** a
 `INT64_MIN`).
 
 You do not need to hand-roll the result struct. Every emitted translation unit
-carries a small set of preamble helpers that build and inspect Option/Result
-values through the **canonical** heap layout (the same one `stdlib/option.tur`
-and `stdlib/result.tur` use), so a value built in C flows straight into the
-stdlib accessors and vice versa:
+carries a small set of preamble helpers that build Option/Result values through
+the **canonical** heap layout (the same one `stdlib/option.tur` and
+`stdlib/result.tur` use), so a value built in C flows straight into the stdlib
+accessors and vice versa. Prefer the **typed** builders -- they spell out the
+payload's cast direction, so a pointer handle needs no hand-written
+`(int64_t)(intptr_t)` widening:
 
-| Helper | Builds / reads |
-|--------|----------------|
-| `tur_ok(int64_t v)`       | `(Result A B)` that is ok, payload `v` |
-| `tur_err(int64_t e)`      | `(Result A B)` that is err, payload `e` |
-| `tur_is_ok(int64_t r)`    | `bool` -- is the result ok? |
-| `tur_ok_value(int64_t r)` | the ok payload |
-| `tur_err_value(int64_t r)`| the err payload |
-| `tur_some(int64_t x)`     | `(Option A)` that is some, payload `x` |
-| `TUR_NONE`                | the none `(Option A)` (NULL) |
-| `tur_is_some(int64_t o)`  | `bool` -- is the option some? |
-| `tur_opt_value(int64_t o)`| the some payload |
+| Helper | Builds | Payload |
+|--------|--------|---------|
+| `tur_ok_ptr(void *p)` / `tur_err_ptr(void *p)`   | ok / err `(Result A B)` | pointer handle, widened for you |
+| `tur_ok_int(int64_t v)` / `tur_err_int(int64_t e)` | ok / err `(Result A B)` | integer code, as-is |
+| `tur_some_ptr(void *p)` / `tur_some_int(int64_t x)` | some `(Option A)` | pointer / integer payload |
+| `tur_none()` (or the `TUR_NONE` macro) | none `(Option A)` | -- (NULL) |
 
-The payload is the `int64_t` carrier, so it covers both integer error codes and
-opaque handles uniformly -- pass a pointer through with the usual
-`(int64_t)(intptr_t)p` cast. There are no separate `_int` / `_ptr` variants to
-remember.
+The carrier-level builders `tur_box_ok` / `tur_box_err` / `tur_box_some` (which
+take the raw `int64_t` and need the explicit pointer cast) remain valid for
+forwarding a payload that is already a carrier. The inspectors
+`tur_is_ok` / `tur_ok_value` / `tur_err_value` / `tur_is_some` / `tur_opt_value`
+read a Result/Option from inside an inline-C consumer.
 
 ```turmeric
 (defopaque Device :ptr<void>)
 
-;; Fallible C constructor: a *typed* (Result Device int), built with tur_ok /
-;; tur_err. No re-declaration of the result struct layout.
+;; Fallible C constructor: a *typed* (Result Device int), built with the typed
+;; builders. No re-declaration of the result struct layout, no hand cast.
 (defn open-device [id : int] : (Result Device int)
   ```c
   #include <stdlib.h>
-  if (id < 0) return tur_err(22);          /* EINVAL */
+  if (id < 0) return tur_err_int(22);      /* EINVAL */
   void *h = malloc(device_size());
-  return tur_ok((int64_t)(intptr_t)h);
+  return tur_ok_ptr(h);
   ```)
 
 ;; And the consumer is plain Turmeric -- ok?/err?/ok-val all work:
@@ -405,23 +403,16 @@ remember.
     (if (ok? r) (device-tag (ok-val r)) -1)))
 ```
 
-The same shape works for `(Option Device)` via `tur_some` / `TUR_NONE`.
+The same shape works for `(Option Device)` via `tur_some_ptr` / `tur_none`.
 
-This is the blessed alternative to two anti-patterns that used to spread
-through spices (see
-[docs/archive/history/no-stdlib-result-builder-for-inline-c.md](../archive/history/no-stdlib-result-builder-for-inline-c.md)):
+**See [inline-c-results-guide.md](inline-c-results-guide.md)** for the full
+helper table, a worked rtmidi-shaped example, the `_Static_assert` layout
+guard, the two anti-patterns this replaces, and the `_int`/`_ptr`-only
+limitation.
 
-- **Re-declaring the struct in raw C** (`struct { bool is_ok; int64_t ok_val;
-  int64_t err_val; } *r = malloc(...)`) and returning it as `:ptr<void>`. This
-  duplicates the layout, drifts silently if the canonical layout changes, and
-  throws away the `Result` type the checker could otherwise enforce.
-- **Aborting on failure** (`fprintf(stderr, ...); abort()`). That is the right
-  call for a genuinely unrecoverable allocation (a control block the process
-  cannot run without -- this is why `threadpool-new` / `task-group-new` abort),
-  but it is wrong for routine, recoverable failures like a device that is
-  busy or a connection that is refused.
-
-See `tests/fixtures/inline-c-typed-result-option/` for an end-to-end example.
+See `tests/fixtures/inline-c-result-builder/` (typed builders) and
+`tests/fixtures/inline-c-typed-result-option/` (the carrier-level `tur_box_*`
+builders) for end-to-end examples.
 
 ---
 

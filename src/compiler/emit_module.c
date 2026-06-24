@@ -4897,6 +4897,40 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
     buf_puts(out, "static int64_t tur_err_value(int64_t __r) __attribute__((unused));\n");
     buf_puts(out, "static int64_t tur_err_value(int64_t __r) {\n");
     buf_puts(out, "    return ((tur_result_box_t *)(intptr_t)__r)->err_val;\n}\n");
+    /* TC5 (type-system-c-abi-followups): typed result/option builders.  The
+     * _int / _ptr suffix spells out the payload's cast direction so an inline-C
+     * author never has to remember whether a pointer payload needs an
+     * (int64_t)(intptr_t) widening by hand: _int takes an int64_t payload
+     * directly, _ptr takes a void * and widens it through intptr_t.  All four
+     * result builders and both option builders construct the same canonical
+     * tur_result_box_t / tur_option_t layout as tur_box_*, so values built here
+     * flow transparently into the stdlib accessors (ok?/ok-val/err-val and
+     * some?/opt-val) and vice versa.  tur_none() is the canonical empty option
+     * (NULL == none), the function-call companion to the TUR_NONE macro.  The
+     * _Static_assert pair pins the byte layout these depend on -- it must match
+     * stdlib/result.tur and stdlib/option.tur, and trips the build at the
+     * source if either struct's size drifts. */
+    buf_puts(out, "_Static_assert(sizeof(tur_option_t) == 2 * sizeof(int64_t),\n");
+    buf_puts(out, "    \"tur_option_t must match stdlib/option.tur layout\");\n");
+    buf_puts(out, "_Static_assert(sizeof(tur_result_box_t) == 3 * sizeof(int64_t),\n");
+    buf_puts(out, "    \"tur_result_box_t must match stdlib/result.tur layout\");\n");
+    buf_puts(out, "static int64_t tur_ok_int(int64_t __v) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_ok_int(int64_t __v) { return tur_box_ok(__v); }\n");
+    buf_puts(out, "static int64_t tur_err_int(int64_t __e) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_err_int(int64_t __e) { return tur_box_err(__e); }\n");
+    buf_puts(out, "static int64_t tur_ok_ptr(void *__p) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_ok_ptr(void *__p) {\n");
+    buf_puts(out, "    return tur_box_ok((int64_t)(intptr_t)__p);\n}\n");
+    buf_puts(out, "static int64_t tur_err_ptr(void *__p) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_err_ptr(void *__p) {\n");
+    buf_puts(out, "    return tur_box_err((int64_t)(intptr_t)__p);\n}\n");
+    buf_puts(out, "static int64_t tur_some_int(int64_t __x) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_some_int(int64_t __x) { return tur_box_some(__x); }\n");
+    buf_puts(out, "static int64_t tur_some_ptr(void *__p) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_some_ptr(void *__p) {\n");
+    buf_puts(out, "    return tur_box_some((int64_t)(intptr_t)__p);\n}\n");
+    buf_puts(out, "static int64_t tur_none(void) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_none(void) { return TUR_NONE; }\n");
     /* A#1: fat-closure auto-shim thunks.  EX_FN_TO_FAT allocates a 2-slot fat
      * struct { __fn = __tur_fatshim<arity>, __orig = bare_fn_ptr } so a non-capturing
      * fn passed to a ^fat parameter is invoked through the standard fat-closure

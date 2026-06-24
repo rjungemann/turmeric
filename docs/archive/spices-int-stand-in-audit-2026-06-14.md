@@ -432,6 +432,20 @@ for the fix. `tur-regex` v0.2.0 demonstrates the new shape end-to-end
 (`regex-compile` returns `(Result Regex cstr)`, `regex-match` returns
 `(Result Match cstr)`, etc.).
 
+**Inline-C constructor half unblocked** (2026-06-24, type-system-c-abi
+followups TC5/TC6): a fallible C constructor whose body *builds* the
+result/option (the common spice shape -- allocate a handle in C, return
+`(Result Handle int)`) no longer hand-rolls the result struct or returns
+a `:ptr<void>`/sentinel. The codegen preamble carries typed builders
+(`tur_ok_ptr` / `tur_err_int` / `tur_some_ptr` / `tur_none`, plus the
+carrier-level `tur_box_*`), pinned to the stdlib layout by a
+`_Static_assert`. With both halves landed (module-scope `(Result A B)`
+returns above + these builders), every remaining S3-style "construct a
+result inside inline-C" site is **ready to mechanically apply**, not
+blocked on language pre-work. Worked pattern:
+[docs/guides/inline-c-results-guide.md](../guides/inline-c-results-guide.md);
+fixture `tests/fixtures/inline-c-result-builder/`.
+
 ### Phase 4: Fix S2 opaque handles, spice by spice
 
 In order of dependency / blast radius:

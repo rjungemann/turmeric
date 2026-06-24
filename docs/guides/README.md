@@ -87,6 +87,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[opaques-guide.md](opaques-guide.md)** -- Opaque newtypes: `defopaque`, nominal handles, `(::)` cast, `:linear` / `:affine` resource discipline
 - **[module-system-guide.md](module-system-guide.md)** -- Module system, namespacing, exports
 - **[c-integration-guide.md](c-integration-guide.md)** -- Foreign function interface (FFI) and C interop
+- **[inline-c-results-guide.md](inline-c-results-guide.md)** -- Returning typed `Result` / `Option` from inline-C with the preamble builders (`tur_ok_ptr`, `tur_err_int`, `tur_some_ptr`, `tur_none`, ...)
 - **[name-mangling-guide.md](name-mangling-guide.md)** -- Reversible/injective Turmeric->C name mangling (`_hy`/`_sl`/`_un` escapes) for inline-C interop and debugging
 - **[cli-args-guide.md](cli-args-guide.md)** -- CLI argument passing via `*args*` and structured parsing with `stdlib/args.tur`
 - **[binding-forms-guide.md](binding-forms-guide.md)** -- `define`, `letrec`, and named let: local binding forms beyond `let`

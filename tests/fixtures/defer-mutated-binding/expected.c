@@ -195,6 +195,30 @@ static int64_t tur_err_value(int64_t __r) __attribute__((unused));
 static int64_t tur_err_value(int64_t __r) {
     return ((tur_result_box_t *)(intptr_t)__r)->err_val;
 }
+_Static_assert(sizeof(tur_option_t) == 2 * sizeof(int64_t),
+    "tur_option_t must match stdlib/option.tur layout");
+_Static_assert(sizeof(tur_result_box_t) == 3 * sizeof(int64_t),
+    "tur_result_box_t must match stdlib/result.tur layout");
+static int64_t tur_ok_int(int64_t __v) __attribute__((unused));
+static int64_t tur_ok_int(int64_t __v) { return tur_box_ok(__v); }
+static int64_t tur_err_int(int64_t __e) __attribute__((unused));
+static int64_t tur_err_int(int64_t __e) { return tur_box_err(__e); }
+static int64_t tur_ok_ptr(void *__p) __attribute__((unused));
+static int64_t tur_ok_ptr(void *__p) {
+    return tur_box_ok((int64_t)(intptr_t)__p);
+}
+static int64_t tur_err_ptr(void *__p) __attribute__((unused));
+static int64_t tur_err_ptr(void *__p) {
+    return tur_box_err((int64_t)(intptr_t)__p);
+}
+static int64_t tur_some_int(int64_t __x) __attribute__((unused));
+static int64_t tur_some_int(int64_t __x) { return tur_box_some(__x); }
+static int64_t tur_some_ptr(void *__p) __attribute__((unused));
+static int64_t tur_some_ptr(void *__p) {
+    return tur_box_some((int64_t)(intptr_t)__p);
+}
+static int64_t tur_none(void) __attribute__((unused));
+static int64_t tur_none(void) { return TUR_NONE; }
 static int64_t __tur_fatshim0(void *__e) {
     return ((int64_t (*)(void))(intptr_t)((int64_t *)__e)[1])();
 }

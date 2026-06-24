@@ -90,6 +90,15 @@ and answer:
 The **only** legitimate `:int` is "this really is a number, not a stand-in
 for something else." Everything else gets a real type.
 
+Returning `option<T>` / `result<T,E>` from an **inline-C** body is
+first-class -- there is no "inline-C can't easily build a result, so I'll
+return `:int`" escape hatch. The codegen preamble carries typed builders
+(`tur_ok_ptr` / `tur_err_int` / `tur_some_ptr` / `tur_none`, and the
+carrier-level `tur_box_*`) that construct the canonical Result/Option
+layout, so a fallible C constructor hands back a real `(Result Handle E)`
+/ `(Option Handle)` with no struct hand-rolling and no sentinel integer.
+See [docs/guides/inline-c-results-guide.md](docs/guides/inline-c-results-guide.md).
+
 ### When you notice this in existing code
 
 Prefer a real type up front when you are writing new API surface -- it is
