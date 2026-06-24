@@ -71,7 +71,7 @@ its own PR; tick when the spice no longer hand-rolls the struct.
 | Spice | Files | Status |
 |---|---|---|
 | ~~rtmidi~~ | core.tur, in.tur, out.tur | **done** (v0.2.0, exemplar) |
-| json | encode.tur, parse.tur, patch.tur | pending |
+| ~~json~~ | parse.tur, patch.tur (encode.tur uses `__errs-*`, out of scope) | **done** (v0.2.0) |
 | notebook | format.tur | pending |
 | ~~osc~~ | client.tur, server.tur | **done** (v0.3.0) |
 | plot | core.tur | pending |
@@ -79,7 +79,7 @@ its own PR; tick when the spice no longer hand-rolls the struct.
 | ~~png~~ | reader.tur, writer.tur | **done** (v0.2.0) |
 | postgres | db.tur, notify.tur, stmt.tur | pending |
 | ~~rtaudio~~ | core.tur, stream.tur | **done** (v0.3.0) |
-| sqlite | db.tur | pending |
+| ~~sqlite~~ | db.tur | **done** (v0.3.0) |
 | ~~template~~ | render.tur | **done** (v0.2.0) |
 | valkey | client.tur, cmd.tur, pubsub.tur | pending |
 | ~~wav~~ | info.tur, reader.tur, writer.tur | **done** (v0.2.0) |
