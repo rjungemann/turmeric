@@ -4658,7 +4658,9 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_puts(body, "__tx->write_count = 0;\n");
             indent_buf(body, ctx->indent);
             buf_puts(body, "tur_stm_set_current_tx(__tx);\n");
-            
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "__tur_stm_begin(__tx);\n");
+
             /* Emit STM block body directly */
             const Expr *stm_expr = e->as.atomically_.stm_expr;
             char *stm_last_val = NULL;
@@ -4679,9 +4681,23 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
             }
             
-            /* Check if retry is needed */
+            /* retry / check-false: park on the read set, then re-run */
             indent_buf(body, ctx->indent);
-            buf_puts(body, "if (__tur_stm_should_retry(__tx)) {\n");
+            buf_puts(body, "if (__tx->retry_requested) {\n");
+            ctx->indent += 4;
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "tur_stm_set_current_tx(__prev_tx);\n");
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "__tur_stm_park(__tx);\n");
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "continue;\n");
+            ctx->indent -= 4;
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "}\n");
+
+            /* Read conflict observed mid-body: restart immediately */
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "if (__tx->aborted) {\n");
             ctx->indent += 4;
             indent_buf(body, ctx->indent);
             buf_puts(body, "tur_stm_set_current_tx(__prev_tx);\n");
@@ -4690,7 +4706,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             ctx->indent -= 4;
             indent_buf(body, ctx->indent);
             buf_puts(body, "}\n");
-            
+
             /* Commit */
             indent_buf(body, ctx->indent);
             buf_puts(body, "if (tur_stm_commit(__tx)) {\n");

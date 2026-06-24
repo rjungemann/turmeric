@@ -280,9 +280,9 @@ static void tur_existential_drop_byval(void *value) {
     tur_existential_t *rec = (tur_existential_t *)value;
     if (rec) free((void *)(intptr_t)rec->value);
 }
-/* STM types (Phase 21) */
+/* STM types (TL2) */
 typedef void *(*stm_fn_t)(void *env);
-typedef struct TVar { void *value; uint64_t version; pthread_mutex_t lock; pthread_cond_t cond; } TVar;
+typedef struct TVar { void *value; uint64_t version; } TVar;
 typedef struct STM_Transaction STM_Transaction;
 struct STM_Transaction {
     TVar *read_set[256];
@@ -291,19 +291,37 @@ struct STM_Transaction {
     TVar *write_set[128];
     void *new_values[128];
     int write_count;
+    uint64_t read_stamp;
     bool retry_requested;
     bool aborted;
     bool committed;
 };
+#define STM_NUM_LOCK_BUCKETS 64
+typedef struct STM_LockBucket { pthread_mutex_t lock; uint64_t commit_seq; } STM_LockBucket;
+typedef struct STM_State {
+    uint64_t version_clock;
+    pthread_mutex_t retry_lock;
+    pthread_cond_t  retry_cond;
+    STM_LockBucket lock_buckets[STM_NUM_LOCK_BUCKETS];
+} STM_State;
+static STM_State __stm_state;
+static pthread_once_t __stm_once = PTHREAD_ONCE_INIT;
 static __thread STM_Transaction *__stm_current_tx = NULL;
 STM_Transaction *tur_stm_current_tx(void) { return __stm_current_tx; }
 void tur_stm_set_current_tx(STM_Transaction *tx) { __stm_current_tx = tx; }
-static int __stm_lock_cmp(const void *a, const void *b) {
-    const TVar *tv_a = *(const TVar **)a;
-    const TVar *tv_b = *(const TVar **)b;
-    if (tv_a < tv_b) return -1;
-    if (tv_a > tv_b) return 1;
-    return 0;
+static void __stm_do_init(void) {
+    __atomic_store_n(&__stm_state.version_clock, (uint64_t)0, __ATOMIC_RELEASE);
+    pthread_mutex_init(&__stm_state.retry_lock, NULL);
+    pthread_cond_init(&__stm_state.retry_cond, NULL);
+    for (int i = 0; i < STM_NUM_LOCK_BUCKETS; i++) {
+        pthread_mutex_init(&__stm_state.lock_buckets[i].lock, NULL);
+        __stm_state.lock_buckets[i].commit_seq = 0;
+    }
+}
+static void __stm_ensure_init(void) { pthread_once(&__stm_once, __stm_do_init); }
+static unsigned __stm_bucket_idx(TVar *tv) {
+    uintptr_t a = (uintptr_t)tv;
+    return (unsigned)((a >> 4) & (STM_NUM_LOCK_BUCKETS - 1));
 }
 STM_Transaction *tur_stm_new_transaction(void) {
     STM_Transaction *tx = calloc(1, sizeof(STM_Transaction));
@@ -311,40 +329,39 @@ STM_Transaction *tur_stm_new_transaction(void) {
 }
 TVar *tur_tvar_new(void *type, void *initial_value) {
     (void)type; /* unused in emitted code */
+    __stm_ensure_init();
     TVar *tv = malloc(sizeof(TVar));
-    tv->value = initial_value; tv->version = 1;
-    pthread_mutex_init(&tv->lock, NULL);
-    pthread_cond_init(&tv->cond, NULL);
+    tv->value = initial_value;
+    __atomic_store_n(&tv->version, (uint64_t)0, __ATOMIC_RELEASE);
     return tv;
 }
 void *tur_tvar_read(STM_Transaction *tx, TVar *tv) {
     for (int i = 0; i < tx->write_count; i++) {
         if (tx->write_set[i] == tv) return tx->new_values[i];
     }
+    uint64_t v1 = __atomic_load_n(&tv->version, __ATOMIC_ACQUIRE);
+    if ((v1 & 1u) || v1 > tx->read_stamp) { tx->aborted = true; return NULL; }
+    void *val = __atomic_load_n(&tv->value, __ATOMIC_ACQUIRE);
+    uint64_t v2 = __atomic_load_n(&tv->version, __ATOMIC_ACQUIRE);
+    if (v1 != v2) { tx->aborted = true; return NULL; }
     if (tx->read_count < 256) {
+        int seen = 0;
         for (int i = 0; i < tx->read_count; i++) {
-            if (tx->read_set[i] == tv) break;
+            if (tx->read_set[i] == tv) { seen = 1; break; }
         }
-        tx->read_set[tx->read_count] = tv;
-        tx->read_versions[tx->read_count++] = tv->version;
+        if (!seen) {
+            tx->read_set[tx->read_count] = tv;
+            tx->read_versions[tx->read_count++] = v1;
+        }
     }
-    return tv->value;
+    return val;
 }
 void tur_tvar_write(STM_Transaction *tx, TVar *tv, void *value) {
     for (int i = 0; i < tx->write_count; i++) {
         if (tx->write_set[i] == tv) { tx->new_values[i] = value; return; }
     }
-    /* Remove from read set if present */
-    for (int i = 0; i < tx->read_count; i++) {
-        if (tx->read_set[i] == tv) {
-            for (int j = i; j < tx->read_count - 1; j++) {
-                tx->read_set[j] = tx->read_set[j+1];
-                tx->read_versions[j] = tx->read_versions[j+1];
-            }
-            tx->read_count--;
-            break;
-        }
-    }
+    /* A read-then-write keeps its read-set entry so commit still validates
+       the version it depended on (otherwise updates are lost). */
     if (tx->write_count < 128) {
         tx->write_set[tx->write_count] = tv;
         tx->new_values[tx->write_count++] = value;
@@ -362,49 +379,81 @@ bool tur_tvar_cas(STM_Transaction *tx, TVar *tv, void *old_value, void *new_valu
     }
     return false;
 }
-static bool __tur_stm_validate(STM_Transaction *tx) {
-    for (int i = 0; i < tx->read_count; i++) {
-        if (tx->read_set[i]->version != tx->read_versions[i]) return false;
+static int __stm_write_buckets(STM_Transaction *tx, unsigned *idxs) {
+    int n = 0;
+    for (int i = 0; i < tx->write_count; i++) {
+        unsigned bi = __stm_bucket_idx(tx->write_set[i]);
+        int seen = 0;
+        for (int j = 0; j < n; j++) { if (idxs[j] == bi) { seen = 1; break; } }
+        if (!seen) idxs[n++] = bi;
     }
-    return true;
+    for (int i = 1; i < n; i++) {
+        unsigned k = idxs[i]; int j = i - 1;
+        while (j >= 0 && idxs[j] > k) { idxs[j+1] = idxs[j]; j--; }
+        idxs[j+1] = k;
+    }
+    return n;
 }
 bool tur_stm_commit(STM_Transaction *tx) {
-    /* Sort write set by address for lock ordering */
-    qsort(tx->write_set, tx->write_count, sizeof(TVar *), __stm_lock_cmp);
-    /* Acquire locks in address order */
-    for (int i = 0; i < tx->write_count; i++) {
-        pthread_mutex_lock(&tx->write_set[i]->lock);
-    }
-    /* Validate */
-    if (!__tur_stm_validate(tx)) {
-        for (int i = 0; i < tx->write_count; i++) {
-            pthread_mutex_unlock(&tx->write_set[i]->lock);
+    unsigned idxs[128];
+    int nidx = __stm_write_buckets(tx, idxs);
+    for (int i = 0; i < nidx; i++) pthread_mutex_lock(&__stm_state.lock_buckets[idxs[i]].lock);
+    uint64_t wv = __atomic_add_fetch(&__stm_state.version_clock, (uint64_t)2, __ATOMIC_ACQ_REL);
+    /* Re-validate the whole read set, including read-then-written TVars */
+    for (int i = 0; i < tx->read_count; i++) {
+        TVar *tv = tx->read_set[i];
+        uint64_t cur = __atomic_load_n(&tv->version, __ATOMIC_ACQUIRE);
+        if ((cur & 1u) || cur != tx->read_versions[i]) {
+            for (int k = nidx - 1; k >= 0; k--) pthread_mutex_unlock(&__stm_state.lock_buckets[idxs[k]].lock);
+            return false;
         }
-        return false;
     }
-    /* Apply writes */
+    /* Publish: lock (odd), store value, store new even version */
     for (int i = 0; i < tx->write_count; i++) {
-        tx->write_set[i]->value = tx->new_values[i];
-        tx->write_set[i]->version++;
-    }
-    /* Notify waiters */
-    for (int i = 0; i < tx->write_count; i++) {
-        pthread_cond_broadcast(&tx->write_set[i]->cond);
+        TVar *tv = tx->write_set[i];
+        uint64_t locked = __atomic_load_n(&tv->version, __ATOMIC_RELAXED) | 1u;
+        __atomic_store_n(&tv->version, locked, __ATOMIC_RELEASE);
+        __atomic_store_n(&tv->value, tx->new_values[i], __ATOMIC_RELEASE);
+        __atomic_store_n(&tv->version, wv, __ATOMIC_RELEASE);
     }
     tx->committed = true;
-    /* Release locks in reverse order */
-    for (int i = tx->write_count - 1; i >= 0; i--) {
-        pthread_mutex_unlock(&tx->write_set[i]->lock);
-    }
+    for (int i = 0; i < nidx; i++) __atomic_add_fetch(&__stm_state.lock_buckets[idxs[i]].commit_seq, (uint64_t)1, __ATOMIC_ACQ_REL);
+    for (int i = nidx - 1; i >= 0; i--) pthread_mutex_unlock(&__stm_state.lock_buckets[idxs[i]].lock);
+    pthread_mutex_lock(&__stm_state.retry_lock);
+    pthread_cond_broadcast(&__stm_state.retry_cond);
+    pthread_mutex_unlock(&__stm_state.retry_lock);
     return true;
 }
 void tur_stm_retry(STM_Transaction *tx) { tx->retry_requested = true; }
 void tur_stm_check(bool condition) { if (!condition) tur_stm_retry(tur_stm_current_tx()); }
-/* Retry with blocking on condition variables (Phase 21) */
 static bool __tur_stm_should_retry(STM_Transaction *tx) {
     if (tx->retry_requested) return true;
     if (tx->aborted) return true;
     return false;
+}
+static void __tur_stm_begin(STM_Transaction *tx) {
+    __stm_ensure_init();
+    tx->read_stamp = __atomic_load_n(&__stm_state.version_clock, __ATOMIC_ACQUIRE);
+}
+static void __tur_stm_park(STM_Transaction *tx) {
+    unsigned idxs[256]; uint64_t seqs[256]; int n = 0;
+    for (int i = 0; i < tx->read_count; i++) {
+        unsigned bi = __stm_bucket_idx(tx->read_set[i]);
+        int seen = 0;
+        for (int j = 0; j < n; j++) { if (idxs[j] == bi) { seen = 1; break; } }
+        if (!seen) { idxs[n] = bi; seqs[n] = __atomic_load_n(&__stm_state.lock_buckets[bi].commit_seq, __ATOMIC_ACQUIRE); n++; }
+    }
+    if (n == 0) return;
+    pthread_mutex_lock(&__stm_state.retry_lock);
+    for (;;) {
+        int advanced = 0;
+        for (int i = 0; i < n; i++) {
+            if (__atomic_load_n(&__stm_state.lock_buckets[idxs[i]].commit_seq, __ATOMIC_ACQUIRE) != seqs[i]) { advanced = 1; break; }
+        }
+        if (advanced) break;
+        pthread_cond_wait(&__stm_state.retry_cond, &__stm_state.retry_lock);
+    }
+    pthread_mutex_unlock(&__stm_state.retry_lock);
 }
 void *tur_atomically(void *(*fn)(void *), void *env) {
     STM_Transaction *tx = tur_stm_new_transaction();
@@ -415,18 +464,15 @@ void *tur_atomically(void *(*fn)(void *), void *env) {
         tx->read_count = 0;
         tx->write_count = 0;
         tur_stm_set_current_tx(tx);
+        __tur_stm_begin(tx);
         fn(env);
-        if (__tur_stm_should_retry(tx)) {
+        if (tx->retry_requested) {
             tur_stm_set_current_tx(prev);
-            /* Block on first read TVar's condition variable if retry requested */
-            if (tx->retry_requested && tx->read_count > 0) {
-                TVar *tv = tx->read_set[0];
-                pthread_mutex_lock(&tv->lock);
-                while (tx->retry_requested) {
-                    pthread_cond_wait(&tv->cond, &tv->lock);
-                }
-                pthread_mutex_unlock(&tv->lock);
-            }
+            __tur_stm_park(tx);
+            continue;
+        }
+        if (tx->aborted) {
+            tur_stm_set_current_tx(prev);
             continue;
         }
         if (tur_stm_commit(tx)) {
@@ -435,7 +481,7 @@ void *tur_atomically(void *(*fn)(void *), void *env) {
             free(tx);
             return ret;
         }
-        /* Commit failed - retry */
+        /* Commit validation failed - retry */
         tur_stm_set_current_tx(prev);
     }
 }

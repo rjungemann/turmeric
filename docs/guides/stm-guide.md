@@ -366,10 +366,30 @@ atomically
 ## Limitations
 
 - **No nested `atomically`:** Calling `atomically` inside `atomically` is an error. Compose by calling `tvar/read`/`tvar/write` directly in nested functions -- they share the caller's transaction context.
+- **No in-transaction I/O:** A transaction body runs optimistically and may re-run several times before it commits (on a read conflict or a failed commit-time validation). Keep side effects -- printing, network, channel sends, consuming a `^linear` value -- *out* of `atomically`; register on-commit work with the defer API instead.
 - **Read set limit:** 256 TVars per transaction.
 - **Write set limit:** 128 TVars per transaction.
 - **Defer limit:** 32 defers per transaction.
-- **Global lock:** Commits serialize through a single global mutex; per-TVar fine-grained locking is a future direction.
+- **Pointee immutability for boxed payloads:** A TVar's version stamp protects the stored *pointer*, not the bytes it points at. A TVar holding a boxed multi-word value (struct, vector, HAMT node) must treat that payload as immutable after it is published -- a writer allocates a fresh payload and swaps the pointer. Mutating a published payload in place defeats the optimistic read check and can expose a torn value to a concurrent reader.
+
+### Concurrency model
+
+Commits use **TL2** (Transactional Locking II), not a single global lock. Reads
+are optimistic and lock-free, validated against a global version clock; commit
+locks only the stripe buckets covering its write set (64 stripes), revalidates
+the read set, and publishes under a per-TVar lock bit. Throughput scales with
+the number of distinct TVars touched, not the number of live transactions.
+
+**Compiled vs interpreted.** The compiled runtime (`tur`) is genuinely
+multi-threaded and runs the TL2 path above. The tree-walking interpreter
+(`turi`) is single-threaded, so a transaction never races a concurrent writer:
+its read-set validation always succeeds and it never aborts or blocks on
+`retry`. The *observable* isolation is identical -- an uncontended TL2
+transaction behaves exactly like the interpreter's -- so a program that is
+correct under `turi` stays correct under `tur`. The one practical difference is
+that a `retry`/`check`-false with no way to make progress blocks forever under
+`tur` (another thread may yet commit) but is reported as an error under `turi`
+(nothing else can ever run).
 
 ## Quick Reference
 
