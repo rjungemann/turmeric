@@ -3,6 +3,8 @@
 #include "kind_check.h"  /* Phase HKT-P1: for kind_of_type_app */
 #include "forms.h"      /* Phase HKT-P1: for Span */
 #include "effect.h"     /* FH4.1: EffectRow name-set helpers for TY_HANDLER */
+#include "../runtime/globals.h"      /* B4: g_opt_byval_recursive_carrier */
+#include "../runtime/experiments.h"  /* B4: experiment_warn_if_used */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -2514,6 +2516,17 @@ static bool adt_is_byvalue_product_d(const AdtDef *def, int depth) {
         const CtorField *f = &c->fields[i];
         /* slice 4: a by-value aggregate field is inlined -- admit it. */
         if (adt_field_is_inline_byval_d(f, depth)) continue;
+        /* B4 (byvalue-recursive-carrier, flag-gated): a single recursive carrier
+         * field -- an (F Self) type-application that stays on the int64 carrier --
+         * does not disqualify the owning product from flowing by value.  Such a
+         * product is an 8-byte wrapper around the carrier int64 (Re/Expr).  Only
+         * a single-field wrapper is admitted in this slice; the field keeps its
+         * int64-carrier storage (it is not inlined). */
+        if (g_opt_byval_recursive_carrier && f->full_type &&
+            f->full_type->kind == TY_APP && c->n_fields == 1) {
+            experiment_warn_if_used("byvalue-recursive-carrier");
+            continue;
+        }
         if (f->full_type) {
             TypeKind fk = f->full_type->kind;
             if (fk == TY_ADT || fk == TY_APP || fk == TY_STRUCT ||
@@ -2529,6 +2542,23 @@ static bool adt_is_byvalue_product_d(const AdtDef *def, int depth) {
 
 bool adt_is_byvalue_product(const AdtDef *def) {
     return adt_is_byvalue_product_d(def, 16);
+}
+
+/* B4 (byvalue-recursive-carrier): true when `def` is a single-variant,
+ * single-field recursive carrier wrapper -- its sole field is an (F Self)
+ * type-application that stays on the int64 carrier (e.g. Re = (Roll (ReF Re)),
+ * Expr = (Roll (ExprF Expr))).  Such a value is an 8-byte wrapper whose by-value
+ * representation IS its carrier int64, so it crosses the fat-closure boundary by
+ * reinterpreting the carrier (no heap box, no deref).  Only meaningful under the
+ * byvalue-recursive-carrier experiment; returns false when the flag is off so the
+ * legacy carrier path is unchanged. */
+bool adt_is_byval_recursive_carrier_wrapper(const AdtDef *def) {
+    if (!g_opt_byval_recursive_carrier) return false;
+    if (!def || !adt_is_flat_product(def) || def->n_type_params != 0) return false;
+    const CtorDef *c = def->ctors[0];
+    if (c->n_fields != 1) return false;
+    const CtorField *f = &c->fields[0];
+    return f->full_type && f->full_type->kind == TY_APP;
 }
 
 /* CONV-S1 (slice 4): public predicate -- is this field stored inline by value?

@@ -317,6 +317,13 @@ static inline bool adt_is_flat_product(const AdtDef *def) {
  * full_types, which are only forward-declared here).  See the definition and
  * docs/upcoming/struct-adt-convergence-s1-bridging-findings.md for the gate. */
 bool adt_is_byvalue_product(const AdtDef *def);
+/* B4 (byvalue-recursive-carrier): true when `def` is a single-variant,
+ * single-field recursive carrier wrapper whose sole field is an (F Self)
+ * type-application kept on the int64 carrier (Re/Expr).  Its by-value
+ * representation IS its carrier int64, so it crosses the fat-closure boundary by
+ * reinterpreting the carrier (no heap box, no deref).  Flag-gated; false when the
+ * byvalue-recursive-carrier experiment is off. */
+bool adt_is_byval_recursive_carrier_wrapper(const AdtDef *def);
 /* CONV-S1 (slice 3): true when a by-value ADT product is large enough (>16
  * bytes) to use the struct-style `const tur_adt_<Name> *` pass-by-pointer ABI. */
 bool adt_byval_pass_by_ptr(const AdtDef *def);

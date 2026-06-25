@@ -25,6 +25,43 @@ graduating did **not** deliver the ABI change described here. Re-running the
 gate widening on today's tree reproduces the identical 9 `cc` errors. This is
 a distinct, still-unbuilt change and is next.
 
+## Status -- slice 1 LANDED (2026-06-25)
+
+Slice 1 (the int64-wide single-carrier-wrapper case, covering `Re` and `Expr`)
+is implemented behind the `byvalue-recursive-carrier` experiment
+(`--enable=byvalue-recursive-carrier`). Flag-off is a byte-identical no-op (the
+legacy carrier path is untouched); flag-on greens all five `hkt-cata-*-carrier`
+fixtures, which now carry a `flags` file opting into the experiment. The full
+default suite is green (`bash tests/run.sh`: 0 failed).
+
+What landed:
+
+- **Gate (`src/compiler/types.c`).** `adt_is_byvalue_product_d` admits a
+  single-variant, single-field product whose sole field is an `(F Self)`
+  type-application (kept on the int64 carrier) when the flag is on -- the
+  8-byte wrapper case (`Re`, `Expr`). A new predicate
+  `adt_is_byval_recursive_carrier_wrapper` names exactly this shape.
+- **ABI = reinterpret, not box (the key decision).** A single-carrier wrapper's
+  by-value representation *is* its int64 carrier, so it crosses the fat-closure
+  boundary by reinterpret with **no heap box and no deref**. This sidesteps the
+  ownership/free contract slice 2 still owes for the `> 8 byte` case.
+- **Call site (`src/compiler/emit_expr.c`).** The fat-closure cast keeps the
+  by-value aggregate param type (so it matches the unchanged thunk), and an
+  erased-carrier arg is reconstructed into the aggregate with a designated
+  compound literal `(tur_adt_X){ .as.<Ctor>._0 = (carrier) }`
+  (`emit_byval_recursive_carrier_reconstruct`). A concrete-aggregate arg passes
+  through untouched.
+- **Field read (`src/compiler/emit_expr.c`).** Both match-arm binders (if-chain
+  and switch) read a recursive-carrier-wrapper field as the raw int64 carrier
+  (no `*(T*)` deref), since no box was ever made on the producer side.
+- **Thunk (`src/compiler/emit_fns.c`).** *Unchanged.* Because an 8-byte
+  single-eightbyte struct and `int64_t` share the SysV register ABI, keeping the
+  thunk's by-value `tur_adt_X` parameter and reconstructing the aggregate at the
+  call site is sufficient and avoids touching M7 thunk emission entirely.
+
+Still open: **slice 2** (the `> 8 byte` by-value-ADT closure-param case and its
+heap-box ownership contract) and **slice 3** (graduate / retire the flag).
+
 ## The problem in one sentence
 
 A user closure `g : (fn [Re] B)` is invoked inside a generic `fmap`
