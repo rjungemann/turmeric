@@ -129,6 +129,32 @@ emit the inner `(godot-export ...)` calls. This is the path Phase #3
 of the godot-language-binding-plan's outstanding work will take when
 it lands.
 
+### 4. Nested vec literals collapse to runtime homogeneous Vec values
+
+A follow-up attempt tried the string-decl surface
+`:exports [["speed" "float" 200.0] ["health" "int" 100]]`. At the
+outer macro the `exports` arg arrives as an AST node whose
+`first/rest` navigate the outer vec's elements directly (no
+`vec-of` head to strip). But the *inner* vecs (`["speed" "float"
+200.0]`) collapse into runtime `Vec` values rather than AST: their
+elements cannot be plucked with first/rest at expansion time, and
+the mixed-type contents trigger `tur-vec-homog__`'s
+"function 'tur-vec-homog__' arg 2: expected tyvar, got int" before
+the macro can even peel them open.
+
+This is a fourth, independent constraint -- even if `quote` were
+fixed and macro args were preserved as AST (gaps 1-3 above), the
+nested-vec form would still fail unless one of the following lands:
+
+- Vec literals stay reachable as AST through nesting (so an inner
+  `[a b c]` inside an outer `[[...] [...]]` is navigable, not
+  evaluated).
+- A heterogeneous vec / tuple literal that does not run through
+  homog-typing in macro-arg position.
+- The macro surface switches to a flat keyword-positional shape
+  (`:exports "speed" "float" 200.0 "health" "int" 100`) that
+  consumes alternating positional args at expansion time.
+
 ## Fix direction (language-level)
 
 If we want the plan's original `(speed : float 200.0)` surface to

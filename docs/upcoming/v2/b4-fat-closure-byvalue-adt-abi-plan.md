@@ -1,7 +1,7 @@
 ---
 title: B4 -- fat-closure ABI for by-value-ADT closure params (Re/Expr by-value)
 category: Planning -- CONV-S1 tail / M7-adjacent
-description: Bring the recursive non-parametric HKT carriers (Re, Expr) onto the by-value ADT path by giving the fat-closure ABI a single, uniform representation for a by-value-ADT closure parameter. Spun out of struct-adt-convergence-s1-bridging-findings.md (B4). Independently scoped: it is NOT a prerequisite for defstruct->defadt lowering, and M7's by-value-HKT graduation did NOT deliver it.
+description: Bring the recursive non-parametric HKT carriers (Re, Expr) onto the by-value ADT path by giving the fat-closure ABI a single, uniform representation for a by-value-ADT closure parameter. Spun out of struct-adt-convergence-s1-bridging-findings.md (B4). Priority work -- the closure-ABI representation disagreement is in the same hazard family as the carrier/by-value mismatches that surface in the debugger (pretty-printer mis-decode, in-frame-eval wild deref).
 ---
 
 # B4 -- fat-closure ABI for by-value-ADT closure params
@@ -10,19 +10,20 @@ description: Bring the recursive non-parametric HKT carriers (Re, Expr) onto the
 
 Spun out of
 [`struct-adt-convergence-s1-bridging-findings.md`](../struct-adt-convergence-s1-bridging-findings.md)
-(the B4 item) so the CONV-S1 findings doc can close. **Not landed; not a
-prerequisite for `defstruct -> defadt` lowering** -- a real `defstruct` cannot
-express a functor-applied-to-self field (`(ExprF Expr)`), so the lowering path
-never reaches this crossing. Build this **only** when a feature actually demands
-a recursive-HKT-carrier (`Re`/`Expr`) flowing by-value.
+(the B4 item) so the CONV-S1 findings doc can close. **Priority work.** The
+closure-ABI representation disagreement described here is in the same hazard
+family as the carrier/by-value mismatches that show up in the debugger
+(pretty-printer mis-decode, in-frame-eval wild deref, locals rendering as the
+wrong type) and as the `nested-carrier-match-loses-concrete-element` reported
+bug -- one closure boundary, two incompatible representations of the same
+ADT. Land this.
 
 **Re-spiked 2026-06-25, post-M7-graduation.** M7's by-value-HKT dispatch is
 graduated -- **default ON** (`g_m7_hkt_enabled = true`, `src/runtime/globals.c`;
 flipped 2026-06-19, `TUR_M7_HKT=0` opts back to the legacy carrier). M7
-graduating satisfied the old "sequence B4 with M7 graduation" framing on the
-timeline **but did not deliver, and does not unblock, the ABI change described
-here.** Re-running the gate widening on today's tree reproduces the identical 9
-`cc` errors. This is a distinct, still-unbuilt change.
+graduating did **not** deliver the ABI change described here. Re-running the
+gate widening on today's tree reproduces the identical 9 `cc` errors. This is
+a distinct, still-unbuilt change and is next.
 
 ## The problem in one sentence
 
@@ -125,13 +126,12 @@ the carrier `ReF` agree on a carrier `Re` at the closure boundary.
 1. **Re-only (int64-wide) slice.** Land steps 1-2 for the `<= 8 byte` case where
    box/unbox is a pure reinterpret (covers `Re` and `Expr`, both single-carrier
    wrappers). Gate behind `--enable=` per the experimental-features rule; flag-off
-   no-op, flag-on greens the five `hkt-cata-*` fixtures. This is the "move Re
-   over" step -- deferred out of CONV-S1 because, even though the box/unbox is
-   trivial for `Re`, the closure-ABI disagreement is the real blocker and there is
-   no sensible partial that lands `Re` without this ABI change.
+   no-op, flag-on greens the five `hkt-cata-*` fixtures. Even though the box/unbox
+   is trivial for `Re`, the closure-ABI disagreement is the real blocker and
+   there is no sensible partial that lands `Re` without this ABI change -- start
+   here.
 2. **Wide by-value-ADT slice.** Define the heap-box ownership contract for
-   `> 8 byte` by-value-ADT closure params and extend steps 1-3. Only needed if a
-   feature wants a wide by-value ADT through a fat closure.
+   `> 8 byte` by-value-ADT closure params and extend steps 1-3.
 3. **Graduate / retire the flag** once both the suite and the legacy carrier
    suite are green.
 
@@ -147,10 +147,17 @@ the carrier `ReF` agree on a carrier `Re` at the closure boundary.
 
 ## Relationship to other plans
 
-- **Not** a prerequisite for
-  [`defstruct-as-defadt-plan.md`](../defstruct-as-defadt-plan.md) slice 5
-  (graduation). That path targets leaf-and-pointer-field products only.
 - Adjacent to
   [`parametric-adt-byvalue-plan.md`](../parametric-adt-byvalue-plan.md): both
   concern by-value representations of parametric/recursive ADTs, and a unified
   by-value-ADT carrier convention should be shared between them.
+- In the same hazard family as the debugger plans
+  ([`debugger-native-types-plan.md`](../debugger-native-types-plan.md),
+  [`debugger-inframe-eval-plan.md`](../debugger-inframe-eval-plan.md),
+  [`debugger-phase5-native-types-progress.md`](../debugger-phase5-native-types-progress.md))
+  and the
+  [`nested-carrier-match-loses-concrete-element`](../../reported/nested-carrier-match-loses-concrete-element.md)
+  reported bug: all turn on whether the by-value monomorphization presents a
+  single, predictable representation. A uniform fat-closure ABI removes one of
+  the disagreement sites that pretty-printers and in-frame eval would otherwise
+  have to defend against.
