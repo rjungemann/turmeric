@@ -149,6 +149,17 @@ void turi_env_register_native(TuriEnv *env, const char *name,
     turi_env_set(env, name, turi_closure(cl));
 }
 
+/* Typed variant: install the native exactly as turi_env_register_native does,
+ * then record its runtime return type in the process-global signature registry
+ * so the elaborator can type calls to it (and typed wrappers over it).  See
+ * docs/archive/untyped-native-registration-blocks-curated-facades.md. */
+void turi_env_register_native_typed(TuriEnv *env, const char *name,
+                                    TuriNativeFn fn, void *ud,
+                                    TurNativeRetType ret) {
+    turi_env_register_native(env, name, fn, ud);
+    tur_native_sig_register(name, ret);
+}
+
 /* libturi-per-embed-env-and-peripherals Gap 2: true when v is a native-closure
  * binding, so turi_env_reset can distinguish embedder/builtin natives (kept)
  * from turi_eval-created defns/defs (dropped). */

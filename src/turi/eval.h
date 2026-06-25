@@ -6,6 +6,7 @@
 #include "turi/env.h"
 #include "turi/fiber.h"
 #include "turi/value.h"
+#include "runtime/globals.h"  /* TurNativeRetType (typed native registration) */
 
 /* ---------------------------------------------------------------------------
  * Public eval API (Phase S0)
@@ -211,6 +212,21 @@ bool turi_env_has_cap(TuriEnv *env, TuriCaps cap);
 void turi_env_register_native(TuriEnv *env, const char *name,
                                TuriNativeFn fn, void *ud);
 
+/* Like turi_env_register_native, but also records the Turmeric type the
+ * native's TuriValue result carries at runtime (`ret`).  Without this, the
+ * elaborator types every interpreter-mode native call -- and any defn wrapping
+ * it -- as :int, so a curated facade declaring an honest :float / :cstr / :bool
+ * / opaque return type failed elaboration (TUR-E0707/E0708).  Registering the
+ * return type lets both a direct call and a typed wrapper see the right type.
+ * The signature registry is process-global (it must be readable by the
+ * elaborator, which has no env at the eval-mode call site), so a later
+ * registration of the same name -- on any env -- replaces the recorded type.
+ * Pass TUR_NRT_INT for the historical untyped behavior.  See
+ * docs/archive/untyped-native-registration-blocks-curated-facades.md. */
+void turi_env_register_native_typed(TuriEnv *env, const char *name,
+                                    TuriNativeFn fn, void *ud,
+                                    TurNativeRetType ret);
+
 /* Gap 5 (libturi-per-embed-env-and-peripherals): finalizer for a native's user
  * data, fired from turi_env_free.  See turi_env_register_native_ex. */
 typedef void (*TuriNativeFreeFn)(void *ud);
@@ -267,6 +283,13 @@ typedef struct TuriNativeSpec {
  * copied; re-registering the same name replaces the prior spec.  Calling this
  * does not retroactively affect envs that already exist. */
 void turi_register_default_native(const char *name, TuriNativeFn fn, void *ud);
+
+/* Like turi_register_default_native, but also records the native's runtime
+ * return type in the process-global signature registry (see
+ * turi_env_register_native_typed) so the elaborator types calls to it -- and
+ * curated typed wrappers over it -- correctly instead of defaulting to :int. */
+void turi_register_default_native_typed(const char *name, TuriNativeFn fn,
+                                        void *ud, TurNativeRetType ret);
 
 /* Gap 1: drop every default-native registration. */
 void turi_clear_default_natives(void);
