@@ -2201,11 +2201,24 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (gf->kind == EX_GET_FIELD) {
                     StructDef *gf_def = gf->as.get_field_.def;
                     uint32_t  gf_fi   = gf->as.get_field_.field_idx;
-                    const StructField *gf_field = &gf_def->fields[gf_fi];
-                    if (gf_field->kind == TY_FN && gf_field->full_type &&
-                            gf_field->full_type->kind == TY_FN) {
+                    /* CONV-S1 (slice 6): a capability call through an `fn` field
+                     * of a record ADT has def == NULL; read the field's kind /
+                     * full_type from the CtorField instead of a StructField. */
+                    TypeKind gf_kind = TY_UNKNOWN;
+                    const Type *gf_full = NULL;
+                    if (gf_def) {
+                        gf_kind = gf_def->fields[gf_fi].kind;
+                        gf_full = gf_def->fields[gf_fi].full_type;
+                    } else if (gf->as.get_field_.adt_ctor) {
+                        const CtorField *cf =
+                            &gf->as.get_field_.adt_ctor->fields[gf_fi];
+                        gf_kind = cf->kind;
+                        gf_full = cf->full_type;
+                    }
+                    if (gf_kind == TY_FN && gf_full &&
+                            gf_full->kind == TY_FN) {
                         is_typed_fn_field =
-                            (register_fn_ptr_typedef(gf_field->full_type) != NULL);
+                            (register_fn_ptr_typedef(gf_full) != NULL);
                         /* parametric-struct-fn-field-call-passes-concrete-arg-to-
                          * carrier-ptr: when the owning struct is parametric and the
                          * field's fn signature is written over the struct's own type
@@ -2219,7 +2232,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * it as untyped so the intptr_t-cast path below specialises
                          * the pointer to the call's concrete arg/result C types. */
                         if (is_typed_fn_field &&
-                                fn_field_full_type_mentions_tyvar(gf_field->full_type))
+                                fn_field_full_type_mentions_tyvar(gf_full))
                             is_typed_fn_field = false;
                     }
                 }
@@ -3015,15 +3028,33 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * stored INLINE -- the ctor param is the aggregate type, so the
                      * by-value arg is passed straight through with no box. */
                     bool field_inline = false;
+                    bool field_is_fn = false;
                     {
                         Type rt = emit_resolve_type(ctx, e->type);
                         if (rt.kind == TY_ADT && rt.as.adt_.def &&
                             adt_is_byvalue_product(rt.as.adt_.def)) {
                             const AdtDef *od = rt.as.adt_.def;
-                            if (od->n_ctors == 1 && i < od->ctors[0]->n_fields)
+                            if (od->n_ctors == 1 && i < od->ctors[0]->n_fields) {
                                 field_inline = adt_field_is_inline_byval(
                                     &od->ctors[0]->fields[i]);
+                                field_is_fn = od->ctors[0]->fields[i].kind == TY_FN;
+                            }
                         }
+                    }
+                    /* CONV-S1 (slice 6): a by-value product's ctor param for an
+                     * `fn` field is the int64 carrier, but the arg is a raw
+                     * function pointer -- cast it through (intptr_t) so the
+                     * function-pointer -> int64 conversion is explicit (a struct
+                     * literal does the same `(int64_t)(intptr_t)` on its fn field),
+                     * otherwise clang emits a -Wint-conversion note. */
+                    if (!suffix && field_is_fn && arg &&
+                        arg->kind != EX_FN_TO_FAT) {
+                        Buf c; buf_init(&c);
+                        buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
+                        buf_putc(&c, '\0');
+                        free(arg_strs[i]);
+                        arg_strs[i] = strdup(c.data);
+                        buf_free(&c);
                     }
                     /* CONV-S1/B3: a by-value ADT argument flowing into a carrier
                      * constructor's int64 field slot must be boxed (heap copy ->

@@ -638,21 +638,19 @@ void elab_register_struct_def(Elab *e, StructDef *def) {
  * byte-identical layout.  As of slice 5 (pointer-field widening) that is:
  *   - a primitive scalar (int / float / bool / cstr / sized numerics), or
  *   - a pointer-kinded field (rc<T> / ref<T> / lref<T> / weak<T> / ptr<void>)
- *     -- each is an 8-byte carrier slot regardless of the inner type, so the
- *     record-ADT path stores it as a scalar carrier exactly as the struct path
- *     does, drop-glue (rc/ref/weak) and all (slice 2), and the pre-pass /
- *     full-elab lowering decision never disagrees because a pointer's
+ *     or an `fn` field -- each is an 8-byte carrier slot regardless of the inner
+ *     type, so the record-ADT path stores it as a scalar carrier exactly as the
+ *     struct path does, drop-glue (rc/ref/weak) and all (slice 2), and the
+ *     pre-pass / full-elab lowering decision never disagrees because a pointer's
  *     representation does not depend on the (possibly not-yet-known) inner
- *     type's by-value-ness, or
+ *     type's by-value-ness (the by-value ctor casts an `fn` arg to the int64
+ *     carrier, slice 6), or
  *   - a bare user type that resolves to a by-value aggregate (a non-heap,
  *     non-opaque, drop-glue-free struct, or a by-value ADT product), which the
  *     record-ADT path now stores INLINE by value exactly as a struct inlines a
  *     nested struct field.
- * A compound (F_LIST) type, or any fn / parametric / :heap field, still
- * disqualifies so the struct keeps the normal struct path.  (`fn` is held back:
- * the by-value ctor takes the function pointer as an `int64_t` param, which the
- * C compiler flags with a cast note; it is not in the rc/ref/ptr pointer set
- * and waits for graduation.)
+ * A compound (F_LIST) type, or any parametric / :heap field, still
+ * disqualifies so the struct keeps the normal struct path.
  * Mirrors the old-syntax pre-scan (name, then F_TYPE_ANN-wrapped type). */
 static bool defstruct_fields_all_primitive(Elab *e, const Form *fields_vec) {
     if (!fields_vec || fields_vec->tag != F_VEC) return false;
@@ -677,14 +675,14 @@ static bool defstruct_fields_all_primitive(Elab *e, const Form *fields_vec) {
             case TY_FLOAT32: case TY_FLOAT64:
                 break;  /* primitive scalar -- ok */
             case TY_RC:   case TY_REF:  case TY_LREF:
-            case TY_WEAK: case TY_PTR_VOID:
-                /* slice 5: a pointer-kinded field is an 8-byte carrier slot
-                 * whatever its inner type is, so it lowers like a scalar -- the
-                 * by-value ADT product already stores such fields as carriers
+            case TY_WEAK: case TY_PTR_VOID: case TY_FN:
+                /* slice 5/6: a pointer-kinded or `fn` field is an 8-byte carrier
+                 * slot whatever its inner type is, so it lowers like a scalar --
+                 * the by-value ADT product already stores such fields as carriers
                  * and synthesises drop glue for the owning (rc/ref/weak) ones
-                 * (slice 2).  The inner type is irrelevant to the lowering
-                 * decision, so the pre-pass and full elaboration always agree.
-                 * TY_FN is intentionally NOT here -- see the header comment. */
+                 * (slice 2); the ctor casts an `fn` arg to the int64 carrier
+                 * (slice 6).  The inner type is irrelevant to the lowering
+                 * decision, so the pre-pass and full elaboration always agree. */
                 break;
             case TY_UNKNOWN: {
                 /* slice 4: a bare user type that resolves to an ADT is lowerable
