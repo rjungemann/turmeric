@@ -2481,6 +2481,33 @@ bool adt_is_byvalue_product(const AdtDef *def) {
     return true;
 }
 
+/* CONV-S1 (slice 3): a by-value ADT product is laid out like a struct, so it
+ * adopts the same size-gated calling convention -- a product whose fields sum to
+ * more than 16 bytes is passed as `const tur_adt_<Name> *` (pass-by-pointer)
+ * rather than by value, exactly as `defstruct` does (StructDef.pass_by_ptr,
+ * elab_structs.c).  Only by-value products qualify (carrier ADTs already flow as
+ * an int64 heap pointer).  The field kinds are the scalar/pointer set
+ * adt_is_byvalue_product admits -- aggregates are rejected -- so the byte sizes
+ * are computed locally here (types.c does not pull in elab's type_size_bytes). */
+static size_t adt_field_size_bytes(TypeKind k) {
+    switch (k) {
+        case TY_BOOL:  case TY_INT8:  case TY_UINT8:                 return 1;
+        case TY_INT16: case TY_UINT16:                              return 2;
+        case TY_INT32: case TY_UINT32: case TY_FLOAT32:             return 4;
+        case TY_NIL:                                                return 0;
+        default:                                                    return 8;
+    }
+}
+
+bool adt_byval_pass_by_ptr(const AdtDef *def) {
+    if (!adt_is_byvalue_product(def)) return false;
+    const CtorDef *c = def->ctors[0];
+    size_t total = 0;
+    for (uint32_t i = 0; i < c->n_fields; i++)
+        total += adt_field_size_bytes(c->fields[i].kind);
+    return total > 16;
+}
+
 const char *adt_byval_c_name(const AdtDef *def) {
     Buf b; buf_init(&b);
     buf_puts(&b, "tur_adt_");
@@ -3868,6 +3895,10 @@ bool type_struct_pass_by_ptr(Type t) {
             }
             return false;
         }
+        case TY_ADT:
+            /* CONV-S1 (slice 3): a large by-value ADT product passes as
+             * `const tur_adt_<Name> *`, mirroring the struct convention. */
+            return t.as.adt_.def && adt_byval_pass_by_ptr(t.as.adt_.def);
         default:
             return false;
     }

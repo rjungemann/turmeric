@@ -317,6 +317,9 @@ static inline bool adt_is_flat_product(const AdtDef *def) {
  * full_types, which are only forward-declared here).  See the definition and
  * docs/upcoming/struct-adt-convergence-s1-bridging-findings.md for the gate. */
 bool adt_is_byvalue_product(const AdtDef *def);
+/* CONV-S1 (slice 3): true when a by-value ADT product is large enough (>16
+ * bytes) to use the struct-style `const tur_adt_<Name> *` pass-by-pointer ABI. */
+bool adt_byval_pass_by_ptr(const AdtDef *def);
 
 /* Phase 11: Struct field descriptor.
  * Stored inline in StructDef.fields[]. */

@@ -3717,7 +3717,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             *fn_binding->type.as.fn.arg_full_types[i]);
                     } else {
                         TypeKind _cpk = fn_binding->type.as.fn.arg_kinds[i];
-                        _callee_pbp = (_cpk == TY_STRUCT || _cpk == TY_APP) &&
+                        /* Slice 3: a large by-value ADT param (TY_ADT) uses the
+                         * same const-T* convention as a struct/struct-app. */
+                        _callee_pbp = (_cpk == TY_STRUCT || _cpk == TY_APP ||
+                                       _cpk == TY_ADT) &&
                             type_struct_pass_by_ptr(e->as.call_.args[i]->type);
                     }
                 }
@@ -5208,9 +5211,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 } else if (adt_is_byvalue_product(adt)) {
                     /* CONV-S1: by-value receiver -- read the field directly off the
                      * aggregate, no carrier pointer deref.  Gated by
-                     * adt_is_byvalue_product (LIVE for leaf products as of B3). */
-                    buf_printf(&hb, "(%s)(%s).as.%s._%u",
-                               cty, sv, mctor, e->as.get_field_.field_idx);
+                     * adt_is_byvalue_product (LIVE for leaf products as of B3).
+                     * Slice 3: a large by-value ADT param arrives pass-by-pointer
+                     * (`const tur_adt_X *`), so a pbp receiver reads through `->`. */
+                    const Expr *adt_recv = e->as.get_field_.struct_expr;
+                    while (adt_recv->kind == EX_ASCRIBE)
+                        adt_recv = adt_recv->as.ascribe_.inner;
+                    if (expr_is_pbp_param(ctx, adt_recv)) {
+                        buf_printf(&hb, "(%s)(%s)->as.%s._%u",
+                                   cty, sv, mctor, e->as.get_field_.field_idx);
+                    } else {
+                        buf_printf(&hb, "(%s)(%s).as.%s._%u",
+                                   cty, sv, mctor, e->as.get_field_.field_idx);
+                    }
                 } else {
                     buf_printf(&hb, "(%s)((tur_adt_%s *)(intptr_t)(%s))->as.%s._%u",
                                cty, adt_mn, sv, mctor, e->as.get_field_.field_idx);
@@ -6563,6 +6576,16 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * adt_is_byvalue_product (LIVE for leaf products as of B3); byval
              * implies flat, so it always takes the if-chain path below. */
             bool adt_byval = adt_is_byvalue_product(adt);
+            /* Slice 3: a large by-value ADT scrutinee that is a pass-by-pointer
+             * param arrives as `const tur_adt_X *`, so it is already a pointer --
+             * bind it as one and read fields with `->`, never `.`. */
+            bool adt_byval_pbp = false;
+            if (adt_byval) {
+                const Expr *scrut_e = e->as.match_.scrutinee;
+                while (scrut_e->kind == EX_ASCRIBE)
+                    scrut_e = scrut_e->as.ascribe_.inner;
+                adt_byval_pbp = expr_is_pbp_param(ctx, scrut_e);
+            }
 
             if (has_any_guard || adt_flat) {
                 /* Phase G4: Emit as if-chain with goto for guard fallthrough */
@@ -6572,7 +6595,12 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 ctx->indent += 4;
 
                 indent_buf(body, ctx->indent);
-                if (adt_byval) {
+                if (adt_byval_pbp) {
+                    /* Slice 3: scrutinee is already a `const tur_adt_X *` (pbp
+                     * param) -- bind as a pointer, fields read via `->`. */
+                    buf_printf(body, "const %s *__scrut = (%s);\n",
+                               adt_c_name, scrut_val);
+                } else if (adt_byval) {
                     /* CONV-S1: scrutinee is a by-value aggregate -- bind directly. */
                     buf_printf(body, "%s __scrut = (%s);\n", adt_c_name, scrut_val);
                 } else {
@@ -6598,24 +6626,24 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     /* Bind fields */
                     if (!pat->is_wildcard && !pat->is_var && pat->ctor) {
                         char *_mctor = mangle_field_name(pat->ctor->name);
+                        /* CONV-S1: by-value scrutinee reads fields with `.`; a
+                         * carrier or (slice 3) pass-by-pointer scrutinee is a
+                         * pointer, so it reads with `->`. */
+                        const char *acc = (adt_byval && !adt_byval_pbp) ? "." : "->";
                         for (uint32_t bi = 0; bi < pat->n_bindings; bi++) {
                             Binding *fb = pat->bindings[bi];
                             const char *ctype = type_c_name(fb->type);
                             char *bname = name_for_binding(ctx, fb);
                             indent_buf(body, ctx->indent);
-                            /* CONV-S1: by-value scrutinee reads fields with `.`,
-                             * carrier scrutinee with `->`.  B3: a by-value ADT
-                             * field is stored boxed (int64 heap pointer) -- unbox
-                             * it by deref. */
+                            /* B3: a by-value ADT field is stored boxed (int64 heap
+                             * pointer) -- unbox it by deref. */
                             if (emit_type_is_byvalue_adt(ctx, fb->type)) {
                                 buf_printf(body,
                                     "%s %s = *(%s *)(intptr_t)(__scrut%sas.%s._%u);\n",
-                                    ctype, bname, ctype, adt_byval ? "." : "->",
-                                    _mctor, bi);
+                                    ctype, bname, ctype, acc, _mctor, bi);
                             } else {
                                 buf_printf(body, "%s %s = (%s)__scrut%sas.%s._%u;\n",
-                                           ctype, bname, ctype, adt_byval ? "." : "->",
-                                           _mctor, bi);
+                                           ctype, bname, ctype, acc, _mctor, bi);
                             }
                             free(bname);
                         }

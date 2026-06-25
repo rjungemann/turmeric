@@ -1,0 +1,24 @@
+;; CONV-S1 (slice 3): a by-value ADT product larger than 16 bytes adopts the
+;; struct pass-by-pointer calling convention -- it is passed as
+;; `const tur_adt_<Name> *`, not by value -- so a lowered `defstruct` keeps the
+;; same ABI a struct has.  `Big` is 24 bytes (three ints), so every `[s : Big]`
+;; param lowers to a pointer; field access and `match` read through `->`, the
+;; caller takes the address, and a pbp param forwards its pointer directly.
+
+(defdata Big :copy (Big [a : int b : int c : int]))
+
+(defn sum-fields [s : Big] : int        ; field access through the pbp pointer
+  (+ (.a s) (+ (.b s) (.c s))))
+
+(defn sum-match [s : Big] : int         ; match scrutinee bound as a pointer
+  (match s (Big a b c) (+ a (+ b c))))
+
+(defn forward [s : Big] : int           ; pbp param forwarded to another pbp fn
+  (sum-fields s))
+
+(defn main [] : int
+  (let [s (Big 10 20 30)]
+    (println (sum-fields s))            ; 60
+    (println (sum-match s))             ; 60
+    (println (forward s))               ; 60
+    0))
