@@ -27,8 +27,20 @@ description: Replicate the Vec producer-monomorphization slice (commit "monomorp
     resolved slot type. `Eq[Map]` dispatches via a typed by-value spec; typed
     `(Map int int)` consumers receive `Map__int__int *`. See
     `docs/archive/eq-map-typed-consumer-blocked-on-transparent-newtype.md`.
-  - **Set (`stdlib/set.tur`):** NOT started. Lines 30, 55, 80, 147,
-    183, 219 still `(int64_t)(intptr_t)`. Zero `__TUR_RET__` matches.
+  - **Set (`stdlib/set.tur`):** producers NOT started -- `set-new` et al.
+    still `(int64_t)(intptr_t)`, zero `__TUR_RET__` matches. But the typed
+    Set *consumer* now exists: `typed-collection-eq-consumers-plan.md`
+    rewrote `Eq[Set]`'s `set-eq-full` / `set-eq-driver` to by-value `(Set A)`,
+    so a concrete `(Set int)` receiver dispatches via
+    `set_eq_full__spec__...(Set__int *, ...)` and emits a `(Set__int *)`
+    consumer (`set-typed-consumer` fixture). Typing Set's producers here is
+    therefore no longer pure future-proofing -- it has a real consumer to
+    point at, and `Set` is already non-transparent (`(hamt :ptr<void>)`), so
+    unlike Map it needs no representation change, only the
+    `(int64_t)(intptr_t)` -> `(__TUR_RET__)(intptr_t)` flip on the producers
+    + `Set` joining the `type_is_heap_vec` allow-list + flipping `set-count` /
+    `set-hamt` to by-value in lockstep (so carrier callers don't break, the
+    same producer/consumer-flip-together rule the Map slice followed).
   - **MutableMap (`stdlib/mutmap.tur`):** DONE. `mutmap-new` at line
     73 returns through `__TUR_RET__`.
 - **Step 4 (signature/bridge plumbing already generic):** Confirmed --

@@ -158,48 +158,73 @@ Executed against the current tree; the empirical state diverges from the
    (`*-eq-driver` allocates the iter box, runs the TCO'd loop, frees) is the
    reusable shape for future `Show[Map]` / `Hash[Map]`.
 
-4-6. **`set-eq-full` / `map-eq?` / `mutmap-eq?` rewrites: already landed**
-   under the same TCO-Eq-MapSet phase. All three instance bodies are pure
-   Turmeric over the cursor; the inline-C `set-eq?` / `map-eq?` /
-   `mutmap-eq-storage?` helpers stay only for direct / abstract-K-V callers
-   (the same compromise `vec-eq?` made).
+4-6. **`set-eq-full` / `map-eq?` / `mutmap-eq?` rewrites: landed**
+   (the cursor-iteration bodies under TCO-Eq-MapSet; the by-value `(Set A)`
+   receiver for `set-eq-full` completed this phase -- see item 7's Set bullet).
+   All three instance bodies are pure Turmeric over the cursor; the inline-C
+   `set-eq?` / `map-eq?` / `mutmap-eq-storage?` helpers stay only for direct /
+   abstract-K-V callers (the same compromise `vec-eq?` made).
 
-7. **Typed consumers (step 7): Cons / Set / MutableMap YES, Map NO.**
+7. **Typed consumers (step 7): Cons / Set / MutableMap / Map all YES.**
    - `Eq[Cons]` -> `(Cons__int *)(intptr_t)` (this phase).
-   - `Eq[Set]` -> `(Set__int *)(intptr_t)` (single type param; promotes on
-     a by-value ascribed receiver).
+   - `Eq[Set]` -> `(Set__int *)(intptr_t)` (this phase). The TCO-Eq-MapSet
+     rewrite made `set-eq-full` / `set-eq-driver` pure-Turmeric over the
+     cursor but left them on the **int64 carrier** (`s1 : int s2 : int`), so
+     `Eq[Set]` still dispatched via `set_hyeq_hyfull(int64_t, int64_t)` and no
+     typed `(Set__A *)` consumer ever appeared (verified zero across all
+     fixtures). This phase completes the Path-A rewrite: `set-eq-full` /
+     `set-eq-driver` take by-value `(Set A)` (`[A] [s1 (Set A) s2 (Set A)]`),
+     and `Eq[Set]` ascribes `(:: x (Set A))`. A concrete `(Set int)` receiver
+     now specializes to `__inst_Eq_eq_qu_Set__spec__bool_Set__int___Set__int__`
+     dispatching `set_eq_full__spec__...(Set__int *, Set__int *)` -- a typed
+     consumer, matching `Eq[Map]`. **Localized, no producer flip:** `Set`'s
+     *public* accessors (`set-count`, `set-hamt`) and producers (`set-new`,
+     `set-add`, ...) stay on the `:int` carrier -- Set's producers are not yet
+     typed, so user callers pass carrier handles, and flipping `set-count` to
+     by-value breaks them (`set-basic` regresses with TUR-E0001). The Eq
+     helpers therefore keep the by-value `(Set A)` *receiver* (which is all the
+     spec signature needs) but ascribe `(:: s :int)` for the carrier-accessor
+     calls. Because the carrier instantiation re-mangles to the identical
+     `set_hyeq_hyfull` / `set_hycount` names, this is **zero snapshot churn**:
+     the only new fixture is `set-typed-consumer` (guards the typed spec +
+     `(Set__int *)` consumer). Compiled-suite + `--interpret` parity green.
    - `Eq[MutableMap]` -> `(MutableMap__int__int *)(intptr_t)` in `mutmap-eq`
      (its producer `mutmap-new` already returns the typed spec, so the
      receiver local is concrete at the `.eq?` site).
-   - `Eq[Map]` -> **still the int64 carrier `__inst_Eq_eq_qu_Map`, and this
-     is structural, not a dispatch-promotion gap.** The blocker is NOT the
-     `#364` multi-param resolution the sequencing above guessed. `Map` is
-     declared `(defstruct Map :heap [K V] (carrier :int))` -- a parametric
-     struct with a *single `:int` field*, which `type_is_transparent_int_newtype`
-     (src/compiler/types.c) recognises as a **transparent int newtype**.
-     `type_c_name` therefore lowers `(Map K V)` to `int64_t` in *every* C
-     signature, pure-Turmeric and inline-C alike (map.tur's own header says
-     so). There is no `Map__int__int` struct to point at, so a
-     `(Map__* *)(intptr_t)` consumer cannot exist regardless of constraint
-     count or ascription -- the "by-value receiver" is literally `int64_t`,
-     and the instance method stays the carrier `__inst_Eq_eq_qu_Map`.
-     Contrast the three that *do* get typed consumers: `Set`
-     (`(hamt :ptr<void>)`), `MutableMap` (`(storage :ptr<void>)`), and `Cons`
-     (two fields) are all non-transparent, so they have real `Set__A` /
-     `MutableMap__K__V` / `Cons__A` structs. Typed Map consumers require
-     changing Map's *representation* (field `:int` -> `:ptr<void>`, matching
-     MutableMap) -- a core-representation change that ripples through every
-     `(Map K V)` signature + snapshot and is squarely producer-slice-scale
-     work, not a consumer rewrite. See
-     `docs/reported/eq-map-typed-consumer-blocked-on-transparent-newtype.md`.
+   - `Eq[Map]` -> **now `(Map__K__V *)(intptr_t)` as well, resolved in #555.**
+     The original blocker -- `Map` declared `(defstruct Map :heap [K V]
+     (carrier :int))`, a parametric struct with a *single `:int` field* that
+     `type_is_transparent_int_newtype` (src/compiler/types.c) treated as a
+     **transparent int newtype** and lowered to `int64_t` in every C signature
+     -- was a *representation* gap, not the `#364` multi-param resolution the
+     sequencing above guessed. #555 ("Make Map a non-transparent heap struct
+     with HAMT pointer") flipped the field to `(hamt :ptr<void>)` (matching
+     `Set` / `MutableMap`), so `(Map K V)` now monomorphizes to a real
+     `Map__K__V` struct. With that change, the seven heap-returning producers
+     return through `__TUR_RET__`, `Map` joined the `type_is_heap_vec`
+     allow-list, and the float/cstr carrier-forcing block was extended to
+     recover the degenerate multi-param declared `(Map K V)` from the resolved
+     slot type (the piece the fix directions had not anticipated -- otherwise
+     `map-assoc-eq-o`'s `val :V` slot truncated `0.5 -> 0`, caught by
+     `tce3-map-cstr-val`). Verified on `map-of-tvec-eq`:
+     `(Map__int__Vec__int *)(intptr_t)` consumers now emit from the typed
+     producers (`map_new`, `map_assoc_eq_o`, `tur_map_kcheck` specs). The
+     remaining `__inst_Eq_eq_qu_Map(int64_t, int64_t)` HKT-head carrier
+     instance is the same permanent-by-design floor `Eq[Vec]`
+     (`__inst_Eq_eq_qu_Vec`) hits -- both carry the abstract HKT head as
+     int64 while the per-instantiation specs use typed pointers. See
+     `docs/archive/eq-map-typed-consumer-blocked-on-transparent-newtype.md`.
 
-8. **Unblock producer-slice (step 8): partially.** Cons / Set / MutableMap
-   now present typed consumers, so the producer-slice plan's typing of those
-   producers removes real crossings. The **Map** half stays blocked, but on
-   the transparent-int-newtype representation (item 7), not `#364`; the
-   producer-slice plan should fold the `(carrier :int)` -> `(hamt :ptr<void>)`
-   representation change into its Map slice (mirroring how it typed
-   MutableMap's producer) before any Map consumer can be typed.
+8. **Unblock producer-slice (step 8): fully.** Cons / Set / MutableMap / Map
+   all present typed consumers, so the producer-slice plan's typing of those
+   producers removes real crossings. The Map half is no longer blocked: #555
+   folded the `(carrier :int)` -> `(hamt :ptr<void>)` representation change
+   into the Map slice (mirroring how MutableMap's producer was typed), so
+   `map-set-typed-pointer-producer-slice-plan.md`'s Map slice is recorded DONE
+   (its Step 3 cites the archived report). The only open producer-slice item
+   is `Set`'s Step 3 (`set-new` et al. still on `(int64_t)(intptr_t)`); the
+   typed Set *consumer* from this plan already exists, so that producer typing
+   is now a pure consistency win with a real consumer to point at.
 
 ## Validation harness
 
