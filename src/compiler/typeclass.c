@@ -179,14 +179,25 @@ TypeClassInstance *typeclass_env_lookup_instance(const TypeClassEnv *env,
             }
             TypeKind eff_kind = type_args[i].kind;
             const StructDef *eff_struct_def = NULL;
+            const AdtDef *eff_adt_def = NULL;
             if (eff_kind == TY_APP) {
-                /* Walk to the head of the TY_APP chain (which should be a
-                 * TY_STRUCT type-constructor). */
+                /* Walk to the head of the TY_APP chain (a type constructor --
+                 * TY_STRUCT, or TY_ADT once a parametric struct lowers to a
+                 * record defadt). */
                 const Type *head = &type_args[i];
                 while (head && head->kind == TY_APP) head = head->as.app.fn;
                 if (head && head->kind == TY_STRUCT) {
                     eff_kind = TY_STRUCT;
                     eff_struct_def = head->as.struct_.def;
+                } else if (head && head->kind == TY_ADT) {
+                    /* CONV-S1: an ADT-app receiver (e.g. `(Option int)` after
+                     * Option lowers) normalises to its TY_ADT head so it matches
+                     * a TY_ADT-headed instance and -- via eff_adt_def below --
+                     * discriminates between distinct ADT constructors instead of
+                     * collapsing every ADT-app to a bare kind-TY_APP match (which
+                     * mis-selected the first TY_APP instance, e.g. MutableMap). */
+                    eff_kind = TY_ADT;
+                    eff_adt_def = head->as.adt_.def;
                 }
             } else if (eff_kind == TY_STRUCT) {
                 /* Phase RT: a plain struct lookup type carries its own
@@ -194,6 +205,8 @@ TypeClassInstance *typeclass_env_lookup_instance(const TypeClassEnv *env,
                  * discriminates between distinct struct instances (e.g.
                  * HasSchema[User] vs HasSchema[Post]). */
                 eff_struct_def = type_args[i].as.struct_.def;
+            } else if (eff_kind == TY_ADT) {
+                eff_adt_def = type_args[i].as.adt_.def;
             }
             /* Normalize the INSTANCE head the same way as the query head above.
              * An instance declared with a (partially/fully) applied head -- e.g.
@@ -209,15 +222,21 @@ TypeClassInstance *typeclass_env_lookup_instance(const TypeClassEnv *env,
              * spurious TUR_E0020 ambiguity. */
             TypeKind inst_eff_kind = inst->type_args[i].kind;
             const StructDef *inst_eff_struct_def = NULL;
+            const AdtDef *inst_eff_adt_def = NULL;
             if (inst_eff_kind == TY_APP) {
                 const Type *ihead = &inst->type_args[i];
                 while (ihead && ihead->kind == TY_APP) ihead = ihead->as.app.fn;
                 if (ihead && ihead->kind == TY_STRUCT) {
                     inst_eff_kind = TY_STRUCT;
                     inst_eff_struct_def = ihead->as.struct_.def;
+                } else if (ihead && ihead->kind == TY_ADT) {
+                    inst_eff_kind = TY_ADT;
+                    inst_eff_adt_def = ihead->as.adt_.def;
                 }
             } else if (inst_eff_kind == TY_STRUCT) {
                 inst_eff_struct_def = inst->type_args[i].as.struct_.def;
+            } else if (inst_eff_kind == TY_ADT) {
+                inst_eff_adt_def = inst->type_args[i].as.adt_.def;
             }
             if (inst_eff_kind != eff_kind) {
                 match = false;
@@ -231,6 +250,16 @@ TypeClassInstance *typeclass_env_lookup_instance(const TypeClassEnv *env,
                 inst_eff_kind == TY_STRUCT &&
                 inst_eff_struct_def != NULL &&
                 inst_eff_struct_def != eff_struct_def) {
+                match = false;
+                break;
+            }
+            /* CONV-S1: the same identity check for ADT constructors, so a lowered
+             * `(Option int)` matches `Eq [Option]` and not, say, `Eq [Result]` or
+             * `Eq [MutableMap]` (both ADT/TY_APP-kinded after lowering). */
+            if (eff_adt_def &&
+                inst_eff_kind == TY_ADT &&
+                inst_eff_adt_def != NULL &&
+                inst_eff_adt_def != eff_adt_def) {
                 match = false;
                 break;
             }
