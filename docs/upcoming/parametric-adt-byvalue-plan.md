@@ -6,6 +6,27 @@ description: Make a concrete monomorphisation of a single-variant parametric fla
 
 # Parametric ADT by-value monomorphisation -- plan
 
+## Status at a glance (2026-06-25)
+
+- **P1 (gate + plumbing, hard-off)** -- **LANDED**. `bash tests/run.sh` 1825 /
+  0, zero churn. Gate-on smoke test reproduces exactly the 4 expected crossings.
+- **P2 (Crossing A: match / field-access / result-init on app receiver)** --
+  **NOT STARTED**.
+- **P3 (Crossing B: by-value app value into a carrier ctor field)** --
+  **NOT STARTED**.
+- **P4 (flip `g_adt_app_byvalue` on + regen snapshots)** -- **NOT STARTED**.
+- **Step 5 (`:heap` typed-pointer ADT ABI)** -- **NOT STARTED**, layered on
+  top of P4. This is the last gap before CONV-S1 graduation.
+
+**Next action:** P2 (Crossing A). Independent of CONV-S1 B4 (the
+functor-applied-to-self HKT crossing) -- the predicate excludes residual-tyvar
+fields, so M7 reconciliation is not a prerequisite for P2-P4.
+
+**Downstream gate:** CONV-S1 graduation -- retiring `StructDef` and lowering
+every `defstruct` to `defadt` ([`defstruct-as-defadt-plan.md`](defstruct-as-defadt-plan.md)
+slice 5) -- is blocked on **step 5 of this plan**. There is no separate
+tracker for the `:heap` typed-pointer ABI; it lives here.
+
 ## Why
 
 CONV-S1 graduation ("retire the `StructDef` surface path, lower every

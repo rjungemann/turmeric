@@ -37,10 +37,29 @@ Landed in `../turmeric-godot/` on 2026-06-25:
 - Down-coercion stays explicit + unchecked (`(:: h :Sprite2DHandle)`).
   A runtime-checked `(checked-cast h :Sprite2DHandle) -> option<...>`
   via `Object::is_class` is left for later.
-- Headless `.gd` drivers were authored but not run in this session
-  (no Godot CLI in the harness). The C++ build is clean and the
-  codegen produces the expected facade; end-to-end verification
-  falls to the next session that can launch Godot.
+### Verification
+
+All five spike `.gd` drivers pass under
+`/Applications/Godot.app/Contents/MacOS/Godot --headless --path . --script ...`:
+`typed_signal` (closure fires), `typed_signal_bad` (wrong-arity handler
+does not fire), `oneshot_prelude` (G6.3 `(timer/one-shot ...)` closure
+fires via SceneTreeTimer), `handle_hierarchy` (Node2DHandle →
+CanvasItemHandle → NodeHandle chain renames via NodeHandle-typed API),
+plus the pre-existing G5 `connect_signal` control. The paddle-pong-tur
+driver also passes after the `score.tur` `(:: self :LabelHandle)`
+ascription.
+
+End-to-end found three bugs the C++ build had not surfaced:
+
+- `godot-connect-typed` was passing a stack-local synth-name pointer
+  into `turi_env_set` (which keeps `name` borrowed). Closure dispatch
+  silently failed. Fixed by copying through `turi_val_strdup(env, ...)`
+  so the binding key lives as long as the env.
+- The G6.3 prelude used `Engine::get_process_fps` and
+  `OS::get_system_time_msecs`, neither of which exists in Godot 4.3.
+  Replaced with `Engine::get_frames_per_second` and
+  `Time::get_ticks_msec`; a `(time)` singleton accessor joined `(os)`
+  and `(engine)`.
 
 ---
 

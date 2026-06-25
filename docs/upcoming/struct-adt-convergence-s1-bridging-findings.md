@@ -6,7 +6,28 @@ description: Concrete site-by-site findings from a spiked attempt at CONV-S1 (ma
 
 # CONV-S1 (by-value merge) -- bridging findings
 
-## Status
+## Status at a glance (2026-06-25)
+
+- **B1 (box/unbox + representation dispatch)** -- **LANDED**, gate off.
+- **B2 (untyped-param refinement)** -- **LANDED**, gate off.
+- **B3 (flip gate for leaf products + field-store crossing)** -- **LANDED, gate
+  LIVE** for leaf products (no aggregate-bearing / recursive fields). Suite
+  green: `bash tests/run.sh` 1813 / 0.
+- **B4 (reconcile with M7 by-value HKT)** -- **DELIBERATELY DEFERRED**, not
+  landed. Spike shows it needs an **M7-owned ABI decision** (fat-closure ABI
+  carrying by-value-ADT params as the int64 carrier uniformly), not a
+  localized bridge. **NOT a prerequisite for CONV-S1 proper** -- real
+  `defstruct`s never have functor-applied-to-self fields.
+- **CONV-S1 proper (lower `defstruct` to `defadt`)** -- **REACHABLE** on the
+  B3 leaf gate once it is extended to pointer/`rc`/`ref` fields. Tracked in
+  [`defstruct-as-defadt-plan.md`](defstruct-as-defadt-plan.md) (slice 5 is
+  the graduation step).
+
+**Net status:** the CONV-S1 boundary is the B3 leaf gate. B4 is open but
+out-of-scope for graduation. Next action lives in the defstruct-as-defadt
+plan, not here.
+
+## Background
 
 This documents a **spike** of CONV-S1 from
 [`struct-adt-convergence-plan.md`](struct-adt-convergence-plan.md): making a
