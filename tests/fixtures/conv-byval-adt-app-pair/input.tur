@@ -1,0 +1,47 @@
+;; Parametric-by-value monomorphisation (parametric-adt-byvalue-plan, P2-P4):
+;; a concrete monomorphisation of a single-variant parametric flat product --
+;; e.g. (Pair2 int int) from (defdata Pair2 [a b] (MkPair2 a b)) -- flows BY
+;; VALUE (a flat tur_adt_Pair2__int__int aggregate), not the int64 heap-pointer
+;; carrier.  This is the parametric analog of CONV-S1's by-value structs.
+;;
+;; Crossing A: a `(Pair2 int int)` parameter arrives as the aggregate and its
+;; `match` binds the scrutinee by value, reading fields with `.`.
+;; Crossing B: a by-value ADT-app value stored into another constructor's
+;; carrier field slot is boxed on the way in and unboxed at the field-bind read.
+
+(defdata Pair2 [a b]
+  (MkPair2 a b))
+
+;; Crossing A -- by-value app parameter, match reads fields with `.`.
+(defn fst [p : (Pair2 int int)] : int
+  (match p (MkPair2 x y) x))
+
+(defn snd [p : (Pair2 int int)] : int
+  (match p (MkPair2 x y) y))
+
+;; A by-value app value returned by value (the aggregate, no carrier box).
+(defn swap [p : (Pair2 int int)] : (Pair2 int int)
+  (match p (MkPair2 x y) (MkPair2 y x)))
+
+;; Crossing B -- a parametric (non-by-value) carrier ADT whose field carries a
+;; by-value (Pair2 int int): the value is boxed into the int64 carrier slot and
+;; unboxed at the match field-bind read.
+(defdata Nest [a]
+  (N (Pair2 a a)))
+
+(defn main [] : int
+  (let [p (MkPair2 10 20)]
+    (println (fst p))                 ; 10
+    (println (snd p))                 ; 20
+    (let [q (swap p)]
+      (println (fst q))               ; 20
+      (println (snd q))))             ; 10
+  (let [n (N (MkPair2 3 4))]          ; by-value app boxed into carrier field
+    (match n
+      (N inner)                       ; unbox at field-bind read
+        (match inner
+          ;; The concrete element is not threaded through the nested carrier
+          ;; match (a pre-existing elaboration gap the sibling fixture
+          ;; defdata-applied-type-field works around the same way), so ascribe.
+          (MkPair2 x y) (println (+ (:: x :int) (:: y :int))))))  ; 7
+  0)

@@ -1509,9 +1509,16 @@ const char  *adt_byval_c_name(const AdtDef *def);
 /* Parametric-by-value monomorphisation (heavy prerequisite for CONV-S1
  * graduation; see docs/upcoming/parametric-adt-byvalue-plan.md).  True when t is
  * a concrete monomorphisation of a single-variant non-GADT parametric flat
- * product whose every monomorphised field is by-value-able.  GATED HARD-OFF for
- * now -- the plumbing keyed on it is a no-op until the crossings are wired. */
+ * product whose every monomorphised field is by-value-able.  LIVE (P2-P4) --
+ * both crossings (match/field-access and ctor-field box/unbox) are wired. */
 bool         adt_app_is_byvalue_product(Type t);
+/* Parametric-by-value: app-aware siblings of adt_byval_pass_by_ptr /
+ * adt_is_byvalue_product -- a concrete flat-product ADT-app (`(Pair2 int
+ * float)`) is laid out as its by-value monomorph aggregate, so it shares the
+ * >16-byte pass-by-pointer size gate and the by-value-product representation
+ * decision (the latter covering both the non-parametric ADT and the app). */
+bool         adt_app_byval_pass_by_ptr(Type t);
+bool         type_is_byvalue_adt_product(Type t);
 /* Phase E: Typed function-pointer typedef registry for unboxed fn struct fields. */
 const char  *register_fn_ptr_typedef(const Type *fn_type);
 void         type_codegen_reset_fn_ptr_typedefs(void);

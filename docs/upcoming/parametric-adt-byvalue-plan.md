@@ -123,14 +123,22 @@ by-value aggregate.
    keyed on it; gate off so the suite is byte-identical. **LANDED** (this change)
    -- `bash tests/run.sh` is 1825 passed, 0 failed, zero churn; the gate-on smoke
    test reproduced exactly the 4 crossings above.
-2. **P2 -- Crossing A.** Widen the match / `EX_GET_FIELD` / result-init by-value
-   decision to accept `adt_app_is_byvalue_product`, and add the app-aware
-   pass-by-pointer size gate. Verify the three Class-A fixtures build by value.
-3. **P3 -- Crossing B.** App-aware box/unbox at the ctor-arg store and field-bind
-   read. Verify `defdata-applied-type-field`.
-4. **P4 -- flip the gate.** Turn `g_adt_app_byvalue` on; regenerate the
-   handful of monomorph snapshots that move (only by-value flat-product apps);
-   add a `conv-byval-adt-app-*` fixture. Verify suite-green with the gate live.
+2. **P2 -- Crossing A. LANDED.** Widened the match / result-init by-value
+   decision (`type_is_byvalue_adt_product`, accepting
+   `adt_app_is_byvalue_product` on the scrutinee type) and added the app-aware
+   pass-by-pointer size gate (`adt_app_byval_pass_by_ptr`, also wired into
+   `type_struct_pass_by_ptr`'s `TY_APP` arm). The three Class-A fixtures
+   (`adt-param-match-type-pair`, `kind-inference-adt`, `positional-adt-poly-ok`)
+   now build and run by value.
+3. **P3 -- Crossing B. LANDED.** Extended `emit_type_is_byvalue_adt` to
+   recognise a by-value ADT-app value, so it boxes into / unboxes out of a
+   carrier ctor field slot at the ctor-arg store and the match field-bind read.
+   `defdata-applied-type-field` builds and runs.
+4. **P4 -- gate flipped. LANDED.** `g_adt_app_byvalue` is now `true`. No
+   existing monomorph snapshot moved (`bash tests/run.sh` is suite-green with
+   zero churn); added `conv-byval-adt-app-pair` covering by-value app
+   param/return (Crossing A) and a by-value app boxed into a carrier field
+   (Crossing B). Suite: 1828 passed, 0 failed with the gate live.
 5. **`:heap` typed-pointer ADT ABI.** With by-value monomorph apps in place, add
    the `:heap` defadt attribute and the `tur_adt_X__A *` typed-pointer lowering
    (the parametric-`Vec<T> *` analog), so a `:heap` struct can lower to a `:heap`

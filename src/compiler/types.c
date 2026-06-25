@@ -2598,6 +2598,42 @@ bool adt_byval_pass_by_ptr(const AdtDef *def) {
     return total > 16;
 }
 
+/* Parametric-by-value: app-aware sibling of adt_byval_pass_by_ptr.  A concrete
+ * flat-product ADT-app (e.g. `(Pair2 int float)`) is laid out like its
+ * monomorph aggregate, so it adopts the same >16-byte pass-by-pointer
+ * convention.  Each field's byte size is taken from its monomorphised kind
+ * (substituting the app args for the base def's type params); aggregate fields
+ * default to the 8-byte carrier slot size, monotone for the threshold. */
+bool adt_app_byval_pass_by_ptr(Type t) {
+    if (!adt_app_is_byvalue_product(t)) return false;
+    AdtDef *def = NULL;
+    Type args[16];
+    uint8_t n_args = 0;
+    if (!type_extract_adt_app(&t, &def, args, &n_args) || !def) return false;
+    const CtorDef *c = def->ctors[0];
+    size_t total = 0;
+    for (uint32_t i = 0; i < c->n_fields; i++) {
+        TypeKind k = c->fields[i].kind;
+        if (c->fields[i].full_type) {
+            Type rf = substitute_adt_app_type(c->fields[i].full_type, def, args);
+            k = rf.kind;
+        }
+        total += adt_field_size_bytes(k);
+    }
+    return total > 16;
+}
+
+/* Parametric-by-value: true when `t` is a by-value monomorph -- either a
+ * non-parametric flat-product TY_ADT (adt_is_byvalue_product) or a concrete
+ * parametric flat-product TY_APP (adt_app_is_byvalue_product).  Codegen sites
+ * that choose the by-value (aggregate, non-carrier) representation for a
+ * scrutinee or value consult this single app-aware predicate. */
+bool type_is_byvalue_adt_product(Type t) {
+    if (t.kind == TY_ADT) return adt_is_byvalue_product(t.as.adt_.def);
+    if (t.kind == TY_APP) return adt_app_is_byvalue_product(t);
+    return false;
+}
+
 /* Parametric-by-value monomorphisation (heavy prerequisite for CONV-S1
  * graduation; see docs/upcoming/parametric-adt-byvalue-plan.md).
  *
@@ -2610,13 +2646,17 @@ bool adt_byval_pass_by_ptr(const AdtDef *def) {
  * parametric analog of CONV-S1/B1-B4 and the foundation the `:heap` typed-pointer
  * ADT ABI builds on.
  *
- * GATED HARD-OFF.  The plumbing keyed on this predicate (type_c_name TY_APP,
- * type_uses_carrier_abi, the monomorphised ctor emitter) is a no-op until the
- * crossings -- call-site box/unbox, match/field-access on an ADT-app receiver,
- * and the M7 by-value-HKT ctor-suffix collision -- are wired and proven
- * suite-green stage by stage.  Flip `g_adt_app_byvalue` locally only for the
- * gate-on smoke test that enumerates those crossings. */
-static const bool g_adt_app_byvalue = false;
+ * LIVE (P2-P4).  The plumbing keyed on this predicate (type_c_name TY_APP,
+ * type_uses_carrier_abi, the monomorphised ctor emitter) flows a concrete
+ * flat-product ADT-app by value, and both crossings the gate-on smoke test
+ * enumerated are wired: Crossing A (match / field-access on an ADT-app
+ * receiver binds the aggregate and reads with `.`, with an app-aware
+ * pass-by-pointer size gate -- adt_app_byval_pass_by_ptr) and Crossing B (a
+ * by-value ADT-app value boxes into / unboxes out of a carrier ctor field
+ * slot via emit_type_is_byvalue_adt).  The M7 by-value-HKT carriers
+ * (`ReF`/`ExprF`) carry a residual tyvar field and are excluded by the
+ * predicate, so this never touches that machinery (B4 remains separate). */
+static const bool g_adt_app_byvalue = true;
 
 bool adt_app_is_byvalue_product(Type t) {
     if (!g_adt_app_byvalue) return false;
@@ -4027,6 +4067,10 @@ bool type_struct_pass_by_ptr(Type t) {
             return def && !def->is_opaque && def->n_type_params == 0 && def->pass_by_ptr;
         }
         case TY_APP: {
+            /* Parametric-by-value: a large concrete flat-product ADT-app passes
+             * as `const tur_adt_<Name>__A *`, mirroring the struct convention. */
+            if (adt_app_is_byvalue_product(t))
+                return adt_app_byval_pass_by_ptr(t);
             /* Look up in the registry (registers on first encounter). */
             if (!type_has_concrete_codegen_layout(&t)) return false;
             register_struct_app(t);

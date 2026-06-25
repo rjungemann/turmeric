@@ -426,8 +426,14 @@ static bool expr_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
  * child is never stored inline; the box/unbox bridge is mandatory at the seam. */
 static bool emit_type_is_byvalue_adt(EmitCtx *ctx, Type t) {
     Type r = emit_resolve_type(ctx, t);
-    return r.kind == TY_ADT && r.as.adt_.def &&
-           adt_is_byvalue_product(r.as.adt_.def);
+    if (r.kind == TY_ADT && r.as.adt_.def)
+        return adt_is_byvalue_product(r.as.adt_.def);
+    /* Parametric-by-value: a concrete flat-product ADT-app value (`(Box int)`)
+     * is a by-value aggregate too -- it crosses an int64 carrier field slot the
+     * same way (box on store, unbox on field-bind read). */
+    if (r.kind == TY_APP)
+        return adt_app_is_byvalue_product(r);
+    return false;
 }
 
 /* G9 (carrier<->concrete): true when a field read `(.field recv)` materializes
@@ -6614,8 +6620,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * is guaranteed by the elaborator so the default branch is unreachable.
                  * CONV-S1/B3: a by-value ADT result is a C aggregate -- it cannot be
                  * scalar-initialised with `0` (invalid initializer), so use `{0}`. */
-                if (e->type.kind == TY_ADT &&
-                    adt_is_byvalue_product(e->type.as.adt_.def))
+                if (type_is_byvalue_adt_product(e->type))
                     buf_printf(body, "%s %s = {0};\n", type_c_name(e->type), tmp);
                 else
                     buf_printf(body, "%s %s = 0;\n", type_c_name(e->type), tmp);
@@ -6641,7 +6646,14 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * (no carrier pointer) and reads fields with `.`.  Gated by
              * adt_is_byvalue_product (LIVE for leaf products as of B3); byval
              * implies flat, so it always takes the if-chain path below. */
-            bool adt_byval = adt_is_byvalue_product(adt);
+            /* Parametric-by-value: an app scrutinee (`(Pair2 int int)`) is a
+             * by-value monomorph aggregate too, even though its base def is
+             * parametric (adt_is_byvalue_product is false for n_type_params!=0).
+             * Widen the by-value decision to the app-aware predicate keyed on the
+             * scrutinee's concrete type. */
+            Type scrut_ty = e->as.match_.scrutinee->type;
+            bool adt_byval = adt_is_byvalue_product(adt) ||
+                             adt_app_is_byvalue_product(scrut_ty);
             /* Slice 3: a large by-value ADT scrutinee that is a pass-by-pointer
              * param arrives as `const tur_adt_X *`, so it is already a pointer --
              * bind it as one and read fields with `->`, never `.`. */
