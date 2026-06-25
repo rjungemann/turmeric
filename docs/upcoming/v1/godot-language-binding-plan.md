@@ -1,8 +1,52 @@
 # Turmeric as a Godot 4 Scripting Language -- Plan
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-06-24
+> **Status:** In progress -- G0-G3 and G5 at MVP; G4 partial (debugger
+> deferred); G6 typing follow-ups archived; defgodot-script shell
+> landed
+> **Last Updated:** 2026-06-25
 > **Type:** Integration / Game Engine
+
+## Implementation Status (2026-06-25)
+
+Phase work has been landing in the sibling repo `../turmeric-godot/`.
+Headless verification runs via
+`/Applications/Godot.app/Contents/MacOS/Godot --headless --path . --script ...`.
+
+| Phase | Status | Notes |
+|---|---|---|
+| G0 -- spike | done | ScriptLanguageExtension registered; .gdextension loads in stock Godot 4.3. |
+| G1 -- hello node | done | Interpreter-mode only; `_ready` dispatches; primitive marshalling. |
+| G2 -- lifecycle + inspector | done | All lifecycle hooks; `:exports` round-trip; `:signals` visible; AOT mode NOT shipped (interpreter only). |
+| G3 -- ClassDB coverage | done | classdb_proxy + curated prelude + extension_api.json codegen (Codegen v2 typed variants). |
+| G4 -- editor niceties | partial | Syntax highlighter + completion landed; debugger spun out into its own plan ([godot-binding-debugger-plan.md](./godot-binding-debugger-plan.md)). |
+| G5 -- polish + release | done | macOS / Linux / Windows CI workflow; paddle-pong-tur demo; docs guide. |
+| G6 -- typing follow-ups | done | Typed signal-connect, class-hierarchy handles, curated one-shot prelude. See [archived plan](../../archive/v1/godot-binding-typing-followups-plan.md). |
+| G7 -- `defgodot-script` shell | minimum-viable | Wraps body in `(do ...)`; users still write explicit `(godot-export ...)` / `(godot-signal ...)` calls inside. The richer surface in this plan's "Script-side surface" section (with `:exports [(name : type default)]` / `:signals [...]` vec literals walked at macro expansion) is **deferred** -- a first attempt hit Turmeric's `list` / `quote` AST construction semantics; needs a session focused on macro-eval support before the walking version ships. |
+
+Outstanding v1-scope work (in rough priority order):
+
+1. **AOT execution mode** -- G2 left interpreter-only; the plan
+   promises both. Needs `tur build --shared` subprocess plumbing,
+   dlopen, a `__tur_godot_script_entry` symbol contract, and a
+   per-script descriptor harvest. Largest remaining piece.
+2. **Richer `defgodot-script` macro** -- walk `:exports` /
+   `:signals` vec literals at macro-expansion time so the surface
+   collapses to the form described below in "Script-side surface."
+   Blocked on resolving
+   [docs/reported/defgodot-script-macro-vec-quote-semantics.md](../../reported/defgodot-script-macro-vec-quote-semantics.md).
+3. **String arena reallocation hazard** -- `string_arena_push` uses
+   `std::vector<std::string>::push_back`, so a second push during the
+   same cb_call frame can invalidate the first `c_str()`. Surfaced
+   by the defgodot-script demo. Fix: switch the arena to `std::deque`
+   or a bump allocator. Small but real correctness issue.
+4. **macOS code-signing** for the bundled .dylib (G5 polish).
+
+**Spun out into its own plan:** the in-editor debugger work
+(`ScriptLanguageExtension::debug_*` + the libturi substrate it needs)
+is multi-week and parented by `tur`-side span/fiber work; it now
+lives in [godot-binding-debugger-plan.md](./godot-binding-debugger-plan.md).
+Per the parent plan, shipping v1 without it is fine; the debugger
+plan is the path to closing the G4 gap when the team is ready.
 
 ---
 

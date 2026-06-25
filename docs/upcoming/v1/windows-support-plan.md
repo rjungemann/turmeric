@@ -2,279 +2,298 @@
 
 **Status:** Not started.
 
-**Last updated:** 2026-05-16
+**Last updated:** 2026-06-25
 
 ---
 
-## Summary
+## North star
 
-Turmeric currently builds and runs on macOS and Linux only. Five categories of
-POSIX-specific code block a native Windows (MSVC or Clang-cl) build:
+**Windows support exists to make `turmeric-godot` usable on Windows.**
 
-1. **Assembly fiber context stubs** -- use the System V ABI, not the Windows
-   x64 calling convention.
-2. **I/O multiplexing** -- uses `epoll` (Linux) or `kqueue` (macOS); Windows
-   needs an IOCP backend.
-3. **Threading primitives** -- use pthreads throughout; Windows needs either
-   a thin shim or direct Win32 equivalents.
-4. **Compiler driver and package manager** -- use POSIX file, path, and
-   process APIs (`opendir`, `popen`, `mkstemp`, `stat`, `unlink`, ...).
-5. **Diagnostics** -- `isatty`/`fileno` and ANSI colour codes need minor
-   Win32 adjustments.
+The shape of v1 is "drop a `.gdextension` into a stock Godot 4 project on
+Windows and write `.tur` scripts that drive nodes." Everything in this plan
+is scoped against that outcome. A user on Windows needs to:
 
-Code generation (`emit.c`) and the WASM build are not affected.
+1. Install Godot from godotengine.org (no engine recompile).
+2. Drop in the `turmeric-godot.gdextension` shipped with a Windows `.dll`.
+3. Attach a `.tur` script to a node, hit Play, and have it run.
 
-The plan is broken into five phases that can largely be worked in order, since
-each phase unblocks the next layer of the build.
+What that means concretely:
+
+- The **GDExtension shim** (built from `../turmeric-godot/`) must build as a
+  Windows `.dll` for `windows-x86_64`.
+- The **embedded `libturi`** statically linked into the shim must compile,
+  link, and run on Windows. This is the interpreter path the shim uses for
+  "edit -> Play" iteration.
+- The **`tur` compiler** (`tur build --shared`) must run on Windows so the
+  shim's AOT path can shell out and produce a script `.dll`. Cross-compiling
+  the *output* (script `.dll`) from Linux CI is not enough -- the editor
+  workflow assumes the user can compile a script locally on their Windows
+  box.
+
+What Godot already gives us, and therefore is **not** on the critical path:
+
+- **Main loop, event polling, input, rendering, timers.** Godot owns these.
+  Scripts that just implement `_ready` / `_process(dt)` / `_input(event)`
+  never touch our reactor.
+- **File and resource I/O during gameplay.** Scripts read assets through
+  Godot's `ResourceLoader`, not our stdlib file APIs.
+- **Thread pool for engine subsystems.** Godot threads physics, rendering,
+  etc. internally.
+
+So the previous plan's "five POSIX categories all need IOCP, pthreads
+shims, ANSI colours, etc." framing is **too broad for v1**. The async
+subsystem (`io_epoll.c` / `io_kqueue.c` -> `io_iocp.c`, scheduler, timer
+wheel, threading primitives) only matters when a `.tur` script reaches for
+turmeric-side concurrency. For the "paddle-pong-tur" demo and any script
+that lives inside Godot's frame callbacks, it does not.
+
+That gives a much shorter critical path. The longer "full standalone
+Windows port" is preserved here, but explicitly de-prioritised.
 
 ---
 
-## Phase WIN0 -- x64 assembly fiber context (`fiber_ctx_x64.S`)
+## Critical path for `turmeric-godot` on Windows
 
-**Goal:** make the hand-rolled context switch work under the Windows x64
-calling convention.
+The minimum that has to be true:
 
-### Background
+1. The Turmeric **compiler driver** (`src/main.c`, `src/pkg/...`) builds
+   and runs on `windows-x86_64` under Clang-cl. (Used by the shim's AOT
+   path; also lets users run `tur build --shared` from a Windows shell.)
+2. The Turmeric **runtime / interpreter** (`libturi`, the `src/turi/`
+   tree, plus the elaborator/codegen libs the shim statically links) builds
+   on Windows.
+3. The **generated C** that `tur emit-c` produces compiles under the same
+   Windows toolchain the shim's `tur build --shared` invokes -- i.e. the
+   preamble does not depend on `<pthread.h>`, `<unistd.h>`, GCC atomics,
+   or POSIX-only types in any code path the GDExtension actually triggers.
+4. The **GDExtension shim** in `../turmeric-godot/` builds a Windows `.dll`
+   via SCons targeting `platform=windows arch=x86_64`, statically links
+   `libturi`, and is installed by the existing `.gdextension` manifest.
 
-`fiber_ctx_x64.S` saves and restores callee-saved registers per the
-System V AMD64 ABI:
+That's it for the demo to run. Everything else is "nice to have on Windows
+the way it works on Linux/macOS today" and is gated below.
 
-```
-RBX, RBP, R12, R13, R14, R15, RSP, RIP
-```
+---
 
-The Windows x64 ABI requires saving all of those **plus** the XMM6--XMM15
-floating-point registers (which are callee-saved on Windows but caller-saved on
-System V). `fiber_entry_shim` passes the fiber pointer in `R12` (System V first
-argument scratch register); Windows puts the first argument in `RCX`.
+## Phase WIN0 -- Compiler + runtime cross-compile to Windows
 
-The ARM64 assembly (`fiber_ctx_arm64.S`) uses the architecture-level
-ARM64 ABI which is essentially identical between platforms, but the GNU `as`
-assembler directive syntax is incompatible with the MSVC ARM assembler
-(`armasm64.exe`). Because GitHub Actions does not yet offer free ARM64 Windows
-runners, ARM64 Windows is out of scope for this plan.
+**Goal:** produce `tur.exe` and a static `libturi.lib` (or equivalent) for
+`windows-x86_64` from CI, so the shim can ship them inside the GDExtension.
 
-### Changes
+### Scope
 
-- Add `src/fiber_ctx_x64_win.asm` (MASM syntax) that saves/restores the
-  Windows x64 callee-saved register set including XMM6--XMM15.
-- Update `src/CMakeLists.txt` to select the correct stub based on
-  `CMAKE_SYSTEM_NAME STREQUAL "Windows"` and toolchain.
-- Alternatively, add a `#ifdef _WIN32` branch in `fiber_ctx.h` that uses
-  `fiber_ctx_x64_win.asm`, keeping the POSIX path unchanged.
-- Gate the `FATAL_ERROR` for unsupported architectures to exclude
-  `x86_64`+Windows once the Windows stub exists.
+The Turmeric front-end (parse, elaborate, codegen) and the interpreter
+(`src/turi/`) are mostly portable C. The non-portable bits are:
+
+- `src/main.c`, `src/pkg/...` -- file and path APIs (`opendir`, `stat`,
+  `mkstemp`, `mkdir`, `unlink`, `getcwd`), subprocess (`popen`), and POSIX
+  path separator assumptions.
+- `src/compiler/diag.c` -- `isatty` / ANSI colour handling.
+- Generated code preamble in `src/codegen/emit.c` -- pulls `<pthread.h>`
+  and `__atomic_*` builtins unconditionally; needs guards for the
+  Windows toolchain even when async features are unused at the script
+  level. (If the script uses zero concurrency, the preamble's pthread
+  symbols should not be referenced at link time -- audit and trim.)
+
+### Approach
+
+- Target **Clang-cl** as the Windows toolchain. It accepts GCC builtins
+  (`__atomic_*`, `__builtin_*`), C11 `_Thread_local`, and the same
+  preprocessor surface the existing code already uses. Pure MSVC is **out
+  of scope for v1**; revisit only if Clang-cl proves insufficient.
+- Add `src/platform_fs.h` with `#ifdef _WIN32` aliases:
+  - `mkdir` / `_mkdir`, `unlink` / `_unlink`, `getcwd` / `_getcwd`.
+  - `stat` / `_stat`, `S_ISDIR` via `_S_IFDIR`.
+  - `opendir`/`readdir`/`closedir` -> `FindFirstFileA` /
+    `FindNextFileA` / `FindClose` wrappers with a `DIR*`-shaped struct.
+  - `mkstemp` / `mkstemps` -> `GetTempPathA` + `CreateFileA(CREATE_NEW)`.
+  - `popen` / `pclose` -> `_popen` / `_pclose` (MSVC CRT has these).
+- `pkg.c` constructs paths with `/`. Win32 file APIs accept forward slash,
+  so no rewrite is needed; just keep `/` everywhere and avoid emitting paths
+  to `cmd.exe`.
+- Cross-compile from the existing CI matrix via a `windows-latest` runner
+  with Clang-cl. Add `cmake/toolchain-windows-clang.cmake` and a
+  `configure-windows` target in the Justfile.
+- Link `ws2_32.lib` only when the async subsystem is actually built
+  (see WIN3).
 
 ### Testing
 
-Add a minimal smoke test: create a fiber, switch to it, switch back, confirm
-registers are intact. This can be a C unit test in `tests/turi/`.
+- Build `tur.exe` in CI under `windows-latest`.
+- Run the **codegen-only** subset of `tests/run.sh` -- the fixtures that
+  exercise `emit-c` and `build` without invoking async or POSIX file APIs
+  beyond what `src/platform_fs.h` already wraps. The full suite is gated
+  on WIN3.
+
+### Out of scope (deferred)
+
+- Fiber assembly stub (`fiber_ctx_x64.S` -> `fiber_ctx_x64_win.asm`).
+- IOCP backend (`io_iocp.c`).
+- pthreads shim across `scheduler.c` / `stm.c` / `timer_wheel.c`.
+
+Those land in WIN3 if/when scripts inside Godot start needing them.
 
 ---
 
-## Phase WIN1 -- I/O backend (`io_iocp.c`)
+## Phase WIN1 -- Generated code preamble portability
 
-**Goal:** implement the `tur_io_*` abstraction using Windows I/O Completion
-Ports so the async scheduler works on Windows.
+**Goal:** the C that `tur emit-c` produces compiles under Clang-cl, for
+scripts that do not use async/STM/threads.
 
 ### Background
 
-The I/O layer is already abstracted behind `src/io.h`. `io_epoll.c` and
-`io_kqueue.c` each implement the same interface; adding `io_iocp.c` follows
-the same pattern.
-
-IOCP is a completion-based API (the kernel notifies you when an operation
-*finished*), whereas epoll/kqueue are readiness-based (the kernel notifies you
-when an fd is *ready*). This mismatch affects how socket reads and writes are
-issued, but it does not change the interface that `scheduler.c` sees.
-
-### Key API mapping
-
-| POSIX (epoll/kqueue)         | Windows IOCP equivalent                           |
-|------------------------------|---------------------------------------------------|
-| `epoll_create1()` / `kqueue()` | `CreateIoCompletionPort(INVALID_HANDLE_VALUE, ...)` |
-| `epoll_ctl(ADD)` / `EV_ADD`  | `CreateIoCompletionPort(fd, iocp, key, 0)`        |
-| `epoll_wait()` / `kevent()`  | `GetQueuedCompletionStatusEx()`                   |
-| `pipe()` wakeup              | `PostQueuedCompletionStatus()` for self-wake      |
-| `fcntl(O_NONBLOCK)`          | `ioctlsocket(FIONBIO)` / overlapped I/O           |
-| `read()` / `write()` on pipe | `ReadFile()` / `WriteFile()` (overlapped)         |
-| `close(fd)`                  | `CloseHandle()`                                   |
+The codegen preamble (`src/codegen/emit.c`) currently emits unconditional
+`#include <pthread.h>` and uses `__atomic_*` builtins in the boxed
+Result/Option runtime helpers. Clang-cl handles the builtins fine, but
+`<pthread.h>` is not present.
 
 ### Changes
 
-- Add `src/io_iocp.c` implementing `tur_io_*` via IOCP and overlapped I/O.
-- Sockets on Windows must be created with `WSASocket(..., WSA_FLAG_OVERLAPPED)`
-  and associated with the IOCP handle before use.
-- Add `WSAStartup` / `WSACleanup` calls to the Windows initialisation path
-  (probably in `main.c` or a new `src/platform_win.c`).
-- Update `src/CMakeLists.txt` to select `io_iocp.c` on Windows and link
-  `ws2_32.lib`.
+- Split the preamble into "core" (always emitted -- Result/Option, RC,
+  cons cells, format helpers) and "async-runtime" (emitted only when the
+  program reaches a concurrency primitive). Most `.tur` scripts in
+  `turmeric-godot` will compile with the core preamble only.
+- For the core preamble: replace `pthread.h` with `<stdatomic.h>` (C11)
+  for the few atomic counters used by RC, and gate the rest behind
+  `#ifdef _WIN32` / `#else` blocks where needed.
+- Carry the runtime-feature flag through to the AOT subprocess: the shim
+  invokes `tur build --shared --no-async <script.tur>` for scripts that
+  declare no async usage. (Static analysis of the elaborated AST already
+  knows whether `scheduler.c` / fiber primitives are reachable.)
 
-### Notes
+### Testing
 
-- The `pipe()` wakeup pair used in epoll/kqueue for cross-thread wake-up
-  should be replaced with `PostQueuedCompletionStatus()` on Windows, which is
-  the idiomatic IOCP self-notification mechanism.
-- IOCP completion packets carry a `ULONG_PTR` key; use this to distinguish
-  timer-wheel notifications from I/O completions.
-
----
-
-## Phase WIN2 -- threading primitives
-
-**Goal:** replace all pthreads usage with Win32 equivalents (or a thin
-compatibility shim).
-
-### Affected files
-
-| File | pthreads APIs used |
-|------|--------------------|
-| `scheduler.c` | `pthread_t`, `pthread_create`, `pthread_join`, `pthread_mutex_*`, `pthread_cond_*`, `pthread_once`, `__thread` |
-| `stm.c` | `pthread_mutex_*`, `pthread_cond_*`, thread-local `TUR_THREAD_LOCAL` |
-| `timer_wheel.c` | `pthread_t`, `pthread_create`, `pthread_join`, `pthread_mutex_*`, `nanosleep`, `clock_gettime(CLOCK_MONOTONIC)` |
-
-### Approach options
-
-**Option A -- thin pthread shim (`src/platform_threads.h`):**
-Define `tur_mutex_t`, `tur_cond_t`, `tur_thread_t`, etc. with inline
-implementations for each platform. This keeps the call sites unchanged and
-is easier to audit. Recommended.
-
-**Option B -- pthreads-win32 / winpthread:**
-Use the `pthreads-win32` (LGPL) or MinGW `winpthread` library as a drop-in.
-Saves implementation effort but adds a dependency; LGPL may be a concern.
-
-### Win32 mapping (Option A)
-
-| pthread | Win32 |
-|---------|-------|
-| `pthread_mutex_t` | `CRITICAL_SECTION` |
-| `pthread_mutex_init/lock/unlock/destroy` | `InitializeCriticalSection`, `Enter/LeaveCriticalSection`, `DeleteCriticalSection` |
-| `pthread_cond_t` | `CONDITION_VARIABLE` (Vista+) |
-| `pthread_cond_init/wait/signal/broadcast/destroy` | `InitializeConditionVariable`, `SleepConditionVariableCS`, `WakeConditionVariable`, `WakeAllConditionVariable` |
-| `pthread_t` / `pthread_create` / `pthread_join` | `HANDLE` / `CreateThread` / `WaitForSingleObject` + `CloseHandle` |
-| `pthread_once` | `InitOnceExecuteOnce` |
-| `__thread` / `TUR_THREAD_LOCAL` | `__declspec(thread)` (MSVC) or `_Thread_local` (C11, supported by Clang-cl) |
-| `nanosleep()` | `Sleep()` (millisecond granularity is sufficient) |
-| `clock_gettime(CLOCK_MONOTONIC)` | `QueryPerformanceCounter()` + `QueryPerformanceFrequency()` |
-
-### Atomic operations
-
-`scheduler.c` and `stm.c` use `__atomic_*` GCC/Clang builtins. Clang-cl
-supports these; MSVC does not. For pure MSVC, replace with `Interlocked*`
-intrinsics or wrap in `src/platform_atomic.h`. The simplest path is to require
-Clang-cl on Windows.
+- A new fixture group `tests/fixtures/windows-core/` covering the script
+  shapes the `turmeric-godot` examples actually use (defstruct, defn,
+  inline-C-free arithmetic, cstr formatting). Snapshot the emitted C and
+  confirm it compiles under Clang-cl in CI.
 
 ---
 
-## Phase WIN3 -- compiler driver and package manager
+## Phase WIN2 -- `turmeric-godot` GDExtension Windows build
 
-**Goal:** make `main.c` and `pkg.c` compile and run correctly on Windows.
+**Goal:** build the shim from `../turmeric-godot/` as a Windows `.dll` and
+load it in a stock Godot 4 binary.
 
-### `main.c`
+### Scope (lives mostly in `../turmeric-godot/`, tracked here for visibility)
 
-| POSIX API | Windows replacement |
-|-----------|---------------------|
-| `mkdir()` | `CreateDirectoryA()` or `_mkdir()` (MSVC CRT) |
-| `stat()` / `S_ISDIR()` | `GetFileAttributesA()` with `FILE_ATTRIBUTE_DIRECTORY` check |
-| `opendir()` / `readdir()` / `closedir()` | `FindFirstFileA()` / `FindNextFileA()` / `FindClose()` |
-| `unlink()` | `DeleteFileA()` or `_unlink()` (MSVC CRT) |
-| `mkstemp()` / `mkstemps()` | `GetTempPathA()` + `CreateFileA(CREATE_NEW)` |
-| `popen()` / `pclose()` | `_popen()` / `_pclose()` (MSVC CRT -- available) |
-| `getcwd()` | `_getcwd()` (MSVC CRT) |
-| `WIFEXITED()` / `WEXITSTATUS()` | Not needed; `_popen` child exit codes come from `_pclose()` directly |
-| Path separator `/` | Accept both `/` and `\`; use forward slash throughout (Windows APIs accept it) |
+- Add `windows` arch targets to the `SConstruct` in `turmeric-godot`.
+- Statically link the WIN0/WIN1 `libturi` artifact.
+- Update `turmeric-godot.gdextension` manifest with
+  `windows.debug.x86_64` / `windows.release.x86_64` entries.
+- Verify the shim's "compile script on demand" path -- the subprocess
+  invocation needs to use `tur.exe` (with the `.exe` suffix) and pick up
+  the right toolchain on Windows. `tur build --shared` already produces
+  `lib<name>.so`; on Windows we want `<name>.dll`. Wire that through the
+  shared-library output naming in `src/main.c` (RP0 path: replace `.so`
+  with `.dll`, drop the `lib` prefix, on `_WIN32`).
+- Cache directory: `%APPDATA%/Godot/turmeric-cache/` or just keep using
+  `<project>/.godot/turmeric-cache/` -- the latter works cross-platform
+  since Godot already creates `.godot/`. Prefer the in-project path.
 
-Most of these have direct MSVC CRT equivalents with a leading `_`. A
-`src/platform_fs.h` header with `#ifdef _WIN32` aliases is sufficient.
+### Testing
 
-### `pkg.c`
-
-Same file/path/process APIs as `main.c`. The `run_capture()` helper uses
-`popen` to invoke `git`; `_popen` on Windows works identically for this use
-case.
-
-Directory scanning and `mkdirp` need the same replacements listed above.
-
-Path separators: `pkg.c` constructs paths with `/`. Forward slash is accepted
-by all Win32 file APIs (but not by some shell/cmd constructs), so passing
-paths constructed with `/` to Win32 APIs is safe.
+- Build the `examples/spike` Godot project on a `windows-latest` runner
+  (Godot ships a headless Windows binary). Confirm
+  `[turmeric-godot] initialize(level=...)` appears in the log.
+- Once the paddle-pong demo lands, run it headless in CI as a smoke test.
 
 ---
 
-## Phase WIN4 -- diagnostics and build system
+## Phase WIN3 -- Deferred: full async subsystem on Windows
 
-**Goal:** colour diagnostics, CMake configuration, and CI runner.
+**Goal:** make turmeric-side concurrency (`spawn`, channels, STM, async
+I/O) work inside the Windows runtime.
 
-### `diag.c`
+**Status:** Deferred until a `turmeric-godot` user actually reaches for
+these features. Tracking the original plan's content here so it does not
+get lost.
 
-| POSIX API | Windows replacement |
-|-----------|---------------------|
-| `isatty(fileno(stderr))` | `_isatty(_fileno(stderr))` (MSVC CRT) |
-| ANSI colour codes (`\033[31m`) | Enable VT100 mode via `SetConsoleMode(ENABLE_VIRTUAL_TERMINAL_PROCESSING)` on Windows 10+; fall back to plain text on older Windows |
+This is where the previous plan's WIN0/WIN1/WIN2 phases live:
 
-Add a one-time initialisation call in `diag.c` (guarded by `#ifdef _WIN32`)
-that enables virtual terminal processing. If the call fails, set a flag to
-suppress ANSI codes.
+- **Fiber assembly stub** -- add `src/async/fiber_ctx_x64_win.asm` (MASM
+  syntax) that saves the Windows x64 callee-saved register set including
+  XMM6--XMM15, and uses RCX (not R12) for the first-argument shim.
+- **IOCP I/O backend** -- add `src/async/io_iocp.c` implementing `tur_io_*`
+  via `CreateIoCompletionPort` / `GetQueuedCompletionStatusEx`, with
+  `PostQueuedCompletionStatus` for cross-thread wake-ups (replacing the
+  POSIX pipe pair). Sockets use `WSASocket(..., WSA_FLAG_OVERLAPPED)`.
+  Add `WSAStartup` to runtime init. Link `ws2_32.lib`.
+- **Threading primitives** -- add `src/platform_threads.h` mapping
+  `tur_mutex_t` / `tur_cond_t` / `tur_thread_t` to `CRITICAL_SECTION` /
+  `CONDITION_VARIABLE` / `HANDLE`+`CreateThread`. `pthread_once` ->
+  `InitOnceExecuteOnce`. `clock_gettime(CLOCK_MONOTONIC)` ->
+  `QueryPerformanceCounter`. Affects `src/async/scheduler.c`,
+  `src/runtime/stm.c`, `src/async/timer_wheel.c`.
+- **Atomics** -- Clang-cl supports `__atomic_*` builtins, so no shim is
+  needed. (Pure MSVC would require an `Interlocked*` wrapper layer; out
+  of scope.)
 
-### CMake
+ARM64 Windows stays out of scope -- GitHub Actions still does not offer
+free ARM64 Windows runners, and `armasm64.exe` syntax diverges from the
+GNU `as` syntax used in `fiber_ctx_arm64.S`.
 
-- Add `cmake/toolchain-windows-clang.cmake` (or document the recommended
-  `clang-cl` invocation) for cross-compile or native Windows builds.
-- Update the `TUR_EXAMPLES` guard so Raylib is not fetched on Windows builds
-  by default (Raylib itself supports Windows but adds complexity).
-- Link `ws2_32` and `ntdll` on Windows (required by IOCP and
-  `QueryPerformanceCounter`).
+When this phase lands, the codegen split from WIN1 collapses: the
+async-runtime preamble becomes a real Windows runtime instead of a
+linker error.
 
-### Justfile
+---
 
-Add a `configure-windows` target:
+## Phase WIN4 -- Deferred: standalone CLI polish
 
-```
-configure-windows:
-    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-windows-clang.cmake \
-          -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-```
+**Goal:** standalone `tur.exe` is a first-class developer experience on
+Windows (not just a build subprocess invoked by the shim).
 
-### GitHub Actions CI
+**Status:** Deferred. The shim drives all editor-time `tur` invocations
+in v1; users who want a standalone Windows CLI workflow can wait.
 
-Add `windows-latest` to the CI matrix once WIN0--WIN3 are complete. Use the
-`clang-cl` toolchain (available on the `windows-latest` runner without
-additional installation). Add it to the release matrix with target name
-`windows-x86_64`.
+Content:
 
-```yaml
-- target: windows-x86_64
-  os: windows-latest
-```
-
-The release packaging step on Windows should produce a `.zip` instead of
-`.tar.gz` (or produce both).
+- **Coloured diagnostics** -- `src/compiler/diag.c` calls
+  `_isatty(_fileno(stderr))` on Windows, and enables VT100 via
+  `SetConsoleMode(ENABLE_VIRTUAL_TERMINAL_PROCESSING)` on Windows 10+.
+  Falls back to plain text if the call fails.
+- **REPL** -- `libedit` is not available on Windows; the REPL falls back
+  to plain `fgets` (already the path taken when `libedit` is absent).
+- **Release packaging** -- add `windows-x86_64` to the release matrix in
+  `.github/workflows/release.yml`, producing a `.zip` artifact.
+- **Examples / Raylib** -- skip `TUR_EXAMPLES` on Windows builds by
+  default. Raylib itself supports Windows, but the demos belong to
+  whichever spice repo ships them, not to this plan.
 
 ---
 
 ## Out of scope
 
-- **ARM64 Windows** -- no free GitHub Actions runner; Microsoft x64 is the
-  only practical target for now.
-- **MinGW / MSYS2** -- MinGW provides a POSIX shim layer and may work with
-  fewer changes, but it produces binaries with a MinGW runtime dependency.
-  Not targeted; contributions welcome.
-- **Windows Subsystem for Linux (WSL)** -- WSL already works today (it runs
-  the Linux build). No changes needed.
-- **WASM** -- unaffected; already builds separately via Emscripten.
+- **ARM64 Windows.** No free GitHub Actions runner; not pursuing.
+- **MinGW / MSYS2.** Clang-cl is the chosen toolchain.
+- **Windows Subsystem for Linux (WSL).** WSL runs the Linux build today;
+  no changes needed.
+- **WASM.** Builds separately via Emscripten; unaffected.
+- **In-engine REPL on Windows.** Not in `turmeric-godot` v1 on any
+  platform; see the Godot binding plan's non-goals.
+- **iOS / Android / web export of Godot projects using Turmeric scripts.**
+  Desktop only.
 
 ---
 
 ## Open questions
 
-1. **Clang-cl vs. MSVC:** Clang-cl supports `__atomic_*` builtins and C11
-   `_Thread_local`, reducing the porting surface significantly. Is pure MSVC
-   support a goal, or is Clang-cl sufficient?
-2. **Fiber stack guard pages:** The current implementation does not set up
-   guard pages. Windows requires `VirtualAlloc` with `PAGE_GUARD` for stack
-   overflow detection. Worth adding as part of WIN0?
-3. **`libedit` on Windows:** `libedit` is not available on Windows. The REPL
-   will fall back to plain `fgets` (already the path taken when `libedit` is
-   absent). Acceptable for a first release.
+1. **Codegen split granularity.** WIN1 proposes splitting the preamble
+   into "core" and "async-runtime." How fine-grained does this need to
+   be? A first pass that gates only `<pthread.h>` and the timer-wheel
+   symbols may be enough; the RC atomics already work under Clang-cl.
+2. **Shim toolchain detection.** When `tur build --shared` runs inside
+   the GDExtension on Windows, which C compiler does it invoke? Clang-cl
+   if present, fall back to MSVC `cl.exe`, or bundle a known-good
+   toolchain with the GDExtension? Bundling adds size but removes a
+   support burden.
+3. **Script `.dll` caching across Godot versions.** The cache key today
+   is the script path + content hash. On Windows the path is
+   case-insensitive; normalise paths before hashing to avoid duplicate
+   cache entries.
+4. **AOT vs interpreter default on Windows.** macOS/Linux defaults to AOT
+   for steady-state speed. Windows users without a system compiler will
+   hit a confusing error on first Play. Consider defaulting to
+   interpreter on Windows until WIN2's toolchain story is settled.
