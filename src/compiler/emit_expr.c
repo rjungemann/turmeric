@@ -3067,10 +3067,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * emits `ctor_AltF__bool`, matching the by-value layout the
                  * consumer reads instead of the int64-carrier `ctor_AltF`. */
                 Type rty = emit_resolve_type(ctx, e->type);
-                char *suffix = (rty.kind == TY_APP)
+                /* CONV-S1: only trust the receiver-type suffix when the app is
+                 * fully concrete.  A lowered record-ADT constructor body
+                 * (`none`'s `(Option false (default-of A))`) carries an erased
+                 * element (`(Option <NULL-def struct>)`), for which
+                 * type_adt_app_ctor_suffix yields the wrong `__struct` carrier
+                 * suffix; fall back to the active spec's result family so the
+                 * `none__spec__tur_adt_Option__int` body emits `ctor_Option__int`. */
+                char *suffix = (rty.kind == TY_APP && type_app_is_concrete_adt(&rty))
                     ? type_adt_app_ctor_suffix(rty) : NULL;
                 if (!suffix)
                     suffix = emit_hkt_spec_ctor_suffix(ctx, e);
+                if (!suffix && rty.kind == TY_APP)
+                    suffix = type_adt_app_ctor_suffix(rty);  /* last resort: prior behaviour */
                 char **arg_strs = (char **)malloc(e->as.call_.n_args * sizeof(char *));
                 if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
