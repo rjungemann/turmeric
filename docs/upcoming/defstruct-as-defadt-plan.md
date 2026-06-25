@@ -357,6 +357,28 @@ runtime *usage* seam, below.
    monomorph value is by-value, so the ABI bridge must land in the SAME change for
    `(eq? (some 5) (some 5))` to compile.  Deferred together -- modifying the hot
    selection path in isolation buys no end-to-end win and risks the green suite.
+
+   **DONE (2026-06-25), consuming direction.** Both landed: (a) the selection
+   discrimination now normalizes ADT-app receivers and rejects cross-constructor
+   matches (`elab_method_call`, the KIND_ARROW arm) AND `typeclass_env_lookup
+   _instance` (typeclass.c) gained the symmetric ADT-head discrimination; (b) the
+   by-value-app -> carrier bridge fires at the dispatch arg (`emit_expr.c`, the
+   per-arg coercion loop) -- a by-value `TY_APP` monomorph arg passed to a class-
+   tyvar / bare-parametric-ADT param of an un-specialized instance method is boxed
+   via `emit_carrier_bridge`.  `(eq? (some 5) (some 5))` and hand-written
+   parametric record-ADT `Eq`/`Functor` instances now compile and run; suite
+   stays 1840/0.  **Still open -- the PRODUCING direction (seam 1b below).**
+1b. **By-value HKT construction inside a specialized instance body (NEXT).**
+   `(fmap (some 5) f)` still fails at `cc` inside
+   `__inst_Functor_fmap_T__spec__tur_adt_Option__int_...`: (i) the `container`
+   param, declared by-value `tur_adt_Option__int`, is read with a *carrier* deref
+   `(*(tur_adt_Option__int *)(intptr_t)(container))`; (ii) the `(none)` arm emits
+   `none()` returning the int64 carrier into a by-value `tur_adt_Option__int`
+   result slot.  This is the by-value-HKT result-construction path
+   (`construct_recovered_byvalue` / the `some`/`none` by-value spec clones,
+   `emit_module.c`) which was built for the *struct* Option and does not yet fire
+   for the lowered record-ADT Option.  Distinct from the consuming bridge above;
+   it is the same family as seam 2 (`Option`/`Result` construction codegen).
 2. **`Option`/`Result` dedicated codegen.** These carry hand-written runtime
    layout (`tur_option_t`, `tur_result_box_t`, `tur_is_some`/`tur_opt_value`,
    `some`/`none`/`ok`/`err`) that assumes the struct/carrier representation;
@@ -373,8 +395,10 @@ runtime *usage* seam, below.
 
 `bash tests/run.sh` is **1840 passed, 0 failed** with the gate widened to
 parametric (non-`:heap`) structs; the flag-on `conv-defstruct-*` canaries pass.
-The flag is still opt-in.  The suite does not yet exercise runtime typeclass-
-method usage on a lowered parametric stdlib type (e.g. `(eq? (some 5) (some 5))`),
-which is the first thing seam 1 must make compile.  Graduation order from here:
-seam 1 (selection + ABI bridge, together) -> seam 3 (`:heap` ADT ABI) -> seam 4
+The flag is still opt-in.  Consuming a lowered parametric type through a
+typeclass method now works end-to-end (`(eq? (some 5) (some 5))` compiles and
+runs; seam 1 consuming-direction DONE).  The suite does not yet exercise this, so
+it neither regressed nor newly covers it.  Graduation order from here: seam 1b
+(by-value HKT construction in instance bodies, e.g. `fmap`) -> seam 2
+(`Option`/`Result` construction codegen) -> seam 3 (`:heap` ADT ABI) -> seam 4
 (validate + remove gate + retire `StructDef` + regen).
