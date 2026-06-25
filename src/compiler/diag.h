@@ -385,6 +385,36 @@ void diag_lsp_end(void);
  * Call after diag_lsp_begin + compilation to fix up temp file paths. */
 void diag_lsp_remap_path(const char *from_path, const char *to_path);
 
+/* ---------------------------------------------------------------------------
+ * Diagnostic sink (embed API -- libturi-per-embed-env-and-peripherals Gap 3)
+ *
+ * When a sink is installed, every diagnostic is delivered to it as a
+ * structured single-line record BEFORE it would otherwise be rendered to
+ * stderr, and the stderr render is suppressed.  This lets a libturi embedder
+ * (e.g. the Godot binding) route each script's compile errors to its own
+ * output channel attributed to that script, instead of a global stderr
+ * firehose.  Pass fn == NULL to remove the sink and restore stderr rendering.
+ *
+ * `code` is the diagnostic's "TUR-E0001"-style string, or "" when none.
+ * `file` is the registered source path, or "" when unknown.  `line`/`col_*`
+ * are 1-based (0 when unavailable).  Multi-part diagnostics (notes,
+ * suggestions, secondary spans) deliver the primary record first, then one
+ * record per subordinate part at its own level.
+ *
+ * The sink coexists with the speculative-elaboration capture frames (a
+ * captured error is still swallowed, not delivered).  LSP-collection and JSON
+ * modes take precedence over the sink when active. */
+typedef void (*DiagSinkFn)(DiagLevel level, const char *code, const char *file,
+                           uint32_t line, uint32_t col_start, uint32_t col_end,
+                           const char *message, void *ud);
+
+/* Install (or, with NULL, clear) the diagnostic sink. */
+void diag_set_sink(DiagSinkFn fn, void *ud);
+
+/* Return the currently-installed sink (NULL if none) and, when out_ud is
+ * non-NULL, its user-data pointer.  Lets a caller save/restore the sink. */
+DiagSinkFn diag_get_sink(void **out_ud);
+
 /* Phase HKT-P5: Look up a long-form explanation for a diagnostic code.
  * If an explanation exists, writes it to `out` and returns true.
  * If no explanation is registered for `code`, returns false without writing.

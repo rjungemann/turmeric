@@ -353,6 +353,17 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_eval_sandbox"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# libturi-per-embed-env-and-peripherals: Gaps 1-4 embed-API harness. Runs with
+# leak detection FORCED ON -- the create/reset/free cycles plus the owned
+# module_base_dir copy must leave zero turi-attributable live allocations.
+add_test(
+  NAME tur_embed_peripherals
+  COMMAND "${CMAKE_BINARY_DIR}/tur_embed_peripherals"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_embed_peripherals PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=1"
+)
 # turi-env-owned-value-arena-pool-plan: env-teardown leak harness. Unlike the
 # other turi targets (which default detect_leaks=0 because the interpreter
 # never frees its process-lifetime closures), this one runs with leak
@@ -507,7 +518,7 @@ set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
                      tur_eval_async_basic tur_eval_async_composition
                      tur_eval_async_effects tur_eval_async_timeout
                      tur_eval_async_cancel tur_eval_async_error tur_eval_async_io
-                     tur_eval_stm tur_env_teardown
+                     tur_eval_stm tur_env_teardown tur_embed_peripherals
   PROPERTIES DEPENDS tur
 )
 

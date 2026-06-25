@@ -15,8 +15,13 @@
  * Prior definitions in `env` remain visible.  New top-level definitions
  * (defn, def) are stored back into `env` for subsequent calls.
  *
- * On parse/elaboration error the diagnostic is already emitted to stderr;
- * the returned value has tag TURI_ERROR with a short description.
+ * On parse/elaboration error the diagnostic is emitted to stderr (or to this
+ * env's sink, if one was installed via turi_env_set_diag_sink); the returned
+ * value has tag TURI_ERROR with a short description.
+ *
+ * If `src` uses `(import ...)`, set the import search root FIRST with
+ * turi_env_set_module_base_dir(env, dir) -- otherwise imports resolve relative
+ * to the process cwd, which for an embedder is rarely the intended directory.
  *
  * The returned value is valid until `turi_env_free(env)`.  Closures hold
  * internal pointers into env-owned arenas and must not outlive env. */
@@ -208,6 +213,70 @@ void turi_env_register_native(TuriEnv *env, const char *name,
 
 /* Register eval-layer native builtins (struct-aware predicates, etc.). */
 void turi_eval_register_builtins(TuriEnv *env);
+
+/* ---------------------------------------------------------------------------
+ * Per-embed-env peripherals (libturi-per-embed-env-and-peripherals)
+ *
+ * Helpers for embedders that create one TuriEnv per attached script and need
+ * the embed surface to scale beyond a single shared env.
+ * --------------------------------------------------------------------------- */
+
+/* Gap 1: a single native (name + fn + user data) to install on a new env. */
+typedef struct TuriNativeSpec {
+    const char  *name;
+    TuriNativeFn fn;
+    void        *ud;
+} TuriNativeSpec;
+
+/* Gap 1: register a native that every SUBSEQUENT turi_env_new / turi_env_new_*
+ * call installs automatically, so an embedder shipping a fixed set of natives
+ * seeds them once instead of re-registering on every per-script env.  `name` is
+ * copied; re-registering the same name replaces the prior spec.  Calling this
+ * does not retroactively affect envs that already exist. */
+void turi_register_default_native(const char *name, TuriNativeFn fn, void *ud);
+
+/* Gap 1: drop every default-native registration. */
+void turi_clear_default_natives(void);
+
+/* Gap 1: like turi_env_new, but also installs the given natives table on the
+ * fresh env (after the default-natives registry).  A NULL/0 table is the same
+ * as turi_env_new. */
+TuriEnv *turi_env_new_with_natives(const TuriNativeSpec *specs, size_t n);
+
+/* Gap 2: reset an env to a from-scratch interpreter state -- clear all globals
+ * that turi_eval installed (user defns/defs), the accumulated source, the
+ * deferred/handler/return/throw/abort control state, and any in-flight catch
+ * boundary -- while KEEPING every registered native (the builtins installed by
+ * turi_env_new and the embedder's own natives) alive.  This is what a script
+ * `_reload` wants: re-run the new source over a clean slate without tearing the
+ * env down and re-registering natives (which turi_env_free would force).
+ *
+ * Note: any non-native definitions a prelude installed (e.g. interpreted stdlib
+ * defns loaded via turi_eval_file) are dropped too -- re-eval the prelude after
+ * a reset.  Arena memory from prior evals is reclaimed at turi_env_free, not
+ * here; reset is a logical reset of bindings + control state, not a heap purge.
+ * Call between top-level eval cycles, not from inside an async/handler frame. */
+void turi_env_reset(TuriEnv *env);
+
+/* Gap 3: per-env diagnostic sink.  When set, this env's parse/elaboration
+ * diagnostics are delivered to `cb` (as structured single-line records) instead
+ * of stderr for the duration of each turi_eval / turi_eval_typed / turi_eval_file
+ * call on this env.  `level` matches DiagLevel (0=error,1=warning,2=note,3=help);
+ * `code` is the "TUR-E0001"-style string or "" ; `file` is the source path or "";
+ * `line`/`col` are 1-based (0 when unavailable).  Pass cb == NULL to clear.
+ * TuriDiagSinkFn is declared in turi/env.h (where the env field lives). */
+void turi_env_set_diag_sink(TuriEnv *env, TuriDiagSinkFn cb, void *ud);
+
+/* Gap 4: set the base directory used to resolve `(import ...)` paths.  Must be
+ * called before turi_eval on source that imports modules, otherwise imports
+ * resolve relative to the process cwd (rarely what an embedder wants).  `path`
+ * is copied; pass NULL to restore the default (".").  This is the supported way
+ * to configure env->module_base_dir. */
+void turi_env_set_module_base_dir(TuriEnv *env, const char *path);
+
+/* Internal: true when v is a native-closure binding (used by turi_env_reset to
+ * tell embedder/builtin natives from turi_eval-created defns). */
+bool turi_value_is_native(TuriValue v);
 
 /* Phase R2: raise a catchable interpreter panic (recoverable by catch-unwind,
  * with the standard message + double-panic guard).  Used by native functions

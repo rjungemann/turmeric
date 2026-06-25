@@ -137,6 +137,13 @@ void turi_env_register_native(TuriEnv *env, const char *name,
     turi_env_set(env, name, turi_closure(cl));
 }
 
+/* libturi-per-embed-env-and-peripherals Gap 2: true when v is a native-closure
+ * binding, so turi_env_reset can distinguish embedder/builtin natives (kept)
+ * from turi_eval-created defns/defs (dropped). */
+bool turi_value_is_native(TuriValue v) {
+    return v.tag == TURI_CLOSURE && v.as_closure && v.as_closure->native != NULL;
+}
+
 /* Phase TI2: native overrides for stdlib/gen.tur's inline-C helpers, which
  * cannot be interpreted directly.  They operate on the ptr<void> ABI produced
  * by EX_GEN_NEXT: a TURI_INT boxing either NULL (0) or a pointer to an int64_t
@@ -7974,13 +7981,40 @@ static void extract_type_tag(Type t, char *buf, size_t cap) {
 static TuriValue turi_eval_impl(TuriEnv *env, const char *src,
                                  char *out_type_tag, size_t tag_cap);
 
+/* Gap 3: forward an env's diagnostics from the process-global diag sink to the
+ * env-specific TuriDiagSinkFn (ud carries the TuriEnv*). */
+static void turi_diag_sink_trampoline(DiagLevel level, const char *code,
+                                      const char *file, uint32_t line,
+                                      uint32_t col_start, uint32_t col_end,
+                                      const char *message, void *ud) {
+    TuriEnv *env = (TuriEnv *)ud;
+    if (env && env->diag_sink)
+        env->diag_sink(env, (int)level, code, file, line, col_start, col_end,
+                       message, env->diag_sink_ud);
+}
+
+/* Run turi_eval_impl with this env's diagnostic sink (if any) installed into
+ * the global diag layer, restoring the previous sink afterward.  Centralises
+ * the save/install/restore so every public eval entry shares one code path. */
+static TuriValue turi_eval_with_sink(TuriEnv *env, const char *src,
+                                     char *out_type_tag, size_t tag_cap) {
+    if (!env || !env->diag_sink)
+        return turi_eval_impl(env, src, out_type_tag, tag_cap);
+    void      *prev_ud = NULL;
+    DiagSinkFn prev    = diag_get_sink(&prev_ud);
+    diag_set_sink(turi_diag_sink_trampoline, env);
+    TuriValue r = turi_eval_impl(env, src, out_type_tag, tag_cap);
+    diag_set_sink(prev, prev_ud);
+    return r;
+}
+
 TuriValue turi_eval(TuriEnv *env, const char *src) {
-    return turi_eval_impl(env, src, NULL, 0);
+    return turi_eval_with_sink(env, src, NULL, 0);
 }
 
 TuriValue turi_eval_typed(TuriEnv *env, const char *src,
                            char *out_type_tag, size_t tag_cap) {
-    return turi_eval_impl(env, src, out_type_tag, tag_cap);
+    return turi_eval_with_sink(env, src, out_type_tag, tag_cap);
 }
 
 static TuriValue turi_eval_impl(TuriEnv *env, const char *src,

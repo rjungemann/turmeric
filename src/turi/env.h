@@ -93,6 +93,15 @@ typedef uint32_t TuriCaps;
 #define TURI_CAP_ALL      (~(TuriCaps)0)
 #define TURI_CAP_NONE     ((TuriCaps)0)
 
+/* Per-env diagnostic sink callback (libturi-per-embed-env-and-peripherals
+ * Gap 3).  Declared here because the function-pointer field lives on TuriEnv;
+ * the public setter turi_env_set_diag_sink is in turi/eval.h.  `level` matches
+ * DiagLevel; see eval.h for the field contract. */
+typedef void (*TuriDiagSinkFn)(struct TuriEnv *env, int level, const char *code,
+                               const char *file, uint32_t line,
+                               uint32_t col_start, uint32_t col_end,
+                               const char *message, void *ud);
+
 /* A name→value binding in the global environment. */
 typedef struct EnvBinding {
     const char       *name;   /* points into sym_arena (permanent) */
@@ -234,6 +243,16 @@ typedef struct TuriEnv {
      * internal to turi/eval.c). A plain NULL check on the eval hot path keeps
      * non-debugger interp runs free of any per-node cost. */
     void       *debugger;
+    /* libturi-per-embed-env-and-peripherals Gap 3: per-env diagnostic sink.
+     * When non-NULL, turi_eval installs it into the process-global diag sink
+     * for the duration of the call so this env's diagnostics route here instead
+     * of stderr.  Set via turi_env_set_diag_sink. */
+    TuriDiagSinkFn diag_sink;
+    void          *diag_sink_ud;
+    /* Gap 4: true when module_base_dir was set via turi_env_set_module_base_dir
+     * (heap-owned, freed by turi_env_free).  Direct field assignments by the CLI
+     * leave this false and retain their existing borrowed-pointer semantics. */
+    bool        module_base_dir_owned;
 } TuriEnv;
 
 /* Create a new unrestricted environment. */
@@ -241,6 +260,9 @@ TuriEnv *turi_env_new(void);
 
 /* Create a sandboxed environment (I/O and FFI builtins disabled). */
 TuriEnv *turi_env_new_sandboxed(void);
+
+/* turi_env_new_with_natives is declared in turi/eval.h (it depends on
+ * TuriNativeSpec / TuriNativeFn). */
 
 /* Free all resources owned by env. Any closures captured from it become
  * dangling after this call. */

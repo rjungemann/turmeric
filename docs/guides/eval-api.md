@@ -250,6 +250,89 @@ static TuriValue native_fail(TuriEnv *env, TuriValue *args,
 
 ---
 
+## Per-embed-env peripherals
+
+These helpers exist for embedders that create **one `TuriEnv` per attached
+script** (so that two scripts cannot clobber each other's globals -- e.g. each
+exporting `_ready`). They keep the embed surface from becoming N copies of the
+same boilerplate. See the report `libturi-per-embed-env-and-peripherals` for
+the motivating Godot use case.
+
+### Default natives -- seed once, install everywhere
+
+```c
+void turi_register_default_native(const char *name, TuriNativeFn fn, void *ud);
+void turi_clear_default_natives(void);
+TuriEnv *turi_env_new_with_natives(const TuriNativeSpec *specs, size_t n);
+```
+
+`turi_register_default_native` records a native that **every subsequent**
+`turi_env_new` / `turi_env_new_sandboxed` / `turi_env_new_with_natives` call
+installs automatically. An embedder shipping ten natives registers them once at
+startup instead of re-registering on every per-script env (and cannot forget
+one). The name is copied; re-registering a name replaces the prior entry. It
+does not retroactively affect already-created envs.
+
+`turi_env_new_with_natives` is `turi_env_new` plus an explicit table installed
+on top of the default-natives registry:
+
+```c
+TuriNativeSpec specs[] = {
+    { "godot-println", native_println, lang_singleton },
+    { "godot-emit",    native_emit,    lang_singleton },
+};
+TuriEnv *env = turi_env_new_with_natives(specs, 2);
+```
+
+### `void turi_env_reset(TuriEnv *env)` -- reload without teardown
+
+Resets an env to a from-scratch interpreter state: clears all globals that
+`turi_eval` installed (user `defn`/`def`), the accumulated source, and the
+deferred / handler / return / throw / abort / catch control state -- while
+**keeping every registered native alive** (the builtins and the embedder's
+own natives). This is what a script `_reload` wants: re-run the new source over
+a clean slate without `turi_env_free` + re-registering natives.
+
+Notes: non-native definitions a prelude installed (interpreted stdlib `defn`s
+loaded via `turi_eval_file`) are dropped too -- re-eval the prelude after a
+reset. Arena memory from prior evals is reclaimed at `turi_env_free`, not here.
+Call between top-level eval cycles, not from inside an async/handler frame.
+
+### `void turi_env_set_diag_sink(TuriEnv *env, TuriDiagSinkFn cb, void *ud)`
+
+Routes this env's parse/elaboration diagnostics to `cb` instead of stderr for
+the duration of each `turi_eval` call on the env. Lets an editor integration
+attribute each script's compile errors to that script in its own Output panel.
+
+```c
+static void on_diag(TuriEnv *env, int level, const char *code,
+                    const char *file, uint32_t line, uint32_t col_start,
+                    uint32_t col_end, const char *message, void *ud) {
+    /* level: 0=error 1=warning 2=note 3=help; code is "TUR-E0001" or "". */
+    editor_output_push((Script *)ud, level, file, line, message);
+}
+
+turi_env_set_diag_sink(env, on_diag, script);
+```
+
+Pass `cb == NULL` to clear. LSP-collection and JSON diagnostic modes take
+precedence over the sink when active.
+
+### `void turi_env_set_module_base_dir(TuriEnv *env, const char *path)`
+
+Sets the base directory used to resolve `(import ...)` paths. **Call this
+before `turi_eval`** on source that imports modules; otherwise imports resolve
+relative to the process cwd (for a packaged app, wherever the binary was
+launched -- almost never what the user means). `path` is copied; pass `NULL` to
+restore the default (`"."`).
+
+```c
+turi_env_set_module_base_dir(env, "res://scripts");
+turi_eval(env, "(import std/list)\n...");
+```
+
+---
+
 ## Async API
 
 The async scheduler is cooperative and single-threaded.  `(async ...)` spawns

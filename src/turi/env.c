@@ -140,6 +140,61 @@ static EnvBinding *ht_find(const EnvHashTable *ht, const char *name) {
 }
 
 /* -------------------------------------------------------------------------
+ * Default-natives registry (libturi-per-embed-env-and-peripherals Gap 1)
+ *
+ * An embedder seeds a fixed set of natives once; every subsequently-created
+ * env installs them automatically, so a host with N per-script envs does not
+ * re-register the same table N times (and cannot forget one).
+ * ---------------------------------------------------------------------- */
+
+typedef struct DefaultNative {
+    char        *name;   /* owned (strdup) */
+    TuriNativeFn fn;
+    void        *ud;
+} DefaultNative;
+
+static DefaultNative *g_default_natives;
+static size_t         g_default_natives_count;
+static size_t         g_default_natives_cap;
+
+void turi_register_default_native(const char *name, TuriNativeFn fn, void *ud) {
+    if (!name || !fn) return;
+    for (size_t i = 0; i < g_default_natives_count; i++) {
+        if (strcmp(g_default_natives[i].name, name) == 0) {
+            g_default_natives[i].fn = fn;
+            g_default_natives[i].ud = ud;
+            return;
+        }
+    }
+    if (g_default_natives_count == g_default_natives_cap) {
+        size_t nc = g_default_natives_cap ? g_default_natives_cap * 2u : 8u;
+        DefaultNative *grown =
+            (DefaultNative *)realloc(g_default_natives, nc * sizeof(DefaultNative));
+        if (!grown) return;
+        g_default_natives     = grown;
+        g_default_natives_cap = nc;
+    }
+    DefaultNative *e = &g_default_natives[g_default_natives_count++];
+    e->name = strdup(name);
+    e->fn   = fn;
+    e->ud   = ud;
+}
+
+void turi_clear_default_natives(void) {
+    for (size_t i = 0; i < g_default_natives_count; i++) free(g_default_natives[i].name);
+    free(g_default_natives);
+    g_default_natives       = NULL;
+    g_default_natives_count = 0;
+    g_default_natives_cap   = 0;
+}
+
+static void install_default_natives(TuriEnv *env) {
+    for (size_t i = 0; i < g_default_natives_count; i++)
+        turi_env_register_native(env, g_default_natives[i].name,
+                                 g_default_natives[i].fn, g_default_natives[i].ud);
+}
+
+/* -------------------------------------------------------------------------
  * TuriEnv lifecycle
  * ---------------------------------------------------------------------- */
 
@@ -170,6 +225,19 @@ TuriEnv *turi_env_new(void) {
     env->reader_macros = (ReaderMacroRegistry *)arena_alloc(
         &env->sym_arena, sizeof(ReaderMacroRegistry));
     reader_macros_init(env->reader_macros, &env->sym_arena);
+    /* Gap 1: install any embedder-seeded default natives last, so they can
+     * override a builtin of the same name if the embedder intends to. */
+    install_default_natives(env);
+    return env;
+}
+
+TuriEnv *turi_env_new_with_natives(const TuriNativeSpec *specs, size_t n) {
+    TuriEnv *env = turi_env_new();
+    if (!env) return NULL;
+    for (size_t i = 0; specs && i < n; i++) {
+        if (specs[i].name && specs[i].fn)
+            turi_env_register_native(env, specs[i].name, specs[i].fn, specs[i].ud);
+    }
     return env;
 }
 
@@ -245,10 +313,94 @@ void turi_env_free(TuriEnv *env) {
 
     free(env->globals_ht.slots);
 
+    /* Gap 4: free a module base dir we own (set via the setter). A directly
+     * assigned (borrowed) path leaves module_base_dir_owned false. */
+    if (env->module_base_dir_owned) {
+        free((void *)env->module_base_dir);
+        env->module_base_dir = NULL;
+    }
+
     buf_free(&env->src_acc);
     symtab_free(&env->st);
     arena_free(&env->sym_arena);
     free(env);
+}
+
+/* -------------------------------------------------------------------------
+ * Per-embed-env peripherals (libturi-per-embed-env-and-peripherals)
+ * ---------------------------------------------------------------------- */
+
+void turi_env_reset(TuriEnv *env) {
+    if (!env) return;
+
+    /* Drop accumulated REPL/eval source so the next turi_eval starts fresh. */
+    env->src_acc.len    = 0;
+    env->prior_toplevel = 0;
+
+    /* Rebuild the globals list, keeping only native-closure bindings (the
+     * builtins from turi_env_new plus the embedder's natives); free every
+     * binding turi_eval installed (user defns/defs). The kept EnvBinding nodes
+     * are reused as-is; their value/name pointers stay valid. */
+    EnvBinding *keep = NULL;
+    EnvBinding *b    = env->globals;
+    while (b) {
+        EnvBinding *next = b->next;
+        if (turi_value_is_native(b->value)) {
+            b->next = keep;
+            keep    = b;
+        } else {
+            free(b);
+        }
+        b = next;
+    }
+    env->globals = keep;
+
+    /* Rebuild the hash table over the surviving bindings. */
+    free(env->globals_ht.slots);
+    ht_init(&env->globals_ht);
+    for (EnvBinding *k = keep; k; k = k->next) ht_insert(&env->globals_ht, k);
+
+    /* Clear transient interpreter control / unwind state. */
+    env->returning    = false; env->return_value = turi_nil();
+    env->throwing     = false; env->throw_value  = turi_nil();
+    env->aborting     = false; env->abort_value  = turi_nil();
+    env->abort_target = NULL;  env->abort_prompt_kind = 0;
+    env->panicking    = false;
+    env->in_no_unwind = false;
+    env->handler_stack = NULL;
+    env->defer_stack   = NULL;
+    env->eval_depth    = 0;
+    env->catch_jmp     = NULL;
+    env->last_tc_env   = NULL;
+    env->defining_mod    = NULL;
+    env->current_module  = NULL;
+    env->reader_type   = READER_TURMERIC;
+
+    /* Restore step fuel to the configured limit (0 == unlimited). */
+    env->step_fuel = env->step_fuel_limit;
+}
+
+void turi_env_set_diag_sink(TuriEnv *env, TuriDiagSinkFn cb, void *ud) {
+    if (!env) return;
+    env->diag_sink    = cb;
+    env->diag_sink_ud = ud;
+}
+
+void turi_env_set_module_base_dir(TuriEnv *env, const char *path) {
+    if (!env) return;
+    if (env->module_base_dir_owned) {
+        free((void *)env->module_base_dir);
+        env->module_base_dir       = NULL;
+        env->module_base_dir_owned = false;
+    }
+    if (path) {
+        char *copy = strdup(path);
+        if (!copy) return;  /* leave base dir unset on OOM */
+        env->module_base_dir       = copy;
+        env->module_base_dir_owned = true;
+    } else {
+        env->module_base_dir = NULL;  /* default (".") */
+    }
 }
 
 /* -------------------------------------------------------------------------
