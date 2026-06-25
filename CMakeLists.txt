@@ -104,6 +104,19 @@ add_test(
   COMMAND bash tests/run-phase4-gdb.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# debugger Phase 5 (rich type display in native debuggers): N1 confirms the
+# deterministic by-value carrier type names emit-c produces (Option__int,
+# Result, ...) round-trip into the binary's DWARF; N2 confirms the gdb
+# pretty-printers in tools/debug/turmeric_gdb.py render a Result parameter as
+# `(ok 14)` and a returned Option as `(some 42)` rather than the raw C carrier.
+# Skips the gdb half cleanly when gdb is absent. The fixture carries
+# requires.dedicated-runner so tests/run.sh leaves it to this target. See
+# docs/upcoming/debugger-plan.md and docs/upcoming/debugger-native-types-plan.md.
+add_test(
+  NAME tur_phase5_gdb
+  COMMAND bash tests/run-phase5-gdb.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # HttpdConn single-definition invariant: no inline-C block may reintroduce a
 # local redeclaration of the consolidated httpd connection structs.
 add_test(

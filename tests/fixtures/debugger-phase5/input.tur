@@ -1,0 +1,38 @@
+;; debugger Phase 5 acceptance fixture -- rich type display in native debuggers.
+;;
+;; `probe` receives a by-value Result as a parameter and returns a by-value
+;; Option.  Built with `tur --debug build` (-g -Og + `#line` directives) and
+;; with the gdb pretty-printers in tools/debug/turmeric_gdb.py loaded, a native
+;; debugger renders both in Turmeric shape rather than the C carrier:
+;;
+;;   (gdb) break probe... ; run
+;;   r = (ok 14)                          <- Result{is_ok,ok_val,err_val}
+;;   (gdb) finish
+;;   Value returned is (some 42)          <- Option__int{is_some,value}
+;;
+;; Why this shape: under -Og (which a self-contained single-file build needs so
+;; the optimizer can DCE preloaded stdlib defns that reference libturi-only
+;; symbols -- see Phase 4), the reliably-materialized inspection points for a
+;; by-value aggregate are a memory-passed parameter (Result is 24 bytes -> spill
+;; slot, visible even unused) and a function return value (`finish`).  `o`'s
+;; payload comes from `seed` (a volatile inline-C value) so the optimizer cannot
+;; constant-fold the option away.  Driven by tests/run-phase5-gdb.sh.
+;;
+;; See docs/upcoming/debugger-plan.md (Phase 5) and
+;; docs/upcoming/debugger-native-types-plan.md.
+
+(defn seed [] : int
+  ```c
+  volatile int64_t v = 42;
+  return v;
+  ```)
+
+(defn parse [b : int] : Result
+  (if (= b 0) (err "zero") (ok (* b 2))))
+
+(defn probe [A] [o : (Option A) r : Result] : (Option A)
+  o)
+
+(defn main [] : int
+  (let [res (probe (some (seed)) (parse 7))]
+    (.value res)))

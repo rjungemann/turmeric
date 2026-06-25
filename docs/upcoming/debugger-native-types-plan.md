@@ -76,6 +76,17 @@ fallback for cases where the C compiler mangles names unpredictably.
 
 ### N1 -- Codegen: stable, discoverable type names
 
+**Status: landed.** Audit + progress write-up in
+[debugger-phase5-native-types-progress.md](./debugger-phase5-native-types-progress.md).
+The default by-value monomorphization already emits the deterministic
+`<TypeName>__<args>` scheme (`Option__int`, `Result`, `Cons__int`, ...), so no
+codegen change was needed to create the names; the audit pinned them and
+documented which value categories are still erased to the bare `int64_t`
+carrier (opaques, ADTs, standalone `none`). The fixture is
+`tests/fixtures/debugger-phase5/` and the gate is the `tur_phase5_gdb` ctest
+(`tests/run-phase5-gdb.sh`), which asserts the names appear in the binary's
+DWARF (`ptype Option__int` / `ptype Result`) as well as in the emitted C.
+
 **Outcome:** every Turmeric type that the debugger should pretty-print
 emits a C type whose name a pretty-printer can match on.
 
@@ -95,6 +106,17 @@ name discoverable from compiled binary symbols / DWARF.
 if necessary.
 
 ### N2 -- gdb pretty-printers for the core types
+
+**Status: core landed.** `tools/debug/turmeric_gdb.py` ships `OptionPrinter`,
+`ResultPrinter`, and a best-effort `ConsPrinter`, auto-registered via a
+`RegexpCollectionPrettyPrinter` keyed on the N1 type names. gdb renders
+`Option` as `(some 42)` and `Result` as `(ok 14)`; structs are left to gdb's
+default aggregate display (they already read well) so the printers do not
+shadow `Vec`/`Map`/user structs. Verified by the `tur_phase5_gdb` ctest.
+Loaded explicitly for now (`gdb -ex "source tools/debug/turmeric_gdb.py"`);
+the auto-load sidecar + opaque/ADT value materialization are the remaining N2
+polish (tracked alongside N3). See
+[debugger-phase5-native-types-progress.md](./debugger-phase5-native-types-progress.md).
 
 **Outcome:** `tur build --debug foo.tur && gdb ./build/bin/foo` shows
 options, results, opaques, cons lists, structs, and cstr in Turmeric shape.
