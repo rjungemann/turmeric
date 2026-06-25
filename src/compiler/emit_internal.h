@@ -29,6 +29,8 @@ extern bool g_lint_panic;
 extern bool g_panic_trace;
 /* Phase C2: --no-contracts (controls the TUR_CONTRACTS_ENABLED preamble define) */
 extern bool g_no_contracts;
+/* Debugger Phase 4: --debug emits `#line N "file.tur"` source-map directives. */
+extern bool g_emit_debug_lines;
 /* CPS3: selective CPS lowering path */
 extern bool g_cps_path;
 /* Phase P3: HAMT lowering - track if HAMT is needed */
@@ -275,6 +277,13 @@ typedef struct EmitCtx {
     /* cps-transform-plan (a): the whole program, so the serial env codec can
      * scan for Serializable instances when marshaling a struct/nominal env. */
     const Expr  *program_root;
+    /* Debugger Phase 4 (--debug): the (file_id, line) of the last `#line`
+     * directive emitted into the current output stream, so consecutive
+     * statements on the same source line do not each re-emit one.  line == 0
+     * means "none emitted yet"; emit_line_reset() restores that at each
+     * function-body boundary so the first statement always re-anchors. */
+    uint32_t     dbg_last_line;
+    uint16_t     dbg_last_file_id;
 } EmitCtx;
 
 /* Phase 4 v1: Defer thunk tracking */
@@ -450,6 +459,17 @@ FnDef *emit_concrete_inst_method_fndef(EmitCtx *ctx, const TypeClass *tc,
  * already use the concrete body type.  Returns the concrete struct Type to emit
  * in place of the carrier, or a TY_UNKNOWN type when no override applies. */
 Type emit_carrier_return_override(const FnDef *fd);
+/* Debugger Phase 4 (--debug): emit a `#line N "path/to/file.tur"` directive
+ * into `out` for `span`, so the C compiler maps the following generated code
+ * back to the Turmeric source for gdb/lldb.  A no-op unless g_emit_debug_lines
+ * is set, the span carries a line, and its file_id resolves to a path.  Skips
+ * a redundant directive when (file_id, line) is unchanged from the last one
+ * emitted into this stream (tracked on ctx).  Guarantees the directive starts
+ * at column 0 (prepends a newline if mid-line). */
+void emit_line_directive(EmitCtx *ctx, Buf *out, Span span);
+/* Reset the line-directive dedup tracker so the next emit_line_directive call
+ * always emits.  Called at each function-body boundary. */
+void emit_line_reset(EmitCtx *ctx);
 void indent_buf(Buf *b, int n);
 bool expr_is_divergent(const Expr *e);
 bool expr_contains_return_or_throw(const Expr *e);

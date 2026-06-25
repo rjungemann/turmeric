@@ -108,6 +108,10 @@ void emit_set_field_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
 
 
 void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
+    /* Debugger Phase 4 (--debug): anchor each statement to its source line so
+     * native stepping advances line-by-line through the `.tur` file.  No-op
+     * unless --debug; deduped against the previous directive on this stream. */
+    emit_line_directive(ctx, body, e->span);
     /* Run e for side effects, discard value. */
     switch (e->kind) {
         case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:

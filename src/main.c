@@ -1802,6 +1802,16 @@ static int cmd_build(const char *input, const char *out_path,
     if (!cc_flags || !*cc_flags) {
         if (wasm_target)
             cc_flags = "-O2 -std=c99 -Wall -fno-strict-aliasing -s WASM=1";
+        else if (g_emit_debug_lines)
+            /* Debugger Phase 4 (--debug): -g for DWARF, -Og for a debugging-
+             * friendly optimization level that still maps cleanly onto the
+             * `#line`-anchored `.tur` source.  -O0 is NOT used: a self-contained
+             * single-file build relies on the optimizer's dead-code elimination
+             * to drop preloaded stdlib defns (e.g. contract handlers) that
+             * reference libturi-only symbols this build does not link; -O0 keeps
+             * them and the link fails.  -Og keeps that DCE while preserving
+             * line-accurate stepping. */
+            cc_flags = "-g -Og -std=c99 -Wall -fno-strict-aliasing";
         else
             cc_flags = "-O2 -std=c99 -Wall -fno-strict-aliasing";
     }
@@ -11491,6 +11501,9 @@ static int usage_build(void) {
         "                    (defaults to `<out>.manifest`). Lists each export\n"
         "                    as `<mod>/<defn> -> <mangled> :: (:args) -> :ret`.\n"
         "  --target wasm     compile to WebAssembly via emcc (requires Emscripten)\n"
+        "  --debug           emit `#line` directives mapping the generated C back\n"
+        "                    to `.tur` source, and compile single-file builds with\n"
+        "                    `-g -O0` so gdb/lldb step through Turmeric source.\n"
         "\n"
         "Try 'tur --help' for global options.\n");
     return 0;
@@ -11753,6 +11766,17 @@ static bool parse_no_abi_cache(int argc, char **argv) {
 static bool parse_panic_abort(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--panic-abort") == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Debugger Phase 4: --debug emits `#line` source-map directives into the
+ * generated C and builds single-file targets with `-g -O0`. */
+static bool parse_debug_build(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--debug") == 0) {
             return true;
         }
     }
@@ -12071,6 +12095,8 @@ int main(int argc, char **argv) {
     g_lint_panic = parse_lint_panic(argc, argv);
     /* Phase C2: --no-contracts strips contract checks (release builds). */
     g_no_contracts = parse_no_contracts(argc, argv);
+    /* Debugger Phase 4: --debug emits `#line` directives + builds with -g -O0. */
+    g_emit_debug_lines = parse_debug_build(argc, argv);
     /* F4: --Werror=deprecated promotes ^deprecated warnings to errors */
     g_werror_deprecated = parse_werror_deprecated(argc, argv);
     /* Phase C: --Werror=inline-c-narrow-params promotes narrow-param warnings */
@@ -12137,6 +12163,14 @@ int main(int argc, char **argv) {
             i--;
         } else if (strcmp(argv[i], "--no-contracts") == 0) {
             /* Phase C2: already parsed into g_no_contracts; remove from argv. */
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--debug") == 0) {
+            /* Debugger Phase 4: already parsed into g_emit_debug_lines; strip
+             * so the per-command flag parsers (build/emit-c) don't reject it. */
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

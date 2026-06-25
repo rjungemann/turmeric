@@ -24,6 +24,12 @@ extern bool g_lint_panic;
 /* Phase C2: --no-contracts (strip contract checks at elaboration) */
 extern bool g_no_contracts;
 
+/* Debugger Phase 4: --debug emits `#line N "file.tur"` directives into the
+ * generated C (so gdb/lldb step through .tur source) and switches the single-
+ * file `tur build` C-compile to `-g -O0`.  Off by default so ordinary builds
+ * and `emit-c` snapshots are unchanged. */
+extern bool g_emit_debug_lines;
+
 /* Phase B5: backtrack depth + clone plan dump */
 extern int64_t g_backtrack_depth;
 extern bool g_dump_clone_plan;

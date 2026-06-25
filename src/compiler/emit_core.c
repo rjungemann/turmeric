@@ -374,6 +374,41 @@ void indent_buf(Buf *b, int n) {
     for (int i = 0; i < n; i++) buf_putc(b, ' ');
 }
 
+/* Debugger Phase 4 (--debug): see emit_internal.h. */
+void emit_line_reset(EmitCtx *ctx) {
+    ctx->dbg_last_line = 0;
+    ctx->dbg_last_file_id = 0;
+}
+
+void emit_line_directive(EmitCtx *ctx, Buf *out, Span span) {
+    if (!g_emit_debug_lines) return;
+    if (span.line == 0) return;                 /* SPAN_UNKNOWN / synthetic node */
+    const char *path = diag_file_path(span.file_id);
+    if (!path) return;                          /* file_id not registered */
+    if (ctx->dbg_last_line == span.line &&
+        ctx->dbg_last_file_id == span.file_id)
+        return;                                 /* same source line as previous */
+    /* A `#` preprocessor directive must begin a line.  Most emit sites leave
+     * the stream at column 0 (statements end in "\n"), but guard against a
+     * mid-line position so the directive never lands inside a statement. */
+    if (out->len > 0 && out->data[out->len - 1] != '\n')
+        buf_putc(out, '\n');
+    /* Escape backslashes and double quotes so a path with either stays a valid
+     * C string literal (Windows-style separators, unusual filenames). */
+    buf_puts(out, "#line ");
+    char num[16];
+    snprintf(num, sizeof(num), "%u", span.line);
+    buf_puts(out, num);
+    buf_puts(out, " \"");
+    for (const char *p = path; *p; p++) {
+        if (*p == '\\' || *p == '"') buf_putc(out, '\\');
+        buf_putc(out, *p);
+    }
+    buf_puts(out, "\"\n");
+    ctx->dbg_last_line = span.line;
+    ctx->dbg_last_file_id = span.file_id;
+}
+
 /* Phase R1: Helper to check if an expression is fully divergent (never
  * produces a value).  Used by emit_let_value to decide whether to assign
  * the body's emitted value to the let's result tmp: a divergent body

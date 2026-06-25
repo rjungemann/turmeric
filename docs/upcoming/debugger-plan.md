@@ -134,6 +134,20 @@ mechanical once Phase 2 exposes the right primitives.
 
 ### Phase 4 -- Source maps for emit-C (native gdb/lldb minimal)
 
+**Status: landed.** Write-up in
+[debugger-native-sourcemaps-phase4.md](./debugger-native-sourcemaps-phase4.md).
+`tur build --debug` threads `#line N "file.tur"` directives into the generated C
+(via `emit_line_directive` at the function-entry and per-statement chokepoints,
+gated on `g_emit_debug_lines` so default codegen / `emit-c` snapshots are
+unchanged) and compiles single-file targets with `-g -Og`, so gdb/lldb step
+through `.tur` source and a crash backtrace names turmeric symbols at turmeric
+locations. The `tur_phase4_gdb` ctest target (`tests/run-phase4-gdb.sh`) asserts
+both the gated `#line` emission and a turmeric-source gdb backtrace of a
+deliberate crash over `tests/fixtures/debugger-phase4/`; it skips the gdb half
+cleanly when gdb is absent. (`-Og`, not `-O0`: a self-contained single-file
+build relies on optimizer DCE to drop preloaded stdlib defns that reference
+libturi-only symbols it does not link -- see the write-up.)
+
 **Outcome:** binaries built via `tur build` carry `#line` directives in
 their generated C, so gdb/lldb step through `.tur` source files (showing
 turmeric lines, not the C carrier) and stack traces print turmeric symbols

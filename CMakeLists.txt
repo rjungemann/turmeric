@@ -91,6 +91,19 @@ add_test(
   COMMAND bash tests/run-dap.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# debugger Phase 4: native source maps for emit-C. `tur --debug` threads
+# `#line N "file.tur"` directives into the generated C (gated off by default so
+# emit-c snapshots are unchanged) and compiles single-file builds with -g -Og,
+# so gdb/lldb step through `.tur` source and backtraces name turmeric frames.
+# The harness asserts both the gated #line emission and a turmeric-source gdb
+# backtrace of a deliberate crash; it skips the gdb half cleanly when gdb is
+# absent. The fixture carries requires.dedicated-runner so tests/run.sh leaves
+# it to this target. See docs/upcoming/debugger-plan.md.
+add_test(
+  NAME tur_phase4_gdb
+  COMMAND bash tests/run-phase4-gdb.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # HttpdConn single-definition invariant: no inline-C block may reintroduce a
 # local redeclaration of the consolidated httpd connection structs.
 add_test(

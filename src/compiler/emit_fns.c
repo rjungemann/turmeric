@@ -816,6 +816,13 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
     buf_puts(file, ") {\n");
 
+    /* Debugger Phase 4 (--debug): anchor the function body to the defn's source
+     * line so a gdb/lldb frame for this function resolves to its `.tur` site.
+     * Reset the dedup tracker first: this body is a fresh statement stream
+     * (possibly into a temp buffer), so the first statement must re-anchor. */
+    emit_line_reset(ctx);
+    emit_line_directive(ctx, file, e->span);
+
     /* M2b RETIRED M2a inference (2026-06-13).
      *
      * Background: M2a (generalized from Prereq 6) used shape inference to
