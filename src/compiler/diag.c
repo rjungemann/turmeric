@@ -204,6 +204,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0037_INLINE_C_NARROW_PARAM:      return "TUR-W0037";
         case TUR_W0038_LINT_PANIC_SITE:            return "TUR-W0038";
         case TUR_W0039_METHOD_DEFN_CLASH:          return "TUR-W0039";
+        case TUR_W0040_EVAL_UNKNOWN_CALL_RUNTIME_DISPATCH: return "TUR-W0040";
         /* LT1: Linear type errors */
         case TUR_E0100_LINEAR_DROPPED:             return "TUR-E0100";
         case TUR_E0101_LINEAR_USE_AFTER_CONSUME:   return "TUR-E0101";
@@ -309,6 +310,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0034") == 0) return TUR_W0034_ROW_VAR_GENERALISED;
     /* U6: inline-C outside Unsafe annotation */
     if (strcmp(s, "TUR-W0036") == 0) return TUR_W0036_INLINE_C_MISSING_UNSAFE;
+    if (strcmp(s, "TUR-W0040") == 0) return TUR_W0040_EVAL_UNKNOWN_CALL_RUNTIME_DISPATCH;
     /* LT1: Linear type errors */
     if (strcmp(s, "TUR-E0100") == 0) return TUR_E0100_LINEAR_DROPPED;
     if (strcmp(s, "TUR-E0101") == 0) return TUR_E0101_LINEAR_USE_AFTER_CONSUME;

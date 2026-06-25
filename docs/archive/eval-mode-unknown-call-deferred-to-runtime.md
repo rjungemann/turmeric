@@ -1,6 +1,12 @@
 # Eval-Mode Elaboration Defers Unknown-Call Diagnostics to Runtime
 
-> **Status:** Reported, not yet fixed
+> **Status:** RESOLVED (2026-06-25) -- fix direction A landed. Eval-mode
+> elaboration now emits **TUR-W0040** ("unknown name '<x>'; will
+> runtime-dispatch -- typo?") when an unknown call head is neither bound
+> nor present in the typed-native registry, so embedders consuming the
+> diag sink surface the likely typo at load time. The runtime-dispatch
+> fallback is preserved, so legitimate late-bound TuriEnv natives still
+> work. See the resolution note at the bottom.
 > **Severity:** Medium -- embedder scripts can ship undefined-name typos
 > that pass `_validate` and only fail when the offending line runs.
 > Compile-mode (`tur check`/`tur build`) is unaffected; UCH1 already
@@ -181,3 +187,37 @@ engine where many branches are exercised lazily.
 the existing typed-native registry, and lets embedders surface the
 warning in their _validate UI. **B** if a real consumer needs the
 stricter mode -- can be added in the same PR or follow-up.
+
+---
+
+## Resolution (2026-06-25)
+
+Fix direction **A** landed.
+
+- **New diagnostic code:** `TUR_W0040_EVAL_UNKNOWN_CALL_RUNTIME_DISPATCH`
+  (`TUR-W0040`), declared in `src/compiler/diag.h` and mapped to/from its
+  string in `src/compiler/diag.c`.
+- **Emit site:** `src/compiler/elab_call.c`, the
+  `g_interpret_mode && !separate_compilation` unknown-call-head fallback.
+  The fallback already consulted `tur_native_sig_lookup` to recover a
+  registered native's return type; that lookup (plus the two hard-coded
+  `error?` / `error-message` entries) now also drives a
+  `native_registered` flag. When the name is **not** registered, the
+  elaborator emits `diag_emit_with_code(DIAG_WARNING, head->span,
+  TUR_W0040_..., "unknown name '%s'; will runtime-dispatch -- typo?")`
+  before building the runtime-dispatch call exactly as before. Names that
+  resolve through ordinary binding lookup (e.g. a `defn` later in the same
+  source) never reach this fallback, so they don't trip the warning.
+- **Behavior preserved:** compile mode still hard-errors via UCH1; the
+  eval-mode runtime-dispatch fallback is unchanged, so embedder natives
+  registered with `turi_env_register_native` / the typed registration APIs
+  keep working.
+- **Regression test:** `tests/turi/eval-unknown-call-warn.{tur,sh}`,
+  registered as the `tur_eval_unknown_call_warn` ctest target, asserts the
+  `TUR-W0040` warning (with symbol name + "runtime-dispatch" text) appears
+  on stderr under `--interpret`.
+
+Fix direction **B** (embedder opt-in hard-error via
+`turi_env_set_strict_unknown_calls`) was **not** implemented -- it remains
+available as a strictly-stronger follow-up if a real consumer needs to
+fail-closed.

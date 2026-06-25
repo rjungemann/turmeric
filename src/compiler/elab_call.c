@@ -2392,12 +2392,14 @@ Expr *elab_call(Elab *e, Form *call) {
              * docs/archive/untyped-native-registration-blocks-curated-facades.md. */
             Type dispatch_result = TYPE_INT;
             const char *nm = name->name;
+            bool native_registered = false;
             if (nm) {
-                if      (strcmp(nm, "error?") == 0)        dispatch_result = TYPE_BOOL;
-                else if (strcmp(nm, "error-message") == 0) dispatch_result = TYPE_CSTR;
+                if      (strcmp(nm, "error?") == 0)        { dispatch_result = TYPE_BOOL; native_registered = true; }
+                else if (strcmp(nm, "error-message") == 0) { dispatch_result = TYPE_CSTR; native_registered = true; }
                 else {
                     TurNativeRetType nrt;
                     if (tur_native_sig_lookup(nm, &nrt)) {
+                        native_registered = true;
                         switch (nrt) {
                             case TUR_NRT_FLOAT: dispatch_result = TYPE_FLOAT;    break;
                             case TUR_NRT_BOOL:  dispatch_result = TYPE_BOOL;     break;
@@ -2409,6 +2411,21 @@ Expr *elab_call(Elab *e, Form *call) {
                         }
                     }
                 }
+            }
+            /* The runtime-dispatch fallback is correct for natives registered
+             * after elaboration (async scheduler functions, embedder natives via
+             * turi_env_register_native).  But it also silently swallows typos: an
+             * undefined name typed :int here passes `_validate` and only fails at
+             * runtime when the call actually runs (and only on the branches that
+             * run).  When the name is neither bound nor in the typed-native
+             * registry, warn so embedders consuming the diag sink surface it at
+             * load time.  See
+             * docs/archive/eval-mode-unknown-call-deferred-to-runtime.md. */
+            if (!native_registered) {
+                diag_emit_with_code(DIAG_WARNING, head->span,
+                                    TUR_W0040_EVAL_UNKNOWN_CALL_RUNTIME_DISPATCH,
+                                    "unknown name '%s'; will runtime-dispatch -- typo?",
+                                    nm ? nm : "<null>");
             }
             Binding *dyn_b = binding_new(e, name, dispatch_result, false, false, head->span);
             Expr *var_expr = expr_new(e->arena, EX_VAR, dispatch_result, head->span);
