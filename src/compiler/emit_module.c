@@ -4467,7 +4467,14 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
     buf_printf(out, " %s(", spec->clone_name);
     for (uint8_t i = 0; i < spec->n_args; i++) {
         if (i > 0) buf_puts(out, ", ");
-        if (spec->fn->params[i]->is_poly_fn) {
+        /* B4 slice 2: a wide by-value ADT closure param crosses as an int64 box
+         * pointer -- mirror emit_fns.c's needs_box_load signature.  spec args are
+         * already concrete, so type_is_wide_byval_adt reads them directly. */
+        if (spec->fn->closure && !spec->fn->params[i]->is_poly_fn &&
+            spec->fn->param_types[i].kind != TY_FN &&
+            type_is_wide_byval_adt(spec->arg_types[i])) {
+            buf_puts(out, "int64_t");
+        } else if (spec->fn->params[i]->is_poly_fn) {
             buf_puts(out, "tur_poly_fn_t");
         } else if (spec->fn->param_types[i].kind == TY_FN
                    && spec->fn->param_types[i].as.fn.cfnptr) {
@@ -4590,7 +4597,15 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
         buf_printf(out, " %s(", fn_name);
         for (uint8_t j = 0; j < fd->n_params; j++) {
             if (j > 0) buf_puts(out, ", ");
-            if (fd->params[j]->is_poly_fn) {
+            /* B4 slice 2: a wide by-value ADT closure param crosses as an int64
+             * box pointer -- mirror emit_fns.c's needs_box_load signature. */
+            Type _b4_pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j])
+                ? *e->type.as.fn.arg_full_types[j] : fd->param_types[j];
+            if (fd->closure && !fd->params[j]->is_poly_fn &&
+                fd->param_types[j].kind != TY_FN &&
+                type_is_wide_byval_adt(emit_resolve_type(ctx, _b4_pty))) {
+                buf_puts(out, "int64_t");
+            } else if (fd->params[j]->is_poly_fn) {
                 buf_puts(out, "tur_poly_fn_t");
             } else if (fd->param_types[j].kind == TY_FN
                        && fd->param_types[j].as.fn.cfnptr) {

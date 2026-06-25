@@ -741,8 +741,39 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             }
         }
     }
+    /* B4 (byvalue-recursive-carrier, slice 2): the inverse of box-spill.  A
+     * CLOSURE thunk whose parameter is a WIDE (>8 byte) by-value ADT receives it
+     * across the fat-closure boundary as an int64 heap-box POINTER (the value
+     * cannot ride the uniform int64 carrier slot directly).  Emit that param as
+     * int64_t under a `__tur_b4box_<orig>` alias and deref+copy it back into the
+     * by-value aggregate `<orig>` at body entry.  The box is owned by the
+     * enclosing carrier node (allocated in its monomorph ctor), so the thunk
+     * only borrows it -- no free here.  Restricted to closures: a top-level fn
+     * taking a wide by-value ADT uses the ordinary pass-by-ptr ABI, not the fat
+     * carrier. */
+    bool needs_box_load[16];
+    for (uint8_t i = 0; i < 16; i++) needs_box_load[i] = false;
+    if (fd->closure) {
+        for (uint8_t i = 0; i < fd->n_params && i < 16; i++) {
+            if (fd->params[i]->is_poly_fn ||
+                fd->param_types[i].kind == TY_FN) continue;
+            Type pty = use_abi_spec
+                ? ctx->current_abi_specialization->arg_types[i]
+                : ((e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[i])
+                       ? *e->type.as.fn.arg_full_types[i] : fd->param_types[i]);
+            if (type_is_wide_byval_adt(emit_resolve_type(ctx, pty)))
+                needs_box_load[i] = true;
+        }
+    }
     for (uint8_t i = 0; i < fd->n_params; i++) {
         if (i > 0) buf_puts(file, ", ");
+        /* B4 slice 2: wide by-value ADT closure param arrives as int64 box ptr. */
+        if (i < 16 && needs_box_load[i]) {
+            const char *pn = raw_name_for_binding(fd->params[i]);
+            buf_printf(file, "int64_t __tur_b4box_%s", pn);
+            free((void*)pn);
+            continue;
+        }
         /* Phase HRT1: poly fn params use tur_poly_fn_t in signature */
         if (fd->params[i]->is_poly_fn) {
             buf_puts(file, "tur_poly_fn_t");
@@ -822,6 +853,24 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * (possibly into a temp buffer), so the first statement must re-anchor. */
     emit_line_reset(ctx);
     emit_line_directive(ctx, file, e->span);
+
+    /* B4 (byvalue-recursive-carrier, slice 2): materialize each wide by-value
+     * ADT closure param from its int64 heap box at entry -- deref + copy into
+     * the by-value aggregate `<orig>` the body expects.  Borrow only: the box is
+     * owned by the carrier node that produced it, so no free here. */
+    for (uint8_t i = 0; i < fd->n_params && i < 16; i++) {
+        if (!needs_box_load[i]) continue;
+        Type pty = use_abi_spec
+            ? ctx->current_abi_specialization->arg_types[i]
+            : ((e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[i])
+                   ? *e->type.as.fn.arg_full_types[i] : fd->param_types[i]);
+        const char *ctype = emit_type_c_name(ctx, pty);
+        const char *pn = raw_name_for_binding(fd->params[i]);
+        indent_buf(file, ctx->indent + 4);
+        buf_printf(file, "%s %s = *(%s *)(intptr_t)__tur_b4box_%s;\n",
+                   ctype, pn, ctype, pn);
+        free((void*)pn);
+    }
 
     /* M2b RETIRED M2a inference (2026-06-13).
      *
