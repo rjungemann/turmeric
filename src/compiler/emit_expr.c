@@ -5360,6 +5360,16 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 const char *cty = type_c_name(e->type);
                 bool adt_through_rc =
                     e->as.get_field_.struct_expr->type.kind == TY_RC;
+                /* Parametric-by-value: the receiver may be a concrete flat-product
+                 * ADT-app monomorph (`(Box int)`, TY_APP) rather than a
+                 * non-parametric TY_ADT.  Both are by-value aggregates, but
+                 * adt_is_byvalue_product() takes an AdtDef* and rejects a
+                 * parametric def (n_type_params > 0).  Decide by the receiver's
+                 * TYPE via the app-aware predicate so a parametric monomorph reads
+                 * its field directly off the aggregate instead of falling through
+                 * to the (wrong) carrier-pointer deref. */
+                bool adt_recv_byvalue =
+                    emit_type_is_byvalue_adt(ctx, e->as.get_field_.struct_expr->type);
                 Buf hb; buf_init(&hb);
                 if (adt_through_rc) {
                     /* CONV-S1 (slice 2): rc<ADT> receiver.  rc/of mallocs
@@ -5377,10 +5387,11 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                    "(%s)((tur_adt_%s *)(intptr_t)(*(int64_t *)((RcControlBlock *)(%s))->value))->as.%s._%u",
                                    cty, adt_mn, sv, mctor, e->as.get_field_.field_idx);
                     }
-                } else if (adt_is_byvalue_product(adt)) {
+                } else if (adt_recv_byvalue) {
                     /* CONV-S1: by-value receiver -- read the field directly off the
                      * aggregate, no carrier pointer deref.  Gated by
-                     * adt_is_byvalue_product (LIVE for leaf products as of B3).
+                     * emit_type_is_byvalue_adt (app-aware: leaf products as of B3,
+                     * and concrete parametric monomorphs).
                      * Slice 3: a large by-value ADT param arrives pass-by-pointer
                      * (`const tur_adt_X *`), so a pbp receiver reads through `->`. */
                     const Expr *adt_recv = e->as.get_field_.struct_expr;

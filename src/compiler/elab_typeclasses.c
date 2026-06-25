@@ -2183,15 +2183,37 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                  * system can distinguish concrete structs (kind *)
                                  * from opaque type constructors (kind * -> *). */
                                 Binding *sb = scope_lookup(e->scope, kw);
+                                /* The instance head names a TYPE.  scope_lookup is
+                                 * value-preferring, and for a single-variant record
+                                 * ADT whose constructor shares the type's name --
+                                 * every lowered `defstruct`, and a hand-written
+                                 * `(defdata T [A] (T [...]))` -- it returns the
+                                 * constructor FUNCTION (TY_FN), shadowing the type.
+                                 * Consult the authoritative type-namespace lookup
+                                 * to recover the ADT/struct type in that case.  We
+                                 * still prefer a struct binding from scope_lookup
+                                 * first, preserving the GADT/struct coexistence
+                                 * (MF4) struct-preference. */
+                                Type *head_ty = NULL;
+                                if (!(sb && sb->type.kind == TY_STRUCT &&
+                                      sb->type.as.struct_.def))
+                                    head_ty = elab_lookup_type_by_name(e, kw);
                                 if (sb && sb->type.kind == TY_STRUCT && sb->type.as.struct_.def) {
                                     type_args[i] = sb->type;
+                                } else if (head_ty && head_ty->kind == TY_ADT &&
+                                           head_ty->as.adt_.def) {
+                                    /* A defdata/defgadt (or lowered defstruct) type
+                                     * constructor used as an instance head, e.g.
+                                     * (definstance Functor [Either] ...).  Preserve
+                                     * the ADT type so the orphan-instance check can
+                                     * credit the owning module, and carry the symbol
+                                     * for method-name mangling. */
+                                    type_args[i] = *head_ty;
+                                    type_arg_syms[i] = kw;
+                                } else if (head_ty && head_ty->kind == TY_STRUCT &&
+                                           head_ty->as.struct_.def) {
+                                    type_args[i] = *head_ty;
                                 } else if (sb && sb->type.kind == TY_ADT && sb->type.as.adt_.def) {
-                                    /* A defdata/defgadt type constructor used as an
-                                     * instance head, e.g. (definstance Functor [Either] ...).
-                                     * Preserve the ADT type so the orphan-instance check
-                                     * can credit the module that defines it, and carry the
-                                     * symbol for method-name mangling so codegen never
-                                     * dereferences the struct_ union on a TY_ADT. */
                                     type_args[i] = sb->type;
                                     type_arg_syms[i] = kw;
                                 } else {
@@ -5077,6 +5099,23 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                             Type ftype = ctor->fields[i].full_type
                                 ? *ctor->fields[i].full_type
                                 : type_from_kind(ctor->fields[i].kind);
+                            /* Parametric record ADT: substitute the receiver's
+                             * concrete type args for the field's TY_TYVAR names so
+                             * `(.val (Box 42))` reads as int, not the bare tyvar A
+                             * (which fails overload resolution in untyped contexts
+                             * like `(println (.val b))`).  Mirrors the match
+                             * field-bind substitution (elab_structs.c) and the
+                             * struct path's elab_struct_field_use_type. */
+                            if (ctor->fields[i].full_type &&
+                                    adt->n_type_params > 0 &&
+                                    field_owner_type->kind == TY_APP) {
+                                Type *type_args = (Type *)arena_alloc(e->arena,
+                                    adt->n_type_params * sizeof(Type));
+                                if (elab_adt_type_extract_args(field_owner_type,
+                                                               adt, type_args))
+                                    ftype = adt_field_instantiate_type(e, adt,
+                                        ctor->fields[i].full_type, type_args);
+                            }
                             Expr *out = expr_new(e->arena, EX_GET_FIELD, ftype,
                                                  call->span);
                             out->as.get_field_.struct_expr = obj;
