@@ -343,6 +343,20 @@ runtime *usage* seam, below.
    the `MutableMap` instance.  This is the deep core of the remaining work and
    lives in the typeclass dispatch/spec-selection machinery
    (`find_matched_abi_spec` / instance resolution), not just `emit_carrier_bridge`.
+
+   **Located (2026-06-25).** The mis-selection is in `elab_method_call`
+   (`elab_typeclasses.c`): the `KIND_STAR` arm (~5604-5605) compares
+   `inst->type_args[0].kind == obj->type.kind` with NO TY_APP-head normalization,
+   so an ADT-app receiver `(Option int)` (kind `TY_APP`, head `TY_ADT`) fails to
+   match the `TY_ADT`-headed `Eq [Option]` instance and instead matches the first
+   `TY_APP`-kinded instance; the `KIND_ARROW` arm (~5644-5652) normalizes a TY_APP
+   head only for `TY_STRUCT`, not `TY_ADT`. Both arms need the ADT-head
+   normalization + `adt_def` discrimination that `typeclass_env_lookup_instance`
+   (typeclass.c) just gained.  **But selection alone is insufficient:** the
+   selected parametric instance method is uniform-carrier (`int64_t`) while the
+   monomorph value is by-value, so the ABI bridge must land in the SAME change for
+   `(eq? (some 5) (some 5))` to compile.  Deferred together -- modifying the hot
+   selection path in isolation buys no end-to-end win and risks the green suite.
 2. **`Option`/`Result` dedicated codegen.** These carry hand-written runtime
    layout (`tur_option_t`, `tur_result_box_t`, `tur_is_some`/`tur_opt_value`,
    `some`/`none`/`ok`/`err`) that assumes the struct/carrier representation;
@@ -354,3 +368,13 @@ runtime *usage* seam, below.
 4. **Validation across every autoloaded parametric stdlib type**, then delete the
    gate + `g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]` row, retire the
    `StructDef` surface path, and regenerate snapshots.
+
+### Current state (suite green)
+
+`bash tests/run.sh` is **1840 passed, 0 failed** with the gate widened to
+parametric (non-`:heap`) structs; the flag-on `conv-defstruct-*` canaries pass.
+The flag is still opt-in.  The suite does not yet exercise runtime typeclass-
+method usage on a lowered parametric stdlib type (e.g. `(eq? (some 5) (some 5))`),
+which is the first thing seam 1 must make compile.  Graduation order from here:
+seam 1 (selection + ABI bridge, together) -> seam 3 (`:heap` ADT ABI) -> seam 4
+(validate + remove gate + retire `StructDef` + regen).
