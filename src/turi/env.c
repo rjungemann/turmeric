@@ -3,6 +3,7 @@
 #include "fiber.h"
 #include "reader_macros.h"  /* RM Q#5: session-scoped reader-macro registry */
 #include "spice_loader.h"   /* RP3: env owns the loaded TurSpiceImage */
+#include "../runtime/globals.h"  /* g_interpret_mode (libturi-embed-interpret-mode-flag) */
 
 #include <limits.h>
 #include <stdlib.h>
@@ -143,6 +144,11 @@ static EnvBinding *ht_find(const EnvHashTable *ht, const char *name) {
  * ---------------------------------------------------------------------- */
 
 TuriEnv *turi_env_new(void) {
+    /* libturi-embed-interpret-mode-flag: anybody calling turi_env_new() is by
+     * definition an interpreter embedder; the compiler path never builds an env
+     * this way. Flip the process-global elaborator flag so registered natives
+     * resolve at runtime instead of failing as "unknown function". */
+    g_interpret_mode = true;
     TuriEnv *env = (TuriEnv *)calloc(1, sizeof(TuriEnv));
     if (!env) return NULL;
     arena_init(&env->sym_arena, 0);

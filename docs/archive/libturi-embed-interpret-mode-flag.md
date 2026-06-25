@@ -1,6 +1,9 @@
 # libturi embedders must manually flip `g_interpret_mode` to call registered natives
 
-> **Status:** Reported
+> **Status:** Resolved 2026-06-24 -- fix #1 applied: `turi_env_new()` now sets
+> `g_interpret_mode = true` (src/turi/env.c). Anyone calling `turi_env_new` is
+> by definition an interpreter embedder; the compiler does not call this path.
+> The `turmeric-godot` workaround was removed in the same change.
 > **Severity:** High (embed-API correctness)
 > **Found by:** Wiring `(godot-println "hi")` from the `turmeric-godot` GDExtension
 > **Date:** 2026-06-24
