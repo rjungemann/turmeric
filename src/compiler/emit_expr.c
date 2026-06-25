@@ -4110,6 +4110,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     drop_fn_name = dg_name_buf;
                     struct_with_rc_fields = true;
                 }
+            } else if (e->as.rc_of_.expr->type.kind == TY_ADT) {
+                /* CONV-S1 (slice 2): a by-value ADT is laid out like a struct, so
+                 * an `rc/of` over one with rc/ref/weak fields needs the same
+                 * field-releasing drop/walk glue (keyed off the C type name). */
+                AdtDef *adef = e->as.rc_of_.expr->type.as.adt_.def;
+                if (adef && adef->needs_drop_glue && adt_is_byvalue_product(adef)) {
+                    char *mn = mangle_field_name(adef->name);
+                    snprintf(dg_name_buf, sizeof(dg_name_buf), "drop_glue_tur_adt_%s", mn);
+                    snprintf(wg_name_buf, sizeof(wg_name_buf), "walk_glue_tur_adt_%s", mn);
+                    free(mn);
+                    drop_fn_name = dg_name_buf;
+                    struct_with_rc_fields = true;
+                }
             }
             if (struct_with_rc_fields) {
                 buf_printf(body, "RcControlBlock *%s = rc_cb_alloc_struct(0, %d, %s, %s);\n",

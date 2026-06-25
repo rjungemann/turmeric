@@ -71,14 +71,23 @@ before the gate widens past leaf-scalar and before the experiment graduates
   `Vec<T> *` lowering.
 - **Nested by-value struct fields** -- a struct-typed field is inlined in a
   struct but carried as an int64 in an ADT.
-- **Drop-glue for by-value ADTs with `rc`/`weak` fields** -- the struct path
-  emits drop-glue; the ADT path does not yet (CONV-S1 "Additional sites").
+- **Drop-glue for by-value ADTs with `rc`/`weak` fields** -- ~~the struct path
+  emits drop-glue; the ADT path does not yet~~ **LANDED (slice 2).** A by-value
+  ADT (`adt_is_byvalue_product`) whose sole variant carries `rc`/`ref`/`weak`
+  fields (`AdtDef.needs_drop_glue`) now emits `drop_glue_tur_adt_<Name>` /
+  `walk_glue_tur_adt_<Name>` next to its typedef (shared
+  `emit_adt_byval_drop_glue`, used by both `emit_adt_typedef_and_ctors` and the
+  early-file mirror), and `EX_RC_OF` wraps such a value via `rc_cb_alloc_struct`
+  with that glue -- so dropping the outer `rc` releases the inner owned fields,
+  exactly as for a struct. Fixture: `conv-byval-adt-rc-drop`.
 
 ## Sequencing
 
 1. **Slice 1 (now)**: leaf-scalar lowering behind the flag; flag-off no-op,
    flag-on fixture proves behavioural parity. *(this change)*
-2. rc<ADT> field-access + drop-glue for by-value ADTs.
+2. rc<ADT> field-access + drop-glue for by-value ADTs. *(drop-glue half
+   landed; `rc<ADT>` field-access auto-deref still pending -- needs an
+   `rc.adt_def` slot mirroring `rc.struct_def`.)*
 3. pass-by-ptr / large-aggregate ABI reconciliation; nested by-value fields.
 4. Widen the gate to all non-parametric record structs; converge codegen.
 5. Graduate: delete the gate, lower unconditionally, retire the `StructDef`

@@ -1,0 +1,18 @@
+;; CONV-S1 (slice 2): a by-value single-variant ADT carrying an rc<T> field now
+;; gets the same drop glue a struct does.  Wrapping such a value in `rc/of` and
+;; dropping the outer rc must release the inner rc through the control block's
+;; drop_fn -- otherwise the inner rc leaks (its strong count would stay at 2).
+;;
+;; The `Box` ADT is a leaf single-variant non-parametric product, so it flows by
+;; value (adt_is_byvalue_product); its rc field makes needs_drop_glue true.
+
+(defdata Box (Box [tag : int payload : rc<int>]))
+
+(defn main [] : int
+  (let [inner (rc/of 10)]
+    (let [kept (rc/clone inner)]
+      (println (rc/strong-count kept))   ; 2 (inner + kept)
+      (let [b (rc/of (Box 7 inner))]     ; inner moved into Box, wrapped in rc
+        (rc/drop b))                      ; outer rc drop -> Box drop-glue -> inner--
+      (println (rc/strong-count kept))   ; 1 if drop-glue fired (else 2 = leak)
+      0)))
