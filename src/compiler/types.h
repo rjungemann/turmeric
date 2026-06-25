@@ -1506,6 +1506,12 @@ char        *type_adt_app_ctor_suffix(Type t);
 /* CONV-S1: stable interned C typedef name (`tur_adt_<mangled>`) for the by-value
  * representation of a non-parametric flat-product ADT.  See types.c. */
 const char  *adt_byval_c_name(const AdtDef *def);
+/* Parametric-by-value monomorphisation (heavy prerequisite for CONV-S1
+ * graduation; see docs/upcoming/parametric-adt-byvalue-plan.md).  True when t is
+ * a concrete monomorphisation of a single-variant non-GADT parametric flat
+ * product whose every monomorphised field is by-value-able.  GATED HARD-OFF for
+ * now -- the plumbing keyed on it is a no-op until the crossings are wired. */
+bool         adt_app_is_byvalue_product(Type t);
 /* Phase E: Typed function-pointer typedef registry for unboxed fn struct fields. */
 const char  *register_fn_ptr_typedef(const Type *fn_type);
 void         type_codegen_reset_fn_ptr_typedefs(void);

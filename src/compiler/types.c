@@ -1447,6 +1447,11 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
     append_adt_app_type_suffix(&suffix, def, args, n_args);
     buf_putc(&suffix, '\0');
 
+    /* Parametric-by-value (gated): a concrete by-value flat-product monomorph
+     * returns/takes its aggregate by value, exactly like the non-parametric
+     * CONV-S1 ctor -- no heap box, no tag.  Hard-off until the crossings wire. */
+    bool app_byval = adt_app_is_byvalue_product(g_adt_apps[idx].type);
+
     /* Emit per-constructor functions for this monomorphised ADT instance. */
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
         CtorDef *ctor = def->ctors[ci];
@@ -1460,20 +1465,29 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
         }
         mctor[mlen] = '\0';
 
-        buf_printf(out, "static int64_t ctor_%s%s(", mctor, suffix.data);
+        buf_printf(out, "static %s ctor_%s%s(",
+                   app_byval ? adt_inst_name : "int64_t", mctor, suffix.data);
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             if (fi > 0) buf_puts(out, ", ");
             const char *ctype = adt_field_c_type(def, &ctor->fields[fi], args);
             buf_printf(out, "%s _%u", ctype, fi);
         }
         buf_printf(out, ") {\n");
-        buf_printf(out, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
-                   adt_inst_name, adt_inst_name, adt_inst_name);
-        if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
-        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-            buf_printf(out, "    __r->as.%s._%u = _%u;\n", mctor, fi, fi);
+        if (app_byval) {
+            buf_printf(out, "    %s __r;\n", adt_inst_name);
+            for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                buf_printf(out, "    __r.as.%s._%u = _%u;\n", mctor, fi, fi);
+            }
+            buf_printf(out, "    return __r;\n");
+        } else {
+            buf_printf(out, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
+                       adt_inst_name, adt_inst_name, adt_inst_name);
+            if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
+            for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                buf_printf(out, "    __r->as.%s._%u = _%u;\n", mctor, fi, fi);
+            }
+            buf_printf(out, "    return (int64_t)(intptr_t)__r;\n");
         }
-        buf_printf(out, "    return (int64_t)(intptr_t)__r;\n");
         buf_printf(out, "}\n\n");
         free(mctor);
     }
@@ -2584,6 +2598,49 @@ bool adt_byval_pass_by_ptr(const AdtDef *def) {
     return total > 16;
 }
 
+/* Parametric-by-value monomorphisation (heavy prerequisite for CONV-S1
+ * graduation; see docs/upcoming/parametric-adt-byvalue-plan.md).
+ *
+ * A concrete monomorphisation of a single-variant, non-GADT, parametric flat
+ * product -- e.g. `(Pair2 int float)` from `(defdata Pair2 [A B] (Pair2 [a:A
+ * b:B]))` -- has a fully concrete layout (`tur_adt_Pair2__int__float`) and is
+ * representationally a by-value aggregate, exactly like a monomorphised struct.
+ * Today it still flows through the int64 heap-pointer carrier (the ctor mallocs
+ * and returns int64, the param is int64).  Flipping it to by-value is the
+ * parametric analog of CONV-S1/B1-B4 and the foundation the `:heap` typed-pointer
+ * ADT ABI builds on.
+ *
+ * GATED HARD-OFF.  The plumbing keyed on this predicate (type_c_name TY_APP,
+ * type_uses_carrier_abi, the monomorphised ctor emitter) is a no-op until the
+ * crossings -- call-site box/unbox, match/field-access on an ADT-app receiver,
+ * and the M7 by-value-HKT ctor-suffix collision -- are wired and proven
+ * suite-green stage by stage.  Flip `g_adt_app_byvalue` locally only for the
+ * gate-on smoke test that enumerates those crossings. */
+static const bool g_adt_app_byvalue = false;
+
+bool adt_app_is_byvalue_product(Type t) {
+    if (!g_adt_app_byvalue) return false;
+    AdtDef *def = NULL;
+    Type args[16];
+    uint8_t n_args = 0;
+    if (!type_extract_adt_app(&t, &def, args, &n_args) || !def) return false;
+    if (!adt_is_flat_product(def)) return false;       /* single-variant, non-GADT */
+    if (def->n_type_params == 0) return false;          /* non-parametric is CONV-S1's path */
+    for (uint8_t i = 0; i < n_args; i++)
+        if (!type_has_concrete_codegen_layout(&args[i])) return false;
+    /* Every monomorphised field must resolve to a by-value-able concrete type --
+     * no residual tyvar / HKT / non-concrete application (those are M7's job). */
+    const CtorDef *c = def->ctors[0];
+    for (uint32_t i = 0; i < c->n_fields; i++) {
+        if (!c->fields[i].full_type) continue;          /* scalar storage -- by value */
+        Type rf = substitute_adt_app_type(c->fields[i].full_type, def, args);
+        TypeKind k = rf.kind;
+        if (k == TY_TYVAR || k == TY_FORALL || k == TY_EXISTS) return false;
+        if (k == TY_APP && !type_has_concrete_codegen_layout(&rf)) return false;
+    }
+    return true;
+}
+
 const char *adt_byval_c_name(const AdtDef *def) {
     Buf b; buf_init(&b);
     buf_puts(&b, "tur_adt_");
@@ -2744,6 +2801,13 @@ const char *type_c_name(Type t) {
         case TY_APP: {
             /* SC7: a transparent int newtype is just its int64 payload. */
             if (type_is_transparent_int_newtype(t)) return "int64_t";
+            /* Parametric-by-value (gated): a concrete flat-product ADT-app flows
+             * as its by-value monomorph aggregate (`tur_adt_Pair2__int__float`),
+             * not the int64 carrier.  Hard-off until the crossings are wired. */
+            if (adt_app_is_byvalue_product(t)) {
+                const char *nm = type_register_adt_app(t);
+                if (nm) return nm;
+            }
             if (type_has_concrete_codegen_layout(&t)) {
                 const char *base = register_struct_app(t);
                 /* end-to-end-monomorphization: a :heap-tagged parameterized type
