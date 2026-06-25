@@ -6,20 +6,23 @@
 ;; Phase TMS2: Typed Map[K V] surface (typed-map-surface-plan).
 ;; K must satisfy Hash[K] and MapKey[K]; both are auto-loaded for the primitive
 ;; key types (int, bool, cstr, float32, float).
-;; At runtime, a Map[K V] is a heap-allocated wrapper around a HAMT ptr<void>,
-;; carried as a single int64 word.  Map is declared as a *transparent int
-;; newtype* (a parametric struct with one :int field), so (Map K V) is emitted
-;; as int64_t in every C signature -- pure-Turmeric and inline-C alike -- while
-;; the type checker still tracks K and V and rejects key/value mismatches.
-;; Internal C layout of the carried pointer: struct { void *hamt; }
+;; At runtime, a Map[K V] is a heap-allocated wrapper around a HAMT ptr<void>.
+;; Map is declared as a non-transparent :heap struct with a single
+;; (hamt :ptr<void>) field, so (Map K V) monomorphizes to a real Map__K__V C
+;; struct and lowers to a typed pointer (Map__K__V *) in every pure-Turmeric C
+;; signature, mirroring MutableMap.  The type checker tracks K and V and rejects
+;; key/value mismatches.  Internal C layout of the carried pointer:
+;; struct { void *hamt; } -- identical to the emitted Map__K__V, so the inline-C
+;; bodies that cast to that anonymous struct stay byte-compatible.
 ;;; Map -- parameterized persistent map with key type K and value type V.
 ;;;
-;;; Map[K V] is a transparent int newtype over the heap pointer to its backing
-;;; HAMT.  The single :int field is the carrier word; it is never accessed
-;;; structurally (every operation is inline-C or delegates to one).
+;;; Map[K V] is a non-transparent :heap struct holding a single ptr<void> to
+;;; its backing HAMT.  The field is never accessed structurally (every
+;;; operation is inline-C or delegates to one); it monomorphizes to a real
+;;; Map__K__V so typed consumers receive a (Map__K__V *) by value.
 ;;;
 ;;; Since: Phase TM0
-(defstruct Map :heap [K V] (carrier :int))
+(defstruct Map :heap [K V] (hamt :ptr<void>))
 ;;; map-new -- create a new empty typed map.
 ;;;
 ;;; map-new is generic and nullary, so its K/V cannot be inferred from
@@ -46,7 +49,7 @@
   ```c
   struct { void *hamt; } *m = malloc(sizeof(*m));
   m->hamt = tur_hamt_new();
-  return (int64_t)(intptr_t)m;
+  return (__TUR_RET__)(intptr_t)m;
   ```)
 ;;; map-empty-for -- internal: an empty Map[K V] whose K/V are pinned by a
 ;;; sample key/value pair.  Used by the hamt-of / #map{...} literal lowering,
@@ -76,7 +79,7 @@
   ```c
   struct { void *hamt; } *m = malloc(sizeof(*m));
   m->hamt = (void*)(intptr_t)h;
-  return (int64_t)(intptr_t)m;
+  return (__TUR_RET__)(intptr_t)m;
   ```)
 ;;; ============================================================================
 ;;; Raw runtime bridges (#{Unsafe}-style, internal).
@@ -101,7 +104,7 @@
                                      (int64_t)owned);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
+  return (__TUR_RET__)(intptr_t)r;
   ```)
 ;;; map-get-eq-o -- raw lookup: explicit hash, boxed carrier key, comparator.
 
@@ -135,7 +138,7 @@
                                      (void *)(intptr_t)keyeq, (int64_t)owned);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
+  return (__TUR_RET__)(intptr_t)r;
   ```)
 ;;; ----------------------------------------------------------------------------
 ;;; Explicit hash + key-equality content API (TCE4).
@@ -179,7 +182,7 @@
                                    (void *)(intptr_t)keyeq);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
+  return (__TUR_RET__)(intptr_t)r;
   ```)
 ;;; map-get-eq -- look up a key using an explicit hash and key-equality fn.
 ;;;
@@ -255,7 +258,7 @@
                                    (void *)(intptr_t)keyeq);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
+  return (__TUR_RET__)(intptr_t)r;
   ```)
 ;;; cstr-hash -- xxHash64 of a NUL-terminated string's contents.
 ;;;
@@ -572,7 +575,7 @@
   void *new_hamt = tur_hamt_merge(ma->hamt, mb->hamt);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
+  return (__TUR_RET__)(intptr_t)r;
   ```)
 ;;; map-free -- free the Map wrapper (does not free HAMT; use map-free-all for that).
 ;;;

@@ -6,6 +6,65 @@ severity: Low. Not a miscompile. `Eq[Map]` is correct and fast (pure-Turmeric
   the int64 carrier `__inst_Eq_eq_qu_Map` instead of a typed by-value spec. The
   only cost is that the producer-slice plan's Map half has zero typed consumers
   to point at, so typing Map producers buys nothing until this is addressed.
+status: RESOLVED. `Map` is now a non-transparent `:heap` struct
+  (`(hamt :ptr<void>)`), so `(Map K V)` monomorphizes to a real `Map__K__V` and
+  lowers to a typed pointer in every pure-Turmeric C signature. `Eq[Map]` now
+  dispatches via the typed by-value spec
+  `__inst_Eq_eq_qu_Map__spec__bool_Map__int__int___Map__int__int__`, and typed
+  `(Map int int)` consumers receive a `Map__int__int *` with no int->pointer
+  relabel. See "Resolution" below.
+---
+
+# Resolution (this session)
+
+Three coordinated pieces -- the producer and consumer flipped together, exactly
+as the fix directions predicted, plus one extra piece the directions did not
+anticipate:
+
+1. **`stdlib/map.tur` -- Map is now a non-transparent heap struct.**
+   `(defstruct Map :heap [K V] (hamt :ptr<void>))` (was `(carrier :int)`). The
+   in-C field layout is unchanged (`struct { void *hamt; }`), so every inline-C
+   body that casts the carrier to that anonymous struct stays byte-compatible.
+   The seven heap-returning inline-C producers (`map-new`, `map-wrap`,
+   `map-assoc-eq-o`, `map-dissoc-eq-o`, `map-assoc-eq`, `map-dissoc-eq`,
+   `map-merge`) now return through `(__TUR_RET__)(intptr_t)` instead of
+   `(int64_t)(intptr_t)`, so each mints its typed producer spec.
+
+2. **`src/compiler/emit_module.c` -- `Map` added to `type_is_heap_vec`'s
+   allow-list** (`{"Vec", "Map", "MutableMap"}`).
+
+3. **`src/compiler/emit_module.c` -- the float/cstr carrier-forcing block now
+   handles the degenerate multi-param declared type.** This was the piece the
+   fix directions missed. A multi-type-param collection (`(Map K V)`,
+   `(MutableMap K V)`) is declared as a *degenerate* `TY_APP` -- a spineless
+   shell whose head `app.fn` is NULL -- so `type_is_heap_vec(fd->param_types[i])`
+   could not recover the `Map` StructDef and the forcing block never fired. The
+   result was that `map-assoc-eq-o`'s `val :V` slot monomorphized to `double`
+   for a `(Map int float)`, and the inline-C `(void *)(intptr_t)val` numerically
+   truncated `0.5 -> 0` (caught by `tce3-map-cstr-val`). The fix keys the
+   heap-collection slot test on the RESOLVED arg/result type as a fallback,
+   guarded by `decl.kind == TY_APP` so a bare-tyvar generic (`some`/`ok` over
+   `A`) is still excluded. (`MutableMap` did not hit this because its accessors
+   stay on the int64 carrier base -- only its producer `mutmap-new` is typed --
+   whereas Map's `map-assoc-eq-o` accessor gets a typed spec from the now-typed
+   call site.)
+
+**Validation.**
+- `tests/fixtures/tce3-map-cstr-val` (`Map int float` / `Map int cstr`) passes:
+  `0.5` round-trips, zero warnings.
+- New fixture `tests/fixtures/map-typed-consumer` exercises a typed
+  `(Map int int)` flowing through `size-of` (emitted `Map__int__int *`),
+  `Eq[Map]` dispatching via `__inst_Eq_eq_qu_Map__spec__...`, and a float-valued
+  map -- 0 warnings.
+- The minimal repro emits the typed spec; `grep '(Map__[A-Za-z0-9_]* *)(intptr_t)'`
+  is now non-empty.
+- `bash tests/run.sh`: 1824 passed, 0 failed (88 snapshots regenerated for the
+  `Map` struct field rename `int64_t carrier` -> `void * hamt`).
+- `bash tests/run-turi.sh`: interpreter-parity-neutral -- the identical 32
+  pre-existing by-value-migration failures, no new ones.
+
+The original finding is retained below for the paper trail.
+
 ---
 
 # Eq[Map] stays on the int64 carrier -- root cause is Map's representation, not #364
