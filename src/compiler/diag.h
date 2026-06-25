@@ -100,6 +100,12 @@ typedef enum DiagCode {
      * method, silently shadowing the method at every bare call site.
      * See docs/reported/typeclass-methods-share-value-namespace-with-defns.md. */
     TUR_W0039_METHOD_DEFN_CLASH,
+    /* Eval-mode unknown call head deferred to runtime-dispatch -- the name is
+     * not bound at elaboration time and not in the typed-native registry, so
+     * it will fail at runtime if no native is registered for it before the
+     * call runs.  Likely a typo.  See
+     * docs/archive/eval-mode-unknown-call-deferred-to-runtime.md. */
+    TUR_W0040_EVAL_UNKNOWN_CALL_RUNTIME_DISPATCH,
     /* MS2: Multi-shot continuation capture analysis */
     TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,       /* ^multishot handler captures a unique/linear value */
     TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER,  /* ^multishot annotation outside a handler continuation */

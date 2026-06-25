@@ -351,6 +351,16 @@ add_test(
   COMMAND bash tests/turi/repl-smoke.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Eval-mode unknown-call diagnostic: an unbound call head under --interpret must
+# warn (TUR-W0040) at elaboration time rather than silently deferring to runtime.
+add_test(
+  NAME tur_eval_unknown_call_warn
+  COMMAND bash tests/turi/eval-unknown-call-warn.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_eval_unknown_call_warn PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
+)
 # Phase S2: (import turi/eval) from Turmeric source
 add_test(
   NAME tur_eval_import
