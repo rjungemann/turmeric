@@ -331,6 +331,78 @@ turi_env_set_module_base_dir(env, "res://scripts");
 turi_eval(env, "(import std/list)\n...");
 ```
 
+### `void turi_env_register_native_ex(...)` -- native ud that the env owns
+
+```c
+typedef void (*TuriNativeFreeFn)(void *ud);
+void turi_env_register_native_ex(TuriEnv *env, const char *name,
+                                 TuriNativeFn fn, void *ud,
+                                 TuriNativeFreeFn free_ud);
+```
+
+Same as `turi_env_register_native`, but `free_ud` (when non-NULL) is invoked
+with `ud` from `turi_env_free`. This lets a native registered with
+`ud = a per-script object` tie that object's lifetime to the env it serves --
+the common embedder pattern where a native calls back into the script for
+property routing or signal emission. With one env per script, env lifetime ==
+script lifetime, so the `ud` is reclaimed exactly when the script goes away.
+
+Finalizers fire in LIFO order at teardown and are **not** fired by
+`turi_env_reset` (natives survive a reset, so their `ud` must too). A native
+whose `ud` outlives the env -- a process-global, or anything registered via
+`turi_register_default_native` (shared across every env) -- must **not** take a
+finalizer; use plain `turi_env_register_native` for those. `TuriNativeSpec` also
+gained a `free_ud` field, honoured by `turi_env_new_with_natives`.
+
+```c
+turi_env_register_native_ex(env, "godot-emit", native_emit,
+                            script, (TuriNativeFreeFn)script_release);
+```
+
+### `void turi_env_set_interpret_mode(TuriEnv *env, bool interpret)`
+
+Sets a per-env bit that is snapshotted into the process-global elaborator mode
+flag for the duration of each `turi_eval` on the env, then restored. Every
+`turi_env_new` defaults it to `true` (interpret mode -- registered natives
+resolve at runtime). An embedder driving compile-mode elaboration through the
+same process flips it to `false`.
+
+The point is co-residency: before this, the *last* `turi_env_new` to run set the
+global for everyone, so two libturi embedders in one process (e.g. a Godot
+binding plus an MCP worker) could clobber each other's mode. Now each env
+re-installs its own bit on every eval. (The elaborator still reads a
+process-global *within* a single eval; threading the mode all the way through
+the elaboration context per-env remains future work, but the cross-eval
+clobber is gone.)
+
+### `void turi_env_set_shared_spice_image(TuriEnv *env, struct TurSpiceImage *image)`
+
+Points an env at another (prototype) env's already-loaded spice image instead of
+auto-discovering and owning its own copy. The borrowing env will **not** free the
+image in `turi_env_free` -- the prototype owns it and must outlive every
+borrower. Pass the prototype's `spice_image` field; pass `NULL` to detach.
+
+```c
+TuriEnv *proto = turi_env_new();          /* auto-discovers the project image  */
+turi_eval(proto, "...");
+TuriEnv *script = turi_env_new();
+turi_env_set_shared_spice_image(script, proto->spice_image);  /* borrow, no copy */
+```
+
+This is a **measure-first** hook: the per-env image cost is only worth
+optimizing once a real project shows many envs duplicating a nontrivial image,
+and it is safe only when no borrower triggers `(reload)` on the shared image (a
+reload would swap the prototype's image out from under the borrowers). It
+deliberately avoids copy-on-write arena machinery until measurement justifies
+it.
+
+> **Debug-only cross-env guard.** In debug builds (`assert`/ASan, i.e. not
+> `NDEBUG`) each `TuriClosure` carries an origin-env tag claimed on first
+> application and checked on every later one. Caching a closure value across
+> per-script envs -- forbidden, because closures pin their originating env's
+> arenas -- aborts with a clear message instead of a heap use-after-free.
+> Release builds compile the field and check out entirely (zero cost).
+
 ---
 
 ## Async API

@@ -1,10 +1,39 @@
 # libturi: per-instance environments and the peripheral embed-API gaps that block them
 
-> **Status:** Partially resolved -- Gaps 1-4 landed (the near-term cluster that
-> blocks a per-script Godot env path); Gaps 5-8 remain open.
+> **Status:** Resolved -- Gaps 1-4 landed first (the near-term cluster that
+> blocks a per-script Godot env path); Gaps 5-8 have now landed too.
 > **Severity:** Medium (architectural; defers what an MVP needs but blocks a real multi-script binding)
 > **Found by:** Scoping `TurmericInstance` for the Godot binding's G1 follow-up
 > **Date:** 2026-06-24
+
+## Resolution (Gaps 5-8)
+
+The remaining medium-term / speculative gaps now have embed API:
+
+- **Gap 5** -- `turi_env_register_native_ex(env, name, fn, ud, free_ud)` plus a
+  `free_ud` field on `TuriNativeSpec`. The finalizer fires once, LIFO, from
+  `turi_env_free` (never from `turi_env_reset`), so a native whose `ud` is a
+  per-script object is reclaimed with the env. Finalizer list on `TuriEnv`
+  (`native_finalizers`), fired in `turi_env_free`. `src/turi/env.c`, decls in
+  `src/turi/eval.h`.
+- **Gap 6** -- debug-only `origin_env` tag on `struct TuriClosure`
+  (`#ifndef NDEBUG`), claimed on first application and asserted on every later
+  one in `eval_apply_driven`; cross-env closure reuse aborts cleanly instead of
+  a heap use-after-free. Compiled out entirely in release. `src/turi/eval.c`.
+- **Gap 7** -- per-env `interpret_mode` bit on `TuriEnv` (defaults true),
+  snapshotted into the process-global `g_interpret_mode` around each
+  `turi_eval` (`turi_eval_with_sink`) and restored, plus
+  `turi_env_set_interpret_mode`. This removes the cross-eval clobber between
+  co-resident embedders; the deeper per-env elaborator threading stays future
+  work (documented). `src/turi/env.c`, `src/turi/eval.c`.
+- **Gap 8** -- `turi_env_set_shared_spice_image(env, image)` borrow hook plus a
+  `spice_image_borrowed` flag so `turi_env_free` leaves a shared image alone.
+  Measure-first: provides the sharing knob without copy-on-write arena
+  machinery. `src/turi/env.c`, decl in `src/turi/env.h`.
+
+Covered by the extended `tests/turi/embed-peripherals.c` (ctest target
+`tur_embed_peripherals`, leak detection ON) and documented in
+`docs/guides/eval-api.md` ("Per-embed-env peripherals").
 
 ## Resolution (Gaps 1-4)
 
@@ -120,7 +149,7 @@ public struct member with one line of header doc; nothing in
 plus a sentence in `turi_eval`'s docblock pointing to it.
 Documentation-only is acceptable; an API setter is cleaner.
 
-### 5. Native `void *ud` lifetime vs env lifetime
+### 5. Native `void *ud` lifetime vs env lifetime  -- RESOLVED
 
 If the embedder registers a native with `ud = TurmericScript*` to
 let the native call back into the script (for property routing,
@@ -134,7 +163,7 @@ nothing in the API surface tells the embedder that's the rule.
 env"), or accept an optional `(*free_ud)(void *)` callback in
 `turi_env_register_native` that fires from `turi_env_free`.
 
-### 6. Closure values pinned to their originating env
+### 6. Closure values pinned to their originating env  -- RESOLVED
 
 `eval.h:21-22` notes that closures "hold internal pointers into
 env-owned arenas and must not outlive env." For an embedder caching
@@ -147,7 +176,7 @@ on the first call to a stale closure.
 "env tag" debug-only field on `TuriClosure` that the eval loop
 asserts against would catch misuse early.
 
-### 7. `g_interpret_mode` is still process-global
+### 7. `g_interpret_mode` is still process-global  -- RESOLVED (cross-eval clobber; deep threading deferred)
 
 The recent fix (libturi-embed-interpret-mode-flag) makes
 `turi_env_new` flip it, which solves the embedder-versus-CLI case.
@@ -162,7 +191,7 @@ elaborator read it from the env pointer threaded through the elab
 context. Substantially larger change than the others; flag it now,
 defer the work.
 
-### 8. Per-env memory cost: each `TuriEnv` carries its own arenas + spice image
+### 8. Per-env memory cost: each `TuriEnv` carries its own arenas + spice image  -- RESOLVED (borrow hook; COW deferred)
 
 `TuriEnv` allocates a fresh `sym_arena`, `value_arena`,
 `globals_ht`, async scheduler state, and (if spice auto-discovery
@@ -180,13 +209,20 @@ optimizing -- might not matter in practice.
 ## Severity calibration
 
 Items 1-4 are **near-term** -- they bite the first time a real
-multi-script Godot project is built. **They have now landed** (see
-Resolution above). Items 5-7 are **medium-term** correctness/scaling
-concerns, not active footguns. Item 8 is **speculative** -- worth
-measuring before optimizing; might never matter.
+multi-script Godot project is built. Items 5-7 are **medium-term**
+correctness/scaling concerns, not active footguns. Item 8 is
+**speculative** -- worth measuring before optimizing; might never matter.
+**All eight have now landed** (see the two Resolution sections above): 1-4
+as the standalone API surface, 5-8 as the follow-up cluster. For 7 and 8
+the landed change is the tractable, low-risk slice the report scoped (the
+cross-eval mode clobber; a measure-first image-sharing hook); the heavier
+work each names -- threading interpret mode through the elaborator per-env
+(7), and copy-on-write arena sharing (8) -- stays deferred until a concrete
+need or measurement justifies it.
 
-With items 1, 2, and 3 landed, the Godot binding can ship a per-script
-env path in G2 without further embed-API work.
+With the near-term items landed, the Godot binding can ship a per-script
+env path in G2 without further embed-API work; the medium-term items keep
+that path honest as the project scales.
 
 ---
 
@@ -208,7 +244,7 @@ envs land in G2 alongside the resource loader (see
 
 ## Related
 
-- [`docs/archive/libturi-embed-include-paths.md`](../archive/libturi-embed-include-paths.md) -- fixed.
-- [`docs/archive/libturi-embed-interpret-mode-flag.md`](../archive/libturi-embed-interpret-mode-flag.md) -- fixed.
+- [`docs/archive/libturi-embed-include-paths.md`](libturi-embed-include-paths.md) -- fixed.
+- [`docs/archive/libturi-embed-interpret-mode-flag.md`](libturi-embed-interpret-mode-flag.md) -- fixed.
 - [`docs/upcoming/v1/godot-language-binding-plan.md`](../upcoming/v1/godot-language-binding-plan.md) -- v1 binding plan; G2 phase is where this matters.
 - [`docs/guides/godot-resource-loader-guide.md`](../guides/godot-resource-loader-guide.md) -- the other piece of G2.

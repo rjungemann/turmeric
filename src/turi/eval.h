@@ -211,6 +211,33 @@ bool turi_env_has_cap(TuriEnv *env, TuriCaps cap);
 void turi_env_register_native(TuriEnv *env, const char *name,
                                TuriNativeFn fn, void *ud);
 
+/* Gap 5 (libturi-per-embed-env-and-peripherals): finalizer for a native's user
+ * data, fired from turi_env_free.  See turi_env_register_native_ex. */
+typedef void (*TuriNativeFreeFn)(void *ud);
+
+/* Gap 5: like turi_env_register_native, but `free_ud` (when non-NULL) is invoked
+ * with `ud` from turi_env_free, so a native registered with `ud = a per-script
+ * object` can let that object's lifetime ride along with the env.  Finalizers
+ * fire in LIFO order at teardown and are NOT fired by turi_env_reset (natives
+ * survive a reset).  Registering the same name more than once enqueues a
+ * finalizer per call -- register a given (ud, free_ud) pair once.  When no
+ * finalizer is needed, plain turi_env_register_native is the right call: a
+ * native whose `ud` outlives the env (a process-global, or a default native)
+ * must NOT take a finalizer.  Default natives (turi_register_default_native)
+ * are shared across every env, so they intentionally have no finalizer hook. */
+void turi_env_register_native_ex(TuriEnv *env, const char *name,
+                                  TuriNativeFn fn, void *ud,
+                                  TuriNativeFreeFn free_ud);
+
+/* Gap 7: set this env's interpret-mode bit (see TuriEnv.interpret_mode).  An
+ * embedder running interpret-mode eval wants `true` (the default); one driving
+ * compile-mode elaboration through the same process wants `false`.  The bit is
+ * installed into the process-global elaborator flag for the duration of each
+ * turi_eval on this env, then restored, so two co-resident embedders no longer
+ * clobber each other's mode.  (The elaborator still reads a process-global
+ * within a single eval; full per-env threading remains future work.) */
+void turi_env_set_interpret_mode(TuriEnv *env, bool interpret);
+
 /* Register eval-layer native builtins (struct-aware predicates, etc.). */
 void turi_eval_register_builtins(TuriEnv *env);
 
@@ -221,11 +248,17 @@ void turi_eval_register_builtins(TuriEnv *env);
  * the embed surface to scale beyond a single shared env.
  * --------------------------------------------------------------------------- */
 
-/* Gap 1: a single native (name + fn + user data) to install on a new env. */
+/* Gap 1: a single native (name + fn + user data) to install on a new env.
+ * Gap 5: `free_ud` is an optional finalizer for `ud`, fired from turi_env_free
+ * when this spec is installed via turi_env_new_with_natives (NULL = none).
+ * Older positional initializers `{ name, fn, ud }` leave it NULL, which keeps
+ * the prior "ud must outlive the env" contract -- opt in only when the env
+ * should own `ud`. */
 typedef struct TuriNativeSpec {
     const char  *name;
     TuriNativeFn fn;
     void        *ud;
+    TuriNativeFreeFn free_ud;
 } TuriNativeSpec;
 
 /* Gap 1: register a native that every SUBSEQUENT turi_env_new / turi_env_new_*

@@ -253,6 +253,26 @@ typedef struct TuriEnv {
      * (heap-owned, freed by turi_env_free).  Direct field assignments by the CLI
      * leave this false and retain their existing borrowed-pointer semantics. */
     bool        module_base_dir_owned;
+    /* Gap 5: list of (free_fn, ud) finalizers for natives registered via
+     * turi_env_register_native_ex.  Each fires once, in LIFO order, from
+     * turi_env_free -- so an embedder can let a native's `ud` lifetime ride
+     * along with the env it was registered on.  turi_env_reset does NOT fire
+     * them (natives survive a reset).  Opaque node list (NativeFinalizer*,
+     * defined in env.c). */
+    void       *native_finalizers;
+    /* Gap 7: per-env interpret-mode bit, snapshotted into the process-global
+     * g_interpret_mode for the duration of each turi_eval on this env (restored
+     * afterward).  Defaults to true (every turi_env_new caller is an interpreter
+     * embedder).  Lets two co-resident libturi embedders -- one wanting
+     * interpret-mode eval, one wanting compile-mode elaboration -- each see their
+     * own setting per eval call without the deeper elaborator-threading refactor.
+     * Set via turi_env_set_interpret_mode. */
+    bool        interpret_mode;
+    /* Gap 8: true when spice_image is BORROWED from another (prototype) env via
+     * turi_env_set_shared_spice_image -- turi_env_free then leaves it alone
+     * instead of calling tur_spice_image_free, so many per-script envs can share
+     * one read-only loaded image rather than each carrying its own copy. */
+    bool        spice_image_borrowed;
 } TuriEnv;
 
 /* Create a new unrestricted environment. */
@@ -273,6 +293,20 @@ void turi_env_free(TuriEnv *env);
  * turi_env_free instead of leaking for the process lifetime. The node is
  * allocated from the env value pool; `base`/`size` are the dealloc args. */
 void turi_env_track_coro_stack(TuriEnv *env, void *base, size_t size);
+
+/* Gap 8 (libturi-per-embed-env-and-peripherals): share one loaded spice image
+ * across many per-script envs read-only, instead of each env auto-discovering
+ * and owning its own copy.  Point every per-script env at a single prototype
+ * env's already-loaded image; the borrowing env will NOT free it in
+ * turi_env_free (the prototype owns it and must outlive every borrower).
+ *
+ * Pass `image` obtained from the prototype env's `spice_image` field (or NULL to
+ * detach).  Borrowing replaces any image the env currently owns (that owned
+ * image is freed first).  This is a measure-first hook: the report flags the
+ * per-env image cost as speculative, so this gives embedders the sharing knob
+ * without committing to copy-on-write arena machinery.  Safe only when no
+ * borrower triggers `(reload)` on the shared image. */
+void turi_env_set_shared_spice_image(TuriEnv *env, struct TurSpiceImage *image);
 
 /* Look up a global binding by name.  Returns TURI_ERROR if not found. */
 TuriValue turi_env_get(TuriEnv *env, const char *name);

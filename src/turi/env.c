@@ -195,6 +195,21 @@ static void install_default_natives(TuriEnv *env) {
 }
 
 /* -------------------------------------------------------------------------
+ * Native ud finalizers (libturi-per-embed-env-and-peripherals Gap 5)
+ *
+ * turi_env_register_native_ex records a (free_fn, ud) pair here; turi_env_free
+ * fires them in LIFO order so a native whose ud is owned by the env (e.g. a
+ * per-script object) is torn down with the env.  turi_env_reset deliberately
+ * leaves them intact -- natives survive a reset, so their ud must too.
+ * ---------------------------------------------------------------------- */
+
+typedef struct NativeFinalizer {
+    TuriNativeFreeFn        free_fn;
+    void                   *ud;
+    struct NativeFinalizer *next;
+} NativeFinalizer;
+
+/* -------------------------------------------------------------------------
  * TuriEnv lifecycle
  * ---------------------------------------------------------------------- */
 
@@ -214,6 +229,11 @@ TuriEnv *turi_env_new(void) {
     buf_init(&env->src_acc);
     env->max_eval_depth = (uint32_t)turi_default_max_eval_depth();
     env->caps = TURI_CAP_ALL;
+    /* Gap 7: default to interpret mode (every turi_env_new caller is an
+     * interpreter embedder; mirrors the g_interpret_mode = true above).  An
+     * embedder driving compile-mode elaboration flips this with
+     * turi_env_set_interpret_mode. */
+    env->interpret_mode = true;
     ht_init(&env->globals_ht);
     /* Phase S7: initialise async scheduler state */
     turi_sched_init(env);
@@ -236,7 +256,9 @@ TuriEnv *turi_env_new_with_natives(const TuriNativeSpec *specs, size_t n) {
     if (!env) return NULL;
     for (size_t i = 0; specs && i < n; i++) {
         if (specs[i].name && specs[i].fn)
-            turi_env_register_native(env, specs[i].name, specs[i].fn, specs[i].ud);
+            /* Gap 5: honour each spec's optional ud finalizer. */
+            turi_env_register_native_ex(env, specs[i].name, specs[i].fn,
+                                        specs[i].ud, specs[i].free_ud);
     }
     return env;
 }
@@ -260,7 +282,10 @@ void turi_env_free(TuriEnv *env) {
      * scheduler tears down its state -- otherwise spice destructors
      * that touch the runtime would see a half-freed env. */
     if (env->spice_image) {
-        tur_spice_image_free(env->spice_image);
+        /* Gap 8: a borrowed (shared) image is owned by the prototype env -- do
+         * not free it here, just drop the reference. */
+        if (!env->spice_image_borrowed)
+            tur_spice_image_free(env->spice_image);
         env->spice_image = NULL;
     }
     /* RP5: drop any retired images that (reload) accumulated. They
@@ -318,6 +343,18 @@ void turi_env_free(TuriEnv *env) {
     if (env->module_base_dir_owned) {
         free((void *)env->module_base_dir);
         env->module_base_dir = NULL;
+    }
+
+    /* Gap 5: fire native ud finalizers in LIFO order, then free the nodes. */
+    {
+        NativeFinalizer *fin = (NativeFinalizer *)env->native_finalizers;
+        while (fin) {
+            NativeFinalizer *next = fin->next;
+            if (fin->free_fn) fin->free_fn(fin->ud);
+            free(fin);
+            fin = next;
+        }
+        env->native_finalizers = NULL;
     }
 
     buf_free(&env->src_acc);
@@ -401,6 +438,39 @@ void turi_env_set_module_base_dir(TuriEnv *env, const char *path) {
     } else {
         env->module_base_dir = NULL;  /* default (".") */
     }
+}
+
+void turi_env_register_native_ex(TuriEnv *env, const char *name,
+                                  TuriNativeFn fn, void *ud,
+                                  TuriNativeFreeFn free_ud) {
+    if (!env) return;
+    /* Install the binding via the eval-layer registrar (TuriClosure is internal
+     * to eval.c). */
+    turi_env_register_native(env, name, fn, ud);
+    /* Gap 5: record the finalizer (if any) so turi_env_free can run it. */
+    if (free_ud) {
+        NativeFinalizer *fin = (NativeFinalizer *)malloc(sizeof(NativeFinalizer));
+        if (!fin) return;  /* the native is still registered; only the finalizer is lost on OOM */
+        fin->free_fn = free_ud;
+        fin->ud      = ud;
+        fin->next    = (NativeFinalizer *)env->native_finalizers;
+        env->native_finalizers = fin;
+    }
+}
+
+void turi_env_set_interpret_mode(TuriEnv *env, bool interpret) {
+    if (!env) return;
+    env->interpret_mode = interpret;
+}
+
+void turi_env_set_shared_spice_image(TuriEnv *env, struct TurSpiceImage *image) {
+    if (!env) return;
+    /* Replace any image we currently OWN (a borrowed one is the prototype's to
+     * free; just drop our reference to it). */
+    if (env->spice_image && !env->spice_image_borrowed)
+        tur_spice_image_free(env->spice_image);
+    env->spice_image          = image;
+    env->spice_image_borrowed = (image != NULL);
 }
 
 /* -------------------------------------------------------------------------

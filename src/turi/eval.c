@@ -75,6 +75,7 @@
 #include "types.h"
 #include "../passes/effect_check.h"
 #include "../passes/borrow_check.h"
+#include "../runtime/globals.h"  /* Gap 7: g_interpret_mode (per-env snapshot) */
 
 /* T1 (turi-eval-trampoline-plan): small inline arg/field buffer with a heap
  * spill above it.  Keeps the per-call scratch off the C stack for the common
@@ -113,6 +114,17 @@ struct TuriClosure {
      * eval_apply publishes this as env->current_module while the body runs so
      * intra-module calls can resolve module-private "<module>/<name>" bindings. */
     const char     *module;
+#ifndef NDEBUG
+    /* libturi-per-embed-env-and-peripherals Gap 6: debug-only env tag.  Closures
+     * hold pointers into their originating env's arenas and must not outlive (or
+     * be applied under) a different env.  Claimed on first application
+     * (eval_apply_driven) and asserted on every later one, so caching a closure
+     * across per-script envs trips a clean abort here instead of a heap
+     * use-after-free.  Compiled out entirely in release (NDEBUG) -- zero cost.
+     * Every closure is born zeroed (calloc / memset / struct-copy), so this
+     * starts NULL without per-site initialisation. */
+    TuriEnv        *origin_env;
+#endif
 };
 
 /* Forward declaration — defined after TuriStruct is fully defined below. */
@@ -6133,6 +6145,24 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
  * ---------------------------------------------------------------------- */
 static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
                                    TuriValue *args, uint32_t n_args) {
+#ifndef NDEBUG
+    /* Gap 6: tag-on-first-use cross-env guard.  Claim the closure for `env` the
+     * first time it is applied; on any later application under a different env,
+     * abort -- that is a closure cached across per-script envs, which would
+     * otherwise dereference freed arena memory. */
+    if (cl) {
+        if (cl->origin_env == NULL) {
+            cl->origin_env = env;
+        } else if (cl->origin_env != env) {
+            fprintf(stderr,
+                    "turi: FATAL: closure applied under a different TuriEnv than "
+                    "it was created in -- closures pin their originating env's "
+                    "arenas and must not be cached/reused across envs "
+                    "(libturi-per-embed-env-and-peripherals Gap 6)\n");
+            abort();
+        }
+    }
+#endif
     /* SB3: step-fuel check for the activation (TCO iterations are charged in
      * the DK_CALL_ARG reuse path).  Mirrors the retired eval_apply_inner's per-call charge,
      * which preceded even the native dispatch. */
@@ -7998,13 +8028,26 @@ static void turi_diag_sink_trampoline(DiagLevel level, const char *code,
  * the save/install/restore so every public eval entry shares one code path. */
 static TuriValue turi_eval_with_sink(TuriEnv *env, const char *src,
                                      char *out_type_tag, size_t tag_cap) {
-    if (!env || !env->diag_sink)
-        return turi_eval_impl(env, src, out_type_tag, tag_cap);
-    void      *prev_ud = NULL;
-    DiagSinkFn prev    = diag_get_sink(&prev_ud);
-    diag_set_sink(turi_diag_sink_trampoline, env);
-    TuriValue r = turi_eval_impl(env, src, out_type_tag, tag_cap);
-    diag_set_sink(prev, prev_ud);
+    /* Gap 7: snapshot this env's interpret-mode bit into the process-global
+     * elaborator flag for the duration of the call, then restore.  Lets two
+     * co-resident libturi embedders run with different modes without the later
+     * one's turi_env_new (which sets g_interpret_mode = true) sticking the flag
+     * for the other.  A NULL env falls through to turi_eval_impl's own guard. */
+    bool saved_mode = g_interpret_mode;
+    if (env) g_interpret_mode = env->interpret_mode;
+
+    TuriValue r;
+    if (!env || !env->diag_sink) {
+        r = turi_eval_impl(env, src, out_type_tag, tag_cap);
+    } else {
+        void      *prev_ud = NULL;
+        DiagSinkFn prev    = diag_get_sink(&prev_ud);
+        diag_set_sink(turi_diag_sink_trampoline, env);
+        r = turi_eval_impl(env, src, out_type_tag, tag_cap);
+        diag_set_sink(prev, prev_ud);
+    }
+
+    g_interpret_mode = saved_mode;
     return r;
 }
 
