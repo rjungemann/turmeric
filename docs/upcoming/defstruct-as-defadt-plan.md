@@ -330,6 +330,19 @@ runtime *usage* seam, below.
    exists); (b) emit per-monomorph instance methods; (c) keep lowered parametric
    structs on the carrier representation (simplest-green, gives up the by-value
    win for them).  Unblocks all parametric stdlib usage at once.
+
+   **Refined finding (2026-06-25):** the failure is not only an ABI bridge -- it
+   is also an instance-**selection** bug.  `(eq? (some 5) (some 5))` emits a call
+   to `__inst_Eq_eq_qu_MutableMap__spec__..._tur_adt_Option__int_...` -- i.e. the
+   `Eq [MutableMap]` instance body specialised with `Option__int` params (its
+   body then calls `mutmap_len`/`mutmap_eq_loop` on an Option).  The dispatch
+   resolver picked the WRONG instance for a by-value `Option__int` receiver
+   (expected `Eq [Option]`).  So before/with the bridge, the by-value ADT-app
+   receiver must resolve to the correct instance head -- the per-(args) spec
+   matcher is keying on the carrier-erased ABI and colliding `Option__int` with
+   the `MutableMap` instance.  This is the deep core of the remaining work and
+   lives in the typeclass dispatch/spec-selection machinery
+   (`find_matched_abi_spec` / instance resolution), not just `emit_carrier_bridge`.
 2. **`Option`/`Result` dedicated codegen.** These carry hand-written runtime
    layout (`tur_option_t`, `tur_result_box_t`, `tur_is_some`/`tur_opt_value`,
    `some`/`none`/`ok`/`err`) that assumes the struct/carrier representation;
