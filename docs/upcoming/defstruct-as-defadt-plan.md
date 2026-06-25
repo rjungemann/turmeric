@@ -88,21 +88,66 @@ and the indirect-call codegen reads the field's kind / `full_type` from the
 `CtorField` when the `EX_GET_FIELD` has a NULL `StructDef`
 ([`emit_expr.c`](../../src/compiler/emit_expr.c)). Like the `rc<ADT>` fix, (2) is
 flag-independent: calling an `fn` field on any hand-written record ADT now works
-(previously "no typeclass method found"). A *typed* `fn` field `(fn [T] U)` is an
-F_LIST type form, which the gate still excludes, so it stays on the struct path.
+(previously "no typeclass method found").
 Fixtures: `conv-defstruct-fn-field-lowering` (flag-on parity),
 `conv-adt-record-fn-field-call` (the closed record-ADT fn-capability-call gap).
 
-Anything else (parametric, or a bare struct-typed
-field) still elaborates as a struct, even with the flag on. A bare struct-typed
-field is deliberately excluded: a struct's by-value-ness is not yet known when
-the top-level type pre-pass pre-registers a sibling that nests it (the stub looks
-trivially copyable), so admitting it could make the pre-pass and full
-elaboration disagree on whether the outer lowers. With the flag on a leaf-scalar
-nested struct has itself already lowered to an ADT, so the common nested case
-still lowers; only a genuinely non-lowering struct field holds the outer on the
-struct path. The lowered program is behaviourally identical (verified by flag-on
-fixtures).
+**Slice 7 (typed-`fn`-field widening).** The gate now also admits a *typed* `fn`
+field `(fn [..] ..)`. Though it is an F_LIST type form (which the leaf check
+otherwise rejects), a typed `fn` is still an 8-byte function-pointer carrier slot
+exactly like a bare `fn` -- its argument/return signature only feeds type
+checking, never layout -- so it lowers like a scalar carrier. The one crossing:
+the struct path stores a typed `fn` field as a *concrete* function pointer and
+calls it directly, but a record-ADT field stores every `fn` (typed or bare) as
+the int64 carrier, which is not directly callable. The capability-call codegen's
+direct-call shortcut ([`emit_expr.c`](../../src/compiler/emit_expr.c)) is now
+gated on a non-NULL `StructDef`, so a record-ADT typed-`fn` field falls through to
+the same intptr_t-cast path bare `fn` already uses (the pointer type is
+specialised from the call's arg/result C types). Like slice 6's fix this is
+flag-independent: a typed-`fn` capability call on any hand-written record ADT now
+works (previously it emitted a non-callable int64-carrier call and failed at
+`cc`). Fixtures: `conv-defstruct-typed-fn-field-lowering` (flag-on parity),
+`conv-adt-record-typed-fn-field-call` (the closed record-ADT typed-fn-call gap).
+
+**Slice 8 (bare-struct-field widening + `make-struct` compatibility).** The gate
+now admits a **bare (nullary) user-type field** -- a struct, an ADT, an opaque
+newtype, or a forward-declared sibling.  The lowering decision is made
+*syntactically* (any bare, non-primitive, non-pointer symbol is a user-type
+reference), so it no longer resolves the field's binding kind and the top-level
+type pre-pass and full elaboration always agree -- even when the field references
+a sibling declared later in the file, whose stub is unresolved at pre-pass time.
+This retires the old "a struct's by-value-ness is not yet known at pre-pass time"
+hazard that kept struct fields on the struct path.
+
+The field's *representation* is then chosen at codegen time from the fully
+resolved inner type, and `resolve_ctor_field`
+([`elab_structs.c`](../../src/compiler/elab_structs.c)) records the field's
+nominal `full_type` for the inners the codegen handles end-to-end: a by-value
+aggregate inner is stored INLINE (slice 4), and a `:heap` struct inner is an
+int64 typed-pointer carrier (`type_is_heap_struct` guards every byval<->carrier
+bridge, and the by-value/carrier ctor now casts a `:heap` argument to the int64
+carrier with `(int64_t)(intptr_t)`, mirroring the slice-6 fn cast, so the ctor
+call emits no `-Wint-conversion`).  A carrier ADT inner (multi-variant /
+parametric / drop-glue) is deliberately left `full_type` NULL -- it stays an
+opaque int64 carrier, exactly as the *struct* path erases an ADT field's type, so
+the two paths agree (both reject reading it back typed) instead of the ADT path
+silently miscompiling.
+
+Slice 8 also closes a flag-on compatibility gap shared by every earlier slice:
+**`make-struct` on a lowered struct.**  `(make-struct Name args...)` on a name
+that has lowered to a single-variant record ADT now rewrites to the auto-bound
+constructor call `(Name args...)` -- positional or keyword -- which the record-ADT
+path already elaborates (`elab_make_struct`, elab_structs.c).  Like the other
+record-ADT fixes this is flag-independent: `make-struct` on a hand-written
+single-variant record ADT works too.  Fixtures:
+`conv-defstruct-struct-field-lowering` (by-value + `:heap` struct fields, flag-on
+parity), `conv-defstruct-make-struct-lowering` (positional + keyword make-struct
+on a lowered struct).
+
+Anything else (parametric or `:heap` *outer* structs, and the carrier-ADT /
+opaque / drop-glue *field* cases described above) still keeps the struct path or
+the type-erased carrier, even with the flag on.  The lowered program is
+behaviourally identical for the admitted cases (verified by flag-on fixtures).
 
 ## Known gaps (later slices, before graduation)
 
@@ -200,13 +245,31 @@ before the gate widens past leaf-scalar and before the experiment graduates
    `(.handler v arg)` dispatches through a single-variant record ADT (a `TY_ADT`
    branch in the elaborator's capability-call path + CtorField-aware
    indirect-call codegen, both flag-independent so hand-written record ADTs gain
-   fn-field calls too). A typed `(fn [T] U)` field is an F_LIST form the gate
-   still excludes. Fixtures: `conv-defstruct-fn-field-lowering`,
-   `conv-adt-record-fn-field-call`. Remaining for graduation: bare struct-typed,
-   `:heap`, parametric fields, and typed `fn` fields.
-7. Graduate: delete the gate, lower unconditionally (including bare struct /
-   parametric / typed-fn fields), retire the `StructDef` surface path, regenerate
-   the affected snapshots in one change.
+   fn-field calls too). Fixtures: `conv-defstruct-fn-field-lowering`,
+   `conv-adt-record-fn-field-call`.
+6a. Widen the gate to a **typed `fn` field** `(fn [..] ..)`. **DONE** -- an F_LIST
+   type form, but representationally identical to a bare `fn` (an 8-byte
+   function-pointer carrier), so it lowers like a scalar carrier. The
+   capability-call direct-call shortcut is gated on a non-NULL `StructDef`, so a
+   record-ADT typed-`fn` field uses the same intptr_t-cast path as a bare `fn`
+   (flag-independent; hand-written record ADTs gain typed-fn calls too). Fixtures:
+   `conv-defstruct-typed-fn-field-lowering`, `conv-adt-record-typed-fn-field-call`.
+6b. Widen the gate to a **bare struct-typed field** (and any bare user-type
+   field).  **DONE** -- the gate decision is now *syntactic* (any bare
+   non-primitive symbol is admitted), so the pre-pass / full-elab agreement holds
+   for forward-referenced sibling types and the old by-value-ness hazard is gone.
+   `resolve_ctor_field` records a field's `full_type` for by-value-aggregate and
+   `:heap` struct inners (the latter cast to the int64 carrier at the ctor call,
+   no `-Wint-conversion`); a carrier ADT inner stays type-erased, matching the
+   struct path.  This slice also closed **`make-struct` on a lowered struct**:
+   `(make-struct Name args...)` rewrites to the constructor call `(Name args...)`
+   (flag-independent; hand-written single-variant record ADTs gain make-struct
+   too). Fixtures: `conv-defstruct-struct-field-lowering`,
+   `conv-defstruct-make-struct-lowering`.
+   Remaining for graduation: `:heap` *outer* structs and parametric fields.
+7. Graduate: delete the gate, lower unconditionally (including parametric / `:heap`
+   structs), retire the `StructDef` surface path, regenerate the affected
+   snapshots in one change.
 
 See [struct-adt-convergence-s1-bridging-findings.md](struct-adt-convergence-s1-bridging-findings.md)
 for the by-value representation work this builds on.

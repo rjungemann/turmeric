@@ -1,0 +1,31 @@
+;; CONV-S1 (slice 8, pre-graduation): with --enable=defstruct-as-defadt, a
+;; defstruct whose field is itself a bare (nullary) user struct lowers to a
+;; single-variant record defadt.  A by-value inner struct is stored INLINE by
+;; value (the way a struct inlines a nested struct field); a :heap inner struct
+;; is an int64 typed-pointer carrier.  In both cases the field carries its struct
+;; type, so field access `(.a (.inner o))`, passing the field to a function, and
+;; binding it in a `match` all resolve.  Behaviour is identical flag off (struct
+;; path) and on (ADT path).
+(defstruct Pt [a : int b : int])
+(defstruct Outer [tag : int pt : Pt])
+(defstruct HBox [label : int big : Big])
+(defstruct Big :heap [x : int y : int z : int])
+
+(defn psum [p : Pt] : int (+ (.a p) (.b p)))
+(defn bsum [g : Big] : int (+ (.x g) (+ (.y g) (.z g))))
+
+;; by-value inner struct: field access, function-arg passing, and match all read
+;; the inline aggregate back as Pt.
+(defn via-access [o : Outer] : int (+ (.tag o) (.a (.pt o))))
+(defn via-fn     [o : Outer] : int (+ (.tag o) (psum (.pt o))))
+(defn via-match  [o : Outer] : int (match o (Outer t p) (+ t (psum p))))
+
+;; :heap inner struct field: typed-pointer carrier, read back as Big.
+(defn hbox-sum [h : HBox] : int (+ (.label h) (bsum (.big h))))
+
+(defn main [] : int
+  (println (via-access (Outer 100 (Pt 40 2))))  ; 100 + 40      = 140
+  (println (via-fn     (Outer 100 (Pt 40 2))))  ; 100 + (40+2)  = 142
+  (println (via-match  (Outer 100 (Pt 40 2))))  ; 100 + (40+2)  = 142
+  (println (hbox-sum   (HBox 100 (Big 1 2 3))))  ; 100 + (1+2+3) = 106
+  0)

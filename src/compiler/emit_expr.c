@@ -2257,7 +2257,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         gf_full = cf->full_type;
                     }
                     if (gf_kind == TY_FN && gf_full &&
-                            gf_full->kind == TY_FN) {
+                            gf_full->kind == TY_FN && gf_def) {
+                        /* CONV-S1 (slice 7): the struct path stores a typed `fn`
+                         * field as a concrete function pointer, so it can be
+                         * called directly.  A record-ADT field (gf_def == NULL)
+                         * stores every `fn` -- typed or bare -- as the int64
+                         * carrier, so it is NOT directly callable; leave
+                         * is_typed_fn_field false so the intptr_t-cast path below
+                         * specialises the pointer to the call's arg/result C
+                         * types, exactly as for a bare `fn` field. */
                         is_typed_fn_field =
                             (register_fn_ptr_typedef(gf_full) != NULL);
                         /* parametric-struct-fn-field-call-passes-concrete-arg-to-
@@ -3146,6 +3154,23 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         arg_strs[i] = strdup(c.data);
                         buf_free(&c);
                         free(tmp);
+                    }
+                    /* CONV-S1 (slice 8): a :heap struct argument is a typed
+                     * pointer (`Big *`), but a constructor stores it in the int64
+                     * carrier field slot.  Cast the pointer to int64 explicitly
+                     * -- the same coercion the fn-field path does above, and the
+                     * one a struct literal applies to its :heap field -- otherwise
+                     * clang emits a -Wint-conversion warning at the ctor call.
+                     * A :heap struct is never an inline by-value field, so this
+                     * never collides with the slice-4 inline path. */
+                    if (!suffix && !field_inline && arg &&
+                        type_is_heap_struct(emit_resolve_type(ctx, arg->type))) {
+                        Buf c; buf_init(&c);
+                        buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
+                        buf_putc(&c, '\0');
+                        free(arg_strs[i]);
+                        arg_strs[i] = strdup(c.data);
+                        buf_free(&c);
                     }
                 }
                 char *_mc = mangle_field_name(fn_binding->name->name);
