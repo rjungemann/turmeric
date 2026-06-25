@@ -62,3 +62,23 @@ but a Result receiver still takes the pointer-cast branch.
 debugger Phase 5 (rich type display in native debuggers) -- building a fixture
 that holds a by-value `Result` local for the gdb pretty-printers. See
 docs/upcoming/debugger-native-types-plan.md.
+
+## Resolution
+
+Fixed in `src/compiler/emit_expr.c` (the `EX_GET_FIELD` lowering). The
+`through_carrier` decision keyed only on the receiver type
+(`TY_STRUCT && def->n_type_params > 0`), which is true for any bare
+`Result`/`Option` receiver -- including a by-value aggregate local. A
+by-value carrier-ABI binding is already tracked by its
+`emit_byvalue_carrier_abi` flag (set true when the binding/param is declared
+as the concrete struct rather than the int64 carrier). The fix flips
+`through_carrier` off when the receiver is such a by-value `EX_VAR`, so the
+access takes the direct `(r).field` branch instead of the
+`((Result *)(intptr_t)(r))->field` pointer cast.
+
+This also corrects the analogous bare-`Option`-by-value case (the original
+report only observed Option working because its repro happened to use a
+concrete `Option__int` receiver, where `n_type_params == 0` already routed to
+the direct path).
+
+Regression coverage: `tests/fixtures/byval-result-field-access/`.

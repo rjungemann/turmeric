@@ -5429,6 +5429,21 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
                 }
             }
+            /* byvalue-result-field-access-casts-aggregate-to-pointer.md: a
+             * by-value carrier-ABI local/param (e.g. `(let [r (parse 7)] ...)`
+             * where parse returns a bare `Result`/`Option`) is declared as the
+             * concrete aggregate struct, not the int64 carrier -- its binding
+             * carries `emit_byvalue_carrier_abi = true`.  But `through_carrier`
+             * defaults true for any `Result`/`Option` receiver (n_type_params >
+             * 0), so the access would emit `((Result *)(intptr_t)(r))->ok_val`,
+             * casting an aggregate value to a pointer (a hard cc error).  When
+             * the receiver is such a by-value var, take the direct `(r).field`
+             * path instead. */
+            if (through_carrier && recv_expr->kind == EX_VAR
+                && recv_expr->as.var.binding
+                && recv_expr->as.var.binding->emit_byvalue_carrier_abi) {
+                through_carrier = false;
+            }
             bool through_pbp = !through_rc && !through_carrier
                 && expr_is_pbp_param(ctx, recv_expr);
             /* Direction (1) of polymorphic-ok-in-typeclass-instance-method-...:
