@@ -134,6 +134,36 @@ static StructDef *lookup_rc_inner_struct_def(Elab *e, const char *tname, uint32_
     return NULL;
 }
 
+/* CONV-S1 (slice 5): the ADT-record analogue of lookup_rc_inner_struct_def.
+ * When a record-variant field is annotated `rc<Name>` and `Name` resolves to an
+ * in-scope struct or single-variant record ADT, build the inner-carrying rc Type
+ * (`type_rc_struct` / `type_rc_adt`) so field access through the rc receiver can
+ * auto-deref to the named field -- exactly the surface a `defstruct` rc<Struct>
+ * field already exposes (DS3 / slice 2), now reached by the lowered struct path.
+ * Returns NULL (the field stays a bare rc carrier) when `tname` is not an
+ * `rc<...>` over a known aggregate, so a scalar inner (`rc<int>`) or an unknown
+ * name is unaffected. */
+static Type *adt_rc_inner_full_type(Elab *e, const char *tname, uint32_t tlen) {
+    if (tlen <= 4 || memcmp(tname, "rc<", 3) != 0 || tname[tlen - 1] != '>') {
+        return NULL;
+    }
+    const char *inner_name = tname + 3;
+    uint32_t inner_len = tlen - 4;  /* strip "rc<" and ">" */
+    const Symbol *sym = symtab_intern(e->st, strslice(inner_name, inner_len));
+    Binding *tb = scope_lookup_type_def(e->scope, sym);
+    if (!tb) return NULL;
+    Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+    if (tb->type.kind == TY_STRUCT) {
+        *t = type_rc_struct(tb->type.as.struct_.def);
+        return t;
+    }
+    if (tb->type.kind == TY_ADT) {
+        *t = type_rc_adt(tb->type.as.adt_.def);
+        return t;
+    }
+    return NULL;
+}
+
 
 static bool struct_type_param_index(const StructDef *def, const char *name, uint8_t *out_idx) {
     if (!def || !name) return false;
@@ -605,14 +635,22 @@ void elab_register_struct_def(Elab *e, StructDef *def) {
 
 /* CONV-S1 (defstruct-as-defadt): true iff every field in an old-syntax
  * defstruct field vector is lowerable to a record-`defadt` field with a
- * byte-identical layout.  As of slice 4 that is either:
+ * byte-identical layout.  As of slice 5 (pointer-field widening) that is:
  *   - a primitive scalar (int / float / bool / cstr / sized numerics), or
+ *   - a pointer-kinded field (rc<T> / ref<T> / lref<T> / weak<T> / ptr<void>)
+ *     or an `fn` field -- each is an 8-byte carrier slot regardless of the inner
+ *     type, so the record-ADT path stores it as a scalar carrier exactly as the
+ *     struct path does, drop-glue (rc/ref/weak) and all (slice 2), and the
+ *     pre-pass / full-elab lowering decision never disagrees because a pointer's
+ *     representation does not depend on the (possibly not-yet-known) inner
+ *     type's by-value-ness (the by-value ctor casts an `fn` arg to the int64
+ *     carrier, slice 6), or
  *   - a bare user type that resolves to a by-value aggregate (a non-heap,
  *     non-opaque, drop-glue-free struct, or a by-value ADT product), which the
  *     record-ADT path now stores INLINE by value exactly as a struct inlines a
  *     nested struct field.
- * A compound (F_LIST) type, or any rc / ref / weak / ptr / fn / parametric /
- * :heap field, still disqualifies so the struct keeps the normal struct path.
+ * A compound (F_LIST) type, or any parametric / :heap field, still
+ * disqualifies so the struct keeps the normal struct path.
  * Mirrors the old-syntax pre-scan (name, then F_TYPE_ANN-wrapped type). */
 static bool defstruct_fields_all_primitive(Elab *e, const Form *fields_vec) {
     if (!fields_vec || fields_vec->tag != F_VEC) return false;
@@ -636,6 +674,16 @@ static bool defstruct_fields_all_primitive(Elab *e, const Form *fields_vec) {
             case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
             case TY_FLOAT32: case TY_FLOAT64:
                 break;  /* primitive scalar -- ok */
+            case TY_RC:   case TY_REF:  case TY_LREF:
+            case TY_WEAK: case TY_PTR_VOID: case TY_FN:
+                /* slice 5/6: a pointer-kinded or `fn` field is an 8-byte carrier
+                 * slot whatever its inner type is, so it lowers like a scalar --
+                 * the by-value ADT product already stores such fields as carriers
+                 * and synthesises drop glue for the owning (rc/ref/weak) ones
+                 * (slice 2); the ctor casts an `fn` arg to the int64 carrier
+                 * (slice 6).  The inner type is irrelevant to the lowering
+                 * decision, so the pre-pass and full elaboration always agree. */
+                break;
             case TY_UNKNOWN: {
                 /* slice 4: a bare user type that resolves to an ADT is lowerable
                  * -- a by-value ADT field is inlined, a carrier ADT field is
@@ -1507,6 +1555,19 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
     uint32_t tlen = ft_form->as.sym->len;
     TypeKind fkind, finner;
     parse_struct_field_type(tname, tlen, &fkind, &finner);
+    if (fkind == TY_RC && finner == TY_UNKNOWN) {
+        /* CONV-S1 (slice 5): rc<Name> over a user struct / record ADT -- carry
+         * the inner def on the field's full_type so receivers of the rc field
+         * auto-deref through it (mirrors DS3's lookup_rc_inner_struct_def on the
+         * struct path).  The field still stores as the TY_RC carrier (the
+         * inline-byval gate rejects a TY_RC full_type), so layout is unchanged;
+         * only field-access resolution gains the inner layout. */
+        Type *rc_full = adt_rc_inner_full_type(e, tname, tlen);
+        if (rc_full) {
+            ctor->fields[fi].full_type = rc_full;
+            finner = (rc_full->kind == TY_RC) ? rc_full->as.rc.inner : finner;
+        }
+    }
     if (fkind == TY_UNKNOWN) {
         /* Phase RF0: fall back to user-defined type lookup. */
         const Symbol *type_sym = symtab_intern(e->st, strslice(tname, tlen));

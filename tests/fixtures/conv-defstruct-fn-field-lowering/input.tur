@@ -1,0 +1,17 @@
+;; CONV-S1 (slice 6): with --enable=defstruct-as-defadt, a defstruct with a bare
+;; `fn` field lowers to a single-variant record defadt and flows through the
+;; by-value ADT path.  The by-value ctor casts the function pointer to the int64
+;; carrier, and a capability-field call `(.handler h arg)` dispatches through the
+;; record ADT exactly as on the struct path.  Behaviour is identical flag off
+;; (struct path) and on (ADT path).
+(defstruct H [tag : int handler : fn])
+
+(defn inc [x : int] : int (+ x 1))
+
+(defn run [h : H] : int
+  (+ (.tag h) (.handler h 41)))
+
+(defn main [] : int
+  (let [h (H 100 inc)]
+    (println (run h))   ; 142
+    0))

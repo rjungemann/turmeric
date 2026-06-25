@@ -5178,6 +5178,62 @@ skip_struct_field_lookup:;
                 }
             }
         }
+        /* CONV-S1 (slice 6): the same capability-field call through an `fn` field
+         * of a single-variant record ADT -- a record ADT *is* a product, so
+         * `(.handler v arg ...)` calls the function stored in the named field,
+         * exactly as a struct does (a `defstruct` with an `fn` field lowers to
+         * this case).  Mirror the TY_STRUCT branch above, building the
+         * EX_GET_FIELD with adt_def/adt_ctor instead of a StructDef. */
+        {
+            const Type *adt_base = &base;
+            while (adt_base && adt_base->kind == TY_APP && adt_base->as.app.fn)
+                adt_base = adt_base->as.app.fn;
+            if (adt_base && adt_base->kind == TY_ADT && adt_base->as.adt_.def) {
+                const AdtDef *adt = adt_base->as.adt_.def;
+                if (adt_is_flat_product(adt) && adt->n_ctors == 1 &&
+                    adt->ctors[0]->is_record) {
+                    const CtorDef *ctor = adt->ctors[0];
+                    for (uint32_t i = 0; i < ctor->n_fields; i++) {
+                        if (!ctor->fields[i].name) continue;
+                        if (strcmp(ctor->fields[i].name, method_name) != 0) continue;
+                        if (ctor->fields[i].kind != TY_FN) break;
+                        Type field_type = ctor->fields[i].full_type
+                            ? *ctor->fields[i].full_type
+                            : type_from_kind(ctor->fields[i].kind);
+                        Expr *get_field = expr_new(e->arena, EX_GET_FIELD,
+                                                   field_type, call->span);
+                        get_field->as.get_field_.struct_expr = obj;
+                        get_field->as.get_field_.field_idx = i;
+                        get_field->as.get_field_.def = NULL;
+                        get_field->as.get_field_.adt_def = adt;
+                        get_field->as.get_field_.adt_ctor = ctor;
+
+                        uint32_t n_args = call->as.list.len - 2;
+                        Expr **args = (Expr **)arena_alloc(e->arena,
+                                                           n_args * sizeof(Expr *));
+                        for (uint32_t j = 0; j < n_args; j++) {
+                            args[j] = elab_form(e, call->as.list.items[2 + j]);
+                            if (!args[j]) return NULL;
+                        }
+                        Type result_type = TYPE_INT;
+                        if (field_type.kind == TY_FN) {
+                            Type rt = field_type.as.fn.result_full_type
+                                          ? *field_type.as.fn.result_full_type
+                                          : type_from_kind(field_type.as.fn.result_kind);
+                            if (rt.kind != TY_UNKNOWN && rt.kind != TY_NIL)
+                                result_type = rt;
+                        }
+                        Expr *call_out = expr_new(e->arena, EX_CALL, result_type,
+                                                  call->span);
+                        call_out->as.call_.fn_binding = NULL;
+                        call_out->as.call_.fn_expr = get_field;
+                        call_out->as.call_.args = args;
+                        call_out->as.call_.n_args = n_args;
+                        return call_out;
+                    }
+                }
+            }
+        }
 skip_capability_field_lookup:;
     }
 

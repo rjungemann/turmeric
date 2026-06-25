@@ -1,0 +1,17 @@
+;; CONV-S1 (slice 6): a capability-field call through an `fn` field of a
+;; single-variant record ADT.  A record ADT is a product, so `(.handler v arg)`
+;; calls the function stored in the named field -- the same surface a struct's
+;; `fn` field exposes.  Before this, the call raised "no typeclass method found
+;; for 'handler'" (the capability-call dispatch only handled struct receivers).
+(defdata H (H [tag : int handler : fn]))
+
+(defn inc [x : int] : int (+ x 1))
+
+;; Reads the scalar field and CALLS the fn field, both in one borrow of H.
+(defn run [h : H] : int
+  (+ (.tag h) (.handler h 41)))
+
+(defn main [] : int
+  (let [h (H 100 inc)]
+    (println (run h))   ; 142 -- 100 + inc(41)
+    0))

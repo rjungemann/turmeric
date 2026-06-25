@@ -1,0 +1,20 @@
+;; CONV-S1 (slice 5): with --enable=defstruct-as-defadt, a defstruct whose
+;; fields are primitive scalars or POINTER fields (rc<T> / ref<T> / lref<T> /
+;; weak<T> / ptr<void>) lowers to a single-variant record defadt and flows
+;; through the by-value ADT path.  A pointer field is an 8-byte carrier slot
+;; whatever its inner type, so the lowering decision never depends on the inner
+;; type's by-value-ness.  An rc<Struct> field carries its inner layout, so
+;; `(.f (.rcfield s))` auto-derefs exactly as on the struct path.  This program
+;; must behave identically with the flag off (struct path) and on (ADT path).
+(defstruct Inner [v : int])
+(defstruct Box [tag : int p : rc<Inner>])
+
+;; Reads the scalar field AND -- through the rc<Inner> field -- the inner
+;; struct's named field, both within a single borrow of the move-only Box.
+(defn box-sum [b : Box] : int
+  (+ (.tag b) (.v (.p b))))
+
+(defn main [] : int
+  (let [b (Box 100 (rc/of (Inner 42)))]
+    (println (box-sum b))   ; 142 -- 100 + 42, rc<Inner> auto-derefs to .v
+    0))
