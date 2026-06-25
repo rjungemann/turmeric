@@ -1,0 +1,39 @@
+;; Regression: a backquote `(do ...)` body containing `(~(dot-sym A) ~w)` must
+;; emit every sibling form, not silently drop the forms before the computed
+;; dot-sym call. A computed `dot-sym` in an outer macro `let` must likewise not
+;; corrupt the surrounding quasiquote template.
+;; docs/archive/macro-backquote-dot-sym-drops-siblings.md
+
+(defstruct W [Pos : int])
+
+;; Variant A: hard-coded `.Pos` -- the form that always worked.
+(defmacro pp-good [w]
+  `(do
+     (println 100)
+     (println (.Pos ~w))
+     (println 300)))
+
+;; Variant B: computed `~(dot-sym A)` -- previously dropped the leading
+;; siblings and printed only 300.
+(defmacro pp-bad [w A]
+  `(do
+     (println 100)
+     (println (~(dot-sym A) ~w))
+     (println 300)))
+
+;; Variant C: outer `let` whose RHS calls `dot-sym`/`list` but is never
+;; spliced -- previously corrupted the template and printed only 300.
+(defmacro pp-unused-dot [w A]
+  (let [d      (dot-sym A)
+        access (list d w)]
+    `(do
+       (println 100)
+       (println 200)
+       (println 300))))
+
+(defn main [] : int
+  (let [w (make-struct W 7)]
+    (pp-good w)
+    (pp-bad  w Pos)
+    (pp-unused-dot w Pos)
+    0))

@@ -1,11 +1,26 @@
 ---
 title: Backquote `~(dot-sym X)` inside a do/let body silently drops sibling forms
-category: Reported
+category: Resolved
 severity: Macro-author footgun (silent miscompile / dropped statements)
 discovered: 2026-06-11, during ECS spice E1' execution (docs/upcoming/ecs-spice-plan.md)
+resolved: 2026-06-25
 ---
 
 # Backquote `~(dot-sym X)` inside a do/let body silently drops sibling forms
+
+> **RESOLVED 2026-06-25.** No longer reproduces. The macro-argument /
+> quasiquote rework in commit `7773dbd` ("macro-args-elaborated-before-
+> expansion") rebuilt how `substitute_params` and `ct_eval_quasiquote`
+> thread compile-time state: the quasiquote wrapper is now preserved across
+> substitution and re-evaluated in a dedicated post-substitute pass
+> (`elab_macros.c`), so a `~(dot-sym A)` (or any CT-builtin call) sitting
+> beside other template forms no longer perturbs the surrounding `(do ...)`
+> body. All three repros below now emit every sibling in order:
+> `pp-good`/`pp-bad` -> `100 7 300`, `pp-unused-dot` -> `100 200 300`.
+> Locked in by regression fixture
+> `tests/fixtures/macro-backquote-dot-sym-siblings/`. The ECS spice's
+> `(list ...)`-style query macros may now be rewritten back to the natural
+> backquote shape when convenient; that is not required for this fix.
 
 ## Summary
 
