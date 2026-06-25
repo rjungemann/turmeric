@@ -6,6 +6,19 @@ description: Bring the recursive non-parametric HKT carriers (Re, Expr) onto the
 
 # B4 -- fat-closure ABI for by-value-ADT closure params
 
+## DONE -- all three slices landed; feature GRADUATED 2026-06-25
+
+Slices 1 (<= 8 byte single-carrier wrappers Re/Expr), 2 (wide > 8 byte
+by-value-ADT closure params via heap-box carrier), and 3 (graduation) are all
+complete. The `byvalue-recursive-carrier` experiment has been **retired**: the
+EXPERIMENTS[] row and the `g_opt_byval_recursive_carrier` enable bit are gone,
+the feature is unconditional (the gate lives in `adt_is_byvalue_product_d`,
+`src/compiler/types.c`), and the six `hkt-cata-*` fixtures dropped their `flags`
+files and now run on the default path. Full default suite: 1829 passed, 0 failed.
+(Per CLAUDE.md the legacy `TUR_M7_HKT=0` carrier suite is not a graduation gate;
+the default by-value suite is.)  The slice-by-slice notes below are retained as
+the historical record.
+
 ## Status / provenance
 
 Spun out of
@@ -24,6 +37,93 @@ flipped 2026-06-19, `TUR_M7_HKT=0` opts back to the legacy carrier). M7
 graduating did **not** deliver the ABI change described here. Re-running the
 gate widening on today's tree reproduces the identical 9 `cc` errors. This is
 a distinct, still-unbuilt change and is next.
+
+## Status -- slice 1 LANDED (2026-06-25)
+
+Slice 1 (the int64-wide single-carrier-wrapper case, covering `Re` and `Expr`)
+is implemented behind the `byvalue-recursive-carrier` experiment
+(`--enable=byvalue-recursive-carrier`). Flag-off is a byte-identical no-op (the
+legacy carrier path is untouched); flag-on greens all five `hkt-cata-*-carrier`
+fixtures, which now carry a `flags` file opting into the experiment. The full
+default suite is green (`bash tests/run.sh`: 0 failed).
+
+What landed:
+
+- **Gate (`src/compiler/types.c`).** `adt_is_byvalue_product_d` admits a
+  single-variant, single-field product whose sole field is an `(F Self)`
+  type-application (kept on the int64 carrier) when the flag is on -- the
+  8-byte wrapper case (`Re`, `Expr`). A new predicate
+  `adt_is_byval_recursive_carrier_wrapper` names exactly this shape.
+- **ABI = reinterpret, not box (the key decision).** A single-carrier wrapper's
+  by-value representation *is* its int64 carrier, so it crosses the fat-closure
+  boundary by reinterpret with **no heap box and no deref**. This sidesteps the
+  ownership/free contract slice 2 still owes for the `> 8 byte` case.
+- **Call site (`src/compiler/emit_expr.c`).** The fat-closure cast keeps the
+  by-value aggregate param type (so it matches the unchanged thunk), and an
+  erased-carrier arg is reconstructed into the aggregate with a designated
+  compound literal `(tur_adt_X){ .as.<Ctor>._0 = (carrier) }`
+  (`emit_byval_recursive_carrier_reconstruct`). A concrete-aggregate arg passes
+  through untouched.
+- **Field read (`src/compiler/emit_expr.c`).** Both match-arm binders (if-chain
+  and switch) read a recursive-carrier-wrapper field as the raw int64 carrier
+  (no `*(T*)` deref), since no box was ever made on the producer side.
+- **Thunk (`src/compiler/emit_fns.c`).** *Unchanged.* Because an 8-byte
+  single-eightbyte struct and `int64_t` share the SysV register ABI, keeping the
+  thunk's by-value `tur_adt_X` parameter and reconstructing the aggregate at the
+  call site is sufficient and avoids touching M7 thunk emission entirely.
+
+## Status -- slice 2 LANDED (2026-06-25)
+
+Slice 2 (the wide, `> 8 byte` by-value-ADT closure-param case) is implemented
+behind the same `byvalue-recursive-carrier` experiment. The gate now also admits
+a multi-field recursive carrier (e.g. `Expr = (Roll :int (ExprF Expr))`, 16
+bytes); flag-off remains a byte-identical no-op and the full default suite is
+green, with a new `hkt-cata-wide-byvalue-carrier` fixture exercising the wide
+path (deep tree, three discriminating algebras).
+
+**Ownership/free contract (the prerequisite the plan demanded).** A wide
+by-value-ADT element that lives in a parametric carrier monomorph is stored as
+an int64 **heap-box pointer**, allocated in that monomorph's constructor. **The
+box is owned by the enclosing carrier node** -- it lives exactly as long as the
+node does. The fat-closure boundary only ever **borrows** the box: the box
+pointer rides the int64 carrier into the closure, and the thunk **deref+copies**
+the aggregate out at entry (the ADT is `:copy`, so the copy is the value). The
+thunk never frees -- there is no per-call transfer of ownership and so no
+double-free / use-after-free hazard. (Carrier nodes themselves are
+process-lifetime, exactly as on the legacy carrier path; no new leak is
+introduced beyond what carrier ADTs already have.)
+
+What landed (on top of slice 1):
+
+- **Monomorph layout (`src/compiler/types.c`, `emit_registered_adt_app_rec`).**
+  A wide by-value-ADT element field of a parametric carrier monomorph
+  (`type_is_wide_byval_adt`) is stored as `int64_t` (box pointer) rather than
+  inline, so the monomorph layout AGREES with the generic int64 carrier the
+  fmap spec reads. The monomorph ctor takes the element by value (the aggregate)
+  and heap-boxes it into the int64 slot. `adt_byval_value_size_bytes` gives the
+  `> 8` decision; `type_is_wide_byval_adt` is flag-scoped (returns false when
+  the experiment is off, so flag-off layout is untouched -- an ordinary wide
+  by-value ADT like a two-float `Pt` keeps its B3 treatment).
+- **Field read (`src/compiler/emit_expr.c`).** An erased (int64) carrier element
+  binding of a wide by-value ADT reads the box pointer raw (no deref); the
+  pointer crosses to the fat closure as the carrier. A *concrete* wide by-value
+  ADT match binding (ctype is the aggregate, e.g. `Pt`) still takes the B3
+  deref -- the two are distinguished by whether the binding is the erased int64
+  carrier.
+- **Call site (`src/compiler/emit_expr.c`).** A wide by-value-ADT fat-closure
+  arg casts the fn-pointer param to `int64_t` and passes the box pointer raw
+  (no reinterpret -- the value cannot fit a register pair through the uniform
+  slot).
+- **Thunk (`src/compiler/emit_fns.c`).** *This is the emit_fns.c work slice 1
+  avoided.* A closure thunk whose parameter is a wide by-value ADT now takes it
+  as an `int64_t` box pointer (`needs_box_load`, the inverse of the existing
+  box-spill) and deref+copies it into the by-value aggregate at body entry --
+  borrow only, no free. The two forward-decl emitters
+  (`emit_abi_forward_decl`, `emit_fn_forward_decls` in `src/compiler/emit_module.c`)
+  mirror the int64 param so prototype and definition agree.
+
+Still open: **slice 3** (graduate / retire the flag once the legacy carrier
+suite is also reconciled).
 
 ## The problem in one sentence
 

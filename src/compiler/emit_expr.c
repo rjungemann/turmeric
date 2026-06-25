@@ -436,6 +436,47 @@ static bool emit_type_is_byvalue_adt(EmitCtx *ctx, Type t) {
     return false;
 }
 
+/* B4 (byvalue-recursive-carrier): true when `t` resolves to a single-carrier
+ * recursive ADT wrapper (Re/Expr) whose by-value representation is its int64
+ * carrier.  At a fat-closure boundary such a value crosses as the raw int64
+ * carrier (reinterpret), never the box/deref bridge emit_type_is_byvalue_adt
+ * would otherwise drive. */
+static bool emit_type_is_byval_recursive_carrier(EmitCtx *ctx, Type t) {
+    Type r = emit_resolve_type(ctx, t);
+    return r.kind == TY_ADT && r.as.adt_.def &&
+           adt_is_byval_recursive_carrier_wrapper(r.as.adt_.def);
+}
+
+/* B4 (byvalue-recursive-carrier, slice 2): true when `t` resolves to a WIDE
+ * (> 8 byte) by-value ADT.  As a parametric carrier monomorph element it is
+ * stored as an int64 heap-box pointer (type_is_wide_byval_adt drives the boxing
+ * in emit_registered_adt_app_rec), so a match binder reads the box POINTER raw
+ * (no deref): the pointer rides the fat-closure boundary as the int64 carrier
+ * and the thunk deref+copies it at entry. */
+static bool emit_type_is_wide_byval_adt(EmitCtx *ctx, Type t) {
+    return type_is_wide_byval_adt(emit_resolve_type(ctx, t));
+}
+
+/* B4 (byvalue-recursive-carrier): build the C expression that reconstructs the
+ * by-value wrapper aggregate from its int64 carrier value -- a designated
+ * compound literal `(tur_adt_X){ .as.<Ctor>._0 = (carrier) }`.  Valid only for a
+ * single-carrier recursive wrapper (emit_type_is_byval_recursive_carrier);
+ * returns a freshly malloc'd string the caller owns. */
+static char *emit_byval_recursive_carrier_reconstruct(EmitCtx *ctx, Type t,
+                                                       const char *carrier) {
+    Type r = emit_resolve_type(ctx, t);
+    const AdtDef *def = r.as.adt_.def;
+    const char *cname = type_c_name(r);
+    char *mctor = mangle_field_name(def->ctors[0]->name);
+    Buf b; buf_init(&b);
+    buf_printf(&b, "(%s){ .as.%s._0 = (%s) }", cname, mctor, carrier);
+    buf_putc(&b, '\0');
+    char *out = strdup(b.data);
+    buf_free(&b);
+    free(mctor);
+    return out;
+}
+
 /* G9 (carrier<->concrete): true when a field read `(.field recv)` materializes
  * a by-value (non-:heap) aggregate in C -- e.g. `(.head xs)` where xs is a
  * monomorphized `Cons__Option__int *`, so `(xs)->head` is an embedded
@@ -2424,6 +2465,25 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             }
                         }
                     }
+                    /* B4 (byvalue-recursive-carrier): a single-carrier recursive
+                     * wrapper (Re/Expr) arg whose VALUE is the erased int64
+                     * carrier (a match binding / spec param emitted as int64_t)
+                     * must be reconstructed into the by-value aggregate the thunk
+                     * param expects -- the fat-closure cast keeps the aggregate
+                     * param type, so the carrier ABI agrees by reinterpret.  A
+                     * concrete-aggregate arg (raw c_name already the aggregate)
+                     * passes through untouched. */
+                    if (phase_f_concrete &&
+                        emit_type_is_byval_recursive_carrier(ctx, e->as.call_.args[i]->type)) {
+                        const char *raw_cn = type_c_name(e->as.call_.args[i]->type);
+                        const char *agg_cn = emit_type_c_name(ctx, e->as.call_.args[i]->type);
+                        if (raw_cn && agg_cn && strcmp(raw_cn, agg_cn) != 0) {
+                            char *rec = emit_byval_recursive_carrier_reconstruct(
+                                ctx, e->as.call_.args[i]->type, raw);
+                            free(raw);
+                            raw = rec;
+                        }
+                    }
                     /* Phase F concrete path: args used as-is, no int64_t widening. */
                     arg_strs[i] = raw;
                 }
@@ -2446,7 +2506,14 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     /* Phase F: cast fn.fn to the concrete signature and call directly */
                     buf_printf(&out, "((%s (*)(void*", emit_type_c_name(ctx, e->type));
                     for (uint32_t i = 0; i < n; i++) {
-                        buf_printf(&out, ", %s", emit_type_c_name(ctx, e->as.call_.args[i]->type));
+                        /* B4 (slice 2): a wide by-value ADT arg crosses as the
+                         * int64 box-pointer carrier (it cannot fit a register
+                         * pair through the uniform fat-closure slot), so the cast
+                         * spells the param int64_t and the thunk deref+copies. */
+                        if (emit_type_is_wide_byval_adt(ctx, e->as.call_.args[i]->type))
+                            buf_puts(&out, ", int64_t");
+                        else
+                            buf_printf(&out, ", %s", emit_type_c_name(ctx, e->as.call_.args[i]->type));
                     }
                     buf_printf(&out, "))%s.fn)(%s.env", fn_name, fn_name);
                     for (uint32_t i = 0; i < n; i++) {
@@ -6753,6 +6820,21 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             if (inline_byval) {
                                 buf_printf(body, "%s %s = __scrut%sas.%s._%u;\n",
                                            ctype, bname, acc, _mctor, bi);
+                            } else if (emit_type_is_byval_recursive_carrier(ctx, fb->type) ||
+                                       (emit_type_is_wide_byval_adt(ctx, fb->type) &&
+                                        strcmp(ctype, "int64_t") == 0)) {
+                                /* B4: read the int64 carrier raw (no deref).
+                                 * slice 1 (<=8): the slot holds the by-value
+                                 * wrapper's bits inline.  slice 2 (>8): the slot
+                                 * holds a heap-box POINTER.  Only fires when the
+                                 * binding is the ERASED int64 carrier (a generic
+                                 * element); a concrete wide by-value ADT binding
+                                 * (ctype is the aggregate) keeps the B3 deref
+                                 * below.  The value crosses to a fat closure as
+                                 * the carrier (reinterpret <=8 / box pointer >8)
+                                 * and is materialized at the boundary. */
+                                buf_printf(body, "%s %s = (%s)__scrut%sas.%s._%u;\n",
+                                           ctype, bname, ctype, acc, _mctor, bi);
                             } else if (emit_type_is_byvalue_adt(ctx, fb->type)) {
                                 /* B3: a by-value ADT field stored boxed (int64 heap
                                  * pointer) in a carrier slot -- unbox by deref. */
@@ -6858,7 +6940,17 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             /* CONV-S1/B3: a by-value ADT field is stored boxed
                              * (int64 heap pointer) in the carrier tagged union;
                              * unbox it by deref. */
-                            if (emit_type_is_byvalue_adt(ctx, fb->type)) {
+                            if (emit_type_is_byval_recursive_carrier(ctx, fb->type) ||
+                                (emit_type_is_wide_byval_adt(ctx, fb->type) &&
+                                 strcmp(ctype, "int64_t") == 0)) {
+                                /* B4: read the int64 carrier raw (no deref).
+                                 * slice 1 (<=8): inline wrapper bits.  slice 2
+                                 * (>8): heap-box POINTER.  Only the erased int64
+                                 * carrier binding takes this path; a concrete wide
+                                 * by-value ADT binding keeps the B3 deref. */
+                                buf_printf(body, "%s %s = (%s)__scrut->as.%s._%u;\n",
+                                           ctype, bname, ctype, _mctor, bi);
+                            } else if (emit_type_is_byvalue_adt(ctx, fb->type)) {
                                 buf_printf(body,
                                     "%s %s = *(%s *)(intptr_t)(__scrut->as.%s._%u);\n",
                                     ctype, bname, ctype, _mctor, bi);

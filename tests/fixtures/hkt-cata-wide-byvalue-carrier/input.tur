@@ -1,0 +1,48 @@
+;; B4 slice 2 (byvalue-recursive-carrier, wide): a recursive carrier whose
+;; by-value form is WIDER than the int64 carrier slot.  Expr = (Roll :int
+;; (ExprF Expr)) is 16 bytes (an :int tag alongside the (ExprF Expr) carrier
+;; field), so the generic catamorphism's closure `(fn [c : Expr] : B ...)` takes
+;; a wide by-value-ADT parameter through the fat-closure ABI.
+;;
+;; The wide value cannot ride the uniform int64 carrier slot directly, so each
+;; (ExprF Expr) element is stored as an int64 heap-BOX pointer in the parametric
+;; carrier monomorph (matching the generic int64 carrier the fmap spec reads),
+;; the box pointer crosses the fat-closure boundary as the carrier, and the
+;; closure thunk deref+copies it back into the by-value aggregate at entry.  The
+;; box is owned by the enclosing carrier node (borrow-only at the closure).
+;;
+;; A DEEP tree with a discriminating algebra (depth, not just sum) is the probe:
+;; a shallow tree would pass by leaf-child luck even with a mis-decoded element.
+(load "stdlib/typeclass-functor.tur")
+
+(defdata ExprF :copy [a] (LitF :int) (AddF a a))
+(defdata Expr  :copy (Roll :int (ExprF Expr)))
+
+(definstance Functor [ExprF]
+  (fmap [c g]
+    (match c
+      (LitF n)   (LitF n)
+      (AddF x y) (AddF (g x) (g y)))))
+
+(defn unroll-e [e : Expr] : (ExprF Expr)
+  (match e (Roll _ l) (:: l (ExprF Expr))))
+
+(defn cata [B] [alg : (fn [(ExprF B)] B)  e : Expr] : B
+  (alg (:: (fmap (unroll-e e) (fn [c : Expr] : B (cata alg c))) (ExprF B))))
+
+(defn sum-alg   [l : (ExprF int)] : int (match l (LitF n) n         (AddF x y) (+ x y)))
+(defn depth-alg [l : (ExprF int)] : int (match l (LitF n) 0         (AddF x y) (+ 1 (if (> x y) x y))))
+(defn count-alg [l : (ExprF int)] : int (match l (LitF n) 1         (AddF x y) (+ x y)))
+
+;; the :int tag slot is arbitrary payload -- it widens Roll past 8 bytes
+(defn lit [n : int] : Expr (Roll 7 (LitF n)))
+(defn add [x : Expr y : Expr] : Expr (Roll 9 (AddF x y)))
+
+(defn main [] : int
+  (let [;; deep, left-leaning: Add(Add(Add(1,2),3), Add(4,5)) -- 5 leaves
+        d (add (add (add (lit 1) (lit 2)) (lit 3)) (add (lit 4) (lit 5)))]
+    (do
+      (println (cata sum-alg   d))   ;; 1+2+3+4+5 = 15
+      (println (cata count-alg d))   ;; 5 leaves
+      (println (cata depth-alg d))   ;; max depth = 3
+      0)))

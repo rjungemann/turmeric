@@ -317,9 +317,18 @@ static inline bool adt_is_flat_product(const AdtDef *def) {
  * full_types, which are only forward-declared here).  See the definition and
  * docs/upcoming/struct-adt-convergence-s1-bridging-findings.md for the gate. */
 bool adt_is_byvalue_product(const AdtDef *def);
+/* B4 (byvalue-recursive-carrier): true when `def` is a single-variant,
+ * single-field recursive carrier wrapper whose sole field is an (F Self)
+ * type-application kept on the int64 carrier (Re/Expr).  Its by-value
+ * representation IS its carrier int64, so it crosses the fat-closure boundary by
+ * reinterpreting the carrier (no heap box, no deref).  (B4 graduated; always
+ * active.) */
+bool adt_is_byval_recursive_carrier_wrapper(const AdtDef *def);
 /* CONV-S1 (slice 3): true when a by-value ADT product is large enough (>16
  * bytes) to use the struct-style `const tur_adt_<Name> *` pass-by-pointer ABI. */
 bool adt_byval_pass_by_ptr(const AdtDef *def);
+/* B4: aggregate byte size of a by-value ADT product (0 if not by-value). */
+size_t adt_byval_value_size_bytes(const AdtDef *def);
 /* CONV-S1 (slice 4): true when a ctor field is itself a by-value aggregate that
  * is stored INLINE (by value) in the owning by-value product, the way a struct
  * inlines a nested struct field -- as opposed to boxing it behind the int64
@@ -1512,6 +1521,9 @@ const char  *adt_byval_c_name(const AdtDef *def);
  * product whose every monomorphised field is by-value-able.  LIVE (P2-P4) --
  * both crossings (match/field-access and ctor-field box/unbox) are wired. */
 bool         adt_app_is_byvalue_product(Type t);
+/* B4 (slice 2): true when `t` is a wide (>8 byte) by-value ADT -- one that must
+ * ride a heap box when stored as a parametric carrier monomorph element. */
+bool         type_is_wide_byval_adt(Type t);
 /* Parametric-by-value: app-aware siblings of adt_byval_pass_by_ptr /
  * adt_is_byvalue_product -- a concrete flat-product ADT-app (`(Pair2 int
  * float)`) is laid out as its by-value monomorph aggregate, so it shares the

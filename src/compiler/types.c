@@ -1432,7 +1432,18 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
         mctor[mlen] = '\0';
         buf_printf(out, "        struct {");
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-            const char *ctype = adt_field_c_type(def, &ctor->fields[fi], args);
+            /* B4 (slice 2): a wide (>8 byte) by-value ADT element is stored as an
+             * int64 heap-box pointer, not inline -- so the monomorph layout
+             * agrees with the generic int64 carrier the fmap spec reads, and the
+             * value crosses the fat-closure boundary via the existing box/deref
+             * bridge.  A <= 8 byte by-value ADT (slice 1) still stores inline. */
+            const CtorField *fld = &ctor->fields[fi];
+            Type fres = (fld->full_type && def)
+                ? substitute_adt_app_type(fld->full_type, def, args)
+                : type_simple(TY_UNKNOWN, CK_COPY);
+            const char *ctype = type_is_wide_byval_adt(fres)
+                ? "int64_t"
+                : adt_field_c_type(def, fld, args);
             buf_printf(out, " %s _%u;", ctype, fi);
         }
         buf_printf(out, " } %s;\n", mctor);
@@ -1465,12 +1476,27 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
         }
         mctor[mlen] = '\0';
 
+        /* B4 (slice 2): a wide by-value ADT element is passed to the ctor by
+         * VALUE (the aggregate) but STORED as an int64 heap box -- so the ctor
+         * param type stays the aggregate while the field storage is int64. */
+        bool *wide_box = ctor->n_fields
+            ? (bool *)calloc(ctor->n_fields, sizeof(bool)) : NULL;
+        const char **val_ctype = ctor->n_fields
+            ? (const char **)calloc(ctor->n_fields, sizeof(char *)) : NULL;
+        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+            const CtorField *fld = &ctor->fields[fi];
+            Type fres = (fld->full_type && def)
+                ? substitute_adt_app_type(fld->full_type, def, args)
+                : type_simple(TY_UNKNOWN, CK_COPY);
+            val_ctype[fi] = adt_field_c_type(def, fld, args);
+            wide_box[fi] = type_is_wide_byval_adt(fres);
+        }
+
         buf_printf(out, "static %s ctor_%s%s(",
                    app_byval ? adt_inst_name : "int64_t", mctor, suffix.data);
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             if (fi > 0) buf_puts(out, ", ");
-            const char *ctype = adt_field_c_type(def, &ctor->fields[fi], args);
-            buf_printf(out, "%s _%u", ctype, fi);
+            buf_printf(out, "%s _%u", val_ctype[fi], fi);
         }
         buf_printf(out, ") {\n");
         if (app_byval) {
@@ -1484,11 +1510,23 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                        adt_inst_name, adt_inst_name, adt_inst_name);
             if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-                buf_printf(out, "    __r->as.%s._%u = _%u;\n", mctor, fi, fi);
+                if (wide_box[fi]) {
+                    /* heap-box the wide by-value element; the box is owned by this
+                     * carrier node and lives as long as it does. */
+                    buf_printf(out,
+                        "    { %s *__b = (%s *)malloc(sizeof(%s)); *__b = _%u;"
+                        " __r->as.%s._%u = (int64_t)(intptr_t)__b; }\n",
+                        val_ctype[fi], val_ctype[fi], val_ctype[fi], fi,
+                        mctor, fi);
+                } else {
+                    buf_printf(out, "    __r->as.%s._%u = _%u;\n", mctor, fi, fi);
+                }
             }
             buf_printf(out, "    return (int64_t)(intptr_t)__r;\n");
         }
         buf_printf(out, "}\n\n");
+        free(wide_box);
+        free(val_ctype);
         free(mctor);
     }
 
@@ -2514,6 +2552,15 @@ static bool adt_is_byvalue_product_d(const AdtDef *def, int depth) {
         const CtorField *f = &c->fields[i];
         /* slice 4: a by-value aggregate field is inlined -- admit it. */
         if (adt_field_is_inline_byval_d(f, depth)) continue;
+        /* B4 (graduated 2026-06-25): a recursive carrier field -- an (F Self)
+         * type-application that stays on the int64 carrier -- does not disqualify
+         * the owning product from flowing by value.  A single such field yields
+         * an 8-byte wrapper around the carrier int64 (Re/Expr) that crosses the
+         * fat closure by reinterpret; a wider product carrying an (F Self) field
+         * plus extra scalars flows by value too, its by-value-ADT element fields
+         * riding a heap box in the parametric carrier monomorph
+         * (type_is_wide_byval_adt). */
+        if (f->full_type && f->full_type->kind == TY_APP) continue;
         if (f->full_type) {
             TypeKind fk = f->full_type->kind;
             if (fk == TY_ADT || fk == TY_APP || fk == TY_STRUCT ||
@@ -2529,6 +2576,21 @@ static bool adt_is_byvalue_product_d(const AdtDef *def, int depth) {
 
 bool adt_is_byvalue_product(const AdtDef *def) {
     return adt_is_byvalue_product_d(def, 16);
+}
+
+/* B4 (byvalue-recursive-carrier): true when `def` is a single-variant,
+ * single-field recursive carrier wrapper -- its sole field is an (F Self)
+ * type-application that stays on the int64 carrier (e.g. Re = (Roll (ReF Re)),
+ * Expr = (Roll (ExprF Expr))).  Such a value is an 8-byte wrapper whose by-value
+ * representation IS its carrier int64, so it crosses the fat-closure boundary by
+ * reinterpreting the carrier (no heap box, no deref).  (B4 graduated 2026-06-25;
+ * unconditional.) */
+bool adt_is_byval_recursive_carrier_wrapper(const AdtDef *def) {
+    if (!def || !adt_is_flat_product(def) || def->n_type_params != 0) return false;
+    const CtorDef *c = def->ctors[0];
+    if (c->n_fields != 1) return false;
+    const CtorField *f = &c->fields[0];
+    return f->full_type && f->full_type->kind == TY_APP;
 }
 
 /* CONV-S1 (slice 4): public predicate -- is this field stored inline by value?
@@ -2596,6 +2658,37 @@ bool adt_byval_pass_by_ptr(const AdtDef *def) {
     for (uint32_t i = 0; i < c->n_fields; i++)
         total += adt_ctor_field_size_bytes(&c->fields[i], 16);
     return total > 16;
+}
+
+/* B4: the by-value (aggregate) byte size of a by-value ADT product -- the sum of
+ * its sole ctor's field sizes.  Used to decide whether a by-value-ADT element
+ * stored in a parametric carrier monomorph fits the int64 carrier slot directly
+ * (<= 8 bytes, reinterpret; slice 1) or must ride a heap box (> 8 bytes; slice
+ * 2).  Returns 0 for a non-by-value product. */
+size_t adt_byval_value_size_bytes(const AdtDef *def) {
+    if (!adt_is_byvalue_product(def)) return 0;
+    const CtorDef *c = def->ctors[0];
+    size_t total = 0;
+    for (uint32_t i = 0; i < c->n_fields; i++)
+        total += adt_ctor_field_size_bytes(&c->fields[i], 16);
+    return total;
+}
+
+/* B4 (byvalue-recursive-carrier, slice 2): true when `t` resolves to a WIDE
+ * (> 8 byte) by-value ADT -- one that cannot be carried in the int64 carrier
+ * slot directly.  Such a value, when it is an element field of a parametric
+ * carrier monomorph (e.g. the (ExprF Expr) element of a wide Expr), must be
+ * stored BOXED (an int64 heap pointer) so the monomorph layout agrees with the
+ * generic int64 carrier the fmap spec reads, and so it crosses the fat-closure
+ * boundary by box+deref (the existing B3 bridge) rather than inline.  This is a
+ * pure size predicate; its call sites are guarded (monomorph boxing fires only
+ * for parametric-carrier elements; the field-read raw-carrier path only for an
+ * erased int64 binding) so an ordinary wide by-value ADT match keeps its
+ * existing B3 treatment. */
+bool type_is_wide_byval_adt(Type t) {
+    if (t.kind == TY_ADT && t.as.adt_.def)
+        return adt_byval_value_size_bytes(t.as.adt_.def) > 8;
+    return false;
 }
 
 /* Parametric-by-value: app-aware sibling of adt_byval_pass_by_ptr.  A concrete
