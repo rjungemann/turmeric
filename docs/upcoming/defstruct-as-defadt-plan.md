@@ -49,10 +49,33 @@ when *all* of:
 - non-parametric (no type-param vector),
 - not `:heap`, not `:linear`,
 - **every field a primitive scalar** (`int`/`float`/`bool`/`cstr`/sized
-  ints+floats) **or a bare ADT-typed field** (slice 4 -- a by-value ADT field is
-  inlined, a carrier ADT field is boxed, both correct).
+  ints+floats), **a pointer field** (`rc<T>`/`ref<T>`/`lref<T>`/`weak<T>`/
+  `ptr<void>` -- slice 5; an 8-byte carrier slot whatever the inner type, with
+  drop glue for the owning `rc`/`ref`/`weak` ones per slice 2), **or a bare
+  ADT-typed field** (slice 4 -- a by-value ADT field is inlined, a carrier ADT
+  field is boxed, both correct).
 
-Anything else (`rc`/`ref`/`weak`/`ptr`/`fn`/parametric, or a bare struct-typed
+**Slice 5 (pointer-field widening).** The lowering gate
+(`defstruct_fields_all_primitive`) now admits pointer-kinded fields. A pointer
+field's representation does not depend on the (possibly not-yet-known) inner
+type's by-value-ness, so the pre-pass / full-elaboration lowering decision never
+disagrees on a `rc<Struct>` sibling the way it would on a bare struct field.
+Slice 5 also closed the **`rc<ADT>` field-access** gap the lowering comment
+named: a record-variant field annotated `rc<Inner>` (where `Inner` is an
+in-scope struct or single-variant record ADT) now carries the inner layout on
+its `full_type` (`adt_rc_inner_full_type` in
+[`elab_structs.c`](../../src/compiler/elab_structs.c), the ADT analogue of DS3's
+`lookup_rc_inner_struct_def`), so `(.f (.rcfield v))` auto-derefs through the rc
+exactly as a `defstruct` `rc<Struct>` field does -- previously it raised "no
+typeclass method found". This fix is flag-independent (it fixes hand-written
+record ADTs too). The field still stores as the `TY_RC` carrier, so layout is
+unchanged. `fn` fields are deliberately **not** admitted (the by-value ctor
+takes the function pointer as an `int64_t` param, producing a cc cast note; not
+in the plan's "rc/ref/ptr" pointer set) and stay on the struct path. Fixtures:
+`conv-defstruct-pointer-field-lowering` (flag-on parity), `conv-rc-adt-record-field-deref`
+(the closed `rc<ADT>` field-deref gap).
+
+Anything else (`fn`/parametric, or a bare struct-typed
 field) still elaborates as a struct, even with the flag on. A bare struct-typed
 field is deliberately excluded: a struct's by-value-ness is not yet known when
 the top-level type pre-pass pre-registers a sibling that nests it (the stub looks
@@ -146,9 +169,20 @@ before the gate widens past leaf-scalar and before the experiment graduates
    is reframed as out-of-scope/moot for this lowering: a real `defstruct` cannot
    express a functor-applied-to-self field, so lowering never reaches the
    crossing. See the s1-bridging findings B4 section.
-5. Graduate: delete the gate, lower unconditionally (including bare struct /
-   pointer fields), retire the `StructDef` surface path, regenerate the affected
-   snapshots in one change.
+5. Widen the gate to **pointer fields** (`rc`/`ref`/`lref`/`weak`/`ptr<void>`).
+   **DONE** -- `defstruct_fields_all_primitive` admits pointer-kinded fields (an
+   8-byte carrier slot whatever the inner type, so pre-pass / full-elab never
+   disagree), and the `rc<ADT>` field-access gap is closed via
+   `adt_rc_inner_full_type` (record-variant `rc<Inner>` fields carry the inner
+   layout, so `(.f (.rcfield v))` auto-derefs -- the flag-independent fix also
+   covers hand-written record ADTs). `fn` fields stay on the struct path (the
+   by-value ctor's `int64_t` fn param produces a cc cast note; not in the
+   pointer set). Fixtures: `conv-defstruct-pointer-field-lowering`,
+   `conv-rc-adt-record-field-deref`. Remaining for graduation: `fn`, bare
+   struct-typed, `:heap`, and parametric fields.
+6. Graduate: delete the gate, lower unconditionally (including `fn` / bare struct
+   / parametric fields), retire the `StructDef` surface path, regenerate the
+   affected snapshots in one change.
 
 See [struct-adt-convergence-s1-bridging-findings.md](struct-adt-convergence-s1-bridging-findings.md)
 for the by-value representation work this builds on.

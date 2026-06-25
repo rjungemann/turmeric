@@ -26,10 +26,14 @@ description: Concrete site-by-site findings from a spiked attempt at CONV-S1 (ma
   gate is the permanent boundary; build the fat-closure ABI only if some future
   feature actually demands recursive-HKT-carrier by-value. See the B4 section
   below for the re-spike details.
-- **CONV-S1 proper (lower `defstruct` to `defadt`)** -- **REACHABLE** on the
-  B3 leaf gate once it is extended to pointer/`rc`/`ref` fields. Tracked in
-  [`defstruct-as-defadt-plan.md`](defstruct-as-defadt-plan.md) (slice 5 is
-  the graduation step).
+- **CONV-S1 proper (lower `defstruct` to `defadt`)** -- **LANDING incrementally
+  behind `--enable=defstruct-as-defadt`.** Scalar, by-value-aggregate (slice 4),
+  and now **pointer** fields (`rc`/`ref`/`lref`/`weak`/`ptr<void>` -- slice 5)
+  lower; the slice-5 work also closed the `rc<ADT>` field-deref gap for
+  record-variant fields. Tracked in
+  [`defstruct-as-defadt-plan.md`](defstruct-as-defadt-plan.md); graduation (now
+  slice 6) -- retire the `StructDef` path, lower `fn` / bare-struct / parametric
+  fields unconditionally -- remains.
 
 **Net status:** the CONV-S1 boundary is the B3 leaf gate. B4 is open but
 out-of-scope for graduation. Next action lives in the defstruct-as-defadt

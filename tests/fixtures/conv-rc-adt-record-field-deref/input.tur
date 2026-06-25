@@ -1,0 +1,19 @@
+;; CONV-S1 (slice 5): field access auto-derefs through an `rc<ADT>` field of a
+;; record ADT.  A record-variant field annotated `rc<Inner>` -- where `Inner` is
+;; an in-scope struct or single-variant record ADT -- now carries the inner
+;; layout on its type, so `(.f (.rcfield v))` resolves the same way a
+;; `defstruct` rc<Struct> field already does (DS3 / slice 2 extended to
+;; field-declared rc types).  Before this, `.v` on the rc-typed field raised
+;; "no typeclass method found for 'v'".
+(defdata Inner (Inner [v : int]))
+(defdata Holder (Holder [tag : int p : rc<Inner>]))
+
+;; Reads both a scalar field and -- through the rc<Inner> field -- the inner
+;; ADT's named field, in a single use of the move-only Holder.
+(defn describe [h : Holder] : int
+  (+ (* (.tag h) 100) (.v (.p h))))
+
+(defn main [] : int
+  (let [h (Holder 7 (rc/of (Inner 42)))]
+    (println (describe h))   ; 742
+    0))
