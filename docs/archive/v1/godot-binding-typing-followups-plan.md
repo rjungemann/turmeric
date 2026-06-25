@@ -1,10 +1,46 @@
 # Godot Binding -- Typing Follow-Ups Plan
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-06-25
+> **Status:** Resolved (2026-06-25)
 > **Type:** Integration / Game Engine -- Phase G6 of the
-> [godot binding plan](./godot-language-binding-plan.md)
+> [godot binding plan](../../upcoming/v1/godot-language-binding-plan.md)
 > **Companion to:** [godot-binding-guide.md](../../guides/godot-binding-guide.md)
+
+## Resolution Notes
+
+Landed in `../turmeric-godot/` on 2026-06-25:
+
+- **G6.1** -- `godot-connect-typed` native + 59 generated
+  `(class/on-<signal> ...)` wrappers with `(fn [argT...] void)` handler
+  parameter typing. Closures bind into the script env under a
+  synthesized symbol; Godot's Callable targets that symbol so dispatch
+  routes through existing `cb_call`. Demos:
+  `examples/spike/scripts/typed_signal{,_bad}.{tur,gd}`.
+- **G6.2** -- `(defopaque <C>Handle :int)` emitted per allow-listed
+  class plus an up-coercion helper to the nearest allow-listed
+  ancestor. Generated method wrappers now use `<C>Handle` for self,
+  for arguments whose JSON type names an allow-listed class, and for
+  Object-typed returns; bodies ascribe back to `:int` at the
+  `godot-call` boundary. Demo:
+  `examples/spike/scripts/handle_hierarchy.{tur,gd}`.
+- **G6.3** -- Curated one-shot prelude entries: `(get-tree)`,
+  `(tree/quit)`, `(tree/get-root)`, `(tree/change-scene-to-file)`,
+  `(timer/one-shot)`, `(engine)` + accessors, `(os)` +
+  `(os/get-system-time-msecs)`, `(log/info)`, `(log/error)`, `(after)`.
+  Demo: `examples/spike/scripts/oneshot_prelude.{tur,gd}`.
+
+### Deferred
+
+- Arena types (Vector2/3, Color, Rect2, Transform2D/3D, Array,
+  Dictionary) still flow as bare `:int` through the generated facade.
+  Promoting them needs typed-native re-registration or a prelude
+  wrap layer.
+- Down-coercion stays explicit + unchecked (`(:: h :Sprite2DHandle)`).
+  A runtime-checked `(checked-cast h :Sprite2DHandle) -> option<...>`
+  via `Object::is_class` is left for later.
+- Headless `.gd` drivers were authored but not run in this session
+  (no Godot CLI in the harness). The C++ build is clean and the
+  codegen produces the expected facade; end-to-end verification
+  falls to the next session that can launch Godot.
 
 ---
 
