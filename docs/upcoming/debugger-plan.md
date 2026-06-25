@@ -98,6 +98,18 @@ non-debugger interp runs.
 
 ### Phase 3 -- DAP server over the interpreter
 
+**Status: landed.** Write-up in
+[debugger-dap-phase3.md](./debugger-dap-phase3.md). `tur dap` speaks the Debug
+Adapter Protocol (JSON-RPC 2.0 / stdio, the same transport as `tur lsp`) as a
+thin shell over Phase 2's debugger. Phase 2's `TuriDebugger` gained a typed
+control API (`turi_debug_*` in `src/turi/eval.h`): a pause handler that replaces
+the text REPL on a stop, resume controls, breakpoint-table management, and
+frame / locals / evaluate introspection. The server (`src/turi/dap.c`) maps DAP
+requests onto that API; the `tur_dap` ctest target
+(`tests/run-dap.sh` + `tests/dap-driver.py`) drives a scripted JSON-RPC session
+over `tests/fixtures/dap/`. A VS Code extension stub ships in
+[editors/vscode-turmeric/](../../editors/vscode-turmeric/).
+
 **Outcome:** VS Code, Neovim DAP, and any other DAP client can attach to a
 turmeric program running under the interpreter and get full breakpoint /
 step / locals UI.
@@ -111,7 +123,11 @@ step / locals UI.
 
 **Exit criteria:** screenshot/demo of VS Code stepping through a turmeric
 program, inspecting locals (including structs, options, results), and
-hitting a conditional breakpoint.
+hitting a conditional breakpoint. *(Demonstrated by the `tur_dap` regression's
+transcript: a scripted client steps through the fixture, inspects per-frame
+locals + `evaluate`, and hits a conditional breakpoint that fires only when
+`i == 3`. Struct / option / result locals render inline via the value printer;
+expandable trees are deferred -- see the Phase 3 write-up.)*
 
 **Risk:** low-medium. DAP is well-documented but verbose; the work is
 mechanical once Phase 2 exposes the right primitives.
@@ -151,12 +167,30 @@ CodeLLDB / lldb-dap. Avoid emitting DWARF directly from the Turmeric
 compiler -- Rust's experience is that even with "correct" variant-part
 DWARF, you still need the printers, so skip the multi-month detour.
 
+### In-frame expression evaluator (cross-cutting; split-out plan)
+
+Split into its own plan:
+[debugger-inframe-eval-plan.md](./debugger-inframe-eval-plan.md).
+
+Not a sequential phase -- a cross-cutting enhancement to the Phase 2 / 3
+interpreter track. Both phases ship a *narrow shim* for evaluating in a paused
+frame: Phase 2's `print <name>` and Phase 3's `evaluate`/hover resolve a single
+binding, and DAP conditional breakpoints accept only `<name> <op> <literal>`.
+The split-out plan generalizes that to evaluating an **arbitrary Turmeric
+expression** in a paused frame's lexical scope, which unlocks full-expression
+conditional breakpoints (`break <line> if <expr>`) and arbitrary `evaluate`.
+The hard part is recovering enough type information from the paused frame's
+runtime values to re-elaborate a fresh expression against them.
+
 ## Dependencies between phases
 
 - Phase 2 depends on Phase 1.
 - Phase 3 depends on Phase 2.
 - Phase 4 depends on Phase 1 only (parallel with 2/3).
 - Phase 5 depends on Phase 4.
+- The in-frame expression evaluator (split-out plan) depends on Phase 2 and
+  Phase 3; it supersedes the single-name / simple-comparison shims those phases
+  shipped.
 
 So Phase 1 + Phase 4 can land in parallel with the 2 -> 3 interpreter track.
 

@@ -1,0 +1,84 @@
+{
+  "name": "turmeric-debug",
+  "displayName": "Turmeric Debugger",
+  "description": "Debug Turmeric (.tur) programs under the interpreter via the Debug Adapter Protocol (tur dap).",
+  "version": "0.1.0",
+  "publisher": "turmeric",
+  "license": "SEE LICENSE IN ../../LICENSE",
+  "engines": { "vscode": "^1.66.0" },
+  "categories": ["Debuggers"],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onDebugResolve:turmeric",
+    "onDebugDynamicConfigurations:turmeric"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "turmeric",
+        "extensions": [".tur", ".tur.sweet"],
+        "aliases": ["Turmeric", "turmeric"]
+      }
+    ],
+    "breakpoints": [
+      { "language": "turmeric" }
+    ],
+    "debuggers": [
+      {
+        "type": "turmeric",
+        "label": "Turmeric (interpreter)",
+        "languages": ["turmeric"],
+        "configurationAttributes": {
+          "launch": {
+            "required": ["program"],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Absolute path to the .tur file to debug.",
+                "default": "${file}"
+              },
+              "args": {
+                "type": "array",
+                "description": "Arguments passed to the program (visible as *args*).",
+                "items": { "type": "string" },
+                "default": []
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Pause at the first executable node.",
+                "default": true
+              },
+              "tur": {
+                "type": "string",
+                "description": "Path to the tur binary (defaults to 'tur' on PATH).",
+                "default": "tur"
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "turmeric",
+            "request": "launch",
+            "name": "Debug current Turmeric file",
+            "program": "${file}",
+            "stopOnEntry": true
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Turmeric: Launch current file",
+            "description": "Debug the active .tur file under the interpreter",
+            "body": {
+              "type": "turmeric",
+              "request": "launch",
+              "name": "Debug ${1:current} Turmeric file",
+              "program": "^\"\\${file}\"",
+              "stopOnEntry": true
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

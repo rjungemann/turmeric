@@ -80,6 +80,17 @@ add_test(
   COMMAND bash tests/run-debugger.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# debugger Phase 3: the Debug Adapter Protocol server (`tur dap`). Drives a
+# scripted JSON-RPC session (tests/dap-driver.py) over a fixture and asserts the
+# handshake, breakpoints (plain + conditional), step/next/stepOut, the call
+# stack, locals/evaluate, output events, and the exit code. The fixture carries
+# requires.dedicated-runner so tests/run.sh skips it (DAP is an interpreter-only
+# path). See docs/upcoming/debugger-plan.md.
+add_test(
+  NAME tur_dap
+  COMMAND bash tests/run-dap.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # HttpdConn single-definition invariant: no inline-C block may reintroduce a
 # local redeclaration of the consolidated httpd connection structs.
 add_test(

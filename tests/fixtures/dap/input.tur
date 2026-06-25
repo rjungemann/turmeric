@@ -1,0 +1,21 @@
+;; Debugger Phase 3 (DAP) regression fixture.
+;; Driven by tests/run-dap.sh via tests/dap-driver.py over `tur dap`.
+;; The dedicated-runner marker keeps tests/run.sh from compiling/running it
+;; natively (the DAP server is an interpreter-only path).
+
+(defn add [a : int b : int] : int
+  (let [s (+ a b)]
+    s))
+
+(defn count-down [i : int] : int
+  (if (<= i 0)
+    0
+    (count-down (- i 1))))
+
+(defn main [] : int
+  (let [x 3
+        y 4
+        z (add x y)
+        w (count-down 5)]
+    (println "done")
+    z))

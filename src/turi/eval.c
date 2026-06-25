@@ -8461,6 +8461,7 @@ typedef enum {
 typedef struct {
     char     file[128];  /* basename matched against a node's source file */
     uint32_t line;
+    char     cond[160];  /* DAP conditional breakpoint expr; "" = unconditional */
 } DbgBreakpoint;
 
 typedef struct {
@@ -8483,9 +8484,21 @@ typedef struct TuriDebugger {
     uint16_t       prev_file;    /* file_id of the previously executed node */
     uint32_t       prev_line;    /* line of the previously executed node (for bp entry) */
     const Expr    *skip_node;    /* dedup: node hooked by eval_expr, skip its driver re-hook */
+    bool           entry;        /* next stop is the program-entry stop (Phase 3 reason) */
     DbgBreakpoint  bps[DBG_MAX_BPS];
     int            n_bps;
     DbgStackFrame  frames[DBG_MAX_FRAMES];
+
+    /* Phase 3 (DAP) control surface.  When pause_fn is set, a stop dispatches to
+     * it instead of dbg_repl; the handler reads cur_frame / cur_expr for the
+     * innermost frame and resumes via turi_debug_resume_*. */
+    TuriDbgPauseFn pause_fn;
+    void          *pause_ud;
+    TuriDbgCondFn  cond_fn;      /* conditional-breakpoint predicate (DAP) */
+    void          *cond_ud;
+    EvalFrame     *cur_frame;    /* lexical frame of the currently paused node */
+    const Expr    *cur_expr;     /* the currently paused node */
+    TuriDbgStop    stop_reason;  /* why we paused (for the pause handler) */
 } TuriDebugger;
 
 /* Last path component of a source path (no allocation). */
@@ -8625,16 +8638,17 @@ static void dbg_print_backtrace(TuriDebugger *dbg) {
 
 /* -------- breakpoints ----------------------------------------------------- */
 
-static bool dbg_bp_match(TuriDebugger *dbg, Span s) {
-    if (dbg->n_bps == 0 || s.line == 0) return false;
+/* Return the index of the first breakpoint matching span `s`, or -1. */
+static int dbg_bp_match(TuriDebugger *dbg, Span s) {
+    if (dbg->n_bps == 0 || s.line == 0) return -1;
     const char *base = dbg_basename(diag_file_path(s.file_id));
     for (int i = 0; i < dbg->n_bps; i++) {
         if (dbg->bps[i].line != s.line) continue;
         if (dbg->bps[i].file[0] == '\0' ||
             strcmp(dbg->bps[i].file, base) == 0)
-            return true;
+            return i;
     }
-    return false;
+    return -1;
 }
 
 /* Parse "<line>" or "<file>:<line>" into a breakpoint and record it. */
@@ -8643,7 +8657,7 @@ static void dbg_add_breakpoint(TuriDebugger *dbg, const char *arg) {
         fprintf(dbg->out, "breakpoint table full (max %d)\n", DBG_MAX_BPS);
         return;
     }
-    DbgBreakpoint bp = {{0}, 0};
+    DbgBreakpoint bp = {{0}, 0, {0}};
     const char *colon = strrchr(arg, ':');
     if (colon) {
         size_t flen = (size_t)(colon - arg);
@@ -8811,9 +8825,26 @@ static void turi_dbg_before_node(TuriEnv *env, EvalFrame *frame,
     bool line_entry = (s.line != dbg->prev_line || s.file_id != dbg->prev_file);
 
     bool hit = false;
-    if (dbg->break_now) { dbg->break_now = false; hit = true; }
-    else if (line_entry && dbg_bp_match(dbg, s)) hit = true;
-    else {
+    TuriDbgStop reason = TURI_DBG_STOP_STEP;
+    if (dbg->break_now) { dbg->break_now = false; hit = true; reason = TURI_DBG_STOP_PAUSE; }
+    else if (line_entry) {
+        int bpi = dbg_bp_match(dbg, s);
+        if (bpi >= 0) {
+            /* Conditional breakpoint: stop only when the predicate holds.  Done
+             * here (not after recording prev_line) so the line-entry test stays
+             * consistent whether or not we ultimately stop. */
+            const char *cond = dbg->bps[bpi].cond;
+            if (cond[0] != '\0' && dbg->cond_fn) {
+                dbg->cur_frame = frame; dbg->cur_expr = e;
+                if (dbg->cond_fn(env, cond, dbg->cond_ud)) {
+                    hit = true; reason = TURI_DBG_STOP_BREAKPOINT;
+                }
+            } else {
+                hit = true; reason = TURI_DBG_STOP_BREAKPOINT;
+            }
+        }
+    }
+    if (!hit) {
         switch (dbg->step) {
         case DBG_STEP_IN:   hit = dbg_line_changed(dbg, s); break;
         case DBG_STEP_OVER: hit = dbg_line_changed(dbg, s) &&
@@ -8821,6 +8852,7 @@ static void turi_dbg_before_node(TuriEnv *env, EvalFrame *frame,
         case DBG_STEP_OUT:  hit = dbg->depth < dbg->step_depth; break;
         case DBG_STEP_NONE: default: break;
         }
+        if (hit) reason = TURI_DBG_STOP_STEP;
     }
 
     /* Record this node's line as "previous" for the next entry test.  Done
@@ -8830,9 +8862,19 @@ static void turi_dbg_before_node(TuriEnv *env, EvalFrame *frame,
 
     if (!hit) return;
 
+    /* The first stop after arming is the program-entry stop, regardless of how
+     * the predicate above classified it. */
+    if (dbg->entry) { reason = TURI_DBG_STOP_ENTRY; dbg->entry = false; }
+
+    dbg->cur_frame   = frame;
+    dbg->cur_expr    = e;
+    dbg->stop_reason = reason;
     dbg->in_repl = true;
-    dbg_repl(env, dbg, frame, e);
+    if (dbg->pause_fn) dbg->pause_fn(env, reason, dbg->pause_ud);
+    else              dbg_repl(env, dbg, frame, e);
     dbg->in_repl   = false;
+    dbg->cur_frame = NULL;
+    dbg->cur_expr  = NULL;
     dbg->stop_file = s.file_id;
     dbg->stop_line = s.line;
 }
@@ -8874,8 +8916,178 @@ void turi_debug_arm(TuriEnv *env) {
     TuriDebugger *dbg = (TuriDebugger *)env->debugger;
     dbg->armed     = true;
     dbg->step      = DBG_STEP_IN;   /* stop at the first located node (entry) */
+    dbg->entry     = true;          /* the first stop is the program-entry stop */
     dbg->stop_file = 0;
     dbg->stop_line = 0;
+}
+
+/* -------- Phase 3: DAP control surface ------------------------------------ */
+
+static TuriDebugger *dbg_of(TuriEnv *env) {
+    return (env && env->debugger) ? (TuriDebugger *)env->debugger : NULL;
+}
+
+void turi_debug_set_pause_handler(TuriEnv *env, TuriDbgPauseFn cb, void *ud) {
+    TuriDebugger *d = dbg_of(env);
+    if (!d) return;
+    d->pause_fn = cb;
+    d->pause_ud = ud;
+}
+
+void turi_debug_set_cond_handler(TuriEnv *env, TuriDbgCondFn cb, void *ud) {
+    TuriDebugger *d = dbg_of(env);
+    if (!d) return;
+    d->cond_fn = cb;
+    d->cond_ud = ud;
+}
+
+void turi_debug_clear_breakpoints(TuriEnv *env) {
+    TuriDebugger *d = dbg_of(env);
+    if (d) d->n_bps = 0;
+}
+
+void turi_debug_clear_breakpoints_for_file(TuriEnv *env, const char *basename) {
+    TuriDebugger *d = dbg_of(env);
+    if (!d || !basename) return;
+    const char *base = dbg_basename(basename);
+    int w = 0;
+    for (int i = 0; i < d->n_bps; i++) {
+        if (strcmp(d->bps[i].file, base) != 0) {
+            if (w != i) d->bps[w] = d->bps[i];
+            w++;
+        }
+    }
+    d->n_bps = w;
+}
+
+int turi_debug_add_breakpoint(TuriEnv *env, const char *basename, uint32_t line,
+                              const char *cond) {
+    TuriDebugger *d = dbg_of(env);
+    if (!d || line == 0 || d->n_bps >= DBG_MAX_BPS) return -1;
+    DbgBreakpoint *bp = &d->bps[d->n_bps];
+    memset(bp, 0, sizeof *bp);
+    const char *base = basename ? dbg_basename(basename) : "";
+    snprintf(bp->file, sizeof bp->file, "%s", base);
+    bp->line = line;
+    if (cond && *cond) snprintf(bp->cond, sizeof bp->cond, "%s", cond);
+    d->n_bps++;
+    return d->n_bps;  /* 1-based id */
+}
+
+void turi_debug_resume_continue(TuriEnv *env) {
+    TuriDebugger *d = dbg_of(env);
+    if (d) d->step = DBG_STEP_NONE;
+}
+void turi_debug_resume_step_in(TuriEnv *env) {
+    TuriDebugger *d = dbg_of(env);
+    if (d) { d->step = DBG_STEP_IN;   d->step_depth = d->depth; }
+}
+void turi_debug_resume_step_over(TuriEnv *env) {
+    TuriDebugger *d = dbg_of(env);
+    if (d) { d->step = DBG_STEP_OVER; d->step_depth = d->depth; }
+}
+void turi_debug_resume_step_out(TuriEnv *env) {
+    TuriDebugger *d = dbg_of(env);
+    if (d) { d->step = DBG_STEP_OUT;  d->step_depth = d->depth; }
+}
+
+int turi_debug_frame_count(TuriEnv *env) {
+    TuriDebugger *d = dbg_of(env);
+    if (!d) return 0;
+    int n = d->depth;
+    if (n > DBG_MAX_FRAMES) n = DBG_MAX_FRAMES;
+    if (n <= 0 && d->cur_expr) n = 1;  /* paused at a top-level node */
+    return n;
+}
+
+/* Map DAP frame index (0 = innermost) to a stored-frame span + name. */
+static bool dbg_frame_span(TuriDebugger *d, int idx, Span *out_s,
+                           const char **out_name) {
+    int n = d->depth;
+    if (n > DBG_MAX_FRAMES) n = DBG_MAX_FRAMES;
+    if (n <= 0 && d->cur_expr) n = 1;
+    if (idx < 0 || idx >= n) return false;
+    if (d->depth > 0) {
+        int si = d->depth - 1 - idx;
+        if (si < 0) si = 0;
+        if (si >= DBG_MAX_FRAMES) si = DBG_MAX_FRAMES - 1;
+        *out_s    = d->frames[si].cur;
+        *out_name = d->frames[si].fn_name;
+        /* The innermost frame's executing node is the paused node itself, which
+         * is more precise than the last span we stamped on the activation. */
+        if (idx == 0 && d->cur_expr) *out_s = d->cur_expr->span;
+    } else {
+        *out_s    = d->cur_expr ? d->cur_expr->span : SPAN_UNKNOWN;
+        *out_name = "<top>";
+    }
+    return true;
+}
+
+bool turi_debug_frame_at(TuriEnv *env, int idx, TuriDbgFrame *out) {
+    TuriDebugger *d = dbg_of(env);
+    if (!d || !out) return false;
+    Span s; const char *name;
+    if (!dbg_frame_span(d, idx, &s, &name)) return false;
+    const char *path = diag_file_path(s.file_id);
+    out->fn_name   = name ? name : "<fn>";
+    out->file_path = path ? path : "";
+    out->line      = s.line;
+    out->col       = s.col_start ? s.col_start : 1;
+    out->end_line  = s.line;
+    out->end_col   = s.col_end ? s.col_end : out->col;
+    return true;
+}
+
+/* The lexical frame to inspect for locals at DAP frame index idx. */
+static EvalFrame *dbg_lexframe(TuriDebugger *d, int idx) {
+    if (d->depth > 0) {
+        if (idx == 0 && d->cur_frame) return d->cur_frame;
+        int si = d->depth - 1 - idx;
+        if (si >= 0 && si < DBG_MAX_FRAMES) return d->frames[si].cf;
+        return NULL;
+    }
+    return d->cur_frame;
+}
+
+void turi_debug_frame_locals(TuriEnv *env, int idx,
+                             void (*cb)(const char *, const char *, void *),
+                             void *ud) {
+    TuriDebugger *d = dbg_of(env);
+    if (!d || !cb) return;
+    EvalFrame *fr = dbg_lexframe(d, idx);
+    const char *seen[256];
+    int n_seen = 0;
+    for (EvalFrame *f = fr; f; f = f->parent) {
+        for (EvalBinding *b = f->bindings; b; b = b->next) {
+            bool dup = false;
+            for (int i = 0; i < n_seen; i++)
+                if (strcmp(seen[i], b->name) == 0) { dup = true; break; }
+            if (dup) continue;
+            if (n_seen < 256) seen[n_seen++] = b->name;
+            char repr[256];
+            turi_value_repr(repr, sizeof repr, b->value);
+            cb(b->name, repr, ud);
+        }
+    }
+}
+
+bool turi_debug_eval_name(TuriEnv *env, int idx, const char *name,
+                          char *out_repr, size_t cap) {
+    TuriDebugger *d = dbg_of(env);
+    if (!d || !name || !out_repr || cap == 0) return false;
+    EvalFrame *fr = dbg_lexframe(d, idx);
+    for (EvalFrame *f = fr; f; f = f->parent)
+        for (EvalBinding *b = f->bindings; b; b = b->next)
+            if (strcmp(b->name, name) == 0) {
+                turi_value_repr(out_repr, cap, b->value);
+                return true;
+            }
+    TuriValue g = turi_env_get(env, name);
+    if (!turi_is_error(g)) {
+        turi_value_repr(out_repr, cap, g);
+        return true;
+    }
+    return false;
 }
 
 void turi_debug_disable(TuriEnv *env) {

@@ -1,0 +1,656 @@
+/* dap.c -- Debug Adapter Protocol server for the Turmeric interpreter.
+ *
+ * Implements the DAP over JSON-RPC 2.0 / stdio (Content-Length framing).  Start
+ * with:  tur dap
+ *
+ * It is a thin shell around the Phase 2 interpreter debugger (src/turi/eval.c):
+ * the debugger does the real work (breakpoints, stepping, the call stack, locals
+ * inspection) and this file maps DAP requests onto its Phase 3 control API
+ * (turi_debug_* in eval.h).
+ *
+ * Lifecycle:
+ *   initialize        -> capabilities + `initialized` event
+ *   setBreakpoints    -> staged (pre-launch) or applied live (while paused)
+ *   launch            -> record program / args / stopOnEntry
+ *   configurationDone -> run the program (blocking; pauses drive the stops)
+ *   ...stops...       -> `stopped` event; stackTrace / scopes / variables /
+ *                        evaluate served from the paused frame
+ *   continue / next / stepIn / stepOut -> resume
+ *   program exit      -> `exited` + `terminated`
+ *   disconnect        -> tear down
+ *
+ * See docs/upcoming/debugger-plan.md (Phase 3) and
+ * docs/upcoming/debugger-dap-phase3.md.
+ */
+
+#include "dap.h"
+#include "eval.h"
+
+#include "../lsp/lsp_io.h"
+#include "../lsp/lsp_json.h"
+#include "buf.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+
+/* ------------------------------------------------------------------------- */
+
+#define DAP_MAX_BP 256
+
+typedef struct {
+    char     file[256];   /* basename matched against node source files */
+    uint32_t line;
+    char     cond[160];   /* "" = unconditional */
+} DapBp;
+
+typedef struct DapState {
+    int       rpc_fd;        /* JSON-RPC out (the saved real stdout) */
+    int       in_fd;         /* JSON-RPC in */
+    int       seq;           /* outgoing message sequence */
+    TuriEnv  *env;           /* set in dap_begin_session; NULL pre-launch */
+    bool      stop_on_entry;
+    int       out_pipe_r;    /* read end of the debuggee-stdout capture pipe */
+    /* Breakpoints staged by setBreakpoints before the env exists. */
+    DapBp     bps[DAP_MAX_BP];
+    int       n_bps;
+} DapState;
+
+/* ---------------------------------------------------------------------------
+ * JSON helpers
+ * --------------------------------------------------------------------------- */
+
+static void dap_json_escape_n(Buf *b, const char *s, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        switch (c) {
+        case '"':  buf_puts(b, "\\\""); break;
+        case '\\': buf_puts(b, "\\\\"); break;
+        case '\n': buf_puts(b, "\\n");  break;
+        case '\r': buf_puts(b, "\\r");  break;
+        case '\t': buf_puts(b, "\\t");  break;
+        default:
+            if (c < 0x20) buf_printf(b, "\\u%04x", c);
+            else          buf_putc(b, (char)c);
+        }
+    }
+}
+
+static void dap_json_escape(Buf *b, const char *s) {
+    if (s) dap_json_escape_n(b, s, strlen(s));
+}
+
+static bool dap_json_bool(const char *json, const char *key) {
+    size_t l;
+    const char *v = lsp_json_raw(json, key, &l);
+    return v && l >= 4 && strncmp(v, "true", 4) == 0;
+}
+
+/* Iterate `{...}` objects inside a JSON array string.  Returns a pointer to the
+ * next object's opening brace (or NULL at the end) and advances *cur past it.
+ * The returned pointer is suitable for lsp_json_* (they stop at the matching
+ * brace, so no NUL-termination of the object is required). */
+static const char *dap_array_next_obj(const char **cur) {
+    const char *p = *cur;
+    while (*p && *p != '{' && *p != ']') p++;
+    if (*p != '{') { *cur = p; return NULL; }
+    const char *start = p;
+    int depth = 0;
+    while (*p) {
+        if (*p == '"') {
+            p++;
+            while (*p && *p != '"') { if (*p == '\\') p++; if (*p) p++; }
+            if (*p) p++;
+            continue;
+        }
+        if (*p == '{') depth++;
+        else if (*p == '}') { depth--; if (depth == 0) { p++; break; } }
+        p++;
+    }
+    *cur = p;
+    return start;
+}
+
+/* Parse a JSON array of strings (e.g. launch "args") into a malloc'd argv. */
+static int dap_parse_str_array(const char *json, const char *key, char ***out) {
+    *out = NULL;
+    size_t l;
+    const char *arr = lsp_json_raw(json, key, &l);
+    if (!arr) return 0;
+    char **v = NULL;
+    int n = 0, cap = 0;
+    const char *p = arr;
+    while (*p && *p != ']') {
+        if (*p == '"') {
+            p++;
+            const char *s = p;
+            while (*p && *p != '"') { if (*p == '\\') p++; if (*p) p++; }
+            size_t len = (size_t)(p - s);
+            char *str = (char *)malloc(len + 1);
+            memcpy(str, s, len);
+            str[len] = '\0';
+            if (n == cap) { cap = cap ? cap * 2 : 4; v = (char **)realloc(v, (size_t)cap * sizeof *v); }
+            v[n++] = str;
+            if (*p) p++;
+        } else {
+            p++;
+        }
+    }
+    *out = v;
+    return n;
+}
+
+static const char *dap_basename(const char *path) {
+    if (!path) return "";
+    const char *slash = strrchr(path, '/');
+    return slash ? slash + 1 : path;
+}
+
+/* ---------------------------------------------------------------------------
+ * Outgoing message framing
+ * --------------------------------------------------------------------------- */
+
+static void dap_write(DapState *s, Buf *b) {
+    lsp_write_message(s->rpc_fd, b->data, b->len);
+}
+
+/* NUL-terminate a Buf in place (without counting the terminator in len) so its
+ * `data` can be passed as a C string -- Buf does not maintain a trailing NUL
+ * across buf_puts/buf_putc. */
+static const char *dap_cstr(Buf *b) {
+    buf_putc(b, '\0');
+    b->len--;
+    return b->data;
+}
+
+static void dap_send_response(DapState *s, int64_t req_seq, const char *cmd,
+                              const char *body, bool success) {
+    Buf b; buf_init(&b);
+    buf_printf(&b,
+        "{\"seq\":%d,\"type\":\"response\",\"request_seq\":%lld,"
+        "\"success\":%s,\"command\":\"%s\"",
+        s->seq++, (long long)req_seq, success ? "true" : "false", cmd);
+    if (body) buf_printf(&b, ",\"body\":%s", body);
+    buf_putc(&b, '}');
+    dap_write(s, &b);
+    buf_free(&b);
+}
+
+static void dap_send_error(DapState *s, int64_t req_seq, const char *cmd,
+                           const char *message) {
+    Buf b; buf_init(&b);
+    buf_printf(&b,
+        "{\"seq\":%d,\"type\":\"response\",\"request_seq\":%lld,"
+        "\"success\":false,\"command\":\"%s\",\"message\":\"",
+        s->seq++, (long long)req_seq, cmd);
+    dap_json_escape(&b, message);
+    buf_puts(&b, "\"}");
+    dap_write(s, &b);
+    buf_free(&b);
+}
+
+static void dap_send_event(DapState *s, const char *event, const char *body) {
+    Buf b; buf_init(&b);
+    buf_printf(&b, "{\"seq\":%d,\"type\":\"event\",\"event\":\"%s\"",
+               s->seq++, event);
+    if (body) buf_printf(&b, ",\"body\":%s", body);
+    buf_putc(&b, '}');
+    dap_write(s, &b);
+    buf_free(&b);
+}
+
+/* ---------------------------------------------------------------------------
+ * Debuggee stdout capture
+ * --------------------------------------------------------------------------- */
+
+/* Drain whatever the debuggee has written to the capture pipe and forward it as
+ * `output` events.  Non-blocking, so safe to call at any pause. */
+static void dap_drain_output(DapState *s) {
+    if (s->out_pipe_r < 0) return;
+    fflush(stdout);
+    char buf[4096];
+    for (;;) {
+        ssize_t n = read(s->out_pipe_r, buf, sizeof buf);
+        if (n <= 0) break;   /* EAGAIN (nonblocking) or EOF */
+        Buf b; buf_init(&b);
+        buf_printf(&b, "{\"seq\":%d,\"type\":\"event\",\"event\":\"output\","
+                       "\"body\":{\"category\":\"stdout\",\"output\":\"",
+                   s->seq++);
+        dap_json_escape_n(&b, buf, (size_t)n);
+        buf_puts(&b, "\"}}");
+        dap_write(s, &b);
+        buf_free(&b);
+        if (n < (ssize_t)sizeof buf) break;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * Conditional-breakpoint evaluation
+ *
+ * The Phase 2 debugger never evaluated arbitrary expressions in a paused frame.
+ * We support the common shape used by DAP conditional breakpoints -- a single
+ * comparison `<name> <op> <literal>` with op in == != < > <= >= -- by resolving
+ * the name in frame 0 and comparing its rendered value to the literal.  An
+ * unparseable condition (or an unresolved name) falls back to "stop", so a
+ * condition we cannot evaluate never silently swallows a breakpoint.
+ * --------------------------------------------------------------------------- */
+
+static const char *dap_find_op(const char *s, int *op_len) {
+    /* two-char ops first so "<=" is not read as "<" */
+    static const char *ops2[] = { "==", "!=", "<=", ">=", NULL };
+    for (int i = 0; ops2[i]; i++) {
+        const char *h = strstr(s, ops2[i]);
+        if (h) { *op_len = 2; return h; }
+    }
+    for (const char *p = s; *p; p++)
+        if (*p == '<' || *p == '>') { *op_len = 1; return p; }
+    return NULL;
+}
+
+static void dap_trim(char *s) {
+    size_t n = strlen(s);
+    while (n > 0 && (s[n-1] == ' ' || s[n-1] == '\t')) s[--n] = '\0';
+    size_t i = 0;
+    while (s[i] == ' ' || s[i] == '\t') i++;
+    if (i) memmove(s, s + i, n - i + 1);
+}
+
+static bool dap_eval_condition(TuriEnv *env, const char *cond) {
+    int op_len = 0;
+    const char *op = dap_find_op(cond, &op_len);
+    if (!op) return true;   /* not a comparison -- best effort: stop */
+
+    char lhs[128], rhs[128];
+    size_t llen = (size_t)(op - cond);
+    if (llen >= sizeof lhs) llen = sizeof lhs - 1;
+    memcpy(lhs, cond, llen); lhs[llen] = '\0';
+    snprintf(rhs, sizeof rhs, "%s", op + op_len);
+    dap_trim(lhs); dap_trim(rhs);
+
+    /* strip surrounding quotes from a string literal */
+    size_t rn = strlen(rhs);
+    if (rn >= 2 && rhs[0] == '"' && rhs[rn-1] == '"') {
+        memmove(rhs, rhs + 1, rn - 2); rhs[rn-2] = '\0';
+    }
+
+    char val[256];
+    if (!turi_debug_eval_name(env, 0, lhs, val, sizeof val))
+        return true;   /* unknown name -- best effort: stop */
+
+    bool eq = strcmp(val, rhs) == 0;
+    if (op_len == 2 && op[0] == '=') return eq;        /* == */
+    if (op_len == 2 && op[0] == '!') return !eq;       /* != */
+
+    /* ordered comparison: numeric */
+    char *le = NULL, *re = NULL;
+    double lv = strtod(val, &le), rv = strtod(rhs, &re);
+    if (le == val || re == rhs) return eq;             /* non-numeric: degrade */
+    if (op_len == 2 && op[0] == '<') return lv <= rv;  /* <= */
+    if (op_len == 2 && op[0] == '>') return lv >= rv;  /* >= */
+    if (op[0] == '<') return lv < rv;
+    if (op[0] == '>') return lv > rv;
+    return eq;
+}
+
+static bool dap_on_cond(TuriEnv *env, const char *condition, void *ud) {
+    (void)ud;
+    return dap_eval_condition(env, condition);
+}
+
+/* ---------------------------------------------------------------------------
+ * Breakpoints
+ * --------------------------------------------------------------------------- */
+
+/* Apply a setBreakpoints request for one source.  Pre-launch (env NULL) the
+ * lines are staged in DapState; while paused they are applied live.  Either way
+ * the previous breakpoints for this source's basename are cleared first
+ * (setBreakpoints is a full replacement per source). */
+static void dap_set_breakpoints(DapState *s, int64_t req_seq, const char *args) {
+    char path[1024] = {0};
+    size_t srclen;
+    const char *src = lsp_json_raw(args, "source", &srclen);
+    if (src) lsp_json_str_copy(src, "path", path, sizeof path);
+    const char *base = dap_basename(path);
+
+    if (s->env) {
+        turi_debug_clear_breakpoints_for_file(s->env, base);
+    } else {
+        int w = 0;
+        for (int i = 0; i < s->n_bps; i++)
+            if (strcmp(s->bps[i].file, base) != 0) {
+                if (w != i) s->bps[w] = s->bps[i];
+                w++;
+            }
+        s->n_bps = w;
+    }
+
+    Buf body; buf_init(&body);
+    buf_puts(&body, "{\"breakpoints\":[");
+
+    size_t bplen;
+    const char *bparr = lsp_json_raw(args, "breakpoints", &bplen);
+    int emitted = 0;
+    if (bparr) {
+        const char *cur = bparr;
+        for (;;) {
+            const char *obj = dap_array_next_obj(&cur);
+            if (!obj) break;
+            int64_t line = lsp_json_int(obj, "line");
+            if (line <= 0) continue;
+            char cond[160] = {0};
+            lsp_json_str_copy(obj, "condition", cond, sizeof cond);
+
+            bool ok = true;
+            if (s->env) {
+                ok = turi_debug_add_breakpoint(s->env, base, (uint32_t)line, cond) > 0;
+            } else if (s->n_bps < DAP_MAX_BP) {
+                DapBp *bp = &s->bps[s->n_bps++];
+                memset(bp, 0, sizeof *bp);
+                snprintf(bp->file, sizeof bp->file, "%s", base);
+                bp->line = (uint32_t)line;
+                snprintf(bp->cond, sizeof bp->cond, "%s", cond);
+            } else {
+                ok = false;
+            }
+            if (emitted++) buf_putc(&body, ',');
+            buf_printf(&body, "{\"verified\":%s,\"line\":%lld}",
+                       ok ? "true" : "false", (long long)line);
+        }
+    }
+    buf_puts(&body, "]}");
+    dap_send_response(s, req_seq, "setBreakpoints", dap_cstr(&body), true);
+    buf_free(&body);
+}
+
+/* ---------------------------------------------------------------------------
+ * Stack / scopes / variables
+ * --------------------------------------------------------------------------- */
+
+static void dap_stack_trace(DapState *s, int64_t req_seq) {
+    Buf body; buf_init(&body);
+    buf_puts(&body, "{\"stackFrames\":[");
+    int n = s->env ? turi_debug_frame_count(s->env) : 0;
+    int emitted = 0;
+    for (int i = 0; i < n; i++) {
+        TuriDbgFrame fr;
+        if (!turi_debug_frame_at(s->env, i, &fr)) continue;
+        if (emitted++) buf_putc(&body, ',');
+        buf_printf(&body, "{\"id\":%d,\"name\":\"", i);
+        dap_json_escape(&body, fr.fn_name);
+        buf_printf(&body, "\",\"line\":%u,\"column\":%u",
+                   fr.line, fr.col);
+        if (fr.file_path[0]) {
+            buf_puts(&body, ",\"source\":{\"name\":\"");
+            dap_json_escape(&body, dap_basename(fr.file_path));
+            buf_puts(&body, "\",\"path\":\"");
+            dap_json_escape(&body, fr.file_path);
+            buf_puts(&body, "\"}");
+        }
+        buf_putc(&body, '}');
+    }
+    buf_printf(&body, "],\"totalFrames\":%d}", emitted);
+    dap_send_response(s, req_seq, "stackTrace", dap_cstr(&body), true);
+    buf_free(&body);
+}
+
+static void dap_scopes(DapState *s, int64_t req_seq, const char *args) {
+    int64_t frame_id = lsp_json_int(args, "frameId");
+    if (frame_id < 0) frame_id = 0;
+    char body[256];
+    /* variablesReference = frameId + 1 so a reference never collides with 0
+     * (the DAP "no children" sentinel). */
+    snprintf(body, sizeof body,
+        "{\"scopes\":[{\"name\":\"Locals\",\"variablesReference\":%lld,"
+        "\"expensive\":false}]}", (long long)(frame_id + 1));
+    dap_send_response(s, req_seq, "scopes", body, true);
+}
+
+typedef struct { Buf *b; int n; } VarCollect;
+
+static void dap_var_cb(const char *name, const char *repr, void *ud) {
+    VarCollect *vc = (VarCollect *)ud;
+    if (vc->n++) buf_putc(vc->b, ',');
+    buf_puts(vc->b, "{\"name\":\"");
+    dap_json_escape(vc->b, name);
+    buf_puts(vc->b, "\",\"value\":\"");
+    dap_json_escape(vc->b, repr);
+    buf_puts(vc->b, "\",\"variablesReference\":0}");
+}
+
+static void dap_variables(DapState *s, int64_t req_seq, const char *args) {
+    int64_t ref = lsp_json_int(args, "variablesReference");
+    int frame = (ref > 0) ? (int)(ref - 1) : 0;
+    Buf body; buf_init(&body);
+    buf_puts(&body, "{\"variables\":[");
+    VarCollect vc = { &body, 0 };
+    if (s->env) turi_debug_frame_locals(s->env, frame, dap_var_cb, &vc);
+    buf_puts(&body, "]}");
+    dap_send_response(s, req_seq, "variables", dap_cstr(&body), true);
+    buf_free(&body);
+}
+
+static void dap_evaluate(DapState *s, int64_t req_seq, const char *args) {
+    char expr[256] = {0};
+    lsp_json_str_copy(args, "expression", expr, sizeof expr);
+    int64_t frame_id = lsp_json_int(args, "frameId");
+    if (frame_id < 0) frame_id = 0;
+    char val[512];
+    if (s->env && turi_debug_eval_name(s->env, (int)frame_id, expr, val, sizeof val)) {
+        Buf body; buf_init(&body);
+        buf_puts(&body, "{\"result\":\"");
+        dap_json_escape(&body, val);
+        buf_puts(&body, "\",\"variablesReference\":0}");
+        dap_send_response(s, req_seq, "evaluate", dap_cstr(&body), true);
+        buf_free(&body);
+    } else {
+        dap_send_error(s, req_seq, "evaluate", "not in scope");
+    }
+}
+
+/* Handle a request that is valid both pre-launch and while paused (the
+ * introspection + breakpoint surface).  Returns true if `cmd` was handled. */
+static bool dap_handle_common(DapState *s, const char *cmd, int64_t req_seq,
+                              const char *args) {
+    if (!strcmp(cmd, "setBreakpoints"))      { dap_set_breakpoints(s, req_seq, args); return true; }
+    if (!strcmp(cmd, "setExceptionBreakpoints")) {
+        dap_send_response(s, req_seq, "setExceptionBreakpoints", "{\"breakpoints\":[]}", true);
+        return true;
+    }
+    if (!strcmp(cmd, "setFunctionBreakpoints")) {
+        dap_send_response(s, req_seq, "setFunctionBreakpoints", "{\"breakpoints\":[]}", true);
+        return true;
+    }
+    if (!strcmp(cmd, "threads")) {
+        dap_send_response(s, req_seq, "threads",
+                          "{\"threads\":[{\"id\":1,\"name\":\"main\"}]}", true);
+        return true;
+    }
+    if (!strcmp(cmd, "stackTrace")) { dap_stack_trace(s, req_seq);        return true; }
+    if (!strcmp(cmd, "scopes"))     { dap_scopes(s, req_seq, args);       return true; }
+    if (!strcmp(cmd, "variables"))  { dap_variables(s, req_seq, args);    return true; }
+    if (!strcmp(cmd, "evaluate"))   { dap_evaluate(s, req_seq, args);     return true; }
+    if (!strcmp(cmd, "source")) {
+        dap_send_error(s, req_seq, "source", "source bytes not served; open the file directly");
+        return true;
+    }
+    return false;
+}
+
+/* ---------------------------------------------------------------------------
+ * Pause handler (invoked from inside the eval loop while suspended)
+ * --------------------------------------------------------------------------- */
+
+static void dap_on_pause(TuriEnv *env, TuriDbgStop reason, void *ud) {
+    DapState *s = (DapState *)ud;
+
+    /* The program-entry stop is swallowed unless the client asked for it. */
+    if (reason == TURI_DBG_STOP_ENTRY && !s->stop_on_entry) {
+        turi_debug_resume_continue(env);
+        return;
+    }
+
+    dap_drain_output(s);
+
+    const char *rs =
+        reason == TURI_DBG_STOP_BREAKPOINT ? "breakpoint" :
+        reason == TURI_DBG_STOP_ENTRY      ? "entry"      :
+        reason == TURI_DBG_STOP_PAUSE      ? "pause"      : "step";
+    char ev[160];
+    snprintf(ev, sizeof ev,
+        "{\"reason\":\"%s\",\"threadId\":1,\"allThreadsStopped\":true}", rs);
+    dap_send_event(s, "stopped", ev);
+
+    for (;;) {
+        char *msg = lsp_read_message(s->in_fd);
+        if (!msg) { turi_debug_resume_continue(env); return; }  /* EOF: run out */
+
+        char cmd[64];
+        if (lsp_json_str_copy(msg, "command", cmd, sizeof cmd) != 0) { free(msg); continue; }
+        int64_t rq = lsp_json_int(msg, "seq");
+        size_t al;
+        const char *ar = lsp_json_raw(msg, "arguments", &al);
+        char *args = NULL;
+        if (ar) { args = (char *)malloc(al + 1); memcpy(args, ar, al); args[al] = '\0'; }
+
+        bool resume = false;
+        if (!strcmp(cmd, "continue")) {
+            turi_debug_resume_continue(env);
+            dap_send_response(s, rq, "continue", "{\"allThreadsContinued\":true}", true);
+            resume = true;
+        } else if (!strcmp(cmd, "next")) {
+            turi_debug_resume_step_over(env);
+            dap_send_response(s, rq, "next", NULL, true);
+            resume = true;
+        } else if (!strcmp(cmd, "stepIn")) {
+            turi_debug_resume_step_in(env);
+            dap_send_response(s, rq, "stepIn", NULL, true);
+            resume = true;
+        } else if (!strcmp(cmd, "stepOut")) {
+            turi_debug_resume_step_out(env);
+            dap_send_response(s, rq, "stepOut", NULL, true);
+            resume = true;
+        } else if (!strcmp(cmd, "pause")) {
+            dap_send_response(s, rq, "pause", NULL, true);  /* already paused */
+        } else if (!strcmp(cmd, "disconnect") || !strcmp(cmd, "terminate")) {
+            dap_send_response(s, rq, cmd, NULL, true);
+            free(args); free(msg);
+            _exit(0);
+        } else if (!dap_handle_common(s, cmd, rq, args)) {
+            dap_send_error(s, rq, cmd, "not supported while paused");
+        }
+        free(args);
+        free(msg);
+        if (resume) return;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * Public entry points
+ * --------------------------------------------------------------------------- */
+
+void dap_begin_session(void *state, TuriEnv *env) {
+    DapState *s = (DapState *)state;
+    s->env = env;
+    turi_debug_set_pause_handler(env, dap_on_pause, s);
+    turi_debug_set_cond_handler(env, dap_on_cond, s);
+    for (int i = 0; i < s->n_bps; i++)
+        turi_debug_add_breakpoint(env, s->bps[i].file, s->bps[i].line, s->bps[i].cond);
+}
+
+/* Run the program with the debuggee's stdout captured to a pipe so it does not
+ * corrupt the JSON-RPC channel; forward it as `output` events. */
+static void dap_run_program(DapState *s, DapLaunchFn launch, void *ud,
+                            const char *program, char **args, int n_args) {
+    int p[2];
+    int saved = -1;
+    s->out_pipe_r = -1;
+    if (pipe(p) == 0) {
+        fcntl(p[0], F_SETFL, O_NONBLOCK);
+#ifdef F_SETPIPE_SZ
+        fcntl(p[1], F_SETPIPE_SZ, 1 << 20);  /* best-effort: 1 MiB buffer */
+#endif
+        s->out_pipe_r = p[0];
+        fflush(stdout);
+        saved = dup(STDOUT_FILENO);
+        dup2(p[1], STDOUT_FILENO);
+        close(p[1]);
+    }
+
+    int rc = launch(program, args, n_args, s, ud);
+
+    fflush(stdout);
+    dap_drain_output(s);
+    if (saved >= 0) { dup2(saved, STDOUT_FILENO); close(saved); }
+    if (s->out_pipe_r >= 0) { close(s->out_pipe_r); s->out_pipe_r = -1; }
+
+    char body[64];
+    snprintf(body, sizeof body, "{\"exitCode\":%d}", rc);
+    dap_send_event(s, "exited", body);
+    dap_send_event(s, "terminated", NULL);
+}
+
+int dap_server_run(int in_fd, int out_fd, DapLaunchFn launch, void *ud) {
+    DapState st;
+    memset(&st, 0, sizeof st);
+    st.in_fd     = in_fd;
+    st.rpc_fd    = dup(out_fd);  /* preserve real stdout before any redirect */
+    st.seq       = 1;
+    st.out_pipe_r = -1;
+
+    bool   launched = false;
+    char   program[4096] = {0};
+    char **prog_args = NULL;
+    int    n_prog_args = 0;
+
+    for (;;) {
+        char *msg = lsp_read_message(in_fd);
+        if (!msg) break;  /* EOF -- client closed the connection */
+
+        char command[64];
+        if (lsp_json_str_copy(msg, "command", command, sizeof command) != 0) { free(msg); continue; }
+        int64_t req_seq = lsp_json_int(msg, "seq");
+        size_t alen;
+        const char *araw = lsp_json_raw(msg, "arguments", &alen);
+        char *args = NULL;
+        if (araw) { args = (char *)malloc(alen + 1); memcpy(args, araw, alen); args[alen] = '\0'; }
+
+        if (!strcmp(command, "initialize")) {
+            dap_send_response(&st, req_seq, "initialize",
+                "{\"supportsConfigurationDoneRequest\":true,"
+                "\"supportsConditionalBreakpoints\":true,"
+                "\"supportsEvaluateForHovers\":true,"
+                "\"supportsTerminateRequest\":true}", true);
+            dap_send_event(&st, "initialized", NULL);
+        } else if (!strcmp(command, "launch")) {
+            lsp_json_str_copy(args, "program", program, sizeof program);
+            st.stop_on_entry = dap_json_bool(args, "stopOnEntry");
+            n_prog_args = dap_parse_str_array(args, "args", &prog_args);
+            launched = (program[0] != '\0');
+            dap_send_response(&st, req_seq, "launch", NULL, launched);
+            if (!launched)
+                dap_send_error(&st, req_seq, "launch", "no program specified");
+        } else if (!strcmp(command, "configurationDone")) {
+            dap_send_response(&st, req_seq, "configurationDone", NULL, true);
+            if (launched) {
+                dap_run_program(&st, launch, ud, program, prog_args, n_prog_args);
+                launched = false;  /* one program per session */
+            }
+        } else if (!strcmp(command, "disconnect") || !strcmp(command, "terminate")) {
+            dap_send_response(&st, req_seq, command, NULL, true);
+            free(args); free(msg);
+            break;
+        } else if (!dap_handle_common(&st, command, req_seq, args)) {
+            dap_send_error(&st, req_seq, command, "unsupported request");
+        }
+
+        free(args);
+        free(msg);
+    }
+
+    for (int i = 0; i < n_prog_args; i++) free(prog_args[i]);
+    free(prog_args);
+    if (st.rpc_fd >= 0) close(st.rpc_fd);
+    return 0;
+}
