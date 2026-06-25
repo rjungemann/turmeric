@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "arena.h"
+#include "runtime/arena.h"
 
 typedef struct StrSlice {
     const char *p;

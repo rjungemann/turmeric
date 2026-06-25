@@ -13,7 +13,7 @@
 
 #include <setjmp.h>
 #include <stdbool.h>
-#include "diag.h"
+#include "compiler/diag.h"
 
 #ifndef __EMSCRIPTEN__
 #  if defined(__APPLE__)
@@ -41,10 +41,10 @@ typedef struct {
 #  endif
 #endif
 
-#include "arena.h"
-#include "buf.h"
-#include "symbols.h"
-#include "value.h"
+#include "runtime/arena.h"
+#include "runtime/buf.h"
+#include "compiler/symbols.h"
+#include "turi/value.h"
 
 /* Phase S7: forward-declare async scheduler types (defined in turi/fiber.h) */
 typedef struct TuriFiber    TuriFiber;

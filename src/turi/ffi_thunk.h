@@ -26,8 +26,8 @@
 #ifndef TUR_TURI_FFI_THUNK_H
 #define TUR_TURI_FFI_THUNK_H
 
-#include "env.h"
-#include "spice_loader.h"
+#include "turi/env.h"
+#include "turi/spice_loader.h"
 
 #ifdef __cplusplus
 extern "C" {

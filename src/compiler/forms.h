@@ -4,9 +4,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#include "arena.h"
-#include "symbols.h"
-#include "buf.h"
+#include "runtime/arena.h"
+#include "compiler/symbols.h"
+#include "runtime/buf.h"
 
 typedef struct Span {
     uint16_t file_id;

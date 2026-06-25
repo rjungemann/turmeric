@@ -1,6 +1,11 @@
 # libturi public headers transitively pull in compiler/ and runtime/ headers
 
-> **Status:** Reported
+> **Status:** Resolved (2026-06-24) -- fix direction (1) applied: rooted-from-`src`
+> includes in `turi/env.h`, `turi/eval.h`, `turi/dap.h`, `turi/ffi_thunk.h`,
+> `turi/fiber.h`, plus the transitively-required `compiler/diag.h`,
+> `compiler/forms.h`, and `compiler/symbols.h`. Probe `cc -Isrc probe.c -c`
+> now compiles. Full test suite shows no new regressions (preexisting FAIL
+> count unchanged at 202).
 > **Severity:** Medium (embedder ergonomics)
 > **Found by:** Building the `turmeric-godot` GDExtension against `libturi.a`
 > **Date:** 2026-06-24

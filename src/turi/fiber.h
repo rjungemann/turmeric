@@ -76,7 +76,7 @@ static inline int swapcontext(ucontext_t *from, ucontext_t *to) {
 #define makecontext(u, fn, argc, ...) ((void)(u), (void)(fn), (void)(argc))
 #endif
 
-#include "value.h"
+#include "turi/value.h"
 
 /* Forward declarations */
 typedef struct TuriEnv    TuriEnv;    /* from env.h — do not include here */

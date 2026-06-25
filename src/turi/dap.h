@@ -1,7 +1,7 @@
 #ifndef TURI_DAP_H
 #define TURI_DAP_H
 
-#include "env.h"
+#include "turi/env.h"
 
 /* ---------------------------------------------------------------------------
  * Debugger Phase 3: Debug Adapter Protocol server over the interpreter.

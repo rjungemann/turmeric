@@ -3,9 +3,9 @@
 
 #include <stdio.h>
 
-#include "env.h"
-#include "fiber.h"
-#include "value.h"
+#include "turi/env.h"
+#include "turi/fiber.h"
+#include "turi/value.h"
 
 /* ---------------------------------------------------------------------------
  * Public eval API (Phase S0)

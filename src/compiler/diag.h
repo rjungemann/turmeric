@@ -5,7 +5,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 
-#include "forms.h"
+#include "compiler/forms.h"
 
 /* Forward declaration for Buf (defined in buf.h) */
 struct Buf;
