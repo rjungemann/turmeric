@@ -296,29 +296,40 @@ fixtures are the graduation canaries and stay red until the seams below close)
   receiver's concrete type args for a tyvar field type
   (`elab_adt_type_extract_args` + `adt_field_instantiate_type`, newly exported),
   so `(.val (Box 42))` types as `int` in untyped contexts (e.g. `println`).
-- **Instance-head resolution.** A bare `definstance` head (`elab_typeclasses.c`,
-  the head-arg parse) now resolves through the **type-namespace** lookup
-  (`elab_lookup_type_by_name`), so a single-variant record ADT whose constructor
-  shares the type's name -- every lowered `defstruct`, and a hand-written
-  `(defdata T [A] (T [...]))` -- resolves to the ADT *type*, not its ctor `fn`
-  (which `scope_lookup`, being value-preferring, returned -> `<struct>`).
+- **Instance-head resolution (bare AND applied heads).** A `definstance` head --
+  both the bare `[Option]` form and the applied `(Result _ B)` form
+  (`elab_typeclasses.c`, the head-arg parse and the applied-ctor parse) -- now
+  resolves through the **type-namespace** lookup (`elab_lookup_type_by_name`), so
+  a single-variant record ADT whose constructor shares the type's name -- every
+  lowered `defstruct`, and a hand-written `(defdata T [A] (T [...]))` -- resolves
+  to the ADT *type*, not its ctor `fn` (which `scope_lookup`, being
+  value-preferring, returned -> opaque `<struct>`).
+
+With these three fixes the **entire autoloaded stdlib elaborates AND compiles
+under the flag** (`Option`/`Result`/`Pair`/`Vec`/`Map`/`Set`/`List`/... all
+lower to record ADTs and the trivial program links + runs).  What remains is a
+runtime *usage* seam, below.
 
 ### Remaining seams before the gate can come off
 
-1. **By-value-ADT vs uniform-carrier typeclass dispatch (NEXT, highest leverage).**
-   A *parametric* instance method is emitted with the uniform int64 carrier ABI
-   (`__inst_Eq_eq_qu_T(int64_t, int64_t)`) because the head type `(T A)` has an
-   abstract `A`, but a concrete monomorph arg (`tur_adt_Maybe2__int`) is
-   *by-value* (P2-P4), so the direct call mismatches
-   (`incompatible type for argument 1`). A *non-parametric* by-value ADT works
-   because its instance method is emitted by-value. The reconciliation must
-   bridge a by-value ADT-app arg to the carrier at the dispatch site, but the
-   gating predicates (`type_uses_carrier_in_dispatch` == `type_uses_carrier_abi`,
-   and `expr_emits_byvalue_carrier_abi`, both `emit_expr.c`) report a by-value
-   app as *non-carrier* and actively suppress the bridge -- so this is
-   multi-point surgery on hot dispatch paths (or, alternatively, emit
-   per-monomorph instance methods). Unblocks all parametric stdlib instances at
-   once.
+1. **By-value-app -> carrier bridge at carrier-ABI call boundaries (NEXT,
+   highest leverage, central seam).**  Stdlib *compiles*, but actual *usage*
+   fails at `cc`: `(eq? (some 5) (some 5))` passes a by-value monomorph
+   (`tur_adt_Option__int`, by-value via P2-P4) into a carrier-ABI consumer
+   expecting `int64_t`.  This is not limited to typeclass dispatch -- the same
+   value flows into generic fns and helper functions (observed:
+   `mutmap_eq_loop(int64_t)`), so the bridge is needed wherever a by-value ADT-app
+   crosses into a carrier-ABI parameter.  The gating predicates
+   (`type_uses_carrier_abi`, and `expr_emits_byvalue_carrier_abi` /
+   `type_uses_carrier_in_dispatch`, all `emit_expr.c`) report a by-value app as
+   *non-carrier* and so suppress the existing `emit_carrier_bridge` box-and-address
+   path.  A *non-parametric* by-value ADT works because its instance method is
+   emitted by-value; only the *parametric* (uniform-carrier) consumers mismatch.
+   Reconciliation options: (a) bridge by-value apps to the carrier at carrier-ABI
+   arg boundaries (preserves by-value; broad but `emit_carrier_bridge` already
+   exists); (b) emit per-monomorph instance methods; (c) keep lowered parametric
+   structs on the carrier representation (simplest-green, gives up the by-value
+   win for them).  Unblocks all parametric stdlib usage at once.
 2. **`Option`/`Result` dedicated codegen.** These carry hand-written runtime
    layout (`tur_option_t`, `tur_result_box_t`, `tur_is_some`/`tur_opt_value`,
    `some`/`none`/`ok`/`err`) that assumes the struct/carrier representation;

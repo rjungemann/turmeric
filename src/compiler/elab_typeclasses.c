@@ -2422,24 +2422,45 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                         Type *fn_type = (Type *)arena_alloc(e->arena, sizeof(Type));
                         memset(fn_type, 0, sizeof(Type));
                         Binding *ctor_b = scope_lookup(e->scope, ctor_sym);
+                        /* The applied head names a TYPE constructor.  scope_lookup
+                         * is value-preferring and for a single-variant record ADT
+                         * whose constructor shares the type's name (every lowered
+                         * defstruct -- e.g. `(Result _ B)` once Result lowers)
+                         * returns the constructor FUNCTION (TY_FN), so the
+                         * TY_ADT/TY_STRUCT branch below would miss and fall to the
+                         * opaque `<struct>` fallback -- erasing the ADT identity and
+                         * breaking `.is-ok` field access in the method body.  Resolve
+                         * the head type authoritatively via the type namespace,
+                         * preferring a struct binding from scope_lookup first (MF4
+                         * struct-preference). */
+                        Type head_ct;
+                        bool have_head_ct = false;
+                        if (ctor_b && ctor_b->type.kind == TY_STRUCT &&
+                            ctor_b->type.as.struct_.def) {
+                            head_ct = ctor_b->type; have_head_ct = true;
+                        } else {
+                            Type *ht = elab_lookup_type_by_name(e, ctor_sym);
+                            if (ht && ((ht->kind == TY_ADT && ht->as.adt_.def) ||
+                                       (ht->kind == TY_STRUCT && ht->as.struct_.def))) {
+                                head_ct = *ht; have_head_ct = true;
+                            } else if (ctor_b && (ctor_b->type.kind == TY_ADT ||
+                                       (ctor_b->type.kind == TY_STRUCT &&
+                                        ctor_b->type.as.struct_.def))) {
+                                head_ct = ctor_b->type; have_head_ct = true;
+                            }
+                        }
                         /* The constructor's kind follows its real arity: a unary
                          * constructor (Option : * -> *) applied to one arg is a
                          * fully-applied type of kind *, while a binary one
                          * (Result : * -> * -> *) applied to one arg is still a
-                         * (* -> *) constructor.  Hardcoding KIND_ARROW2 here
-                         * mis-classified an applied unary head like `(Option cstr)`
-                         * as (* -> *), which then promoted a STAR-declared class
-                         * (e.g. Enc) to higher kind and rejected its other
-                         * fully-applied instances.  Derive the kind from the def's
+                         * (* -> *) constructor.  Derive the kind from the def's
                          * n_type_params when known; fall back to the legacy binary
                          * assumption only for an opaque (def == NULL) constructor. */
-                        if (ctor_b && (ctor_b->type.kind == TY_ADT ||
-                                       (ctor_b->type.kind == TY_STRUCT &&
-                                        ctor_b->type.as.struct_.def))) {
-                            *fn_type = ctor_b->type;
-                            uint32_t ctor_arity = (ctor_b->type.kind == TY_ADT)
-                                ? ctor_b->type.as.adt_.def->n_type_params
-                                : ctor_b->type.as.struct_.def->n_type_params;
+                        if (have_head_ct) {
+                            *fn_type = head_ct;
+                            uint32_t ctor_arity = (head_ct.kind == TY_ADT)
+                                ? head_ct.as.adt_.def->n_type_params
+                                : head_ct.as.struct_.def->n_type_params;
                             fn_type->hkt_kind = (ctor_arity > 0)
                                 ? kind_for_arity(ctor_arity)
                                 : KIND_ARROW2;
