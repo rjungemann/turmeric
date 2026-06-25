@@ -3092,18 +3092,19 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
          * typed; force everything else to the int64 carrier the inline-C body
          * reads.
          *
-         * A multi-type-param collection (`(Map K V)`, `(MutableMap K V)`) is
-         * declared as a *degenerate* TY_APP -- a spineless shell whose head
-         * `app.fn` is NULL, so `type_is_heap_vec` cannot recover its StructDef.
-         * (Single-param `(Vec A)` keeps a real spine and extracts directly.)
-         * For those, fall back to the RESOLVED slot type: a declared TY_APP
-         * whose resolved arg/result is a heap collection is the same structural
-         * collection slot, just recovered post-monomorphization.  The
-         * `decl.kind == TY_APP` guard preserves the some/ok exclusion -- a bare
-         * tyvar `A` is TY_TYVAR, never TY_APP, so it stays off the slice. */
+         * multi-param-struct-annotation-degenerate-tyapp: a multi-type-param
+         * collection (`(Map K V)`, `(MutableMap K V)`) now keeps a real spine in
+         * `fd->param_types` / `fd->return_type` (the realiser in elab_fns.c
+         * preserves the spined `type_app` chain), so `type_is_heap_vec` extracts
+         * its StructDef directly from the DECLARED type -- exactly like the
+         * single-param `(Vec A)` slice always did.  The earlier resolved-type
+         * fallback (`decl.kind == TY_APP && type_is_heap_vec(resolved)`) that
+         * worked around the spineless shell is no longer needed.  The some/ok
+         * exclusion is preserved structurally: a bare tyvar element `A` is
+         * TY_TYVAR (never a heap struct), so it stays off the slice even when it
+         * resolves to a collection at this call. */
         #define TUR_SLOT_IS_COLL(decl, resolved) \
-            (type_is_heap_vec(decl) || \
-             ((decl).kind == TY_APP && type_is_heap_vec(resolved)))
+            (((void)(resolved)), type_is_heap_vec(decl))
         bool ret_is_vec = fd &&
             TUR_SLOT_IS_COLL(fd->return_type, result_type);
         bool any_heap_slot = ret_is_vec;

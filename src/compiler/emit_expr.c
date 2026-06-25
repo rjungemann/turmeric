@@ -1851,9 +1851,33 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * already returns the concrete type, truncating the double to int64_t. */
                 if (ctx) {
                     for (uint32_t si = 0; si < ctx->n_specialized_calls; si++) {
-                        if (ctx->specialized_call_exprs[si] == inner_call) {
-                            return emit_value(ctx, body, inner_call);
+                        if (ctx->specialized_call_exprs[si] != inner_call) continue;
+                        /* multi-param-struct-annotation-degenerate-tyapp: a
+                         * specialized clone returns the concrete type only when
+                         * its spec result_type matches the reinterpret target.
+                         * An inline-C accessor spec (e.g. map-get-eq-o : V) keeps
+                         * the int64 carrier as its result_type -- forced by the
+                         * carrier-forcing block in emit_module.c -- so a
+                         * `(:: ... :float)` / `:cstr` read MUST still apply the
+                         * carrier reinterpret.  Mirror the first loop's type_eq
+                         * guard: look the spec up by clone name and only skip the
+                         * reinterpret when it genuinely returns e->type.  When no
+                         * spec is found, keep the legacy skip (the clone already
+                         * returned the concrete type). */
+                        const char *clone = ctx->specialized_call_names[si];
+                        bool returns_concrete = true;
+                        if (clone) {
+                            for (uint32_t sj = 0; sj < ctx->n_abi_specializations; sj++) {
+                                const EmitAbiSpecialization *sp = &ctx->abi_specializations[sj];
+                                if (sp->clone_name && strcmp(sp->clone_name, clone) == 0) {
+                                    returns_concrete = type_eq(sp->result_type, e->type);
+                                    break;
+                                }
+                            }
                         }
+                        if (returns_concrete)
+                            return emit_value(ctx, body, inner_call);
+                        break;  /* carrier-returning spec: fall through to reinterpret */
                     }
                 }
             }

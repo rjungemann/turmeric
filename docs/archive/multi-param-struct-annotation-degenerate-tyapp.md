@@ -13,6 +13,38 @@ severity: Low-Medium. Not a miscompile today -- every site that needs the
 
 # Multi-param struct annotations lose their spine in `fd->param_types`
 
+## RESOLVED (2026-06-25)
+
+Fixed end-to-end. The realiser (`src/compiler/elab_fns.c`) now preserves the
+spined `type_app` chain for a multi-param `(Map K V)` / `(MutableMap K V)`
+parameter (new `TY_APP` preserve case, mirroring the `TY_STRUCT` one) and for a
+multi-param return (using the already-captured `return_app_type`). With a real
+spine, `type_extract_struct_app` / `type_is_heap_struct` / `type_is_heap_vec`
+extract the head StructDef directly from the *declared* type, exactly like the
+single-param `(Vec A)` slice always did.
+
+The cross-cutting audit (step 2) found the only reader that genuinely depended
+on the spineless shell was the `::` (`EX_REINTERPRET`) call-site lowering in
+`src/compiler/emit_expr.c`: its KB-015 second loop unconditionally skipped the
+carrier reinterpret for any specialized call, assuming the clone returned the
+concrete type. Once multi-param accessors (`map-get-eq-o : V`) started minting
+typed specs, that assumption broke -- those specs keep the int64 carrier as
+their `result_type` (forced by the carrier-forcing block), so a `(:: ... :float)`
+read MUST still reinterpret. Fixed by gating the skip on the spec's actual
+`result_type` (looked up by clone name), mirroring the first loop's `type_eq`
+guard. This was the source of the `0.5 -> 4.60268e+18` garbage the report's
+experiment hit.
+
+Step 3: the `TUR_SLOT_IS_COLL` resolved-type fallback in `emit_module.c` is
+removed -- the declared-type path alone is now sufficient.
+
+Validation: `tce3-map-cstr-val` prints `0.5`; `bash tests/run.sh` green
+(1826 passed, 0 failed) after regenerating the `conv-byval-adt-nested-inline`,
+`map-typed-consumer`, and `mutmap-typed-consumer` snapshots; `bash
+tests/run-turi.sh` unchanged from baseline (1313/33/442).
+
+---
+
 ## One-line summary
 
 For a `defn`/`fn` parameter or return annotated with a **multi-type-param**

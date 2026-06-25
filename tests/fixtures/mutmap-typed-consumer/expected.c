@@ -2976,7 +2976,6 @@ static bool set_hyeq_hydriver(int64_t, int64_t);
 static bool set_hyeq_hyfull(int64_t, int64_t);
 static int64_t set_hyadd1(int64_t, int64_t);
 static int64_t mutmap_hylen(int64_t);
-static void mutmap_hyset_ex(int64_t, int64_t, int64_t, int64_t);
 static int64_t mutmap_hyget(int64_t, int64_t, int64_t);
 static bool mutmap_hyhas_qu(int64_t, int64_t, int64_t);
 static int64_t mutmap_hycap(int64_t);
@@ -2986,7 +2985,6 @@ static int64_t mutmap_hyslot_hykey(int64_t, int64_t);
 static int64_t mutmap_hyslot_hyvalue(int64_t, int64_t);
 static bool mutmap_hyeq_hystorage_qu(void *, void *, int64_t);
 static bool mutmap_hyeq_hyloop(int64_t, int64_t, int64_t, int64_t, int64_t);
-static void mutmap_hyfree(int64_t);
 static int64_t json_slnull();
 static int64_t json_slbool(int64_t);
 static int64_t json_slint(int64_t);
@@ -3067,7 +3065,13 @@ static int64_t sum_hyvals(MutableMap__int__int *, int64_t, int64_t, int64_t);
 static int64_t total(MutableMap__int__int *);
 static bool some___spec__bool_Option__opaque(Option__opaque);
 static Cons__int * tcons__spec__Cons__int___int64_t_int64_t(int64_t, int64_t);
+static int64_t mutmap_slot_occupied___spec__int64_t_MutableMap__int__int___int64_t(MutableMap__int__int *, int64_t);
+static int64_t mutmap_slot_value__spec__int64_t_MutableMap__int__int___int64_t(MutableMap__int__int *, int64_t);
+static int64_t mutmap_cap__spec__int64_t_MutableMap__int__int__(MutableMap__int__int *);
 static MutableMap__int__int * mutmap_new__spec__MutableMap__int__int__();
+static void mutmap_set___spec__void_MutableMap__int__int___int64_t_int64_t_int64_t(MutableMap__int__int *, int64_t, int64_t, int64_t);
+static int64_t mutmap_len__spec__int64_t_MutableMap__int__int__(MutableMap__int__int *);
+static void mutmap_free__spec__void_MutableMap__int__int__(MutableMap__int__int *);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -4452,67 +4456,6 @@ static int64_t mutmap_hylen(int64_t m) {
   
 }
 
-static void mutmap_hyset_ex(int64_t m, int64_t h, int64_t key, int64_t val) {
-        enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
-  struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
-  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
-  struct { void *storage; } *mm = (void*)(intptr_t)m;
-  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
-  /* Resize when load factor (len + tomb) / cap >= 0.75. */
-  if ((s->len + s->tomb) * 4 >= s->cap * 3) {
-      uint64_t new_cap = s->cap * 2;
-      struct __tur_mm_storage *ns = (struct __tur_mm_storage *)
-          malloc(sizeof(*ns) + new_cap * sizeof(struct __tur_mm_slot));
-      ns->cap = new_cap; ns->len = 0; ns->tomb = 0;
-      for (uint64_t i = 0; i < new_cap; i++) {
-          ns->slots[i].tag = TUR_MM_EMPTY;
-          ns->slots[i].hash = 0; ns->slots[i].key = 0; ns->slots[i].value = 0;
-      }
-      uint64_t mask = new_cap - 1;
-      for (uint64_t i = 0; i < s->cap; i++) {
-          if (s->slots[i].tag != TUR_MM_OCCUPIED) continue;
-          uint64_t idx = ((uint64_t)s->slots[i].hash) & mask;
-          while (ns->slots[idx].tag == TUR_MM_OCCUPIED) idx = (idx + 1) & mask;
-          ns->slots[idx] = s->slots[i];
-          ns->len++;
-      }
-      free(s);
-      mm->storage = ns;
-      s = ns;
-  }
-  uint64_t mask = s->cap - 1;
-  uint64_t idx = ((uint64_t)h) & mask;
-  int64_t first_tomb = -1;
-  for (;;) {
-      struct __tur_mm_slot *slot = &s->slots[idx];
-      if (slot->tag == TUR_MM_EMPTY) {
-          /* Not present: insert at first tombstone if any, else here. */
-          if (first_tomb >= 0) {
-              struct __tur_mm_slot *ts = &s->slots[first_tomb];
-              ts->tag = TUR_MM_OCCUPIED;
-              ts->hash = h; ts->key = key; ts->value = val;
-              s->tomb--;
-              s->len++;
-          } else {
-              slot->tag = TUR_MM_OCCUPIED;
-              slot->hash = h; slot->key = key; slot->value = val;
-              s->len++;
-          }
-          return;
-      }
-      if (slot->tag == TUR_MM_OCCUPIED && slot->hash == h && slot->key == key) {
-          /* Update existing. */
-          slot->value = val;
-          return;
-      }
-      if (slot->tag == TUR_MM_DELETED && first_tomb < 0) {
-          first_tomb = (int64_t)idx;
-      }
-      idx = (idx + 1) & mask;
-  }
-  
-}
-
 static int64_t mutmap_hyget(int64_t m, int64_t h, int64_t key) {
         enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
@@ -4657,13 +4600,6 @@ static bool mutmap_hyeq_hyloop(int64_t m1, int64_t m2, int64_t i, int64_t cap, i
             __t45 = __t46;
         }
         return __t45;
-}
-
-static void mutmap_hyfree(int64_t m) {
-        struct { void *storage; } *mm = (void*)(intptr_t)m;
-  if (mm->storage) free(mm->storage);
-  free(mm);
-  
 }
 
 static int64_t json_slnull() {
@@ -5705,11 +5641,11 @@ static int64_t sum_hyvals(MutableMap__int__int * m, int64_t i, int64_t cap, int6
         if ((i) == (cap)) {
             return acc;
         } else {
-            if (mutmap_hyslot_hyoccupied_qu((int64_t)(intptr_t)((int64_t)(intptr_t)(m)), i)) {
+            if (mutmap_slot_occupied___spec__int64_t_MutableMap__int__int___int64_t(m, i)) {
                 MutableMap__int__int * __t55 = m;
                 int64_t __t56 = (i) + (INT64_C(1));
                 int64_t __t57 = cap;
-                int64_t __t58 = (acc) + (mutmap_hyslot_hyvalue((int64_t)(intptr_t)((int64_t)(intptr_t)(m)), i));
+                int64_t __t58 = (acc) + (mutmap_slot_value__spec__int64_t_MutableMap__int__int___int64_t(m, i));
                 m = __t55;
                 i = __t56;
                 cap = __t57;
@@ -5730,7 +5666,7 @@ static int64_t sum_hyvals(MutableMap__int__int * m, int64_t i, int64_t cap, int6
 }
 
 static int64_t total(MutableMap__int__int * m) {
-        return sum_hyvals(m, INT64_C(0), mutmap_hycap((int64_t)(intptr_t)((int64_t)(intptr_t)(m))), INT64_C(0));
+        return sum_hyvals(m, INT64_C(0), mutmap_cap__spec__int64_t_MutableMap__int__int__(m), INT64_C(0));
 }
 
 int main(int argc, char **argv) {
@@ -5746,12 +5682,12 @@ int main(int argc, char **argv) {
         {
             MutableMap__int__int * a_1253 = mutmap_new__spec__MutableMap__int__int__();
             (void)a_1253;
-            mutmap_hyset_ex((int64_t)(intptr_t)((int64_t)(intptr_t)(a_1253)), INT64_C(1), INT64_C(1), INT64_C(100));
-            mutmap_hyset_ex((int64_t)(intptr_t)((int64_t)(intptr_t)(a_1253)), INT64_C(2), INT64_C(2), INT64_C(200));
-            mutmap_hyset_ex((int64_t)(intptr_t)((int64_t)(intptr_t)(a_1253)), INT64_C(3), INT64_C(3), INT64_C(300));
+            mutmap_set___spec__void_MutableMap__int__int___int64_t_int64_t_int64_t(a_1253, INT64_C(1), INT64_C(1), INT64_C(100));
+            mutmap_set___spec__void_MutableMap__int__int___int64_t_int64_t_int64_t(a_1253, INT64_C(2), INT64_C(2), INT64_C(200));
+            mutmap_set___spec__void_MutableMap__int__int___int64_t_int64_t_int64_t(a_1253, INT64_C(3), INT64_C(3), INT64_C(300));
             printf("%lld\n", (long long)(total(a_1253)));
-            printf("%lld\n", (long long)(mutmap_hylen((int64_t)(intptr_t)((int64_t)(intptr_t)(a_1253)))));
-            mutmap_hyfree((int64_t)(intptr_t)((int64_t)(intptr_t)(a_1253)));
+            printf("%lld\n", (long long)(mutmap_len__spec__int64_t_MutableMap__int__int__(a_1253)));
+            mutmap_free__spec__void_MutableMap__int__int__(a_1253);
         }
         int64_t __t63;
         __t63 = INT64_C(0);
@@ -5766,6 +5702,33 @@ static Cons__int * tcons__spec__Cons__int___int64_t_int64_t(int64_t h, int64_t t
         Cons__int *__t64 = (Cons__int *)malloc(sizeof(Cons__int));
         *__t64 = (Cons__int){.head = h, .tail = t};
         return __t64;
+}
+
+static int64_t mutmap_slot_occupied___spec__int64_t_MutableMap__int__int___int64_t(MutableMap__int__int * m, int64_t i) {
+        enum { TUR_MM_OCCUPIED=1 };
+  struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
+  return s->slots[i].tag == TUR_MM_OCCUPIED;
+  
+}
+
+static int64_t mutmap_slot_value__spec__int64_t_MutableMap__int__int___int64_t(MutableMap__int__int * m, int64_t i) {
+        struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
+  return (int64_t)s->slots[i].value;
+  
+}
+
+static int64_t mutmap_cap__spec__int64_t_MutableMap__int__int__(MutableMap__int__int * m) {
+        struct __tur_mm_storage_c { uint64_t cap; uint64_t len; uint64_t tomb; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage_c *s = (struct __tur_mm_storage_c *)mm->storage;
+  return (int64_t)s->cap;
+  
 }
 
 static MutableMap__int__int * mutmap_new__spec__MutableMap__int__int__() {
@@ -5795,6 +5758,82 @@ static MutableMap__int__int * mutmap_new__spec__MutableMap__int__int__() {
   struct { void *storage; } *m = malloc(sizeof(*m));
   m->storage = s;
   return (MutableMap__int__int *)(intptr_t)m;
+  
+}
+
+static void mutmap_set___spec__void_MutableMap__int__int___int64_t_int64_t_int64_t(MutableMap__int__int * m, int64_t h, int64_t key, int64_t val) {
+        enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
+  struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
+  /* Resize when load factor (len + tomb) / cap >= 0.75. */
+  if ((s->len + s->tomb) * 4 >= s->cap * 3) {
+      uint64_t new_cap = s->cap * 2;
+      struct __tur_mm_storage *ns = (struct __tur_mm_storage *)
+          malloc(sizeof(*ns) + new_cap * sizeof(struct __tur_mm_slot));
+      ns->cap = new_cap; ns->len = 0; ns->tomb = 0;
+      for (uint64_t i = 0; i < new_cap; i++) {
+          ns->slots[i].tag = TUR_MM_EMPTY;
+          ns->slots[i].hash = 0; ns->slots[i].key = 0; ns->slots[i].value = 0;
+      }
+      uint64_t mask = new_cap - 1;
+      for (uint64_t i = 0; i < s->cap; i++) {
+          if (s->slots[i].tag != TUR_MM_OCCUPIED) continue;
+          uint64_t idx = ((uint64_t)s->slots[i].hash) & mask;
+          while (ns->slots[idx].tag == TUR_MM_OCCUPIED) idx = (idx + 1) & mask;
+          ns->slots[idx] = s->slots[i];
+          ns->len++;
+      }
+      free(s);
+      mm->storage = ns;
+      s = ns;
+  }
+  uint64_t mask = s->cap - 1;
+  uint64_t idx = ((uint64_t)h) & mask;
+  int64_t first_tomb = -1;
+  for (;;) {
+      struct __tur_mm_slot *slot = &s->slots[idx];
+      if (slot->tag == TUR_MM_EMPTY) {
+          /* Not present: insert at first tombstone if any, else here. */
+          if (first_tomb >= 0) {
+              struct __tur_mm_slot *ts = &s->slots[first_tomb];
+              ts->tag = TUR_MM_OCCUPIED;
+              ts->hash = h; ts->key = key; ts->value = val;
+              s->tomb--;
+              s->len++;
+          } else {
+              slot->tag = TUR_MM_OCCUPIED;
+              slot->hash = h; slot->key = key; slot->value = val;
+              s->len++;
+          }
+          return;
+      }
+      if (slot->tag == TUR_MM_OCCUPIED && slot->hash == h && slot->key == key) {
+          /* Update existing. */
+          slot->value = val;
+          return;
+      }
+      if (slot->tag == TUR_MM_DELETED && first_tomb < 0) {
+          first_tomb = (int64_t)idx;
+      }
+      idx = (idx + 1) & mask;
+  }
+  
+}
+
+static int64_t mutmap_len__spec__int64_t_MutableMap__int__int__(MutableMap__int__int * m) {
+        struct __tur_mm_storage_l { uint64_t cap; uint64_t len; uint64_t tomb; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage_l *s = (struct __tur_mm_storage_l *)mm->storage;
+  return (int64_t)s->len;
+  
+}
+
+static void mutmap_free__spec__void_MutableMap__int__int__(MutableMap__int__int * m) {
+        struct { void *storage; } *mm = (void*)(intptr_t)m;
+  if (mm->storage) free(mm->storage);
+  free(mm);
   
 }
 

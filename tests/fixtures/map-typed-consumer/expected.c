@@ -2901,7 +2901,6 @@ static void * hamt_slpersistent_ex(void *);
 static int64_t hamt_slautolink_hyhint();
 static int64_t map_hynew();
 static void * map_hyhamt(int64_t);
-static int64_t map_hyget_hyeq_hyo(int64_t, int64_t, int64_t, int64_t, int64_t);
 static int64_t cstr_hyhash(const char *);
 static bool tur_hycstr_hykey_hyeq_qu(const char *, const char *);
 static bool tur_hyint_hycarrier_hyeq_qu(int64_t, int64_t);
@@ -3072,6 +3071,7 @@ static int64_t replace(int64_t, int64_t);
 static int64_t size_hyof(Map__int__int *);
 static bool some___spec__bool_Option__opaque(Option__opaque);
 static Cons__int * tcons__spec__Cons__int___int64_t_int64_t(int64_t, int64_t);
+static int64_t map_count__spec__int64_t_Map__int__int__(Map__int__int *);
 static Map__int__int * map_assoc_eq_o__spec__Map__int__int___Map__int__int___int64_t_int64_t_int64_t_int64_t_int64_t(Map__int__int *, int64_t, int64_t, int64_t, int64_t, int64_t);
 static Map__int__int * tur_map_kcheck__spec__Map__int__int___Map__int__int___const_void__(Map__int__int *, const void *);
 static Map__int__int * map_new__spec__Map__int__int__();
@@ -3080,6 +3080,8 @@ static Map__int__float * tur_map_kcheck__spec__Map__int__float___Map__int__float
 static Map__int__float * map_new__spec__Map__int__float__();
 static bool __inst_Eq_eq_qu_Map__spec__bool_Map__int__int___Map__int__int__(Map__int__int *, Map__int__int *);
 static bool map_eq_driver__spec__bool_Map__int__int___Map__int__int___bool(Map__int__int *, Map__int__int *, int64_t);
+static int64_t map_hamt__spec__int64_t_Map__int__int__(Map__int__int *);
+static int64_t map_get_eq_o__spec__int64_t_Map__int__float___int64_t_int64_t_int64_t_int64_t(Map__int__float *, int64_t, int64_t, int64_t, int64_t);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -3670,14 +3672,6 @@ static int64_t map_hynew() {
 static void * map_hyhamt(int64_t m) {
         struct { void *hamt; } *map = (void*)(intptr_t)m;
   return map->hamt;
-  
-}
-
-static int64_t map_hyget_hyeq_hyo(int64_t m, int64_t h, int64_t key, int64_t keyeq, int64_t owned) {
-        struct { void *hamt; } *map = (void *)(intptr_t)m;
-  return (int64_t)(intptr_t)tur_hamt_get_eq_o(map->hamt, (uint64_t)h,
-                                              (void *)(intptr_t)key,
-                                              (void *)(intptr_t)keyeq, (int64_t)owned);
   
 }
 
@@ -5673,7 +5667,7 @@ static int64_t replace(int64_t old, int64_t new) {
 }
 
 static int64_t size_hyof(Map__int__int * m) {
-        return map_hycount((int64_t)(intptr_t)((int64_t)(intptr_t)(m)));
+        return map_count__spec__int64_t_Map__int__int__(m);
 }
 
 int main(int argc, char **argv) {
@@ -5726,7 +5720,7 @@ int main(int argc, char **argv) {
             {
                 int64_t _un_untur_unmk_un_un_1256 = INT64_C(1);
                 (void)_un_untur_unmk_un_un_1256;
-                __t59 = ((union { int64_t s; double d; }){.s = map_hyget_hyeq_hyo((int64_t)(intptr_t)((int64_t)(intptr_t)(tur_map_kcheck__spec__Map__int__float___Map__int__float___const_void__(f_1255, &_un_untur_unmk_un_un_1256))), __inst_Hash_hash_int(_un_untur_unmk_un_un_1256), __inst_MapKey_mk_hybox_int(_un_untur_unmk_un_un_1256), __inst_MapKey_mk_hycmp_int(_un_untur_unmk_un_un_1256), __inst_MapKey_mk_hyowned_qu_int(_un_untur_unmk_un_un_1256))}).d;
+                __t59 = ((union { int64_t s; double d; }){.s = map_get_eq_o__spec__int64_t_Map__int__float___int64_t_int64_t_int64_t_int64_t(tur_map_kcheck__spec__Map__int__float___Map__int__float___const_void__(f_1255, &_un_untur_unmk_un_un_1256), __inst_Hash_hash_int(_un_untur_unmk_un_un_1256), __inst_MapKey_mk_hybox_int(_un_untur_unmk_un_un_1256), __inst_MapKey_mk_hycmp_int(_un_untur_unmk_un_un_1256), __inst_MapKey_mk_hyowned_qu_int(_un_untur_unmk_un_un_1256))}).d;
             }
             printf("%g\n", (double)(__t59));
         }
@@ -5743,6 +5737,12 @@ static Cons__int * tcons__spec__Cons__int___int64_t_int64_t(int64_t h, int64_t t
         Cons__int *__t61 = (Cons__int *)malloc(sizeof(Cons__int));
         *__t61 = (Cons__int){.head = h, .tail = t};
         return __t61;
+}
+
+static int64_t map_count__spec__int64_t_Map__int__int__(Map__int__int * m) {
+        struct { void *hamt; } *map = (void*)(intptr_t)m;
+  return tur_hamt_count(map->hamt);
+  
 }
 
 static Map__int__int * map_assoc_eq_o__spec__Map__int__int___Map__int__int___int64_t_int64_t_int64_t_int64_t_int64_t(Map__int__int * m, int64_t h, int64_t key, int64_t val, int64_t keyeq, int64_t owned) {
@@ -5790,7 +5790,7 @@ static Map__int__float * map_new__spec__Map__int__float__() {
 }
 
 static bool __inst_Eq_eq_qu_Map__spec__bool_Map__int__int___Map__int__int__(Map__int__int * x, Map__int__int * y) {
-        bool __t62 = (map_hycount((int64_t)(intptr_t)((int64_t)(intptr_t)(x)))) == (map_hycount((int64_t)(intptr_t)((int64_t)(intptr_t)(y))));
+        bool __t62 = (map_count__spec__int64_t_Map__int__int__(x)) == (map_count__spec__int64_t_Map__int__int__(y));
         if (__t62) {
             int64_t *__t63 = (int64_t *)malloc(2 * sizeof(int64_t));
             __t63[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
@@ -5804,11 +5804,11 @@ static bool __inst_Eq_eq_qu_Map__spec__bool_Map__int__int___Map__int__int__(Map_
 static bool map_eq_driver__spec__bool_Map__int__int___Map__int__int___bool(Map__int__int * m1, Map__int__int * m2, int64_t val_cmp) {
         bool __t65;
         {
-            void * iter_738 = hamt_sliter_hyalloc((void *)(intptr_t)(map_hyhamt((int64_t)(intptr_t)(m1))));
+            void * iter_738 = hamt_sliter_hyalloc((void *)(intptr_t)(map_hamt__spec__int64_t_Map__int__int__(m1)));
             (void)iter_738;
-            void * keyeq_739 = hamt_slkeyeq((void *)(intptr_t)(map_hyhamt((int64_t)(intptr_t)(m1))));
+            void * keyeq_739 = hamt_slkeyeq((void *)(intptr_t)(map_hamt__spec__int64_t_Map__int__int__(m1)));
             (void)keyeq_739;
-            bool result_740 = map_hyeq_hyloop((void *)(intptr_t)(iter_738), (void *)(intptr_t)(map_hyhamt((int64_t)(intptr_t)(m2))), (void *)(intptr_t)(keyeq_739), (int64_t)(intptr_t)(val_cmp));
+            bool result_740 = map_hyeq_hyloop((void *)(intptr_t)(iter_738), (void *)(intptr_t)(map_hamt__spec__int64_t_Map__int__int__(m2)), (void *)(intptr_t)(keyeq_739), (int64_t)(intptr_t)(val_cmp));
             (void)result_740;
             hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_738));
             bool __t66;
@@ -5816,6 +5816,20 @@ static bool map_eq_driver__spec__bool_Map__int__int___Map__int__int___bool(Map__
             __t65 = __t66;
         }
         return __t65;
+}
+
+static int64_t map_hamt__spec__int64_t_Map__int__int__(Map__int__int * m) {
+        struct { void *hamt; } *map = (void*)(intptr_t)m;
+  return map->hamt;
+  
+}
+
+static int64_t map_get_eq_o__spec__int64_t_Map__int__float___int64_t_int64_t_int64_t_int64_t(Map__int__float * m, int64_t h, int64_t key, int64_t keyeq, int64_t owned) {
+        struct { void *hamt; } *map = (void *)(intptr_t)m;
+  return (int64_t)(intptr_t)tur_hamt_get_eq_o(map->hamt, (uint64_t)h,
+                                              (void *)(intptr_t)key,
+                                              (void *)(intptr_t)keyeq, (int64_t)owned);
+  
 }
 
 

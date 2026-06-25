@@ -3440,6 +3440,18 @@ Expr *elab_defn(Elab *e, const Form *call) {
              * type_c_name(TY_ADT) is int64_t while the gate is off, so the emitted
              * signature is unchanged today. */
             fd->param_types[i] = params[i]->type;
+        } else if (param_kinds[i] == TY_APP && params[i]->type.kind == TY_APP
+                   && params[i]->type.as.app.fn) {
+            /* multi-param-struct-annotation-degenerate-tyapp: preserve the
+             * spined type application (`(Map K V)`, `(MutableMap K V)`) built
+             * by fn_type_from_form via type_app -- its `app.fn` chain reaches
+             * the head StructDef.  Without this the realiser rebuilt the param
+             * as type_from_kind(TY_APP), a spineless shell whose `app.fn`/
+             * `app.arg` are NULL, defeating every spine-walking predicate
+             * (type_extract_struct_app / type_is_heap_struct / type_is_heap_vec).
+             * Single-param `(Vec A)` already kept its spine through a different
+             * realisation path; this brings multi-param apps in line. */
+            fd->param_types[i] = params[i]->type;
         } else {
             fd->param_types[i] = type_from_kind(param_kinds[i]);
         }
@@ -3451,7 +3463,10 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * For a borrow return we have the parsed Type (with lifetime IDs); otherwise
      * the bare kind is sufficient for the lifetime pass. */
     fd->return_type = return_borrow_type ? *return_borrow_type
-                                         : type_from_kind(return_kind);
+                     : (return_app_type && return_app_type->kind == TY_APP
+                        && return_app_type->as.app.fn)
+                         ? *return_app_type
+                         : type_from_kind(return_kind);
     /* Phase 15: Store collected constraints */
     fd->constraints.constraints = constraint_list;
     fd->constraints.n_constraints = n_constraints;
