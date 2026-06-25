@@ -3524,6 +3524,46 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                                            bridge_ty);
                     }
                 }
+                /* CONV-S1: a by-value parametric ADT-app argument
+                 * (`tur_adt_Option__int`) passed to a uniform-carrier (int64)
+                 * parameter -- e.g. the parametric typeclass instance method
+                 * `__inst_Eq_eq_qu_T(int64_t, ...)` selected for an `(Option int)`
+                 * receiver, whose body reads each param back as
+                 * `((tur_adt_Option *)(intptr_t)x)->...` -- must be boxed to the
+                 * carrier (spill + address-of + cast).  `type_uses_carrier_abi`
+                 * reports a by-value app as non-carrier, so the
+                 * `expr_emits_byvalue_carrier_abi` bridges above never fire; detect
+                 * the by-value app directly and bridge only when the callee param
+                 * lowers to the int64 carrier (a class type-variable slot), never a
+                 * concrete-aggregate param (which already takes the value by value).
+                 * A matched concrete spec resolves the param to the real C type and
+                 * carries its own bridges, so it is excluded. */
+                if (!needs_fn_cast && !matched_spec &&
+                    fn_binding->type.kind == TY_FN && emit_arg &&
+                    emit_arg->type.kind == TY_APP &&
+                    adt_app_is_byvalue_product(emit_arg->type)) {
+                    uint8_t n_fnparams = fn_binding->type.as.fn.arity;
+                    uint8_t param_idx = (i < n_fnparams) ? (uint8_t)i
+                        : (uint8_t)(n_fnparams > 0 ? n_fnparams - 1 : 0);
+                    TypeKind pk = fn_binding->type.as.fn.arg_kinds[param_idx];
+                    /* pk is the param's NOMINAL kind: a class type variable
+                     * (TY_TYVAR/FORALL/EXISTS) or the bare parametric ADT it
+                     * resolved to (TY_ADT -- e.g. `eq? [x : T]` with T = the bare
+                     * `Option`).  A bare *parametric* ADT param cannot be emitted
+                     * by value (its field is polymorphic), and an un-specialized
+                     * (`!matched_spec`) generic/instance method emits the int64
+                     * carrier for all of these -- so a by-value TY_APP monomorph
+                     * arg must be boxed.  A non-parametric by-value ADT param
+                     * (also pk==TY_ADT, but emitted by value) only ever receives a
+                     * TY_ADT arg, never a TY_APP monomorph, so it never reaches
+                     * here. */
+                    if (pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS ||
+                        pk == TY_ADT) {
+                        raw = emit_carrier_bridge(ctx, body, raw,
+                                                  CK_CONCRETE, CK_CARRIER,
+                                                  emit_arg->type);
+                    }
+                }
                 /* ACB (KB-004): when a specialized call expects a concrete aggregate
                  * argument but the emitted value is a carrier (int64_t), bridge it
                  * here.  Skip when needs_fn_cast already applied a different coercion.

@@ -5725,6 +5725,40 @@ skip_capability_field_lookup:;
                             }
                         }
                     }
+                    /* CONV-S1: head-normalized nominal discrimination across the
+                     * applied/bare and struct/ADT asymmetries the blocks above
+                     * miss.  Once a parametric struct lowers, an ADT-app RECEIVER
+                     * `(Option int)` (TY_APP, head TY_ADT) is matched against
+                     * instances whose head is a *bare* ADT (`Eq [Option]`,
+                     * type_arg TY_ADT) AND against still-struct heads (`:heap`
+                     * `Eq [MutableMap]`, type_arg TY_STRUCT).  None of the
+                     * struct/struct, app/app, or adt/adt blocks above fire on the
+                     * cross-category (TY_ADT head vs TY_STRUCT head) or the
+                     * applied-vs-bare pairing, so every non-primitive instance is
+                     * an equally-good match and the first registered one wins
+                     * (e.g. `(eq? (some 5) (some 5))` mis-dispatched to
+                     * `Eq [MutableMap]`).  Walk both sides to their head; when BOTH
+                     * heads are concrete nominal types (a struct/ADT with a def),
+                     * require the same constructor.  A tyvar / fn / erased
+                     * (NULL-def) head stays a wildcard. */
+                    if (type_ok) {
+                        const Type *oh = &obj->type;
+                        while (oh && oh->kind == TY_APP) oh = oh->as.app.fn;
+                        const Type *ih = &inst->type_args[0];
+                        while (ih && ih->kind == TY_APP) ih = ih->as.app.fn;
+                        bool o_adt = oh && oh->kind == TY_ADT && oh->as.adt_.def;
+                        bool o_str = oh && oh->kind == TY_STRUCT && oh->as.struct_.def;
+                        bool i_adt = ih && ih->kind == TY_ADT && ih->as.adt_.def;
+                        bool i_str = ih && ih->kind == TY_STRUCT && ih->as.struct_.def;
+                        if ((o_adt || o_str) && (i_adt || i_str)) {
+                            bool same =
+                                (o_adt && i_adt &&
+                                 oh->as.adt_.def == ih->as.adt_.def) ||
+                                (o_str && i_str &&
+                                 oh->as.struct_.def == ih->as.struct_.def);
+                            if (!same) type_ok = false;
+                        }
+                    }
                 }
                 if (!type_ok) {
                     /* Record as fallback but keep searching. */
@@ -5789,7 +5823,7 @@ skip_capability_field_lookup:;
         }
     }
 found_method:;
-    
+
     if (!best_method) {
         /* No matching method found */
         diag_emit(DIAG_ERROR, call->span,
