@@ -1,0 +1,20 @@
+;; typed-collection-eq-consumers-plan step 7 (Set) + producer-slice Set step 3.
+;; Set is a non-transparent :heap struct ((hamt :ptr<void>)); its producers
+;; (set-new / set-add ...) now return typed (Set A) via __TUR_RET__ and its
+;; accessors (set-count / set-hamt) and Eq helpers take by-value (Set A), so a
+;; concrete (Set int) handle monomorphizes to Set__int * with no int->pointer
+;; relabel.  A typed (Set int) flows into a user fn taking the concrete heap
+;; type, and Eq[Set] dispatches via the typed by-value spec
+;; __inst_Eq_eq_qu_Set__spec__... over Set__int * rather than the int64 carrier.
+
+(defn size-of [s : (Set int)] : int
+  (set-count s))
+
+(defn main [] : int
+  (let [a (set-add (set-add (:: (set-new) (Set int)) 1 1) 2 2)
+        b (set-add (set-add (:: (set-new) (Set int)) 2 2) 1 1)
+        c (set-add (:: (set-new) (Set int)) 1 1)]
+    (println (size-of a))                                  ; 2
+    (println (eq? (:: a (Set int)) (:: b (Set int))))      ; true
+    (println (eq? (:: a (Set int)) (:: c (Set int)))))     ; false
+  0)

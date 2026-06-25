@@ -21,13 +21,14 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn set-new []
+(defn set-new [A]
+  []
   #{}
-  : int
+  : (Set A)
   ```c
   struct { void *hamt; } *s = malloc(sizeof(*s));
   s->hamt = tur_hamt_new();
-  return (int64_t)(intptr_t)s;
+  return (__TUR_RET__)(intptr_t)s;
   ```)
 ;;; set-add -- add element x to the set; returns a new set.
 ;;;
@@ -44,15 +45,16 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn set-add [s : int h : int x : int]
+(defn set-add [A]
+  [s (Set A) h :int x :int]
   #{}
-  : int
+  : (Set A)
   ```c
   struct { void *hamt; } *set = (void*)(intptr_t)s;
   void *new_hamt = tur_hamt_set(set->hamt, h, (void*)(intptr_t)x, (void*)1);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
+  return (__TUR_RET__)(intptr_t)r;
   ```)
 ;;; set-remove -- remove element x from the set; returns a new set.
 ;;;
@@ -69,15 +71,16 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn set-remove [s : int h : int x : int]
+(defn set-remove [A]
+  [s (Set A) h :int x :int]
   #{}
-  : int
+  : (Set A)
   ```c
   struct { void *hamt; } *set = (void*)(intptr_t)s;
   void *new_hamt = tur_hamt_del(set->hamt, h, (void*)(intptr_t)x);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
+  return (__TUR_RET__)(intptr_t)r;
   ```)
 ;;; set-member? -- check whether element x is in the set.
 ;;;
@@ -94,7 +97,8 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn set-member? [s : int h : int x : int]
+(defn set-member? [A]
+  [s (Set A) h :int x :int]
   #{}
   : bool
   ```c
@@ -114,7 +118,8 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn set-count [s : int]
+(defn set-count [A]
+  [s (Set A)]
   #{}
   : int
   ```c
@@ -135,16 +140,17 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn set-union [a : int b : int]
+(defn set-union [A]
+  [a (Set A) b (Set A)]
   #{}
-  : int
+  : (Set A)
   ```c
   struct { void *hamt; } *sa = (void*)(intptr_t)a;
   struct { void *hamt; } *sb = (void*)(intptr_t)b;
   void *new_hamt = tur_hamt_merge(sa->hamt, sb->hamt);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
+  return (__TUR_RET__)(intptr_t)r;
   ```)
 ;;; set-intersect -- compute the intersection of two sets.
 ;;;
@@ -160,9 +166,10 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn set-intersect [a : int b : int]
+(defn set-intersect [A]
+  [a (Set A) b (Set A)]
   #{}
-  : int
+  : (Set A)
   ```c
   struct { void *hamt; } *sa = (void*)(intptr_t)a;
   struct { void *hamt; } *sb = (void*)(intptr_t)b;
@@ -180,7 +187,7 @@
   tur_hamt_iter_free((void*)iter_buf);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = result;
-  return (int64_t)(intptr_t)r;
+  return (__TUR_RET__)(intptr_t)r;
   ```)
 ;;; set-diff -- compute set difference a \ b (elements in a but not b).
 ;;;
@@ -196,9 +203,10 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn set-diff [a : int b : int]
+(defn set-diff [A]
+  [a (Set A) b (Set A)]
   #{}
-  : int
+  : (Set A)
   ```c
   struct { void *hamt; } *sa = (void*)(intptr_t)a;
   struct { void *hamt; } *sb = (void*)(intptr_t)b;
@@ -216,7 +224,7 @@
   tur_hamt_iter_free((void*)iter_buf);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = result;
-  return (int64_t)(intptr_t)r;
+  return (__TUR_RET__)(intptr_t)r;
   ```)
 ;;; set-eq? -- compare two sets for equality.
 ;;;
@@ -323,7 +331,8 @@
 ;;;
 ;;; Since: Phase TC2
 
-(defn set-free [s : int]
+(defn set-free [A]
+  [s (Set A)]
   #{}
   : void
   ```c
@@ -331,7 +340,8 @@
   ```)
 ;;; set-hamt -- internal accessor returning the backing HAMT pointer.
 
-(defn set-hamt [s : int]
+(defn set-hamt [A]
+  [s (Set A)]
   #{}
   : ptr<void>
   ```c struct { void *hamt; } *set = (void*)(intptr_t)s; return set->hamt; ```)
@@ -367,7 +377,9 @@
 ;;; Since: Phase TCO-Eq-MapSet
 
 
-(defn set-eq-driver [s1 : int s2 : int] : bool
+(defn set-eq-driver [A]
+  [s1 (Set A) s2 (Set A)]
+  : bool
   (let [iter   (hamt/iter-alloc (set-hamt s1))
         keyeq  (hamt/keyeq (set-hamt s1))
         result (set-eq-loop iter (set-hamt s2) keyeq)]
@@ -377,19 +389,27 @@
 ;; body now dispatches through the pure-Turmeric `set-eq-loop` (TCO'd inside
 ;; its by-value spec), mirroring `Eq [Vec]` / `Eq [MutableMap]` / `Eq [Map]`.
 ;; The inline-C `set-eq?` / `set-eq-cmp?` pair stays for direct callers.
-;;; set-eq-full -- length-prefixed structural equality (carrier inputs).
+;;; set-eq-full -- length-prefixed structural equality over by-value (Set A).
 ;;;
 ;;; Pulled out as a single-receiver helper so the `Eq [Set]` instance reads
 ;;; x and y exactly once each, mirroring the original single-use instance
-;;; shape and sidestepping the :heap receiver use-after-move check.  At the
-;;; int carrier level Set values are freely copyable, so threading them
-;;; through this helper unblocks the length + driver pair.
+;;; shape.  Takes by-value `(Set A)` (Path A), so a concrete `(Set int)`
+;;; receiver dispatches via the typed per-A spec
+;;; `set_eq_full__spec__bool_Set__int___Set__int__(Set__int *, Set__int *)`
+;;; instead of the int64 carrier -- giving `Eq [Set]` a typed `(Set__A *)`
+;;; consumer, matching `Eq [Map]` / `Eq [MutableMap]` / `Eq [Vec]`.  An
+;;; HKT-headed (abstract-A) receiver still instantiates the int64 carrier
+;;; (`set_hyeq_hyfull`), so existing carrier callers are unaffected.
 
 
-(defn set-eq-full [s1 : int s2 : int] : bool
+(defn set-eq-full [A]
+  [s1 (Set A) s2 (Set A)]
+  : bool
   (and (= (set-count s1) (set-count s2)) (set-eq-driver s1 s2)))
 
-(definstance Eq [Set] [(Eq A)] (eq? [x y] (set-eq-full x y)))
+(definstance Eq [Set]
+  [(Eq A)]
+  (eq? [x y] (set-eq-full (:: x (Set A)) (:: y (Set A)))))
 ;;; set-add1 -- insert one element, using it as its own hash.
 ;;;
 ;;; The identity-hash convention the typed Set[A] uses everywhere
@@ -398,7 +418,7 @@
 ;;; computed element is evaluated once and is not subject to the let-binding
 ;;; move check that a doubled (set-add s e e) would trip.
 
-(defn set-add1 [s : int x : int] : int (set-add s x x))
+(defn set-add1 [A] [s (Set A) x :int] : (Set A) (set-add s x x))
 ;;; set-add-each__ -- internal helper for the set-of macro.
 ;;;
 ;;; Threads (set-add1 s x) over the elements in xs.  Each element appears
