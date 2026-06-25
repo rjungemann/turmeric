@@ -2980,14 +2980,30 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         arg_strs[i] = strdup(c.data);
                         buf_free(&c);
                     }
+                    /* CONV-S1 (slice 4): when the owning ctor is itself a by-value
+                     * product and this field is a by-value aggregate, the field is
+                     * stored INLINE -- the ctor param is the aggregate type, so the
+                     * by-value arg is passed straight through with no box. */
+                    bool field_inline = false;
+                    {
+                        Type rt = emit_resolve_type(ctx, e->type);
+                        if (rt.kind == TY_ADT && rt.as.adt_.def &&
+                            adt_is_byvalue_product(rt.as.adt_.def)) {
+                            const AdtDef *od = rt.as.adt_.def;
+                            if (od->n_ctors == 1 && i < od->ctors[0]->n_fields)
+                                field_inline = adt_field_is_inline_byval(
+                                    &od->ctors[0]->fields[i]);
+                        }
+                    }
                     /* CONV-S1/B3: a by-value ADT argument flowing into a carrier
                      * constructor's int64 field slot must be boxed (heap copy ->
                      * int64) -- the field-store crossing.  Only for the plain
                      * (non-suffixed) carrier ctor; a monomorphised per-instance
                      * ctor (suffix != NULL, the M7 HKT path) takes the concrete
-                     * type directly and is B4's concern.  ADT fields are always
-                     * int64 in the typedef, so a by-value child is never inlined. */
-                    if (!suffix && arg && emit_type_is_byvalue_adt(ctx, arg->type)) {
+                     * type directly and is B4's concern.  An inline by-value field
+                     * (slice 4) takes the aggregate directly, so it skips the box. */
+                    if (!suffix && !field_inline && arg &&
+                        emit_type_is_byvalue_adt(ctx, arg->type)) {
                         const char *cn = type_c_name(emit_resolve_type(ctx, arg->type));
                         char *tmp = fresh_tmp(ctx);
                         indent_buf(body, ctx->indent);
@@ -5217,7 +5233,18 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     const Expr *adt_recv = e->as.get_field_.struct_expr;
                     while (adt_recv->kind == EX_ASCRIBE)
                         adt_recv = adt_recv->as.ascribe_.inner;
-                    if (expr_is_pbp_param(ctx, adt_recv)) {
+                    bool pbp = expr_is_pbp_param(ctx, adt_recv);
+                    /* slice 4: an inline by-value aggregate field is already its
+                     * own aggregate value in the union slot -- read it with no cast
+                     * (a cast-to-aggregate is invalid C) and no carrier deref. */
+                    bool inline_byval = ctor &&
+                        e->as.get_field_.field_idx < ctor->n_fields &&
+                        adt_field_is_inline_byval(&ctor->fields[e->as.get_field_.field_idx]);
+                    if (inline_byval) {
+                        buf_printf(&hb, "(%s)%sas.%s._%u",
+                                   sv, pbp ? "->" : ".", mctor,
+                                   e->as.get_field_.field_idx);
+                    } else if (pbp) {
                         buf_printf(&hb, "(%s)(%s)->as.%s._%u",
                                    cty, sv, mctor, e->as.get_field_.field_idx);
                     } else {
@@ -6635,9 +6662,18 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             const char *ctype = type_c_name(fb->type);
                             char *bname = name_for_binding(ctx, fb);
                             indent_buf(body, ctx->indent);
-                            /* B3: a by-value ADT field is stored boxed (int64 heap
-                             * pointer) -- unbox it by deref. */
-                            if (emit_type_is_byvalue_adt(ctx, fb->type)) {
+                            /* slice 4: an inline by-value aggregate field is the
+                             * aggregate value itself in the union slot -- bind it
+                             * directly, no cast (cast-to-aggregate is invalid C)
+                             * and no carrier unbox. */
+                            bool inline_byval = adt_byval && bi < pat->ctor->n_fields &&
+                                adt_field_is_inline_byval(&pat->ctor->fields[bi]);
+                            if (inline_byval) {
+                                buf_printf(body, "%s %s = __scrut%sas.%s._%u;\n",
+                                           ctype, bname, acc, _mctor, bi);
+                            } else if (emit_type_is_byvalue_adt(ctx, fb->type)) {
+                                /* B3: a by-value ADT field stored boxed (int64 heap
+                                 * pointer) in a carrier slot -- unbox by deref. */
                                 buf_printf(body,
                                     "%s %s = *(%s *)(intptr_t)(__scrut%sas.%s._%u);\n",
                                     ctype, bname, ctype, acc, _mctor, bi);

@@ -347,6 +347,11 @@ bool type_uses_carrier_abi(Type t) {
      * same emit_carrier_bridge machinery a by-value struct uses.  Gated by
      * adt_is_byvalue_product (LIVE for leaf products as of B3). */
     if (t.kind == TY_ADT && adt_is_byvalue_product(t.as.adt_.def)) return false;
+    /* Parametric-by-value (gated): a concrete by-value flat-product ADT-app is a
+     * by-value aggregate, not a carrier -- it spills/boxes/derefs through the
+     * same emit_carrier_bridge machinery a monomorphised struct uses.  Hard-off
+     * until the crossings are wired. */
+    if (t.kind == TY_APP && adt_app_is_byvalue_product(t)) return false;
     if (t.kind == TY_APP || t.kind == TY_ADT) return true;
     if (t.kind == TY_STRUCT && t.as.struct_.def &&
         t.as.struct_.def->n_type_params > 0) return true;

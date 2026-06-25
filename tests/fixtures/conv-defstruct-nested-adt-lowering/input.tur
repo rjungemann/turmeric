@@ -1,0 +1,25 @@
+;; CONV-S1 (slice 4): with --enable=defstruct-as-defadt, a defstruct whose
+;; fields are primitive scalars or by-value ADT aggregates lowers to a
+;; single-variant record defadt and flows through the by-value ADT path, with
+;; the nested aggregate stored INLINE by value.  Pt (leaf-scalar) lowers first;
+;; Line nests two Pt and lowers too, inlining them exactly as the struct path
+;; does.  Every struct surface op -- positional construction, `.field` access,
+;; and `match` -- must behave identically to the struct path (flag off).
+(defstruct Pt [x : float y : float])
+(defstruct Line [a : Pt b : Pt])
+
+(defn first-x [l : Line] : float
+  (.x (.a l)))
+
+(defn sum-corners [l : Line] : float
+  (match l (Line a b)
+    (match a (Pt ax ay)
+      (match b (Pt bx by)
+        (+ (+ ax ay) (+ bx by))))))
+
+(defn main [] : int
+  (let [l (Line (Pt 7.1 2.0) (Pt 3.25 9.0))
+        m (Line (Pt 1.5 2.5) (Pt 3.5 4.5))]
+    (println (first-x l))      ; 7.1
+    (println (sum-corners m))  ; 12
+    0))

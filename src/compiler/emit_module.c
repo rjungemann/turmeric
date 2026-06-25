@@ -4724,6 +4724,45 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
     free(mctor);
 }
 
+/* CONV-S1: scalar C type name for a ctor field by its storage kind -- the
+ * carrier-layout mapping (int64 for everything that is not a primitive scalar). */
+static const char *adt_field_scalar_c_type(TypeKind k) {
+    switch (k) {
+        case TY_INT:      return "int64_t";
+        case TY_BOOL:     return "bool";
+        case TY_FLOAT:    return "double";
+        case TY_CSTR:     return "const char *";
+        case TY_PTR_VOID: return "void *";
+        case TY_RC:
+        case TY_WEAK:     return "RcControlBlock *";
+        case TY_REF:
+        case TY_LREF:     return "void *";
+        case TY_INT8:     return "int8_t";
+        case TY_INT16:    return "int16_t";
+        case TY_INT32:    return "int32_t";
+        case TY_INT64:    return "int64_t";
+        case TY_UINT8:    return "uint8_t";
+        case TY_UINT16:   return "uint16_t";
+        case TY_UINT32:   return "uint32_t";
+        case TY_UINT64:   return "uint64_t";
+        case TY_FLOAT32:  return "float";
+        case TY_FLOAT64:  return "double";
+        default:          return "int64_t";
+    }
+}
+
+/* CONV-S1 (slice 4): C type for a ctor field in a by-value product.  A nested
+ * by-value aggregate field is stored INLINE as its own aggregate type (the way
+ * a struct inlines a nested struct field); everything else uses the carrier
+ * scalar mapping.  `byval` is the owning product's by-value status -- only a
+ * by-value owner inlines (a carrier owner keeps every field as an int64 slot and
+ * boxes a by-value child at the store). */
+static const char *adt_ctor_field_c_type(const CtorField *f, bool byval) {
+    if (byval && adt_field_is_inline_byval(f))
+        return adt_field_inline_c_name(f);
+    return adt_field_scalar_c_type(f->kind);
+}
+
 /* Pass 0 helper: emit the tagged-union `typedef struct tur_adt_<Name> { ... }`
  * plus one `ctor_<Ctor>` allocator per constructor for an ADT (defdata/defgadt).
  *
@@ -4756,29 +4795,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
         char *mctor = mangle_field_name(ctor->name);
         buf_printf(out, "        struct {");
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-            const char *ctype;
-            switch (ctor->fields[fi].kind) {
-                case TY_INT:      ctype = "int64_t"; break;
-                case TY_BOOL:     ctype = "bool"; break;
-                case TY_FLOAT:    ctype = "double"; break;
-                case TY_CSTR:     ctype = "const char *"; break;
-                case TY_PTR_VOID: ctype = "void *"; break;
-                case TY_RC:
-                case TY_WEAK:     ctype = "RcControlBlock *"; break;
-                case TY_REF:
-                case TY_LREF:     ctype = "void *"; break;
-                case TY_INT8:     ctype = "int8_t"; break;
-                case TY_INT16:    ctype = "int16_t"; break;
-                case TY_INT32:    ctype = "int32_t"; break;
-                case TY_INT64:    ctype = "int64_t"; break;
-                case TY_UINT8:    ctype = "uint8_t"; break;
-                case TY_UINT16:   ctype = "uint16_t"; break;
-                case TY_UINT32:   ctype = "uint32_t"; break;
-                case TY_UINT64:   ctype = "uint64_t"; break;
-                case TY_FLOAT32:  ctype = "float"; break;
-                case TY_FLOAT64:  ctype = "double"; break;
-                default:          ctype = "int64_t"; break;
-            }
+            const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], byval);
             buf_printf(out, " %s _%u;", ctype, fi);
         }
         buf_printf(out, " } %s;\n", mctor);
@@ -4799,29 +4816,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
         buf_printf(out, "static %s ctor_%s(", byval ? adt_c_name : "int64_t", mctor);
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             if (fi > 0) buf_puts(out, ", ");
-            const char *ctype;
-            switch (ctor->fields[fi].kind) {
-                case TY_INT:      ctype = "int64_t"; break;
-                case TY_BOOL:     ctype = "bool"; break;
-                case TY_FLOAT:    ctype = "double"; break;
-                case TY_CSTR:     ctype = "const char *"; break;
-                case TY_PTR_VOID: ctype = "void *"; break;
-                case TY_RC:
-                case TY_WEAK:     ctype = "RcControlBlock *"; break;
-                case TY_REF:
-                case TY_LREF:     ctype = "void *"; break;
-                case TY_INT8:     ctype = "int8_t"; break;
-                case TY_INT16:    ctype = "int16_t"; break;
-                case TY_INT32:    ctype = "int32_t"; break;
-                case TY_INT64:    ctype = "int64_t"; break;
-                case TY_UINT8:    ctype = "uint8_t"; break;
-                case TY_UINT16:   ctype = "uint16_t"; break;
-                case TY_UINT32:   ctype = "uint32_t"; break;
-                case TY_UINT64:   ctype = "uint64_t"; break;
-                case TY_FLOAT32:  ctype = "float"; break;
-                case TY_FLOAT64:  ctype = "double"; break;
-                default:          ctype = "int64_t"; break;
-            }
+            const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], byval);
             buf_printf(out, "%s _%u", ctype, fi);
         }
         buf_printf(out, ") {\n");
@@ -8165,29 +8160,7 @@ int emit_program(Buf *out, const Expr *program) {
                 char *mctor = mangle_field_name(ctor->name);
                 buf_printf(&early_file, "        struct {");
                 for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-                    const char *ctype;
-                    switch (ctor->fields[fi].kind) {
-                        case TY_INT:      ctype = "int64_t"; break;
-                        case TY_BOOL:     ctype = "bool"; break;
-                        case TY_FLOAT:    ctype = "double"; break;
-                        case TY_CSTR:     ctype = "const char *"; break;
-                        case TY_PTR_VOID: ctype = "void *"; break;
-                        case TY_RC:
-                        case TY_WEAK:     ctype = "RcControlBlock *"; break;
-                        case TY_REF:
-                        case TY_LREF:     ctype = "void *"; break;
-                        case TY_INT8:     ctype = "int8_t"; break;
-                        case TY_INT16:    ctype = "int16_t"; break;
-                        case TY_INT32:    ctype = "int32_t"; break;
-                        case TY_INT64:    ctype = "int64_t"; break;
-                        case TY_UINT8:    ctype = "uint8_t"; break;
-                        case TY_UINT16:   ctype = "uint16_t"; break;
-                        case TY_UINT32:   ctype = "uint32_t"; break;
-                        case TY_UINT64:   ctype = "uint64_t"; break;
-                        case TY_FLOAT32:  ctype = "float"; break;
-                        case TY_FLOAT64:  ctype = "double"; break;
-                        default:          ctype = "int64_t"; break;
-                    }
+                    const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], byval);
                     buf_printf(&early_file, " %s _%u;", ctype, fi);
                 }
                 buf_printf(&early_file, " } %s;\n", mctor);
@@ -8208,29 +8181,7 @@ int emit_program(Buf *out, const Expr *program) {
                            byval ? adt_c_name : "int64_t", mctor);
                 for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                     if (fi > 0) buf_puts(&early_file, ", ");
-                    const char *ctype;
-                    switch (ctor->fields[fi].kind) {
-                        case TY_INT:      ctype = "int64_t"; break;
-                        case TY_BOOL:     ctype = "bool"; break;
-                        case TY_FLOAT:    ctype = "double"; break;
-                        case TY_CSTR:     ctype = "const char *"; break;
-                        case TY_PTR_VOID: ctype = "void *"; break;
-                        case TY_RC:
-                        case TY_WEAK:     ctype = "RcControlBlock *"; break;
-                        case TY_REF:
-                        case TY_LREF:     ctype = "void *"; break;
-                        case TY_INT8:     ctype = "int8_t"; break;
-                        case TY_INT16:    ctype = "int16_t"; break;
-                        case TY_INT32:    ctype = "int32_t"; break;
-                        case TY_INT64:    ctype = "int64_t"; break;
-                        case TY_UINT8:    ctype = "uint8_t"; break;
-                        case TY_UINT16:   ctype = "uint16_t"; break;
-                        case TY_UINT32:   ctype = "uint32_t"; break;
-                        case TY_UINT64:   ctype = "uint64_t"; break;
-                        case TY_FLOAT32:  ctype = "float"; break;
-                        case TY_FLOAT64:  ctype = "double"; break;
-                        default:          ctype = "int64_t"; break;
-                    }
+                    const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], byval);
                     buf_printf(&early_file, "%s _%u", ctype, fi);
                 }
                 buf_printf(&early_file, ") {\n");

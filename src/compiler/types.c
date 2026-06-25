@@ -1447,6 +1447,11 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
     append_adt_app_type_suffix(&suffix, def, args, n_args);
     buf_putc(&suffix, '\0');
 
+    /* Parametric-by-value (gated): a concrete by-value flat-product monomorph
+     * returns/takes its aggregate by value, exactly like the non-parametric
+     * CONV-S1 ctor -- no heap box, no tag.  Hard-off until the crossings wire. */
+    bool app_byval = adt_app_is_byvalue_product(g_adt_apps[idx].type);
+
     /* Emit per-constructor functions for this monomorphised ADT instance. */
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
         CtorDef *ctor = def->ctors[ci];
@@ -1460,20 +1465,29 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
         }
         mctor[mlen] = '\0';
 
-        buf_printf(out, "static int64_t ctor_%s%s(", mctor, suffix.data);
+        buf_printf(out, "static %s ctor_%s%s(",
+                   app_byval ? adt_inst_name : "int64_t", mctor, suffix.data);
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             if (fi > 0) buf_puts(out, ", ");
             const char *ctype = adt_field_c_type(def, &ctor->fields[fi], args);
             buf_printf(out, "%s _%u", ctype, fi);
         }
         buf_printf(out, ") {\n");
-        buf_printf(out, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
-                   adt_inst_name, adt_inst_name, adt_inst_name);
-        if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
-        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-            buf_printf(out, "    __r->as.%s._%u = _%u;\n", mctor, fi, fi);
+        if (app_byval) {
+            buf_printf(out, "    %s __r;\n", adt_inst_name);
+            for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                buf_printf(out, "    __r.as.%s._%u = _%u;\n", mctor, fi, fi);
+            }
+            buf_printf(out, "    return __r;\n");
+        } else {
+            buf_printf(out, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
+                       adt_inst_name, adt_inst_name, adt_inst_name);
+            if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
+            for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                buf_printf(out, "    __r->as.%s._%u = _%u;\n", mctor, fi, fi);
+            }
+            buf_printf(out, "    return (int64_t)(intptr_t)__r;\n");
         }
-        buf_printf(out, "    return (int64_t)(intptr_t)__r;\n");
         buf_printf(out, "}\n\n");
         free(mctor);
     }
@@ -2463,11 +2477,43 @@ static const char *heap_ptr_c_name(const char *base) {
  * case and stay on the carrier path until B4.  Deliberately conservative -- a
  * precise transitive recursion check can widen this to non-recursive
  * aggregate-bearing products later, once every crossing is wired. */
-bool adt_is_byvalue_product(const AdtDef *def) {
+/* CONV-S1 (slice 4): a depth-guarded by-value-product check, used both as the
+ * public entry point and recursively by adt_field_is_inline_byval_d to decide
+ * whether a nested aggregate field is itself a by-value product (and so can be
+ * stored INLINE rather than via the int64 carrier).  A by-value product cannot
+ * contain itself by value (that is infinite size and ill-formed), so any cycle
+ * is rejected upstream; the depth cap is a belt-and-braces loop guard, not a
+ * semantic limit. */
+static bool adt_is_byvalue_product_d(const AdtDef *def, int depth);
+
+/* CONV-S1 (slice 4): true when a ctor field is itself a by-value aggregate that
+ * should be stored INLINE (by value) in the owning by-value product, exactly as
+ * `defstruct` inlines a nested struct field -- instead of boxing it behind the
+ * int64 carrier.  An inline candidate is a non-heap, non-opaque, drop-glue-free
+ * struct, or a by-value ADT product with no drop glue.  Restricting to
+ * drop-glue-free inners keeps the outer product trivially copyable, so the
+ * outer needs no recursive drop glue. */
+static bool adt_field_is_inline_byval_d(const CtorField *f, int depth) {
+    if (depth <= 0 || !f || !f->full_type) return false;
+    const Type *ft = f->full_type;
+    if (ft->kind == TY_STRUCT) {
+        const StructDef *sd = ft->as.struct_.def;
+        return sd && !sd->is_opaque && !sd->is_heap && !sd->needs_drop_glue;
+    }
+    if (ft->kind == TY_ADT) {
+        const AdtDef *ad = ft->as.adt_.def;
+        return ad && !ad->needs_drop_glue && adt_is_byvalue_product_d(ad, depth - 1);
+    }
+    return false;
+}
+
+static bool adt_is_byvalue_product_d(const AdtDef *def, int depth) {
     if (!adt_is_flat_product(def) || def->n_type_params != 0) return false;
     const CtorDef *c = def->ctors[0];
     for (uint32_t i = 0; i < c->n_fields; i++) {
         const CtorField *f = &c->fields[i];
+        /* slice 4: a by-value aggregate field is inlined -- admit it. */
+        if (adt_field_is_inline_byval_d(f, depth)) continue;
         if (f->full_type) {
             TypeKind fk = f->full_type->kind;
             if (fk == TY_ADT || fk == TY_APP || fk == TY_STRUCT ||
@@ -2479,6 +2525,25 @@ bool adt_is_byvalue_product(const AdtDef *def) {
             return false;
     }
     return true;
+}
+
+bool adt_is_byvalue_product(const AdtDef *def) {
+    return adt_is_byvalue_product_d(def, 16);
+}
+
+/* CONV-S1 (slice 4): public predicate -- is this field stored inline by value?
+ * (See adt_field_is_inline_byval_d.)  Codegen sites that emit the field type,
+ * construct the product, read a field, or bind a match pattern consult this to
+ * choose the inline-aggregate path over the int64-carrier path. */
+bool adt_field_is_inline_byval(const CtorField *f) {
+    return adt_field_is_inline_byval_d(f, 16);
+}
+
+/* CONV-S1 (slice 4): the inline C type name for a by-value-aggregate field
+ * (e.g. "tur_adt_Pt" for a nested by-value ADT, or a struct's C name).  Only
+ * valid when adt_field_is_inline_byval(f). */
+const char *adt_field_inline_c_name(const CtorField *f) {
+    return type_c_name(*f->full_type);
 }
 
 /* CONV-S1 (slice 3): a by-value ADT product is laid out like a struct, so it
@@ -2499,13 +2564,81 @@ static size_t adt_field_size_bytes(TypeKind k) {
     }
 }
 
+/* slice 4: size of a single ctor field, recursing into an inline by-value
+ * aggregate (its fields contribute their own bytes rather than a single 8-byte
+ * carrier slot), so the >16-byte pass-by-pointer threshold lines up with the
+ * nested-struct layout. */
+static size_t adt_ctor_field_size_bytes(const CtorField *f, int depth) {
+    if (depth > 0 && adt_field_is_inline_byval_d(f, depth) && f->full_type) {
+        if (f->full_type->kind == TY_ADT && f->full_type->as.adt_.def) {
+            const AdtDef *ad = f->full_type->as.adt_.def;
+            const CtorDef *ic = ad->ctors[0];
+            size_t t = 0;
+            for (uint32_t i = 0; i < ic->n_fields; i++)
+                t += adt_ctor_field_size_bytes(&ic->fields[i], depth - 1);
+            return t;
+        }
+        if (f->full_type->kind == TY_STRUCT && f->full_type->as.struct_.def) {
+            /* Struct field byte sizes are not computed here (types.c does not
+             * pull in elab's type_size_bytes); approximate each struct field as
+             * 8 bytes, which is monotone and conservative for the threshold. */
+            const StructDef *sd = f->full_type->as.struct_.def;
+            return (size_t)sd->n_fields * 8;
+        }
+    }
+    return adt_field_size_bytes(f->kind);
+}
+
 bool adt_byval_pass_by_ptr(const AdtDef *def) {
     if (!adt_is_byvalue_product(def)) return false;
     const CtorDef *c = def->ctors[0];
     size_t total = 0;
     for (uint32_t i = 0; i < c->n_fields; i++)
-        total += adt_field_size_bytes(c->fields[i].kind);
+        total += adt_ctor_field_size_bytes(&c->fields[i], 16);
     return total > 16;
+}
+
+/* Parametric-by-value monomorphisation (heavy prerequisite for CONV-S1
+ * graduation; see docs/upcoming/parametric-adt-byvalue-plan.md).
+ *
+ * A concrete monomorphisation of a single-variant, non-GADT, parametric flat
+ * product -- e.g. `(Pair2 int float)` from `(defdata Pair2 [A B] (Pair2 [a:A
+ * b:B]))` -- has a fully concrete layout (`tur_adt_Pair2__int__float`) and is
+ * representationally a by-value aggregate, exactly like a monomorphised struct.
+ * Today it still flows through the int64 heap-pointer carrier (the ctor mallocs
+ * and returns int64, the param is int64).  Flipping it to by-value is the
+ * parametric analog of CONV-S1/B1-B4 and the foundation the `:heap` typed-pointer
+ * ADT ABI builds on.
+ *
+ * GATED HARD-OFF.  The plumbing keyed on this predicate (type_c_name TY_APP,
+ * type_uses_carrier_abi, the monomorphised ctor emitter) is a no-op until the
+ * crossings -- call-site box/unbox, match/field-access on an ADT-app receiver,
+ * and the M7 by-value-HKT ctor-suffix collision -- are wired and proven
+ * suite-green stage by stage.  Flip `g_adt_app_byvalue` locally only for the
+ * gate-on smoke test that enumerates those crossings. */
+static const bool g_adt_app_byvalue = false;
+
+bool adt_app_is_byvalue_product(Type t) {
+    if (!g_adt_app_byvalue) return false;
+    AdtDef *def = NULL;
+    Type args[16];
+    uint8_t n_args = 0;
+    if (!type_extract_adt_app(&t, &def, args, &n_args) || !def) return false;
+    if (!adt_is_flat_product(def)) return false;       /* single-variant, non-GADT */
+    if (def->n_type_params == 0) return false;          /* non-parametric is CONV-S1's path */
+    for (uint8_t i = 0; i < n_args; i++)
+        if (!type_has_concrete_codegen_layout(&args[i])) return false;
+    /* Every monomorphised field must resolve to a by-value-able concrete type --
+     * no residual tyvar / HKT / non-concrete application (those are M7's job). */
+    const CtorDef *c = def->ctors[0];
+    for (uint32_t i = 0; i < c->n_fields; i++) {
+        if (!c->fields[i].full_type) continue;          /* scalar storage -- by value */
+        Type rf = substitute_adt_app_type(c->fields[i].full_type, def, args);
+        TypeKind k = rf.kind;
+        if (k == TY_TYVAR || k == TY_FORALL || k == TY_EXISTS) return false;
+        if (k == TY_APP && !type_has_concrete_codegen_layout(&rf)) return false;
+    }
+    return true;
 }
 
 const char *adt_byval_c_name(const AdtDef *def) {
@@ -2668,6 +2801,13 @@ const char *type_c_name(Type t) {
         case TY_APP: {
             /* SC7: a transparent int newtype is just its int64 payload. */
             if (type_is_transparent_int_newtype(t)) return "int64_t";
+            /* Parametric-by-value (gated): a concrete flat-product ADT-app flows
+             * as its by-value monomorph aggregate (`tur_adt_Pair2__int__float`),
+             * not the int64 carrier.  Hard-off until the crossings are wired. */
+            if (adt_app_is_byvalue_product(t)) {
+                const char *nm = type_register_adt_app(t);
+                if (nm) return nm;
+            }
             if (type_has_concrete_codegen_layout(&t)) {
                 const char *base = register_struct_app(t);
                 /* end-to-end-monomorphization: a :heap-tagged parameterized type

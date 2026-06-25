@@ -42,18 +42,26 @@ Behind the `defstruct-as-defadt` experiment (`--enable=defstruct-as-defadt`).
 Default off: every `defstruct` still elaborates as a `StructDef`, so the suite is
 byte-for-byte unchanged.
 
-**Slice 1 (this change): leaf-scalar structs only.** A `defstruct` is lowered
-only when *all* of:
+**Slices 1-4: scalar and by-value-aggregate structs.** A `defstruct` is lowered
+when *all* of:
 
 - old-style single-vector field syntax,
 - non-parametric (no type-param vector),
 - not `:heap`, not `:linear`,
 - **every field a primitive scalar** (`int`/`float`/`bool`/`cstr`/sized
-  ints+floats) -- no `rc`/`ref`/`weak`/`ptr`/`fn`/struct/ADT fields.
+  ints+floats) **or a bare ADT-typed field** (slice 4 -- a by-value ADT field is
+  inlined, a carrier ADT field is boxed, both correct).
 
-Anything else still elaborates as a struct, even with the flag on. This subset
-hits **none** of the record-ADT gaps below, so the lowered program is
-behaviourally identical (verified by a flag-on fixture).
+Anything else (`rc`/`ref`/`weak`/`ptr`/`fn`/parametric, or a bare struct-typed
+field) still elaborates as a struct, even with the flag on. A bare struct-typed
+field is deliberately excluded: a struct's by-value-ness is not yet known when
+the top-level type pre-pass pre-registers a sibling that nests it (the stub looks
+trivially copyable), so admitting it could make the pre-pass and full
+elaboration disagree on whether the outer lowers. With the flag on a leaf-scalar
+nested struct has itself already lowered to an ADT, so the common nested case
+still lowers; only a genuinely non-lowering struct field holds the outer on the
+struct path. The lowered program is behaviourally identical (verified by flag-on
+fixtures).
 
 ## Known gaps (later slices, before graduation)
 
@@ -82,11 +90,25 @@ before the gate widens past leaf-scalar and before the experiment graduates
   `conv-byval-adt-large-pbp`.
 - **`:heap` typed-pointer ABI** -- no ADT equivalent of the parametric
   `Vec<T> *` lowering.
-- **Nested by-value struct fields** -- a struct-typed field is inlined in a
-  struct but carried as an int64 in an ADT.  *(Deferred into slice 4: inlining a
-  nested aggregate field requires `adt_is_byvalue_product` to admit aggregate
-  fields, which is exactly the gate-widening slice 4 performs -- it cannot land
-  ahead of that without a one-off partial widen.  Tracked there.)*
+- **Nested by-value struct fields** -- ~~a struct-typed field is inlined in a
+  struct but carried as an int64 in an ADT~~ **LANDED (slice 4).** The
+  representation gate `adt_is_byvalue_product` (types.c) now admits a field that
+  is itself a by-value aggregate (a non-heap/non-opaque/drop-glue-free struct, or
+  a by-value ADT product) and stores it **inline by value** -- the same flat
+  layout a struct gives a nested struct field -- instead of boxing it behind the
+  int64 carrier.  `adt_field_is_inline_byval` is the single representation gate
+  shared by every site: the typedef + ctor emitters (`adt_ctor_field_c_type`,
+  emit_module.c, both the whole-program and early-file paths), the ctor-arg
+  store (which skips the B3 box for an inline field, emit_expr.c), `EX_GET_FIELD`
+  (reads the aggregate with no cast / no deref), the `match` field-bind
+  (binds the aggregate directly), and the pass-by-ptr size calc (sums an inline
+  field's own bytes, types.c).  `resolve_ctor_field` (elab_structs.c) records the
+  inline field's `full_type` so codegen can spell the aggregate.  A recursive HKT
+  fixed-point (`Re`/`Expr`) is parametric and self-references through an
+  `(ExprF Expr)` TY_APP field, so it stays on the carrier path -- B4's concern,
+  not a prerequisite here.  Fixtures: `conv-byval-adt-nested-inline` (snapshot:
+  inline layout, pbp ABI, by-value match), `conv-defstruct-nested-adt-lowering`
+  (flag-on parity).
 - **Drop-glue for by-value ADTs with `rc`/`weak` fields** -- ~~the struct path
   emits drop-glue; the ADT path does not yet~~ **LANDED (slice 2).** A by-value
   ADT (`adt_is_byvalue_product`) whose sole variant carries `rc`/`ref`/`weak`
@@ -107,10 +129,20 @@ before the gate widens past leaf-scalar and before the experiment graduates
 3. pass-by-ptr / large-aggregate ABI reconciliation; nested by-value fields.
    **pass-by-ptr DONE** (`conv-byval-adt-large-pbp`); nested by-value fields
    folded into slice 4 (needs the gate to admit aggregate fields).
-4. Widen the gate to all non-parametric record structs (including nested
-   by-value aggregate fields); converge codegen.
-5. Graduate: delete the gate, lower unconditionally, retire the `StructDef`
-   surface path, regenerate the affected snapshots in one change.
+4. Widen the gate to non-parametric record structs with nested by-value
+   aggregate fields; converge codegen. **DONE** -- `adt_is_byvalue_product`
+   admits by-value-aggregate fields and stores them inline by value, with codegen
+   converged across the typedef/ctor/field-access/match/pass-by-ptr sites
+   (`conv-byval-adt-nested-inline`); the `defstruct` lowering gate accepts bare
+   ADT-typed fields (`conv-defstruct-nested-adt-lowering`). Recursive HKT
+   fixed-points stay on the carrier path (B4, below). Bare struct-typed fields
+   and `rc`/`ref`/`ptr`/`fn`/parametric fields remain for graduation.
+   B4 (reconcile recursive/HKT carriers `Re`/`Expr` with the by-value path,
+   per the s1-bridging findings) is **not** a prerequisite for lowering real
+   structs and is sequenced with M7's by-value-HKT graduation.
+5. Graduate: delete the gate, lower unconditionally (including bare struct /
+   pointer fields), retire the `StructDef` surface path, regenerate the affected
+   snapshots in one change.
 
 See [struct-adt-convergence-s1-bridging-findings.md](struct-adt-convergence-s1-bridging-findings.md)
 for the by-value representation work this builds on.
