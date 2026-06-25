@@ -220,6 +220,10 @@ Expr *elab_rc_of(Elab *e, const Form *call) {
     Type rc_type;
     if (inner->type.kind == TY_STRUCT && inner->type.as.struct_.def) {
         rc_type = type_rc_struct(inner->type.as.struct_.def);
+    } else if (inner->type.kind == TY_ADT && inner->type.as.adt_.def) {
+        /* CONV-S1 (slice 2): wrapping a single-variant record ADT carries its
+         * AdtDef so `(.field rc-of-adt)` can auto-deref through the rc. */
+        rc_type = type_rc_adt(inner->type.as.adt_.def);
     } else {
         rc_type = type_rc(inner->type.kind);
     }

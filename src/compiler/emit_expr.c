@@ -5186,8 +5186,26 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 char *adt_mn = mangle_field_name(adt->name);
                 char *mctor  = mangle_field_name(ctor->name);
                 const char *cty = type_c_name(e->type);
+                bool adt_through_rc =
+                    e->as.get_field_.struct_expr->type.kind == TY_RC;
                 Buf hb; buf_init(&hb);
-                if (adt_is_byvalue_product(adt)) {
+                if (adt_through_rc) {
+                    /* CONV-S1 (slice 2): rc<ADT> receiver.  rc/of mallocs
+                     * `type_c_name(ADT)` and stores the value there, so the
+                     * rc-block's value pointer either addresses the by-value
+                     * aggregate directly, or (for a carrier ADT, type_c_name ==
+                     * int64_t) holds the int64 carrier that points at it.  Match
+                     * the two layouts so the deref reaches the variant field. */
+                    if (adt_is_byvalue_product(adt)) {
+                        buf_printf(&hb,
+                                   "(%s)((tur_adt_%s *)((RcControlBlock *)(%s))->value)->as.%s._%u",
+                                   cty, adt_mn, sv, mctor, e->as.get_field_.field_idx);
+                    } else {
+                        buf_printf(&hb,
+                                   "(%s)((tur_adt_%s *)(intptr_t)(*(int64_t *)((RcControlBlock *)(%s))->value))->as.%s._%u",
+                                   cty, adt_mn, sv, mctor, e->as.get_field_.field_idx);
+                    }
+                } else if (adt_is_byvalue_product(adt)) {
                     /* CONV-S1: by-value receiver -- read the field directly off the
                      * aggregate, no carrier pointer deref.  Gated by
                      * adt_is_byvalue_product (LIVE for leaf products as of B3). */

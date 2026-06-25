@@ -61,9 +61,14 @@ A record ADT does not yet cover these struct-only behaviours; each must land
 before the gate widens past leaf-scalar and before the experiment graduates
 (deletes the gate, makes lowering always-on, removes the `StructDef` path):
 
-- **`rc<Struct>` field access auto-deref** -- `Type.as.rc.struct_def` carries a
-  `StructDef*`; there is no `rc.adt_def` equivalent, so `(.f rc-val)` over a
-  lowered struct would not resolve.
+- **`rc<Struct>` field access auto-deref** -- ~~`Type.as.rc.struct_def` carries
+  a `StructDef*`; there is no `rc.adt_def` equivalent~~ **LANDED (slice 2).** A
+  `Type.as.rc.adt_def` slot now mirrors `struct_def` (set by `type_rc_adt`, wired
+  in `elab_rc_of` when wrapping a TY_ADT value); the dot-accessor in
+  `elab_typeclasses.c` auto-derefs an `rc<ADT>` receiver to its record variant,
+  and `EX_GET_FIELD` codegen reads the field through the rc-block's value pointer
+  (by-value: direct cast; carrier: int64-carrier load). Fixture:
+  `conv-rc-adt-field-access`.
 - **Large-struct pass-by-pointer** (`type_struct_pass_by_ptr`, >16 bytes) -- ADTs
   have no size-gated calling convention (a representation/ABI change, not a
   correctness break, but must be reconciled before snapshots converge).
@@ -85,9 +90,9 @@ before the gate widens past leaf-scalar and before the experiment graduates
 
 1. **Slice 1 (now)**: leaf-scalar lowering behind the flag; flag-off no-op,
    flag-on fixture proves behavioural parity. *(this change)*
-2. rc<ADT> field-access + drop-glue for by-value ADTs. *(drop-glue half
-   landed; `rc<ADT>` field-access auto-deref still pending -- needs an
-   `rc.adt_def` slot mirroring `rc.struct_def`.)*
+2. rc<ADT> field-access + drop-glue for by-value ADTs. **DONE** -- drop-glue
+   (`conv-byval-adt-rc-drop`) and `rc<ADT>` field-access auto-deref
+   (`conv-rc-adt-field-access`) both landed.
 3. pass-by-ptr / large-aggregate ABI reconciliation; nested by-value fields.
 4. Widen the gate to all non-parametric record structs; converge codegen.
 5. Graduate: delete the gate, lower unconditionally, retire the `StructDef`

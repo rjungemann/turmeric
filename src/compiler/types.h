@@ -638,6 +638,13 @@ typedef struct Type {
              * `(set! (.field rc-of-s) v)` can resolve struct fields without
              * losing the def through the rc wrapper. */
             struct StructDef *struct_def;
+            /* CONV-S1 (slice 2): mirror of struct_def for an `rc<Name>` whose
+             * `Name` is a single-variant record ADT (a lowered struct, or a
+             * hand-written record `defdata`).  Carries the AdtDef * so
+             * `(.field rc-of-adt)` auto-derefs through the rc to the variant's
+             * named field.  NULL unless inner == TY_ADT.  struct_def and adt_def
+             * are mutually exclusive (inner is TY_STRUCT xor TY_ADT). */
+            struct AdtDef *adt_def;
         } rc;
         /* Phase 12: Borrow types store the referenced type T */
         struct {
@@ -1122,6 +1129,18 @@ static inline Type type_rc_struct(struct StructDef *def) {
     t.copy_kind = CK_MOVE;
     t.as.rc.inner = TY_STRUCT;
     t.as.rc.struct_def = def;
+    t.n_lifetimes = 0;
+    return t;
+}
+
+/* CONV-S1 (slice 2): rc<ADT> with the ADT def carried alongside, mirroring
+ * type_rc_struct, so field access through the rc resolves the variant layout. */
+static inline Type type_rc_adt(struct AdtDef *def) {
+    Type t = {0};
+    t.kind = TY_RC;
+    t.copy_kind = CK_MOVE;
+    t.as.rc.inner = TY_ADT;
+    t.as.rc.adt_def = def;
     t.n_lifetimes = 0;
     return t;
 }
