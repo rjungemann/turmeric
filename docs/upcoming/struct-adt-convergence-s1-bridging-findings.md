@@ -162,10 +162,14 @@ be made consistent.
   (e.g. `emit_carrier_return_override` [`emit_core.c:364`](../../src/compiler/emit_core.c),
   the box-spill eligibility loop [`emit_fns.c:733`](../../src/compiler/emit_fns.c),
   `type_struct_pass_by_ptr`). Grep: `kind == TY_STRUCT`.
-- **Drop-glue for by-value ADTs with rc/weak fields** is a gap today
-  ([`emit_module.c:8031`](../../src/compiler/emit_module.c) emits struct
-  drop-glue; there is no ADT equivalent). A by-value `:copy` ADT is trivially
-  copyable, but a by-value non-`:copy` ADT carrying an rc field would need glue.
+- **Drop-glue for by-value ADTs with rc/weak fields** -- **CLOSED** (CONV-S1
+  slice 2). The struct path
+  ([`emit_module.c`](../../src/compiler/emit_module.c)) emits struct drop-glue;
+  the by-value ADT path now emits the matching `drop_glue_tur_adt_<Name>` /
+  `walk_glue_tur_adt_<Name>` via the shared `emit_adt_byval_drop_glue`, wired
+  into `EX_RC_OF` through `rc_cb_alloc_struct`. A by-value `:copy` ADT is
+  trivially copyable; a by-value non-`:copy` ADT carrying an rc field releases
+  it when the wrapping `rc` drops. Fixture: `conv-byval-adt-rc-drop`.
 - **Monomorphisation of parametric flat ADTs as by-value** (the type-app path,
   [`types.c:1393`](../../src/compiler/types.c)) is out of scope for the
   non-parametric stage but is the next layer once this lands.

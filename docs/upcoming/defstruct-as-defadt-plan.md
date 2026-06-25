@@ -61,26 +61,54 @@ A record ADT does not yet cover these struct-only behaviours; each must land
 before the gate widens past leaf-scalar and before the experiment graduates
 (deletes the gate, makes lowering always-on, removes the `StructDef` path):
 
-- **`rc<Struct>` field access auto-deref** -- `Type.as.rc.struct_def` carries a
-  `StructDef*`; there is no `rc.adt_def` equivalent, so `(.f rc-val)` over a
-  lowered struct would not resolve.
-- **Large-struct pass-by-pointer** (`type_struct_pass_by_ptr`, >16 bytes) -- ADTs
-  have no size-gated calling convention (a representation/ABI change, not a
-  correctness break, but must be reconciled before snapshots converge).
+- **`rc<Struct>` field access auto-deref** -- ~~`Type.as.rc.struct_def` carries
+  a `StructDef*`; there is no `rc.adt_def` equivalent~~ **LANDED (slice 2).** A
+  `Type.as.rc.adt_def` slot now mirrors `struct_def` (set by `type_rc_adt`, wired
+  in `elab_rc_of` when wrapping a TY_ADT value); the dot-accessor in
+  `elab_typeclasses.c` auto-derefs an `rc<ADT>` receiver to its record variant,
+  and `EX_GET_FIELD` codegen reads the field through the rc-block's value pointer
+  (by-value: direct cast; carrier: int64-carrier load). Fixture:
+  `conv-rc-adt-field-access`.
+- **Large-struct pass-by-pointer** (`type_struct_pass_by_ptr`, >16 bytes) --
+  ~~ADTs have no size-gated calling convention~~ **LANDED (slice 3).** A by-value
+  ADT product whose fields sum to >16 bytes now adopts the struct convention:
+  `adt_byval_pass_by_ptr` (types.c) gates it, `type_struct_pass_by_ptr` returns
+  true for the `TY_ADT` case, and the param is emitted as
+  `const tur_adt_<Name> *`.  The three ADT-specific emit sites follow suit --
+  field access reads through `->` for a pbp receiver, the `match` scrutinee binds
+  as a pointer, and the call site takes the address (`&tmp`) / forwards a pbp
+  param's pointer directly.  A lowered >16-byte leaf-scalar `defstruct` is now
+  ABI-identical to the struct path (same `const T*`, same `&` call site). Fixture:
+  `conv-byval-adt-large-pbp`.
 - **`:heap` typed-pointer ABI** -- no ADT equivalent of the parametric
   `Vec<T> *` lowering.
 - **Nested by-value struct fields** -- a struct-typed field is inlined in a
-  struct but carried as an int64 in an ADT.
-- **Drop-glue for by-value ADTs with `rc`/`weak` fields** -- the struct path
-  emits drop-glue; the ADT path does not yet (CONV-S1 "Additional sites").
+  struct but carried as an int64 in an ADT.  *(Deferred into slice 4: inlining a
+  nested aggregate field requires `adt_is_byvalue_product` to admit aggregate
+  fields, which is exactly the gate-widening slice 4 performs -- it cannot land
+  ahead of that without a one-off partial widen.  Tracked there.)*
+- **Drop-glue for by-value ADTs with `rc`/`weak` fields** -- ~~the struct path
+  emits drop-glue; the ADT path does not yet~~ **LANDED (slice 2).** A by-value
+  ADT (`adt_is_byvalue_product`) whose sole variant carries `rc`/`ref`/`weak`
+  fields (`AdtDef.needs_drop_glue`) now emits `drop_glue_tur_adt_<Name>` /
+  `walk_glue_tur_adt_<Name>` next to its typedef (shared
+  `emit_adt_byval_drop_glue`, used by both `emit_adt_typedef_and_ctors` and the
+  early-file mirror), and `EX_RC_OF` wraps such a value via `rc_cb_alloc_struct`
+  with that glue -- so dropping the outer `rc` releases the inner owned fields,
+  exactly as for a struct. Fixture: `conv-byval-adt-rc-drop`.
 
 ## Sequencing
 
 1. **Slice 1 (now)**: leaf-scalar lowering behind the flag; flag-off no-op,
    flag-on fixture proves behavioural parity. *(this change)*
-2. rc<ADT> field-access + drop-glue for by-value ADTs.
+2. rc<ADT> field-access + drop-glue for by-value ADTs. **DONE** -- drop-glue
+   (`conv-byval-adt-rc-drop`) and `rc<ADT>` field-access auto-deref
+   (`conv-rc-adt-field-access`) both landed.
 3. pass-by-ptr / large-aggregate ABI reconciliation; nested by-value fields.
-4. Widen the gate to all non-parametric record structs; converge codegen.
+   **pass-by-ptr DONE** (`conv-byval-adt-large-pbp`); nested by-value fields
+   folded into slice 4 (needs the gate to admit aggregate fields).
+4. Widen the gate to all non-parametric record structs (including nested
+   by-value aggregate fields); converge codegen.
 5. Graduate: delete the gate, lower unconditionally, retire the `StructDef`
    surface path, regenerate the affected snapshots in one change.
 

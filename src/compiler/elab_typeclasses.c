@@ -4983,6 +4983,16 @@ Expr *elab_method_call(Elab *e, const Form *call) {
             base.as.struct_.def = rc_struct_def;
             field_owner_type = &base;
         }
+        /* CONV-S1 (slice 2): the same auto-deref for an rc<ADT> receiver, so
+         * `(.field rc-of-adt)` resolves through the record variant carried on
+         * the rc type.  obj keeps its rc<ADT> type; codegen derefs the control
+         * block's value pointer to reach the aggregate. */
+        else if (base.kind == TY_RC && base.as.rc.adt_def) {
+            struct AdtDef *rc_adt = base.as.rc.adt_def;  /* read before union rewrite */
+            base.kind = TY_ADT;
+            base.as.adt_.def = rc_adt;
+            field_owner_type = &base;
+        }
         StructDef *app_struct_def = NULL;
         if (base.kind == TY_APP) {
             Type app_args[8];

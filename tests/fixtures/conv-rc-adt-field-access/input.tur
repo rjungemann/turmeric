@@ -1,0 +1,13 @@
+;; CONV-S1 (slice 2): field access auto-derefs through an `rc<ADT>` receiver.
+;; A single-variant record ADT is a product, so wrapping one in `rc/of` and
+;; reading `(.field rc-val)` / `(. rc-val field)` resolves through the rc to the
+;; variant's named field -- the same auto-deref `rc<Struct>` already gets, now
+;; carried on the rc type via the `rc.adt_def` slot (mirror of `rc.struct_def`).
+
+(defdata Point :copy (Point [x : int y : int]))
+
+(defn main [] : int
+  (let [p (rc/of (Point 3 4))]
+    (println (.x p))        ; 3 -- (.field rc-of-adt)
+    (println (. p y))       ; 4 -- (. rc-of-adt field)
+    0))

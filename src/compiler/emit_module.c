@@ -4675,6 +4675,55 @@ static void emit_cons_helper(Buf *out) {
     buf_puts(out, "#endif\n");
 }
 
+/* CONV-S1 (slice 2): drop-glue + walk-glue for a by-value ADT carrying
+ * rc/ref/weak fields.  A by-value flat product (adt_is_byvalue_product) is laid
+ * out exactly like a struct, so when it is wrapped in an `rc/of` its control
+ * block needs the same field-releasing drop_fn (and cycle-walker walk_fn) the
+ * struct path emits.  byval implies a single, flat (untagged) variant, so the
+ * fields live at `s->as.<ctor>._<fi>`.  Mirrors the struct emission at the
+ * `def->needs_drop_glue` site below; the names are keyed off the mangled C type
+ * name (`drop_glue_tur_adt_<Name>`) so they never collide with the struct glue. */
+static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
+                                     const char *adt_c_name) {
+    if (!def->needs_drop_glue || def->n_ctors == 0) return;
+    const CtorDef *ctor = def->ctors[0];
+    char *mctor = mangle_field_name(ctor->name);
+
+    buf_printf(out, "static void drop_glue_%s(void *ptr) {\n", adt_c_name);
+    buf_printf(out, "    if (!ptr) return;\n");
+    buf_printf(out, "    %s *s = (%s *)ptr;\n", adt_c_name, adt_c_name);
+    /* Drop fields in REVERSE order, matching struct drop-glue. */
+    for (int32_t fi = (int32_t)ctor->n_fields - 1; fi >= 0; fi--) {
+        TypeKind k = ctor->fields[fi].kind;
+        if (k == TY_RC) {
+            buf_printf(out, "    if (s->as.%s._%d) { rc_strong_decrement(s->as.%s._%d); rc_free_queue_drain(); }\n",
+                       mctor, fi, mctor, fi);
+        } else if (k == TY_WEAK) {
+            buf_printf(out, "    if (s->as.%s._%d) rc_weak_decrement(s->as.%s._%d);\n",
+                       mctor, fi, mctor, fi);
+        } else if (k == TY_REF || k == TY_LREF) {
+            buf_printf(out, "    if (s->as.%s._%d) free(s->as.%s._%d);\n",
+                       mctor, fi, mctor, fi);
+        }
+    }
+    buf_printf(out, "    free(ptr);\n");
+    buf_printf(out, "}\n\n");
+
+    /* Walk glue -- enumerate strong (rc) children for the cycle walker. */
+    buf_printf(out, "static void walk_glue_%s(void *ptr, RcWalkChildFn cb, void *ctx) {\n",
+               adt_c_name);
+    buf_printf(out, "    if (!ptr || !cb) return;\n");
+    buf_printf(out, "    %s *s = (%s *)ptr;\n", adt_c_name, adt_c_name);
+    for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+        if (ctor->fields[fi].kind == TY_RC) {
+            buf_printf(out, "    if (s->as.%s._%u) cb(s->as.%s._%u, ctx);\n",
+                       mctor, fi, mctor, fi);
+        }
+    }
+    buf_printf(out, "}\n\n");
+    free(mctor);
+}
+
 /* Pass 0 helper: emit the tagged-union `typedef struct tur_adt_<Name> { ... }`
  * plus one `ctor_<Ctor>` allocator per constructor for an ADT (defdata/defgadt).
  *
@@ -4737,6 +4786,11 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
     }
     buf_printf(out, "    } as;\n");
     buf_printf(out, "} %s;\n\n", adt_c_name);
+
+    /* CONV-S1 (slice 2): a by-value ADT with rc/ref/weak fields needs the same
+     * drop/walk glue a struct gets, so an `rc/of` wrapping it releases the inner
+     * owned fields when the control block hits zero. */
+    if (byval) emit_adt_byval_drop_glue(out, def, adt_c_name);
 
     /* Emit constructor functions */
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
@@ -8141,6 +8195,10 @@ int emit_program(Buf *out, const Expr *program) {
             }
             buf_printf(&early_file, "    } as;\n");
             buf_printf(&early_file, "} %s;\n\n", adt_c_name);
+
+            /* CONV-S1 (slice 2): by-value ADT drop/walk glue (mirror of
+             * emit_adt_typedef_and_ctors). */
+            if (byval) emit_adt_byval_drop_glue(&early_file, def, adt_c_name);
 
             /* Emit constructor functions */
             for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
