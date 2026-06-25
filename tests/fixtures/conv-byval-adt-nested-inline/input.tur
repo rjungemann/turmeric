@@ -1,0 +1,29 @@
+;; CONV-S1 (slice 4): a by-value ADT product whose field is itself a by-value
+;; aggregate is stored INLINE by value -- the same flat layout a struct gives a
+;; nested struct field -- rather than boxed behind the int64 carrier.  `Line`
+;; (two Pt = 32 bytes) exceeds 16 bytes, so it adopts the struct-style
+;; `const tur_adt_Line *` pass-by-pointer ABI; `Box` (one Pt = 16 bytes) stays
+;; by value.  Float payloads with non-zero fractional parts would expose any
+;; truncation/box/round bug.  Field access and `match` both read the nested
+;; aggregate by value, with no malloc and no carrier deref.
+(defdata Pt (Pt [x : float y : float]))
+(defdata Line (Line [a : Pt b : Pt]))
+(defdata Box (Box [p : Pt]))
+
+(defn first-x [l : Line] : float
+  (match l (Line a b) (match a (Pt x y) x)))
+
+(defn second-y [l : Line] : float
+  (match l (Line a b) (match b (Pt x y) y)))
+
+(defn box-x [b : Box] : float
+  (.x (.p b)))
+
+(defn main [] : int
+  (let [l (Line (Pt 7.1 2.0) (Pt 3.25 9.0))
+        m (Line (Pt 1.5 2.5) (Pt 3.5 4.5))
+        b (Box (Pt 8.25 6.75))]
+    (println (first-x l))
+    (println (second-y m))
+    (println (box-x b))
+    0))

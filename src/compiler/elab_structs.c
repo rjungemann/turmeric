@@ -604,12 +604,17 @@ void elab_register_struct_def(Elab *e, StructDef *def) {
 }
 
 /* CONV-S1 (defstruct-as-defadt): true iff every field in an old-syntax
- * defstruct field vector is a primitive scalar (int / float / bool / cstr /
- * sized numerics) -- the leaf-scalar subset slice 1 of the lowering handles.  A
- * compound (F_LIST) type, or any user / rc / ref / weak / ptr / fn type,
- * disqualifies, so the struct keeps the normal struct path.  Mirrors the
- * old-syntax pre-scan (name, then F_TYPE_ANN-wrapped type, per field). */
-static bool defstruct_fields_all_primitive(const Form *fields_vec) {
+ * defstruct field vector is lowerable to a record-`defadt` field with a
+ * byte-identical layout.  As of slice 4 that is either:
+ *   - a primitive scalar (int / float / bool / cstr / sized numerics), or
+ *   - a bare user type that resolves to a by-value aggregate (a non-heap,
+ *     non-opaque, drop-glue-free struct, or a by-value ADT product), which the
+ *     record-ADT path now stores INLINE by value exactly as a struct inlines a
+ *     nested struct field.
+ * A compound (F_LIST) type, or any rc / ref / weak / ptr / fn / parametric /
+ * :heap field, still disqualifies so the struct keeps the normal struct path.
+ * Mirrors the old-syntax pre-scan (name, then F_TYPE_ANN-wrapped type). */
+static bool defstruct_fields_all_primitive(Elab *e, const Form *fields_vec) {
     if (!fields_vec || fields_vec->tag != F_VEC) return false;
     uint32_t n = fields_vec->as.list.len;
     if (n == 0) return false;
@@ -631,8 +636,28 @@ static bool defstruct_fields_all_primitive(const Form *fields_vec) {
             case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
             case TY_FLOAT32: case TY_FLOAT64:
                 break;  /* primitive scalar -- ok */
+            case TY_UNKNOWN: {
+                /* slice 4: a bare user type that resolves to an ADT is lowerable
+                 * -- a by-value ADT field is inlined, a carrier ADT field is
+                 * boxed, and both are handled by the record-ADT codegen.  ADT-ness
+                 * is stable between the top-level type pre-pass (which sees an
+                 * empty stub) and full elaboration, so the lowering decision the
+                 * two passes reach always agrees.  A struct-typed field is NOT
+                 * accepted: a struct's by-value-ness is not yet known at pre-pass
+                 * time (the stub looks trivially copyable), so admitting it could
+                 * make the two passes disagree -- it keeps the struct path.  Note
+                 * that with the flag on a leaf-scalar nested struct has itself
+                 * lowered to an ADT already, so the common nested case still
+                 * lowers; only a genuinely struct-only (non-lowering) field type
+                 * holds the outer on the struct path. */
+                const Symbol *ts = symtab_intern(e->st,
+                    strslice(type_tok->as.sym->name, type_tok->as.sym->len));
+                Binding *tb = scope_lookup_type_def(e->scope, ts);
+                if (!tb || tb->type.kind != TY_ADT) return false;
+                break;  /* ADT field -- ok */
+            }
             default:
-                return false;  /* user type / rc / ref / ptr / fn / unknown */
+                return false;  /* rc / ref / ptr / fn / etc. -- not yet */
         }
         i++;
     }
@@ -672,7 +697,7 @@ bool defstruct_lowers_to_adt(Elab *e, const Form *call) {
     if (idx >= call->as.list.len) return false;
     const Form *fields = call->as.list.items[idx];
     if (fields->tag != F_VEC) return false;  /* new-style field-lists: not slice 1 */
-    return defstruct_fields_all_primitive(fields);
+    return defstruct_fields_all_primitive(e, fields);
 }
 
 Expr *elab_defstruct(Elab *e, const Form *call) {
@@ -1489,6 +1514,29 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
         if (tb && (tb->type.kind == TY_STRUCT || tb->type.kind == TY_ADT)) {
             fkind = TY_INT;
             finner = TY_UNKNOWN;
+            /* CONV-S1 (slice 4): a bare field whose type is itself a by-value
+             * aggregate (a non-heap/non-opaque drop-glue-free struct, or a
+             * by-value ADT product) is stored INLINE by value in the owning
+             * by-value product -- the way a struct inlines a nested struct field.
+             * Record its full type so codegen lays the field out as the inline
+             * aggregate (`tur_adt_<Inner>` / struct C name) instead of boxing it
+             * behind the int64 carrier.  A carrier inner (multi-variant ADT,
+             * parametric, :heap) keeps full_type NULL and the boxed int64 path. */
+            bool inline_byval = false;
+            if (tb->type.kind == TY_STRUCT) {
+                StructDef *sd = tb->type.as.struct_.def;
+                inline_byval = sd && !sd->is_opaque && !sd->is_heap &&
+                               !sd->needs_drop_glue;
+            } else {
+                AdtDef *ad = tb->type.as.adt_.def;
+                inline_byval = ad && !ad->needs_drop_glue &&
+                               adt_is_byvalue_product(ad);
+            }
+            if (inline_byval) {
+                Type *ft = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *ft = tb->type;
+                ctor->fields[fi].full_type = ft;
+            }
         } else {
             diag_emit(DIAG_ERROR, ft_form->span,
                       "defdata: field has unrecognized type :%s", tname);

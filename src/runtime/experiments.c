@@ -29,14 +29,15 @@
 
 /* The registry.  Empty by design (see file header). */
 static const ExperimentDescriptor EXPERIMENTS[] = {
-    /* CONV-S1: lower a simple leaf-scalar `defstruct` to a single-variant record
-     * `defadt`, so structs flow through the by-value ADT path -- the first slice
-     * of the struct/ADT convergence lowering.  In flux: currently only
-     * leaf-scalar (no rc/ref/ptr/struct/ADT/fn fields), non-parametric,
-     * non-heap, non-linear structs lower; everything else still elaborates as a
-     * struct. */
+    /* CONV-S1: lower a `defstruct` to a single-variant record `defadt`, so
+     * structs flow through the by-value ADT path -- the struct/ADT convergence
+     * lowering.  In flux: as of slice 4 a non-parametric, non-heap, non-linear
+     * struct whose fields are primitive scalars or by-value ADT aggregates
+     * (stored INLINE by value, the way a struct inlines a nested struct field)
+     * lowers; rc/ref/ptr/fn/parametric and bare struct-typed fields still keep
+     * the struct path. */
     { "defstruct-as-defadt",
-      "lower simple leaf-scalar defstructs to single-variant record defadts",
+      "lower scalar/by-value-aggregate defstructs to single-variant record defadts",
       "docs/upcoming/defstruct-as-defadt-plan.md",
       "0.25.1",                  /* introduced */
       "0.30.0",                  /* expires_at (hard contract; release-cut enforced) */

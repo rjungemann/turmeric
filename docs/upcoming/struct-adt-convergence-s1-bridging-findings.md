@@ -170,6 +170,17 @@ be made consistent.
   into `EX_RC_OF` through `rc_cb_alloc_struct`. A by-value `:copy` ADT is
   trivially copyable; a by-value non-`:copy` ADT carrying an rc field releases
   it when the wrapping `rc` drops. Fixture: `conv-byval-adt-rc-drop`.
+- **Nested by-value aggregate fields** -- **CLOSED (CONV-S1 slice 4).** A
+  by-value product whose field is itself a by-value aggregate (a
+  drop-glue-free non-heap/non-opaque struct, or a by-value ADT product) now
+  stores that field **inline by value**, exactly as a struct inlines a nested
+  struct field, instead of boxing it behind the int64 carrier.
+  `adt_is_byvalue_product` admits such a field via `adt_field_is_inline_byval`
+  (the shared representation gate), and the typedef/ctor emitters, ctor-arg
+  store (box skipped), field access, `match` field-bind, and pass-by-ptr size
+  all key on it. Recursive HKT fixed-points (`Re`/`Expr`) are parametric and
+  self-reference through a `(ExprF Expr)` TY_APP field, so they stay on the
+  carrier path -- that is Crossing 3 / B4, below.
 - **Monomorphisation of parametric flat ADTs as by-value** (the type-app path,
   [`types.c:1393`](../../src/compiler/types.c)) is out of scope for the
   non-parametric stage but is the next layer once this lands.

@@ -2463,11 +2463,43 @@ static const char *heap_ptr_c_name(const char *base) {
  * case and stay on the carrier path until B4.  Deliberately conservative -- a
  * precise transitive recursion check can widen this to non-recursive
  * aggregate-bearing products later, once every crossing is wired. */
-bool adt_is_byvalue_product(const AdtDef *def) {
+/* CONV-S1 (slice 4): a depth-guarded by-value-product check, used both as the
+ * public entry point and recursively by adt_field_is_inline_byval_d to decide
+ * whether a nested aggregate field is itself a by-value product (and so can be
+ * stored INLINE rather than via the int64 carrier).  A by-value product cannot
+ * contain itself by value (that is infinite size and ill-formed), so any cycle
+ * is rejected upstream; the depth cap is a belt-and-braces loop guard, not a
+ * semantic limit. */
+static bool adt_is_byvalue_product_d(const AdtDef *def, int depth);
+
+/* CONV-S1 (slice 4): true when a ctor field is itself a by-value aggregate that
+ * should be stored INLINE (by value) in the owning by-value product, exactly as
+ * `defstruct` inlines a nested struct field -- instead of boxing it behind the
+ * int64 carrier.  An inline candidate is a non-heap, non-opaque, drop-glue-free
+ * struct, or a by-value ADT product with no drop glue.  Restricting to
+ * drop-glue-free inners keeps the outer product trivially copyable, so the
+ * outer needs no recursive drop glue. */
+static bool adt_field_is_inline_byval_d(const CtorField *f, int depth) {
+    if (depth <= 0 || !f || !f->full_type) return false;
+    const Type *ft = f->full_type;
+    if (ft->kind == TY_STRUCT) {
+        const StructDef *sd = ft->as.struct_.def;
+        return sd && !sd->is_opaque && !sd->is_heap && !sd->needs_drop_glue;
+    }
+    if (ft->kind == TY_ADT) {
+        const AdtDef *ad = ft->as.adt_.def;
+        return ad && !ad->needs_drop_glue && adt_is_byvalue_product_d(ad, depth - 1);
+    }
+    return false;
+}
+
+static bool adt_is_byvalue_product_d(const AdtDef *def, int depth) {
     if (!adt_is_flat_product(def) || def->n_type_params != 0) return false;
     const CtorDef *c = def->ctors[0];
     for (uint32_t i = 0; i < c->n_fields; i++) {
         const CtorField *f = &c->fields[i];
+        /* slice 4: a by-value aggregate field is inlined -- admit it. */
+        if (adt_field_is_inline_byval_d(f, depth)) continue;
         if (f->full_type) {
             TypeKind fk = f->full_type->kind;
             if (fk == TY_ADT || fk == TY_APP || fk == TY_STRUCT ||
@@ -2479,6 +2511,25 @@ bool adt_is_byvalue_product(const AdtDef *def) {
             return false;
     }
     return true;
+}
+
+bool adt_is_byvalue_product(const AdtDef *def) {
+    return adt_is_byvalue_product_d(def, 16);
+}
+
+/* CONV-S1 (slice 4): public predicate -- is this field stored inline by value?
+ * (See adt_field_is_inline_byval_d.)  Codegen sites that emit the field type,
+ * construct the product, read a field, or bind a match pattern consult this to
+ * choose the inline-aggregate path over the int64-carrier path. */
+bool adt_field_is_inline_byval(const CtorField *f) {
+    return adt_field_is_inline_byval_d(f, 16);
+}
+
+/* CONV-S1 (slice 4): the inline C type name for a by-value-aggregate field
+ * (e.g. "tur_adt_Pt" for a nested by-value ADT, or a struct's C name).  Only
+ * valid when adt_field_is_inline_byval(f). */
+const char *adt_field_inline_c_name(const CtorField *f) {
+    return type_c_name(*f->full_type);
 }
 
 /* CONV-S1 (slice 3): a by-value ADT product is laid out like a struct, so it
@@ -2499,12 +2550,37 @@ static size_t adt_field_size_bytes(TypeKind k) {
     }
 }
 
+/* slice 4: size of a single ctor field, recursing into an inline by-value
+ * aggregate (its fields contribute their own bytes rather than a single 8-byte
+ * carrier slot), so the >16-byte pass-by-pointer threshold lines up with the
+ * nested-struct layout. */
+static size_t adt_ctor_field_size_bytes(const CtorField *f, int depth) {
+    if (depth > 0 && adt_field_is_inline_byval_d(f, depth) && f->full_type) {
+        if (f->full_type->kind == TY_ADT && f->full_type->as.adt_.def) {
+            const AdtDef *ad = f->full_type->as.adt_.def;
+            const CtorDef *ic = ad->ctors[0];
+            size_t t = 0;
+            for (uint32_t i = 0; i < ic->n_fields; i++)
+                t += adt_ctor_field_size_bytes(&ic->fields[i], depth - 1);
+            return t;
+        }
+        if (f->full_type->kind == TY_STRUCT && f->full_type->as.struct_.def) {
+            /* Struct field byte sizes are not computed here (types.c does not
+             * pull in elab's type_size_bytes); approximate each struct field as
+             * 8 bytes, which is monotone and conservative for the threshold. */
+            const StructDef *sd = f->full_type->as.struct_.def;
+            return (size_t)sd->n_fields * 8;
+        }
+    }
+    return adt_field_size_bytes(f->kind);
+}
+
 bool adt_byval_pass_by_ptr(const AdtDef *def) {
     if (!adt_is_byvalue_product(def)) return false;
     const CtorDef *c = def->ctors[0];
     size_t total = 0;
     for (uint32_t i = 0; i < c->n_fields; i++)
-        total += adt_field_size_bytes(c->fields[i].kind);
+        total += adt_ctor_field_size_bytes(&c->fields[i], 16);
     return total > 16;
 }
 

@@ -320,6 +320,12 @@ bool adt_is_byvalue_product(const AdtDef *def);
 /* CONV-S1 (slice 3): true when a by-value ADT product is large enough (>16
  * bytes) to use the struct-style `const tur_adt_<Name> *` pass-by-pointer ABI. */
 bool adt_byval_pass_by_ptr(const AdtDef *def);
+/* CONV-S1 (slice 4): true when a ctor field is itself a by-value aggregate that
+ * is stored INLINE (by value) in the owning by-value product, the way a struct
+ * inlines a nested struct field -- as opposed to boxing it behind the int64
+ * carrier.  adt_field_inline_c_name returns its inline C type name. */
+bool adt_field_is_inline_byval(const CtorField *f);
+const char *adt_field_inline_c_name(const CtorField *f);
 
 /* Phase 11: Struct field descriptor.
  * Stored inline in StructDef.fields[]. */
