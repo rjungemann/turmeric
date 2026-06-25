@@ -166,3 +166,41 @@ extern bool g_allow_experimental;
  * the by-value ADT path.  Gated by the `defstruct-as-defadt` experiment; see
  * docs/upcoming/defstruct-as-defadt-plan.md. */
 extern bool g_opt_defstruct_as_defadt;
+
+/* ---------------------------------------------------------------------------
+ * Interpreter-native return-type signatures
+ * (untyped-native-registration-blocks-curated-facades fix)
+ *
+ * `turi_register_default_native` / `turi_env_register_native` register an
+ * embedder native by (name, fn, ud) with no type information, so the
+ * elaborator's eval-mode fallback used to default every native call to :int
+ * (with a hand-rolled allow-list for `error?`/`error-message`).  A defn that
+ * wraps a native and declares its honest non-:int return type then failed
+ * elaboration (TUR-E0707/E0708) because the body was typed :int.
+ *
+ * This process-global registry lets the typed registration API record the
+ * Turmeric type a native's TuriValue result carries at runtime.  The
+ * elaborator consults it (replacing the allow-list) so both a direct call and
+ * a curated typed wrapper see the right return type.  The enum lives here --
+ * in the neutral runtime layer shared by the compiler and the embedder API --
+ * so neither side has to include the other's headers.  See
+ * docs/archive/untyped-native-registration-blocks-curated-facades.md.
+ * --------------------------------------------------------------------------- */
+typedef enum TurNativeRetType {
+    TUR_NRT_INT = 0,   /* default; matches the historical untyped behavior */
+    TUR_NRT_FLOAT,
+    TUR_NRT_BOOL,
+    TUR_NRT_CSTR,
+    TUR_NRT_VOID,
+    TUR_NRT_PTR,       /* opaque handle -> ptr<void> */
+} TurNativeRetType;
+
+/* Register (or replace) the return-type signature for native `name`.  `name`
+ * is copied; last write wins.  Registering TUR_NRT_INT is a no-op-equivalent
+ * (the elaborator default), but is still recorded so a later override is
+ * visible. */
+void tur_native_sig_register(const char *name, TurNativeRetType ret);
+/* Look up `name`; on hit writes *ret and returns true, else returns false. */
+bool tur_native_sig_lookup(const char *name, TurNativeRetType *ret);
+/* Drop every registered signature (mirrors turi_clear_default_natives). */
+void tur_native_sig_clear(void);

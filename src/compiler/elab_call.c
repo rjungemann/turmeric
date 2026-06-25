@@ -2382,12 +2382,33 @@ Expr *elab_call(Elab *e, Form *call) {
              * Known interpreter natives whose return type is not :int get
              * explicit typing here so callers (e.g. `(if (error? r) ...)`)
              * see the right type at the call site.  Add new entries
-             * sparingly -- a stdlib declaration is preferred when one fits. */
+             * sparingly -- a stdlib declaration is preferred when one fits.
+             *
+             * Embedder natives registered with a typed registration API
+             * (turi_register_default_native_typed / turi_env_register_native_typed)
+             * record their return type in the process-global signature registry;
+             * consult it so a curated typed wrapper over a non-:int native
+             * elaborates correctly.  See
+             * docs/archive/untyped-native-registration-blocks-curated-facades.md. */
             Type dispatch_result = TYPE_INT;
             const char *nm = name->name;
             if (nm) {
                 if      (strcmp(nm, "error?") == 0)        dispatch_result = TYPE_BOOL;
                 else if (strcmp(nm, "error-message") == 0) dispatch_result = TYPE_CSTR;
+                else {
+                    TurNativeRetType nrt;
+                    if (tur_native_sig_lookup(nm, &nrt)) {
+                        switch (nrt) {
+                            case TUR_NRT_FLOAT: dispatch_result = TYPE_FLOAT;    break;
+                            case TUR_NRT_BOOL:  dispatch_result = TYPE_BOOL;     break;
+                            case TUR_NRT_CSTR:  dispatch_result = TYPE_CSTR;     break;
+                            case TUR_NRT_VOID:  dispatch_result = TYPE_NIL;      break;
+                            case TUR_NRT_PTR:   dispatch_result = TYPE_PTR_VOID; break;
+                            case TUR_NRT_INT:   /* fallthrough: keep TYPE_INT */
+                            default:            dispatch_result = TYPE_INT;      break;
+                        }
+                    }
+                }
             }
             Binding *dyn_b = binding_new(e, name, dispatch_result, false, false, head->span);
             Expr *var_expr = expr_new(e->arena, EX_VAR, dispatch_result, head->span);

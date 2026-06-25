@@ -1,11 +1,39 @@
 # Untyped Native Registration Blocks Curated Facades Over Embedder Natives
 
-> **Status:** Reported, not yet fixed
+> **Status:** RESOLVED 2026-06-25 -- fix direction A (typed native
+> registration API) landed.
 > **Severity:** Medium -- blocks ergonomic typed wrappers over embedder
 > natives; existing scripts still work via direct calls.
 > **Discovered:** 2026-06-25
 > **Discovered by:** turmeric-godot G3.b prelude work (see
 > `../../turmeric-godot/src/bridge/prelude.cpp`)
+
+---
+
+## Resolution
+
+Fix direction **A** shipped. A process-global return-type signature registry
+(`tur_native_sig_register` / `tur_native_sig_lookup`, with the neutral
+`TurNativeRetType` enum) lives in `src/runtime/globals.{h,c}`, the shared layer
+both the elaborator and the embedder API can reach. Two typed registration
+entry points were added to the embedder surface (`src/turi/eval.h`):
+
+- `turi_register_default_native_typed(name, fn, ud, ret)` -- in `src/turi/env.c`
+- `turi_env_register_native_typed(env, name, fn, ud, ret)` -- in `src/turi/eval.c`
+
+Both install the native exactly as their untyped counterparts, then record the
+runtime return type. The elaborator's eval-mode fallback
+(`src/compiler/elab_call.c`) now consults the registry, mapping
+`TUR_NRT_FLOAT/BOOL/CSTR/VOID/PTR` to the corresponding `Type`, so a direct
+call and a curated typed wrapper both see the honest return type instead of the
+old `:int` default. The hand-rolled `error?`/`error-message` allow-list is kept
+(those are interpreter builtins, not embedder natives).
+
+Scope per the report's open questions: monomorphic return type only (untyped
+natives stay `:int`); arg types remain unchecked in this path; the registry is
+process-global, with last-write-wins on a name (per-env precedence at compile
+time remains future work). Regression coverage:
+`test_typed_native` in `tests/turi/embed-peripherals.c`.
 
 ---
 

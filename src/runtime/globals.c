@@ -4,6 +4,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "globals.h"  /* TurNativeRetType + native-sig registry prototypes */
 
 /* Phase U5: Global configuration for unsafe linting */
 uint32_t g_unsafe_max_lines = 20;
@@ -182,3 +186,55 @@ bool g_allow_experimental = false;
 
 /* CONV-S1 (defstruct-as-defadt experiment) enable bit; see globals.h. */
 bool g_opt_defstruct_as_defadt = false;
+
+/* ---------------------------------------------------------------------------
+ * Interpreter-native return-type signature registry (see globals.h).
+ * --------------------------------------------------------------------------- */
+typedef struct TurNativeSig {
+    char            *name;   /* owned (strdup) */
+    TurNativeRetType ret;
+} TurNativeSig;
+
+static TurNativeSig *g_native_sigs;
+static size_t        g_native_sigs_count;
+static size_t        g_native_sigs_cap;
+
+void tur_native_sig_register(const char *name, TurNativeRetType ret) {
+    if (!name) return;
+    for (size_t i = 0; i < g_native_sigs_count; i++) {
+        if (strcmp(g_native_sigs[i].name, name) == 0) {
+            g_native_sigs[i].ret = ret;
+            return;
+        }
+    }
+    if (g_native_sigs_count == g_native_sigs_cap) {
+        size_t nc = g_native_sigs_cap ? g_native_sigs_cap * 2u : 8u;
+        TurNativeSig *grown =
+            (TurNativeSig *)realloc(g_native_sigs, nc * sizeof(TurNativeSig));
+        if (!grown) return;
+        g_native_sigs     = grown;
+        g_native_sigs_cap = nc;
+    }
+    TurNativeSig *e = &g_native_sigs[g_native_sigs_count++];
+    e->name = strdup(name);
+    e->ret  = ret;
+}
+
+bool tur_native_sig_lookup(const char *name, TurNativeRetType *ret) {
+    if (!name) return false;
+    for (size_t i = 0; i < g_native_sigs_count; i++) {
+        if (strcmp(g_native_sigs[i].name, name) == 0) {
+            if (ret) *ret = g_native_sigs[i].ret;
+            return true;
+        }
+    }
+    return false;
+}
+
+void tur_native_sig_clear(void) {
+    for (size_t i = 0; i < g_native_sigs_count; i++) free(g_native_sigs[i].name);
+    free(g_native_sigs);
+    g_native_sigs       = NULL;
+    g_native_sigs_count = 0;
+    g_native_sigs_cap   = 0;
+}

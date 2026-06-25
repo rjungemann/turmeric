@@ -245,10 +245,61 @@ static void test_shared_spice_image(void) {
     turi_env_free(env);  /* must not double-free under ASan */
 }
 
+/* --- Typed native registration: curated facade over a non-:int native ----
+ * Regression test for
+ * docs/archive/untyped-native-registration-blocks-curated-facades.md.
+ * A native whose runtime result is :float must be wrappable by a defn that
+ * declares the honest :float return type -- without the typed registry the
+ * wrapper failed elaboration (TUR-E0707) because the call was typed :int. */
+static TuriValue native_get_x(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)args; (void)n; (void)ud;
+    return turi_float(3.5);
+}
+static TuriValue native_label(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)args; (void)n; (void)ud;
+    return turi_cstr("hi");
+}
+
+static void test_typed_native(void) {
+    turi_register_default_native_typed("my-get-x", native_get_x, NULL, TUR_NRT_FLOAT);
+    turi_register_default_native_typed("my-label", native_label, NULL, TUR_NRT_CSTR);
+
+    TuriEnv *env = turi_env_new();
+
+    /* Direct call returns the float value. */
+    TuriValue dx = turi_eval(env, "(my-get-x)");
+    CHECK(dx.tag == TURI_FLOAT && dx.as_float == 3.5,
+          "typed float native: direct call returns float");
+
+    /* The curated facade -- a wrapper declaring :float -- now elaborates. */
+    TuriValue def = turi_eval(env, "(defn wrap-x [] :float (my-get-x))");
+    CHECK(def.tag != TURI_ERROR, "typed float native: :float wrapper elaborates");
+    TuriValue wx = turi_eval(env, "(wrap-x)");
+    CHECK(wx.tag == TURI_FLOAT && wx.as_float == 3.5,
+          "typed float native: wrapper returns float");
+
+    /* A :cstr native wraps cleanly too. */
+    TuriValue defc = turi_eval(env, "(defn wrap-label [] :cstr (my-label))");
+    CHECK(defc.tag != TURI_ERROR, "typed cstr native: :cstr wrapper elaborates");
+
+    turi_env_free(env);
+
+    /* Per-env typed registration feeds the same process-global registry. */
+    TuriEnv *e2 = turi_env_new();
+    turi_env_register_native_typed(e2, "env-x", native_get_x, NULL, TUR_NRT_FLOAT);
+    TuriValue d2 = turi_eval(e2, "(defn w2 [] :float (env-x))");
+    CHECK(d2.tag != TURI_ERROR, "env-scoped typed native: :float wrapper elaborates");
+    turi_env_free(e2);
+
+    turi_clear_default_natives();
+    tur_native_sig_clear();
+}
+
 int main(void) {
     turi_init(false);
 
     test_default_natives();
+    test_typed_native();
     test_reset();
     test_diag_sink();
     test_module_base_dir();

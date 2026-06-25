@@ -180,6 +180,16 @@ void turi_register_default_native(const char *name, TuriNativeFn fn, void *ud) {
     e->ud   = ud;
 }
 
+/* Typed variant: register the default native as usual, then record its runtime
+ * return type in the process-global signature registry so the elaborator types
+ * calls to it (and curated typed wrappers over it) correctly.  See
+ * docs/archive/untyped-native-registration-blocks-curated-facades.md. */
+void turi_register_default_native_typed(const char *name, TuriNativeFn fn,
+                                        void *ud, TurNativeRetType ret) {
+    turi_register_default_native(name, fn, ud);
+    tur_native_sig_register(name, ret);
+}
+
 void turi_clear_default_natives(void) {
     for (size_t i = 0; i < g_default_natives_count; i++) free(g_default_natives[i].name);
     free(g_default_natives);
