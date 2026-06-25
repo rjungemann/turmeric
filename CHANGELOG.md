@@ -4,6 +4,40 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.25.2] -- 2026-06-24
+
+### Added
+
+- **Interpreter debugger (`tur debug`) + DAP server (#543, #544, #545).**
+  Three-phase debugger: source-spans audit and coverage gate, an
+  interactive REPL-style stepper over the interpreter, and a Debug
+  Adapter Protocol server so editors can attach.
+- **By-value ADT representation for leaf-scalar products (CONV-S1/B3,
+  CONV-S2/S4, #540, #541, #546).** Struct/ADT convergence:
+  record-style variants, keyword construction, match-on-struct, and
+  by-value layout for single- and multi-variant ADTs without the
+  carrier indirection.
+- **Mise plugin.** Install Turmeric via `mise`.
+- **Try Turmeric (web playground) overhauled.** PWA manifest +
+  apple-touch-icon, non-scrolling mobile layout, editor/console
+  persistence across reload, iOS safe-area + focus-zoom handling, and
+  a legible mobile Examples dropdown.
+
+### Changed
+
+- **turi interpreter perf.** Env-owned value-arena pool (#537),
+  pooled inline-C escaping buffers, and coroutine-stack tracking
+  (#539).
+- **Spice `__ok` / `__err` migration complete.** All 13 spices
+  (json, sqlite, png, rtaudio, osc, template, wav, postgres, valkey,
+  ...) now use the canonical Result builders; umbrella plan archived.
+
+### Fixed
+
+- **By-value struct/ADT results now survive the closure ABI (#538).**
+- **Invalid C initializer when let-binding a by-pointer struct param
+  (#542).**
+
 ## [0.25.1] -- 2026-06-24
 
 ### Added

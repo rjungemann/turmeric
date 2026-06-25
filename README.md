@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.25.1` -- typed inline-C `Result` / `Option` builders (`tur_ok_ptr`, `tur_err_int`, ...) for fallible C constructors, plus struct ergonomics (auto-bound constructor, keyword args, `with` update).
+**Latest release:** `v0.25.2` -- interpreter debugger with DAP server (`tur debug`), by-value ADT representation for struct/ADT convergence, and a major Try Turmeric web playground overhaul (PWA, mobile layout, persistence).
 
 ## What
 
