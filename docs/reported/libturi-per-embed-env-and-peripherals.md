@@ -1,9 +1,33 @@
 # libturi: per-instance environments and the peripheral embed-API gaps that block them
 
-> **Status:** Reported (forward-looking; not blocking the immediate G1 slice)
+> **Status:** Partially resolved -- Gaps 1-4 landed (the near-term cluster that
+> blocks a per-script Godot env path); Gaps 5-8 remain open.
 > **Severity:** Medium (architectural; defers what an MVP needs but blocks a real multi-script binding)
 > **Found by:** Scoping `TurmericInstance` for the Godot binding's G1 follow-up
 > **Date:** 2026-06-24
+
+## Resolution (Gaps 1-4)
+
+The four near-term gaps now have embed API:
+
+- **Gap 1** -- `turi_register_default_native` / `turi_clear_default_natives`
+  (a process-global registry every `turi_env_new` consults) plus
+  `turi_env_new_with_natives(specs, n)`. `src/turi/env.c`, decls in
+  `src/turi/eval.h`.
+- **Gap 2** -- `turi_env_reset(env)`: rebuilds globals keeping only native
+  closures, clears accumulated source + deferred/handler/return/throw/abort/
+  catch state. `src/turi/env.c` (uses `turi_value_is_native` in
+  `src/turi/eval.c`).
+- **Gap 3** -- `turi_env_set_diag_sink(env, cb, ud)` on top of a diag-layer
+  sink (`diag_set_sink` / `diag_get_sink` in `src/compiler/diag.{h,c}`).
+  `turi_eval` installs the env's sink around the call via a trampoline.
+- **Gap 4** -- `turi_env_set_module_base_dir(env, path)` (owns a copy, freed by
+  `turi_env_free`) plus a sentence in the `turi_eval` docblock.
+
+Covered by `tests/turi/embed-peripherals.c` (ctest target
+`tur_embed_peripherals`, leak detection ON) and documented in
+`docs/guides/eval-api.md` ("Per-embed-env peripherals"). Gaps 5-8 below stay
+open.
 
 ## Summary
 
@@ -45,7 +69,7 @@ what users will expect.
 
 ## The peripheral gaps
 
-### 1. No way to install natives onto every new env
+### 1. No way to install natives onto every new env  -- RESOLVED
 
 `turi_env_register_native(env, name, fn, ud)` mutates one env. An
 embedder that ships ten natives (`godot-println`, `godot-emit`, ...)
@@ -57,7 +81,7 @@ embedder seeds once and every `turi_env_new` consults, or a
 `turi_env_new_with_natives(NativeSpec[], n)` constructor that takes
 the table explicitly. Either keeps registration in one place.
 
-### 2. No `turi_env_reset(env)` — `_reload` has to destroy + recreate
+### 2. No `turi_env_reset(env)` — `_reload` has to destroy + recreate  -- RESOLVED
 
 When a `.tur` file changes and Godot calls `Script::_reload`, the
 right behaviour is "start the script's interpreter state from
@@ -71,7 +95,7 @@ clear deferred state, clear handler stacks -- but keep already-
 registered natives alive. Roughly "drop everything `turi_eval`
 created; preserve everything the embedder configured."
 
-### 3. Diagnostics route to global stderr, not per-env
+### 3. Diagnostics route to global stderr, not per-env  -- RESOLVED
 
 `turi_eval` writes parse/elaboration errors to stderr via the diag
 subsystem. In Godot we want each script's compile errors to show up
@@ -83,7 +107,7 @@ error.
 that intercepts diagnostics before they hit stderr; the embedder
 buffers them and pushes them to its own output channel.
 
-### 4. `env->module_base_dir` is undocumented but load-bearing
+### 4. `env->module_base_dir` is undocumented but load-bearing  -- RESOLVED
 
 A script that uses `(import std/list)` needs `env->module_base_dir`
 set before the `turi_eval` call, or the import resolves relative to
@@ -156,12 +180,12 @@ optimizing -- might not matter in practice.
 ## Severity calibration
 
 Items 1-4 are **near-term** -- they bite the first time a real
-multi-script Godot project is built. Items 5-7 are **medium-term**
-correctness/scaling concerns, not active footguns. Item 8 is
-**speculative** -- worth measuring before optimizing; might never
-matter.
+multi-script Godot project is built. **They have now landed** (see
+Resolution above). Items 5-7 are **medium-term** correctness/scaling
+concerns, not active footguns. Item 8 is **speculative** -- worth
+measuring before optimizing; might never matter.
 
-If items 1, 2, and 3 land, the Godot binding can ship a per-script
+With items 1, 2, and 3 landed, the Godot binding can ship a per-script
 env path in G2 without further embed-API work.
 
 ---

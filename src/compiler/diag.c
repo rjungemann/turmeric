@@ -1856,6 +1856,34 @@ static DiagLspEntry *lsp_entries_ = NULL;
 static size_t        lsp_entry_count_ = 0;
 static size_t        lsp_entry_cap_ = 0;
 
+/* Diagnostic sink (embed API -- see diag.h). */
+static DiagSinkFn diag_sink_fn_ = NULL;
+static void      *diag_sink_ud_ = NULL;
+
+void diag_set_sink(DiagSinkFn fn, void *ud) {
+    diag_sink_fn_ = fn;
+    diag_sink_ud_ = ud;
+}
+
+DiagSinkFn diag_get_sink(void **out_ud) {
+    if (out_ud) *out_ud = diag_sink_ud_;
+    return diag_sink_fn_;
+}
+
+/* Deliver one diagnostic record to the installed sink.  Returns true when a
+ * sink consumed it (so the caller suppresses the stderr render). */
+static bool diag_sink_dispatch(DiagLevel level, DiagCode code, Span span,
+                               const char *msg) {
+    if (!diag_sink_fn_) return false;
+    const SourceFile *f = (span.file_id < MAX_FILES) ? files_[span.file_id] : NULL;
+    const char *path = (f && f->path) ? f->path : "";
+    const char *code_str = diag_code_to_string(code);
+    diag_sink_fn_(level, code_str ? code_str : "", path,
+                  span.line, span.col_start, span.col_end,
+                  msg ? msg : "", diag_sink_ud_);
+    return true;
+}
+
 static void lsp_append(DiagLevel level, DiagCode code, Span span, const char *msg) {
     if (lsp_entry_count_ >= lsp_entry_cap_) {
         lsp_entry_cap_ = lsp_entry_cap_ ? lsp_entry_cap_ * 2 : 32;
@@ -1923,6 +1951,13 @@ void diag_emitv(DiagLevel level, Span span, const char *fmt, va_list ap) {
         return;
     }
 
+    if (diag_sink_fn_) {
+        char msg[512];
+        vsnprintf(msg, sizeof(msg), fmt, ap);
+        diag_sink_dispatch(level, DIAG_CODE_NONE, span, msg);
+        return;
+    }
+
     /* Phase 8: If JSON output is enabled, emit in JSON format */
     if (json_output_) {
         char msg[1024];
@@ -1969,6 +2004,16 @@ void diag_emit_with_code(DiagLevel level, Span span, DiagCode code, const char *
         vsnprintf(msg, sizeof(msg), fmt, ap);
         va_end(ap);
         lsp_append(level, code, span, msg);
+        return;
+    }
+
+    if (diag_sink_fn_) {
+        va_list ap;
+        va_start(ap, fmt);
+        char msg[512];
+        vsnprintf(msg, sizeof(msg), fmt, ap);
+        va_end(ap);
+        diag_sink_dispatch(level, code, span, msg);
         return;
     }
 
@@ -2019,6 +2064,14 @@ void diag_emit_with_notes(DiagLevel level, Span span, const char *message,
         lsp_append(level, DIAG_CODE_NONE, span, message);
         for (size_t i = 0; i < note_count; i++)
             lsp_append(notes[i].level, DIAG_CODE_NONE, notes[i].span, notes[i].message);
+        return;
+    }
+
+    if (diag_sink_fn_) {
+        diag_sink_dispatch(level, DIAG_CODE_NONE, span, message);
+        for (size_t i = 0; i < note_count; i++)
+            diag_sink_dispatch(notes[i].level, DIAG_CODE_NONE, notes[i].span,
+                               notes[i].message);
         return;
     }
 
@@ -2079,6 +2132,13 @@ void diag_emit_with_suggestion(DiagLevel level, Span span, const char *message,
         return;
     }
 
+    if (diag_sink_fn_) {
+        diag_sink_dispatch(level, DIAG_CODE_NONE, span, message);
+        if (suggestion && suggestion->text)
+            diag_sink_dispatch(DIAG_HELP, DIAG_CODE_NONE, span, suggestion->text);
+        return;
+    }
+
     /* Phase 8: If JSON output is enabled, emit in JSON format */
     if (json_output_) {
         diag_emit_json(level, span, DIAG_CODE_NONE, message);
@@ -2134,6 +2194,14 @@ void diag_emit_multi_span(DiagLevel level, const char *message,
         for (size_t i = 0; i < secondary_count; i++)
             lsp_append(DIAG_NOTE, DIAG_CODE_NONE, secondary_spans[i],
                        secondary_labels ? secondary_labels[i] : "");
+        return;
+    }
+
+    if (diag_sink_fn_) {
+        diag_sink_dispatch(level, DIAG_CODE_NONE, primary_span, message);
+        for (size_t i = 0; i < secondary_count; i++)
+            diag_sink_dispatch(DIAG_NOTE, DIAG_CODE_NONE, secondary_spans[i],
+                               secondary_labels ? secondary_labels[i] : "");
         return;
     }
 
