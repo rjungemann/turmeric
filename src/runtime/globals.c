@@ -187,9 +187,6 @@ bool g_allow_experimental = false;
 /* CONV-S1 (defstruct-as-defadt experiment) enable bit; see globals.h. */
 bool g_opt_defstruct_as_defadt = false;
 
-/* B4 (byvalue-recursive-carrier experiment) enable bit; see globals.h. */
-bool g_opt_byval_recursive_carrier = false;
-
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signature registry (see globals.h).
  * --------------------------------------------------------------------------- */

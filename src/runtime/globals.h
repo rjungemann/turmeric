@@ -167,14 +167,6 @@ extern bool g_allow_experimental;
  * docs/upcoming/defstruct-as-defadt-plan.md. */
 extern bool g_opt_defstruct_as_defadt;
 
-/* B4 (byvalue-recursive-carrier experiment): when enabled, a single-variant,
- * single-field recursive carrier wrapper (Re = (Roll (ReF Re)), Expr = (Roll
- * (ExprF Expr))) flows by value as an 8-byte wrapper around its int64 carrier,
- * and the fat-closure ABI carries such a by-value-ADT parameter as the int64
- * carrier uniformly.  Gated by the `byvalue-recursive-carrier` experiment; see
- * docs/upcoming/v2/b4-fat-closure-byvalue-adt-abi-plan.md. */
-extern bool g_opt_byval_recursive_carrier;
-
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signatures
  * (untyped-native-registration-blocks-curated-facades fix)

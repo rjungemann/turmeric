@@ -3,8 +3,6 @@
 #include "kind_check.h"  /* Phase HKT-P1: for kind_of_type_app */
 #include "forms.h"      /* Phase HKT-P1: for Span */
 #include "effect.h"     /* FH4.1: EffectRow name-set helpers for TY_HANDLER */
-#include "../runtime/globals.h"      /* B4: g_opt_byval_recursive_carrier */
-#include "../runtime/experiments.h"  /* B4: experiment_warn_if_used */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -2554,22 +2552,15 @@ static bool adt_is_byvalue_product_d(const AdtDef *def, int depth) {
         const CtorField *f = &c->fields[i];
         /* slice 4: a by-value aggregate field is inlined -- admit it. */
         if (adt_field_is_inline_byval_d(f, depth)) continue;
-        /* B4 (byvalue-recursive-carrier, flag-gated): a single recursive carrier
-         * field -- an (F Self) type-application that stays on the int64 carrier --
-         * does not disqualify the owning product from flowing by value.  Such a
-         * product is an 8-byte wrapper around the carrier int64 (Re/Expr).  Only
-         * a single-field wrapper is admitted in this slice; the field keeps its
-         * int64-carrier storage (it is not inlined). */
-        if (g_opt_byval_recursive_carrier && f->full_type &&
-            f->full_type->kind == TY_APP) {
-            /* slice 1: an 8-byte single-carrier wrapper (Re/Expr) crosses the
-             * fat closure by reinterpret.  slice 2: a wider product carrying an
-             * (F Self) field plus extra scalars flows by value too -- its
-             * by-value-ADT element fields ride a heap box in the parametric
-             * carrier monomorph (type_is_wide_byval_adt). */
-            experiment_warn_if_used("byvalue-recursive-carrier");
-            continue;
-        }
+        /* B4 (graduated 2026-06-25): a recursive carrier field -- an (F Self)
+         * type-application that stays on the int64 carrier -- does not disqualify
+         * the owning product from flowing by value.  A single such field yields
+         * an 8-byte wrapper around the carrier int64 (Re/Expr) that crosses the
+         * fat closure by reinterpret; a wider product carrying an (F Self) field
+         * plus extra scalars flows by value too, its by-value-ADT element fields
+         * riding a heap box in the parametric carrier monomorph
+         * (type_is_wide_byval_adt). */
+        if (f->full_type && f->full_type->kind == TY_APP) continue;
         if (f->full_type) {
             TypeKind fk = f->full_type->kind;
             if (fk == TY_ADT || fk == TY_APP || fk == TY_STRUCT ||
@@ -2592,11 +2583,9 @@ bool adt_is_byvalue_product(const AdtDef *def) {
  * type-application that stays on the int64 carrier (e.g. Re = (Roll (ReF Re)),
  * Expr = (Roll (ExprF Expr))).  Such a value is an 8-byte wrapper whose by-value
  * representation IS its carrier int64, so it crosses the fat-closure boundary by
- * reinterpreting the carrier (no heap box, no deref).  Only meaningful under the
- * byvalue-recursive-carrier experiment; returns false when the flag is off so the
- * legacy carrier path is unchanged. */
+ * reinterpreting the carrier (no heap box, no deref).  (B4 graduated 2026-06-25;
+ * unconditional.) */
 bool adt_is_byval_recursive_carrier_wrapper(const AdtDef *def) {
-    if (!g_opt_byval_recursive_carrier) return false;
     if (!def || !adt_is_flat_product(def) || def->n_type_params != 0) return false;
     const CtorDef *c = def->ctors[0];
     if (c->n_fields != 1) return false;
@@ -2691,13 +2680,12 @@ size_t adt_byval_value_size_bytes(const AdtDef *def) {
  * carrier monomorph (e.g. the (ExprF Expr) element of a wide Expr), must be
  * stored BOXED (an int64 heap pointer) so the monomorph layout agrees with the
  * generic int64 carrier the fmap spec reads, and so it crosses the fat-closure
- * boundary by box+deref (the existing B3 bridge) rather than inline.  Flag-gated
- * via adt_is_byvalue_product (false when the experiment is off). */
+ * boundary by box+deref (the existing B3 bridge) rather than inline.  This is a
+ * pure size predicate; its call sites are guarded (monomorph boxing fires only
+ * for parametric-carrier elements; the field-read raw-carrier path only for an
+ * erased int64 binding) so an ordinary wide by-value ADT match keeps its
+ * existing B3 treatment. */
 bool type_is_wide_byval_adt(Type t) {
-    /* Strictly scoped to the experiment: flag-off codegen is unchanged, so an
-     * ordinary wide by-value ADT (e.g. a two-float Pt stored in a carrier ADT)
-     * keeps its existing B3 inline/box+deref treatment. */
-    if (!g_opt_byval_recursive_carrier) return false;
     if (t.kind == TY_ADT && t.as.adt_.def)
         return adt_byval_value_size_bytes(t.as.adt_.def) > 8;
     return false;

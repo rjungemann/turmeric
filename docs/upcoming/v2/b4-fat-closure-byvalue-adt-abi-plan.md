@@ -6,6 +6,19 @@ description: Bring the recursive non-parametric HKT carriers (Re, Expr) onto the
 
 # B4 -- fat-closure ABI for by-value-ADT closure params
 
+## DONE -- all three slices landed; feature GRADUATED 2026-06-25
+
+Slices 1 (<= 8 byte single-carrier wrappers Re/Expr), 2 (wide > 8 byte
+by-value-ADT closure params via heap-box carrier), and 3 (graduation) are all
+complete. The `byvalue-recursive-carrier` experiment has been **retired**: the
+EXPERIMENTS[] row and the `g_opt_byval_recursive_carrier` enable bit are gone,
+the feature is unconditional (the gate lives in `adt_is_byvalue_product_d`,
+`src/compiler/types.c`), and the six `hkt-cata-*` fixtures dropped their `flags`
+files and now run on the default path. Full default suite: 1829 passed, 0 failed.
+(Per CLAUDE.md the legacy `TUR_M7_HKT=0` carrier suite is not a graduation gate;
+the default by-value suite is.)  The slice-by-slice notes below are retained as
+the historical record.
+
 ## Status / provenance
 
 Spun out of

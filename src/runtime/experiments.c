@@ -43,19 +43,11 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.30.0",                  /* expires_at (hard contract; release-cut enforced) */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_defstruct_as_defadt },
-    /* B4: bring the recursive non-parametric HKT carriers (Re, Expr) onto the
-     * by-value ADT path by giving the fat-closure ABI a single, uniform
-     * representation for a by-value-ADT closure parameter -- the int64 carrier.
-     * In flux: slice 1 lands the int64-wide (<= 8 byte) single-carrier-wrapper
-     * case (Re/Expr); the wide (> 8 byte) by-value-ADT closure-param case with
-     * its heap-box ownership contract is still unbuilt. */
-    { "byvalue-recursive-carrier",
-      "flow single-carrier recursive ADT wrappers (Re/Expr) by value through the fat-closure ABI",
-      "docs/upcoming/v2/b4-fat-closure-byvalue-adt-abi-plan.md",
-      "0.25.1",                  /* introduced */
-      "0.30.0",                  /* expires_at (hard contract; release-cut enforced) */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_byval_recursive_carrier },
+    /* B4 byvalue-recursive-carrier GRADUATED 2026-06-25 -- the recursive carrier
+     * wrappers (Re/Expr, and wider products carrying an (F Self) field) now flow
+     * by value through the fat-closure ABI unconditionally; the gate lives in
+     * adt_is_byvalue_product_d (types.c).  See
+     * docs/upcoming/v2/b4-fat-closure-byvalue-adt-abi-plan.md. */
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };
