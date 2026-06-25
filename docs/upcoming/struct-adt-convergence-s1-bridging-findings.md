@@ -13,11 +13,19 @@ description: Concrete site-by-site findings from a spiked attempt at CONV-S1 (ma
 - **B3 (flip gate for leaf products + field-store crossing)** -- **LANDED, gate
   LIVE** for leaf products (no aggregate-bearing / recursive fields). Suite
   green: `bash tests/run.sh` 1813 / 0.
-- **B4 (reconcile with M7 by-value HKT)** -- **DELIBERATELY DEFERRED**, not
-  landed. Spike shows it needs an **M7-owned ABI decision** (fat-closure ABI
-  carrying by-value-ADT params as the int64 carrier uniformly), not a
-  localized bridge. **NOT a prerequisite for CONV-S1 proper** -- real
-  `defstruct`s never have functor-applied-to-self fields.
+- **B4 (reconcile with M7 by-value HKT)** -- **NOT LANDED; reframed as
+  out-of-scope/moot (2026-06-25).** M7's by-value HKT is now **graduated --
+  default ON** (`g_m7_hkt_enabled = true`), so the old "sequence with M7
+  graduation" framing is satisfied on the timeline -- **but a fresh post-M7 spike
+  reproduces the identical 9 `cc` errors**: M7 graduating did NOT deliver, and
+  does not unblock, the fat-closure-ABI change B4 needs (carry a by-value-ADT
+  closure param as the int64 carrier uniformly). That change was never part of
+  M7's scope and remains unbuilt. **NOT a prerequisite for CONV-S1 proper** --
+  real `defstruct`s never have functor-applied-to-self fields, so the
+  `defstruct -> defadt` path never reaches this crossing. The B3 leaf-and-pointer
+  gate is the permanent boundary; build the fat-closure ABI only if some future
+  feature actually demands recursive-HKT-carrier by-value. See the B4 section
+  below for the re-spike details.
 - **CONV-S1 proper (lower `defstruct` to `defadt`)** -- **REACHABLE** on the
   B3 leaf gate once it is extended to pointer/`rc`/`ref` fields. Tracked in
   [`defstruct-as-defadt-plan.md`](defstruct-as-defadt-plan.md) (slice 5 is
@@ -331,8 +339,54 @@ be made consistent.
    parameter as the int64 carrier uniformly** -- box at closure creation / arg
    pass, unbox at thunk entry -- so the cast is always `(void*, int64_t)` and the
    `ReF__Re` inline-storage path and the carrier `ReF` path agree on a boxed `Re`.
-   That is an M7-owned change and should be sequenced with (or after) M7's
-   by-value-HKT graduation, not bolted on underneath it.
+
+   **RE-SPIKED POST-M7-GRADUATION (2026-06-25).** M7's by-value-HKT dispatch is
+   **graduated -- default ON** (`g_m7_hkt_enabled = true`, `globals.c`; flipped
+   2026-06-19, `TUR_M7_HKT=0` opts back to the legacy carrier). The earlier
+   "sequence B4 with M7's graduation" framing is therefore satisfied on the
+   timeline -- but **M7 graduating did not deliver the fat-closure ABI change B4
+   needs, and does not unblock B4 for free.** Re-running the exact gate widening
+   (`adt_is_byvalue_product` -> `adt_is_flat_product(def) && n_type_params == 0`)
+   on today's tree reproduces the **identical 9 `cc` errors**, now across both
+   `Re` and `Expr` fixtures, e.g.:
+
+   ```c
+   __t79 = ctor_StarF__float(((double (*)(void*, tur_adt_Re))g.fn)(g.env, x_1268));
+   //                                            ^^^^^^^^^^ expects by-value Re; x_1268 is int64
+   ```
+
+   The emitted C confirms the root cause is unchanged and intrinsic to the
+   current ABI, not a missing M7 feature: the by-value thunk is generated with a
+   by-value param --
+
+   ```c
+   typedef double (*tur_thunk_double_tur_adt_Re_t)(void *, tur_adt_Re);
+   static double __fn_1274__spec__double_void___tur_adt_Re(void *__env, tur_adt_Re c) { ... }
+   ```
+
+   -- while the carrier `fmap` spec (`__inst_Functor_fmap_T__spec__...__h2`,
+   scrutinee `tur_adt_ReF *`, `int64_t` fields) calls that same `g.fn` with a raw
+   `int64_t`. One closure, two incompatible call ABIs. Note `tur_adt_Re` is itself
+   just an 8-byte wrapper around the carrier (`union { struct { int64_t _0; } Roll; }`),
+   because Re's sole field `(ReF Re)` is a `TY_APP` and stays on the carrier -- so
+   for `Re` specifically the box/unbox is a reinterpret, not a malloc; the general
+   (wider-than-int64) by-value-ADT param still needs a real heap box with an
+   ownership/free contract, which is the genuinely hard, still-unbuilt part.
+
+   **Net (2026-06-25): B4 is NOT made free by M7's graduation.** The dedicated
+   fat-closure-ABI change (carry a by-value-ADT closure param as the int64 carrier
+   uniformly: reinterpret when <=8 bytes, heap-box-with-owner when wider; unbox at
+   thunk entry; force every call-site cast to `(void*, int64_t)`) was never part
+   of M7's scope and still does not exist. It remains the real, unbuilt
+   prerequisite. **Recommendation: treat B4 as out-of-scope/moot for CONV-S1, not
+   "pending M7."** Nothing requires `Re`/`Expr` by-value -- they are correct on the
+   carrier path, M7 already gives them by-value monomorphisations (`tur_adt_ReF__Re`)
+   where method dispatch needs it, and a real `defstruct` cannot express a
+   functor-applied-to-self field, so `defstruct -> defadt` never reaches this
+   crossing. The **B3 leaf-and-pointer-field gate is the permanent CONV-S1
+   boundary.** Build the fat-closure-ABI change only if a future feature actually
+   demands recursive-HKT-carrier by-value; it is its own project, not a CONV-S1
+   tail.
 
    **Boundary decision.** Until then the **B3 leaf gate is the principled CONV-S1
    boundary**: aggregate-bearing / recursive products keep the carrier ABI. This

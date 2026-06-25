@@ -139,7 +139,13 @@ before the gate widens past leaf-scalar and before the experiment graduates
    and `rc`/`ref`/`ptr`/`fn`/parametric fields remain for graduation.
    B4 (reconcile recursive/HKT carriers `Re`/`Expr` with the by-value path,
    per the s1-bridging findings) is **not** a prerequisite for lowering real
-   structs and is sequenced with M7's by-value-HKT graduation.
+   structs. **Update (2026-06-25):** M7's by-value-HKT dispatch has graduated
+   (default ON, `g_m7_hkt_enabled = true`), but a fresh post-graduation spike
+   shows that does NOT unblock B4 -- the fat-closure-ABI change B4 needs was never
+   in M7's scope and the gate-widening still produces the same 9 `cc` errors. B4
+   is reframed as out-of-scope/moot for this lowering: a real `defstruct` cannot
+   express a functor-applied-to-self field, so lowering never reaches the
+   crossing. See the s1-bridging findings B4 section.
 5. Graduate: delete the gate, lower unconditionally (including bare struct /
    pointer fields), retire the `StructDef` surface path, regenerate the affected
    snapshots in one change.
