@@ -273,3 +273,60 @@ before the gate widens past leaf-scalar and before the experiment graduates
 
 See [struct-adt-convergence-s1-bridging-findings.md](struct-adt-convergence-s1-bridging-findings.md)
 for the by-value representation work this builds on.
+
+## Graduation progress (2026-06-25)
+
+Graduation (step 7) was attempted. The gate was widened to **parametric
+(non-`:heap`) structs**, which surfaced that the entire autoloaded stdlib
+(`Option`/`Result`/`Pair`/`Vec`/`Map`/`Set`/`List`/...) is parametric and must
+work as record ADTs before the gate can come off. Three **flag-independent**
+enabler fixes landed (they also fix hand-written parametric record ADTs); the
+remaining work is a sequence of codegen seams, each substantial.
+
+### Landed (flag-independent; suite 1833 passed, the 7 flag-on `conv-defstruct-*`
+fixtures are the graduation canaries and stay red until the seams below close)
+
+- **Parametric record-ADT field read.** The `EX_GET_FIELD` by-value gate
+  (`emit_expr.c`, `case EX_GET_FIELD`) was app-aware-ified
+  (`emit_type_is_byvalue_adt`) so a concrete monomorph (`(Box int)`, `TY_APP`)
+  reads its field directly off the aggregate instead of the carrier-pointer
+  deref (which cast an aggregate to a pointer -> `cc` error).
+- **Parametric dot-accessor type.** The dot-accessor
+  (`elab_typeclasses.c`, single-variant-record-ADT branch) now substitutes the
+  receiver's concrete type args for a tyvar field type
+  (`elab_adt_type_extract_args` + `adt_field_instantiate_type`, newly exported),
+  so `(.val (Box 42))` types as `int` in untyped contexts (e.g. `println`).
+- **Instance-head resolution.** A bare `definstance` head (`elab_typeclasses.c`,
+  the head-arg parse) now resolves through the **type-namespace** lookup
+  (`elab_lookup_type_by_name`), so a single-variant record ADT whose constructor
+  shares the type's name -- every lowered `defstruct`, and a hand-written
+  `(defdata T [A] (T [...]))` -- resolves to the ADT *type*, not its ctor `fn`
+  (which `scope_lookup`, being value-preferring, returned -> `<struct>`).
+
+### Remaining seams before the gate can come off
+
+1. **By-value-ADT vs uniform-carrier typeclass dispatch (NEXT, highest leverage).**
+   A *parametric* instance method is emitted with the uniform int64 carrier ABI
+   (`__inst_Eq_eq_qu_T(int64_t, int64_t)`) because the head type `(T A)` has an
+   abstract `A`, but a concrete monomorph arg (`tur_adt_Maybe2__int`) is
+   *by-value* (P2-P4), so the direct call mismatches
+   (`incompatible type for argument 1`). A *non-parametric* by-value ADT works
+   because its instance method is emitted by-value. The reconciliation must
+   bridge a by-value ADT-app arg to the carrier at the dispatch site, but the
+   gating predicates (`type_uses_carrier_in_dispatch` == `type_uses_carrier_abi`,
+   and `expr_emits_byvalue_carrier_abi`, both `emit_expr.c`) report a by-value
+   app as *non-carrier* and actively suppress the bridge -- so this is
+   multi-point surgery on hot dispatch paths (or, alternatively, emit
+   per-monomorph instance methods). Unblocks all parametric stdlib instances at
+   once.
+2. **`Option`/`Result` dedicated codegen.** These carry hand-written runtime
+   layout (`tur_option_t`, `tur_result_box_t`, `tur_is_some`/`tur_opt_value`,
+   `some`/`none`/`ok`/`err`) that assumes the struct/carrier representation;
+   lowering them to record ADTs needs that special-casing reconciled or retired.
+3. **`:heap` typed-pointer ADT ABI.** Still NOT STARTED (see
+   [parametric-adt-byvalue-plan.md](parametric-adt-byvalue-plan.md) step 5) --
+   `Vec`/`Map`/`Set`/`MutableMap` are `:heap` parametric structs and have no
+   `tur_adt_X__A *` typed-pointer ADT lowering.
+4. **Validation across every autoloaded parametric stdlib type**, then delete the
+   gate + `g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]` row, retire the
+   `StructDef` surface path, and regenerate snapshots.
