@@ -384,19 +384,30 @@ runtime *usage* seam, below.
    wrongly derefs a by-value `container`.  All flag-independent (helps hand-written
    record-ADT HKT instances too).  Suite stays 1840/0.  **Result is NOT yet done
    -- see seam 2.**
-2. **`Result` construction codegen (mixed-type fields).** Under the flag,
-   `(ok 42) : (Result int cstr)` fails at `cc`: the by-value monomorph ctor
-   `ctor_Result__int__cstr(bool, int64_t, const char *)` receives the `(default-of
-   B)` err arg as `int64_t` for the `const char *` field -- the default/err arg is
-   not coerced to the field's concrete C type in the by-value monomorph ctor (a
-   2-type-param ADT whose fields have different C types).  `Option` (single param,
-   homogeneous-carrier err sentinel) does not hit this; `Result` does.  Also
-   `fmap`/`bind` on `Result` leave the result type under-determined
-   (`(type-app ? ?)`) -- but that reproduces WITHOUT the flag too, so it is a
-   pre-existing baseline limitation, not a lowering regression.  Separately, the
-   hand-written runtime layout (`tur_option_t`, `tur_result_box_t`,
-   `tur_is_some`/`tur_opt_value`, the `MonadError` inline-C bodies) still assumes
-   the struct/carrier representation and must be reconciled or retired.
+2. **`Result` construction codegen (mixed-type fields). DONE (2026-06-25) at
+   baseline parity.** `(ok 42)`, `(err "boom")`, `ok?`, `ok-val`, `err-val` all
+   compile and run under the flag (verified, matching the no-flag baseline).  Two
+   fixes: (i) a `(default-of T)` arg to a by-value monomorph ctor with
+   heterogeneous fields now emits the default in the FIELD's concrete C type
+   (`(const char *){0}` for the `const char *` err slot of
+   `ctor_Result__int__cstr`), recovered by substituting the active spec's concrete
+   app args for the ctor field's tyvar; (ii) the by-value-app -> carrier bridge gate
+   widened to `pk==TY_INT` and non-concrete `TY_APP` params, so a free generic fn
+   whose `(Result A B)` param collapses to the int64 carrier (`ok?`) gets its
+   by-value monomorph arg boxed.  Suite stays 1840/0.
+   - *Not lowering bugs (pre-existing baseline limitations, reproduce WITHOUT the
+     flag):* `fmap`/`bind`/`catch-error` on `Result` leave the result type
+     under-determined (`(type-app ? ?)` / collapsed to `int`), so a following
+     `ok-val` can't type it.  Out of scope for the lowering.
+   - *Cosmetic:* `err-val` on a lowered Result emits a `-Wint-conversion` *warning*
+     (`(int64_t)(r).as.Result._2` on the `const char *` field) -- compiles and runs
+     correctly; the field-read cast uses the accessor's collapsed `int64` result
+     type.  Tighten when convenient.
+   - *Still open for FULL graduation:* the hand-written runtime layout
+     (`tur_option_t`, `tur_result_box_t`, `tur_is_some`/`tur_opt_value`, the
+     `MonadError` inline-C bodies) still assumes the struct/carrier representation;
+     it coexists fine today (parity) but should be reconciled or retired when the
+     gate comes off.
 3. **`:heap` typed-pointer ADT ABI.** Still NOT STARTED (see
    [parametric-adt-byvalue-plan.md](parametric-adt-byvalue-plan.md) step 5) --
    `Vec`/`Map`/`Set`/`MutableMap` are `:heap` parametric structs and have no
@@ -409,10 +420,16 @@ runtime *usage* seam, below.
 
 `bash tests/run.sh` is **1840 passed, 0 failed** with the gate widened to
 parametric (non-`:heap`) structs; the flag-on `conv-defstruct-*` canaries pass.
-The flag is still opt-in.  Consuming a lowered parametric type through a
-typeclass method now works end-to-end (`(eq? (some 5) (some 5))` compiles and
-runs; seam 1 consuming-direction DONE).  The suite does not yet exercise this, so
-it neither regressed nor newly covers it.  Graduation order from here: seam 1b
-(by-value HKT construction in instance bodies, e.g. `fmap`) -> seam 2
-(`Option`/`Result` construction codegen) -> seam 3 (`:heap` ADT ABI) -> seam 4
-(validate + remove gate + retire `StructDef` + regen).
+The flag is still opt-in.  **`Option` and `Result` -- the two hardest
+dedicated-codegen stdlib types -- now work under the flag at parity with the
+no-flag baseline:** construction (`some`/`none`/`ok`/`err`), accessors
+(`ok?`/`ok-val`/`err-val`/`unwrap-or`), and HKT instances (`fmap`/`bind`/`alt-or`
+on Option) all compile and run with correct results.  (`fmap`/`bind` on `Result`
+remain blocked by a *baseline* type-recovery limitation, not the lowering.)
+
+Seams 1, 1b, 2 are DONE.  Graduation order from here: **seam 3** (`:heap` ADT ABI
+-- `Vec`/`Map`/`Set`/`MutableMap`, the last representational gap) -> **seam 4**
+(validate across every parametric stdlib type, then delete the gate +
+`g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]` row, retire the `StructDef`
+surface path, regen snapshots).  The suite does not yet exercise the by-value HKT
+usage the flag now supports, so adding flag-on fixtures for it is part of seam 4.
