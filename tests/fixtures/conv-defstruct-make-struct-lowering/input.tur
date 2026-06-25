@@ -1,0 +1,13 @@
+;; CONV-S1 (slice 8, pre-graduation): an existing (make-struct Name args...)
+;; callsite keeps working after Name lowers to a single-variant record defadt.
+;; make-struct on a lowered struct is the auto-bound constructor call
+;; (Name args...) -- positional or keyword -- which the record-ADT path already
+;; elaborates.  Behaviour is identical flag off (struct path) and on (ADT path).
+(defstruct P [a : int b : int])
+
+(defn main [] : int
+  (let [p1 (make-struct P 40 2)          ; positional
+        p2 (make-struct P :b 100 :a 42)] ; keyword, reordered
+    (println (+ (.a p1) (.b p1)))   ; 42
+    (println (+ (.a p2) (.b p2)))   ; 142
+    0))

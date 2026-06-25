@@ -3088,6 +3088,23 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_free(&c);
                         free(tmp);
                     }
+                    /* CONV-S1 (slice 8): a :heap struct argument is a typed
+                     * pointer (`Big *`), but a constructor stores it in the int64
+                     * carrier field slot.  Cast the pointer to int64 explicitly
+                     * -- the same coercion the fn-field path does above, and the
+                     * one a struct literal applies to its :heap field -- otherwise
+                     * clang emits a -Wint-conversion warning at the ctor call.
+                     * A :heap struct is never an inline by-value field, so this
+                     * never collides with the slice-4 inline path. */
+                    if (!suffix && !field_inline && arg &&
+                        type_is_heap_struct(emit_resolve_type(ctx, arg->type))) {
+                        Buf c; buf_init(&c);
+                        buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
+                        buf_putc(&c, '\0');
+                        free(arg_strs[i]);
+                        arg_strs[i] = strdup(c.data);
+                        buf_free(&c);
+                    }
                 }
                 char *_mc = mangle_field_name(fn_binding->name->name);
                 Buf out; buf_init(&out);

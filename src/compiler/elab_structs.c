@@ -707,24 +707,24 @@ static bool defstruct_fields_all_primitive(Elab *e, const Form *fields_vec) {
                  * decision, so the pre-pass and full elaboration always agree. */
                 break;
             case TY_UNKNOWN: {
-                /* slice 4: a bare user type that resolves to an ADT is lowerable
-                 * -- a by-value ADT field is inlined, a carrier ADT field is
-                 * boxed, and both are handled by the record-ADT codegen.  ADT-ness
-                 * is stable between the top-level type pre-pass (which sees an
-                 * empty stub) and full elaboration, so the lowering decision the
-                 * two passes reach always agrees.  A struct-typed field is NOT
-                 * accepted: a struct's by-value-ness is not yet known at pre-pass
-                 * time (the stub looks trivially copyable), so admitting it could
-                 * make the two passes disagree -- it keeps the struct path.  Note
-                 * that with the flag on a leaf-scalar nested struct has itself
-                 * lowered to an ADT already, so the common nested case still
-                 * lowers; only a genuinely struct-only (non-lowering) field type
-                 * holds the outer on the struct path. */
-                const Symbol *ts = symtab_intern(e->st,
-                    strslice(type_tok->as.sym->name, type_tok->as.sym->len));
-                Binding *tb = scope_lookup_type_def(e->scope, ts);
-                if (!tb || tb->type.kind != TY_ADT) return false;
-                break;  /* ADT field -- ok */
+                /* slice 4 + slice 8: a bare *user-type* field -- an ADT, a
+                 * struct, an opaque newtype, or a (forward-declared, not-yet-
+                 * resolved) sibling type -- is lowerable.  The record-ADT codegen
+                 * decides the field's representation at *codegen* time from the
+                 * fully resolved type: a by-value aggregate (a non-heap,
+                 * non-opaque, drop-glue-free struct or a by-value ADT product) is
+                 * stored INLINE by value (slice 4), and any other user type (a
+                 * :heap / opaque / recursive carrier struct or a carrier ADT) is
+                 * stored as the int64 carrier.  Whether the *outer* struct lowers
+                 * therefore must NOT depend on the field type's by-value-ness:
+                 * this branch makes the decision *syntactically* (any bare,
+                 * non-primitive, non-pointer symbol is a user-type reference and
+                 * is admitted), so the top-level type pre-pass and full
+                 * elaboration always agree even when the field references a
+                 * sibling declared later in the file (whose stub is unresolved at
+                 * pre-pass time).  Parametric structs are excluded by the caller,
+                 * so a bare symbol here is never an in-scope type parameter. */
+                break;  /* user-type field -- ok */
             }
             default:
                 return false;  /* rc / ref / ptr / fn / etc. -- not yet */
@@ -1597,25 +1597,40 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
         if (tb && (tb->type.kind == TY_STRUCT || tb->type.kind == TY_ADT)) {
             fkind = TY_INT;
             finner = TY_UNKNOWN;
-            /* CONV-S1 (slice 4): a bare field whose type is itself a by-value
-             * aggregate (a non-heap/non-opaque drop-glue-free struct, or a
-             * by-value ADT product) is stored INLINE by value in the owning
-             * by-value product -- the way a struct inlines a nested struct field.
-             * Record its full type so codegen lays the field out as the inline
-             * aggregate (`tur_adt_<Inner>` / struct C name) instead of boxing it
-             * behind the int64 carrier.  A carrier inner (multi-variant ADT,
-             * parametric, :heap) keeps full_type NULL and the boxed int64 path. */
-            bool inline_byval = false;
+            /* CONV-S1 (slice 4 + slice 8): record the bare field's nominal
+             * full_type so a field read resolves to the declared user type.  We
+             * record it only for inner types whose by-value-vs-carrier
+             * representation the record-ADT codegen handles end-to-end:
+             *   - slice 4: a by-value aggregate inner (a non-heap/non-opaque/
+             *     drop-glue-free struct, or a by-value ADT product) is stored
+             *     INLINE by value in the owning by-value product, the way a struct
+             *     inlines a nested struct field; `adt_field_is_inline_byval` reads
+             *     full_type to spell the inline aggregate C type.
+             *   - slice 8: a :heap struct inner is an int64 typed-pointer carrier
+             *     -- `type_is_heap_struct` guards every byval<->carrier bridge, so
+             *     the field carries its struct type for read-back (matching the
+             *     struct path's struct_field_user_type_storage) without tripping a
+             *     spurious concrete->carrier spill.
+             * A carrier ADT inner (multi-variant / parametric / drop-glue) is
+             * deliberately left full_type NULL: it stays an opaque int64 carrier,
+             * exactly as the *struct* path erases an ADT field's type (a defstruct
+             * with an ADT field cannot read it back typed either, so this is
+             * parity).  Recording a carrier-ADT full_type would misclassify the
+             * field read as a concrete by-value aggregate and emit a spurious
+             * concrete->carrier address-of bridge (a silent miscompile). */
+            bool record_full = false;
             if (tb->type.kind == TY_STRUCT) {
                 StructDef *sd = tb->type.as.struct_.def;
-                inline_byval = sd && !sd->is_opaque && !sd->is_heap &&
-                               !sd->needs_drop_glue;
+                /* by-value struct (inlined, slice 4) or :heap struct
+                 * (typed-pointer carrier, heap-bridge-guarded, slice 8). */
+                record_full = sd && !sd->is_opaque &&
+                              (sd->is_heap || !sd->needs_drop_glue);
             } else {
                 AdtDef *ad = tb->type.as.adt_.def;
-                inline_byval = ad && !ad->needs_drop_glue &&
-                               adt_is_byvalue_product(ad);
+                record_full = ad && !ad->needs_drop_glue &&
+                              adt_is_byvalue_product(ad);
             }
-            if (inline_byval) {
+            if (record_full) {
                 Type *ft = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *ft = tb->type;
                 ctor->fields[fi].full_type = ft;
@@ -4175,6 +4190,25 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
      * scope_lookup, so a same-named auto-bound constructor (TY_FN, in the value
      * namespace) does not shadow the struct type binding we need here. */
     Binding *struct_binding = scope_lookup_type_def(e->scope, name_form->as.sym);
+    /* CONV-S1 (defstruct-as-defadt): when a `defstruct` has lowered to a
+     * single-variant record `defadt`, its name resolves to a TY_ADT, not a
+     * TY_STRUCT.  An existing `(make-struct Name args...)` callsite must keep
+     * working: it is exactly the auto-bound constructor call `(Name args...)`
+     * (positional or keyword), which the record-ADT path already elaborates
+     * (CONV-S0 positional, CONV-S4 keyword).  Rewrite to that constructor form
+     * and elaborate it, so the lowering is transparent to make-struct. */
+    if (struct_binding && struct_binding->type.kind == TY_ADT) {
+        AdtDef *ad = struct_binding->type.as.adt_.def;
+        if (ad && ad->n_ctors == 1 && ad->ctors[0] && ad->ctors[0]->is_record) {
+            uint32_t nitems = call->as.list.len - 1;  /* drop the `make-struct` head */
+            Form **items = (Form **)arena_alloc(e->arena, nitems * sizeof(Form *));
+            items[0] = name_form;                     /* constructor name */
+            for (uint32_t i = 2; i < call->as.list.len; i++)
+                items[i - 1] = call->as.list.items[i];
+            Form *ctor_call = form_list(e->arena, call->span, items, nitems);
+            return elab_call(e, ctor_call);
+        }
+    }
     if (!struct_binding || struct_binding->type.kind != TY_STRUCT) {
         diag_emit(DIAG_ERROR, name_form->span,
                   "make-struct: '%s' is not a defined struct type",
