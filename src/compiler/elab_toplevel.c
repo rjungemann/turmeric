@@ -532,8 +532,21 @@ Expr *elab_form(Elab *e, Form *f) {
                 return NULL;
             }
             Form *quoted = f->as.list.items[0];
-            /* Quote just returns the inner form as a literal */
-            /* For now, support quoting literals and symbols */
+            /* Quoting a bare symbol yields a first-class :Sym literal --
+             * the same lowering the F_KEYWORD branch below uses for
+             * `:foo`. This lets DSL helpers in defns construct AST
+             * nodes without TUR-E0003 chasing the inner symbol against
+             * scope. See
+             * docs/reported/defgodot-script-macro-vec-quote-semantics.md. */
+            if (quoted->tag == F_SYM) {
+                Expr *out = expr_new(e->arena, EX_SYM_LIT, TYPE_SYM, f->span);
+                out->as.sym_lit_.sym = quoted->as.sym;
+                return out;
+            }
+            /* Non-symbol quoted forms (literals, lists): fall back to
+             * the legacy "elaborate as expression" behaviour. Runtime
+             * list-of-values construction for `(quote (a b c))` is a
+             * follow-up. */
             return elab_form(e, quoted);
         }
         /* Phase 6: quasiquote forms - expand them */

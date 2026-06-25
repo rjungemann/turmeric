@@ -1816,7 +1816,19 @@ Expr *elab_call(Elab *e, Form *call) {
     }
     /* Phase 6 */
     if (name == e->sym_defmacro) return elab_defmacro(e, call);
-    if (name == e->sym_quote)    return elab_form(e, call->as.list.items[1]); /* (quote x) -> x */
+    if (name == e->sym_quote) {
+        /* (quote x) -- mirrors F_QUOTE in elab_toplevel.c. Quoting a
+         * bare symbol yields a :Sym literal so DSL helpers in defns
+         * can construct AST nodes without the inner symbol being
+         * TUR-E0003-resolved against the scope. */
+        Form *quoted = call->as.list.items[1];
+        if (quoted->tag == F_SYM) {
+            Expr *out = expr_new(e->arena, EX_SYM_LIT, TYPE_SYM, call->span);
+            out->as.sym_lit_.sym = quoted->as.sym;
+            return out;
+        }
+        return elab_form(e, quoted);
+    }
     if (name == e->sym_gensym)   return elab_gensym(e, call);
     if (name == e->sym_thread)    return elab_thread(e, call);
     if (name == e->sym_thread_last) return elab_thread_last(e, call);

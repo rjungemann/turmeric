@@ -28,11 +28,19 @@ Outstanding v1-scope work:
 1. **Richer `defgodot-script` macro** -- walk `:exports` /
    `:signals` vec literals at macro-expansion time so the surface
    collapses to the form described below in "Script-side surface."
-   Blocked on four Turmeric language-level gaps tracked in
-   [docs/reported/defgodot-script-macro-vec-quote-semantics.md](../../reported/defgodot-script-macro-vec-quote-semantics.md)
-   (`quote` does not suppress elaboration; macro args are elaborated
-   before the macro sees them; nested vec literals collapse to runtime
-   homogeneous Vec values). The MV shell ships in the meantime.
+   The original investigation closed on 2026-06-25 with one fix
+   landed in `tur` (`(quote sym)` now produces a first-class `:Sym`
+   literal -- see
+   [the archived report](../../archive/defgodot-script-macro-vec-quote-semantics.md))
+   and three remaining language gaps split out into focused reports:
+   - [macro-args-elaborated-before-expansion.md](../../reported/macro-args-elaborated-before-expansion.md)
+   - [list-macro-quote-vs-syntactic-symbol.md](../../reported/list-macro-quote-vs-syntactic-symbol.md)
+   - [nested-vec-literals-collapse-to-runtime-vec.md](../../reported/nested-vec-literals-collapse-to-runtime-vec.md)
+
+   Each is independent; closing any one is useful, closing all three
+   would unlock the plan's preferred `(speed : float 200.0)`-shape
+   surface. The MV `(defgodot-script Name body...)` shell ships in
+   the meantime.
 
 **Spun out into their own plans:**
 
