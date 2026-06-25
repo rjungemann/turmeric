@@ -1,0 +1,33 @@
+;; Pins the working behavior for nested-vec-literals-collapse-to-runtime-vec.md:
+;; an inner [...] inside an outer [[...] [...]] arrives at the macro as AST
+;; -- first/rest navigate through it, and heterogeneous element types are
+;; fine as long as the macro consumes them by AST (not as a Vec value).
+;;
+;; Original report claimed this surface was unusable; both bug #1 (mixed-type
+;; inner vec rejected at the call site even when the macro discards its arg)
+;; and bug #2 (inner vec opaque to first/rest) do not reproduce in current
+;; main. Only the genuine homogeneity rule still bites if a macro emits an
+;; inner [...] back as a vec-of value -- which is by design.
+
+;; (1) Mixed-type inner vec literal: macro discards its arg. Must compile.
+(defmacro discard [x] 0)
+(println (discard [["speed" "float" 200.0]
+                   ["health" "int"   100]]))
+
+;; (2) Homogeneous inner vec: first/rest navigates nested AST.
+(defmacro pick-d [items]
+  (first (first (rest items))))
+(println (pick-d [["a" "b" "c"]
+                  ["d" "e" "f"]]))
+
+;; (3) Heterogeneous inner vec: macro consumes elements by type at expansion
+;;     time and emits each as its real type. The [...] never becomes a value.
+(defmacro emit-row [exports]
+  (let [item (first exports)
+        name (first item)
+        kind (first (rest item))
+        dflt (first (rest (rest item)))]
+    `(do (println ~name)
+         (println ~kind)
+         ~dflt)))
+(println (emit-row [["speed" "float" 200.0]]))

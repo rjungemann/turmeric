@@ -1,6 +1,6 @@
 # Nested VEC Literals Inside Macro Args Collapse To Runtime Homogeneous `Vec` Values
 
-> **Status:** Reported, not yet investigated.
+> **Status:** Resolved 2026-06-25 -- not reproducible in current main.
 > **Severity:** Medium -- breaks the most ergonomic DSL surface shape
 >   (vec literals of vec literals as a declaration list). Any DSL
 >   author wanting to consume nested `[...]` shapes at expansion time
@@ -8,6 +8,28 @@
 > **Discovered:** 2026-06-25 (spun out from
 >   [defgodot-script-macro-vec-quote-semantics.md](./defgodot-script-macro-vec-quote-semantics.md)
 >   gap #4).
+> **Resolution:** Both claimed behaviours pass in current main (likely
+>   landed alongside `macro-args-elaborated-before-expansion` and
+>   `list-macro-quote-vs-syntactic-symbol`):
+>
+>   1. `(defmacro outer [exports] nil)` paired with
+>      `(outer [["speed" "float" 200.0]])` builds clean -- the
+>      heterogeneous inner vec literal is *not* run through
+>      `tur-vec-homog__` at the call site. The homog check fires only
+>      when an inner `[...]` actually reaches value position.
+>   2. `(first (first (rest exports)))` and the deeper navigation
+>      patterns from the report return the expected AST elements,
+>      including string and float leaves out of a mixed inner vec.
+>
+>   What still trips `tur-vec-homog__` is a macro that returns a
+>   heterogeneous inner vec literal *as a value* (e.g.
+>   `(defmacro outer [exports] exports)` over a mixed `[...]`) -- that
+>   is the language's intentional homogeneity rule for `vec-of`, not
+>   the bug filed here. Heterogeneous fixed-arity payloads still need
+>   `tupleN`, the proposed `#row{...}` row type, or list/cons surface.
+>
+>   Pinned by `tests/fixtures/macro-arg-nested-vec-literal-ast-passthrough/`.
+>   Archived to `docs/archive/`.
 
 ---
 
