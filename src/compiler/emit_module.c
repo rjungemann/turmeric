@@ -7923,6 +7923,8 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.current_scan_fn = NULL;
     ctx.fn_name_override = NULL;
     ctx.fn_name_override_external = false;  /* J3: must match fn_name_override */
+    ctx.dbg_last_line = 0;   /* Debugger Phase 4: no #line emitted yet */
+    ctx.dbg_last_file_id = 0;
     ctx.n_pbp_params = 0;    /* Phase D: no pbp params at top level */
     /* ASan/LSan plan (Option C): arena for transient ABI-spec Type scratch,
      * freed in bulk at the end of this function. */
@@ -9346,6 +9348,8 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     ctx.current_scan_fn = NULL;
     ctx.fn_name_override = NULL;
     ctx.fn_name_override_external = false;  /* J3 */
+    ctx.dbg_last_line = 0;   /* Debugger Phase 4: no #line emitted yet */
+    ctx.dbg_last_file_id = 0;
     ctx.n_pbp_params = 0;    /* Phase D: no pbp params at top level */
     /* Phase 4 v1: frame/defer tracking (not initialized above; zero them here). */
     ctx.frame_var = NULL;

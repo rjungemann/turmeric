@@ -27,6 +27,10 @@ bool g_lint_panic = false;
  * makes contract-enabled? fold to false. */
 bool g_no_contracts = false;
 
+/* Debugger Phase 4: --debug emits `#line` directives into the generated C and
+ * builds single-file targets with `-g -O0`. */
+bool g_emit_debug_lines = false;
+
 /* Phase B5: --backtrack-depth N global flag (0 = unlimited) */
 int64_t g_backtrack_depth = 0;
 

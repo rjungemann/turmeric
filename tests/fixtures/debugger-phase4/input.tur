@@ -1,0 +1,28 @@
+;; debugger Phase 4 acceptance fixture -- native source maps for emit-C.
+;;
+;; A deliberate crash (abort) is reached through a small call chain
+;; (boom <- middle <- main) so a native backtrace shows turmeric-source
+;; frames -- this file's name + line -- and turmeric symbol names, rather
+;; than the generated C carrier.  Built with `tur --debug build`, which
+;; emits `#line N "input.tur"` directives into the generated C and compiles
+;; with `-g -Og`.  Driven by tests/run-phase4-gdb.sh.
+;;
+;; The crash lives in an inline-C body so it is reliable across environments
+;; (a null dereference does not fault where page 0 is mapped); abort() always
+;; raises SIGABRT.
+;;
+;; See docs/upcoming/debugger-plan.md (Phase 4) and
+;; docs/upcoming/debugger-native-sourcemaps-phase4.md.
+
+(defn boom [n : int] : int
+  ```c
+  if (n > 0) abort();
+  return n;
+  ```)
+
+(defn middle [x : int] : int
+  (boom (+ x 1)))
+
+(defn main [] : int
+  (middle 41)
+  0)
