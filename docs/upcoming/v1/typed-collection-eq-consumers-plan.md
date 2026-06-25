@@ -120,6 +120,87 @@ helper rewrite, can land first.
    consumers present, the producer-typing slice now removes real
    crossings instead of being pure regen churn.
 
+## Landing status (Phase TCE -- 2026-06-25)
+
+Executed against the current tree; the empirical state diverges from the
+"for review" framing above, so this section records what actually holds.
+
+1. **Clone-name / signature divergence (step 1): already resolved.** The
+   `emit_abi_clone_name` -> `type_c_name` TY_APP double-spec the archived
+   probe described (`Cons__int_Cons__int` *and* a spurious
+   `int64_t_int64_t`) no longer reproduces. Both the factored-helper form
+   and the archive's exact inline-projection form
+   (`(let [c1 (:: t1 (Cons A))] ...)` with `:int` params) emit clean code
+   with no spurious int64 spec. The spec-promotion path was reworked
+   between the archive note and now (see the realloc/`current_abi_specialization`
+   and `match_bindings` handling in `emit_abi_intern_spec`). No compiler
+   change was needed.
+
+2. **`Eq[Cons]` Path A (step 2): LANDED.** `cons-eq-go [A] [(Eq A)]
+   [c1 : (Cons A) c2 : (Cons A)]` (stdlib/list.tur) projects `.head`/`.tail`
+   by value and recurses via `(:: tail (Cons A))`, mirroring `tlength`. The
+   `Eq[Cons]` instance guards nil then forwards. This emits per-element
+   specs -- `cons_eq_go__spec__bool_Cons__int___Cons__int__(Cons__int *, ...)`
+   dispatching `__inst_Eq_eq_qu_int`, and a parallel `Cons__float` spec
+   dispatching `__inst_Eq_eq_qu_float` -- with TCO'd goto loops and typed
+   `(Cons__T *)(intptr_t)` consumers at the dispatch site. Verified int and
+   float (`1.5`/`2.25` vs `7.1`) element dispatch is now *correct*; the prior
+   `:int`-carrier sketch silently used integer equality for every element
+   type (a latent bug for `cstr`/struct/NaN/-0.0 elements). Compiled-suite +
+   `--interpret` parity both green.
+
+3. **Iteration primitive (step 3): already chosen and shipped.** "Phase
+   TCO-Eq-MapSet" (predating this doc) settled the load-bearing call in
+   favour of a **fold-with-typed-continuation cursor**, not HAMT-node ADT
+   recursion: `hamt/iter-alloc` + `hamt/iter-advance!` /
+   `hamt/iter-cur-hash` / `hamt/iter-cur-key`, threaded by `set-eq-loop`
+   (stdlib/set.tur) and `map-eq-loop` (stdlib/map.tur). The driver pattern
+   (`*-eq-driver` allocates the iter box, runs the TCO'd loop, frees) is the
+   reusable shape for future `Show[Map]` / `Hash[Map]`.
+
+4-6. **`set-eq-full` / `map-eq?` / `mutmap-eq?` rewrites: already landed**
+   under the same TCO-Eq-MapSet phase. All three instance bodies are pure
+   Turmeric over the cursor; the inline-C `set-eq?` / `map-eq?` /
+   `mutmap-eq-storage?` helpers stay only for direct / abstract-K-V callers
+   (the same compromise `vec-eq?` made).
+
+7. **Typed consumers (step 7): Cons / Set / MutableMap YES, Map NO.**
+   - `Eq[Cons]` -> `(Cons__int *)(intptr_t)` (this phase).
+   - `Eq[Set]` -> `(Set__int *)(intptr_t)` (single type param; promotes on
+     a by-value ascribed receiver).
+   - `Eq[MutableMap]` -> `(MutableMap__int__int *)(intptr_t)` in `mutmap-eq`
+     (its producer `mutmap-new` already returns the typed spec, so the
+     receiver local is concrete at the `.eq?` site).
+   - `Eq[Map]` -> **still the int64 carrier `__inst_Eq_eq_qu_Map`, and this
+     is structural, not a dispatch-promotion gap.** The blocker is NOT the
+     `#364` multi-param resolution the sequencing above guessed. `Map` is
+     declared `(defstruct Map :heap [K V] (carrier :int))` -- a parametric
+     struct with a *single `:int` field*, which `type_is_transparent_int_newtype`
+     (src/compiler/types.c) recognises as a **transparent int newtype**.
+     `type_c_name` therefore lowers `(Map K V)` to `int64_t` in *every* C
+     signature, pure-Turmeric and inline-C alike (map.tur's own header says
+     so). There is no `Map__int__int` struct to point at, so a
+     `(Map__* *)(intptr_t)` consumer cannot exist regardless of constraint
+     count or ascription -- the "by-value receiver" is literally `int64_t`,
+     and the instance method stays the carrier `__inst_Eq_eq_qu_Map`.
+     Contrast the three that *do* get typed consumers: `Set`
+     (`(hamt :ptr<void>)`), `MutableMap` (`(storage :ptr<void>)`), and `Cons`
+     (two fields) are all non-transparent, so they have real `Set__A` /
+     `MutableMap__K__V` / `Cons__A` structs. Typed Map consumers require
+     changing Map's *representation* (field `:int` -> `:ptr<void>`, matching
+     MutableMap) -- a core-representation change that ripples through every
+     `(Map K V)` signature + snapshot and is squarely producer-slice-scale
+     work, not a consumer rewrite. See
+     `docs/reported/eq-map-typed-consumer-blocked-on-transparent-newtype.md`.
+
+8. **Unblock producer-slice (step 8): partially.** Cons / Set / MutableMap
+   now present typed consumers, so the producer-slice plan's typing of those
+   producers removes real crossings. The **Map** half stays blocked, but on
+   the transparent-int-newtype representation (item 7), not `#364`; the
+   producer-slice plan should fold the `(carrier :int)` -> `(hamt :ptr<void>)`
+   representation change into its Map slice (mirroring how it typed
+   MutableMap's producer) before any Map consumer can be typed.
+
 ## Validation harness
 
 - `bash tests/run.sh` -- gate on zero new FAIL. **Coordinate the regen

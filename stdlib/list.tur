@@ -184,14 +184,53 @@
       (if (cmp-fn (list-head l1) (list-head l2))
         (list-eq? (list-tail l1) (list-tail l2) cmp-fn)
         false))))
+;;; cons-eq-go -- by-value structural equality walk over two non-nil (Cons A) cells.
+;;;
+;;; Path A helper for Eq [Cons]: receives the two head cells by value, compares
+;;; heads through `(Eq A)`, then recurses on the tails -- recovering a typed
+;;; `(Cons A)` view of each `:int` tail link via ascription, mirroring the
+;;; `tlength` walk.  No inline-C, no int64-carrier comparator: the per-instance
+;;; spec emits a clean by-value `bool (...)(Cons__A *, Cons__A *)` body.  Callers
+;;; must guard the nil (0) case first -- this helper dereferences `.head`/`.tail`
+;;; and assumes both cells are present.
+;;;
+;;; Parameters:
+;;;   c1 -- first head cell, a non-nil (Cons A)
+;;;   c2 -- second head cell, a non-nil (Cons A)
+;;;
+;;; Returns:
+;;;   true when both chains have equal heads in the same order and equal length.
+;;;
+;;; Example:
+;;;   (cons-eq-go (:: (tcons 1 (tnil)) (Cons int))
+;;;               (:: (tcons 1 (tnil)) (Cons int)))  ; => true
+;;;
+;;; Since: Phase TCE (typed-collection-eq-consumers)
+(defn cons-eq-go [A] [(Eq A)] [c1 : (Cons A) c2 : (Cons A)] : bool
+  (if (eq? (.head c1) (.head c2))
+    (let [t1 (.tail c1)
+          t2 (.tail c2)]
+      (if (= t1 0)
+        (= t2 0)
+        (if (= t2 0)
+          false
+          (cons-eq-go (:: t1 (Cons A)) (:: t2 (Cons A))))))
+    false))
 ;;; Eq [Cons] -- element-wise equality using the element type's Eq instance.
 ;; TC1-9: Phase PTC4 -- constrained Eq instance for List[A] (Cons cells).
-;; Note: element comparison uses integer equality; correct for all primitive A.
+;; Phase TCE: Path A rewrite -- the instance body projects head/tail by value
+;; through cons-eq-go instead of the int64-carrier list-eq? inline-C helper.
 
 (definstance Eq [Cons]
   [(Eq A)]
   (eq? [x y]
-    (list-eq? (:: x :int) (:: y :int) (fn [a b] (eq? (:: a A) (:: b A))))))
+    (let [t1 (:: x :int)
+          t2 (:: y :int)]
+      (if (= t1 0)
+        (= t2 0)
+        (if (= t2 0)
+          false
+          (cons-eq-go (:: t1 (Cons A)) (:: t2 (Cons A))))))))
 ;;; __cons-fmap -- apply a typed thunk to every head element of a Cons list.
 ;;;
 ;;; Walks the cons chain, allocates a new cell for each node, and writes
