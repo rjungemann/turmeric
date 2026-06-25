@@ -13,11 +13,19 @@ description: Concrete site-by-site findings from a spiked attempt at CONV-S1 (ma
 - **B3 (flip gate for leaf products + field-store crossing)** -- **LANDED, gate
   LIVE** for leaf products (no aggregate-bearing / recursive fields). Suite
   green: `bash tests/run.sh` 1813 / 0.
-- **B4 (reconcile with M7 by-value HKT)** -- **DELIBERATELY DEFERRED**, not
-  landed. Spike shows it needs an **M7-owned ABI decision** (fat-closure ABI
-  carrying by-value-ADT params as the int64 carrier uniformly), not a
-  localized bridge. **NOT a prerequisite for CONV-S1 proper** -- real
-  `defstruct`s never have functor-applied-to-self fields.
+- **B4 (reconcile with M7 by-value HKT)** -- **NOT LANDED; reframed as
+  out-of-scope/moot (2026-06-25).** M7's by-value HKT is now **graduated --
+  default ON** (`g_m7_hkt_enabled = true`), so the old "sequence with M7
+  graduation" framing is satisfied on the timeline -- **but a fresh post-M7 spike
+  reproduces the identical 9 `cc` errors**: M7 graduating did NOT deliver, and
+  does not unblock, the fat-closure-ABI change B4 needs (carry a by-value-ADT
+  closure param as the int64 carrier uniformly). That change was never part of
+  M7's scope and remains unbuilt. **NOT a prerequisite for CONV-S1 proper** --
+  real `defstruct`s never have functor-applied-to-self fields, so the
+  `defstruct -> defadt` path never reaches this crossing. The B3 leaf-and-pointer
+  gate is the permanent boundary; build the fat-closure ABI only if some future
+  feature actually demands recursive-HKT-carrier by-value. See the B4 section
+  below for the re-spike details.
 - **CONV-S1 proper (lower `defstruct` to `defadt`)** -- **REACHABLE** on the
   B3 leaf gate once it is extended to pointer/`rc`/`ref` fields. Tracked in
   [`defstruct-as-defadt-plan.md`](defstruct-as-defadt-plan.md) (slice 5 is
@@ -289,52 +297,27 @@ be made consistent.
    untouched and stays B4's concern.
 4. **B4 -- reconcile with M7 by-value HKT.** Bring the recursive/HKT carriers
    (`Re`, `Expr`) onto the unified by-value path without double-handling.
-   **INVESTIGATED; NOT LANDED -- deliberately deferred (suite stays green on the
-   B3 leaf gate).** Widening the gate to the full predicate (`adt_is_flat_product
-   && n_type_params == 0`, i.e. admitting the recursive non-parametric `Re`/`Expr`)
-   was spiked. With B3's crossings in place it produces **exactly one crossing**,
-   9 identical `cc` errors, all of the form:
+   **NOT LANDED; spun out to its own plan --
+   [`v2/b4-fat-closure-byvalue-adt-abi-plan.md`](v2/b4-fat-closure-byvalue-adt-abi-plan.md).**
+   It needs a dedicated **fat-closure ABI change** (carry a by-value-ADT closure
+   param as the int64 carrier uniformly: reinterpret when <= 8 bytes, heap-box
+   with an owner when wider; reconstruct at thunk entry; force every call-site
+   cast to `(void*, int64_t)`). A re-spike on 2026-06-25 confirmed this is **not**
+   delivered by M7's by-value-HKT graduation (default ON since 2026-06-19): the
+   gate widening still produces the identical 9 `cc` errors across `Re`/`Expr`,
+   because the by-value thunk takes `tur_adt_Re` while the carrier `fmap` spec
+   calls the same `g.fn` with a raw `int64`. Even `Re` -- whose `tur_adt_Re` is
+   just an 8-byte carrier wrapper, so its box/unbox is a reinterpret -- cannot be
+   moved over on its own; the closure-ABI disagreement is the blocker, not the
+   box/unbox width, so there is no sensible partial that lands `Re` without the
+   full ABI change. **Out-of-scope/moot for CONV-S1:** nothing requires `Re`/`Expr`
+   by-value (they are correct on the carrier path; M7 already gives them by-value
+   monomorphisations where dispatch needs it), and a real `defstruct` cannot
+   express a functor-applied-to-self field, so `defstruct -> defadt` never reaches
+   this crossing. See the spun-out plan for the full reproduction, decoded C, the
+   segfault hazard of a naive local bridge, and slicing.
 
-   ```c
-   ctor_AltF__int(((int64_t (*)(void*, tur_adt_Re))g.fn)(g.env, x_1263), ...)
-   //                              ^^^^^^^^^^ expects by-value Re; x_1263 is int64
-   ```
-
-   A user closure `g : (fn [Re] B)` is invoked inside a generic `fmap` spec
-   through the fat-closure ABI; the closure's fat function-pointer cast now spells
-   the param `tur_adt_Re` (by-value), but the carrier `fmap` spec hands it the
-   int64 the parametric `ReF` field stores. This is the closure/HKT crossing
-   (Crossing 3) and it lands squarely in the **M7 by-value-HKT machinery**, which
-   the emitted C shows is genuinely multi-representation:
-   - `ctor_AltF` (carrier int64 fields), `ctor_AltF__Re(tur_adt_Re, tur_adt_Re)`
-     (a by-value monomorphisation), plus `__int` / `__bool` / `__float` specs;
-   - a `tur_adt_ReF__Re` typedef that stores `Re` **inline by value**, alongside
-     the carrier `ReF` whose `a` field is int64;
-   - multiple `fmap` specs that disagree on the field representation -- one casts
-     the closure to `(void*, int64_t)` (fine), another to `(void*, tur_adt_Re)`
-     (the break).
-
-   **Why no localized bridge was forced.** The "obvious" fix -- unbox `x_1263`
-   (`*(tur_adt_Re *)(intptr_t)x_1263`) at the fat-closure application
-   (`emit_expr.c` phase-F-concrete path, ~2402) -- is only correct if that int64
-   is a heap-boxed `Re`, which depends on *which* `ReF` spec feeds the value; the
-   `ReF__Re` path stores `Re` inline (no box) while the carrier path boxes. Guessing
-   wrong dereferences a non-pointer. The codebase already records a prior
-   wild-pointer deref at this very application site from exactly this class of
-   carrier->concrete assumption (`emit_expr.c:2397-2400`). Forcing a bridge here
-   would trade a `cc` error for a latent segfault.
-
-   **Recommended path (concrete hypothesis for the next session).** B4 is not a
-   localized bridge; it requires M7 to commit to a *single* representation for a
-   parametric-ADT field instantiated at a by-value ADT (`a = Re` inside `ReF`).
-   The most promising direction: make the **fat-closure ABI carry a by-value-ADT
-   parameter as the int64 carrier uniformly** -- box at closure creation / arg
-   pass, unbox at thunk entry -- so the cast is always `(void*, int64_t)` and the
-   `ReF__Re` inline-storage path and the carrier `ReF` path agree on a boxed `Re`.
-   That is an M7-owned change and should be sequenced with (or after) M7's
-   by-value-HKT graduation, not bolted on underneath it.
-
-   **Boundary decision.** Until then the **B3 leaf gate is the principled CONV-S1
+   **Boundary decision.** The **B3 leaf gate is the principled CONV-S1
    boundary**: aggregate-bearing / recursive products keep the carrier ABI. This
    does not block "CONV-S1 proper" (below): a real `defstruct` never has a
    functor-applied-to-self field (`(ExprF Expr)`) -- recursive structs reference
