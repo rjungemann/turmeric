@@ -3093,6 +3093,56 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         arg = arg->as.reinterpret_.expr;
                     }
                     arg_strs[i] = emit_value(ctx, body, arg);
+                    /* CONV-S1 (seam 2): a `(default-of T)` argument to a
+                     * monomorphised ctor whose field type is heterogeneous --
+                     * `(ok v) : (Result int cstr)` passes `(default-of B)` for the
+                     * `const char *` err field -- emits `(int64_t){0}` (the
+                     * collapsed carrier default) where the by-value monomorph ctor
+                     * `ctor_Result__int__cstr` expects the field's concrete C type.
+                     * (The struct path elides the slot via C99 zero-init; the
+                     * ctor-call path passes it explicitly.)  Recompute the default
+                     * in the field's concrete type so it lands as `(const char *){0}`.
+                     * Resolve the field type from the active spec's concrete result
+                     * (or rty) by substituting the app args for the ctor field's
+                     * tyvar name. */
+                    if (suffix && arg && arg->kind == EX_DEFAULT_OF &&
+                        e->as.call_.ctor && i < e->as.call_.ctor->n_fields &&
+                        e->as.call_.ctor->fields[i].full_type) {
+                        const CtorDef *ct = e->as.call_.ctor;
+                        AdtDef *cdef = ct->adt;
+                        Type concrete = rty;
+                        if (ctx->current_abi_specialization) {
+                            Type sr = emit_resolve_type(ctx,
+                                ctx->current_abi_specialization->result_type);
+                            if (type_adt_app_def(&sr) == cdef) concrete = sr;
+                        }
+                        if (concrete.kind == TY_APP && cdef) {
+                            Type aargs[16]; uint8_t na = 0;
+                            const Type *cur = &concrete; Type raw[16]; uint8_t nr = 0;
+                            while (cur && cur->kind == TY_APP && nr < 16) {
+                                if (cur->as.app.arg) raw[nr++] = *cur->as.app.arg;
+                                cur = cur->as.app.fn; }
+                            for (uint8_t k = 0; k < nr; k++) aargs[k] = raw[nr - 1 - k];
+                            na = nr;
+                            const Type *ft = ct->fields[i].full_type;
+                            Type fty = *ft;
+                            if (ft->kind == TY_TYVAR && ft->as.tyvar_.name) {
+                                for (uint8_t k = 0; k < cdef->n_type_params && k < na; k++)
+                                    if (cdef->type_params[k] &&
+                                        strcmp(cdef->type_params[k], ft->as.tyvar_.name) == 0) {
+                                        fty = aargs[k]; break; }
+                            }
+                            const char *fc = emit_type_c_name(ctx, fty);
+                            if (fc && strcmp(fc, "int64_t") != 0) {
+                                Buf db; buf_init(&db);
+                                buf_printf(&db, "(%s){0}", fc);
+                                buf_putc(&db, '\0');
+                                free(arg_strs[i]);
+                                arg_strs[i] = strdup(db.data);
+                                buf_free(&db);
+                            }
+                        }
+                    }
                     /* hkt-cata-function-carrier: an EX_FN_TO_FAT shim (a thin fn
                      * boxed into a fat closure for a parametric ADT field, see
                      * elab_call.c) emits a `void *` box.  The constructor lowers
@@ -3565,9 +3615,25 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * arg must be boxed.  A non-parametric by-value ADT param
                      * (also pk==TY_ADT, but emitted by value) only ever receives a
                      * TY_ADT arg, never a TY_APP monomorph, so it never reaches
-                     * here. */
+                     * here.  A generic `(Result A B)` param (pk==TY_APP whose
+                     * full_type is a NON-concrete app -- a free fn like
+                     * `ok? [r : (Result A B)]`) is likewise emitted on the int64
+                     * carrier, so its by-value monomorph arg is boxed too; a
+                     * CONCRETE app param (`(Result int cstr)`) is emitted by value
+                     * and must NOT be bridged.  A generic param whose type erased
+                     * all the way to the int64 carrier (pk==TY_INT -- e.g. a free
+                     * `ok? [r : (Result A B)]` whose param collapses to int64) is
+                     * also a carrier sink.  In every admitted case the param lowers
+                     * to int64; the by-value-app guard above means a genuine int
+                     * param never reaches here (a by-value monomorph could not
+                     * type-check into an int slot). */
+                    bool app_param_carrier = false;
+                    if (pk == TY_APP && fn_binding->type.as.fn.arg_full_types &&
+                        fn_binding->type.as.fn.arg_full_types[param_idx])
+                        app_param_carrier = !type_app_is_concrete_adt(
+                            fn_binding->type.as.fn.arg_full_types[param_idx]);
                     if (pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS ||
-                        pk == TY_ADT) {
+                        pk == TY_ADT || pk == TY_INT || app_param_carrier) {
                         raw = emit_carrier_bridge(ctx, body, raw,
                                                   CK_CONCRETE, CK_CARRIER,
                                                   emit_arg->type);
