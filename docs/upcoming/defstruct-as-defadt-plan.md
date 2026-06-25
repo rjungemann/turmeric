@@ -368,21 +368,35 @@ runtime *usage* seam, below.
    via `emit_carrier_bridge`.  `(eq? (some 5) (some 5))` and hand-written
    parametric record-ADT `Eq`/`Functor` instances now compile and run; suite
    stays 1840/0.  **Still open -- the PRODUCING direction (seam 1b below).**
-1b. **By-value HKT construction inside a specialized instance body (NEXT).**
-   `(fmap (some 5) f)` still fails at `cc` inside
-   `__inst_Functor_fmap_T__spec__tur_adt_Option__int_...`: (i) the `container`
-   param, declared by-value `tur_adt_Option__int`, is read with a *carrier* deref
-   `(*(tur_adt_Option__int *)(intptr_t)(container))`; (ii) the `(none)` arm emits
-   `none()` returning the int64 carrier into a by-value `tur_adt_Option__int`
-   result slot.  This is the by-value-HKT result-construction path
-   (`construct_recovered_byvalue` / the `some`/`none` by-value spec clones,
-   `emit_module.c`) which was built for the *struct* Option and does not yet fire
-   for the lowered record-ADT Option.  Distinct from the consuming bridge above;
-   it is the same family as seam 2 (`Option`/`Result` construction codegen).
-2. **`Option`/`Result` dedicated codegen.** These carry hand-written runtime
-   layout (`tur_option_t`, `tur_result_box_t`, `tur_is_some`/`tur_opt_value`,
-   `some`/`none`/`ok`/`err`) that assumes the struct/carrier representation;
-   lowering them to record ADTs needs that special-casing reconciled or retired.
+1b. **By-value HKT construction inside a specialized instance body. DONE
+   (2026-06-25) for Option.** `(fmap (some 5) f)`, `(bind (some 10) k)`,
+   `(alt-or (none) (some 7))` now compile and run by-value with correct results.
+   Five fixes: (i) `body_is_construct` recognizes a constructor-CALL body (a
+   lowered struct's `make-struct` rewrites to the ctor call, so the body is no
+   longer `EX_MAKE_STRUCT`); (ii) the family-recovery rehydration extracts an ADT
+   app, not only a struct app, so a return-only-poly `(none)` gets `{A -> int}`;
+   (iii) the three `construct_recovered_byvalue` gates accept a concrete ADT app
+   (`type_app_is_concrete_adt`); (iv) the N-arg ctor suffix only trusts
+   `type_adt_app_ctor_suffix` for a fully-concrete app and otherwise falls back to
+   the active spec family, so the lowered ctor body (`(Option <erased> )`) emits
+   `ctor_Option__int` in `none__spec`; (v) a concrete ADT-app spec PARAM is flagged
+   `emit_byvalue_carrier_abi`, so the ACB carrier->concrete bridge no longer
+   wrongly derefs a by-value `container`.  All flag-independent (helps hand-written
+   record-ADT HKT instances too).  Suite stays 1840/0.  **Result is NOT yet done
+   -- see seam 2.**
+2. **`Result` construction codegen (mixed-type fields).** Under the flag,
+   `(ok 42) : (Result int cstr)` fails at `cc`: the by-value monomorph ctor
+   `ctor_Result__int__cstr(bool, int64_t, const char *)` receives the `(default-of
+   B)` err arg as `int64_t` for the `const char *` field -- the default/err arg is
+   not coerced to the field's concrete C type in the by-value monomorph ctor (a
+   2-type-param ADT whose fields have different C types).  `Option` (single param,
+   homogeneous-carrier err sentinel) does not hit this; `Result` does.  Also
+   `fmap`/`bind` on `Result` leave the result type under-determined
+   (`(type-app ? ?)`) -- but that reproduces WITHOUT the flag too, so it is a
+   pre-existing baseline limitation, not a lowering regression.  Separately, the
+   hand-written runtime layout (`tur_option_t`, `tur_result_box_t`,
+   `tur_is_some`/`tur_opt_value`, the `MonadError` inline-C bodies) still assumes
+   the struct/carrier representation and must be reconciled or retired.
 3. **`:heap` typed-pointer ADT ABI.** Still NOT STARTED (see
    [parametric-adt-byvalue-plan.md](parametric-adt-byvalue-plan.md) step 5) --
    `Vec`/`Map`/`Set`/`MutableMap` are `:heap` parametric structs and have no
