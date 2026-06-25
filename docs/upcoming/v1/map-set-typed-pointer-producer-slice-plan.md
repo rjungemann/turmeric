@@ -1,5 +1,5 @@
 ---
-title: Map/Set Typed-Pointer Producer Slice -- Plan (for review; likely deferred)
+title: Map/Set Typed-Pointer Producer Slice -- Plan (for review)
 category: Planning -- ABI / Codegen, end-to-end monomorphization
 description: Replicate the Vec producer-monomorphization slice (commit "monomorphize Vec inline-C producers to typed pointers") for Map/Set/MutableMap. RECORDS A KEY FINDING -- the audit shows Map/Set currently have ZERO producer-result crossings, so this slice is consistency/future-proofing, not a crossing-reduction win. Written for review; the recommendation is to DEFER Map/Set until M4 dict-ABI creates typed Map/Set consumers, and to do the small MutableMap producer win opportunistically.
 ---
@@ -7,10 +7,6 @@ description: Replicate the Vec producer-monomorphization slice (commit "monomorp
 # Map/Set Typed-Pointer Producer Slice -- Plan
 
 ## Status (verified 2026-06-22)
-
-**Plan recommendation followed -- in intended steady state.** Map/Set
-producer-typing deferred (awaiting M4 dict-ABI); MutableMap opportunistic
-win landed.
 
 - **TL;DR / Recommendation (defer Map/Set, do MutableMap now):**
   Honored. `src/compiler/emit_module.c:1913-1924` `type_is_heap_vec`
