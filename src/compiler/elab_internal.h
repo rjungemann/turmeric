@@ -1121,6 +1121,10 @@ Expr *elab_defstruct(Elab *e, const Form *call);
 Expr *elab_defopaque(Elab *e, const Form *call);
 void elab_register_adt_def(Elab *e, AdtDef *def);
 Expr *elab_defdata(Elab *e, const Form *call);
+/* CONV-S1 (defstruct-as-defadt): true iff this defstruct form qualifies for the
+ * slice-1 lowering to a single-variant record defadt.  Shared by the top-level
+ * type pre-pass and elab_defstruct. */
+bool defstruct_lowers_to_adt(Elab *e, const Form *call);
 TypeKind gadt_skolem_lookup(const SkolemEnv *env, const char *name);
 Expr *elab_defgadt(Elab *e, const Form *call);
 Expr *elab_coerce(Elab *e, const Form *call);

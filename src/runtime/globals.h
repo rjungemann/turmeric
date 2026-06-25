@@ -154,3 +154,9 @@ extern bool g_werror_inline_c_narrow_params;
  * intended for the Turmeric project's own CI matrix; spice users should not
  * set it.  Read by experiment_warn_if_used in src/runtime/experiments.c. */
 extern bool g_allow_experimental;
+
+/* CONV-S1 (defstruct-as-defadt experiment): when enabled, a simple leaf-scalar
+ * `defstruct` is lowered to a single-variant record `defadt` so it flows through
+ * the by-value ADT path.  Gated by the `defstruct-as-defadt` experiment; see
+ * docs/upcoming/defstruct-as-defadt-plan.md. */
+extern bool g_opt_defstruct_as_defadt;

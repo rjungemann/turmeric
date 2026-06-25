@@ -72,7 +72,12 @@ ctor/ABI codegen all branch on that):
   the tag-word cost is gone, but a true merge still has to make single-variant
   ADTs flow *by value* (today they are heap-pointer int64 carriers) so the
   lowered struct is byte-identical -- touching the ABI, monomorphization,
-  drop-glue, and ~57 `defdata` fixtures.
+  drop-glue, and ~57 `defdata` fixtures. A spike of the by-value core (which
+  works for typed receivers) found that suite-green requires a full
+  byval<->carrier bridging merge at every crossing (int-typed params, ADT/GADT
+  fields, closure/HKT args) plus untyped-param inference; the exact sites and a
+  suite-green B1-B4 decomposition are catalogued in
+  [`struct-adt-convergence-s1-bridging-findings.md`](struct-adt-convergence-s1-bridging-findings.md).
 - **`with` on a *narrowed* multi-variant ADT.** The single-variant case landed
   above; `(with v [...])` inside a `match` arm that narrowed a multi-variant
   ADT to one record variant needs variant narrowing in the type system (the

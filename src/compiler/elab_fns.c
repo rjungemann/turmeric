@@ -3430,6 +3430,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
             /* ptr-generic-parameterised-type: preserve the pointee type so
              * emit.c lowers a `:ptr<T>` parameter to `T *`, not `void *`. */
             fd->param_types[i] = params[i]->type;
+        } else if (param_kinds[i] == TY_INT && params[i]->type.kind == TY_ADT
+                   && params[i]->type.as.adt_.def) {
+            /* CONV-S1/B2: an untyped param (defaulted to TY_INT) that was used as
+             * a match scrutinee had its binding refined to the inferred ADT during
+             * body elaboration (elab_match).  The body runs before this realiser,
+             * so preserve that ADT type instead of collapsing back to int64 -- the
+             * parameter and the by-value match body then agree once the gate flips.
+             * type_c_name(TY_ADT) is int64_t while the gate is off, so the emitted
+             * signature is unchanged today. */
+            fd->param_types[i] = params[i]->type;
         } else {
             fd->param_types[i] = type_from_kind(param_kinds[i]);
         }

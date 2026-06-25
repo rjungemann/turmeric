@@ -1,5 +1,6 @@
 /* elab_structs.c -- struct/ADT/GADT definitions, pattern matching, and borrow traits. */
 #include "elab_internal.h"
+#include "experiments.h"  /* CONV-S1: defstruct-as-defadt experiment gate */
 
 /* ---- file-local helper forward declarations ---- */
 static void parse_struct_field_type(const char *tname, uint32_t tlen,
@@ -602,6 +603,78 @@ void elab_register_struct_def(Elab *e, StructDef *def) {
     e->struct_defs[e->n_struct_defs++] = def;
 }
 
+/* CONV-S1 (defstruct-as-defadt): true iff every field in an old-syntax
+ * defstruct field vector is a primitive scalar (int / float / bool / cstr /
+ * sized numerics) -- the leaf-scalar subset slice 1 of the lowering handles.  A
+ * compound (F_LIST) type, or any user / rc / ref / weak / ptr / fn type,
+ * disqualifies, so the struct keeps the normal struct path.  Mirrors the
+ * old-syntax pre-scan (name, then F_TYPE_ANN-wrapped type, per field). */
+static bool defstruct_fields_all_primitive(const Form *fields_vec) {
+    if (!fields_vec || fields_vec->tag != F_VEC) return false;
+    uint32_t n = fields_vec->as.list.len;
+    if (n == 0) return false;
+    uint32_t i = 0;
+    while (i < n) {
+        if (fields_vec->as.list.items[i]->tag != F_SYM) return false;  /* field name */
+        i++;
+        if (i >= n) return false;
+        const Form *type_tok = fields_vec->as.list.items[i];
+        if (type_tok->tag == F_TYPE_ANN) type_tok = type_tok->as.list.items[0];
+        if (type_tok->tag != F_KEYWORD && type_tok->tag != F_SYM)
+            return false;  /* F_LIST -> compound/applied type -> not leaf */
+        TypeKind k = TY_UNKNOWN, inner = TY_UNKNOWN;
+        parse_struct_field_type(type_tok->as.sym->name, type_tok->as.sym->len,
+                                &k, &inner);
+        switch (k) {
+            case TY_INT:   case TY_BOOL:  case TY_FLOAT: case TY_CSTR:
+            case TY_INT8:  case TY_INT16: case TY_INT32: case TY_INT64:
+            case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+            case TY_FLOAT32: case TY_FLOAT64:
+                break;  /* primitive scalar -- ok */
+            default:
+                return false;  /* user type / rc / ref / ptr / fn / unknown */
+        }
+        i++;
+    }
+    return true;
+}
+
+/* CONV-S1 (defstruct-as-defadt): decide whether a `defstruct` form qualifies for
+ * the slice-1 lowering -- flag on, old-syntax single field vector,
+ * non-parametric, not :heap / :linear, every field a primitive scalar.  Shared
+ * by the top-level type pre-pass (which must then register an ADT stub rather
+ * than a struct stub) and elab_defstruct (which performs the rewrite), so they
+ * agree on which names become ADTs.  Re-derives the annotation / field shape
+ * straight from the form (cheap; the form is small). */
+bool defstruct_lowers_to_adt(Elab *e, const Form *call) {
+    if (!g_opt_defstruct_as_defadt) return false;
+    if (call->tag != F_LIST || call->as.list.len < 3) return false;
+    const Form *name_form = call->as.list.items[1];
+    if (name_form->tag != F_SYM) return false;
+    uint32_t idx = 2;
+    while (idx < call->as.list.len) {
+        const Form *kw = call->as.list.items[idx];
+        if (kw->tag != F_KEYWORD) break;
+        if (kw->as.sym == e->kw_copy || kw->as.sym == e->kw_move ||
+            kw->as.sym == e->kw_no_auto_ctor) { idx++; continue; }
+        if (kw->as.sym == e->kw_linear || kw->as.sym == e->kw_heap)
+            return false;  /* :linear / :heap keep the struct path in slice 1 */
+        break;
+    }
+    /* A leading all-symbol vector is a type-parameter list -> parametric. */
+    if (idx < call->as.list.len && call->as.list.items[idx]->tag == F_VEC) {
+        const Form *vec = call->as.list.items[idx];
+        bool all_syms = vec->as.list.len > 0;
+        for (uint32_t i = 0; i < vec->as.list.len; i++)
+            if (vec->as.list.items[i]->tag != F_SYM) { all_syms = false; break; }
+        if (all_syms) return false;  /* parametric struct */
+    }
+    if (idx >= call->as.list.len) return false;
+    const Form *fields = call->as.list.items[idx];
+    if (fields->tag != F_VEC) return false;  /* new-style field-lists: not slice 1 */
+    return defstruct_fields_all_primitive(fields);
+}
+
 Expr *elab_defstruct(Elab *e, const Form *call) {
     if (call->as.list.len < 2) {
         diag_emit(DIAG_ERROR, call->span,
@@ -750,7 +823,34 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
             fields_form = form_vec(e->arena, fields_form->span, flat, flat_n);
         }
     }
-    
+
+    /* CONV-S1 (defstruct-as-defadt experiment): lower a simple leaf-scalar
+     * struct to a single-variant record `defadt`, so it flows through the
+     * by-value ADT path.  Slice 1 only fires for an old-syntax, non-parametric,
+     * non-:heap, non-:linear struct whose fields are all primitive scalars --
+     * the subset that hits none of the record-ADT gaps (rc<ADT> deref,
+     * pass-by-ptr, nested by-value fields, drop-glue).  Everything else still
+     * elaborates as a struct, even with the flag on.  Rewrite:
+     *     (defstruct P [a : int b : int])  ->  (defdata P (P [a : int b : int]))
+     * and dispatch to elab_defdata, reusing all the AdtDef machinery.  See
+     * docs/upcoming/defstruct-as-defadt-plan.md. */
+    if (defstruct_lowers_to_adt(e, call)) {
+        experiment_warn_if_used("defstruct-as-defadt");
+        /* Constructor variant form: (Name <field-vec>) */
+        Form *ctor_items[2] = { name_form, fields_form };
+        Form *ctor_form = form_list(e->arena, call->span, ctor_items, 2);
+        /* (defdata Name [:copy] (Name <field-vec>)) */
+        Form *dd_items[4];
+        uint32_t ddn = 0;
+        dd_items[ddn++] = form_sym(e->arena, name_form->span, e->sym_defdata);
+        dd_items[ddn++] = name_form;
+        if (is_copy)
+            dd_items[ddn++] = form_keyword(e->arena, name_form->span, e->kw_copy);
+        dd_items[ddn++] = ctor_form;
+        Form *dd_form = form_list(e->arena, call->span, dd_items, ddn);
+        return elab_defdata(e, dd_form);
+    }
+
     /* Phase RF0: allow re-elaboration of forward-declared stub types.
      * MF4: only reuse the existing binding as a stub when its kind matches
      * the kind we're elaborating (TY_STRUCT here).  A same-name GADT
@@ -3238,6 +3338,21 @@ Expr *elab_match(Elab *e, const Form *call) {
             if (inferred_adt) {
                 /* Patch the scrutinee type to the inferred ADT */
                 scrutinee->type = type_adt(inferred_adt);
+                /* CONV-S1/B2: when the scrutinee is a bare variable whose binding
+                 * still carries the int64 default (an untyped param defaulted to
+                 * TY_INT), propagate the inferred ADT back onto the binding.  The
+                 * signature realiser (elab_fns.c) runs AFTER the body, so it picks
+                 * this up and gives the param its ADT type -- making the parameter
+                 * and the match body agree on the representation once the by-value
+                 * gate flips.  Matching a value with constructor patterns proves it
+                 * IS that ADT, so this never mis-types a genuine int.  No-op for
+                 * emitted C while the gate is off (type_c_name(TY_ADT) is int64_t).
+                 * Only refine a still-default TY_INT binding -- never an explicit
+                 * annotation, which already carries its own type kind. */
+                if (scrutinee->kind == EX_VAR && scrutinee->as.var.binding &&
+                    scrutinee->as.var.binding->type.kind == TY_INT) {
+                    scrutinee->as.var.binding->type = type_adt(inferred_adt);
+                }
             } else {
                 diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
                           "match: scrutinee must be an ADT type, got %s",

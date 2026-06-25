@@ -303,6 +303,21 @@ static inline bool adt_is_flat_product(const AdtDef *def) {
     return def && def->n_ctors == 1 && !def->is_gadt;
 }
 
+/* CONV-S1: a single-variant, non-GADT, NON-PARAMETRIC flat product can flow
+ * *by value* -- a flat `tur_adt_<Name>` C aggregate passed/returned/stored
+ * directly, rather than through the int64 heap-pointer carrier.  This is the
+ * representational prerequisite for lowering `defstruct` to `defadt`.
+ *
+ * LIVE as of CONV-S1/B3, gated to "leaf" products (every field a scalar) so the
+ * recursive HKT carriers stay on the carrier path until B4.  Parametric flat
+ * ADTs (stdlib `Fix`, the functor `ReF [a]`, ...) also keep the carrier ABI --
+ * their concrete monomorphic by-value layout is the M7 by-value-HKT path's job.
+ *
+ * Defined in types.c (needs the complete `struct Type` to inspect ctor field
+ * full_types, which are only forward-declared here).  See the definition and
+ * docs/upcoming/struct-adt-convergence-s1-bridging-findings.md for the gate. */
+bool adt_is_byvalue_product(const AdtDef *def);
+
 /* Phase 11: Struct field descriptor.
  * Stored inline in StructDef.fields[]. */
 typedef struct StructField {
@@ -1460,6 +1475,9 @@ void         type_codegen_reset_adt_apps(void);
 void         type_codegen_emit_adt_apps(Buf *out);
 const char  *type_register_adt_app(Type t);
 char        *type_adt_app_ctor_suffix(Type t);
+/* CONV-S1: stable interned C typedef name (`tur_adt_<mangled>`) for the by-value
+ * representation of a non-parametric flat-product ADT.  See types.c. */
+const char  *adt_byval_c_name(const AdtDef *def);
 /* Phase E: Typed function-pointer typedef registry for unboxed fn struct fields. */
 const char  *register_fn_ptr_typedef(const Type *fn_type);
 void         type_codegen_reset_fn_ptr_typedefs(void);
