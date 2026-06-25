@@ -6,6 +6,31 @@ description: Create typed Map/Set/Cons consumers so the producer-typing slice ha
 
 # Typed Eq[Map] / Eq[Set] / Eq[Cons] Consumers -- Plan
 
+## COMPLETE -- 2026-06-25
+
+**All eight steps are landed; every collection-Eq instance now has a typed
+consumer.** `Eq[Cons]` (#553), `Eq[Map]` (#555), `Eq[Set]` + the full Set
+producer slice (this branch), and `Eq[MutableMap]` all dispatch a concrete
+receiver via a typed by-value per-instantiation spec over `Cons__A *` /
+`Map__K__V *` / `Set__A *` / `MutableMap__K__V *`. The downstream
+`map-set-typed-pointer-producer-slice-plan.md` is likewise complete.
+
+The surrounding milestones this plan referenced as future gates have also
+landed and are no longer pending:
+
+- **M4 (per-method typeclass dict ABI):** landed -- non-HKT instance dicts hold
+  per-instance concretely-typed function pointers and dispatch with no carrier
+  result cast. See `docs/archive/m4-typeclass-per-method-abi-plan.md`.
+- **M6/M7 (HKT class dispatch):** landed and on by default
+  (`g_m7_hkt_enabled = true`, Option 1 full per-`(f, A)` monomorphization,
+  2026-06-19). See `docs/archive/hkt-dispatch-options-tradeoff.md`. This
+  unblocks (but does not itself deliver) HKT-class collection instances like
+  `Functor[Map]` -- now a stdlib instance-body task, not an ABI gate.
+
+The "Landing status" section below is the authoritative per-step record; this
+banner only flags that the plan as a whole is closed and that its forward
+references to M4/M6/M7 are now historical.
+
 ## Why this exists
 
 The Vec slice of end-to-end monomorphization (commit `600e859`,
@@ -258,8 +283,9 @@ Executed against the current tree; the empirical state diverges from the
 
 - **Iteration primitive design lock-in.** The choice between
   fold-with-continuation and ADT-node-recursion shapes future
-  collection work (`Show[Map]`, `Hash[Map]`, `Functor[Map]`-once-HKT-lands).
-  Worth a focused RFC turn, not a snap decision inside the first rewrite.
+  collection work (`Show[Map]`, `Hash[Map]`, and -- now that HKT dispatch has
+  landed, see the banner above -- `Functor[Map]`). Worth a focused RFC turn,
+  not a snap decision inside the first rewrite.
 - **HAMT structural recursion under the matrix.** Pure-Turmeric
   iteration of HAMT nodes intersects with `#NotImplemented` paths on
   the by-value side; verify with `tce3-map-cstr-val` (float-value
@@ -271,9 +297,13 @@ Executed against the current tree; the empirical state diverges from the
 
 ## Out of scope
 
-- HKT-class collection instances (`Functor[Map]`, `Foldable[Set]`) --
-  those wait on M6/M7's HKT dispatch story per the archived
-  `m4-final-state` doc's "What's worth doing next".
+- HKT-class collection instances (`Functor[Map]`, `Foldable[Set]`) -- the M6/M7
+  HKT dispatch story they waited on has since **landed** (Option 1, full
+  per-`(f, A)` monomorphization, on by default `g_m7_hkt_enabled = true`,
+  2026-06-19; see `docs/archive/hkt-dispatch-options-tradeoff.md`). Writing the
+  actual `Functor[Map]` / `Foldable[Set]` instance bodies is now unblocked
+  stdlib work (the "Phase 4.2" instance-body migration), not an ABI gate --
+  it is still out of scope *for this Eq-consumer plan*, but no longer blocked.
 - M5 constrained-polymorphic dict typing -- adjacent but independent.
 - `vec-eq?` (done, see #400 / `6f381cc4`).
 

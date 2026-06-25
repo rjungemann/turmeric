@@ -6,6 +6,36 @@ description: Replicate the Vec producer-monomorphization slice (commit "monomorp
 
 # Map/Set Typed-Pointer Producer Slice -- Plan
 
+## COMPLETE -- 2026-06-25
+
+**This plan is fully landed; all four `:heap` collections now type their
+producers.** The "for review" body below (status verified 2026-06-22)
+recommended *deferring* Map/Set producer-typing until M4 dict-ABI created
+consumer demand. Both halves of that gate have since resolved, so the
+recommendation is moot and the work is done:
+
+- **M4 (per-method typeclass dict ABI) is landed**, not a future gate. Non-HKT
+  instance dicts hold per-instance concretely-typed function pointers and
+  dispatch with no `(int64_t)(intptr_t)` result cast; parametric instances
+  route through M4c Path A per-instantiation specs. See
+  `docs/archive/m4-typeclass-per-method-abi-plan.md` and
+  `docs/artifacts/monomorphization-audit.md` ("M4-rest -- LANDED").
+- **M6/M7 (HKT class dispatch) is landed and on by default**
+  (`g_m7_hkt_enabled = true`, Option 1 full per-`(f, A)` monomorphization,
+  2026-06-19). See `docs/archive/hkt-dispatch-options-tradeoff.md`.
+- **Producer typing is done for every collection:** Vec (#400), MutableMap
+  (#411), Map (#555), Set (this branch). Each mints typed producer specs
+  (`Vec__A *` / `Map__K__V *` / `Set__A *` / `MutableMap__K__V *`) via
+  `__TUR_RET__`, with the collection name in `type_is_heap_vec`'s allow-list.
+
+The Map/Set slices were *not* held until a separate M4 regen window after all
+-- once `Eq[Map]`/`Eq[Set]` were rewritten to by-value receivers (the
+typed-collection-eq-consumers plan), the typed consumers appeared and the
+producer typing landed in the same window, exactly as step 3 of the recipe
+below describes. The audit table's "0 crossings for Map/Set" snapshot reflected
+the *pre-consumer* tree; with by-value `Eq` consumers present the producer
+typing removes real crossings. The body below is retained as the paper trail.
+
 ## Status (verified 2026-06-22)
 
 - **TL;DR / Recommendation (defer Map/Set, do MutableMap now):**

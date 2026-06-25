@@ -6,6 +6,44 @@ description: Replace Turmeric's hybrid int64-carrier / by-value ABI with end-to-
 
 # End-to-End Monomorphization -- Plan
 
+## Status -- Track A complete (archived 2026-06-19, `08be4661`)
+
+This plan was moved to `docs/archive/` when the **by-value monomorphization
+track (M2-M7) landed**; the phase bodies below are the original roadmap and
+read as forward-looking estimates -- treat them as historical. Current state of
+the milestones, verified against the tree 2026-06-25:
+
+- **M2 / M3 (polymorphic constructors + accessors direct-emit):** landed.
+- **M4 (non-HKT typeclass instances -> per-method ABI):** landed. Non-HKT
+  instance dicts hold per-instance concretely-typed function pointers
+  (`src/compiler/emit_stmt.c`), dispatch emits no `(int64_t)(intptr_t)` result
+  cast (`src/compiler/emit_expr.c`), and parametric instances route through
+  M4c Path A per-instantiation specs. See
+  `docs/archive/m4-typeclass-per-method-abi-plan.md` and
+  `docs/artifacts/monomorphization-audit.md` ("M4-rest -- LANDED").
+- **M6 / M7 (HKT class dispatch):** landed and **on by default**
+  (`src/runtime/globals.c`: `g_m7_hkt_enabled = true`). M6 chose Option 1
+  (full per-`(f, A)` monomorphization); M7 emits per-`(f, A)` by-value
+  instance-method specs (`elab_typeclasses.c` / `emit_module.c`). All four
+  HKT probes (`docs/artifacts/m7-hkt-probe*.tur`) pass. See
+  `docs/archive/hkt-dispatch-options-tradeoff.md` and
+  `docs/archive/hkt-deferred-tasks.md`.
+- **Producer-typing follow-through (Track-A-adjacent):** every `:heap`
+  collection now types its producers -- Vec (#400), MutableMap (#411), Map
+  (#555), Set (2026-06-25). See
+  `docs/upcoming/v1/map-set-typed-pointer-producer-slice-plan.md` and
+  `docs/upcoming/v1/typed-collection-eq-consumers-plan.md`.
+- **Carrier bridge (M9):** intentionally retained, down-scoped to the
+  by-design boundaries (blessed inline-C construction, type-erased `SChan`,
+  fat-closure comparator reinterpret casts). Floor measured at 34 crossings /
+  10 fixtures, zero monomorphic deref-copy crossings; see the M3 audit doc.
+
+Residual work is the **Phase 4.2 stdlib instance-body migration** (rewriting
+carrier-delegating HKT instances like `Bifunctor[Result]` to by-value bodies so
+they too emit per-`(f, A)` specs) -- an optimization, not a correctness gap.
+Milestones not re-verified in this note (M5 constrained-dict typing, M8
+existential carrier, M10 audit cleanup) are not asserted here either way.
+
 ## Why
 
 Every type-system feature shipped this year ended in an ABI patch
