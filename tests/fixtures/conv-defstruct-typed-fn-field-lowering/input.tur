@@ -1,0 +1,24 @@
+;; CONV-S1 (slice 7, pre-graduation): with --enable=defstruct-as-defadt, a
+;; defstruct with a *typed* `fn` field `(fn [..] ..)` lowers to a single-variant
+;; record defadt and flows through the by-value ADT path, exactly like the bare
+;; `fn` field of slice 6.  A typed fn field stores as the int64 carrier (its
+;; signature only feeds type checking, never layout), so the capability-field
+;; call dispatches through the record ADT via the intptr_t-cast path.  Behaviour
+;; is identical flag off (struct path) and on (ADT path).
+(defstruct H [tag : int unary : (fn [int] int) binop : (fn [int int] int)])
+
+(defn inc [x : int] : int (+ x 1))
+(defn add [a : int b : int] : int (+ a b))
+
+(defn run [h : H] : int
+  (+ (.tag h)
+     (+ (.unary h 1)        ; 2
+        (.binop h 40 99)))) ; 139
+
+(defn main [] : int
+  ;; positional and keyword construction both exercise the typed fn fields
+  (let [h  (H 0 inc add)
+        h2 (H :tag 1 :unary inc :binop add)]
+    (println (run h))    ; 141
+    (println (run h2))   ; 142
+    0))

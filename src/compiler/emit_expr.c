@@ -2216,7 +2216,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         gf_full = cf->full_type;
                     }
                     if (gf_kind == TY_FN && gf_full &&
-                            gf_full->kind == TY_FN) {
+                            gf_full->kind == TY_FN && gf_def) {
+                        /* CONV-S1 (slice 7): the struct path stores a typed `fn`
+                         * field as a concrete function pointer, so it can be
+                         * called directly.  A record-ADT field (gf_def == NULL)
+                         * stores every `fn` -- typed or bare -- as the int64
+                         * carrier, so it is NOT directly callable; leave
+                         * is_typed_fn_field false so the intptr_t-cast path below
+                         * specialises the pointer to the call's arg/result C
+                         * types, exactly as for a bare `fn` field. */
                         is_typed_fn_field =
                             (register_fn_ptr_typedef(gf_full) != NULL);
                         /* parametric-struct-fn-field-call-passes-concrete-arg-to-

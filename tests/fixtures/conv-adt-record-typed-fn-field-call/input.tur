@@ -1,0 +1,18 @@
+;; CONV-S1 (slice 7): a capability-field call `(.handler v arg)` through a
+;; *typed* `fn` field of a hand-written single-variant record ADT dispatches
+;; through the record ADT.  This is flag-independent -- like slice 6's bare-fn
+;; fix, the record-ADT typed-fn field stores as the int64 carrier and the call
+;; specialises the function-pointer type from the call's arg/result types.
+;; Previously this emitted a non-callable int64 carrier call and failed at cc.
+(defdata H (H [tag : int unary : (fn [int] int) binop : (fn [int int] int)]))
+
+(defn inc [x : int] : int (+ x 1))
+(defn add [a : int b : int] : int (+ a b))
+
+(defn run [h : H] : int
+  (+ (.tag h) (+ (.unary h 1) (.binop h 40 99))))
+
+(defn main [] : int
+  (let [h (H 0 inc add)]
+    (println (run h))   ; 141
+    0))

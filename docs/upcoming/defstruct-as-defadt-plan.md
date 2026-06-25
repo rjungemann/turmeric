@@ -88,10 +88,26 @@ and the indirect-call codegen reads the field's kind / `full_type` from the
 `CtorField` when the `EX_GET_FIELD` has a NULL `StructDef`
 ([`emit_expr.c`](../../src/compiler/emit_expr.c)). Like the `rc<ADT>` fix, (2) is
 flag-independent: calling an `fn` field on any hand-written record ADT now works
-(previously "no typeclass method found"). A *typed* `fn` field `(fn [T] U)` is an
-F_LIST type form, which the gate still excludes, so it stays on the struct path.
+(previously "no typeclass method found").
 Fixtures: `conv-defstruct-fn-field-lowering` (flag-on parity),
 `conv-adt-record-fn-field-call` (the closed record-ADT fn-capability-call gap).
+
+**Slice 7 (typed-`fn`-field widening).** The gate now also admits a *typed* `fn`
+field `(fn [..] ..)`. Though it is an F_LIST type form (which the leaf check
+otherwise rejects), a typed `fn` is still an 8-byte function-pointer carrier slot
+exactly like a bare `fn` -- its argument/return signature only feeds type
+checking, never layout -- so it lowers like a scalar carrier. The one crossing:
+the struct path stores a typed `fn` field as a *concrete* function pointer and
+calls it directly, but a record-ADT field stores every `fn` (typed or bare) as
+the int64 carrier, which is not directly callable. The capability-call codegen's
+direct-call shortcut ([`emit_expr.c`](../../src/compiler/emit_expr.c)) is now
+gated on a non-NULL `StructDef`, so a record-ADT typed-`fn` field falls through to
+the same intptr_t-cast path bare `fn` already uses (the pointer type is
+specialised from the call's arg/result C types). Like slice 6's fix this is
+flag-independent: a typed-`fn` capability call on any hand-written record ADT now
+works (previously it emitted a non-callable int64-carrier call and failed at
+`cc`). Fixtures: `conv-defstruct-typed-fn-field-lowering` (flag-on parity),
+`conv-adt-record-typed-fn-field-call` (the closed record-ADT typed-fn-call gap).
 
 Anything else (parametric, or a bare struct-typed
 field) still elaborates as a struct, even with the flag on. A bare struct-typed
@@ -200,12 +216,18 @@ before the gate widens past leaf-scalar and before the experiment graduates
    `(.handler v arg)` dispatches through a single-variant record ADT (a `TY_ADT`
    branch in the elaborator's capability-call path + CtorField-aware
    indirect-call codegen, both flag-independent so hand-written record ADTs gain
-   fn-field calls too). A typed `(fn [T] U)` field is an F_LIST form the gate
-   still excludes. Fixtures: `conv-defstruct-fn-field-lowering`,
-   `conv-adt-record-fn-field-call`. Remaining for graduation: bare struct-typed,
-   `:heap`, parametric fields, and typed `fn` fields.
+   fn-field calls too). Fixtures: `conv-defstruct-fn-field-lowering`,
+   `conv-adt-record-fn-field-call`.
+6a. Widen the gate to a **typed `fn` field** `(fn [..] ..)`. **DONE** -- an F_LIST
+   type form, but representationally identical to a bare `fn` (an 8-byte
+   function-pointer carrier), so it lowers like a scalar carrier. The
+   capability-call direct-call shortcut is gated on a non-NULL `StructDef`, so a
+   record-ADT typed-`fn` field uses the same intptr_t-cast path as a bare `fn`
+   (flag-independent; hand-written record ADTs gain typed-fn calls too). Fixtures:
+   `conv-defstruct-typed-fn-field-lowering`, `conv-adt-record-typed-fn-field-call`.
+   Remaining for graduation: bare struct-typed, `:heap`, and parametric fields.
 7. Graduate: delete the gate, lower unconditionally (including bare struct /
-   parametric / typed-fn fields), retire the `StructDef` surface path, regenerate
+   parametric fields), retire the `StructDef` surface path, regenerate
    the affected snapshots in one change.
 
 See [struct-adt-convergence-s1-bridging-findings.md](struct-adt-convergence-s1-bridging-findings.md)

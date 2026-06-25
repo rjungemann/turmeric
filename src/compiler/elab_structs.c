@@ -638,18 +638,23 @@ void elab_register_struct_def(Elab *e, StructDef *def) {
  * byte-identical layout.  As of slice 5 (pointer-field widening) that is:
  *   - a primitive scalar (int / float / bool / cstr / sized numerics), or
  *   - a pointer-kinded field (rc<T> / ref<T> / lref<T> / weak<T> / ptr<void>)
- *     or an `fn` field -- each is an 8-byte carrier slot regardless of the inner
- *     type, so the record-ADT path stores it as a scalar carrier exactly as the
- *     struct path does, drop-glue (rc/ref/weak) and all (slice 2), and the
+ *     or a bare `fn` field -- each is an 8-byte carrier slot regardless of the
+ *     inner type, so the record-ADT path stores it as a scalar carrier exactly
+ *     as the struct path does, drop-glue (rc/ref/weak) and all (slice 2), and the
  *     pre-pass / full-elab lowering decision never disagrees because a pointer's
  *     representation does not depend on the (possibly not-yet-known) inner
  *     type's by-value-ness (the by-value ctor casts an `fn` arg to the int64
  *     carrier, slice 6), or
+ *   - a *typed* `fn` field `(fn [..] ..)` (slice 7) -- an F_LIST type form, but
+ *     still an 8-byte function-pointer carrier slot like a bare `fn`; its
+ *     signature only feeds type checking, never layout, so it lowers like a
+ *     scalar carrier and the capability call specialises the pointer through the
+ *     intptr_t-cast path, or
  *   - a bare user type that resolves to a by-value aggregate (a non-heap,
  *     non-opaque, drop-glue-free struct, or a by-value ADT product), which the
  *     record-ADT path now stores INLINE by value exactly as a struct inlines a
  *     nested struct field.
- * A compound (F_LIST) type, or any parametric / :heap field, still
+ * Any other compound (F_LIST) type, or any parametric / :heap field, still
  * disqualifies so the struct keeps the normal struct path.
  * Mirrors the old-syntax pre-scan (name, then F_TYPE_ANN-wrapped type). */
 static bool defstruct_fields_all_primitive(Elab *e, const Form *fields_vec) {
@@ -663,8 +668,25 @@ static bool defstruct_fields_all_primitive(Elab *e, const Form *fields_vec) {
         if (i >= n) return false;
         const Form *type_tok = fields_vec->as.list.items[i];
         if (type_tok->tag == F_TYPE_ANN) type_tok = type_tok->as.list.items[0];
+        if (type_tok->tag == F_LIST) {
+            /* slice 7 (pre-graduation): a *typed* `fn` field `(fn [..] ..)` is,
+             * exactly like a bare `fn` (slice 6), an 8-byte function-pointer
+             * carrier slot -- its argument/return signature only feeds type
+             * checking, never layout -- so it lowers like a scalar carrier and
+             * the pre-pass / full-elab decision never disagrees.  Any other
+             * compound / applied F_LIST type (e.g. `(Vec int)`, `(exists ...)`)
+             * still keeps the struct path. */
+            if (type_tok->as.list.len >= 1 &&
+                type_tok->as.list.items[0]->tag == F_SYM &&
+                type_tok->as.list.items[0]->as.sym->len == 2 &&
+                memcmp(type_tok->as.list.items[0]->as.sym->name, "fn", 2) == 0) {
+                i++;
+                continue;
+            }
+            return false;  /* compound/applied type -> not leaf */
+        }
         if (type_tok->tag != F_KEYWORD && type_tok->tag != F_SYM)
-            return false;  /* F_LIST -> compound/applied type -> not leaf */
+            return false;  /* not a leaf type token */
         TypeKind k = TY_UNKNOWN, inner = TY_UNKNOWN;
         parse_struct_field_type(type_tok->as.sym->name, type_tok->as.sym->len,
                                 &k, &inner);
