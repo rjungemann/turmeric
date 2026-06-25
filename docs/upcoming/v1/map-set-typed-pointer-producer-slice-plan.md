@@ -19,9 +19,14 @@ description: Replicate the Vec producer-monomorphization slice (commit "monomorp
   (predicate doesn't fire). For MutableMap, validated by in-tree
   fixtures + `tce3-map-cstr-val` reference.
 - **Step 3 (`__TUR_RET__` on heap-returning producers):**
-  - **Map (`stdlib/map.tur`):** NOT started. Lines 49, 79, 104, 138,
-    182, 258 still emit `return (int64_t)(intptr_t)...`. Zero
-    `__TUR_RET__` matches.
+  - **Map (`stdlib/map.tur`):** DONE (eq-map-typed-consumer report). Map is
+    now a non-transparent `:heap` struct (`(hamt :ptr<void>)`); the seven
+    heap-returning producers return through `__TUR_RET__`, `Map` joined the
+    `type_is_heap_vec` allow-list, and the float/cstr carrier-forcing block was
+    extended to recover the degenerate multi-param declared `(Map K V)` from the
+    resolved slot type. `Eq[Map]` dispatches via a typed by-value spec; typed
+    `(Map int int)` consumers receive `Map__int__int *`. See
+    `docs/archive/eq-map-typed-consumer-blocked-on-transparent-newtype.md`.
   - **Set (`stdlib/set.tur`):** NOT started. Lines 30, 55, 80, 147,
     183, 219 still `(int64_t)(intptr_t)`. Zero `__TUR_RET__` matches.
   - **MutableMap (`stdlib/mutmap.tur`):** DONE. `mutmap-new` at line

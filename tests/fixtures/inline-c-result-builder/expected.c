@@ -2595,7 +2595,7 @@ static void tur_role_close(void *role_ptr) {
 }
 
 typedef struct Map {
-    int64_t carrier;
+    void * hamt;
 } Map;
 
 typedef struct Vec {

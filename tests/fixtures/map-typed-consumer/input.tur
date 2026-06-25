@@ -1,0 +1,22 @@
+;; eq-map-typed-consumer-blocked-on-transparent-newtype.md: Map is now a
+;; non-transparent :heap struct (hamt :ptr<void>), so (Map K V) monomorphizes
+;; to a real Map__K__V and lowers to a typed pointer in pure-Turmeric C
+;; signatures.  A typed (Map int int) handle flows into a user fn taking the
+;; concrete heap type with NO int->pointer relabel, and Eq[Map] dispatches via
+;; the typed by-value spec __inst_Eq_eq_qu_Map__spec__... rather than the int64
+;; carrier base.  The float-valued map exercises the element-slot carrier
+;; forcing (V must ride the int64 carrier, not monomorphize to double).
+
+(defn size-of [m : (Map int int)] : int
+  (map-count m))
+
+(defn main [] : int
+  (let [a (map-assoc (:: (map-new) (Map int int)) 1 10)
+        b (map-assoc (:: (map-new) (Map int int)) 1 10)
+        c (map-assoc (:: (map-new) (Map int int)) 1 99)
+        f (map-assoc (:: (map-new) (Map int float)) 1 0.5)]
+    (println (size-of a))                                  ; 1
+    (println (eq? (:: a (Map int int)) (:: b (Map int int))))  ; true
+    (println (eq? (:: a (Map int int)) (:: c (Map int int))))  ; false
+    (println (:: (map-get f 1) :float)))                   ; 0.5
+  0)

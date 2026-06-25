@@ -1904,6 +1904,7 @@ static bool type_is_heap_vec(Type t) {
     }
     return def && def->name &&
         (strcmp(def->name, "Vec") == 0 ||
+         strcmp(def->name, "Map") == 0 ||
          strcmp(def->name, "MutableMap") == 0);
 }
 
@@ -3083,33 +3084,50 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * carrier reads sound and lets the call site reinterpret as today; the
      * `:heap` slots stay typed pointers (reinterpret-safe). */
     {
-        /* A Vec producer/accessor is identified by its DECLARED signature
-         * carrying a structural `(Vec _)` slot -- not by a bare tyvar that
-         * merely resolved to a Vec at this call (that would wrongly catch the
-         * generic `some`/`ok` constructors whose `A` element happens to be a
-         * Vec).  Keep those declared-Vec slots typed; force everything else to
-         * the int64 carrier the inline-C body reads. */
-        bool ret_is_vec = fd && type_is_heap_vec(fd->return_type);
+        /* A heap-collection producer/accessor is identified by its DECLARED
+         * signature carrying a structural `(Vec _)` / `(Map _ _)` slot -- not by
+         * a bare tyvar that merely resolved to a collection at this call (that
+         * would wrongly catch the generic `some`/`ok` constructors whose `A`
+         * element happens to be a Vec).  Keep those declared-collection slots
+         * typed; force everything else to the int64 carrier the inline-C body
+         * reads.
+         *
+         * A multi-type-param collection (`(Map K V)`, `(MutableMap K V)`) is
+         * declared as a *degenerate* TY_APP -- a spineless shell whose head
+         * `app.fn` is NULL, so `type_is_heap_vec` cannot recover its StructDef.
+         * (Single-param `(Vec A)` keeps a real spine and extracts directly.)
+         * For those, fall back to the RESOLVED slot type: a declared TY_APP
+         * whose resolved arg/result is a heap collection is the same structural
+         * collection slot, just recovered post-monomorphization.  The
+         * `decl.kind == TY_APP` guard preserves the some/ok exclusion -- a bare
+         * tyvar `A` is TY_TYVAR, never TY_APP, so it stays off the slice. */
+        #define TUR_SLOT_IS_COLL(decl, resolved) \
+            (type_is_heap_vec(decl) || \
+             ((decl).kind == TY_APP && type_is_heap_vec(resolved)))
+        bool ret_is_vec = fd &&
+            TUR_SLOT_IS_COLL(fd->return_type, result_type);
         bool any_heap_slot = ret_is_vec;
         for (uint8_t i = 0; i < n_spec_args && !any_heap_slot; i++)
             if (fd && i < fd->n_params && fd->param_types &&
-                type_is_heap_vec(fd->param_types[i])) any_heap_slot = true;
+                TUR_SLOT_IS_COLL(fd->param_types[i], arg_types[i]))
+                any_heap_slot = true;
         bool heap_inline_c_producer = fd && fd->body &&
             fd->body->kind == EX_INLINE_C && any_heap_slot;
         if (heap_inline_c_producer) {
-            /* The inline-C body reads every non-Vec slot as the int64 carrier;
-             * force all of them to TYPE_INT so the spec signature, forward
-             * decl, clone name, and body agree (int->int is a no-op;
+            /* The inline-C body reads every non-collection slot as the int64
+             * carrier; force all of them to TYPE_INT so the spec signature,
+             * forward decl, clone name, and body agree (int->int is a no-op;
              * float/cstr/struct -> int64 is the carrier the body expects).  A
              * nil result keeps `void`. */
             for (uint8_t i = 0; i < n_spec_args; i++) {
                 bool slot_is_vec = fd && i < fd->n_params && fd->param_types &&
-                    type_is_heap_vec(fd->param_types[i]);
+                    TUR_SLOT_IS_COLL(fd->param_types[i], arg_types[i]);
                 if (!slot_is_vec) arg_types[i] = TYPE_INT;
             }
             if (!ret_is_vec && result_type.kind != TY_NIL)
                 result_type = TYPE_INT;
         }
+        #undef TUR_SLOT_IS_COLL
     }
 
     uint32_t before_specs = ctx->n_abi_specializations;
