@@ -172,22 +172,23 @@ Executed against the current tree; the empirical state diverges from the
      cursor but left them on the **int64 carrier** (`s1 : int s2 : int`), so
      `Eq[Set]` still dispatched via `set_hyeq_hyfull(int64_t, int64_t)` and no
      typed `(Set__A *)` consumer ever appeared (verified zero across all
-     fixtures). This phase completes the Path-A rewrite: `set-eq-full` /
-     `set-eq-driver` take by-value `(Set A)` (`[A] [s1 (Set A) s2 (Set A)]`),
-     and `Eq[Set]` ascribes `(:: x (Set A))`. A concrete `(Set int)` receiver
-     now specializes to `__inst_Eq_eq_qu_Set__spec__bool_Set__int___Set__int__`
-     dispatching `set_eq_full__spec__...(Set__int *, Set__int *)` -- a typed
-     consumer, matching `Eq[Map]`. **Localized, no producer flip:** `Set`'s
-     *public* accessors (`set-count`, `set-hamt`) and producers (`set-new`,
-     `set-add`, ...) stay on the `:int` carrier -- Set's producers are not yet
-     typed, so user callers pass carrier handles, and flipping `set-count` to
-     by-value breaks them (`set-basic` regresses with TUR-E0001). The Eq
-     helpers therefore keep the by-value `(Set A)` *receiver* (which is all the
-     spec signature needs) but ascribe `(:: s :int)` for the carrier-accessor
-     calls. Because the carrier instantiation re-mangles to the identical
-     `set_hyeq_hyfull` / `set_hycount` names, this is **zero snapshot churn**:
-     the only new fixture is `set-typed-consumer` (guards the typed spec +
-     `(Set__int *)` consumer). Compiled-suite + `--interpret` parity green.
+     fixtures). Two sub-steps closed it: (a) a first pass made just
+     `set-eq-full` / `set-eq-driver` take by-value `(Set A)` while keeping the
+     public `set-count` / `set-hamt` on the carrier (ascribing `(:: s :int)`
+     for those calls), because Set's producers were not yet typed -- flipping
+     `set-count` alone regressed `set-basic` with TUR-E0001. (b) This phase
+     then landed the **full Set producer slice** (see step 8): the producers
+     return `(__TUR_RET__)` typed `(Set A)`, the accessors take by-value
+     `(Set A)`, `Set` joined `type_is_heap_vec`, and the (a) ascriptions were
+     removed. A concrete `(Set int)` now specializes to
+     `__inst_Eq_eq_qu_Set__spec__bool_Set__int___Set__int__` dispatching
+     `set_eq_full__spec__...(Set__int *, Set__int *)` over typed producers
+     (`set_new__spec__Set__int__`, `set_add__spec__...`) and accessors
+     (`set_count__spec__...`) -- a typed consumer end to end, matching
+     `Eq[Map]`. New fixture `set-typed-consumer` guards it; 93 snapshots
+     regenerated for the producer-typing flip. Compiled suite + `--interpret`
+     parity green (the int64 carrier instances persist for HKT-headed /
+     abstract-A receivers, so existing carrier callers are unaffected).
    - `Eq[MutableMap]` -> `(MutableMap__int__int *)(intptr_t)` in `mutmap-eq`
      (its producer `mutmap-new` already returns the typed spec, so the
      receiver local is concrete at the `.eq?` site).
@@ -215,16 +216,28 @@ Executed against the current tree; the empirical state diverges from the
      int64 while the per-instantiation specs use typed pointers. See
      `docs/archive/eq-map-typed-consumer-blocked-on-transparent-newtype.md`.
 
-8. **Unblock producer-slice (step 8): fully.** Cons / Set / MutableMap / Map
-   all present typed consumers, so the producer-slice plan's typing of those
-   producers removes real crossings. The Map half is no longer blocked: #555
-   folded the `(carrier :int)` -> `(hamt :ptr<void>)` representation change
-   into the Map slice (mirroring how MutableMap's producer was typed), so
-   `map-set-typed-pointer-producer-slice-plan.md`'s Map slice is recorded DONE
-   (its Step 3 cites the archived report). The only open producer-slice item
-   is `Set`'s Step 3 (`set-new` et al. still on `(int64_t)(intptr_t)`); the
-   typed Set *consumer* from this plan already exists, so that producer typing
-   is now a pure consistency win with a real consumer to point at.
+8. **Unblock producer-slice (step 8): fully, and Set's producer slice now
+   landed too.** Cons / Set / MutableMap / Map all present typed consumers, so
+   the producer-slice plan's typing of those producers removes real crossings.
+   - **Map:** #555 folded the `(carrier :int)` -> `(hamt :ptr<void>)`
+     representation change into the Map slice (mirroring how MutableMap's
+     producer was typed); `map-set-typed-pointer-producer-slice-plan.md`'s Map
+     slice is DONE (its Step 3 cites the archived report).
+   - **Set:** this phase completed the Set producer slice. `Set` was already
+     non-transparent (`(hamt :ptr<void>)`), so it needed no representation
+     change -- only the producer/consumer flip in lockstep: the six
+     heap-returning producers (`set-new` / `set-add` / `set-remove` /
+     `set-union` / `set-intersect` / `set-diff`, plus the `set-add1` wrapper)
+     now return through `(__TUR_RET__)(intptr_t)` and are `[A]`-polymorphic;
+     the accessors (`set-count` / `set-member?` / `set-free` / `set-hamt`) and
+     the Eq helpers take by-value `(Set A)`; `Set` joined the
+     `type_is_heap_vec` allow-list. A concrete `(Set int)` monomorphizes to
+     `Set__int *` end to end (typed producers + accessors + Eq spec). The
+     element/hash slots stay `:int` carrier and `set-eq?` / `set-eq-cmp?` stay
+     carrier inline-C (the `map-eq?` / `vec-eq?` compromise). The localized
+     consumer-only rewrite the previous phase shipped (ascribing the carrier
+     accessors) is superseded by this full slice -- the ascriptions are gone
+     now that the accessors are by-value.
 
 ## Validation harness
 

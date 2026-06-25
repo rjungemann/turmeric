@@ -1905,6 +1905,7 @@ static bool type_is_heap_vec(Type t) {
     return def && def->name &&
         (strcmp(def->name, "Vec") == 0 ||
          strcmp(def->name, "Map") == 0 ||
+         strcmp(def->name, "Set") == 0 ||
          strcmp(def->name, "MutableMap") == 0);
 }
 

@@ -2959,22 +2959,13 @@ static int64_t zipper_hyfocus_hyraw(int64_t);
 static int64_t zipper_hymove_hyleft_hyraw(int64_t);
 static int64_t zipper_hymove_hyright_hyraw(int64_t);
 static void zipper_hyfree_hyraw(int64_t);
-static int64_t set_hynew();
-static int64_t set_hyadd(int64_t, int64_t, int64_t);
-static int64_t set_hyremove(int64_t, int64_t, int64_t);
-static bool set_hymember_qu(int64_t, int64_t, int64_t);
 static int64_t set_hycount(int64_t);
-static int64_t set_hyunion(int64_t, int64_t);
-static int64_t set_hyintersect(int64_t, int64_t);
-static int64_t set_hydiff(int64_t, int64_t);
 static bool set_hyeq_qu(int64_t, int64_t);
 static bool set_hyeq_hycmp_qu(int64_t, int64_t, int64_t);
-static void set_hyfree(int64_t);
 static void * set_hyhamt(int64_t);
 static bool set_hyeq_hyloop(void *, void *, void *);
 static bool set_hyeq_hydriver(int64_t, int64_t);
 static bool set_hyeq_hyfull(int64_t, int64_t);
-static int64_t set_hyadd1(int64_t, int64_t);
 static int64_t mutmap_hylen(int64_t);
 static int64_t mutmap_hyget(int64_t, int64_t, int64_t);
 static bool mutmap_hyhas_qu(int64_t, int64_t, int64_t);
@@ -3064,9 +3055,13 @@ static int64_t replace(int64_t, int64_t);
 static int64_t size_hyof(Set__int *);
 static bool some___spec__bool_Option__opaque(Option__opaque);
 static Cons__int * tcons__spec__Cons__int___int64_t_int64_t(int64_t, int64_t);
+static int64_t set_count__spec__int64_t_Set__int__(Set__int *);
+static Set__int * set_add__spec__Set__int___Set__int___int64_t_int64_t(Set__int *, int64_t, int64_t);
+static Set__int * set_new__spec__Set__int__();
 static bool __inst_Eq_eq_qu_Set__spec__bool_Set__int___Set__int__(Set__int *, Set__int *);
 static bool set_eq_full__spec__bool_Set__int___Set__int__(Set__int *, Set__int *);
 static bool set_eq_driver__spec__bool_Set__int___Set__int__(Set__int *, Set__int *);
+static int64_t set_hamt__spec__int64_t_Set__int__(Set__int *);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -4233,92 +4228,9 @@ static void zipper_hyfree_hyraw(int64_t z) {
   
 }
 
-static int64_t set_hynew() {
-        struct { void *hamt; } *s = malloc(sizeof(*s));
-  s->hamt = tur_hamt_new();
-  return (int64_t)(intptr_t)s;
-  
-}
-
-static int64_t set_hyadd(int64_t s, int64_t h, int64_t x) {
-        struct { void *hamt; } *set = (void*)(intptr_t)s;
-  void *new_hamt = tur_hamt_set(set->hamt, h, (void*)(intptr_t)x, (void*)1);
-  struct { void *hamt; } *r = malloc(sizeof(*r));
-  r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
-  
-}
-
-static int64_t set_hyremove(int64_t s, int64_t h, int64_t x) {
-        struct { void *hamt; } *set = (void*)(intptr_t)s;
-  void *new_hamt = tur_hamt_del(set->hamt, h, (void*)(intptr_t)x);
-  struct { void *hamt; } *r = malloc(sizeof(*r));
-  r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
-  
-}
-
-static bool set_hymember_qu(int64_t s, int64_t h, int64_t x) {
-        struct { void *hamt; } *set = (void*)(intptr_t)s;
-  return tur_hamt_has(set->hamt, h, (void*)(intptr_t)x);
-  
-}
-
 static int64_t set_hycount(int64_t s) {
         struct { void *hamt; } *set = (void*)(intptr_t)s;
   return tur_hamt_count(set->hamt);
-  
-}
-
-static int64_t set_hyunion(int64_t a, int64_t b) {
-        struct { void *hamt; } *sa = (void*)(intptr_t)a;
-  struct { void *hamt; } *sb = (void*)(intptr_t)b;
-  void *new_hamt = tur_hamt_merge(sa->hamt, sb->hamt);
-  struct { void *hamt; } *r = malloc(sizeof(*r));
-  r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
-  
-}
-
-static int64_t set_hyintersect(int64_t a, int64_t b) {
-        struct { void *hamt; } *sa = (void*)(intptr_t)a;
-  struct { void *hamt; } *sb = (void*)(intptr_t)b;
-  void *result = tur_hamt_new();
-  uint64_t iter_buf[32];
-  for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
-  tur_hamt_iter_init((void*)iter_buf, sa->hamt);
-  uint64_t hash_out;
-  void *key_out = NULL, *val_out = NULL;
-  while (tur_hamt_iter_next((void*)iter_buf, &hash_out, &key_out, &val_out)) {
-      if (tur_hamt_has(sb->hamt, (int64_t)hash_out, key_out)) {
-          result = tur_hamt_set(result, (int64_t)hash_out, key_out, (void*)1);
-      }
-  }
-  tur_hamt_iter_free((void*)iter_buf);
-  struct { void *hamt; } *r = malloc(sizeof(*r));
-  r->hamt = result;
-  return (int64_t)(intptr_t)r;
-  
-}
-
-static int64_t set_hydiff(int64_t a, int64_t b) {
-        struct { void *hamt; } *sa = (void*)(intptr_t)a;
-  struct { void *hamt; } *sb = (void*)(intptr_t)b;
-  void *result = tur_hamt_new();
-  uint64_t iter_buf[32];
-  for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
-  tur_hamt_iter_init((void*)iter_buf, sa->hamt);
-  uint64_t hash_out;
-  void *key_out = NULL, *val_out = NULL;
-  while (tur_hamt_iter_next((void*)iter_buf, &hash_out, &key_out, &val_out)) {
-      if (!tur_hamt_has(sb->hamt, (int64_t)hash_out, key_out)) {
-          result = tur_hamt_set(result, (int64_t)hash_out, key_out, (void*)1);
-      }
-  }
-  tur_hamt_iter_free((void*)iter_buf);
-  struct { void *hamt; } *r = malloc(sizeof(*r));
-  r->hamt = result;
-  return (int64_t)(intptr_t)r;
   
 }
 
@@ -4380,11 +4292,6 @@ static bool set_hyeq_hycmp_qu(int64_t a, int64_t b, int64_t cmp_fn) {
   
 }
 
-static void set_hyfree(int64_t s) {
-        free((void*)(intptr_t)s);
-  
-}
-
 static void * set_hyhamt(int64_t s) {
         struct { void *hamt; } *set = (void*)(intptr_t)s; return set->hamt; 
 }
@@ -4437,10 +4344,6 @@ static bool set_hyeq_hyfull(int64_t s1, int64_t s2) {
             __t44 = set_hyeq_hydriver(s1, s2);
         }
         return __t44;
-}
-
-static int64_t set_hyadd1(int64_t s, int64_t x) {
-        return set_hyadd(s, x, x);
 }
 
 static int64_t mutmap_hylen(int64_t m) {
@@ -5632,7 +5535,7 @@ static int64_t replace(int64_t old, int64_t new) {
 }
 
 static int64_t size_hyof(Set__int * s) {
-        return set_hycount((int64_t)(intptr_t)((int64_t)(intptr_t)(s)));
+        return set_count__spec__int64_t_Set__int__(s);
 }
 
 int main(int argc, char **argv) {
@@ -5646,15 +5549,15 @@ int main(int argc, char **argv) {
             g_tur_args = (int64_t)(intptr_t)_c;
         }
         {
-            int64_t a_1248 = (int64_t)(intptr_t)(set_hyadd(set_hyadd(set_hynew(), INT64_C(1), INT64_C(1)), INT64_C(2), INT64_C(2)));
+            Set__int * a_1248 = set_add__spec__Set__int___Set__int___int64_t_int64_t(set_add__spec__Set__int___Set__int___int64_t_int64_t(set_new__spec__Set__int__(), INT64_C(1), INT64_C(1)), INT64_C(2), INT64_C(2));
             (void)a_1248;
-            int64_t b_1249 = (int64_t)(intptr_t)(set_hyadd(set_hyadd(set_hynew(), INT64_C(2), INT64_C(2)), INT64_C(1), INT64_C(1)));
+            Set__int * b_1249 = set_add__spec__Set__int___Set__int___int64_t_int64_t(set_add__spec__Set__int___Set__int___int64_t_int64_t(set_new__spec__Set__int__(), INT64_C(2), INT64_C(2)), INT64_C(1), INT64_C(1));
             (void)b_1249;
-            int64_t c_1250 = (int64_t)(intptr_t)(set_hyadd(set_hynew(), INT64_C(1), INT64_C(1)));
+            Set__int * c_1250 = set_add__spec__Set__int___Set__int___int64_t_int64_t(set_new__spec__Set__int__(), INT64_C(1), INT64_C(1));
             (void)c_1250;
             printf("%lld\n", (long long)(size_hyof(a_1248)));
-            puts((__inst_Eq_eq_qu_Set__spec__bool_Set__int___Set__int__((Set__int *)(intptr_t)(a_1248), (Set__int *)(intptr_t)(b_1249))) ? "true" : "false");
-            puts((__inst_Eq_eq_qu_Set__spec__bool_Set__int___Set__int__((Set__int *)(intptr_t)(a_1248), (Set__int *)(intptr_t)(c_1250))) ? "true" : "false");
+            puts((__inst_Eq_eq_qu_Set__spec__bool_Set__int___Set__int__(a_1248, b_1249)) ? "true" : "false");
+            puts((__inst_Eq_eq_qu_Set__spec__bool_Set__int___Set__int__(a_1248, c_1250)) ? "true" : "false");
         }
         int64_t __t55;
         __t55 = INT64_C(0);
@@ -5671,12 +5574,34 @@ static Cons__int * tcons__spec__Cons__int___int64_t_int64_t(int64_t h, int64_t t
         return __t56;
 }
 
+static int64_t set_count__spec__int64_t_Set__int__(Set__int * s) {
+        struct { void *hamt; } *set = (void*)(intptr_t)s;
+  return tur_hamt_count(set->hamt);
+  
+}
+
+static Set__int * set_add__spec__Set__int___Set__int___int64_t_int64_t(Set__int * s, int64_t h, int64_t x) {
+        struct { void *hamt; } *set = (void*)(intptr_t)s;
+  void *new_hamt = tur_hamt_set(set->hamt, h, (void*)(intptr_t)x, (void*)1);
+  struct { void *hamt; } *r = malloc(sizeof(*r));
+  r->hamt = new_hamt;
+  return (Set__int *)(intptr_t)r;
+  
+}
+
+static Set__int * set_new__spec__Set__int__() {
+        struct { void *hamt; } *s = malloc(sizeof(*s));
+  s->hamt = tur_hamt_new();
+  return (Set__int *)(intptr_t)s;
+  
+}
+
 static bool __inst_Eq_eq_qu_Set__spec__bool_Set__int___Set__int__(Set__int * x, Set__int * y) {
         return set_eq_full__spec__bool_Set__int___Set__int__(x, y);
 }
 
 static bool set_eq_full__spec__bool_Set__int___Set__int__(Set__int * s1, Set__int * s2) {
-        bool __t57 = (set_hycount((int64_t)(intptr_t)(s1))) == (set_hycount((int64_t)(intptr_t)(s2)));
+        bool __t57 = (set_count__spec__int64_t_Set__int__(s1)) == (set_count__spec__int64_t_Set__int__(s2));
         if (__t57) {
             __t57 = set_eq_driver__spec__bool_Set__int___Set__int__(s1, s2);
         }
@@ -5686,11 +5611,11 @@ static bool set_eq_full__spec__bool_Set__int___Set__int__(Set__int * s1, Set__in
 static bool set_eq_driver__spec__bool_Set__int___Set__int__(Set__int * s1, Set__int * s2) {
         bool __t58;
         {
-            void * iter_1049 = hamt_sliter_hyalloc((void *)(intptr_t)(set_hyhamt((int64_t)(intptr_t)(s1))));
+            void * iter_1049 = hamt_sliter_hyalloc((void *)(intptr_t)(set_hamt__spec__int64_t_Set__int__(s1)));
             (void)iter_1049;
-            void * keyeq_1050 = hamt_slkeyeq((void *)(intptr_t)(set_hyhamt((int64_t)(intptr_t)(s1))));
+            void * keyeq_1050 = hamt_slkeyeq((void *)(intptr_t)(set_hamt__spec__int64_t_Set__int__(s1)));
             (void)keyeq_1050;
-            bool result_1051 = set_hyeq_hyloop((void *)(intptr_t)(iter_1049), (void *)(intptr_t)(set_hyhamt((int64_t)(intptr_t)(s2))), (void *)(intptr_t)(keyeq_1050));
+            bool result_1051 = set_hyeq_hyloop((void *)(intptr_t)(iter_1049), (void *)(intptr_t)(set_hamt__spec__int64_t_Set__int__(s2)), (void *)(intptr_t)(keyeq_1050));
             (void)result_1051;
             hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_1049));
             bool __t59;
@@ -5698,6 +5623,10 @@ static bool set_eq_driver__spec__bool_Set__int___Set__int__(Set__int * s1, Set__
             __t58 = __t59;
         }
         return __t58;
+}
+
+static int64_t set_hamt__spec__int64_t_Set__int__(Set__int * s) {
+        struct { void *hamt; } *set = (void*)(intptr_t)s; return set->hamt; 
 }
 
 

@@ -2961,22 +2961,13 @@ static int64_t zipper_hyfocus_hyraw(int64_t);
 static int64_t zipper_hymove_hyleft_hyraw(int64_t);
 static int64_t zipper_hymove_hyright_hyraw(int64_t);
 static void zipper_hyfree_hyraw(int64_t);
-static int64_t set_hynew();
-static int64_t set_hyadd(int64_t, int64_t, int64_t);
-static int64_t set_hyremove(int64_t, int64_t, int64_t);
-static bool set_hymember_qu(int64_t, int64_t, int64_t);
 static int64_t set_hycount(int64_t);
-static int64_t set_hyunion(int64_t, int64_t);
-static int64_t set_hyintersect(int64_t, int64_t);
-static int64_t set_hydiff(int64_t, int64_t);
 static bool set_hyeq_qu(int64_t, int64_t);
 static bool set_hyeq_hycmp_qu(int64_t, int64_t, int64_t);
-static void set_hyfree(int64_t);
 static void * set_hyhamt(int64_t);
 static bool set_hyeq_hyloop(void *, void *, void *);
 static bool set_hyeq_hydriver(int64_t, int64_t);
 static bool set_hyeq_hyfull(int64_t, int64_t);
-static int64_t set_hyadd1(int64_t, int64_t);
 static int64_t mutmap_hylen(int64_t);
 static int64_t mutmap_hyget(int64_t, int64_t, int64_t);
 static bool mutmap_hyhas_qu(int64_t, int64_t, int64_t);
@@ -4241,92 +4232,9 @@ static void zipper_hyfree_hyraw(int64_t z) {
   
 }
 
-static int64_t set_hynew() {
-        struct { void *hamt; } *s = malloc(sizeof(*s));
-  s->hamt = tur_hamt_new();
-  return (int64_t)(intptr_t)s;
-  
-}
-
-static int64_t set_hyadd(int64_t s, int64_t h, int64_t x) {
-        struct { void *hamt; } *set = (void*)(intptr_t)s;
-  void *new_hamt = tur_hamt_set(set->hamt, h, (void*)(intptr_t)x, (void*)1);
-  struct { void *hamt; } *r = malloc(sizeof(*r));
-  r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
-  
-}
-
-static int64_t set_hyremove(int64_t s, int64_t h, int64_t x) {
-        struct { void *hamt; } *set = (void*)(intptr_t)s;
-  void *new_hamt = tur_hamt_del(set->hamt, h, (void*)(intptr_t)x);
-  struct { void *hamt; } *r = malloc(sizeof(*r));
-  r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
-  
-}
-
-static bool set_hymember_qu(int64_t s, int64_t h, int64_t x) {
-        struct { void *hamt; } *set = (void*)(intptr_t)s;
-  return tur_hamt_has(set->hamt, h, (void*)(intptr_t)x);
-  
-}
-
 static int64_t set_hycount(int64_t s) {
         struct { void *hamt; } *set = (void*)(intptr_t)s;
   return tur_hamt_count(set->hamt);
-  
-}
-
-static int64_t set_hyunion(int64_t a, int64_t b) {
-        struct { void *hamt; } *sa = (void*)(intptr_t)a;
-  struct { void *hamt; } *sb = (void*)(intptr_t)b;
-  void *new_hamt = tur_hamt_merge(sa->hamt, sb->hamt);
-  struct { void *hamt; } *r = malloc(sizeof(*r));
-  r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
-  
-}
-
-static int64_t set_hyintersect(int64_t a, int64_t b) {
-        struct { void *hamt; } *sa = (void*)(intptr_t)a;
-  struct { void *hamt; } *sb = (void*)(intptr_t)b;
-  void *result = tur_hamt_new();
-  uint64_t iter_buf[32];
-  for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
-  tur_hamt_iter_init((void*)iter_buf, sa->hamt);
-  uint64_t hash_out;
-  void *key_out = NULL, *val_out = NULL;
-  while (tur_hamt_iter_next((void*)iter_buf, &hash_out, &key_out, &val_out)) {
-      if (tur_hamt_has(sb->hamt, (int64_t)hash_out, key_out)) {
-          result = tur_hamt_set(result, (int64_t)hash_out, key_out, (void*)1);
-      }
-  }
-  tur_hamt_iter_free((void*)iter_buf);
-  struct { void *hamt; } *r = malloc(sizeof(*r));
-  r->hamt = result;
-  return (int64_t)(intptr_t)r;
-  
-}
-
-static int64_t set_hydiff(int64_t a, int64_t b) {
-        struct { void *hamt; } *sa = (void*)(intptr_t)a;
-  struct { void *hamt; } *sb = (void*)(intptr_t)b;
-  void *result = tur_hamt_new();
-  uint64_t iter_buf[32];
-  for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
-  tur_hamt_iter_init((void*)iter_buf, sa->hamt);
-  uint64_t hash_out;
-  void *key_out = NULL, *val_out = NULL;
-  while (tur_hamt_iter_next((void*)iter_buf, &hash_out, &key_out, &val_out)) {
-      if (!tur_hamt_has(sb->hamt, (int64_t)hash_out, key_out)) {
-          result = tur_hamt_set(result, (int64_t)hash_out, key_out, (void*)1);
-      }
-  }
-  tur_hamt_iter_free((void*)iter_buf);
-  struct { void *hamt; } *r = malloc(sizeof(*r));
-  r->hamt = result;
-  return (int64_t)(intptr_t)r;
   
 }
 
@@ -4388,11 +4296,6 @@ static bool set_hyeq_hycmp_qu(int64_t a, int64_t b, int64_t cmp_fn) {
   
 }
 
-static void set_hyfree(int64_t s) {
-        free((void*)(intptr_t)s);
-  
-}
-
 static void * set_hyhamt(int64_t s) {
         struct { void *hamt; } *set = (void*)(intptr_t)s; return set->hamt; 
 }
@@ -4445,10 +4348,6 @@ static bool set_hyeq_hyfull(int64_t s1, int64_t s2) {
             __t44 = set_hyeq_hydriver(s1, s2);
         }
         return __t44;
-}
-
-static int64_t set_hyadd1(int64_t s, int64_t x) {
-        return set_hyadd(s, x, x);
 }
 
 static int64_t mutmap_hylen(int64_t m) {

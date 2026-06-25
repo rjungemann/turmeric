@@ -27,20 +27,25 @@ description: Replicate the Vec producer-monomorphization slice (commit "monomorp
     resolved slot type. `Eq[Map]` dispatches via a typed by-value spec; typed
     `(Map int int)` consumers receive `Map__int__int *`. See
     `docs/archive/eq-map-typed-consumer-blocked-on-transparent-newtype.md`.
-  - **Set (`stdlib/set.tur`):** producers NOT started -- `set-new` et al.
-    still `(int64_t)(intptr_t)`, zero `__TUR_RET__` matches. But the typed
-    Set *consumer* now exists: `typed-collection-eq-consumers-plan.md`
-    rewrote `Eq[Set]`'s `set-eq-full` / `set-eq-driver` to by-value `(Set A)`,
-    so a concrete `(Set int)` receiver dispatches via
-    `set_eq_full__spec__...(Set__int *, ...)` and emits a `(Set__int *)`
-    consumer (`set-typed-consumer` fixture). Typing Set's producers here is
-    therefore no longer pure future-proofing -- it has a real consumer to
-    point at, and `Set` is already non-transparent (`(hamt :ptr<void>)`), so
-    unlike Map it needs no representation change, only the
-    `(int64_t)(intptr_t)` -> `(__TUR_RET__)(intptr_t)` flip on the producers
-    + `Set` joining the `type_is_heap_vec` allow-list + flipping `set-count` /
-    `set-hamt` to by-value in lockstep (so carrier callers don't break, the
-    same producer/consumer-flip-together rule the Map slice followed).
+  - **Set (`stdlib/set.tur`):** DONE. `Set` is already non-transparent
+    (`(hamt :ptr<void>)`), so unlike Map it needed no representation change --
+    only the producer/consumer flip, done in lockstep per the same rule the
+    Map slice followed. The six heap-returning producers (`set-new`,
+    `set-add`, `set-remove`, `set-union`, `set-intersect`, `set-diff`, plus the
+    `set-add1` wrapper) now return through `(__TUR_RET__)(intptr_t)` and are
+    `[A]`-polymorphic over `(Set A)`; the accessors (`set-count`, `set-member?`,
+    `set-free`, `set-hamt`) and the `Eq[Set]` helpers (`set-eq-full` /
+    `set-eq-driver`) take by-value `(Set A)`; `Set` joined the
+    `type_is_heap_vec` allow-list (`emit_module.c`). The element/hash slots
+    stay `:int` carrier (mirroring Map's `key :int`), and the carrier-essential
+    `set-eq?` / `set-eq-cmp?` inline-C walkers stay on `:int` (the same
+    compromise `map-eq?` / `vec-eq?` made). A concrete `(Set int)` now
+    monomorphizes to `Set__int *` end to end: typed producers
+    (`set_new__spec__Set__int__`, `set_add__spec__...`), typed accessors
+    (`set_count__spec__...`), and `Eq[Set]` dispatching via
+    `__inst_Eq_eq_qu_Set__spec__...(Set__int *, Set__int *)`
+    (`set-typed-consumer` fixture). An HKT-headed / abstract-A receiver still
+    instantiates the int64 carrier, so existing carrier callers are unaffected.
   - **MutableMap (`stdlib/mutmap.tur`):** DONE. `mutmap-new` at line
     73 returns through `__TUR_RET__`.
 - **Step 4 (signature/bridge plumbing already generic):** Confirmed --
