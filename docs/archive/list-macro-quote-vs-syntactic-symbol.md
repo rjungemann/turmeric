@@ -1,6 +1,10 @@
 # `(list bare-sym ...)` Inside `defmacro` Relies On Syntactic-Symbol Passthrough That `'sym` Does Not Provide
 
-> **Status:** Reported, not yet investigated.
+> **Status:** Resolved 2026-06-25 -- `elab_call` now treats an F_QUOTE-wrapped
+>   F_SYM in call-head position as the bare symbol, so a macro that builds its
+>   expansion via `(list 'foo args...)` dispatches the emitted `(foo args...)`
+>   through the normal scope-lookup / special-form / macro path. Regression
+>   fixture: `tests/fixtures/macro-list-quote-symbol-head/`.
 > **Severity:** Low-medium -- subtle but real asymmetry in how
 >   `(list ...)` treats bare symbol names vs. quote-form symbol values
 >   inside macro bodies. Affects macro authors trying to build AST

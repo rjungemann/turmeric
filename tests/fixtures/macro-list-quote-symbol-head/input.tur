@@ -1,0 +1,17 @@
+;; Regression for docs/archive/list-macro-quote-vs-syntactic-symbol.md.
+;;
+;; A macro body that builds its expansion via `(list 'foo args...)` lands
+;; in elab_call with the head shaped as F_QUOTE wrapping F_SYM(foo) -- the
+;; same `'foo` literal the macro body wrote. Before the fix the head fell
+;; through the generic head-expression path, elaborated to an EX_SYM_LIT
+;; (:Sym), and tripped "expression in call head has type `Sym`, which is
+;; not callable". After the fix `'sym` in head position is treated as the
+;; bare `sym`, so the macro-emitted call dispatches normally.
+
+(defn foo [a : int b : int] : int (+ a b))
+
+(defmacro mk [] (list 'foo 10 5))
+
+(defn main [] : int
+  (println (mk))   ;; 15
+  0)

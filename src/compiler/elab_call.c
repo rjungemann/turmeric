@@ -1411,6 +1411,27 @@ Expr *elab_call(Elab *e, Form *call) {
     /* Already established: call->tag == F_LIST and len >= 1. */
     Form *head = call->as.list.items[0];
 
+    /* docs/reported/list-macro-quote-vs-syntactic-symbol.md: a macro that
+     * builds an expansion via `(list 'foo args...)` lands here with the head
+     * shaped as F_QUOTE wrapping F_SYM(foo) -- the same `'foo` literal the
+     * macro body wrote. Without this unwrap the head elaborates to an
+     * EX_SYM_LIT (:Sym), which falls through to the head-expression path and
+     * trips "expression in call head has type `Sym`, which is not callable".
+     * Treat `'sym` in head position the same as the bare `sym`: rewrite the
+     * call's head to the underlying F_SYM and recurse so scope lookup,
+     * special-form dispatch, and macro dispatch all fire as expected. This
+     * restores the round-trip for macro authors who carry symbols around as
+     * quoted values and splice them into call-head positions. */
+    if (head->tag == F_QUOTE && head->as.list.len == 1 &&
+        head->as.list.items[0]->tag == F_SYM) {
+        uint32_t n = call->as.list.len;
+        Form **items = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+        items[0] = head->as.list.items[0];
+        for (uint32_t i = 1; i < n; i++) items[i] = call->as.list.items[i];
+        Form *rewritten = form_list(e->arena, call->span, items, n);
+        return elab_call(e, rewritten);
+    }
+
     /* General callable-expression heads: ((expr) args...). */
     if (head->tag != F_SYM) {
         Expr *head_expr = elab_form(e, head);
