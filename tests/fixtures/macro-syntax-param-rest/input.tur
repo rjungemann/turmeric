@@ -1,0 +1,12 @@
+;; ^syntax on a rest param: each rest arg stays as raw AST and the rest
+;; list itself is bound as an F_LIST value the macro can walk with CT
+;; builtins (first/rest/symbol-name).
+;; docs/reported/macro-args-elaborated-before-expansion.md
+(defmacro names [& ^syntax decls]
+  `(do
+     (println ~(symbol-name (first (first decls))))
+     (println ~(symbol-name (first (second decls))))))
+
+(defn main [] : int
+  (names (alpha : int 1) (beta : float 2.0))
+  0)

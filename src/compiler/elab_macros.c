@@ -17,7 +17,7 @@ static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint
 static CtValue ct_eval_call(CtEnv *env, Form *f);
 static CtValue ct_eval_form(CtEnv *env, Form *f);
 static CtValue ct_eval_splice_inner(CtEnv *env, Form *f);
-static Form *elab_eval_macro_form(Elab *e, Form *f);
+static Form *elab_eval_macro_form(Elab *e, Form *f, MacroDef *macro, Form **args);
 static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args);
 
 static CtValue ct_value_form(Form *f) {
@@ -885,9 +885,25 @@ static CtValue ct_eval_form(CtEnv *env, Form *f) {
     return ct_value_form(f);
 }
 
-static Form *elab_eval_macro_form(Elab *e, Form *f) {
+static Form *elab_eval_macro_form(Elab *e, Form *f, MacroDef *macro, Form **args) {
     bool ok = true;
     CtEnv *env = ct_env_new(e, NULL, &ok);
+    /* Bind ^syntax params so (first decl) / (symbol-name decl) in the macro
+     * body see the raw arg Form as a CT value instead of trying to evaluate
+     * the substituted code (which would hit the bug in
+     * docs/reported/macro-args-elaborated-before-expansion.md). */
+    if (macro && macro->is_syntax_param) {
+        for (uint32_t i = 0; i < macro->n_params; i++) {
+            if (!macro->is_syntax_param[i]) continue;
+            Form *param = macro->params[i];
+            if (param->tag == F_SYM) {
+                ct_env_bind(env, param->as.sym, ct_value_form(args[i]));
+            }
+        }
+    }
+    if (macro && macro->rest_is_syntax && macro->rest_param) {
+        ct_env_bind(env, macro->rest_param, ct_value_form(args[macro->n_params]));
+    }
     CtValue v = ct_eval_form(env, f);
     if (!ok) return NULL;
     if (v.tag != CT_VAL_FORM) {
@@ -1210,11 +1226,17 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
             for (uint32_t i = 0; i < macro->n_params; i++) {
                 Form *param = macro->params[i];
                 if (param->tag == F_SYM && param->as.sym == f->as.sym) {
+                    /* ^syntax param: leave the symbol; the CT env (set up by
+                     * elab_eval_macro_form) binds it to the raw arg Form so
+                     * (first decl) / (symbol-name decl) treat it as AST data
+                     * rather than evaluating it as code. */
+                    if (macro->is_syntax_param && macro->is_syntax_param[i]) return f;
                     return args[i];
                 }
             }
             /* Check if this symbol is the rest parameter */
             if (macro->rest_param && macro->rest_param == f->as.sym) {
+                if (macro->rest_is_syntax) return f;
                 return args[macro->n_params]; /* rest list packed at n_params index */
             }
             /* Not a parameter - return as-is */
@@ -1287,7 +1309,8 @@ Form *elab_expand_macro(Elab *e, MacroDef *macro, Form **args, uint32_t n_args) 
         aug_args[macro->n_params] = form_list(e->arena, rest_span, rest_items, n_rest);
         Form *templ = substitute_params(e, macro->body, macro, aug_args);
         if (!templ) { EXPAND_RESTORE(); return NULL; }
-        Form *result = form_contains_ct_builtins(templ) ? elab_eval_macro_form(e, templ) : templ;
+        Form *result = (form_contains_ct_builtins(templ) || macro->is_syntax_param || macro->rest_is_syntax)
+            ? elab_eval_macro_form(e, templ, macro, aug_args) : templ;
         EXPAND_RESTORE(); return result;
     }
     if (n_args != macro->n_params) {
@@ -1300,7 +1323,8 @@ Form *elab_expand_macro(Elab *e, MacroDef *macro, Form **args, uint32_t n_args) 
     /* Substitute parameters in the macro body */
     Form *templ = substitute_params(e, macro->body, macro, args);
     if (!templ) { EXPAND_RESTORE(); return NULL; }
-    Form *result = form_contains_ct_builtins(templ) ? elab_eval_macro_form(e, templ) : templ;
+    Form *result = (form_contains_ct_builtins(templ) || macro->is_syntax_param)
+        ? elab_eval_macro_form(e, templ, macro, args) : templ;
     EXPAND_RESTORE(); return result;
 
 #undef EXPAND_RESTORE
@@ -1343,35 +1367,65 @@ Expr *elab_defmacro(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* Extract parameter symbols, detecting optional variadic '& rest' tail. */
+    /* Extract parameter symbols, detecting optional variadic '& rest' tail
+     * and per-param '^syntax' markers (macro-args-elaborated-before-expansion).
+     * '^syntax' appears as a separate token immediately before the param it
+     * marks; the next token is the actual param name (may also follow '&'). */
     uint32_t n_total = params_f->as.list.len;
-    /* Allocate enough space for all params (excluding '&' marker) */
+    /* Allocate enough space for all params (excluding '&' / '^syntax' markers) */
     Form **params = (Form **)arena_alloc(e->arena, n_total * sizeof(Form *));
+    bool *is_syntax_param = (bool *)arena_alloc(e->arena, n_total * sizeof(bool));
+    memset(is_syntax_param, 0, n_total * sizeof(bool));
     uint32_t n_fixed = 0;
     bool is_variadic = false;
+    bool rest_is_syntax = false;
     const Symbol *rest_param = NULL;
+    bool next_is_syntax = false;
+    bool any_syntax = false;
 
     for (uint32_t i = 0; i < n_total; i++) {
         Form *p = params_f->as.list.items[i];
         if (p->tag != F_SYM) {
             diag_emit(DIAG_ERROR, p->span,
-                      "defmacro: parameter must be a symbol, got %s", 
+                      "defmacro: parameter must be a symbol, got %s",
                       p->tag == F_KEYWORD ? "keyword" : "non-symbol");
             return NULL;
         }
-        if (p->as.sym == e->sym_borrow) {
-            /* '&' rest-arg marker: the next symbol is the rest param */
+        /* '^syntax' marker: the next param receives its arg as raw AST. */
+        if (p->as.sym->len == 7 && memcmp(p->as.sym->name, "^syntax", 7) == 0) {
             if (i + 1 >= n_total) {
+                diag_emit(DIAG_ERROR, p->span,
+                          "defmacro: '^syntax' must be followed by a parameter name");
+                return NULL;
+            }
+            next_is_syntax = true;
+            continue;
+        }
+        if (p->as.sym == e->sym_borrow) {
+            /* '&' rest-arg marker: the next symbol (or '^syntax' marker + symbol)
+             * is the rest param */
+            uint32_t j = i + 1;
+            bool rest_syn = next_is_syntax;
+            next_is_syntax = false;
+            if (j < n_total) {
+                Form *q = params_f->as.list.items[j];
+                if (q->tag == F_SYM && q->as.sym->len == 7 &&
+                    memcmp(q->as.sym->name, "^syntax", 7) == 0) {
+                    rest_syn = true;
+                    j++;
+                }
+            }
+            if (j >= n_total) {
                 diag_emit(DIAG_ERROR, p->span,
                           "defmacro: '&' must be followed by a rest parameter name");
                 return NULL;
             }
-            if (i + 2 < n_total) {
-                diag_emit(DIAG_ERROR, params_f->as.list.items[i + 2]->span,
+            if (j + 1 < n_total) {
+                diag_emit(DIAG_ERROR, params_f->as.list.items[j + 1]->span,
                           "defmacro: only one parameter may follow '&'");
                 return NULL;
             }
-            Form *rest_f = params_f->as.list.items[i + 1];
+            Form *rest_f = params_f->as.list.items[j];
             if (rest_f->tag != F_SYM) {
                 diag_emit(DIAG_ERROR, rest_f->span,
                           "defmacro: rest parameter after '&' must be a symbol");
@@ -1379,9 +1433,21 @@ Expr *elab_defmacro(Elab *e, const Form *call) {
             }
             is_variadic = true;
             rest_param = rest_f->as.sym;
+            rest_is_syntax = rest_syn;
+            if (rest_syn) any_syntax = true;
             break; /* no more params after & rest */
         }
+        if (next_is_syntax) {
+            is_syntax_param[n_fixed] = true;
+            any_syntax = true;
+            next_is_syntax = false;
+        }
         params[n_fixed++] = p;
+    }
+    if (next_is_syntax) {
+        diag_emit(DIAG_ERROR, params_f->span,
+                  "defmacro: '^syntax' must be followed by a parameter name");
+        return NULL;
     }
 
     /* The body is everything after the parameter list */
@@ -1413,6 +1479,8 @@ Expr *elab_defmacro(Elab *e, const Form *call) {
     macro->n_params = n_fixed;
     macro->is_variadic = is_variadic;
     macro->rest_param = rest_param;
+    macro->is_syntax_param = any_syntax ? is_syntax_param : NULL;
+    macro->rest_is_syntax = rest_is_syntax;
     macro->body = body;
     macro->span = call->span;
     macro->defining_module_name = e->current_module_name; /* Phase M4 */

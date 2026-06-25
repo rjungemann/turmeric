@@ -746,6 +746,15 @@ typedef struct MacroDef {
     uint32_t n_params;       /* number of fixed params (excludes rest param) */
     bool is_variadic;        /* true if [params & rest] syntax used */
     const Symbol *rest_param; /* rest-arg symbol name, or NULL */
+    /* docs/reported/macro-args-elaborated-before-expansion.md:
+     * per-param ^syntax marker.  When is_syntax_param[i] is true, the
+     * corresponding arg form is passed to the macro as data: substitute_params
+     * leaves the param symbol in place and elab_eval_macro_form binds the
+     * symbol to the raw arg Form in the CT env, so CT builtins like
+     * (first decl) / (symbol-name (first decl)) walk the AST instead of
+     * trying to evaluate it as code. NULL when no params are marked. */
+    bool *is_syntax_param;
+    bool rest_is_syntax;     /* ^syntax marker on the rest param */
     Form *body;
     Span span;
     /* Phase M4: module that defined this macro (NULL = stdlib/pre-module) */

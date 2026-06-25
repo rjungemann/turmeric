@@ -1,6 +1,14 @@
 # Macro Arguments Are Elaborated Before The Macro Sees Them
 
-> **Status:** Reported, not yet investigated.
+> **Status:** Resolved 2026-06-25. Per-parameter `^syntax` marker
+>   landed (fix direction #2). A macro param prefixed with `^syntax`
+>   receives its arg as raw AST: `substitute_params` leaves the param
+>   symbol in place and `elab_eval_macro_form` binds it in the CT env
+>   to the unevaluated Form, so `(first decl)` / `(symbol-name decl)`
+>   walk the AST rather than evaluate it as code. Works for fixed and
+>   variadic rest params (`& ^syntax decls`). Fixtures:
+>   `tests/fixtures/macro-syntax-param`,
+>   `tests/fixtures/macro-syntax-param-rest`.
 > **Severity:** Medium-high -- the most foundational of the three
 >   DSL-author gaps spun out of the original
 >   `defgodot-script` investigation. Without this, no DSL surface can
