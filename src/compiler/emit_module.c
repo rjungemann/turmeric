@@ -5025,6 +5025,40 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
     buf_printf(out, "} %s;\n\n", adt_c_name);
     }
 
+    /* CONV-S1 seam 4 (inline-C compat alias for a parametric record): a
+     * parametric single-variant record ADT (a lowered parametric defstruct --
+     * Tuple2 / Pair, and the comonad/future/promise cells built on them) gets NO
+     * `<Name>` surface alias above (that is non-parametric only), yet stdlib
+     * inline-C names the erased generic struct directly
+     * (`Tuple2 *p = malloc(sizeof(Tuple2)); p->e1 = ...`).  At default that
+     * `typedef struct Tuple2 { int64_t e1; int64_t e2; }` is emitted by the
+     * struct path; under lowering it vanishes.  Re-emit it -- carrier (int64)
+     * field slots keyed by the record's real field names -- so the inline-C
+     * compiles.  It is byte-compatible with the positional `tur_adt_<Name>`
+     * carrier (same offsets) and is referenced ONLY by hand-written inline-C;
+     * generated code always uses `tur_adt_<Name>` / its monomorphs.  Guarded so
+     * the multi-path emit (early_file + impl_early) does not redefine it. */
+    if (def->n_type_params > 0 && def->n_ctors == 1 && def->ctors[0]->is_record) {
+        CtorDef *crec = def->ctors[0];
+        bool all_named = crec->n_fields > 0;
+        for (uint32_t fi = 0; fi < crec->n_fields; fi++)
+            if (!crec->fields[fi].name) { all_named = false; break; }
+        if (all_named) {
+            char *sname = mangle_field_name(def->name);
+            buf_printf(out, "#ifndef TUR_COMPAT_%s\n#define TUR_COMPAT_%s\n",
+                       sname, sname);
+            buf_printf(out, "typedef struct %s {\n", sname);
+            for (uint32_t fi = 0; fi < crec->n_fields; fi++) {
+                const char *ctype = adt_ctor_field_c_type(&crec->fields[fi], false);
+                char *fname = mangle_field_name(crec->fields[fi].name);
+                buf_printf(out, "    %s %s;\n", ctype, fname);
+                free(fname);
+            }
+            buf_printf(out, "} %s;\n#endif\n\n", sname);
+            free(sname);
+        }
+    }
+
     /* CONV-S1 (slice 2): a by-value ADT with rc/ref/weak fields needs the same
      * drop/walk glue a struct gets, so an `rc/of` wrapping it releases the inner
      * owned fields when the control block hits zero. */
@@ -8462,6 +8496,36 @@ int emit_program(Buf *out, const Expr *program) {
             }
             buf_printf(&early_file, "    } as;\n");
             buf_printf(&early_file, "} %s;\n\n", adt_c_name);
+            }
+
+            /* CONV-S1 seam 4 (inline-C compat alias for a parametric record):
+             * mirror of emit_adt_typedef_and_ctors -- re-emit the erased generic
+             * `typedef struct <Name> { <int64 named fields> }` for a parametric
+             * single-variant record so stdlib inline-C that names the bare type
+             * (`Tuple2 *p; p->e1 = ...`) compiles.  Byte-compatible carrier form;
+             * referenced only by hand-written inline-C. */
+            if (def->n_type_params > 0 && def->n_ctors == 1 &&
+                def->ctors[0]->is_record) {
+                CtorDef *crec = def->ctors[0];
+                bool all_named = crec->n_fields > 0;
+                for (uint32_t fi = 0; fi < crec->n_fields; fi++)
+                    if (!crec->fields[fi].name) { all_named = false; break; }
+                if (all_named) {
+                    char *sname = mangle_field_name(def->name);
+                    buf_printf(&early_file,
+                               "#ifndef TUR_COMPAT_%s\n#define TUR_COMPAT_%s\n",
+                               sname, sname);
+                    buf_printf(&early_file, "typedef struct %s {\n", sname);
+                    for (uint32_t fi = 0; fi < crec->n_fields; fi++) {
+                        const char *ctype =
+                            adt_ctor_field_c_type(&crec->fields[fi], false);
+                        char *fname = mangle_field_name(crec->fields[fi].name);
+                        buf_printf(&early_file, "    %s %s;\n", ctype, fname);
+                        free(fname);
+                    }
+                    buf_printf(&early_file, "} %s;\n#endif\n\n", sname);
+                    free(sname);
+                }
             }
 
             /* CONV-S1 (slice 2): by-value ADT drop/walk glue (mirror of
