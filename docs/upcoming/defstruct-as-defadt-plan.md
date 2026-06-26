@@ -591,11 +591,25 @@ runtime *usage* seam, below.
      regenerated.  *Cleared ~43* (`httpd-*`, `clone-*`, `eqmap-struct`, the `Pos`
      `typeclass-*` tests).  Fixture `conv-defstruct-inline-c-abi`.
 
-   **Running total: 212 -> 66 unique build-failing fixtures under force-lower
+   **Running total: 212 -> 60 unique build-failing fixtures under force-lower
    (default suite stays 1857/0).**  (Sub-root (a) -- 0-arg construct in control
    flow -- the inline-C-tail return bridge, the accessor-unbox, the
-   assignment-position straddle, the inline-C instance-method signature, and the
-   by-value struct-field receiver / by-value ADT field storage are all LANDED.)
+   assignment-position straddle, the inline-C instance-method signature, the
+   by-value struct-field receiver / by-value ADT field storage, the parametric
+   keyword type-param field, and set!-over-lowered-record-ADT are all LANDED.)
+
+   - **parametric keyword type-param field DONE (2026-06-26).**  A parametric
+     `(defstruct Box [A] (val :A) ...)` lowered to a record variant where the
+     `:A` keyword field type was not matched against the type params (the bare-`A`
+     TP1 check only sees F_SYM); resolve_ctor_field now resolves a keyword type
+     param to a tyvar field.  Cleared `m2b-default-of`, `m2b-make-struct-keyword`.
+   - **set!-over-lowered-record-ADT DONE (2026-06-26).**  `(set! (.field s) v)`
+     resolved only a StructDef receiver; a lowered record ADT (by-value or :heap)
+     errored / null-derefed.  elab_set_field resolves a record-ADT receiver to its
+     sole record ctor; EX_SET_FIELD carries adt_def/adt_ctor and
+     emit_set_field_stmt writes through the ADT member path.  Cleared
+     `struct-set-field`, `defstruct-byvalue-struct-field`,
+     `heap-make-struct-roundtrip`, `heap-generic-base`.
 
    - **by-value ADT struct field + carrier-held receiver DONE (2026-06-26).**
      A struct field typed as a by-value aggregate ADT (`(Option cstr)` ->
