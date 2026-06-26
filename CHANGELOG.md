@@ -4,6 +4,56 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.25.3] -- 2026-06-26
+
+### Added
+
+- **CONV-S1 struct/ADT convergence widens to parametric, fn-field, and
+  pointer-field structs (#551, #554, #561, #566, #567).** `defstruct`
+  lowering now handles by-value ADT products with nested aggregates,
+  rc<ADT> field access, drop-glue, large-ADT pass-by-pointer ABI, typed
+  `fn` fields, and parametric record-ADT field access with
+  instance-head resolution.
+- **Parametric ADT by-value monomorphisation flipped on (P2-P4, #559).**
+  Wire crossings landed and the gate is on.
+- **Heap-ADT auto-lowering + carrier bridges for parametric `:heap`
+  (#568, #569).** Seam 3 of the CONV-S1 ABI work: typed-pointer ADT
+  foundation plus auto-lowering and bridges.
+- **B4 slice 2: wide by-value ADT closure params via heap-box carrier
+  (#563).** Wide ADTs survive fat-closure boundaries.
+- **Typed consumers for `Set` (#564) and `Eq[Cons]` via typed
+  `(Cons__A *)` consumers (#553).**
+- **libturi embed peripherals: Gaps 1-8 (#547, #549) + configurable
+  include paths for embedders.**
+- **Debugger Phase 4 + 5 (#548, #550).** Native source maps for
+  `emit-c`; native type-name audit and gdb pretty-printers.
+- **Typed native registration (#552).** Curated facades over embedder
+  natives now type-check.
+- **TUR-W0040: warn on eval-mode unknown call heads (#560).**
+
+### Changed
+
+- **`Map` is now a non-transparent heap struct backed by a HAMT pointer
+  (#555).**
+- **Macro args elaborated before expansion; list-macro quote vs
+  syntactic-symbol fixes; nested vec literals collapse to a runtime
+  vec.**
+
+### Fixed
+
+- **By-value Result/Option field access aggregate-to-pointer cast
+  (#557).**
+- **Multi-param struct-app spine preservation for param/return types
+  (#556).**
+
+### Docs
+
+- **Godot binding guide (G5 prep) + typing follow-ups plan
+  (G6.1-G6.3).**
+- **Windows cross-compile bootstrap plan (#562).**
+- **Cross-script calls section (T4.A starter); Tier 3 and Tier 4 plans
+  archived as shipped.**
+
 ## [0.25.2] -- 2026-06-24
 
 ### Added

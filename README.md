@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.25.2` -- interpreter debugger with DAP server (`tur debug`), by-value ADT representation for struct/ADT convergence, and a major Try Turmeric web playground overhaul (PWA, mobile layout, persistence).
+**Latest release:** `v0.25.3` -- CONV-S1 struct/ADT convergence widens to parametric, fn-field, and pointer-field structs; parametric ADT by-value monomorphisation flips on; libturi embed peripherals and debugger source maps land.
 
 ## What
 
