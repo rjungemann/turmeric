@@ -637,6 +637,40 @@ runtime *usage* seam, below.
      r;`) under an int64 carrier signature -- the compiler cannot rewrite inside
      inline-C, so the method's C signature must be the concrete aggregate (an
      instance-method return-ABI decision), or the body must be wrapped.
+   - **0-arg return-only-poly construct (`none`/`empty`) not spec-recorded in
+     control flow (HIGHEST-LEVERAGE sub-root, located 2026-06-26).**  In
+     `(if b (some 1) (none))` consumed/returned at type `(Option int)`, `some`
+     emits its by-value spec `some__spec__tur_adt_Option__int_int64_t` but `none`
+     emits the int64 carrier base `none()` -- so the two `if` branches disagree on
+     representation and the by-value merge temp `tur_adt_Option__int __t = none()`
+     is a hard cc error.  `find_matched_abi_spec` (emit_expr.c) returns NULL for a
+     0-arg construct UNLESS the exact call `Expr*` was recorded in
+     `specialized_call_exprs` (its only sound disambiguator -- a 0-arg construct
+     has no arg types to key on, and a by-value spec differs from the carrier base
+     ONLY in return ABI).  `some` (1-arg) gets recorded; the sibling `none` (0-arg)
+     in the same control-flow merge does NOT.  The fix is in the spec-RECORDING
+     pass (emit_module.c): when a by-value Option/Result flows through an if/let/do
+     merge or a by-value return slot, record the 0-arg construct branches
+     (`none`/`err`-less/`empty`) against the same by-value spec as their siblings.
+     The matching `none__spec__tur_adt_Option__int()` is already emitted -- only
+     the call-site selection is missing.  This single sub-root recurs across the
+     cluster wherever Option/Result construction sits in control flow.
+   - **existential-wrapped construct return** (`kleisli-arrow-instance`): the
+     closure body is `(pack (some x) ...)` (EX_EXISTS_PACK, kind 93), so the
+     existing concrete->carrier return bridge (emit_fns.c ~L1431, which already
+     handles a bare `some`/`ok` tail) cannot see the by-value producer through the
+     `pack`.  Needs the bridge / `fn_body_tail_*` walkers to look through
+     EX_EXISTS_PACK.
+
+   **Assessment.**  Every sub-root above lives in the most delicate central
+   codegen -- spec interning/recording (`specialized_call_exprs`), the parametric
+   monomorph ctor/accessor box-unbox, and the function return-ABI decision -- and
+   most fixtures need several at once.  Each is a real, located fix, but landing
+   them safely needs dedicated, careful work (high regression surface on the green
+   1854 suite); they do not yield to quick one-shot increments.  A pragmatic
+   graduation alternative for the residue is to keep the specific stdlib constructs
+   that straddle (return-only-poly `none`/`err` in control flow) on the carrier
+   representation rather than forcing them by-value.
 
    Then: ~22 fixtures that **build but mismatch at runtime or only fail at link**
    (`OK_RUNTIME_OR_LINK` -- includes the httpd `-lturi` harness-link cases that only
