@@ -8,19 +8,26 @@ description: Make a concrete monomorphisation of a single-variant parametric fla
 
 ## Status at a glance (2026-06-25)
 
-- **P1 (gate + plumbing, hard-off)** -- **LANDED**. `bash tests/run.sh` 1825 /
-  0, zero churn. Gate-on smoke test reproduces exactly the 4 expected crossings.
+- **P1 (gate + plumbing, hard-off)** -- **LANDED**.
 - **P2 (Crossing A: match / field-access / result-init on app receiver)** --
-  **NOT STARTED**.
+  **LANDED**.
 - **P3 (Crossing B: by-value app value into a carrier ctor field)** --
-  **NOT STARTED**.
-- **P4 (flip `g_adt_app_byvalue` on + regen snapshots)** -- **NOT STARTED**.
-- **Step 5 (`:heap` typed-pointer ADT ABI)** -- **NOT STARTED**, layered on
-  top of P4. This is the last gap before CONV-S1 graduation.
+  **LANDED**.
+- **P4 (flip `g_adt_app_byvalue` on + regen snapshots)** -- **LANDED**. Suite:
+  1828 / 0 with the gate live; added `conv-byval-adt-app-pair` covering both
+  crossings. (P2-P4 shipped in commit 37baf8d38.)
+- **Step 5 (`:heap` typed-pointer ADT ABI)** -- **PARTIAL.** Non-parametric
+  `:heap` defstruct lowering landed (commit 7431a0007) and the parametric
+  `:heap` typed-pointer<->int64-carrier bridges are wired (commit 82b71ce5b),
+  but the parametric `:heap` lowering gate stays CLOSED: a few carrier-bridge
+  sites still emit cosmetic -Wint-conversion warnings and the hand-written
+  stdlib (Vec/Map/Set/MutableMap) inline-C still assumes the struct
+  representation. Both are tracked for graduation in
+  [`defstruct-as-defadt-plan.md`](defstruct-as-defadt-plan.md).
 
-**Next action:** P2 (Crossing A). Independent of CONV-S1 B4 (the
-functor-applied-to-self HKT crossing) -- the predicate excludes residual-tyvar
-fields, so M7 reconciliation is not a prerequisite for P2-P4.
+**Next action:** finish the parametric `:heap` graduation tail in
+`defstruct-as-defadt-plan.md` (warning-clean carrier bridges + stdlib inline-C
+rep migration), then flip the parametric-:heap lowering gate.
 
 **Downstream gate:** CONV-S1 graduation -- retiring `StructDef` and lowering
 every `defstruct` to `defadt` ([`defstruct-as-defadt-plan.md`](defstruct-as-defadt-plan.md)

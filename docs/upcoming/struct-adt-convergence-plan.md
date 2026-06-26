@@ -6,7 +6,16 @@ description: Unify structs and ADTs by treating `defstruct S [...]` as sugar for
 
 # Struct / ADT Convergence -- Plan
 
-## Implementation status (2026-06-24)
+## Implementation status (2026-06-25)
+
+**CONV-S1 by-value merge: bridging slices B1-B3 landed; B4 (recursive HKT
+fat-closure ABI) shipped and graduated 2026-06-25 (see archived
+`b4-fat-closure-byvalue-adt-abi-plan.md`). The s1-bridging findings doc has
+been archived. CONV-S1 proper (`defstruct` lowering to `defadt`) is landing
+incrementally in [`defstruct-as-defadt-plan.md`](defstruct-as-defadt-plan.md);
+the parametric `:heap` ABI tail is tracked in
+[`parametric-adt-byvalue-plan.md`](parametric-adt-byvalue-plan.md) step 5.**
+
 
 The **surface-level** convergence has landed (each step tested, full suite
 green):
