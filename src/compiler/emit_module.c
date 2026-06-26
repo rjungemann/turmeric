@@ -2351,7 +2351,20 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             ctx->current_abi_specialization->fn &&
             ctx->current_abi_specialization->fn->owner_instance &&
             ctx->current_abi_specialization->result_type.kind == TY_APP;
-        if (!m7_construct_in_byval_spec) return;
+        /* CONV-S1 seam 4 (a): a binding-less return-only-poly construct (`(none)`)
+         * scanned in a let-init / by-value control-flow value-tail (NO active
+         * spec) carries no abi_bindings, but the consuming context published its
+         * concrete result family as `result_type_override` (the value-tail walk in
+         * emit_abi_scan_construct_tail).  Fall through so the
+         * construct_recovered_byvalue path below mints + records `none__spec`
+         * exactly as the return-tail / in-spec positions already do; otherwise the
+         * merge emits the carrier `none()` into a by-value `Option__int` slot. */
+        bool construct_with_concrete_override =
+            result_type_override &&
+            call->as.call_.fn_binding &&
+            call->as.call_.fn_binding->is_construct_template &&
+            result_type_override->kind == TY_APP;
+        if (!m7_construct_in_byval_spec && !construct_with_concrete_override) return;
     }
 
     /* Variant 2 of generic-struct-opaque-element: when this call is scanned
@@ -3551,6 +3564,50 @@ static void emit_abi_scan_fn_values(EmitCtx *ctx, const Expr *call,
     }
 }
 
+/* CONV-S1 seam 4 (a): register the #{Construct} calls in the VALUE-TAIL of `e`
+ * (descending through ascribe / if-then-else / do-last / let-body) with
+ * `override` as their result type.  A binding-less return-only-poly construct
+ * (`(none)` / `(empty)`) carries an abstract `(Option A)` type of its own; only
+ * the consuming context (a let-binding's declared `(Option int)`) knows the
+ * concrete family.  Passing it as result_type_override makes
+ * emit_abi_register_call's construct_recovered_byvalue path mint the by-value
+ * spec.  Only tail value positions are visited -- a construct in an argument /
+ * condition keeps its own ABI and is left to the normal scan. */
+static void emit_abi_scan_construct_tail(EmitCtx *ctx, const Expr *e,
+                                         const Type *override,
+                                         const Expr **items, uint32_t n_items) {
+    if (!e || !override) return;
+    switch (e->kind) {
+        case EX_ASCRIBE:
+            emit_abi_scan_construct_tail(ctx, e->as.ascribe_.inner, override,
+                                         items, n_items);
+            break;
+        case EX_IF:
+            emit_abi_scan_construct_tail(ctx, e->as.if_.then_, override,
+                                         items, n_items);
+            emit_abi_scan_construct_tail(ctx, e->as.if_.else_or_null, override,
+                                         items, n_items);
+            break;
+        case EX_DO:
+            if (e->as.do_.n > 0)
+                emit_abi_scan_construct_tail(ctx, e->as.do_.items[e->as.do_.n - 1],
+                                             override, items, n_items);
+            break;
+        case EX_LET:
+        case EX_LETREC:
+            emit_abi_scan_construct_tail(ctx, e->as.let_.body, override,
+                                         items, n_items);
+            break;
+        case EX_CALL:
+            if (e->as.call_.fn_binding &&
+                e->as.call_.fn_binding->is_construct_template)
+                emit_abi_register_call(ctx, e, items, n_items, override);
+            break;
+        default:
+            break;
+    }
+}
+
 static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
                                const Expr **items, uint32_t n_items) {
     if (!e) return;
@@ -3579,6 +3636,20 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
          * and the link fails with `undefined reference to vec_hynew`. */
         case EX_LETREC:
             for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                /* CONV-S1 seam 4 (a): a binding-less return-only-poly construct in
+                 * a let-init value-tail (`o (if b (some 1) (none))`) carries an
+                 * abstract `(Option A)` result -- only the binding's declared type
+                 * knows `(Option int)`.  Register the construct calls in the init's
+                 * value-tail with the binding's concrete type as result override,
+                 * so the by-value construct spec (`none__spec__tur_adt_Option__int`)
+                 * is minted + recorded exactly as the return-tail position does.
+                 * The normal scan below then skips the already-recorded constructs.
+                 * Only value-tail positions are visited -- args/conditions are left
+                 * to the normal scan (a `none` ARG must stay on its own ABI). */
+                const Binding *lb = e->as.let_.bindings[i].binding;
+                if (lb && lb->type.kind == TY_APP && !type_uses_carrier_abi(lb->type))
+                    emit_abi_scan_construct_tail(ctx, e->as.let_.bindings[i].init,
+                                                 &lb->type, items, n_items);
                 emit_abi_scan_expr(ctx, e->as.let_.bindings[i].init, items, n_items);
             }
             emit_abi_scan_expr(ctx, e->as.let_.body, items, n_items);
@@ -3587,6 +3658,12 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
             for (uint32_t i = 0; i < e->as.do_.n; i++) {
                 emit_abi_scan_expr(ctx, e->as.do_.items[i], items, n_items);
             }
+            /* CONV-S1 seam 4 (a): a `do` whose own type is a concrete construct app
+             * is a by-value merge point -- register its tail construct by value. */
+            if (e->type.kind == TY_APP && !type_uses_carrier_abi(e->type) &&
+                e->as.do_.n > 0)
+                emit_abi_scan_construct_tail(ctx, e->as.do_.items[e->as.do_.n - 1],
+                                             &e->type, items, n_items);
             break;
         case EX_BUILTIN:
             for (uint32_t i = 0; i < e->as.builtin.n; i++) {
@@ -3597,6 +3674,19 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
             emit_abi_scan_expr(ctx, e->as.if_.cond, items, n_items);
             emit_abi_scan_expr(ctx, e->as.if_.then_, items, n_items);
             emit_abi_scan_expr(ctx, e->as.if_.else_or_null, items, n_items);
+            /* CONV-S1 seam 4 (a): an `if` whose own type is a concrete construct
+             * app (`(Option int)`) is a by-value merge point -- both branches feed
+             * a by-value temp.  Register the value-tail constructs of each branch
+             * by value so a binding-less `(none)` branch mints its by-value spec
+             * instead of straddling the carrier base against the by-value temp.
+             * Covers arg / return / nested positions uniformly (the merge temp's C
+             * type is by-value exactly when this node's type is a by-value app). */
+            if (e->type.kind == TY_APP && !type_uses_carrier_abi(e->type)) {
+                emit_abi_scan_construct_tail(ctx, e->as.if_.then_, &e->type,
+                                             items, n_items);
+                emit_abi_scan_construct_tail(ctx, e->as.if_.else_or_null, &e->type,
+                                             items, n_items);
+            }
             break;
         case EX_WHILE:
             emit_abi_scan_expr(ctx, e->as.while_.cond, items, n_items);
