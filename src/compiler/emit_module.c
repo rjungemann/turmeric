@@ -4782,7 +4782,6 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
                                      const char *adt_c_name) {
     if (!def->needs_drop_glue || def->n_ctors == 0) return;
     const CtorDef *ctor = def->ctors[0];
-    char *mctor = mangle_field_name(ctor->name);
 
     buf_printf(out, "static void drop_glue_%s(void *ptr) {\n", adt_c_name);
     buf_printf(out, "    if (!ptr) return;\n");
@@ -4790,16 +4789,16 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
     /* Drop fields in REVERSE order, matching struct drop-glue. */
     for (int32_t fi = (int32_t)ctor->n_fields - 1; fi >= 0; fi--) {
         TypeKind k = ctor->fields[fi].kind;
+        char *mp = adt_field_member_path(def, ctor, (uint32_t)fi);
         if (k == TY_RC) {
-            buf_printf(out, "    if (s->as.%s._%d) { rc_strong_decrement(s->as.%s._%d); rc_free_queue_drain(); }\n",
-                       mctor, fi, mctor, fi);
+            buf_printf(out, "    if (s->%s) { rc_strong_decrement(s->%s); rc_free_queue_drain(); }\n",
+                       mp, mp);
         } else if (k == TY_WEAK) {
-            buf_printf(out, "    if (s->as.%s._%d) rc_weak_decrement(s->as.%s._%d);\n",
-                       mctor, fi, mctor, fi);
+            buf_printf(out, "    if (s->%s) rc_weak_decrement(s->%s);\n", mp, mp);
         } else if (k == TY_REF || k == TY_LREF) {
-            buf_printf(out, "    if (s->as.%s._%d) free(s->as.%s._%d);\n",
-                       mctor, fi, mctor, fi);
+            buf_printf(out, "    if (s->%s) free(s->%s);\n", mp, mp);
         }
+        free(mp);
     }
     buf_printf(out, "    free(ptr);\n");
     buf_printf(out, "}\n\n");
@@ -4811,12 +4810,12 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
     buf_printf(out, "    %s *s = (%s *)ptr;\n", adt_c_name, adt_c_name);
     for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
         if (ctor->fields[fi].kind == TY_RC) {
-            buf_printf(out, "    if (s->as.%s._%u) cb(s->as.%s._%u, ctx);\n",
-                       mctor, fi, mctor, fi);
+            char *mp = adt_field_member_path(def, ctor, fi);
+            buf_printf(out, "    if (s->%s) cb(s->%s, ctx);\n", mp, mp);
+            free(mp);
         }
     }
     buf_printf(out, "}\n\n");
-    free(mctor);
 }
 
 /* CONV-S1: scalar C type name for a ctor field by its storage kind -- the
@@ -4885,6 +4884,25 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
     /* seam 3: a :heap ADT's header holds its fields by value (the pointer
      * indirection is the ABI; the header layout is the by-value one). */
     bool hdr_byval = byval || def->is_heap;
+    /* CONV-S1 seam 4: a non-parametric single-variant record lowers to a FLAT,
+     * named, C-ABI-compatible aggregate + a `<Name>` surface alias, so inline-C
+     * that reads it by its surface type/field names compiles unchanged. */
+    bool named = adt_uses_named_layout(def);
+    if (named) {
+        CtorDef *ctor = def->ctors[0];
+        buf_printf(out, "typedef struct %s {\n", adt_c_name);
+        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+            const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], hdr_byval);
+            char *fname = mangle_field_name(ctor->fields[fi].name);
+            buf_printf(out, "    %s %s;\n", ctype, fname);
+            free(fname);
+        }
+        buf_printf(out, "} %s;\n", adt_c_name);
+        /* Surface alias so inline-C `sizeof(<Name>)` / `(<Name> *)p` resolve. */
+        char *sname = mangle_field_name(def->name);
+        buf_printf(out, "typedef %s %s;\n\n", adt_c_name, sname);
+        free(sname);
+    } else {
     buf_printf(out, "typedef struct %s {\n", adt_c_name);
     if (!flat) buf_printf(out, "    int tag;\n");
     buf_printf(out, "    union {\n");
@@ -4901,6 +4919,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
     }
     buf_printf(out, "    } as;\n");
     buf_printf(out, "} %s;\n\n", adt_c_name);
+    }
 
     /* CONV-S1 (slice 2): a by-value ADT with rc/ref/weak fields needs the same
      * drop/walk glue a struct gets, so an `rc/of` wrapping it releases the inner
@@ -4933,7 +4952,9 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
                        adt_c_name, adt_c_name, adt_c_name);
             if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-                buf_printf(out, "    __r->as.%s._%u = _%u;\n", mctor, fi, fi);
+                char *mp = adt_field_member_path(def, ctor, fi);
+                buf_printf(out, "    __r->%s = _%u;\n", mp, fi);
+                free(mp);
             }
             buf_printf(out, "    return __r;\n");
         } else if (byval) {
@@ -4941,7 +4962,9 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
              * box, no tag (byval implies single-variant flat product). */
             buf_printf(out, "    %s __r;\n", adt_c_name);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-                buf_printf(out, "    __r.as.%s._%u = _%u;\n", mctor, fi, fi);
+                char *mp = adt_field_member_path(def, ctor, fi);
+                buf_printf(out, "    __r.%s = _%u;\n", mp, fi);
+                free(mp);
             }
             buf_printf(out, "    return __r;\n");
         } else {
@@ -4949,7 +4972,9 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
                        adt_c_name, adt_c_name, adt_c_name);
             if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-                buf_printf(out, "    __r->as.%s._%u = _%u;\n", mctor, fi, fi);
+                char *mp = adt_field_member_path(def, ctor, fi);
+                buf_printf(out, "    __r->%s = _%u;\n", mp, fi);
+                free(mp);
             }
             buf_printf(out, "    return (int64_t)(intptr_t)__r;\n");
         }
@@ -8273,6 +8298,23 @@ int emit_program(Buf *out, const Expr *program) {
             bool hdr_byval = byval || heap;
             char adt_ptr_name[260];
             snprintf(adt_ptr_name, sizeof(adt_ptr_name), "%s *", adt_c_name);
+            /* CONV-S1 seam 4: flat named C-ABI layout + surface alias (mirror of
+             * emit_adt_typedef_and_ctors). */
+            bool named = adt_uses_named_layout(def);
+            if (named) {
+                CtorDef *ctor = def->ctors[0];
+                buf_printf(&early_file, "typedef struct %s {\n", adt_c_name);
+                for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                    const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], hdr_byval);
+                    char *fname = mangle_field_name(ctor->fields[fi].name);
+                    buf_printf(&early_file, "    %s %s;\n", ctype, fname);
+                    free(fname);
+                }
+                buf_printf(&early_file, "} %s;\n", adt_c_name);
+                char *sname = mangle_field_name(def->name);
+                buf_printf(&early_file, "typedef %s %s;\n\n", adt_c_name, sname);
+                free(sname);
+            } else {
             buf_printf(&early_file, "typedef struct %s {\n", adt_c_name);
             if (!flat) buf_printf(&early_file, "    int tag;\n");
             buf_printf(&early_file, "    union {\n");
@@ -8289,6 +8331,7 @@ int emit_program(Buf *out, const Expr *program) {
             }
             buf_printf(&early_file, "    } as;\n");
             buf_printf(&early_file, "} %s;\n\n", adt_c_name);
+            }
 
             /* CONV-S1 (slice 2): by-value ADT drop/walk glue (mirror of
              * emit_adt_typedef_and_ctors). */
@@ -8311,15 +8354,18 @@ int emit_program(Buf *out, const Expr *program) {
                                adt_c_name, adt_c_name, adt_c_name);
                     if (!flat) buf_printf(&early_file, "    __r->tag = %u;\n", ctor->tag);
                     for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-                        buf_printf(&early_file, "    __r->as.%s._%u = _%u;\n", mctor, fi, fi);
+                        char *mp = adt_field_member_path(def, ctor, fi);
+                        buf_printf(&early_file, "    __r->%s = _%u;\n", mp, fi);
+                        free(mp);
                     }
                     buf_printf(&early_file, "    return __r;\n");
                 } else if (byval) {
                     /* CONV-S1: return the flat aggregate by value -- no heap box. */
                     buf_printf(&early_file, "    %s __r;\n", adt_c_name);
                     for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-                        buf_printf(&early_file, "    __r.as.%s._%u = _%u;\n",
-                                   mctor, fi, fi);
+                        char *mp = adt_field_member_path(def, ctor, fi);
+                        buf_printf(&early_file, "    __r.%s = _%u;\n", mp, fi);
+                        free(mp);
                     }
                     buf_printf(&early_file, "    return __r;\n");
                 } else {
@@ -8327,8 +8373,9 @@ int emit_program(Buf *out, const Expr *program) {
                                adt_c_name, adt_c_name, adt_c_name);
                     if (!flat) buf_printf(&early_file, "    __r->tag = %u;\n", ctor->tag);
                     for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-                        buf_printf(&early_file, "    __r->as.%s._%u = _%u;\n",
-                                   mctor, fi, fi);
+                        char *mp = adt_field_member_path(def, ctor, fi);
+                        buf_printf(&early_file, "    __r->%s = _%u;\n", mp, fi);
+                        free(mp);
                     }
                     buf_printf(&early_file, "    return (int64_t)(intptr_t)__r;\n");
                 }

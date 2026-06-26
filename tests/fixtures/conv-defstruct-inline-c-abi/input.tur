@@ -1,0 +1,40 @@
+;; conv-defstruct-inline-c-abi: under the defstruct-as-defadt flag a
+;; non-parametric struct lowers to a single-variant record ADT, but inline-C
+;; that reads the value by its surface C type and flat field names must keep
+;; working -- this is the C-ABI-compatibility contract for inline-C interop.
+;;
+;; Seam 4 emits such a struct as a FLAT, named aggregate
+;; (`typedef struct tur_adt_Cfg { int64_t width; int64_t height; } tur_adt_Cfg;`)
+;; plus a `typedef tur_adt_Cfg Cfg;` surface alias, so:
+;;   - a by-value param `c : Cfg` reads `c.width` / `c.height` directly;
+;;   - inline-C can `sizeof(Cfg)` and `(Cfg *)p` against the surface name.
+;; Before seam 4 the ADT layout was `union { struct { int64_t _0; ... } Cfg; } as`
+;; with no surface alias, so this inline-C failed with `unknown type name 'Cfg'`
+;; / `'tur_adt_Cfg' has no member named 'width'`.
+
+(defstruct Cfg :copy [width : int  height : int])
+
+;; By-value field access in inline-C (httpd-set-cookie! shape).
+(defn cfg-area [c : Cfg] : int
+  ```c
+  return c.width * c.height;
+  ```)
+
+;; sizeof + pointer-cast against the surface type name (clone shape): deep-copy
+;; the value onto the heap and read a field back through the surface type.
+(defn cfg-roundtrip-height [c : Cfg] : int
+  ```c
+  Cfg *dst = (Cfg *)malloc(sizeof(Cfg));
+  *dst = c;
+  int64_t h = dst->height;
+  free(dst);
+  return h;
+  ```)
+
+(defn main [] : int
+  (let [c (make-struct Cfg 7 6)]
+    (println (cfg-area c))                ;; 42
+    (println (cfg-roundtrip-height c))    ;; 6
+    ;; pure-Turmeric field access still works alongside the inline-C path
+    (println (.width c)))                 ;; 7
+  0)

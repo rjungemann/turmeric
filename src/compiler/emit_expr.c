@@ -474,13 +474,13 @@ static char *emit_byval_recursive_carrier_reconstruct(EmitCtx *ctx, Type t,
     Type r = emit_resolve_type(ctx, t);
     const AdtDef *def = r.as.adt_.def;
     const char *cname = type_c_name(r);
-    char *mctor = mangle_field_name(def->ctors[0]->name);
+    char *mp = adt_field_member_path(def, def->ctors[0], 0);
     Buf b; buf_init(&b);
-    buf_printf(&b, "(%s){ .as.%s._0 = (%s) }", cname, mctor, carrier);
+    buf_printf(&b, "(%s){ .%s = (%s) }", cname, mp, carrier);
     buf_putc(&b, '\0');
     char *out = strdup(b.data);
     buf_free(&b);
-    free(mctor);
+    free(mp);
     return out;
 }
 
@@ -5482,6 +5482,9 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 const CtorDef *ctor = e->as.get_field_.adt_ctor;
                 char *adt_mn = mangle_field_name(adt->name);
                 char *mctor  = mangle_field_name(ctor->name);
+                /* CONV-S1 seam 4: member-access path -- a flat named record reads
+                 * `.value`; a tagged/positional ADT reads `.as.<Ctor>._N`. */
+                char *mp = adt_field_member_path(adt, ctor, e->as.get_field_.field_idx);
                 const char *cty = type_c_name(e->type);
                 bool adt_through_rc =
                     e->as.get_field_.struct_expr->type.kind == TY_RC;
@@ -5505,12 +5508,12 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * the two layouts so the deref reaches the variant field. */
                     if (adt_is_byvalue_product(adt)) {
                         buf_printf(&hb,
-                                   "(%s)((tur_adt_%s *)((RcControlBlock *)(%s))->value)->as.%s._%u",
-                                   cty, adt_mn, sv, mctor, e->as.get_field_.field_idx);
+                                   "(%s)((tur_adt_%s *)((RcControlBlock *)(%s))->value)->%s",
+                                   cty, adt_mn, sv, mp);
                     } else {
                         buf_printf(&hb,
-                                   "(%s)((tur_adt_%s *)(intptr_t)(*(int64_t *)((RcControlBlock *)(%s))->value))->as.%s._%u",
-                                   cty, adt_mn, sv, mctor, e->as.get_field_.field_idx);
+                                   "(%s)((tur_adt_%s *)(intptr_t)(*(int64_t *)((RcControlBlock *)(%s))->value))->%s",
+                                   cty, adt_mn, sv, mp);
                     }
                 } else if (adt_recv_byvalue) {
                     /* CONV-S1: by-value receiver -- read the field directly off the
@@ -5541,22 +5544,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         e->as.get_field_.field_idx < ctor->n_fields &&
                         adt_field_is_inline_byval(&ctor->fields[e->as.get_field_.field_idx]);
                     if (inline_byval) {
-                        buf_printf(&hb, "(%s)%sas.%s._%u",
-                                   sv, use_arrow ? "->" : ".", mctor,
-                                   e->as.get_field_.field_idx);
+                        buf_printf(&hb, "(%s)%s%s",
+                                   sv, use_arrow ? "->" : ".", mp);
                     } else if (use_arrow) {
-                        buf_printf(&hb, "(%s)(%s)->as.%s._%u",
-                                   cty, sv, mctor, e->as.get_field_.field_idx);
+                        buf_printf(&hb, "(%s)(%s)->%s", cty, sv, mp);
                     } else {
-                        buf_printf(&hb, "(%s)(%s).as.%s._%u",
-                                   cty, sv, mctor, e->as.get_field_.field_idx);
+                        buf_printf(&hb, "(%s)(%s).%s", cty, sv, mp);
                     }
                 } else {
-                    buf_printf(&hb, "(%s)((tur_adt_%s *)(intptr_t)(%s))->as.%s._%u",
-                               cty, adt_mn, sv, mctor, e->as.get_field_.field_idx);
+                    buf_printf(&hb, "(%s)((tur_adt_%s *)(intptr_t)(%s))->%s",
+                               cty, adt_mn, sv, mp);
                 }
                 buf_putc(&hb, '\0');
-                free(sv); free(adt_mn); free(mctor);
+                free(sv); free(adt_mn); free(mctor); free(mp);
                 char *r = strdup(hb.data);
                 buf_free(&hb);
                 return r;
@@ -7028,6 +7028,9 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             Binding *fb = pat->bindings[bi];
                             const char *ctype = type_c_name(fb->type);
                             char *bname = name_for_binding(ctx, fb);
+                            /* CONV-S1 seam 4: flat named record binds `.field`; a
+                             * tagged/positional ADT binds `.as.<Ctor>._N`. */
+                            char *mp = adt_field_member_path(pat->ctor->adt, pat->ctor, bi);
                             indent_buf(body, ctx->indent);
                             /* slice 4: an inline by-value aggregate field is the
                              * aggregate value itself in the union slot -- bind it
@@ -7036,8 +7039,8 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             bool inline_byval = adt_byval && bi < pat->ctor->n_fields &&
                                 adt_field_is_inline_byval(&pat->ctor->fields[bi]);
                             if (inline_byval) {
-                                buf_printf(body, "%s %s = __scrut%sas.%s._%u;\n",
-                                           ctype, bname, acc, _mctor, bi);
+                                buf_printf(body, "%s %s = __scrut%s%s;\n",
+                                           ctype, bname, acc, mp);
                             } else if (emit_type_is_byval_recursive_carrier(ctx, fb->type) ||
                                        (emit_type_is_wide_byval_adt(ctx, fb->type) &&
                                         strcmp(ctype, "int64_t") == 0)) {
@@ -7051,19 +7054,20 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                  * below.  The value crosses to a fat closure as
                                  * the carrier (reinterpret <=8 / box pointer >8)
                                  * and is materialized at the boundary. */
-                                buf_printf(body, "%s %s = (%s)__scrut%sas.%s._%u;\n",
-                                           ctype, bname, ctype, acc, _mctor, bi);
+                                buf_printf(body, "%s %s = (%s)__scrut%s%s;\n",
+                                           ctype, bname, ctype, acc, mp);
                             } else if (emit_type_is_byvalue_adt(ctx, fb->type)) {
                                 /* B3: a by-value ADT field stored boxed (int64 heap
                                  * pointer) in a carrier slot -- unbox by deref. */
                                 buf_printf(body,
-                                    "%s %s = *(%s *)(intptr_t)(__scrut%sas.%s._%u);\n",
-                                    ctype, bname, ctype, acc, _mctor, bi);
+                                    "%s %s = *(%s *)(intptr_t)(__scrut%s%s);\n",
+                                    ctype, bname, ctype, acc, mp);
                             } else {
-                                buf_printf(body, "%s %s = (%s)__scrut%sas.%s._%u;\n",
-                                           ctype, bname, ctype, acc, _mctor, bi);
+                                buf_printf(body, "%s %s = (%s)__scrut%s%s;\n",
+                                           ctype, bname, ctype, acc, mp);
                             }
                             free(bname);
+                            free(mp);
                         }
                         free(_mctor);
                     }
@@ -7154,6 +7158,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             const char *ctype = type_c_name(fb->type);
                             /* Use name_for_binding to get the canonical C name */
                             char *bname = name_for_binding(ctx, fb);
+                            char *mp = adt_field_member_path(pat->ctor->adt, pat->ctor, bi);
                             indent_buf(body, ctx->indent);
                             /* CONV-S1/B3: a by-value ADT field is stored boxed
                              * (int64 heap pointer) in the carrier tagged union;
@@ -7166,17 +7171,18 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                  * (>8): heap-box POINTER.  Only the erased int64
                                  * carrier binding takes this path; a concrete wide
                                  * by-value ADT binding keeps the B3 deref. */
-                                buf_printf(body, "%s %s = (%s)__scrut->as.%s._%u;\n",
-                                           ctype, bname, ctype, _mctor, bi);
+                                buf_printf(body, "%s %s = (%s)__scrut->%s;\n",
+                                           ctype, bname, ctype, mp);
                             } else if (emit_type_is_byvalue_adt(ctx, fb->type)) {
                                 buf_printf(body,
-                                    "%s %s = *(%s *)(intptr_t)(__scrut->as.%s._%u);\n",
-                                    ctype, bname, ctype, _mctor, bi);
+                                    "%s %s = *(%s *)(intptr_t)(__scrut->%s);\n",
+                                    ctype, bname, ctype, mp);
                             } else {
-                                buf_printf(body, "%s %s = (%s)__scrut->as.%s._%u;\n",
-                                           ctype, bname, ctype, _mctor, bi);
+                                buf_printf(body, "%s %s = (%s)__scrut->%s;\n",
+                                           ctype, bname, ctype, mp);
                             }
                             free(bname);
+                            free(mp);
                         }
                         free(_mctor);
                     }

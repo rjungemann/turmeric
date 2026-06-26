@@ -997,6 +997,25 @@ char *mangle_field_name(const char *name) {
     return p;
 }
 
+/* CONV-S1 seam 4: build the C member-access path (without a leading '.'/'->')
+ * for constructor field `fi`.  A flat, named-layout ADT (adt_uses_named_layout)
+ * is accessed by its mangled field name (`value`, `max_age`); every other ADT
+ * keeps the positional tagged-union path (`as.<Ctor>._N`).  Caller frees.
+ * Single source of truth for the typedef/ctor/field-access/match/drop-glue
+ * emit sites so they never disagree on the layout. */
+char *adt_field_member_path(const AdtDef *def, const CtorDef *ctor, uint32_t fi) {
+    if (adt_uses_named_layout(def))
+        return mangle_field_name(ctor->fields[fi].name);
+    char *mctor = mangle_field_name(ctor->name);
+    Buf b; buf_init(&b);
+    buf_printf(&b, "as.%s._%u", mctor, fi);
+    buf_putc(&b, '\0');
+    char *r = strdup(b.data);
+    buf_free(&b);
+    free(mctor);
+    return r;
+}
+
 /* Return a sanitized C identifier for a Binding, without the ID suffix.
  * Used for function names and parameters. Caller frees.
  *

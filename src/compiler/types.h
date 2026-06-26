@@ -308,6 +308,32 @@ static inline bool adt_is_flat_product(const AdtDef *def) {
     return def && def->n_ctors == 1 && !def->is_gadt;
 }
 
+/* CONV-S1 seam 4: a NON-PARAMETRIC, single-variant, record-style ADT (the
+ * lowered-`defstruct` shape, and a hand-written `(defdata P (P [f : T ...]))`)
+ * is emitted with a FLAT, C-ABI-compatible layout -- `typedef struct
+ * tur_adt_<Name> { <ty> <field>; ... } tur_adt_<Name>;` with the record's real
+ * field names -- plus a `typedef tur_adt_<Name> <Name>;` surface alias, instead
+ * of the tagged `union { struct { T _0; ... } <Ctor>; } as;` wrapper.  This
+ * makes inline-C that reads the value by its surface type/field names
+ * (`opts.name`, `sizeof(<Name>)`, `(<Name> *)p`) compile unchanged once the
+ * struct lowers to an ADT -- the central inline-C-ABI graduation blocker.
+ *
+ * Restricted to NON-parametric records: a parametric record has no single
+ * monomorphic C type for inline-C to name, so its monomorphs (types.c) keep the
+ * positional `as.<Ctor>._N` layout.  The memory layout is byte-identical to the
+ * old nested form for a single variant, so the two are interchangeable in
+ * memory; only the C member-access spelling differs, and every generated access
+ * site switches together via adt_field_member_path (emit_core.c). */
+static inline bool adt_uses_named_layout(const AdtDef *def) {
+    if (!def || def->n_ctors != 1 || def->is_gadt || def->n_type_params != 0)
+        return false;
+    const CtorDef *c = def->ctors[0];
+    if (!c || !c->is_record || c->n_fields == 0) return false;
+    for (uint32_t i = 0; i < c->n_fields; i++)
+        if (!c->fields[i].name) return false;
+    return true;
+}
+
 /* CONV-S1: a single-variant, non-GADT, NON-PARAMETRIC flat product can flow
  * *by value* -- a flat `tur_adt_<Name>` C aggregate passed/returned/stored
  * directly, rather than through the int64 heap-pointer carrier.  This is the
