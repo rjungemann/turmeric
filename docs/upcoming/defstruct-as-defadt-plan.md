@@ -570,39 +570,46 @@ runtime *usage* seam, below.
      by two emit paths redefined `ctor_<name>` at cc.  Added the matching
      `#ifndef TUR_FN_<name>` guard.  Correct ODR fix; the two triggering fixtures
      carry separate downstream issues so it clears none on its own.
+   - **Flat named C-ABI layout for single-variant record ADTs (the big lever).**
+     The central inline-C-ABI blocker: hand-written inline-C that reads a struct by
+     its surface C type and flat field names (`httpd-set-cookie!`'s `opts.name`, the
+     `clone-*` instances' `sizeof(Opt)` / `(Opt *)p`, the `Pos`-based `typeclass-*`
+     tests) broke once the struct lowered, because the ADT was a tagged
+     `union { struct { T _0; ... } <Ctor>; } as;` named `tur_adt_<Name>` with no
+     surface alias (`unknown type name '<Name>'` / `'tur_adt_<Name>' has no member
+     '<field>'`).  A NON-parametric single-variant record now emits a FLAT named
+     aggregate `typedef struct tur_adt_<Name> { T <field>; ... } tur_adt_<Name>;`
+     plus a `typedef tur_adt_<Name> <Name>;` surface alias.  The single-variant
+     memory layout is byte-identical to the old nested form, so only the C member
+     spelling changes; a new `adt_uses_named_layout` predicate gates it and a single
+     `adt_field_member_path` helper (emit_core.c) routes the spelling
+     (`.field` vs `.as.<Ctor>._N`) through every site (typedef + ctor on the main
+     path and the early-file mirror, drop/walk glue, EX_GET_FIELD, match field-bind,
+     B4 carrier-reconstruct).  Parametric monomorphs (types.c) keep the positional
+     layout (no single C type to name).  Flag-independent; two hand-written
+     snapshots (`conv-single-variant-flat`, `conv-byval-adt-nested-inline`)
+     regenerated.  *Cleared ~43* (`httpd-*`, `clone-*`, `eqmap-struct`, the `Pos`
+     `typeclass-*` tests).  Fixture `conv-defstruct-inline-c-abi`.
 
-   **The central remaining blocker: inline-C that assumes the struct's flat C
-   ABI.**  By failure-signature, the largest remaining real cluster is
-   `'tur_adt_<Name>' has no member named '<field>'` (~38) plus `unknown type name
-   '<Name>'` (~8, e.g. `Tuple2`/`Pos`) plus `request for member ...` (~3).  All
-   are the same shape: hand-written inline-C (in stdlib `httpd.tur`'s
-   `httpd-set-cookie!`, the `clone-*` instances, `eqmap-struct`, `tuple2-inline-c`,
-   the `Pos`-based `typeclass-*` tests) reads a lowered struct **by its surface C
-   type name and flat field names** (`opts.name`, `sizeof(CookieOpts)`,
-   `(Tuple2 *)`), but the lowered ADT is `tur_adt_<Name>` with a nested
-   `as.<Ctor>._N` layout.  Two principled fixes, pick one before this cluster can
-   close:
-   - (a) **C-ABI-compatible layout for single-variant record ADTs** -- emit a
-     FLAT struct using the record's real field names plus a
-     `typedef tur_adt_<Name> <Name>;` alias, so `sizeof(<Name>)`, `(<Name> *)`,
-     and `v.field` in inline-C all keep working.  Highest leverage (clears ~50 at
-     once) but it changes the layout of *every* single-variant record ADT and
-     touches every field-access / ctor / match / drop-glue / pass-by-ptr site that
-     currently reads `as.<Ctor>._N`, plus a full snapshot regen -- a large, risky
-     change that warrants its own focused seam.
-   - (b) **rewrite the inline-C** to be representation-independent (as done for the
-     seq pair helpers) -- safe and incremental, but does not generalise to
-     fixtures whose inline-C genuinely receives a by-value struct value
-     (`httpd-set-cookie!`'s `opts.name`), which has no representation-independent
-     spelling.
-   The remaining non-inline-C blockers are smaller: ~20 fixtures that now **build
-   but mismatch at runtime** (`OK_RUNTIME` -- a lowered-path correctness bug, e.g.
-   `hkt-ap-fn-in-container` prints 4150 vs the baseline's 4175), ~8
-   `incompatible type for argument` (carrier<->by-value ABI bridges), a handful of
-   `incompatible types when returning/initializing` (ditto), and the moot
-   **`hkt-cata-*`** carriers (B4 territory -- a real `defstruct` cannot express a
-   functor-applied-to-self field, so these get *excluded* at graduation, not
-   fixed).
+   **Running total: 212 -> 99 real blockers (53%); default suite stays 1854/0.**
+
+   **Remaining blockers (~99), by signature.**  The biggest cluster is now the
+   **by-value-aggregate <-> int64-carrier ABI bridge** family: `incompatible types
+   when returning/initializing/assigning` (~20 across several variants),
+   `incompatible type for argument` (~8), `aggregate value used where an integer was
+   expected` (~4), `conversion to non-scalar type requested` (~2) -- a lowered
+   by-value record flowing into/out of a carrier-ABI boundary (a generic fn, an
+   un-specialized instance method, a return slot) without the box/unbox bridge.
+   This is seam-1 territory widened to more crossing sites and is the natural next
+   lever.  Then: ~22 fixtures that **build but mismatch at runtime or only fail at
+   link** (`OK_RUNTIME_OR_LINK` -- includes the httpd `-lturi` harness-link cases
+   that only `tests/run.sh` sets up, plus genuine lowered-path correctness bugs like
+   `hkt-ap-fn-in-container` printing 4150 vs 4175); ~7 `invalid initializer` (more
+   ctor-monomorph selection edges); 3 `unknown type name 'Tuple2'` (inline-C naming
+   the **parametric** `Tuple2` directly -- needs fixture rewrite, no single C type
+   exists); a few `no typeclass method` (schema HKT) and one-offs
+   (`struct-set-field`, `struct-curry-ctor`); and the moot **`hkt-cata-*`** carriers
+   (B4 territory -- excluded at graduation, not fixed).
 
    Each non-moot cluster must be driven to zero -- promote a representative
    force-lower failure to a flag-on fixture, fix the lowering, repeat -- before the
@@ -637,12 +644,14 @@ What remains is **step 4 (full graduation)**: make lowering unconditional (delet
 the gate + `g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]` row), retire the
 `StructDef` surface path, and regen snapshots.  **Seam 4 is IN PROGRESS** (see the
 step-4 entry above for the measured scope and the running cleared-cluster log).
-The default `bash tests/run.sh` is **green (1853 passed, 0 failed)** with four
-flag-independent seam-4 fixes landed; the force-lower probe is down from **212 to
-142 real (non-snapshot) blockers**.  The dominant remaining cluster is the
-inline-C-assumes-struct-C-ABI family (`'tur_adt_<Name>' has no member` /
-`unknown type name '<Name>'`), whose principled fix -- a C-ABI-compatible flat
-named layout + `typedef <Name>` alias for single-variant record ADTs -- is the
-single largest remaining piece and warrants its own focused seam.  Driving the
-remaining clusters to zero (promote each to a flag-on fixture + fix) is the gating
-work before the experiment can graduate.
+The default `bash tests/run.sh` is **green (1854 passed, 0 failed)** with five
+flag-independent seam-4 fixes landed -- including the big lever, the C-ABI-compatible
+flat named layout + `typedef <Name>` alias for single-variant record ADTs.  The
+force-lower probe is down from **212 to 99 real (non-snapshot) blockers (53%
+cleared)**.  The dominant remaining cluster is now the by-value-aggregate <->
+int64-carrier **ABI bridge** family (`incompatible types when
+returning/initializing/assigning`, `aggregate value used where an integer was
+expected`) -- seam-1 widened to more crossing sites, the natural next lever --
+followed by ~22 runtime/link mismatches and smaller ctor-selection / parametric
+inline-C edges.  Driving the remaining clusters to zero (promote each to a flag-on
+fixture + fix) is the gating work before the experiment can graduate.
