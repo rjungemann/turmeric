@@ -591,13 +591,14 @@ runtime *usage* seam, below.
      regenerated.  *Cleared ~43* (`httpd-*`, `clone-*`, `eqmap-struct`, the `Pos`
      `typeclass-*` tests).  Fixture `conv-defstruct-inline-c-abi`.
 
-   **Running total: 212 -> 53 unique build-failing fixtures under force-lower
+   **Running total: 212 -> 51 unique build-failing fixtures under force-lower
    (default suite stays 1863/0).**  (Sub-root (a) -- 0-arg construct in control
    flow -- the inline-C-tail return bridge, the accessor-unbox, the
    assignment-position straddle, the inline-C instance-method signature, the
    by-value struct-field receiver / by-value ADT field storage, the parametric
-   keyword type-param field, set!-over-lowered-record-ADT, and the
-   parametric-record inline-C compat typedef are all LANDED.)
+   keyword type-param field, set!-over-lowered-record-ADT, the parametric-record
+   inline-C compat typedef, and the inline-C-carrier-result -> by-value-sink
+   bridges (let-init / call-arg, NULL-safe lowered Option) are all LANDED.)
 
    - **parametric keyword type-param field DONE (2026-06-26).**  A parametric
      `(defstruct Box [A] (val :A) ...)` lowered to a record variant where the
