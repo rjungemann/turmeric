@@ -1435,14 +1435,15 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * concrete type comes from the matched spec, since the construct's
              * own e->type is collapsed to the int64 carrier. */
             Type src = fn_body_tail_byvalue_carrier_type(ctx, fd->body);
-            if (type_is_heap_struct(src)) {
+            if (type_is_heap_struct(src) || type_is_heap_adt(src)) {
                 /* constrained-defn-monomorphize: a `:heap` struct tail (e.g.
                  * `(Cons A)` built by `tcons-of`) is ALREADY a pointer (`Cons__A *`)
                  * that fits the int64 carrier directly.  Malloc-boxing it
                  * double-boxes (the carrier consumer then reads a pointer-to-pointer
                  * as the cell -> a length-1 / garbage list), the heap-struct mirror
                  * of the M7 double-box guard above.  Cast the pointer to the carrier
-                 * instead of spilling. */
+                 * instead of spilling.  seam 3: a lowered `:heap` ADT tail
+                 * (`type_is_heap_adt`) is the same typed-pointer shape. */
                 buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
             } else {
                 const char *cty = emit_type_c_name(ctx, src);
@@ -1452,6 +1453,17 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                     "return (int64_t)(intptr_t)__tur_ret_p; }\n",
                     cty, cty, cty, ret_val);
             }
+        } else if (ret_is_int64_carrier && fd->body &&
+                   fd->body->type.kind != TY_NEVER &&
+                   type_is_heap_adt(emit_resolve_type(ctx, fd->body->type))) {
+            /* seam 3: the function returns the int64 carrier (an abstract
+             * parametric base like `tcons : (Cons A)`), but the body tail is a
+             * lowered `:heap` ADT value -- a typed pointer (`ctor_Cons(..)` ->
+             * `tur_adt_Cons *`) whose bit pattern IS the carrier.  Reinterpret-cast
+             * it, never return it uncast (-Wint-conversion) and never malloc-box
+             * (double-box).  The non-parametric mirror is the `type_is_heap_adt`
+             * arm in `type_uses_carrier_abi` / the heap-struct return cast above. */
+            buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
         } else {
             buf_printf(file, "return %s;\n", ret_val);
         }

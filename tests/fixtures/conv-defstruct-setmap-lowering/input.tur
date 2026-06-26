@@ -1,0 +1,9 @@
+;; CONV-S1 seam 3 (graduation): the parametric `:heap` `Set` and `Map` containers
+;; lower to record ADTs under the flag.  Data literals (#set / #map) and their
+;; count/get/member accessors all flow through the lowered typed-pointer handle.
+(defn main [] : int
+  (println (set-count #set{1 2 3 2 1}))                ; 3
+  (println (if (set-member? #set{1 2 3} 2 2) 1 0))     ; 1
+  (println (:: (map-get #map{:a 10 :b 20} :b) :int))   ; 20
+  (println (map-count #map{:a 1 :b 2 :c 3}))           ; 3
+  0)

@@ -1,0 +1,40 @@
+;; CONV-S1 seam 3 (pre-graduation): with --enable=defstruct-as-defadt, a
+;; NON-PARAMETRIC `:heap` defstruct lowers to a `:heap` single-variant record
+;; defadt -- a typed pointer `tur_adt_<Name> *` to a malloc'd by-value header,
+;; the ADT analogue of a `:heap` struct's `Name *` ABI.  The by-value-vs-:heap
+;; integration sites all exclude a `:heap` ADT, so:
+;;   - a `:heap` value passed to a `:heap` param stays a single pointer (no
+;;     double-pointer pass-by-ptr wrap, no spurious `&` at the call site),
+;;   - field access derefs through `->`,
+;;   - a `match` binds the scrutinee as a pointer and reads fields via `->`,
+;;   - `with` on a `:copy :heap` struct round-trips,
+;;   - a `:heap` field of a (non-heap) struct is stored as the typed-pointer
+;;     carrier and the ctor call casts it with `(int64_t)(intptr_t)` (no
+;;     -Wint-conversion).
+;; Behaviour is identical flag off (struct path) and on (ADT path).
+(defstruct Big :heap [x : int y : int z : int])
+(defstruct Pt  :copy :heap [x : int y : int])
+(defstruct Holder [tag : int big : Big])
+
+(defn bsum [g : Big] : int (+ (.x g) (+ (.y g) (.z g))))
+(defn psum [p : Pt] : int (+ (.x p) (.y p)))
+
+;; match on a :heap struct (scrutinee binds as a pointer, fields read via `->`)
+(defn via-match [p : Pt] : int (match p (Pt a b) (+ a b)))
+
+;; with-update on a :copy :heap struct
+(defn bump-x [p : Pt] : Pt (with p [x (+ (.x p) 10)]))
+
+;; nested :heap field read back, then passed to a :heap param
+(defn hsum [h : Holder] : int (+ (.tag h) (bsum (.big h))))
+
+(defn main [] : int
+  (let [p  (Pt 3 4)
+        kp (Pt :x 5 :y 6)
+        h  (Holder 100 (Big 1 2 3))]
+    (println (psum p))           ; 7
+    (println (via-match p))      ; 7
+    (println (psum kp))          ; 11
+    (println (psum (bump-x p)))  ; 17
+    (println (hsum h))           ; 100 + (1+2+3) = 106
+    0))

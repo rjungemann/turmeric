@@ -1,0 +1,17 @@
+;; CONV-S1 seam 3 (graduation): with --enable=defstruct-as-defadt the parametric
+;; `:heap` stdlib containers now LOWER to record ADTs.  `Vec` is a `:heap [A]`
+;; struct whose inline-C accessors are int64-carrier bases; the lowered `(Vec int)`
+;; is a typed pointer whose handle crosses into those bases by reinterpret (the
+;; heap-ADT carrier bridges).  Exercises push/get/len/set! at parity with the
+;; struct path.
+(defn main [] : int
+  (let [v (vec-new)]
+    (vec-push! v 100)
+    (vec-push! v 200)
+    (vec-push! v 300)
+    (vec-set! v 1 250)
+    (println (vec-len v))     ; 3
+    (println (vec-get v 0))   ; 100
+    (println (vec-get v 1))   ; 250
+    (println (vec-get v 2))   ; 300
+    0))

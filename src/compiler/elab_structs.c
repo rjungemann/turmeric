@@ -764,27 +764,31 @@ bool defstruct_lowers_to_adt(Elab *e, const Form *call) {
             kw->as.sym == e->kw_no_auto_ctor) { idx++; continue; }
         if (kw->as.sym == e->kw_linear)
             return false;  /* :linear keeps the struct path */
-        /* seam 3: the :heap typed-pointer ADT ABI foundation is in place (defdata
-         * :heap, the typed-pointer type_c_name, the malloc'ing monomorph/
-         * non-parametric ctors, `->` field access), and a hand-written
-         * `(defdata X :heap ...)` lowers and runs.  But auto-lowering a `:heap`
-         * *struct* still has a long tail of by-value-vs-:heap integration sites
-         * (a nested :heap field is spuriously address-of'd when passed; the
-         * stdlib Vec/Map/Set inline-C assumes the struct rep), so the gate keeps
-         * :heap structs on the struct path until that lands. */
-        if (kw->as.sym == e->kw_heap) return false;
+        /* seam 3 (DONE): a `:heap` struct -- BOTH non-parametric and parametric
+         * (the stdlib Vec/Map/Set/MutableMap/Cons) -- lowers to a `:heap` record
+         * defadt.  The typed-pointer ABI foundation (`defdata :heap`, the
+         * typed-pointer `type_c_name`, malloc'ing ctors, `->` field access), the
+         * by-value-vs-:heap integration (pbp / carrier-ABI / match scrutinee /
+         * ctor-arg cast all exclude a `:heap` ADT), and the heap-ADT carrier
+         * bridges (the typed-pointer<->int64-carrier crossings the inline-C carrier
+         * bases use) all reconcile it, so `:heap` no longer keeps the struct path. */
+        if (kw->as.sym == e->kw_heap) { idx++; continue; }
         break;
     }
     /* A leading all-symbol vector is a type-parameter list -> parametric.
-     * Parametric structs now lower to parametric record defadts (the dot-accessor
-     * and by-value codegen substitute the app's type args), so skip past the
+     * Parametric structs -- including parametric `:heap` structs (the stdlib
+     * Vec/Map/Set/MutableMap/Cons) -- now lower to parametric record defadts: the
+     * dot-accessor and by-value codegen substitute the app's type args, and the
+     * typed-pointer<->int64-carrier crossings their inline-C carrier bases use are
+     * reconciled by the heap-ADT carrier bridges (seam 3).  So skip past the
      * type-param vec rather than bailing. */
     if (idx < call->as.list.len && call->as.list.items[idx]->tag == F_VEC) {
         const Form *vec = call->as.list.items[idx];
         bool all_syms = vec->as.list.len > 0;
         for (uint32_t i = 0; i < vec->as.list.len; i++)
             if (vec->as.list.items[i]->tag != F_SYM) { all_syms = false; break; }
-        if (all_syms) idx++;  /* parametric: consume the type-param vec */
+        if (all_syms)
+            idx++;  /* parametric (heap or not): consume the type-param vec */
     }
     if (idx >= call->as.list.len) return false;
     const Form *fields = call->as.list.items[idx];

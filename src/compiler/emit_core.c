@@ -347,11 +347,20 @@ bool type_uses_carrier_abi(Type t) {
      * same emit_carrier_bridge machinery a by-value struct uses.  Gated by
      * adt_is_byvalue_product (LIVE for leaf products as of B3). */
     if (t.kind == TY_ADT && adt_is_byvalue_product(t.as.adt_.def)) return false;
-    /* Parametric-by-value (gated): a concrete by-value flat-product ADT-app is a
-     * by-value aggregate, not a carrier -- it spills/boxes/derefs through the
-     * same emit_carrier_bridge machinery a monomorphised struct uses.  Hard-off
-     * until the crossings are wired. */
-    if (t.kind == TY_APP && adt_app_is_byvalue_product(t)) return false;
+    /* seam 3: a non-parametric :heap ADT is a concrete typed pointer
+     * `tur_adt_<Name> *` (not the int64 carrier), exactly as a non-parametric
+     * :heap struct is not carrier-ABI -- so no spill/box/deref bridging. */
+    if (t.kind == TY_ADT && t.as.adt_.def && t.as.adt_.def->is_heap &&
+        t.as.adt_.def->n_type_params == 0) return false;
+    /* seam 3: a :heap ADT app (lowered Vec/Map/Set/...) is a typed POINTER whose
+     * bit pattern IS the int64 carrier -- it DOES use the carrier ABI (its
+     * inline-C bases take/return int64), exactly as a parametric :heap STRUCT app
+     * does.  Keep it on the carrier path (fall through to the TY_APP return below)
+     * rather than letting the by-value-product check misclassify it as a by-value
+     * aggregate (which would declare a let binding as `tur_adt_Vec__int *` and
+     * spill+address-of at carrier sinks). */
+    if (t.kind == TY_APP && adt_app_is_byvalue_product(t) &&
+        !type_is_heap_adt(t)) return false;
     if (t.kind == TY_APP || t.kind == TY_ADT) return true;
     if (t.kind == TY_STRUCT && t.as.struct_.def &&
         t.as.struct_.def->n_type_params > 0) return true;
@@ -3222,7 +3231,7 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
      * carrier (e.g. the abstract `vec-new` base result feeding a `(Vec A)`
      * spec param) emitted `*(int64_t *)(intptr_t)(handle)` -- a wild deref of
      * the header's first word, segfaulting at runtime. */
-    if (type_is_heap_struct(concrete_ty)) {
+    if (type_is_heap_struct(concrete_ty) || type_is_heap_adt(concrete_ty)) {
         if (src_ck == CK_CARRIER && sink_ck == CK_CONCRETE) {
             /* If the concrete C type is a pointer (`Vec__int *`), cast to it;
              * when abstract (cname collapses to int64_t) the carrier already
