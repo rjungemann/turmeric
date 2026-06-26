@@ -591,7 +591,7 @@ runtime *usage* seam, below.
      regenerated.  *Cleared ~43* (`httpd-*`, `clone-*`, `eqmap-struct`, the `Pos`
      `typeclass-*` tests).  Fixture `conv-defstruct-inline-c-abi`.
 
-   **Running total: 212 -> 97 real blockers (54%); default suite stays 1856/0.**
+   **Running total: 212 -> 96 real blockers (55%); default suite stays 1857/0.**
    (Sub-root (a) -- 0-arg construct in control flow -- and the inline-C-tail
    return bridge are LANDED.)
 
@@ -648,16 +648,20 @@ runtime *usage* seam, below.
      (decode 5))` where the `int` `Decode` instance returns the int64 `tur_box_ok`
      carrier but `ok_val__spec__..._Result__int__cstr` expects the by-value
      `tur_adt_Result__int__cstr` param -- needs an unbox bridge at the dispatch arg.
-   - **Remaining return-direction sub-cases (still open).**  (1) *accessor-unbox*:
-     a `#{Construct}` accessor (`ok_val`/`err_val`) whose body `(.field r)` reads a
-     by-value-element field stored as the int64 carrier emits `(int64_t)...->_1` but
-     is declared to return the by-value aggregate (`nested-construct-byvalue-decode`,
-     `poly-nested-tuple-accessor`).  (2) *inline-C instance-method signature*: a
-     `Pos r; return r;` inline-C instance body under an int64 signature -- the
-     SIGNATURE must be the by-value aggregate, not the carrier
+   - **Remaining return-direction sub-cases.**  (1) *accessor-unbox* **DONE
+     (2026-06-26)**: a generic accessor (`tuple2-2nd`/`ok-val`) whose result is a
+     bare tyvar reads a by-value-element field stored as the int64 carrier; in its
+     ABI spec `e->type` collapses to int64 but the spec resolves the field to a
+     by-value aggregate, so `EX_GET_FIELD` now deref-unboxes the B4 box pointer
+     when those disagree (`poly-nested-tuple-accessor`; fixture
+     `conv-defstruct-accessor-unbox`).  (2) *inline-C instance-method signature*
+     (still open): a `Pos r; return r;` inline-C instance body under an int64
+     signature -- the SIGNATURE must be the by-value aggregate, not the carrier
      (`typeclass-fundep-collect`, `typeclass-multiparam-storage-dispatch`).  (3)
-     *assignment-position straddle*: an int64 carrier value stored into a by-value
-     let/temp (`tail-call-inline-c-carrier-bridge`'s residual error).
+     *assignment-position straddle* (still open): an int64 carrier value stored
+     into a by-value let/temp (`tail-call-inline-c-carrier-bridge`'s residual
+     error; also `nested-construct-byvalue-decode`'s residual nested-construct
+     straddle).
    - **inline-C instance method returning a by-value aggregate** (`Pos r; return
      r;`) under an int64 carrier signature -- the compiler cannot rewrite inside
      inline-C, so the method's C signature must be the concrete aggregate (an
@@ -750,12 +754,12 @@ What remains is **step 4 (full graduation)**: make lowering unconditional (delet
 the gate + `g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]` row), retire the
 `StructDef` surface path, and regen snapshots.  **Seam 4 is IN PROGRESS** (see the
 step-4 entry above for the measured scope and the running cleared-cluster log).
-The default `bash tests/run.sh` is **green (1856 passed, 0 failed)** with seven
+The default `bash tests/run.sh` is **green (1857 passed, 0 failed)** with eight
 flag-independent seam-4 fixes landed -- including the big lever (the C-ABI-
 compatible flat named layout + `typedef <Name>` alias for single-variant record
 ADTs), ABI-bridge sub-root (a) (0-arg construct selection in control flow), and
 the inline-C-tail return bridge.
-The force-lower probe is down from **212 to 97 real (non-snapshot) blockers (54%
+The force-lower probe is down from **212 to 96 real (non-snapshot) blockers (55%
 cleared)**.  The dominant remaining cluster is now the by-value-aggregate <->
 int64-carrier **ABI bridge** family (`incompatible types when
 returning/initializing/assigning`, `aggregate value used where an integer was
