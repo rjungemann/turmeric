@@ -279,12 +279,13 @@ static bool fn_body_tail_returns_carrier_value(EmitCtx *ctx, const Expr *e) {
     switch (e->kind) {
         case EX_ASCRIBE:
             return fn_body_tail_returns_carrier_value(ctx, e->as.ascribe_.inner);
-        case EX_DO:
-            return e->as.do_.n > 0 &&
-                   fn_body_tail_returns_carrier_value(ctx, e->as.do_.items[e->as.do_.n - 1]);
-        case EX_LET:
-        case EX_LETREC:
-            return fn_body_tail_returns_carrier_value(ctx, e->as.let_.body);
+        /* NOTE: do NOT descend into EX_DO/EX_LET/EX_LETREC here.  Under the
+         * defstruct-as-defadt lowering those control forms now bridge their own
+         * tail value into a by-value merge temp (emit_expr.c's
+         * bridge_control_value_to_byvalue_temp), so the merge result is already
+         * the by-value aggregate and `return <temp>` needs no further unbox.
+         * Descending would re-fire the M5 carrier->concrete deref on a value that
+         * is no longer the carrier (the assignment-straddle double-bridge). */
         case EX_CALL: {
             const Binding *b = e->as.call_.fn_binding;
             if (!b || b->type.kind != TY_FN || !b->type.as.fn.result_full_type)

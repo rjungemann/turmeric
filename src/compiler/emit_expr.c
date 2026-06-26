@@ -615,6 +615,32 @@ Type fn_body_tail_byvalue_carrier_type(EmitCtx *ctx, const Expr *e) {
                 strcmp(emit_type_c_name(ctx, sr), "int64_t") != 0)
                 return sr;
         }
+        /* CONV-S1 seam 4 (assignment-straddle): an inline-C callee whose declared
+         * result is a parametric ADT app (`(Result cstr cstr)`) is lowered by
+         * value (a flat aggregate, not the carrier), yet emit_fns.c still emits
+         * the inline-C body with an int64 carrier C return.  A control-form merge
+         * temp (if/do/let) that sources its value from such a call must be the
+         * by-value aggregate so the carrier->concrete deref bridge can populate it
+         * -- mirror the make-struct/spec recoveries above.  No abi spec exists for
+         * a plain monomorphic inline-C call, so the spec branch misses it.  Inert
+         * at default: there the lowered-by-value rep does not apply, so the result
+         * type IS the carrier and its c-name is `int64_t` (excluded below). */
+        const Binding *cb = x->as.call_.fn_binding;
+        if (cb && cb->body_is_inline_c && cb->type.kind == TY_FN &&
+            cb->type.as.fn.result_full_type) {
+            Type sr = emit_resolve_type(ctx, *cb->type.as.fn.result_full_type);
+            /* Gate on !type_uses_carrier_abi(sr): the by-value-temp strategy only
+             * applies when the lowered aggregate flows by value.  At default the
+             * same `(Result cstr cstr)` IS the carrier (type_uses_carrier_abi
+             * true), where the existing carrier-temp + single M5 deref already
+             * handles the merge -- firing here would declare a by-value temp and
+             * double-bridge.  This keeps the extension strictly lowering-only. */
+            if ((sr.kind == TY_APP || sr.kind == TY_ADT) &&
+                !type_uses_carrier_abi(sr) &&
+                !type_is_heap_struct(sr) && !type_is_heap_adt(sr) &&
+                strcmp(emit_type_c_name(ctx, sr), "int64_t") != 0)
+                return sr;
+        }
     }
     return unknown;
 }
@@ -840,6 +866,25 @@ static void emit_control_result_temp_decl(EmitCtx *ctx, Buf *body, Type type,
     emit_temp_decl(ctx, body, type, name, NULL);
 }
 
+/* CONV-S1 seam 4 (assignment-straddle): bridge the value `v` of a control-form
+ * tail (`last`) into a by-value merge temp that emit_control_result_temp_decl
+ * declared via its branch-1 (fn_body_tail_byvalue_carrier_type) recovery.  When
+ * the tail is a carrier producer whose by-value aggregate return is nonetheless
+ * EMITTED as the int64 carrier (an inline-C / #{Construct} producer under the
+ * defstruct-as-defadt lowering), `emit_value` yields the carrier handle but the
+ * temp is the by-value aggregate -- deref it carrier->concrete so the assign
+ * type-checks.  emit_if_value applies the same bridge per arm inline; this is the
+ * do/let companion.  Inert (returns `v` unchanged) when the temp is not by-value
+ * or the tail already emits the by-value aggregate. */
+static char *bridge_control_value_to_byvalue_temp(EmitCtx *ctx, Buf *body,
+                                                   char *v, const Expr *last) {
+    Type bv = fn_body_tail_byvalue_carrier_type(ctx, last);
+    if (bv.kind != TY_UNKNOWN &&
+        !fn_body_tail_emits_byvalue_carrier_abi(ctx, last))
+        return emit_carrier_bridge(ctx, body, v, CK_CARRIER, CK_CONCRETE, bv);
+    return v;
+}
+
 /* Fat-closure-env scoped free (docs/reported/fat-closure-env-leak.md): decide
  * whether let-binding `idx` of `e` holds a freshly-constructed fat closure whose
  * heap env can be `free`d when the let scope exits.  Sound iff:
@@ -1062,6 +1107,8 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
          * it. */
         if (!nil_result && !expr_is_divergent(e->as.let_.body)) {
             char *bv = emit_value(ctx, body, e->as.let_.body);
+            bv = bridge_control_value_to_byvalue_temp(ctx, body, bv,
+                                                      e->as.let_.body);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s = %s;\n", tmp, bv);
             free(bv);
@@ -1079,6 +1126,8 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         emit_stmt(ctx, body, e->as.let_.body);
     } else {
         char *bv = emit_value(ctx, body, e->as.let_.body);
+        bv = bridge_control_value_to_byvalue_temp(ctx, body, bv,
+                                                  e->as.let_.body);
         indent_buf(body, ctx->indent);
         buf_printf(body, "%s = %s;\n", tmp, bv);
         free(bv);
@@ -1234,6 +1283,8 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     if (body_has_return_or_throw) {
         if (!nil_result && !expr_is_divergent(e->as.let_.body)) {
             char *bv = emit_value(ctx, body, e->as.let_.body);
+            bv = bridge_control_value_to_byvalue_temp(ctx, body, bv,
+                                                      e->as.let_.body);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s = %s;\n", tmp, bv);
             free(bv);
@@ -1464,6 +1515,7 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     emit_control_result_temp_decl(ctx, body, last->type, last, result);
                 }
                 char *v = emit_value(ctx, body, last);
+                v = bridge_control_value_to_byvalue_temp(ctx, body, v, last);
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s = %s;\n", result, v);
                 free(v);
@@ -1648,6 +1700,7 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             result = fresh_tmp(ctx);
             emit_control_result_temp_decl(ctx, body, last->type, last, result);
             char *v = emit_value(ctx, body, last);
+            v = bridge_control_value_to_byvalue_temp(ctx, body, v, last);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s = %s;\n", result, v);
             free(v);
