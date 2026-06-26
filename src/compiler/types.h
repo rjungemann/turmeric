@@ -1546,6 +1546,9 @@ bool         type_struct_pass_by_ptr(Type t);
 /* end-to-end-monomorphization: true when t is a (possibly applied) :heap struct
  * -- its monomorphic ABI is a typed pointer `T__A *`. */
 bool         type_is_heap_struct(Type t);
+/* seam 3: the ADT analogue -- true when t is a (possibly applied) :heap ADT
+ * (the lowered form of a :heap defstruct); its ABI is `tur_adt_<Name> *`. */
+bool         type_is_heap_adt(Type t);
 /* True when t is a fully concrete (tyvar-free) type with a monomorphizable C
  * codegen layout -- e.g. `(Vec int)` but not `(Vec A)`.  Gates spec-minting on
  * concrete-only call sites. */

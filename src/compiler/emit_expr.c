@@ -3230,7 +3230,8 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * A :heap struct is never an inline by-value field, so this
                      * never collides with the slice-4 inline path. */
                     if (!suffix && !field_inline && arg &&
-                        type_is_heap_struct(emit_resolve_type(ctx, arg->type))) {
+                        (type_is_heap_struct(emit_resolve_type(ctx, arg->type)) ||
+                         type_is_heap_adt(emit_resolve_type(ctx, arg->type)))) {
                         Buf c; buf_init(&c);
                         buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
                         buf_putc(&c, '\0');
@@ -6919,8 +6920,13 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * Widen the by-value decision to the app-aware predicate keyed on the
              * scrutinee's concrete type. */
             Type scrut_ty = e->as.match_.scrutinee->type;
-            bool adt_byval = adt_is_byvalue_product(adt) ||
-                             adt_app_is_byvalue_product(scrut_ty);
+            /* seam 3: a :heap ADT scrutinee is a typed pointer, never a by-value
+             * aggregate -- it falls to the carrier branch below (bind as a
+             * pointer, read fields with `->`), exactly as a carrier ADT does. */
+            bool adt_byval = (adt_is_byvalue_product(adt) ||
+                              adt_app_is_byvalue_product(scrut_ty)) &&
+                             !type_is_heap_adt(scrut_ty) &&
+                             !(adt && adt->is_heap);
             /* Slice 3: a large by-value ADT scrutinee that is a pass-by-pointer
              * param arrives as `const tur_adt_X *`, so it is already a pointer --
              * bind it as one and read fields with `->`, never `.`. */

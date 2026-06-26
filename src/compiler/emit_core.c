@@ -347,6 +347,11 @@ bool type_uses_carrier_abi(Type t) {
      * same emit_carrier_bridge machinery a by-value struct uses.  Gated by
      * adt_is_byvalue_product (LIVE for leaf products as of B3). */
     if (t.kind == TY_ADT && adt_is_byvalue_product(t.as.adt_.def)) return false;
+    /* seam 3: a non-parametric :heap ADT is a concrete typed pointer
+     * `tur_adt_<Name> *` (not the int64 carrier), exactly as a non-parametric
+     * :heap struct is not carrier-ABI -- so no spill/box/deref bridging. */
+    if (t.kind == TY_ADT && t.as.adt_.def && t.as.adt_.def->is_heap &&
+        t.as.adt_.def->n_type_params == 0) return false;
     /* Parametric-by-value (gated): a concrete by-value flat-product ADT-app is a
      * by-value aggregate, not a carrier -- it spills/boxes/derefs through the
      * same emit_carrier_bridge machinery a monomorphised struct uses.  Hard-off

@@ -174,8 +174,14 @@ before the gate widens past leaf-scalar and before the experiment graduates
   param's pointer directly.  A lowered >16-byte leaf-scalar `defstruct` is now
   ABI-identical to the struct path (same `const T*`, same `&` call site). Fixture:
   `conv-byval-adt-large-pbp`.
-- **`:heap` typed-pointer ABI** -- no ADT equivalent of the parametric
-  `Vec<T> *` lowering.
+- **`:heap` typed-pointer ABI** -- ~~no ADT equivalent of the parametric
+  `Vec<T> *` lowering~~ **FOUNDATION + NON-PARAMETRIC `:heap`-STRUCT LOWERING
+  LANDED (seam 3, 2026-06-26).** A `:heap` record ADT lowers to a typed pointer
+  `tur_adt_<Name> *`, and a non-parametric `:heap` *struct* now auto-lowers with
+  full parity (`type_is_heap_adt` + `:heap` exclusions at pbp / carrier-ABI /
+  `match`-scrutinee / ctor-arg-cast). Fixtures `conv-heap-adt-typed-pointer`,
+  `conv-defstruct-heap-struct-lowering`. The **parametric** stdlib `:heap`
+  containers (`Vec`/`Map`/`Set`/`MutableMap`) remain on the struct path.
 - **Nested by-value struct fields** -- ~~a struct-typed field is inlined in a
   struct but carried as an int64 in an ADT~~ **LANDED (slice 4).** The
   representation gate `adt_is_byvalue_product` (types.c) now admits a field that
@@ -408,47 +414,68 @@ runtime *usage* seam, below.
      `MonadError` inline-C bodies) still assumes the struct/carrier representation;
      it coexists fine today (parity) but should be reconciled or retired when the
      gate comes off.
-3. **`:heap` typed-pointer ADT ABI. FOUNDATION DONE (2026-06-26); :heap-struct
-   auto-lowering deferred.** A `:heap` record ADT now lowers to a typed pointer
-   (`tur_adt_<Name>__<args> *`) to a heap-allocated header -- the ADT analogue of
-   a `:heap` struct's `Name *`.  Landed (all gated on `AdtDef.is_heap`, so inert
-   unless an ADT is `:heap`): `defdata :heap` parsing; `type_c_name` typed-pointer
-   for a `:heap` `TY_ADT` and concrete `:heap` `TY_APP` monomorph; malloc'ing
-   ctors in both the parametric monomorph emitter (types.c) and the non-parametric
-   emitter + its early-file mirror (emit_module.c); `->` field access for a `:heap`
-   receiver; `emit_type_is_byvalue_adt` / `adt_field_is_inline_byval` excluding
-   `:heap` (a `:heap` ADT is a pointer carrier, never an inline/boxed aggregate);
+3. **`:heap` typed-pointer ADT ABI. FOUNDATION + NON-PARAMETRIC `:heap`-STRUCT
+   AUTO-LOWERING DONE (2026-06-26); parametric stdlib `:heap` deferred.** A
+   `:heap` record ADT lowers to a typed pointer (`tur_adt_<Name>__<args> *`) to a
+   heap-allocated header -- the ADT analogue of a `:heap` struct's `Name *`.
+   Foundation (all gated on `AdtDef.is_heap`, so inert unless an ADT is `:heap`):
+   `defdata :heap` parsing; `type_c_name` typed-pointer for a `:heap` `TY_ADT` and
+   concrete `:heap` `TY_APP` monomorph; malloc'ing ctors in both the parametric
+   monomorph emitter (types.c) and the non-parametric emitter + its early-file
+   mirror (emit_module.c); `->` field access for a `:heap` receiver;
+   `emit_type_is_byvalue_adt` / `adt_field_is_inline_byval` excluding `:heap` (a
+   `:heap` ADT is a pointer carrier, never an inline/boxed aggregate);
    `resolve_ctor_field` recording a `:heap` / forward-stub ADT field's `full_type`.
    A hand-written `(defdata HCell :heap [A] (HCell [fst : A snd : int]))` lowers,
    constructs and reads back correctly (fixture `conv-heap-adt-typed-pointer`).
-   **Remaining (kept on the struct path by the gate):** auto-lowering a `:heap`
-   *struct* still has a by-value-vs-`:heap` integration tail -- a nested `:heap`
-   field passed to another `:heap` param is spuriously address-of'd
-   (`bsum(&__t32)` where `__t32` is already `tur_adt_Big *`); each by-value site
-   (`field_read_emits_byvalue_aggregate`, the arg `&`-bridge, pbp) needs the same
-   `:heap` exclusion the foundation predicates got.  Then the stdlib
-   `Vec`/`Map`/`Set`/`MutableMap` -- whose inline-C bodies assume the struct/typed-
-   pointer rep -- must lower, the largest remaining piece.
+
+   **`:heap`-struct auto-lowering (2026-06-26).** The lowering gate now admits a
+   **non-parametric** `:heap` struct, and the by-value-vs-`:heap` integration tail
+   is closed.  The double-pointer / spurious-address-of bug (`bsum(&__t32)` where
+   `__t32` is already `tur_adt_Big *`) came from a `:heap` ADT being treated as a
+   `>16`-byte by-value aggregate; the same erasure misbound a `:heap` `match`
+   scrutinee as an aggregate.  A new `type_is_heap_adt` predicate (types.c, the ADT
+   analogue of `type_is_heap_struct`) plus `:heap` exclusions at each by-value
+   site: **pbp** (`adt_byval_pass_by_ptr` / `adt_app_byval_pass_by_ptr` bail for
+   `:heap`, so the param stays a single `tur_adt_Big *` and the call site drops the
+   `&`); **carrier-ABI** (`type_uses_carrier_abi` returns false for a
+   non-parametric `:heap` ADT, mirroring a non-parametric `:heap` struct);
+   **`match` scrutinee** (`emit_expr.c` excludes `:heap` from the by-value branch,
+   so it binds a pointer and reads `->`); **the ctor-arg cast** (a `:heap`-ADT
+   argument to a struct's carrier field slot gets the `(int64_t)(intptr_t)` cast,
+   so no `-Wint-conversion`).  A non-parametric `:heap` struct now lowers, with
+   field access, function-arg passing (`:heap` value -> `:heap` param), `match`,
+   `with` on a `:copy :heap` struct, keyword construction, and a `:heap` field of a
+   non-heap struct all at parity with the struct path (fixture
+   `conv-defstruct-heap-struct-lowering`).
+
+   **Remaining (kept on the struct path by the gate):** a **parametric** `:heap`
+   struct (the stdlib `Vec`/`Map`/`Set`/`MutableMap`, whose inline-C bodies assume
+   the struct/typed-pointer rep) stays on the struct path until that
+   reconciliation lands -- the largest remaining piece.
 4. **Validation across every autoloaded parametric stdlib type**, then delete the
    gate + `g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]` row, retire the
    `StructDef` surface path, and regenerate snapshots.
 
 ### Current state (suite green)
 
-`bash tests/run.sh` is **1841 passed, 0 failed** with the gate widened to
-parametric (non-`:heap`) structs; the flag-on `conv-defstruct-*` canaries pass.
-The flag is still opt-in.  **`Option` and `Result` -- the two hardest
-dedicated-codegen stdlib types -- now work under the flag at parity with the
-no-flag baseline:** construction (`some`/`none`/`ok`/`err`), accessors
-(`ok?`/`ok-val`/`err-val`/`unwrap-or`), and HKT instances (`fmap`/`bind`/`alt-or`
-on Option) all compile and run with correct results.  (`fmap`/`bind` on `Result`
-remain blocked by a *baseline* type-recovery limitation, not the lowering.)
+`bash tests/run.sh` is **1845 passed, 0 failed** with the gate widened to
+parametric (non-`:heap`) structs and **non-parametric `:heap` structs**; the
+flag-on `conv-defstruct-*` canaries pass (including the new
+`conv-defstruct-heap-struct-lowering`).  The flag is still opt-in.  **`Option`
+and `Result` -- the two hardest dedicated-codegen stdlib types -- now work under
+the flag at parity with the no-flag baseline:** construction
+(`some`/`none`/`ok`/`err`), accessors (`ok?`/`ok-val`/`err-val`/`unwrap-or`), and
+HKT instances (`fmap`/`bind`/`alt-or` on Option) all compile and run with correct
+results.  (`fmap`/`bind` on `Result` remain blocked by a *baseline* type-recovery
+limitation, not the lowering.)
 
-Seams 1, 1b, 2 are DONE, and seam 3's `:heap` ADT ABI *foundation* is in place
-(a hand-written `:heap` defadt lowers and runs).  Graduation order from here:
-finish **seam 3** (`:heap`-struct auto-lowering, then the stdlib
-`Vec`/`Map`/`Set`/`MutableMap` whose inline-C assumes the struct rep -- the last
-representational gap) -> **seam 4** (validate across every parametric stdlib
+Seams 1, 1b, 2 are DONE, and seam 3 now covers the `:heap` ADT ABI foundation
+(a hand-written `:heap` defadt lowers and runs) **and non-parametric `:heap`-struct
+auto-lowering** (`conv-defstruct-heap-struct-lowering`).  Graduation order from
+here: finish **seam 3** -- lower the **parametric** stdlib `:heap` containers
+(`Vec`/`Map`/`Set`/`MutableMap`), whose inline-C assumes the struct rep, the last
+representational gap -> **seam 4** (validate across every parametric stdlib
 type, then delete the gate + `g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]`
 row, retire the `StructDef` surface path, regen snapshots).  The suite does not
 yet exercise the by-value HKT usage the flag now supports, so adding flag-on

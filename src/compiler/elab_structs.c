@@ -757,6 +757,7 @@ bool defstruct_lowers_to_adt(Elab *e, const Form *call) {
     const Form *name_form = call->as.list.items[1];
     if (name_form->tag != F_SYM) return false;
     uint32_t idx = 2;
+    bool is_heap = false;
     while (idx < call->as.list.len) {
         const Form *kw = call->as.list.items[idx];
         if (kw->tag != F_KEYWORD) break;
@@ -766,13 +767,15 @@ bool defstruct_lowers_to_adt(Elab *e, const Form *call) {
             return false;  /* :linear keeps the struct path */
         /* seam 3: the :heap typed-pointer ADT ABI foundation is in place (defdata
          * :heap, the typed-pointer type_c_name, the malloc'ing monomorph/
-         * non-parametric ctors, `->` field access), and a hand-written
-         * `(defdata X :heap ...)` lowers and runs.  But auto-lowering a `:heap`
-         * *struct* still has a long tail of by-value-vs-:heap integration sites
-         * (a nested :heap field is spuriously address-of'd when passed; the
-         * stdlib Vec/Map/Set inline-C assumes the struct rep), so the gate keeps
-         * :heap structs on the struct path until that lands. */
-        if (kw->as.sym == e->kw_heap) return false;
+         * non-parametric ctors, `->` field access), and a NON-PARAMETRIC `:heap`
+         * struct now lowers to a `:heap` record defadt.  The by-value-vs-:heap
+         * integration sites (pbp, carrier-ABI, match scrutinee, the ctor-arg
+         * `(int64_t)(intptr_t)` cast) all exclude a `:heap` ADT, so a nested
+         * `:heap` field is no longer spuriously address-of'd.  A *parametric*
+         * `:heap` struct (the stdlib Vec/Map/Set/MutableMap, whose inline-C bodies
+         * assume the struct/typed-pointer rep) stays on the struct path until that
+         * reconciliation lands -- see the gate just below. */
+        if (kw->as.sym == e->kw_heap) { is_heap = true; idx++; continue; }
         break;
     }
     /* A leading all-symbol vector is a type-parameter list -> parametric.
@@ -784,7 +787,13 @@ bool defstruct_lowers_to_adt(Elab *e, const Form *call) {
         bool all_syms = vec->as.list.len > 0;
         for (uint32_t i = 0; i < vec->as.list.len; i++)
             if (vec->as.list.items[i]->tag != F_SYM) { all_syms = false; break; }
-        if (all_syms) idx++;  /* parametric: consume the type-param vec */
+        if (all_syms) {
+            /* seam 3: a *parametric* `:heap` struct (Vec/Map/Set/MutableMap) keeps
+             * the struct path -- its inline-C runtime assumes the typed-pointer
+             * struct rep, the largest remaining graduation piece. */
+            if (is_heap) return false;
+            idx++;  /* parametric (non-heap): consume the type-param vec */
+        }
     }
     if (idx >= call->as.list.len) return false;
     const Form *fields = call->as.list.items[idx];

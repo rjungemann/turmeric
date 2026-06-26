@@ -2671,6 +2671,11 @@ static size_t adt_ctor_field_size_bytes(const CtorField *f, int depth) {
 }
 
 bool adt_byval_pass_by_ptr(const AdtDef *def) {
+    /* seam 3: a :heap ADT already lowers to a typed pointer `tur_adt_<Name> *`,
+     * so it is passed by value (the pointer itself), never pass-by-pointer-
+     * wrapped -- wrapping would make the param a double pointer and address-of
+     * the call site (`bsum(&p)` where `p` is already a pointer). */
+    if (def && def->is_heap) return false;
     if (!adt_is_byvalue_product(def)) return false;
     const CtorDef *c = def->ctors[0];
     size_t total = 0;
@@ -2722,6 +2727,8 @@ bool adt_app_byval_pass_by_ptr(Type t) {
     Type args[16];
     uint8_t n_args = 0;
     if (!type_extract_adt_app(&t, &def, args, &n_args) || !def) return false;
+    /* seam 3: a :heap parametric ADT monomorph is a typed pointer, never pbp. */
+    if (def->is_heap) return false;
     const CtorDef *c = def->ctors[0];
     size_t total = 0;
     for (uint32_t i = 0; i < c->n_fields; i++) {
@@ -4224,6 +4231,22 @@ bool type_is_heap_struct(Type t) {
         StructDef *def = NULL;
         Type args[16]; uint8_t n_args = 0;
         if (type_extract_struct_app(&t, &def, args, &n_args))
+            return def && def->is_heap;
+    }
+    return false;
+}
+
+/* seam 3: the ADT analogue of type_is_heap_struct -- true when t is a (possibly
+ * applied) ADT whose AdtDef carries :heap, i.e. its monomorphic ABI is a typed
+ * pointer `tur_adt_<Name>__<args> *` to a heap-allocated header.  A lowered
+ * `:heap` defstruct flows through this path. */
+bool type_is_heap_adt(Type t) {
+    if (t.kind == TY_ADT)
+        return t.as.adt_.def && t.as.adt_.def->is_heap;
+    if (t.kind == TY_APP) {
+        AdtDef *def = NULL;
+        Type args[16]; uint8_t n_args = 0;
+        if (type_extract_adt_app(&t, &def, args, &n_args))
             return def && def->is_heap;
     }
     return false;
