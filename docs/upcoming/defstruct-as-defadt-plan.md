@@ -591,11 +591,27 @@ runtime *usage* seam, below.
      regenerated.  *Cleared ~43* (`httpd-*`, `clone-*`, `eqmap-struct`, the `Pos`
      `typeclass-*` tests).  Fixture `conv-defstruct-inline-c-abi`.
 
-   **Running total: 212 -> 71 unique build-failing fixtures under force-lower
+   **Running total: 212 -> 66 unique build-failing fixtures under force-lower
    (default suite stays 1857/0).**  (Sub-root (a) -- 0-arg construct in control
    flow -- the inline-C-tail return bridge, the accessor-unbox, the
-   assignment-position straddle, and the inline-C instance-method signature are
-   all LANDED.)
+   assignment-position straddle, the inline-C instance-method signature, and the
+   by-value struct-field receiver / by-value ADT field storage are all LANDED.)
+
+   - **by-value ADT struct field + carrier-held receiver DONE (2026-06-26).**
+     A struct field typed as a by-value aggregate ADT (`(Option cstr)` ->
+     `tur_adt_Option__cstr`): at default the field's kind was TY_STRUCT and it
+     embedded the by-value monomorph; under lowering the kind collapses to the
+     int64 carrier and the field typedef fell to the int64 default, mismatching
+     the by-value ctor init.  emit_module.c now embeds a non-:heap ADT/app field
+     as its monomorph aggregate (+ pre-flushes the typedef).  Companion: a
+     typeclass instance method's dispatch class-var param is declared int64 (the
+     uniform dict ABI) while its elaborated type is the by-value aggregate -- a
+     new `emit_carrier_holds_byval` Binding flag drives the field read to deref
+     the carrier to the concrete monomorph pointer.  Cleared 5 fixtures
+     (`instance-method-byvalue-struct-field-receiver`,
+     `defstruct-field-byvalue-parametric-struct`,
+     `applied-struct-instance-element-discrimination`,
+     `definstance-applied-unary-head-kind`, `macro-defstruct-field-type-unquote`).
 
    **Remaining blockers (~99), by signature.**  The biggest cluster is the
    **by-value-aggregate <-> int64-carrier ABI bridge** family (~33): `incompatible
