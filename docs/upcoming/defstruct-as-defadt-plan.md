@@ -591,10 +591,11 @@ runtime *usage* seam, below.
      regenerated.  *Cleared ~43* (`httpd-*`, `clone-*`, `eqmap-struct`, the `Pos`
      `typeclass-*` tests).  Fixture `conv-defstruct-inline-c-abi`.
 
-   **Running total: 212 -> 73 unique build-failing fixtures under force-lower
+   **Running total: 212 -> 71 unique build-failing fixtures under force-lower
    (default suite stays 1857/0).**  (Sub-root (a) -- 0-arg construct in control
-   flow -- the inline-C-tail return bridge, the accessor-unbox, and the
-   assignment-position straddle are all LANDED.)
+   flow -- the inline-C-tail return bridge, the accessor-unbox, the
+   assignment-position straddle, and the inline-C instance-method signature are
+   all LANDED.)
 
    **Remaining blockers (~99), by signature.**  The biggest cluster is the
    **by-value-aggregate <-> int64-carrier ABI bridge** family (~33): `incompatible
@@ -666,10 +667,17 @@ runtime *usage* seam, below.
      abstract int64 carrier.  Root cause + fix directions captured in
      `docs/reported/construct-template-accessor-spec-clone-no-active-spec.md`
      (the fix belongs in the spec-clone body emit, not the leaf).  (2) *inline-C
-     instance-method signature*
-     (still open): a `Pos r; return r;` inline-C instance body under an int64
-     signature -- the SIGNATURE must be the by-value aggregate, not the carrier
-     (`typeclass-fundep-collect`, `typeclass-multiparam-storage-dispatch`).  (3)
+     instance-method signature* **DONE (2026-06-26)**: a `Pos r; return r;`
+     inline-C instance body whose declared result is a by-value record/product
+     (`Pos` -> `tur_adt_Pos`) was emitted with the int64 carrier signature while
+     the dispatch dict slot already used the aggregate.  emit_fns.c lowered an
+     inline-C result to int64 unless it matched a recognized typed kind
+     (ptr/TY_STRUCT/cfnptr/heap-spec); a by-value ADT/app result was
+     unrecognized.  Added a `typed_byval_adt` case (non-:heap ADT/app, carrier-ABI
+     false, concrete layout) emitting the aggregate C name, mirrored in
+     emit_module.c's forward-decl path so prototype/definition/dict-slot agree;
+     carrier-ABI ADTs stay int64.  Clears `typeclass-fundep-collect`,
+     `typeclass-multiparam-storage-dispatch`.  (3)
      *assignment-position straddle* **DONE (2026-06-26)**: an int64 carrier value
      (from an inline-C / construct producer whose lowered by-value ADT-app result
      is nonetheless emitted as the carrier) stored into a by-value if/do/let merge
