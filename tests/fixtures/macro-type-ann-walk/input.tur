@@ -1,0 +1,30 @@
+;; type-ann? / type-ann-inner CT primitives let a macro walk
+;; through a structural `name : type` annotation. The reader folds
+;; `: type` into an F_TYPE_ANN node (forms.c:142), and pre-fix
+;; first/rest/second only descended F_LIST/F_VEC, so a macro had
+;; no way to read the inner type symbol out.
+;; docs/reported/ct-primitives-cannot-walk-type-ann-nodes.md
+(defmacro probe [^syntax decl]
+  ;; decl shape: (name : type default)
+  (let [name-sym (first decl)
+        slot1    (first (rest decl))
+        is-ann   (type-ann? slot1)
+        type-sym (type-ann-inner slot1)
+        default  (first (rest (rest decl)))]
+    `(do
+       (println ~(symbol-name name-sym))
+       (println (if ~is-ann "annotated" "plain"))
+       (println ~(symbol-name type-sym))
+       (println ~default))))
+
+;; A second macro asserts type-ann? is false on a plain symbol slot.
+(defmacro probe-plain [^syntax decl]
+  (let [slot1  (first (rest decl))
+        is-ann (type-ann? slot1)]
+    `(println (if ~is-ann "annotated" "plain"))))
+
+(defn main [] : int
+  (probe (speed : float 200.0))
+  (probe (label-tag : string "ok-from-export"))
+  (probe-plain (speed float 200.0))
+  0)

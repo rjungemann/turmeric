@@ -21,6 +21,14 @@ debugging requires DWARF type emission for opaques/ADTs/options/results and
 is multi-week. Splitting the work means programmers get step/break/inspect
 early (against the interpreter) while the native side ramps.
 
+## Generated docs convention
+
+Phase progress/report write-ups generated as part of this plan (and the
+sibling debugger plans) live under [`docs/artifacts/`](../artifacts/), not
+`docs/upcoming/`. `docs/upcoming/` is reserved for the plans themselves;
+artifacts are the by-products of executing them. New per-phase reports
+produced by this plan should be created in `docs/artifacts/` from the start.
+
 ## Non-goals
 
 - Time-travel / reverse debugging.
@@ -33,7 +41,7 @@ early (against the interpreter) while the native side ramps.
 ### Phase 1 -- Source spans audit
 
 **Status: landed.** Audit write-up + the span-coverage gate are in
-[debugger-spans-audit.md](./debugger-spans-audit.md). `tur audit-spans <file>`
+[debugger-spans-audit.md](../artifacts/debugger-spans-audit.md). `tur audit-spans <file>`
 walks the post-elaboration tree and reports breakpoint-eligible nodes (defn,
 let form, call site, top-level form) lacking a usable span; the
 `tur_span_coverage` ctest target (`tests/check-span-coverage.sh`) gates the
@@ -62,7 +70,7 @@ that round-trips through elaboration.
 ### Phase 2 -- Interpreter debugger (CLI)
 
 **Status: landed.** Write-up in
-[debugger-interpreter-phase2.md](./debugger-interpreter-phase2.md). `tur debug
+[debugger-interpreter-phase2.md](../artifacts/debugger-interpreter-phase2.md). `tur debug
 <file>` drops into a `(tur-dbg)` REPL with break / step / next / finish /
 continue / backtrace / locals / print / list / quit and the `(break)` builtin.
 The eval-loop hooks live in `src/turi/eval.c` behind a single `env->debugger`
@@ -99,7 +107,7 @@ non-debugger interp runs.
 ### Phase 3 -- DAP server over the interpreter
 
 **Status: landed.** Write-up in
-[debugger-dap-phase3.md](./debugger-dap-phase3.md). `tur dap` speaks the Debug
+[debugger-dap-phase3.md](../artifacts/debugger-dap-phase3.md). `tur dap` speaks the Debug
 Adapter Protocol (JSON-RPC 2.0 / stdio, the same transport as `tur lsp`) as a
 thin shell over Phase 2's debugger. Phase 2's `TuriDebugger` gained a typed
 control API (`turi_debug_*` in `src/turi/eval.h`): a pause handler that replaces
@@ -135,7 +143,7 @@ mechanical once Phase 2 exposes the right primitives.
 ### Phase 4 -- Source maps for emit-C (native gdb/lldb minimal)
 
 **Status: landed.** Write-up in
-[debugger-native-sourcemaps-phase4.md](./debugger-native-sourcemaps-phase4.md).
+[debugger-native-sourcemaps-phase4.md](../artifacts/debugger-native-sourcemaps-phase4.md).
 `tur build --debug` threads `#line N "file.tur"` directives into the generated C
 (via `emit_line_directive` at the function-entry and per-statement chokepoints,
 gated on `g_emit_debug_lines` so default codegen / `emit-c` snapshots are
@@ -175,7 +183,7 @@ not the macro definition.
 **Status: in progress (N1 + N2 core landed).** Split into its own plan:
 [debugger-native-types-plan.md](./debugger-native-types-plan.md); progress
 write-up in
-[debugger-phase5-native-types-progress.md](./debugger-phase5-native-types-progress.md).
+[debugger-phase5-native-types-progress.md](../artifacts/debugger-phase5-native-types-progress.md).
 
 N1 (codegen type-name audit) confirmed that the default by-value
 monomorphization already mints deterministic, discoverable C type names for the

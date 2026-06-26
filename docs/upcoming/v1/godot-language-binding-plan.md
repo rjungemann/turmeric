@@ -1,8 +1,9 @@
 # Turmeric as a Godot 4 Scripting Language -- Plan
 
-> **Status:** In progress -- G0-G3 and G5 at MVP; G4 partial (debugger
-> deferred); G6 typing follow-ups archived; defgodot-script shell
-> landed
+> **Status:** In progress -- G0-G3, G5, G6, G7 done; G4 partial
+> (debugger deferred). defgodot-script ships the plan-shape
+> :exports / :signals block surface; verified headless against
+> stock Godot 4.x.
 > **Last Updated:** 2026-06-25
 > **Type:** Integration / Game Engine
 
@@ -21,26 +22,32 @@ Headless verification runs via
 | G4 -- editor niceties | partial | Syntax highlighter + completion landed; debugger spun out into its own plan ([godot-binding-debugger-plan.md](./godot-binding-debugger-plan.md)). |
 | G5 -- polish + release | done | macOS / Linux / Windows CI workflow; paddle-pong-tur demo; docs guide. |
 | G6 -- typing follow-ups | done | Typed signal-connect, class-hierarchy handles, curated one-shot prelude. See [archived plan](../../archive/v1/godot-binding-typing-followups-plan.md). |
-| G7 -- `defgodot-script` shell | minimum-viable | Wraps body in `(do ...)`; users still write explicit `(godot-export ...)` / `(godot-signal ...)` calls inside. The richer surface in this plan's "Script-side surface" section (with `:exports [(name : type default)]` / `:signals [...]` vec literals walked at macro expansion) is **deferred** -- a first attempt hit Turmeric's `list` / `quote` AST construction semantics; needs a session focused on macro-eval support before the walking version ships. |
+| G7 -- `defgodot-script` shell | done | Plan-shape block surface: `(defgodot-script Name :extends Parent :exports ((n : T v) ...) :signals (bare-name (name (a : T) ...)) body...)`. Body walked at macro expansion via an accumulator-threaded helper (`tg-script-walk__`); `:exports`/`:signals` keywords consume the following list, every other form passes through. Multi-arg signals supported via a second accumulator helper (`tg-signal-acc__`) that folds `(arg : type)` decls into the flat `godot-signal` arg list. Per-decl `defgodot-export` / `defgodot-signal` remain available outside the block surface. Verified headless via three fixtures: `defgodot_script.gd` (legacy native calls), `defgodot_script_richer.gd` (per-decl macros), `defgodot_script_block.gd` (block surface, multi-arg signal `hit (damage : int) (impulse : float)`). Backed by `^syntax`, `type-ann-inner`, and structural-`=` on F_KEYWORD in `src/compiler/elab_macros.c`. |
 
-Outstanding v1-scope work:
+Outstanding v1-scope work: **none.** G7 closed the
+`defgodot-script` plan-shape surface this session. The body-walking
+`:exports` / `:signals` block macro, plus multi-arg signal support,
+landed in `../turmeric-godot/src/bridge/prelude.cpp` and is
+headless-verified. The five `tur`-side language gaps the original
+investigation surfaced are all closed (2026-06-25):
 
-1. **Richer `defgodot-script` macro** -- walk `:exports` /
-   `:signals` vec literals at macro-expansion time so the surface
-   collapses to the form described below in "Script-side surface."
-   The original investigation closed on 2026-06-25 with one fix
-   landed in `tur` (`(quote sym)` now produces a first-class `:Sym`
-   literal -- see
-   [the archived report](../../archive/defgodot-script-macro-vec-quote-semantics.md))
-   and three remaining language gaps split out into focused reports:
-   - [macro-args-elaborated-before-expansion.md](../../reported/macro-args-elaborated-before-expansion.md)
-   - [list-macro-quote-vs-syntactic-symbol.md](../../reported/list-macro-quote-vs-syntactic-symbol.md)
-   - [nested-vec-literals-collapse-to-runtime-vec.md](../../reported/nested-vec-literals-collapse-to-runtime-vec.md)
-
-   Each is independent; closing any one is useful, closing all three
-   would unlock the plan's preferred `(speed : float 200.0)`-shape
-   surface. The MV `(defgodot-script Name body...)` shell ships in
-   the meantime.
+- `(quote sym)` produces a first-class `:Sym` literal --
+  [archived report](../../archive/defgodot-script-macro-vec-quote-semantics.md).
+- `^syntax` per-param marker landed (`& ^syntax body` hands the
+  macro raw AST instead of pre-elaborated forms) --
+  [archived report](../../archive/macro-args-elaborated-before-expansion.md).
+- `elab_call` now treats an F_QUOTE-wrapped F_SYM in call-head
+  position as the bare symbol, so `(list 'foo args...)` dispatches
+  through the normal scope/special-form/macro path --
+  [archived report](../../archive/list-macro-quote-vs-syntactic-symbol.md).
+- Nested `[...]` literals inside macro args are navigable as AST
+  (the homogeneity check only fires when a heterogeneous `[...]`
+  reaches value position) --
+  [archived report](../../archive/nested-vec-literals-collapse-to-runtime-vec.md).
+- `type-ann-inner` / `type-ann?` CT primitives unwrap the
+  `F_TYPE_ANN` node the reader emits for structural `name : type`
+  annotations, so a macro can read the inner type symbol --
+  [archived report](../../archive/ct-primitives-cannot-walk-type-ann-nodes.md).
 
 **Spun out into their own plans:**
 
@@ -54,6 +61,39 @@ Outstanding v1-scope work:
 **Already landed in this session:**
 
 - `defgodot-script` minimum-viable shell macro.
+- `defgodot-export` / `defgodot-signal` ergonomic sub-macros in
+  `../turmeric-godot/src/bridge/prelude.cpp`. Each lifts the
+  per-decl `(godot-export "name" "type" default)` /
+  `(godot-signal "name" ...)` ceremony into a `(name : type default)` /
+  bare-symbol-or-`(name (arg : type)...)` shape, batched and
+  variadic. `defgodot-signal` handles both zero-arg signals and
+  signals with declared args (multi-arg flattened via
+  `tg-signal-acc__`). Spike fixture:
+  `examples/spike/scripts/defgodot_script_richer.{tur,gd}` --
+  headless-verified PASS against stock Godot 4.x (macOS arm64).
+- `defgodot-script` block surface
+  (`tg-script-walk__` body walker in the same prelude) -- accepts
+  `:extends` / `:exports` / `:signals` keyword-led blocks
+  interleaved with normal body forms, expands to a `(do ...)` of
+  the lowered `godot-export` / `godot-signal` calls plus
+  pass-through forms. Spike fixture:
+  `examples/spike/scripts/defgodot_script_block.{tur,gd}` --
+  headless-verified PASS (also asserts the multi-arg
+  `hit (damage : int) (impulse : float)` signal registered with
+  the right arg names).
+- `type-ann-inner` / `type-ann?` CT primitives in
+  `src/compiler/elab_macros.c` (this repo). Unwraps the
+  `F_TYPE_ANN` node the reader emits for structural `name : type`
+  so macros can read the inner type symbol; lets `defgodot-export`
+  consume the plan-shape `(name : type default)` decls directly.
+  Fixture: `tests/fixtures/macro-type-ann-walk/`. See
+  [archived report](../../archive/ct-primitives-cannot-walk-type-ann-nodes.md).
+- Build hygiene in `../turmeric-godot/`:
+  `src/aot/aot_metadata.cpp` swapped its two `try/std::stoll` blocks
+  for `std::strtoll` with `endptr`, since `godot-cpp` builds with
+  `-fno-exceptions` and the AOT sources were added to
+  `SConstruct`'s glob locally. Unblocks `scons platform=macos
+  arch=arm64 target=template_debug` clean.
 - String arena reallocation hazard -- switched `g_str_arena` from
   `std::vector` to `std::deque` for pointer stability across pushes.
 - macOS code-signing skeleton in `.github/workflows/build.yml` --

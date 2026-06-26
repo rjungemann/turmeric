@@ -12,7 +12,36 @@ Scope is limited to `web/try/` and the assets it pulls in (`web/main.js`,
 
 ## Status
 
-Not started. Single-PR-sized; can land incrementally by section.
+In progress. Rollout step 1 (mobile layout) has landed; persistence and
+PWA service worker are still outstanding.
+
+Done:
+- §1.1 Web app manifest + meta tags + 192/512/apple-touch icons
+  (`web/public/manifest.webmanifest`, `web/public/icons/`, `web/try/index.html`).
+- §2.1 Viewport meta (`interactive-widget=resizes-content`, `viewport-fit=cover`).
+- §2.1a iOS focus-zoom suppression (`.monaco-editor .inputarea`, `#repl-input`,
+  `#doc-search` forced to 16px under `pointer: coarse` / `max-width: 1024px`).
+- §2.2 Non-scrolling mobile layout (`100dvh`, grid with `--split`, doc panel
+  hidden, footer hidden, safe-area inset under `display-mode: standalone`).
+- §2.3 Toolbar density collapse on `max-width: 600px`.
+- §2.4 Horizontally scrollable editor header -- CSS overflow/scroll-snap/mask
+  fade and JS drag-to-scroll with 6px threshold + click suppression
+  (`web/main.js` ~L1099-1160).
+- §4 Editor persistence -- partial: single-buffer keys
+  (`tur.try.buffer.v1`, `tur.try.cursor.v1`, `tur.try.scroll.v1`,
+  `tur.try.console.v1`) and "Reset workspace" flow. No multi-tab
+  (`tur.try.tabs.v1` / `tur.try.activeTab.v1`) yet.
+
+Not done:
+- §1.2 Service worker (`web/public/sw.js`) -- no SW shipped; offline cache
+  + WASM precache outstanding.
+- §1.3 Install affordances (`beforeinstallprompt` capture + iOS A2HS hint).
+- §3 Draggable split -- CSS `--split` slot exists but no `#split-handle`
+  markup, no pointer drag handler, no `localStorage` persistence of the
+  fraction (the reset path clears the keys but nothing writes them).
+- §5 `/sw.js` headers in `web/public/_headers`.
+- §6 Mobile Playwright project + offline-reload test + Lighthouse PWA audit.
+- Rollout steps 2-5 from §7.
 
 ## 1. PWA shell
 

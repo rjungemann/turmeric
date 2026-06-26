@@ -8,6 +8,13 @@
 
 ---
 
+## Generated docs convention
+
+Phase progress/report write-ups generated as part of this plan live under
+[`docs/artifacts/`](../../artifacts/), not `docs/upcoming/`.
+`docs/upcoming/` is reserved for the plans themselves; artifacts are the
+by-products of executing them.
+
 ## Why this is its own plan
 
 The parent binding plan's G4 ("Editor Niceties") parked the debugger
@@ -99,7 +106,7 @@ the *expanded* AST node it corresponds to. Span propagation through
 the macro expander is its own correctness pass.
 
 This work is partly shared with the existing
-`docs/upcoming/debugger-spans-audit.md` work in `tur` proper. Land
+`docs/artifacts/debugger-spans-audit.md` work in `tur` proper. Land
 that first; the Godot binding consumes the result.
 
 ### B4. Breakpoint table

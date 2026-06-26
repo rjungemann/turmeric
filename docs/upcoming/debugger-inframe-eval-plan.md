@@ -6,6 +6,13 @@ Track: post-v1 polish. Cross-cutting enhancement to debugger Phases 2-3
 (interpreter debugger + DAP); not a sequential phase of the parent plan.
 Parent: [debugger-plan.md](./debugger-plan.md)
 
+## Generated docs convention
+
+Phase progress/report write-ups generated as part of this plan live under
+[`docs/artifacts/`](../artifacts/), not `docs/upcoming/`. `docs/upcoming/`
+is reserved for the plans themselves; artifacts are the by-products of
+executing them.
+
 ## Goal
 
 Evaluate an **arbitrary Turmeric expression in the lexical scope of a paused
@@ -24,11 +31,11 @@ two features both shipped debugger phases explicitly deferred:
 
 ## Where the two phases left off
 
-- Phase 2 (`debugger-interpreter-phase2.md`): "evaluating an arbitrary
+- Phase 2 ([`docs/artifacts/debugger-interpreter-phase2.md`](../artifacts/debugger-interpreter-phase2.md)): "evaluating an arbitrary
   expression in the paused frame's lexical scope is deferred. `print <name>`
   covers single-binding inspection in the meantime." `dbg_add_breakpoint` parses
   only `<file>:<line>` -- there is no `if <expr>` arm yet.
-- Phase 3 (`debugger-dap-phase3.md`): `evaluate` resolves a single name
+- Phase 3 ([`docs/artifacts/debugger-dap-phase3.md`](../artifacts/debugger-dap-phase3.md)): `evaluate` resolves a single name
   (`turi_debug_eval_name`); conditional breakpoints accept only a single
   comparison `<name> <op> <literal>` (`dap_eval_condition`), with an unparseable
   or unresolved condition degrading to "stop" so a breakpoint is never silently

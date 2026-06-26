@@ -262,6 +262,8 @@ static bool form_contains_ct_builtins(Form *f) {
                     ct_symbol_name(head, "empty?") ||
                     ct_symbol_name(head, "list?") ||
                     ct_symbol_name(head, "vec?") ||
+                    ct_symbol_name(head, "type-ann?") ||
+                    ct_symbol_name(head, "type-ann-inner") ||
                     ct_symbol_name(head, "symbol-name") ||
                     ct_symbol_name(head, "dot-sym") ||
                     ct_symbol_name(head, "str->sym") ||
@@ -373,6 +375,21 @@ static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint
         if (args[0]->tag != F_SYM) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time symbol-name expects a symbol"); return ct_value_form(form_nil(env->elab->arena, span)); }
         const Symbol *sym = args[0]->as.sym;
         return ct_value_form(form_str(env->elab->arena, span, sym->name, sym->len));
+    }
+    if (ct_symbol_name(name, "type-ann?")) {
+        if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time type-ann? expects 1 argument"); return ct_value_form(form_bool(env->elab->arena, span, false)); }
+        return ct_value_form(form_bool(env->elab->arena, span, args[0]->tag == F_TYPE_ANN));
+    }
+    if (ct_symbol_name(name, "type-ann-inner")) {
+        /* Unwrap an F_TYPE_ANN node so a macro can read the type form a
+         * structural `name : type` annotation carries. The reader folds
+         * `: type` into form_type_ann(inner) (src/compiler/forms.c:142),
+         * stored as items[0] with len=1. CT first/rest/second only
+         * descend F_LIST/F_VEC, so the macro author has no other way
+         * through. See docs/reported/ct-primitives-cannot-walk-type-ann-nodes.md. */
+        if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time type-ann-inner expects 1 argument"); return ct_value_form(form_nil(env->elab->arena, span)); }
+        if (args[0]->tag != F_TYPE_ANN) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time type-ann-inner expects an annotation form"); return ct_value_form(form_nil(env->elab->arena, span)); }
+        return ct_value_form(args[0]->as.list.items[0]);
     }
     if (ct_symbol_name(name, "dot-sym")) {
         /* (dot-sym field-sym) => the symbol ".field-sym" for use in method calls */

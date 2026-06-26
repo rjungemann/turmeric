@@ -6,6 +6,13 @@ Track: post-v1. Depends on Phase 4 (`#line` source maps) of the parent
 debugger plan.
 Parent: [debugger-plan.md](./debugger-plan.md)
 
+## Generated docs convention
+
+Phase progress/report write-ups generated as part of this plan live under
+[`docs/artifacts/`](../artifacts/), not `docs/upcoming/`. `docs/upcoming/`
+is reserved for the plans themselves; artifacts are the by-products of
+executing them.
+
 ## Goal
 
 Make gdb and lldb show Turmeric values as Turmeric -- not as the C carrier.
@@ -77,7 +84,7 @@ fallback for cases where the C compiler mangles names unpredictably.
 ### N1 -- Codegen: stable, discoverable type names
 
 **Status: landed.** Audit + progress write-up in
-[debugger-phase5-native-types-progress.md](./debugger-phase5-native-types-progress.md).
+[debugger-phase5-native-types-progress.md](../artifacts/debugger-phase5-native-types-progress.md).
 The default by-value monomorphization already emits the deterministic
 `<TypeName>__<args>` scheme (`Option__int`, `Result`, `Cons__int`, ...), so no
 codegen change was needed to create the names; the audit pinned them and
@@ -116,7 +123,7 @@ shadow `Vec`/`Map`/user structs. Verified by the `tur_phase5_gdb` ctest.
 Loaded explicitly for now (`gdb -ex "source tools/debug/turmeric_gdb.py"`);
 the auto-load sidecar + opaque/ADT value materialization are the remaining N2
 polish (tracked alongside N3). See
-[debugger-phase5-native-types-progress.md](./debugger-phase5-native-types-progress.md).
+[debugger-phase5-native-types-progress.md](../artifacts/debugger-phase5-native-types-progress.md).
 
 **Outcome:** `tur build --debug foo.tur && gdb ./build/bin/foo` shows
 options, results, opaques, cons lists, structs, and cstr in Turmeric shape.

@@ -219,6 +219,144 @@ in v1; only errors and warnings reach the editor's error list panel.
 
 ---
 
+## AOT execution mode
+
+The interpreter path runs every script body through libturi at call time.
+That's plenty for editor-time iteration but leaves throughput on the
+table. The AOT path compiles each script to a shared library via
+`tur build --shared`, dlopens it, and routes `cb_call` directly through
+the dlsym'd function pointer. Same observable behaviour either way --
+AOT is the optimisation, not a separate language.
+
+Plan reference: [docs/upcoming/v1/godot-binding-aot-plan.md](../upcoming/v1/godot-binding-aot-plan.md).
+
+### Opting in
+
+Three ways to flip a script (or the whole project) to AOT. Highest wins:
+
+1. **`TURMERIC_GODOT_AOT` env var** -- dev-loop override. Values
+   `1`/`true`/`aot` enable; `0`/`false`/`interpreter` disable. Set this
+   when you want one editor session in AOT without touching
+   `project.godot`.
+2. **`#mode <mode>` directive at the top of the .tur file** -- the
+   per-script knob. Tolerates leading blank lines, `;` comments, and a
+   `#lang sweet-exp` line above it:
+
+   ```turmeric
+   #lang sweet-exp
+   #mode aot
+
+   defn _ready []
+     godot-println("AOT-compiled")
+   ```
+3. **`turmeric/execution_mode` project setting** -- string enum
+   (`interpreter` / `aot`). Set under *Project -> Project Settings ->
+   Advanced -> Turmeric -> Execution Mode*.
+4. **Default**: `interpreter`.
+
+A second project setting, `turmeric/tur_binary`, overrides the path to
+the `tur` compiler. Precedence for that is `TUR_BIN` env > project
+setting > `tur` on `PATH`.
+
+### What gets AOT'd, what falls back
+
+`cb_call` tries AOT first. It dispatches when:
+
+- The method is declared `(defmodule script :exports [...])` *or* lives
+  at top-level (the `"_"` module the dispatcher matches against).
+- Every arg/ret type is one of `:void`, `:bool`, `:int` (any width),
+  `:cstr`, `:float` / `:float32` / `:float64`.
+- The arity matches the manifest exactly.
+- The call is not variadic.
+
+Everything else (`Ptr`/`Any`/struct types, mismatched arity, variadic,
+methods not in the manifest) falls through to the interpreter path
+silently -- so curated facade calls (`node/set-position`, ...) and
+methods you didn't AOT-export keep working unchanged.
+
+### Cache layout
+
+```
+<godot_project>/.godot/turmeric-cache/<fnv64-hash>/
+  build.tur                       ;; staged defpackage
+  build.log                       ;; stdout/stderr of tur build
+  src/<module>.tur                ;; verbatim copy of the script source
+  build/lib/lib<pkg>.so           ;; the dlopen'd shared library
+  build/lib/lib<pkg>.so.manifest  ;; one line per export, see below
+  exports.metadata                ;; inspector exports + signals (A4 sidecar)
+```
+
+The hash mixes `(script abs-path, source bytes, tur realpath + mtime)`,
+so any of those changing forces a rebuild. A `.gitignore` is dropped in
+the cache root automatically.
+
+Manifest line format (from `tur build --shared`):
+
+```
+mod/name -> mangled_symbol :: (:t1 :t2 ...) -> :ret
+```
+
+Two reload paths:
+
+- **Cold / source changed** -- run the interp prelude + facade + source
+  pass (which populates `(godot-export ...)` / `(godot-signal ...)`
+  decls), invoke `tur build --shared`, dlopen, then persist the
+  inspector exports + signals into `exports.metadata`.
+- **Warm cache** -- when `lib.so`, the manifest, and `exports.metadata`
+  all exist, skip the interp eval entirely: restore the export/signal
+  list from the sidecar and dlopen the image. The Output panel logs
+  `[turmeric res://… AOT] fast-path: N exports + …`.
+
+### Microbenchmark
+
+`examples/aot-bench/` from the turmeric-godot repo runs
+`hot(x) -> (+ x 1)` one million times. Compare two headless runs:
+
+```sh
+/Applications/Godot.app/Contents/MacOS/Godot --headless --path examples/aot-bench --quit
+TURMERIC_GODOT_AOT=1 /Applications/Godot.app/Contents/MacOS/Godot \
+    --headless --path examples/aot-bench --quit
+```
+
+Each run prints `mode=… iters=… ns_per_call=…`. Plan target: AOT >= 5x
+faster than interpreter at this workload.
+
+### Troubleshooting
+
+Watch the Godot Output panel; every AOT diagnostic prefixes
+`[turmeric res://path/to/script.tur AOT] `.
+
+- **`tur build --shared failed (exit N): ...`** -- the staged compile
+  rejected your source. Read the full log at
+  `<cache>/<hash>/build.log`.
+- **`fast-path: image load failed (... dlopen failed for ...)`** -- the
+  cached `.so` mismatches the loader; usually fixed by removing
+  `.godot/turmeric-cache/<hash>/` and reloading.
+- **`fast-path: metadata read failed (...)`** -- the sidecar is from
+  an older binary or got truncated; the slow path will rebuild and
+  rewrite it.
+- **Stuck in interpreter mode** -- env var beats everything; check
+  `TURMERIC_GODOT_AOT` isn't set to `0`/`false`. Then check the
+  `#mode` directive, then the project setting.
+
+### Reload + hot-reload
+
+The AOT image owns a `dlopen` handle, dropped before the next image
+loads -- generations never overlap. v1 restricts AOT hot-reload to
+editor-stopped scripts (matches the parent plan's hot-reload story);
+there is no runtime guard against reload during a live call because
+Godot only fires `Script::_reload` outside Play.
+
+### Not yet
+
+- Variadic dispatch.
+- `Ptr` / opaque-handle / struct args and returns.
+- Cross-script (one AOT script calling another's defn).
+- Export-time signed dylibs.
+- Per-method JIT -- AOT is the v1 story; JIT is not in the v1 picture.
+
+---
+
 ## Known gaps
 
 1. **No debugger.** Phase G4.3 (`debug_*` hooks) was called "stretch"
