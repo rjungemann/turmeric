@@ -2264,6 +2264,54 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                     family_elem_rehydrated = true;
                 }
             }
+            /* CONV-S1: the same family recovery for a lowered record-ADT result.
+             * `type_extract_struct_app` only matches a TY_STRUCT head, so once
+             * `Option`/`Result`/... lower to record defadts the recovery above
+             * misses `(none)`/`(err)` in an HKT instance body -- the call reaches
+             * emit with no bindings, `recovered` stays the abstract `(Option A)`,
+             * and the construct-by-value path declines (non-concrete), so the body
+             * emits the carrier `none()` into a by-value slot.  Mirror the struct
+             * extraction for an ADT app: walk both the spec result and the callee
+             * result to their head ADT + element args and synthesize `{A -> int}`. */
+            if (!family_elem_rehydrated) {
+                AdtDef *ad1 = NULL, *ad2 = NULL;
+                Type ae1[16], ae2[16];
+                uint8_t an1 = 0, an2 = 0;
+                /* spec_res */
+                { const Type *cur = &spec_res; Type raw[16]; uint8_t nr = 0;
+                  while (cur && cur->kind == TY_APP && nr < 16) {
+                      if (cur->as.app.arg) raw[nr++] = *cur->as.app.arg;
+                      cur = cur->as.app.fn; }
+                  if (cur && cur->kind == TY_ADT && cur->as.adt_.def) {
+                      ad1 = cur->as.adt_.def;
+                      for (uint8_t k = 0; k < nr; k++) ae1[k] = raw[nr - 1 - k];
+                      an1 = nr; } }
+                /* callee_res */
+                { const Type *cur = &callee_res; Type raw[16]; uint8_t nr = 0;
+                  while (cur && cur->kind == TY_APP && nr < 16) {
+                      if (cur->as.app.arg) raw[nr++] = *cur->as.app.arg;
+                      cur = cur->as.app.fn; }
+                  if (cur && cur->kind == TY_ADT && cur->as.adt_.def) {
+                      ad2 = cur->as.adt_.def;
+                      for (uint8_t k = 0; k < nr; k++) ae2[k] = raw[nr - 1 - k];
+                      an2 = nr; } }
+                if (ad1 && ad1 == ad2 && an1 == an2 && an1 > 0) {
+                    uint8_t nb = 0;
+                    for (uint8_t k = 0; k < an1 && nb < ABI_TYPE_BINDINGS_MAX; k++) {
+                        if (ae2[k].kind == TY_TYVAR && ae2[k].as.tyvar_.name &&
+                            type_has_concrete_codegen_layout(&ae1[k])) {
+                            rehydrated[nb].name = ae2[k].as.tyvar_.name;
+                            rehydrated[nb].type = ae1[k];
+                            nb++;
+                        }
+                    }
+                    if (nb > 0) {
+                        bindings = rehydrated;
+                        n_bindings = nb;
+                        family_elem_rehydrated = true;
+                    }
+                }
+            }
         } else if (n_bindings <= ABI_TYPE_BINDINGS_MAX) {
             /* (2) re-hydrate carrier-collapsed bindings by name. */
             bool any = false;
@@ -2766,8 +2814,15 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * pinned the return to the same parametric family promote. */
     bool construct_recovered_byvalue = false;
     {
+        /* CONV-S1: a `#{Construct}` template whose struct lowered to a record
+         * defadt has a constructor-CALL body (`(Option false x)`, EX_CALL with a
+         * resolved ctor), not an EX_MAKE_STRUCT -- `make-struct` rewrote to the
+         * auto-bound ctor call.  Recognize both so the by-value result recovery
+         * (e.g. minting `none__spec__tur_adt_Option__int`) fires for a lowered
+         * constructor exactly as it does for the struct one. */
         bool body_is_construct = fd && fd->body
-            && fd->body->kind == EX_MAKE_STRUCT
+            && (fd->body->kind == EX_MAKE_STRUCT
+                || (fd->body->kind == EX_CALL && fd->body->as.call_.ctor))
             && fd->binding && fd->binding->is_construct_template;
         /* nested-construct-byvalue (Gaps #2/#3/#5): a nested #{Construct} arg
          * whose concrete by-value result type was threaded top-down from the
@@ -2779,7 +2834,8 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         if (body_is_construct && !borrow_path && result_type_override &&
             result_type.kind == TY_APP &&
             !type_is_heap_struct(result_type) &&
-            type_has_concrete_codegen_layout(&result_type) &&
+            (type_has_concrete_codegen_layout(&result_type) ||
+             type_app_is_concrete_adt(&result_type)) &&
             !emit_abi_type_has_concrete_named_tyvar(&result_type)) {
             construct_recovered_byvalue = true;
             abi_changes = true;
@@ -2790,13 +2846,16 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             Type spec_ret = ctx->current_abi_specialization->result_type;
             if (spec_ret.kind == TY_APP &&
                 !type_is_heap_struct(spec_ret) &&
-                type_has_concrete_codegen_layout(&spec_ret)) {
+                (type_has_concrete_codegen_layout(&spec_ret) ||
+                 type_app_is_concrete_adt(&spec_ret))) {
                 Type rh = spec_ret;
                 while (rh.kind == TY_APP && rh.as.app.fn) rh = *rh.as.app.fn;
                 Type ch = generic_result;
                 while (ch.kind == TY_APP && ch.as.app.fn) ch = *ch.as.app.fn;
-                if (rh.kind == TY_STRUCT && ch.kind == TY_STRUCT &&
-                    rh.as.struct_.def && rh.as.struct_.def == ch.as.struct_.def) {
+                if ((rh.kind == TY_STRUCT && ch.kind == TY_STRUCT &&
+                     rh.as.struct_.def && rh.as.struct_.def == ch.as.struct_.def) ||
+                    (rh.kind == TY_ADT && ch.kind == TY_ADT &&
+                     rh.as.adt_.def && rh.as.adt_.def == ch.as.adt_.def)) {
                     result_type = spec_ret;
                     construct_recovered_byvalue = true;
                     abi_changes = true;
@@ -2815,7 +2874,8 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 : result_type;
             if (recovered.kind == TY_APP &&
                 !type_is_heap_struct(recovered) &&
-                type_has_concrete_codegen_layout(&recovered) &&
+                (type_has_concrete_codegen_layout(&recovered) ||
+                 type_app_is_concrete_adt(&recovered)) &&
                 !emit_abi_type_has_concrete_named_tyvar(&recovered)) {
                 result_type = recovered;
                 construct_recovered_byvalue = true;

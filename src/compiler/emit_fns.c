@@ -804,10 +804,20 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         } else if (use_abi_spec) {
             const char *pc = emit_type_c_name(ctx, ctx->current_abi_specialization->arg_types[i]);
             buf_puts(file, pc);
-            /* KB-021: a concrete carrier-ABI spec param is passed by value. */
-            if (fd->params[i] &&
-                type_uses_carrier_abi(emit_resolve_type(ctx, ctx->current_abi_specialization->arg_types[i])) &&
-                strcmp(pc, "int64_t") != 0)
+            /* KB-021: a concrete carrier-ABI spec param is passed by value.
+             * CONV-S1: a by-value parametric record-ADT monomorph param
+             * (`tur_adt_Option__int`) is ALSO passed by value but reports
+             * NON-carrier from type_uses_carrier_abi (it is genuinely by-value,
+             * P2-P4), so it was not flagged -- leaving the ACB carrier->concrete
+             * bridge to wrongly deref it (`(*(tur_adt_Option__int *)(intptr_t)
+             * container)`) inside an HKT instance body whose param's generic elab
+             * type `(Option A)` still reads as the carrier.  Flag a concrete ADT-app
+             * spec param too so it is recognised as already by-value. */
+            Type resolved_spec_arg =
+                emit_resolve_type(ctx, ctx->current_abi_specialization->arg_types[i]);
+            if (fd->params[i] && strcmp(pc, "int64_t") != 0 &&
+                (type_uses_carrier_abi(resolved_spec_arg) ||
+                 type_app_is_concrete_adt(&resolved_spec_arg)))
                 fd->params[i]->emit_byvalue_carrier_abi = true;
         } else {
             /* Phase D: large structs use const T* ABI unless in inline-C or closure.

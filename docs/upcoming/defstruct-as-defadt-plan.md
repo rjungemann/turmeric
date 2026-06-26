@@ -273,3 +273,163 @@ before the gate widens past leaf-scalar and before the experiment graduates
 
 See [struct-adt-convergence-s1-bridging-findings.md](struct-adt-convergence-s1-bridging-findings.md)
 for the by-value representation work this builds on.
+
+## Graduation progress (2026-06-25)
+
+Graduation (step 7) was attempted. The gate was widened to **parametric
+(non-`:heap`) structs**, which surfaced that the entire autoloaded stdlib
+(`Option`/`Result`/`Pair`/`Vec`/`Map`/`Set`/`List`/...) is parametric and must
+work as record ADTs before the gate can come off. Three **flag-independent**
+enabler fixes landed (they also fix hand-written parametric record ADTs); the
+remaining work is a sequence of codegen seams, each substantial.
+
+### Landed (flag-independent; suite 1833 passed, the 7 flag-on `conv-defstruct-*`
+fixtures are the graduation canaries and stay red until the seams below close)
+
+- **Parametric record-ADT field read.** The `EX_GET_FIELD` by-value gate
+  (`emit_expr.c`, `case EX_GET_FIELD`) was app-aware-ified
+  (`emit_type_is_byvalue_adt`) so a concrete monomorph (`(Box int)`, `TY_APP`)
+  reads its field directly off the aggregate instead of the carrier-pointer
+  deref (which cast an aggregate to a pointer -> `cc` error).
+- **Parametric dot-accessor type.** The dot-accessor
+  (`elab_typeclasses.c`, single-variant-record-ADT branch) now substitutes the
+  receiver's concrete type args for a tyvar field type
+  (`elab_adt_type_extract_args` + `adt_field_instantiate_type`, newly exported),
+  so `(.val (Box 42))` types as `int` in untyped contexts (e.g. `println`).
+- **Instance-head resolution (bare AND applied heads).** A `definstance` head --
+  both the bare `[Option]` form and the applied `(Result _ B)` form
+  (`elab_typeclasses.c`, the head-arg parse and the applied-ctor parse) -- now
+  resolves through the **type-namespace** lookup (`elab_lookup_type_by_name`), so
+  a single-variant record ADT whose constructor shares the type's name -- every
+  lowered `defstruct`, and a hand-written `(defdata T [A] (T [...]))` -- resolves
+  to the ADT *type*, not its ctor `fn` (which `scope_lookup`, being
+  value-preferring, returned -> opaque `<struct>`).
+
+With these three fixes the **entire autoloaded stdlib elaborates AND compiles
+under the flag** (`Option`/`Result`/`Pair`/`Vec`/`Map`/`Set`/`List`/... all
+lower to record ADTs and the trivial program links + runs).  What remains is a
+runtime *usage* seam, below.
+
+### Remaining seams before the gate can come off
+
+1. **By-value-app -> carrier bridge at carrier-ABI call boundaries (NEXT,
+   highest leverage, central seam).**  Stdlib *compiles*, but actual *usage*
+   fails at `cc`: `(eq? (some 5) (some 5))` passes a by-value monomorph
+   (`tur_adt_Option__int`, by-value via P2-P4) into a carrier-ABI consumer
+   expecting `int64_t`.  This is not limited to typeclass dispatch -- the same
+   value flows into generic fns and helper functions (observed:
+   `mutmap_eq_loop(int64_t)`), so the bridge is needed wherever a by-value ADT-app
+   crosses into a carrier-ABI parameter.  The gating predicates
+   (`type_uses_carrier_abi`, and `expr_emits_byvalue_carrier_abi` /
+   `type_uses_carrier_in_dispatch`, all `emit_expr.c`) report a by-value app as
+   *non-carrier* and so suppress the existing `emit_carrier_bridge` box-and-address
+   path.  A *non-parametric* by-value ADT works because its instance method is
+   emitted by-value; only the *parametric* (uniform-carrier) consumers mismatch.
+   Reconciliation options: (a) bridge by-value apps to the carrier at carrier-ABI
+   arg boundaries (preserves by-value; broad but `emit_carrier_bridge` already
+   exists); (b) emit per-monomorph instance methods; (c) keep lowered parametric
+   structs on the carrier representation (simplest-green, gives up the by-value
+   win for them).  Unblocks all parametric stdlib usage at once.
+
+   **Refined finding (2026-06-25):** the failure is not only an ABI bridge -- it
+   is also an instance-**selection** bug.  `(eq? (some 5) (some 5))` emits a call
+   to `__inst_Eq_eq_qu_MutableMap__spec__..._tur_adt_Option__int_...` -- i.e. the
+   `Eq [MutableMap]` instance body specialised with `Option__int` params (its
+   body then calls `mutmap_len`/`mutmap_eq_loop` on an Option).  The dispatch
+   resolver picked the WRONG instance for a by-value `Option__int` receiver
+   (expected `Eq [Option]`).  So before/with the bridge, the by-value ADT-app
+   receiver must resolve to the correct instance head -- the per-(args) spec
+   matcher is keying on the carrier-erased ABI and colliding `Option__int` with
+   the `MutableMap` instance.  This is the deep core of the remaining work and
+   lives in the typeclass dispatch/spec-selection machinery
+   (`find_matched_abi_spec` / instance resolution), not just `emit_carrier_bridge`.
+
+   **Located (2026-06-25).** The mis-selection is in `elab_method_call`
+   (`elab_typeclasses.c`): the `KIND_STAR` arm (~5604-5605) compares
+   `inst->type_args[0].kind == obj->type.kind` with NO TY_APP-head normalization,
+   so an ADT-app receiver `(Option int)` (kind `TY_APP`, head `TY_ADT`) fails to
+   match the `TY_ADT`-headed `Eq [Option]` instance and instead matches the first
+   `TY_APP`-kinded instance; the `KIND_ARROW` arm (~5644-5652) normalizes a TY_APP
+   head only for `TY_STRUCT`, not `TY_ADT`. Both arms need the ADT-head
+   normalization + `adt_def` discrimination that `typeclass_env_lookup_instance`
+   (typeclass.c) just gained.  **But selection alone is insufficient:** the
+   selected parametric instance method is uniform-carrier (`int64_t`) while the
+   monomorph value is by-value, so the ABI bridge must land in the SAME change for
+   `(eq? (some 5) (some 5))` to compile.  Deferred together -- modifying the hot
+   selection path in isolation buys no end-to-end win and risks the green suite.
+
+   **DONE (2026-06-25), consuming direction.** Both landed: (a) the selection
+   discrimination now normalizes ADT-app receivers and rejects cross-constructor
+   matches (`elab_method_call`, the KIND_ARROW arm) AND `typeclass_env_lookup
+   _instance` (typeclass.c) gained the symmetric ADT-head discrimination; (b) the
+   by-value-app -> carrier bridge fires at the dispatch arg (`emit_expr.c`, the
+   per-arg coercion loop) -- a by-value `TY_APP` monomorph arg passed to a class-
+   tyvar / bare-parametric-ADT param of an un-specialized instance method is boxed
+   via `emit_carrier_bridge`.  `(eq? (some 5) (some 5))` and hand-written
+   parametric record-ADT `Eq`/`Functor` instances now compile and run; suite
+   stays 1840/0.  **Still open -- the PRODUCING direction (seam 1b below).**
+1b. **By-value HKT construction inside a specialized instance body. DONE
+   (2026-06-25) for Option.** `(fmap (some 5) f)`, `(bind (some 10) k)`,
+   `(alt-or (none) (some 7))` now compile and run by-value with correct results.
+   Five fixes: (i) `body_is_construct` recognizes a constructor-CALL body (a
+   lowered struct's `make-struct` rewrites to the ctor call, so the body is no
+   longer `EX_MAKE_STRUCT`); (ii) the family-recovery rehydration extracts an ADT
+   app, not only a struct app, so a return-only-poly `(none)` gets `{A -> int}`;
+   (iii) the three `construct_recovered_byvalue` gates accept a concrete ADT app
+   (`type_app_is_concrete_adt`); (iv) the N-arg ctor suffix only trusts
+   `type_adt_app_ctor_suffix` for a fully-concrete app and otherwise falls back to
+   the active spec family, so the lowered ctor body (`(Option <erased> )`) emits
+   `ctor_Option__int` in `none__spec`; (v) a concrete ADT-app spec PARAM is flagged
+   `emit_byvalue_carrier_abi`, so the ACB carrier->concrete bridge no longer
+   wrongly derefs a by-value `container`.  All flag-independent (helps hand-written
+   record-ADT HKT instances too).  Suite stays 1840/0.  **Result is NOT yet done
+   -- see seam 2.**
+2. **`Result` construction codegen (mixed-type fields). DONE (2026-06-25) at
+   baseline parity.** `(ok 42)`, `(err "boom")`, `ok?`, `ok-val`, `err-val` all
+   compile and run under the flag (verified, matching the no-flag baseline).  Two
+   fixes: (i) a `(default-of T)` arg to a by-value monomorph ctor with
+   heterogeneous fields now emits the default in the FIELD's concrete C type
+   (`(const char *){0}` for the `const char *` err slot of
+   `ctor_Result__int__cstr`), recovered by substituting the active spec's concrete
+   app args for the ctor field's tyvar; (ii) the by-value-app -> carrier bridge gate
+   widened to `pk==TY_INT` and non-concrete `TY_APP` params, so a free generic fn
+   whose `(Result A B)` param collapses to the int64 carrier (`ok?`) gets its
+   by-value monomorph arg boxed.  Suite stays 1840/0.
+   - *Not lowering bugs (pre-existing baseline limitations, reproduce WITHOUT the
+     flag):* `fmap`/`bind`/`catch-error` on `Result` leave the result type
+     under-determined (`(type-app ? ?)` / collapsed to `int`), so a following
+     `ok-val` can't type it.  Out of scope for the lowering.
+   - *Cosmetic:* `err-val` on a lowered Result emits a `-Wint-conversion` *warning*
+     (`(int64_t)(r).as.Result._2` on the `const char *` field) -- compiles and runs
+     correctly; the field-read cast uses the accessor's collapsed `int64` result
+     type.  Tighten when convenient.
+   - *Still open for FULL graduation:* the hand-written runtime layout
+     (`tur_option_t`, `tur_result_box_t`, `tur_is_some`/`tur_opt_value`, the
+     `MonadError` inline-C bodies) still assumes the struct/carrier representation;
+     it coexists fine today (parity) but should be reconciled or retired when the
+     gate comes off.
+3. **`:heap` typed-pointer ADT ABI.** Still NOT STARTED (see
+   [parametric-adt-byvalue-plan.md](parametric-adt-byvalue-plan.md) step 5) --
+   `Vec`/`Map`/`Set`/`MutableMap` are `:heap` parametric structs and have no
+   `tur_adt_X__A *` typed-pointer ADT lowering.
+4. **Validation across every autoloaded parametric stdlib type**, then delete the
+   gate + `g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]` row, retire the
+   `StructDef` surface path, and regenerate snapshots.
+
+### Current state (suite green)
+
+`bash tests/run.sh` is **1840 passed, 0 failed** with the gate widened to
+parametric (non-`:heap`) structs; the flag-on `conv-defstruct-*` canaries pass.
+The flag is still opt-in.  **`Option` and `Result` -- the two hardest
+dedicated-codegen stdlib types -- now work under the flag at parity with the
+no-flag baseline:** construction (`some`/`none`/`ok`/`err`), accessors
+(`ok?`/`ok-val`/`err-val`/`unwrap-or`), and HKT instances (`fmap`/`bind`/`alt-or`
+on Option) all compile and run with correct results.  (`fmap`/`bind` on `Result`
+remain blocked by a *baseline* type-recovery limitation, not the lowering.)
+
+Seams 1, 1b, 2 are DONE.  Graduation order from here: **seam 3** (`:heap` ADT ABI
+-- `Vec`/`Map`/`Set`/`MutableMap`, the last representational gap) -> **seam 4**
+(validate across every parametric stdlib type, then delete the gate +
+`g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]` row, retire the `StructDef`
+surface path, regen snapshots).  The suite does not yet exercise the by-value HKT
+usage the flag now supports, so adding flag-on fixtures for it is part of seam 4.

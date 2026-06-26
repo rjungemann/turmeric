@@ -2183,15 +2183,37 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                  * system can distinguish concrete structs (kind *)
                                  * from opaque type constructors (kind * -> *). */
                                 Binding *sb = scope_lookup(e->scope, kw);
+                                /* The instance head names a TYPE.  scope_lookup is
+                                 * value-preferring, and for a single-variant record
+                                 * ADT whose constructor shares the type's name --
+                                 * every lowered `defstruct`, and a hand-written
+                                 * `(defdata T [A] (T [...]))` -- it returns the
+                                 * constructor FUNCTION (TY_FN), shadowing the type.
+                                 * Consult the authoritative type-namespace lookup
+                                 * to recover the ADT/struct type in that case.  We
+                                 * still prefer a struct binding from scope_lookup
+                                 * first, preserving the GADT/struct coexistence
+                                 * (MF4) struct-preference. */
+                                Type *head_ty = NULL;
+                                if (!(sb && sb->type.kind == TY_STRUCT &&
+                                      sb->type.as.struct_.def))
+                                    head_ty = elab_lookup_type_by_name(e, kw);
                                 if (sb && sb->type.kind == TY_STRUCT && sb->type.as.struct_.def) {
                                     type_args[i] = sb->type;
+                                } else if (head_ty && head_ty->kind == TY_ADT &&
+                                           head_ty->as.adt_.def) {
+                                    /* A defdata/defgadt (or lowered defstruct) type
+                                     * constructor used as an instance head, e.g.
+                                     * (definstance Functor [Either] ...).  Preserve
+                                     * the ADT type so the orphan-instance check can
+                                     * credit the owning module, and carry the symbol
+                                     * for method-name mangling. */
+                                    type_args[i] = *head_ty;
+                                    type_arg_syms[i] = kw;
+                                } else if (head_ty && head_ty->kind == TY_STRUCT &&
+                                           head_ty->as.struct_.def) {
+                                    type_args[i] = *head_ty;
                                 } else if (sb && sb->type.kind == TY_ADT && sb->type.as.adt_.def) {
-                                    /* A defdata/defgadt type constructor used as an
-                                     * instance head, e.g. (definstance Functor [Either] ...).
-                                     * Preserve the ADT type so the orphan-instance check
-                                     * can credit the module that defines it, and carry the
-                                     * symbol for method-name mangling so codegen never
-                                     * dereferences the struct_ union on a TY_ADT. */
                                     type_args[i] = sb->type;
                                     type_arg_syms[i] = kw;
                                 } else {
@@ -2400,24 +2422,45 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                         Type *fn_type = (Type *)arena_alloc(e->arena, sizeof(Type));
                         memset(fn_type, 0, sizeof(Type));
                         Binding *ctor_b = scope_lookup(e->scope, ctor_sym);
+                        /* The applied head names a TYPE constructor.  scope_lookup
+                         * is value-preferring and for a single-variant record ADT
+                         * whose constructor shares the type's name (every lowered
+                         * defstruct -- e.g. `(Result _ B)` once Result lowers)
+                         * returns the constructor FUNCTION (TY_FN), so the
+                         * TY_ADT/TY_STRUCT branch below would miss and fall to the
+                         * opaque `<struct>` fallback -- erasing the ADT identity and
+                         * breaking `.is-ok` field access in the method body.  Resolve
+                         * the head type authoritatively via the type namespace,
+                         * preferring a struct binding from scope_lookup first (MF4
+                         * struct-preference). */
+                        Type head_ct;
+                        bool have_head_ct = false;
+                        if (ctor_b && ctor_b->type.kind == TY_STRUCT &&
+                            ctor_b->type.as.struct_.def) {
+                            head_ct = ctor_b->type; have_head_ct = true;
+                        } else {
+                            Type *ht = elab_lookup_type_by_name(e, ctor_sym);
+                            if (ht && ((ht->kind == TY_ADT && ht->as.adt_.def) ||
+                                       (ht->kind == TY_STRUCT && ht->as.struct_.def))) {
+                                head_ct = *ht; have_head_ct = true;
+                            } else if (ctor_b && (ctor_b->type.kind == TY_ADT ||
+                                       (ctor_b->type.kind == TY_STRUCT &&
+                                        ctor_b->type.as.struct_.def))) {
+                                head_ct = ctor_b->type; have_head_ct = true;
+                            }
+                        }
                         /* The constructor's kind follows its real arity: a unary
                          * constructor (Option : * -> *) applied to one arg is a
                          * fully-applied type of kind *, while a binary one
                          * (Result : * -> * -> *) applied to one arg is still a
-                         * (* -> *) constructor.  Hardcoding KIND_ARROW2 here
-                         * mis-classified an applied unary head like `(Option cstr)`
-                         * as (* -> *), which then promoted a STAR-declared class
-                         * (e.g. Enc) to higher kind and rejected its other
-                         * fully-applied instances.  Derive the kind from the def's
+                         * (* -> *) constructor.  Derive the kind from the def's
                          * n_type_params when known; fall back to the legacy binary
                          * assumption only for an opaque (def == NULL) constructor. */
-                        if (ctor_b && (ctor_b->type.kind == TY_ADT ||
-                                       (ctor_b->type.kind == TY_STRUCT &&
-                                        ctor_b->type.as.struct_.def))) {
-                            *fn_type = ctor_b->type;
-                            uint32_t ctor_arity = (ctor_b->type.kind == TY_ADT)
-                                ? ctor_b->type.as.adt_.def->n_type_params
-                                : ctor_b->type.as.struct_.def->n_type_params;
+                        if (have_head_ct) {
+                            *fn_type = head_ct;
+                            uint32_t ctor_arity = (head_ct.kind == TY_ADT)
+                                ? head_ct.as.adt_.def->n_type_params
+                                : head_ct.as.struct_.def->n_type_params;
                             fn_type->hkt_kind = (ctor_arity > 0)
                                 ? kind_for_arity(ctor_arity)
                                 : KIND_ARROW2;
@@ -5077,6 +5120,23 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                             Type ftype = ctor->fields[i].full_type
                                 ? *ctor->fields[i].full_type
                                 : type_from_kind(ctor->fields[i].kind);
+                            /* Parametric record ADT: substitute the receiver's
+                             * concrete type args for the field's TY_TYVAR names so
+                             * `(.val (Box 42))` reads as int, not the bare tyvar A
+                             * (which fails overload resolution in untyped contexts
+                             * like `(println (.val b))`).  Mirrors the match
+                             * field-bind substitution (elab_structs.c) and the
+                             * struct path's elab_struct_field_use_type. */
+                            if (ctor->fields[i].full_type &&
+                                    adt->n_type_params > 0 &&
+                                    field_owner_type->kind == TY_APP) {
+                                Type *type_args = (Type *)arena_alloc(e->arena,
+                                    adt->n_type_params * sizeof(Type));
+                                if (elab_adt_type_extract_args(field_owner_type,
+                                                               adt, type_args))
+                                    ftype = adt_field_instantiate_type(e, adt,
+                                        ctor->fields[i].full_type, type_args);
+                            }
                             Expr *out = expr_new(e->arena, EX_GET_FIELD, ftype,
                                                  call->span);
                             out->as.get_field_.struct_expr = obj;
@@ -5665,6 +5725,40 @@ skip_capability_field_lookup:;
                             }
                         }
                     }
+                    /* CONV-S1: head-normalized nominal discrimination across the
+                     * applied/bare and struct/ADT asymmetries the blocks above
+                     * miss.  Once a parametric struct lowers, an ADT-app RECEIVER
+                     * `(Option int)` (TY_APP, head TY_ADT) is matched against
+                     * instances whose head is a *bare* ADT (`Eq [Option]`,
+                     * type_arg TY_ADT) AND against still-struct heads (`:heap`
+                     * `Eq [MutableMap]`, type_arg TY_STRUCT).  None of the
+                     * struct/struct, app/app, or adt/adt blocks above fire on the
+                     * cross-category (TY_ADT head vs TY_STRUCT head) or the
+                     * applied-vs-bare pairing, so every non-primitive instance is
+                     * an equally-good match and the first registered one wins
+                     * (e.g. `(eq? (some 5) (some 5))` mis-dispatched to
+                     * `Eq [MutableMap]`).  Walk both sides to their head; when BOTH
+                     * heads are concrete nominal types (a struct/ADT with a def),
+                     * require the same constructor.  A tyvar / fn / erased
+                     * (NULL-def) head stays a wildcard. */
+                    if (type_ok) {
+                        const Type *oh = &obj->type;
+                        while (oh && oh->kind == TY_APP) oh = oh->as.app.fn;
+                        const Type *ih = &inst->type_args[0];
+                        while (ih && ih->kind == TY_APP) ih = ih->as.app.fn;
+                        bool o_adt = oh && oh->kind == TY_ADT && oh->as.adt_.def;
+                        bool o_str = oh && oh->kind == TY_STRUCT && oh->as.struct_.def;
+                        bool i_adt = ih && ih->kind == TY_ADT && ih->as.adt_.def;
+                        bool i_str = ih && ih->kind == TY_STRUCT && ih->as.struct_.def;
+                        if ((o_adt || o_str) && (i_adt || i_str)) {
+                            bool same =
+                                (o_adt && i_adt &&
+                                 oh->as.adt_.def == ih->as.adt_.def) ||
+                                (o_str && i_str &&
+                                 oh->as.struct_.def == ih->as.struct_.def);
+                            if (!same) type_ok = false;
+                        }
+                    }
                 }
                 if (!type_ok) {
                     /* Record as fallback but keep searching. */
@@ -5729,7 +5823,7 @@ skip_capability_field_lookup:;
         }
     }
 found_method:;
-    
+
     if (!best_method) {
         /* No matching method found */
         diag_emit(DIAG_ERROR, call->span,

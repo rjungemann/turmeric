@@ -392,7 +392,7 @@ bool elab_struct_type_extract_args(const Type *t, const StructDef *def, Type *ou
 
 /* TP6: Unpack a TY_APP chain on an ADT type to recover concrete type arguments.
  * Analogous to elab_struct_type_extract_args but for AdtDef instead of StructDef. */
-static bool elab_adt_type_extract_args(const Type *t, const AdtDef *def, Type *out_args) {
+bool elab_adt_type_extract_args(const Type *t, const AdtDef *def, Type *out_args) {
     if (!t || !def || def->n_type_params == 0 || !out_args) return false;
     const Type *cur = t;
     uint8_t n_raw = 0;
@@ -414,8 +414,8 @@ static bool elab_adt_type_extract_args(const Type *t, const AdtDef *def, Type *o
 
 /* TP6: Instantiate a field type by substituting TY_TYVAR names with concrete type args.
  * Analogous to struct_field_instantiate_type but uses AdtDef.type_params for name lookup. */
-static Type adt_field_instantiate_type(Elab *e, const AdtDef *def, const Type *t,
-                                       const Type *type_args) {
+Type adt_field_instantiate_type(Elab *e, const AdtDef *def, const Type *t,
+                                const Type *type_args) {
     if (!t) return TYPE_UNKNOWN;
     switch (t->kind) {
         case TY_TYVAR: {
@@ -657,7 +657,57 @@ void elab_register_struct_def(Elab *e, StructDef *def) {
  * Any other compound (F_LIST) type, or any parametric / :heap field, still
  * disqualifies so the struct keeps the normal struct path.
  * Mirrors the old-syntax pre-scan (name, then F_TYPE_ANN-wrapped type). */
+/* Per-field-type lowerability check, shared by the old-syntax (flat vector) and
+ * new-syntax (per-field list) scans and parametric/non-parametric alike.
+ * `type_tok` is the field's type form, already unwrapped from any F_TYPE_ANN.
+ * Returns true when the field is representable on the record-ADT path. */
+static bool defstruct_field_type_lowerable(const Form *type_tok) {
+    if (type_tok->tag == F_LIST) {
+        /* slice 7: a *typed* `fn` field `(fn [..] ..)` is, exactly like a bare
+         * `fn` (slice 6), an 8-byte function-pointer carrier slot -- its
+         * argument/return signature only feeds type checking, never layout -- so
+         * it lowers like a scalar carrier.  Any other compound / applied F_LIST
+         * type (e.g. `(Vec int)`, `(exists ...)`) still keeps the struct path. */
+        return type_tok->as.list.len >= 1 &&
+               type_tok->as.list.items[0]->tag == F_SYM &&
+               type_tok->as.list.items[0]->as.sym->len == 2 &&
+               memcmp(type_tok->as.list.items[0]->as.sym->name, "fn", 2) == 0;
+    }
+    if (type_tok->tag != F_KEYWORD && type_tok->tag != F_SYM)
+        return false;  /* not a leaf type token */
+    TypeKind k = TY_UNKNOWN, inner = TY_UNKNOWN;
+    parse_struct_field_type(type_tok->as.sym->name, type_tok->as.sym->len,
+                            &k, &inner);
+    switch (k) {
+        case TY_INT:   case TY_BOOL:  case TY_FLOAT: case TY_CSTR:
+        case TY_INT8:  case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32: case TY_FLOAT64:
+            return true;  /* primitive scalar */
+        case TY_RC:   case TY_REF:  case TY_LREF:
+        case TY_WEAK: case TY_PTR_VOID: case TY_FN:
+            /* slice 5/6: a pointer-kinded or `fn` field is an 8-byte carrier slot
+             * whatever its inner type is, so it lowers like a scalar -- the
+             * by-value ADT product already stores such fields as carriers and
+             * synthesises drop glue for the owning (rc/ref/weak) ones (slice 2). */
+            return true;
+        case TY_UNKNOWN:
+            /* slice 4/8 + graduation: a bare *user-type* field -- an ADT, struct,
+             * opaque newtype, forward-declared sibling, OR (now that parametric
+             * structs lower) an in-scope TYPE PARAMETER like `A`.  The decision is
+             * syntactic so the pre-pass and full elaboration always agree; the
+             * record-ADT codegen picks the representation from the resolved type
+             * (by-value aggregate inlined; carrier/:heap/tyvar kept as int64
+             * carrier and substituted at field-access via adt_field_instantiate
+             * _type). */
+            return true;
+        default:
+            return false;
+    }
+}
+
 static bool defstruct_fields_all_primitive(Elab *e, const Form *fields_vec) {
+    (void)e;
     if (!fields_vec || fields_vec->tag != F_VEC) return false;
     uint32_t n = fields_vec->as.list.len;
     if (n == 0) return false;
@@ -668,70 +718,30 @@ static bool defstruct_fields_all_primitive(Elab *e, const Form *fields_vec) {
         if (i >= n) return false;
         const Form *type_tok = fields_vec->as.list.items[i];
         if (type_tok->tag == F_TYPE_ANN) type_tok = type_tok->as.list.items[0];
-        if (type_tok->tag == F_LIST) {
-            /* slice 7 (pre-graduation): a *typed* `fn` field `(fn [..] ..)` is,
-             * exactly like a bare `fn` (slice 6), an 8-byte function-pointer
-             * carrier slot -- its argument/return signature only feeds type
-             * checking, never layout -- so it lowers like a scalar carrier and
-             * the pre-pass / full-elab decision never disagrees.  Any other
-             * compound / applied F_LIST type (e.g. `(Vec int)`, `(exists ...)`)
-             * still keeps the struct path. */
-            if (type_tok->as.list.len >= 1 &&
-                type_tok->as.list.items[0]->tag == F_SYM &&
-                type_tok->as.list.items[0]->as.sym->len == 2 &&
-                memcmp(type_tok->as.list.items[0]->as.sym->name, "fn", 2) == 0) {
-                i++;
-                continue;
-            }
-            return false;  /* compound/applied type -> not leaf */
-        }
-        if (type_tok->tag != F_KEYWORD && type_tok->tag != F_SYM)
-            return false;  /* not a leaf type token */
-        TypeKind k = TY_UNKNOWN, inner = TY_UNKNOWN;
-        parse_struct_field_type(type_tok->as.sym->name, type_tok->as.sym->len,
-                                &k, &inner);
-        switch (k) {
-            case TY_INT:   case TY_BOOL:  case TY_FLOAT: case TY_CSTR:
-            case TY_INT8:  case TY_INT16: case TY_INT32: case TY_INT64:
-            case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
-            case TY_FLOAT32: case TY_FLOAT64:
-                break;  /* primitive scalar -- ok */
-            case TY_RC:   case TY_REF:  case TY_LREF:
-            case TY_WEAK: case TY_PTR_VOID: case TY_FN:
-                /* slice 5/6: a pointer-kinded or `fn` field is an 8-byte carrier
-                 * slot whatever its inner type is, so it lowers like a scalar --
-                 * the by-value ADT product already stores such fields as carriers
-                 * and synthesises drop glue for the owning (rc/ref/weak) ones
-                 * (slice 2); the ctor casts an `fn` arg to the int64 carrier
-                 * (slice 6).  The inner type is irrelevant to the lowering
-                 * decision, so the pre-pass and full elaboration always agree. */
-                break;
-            case TY_UNKNOWN: {
-                /* slice 4 + slice 8: a bare *user-type* field -- an ADT, a
-                 * struct, an opaque newtype, or a (forward-declared, not-yet-
-                 * resolved) sibling type -- is lowerable.  The record-ADT codegen
-                 * decides the field's representation at *codegen* time from the
-                 * fully resolved type: a by-value aggregate (a non-heap,
-                 * non-opaque, drop-glue-free struct or a by-value ADT product) is
-                 * stored INLINE by value (slice 4), and any other user type (a
-                 * :heap / opaque / recursive carrier struct or a carrier ADT) is
-                 * stored as the int64 carrier.  Whether the *outer* struct lowers
-                 * therefore must NOT depend on the field type's by-value-ness:
-                 * this branch makes the decision *syntactically* (any bare,
-                 * non-primitive, non-pointer symbol is a user-type reference and
-                 * is admitted), so the top-level type pre-pass and full
-                 * elaboration always agree even when the field references a
-                 * sibling declared later in the file (whose stub is unresolved at
-                 * pre-pass time).  Parametric structs are excluded by the caller,
-                 * so a bare symbol here is never an in-scope type parameter. */
-                break;  /* user-type field -- ok */
-            }
-            default:
-                return false;  /* rc / ref / ptr / fn / etc. -- not yet */
-        }
+        if (!defstruct_field_type_lowerable(type_tok)) return false;
         i++;
     }
     return true;
+}
+
+/* New-syntax sibling of defstruct_fields_all_primitive: the field defs are
+ * separate `(field-name type)` F_LIST forms (call->items[start_idx ..]), the
+ * shape a parametric struct `(defstruct P [A] (f A) ...)` uses.  Every field's
+ * type must be lowerable; at least one field is required. */
+static bool defstruct_newstyle_fields_all_primitive(Elab *e, const Form *call,
+                                                    uint32_t start_idx) {
+    (void)e;
+    bool any = false;
+    for (uint32_t ci = start_idx; ci < call->as.list.len; ci++) {
+        const Form *ff = call->as.list.items[ci];
+        if (ff->tag != F_LIST || ff->as.list.len < 2) return false;
+        if (ff->as.list.items[0]->tag != F_SYM) return false;  /* field name */
+        const Form *type_tok = ff->as.list.items[1];
+        if (type_tok->tag == F_TYPE_ANN) type_tok = type_tok->as.list.items[0];
+        if (!defstruct_field_type_lowerable(type_tok)) return false;
+        any = true;
+    }
+    return any;
 }
 
 /* CONV-S1 (defstruct-as-defadt): decide whether a `defstruct` form qualifies for
@@ -753,21 +763,25 @@ bool defstruct_lowers_to_adt(Elab *e, const Form *call) {
         if (kw->as.sym == e->kw_copy || kw->as.sym == e->kw_move ||
             kw->as.sym == e->kw_no_auto_ctor) { idx++; continue; }
         if (kw->as.sym == e->kw_linear || kw->as.sym == e->kw_heap)
-            return false;  /* :linear / :heap keep the struct path in slice 1 */
+            return false;  /* :linear keeps the struct path; :heap is task 3 */
         break;
     }
-    /* A leading all-symbol vector is a type-parameter list -> parametric. */
+    /* A leading all-symbol vector is a type-parameter list -> parametric.
+     * Parametric structs now lower to parametric record defadts (the dot-accessor
+     * and by-value codegen substitute the app's type args), so skip past the
+     * type-param vec rather than bailing. */
     if (idx < call->as.list.len && call->as.list.items[idx]->tag == F_VEC) {
         const Form *vec = call->as.list.items[idx];
         bool all_syms = vec->as.list.len > 0;
         for (uint32_t i = 0; i < vec->as.list.len; i++)
             if (vec->as.list.items[i]->tag != F_SYM) { all_syms = false; break; }
-        if (all_syms) return false;  /* parametric struct */
+        if (all_syms) idx++;  /* parametric: consume the type-param vec */
     }
     if (idx >= call->as.list.len) return false;
     const Form *fields = call->as.list.items[idx];
-    if (fields->tag != F_VEC) return false;  /* new-style field-lists: not slice 1 */
-    return defstruct_fields_all_primitive(e, fields);
+    if (fields->tag == F_VEC)
+        return defstruct_fields_all_primitive(e, fields);     /* old syntax */
+    return defstruct_newstyle_fields_all_primitive(e, call, idx);  /* new syntax */
 }
 
 Expr *elab_defstruct(Elab *e, const Form *call) {
@@ -827,6 +841,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
     bool new_field_syntax = false;
     const Symbol **field_type_params = NULL;
     Kind *field_type_param_kinds = NULL;
+    Form *type_param_vec_form = NULL;  /* original [A B ...] form, for lowering */
 
     if (fields_start_idx < call->as.list.len &&
         call->as.list.items[fields_start_idx]->tag == F_VEC) {
@@ -839,6 +854,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
             }
         }
         if (all_syms && maybe_tp->as.list.len > 0) {
+            type_param_vec_form = maybe_tp;
             /* This is a type-params list; remaining forms are (field :type) lists */
             n_type_params_v = (uint8_t)maybe_tp->as.list.len;
             type_params_arr = (const char **)arena_alloc(e->arena,
@@ -919,28 +935,53 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         }
     }
 
-    /* CONV-S1 (defstruct-as-defadt experiment): lower a simple leaf-scalar
-     * struct to a single-variant record `defadt`, so it flows through the
-     * by-value ADT path.  Slice 1 only fires for an old-syntax, non-parametric,
-     * non-:heap, non-:linear struct whose fields are all primitive scalars --
-     * the subset that hits none of the record-ADT gaps (rc<ADT> deref,
-     * pass-by-ptr, nested by-value fields, drop-glue).  Everything else still
-     * elaborates as a struct, even with the flag on.  Rewrite:
-     *     (defstruct P [a : int b : int])  ->  (defdata P (P [a : int b : int]))
-     * and dispatch to elab_defdata, reusing all the AdtDef machinery.  See
-     * docs/upcoming/defstruct-as-defadt-plan.md. */
+    /* CONV-S1 (defstruct-as-defadt experiment): lower a `defstruct` to a
+     * single-variant record `defadt`, so it flows through the by-value ADT path.
+     * The lowering now covers non-:heap structs -- scalar/pointer/fn/aggregate
+     * fields, old OR new field syntax, and PARAMETRIC structs (lowered to a
+     * parametric record defadt; the dot-accessor and by-value codegen substitute
+     * the app's type args).  Rewrite, preserving :copy and the type-param vec:
+     *     (defstruct P [a : int b : int])      -> (defdata P (P [a : int b : int]))
+     *     (defstruct Box [A] (val A))           -> (defdata Box [A] (Box [val : A]))
+     * and dispatch to elab_defdata, reusing all the AdtDef machinery.  Anything
+     * the gate rejects (:heap / :linear outer structs) still elaborates as a
+     * struct.  See docs/upcoming/defstruct-as-defadt-plan.md. */
     if (defstruct_lowers_to_adt(e, call)) {
         experiment_warn_if_used("defstruct-as-defadt");
+        /* Build the record-variant field vector [name : type ...].  Old syntax
+         * already has fields_form in that shape; new syntax has separate
+         * (name type) forms (call->items[fields_start_idx ..]) that we flatten to
+         * [name type ...] -- the record-variant parser unwraps an F_TYPE_ANN or
+         * accepts a bare type form in the odd slots either way. */
+        Form *field_vec;
+        if (!new_field_syntax) {
+            field_vec = fields_form;
+        } else {
+            uint32_t nf = call->as.list.len - fields_start_idx;
+            Form **fv = (Form **)arena_alloc(e->arena,
+                            (nf > 0 ? nf * 2 : 1) * sizeof(Form *));
+            uint32_t k = 0;
+            for (uint32_t ci = fields_start_idx; ci < call->as.list.len; ci++) {
+                Form *ff = call->as.list.items[ci];
+                fv[k++] = ff->as.list.items[0];   /* field name */
+                fv[k++] = ff->as.list.items[1];   /* field type (bare or F_TYPE_ANN) */
+            }
+            field_vec = form_vec(e->arena, call->span, fv, k);
+        }
         /* Constructor variant form: (Name <field-vec>) */
-        Form *ctor_items[2] = { name_form, fields_form };
+        Form *ctor_items[2] = { name_form, field_vec };
         Form *ctor_form = form_list(e->arena, call->span, ctor_items, 2);
-        /* (defdata Name [:copy] (Name <field-vec>)) */
-        Form *dd_items[4];
+        /* (defdata Name [:copy] [type-params] (Name <field-vec>)) -- defdata's
+         * argument order is name, optional :copy, optional type-param vec, then
+         * the constructor(s). */
+        Form *dd_items[5];
         uint32_t ddn = 0;
         dd_items[ddn++] = form_sym(e->arena, name_form->span, e->sym_defdata);
         dd_items[ddn++] = name_form;
         if (is_copy)
             dd_items[ddn++] = form_keyword(e->arena, name_form->span, e->kw_copy);
+        if (type_param_vec_form)
+            dd_items[ddn++] = type_param_vec_form;  /* original [A B ...] vec, kinds intact */
         dd_items[ddn++] = ctor_form;
         Form *dd_form = form_list(e->arena, call->span, dd_items, ddn);
         return elab_defdata(e, dd_form);
