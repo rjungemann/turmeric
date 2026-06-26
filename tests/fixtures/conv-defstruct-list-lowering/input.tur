@@ -1,0 +1,10 @@
+;; CONV-S1 seam 3 (graduation): the parametric `:heap` `Cons` list lowers to a
+;; record ADT under the flag.  `tcons` builds a cell (a typed-pointer monomorph
+;; `tur_adt_Cons__int *`), and the `(:: (tcons ..) :int)` carrier ascriptions in
+;; list.tur's own walkers (list-fmap/list-concat) reinterpret-cast the pointer to
+;; the int64 carrier.  Exercises construction + field access at parity.
+(defn main [] : int
+  (let [l (tcons 7 (tcons 8 (tcons 9 (tnil))))]
+    (println (.head l))                          ; 7
+    (println (.head (:: (.tail l) (Cons int))))  ; 8
+    0))

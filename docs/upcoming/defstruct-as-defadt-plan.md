@@ -175,13 +175,14 @@ before the gate widens past leaf-scalar and before the experiment graduates
   ABI-identical to the struct path (same `const T*`, same `&` call site). Fixture:
   `conv-byval-adt-large-pbp`.
 - **`:heap` typed-pointer ABI** -- ~~no ADT equivalent of the parametric
-  `Vec<T> *` lowering~~ **FOUNDATION + NON-PARAMETRIC `:heap`-STRUCT LOWERING
-  LANDED (seam 3, 2026-06-26).** A `:heap` record ADT lowers to a typed pointer
-  `tur_adt_<Name> *`, and a non-parametric `:heap` *struct* now auto-lowers with
-  full parity (`type_is_heap_adt` + `:heap` exclusions at pbp / carrier-ABI /
-  `match`-scrutinee / ctor-arg-cast). Fixtures `conv-heap-adt-typed-pointer`,
-  `conv-defstruct-heap-struct-lowering`. The **parametric** stdlib `:heap`
-  containers (`Vec`/`Map`/`Set`/`MutableMap`) remain on the struct path.
+  `Vec<T> *` lowering~~ **DONE (seam 3, 2026-06-26).** A `:heap` record ADT lowers
+  to a typed pointer `tur_adt_<Name> *`; both **non-parametric** `:heap` structs
+  and the **parametric** stdlib `:heap` containers (`Vec`/`Map`/`Set`/`MutableMap`/
+  `Cons`) now auto-lower under the flag at full parity (`type_is_heap_adt` + `:heap`
+  exclusions at pbp / carrier-ABI / `match`-scrutinee / ctor-arg-cast, plus the
+  heap-ADT carrier bridges). Fixtures `conv-heap-adt-typed-pointer`,
+  `conv-defstruct-heap-struct-lowering`, `conv-heap-adt-carrier-base`,
+  `conv-heap-adt-carrier-ascribe`, `conv-defstruct-{vec,list,setmap}-lowering`.
 - **Nested by-value struct fields** -- ~~a struct-typed field is inlined in a
   struct but carried as an int64 in an ADT~~ **LANDED (slice 4).** The
   representation gate `adt_is_byvalue_product` (types.c) now admits a field that
@@ -273,9 +274,21 @@ before the gate widens past leaf-scalar and before the experiment graduates
    too). Fixtures: `conv-defstruct-struct-field-lowering`,
    `conv-defstruct-make-struct-lowering`.
    Remaining for graduation: `:heap` *outer* structs and parametric fields.
+6c. Widen the gate to **non-parametric `:heap` structs**, then **parametric `:heap`
+   structs** (the stdlib `Vec`/`Map`/`Set`/`MutableMap`/`Cons`).  **DONE
+   (2026-06-26)** -- a `type_is_heap_adt` predicate + `:heap` exclusions at every
+   by-value site (pbp / carrier-ABI / match scrutinee / ctor-arg cast), the
+   heap-ADT carrier bridges (`emit_carrier_bridge` / `type_uses_carrier_abi` /
+   carrier-return / the `(:: heap-call :int)` ascription), and the warning sweep.
+   Under the flag, **every** eligible `defstruct` now lowers.  Fixtures:
+   `conv-defstruct-heap-struct-lowering`, `conv-heap-adt-carrier-base`,
+   `conv-heap-adt-carrier-ascribe`, `conv-defstruct-vec-lowering`,
+   `conv-defstruct-list-lowering`, `conv-defstruct-setmap-lowering`.
 7. Graduate: delete the gate, lower unconditionally (including parametric / `:heap`
    structs), retire the `StructDef` surface path, regenerate the affected
-   snapshots in one change.
+   snapshots in one change.  Gating work: a force-lower probe still shows ~60 build
+   failures in fixtures never written for the flag (edge cases the flag-on path
+   does not yet cover); each must be promoted to a flag-on fixture and fixed first.
 
 See [struct-adt-convergence-s1-bridging-findings.md](struct-adt-convergence-s1-bridging-findings.md)
 for the by-value representation work this builds on.
@@ -414,8 +427,8 @@ runtime *usage* seam, below.
      `MonadError` inline-C bodies) still assumes the struct/carrier representation;
      it coexists fine today (parity) but should be reconciled or retired when the
      gate comes off.
-3. **`:heap` typed-pointer ADT ABI. FOUNDATION + NON-PARAMETRIC `:heap`-STRUCT
-   AUTO-LOWERING DONE (2026-06-26); parametric stdlib `:heap` deferred.** A
+3. **`:heap` typed-pointer ADT ABI. DONE (2026-06-26) -- parametric `:heap`
+   containers now lower under the flag.** A
    `:heap` record ADT lowers to a typed pointer (`tur_adt_<Name>__<args> *`) to a
    heap-allocated header -- the ADT analogue of a `:heap` struct's `Name *`.
    Foundation (all gated on `AdtDef.is_heap`, so inert unless an ADT is `:heap`):
@@ -497,45 +510,58 @@ runtime *usage* seam, below.
    Proven flag-independently by `conv-heap-adt-carrier-ascribe` (a specialized
    `(Box int)` ctor ascribed to `:int` and read back through a carrier base).
 
-   **Remaining (kept on the struct path by the gate):** the gate still keeps a
-   **parametric** `:heap` struct on the struct path.  The containers now lower
-   clean, so the blocker is no longer warnings but the hand-written stdlib runtime:
-   `tur_option_t`/`tur_result_box_t`, and the `Vec`/`Map`/`Set`/`MutableMap`
-   inline-C bodies, still assume the struct/typed-pointer rep and must be
-   reconciled or retired before the parametric-`:heap` gate can flip -- the largest
-   remaining piece.  (A broader emit-site audit for any residual
-   `type_is_heap_struct` that wants a `|| type_is_heap_adt` sibling should ride
-   along with that work, exercised by the full stdlib under a gate-open run.)
-4. **Validation across every autoloaded parametric stdlib type**, then delete the
-   gate + `g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]` row, retire the
-   `StructDef` surface path, and regenerate snapshots.
+   **Parametric-`:heap` gate FLIPPED (2026-06-26).** With the carrier bridges +
+   warning sweep in place, the gate now lowers a **parametric `:heap` struct** too
+   -- the autoloaded stdlib `Vec`/`Map`/`Set`/`MutableMap`/`Cons` all lower to
+   record ADTs under the flag.  The feared blocker (the hand-written stdlib runtime
+   assuming the struct rep) turned out to coexist cleanly: the `:heap` containers'
+   inline-C carrier bases take/return the int64 carrier, and the heap-ADT carrier
+   bridges reconcile every typed-pointer<->carrier crossing, so `tur_option_t` /
+   `tur_result_box_t` and the Vec/Map/Set inline-C keep working unchanged.  The
+   full suite stays **1850 passed, 0 failed** with the gate flipped, and three
+   flag-on container fixtures (`conv-defstruct-vec-lowering`,
+   `conv-defstruct-list-lowering`, `conv-defstruct-setmap-lowering`) exercise
+   push/get/len/set! / cons/head/tail / set+map count/get at parity with the
+   struct path; `Option` HKT (`fmap`/`bind`/`alt-or`) also stays at parity.  Under
+   the flag, **every** eligible `defstruct` (scalar / pointer / fn / aggregate /
+   non-parametric-`:heap` / parametric / parametric-`:heap`) now lowers.
+4. **Full graduation:** delete the gate + `g_opt_defstruct_as_defadt` + the
+   `EXPERIMENTS[]` row, make lowering unconditional, retire the `StructDef` surface
+   path, and regenerate snapshots.  NOT yet ready: a force-lower probe (lowering
+   *every* `defstruct` in *every* fixture, unconditionally) still surfaces ~60
+   build failures in fixtures that were never written for the flag -- edge cases
+   the flag-on path does not yet cover (e.g. `:heap`-field structs, `defopaque`
+   payloads through `#{Unsafe}`, exists-pack by-value structs, HKT cata carriers).
+   These must be driven to zero -- ideally by promoting each force-lower failure to
+   a flag-on fixture and fixing it -- before the gate can be deleted and snapshots
+   regenerated.
 
 ### Current state (suite green)
 
-`bash tests/run.sh` is **1847 passed, 0 failed** with the gate widened to
-parametric (non-`:heap`) structs and **non-parametric `:heap` structs**; the
-flag-on `conv-defstruct-*` canaries pass (including
-`conv-defstruct-heap-struct-lowering`), plus the flag-independent
-`conv-heap-adt-carrier-base` and `conv-heap-adt-carrier-ascribe`.  The flag is
-still opt-in.  **`Option`
-and `Result` -- the two hardest dedicated-codegen stdlib types -- now work under
-the flag at parity with the no-flag baseline:** construction
-(`some`/`none`/`ok`/`err`), accessors (`ok?`/`ok-val`/`err-val`/`unwrap-or`), and
-HKT instances (`fmap`/`bind`/`alt-or` on Option) all compile and run with correct
-results.  (`fmap`/`bind` on `Result` remain blocked by a *baseline* type-recovery
+`bash tests/run.sh` is **1850 passed, 0 failed** with **every eligible
+`defstruct` lowering under the flag** -- scalar / pointer / fn / aggregate /
+non-parametric-`:heap` / parametric / parametric-`:heap`.  The flag-on
+`conv-defstruct-*` canaries pass (including `conv-defstruct-heap-struct-lowering`
+and the three container fixtures `conv-defstruct-vec-lowering` /
+`conv-defstruct-list-lowering` / `conv-defstruct-setmap-lowering`), plus the
+flag-independent `conv-heap-adt-carrier-base` and `conv-heap-adt-carrier-ascribe`.
+The flag is still opt-in.  **`Option` and `Result` -- the two hardest
+dedicated-codegen stdlib types -- work under the flag at parity with the no-flag
+baseline:** construction (`some`/`none`/`ok`/`err`), accessors
+(`ok?`/`ok-val`/`err-val`/`unwrap-or`), and HKT instances
+(`fmap`/`bind`/`alt-or` on Option) all compile and run with correct results.
+(`fmap`/`bind` on `Result` remain blocked by a *baseline* type-recovery
 limitation, not the lowering.)
 
-Seams 1, 1b, 2 are DONE, and seam 3 now covers the `:heap` ADT ABI foundation
-(a hand-written `:heap` defadt lowers and runs), **non-parametric `:heap`-struct
-auto-lowering** (`conv-defstruct-heap-struct-lowering`), **the parametric
-`:heap`-ADT carrier bridges** (`conv-heap-adt-carrier-base`), **and the
-carrier-bridge warning sweep** (`conv-heap-adt-carrier-ascribe`) -- with these the
-lowered stdlib `Vec`/`Set`/`Map`/`List` all build `-Wint-conversion`-clean AND run
-correctly behind a gate-open probe.  Graduation order from here: finish **seam 3**
--- reconcile/retire the hand-written stdlib runtime (`tur_option_t` /
-`tur_result_box_t` and the Vec/Map/Set inline-C, which still assume the struct
-rep), then flip the parametric-`:heap` gate -> **seam 4** (validate across every
-parametric stdlib type, then delete the gate + `g_opt_defstruct_as_defadt` + the
-`EXPERIMENTS[]` row, retire the `StructDef` surface path, regen snapshots).  The
-suite does not yet exercise the by-value HKT usage the flag now supports, so
-adding flag-on fixtures for it is part of seam 4.
+Seams 1, 1b, 2 are DONE, and **seam 3 is DONE**: the `:heap` ADT ABI foundation,
+non-parametric `:heap`-struct auto-lowering, the parametric `:heap`-ADT carrier
+bridges, the carrier-bridge warning sweep, AND the parametric-`:heap` gate flip --
+the autoloaded stdlib `Vec`/`Set`/`Map`/`List` now lower to record ADTs under the
+flag, build `-Wint-conversion`-clean, and run at parity with the struct path.
+What remains is **step 4 (full graduation)**: make lowering unconditional (delete
+the gate + `g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]` row), retire the
+`StructDef` surface path, and regen snapshots.  A force-lower probe (lowering
+*every* `defstruct` unconditionally) still surfaces ~60 build failures in fixtures
+never written for the flag -- the edge cases the flag-on path does not yet cover.
+Driving those to zero (promote each to a flag-on fixture + fix) is the gating work
+before the experiment can graduate.
