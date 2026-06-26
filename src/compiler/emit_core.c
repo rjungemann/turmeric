@@ -2704,6 +2704,19 @@ void emit_dict_name(char *buf, size_t buflen, const TypeClassInstance *inst) {
                          inst->type_args[i].as.struct_.def->name)
                     component = inst->type_args[i].as.struct_.def->name;
                 break;
+            case TY_ADT:
+                /* CONV-S1 (defstruct-as-defadt): a record-ADT instance head names
+                 * its dict by the constructor, exactly as TY_STRUCT -- otherwise
+                 * every non-parametric ADT-headed instance collapses to dict_<C>_T
+                 * and the emitted dict struct/singleton collide (ODR redefinition).
+                 * Mirrors build_inst_type_suffix's TY_ADT arm so the elab-side and
+                 * emit-side dict names stay in lockstep. */
+                if (inst->type_arg_syms && inst->type_arg_syms[i])
+                    component = inst->type_arg_syms[i]->name;
+                else if (inst->type_args[i].as.adt_.def &&
+                         inst->type_args[i].as.adt_.def->name)
+                    component = inst->type_args[i].as.adt_.def->name;
+                break;
             case TY_APP: {
                 const char *fn_part  = "T";
                 const char *arg_part = "T";

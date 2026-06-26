@@ -504,6 +504,18 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                             component = inst->type_args[i].as.struct_.def->name;
                         }
                         break;
+                    case TY_ADT:
+                        /* CONV-S1 (defstruct-as-defadt): a record-ADT head names its
+                         * dict struct/singleton by the constructor, mirroring
+                         * TY_STRUCT / emit_dict_name -- otherwise two ADT-headed
+                         * instances both emit dict_<C>_T and collide (ODR). */
+                        if (inst->type_arg_syms && inst->type_arg_syms[i]) {
+                            component = inst->type_arg_syms[i]->name;
+                        } else if (inst->type_args[i].as.adt_.def &&
+                                   inst->type_args[i].as.adt_.def->name) {
+                            component = inst->type_args[i].as.adt_.def->name;
+                        }
+                        break;
                     case TY_APP: {
                         /* Phase HKT §3: partial type application — encode as "ctor_arg"
                          * e.g. (result int) → "result_int" → dict_Functor_result_int */

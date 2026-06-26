@@ -1699,6 +1699,30 @@ static bool build_inst_type_suffix(const Type *type_args,
                     type_component = "T";
                 }
                 break;
+            case TY_ADT:
+                /* CONV-S1 (defstruct-as-defadt): a record-ADT head -- a lowered
+                 * `defstruct` or a hand-written single-variant `(defdata T ...)` --
+                 * mangles by its constructor name exactly as TY_STRUCT does.
+                 * Without this the switch fell through to `default: "T"`, so every
+                 * non-parametric ADT-headed instance of a class collapsed to the
+                 * same `_T` suffix and the idempotent re-instance guard silently
+                 * swallowed all but the first (e.g. `Backend [CanvasBackend]`,
+                 * `[SurfaceBackend]`, `[PngBackend]` -> one surviving instance).
+                 * Flag-independent: also fixes hand-written record-ADT instances. */
+                if (type_arg_syms && type_arg_syms[j]) {
+                    uint32_t sym_len = type_arg_syms[j]->len;
+                    if (sym_len >= sizeof(ctor_name_buf))
+                        sym_len = (uint32_t)(sizeof(ctor_name_buf) - 1);
+                    memcpy(ctor_name_buf, type_arg_syms[j]->name, sym_len);
+                    ctor_name_buf[sym_len] = '\0';
+                    tur_mangle_ident(ctor_name_buf, ctor_mangle_buf, sizeof(ctor_mangle_buf));
+                    type_component = ctor_mangle_buf;
+                } else if (type_args[j].as.adt_.def && type_args[j].as.adt_.def->name) {
+                    type_component = type_args[j].as.adt_.def->name;
+                } else {
+                    type_component = "T";
+                }
+                break;
             case TY_APP: {
                 /* Phase HKT §3: partial type application -- encode as "ctor_arg" */
                 const char *ctor_part = "T";
@@ -2096,7 +2120,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         return NULL;
     }
     const Symbol *tc_name = tc_form->as.sym;
-    
+
     /* Look up the typeclass */
     TypeClass *tc = typeclass_env_lookup_typeclass(&e->typeclass_env, tc_name);
     if (!tc) {
@@ -4279,6 +4303,15 @@ static Expr *make_dict_expr(Elab *e, TypeClassInstance *inst, Span span) {
                 else if (inst->type_args[i].as.struct_.def &&
                          inst->type_args[i].as.struct_.def->name)
                     component = inst->type_args[i].as.struct_.def->name;
+                break;
+            case TY_ADT:
+                /* CONV-S1 (defstruct-as-defadt): match emit_dict_name's TY_ADT arm
+                 * so the DICT expr's dict_name agrees with the emitted struct. */
+                if (inst->type_arg_syms && inst->type_arg_syms[i])
+                    component = inst->type_arg_syms[i]->name;
+                else if (inst->type_args[i].as.adt_.def &&
+                         inst->type_args[i].as.adt_.def->name)
+                    component = inst->type_args[i].as.adt_.def->name;
                 break;
             default: break;
         }

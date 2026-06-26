@@ -1,0 +1,37 @@
+;; conv-defstruct-multi-instance-dispatch: under the defstruct-as-defadt flag,
+;; several distinct structs each lower to a single-variant record ADT.  When a
+;; typeclass has one instance PER such struct, every instance must keep a
+;; distinct mangled identity -- the per-instance method names, the dict struct,
+;; and the dict singleton all key off the head's constructor name.
+;;
+;; Regression for the seam-4 graduation bug: build_inst_type_suffix /
+;; emit_dict_name / emit_stmt.c / the DICT-expr dict_name all lacked a TY_ADT
+;; arm, so every ADT-headed instance collapsed to the `_T` suffix.  The
+;; idempotent re-instance guard then silently swallowed all but the FIRST
+;; instance (so SurfaceBackend/PngBackend dispatch reported "no instance"), and
+;; the emitted `dict_<Class>_T` struct/singleton collided (ODR redefinition).
+(defclass Backend [b]
+  (render-to [self : b  x : int] : int))
+
+;; Deliberately different layouts so a shared ABI cannot mask the bug.
+(defstruct CanvasBackend [canvas : int  px : int  py : int  pw : int  ph : int])
+(defstruct SurfaceBackend [width : int])
+(defstruct PngBackend [path : cstr  tag : int])
+
+(definstance Backend [CanvasBackend]
+  (render-to [self x] (+ (+ (.canvas self) (.pw self)) x)))
+(definstance Backend [SurfaceBackend]
+  (render-to [self x] (+ (.width self) x)))
+(definstance Backend [PngBackend]
+  (render-to [self x] (+ (render-to (make-struct SurfaceBackend 1000) 0)
+                         (+ (.tag self) x))))
+
+;; A polymorphic helper constrained over the class, dispatched per monomorph.
+(defn draw [^Backend B b : B x : int] : int
+  (render-to b x))
+
+(defn main [] : int
+  (println (draw (make-struct CanvasBackend 100 0 0 7 0) 1))   ;; 100+7+1 = 108
+  (println (draw (make-struct SurfaceBackend 200) 2))          ;; 202
+  (println (draw (make-struct PngBackend "x" 50) 3))           ;; 1000+50+3 = 1053
+  0)
