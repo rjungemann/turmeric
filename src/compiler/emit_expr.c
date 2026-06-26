@@ -3900,7 +3900,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     fn_binding->type.as.fn.arg_full_types &&
                     fn_binding->type.as.fn.arg_full_types[i]) {
                     Type pf = *fn_binding->type.as.fn.arg_full_types[i];
-                    if (type_is_heap_struct(pf) &&
+                    if ((type_is_heap_struct(pf) || type_is_heap_adt(pf)) &&
                         type_has_concrete_codegen_layout(&pf))
                         callee_param_is_typed_heap_ptr = true;
                 }
@@ -4085,11 +4085,13 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * `(defn f [v : (Vec int)] ...)` or `[m : (MutableMap int int)]`
                  * -- the typed value flows in directly). */
                 if (emit_arg &&
-                    type_is_heap_struct(emit_resolve_type(ctx, emit_arg->type)) &&
+                    (type_is_heap_struct(emit_resolve_type(ctx, emit_arg->type)) ||
+                     type_is_heap_adt(emit_resolve_type(ctx, emit_arg->type))) &&
                     expr_emits_byvalue_carrier_abi(ctx, emit_arg) &&
                     !callee_param_is_typed_heap_ptr &&
                     !(matched_spec && i < matched_spec->n_args &&
-                      type_is_heap_struct(matched_spec->arg_types[i]))) {
+                      (type_is_heap_struct(matched_spec->arg_types[i]) ||
+                       type_is_heap_adt(matched_spec->arg_types[i])))) {
                     Buf _hb; buf_init(&_hb);
                     buf_printf(&_hb, "(int64_t)(intptr_t)(%s)", raw);
                     buf_putc(&_hb, '\0');
@@ -6153,11 +6155,52 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                             &inner_resolved))
                     inner_resolved =
                         emit_resolve_type(ctx, e->as.ascribe_.inner->type);
+                /* Original heap-STRUCT path (unchanged): a concrete `:heap` struct
+                 * pointer ascribed to the int64 carrier needs the pointer->int
+                 * relabel; the abstract carrier base (no concrete layout) is left
+                 * untouched. */
                 if (type_is_heap_struct(inner_resolved) &&
                     type_has_concrete_codegen_layout(&inner_resolved)) {
                     return emit_carrier_bridge(ctx, body, inner_val,
                                                CK_CONCRETE, CK_CARRIER,
                                                inner_resolved);
+                }
+                /* seam 3: the heap-ADT analogue (lowered Vec/Cons/...).  An ADT app
+                 * has NO `type_has_concrete_codegen_layout` (that predicate only
+                 * handles struct apps), so gate on the c-name being a concrete
+                 * pointer (`tur_adt_<Name>__A *`) -- the same signal
+                 * emit_carrier_bridge's heap branch keys on.  When the inner is a
+                 * heap-ADT CALL whose elab type collapsed to the abstract `(Cons A)`
+                 * (c-name int64_t), recover the concrete result from its matched
+                 * spec.  Gated entirely on `type_is_heap_adt`, so it can only fire
+                 * for a lowered/hand-written `:heap` ADT -- never for a heap struct
+                 * or non-heap value, hence no snapshot drift on the gate-off suite. */
+                if (type_is_heap_adt(inner_resolved)) {
+                    Type adt_r = inner_resolved;
+                    const char *acn = emit_type_c_name(ctx, adt_r);
+                    bool adt_ptr = acn && strchr(acn, '*');
+                    if (!adt_ptr) {
+                        const Expr *ci = e->as.ascribe_.inner;
+                        while (ci && ci->kind == EX_ASCRIBE)
+                            ci = ci->as.ascribe_.inner;
+                        if (ci && ci->kind == EX_CALL) {
+                            const EmitAbiSpecialization *isp =
+                                find_matched_abi_spec(ctx, ci,
+                                                      ci->as.call_.fn_binding);
+                            if (isp) {
+                                Type sr = emit_resolve_type(ctx, isp->result_type);
+                                const char *sn = emit_type_c_name(ctx, sr);
+                                if (type_is_heap_adt(sr) && sn && strchr(sn, '*')) {
+                                    adt_r = sr;
+                                    adt_ptr = true;
+                                }
+                            }
+                        }
+                    }
+                    if (adt_ptr) {
+                        return emit_carrier_bridge(ctx, body, inner_val,
+                                                   CK_CONCRETE, CK_CARRIER, adt_r);
+                    }
                 }
             }
             return inner_val;

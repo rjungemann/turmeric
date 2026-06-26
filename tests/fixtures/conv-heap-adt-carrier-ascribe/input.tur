@@ -1,0 +1,30 @@
+;; CONV-S1 seam 3: the carrier-bridge warning sweep for lowered parametric :heap
+;; ADTs.  This is the shape stdlib list.tur uses (`__cons-fmap`/`list-concat`):
+;; a constructor-call result is ascribed to the int64 carrier `(:: (mk ..) :int)`
+;; and bound into an `:int` local that flows on to an inline-C carrier base.
+;; When `mk` specializes (concrete `(Box int)` arg), it returns the typed pointer
+;; `tur_adt_Box__int *`; ascribing that to `:int` must REINTERPRET-cast the
+;; pointer to the int64 carrier, never assign it raw (-Wint-conversion) -- the
+;; `type_has_concrete_codegen_layout` guard the heap-struct path used does not
+;; fire for an ADT app, so the cast is gated on the recovered spec's concrete
+;; pointer c-name instead.  Flag-independent: hand-written defadt, no experiment.
+(defdata Box :heap [A] (Box [val : A nxt : int]))
+
+(defn mk [A] [v : A nxt : int] : (Box A) (Box v nxt))
+
+;; inline-C carrier base: takes the int64 carrier handle (== the :heap pointer).
+(defn box-val [b : int] : int
+  ```c
+  struct { int64_t val; int64_t nxt; } *p = (void*)(intptr_t)b;
+  return (int)p->val;
+  ```)
+
+;; `(:: (mk v 0) :int)` -- a specialized `(Box int)` ctor result ascribed to the
+;; carrier, then bound to an `:int` local (the list.tur `out` shape).
+(defn build [v : int] : int
+  (let [b (:: (mk v 0) :int)]
+    b))
+
+(defn main [] : int
+  (println (box-val (build 42)))   ; 42
+  0)
