@@ -4,6 +4,27 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.25.4] -- 2026-06-26
+
+### Added
+
+- **PWA support and mobile split-view for the web REPL.** Service
+  worker, install manifest, custom `_headers`, kill-switch SW for
+  recovery, and a mobile split-and-PWA Playwright spec covering
+  `/try`.
+
+### Changed
+
+- **Curly-infix `{a + b}` is now enabled in the default
+  s-expression dialect, not just sweet-exp.** Reader-form change
+  in `src/compiler/reader.c` with three new default-dialect
+  fixtures (`curly-infix-default-{basic-add,mixed-vars,nested}`).
+- **Contract types must use the explicit `#refine{var : T | pred}`
+  reader form** instead of the former bare `{var : T | pred}`
+  overload, which is freed up for curly-infix. Two new fixtures
+  (`refine-basic`, `refine-in-defn`); reader-forms,
+  contract-types, and syntax guides updated.
+
 ## [0.25.3] -- 2026-06-26
 
 ### Added

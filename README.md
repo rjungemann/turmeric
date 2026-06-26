@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.25.3` -- CONV-S1 struct/ADT convergence widens to parametric, fn-field, and pointer-field structs; parametric ADT by-value monomorphisation flips on; libturi embed peripherals and debugger source maps land.
+**Latest release:** `v0.25.4` -- curly-infix `{a + b}` works in the default s-expression dialect (contract types move to explicit `#refine{...}`); PWA install and mobile split-view land in the web REPL.
 
 ## What
 
