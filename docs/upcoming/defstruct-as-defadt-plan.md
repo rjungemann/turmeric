@@ -591,12 +591,13 @@ runtime *usage* seam, below.
      regenerated.  *Cleared ~43* (`httpd-*`, `clone-*`, `eqmap-struct`, the `Pos`
      `typeclass-*` tests).  Fixture `conv-defstruct-inline-c-abi`.
 
-   **Running total: 212 -> 60 unique build-failing fixtures under force-lower
-   (default suite stays 1857/0).**  (Sub-root (a) -- 0-arg construct in control
+   **Running total: 212 -> 53 unique build-failing fixtures under force-lower
+   (default suite stays 1863/0).**  (Sub-root (a) -- 0-arg construct in control
    flow -- the inline-C-tail return bridge, the accessor-unbox, the
    assignment-position straddle, the inline-C instance-method signature, the
    by-value struct-field receiver / by-value ADT field storage, the parametric
-   keyword type-param field, and set!-over-lowered-record-ADT are all LANDED.)
+   keyword type-param field, set!-over-lowered-record-ADT, and the
+   parametric-record inline-C compat typedef are all LANDED.)
 
    - **parametric keyword type-param field DONE (2026-06-26).**  A parametric
      `(defstruct Box [A] (val :A) ...)` lowered to a record variant where the
@@ -784,6 +785,19 @@ runtime *usage* seam, below.
    exists); a few `no typeclass method` (schema HKT) and one-offs
    (`struct-curry-ctor`); and the moot **`hkt-cata-*`** carriers
    (B4 territory -- excluded at graduation, not fixed).
+
+   - **parametric-record inline-C compat DONE (2026-06-26).**  Most of the
+     `unknown type name 'Tuple2'` cases were NOT a fixture-rewrite problem: stdlib
+     inline-C names the erased generic `Tuple2` struct (carrier `e1/e2` int64
+     fields) which the struct path emits at default but the ADT lowering dropped.
+     emit_adt_typedef_and_ctors (+ its early_file mirror) now re-emit that erased
+     `typedef struct <Name>` for a parametric single-variant record ADT
+     (`#ifndef TUR_COMPAT_<Name>` guarded), byte-compatible with the positional
+     carrier.  Cleared `comonad-capturing-closure`, `future-capturing-closure`,
+     `future-linear`, `future-split-free`, `hkt-stdlib-parser-instances`,
+     `promise-linear`, `tuple2-inline-c-layout` (7).  Remaining `unknown type
+     name` case is `result-over-struct-with-option-field-typedef-order` (`User`
+     typedef ordering -- a different, struct-with-Option-field seam).
 
    - **schema-HKT `no typeclass method found for 'raw'` (investigated
      2026-06-26, BLOCKED in M7).**  `(.raw (fmap s f))` over a phantom record
