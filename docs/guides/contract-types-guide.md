@@ -1,7 +1,7 @@
 ---
 title: Contract Types Guide
 category: Error Handling
-description: Contract types: `{ x : T | p }`, `:pre`/`:post` annotations, FFI contracts
+description: Contract types: `#refine{ x : T | p }`, `:pre`/`:post` annotations, FFI contracts
 ---
 
 # Contract Types Guide
@@ -10,8 +10,20 @@ description: Contract types: `{ x : T | p }`, `:pre`/`:post` annotations, FFI co
 > `invariant!`), see [Error Handling Guide](error-handling-guide.md).
 
 Contract types add **runtime-checked predicates** to types as a first-class language feature.
-A contract type `{ x : T | p }` represents values of type `T` that satisfy predicate `p`,
+A contract type `#refine{ x : T | p }` represents values of type `T` that satisfy predicate `p`,
 verified automatically at function boundaries and assignment sites.
+
+---
+
+## Why `#refine{...}`?
+
+Contract types used to be spelled with bare curly braces, `{ x : T | p }`.
+Bare `{...}` is now SRFI-105 curly-infix in every dialect (so `{a + b}`
+reads as `(+ a b)` in plain s-expression Turmeric, no `#lang sweet-exp`
+required), and contract types moved to the `#refine{...}` data-literal form
+alongside the rest of the `#`-prefixed family (`#map{...}`, `#set{...}`,
+`#row{...}`, `#r{...}`). The semantics are identical to the old form -- only
+the reader entry point changed.
 
 ---
 
@@ -26,10 +38,10 @@ the checks at every crossing point.
 |---|---|---|
 | `require!` macro (today) | Inside the function body | When execution reaches that line |
 | Contract type `:pre` (CT1) | On the `defn` declaration | Automatically at every call site |
-| Inline contract `{ x : T \| p }` (CT1) | In the parameter or return type | At every use of that type |
+| Inline contract `#refine{ x : T \| p }` (CT1) | In the parameter or return type | At every use of that type |
 
 Contract predicates are **ordinary Turmeric expressions** -- no special syntax beyond the
-`{ x : T | p }` wrapper. They are **pure by default**; the elaborator enforces `#{}` on
+`#refine{ x : T | p }` wrapper. They are **pure by default**; the elaborator enforces `#{}` on
 all predicate expressions.
 
 ---
@@ -40,19 +52,19 @@ all predicate expressions.
 
 ```turmeric no-check
 ;; A non-negative integer
-(deftype Nat { x : int | (>= x 0) })
+(deftype Nat #refine{ x : int | (>= x 0) })
 
 ;; Inline in a function signature
-(defn sqrt [x : { y : double | (>= y 0) }] : double
+(defn sqrt [x : #refine{ y : double | (>= y 0) }] : double
   ...)
 ```
 
 ```sweet-exp
 ;; A non-negative integer
-deftype Nat { x : int | (>= x 0) }
+deftype Nat #refine{ x : int | (>= x 0) }
 
 ;; Inline in a function signature
-defn sqrt [x : { y : double | (>= y 0) }] : double
+defn sqrt [x : #refine{ y : double | (>= y 0) }] : double
   ...
 ```
 
@@ -96,13 +108,13 @@ defn safe-sqrt [x : double] : double :pre (>= x 0.0) :post (>= result 0.0)
 ```turmeric no-check
 (defstruct BoundedBuffer [
   data  : (vec int)
-  index : { i : int | (and (>= i 0) (< i (vec/len data))) }])
+  index : #refine{ i : int | (and (>= i 0) (< i (vec/len data))) }])
 ```
 
 ```sweet-exp
 defstruct BoundedBuffer [
   data  : (vec int)
-  index : { i : int | (and (>= i 0) (< i (vec/len data))) }]
+  index : #refine{ i : int | (and (>= i 0) (< i (vec/len data))) }]
 ```
 
 The predicate for a struct field may reference other fields in scope at elaboration time.
@@ -129,7 +141,7 @@ The contract documents and enforces the requirement at the call site. Inside the
 no redundant check is needed:
 
 ```turmeric no-check
-(defn vec-get-checked [v : (vec a), i : { x : int | (and (>= x 0) (< x (vec/len v))) }] : a
+(defn vec-get-checked [v : (vec a), i : #refine{ x : int | (and (>= x 0) (< x (vec/len v))) }] : a
   (vec/get-unsafe v i))
 
 ;; At the call site, the elaborator inserts:
@@ -140,7 +152,7 @@ no redundant check is needed:
 ```
 
 ```sweet-exp
-defn vec-get-checked [v : (vec a), i : { x : int | (and (>= x 0) (< x (vec/len v))) }] : a
+defn vec-get-checked [v : (vec a), i : #refine{ x : int | (and (>= x 0) (< x (vec/len v))) }] : a
   vec/get-unsafe(v i)
 
 ;; At the call site, the elaborator inserts:
@@ -155,20 +167,20 @@ defn example [v : (vec int)] : int
 Accept an untyped value and narrow it at runtime:
 
 ```turmeric no-check
-(defn ensure-positive [x : any] : { y : int | (>= y 0) }
+(defn ensure-positive [x : any] : #refine{ y : int | (>= y 0) }
   :contract (>= x 0)
   x)
 
-(defn pipeline [] : { y : int | (>= y 0) }
+(defn pipeline [] : #refine{ y : int | (>= y 0) }
   (ensure-positive 42))
 ```
 
 ```sweet-exp
-defn ensure-positive [x : any] : { y : int | {y >= 0} }
+defn ensure-positive [x : any] : #refine{ y : int | {y >= 0} }
   :contract {x >= 0}
   x
 
-defn pipeline [] : { y : int | {y >= 0} }
+defn pipeline [] : #refine{ y : int | {y >= 0} }
   ensure-positive(42)
 ```
 
@@ -206,9 +218,9 @@ defn safe-sqrt [x : double] : double :pre (>= x 0.0) :post (>= result 0.0)
 
 | Site | When checked |
 |---|---|
-| Function entry | `:pre` predicates; `{ x : T \| p }` on parameters |
-| Function return | `:post` predicates; `{ x : T \| p }` on return type |
-| Let binding | `{ x : T \| p }` on the bound variable's type |
+| Function entry | `:pre` predicates; `#refine{ x : T \| p }` on parameters |
+| Function return | `:post` predicates; `#refine{ x : T \| p }` on return type |
+| Let binding | `#refine{ x : T \| p }` on the bound variable's type |
 | `extern-c` call | `:pre` before call; `:post` on return value |
 
 ---
@@ -302,9 +314,9 @@ Contract types are planned in four phases:
 
 | Phase | Goal |
 |---|---|
-| CT0 | Parse `{ x : T \| p }` syntax; `TY_CONTRACT` type node; store `:pre`/`:post`/`:contract` on `FnDef` |
+| CT0 | Parse `#refine{ x : T \| p }` syntax; `TY_CONTRACT` type node; store `:pre`/`:post`/`:contract` on `FnDef` |
 | CT1 | Insert runtime checks at function entry, exit, let bindings, and `extern-c` boundaries |
-| CT2 | Propagate and simplify contracts through operations; subtype relation `{ x : T \| p } <: T` |
+| CT2 | Propagate and simplify contracts through operations; subtype relation `#refine{ x : T \| p } <: T` |
 | CT3 | Eliminate provably-true checks at compile time; debug/release build switch |
 | CT4 | FFI contracts; `(cast x : T)` downcast from `any`; contract handler API; `tur explain` entries |
 
@@ -315,4 +327,5 @@ Contract types are planned in four phases:
 - [Error Handling Guide](error-handling-guide.md) -- `Result`, `Option`, `panic`, and today's contract macros
 - [C Integration Guide](c-integration-guide.md) -- FFI and `extern-c`
 - [Type Annotations Guide](type-annotations-guide.md) -- compound type syntax
+- [Reader Forms Guide](reader-forms-guide.md) -- bare `{...}` curly-infix and the `#refine{...}` data literal
 - [Advanced Type System Rationale](advanced-type-system-rationale.md) -- why contract types shipped and refinement types were deferred

@@ -38,6 +38,9 @@ static Form *read_seq(Reader *r, char open, char close, FormTag tag,
                       const char *unterminated_msg);
 /* INT-1: Reader conditional */
 static Form *read_reader_cond(Reader *r);
+/* CT0: Contract-type reader. Body for `#refine{...}` and historically for
+ * bare `{var : T | pred}` (now removed -- bare braces are curly-infix). */
+static Form *read_contract_type(Reader *r);
 
 static Span span_from_to(const Reader *r,
                          uint32_t start_line, uint32_t start_col,
@@ -1006,6 +1009,21 @@ static Form *read_row_literal(Reader *r) {
                     "unterminated row literal (missing '}') (TUR-E0281)");
 }
 
+/* Read a #refine{var : T | pred} contract-type data literal.  Consumes the
+ * `#refine` tag, then delegates to read_contract_type for the `{...}` body,
+ * producing the same F_CONTRACT_TYPE form bare braces used to. */
+static Form *read_refine_literal(Reader *r) {
+    advance(r); /* consume '#' */
+    advance(r); /* consume 'r' */
+    advance(r); /* consume 'e' */
+    advance(r); /* consume 'f' */
+    advance(r); /* consume 'i' */
+    advance(r); /* consume 'n' */
+    advance(r); /* consume 'e' */
+    /* peek == '{' guaranteed by caller */
+    return read_contract_type(r);
+}
+
 /* TCE (typed-container-elements / test-suite-idioms Phase E): a `:`-prefixed
  * element type fused to the closer of a vec or set literal pins the
  * collection's element type.  `[]:int` lowers to `(:: [] (Vec int))` and
@@ -1073,6 +1091,12 @@ static Form *try_read_data_literal(Reader *r) {
     if (peek_at(r, 1) == 'r' && peek_at(r, 2) == 'o' &&
         peek_at(r, 3) == 'w' && peek_at(r, 4) == '{') {
         return read_row_literal(r);
+    }
+    if (peek_at(r, 1) == 'r' && peek_at(r, 2) == 'e' &&
+        peek_at(r, 3) == 'f' && peek_at(r, 4) == 'i' &&
+        peek_at(r, 5) == 'n' && peek_at(r, 6) == 'e' &&
+        peek_at(r, 7) == '{') {
+        return read_refine_literal(r);
     }
     /* Detect a #<ident>{ shape with an unrecognized tag -> TUR-E0283.
      * Scan a run of identifier characters after '#'; if it is followed by
@@ -2808,15 +2832,11 @@ static Form *read_form(Reader *r) {
     }
 
     /* CT0 / Phase S1: Curly-brace handling.
-     * In curly-infix mode (SRFI-105), '{' is the infix operator.
-     * Otherwise '{' introduces a contract type { var : T | pred }. */
+     * Bare '{' is always SRFI-105 curly-infix in every dialect.  Contract
+     * types use the explicit `#refine{var : T | pred}` data-literal form
+     * (read_refine_literal), keeping the dispatch context-free. */
     if (c == '{') {
-        if (r->curly_infix_enabled) {
-            return read_curly_infix(r);
-        } else {
-            /* CT0: contract type annotation { var : T | pred } */
-            return read_contract_type(r);
-        }
+        return read_curly_infix(r);
     }
     
     if (c == '(') return read_seq(r, '(', ')', F_LIST, "unterminated list (missing ')')");
@@ -3721,8 +3741,10 @@ Form **read_all_with_registry(Arena *arena, SymbolTable *st,
     r.line = 1;
     r.col = 1;
     r.error = false;
-    /* Phase S1: Set syntax feature flags based on reader type from SourceFile */
-    r.curly_infix_enabled = false;
+    /* Phase S1: Set syntax feature flags based on reader type from SourceFile.
+     * curly-infix is on in every dialect now -- bare {a + b} reads as (+ a b)
+     * regardless of #lang.  Contract types live behind explicit `#refine{...}`. */
+    r.curly_infix_enabled = true;
     r.neoteric_enabled = false;
     /* RM1: Reader-macro registry. If the caller supplied one, dispatch and
      * registration happen against it directly (REPL session semantics);

@@ -282,16 +282,16 @@ function boundaries.
 
 ```turmeric no-check
 (defn vec-get [v :(vec a)
-               i :{ j :int | (and (>= j 0) (< j (vec/len v))) }] :a
+               i :#refine{ j :int | (and (>= j 0) (< j (vec/len v))) }] :a
   (vec/get-unsafe v i))
 
-(defn sqrt [x :{ y :double | (>= y 0) }] :double ...)
+(defn sqrt [x :#refine{ y :double | (>= y 0) }] :double ...)
 ```
 ```sweet-exp
 defn vec-get [v : (vec a)
-              i : { j :int | (and (>= j 0) (< j (vec/len v))) }] :a
+              i : #refine{ j :int | (and (>= j 0) (< j (vec/len v))) }] :a
   vec/get-unsafe(v i)
-defn sqrt [x : { y :double | (>= y 0) }] :double
+defn sqrt [x : #refine{ y :double | (>= y 0) }] :double
   ...
 ```
 
@@ -427,10 +427,11 @@ The cost is Very High; the remaining demand is Low. Deferral is correct.
 
 ## Why refinement types were correctly deferred for v1.0.0
 
-Refinement types attach compile-time-checked predicates to types:
+Refinement types attach compile-time-checked predicates to types
+(using the same `#refine{...}` reader form contract types use today):
 
 ```
-{ x : int | (>= x 0) }  -- an int proven non-negative
+#refine{ x : int | (>= x 0) }  -- an int proven non-negative
 ```
 
 The key word is "proven". Unlike contract types, refinement types require the

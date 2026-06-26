@@ -568,9 +568,12 @@ println $ normalize $ vec3(1.0 0.0 0.0)
 Prefer `$` over neoteric when the outer call takes exactly one argument that is
 itself a call with multiple space-separated arguments.
 
-### Sweet-Exp Curly-infix -- `{a + b}` for arithmetic
+### Curly-infix -- `{a + b}` for arithmetic
 
-Use `{...}` for arithmetic expressions to make operator precedence visual.
+Curly-infix is enabled in every dialect (plain s-expression and sweet-exp
+alike), so `{...}` arithmetic is always available. Use it for arithmetic
+expressions to make operator precedence visual. Contract types, which used
+to share bare-brace syntax, live behind `#refine{var : T | pred}` now.
 
 ```turmeric
 let [area {width * height}]

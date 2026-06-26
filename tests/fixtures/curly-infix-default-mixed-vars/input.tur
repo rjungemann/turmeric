@@ -1,0 +1,5 @@
+(defn main [] : int
+  (let [w 10
+        h 20]
+    (println {w * h})
+    0))

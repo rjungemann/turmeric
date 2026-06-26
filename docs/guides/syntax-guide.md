@@ -9,7 +9,9 @@ description: How to read and write Turmeric -- s-expression and sweet-expression
 This guide is the front door to Turmeric's surface syntax. It teaches you to
 *read* and *write* Turmeric source in both dialects:
 
-1. The default **S-expression** dialect used by `.tur` files.
+1. The default **S-expression** dialect used by `.tur` files. SRFI-105
+   **curly-infix** is enabled here too -- `{a + b}` reads as `(+ a b)` in
+   every dialect, no `#lang` directive required.
 2. The **sweet-expression** dialect activated by `#lang sweet-exp` or a
    `.tur.sweet` extension (indentation + neoteric + `$` + curly-infix).
 

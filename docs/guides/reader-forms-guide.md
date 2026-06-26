@@ -255,16 +255,39 @@ A set literal.
 #s(:red :green :blue)
 ```
 
-### Contract type -- `{ var : T | pred }`
+### Contract type -- `#refine{ var : T | pred }`
 
 A refinement type annotation. Introduces a binding `var` of type `T` with
-predicate `pred`.
+predicate `pred`. Bare `{...}` is curly-infix in every dialect (see
+[Curly-infix](#curly-infix----a--b-) below), so contract types use the
+`#refine{...}` data-literal form alongside `#map{...}`, `#set{...}`,
+`#row{...}`, and `#r{...}`.
 
 ```turmeric no-check
-{ x : :int | (> x 0) }
+#refine{ x : :int | (> x 0) }
 ```
 ```sweet-exp
-{ x : :int | (> x 0) }
+#refine{ x : :int | (> x 0) }
+```
+
+### Curly-infix -- `{a + b}`
+
+SRFI-105 curly-infix is enabled in every dialect (plain s-expression
+Turmeric, `#lang sweet-exp`, `--lang curly-infix`, `--lang neoteric`). A
+bare `{...}` form with one repeated operator at the odd positions lowers
+to the equivalent prefix call; anything else lowers to `($nfx$ ...)` for a
+user-defined precedence macro to handle.
+
+```turmeric
+{1 + 2}              ; => (+ 1 2)
+{a * b}              ; => (* a b)
+{ {a + b} * c }      ; => (* (+ a b) c)
+{a + b * c}          ; => ($nfx$ a + b * c)  -- mixed operators
+```
+```sweet-exp
+{1 + 2}              ; => (+ 1 2)
+{a * b}              ; => (* a b)
+{ {a + b} * c }      ; => (* (+ a b) c)
 ```
 
 ---

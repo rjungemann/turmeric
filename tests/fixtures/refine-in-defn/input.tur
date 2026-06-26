@@ -1,0 +1,6 @@
+(defn checked-pos [x : #refine{n : int | (> n 0)}] : int
+  x)
+
+(defn main [] : int
+  (println (checked-pos 7))
+  0)

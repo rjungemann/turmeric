@@ -29,6 +29,7 @@ def small #set{1 2 3}
 | `[e1 e2 e3 ...]` *(expression position)* | `(vec-of e1 e2 e3 ...)` | element type inferred from the first element |
 | `#map{k1 v1 k2 v2 ...}` | `(hamt-of k1' v1 k2' v2 ...)` | keys normalized (see below); last duplicate key wins |
 | `#set{e1 e2 e3 ...}` | `(set-of e1 e2 e3 ...)` | duplicate elements collapse |
+| `#refine{ var : T \| pred }` | contract-type annotation | see [Contract Types Guide](contract-types-guide.md) |
 
 ```turmeric no-check
 [1 2 3]                       ; => (vec-of 1 2 3)

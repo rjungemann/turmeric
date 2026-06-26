@@ -1,0 +1,6 @@
+(defn pos [x : #refine{n : int | (> n 0)}] : int
+  x)
+
+(defn main [] : int
+  (println (pos 42))
+  0)
