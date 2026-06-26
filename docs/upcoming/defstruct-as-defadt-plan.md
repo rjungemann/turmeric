@@ -449,20 +449,54 @@ runtime *usage* seam, below.
    non-heap struct all at parity with the struct path (fixture
    `conv-defstruct-heap-struct-lowering`).
 
-   **Remaining (kept on the struct path by the gate):** a **parametric** `:heap`
-   struct (the stdlib `Vec`/`Map`/`Set`/`MutableMap`, whose inline-C bodies assume
-   the struct/typed-pointer rep) stays on the struct path until that
-   reconciliation lands -- the largest remaining piece.
+   **Parametric `:heap`-ADT carrier bridges (2026-06-26).** The next layer toward
+   the stdlib containers: when a parametric `:heap` struct lowers, a concrete
+   monomorph `(Vec int)` is a typed pointer `tur_adt_Vec__int *`, but the stdlib's
+   inline-C accessors are *carrier bases* (int64 in/out -- the int64 carrier IS the
+   handle).  Three flag-independent crossings were wired so the typed pointer and
+   the int64 carrier interconvert by reinterpret (never spill+address-of, never an
+   uncast pointer):
+   - **`emit_carrier_bridge`** (emit_core.c): its `:heap` reinterpret branch now
+     also fires for `type_is_heap_adt`, so a `(Vec int)` value crossing into a
+     carrier-ABI param emits `(int64_t)(intptr_t)(handle)` -- previously a lowered
+     `:heap` ADT fell through to the by-value-aggregate path and was spilled to a
+     stack temp whose ADDRESS was passed (`&__t28`, a pointer-to-handle -> segfault
+     on the first `vec-push!`).
+   - **`type_uses_carrier_abi`** (emit_core.c): a `:heap` ADT *app* now reports as
+     carrier-ABI (it is a pointer = carrier), like a parametric `:heap` *struct*
+     app -- so a `let` binding of a container is declared `int64_t`, not
+     `tur_adt_Vec__int *` (which mismatched every carrier-base call).
+   - **the carrier-return path** (emit_fns.c): an abstract parametric base whose
+     declared return is a `:heap` ADT (`box-mk : (Box A)`, `tcons : (Cons A)`) and
+     whose body tail is a `:heap` ctor call casts the typed-pointer result to the
+     int64 carrier instead of returning it uncast (`-Wint-conversion`) or
+     malloc-boxing it (double-box).
+   With these, the stdlib `Vec`/`Set`/`Map`/legacy-`List` all *run correctly* when
+   their `defstruct` is lowered (verified behind a local gate-open probe).  Proven
+   flag-independently by a hand-written carrier-base defadt
+   (`conv-heap-adt-carrier-base`): a `(Box int)` handle crosses into an inline-C
+   carrier base and reads back `42` -- WITHOUT the bridges it reads garbage.
+
+   **Remaining (kept on the struct path by the gate):** the gate still keeps a
+   **parametric** `:heap` struct on the struct path.  The containers run, but a few
+   carrier-bridge sites still emit a cosmetic `-Wint-conversion` *warning* (e.g. a
+   spec-call result `tcons__spec(..) : tur_adt_Cons__int *` bound into an `int64_t`
+   local inside `list-fmap`/`list-concat`).  Flipping the parametric-`:heap` gate
+   needs that warning sweep finished (the ~33 `type_is_heap_struct` emit sites
+   audited for a `|| type_is_heap_adt` sibling) AND the hand-written stdlib runtime
+   (`tur_option_t`/`tur_result_box_t`, the Vec/Map/Set inline-C) reconciled or
+   retired -- the largest remaining piece.
 4. **Validation across every autoloaded parametric stdlib type**, then delete the
    gate + `g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]` row, retire the
    `StructDef` surface path, and regenerate snapshots.
 
 ### Current state (suite green)
 
-`bash tests/run.sh` is **1845 passed, 0 failed** with the gate widened to
+`bash tests/run.sh` is **1846 passed, 0 failed** with the gate widened to
 parametric (non-`:heap`) structs and **non-parametric `:heap` structs**; the
-flag-on `conv-defstruct-*` canaries pass (including the new
-`conv-defstruct-heap-struct-lowering`).  The flag is still opt-in.  **`Option`
+flag-on `conv-defstruct-*` canaries pass (including
+`conv-defstruct-heap-struct-lowering`), plus the flag-independent
+`conv-heap-adt-carrier-base`.  The flag is still opt-in.  **`Option`
 and `Result` -- the two hardest dedicated-codegen stdlib types -- now work under
 the flag at parity with the no-flag baseline:** construction
 (`some`/`none`/`ok`/`err`), accessors (`ok?`/`ok-val`/`err-val`/`unwrap-or`), and
@@ -471,12 +505,15 @@ results.  (`fmap`/`bind` on `Result` remain blocked by a *baseline* type-recover
 limitation, not the lowering.)
 
 Seams 1, 1b, 2 are DONE, and seam 3 now covers the `:heap` ADT ABI foundation
-(a hand-written `:heap` defadt lowers and runs) **and non-parametric `:heap`-struct
-auto-lowering** (`conv-defstruct-heap-struct-lowering`).  Graduation order from
-here: finish **seam 3** -- lower the **parametric** stdlib `:heap` containers
-(`Vec`/`Map`/`Set`/`MutableMap`), whose inline-C assumes the struct rep, the last
-representational gap -> **seam 4** (validate across every parametric stdlib
-type, then delete the gate + `g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]`
-row, retire the `StructDef` surface path, regen snapshots).  The suite does not
-yet exercise the by-value HKT usage the flag now supports, so adding flag-on
-fixtures for it is part of seam 4.
+(a hand-written `:heap` defadt lowers and runs), **non-parametric `:heap`-struct
+auto-lowering** (`conv-defstruct-heap-struct-lowering`), **and the parametric
+`:heap`-ADT carrier bridges** (`conv-heap-adt-carrier-base`) -- with these the
+lowered stdlib `Vec`/`Set`/`Map`/`List` all run correctly behind a gate-open
+probe.  Graduation order from here: finish **seam 3** -- complete the
+carrier-bridge warning sweep (the remaining `type_is_heap_struct` -> `||
+type_is_heap_adt` emit sites), reconcile/retire the hand-written stdlib runtime,
+then flip the parametric-`:heap` gate -> **seam 4** (validate across every
+parametric stdlib type, then delete the gate + `g_opt_defstruct_as_defadt` + the
+`EXPERIMENTS[]` row, retire the `StructDef` surface path, regen snapshots).  The
+suite does not yet exercise the by-value HKT usage the flag now supports, so
+adding flag-on fixtures for it is part of seam 4.

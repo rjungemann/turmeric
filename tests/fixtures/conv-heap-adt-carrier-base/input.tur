@@ -1,0 +1,28 @@
+;; CONV-S1 seam 3: a hand-written parametric :heap record ADT whose handle
+;; crosses between the concrete typed-pointer monomorph (`tur_adt_Box__int *`,
+;; what `(Box int)` lowers to) and the int64 carrier an inline-C base reads.
+;; This is the shape the stdlib :heap containers (Vec/Map/Set) use: their
+;; accessors are inline-C *carrier bases* (int64 in/out), while a concrete
+;; `(Box int)` value is a typed pointer.  The heap-ADT carrier bridges must
+;; reinterpret-cast across the boundary, never spill+address-of (which would
+;; pass a pointer-to-handle) and never read the handle uncast (garbage).
+;; Flag-independent: this is a hand-written defadt, no experiment needed.
+(defdata Box :heap [A] (Box [val : A]))
+
+;; inline-C carrier base: takes the int64 carrier, which for a :heap value IS
+;; the typed-pointer handle.  Reads the boxed value back through it.
+(defn box-rawget [A] [b : (Box A)] : int
+  ```c
+  struct { int64_t val; } *p = (void*)(intptr_t)b;
+  return (int)p->val;
+  ```)
+
+;; a base that RETURNS the carrier handle for a freshly built :heap value -- the
+;; return must reinterpret the typed pointer to the int64 carrier, not malloc-box.
+(defn box-mk [A] [v : A] : (Box A) (Box v))
+
+(defn main [] : int
+  (let [b (box-mk 42)]
+    (println (.val b))        ; 42  -- auto-accessor (specialized typed-pointer path)
+    (println (box-rawget b))  ; 42  -- inline-C carrier base (typed-pointer <-> carrier crossing)
+    0))
