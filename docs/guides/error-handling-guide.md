@@ -20,6 +20,12 @@ Turmeric offers two primary error handling strategies:
 Contract macros (`assert!`, `require!`, `ensure!`, `invariant!`) provide structured
 precondition and postcondition checking built on top of `panic`.
 
+> **Removed in 0.25.0:** `throw` / `try` / `catch` have been deleted end-to-end.
+> Use `Result` for recoverable failures and `panic` / `catch-unwind` for
+> unrecoverable ones. Fiber rejection (from `await`, `with-timeout`,
+> `task-cancel`) now surfaces as `TURI_REJECTION` and is observed with
+> `(error? r)` / `(error-message r)` rather than `try`/`catch`.
+
 ---
 
 ## `Result`

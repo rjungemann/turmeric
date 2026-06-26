@@ -371,6 +371,59 @@ Post-v0.20.0 sweep (2026-06-12):
 - **[turi-native-set-count-layout-overflow.md](history/turi-native-set-count-layout-overflow.md)** -- `native_set_*` shims rewritten over `{void* hamt}`; `set.tur` joined the prelude; HAMT-backed `#set{}` literals now safe under `--interpret` (TI8.b/W1b)
 - **[turi-select-needs-channel-primitives.md](history/turi-select-needs-channel-primitives.md)** -- `(select ...)` carve-out documented in [eval-api.md](../guides/eval-api.md); real native-channel `EX_SELECT` interpretation tracked in `docs/archive/turi-parity-post-v1-plan.md`
 
+Post-v0.24.x / v0.25.x sweep (2026-06-26):
+
+- **[drop-x-flags-plan.md](history/drop-x-flags-plan.md)** -- All 16 `-X` flags now accept-and-warn no-ops (v0.24.0); see [compiler-flags-guide.md](../guides/compiler-flags-guide.md)
+- **[experimental-flag-mechanism-plan.md](history/experimental-flag-mechanism-plan.md)** -- `--enable=<name>` registry (XF0-XF4, XF6); shipped v0.24.3 (#524); see [experimental-flags-guide.md](../guides/experimental-flags-guide.md)
+- **[experimental-flag-xf5-stale-premise.md](history/experimental-flag-xf5-stale-premise.md)** -- XF5 deferred with explicit rationale; resolved
+- **[stm-fine-grained-locking-plan.md](history/stm-fine-grained-locking-plan.md)** -- TL2 fine-grained locking complete (v0.24.3 #528); see [stm-guide.md](../guides/stm-guide.md)
+- **[spices-c-sources-plan.md](history/spices-c-sources-plan.md)** -- `:c-sources` / `:c-includes` manifest keys shipped (v0.24.1 #516); see [developing-spices-guide.md](../guides/developing-spices-guide.md)
+- **[throw-deprecation-plan.md](history/throw-deprecation-plan.md)** -- `throw`/`try`/`catch` removed end-to-end (v0.25.0); see [error-handling-guide.md](../guides/error-handling-guide.md)
+- **[catch-unwind-drops-captures-segv.md](history/catch-unwind-drops-captures-segv.md)** -- `catch-unwind` capture drop SEGV resolved (v0.24.x)
+- **[callcc-escape-through-cont-param-misslowers.md](history/callcc-escape-through-cont-param-misslowers.md)** -- CC4 flavored continuations (v0.25.0 #527)
+- **[carrier-crossing-recovery-routing-plan.md](history/carrier-crossing-recovery-routing-plan.md)** -- Carrier-crossing recovery routing; resolved
+- **[always-on-linear-session-fixture-failures.md](history/always-on-linear-session-fixture-failures.md)** -- Linear/session fixture failures from always-on graduation (v0.24.1 #518)
+- **[b4-fat-closure-byvalue-adt-abi-plan.md](history/b4-fat-closure-byvalue-adt-abi-plan.md)** -- B4 fat-closure by-value ADT ABI graduated (v0.25.2)
+- **[byvalue-result-field-access-casts-aggregate-to-pointer.md](history/byvalue-result-field-access-casts-aggregate-to-pointer.md)** -- By-value `Result` field access codegen fix
+- **[struct-adt-convergence-s1-bridging-findings.md](history/struct-adt-convergence-s1-bridging-findings.md)** -- CONV-S1 struct/ADT convergence (v0.25.2 #540/#546)
+- **[struct-return-through-closure-loses-type-report.md](history/struct-return-through-closure-loses-type-report.md)** -- By-value struct/ADT results through closure ABI (#538); paper trail at `struct-return-through-closure-loses-type.md`
+- **[struct-ergonomics-plan.md](history/struct-ergonomics-plan.md)** -- Auto-bound constructor + keyword args + `with` form (v0.25.1 #535)
+- **[struct-constructor-currying-plan.md](history/struct-constructor-currying-plan.md)** -- Constructor currying (CURRY-V0/V1/V2 + DOC); shipped
+- **[parametric-struct-fn-field-call-passes-concrete-arg-to-carrier-ptr.md](history/parametric-struct-fn-field-call-passes-concrete-arg-to-carrier-ptr.md)** -- Parametric struct fn-field carrier-ptr ABI fix (v0.25.1 #534)
+- **[parametric-defstruct-fn-field-gaps.md](history/parametric-defstruct-fn-field-gaps.md)** -- Remaining defstruct fn-field gaps (v0.24.3 #523/#525)
+- **[make-struct-parametric-fn-field-inference.md](history/make-struct-parametric-fn-field-inference.md)** -- Type-arg inference from fn-typed fields; resolved
+- **[typeclass-associated-types-followups-plan.md](history/typeclass-associated-types-followups-plan.md)** -- Multi-param projection + fundeps (v0.24.3 #522)
+- **[dot-method-call-misroutes-to-typeclass.md](history/dot-method-call-misroutes-to-typeclass.md)** -- `(. obj field args)` receiver-first routing (v0.25.1 #533)
+- **[used-attr-not-honored-in-single-file-whole-program.md](history/used-attr-not-honored-in-single-file-whole-program.md)** -- `#[used]` honored on single-file builds (v0.25.1 #532)
+- **[macro-typed-inline-lambda-arg.md](history/macro-typed-inline-lambda-arg.md)** -- Typed inline lambdas as macro arguments (v0.25.0 #529)
+- **[macro-args-elaborated-before-expansion.md](history/macro-args-elaborated-before-expansion.md)** -- Per-parameter `^syntax` marker landed
+- **[macro-backquote-dot-sym-drops-siblings.md](history/macro-backquote-dot-sym-drops-siblings.md)** -- No longer reproduces; resolved
+- **[list-macro-quote-vs-syntactic-symbol.md](history/list-macro-quote-vs-syntactic-symbol.md)** -- F_QUOTE-wrapped F_SYM in call-head position; resolved
+- **[multi-param-struct-annotation-degenerate-tyapp.md](history/multi-param-struct-annotation-degenerate-tyapp.md)** -- Multi-param struct annotation fixed end-to-end
+- **[eq-map-typed-consumer-blocked-on-transparent-newtype.md](history/eq-map-typed-consumer-blocked-on-transparent-newtype.md)** -- `Map` now a non-transparent `:heap` struct
+- **[eval-mode-unknown-call-deferred-to-runtime.md](history/eval-mode-unknown-call-deferred-to-runtime.md)** -- TUR-W0040 deferred-call diagnostic
+- **[ct-primitives-cannot-walk-type-ann-nodes.md](history/ct-primitives-cannot-walk-type-ann-nodes.md)** -- `type-ann-inner` and `type-ann?` shipped
+- **[nested-vec-literals-collapse-to-runtime-vec.md](history/nested-vec-literals-collapse-to-runtime-vec.md)** -- Not reproducible; resolved
+- **[defgodot-script-macro-vec-quote-semantics.md](history/defgodot-script-macro-vec-quote-semantics.md)** -- Closed / archived
+- **[godot-binding-api-surface-expansion-plan.md](history/godot-binding-api-surface-expansion-plan.md)** -- T3.A-T3.E shipped; see [godot-binding-guide.md](../guides/godot-binding-guide.md)
+- **[godot-binding-game-ergonomics-plan.md](history/godot-binding-game-ergonomics-plan.md)** -- T4.A-T4.D shipped; see [godot-binding-guide.md](../guides/godot-binding-guide.md)
+- **[libturi-embed-include-paths.md](history/libturi-embed-include-paths.md)** -- libturi embed include paths fix
+- **[libturi-embed-interpret-mode-flag.md](history/libturi-embed-interpret-mode-flag.md)** -- libturi interpret-mode flag
+- **[libturi-per-embed-env-and-peripherals.md](history/libturi-per-embed-env-and-peripherals.md)** -- Per-embed env + peripherals (Gaps 1-8 all landed)
+- **[let-bind-passbyptr-struct-param-invalid-initializer.md](history/let-bind-passbyptr-struct-param-invalid-initializer.md)** -- Invalid C initializer for by-pointer struct param (v0.25.2 #542)
+- **[turi-value-pool-residual-sites.md](history/turi-value-pool-residual-sites.md)** -- Residual pooling sites tracked
+- **[turi-env-owned-value-arena-pool-plan.md](history/turi-env-owned-value-arena-pool-plan.md)** -- Env-owned value arena pool Phase 1 (v0.25.2 #537)
+- **[c-num-spelling-uninitialized-on-some-type-paths.md](history/c-num-spelling-uninitialized-on-some-type-paths.md)** -- Bare `Type t;` zero-init fix
+- **[untyped-native-registration-blocks-curated-facades.md](history/untyped-native-registration-blocks-curated-facades.md)** -- Typed native registration API landed
+- **[tur-build-cmake-deps-workspace-overreach.md](history/tur-build-cmake-deps-workspace-overreach.md)** -- Workspace cmake-dep overreach resolved
+- **[project-mode-no-stdlib-autoload.md](history/project-mode-no-stdlib-autoload.md)** -- Project-mode stdlib autoload fix
+- **[tourist-session-followups-plan.md](history/tourist-session-followups-plan.md)** -- S0/R0/V0/C0 all landed
+- **[thread-pool-followups-plan.md](history/thread-pool-followups-plan.md)** -- TY-V0/WORK-V0/FUT-V0/SCOPE-V0/TRY-V0 all landed
+- **[valkey-typed-variadic-cmd-builder-plan.md](history/valkey-typed-variadic-cmd-builder-plan.md)** -- P0+P1+P2 all landed
+- **[spices-pr47-watch-notebook-triage.md](history/spices-pr47-watch-notebook-triage.md)** -- Triage concluded
+- **[mise-plugin-plan.md](history/mise-plugin-plan.md)** -- Mise plugin shipped (v0.25.2); see [mise-asdf-guide.md](../guides/mise-asdf-guide.md)
+- **[end-to-end-monomorphization-plan.md](history/end-to-end-monomorphization-plan.md)** -- Track A complete (archived 2026-06-19); successor track at `end-to-end-monomorphization-plan-2.md`
+
 Earlier additions:
 
 - **[frame-spice-plan.md](history/frame-spice-plan.md)** -- `tur-frame` dataframe spice; FR0-FR10 complete; see [frame-guide.md](../guides/frame-guide.md)
