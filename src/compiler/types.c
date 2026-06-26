@@ -1465,7 +1465,17 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
      * CONV-S1 ctor -- no heap box, no tag.  Hard-off until the crossings wire. */
     bool app_byval = adt_app_is_byvalue_product(g_adt_apps[idx].type);
 
-    /* Emit per-constructor functions for this monomorphised ADT instance. */
+    /* Emit per-constructor functions for this monomorphised ADT instance.
+     *
+     * Same cross-emission dedup story as the typedef guard above: the typedef is
+     * keyed on TUR_TY_<name>, but the ctor functions were emitted UNGUARDED, so
+     * a monomorph reached by two emit paths (e.g. the whole-program pass and the
+     * early-file mirror, common once a lowered parametric struct's monomorph --
+     * `Option__opaque`, `Vec__opaque` -- is requested from both) produced a
+     * `redefinition of ctor_<name>` at cc.  Guard the ctor block on TUR_FN_<name>
+     * so the first definition wins, exactly as the typedef does. */
+    buf_printf(out, "#ifndef TUR_FN_%s\n", adt_inst_name);
+    buf_printf(out, "#define TUR_FN_%s\n", adt_inst_name);
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
         CtorDef *ctor = def->ctors[ci];
         size_t mlen = strlen(ctor->name);
@@ -1545,6 +1555,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
         free(val_ctype);
         free(mctor);
     }
+    buf_printf(out, "#endif\n");
 
     buf_free(&suffix);
     g_adt_apps[idx].emitted  = true;
