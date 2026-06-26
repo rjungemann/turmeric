@@ -591,9 +591,10 @@ runtime *usage* seam, below.
      regenerated.  *Cleared ~43* (`httpd-*`, `clone-*`, `eqmap-struct`, the `Pos`
      `typeclass-*` tests).  Fixture `conv-defstruct-inline-c-abi`.
 
-   **Running total: 212 -> 96 real blockers (55%); default suite stays 1857/0.**
-   (Sub-root (a) -- 0-arg construct in control flow -- and the inline-C-tail
-   return bridge are LANDED.)
+   **Running total: 212 -> 73 unique build-failing fixtures under force-lower
+   (default suite stays 1857/0).**  (Sub-root (a) -- 0-arg construct in control
+   flow -- the inline-C-tail return bridge, the accessor-unbox, and the
+   assignment-position straddle are all LANDED.)
 
    **Remaining blockers (~99), by signature.**  The biggest cluster is the
    **by-value-aggregate <-> int64-carrier ABI bridge** family (~33): `incompatible
@@ -658,10 +659,24 @@ runtime *usage* seam, below.
      (still open): a `Pos r; return r;` inline-C instance body under an int64
      signature -- the SIGNATURE must be the by-value aggregate, not the carrier
      (`typeclass-fundep-collect`, `typeclass-multiparam-storage-dispatch`).  (3)
-     *assignment-position straddle* (still open): an int64 carrier value stored
-     into a by-value let/temp (`tail-call-inline-c-carrier-bridge`'s residual
-     error; also `nested-construct-byvalue-decode`'s residual nested-construct
-     straddle).
+     *assignment-position straddle* **DONE (2026-06-26)**: an int64 carrier value
+     (from an inline-C / construct producer whose lowered by-value ADT-app result
+     is nonetheless emitted as the carrier) stored into a by-value if/do/let merge
+     temp.  The `if` branch already bridged per arm; `do`/`let` assigned the raw
+     carrier into the by-value temp AND a stale M5 trailing deref fired on the
+     already-by-value merge (double bridge).  Fixed by (a) recovering the inline-C
+     by-value result in `fn_body_tail_byvalue_carrier_type` (gated
+     `!type_uses_carrier_abi` so it is strictly lowering-only -- at default the
+     same type IS the carrier and the carrier-temp + single M5 deref already
+     handles it), (b) a `do`/`let` companion to the if-arm bridge
+     (`bridge_control_value_to_byvalue_temp` in emit_do_value/emit_let_value/
+     emit_letrec_value), and (c) stopping `fn_body_tail_returns_carrier_value`
+     from descending into do/let (those now bridge their own tail, so the M5
+     return deref must not re-fire).  Clears `tail-call-inline-c-carrier-bridge`.
+     (`nested-construct-byvalue-decode`'s residual error is a *different* sub-root
+     -- a `#{Construct}` accessor template, `unwrap`/`ok-val`, returning a by-value
+     element as the int64 carrier; that is the accessor-unbox family, not the
+     merge straddle.)
    - **inline-C instance method returning a by-value aggregate** (`Pos r; return
      r;`) under an int64 carrier signature -- the compiler cannot rewrite inside
      inline-C, so the method's C signature must be the concrete aggregate (an
