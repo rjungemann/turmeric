@@ -2386,6 +2386,27 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
     e->expected_type = saved_expected;
     if (!inner) return NULL;
 
+    /* CONV-S1 (defstruct-as-defadt, seam 4): ascribing a concrete ADT app onto
+     * an ADT constructor call whose own type is left bare/under-applied.  A
+     * parametric struct whose type parameter is not pinned by its field types
+     * (e.g. `(defstruct ArrW [a] (raw :int))` -- `a` never appears in a field)
+     * gives `(make-struct ArrW 0)` the bare TY_ADT result type; only the
+     * ascription `(:: ... (ArrW int))` knows the monomorph.  Without refining
+     * the ctor call's type, codegen emits the int64-carrier base `ctor_ArrW`
+     * but the ascribed binding is declared `tur_adt_ArrW__int`, so the
+     * initializer is a hard cc type error.  When the ascription names a concrete
+     * app of the SAME ADT the ctor builds, push that app type onto the ctor call
+     * so the per-monomorph ctor (`ctor_ArrW__int`) is selected. */
+    if (ascribed->kind == TY_APP && inner->kind == EX_CALL &&
+        inner->as.call_.ctor &&
+        (inner->type.kind == TY_ADT || inner->type.kind == TY_APP)) {
+        AdtDef *asc_def = type_adt_app_def(ascribed);
+        AdtDef *inner_def = (inner->type.kind == TY_ADT)
+            ? inner->type.as.adt_.def : type_adt_app_def(&inner->type);
+        if (asc_def && asc_def == inner_def)
+            inner->type = *ascribed;
+    }
+
     /* TS3.3: if both source and target are scalar same-size kinds and they
      * differ, insert an EX_REINTERPRET. */
     TypeKind src_kind = inner->type.kind;
