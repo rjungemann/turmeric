@@ -239,7 +239,60 @@ bool fn_body_tail_is_carrier_producer(const Expr *e) {
                 b->type.as.fn.result_full_type &&
                 type_uses_carrier_abi(*b->type.as.fn.result_full_type))
                 return true;
+            /* CONV-S1 seam 4 (return-bridge): under the defstruct-as-defadt
+             * lowering a parametric ADT app (`(Result cstr cstr)`) is a BY-VALUE
+             * type, so `type_uses_carrier_abi` reports false -- yet an inline-C
+             * body is still EMITTED with an int64 carrier return (emit_fns.c's
+             * signature path lowers an inline-C TY_APP result to int64_t, since it
+             * is neither a typed pointer nor a TY_STRUCT).  A pure-Turmeric wrapper
+             * whose own return is the by-value aggregate (`capture` -> the int64
+             * `captures-get`) therefore still needs the carrier->by-value bridge.
+             * Recognise a non-heap TY_APP inline-C result as a carrier producer. */
+            if (b->body_is_inline_c && b->type.kind == TY_FN &&
+                b->type.as.fn.result_full_type &&
+                b->type.as.fn.result_full_type->kind == TY_APP &&
+                !type_is_heap_struct(*b->type.as.fn.result_full_type) &&
+                !type_is_heap_adt(*b->type.as.fn.result_full_type))
+                return true;
             return false;
+        }
+        default:
+            return false;
+    }
+}
+
+/* CONV-S1 seam 4 (return-bridge): true when the body tail is a direct call to an
+ * INLINE-C function whose by-value ADT-app result is nonetheless EMITTED as the
+ * int64 carrier.  Under the defstruct-as-defadt lowering a parametric ADT app
+ * (`(Result cstr cstr)`) is a by-value type, so `type_uses_carrier_abi` reports
+ * false -- but emit_fns.c still lowers an inline-C body with a TY_APP result to an
+ * int64_t C return, so a pure-Turmeric wrapper whose own return is the by-value
+ * aggregate returns that int64 into the aggregate slot.  This narrowly widens the
+ * M5 straddle gate (whose `type_uses_carrier_abi(body type)` test misses the
+ * lowered case) to exactly that shape -- NOT to an if/construct merge tail (which
+ * the (a) fix already lowers by value, so unboxing it would be wrong).  At default
+ * (no lowering) the inline-C result is the carrier rep and the M5 gate already
+ * handles it, so this stays inert. */
+static bool fn_body_tail_returns_carrier_value(EmitCtx *ctx, const Expr *e) {
+    (void)ctx;
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_ASCRIBE:
+            return fn_body_tail_returns_carrier_value(ctx, e->as.ascribe_.inner);
+        case EX_DO:
+            return e->as.do_.n > 0 &&
+                   fn_body_tail_returns_carrier_value(ctx, e->as.do_.items[e->as.do_.n - 1]);
+        case EX_LET:
+        case EX_LETREC:
+            return fn_body_tail_returns_carrier_value(ctx, e->as.let_.body);
+        case EX_CALL: {
+            const Binding *b = e->as.call_.fn_binding;
+            if (!b || b->type.kind != TY_FN || !b->type.as.fn.result_full_type)
+                return false;
+            Type rft = *b->type.as.fn.result_full_type;
+            return b->body_is_inline_c && rft.kind == TY_APP
+                && !type_uses_carrier_abi(rft)
+                && !type_is_heap_struct(rft) && !type_is_heap_adt(rft);
         }
         default:
             return false;
@@ -1402,7 +1455,8 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             free(bridged);
         } else if (!ret_is_int64_carrier && ret_ctype
                    && fd->body->type.kind != TY_NEVER
-                   && type_uses_carrier_abi(emit_resolve_type(ctx, fd->body->type))
+                   && (type_uses_carrier_abi(emit_resolve_type(ctx, fd->body->type))
+                       || fn_body_tail_returns_carrier_value(ctx, fd->body))
                    && fn_body_tail_is_carrier_producer(fd->body)
                    && !fn_body_tail_emits_byvalue_carrier_abi(ctx, fd->body)) {
             /* M5 straddle (root cause C): an ordinary function or lifted lambda
