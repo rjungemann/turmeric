@@ -527,29 +527,88 @@ runtime *usage* seam, below.
    non-parametric-`:heap` / parametric / parametric-`:heap`) now lowers.
 4. **Full graduation:** delete the gate + `g_opt_defstruct_as_defadt` + the
    `EXPERIMENTS[]` row, make lowering unconditional, retire the `StructDef` surface
-   path, and regenerate snapshots.  NOT yet ready, and the gap is **large**: a
-   force-lower probe (a temporary `getenv("TUR_FORCE_LOWER")` bypass at the top of
-   `defstruct_lowers_to_adt` that makes lowering unconditional) shows **~229 unique
-   fixtures fail** -- the bulk are `tur build` failures in fixtures never written
-   for the flag, exercising struct-specific features the ADT lowering path does not
-   yet cover.  Rough clusters from the probe:
-   - **constrained-generic / instance dispatch** (`constrained-generic-*`,
-     `constrained-instance-*`, `applied-struct-instance-element-discrimination`) --
-     element/receiver dispatch over a lowered struct;
-   - **clone / linear / borrow** (`clone-{list,option,pair,vec}`, `borrow-struct-
-     field`, `future-linear`, `backtrack-clone-ref`) -- substructural paths;
-   - **defstruct feature edges** (`defstruct-inline-c-byvalue*`,
-     `defstruct-byvalue-struct-field`, `defstruct-opaque-field-readback`,
-     `defstruct-fn-field-single-arg`, `dot-parametric-fn-field-call`);
-   - **HKT cata carriers** (`hkt-cata-*`) -- B4 territory, already deemed
-     out-of-scope/moot for real `defstruct`s (a struct cannot express a
-     functor-applied-to-self field), so these likely get *excluded* at graduation
-     rather than fixed;
-   - **exists-pack / opaque / heap-make-struct** edges.
+   path, and regenerate snapshots.  NOT yet ready, and the gap is **large**.
+
+   **Measured force-lower scope (2026-06-26).** A force-lower probe (a temporary
+   `getenv("TUR_FORCE_LOWER")` bypass at the top of `defstruct_lowers_to_adt` that
+   forces every well-formed `defstruct` to lower) shows **323 failing fixtures
+   total** when forcing *literally every* struct (including `:linear` outer
+   structs and applied-type/`exists` fields the field-lowerability gate still
+   legitimately rejects).  Keeping the field-lowerability checks and forcing only
+   the flag, the realistic graduation baseline is **312 fixtures**, of which
+   **~166 are codegen (snapshot) mismatches** -- expected drift resolved by
+   regenerating `expected.c` at graduation, NOT bugs -- leaving **212 real
+   `tur build`/`emit-c`/`stdout` blockers** at the start of this work.  (The
+   earlier "~60" / "~229" estimates in this plan were stale; 212 real is the
+   measured number.)
+
+   **Cleared this session (4 commits, flag-independent, default suite stays
+   green; 212 -> 142 real blockers).**
+   - **Instance/dict name manglers lacked a `TY_ADT` arm** -- the four parallel
+     manglers (`build_inst_type_suffix`, `emit_dict_name`, the DICT-expr
+     `dict_name`, the `emit_stmt.c` inline builder) fell through to `"T"` for an
+     ADT-headed instance, so every non-parametric ADT-headed instance of a class
+     collapsed to the `_T` suffix.  The idempotent re-instance guard then silently
+     swallowed all but the first instance (spurious "no instance", TUR-E0001), and
+     the emitted `dict_<Class>_T` collided (ODR).  *Cleared ~19*
+     (`constrained-generic-*`, `constrained-instance-*`, `instance-*`,
+     `typeclass-*`).  Fixture `conv-defstruct-multi-instance-dispatch`.
+   - **seq pair helpers hardcoded the `Tuple2` C type** in inline-C
+     (`Tuple2 *p; p->e1`), which lowering renames to `tur_adt_Tuple2` with a
+     nested `as.Tuple2._N` layout.  Rewrote them over a private flat
+     `struct __seq_pair2` (opaque int64 handle either way).  *Cleared ~37* (the
+     whole `seq-*` cluster).  Fixture `conv-defstruct-seq-pair-lowering`.
+   - **Ascribed under-applied parametric ctor selected the carrier base.**  A
+     parametric struct whose type param is not pinned by a field
+     (`(defstruct BoxW [a] (raw :int))`) leaves `(make-struct BoxW 5)` bare
+     `TY_ADT`; only the `(:: ... (BoxW int))` ascription knows the monomorph.
+     `elab_ascribe` now pushes the concrete same-ADT app onto the ctor call so the
+     monomorph ctor is chosen.  *Cleared ~14* (`instance-closure-return-*`,
+     `poly-to-fat-*`).  Fixture `conv-defstruct-ascribed-monomorph-ctor`.
+   - **Monomorphised ADT ctor functions were emitted unguarded** (the typedef had
+     an `#ifndef TUR_TY_<name>` guard, the ctor did not), so a monomorph reached
+     by two emit paths redefined `ctor_<name>` at cc.  Added the matching
+     `#ifndef TUR_FN_<name>` guard.  Correct ODR fix; the two triggering fixtures
+     carry separate downstream issues so it clears none on its own.
+
+   **The central remaining blocker: inline-C that assumes the struct's flat C
+   ABI.**  By failure-signature, the largest remaining real cluster is
+   `'tur_adt_<Name>' has no member named '<field>'` (~38) plus `unknown type name
+   '<Name>'` (~8, e.g. `Tuple2`/`Pos`) plus `request for member ...` (~3).  All
+   are the same shape: hand-written inline-C (in stdlib `httpd.tur`'s
+   `httpd-set-cookie!`, the `clone-*` instances, `eqmap-struct`, `tuple2-inline-c`,
+   the `Pos`-based `typeclass-*` tests) reads a lowered struct **by its surface C
+   type name and flat field names** (`opts.name`, `sizeof(CookieOpts)`,
+   `(Tuple2 *)`), but the lowered ADT is `tur_adt_<Name>` with a nested
+   `as.<Ctor>._N` layout.  Two principled fixes, pick one before this cluster can
+   close:
+   - (a) **C-ABI-compatible layout for single-variant record ADTs** -- emit a
+     FLAT struct using the record's real field names plus a
+     `typedef tur_adt_<Name> <Name>;` alias, so `sizeof(<Name>)`, `(<Name> *)`,
+     and `v.field` in inline-C all keep working.  Highest leverage (clears ~50 at
+     once) but it changes the layout of *every* single-variant record ADT and
+     touches every field-access / ctor / match / drop-glue / pass-by-ptr site that
+     currently reads `as.<Ctor>._N`, plus a full snapshot regen -- a large, risky
+     change that warrants its own focused seam.
+   - (b) **rewrite the inline-C** to be representation-independent (as done for the
+     seq pair helpers) -- safe and incremental, but does not generalise to
+     fixtures whose inline-C genuinely receives a by-value struct value
+     (`httpd-set-cookie!`'s `opts.name`), which has no representation-independent
+     spelling.
+   The remaining non-inline-C blockers are smaller: ~20 fixtures that now **build
+   but mismatch at runtime** (`OK_RUNTIME` -- a lowered-path correctness bug, e.g.
+   `hkt-ap-fn-in-container` prints 4150 vs the baseline's 4175), ~8
+   `incompatible type for argument` (carrier<->by-value ABI bridges), a handful of
+   `incompatible types when returning/initializing` (ditto), and the moot
+   **`hkt-cata-*`** carriers (B4 territory -- a real `defstruct` cannot express a
+   functor-applied-to-self field, so these get *excluded* at graduation, not
+   fixed).
+
    Each non-moot cluster must be driven to zero -- promote a representative
    force-lower failure to a flag-on fixture, fix the lowering, repeat -- before the
-   gate can be deleted and snapshots regenerated.  This is a multi-step phase in
-   its own right, comparable in size to seams 1-3 combined.
+   gate can be deleted and snapshots regenerated.  This remains a multi-step phase
+   in its own right, larger than seams 1-3 combined; the inline-C-ABI cluster (a)
+   is the single biggest piece.
 
 ### Current state (suite green)
 
@@ -573,10 +632,17 @@ non-parametric `:heap`-struct auto-lowering, the parametric `:heap`-ADT carrier
 bridges, the carrier-bridge warning sweep, AND the parametric-`:heap` gate flip --
 the autoloaded stdlib `Vec`/`Set`/`Map`/`List` now lower to record ADTs under the
 flag, build `-Wint-conversion`-clean, and run at parity with the struct path.
+
 What remains is **step 4 (full graduation)**: make lowering unconditional (delete
 the gate + `g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]` row), retire the
-`StructDef` surface path, and regen snapshots.  A force-lower probe (lowering
-*every* `defstruct` unconditionally) still surfaces ~60 build failures in fixtures
-never written for the flag -- the edge cases the flag-on path does not yet cover.
-Driving those to zero (promote each to a flag-on fixture + fix) is the gating work
-before the experiment can graduate.
+`StructDef` surface path, and regen snapshots.  **Seam 4 is IN PROGRESS** (see the
+step-4 entry above for the measured scope and the running cleared-cluster log).
+The default `bash tests/run.sh` is **green (1853 passed, 0 failed)** with four
+flag-independent seam-4 fixes landed; the force-lower probe is down from **212 to
+142 real (non-snapshot) blockers**.  The dominant remaining cluster is the
+inline-C-assumes-struct-C-ABI family (`'tur_adt_<Name>' has no member` /
+`unknown type name '<Name>'`), whose principled fix -- a C-ABI-compatible flat
+named layout + `typedef <Name>` alias for single-variant record ADTs -- is the
+single largest remaining piece and warrants its own focused seam.  Driving the
+remaining clusters to zero (promote each to a flag-on fixture + fix) is the gating
+work before the experiment can graduate.
