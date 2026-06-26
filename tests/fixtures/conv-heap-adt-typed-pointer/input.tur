@@ -1,0 +1,17 @@
+;; CONV-S1 seam 3: a :heap record ADT lowers to a typed pointer
+;; (`tur_adt_<Name>__<args> *`) to a heap-allocated header -- the ADT analogue
+;; of a :heap struct's `Name *`.  The ctor mallocs the header and returns the
+;; pointer; field access derefs through `->`.  Flag-independent (a hand-written
+;; `(defdata X :heap ...)` lowers this way regardless of the experiment).
+(defdata HCell :heap [A] (HCell [fst : A snd : int]))
+
+(defn mk [A] [x : A] : (HCell A) (HCell x 7))
+(defn getf [A] [c : (HCell A)] : A   (.fst c))
+(defn gets [A] [c : (HCell A)] : int (.snd c))
+
+(defn main [] : int
+  (let [c (mk 35)]
+    (println (getf c))          ; 35
+    (println (gets c))          ; 7
+    (println (+ (getf c) (gets c)))  ; 42
+    0))

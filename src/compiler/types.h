@@ -278,6 +278,11 @@ typedef struct AdtDef {
     CtorDef   **ctors;           /* arena-allocated pointer array */
     bool        is_copy;         /* :copy annotation */
     bool        needs_drop_glue; /* any ctor has rc/ref/weak fields */
+    /* CONV-S1 seam 3: :heap -- this record ADT's natural monomorphic ABI is a
+     * typed pointer (`tur_adt_<Name>__<args> *`) to a heap-allocated header, the
+     * ADT analogue of a :heap StructDef (Vec/Map/Set).  Set by defdata on `:heap`
+     * (and by the defstruct->defadt lowering of a `:heap` struct). */
+    bool        is_heap;
     /* Phase G1: GADT flag and type parameters */
     bool        is_gadt;         /* true for defgadt, false for defdata */
     const char **type_params;    /* arena-allocated array of type param names (interned) */

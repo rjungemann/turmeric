@@ -762,8 +762,17 @@ bool defstruct_lowers_to_adt(Elab *e, const Form *call) {
         if (kw->tag != F_KEYWORD) break;
         if (kw->as.sym == e->kw_copy || kw->as.sym == e->kw_move ||
             kw->as.sym == e->kw_no_auto_ctor) { idx++; continue; }
-        if (kw->as.sym == e->kw_linear || kw->as.sym == e->kw_heap)
-            return false;  /* :linear keeps the struct path; :heap is task 3 */
+        if (kw->as.sym == e->kw_linear)
+            return false;  /* :linear keeps the struct path */
+        /* seam 3: the :heap typed-pointer ADT ABI foundation is in place (defdata
+         * :heap, the typed-pointer type_c_name, the malloc'ing monomorph/
+         * non-parametric ctors, `->` field access), and a hand-written
+         * `(defdata X :heap ...)` lowers and runs.  But auto-lowering a `:heap`
+         * *struct* still has a long tail of by-value-vs-:heap integration sites
+         * (a nested :heap field is spuriously address-of'd when passed; the
+         * stdlib Vec/Map/Set inline-C assumes the struct rep), so the gate keeps
+         * :heap structs on the struct path until that lands. */
+        if (kw->as.sym == e->kw_heap) return false;
         break;
     }
     /* A leading all-symbol vector is a type-parameter list -> parametric.
@@ -971,15 +980,18 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         /* Constructor variant form: (Name <field-vec>) */
         Form *ctor_items[2] = { name_form, field_vec };
         Form *ctor_form = form_list(e->arena, call->span, ctor_items, 2);
-        /* (defdata Name [:copy] [type-params] (Name <field-vec>)) -- defdata's
-         * argument order is name, optional :copy, optional type-param vec, then
-         * the constructor(s). */
-        Form *dd_items[5];
+        /* (defdata Name [:copy] [:heap] [type-params] (Name <field-vec>)) --
+         * defdata's argument order is name, optional :copy/:move/:heap keywords,
+         * optional type-param vec, then the constructor(s).  Seam 3: a :heap
+         * struct lowers to a :heap record defadt (typed-pointer ABI). */
+        Form *dd_items[6];
         uint32_t ddn = 0;
         dd_items[ddn++] = form_sym(e->arena, name_form->span, e->sym_defdata);
         dd_items[ddn++] = name_form;
         if (is_copy)
             dd_items[ddn++] = form_keyword(e->arena, name_form->span, e->kw_copy);
+        if (is_heap)
+            dd_items[ddn++] = form_keyword(e->arena, name_form->span, e->kw_heap);
         if (type_param_vec_form)
             dd_items[ddn++] = type_param_vec_form;  /* original [A B ...] vec, kinds intact */
         dd_items[ddn++] = ctor_form;
@@ -1668,8 +1680,16 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
                               (sd->is_heap || !sd->needs_drop_glue);
             } else {
                 AdtDef *ad = tb->type.as.adt_.def;
+                /* by-value ADT product (inlined, slice 4), a :heap record ADT
+                 * (typed-pointer carrier, seam 3 -- the ADT analogue of a :heap
+                 * struct field), or a forward-declared stub (n_ctors == 0) whose
+                 * fill-in is a product/heap -- record optimistically, matching the
+                 * struct path which records a forward struct stub via
+                 * !needs_drop_glue.  The def pointer is stable across the fill, so
+                 * the recorded full_type sees the final layout at codegen. */
                 record_full = ad && !ad->needs_drop_glue &&
-                              adt_is_byvalue_product(ad);
+                              (ad->is_heap || ad->n_ctors == 0 ||
+                               adt_is_byvalue_product(ad));
             }
             if (record_full) {
                 Type *ft = (Type *)arena_alloc(e->arena, sizeof(Type));
@@ -1722,18 +1742,19 @@ Expr *elab_defdata(Elab *e, const Form *call) {
     }
     const Symbol *name = name_form->as.sym;
 
-    /* Check for optional :copy annotation */
+    /* Check for optional :copy / :move / :heap annotations (any order).
+     * CONV-S1 seam 3: :heap marks a typed-pointer record ADT (the analogue of a
+     * :heap struct -- Vec/Map/Set), set by a lowered `:heap` defstruct. */
     bool is_copy = false;
+    bool is_heap = false;
     uint32_t ctors_start_idx = 2;
-    if (call->as.list.len >= 3) {
-        Form *kw_form = call->as.list.items[2];
-        if (kw_form->tag == F_KEYWORD && kw_form->as.sym == e->kw_copy) {
-            is_copy = true;
-            ctors_start_idx = 3;
-        } else if (kw_form->tag == F_KEYWORD && kw_form->as.sym == e->kw_move) {
-            is_copy = false;
-            ctors_start_idx = 3;
-        }
+    while (ctors_start_idx < call->as.list.len) {
+        Form *kw_form = call->as.list.items[ctors_start_idx];
+        if (kw_form->tag != F_KEYWORD) break;
+        if (kw_form->as.sym == e->kw_copy) { is_copy = true; ctors_start_idx++; continue; }
+        if (kw_form->as.sym == e->kw_move) { is_copy = false; ctors_start_idx++; continue; }
+        if (kw_form->as.sym == e->kw_heap) { is_heap = true; ctors_start_idx++; continue; }
+        break;
     }
 
     /* Phase RF1: Check for an optional type-parameter vector [^f a b ...] between
@@ -1826,6 +1847,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         def->n_ctors = n_ctors;
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
         def->is_copy = is_copy;
+        def->is_heap = is_heap;
         def->needs_drop_glue = false;
         def->is_gadt = false;
         def->type_params = type_params;
@@ -1858,6 +1880,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         def->n_ctors = n_ctors;
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
         def->is_copy = is_copy;
+        def->is_heap = is_heap;
         /* Phase RF1: store type parameters */
         def->type_params = type_params;
         def->n_type_params = n_type_params;

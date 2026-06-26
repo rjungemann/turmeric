@@ -427,12 +427,19 @@ static bool expr_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
 static bool emit_type_is_byvalue_adt(EmitCtx *ctx, Type t) {
     Type r = emit_resolve_type(ctx, t);
     if (r.kind == TY_ADT && r.as.adt_.def)
-        return adt_is_byvalue_product(r.as.adt_.def);
+        /* seam 3: a :heap ADT is a typed POINTER, not a by-value aggregate, so it
+         * is never boxed/unboxed across a carrier field slot -- it already IS a
+         * pointer-sized carrier.  (The struct path excludes :heap structs the
+         * same way via type_is_heap_struct.) */
+        return !r.as.adt_.def->is_heap && adt_is_byvalue_product(r.as.adt_.def);
     /* Parametric-by-value: a concrete flat-product ADT-app value (`(Box int)`)
      * is a by-value aggregate too -- it crosses an int64 carrier field slot the
      * same way (box on store, unbox on field-bind read). */
-    if (r.kind == TY_APP)
+    if (r.kind == TY_APP) {
+        AdtDef *ad = type_adt_app_def(&r);
+        if (ad && ad->is_heap) return false;
         return adt_app_is_byvalue_product(r);
+    }
     return false;
 }
 
@@ -5513,6 +5520,17 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     while (adt_recv->kind == EX_ASCRIBE)
                         adt_recv = adt_recv->as.ascribe_.inner;
                     bool pbp = expr_is_pbp_param(ctx, adt_recv);
+                    /* CONV-S1 seam 3: a :heap ADT receiver is a typed POINTER to
+                     * its heap header (`tur_adt_Vec__int *`), so read through `->`
+                     * exactly as a pass-by-pointer receiver does. */
+                    Type recv_rt = emit_resolve_type(ctx,
+                        e->as.get_field_.struct_expr->type);
+                    bool heap_recv =
+                        (recv_rt.kind == TY_ADT && recv_rt.as.adt_.def &&
+                         recv_rt.as.adt_.def->is_heap) ||
+                        (recv_rt.kind == TY_APP && type_adt_app_def(&recv_rt) &&
+                         type_adt_app_def(&recv_rt)->is_heap);
+                    bool use_arrow = pbp || heap_recv;
                     /* slice 4: an inline by-value aggregate field is already its
                      * own aggregate value in the union slot -- read it with no cast
                      * (a cast-to-aggregate is invalid C) and no carrier deref. */
@@ -5521,9 +5539,9 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         adt_field_is_inline_byval(&ctor->fields[e->as.get_field_.field_idx]);
                     if (inline_byval) {
                         buf_printf(&hb, "(%s)%sas.%s._%u",
-                                   sv, pbp ? "->" : ".", mctor,
+                                   sv, use_arrow ? "->" : ".", mctor,
                                    e->as.get_field_.field_idx);
-                    } else if (pbp) {
+                    } else if (use_arrow) {
                         buf_printf(&hb, "(%s)(%s)->as.%s._%u",
                                    cty, sv, mctor, e->as.get_field_.field_idx);
                     } else {
