@@ -1,0 +1,30 @@
+;; conv-defstruct-accessor-unbox: a generic accessor (`tuple2-2nd : [A B]
+;; (Tuple2 A B) -> B`) whose result is a bare tyvar, instantiated to a concrete
+;; BY-VALUE aggregate (B = (Tuple2 cstr int)).
+;;
+;; Under the defstruct-as-defadt flag Tuple2 lowers to a record ADT.  The
+;; accessor's field read `(.snd t)` is over a TYPE-ERASED tyvar field: e->type
+;; collapses to the int64 carrier, but the accessor spec's bindings resolve B to
+;; the by-value `(Tuple2 cstr int)`.  The field is stored as the int64 B4 box
+;; pointer, so the read must DEREF-unbox it to the aggregate -- before the
+;; seam-4 accessor-unbox fix the spec returned the raw int64 into its by-value
+;; return slot (`incompatible types when returning 'long int' but
+;; 'tur_adt_Tuple2__cstr__int'`).  The nested chaining feeds the inner Tuple2
+;; result to an outer accessor, so the by-value type must survive.
+
+(defn deep-2nd [t : (Tuple2 int (Tuple2 cstr int))] : int
+  (tuple2-2nd (tuple2-2nd t)))
+
+(defn deep-1st [t : (Tuple2 int (Tuple2 cstr int))] : cstr
+  (tuple2-1st (tuple2-2nd t)))
+
+(defn via-let [t : (Tuple2 int (Tuple2 cstr int))] : int
+  (let [inner (tuple2-2nd t)]
+    (tuple2-2nd inner)))
+
+(defn main [] : int
+  (let [t (tuple2 9 (tuple2 "hi" 2))]
+    (println (deep-2nd t))   ;; 2
+    (println (deep-1st t))   ;; hi
+    (println (via-let t)))   ;; 2
+  0)

@@ -5486,6 +5486,24 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * `.value`; a tagged/positional ADT reads `.as.<Ctor>._N`. */
                 char *mp = adt_field_member_path(adt, ctor, e->as.get_field_.field_idx);
                 const char *cty = type_c_name(e->type);
+                /* CONV-S1 seam 4 (accessor-unbox): inside an ABI spec a generic
+                 * accessor reads a TYPE-ERASED field (`(.snd t)` over `(Tuple2 A
+                 * B)`).  e->type collapsed the field's tyvar to the int64 carrier
+                 * (cty == "int64_t"), but the spec's bindings resolve it to a
+                 * concrete BY-VALUE aggregate (`(Tuple2 cstr int)`).  The field is
+                 * stored as the int64 B4 box pointer, so the read must DEREF-unbox
+                 * it to the aggregate instead of returning the int64.  Gated on the
+                 * e->type-vs-spec disagreement, so it is inert wherever no spec
+                 * resolution changes the field type (the default path). */
+                Type fld_rty = emit_resolve_type(ctx, e->type);
+                const char *fld_rcty = emit_type_c_name(ctx, fld_rty);
+                bool field_byval_unbox =
+                    cty && strcmp(cty, "int64_t") == 0 &&
+                    fld_rcty && strcmp(fld_rcty, "int64_t") != 0 &&
+                    (fld_rty.kind == TY_APP || fld_rty.kind == TY_STRUCT) &&
+                    !type_is_heap_struct(fld_rty) && !type_is_heap_adt(fld_rty) &&
+                    ctor && e->as.get_field_.field_idx < ctor->n_fields &&
+                    !adt_field_is_inline_byval(&ctor->fields[e->as.get_field_.field_idx]);
                 bool adt_through_rc =
                     e->as.get_field_.struct_expr->type.kind == TY_RC;
                 /* Parametric-by-value: the receiver may be a concrete flat-product
@@ -5551,6 +5569,11 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     } else {
                         buf_printf(&hb, "(%s)(%s).%s", cty, sv, mp);
                     }
+                } else if (field_byval_unbox) {
+                    /* deref-unbox the carrier-stored B4 box pointer to the spec's
+                     * concrete by-value aggregate (accessor-unbox, above). */
+                    buf_printf(&hb, "(*(%s *)(intptr_t)(((tur_adt_%s *)(intptr_t)(%s))->%s))",
+                               fld_rcty, adt_mn, sv, mp);
                 } else {
                     buf_printf(&hb, "(%s)((tur_adt_%s *)(intptr_t)(%s))->%s",
                                cty, adt_mn, sv, mp);
