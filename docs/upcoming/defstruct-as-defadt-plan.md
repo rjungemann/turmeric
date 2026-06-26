@@ -591,7 +591,8 @@ runtime *usage* seam, below.
      regenerated.  *Cleared ~43* (`httpd-*`, `clone-*`, `eqmap-struct`, the `Pos`
      `typeclass-*` tests).  Fixture `conv-defstruct-inline-c-abi`.
 
-   **Running total: 212 -> 99 real blockers (53%); default suite stays 1854/0.**
+   **Running total: 212 -> 98 real blockers (54%); default suite stays 1855/0.**
+   (Sub-root (a) below -- 0-arg construct in control flow -- is LANDED.)
 
    **Remaining blockers (~99), by signature.**  The biggest cluster is the
    **by-value-aggregate <-> int64-carrier ABI bridge** family (~33): `incompatible
@@ -638,7 +639,7 @@ runtime *usage* seam, below.
      inline-C, so the method's C signature must be the concrete aggregate (an
      instance-method return-ABI decision), or the body must be wrapped.
    - **0-arg return-only-poly construct (`none`/`empty`) not spec-recorded in
-     control flow (HIGHEST-LEVERAGE sub-root, located 2026-06-26).**  In
+     control flow.  DONE (2026-06-26).**  In
      `(if b (some 1) (none))` consumed/returned at type `(Option int)`, `some`
      emits its by-value spec `some__spec__tur_adt_Option__int_int64_t` but `none`
      emits the int64 carrier base `none()` -- so the two `if` branches disagree on
@@ -655,6 +656,16 @@ runtime *usage* seam, below.
      The matching `none__spec__tur_adt_Option__int()` is already emitted -- only
      the call-site selection is missing.  This single sub-root recurs across the
      cluster wherever Option/Result construction sits in control flow.
+     **LANDED (commit "seam 4 (a)"):** a new value-tail walk
+     (`emit_abi_scan_construct_tail`, emit_module.c) publishes the concrete merge
+     type (a let-binding's declared type, or an if/do node's own type) to the
+     construct calls in the value-tail as `result_type_override`, and the
+     "no bindings & no active spec" guard now falls through when a concrete
+     construct override is present so `construct_recovered_byvalue` mints + records
+     the by-value spec.  Gated `!type_uses_carrier_abi` so it is inert on the
+     default carrier path (no snapshot drift) and flag-independent.  Clears
+     `option-control-form-construct`; fixture
+     `conv-defstruct-control-flow-construct` (let-init / arg / return merges).
    - **existential-wrapped construct return** (`kleisli-arrow-instance`): the
      closure body is `(pack (some x) ...)` (EX_EXISTS_PACK, kind 93), so the
      existing concrete->carrier return bridge (emit_fns.c ~L1431, which already
@@ -715,10 +726,11 @@ What remains is **step 4 (full graduation)**: make lowering unconditional (delet
 the gate + `g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]` row), retire the
 `StructDef` surface path, and regen snapshots.  **Seam 4 is IN PROGRESS** (see the
 step-4 entry above for the measured scope and the running cleared-cluster log).
-The default `bash tests/run.sh` is **green (1854 passed, 0 failed)** with five
-flag-independent seam-4 fixes landed -- including the big lever, the C-ABI-compatible
-flat named layout + `typedef <Name>` alias for single-variant record ADTs.  The
-force-lower probe is down from **212 to 99 real (non-snapshot) blockers (53%
+The default `bash tests/run.sh` is **green (1855 passed, 0 failed)** with six
+flag-independent seam-4 fixes landed -- including the big lever (the C-ABI-
+compatible flat named layout + `typedef <Name>` alias for single-variant record
+ADTs) and ABI-bridge sub-root (a) (0-arg construct selection in control flow).
+The force-lower probe is down from **212 to 98 real (non-snapshot) blockers (54%
 cleared)**.  The dominant remaining cluster is now the by-value-aggregate <->
 int64-carrier **ABI bridge** family (`incompatible types when
 returning/initializing/assigning`, `aggregate value used where an integer was
