@@ -1206,6 +1206,19 @@ static const char *adt_field_c_type(const AdtDef *owner, const CtorField *field,
     }
 }
 
+/* Resolve an ADT ctor field's declared type against a concrete ADT-app receiver
+ * type (substitutes the app's type args into the field's declared type).  See
+ * types.h.  TY_UNKNOWN when `recv` is not a resolvable ADT app. */
+Type adt_field_type_for_app(const Type *recv, const CtorField *field) {
+    Type unknown = type_simple(TY_UNKNOWN, CK_COPY);
+    if (!recv || !field || !field->full_type) return unknown;
+    AdtDef *def = NULL;
+    Type args[16];
+    uint8_t n_args = 0;
+    if (!type_extract_adt_app(recv, &def, args, &n_args) || !def) return unknown;
+    return substitute_adt_app_type(field->full_type, def, args);
+}
+
 /* Append the mangled type-arg suffix for an ADT app (e.g. "__float" for (Maybe float)). */
 static void append_adt_app_type_suffix(Buf *b, const AdtDef *def,
                                         const Type *args, uint8_t n_args) {

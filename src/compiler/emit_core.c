@@ -3397,6 +3397,67 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                 free(src_tmp);
                 used_canonical = true;
             }
+            /* CONV-S1 seam 4: the same canonical NULL-safe readback for a LOWERED
+             * Option/Result record ADT (`tur_adt_Option__Device`).  The struct
+             * path above keys on type_extract_struct_app and misses an ADT app, so
+             * a `none` (NULL carrier) would otherwise hit the unguarded deref below
+             * and segfault.  Read the canonical box fields by name (the ctor field
+             * names match tur_option_t/tur_result_box_t) and write the ADT
+             * aggregate through its member path, guarding Option with a NULL test
+             * that collapses to a zeroed `{0}` (is_some=false). */
+            if (!used_canonical) {
+                Type rty = emit_resolve_type(ctx, concrete_ty);
+                AdtDef *adt = (rty.kind == TY_APP) ? type_adt_app_def(&rty)
+                            : (rty.kind == TY_ADT ? rty.as.adt_.def : NULL);
+                if (adt && adt->name && adt->n_ctors == 1 &&
+                    adt->ctors[0]->is_record &&
+                    (strcmp(adt->name, "Option") == 0 ||
+                     strcmp(adt->name, "Result") == 0)) {
+                    const CtorDef *ctor = adt->ctors[0];
+                    bool is_option = strcmp(adt->name, "Option") == 0;
+                    const char *box_t = is_option ? "tur_option_t"
+                                                  : "tur_result_box_t";
+                    char *src_tmp = fresh_tmp(ctx);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s *%s = (%s *)(intptr_t)(%s);\n",
+                               box_t, src_tmp, box_t, src_str);
+                    if (is_option) buf_printf(&out, "(%s ? ", src_tmp);
+                    buf_printf(&out, "(%s){", cname);
+                    for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                        if (fi > 0) buf_puts(&out, ", ");
+                        char *mp = adt_field_member_path(adt, ctor, fi);
+                        char *bf = mangle_field_name(ctor->fields[fi].name);
+                        Type field_ty = adt_field_type_for_app(&rty,
+                                            &ctor->fields[fi]);
+                        if (field_ty.kind == TY_UNKNOWN)
+                            field_ty = type_simple(ctor->fields[fi].kind, CK_COPY);
+                        const char *fcname = emit_type_c_name(ctx, field_ty);
+                        TypeKind fk = field_ty.kind;
+                        buf_printf(&out, ".%s = ", mp);
+                        if (fk == TY_BOOL) {
+                            buf_printf(&out, "%s->%s", src_tmp, bf);
+                        } else if (fk == TY_INT || fk == TY_INT64 ||
+                                   fk == TY_UINT64) {
+                            buf_printf(&out, "%s->%s", src_tmp, bf);
+                        } else if (fk == TY_FLOAT || fk == TY_FLOAT64 ||
+                                   fk == TY_FLOAT32) {
+                            buf_printf(&out,
+                                "((union { int64_t s; %s d; }){.s = %s->%s}).d",
+                                fcname, src_tmp, bf);
+                        } else if (fk == TY_CSTR || fk == TY_PTR_VOID) {
+                            buf_printf(&out, "(%s)(intptr_t)(%s->%s)",
+                                       fcname, src_tmp, bf);
+                        } else {
+                            buf_printf(&out, "(%s)(%s->%s)", fcname, src_tmp, bf);
+                        }
+                        free(mp); free(bf);
+                    }
+                    buf_printf(&out, "}");
+                    if (is_option) buf_printf(&out, " : (%s){0})", cname);
+                    free(src_tmp);
+                    used_canonical = true;
+                }
+            }
             if (!used_canonical) {
                 /* Pointer carrier: dereference the heap pointer. */
                 buf_printf(&out, "(*(%s *)(intptr_t)(%s))", cname, src_str);

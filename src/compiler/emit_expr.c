@@ -635,9 +635,19 @@ Type fn_body_tail_byvalue_carrier_type(EmitCtx *ctx, const Expr *e) {
              * true), where the existing carrier-temp + single M5 deref already
              * handles the merge -- firing here would declare a by-value temp and
              * double-bridge.  This keeps the extension strictly lowering-only. */
+            /* Also require !type_has_concrete_codegen_layout(sr): the inline-C
+             * body is EMITTED returning the int64 carrier ONLY when emit_fns'
+             * typed_byval_adt does NOT apply -- i.e. a parametric ADT-app result
+             * (`(Result cstr cstr)` / `(Option Device)`, no single C layout) falls
+             * to the int64 default and needs the carrier->by-value bridge.  A
+             * NON-parametric concrete record result (`Pos`) instead returns BY
+             * VALUE (typed_byval_adt fires), so it must NOT be treated as a carrier
+             * producer here -- otherwise the consume-side bridge double-derefs an
+             * aggregate (the typeclass-fundep-collect regression). */
             if ((sr.kind == TY_APP || sr.kind == TY_ADT) &&
                 !type_uses_carrier_abi(sr) &&
                 !type_is_heap_struct(sr) && !type_is_heap_adt(sr) &&
+                !type_has_concrete_codegen_layout(&sr) &&
                 strcmp(emit_type_c_name(ctx, sr), "int64_t") != 0)
                 return sr;
         }
@@ -1076,9 +1086,31 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             bool bind_is_ptr_repr = strchr(bind_c, '*') != NULL;
             bool init_is_pbp = expr_is_pbp_param(ctx,
                                                  e->as.let_.bindings[i].init);
+            /* CONV-S1 seam 4 (inline-C carrier init -> by-value binding): the
+             * initializer is a call to an inline-C function whose by-value ADT-app
+             * result (`(Result Device int)` under lowering) is nonetheless EMITTED
+             * as the int64 carrier (emit_fns lowers an inline-C TY_APP result to
+             * int64), but the binding is the by-value aggregate.  Deref the carrier
+             * into the aggregate so the initialiser type-checks -- the consume-side
+             * companion of the assignment-straddle merge bridge.  Gated on the
+             * by-value-vs-emit disagreement, so inert when the init already yields
+             * the aggregate. */
+            Type init_bv = fn_body_tail_byvalue_carrier_type(
+                ctx, e->as.let_.bindings[i].init);
+            bool init_carrier_to_byval = !bind_is_ptr_repr &&
+                strcmp(bind_c, "int64_t") != 0 &&
+                init_bv.kind != TY_UNKNOWN &&
+                !fn_body_tail_emits_byvalue_carrier_abi(
+                    ctx, e->as.let_.bindings[i].init);
             if (init_is_pbp && !bind_is_ptr_repr &&
                 strcmp(bind_c, "int64_t") != 0) {
                 buf_printf(body, "%s %s = *(%s);\n", bind_c, bn, iv);
+            } else if (init_carrier_to_byval) {
+                char *bridged = emit_carrier_bridge(ctx, body, iv,
+                                    CK_CARRIER, CK_CONCRETE, init_bv);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = %s;\n", bind_c, bn, bridged);
+                iv = bridged;  /* emit_carrier_bridge freed the old iv */
             } else if (strcmp(bind_c, "int64_t") == 0 &&
                 (init_kind == TY_FN || init_kind == TY_PTR_VOID || init_is_ptr_repr)) {
                 buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n", bind_c, bn, iv);
@@ -1264,9 +1296,31 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             bool bind_is_ptr_repr = strchr(bind_c, '*') != NULL;
             bool init_is_pbp = expr_is_pbp_param(ctx,
                                                  e->as.let_.bindings[i].init);
+            /* CONV-S1 seam 4 (inline-C carrier init -> by-value binding): the
+             * initializer is a call to an inline-C function whose by-value ADT-app
+             * result (`(Result Device int)` under lowering) is nonetheless EMITTED
+             * as the int64 carrier (emit_fns lowers an inline-C TY_APP result to
+             * int64), but the binding is the by-value aggregate.  Deref the carrier
+             * into the aggregate so the initialiser type-checks -- the consume-side
+             * companion of the assignment-straddle merge bridge.  Gated on the
+             * by-value-vs-emit disagreement, so inert when the init already yields
+             * the aggregate. */
+            Type init_bv = fn_body_tail_byvalue_carrier_type(
+                ctx, e->as.let_.bindings[i].init);
+            bool init_carrier_to_byval = !bind_is_ptr_repr &&
+                strcmp(bind_c, "int64_t") != 0 &&
+                init_bv.kind != TY_UNKNOWN &&
+                !fn_body_tail_emits_byvalue_carrier_abi(
+                    ctx, e->as.let_.bindings[i].init);
             if (init_is_pbp && !bind_is_ptr_repr &&
                 strcmp(bind_c, "int64_t") != 0) {
                 buf_printf(body, "%s %s = *(%s);\n", bind_c, bn, iv);
+            } else if (init_carrier_to_byval) {
+                char *bridged = emit_carrier_bridge(ctx, body, iv,
+                                    CK_CARRIER, CK_CONCRETE, init_bv);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = %s;\n", bind_c, bn, bridged);
+                iv = bridged;  /* emit_carrier_bridge freed the old iv */
             } else if (strcmp(bind_c, "int64_t") == 0 &&
                 (init_kind == TY_FN || init_kind == TY_PTR_VOID || init_is_ptr_repr)) {
                 buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n", bind_c, bn, iv);
@@ -3753,7 +3807,18 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     (emit_arg->type.kind == TY_INT ||
                      (type_kind_is_aggregate(emit_arg->type.kind) &&
                       type_uses_carrier_abi(emit_arg->type) &&
-                      !expr_emits_byvalue_carrier_abi(ctx, emit_arg)))) {
+                      !expr_emits_byvalue_carrier_abi(ctx, emit_arg)) ||
+                     /* CONV-S1 seam 4 (inline-C carrier arg -> by-value spec
+                      * param): the arg is a call to an inline-C function whose
+                      * by-value ADT-app result (`(Option Device)` under lowering)
+                      * is EMITTED as the int64 carrier, so its `emit_arg->type`
+                      * reads by-value (type_uses_carrier_abi false) and the two
+                      * checks above miss it.  Deref the carrier into the spec's
+                      * by-value param -- the call-arg companion of the let-init /
+                      * merge carrier->by-value bridges. */
+                     (fn_body_tail_byvalue_carrier_type(ctx, emit_arg).kind
+                          != TY_UNKNOWN &&
+                      !fn_body_tail_emits_byvalue_carrier_abi(ctx, emit_arg)))) {
                     raw = emit_carrier_bridge(ctx, body, raw,
                                              CK_CARRIER, CK_CONCRETE,
                                              matched_spec->arg_types[i]);

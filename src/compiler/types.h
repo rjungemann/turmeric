@@ -1585,6 +1585,8 @@ bool         type_has_concrete_codegen_layout(const Type *t);
 bool         type_app_is_concrete_adt(const Type *t);
 /* The AdtDef at the head of an ADT application, or NULL if not an ADT app. */
 AdtDef      *type_adt_app_def(const Type *t);
+/* Resolve an ADT ctor field's type against a concrete ADT-app receiver type. */
+Type         adt_field_type_for_app(const Type *recv, const CtorField *field);
 /* end-to-end-monomorphization: the by-value struct C name (`Vec__int`) for a
  * struct/struct-app, WITHOUT the trailing " *" the heap pointer lowering adds. */
 const char  *type_struct_value_c_name(Type t);
