@@ -593,17 +593,54 @@ runtime *usage* seam, below.
 
    **Running total: 212 -> 99 real blockers (53%); default suite stays 1854/0.**
 
-   **Remaining blockers (~99), by signature.**  The biggest cluster is now the
-   **by-value-aggregate <-> int64-carrier ABI bridge** family: `incompatible types
-   when returning/initializing/assigning` (~20 across several variants),
-   `incompatible type for argument` (~8), `aggregate value used where an integer was
-   expected` (~4), `conversion to non-scalar type requested` (~2) -- a lowered
-   by-value record flowing into/out of a carrier-ABI boundary (a generic fn, an
-   un-specialized instance method, a return slot) without the box/unbox bridge.
-   This is seam-1 territory widened to more crossing sites and is the natural next
-   lever.  Then: ~22 fixtures that **build but mismatch at runtime or only fail at
-   link** (`OK_RUNTIME_OR_LINK` -- includes the httpd `-lturi` harness-link cases
-   that only `tests/run.sh` sets up, plus genuine lowered-path correctness bugs like
+   **Remaining blockers (~99), by signature.**  The biggest cluster is the
+   **by-value-aggregate <-> int64-carrier ABI bridge** family (~33): `incompatible
+   types when returning/initializing/assigning` (~20), `incompatible type for
+   argument` (~8), `aggregate value used where an integer was expected` (~4),
+   `conversion to non-scalar type requested` (~2) -- a lowered by-value record
+   flowing into/out of a carrier-ABI boundary without the box/unbox bridge.
+
+   **Deep dive (2026-06-26): the ABI-bridge cluster is NOT a single fix -- it is a
+   coordinated set of crossing-site bridges, each fixture needing several.**  A
+   focused investigation mapped the concrete sub-roots (no quick win lands a fixture
+   on its own; each is a hot-path change in the by-value/carrier construction &
+   dispatch machinery and several interact within one fixture, so they must land
+   together):
+   - **Parametric-monomorph ctor: wide (>8 byte) by-value element not boxed.**  The
+     monomorph typedef stores a wide by-value element as the int64 heap-box pointer
+     (B4), but the `app_byval` ctor branch (types.c, `emit_adt_app_instance`) stored
+     it inline -- assigning a `tur_adt_Point` aggregate into an `int64_t` slot.  Fix:
+     box wide elements in the byval ctor branch exactly as the carrier branch does
+     (verified locally; no-regression but clears nothing alone).
+   - **Generated accessor: wide by-value element not UNBOXED on read.**  The
+     `ok_val`/`err_val` monomorph accessor emits `(int64_t)(r).as.Result._1` for a
+     wide element field (the boxed pointer cast to int64) where the declared return
+     is the aggregate (`tur_adt_Point`) -- it must deref:
+     `*(tur_adt_Point *)(intptr_t)(r).as.Result._1`.
+   - **Closure / lifted-lambda return: result_kind vs C-return mismatch.**  A lifted
+     lambda `fn [x] (some x)` has logical `result_kind` = TY_APP/ADT (Option lowered
+     by-value), but its C return slot is the int64 carrier (the signature logic in
+     emit_fn_def forces int64 via `fn_body_tail_is_carrier_producer`).  The
+     concrete->carrier return bridge in `emit_tail` (emit_fns.c) is gated on
+     `result_kind == TY_INT`, so it no longer fires -> `return some__spec(x)` returns
+     a `tur_adt_Option__int` into an `int64_t` slot.  Widening the guard to the
+     carrier-producer case did NOT fix it (the lambda body's bridge predicate
+     `fn_body_tail_emits_byvalue_carrier_abi` returns false in that context --
+     `find_matched_abi_spec` does not resolve the spec for the lambda body), so the
+     real fix is deeper: the lambda-body emit path / spec resolution, not just the
+     guard.
+   - **Carrier-instance result vs by-value-spec param at the call arg.**  `(ok-val
+     (decode 5))` where the `int` `Decode` instance returns the int64 `tur_box_ok`
+     carrier but `ok_val__spec__..._Result__int__cstr` expects the by-value
+     `tur_adt_Result__int__cstr` param -- needs an unbox bridge at the dispatch arg.
+   - **inline-C instance method returning a by-value aggregate** (`Pos r; return
+     r;`) under an int64 carrier signature -- the compiler cannot rewrite inside
+     inline-C, so the method's C signature must be the concrete aggregate (an
+     instance-method return-ABI decision), or the body must be wrapped.
+
+   Then: ~22 fixtures that **build but mismatch at runtime or only fail at link**
+   (`OK_RUNTIME_OR_LINK` -- includes the httpd `-lturi` harness-link cases that only
+   `tests/run.sh` sets up, plus genuine lowered-path correctness bugs like
    `hkt-ap-fn-in-container` printing 4150 vs 4175); ~7 `invalid initializer` (more
    ctor-monomorph selection edges); 3 `unknown type name 'Tuple2'` (inline-C naming
    the **parametric** `Tuple2` directly -- needs fixture rewrite, no single C type
