@@ -655,7 +655,18 @@ runtime *usage* seam, below.
      ABI spec `e->type` collapses to int64 but the spec resolves the field to a
      by-value aggregate, so `EX_GET_FIELD` now deref-unboxes the B4 box pointer
      when those disagree (`poly-nested-tuple-accessor`; fixture
-     `conv-defstruct-accessor-unbox`).  (2) *inline-C instance-method signature*
+     `conv-defstruct-accessor-unbox`).  *Construct-template accessor variant*
+     (investigated 2026-06-26, **BLOCKED upstream**): the same accessor over a
+     stdlib `Option`/`Result` monomorph (`unwrap__spec__tur_adt_Box_...`, body
+     `(.value o)`) emits the wrong `(int64_t)` cast on a by-value element.  The
+     leaf `EX_GET_FIELD` recovery (resolve the field through the receiver's
+     spec-resolved app via the new-ready `adt_field_type_for_app`) is correct but
+     cannot fire: the cstr/float/Box spec-clone bodies reach the read with
+     `current_abi_specialization == NULL`, so the receiver resolves only to the
+     abstract int64 carrier.  Root cause + fix directions captured in
+     `docs/reported/construct-template-accessor-spec-clone-no-active-spec.md`
+     (the fix belongs in the spec-clone body emit, not the leaf).  (2) *inline-C
+     instance-method signature*
      (still open): a `Pos r; return r;` inline-C instance body under an int64
      signature -- the SIGNATURE must be the by-value aggregate, not the carrier
      (`typeclass-fundep-collect`, `typeclass-multiparam-storage-dispatch`).  (3)
