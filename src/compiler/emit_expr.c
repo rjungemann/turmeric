@@ -3808,17 +3808,27 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      (type_kind_is_aggregate(emit_arg->type.kind) &&
                       type_uses_carrier_abi(emit_arg->type) &&
                       !expr_emits_byvalue_carrier_abi(ctx, emit_arg)) ||
-                     /* CONV-S1 seam 4 (inline-C carrier arg -> by-value spec
-                      * param): the arg is a call to an inline-C function whose
-                      * by-value ADT-app result (`(Option Device)` under lowering)
-                      * is EMITTED as the int64 carrier, so its `emit_arg->type`
-                      * reads by-value (type_uses_carrier_abi false) and the two
-                      * checks above miss it.  Deref the carrier into the spec's
-                      * by-value param -- the call-arg companion of the let-init /
-                      * merge carrier->by-value bridges. */
-                     (fn_body_tail_byvalue_carrier_type(ctx, emit_arg).kind
-                          != TY_UNKNOWN &&
-                      !fn_body_tail_emits_byvalue_carrier_abi(ctx, emit_arg)))) {
+                     /* CONV-S1 seam 4 (carrier-producer arg -> by-value spec
+                      * param): the arg is a direct call to a carrier producer -- an
+                      * inline-C / #{Construct} / `__inst_` method whose by-value
+                      * ADT-app result (`(Result bool cstr)` / `(Option Device)`
+                      * under lowering) is EMITTED as the int64 carrier, so its
+                      * `emit_arg->type` reads by-value (type_uses_carrier_abi
+                      * false) and the two checks above miss it.  Deref the carrier
+                      * into the spec's by-value param -- the call-arg companion of
+                      * the let-init / merge carrier->by-value bridges.  REQUIRES no
+                      * matched ABI spec on the arg: a by-value spec clone of an
+                      * instance method (`__inst_..__spec__Pos`) already returns the
+                      * aggregate by value and must NOT be deref'd (it is also an
+                      * `__inst_` carrier producer by name, so the spec check is what
+                      * distinguishes the two -- the default
+                      * typeclass-assoc-type-parametric-struct-element regression). */
+                     (emit_arg->kind == EX_CALL &&
+                      emit_arg->as.call_.fn_binding &&
+                      fn_body_tail_is_carrier_producer(emit_arg) &&
+                      !find_matched_abi_spec(ctx, emit_arg,
+                                             emit_arg->as.call_.fn_binding) &&
+                      !expr_emits_byvalue_carrier_abi(ctx, emit_arg)))) {
                     raw = emit_carrier_bridge(ctx, body, raw,
                                              CK_CARRIER, CK_CONCRETE,
                                              matched_spec->arg_types[i]);
