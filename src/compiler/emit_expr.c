@@ -5567,8 +5567,31 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * TYPE via the app-aware predicate so a parametric monomorph reads
                  * its field directly off the aggregate instead of falling through
                  * to the (wrong) carrier-pointer deref. */
-                bool adt_recv_byvalue =
+                /* CONV-S1 seam 4 (carrier-held by-value-ADT receiver): the
+                 * receiver's USE type is a by-value ADT (`(Option cstr)` under
+                 * lowering) but it is HELD as the int64 carrier -- e.g. a typeclass
+                 * instance method's dispatch class-var param `x` declared
+                 * `int64_t` (the uniform dict ABI) that the call site spilled +
+                 * addressed.  Reading the field off the by-value aggregate
+                 * (`(x).as...`) is wrong; cast the int64 carrier to the receiver's
+                 * concrete monomorph pointer and deref.  Detect via the receiver
+                 * VAR's BINDING type lowering to int64 (not flagged as a by-value
+                 * carrier param) while its use type is a by-value aggregate.  Inert
+                 * at default: there the same use type is the int64 carrier, so
+                 * emit_type_is_byvalue_adt is false. */
+                bool recv_held_as_carrier = false;
+                {
+                    const Expr *rv = e->as.get_field_.struct_expr;
+                    while (rv && rv->kind == EX_ASCRIBE) rv = rv->as.ascribe_.inner;
+                    if (rv && rv->kind == EX_VAR && rv->as.var.binding)
+                        recv_held_as_carrier =
+                            rv->as.var.binding->emit_carrier_holds_byval;
+                }
+                bool recv_carrier_byval = recv_held_as_carrier &&
                     emit_type_is_byvalue_adt(ctx, e->as.get_field_.struct_expr->type);
+                bool adt_recv_byvalue =
+                    emit_type_is_byvalue_adt(ctx, e->as.get_field_.struct_expr->type) &&
+                    !recv_held_as_carrier;
                 Buf hb; buf_init(&hb);
                 if (adt_through_rc) {
                     /* CONV-S1 (slice 2): rc<ADT> receiver.  rc/of mallocs
@@ -5586,6 +5609,13 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                    "(%s)((tur_adt_%s *)(intptr_t)(*(int64_t *)((RcControlBlock *)(%s))->value))->%s",
                                    cty, adt_mn, sv, mp);
                     }
+                } else if (recv_carrier_byval) {
+                    /* carrier-held by-value-ADT receiver: cast the int64 carrier to
+                     * the receiver's concrete monomorph pointer and deref (above). */
+                    const char *recv_cn = emit_type_c_name(ctx,
+                        emit_resolve_type(ctx, e->as.get_field_.struct_expr->type));
+                    buf_printf(&hb, "(%s)((%s *)(intptr_t)(%s))->%s",
+                               cty, recv_cn, sv, mp);
                 } else if (adt_recv_byvalue) {
                     /* CONV-S1: by-value receiver -- read the field directly off the
                      * aggregate, no carrier pointer deref.  Gated by

@@ -912,6 +912,21 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                     type_uses_carrier_abi(emit_resolve_type(ctx, param_ty)) &&
                     strcmp(pc, "int64_t") != 0)
                     fd->params[i]->emit_byvalue_carrier_abi = true;
+                /* CONV-S1 seam 4 (carrier-held by-value-ADT receiver): the param
+                 * signature is the int64 carrier (param_ty is the dispatch class
+                 * var `a`), but the binding's elaborated type is a by-value
+                 * aggregate ADT (`(Option cstr)` under lowering).  Flag it so a
+                 * field read off this receiver derefs the carrier pointer to the
+                 * concrete monomorph instead of reading the by-value aggregate. */
+                if (fd->params[i] && strcmp(pc, "int64_t") == 0) {
+                    Type bt = emit_resolve_type(ctx, fd->params[i]->type);
+                    const char *btc = emit_type_c_name(ctx, bt);
+                    if (btc && strcmp(btc, "int64_t") != 0 &&
+                        (bt.kind == TY_ADT || bt.kind == TY_APP) &&
+                        !type_is_heap_struct(bt) && !type_is_heap_adt(bt) &&
+                        !type_uses_carrier_abi(bt))
+                        fd->params[i]->emit_carrier_holds_byval = true;
+                }
             }
         }
         const char *pn = raw_name_for_binding(fd->params[i]);

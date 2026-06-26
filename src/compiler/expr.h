@@ -206,6 +206,14 @@ struct Binding {
      * before the call.  Set at the binding's declaration site (let binding or
      * function parameter emission). */
     bool          emit_byvalue_carrier_abi;
+    /* CONV-S1 seam 4 (carrier-held by-value-ADT receiver): true when this
+     * parameter's C signature was emitted as the int64 carrier (e.g. a typeclass
+     * instance method's dispatch class-var param) even though the binding's
+     * elaborated type is a by-value aggregate ADT (`(Option cstr)` under the
+     * defstruct-as-defadt lowering).  A field read off such a receiver must cast
+     * the int64 carrier to the concrete monomorph pointer and deref, not read the
+     * field off the by-value aggregate.  Set in the param emitter (emit_fns.c). */
+    bool          emit_carrier_holds_byval;
     /* True when this binding names a defn whose body is an EX_INLINE_C block.
      * The formal-param emitter (emit_fns.c:423) treats inline-C defns as
      * by-value for struct params even when they would normally cross the

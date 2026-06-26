@@ -8297,6 +8297,17 @@ int emit_program(Buf *out, const Expr *program) {
                     (void)type_c_name(*f->full_type);  /* register_struct_app */
                     type_codegen_emit_struct_apps(&early_file);
                 }
+                /* CONV-S1 seam 4: a by-value ADT-app field (lowered `(Option
+                 * cstr)` -> `tur_adt_Option__cstr`) embeds the monomorph
+                 * aggregate, whose typedef is registered on demand and otherwise
+                 * flushed after the user struct typedefs -- register + flush it
+                 * into early_file so the embedding struct sees a complete type. */
+                if (f->full_type && (f->full_type->kind == TY_ADT
+                                     || f->full_type->kind == TY_APP)
+                    && !type_is_heap_adt(*f->full_type)) {
+                    (void)type_register_adt_app(*f->full_type);
+                    type_codegen_emit_adt_apps(&early_file);
+                }
             }
             /* Emit: typedef struct Name { fields... } Name; */
             buf_printf(&early_file, "typedef struct %s {\n", def->name);
@@ -8311,6 +8322,22 @@ int emit_program(Buf *out, const Expr *program) {
                     /* defstruct-byvalue-struct-field-stored-as-int-carrier:
                      * a bare by-value struct field is stored inline as that
                      * aggregate, named by type_c_name (int64_t for opaque). */
+                    ctype = type_c_name(*f->full_type);
+                } else if (f->full_type &&
+                           (f->full_type->kind == TY_ADT ||
+                            f->full_type->kind == TY_APP) &&
+                           !type_is_heap_adt(*f->full_type) &&
+                           strcmp(type_c_name(*f->full_type), "int64_t") != 0) {
+                    /* CONV-S1 seam 4 (by-value ADT struct field): under the
+                     * defstruct-as-defadt lowering a parametric ADT-app field
+                     * (`(Option cstr)` -> `tur_adt_Option__cstr`) is the by-value
+                     * monomorph aggregate -- the SAME slot a by-value struct field
+                     * gets (at default the field's type was a struct and took the
+                     * branch above).  The monomorph ctors/specs return it by value,
+                     * so the field storage must be the aggregate, not the int64
+                     * carrier (which the switch default below would pick once the
+                     * field kind flipped struct -> ADT).  :heap ADTs stay the typed
+                     * pointer / carrier. */
                     ctype = type_c_name(*f->full_type);
                 } else switch (f->kind) {
                     case TY_INT:      ctype = "int64_t"; break;
@@ -9221,6 +9248,22 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
                     /* defstruct-byvalue-struct-field-stored-as-int-carrier:
                      * a bare by-value struct field is stored inline as that
                      * aggregate, named by type_c_name (int64_t for opaque). */
+                    ctype = type_c_name(*f->full_type);
+                } else if (f->full_type &&
+                           (f->full_type->kind == TY_ADT ||
+                            f->full_type->kind == TY_APP) &&
+                           !type_is_heap_adt(*f->full_type) &&
+                           strcmp(type_c_name(*f->full_type), "int64_t") != 0) {
+                    /* CONV-S1 seam 4 (by-value ADT struct field): under the
+                     * defstruct-as-defadt lowering a parametric ADT-app field
+                     * (`(Option cstr)` -> `tur_adt_Option__cstr`) is the by-value
+                     * monomorph aggregate -- the SAME slot a by-value struct field
+                     * gets (at default the field's type was a struct and took the
+                     * branch above).  The monomorph ctors/specs return it by value,
+                     * so the field storage must be the aggregate, not the int64
+                     * carrier (which the switch default below would pick once the
+                     * field kind flipped struct -> ADT).  :heap ADTs stay the typed
+                     * pointer / carrier. */
                     ctype = type_c_name(*f->full_type);
                 } else switch (f->kind) {
                     case TY_INT:      ctype = "int64_t"; break;
