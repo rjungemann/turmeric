@@ -309,11 +309,71 @@ pre {
 }
 
 /* ==========================================================================
+ * Split Handle (resizer between editor and console)
+ * ========================================================================== */
+
+.split-handle {
+    flex: 0 0 6px;
+    width: 6px;
+    background: var(--border-mid);
+    cursor: col-resize;
+    position: relative;
+    z-index: 5;
+    touch-action: none;
+    user-select: none;
+    transition: background 120ms;
+}
+
+.split-handle:hover,
+.split-handle.is-dragging,
+.split-handle:focus-visible {
+    background: var(--gold, #d4a83b);
+    outline: none;
+}
+
+/* Wider invisible hit target for touch / fine mouse use without
+   shifting layout. */
+.split-handle::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -6px;
+    right: -6px;
+}
+
+body.split-dragging,
+body.split-dragging * {
+    user-select: none !important;
+    cursor: inherit !important;
+}
+
+/* iOS Add-to-Home-Screen hint banner. */
+#ios-a2hs-hint {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    background: var(--bg-panel);
+    color: var(--text);
+    border: 1px solid var(--border-mid);
+    border-radius: 8px;
+    font-size: 13px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+/* ==========================================================================
  * Editor Pane
  * ========================================================================== */
 
 .editor-pane {
-    flex: 1;
+    flex: 0 1 calc(var(--split-h, 0.56) * 100%);
     display: flex;
     flex-direction: column;
     border-right: 1px solid var(--border-mid);
@@ -473,11 +533,10 @@ pre {
  * ========================================================================== */
 
 .console-pane {
-    width: 44%;
-    flex-shrink: 0;
+    flex: 1 1 0;
     display: flex;
     flex-direction: column;
-    min-width: 300px;
+    min-width: 0;
     min-height: 0;
     overflow: hidden;
     background: var(--bg-base);
@@ -1315,12 +1374,28 @@ pre {
 
     .repl-container {
         display: grid;
-        grid-template-rows: var(--split, 1fr) 1fr;
+        grid-template-rows: calc(var(--split-v, 0.5) * 100%) 6px 1fr;
         grid-template-columns: 1fr;
         height: 100%;
         min-height: 0;
         flex: 1 1 auto;
         gap: 0;
+    }
+
+    /* Mobile: handle becomes a horizontal bar between editor (top)
+       and console (bottom). Wider invisible padding for finger drags. */
+    .split-handle {
+        width: 100%;
+        height: 6px;
+        cursor: row-resize;
+    }
+    .split-handle::before {
+        left: 0;
+        right: 0;
+        top: -10px;
+        bottom: -10px;
+        width: auto;
+        height: auto;
     }
 
     .editor-pane {

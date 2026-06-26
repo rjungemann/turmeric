@@ -97,6 +97,13 @@
                     </div>
                 </div>
 
+                <!-- Drag handle between editor and console (mobile: horizontal,
+                     desktop: vertical). aria-orientation is flipped by JS based
+                     on the active media query. -->
+                <div class="split-handle" id="split-handle" role="separator"
+                     aria-orientation="vertical" tabindex="0"
+                     aria-label="Resize editor and console"></div>
+
                 <!-- Console Pane -->
                 <div class="console-pane">
                     <div class="console-header">

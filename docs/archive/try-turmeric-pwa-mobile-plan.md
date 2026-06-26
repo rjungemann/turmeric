@@ -12,36 +12,43 @@ Scope is limited to `web/try/` and the assets it pulls in (`web/main.js`,
 
 ## Status
 
-In progress. Rollout step 1 (mobile layout) has landed; persistence and
-PWA service worker are still outstanding.
+Shipped. All in-scope sections landed; archived to `docs/archive/`.
 
 Done:
-- §1.1 Web app manifest + meta tags + 192/512/apple-touch icons
-  (`web/public/manifest.webmanifest`, `web/public/icons/`, `web/try/index.html`).
-- §2.1 Viewport meta (`interactive-widget=resizes-content`, `viewport-fit=cover`).
-- §2.1a iOS focus-zoom suppression (`.monaco-editor .inputarea`, `#repl-input`,
-  `#doc-search` forced to 16px under `pointer: coarse` / `max-width: 1024px`).
-- §2.2 Non-scrolling mobile layout (`100dvh`, grid with `--split`, doc panel
-  hidden, footer hidden, safe-area inset under `display-mode: standalone`).
-- §2.3 Toolbar density collapse on `max-width: 600px`.
-- §2.4 Horizontally scrollable editor header -- CSS overflow/scroll-snap/mask
-  fade and JS drag-to-scroll with 6px threshold + click suppression
-  (`web/main.js` ~L1099-1160).
-- §4 Editor persistence -- partial: single-buffer keys
-  (`tur.try.buffer.v1`, `tur.try.cursor.v1`, `tur.try.scroll.v1`,
-  `tur.try.console.v1`) and "Reset workspace" flow. No multi-tab
-  (`tur.try.tabs.v1` / `tur.try.activeTab.v1`) yet.
+- §1.1 Web app manifest + meta tags + 192/512/apple-touch icons.
+- §1.2 Service worker (`web/public/sw.js`) -- precache on install, cache-first
+  for static + WASM, network-first for `/docs/*` and HTML navigations,
+  `CACHE_VERSION` constant bumped per release, kill-switch `web/public/sw-kill.js`,
+  registration from `web/main.js` on `load` with scope `/`.
+- §1.3 Install affordances -- `beforeinstallprompt` captured, "Install" button
+  injected into the editor toolbar, hidden on `appinstalled`; iOS Safari gets
+  a one-time "Add to Home Screen" hint banner.
+- §2.1 / §2.1a / §2.2 / §2.3 / §2.4 -- mobile viewport, focus-zoom suppression,
+  non-scrolling layout, toolbar density, horizontally scrollable editor header.
+- §3 Draggable split -- `#split-handle` markup, CSS hit target with wider
+  invisible padding (`::before`), pointer drag handler with clamp to
+  `[0.15, 0.85]`, keyboard nudge (arrows / Home / End), double-click reset,
+  `localStorage` persistence under `tur.try.split.h.v1` / `tur.try.split.v.v1`,
+  Monaco `layout()` triggered after each drag.
+- §4 Editor persistence -- single-buffer keys (`tur.try.buffer.v1`,
+  `tur.try.cursor.v1`, `tur.try.scroll.v1`, `tur.try.console.v1`) +
+  "Reset workspace" flow. Multi-tab (`tur.try.tabs.v1` /
+  `tur.try.activeTab.v1`) is **deferred** -- the underlying multi-tab UI
+  doesn't exist yet (the "+ New" button is a placeholder), so persisting
+  tab state would have nothing to persist.
+- §5 `/sw.js` + `/sw-kill.js` + `/manifest.webmanifest` entries in
+  `web/public/_headers`.
+- §6 Mobile Playwright project (`devices['iPhone 13']`) with
+  `tests/mobile.split-and-pwa.spec.js` covering layout, split persistence,
+  editor buffer persistence, SW registration + WASM cache, and manifest
+  reachability. Lighthouse PWA audit deferred to the `web-perf` skill on
+  next release verification (`chrome-devtools-mcp`).
 
-Not done:
-- §1.2 Service worker (`web/public/sw.js`) -- no SW shipped; offline cache
-  + WASM precache outstanding.
-- §1.3 Install affordances (`beforeinstallprompt` capture + iOS A2HS hint).
-- §3 Draggable split -- CSS `--split` slot exists but no `#split-handle`
-  markup, no pointer drag handler, no `localStorage` persistence of the
-  fraction (the reset path clears the keys but nothing writes them).
-- §5 `/sw.js` headers in `web/public/_headers`.
-- §6 Mobile Playwright project + offline-reload test + Lighthouse PWA audit.
-- Rollout steps 2-5 from §7.
+Deferred to a v2 follow-up:
+- Multi-tab persistence (waits on real multi-tab UI).
+- Doc-panel last-symbol persistence (Open question #1).
+- Service worker precache of Monaco chunks (Open question #3 -- runtime
+  cache picks them up on first use today).
 
 ## 1. PWA shell
 

@@ -1,3 +1,14 @@
 /*
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp
+
+/sw.js
+  Cache-Control: no-cache
+  Service-Worker-Allowed: /
+
+/sw-kill.js
+  Cache-Control: no-cache
+  Service-Worker-Allowed: /
+
+/manifest.webmanifest
+  Cache-Control: public, max-age=3600
