@@ -4703,8 +4703,22 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                  * return lowers to its concrete typedef even for inline-C
                  * bodies, so the forward decl agrees with the definition. */
                 bool typed_cfnptr = rft && rft->kind == TY_FN && rft->as.fn.cfnptr;
+                /* CONV-S1 seam 4 (inline-C instance-method signature): mirror
+                 * emit_fns.c -- a by-value (carrier-ABI false) non-:heap ADT/app
+                 * result from an inline-C body lowers to the aggregate C name, not
+                 * the int64 carrier, so the forward decl agrees with the
+                 * definition and the dict slot. */
+                Type rft_r = rft ? emit_resolve_type(ctx, *rft)
+                                 : type_simple(TY_UNKNOWN, CK_COPY);
+                bool typed_byval_adt = body_is_inline_c && rft &&
+                    (rft_r.kind == TY_ADT || rft_r.kind == TY_APP) &&
+                    !type_uses_carrier_abi(rft_r) &&
+                    !type_is_heap_adt(rft_r) &&
+                    type_has_concrete_codegen_layout(&rft_r);
                 if (fn_ret_td && !body_is_inline_c) {
                     buf_puts(out, fn_ret_td);
+                } else if (typed_byval_adt) {
+                    buf_puts(out, type_c_name(rft_r));
                 } else if (rft && (!body_is_inline_c || typed_ptr || typed_struct || typed_cfnptr)) {
                     buf_puts(out, type_c_name(*rft));
                 } else {

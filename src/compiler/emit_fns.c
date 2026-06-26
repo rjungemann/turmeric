@@ -682,11 +682,27 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * matches: int64_t for the base, the typed pointer for the spec. */
             bool typed_heap_spec = body_is_inline_c && use_abi_spec &&
                                    type_is_heap_struct(rft);
+            /* CONV-S1 seam 4 (inline-C instance-method signature): under the
+             * defstruct-as-defadt lowering a by-value record/product result
+             * (e.g. `Pos` -> `tur_adt_Pos`) is a concrete aggregate, not the
+             * int64 carrier -- an inline-C body returns it by value (`Pos r;
+             * return r;`), so the C signature must be the aggregate, exactly as
+             * the dict slot (emit_stmt.c, via type_c_name(result_full_type))
+             * already is.  Mirror `typed_struct` for the ADT representation: a
+             * non-:heap ADT/ADT-app whose ABI is by-value (carrier-ABI false)
+             * with a concrete codegen layout.  Carrier-ABI ADTs (multi-variant
+             * sums returned as the int64 handle) are excluded and stay int64. */
+            Type rft_r = emit_resolve_type(ctx, rft);
+            bool typed_byval_adt = body_is_inline_c &&
+                (rft_r.kind == TY_ADT || rft_r.kind == TY_APP) &&
+                !type_uses_carrier_abi(rft_r) &&
+                !type_is_heap_adt(rft_r) &&
+                type_has_concrete_codegen_layout(&rft_r);
             if (fn_ret_td && !body_is_inline_c) {
                 buf_puts(file, fn_ret_td);
             } else if (!body_is_inline_c || typed_ptr || typed_struct ||
-                       typed_cfnptr || typed_heap_spec) {
-                buf_puts(file, emit_type_c_name(ctx, rft));
+                       typed_cfnptr || typed_heap_spec || typed_byval_adt) {
+                buf_puts(file, emit_type_c_name(ctx, typed_byval_adt ? rft_r : rft));
             } else {
                 buf_puts(file, "int64_t");
             }
