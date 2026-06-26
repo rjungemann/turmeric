@@ -527,14 +527,29 @@ runtime *usage* seam, below.
    non-parametric-`:heap` / parametric / parametric-`:heap`) now lowers.
 4. **Full graduation:** delete the gate + `g_opt_defstruct_as_defadt` + the
    `EXPERIMENTS[]` row, make lowering unconditional, retire the `StructDef` surface
-   path, and regenerate snapshots.  NOT yet ready: a force-lower probe (lowering
-   *every* `defstruct` in *every* fixture, unconditionally) still surfaces ~60
-   build failures in fixtures that were never written for the flag -- edge cases
-   the flag-on path does not yet cover (e.g. `:heap`-field structs, `defopaque`
-   payloads through `#{Unsafe}`, exists-pack by-value structs, HKT cata carriers).
-   These must be driven to zero -- ideally by promoting each force-lower failure to
-   a flag-on fixture and fixing it -- before the gate can be deleted and snapshots
-   regenerated.
+   path, and regenerate snapshots.  NOT yet ready, and the gap is **large**: a
+   force-lower probe (a temporary `getenv("TUR_FORCE_LOWER")` bypass at the top of
+   `defstruct_lowers_to_adt` that makes lowering unconditional) shows **~229 unique
+   fixtures fail** -- the bulk are `tur build` failures in fixtures never written
+   for the flag, exercising struct-specific features the ADT lowering path does not
+   yet cover.  Rough clusters from the probe:
+   - **constrained-generic / instance dispatch** (`constrained-generic-*`,
+     `constrained-instance-*`, `applied-struct-instance-element-discrimination`) --
+     element/receiver dispatch over a lowered struct;
+   - **clone / linear / borrow** (`clone-{list,option,pair,vec}`, `borrow-struct-
+     field`, `future-linear`, `backtrack-clone-ref`) -- substructural paths;
+   - **defstruct feature edges** (`defstruct-inline-c-byvalue*`,
+     `defstruct-byvalue-struct-field`, `defstruct-opaque-field-readback`,
+     `defstruct-fn-field-single-arg`, `dot-parametric-fn-field-call`);
+   - **HKT cata carriers** (`hkt-cata-*`) -- B4 territory, already deemed
+     out-of-scope/moot for real `defstruct`s (a struct cannot express a
+     functor-applied-to-self field), so these likely get *excluded* at graduation
+     rather than fixed;
+   - **exists-pack / opaque / heap-make-struct** edges.
+   Each non-moot cluster must be driven to zero -- promote a representative
+   force-lower failure to a flag-on fixture, fix the lowering, repeat -- before the
+   gate can be deleted and snapshots regenerated.  This is a multi-step phase in
+   its own right, comparable in size to seams 1-3 combined.
 
 ### Current state (suite green)
 
