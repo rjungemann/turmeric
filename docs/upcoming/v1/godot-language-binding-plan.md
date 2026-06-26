@@ -17,7 +17,7 @@ Headless verification runs via
 |---|---|---|
 | G0 -- spike | done | ScriptLanguageExtension registered; .gdextension loads in stock Godot 4.3. |
 | G1 -- hello node | done | Interpreter-mode only; `_ready` dispatches; primitive marshalling. |
-| G2 -- lifecycle + inspector | done | All lifecycle hooks; `:exports` round-trip; `:signals` visible; AOT mode spun out into its own plan ([godot-binding-aot-plan.md](./godot-binding-aot-plan.md)). |
+| G2 -- lifecycle + inspector | done | All lifecycle hooks; `:exports` round-trip; `:signals` visible; AOT mode spun out into its own plan ([godot-binding-aot-plan.md](../../archive/godot-binding-aot-plan.md)). |
 | G3 -- ClassDB coverage | done | classdb_proxy + curated prelude + extension_api.json codegen (Codegen v2 typed variants). |
 | G4 -- editor niceties | partial | Syntax highlighter + completion landed; debugger spun out into its own plan ([godot-binding-debugger-plan.md](./godot-binding-debugger-plan.md)). |
 | G5 -- polish + release | done | macOS / Linux / Windows CI workflow; paddle-pong-tur demo; docs guide. |
@@ -53,7 +53,7 @@ investigation surfaced are all closed (2026-06-25):
 
 - **AOT execution mode** -- `tur build --shared` subprocess, dlopen,
   libffi marshalling. Multi-week scope. Lives in
-  [godot-binding-aot-plan.md](./godot-binding-aot-plan.md).
+  [godot-binding-aot-plan.md](../../archive/godot-binding-aot-plan.md).
 - **In-editor debugger** -- `ScriptLanguageExtension::debug_*` +
   libturi substrate (frame stack, fiber-based eval, span tracking).
   Lives in [godot-binding-debugger-plan.md](./godot-binding-debugger-plan.md).

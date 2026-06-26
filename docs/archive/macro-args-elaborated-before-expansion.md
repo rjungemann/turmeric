@@ -71,7 +71,7 @@ The workaround today is to take strings:
 ```
 
 That ships -- the [turmeric-godot defgodot-script MV
-shell](../upcoming/v1/godot-binding-aot-plan.md) and its
+shell](./godot-binding-aot-plan.md) and its
 [upgrade plan](../upcoming/v1/godot-language-binding-plan.md) both
 sit on top of it -- but it's user-visible ergonomic debt.
 
