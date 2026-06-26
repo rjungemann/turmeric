@@ -1648,6 +1648,27 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
         }
     }
     if (fkind == TY_UNKNOWN) {
+        /* CONV-S1 seam 4: a KEYWORD field type (`:A`) naming a declared type
+         * parameter.  The defstruct-as-defadt lowering carries defstruct's `:A`
+         * field-type syntax verbatim into the record variant, but the bare-symbol
+         * TP1 check above (adt_field_type_from_form, F_SYM only) misses the
+         * keyword form, so a parametric `(defstruct Box [A] (val :A) ...)` lowered
+         * to `(defdata Box [A] (Box [val : A] ...))` errored "unrecognized type
+         * :A".  Resolve a keyword that matches a declared type param to a tyvar
+         * field, exactly as the bare `A` symbol form is. */
+        for (uint8_t pi = 0; pi < def->n_type_params; pi++) {
+            if (def->type_params[pi] &&
+                strlen(def->type_params[pi]) == tlen &&
+                memcmp(def->type_params[pi], tname, tlen) == 0) {
+                Type *tv = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *tv = type_tyvar_named(def->type_params[pi]);
+                ctor->fields[fi].kind = TY_INT;
+                ctor->fields[fi].inner_kind = TY_UNKNOWN;
+                ctor->fields[fi].full_type = tv;
+                if (ctor->field_forms) ctor->field_forms[fi] = ft_form;
+                return true;
+            }
+        }
         /* Phase RF0: fall back to user-defined type lookup. */
         const Symbol *type_sym = symtab_intern(e->st, strslice(tname, tlen));
         Binding *tb = scope_lookup_type_def(e->scope, type_sym);
