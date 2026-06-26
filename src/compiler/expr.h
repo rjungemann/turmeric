@@ -877,7 +877,10 @@ struct Expr {
         /* Phase DS3: (set! (.field s) v) - struct field write.  receiver_is_rc
          * is true when the receiver expression is rc<Struct> (auto-deref); in
          * that case codegen casts through the rc-block's value pointer. */
-        struct { Expr *receiver; Expr *value; uint32_t field_idx; StructDef *def; bool receiver_is_rc; } set_field_;
+        /* CONV-S1 seam 4: under the defstruct-as-defadt lowering the receiver is
+         * a single-variant record ADT, not a StructDef.  adt_def/adt_ctor are set
+         * (def == NULL) so codegen writes the field through the ADT member path. */
+        struct { Expr *receiver; Expr *value; uint32_t field_idx; StructDef *def; bool receiver_is_rc; const struct AdtDef *adt_def; const struct CtorDef *adt_ctor; } set_field_;
 
         struct { Expr **items; uint32_t n; }                               program;
 

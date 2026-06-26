@@ -46,6 +46,40 @@ void emit_set_field_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
     uint32_t fi = e->as.set_field_.field_idx;
     char *rv = emit_value(ctx, body, e->as.set_field_.receiver);
     char *vv = emit_value(ctx, body, e->as.set_field_.value);
+
+    /* CONV-S1 seam 4: a lowered record-ADT receiver -- write the field through
+     * the ADT member path (`.as.<Ctor>._N` for the positional layout, `.value`
+     * for a flat-named record).  A :heap receiver is a typed pointer (`->`); a
+     * by-value receiver is the aggregate lvalue (`.`); the abstract carrier base
+     * casts the int64 to the monomorph pointer first. */
+    if (!def && e->as.set_field_.adt_def) {
+        const AdtDef *adt = e->as.set_field_.adt_def;
+        const CtorDef *ctor = e->as.set_field_.adt_ctor;
+        char *mp = adt_field_member_path(adt, ctor, fi);
+        Buf lhs; buf_init(&lhs);
+        Type recv_rty = emit_resolve_type(ctx, e->as.set_field_.receiver->type);
+        const char *recv_cn = type_c_name(recv_rty);
+        bool recv_is_ptr = recv_cn && strchr(recv_cn, '*') != NULL;
+        if (e->as.set_field_.receiver_is_rc) {
+            buf_printf(&lhs, "((tur_adt_%s *)((RcControlBlock *)(%s))->value)->%s",
+                       mangle_field_name(adt->name), rv, mp);
+        } else if (type_is_heap_adt(recv_rty)) {
+            if (recv_is_ptr)
+                buf_printf(&lhs, "(%s)->%s", rv, mp);
+            else
+                buf_printf(&lhs, "((%s *)(intptr_t)(%s))->%s",
+                           type_c_name(recv_rty), rv, mp);
+        } else {
+            buf_printf(&lhs, "(%s).%s", rv, mp);
+        }
+        buf_putc(&lhs, '\0');
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s = %s;\n", lhs.data, vv);
+        buf_free(&lhs);
+        free(rv); free(vv); free(mp);
+        return;
+    }
+
     char *mfn = mangle_field_name(def->fields[fi].name);
 
     /* Build the lvalue expression for the field slot. */
