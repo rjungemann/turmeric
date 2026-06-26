@@ -1390,6 +1390,8 @@ static void emit_registered_struct_app_rec(Buf *out, uint32_t idx) {
 }
 
 /* TS4P1: Emit the typedef and per-constructor functions for one registered ADT app. */
+static const char *heap_ptr_c_name(const char *base);  /* defined below */
+
 static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
     if (idx >= g_n_adt_apps) return;
     if (g_adt_apps[idx].emitted || g_adt_apps[idx].emitting) return;
@@ -1492,14 +1494,28 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
             wide_box[fi] = type_is_wide_byval_adt(fres);
         }
 
-        buf_printf(out, "static %s ctor_%s%s(",
-                   app_byval ? adt_inst_name : "int64_t", mctor, suffix.data);
+        /* CONV-S1 seam 3: a :heap monomorph ctor mallocs the by-value header and
+         * returns a TYPED pointer (`tur_adt_Vec__int *`), the ADT analogue of a
+         * :heap struct ctor.  Fields are stored INLINE by value in the header
+         * (no int64 carrier box) -- the pointer indirection is the whole point. */
+        bool app_heap = def->is_heap;
+        const char *ctor_ret = app_heap ? heap_ptr_c_name(adt_inst_name)
+                             : app_byval ? adt_inst_name : "int64_t";
+        buf_printf(out, "static %s ctor_%s%s(", ctor_ret, mctor, suffix.data);
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             if (fi > 0) buf_puts(out, ", ");
             buf_printf(out, "%s _%u", val_ctype[fi], fi);
         }
         buf_printf(out, ") {\n");
-        if (app_byval) {
+        if (app_heap) {
+            buf_printf(out, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
+                       adt_inst_name, adt_inst_name, adt_inst_name);
+            if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
+            for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                buf_printf(out, "    __r->as.%s._%u = _%u;\n", mctor, fi, fi);
+            }
+            buf_printf(out, "    return __r;\n");
+        } else if (app_byval) {
             buf_printf(out, "    %s __r;\n", adt_inst_name);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                 buf_printf(out, "    __r.as.%s._%u = _%u;\n", mctor, fi, fi);
@@ -2540,7 +2556,10 @@ static bool adt_field_is_inline_byval_d(const CtorField *f, int depth) {
     }
     if (ft->kind == TY_ADT) {
         const AdtDef *ad = ft->as.adt_.def;
-        return ad && !ad->needs_drop_glue && adt_is_byvalue_product_d(ad, depth - 1);
+        /* seam 3: a :heap ADT is a typed POINTER, not an inline aggregate -- store
+         * it as the pointer carrier, exactly as a :heap struct field is excluded. */
+        return ad && !ad->is_heap && !ad->needs_drop_glue &&
+               adt_is_byvalue_product_d(ad, depth - 1);
     }
     return false;
 }
@@ -2922,8 +2941,14 @@ const char *type_c_name(Type t) {
          * is the flat `tur_adt_<Name>` aggregate, not the int64 carrier.  Gated
          * by adt_is_byvalue_product (LIVE for leaf products as of B3). */
         case TY_ADT:
-            if (adt_is_byvalue_product(t.as.adt_.def))
+            if (adt_is_byvalue_product(t.as.adt_.def)) {
+                /* CONV-S1 seam 3: a :heap record ADT lowers to a typed pointer to
+                 * its by-value header (the ADT analogue of a :heap struct's
+                 * `Name *`). */
+                if (t.as.adt_.def->is_heap)
+                    return heap_ptr_c_name(adt_byval_c_name(t.as.adt_.def));
                 return adt_byval_c_name(t.as.adt_.def);
+            }
             return "int64_t";
         /* Phase G2: unresolved type variable — treated as int64_t at codegen level */
         case TY_TYVAR:
@@ -2939,7 +2964,14 @@ const char *type_c_name(Type t) {
              * not the int64 carrier.  Hard-off until the crossings are wired. */
             if (adt_app_is_byvalue_product(t)) {
                 const char *nm = type_register_adt_app(t);
-                if (nm) return nm;
+                if (nm) {
+                    /* CONV-S1 seam 3: a :heap parametric record ADT monomorph
+                     * (`(Vec int)`) lowers to a typed pointer `tur_adt_Vec__int *`
+                     * to its heap header -- the ADT analogue of `Vec__int *`. */
+                    AdtDef *adef = type_adt_app_def(&t);
+                    if (adef && adef->is_heap) return heap_ptr_c_name(nm);
+                    return nm;
+                }
             }
             if (type_has_concrete_codegen_layout(&t)) {
                 const char *base = register_struct_app(t);

@@ -4882,6 +4882,9 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
      * Gated by adt_is_byvalue_product (LIVE for leaf products as of B3).  byval
      * implies flat. */
     bool byval = adt_is_byvalue_product(def);
+    /* seam 3: a :heap ADT's header holds its fields by value (the pointer
+     * indirection is the ABI; the header layout is the by-value one). */
+    bool hdr_byval = byval || def->is_heap;
     buf_printf(out, "typedef struct %s {\n", adt_c_name);
     if (!flat) buf_printf(out, "    int tag;\n");
     buf_printf(out, "    union {\n");
@@ -4890,7 +4893,7 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
         char *mctor = mangle_field_name(ctor->name);
         buf_printf(out, "        struct {");
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-            const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], byval);
+            const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], hdr_byval);
             buf_printf(out, " %s _%u;", ctype, fi);
         }
         buf_printf(out, " } %s;\n", mctor);
@@ -4904,18 +4907,36 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
      * owned fields when the control block hits zero. */
     if (byval) emit_adt_byval_drop_glue(out, def, adt_c_name);
 
+    /* CONV-S1 seam 3: a non-parametric :heap record ADT (a lowered `:heap`
+     * struct with no type params) returns a typed pointer to its by-value header
+     * -- the ADT analogue of a :heap struct's `Name *` ctor. */
+    bool heap = def->is_heap;
+    char adt_ptr_name[260];
+    snprintf(adt_ptr_name, sizeof(adt_ptr_name), "%s *", adt_c_name);
+
     /* Emit constructor functions */
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
         CtorDef *ctor = def->ctors[ci];
         char *mctor = mangle_field_name(ctor->name);
-        buf_printf(out, "static %s ctor_%s(", byval ? adt_c_name : "int64_t", mctor);
+        buf_printf(out, "static %s ctor_%s(",
+                   heap ? adt_ptr_name : byval ? adt_c_name : "int64_t", mctor);
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             if (fi > 0) buf_puts(out, ", ");
-            const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], byval);
+            const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], byval || heap);
             buf_printf(out, "%s _%u", ctype, fi);
         }
         buf_printf(out, ") {\n");
-        if (byval) {
+        if (heap) {
+            /* malloc the by-value header, store fields inline, return the typed
+             * pointer (no int64 carrier cast -- the pointer IS the value). */
+            buf_printf(out, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
+                       adt_c_name, adt_c_name, adt_c_name);
+            if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
+            for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                buf_printf(out, "    __r->as.%s._%u = _%u;\n", mctor, fi, fi);
+            }
+            buf_printf(out, "    return __r;\n");
+        } else if (byval) {
             /* CONV-S1: build and return the flat aggregate by value -- no heap
              * box, no tag (byval implies single-variant flat product). */
             buf_printf(out, "    %s __r;\n", adt_c_name);
@@ -8247,6 +8268,11 @@ int emit_program(Buf *out, const Expr *program) {
             /* CONV-S1: by-value flat product (LIVE for leaf products as of B3) --
              * mirror of emit_adt_typedef_and_ctors.  byval implies flat. */
             bool byval = adt_is_byvalue_product(def);
+            /* seam 3: :heap header holds fields by value; ctor returns a pointer. */
+            bool heap = def->is_heap;
+            bool hdr_byval = byval || heap;
+            char adt_ptr_name[260];
+            snprintf(adt_ptr_name, sizeof(adt_ptr_name), "%s *", adt_c_name);
             buf_printf(&early_file, "typedef struct %s {\n", adt_c_name);
             if (!flat) buf_printf(&early_file, "    int tag;\n");
             buf_printf(&early_file, "    union {\n");
@@ -8255,7 +8281,7 @@ int emit_program(Buf *out, const Expr *program) {
                 char *mctor = mangle_field_name(ctor->name);
                 buf_printf(&early_file, "        struct {");
                 for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-                    const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], byval);
+                    const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], hdr_byval);
                     buf_printf(&early_file, " %s _%u;", ctype, fi);
                 }
                 buf_printf(&early_file, " } %s;\n", mctor);
@@ -8273,14 +8299,22 @@ int emit_program(Buf *out, const Expr *program) {
                 CtorDef *ctor = def->ctors[ci];
                 char *mctor = mangle_field_name(ctor->name);
                 buf_printf(&early_file, "static %s ctor_%s(",
-                           byval ? adt_c_name : "int64_t", mctor);
+                           heap ? adt_ptr_name : byval ? adt_c_name : "int64_t", mctor);
                 for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                     if (fi > 0) buf_puts(&early_file, ", ");
-                    const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], byval);
+                    const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], hdr_byval);
                     buf_printf(&early_file, "%s _%u", ctype, fi);
                 }
                 buf_printf(&early_file, ") {\n");
-                if (byval) {
+                if (heap) {
+                    buf_printf(&early_file, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
+                               adt_c_name, adt_c_name, adt_c_name);
+                    if (!flat) buf_printf(&early_file, "    __r->tag = %u;\n", ctor->tag);
+                    for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                        buf_printf(&early_file, "    __r->as.%s._%u = _%u;\n", mctor, fi, fi);
+                    }
+                    buf_printf(&early_file, "    return __r;\n");
+                } else if (byval) {
                     /* CONV-S1: return the flat aggregate by value -- no heap box. */
                     buf_printf(&early_file, "    %s __r;\n", adt_c_name);
                     for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {

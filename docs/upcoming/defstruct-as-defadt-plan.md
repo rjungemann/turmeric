@@ -408,17 +408,34 @@ runtime *usage* seam, below.
      `MonadError` inline-C bodies) still assumes the struct/carrier representation;
      it coexists fine today (parity) but should be reconciled or retired when the
      gate comes off.
-3. **`:heap` typed-pointer ADT ABI.** Still NOT STARTED (see
-   [parametric-adt-byvalue-plan.md](parametric-adt-byvalue-plan.md) step 5) --
-   `Vec`/`Map`/`Set`/`MutableMap` are `:heap` parametric structs and have no
-   `tur_adt_X__A *` typed-pointer ADT lowering.
+3. **`:heap` typed-pointer ADT ABI. FOUNDATION DONE (2026-06-26); :heap-struct
+   auto-lowering deferred.** A `:heap` record ADT now lowers to a typed pointer
+   (`tur_adt_<Name>__<args> *`) to a heap-allocated header -- the ADT analogue of
+   a `:heap` struct's `Name *`.  Landed (all gated on `AdtDef.is_heap`, so inert
+   unless an ADT is `:heap`): `defdata :heap` parsing; `type_c_name` typed-pointer
+   for a `:heap` `TY_ADT` and concrete `:heap` `TY_APP` monomorph; malloc'ing
+   ctors in both the parametric monomorph emitter (types.c) and the non-parametric
+   emitter + its early-file mirror (emit_module.c); `->` field access for a `:heap`
+   receiver; `emit_type_is_byvalue_adt` / `adt_field_is_inline_byval` excluding
+   `:heap` (a `:heap` ADT is a pointer carrier, never an inline/boxed aggregate);
+   `resolve_ctor_field` recording a `:heap` / forward-stub ADT field's `full_type`.
+   A hand-written `(defdata HCell :heap [A] (HCell [fst : A snd : int]))` lowers,
+   constructs and reads back correctly (fixture `conv-heap-adt-typed-pointer`).
+   **Remaining (kept on the struct path by the gate):** auto-lowering a `:heap`
+   *struct* still has a by-value-vs-`:heap` integration tail -- a nested `:heap`
+   field passed to another `:heap` param is spuriously address-of'd
+   (`bsum(&__t32)` where `__t32` is already `tur_adt_Big *`); each by-value site
+   (`field_read_emits_byvalue_aggregate`, the arg `&`-bridge, pbp) needs the same
+   `:heap` exclusion the foundation predicates got.  Then the stdlib
+   `Vec`/`Map`/`Set`/`MutableMap` -- whose inline-C bodies assume the struct/typed-
+   pointer rep -- must lower, the largest remaining piece.
 4. **Validation across every autoloaded parametric stdlib type**, then delete the
    gate + `g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]` row, retire the
    `StructDef` surface path, and regenerate snapshots.
 
 ### Current state (suite green)
 
-`bash tests/run.sh` is **1840 passed, 0 failed** with the gate widened to
+`bash tests/run.sh` is **1841 passed, 0 failed** with the gate widened to
 parametric (non-`:heap`) structs; the flag-on `conv-defstruct-*` canaries pass.
 The flag is still opt-in.  **`Option` and `Result` -- the two hardest
 dedicated-codegen stdlib types -- now work under the flag at parity with the
@@ -427,9 +444,12 @@ no-flag baseline:** construction (`some`/`none`/`ok`/`err`), accessors
 on Option) all compile and run with correct results.  (`fmap`/`bind` on `Result`
 remain blocked by a *baseline* type-recovery limitation, not the lowering.)
 
-Seams 1, 1b, 2 are DONE.  Graduation order from here: **seam 3** (`:heap` ADT ABI
--- `Vec`/`Map`/`Set`/`MutableMap`, the last representational gap) -> **seam 4**
-(validate across every parametric stdlib type, then delete the gate +
-`g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]` row, retire the `StructDef`
-surface path, regen snapshots).  The suite does not yet exercise the by-value HKT
-usage the flag now supports, so adding flag-on fixtures for it is part of seam 4.
+Seams 1, 1b, 2 are DONE, and seam 3's `:heap` ADT ABI *foundation* is in place
+(a hand-written `:heap` defadt lowers and runs).  Graduation order from here:
+finish **seam 3** (`:heap`-struct auto-lowering, then the stdlib
+`Vec`/`Map`/`Set`/`MutableMap` whose inline-C assumes the struct rep -- the last
+representational gap) -> **seam 4** (validate across every parametric stdlib
+type, then delete the gate + `g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]`
+row, retire the `StructDef` surface path, regen snapshots).  The suite does not
+yet exercise the by-value HKT usage the flag now supports, so adding flag-on
+fixtures for it is part of seam 4.
