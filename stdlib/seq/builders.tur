@@ -49,13 +49,18 @@
 
 (defn seq-pair-first [p : int] : int
   ```c
-  Tuple2 *pair = (Tuple2 *)(intptr_t)p;
+  /* Representation-independent: a seq pair is a private 2-int64 cell (see
+   * seq-make-pair), not the stdlib `Tuple2` type, which the
+   * defstruct-as-defadt lowering renames + restructures. */
+  struct __seq_pair2 { int64_t e1; int64_t e2; };
+  struct __seq_pair2 *pair = (struct __seq_pair2 *)(intptr_t)p;
   return pair->e1;
   ```)
 
 (defn seq-pair-second [p : int] : int
   ```c
-  Tuple2 *pair = (Tuple2 *)(intptr_t)p;
+  struct __seq_pair2 { int64_t e1; int64_t e2; };
+  struct __seq_pair2 *pair = (struct __seq_pair2 *)(intptr_t)p;
   return pair->e2;
   ```)
 ;; -------------------------------------------------------------------
