@@ -228,7 +228,7 @@ table. The AOT path compiles each script to a shared library via
 the dlsym'd function pointer. Same observable behaviour either way --
 AOT is the optimisation, not a separate language.
 
-Plan reference: [docs/upcoming/v1/godot-binding-aot-plan.md](../upcoming/v1/godot-binding-aot-plan.md).
+Plan reference: [docs/archive/godot-binding-aot-plan.md](../archive/godot-binding-aot-plan.md).
 
 ### Opting in
 
@@ -318,8 +318,15 @@ TURMERIC_GODOT_AOT=1 /Applications/Godot.app/Contents/MacOS/Godot \
     --headless --path examples/aot-bench --quit
 ```
 
-Each run prints `mode=… iters=… ns_per_call=…`. Plan target: AOT >= 5x
-faster than interpreter at this workload.
+Each run prints `mode=… iters=… ns_per_call=…`. The 5x plan target is
+achievable but not at the bundled bench's body weight -- `(+ x 1)` is
+so cheap that Godot's per-call Variant infrastructure (~250 ns)
+dominates either path's body cost. The ~7 ns AOT-vs-interp delta you
+see at 1 arithmetic op grows linearly as the body gets heavier; a
+recursive or 100-op body shows the planned ratio. The bench's
+day-to-day job is wiring + cache-hit smoke testing, not throughput
+demonstration -- see `examples/aot-bench/README.md` for the full cost
+breakdown.
 
 ### Troubleshooting
 
@@ -349,11 +356,19 @@ Godot only fires `Script::_reload` outside Play.
 
 ### Not yet
 
-- Variadic dispatch.
 - `Ptr` / opaque-handle / struct args and returns.
-- Cross-script (one AOT script calling another's defn).
+- Cross-script direct dispatch (Callable fallback works -- see
+  [Cross-script calls](#cross-script-calls)). The fast-path
+  build-graph variant is Tier 4 (T4.A approach 2).
 - Export-time signed dylibs.
 - Per-method JIT -- AOT is the v1 story; JIT is not in the v1 picture.
+
+### Shipped since the original v1 plan
+
+- Variadic dispatch: `godot-call-pack` + generated `cls/method`
+  wrappers with a trailing `extras : ArrayHandle`. Covers
+  `Object::emit_signal`, `Node::rpc`, `SceneTree::call_group`, ...
+  See Tier 3 (T3.E).
 
 ---
 
@@ -386,8 +401,50 @@ Godot only fires `Script::_reload` outside Play.
    Pre-existing; one-line `var sigs: Array =` fix waiting to be
    landed.
 
-7. **Generated facade allowlist is 15 of 920 classes.** Tactical
-   growth as demos demand.
+7. **Generated facade allowlist is 53 of 920 classes** (was 15 in the
+   original v1 plan; Tier 3 grew it). Tactical growth as demos
+   demand; the long tail is editor-internals / audio-server / 3D
+   classes the average 2D game doesn't touch.
+
+---
+
+## Cross-script calls
+
+Each `.tur` script AOT-compiles to its own dlopen'd shared library.
+Direct symbol resolution from one script's library into another's is
+the Tier 4 "approach 2" piece (per-script `build.tur`-style
+dependency graph, `RTLD_GLOBAL` for exports) -- not in v1.x.
+
+The v1.x **always-available path** is exactly what GDScript pays for
+the same operation: route through Godot's Callable / `Object::callv`.
+The substrate is already in place, surfaced through two named
+helpers in the prelude:
+
+```turmeric
+;; Positional flavour -- up to a few fixed args. Primitives stay
+;; primitive; arena handles (Vec2Handle, ColorHandle, ...) stay arena
+;; handles. Returns the dynamic Variant result as :int (caller
+;; demotes if a concrete type is known).
+(cross-call other-node "do-thing" arg1 arg2)
+
+;; Arbitrary-arity flavour -- pass an ArrayHandle for any arg count.
+;; Same machinery the T3.E generated vararg wrappers use.
+(let [extras (array-new)]
+  (array-push-i extras 5)
+  (array-push-c extras "hello")
+  (cross-call-pack other-node "do-thing" extras))
+```
+
+Dispatch on the other script's defn uses the kebab-case Turmeric
+name -- a `(defn do-thing [x] ...)` in `Enemy.tur` is reached as
+`(cross-call enemy-node "do-thing" ...)`. The bridge's `cb_call`
+normalises the underscore/dash spelling.
+
+Performance: each call pays the Variant marshalling cost twice
+(once into the call_args Array, once for the return value). For
+gameplay code that calls cross-script tens of times per frame this
+is fine; for inner-loop substrate (per-particle, per-cell) the v1.x
+guidance is "keep it inside one script."
 
 ---
 
@@ -411,3 +468,155 @@ cd ../turmeric-godot/examples/spike
 ```
 
 Should print `[classdb_call.gd] all assertions passed`.
+
+---
+
+## Cheat sheet
+
+Commands assume you're sitting in the `turmeric-godot` repo root, with
+`turmeric/` checked out next door at `../turmeric` and the `tur` binary
+on PATH (or `TUR_BIN` set).
+
+### Build the GDExtension
+
+```sh
+# One-time SCons install via mise + pipx.
+mise use -g pipx:scons
+
+# Debug build (debug-symbols + sanitisers in libturi).
+scons platform=macos arch=arm64 target=template_debug
+
+# Release build.
+scons platform=macos arch=arm64 target=template_release
+
+# Force a full rebuild of the extension itself.
+rm -rf .sconsign.dblite src/*.os src/bridge/*.os src/aot/*.os
+scons platform=macos arch=arm64 target=template_debug
+
+# Rebuild libturi.a first when you've edited compiler sources upstream.
+(cd ../turmeric && cmake --build build-rel --target libturi -j)
+```
+
+`SConstruct` mirrors `examples/spike/bin/` into every sibling example
+that holds a `turmeric-godot.gdextension` file, so all examples pick up
+a fresh build automatically.
+
+### Run an example headless
+
+```sh
+GODOT=/Applications/Godot.app/Contents/MacOS/Godot
+
+# One-time project import; populates .godot/ so the .tur loader registers.
+# Skip if the project already has a populated .godot/.
+$GODOT --headless --path examples/aot-bench --editor --quit-after 2
+
+# Run a SceneTree script. Use this pattern for any headless test/bench.
+$GODOT --headless --path examples/aot-bench --script res://main.gd
+```
+
+### Toggle AOT vs interpreter
+
+Precedence (highest wins): env var > `#mode` directive > project setting >
+default `interpreter`.
+
+```sh
+# Dev-loop override: one run in AOT mode.
+TURMERIC_GODOT_AOT=1 $GODOT --headless --path examples/aot-bench \
+    --script res://main.gd
+
+# Force interpreter even if project.godot says aot.
+TURMERIC_GODOT_AOT=0 $GODOT --headless --path examples/aot-bench \
+    --script res://main.gd
+```
+
+For per-script opt-in, add `#mode aot` to the top of a `.tur` file. For
+project-wide opt-in, set `turmeric/execution_mode = "aot"` in
+`project.godot` (under `[turmeric]`).
+
+### Clear the AOT cache
+
+The cache key includes source bytes + `tur` binary mtime, so source
+edits + compiler upgrades both force a rebuild automatically. Force a
+clear by hand when:
+
+- A previous build with an empty/broken `exports.manifest` got cached
+  (e.g. you forgot the `(defmodule ... (export ...))` wrapper).
+- You want to time the cold-build path.
+- You changed something in the staging logic itself.
+
+```sh
+# One project.
+rm -rf examples/aot-bench/.godot/turmeric-cache
+
+# All examples.
+find examples -type d -name turmeric-cache -exec rm -rf {} +
+
+# Plus the A4 metadata sidecars (lives under the same cache root, so the
+# command above already gets them; included for clarity).
+```
+
+The cache is at `<godot_project>/.godot/turmeric-cache/<fnv64-hash>/`
+with `build.tur`, `src/<module>.tur`, `build.log`,
+`build/lib/lib<pkg>.so`, `build/lib/lib<pkg>.so.manifest`, and
+`exports.metadata`.
+
+### Inspect the AOT artifacts
+
+```sh
+# What got built for one script (sha will differ).
+ls examples/aot-bench/.godot/turmeric-cache/*/build/lib/
+
+# What symbols the manifest declared.
+cat examples/aot-bench/.godot/turmeric-cache/*/build/lib/*.manifest
+
+# Why a build failed (full tur stdout/stderr).
+cat examples/aot-bench/.godot/turmeric-cache/*/build.log
+
+# What inspector exports + signals the A4 sidecar persisted.
+cat examples/aot-bench/.godot/turmeric-cache/*/exports.metadata
+```
+
+### Confirm AOT actually fired
+
+In the Godot Output panel, look for these two lines per AOT script
+reload (both are required):
+
+```
+[turmeric res://path/to/script.tur AOT] loaded N exports from .../lib<pkg>.so (built|cache hit)
+[turmeric-godot AOT] first dispatch routed via AOT: mod/name (mangled=...)
+```
+
+The first proves build + dlopen worked; the second proves `cb_call`
+actually took the AOT path on at least one call. Absence of either
+means the script silently ran on the interpreter regardless of the
+`mode=` line in any benchmark output.
+
+### Pin a specific `tur` binary
+
+```sh
+# Per-run override.
+TUR_BIN=/Users/me/Projects/turmeric/build/tur $GODOT --headless ...
+
+# Per-project override -- set turmeric/tur_binary in project.godot.
+[turmeric]
+tur_binary="/Users/me/Projects/turmeric/build/tur"
+```
+
+`TUR_BIN` env > `turmeric/tur_binary` setting > `tur` on `PATH`.
+
+### Re-run the bench from scratch
+
+```sh
+rm -rf examples/aot-bench/.godot/turmeric-cache
+
+# Cold interpreter baseline.
+$GODOT --headless --path examples/aot-bench --script res://main.gd
+
+# Cold AOT build + first dispatch.
+TURMERIC_GODOT_AOT=1 $GODOT --headless --path examples/aot-bench \
+    --script res://main.gd
+
+# Warm AOT (should print "(cache hit)" instead of "(built)").
+TURMERIC_GODOT_AOT=1 $GODOT --headless --path examples/aot-bench \
+    --script res://main.gd
+```
