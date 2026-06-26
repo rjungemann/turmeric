@@ -782,8 +782,21 @@ runtime *usage* seam, below.
    ctor-monomorph selection edges); 3 `unknown type name 'Tuple2'` (inline-C naming
    the **parametric** `Tuple2` directly -- needs fixture rewrite, no single C type
    exists); a few `no typeclass method` (schema HKT) and one-offs
-   (`struct-set-field`, `struct-curry-ctor`); and the moot **`hkt-cata-*`** carriers
+   (`struct-curry-ctor`); and the moot **`hkt-cata-*`** carriers
    (B4 territory -- excluded at graduation, not fixed).
+
+   - **schema-HKT `no typeclass method found for 'raw'` (investigated
+     2026-06-26, BLOCKED in M7).**  `(.raw (fmap s f))` over a phantom record
+     newtype `(Schema A)`: the `fmap` *call result type* is a degenerate `(f b)`
+     app (`app.fn == app.arg == NULL`) under lowering instead of `(Schema int)`,
+     so the dot-access cannot resolve the receiver to the Schema record ADT.  At
+     default the call-result head is a concrete `TY_STRUCT` (the struct-match loop
+     recovers it); under lowering Schema is an ADT and the HKT result-type
+     concretization leaves the head empty.  Root cause + repro + fix directions in
+     `docs/reported/schema-hkt-method-call-result-degenerate-app.md` (the fix is
+     in the M7 HKT result-type rewrite / call-site instantiation, not a leaf).
+     Affects `schema-hkt-functor`, `schema-hkt-alternative`,
+     `schema-applicative-user`, `schema-applicative-user-errors`.
 
    Each non-moot cluster must be driven to zero -- promote a representative
    force-lower failure to a flag-on fixture, fix the lowering, repeat -- before the
