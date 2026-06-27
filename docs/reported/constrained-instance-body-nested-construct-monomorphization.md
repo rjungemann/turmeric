@@ -120,17 +120,36 @@ element) rather than the actual argument `acc : (Vec (Option int))`.  Because th
 Vec is :heap, the correct lowering keeps `(ok acc)` on the plain carrier `ok`
 (pointer cast to int64); minting any by-value spec is wrong.
 
-Fix direction (next pass): derive a construct payload arg type from the actual
-argument expression's spec-resolved type when the binding-derived type comes from
-a name-colliding constraint var -- a construct over a spec parameter whose type is
-a :heap/parametric container must not collapse to the container's element.  (A
-direct attempt to prefer `emit_spec_arg_type_for_binding` for construct payload
-args in the owned arg loop did not take effect -- `build`'s `(ok acc)` reaches the
-interning through a construct path that bypasses that loop; the override must be
-placed where the construct's `arg_types[]` are finalized for interning, or the
-elab-side abi-binding for a construct whose element is `(Container ConstraintVar)`
-must record the element type, not the bare constraint var.)  Then the `ok-val`
-accessor and `vec-push!` carrier bridges should fall in line.
+Root cause (pinned 2026-06-27): the `ok` construct template's element tyvar is
+named **`A`** -- the SAME name as `build`'s constraint var `A`.  Inside `build`'s
+spec (`A -> (Option int)`) both the call's abi-binding AND `emit_resolve_type`
+resolve the `ok` payload through that binding, yielding `Option__int` (build's
+`A`, the Vec's element) instead of the actual argument `acc : (Vec A) = (Vec
+(Option int))`.  Because `acc` is a :heap Vec (its pointer IS the int64 carrier),
+the correct lowering keeps `(ok acc)` on the plain carrier `ok` -- minting any
+by-value spec is wrong.
+
+Emit-side override is a DEAD END (attempted + reverted): overriding the interned
+`arg_types[0]` to the actual `acc` type (`(Vec (Option int))`, via
+`emit_spec_arg_type_for_binding` right before `emit_abi_intern_spec`) does mint
+`ok__spec__..._tur_adt_Vec__Option__int__` and makes `build` COMPILE -- but the
+spec BODY emit still resolves the param's type via `emit_resolve_type(A) ->
+Option__int` (the collision), so `emit_type_is_byvalue_adt` fires and the body
+DOUBLE-BOXES the :heap Vec pointer into a `Vec **` (malloc + store pointer).  At
+runtime `ok-val` then hands back the wrong pointer and the vec reads back empty
+(`vec-len = 0`, then "tvec index out of bounds").  Patching the intern arg type
+without also fixing `emit_resolve_type`'s view of the param leaves the spec
+signature and its body inconsistent.
+
+Fix direction (next pass) -- must make BOTH the interned arg type and the spec
+body's `emit_resolve_type` agree, which means breaking the collision upstream:
+disambiguate the `ok` construct-template element tyvar from the enclosing
+constrained-`defn`'s constraint var at elaboration (so the `(ok acc)` abi-binding
+records ok's own element `a -> (Vec A)` rather than reusing the name `A`), OR
+thread the actual argument's resolved type uniformly through both interning and
+body emit for a construct whose element is `(Container ConstraintVar)` over a
+:heap container.  Only then will the `ok-val` accessor and `vec-push!` carrier
+bridges (defect #3) fall in line.
 
 ## Notes
 
