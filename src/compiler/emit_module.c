@@ -1119,8 +1119,14 @@ static bool emit_ground_constraint_var(FnDef *fd,
         }
         Type recv = bindings[0].type;
         StructDef *rsd = NULL; Type rargs[16]; uint8_t rn = 0;
-        if (type_extract_struct_app(&recv, &rsd, rargs, &rn) &&
-            (uint8_t)tc->param_idx < rn) {
+        AdtDef *rad = NULL;
+        bool extracted =
+            type_extract_struct_app(&recv, &rsd, rargs, &rn) ||
+            /* lowered record ADT receiver (`(Vec bool)`/`(Cons (Option int))`):
+             * extract its element args the same way so the constraint var grounds
+             * via param_idx under defstruct-as-defadt. */
+            type_extract_adt_app(&recv, &rad, rargs, &rn);
+        if (extracted && (uint8_t)tc->param_idx < rn) {
             Type g = rargs[tc->param_idx];
             if (g.kind != TY_TYVAR && g.kind != TY_UNKNOWN) {
                 if (out) *out = g;

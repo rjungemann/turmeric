@@ -2699,6 +2699,31 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                         }
                                     }
                                 }
+                                /* CONV-S2: under defstruct-as-defadt the instance
+                                 * head is a lowered record ADT (`[Cons]`/`[Vec]`),
+                                 * so the constraint var (`A` in `[(Tag A)]`) is one
+                                 * of the ADT's type params, not a struct's.  Mirror
+                                 * the struct lookup so its param_idx is recorded;
+                                 * without it p_idx stays -1 and the emit-side
+                                 * constraint-var->element mapping (a helper call or
+                                 * lifted closure inside the instance body) never
+                                 * grounds A, baking the carrier representative. */
+                                if (!found) {
+                                    for (uint8_t j = 0; j < n_type_args && p_idx < 0; j++) {
+                                        if (type_args[j].kind == TY_ADT &&
+                                            type_args[j].as.adt_.def) {
+                                            AdtDef *adef = type_args[j].as.adt_.def;
+                                            for (uint8_t k = 0; k < adef->n_type_params; k++) {
+                                                if (adef->type_params[k] &&
+                                                    strcmp(adef->type_params[k],
+                                                           type_param_name->name) == 0) {
+                                                    p_idx = (int8_t)k;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -2777,6 +2802,24 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                             StructDef *sdef = type_args[j].as.struct_.def;
                                             for (uint8_t k = 0; k < sdef->n_type_params; k++) {
                                                 if (strcmp(sdef->type_params[k],
+                                                           type_param_name->name) == 0) {
+                                                    p_idx = (int8_t)k;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                /* CONV-S2: lowered record ADT instance head -- see
+                                 * the paren-format block above. */
+                                if (!found) {
+                                    for (uint8_t j = 0; j < n_type_args && p_idx < 0; j++) {
+                                        if (type_args[j].kind == TY_ADT &&
+                                            type_args[j].as.adt_.def) {
+                                            AdtDef *adef = type_args[j].as.adt_.def;
+                                            for (uint8_t k = 0; k < adef->n_type_params; k++) {
+                                                if (adef->type_params[k] &&
+                                                    strcmp(adef->type_params[k],
                                                            type_param_name->name) == 0) {
                                                     p_idx = (int8_t)k;
                                                     break;
