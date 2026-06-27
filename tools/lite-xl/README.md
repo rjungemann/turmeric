@@ -62,6 +62,19 @@ Output streams into Lite XL's log pane (View > Toggle Log View if it is
 not visible). Lines that look like `path:line:col:` come through
 `core.error` so the log pane highlights them.
 
+## Themes
+
+Two color themes ported 1:1 from the Try Turmeric palette
+(`web/main.js`):
+
+- `turmeric-dark` -- the "Spice Market" dark theme. Set as the default
+  when launching via `tur run lite-xl`.
+- `turmeric-light` -- the light variant.
+
+Switch via Lite XL's command palette: `Core: Change Color Theme`. The
+sync between the Monaco palette and the Lua port is gated by
+`python3 tests/lite-xl/check-palette-sync.py`.
+
 ## Configuration
 
 Override any of these in `~/.config/lite-xl/init.lua`:

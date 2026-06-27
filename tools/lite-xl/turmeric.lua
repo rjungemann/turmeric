@@ -27,59 +27,85 @@ local process = require "process"
 syntax.add {
   name = "Turmeric",
   files = { "%.tur$", "%.tur%.sweet$" },
-  comment = ";;",
+  comment = ";",
   patterns = {
+    -- Inline-C fence: keep the whole ```c ... ``` block visually quiet
+    -- by tagging the fence itself; body is rendered as the default
+    -- "string" style so users can tell C apart from Turmeric at a glance.
+    { pattern = { "```c", "```" },                type = "string" },
     -- Strings (double-quoted with backslash escapes).
     { pattern = { '"', '"', '\\' },              type = "string" },
-    -- Triple-semicolon docstring takes precedence over plain comment.
-    { pattern = ";;;.*",                          type = "comment" },
-    { pattern = ";.*",                            type = "comment" },
-    -- Numeric literals.
+    -- Docstring (;;; ... line) takes precedence over plain comments and
+    -- gets the `keyword2` slot so themes can render it distinctly.
+    { pattern = ";;;.-\n",                        type = "keyword2" },
+    { pattern = ";.-\n",                          type = "comment" },
+    -- Data literal headers: #map{...}, #set{...}, #row{...}, #fx{...},
+    -- #lang sweet-exp, #refine{...}. Just tag the head; the contents
+    -- follow normal rules thanks to the standalone brace tokens.
+    { pattern = "#%a[%w%-]*%f[{]",                type = "literal" },
+    -- Numeric literals -- floats first so 7.1 wins over 7 then .1.
     { pattern = "-?%d+%.%d+",                     type = "number" },
     { pattern = "-?%.%d+",                        type = "number" },
     { pattern = "-?%d+",                          type = "number" },
-    -- Keyword literals (Turmeric :keyword).
-    { pattern = ":[%a_][%w_%-]*",                 type = "literal" },
-    -- Inline-C fence marker (just the backticks; body remains plain).
-    { pattern = "```c",                           type = "keyword2" },
-    { pattern = "```",                            type = "keyword2" },
+    -- Turmeric keyword literals: :name and :ns/name.
+    { pattern = ":[%a_][%w_%-/]*",                type = "literal" },
+    -- Curly-infix braces are their own tokens so themes can highlight
+    -- {a + b} arithmetic distinctly from plain s-expr parens.
+    { pattern = "[{}]",                           type = "operator" },
+    -- Sweet-exp rest-of-line marker `$`.
+    { pattern = "%$",                             type = "keyword" },
     -- Operators / delimiters worth coloring.
-    { pattern = "[%(%)%[%]{}]",                   type = "operator" },
-    -- A symbol-shaped function call head: identifier followed by space-args.
-    { pattern = "[%a_][%w_%-%?!%*/%+%-=<>]*",     type = "symbol" },
+    { pattern = "[%(%)%[%]]",                     type = "operator" },
+    -- Identifier shapes -- allow Lisp-y chars in names (-, ?, !, *, /,
+    -- +, -, =, <, >, ').
+    { pattern = "[%a_][%w_%-%?!%*/%+=<>']*",      type = "symbol" },
   },
   symbols = {
     -- Special forms / binding forms.
-    ["defn"]       = "keyword",
-    ["defmacro"]   = "keyword",
-    ["defstruct"]  = "keyword",
-    ["defopaque"]  = "keyword",
-    ["definstance"]= "keyword",
-    ["defclass"]   = "keyword",
-    ["def"]        = "keyword",
-    ["fn"]         = "keyword",
-    ["let"]        = "keyword",
-    ["if"]         = "keyword",
-    ["when"]       = "keyword",
-    ["cond"]       = "keyword",
-    ["do"]         = "keyword",
-    ["for"]        = "keyword",
-    ["while"]      = "keyword",
-    ["loop"]       = "keyword",
-    ["recur"]      = "keyword",
-    ["match"]      = "keyword",
-    ["import"]     = "keyword",
-    ["export"]     = "keyword",
+    ["defn"]        = "keyword",
+    ["defmacro"]    = "keyword",
+    ["defstruct"]   = "keyword",
+    ["defopaque"]   = "keyword",
+    ["definstance"] = "keyword",
+    ["defclass"]    = "keyword",
+    ["defmodule"]   = "keyword",
+    ["def"]         = "keyword",
+    ["fn"]          = "keyword",
+    ["let"]         = "keyword",
+    ["loop"]        = "keyword",
+    ["recur"]       = "keyword",
+    ["if"]          = "keyword",
+    ["when"]        = "keyword",
+    ["unless"]      = "keyword",
+    ["cond"]        = "keyword",
+    ["do"]          = "keyword",
+    ["for"]         = "keyword",
+    ["while"]       = "keyword",
+    ["match"]       = "keyword",
+    ["import"]      = "keyword",
+    ["export"]      = "keyword",
+    ["extern-c"]    = "keyword",
+    ["lambda"]      = "keyword",
     -- Primitive types.
-    ["int"]        = "keyword2",
-    ["float"]      = "keyword2",
-    ["bool"]       = "keyword2",
-    ["cstr"]       = "keyword2",
-    ["void"]       = "keyword2",
-    -- Literals.
-    ["true"]       = "literal",
-    ["false"]      = "literal",
-    ["nil-value"]  = "literal",
+    ["int"]         = "keyword2",
+    ["float"]       = "keyword2",
+    ["bool"]        = "keyword2",
+    ["cstr"]        = "keyword2",
+    ["void"]        = "keyword2",
+    ["byte"]        = "keyword2",
+    ["char"]        = "keyword2",
+    -- Type constructors used in annotations.
+    ["option"]      = "keyword2",
+    ["result"]      = "keyword2",
+    ["list"]        = "keyword2",
+    ["vec"]         = "keyword2",
+    ["map"]         = "keyword2",
+    ["set"]         = "keyword2",
+    -- Boolean / nil literals.
+    ["true"]        = "literal",
+    ["false"]       = "literal",
+    ["nil-value"]   = "literal",
+    ["nil"]         = "literal",
   },
 }
 
