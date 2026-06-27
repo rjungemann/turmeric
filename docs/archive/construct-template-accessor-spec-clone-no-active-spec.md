@@ -1,5 +1,31 @@
 # Construct-template accessor spec-clone bodies emit field reads with no active ABI spec
 
+**RESOLVED (2026-06-27).**  Fixed as part of the constrained-instance-body
+nested-construct monomorphization work (commit clearing
+`nested-construct-byvalue-decode`).  The per-element `unwrap` accessor spec
+bodies now emit the correct field reads under the force-lower probe -- the
+element type is recovered, not collapsed to the int64 carrier:
+
+```c
+static const char * unwrap__spec__const_char___tur_adt_Option__cstr(tur_adt_Option__cstr o) {
+        return (const char *)(o).as.Option._1;     /* cstr cast */
+}
+static double unwrap__spec__double_tur_adt_Option__float(tur_adt_Option__float o) {
+        return (double)(o).as.Option._1;           /* reads the double field */
+}
+static tur_adt_Box unwrap__spec__tur_adt_Box_tur_adt_Option__Box(tur_adt_Option__Box o) {
+        return (o).as.Option._1;                   /* reads the inline aggregate, no cast */
+}
+```
+
+The accessor param `o` is the concrete by-value monomorph (`tur_adt_Option__cstr`
+etc.), so the `adt_recv_byvalue` `EX_GET_FIELD` branch reads the field directly
+off the aggregate at its resolved element type -- the "no active spec" blocker the
+original analysis chased no longer applies once the per-element specs mint
+correctly (the return-dispatch minting + payload-arg recovery from that fix).
+`nested-construct-byvalue-decode` builds and runs `42 / hi / 3.25 / 99` under
+force-lower; default suite 1863/0.  Original report below.
+
 **Severity:** medium (seam-4 / defstruct-as-defadt graduation blocker; not a default-path bug)
 
 ## One-line summary
