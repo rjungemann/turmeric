@@ -390,8 +390,23 @@ body.split-dragging * {
     background: var(--bg-panel);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
-    overflow: hidden;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
 }
+.editor-header::-webkit-scrollbar { display: none; }
+.editor-tabs,
+.editor-actions { flex-shrink: 0; }
+.editor-header.has-overflow {
+    mask-image: linear-gradient(to right, transparent 0, black 16px, black calc(100% - 16px), transparent 100%);
+    -webkit-mask-image: linear-gradient(to right, transparent 0, black 16px, black calc(100% - 16px), transparent 100%);
+}
+.editor-header[data-dragging="1"] { cursor: grabbing; }
+.editor-header[data-dragging="1"] * { pointer-events: none; }
 
 .tutorial-bar {
     display: flex;
@@ -1511,28 +1526,7 @@ body.split-dragging * {
     /* Footer would otherwise consume scarce vertical space. */
     .footer { display: none; }
 
-    /* Horizontally scrollable editor header */
-    .editor-header {
-        flex-wrap: nowrap;
-        overflow-x: auto;
-        overflow-y: hidden;
-        scroll-snap-type: x proximity;
-        scrollbar-width: none;
-        overscroll-behavior-x: contain;
-        -webkit-overflow-scrolling: touch;
-    }
-    .editor-header::-webkit-scrollbar { display: none; }
-    .editor-tabs,
-    .editor-actions { flex-shrink: 0; }
     .editor-actions { margin-left: 0; }
-
-    .editor-header.has-overflow {
-        mask-image: linear-gradient(to right, transparent 0, black 16px, black calc(100% - 16px), transparent 100%);
-        -webkit-mask-image: linear-gradient(to right, transparent 0, black 16px, black calc(100% - 16px), transparent 100%);
-    }
-
-    .editor-header[data-dragging="1"] { cursor: grabbing; }
-    .editor-header[data-dragging="1"] * { pointer-events: none; }
 }
 
 @media (max-width: 1024px) and (display-mode: standalone) {
@@ -1554,16 +1548,14 @@ body.split-dragging * {
    buttons themselves are present in the tab bar. */
 .more-wrap { display: none; position: relative; }
 .more-menu {
-    position: absolute;
-    top: calc(100% + 4px);
-    right: 0;
+    position: fixed;
     min-width: 180px;
     background: var(--bg-panel);
     border: 1px solid var(--border);
     border-radius: 6px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
     padding: 4px;
-    z-index: 50;
+    z-index: 9999;
     display: flex;
     flex-direction: column;
 }

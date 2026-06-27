@@ -2004,6 +2004,11 @@ function initEventListeners() {
     const moreBtn = document.getElementById('more-btn');
     const moreMenu = document.getElementById('more-menu');
     if (moreBtn && moreMenu) {
+        // Reparent to <body> so the popover escapes any ancestor
+        // overflow:hidden / stacking-context (Monaco, editor-pane, etc.).
+        if (moreMenu.parentElement !== document.body) {
+            document.body.appendChild(moreMenu);
+        }
         const closeMenu = () => {
             moreMenu.hidden = true;
             moreBtn.setAttribute('aria-expanded', 'false');
@@ -2017,6 +2022,11 @@ function initEventListeners() {
             }
             moreMenu.hidden = false;
             moreBtn.setAttribute('aria-expanded', 'true');
+            // Anchor below the button. position:fixed so the menu escapes
+            // .editor-header's overflow:hidden clip on mobile.
+            const r = moreBtn.getBoundingClientRect();
+            moreMenu.style.top = `${r.bottom + 4}px`;
+            moreMenu.style.right = `${Math.max(4, window.innerWidth - r.right)}px`;
         };
         moreBtn.addEventListener('click', (e) => {
             e.stopPropagation();
