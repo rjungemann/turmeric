@@ -134,6 +134,16 @@ static Form *type_to_form(Elab *e, const Type *t, Span span) {
         return form_sym(e->arena, span,
             intern_cstr(e->st, t->as.struct_.def->name));
     }
+    /* CONV-S2: under defstruct-as-defadt a typed-collection element is a lowered
+     * record ADT (`Vec`/`Map`/...), so its bare name and TY_APP head are TY_ADT,
+     * not TY_STRUCT.  Mirror the struct cases so the comparator-synthesis
+     * ascription form (`(:: a (Vec int))`) is built for an ADT element; without
+     * it type_to_form returns NULL, the dispatch synthesis declines, and the
+     * element comparator collapses to the wrong (int) instance. */
+    if (t->kind == TY_ADT && t->as.adt_.def && t->as.adt_.def->name) {
+        return form_sym(e->arena, span,
+            intern_cstr(e->st, t->as.adt_.def->name));
+    }
     if (t->kind == TY_APP) {
         /* Walk the TY_APP chain to collect [head, arg1, arg2, ...]
          * (left-associative -- arg1 is the innermost). */
@@ -144,15 +154,19 @@ static Form *type_to_form(Elab *e, const Type *t, Span span) {
             if (head->as.app.arg) args[n_args++] = head->as.app.arg;
             head = head->as.app.fn;
         }
-        if (!head || head->kind != TY_STRUCT ||
-            !head->as.struct_.def || !head->as.struct_.def->name) {
+        const char *head_name =
+            (head && head->kind == TY_STRUCT && head->as.struct_.def)
+                ? head->as.struct_.def->name
+          : (head && head->kind == TY_ADT && head->as.adt_.def)
+                ? head->as.adt_.def->name
+          : NULL;
+        if (!head_name) {
             return NULL;
         }
         /* Build (StructName arg1-form arg2-form ...) in original order. */
         uint32_t n_items = 1 + n_args;
         Form **items = (Form **)arena_alloc(e->arena, n_items * sizeof(Form *));
-        items[0] = form_sym(e->arena, span,
-            intern_cstr(e->st, head->as.struct_.def->name));
+        items[0] = form_sym(e->arena, span, intern_cstr(e->st, head_name));
         /* args were collected innermost-first; reverse to original order. */
         for (uint8_t i = 0; i < n_args; i++) {
             Form *af = type_to_form(e, args[n_args - 1 - i], span);
