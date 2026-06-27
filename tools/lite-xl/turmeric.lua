@@ -180,12 +180,12 @@ local function run_tur(args, label)
   end)
 end
 
+-- turmeric:run-file's implementation is defined after the ReplView (Phase 4)
+-- block below, since it has to talk to the running REPL pane. The command is
+-- registered there alongside the other ReplView-aware commands. Only
+-- turmeric:check-file lives here -- it spawns a one-shot `tur check` and
+-- streams diagnostics into the log pane, no REPL involvement.
 command.add(nil, {
-  ["turmeric:run-file"] = function()
-    -- v1 target: the tree-walking interpreter. No codegen, no
-    -- per-file build cache, fastest edit-run loop.
-    run_tur({ "--interpret" }, "interpret")
-  end,
   ["turmeric:check-file"] = function()
     run_tur({ "check" }, "check")
   end,
@@ -584,6 +584,17 @@ function ReplView:send_buffer_text(text)
   end
 end
 
+-- DrRacket-style Run: feed `:run <abs-path>` to the running interpreter so
+-- the file's top-level forms (and (main) if defined) execute inside the
+-- REPL's env. Re-runnable: `:run` resets the session before each load so
+-- redefining bindings works without tripping duplicate-defn errors.
+-- See docs/notes/tur-repl-reload-semantics.md for why this is needed.
+function ReplView:send_run(abs_path)
+  if not self.proc or not self.proc:running() then self:start() end
+  if not self.proc then return end
+  pcall(function() self.proc:write(":run " .. abs_path .. "\n") end)
+end
+
 -- Lite XL hooks ------------------------------------------------------------
 
 function ReplView:on_text_input(text)
@@ -702,6 +713,20 @@ command.add(nil, {
     local text = table.concat(doc.lines, "")
     local view = open_repl_view("down")
     view:send_buffer_text(text)
+  end,
+  -- DrRacket Run: save buffer, open the REPL pane, ask the running
+  -- interpreter to :run the file. Replaces the old `tur --interpret` spawn
+  -- so cmd+r leaves every top-level binding visible at the prompt.
+  ["turmeric:run-file"] = function()
+    local doc = nearest_doc()
+    if not doc or not doc.filename then
+      core.error("turmeric: save the buffer first")
+      return
+    end
+    doc:save()
+    local path = system.absolute_path(doc.filename)
+    local view = open_repl_view("down")
+    view:send_run(path)
   end,
 })
 

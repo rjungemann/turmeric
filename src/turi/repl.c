@@ -3,7 +3,7 @@
  * Features:
  *  - libedit/readline line editing + persistent history (~/.tur_history)
  *  - Multi-line continuation prompt (`..`) while parentheses are unbalanced
- *  - Meta-commands: :help  :quit/:q  :type <expr>  :doc <sym>  :reload <file>
+ *  - Meta-commands: :help  :quit/:q  :type <expr>  :doc <sym>  :reload <file>  :run <file>
  *  - Colour diagnostics when stderr is a terminal (reuses src/diag.c)
  *  - Pretty-printer for TuriValue (extends turi_value_repr)
  */
@@ -89,7 +89,7 @@ static int paren_balance(const char *s) {
 /* Known REPL meta-commands for colon-prefix completion. */
 static const char *const k_meta_cmds[] = {
     ":help", ":quit", ":q",
-    ":type", ":doc", ":reload", ":reset",
+    ":type", ":doc", ":reload", ":run", ":reset",
     ":tutorial", ":next", ":prev", ":hint", ":skip",
     ":quit-tutorial", ":tutorial-progress",
     NULL
@@ -394,6 +394,65 @@ static void cmd_reload(TuriEnv *env, const char *path) {
 }
 
 /* -------------------------------------------------------------------------
+ * :run <file>  -- DrRacket-style "press Run" semantic.
+ *
+ * Resets the env (mirrors :reset) and then loads the file, so re-pressing
+ * Run on an edited file cleanly redefines bindings instead of tripping
+ * the elaborator's duplicate-defn check against the source accumulator
+ * (see docs/notes/tur-repl-reload-semantics.md). If the file defines
+ * (main), invoke it automatically. Returns the (possibly new) env via
+ * *env_io; callers must update their local and any completion handle.
+ * ---------------------------------------------------------------------- */
+
+static void cmd_run(TuriEnv **env_io, const char *path) {
+    if (!env_io || !*env_io) return;
+
+    TuriEnv *env = *env_io;
+    turi_env_free(env);
+    env = turi_env_new();
+    if (!env) {
+        fprintf(stderr, "tur repl: failed to allocate fresh environment\n");
+        *env_io = NULL;
+        return;
+    }
+    tur_ffi_register_reload_native(env);
+    *env_io = env;
+
+    printf(";; run: %s\n", path);
+    fflush(stdout);
+
+    TuriValue result = turi_eval_file(env, path);
+    if (turi_is_error(result)) {
+        const char *msg = turi_error_message(result);
+        if (msg &&
+            strcmp(msg, "parse error") != 0 &&
+            strcmp(msg, "elaboration error") != 0) {
+            fprintf(stderr, "run error: %s\n", msg);
+        }
+        return;
+    }
+
+    /* Auto-invoke (main) if it resolves to a closure. Unbound or non-closure
+     * is silent: not every script defines main, and the top-level forms
+     * already ran above. */
+    TuriValue mainv = turi_env_get(env, "main");
+    if (mainv.tag == TURI_CLOSURE) {
+        TuriValue r = turi_call(env, mainv, NULL, 0);
+        turi_run_pending_defers(env);
+        if (turi_is_error(r)) {
+            const char *msg = turi_error_message(r);
+            if (msg) fprintf(stderr, "main: %s\n", msg);
+        } else if (r.tag != TURI_NIL) {
+            char repr[1024];
+            turi_value_repr(repr, sizeof(repr), r);
+            printf("=> %s\n", repr);
+        }
+    }
+    printf(";; ready\n");
+    fflush(stdout);
+}
+
+/* -------------------------------------------------------------------------
  * Help text
  * ---------------------------------------------------------------------- */
 
@@ -459,6 +518,7 @@ static void print_help(void) {
         "  :type <expr>        print inferred type without evaluating\n"
         "  :doc  <sym>         print documentation for a symbol or builtin\n"
         "  :reload <file>      evaluate a .tur file into the current session\n"
+        "  :run <file>         reset session, load file, auto-invoke (main)\n"
         "  :reset              clear session and start fresh\n"
         "\n"
         "Tutorial commands:\n"
@@ -880,6 +940,23 @@ int turi_repl_run(bool watch_mode) {
                 const char *path = (line[7] == ' ') ? line + 8 : "";
                 if (*path) cmd_reload(env, path);
                 else printf(":reload requires a file path\n");
+                free(line);
+                continue;
+            }
+            if (strncmp(line, ":run", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) {
+                const char *path = (line[4] == ' ') ? line + 5 : "";
+                if (*path) {
+                    cmd_run(&env, path);
+                    if (!env) { free(line); break; }
+                    balance = 0;
+                    multi.len = 0;
+                    in_sweet_form = false;
+#ifdef TURI_HAVE_EDITLINE
+                    g_completion_env = env;
+#endif
+                } else {
+                    printf(":run requires a file path\n");
+                }
                 free(line);
                 continue;
             }
