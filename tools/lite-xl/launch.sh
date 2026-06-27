@@ -46,7 +46,7 @@ if [ "$(uname -s)" = "Darwin" ] && [ -d "/Applications/Lite XL.app" ] && [ -z "$
     echo "lite-xl: open -a 'Lite XL' with tur=$ROOT/build/tur"
     # `open --args` forwards everything after it to the app's argv. If
     # there are no extra args the trailing `--args` is harmless.
-    exec open -a "Lite XL" --args "${abs_args[@]}"
+    exec open -a "Lite XL" --args ${abs_args[@]+"${abs_args[@]}"}
 fi
 
 LITE_BIN="${TUR_LITE_XL:-}"
@@ -63,4 +63,4 @@ if [ -z "$LITE_BIN" ]; then
     fi
 fi
 echo "lite-xl: launching $LITE_BIN with tur=$ROOT/build/tur"
-exec "$LITE_BIN" "${abs_args[@]}"
+exec "$LITE_BIN" ${abs_args[@]+"${abs_args[@]}"}

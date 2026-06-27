@@ -15,6 +15,7 @@
 
 local core = require "core"
 local command = require "core.command"
+local common = require "core.common"
 local keymap = require "core.keymap"
 local syntax = require "core.syntax"
 local process = require "process"
@@ -164,6 +165,101 @@ command.add(nil, {
   ["turmeric:check-file"] = function()
     run_tur({ "check" }, "check")
   end,
+})
+
+-- -------------------------------------------------------------------------
+-- New project (Phase 1.5)
+-- -------------------------------------------------------------------------
+
+config.plugins.turmeric.init_cmd = config.plugins.turmeric.init_cmd or "tur"
+config.plugins.turmeric.init_subcommand = config.plugins.turmeric.init_subcommand or "init"
+
+local function project_root()
+  return core.project_dir or system.absolute_path(".") or "."
+end
+
+-- Scaffold a Turmeric project at <parent>/<name> by shelling out to
+-- `tur init [flags] <name>`. On success, open build.tur and src/main.tur
+-- in new buffers and switch the project root to the new directory.
+local function new_project(extra_flags, label)
+  core.command_view:enter("New Turmeric project name", {
+    submit = function(name)
+      name = (name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+      if name == "" then
+        core.error("turmeric: project name cannot be empty")
+        return
+      end
+      local parent = project_root()
+      local target = parent .. "/" .. name
+      local info = system.get_file_info(target)
+      if info then
+        core.error("turmeric: %s already exists", target)
+        return
+      end
+      -- tur init scaffolds INTO cwd (not into a subdir named after the
+      -- project), so we create the target dir and cd into it ourselves.
+      local mkdir_ok, mkdir_err = common.mkdirp(target)
+      if not mkdir_ok then
+        core.error("turmeric: cannot create %s: %s", target, mkdir_err)
+        return
+      end
+
+      local cmd = { config.plugins.turmeric.init_cmd, config.plugins.turmeric.init_subcommand }
+      for _, f in ipairs(extra_flags or {}) do table.insert(cmd, f) end
+      table.insert(cmd, name)
+
+      local ok, proc = pcall(process.start, cmd, {
+        cwd = target,
+        stdin = process.REDIRECT_DISCARD,
+        stdout = process.REDIRECT_PIPE,
+        stderr = process.REDIRECT_PIPE,
+      })
+      if not ok then
+        core.error("turmeric: failed to spawn tur init: %s", tostring(proc))
+        return
+      end
+      core.log("turmeric: %s %s in %s", label or "init", name, parent)
+
+      core.add_thread(function()
+        while proc:running() do
+          local out = proc:read_stdout(4096)
+          local err = proc:read_stderr(4096)
+          if out and #out > 0 then
+            for line in out:gmatch("[^\n]+") do core.log("%s", line) end
+          end
+          if err and #err > 0 then
+            for line in err:gmatch("[^\n]+") do core.error("%s", line) end
+          end
+          coroutine.yield(0.05)
+        end
+        local rc = proc:returncode() or -1
+        if rc ~= 0 then
+          core.error("turmeric: tur init exit %d (project not scaffolded)", rc)
+          return
+        end
+
+        -- Open the manifest and main source if they exist. tur init writes
+        -- build.tur by default; --sweet writes build.tur.sweet.
+        local manifest = target .. "/build.tur"
+        if not system.get_file_info(manifest) then
+          manifest = target .. "/build.tur.sweet"
+        end
+        local main_src = target .. "/src/main.tur"
+        for _, path in ipairs({ manifest, main_src }) do
+          if system.get_file_info(path) then
+            core.root_view:open_doc(core.open_doc(path))
+          end
+        end
+        core.log("turmeric: project ready at %s", target)
+      end)
+    end,
+  })
+end
+
+command.add(nil, {
+  ["turmeric:new-project"]      = function() new_project({},          "init") end,
+  ["turmeric:new-project-sweet"]= function() new_project({"--sweet"}, "init --sweet") end,
+  ["turmeric:new-library"]      = function() new_project({"--lib"},   "init --lib") end,
 })
 
 keymap.add {

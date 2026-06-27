@@ -46,6 +46,18 @@ that pins the compiler at `./build/tur`. Idempotent; safe to re-run.
 | cmd+r | ctrl+r | `turmeric:run-file` -- saves the buffer, runs `tur run <file>` |
 | cmd+shift+r | ctrl+shift+r | `turmeric:check-file` -- runs `tur check <file>` |
 
+Surfaced through the command palette (cmd+shift+p / ctrl+shift+p) without
+a default keybinding:
+
+- `turmeric:new-project` -- prompt for a name, scaffold a binary project
+  via `tur init <name>`, open the resulting `build.tur` + `src/main.tur`
+- `turmeric:new-project-sweet` -- same, with `tur init --sweet`
+- `turmeric:new-library` -- same, with `tur init --lib`
+
+New projects are created under the current Lite XL project directory.
+Override the command surface via `config.plugins.turmeric.init_cmd` and
+`init_subcommand` if you want to point at a wrapper script.
+
 Output streams into Lite XL's log pane (View > Toggle Log View if it is
 not visible). Lines that look like `path:line:col:` come through
 `core.error` so the log pane highlights them.
