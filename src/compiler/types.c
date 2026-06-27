@@ -1541,7 +1541,21 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
         } else if (app_byval) {
             buf_printf(out, "    %s __r;\n", adt_inst_name);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-                buf_printf(out, "    __r.as.%s._%u = _%u;\n", mctor, fi, fi);
+                /* CONV-S1 seam 4 (B4 wide element in a by-value product): the
+                 * typedef stores a >8-byte by-value ADT field as the int64 box
+                 * pointer (line ~1459, type_is_wide_byval_adt), so the by-value
+                 * ctor must heap-box it too -- not assign the aggregate param into
+                 * the int64 slot.  Matches the carrier-ctor branch below and the
+                 * accessor's wide-element deref (emit_expr.c). */
+                if (wide_box[fi]) {
+                    buf_printf(out,
+                        "    { %s *__b = (%s *)malloc(sizeof(%s)); *__b = _%u;"
+                        " __r.as.%s._%u = (int64_t)(intptr_t)__b; }\n",
+                        val_ctype[fi], val_ctype[fi], val_ctype[fi], fi,
+                        mctor, fi);
+                } else {
+                    buf_printf(out, "    __r.as.%s._%u = _%u;\n", mctor, fi, fi);
+                }
             }
             buf_printf(out, "    return __r;\n");
         } else {

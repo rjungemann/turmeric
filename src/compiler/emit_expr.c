@@ -5719,9 +5719,35 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     bool inline_byval = ctor &&
                         e->as.get_field_.field_idx < ctor->n_fields &&
                         adt_field_is_inline_byval(&ctor->fields[e->as.get_field_.field_idx]);
-                    if (inline_byval) {
-                        buf_printf(&hb, "(%s)%s%s",
-                                   sv, use_arrow ? "->" : ".", mp);
+                    /* construct-template accessor unbox (by-value receiver): the
+                     * field's spec-resolved CONCRETE type (fld_rty -- `User`/`Point`
+                     * when the accessor spec `ok_val__spec__tur_adt_User_...` is
+                     * active and resolves the bare-tyvar field) is a by-value
+                     * aggregate the generic `cty` (int64) cast would corrupt.  A
+                     * narrow element is stored INLINE (read the aggregate directly);
+                     * a WIDE element is the int64 box pointer (deref it); a scalar
+                     * element (cstr/float) casts to the element type. */
+                    Type eff_fld_rty = fld_rty;
+                    const char *eff_fld_rcty =
+                        (fld_rcty && strcmp(fld_rcty, "int64_t") != 0
+                         && cty && strcmp(cty, "int64_t") == 0)
+                            ? fld_rcty : NULL;
+                    bool rec_aggregate = eff_fld_rcty &&
+                        (eff_fld_rty.kind == TY_APP ||
+                         eff_fld_rty.kind == TY_STRUCT ||
+                         eff_fld_rty.kind == TY_ADT) &&
+                        !type_is_heap_struct(eff_fld_rty) &&
+                        !type_is_heap_adt(eff_fld_rty);
+                    bool rec_wide = rec_aggregate &&
+                        type_is_wide_byval_adt(eff_fld_rty);
+                    const char *acc = use_arrow ? "->" : ".";
+                    if (rec_wide) {
+                        buf_printf(&hb, "(*(%s *)(intptr_t)((%s)%s%s))",
+                                   eff_fld_rcty, sv, acc, mp);
+                    } else if (inline_byval || rec_aggregate) {
+                        buf_printf(&hb, "(%s)%s%s", sv, acc, mp);
+                    } else if (eff_fld_rcty) {
+                        buf_printf(&hb, "(%s)(%s)%s%s", eff_fld_rcty, sv, acc, mp);
                     } else if (use_arrow) {
                         buf_printf(&hb, "(%s)(%s)->%s", cty, sv, mp);
                     } else {
