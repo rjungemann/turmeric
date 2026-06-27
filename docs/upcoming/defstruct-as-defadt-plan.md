@@ -591,7 +591,7 @@ runtime *usage* seam, below.
      regenerated.  *Cleared ~43* (`httpd-*`, `clone-*`, `eqmap-struct`, the `Pos`
      `typeclass-*` tests).  Fixture `conv-defstruct-inline-c-abi`.
 
-   **Running total: 212 -> 45 unique build-failing fixtures under force-lower
+   **Running total: 212 -> 42 unique build-failing fixtures under force-lower
    (default suite stays 1863/0).**  (Sub-root (a) -- 0-arg construct in control
    flow -- the inline-C-tail return bridge, the accessor-unbox, the
    assignment-position straddle, the inline-C instance-method signature, the
@@ -599,8 +599,9 @@ runtime *usage* seam, below.
    keyword type-param field, set!-over-lowered-record-ADT, the parametric-record
    inline-C compat typedef, the inline-C-carrier-result -> by-value-sink bridges
    (let-init / call-arg, NULL-safe lowered Option), the carrier-producer-arg
-   (__inst_/construct) -> by-value-spec-param bridge, and the wide-by-value-element
-   accessor-unbox + ctor-box are all LANDED.)
+   (__inst_/construct) -> by-value-spec-param bridge, the wide-by-value-element
+   accessor-unbox + ctor-box, and the abi-spec interning recognizing a lowered
+   by-value TY_ADT result are all LANDED.)
 
    - **wide by-value element: accessor unbox + ctor box DONE (2026-06-27).**  A
      by-value Result/Option carrying a value-struct element (User/Point) read via
@@ -615,21 +616,19 @@ runtime *usage* seam, below.
      accessor unbox (it worked via the active accessor spec's resolved field type,
      not the receiver-app recovery the earlier report tried).
 
-   - **templated inline-C helper with by-value RECORD result (investigated
-     2026-06-27, BLOCKED in abi-spec interning).**  A return-only-poly templated
-     inline-C helper (`dense-get [A] : A`, `__TUR_TY_A__` body) whose result `A`
-     resolves to a by-value record (`Pos`) is NOT specialized per element type
-     under lowering: the call falls back to the int64 carrier base
-     (`dense_hyget`/`_un_undense_hyget`), so a wrapper/instance spec returning the
-     by-value `tur_adt_Pos` does `return <int64 base>(...)`.  `Pos` is WIDE, so no
-     leaf return bridge works (the int64 base reads the array at the wrong stride);
-     the helper body must be re-emitted with `__TUR_TY_A__ = tur_adt_Pos`.  At
-     default (Pos is `TY_STRUCT`) the spec is correctly emitted; the struct->ADT
-     flip is the only change, so the spec-forcing/scan paths recognize a `TY_STRUCT`
-     result but not the lowered `TY_ADT`.  Root cause + repro + fix directions in
-     `docs/reported/templated-inline-c-byvalue-record-result-not-specialized.md`
-     (the fix is in the M3/M4/M5 abi-spec interning, not a leaf).  Affects
-     `typeclass-assoc-type-method-return`, `generic-inline-c-struct-through-unsafe`.
+   - **templated inline-C helper with by-value RECORD result DONE (2026-06-27).**
+     A return-only-poly templated inline-C helper (`dense-get [A] : A`,
+     `__TUR_TY_A__` body) whose result `A` resolves to a by-value record (`Pos`)
+     was not specialized per element under lowering -- it stayed on the int64
+     carrier base, so a wrapper/instance spec returning `tur_adt_Pos` did
+     `return <int64 base>(...)`.  Fixed in the abi-spec interning:
+     `emit_abi_register_call`'s return-only-poly `recovered_byvalue` recovery only
+     un-collapsed a `TY_STRUCT`/`TY_APP` by-value result; extending it to a
+     non-:heap concrete by-value `TY_ADT` (the struct->ADT flip was the only change
+     from the default path) un-collapses the result, sets `abi_changes`, and
+     interns the per-element spec with the `__TUR_TY_A__`-substituted body.  Cleared
+     `typeclass-assoc-type-method-return`, `generic-inline-c-struct-through-unsafe`,
+     `typeclass-assoc-type-parametric-struct-element`.  Report archived.
 
    - **parametric keyword type-param field DONE (2026-06-26).**  A parametric
      `(defstruct Box [A] (val :A) ...)` lowered to a record variant where the
