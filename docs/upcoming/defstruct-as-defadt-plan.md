@@ -591,7 +591,7 @@ runtime *usage* seam, below.
      regenerated.  *Cleared ~43* (`httpd-*`, `clone-*`, `eqmap-struct`, the `Pos`
      `typeclass-*` tests).  Fixture `conv-defstruct-inline-c-abi`.
 
-   **Running total: 212 -> 30 unique build-failing fixtures under force-lower
+   **Running total: 212 -> 29 unique build-failing fixtures under force-lower
    (default suite stays 1863/0).**  (Sub-root (a) -- 0-arg construct in control
    flow -- the inline-C-tail return bridge, the accessor-unbox, the
    assignment-position straddle, the inline-C instance-method signature, the
@@ -603,8 +603,36 @@ runtime *usage* seam, below.
    accessor-unbox + ctor-box, the abi-spec interning recognizing a lowered
    by-value TY_ADT result, the M7-HKT transparent-int-newtype phantom
    wrapper (`(Schema A)`), the by-value-ADT `any` box/unbox, the vec-element carrier<->by-value read/escape
-   bridges, and the bare-receiver record-ADT field-tyvar collapse are all
-   LANDED.)
+   bridges, the bare-receiver record-ADT field-tyvar collapse, and the
+   :heap-ADT by-value-aggregate-element field read are all LANDED.)
+
+   - **:heap-ADT by-value-aggregate-element field read DONE (2026-06-27).**  A
+     direct field read on a :heap record-ADT receiver whose element is a by-value
+     aggregate -- `(.head xs)` / `(.tail xs)` where `xs : (Cons (Option int))`
+     and `Cons` is `(defstruct Cons :heap [A] (head A) (tail :int))` -- emitted a
+     generic-`tur_adt_Cons`-carrier cast then C-cast an int64 to the aggregate
+     (`conversion to non-scalar type`).  Fix is `:heap`-SCOPED: a nested
+     by-value-product element (`(Option int)`) is accepted by
+     `adt_app_is_byvalue_product` / `type_app_is_concrete_adt` ONLY when the
+     outer ADT is `:heap`, so `type_c_name((Cons (Option int)))` yields the
+     monomorph pointer and the new EX_GET_FIELD `:heap`-ADT-receiver branch reads
+     the inline aggregate field off `tur_adt_Cons__Option__int *`.  A NON-heap
+     nested aggregate (`(Result (Option cstr) cstr)`) already round-trips via the
+     struct-app monomorph path and is left untouched -- the `:heap` gate is what
+     keeps the constrained-instance-body specs (and the global
+     `type_has_concrete_codegen_layout`) undisturbed.  The c-name lookup in the
+     field-read branch is itself gated on the cheap `is_heap_adt` check so it
+     never registers monomorphs for unrelated non-heap receivers.  Cleared
+     `list-length-byvalue-aggregate-element` and
+     `list-homog-byvalue-aggregate-element` (build + run).
+     (`constrained-loop-vec-push-byvalue-result-element` shifts from a runtime
+     segfault to a build error -- the `:heap` Vec-element flip surfaces its
+     latent constrained-instance-body monomorphization defects; it and the
+     already-segfaulting `nested-construct-byvalue-decode` are tracked in
+     `docs/reported/constrained-instance-body-nested-construct-monomorphization.md`.
+     A prior write-up mis-stated these two as regressions from this work -- a
+     testing artifact from stashing the force-lower probe; the TRUE force-lower
+     baseline shows both already segfaulting.)
 
    - **by-value-ADT `any` box/unbox DONE (2026-06-27).**  Coercing a by-value
      struct into the `any` top type heap-boxes it (malloc + copy, store the

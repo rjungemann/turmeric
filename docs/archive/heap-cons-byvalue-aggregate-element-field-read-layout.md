@@ -1,5 +1,36 @@
 # :heap ADT field read at by-value aggregate element -- the nested-by-value-monomorph cascade
 
+**RESOLVED (2026-06-27).**  The fix turned out far narrower than the cascade
+below feared, once a TESTING ERROR was corrected: every "fixture X passes at
+baseline" measurement in the earlier write-ups had `git stash`-ed the
+force-lower probe along with the code, so it was silently testing the
+NON-lowered (struct) path.  The TRUE force-lower baseline shows
+`nested-construct-byvalue-decode` and `constrained-loop-vec-push-byvalue-result-
+element` were ALREADY runtime-segfaulting -- they are not regressions, just
+pre-existing breakage in the constrained-instance-body monomorphization (their
+own separate work).
+
+So the actual cluster is only the two `:heap` list fixtures, and the fix is
+`:heap`-SCOPED: a nested by-value-product element (`(Cons (Option int))`'s
+`(Option int)`) is accepted by `adt_app_is_byvalue_product` /
+`type_app_is_concrete_adt` ONLY when the outer ADT is `:heap`.  A non-heap nested
+aggregate (`(Result (Option cstr) cstr)`) already round-trips via the struct-app
+monomorph path, and flipping it to the ADT-app path is what double-represented
+the type and broke the constrained-instance specs -- the `:heap` gate avoids it
+entirely.  Plus the EX_GET_FIELD `:heap`-ADT-receiver branch reads the field off
+the monomorph cell (its c-name lookup gated on the cheap `is_heap_adt` check so
+it never registers monomorphs for unrelated non-heap receivers).  No global
+`type_has_concrete_codegen_layout` change; the typedef-ordering dep pass (old
+"site 3") and the carrier-box readback (old "site 5") turned out unnecessary.
+
+Cleared `list-length-byvalue-aggregate-element` and
+`list-homog-byvalue-aggregate-element` (build + run); default suite 1863/0;
+force-lower real build failures 30 -> 29.  `constrained-loop-...` shifts from a
+runtime segfault to a build error (still failing -- the `:heap` Vec element flip
+surfaces its latent 3-defect monomorphization as a build error); it and
+`nested-construct-...` remain tracked separately as constrained-instance-body
+monomorphization work.  Original report below.
+
 **Severity:** medium (seam-4 / defstruct-as-defadt graduation blocker; not a
 default-path bug). 2 fixtures direct, ~4 in the blast radius.
 

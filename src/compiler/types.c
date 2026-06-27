@@ -484,7 +484,11 @@ bool type_app_is_concrete_adt(const Type *t) {
     uint8_t n_args = 0;
     if (!type_extract_adt_app(t, &def, args, &n_args) || !def) return false;
     for (uint8_t i = 0; i < n_args; i++) {
-        if (!type_has_concrete_codegen_layout(&args[i])) return false;
+        /* Nested by-value-product element accepted only for a :heap outer (see
+         * adt_app_is_byvalue_product) so the ctor selection picks the monomorph
+         * ctor matching the field-read consumer's layout. */
+        if (!type_has_concrete_codegen_layout(&args[i]) &&
+            !(def->is_heap && adt_app_is_byvalue_product(args[i]))) return false;
     }
     return true;
 }
@@ -2866,8 +2870,14 @@ bool adt_app_is_byvalue_product(Type t) {
     if (!type_extract_adt_app(&t, &def, args, &n_args) || !def) return false;
     if (!adt_is_flat_product(def)) return false;       /* single-variant, non-GADT */
     if (def->n_type_params == 0) return false;          /* non-parametric is CONV-S1's path */
+    /* A nested by-value-product element (`(Cons (Option int))`'s `(Option int)`)
+     * is accepted ONLY for a :heap outer.  A :heap cell stores its element inline
+     * and its field read needs the ADT monomorph layout; a non-heap nested
+     * aggregate already round-trips via the struct-app monomorph path, so leaving
+     * it untouched avoids perturbing the constrained-instance-body specs. */
     for (uint8_t i = 0; i < n_args; i++)
-        if (!type_has_concrete_codegen_layout(&args[i])) return false;
+        if (!type_has_concrete_codegen_layout(&args[i]) &&
+            !(def->is_heap && adt_app_is_byvalue_product(args[i]))) return false;
     /* Every monomorphised field must resolve to a by-value-able concrete type --
      * no residual tyvar / HKT / non-concrete application (those are M7's job). */
     const CtorDef *c = def->ctors[0];
@@ -2876,7 +2886,8 @@ bool adt_app_is_byvalue_product(Type t) {
         Type rf = substitute_adt_app_type(c->fields[i].full_type, def, args);
         TypeKind k = rf.kind;
         if (k == TY_TYVAR || k == TY_FORALL || k == TY_EXISTS) return false;
-        if (k == TY_APP && !type_has_concrete_codegen_layout(&rf)) return false;
+        if (k == TY_APP && !type_has_concrete_codegen_layout(&rf) &&
+            !(def->is_heap && adt_app_is_byvalue_product(rf))) return false;
     }
     return true;
 }

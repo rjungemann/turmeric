@@ -5738,6 +5738,28 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 bool adt_recv_byvalue =
                     emit_type_is_byvalue_adt(ctx, e->as.get_field_.struct_expr->type) &&
                     !recv_held_as_carrier;
+                /* CONV-S1 seam 4 (:heap ADT receiver, concrete element): a
+                 * `(defstruct Cons :heap [A] (head A) (tail :int))` lowers to a
+                 * :heap record ADT whose monomorph cell stores a by-value
+                 * aggregate element INLINE (`tur_adt_Cons__Option__int`).
+                 * `(.head xs)` must cast the heap pointer to that MONOMORPH and
+                 * read the field at its real (aggregate) type, not the generic
+                 * `tur_adt_Cons` carrier (whose `_0` is int64) with an int64->
+                 * aggregate cast.  Gate the c-name (which REGISTERS the monomorph
+                 * as a side effect) on the cheap is_heap_adt check so a non-heap
+                 * receiver never reaches it and unrelated monomorphization is
+                 * undisturbed. */
+                const char *heap_recv_cn = NULL;
+                bool heap_adt_recv = false;
+                if (type_is_heap_adt(e->as.get_field_.struct_expr->type)) {
+                    Type heap_recv_rt = emit_resolve_type(ctx,
+                        e->as.get_field_.struct_expr->type);
+                    if (type_is_heap_adt(heap_recv_rt)) {
+                        heap_recv_cn = emit_type_c_name(ctx, heap_recv_rt);
+                        heap_adt_recv = heap_recv_cn &&
+                            strchr(heap_recv_cn, '*') != NULL;
+                    }
+                }
                 Buf hb; buf_init(&hb);
                 if (adt_through_rc) {
                     /* CONV-S1 (slice 2): rc<ADT> receiver.  rc/of mallocs
@@ -5824,6 +5846,22 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     } else {
                         buf_printf(&hb, "(%s)(%s).%s", cty, sv, mp);
                     }
+                } else if (heap_adt_recv) {
+                    /* :heap ADT receiver with a concrete monomorph layout: cast
+                     * the heap pointer to the MONOMORPH cell type and read the
+                     * field at its real C type.  An aggregate field is stored
+                     * inline (read directly, no cast -- a cast-to-aggregate is
+                     * invalid C); a scalar/pointer field keeps the cty cast. */
+                    bool fld_aggregate =
+                        (fld_rty.kind == TY_APP || fld_rty.kind == TY_STRUCT ||
+                         fld_rty.kind == TY_ADT) &&
+                        !type_is_heap_struct(fld_rty) && !type_is_heap_adt(fld_rty);
+                    if (fld_aggregate)
+                        buf_printf(&hb, "((%s)(intptr_t)(%s))->%s",
+                                   heap_recv_cn, sv, mp);
+                    else
+                        buf_printf(&hb, "(%s)((%s)(intptr_t)(%s))->%s",
+                                   cty, heap_recv_cn, sv, mp);
                 } else if (field_byval_unbox) {
                     /* deref-unbox the carrier-stored B4 box pointer to the spec's
                      * concrete by-value aggregate (accessor-unbox, above). */
