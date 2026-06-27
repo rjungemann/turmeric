@@ -96,11 +96,23 @@ println $ sum-squares 3 4
 // ============================================================================
 
 const STORAGE_KEYS = {
-    buffer:  'tur.try.buffer.v1',
-    cursor:  'tur.try.cursor.v1',
-    scroll:  'tur.try.scroll.v1',
-    consol:  'tur.try.console.v1',
+    // Legacy single-buffer keys -- read only for migration.
+    buffer:    'tur.try.buffer.v1',
+    cursor:    'tur.try.cursor.v1',
+    scroll:    'tur.try.scroll.v1',
+    consol:    'tur.try.console.v1',
+    // Multi-tab keys (Phase 1 of try-turmeric-multi-tab-and-projects-plan).
+    tabs:      'tur.try.tabs.v1',
+    activeTab: 'tur.try.activeTab.v1',
 };
+
+// Multi-tab editor state. Each tab carries its persisted record plus a
+// non-persisted Monaco ITextModel created on demand. The model holds the
+// per-tab undo stack, so swapping models (rather than re-using one and
+// calling setValue) preserves undo across tab switches.
+let tabs = [];          // [{id, name, content, cursor, scrollTop, createdAt, _model}]
+let activeId = null;
+let tabsHydrating = false;  // suppress persist during initial hydration / tutorial
 
 const MAX_CONSOLE_LINES = 200;
 
@@ -178,6 +190,291 @@ function resetWorkspace() {
     } catch {}
     window.location.hash = '';
     window.location.reload();
+}
+
+// ============================================================================
+// Multi-tab editor state
+// ============================================================================
+
+function genTabId() {
+    // Stable, non-cryptographic id. Tab ids are local to a single browser
+    // workspace -- collision risk is purely cosmetic.
+    return 'tab-' + Math.random().toString(36).slice(2, 10) + '-' + Date.now().toString(36);
+}
+
+function tabsSnapshot() {
+    return tabs.map(t => ({
+        id: t.id,
+        name: t.name,
+        content: t._model ? t._model.getValue() : t.content,
+        cursor: t.cursor || { lineNumber: 1, column: 1 },
+        scrollTop: t.scrollTop || 0,
+        createdAt: t.createdAt,
+    }));
+}
+
+const persistTabs = debounce(() => {
+    if (tabsHydrating) return;
+    safeWrite(STORAGE_KEYS.tabs, tabsSnapshot());
+}, 250);
+
+function persistActiveId() {
+    if (tabsHydrating) return;
+    safeWrite(STORAGE_KEYS.activeTab, activeId);
+}
+
+function findTab(id) {
+    return tabs.find(t => t.id === id) || null;
+}
+
+function currentTab() {
+    return findTab(activeId);
+}
+
+function uniqueUntitledName() {
+    const used = new Set(tabs.map(t => t.name));
+    for (let n = 1; n < 10000; n++) {
+        const candidate = `untitled-${n}.tur`;
+        if (!used.has(candidate)) return candidate;
+    }
+    return `untitled-${Date.now()}.tur`;
+}
+
+function ensureModel(tab) {
+    if (tab._model && !tab._model.isDisposed()) return tab._model;
+    tab._model = monaco.editor.createModel(tab.content || '', 'turmeric');
+    return tab._model;
+}
+
+function captureActiveTabState() {
+    const t = currentTab();
+    if (!t || !editor) return;
+    t.content = editor.getValue();
+    const pos = editor.getPosition();
+    if (pos) t.cursor = { lineNumber: pos.lineNumber, column: pos.column };
+    t.scrollTop = editor.getScrollTop();
+}
+
+function switchTab(id) {
+    if (!editor) return;
+    const next = findTab(id);
+    if (!next) return;
+    if (id === activeId) {
+        renderTabs();
+        return;
+    }
+    captureActiveTabState();
+    activeId = id;
+    editor.setModel(ensureModel(next));
+    try {
+        if (next.cursor) editor.setPosition(next.cursor);
+        if (typeof next.scrollTop === 'number') editor.setScrollTop(next.scrollTop);
+    } catch {}
+    editor.focus();
+    renderTabs();
+    persistActiveId();
+}
+
+function createTab({ name, content = '', activate = true } = {}) {
+    const tab = {
+        id: genTabId(),
+        name: name || uniqueUntitledName(),
+        content,
+        cursor: { lineNumber: 1, column: 1 },
+        scrollTop: 0,
+        createdAt: Date.now(),
+        _model: null,
+    };
+    tabs.push(tab);
+    if (activate) switchTab(tab.id);
+    else renderTabs();
+    persistTabs();
+    return tab;
+}
+
+function closeTab(id) {
+    if (tabs.length <= 1) return;  // always keep at least one tab open
+    const idx = tabs.findIndex(t => t.id === id);
+    if (idx < 0) return;
+    const closing = tabs[idx];
+    tabs.splice(idx, 1);
+    if (closing._model && !closing._model.isDisposed()) {
+        try { closing._model.dispose(); } catch {}
+    }
+    if (id === activeId) {
+        const neighbor = tabs[idx] || tabs[idx - 1] || tabs[0];
+        activeId = neighbor.id;
+        editor.setModel(ensureModel(neighbor));
+        try {
+            if (neighbor.cursor) editor.setPosition(neighbor.cursor);
+            if (typeof neighbor.scrollTop === 'number') editor.setScrollTop(neighbor.scrollTop);
+        } catch {}
+    }
+    renderTabs();
+    persistTabs();
+    persistActiveId();
+}
+
+function sanitizeTabName(raw) {
+    let name = (raw || '').trim();
+    if (!name) return null;
+    // strip path separators / shell-unfriendly characters
+    name = name.replace(/[\/\\<>:"|?*\x00-\x1f]/g, '_');
+    if (!/\.tur$/i.test(name)) name += '.tur';
+    return name;
+}
+
+function renameTab(id, rawName) {
+    const tab = findTab(id);
+    if (!tab) return;
+    const cleaned = sanitizeTabName(rawName);
+    if (!cleaned || cleaned === tab.name) { renderTabs(); return; }
+    // disambiguate on collision: append -2, -3, ...
+    let final = cleaned;
+    const used = new Set(tabs.filter(t => t.id !== id).map(t => t.name));
+    if (used.has(final)) {
+        const base = final.replace(/\.tur$/i, '');
+        for (let n = 2; n < 10000; n++) {
+            const candidate = `${base}-${n}.tur`;
+            if (!used.has(candidate)) { final = candidate; break; }
+        }
+    }
+    tab.name = final;
+    renderTabs();
+    persistTabs();
+}
+
+function renderTabs() {
+    const strip = document.querySelector('.editor-tabs');
+    if (!strip) return;
+    strip.innerHTML = '';
+    const canClose = tabs.length > 1;
+    for (const tab of tabs) {
+        const btn = document.createElement('button');
+        btn.className = 'tab-button' + (tab.id === activeId ? ' active' : '');
+        btn.dataset.tabId = tab.id;
+        btn.title = tab.name;
+        const label = document.createElement('span');
+        label.className = 'tab-label';
+        label.textContent = tab.name;
+        btn.appendChild(label);
+        if (canClose) {
+            const x = document.createElement('span');
+            x.className = 'tab-close';
+            x.textContent = '×';
+            x.setAttribute('aria-label', `Close ${tab.name}`);
+            x.addEventListener('mousedown', (e) => { e.stopPropagation(); });
+            x.addEventListener('click', (e) => {
+                e.stopPropagation();
+                closeTab(tab.id);
+            });
+            btn.appendChild(x);
+        }
+        btn.addEventListener('click', () => {
+            switchTab(tab.id);
+            requestAnimationFrame(() => btn.scrollIntoView({ inline: 'nearest', block: 'nearest' }));
+        });
+        btn.addEventListener('dblclick', (e) => {
+            e.preventDefault();
+            beginRename(tab.id, btn, label);
+        });
+        strip.appendChild(btn);
+    }
+    const newBtn = document.createElement('button');
+    newBtn.className = 'tab-button tab-new';
+    newBtn.dataset.tab = 'new';
+    newBtn.textContent = '+ New';
+    newBtn.title = 'New tab';
+    newBtn.addEventListener('click', () => createTab());
+    strip.appendChild(newBtn);
+}
+
+function beginRename(id, btn, labelEl) {
+    const tab = findTab(id);
+    if (!tab) return;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'tab-rename';
+    input.value = tab.name;
+    input.spellcheck = false;
+    const commit = (apply) => {
+        if (input.parentNode) input.replaceWith(labelEl);
+        if (apply) renameTab(id, input.value);
+        else renderTabs();
+    };
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+        else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+    });
+    input.addEventListener('blur', () => commit(true));
+    labelEl.replaceWith(input);
+    input.focus();
+    input.select();
+}
+
+function hydrateTabs(defaultContent) {
+    tabsHydrating = true;
+    try {
+        const stored = safeRead(STORAGE_KEYS.tabs);
+        if (Array.isArray(stored) && stored.length > 0) {
+            tabs = stored.map(t => ({
+                id: typeof t.id === 'string' ? t.id : genTabId(),
+                name: sanitizeTabName(t.name) || uniqueUntitledName(),
+                content: typeof t.content === 'string' ? t.content : '',
+                cursor: t.cursor && typeof t.cursor.lineNumber === 'number'
+                    ? { lineNumber: t.cursor.lineNumber, column: t.cursor.column || 1 }
+                    : { lineNumber: 1, column: 1 },
+                scrollTop: typeof t.scrollTop === 'number' ? t.scrollTop : 0,
+                createdAt: typeof t.createdAt === 'number' ? t.createdAt : Date.now(),
+                _model: null,
+            }));
+            const storedActive = safeRead(STORAGE_KEYS.activeTab);
+            activeId = (typeof storedActive === 'string' && findTab(storedActive))
+                ? storedActive : tabs[0].id;
+            return;
+        }
+        // Migration from legacy single-buffer keys.
+        const legacyBuffer = safeRead(STORAGE_KEYS.buffer);
+        if (typeof legacyBuffer === 'string') {
+            const legacyCursor = safeRead(STORAGE_KEYS.cursor);
+            const legacyScroll = safeRead(STORAGE_KEYS.scroll);
+            tabs = [{
+                id: genTabId(),
+                name: 'main.tur',
+                content: legacyBuffer,
+                cursor: legacyCursor && typeof legacyCursor.lineNumber === 'number'
+                    ? { lineNumber: legacyCursor.lineNumber, column: legacyCursor.column || 1 }
+                    : { lineNumber: 1, column: 1 },
+                scrollTop: typeof legacyScroll === 'number' ? legacyScroll : 0,
+                createdAt: Date.now(),
+                _model: null,
+            }];
+            activeId = tabs[0].id;
+            // Write new keys before deleting legacy so a crash mid-migration
+            // leaves the legacy data intact.
+            safeWrite(STORAGE_KEYS.tabs, tabsSnapshot());
+            safeWrite(STORAGE_KEYS.activeTab, activeId);
+            try {
+                localStorage.removeItem(STORAGE_KEYS.buffer);
+                localStorage.removeItem(STORAGE_KEYS.cursor);
+                localStorage.removeItem(STORAGE_KEYS.scroll);
+            } catch {}
+            return;
+        }
+        // Fresh workspace -- seed with the default Hello World tab.
+        tabs = [{
+            id: genTabId(),
+            name: 'main.tur',
+            content: defaultContent,
+            cursor: { lineNumber: 1, column: 1 },
+            scrollTop: 0,
+            createdAt: Date.now(),
+            _model: null,
+        }];
+        activeId = tabs[0].id;
+    } finally {
+        tabsHydrating = false;
+    }
 }
 
 // ============================================================================
@@ -789,47 +1086,75 @@ async function initEditor() {
     // Expose editor for smoke tests
     window._turiEditor = editor;
 
-    // Hydrate from localStorage. Priority order:
-    //   1. URL hash share-link (handled later in loadFromUrlHash)
-    //   2. localStorage
-    //   3. Default example (already set as initial value)
-    // Tutorial mode bypasses hydration so step content isn't stomped.
-    if (!isTutorialMode() && !hasUrlHashCode()) {
-        const savedBuffer = safeRead(STORAGE_KEYS.buffer);
-        if (typeof savedBuffer === 'string') {
-            editor.setValue(savedBuffer);
-        }
-        const savedCursor = safeRead(STORAGE_KEYS.cursor);
-        if (savedCursor && typeof savedCursor.lineNumber === 'number') {
-            try { editor.setPosition(savedCursor); } catch {}
-        }
-        const savedScroll = safeRead(STORAGE_KEYS.scroll);
-        if (typeof savedScroll === 'number') {
-            try { editor.setScrollTop(savedScroll); } catch {}
-        }
+    // Hydrate the tab set. Priority order:
+    //   1. URL hash share-link (handled later in loadFromUrlHash; it overwrites
+    //      the active tab's content).
+    //   2. localStorage multi-tab set (or migration from legacy single-buffer).
+    //   3. Default Hello World tab.
+    // Tutorial mode owns a single ephemeral tab and bypasses persistence.
+    if (isTutorialMode()) {
+        tabs = [{
+            id: genTabId(),
+            name: 'tutorial.tur',
+            content: editor.getValue(),
+            cursor: { lineNumber: 1, column: 1 },
+            scrollTop: 0,
+            createdAt: Date.now(),
+            _model: null,
+        }];
+        activeId = tabs[0].id;
+        tabsHydrating = true;  // permanently suppress persistence in tutorial mode
+    } else {
+        hydrateTabs(CONFIG.DEFAULT_CODE);
     }
+    // Attach the active tab's model to the editor. The initial editor.create
+    // call gave us a throwaway model with CONFIG.DEFAULT_CODE; swapping to the
+    // active tab's model replaces it so all subsequent reads/writes go to the
+    // tab record.
+    const active = currentTab();
+    if (active) {
+        const orphan = editor.getModel();
+        editor.setModel(ensureModel(active));
+        if (orphan && !orphan.isDisposed()) {
+            try { orphan.dispose(); } catch {}
+        }
+        try {
+            if (active.cursor) editor.setPosition(active.cursor);
+            if (typeof active.scrollTop === 'number') editor.setScrollTop(active.scrollTop);
+        } catch {}
+    }
+    renderTabs();
     hydrateConsole();
 
-    // Update cursor position on cursor change + persist
+    // Update cursor position display + per-tab cursor persistence.
     const persistCursor = debounce(() => {
+        const t = currentTab();
+        if (!t) return;
         const pos = editor.getPosition();
-        if (pos) safeWrite(STORAGE_KEYS.cursor, { lineNumber: pos.lineNumber, column: pos.column });
+        if (pos) t.cursor = { lineNumber: pos.lineNumber, column: pos.column };
+        persistTabs();
     }, 500);
     editor.onDidChangeCursorPosition(() => { updateCursorPosition(); persistCursor(); });
 
-    // Persist scroll position
+    // Per-tab scroll persistence.
     const persistScroll = debounce(() => {
-        safeWrite(STORAGE_KEYS.scroll, editor.getScrollTop());
+        const t = currentTab();
+        if (!t) return;
+        t.scrollTop = editor.getScrollTop();
+        persistTabs();
     }, 500);
     editor.onDidScrollChange(persistScroll);
 
-    // Update URL hash on content change (debounced) + persist buffer.
-    const persistBuffer = debounce(() => {
-        safeWrite(STORAGE_KEYS.buffer, editor.getValue());
+    // Update URL hash on content change (debounced) + persist active tab.
+    const persistContent = debounce(() => {
+        const t = currentTab();
+        if (!t) return;
+        t.content = editor.getValue();
+        persistTabs();
     }, 250);
     let urlHashTimer;
     editor.onDidChangeModelContent(() => {
-        persistBuffer();
+        persistContent();
         clearTimeout(urlHashTimer);
         urlHashTimer = setTimeout(updateUrlHash, 1000);
     });
@@ -1078,6 +1403,56 @@ function initEventListeners() {
     // Solve button
     document.getElementById('solve-btn')?.addEventListener('click', solveStep);
 
+    // Mobile overflow menu (⋯) — forwards each menu item to the underlying
+    // button or the examples <select>, so the existing wiring stays the
+    // single source of truth.
+    const moreBtn = document.getElementById('more-btn');
+    const moreMenu = document.getElementById('more-menu');
+    if (moreBtn && moreMenu) {
+        const closeMenu = () => {
+            moreMenu.hidden = true;
+            moreBtn.setAttribute('aria-expanded', 'false');
+        };
+        const openMenu = () => {
+            // Mirror visibility of the Solve menu item to the original button.
+            const solveItem = moreMenu.querySelector('[data-cmd="solve-btn"]');
+            const solveBtn = document.getElementById('solve-btn');
+            if (solveItem && solveBtn) {
+                solveItem.hidden = solveBtn.style.display === 'none';
+            }
+            moreMenu.hidden = false;
+            moreBtn.setAttribute('aria-expanded', 'true');
+        };
+        moreBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            moreMenu.hidden ? openMenu() : closeMenu();
+        });
+        moreMenu.addEventListener('click', (e) => {
+            const item = e.target.closest('.more-item');
+            if (!item) return;
+            const cmd = item.dataset.cmd;
+            const example = item.dataset.example;
+            if (cmd) {
+                document.getElementById(cmd)?.click();
+            } else if (example) {
+                const sel = document.getElementById('examples-select');
+                if (sel) {
+                    sel.value = example;
+                    sel.dispatchEvent(new Event('change'));
+                }
+            }
+            closeMenu();
+        });
+        document.addEventListener('click', (e) => {
+            if (!moreMenu.hidden && !moreMenu.contains(e.target) && e.target !== moreBtn) {
+                closeMenu();
+            }
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !moreMenu.hidden) closeMenu();
+        });
+    }
+
     // Tutorial close button
     document.getElementById('tutorial-close')?.addEventListener('click', () => {
         document.getElementById('tutorial-overlay')?.style.setProperty('display', 'none');
@@ -1168,14 +1543,8 @@ function initHScrollDrag() {
     el.addEventListener('pointerup', endDrag);
     el.addEventListener('pointercancel', endDrag);
 
-    // Keep active tab visible after switching
-    document.querySelectorAll('.tab-button').forEach((btn) => {
-        btn.addEventListener('click', () => {
-            requestAnimationFrame(() => {
-                btn.scrollIntoView({ inline: 'nearest', block: 'nearest' });
-            });
-        });
-    });
+    // Tab-button click handlers (switch + scroll-into-view) are attached by
+    // renderTabs() in the multi-tab state module.
 }
 
 // ============================================================================

@@ -448,6 +448,48 @@ body.split-dragging * {
     background: transparent;
 }
 
+.tab-label {
+    pointer-events: none;
+}
+
+.tab-close {
+    margin-left: 8px;
+    width: 14px;
+    height: 14px;
+    line-height: 14px;
+    text-align: center;
+    font-size: 14px;
+    color: var(--text-dim);
+    border-radius: 3px;
+    opacity: 0;
+    transition: opacity var(--transition-normal), background var(--transition-normal), color var(--transition-normal);
+    flex-shrink: 0;
+}
+.tab-button:hover .tab-close,
+.tab-button.active .tab-close { opacity: 1; }
+.tab-close:hover {
+    color: var(--text-primary);
+    background: color-mix(in srgb, var(--text-primary) 18%, transparent);
+}
+
+.tab-rename {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    background: var(--bg-input, rgba(255,255,255,0.06));
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0 4px;
+    height: 20px;
+    width: 9em;
+    outline: none;
+}
+
+.tab-new {
+    color: var(--text-dim);
+}
+.tab-new:hover { color: var(--text-sec); }
+
 .editor-actions {
     display: flex;
     align-items: center;
@@ -1458,28 +1500,54 @@ body.split-dragging * {
     }
 }
 
+/* The overflow popover is a mobile-only affordance; on desktop the
+   buttons themselves are present in the tab bar. */
+.more-wrap { display: none; position: relative; }
+.more-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    min-width: 180px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    padding: 4px;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+}
+.more-menu[hidden] { display: none; }
+.more-item {
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    padding: 8px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.more-item:hover, .more-item:focus { background: var(--bg-hover, rgba(255,255,255,0.06)); outline: none; }
+.more-sep { height: 1px; background: var(--border); margin: 4px 0; }
+.more-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-dim);
+    padding: 6px 12px 2px;
+}
+
 @media (max-width: 600px) {
-    /* Icon-only buttons; Run keeps its label. The Examples <select>
-       carries the .btn class too, so explicitly exclude it -- it has
-       no icon, and font-size:0 would collapse it to a sliver. */
-    .editor-actions .btn:not(#run-btn):not(.select) {
-        font-size: 0;
-        padding-left: 6px;
-        padding-right: 6px;
-    }
-    .editor-actions .btn:not(#run-btn):not(.select) svg {
-        margin: 0;
-    }
-    /* iOS shows a native picker on <select> tap rather than zooming,
-       so we can drop back to a body-text-sized font. Width is left to
-       fit-content so "Examples" never gets truncated; the editor
-       header scrolls horizontally to accommodate. */
-    .editor-actions .select {
-        font-size: 13px;
-        max-width: none;
-        width: auto;
-        padding: 5px 10px;
-    }
+    /* Collapse Solve/Clear/Format/Share/Examples into the ⋯ menu so
+       the tab bar has room for tabs. Run stays visible. */
+    .editor-actions > #solve-btn,
+    .editor-actions > #clear-btn,
+    .editor-actions > #format-btn,
+    .editor-actions > #share-btn,
+    .editor-actions > #examples-select { display: none; }
+    .more-wrap { display: inline-flex; }
 }
 
 /* Monaco's on-screen-keyboard widget overlaps the editor surface on

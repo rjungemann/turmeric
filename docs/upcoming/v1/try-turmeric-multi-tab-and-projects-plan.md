@@ -1,6 +1,7 @@
 ## Try Turmeric: Multi-tab UI, Project Zip Download, and Zip Load
 
-> **Status:** Draft plan (design only, no build)
+> **Status:** Phase 1 landed (multi-tab UI + persistence + migration);
+> Phases 2 (download-as-zip) and 3 (load-from-zip) not started.
 > **Type:** Web platform / Try Turmeric
 > **Predecessor:** [`docs/archive/try-turmeric-pwa-mobile-plan.md`](../../archive/try-turmeric-pwa-mobile-plan.md)
 
@@ -24,10 +25,17 @@ Playwright tests in `web/tests/`.
 
 ## Status
 
-Not started. Multi-tab persistence keys (`tur.try.tabs.v1`,
-`tur.try.activeTab.v1`) were defined in the predecessor plan but
-deferred because the underlying multi-tab UI never existed -- the
-`+ New` button in `web/try/index.html` is a static placeholder.
+Phase 1 (multi-tab UI + persistence + migration) is live in `web/main.js`
+and `web/styles.css`. Each tab carries an independent Monaco
+`ITextModel` (so undo history survives switches), the `+ New` button
+creates `untitled-N.tur`, hover-`×` closes (disallowed when one tab
+remains), double-click renames inline, and the tab set persists under
+`tur.try.tabs.v1` / `tur.try.activeTab.v1` with a one-shot migration
+from the legacy `tur.try.buffer.v1` / `cursor` / `scroll` keys.
+
+Drag-to-reorder (plan §1.3 bullet 3) is intentionally deferred -- not
+load-bearing for Phases 2 and 3, which only need a stable tab list.
+Playwright specs (§6) are still to land.
 
 ## 1. Multi-tab UI
 

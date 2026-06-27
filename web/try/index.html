@@ -30,10 +30,11 @@
                 <!-- Editor Pane -->
                 <div class="editor-pane">
                     <div class="editor-header">
-                        <div class="editor-tabs">
-                            <button class="tab-button active" data-tab="main">main.tur</button>
-                            <button class="tab-button" data-tab="new">+ New</button>
-                        </div>
+                        <!-- Tab buttons (incl. the trailing "+ New") are
+                             rendered by renderTabs() in main.js from the
+                             multi-tab state. The strip is left empty here
+                             until the editor initialises. -->
+                        <div class="editor-tabs"></div>
                         <div class="editor-actions">
                             <button class="btn btn-icon" id="run-btn" title="Run (Ctrl/Cmd + Enter)">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -75,6 +76,33 @@
                                 <option value="effects">Effects</option>
                                 <option value="sweet">Sweet-exp Syntax</option>
                             </select>
+                            <!-- Mobile overflow: collapses Solve/Clear/Format/Share/Examples
+                                 into a single popover so the tab bar has room. Run stays
+                                 visible as the primary action. -->
+                            <div class="more-wrap">
+                                <button class="btn btn-icon" id="more-btn"
+                                        aria-haspopup="true" aria-expanded="false"
+                                        aria-controls="more-menu" title="More actions">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                        <path d="M6 10c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm12 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm-6 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>
+                                    </svg>
+                                </button>
+                                <div class="more-menu" id="more-menu" role="menu" hidden>
+                                    <button class="more-item" role="menuitem" data-cmd="solve-btn" data-show-when="solve">Solve this</button>
+                                    <button class="more-item" role="menuitem" data-cmd="clear-btn">Clear</button>
+                                    <button class="more-item" role="menuitem" data-cmd="format-btn">Format</button>
+                                    <button class="more-item" role="menuitem" data-cmd="share-btn">Share</button>
+                                    <div class="more-sep" role="separator"></div>
+                                    <div class="more-label">Examples</div>
+                                    <button class="more-item" role="menuitem" data-example="hello">Hello World</button>
+                                    <button class="more-item" role="menuitem" data-example="math">Basic Math</button>
+                                    <button class="more-item" role="menuitem" data-example="factorial">Factorial</button>
+                                    <button class="more-item" role="menuitem" data-example="fibonacci">Fibonacci</button>
+                                    <button class="more-item" role="menuitem" data-example="closure">Closures</button>
+                                    <button class="more-item" role="menuitem" data-example="effects">Effects</button>
+                                    <button class="more-item" role="menuitem" data-example="sweet">Sweet-exp Syntax</button>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <div class="tutorial-bar" id="tutorial-bar" style="display: none;">
