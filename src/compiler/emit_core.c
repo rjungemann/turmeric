@@ -1189,6 +1189,23 @@ static bool emit_inst_head_matches(Type pattern, Type concrete) {
             return true;
         }
     }
+    /* CONV-S1 seam 4: the ADT mirror of the G2 head match.  An instance written
+     * over a bare type constructor whose head is a record ADT (`definstance Dec
+     * [Option]`, head `Option`) -- including a `defstruct` lowered to a record
+     * defadt -- matches any concrete application `(Option int)`.  Without this a
+     * nested/return dispatch that recovers an APPLIED element type (`build`'s
+     * `(dec i)` re-resolving to `(Option int)`) cannot find the `Dec [Option]`
+     * instance FnDef, falls back to the int-carrier representative, and mints an
+     * ill-typed `__inst_Dec_dec_int__spec` returning the wrong element. */
+    if (pattern.kind == TY_ADT && pattern.as.adt_.def &&
+        pattern.as.adt_.def->n_type_params > 0 && concrete.kind == TY_APP) {
+        Type head = concrete;
+        while (head.kind == TY_APP && head.as.app.fn) head = *head.as.app.fn;
+        if (head.kind == TY_ADT &&
+            head.as.adt_.def == pattern.as.adt_.def) {
+            return true;
+        }
+    }
     return false;
 }
 

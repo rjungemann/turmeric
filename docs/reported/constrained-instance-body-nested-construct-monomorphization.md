@@ -89,10 +89,48 @@ by-value Result/Option element forces a monomorph in the `build` loop:
 These are `build`-specific (a plain constrained `defn`, not an instance method),
 so the gaps-1..5 fixes deliberately do NOT fire there (gap #2's
 `g_bhd_detect_return_dispatch` is off inside a plain-defn spec, gap #3 requires
-`owner_instance`).  Resolving them needs the constrained-`defn` redirect-ABI
-coherence: when build specializes at a by-value element, its `(dec i)` result
-binding, the `ok-val` accessor, and the `vec-push!` must all agree on the by-value
-Result/Option representation instead of straddling the int64 carrier.
+`owner_instance`).
+
+### Defect #1 RESOLVED (2026-06-27): the dec mis-dispatch
+
+`build`'s `(dec i)` at `A = (Option int)` re-resolved to `(Option int)` (an
+applied type) but `emit_concrete_inst_method_fndef` could not match the
+`Dec [Option]` instance -- whose head is the bare `Option` type constructor (a
+`TY_ADT` under lowering) -- against the application, so the redirect found no
+FnDef, fell back to the int-carrier `dec_int` representative, and minted an
+ill-typed `__inst_Dec_dec_int__spec__tur_adt_Option__int_int64_t` (body returns
+`Result__int__cstr`, declared `Option__int`).  Root cause: `emit_inst_head_matches`
+(emit_core.c) had a "bare type-constructor head matches an application" branch for
+`TY_STRUCT` patterns only; added the symmetric `TY_ADT` branch.  `build`'s
+`(dec i)` now correctly emits `__inst_Dec_dec_Option(i)` on the carrier
+(`int64_t r`).  Default suite 1863/0.
+
+### Defects #2/#3 STILL OPEN: build's `(ok acc)` payload mis-binding
+
+`build`'s tail `(:: (ok acc) (Result (Vec A) cstr))` (acc : `(Vec A)`, a :heap
+Vec that rides the int64 carrier as a pointer) interns an `ok` spec with
+`arg0 = tur_adt_Option__int` -- the Vec's ELEMENT -- instead of the Vec, producing
+`ok__spec__int64_t_tur_adt_Option__int__h1((int64_t)(intptr_t)(acc))`: the spec
+expects a by-value `Option__int` but the call passes the Vec pointer as int64.
+The construct payload arg type collapses because the `(ok acc)` call carries an
+abi-binding whose NAME is the enclosing spec's constraint var `A` (the `ok`
+template's element tyvar was elaborated under that same name), so the rehydration
+path resolves the payload to `A`'s value (`Option__int = (Option int)`, the Vec's
+element) rather than the actual argument `acc : (Vec (Option int))`.  Because the
+Vec is :heap, the correct lowering keeps `(ok acc)` on the plain carrier `ok`
+(pointer cast to int64); minting any by-value spec is wrong.
+
+Fix direction (next pass): derive a construct payload arg type from the actual
+argument expression's spec-resolved type when the binding-derived type comes from
+a name-colliding constraint var -- a construct over a spec parameter whose type is
+a :heap/parametric container must not collapse to the container's element.  (A
+direct attempt to prefer `emit_spec_arg_type_for_binding` for construct payload
+args in the owned arg loop did not take effect -- `build`'s `(ok acc)` reaches the
+interning through a construct path that bypasses that loop; the override must be
+placed where the construct's `arg_types[]` are finalized for interning, or the
+elab-side abi-binding for a construct whose element is `(Container ConstraintVar)`
+must record the element type, not the bare constraint var.)  Then the `ok-val`
+accessor and `vec-push!` carrier bridges should fall in line.
 
 ## Notes
 
