@@ -1560,11 +1560,20 @@ bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
         const TypeClassInstance *inst =
             ctx->current_abi_specialization->fn->owner_instance;
         Type recv = ctx->current_abi_specialization->bindings[0].type;
-        StructDef *rsd = NULL; Type rargs[16]; uint8_t rn = 0;
-        if (type_extract_struct_app(&recv, &rsd, rargs, &rn)) {
+        StructDef *rsd = NULL; AdtDef *rad = NULL; Type rargs[16]; uint8_t rn = 0;
+        /* CONV-S2: the class-var receiver may be a lowered record ADT-app
+         * (`(Vec bool)`/`(Cons (Option int))`) under defstruct-as-defadt, which
+         * type_extract_struct_app rejects -- so a constrained instance over a
+         * lowered container (`(definstance Tag [Vec] [(Tag A)] ...)`) left its
+         * element constraint var unbound and the inner `(tag (:: (vec-get v i)
+         * A))` kept the baked carrier representative (wrong instance / a segfault
+         * when the element's real ABI differs). Extract the ADT-app element args
+         * too. */
+        if (type_extract_struct_app(&recv, &rsd, rargs, &rn) ||
+            type_extract_adt_app(&recv, &rad, rargs, &rn)) {
             /* Route the param_idx->element mapping through the shared chokepoint
-             * kernel (struct-strict extraction stays here), then pick the entry
-             * naming this still-unbound constraint var. */
+             * kernel (extraction stays here), then pick the entry naming this
+             * still-unbound constraint var. */
             AbiTypeBinding cb[ABI_TYPE_BINDINGS_MAX];
             uint8_t ncb = emit_abi_constraint_var_bindings(inst, rargs, rn, cb,
                                                            ABI_TYPE_BINDINGS_MAX);
