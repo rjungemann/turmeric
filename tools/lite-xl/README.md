@@ -133,6 +133,28 @@ blocks in the active buffer (refreshed on save).
 Override the helper subcommand via
 `config.plugins.turmeric.lsp_cmd = "lsp-lite"` (the default).
 
+## REPL (Phase 4)
+
+Spawns a long-lived `tur repl` subprocess and bridges it through the
+LogView (output) and CommandView (input). The implementation reuses
+the two built-in views rather than rolling a bespoke `ReplView` --
+honest about what's there.
+
+| Key (mac) | Key (others) | Command |
+| --- | --- | --- |
+| cmd+e | ctrl+e | `turmeric:repl-eval` -- prompt for an expression, send it to the running REPL |
+| cmd+shift+l | ctrl+shift+l | `turmeric:repl-reload-buffer` -- save the active buffer and pipe its full contents into the REPL |
+
+Also surfaced through the command palette:
+
+- `turmeric:start-repl` -- spawn the REPL subprocess if not already running
+- `turmeric:stop-repl`  -- send `:quit` and terminate
+
+Output appears in the log pane prefixed with `repl> `; the input that
+triggered each block is logged with `repl< ` so the back-and-forth is
+easy to follow. Configure the subcommand via
+`config.plugins.turmeric.repl_subcommand` (default `"repl"`).
+
 ## Why Lite XL (not SciTE)
 
 The earlier SciTE direction is [superseded](../../docs/upcoming/turmeric-scite-desktop-plan.md);

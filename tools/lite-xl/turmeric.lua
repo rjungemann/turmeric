@@ -463,6 +463,114 @@ require "core.doc".save = function(self, ...)
   return rc
 end
 
+-- -------------------------------------------------------------------------
+-- Phase 4: REPL pane (via CommandView prompt + LogView output)
+-- -------------------------------------------------------------------------
+--
+-- Lite XL's CommandView + LogView together cover the input/output halves of
+-- a REPL surface, so the v1 ReplView is a bridge over those two existing
+-- views rather than a bespoke `View` subclass. A long-lived `tur repl`
+-- subprocess holds the evaluator state across commands.
+
+config.plugins.turmeric.repl_subcommand = config.plugins.turmeric.repl_subcommand or "repl"
+
+local repl_proc = nil
+local repl_buf  = ""
+
+local function repl_drain()
+  if not repl_proc then return end
+  while true do
+    local out = repl_proc:read_stdout(8192)
+    local err = repl_proc:read_stderr(8192)
+    if (not out or out == "") and (not err or err == "") then break end
+    if out and out ~= "" then repl_buf = repl_buf .. out end
+    if err and err ~= "" then
+      for line in err:gmatch("[^\n]+") do core.error("repl: %s", line) end
+    end
+  end
+end
+
+local function repl_emit()
+  if repl_buf == "" then return end
+  for line in repl_buf:gmatch("[^\n]+") do core.log("repl> %s", line) end
+  repl_buf = ""
+end
+
+local function repl_start(quiet)
+  if repl_proc and repl_proc:running() then
+    if not quiet then core.log("turmeric: repl already running") end
+    return true
+  end
+  local ok, p = pcall(process.start,
+    { config.plugins.turmeric.tur, config.plugins.turmeric.repl_subcommand },
+    { stdin = process.REDIRECT_PIPE,
+      stdout = process.REDIRECT_PIPE,
+      stderr = process.REDIRECT_PIPE })
+  if not ok then
+    core.error("turmeric: failed to spawn tur repl: %s", tostring(p))
+    return false
+  end
+  repl_proc = p
+  repl_buf  = ""
+  core.add_thread(function()
+    while repl_proc and repl_proc:running() do
+      repl_drain()
+      repl_emit()
+      coroutine.yield(0.05)
+    end
+    repl_drain()
+    repl_emit()
+    core.log("turmeric: repl exited")
+    repl_proc = nil
+  end)
+  core.log("turmeric: repl started")
+  return true
+end
+
+local function repl_send(text)
+  if not repl_proc or not repl_proc:running() then
+    if not repl_start() then return end
+  end
+  if not text:match("\n$") then text = text .. "\n" end
+  repl_proc:write(text)
+end
+
+command.add(nil, {
+  ["turmeric:start-repl"] = function() repl_start() end,
+  ["turmeric:stop-repl"]  = function()
+    if repl_proc and repl_proc:running() then
+      repl_proc:write(":quit\n")
+      repl_proc:terminate()
+      core.log("turmeric: repl stopped")
+    end
+  end,
+  ["turmeric:repl-eval"] = function()
+    core.command_view:enter("Turmeric expr", {
+      submit = function(expr)
+        if expr and expr ~= "" then
+          core.log("repl< %s", expr)
+          repl_send(expr)
+        end
+      end,
+    })
+  end,
+  ["turmeric:repl-reload-buffer"] = function()
+    local doc = nearest_doc()
+    if not doc then core.error("turmeric: no active buffer"); return end
+    if doc.filename then doc:save() end
+    local text = table.concat(doc.lines, "")
+    core.log("turmeric: reloading buffer into repl (%d bytes)", #text)
+    repl_send(text)
+  end,
+})
+
+keymap.add {
+  ["cmd+shift+l"]  = "turmeric:repl-reload-buffer",
+  ["ctrl+shift+l"] = "turmeric:repl-reload-buffer",
+  ["cmd+e"]        = "turmeric:repl-eval",
+  ["ctrl+e"]       = "turmeric:repl-eval",
+}
+
 -- Optional integration with Lite XL's built-in `autocomplete` plugin.
 -- It exposes `autocomplete.add({ name=..., files=..., items={...} })`.
 -- We seed an empty list and refresh it as the user types.
