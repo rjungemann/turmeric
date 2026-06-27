@@ -1214,6 +1214,9 @@ async function initEditor() {
             renderTabs();
             persistTabs();
         },
+        // Phase 2 surface: lets specs assert the logical project layout
+        // without intercepting an actual browser download.
+        projectEntries: () => buildProjectEntries().entries,
     };
 
     // Hydrate the tab set. Priority order:
@@ -1429,6 +1432,186 @@ function loadExample(name) {
     }
 }
 
+// ============================================================================
+// Project download (Phase 2 of try-turmeric-multi-tab-and-projects-plan)
+// ============================================================================
+
+// CRC-32 table (one-time init), used by both the local headers and the
+// central directory for store-only entries.
+const CRC32_TABLE = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+        t[n] = c >>> 0;
+    }
+    return t;
+})();
+
+function crc32(bytes) {
+    let c = 0xffffffff;
+    for (let i = 0; i < bytes.length; i++) {
+        c = CRC32_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+    }
+    return (c ^ 0xffffffff) >>> 0;
+}
+
+// Hand-rolled store-only ZIP writer. No deflate -- text files compress
+// poorly, the dep surface stays flat, and Phase 3's unzipper can do the
+// same. Each entry is `{ path: string, content: string }`. Returns a Blob.
+function buildZip(entries) {
+    const enc = new TextEncoder();
+    const localChunks = [];      // bytes for the local file part
+    const centralChunks = [];    // bytes for the central directory part
+    let offset = 0;
+
+    for (const entry of entries) {
+        const nameBytes = enc.encode(entry.path);
+        const dataBytes = enc.encode(entry.content);
+        const c = crc32(dataBytes);
+        const size = dataBytes.length;
+
+        // Local file header (PK\x03\x04). All multi-byte fields little-endian.
+        const local = new Uint8Array(30 + nameBytes.length);
+        const lv = new DataView(local.buffer);
+        lv.setUint32(0,  0x04034b50, true);   // signature
+        lv.setUint16(4,  20,         true);   // version needed
+        lv.setUint16(6,  0,          true);   // flags
+        lv.setUint16(8,  0,          true);   // method: 0 = store
+        lv.setUint16(10, 0,          true);   // mod time (unset)
+        lv.setUint16(12, 0x21,       true);   // mod date (jan 1 1980)
+        lv.setUint32(14, c,          true);   // crc-32
+        lv.setUint32(18, size,       true);   // compressed size
+        lv.setUint32(22, size,       true);   // uncompressed size
+        lv.setUint16(26, nameBytes.length, true);
+        lv.setUint16(28, 0,          true);   // extra field length
+        local.set(nameBytes, 30);
+
+        localChunks.push(local, dataBytes);
+
+        // Central directory entry (PK\x01\x02).
+        const central = new Uint8Array(46 + nameBytes.length);
+        const cv = new DataView(central.buffer);
+        cv.setUint32(0,  0x02014b50, true);
+        cv.setUint16(4,  20,         true);   // version made by
+        cv.setUint16(6,  20,         true);   // version needed
+        cv.setUint16(8,  0,          true);
+        cv.setUint16(10, 0,          true);
+        cv.setUint16(12, 0,          true);
+        cv.setUint16(14, 0x21,       true);
+        cv.setUint32(16, c,          true);
+        cv.setUint32(20, size,       true);
+        cv.setUint32(24, size,       true);
+        cv.setUint16(28, nameBytes.length, true);
+        cv.setUint16(30, 0,          true);   // extra field length
+        cv.setUint16(32, 0,          true);   // comment length
+        cv.setUint16(34, 0,          true);   // disk number
+        cv.setUint16(36, 0,          true);   // internal attrs
+        cv.setUint32(38, 0,          true);   // external attrs
+        cv.setUint32(42, offset,     true);   // local header offset
+        central.set(nameBytes, 46);
+        centralChunks.push(central);
+
+        offset += local.length + dataBytes.length;
+    }
+
+    const localSize   = localChunks.reduce((s, a) => s + a.length, 0);
+    const centralSize = centralChunks.reduce((s, a) => s + a.length, 0);
+
+    // End of central directory record (PK\x05\x06).
+    const eocd = new Uint8Array(22);
+    const ev = new DataView(eocd.buffer);
+    ev.setUint32(0,  0x06054b50,     true);
+    ev.setUint16(4,  0,              true);   // disk
+    ev.setUint16(6,  0,              true);
+    ev.setUint16(8,  entries.length, true);
+    ev.setUint16(10, entries.length, true);
+    ev.setUint32(12, centralSize,    true);
+    ev.setUint32(16, localSize,      true);
+    ev.setUint16(20, 0,              true);   // comment length
+
+    return new Blob([...localChunks, ...centralChunks, eocd],
+                    { type: 'application/zip' });
+}
+
+// Slugify a tab name into something tur build will accept as a source
+// filename. Strips path separators and shell-unfriendly characters,
+// guarantees the .tur extension, and disambiguates collisions.
+function slugifyTabName(raw, used) {
+    let name = (raw || 'untitled.tur').trim().replace(/[\/\\<>:"|?*\x00-\x1f]/g, '_');
+    if (!/\.tur$/i.test(name)) name += '.tur';
+    if (!used.has(name)) return name;
+    const base = name.replace(/\.tur$/i, '');
+    for (let n = 2; n < 10000; n++) {
+        const candidate = `${base}-${n}.tur`;
+        if (!used.has(candidate)) return candidate;
+    }
+    return `untitled-${Date.now()}.tur`;
+}
+
+// Build the project zip's logical entries from the current tab set. Exposed
+// (via a wrapper below) so Playwright can drive it without intercepting the
+// browser download.
+function buildProjectEntries() {
+    captureActiveTabState();
+    const snapshot = tabsSnapshot();
+    const used = new Set();
+    const files = snapshot.map(t => {
+        const fileName = slugifyTabName(t.name, used);
+        used.add(fileName);
+        return { fileName, tab: t };
+    });
+    // Pick the main: prefer main.tur if present, else the first tab.
+    const mainEntry = files.find(f => f.fileName === 'main.tur') || files[0];
+
+    const buildTur = [
+        '(project',
+        '  :name "try-turmeric-project"',
+        `  :main "${mainEntry.fileName}"`,
+        `  :src [${files.map(f => `"${f.fileName}"`).join(' ')}]`,
+        ')',
+        '',
+    ].join('\n');
+
+    const workspaceJson = JSON.stringify({
+        version: 1,
+        activeId: activeId,
+        tabs: files.map(f => ({
+            id: f.tab.id,
+            name: f.tab.name,
+            file: `src/${f.fileName}`,
+            cursor: f.tab.cursor,
+            scrollTop: f.tab.scrollTop,
+            createdAt: f.tab.createdAt,
+        })),
+    }, null, 2);
+
+    const entries = [
+        { path: 'build.tur', content: buildTur },
+        ...files.map(f => ({ path: `src/${f.fileName}`, content: f.tab.content })),
+        { path: '.turmeric/workspace.json', content: workspaceJson },
+    ];
+    return { entries, mainEntry };
+}
+
+function downloadProject() {
+    const { entries } = buildProjectEntries();
+    const blob = buildZip(entries);
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').replace(/-\d{3}Z$/, 'Z');
+    const filename = `try-turmeric-${ts}.zip`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    // Free the blob URL after the click has had a chance to start the
+    // download -- some browsers will revoke too eagerly otherwise.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+    showStatus(`Downloaded ${filename}`, 'success');
+}
+
 /**
  * Share the current code
  */
@@ -1515,6 +1698,9 @@ function initEventListeners() {
     
     // Share button
     document.getElementById('share-btn')?.addEventListener('click', shareCode);
+
+    // Download-project-as-zip button (Phase 2 of the multi-tab plan).
+    document.getElementById('download-btn')?.addEventListener('click', downloadProject);
     
     // Clear console button
     document.getElementById('clear-console-btn')?.addEventListener('click', clearConsole);

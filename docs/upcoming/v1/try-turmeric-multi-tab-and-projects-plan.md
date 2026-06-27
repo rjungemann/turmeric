@@ -1,9 +1,8 @@
 ## Try Turmeric: Multi-tab UI, Project Zip Download, and Zip Load
 
-> **Status:** Phase 1 fully landed (multi-tab UI + drag-reorder +
-> persistence + migration + Playwright specs).
-> Phase 1.5 (cross-tab `load` bridge via concatenation) and Phases 2
-> (download-as-zip) and 3 (load-from-zip) not started.
+> **Status:** Phase 1 fully landed. Phase 2 (download project as zip)
+> landed. Phase 1.5 (cross-tab `load` bridge via concatenation) and
+> Phase 3 (load-from-zip) not started.
 > **Type:** Web platform / Try Turmeric
 > **Predecessor:** [`docs/archive/try-turmeric-pwa-mobile-plan.md`](../../archive/try-turmeric-pwa-mobile-plan.md)
 
@@ -266,6 +265,18 @@ from scratch when Phase 2/3 ships and someone reaches for the next
 thing.
 
 ## 3. Download project as zip
+
+**Landed.** `web/main.js` has a ~50-line store-only ZIP writer
+(`buildZip()` + a one-shot CRC-32 table), `buildProjectEntries()` for
+the logical layout, and `downloadProject()` for the user-facing
+trigger. The toolbar gets a `Download` button next to `Share`; the
+mobile `⋯` menu gets a "Download project" item that exercises the
+same handler. Playwright coverage in `web/tests/mobile.download.spec.js`
+(4 tests, all green): layout for a single tab, slugified collision-free
+layout for multi-tab, end-to-end download click → ZIP bytes round-trip
+through an inline reader, and filename pattern. The reader is store-
+only; Phase 3 will lift it to handle deflate or pull in `fflate` if a
+zip-with-deflate ever lands.
 
 ### 3.1 Trigger
 

@@ -1558,6 +1558,7 @@ body.split-dragging * {
     .editor-actions > #clear-btn,
     .editor-actions > #format-btn,
     .editor-actions > #share-btn,
+    .editor-actions > #download-btn,
     .editor-actions > #examples-select { display: none; }
     .more-wrap { display: inline-flex; }
 }
