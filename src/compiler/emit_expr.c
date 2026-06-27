@@ -3181,6 +3181,26 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * emits `ctor_AltF__bool`, matching the by-value layout the
                  * consumer reads instead of the int64-carrier `ctor_AltF`. */
                 Type rty = emit_resolve_type(ctx, e->type);
+                /* SC7 (lowered transparent int-newtype): under the
+                 * defstruct->defadt lowering a phantom int-newtype
+                 * (`(defstruct Schema [A] (raw :int))`) is a single-variant
+                 * record ADT whose runtime representation is still its bare
+                 * int64 payload (type_c_name -> "int64_t").  Its constructor is
+                 * the identity on that payload -- emit the single arg cast to
+                 * int64 directly, exactly as EX_MAKE_STRUCT does, so we never
+                 * call (or need) the aggregate `ctor_Schema__int` and the result
+                 * matches the int64 carrier every consumer expects. */
+                if (e->as.call_.n_args == 1 &&
+                    type_is_transparent_int_newtype(rty)) {
+                    char *fv = emit_value(ctx, body, e->as.call_.args[0]);
+                    Buf id; buf_init(&id);
+                    buf_printf(&id, "(int64_t)(%s)", fv);
+                    buf_putc(&id, '\0');
+                    free(fv);
+                    char *result = strdup(id.data);
+                    buf_free(&id);
+                    return result;
+                }
                 /* CONV-S1: only trust the receiver-type suffix when the app is
                  * fully concrete.  A lowered record-ADT constructor body
                  * (`none`'s `(Option false (default-of A))`) carries an erased
@@ -5600,6 +5620,17 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * valid C even though the C parameter type is int64_t.
              * Phase D: for pass-by-ptr params (const T*), use -> instead of . */
             char *sv = emit_value(ctx, body, e->as.get_field_.struct_expr);
+            /* SC7: a transparent int newtype (including the lowered record-ADT
+             * form, `(defstruct Schema [A] (raw :int))`) IS its single int64
+             * field -- the access is the identity.  Catch it here, before the
+             * ADT positional/named member-path branch, so `(.raw (fmap s f))`
+             * over a `(Schema int)` result reads the int64 carrier directly
+             * rather than `.as.Schema._0` on a non-aggregate value.  Mirrors the
+             * TY_STRUCT transparent-newtype shortcut further below. */
+            if (type_is_transparent_int_newtype(
+                    e->as.get_field_.struct_expr->type)) {
+                return sv;
+            }
             /* CONV-S0/S4: receiver is a single-variant record ADT (def == NULL).
              * The value is the heap-pointer int64 carrier; read the field out of
              * the sole variant's union member.  The flat-product typedef has no

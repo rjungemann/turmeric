@@ -591,7 +591,7 @@ runtime *usage* seam, below.
      regenerated.  *Cleared ~43* (`httpd-*`, `clone-*`, `eqmap-struct`, the `Pos`
      `typeclass-*` tests).  Fixture `conv-defstruct-inline-c-abi`.
 
-   **Running total: 212 -> 42 unique build-failing fixtures under force-lower
+   **Running total: 212 -> 36 unique build-failing fixtures under force-lower
    (default suite stays 1863/0).**  (Sub-root (a) -- 0-arg construct in control
    flow -- the inline-C-tail return bridge, the accessor-unbox, the
    assignment-position straddle, the inline-C instance-method signature, the
@@ -600,8 +600,30 @@ runtime *usage* seam, below.
    inline-C compat typedef, the inline-C-carrier-result -> by-value-sink bridges
    (let-init / call-arg, NULL-safe lowered Option), the carrier-producer-arg
    (__inst_/construct) -> by-value-spec-param bridge, the wide-by-value-element
-   accessor-unbox + ctor-box, and the abi-spec interning recognizing a lowered
-   by-value TY_ADT result are all LANDED.)
+   accessor-unbox + ctor-box, the abi-spec interning recognizing a lowered
+   by-value TY_ADT result, and the M7-HKT transparent-int-newtype phantom
+   wrapper (`(Schema A)`) are all LANDED.)
+
+   - **M7-HKT transparent-int-newtype phantom wrapper DONE (2026-06-27).**  A
+     phantom int-newtype `(defstruct Schema [A] (raw :int))` used as an HKT
+     container (Functor/Applicative/Alternative [Schema]): under lowering it
+     becomes a single-variant *record* ADT, but it is still an int64 carrier at
+     runtime (one concrete `:int` field).  `type_is_transparent_int_newtype` now
+     recognizes that lowered record-ADT shape (gated on the record style + a
+     genuinely-concrete `:int` field, so a positional `(defdata Fix [^f] (Roll
+     :int))` or a tyvar-field `(Box a)` is *not* mis-collapsed), which lets the
+     SC7 chainable-HKT-return propagation concretize the `(fmap s f)` call result
+     to `(Schema int)` -- fixing the "no typeclass method found for 'raw'"
+     elaboration error on `(.raw (fmap s f))`.  Codegen then follows through: the
+     ADT arm of `type_c_name` returns `int64_t`, the record-ADT ctor emits its
+     int64 payload directly (no aggregate `ctor_Schema__int`), the EX_GET_FIELD
+     ADT branch reads the carrier identity, `type_struct_pass_by_ptr` never
+     pointer-wraps it, and `emit_carrier_bridge` treats the crossing as a no-op
+     (no address-of-a-stack-temp handed to an int64-by-value formal).  Cleared
+     `schema-hkt-functor`, `schema-hkt-alternative`, `schema-applicative-user`,
+     `schema-applicative-user-errors`; default suite 1863/0.  (The `hkt-ap-fn-in-
+     container` / `hkt-stdlib-option-result-instances` pair is a *distinct*
+     `Option__opaque` specialization cluster, not this root.)
 
    - **wide by-value element: accessor unbox + ctor box DONE (2026-06-27).**  A
      by-value Result/Option carrying a value-struct element (User/Point) read via
@@ -830,18 +852,23 @@ runtime *usage* seam, below.
      name` case is `result-over-struct-with-option-field-typedef-order` (`User`
      typedef ordering -- a different, struct-with-Option-field seam).
 
-   - **schema-HKT `no typeclass method found for 'raw'` (investigated
-     2026-06-26, BLOCKED in M7).**  `(.raw (fmap s f))` over a phantom record
-     newtype `(Schema A)`: the `fmap` *call result type* is a degenerate `(f b)`
-     app (`app.fn == app.arg == NULL`) under lowering instead of `(Schema int)`,
-     so the dot-access cannot resolve the receiver to the Schema record ADT.  At
-     default the call-result head is a concrete `TY_STRUCT` (the struct-match loop
-     recovers it); under lowering Schema is an ADT and the HKT result-type
-     concretization leaves the head empty.  Root cause + repro + fix directions in
-     `docs/reported/schema-hkt-method-call-result-degenerate-app.md` (the fix is
-     in the M7 HKT result-type rewrite / call-site instantiation, not a leaf).
-     Affects `schema-hkt-functor`, `schema-hkt-alternative`,
-     `schema-applicative-user`, `schema-applicative-user-errors`.
+   - **schema-HKT `no typeclass method found for 'raw'` RESOLVED (2026-06-27).**
+     `(.raw (fmap s f))` over a phantom record newtype `(Schema A)` failed
+     because the `fmap` call result never concretized to `(Schema int)`.  The
+     real cause was upstream of the M7 head-rewrite: the SC7 chainable-HKT-return
+     propagation reads `type_is_transparent_int_newtype(body->type)` to recover
+     the `(Schema int)` body type, and that predicate only knew the `TY_STRUCT`
+     newtype shape -- under lowering Schema is a single-variant *record* ADT, so
+     the predicate returned false and the call kept the un-concretized result
+     (its `.raw` then had no record head to resolve against).  Teaching the
+     predicate the lowered record-ADT form -- gated on the record style and a
+     genuinely-concrete `:int` field so a positional `(defdata Fix [^f] (Roll
+     :int))` and a tyvar-field `(Box a)` are excluded -- fixes elaboration, and
+     the codegen follow-through (type_c_name ADT arm, transparent ctor emit,
+     EX_GET_FIELD identity, pass-by-ptr opt-out, carrier-bridge no-op) makes it
+     build + run.  Cleared `schema-hkt-functor`, `schema-hkt-alternative`,
+     `schema-applicative-user`, `schema-applicative-user-errors`.  Report archived
+     to `docs/archive/schema-hkt-method-call-result-degenerate-app.md`.
 
    Each non-moot cluster must be driven to zero -- promote a representative
    force-lower failure to a flag-on fixture, fix the lowering, repeat -- before the

@@ -3195,6 +3195,14 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
     /* No crossing needed. */
     if (src_ck == sink_ck) return src_str;
 
+    /* SC7: a transparent int newtype (including the lowered single-int-field
+     * record-ADT form) has the SAME C representation -- a bare int64 -- in both
+     * the carrier and the concrete world, so the crossing is the identity in
+     * either direction.  Return the source verbatim before the aggregate-spill
+     * path below would take its address (`(int64_t)(intptr_t)(&tmp)`) and hand a
+     * stack pointer to an int64-by-value formal. */
+    if (type_is_transparent_int_newtype(concrete_ty)) return src_str;
+
     /* M3 audit: identify which call site reaches the bridge; trace tagged so
      * the per-fixture cost of removing it is measurable.  Enable with
      * TUR_M3_AUDIT=1. */

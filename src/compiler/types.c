@@ -516,14 +516,57 @@ AdtDef *type_adt_app_def(const Type *t) {
  * `:int` field excludes value-carrying parametric structs like
  * `(defstruct Box [A] (x A))` (whose field is the type parameter), so no
  * existing by-value parametric struct changes representation. */
+/* SC7 helper: a lowered record-ADT field is a CONCRETE `:int` (not a `:a` tyvar
+ * field whose carrier kind merely happens to be int64).  A parametric ADT's
+ * tyvar field (`(defdata Box [a] (Box a))`) reports kind == TY_INT (the int64
+ * carrier representation) but carries a TY_TYVAR full_type; such a field is a
+ * genuine by-value element slot, NOT a transparent int payload, so it must be
+ * rejected -- otherwise `(Box float)` would be mistaken for an int newtype and
+ * its aggregate value silently collapsed to int64. */
+static bool ctor_field_is_concrete_int(const CtorField *f) {
+    if (!f || f->kind != TY_INT) return false;
+    return f->full_type == NULL || f->full_type->kind == TY_INT;
+}
+
+/* SC7 helper: the transparent-int-newtype shape is the lowered-`defstruct`
+ * RECORD form -- a single named `:int` field accessed via `.field`.  A
+ * positional defdata constructor (`(defdata Fix [^f] (Roll :int))`) is a
+ * genuine ADT whose values flow through `(Roll x)` / `match`, NOT field access,
+ * so it must keep its tagged/flat-product representation even though it is
+ * structurally a parametric single-int-field single-variant ADT.  Gating on the
+ * record style (named field) is exactly what separates the lowered defstruct
+ * from a hand-written positional ADT. */
+static bool adt_ctor_is_transparent_int_record(const CtorDef *c) {
+    return c && c->is_record && c->n_fields == 1 &&
+           c->fields[0].name != NULL &&
+           ctor_field_is_concrete_int(&c->fields[0]);
+}
+
 bool type_is_transparent_int_newtype(Type t) {
     StructDef *def = NULL;
     if (t.kind == TY_STRUCT) {
         def = t.as.struct_.def;
+    } else if (t.kind == TY_ADT) {
+        /* CONV-S1 seam 4: under the defstruct->defadt lowering the same phantom
+         * int-newtype (`(defstruct Schema [A] (raw :int))`) is a single-variant
+         * record ADT, not a TY_STRUCT.  Recognize that shape so the SC7
+         * chainable-HKT-return propagation (and every other transparency check)
+         * keeps treating it as the int64 carrier it still is at runtime. */
+        AdtDef *adef = t.as.adt_.def;
+        if (!adef || adef->n_type_params == 0 || adef->n_ctors != 1) return false;
+        return adt_ctor_is_transparent_int_record(adef->ctors[0]);
     } else if (t.kind == TY_APP) {
         Type args[16];
         uint8_t n_args = 0;
-        if (!type_extract_struct_app(&t, &def, args, &n_args)) return false;
+        if (type_extract_struct_app(&t, &def, args, &n_args)) {
+            /* struct-headed app -- fall through to the struct check below */
+        } else {
+            AdtDef *adef = NULL;
+            if (!type_extract_adt_app(&t, &adef, args, &n_args) || !adef)
+                return false;
+            if (adef->n_type_params == 0 || adef->n_ctors != 1) return false;
+            return adt_ctor_is_transparent_int_record(adef->ctors[0]);
+        }
     } else {
         return false;
     }
@@ -2986,6 +3029,9 @@ const char *type_c_name(Type t) {
          * is the flat `tur_adt_<Name>` aggregate, not the int64 carrier.  Gated
          * by adt_is_byvalue_product (LIVE for leaf products as of B3). */
         case TY_ADT:
+            /* SC7: a lowered transparent int-newtype ADT is just its int64
+             * payload (mirrors the TY_STRUCT / TY_APP arms above). */
+            if (type_is_transparent_int_newtype(t)) return "int64_t";
             if (adt_is_byvalue_product(t.as.adt_.def)) {
                 /* CONV-S1 seam 3: a :heap record ADT lowers to a typed pointer to
                  * its by-value header (the ADT analogue of a :heap struct's
@@ -4226,6 +4272,12 @@ bool type_is_subtype(Type sub, Type super_) {
 /* Phase D: returns true when t is a struct type whose estimated sizeof exceeds 16
  * bytes, meaning it should be passed as const T* rather than by value. */
 bool type_struct_pass_by_ptr(Type t) {
+    /* SC7: a transparent int newtype is its bare int64 payload at the C level
+     * (type_c_name -> "int64_t"), so it is always passed by value, never
+     * pass-by-pointer-wrapped.  Catch it before the struct/ADT aggregate arms
+     * below, which would otherwise treat the lowered single-int-field record
+     * ADT as an aggregate and take its address at the call site. */
+    if (type_is_transparent_int_newtype(t)) return false;
     /* end-to-end-monomorphization: a :heap type already lowers to a typed
      * pointer `T__A *`, so it is passed by value (the pointer itself), never
      * pass-by-pointer-wrapped -- wrapping would make the param a double

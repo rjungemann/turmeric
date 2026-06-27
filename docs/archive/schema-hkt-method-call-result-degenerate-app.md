@@ -1,5 +1,24 @@
 # schema-HKT: HKT method-call result type is a degenerate `(f b)` app under lowering
 
+**RESOLVED (2026-06-27).**  The degenerate `(f b)` result was a *symptom*, not
+the root.  The real fix was one layer up: the SC7 chainable-HKT-return
+propagation (`elab_typeclasses.c`) recovers the concrete container type from the
+instance body via `type_is_transparent_int_newtype(body->type)`, but that
+predicate only recognized the `TY_STRUCT` int-newtype.  Under the
+defstruct->defadt lowering `(Schema A)` is a single-variant *record* ADT, so the
+predicate returned false, the propagation did not fire, and the `(fmap s f)` call
+kept its un-concretized result type -- leaving `(.raw ...)` with no record head
+to resolve.  Extending `type_is_transparent_int_newtype` to the lowered
+record-ADT shape (gated on the record style + a genuinely-concrete `:int` field,
+so a positional `(defdata Fix [^f] (Roll :int))` and a tyvar-field `(Box a)` are
+*not* mis-collapsed) restores the propagation; the codegen follow-through
+(`type_c_name` TY_ADT arm -> `int64_t`, transparent record-ADT ctor emit,
+EX_GET_FIELD carrier identity, `type_struct_pass_by_ptr` opt-out,
+`emit_carrier_bridge` no-op) makes it build and run.  No M7 head-rewrite change
+was needed.  Cleared `schema-hkt-functor`, `schema-hkt-alternative`,
+`schema-applicative-user`, `schema-applicative-user-errors`; default suite
+1863/0.  Original report below.
+
 **Severity:** medium (seam-4 / defstruct-as-defadt graduation blocker; not a
 default-path bug). 4 fixtures.
 
