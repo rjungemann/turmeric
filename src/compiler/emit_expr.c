@@ -409,19 +409,8 @@ static bool expr_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
             find_matched_abi_spec(ctx, e, e->as.call_.fn_binding);
         if (spec) {
             Type sr = emit_resolve_type(ctx, spec->result_type);
-            const char *src = emit_type_c_name(ctx, sr);
-            if (!src || strcmp(src, "int64_t") == 0) return false;
-            /* The matched spec materializes its result by value.  At default a
-             * carrier-family Option/Result reports type_uses_carrier_abi=true;
-             * under defstruct-as-defadt a flat-product Option/Result lowers to a
-             * by-value ADT for which type_uses_carrier_abi is FALSE -- yet the
-             * spec still emits the concrete aggregate, so a consumer (return
-             * bridge, vec-push, ...) must NOT re-bridge it as a carrier handle.
-             * Accept any concrete non-:heap aggregate result too. */
-            return type_uses_carrier_abi(sr) ||
-                   ((sr.kind == TY_APP || sr.kind == TY_STRUCT ||
-                     sr.kind == TY_ADT) &&
-                    !type_is_heap_struct(sr) && !type_is_heap_adt(sr));
+            return type_uses_carrier_abi(sr) &&
+                   strcmp(emit_type_c_name(ctx, sr), "int64_t") != 0;
         }
         if (!type_uses_carrier_abi(e->type)) return false;
         return call_returns_byvalue_aggregate(ctx, e);
@@ -656,18 +645,8 @@ Type fn_body_tail_byvalue_carrier_type(EmitCtx *ctx, const Expr *e) {
             find_matched_abi_spec(ctx, x, x->as.call_.fn_binding);
         if (spec) {
             Type sr = emit_resolve_type(ctx, spec->result_type);
-            const char *src = emit_type_c_name(ctx, sr);
-            /* Mirror expr_emits_byvalue_carrier_abi: a lowered flat-product
-             * Option/Result spec result is a by-value ADT for which
-             * type_uses_carrier_abi is FALSE, but the spec still emits the
-             * concrete aggregate -- so a carrier-returning closure/fn whose tail
-             * is such a `some`/`ok` spec must heap-box it.  Accept any concrete
-             * non-:heap aggregate result, not just nominal carrier-ABI types. */
-            if (src && strcmp(src, "int64_t") != 0 &&
-                (type_uses_carrier_abi(sr) ||
-                 ((sr.kind == TY_APP || sr.kind == TY_STRUCT ||
-                   sr.kind == TY_ADT) &&
-                  !type_is_heap_struct(sr) && !type_is_heap_adt(sr))))
+            if (type_uses_carrier_abi(sr) &&
+                strcmp(emit_type_c_name(ctx, sr), "int64_t") != 0)
                 return sr;
         }
         /* CONV-S1 seam 4 (assignment-straddle): an inline-C callee whose declared
