@@ -458,17 +458,27 @@ static bool exwit_inst_param_by_ptr(const FnDef *mi, Type pt) {
  * carrier as a heap-box pointer, so the thunk must deref it. */
 static bool exwit_type_is_byval_struct(Type t) {
     if (type_is_heap_struct(t)) return false;
+    if (type_is_heap_adt(t)) return false;
     if (type_is_transparent_int_newtype(t)) return false;
     StructDef *def = NULL;
     if (t.kind == TY_STRUCT) {
         def = t.as.struct_.def;
-    } else if (t.kind == TY_APP) {
-        Type args[16]; uint8_t n_args = 0;
-        type_extract_struct_app(&t, &def, args, &n_args);
+        if (!def || def->is_opaque) return false;
+    } else if (t.kind == TY_APP &&
+               type_extract_struct_app(&t, &def, (Type[16]){0}, &(uint8_t){0})) {
+        if (!def || def->is_opaque) return false;
+    } else if (t.kind == TY_ADT || t.kind == TY_APP) {
+        /* CONV-S2: a packed by-value payload struct is a lowered record ADT
+         * (`Wm`/`LinesR`) under defstruct-as-defadt; it is a by-value aggregate
+         * that the existential witness thunk must deref from the box pointer
+         * before forwarding to the real instance fn. */
+        AdtDef *adef = NULL;
+        if (t.kind == TY_ADT) adef = t.as.adt_.def;
+        else type_extract_adt_app(&t, &adef, (Type[16]){0}, &(uint8_t){0});
+        if (!adef || adef->is_heap) return false;
     } else {
         return false;
     }
-    if (!def || def->is_opaque) return false;
     const char *cn = type_struct_value_c_name(t);
     return cn && strcmp(cn, "int64_t") != 0;
 }

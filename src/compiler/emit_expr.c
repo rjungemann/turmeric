@@ -62,14 +62,28 @@ static bool fn_field_full_type_mentions_tyvar(const Type *fn_type) {
  * The two emit sites (pack, open) must agree, so both consult this predicate. */
 static bool exists_payload_is_byval_aggregate(Type t) {
     if (type_is_heap_struct(t)) return false;          /* typed pointer T * */
+    if (type_is_heap_adt(t)) return false;             /* typed pointer T * */
     if (type_is_transparent_int_newtype(t)) return false;  /* int64 */
     StructDef *def = NULL;
     if (t.kind == TY_STRUCT) {
         def = t.as.struct_.def;
-    } else if (t.kind == TY_APP) {
-        Type args[16];
-        uint8_t n_args = 0;
-        type_extract_struct_app(&t, &def, args, &n_args);
+    } else if (t.kind == TY_APP &&
+               type_extract_struct_app(&t, &def, (Type[16]){0},
+                                       &(uint8_t){0})) {
+        /* struct-app extracted into def */
+    } else if (t.kind == TY_ADT || t.kind == TY_APP) {
+        /* CONV-S2: under defstruct-as-defadt a packed by-value struct is a
+         * lowered record ADT (`Wm`, `LinesR`, `(World int int)`).  It is a
+         * by-value aggregate just like the struct case, so it must be heap-boxed
+         * into the existential's int64 `value` slot rather than ride the scalar
+         * `(int64_t)(aggregate)` cast (a hard cc error).  Decide by the resolved
+         * C name being a real aggregate (not the int64 carrier). */
+        AdtDef *adef = NULL;
+        if (t.kind == TY_ADT) adef = t.as.adt_.def;
+        else type_extract_adt_app(&t, &adef, (Type[16]){0}, &(uint8_t){0});
+        if (!adef || adef->is_heap) return false;
+        const char *acn = type_struct_value_c_name(t);
+        return acn && strcmp(acn, "int64_t") != 0;
     } else {
         return false;
     }
@@ -5839,6 +5853,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         recv_held_as_carrier =
                             rv->as.var.binding->emit_carrier_holds_byval;
                 }
+                /* applied-unary-instance-head: emit_carrier_holds_byval is set on
+                 * the param binding while emitting the CARRIER BASE (`x` is the
+                 * int64 carrier there) and persists on the shared binding into the
+                 * BY-VALUE spec emission.  When the active spec passes this param
+                 * as a concrete by-value ADT app (`tur_adt_Option__cstr x`), the
+                 * carrier-pointer deref (`(intptr_t)(x)` on an aggregate -- a hard
+                 * cc error) is wrong; the field reads directly off the aggregate.
+                 * Suppress the stale flag for this emission. */
+                if (recv_spec_byval_adt) recv_held_as_carrier = false;
                 bool recv_carrier_byval = recv_held_as_carrier &&
                     emit_type_is_byvalue_adt(ctx, e->as.get_field_.struct_expr->type);
                 bool adt_recv_byvalue =
