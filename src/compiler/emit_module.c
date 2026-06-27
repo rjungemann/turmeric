@@ -2922,7 +2922,13 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         generic_result.kind == TY_APP && bindings && n_bindings > 0) {
         Type recovered = emit_abi_instantiate_type(
             &generic_result, bindings, n_bindings, ctx->type_arena);
-        if (type_has_concrete_codegen_layout(&recovered))
+        /* Accept a concrete (possibly :heap) record ADT-app result too: under
+         * defstruct-as-defadt `(Cons cstr)` is an ADT-app that
+         * type_has_concrete_codegen_layout rejects (struct-only TY_APP branch),
+         * so without this the recovered `Cons__cstr *` was dropped and the spec
+         * returned `Cons__int *` (the incompatible-pointer warning). */
+        if (type_has_concrete_codegen_layout(&recovered) ||
+            (recovered.kind == TY_APP && type_app_is_concrete_adt(&recovered)))
             result_type = recovered;
     }
     /* M6 / gap G6(c): an HKT instance method (`fmap`) called inside a GENERIC
