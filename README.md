@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.25.4` -- curly-infix `{a + b}` works in the default s-expression dialect (contract types move to explicit `#refine{...}`); PWA install and mobile split-view land in the web REPL.
+**Latest release:** `v0.25.5` -- explicit `#fx{...}` reader form for effect rows; legacy `#{...}` / `@{...}` rows are tagged for deprecation diagnostics.
 
 ## What
 

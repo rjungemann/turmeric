@@ -4,6 +4,19 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.25.5] -- 2026-06-26
+
+### Added
+
+- **Explicit `#fx{...}` reader form for effect rows.** Phase 1 of the
+  fx-row-syntax-rename-plan: `#fx{...}` is the new canonical spelling,
+  while legacy bare `#{...}` and `@{...}` effect rows now carry
+  provenance tags so elab can emit deprecation diagnostics (TUR-D0002 /
+  TUR-D0003) on first consumption.
+- **`tools/migrate-fx-rows.py`** automates the rewrite from the legacy
+  spellings to `#fx{...}`; applied across the stdlib and the fixture
+  suite.
+
 ## [0.25.4] -- 2026-06-26
 
 ### Added
