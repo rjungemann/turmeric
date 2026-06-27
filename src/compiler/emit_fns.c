@@ -1096,6 +1096,51 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         }
     }
 
+    /* boxed-aggregate carrier base (lowered #{Construct}): under defstruct-as-
+     * defadt the make-struct -> ctor rewrite turns the #{Construct} body into a
+     * ctor EX_CALL returning the by-value record-ADT aggregate
+     * (`ctor_Option__A(false, 0)` -> `tur_adt_Option__A`), so the EX_MAKE_STRUCT
+     * M2b path above misses it and the raw aggregate would be returned from an
+     * int64-carrier function (a hard cc error).  Heap-box the aggregate and
+     * return the pointer as the int64 carrier.  The box layout is identical to
+     * the legacy tur_option_t / tur_result_box_t (same field offsets), so every
+     * consumer -- the canonical carrier->concrete readback, `.is-some`/`.value`,
+     * and the legacy `tur_is_some`/`tur_opt_value` helpers (all of which read
+     * `->is_some`/`->value` or NULL-guard) -- reads it correctly.  An Option
+     * `none` (discriminator literal false, no payload) stays the NULL carrier so
+     * a bare `== 0` none test elsewhere keeps working. */
+    if (!m2b_carrier_synth && (!use_abi_spec || carrier_spec_return)
+        && fd->binding && fd->binding->is_construct_template
+        && fd->body && fd->body->kind == EX_CALL && fd->body->as.call_.ctor) {
+        const CtorDef *ctor = fd->body->as.call_.ctor;
+        const AdtDef *adt = ctor ? ctor->adt : NULL;
+        bool is_option_none = false;
+        if (adt && adt->name && strcmp(adt->name, "Option") == 0 &&
+            fd->body->as.call_.n_args >= 1 && fd->body->as.call_.args) {
+            const Expr *d = fd->body->as.call_.args[0];
+            while (d && d->kind == EX_ASCRIBE) d = d->as.ascribe_.inner;
+            if (d && d->kind == EX_BOOL_LIT && d->as.b == false)
+                is_option_none = true;
+        }
+        Type cr = emit_resolve_type(ctx, fd->body->type);
+        const char *cn = type_c_name(cr);
+        if (is_option_none) {
+            indent_buf(file, ctx->indent + 4);
+            buf_puts(file, "return 0;\n");
+            m2b_carrier_synth = true;
+        } else if (cn && strcmp(cn, "int64_t") != 0 &&
+                   !type_is_heap_struct(cr) && !type_is_heap_adt(cr)) {
+            char *cv = emit_value(ctx, file, fd->body);
+            indent_buf(file, ctx->indent + 4);
+            buf_printf(file,
+                "{ %s *__tur_cbox = (%s *)malloc(sizeof(%s)); *__tur_cbox = %s; "
+                "return (int64_t)(intptr_t)__tur_cbox; }\n",
+                cn, cn, cn, cv);
+            free(cv);
+            m2b_carrier_synth = true;
+        }
+    }
+
     {
         /* M2b retirement of the M2a inference path: the shape-inference
          * code that used to live here (Result/Option/discriminator field

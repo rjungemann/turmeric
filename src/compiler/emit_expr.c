@@ -656,8 +656,18 @@ Type fn_body_tail_byvalue_carrier_type(EmitCtx *ctx, const Expr *e) {
             find_matched_abi_spec(ctx, x, x->as.call_.fn_binding);
         if (spec) {
             Type sr = emit_resolve_type(ctx, spec->result_type);
-            if (type_uses_carrier_abi(sr) &&
-                strcmp(emit_type_c_name(ctx, sr), "int64_t") != 0)
+            const char *src = emit_type_c_name(ctx, sr);
+            /* Mirror expr_emits_byvalue_carrier_abi: a lowered flat-product
+             * Option/Result spec result is a by-value ADT for which
+             * type_uses_carrier_abi is FALSE, but the spec still emits the
+             * concrete aggregate -- so a carrier-returning closure/fn whose tail
+             * is such a `some`/`ok` spec must heap-box it.  Accept any concrete
+             * non-:heap aggregate result, not just nominal carrier-ABI types. */
+            if (src && strcmp(src, "int64_t") != 0 &&
+                (type_uses_carrier_abi(sr) ||
+                 ((sr.kind == TY_APP || sr.kind == TY_STRUCT ||
+                   sr.kind == TY_ADT) &&
+                  !type_is_heap_struct(sr) && !type_is_heap_adt(sr))))
                 return sr;
         }
         /* CONV-S1 seam 4 (assignment-straddle): an inline-C callee whose declared
