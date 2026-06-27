@@ -591,15 +591,29 @@ runtime *usage* seam, below.
      regenerated.  *Cleared ~43* (`httpd-*`, `clone-*`, `eqmap-struct`, the `Pos`
      `typeclass-*` tests).  Fixture `conv-defstruct-inline-c-abi`.
 
-   **Running total: 212 -> 48 unique build-failing fixtures under force-lower
+   **Running total: 212 -> 45 unique build-failing fixtures under force-lower
    (default suite stays 1863/0).**  (Sub-root (a) -- 0-arg construct in control
    flow -- the inline-C-tail return bridge, the accessor-unbox, the
    assignment-position straddle, the inline-C instance-method signature, the
    by-value struct-field receiver / by-value ADT field storage, the parametric
    keyword type-param field, set!-over-lowered-record-ADT, the parametric-record
    inline-C compat typedef, the inline-C-carrier-result -> by-value-sink bridges
-   (let-init / call-arg, NULL-safe lowered Option), and the carrier-producer-arg
-   (__inst_/construct) -> by-value-spec-param bridge are all LANDED.)
+   (let-init / call-arg, NULL-safe lowered Option), the carrier-producer-arg
+   (__inst_/construct) -> by-value-spec-param bridge, and the wide-by-value-element
+   accessor-unbox + ctor-box are all LANDED.)
+
+   - **wide by-value element: accessor unbox + ctor box DONE (2026-06-27).**  A
+     by-value Result/Option carrying a value-struct element (User/Point) read via
+     a return-only-poly accessor (`ok-val`/`unwrap`): the accessor spec body's
+     by-value-receiver branch now reads the spec-resolved field type (inline for a
+     narrow element, box-deref for a WIDE one), and the parametric monomorph
+     ctor's `app_byval` branch now heap-boxes a wide element (matching the typedef
+     + carrier ctor).  Clears `polymorphic-ok-err-value-struct-payload`,
+     `instance-method-return-carrier-bridge`; `nested-construct-byvalue-decode`
+     now BUILDS (its remaining runtime segfault is the separate decode-seam set in
+     its report).  This resolved the BUILD-time half of the construct-template
+     accessor unbox (it worked via the active accessor spec's resolved field type,
+     not the receiver-app recovery the earlier report tried).
 
    - **parametric keyword type-param field DONE (2026-06-26).**  A parametric
      `(defstruct Box [A] (val :A) ...)` lowered to a record variant where the
