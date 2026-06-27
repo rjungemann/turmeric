@@ -18,7 +18,7 @@
 ;;; Example:
 ;;;   (str-from-cstr "hello")  ; => <str ptr>
 ;; Create a str from a C string (NUL-terminated)
-(defn str-from-cstr [cstr]
+(defn str-from-cstr [cstr] : ptr<void>
   ```c
   const char *s = (const char*)cstr;
   size_t len = strlen(s);
@@ -76,7 +76,7 @@
 ;;;   (str-free my-str)
 ;; Free the str struct (does NOT free the underlying string data)
 
-(defn str-free [s]
+(defn str-free [s] : int
   ```c
   free(s);
   return 0;

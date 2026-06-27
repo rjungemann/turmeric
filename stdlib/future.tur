@@ -887,6 +887,63 @@
   return (void *)out;
   ```)
 ;; ---- AW-008: Future timeout ---
+
+;; Hoisted thread-fn helpers for future-timeout / future-with-timeout.
+;; Originally these were nested function definitions inside the parent
+;; defn's inline-C block (a GCC extension); clang rejects nested
+;; functions, so each is a top-level defn now, in the same shape as
+;; stdlib/threadpool.tur:tp-worker. The pthread_create site casts the
+;; mangled C name to (void *(*)(void *)).
+;;; future-timeout-thread -- pthread body for future-timeout. INTERNAL.
+(defn future-timeout-thread [raw : ptr<void>] : ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  typedef struct { FutureCell *fc; int ms; } TimeoutArg;
+  typedef struct { long tv_sec; long tv_nsec; } timespec;
+  TimeoutArg *a = (TimeoutArg *)raw;
+  if (a->ms > 0) {
+      timespec ts; ts.tv_sec = a->ms / 1000; ts.tv_nsec = (a->ms % 1000) * 1000000L;
+      nanosleep(&ts, NULL);
+  }
+  pthread_mutex_lock(&a->fc->lock);
+  if (!a->fc->is_set) { a->fc->is_set = true; pthread_cond_broadcast(&a->fc->ready); }
+  pthread_mutex_unlock(&a->fc->lock);
+  free(a); return NULL;
+  ```)
+
+;;; future-with-timeout-tfn -- pthread body for the timeout half of future-with-timeout. INTERNAL.
+(defn future-with-timeout-tfn [raw : ptr<void>] : ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  typedef struct { FutureCell *out; FutureCell *src; int ms; } TA;
+  typedef struct { long tv_sec; long tv_nsec; } timespec;
+  TA *a = (TA *)raw;
+  if (a->ms > 0) {
+      timespec ts; ts.tv_sec = a->ms / 1000; ts.tv_nsec = (a->ms % 1000) * 1000000L;
+      nanosleep(&ts, NULL);
+  }
+  pthread_mutex_lock(&a->out->lock);
+  if (!a->out->is_set) { a->out->is_set = true; a->out->is_ok = false; a->out->exn = -1; pthread_cond_broadcast(&a->out->ready); }
+  pthread_mutex_unlock(&a->out->lock);
+  free(a); return NULL;
+  ```)
+
+;;; future-with-timeout-wfn -- pthread body for the wait half of future-with-timeout. INTERNAL.
+(defn future-with-timeout-wfn [raw : ptr<void>] : ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
+  typedef struct { FutureCell *out; FutureCell *src; } WA;
+  WA *a = (WA *)raw;
+  pthread_mutex_lock(&a->src->lock);
+  while (!a->src->is_set) pthread_cond_wait(&a->src->ready, &a->src->lock);
+  bool ok = a->src->is_ok; int64_t val = a->src->value; int64_t exn = a->src->exn;
+  pthread_mutex_unlock(&a->src->lock);
+  pthread_mutex_lock(&a->out->lock);
+  if (!a->out->is_set) { a->out->is_set = true; a->out->is_ok = ok; a->out->value = val; a->out->exn = exn; pthread_cond_broadcast(&a->out->ready); }
+  pthread_mutex_unlock(&a->out->lock);
+  free(a); return NULL;
+  ```)
+
 ;; Create a future that times out after ms milliseconds with error -1.
 ;;; future-timeout -- create a future that settles with error -1 after ms milliseconds.
 ;;;
@@ -920,19 +977,7 @@
   arg->fc = fc; arg->ms = ms;
   pthread_t tid; pthread_attr_t attr;
   pthread_attr_init(&attr); pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-  typedef struct { long tv_sec; long tv_nsec; } timespec;
-  void *thread_fn(void *raw) {
-      TimeoutArg *a = (TimeoutArg *)raw;
-      if (a->ms > 0) {
-          timespec ts; ts.tv_sec = a->ms / 1000; ts.tv_nsec = (a->ms % 1000) * 1000000L;
-          nanosleep(&ts, NULL);
-      }
-      pthread_mutex_lock(&a->fc->lock);
-      if (!a->fc->is_set) { a->fc->is_set = true; pthread_cond_broadcast(&a->fc->ready); }
-      pthread_mutex_unlock(&a->fc->lock);
-      free(a); return NULL;
-  }
-  pthread_create(&tid, &attr, thread_fn, arg);
+  pthread_create(&tid, &attr, (void *(*)(void *))future_hytimeout_hythread, arg);
   pthread_attr_destroy(&attr);
   return (void *)fc;
   ```)
@@ -963,19 +1008,7 @@
   arg->out = out; arg->src = fc; arg->ms = ms;
   pthread_t tid; pthread_attr_t attr;
   pthread_attr_init(&attr); pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-  typedef struct { long tv_sec; long tv_nsec; } timespec;
-  void *tfn(void *raw) {
-      TA *a = (TA *)raw;
-      if (a->ms > 0) {
-          timespec ts; ts.tv_sec = a->ms / 1000; ts.tv_nsec = (a->ms % 1000) * 1000000L;
-          nanosleep(&ts, NULL);
-      }
-      pthread_mutex_lock(&a->out->lock);
-      if (!a->out->is_set) { a->out->is_set = true; a->out->is_ok = false; a->out->exn = -1; pthread_cond_broadcast(&a->out->ready); }
-      pthread_mutex_unlock(&a->out->lock);
-      free(a); return NULL;
-  }
-  pthread_create(&tid, &attr, tfn, arg); pthread_attr_destroy(&attr);
+  pthread_create(&tid, &attr, (void *(*)(void *))future_hywith_hytimeout_hytfn, arg); pthread_attr_destroy(&attr);
   pthread_mutex_lock(&fc->lock);
   if (fc->is_set) {
       pthread_mutex_unlock(&fc->lock);
@@ -988,19 +1021,8 @@
       WA *warg = (WA *)malloc(sizeof(WA));
       if (!warg) { free(out); free(arg); fprintf(stderr, "future-with-timeout: warg oom\n"); abort(); }
       warg->out = out; warg->src = fc;
-      void *wfn(void *raw) {
-          WA *a = (WA *)raw;
-          pthread_mutex_lock(&a->src->lock);
-          while (!a->src->is_set) pthread_cond_wait(&a->src->ready, &a->src->lock);
-          bool ok = a->src->is_ok; int64_t val = a->src->value; int64_t exn = a->src->exn;
-          pthread_mutex_unlock(&a->src->lock);
-          pthread_mutex_lock(&a->out->lock);
-          if (!a->out->is_set) { a->out->is_set = true; a->out->is_ok = ok; a->out->value = val; a->out->exn = exn; pthread_cond_broadcast(&a->out->ready); }
-          pthread_mutex_unlock(&a->out->lock);
-          free(a); return NULL;
-      }
       pthread_t tid2; pthread_attr_t attr2; pthread_attr_init(&attr2); pthread_attr_setdetachstate(&attr2, PTHREAD_CREATE_DETACHED);
-      pthread_create(&tid2, &attr2, wfn, warg); pthread_attr_destroy(&attr2);
+      pthread_create(&tid2, &attr2, (void *(*)(void *))future_hywith_hytimeout_hywfn, warg); pthread_attr_destroy(&attr2);
   }
   return (void *)out;
   ```)

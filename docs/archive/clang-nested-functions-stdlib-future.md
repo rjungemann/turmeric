@@ -147,3 +147,43 @@ The 28 residual gate failures decompose as:
 
 Best case after option A: gate drops from 28 → ~6 failures, all
 runtime-test drift in the image-hook fixtures.
+
+---
+
+## Resolution
+
+Option A landed. Three sites in `stdlib/future.tur` plus one in
+`stdlib/taskgroup.tur` (also a nested `void timeout_fn` discovered when
+re-running the suite) were hoisted into top-level defns following the
+`stdlib/threadpool.tur::tp-worker` pattern: each defn declares
+`[raw : ptr<void>] : ptr<void>` with the inline-C body
+self-contained (struct typedefs redeclared inline), and the parent's
+`pthread_create(...)` call uses the cast
+`(void *(*)(void *))<mangled_name>`.
+
+Concrete sites:
+
+- `stdlib/future.tur`: `future-timeout-thread`,
+  `future-with-timeout-tfn`, `future-with-timeout-wfn`.
+- `stdlib/taskgroup.tur`: `spawn-timeout-thread-fn`.
+
+While running the suite, two adjacent clang-17 fallout issues
+surfaced and were folded in:
+
+- `stdlib/str.tur`: `str-from-cstr` and `str-free` were declared with
+  no explicit return type (defaulting to `:void` codegen) but had
+  inline-C bodies that `return`ed values. Clang 17 promoted
+  `-Wreturn-mismatch` to a default error. Added explicit `: ptr<void>`
+  and `: int` annotations to match the bodies. Affected fixtures:
+  `re-union-patterns`, `reader-macros-rx-literal`, `sum-either-str-parse`.
+- Apple clang 17's `-Wint-conversion` and `-Wreturn-mismatch`
+  promotions are tracked separately in
+  `docs/reported/clang17-wint-conversion-codegen.md`. The
+  `-Wno-error=int-conversion` workaround landed alongside (commit
+  347ae1b02).
+
+**Gate delta:** 206 → 4. The residual 4 are all stdout mismatches in
+`image-hooks-tracked`, `image-reload-hook`, `image-roundtrip`, and
+`load-in-imported-module`. Verified pre-existing by stashing the
+Option A changes and re-running -- they reproduce against HEAD.
+Filed separately under `docs/reported/`.
