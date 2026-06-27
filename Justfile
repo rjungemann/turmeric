@@ -139,6 +139,43 @@ emit-c file:
     ./build/tur emit-c {{file}}
 
 # ---------------------------------------------------------------------------
+# Desktop editor (SciTE)
+# ---------------------------------------------------------------------------
+
+# Launch SciTE with the in-tree `./build/tur` on PATH so the Turmeric
+# properties (tools/scite/turmeric.properties) run against the freshly-built
+# compiler. Optional positional args are passed straight through to SciTE
+# (typically file paths to open).
+#
+# Assumes the user has installed `tools/scite/turmeric.properties` per
+# tools/scite/README.md (one-time setup). Set TUR_SCITE to override the
+# SciTE binary; otherwise we probe `scite`, then the macOS Cocoa app bundle.
+scite *ARGS: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ROOT="$(pwd)"
+    export PATH="$ROOT/build:$PATH"
+    SCITE_BIN="${TUR_SCITE:-}"
+    if [ -z "$SCITE_BIN" ]; then
+        if command -v scite >/dev/null 2>&1; then
+            SCITE_BIN="scite"
+        elif [ -x "/Applications/SciTE.app/Contents/MacOS/SciTE" ]; then
+            SCITE_BIN="/Applications/SciTE.app/Contents/MacOS/SciTE"
+        else
+            echo "error: no SciTE binary found." >&2
+            echo "  linux:   apt install scite  (or pacman -S scite)" >&2
+            echo "  macos:   no Homebrew distribution today; download SciTE.app from" >&2
+            echo "           https://www.scintilla.org/SciTEDownload.html" >&2
+            echo "           and drop it in /Applications, or build the Cocoa port from source." >&2
+            echo "  windows: https://www.scintilla.org/SciTEDownload.html" >&2
+            echo "  or set TUR_SCITE=/path/to/scite and retry." >&2
+            exit 127
+        fi
+    fi
+    echo "scite: launching $SCITE_BIN with tur=$ROOT/build/tur"
+    exec "$SCITE_BIN" {{ARGS}}
+
+# ---------------------------------------------------------------------------
 # Games / Examples (CMake targets — require Raylib)
 # ---------------------------------------------------------------------------
 

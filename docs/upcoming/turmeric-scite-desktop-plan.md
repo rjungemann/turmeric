@@ -48,8 +48,153 @@ re-architecting the editor. See "Forward-compatibility hooks" below.
   surprising amount of "make this look and feel like a Turmeric IDE" is
   configuration, not C++.
 - Footprint: single-digit MB binary, no webview, no Node, no JIT.
-- All three desktop OSes are covered (Linux/Windows native; macOS via the
-  Cocoa SciTE port).
+- Linux and Windows are covered by upstream SciTE -- we re-skin the
+  existing shell with our properties, lexer, and theme baked in. macOS
+  is **not** covered by upstream (no free Cocoa SciTE shell exists --
+  see "Embedding / packaging research" below); on macOS we ship a thin
+  native Cocoa host around the Scintilla widget instead. XQuartz/X11 is
+  explicitly off the table.
+
+## Embedding / packaging research
+
+The first version of this plan assumed "ship our properties, tell users
+to install upstream SciTE, done on all three OSes." Research into the
+2025/2026 state of the upstream tree shows the macOS half of that
+assumption does not hold. This section captures the dependency and
+distribution reality and the chosen path.
+
+### The units we actually embed
+
+- **Scintilla** is the editor *widget* (text buffer + view). It ships
+  active native backends for Win32, GTK, Cocoa, and Qt. License is the
+  permissive HPND-style "Scintilla License" -- rebrand, rename, and
+  redistribute are all fine as long as Neil Hodgson's copyright stays
+  in the source and About box.
+- **Lexilla** is the lexer library that was split out at Scintilla 5.0
+  with a stable C ABI. Scintilla loads lexers from it at runtime, so
+  adding a Turmeric lexer is one C++17 class linked into Lexilla -- no
+  Scintilla fork needed.
+- **SciTE** is the reference *shell* around Scintilla -- menus, file
+  management, build/run pipeline, output pane, properties loader, Lua
+  extension layer. The SciTE source tree carries three separate shells
+  (`win32/`, `gtk/`, `cocoa/`-adjacent), and most of what feels like
+  "customization" is properties + Lua, not C++: `command.build`,
+  `command.go.*.tur=tur --interpret $(FileNameExt)`, error-regex
+  patterns, key bindings, status bar format are all properties.
+  Window title, About box text, and app icon are baked into resource
+  files and need a ~50-line patch to rebrand.
+
+### Per-OS upstream status (2025/2026)
+
+- **Windows.** SciTE 5.6.3 (released 2026-06-06) ships a healthy native
+  Win32 `SciTE.exe` with full Lua and the properties system. Re-skinning
+  is straightforward.
+- **Linux / GTK.** The GTK shell is current (GTK3, tested on Fedora 36 /
+  Ubuntu 22.04), shipped as binaries and Debian apt packages. Re-skin
+  works.
+- **macOS -- the load-bearing finding.** *No free, open-source SciTE
+  Cocoa shell exists.* The Scintilla source's `cocoa/` directory contains
+  the **widget** (`ScintillaCocoa.mm`, `ScintillaView.mm`, `PlatCocoa.mm`,
+  `InfoBar.mm`) plus a `ScintillaTest` sample app -- not a SciTE shell.
+  The only released Cocoa SciTE is Neil Hodgson's closed-source paid
+  Mac App Store build. MacPorts' `scite` port is GTK3 on macOS, which
+  means XQuartz or native-Quartz GTK -- both unacceptable. The Scintilla
+  Cocoa **widget** itself is actively maintained (fixes through Aug 2024;
+  macOS 10.13 minimum since 5.3.8). So we have a healthy widget and no
+  shell.
+
+### Options considered
+
+- **(A) Re-skin and re-package upstream SciTE.** Clone the SciTE source,
+  drop `turmeric.properties` + the Turmeric Lexilla lexer + colors into
+  the bundle, patch ~50 lines of resource files for title/icon/About,
+  bake an in-bundle properties dir lookup, build, sign, ship. Works on
+  Win32 and GTK Linux. **Does not exist for macOS** without first
+  writing a Cocoa SciTE shell from scratch.
+- **(B) Embed Scintilla in our own minimal native shell.** Cocoa NSView
+  on macOS, GTK on Linux, Win32 on Windows. Linear cost: three shells,
+  three accelerator tables, three runners, three output panes. Each is
+  a few hundred lines of glue around a widget that already does the
+  heavy lifting. Single-developer estimate for full three-OS parity:
+  4-8 weeks. We lose the Lua extension surface and the body of community
+  properties unless we reimplement the properties loader.
+- **(C) Qt + ScintillaEdit.** One codebase, three OSes. Costs: Qt6
+  binary is 30-80 MB before compression, macOS chrome looks "Qt-ish"
+  rather than truly native, signing/notarization adds a step, and we
+  inherit a heavyweight cross-platform dep for a one-developer project.
+
+### Chosen path -- hybrid A + narrow-B
+
+**Re-skin upstream SciTE on Windows and Linux. Ship a narrow custom
+Cocoa shell around the Scintilla widget on macOS.** No Qt, no XQuartz,
+no GTK-on-macOS.
+
+What is shared across all three OSes:
+
+- The Turmeric `.properties` file (Phase 1).
+- The Lexilla Turmeric lexer (Phase 2).
+- The color theme (Phase 2).
+- The `tur lsp-lite` autocomplete backend (Phase 3).
+- The diagnostic regex and the run-mode selector
+  (`turmeric.run.mode`, Phase 1).
+
+What is per-OS:
+
+- **Win32 + GTK:** vendor upstream SciTE source, drop our properties /
+  lexer / theme into the bundle, patch resource files for branding,
+  ship `Turmeric SciTE.exe` and a `.deb`. Lua scripting comes along
+  for free.
+- **macOS:** vendor `scintilla/cocoa/` into `vendor/scintilla/`. Use the
+  `ScintillaTest` Xcode project as the skeleton. Build a minimal
+  `AppDelegate` + `NSWindowController` + split view: `ScintillaView`
+  on top, read-only `NSTextView` for the output pane on the bottom,
+  an `NSToolbar` with Build/Run buttons that `NSTask`-exec `tur`.
+  Reimplement only the SciTE features Turmeric actually uses --
+  open/save, extension-to-lexer dispatch via Lexilla, the `command.go`
+  runner, error-regex line parsing for clickable output, Cmd-key
+  bindings. Estimated **~1500-2500 LOC of Objective-C++** for shell
+  parity with what properties + SciTE shell give us for free on the
+  other two OSes. Lua is deferred on macOS for v1.
+
+### Honest effort estimate
+
+The original "9-13 working days" estimate assumed option A worked on all
+three OSes. With the macOS path now option B, the real budget is:
+
+- **Win32 + Linux (option A skin):** ~9-13 days, as originally scoped.
+- **macOS (option B narrow Cocoa shell):** ~3-5 weeks for shell parity.
+- **Total for three-OS v1:** ~5-7 weeks single-developer.
+
+If that exceeds appetite, two honest reductions:
+
+- **Ship Win32 + Linux v1 first**, mark macOS "in progress" with a
+  pointer at the upstream paid Mac App Store SciTE + our properties as a
+  bring-your-own-editor fallback for early macOS users. The Phase 5
+  Homebrew cask graduates to actually shipping a real bundle once the
+  Cocoa shell lands.
+- **Pivot macOS to Qt (option C)** and accept the size + look-and-feel
+  cost. Not recommended.
+
+Abort is not warranted -- the Scintilla Cocoa widget is healthy and a
+thin shell is a known shape of work -- but the macOS half is a
+sub-project of its own, not a property-file drop.
+
+### License + branding
+
+The Scintilla license is HPND-style permissive. Rebranding to "Turmeric
+SciTE" is fine; the source files and the About box must keep Neil
+Hodgson's copyright notice. The macOS Cocoa shell we write ourselves
+ships under our own license, vendoring the Scintilla widget under its.
+
+### Cited sources
+
+- Scintilla docs (platforms, widget): <https://www.scintilla.org/ScintillaDoc.html>
+- Lexilla overview: <https://www.scintilla.org/Lexilla.html>
+- SciTE downloads (Win32 + GTK, no macOS): <https://www.scintilla.org/SciTEDownload.html>
+- SciTE for OS X (paid Mac App Store): <https://www.scintilla.org/SciTE-OSX.html>
+- SciTE Lua extension scope: <https://www.scintilla.org/SciTELua.html>
+- Scintilla license: <https://www.scintilla.org/License.txt>
+- Scintilla Cocoa source (widget only, no SciTE shell): <https://github.com/mirror/scintilla/tree/master/cocoa>
 
 ## What we are explicitly NOT building (yet)
 
@@ -63,7 +208,10 @@ re-architecting the editor. See "Forward-compatibility hooks" below.
   drives **turi**. Compiler-mode is a Phase-6 followup, not a v1 gate.
 - A project manager / multi-file workspace UI beyond what SciTE already
   ships (open file, recent files, session). `build.tur` discovery is reused
-  from the CLI -- no new project model.
+  from the CLI -- no new project model. A `Tools > New Turmeric Project...`
+  entry that shells out to `tur init` (Phase 1.5) is in scope precisely
+  because it adds no project model of its own; everything past that --
+  workspace trees, multi-root windows, dependency UIs -- stays out.
 
 ## Architecture
 
@@ -132,6 +280,43 @@ Deliverables in this repo:
 Acceptance: open a `.tur` file in stock SciTE, press F7 / Ctrl+F7,
 compiler output appears in the bottom pane, clicking an error jumps to
 the source line.
+
+### Phase 1.5 -- "New Turmeric Project..." menu entry (0.5 day)
+
+Goal: a first-run user who installed the editor and `tur` can scaffold a
+working project from inside SciTE without dropping to a shell. This is a
+plain shell-out to `tur init` -- the same model as Run/Check -- and adds
+no project model of its own.
+
+Deliverables (still in `tools/scite/turmeric.properties`):
+
+- A `user.command.*` entry bound to `Tools > New Turmeric Project...` that
+  prompts for a destination directory + project name, then runs
+  `tur init <name>` (or `tur init --sweet <name>` / `tur init --lib <name>`
+  via separate menu entries or a `turmeric.init.flags` user property) in
+  the chosen parent directory.
+- After scaffolding succeeds, SciTE opens the newly-created
+  `<dir>/build.tur` (or `build.tur.sweet`) in a new buffer so the user
+  lands in an obviously-editable file. If a `src/main.tur` was generated,
+  open it too; recent-files picks up both.
+- The same property knobs that govern Run-mode govern Init: a
+  `turmeric.init.cmd` property defaults to `tur init` so the day a
+  `turi init` (or similar) lands it is a one-line swap, mirroring the
+  `turmeric.turi.cmd` pattern.
+- The init invocation streams stdout/stderr into the output pane and
+  reuses the existing `error.list.regex` -- any `path:line:col:` style
+  failure from `tur init` is already clickable.
+
+Acceptance: from a fresh SciTE window with no file open, choose
+`Tools > New Turmeric Project...`, type a name, and end up with a
+generated project directory, `build.tur` open in the editor, and the
+output pane showing the scaffolding log. Pressing Run on `src/main.tur`
+immediately works because Phase 1 already routes through `tur --interpret`
+with `build.tur` walk-up.
+
+Forward-compat: when run-mode flips to `compiler` later, `tur init` is
+unchanged -- the manifest is the same on both paths -- so no extra
+plumbing is required at the Phase-6 cutover.
 
 ### Phase 2 -- Syntax highlighting + Try Turmeric color scheme (2-3 days)
 
@@ -216,13 +401,27 @@ behavior.
 (`tur repl` -- the AOT spice REPL with `.tur-repl-cache/` -- is the
 Phase-6 compiler-mode upgrade, not v1.)
 
-### Phase 5 -- Polish + packaging (2-3 days)
+### Phase 5 -- Polish + packaging (2-3 days for Win32/Linux; macOS separately)
 
-- Per-OS bundles: a macOS `.app` containing the Cocoa SciTE build with our
-  properties pre-installed, a Windows `.zip` with `SciTE.exe` and the
-  properties dropped next to it, a Linux `tar.gz` with a `.desktop`
-  entry. None of these ship a `tur` binary -- they assume `tur` is on
-  PATH and surface a clear error in the output pane when it is not.
+Packaging splits along the option-A / option-B seam from the embedding
+research:
+
+- **Windows + Linux (option A skin):** vendor the upstream SciTE
+  source, drop our `turmeric.properties`, Lexilla Turmeric lexer, and
+  color theme into the bundle, patch ~50 lines of resource files for
+  title/icon/About, build, sign, ship. Output: a Windows `.zip` with
+  `Turmeric SciTE.exe` (and an optional installer), a Linux `tar.gz`
+  with a `.desktop` entry, and a Debian `.deb`.
+- **macOS (option B narrow Cocoa shell):** a separate ~3-5 week
+  subproject. Vendor `scintilla/cocoa/` into `vendor/scintilla/`, fork
+  the upstream `ScintillaTest` Xcode project as the skeleton, build a
+  minimal Cocoa shell (AppDelegate + NSWindowController + split view +
+  NSToolbar), reimplement the Turmeric-shaped subset of SciTE features
+  on top of it, sign + notarize with a Developer ID, ship a `.dmg`
+  containing `Turmeric SciTE.app`.
+
+None of the bundles ship a `tur` binary -- they assume `tur` is on PATH
+and surface a clear error in the output pane when it is not.
 - A `tools/scite/install.sh` (and `.ps1`) that drops the properties into
   the user's SciTE config directory for users who already have SciTE
   installed and just want the Turmeric mode.
@@ -308,10 +507,13 @@ without having read any docs beyond a one-paragraph "you'll also need
 ## Open questions
 
 1. **Lua-SciTE or vanilla SciTE?** Lua scripting unlocks Phases 2-4 with
-   no C++ changes; the Cocoa SciTE port has historically lagged on the
-   Lua extension. We choose Lua-SciTE if and only if all three OS
-   targets have a current Lua-enabled build; otherwise we fall back to
-   the C++ container-lexer hook (still small).
+   no C++ changes on Win32 and GTK -- both upstream shells ship
+   Lua-enabled by default in current releases. macOS is not affected by
+   this question, because the macOS path is a custom Cocoa shell with no
+   SciTE/Lua extension surface (Phases 2-4 there talk directly to the
+   Scintilla widget's `AutoCShow`/`CallTipShow` C++ API from our shell).
+   Net effect: **Lua on Win32 + Linux, native shell calls on macOS** --
+   the `tur lsp-lite` RPC backend is the same on all three.
 2. **`tur lsp-lite` vs. a real LSP.** Going full LSP would let VS Code,
    Helix, Emacs, etc. share the same backend. For this plan we ship the
    minimal stdio RPC; a real LSP is a sibling effort that should reuse
@@ -367,8 +569,24 @@ These are cheap to add now and impossible to retrofit cleanly later.
 
 ## Effort estimate
 
-Roughly **9-13 working days** end-to-end for a single developer, with
-Phases 1 + 2 (~5 days) being the smallest viable first cut that is worth
-publishing on its own. The Homebrew cask in Phase 5 is ~0.5 day on top
-once the macOS bundle exists, assuming the `turmeric` formula already
-lives in a tap we control.
+Revised after the embedding research; see "Embedding / packaging
+research" above for the rationale.
+
+- **Win32 + Linux end-to-end (option A skin):** ~9-13 working days for a
+  single developer, the original whole-plan estimate. Phases 1 + 2
+  (~5 days) are the smallest viable first cut worth publishing.
+- **macOS (option B narrow Cocoa shell):** ~3-5 weeks on top, single
+  developer. This is a separate, smaller subproject; it does **not**
+  block the Win32/Linux v1.
+- **Total three-OS v1:** ~5-7 weeks single-developer.
+
+The Homebrew cask in Phase 5 is ~0.5 day on top once the macOS bundle
+exists, assuming the `turmeric` formula already lives in a tap we
+control. Until the Cocoa shell lands, the cask is shelved -- not the
+Win32/Linux releases.
+
+The smallest publishable artifact is **Phase 1 + 2 on Win32 + Linux**
+(~5 days), shipped as re-skinned upstream SciTE with our properties and
+lexer. macOS users get the existing "install upstream paid SciTE +
+import turmeric" fallback from `tools/scite/README.md` until the Cocoa
+shell catches up.
