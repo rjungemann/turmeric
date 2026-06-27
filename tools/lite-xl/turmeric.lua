@@ -464,111 +464,292 @@ require "core.doc".save = function(self, ...)
 end
 
 -- -------------------------------------------------------------------------
--- Phase 4: REPL pane (via CommandView prompt + LogView output)
+-- Phase 4: REPL pane -- a real ReplView, not a CommandView+LogView bridge
 -- -------------------------------------------------------------------------
 --
--- Lite XL's CommandView + LogView together cover the input/output halves of
--- a REPL surface, so the v1 ReplView is a bridge over those two existing
--- views rather than a bespoke `View` subclass. A long-lived `tur repl`
--- subprocess holds the evaluator state across commands.
+-- A custom `core.view` subclass with its own pane, scrollable output
+-- history, and an inline prompt that captures keyboard input. Backed by
+-- a long-lived `tur repl` subprocess; output streams in via core.add_thread.
 
 config.plugins.turmeric.repl_subcommand = config.plugins.turmeric.repl_subcommand or "repl"
+config.plugins.turmeric.repl_max_lines  = config.plugins.turmeric.repl_max_lines  or 5000
 
-local repl_proc = nil
-local repl_buf  = ""
+local View      = require "core.view"
+local style     = require "core.style"
+local renderer  = renderer       -- global in Lite XL
+local system    = system         -- global in Lite XL
 
-local function repl_drain()
-  if not repl_proc then return end
+local ReplView = View:extend()
+
+function ReplView:new()
+  ReplView.super.new(self)
+  self.scrollable = true
+  self.lines      = {}     -- { {text=str, kind="out"|"err"|"in"|"sys"}, ... }
+  self.line_buf   = ""     -- partial-line accumulator for stdout
+  self.err_buf    = ""     -- partial-line accumulator for stderr
+  self.input      = ""     -- current input string
+  self.history    = {}     -- list of previously submitted inputs
+  self.history_idx= 0      -- 0 = editing fresh input; >0 = browsing
+  self.input_draft= ""     -- saved fresh input when browsing history
+  self.proc       = nil
+  self:start()
+end
+
+function ReplView:get_name() return "Turmeric REPL" end
+
+function ReplView:push(text, kind)
+  if text == nil or text == "" then return end
+  if #self.lines >= config.plugins.turmeric.repl_max_lines then
+    table.remove(self.lines, 1)
+  end
+  table.insert(self.lines, { text = text, kind = kind or "out" })
+end
+
+function ReplView:absorb(buf_name, raw, kind)
+  -- Split raw stream into complete lines; carry the trailing partial
+  -- line over to the next read so we don't fragment escape sequences.
+  local buf = self[buf_name] .. (raw or "")
   while true do
-    local out = repl_proc:read_stdout(8192)
-    local err = repl_proc:read_stderr(8192)
-    if (not out or out == "") and (not err or err == "") then break end
-    if out and out ~= "" then repl_buf = repl_buf .. out end
-    if err and err ~= "" then
-      for line in err:gmatch("[^\n]+") do core.error("repl: %s", line) end
-    end
+    local nl = buf:find("\n", 1, true)
+    if not nl then break end
+    self:push(buf:sub(1, nl - 1), kind)
+    buf = buf:sub(nl + 1)
   end
+  self[buf_name] = buf
 end
 
-local function repl_emit()
-  if repl_buf == "" then return end
-  for line in repl_buf:gmatch("[^\n]+") do core.log("repl> %s", line) end
-  repl_buf = ""
-end
-
-local function repl_start(quiet)
-  if repl_proc and repl_proc:running() then
-    if not quiet then core.log("turmeric: repl already running") end
-    return true
-  end
+function ReplView:start()
+  if self.proc and self.proc:running() then return end
   local ok, p = pcall(process.start,
     { config.plugins.turmeric.tur, config.plugins.turmeric.repl_subcommand },
     { stdin = process.REDIRECT_PIPE,
       stdout = process.REDIRECT_PIPE,
       stderr = process.REDIRECT_PIPE })
   if not ok then
-    core.error("turmeric: failed to spawn tur repl: %s", tostring(p))
-    return false
+    self:push("failed to spawn tur repl: " .. tostring(p), "err")
+    return
   end
-  repl_proc = p
-  repl_buf  = ""
+  self.proc = p
+  self:push("started: " .. config.plugins.turmeric.tur .. " "
+            .. config.plugins.turmeric.repl_subcommand, "sys")
+  local self_ref = self
   core.add_thread(function()
-    while repl_proc and repl_proc:running() do
-      repl_drain()
-      repl_emit()
+    while self_ref.proc and self_ref.proc:running() do
+      self_ref:absorb("line_buf", self_ref.proc:read_stdout(8192), "out")
+      self_ref:absorb("err_buf",  self_ref.proc:read_stderr(8192), "err")
       coroutine.yield(0.05)
     end
-    repl_drain()
-    repl_emit()
-    core.log("turmeric: repl exited")
-    repl_proc = nil
+    -- Flush whatever the process left behind.
+    self_ref:absorb("line_buf", "", "out")
+    self_ref:absorb("err_buf",  "", "err")
+    if self_ref.line_buf ~= "" then self_ref:push(self_ref.line_buf, "out"); self_ref.line_buf = "" end
+    if self_ref.err_buf  ~= "" then self_ref:push(self_ref.err_buf,  "err"); self_ref.err_buf  = "" end
+    self_ref:push("repl exited", "sys")
+    self_ref.proc = nil
   end)
-  core.log("turmeric: repl started")
-  return true
 end
 
-local function repl_send(text)
-  if not repl_proc or not repl_proc:running() then
-    if not repl_start() then return end
+function ReplView:stop()
+  if self.proc and self.proc:running() then
+    pcall(function() self.proc:write(":quit\n") end)
+    self.proc:terminate()
   end
-  if not text:match("\n$") then text = text .. "\n" end
-  repl_proc:write(text)
+end
+
+function ReplView:try_close(do_close)
+  self:stop()
+  ReplView.super.try_close(self, do_close)
+end
+
+function ReplView:send_input()
+  local text = self.input
+  if text == "" then return end
+  table.insert(self.history, text)
+  self.history_idx = 0
+  self.input_draft = ""
+  self.input = ""
+  self:push("> " .. text, "in")
+  if not self.proc or not self.proc:running() then self:start() end
+  if self.proc then
+    pcall(function() self.proc:write(text .. "\n") end)
+  end
+end
+
+function ReplView:send_buffer_text(text)
+  if not self.proc or not self.proc:running() then self:start() end
+  self:push("[buffer reload: " .. tostring(#text) .. " bytes]", "sys")
+  if self.proc then
+    pcall(function() self.proc:write(text)
+                     if not text:match("\n$") then self.proc:write("\n") end end)
+  end
+end
+
+-- Lite XL hooks ------------------------------------------------------------
+
+function ReplView:on_text_input(text)
+  self.input = self.input .. text
+end
+
+function ReplView:on_mouse_pressed(button, x, y, clicks)
+  ReplView.super.on_mouse_pressed(self, button, x, y, clicks)
+  core.set_active_view(self)
+end
+
+-- Layout: one line per output entry, then the prompt line at the bottom
+-- of the visible region (which scrolls with the content).
+local function line_h()
+  return style.code_font:get_height() + style.padding.y / 2
+end
+
+function ReplView:get_scrollable_size()
+  return (#self.lines + 1) * line_h() + style.padding.y * 2
+end
+
+local KIND_COLOR = {
+  out = function() return style.text     end,
+  err = function() return style.error or style.accent end,
+  ["in"] = function() return style.accent end,
+  sys = function() return style.dim or style.text end,
+}
+
+function ReplView:draw()
+  self:draw_background(style.background)
+  local ox, oy = self:get_content_offset()
+  local x = ox + style.padding.x
+  local y = oy + style.padding.y
+  local lh = line_h()
+  local fnt = style.code_font
+
+  -- Output history.
+  for _, entry in ipairs(self.lines) do
+    local color = (KIND_COLOR[entry.kind] or KIND_COLOR.out)()
+    renderer.draw_text(fnt, entry.text, x, y, color)
+    y = y + lh
+  end
+
+  -- Prompt + current input + blinking cursor.
+  local prompt_color = style.accent
+  local px = x
+  px = renderer.draw_text(fnt, "tur> ", px, y, prompt_color)
+  px = renderer.draw_text(fnt, self.input, px, y, style.text)
+
+  if core.active_view == self then
+    local T = system.get_time()
+    if (T - math.floor(T / 0.5) * 0.5) < 0.25 then
+      local cw = fnt:get_width("_")
+      renderer.draw_rect(px, y, cw, fnt:get_height(), style.caret or style.accent)
+    end
+  end
+
+  self:draw_scrollbar()
+end
+
+function ReplView:update()
+  ReplView.super.update(self)
+end
+
+-- ReplView registry --------------------------------------------------------
+
+local function find_repl_view()
+  -- Locate any existing ReplView already attached to the root view, so
+  -- repeat invocations focus it instead of opening duplicates.
+  local found
+  local function walk(node)
+    if not node then return end
+    if node.active_view and node.active_view:is(ReplView) then
+      found = node.active_view; return
+    end
+    if node.views then
+      for _, v in ipairs(node.views) do
+        if v:is(ReplView) then found = v; return end
+      end
+    end
+    if node.a then walk(node.a) end
+    if node.b then walk(node.b) end
+  end
+  walk(core.root_view.root_node)
+  return found
+end
+
+local function open_repl_view(split_dir)
+  local existing = find_repl_view()
+  if existing then
+    core.set_active_view(existing)
+    return existing
+  end
+  local view = ReplView()
+  local node = core.root_view:get_active_node_default()
+  if split_dir then
+    local new_node = node:split(split_dir)
+    new_node:add_view(view)
+  else
+    node:add_view(view)
+  end
+  core.set_active_view(view)
+  return view
 end
 
 command.add(nil, {
-  ["turmeric:start-repl"] = function() repl_start() end,
+  ["turmeric:start-repl"] = function() open_repl_view("down") end,
   ["turmeric:stop-repl"]  = function()
-    if repl_proc and repl_proc:running() then
-      repl_proc:write(":quit\n")
-      repl_proc:terminate()
-      core.log("turmeric: repl stopped")
-    end
-  end,
-  ["turmeric:repl-eval"] = function()
-    core.command_view:enter("Turmeric expr", {
-      submit = function(expr)
-        if expr and expr ~= "" then
-          core.log("repl< %s", expr)
-          repl_send(expr)
-        end
-      end,
-    })
+    local v = find_repl_view()
+    if v then v:stop() end
   end,
   ["turmeric:repl-reload-buffer"] = function()
     local doc = nearest_doc()
     if not doc then core.error("turmeric: no active buffer"); return end
     if doc.filename then doc:save() end
     local text = table.concat(doc.lines, "")
-    core.log("turmeric: reloading buffer into repl (%d bytes)", #text)
-    repl_send(text)
+    local view = open_repl_view("down")
+    view:send_buffer_text(text)
+  end,
+})
+
+-- ReplView-specific keybindings: only fire when a ReplView has focus, so
+-- they don't shadow editor keys when the user is in a normal DocView.
+local function repl_predicate()
+  return core.active_view and core.active_view:is(ReplView)
+end
+
+command.add(repl_predicate, {
+  ["turmeric-repl:submit"] = function()
+    core.active_view:send_input()
+  end,
+  ["turmeric-repl:backspace"] = function()
+    local v = core.active_view
+    if #v.input > 0 then v.input = v.input:sub(1, -2) end
+  end,
+  ["turmeric-repl:clear-input"] = function()
+    core.active_view.input = ""
+  end,
+  ["turmeric-repl:history-prev"] = function()
+    local v = core.active_view
+    if #v.history == 0 then return end
+    if v.history_idx == 0 then v.input_draft = v.input end
+    v.history_idx = math.min(v.history_idx + 1, #v.history)
+    v.input = v.history[#v.history - v.history_idx + 1]
+  end,
+  ["turmeric-repl:history-next"] = function()
+    local v = core.active_view
+    if v.history_idx == 0 then return end
+    v.history_idx = v.history_idx - 1
+    if v.history_idx == 0 then
+      v.input = v.input_draft
+    else
+      v.input = v.history[#v.history - v.history_idx + 1]
+    end
   end,
 })
 
 keymap.add {
   ["cmd+shift+l"]  = "turmeric:repl-reload-buffer",
   ["ctrl+shift+l"] = "turmeric:repl-reload-buffer",
-  ["cmd+e"]        = "turmeric:repl-eval",
-  ["ctrl+e"]       = "turmeric:repl-eval",
+  -- ReplView-only (the predicate above guards against shadowing).
+  ["return"]    = "turmeric-repl:submit",
+  ["backspace"] = "turmeric-repl:backspace",
+  ["ctrl+u"]    = "turmeric-repl:clear-input",
+  ["up"]        = "turmeric-repl:history-prev",
+  ["down"]      = "turmeric-repl:history-next",
 }
 
 -- Optional integration with Lite XL's built-in `autocomplete` plugin.

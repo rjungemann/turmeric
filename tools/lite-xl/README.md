@@ -154,25 +154,36 @@ Override the helper subcommand via
 
 ## REPL (Phase 4)
 
-Spawns a long-lived `tur repl` subprocess and bridges it through the
-LogView (output) and CommandView (input). The implementation reuses
-the two built-in views rather than rolling a bespoke `ReplView` --
-honest about what's there.
+`turmeric:start-repl` opens a real `ReplView` pane (a custom `core.view`
+subclass) in a horizontal split below the active editor. The pane is
+backed by a long-lived `tur repl` subprocess; stdout/stderr stream in
+asynchronously and the bottom prompt captures keystrokes directly.
 
 | Key (mac) | Key (others) | Command |
 | --- | --- | --- |
-| cmd+e | ctrl+e | `turmeric:repl-eval` -- prompt for an expression, send it to the running REPL |
-| cmd+shift+l | ctrl+shift+l | `turmeric:repl-reload-buffer` -- save the active buffer and pipe its full contents into the REPL |
+| cmd+shift+l | ctrl+shift+l | `turmeric:repl-reload-buffer` -- save the active buffer and pipe its full contents into the REPL pane |
+
+Keys active **only when the ReplView has focus** (so they never shadow
+editor keys):
+
+| Key | Action |
+| --- | --- |
+| return | submit current input |
+| backspace | delete last char |
+| ctrl+u | clear current input |
+| up / down | walk input history |
 
 Also surfaced through the command palette:
 
-- `turmeric:start-repl` -- spawn the REPL subprocess if not already running
-- `turmeric:stop-repl`  -- send `:quit` and terminate
+- `turmeric:start-repl` -- open the ReplView pane (or focus the existing one)
+- `turmeric:stop-repl`  -- send `:quit` and terminate the subprocess
 
-Output appears in the log pane prefixed with `repl> `; the input that
-triggered each block is logged with `repl< ` so the back-and-forth is
-easy to follow. Configure the subcommand via
-`config.plugins.turmeric.repl_subcommand` (default `"repl"`).
+Configuration:
+
+```lua
+config.plugins.turmeric.repl_subcommand = "repl"   -- or "--interpret", etc.
+config.plugins.turmeric.repl_max_lines  = 5000     -- ring-buffer cap
+```
 
 ## Why Lite XL (not SciTE)
 
