@@ -1485,7 +1485,7 @@ bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
                         ? &recv->as.get_field_.adt_ctor->fields[fidx] : NULL;
                 if (cf && cf->full_type && cf->full_type->kind == TY_TYVAR &&
                     type_extract_adt_app(&rt, &ad, aargs, &an) && ad) {
-                    Type fr = substitute_adt_app_type(cf->full_type, ad, aargs);
+                    Type fr = substitute_adt_app_type_owned(cf->full_type, ad, aargs);
                     if (fr.kind != TY_TYVAR && fr.kind != TY_UNKNOWN) {
                         disp_ty = fr;
                         have_disp = true;
