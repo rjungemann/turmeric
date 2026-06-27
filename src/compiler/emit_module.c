@@ -1701,6 +1701,29 @@ static bool body_has_dispatch_on_app_tyvar(
                     }
                 }
             }
+            /* constrained-instance-element-dispatch: the dispatch receiver may be
+             * a field read `(.value x)` from a PARAMETRIC container `x` whose type
+             * is the instance's APPLIED class-var head -- `(Option A)` (TY_APP) or
+             * a bare `Option` (TY_ADT) -- not a bare TY_TYVAR.  The extracted field
+             * is the constraint element `A`, which varies per instantiation (int /
+             * float / cstr / Box), so a per-element spec must be minted and the
+             * inner `(enc (.value x))` re-dispatched on `A`.  Detect this when the
+             * container's head ADT matches the head of a concrete TY_APP binding
+             * value (the class var instantiated to `(Option <elem>)`); without it
+             * the carrier base bakes `__inst_Enc_enc_int` for every element. */
+            if (cont) {
+                AdtDef *chead =
+                    (cont->type.kind == TY_APP) ? type_adt_app_def(&cont->type)
+                  : (cont->type.kind == TY_ADT) ? cont->type.as.adt_.def
+                  : NULL;
+                if (chead) {
+                    for (uint8_t i = 0; i < n_bindings; i++) {
+                        if (bindings[i].type.kind != TY_APP) continue;
+                        if (type_adt_app_def(&bindings[i].type) == chead)
+                            return true;
+                    }
+                }
+            }
         }
     }
     switch (e->kind) {
@@ -2636,6 +2659,31 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                  * spec whose signature contradicts its body. */
                 && !emit_abi_type_has_concrete_named_tyvar(&bindings[0].type)) {
                 arg_types[i] = bindings[0].type;
+            }
+            /* constrained-instance-element-dispatch (ADT class var): the M4c
+             * branch above only fires for a TY_STRUCT class var.  When the
+             * instance is on a parametric ADT head (`(definstance Enc [Option]
+             * [(Enc A)] ...)`), the method param `x : a` resolves to the bare
+             * carrier `Option` TY_ADT, and the call-site binding for the class
+             * var carries the concrete `(Option <elem>)` TY_APP.  arg_full_types
+             * is NULL here (the tyvar was erased at instance elab), so the
+             * substitution above never ran.  Match the param's head ADT against
+             * a concrete TY_APP binding of the same ADT and adopt it, so the
+             * per-element spec is minted with the by-value Option signature and
+             * its body re-dispatches `(enc (.value x))` on the concrete element
+             * instead of baking the int64 representative. */
+            if (fd->owner_instance && generic_arg.kind == TY_ADT &&
+                generic_arg.as.adt_.def &&
+                type_eq(generic_arg, arg_types[i]) /* not already substituted */) {
+                for (uint8_t bi = 0; bi < n_bindings; bi++) {
+                    if (bindings[bi].type.kind != TY_APP) continue;
+                    if (type_adt_app_def(&bindings[bi].type) != generic_arg.as.adt_.def)
+                        continue;
+                    if (emit_abi_type_has_concrete_named_tyvar(&bindings[bi].type))
+                        continue;
+                    arg_types[i] = bindings[bi].type;
+                    break;
+                }
             }
             if (strcmp(type_c_name(generic_arg), type_c_name(arg_types[i])) != 0) {
                 abi_changes = true;

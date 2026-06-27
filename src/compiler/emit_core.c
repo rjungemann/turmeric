@@ -1467,6 +1467,33 @@ bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
                     disp_ty = *f->full_type;
                     have_disp = true;
                 }
+            } else {
+                /* constrained-instance-element-dispatch (lowered record ADT
+                 * receiver): under defstruct-as-defadt the parametric container
+                 * is an ADT, not a struct -- `(Option cstr)` is a TY_APP over the
+                 * lowered record ADT def, which type_extract_struct_app rejects.
+                 * Mirror the struct path with the ADT-app helpers: extract the
+                 * AdtDef + element args, then substitute them into the ctor
+                 * field's declared full_type (the tyvar `A`) so the inner
+                 * `(enc (.value x))` re-dispatches on the concrete element. */
+                AdtDef *ad = NULL;
+                Type aargs[16];
+                uint8_t an = 0;
+                const CtorField *cf =
+                    (recv->as.get_field_.adt_ctor &&
+                     fidx < recv->as.get_field_.adt_ctor->n_fields)
+                        ? &recv->as.get_field_.adt_ctor->fields[fidx] : NULL;
+                if (cf && cf->full_type && cf->full_type->kind == TY_TYVAR &&
+                    type_extract_adt_app(&rt, &ad, aargs, &an) && ad) {
+                    Type fr = substitute_adt_app_type(cf->full_type, ad, aargs);
+                    if (fr.kind != TY_TYVAR && fr.kind != TY_UNKNOWN) {
+                        disp_ty = fr;
+                        have_disp = true;
+                        disp_ty_owned = (fr.kind == TY_APP);
+                    } else {
+                        free_struct_app_type(fr);
+                    }
+                }
             }
         }
     }

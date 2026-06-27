@@ -5731,6 +5731,51 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * e->type-vs-spec disagreement, so it is inert wherever no spec
                  * resolution changes the field type (the default path). */
                 Type fld_rty = emit_resolve_type(ctx, e->type);
+                bool fld_rty_owned = false;
+                /* constrained-instance-element-dispatch (lowered record ADT
+                 * receiver): the receiver may be a spec param whose ACTIVE arg
+                 * type is a concrete by-value ADT app (`(Option cstr)`) while its
+                 * declared/use type is the bare carrier ADT (`Option`).  e->type
+                 * collapsed the field to the int64 carrier, so the resolve above
+                 * left fld_rty int64.  Recover the field's concrete element by
+                 * substituting the receiver app's args into the ctor field's
+                 * declared full_type, and remember the receiver is by-value so the
+                 * read goes directly off the aggregate (below). */
+                Type recv_spec_ty = {0};
+                bool recv_spec_byval_adt = false;
+                {
+                    const Expr *rv0 = e->as.get_field_.struct_expr;
+                    while (rv0 && rv0->kind == EX_ASCRIBE)
+                        rv0 = rv0->as.ascribe_.inner;
+                    if (rv0 && rv0->kind == EX_VAR &&
+                        emit_var_spec_arg_type(ctx, rv0, &recv_spec_ty) &&
+                        recv_spec_ty.kind == TY_APP &&
+                        type_app_is_concrete_adt(&recv_spec_ty) &&
+                        !type_is_heap_adt(recv_spec_ty)) {
+                        recv_spec_byval_adt = true;
+                        const char *frc0 = emit_type_c_name(ctx, fld_rty);
+                        if (ctor && e->as.get_field_.field_idx < ctor->n_fields &&
+                            frc0 && strcmp(frc0, "int64_t") == 0) {
+                            AdtDef *rad = NULL; Type raargs[16]; uint8_t ran = 0;
+                            const CtorField *rcf =
+                                &ctor->fields[e->as.get_field_.field_idx];
+                            if (rcf->full_type &&
+                                rcf->full_type->kind == TY_TYVAR &&
+                                type_extract_adt_app(&recv_spec_ty, &rad, raargs,
+                                                     &ran) && rad) {
+                                Type sub = substitute_adt_app_type(
+                                    rcf->full_type, rad, raargs);
+                                if (sub.kind != TY_TYVAR &&
+                                    sub.kind != TY_UNKNOWN) {
+                                    fld_rty = sub;
+                                    fld_rty_owned = (sub.kind == TY_APP);
+                                } else {
+                                    free_struct_app_type(sub);
+                                }
+                            }
+                        }
+                    }
+                }
                 const char *fld_rcty = emit_type_c_name(ctx, fld_rty);
                 bool field_byval_unbox =
                     cty && strcmp(cty, "int64_t") == 0 &&
@@ -5772,7 +5817,8 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 bool recv_carrier_byval = recv_held_as_carrier &&
                     emit_type_is_byvalue_adt(ctx, e->as.get_field_.struct_expr->type);
                 bool adt_recv_byvalue =
-                    emit_type_is_byvalue_adt(ctx, e->as.get_field_.struct_expr->type) &&
+                    (emit_type_is_byvalue_adt(ctx, e->as.get_field_.struct_expr->type)
+                     || recv_spec_byval_adt) &&
                     !recv_held_as_carrier;
                 /* CONV-S1 seam 4 (:heap ADT receiver, concrete element): a
                  * `(defstruct Cons :heap [A] (head A) (tail :int))` lowers to a
@@ -5909,6 +5955,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
                 buf_putc(&hb, '\0');
                 free(sv); free(adt_mn); free(mctor); free(mp);
+                if (fld_rty_owned) free_struct_app_type(fld_rty);
                 char *r = strdup(hb.data);
                 buf_free(&hb);
                 return r;

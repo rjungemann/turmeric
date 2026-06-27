@@ -1534,6 +1534,16 @@ bool         type_extract_struct_app(const Type *t, struct StructDef **out_def,
 Type         substitute_struct_app_type(const Type *t,
                                         const struct StructDef *def,
                                         const Type *args);
+/* ADT-app analogues of the struct-app helpers above: extract an ADT-headed
+ * TY_APP chain into (AdtDef*, args[], n), and substitute those args for the
+ * TY_TYVAR names in a field's declared full_type.  substitute_adt_app_type
+ * allocates a fresh malloc'd spine for a TY_APP result (same ownership as the
+ * struct path -- free with free_struct_app_type). */
+bool         type_extract_adt_app(const Type *t, struct AdtDef **out_def,
+                                  Type *out_args, uint8_t *out_n);
+Type         substitute_adt_app_type(const Type *t,
+                                     const struct AdtDef *def,
+                                     const Type *args);
 /* Release the malloc'd TY_APP spine nodes that substitute_struct_app_type /
  * clone_struct_app_type allocate for a compound (TY_APP) result.  A no-op on a
  * leaf Type, so it is safe to call unconditionally on any substitute result. */

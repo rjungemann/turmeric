@@ -383,8 +383,8 @@ bool type_extract_struct_app(const Type *t, StructDef **out_def,
 
 /* TS4P1: Extract an ADT-headed TY_APP chain into (AdtDef*, args[], n_args).
  * Mirrors type_extract_struct_app but requires the head to be TY_ADT (not TY_STRUCT). */
-static bool type_extract_adt_app(const Type *t, AdtDef **out_def,
-                                  Type *out_args, uint8_t *out_n) {
+bool type_extract_adt_app(const Type *t, AdtDef **out_def,
+                          Type *out_args, uint8_t *out_n) {
     if (!t) return false;
     Type raw[16];
     uint8_t n_raw = 0;
@@ -1191,7 +1191,7 @@ static bool adt_type_param_index(const AdtDef *def, const char *name, uint8_t *o
     return false;
 }
 
-static Type substitute_adt_app_type(const Type *t, const AdtDef *def, const Type *args) {
+Type substitute_adt_app_type(const Type *t, const AdtDef *def, const Type *args) {
     if (!t) return type_from_kind(TY_UNKNOWN);
     switch (t->kind) {
         case TY_TYVAR: {
