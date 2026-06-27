@@ -629,6 +629,22 @@ Type fn_body_tail_byvalue_carrier_type(EmitCtx *ctx, const Expr *e) {
         if (cb && cb->body_is_inline_c && cb->type.kind == TY_FN &&
             cb->type.as.fn.result_full_type) {
             Type sr = emit_resolve_type(ctx, *cb->type.as.fn.result_full_type);
+            /* CONV-S1 seam 4 (inline-C generic-element result): a `: A` inline-C
+             * body (e.g. `vec-get`) always returns the int64 carrier regardless
+             * of the element type, and at a non-spec call site the bare tyvar `A`
+             * has no binding so emit_resolve leaves it abstract.  The TYPER, by
+             * contrast, already grounded the CALL's own result type to the
+             * concrete element (`(Option int)` here, via the `(:: ... (Option
+             * int))` read).  Fall back to that grounded type so a by-value
+             * aggregate element read through the int64 carrier gets the
+             * carrier->concrete deref bridge.  Gated on the declared result being
+             * a bare tyvar, so concrete inline-C results are untouched. */
+            if (cb->type.as.fn.result_full_type->kind == TY_TYVAR &&
+                (sr.kind == TY_TYVAR ||
+                 strcmp(emit_type_c_name(ctx, sr), "int64_t") == 0)) {
+                Type cr = emit_resolve_type(ctx, x->type);
+                if (cr.kind == TY_APP || cr.kind == TY_ADT) sr = cr;
+            }
             /* Gate on !type_uses_carrier_abi(sr): the by-value-temp strategy only
              * applies when the lowered aggregate flows by value.  At default the
              * same `(Result cstr cstr)` IS the carrier (type_uses_carrier_abi

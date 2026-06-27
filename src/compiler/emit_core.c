@@ -3503,12 +3503,16 @@ char *emit_carrier_bridge_escaping(EmitCtx *ctx, Buf *body,
      * standard bridge; everything else is byte-for-byte identical, so delegate.
      *  - src_ck == sink_ck: no crossing.
      *  - carrier->concrete: a read-back, never takes an address.
-     *  - :heap struct: the pointer IS the carrier (shared by identity).
+     *  - :heap struct / :heap ADT: the pointer IS the carrier (shared by
+     *    identity).  Under the defstruct->defadt lowering Vec/Map/Set/List are
+     *    heap ADTs, not heap structs, so a nested heap-container element
+     *    (`(Vec (Vec int))`) must delegate here too -- otherwise it falls into
+     *    the aggregate heap-promote below and boxes the pointer into a `T **`.
      *  - inline scalar: a union reinterpret, no address taken.
      *  - pointer-sized leaf (cstr/ptr<void>/int*): already int64-compatible,
      *    no address taken. */
     if (src_ck != CK_CONCRETE || sink_ck != CK_CARRIER ||
-        type_is_heap_struct(concrete_ty) ||
+        type_is_heap_struct(concrete_ty) || type_is_heap_adt(concrete_ty) ||
         carrier_is_inline(concrete_ty.kind)) {
         return emit_carrier_bridge(ctx, body, src_str, src_ck, sink_ck,
                                    concrete_ty);

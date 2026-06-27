@@ -591,7 +591,7 @@ runtime *usage* seam, below.
      regenerated.  *Cleared ~43* (`httpd-*`, `clone-*`, `eqmap-struct`, the `Pos`
      `typeclass-*` tests).  Fixture `conv-defstruct-inline-c-abi`.
 
-   **Running total: 212 -> 36 unique build-failing fixtures under force-lower
+   **Running total: 212 -> 33 unique build-failing fixtures under force-lower
    (default suite stays 1863/0).**  (Sub-root (a) -- 0-arg construct in control
    flow -- the inline-C-tail return bridge, the accessor-unbox, the
    assignment-position straddle, the inline-C instance-method signature, the
@@ -601,8 +601,31 @@ runtime *usage* seam, below.
    (let-init / call-arg, NULL-safe lowered Option), the carrier-producer-arg
    (__inst_/construct) -> by-value-spec-param bridge, the wide-by-value-element
    accessor-unbox + ctor-box, the abi-spec interning recognizing a lowered
-   by-value TY_ADT result, and the M7-HKT transparent-int-newtype phantom
-   wrapper (`(Schema A)`) are all LANDED.)
+   by-value TY_ADT result, the M7-HKT transparent-int-newtype phantom
+   wrapper (`(Schema A)`), and the vec-element carrier<->by-value read/escape
+   bridges are all LANDED.)
+
+   - **vec by-value/heap-ADT element read + escape bridges DONE (2026-06-27).**
+     Reading a by-value aggregate element back out of a `Vec` -- `(:: (vec-get v
+     i) (Option int))` -- failed to build (`tur_adt_Option__int x = vec_hyget(...)`,
+     an int64-from-aggregate invalid initializer).  `vec-get` is inline-C with a
+     generic `: A` result that always returns the int64 carrier, but at a non-spec
+     call site the bare tyvar `A` left `fn_body_tail_byvalue_carrier_type` blind,
+     so no carrier->by-value deref bridge was minted.  Fall back to the CALL's own
+     elaborated result type (which the typer already grounded to `(Option int)`)
+     when the inline-C result is a bare tyvar, so the let-init bridge derefs the
+     heap-promoted element.  Separately, `emit_carrier_bridge_escaping` only
+     short-circuited a `:heap` *struct* element to the pointer-is-carrier path;
+     under lowering `Vec`/`Map`/`Set`/`List` are `:heap` *ADTs*, so a nested
+     heap-container element (`(Vec (Vec int))`) fell into the aggregate
+     heap-promote path and boxed the pointer into a `T **` (read back out of
+     bounds).  Adding `type_is_heap_adt` to the delegation guard casts the pointer
+     to the carrier directly.  Cleared `vec-push-byvalue-aggregate-escapes-frame`
+     and `vec-push-heap-struct-element-carrier-cast` (build + run).
+     `constrained-loop-vec-push-byvalue-result-element` now BUILDS but segfaults
+     at runtime -- a deeper residual (nested return-dispatch redirect over a
+     by-value element; its own header notes three combined defects), tracked
+     separately.
 
    - **M7-HKT transparent-int-newtype phantom wrapper DONE (2026-06-27).**  A
      phantom int-newtype `(defstruct Schema [A] (raw :int))` used as an HKT
