@@ -1,7 +1,8 @@
 ## Try Turmeric: Multi-tab UI, Project Zip Download, and Zip Load
 
-> **Status:** Phase 1 landed (multi-tab UI + persistence + migration);
-> Phases 2 (download-as-zip) and 3 (load-from-zip) not started.
+> **Status:** Phase 1 landed (multi-tab UI + persistence + migration).
+> Phase 1.5 (cross-tab `load` bridge via concatenation) and Phases 2
+> (download-as-zip) and 3 (load-from-zip) not started.
 > **Type:** Web platform / Try Turmeric
 > **Predecessor:** [`docs/archive/try-turmeric-pwa-mobile-plan.md`](../../archive/try-turmeric-pwa-mobile-plan.md)
 
@@ -33,9 +34,11 @@ remains), double-click renames inline, and the tab set persists under
 `tur.try.tabs.v1` / `tur.try.activeTab.v1` with a one-shot migration
 from the legacy `tur.try.buffer.v1` / `cursor` / `scroll` keys.
 
-Drag-to-reorder (plan §1.3 bullet 3) is intentionally deferred -- not
-load-bearing for Phases 2 and 3, which only need a stable tab list.
-Playwright specs (§6) are still to land.
+Drag-to-reorder (plan §1.3 bullet 3) is **not yet implemented but is
+now load-bearing for Phase 1.5** -- concatenation splices tabs in
+tab-strip order with the active tab last, so users need a way to
+change that order without delete-and-recreate. It moves out of "polish"
+into "prerequisite for 1.5." Playwright specs (§6) are still to land.
 
 ## 1. Multi-tab UI
 
@@ -81,17 +84,27 @@ The existing `.editor-tabs` row gains:
   create a new one without first opening a side panel).
 - **Reordering** by horizontal drag of the tab buttons. Reuses the
   pointer-capture pattern from `initHScrollDrag` in `main.js`; a 6px
-  drag threshold disambiguates click-vs-drag.
+  drag threshold disambiguates click-vs-drag. Reorder mutates the
+  `tabs[]` array in place and persists via the same debounced
+  `safeWrite`. **Load-bearing for Phase 1.5**: concatenation splices
+  tabs in tab-strip order with the active tab last, so users need
+  drag-reorder to control which sibling definitions are spliced
+  before the active tab. Keyboard reorder (Ctrl/Alt + Shift + Left
+  / Right on a focused tab button) is a nice-to-have; defer until
+  someone asks.
 
 ### 1.4 Run semantics
 
 `Run` (Ctrl/Cmd+Enter) executes the **active tab's** content.
 
-Cross-tab imports are out of scope for v1 of this plan -- the WASM
-runtime currently flattens the input to a single buffer. A follow-on
-"virtual project mount" plan can teach the WASM driver about other tabs
-later. The download-as-zip path below is the workaround in the
-meantime: export the project, run `tur build` locally.
+Cross-tab imports through the WASM driver's own resolver are out of
+scope for v1 -- the runtime flattens its input to a single buffer.
+**Phase 1.5 (§2.5)** ships a concatenation bridge that splices the
+tab set into that single buffer at Run time, so the common case
+("library tab + main tab") works without driver changes. The full
+fix -- a virtual-FS hook so the driver sees real files and module
+names -- is a separate plan. The download-as-zip path (Phase 2) is
+the long-term escape hatch: export, run `tur build` locally.
 
 ## 2. Persistence
 
@@ -141,6 +154,111 @@ Per-tab writes go through `safeWrite`, which already handles
 `QuotaExceededError` by disabling persistence for the session. For
 large projects this is fine -- the user can still download the zip
 before reloading.
+
+## 2.5 Cross-tab `load` bridge (Phase 1.5)
+
+Phase 1 leaves §1.4 standing: the WASM driver still flattens its
+input to a single buffer, so `(load "sibling.tur")` and
+`(import sibling)` from one tab cannot see another tab's content. The
+download-as-zip path (Phase 2) is the long-term answer, but a small
+concatenation bridge gets cross-tab definitions working in-browser
+without touching the WASM driver -- similar to how the Processing
+spin-offs (Processing.js, p5.js sketches, OpenProcessing) splice the
+sketch's `.pde` / `.js` files together before handing them to the
+engine.
+
+### 2.5.1 Runtime behavior
+
+`runCode()` synthesises a single buffer at submission time:
+
+1. Take every tab whose name ends in `.tur`, in tab-strip order.
+2. Concatenate `;; --- <tab.name> ---\n` followed by the tab's content,
+   each block ending in a trailing newline.
+3. The **active tab is placed last** so its top-level forms (and any
+   `main`) run after sibling definitions are in scope.
+
+The WASM driver receives the synthesised buffer; nothing else in the
+pipeline changes. Format / Share / URL-hash still operate on the
+**active tab only** -- the splicing is a Run-time concern, not a
+persistence concern.
+
+A single-tab workspace produces the same buffer it does today (just
+the active tab's content; the bridge is a no-op).
+
+### 2.5.2 Diagnostics
+
+When the splice produces diagnostics, line numbers refer to the
+synthesised buffer, not any one tab. To keep error messages legible
+without teaching the driver about virtual files:
+
+- The `;; --- <name> ---` marker comments are intentionally
+  `;;`-prefixed so they survive the tokenizer as no-op headers.
+- The console output runs a small post-processor over diagnostic
+  lines: when a `line N` reference falls inside a known tab range
+  (computed from the splice), rewrite the message to
+  `<tab.name>:line K`, where K is the offset within that tab.
+- The post-processor is best-effort -- on mismatch it leaves the
+  message untouched rather than guessing.
+
+### 2.5.3 Out of scope for 1.5
+
+- **Name collisions**: if two tabs define the same symbol, last write
+  wins (per concatenation order). No warning. Users move to Phase 2
+  + local `tur build` to get real namespacing.
+- **`defmodule` collisions**: same caveat -- two tabs declaring the
+  same module name silently collide.
+- **Relative `load` / `import` paths**: the bridge does not synthesise
+  a virtual filesystem; an `import` whose resolution depends on a
+  physical path keeps failing the way it does today. Users hit this
+  rarely on `/try`; the eventual fix is the virtual-FS hook in §1.4.
+- **Selective inclusion**: every tab is included on every Run. No
+  `:exclude-from-run` flag, no per-tab "library / sketch" labels.
+  Keep the model boring; users who need precision can delete tabs.
+
+### 2.5.4 UI surface
+
+None. The bridge is invisible -- the same Run button does the same
+thing, just over the synthesised buffer. The only user-visible
+artifact is the rewritten line-number prefix in diagnostics, and a
+status-bar hint ("Ran 3 tabs") shown for one second after a
+multi-tab Run.
+
+### 2.5.5 Tests
+
+Add to the Playwright suite:
+
+- `mobile.load-bridge.spec.js` -- two tabs (`util.tur` defining
+  `square`, `main.tur` calling it); Run on `main.tur` succeeds.
+- Diagnostic rewrite spec: an intentional error in `util.tur`
+  surfaces with the tab name and the in-tab line number.
+
+### 2.5.6 Possible future directions
+
+Captured here so the bridge can grow into the virtual-FS hook
+without surprising future contributors:
+
+1. **Implicit `build.tur`**: instead of splicing, synthesise a
+   `build.tur` (`:main "<active>.tur"`, `:src ["<other>.tur" ...]`)
+   plus a virtual `src/` and teach the WASM driver to resolve
+   modules from a JS-side `Map<string, string>`. Once that hook
+   lands, the splice is unnecessary and `defmodule` / `import` work
+   as on disk.
+2. **Per-tab module hints**: a `;; @module foo/bar` magic comment
+   could pre-seed module names so the bridge can sort tabs
+   topologically (deps first) rather than relying on user-visible
+   tab order.
+3. **REPL-side incremental load**: the in-browser REPL (eventually)
+   could accept tab additions as `(reload "<name>")` rather than
+   re-splicing the whole project on every Run. Out of scope until
+   the REPL gets a separate WASM entry point.
+4. **Cross-tab share-link**: the URL-hash share-link could encode
+   the entire spliced buffer (still single-shot, no FS). Cheap once
+   the splice exists; deferred because the zip is the better
+   "share a project" path.
+
+These are **non-goals for 1.5**. Listed so they don't get rediscovered
+from scratch when Phase 2/3 ships and someone reaches for the next
+thing.
 
 ## 3. Download project as zip
 
@@ -266,13 +384,19 @@ Manual checks before release:
 ## 7. Rollout
 
 1. Multi-tab UI + persistence + migration (largest single piece,
-   independently shippable).
+   independently shippable). **Landed.**
+1.5. Drag-reorder + cross-tab `load` concatenation bridge. Depends on
+   Phase 1; ships before Phases 2/3 because tab order becomes a
+   user-visible Run-semantics input the moment the bridge exists.
 2. Download-as-zip (tiny addition once tabs exist).
 3. Load-from-zip + drop overlay (depends on 2 for the format).
 
 Each step is independently revertable; only step 1 carries a migration
 risk, mitigated by writing the new keys before deleting the legacy ones
-(if the migration write fails, the legacy keys survive intact).
+(if the migration write fails, the legacy keys survive intact). Phase
+1.5 is also revertable in isolation -- the splice happens in
+`runCode()` and can be replaced with the original single-tab call by
+flipping one branch.
 
 ## Open questions
 
