@@ -1,5 +1,32 @@
 # Lowered Option/Result `#{Construct}` carrier base returns by-value into int64
 
+**RESOLVED (boxed-aggregate).** Fixed in `seam-4: boxed-aggregate carrier base
+for lowered Option/Result constructs`. The carrier of a lowered parametric
+Option/Result is now a heap pointer to the record-ADT aggregate (layout-
+identical to the legacy `tur_option_t`/`tur_result_box_t`, so the canonical
+readback, `.is-some`/`.value`, and the legacy helpers all read it):
+
+- `emit_fns.c`: the M2b carrier-synth gained a branch for the lowered ctor-call
+  `#{Construct}` body -- it heap-boxes the aggregate and returns the pointer as
+  the int64 carrier; an Option `none` (discriminator literal false) stays the
+  NULL carrier so a bare `== 0` test keeps working.
+- `emit_expr.c` (`fn_body_tail_byvalue_carrier_type`): a carrier-returning
+  closure whose tail is a `some`/`ok` spec now heap-boxes the by-value spec
+  result (accepts a concrete non-:heap aggregate, not just nominal carrier-ABI
+  types).
+
+Fixes `positional-opaque-ok`, `positional-pap-opaque-ok`,
+`kleisli-arrow-instance` under force-lower. The other two fixtures the original
+report listed (`hkt-ap-fn-in-container`, `hkt-stdlib-option-result-instances`)
+turned out to have a DIFFERENT root -- the `some` spec arg type for a
+`(fn [float] float)` element is mistyped as `double` instead of the int64
+fat-closure handle -- now tracked separately in
+`docs/reported/some-of-fn-element-spec-arg-mistyped.md`.
+
+---
+
+(Original report below.)
+
 **Severity:** medium (force-lower only; blocks the `none`/`some`/`ok`/`err`
 carrier-base + any program that consumes a polymorphic Option/Result through
 the int64 carrier under defstruct-as-defadt). Default path unaffected.
