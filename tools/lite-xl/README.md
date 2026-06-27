@@ -45,6 +45,7 @@ that pins the compiler at `./build/tur`. Idempotent; safe to re-run.
 | --- | --- | --- |
 | cmd+r | ctrl+r | `turmeric:run-file` -- saves the buffer, runs `tur run <file>` |
 | cmd+shift+r | ctrl+shift+r | `turmeric:check-file` -- runs `tur check <file>` |
+| f1 / cmd+i | f1 | `turmeric:doc-at-cursor` -- prints the docstring for the symbol at the cursor into the log pane |
 
 Surfaced through the command palette (cmd+shift+p / ctrl+shift+p) without
 a default keybinding:
@@ -111,12 +112,26 @@ config.plugins.turmeric = config.plugins.turmeric or {}
 config.plugins.turmeric.tur = "/usr/local/bin/tur"   -- compiler binary
 ```
 
-The plugin currently shells out to `tur run` because the documented
-v1 target (`tur --interpret`) hits a segfault on a null
-`ReaderMacroRegistry`; see
-[`docs/reported/tur-interpret-null-reader-macro-registry.md`](../../docs/reported/tur-interpret-null-reader-macro-registry.md).
-The command string is a one-line change in `turmeric.lua` once the
-interpreter is fixed.
+The Run command shells out to `tur --interpret <file>` (the tree-walking
+interpreter); the prior null `ReaderMacroRegistry` segfault has been
+fixed and the archived report lives at
+[`docs/archive/tur-interpret-null-reader-macro-registry.md`](../../docs/archive/tur-interpret-null-reader-macro-registry.md).
+
+## Autocomplete and docstrings (Phase 3)
+
+The plugin spawns one long-lived `tur lsp-lite` helper on first symbol
+lookup and talks to it with newline-delimited JSON over stdin/stdout.
+The helper indexes `stdlib/docstrings.tur` on startup plus any `;;;`
+blocks in the active buffer (refreshed on save).
+
+- F1 (or cmd+i on macOS) -- print the docstring for the symbol at the
+  cursor into the log pane.
+- The built-in `autocomplete` plugin gets a `turmeric` source that
+  surfaces stdlib + buffer-local names as you type. Enable Lite XL's
+  autocomplete plugin if it is not on by default.
+
+Override the helper subcommand via
+`config.plugins.turmeric.lsp_cmd = "lsp-lite"` (the default).
 
 ## Why Lite XL (not SciTE)
 

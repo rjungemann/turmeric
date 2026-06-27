@@ -294,6 +294,210 @@ keymap.add {
 }
 
 -- -------------------------------------------------------------------------
+-- Phase 3: lsp-lite helper -- autocomplete + calltips
+-- -------------------------------------------------------------------------
+--
+-- Spawns one long-lived `tur lsp-lite` subprocess on first symbol lookup and
+-- talks to it with newline-delimited JSON. Feeds prefix matches into Lite XL's
+-- built-in `autocomplete` plugin (when present); falls back to a status-bar
+-- ping otherwise. F1 prints the doc for the symbol under the cursor.
+--
+-- The helper is intentionally line-oriented (one JSON object per line in,
+-- one per line out) so the Lua client does not need a JSON framing parser.
+
+config.plugins.turmeric.lsp_cmd = config.plugins.turmeric.lsp_cmd or "lsp-lite"
+
+local lsp_proc = nil
+local lsp_buf  = ""       -- partial line accumulator
+local lsp_seq  = 0
+local lsp_callbacks = {}  -- id -> function(result, err)
+
+local function lsp_start()
+  if lsp_proc and lsp_proc:running() then return true end
+  local ok, p = pcall(process.start,
+    { config.plugins.turmeric.tur, config.plugins.turmeric.lsp_cmd },
+    { stdin = process.REDIRECT_PIPE,
+      stdout = process.REDIRECT_PIPE,
+      stderr = process.REDIRECT_PIPE })
+  if not ok then
+    core.error("turmeric: failed to spawn lsp-lite: %s", tostring(p))
+    return false
+  end
+  lsp_proc = p
+  lsp_buf  = ""
+  core.add_thread(function()
+    while lsp_proc and lsp_proc:running() do
+      local out = lsp_proc:read_stdout(8192)
+      if out and #out > 0 then
+        lsp_buf = lsp_buf .. out
+        while true do
+          local nl = lsp_buf:find("\n", 1, true)
+          if not nl then break end
+          local line = lsp_buf:sub(1, nl - 1)
+          lsp_buf = lsp_buf:sub(nl + 1)
+          local id = tonumber(line:match('"id"%s*:%s*(%-?%d+)'))
+          if id and lsp_callbacks[id] then
+            local cb = lsp_callbacks[id]
+            lsp_callbacks[id] = nil
+            -- Cheap "result" / "error" extraction; lsp-lite responses are
+            -- flat (no nested objects in result, ever -- arrays of strings,
+            -- bare strings, or "ok"). Strip outer quoting where present.
+            local err = line:match('"error"%s*:%s*"(.-)"')
+            local result_raw = line:match('"result"%s*:%s*(.+)}%s*$')
+            cb(result_raw, err)
+          end
+        end
+      end
+      coroutine.yield(0.05)
+    end
+  end)
+  return true
+end
+
+local function lsp_send(method, params, cb)
+  if not lsp_start() then return end
+  lsp_seq = lsp_seq + 1
+  local id = lsp_seq
+  if cb then lsp_callbacks[id] = cb end
+  -- Minimal JSON encoder for the params we send: only string values.
+  local parts = {}
+  for k, v in pairs(params or {}) do
+    local s = tostring(v):gsub("\\", "\\\\"):gsub('"', '\\"')
+                         :gsub("\n", "\\n"):gsub("\r", "\\r"):gsub("\t", "\\t")
+    table.insert(parts, string.format('"%s":"%s"', k, s))
+  end
+  local msg = string.format('{"id":%d,"method":"%s","params":{%s}}\n',
+                            id, method, table.concat(parts, ","))
+  lsp_proc:write(msg)
+end
+
+-- Parse a result that is a JSON array of strings like `["a","b","c"]` into
+-- a Lua array. Returns {} if the raw string is missing or malformed.
+local function parse_string_array(raw)
+  -- Walk the raw `["a","b","..."]` looking for "..."-quoted substrings.
+  -- Honors backslash escapes so an embedded \" does not terminate an item.
+  local out = {}
+  if not raw then return out end
+  local i, n = 1, #raw
+  while i <= n do
+    local q = raw:find('"', i, true)
+    if not q then break end
+    local j = q + 1
+    while j <= n do
+      local c = raw:sub(j, j)
+      if c == '\\' then j = j + 2
+      elseif c == '"' then break
+      else j = j + 1 end
+    end
+    table.insert(out, raw:sub(q + 1, j - 1))
+    i = j + 1
+  end
+  return out
+end
+
+local function parse_string(raw)
+  if not raw then return "" end
+  local s = raw:match('^"(.*)"$') or ""
+  s = s:gsub("\\n", "\n"):gsub("\\r", "\r"):gsub("\\t", "\t")
+       :gsub('\\"', '"'):gsub("\\\\", "\\")
+  return s
+end
+
+-- Symbol-at-cursor extraction. Turmeric identifiers allow Lisp-y chars.
+local function symbol_at_cursor()
+  local doc = nearest_doc()
+  if not doc then return nil end
+  local line, col = doc:get_selection()
+  local text = doc.lines[line] or ""
+  local i = col - 1
+  local function is_sym(c) return c and c:match("[%a%d_%-%?!%*/%+=<>'%./]") end
+  while i > 0 and is_sym(text:sub(i, i)) do i = i - 1 end
+  local j = col - 1
+  while j <= #text and is_sym(text:sub(j, j)) do j = j + 1 end
+  local sym = text:sub(i + 1, j - 1)
+  return sym ~= "" and sym or nil
+end
+
+command.add(nil, {
+  ["turmeric:doc-at-cursor"] = function()
+    local sym = symbol_at_cursor()
+    if not sym then core.error("turmeric: no symbol at cursor"); return end
+    lsp_send("doc", { name = sym }, function(raw, err)
+      if err then core.error("turmeric: doc lookup failed: %s", err); return end
+      local doc_text = parse_string(raw)
+      if doc_text == "" then
+        core.log("turmeric: no doc for %s", sym)
+      else
+        core.log("== %s ==\n%s", sym, doc_text)
+      end
+    end)
+  end,
+  ["turmeric:calltip-at-cursor"] = function()
+    local sym = symbol_at_cursor()
+    if not sym then core.error("turmeric: no symbol at cursor"); return end
+    lsp_send("calltip", { name = sym }, function(raw, err)
+      if err then core.error("turmeric: calltip failed: %s", err); return end
+      local s = parse_string(raw)
+      if s == "" then core.log("turmeric: no calltip for %s", sym)
+      else core.log("%s", s) end
+    end)
+  end,
+})
+
+keymap.add {
+  ["f1"]    = "turmeric:doc-at-cursor",
+  ["cmd+i"] = "turmeric:doc-at-cursor",
+}
+
+-- Push the active buffer text into lsp-lite on save so per-buffer defns
+-- show up in completions.
+local DocSave = require "core.doc".save
+require "core.doc".save = function(self, ...)
+  local rc = DocSave(self, ...)
+  if self.filename and self.filename:match("%.tur$") then
+    lsp_send("update", {
+      uri  = "file://" .. (self.abs_filename or self.filename),
+      text = table.concat(self.lines, ""),
+    })
+  end
+  return rc
+end
+
+-- Optional integration with Lite XL's built-in `autocomplete` plugin.
+-- It exposes `autocomplete.add({ name=..., files=..., items={...} })`.
+-- We seed an empty list and refresh it as the user types.
+local ok_ac, autocomplete = pcall(require, "plugins.autocomplete")
+if ok_ac and autocomplete and autocomplete.add then
+  local items = {}
+  autocomplete.add({
+    name  = "turmeric",
+    files = { "%.tur$", "%.tur%.sweet$" },
+    items = items,
+  })
+  -- Periodically refresh from lsp-lite based on the current word prefix.
+  -- Cheap: lsp-lite filters server-side.
+  local last_prefix = ""
+  core.add_thread(function()
+    while true do
+      coroutine.yield(0.4)
+      local doc = nearest_doc()
+      if doc and doc.filename and doc.filename:match("%.tur$") then
+        local sym = symbol_at_cursor() or ""
+        if #sym >= 2 and sym ~= last_prefix then
+          last_prefix = sym
+          lsp_send("complete", { prefix = sym }, function(raw, err)
+            if err then return end
+            for k in pairs(items) do items[k] = nil end
+            local arr = parse_string_array(raw)
+            for _, n in ipairs(arr) do items[n] = true end
+          end)
+        end
+      end
+    end
+  end)
+end
+
+-- -------------------------------------------------------------------------
 -- Sidebar visibility -- Processing-style "file vs project" launch
 -- -------------------------------------------------------------------------
 --

@@ -75,6 +75,8 @@
 #include "lsp/mcp.h"
 /* DAP server (debugger Phase 3) */
 #include "turi/dap.h"
+/* lsp-lite: lightweight completion/calltip backend for editors */
+#include "cli/lsp_lite.h"
 
 #ifndef TUR_VERSION
 #define TUR_VERSION "unknown"
@@ -11319,7 +11321,7 @@ static void list_external_subcommands(void) {
     static const char *const builtins[] = {
         "build", "emit-c", "emit-h", "emit-cmake", "run", "repl", "worker",
         "eval", "doc", "explain", "test", "check", "format", "fmt",
-        "parse-check", "audit-spans", "debug", "dap",
+        "parse-check", "audit-spans", "debug", "dap", "lsp-lite",
         "init", "add", "add-cmake", "fetch",
         "install", "uninstall", "list", "upgrade",
         NULL,
@@ -11418,6 +11420,7 @@ static int usage(void) {
         "  tur --interpret <file.tur>        run a file through the tree-walking interpreter\n"
         "  tur debug <file.tur>              run a file under the interactive debugger\n"
         "  tur dap                           Debug Adapter Protocol server (JSON-RPC/stdio) for editors\n"
+        "  tur lsp-lite                      lightweight completion/calltip/doc backend (NDJSON/stdio)\n"
         "  tur eval '<expr>'                 evaluate an inline expression\n"
         "  tur doc <symbol>                  print documentation for a builtin or special form\n"
         "  tur explain <TUR-E####|snippet>   explain a diagnostic code or snippet errors\n"
@@ -12668,6 +12671,14 @@ int main(int argc, char **argv) {
     /* Debugger Phase 3: DAP server over the interpreter (JSON-RPC / stdio). */
     if (strcmp(cmd, "dap") == 0) {
         return cmd_dap();
+    }
+    /* lsp-lite: completion/calltip/doc backend for the Lite XL plugin and
+     * other lightweight editors. Newline-delimited JSON over stdio; stdout
+     * is reserved for protocol traffic. */
+    if (strcmp(cmd, "lsp-lite") == 0) {
+        diag_init(false);
+        resolve_stdlib_root();   /* sets TUR_STDLIB_DIR so lsp_lite can find docstrings.tur */
+        return lsp_lite_run(STDIN_FILENO, STDOUT_FILENO);
     }
     if (strcmp(cmd, "build") == 0) {
         const char *input = NULL;

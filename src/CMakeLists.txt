@@ -171,6 +171,8 @@ set(TUR_CORE_SOURCES
     lsp/lsp_docs.c
     lsp/lsp_util.c
     lsp/lsp.c
+    # cli/ -- standalone subcommands
+    cli/lsp_lite.c
 )
 
 # Architecture-specific assembly (added to both tur and libturi)
