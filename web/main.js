@@ -1217,6 +1217,27 @@ async function initEditor() {
         // Phase 2 surface: lets specs assert the logical project layout
         // without intercepting an actual browser download.
         projectEntries: () => buildProjectEntries().entries,
+        // Same data as projectEntries(), but encoded into the zip bytes the
+        // user would actually download. The test surface returns a plain
+        // Array<number> because Playwright's evaluate() does not transfer
+        // Uint8Array cleanly across the wire.
+        projectZipBytes: async () => {
+            const { entries } = buildProjectEntries();
+            const blob = buildZip(entries);
+            return Array.from(new Uint8Array(await blob.arrayBuffer()));
+        },
+        // Phase 3 surface: parse + load entry points for specs that need
+        // to drive a fake zip into the app without juggling File objects.
+        // `loadBytes` is fire-and-forget from the test's perspective; the
+        // confirm() dialog is auto-accepted via page.on('dialog').
+        loadBytes: async (bytes) => {
+            const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+            return loadProjectFromBytes(u8, 'spec.zip');
+        },
+        parseBytes: (bytes) => {
+            const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+            return parseProjectZip(u8);
+        },
     };
 
     // Hydrate the tab set. Priority order:
@@ -1612,6 +1633,254 @@ function downloadProject() {
     showStatus(`Downloaded ${filename}`, 'success');
 }
 
+// ============================================================================
+// Project load (Phase 3 of try-turmeric-multi-tab-and-projects-plan)
+// ============================================================================
+
+const MAX_ZIP_BYTES   = 5  * 1024 * 1024;   // user-facing size guard
+const PARSE_ZIP_LIMIT = 50 * 1024 * 1024;   // safety belt against OOM
+
+// Store-only ZIP reader. Mirrors buildZip(): we only accept method 0
+// because that's all we write. Anything else throws and the caller
+// surfaces a toast. Returns `{ [path]: Uint8Array }`.
+function readStoreZip(bytes) {
+    if (bytes.length > PARSE_ZIP_LIMIT) {
+        throw new Error('ZIP exceeds parse limit');
+    }
+    if (bytes.length < 22 ||
+        bytes[0] !== 0x50 || bytes[1] !== 0x4b ||
+        bytes[2] !== 0x03 || bytes[3] !== 0x04) {
+        throw new Error('Not a ZIP file (bad magic bytes)');
+    }
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    // Scan back from the end for the EOCD signature 0x06054b50.
+    let eocd = -1;
+    for (let i = bytes.length - 22; i >= 0 && i > bytes.length - 65557; i--) {
+        if (view.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) throw new Error('EOCD not found -- truncated or not a ZIP');
+    const total    = view.getUint16(eocd + 10, true);
+    const cdSize   = view.getUint32(eocd + 12, true);
+    const cdOffset = view.getUint32(eocd + 16, true);
+    const dec = new TextDecoder('utf-8');
+    const out = {};
+    let p = cdOffset;
+    for (let i = 0; i < total; i++) {
+        if (view.getUint32(p, true) !== 0x02014b50) {
+            throw new Error(`Bad central directory entry at byte ${p}`);
+        }
+        const method   = view.getUint16(p + 10, true);
+        const compSize = view.getUint32(p + 20, true);
+        const nameLen  = view.getUint16(p + 28, true);
+        const extraLen = view.getUint16(p + 30, true);
+        const cmtLen   = view.getUint16(p + 32, true);
+        const localOff = view.getUint32(p + 42, true);
+        const name = dec.decode(bytes.subarray(p + 46, p + 46 + nameLen));
+        if (method !== 0) {
+            throw new Error(`Unsupported compression method ${method} for ${name}`);
+        }
+        const lNameLen  = view.getUint16(localOff + 26, true);
+        const lExtraLen = view.getUint16(localOff + 28, true);
+        const dataOff = localOff + 30 + lNameLen + lExtraLen;
+        out[name] = bytes.subarray(dataOff, dataOff + compSize);
+        p += 46 + nameLen + extraLen + cmtLen;
+    }
+    if (p - cdOffset !== cdSize) throw new Error('Central directory size mismatch');
+    return out;
+}
+
+// Take the raw entry map and shape it into a Tab[] (no Monaco models yet --
+// those get created when the project actually applies). Returns
+// `{ tabs, activeId }` or throws a user-readable error.
+function parseProjectZip(bytes) {
+    const dec = new TextDecoder('utf-8');
+    const raw = readStoreZip(bytes);
+    // Pull workspace.json first (optional) -- a missing one is fine.
+    let ws = null;
+    if (raw['.turmeric/workspace.json']) {
+        try { ws = JSON.parse(dec.decode(raw['.turmeric/workspace.json'])); }
+        catch { ws = null; }
+    }
+    // Collect *.tur entries under src/.
+    const srcFiles = {};
+    for (const path of Object.keys(raw)) {
+        if (!path.startsWith('src/')) continue;
+        if (!/\.tur$/i.test(path)) continue;
+        if (path.length === 'src/'.length) continue;
+        srcFiles[path] = dec.decode(raw[path]);
+    }
+    // Reject the zip only when there's nothing meaningful to load -- per
+    // the plan, "a zip whose src/ is empty OR whose only .tur files are
+    // 0 bytes is rejected." Individual zero-byte tabs in a mixed zip are
+    // kept; the user gets a blank tab to fill in.
+    const fileNames = Object.keys(srcFiles);
+    if (fileNames.length === 0) {
+        throw new Error('ZIP contains no .tur source files under src/');
+    }
+    if (!fileNames.some(f => srcFiles[f].length > 0)) {
+        throw new Error('ZIP src/ contains only empty .tur files');
+    }
+    // Build the tab list. When workspace.json is present we honor its order
+    // and metadata for matching files; any extra src/ entries get appended
+    // alphabetically so nothing is silently dropped.
+    const seen = new Set();
+    const tabsOut = [];
+    if (ws && Array.isArray(ws.tabs)) {
+        for (const t of ws.tabs) {
+            const file = typeof t.file === 'string' ? t.file : null;
+            if (!file || !(file in srcFiles)) continue;  // referenced file missing
+            const content = srcFiles[file];
+            tabsOut.push({
+                id: typeof t.id === 'string' ? t.id : genTabId(),
+                name: sanitizeTabName(t.name || file.replace(/^src\//, '')) || 'main.tur',
+                content,
+                cursor: t.cursor && typeof t.cursor.lineNumber === 'number'
+                    ? { lineNumber: t.cursor.lineNumber, column: t.cursor.column || 1 }
+                    : { lineNumber: 1, column: 1 },
+                scrollTop: typeof t.scrollTop === 'number' ? t.scrollTop : 0,
+                createdAt: typeof t.createdAt === 'number' ? t.createdAt : Date.now(),
+                _model: null,
+            });
+            seen.add(file);
+        }
+    }
+    const leftovers = Object.keys(srcFiles)
+        .filter(f => !seen.has(f))
+        .sort();
+    for (const file of leftovers) {
+        tabsOut.push({
+            id: genTabId(),
+            name: sanitizeTabName(file.replace(/^src\//, '')) || 'untitled.tur',
+            content: srcFiles[file],
+            cursor: { lineNumber: 1, column: 1 },
+            scrollTop: 0,
+            createdAt: Date.now(),
+            _model: null,
+        });
+    }
+    // Pick the active tab. workspace.json's activeId wins if it points at a
+    // tab we kept; else main.tur; else alphabetical first.
+    let activeIdOut = null;
+    if (ws && typeof ws.activeId === 'string') {
+        if (tabsOut.find(t => t.id === ws.activeId)) activeIdOut = ws.activeId;
+    }
+    if (!activeIdOut) {
+        const main = tabsOut.find(t => t.name === 'main.tur');
+        activeIdOut = main ? main.id
+            : [...tabsOut].sort((a, b) => a.name.localeCompare(b.name))[0].id;
+    }
+    return { tabs: tabsOut, activeId: activeIdOut };
+}
+
+// Replace the current tab set with `parsed`. Persistence and UI re-render
+// happen synchronously; callers (drag-drop, file picker) are responsible
+// for the user confirmation step before invoking this.
+function applyProjectLoad(parsed) {
+    // Dispose old models so we don't leak them into Monaco's global model
+    // store.
+    for (const t of tabs) {
+        if (t._model && !t._model.isDisposed()) {
+            try { t._model.dispose(); } catch {}
+        }
+    }
+    tabs = parsed.tabs;
+    activeId = parsed.activeId;
+    const active = currentTab();
+    if (active && editor) {
+        editor.setModel(ensureModel(active));
+        try {
+            if (active.cursor) editor.setPosition(active.cursor);
+            if (typeof active.scrollTop === 'number') editor.setScrollTop(active.scrollTop);
+        } catch {}
+    }
+    renderTabs();
+    safeWrite(STORAGE_KEYS.tabs, tabsSnapshot());
+    safeWrite(STORAGE_KEYS.activeTab, activeId);
+    showStatus(`Loaded ${tabs.length} tab${tabs.length === 1 ? '' : 's'}`, 'success');
+}
+
+// Common entry point: take bytes (Uint8Array) from a File / drop / picker,
+// validate, prompt to replace, apply. Resolves when the operation is done.
+async function loadProjectFromBytes(bytes, sourceLabel = 'project') {
+    if (bytes.length > MAX_ZIP_BYTES) {
+        showStatus(`${sourceLabel} is too large (${(bytes.length / 1024 / 1024).toFixed(1)} MB; limit 5 MB)`, 'error');
+        return false;
+    }
+    let parsed;
+    try {
+        parsed = parseProjectZip(bytes);
+    } catch (e) {
+        showStatus(`${sourceLabel}: ${e.message}`, 'error');
+        return false;
+    }
+    // Replace, not merge. Implementation note from the plan: don't write
+    // the new tab set to localStorage until the user confirms -- a reject
+    // leaves the existing tab set intact.
+    const ok = confirm(
+        `Loading this project will replace your current ${tabs.length} ` +
+        `tab${tabs.length === 1 ? '' : 's'}. The current workspace is in ` +
+        `your browser's localStorage and can be recovered by reloading ` +
+        `without confirming.`);
+    if (!ok) return false;
+    applyProjectLoad(parsed);
+    return true;
+}
+
+async function loadProjectFromFile(file) {
+    if (!file) return false;
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    return loadProjectFromBytes(bytes, file.name || 'file');
+}
+
+function openProjectFile() {
+    const input = document.getElementById('open-project-input');
+    if (input) {
+        input.value = '';  // allow re-selecting the same file
+        input.click();
+    }
+}
+
+// Drag-and-drop overlay on the editor pane. dragenter / dragover are the
+// signals; the visible overlay sits inside .editor-pane and toggles via a
+// .drag-over class. dragleave fires too eagerly on child enter/leave, so
+// we count enters / leaves and only clear the overlay when the count hits
+// zero -- the standard pattern for whole-element drop targets.
+function initProjectDrop() {
+    const pane = document.querySelector('.editor-pane');
+    if (!pane) return;
+    let depth = 0;
+    const isZipDrag = (e) => Array.from(e.dataTransfer?.types || []).includes('Files');
+    pane.addEventListener('dragenter', (e) => {
+        if (!isZipDrag(e)) return;
+        e.preventDefault();
+        depth++;
+        pane.classList.add('drag-over');
+    });
+    pane.addEventListener('dragover', (e) => {
+        if (!isZipDrag(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+    });
+    pane.addEventListener('dragleave', (e) => {
+        if (!isZipDrag(e)) return;
+        depth = Math.max(0, depth - 1);
+        if (depth === 0) pane.classList.remove('drag-over');
+    });
+    pane.addEventListener('drop', async (e) => {
+        if (!isZipDrag(e)) return;
+        e.preventDefault();
+        depth = 0;
+        pane.classList.remove('drag-over');
+        const file = e.dataTransfer?.files?.[0];
+        if (!file) return;
+        if (!/\.zip$/i.test(file.name) && file.type !== 'application/zip') {
+            showStatus(`${file.name}: not a .zip file`, 'error');
+            return;
+        }
+        await loadProjectFromFile(file);
+    });
+}
+
 /**
  * Share the current code
  */
@@ -1701,6 +1970,16 @@ function initEventListeners() {
 
     // Download-project-as-zip button (Phase 2 of the multi-tab plan).
     document.getElementById('download-btn')?.addEventListener('click', downloadProject);
+
+    // Open-project-zip (Phase 3): button + hidden <input type=file> + the
+    // drag-drop overlay on the editor pane.
+    document.getElementById('open-btn')?.addEventListener('click', openProjectFile);
+    document.getElementById('open-project-input')?.addEventListener('change', async (e) => {
+        const file = e.target.files?.[0];
+        if (file) await loadProjectFromFile(file);
+        e.target.value = '';
+    });
+    initProjectDrop();
     
     // Clear console button
     document.getElementById('clear-console-btn')?.addEventListener('click', clearConsole);

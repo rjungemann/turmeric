@@ -502,6 +502,44 @@ body.split-dragging * {
     box-shadow: inset 2px 0 0 var(--gold);
 }
 
+/* Drop overlay for "load project zip" (Phase 3). Hidden by default
+   and pointer-events: none so it never interferes with editor input;
+   .editor-pane.drag-over reveals it during a file drag. */
+.drop-overlay {
+    position: absolute;
+    inset: 0;
+    display: none;
+    pointer-events: none;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--bg-panel) 85%, transparent);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    border: 2px dashed var(--gold);
+    border-radius: 6px;
+    z-index: 40;
+}
+.editor-pane.drag-over .drop-overlay { display: flex; }
+.drop-overlay-message {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    color: var(--text-primary);
+    font-size: 14px;
+    text-align: center;
+    padding: 24px;
+}
+.drop-overlay-message svg { color: var(--gold); }
+.drop-overlay-message code {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--gold);
+    background: color-mix(in srgb, var(--gold) 12%, transparent);
+    padding: 1px 6px;
+    border-radius: 3px;
+}
+
 .editor-actions {
     display: flex;
     align-items: center;
@@ -1559,6 +1597,7 @@ body.split-dragging * {
     .editor-actions > #format-btn,
     .editor-actions > #share-btn,
     .editor-actions > #download-btn,
+    .editor-actions > #open-btn,
     .editor-actions > #examples-select { display: none; }
     .more-wrap { display: inline-flex; }
 }

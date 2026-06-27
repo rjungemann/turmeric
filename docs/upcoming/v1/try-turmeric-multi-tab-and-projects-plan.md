@@ -1,8 +1,8 @@
 ## Try Turmeric: Multi-tab UI, Project Zip Download, and Zip Load
 
-> **Status:** Phase 1 fully landed. Phase 2 (download project as zip)
-> landed. Phase 1.5 (cross-tab `load` bridge via concatenation) and
-> Phase 3 (load-from-zip) not started.
+> **Status:** Phases 1, 2, and 3 landed. Phase 1.5 (cross-tab `load`
+> bridge via concatenation) is the only remaining piece of the
+> original plan.
 > **Type:** Web platform / Try Turmeric
 > **Predecessor:** [`docs/archive/try-turmeric-pwa-mobile-plan.md`](../../archive/try-turmeric-pwa-mobile-plan.md)
 
@@ -328,6 +328,20 @@ unchanged. This keeps the feature available offline (PWA standalone
 mode) and avoids any privacy footgun -- user code never leaves the tab.
 
 ## 4. Load project from zip
+
+**Landed.** `web/main.js` has a matching store-only ZIP reader
+(`readStoreZip()`, EOCD-scan + CD walk; method != 0 throws),
+`parseProjectZip()` for `{ tabs, activeId }` shaping (workspace.json
+honored when present; missing/no-workspace falls back to main.tur or
+alphabetical first), `applyProjectLoad()` for the actual replace
+(disposes outgoing Monaco models, swaps in the new tab set, persists),
+and `loadProjectFromBytes()` for the user-confirm gate + size guard
+(5 MB user-facing limit; 50 MB parse safety belt). The drop overlay
+sits inside `.editor-wrapper` and is gated by `.editor-pane.drag-over`
+so it never interferes with editor input. Coverage in
+`web/tests/mobile.load.spec.js` (6 tests): round-trip, workspace.json
+activeId restoration, non-zip rejection, all-empty-src rejection,
+oversized-zip rejection, and the file-input change end-to-end.
 
 ### 4.1 Trigger
 
