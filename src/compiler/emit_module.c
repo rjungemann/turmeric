@@ -2660,9 +2660,17 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         bool recovered_byvalue =
             (recovered.kind == TY_STRUCT && recovered.as.struct_.def &&
              !type_uses_carrier_abi(recovered)) ||
-            ((recovered.kind == TY_APP || recovered.kind == TY_STRUCT) &&
+            /* CONV-S1 seam 4: under the defstruct-as-defadt lowering a by-value
+             * record result is a TY_ADT (`tur_adt_Pos`), not a TY_STRUCT -- the
+             * struct->ADT flip is the only change from the default path, where this
+             * recovery already fires for the TY_STRUCT form.  Accept a non-:heap
+             * concrete by-value ADT (and ADT-app) too so a return-only-poly
+             * templated inline-C helper (`dense-get [A] : A`) is specialized per
+             * element type instead of staying on the lossy int64 carrier base. */
+            ((recovered.kind == TY_APP || recovered.kind == TY_STRUCT ||
+              recovered.kind == TY_ADT) &&
              type_has_concrete_codegen_layout(&recovered) &&
-             !type_is_heap_struct(recovered) &&
+             !type_is_heap_struct(recovered) && !type_is_heap_adt(recovered) &&
              rec_c && strcmp(rec_c, "int64_t") != 0);
         if (recovered_byvalue) {
             result_type = recovered;

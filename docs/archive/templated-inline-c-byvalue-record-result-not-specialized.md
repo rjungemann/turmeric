@@ -1,5 +1,16 @@
 # Templated inline-C return-only-poly helper not specialized for a by-value RECORD result under lowering
 
+**RESOLVED (2026-06-27).**  The fix landed exactly where the diagnosis pointed:
+`emit_abi_register_call`'s return-only-poly recovery (`recovered_byvalue`,
+emit_module.c) accepted a `TY_STRUCT`/`TY_APP` by-value result but not a lowered
+`TY_ADT` record, so the helper stayed on the int64 carrier base.  Extending the
+gate to a non-:heap concrete by-value `TY_ADT` un-collapses the result, sets
+`abi_changes`, and interns the per-element spec (with the `__TUR_TY_A__`-
+substituted body).  Cleared `typeclass-assoc-type-method-return`,
+`generic-inline-c-struct-through-unsafe`, and
+`typeclass-assoc-type-parametric-struct-element`; default suite 1863/0.
+Original report below.
+
 **Severity:** medium (seam-4 / defstruct-as-defadt graduation blocker; not a
 default-path bug). 2 fixtures.
 
