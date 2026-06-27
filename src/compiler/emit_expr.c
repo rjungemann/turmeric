@@ -5742,6 +5742,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * declared full_type, and remember the receiver is by-value so the
                  * read goes directly off the aggregate (below). */
                 Type recv_spec_ty = {0};
+                bool have_recv_spec = false;
                 bool recv_spec_byval_adt = false;
                 {
                     const Expr *rv0 = e->as.get_field_.struct_expr;
@@ -5750,9 +5751,13 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (rv0 && rv0->kind == EX_VAR &&
                         emit_var_spec_arg_type(ctx, rv0, &recv_spec_ty) &&
                         recv_spec_ty.kind == TY_APP &&
-                        type_app_is_concrete_adt(&recv_spec_ty) &&
-                        !type_is_heap_adt(recv_spec_ty)) {
-                        recv_spec_byval_adt = true;
+                        type_app_is_concrete_adt(&recv_spec_ty)) {
+                        have_recv_spec = true;
+                        /* by-value (non-heap) receiver reads its field directly off
+                         * the aggregate; a :heap receiver derefs the monomorph
+                         * pointer (heap_adt_recv path below) -- both need the
+                         * recovered concrete element field type. */
+                        recv_spec_byval_adt = !type_is_heap_adt(recv_spec_ty);
                         const char *frc0 = emit_type_c_name(ctx, fld_rty);
                         if (ctor && e->as.get_field_.field_idx < ctor->n_fields &&
                             frc0 && strcmp(frc0, "int64_t") == 0) {
@@ -5763,7 +5768,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                 rcf->full_type->kind == TY_TYVAR &&
                                 type_extract_adt_app(&recv_spec_ty, &rad, raargs,
                                                      &ran) && rad) {
-                                Type sub = substitute_adt_app_type(
+                                Type sub = substitute_adt_app_type_owned(
                                     rcf->full_type, rad, raargs);
                                 if (sub.kind != TY_TYVAR &&
                                     sub.kind != TY_UNKNOWN) {
@@ -5834,8 +5839,16 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 const char *heap_recv_cn = NULL;
                 bool heap_adt_recv = false;
                 if (type_is_heap_adt(e->as.get_field_.struct_expr->type)) {
-                    Type heap_recv_rt = emit_resolve_type(ctx,
-                        e->as.get_field_.struct_expr->type);
+                    /* Prefer the spec-recovered concrete receiver app (`(Cons
+                     * float)` -> `tur_adt_Cons__float *`) so a constrained
+                     * instance spec reads its :heap field off the right monomorph
+                     * rather than the element-erased generic `tur_adt_Cons *`
+                     * (whose `_0` is int64). */
+                    Type heap_recv_rt = (have_recv_spec &&
+                                         type_is_heap_adt(recv_spec_ty))
+                        ? recv_spec_ty
+                        : emit_resolve_type(ctx,
+                              e->as.get_field_.struct_expr->type);
                     if (type_is_heap_adt(heap_recv_rt)) {
                         heap_recv_cn = emit_type_c_name(ctx, heap_recv_rt);
                         heap_adt_recv = heap_recv_cn &&
@@ -5933,17 +5946,25 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * the heap pointer to the MONOMORPH cell type and read the
                      * field at its real C type.  An aggregate field is stored
                      * inline (read directly, no cast -- a cast-to-aggregate is
-                     * invalid C); a scalar/pointer field keeps the cty cast. */
+                     * invalid C); a scalar/pointer field casts to the SPEC-
+                     * RECOVERED element type (fld_rcty -- `double`/`const char *`)
+                     * when the erased carrier `cty` is int64, so a float/cstr
+                     * element is not value-truncated or pointer-mangled through an
+                     * int64 cast. */
                     bool fld_aggregate =
                         (fld_rty.kind == TY_APP || fld_rty.kind == TY_STRUCT ||
                          fld_rty.kind == TY_ADT) &&
                         !type_is_heap_struct(fld_rty) && !type_is_heap_adt(fld_rty);
+                    const char *heap_fld_cast =
+                        (fld_rcty && strcmp(fld_rcty, "int64_t") != 0 &&
+                         cty && strcmp(cty, "int64_t") == 0)
+                            ? fld_rcty : cty;
                     if (fld_aggregate)
                         buf_printf(&hb, "((%s)(intptr_t)(%s))->%s",
                                    heap_recv_cn, sv, mp);
                     else
                         buf_printf(&hb, "(%s)((%s)(intptr_t)(%s))->%s",
-                                   cty, heap_recv_cn, sv, mp);
+                                   heap_fld_cast, heap_recv_cn, sv, mp);
                 } else if (field_byval_unbox) {
                     /* deref-unbox the carrier-stored B4 box pointer to the spec's
                      * concrete by-value aggregate (accessor-unbox, above). */
