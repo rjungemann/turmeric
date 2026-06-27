@@ -1,0 +1,4 @@
+# Build artifacts from build-app-icon.sh.
+Turmeric.app/
+turmeric.icns
+turmeric.iconset/

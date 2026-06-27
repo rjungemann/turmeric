@@ -75,6 +75,32 @@ Switch via Lite XL's command palette: `Core: Change Color Theme`. The
 sync between the Monaco palette and the Lua port is gated by
 `python3 tests/lite-xl/check-palette-sync.py`.
 
+## Branded macOS bundle (temporary)
+
+On the first `tur run lite-xl` macOS launch, `launch.sh` builds a sibling
+`tools/lite-xl/Turmeric.app/` that wears the Turmeric logo from
+`web/public/logo-icon.svg`:
+
+- `Resources/turmeric.icns` is rasterized at 16/32/64/128/256/512/1024 px
+  (ImageMagick + `iconutil`) and centered on a square transparent canvas.
+- The `lite-xl` binary is **copied** from `/Applications/Lite XL.app`
+  (~3 MB) rather than symlinked -- macOS resolves binary symlinks and
+  would otherwise report the upstream bundle to LaunchServices, defeating
+  the icon swap.
+- Everything else under `Resources/` is symlinked into the upstream
+  bundle, so plugin/data updates from a Lite XL upgrade are picked up
+  automatically.
+- The bundle is gitignored as a build artifact.
+
+Rebuild manually with `bash tools/lite-xl/build-app-icon.sh`. Skip the
+auto-build with `TUR_SKIP_BRAND=1 tur run lite-xl`. Requires
+`brew install imagemagick`.
+
+The branded bundle is a temporary "look, our icon in the dock!"
+affordance ahead of the Phase 5 distribution, which will publish a real
+`Turmeric Studio.app` from upstream Lite XL sources with proper signing
+and notarization.
+
 ## Configuration
 
 Override any of these in `~/.config/lite-xl/init.lua`:

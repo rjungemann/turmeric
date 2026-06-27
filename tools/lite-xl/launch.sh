@@ -76,11 +76,34 @@ done
 # NSApplication bootstrap and stays alive after we return. Direct-execing
 # the bundle's Mach-O works in some shells but quits silently in others
 # (no controlling terminal, GUI activation race).
-if [ "$(uname -s)" = "Darwin" ] && [ -d "/Applications/Lite XL.app" ] && [ -z "${TUR_LITE_XL:-}" ]; then
-    echo "lite-xl: open -a 'Lite XL' with tur=$ROOT/build/tur"
-    # `open --args` forwards everything after it to the app's argv. If
-    # there are no extra args the trailing `--args` is harmless.
-    exec open -a "Lite XL" --args ${abs_args[@]+"${abs_args[@]}"}
+if [ "$(uname -s)" = "Darwin" ] && [ -z "${TUR_LITE_XL:-}" ]; then
+    # Prefer the rebranded sibling bundle (Turmeric.app) if it has been
+    # built; the dock then shows the Turmeric icon instead of generic
+    # Lite XL. The sibling bundle is just symlinks back into the user's
+    # stock /Applications/Lite XL.app with a custom Info.plist + icon,
+    # so it stays in lock-step with upstream Lite XL automatically.
+    # Auto-build the branded sibling on first run (cheap; only runs once
+    # unless build-app-icon.sh is re-invoked). Skip via TUR_SKIP_BRAND=1.
+    if [ -z "${TUR_SKIP_BRAND:-}" ] \
+        && [ ! -d "$ROOT/tools/lite-xl/Turmeric.app" ] \
+        && [ -d "/Applications/Lite XL.app" ] \
+        && command -v magick >/dev/null 2>&1 \
+        && command -v iconutil >/dev/null 2>&1; then
+        echo "lite-xl: building branded Turmeric.app (one-time)"
+        bash "$ROOT/tools/lite-xl/build-app-icon.sh" >&2 || true
+    fi
+    LAUNCH_APP=""
+    if [ -d "$ROOT/tools/lite-xl/Turmeric.app" ]; then
+        LAUNCH_APP="$ROOT/tools/lite-xl/Turmeric.app"
+    elif [ -d "/Applications/Lite XL.app" ]; then
+        LAUNCH_APP="/Applications/Lite XL.app"
+    fi
+    if [ -n "$LAUNCH_APP" ]; then
+        echo "lite-xl: open -a '$LAUNCH_APP' with tur=$ROOT/build/tur"
+        # `open --args` forwards everything after it to the app's argv.
+        # If there are no extra args the trailing `--args` is harmless.
+        exec open -a "$LAUNCH_APP" --args ${abs_args[@]+"${abs_args[@]}"}
+    fi
 fi
 
 LITE_BIN="${TUR_LITE_XL:-}"
