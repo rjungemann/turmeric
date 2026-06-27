@@ -371,6 +371,10 @@ function renderTabs() {
             btn.appendChild(x);
         }
         btn.addEventListener('click', () => {
+            if (btn.dataset.suppressClick === '1') {
+                delete btn.dataset.suppressClick;
+                return;
+            }
             switchTab(tab.id);
             requestAnimationFrame(() => btn.scrollIntoView({ inline: 'nearest', block: 'nearest' }));
         });
@@ -378,6 +382,7 @@ function renderTabs() {
             e.preventDefault();
             beginRename(tab.id, btn, label);
         });
+        setupTabDrag(btn, tab);
         strip.appendChild(btn);
     }
     const newBtn = document.createElement('button');
@@ -387,6 +392,113 @@ function renderTabs() {
     newBtn.title = 'New tab';
     newBtn.addEventListener('click', () => createTab());
     strip.appendChild(newBtn);
+}
+
+// Pointer-driven horizontal reorder. Mirrors the 6px-threshold + pointer-
+// capture pattern from initHScrollDrag(); during a drag we don't mutate
+// tabs[] (renderTabs() would tear down the captured element), we just paint
+// a drop indicator on the target neighbor and commit on release.
+function setupTabDrag(btn, tab) {
+    let pointerId = null;
+    let startX = 0;
+    let dragging = false;
+    let dropBefore = null;  // tab id where dragging tab will land, or null = end
+
+    const clearDropMarkers = () => {
+        const strip = btn.parentNode;
+        if (!strip) return;
+        for (const el of strip.querySelectorAll('.tab-button')) {
+            delete el.dataset.dropBefore;
+        }
+    };
+
+    const computeDropTarget = (clientX) => {
+        const strip = btn.parentNode;
+        if (!strip) return null;
+        for (const el of strip.querySelectorAll('.tab-button[data-tab-id]')) {
+            if (el === btn) continue;
+            const rect = el.getBoundingClientRect();
+            if (clientX < rect.left + rect.width / 2) {
+                return el.dataset.tabId;
+            }
+        }
+        return null;  // past the last tab → drop at end
+    };
+
+    btn.addEventListener('pointerdown', (e) => {
+        // Don't start a drag on the × close or on a rename input.
+        if (e.target.closest('.tab-close, .tab-rename')) return;
+        if (e.button !== 0) return;
+        pointerId = e.pointerId;
+        startX = e.clientX;
+        dragging = false;
+        dropBefore = null;
+    });
+
+    btn.addEventListener('pointermove', (e) => {
+        if (pointerId !== e.pointerId) return;
+        const dx = e.clientX - startX;
+        if (!dragging && Math.abs(dx) > 6) {
+            dragging = true;
+            btn.dataset.dragging = '1';
+            try { btn.setPointerCapture(pointerId); } catch {}
+        }
+        if (!dragging) return;
+        e.preventDefault();
+        const target = computeDropTarget(e.clientX);
+        if (target !== dropBefore) {
+            clearDropMarkers();
+            dropBefore = target;
+            if (target) {
+                const el = btn.parentNode.querySelector(`.tab-button[data-tab-id="${target}"]`);
+                if (el) el.dataset.dropBefore = '1';
+            } else {
+                // "drop at end" — mark the trailing + New button so the user
+                // sees a consistent visual cue.
+                const newBtn = btn.parentNode.querySelector('.tab-new');
+                if (newBtn) newBtn.dataset.dropBefore = '1';
+            }
+        }
+    });
+
+    const endDrag = (e) => {
+        if (pointerId !== e.pointerId) return;
+        try { btn.releasePointerCapture(pointerId); } catch {}
+        pointerId = null;
+        if (!dragging) return;
+        dragging = false;
+        delete btn.dataset.dragging;
+        clearDropMarkers();
+        btn.dataset.suppressClick = '1';  // consumed by the click listener
+        // Commit the reorder.
+        const fromIdx = tabs.findIndex(t => t.id === tab.id);
+        if (fromIdx < 0) return;
+        let toIdx = dropBefore == null
+            ? tabs.length
+            : tabs.findIndex(t => t.id === dropBefore);
+        if (toIdx < 0) toIdx = tabs.length;
+        // Remove first, then compute the insertion index in the now-shorter
+        // array so the math works whether moving left or right.
+        const [moved] = tabs.splice(fromIdx, 1);
+        if (toIdx > fromIdx) toIdx -= 1;
+        if (toIdx === fromIdx) {
+            // No actual movement -- just re-insert.
+            tabs.splice(fromIdx, 0, moved);
+            return;
+        }
+        tabs.splice(toIdx, 0, moved);
+        renderTabs();
+        persistTabs();
+    };
+    btn.addEventListener('pointerup', endDrag);
+    btn.addEventListener('pointercancel', (e) => {
+        if (pointerId !== e.pointerId) return;
+        try { btn.releasePointerCapture(pointerId); } catch {}
+        pointerId = null;
+        dragging = false;
+        delete btn.dataset.dragging;
+        clearDropMarkers();
+    });
 }
 
 function beginRename(id, btn, labelEl) {
@@ -1085,6 +1197,24 @@ async function initEditor() {
     
     // Expose editor for smoke tests
     window._turiEditor = editor;
+    // Multi-tab test surface. Read-only `tabs()` snapshot keeps tests from
+    // accidentally mutating module state.
+    window._turiTabs = {
+        tabs: () => tabsSnapshot(),
+        activeId: () => activeId,
+        create: (opts) => createTab(opts),
+        close:  (id) => closeTab(id),
+        switch: (id) => switchTab(id),
+        rename: (id, name) => renameTab(id, name),
+        reorder: (id, toIdx) => {
+            const fromIdx = tabs.findIndex(t => t.id === id);
+            if (fromIdx < 0 || toIdx < 0 || toIdx > tabs.length - 1) return;
+            const [m] = tabs.splice(fromIdx, 1);
+            tabs.splice(toIdx, 0, m);
+            renderTabs();
+            persistTabs();
+        },
+    };
 
     // Hydrate the tab set. Priority order:
     //   1. URL hash share-link (handled later in loadFromUrlHash; it overwrites

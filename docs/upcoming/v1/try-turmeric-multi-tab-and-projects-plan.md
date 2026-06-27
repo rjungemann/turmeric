@@ -1,6 +1,7 @@
 ## Try Turmeric: Multi-tab UI, Project Zip Download, and Zip Load
 
-> **Status:** Phase 1 landed (multi-tab UI + persistence + migration).
+> **Status:** Phase 1 fully landed (multi-tab UI + drag-reorder +
+> persistence + migration + Playwright specs).
 > Phase 1.5 (cross-tab `load` bridge via concatenation) and Phases 2
 > (download-as-zip) and 3 (load-from-zip) not started.
 > **Type:** Web platform / Try Turmeric
@@ -34,11 +35,15 @@ remains), double-click renames inline, and the tab set persists under
 `tur.try.tabs.v1` / `tur.try.activeTab.v1` with a one-shot migration
 from the legacy `tur.try.buffer.v1` / `cursor` / `scroll` keys.
 
-Drag-to-reorder (plan §1.3 bullet 3) is **not yet implemented but is
-now load-bearing for Phase 1.5** -- concatenation splices tabs in
-tab-strip order with the active tab last, so users need a way to
-change that order without delete-and-recreate. It moves out of "polish"
-into "prerequisite for 1.5." Playwright specs (§6) are still to land.
+Drag-to-reorder (plan §1.3 bullet 3) is implemented: pointer-capture
+with a 6px threshold to disambiguate click-vs-drag, a 2px gold
+left-border on the would-be drop target (or the trailing `+ New`
+button when dropping at the end), and a click-suppression flag so the
+release doesn't switch tabs. Was promoted from "polish" to
+"prerequisite for 1.5" because concatenation makes tab order a
+user-visible Run input. Playwright multi-tab specs are in
+`web/tests/mobile.tabs.spec.js` and `mobile.tabs-migration.spec.js`
+(9 tests, all green under the `mobile` project).
 
 ## 1. Multi-tab UI
 

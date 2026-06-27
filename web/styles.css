@@ -490,6 +490,18 @@ body.split-dragging * {
 }
 .tab-new:hover { color: var(--text-sec); }
 
+/* Drag-to-reorder feedback. The dragging tab dims slightly and shifts;
+   the drop-target neighbor gets a 2px gold left border so the
+   insertion point is unambiguous. */
+.tab-button[data-dragging="1"] {
+    opacity: 0.55;
+    background: color-mix(in srgb, var(--gold) 8%, transparent);
+    cursor: grabbing;
+}
+.tab-button[data-drop-before="1"] {
+    box-shadow: inset 2px 0 0 var(--gold);
+}
+
 .editor-actions {
     display: flex;
     align-items: center;
