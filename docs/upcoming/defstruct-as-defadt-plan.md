@@ -591,7 +591,7 @@ runtime *usage* seam, below.
      regenerated.  *Cleared ~43* (`httpd-*`, `clone-*`, `eqmap-struct`, the `Pos`
      `typeclass-*` tests).  Fixture `conv-defstruct-inline-c-abi`.
 
-   **Running total: 212 -> 33 unique build-failing fixtures under force-lower
+   **Running total: 212 -> 32 unique build-failing fixtures under force-lower
    (default suite stays 1863/0).**  (Sub-root (a) -- 0-arg construct in control
    flow -- the inline-C-tail return bridge, the accessor-unbox, the
    assignment-position straddle, the inline-C instance-method signature, the
@@ -602,8 +602,28 @@ runtime *usage* seam, below.
    (__inst_/construct) -> by-value-spec-param bridge, the wide-by-value-element
    accessor-unbox + ctor-box, the abi-spec interning recognizing a lowered
    by-value TY_ADT result, the M7-HKT transparent-int-newtype phantom
-   wrapper (`(Schema A)`), and the vec-element carrier<->by-value read/escape
-   bridges are all LANDED.)
+   wrapper (`(Schema A)`), the vec-element carrier<->by-value read/escape
+   bridges, and the bare-receiver record-ADT field-tyvar collapse are all
+   LANDED.)
+
+   - **bare-receiver record-ADT field-tyvar collapse DONE (2026-06-27).**  A
+     field read on a BARE (unparameterized) record-ADT receiver -- `(.ok-val r)`
+     where `r : Result` is used with no type args -- typed as the field's raw
+     tyvar `A` under lowering, because the dot-access ADT branch only substitutes
+     the field tyvar when the receiver is an applied `TY_APP`.  An untyped
+     consumer (`(println (.ok-val r))`) then failed overload resolution
+     (TUR-E0006 "first arg type tyvar").  The value rides the int64 carrier
+     exactly as at default, so the dot-access branch now collapses a residual
+     field tyvar to the field's carrier kind (TY_INT) -- but ONLY for the bare
+     `TY_ADT` receiver; an applied `(Tuple2 A B)` inside a generic body keeps its
+     field tyvar so the ABI spec still resolves it to a concrete by-value
+     aggregate (the accessor-unbox path, guarded by the
+     `conv-defstruct-accessor-unbox` canary).  Cleared `byval-result-field-access`.
+     The sibling `dot-parametric-fn-field-call` /
+     `make-struct-parametric-fn-field-infer` cluster (the lowered ADT ctor
+     skipping make-struct's fn-field type-param inference) is a DISTINCT root,
+     reported in
+     `docs/reported/lowered-adt-ctor-skips-fn-field-type-param-inference.md`.
 
    - **vec by-value/heap-ADT element read + escape bridges DONE (2026-06-27).**
      Reading a by-value aggregate element back out of a `Vec` -- `(:: (vec-get v

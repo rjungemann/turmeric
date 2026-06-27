@@ -5170,6 +5170,23 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                                     ftype = adt_field_instantiate_type(e, adt,
                                         ctor->fields[i].full_type, type_args);
                             }
+                            /* Bare/unparameterized receiver (`r : Result`, a
+                             * TY_ADT with no type-arg application) leaves a tyvar
+                             * field type unbound; the value rides the int64
+                             * carrier exactly as at default, so collapse the
+                             * residual tyvar to the field's carrier kind (TY_INT).
+                             * Without this `(.ok-val r)` types as a bare tyvar and
+                             * fails overload resolution in an untyped context like
+                             * `(println (.ok-val r))`.  Mirrors the struct path's
+                             * elab_struct_field_use_type, which already collapses
+                             * an unbound field tyvar.  Gated to the bare receiver:
+                             * an APPLIED receiver `(Tuple2 A B)` inside a generic
+                             * body keeps its field tyvar so the ABI spec can later
+                             * resolve it to a concrete by-value aggregate (the
+                             * accessor-unbox path). */
+                            if (ftype.kind == TY_TYVAR &&
+                                field_owner_type->kind != TY_APP)
+                                ftype = type_from_kind(ctor->fields[i].kind);
                             Expr *out = expr_new(e->arena, EX_GET_FIELD, ftype,
                                                  call->span);
                             out->as.get_field_.struct_expr = obj;
