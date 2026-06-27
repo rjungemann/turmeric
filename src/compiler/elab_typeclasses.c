@@ -5359,6 +5359,21 @@ skip_struct_field_lookup:;
                         Type field_type = ctor->fields[i].full_type
                             ? *ctor->fields[i].full_type
                             : type_from_kind(ctor->fields[i].kind);
+                        /* lowered-adt-ctor-skips-fn-field-type-param-inference:
+                         * substitute the receiver's concrete type args into the
+                         * fn-field's signature so `(.get l p)` on `l : (Lens Person
+                         * cstr)` reads `get` as `(fn [Person] cstr)` -- otherwise
+                         * the result stays the bare tyvar `A` and the call types as
+                         * a tyvar (TUR-E0006 in an untyped context).  Mirrors the
+                         * plain dot-read path's app-arg substitution above. */
+                        if (ctor->fields[i].full_type && adt->n_type_params > 0 &&
+                            base.kind == TY_APP) {
+                            Type *type_args = (Type *)arena_alloc(
+                                e->arena, adt->n_type_params * sizeof(Type));
+                            if (elab_adt_type_extract_args(&base, adt, type_args))
+                                field_type = adt_field_instantiate_type(
+                                    e, adt, ctor->fields[i].full_type, type_args);
+                        }
                         Expr *get_field = expr_new(e->arena, EX_GET_FIELD,
                                                    field_type, call->span);
                         get_field->as.get_field_.struct_expr = obj;

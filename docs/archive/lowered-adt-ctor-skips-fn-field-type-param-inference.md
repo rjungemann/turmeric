@@ -1,5 +1,37 @@
 # Lowered record-ADT constructor skips make-struct's fn-field type-param inference
 
+**RESOLVED (2026-06-27).**  `dot-parametric-fn-field-call` and
+`make-struct-parametric-fn-field-infer` build and run under the force-lower probe
+(`Bob/Alice`, `bob/alice`); default suite 1863/0.  Three coordinated fixes (the
+inference gap turned out to span the ctor inference, the fn-field-call resolution,
+AND the ADT field-type substituter):
+
+1. **`elab_make_struct` ADT short-circuit** (elab_structs.c): after delegating to
+   the auto-bound ctor call, port the struct path's fn-field type-param inference
+   -- re-elaborate the positional value forms, unify each ctor field's declared
+   `full_type` against the value's actual type via the new
+   `adt_field_collect_type_args` (the record-ADT analogue of
+   `struct_field_collect_type_args`, descending into TY_FN fields), and stamp the
+   grounded `(Lens Person cstr)` app type onto the ctor call.  Gated to a
+   parametric record ctor with at least one fn-typed field, positional form.
+
+2. **`adt_field_instantiate_type` TY_FN arm** (elab_structs.c): the ADT field-type
+   substituter handled only TY_TYVAR/TY_APP, so a `(fn [S] A)` field passed
+   through with its tyvars intact.  Added the TY_FN case (mirroring
+   `struct_field_instantiate_type`) so the fn field's arg/result slots are
+   substituted.
+
+3. **slice-6 fn-field call** (elab_typeclasses.c): the `(.get l p)` capability-
+   field-call path read the ctor field type without substituting the receiver's
+   concrete app args, so the call result stayed the bare tyvar `A`.  Added the
+   `elab_adt_type_extract_args` + `adt_field_instantiate_type` substitution
+   (mirroring the plain dot-read path) so the call types as `(fn [Person] cstr)`.
+
+The sibling `fn-field-unboxed` (a NON-parametric `Callback :copy [op (fn [int32]
+int32)]`) still segfaults under force-lower -- confirmed pre-existing (fails at
+HEAD+probe without this fix), a distinct sub-int64 fn-field-unboxing sub-root, not
+this inference gap.
+
 **Severity:** medium (seam-4 / defstruct-as-defadt graduation blocker; not a
 default-path bug). 3 fixtures.
 
