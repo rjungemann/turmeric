@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Turmeric Studio
+GenericName=Code Editor
+Comment=A lightweight code editor for Turmeric
+Exec=turmeric-studio %F
+Icon=turmeric-studio
+Terminal=false
+Categories=Development;IDE;TextEditor;
+MimeType=text/plain;text/x-turmeric;
+Keywords=text;editor;turmeric;programming;lisp;
+StartupWMClass=lite-xl

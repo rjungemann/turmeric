@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>lite-xl</string>
+    <key>CFBundleIconFile</key>
+    <string>turmeric.icns</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.turmeric.studio</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Turmeric Studio</string>
+    <key>CFBundleDisplayName</key>
+    <string>Turmeric Studio</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>@TURMERIC_VERSION@</string>
+    <key>CFBundleVersion</key>
+    <string>@TURMERIC_VERSION@</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSRequiresAquaSystemAppearance</key>
+    <false/>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Turmeric Source</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array><string>public.plain-text</string></array>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>tur</string>
+                <string>tur.sweet</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

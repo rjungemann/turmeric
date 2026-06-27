@@ -104,3 +104,8 @@ tests/fixtures/*/*/turi.stderr
 
 # Claude Code agent worktrees (transient, harness-managed)
 .claude/worktrees/
+
+# Lite XL distribution: vendored upstream + bundle build artifacts
+vendor/lite-xl/
+tools/lite-xl/dist-out/
+dist-out/

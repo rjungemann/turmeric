@@ -76,6 +76,25 @@ Switch via Lite XL's command palette: `Core: Change Color Theme`. The
 sync between the Monaco palette and the Lua port is gated by
 `python3 tests/lite-xl/check-palette-sync.py`.
 
+## Plugin-only install (`install.sh`)
+
+If you already have stock Lite XL and just want the Turmeric plugin:
+
+```sh
+bash tools/lite-xl/install.sh             # symlink (tracks repo updates)
+bash tools/lite-xl/install.sh --copy      # standalone copy
+LITE_XL_CONFIG=/custom/path bash tools/lite-xl/install.sh
+```
+
+## Turmeric Studio distribution (Phase 5)
+
+Scripts to produce a rebranded `Turmeric Studio.app` (macOS DMG) and
+`TurmericStudio.AppImage` (Linux) live in
+[`dist/`](dist/README.md). The bundle does not ship the `tur`
+compiler; it expects `tur` on PATH. Signing + notarization are opt-in
+via `TURMERIC_SIGN_IDENTITY` / `TURMERIC_NOTARY_PROFILE`. Windows
+distribution is tracked in a separate plan.
+
 ## Branded macOS bundle (temporary)
 
 On the first `tur run lite-xl` macOS launch, `launch.sh` builds a sibling
