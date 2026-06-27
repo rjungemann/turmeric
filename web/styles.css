@@ -384,13 +384,22 @@ body.split-dragging * {
 }
 
 .editor-header {
-    height: 36px;
     display: flex;
-    align-items: stretch;
+    flex-direction: column-reverse;
     background: var(--bg-panel);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
+}
+/* Each row scrolls horizontally on its own. Tabs left-aligned, actions
+   right-aligned. */
+.editor-tabs,
+.editor-actions {
+    height: 36px;
+    min-height: 36px;
+    display: flex;
+    align-items: stretch;
     flex-wrap: nowrap;
+    flex-shrink: 0;
     overflow-x: auto;
     overflow-y: hidden;
     scroll-snap-type: x proximity;
@@ -398,15 +407,24 @@ body.split-dragging * {
     overscroll-behavior-x: contain;
     -webkit-overflow-scrolling: touch;
 }
-.editor-header::-webkit-scrollbar { display: none; }
-.editor-tabs,
-.editor-actions { flex-shrink: 0; }
-.editor-header.has-overflow {
+.editor-actions {
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+    gap: 4px;
+    padding: 0 8px;
+    justify-content: flex-end;
+}
+.editor-tabs::-webkit-scrollbar,
+.editor-actions::-webkit-scrollbar { display: none; }
+.editor-tabs.has-overflow,
+.editor-actions.has-overflow {
     mask-image: linear-gradient(to right, transparent 0, black 16px, black calc(100% - 16px), transparent 100%);
     -webkit-mask-image: linear-gradient(to right, transparent 0, black 16px, black calc(100% - 16px), transparent 100%);
 }
-.editor-header[data-dragging="1"] { cursor: grabbing; }
-.editor-header[data-dragging="1"] * { pointer-events: none; }
+.editor-tabs[data-dragging="1"],
+.editor-actions[data-dragging="1"] { cursor: grabbing; }
+.editor-tabs[data-dragging="1"] *,
+.editor-actions[data-dragging="1"] * { pointer-events: none; }
 
 .tutorial-bar {
     display: flex;
@@ -430,12 +448,6 @@ body.split-dragging * {
 .tutorial-bar-desc {
     color: var(--text-sec);
     flex: 1;
-}
-
-.editor-tabs {
-    display: flex;
-    height: 100%;
-    flex-shrink: 0;
 }
 
 .tab-button {
@@ -553,15 +565,6 @@ body.split-dragging * {
     background: color-mix(in srgb, var(--gold) 12%, transparent);
     padding: 1px 6px;
     border-radius: 3px;
-}
-
-.editor-actions {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    margin-left: auto;
-    padding: 0 8px;
-    flex-shrink: 0;
 }
 
 .editor-wrapper {
@@ -1526,7 +1529,6 @@ body.split-dragging * {
     /* Footer would otherwise consume scarce vertical space. */
     .footer { display: none; }
 
-    .editor-actions { margin-left: 0; }
 }
 
 @media (max-width: 1024px) and (display-mode: standalone) {

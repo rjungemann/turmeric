@@ -2087,7 +2087,11 @@ function initEventListeners() {
 }
 
 function initHScrollDrag() {
-    const el = document.querySelector('.editor-header');
+    const rows = document.querySelectorAll('.editor-tabs, .editor-actions');
+    rows.forEach(initHScrollDragRow);
+}
+
+function initHScrollDragRow(el) {
     if (!el) return;
 
     const updateOverflow = () => {
