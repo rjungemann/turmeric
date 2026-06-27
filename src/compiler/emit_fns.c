@@ -1550,6 +1550,31 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * (double-box).  The non-parametric mirror is the `type_is_heap_adt`
              * arm in `type_uses_carrier_abi` / the heap-struct return cast above. */
             buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
+        } else if (ret_is_int64_carrier && fd->body &&
+                   fd->body->type.kind != TY_NEVER &&
+                   e->type.kind == TY_FN &&
+                   e->type.as.fn.result_kind == TY_TYVAR &&
+                   (emit_resolve_type(ctx, fd->body->type).kind == TY_FLOAT ||
+                    emit_resolve_type(ctx, fd->body->type).kind == TY_FLOAT32 ||
+                    emit_resolve_type(ctx, fd->body->type).kind == TY_FLOAT64)) {
+            /* nested-construct-byvalue (Gap #4, float element): a generic
+             * accessor (`ok-val`) whose DECLARED result is a bare tyvar (`: A`)
+             * collapses to the int64 carrier return, but inside a `(Result float
+             * cstr)` spec its body tail is a concrete `double` field read.  A plain
+             * `return <double>;` through an `int64_t` result NUMERICALLY converts
+             * (3.25 -> 3), and the caller's union reinterpret then reads garbage.
+             * Bit-reinterpret the float into the int64 carrier so the carried
+             * value round-trips (the cstr/pointer element is already bit-
+             * preserving through the implicit pointer->int64 return cast).  Gated
+             * on a TYVAR-declared result so a genuine `: float` function carried
+             * through the int64 poly-fn slot (poly-to-fat-float-*) -- which uses a
+             * NUMERIC convention -- is untouched. */
+            Type body_rt = emit_resolve_type(ctx, fd->body->type);
+            char *bridged = emit_carrier_bridge(ctx, file, strdup(ret_val),
+                                                CK_CONCRETE, CK_CARRIER, body_rt);
+            indent_buf(file, ctx->indent);
+            buf_printf(file, "return %s;\n", bridged);
+            free(bridged);
         } else {
             buf_printf(file, "return %s;\n", ret_val);
         }

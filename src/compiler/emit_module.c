@@ -1603,6 +1603,33 @@ static bool emit_abi_call_is_generic_relay(const EmitCtx *ctx, const Expr *call,
     return fe && emit_abi_fn_is_generic_unsafe(fe);
 }
 
+/* True when `t` mentions (anywhere in its app spine) a tyvar whose name is bound
+ * in `bindings` TO A CONCRETE TYPE.  Used to detect a return-dispatch call whose
+ * result type embeds a bound constraint var that has been resolved to a real
+ * element (`A -> cstr`).  Requiring a concrete binding keeps a still-generic
+ * dispatch (`build`'s own `(dec i)` where `A` is build's unbound type param)
+ * from minting a premature per-element spec -- only a pinned dispatch
+ * (nested-construct's `(dec X)` ascribed to a concrete `(Result (Option cstr)
+ * cstr)`) qualifies. */
+static bool type_mentions_bound_tyvar(const Type *t,
+        const AbiTypeBinding *bindings, uint8_t n_bindings) {
+    if (!t) return false;
+    if (t->kind == TY_TYVAR && t->as.tyvar_.name) {
+        for (uint8_t i = 0; i < n_bindings; i++)
+            if (bindings[i].name &&
+                strcmp(bindings[i].name, t->as.tyvar_.name) == 0 &&
+                bindings[i].type.kind != TY_TYVAR &&
+                bindings[i].type.kind != TY_UNKNOWN &&
+                type_has_concrete_codegen_layout(&bindings[i].type))
+                return true;
+        return false;
+    }
+    if (t->kind == TY_APP)
+        return type_mentions_bound_tyvar(t->as.app.fn, bindings, n_bindings) ||
+               type_mentions_bound_tyvar(t->as.app.arg, bindings, n_bindings);
+    return false;
+}
+
 /* GDE1: scan an expression subtree for a typeclass-method dispatch call where
  * the receiver is a TY_TYVAR bound to a TY_APP type in `bindings`.  Returns
  * true when any such call is found.  This detects the case where the C ABI is
@@ -1610,11 +1637,30 @@ static bool emit_abi_call_is_generic_relay(const EmitCtx *ctx, const Expr *call,
  * dispatched through the dict must still be re-resolved after monomorphization
  * (e.g. an eq? call on a Map[cstr int] argument -- same ABI as int, but needs
  * __inst_Eq_eq__Map not __inst_Eq_eq__int). */
+/* Set by emit_abi_register_call's instance_changes computation: the
+ * return-dispatch detection below (an inner `(:: (dec tag) (Result A cstr))`
+ * re-dispatching on a bound constraint var) must fire ONLY while scanning the
+ * body of an enclosing typeclass-INSTANCE-method spec.  In a plain constrained
+ * `defn` body (`build`'s `(dec i)`, whose result is consumed as the int64
+ * carrier) minting a per-element instance spec reroutes the call onto a by-value
+ * redirect spec the carrier caller cannot consume -- a regression.  Single
+ * compile thread, so a file-scope toggle is safe. */
+static bool g_bhd_detect_return_dispatch = false;
+
 static bool body_has_dispatch_on_app_tyvar(
         const Expr *e,
         const AbiTypeBinding *bindings, uint8_t n_bindings) {
     if (!e) return false;
     if (e->kind == EX_CALL && e->as.call_.dict_arg && e->as.call_.n_args >= 1) {
+        /* nested-construct/constrained-instance: a RETURN-dispatched inner method
+         * call (`(:: (dec tag) (Result A cstr))`) re-dispatches to the per-A
+         * instance inside the spec, so a per-A spec must be minted even though the
+         * receiver (`tag`) is concrete and the C ABI (carrier) is unchanged.
+         * Trigger when the call's result type embeds a bound constraint var --
+         * but only inside an instance-method spec (see g_bhd_detect_return_dispatch). */
+        if (g_bhd_detect_return_dispatch &&
+            type_mentions_bound_tyvar(&e->type, bindings, n_bindings))
+            return true;
         const Expr *recv = e->as.call_.args[0];
         while (recv && recv->kind == EX_ASCRIBE)
             recv = recv->as.ascribe_.inner;
@@ -2617,6 +2663,79 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     Type generic_result = fn_binding->type.as.fn.result_full_type
         ? *fn_binding->type.as.fn.result_full_type
         : emit_type_from_kind(fn_binding->type.as.fn.result_kind);
+
+    /* nested-construct-byvalue (Gap #4): a CARRIER-result construct template
+     * scanned inside a constrained instance-method spec -- the outer `(ok ...)`
+     * of `(definstance Dec [Option] [(Dec A)] (dec [tag] (ok (some ...))))`,
+     * whose result `(Result (Option A) cstr)` rides the int64 carrier so none of
+     * the by-value result-recovery below fires.  Its payload arg binding
+     * collapsed `A` to the int64-carrier representative at elab (`Option__int`),
+     * and composition cannot un-collapse it (the type has no surviving tyvar).
+     * Recover each payload arg type top-down from the active spec's METHOD
+     * result family: instantiate the method's declared result (`(Result a cstr)`)
+     * through the spec bindings (`a -> Option__cstr`) to get the concrete result
+     * `(Result Option__cstr cstr)`, unify the construct's OWN generic result
+     * against it to bind the construct's tyvars (`A -> Option__cstr`), and
+     * re-instantiate each payload slot -- so `ok`'s arg becomes `Option__cstr`,
+     * not the carrier `Option__int`.  Emit-side, arg-types only: it does not flip
+     * the carrier result to by-value, just fixes the payload monomorph the spec
+     * is interned with. */
+    if (!borrow_path && fd && fd->binding && fd->binding->is_construct_template &&
+        ctx->current_abi_specialization &&
+        ctx->current_abi_specialization->binding &&
+        ctx->current_abi_specialization->fn &&
+        ctx->current_abi_specialization->fn->owner_instance &&
+        ctx->current_abi_specialization->n_bindings > 0 &&
+        generic_result.kind == TY_APP) {
+        const EmitAbiSpecialization *aspec = ctx->current_abi_specialization;
+        const Type *m_res = (aspec->binding->type.kind == TY_FN)
+            ? aspec->binding->type.as.fn.result_full_type : NULL;
+        if (m_res && m_res->kind == TY_APP) {
+            Type concrete_mres = emit_abi_instantiate_type(
+                m_res, aspec->bindings, aspec->n_bindings, ctx->type_arena);
+            /* family-match guard: the construct must build the same head family
+             * the method returns (both `Result`), so its tyvars map positionally. */
+            Type gh = generic_result, ch = concrete_mres;
+            while (gh.kind == TY_APP && gh.as.app.fn) gh = *gh.as.app.fn;
+            while (ch.kind == TY_APP && ch.as.app.fn) ch = *ch.as.app.fn;
+            bool same_family =
+                (gh.kind == TY_ADT && ch.kind == TY_ADT && gh.as.adt_.def &&
+                 gh.as.adt_.def == ch.as.adt_.def) ||
+                (gh.kind == TY_STRUCT && ch.kind == TY_STRUCT && gh.as.struct_.def &&
+                 gh.as.struct_.def == ch.as.struct_.def);
+            if (same_family && concrete_mres.kind == TY_APP &&
+                !emit_abi_type_has_concrete_named_tyvar(&concrete_mres)) {
+                AbiTypeBinding ub[ABI_TYPE_BINDINGS_MAX]; uint8_t un = 0;
+                emit_abi_unify_collect(&generic_result, &concrete_mres, ub, &un,
+                                       ABI_TYPE_BINDINGS_MAX);
+                if (un > 0) {
+                    for (uint8_t i = 0; i < n_spec_args; i++) {
+                        const Type *ef = (fn_binding->type.as.fn.arg_full_types &&
+                                          fn_binding->type.as.fn.arg_full_types[i])
+                            ? fn_binding->type.as.fn.arg_full_types[i]
+                            : (i < fd->n_params ? &fd->params[i]->type : NULL);
+                        if (!ef) continue;
+                        Type a = emit_abi_instantiate_type(ef, ub, un,
+                                                           ctx->type_arena);
+                        if (a.kind != TY_TYVAR && a.kind != TY_UNKNOWN &&
+                            !emit_abi_type_has_concrete_named_tyvar(&a)) {
+                            /* Correct the payload arg type ONLY -- do NOT force an
+                             * ABI change.  A spec is minted for this construct only
+                             * when some OTHER signal already flipped abi_changes
+                             * (e.g. the payload arg already differs from the carrier,
+                             * as in nested-construct's `Option__int`).  Forcing
+                             * abi_changes here over-mints by-value specs on the
+                             * default carrier path (constrained-loop regressed: a
+                             * carrier-consistent `(dec i)` got rerouted to a
+                             * by-value redirect spec it must not use). */
+                            arg_types[i] = a;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Type result_type = result_type_override ? *result_type_override : call->type;
     /* Variant 2: inside an active specialization, `call->type` is still expressed
      * in the enclosing generic's tyvars (e.g. `(Pair T ptr<void>)`); instantiate
@@ -2740,7 +2859,17 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * the call never reaches the correct HKT instance (__inst_Eq_eq__Map). */
     bool instance_changes = false;
     if (!abi_changes && !borrow_path && fd && fd->body) {
+        /* Fire the return-dispatch per-element minting at top level (current ==
+         * NULL: nested-construct's `(dec X)` in `main`) and inside instance-method
+         * spec bodies, but NOT inside a plain constrained-`defn` spec.  `build`'s
+         * `(dec i)` consumes its result as the int64 carrier, so minting a by-value
+         * redirect dec spec there reroutes onto a return it cannot consume. */
+        const EmitAbiSpecialization *cur_spec = ctx->current_abi_specialization;
+        bool saved_detect = g_bhd_detect_return_dispatch;
+        g_bhd_detect_return_dispatch =
+            !cur_spec || (cur_spec->fn && cur_spec->fn->owner_instance);
         instance_changes = body_has_dispatch_on_app_tyvar(fd->body, bindings, n_bindings);
+        g_bhd_detect_return_dispatch = saved_detect;
     }
     /* poly-closure-result-specialization (Stage B+C): when the callee returns a
      * lifted inner closure whose result/arg tyvar resolves to a float, the inner

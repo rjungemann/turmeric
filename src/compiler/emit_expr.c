@@ -3373,7 +3373,18 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * (slice 4) takes the aggregate directly, so it skips the box. */
                     if (!suffix && !field_inline && arg &&
                         emit_type_is_byvalue_adt(ctx, arg->type)) {
-                        const char *cn = type_c_name(emit_resolve_type(ctx, arg->type));
+                        /* nested-construct-byvalue (Gap #4): when this construct is
+                         * a spec body (`ok__spec__..._Option__cstr`) the boxed arg
+                         * is the spec's param `x`, whose static type collapsed the
+                         * element to the carrier representative (`Option__int`).
+                         * Box at the spec's concrete arg type (`Option__cstr`) so
+                         * the heap copy width and the `*tmp = (x)` assignment agree
+                         * with the param's C type. */
+                        Type box_ty = arg->type;
+                        Type spec_ty;
+                        if (emit_var_spec_arg_type(ctx, arg, &spec_ty))
+                            box_ty = spec_ty;
+                        const char *cn = type_c_name(emit_resolve_type(ctx, box_ty));
                         char *tmp = fresh_tmp(ctx);
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "%s *%s = (%s *)malloc(sizeof(%s));\n",
@@ -3854,10 +3865,35 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (spec_cname && strcmp(spec_cname, "int64_t") == 0)
                         spec_lowers_to_int64 = true;
                 }
+                /* nested-construct-byvalue (Gap #4): when the argument is a call
+                 * whose OWN matched ABI spec already returns the concrete by-value
+                 * aggregate (`ok_val__spec__tur_adt_Box_...` returns a `tur_adt_Box`
+                 * by value, not the int64 carrier), the value is ALREADY concrete --
+                 * applying the carrier->concrete deref-unbox on top double-unboxes
+                 * (`*(tur_adt_Box*)(intptr_t)(<aggregate>)`).  Recognize the
+                 * by-value-returning arg spec and skip the bridge.  Scalar-element
+                 * accessors (`ok_val__spec__int64_t_...`) still return the carrier
+                 * int64 and are bridged as before. */
+                bool arg_spec_returns_byvalue_aggregate = false;
+                if (emit_arg && emit_arg->kind == EX_CALL &&
+                    emit_arg->as.call_.fn_binding &&
+                    emit_arg->as.call_.fn_binding->type.kind == TY_FN) {
+                    const EmitAbiSpecialization *as = find_matched_abi_spec(
+                        ctx, emit_arg, emit_arg->as.call_.fn_binding);
+                    if (as) {
+                        Type rt = emit_resolve_type(ctx, as->result_type);
+                        const char *rc = emit_type_c_name(ctx, rt);
+                        if (rc && strcmp(rc, "int64_t") != 0 &&
+                            type_kind_is_aggregate(rt.kind) &&
+                            !type_uses_carrier_abi(rt))
+                            arg_spec_returns_byvalue_aggregate = true;
+                    }
+                }
                 if (!needs_fn_cast && matched_spec &&
                     emit_arg &&
                     !expr_is_pbp_param(ctx, emit_arg) &&
                     !spec_lowers_to_int64 &&
+                    !arg_spec_returns_byvalue_aggregate &&
                     type_kind_is_aggregate(matched_spec->arg_types[i].kind) &&
                     /* G9: a by-value aggregate field read (`(.head xs)` off a
                      * monomorphized cell) is ALREADY the concrete aggregate; the

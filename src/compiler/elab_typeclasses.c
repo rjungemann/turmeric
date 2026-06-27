@@ -4611,12 +4611,61 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
             }
         }
         if (!is_hkt && tc->n_type_params == 1 && tc->type_params[0]) {
+            /* nested-construct/constrained-instance return dispatch: besides
+             * binding the class var (`a -> (Option cstr)`), also bind the matched
+             * instance's OWN head tyvars by unifying its head (`(Option A)`)
+             * against the pinned dispatch value (`(Option cstr)`) -> `A -> cstr`.
+             * A constrained instance body (`(definstance Dec [Option] [(Dec A)]
+             * ...)`) writes its nested construct/return-dispatch seams in terms
+             * of `A`; without grounding it the spec collapses every element to the
+             * int64-carrier representative (`dec_int`, `Option__int`) and a
+             * cstr/float/struct consumer misreads the carrier int.  Mirrors the
+             * receiver-dispatch path's head-tyvar collection. */
+            /* The instance's constraint vars (`A` of `[(Dec A)]`) are NOT in the
+             * bare head `Option`; recover them from the pinned dispatch value's
+             * app args at each constraint's param_idx -- `a = (Option cstr)` ->
+             * A = arg[0] = cstr. */
+            Type barg_spine[8]; uint8_t n_barg = 0;
+            {
+                Type tcur = bound; Type stack[8]; uint8_t ns = 0;
+                while (tcur.kind == TY_APP && tcur.as.app.fn && tcur.as.app.arg) {
+                    if (ns < 8) stack[ns++] = *tcur.as.app.arg;
+                    tcur = *tcur.as.app.fn;
+                }
+                for (int s = (int)ns - 1; s >= 0 && n_barg < 8; s--)
+                    barg_spine[n_barg++] = stack[s];
+            }
+            const Symbol *hb_names[ABI_TYPE_BINDINGS_MAX];
+            Type hb_types[ABI_TYPE_BINDINGS_MAX];
+            uint8_t hb_n = 0;
+            uint8_t neg_pos = 0;  /* positional index for standalone (param_idx<0) constraints */
+            for (uint8_t ci = 0;
+                 ci < inst->n_type_param_constraints &&
+                 hb_n < ABI_TYPE_BINDINGS_MAX - 1; ci++) {
+                const TypeConstraint *cstr = &inst->type_param_constraints[ci];
+                if (!cstr->tyvar || !cstr->tyvar->name) continue;
+                /* A constraint tied to a head type-param position uses param_idx;
+                 * a STANDALONE constraint (`[Option] [(Dec A)]`, param_idx == -1)
+                 * binds positionally against the dispatch value's app args -- the
+                 * `[(Dec A)]` element corresponds to `(Option cstr)`'s arg[0]. */
+                int pidx = cstr->param_idx >= 0 ? cstr->param_idx : (int)neg_pos;
+                if (cstr->param_idx < 0) neg_pos++;
+                if (pidx < 0 || pidx >= (int)n_barg) continue;
+                hb_names[hb_n] = cstr->tyvar;
+                hb_types[hb_n] = barg_spine[pidx];
+                hb_n++;
+            }
+            uint8_t total = (uint8_t)(1 + hb_n);
             AbiTypeBinding *bindings = (AbiTypeBinding *)arena_alloc(
-                e->arena, sizeof(AbiTypeBinding));
+                e->arena, total * sizeof(AbiTypeBinding));
             bindings[0].name = tc->type_params[0]->name;
             bindings[0].type = bound;
+            for (uint8_t k = 0; k < hb_n; k++) {
+                bindings[1 + k].name = hb_names[k]->name;
+                bindings[1 + k].type = hb_types[k];
+            }
             out->as.call_.abi_bindings = bindings;
-            out->as.call_.n_abi_bindings = 1;
+            out->as.call_.n_abi_bindings = total;
         }
         /* M7 layer-4 (flag-gated): a return-directed HKT method -- Applicative
          * `pure`/`wrap`, `[x : a] : (f a)` -- has its class var `f` ONLY in the

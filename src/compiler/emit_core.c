@@ -3359,12 +3359,16 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                      * (heap-tagged, carrier_is_inline, pointer deref) so we
                      * stay consistent with the rest of the bridge. */
                     Type field_ty;
+                    bool field_ty_owned = false;
                     if (f->full_type && def->n_type_params > 0) {
                         /* substitute_struct_app_type allocates spine nodes for
-                         * compound results; for the field types we care about
-                         * here (bare TY_TYVAR -> scalar/cstr/value-struct) the
-                         * result is a leaf and there is nothing to free. */
+                         * compound results.  A by-value aggregate element
+                         * (`(Result (Option int) cstr)`'s ok_val -> `(Option int)`)
+                         * substitutes to a TY_APP whose spine must be released --
+                         * the leaf-only assumption no longer holds once a record
+                         * carries a nested parametric field. */
                         field_ty = substitute_struct_app_type(f->full_type, def, type_args);
+                        field_ty_owned = (field_ty.kind == TY_APP);
                     } else if (f->full_type) {
                         field_ty = *f->full_type;
                     } else {
@@ -3389,6 +3393,25 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                         buf_printf(&out,
                             "((union { int64_t s; %s d; }){.s = %s->%s}).d",
                             fcname, src_tmp, fname);
+                    } else if ((fk == TY_APP || fk == TY_STRUCT || fk == TY_ADT) &&
+                               !type_is_heap_struct(field_ty) &&
+                               !type_is_heap_adt(field_ty) &&
+                               type_has_concrete_codegen_layout(&field_ty) &&
+                               fcname && strcmp(fcname, "int64_t") != 0) {
+                        /* nested-construct-byvalue (Gap #4 / site 5, struct path):
+                         * a WIDE by-value aggregate field (`(Result (Option int)
+                         * cstr)`'s ok_val -> `(Option int)`) is stored BOXED in the
+                         * canonical carrier box (malloc'd pointer cast to int64), so
+                         * a direct `(Option__int)(box->ok_val)` cast is an illegal
+                         * int64->aggregate conversion.  Deref-unbox instead --
+                         * mirrors the lowered-ADT readback below.  A :heap struct
+                         * field stays a pointer slot (handled by is_struct_ptr_slot
+                         * in the next arm); an opaque/transparent newtype carried
+                         * INLINE as the int64 carrier (c-name `int64_t`, e.g. a
+                         * `defopaque :ptr<void>` Device) must NOT be deref'd -- it is
+                         * the value, not a box pointer. */
+                        buf_printf(&out, "(*(%s *)(intptr_t)(%s->%s))",
+                                   fcname, src_tmp, fname);
                     } else if (fk == TY_CSTR || fk == TY_PTR_VOID || is_struct_ptr_slot) {
                         buf_printf(&out, "(%s)(intptr_t)(%s->%s)",
                                    fcname, src_tmp, fname);
@@ -3398,6 +3421,7 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                          * does the right thing on the int64 carrier slot. */
                         buf_printf(&out, "(%s)(%s->%s)", fcname, src_tmp, fname);
                     }
+                    if (field_ty_owned) free_struct_app_type(field_ty);
                 }
                 buf_printf(&out, "}");
                 if (is_option)
@@ -3454,6 +3478,21 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                                 fcname, src_tmp, bf);
                         } else if (fk == TY_CSTR || fk == TY_PTR_VOID) {
                             buf_printf(&out, "(%s)(intptr_t)(%s->%s)",
+                                       fcname, src_tmp, bf);
+                        } else if ((fk == TY_STRUCT || fk == TY_ADT ||
+                                    fk == TY_APP) &&
+                                   !type_is_heap_struct(field_ty) &&
+                                   !type_is_heap_adt(field_ty) &&
+                                   type_has_concrete_codegen_layout(&field_ty) &&
+                                   fcname && strcmp(fcname, "int64_t") != 0) {
+                            /* nested-construct-byvalue (Gap #4 / site 5): a WIDE
+                             * by-value aggregate field (`(Result Box cstr)`'s
+                             * ok_val holding a `tur_adt_Box`) is stored BOXED in the
+                             * canonical carrier box (malloc'd pointer cast to
+                             * int64), so a direct `(tur_adt_Box)(box->ok_val)` cast
+                             * is an illegal int64->aggregate conversion.  Deref-
+                             * unbox the heap pointer instead. */
+                            buf_printf(&out, "(*(%s *)(intptr_t)(%s->%s))",
                                        fcname, src_tmp, bf);
                         } else {
                             buf_printf(&out, "(%s)(%s->%s)", fcname, src_tmp, bf);

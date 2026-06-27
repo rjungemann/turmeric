@@ -1,67 +1,100 @@
 # Constrained-instance-body nested-construct monomorphization (under lowering)
 
 **Severity:** medium (seam-4 / defstruct-as-defadt graduation blocker; not a
-default-path bug). 2 fixtures.
+default-path bug). 1 fixture remaining.
 
-## One-line summary
+## Status (2026-06-27)
+
+`nested-construct-byvalue-decode` is **RESOLVED** under the force-lower probe
+(`42 / hi / 3.25 / 99`).  `constrained-loop-vec-push-byvalue-result-element`
+still build-fails under force-lower on its own three documented defects (below);
+it no longer regresses the default path.  Default suite: 1863/0.
+
+## What was fixed (the "five emit-time gaps")
 
 The body of a constrained parametric instance that builds a NESTED construct over
 a return-dispatched inner method -- `(definstance Dec [Option] [(Dec A)] (dec
-[tag] (ok (some (ok-val (:: (dec tag) (Result A cstr)))))))` -- does not thread
-the constraint element type `A` through every seam under the defstruct->defadt
-lowering, so it runtime-segfaults (`nested-construct-byvalue-decode`) or, once a
-`:heap` Vec element forces a by-value monomorph, build-fails
-(`constrained-loop-vec-push-byvalue-result-element`).
+[tag] (ok (some (ok-val (:: (dec tag) (Result A cstr)))))))` -- now threads the
+constraint element type `A` through every seam under the defstruct->defadt
+lowering.  Five coordinated emit-side fixes:
 
-## Status
+1. **Constraint-var binding at return dispatch** (`elab_typeclasses.c`,
+   `elab_try_return_dispatch`): besides binding the class var (`a -> (Option
+   cstr)`), bind the instance's standalone constraint vars (`A` of `[(Dec A)]`,
+   `param_idx == -1`) positionally against the pinned dispatch value's app args
+   (`A -> cstr`).  Without it the spec collapses every element to the int64
+   carrier representative.
 
-Both fixtures BUILD at the force-lower baseline but **segfault at runtime** --
-they were never passing under lowering (a previous investigation mis-measured
-this by stashing the force-lower probe, which silently tested the non-lowered
-path).  They are the "five emit-time gaps" `nested-construct-byvalue-decode`'s
-own header enumerates, plus `constrained-loop`'s three documented defects.
+2. **Return-dispatch per-element minting trigger** (`emit_module.c`,
+   `body_has_dispatch_on_app_tyvar` + `type_mentions_bound_tyvar`): a
+   RETURN-dispatched inner `(:: (dec tag) (Result A cstr))` re-dispatches per `A`
+   even though the receiver (`tag`) is concrete and the carrier ABI is unchanged,
+   so a per-`A` spec must be minted.  Detected when the call's result type embeds
+   a bound constraint var resolved to a CONCRETE element.  Gated by
+   `g_bhd_detect_return_dispatch` to fire at top level and inside instance-method
+   spec bodies but NOT inside a plain constrained-`defn` spec (where the result is
+   consumed as the int64 carrier -- see the `build` caveat below).
 
-## Evidence (nested-construct-byvalue-decode, force-lower)
+3. **Outer-construct payload arg recovery** (`emit_module.c`,
+   `emit_abi_register_call` Gap #4 block): a CARRIER-result construct (`(ok ...)`
+   whose `(Result (Option A) cstr)` rides the carrier) has its payload arg binding
+   collapsed to `Option__int` at elab; recover it top-down from the active
+   instance-method spec's METHOD result family (`(Result a cstr)` instantiated
+   through the spec bindings -> `(Result Option__cstr cstr)`, unified against the
+   construct's own generic result).  Gated to typeclass-instance-method specs
+   (`owner_instance != NULL`) so a plain constrained `defn` (`build`'s `(ok acc)`)
+   is untouched.  Arg-types only -- does not flip the carrier result to by-value.
 
-The four element specializations of `__inst_Dec_dec_Option` should each dispatch
-the inner `(dec tag)` to the matching instance and wrap with the matching
-`some`/`ok` monomorph:
+4. **Carrier-box readback deref-unbox for wide by-value aggregate fields**
+   (`emit_core.c`, `emit_carrier_bridge`, BOTH the struct-app and lowered-ADT
+   canonical readback paths): a wide by-value aggregate field (`(Result (Option
+   int) cstr)`'s ok_val, `(Result Box cstr)`'s ok_val) is stored BOXED in the
+   canonical carrier box, so a direct `(Option__int)(box->ok_val)` cast is an
+   illegal int64->aggregate conversion -- deref-unbox instead.  Excludes
+   opaque/transparent newtypes carried INLINE as the int64 carrier (c-name
+   `int64_t`, e.g. `defopaque :ptr<void>`), which are the value, not a box pointer.
+   Also frees the substituted compound field type (a previously-latent leak the
+   leaf-only assumption masked).
 
-```
-__inst_Dec_dec_Option__spec__Result__Option__cstr__cstr  ->  dec_cstr, some__Option__cstr
-__inst_Dec_dec_Option__spec__Result__Option__float__cstr ->  dec_float, some__Option__float
-...
-```
+5. **Float element reinterpret at the carrier-return and consumer seams**
+   (`emit_fns.c` return path + `emit_expr.c` arg path): a generic accessor
+   (`ok-val`) declared `: A` returns the int64 carrier, but inside a `(Result
+   float cstr)` spec its body tail is a concrete `double` -- a plain
+   `return <double>;` through an `int64_t` result NUMERICALLY converts (3.25 -> 3).
+   Bit-reinterpret via the carrier bridge.  Gated on a TYVAR-declared result so a
+   genuine `: float` poly-fn carried through the int64 slot (numeric convention)
+   is untouched.  Companion: `emit_expr.c` skips the carrier->concrete deref when
+   the arg's own matched spec already returns the concrete by-value aggregate
+   (`ok_val__spec__tur_adt_Box_...` returns `tur_adt_Box` by value, not a box
+   pointer -- double-unbox guard).
 
-Under lowering they instead collapse: the inner `(:: (dec tag) (Result A cstr))`
-return-dispatch resolves `A` to the int64 carrier representative
-(`__inst_Dec_dec_int`), and the inner `some` monomorphizes at `Option__int`
-regardless of the spec's `A`, so a cstr/float/Box spec passes an `Option__int`
-where its `_Option__cstr` constructor is expected (or silently decodes the wrong
-value).  `emit_reresolve_disp_type`'s Gap-#4 ascribed-return-dispatch recovery
-(emit_core.c) exists but does not re-grond the inner call through the active
-constrained-instance spec's `A` binding.
+The new `emit_var_spec_arg_type` call site (the boxing-path spec arg lookup) is
+registered in `docs/artifacts/crossing-routing-audit.txt` (10 sites).
 
-## Fix directions
+## Remaining: constrained-loop-vec-push-byvalue-result-element
 
-Thread the constrained-instance spec's element binding (`A -> cstr/float/Box`)
-into every seam of the nested construct body:
-1. the inner return-dispatched `(:: (dec tag) (Result A cstr))` -> re-dispatch to
-   `Dec[A]` (not `Dec[int]`) per spec;
-2. the `ok-val` accessor on that result -> read at the spec's element type;
-3. the `some` / `ok` constructs -> monomorphize at the spec's element type, and
-   recover each by-value construct seam's payload type top-down from the
-   enclosing construct's recovered result;
-4. reinterpret a carrier int64 into a float element at the construct seam.
+Its own header documents three combined defects that surface (build error) once a
+by-value Result/Option element forces a monomorph in the `build` loop:
 
-This is the constrained-instance-body monomorphization the
-`nested-construct-byvalue-decode` header calls "five emit-time gaps"; it is
-independent of the (resolved) heap-cons field-read cluster.
+1. **build's `(dec i)` result is declared as the int64 carrier** while the
+   nested-instance dispatch redirect mints a by-value `(Result (Option int) cstr)`
+   spec for it -- `int64_t r = <by-value Result>` is a cc type error.  The redirect
+   spec is correct; build's `r` binding must be declared at the by-value Result
+   type when the constraint element is by-value.
+
+2. **return-only-poly accessor** (`ok-val` of the by-value Result) and
+
+3. **vec-push carrier bridge** spilling at the accessor's collapsed int64 type.
+
+These are `build`-specific (a plain constrained `defn`, not an instance method),
+so the gaps-1..5 fixes deliberately do NOT fire there (gap #2's
+`g_bhd_detect_return_dispatch` is off inside a plain-defn spec, gap #3 requires
+`owner_instance`).  Resolving them needs the constrained-`defn` redirect-ABI
+coherence: when build specializes at a by-value element, its `(dec i)` result
+binding, the `ok-val` accessor, and the `vec-push!` must all agree on the by-value
+Result/Option representation instead of straddling the int64 carrier.
 
 ## Notes
 
-- Default suite is unaffected (only the lowered representation triggers it).
-- `constrained-loop-...` additionally carries the nested-return-dispatch-redirect
-  / return-only-poly-accessor / vec-push-carrier-bridge trio its own header
-  documents; the `:heap` Vec element by-value flip (from the resolved heap-cons
-  cluster) now surfaces them as a build error instead of a runtime segfault.
+- Default suite is unaffected (only the lowered representation triggers the bug).
+- Independent of the (resolved) heap-cons field-read cluster.
