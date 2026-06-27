@@ -1544,6 +1544,12 @@ bool         type_extract_adt_app(const Type *t, struct AdtDef **out_def,
 Type         substitute_adt_app_type(const Type *t,
                                      const struct AdtDef *def,
                                      const Type *args);
+/* Owned variant -- deep-clones the substituted arg so the result aliases
+ * nothing in args[] and is safe to free with free_struct_app_type.  Use this
+ * at any call site that releases the result. */
+Type         substitute_adt_app_type_owned(const Type *t,
+                                           const struct AdtDef *def,
+                                           const Type *args);
 /* Release the malloc'd TY_APP spine nodes that substitute_struct_app_type /
  * clone_struct_app_type allocate for a compound (TY_APP) result.  A no-op on a
  * leaf Type, so it is safe to call unconditionally on any substitute result. */

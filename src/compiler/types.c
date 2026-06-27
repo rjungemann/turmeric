@@ -1222,6 +1222,46 @@ Type substitute_adt_app_type(const Type *t, const AdtDef *def, const Type *args)
     }
 }
 
+/* Owned analogue of substitute_adt_app_type: the substituted tyvar arg is
+ * DEEP-CLONED (clone_struct_app_type) so the returned tree aliases nothing in
+ * the caller's `args[]` spine and can be released with free_struct_app_type.
+ * Mirrors substitute_struct_app_type's ownership discipline.  Use this (not the
+ * aliasing variant above) at any call site that frees the result -- the plain
+ * substitute_adt_app_type returns `args[idx]` by reference for a bare tyvar,
+ * and a free() over that (or over a spine whose leaves alias it) is a bad-free
+ * of arena-backed nodes. */
+Type substitute_adt_app_type_owned(const Type *t, const AdtDef *def,
+                                   const Type *args) {
+    if (!t) return type_from_kind(TY_UNKNOWN);
+    switch (t->kind) {
+        case TY_TYVAR: {
+            uint8_t idx = 0;
+            if (t->as.tyvar_.name &&
+                adt_type_param_index(def, t->as.tyvar_.name, &idx)) {
+                return clone_struct_app_type(args[idx]);
+            }
+            return *t;
+        }
+        case TY_APP: {
+            Type fn  = substitute_adt_app_type_owned(t->as.app.fn,  def, args);
+            Type arg = substitute_adt_app_type_owned(t->as.app.arg, def, args);
+            Type out = {0};
+            out.kind = TY_APP;
+            out.copy_kind = CK_COPY;
+            out.hkt_kind = KIND_STAR;
+            propagate_app_discipline(&out, &fn);
+            out.as.app.fn  = (Type *)malloc(sizeof(Type));
+            out.as.app.arg = (Type *)malloc(sizeof(Type));
+            if (!out.as.app.fn || !out.as.app.arg) { fprintf(stderr, "tur: oom\n"); abort(); }
+            *out.as.app.fn  = fn;
+            *out.as.app.arg = arg;
+            return out;
+        }
+        default:
+            return *t;
+    }
+}
+
 /* Return the C type string for a CtorField with concrete type args substituted. */
 static const char *adt_field_c_type(const AdtDef *owner, const CtorField *field,
                                      const Type *args) {
@@ -1466,6 +1506,38 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
     }
 
     const char *adt_inst_name = g_adt_apps[idx].name;
+
+    /* Dependency pre-pass (typedef ordering): a ctor field whose resolved type
+     * is itself a parametric monomorph -- e.g. `Cons__Option__int` whose head
+     * field is the by-value `Option__int` -- references that nested typedef by
+     * value INSIDE this aggregate, so the dependency's typedef MUST precede
+     * ours.  The struct-app emitter already does this (emit_registered_struct_
+     * app_rec); mirror it here, recursing into both the ADT-app and struct-app
+     * registries.  The `emitting` guard above breaks the cycle for a recursive
+     * field (a `Cons` tail referencing the same `Cons` monomorph). */
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        CtorDef *ctor = def->ctors[ci];
+        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+            const CtorField *fld = &ctor->fields[fi];
+            if (!fld->full_type) continue;
+            Type resolved = substitute_adt_app_type_owned(fld->full_type, def, args);
+            if (resolved.kind == TY_APP) {
+                for (uint32_t di = 0; di < g_n_adt_apps; di++) {
+                    if (type_eq(g_adt_apps[di].type, resolved)) {
+                        emit_registered_adt_app_rec(out, di);
+                        break;
+                    }
+                }
+                for (uint32_t di = 0; di < g_n_struct_apps; di++) {
+                    if (type_eq(g_struct_apps[di].type, resolved)) {
+                        emit_registered_struct_app_rec(out, di);
+                        break;
+                    }
+                }
+            }
+            free_struct_app_type(resolved);
+        }
+    }
 
     /* Emit the typedef for this monomorphised ADT instance.
      *
