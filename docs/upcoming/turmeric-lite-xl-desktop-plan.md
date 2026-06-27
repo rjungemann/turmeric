@@ -217,45 +217,17 @@ Goal: a Turmeric REPL inside the editor.
 Acceptance: start REPL, type `(my-fn 1 2)`, get a value; edit `my-fn`,
 press reload, call again, see new behavior.
 
-### Phase 5 -- Distribution: "Turmeric Studio" branded bundle for macOS + Linux (~5 days)
+### Phase 5 -- Distribution: "Turmeric Studio" branded bundle for macOS + Linux
 
-Lite XL is MIT-licensed and explicitly built to be forked. Phase 5
-ships a rebranded distribution that bundles the plugin and the color
-theme so a brand-new user does one download. **macOS and Linux only**;
-the Windows distribution story is split into its own plan because the
-signing economics, installer toolchain, and package-channel fan-out
-are qualitatively different -- see
+The scaffolding (install.sh, vendor.sh, bake-bundle.sh, make-dmg.sh,
+make-appimage.sh, Info.plist, .desktop, Homebrew cask template) shipped
+in commit `eb5c1af66`. The remaining shipping work -- actually vendoring
+Lite XL, the first end-to-end build on each OS, Apple Developer ID
+signing + notarization, Universal DMG, release-workflow integration, and
+Homebrew tap publication -- is broken out into its own plan:
+[`turmeric-studio-distribution-plan.md`](turmeric-studio-distribution-plan.md).
+Windows distribution stays in
 [`turmeric-lite-xl-windows-plan.md`](turmeric-lite-xl-windows-plan.md).
-
-- Vendor Lite XL upstream into `vendor/lite-xl/` at a pinned tag.
-  Shared with the Windows plan -- the vendor drop happens once and
-  serves all three OSes.
-- Bake `turmeric.lua` + the color themes + a small `init.lua` default
-  into the bundle's `Resources/` (macOS) / `data/` (Linux) so they ship
-  enabled.
-- Rebrand: `Info.plist`/icon on macOS, `.desktop` entry on Linux. The
-  Lite XL window title is plugin-driven, so the in-app branding is one
-  line of Lua.
-- Build via the upstream meson + ninja recipe -- already cross-platform,
-  no new CI to write. Sign + notarize the macOS bundle with a Developer
-  ID.
-- Distribute as `TurmericStudio-<version>-macos-arm64.dmg`,
-  `-universal.dmg`, and `-linux-x86_64.AppImage`, released alongside
-  `tur` itself.
-- Bundles do **not** ship `tur` -- they assume `tur` is on PATH and
-  surface a clear error in the log pane when it is not, with a
-  one-click button that opens the Turmeric install docs.
-- A `tools/lite-xl/install.sh` for users who already have stock Lite XL
-  and just want the Turmeric plugin. (The Windows `install.ps1` lives
-  in the Windows plan, Phase W1.)
-- **Homebrew cask** for the macOS bundle, distributed via a tap, with
-  `depends_on formula: "turmeric"` so a single command pulls both
-  editor and compiler.
-
-Acceptance: a brand-new macOS user downloads the bundle, opens it,
-double-clicks an `examples/*.tur` file, presses cmd+r, sees output.
-Linux user does the same with the AppImage. Windows distribution is
-tracked separately.
 
 ## Files and locations
 

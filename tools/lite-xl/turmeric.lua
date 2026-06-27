@@ -752,6 +752,33 @@ keymap.add {
   ["down"]      = "turmeric-repl:history-next",
 }
 
+-- -------------------------------------------------------------------------
+-- Auto-open the REPL on startup
+-- -------------------------------------------------------------------------
+--
+-- DrRacket-style "definitions on top, interactions on the bottom" layout:
+-- the REPL pane appears in a horizontal split below the editor as soon as
+-- the plugin loads. Opt out with `config.plugins.turmeric.auto_open_repl
+-- = false` in init.lua.
+
+config.plugins.turmeric.auto_open_repl = config.plugins.turmeric.auto_open_repl ~= false
+
+if config.plugins.turmeric.auto_open_repl then
+  -- Defer one tick so the root view / project tree have finished initial
+  -- layout before we split. core.add_thread with no yield runs at the next
+  -- frame, which is the canonical "after-startup" hook in Lite XL plugins.
+  core.add_thread(function()
+    coroutine.yield(0.1)
+    open_repl_view("down")
+    -- Re-focus the editor so the user can start typing in their file,
+    -- not in the REPL prompt.
+    local node = core.root_view.root_node
+    if node and node.a and node.a.active_view then
+      core.set_active_view(node.a.active_view)
+    end
+  end)
+end
+
 -- Optional integration with Lite XL's built-in `autocomplete` plugin.
 -- It exposes `autocomplete.add({ name=..., files=..., items={...} })`.
 -- We seed an empty list and refresh it as the user types.
