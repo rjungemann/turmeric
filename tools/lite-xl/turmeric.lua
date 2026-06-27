@@ -182,11 +182,9 @@ end
 
 command.add(nil, {
   ["turmeric:run-file"] = function()
-    -- v1 should use `--interpret` (tree-walking, no codegen) but that
-    -- subcommand currently crashes on a null ReaderMacroRegistry; see
-    -- docs/reported/tur-interpret-null-reader-macro-registry.md. Falling
-    -- back to `tur run` (AOT) until the interpreter is fixed.
-    run_tur({ "run" }, "run")
+    -- v1 target: the tree-walking interpreter. No codegen, no
+    -- per-file build cache, fastest edit-run loop.
+    run_tur({ "--interpret" }, "interpret")
   end,
   ["turmeric:check-file"] = function()
     run_tur({ "check" }, "check")

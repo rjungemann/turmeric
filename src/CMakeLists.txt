@@ -9,6 +9,22 @@ cmake_minimum_required(VERSION 3.20)
 add_compile_definitions(_DEFAULT_SOURCE)
 
 # ---------------------------------------------------------------------------
+# Feature-test macro: macOS gates the POSIX-XSI ucontext_t (used by
+# TuriEnv::sched_ctx for the async scheduler) behind _XOPEN_SOURCE.
+# Without it, <sys/_types/_ucontext.h> exposes a legacy 56-byte stub,
+# and TUs that pull in <signal.h> / <sys/wait.h> BEFORE turi/env.h get
+# the small stub baked into their view of `struct TuriEnv` -- producing
+# a struct-layout mismatch (sizeof differs by ~832 bytes) and silent
+# null-pointer reads of fields declared after sched_ctx. Forcing it
+# project-wide guarantees every TU agrees on TuriEnv's layout.
+# _DARWIN_C_SOURCE keeps the macOS-specific extensions visible on top
+# of POSIX-XSI (mkstemps, NSIG, st_mtimespec, ...).
+# ---------------------------------------------------------------------------
+if(APPLE)
+    add_compile_definitions(_XOPEN_SOURCE=700 _DARWIN_C_SOURCE)
+endif()
+
+# ---------------------------------------------------------------------------
 # Phase S1: detect libedit for REPL line editing + history
 # ---------------------------------------------------------------------------
 find_library(LIBEDIT_LIB edit)
