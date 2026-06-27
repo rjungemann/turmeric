@@ -1,14 +1,15 @@
 # Constrained-instance-body nested-construct monomorphization (under lowering)
 
+**RESOLVED (2026-06-27).**  Both fixtures pass under the force-lower probe:
+`nested-construct-byvalue-decode` (`42 / hi / 3.25 / 99`) and
+`constrained-loop-vec-push-byvalue-result-element` (`3 / 0 / 1 / 2`).  Default
+suite 1863/0.
+
+The constrained-loop half landed in three steps (defects #1, then #2+#3 together);
+see the "Remaining: constrained-loop" section below for the resolved breakdown.
+
 **Severity:** medium (seam-4 / defstruct-as-defadt graduation blocker; not a
-default-path bug). 1 fixture remaining.
-
-## Status (2026-06-27)
-
-`nested-construct-byvalue-decode` is **RESOLVED** under the force-lower probe
-(`42 / hi / 3.25 / 99`).  `constrained-loop-vec-push-byvalue-result-element`
-still build-fails under force-lower on its own three documented defects (below);
-it no longer regresses the default path.  Default suite: 1863/0.
+default-path bug). 2 fixtures, both resolved.
 
 ## What was fixed (the "five emit-time gaps")
 
@@ -105,51 +106,38 @@ ill-typed `__inst_Dec_dec_int__spec__tur_adt_Option__int_int64_t` (body returns
 `(dec i)` now correctly emits `__inst_Dec_dec_Option(i)` on the carrier
 (`int64_t r`).  Default suite 1863/0.
 
-### Defects #2/#3 STILL OPEN: build's `(ok acc)` payload mis-binding
+### Defects #2/#3 RESOLVED (2026-06-27): build's `(ok acc)` payload mis-binding
 
 `build`'s tail `(:: (ok acc) (Result (Vec A) cstr))` (acc : `(Vec A)`, a :heap
-Vec that rides the int64 carrier as a pointer) interns an `ok` spec with
-`arg0 = tur_adt_Option__int` -- the Vec's ELEMENT -- instead of the Vec, producing
-`ok__spec__int64_t_tur_adt_Option__int__h1((int64_t)(intptr_t)(acc))`: the spec
-expects a by-value `Option__int` but the call passes the Vec pointer as int64.
-The construct payload arg type collapses because the `(ok acc)` call carries an
-abi-binding whose NAME is the enclosing spec's constraint var `A` (the `ok`
-template's element tyvar was elaborated under that same name), so the rehydration
-path resolves the payload to `A`'s value (`Option__int = (Option int)`, the Vec's
-element) rather than the actual argument `acc : (Vec (Option int))`.  Because the
-Vec is :heap, the correct lowering keeps `(ok acc)` on the plain carrier `ok`
-(pointer cast to int64); minting any by-value spec is wrong.
+Vec that rides the int64 carrier as a pointer) interned an `ok` spec with
+`arg0 = tur_adt_Option__int` -- the Vec's ELEMENT -- instead of the Vec, then
+double-boxed the :heap pointer into a `Vec **`, so at runtime the vec read back
+empty (`vec-len = 0`, "tvec index out of bounds").
 
-Root cause (pinned 2026-06-27): the `ok` construct template's element tyvar is
-named **`A`** -- the SAME name as `build`'s constraint var `A`.  Inside `build`'s
-spec (`A -> (Option int)`) both the call's abi-binding AND `emit_resolve_type`
-resolve the `ok` payload through that binding, yielding `Option__int` (build's
-`A`, the Vec's element) instead of the actual argument `acc : (Vec A) = (Vec
-(Option int))`.  Because `acc` is a :heap Vec (its pointer IS the int64 carrier),
-the correct lowering keeps `(ok acc)` on the plain carrier `ok` -- minting any
-by-value spec is wrong.
+Root cause: `build`'s `(ok acc)` records the abi-binding `{A -> (Vec A)}` at elab
+-- the NAME `A` is the `ok` construct template's own element tyvar, which happens
+to collide with `build`'s constraint var `A`, and the VALUE is the container
+`(Vec A)`.  Because `(Vec A)`'s element tyvar is unresolved, `type_c_name((Vec
+A))` collapses to `int64_t`, so emit's carrier-collapse **rehydration path**
+(emit_module.c, "(2) re-hydrate carrier-collapsed bindings by name") mistook it
+for a collapsed bare constraint var and REPLACED it by name with the active
+spec's `A -> (Option int)` -- dropping the `(Vec ...)` wrapper and minting `ok`
+over the element instead of the container.
 
-Emit-side override is a DEAD END (attempted + reverted): overriding the interned
-`arg_types[0]` to the actual `acc` type (`(Vec (Option int))`, via
-`emit_spec_arg_type_for_binding` right before `emit_abi_intern_spec`) does mint
-`ok__spec__..._tur_adt_Vec__Option__int__` and makes `build` COMPILE -- but the
-spec BODY emit still resolves the param's type via `emit_resolve_type(A) ->
-Option__int` (the collision), so `emit_type_is_byvalue_adt` fires and the body
-DOUBLE-BOXES the :heap Vec pointer into a `Vec **` (malloc + store pointer).  At
-runtime `ok-val` then hands back the wrong pointer and the vec reads back empty
-(`vec-len = 0`, then "tvec index out of bounds").  Patching the intern arg type
-without also fixing `emit_resolve_type`'s view of the param leaves the spec
-signature and its body inconsistent.
+Fix (emit_module.c): the rehydration path now skips a binding whose VALUE is a
+`TY_APP` (a parametric container).  A container over the constraint var is the
+COMPOSITION path's job -- it instantiates `(Vec A)` through `A -> (Option int)`
+to `(Vec (Option int))` -- so the binding correctly stays the :heap Vec, `(ok
+acc)` rides the plain carrier `ok` (pointer -> int64), and the `ok-val` accessor
+and `vec-push!` bridges (defect #3) fall in line with no further change.  Only a
+bare scalar/tyvar value is a genuine carrier collapse the rehydration should
+touch.
 
-Fix direction (next pass) -- must make BOTH the interned arg type and the spec
-body's `emit_resolve_type` agree, which means breaking the collision upstream:
-disambiguate the `ok` construct-template element tyvar from the enclosing
-constrained-`defn`'s constraint var at elaboration (so the `(ok acc)` abi-binding
-records ok's own element `a -> (Vec A)` rather than reusing the name `A`), OR
-thread the actual argument's resolved type uniformly through both interning and
-body emit for a construct whose element is `(Container ConstraintVar)` over a
-:heap container.  Only then will the `ok-val` accessor and `vec-push!` carrier
-bridges (defect #3) fall in line.
+(An earlier emit-side override of the interned `arg_types[0]` was a dead end: it
+made `build` compile but left the spec BODY's `emit_resolve_type(A) ->
+Option__int` inconsistent with the corrected signature, double-boxing the pointer
+-- the rehydration-skip fix instead keeps the binding itself correct so signature
+and body agree.)
 
 ## Notes
 

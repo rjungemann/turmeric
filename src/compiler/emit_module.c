@@ -2363,7 +2363,20 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             bool any = false;
             for (uint8_t i = 0; i < n_bindings; i++) {
                 rehydrated[i] = bindings[i];
+                /* constrained-loop redirect-ABI coherence (defect #2): a binding
+                 * whose VALUE is a parametric container over the constraint var
+                 * (`A -> (Vec A)`, ok's element tyvar happening to share the name
+                 * `A` with the enclosing constrained-defn's constraint var) c-names
+                 * to `int64_t` because its element tyvar is unresolved -- but it is
+                 * NOT a carrier-collapsed bare constraint var.  Replacing it by name
+                 * with the spec's `A -> (Option int)` drops the `(Vec ...)` wrapper
+                 * and mints `ok` over the element instead of the container.  A
+                 * TY_APP container is the COMPOSITION path's job (instantiate
+                 * `(Vec A)` through `A -> (Option int)` -> `(Vec (Option int))`),
+                 * so skip rehydration here; only a bare scalar/tyvar value is a
+                 * genuine carrier collapse. */
                 if (bindings[i].name &&
+                    bindings[i].type.kind != TY_APP &&
                     strcmp(type_c_name(bindings[i].type), "int64_t") == 0) {
                     for (uint8_t j = 0; j < aspec->n_bindings; j++) {
                         if (aspec->bindings[j].name &&
