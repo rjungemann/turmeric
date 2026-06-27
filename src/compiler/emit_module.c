@@ -2018,7 +2018,12 @@ static bool emit_abi_try_nested_instance_dispatch_redirect(
     if (!redisp || !redisp->binding || !redisp->owner_instance) return false;
     if (redisp->n_params < 1 || !redisp->body || redisp->closure) return false;
     if (!resolved || resolved->kind != TY_APP) return false;
-    if (!type_has_concrete_codegen_layout(resolved)) return false;
+    /* The recovered receiver may be a lowered record ADT-app (`(Option int)`),
+     * which type_has_concrete_codegen_layout rejects (its TY_APP branch is
+     * struct-only); accept a concrete ADT-app too so a nested constrained
+     * instance on an ADT head mints its per-element spec. */
+    if (!type_has_concrete_codegen_layout(resolved) &&
+        !type_app_is_concrete_adt(resolved)) return false;
 
     Binding *fn_binding = redisp->binding;
     if (fn_binding->type.kind != TY_FN || !fn_binding->is_global ||
@@ -2038,14 +2043,31 @@ static bool emit_abi_try_nested_instance_dispatch_redirect(
      * tyvar reads resolve against). */
     Type resolved_copy = *resolved;
     StructDef *rsd = NULL; Type rargs[8]; uint8_t rn = 0;
-    if (!type_extract_struct_app(&resolved_copy, &rsd, rargs, &rn) || !rsd) {
-        return false;
+    const char *const *rparam_names = NULL;
+    uint8_t rn_params = 0;
+    if (type_extract_struct_app(&resolved_copy, &rsd, rargs, &rn) && rsd) {
+        rparam_names = rsd->type_params;
+        rn_params = rsd->n_type_params;
+    } else {
+        /* constrained-generic-nested-container-element-dispatch: under
+         * defstruct-as-defadt the recovered receiver/element is a lowered record
+         * ADT-app (`(Option int)`), which type_extract_struct_app rejects.  Pull
+         * the element bindings from the ADT def's type-param names instead, so a
+         * nested container element (`(Cons (Option int))` -> the `(Option int)`
+         * inner instance) mints its own per-element spec rather than baking the
+         * innermost int representative. */
+        AdtDef *rad = NULL; uint8_t adn = 0;
+        if (!type_extract_adt_app(&resolved_copy, &rad, rargs, &adn) || !rad)
+            return false;
+        rparam_names = rad->type_params;
+        rn_params = rad->n_type_params;
+        rn = adn;
     }
-    if (rsd->n_type_params != rn || rn == 0) return false;
+    if (rn_params != rn || rn == 0 || !rparam_names) return false;
     AbiTypeBinding eb[ABI_TYPE_BINDINGS_MAX]; uint8_t enb = 0;
     for (uint8_t p = 0; p < rn && enb < ABI_TYPE_BINDINGS_MAX; p++) {
-        if (!rsd->type_params[p]) continue;
-        eb[enb].name = rsd->type_params[p];
+        if (!rparam_names[p]) continue;
+        eb[enb].name = rparam_names[p];
         eb[enb].type = rargs[p];
         enb++;
     }
@@ -2133,8 +2155,12 @@ static bool emit_abi_try_nested_instance_dispatch_redirect(
      * dispatch that layout is in arg_types[0]; for a return dispatch it is in the
      * (instantiated) result type. */
     if (return_dispatch) {
-        if (!type_has_concrete_codegen_layout(&result_type)) return false;
-    } else if (!type_has_concrete_codegen_layout(&arg_types[0])) {
+        if (!type_has_concrete_codegen_layout(&result_type) &&
+            !(result_type.kind == TY_APP && type_app_is_concrete_adt(&result_type)))
+            return false;
+    } else if (!type_has_concrete_codegen_layout(&arg_types[0]) &&
+               !(arg_types[0].kind == TY_APP &&
+                 type_app_is_concrete_adt(&arg_types[0]))) {
         return false;
     }
 

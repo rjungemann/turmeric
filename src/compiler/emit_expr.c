@@ -529,11 +529,31 @@ static bool field_read_emits_byvalue_aggregate(EmitCtx *ctx, const Expr *e) {
                fidx < rt.as.struct_.def->n_fields) {
         const StructField *f = &rt.as.struct_.def->fields[fidx];
         if (f->full_type) { fr = *f->full_type; have_fr = true; }
+    } else {
+        /* Lowered record ADT-app receiver (`(Cons (Option int))`): the field is
+         * a ctor field whose full_type is the container's type-param; substitute
+         * the receiver's element args, as the struct path does. */
+        AdtDef *ad = NULL; Type aargs[16]; uint8_t an = 0;
+        const CtorDef *ctor = e->as.get_field_.adt_ctor;
+        if (ctor && fidx < ctor->n_fields &&
+            type_extract_adt_app(&rt, &ad, aargs, &an) && ad) {
+            const CtorField *cf = &ctor->fields[fidx];
+            if (cf->full_type && cf->full_type->kind == TY_TYVAR) {
+                fr = substitute_adt_app_type_owned(cf->full_type, ad, aargs);
+                fr_owned = (fr.kind == TY_APP);
+                have_fr = true;
+            } else if (cf->full_type) {
+                fr = *cf->full_type;
+                have_fr = true;
+            }
+        }
     }
     if (!have_fr) return false;
 
-    bool result = type_uses_carrier_abi(fr) && !type_is_heap_struct(fr) &&
-                  type_has_concrete_codegen_layout(&fr);
+    bool result = !type_is_heap_struct(fr) && !type_is_heap_adt(fr) &&
+                  ((type_uses_carrier_abi(fr) &&
+                    type_has_concrete_codegen_layout(&fr)) ||
+                   (fr.kind == TY_APP && type_app_is_concrete_adt(&fr)));
     if (fr_owned) free_struct_app_type(fr);
     return result;
 }
