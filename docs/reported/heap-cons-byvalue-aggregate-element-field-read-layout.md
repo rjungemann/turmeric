@@ -1,17 +1,18 @@
-# :heap ADT field read at by-value aggregate element needs consistent concrete-app recognition
+# :heap ADT field read at by-value aggregate element -- the nested-by-value-monomorph cascade
 
 **Severity:** medium (seam-4 / defstruct-as-defadt graduation blocker; not a
-default-path bug). 2 fixtures.
+default-path bug). 2 fixtures direct, ~4 in the blast radius.
 
 ## One-line summary
 
 A direct field read on a `:heap` record-ADT receiver whose element is a by-value
 aggregate -- `(.head xs)` / `(.tail xs)` where `xs : (Cons (Option int))` and
-`Cons` is `(defstruct Cons :heap [A] (head A) (tail :int))` -- emits a cast to
-the GENERIC carrier `tur_adt_Cons` (`->as.Cons._0` is `int64_t`) and then C-casts
-that int64 to the aggregate `tur_adt_Option__int` -> `error: conversion to
-non-scalar type requested`.  It should cast the heap pointer to the MONOMORPH
-`tur_adt_Cons__Option__int *` and read the inline aggregate field.
+`Cons` is `(defstruct Cons :heap [A] (head A) (tail :int))` -- mislowers because
+the compiler does not consistently treat `(Cons (Option int))` (and its nested
+`(Option int)` element) as a concrete by-value monomorph.  Making it consistent
+is NOT a leaf fix: the "is this a concrete by-value ADT-app" decision is consumed
+by a CASCADE of codegen sites, and flipping a NESTED ADT-app element to by-value
+exposes each one in turn.
 
 ## Minimal repro
 
@@ -22,70 +23,97 @@ non-scalar type requested`.  It should cast the heap pointer to the MONOMORPH
 (defn opt-or [o : (Option int) d : int] : int (if (.is-some o) (.value o) d))
 (defn main [] : int
   (let [xs (:: (list (some 42) (some 7)) (Cons (Option int)))]
-    (let [h0 (.head xs)]                      ;; <- conversion to non-scalar type
-      (println (opt-or h0 0))))
+    (println (.head xs)) ...)            ;; conversion to non-scalar type
   0)
 ```
 
 Both pass at default (where `Cons`/`Option` are int64-carrier heap handles).
 
-## Root cause (located) and why it is not a leaf fix
+## The cascade (mapped 2026-06-27)
 
-The construction side IS already correct under lowering: `tcons-of` monomorphizes
-to `tur_adt_Cons__Option__int *` and stores the `Option__int` aggregate INLINE
-(`union { struct { tur_adt_Option__int _0; int64_t _1; } Cons; }`), and the
-element-aware `tlength` spec reads the chain correctly.  Only the DIRECT
-`(.head xs)` / `(.tail xs)` reads in `main` mislower.
+The root knob is `adt_app_is_byvalue_product` / `type_app_is_concrete_adt`
+rejecting a nested ADT-app ARG: `type_has_concrete_codegen_layout((Option int))`
+is false (its `TY_APP` arm only handles struct-apps), so `(Cons (Option int))` is
+not a by-value product and `type_c_name` collapses it to int64.  The instinct is
+to teach the predicates to accept a nested by-value ADT-app element.  Doing so
+fixes the two list fixtures but cascades:
 
-The EX_GET_FIELD ADT branch (emit_expr.c) has no `:heap`-ADT-receiver case: the
-`adt_recv_byvalue` branch is gated on `emit_type_is_byvalue_adt`, which is false
-for a `:heap` ADT (a pointer, not by-value), so the read falls to the generic
-carrier-pointer-cast fallback.
+1. **Constructor selection** (emit_expr.c N-arg ctor branch via
+   `type_app_is_concrete_adt`): without the nested-arg fix the `tcons-of` spec
+   calls the GENERIC `ctor_Cons` (a 16-byte `{int64 head; int64 tail}` cell)
+   while the reader uses the monomorph `tur_adt_Cons__Option__int` (whose `tail`
+   is at offset 16) -> **heap-buffer-overflow** (confirmed via ASan: read past
+   the 16-byte `ctor_Cons` allocation).  Fix: `type_app_is_concrete_adt` accepts
+   a nested by-value ADT-app arg.
 
-Adding a `:heap`-ADT-receiver branch that casts to the monomorph requires
-`type_c_name((Cons (Option int)))` to yield `tur_adt_Cons__Option__int *`.  That
-in turn requires `adt_app_is_byvalue_product((Cons (Option int)))` to be true,
-which fails because the element `(Option int)` is rejected by
-`type_has_concrete_codegen_layout` -- whose `TY_APP` arm only handles
-struct-headed apps, never ADT-headed apps (even though the bare `TY_ADT` case
-returns true).  Two fix attempts, both unsatisfactory:
+2. **Field read** (emit_expr.c EX_GET_FIELD): the ADT branch has no
+   `:heap`-ADT-receiver case (the `adt_recv_byvalue` branch is gated on
+   `emit_type_is_byvalue_adt`, false for `:heap`), so it falls to the generic
+   carrier cast.  Fix: a `heap_adt_recv` branch that casts to the monomorph
+   pointer (`tur_adt_Cons__Option__int *`) and reads the inline aggregate field.
 
-1. **Broaden `type_has_concrete_codegen_layout` to accept concrete ADT-apps.**
-   Makes both fixtures pass (producer + the new monomorph read agree), but has a
-   FAR-reaching blast radius: recursive-functor HKT monomorphs
-   (`(ExprF Expr)` -> `ExprF__Expr`) are then named by `type_c_name` but never
-   registered/emitted, so 9 default fixtures regress with `unknown type name
-   'ExprF__Expr'` (hkt-cata-*, hkt-fmap-byvalue-sum-element,
-   fn-typed-match-arm-capture, conv-defstruct-return-bridge-inline-c).
+3. **Nested typedef ordering** (types.c `emit_registered_adt_app_rec`): the
+   monomorph cell `tur_adt_Cons__Option__int { ... tur_adt_Option__int _0; ... }`
+   references the nested monomorph typedef, which `adt_field_c_type` registers
+   only WHILE this typedef's field loop runs -- too late to precede it ->
+   `unknown type name 'tur_adt_Option__cstr'` / `'tur_adt_Tuple2__cstr__int'`.
+   Fix: a dependency pre-pass (mirroring the struct-app emitter) that recursively
+   emits each nested by-value ADT-app/struct-app field typedef first.  (This one
+   is a pure improvement and fixed `tuple-type-bracket-sugar`.)
 
-2. **Narrow: only teach `adt_app_is_byvalue_product` to accept a nested by-value
-   ADT-app element/arg** (recurse on `adt_app_is_byvalue_product`), leaving the
-   global predicate untouched.  The two fixtures then BUILD (the monomorph read
-   fires) but SEGFAULT at runtime: some other emit path still gates on
-   `type_has_concrete_codegen_layout((Option int)) == false` and emits carrier
-   code, so producer and consumer disagree on the cell ABI.
+4. **Canonical carrier-box readback, named-field path** (emit_core.c
+   `emit_carrier_bridge`, the `tur_option_t`/`tur_result_box_t` reconstruction):
+   a nested WIDE by-value field (`(Result (Option int) cstr)`'s ok_val holding a
+   16-byte boxed Option) was C-cast int64->aggregate.  Fix: deref-unbox
+   (`*(tur_adt_Option__int *)(intptr_t)(box->ok_val)`).  NOTE this path is
+   struct-app-only (gated on `type_extract_struct_app` + Option/Result name), so
+   it does NOT cover a LOWERED ADT Result.
 
-The clean fix needs a single notion of "this ADT-app has a concrete, actually-
-emitted monomorph layout" that (a) is true for non-recursive concrete apps like
-`(Option int)` / `(Cons (Option int))`, (b) is false for recursive-functor
-monomorphs that are never emitted, and (c) is used uniformly by `type_c_name`,
-`type_has_concrete_codegen_layout`, the construction path, and the field-read
-path.  That is a layout-registration consolidation, not a leaf patch -- hence
-reported rather than forced.
+5. **Carrier-box readback, ADT positional path** (NOT yet located): a lowered
+   record-ADT Result reconstructed in a `#{Construct}`/instance spec body emits
+   `(tur_adt_Result__Option__int__cstr){.as.Result._1 = (tur_adt_Option__int)
+   (__t->ok_val), ...}` -- the same int64->aggregate cast, but via the positional
+   `.as.<Ctor>._N` form, not the named canonical readback in (4).  This is the
+   remaining build error for `nested-construct-byvalue-decode`.
 
-## Fix directions
+6. **`constrained-loop-vec-push-byvalue-result-element`**: a SEPARATE deeper
+   fixture (its header documents three combined defects -- nested return-dispatch
+   redirect mistyping `dec`'s seed, the return-only-poly accessor, and the
+   vec-push carrier bridge).  Flipping the nested app to by-value turns its
+   prior runtime segfault into a build error; fully fixing it needs the
+   return-dispatch work, out of scope here.
 
-- Give `type_has_concrete_codegen_layout` an ADT-app arm gated on
-  non-recursion (an `AdtDef` recursion flag, or "the monomorph is registered in
-  the adt-app registry"), so the recursive HKT monomorphs stay carrier while
-  `(Option int)` / `(Cons (Option int))` become concrete -- then add the
-  `:heap`-ADT-receiver branch to EX_GET_FIELD that casts to the monomorph and
-  reads the inline aggregate field (mirroring the existing :heap-STRUCT receiver
-  handling at the struct path).
+Sites 1-4 are implemented and correct in isolation; 5 and 6 remain.  Because the
+nested-by-value flip is global (it changes `type_c_name` / `adt_app_is_byvalue_
+product` for EVERY consumer), a partial landing regresses `nested-construct-
+byvalue-decode` (site 5) -- which passes today -- so the cluster must land all of
+1-5 atomically (and accept 6 as a separately-tracked residual).
+
+## Why NOT broaden `type_has_concrete_codegen_layout` globally
+
+The tempting one-liner -- give its `TY_APP` arm an ADT-app case -- regresses 9
+DEFAULT fixtures: a MULTI-variant recursive-functor app `(ExprF Expr)` then gets
+named `ExprF__Expr` by `type_c_name`'s `register_struct_app` fallback but is never
+emitted (`unknown type name`).  Gating on `adt_app_is_byvalue_product`
+(single-variant flat product) avoids the default regressions but still drives the
+force-lower cascade 1-6 above; measured net was 30 -> 30 (cleared list-length /
+list-homog / tuple-type-bracket-sugar, regressed nested-construct-byvalue-decode /
+constrained-loop) until sites 4+5 are both done.
+
+## Fix direction (for a dedicated pass)
+
+Land sites 1-5 together: the two predicate fixes (`adt_app_is_byvalue_product`
+and `type_app_is_concrete_adt` accept a nested by-value ADT-app arg/field), the
+`heap_adt_recv` EX_GET_FIELD branch, the `emit_registered_adt_app_rec` dependency
+pre-pass, and BOTH carrier-box readback paths (named + ADT-positional)
+deref-unboxing a nested wide by-value field.  Verify the default suite (esp.
+`hkt-cata-*`, which must stay carrier) and re-sweep force-lower.  Track
+`constrained-loop-vec-push-byvalue-result-element` (site 6) separately under its
+own return-dispatch report.
 
 ## Notes
 
-- Default suite is unaffected (only the lowered representation triggers it).
-- Distinct from the (landed) vec-element carrier<->by-value read bridge: that was
-  an inline-C generic-result deref; this is the cons-cell field read using the
-  wrong (generic vs monomorph) struct layout.
+- Default suite is unaffected by the bug (only the lowered representation triggers
+  it); the danger is entirely in the fix's blast radius.
+- Distinct from the landed vec-element carrier<->by-value read bridge (an
+  inline-C generic-result deref) and the by-value-ADT `any` box/unbox.
