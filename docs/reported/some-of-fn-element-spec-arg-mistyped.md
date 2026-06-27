@@ -31,16 +31,40 @@ fat-closure handle ABI and the carrier.
 - `hkt-stdlib-option-result-instances` -- the `(:: (fn ...) int)`-erased sibling
   (`some___spec__bool_...` arg mismatch).
 
-## Root cause (direction)
+## Root cause (CONFIRMED 2026-06-27 -- and why it is a dedicated pass)
 
 A function-typed construct element rides as the opaque fat-closure handle
-(`void *` / int64), but the `some`/`ok` `#{Construct}` spec arg-type computation
-resolves the element `(fn [float] float)` to its result kind (`double`) rather
-than the opaque handle. The element should be treated as the fat-closure carrier
-(int64) when it is a `TY_FN`, regardless of the fn's result type. Likely in the
-abi spec `arg_types` derivation for a construct whose payload element is a
-function (the float result leaks through a poly-to-fat-float / result-kind
-path); the int case is masked because int64 == the handle ABI.
+(`void *` / int64), but `(some <float-fn>)` mints `some__spec__...opaque_double`
+(arg `double`) -- and the spec body `ctor_Option__opaque(true, x)` then passes
+that `double` to the int64 ctor field too. `type_c_name` of the resolved arg is
+`double` because the arg is the fn's RESULT type, not the handle. The int-fn
+sibling is masked because int64 == the handle ABI.
+
+The deeper problem is that at the `emit_abi_register_call` arg-loop the some
+call's three pieces of type information all DISAGREE for the fn payload (traced
+with a temporary `[SOME]` probe):
+
+- the declared param `generic_arg` is the bare class tyvar `A` (TY_TYVAR);
+- the recorded `abi_binding` is `A = double` (TY_FLOAT) -- the elaborator
+  recorded the fn's RESULT type, not `(fn [float] float)` nor the int64 handle;
+- `call->type` is the carrier-collapsed `(Option ...)` whose c-name is
+  `int64_t` (TY_APP, element erased);
+- the argument expression, walked through let/reinterpret/do, bottoms out at the
+  closure-construction `EX_CALL` typed `TY_TYVAR` -- so there is no local
+  "the payload is a function" signal either.
+
+The AUTHORITATIVE `Option__opaque` result element is only recovered DOWNSTREAM
+(the construct-recovered-byvalue threading from the consuming `ap`), after the
+arg-loop has already fixed `arg_types[0] = double` from the binding. So a correct
+fix must either (a) repair the elaboration binding to record the fn payload as
+its handle/`(fn ...)` type rather than the fn's result, or (b) reconcile
+`arg_types[0]` against the recovered result element just before
+`emit_abi_intern_spec` (when `result_type` = `Option__opaque` is known) -- both
+larger than a local arg-loop tweak.
+
+A naive "normalize a TY_FN-typed generic element arg to int64" does NOT fire
+here: `arg_types[0]` is already `TY_FLOAT` (the binding collapsed the fn to its
+result) before the loop, never `TY_FN`.
 
 ## Status
 
@@ -48,6 +72,7 @@ Surfaced finishing the boxed-aggregate carrier-base work
 (`docs/archive/lowered-option-result-construct-carrier-base.md`), which fixed the
 non-fn members of that cluster (`positional-opaque-ok`/`-pap`,
 `kleisli-arrow-instance`). This fn-element arg-typing case is independent of the
-carrier representation and is left for a focused HKT-fn-element pass; see also
-`docs/archive/ap-fn-in-container-monomorphization-plan.md` for the by-value
-fn-in-container machinery this rides on.
+carrier representation and needs a focused pass on either the elaboration
+binding for an fn construct-payload or the arg/result reconciliation at spec
+intern; see also `docs/archive/ap-fn-in-container-monomorphization-plan.md` for
+the by-value fn-in-container machinery this rides on.
