@@ -69,7 +69,7 @@ result) before the loop, never `TY_FN`.
 ## Status
 
 Surfaced finishing the boxed-aggregate carrier-base work
-(`docs/archive/lowered-option-result-construct-carrier-base.md`), which fixed the
+(`docs/reported/lowered-option-result-construct-carrier-base.md`), which fixed the
 non-fn members of that cluster (`positional-opaque-ok`/`-pap`,
 `kleisli-arrow-instance`). This fn-element arg-typing case is independent of the
 carrier representation and needs a focused pass on either the elaboration

@@ -1,26 +1,56 @@
 # Lowered Option/Result `#{Construct}` carrier base returns by-value into int64
 
-**RESOLVED (boxed-aggregate).** Fixed in `seam-4: boxed-aggregate carrier base
-for lowered Option/Result constructs`. The carrier of a lowered parametric
-Option/Result is now a heap pointer to the record-ADT aggregate (layout-
-identical to the legacy `tur_option_t`/`tur_result_box_t`, so the canonical
-readback, `.is-some`/`.value`, and the legacy helpers all read it):
+**STILL OPEN. A boxed-aggregate attempt was made and REVERTED -- it was net-
+negative under force-lower** (commits `seam-4: boxed-aggregate carrier base ...`
++ `... recognize lowered by-value Option/Result spec result ...`, reverted by
+`seam-4: revert boxed-aggregate carrier base (net regression ...)`).
 
-- `emit_fns.c`: the M2b carrier-synth gained a branch for the lowered ctor-call
-  `#{Construct}` body -- it heap-boxes the aggregate and returns the pointer as
-  the int64 carrier; an Option `none` (discriminator literal false) stays the
-  NULL carrier so a bare `== 0` test keeps working.
-- `emit_expr.c` (`fn_body_tail_byvalue_carrier_type`): a carrier-returning
-  closure whose tail is a `some`/`ok` spec now heap-boxes the by-value spec
-  result (accepts a concrete non-:heap aggregate, not just nominal carrier-ABI
-  types).
+What was tried (boxed-aggregate, the report's option 2):
 
-Fixes `positional-opaque-ok`, `positional-pap-opaque-ok`,
-`kleisli-arrow-instance` under force-lower. The other two fixtures the original
-report listed (`hkt-ap-fn-in-container`, `hkt-stdlib-option-result-instances`)
-turned out to have a DIFFERENT root -- the `some` spec arg type for a
-`(fn [float] float)` element is mistyped as `double` instead of the int64
-fat-closure handle -- now tracked separately in
+- `emit_fns.c` M2b carrier-synth: a branch for the lowered ctor-call
+  `#{Construct}` body that heap-boxed the aggregate (none -> NULL, some/ok/err
+  -> malloc'd box) and returned the pointer as the int64 carrier.
+- `emit_expr.c`: broadened `expr_emits_byvalue_carrier_abi` /
+  `fn_body_tail_byvalue_carrier_type` to treat ANY concrete non-:heap aggregate
+  spec result as a by-value carrier producer (not just nominal carrier-ABI
+  types), so the return/closure bridges would heap-box a `some`/`ok` spec
+  result.
+
+Why it regressed (force-lower only; the default suite does NOT lower
+Option/Result, so it stayed 1863/0 and could not catch this -- a force-lower
+sweep is required to see it):
+
+- It fixed 4 (`positional-opaque-ok`/`-pap`, `kleisli-arrow-instance`,
+  `typeclass-return-dispatch-result-wrapped`) but regressed ~9 previously-passing
+  fixtures: a whole `option-*` cluster (`option-basic`, `option-of-tvec-eq`,
+  `option-construct-byvalue-return-spec`, `option-consumers-byvalue-arg`,
+  `option-map-capturing-closure`, `option-map-literal-none-unannotated-lambda`)
+  plus `list-length`/`list-homog-byvalue-aggregate-element` and
+  `constrained-instance-dispatch-parametric-container-element`.
+- Two distinct over-reaches: (a) the M2b heap-box changed the lowered carrier
+  representation in a way option consumers did not agree with (the carrier and
+  by-value worlds for the SAME `(Option int)` must agree, and the construct base
+  is only one of many producers); (b) the predicate broadening made heap-box
+  bridges over-fire -- e.g. `(some 42)` in a let-init was boxed into an
+  aggregate-typed binding (`tur_adt_Option__int x = (int64_t)(intptr_t)p;` ->
+  "invalid initializer").
+
+Lesson for the next attempt: the carrier vs by-value representation of a lowered
+parametric Option/Result is ONE global decision -- changing only the construct
+base (or only one predicate) desynchronizes producers and consumers. A correct
+boxed-aggregate pass must flip the representation atomically across every
+producer (construct base AND every `some`/`ok` call site) AND every consumer
+(`.is-some`/`.value`, match, the carrier<->concrete bridges, the legacy
+`tur_option_t`/`tur_result_box_t` helpers), and must be validated by a
+FORCE-LOWER sweep, not just the default suite. Given that blast radius, option 1
+(sentinel-preserving: the carrier base reproduces the legacy carrier exactly --
+`return 0` for none, `tur_box_some`/`tur_box_ok` for the rest -- which is what
+the make-struct M2b path already emits at default; the lowered ctor-form body
+just needs the same legacy-carrier synth) is the lower-risk path and should be
+tried first.
+
+The two `hkt-*` fixtures the original report listed have a DIFFERENT root (`some`
+of a `(fn [float] float)` element mistypes its spec arg as `double`), tracked in
 `docs/reported/some-of-fn-element-spec-arg-mistyped.md`.
 
 ---
