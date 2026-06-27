@@ -1970,18 +1970,38 @@ static bool emit_abi_try_byval_twin_redirect(EmitCtx *ctx, const Expr *call,
  * GENERAL call-site relabel bug (it hit Vec equally) and is fixed in
  * emit_expr.c via the `callee_param_is_typed_heap_ptr` guard. */
 static bool type_is_heap_vec(Type t) {
-    if (!type_is_heap_struct(t)) return false;
-    StructDef *def = NULL;
-    if (t.kind == TY_STRUCT) def = t.as.struct_.def;
-    else if (t.kind == TY_APP) {
-        Type args[16]; uint8_t n = 0;
-        if (!type_extract_struct_app(&t, &def, args, &n)) return false;
+    const char *name = NULL;
+    if (type_is_heap_struct(t)) {
+        StructDef *def = NULL;
+        if (t.kind == TY_STRUCT) def = t.as.struct_.def;
+        else if (t.kind == TY_APP) {
+            Type args[16]; uint8_t n = 0;
+            if (!type_extract_struct_app(&t, &def, args, &n)) return false;
+        }
+        name = def ? def->name : NULL;
+    } else if (type_is_heap_adt(t)) {
+        /* CONV-S2: under defstruct-as-defadt the heap collections (Vec/Map/Set/
+         * MutableMap) are lowered record ADTs, so the inline-C float/cstr-safety
+         * gate (which forces non-heap scalar element slots back to the int64
+         * carrier the inline-C body bit-reinterprets) must recognize the ADT
+         * form too; otherwise a `(Map K V)` with V=float retypes the value slot
+         * to `double`, turning the body's `(intptr_t)val` reinterpret into a
+         * numeric conversion (`0.5 -> 0`). */
+        AdtDef *adef = NULL;
+        if (t.kind == TY_ADT) adef = t.as.adt_.def;
+        else if (t.kind == TY_APP) {
+            Type args[16]; uint8_t n = 0;
+            if (!type_extract_adt_app(&t, &adef, args, &n)) return false;
+        }
+        name = adef ? adef->name : NULL;
+    } else {
+        return false;
     }
-    return def && def->name &&
-        (strcmp(def->name, "Vec") == 0 ||
-         strcmp(def->name, "Map") == 0 ||
-         strcmp(def->name, "Set") == 0 ||
-         strcmp(def->name, "MutableMap") == 0);
+    return name &&
+        (strcmp(name, "Vec") == 0 ||
+         strcmp(name, "Map") == 0 ||
+         strcmp(name, "Set") == 0 ||
+         strcmp(name, "MutableMap") == 0);
 }
 
 /* Does Type `t` mention the named type variable?  Local mirror of
