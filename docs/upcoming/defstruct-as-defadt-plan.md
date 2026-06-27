@@ -591,7 +591,7 @@ runtime *usage* seam, below.
      regenerated.  *Cleared ~43* (`httpd-*`, `clone-*`, `eqmap-struct`, the `Pos`
      `typeclass-*` tests).  Fixture `conv-defstruct-inline-c-abi`.
 
-   **Running total: 212 -> 32 unique build-failing fixtures under force-lower
+   **Running total: 212 -> 30 unique build-failing fixtures under force-lower
    (default suite stays 1863/0).**  (Sub-root (a) -- 0-arg construct in control
    flow -- the inline-C-tail return bridge, the accessor-unbox, the
    assignment-position straddle, the inline-C instance-method signature, the
@@ -602,9 +602,30 @@ runtime *usage* seam, below.
    (__inst_/construct) -> by-value-spec-param bridge, the wide-by-value-element
    accessor-unbox + ctor-box, the abi-spec interning recognizing a lowered
    by-value TY_ADT result, the M7-HKT transparent-int-newtype phantom
-   wrapper (`(Schema A)`), the vec-element carrier<->by-value read/escape
+   wrapper (`(Schema A)`), the by-value-ADT `any` box/unbox, the vec-element carrier<->by-value read/escape
    bridges, and the bare-receiver record-ADT field-tyvar collapse are all
    LANDED.)
+
+   - **by-value-ADT `any` box/unbox DONE (2026-06-27).**  Coercing a by-value
+     struct into the `any` top type heap-boxes it (malloc + copy, store the
+     pointer in the tagged payload) on inject and dereferences it on `(cast x
+     T)`.  The elaborator records this via `box_struct`/`target_struct`, both
+     `StructDef*` -- NULL under the lowering, where the by-value struct is a
+     record ADT, so EX_UNION_INJECT fell to `TUR_TAG(tag, (int64_t)(intptr_t)
+     (p))` (casting an aggregate to int64 -- "aggregate value used where an
+     integer was expected") and EX_ANY_CAST to `(tur_adt_Point)(intptr_t)
+     TUR_UNTAG(...)` (casting an int64 to a non-scalar).  Both arms now detect a
+     by-value ADT via `emit_type_is_byvalue_adt` (inject: the value's type;
+     cast: the result type `e->type`) and emit the same heap-box / pointer-deref
+     the struct path does, keyed on the ADT monomorph C name.  Cleared
+     `any-box-struct` and `if-narrow-chained` (the latter's `(is? v Point)`
+     narrowing unboxes through the identical path).  (`type-of` on the boxed
+     value now reports `adt` rather than `struct` under lowering -- correct
+     post-graduation, since a defstruct *is* sugar for a record ADT; the
+     `any-box-struct` snapshot regenerates to `adt` when the gate flips.)
+     Remaining cluster-C members `typeclass-return-dispatch-result-wrapped`
+     (Result-box cast) and `exists-pack-constrained-byval-struct` (existential
+     pack value slot) are distinct aggregate->carrier sites, still open.
 
    - **bare-receiver record-ADT field-tyvar collapse DONE (2026-06-27).**  A
      field read on a BARE (unparameterized) record-ADT receiver -- `(.ok-val r)`

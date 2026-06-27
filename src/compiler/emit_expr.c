@@ -2114,6 +2114,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(&out,
                     "TUR_TAG(%lld, ((union { double d; int64_t i; }){.d = (%s)}).i)",
                     (long long)tag, inner);
+            } else if (emit_type_is_byvalue_adt(ctx,
+                           e->as.union_inject_.value->type)) {
+                /* CONV-S1 seam 4: under the defstruct->defadt lowering a by-value
+                 * struct is a record ADT, so box_struct (a StructDef*) is NULL --
+                 * but the aggregate still cannot ride the int64 carrier.  Heap-box
+                 * it exactly as the struct path does, using the ADT monomorph C
+                 * name; EX_ANY_CAST unboxes via the same predicate on the target. */
+                const char *cn = emit_type_c_name(ctx,
+                    emit_resolve_type(ctx, e->as.union_inject_.value->type));
+                buf_printf(&out,
+                    "__extension__ ({ %s *__tur_box = (%s *)malloc(sizeof(%s)); "
+                    "*__tur_box = (%s); TUR_TAG(%lld, (int64_t)(intptr_t)__tur_box); })",
+                    cn, cn, cn, inner, (long long)tag);
             } else {
                 buf_printf(&out, "TUR_TAG(%lld, (int64_t)(intptr_t)(%s))",
                            (long long)tag, inner);
@@ -2168,6 +2181,17 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     "__tur_any_cast_check(TUR_GETTAG(__tur_c), %lld); "
                     "((union { int64_t i; double d; }){.i = TUR_UNTAG(__tur_c)}).d; })",
                     inner, (long long)target_tag);
+            } else if (emit_type_is_byvalue_adt(ctx, e->type)) {
+                /* CONV-S1 seam 4: by-value record-ADT target (lowered defstruct).
+                 * target_struct is NULL, but the payload was heap-boxed on inject,
+                 * so unbox by dereferencing the pointer -- the ADT analogue of the
+                 * struct deref above. */
+                const char *cn = emit_type_c_name(ctx, emit_resolve_type(ctx, e->type));
+                buf_printf(&out,
+                    "__extension__ ({ tur_tagged_t __tur_c = (%s); "
+                    "__tur_any_cast_check(TUR_GETTAG(__tur_c), %lld); "
+                    "*(%s *)(intptr_t)TUR_UNTAG(__tur_c); })",
+                    inner, (long long)target_tag, cn);
             } else {
                 Type target = type_simple(e->as.any_cast_.target_kind, CK_COPY);
                 buf_printf(&out,
