@@ -76,6 +76,122 @@ the way it works on Linux/macOS today" and is gated below.
 
 ---
 
+## Local Wine + llvm-mingw loop (macOS host)
+
+Wine + `llvm-mingw` lets you iterate on **WIN0** (compiler/runtime cross-build)
+and **WIN1** (generated-code preamble portability) entirely on a Mac, without
+round-tripping through GitHub Actions for every prod-cycle. This is **not** the
+gate for WIN2 (Godot shim) or WIN3 (async/IOCP) -- CI on a real
+`windows-latest` runner stays authoritative for those. But for the "does the
+compiler build, does the emitted C compile" loop, it cuts a 5-10 minute CI
+round-trip down to seconds.
+
+### Toolchain choice: `llvm-mingw` for local, Clang-cl for CI
+
+The plan targets **Clang-cl** as the canonical Windows toolchain. Clang-cl
+under Wine is a hassle (needs the MSVC headers + CRT, which are licensed and
+fiddly to stage), so for local iteration use **`llvm-mingw`** instead -- a
+self-contained tarball of `clang` + `lld` + MinGW-w64 headers/import libs that
+runs natively on macOS and produces real Windows PE binaries. The preprocessor
+surface (`_WIN32`, `__atomic_*`, `_Thread_local`, `<stdatomic.h>`) is the same
+as Clang-cl's, so portability bugs caught here will also be caught in CI. The
+small delta -- MinGW's CRT vs. MSVCRT, `__declspec(dllexport)` vs.
+`__attribute__((dllexport))`, name mangling for `extern "C"` -- only matters
+once you're shipping the actual `.dll`/`.exe` artifact, which is what CI is
+for.
+
+### macOS setup (Homebrew + mise)
+
+```sh
+# 1. Wine (CrossOver-flavoured fork, runs Win64 binaries on Apple Silicon)
+brew install --cask wine-stable
+# Apple Silicon: also install Rosetta if not already present
+softwareupdate --install-rosetta --agree-to-license
+
+# 2. llvm-mingw -- self-contained Clang + lld + MinGW-w64 toolchain
+#    Pinned via mise so the version is reproducible across machines.
+mise use -g llvm-mingw@20250528  # or whichever release is current
+# (If no mise plugin exists, fall back to a manual install:
+#   curl -L -o /tmp/llvm-mingw.tar.xz \
+#     https://github.com/mstorsjo/llvm-mingw/releases/download/20250528/llvm-mingw-20250528-ucrt-macos-universal.tar.xz
+#   sudo tar -C /opt -xf /tmp/llvm-mingw.tar.xz
+#   sudo ln -s /opt/llvm-mingw-20250528-ucrt-macos-universal /opt/llvm-mingw
+#   then add /opt/llvm-mingw/bin to PATH)
+
+# 3. Verify
+x86_64-w64-mingw32-clang --version  # should print clang version + target
+wine64 --version                    # should print wine-9.x or later
+```
+
+Wine first-run will populate `~/.wine/` -- let it finish before invoking any
+`.exe`. On Apple Silicon, Wine runs x86_64 binaries via Rosetta automatically;
+for ARM64 Windows binaries (out of scope for v1 anyway) you'd need
+`wine-crossover` or a separate ARM64 prefix.
+
+### CMake toolchain file
+
+Add `cmake/toolchain-windows-mingw.cmake` for local cross-builds (alongside
+the `toolchain-windows-clang.cmake` WIN0 already plans for CI):
+
+```cmake
+set(CMAKE_SYSTEM_NAME Windows)
+set(CMAKE_SYSTEM_PROCESSOR x86_64)
+set(TOOLCHAIN_PREFIX x86_64-w64-mingw32)
+set(CMAKE_C_COMPILER   ${TOOLCHAIN_PREFIX}-clang)
+set(CMAKE_CXX_COMPILER ${TOOLCHAIN_PREFIX}-clang++)
+set(CMAKE_RC_COMPILER  ${TOOLCHAIN_PREFIX}-windres)
+set(CMAKE_AR           ${TOOLCHAIN_PREFIX}-ar)
+set(CMAKE_RANLIB       ${TOOLCHAIN_PREFIX}-ranlib)
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+# Run the produced .exe through Wine so CTest / tests/run.sh work transparently
+set(CMAKE_CROSSCOMPILING_EMULATOR wine64)
+```
+
+Configure + build:
+
+```sh
+cmake -S . -B build-win -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-windows-mingw.cmake \
+  -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+cmake --build build-win -j
+wine64 build-win/tur.exe --version  # smoke test
+```
+
+`CMAKE_CROSSCOMPILING_EMULATOR=wine64` means `ctest` and any harness that
+invokes the built binary directly will Just Work -- the test runner does not
+need to know it's running a Windows binary.
+
+### Running the codegen-only fixture subset locally
+
+WIN0's testing plan calls for running the `emit-c` / `build` fixtures that
+don't reach POSIX async. Once `tur.exe` is built and Wine is on PATH, the same
+`tests/run.sh` invocation works:
+
+```sh
+TUR=wine64\ $(pwd)/build-win/tur.exe \
+  timeout 600 bash tests/run.sh tests/fixtures/windows-core/
+```
+
+(Use the dedicated `windows-core/` fixture group WIN1 introduces; the full
+suite stays gated on WIN3.)
+
+### Caveats -- don't trust Wine for everything
+
+- **IOCP / overlapped I/O** under Wine is approximate. WIN3 async work needs
+  real Windows.
+- **GUI / Godot integration** under Wine adds a second variable. WIN2's
+  `turmeric-godot.dll` smoke test stays on `windows-latest` CI.
+- **CRT divergence.** `llvm-mingw` defaults to UCRT, Clang-cl defaults to
+  MSVCRT. They agree on the C11 surface this plan cares about, but if you
+  see a divergence in `printf` formatting, `errno` codes, or wide-char
+  behaviour, suspect the CRT before suspecting the code.
+- **First Wine run is slow** (~30s to build the prefix). Subsequent runs are
+  near-native.
+
+---
+
 ## Phase WIN0 -- Compiler + runtime cross-compile to Windows
 
 **Goal:** produce `tur.exe` and a static `libturi.lib` (or equivalent) for
