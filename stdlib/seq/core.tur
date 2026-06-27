@@ -170,9 +170,9 @@
 (defn empty-seq [] : int
   (let [_d 0]
     (seq-new (fn [] (let [_ignore _d] (gen [] (while false (yield 0))))))))
-;; --- Vec helpers (no #{Unsafe} so usable inside gen bodies) ---
-;;; seq-vec-len -- return the length of a vec without #{Unsafe}.
-;;; seq-vec-get -- return element at index i in a vec without #{Unsafe}.
+;; --- Vec helpers (no #fx{Unsafe} so usable inside gen bodies) ---
+;;; seq-vec-len -- return the length of a vec without #fx{Unsafe}.
+;;; seq-vec-get -- return element at index i in a vec without #fx{Unsafe}.
 
 
 (defn seq-vec-len [v : int] : int
@@ -186,7 +186,7 @@
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void *)(intptr_t)v;
   return vec->data[i];
   ```)
-;; --- List helpers (no #{Unsafe} so usable inside gen bodies) ---
+;; --- List helpers (no #fx{Unsafe} so usable inside gen bodies) ---
 ;;; seq-list-nil? -- test whether a list is empty (NULL).
 ;;; seq-list-head -- return the value of the first Cons cell.
 ;;; seq-list-tail -- return the next pointer of the first Cons cell.

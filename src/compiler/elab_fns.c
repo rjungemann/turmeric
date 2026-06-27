@@ -1879,6 +1879,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     if (call->as.list.len >= body_start + 1) {
         Form *maybe_row = call->as.list.items[body_start];
         if (maybe_row->tag == F_MAP) {
+            warn_legacy_fx_row(maybe_row);
             uint8_t n_sym = (uint8_t)maybe_row->as.list.len;
             const Symbol **syms = (const Symbol **)arena_alloc(e->arena,
                                     (n_sym ? n_sym : 1) * sizeof(Symbol *));
@@ -3848,6 +3849,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
     if (call->as.list.len >= params_idx + 2) {
         Form *maybe_row = call->as.list.items[params_idx + 1];
         if (maybe_row->tag == F_MAP) {
+            warn_legacy_fx_row(maybe_row);
             uint8_t n_sym = (uint8_t)maybe_row->as.list.len;
             const Symbol **syms = (const Symbol **)arena_alloc(e->arena,
                                     (n_sym ? n_sym : 1) * sizeof(Symbol *));
@@ -4613,6 +4615,7 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
     uint32_t ret_idx = 3;
     if (ret_idx < call->as.list.len && call->as.list.items[ret_idx]->tag == F_MAP) {
         /* #{...} effect-row annotation: skip silently (advisory in v1) */
+        warn_legacy_fx_row(call->as.list.items[ret_idx]);
         ret_idx++;
     }
     if (ret_idx >= call->as.list.len) {

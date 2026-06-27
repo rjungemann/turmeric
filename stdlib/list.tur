@@ -149,7 +149,7 @@
 ;;; Since: Phase TC1
 
 (defn list-length [l : int]
-  #{}
+  #fx{}
   : int
   ```c
   struct __tur_cell_t { int64_t head; int64_t tail; };

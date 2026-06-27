@@ -17,11 +17,11 @@
 (defn main [] : int
   ;; let-bound fat box, ascribed + applied, both fields read back
   (let [ps (mk-fpair 1.5 2.5)
-        p  ((:: ps (fn [float] #{} (Pair float float))) 0.0)]
+        p  ((:: ps (fn [float] #fx{} (Pair float float))) 0.0)]
     (println (pair-fst p))
     (println (pair-snd p)))
   ;; direct application (no intermediate let binding), int element type
-  (let [q ((:: (mk-ipair 7 9) (fn [float] #{} (Pair int int))) 0.0)]
+  (let [q ((:: (mk-ipair 7 9) (fn [float] #fx{} (Pair int int))) 0.0)]
     (println (pair-fst q))
     (println (pair-snd q)))
   0)

@@ -1,7 +1,7 @@
 ---
 title: Sum Types and `Either`
 category: Language Basics
-description: Declaring binary and n-ary sum types with `defdata`, pattern matching with `match`, exhaustiveness behaviour and the `#{NonExhaustive}` opt-out, the FFI layout, and the stdlib `Either` module.
+description: Declaring binary and n-ary sum types with `defdata`, pattern matching with `match`, exhaustiveness behaviour and the `#fx{NonExhaustive}` opt-out, the FFI layout, and the stdlib `Either` module.
 ---
 
 # Sum Types and `Either`
@@ -170,10 +170,10 @@ match: non-exhaustive patterns -- constructor 'Left' of 'Either' not covered
 This is deliberate: the compiler will not let a new constructor silently slip
 past existing matches.
 
-### Opting out: `#{NonExhaustive}`
+### Opting out: `#fx{NonExhaustive}`
 
 When you have *proven* a case cannot occur by other means, place the
-`#{NonExhaustive}` marker immediately after `match` (before the scrutinee) to
+`#fx{NonExhaustive}` marker immediately after `match` (before the scrutinee) to
 suppress the diagnostic:
 
 ```turmeric
@@ -198,7 +198,7 @@ arm is unreachable.
 
 > Note: this guide's plan ([sum-types-either-plan](../archive/history/sum-types-either-plan.md)) originally specced
 > exhaustiveness as a *warning*. The implementation keeps it a hard **error**
-> (the stronger, pre-existing behaviour) and adds `#{NonExhaustive}` as the
+> (the stronger, pre-existing behaviour) and adds `#fx{NonExhaustive}` as the
 > deliberate opt-out -- see that plan's ADR for the rationale.
 
 ## The `Either` module

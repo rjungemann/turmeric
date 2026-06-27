@@ -27,7 +27,7 @@
 ;;; Since: Phase 20
 
 (defn ptr/null []
-  #{Unsafe}
+  #fx{Unsafe}
   : ptr
   ```c
   return NULL;
@@ -46,7 +46,7 @@
 ;;; Since: Phase 20
 
 (defn tvar/new [init]
-  #{Unsafe}
+  #fx{Unsafe}
   : TVar
   ```c
   TVar *tv = tur_tvar_new(NULL, (void*)(intptr_t)init);
@@ -66,7 +66,7 @@
 ;;; Since: Phase 20
 
 (defn tvar/read [tv : TVar]
-  #{Unsafe}
+  #fx{Unsafe}
   : ptr
   ```c
   return (void*)tur_tvar_read(tur_stm_current_tx(), (TVar*)tv);
@@ -83,7 +83,7 @@
 ;;; Since: Phase 20
 
 (defn tvar/write [tv : TVar val : ptr]
-  #{Unsafe}
+  #fx{Unsafe}
   : nil
   ```c
   tur_tvar_write(tur_stm_current_tx(), (TVar*)tv, (void*)val);
@@ -104,7 +104,7 @@
 ;;; Since: Phase 20
 
 (defn tvar/swap [tv : TVar new : ptr]
-  #{Unsafe}
+  #fx{Unsafe}
   : ptr
   ```c
   return (void*)tur_tvar_swap(tur_stm_current_tx(), (TVar*)tv, (void*)new);
@@ -125,7 +125,7 @@
 ;;; Since: Phase 21
 
 (defn tvar/cas [tv : TVar old : ptr new : ptr]
-  #{Unsafe}
+  #fx{Unsafe}
   : bool
   ```c
   return tur_tvar_cas(tur_stm_current_tx(), (TVar*)tv, (void*)old, (void*)new);

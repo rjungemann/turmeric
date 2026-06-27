@@ -3,7 +3,7 @@
 ;; Checks:
 ;;   (1) Using inline-C directly as the body of a variadic defn is rejected.
 
-(defn bad-var [a : int & rest : int] #{Unsafe} : int
+(defn bad-var [a : int & rest : int] #fx{Unsafe} : int
   ```c
   return a + 1;
   ```)

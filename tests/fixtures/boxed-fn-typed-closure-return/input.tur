@@ -11,10 +11,10 @@
 ;; body is a capturing closure, so the signature, forward declaration, and the
 ;; consumer let-binding all carry the void* fat-closure carrier in lockstep.
 
-(defn make-scale [k : float] : (fn [float] #{} float)
+(defn make-scale [k : float] : (fn [float] #fx{} float)
   (fn [x : float] : float (* x k)))     ;; captures k -> fat box
 
-(defn make-adder [k : int] : (fn [int] #{} int)
+(defn make-adder [k : int] : (fn [int] #fx{} int)
   (fn [x : int] : int (+ x k)))         ;; captures k -> fat box
 
 (defn main [] : int

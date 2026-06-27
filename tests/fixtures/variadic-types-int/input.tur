@@ -3,7 +3,7 @@
 ;; Checks the fast-path TypeKind comparison is unchanged: an :int rest accepts
 ;; :int args and the cons-list is walked correctly.
 
-(defn cons-list-len [lst :int] #{Unsafe} :int
+(defn cons-list-len [lst :int] #fx{Unsafe} :int
   ```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
   int64_t n = 0;
@@ -12,7 +12,7 @@
   return (int)n;
   ```)
 
-(defn sum-rest [& xs :int] #{Unsafe} :int
+(defn sum-rest [& xs :int] #fx{Unsafe} :int
   (cons-list-len xs))
 
 (defn main [] :int

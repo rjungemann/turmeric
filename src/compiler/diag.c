@@ -250,6 +250,8 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0600_DYNVAR_NO_EARMUFFS:        return "TUR-W0600";
         /* Deprecation band */
         case TUR_D0001_FN_TYPE_COLON:             return "TUR-D0001";
+        case TUR_D0002_FX_ROW_LEGACY_HASH:        return "TUR-D0002";
+        case TUR_D0003_FX_ROW_LEGACY_AT:          return "TUR-D0003";
         /* XF: experimental-flag mechanism */
         case TUR_E0310_UNKNOWN_EXPERIMENT:        return "TUR-E0310";
         case TUR_W0060_EXPERIMENTAL_PROTOTYPE:    return "TUR-W0060";
@@ -356,6 +358,8 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0600") == 0) return TUR_W0600_DYNVAR_NO_EARMUFFS;
     /* Deprecation band */
     if (strcmp(s, "TUR-D0001") == 0) return TUR_D0001_FN_TYPE_COLON;
+    if (strcmp(s, "TUR-D0002") == 0) return TUR_D0002_FX_ROW_LEGACY_HASH;
+    if (strcmp(s, "TUR-D0003") == 0) return TUR_D0003_FX_ROW_LEGACY_AT;
     /* XF: experimental-flag mechanism */
     if (strcmp(s, "TUR-E0310") == 0) return TUR_E0310_UNKNOWN_EXPERIMENT;
     if (strcmp(s, "TUR-W0060") == 0) return TUR_W0060_EXPERIMENTAL_PROTOTYPE;
@@ -1529,6 +1533,48 @@ static const DiagExplanation diag_explanations_[] = {
       "only the *inner* types inside (fn ...) lose theirs.  Run\n"
       "tools/rewrite_fn_type_colons.py to migrate a tree automatically.\n"
       "Promoted to an error under --Werror=deprecated.\n",
+    },
+    /* fx-row-syntax-rename-plan Phase 2: bare #{...} effect row */
+    { TUR_D0002_FX_ROW_LEGACY_HASH,
+      "TUR-D0002: bare `#{...}` effect row is deprecated; prefer `#fx{...}`\n"
+      "\n"
+      "The effect-row annotation used in function/handler signatures has\n"
+      "moved from the bare `#{...}` form to the self-describing `#fx{...}`\n"
+      "form, in line with the other reader literals (`#map{...}`,\n"
+      "`#set{...}`, `#row{...}`, `#refine{...}`, `#r{...}`).  The bare\n"
+      "`#{...}` slot is being reclaimed for a future reader literal.\n"
+      "\n"
+      "Example triggering this warning:\n"
+      "  (defn read-line [] #{Unsafe IO} : cstr ...)\n"
+      "                     ^^^^^^^^^^^^  legacy form\n"
+      "\n"
+      "Fix: prefix with `fx`:\n"
+      "  (defn read-line [] #fx{Unsafe IO} : cstr ...)\n"
+      "\n"
+      "Migration is fully mechanical -- run tools/migrate-fx-rows.py to\n"
+      "rewrite a tree.  The legacy form is removed in a future release.\n",
+    },
+    /* fx-row-syntax-rename-plan Phase 2: @{...} effect row */
+    { TUR_D0003_FX_ROW_LEGACY_AT,
+      "TUR-D0003: `@{...}` effect row is deprecated; prefer `#fx{...}`\n"
+      "\n"
+      "`@{...}` was an alternate sugar for the same effect-row form spelled\n"
+      "`#{...}`.  Having two spellings was the original wart this rename\n"
+      "fixes, so `@{...}` is being retired alongside the bare `#{...}` form;\n"
+      "both migrate to `#fx{...}`.\n"
+      "\n"
+      "Bare `@x` deref sugar is unaffected -- only the `@{...}` effect-row\n"
+      "form is deprecated.\n"
+      "\n"
+      "Example triggering this warning:\n"
+      "  (defn read-line [] @{Unsafe IO} : cstr ...)\n"
+      "                     ^^^^^^^^^^^^  legacy form\n"
+      "\n"
+      "Fix: rewrite as `#fx{...}`:\n"
+      "  (defn read-line [] #fx{Unsafe IO} : cstr ...)\n"
+      "\n"
+      "Run tools/migrate-fx-rows.py to rewrite a tree.  Removed in a future\n"
+      "release.\n",
     },
     /* XF (experimental-flag-mechanism-plan): unknown --enable= name */
     { TUR_E0310_UNKNOWN_EXPERIMENT,

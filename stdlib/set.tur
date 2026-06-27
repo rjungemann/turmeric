@@ -23,7 +23,7 @@
 
 (defn set-new [A]
   []
-  #{}
+  #fx{}
   : (Set A)
   ```c
   struct { void *hamt; } *s = malloc(sizeof(*s));
@@ -47,7 +47,7 @@
 
 (defn set-add [A]
   [s (Set A) h :int x :int]
-  #{}
+  #fx{}
   : (Set A)
   ```c
   struct { void *hamt; } *set = (void*)(intptr_t)s;
@@ -73,7 +73,7 @@
 
 (defn set-remove [A]
   [s (Set A) h :int x :int]
-  #{}
+  #fx{}
   : (Set A)
   ```c
   struct { void *hamt; } *set = (void*)(intptr_t)s;
@@ -99,7 +99,7 @@
 
 (defn set-member? [A]
   [s (Set A) h :int x :int]
-  #{}
+  #fx{}
   : bool
   ```c
   struct { void *hamt; } *set = (void*)(intptr_t)s;
@@ -120,7 +120,7 @@
 
 (defn set-count [A]
   [s (Set A)]
-  #{}
+  #fx{}
   : int
   ```c
   struct { void *hamt; } *set = (void*)(intptr_t)s;
@@ -142,7 +142,7 @@
 
 (defn set-union [A]
   [a (Set A) b (Set A)]
-  #{}
+  #fx{}
   : (Set A)
   ```c
   struct { void *hamt; } *sa = (void*)(intptr_t)a;
@@ -168,7 +168,7 @@
 
 (defn set-intersect [A]
   [a (Set A) b (Set A)]
-  #{}
+  #fx{}
   : (Set A)
   ```c
   struct { void *hamt; } *sa = (void*)(intptr_t)a;
@@ -205,7 +205,7 @@
 
 (defn set-diff [A]
   [a (Set A) b (Set A)]
-  #{}
+  #fx{}
   : (Set A)
   ```c
   struct { void *hamt; } *sa = (void*)(intptr_t)a;
@@ -245,7 +245,7 @@
 ;; docs/upcoming/v2/phase4-carrier-helper-inventory.md.
 
 (defn set-eq? [a : int b : int]
-  #{}
+  #fx{}
   : bool
   ```c
   struct { void *hamt; } *sa = (void*)(intptr_t)a;
@@ -283,7 +283,7 @@
 ;;; Since: Phase F3-5 (cross-plan-followups)
 
 (defn set-eq-cmp? [a : int b : int ^fat cmp-fn]
-  #{}
+  #fx{}
   : bool
   ```c
   /* O(n*m) comparison: iterate a's elements, scan b for a structural
@@ -333,7 +333,7 @@
 
 (defn set-free [A]
   [s (Set A)]
-  #{}
+  #fx{}
   : void
   ```c
   free((void*)(intptr_t)s);
@@ -342,7 +342,7 @@
 
 (defn set-hamt [A]
   [s (Set A)]
-  #{}
+  #fx{}
   : ptr<void>
   ```c struct { void *hamt; } *set = (void*)(intptr_t)s; return set->hamt; ```)
 ;;; set-eq-loop -- pure-Turmeric structural-equality walk over s1's HAMT.

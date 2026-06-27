@@ -3,7 +3,7 @@
 
 (defeffect Write [msg :cstr] :nil)
 
-(defn always-writes [x : int] #{e} : int
+(defn always-writes [x : int] #fx{e} : int
   (do (perform (Write "hello"))
       x))
 

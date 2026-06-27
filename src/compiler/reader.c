@@ -608,9 +608,13 @@ static Form *read_at(struct Reader *r) {
     advance(r); /* consume '@' */
     skip_ws_and_comments(r);
 
-    /* Effect-row annotation sugar for signatures. */
+    /* Effect-row annotation sugar for signatures.
+     * fx-row-syntax-rename-plan Phase 1: tag with PROV_FX_AT_LEGACY so elab
+     * emits TUR-D0003 on first consumption. */
     if (peek(r) == '{') {
-        return read_seq(r, '{', '}', F_MAP, "unterminated effect row (missing '}')");
+        Form *m = read_seq(r, '{', '}', F_MAP, "unterminated effect row (missing '}')");
+        if (m && m->tag == F_MAP) m->fx_prov = (uint8_t)PROV_FX_AT_LEGACY;
+        return m;
     }
 
     if (peek(r) == -1) {
@@ -919,7 +923,28 @@ static Form *read_map(Reader *r) {
         return NULL;
     }
 
-    return read_seq(r, '{', '}', F_MAP, "unterminated map (missing '}')");
+    /* fx-row-syntax-rename-plan Phase 1: bare `#{...}` is the legacy
+     * effect-row spelling.  Tag with PROV_FX_LEGACY so elab emits TUR-D0002
+     * the first time the form is consumed as an effect row.  Non-effect-row
+     * consumers (none in tree today, but the slot is reserved) ignore the
+     * provenance. */
+    Form *m = read_seq(r, '{', '}', F_MAP, "unterminated map (missing '}')");
+    if (m && m->tag == F_MAP) m->fx_prov = (uint8_t)PROV_FX_LEGACY;
+    return m;
+}
+
+/* fx-row-syntax-rename-plan Phase 1: `#fx{...}` is the explicit effect-row
+ * spelling, distinguished from the legacy bare `#{...}` only by the
+ * provenance tag.  Dispatched from read_form *before* the `#` + `{` map
+ * branch so `#fx{` does not parse as the symbol `fx` followed by a map. */
+static Form *read_fx_row(Reader *r) {
+    advance(r); /* consume '#' */
+    advance(r); /* consume 'f' */
+    advance(r); /* consume 'x' */
+    /* peek is '{' -- checked by caller */
+    Form *m = read_seq(r, '{', '}', F_MAP, "unterminated #fx{...} effect row (missing '}')");
+    if (m && m->tag == F_MAP) m->fx_prov = (uint8_t)PROV_FX_EXPLICIT;
+    return m;
 }
 
 static Form *read_set(Reader *r) {
@@ -2786,6 +2811,14 @@ static Form *read_form(Reader *r) {
         }
         (void)discarded;
         return read_form(r);
+    }
+    /* fx-row-syntax-rename-plan Phase 1: `#fx{...}` -- explicit effect row.
+     * Must be checked BEFORE the generic `#` + `{` map dispatch, otherwise
+     * the bare-map branch would never see `f` after `#`.  None of the
+     * other reader literals (`#map{`, `#set{`, `#row{`, `#refine{`, `#r{`,
+     * `#s(`, `#json...`) start with `#fx{`, so this prefix is unambiguous. */
+    if (c == '#' && peek2(r) == 'f' && peek3(r) == 'x' && peek_at(r, 3) == '{') {
+        return read_fx_row(r);
     }
     if (c == '#' && peek2(r) == '{') {
         return read_map(r);

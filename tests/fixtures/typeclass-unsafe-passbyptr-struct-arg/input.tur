@@ -12,7 +12,7 @@
 
 (defclass Show [a] (show [x] : cstr))
 
-(defn __build [lst : int] #{Unsafe} : cstr
+(defn __build [lst : int] #fx{Unsafe} : cstr
   ```c
   typedef struct __c { int64_t head; int64_t tail; } cons_t;
   cons_t *p = (cons_t *)(intptr_t)lst;

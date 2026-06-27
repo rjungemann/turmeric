@@ -2,6 +2,6 @@
   :name        "httpd-mw-compress-test"
   :version     "0.1.0"
   :description "Fixture: mw-compress gzip negotiation + roundtrip."
-  :spices #{
-    "tur-zlib" #{:path "../../../../turmeric-spices/spices/zlib"}
+  :spices #fx{
+    "tur-zlib" #fx{:path "../../../../turmeric-spices/spices/zlib"}
   })

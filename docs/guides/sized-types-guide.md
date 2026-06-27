@@ -354,7 +354,7 @@ let [lst list(10 20 30)]
     println(sized-vec-len(v))   ; => 3
 ```
 
-`sized-vec-from-list` requires `#{Unsafe}` because it casts the cons cell
+`sized-vec-from-list` requires `#fx{Unsafe}` because it casts the cons cell
 layout directly.
 
 ### Type-level index inference (SZ8)
@@ -411,7 +411,7 @@ C struct layout:
 struct { int64_t len; int64_t *data; }
 ```
 
-All `SizedBuf` operations require `#{Unsafe}` at the call site.
+All `SizedBuf` operations require `#fx{Unsafe}` at the call site.
 
 ### Heap allocation
 
@@ -582,7 +582,7 @@ C struct layout:
 struct { int64_t rows; int64_t cols; int64_t *data; }
 ```
 
-All operations require `#{Unsafe}`.
+All operations require `#fx{Unsafe}`.
 
 ```turmeric
 (import stdlib/sized-matrix)
@@ -680,7 +680,7 @@ struct { int64_t len; uint8_t *bits; }
 ```
 
 Bit `i` is stored at byte `i/8`, at position `i%8` within that byte (LSB = bit
-0). All operations require `#{Unsafe}`.
+0). All operations require `#fx{Unsafe}`.
 
 ```turmeric
 (import stdlib/sized-bits)
@@ -897,7 +897,7 @@ size-assert-eq!(size-static(4) size-static(5))
 | `sized-vec-of-2`       | `(-> int int SizedVec)`           | 2-element vec; size inferred as 2            |
 | `sized-vec-of-3`       | `(-> int int int SizedVec)`       | 3-element vec; size inferred as 3            |
 | `sized-vec-of-4`       | `(-> int int int int SizedVec)`   | 4-element vec; size inferred as 4            |
-| `sized-vec-from-list`  | `#{Unsafe} (-> int SizedVec)`     | Convert a cons list; size inferred at runtime |
+| `sized-vec-from-list`  | `#fx{Unsafe} (-> int SizedVec)`     | Convert a cons list; size inferred at runtime |
 | `sized-vec-push`       | `(-> SizedVec int SizedVec)`      | Prepend an element; size becomes n+1         |
 | `sized-vec-len`        | `(-> SizedVec int)`               | Element count                                |
 | `sized-vec-get`        | `(-> SizedVec int int)`           | Bounds-checked element read                  |
@@ -907,53 +907,53 @@ size-assert-eq!(size-static(4) size-static(5))
 
 | Function                  | Signature                          | Description                                       |
 |---------------------------|------------------------------------|---------------------------------------------------|
-| `sized-buf-new`           | `#{Unsafe} (-> int int)`           | Heap-allocate n elements (uninitialized)          |
-| `sized-buf-new-zeroed`    | `#{Unsafe} (-> int int)`           | Heap-allocate n elements, zeroed                  |
-| `sized-buf-free`          | `#{Unsafe} (-> int nil)`           | Free a heap-allocated buffer                      |
-| `sized-buf-len`           | `#{Unsafe} (-> int int)`           | Element count                                     |
-| `sized-buf-get`           | `#{Unsafe} (-> int int int)`       | Bounds-checked element read                       |
-| `sized-buf-set!`          | `#{Unsafe} (-> int int int int)`   | Bounds-checked element write; returns buf         |
-| `sized-buf-fill!`         | `#{Unsafe} (-> int int int)`       | Set all elements to a value                       |
-| `sized-buf-copy!`         | `#{Unsafe} (-> int int nil)`       | Copy src into dst (equal lengths required)        |
-| `sized-buf-sum`           | `#{Unsafe} (-> int int)`           | Sum of all elements                               |
-| `sized-buf-min`           | `#{Unsafe} (-> int int)`           | Minimum element                                   |
-| `sized-buf-max`           | `#{Unsafe} (-> int int)`           | Maximum element                                   |
-| `sized-buf-size`          | `#{Unsafe} (-> int Size)`          | Element count as a `Size` expression              |
-| `sized-buf-with-stack`    | `#{Unsafe} (-> int fn int)`        | Stack-allocate n elements; call f with buffer     |
-| `sized-buf-compute`       | `#{Unsafe} (-> int int)`           | Stack when n<=64, heap otherwise (demo)           |
-| `sized-buf-from-sized-vec`| `#{Unsafe} (-> SizedVec int)`      | Convert a `SizedVec` to a flat heap buffer        |
+| `sized-buf-new`           | `#fx{Unsafe} (-> int int)`           | Heap-allocate n elements (uninitialized)          |
+| `sized-buf-new-zeroed`    | `#fx{Unsafe} (-> int int)`           | Heap-allocate n elements, zeroed                  |
+| `sized-buf-free`          | `#fx{Unsafe} (-> int nil)`           | Free a heap-allocated buffer                      |
+| `sized-buf-len`           | `#fx{Unsafe} (-> int int)`           | Element count                                     |
+| `sized-buf-get`           | `#fx{Unsafe} (-> int int int)`       | Bounds-checked element read                       |
+| `sized-buf-set!`          | `#fx{Unsafe} (-> int int int int)`   | Bounds-checked element write; returns buf         |
+| `sized-buf-fill!`         | `#fx{Unsafe} (-> int int int)`       | Set all elements to a value                       |
+| `sized-buf-copy!`         | `#fx{Unsafe} (-> int int nil)`       | Copy src into dst (equal lengths required)        |
+| `sized-buf-sum`           | `#fx{Unsafe} (-> int int)`           | Sum of all elements                               |
+| `sized-buf-min`           | `#fx{Unsafe} (-> int int)`           | Minimum element                                   |
+| `sized-buf-max`           | `#fx{Unsafe} (-> int int)`           | Maximum element                                   |
+| `sized-buf-size`          | `#fx{Unsafe} (-> int Size)`          | Element count as a `Size` expression              |
+| `sized-buf-with-stack`    | `#fx{Unsafe} (-> int fn int)`        | Stack-allocate n elements; call f with buffer     |
+| `sized-buf-compute`       | `#fx{Unsafe} (-> int int)`           | Stack when n<=64, heap otherwise (demo)           |
+| `sized-buf-from-sized-vec`| `#fx{Unsafe} (-> SizedVec int)`      | Convert a `SizedVec` to a flat heap buffer        |
 
 ### stdlib/sized-matrix.tur
 
 | Function                    | Signature                                 | Description                                  |
 |-----------------------------|-------------------------------------------|----------------------------------------------|
-| `sized-matrix-new`          | `#{Unsafe} (-> int int int)`              | Allocate rows x cols (uninitialized)         |
-| `sized-matrix-new-zeroed`   | `#{Unsafe} (-> int int int)`              | Allocate rows x cols, zeroed                 |
-| `sized-matrix-free`         | `#{Unsafe} (-> int nil)`                  | Free the matrix                              |
-| `sized-matrix-rows`         | `#{Unsafe} (-> int int)`                  | Row count                                    |
-| `sized-matrix-cols`         | `#{Unsafe} (-> int int)`                  | Column count                                 |
-| `sized-matrix-size`         | `#{Unsafe} (-> int Size)`                 | Total element count as `Size`                |
-| `sized-matrix-row-size`     | `#{Unsafe} (-> int Size)`                 | Column count as `Size`                       |
-| `sized-matrix-get`          | `#{Unsafe} (-> int int int int)`          | Bounds-checked element read at (r, c)        |
-| `sized-matrix-set!`         | `#{Unsafe} (-> int int int int int)`      | Bounds-checked element write at (r, c)       |
-| `sized-matrix-fill!`        | `#{Unsafe} (-> int int int)`              | Set all elements to a value                  |
-| `sized-matrix-row-sum`      | `#{Unsafe} (-> int int int)`              | Sum of row r                                 |
-| `sized-matrix-col-sum`      | `#{Unsafe} (-> int int int)`              | Sum of column c                              |
-| `sized-matrix-total-sum`    | `#{Unsafe} (-> int int)`                  | Sum of all elements                          |
-| `sized-matrix-assert-shape!`| `#{Unsafe} (-> int Size Size nil)`        | Panic on shape mismatch                      |
+| `sized-matrix-new`          | `#fx{Unsafe} (-> int int int)`              | Allocate rows x cols (uninitialized)         |
+| `sized-matrix-new-zeroed`   | `#fx{Unsafe} (-> int int int)`              | Allocate rows x cols, zeroed                 |
+| `sized-matrix-free`         | `#fx{Unsafe} (-> int nil)`                  | Free the matrix                              |
+| `sized-matrix-rows`         | `#fx{Unsafe} (-> int int)`                  | Row count                                    |
+| `sized-matrix-cols`         | `#fx{Unsafe} (-> int int)`                  | Column count                                 |
+| `sized-matrix-size`         | `#fx{Unsafe} (-> int Size)`                 | Total element count as `Size`                |
+| `sized-matrix-row-size`     | `#fx{Unsafe} (-> int Size)`                 | Column count as `Size`                       |
+| `sized-matrix-get`          | `#fx{Unsafe} (-> int int int int)`          | Bounds-checked element read at (r, c)        |
+| `sized-matrix-set!`         | `#fx{Unsafe} (-> int int int int int)`      | Bounds-checked element write at (r, c)       |
+| `sized-matrix-fill!`        | `#fx{Unsafe} (-> int int int)`              | Set all elements to a value                  |
+| `sized-matrix-row-sum`      | `#fx{Unsafe} (-> int int int)`              | Sum of row r                                 |
+| `sized-matrix-col-sum`      | `#fx{Unsafe} (-> int int int)`              | Sum of column c                              |
+| `sized-matrix-total-sum`    | `#fx{Unsafe} (-> int int)`                  | Sum of all elements                          |
+| `sized-matrix-assert-shape!`| `#fx{Unsafe} (-> int Size Size nil)`        | Panic on shape mismatch                      |
 
 ### stdlib/sized-bits.tur
 
 | Function                   | Signature                          | Description                                    |
 |----------------------------|------------------------------------|------------------------------------------------|
-| `sized-bitvec-new`         | `#{Unsafe} (-> int int)`           | Allocate n bits, all zero                      |
-| `sized-bitvec-free`        | `#{Unsafe} (-> int nil)`           | Free the bit vector                            |
-| `sized-bitvec-len`         | `#{Unsafe} (-> int int)`           | Bit count                                      |
-| `sized-bitvec-size`        | `#{Unsafe} (-> int Size)`          | Bit count as a `Size` expression               |
-| `sized-bitvec-get`         | `#{Unsafe} (-> int int int)`       | Read bit i; returns 0 or 1                     |
-| `sized-bitvec-set!`        | `#{Unsafe} (-> int int int)`       | Set bit i to 1; returns bv                     |
-| `sized-bitvec-clear!`      | `#{Unsafe} (-> int int int)`       | Clear bit i to 0; returns bv                   |
-| `sized-bitvec-toggle!`     | `#{Unsafe} (-> int int int)`       | Flip bit i; returns bv                         |
-| `sized-bitvec-count`       | `#{Unsafe} (-> int int)`           | Popcount (number of set bits)                  |
-| `sized-bitvec-fill!`       | `#{Unsafe} (-> int int int)`       | Set all bits to v (0 or 1); returns bv         |
-| `sized-bitvec-assert-len!` | `#{Unsafe} (-> int Size nil)`      | Panic if bit count does not match expected     |
+| `sized-bitvec-new`         | `#fx{Unsafe} (-> int int)`           | Allocate n bits, all zero                      |
+| `sized-bitvec-free`        | `#fx{Unsafe} (-> int nil)`           | Free the bit vector                            |
+| `sized-bitvec-len`         | `#fx{Unsafe} (-> int int)`           | Bit count                                      |
+| `sized-bitvec-size`        | `#fx{Unsafe} (-> int Size)`          | Bit count as a `Size` expression               |
+| `sized-bitvec-get`         | `#fx{Unsafe} (-> int int int)`       | Read bit i; returns 0 or 1                     |
+| `sized-bitvec-set!`        | `#fx{Unsafe} (-> int int int)`       | Set bit i to 1; returns bv                     |
+| `sized-bitvec-clear!`      | `#fx{Unsafe} (-> int int int)`       | Clear bit i to 0; returns bv                   |
+| `sized-bitvec-toggle!`     | `#fx{Unsafe} (-> int int int)`       | Flip bit i; returns bv                         |
+| `sized-bitvec-count`       | `#fx{Unsafe} (-> int int)`           | Popcount (number of set bits)                  |
+| `sized-bitvec-fill!`       | `#fx{Unsafe} (-> int int int)`       | Set all bits to v (0 or 1); returns bv         |
+| `sized-bitvec-assert-len!` | `#fx{Unsafe} (-> int Size nil)`      | Panic if bit count does not match expected     |

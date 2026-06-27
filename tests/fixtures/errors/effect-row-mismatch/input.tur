@@ -5,7 +5,7 @@
 (defeffect Write [msg :cstr] :nil)
 (defeffect Read [] :int)
 
-(defn bad-fn [] #{Write} : int
+(defn bad-fn [] #fx{Write} : int
   (perform (Read)))
 
 (defn main [] : int

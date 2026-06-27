@@ -5,11 +5,11 @@
 (defeffect Tell [s :cstr] :nil)
 
 ;;; run-asker -- run a zero-arg callback with row variable e.
-(defn run-asker [f :(fn [] #{e} int)] #{e} : int
+(defn run-asker [f :(fn [] #fx{e} int)] #fx{e} : int
   (f))
 
 ;;; run-teller -- run a zero-arg callback with row variable e.
-(defn run-teller [g :(fn [] #{e} nil)] #{e} : nil
+(defn run-teller [g :(fn [] #fx{e} nil)] #fx{e} : nil
   (g))
 
 (defn main [] : int

@@ -4,7 +4,7 @@
 
 (defeffect Write [s :cstr] :nil)
 
-(defn do-write [s : cstr] #{Write} : nil
+(defn do-write [s : cstr] #fx{Write} : nil
   (perform (Write s)))
 
 (defn main [] : int

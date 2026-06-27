@@ -2,7 +2,7 @@
 
 (defeffect Write [s :cstr] :nil)
 
-(defn call-pure [f :(fn [cstr] #{} nil)] #{} : nil
+(defn call-pure [f :(fn [cstr] #fx{} nil)] #fx{} : nil
   (f "test"))
 
 (defn main [] : int

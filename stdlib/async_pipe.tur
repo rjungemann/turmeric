@@ -29,7 +29,7 @@
 ;;;
 ;;; Since: Phase T24
 (defn async-read-stdin [buf-size : int]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   /* Set stdin non-blocking */
@@ -71,7 +71,7 @@
 ;;; Since: Phase T24
 
 (defn async-stdin-buf []
-  #{Unsafe}
+  #fx{Unsafe}
   : ptr<void>
   ```c
   if (!tur_current_fiber) return NULL;
@@ -89,7 +89,7 @@
 ;;; Since: Phase T24
 
 (defn async-stdin-len []
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   if (!tur_current_fiber) return 0;
@@ -113,7 +113,7 @@
 ;;; Since: Phase T24
 
 (defn async-write-stdout [data : cstr len : int]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   /* Set stdout non-blocking */

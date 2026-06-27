@@ -30,7 +30,7 @@
 ;;;
 ;;; Since: Phase RF2
 
-(defn roll [layer : int] #{} : int (Roll layer))
+(defn roll [layer : int] #fx{} : int (Roll layer))
 ;;; unroll -- unwrap one layer of Fix to expose the inner functor value.
 ;;;
 ;;; Parameters:
@@ -44,7 +44,7 @@
 ;;;
 ;;; Since: Phase RF2
 
-(defn unroll [fix : int] #{} : int (match fix (Roll inner) inner))
+(defn unroll [fix : int] #fx{} : int (match fix (Roll inner) inner))
 ;;; cata -- catamorphism: fold a Fix value using an F-algebra.
 ;;;
 ;;; A catamorphism (or "fold") collapses a Fix-encoded recursive structure by

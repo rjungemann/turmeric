@@ -52,7 +52,7 @@
 ;;; Since: Phase T19-C
 
 (defn thread-spawn-fn [fn-ptr : ptr<void> arg : ptr<void>]
-  #{Unsafe}
+  #fx{Unsafe}
   : ThreadHandle
   ```c
   TurThreadState *state = (TurThreadState *)malloc(sizeof(TurThreadState));
@@ -87,7 +87,7 @@
 ;;; Since: Phase T19-C
 
 (defn thread-join [t : ThreadHandle]
-  #{Unsafe}
+  #fx{Unsafe}
   : nil
   ```c
   TurThreadHandle *h = (TurThreadHandle *)t;
@@ -108,7 +108,7 @@
 ;;; Since: Phase T19-C
 
 (defn thread-detach [t : ThreadHandle]
-  #{Unsafe}
+  #fx{Unsafe}
   : nil
   ```c
   TurThreadHandle *h = (TurThreadHandle *)t;
@@ -129,7 +129,7 @@
 ;;; Since: Phase T19-C
 
 (defn thread-id []
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   return (int64_t)(uintptr_t)pthread_self();
@@ -152,7 +152,7 @@
 
 
 (defn cancel-thread [t : ThreadHandle]
-  #{Unsafe}
+  #fx{Unsafe}
   : void
   ```c
   TurThreadHandle *h = (TurThreadHandle *)t;
@@ -172,7 +172,7 @@
 ;;; Since: Phase TC0
 
 (defn cancelled? []
-  #{Unsafe}
+  #fx{Unsafe}
   : bool
   ```c
   return tur_thread_cancel_requested() != 0;
@@ -200,7 +200,7 @@
 ;;; Since: Phase TC1
 
 (defn with-cancel-guard [cleanup : ptr<void> body : ptr<void>]
-  #{Unsafe}
+  #fx{Unsafe}
   : nil
   ```c
   /* Save previous cancel jmpbuf state (supports nested guards) */
@@ -228,7 +228,7 @@
 ;;; __yield-point-impl -- internal: check cancel and exit if cancelled.
 
 (defn __yield-point-impl []
-  #{Unsafe}
+  #fx{Unsafe}
   : void
   ```c
   if (tur_thread_cancel_requested()) {

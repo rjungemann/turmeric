@@ -811,6 +811,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 const Symbol *one[1] = { eff_f->as.sym };
                 handled_row = effect_row_unresolved(e->arena, one, 1);
             } else if (eff_f->tag == F_MAP) {
+                warn_legacy_fx_row(eff_f);
                 uint8_t n_sym = (uint8_t)eff_f->as.list.len;
                 const Symbol **syms = (const Symbol **)arena_alloc(e->arena,
                                         (n_sym ? n_sym : 1) * sizeof(Symbol *));
@@ -1141,6 +1142,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             EffectRow *fn_effect_row = NULL;
             if (idx < form->as.list.len && form->as.list.items[idx]->tag == F_MAP) {
                 Form *row_form = form->as.list.items[idx++];
+                warn_legacy_fx_row(row_form);
                 uint8_t n_row_sym = (uint8_t)row_form->as.list.len;
                 const Symbol **row_syms = (const Symbol **)arena_alloc(e->arena,
                     (n_row_sym ? n_row_sym : 1) * sizeof(Symbol *));

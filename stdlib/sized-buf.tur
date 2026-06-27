@@ -41,7 +41,7 @@
 
 
 (defn __sized-buf-new-raw [n]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   struct { int64_t len; int64_t *data; } *b = malloc(sizeof(*b));
@@ -51,7 +51,7 @@
   ```)
 
 (defn __sized-buf-new-zeroed-raw [n]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   struct { int64_t len; int64_t *data; } *b = malloc(sizeof(*b));
@@ -61,7 +61,7 @@
   ```)
 
 (defn __sized-buf-free-raw [b]
-  #{Unsafe}
+  #fx{Unsafe}
   : nil
   ```c
   struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
@@ -70,7 +70,7 @@
   ```)
 
 (defn __sized-buf-len-raw [b]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
@@ -78,7 +78,7 @@
   ```)
 
 (defn __sized-buf-get-raw [b i]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
@@ -89,7 +89,7 @@
   ```)
 
 (defn __sized-buf-set!-raw [b i v]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
@@ -100,7 +100,7 @@
   ```)
 
 (defn __sized-buf-fill!-raw [b v]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
@@ -109,7 +109,7 @@
   ```)
 
 (defn __sized-buf-copy!-raw [dst src]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   struct { int64_t len; int64_t *data; } *d = (void*)(intptr_t)dst;
@@ -124,7 +124,7 @@
   ```)
 
 (defn __sized-buf-sum-raw [b]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
@@ -134,7 +134,7 @@
   ```)
 
 (defn __sized-buf-min-raw [b]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
@@ -145,7 +145,7 @@
   ```)
 
 (defn __sized-buf-max-raw [b]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
@@ -156,7 +156,7 @@
   ```)
 
 (defn __sized-buf-from-sized-vec-raw [v]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   /* SizedVec GADT node layout (from generated C):
@@ -455,7 +455,7 @@
 ;;; Since: Phase SZ2
 
 (defn sized-buf-with-stack [n f]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   /* alloca: data lives on THIS function's stack frame.
@@ -493,7 +493,7 @@
 ;;; Since: Phase SZ2
 
 (defn sized-buf-compute [n]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   int64_t threshold = 64;

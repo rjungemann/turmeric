@@ -9,7 +9,7 @@
   (match s (Static n) n (Add a b) (+ (size-eval a) (size-eval b))
             (Mul a b) (* (size-eval a) (size-eval b))))
 
-(defn sized-bitvec-new [n] #{Unsafe} : int
+(defn sized-bitvec-new [n] #fx{Unsafe} : int
   ```c
   struct { int64_t len; uint8_t *bits; } *bv = malloc(sizeof(*bv));
   bv->len  = n;
@@ -18,24 +18,24 @@
   return (int64_t)(intptr_t)bv;
   ```)
 
-(defn sized-bitvec-free [bv] #{Unsafe} : nil
+(defn sized-bitvec-free [bv] #fx{Unsafe} : nil
   ```c
   struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
   if (b->bits) free(b->bits);
   free(b);
   ```)
 
-(defn sized-bitvec-len [bv] #{Unsafe} : int
+(defn sized-bitvec-len [bv] #fx{Unsafe} : int
   ```c
   return ((struct { int64_t len; uint8_t *bits; } *)(intptr_t)bv)->len;
   ```)
 
-(defn sized-bitvec-size [bv] #{Unsafe} : Size
+(defn sized-bitvec-size [bv] #fx{Unsafe} : Size
   ```c
   return ctor_Static(((struct { int64_t len; uint8_t *bits; } *)(intptr_t)bv)->len);
   ```)
 
-(defn sized-bitvec-get [bv i] #{Unsafe} : int
+(defn sized-bitvec-get [bv i] #fx{Unsafe} : int
   ```c
   struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
   if (i < 0 || i >= b->len) {
@@ -44,7 +44,7 @@
   return (b->bits[i / 8] >> (i % 8)) & 1;
   ```)
 
-(defn sized-bitvec-set! [bv i] #{Unsafe} : int
+(defn sized-bitvec-set! [bv i] #fx{Unsafe} : int
   ```c
   struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
   if (i < 0 || i >= b->len) {
@@ -54,7 +54,7 @@
   return bv;
   ```)
 
-(defn sized-bitvec-clear! [bv i] #{Unsafe} : int
+(defn sized-bitvec-clear! [bv i] #fx{Unsafe} : int
   ```c
   struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
   if (i < 0 || i >= b->len) {
@@ -64,7 +64,7 @@
   return bv;
   ```)
 
-(defn sized-bitvec-toggle! [bv i] #{Unsafe} : int
+(defn sized-bitvec-toggle! [bv i] #fx{Unsafe} : int
   ```c
   struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
   if (i < 0 || i >= b->len) {
@@ -74,7 +74,7 @@
   return bv;
   ```)
 
-(defn sized-bitvec-count [bv] #{Unsafe} : int
+(defn sized-bitvec-count [bv] #fx{Unsafe} : int
   ```c
   struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
   int64_t nbytes = (b->len + 7) / 8;
@@ -86,7 +86,7 @@
   return count;
   ```)
 
-(defn sized-bitvec-assert-len! [bv expected : Size] #{Unsafe} : nil
+(defn sized-bitvec-assert-len! [bv expected : Size] #fx{Unsafe} : nil
   (require-msg!
     (= (sized-bitvec-len bv) (size-eval expected))
     "sized-bitvec-assert-len!: bit count mismatch"))

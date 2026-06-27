@@ -50,7 +50,7 @@ The same works for built-in operators:
 
 The partially-applied closure carries the full type of its remaining parameters,
 including type annotations on rank-2 polymorphic slots and effect rows. A
-partial application of an `#{IO}` function is itself `#{IO}`.
+partial application of an `#fx{IO}` function is itself `#fx{IO}`.
 
 ---
 

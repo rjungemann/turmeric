@@ -3,7 +3,7 @@
   ;; via cross-spice :c-sources propagation. Forward-declared here rather than
   ;; via the dep's private header (dep :c-includes are an implementation
   ;; detail). The binary exits 7.
-  (defn vendor-value [] #{Unsafe} : int
+  (defn vendor-value [] #fx{Unsafe} : int
     ```c
     extern int vendor_value(void);
     return vendor_value();

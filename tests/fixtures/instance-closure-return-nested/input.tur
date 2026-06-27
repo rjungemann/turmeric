@@ -14,7 +14,7 @@
 ;; protocol.
 
 (defclass HasAdder [a]
-  (adder [self] : (fn [int] #{} (fn [int] int))))
+  (adder [self] : (fn [int] #fx{} (fn [int] int))))
 
 (defstruct AddW [a]
   (raw :int))

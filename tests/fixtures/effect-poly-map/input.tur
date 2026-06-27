@@ -5,7 +5,7 @@
 
 (defeffect Log [msg :cstr] :nil)
 
-(defn map-list [n : int f :(fn [int] #{e} int)] #{e} : int
+(defn map-list [n : int f :(fn [int] #fx{e} int)] #fx{e} : int
   (if (> n 0)
     (+ (f n) (map-list (- n 1) f))
     0))

@@ -40,7 +40,7 @@
 (defn print-contents [p : ptr<void>] : nil
   ```c printf("contents=%s\n", (const char*)p); free(p); ```)
 
-(defn main [] #{Unsafe} : int
+(defn main [] #fx{Unsafe} : int
   (let [fs (Test-FileSystem)]
     (fs-write fs "a.txt" "hello" 5)
     (print-int "exists=" (testfs-exists? "a.txt"))

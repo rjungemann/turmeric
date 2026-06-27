@@ -19,7 +19,7 @@
 (definstance Decode [int] (decode [doc val]
   ```c return tur_box_ok((int64_t)val); ```))
 
-(defn __int->cstr [n : int] #{Unsafe} : cstr
+(defn __int->cstr [n : int] #fx{Unsafe} : cstr
   ```c char *b = (char*)malloc(24); snprintf(b, 24, "%lld", (long long)n); return b; ```)
 
 (defn main [] : int

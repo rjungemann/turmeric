@@ -8,12 +8,12 @@
 (defeffect FS [] :nil ^extends IO ^capability)
 
 ;; A capability-tagged file reader (stands in for fs/read-text).
-(defn file-read [path : cstr] #{FS} : cstr
+(defn file-read [path : cstr] #fx{FS} : cstr
   ```c return (int64_t)(intptr_t)path;
   ```)
 
 ;; This function claims to be pure (#{}) but calls an FS-tagged function.
-(defn read-config [path : cstr] #{} : cstr
+(defn read-config [path : cstr] #fx{} : cstr
   (file-read path))
 
 (defn main [] : int 0)

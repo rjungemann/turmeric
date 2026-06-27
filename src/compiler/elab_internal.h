@@ -1259,6 +1259,9 @@ Expr       *elab_defdynamic(Elab *e, const Form *call);
 Expr       *elab_binding(Elab *e, const Form *call);
 DynVarEntry *dynvar_lookup(const Elab *e, const Symbol *name);
 
+/* elab_effects.c -- fx-row-syntax-rename-plan Phase 2 deprecation warner */
+void warn_legacy_fx_row(Form *f);
+
 /* elab_sessions.c */
 Expr *elab_session_make(Elab *e, const Form *call);
 Expr *elab_session_send(Elab *e, const Form *call);

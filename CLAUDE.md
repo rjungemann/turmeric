@@ -883,14 +883,14 @@ Rules for `& rest`:
   (which returns a variadic closure), but you cannot partially apply into
   the rest slot.
 
-### Cons-list manipulation in `#{Unsafe}` code
+### Cons-list manipulation in `#fx{Unsafe}` code
 
 The rest parameter is a `int64_t` holding a pointer to a linked list of
 `__tur_cons_cell { int64_t head; int64_t tail; }` cells, or `0` (nil).
 Inline-C helpers that walk it look like:
 
 ```turmeric
-(defn cons-list-sum [lst : int] #{Unsafe} : int
+(defn cons-list-sum [lst : int] #fx{Unsafe} : int
   ```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
   int64_t acc = 0;
@@ -903,7 +903,7 @@ Inline-C helpers that walk it look like:
 Or use a pure tail-recursive helper:
 
 ```turmeric
-(defn list-sum-acc [lst : int acc : int] #{Unsafe} : int
+(defn list-sum-acc [lst : int acc : int] #fx{Unsafe} : int
   (if (= lst 0)
     acc
     (list-sum-acc (cons-tail lst) (+ acc (cons-head lst)))))

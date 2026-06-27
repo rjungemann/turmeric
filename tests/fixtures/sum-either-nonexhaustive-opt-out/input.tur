@@ -6,7 +6,7 @@
   (Right R))
 
 (defn only-right [e : int] : int
-  (match #{NonExhaustive} e
+  (match #fx{NonExhaustive} e
     (Right r) r))
 
 (defn main [] : int

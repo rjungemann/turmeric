@@ -79,7 +79,7 @@ at call sites and gives you one place to evolve the shape.
 
 For raw C-ABI callbacks (`qsort` comparators, signal handlers, audio
 streams) the type is `c-fn` with the literal C signature; the body
-must be `#{Unsafe}` and the defn `#[used]` so the symbol survives
+must be `#fx{Unsafe}` and the defn `#[used]` so the symbol survives
 DCE. See [c-integration-guide.md](c-integration-guide.md) for the
 inline-C side.
 
@@ -200,9 +200,9 @@ also lie about what's stored.
 (defn __mw-chain-run [mws : (list Middleware) ctx : Ctx] : (Option Response) ...)
 ```
 
-For internal helpers in `#{Unsafe}` blocks the cons cell layout
+For internal helpers in `#fx{Unsafe}` blocks the cons cell layout
 (`struct { int64_t head; int64_t tail; }`) is documented in
-`CLAUDE.md` under "Cons-list manipulation in `#{Unsafe}` code." The
+`CLAUDE.md` under "Cons-list manipulation in `#fx{Unsafe}` code." The
 declared element type is still required -- variadic rest with a real
 element type is type-checked, so `& xs : Middleware` rejects mixed
 calls at the call site rather than reading them back as opaque `:int`.

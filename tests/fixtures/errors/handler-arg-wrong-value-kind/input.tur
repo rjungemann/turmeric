@@ -4,8 +4,8 @@
 ;; not, so PH1.2's type_is_subtype rejects it with TUR-E0001 and PH1.3 names
 ;; both handler types.
 (defeffect Ask [] :int)
-(defn want-cstr-result [h :(handler #{Ask} int cstr)] : int
+(defn want-cstr-result [h :(handler #fx{Ask} int cstr)] : int
   0)
-(defn pass-int-result [h :(handler #{Ask} int int)] : int
+(defn pass-int-result [h :(handler #fx{Ask} int int)] : int
   (want-cstr-result h))
 (defn main [] : int 0)

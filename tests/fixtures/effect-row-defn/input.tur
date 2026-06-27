@@ -5,11 +5,11 @@
 (defeffect Ask [] :int)
 
 ;; Single effect annotation
-(defn log-hello [] #{Log} : nil
+(defn log-hello [] #fx{Log} : nil
   (perform (Log "hello")))
 
 ;; Multiple effects annotation
-(defn ask-and-log [] #{Ask Log} : int
+(defn ask-and-log [] #fx{Ask Log} : int
   (do
     (let [n (perform (Ask))]
       (do (perform (Log "asked")) n))))

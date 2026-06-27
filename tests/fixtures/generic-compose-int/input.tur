@@ -13,10 +13,10 @@
 ;; int), so it does not hit the TUR-E0705 float guard; it exercises only the
 ;; Stage A acceptance widening.
 
-(defn cmp [A B C] [^fat f :(fn [A] #{} B) ^fat g :(fn [B] #{} C)] : ptr<void>
+(defn cmp [A B C] [^fat f :(fn [A] #fx{} B) ^fat g :(fn [B] #fx{} C)] : ptr<void>
   (let [fv f gv g] (fn [x : A] : C (gv (fv x)))))
 
-(defn call-int [^fat f :(fn [int] #{} int) x : int] : int (f x))
+(defn call-int [^fat f :(fn [int] #fx{} int) x : int] : int (f x))
 
 (defn add1 [x : int] : int (+ x 1))
 (defn mul2 [x : int] : int (* x 2))

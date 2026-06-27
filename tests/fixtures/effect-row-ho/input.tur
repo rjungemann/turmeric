@@ -3,7 +3,7 @@
 
 (defeffect Ask [] :int)
 
-(defn run-twice [f :(fn [] #{e} int)] #{e} : int
+(defn run-twice [f :(fn [] #fx{e} int)] #fx{e} : int
   (+ (f) (f)))
 
 (defn main [] : int

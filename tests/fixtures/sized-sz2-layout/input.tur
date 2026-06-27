@@ -22,7 +22,7 @@
 (defn sized-vec-of-4 [a : int b : int c : int d : int] : SizedVec
   (SVCons a (SVCons b (SVCons c (SVCons d (SVNil))))))
 
-(defn sized-buf-new-zeroed [n] #{Unsafe} : int
+(defn sized-buf-new-zeroed [n] #fx{Unsafe} : int
   ```c
   struct { int64_t len; int64_t *data; } *b = malloc(sizeof(*b));
   b->len  = n;
@@ -30,41 +30,41 @@
   return (int64_t)(intptr_t)b;
   ```)
 
-(defn sized-buf-free [b] #{Unsafe} : nil
+(defn sized-buf-free [b] #fx{Unsafe} : nil
   ```c
   struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
   if (buf->data) free(buf->data);
   free(buf);
   ```)
 
-(defn sized-buf-len [b] #{Unsafe} : int
+(defn sized-buf-len [b] #fx{Unsafe} : int
   ```c
   return ((struct { int64_t len; int64_t *data; } *)(intptr_t)b)->len;
   ```)
 
-(defn sized-buf-get [b i] #{Unsafe} : int
+(defn sized-buf-get [b i] #fx{Unsafe} : int
   ```c
   struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
   if (i >= 0 && i < buf->len) return buf->data[i];
   fprintf(stderr, "sized-buf-get: out of bounds\n"); exit(1);
   ```)
 
-(defn sized-buf-set! [b i v] #{Unsafe} : int
+(defn sized-buf-set! [b i v] #fx{Unsafe} : int
   ```c
   struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
   if (i >= 0 && i < buf->len) { buf->data[i] = v; return b; }
   fprintf(stderr, "sized-buf-set!: out of bounds\n"); exit(1);
   ```)
 
-(defn sized-buf-sum [b] #{Unsafe} : int
+(defn sized-buf-sum [b] #fx{Unsafe} : int
   ```c
   struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
   int64_t s = 0; for (int64_t i = 0; i < buf->len; i++) s += buf->data[i]; return s;
   ```)
 
-(defn sized-buf-size [b] #{Unsafe} : Size (Static (sized-buf-len b)))
+(defn sized-buf-size [b] #fx{Unsafe} : Size (Static (sized-buf-len b)))
 
-(defn sized-buf-from-sized-vec [v] #{Unsafe} : int
+(defn sized-buf-from-sized-vec [v] #fx{Unsafe} : int
   ```c
   typedef struct {
     int tag;

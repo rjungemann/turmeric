@@ -109,7 +109,7 @@ println-all("a" "b" "c")
   (returning a variadic closure), but you cannot partially apply into
   the rest slot.
 
-#### Cons-list manipulation in `#{Unsafe}` code
+#### Cons-list manipulation in `#fx{Unsafe}` code
 
 The rest parameter is an `int64_t` holding a pointer to a linked list
 of `__tur_cons_cell { int64_t head; int64_t tail; }` cells, or `0`

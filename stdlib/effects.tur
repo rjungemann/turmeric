@@ -42,18 +42,18 @@
 ;; These tag names are STABLE after this change; downstream annotation churn
 ;; should be purely additive, never a rename.
 ;;
-;;   #{IO}    umbrella, parent of the others
-;;   #{FS}    fs.tur, path.tur, tmpfile
-;;   #{Net}   net.tur, async_socket.tur, httpd.tur
-;;   #{Proc}  process.tur, env.tur
-;;   #{Rand}  random.tur
+;;   #fx{IO}    umbrella, parent of the others
+;;   #fx{FS}    fs.tur, path.tur, tmpfile
+;;   #fx{Net}   net.tur, async_socket.tur, httpd.tur
+;;   #fx{Proc}  process.tur, env.tur
+;;   #fx{Rand}  random.tur
 ;;; FS -- capability tag for file-system access (fs, path, tmpfile).
 ;;;
 ;;; Returns:
-;;;   nil (never performed; used only as a #{FS} row annotation)
+;;;   nil (never performed; used only as a #fx{FS} row annotation)
 ;;;
 ;;; Example:
-;;;   (defn read-config [p : cstr] #{FS} : cstr ...)
+;;;   (defn read-config [p : cstr] #fx{FS} : cstr ...)
 ;;;
 ;;; Since: stdlib-effect-rows
 
@@ -61,10 +61,10 @@
 ;;; Net -- capability tag for network access (net, async_socket, httpd).
 ;;;
 ;;; Returns:
-;;;   nil (never performed; used only as a #{Net} row annotation)
+;;;   nil (never performed; used only as a #fx{Net} row annotation)
 ;;;
 ;;; Example:
-;;;   (defn http-get [url : cstr] #{Net} : cstr ...)
+;;;   (defn http-get [url : cstr] #fx{Net} : cstr ...)
 ;;;
 ;;; Since: stdlib-effect-rows
 
@@ -72,10 +72,10 @@
 ;;; Proc -- capability tag for process/environment access (process, env).
 ;;;
 ;;; Returns:
-;;;   nil (never performed; used only as a #{Proc} row annotation)
+;;;   nil (never performed; used only as a #fx{Proc} row annotation)
 ;;;
 ;;; Example:
-;;;   (defn spawn [cmd : cstr] #{Proc} : int ...)
+;;;   (defn spawn [cmd : cstr] #fx{Proc} : int ...)
 ;;;
 ;;; Since: stdlib-effect-rows
 
@@ -83,10 +83,10 @@
 ;;; Rand -- capability tag for non-deterministic randomness (random).
 ;;;
 ;;; Returns:
-;;;   nil (never performed; used only as a #{Rand} row annotation)
+;;;   nil (never performed; used only as a #fx{Rand} row annotation)
 ;;;
 ;;; Example:
-;;;   (defn rand-u64 [] #{Rand} : int ...)
+;;;   (defn rand-u64 [] #fx{Rand} : int ...)
 ;;;
 ;;; Since: stdlib-effect-rows
 
@@ -216,7 +216,7 @@
 ;;; Since: Phase 19
 
 (defn read-int-console []
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   int _v = 0;

@@ -143,7 +143,7 @@
 ;;; Since: Phase R1
 
 
-(defn reactor-new [] #{} : Reactor (:: (tur_reactor_new) :Reactor))
+(defn reactor-new [] #fx{} : Reactor (:: (tur_reactor_new) :Reactor))
 ;;; reactor-free -- free a reactor and unregister all attached sources.
 ;;;
 ;;; Parameters:
@@ -154,7 +154,7 @@
 ;;;
 ;;; Since: Phase R1
 
-(defn reactor-free [r : Reactor] #{} : nil (tur_reactor_free (:: r :ptr<void>)))
+(defn reactor-free [r : Reactor] #fx{} : nil (tur_reactor_free (:: r :ptr<void>)))
 ;; ---- Source registration ----
 ;;; reactor-add-fd -- watch a file descriptor for I/O events.
 ;;;
@@ -190,7 +190,7 @@
                       events : int
                       cb : int
                       user-data : ptr<void>]
-  #{}
+  #fx{}
   : EventSourceId
   (:: (tur_reactor_add_fd (:: r :ptr<void>) fd events cb user-data)
     :EventSourceId))
@@ -212,7 +212,7 @@
 (defn reactor-modify-fd [^borrow r : Reactor
                          id : EventSourceId
                          new-events : int]
-  #{}
+  #fx{}
   : int
   (tur_reactor_modify_fd (:: r :ptr<void>) (:: id :int) new-events))
 ;;; reactor-remove -- unregister a source by id.
@@ -233,7 +233,7 @@
 ;;; Since: Phase R2
 
 (defn reactor-remove [^borrow r : Reactor id : EventSourceId]
-  #{}
+  #fx{}
   : int
   (tur_reactor_remove (:: r :ptr<void>) (:: id :int)))
 ;;; reactor-add-timer -- register a one-shot timer that fires once.
@@ -264,7 +264,7 @@
                          delay-ms : int
                          cb : int
                          user-data : ptr<void>]
-  #{}
+  #fx{}
   : EventSourceId
   (:: (tur_reactor_add_timer (:: r :ptr<void>) delay-ms cb user-data)
     :EventSourceId))
@@ -298,7 +298,7 @@
                             interval-ms : int
                             cb : int
                             user-data : ptr<void>]
-  #{}
+  #fx{}
   : EventSourceId
   (:: (tur_reactor_add_interval (:: r :ptr<void>)
         first-ms
@@ -337,7 +337,7 @@
                           signum : int
                           cb : int
                           user-data : ptr<void>]
-  #{}
+  #fx{}
   : EventSourceId
   (:: (tur_reactor_add_signal (:: r :ptr<void>) signum cb user-data)
     :EventSourceId))
@@ -371,7 +371,7 @@
                         ch : ptr<void>
                         cb : int
                         user-data : ptr<void>]
-  #{}
+  #fx{}
   : EventSourceId
   (:: (tur_reactor_add_chan (:: r :ptr<void>) ch cb user-data) :EventSourceId))
 ;; ---- Running ----
@@ -395,7 +395,7 @@
 
 
 (defn reactor-poll [^borrow r : Reactor timeout-ms : int]
-  #{}
+  #fx{}
   : int
   (tur_reactor_poll (:: r :ptr<void>) timeout-ms))
 ;;; reactor-run -- run the event loop until stopped or all sources removed.
@@ -412,7 +412,7 @@
 ;;; Since: Phase R1
 
 (defn reactor-run [^borrow r : Reactor]
-  #{}
+  #fx{}
   : nil
   (tur_reactor_run (:: r :ptr<void>)))
 ;;; reactor-stop -- ask reactor-run to return after the current dispatch round.
@@ -430,7 +430,7 @@
 ;;; Since: Phase R1
 
 (defn reactor-stop [^borrow r : Reactor]
-  #{}
+  #fx{}
   : nil
   (tur_reactor_stop (:: r :ptr<void>)))
 ;;; reactor-wake -- interrupt a reactor blocked in reactor-poll or reactor-run.
@@ -448,7 +448,7 @@
 ;;; Since: Phase R1
 
 (defn reactor-wake [^borrow r : Reactor]
-  #{}
+  #fx{}
   : nil
   (tur_reactor_wake (:: r :ptr<void>)))
 ;; ---- Local fiber driver (Phase F2-F7) ----
@@ -500,7 +500,7 @@
 ;;; Since: Phase F2
 
 (defn local-fiber-group-new [^borrow r : Reactor]
-  #{}
+  #fx{}
   : ptr<void>
   (tur_local_fiber_group_new (:: r :ptr<void>)))
 ;;; local-fiber-group-free -- free a fiber group and cancel any parked fibers.
@@ -518,7 +518,7 @@
 ;;; Since: Phase F2
 
 (defn local-fiber-group-free [g : ptr<void>]
-  #{}
+  #fx{}
   : nil
   (tur_local_fiber_group_free g))
 ;;; local-spawn -- spawn a fiber into a group.
@@ -542,7 +542,7 @@
 ;;; Since: Phase F3
 
 (defn local-spawn [g : ptr<void> body : int user-data : ptr<void>]
-  #{}
+  #fx{}
   : int
   (tur_local_spawn g body user-data))
 ;;; reactor-run-fibers -- drive the reactor and pump the group's fibers.
@@ -567,7 +567,7 @@
 ;;;
 ;;; Since: Phase F3
 
-(defn reactor-run-fibers [g : ptr<void>] #{} : int (tur_reactor_run_fibers g))
+(defn reactor-run-fibers [g : ptr<void>] #fx{} : int (tur_reactor_run_fibers g))
 ;;; local-park-fd -- park the running fiber until an fd is ready.
 ;;;
 ;;; Registers fd on the bound reactor for events (a READ/WRITE bitmask) and
@@ -593,7 +593,7 @@
 ;;; Since: Phase F4
 
 (defn local-park-fd [g : ptr<void> fd : int events : int timeout-ms : int]
-  #{}
+  #fx{}
   : int
   (tur_local_park_fd g fd events timeout-ms))
 ;;; local-park-chan -- park the running fiber until a channel has a value.
@@ -619,6 +619,6 @@
 ;;; Since: Phase F5
 
 (defn local-park-chan [g : ptr<void> ch : ptr<void>]
-  #{}
+  #fx{}
   : int
   (tur_local_park_chan g ch))

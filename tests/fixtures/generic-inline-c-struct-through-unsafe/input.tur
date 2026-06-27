@@ -18,19 +18,19 @@
 
 (defopaque Dense [A] :int)
 
-(defn __dense-new [A] [cap : int] #{Unsafe} : int
+(defn __dense-new [A] [cap : int] #fx{Unsafe} : int
   ```c
   return (int64_t)(intptr_t)calloc((size_t)cap, sizeof(__TUR_TY_A__));
   ```)
 
-(defn __dense-set! [A] [d : int idx : int v : A] #{Unsafe} : nil
+(defn __dense-set! [A] [d : int idx : int v : A] #fx{Unsafe} : nil
   ```c
   __TUR_TY_A__ *arr = (__TUR_TY_A__ *)(intptr_t)d;
   arr[idx] = v;
   return;
   ```)
 
-(defn __dense-get [A] [d : int idx : int] #{Unsafe} : A
+(defn __dense-get [A] [d : int idx : int] #fx{Unsafe} : A
   ```c
   __TUR_TY_A__ *arr = (__TUR_TY_A__ *)(intptr_t)d;
   return arr[idx];

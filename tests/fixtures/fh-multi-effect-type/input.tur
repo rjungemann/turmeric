@@ -5,7 +5,7 @@
 ;; and application of a handler bound to a variable.
 (defeffect Ask [] :int)
 (defeffect Tell [s :cstr] :nil)
-(defn run-with [h :(handler #{Ask Tell} int int)] : int
+(defn run-with [h :(handler #fx{Ask Tell} int int)] : int
   (with-handler h
     (do (perform (Tell "hi")) (+ (perform (Ask)) 1))))
 (defn main [] : int

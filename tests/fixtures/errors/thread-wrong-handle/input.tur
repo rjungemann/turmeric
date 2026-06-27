@@ -9,6 +9,6 @@
 (defn raw-ptr [] : ptr<void>
   ```c return malloc(8); ```)
 
-(defn main [] #{Unsafe} : int
+(defn main [] #fx{Unsafe} : int
   (thread-join (raw-ptr))
   0)

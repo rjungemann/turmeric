@@ -5,14 +5,14 @@
   (Right R))
 
 ; Read the discriminant tag directly out of the C struct (0 = Left, 1 = Right).
-(defn c-tag [e : int] #{Unsafe} : int
+(defn c-tag [e : int] #fx{Unsafe} : int
   ```c
   tur_adt_Either *p = (tur_adt_Either *)(intptr_t)e;
   return (int64_t)p->tag;
   ```)
 
 ; Read the Right payload directly from the union arm.
-(defn c-right-payload [e : int] #{Unsafe} : int
+(defn c-right-payload [e : int] #fx{Unsafe} : int
   ```c
   tur_adt_Either *p = (tur_adt_Either *)(intptr_t)e;
   return p->as.Right._0;

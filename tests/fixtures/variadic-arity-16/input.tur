@@ -6,7 +6,7 @@
 ;;   (3) The combined result is computed correctly.
 
 ;; Walk a cons-list and sum all heads.
-(defn cons-list-sum [lst : int] #{Unsafe} : int
+(defn cons-list-sum [lst : int] #fx{Unsafe} : int
   ```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
   int64_t acc = 0;
@@ -19,7 +19,7 @@
 (defn sum16 [a : int b : int c : int d : int e : int
              f : int g : int h : int i : int j : int
              k : int l : int m : int n : int o : int
-             & rest : int] #{Unsafe} : int
+             & rest : int] #fx{Unsafe} : int
   (+ (+ a (+ b (+ c (+ d (+ e (+ f (+ g (+ h (+ i (+ j (+ k (+ l (+ m (+ n o))))))))))))))
      (cons-list-sum rest)))
 

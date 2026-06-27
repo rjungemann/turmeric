@@ -21,15 +21,15 @@
 (defn konst [k : float] (let [kv k] (fn [t : float] : float kv)))
 
 ;; apply an SF to a signal through the ptr<void> carrier (the __apply-sf shape)
-(defn apply-sf [^fat sf  : (fn [ptr<void>] #{} ptr<void>)
-                ^fat sig : (fn [float]     #{} float)] : ptr<void>
+(defn apply-sf [^fat sf  : (fn [ptr<void>] #fx{} ptr<void>)
+                ^fat sig : (fn [float]     #fx{} float)] : ptr<void>
   (sf sig))
 
 (defn main [] : int
-  (let [^fat out : (fn [float] #{} float)
+  (let [^fat out : (fn [float] #fx{} float)
              (apply-sf (:: (invert) :ptr<void>) (:: (konst 0.5) :ptr<void>))]
     (println (out 0.0)))                  ;; captureless -> -0.5
-  (let [^fat out : (fn [float] #{} float)
+  (let [^fat out : (fn [float] #fx{} float)
              (apply-sf (:: (invert-cap) :ptr<void>) (:: (konst 0.5) :ptr<void>))]
     (println (out 0.0)))                  ;; capturing control -> -0.5
   0)

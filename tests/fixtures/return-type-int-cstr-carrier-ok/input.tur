@@ -9,7 +9,7 @@
 (defn gbridge [A] [x : A] : int
   "carried")
 
-(defn ubridge [] #{Unsafe} : int
+(defn ubridge [] #fx{Unsafe} : int
   "carried")
 
 (defn main [] : int

@@ -4,7 +4,7 @@
 (defeffect Write [msg :cstr] :nil)
 
 (defn main [] : int
-  (let [bad-fn (fn [] #{} : nil
+  (let [bad-fn (fn [] #fx{} : nil
                  (perform (Write "oops")))]
     (handle
       (bad-fn)

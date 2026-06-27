@@ -41,7 +41,7 @@ the checks at every crossing point.
 | Inline contract `#refine{ x : T \| p }` (CT1) | In the parameter or return type | At every use of that type |
 
 Contract predicates are **ordinary Turmeric expressions** -- no special syntax beyond the
-`#refine{ x : T | p }` wrapper. They are **pure by default**; the elaborator enforces `#{}` on
+`#refine{ x : T | p }` wrapper. They are **pure by default**; the elaborator enforces `#fx{}` on
 all predicate expressions.
 
 ---
@@ -287,7 +287,7 @@ Run `tur explain TUR_E0400` for full diagnostic output with source location and 
 | `stdlib/contract.tur` (`assert!`, `require!`, `ensure!`) | Unchanged -- macros are imperative guards; contract types are declarative annotations |
 | Borrow checker | Orthogonal -- contracts are runtime; borrow checking is compile-time |
 | Typeclasses | Predicates can call typeclass methods; predicate is an ordinary Turmeric expression |
-| Algebraic effects | Predicates are pure (`#{}` enforced); effects inside predicates are not permitted |
+| Algebraic effects | Predicates are pure (`#fx{}` enforced); effects inside predicates are not permitted |
 | `any` type | Contract types enable gradual typing for `any` values |
 | FFI (`extern-c`) | `:pre` / `:post` validated at the Turmeric/C boundary |
 

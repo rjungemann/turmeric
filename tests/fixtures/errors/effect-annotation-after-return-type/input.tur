@@ -1,7 +1,7 @@
 ;; Regression: a misplaced effect annotation (after the return type) must
 ;; report the real cause (annotation ordering), not "map literals are parsed
 ;; but not yet supported by elaboration".
-(defn raw [] : int #{Unsafe}
+(defn raw [] : int #fx{Unsafe}
   ```c
   return 42;
   ```)

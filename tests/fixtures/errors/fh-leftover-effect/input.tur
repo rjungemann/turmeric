@@ -3,7 +3,7 @@
 ;; reported (TUR-E0009), exactly as it would be for an inline (handle ...).
 (defeffect Write [s :cstr] :nil)
 (defeffect Other [] :int)
-(defn do-work [] #{Write} : int
+(defn do-work [] #fx{Write} : int
   (with-handler
     (handler (Write [s] k) (do (println s) (resume k nil)))
     (do (perform (Write "inner")) (perform (Other)))))

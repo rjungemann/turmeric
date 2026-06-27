@@ -35,7 +35,7 @@
 
 (defn ok [A B]
   [x : A]
-  #{Construct}
+  #fx{Construct}
   : (Result A B)
   (make-struct Result :is-ok true :ok-val x :err-val (default-of B)))
 ;;; err -- wrap an error value of type B in a Result[A B].
@@ -57,7 +57,7 @@
 
 (defn err [A B]
   [e : B]
-  #{Construct}
+  #fx{Construct}
   : (Result A B)
   (make-struct Result :is-ok false :ok-val (default-of A) :err-val e))
 ;;; ok? -- check whether a Result[A B] is ok.
@@ -75,7 +75,7 @@
 ;;; Since: Phase TC1
 
 (defn ok? [r : int]
-  #{}
+  #fx{}
   : bool
   ```c
   return tur_is_ok(r);
@@ -94,7 +94,7 @@
 ;;; Since: Phase TC1
 
 (defn err? [r : int]
-  #{}
+  #fx{}
   : bool
   ```c
   return !tur_is_ok(r);
@@ -140,7 +140,7 @@
 ;;; Since: Phase TC1
 
 (defn result-free [r : int]
-  #{}
+  #fx{}
   : void
   ```c
   if (r) free((void*)(intptr_t)r);
@@ -187,7 +187,7 @@
 ;;; Since: Phase TC1
 
 (defn result-eq? [r1 : int r2 : int ^fat ok-cmp ^fat err-cmp]
-  #{}
+  #fx{}
   : bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a = (void*)(intptr_t)r1;
@@ -204,7 +204,7 @@
 ;;; __tur-q-is-err? -- ? operator helper; checks if a Result value is an error.
 
 (defn __tur-q-is-err? [r : ptr<void>]
-  #{}
+  #fx{}
   : bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = r;
@@ -213,7 +213,7 @@
 ;;; __tur-q-ok-val -- ? operator helper; extracts the ok payload from a Result value.
 
 (defn __tur-q-ok-val [r : ptr<void>]
-  #{}
+  #fx{}
   : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = r;
@@ -257,7 +257,7 @@
 ;;; Since: stdlib-hkt-consolidation T1
 
 (defn result-bimap [container : int fn-left fn-right]
-  #{}
+  #fx{}
   : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)container;

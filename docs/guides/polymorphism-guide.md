@@ -34,7 +34,7 @@ and links to a deeper guide for the rules and edge cases.
 | Branch on a tagged value | ADTs (`defdata`) | [gadts-guide.md](gadts-guide.md) |
 | Track usage discipline (linear / affine / unique) | Substructural annotations | [substructural-types-guide.md](substructural-types-guide.md), [uniqueness-types-guide.md](uniqueness-types-guide.md) |
 | Accept any number of same-typed values | `& rest :T` variadics | [function-arity-guide.md](function-arity-guide.md) |
-| Drop type-checking at the boundary | Inline-C with `#{Unsafe}` | [c-integration-guide.md](c-integration-guide.md) |
+| Drop type-checking at the boundary | Inline-C with `#fx{Unsafe}` | [c-integration-guide.md](c-integration-guide.md) |
 
 The rest of this guide walks each row.
 
@@ -418,7 +418,7 @@ call.)
 
 When no static encoding works -- because the actual operation lives on the C
 side, or the cost of an indirect dispatch is unacceptable -- drop into an
-inline-C block and tag the surrounding `defn` with `#{Unsafe}`. The compiler
+inline-C block and tag the surrounding `defn` with `#fx{Unsafe}`. The compiler
 stops type-checking inside the block; you become responsible for the types.
 
 ```turmeric

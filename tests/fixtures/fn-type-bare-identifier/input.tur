@@ -37,7 +37,7 @@
   (f))
 
 ;; bare with an explicit empty effect set
-(defn applyeff [f : (fn [int] #{} int) x : int] : int
+(defn applyeff [f : (fn [int] #fx{} int) x : int] : int
   (f x))
 
 ;; mixed legacy ':int' + bare 'int' in one signature (lenient transition path)

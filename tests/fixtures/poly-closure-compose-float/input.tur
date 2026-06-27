@@ -8,10 +8,10 @@
 ;; deferred in docs/reported/poly-closure-inner-dispatch-result-erased.md.
 
 (defn cmp [A B C]
-  [^fat f :(fn [A] #{} B) ^fat g :(fn [B] #{} C)] : ptr<void>
+  [^fat f :(fn [A] #fx{} B) ^fat g :(fn [B] #fx{} C)] : ptr<void>
   (let [fv f gv g] (fn [x : A] : C (gv (fv x)))))
 
-(defn call-float [^fat f :(fn [float] #{} float) x : float] : float (f x))
+(defn call-float [^fat f :(fn [float] #fx{} float) x : float] : float (f x))
 
 (defn fadd  [x : float] : float (+ x 0.25))
 (defn fhalf [x : float] : float (* x 0.5))

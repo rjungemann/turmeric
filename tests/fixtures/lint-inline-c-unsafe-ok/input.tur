@@ -1,5 +1,5 @@
 ;; U6: inline-C block inside #{Unsafe} function should not warn
-(defn raw-add [a : int b : int] #{Unsafe} : int
+(defn raw-add [a : int b : int] #fx{Unsafe} : int
   ```c
   return a + b;
   ```)

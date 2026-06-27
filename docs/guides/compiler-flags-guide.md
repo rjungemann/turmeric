@@ -75,7 +75,7 @@ These are real flags, not deprecated.
 ### `--strict-effects`
 
 Emits warnings on functions whose inferred effect row is non-empty but
-whose signature carries no explicit `#{...}` annotation or `forall [e]`
+whose signature carries no explicit `#fx{...}` annotation or `forall [e]`
 quantification. Opt-in.
 
 ### `--keep-contracts`

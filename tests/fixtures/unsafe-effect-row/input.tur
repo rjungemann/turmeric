@@ -1,4 +1,4 @@
-(defn unsafe-id [x : int] @{Unsafe} :int
+(defn unsafe-id [x : int] #fx{Unsafe} :int
   x)
 
 (defn main [] : int

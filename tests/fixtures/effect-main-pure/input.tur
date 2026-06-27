@@ -2,7 +2,7 @@
 
 (defeffect Write [msg :cstr] :nil)
 
-(defn main [] #{} : int
+(defn main [] #fx{} : int
   (handle
     (perform (Write "hello"))
     (Write [msg] k) (do (println msg) (resume k 0)))

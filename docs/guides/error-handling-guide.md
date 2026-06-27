@@ -210,7 +210,7 @@ early from the enclosing function. It is the ergonomic counterpart to manual
       (ok-val __q)))      ;; otherwise yield the unwrapped ok value
 ```
 
-The lowering routes through the `#{}`-safe stdlib helpers `__tur-q-is-err?`
+The lowering routes through the `#fx{}`-safe stdlib helpers `__tur-q-is-err?`
 and `__tur-q-ok-val` (in `stdlib/result.tur`), so call sites need no `(unsafe
 ...)` wrapper.
 

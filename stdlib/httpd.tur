@@ -643,7 +643,7 @@
 ;;; Since: Phase H3
 
 (defn httpd-new-pool [port : int workers : int ^fat handler : int]
-  #{Net}
+  #fx{Net}
   : ptr<void>
   ```c
   #include <fcntl.h>
@@ -741,7 +741,7 @@
 ;;; Since: Phase H1
 
 (defn httpd-new [port : int ^fat handler : int]
-  #{Net}
+  #fx{Net}
   : ptr<void>
   (httpd-new-pool port 4 handler))
 ;;; httpd-new-tls -- create an httpd instance with TLS termination.
@@ -780,7 +780,7 @@
 ;;; Since: Phase H5
 
 (defn httpd-new-tls [port : int workers : int ^fat handler : int ctx : int]
-  #{Net}
+  #fx{Net}
   : ptr<void>
   ```c
   typedef struct {
@@ -848,7 +848,7 @@
 ;;; Since: Phase H1
 
 (defn httpd-run [h : ptr<void>]
-  #{Net}
+  #fx{Net}
   : nil
   ```c
   typedef struct {
@@ -873,7 +873,7 @@
 ;;; Since: Phase H1
 
 (defn httpd-stop [h : ptr<void>]
-  #{Net}
+  #fx{Net}
   : nil
   ```c
   typedef struct {
@@ -2656,7 +2656,7 @@
 (defn httpd-new-async-with-limit [port : int
                                   ^fat handler : int
                                   max-in-flight : int]
-  #{Net}
+  #fx{Net}
   : ptr<void>
   ```c
   #include <fcntl.h>
@@ -2726,7 +2726,7 @@
 ;;; Since: Phase H8 (A0+A1)
 
 (defn httpd-new-async [port : int ^fat handler : int]
-  #{Net}
+  #fx{Net}
   : ptr<void>
   (httpd-new-async-with-limit port handler 0))
 ;;; httpd-run-async -- drive the async server until stopped.
@@ -2738,7 +2738,7 @@
 ;;; Since: Phase H8 (A0+A1)
 
 (defn httpd-run-async [h : ptr<void>]
-  #{Net}
+  #fx{Net}
   : nil
   ```c
   typedef struct {
@@ -2766,7 +2766,7 @@
 ;;; Since: Phase H8 (A0+A1)
 
 (defn httpd-stop-async [h : ptr<void>]
-  #{Net}
+  #fx{Net}
   : nil
   ```c
   typedef struct {

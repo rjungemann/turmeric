@@ -2,7 +2,7 @@
 ;; #{Write} which is a subset of #{IO}.
 (defeffect IO [] :nil)
 (defeffect Write [s :cstr] :nil ^extends IO)
-(defn log-io [] #{IO} : nil
+(defn log-io [] #fx{IO} : nil
   (perform (Write "via hierarchy")))
 (defn main [] : int
   (handle

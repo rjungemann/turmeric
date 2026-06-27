@@ -14,11 +14,11 @@
 ;; range); the fields must be the int64_t fn-ABI carrier instead.  See
 ;; docs/reported/captured-fn-stored-in-double-env-field.md.
 
-(defn call-f [^fat f :(fn [float] #{} float) x : float] : float
+(defn call-f [^fat f :(fn [float] #fx{} float) x : float] : float
   (f x))
 
-(defn compose [^fat f :(fn [float] #{} float)
-               ^fat g :(fn [float] #{} float)] : ptr<void>
+(defn compose [^fat f :(fn [float] #fx{} float)
+               ^fat g :(fn [float] #fx{} float)] : ptr<void>
   (fn [x : float] : float (f (g x))))   ;; captures f and g -> fat, returns :float
 
 (defn make-scale [k : float] : ptr<void>

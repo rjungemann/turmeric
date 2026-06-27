@@ -31,7 +31,7 @@
 ;;; Since: Phase TC2
 
 (defn grid-new [width : int height : int]
-  #{}
+  #fx{}
   : int
   ```c
   struct { int64_t *data; int width; int height; int cx; int cy; } *g = malloc(sizeof(*g));
@@ -58,7 +58,7 @@
 ;;; Since: Phase TC2
 
 (defn grid-get [g : int x : int y : int]
-  #{}
+  #fx{}
   : int
   ```c
   struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
@@ -78,7 +78,7 @@
 ;;; Since: Phase TC2
 
 (defn grid-set! [g : int x : int y : int v : int]
-  #{}
+  #fx{}
   : void
   ```c
   struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
@@ -98,7 +98,7 @@
 ;;; Since: Phase TC2
 
 (defn grid-width [g : int]
-  #{}
+  #fx{}
   : int
   ```c
   struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
@@ -118,7 +118,7 @@
 ;;; Since: Phase TC2
 
 (defn grid-height [g : int]
-  #{}
+  #fx{}
   : int
   ```c
   struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
@@ -135,7 +135,7 @@
 ;;; Since: Phase TC2
 
 (defn grid-free [g : int]
-  #{}
+  #fx{}
   : void
   ```c
   struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;

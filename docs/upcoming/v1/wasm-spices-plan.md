@@ -139,7 +139,7 @@ unioned. Example for `tur-raylib`:
   })
 ```
 
-`tur-opengl` would declare `:requires #{:canvas}` and add
+`tur-opengl` would declare `:requires #fx{:canvas}` and add
 `-sUSE_GLFW=3 -sFULL_ES3=1 -sMIN_WEBGL_VERSION=2`. `tur-sqlite` would declare
 no canvas/audio but add `-sFORCE_FILESYSTEM=1`.
 

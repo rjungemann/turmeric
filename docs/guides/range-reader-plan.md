@@ -205,7 +205,7 @@ Float variants mirror the integer constructors exactly, using the
 
 **Location:** `src/compiler/reader.c`, inside `read_form`.
 
-Add a new dispatch arm immediately before the `#{}` map check:
+Add a new dispatch arm immediately before the `#fx{}` map check:
 
 ```c
 /* RR0: Range literal #r{...} */

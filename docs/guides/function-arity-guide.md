@@ -156,7 +156,7 @@ declared type instead. For a mix of distinct handle types, prefer two explicit
 
 ---
 
-## Walking the rest cons-list in `#{Unsafe}` code
+## Walking the rest cons-list in `#fx{Unsafe}` code
 
 The rest parameter is a `int64_t` holding a pointer to a linked list of
 `__tur_cons_cell { int64_t head; int64_t tail; }` cells, or `0` (nil).

@@ -79,7 +79,7 @@ concurrency).
 | Sweet-exp / neoteric / curly-infix | OK | OK | reader layer sits below both back ends |
 | Data literals (`#map{}`, `#set{}`, `[...]`) | OK | OK | reader dispatch shared |
 | `#json(...)` / `#json-str<T>(...)` readers | OK | OK | native json/schema overrides |
-| Inline-C (`#{Unsafe}` ```c bodies) | OK | none | permanent carve-out; see [Carve-outs](#documented-carve-outs) |
+| Inline-C (`#fx{Unsafe}` ```c bodies) | OK | none | permanent carve-out; see [Carve-outs](#documented-carve-outs) |
 | WASM async | OK | n/a | the interpreter has no WASM target |
 
 ---
@@ -126,7 +126,7 @@ These are interpreter limitations **by design**, codified in
 `tools/check_turi_parity.py` / `tools/check_turi_native_parity.py` so they
 cannot drift silently.
 
-- **Inline-C (`EX_INLINE_C`).** A `#{Unsafe}` ```c body declares a fixed C
+- **Inline-C (`EX_INLINE_C`).** A `#fx{Unsafe}` ```c body declares a fixed C
   signature the tree-walker cannot execute. The escape hatch is the native
   override: stdlib inline-C functions register a C implementation
   (`wk_register_*_natives`, `try_exec_simple_inline_c`) that turi calls instead.

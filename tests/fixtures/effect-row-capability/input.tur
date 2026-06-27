@@ -9,12 +9,12 @@
 (defeffect FS [] :nil ^extends IO ^capability)
 
 ;; Capability-tagged leaf (inline-C body never performs FS; no W0031).
-(defn slurp [path : cstr] #{FS} : int
+(defn slurp [path : cstr] #fx{FS} : int
   ```c return (int64_t)__builtin_strlen(path);
   ```)
 
 ;; A caller that correctly declares #{FS} -- propagation keeps it in-row.
-(defn count-bytes [path : cstr] #{FS} : int
+(defn count-bytes [path : cstr] #fx{FS} : int
   (slurp path))
 
 ;; An un-annotated caller is never checked, so it compiles freely.

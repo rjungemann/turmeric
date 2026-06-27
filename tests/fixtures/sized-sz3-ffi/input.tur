@@ -23,7 +23,7 @@
 ; ===== Simulated C structs =====
 
 ; ffi-point-new: wraps a C struct { int64_t x; int64_t y; } (2-element array layout)
-(defn ffi-point-new [x y] #{Unsafe} : int
+(defn ffi-point-new [x y] #fx{Unsafe} : int
   ```c
   int64_t *pt = (int64_t *)malloc(2 * sizeof(int64_t));
   pt[0] = x;
@@ -31,22 +31,22 @@
   return (int64_t)(intptr_t)pt;
   ```)
 
-(defn ffi-point-free [pt] #{Unsafe} : nil
+(defn ffi-point-free [pt] #fx{Unsafe} : nil
   ```c
   free((void*)(intptr_t)pt);
   ```)
 
-(defn ffi-point-x [pt] #{Unsafe} : int
+(defn ffi-point-x [pt] #fx{Unsafe} : int
   ```c return ((int64_t *)(intptr_t)pt)[0]; ```)
 
-(defn ffi-point-y [pt] #{Unsafe} : int
+(defn ffi-point-y [pt] #fx{Unsafe} : int
   ```c return ((int64_t *)(intptr_t)pt)[1]; ```)
 
 ; ffi-point-size: size annotation -- a point is always 2 elements
 (defn ffi-point-size [] : Size (Static 2))
 
 ; ffi-array-new: wraps C int64_t[n] with an explicit size annotation
-(defn ffi-array-new [n] #{Unsafe} : int
+(defn ffi-array-new [n] #fx{Unsafe} : int
   ```c
   struct { int64_t len; int64_t *data; } *a = malloc(sizeof(*a));
   a->len  = n;
@@ -54,29 +54,29 @@
   return (int64_t)(intptr_t)a;
   ```)
 
-(defn ffi-array-free [a] #{Unsafe} : nil
+(defn ffi-array-free [a] #fx{Unsafe} : nil
   ```c
   struct { int64_t len; int64_t *data; } *arr = (void*)(intptr_t)a;
   free(arr->data); free(arr);
   ```)
 
-(defn ffi-array-len [a] #{Unsafe} : int
+(defn ffi-array-len [a] #fx{Unsafe} : int
   ```c
   return ((struct { int64_t len; int64_t *data; } *)(intptr_t)a)->len;
   ```)
 
-(defn ffi-array-size [a] #{Unsafe} : Size
+(defn ffi-array-size [a] #fx{Unsafe} : Size
   ```c
   return ctor_Static(((struct { int64_t len; int64_t *data; } *)(intptr_t)a)->len);
   ```)
 
-(defn ffi-array-get [a i] #{Unsafe} : int
+(defn ffi-array-get [a i] #fx{Unsafe} : int
   ```c
   struct { int64_t len; int64_t *data; } *arr = (void*)(intptr_t)a;
   return arr->data[i];
   ```)
 
-(defn ffi-array-set! [a i v] #{Unsafe} : int
+(defn ffi-array-set! [a i v] #fx{Unsafe} : int
   ```c
   struct { int64_t len; int64_t *data; } *arr = (void*)(intptr_t)a;
   arr->data[i] = v; return a;

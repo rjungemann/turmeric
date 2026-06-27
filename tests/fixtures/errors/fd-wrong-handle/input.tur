@@ -6,7 +6,7 @@
 ;; mix-up that type-checked when both were bare :int -- is now a compile error.
 (load "stdlib/async_socket.tur")
 
-(defn main [] #{Unsafe} : int
+(defn main [] #fx{Unsafe} : int
   (let [fd (async-socket-connect "127.0.0.1" 80)]
     (let [n (async-socket-recv fd 256)]
       (async-socket-close n)))

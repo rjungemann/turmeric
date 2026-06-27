@@ -174,7 +174,7 @@
 
 
 (defn rand-int [min max]
-  #{Rand}
+  #fx{Rand}
   : int
   ```c
   static int seeded = 0;
@@ -200,7 +200,7 @@
 ;; Returns value scaled by 10000 (divide by 10000.0 to get actual float)
 
 (defn rand-float []
-  #{Rand}
+  #fx{Rand}
   : int
   ```c
   static int seeded = 0;
@@ -225,7 +225,7 @@
 ;; Roll a die with n sides (1 to n)
 
 (defn rand-die [sides]
-  #{Rand}
+  #fx{Rand}
   : int
   ```c
   static int seeded = 0;
@@ -247,7 +247,7 @@
 ;; Random boolean (true or false)
 
 (defn rand-bool []
-  #{Rand}
+  #fx{Rand}
   : int
   ```c
   static int seeded = 0;

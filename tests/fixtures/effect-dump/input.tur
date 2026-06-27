@@ -4,7 +4,7 @@
 
 (defn pure-fn [] : int 42)
 
-(defn effectful [] #{Write} : nil
+(defn effectful [] #fx{Write} : nil
   (perform (Write "hello")))
 
 (defn main [] : int

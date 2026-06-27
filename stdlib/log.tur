@@ -83,7 +83,7 @@ static void __tur_log_null(const char* msg) { (void)msg; }
 ```
 
 (defn Real-Logger []
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   __tur_logger* logger = (__tur_logger*)malloc(sizeof(__tur_logger));
@@ -102,7 +102,7 @@ static void __tur_log_null(const char* msg) { (void)msg; }
 ;; Free a Real-Logger
 
 (defn Real-Logger-free [log]
-  #{Unsafe}
+  #fx{Unsafe}
   : nil
   ```c
   free((void*)(intptr_t)log);
@@ -126,7 +126,7 @@ static void __tur_log_null(const char* msg) { (void)msg; }
 
 
 (defn Simple-Logger []
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   __tur_logger* logger = (__tur_logger*)malloc(sizeof(__tur_logger));
@@ -145,7 +145,7 @@ static void __tur_log_null(const char* msg) { (void)msg; }
 ;; Free a Simple-Logger
 
 (defn Simple-Logger-free [log]
-  #{Unsafe}
+  #fx{Unsafe}
   : nil
   ```c
   free((void*)(intptr_t)log);
@@ -168,7 +168,7 @@ static void __tur_log_null(const char* msg) { (void)msg; }
 
 
 (defn Null-Logger []
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   __tur_logger* logger = (__tur_logger*)malloc(sizeof(__tur_logger));
@@ -187,7 +187,7 @@ static void __tur_log_null(const char* msg) { (void)msg; }
 ;; Free a Null-Logger
 
 (defn Null-Logger-free [log]
-  #{Unsafe}
+  #fx{Unsafe}
   : nil
   ```c
   free((void*)(intptr_t)log);
@@ -209,7 +209,7 @@ static void __tur_log_null(const char* msg) { (void)msg; }
 
 
 (defn log-debug-direct [msg : cstr]
-  #{Unsafe IO}
+  #fx{Unsafe IO}
   : nil
   ```c
   fprintf(stdout, "[DEBUG] %s\n", msg);
@@ -228,7 +228,7 @@ static void __tur_log_null(const char* msg) { (void)msg; }
 ;; Log an info message
 
 (defn log-info-direct [msg : cstr]
-  #{Unsafe IO}
+  #fx{Unsafe IO}
   : nil
   ```c
   fprintf(stdout, "[INFO] %s\n", msg);
@@ -247,7 +247,7 @@ static void __tur_log_null(const char* msg) { (void)msg; }
 ;; Log a warning message
 
 (defn log-warn-direct [msg : cstr]
-  #{Unsafe IO}
+  #fx{Unsafe IO}
   : nil
   ```c
   fprintf(stderr, "[WARN] %s\n", msg);
@@ -266,7 +266,7 @@ static void __tur_log_null(const char* msg) { (void)msg; }
 ;; Log an error message
 
 (defn log-error-direct [msg : cstr]
-  #{Unsafe IO}
+  #fx{Unsafe IO}
   : nil
   ```c
   fprintf(stderr, "[ERROR] %s\n", msg);

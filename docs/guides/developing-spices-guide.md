@@ -588,13 +588,13 @@ Add two keys under `:build-opts`:
 ```turmeric
 (defpackage tur-signal
   :name "tur-signal"
-  :build-opts #{
+  :build-opts #fx{
     :c-includes ["c/kissfft"]            ;; -I dirs (manifest-relative)
     :c-sources  ["c/kissfft/kiss_fft.c"  ;; .c files compiled + linked
                  "c/kissfft/kiss_fftr.c"
                  "c/glue/fft_shim.c"]
   }
-  :exports #{ "signal/fft" [fft-forward fft-inverse] })
+  :exports #fx{ "signal/fft" [fft-forward fft-inverse] })
 ```
 
 ### Rules

@@ -2,10 +2,10 @@
 
 (defeffect Write [s :cstr] :nil)
 
-(defn run-e [f :(fn [] #{e} nil)] #{e} : nil
+(defn run-e [f :(fn [] #fx{e} nil)] #fx{e} : nil
   (f))
 
-(defn write-and-e [] #{Write e} : nil
+(defn write-and-e [] #fx{Write e} : nil
   (perform (Write "x")))
 
 (defn main [] : int

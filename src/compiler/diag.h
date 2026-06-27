@@ -184,6 +184,15 @@ typedef enum DiagCode {
      * marks the param/result slots as types.  Drop the colon:
      * (fn [:int] :int) -> (fn [int] int). */
     TUR_D0001_FN_TYPE_COLON,
+    /* fx-row-syntax-rename-plan Phase 2: bare `#{...}` as an effect row is
+     * deprecated; prefer `#fx{...}`.  Emitted from elaboration when an
+     * F_MAP whose provenance is PROV_FX_LEGACY is consumed as an effect row. */
+    TUR_D0002_FX_ROW_LEGACY_HASH,
+    /* fx-row-syntax-rename-plan Phase 2: `@{...}` as an effect row is
+     * deprecated; prefer `#fx{...}`.  Emitted from elaboration when an
+     * F_MAP whose provenance is PROV_FX_AT_LEGACY is consumed as an
+     * effect row.  Note: this does not affect bare `@x` deref sugar. */
+    TUR_D0003_FX_ROW_LEGACY_AT,
     /* XF (experimental-flag-mechanism-plan): the `--enable=<name>` surface.
      * E0310 fires at CLI/manifest parse on an unknown experiment name;
      * W0060/W0061 fire once per compile at the first use site of an enabled

@@ -297,7 +297,7 @@ defn run-twice [f :(fn [] #{e} int)] #{e} :int
   {f() + f()}
 ```
 
-The row `#{e}` is a row variable: `run-twice` performs whatever effects `f` performs, no more.
+The row `#fx{e}` is a row variable: `run-twice` performs whatever effects `f` performs, no more.
 
 ### Compiler flags
 
@@ -353,14 +353,14 @@ discipline, declare a **capability effect** with `^capability`:
 A capability effect is a coarse *authority* tag rather than something you
 `perform`. It behaves differently from an ordinary effect in two ways:
 
-- **Justified by annotation alone.** A function tagged `#{FS}` is never flagged
+- **Justified by annotation alone.** A function tagged `#fx{FS}` is never flagged
   as over-annotated (`TUR-W0031`), even though its body never performs `FS` --
   the annotation *is* the justification.
 - **Propagated from the declared row.** Capability effects are never inferred
   from a body, so they propagate from a callee's *declared* row into the
-  caller's inferred row. A `#{}` (pure) caller of an `#{FS}`-tagged function
+  caller's inferred row. A `#fx{}` (pure) caller of an `#fx{FS}`-tagged function
   therefore fails effect-row checking with `TUR-E0009`, exactly like the
-  built-in `#{Unsafe}`.
+  built-in `#fx{Unsafe}`.
 
 The standard library ships five capability tags in
 [`stdlib/effects.tur`](../../stdlib/effects.tur), used to annotate the
@@ -368,15 +368,15 @@ I/O-touching modules:
 
 | Tag       | Used by                                     |
 |-----------|---------------------------------------------|
-| `#{IO}`   | umbrella, parent of the others              |
-| `#{FS}`   | `fs.tur`, `csv.tur` file helpers, `tmpfile` |
-| `#{Net}`  | `net.tur`, `async_socket.tur`, `httpd.tur`  |
-| `#{Proc}` | `process.tur`, `env.tur`                     |
-| `#{Rand}` | `random.tur`                                |
+| `#fx{IO}`   | umbrella, parent of the others              |
+| `#fx{FS}`   | `fs.tur`, `csv.tur` file helpers, `tmpfile` |
+| `#fx{Net}`  | `net.tur`, `async_socket.tur`, `httpd.tur`  |
+| `#fx{Proc}` | `process.tur`, `env.tur`                     |
+| `#fx{Rand}` | `random.tur`                                |
 
 Discipline stays **opt-in**: a function with no effect-row annotation is never
 checked, so existing code that ignores effect rows keeps compiling. Only when a
-caller annotates its own row (e.g. declares `#{}` or `#{Net}`) does the compiler
+caller annotates its own row (e.g. declares `#fx{}` or `#fx{Net}`) does the compiler
 enforce that it has the capabilities of everything it calls.
 
 ```turmeric

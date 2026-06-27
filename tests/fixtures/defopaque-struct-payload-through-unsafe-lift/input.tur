@@ -19,7 +19,7 @@
 
 (defopaque Box [A] :int)
 
-(defn __mk-raw [] #{Unsafe} : int
+(defn __mk-raw [] #fx{Unsafe} : int
   ```c
   return 0;
   ```)
@@ -27,7 +27,7 @@
 (defn make-box [A] [] : (Box A)
   (:: (unsafe (__mk-raw)) :Box))
 
-(defn __set-raw [A] [b : int v : A] #{Unsafe} : int
+(defn __set-raw [A] [b : int v : A] #fx{Unsafe} : int
   ```c
   (void)b; (void)v;
   return 1;

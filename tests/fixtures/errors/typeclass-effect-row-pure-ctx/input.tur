@@ -3,14 +3,14 @@
 (defeffect Write [msg :cstr] :nil)
 
 (defclass IOShow [a]
-  (io-show [x] #{Write} :nil))
+  (io-show [x] #fx{Write} :nil))
 
 (definstance IOShow [int]
   (io-show [x] :nil
     (perform (Write "42"))))
 
 ;; This function is pure (#{}), but calls io-show which has #{Write}
-(defn pure-fn [] #{} :nil
+(defn pure-fn [] #fx{} :nil
   (.io-show 42))
 
 (defn main [] :int

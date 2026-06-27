@@ -66,7 +66,7 @@
 
 (defn pair-free [A B]
   [p : (Pair A B)]
-  #{}
+  #fx{}
   :void
   ```c
   (void)p;
@@ -92,7 +92,7 @@
 ;;; pair-eq-carrier? -- legacy carrier-ABI helper used inside Pair's Eq instance.
 
 (defn pair-eq-carrier? [p1 : int p2 : int ^fat fst-cmp ^fat snd-cmp]
-  #{}
+  #fx{}
   : bool
   ```c
   struct { int64_t fst; int64_t snd; } *a = (void*)(intptr_t)p1;

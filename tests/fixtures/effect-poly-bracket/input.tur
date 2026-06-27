@@ -4,7 +4,7 @@
 
 (defeffect Log [msg :cstr] :nil)
 
-(defn bracket [body :(fn [] #{e} int)] #{e} : int
+(defn bracket [body :(fn [] #fx{e} int)] #fx{e} : int
   (do
     (println "acquire")
     (let [result (body)]

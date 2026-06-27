@@ -1,6 +1,6 @@
 ;; ET4: I/O effects are properly tracked.
 (defeffect Log [msg :cstr] :nil)
-(defn do-log [] #{Log} : nil
+(defn do-log [] #fx{Log} : nil
   (perform (Log "hello")))
 (defn main [] : int
   (handle

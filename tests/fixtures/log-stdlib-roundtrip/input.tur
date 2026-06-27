@@ -20,7 +20,7 @@
                         void (*w)(const char*); void (*e)(const char*); } L;
   ((L*)(intptr_t)lg)->i(msg); ```)
 
-(defn main [] #{Unsafe} : int
+(defn main [] #fx{Unsafe} : int
   (let [s (Simple-Logger)]
     (logger-debug s "alpha")
     (logger-info s "beta")

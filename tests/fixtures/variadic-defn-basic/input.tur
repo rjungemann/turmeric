@@ -6,7 +6,7 @@
 ;;   (3) a helper walks the cons list correctly
 
 ;; Walk a __tur_cons_cell list and sum all heads.
-(defn cons-list-sum [lst : int] #{Unsafe} : int
+(defn cons-list-sum [lst : int] #fx{Unsafe} : int
   ```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
   int64_t acc = 0;
@@ -16,7 +16,7 @@
   ```)
 
 ;; Variadic summer: fixed acc + rest list of int.
-(defn var-sum [acc : int & rest : int] #{Unsafe} : int
+(defn var-sum [acc : int & rest : int] #fx{Unsafe} : int
   (+ acc (cons-list-sum rest)))
 
 ;; Variadic nil-check: is the rest list empty?

@@ -4,7 +4,7 @@
 ;; (defn f [A] [& items :A] ...) -- A is a polymorphic rest element (TY_TYVAR);
 ;; a call passes when every arg has the same type (here, all int).
 
-(defn cons-list-len [lst : int] #{Unsafe} : int
+(defn cons-list-len [lst : int] #fx{Unsafe} : int
   ```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
   int64_t n = 0;
@@ -13,7 +13,7 @@
   return (int)n;
   ```)
 
-(defn count-any [A] [& items :A] #{Unsafe} :int
+(defn count-any [A] [& items :A] #fx{Unsafe} :int
   (cons-list-len items))
 
 (defn main [] : int

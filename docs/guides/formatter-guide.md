@@ -80,7 +80,7 @@ These forms have well-known argument roles and use custom layouts:
 ### Vectors, maps, sets
 
 - `[...]` -- inline if total width fits; otherwise one element per line.
-- `#{...}` maps -- inline if total width fits; otherwise one key-value pair
+- `#fx{...}` maps -- inline if total width fits; otherwise one key-value pair
   per line.
 - `#s(...)` sets -- inline if total width fits; otherwise one element per line.
 

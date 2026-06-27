@@ -1377,6 +1377,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
             if (fkind == TY_FN && scan < n_items &&
                 fields_form->as.list.items[scan]->tag == F_MAP) {
                 Form *row_form = fields_form->as.list.items[scan++];
+                warn_legacy_fx_row(row_form);
                 uint8_t n_sym = (uint8_t)row_form->as.list.len;
                 const Symbol **syms = (const Symbol **)arena_alloc(e->arena,
                                         (n_sym ? n_sym : 1) * sizeof(Symbol *));
@@ -3086,6 +3087,7 @@ Expr *elab_match(Elab *e, const Form *call) {
      * symbols (same shape as a defn effect row). */
     bool nonexhaustive_optout = false;
     if (call->as.list.items[1]->tag == F_MAP) {
+        warn_legacy_fx_row(call->as.list.items[1]);
         const Form *marker = call->as.list.items[1];
         const Symbol *sym_nonexh = intern_cstr(e->st, "NonExhaustive");
         for (uint32_t mi = 0; mi < marker->as.list.len; mi++) {

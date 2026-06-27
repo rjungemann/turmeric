@@ -5,10 +5,10 @@
 
 (defeffect Log [msg :cstr] :nil)
 
-(defn apply [f :(fn [int] #{e} int) x : int] #{e} : int
+(defn apply [f :(fn [int] #fx{e} int) x : int] #fx{e} : int
   (f x))
 
-(defn apply-logged [x : int] #{Log} : int
+(defn apply-logged [x : int] #fx{Log} : int
   (apply (fn [v] (do (perform (Log "calling")) v)) x))
 
 (defn main [] : int

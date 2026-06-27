@@ -79,7 +79,7 @@
 ;;; Since: LT4
 
 (defn socket-close [s : Socket]
-  #{Net}
+  #fx{Net}
   : int
   ```c
   if (s.fd < 0) return -1;

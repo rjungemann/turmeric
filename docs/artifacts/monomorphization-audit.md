@@ -186,7 +186,7 @@ it did not yet retire the bridge.
 | Bucket | Sites | Disposition |
 |---|---|---|
 | `passes_through_carrier` | ~20+ call sites in `emit_expr.c`; central bridge in `emit_core.c` | Removed by M2-M7 (route constructors / accessors / dispatch through monomorphized direct ABI) |
-| `uses_int64_in_body` | 5 prelude helpers + ~10 stdlib defns | Replaced by `#{Construct}`-style emission templates in M2 |
+| `uses_int64_in_body` | 5 prelude helpers + ~10 stdlib defns | Replaced by `#fx{Construct}`-style emission templates in M2 |
 | `parametric_struct_field` | Struct-field-type lowering pass added in 78589845; ~3 emit sites | Stays for value-struct payloads; cleaned up to consume monomorphized ABI in M3 |
 | `dispatch_method_arg` | Dict-struct emit in `emit_stmt.c`; per-instance method emit in `emit_module.c`; fatshim in `emit_module.c` | Dict struct already typed per-instance (non-HKT path is codegen-compatible). Fatshim retired in M4-M5. HKT dispatch is M6 / M7. |
 | `existential_value` | Pack / open in `emit_expr.c`; `tur_poly_fn_t` plumbing; HAMT int64 path | **Stays.** These are the documented inhabitants of the carrier ABI after M8. |
@@ -281,7 +281,7 @@ and renames (`tur_box_ok` / `tur_box_err`) in M8 for what remains.
 - `stdlib/pair.tur:56` -- `pair-snd [p : (Pair A B)] : B`.
 - `stdlib/vec.tur:67` -- `vec-get [A] ... : A` (inline-C carrier path).
 
-**Disposition:** M2 replaces the constructor bodies with `#{Construct}`
+**Disposition:** M2 replaces the constructor bodies with `#fx{Construct}`
 emission templates; M3 deletes the bridge that makes the accessors
 look-through-carrier work, since after M2 they operate on real
 by-value structs.
@@ -436,12 +436,12 @@ designated-initializer's implicit zero, eliminating the explicit
 memset stanza.
 
 What's left of `emit_fns.c:783-820`: a narrow heap-spill stanza that
-sets up `__tur_inbox_X` pointers for any `#{Construct}` body that
+sets up `__tur_inbox_X` pointers for any `#fx{Construct}` body that
 still casts via `(int64_t)(intptr_t)x` in inline-C.  Stdlib has none
 today; the stanza is defensive cover for future user code.
 
 Still open: the orthogonal `m2b_carrier_synth` path
-(`emit_fns.c:680-720`) for `#{Construct}` defns whose spec emits in
+(`emit_fns.c:680-720`) for `#fx{Construct}` defns whose spec emits in
 the int64-carrier-return context (typeclass-instance-method
 dispatch).  Retired only when M4 reworks dict slots to per-instance
 typed pointers.
@@ -452,7 +452,7 @@ typed pointers.
   - `:867-878` the condition: `is_instance_method && type_uses_carrier_abi(result_type)` true *and* body codegen produces struct -> emit carrier wrapper.
 
 M2 + M4 between them remove the precondition (the constructor body
-won't produce a carrier-incompatible struct once `#{Construct}` is in
+won't produce a carrier-incompatible struct once `#fx{Construct}` is in
 place; the dict won't expect a carrier slot once M4 lands), so this
 shim becomes dead and is deleted in M9.
 
@@ -536,7 +536,7 @@ to it; M5 must measure.
 ## 10. Next steps
 
 1. **M2a -- LANDED (2026-06-13) and SUBSEQUENTLY RETIRED.**
-   Generalized inference shipped as the `#{Construct}`-driven synth
+   Generalized inference shipped as the `#fx{Construct}`-driven synth
    in `emit_fns.c:607-699`.  Once M2b's `(make-struct ...)` body
    form landed (elaborator side at `elab_structs.c` / `elab_types.c`,
    emit at `emit_expr.c:3700-3731` / `:1138`), stdlib migration to
@@ -575,7 +575,7 @@ to it; M5 must measure.
    output (designated initializer instead of memset-then-assign).
    See Section 7.1.
 7. **M2b residual** -- the orthogonal `m2b_carrier_synth` path
-   (`emit_fns.c:680-720`) for `#{Construct}` defns emitted in the
+   (`emit_fns.c:680-720`) for `#fx{Construct}` defns emitted in the
    int64-carrier-return context (typeclass-instance-method dispatch)
    stays until M4 reworks dict slots.  HKT method bodies
    (`fmap`/`pure`/`ap`/`bind`/`throw-error` for `Option`/`Result`)

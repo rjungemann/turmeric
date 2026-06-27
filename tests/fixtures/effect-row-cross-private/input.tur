@@ -19,6 +19,6 @@
       (run-internal)
       (InternalLog [msg] k) (resume k nil))))
 
-(defn main [] #{} : int
+(defn main [] #fx{} : int
   (println (wrapper))
   0)

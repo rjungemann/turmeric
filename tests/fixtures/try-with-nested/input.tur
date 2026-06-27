@@ -3,7 +3,7 @@
 (defeffect Write [s :cstr] :nil)
 (defeffect Fail [msg :cstr] :nil)
 
-(defn risky [] #{Write Fail} : int
+(defn risky [] #fx{Write Fail} : int
   (do (perform (Write "start"))
       (perform (Fail "oops"))
       99))

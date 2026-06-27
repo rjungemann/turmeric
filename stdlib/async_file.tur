@@ -35,7 +35,7 @@
 ;;; Since: Phase T24
 
 (defn async-file-open [path : cstr flags : int]
-  #{Unsafe}
+  #fx{Unsafe}
   : Fd
   ```c
   int oflags;
@@ -65,7 +65,7 @@
 ;;; Since: Phase T24
 
 (defn async-file-read [fd : Fd buf-size : int]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   char *buf = (char *)malloc((size_t)buf_size);
@@ -111,7 +111,7 @@
 ;;; Since: Phase T24
 
 (defn async-file-write [fd : Fd data : cstr len : int]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   int64_t total = 0;
@@ -149,7 +149,7 @@
 ;;; Since: Phase T24
 
 (defn async-file-close [fd : Fd]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   tur_io_unregister((int)fd);
@@ -168,7 +168,7 @@
 ;;; Since: Phase T24
 
 (defn async-file-read-buf []
-  #{Unsafe}
+  #fx{Unsafe}
   : ptr<void>
   ```c
   if (!tur_current_fiber) return NULL;
@@ -186,7 +186,7 @@
 ;;; Since: Phase T24
 
 (defn async-file-read-len []
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   if (!tur_current_fiber) return 0;

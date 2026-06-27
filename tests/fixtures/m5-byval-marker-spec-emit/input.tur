@@ -16,7 +16,7 @@
 
 (defn vget-marker-byval [A]
   [v : (Vec A) i : int]
-  #{ByVal}
+  #fx{ByVal}
   : A
   ```c
   if (i >= 0 && (size_t)i < (size_t)v->len) {

@@ -50,7 +50,7 @@
 ;;; Since: Phase B2
 
 (defn process/pid []
-  #{Proc}
+  #fx{Proc}
   : Pid
   ```c
   #include <unistd.h>
@@ -67,7 +67,7 @@
 ;;; Since: Phase B2
 
 (defn process/ppid []
-  #{Proc}
+  #fx{Proc}
   : Pid
   ```c
   #include <unistd.h>
@@ -84,7 +84,7 @@
 ;;; Since: Phase B2
 
 (defn process/exit [code : int]
-  #{Proc}
+  #fx{Proc}
   : void
   ```c
   exit((int)code);
@@ -107,7 +107,7 @@
 ;;; Since: Phase B2
 
 (defn process/exec [path : cstr argv : int]
-  #{Proc}
+  #fx{Proc}
   : int
   ```c
   #include <unistd.h>
@@ -144,7 +144,7 @@
 ;;; Since: Phase B2
 
 (defn process/spawn [path : cstr argv : int]
-  #{Proc}
+  #fx{Proc}
   : ChildHandle
   ```c
   #include <unistd.h>
@@ -179,7 +179,7 @@
 ;;; Since: Phase B2
 
 (defn process/wait [child : ChildHandle]
-  #{Proc}
+  #fx{Proc}
   : int
   ```c
   #include <sys/wait.h>
@@ -205,7 +205,7 @@
 ;;; Since: Phase B2
 
 (defn process/run [path : cstr argv : int]
-  #{Proc}
+  #fx{Proc}
   : int
   ```c
   #include <unistd.h>
@@ -257,7 +257,7 @@
 ;;; Since: Phase B2
 
 (defn process/capture [path : cstr argv : int]
-  #{Proc}
+  #fx{Proc}
   : int
   ```c
   int argc = 0;
@@ -319,7 +319,7 @@
 ;;; Since: Phase B2
 
 (defn process/cwd []
-  #{Proc}
+  #fx{Proc}
   : cstr
   ```c
   #include <unistd.h>
@@ -341,7 +341,7 @@
 ;;; Since: Phase B2
 
 (defn process/chdir [path : cstr]
-  #{Proc}
+  #fx{Proc}
   : int
   ```c
   #include <unistd.h>

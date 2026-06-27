@@ -84,6 +84,17 @@ typedef enum FormTag {
     F_ROW_LITERAL,
 } FormTag;
 
+/* fx-row-syntax-rename-plan: provenance tag on F_MAP forms that originate
+ * as an effect row.  Drives the TUR-D0002/D0003 deprecation warnings emitted
+ * when elaboration consumes an F_MAP as an effect row.  PROV_FX_NONE is the
+ * zero default so memset(0) of a Form leaves provenance unset. */
+typedef enum FxProvenance {
+    PROV_FX_NONE = 0,        /* not an effect row, or originated as #fx{...} */
+    PROV_FX_EXPLICIT,        /* #fx{...} -- preferred spelling, no warning */
+    PROV_FX_LEGACY,          /* bare #{...} -- TUR-D0002 */
+    PROV_FX_AT_LEGACY,       /* @{...}     -- TUR-D0003 */
+} FxProvenance;
+
 struct Form;
 typedef struct Form Form;
 
@@ -96,6 +107,7 @@ struct Form {
     FormTag       tag;
     Span          span;
     LiteralSuffix lit_suffix; /* Phase N: type suffix for F_INT/F_FLOAT; LIT_SUF_NONE otherwise */
+    uint8_t       fx_prov;    /* FxProvenance: only meaningful for F_MAP forms */
     union {
         bool          b;
         int64_t       i;

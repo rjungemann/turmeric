@@ -3,7 +3,7 @@
 
 (defeffect Write [s :cstr] :nil)
 
-(defn bad-fn [] #{} : nil
+(defn bad-fn [] #fx{} : nil
   (perform (Write "oops")))
 
 (defn main [] : int

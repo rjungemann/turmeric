@@ -3,7 +3,7 @@
 (defeffect Write [s :cstr] :nil)
 (defeffect Read [] :int)
 
-(defn effectful [] #{Write Read} : int
+(defn effectful [] #fx{Write Read} : int
   (do (perform (Write "asking"))
       (perform (Read))))
 

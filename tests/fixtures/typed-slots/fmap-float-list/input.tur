@@ -22,7 +22,7 @@
   ```)
 
 ;; Helper: build a 2-element float cons list and return raw :int pointer.
-(defn make-raw-float-list [a : float b : float] #{Unsafe} : int
+(defn make-raw-float-list [a : float b : float] #fx{Unsafe} : int
   ```c
   struct _c { double head; int64_t tail; };
   struct _c *t = malloc(sizeof(*t));
@@ -32,7 +32,7 @@
   return (int64_t)(intptr_t)h;
   ```)
 
-(defn main [] #{Unsafe} : int
+(defn main [] #fx{Unsafe} : int
   ;; Test 1: integer list [3, 5] fmap (*factor) with capturing closure => [6, 10]
   (let [factor 2]
     (let [xs (tcons 3 (tcons 5 0))]

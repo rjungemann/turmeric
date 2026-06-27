@@ -44,7 +44,7 @@
 
 (defn map-new [K V]
   []
-  #{}
+  #fx{}
   : (Map K V)
   ```c
   struct { void *hamt; } *m = malloc(sizeof(*m));
@@ -64,7 +64,7 @@
 
 (defn map-hamt [K V]
   [m (Map K V)]
-  #{}
+  #fx{}
   :ptr<void>
   ```c
   struct { void *hamt; } *map = (void*)(intptr_t)m;
@@ -74,7 +74,7 @@
 
 (defn map-wrap [K V]
   [h :ptr<void>]
-  #{}
+  #fx{}
   : (Map K V)
   ```c
   struct { void *hamt; } *m = malloc(sizeof(*m));
@@ -82,7 +82,7 @@
   return (__TUR_RET__)(intptr_t)m;
   ```)
 ;;; ============================================================================
-;;; Raw runtime bridges (#{Unsafe}-style, internal).
+;;; Raw runtime bridges (#fx{Unsafe}-style, internal).
 ;;;
 ;;; These carry the key already boxed into the int64 carrier (a :int, not :K)
 ;;; and an explicit comparator/ownership flag.  They are the thin C layer the
@@ -545,7 +545,7 @@
 
 (defn map-count [K V]
   [m (Map K V)]
-  #{}
+  #fx{}
   :int
   ```c
   struct { void *hamt; } *map = (void*)(intptr_t)m;
@@ -567,7 +567,7 @@
 
 (defn map-merge [K V]
   [a (Map K V) b (Map K V)]
-  #{}
+  #fx{}
   : (Map K V)
   ```c
   struct { void *hamt; } *ma = (void*)(intptr_t)a;
@@ -589,7 +589,7 @@
 
 (defn map-free [K V]
   [m (Map K V)]
-  #{}
+  #fx{}
   :void
   ```c
   free((void*)(intptr_t)m);
@@ -614,7 +614,7 @@
 ;; docs/upcoming/v2/phase4-carrier-helper-inventory.md.
 
 (defn map-eq-raw? [m1 : int m2 : int ^fat val-cmp]
-  #{}
+  #fx{}
   : bool
   ```c
   struct { void *hamt; } *map1 = (void*)(intptr_t)m1;
@@ -658,7 +658,7 @@
 ;;; for :cstr keys (distinct pointers with equal text match).
 
 (defn map-eq-raw-k? [m1 : int m2 : int keyeq ^fat val-cmp]
-  #{}
+  #fx{}
   : bool
   ```c
   struct { void *hamt; } *map1 = (void*)(intptr_t)m1;
@@ -723,7 +723,7 @@
 
 (defn map-iter-cur-val-as [V]
   [iter : ptr<void>]
-  #{}
+  #fx{}
   : V
   ```c return (int64_t)(intptr_t)tur_hamt_iter_cur_val((void*)(intptr_t)iter); ```)
 ;;; map-get-dynamic-as -- typed lookup against m2's hamt, threading m1's
@@ -735,7 +735,7 @@
 
 (defn map-get-dynamic-as [V]
   [m : ptr<void> hash : int key : ptr<void> keyeq : ptr<void>]
-  #{}
+  #fx{}
   : V
   ```c return (int64_t)(intptr_t)tur_hamt_get_dynamic((void*)(intptr_t)m, hash, (void*)(intptr_t)key, (void*)(intptr_t)keyeq); ```)
 ;;; map-eq-loop -- pure-Turmeric structural-equality walk over m1's HAMT.

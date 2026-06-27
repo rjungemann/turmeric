@@ -79,7 +79,7 @@
 (load "stdlib/thread.tur")
 
 (defn spawn-conveying [f : ptr<void>]
-  #{Unsafe}
+  #fx{Unsafe}
   : ThreadHandle
   ```c
   return (void *)(intptr_t)_tur_spawn_conveying((int64_t)(intptr_t)f);

@@ -568,7 +568,7 @@
 
 
 (defn sized-vec-from-list [lst]
-  #{Unsafe}
+  #fx{Unsafe}
   : SizedVec
   ```c
   struct __sz_cons { int64_t value; int64_t next; };

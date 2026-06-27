@@ -4,7 +4,7 @@
 (defeffect Write [s :cstr] :nil)
 (defeffect Log [msg :cstr] :nil)
 
-(defn inner [] #{Log} : nil
+(defn inner [] #fx{Log} : nil
   (handle
     (do
       (perform (Write "handled internally"))

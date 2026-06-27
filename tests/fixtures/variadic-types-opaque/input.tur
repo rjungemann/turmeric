@@ -6,7 +6,7 @@
 
 (defopaque Route :int)
 
-(defn cons-list-len [lst :int] #{Unsafe} :int
+(defn cons-list-len [lst :int] #fx{Unsafe} :int
   ```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
   int64_t n = 0;
@@ -17,7 +17,7 @@
 
 (defn mk-route [tag :int] :Route tag)
 
-(defn count-routes [& items :Route] #{Unsafe} :int
+(defn count-routes [& items :Route] #fx{Unsafe} :int
   (cons-list-len items))
 
 (defn main [] :int

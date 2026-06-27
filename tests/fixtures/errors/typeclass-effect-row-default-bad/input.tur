@@ -4,7 +4,7 @@
 (defeffect Write [msg :cstr] :nil)
 
 (defclass Greet [a]
-  (greeting [x] #{} : cstr
+  (greeting [x] #fx{} : cstr
     (do (perform (Write "hi"))
         "hello")))
 

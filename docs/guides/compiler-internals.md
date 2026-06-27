@@ -119,7 +119,7 @@ Defines the `Form` union -- the raw parsed representation before type-checking:
 | `FORM_LIST` | `(a b c ...)` |
 | `FORM_VEC` | `[a b c ...]` |
 | `FORM_MAP` | `{k v ...}` |
-| `FORM_SET` | `#{a b ...}` |
+| `FORM_SET` | `#fx{a b ...}` |
 | `FORM_CODE` | inline C block (``` ``` ```) |
 
 Each `Form` also carries a `Span` (file, line, col, byte offset) used for

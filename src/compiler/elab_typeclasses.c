@@ -1011,6 +1011,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
         Form *maybe_row = method_form->as.list.items[ret_idx];
         if (maybe_row->tag == F_MAP) {
             /* #{Effect...} effect-row annotation -- parse and store it. */
+            warn_legacy_fx_row(maybe_row);
             uint8_t n_sym = (uint8_t)maybe_row->as.list.len;
             const Symbol **syms = (const Symbol **)arena_alloc(e->arena,
                                     (n_sym ? n_sym : 1) * sizeof(Symbol *));
@@ -1040,6 +1041,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
         }
         if (ret_form->tag == F_MAP) {
             /* another effect row or #{} after the params — skip silently */
+            warn_legacy_fx_row(ret_form);
             /* (ignore the rest; return type stays TYPE_NIL) */
         } else if (ret_form->tag == F_KEYWORD) {
             const Symbol *kw = ret_form->as.sym;

@@ -50,7 +50,7 @@
                       focus : int
                       right : ptr<void>
                       right-len : int]
-  #{}
+  #fx{}
   : int
   ```c
   struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *z = malloc(sizeof(*z));
@@ -83,7 +83,7 @@
 ;;; Since: Phase TC2
 
 (defn zipper-focus-raw [z : int]
-  #{}
+  #fx{}
   : int
   ```c
   struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *zip = (void*)(intptr_t)z;
@@ -109,7 +109,7 @@
 ;;; Since: Phase TC2
 
 (defn zipper-move-left-raw [z : int]
-  #{}
+  #fx{}
   : int
   ```c
   struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *zip = (void*)(intptr_t)z;
@@ -146,7 +146,7 @@
 ;;; Since: Phase TC2
 
 (defn zipper-move-right-raw [z : int]
-  #{}
+  #fx{}
   : int
   ```c
   struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *zip = (void*)(intptr_t)z;
@@ -180,7 +180,7 @@
 ;;; Since: Phase TC2
 
 (defn zipper-free-raw [z : int]
-  #{}
+  #fx{}
   : void
   ```c
   struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *zip = (void*)(intptr_t)z;

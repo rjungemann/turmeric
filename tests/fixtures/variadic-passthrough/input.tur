@@ -7,7 +7,7 @@
 ;;   (2) Demonstrates cons-list manipulation in inline-C (Unsafe context).
 
 ;; Walk a __tur_cons_cell list and compute its length.
-(defn cons-list-len [lst : int] #{Unsafe} : int
+(defn cons-list-len [lst : int] #fx{Unsafe} : int
   ```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
   int64_t n = 0;
@@ -17,7 +17,7 @@
   ```)
 
 ;; Walk a __tur_cons_cell list and sum all heads.
-(defn cons-list-sum [lst : int] #{Unsafe} : int
+(defn cons-list-sum [lst : int] #fx{Unsafe} : int
   ```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
   int64_t acc = 0;
@@ -27,17 +27,17 @@
   ```)
 
 ;; Base variadic summer -- sums the rest list.
-(defn base-sum [& rest : int] #{Unsafe} : int
+(defn base-sum [& rest : int] #fx{Unsafe} : int
   (cons-list-sum rest))
 
 ;; Passthrough: receives a rest-list by-pointer and reports its length + sum.
 ;; Returns (len * 100 + sum) so a single int encodes both values.
-(defn report-list [lst : int] #{Unsafe} : int
+(defn report-list [lst : int] #fx{Unsafe} : int
   (+ (* (cons-list-len lst) 100)
      (cons-list-sum lst)))
 
 ;; Variadic wrapper that forwards the rest-list for inspection.
-(defn variadic-report [tag : int & rest : int] #{Unsafe} : int
+(defn variadic-report [tag : int & rest : int] #fx{Unsafe} : int
   (+ (* tag 10000)
      (report-list rest)))
 

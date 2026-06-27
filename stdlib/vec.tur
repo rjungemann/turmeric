@@ -54,7 +54,7 @@
 
 (defn vec-new [A]
   []
-  #{}
+  #fx{}
   : (Vec A)
   ```c
   struct { int64_t *data; int64_t len; int64_t cap; } *v = malloc(sizeof(*v));
@@ -78,7 +78,7 @@
 
 (defn vec-len [A]
   [v : (Vec A)]
-  #{}
+  #fx{}
   : int
   ```c
   struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
@@ -100,7 +100,7 @@
 
 (defn vec-get [A]
   [v : (Vec A) i :int]
-  #{}
+  #fx{}
   :A
   ```c
   struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
@@ -122,7 +122,7 @@
 
 (defn vec-push! [A]
   [v : (Vec A) val :A]
-  #{}
+  #fx{}
   :nil
   ```c
   struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
@@ -151,7 +151,7 @@
 
 (defn vec-pop! [A]
   [v : (Vec A)]
-  #{}
+  #fx{}
   :A
   ```c
   struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
@@ -172,7 +172,7 @@
 
 (defn vec-set! [A]
   [v : (Vec A) i :int val :A]
-  #{}
+  #fx{}
   :void
   ```c
   struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
@@ -192,7 +192,7 @@
 
 (defn vec-free [A]
   [v : (Vec A)]
-  #{}
+  #fx{}
   : void
   ```c
   struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
@@ -281,7 +281,7 @@
 ;;; Since: Phase TC1
 
 (defn vec-eq? [v1 : int v2 : int ^fat cmp-fn]
-  #{}
+  #fx{}
   : bool
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *a = (void*)(intptr_t)v1;

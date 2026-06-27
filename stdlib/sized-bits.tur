@@ -27,7 +27,7 @@
 ;;;
 ;;; Since: Phase SZ3
 (defn sized-bitvec-new [n]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   struct { int64_t len; uint8_t *bits; } *bv = malloc(sizeof(*bv));
@@ -50,7 +50,7 @@
 ;;; Since: Phase SZ3
 
 (defn sized-bitvec-free [bv]
-  #{Unsafe}
+  #fx{Unsafe}
   : nil
   ```c
   struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
@@ -73,7 +73,7 @@
 
 
 (defn sized-bitvec-len [bv]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   return ((struct { int64_t len; uint8_t *bits; } *)(intptr_t)bv)->len;
@@ -92,7 +92,7 @@
 ;;; Since: Phase SZ3
 
 (defn sized-bitvec-size [bv]
-  #{Unsafe}
+  #fx{Unsafe}
   : Size
   ```c
   return ctor_Static(((struct { int64_t len; uint8_t *bits; } *)(intptr_t)bv)->len);
@@ -112,7 +112,7 @@
 ;;; Since: Phase SZ3
 
 (defn sized-bitvec-get [bv i]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
@@ -137,7 +137,7 @@
 ;;; Since: Phase SZ3
 
 (defn sized-bitvec-set! [bv i]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
@@ -163,7 +163,7 @@
 ;;; Since: Phase SZ3
 
 (defn sized-bitvec-clear! [bv i]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
@@ -189,7 +189,7 @@
 ;;; Since: Phase SZ3
 
 (defn sized-bitvec-toggle! [bv i]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
@@ -216,7 +216,7 @@
 
 
 (defn sized-bitvec-count [bv]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
@@ -244,7 +244,7 @@
 ;;; Since: Phase SZ3
 
 (defn sized-bitvec-fill! [bv v]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
@@ -269,7 +269,7 @@
 
 
 (defn sized-bitvec-assert-len! [bv expected]
-  #{Unsafe}
+  #fx{Unsafe}
   : nil
   (require-msg! (= (sized-bitvec-len bv) (size-eval expected))
     "sized-bitvec-assert-len!: bit count mismatch"))

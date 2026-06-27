@@ -219,7 +219,7 @@ uses `^fat` is 1- or 2-ary, so this rarely binds.
 
 ## Interaction with other annotations
 
-- `^fat` is independent of `#{Unsafe}`, `:linear`, and effect rows.
+- `^fat` is independent of `#fx{Unsafe}`, `:linear`, and effect rows.
   It is a representation marker, not a discipline or capability.
 - `^fat` on a parameter and `^fat` on the return type compose: a
   factory that takes a captureless callback *and* returns a captureless
@@ -233,7 +233,7 @@ uses `^fat` is 1- or 2-ary, so this rarely binds.
 | Situation | Annotation |
 |---|---|
 | Your function calls a callback via `apply-fat` / `TUR_APPLY1` | `[cb ^fat fn-type]` on the parameter |
-| The callback returns a non-int type (`:float`, ...) | `[cb ^fat :(fn [argtypes] #{} :RetType)]` -- annotate so the result type is threaded |
+| The callback returns a non-int type (`:float`, ...) | `[cb ^fat :(fn [argtypes] #fx{} :RetType)]` -- annotate so the result type is threaded |
 | The callback is int-carrier (generic combinator) | bare `[cb ^fat]` is fine |
 | Your function returns a `(fn ...)` that downstream code will fat-call | `^fat :ptr<void>` on the return type |
 | Both of the above | Mark both positions |

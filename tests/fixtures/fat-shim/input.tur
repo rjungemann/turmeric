@@ -2,7 +2,7 @@
 ;; into a fat closure at the call site, so the inline-C fat-call protocol works
 ;; without the historical capture-forcing dummy ((let [_ x] (fn ...))).
 
-(defn apply1 [^fat cb : int x : int] #{Unsafe} : int
+(defn apply1 [^fat cb : int x : int] #fx{Unsafe} : int
   ```c
   int64_t *fat = (int64_t *)(intptr_t)cb;
   int64_t (*thunk)(void *, int64_t) =
@@ -10,7 +10,7 @@
   return thunk((void *)fat, x);
   ```)
 
-(defn apply2 [^fat cb : int x : int y : int] #{Unsafe} : int
+(defn apply2 [^fat cb : int x : int y : int] #fx{Unsafe} : int
   ```c
   int64_t *fat = (int64_t *)(intptr_t)cb;
   int64_t (*thunk)(void *, int64_t, int64_t) =

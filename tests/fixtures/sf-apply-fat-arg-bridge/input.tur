@@ -9,10 +9,10 @@
 ;; (the "any caller of an ^fat-taking SF" update).
 
 (defn sine [freq : float]
-  (fn [^fat sig : (fn [float] #{} float)] : ptr<void>
+  (fn [^fat sig : (fn [float] #fx{} float)] : ptr<void>
     (fn [t : float] : float (* freq (sig t)))))
 
-(defn sample [^fat s : (fn [float] #{} float) t : float] : float
+(defn sample [^fat s : (fn [float] #fx{} float) t : float] : float
   (s t))
 
 (defn constant [v : float] : ptr<void>

@@ -9,6 +9,35 @@ static void push_handled_effect(Elab *e, const Symbol *name);
 static bool elab_effect_is_referred(const Elab *e, const Effect *eff);
 static void cont_mark_consumed(Expr *k);
 
+/* fx-row-syntax-rename-plan Phase 2: warn-once helper for legacy effect-row
+ * spellings.  Call sites pass an F_MAP form they are about to consume as an
+ * effect row; if the form's reader-set provenance is PROV_FX_LEGACY (bare
+ * `#{...}`) or PROV_FX_AT_LEGACY (`@{...}`), emit the corresponding
+ * deprecation warning and clear the provenance so a single source location
+ * warns at most once.  `#fx{...}` (PROV_FX_EXPLICIT) and non-effect-row uses
+ * are silent. */
+void warn_legacy_fx_row(Form *f) {
+    if (!f || f->tag != F_MAP) return;
+    DiagCode code;
+    const char *spelling;
+    switch ((FxProvenance)f->fx_prov) {
+        case PROV_FX_LEGACY:
+            code = TUR_D0002_FX_ROW_LEGACY_HASH;
+            spelling = "#{...}";
+            break;
+        case PROV_FX_AT_LEGACY:
+            code = TUR_D0003_FX_ROW_LEGACY_AT;
+            spelling = "@{...}";
+            break;
+        default:
+            return;
+    }
+    diag_emit_with_code(DIAG_WARNING, f->span, code,
+        "%s effect row is deprecated; prefer #fx{...} "
+        "(run tools/migrate-fx-rows.py to rewrite)", spelling);
+    f->fx_prov = (uint8_t)PROV_FX_EXPLICIT;
+}
+
 /* Phase 18: Delimited continuations */
 
 /* CF2: Derive the delimited-continuation result type for shift/shift0.

@@ -32,7 +32,7 @@
 ;;;
 ;;; Since: Phase RF3
 
-(defn free-pure [x : int] #{} : int (PureFree x))
+(defn free-pure [x : int] #fx{} : int (PureFree x))
 ;;; free-lift -- lift one layer of f into Free.
 ;;;
 ;;; Parameters:
@@ -46,7 +46,7 @@
 ;;;
 ;;; Since: Phase RF3
 
-(defn free-lift [fx : int] #{} : int (Suspend fx))
+(defn free-lift [fx : int] #fx{} : int (Suspend fx))
 ;;; free-bind -- monadic bind for Free.
 ;;;
 ;;; Sequentially composes two Free computations.
@@ -68,7 +68,7 @@
 ;;; Updated: TS5 -- replaced fat-pointer extraction with TS1 typed thunk call.
 
 (defn free-bind [ma : int ^fat kont : int]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   typedef struct { int tag; union { struct { int64_t _0; } PureFree; struct { int64_t _0; } Suspend; } as; } tur_adt_Free_fb;
@@ -94,7 +94,7 @@
 ;;; Updated: TS5 -- replaced fat-pointer extraction with TS1 typed thunk call.
 
 (defn free-fmap [free : int ^fat f : int]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   typedef struct { int tag; union { struct { int64_t _0; } PureFree; struct { int64_t _0; } Suspend; } as; } tur_adt_Free;
@@ -124,7 +124,7 @@
 ;;; Updated: TS5 -- replaced fat-pointer extraction with TS1 typed thunk call.
 
 (defn free-run [^fat interp : int free : int]
-  #{Unsafe}
+  #fx{Unsafe}
   : int
   ```c
   typedef struct { int tag; union { struct { int64_t _0; } PureFree; struct { int64_t _0; } Suspend; } as; } tur_adt_Free_fr;

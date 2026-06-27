@@ -42,7 +42,7 @@
 
 (defn mutmap-new [K V]
   []
-  #{}
+  #fx{}
   : (MutableMap K V)
   ```c
   /* Backing storage layout:
@@ -87,7 +87,7 @@
 
 (defn mutmap-len [K V]
   [m : (MutableMap K V)]
-  #{}
+  #fx{}
   : int
   ```c
   struct __tur_mm_storage_l { uint64_t cap; uint64_t len; uint64_t tomb; };
@@ -113,7 +113,7 @@
 
 (defn mutmap-set! [K V]
   [m : (MutableMap K V) h : int key : K val : V]
-  #{}
+  #fx{}
   : nil
   ```c
   enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
@@ -193,7 +193,7 @@
 
 (defn mutmap-get [K V]
   [m : (MutableMap K V) h : int key : K]
-  #{}
+  #fx{}
   : V
   ```c
   enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
@@ -229,7 +229,7 @@
 
 (defn mutmap-has? [K V]
   [m : (MutableMap K V) h : int key : K]
-  #{}
+  #fx{}
   : bool
   ```c
   enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
@@ -266,7 +266,7 @@
 
 (defn mutmap-delete! [K V]
   [m : (MutableMap K V) h : int key : K]
-  #{}
+  #fx{}
   : bool
   ```c
   enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
@@ -305,7 +305,7 @@
 
 (defn mutmap-cap [K V]
   [m : (MutableMap K V)]
-  #{}
+  #fx{}
   : int
   ```c
   struct __tur_mm_storage_c { uint64_t cap; uint64_t len; uint64_t tomb; };
@@ -329,7 +329,7 @@
 
 (defn mutmap-slot-occupied? [K V]
   [m : (MutableMap K V) i : int]
-  #{}
+  #fx{}
   : bool
   ```c
   enum { TUR_MM_OCCUPIED=1 };
@@ -355,7 +355,7 @@
 
 (defn mutmap-slot-hash [K V]
   [m : (MutableMap K V) i : int]
-  #{}
+  #fx{}
   : int
   ```c
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
@@ -380,7 +380,7 @@
 
 (defn mutmap-slot-key [K V]
   [m : (MutableMap K V) i : int]
-  #{}
+  #fx{}
   : K
   ```c
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
@@ -405,7 +405,7 @@
 
 (defn mutmap-slot-value [K V]
   [m : (MutableMap K V) i : int]
-  #{}
+  #fx{}
   : V
   ```c
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
@@ -425,7 +425,7 @@
 ;; dispatches through the pure-Turmeric `vec-eq-loop`.
 
 (defn mutmap-eq-storage? [pa : ptr<void> pb : ptr<void> ^fat val-cmp]
-  #{}
+  #fx{}
   : bool
   ```c
   enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
@@ -536,7 +536,7 @@
 
 (defn mutmap-eq? [K V]
   [m1 : (MutableMap K V) m2 : (MutableMap K V) ^fat val-cmp]
-  #{}
+  #fx{}
   : bool
   (mutmap-eq-storage? (.storage m1) (.storage m2) val-cmp))
 ;;; mutmap-free -- free the storage and wrapper.
@@ -551,7 +551,7 @@
 
 (defn mutmap-free [K V]
   [m : (MutableMap K V)]
-  #{}
+  #fx{}
   : void
   ```c
   struct { void *storage; } *mm = (void*)(intptr_t)m;

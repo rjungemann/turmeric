@@ -6,7 +6,7 @@
 
 ;; Use a custom C function so there's no conflict with system headers.
 ;; The #{IO} row annotation is accepted and silently discarded.
-(defn c-write-int [n : int] #{IO} : nil
+(defn c-write-int [n : int] #fx{IO} : nil
   ```c
   char buf[32];
   snprintf(buf, sizeof(buf), "%lld", (long long)n);

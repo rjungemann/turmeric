@@ -36,7 +36,7 @@
 (defn sized-vec-of-4 [a : int b : int c : int d : int] : SizedVec
   (SVCons a (SVCons b (SVCons c (SVCons d (SVNil))))))
 
-(defn sized-vec-from-list [lst] #{Unsafe} : SizedVec
+(defn sized-vec-from-list [lst] #fx{Unsafe} : SizedVec
   ```c
   struct __sz_cons { int64_t value; int64_t next; };
   int64_t count = 0;

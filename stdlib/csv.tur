@@ -423,7 +423,7 @@
 ;;; Since: Phase D2
 
 (defn csv/read-file-with-delim [path : cstr delim : int]
-  #{FS}
+  #fx{FS}
   : int
   ```c
   /* Validate delimiter */
@@ -489,7 +489,7 @@
 ;;; Since: Phase B2
 
 (defn csv/read-file [path : cstr]
-  #{FS}
+  #fx{FS}
   : int
   ```c
   return csv_slread_hyfile_hywith_hydelim(path, 44);
@@ -512,7 +512,7 @@
 ;;; Since: Phase D2
 
 (defn csv/write-file-with-delim [path : cstr rows : int delim : int]
-  #{FS}
+  #fx{FS}
   : int
   ```c
   /* Validate delimiter */
@@ -561,7 +561,7 @@
 ;;; Since: Phase B2
 
 (defn csv/write-file [path : cstr rows : int]
-  #{FS}
+  #fx{FS}
   : int
   ```c
   return csv_slwrite_hyfile_hywith_hydelim(path, rows, 44);

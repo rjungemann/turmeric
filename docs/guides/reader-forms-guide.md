@@ -230,17 +230,21 @@ A vector literal.
 [:a :b :c]
 ```
 
-### Map literal -- `#{...}`
+### Map literal -- `#map{...}`
 
 A map (hash-array-mapped trie) literal. Key-value pairs are written
 interleaved.
 
 ```turmeric no-check
-#{:name "Alice" :age 30}
+#map{:name "Alice" :age 30}
 ```
 ```sweet-exp
-#{:name "Alice" :age 30}
+#map{:name "Alice" :age 30}
 ```
+
+(The bare `#{...}` form historically doubled as a map literal *and* an
+effect-row annotation; it is now deprecated -- see [Deprecated Forms](#deprecated-forms)
+below.)
 
 ### Set literal -- `#s(...)`
 
@@ -369,20 +373,15 @@ Expands to `(deref expr)`.
 ; => (deref my-ref)
 ```
 
-### Effect-row annotation -- `@{...}`
+### Effect-row annotation -- `@{...}` (deprecated)
 
 A `@` immediately followed by `{` reads a brace-delimited effect-row map
-rather than a deref.
+rather than a deref. **Deprecated** in favor of [`#fx{...}`](#hash-dispatch-forms);
+see [Deprecated Forms](#deprecated-forms). Bare `@x` deref sugar is unaffected.
 
 ```turmeric
-@{IO}
-@{IO Exn}
-```
-```sweet-exp
-@
-{IO}
-@
-{IO Exn}
+@{IO}             ; TUR-D0003 -- prefer #fx{IO}
+@{IO Exn}         ; TUR-D0003 -- prefer #fx{IO Exn}
 ```
 
 ### Borrow -- `&expr`
@@ -445,6 +444,43 @@ output and `:turi` for the interpreter.
 ```sweet-exp
 println(#?(:tur "compiled" :turi "interpreted"))
 ```
+
+### Effect row -- `#fx{Effect1 Effect2 ...}`
+
+Annotates a function or handler signature with the effects it may perform.
+
+```turmeric no-check
+(defn read-line [] #fx{Unsafe IO} : cstr ...)
+(defn pure-helper [] #fx{} : int 0)
+```
+```sweet-exp
+defn read-line [] #fx{Unsafe IO} : cstr
+  ...
+```
+
+---
+
+## Deprecated Forms
+
+These spellings are still accepted during the grace window but produce a
+deprecation warning at every use. The migration script
+`tools/migrate-fx-rows.py` rewrites a tree mechanically. The plan that
+drives the rename lives at
+[`docs/upcoming/fx-row-syntax-rename-plan.md`](../upcoming/fx-row-syntax-rename-plan.md).
+
+### `#{...}` effect row -- TUR-D0002
+
+The bare `#{Unsafe IO}` form is being retired in favor of the self-describing
+`#fx{Unsafe IO}` form so the family of `#tag{...}` reader literals
+(`#map{...}`, `#set{...}`, `#row{...}`, ...) is uniform and the `#{...}` slot
+is freed for a future reader form. Run `tur explain TUR-D0002` for details.
+
+### `@{...}` effect row -- TUR-D0003
+
+The `@`-prefixed alternate sugar for an effect row is being retired alongside
+the bare `#{...}` form -- two spellings for the same thing was the original
+wart this rename fixes. Bare `@x` deref sugar is unaffected; only the
+`@{...}` effect-row form is deprecated. Run `tur explain TUR-D0003`.
 
 ---
 

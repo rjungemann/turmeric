@@ -4,7 +4,7 @@
 (defeffect Read [] :int)
 
 (defclass IOShow [a]
-  (io-show [x] #{Write} :nil))
+  (io-show [x] #fx{Write} :nil))
 
 ;; This instance performs Read which is NOT in #{Write}
 (definstance IOShow [int]

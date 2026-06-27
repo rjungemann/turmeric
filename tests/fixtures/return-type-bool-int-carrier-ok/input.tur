@@ -11,7 +11,7 @@
 (defn gbridge [A] [x : A] : bool
   42)
 
-(defn ubridge [] #{Unsafe} : bool
+(defn ubridge [] #fx{Unsafe} : bool
   42)
 
 (defn main [] : int

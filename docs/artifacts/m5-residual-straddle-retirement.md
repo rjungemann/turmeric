@@ -392,7 +392,7 @@ abstract element).  Those carrier bases must therefore exist and compile.
 
 Two helper shapes were tried for the carrier base; both fail:
 
-- **inline-C `#{ByVal}` helper** (body assumes the by-value C struct):
+- **inline-C `#fx{ByVal}` helper** (body assumes the by-value C struct):
   its carrier base is uncompilable (`v.len` on an `int64_t`).  Suppressing
   it via `prefer_byvalue_spec` is **unsafe** -- `vec-of-tvec-eq-manual`
   emits a *real* carrier call to `vec_hylen_hybyval`, so suppression turns
@@ -419,7 +419,7 @@ len; int64_t cap; }` shape.  With that one change:
 - `Eq Vec` (and `Eq Cons`, same shape) can drop `(:: x :int)` + the
   carrier `vec-len`/`vec-eq-loop` helpers entirely; the spec path is
   bridge-free and the carrier path still works.
-- No `#{ByVal}` marker, no carrier-base suppression, no stdlib API twin.
+- No `#fx{ByVal}` marker, no carrier-base suppression, no stdlib API twin.
 
 ### Finding 4 -- the naive ABI-aware field-access change has WIDE blast radius (empirical)
 
@@ -707,7 +707,7 @@ Both share one Turmeric source body.  For the spec body, `(.len x)` on
 by-value `Vec__int` is correct.  For the carrier base, `(.len x)` on
 int64 carrier is a hard cc error.  The same helpers (`vec-get-byval`,
 `vec-eq-loop-byval`) cannot be called from both ABIs of the same body
-because `#{ByVal}`'s `prefer_byvalue_spec` flag suppresses the carrier
+because `#fx{ByVal}`'s `prefer_byvalue_spec` flag suppresses the carrier
 base of the helpers (via `emit_abi_fn_skip_generic`) -- correct for
 the spec-only use, but it leaves the carrier base of the instance
 method with unresolved-symbol calls.
@@ -731,7 +731,7 @@ also addressing the constraint-dispatch gap and the
 single-body-two-ABIs design choice for instance methods.  Both are
 multi-session pieces of elaboration infra work.
 
-The composition fix + `#{ByVal}` marker landed this session ARE useful
+The composition fix + `#fx{ByVal}` marker landed this session ARE useful
 on their own (they're prerequisites for any eventual byval-helper
 migration) and are pinned by the
 `tests/fixtures/m5-byval-marker-spec-emit/` fixture.  But the
