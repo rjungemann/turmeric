@@ -615,6 +615,22 @@ runtime *usage* seam, below.
      accessor unbox (it worked via the active accessor spec's resolved field type,
      not the receiver-app recovery the earlier report tried).
 
+   - **templated inline-C helper with by-value RECORD result (investigated
+     2026-06-27, BLOCKED in abi-spec interning).**  A return-only-poly templated
+     inline-C helper (`dense-get [A] : A`, `__TUR_TY_A__` body) whose result `A`
+     resolves to a by-value record (`Pos`) is NOT specialized per element type
+     under lowering: the call falls back to the int64 carrier base
+     (`dense_hyget`/`_un_undense_hyget`), so a wrapper/instance spec returning the
+     by-value `tur_adt_Pos` does `return <int64 base>(...)`.  `Pos` is WIDE, so no
+     leaf return bridge works (the int64 base reads the array at the wrong stride);
+     the helper body must be re-emitted with `__TUR_TY_A__ = tur_adt_Pos`.  At
+     default (Pos is `TY_STRUCT`) the spec is correctly emitted; the struct->ADT
+     flip is the only change, so the spec-forcing/scan paths recognize a `TY_STRUCT`
+     result but not the lowered `TY_ADT`.  Root cause + repro + fix directions in
+     `docs/reported/templated-inline-c-byvalue-record-result-not-specialized.md`
+     (the fix is in the M3/M4/M5 abi-spec interning, not a leaf).  Affects
+     `typeclass-assoc-type-method-return`, `generic-inline-c-struct-through-unsafe`.
+
    - **parametric keyword type-param field DONE (2026-06-26).**  A parametric
      `(defstruct Box [A] (val :A) ...)` lowered to a record variant where the
      `:A` keyword field type was not matched against the type params (the bare-`A`
