@@ -78,6 +78,25 @@
             }
           }
         ]
+      },
+      {
+        "type": "lldb",
+        "label": "Turmeric Native (CodeLLDB)",
+        "configurationSnippets": [
+          {
+            "label": "Turmeric: Debug Native (CodeLLDB)",
+            "description": "Debug a compiled Turmeric binary using CodeLLDB with pretty-printers",
+            "body": {
+              "type": "lldb",
+              "request": "launch",
+              "name": "Debug Turmeric Native (CodeLLDB)",
+              "program": "^\"\\${workspaceFolder}/build/\\${fileBasenameNoExtension}\"",
+              "initCommands": [
+                "command script import ^\"\\${workspaceFolder}/tools/debug/turmeric_lldb.py\""
+              ]
+            }
+          }
+        ]
       }
     ]
   }
