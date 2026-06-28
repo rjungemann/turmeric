@@ -1808,6 +1808,16 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
                  * (typed-pointer carrier, heap-bridge-guarded, slice 8). */
                 record_full = sd && !sd->is_opaque &&
                               (sd->is_heap || !sd->needs_drop_glue);
+                /* CONV-S1 (opaque field nominal identity): a bare `defopaque`
+                 * field (`tag : Tag` over `:int`) is a TRANSPARENT int newtype --
+                 * stored as the int64 carrier (adt_field_is_inline_byval excludes
+                 * opaques, so no inline-aggregate misclassification) but with a
+                 * nominal identity the struct path preserves via
+                 * elab_struct_field_use_type.  Record its full_type so a lowered
+                 * record-ADT field reads back as the opaque type (`(.tag w) : Tag`)
+                 * instead of collapsing to its `:int` carrier -- matching the
+                 * struct path and clearing the re-pin the field otherwise needs. */
+                if (sd && sd->is_opaque) record_full = true;
             } else {
                 AdtDef *ad = tb->type.as.adt_.def;
                 /* by-value ADT product (inlined, slice 4), a :heap record ADT
