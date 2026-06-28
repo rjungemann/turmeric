@@ -714,13 +714,13 @@ local function open_repl_view(split_dir)
   return view
 end
 
-local function find_repl_node()
+local function find_doc_view()
   local found
   local function walk(node)
     if not node then return end
     if node.views then
       for _, v in ipairs(node.views) do
-        if v:is(ReplView) then found = node; return end
+        if v.doc then found = v; return end
       end
     end
     if node.a then walk(node.a) end
@@ -732,10 +732,19 @@ end
 
 local function toggle_repl_view()
   local view = find_repl_view()
-  local node = find_repl_node()
-  if view and node then
-    node:close_view(core.root_view, view)
+  if view then
+    if core.active_view == view then
+      -- If REPL is currently focused, focus back to the code pane (DocView)
+      local doc_view = find_doc_view()
+      if doc_view then
+        core.set_active_view(doc_view)
+      end
+    else
+      -- If REPL is open but not focused, focus it!
+      core.set_active_view(view)
+    end
   else
+    -- If REPL is closed, open and focus it!
     open_repl_view("down")
   end
 end
@@ -1022,7 +1031,7 @@ else
     TurmericToolbarView.super.new(self)
     self.size.y = 30
     self.buttons = {
-      { text = " ▶ Run ", command = "turmeric:run-file", color = { 60, 180, 60 } },
+      { text = " ▶  Run ", command = "turmeric:run-file", color = { 60, 180, 60 } },
       { text = " >_ REPL ", command = "turmeric:start-repl", color = { 100, 140, 240 } },
     }
     self.hovered_idx = nil
@@ -1067,7 +1076,7 @@ else
       end
     end
     if old_hovered ~= self.hovered_idx then
-      core.redraw()
+      core.redraw = true
     end
   end
 
