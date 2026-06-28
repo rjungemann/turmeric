@@ -4410,7 +4410,18 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
             for (uint32_t i = 2; i < call->as.list.len; i++)
                 items[i - 1] = call->as.list.items[i];
             Form *ctor_call = form_list(e->arena, call->span, items, nitems);
+            /* make-struct of a NON-parametric record ADT did no field typecheck
+             * at default (it accepted `0`/NULL ptr<void> for an rc<T> or ptr<T>
+             * field, etc.).  The ctor-call rewrite would now subject those args
+             * to elab_call's strict positional check.  Set the leniency flag so
+             * the ctor call's OWN args relax to that parity; elab_call_fn reads-
+             * and-clears it so nested arg-elaboration calls do not inherit it.
+             * Only for the non-parametric case -- parametric ctors still
+             * infer/check. */
+            bool saved_ms_lenient = e->make_struct_lenient_args;
+            e->make_struct_lenient_args = (ad->n_type_params == 0);
             Expr *ce = elab_call(e, ctor_call);
+            e->make_struct_lenient_args = saved_ms_lenient;
             /* lowered-adt-ctor-skips-fn-field-type-param-inference: the struct
              * make-struct path runs struct_field_collect_type_args to ground the
              * struct's type params from the supplied field values -- crucially

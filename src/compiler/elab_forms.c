@@ -2309,6 +2309,14 @@ static Expr *elab_set_field(Elab *e, const Form *call, Form *target) {
         def = rt.as.rc.struct_def;
         receiver_is_rc = true;
         receiver_struct_type = &rt;
+    } else if (rt.kind == TY_RC && rt.as.rc.adt_def) {
+        /* CONV-S1 seam 4: rc<Name> where Name is a lowered single-variant
+         * record ADT (a defstruct-as-defadt struct).  Resolve the field through
+         * the rc wrapper's adt_def mirror, the by-value analog of the
+         * struct_def branch above. */
+        adt = rt.as.rc.adt_def;
+        receiver_is_rc = true;
+        receiver_struct_type = &rt;
     } else if (rt.kind == TY_REF_MUT) {
         /* &mut Struct -- field write through a mutable borrow.  The
          * borrow already permits interior mutation; no ^mut on the

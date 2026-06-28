@@ -3081,6 +3081,16 @@ static Expr *try_eta_expand_generic_fn_arg(Elab *e, const Form *arg_form,
 static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     uint32_t n_args = call->as.list.len - 1;
 
+    /* defstruct-as-defadt (exg5-exists-cycle): read-and-clear the make-struct
+     * leniency flag at entry.  It is set by the make-struct -> ctor-call rewrite
+     * (elab_structs.c) ONLY for a non-parametric record ADT, so the ctor call's
+     * own positional args relax to default make-struct's no-field-typecheck
+     * parity (e.g. a `0`/NULL ptr<void> for an rc<T>/ptr<T> field).  Clearing it
+     * here means the args elaborated below -- and any nested calls they spawn --
+     * do not inherit the leniency; only THIS call's direct args are relaxed. */
+    bool ms_lenient = e->make_struct_lenient_args;
+    e->make_struct_lenient_args = false;
+
     /* Get the function type */
     Type fn_type = fn_binding->type;
     
@@ -4095,6 +4105,15 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             }
         }
 
+        if (!arg_ok && ms_lenient) {
+            /* defstruct-as-defadt (exg5-exists-cycle): this is the make-struct ->
+             * ctor-call rewrite of a NON-parametric record ADT.  Default
+             * make-struct does no field typecheck, so accept the value as-is to
+             * preserve parity (e.g. `0`/NULL ptr<void> into an rc<T>/ptr<T>
+             * field).  ms_lenient was cleared at entry, so this only relaxes the
+             * direct ctor args, never anything nested. */
+            arg_ok = true;
+        }
         if (!arg_ok) {
             /* Phase 8: Enhanced type mismatch with error code */
             /* IT1: Use union-specific error code when union type is involved */

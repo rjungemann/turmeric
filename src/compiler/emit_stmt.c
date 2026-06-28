@@ -61,8 +61,10 @@ void emit_set_field_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         const char *recv_cn = type_c_name(recv_rty);
         bool recv_is_ptr = recv_cn && strchr(recv_cn, '*') != NULL;
         if (e->as.set_field_.receiver_is_rc) {
+            char *madt = mangle_field_name(adt->name);
             buf_printf(&lhs, "((tur_adt_%s *)((RcControlBlock *)(%s))->value)->%s",
-                       mangle_field_name(adt->name), rv, mp);
+                       madt, rv, mp);
+            free(madt);
         } else if (type_is_heap_adt(recv_rty)) {
             if (recv_is_ptr)
                 buf_printf(&lhs, "(%s)->%s", rv, mp);
@@ -73,6 +75,23 @@ void emit_set_field_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_printf(&lhs, "(%s).%s", rv, mp);
         }
         buf_putc(&lhs, '\0');
+        /* Mirror the struct path's ownership transfer for the old field value:
+         * an rc field's prior pointer is decremented (the new value carries its
+         * own +1), a weak field's is weak-decremented, a ref/lref field freed.
+         * Guarded by `if (lhs)` so a NULL sentinel (e.g. the construction-time
+         * placeholder) is a no-op. */
+        TypeKind afk = ctor->fields[fi].kind;
+        if (afk == TY_RC) {
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "if (%s) { rc_strong_decrement(%s); rc_free_queue_drain(); }\n",
+                       lhs.data, lhs.data);
+        } else if (afk == TY_WEAK) {
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "if (%s) rc_weak_decrement(%s);\n", lhs.data, lhs.data);
+        } else if (afk == TY_REF || afk == TY_LREF) {
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "if (%s) free(%s);\n", lhs.data, lhs.data);
+        }
         indent_buf(body, ctx->indent);
         buf_printf(body, "%s = %s;\n", lhs.data, vv);
         buf_free(&lhs);

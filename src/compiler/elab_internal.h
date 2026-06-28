@@ -723,6 +723,16 @@ typedef struct Elab {
      * (not bool) so nested rows can save/inc/dec/restore around their
      * element recursion. */
     uint8_t           strict_unknown_types;
+    /* defstruct-as-defadt: a `(make-struct Name ...)` on a NON-parametric
+     * lowered record ADT rewrites to the auto-bound ctor call `(Name ...)`,
+     * which then hits elab_call's strict positional arg typecheck.  At default,
+     * make-struct of a non-parametric struct does NO field typecheck (it accepts
+     * the value as-is, e.g. `0`-as-NULL for a ptr<void> field, a NULL ptr<void>
+     * for an rc<T> field).  Set true around that rewrite's elab_call so the ctor
+     * call's OWN arg check relaxes to parity with default make-struct.  elab_call
+     * reads-and-clears it at entry, so nested calls during arg elaboration do not
+     * inherit the leniency. */
+    bool              make_struct_lenient_args;
 } Elab;
 
 /* GF1: per-gen elaboration state (stack-allocated, linked by parent pointer) */
