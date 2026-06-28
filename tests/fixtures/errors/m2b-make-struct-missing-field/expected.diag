@@ -1,1 +1,2 @@
-constructor 'M2bPair' expects 2 fields, got 1 keyword
+TUR-E0292
+missing field 'snd'

@@ -1,1 +1,2 @@
-constructor 'Person' expects 2 fields, got 3 keyword
+TUR-E0293
+duplicate field 'age'

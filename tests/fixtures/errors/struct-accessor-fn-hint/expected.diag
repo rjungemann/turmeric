@@ -1,1 +1,4 @@
 unknown function or operator 'pt-x'
+struct accessor functions are not generated
+(.x x)
+(make-struct pt ...)

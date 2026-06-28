@@ -1,1 +1,2 @@
-constructor 'Circle' has no field 'diameter'
+TUR-E0294
+unknown field 'diameter'

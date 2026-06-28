@@ -1,1 +1,2 @@
-field 'fst' given more than once
+TUR-E0293
+duplicate field 'fst'

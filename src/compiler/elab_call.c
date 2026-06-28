@@ -105,6 +105,30 @@ static bool struct_accessor_hint(Elab *e, const char *name,
             }
         }
     }
+    /* A `defstruct` lowers to a single-variant record ADT, so the same
+     * `<name>-<field>` accessor-call mistake on a lowered struct lands in
+     * adt_defs, not struct_defs -- mirror the scan there so the hint still
+     * fires (its record fields back `(.field x)` exactly like a struct). */
+    for (uint32_t i = 0; i < e->n_adt_defs; i++) {
+        const struct AdtDef *ad = e->adt_defs[i];
+        if (!ad || !ad->name || ad->n_ctors != 1) continue;
+        const struct CtorDef *ct = ad->ctors[0];
+        if (!ct || !ct->is_record) continue;
+        size_t slen = strlen(ad->name);
+        if (slen + 1 >= nlen) continue;
+        if (strncmp(name, ad->name, slen) != 0) continue;
+        if (name[slen] != '-') continue;
+        const char *field = name + slen + 1;
+        for (uint32_t f = 0; f < ct->n_fields; f++) {
+            if (ct->fields[f].name && strcmp(field, ct->fields[f].name) == 0) {
+                snprintf(buf, buflen,
+                         "struct accessor functions are not generated; read the "
+                         "field with (.%s x) and construct with (make-struct %s "
+                         "...)", field, ad->name);
+                return true;
+            }
+        }
+    }
     return false;
 }
 
@@ -2034,61 +2058,85 @@ Expr *elab_call(Elab *e, Form *call) {
      * fires for a record-style ctor whose first argument is a keyword; the
      * rewritten positional form then flows through the normal ctor paths below. */
     if (fn_binding && call->as.list.len >= 2 &&
-        call->as.list.items[1]->tag == F_KEYWORD &&
         (fn_binding->type.kind == TY_ADT ||
          (fn_binding->type.kind == TY_FN &&
           fn_binding->type.as.fn.result_kind == TY_ADT))) {
         CtorDef *kwctor = elab_lookup_ctor(e, name);
         if (kwctor && kwctor->is_record) {
-            uint32_t n_args = call->as.list.len - 1;
-            if (n_args % 2 != 0) {
+            bool first_kw = call->as.list.items[1]->tag == F_KEYWORD;
+            bool any_kw = false;
+            for (uint32_t a = 1; a < call->as.list.len; a++)
+                if (call->as.list.items[a]->tag == F_KEYWORD) { any_kw = true; break; }
+            /* Positional argument(s) followed by a keyword -- a mix.  (The
+             * keyword-FIRST mix, `(P :x 1 2)`, is caught inside the pair loop
+             * below.)  The same diagnostic the make-struct path emits, so a
+             * `defstruct` lowered to a record ADT keeps the precise error
+             * instead of falling through to a confusing "not callable". */
+            if (any_kw && !first_kw) {
                 diag_emit(DIAG_ERROR, call->span,
-                          "constructor '%s': keyword construction needs "
-                          ":field value pairs", kwctor->name);
+                          "TUR-E0299: constructor '%s': cannot mix positional "
+                          "and keyword arguments", kwctor->name);
                 return NULL;
             }
-            uint32_t n_pairs = n_args / 2;
-            if (n_pairs != kwctor->n_fields) {
-                diag_emit(DIAG_ERROR, call->span,
-                          "constructor '%s' expects %u fields, got %u keyword "
-                          "argument(s)", kwctor->name, kwctor->n_fields, n_pairs);
-                return NULL;
-            }
-            Form **pos_items = (Form **)arena_alloc(e->arena,
-                                   (kwctor->n_fields + 1) * sizeof(Form *));
-            pos_items[0] = call->as.list.items[0];
-            for (uint32_t fi = 0; fi < kwctor->n_fields; fi++) pos_items[fi + 1] = NULL;
-            for (uint32_t pi = 0; pi < n_pairs; pi++) {
-                Form *kw = call->as.list.items[1 + pi * 2];
-                Form *val = call->as.list.items[2 + pi * 2];
-                if (kw->tag != F_KEYWORD) {
-                    diag_emit(DIAG_ERROR, kw->span,
-                              "constructor '%s': cannot mix positional and "
-                              "keyword arguments", kwctor->name);
+            if (first_kw) {
+                uint32_t n_args = call->as.list.len - 1;
+                if (n_args % 2 != 0) {
+                    diag_emit(DIAG_ERROR, call->span,
+                              "constructor '%s': keyword construction needs "
+                              ":field value pairs", kwctor->name);
                     return NULL;
                 }
-                int fidx = -1;
+                uint32_t n_pairs = n_args / 2;
+                Form **pos_items = (Form **)arena_alloc(e->arena,
+                                       (kwctor->n_fields + 1) * sizeof(Form *));
+                pos_items[0] = call->as.list.items[0];
+                for (uint32_t fi = 0; fi < kwctor->n_fields; fi++) pos_items[fi + 1] = NULL;
+                /* Validate each pair (unknown / duplicate) FIRST -- before any
+                 * arity check -- so a duplicate or unknown field is named
+                 * precisely rather than masked by the off-by-one count it
+                 * produces (`:age :age` would otherwise read as "got 3, want 2"). */
+                for (uint32_t pi = 0; pi < n_pairs; pi++) {
+                    Form *kw = call->as.list.items[1 + pi * 2];
+                    Form *val = call->as.list.items[2 + pi * 2];
+                    if (kw->tag != F_KEYWORD) {
+                        diag_emit(DIAG_ERROR, kw->span,
+                                  "TUR-E0299: constructor '%s': cannot mix "
+                                  "positional and keyword arguments", kwctor->name);
+                        return NULL;
+                    }
+                    int fidx = -1;
+                    for (uint32_t fi = 0; fi < kwctor->n_fields; fi++) {
+                        if (kwctor->fields[fi].name &&
+                            strcmp(kwctor->fields[fi].name, kw->as.sym->name) == 0) {
+                            fidx = (int)fi; break;
+                        }
+                    }
+                    if (fidx < 0) {
+                        diag_emit(DIAG_ERROR, kw->span,
+                                  "TUR-E0294: constructor '%s': unknown field '%s'",
+                                  kwctor->name, kw->as.sym->name);
+                        return NULL;
+                    }
+                    if (pos_items[fidx + 1]) {
+                        diag_emit(DIAG_ERROR, kw->span,
+                                  "TUR-E0293: constructor '%s': duplicate field '%s'",
+                                  kwctor->name, kw->as.sym->name);
+                        return NULL;
+                    }
+                    pos_items[fidx + 1] = val;
+                }
+                /* Any field left unset is missing (this also subsumes the
+                 * too-few-pairs case). */
                 for (uint32_t fi = 0; fi < kwctor->n_fields; fi++) {
-                    if (kwctor->fields[fi].name &&
-                        strcmp(kwctor->fields[fi].name, kw->as.sym->name) == 0) {
-                        fidx = (int)fi; break;
+                    if (!pos_items[fi + 1]) {
+                        diag_emit(DIAG_ERROR, call->span,
+                                  "TUR-E0292: constructor '%s': missing field '%s'",
+                                  kwctor->name, kwctor->fields[fi].name);
+                        return NULL;
                     }
                 }
-                if (fidx < 0) {
-                    diag_emit(DIAG_ERROR, kw->span,
-                              "constructor '%s' has no field '%s'",
-                              kwctor->name, kw->as.sym->name);
-                    return NULL;
-                }
-                if (pos_items[fidx + 1]) {
-                    diag_emit(DIAG_ERROR, kw->span,
-                              "constructor '%s': field '%s' given more than once",
-                              kwctor->name, kw->as.sym->name);
-                    return NULL;
-                }
-                pos_items[fidx + 1] = val;
+                call = form_list(e->arena, call->span, pos_items, kwctor->n_fields + 1);
             }
-            call = form_list(e->arena, call->span, pos_items, kwctor->n_fields + 1);
         }
     }
 
