@@ -3396,10 +3396,23 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * but the fn name is the constructor name so we emit ctor_Name(args).
              * Phase G3: result_full_type is set for non-constructor ADT-returning
              * functions (e.g. equal-sym) — those must fall through to regular calls.
-             * TS4P2: use per-instance ctor when the call result is a concrete ADT app. */
+             * TS4P2: use per-instance ctor when the call result is a concrete ADT app.
+             * CONV-S1 seam 4: a typeclass instance method (`__inst_*`) is a dispatch
+             * function, NEVER an ADT constructor -- exclude it explicitly.  At
+             * default an instance method returning a (parametric) struct has
+             * result_kind TY_STRUCT, so this gate's `result_kind == TY_ADT` already
+             * skipped it; under the defstruct-as-defadt lowering that struct is now
+             * an ADT (`Serializable [Pair]`'s `deserialize : Bytes -> Pair`), and a
+             * bare PARAMETRIC ADT return keeps result_full_type NULL (the
+             * non-parametric by-value branch in elab_typeclasses.c does not fire),
+             * so without this guard the call mis-emits as `ctor___inst_...` -- an
+             * undefined symbol (link error). */
+            bool fn_is_inst_method = fn_binding->name && fn_binding->name->name &&
+                strncmp(fn_binding->name->name, "__inst_", 7) == 0;
             if (fn_binding->type.kind == TY_FN &&
                 fn_binding->type.as.fn.result_kind == TY_ADT &&
-                !fn_binding->type.as.fn.result_full_type) {
+                !fn_binding->type.as.fn.result_full_type &&
+                !fn_is_inst_method) {
                 /* TS4P2: choose per-instance ctor name if the result is a concrete ADT app.
                  * Resolve through the active ABI spec first (M7 by-value HKT, gap
                  * G6) so `(AltF (g x) (g y)) : (ReF b)` grounds to `(ReF bool)` and

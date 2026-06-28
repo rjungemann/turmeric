@@ -642,6 +642,24 @@ runtime *usage* seam, below.
      `conv-defstruct-none-base-carrier-return` (carrier-ascribed `some`/`none`,
      flag-on parity).
 
+   - **Instance-method ADT return mis-emitted as a constructor DONE
+     (2026-06-28).**  A typeclass instance method whose declared result is the
+     class variable resolved to a PARAMETRIC struct (`Serializable [Pair]`'s
+     `deserialize : Bytes -> Pair`) is called explicitly by its `__inst_` mangled
+     name (the return-type-polymorphic idiom).  At default `Pair` is a struct so
+     the method's `result_kind` is TY_STRUCT and the N-arg ctor-emit gate
+     (`result_kind == TY_ADT && !result_full_type`) skipped it; under the lowering
+     `Pair` is an ADT, and a bare *parametric* ADT return keeps `result_full_type`
+     NULL (the non-parametric by-value branch in elab_typeclasses.c does not fire),
+     so the call mis-emitted as `ctor___inst_Serializable_deserialize_Pair` -- an
+     undefined symbol (link error).  Fix: the N-arg ctor-emit gate (emit_expr.c)
+     now excludes an `__inst_`-prefixed callee -- an instance method is a dispatch
+     function, never an ADT constructor.  (`call_.ctor` is not a usable
+     discriminator: it is NULL for a curried/partially-applied ctor completion
+     too, so requiring it broke `struct-curry-ctor`.)  Default suite 1865/0.
+     Cleared `serial-composite-instances` (5 -> 4 build blockers).  Fixture
+     `conv-defstruct-inst-method-adt-return`.
+
    **Running total: 212 -> 25 unique build-failing fixtures under force-lower
    (default suite stays 1862/0).**  (Sub-root (a) -- 0-arg construct in control
    flow -- the inline-C-tail return bridge, the accessor-unbox, the
@@ -1081,17 +1099,16 @@ read, and the four most recent carrier<->by-value crossings cleared by PR #571
 (non-parametric by-value-ADT arg boxing, `fn`-field int64 carrier width,
 wide-by-value -> closure-thunk carrier heap-box, bounded-wrapper -> concrete
 aggregate-return tail bridge).
-The force-lower probe is down to **5 unique build-failing fixtures** (plus 2
+The force-lower probe is down to **4 unique build-failing fixtures** (plus 2
 stdout mismatches) as of 2026-06-28, after the named parametric-monomorph layout
-keystone cleared `tuplen-struct-param-passing` + `m5-byval-marker-spec-emit`, and
-the none()-base / by-value-spec carrier-return bridges cleared
-`positional-opaque-ok`, `positional-pap-opaque-ok`, `kleisli-arrow-instance`, and
-`typeclass-return-dispatch-result-wrapped`.  The remaining 5 build blockers, by
-root: the `Option__opaque` specialization (`hkt-ap-fn-in-container`,
+keystone cleared `tuplen-struct-param-passing` + `m5-byval-marker-spec-emit`, the
+none()-base / by-value-spec carrier-return bridges cleared `positional-opaque-ok`,
+`positional-pap-opaque-ok`, `kleisli-arrow-instance`, and
+`typeclass-return-dispatch-result-wrapped`, and the instance-method ADT-return
+ctor-misemit fix cleared `serial-composite-instances`.  The remaining 4 build
+blockers, by root: the `Option__opaque` specialization (`hkt-ap-fn-in-container`,
 `hkt-stdlib-option-result-instances`); the by-value embed typedef ordering
-(`result-over-struct-with-option-field-typedef-order`); the stdlib/user `Cons`
-C-name collision (`adt-recursive`); and one link failure
-(`serial-composite-instances`, an `__inst_`-prefixed ctor mis-mangle).  Driving
-these to zero (promote each to a flag-on fixture + fix) is the gating work before
-the experiment can graduate.  Runway: experiment `expires_at` is `0.30.0`
-(current `VERSION` is `0.25.5`).
+(`result-over-struct-with-option-field-typedef-order`); and the stdlib/user `Cons`
+C-name collision (`adt-recursive`).  Driving these to zero (promote each to a
+flag-on fixture + fix) is the gating work before the experiment can graduate.
+Runway: experiment `expires_at` is `0.30.0` (current `VERSION` is `0.25.5`).
