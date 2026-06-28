@@ -2254,7 +2254,16 @@ static bool type_phantom_hides_aggregate(const Type *t) {
     if (!type_extract_struct_app(t, &def, args, &n_args) || !def || !def->is_opaque)
         return false;
     for (uint8_t i = 0; i < n_args; i++) {
-        if (!type_has_concrete_codegen_layout(&args[i])) continue;
+        /* Under the defstruct-as-defadt lowering the by-value aggregate element
+         * is an ADT app (`Option__int`), not a struct app.
+         * `type_has_concrete_codegen_layout` only recognizes struct apps, so it
+         * returns false for an ADT-app aggregate -- check the ADT predicate too,
+         * else the loop `continue`s past the element, the phantom-opaque spec is
+         * not minted, and the carrier walk segfaults on the shifted cell layout.
+         * `adt_app_is_byvalue_product` excludes `:heap` ADTs (a single 8-byte
+         * pointer carrier -- no spec needed), matching the struct branch. */
+        bool byval_adt = adt_app_is_byvalue_product(args[i]);
+        if (!type_has_concrete_codegen_layout(&args[i]) && !byval_adt) continue;
         /* The element shifts the cell layout only when it is a BY-VALUE aggregate
          * embedded inline (e.g. `Option__int`) -- a non-opaque, non-:heap struct.
          * Scalar/pointer elements (int, cstr, float) and :heap handles (Vec, Cons)
@@ -2265,6 +2274,9 @@ static bool type_phantom_hides_aggregate(const Type *t) {
         uint8_t en = 0;
         if (type_extract_struct_app(&args[i], &ed, eargs, &en) &&
             ed && !ed->is_opaque && !ed->is_heap) {
+            return true;
+        }
+        if (byval_adt) {
             return true;
         }
     }

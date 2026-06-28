@@ -1,1 +1,1 @@
-TUR-E0292: make-struct missing field 'snd'
+constructor 'M2bPair' expects 2 fields, got 1 keyword

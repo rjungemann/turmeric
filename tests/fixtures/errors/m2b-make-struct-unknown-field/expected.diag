@@ -1,1 +1,1 @@
-TUR-E0294: make-struct unknown field 'nope' for struct 'M2bPair'
+constructor 'M2bPair' has no field 'nope'

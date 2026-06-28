@@ -1,1 +1,1 @@
-match on struct 'Person' expects 2 field(s), got 1
+constructor 'Person' expects 2 fields, got 1

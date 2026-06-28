@@ -3685,6 +3685,38 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         arg_strs[i] = strdup(c.data);
                         buf_free(&c);
                     }
+                    /* A FLOAT argument flowing into a ctor field that is ERASED
+                     * to the int64 CARRIER -- a tyvar field of a carrier-helper
+                     * base ctor (`ctor_Result(bool,int64_t,int64_t)`'s `ok_val`,
+                     * declared `a`) -- must be BIT-reinterpreted, not numerically
+                     * converted: `ok__spec__int64_t_double`'s `ctor_Result(true,
+                     * x, ...)` with `x` a double would truncate 2.5 -> 2.  Gate on
+                     * the ctor FIELD's declared type being a tyvar (== the int64
+                     * carrier): a CONCRETE float field (`ctor_Circle(double)`'s
+                     * `radius : float`) takes the double directly and bit-packs
+                     * internally, and a monomorph ctor (suffix != NULL) likewise
+                     * takes the concrete double -- both must be excluded. */
+                    if (!suffix && !field_inline && arg && e->as.call_.ctor &&
+                        i < e->as.call_.ctor->n_fields) {
+                        Type art = emit_resolve_type(ctx, arg->type);
+                        /* `full_type` is non-NULL only for a tyvar-declared
+                         * field (carrier-erased to int64); a concrete field
+                         * (`radius : float`) leaves it NULL and is NOT a carrier. */
+                        const Type *fft = e->as.call_.ctor->fields[i].full_type;
+                        bool field_is_carrier = fft && fft->kind == TY_TYVAR;
+                        if (field_is_carrier &&
+                            (art.kind == TY_FLOAT || art.kind == TY_FLOAT32 ||
+                             art.kind == TY_FLOAT64)) {
+                            const char *fcn = type_c_name(art);
+                            Buf c; buf_init(&c);
+                            buf_printf(&c, "((union { %s s; int64_t d; }){.s = (%s)}).d",
+                                       fcn, arg_strs[i]);
+                            buf_putc(&c, '\0');
+                            free(arg_strs[i]);
+                            arg_strs[i] = strdup(c.data);
+                            buf_free(&c);
+                        }
+                    }
                     /* CONV-S1 seam 4 (typedef ordering): a lowered `Result`/`Option`
                      * monomorph ctor stores a non-parametric value-struct field as a
                      * heap pointer `T *` (adt_field_c_type) -- matching the struct

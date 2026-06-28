@@ -943,21 +943,40 @@ static const Form *sz_recover_type_form(Elab *e, const Expr *x) {
             return NULL;
         }
         case EX_GET_FIELD: {
-            const StructDef *def = x->as.get_field_.def;
             uint32_t fi = x->as.get_field_.field_idx;
-            if (!def || fi >= def->n_fields) return NULL;
-            const StructField *field = &def->fields[fi];
-            /* Only a field whose declared type is a bare struct type variable
-             * threads a recoverable index: map that variable to its struct
-             * type-parameter position, then index into the receiver Form. */
-            if (!field->full_type || field->full_type->kind != TY_TYVAR ||
-                !field->full_type->as.tyvar_.name)
+            /* Recover the field's declared type + the owner's type-params from
+             * either a struct receiver OR a lowered record-ADT receiver (under
+             * defstruct-as-defadt the StructDef* `def` is NULL and the field
+             * access carries `adt_def`/`adt_ctor` instead).  Both back the same
+             * size-index projection. */
+            const Type *field_full = NULL;
+            const char **type_params = NULL;
+            uint8_t n_type_params = 0;
+            const StructDef *def = x->as.get_field_.def;
+            if (def && fi < def->n_fields) {
+                field_full = def->fields[fi].full_type;
+                type_params = def->type_params;
+                n_type_params = def->n_type_params;
+            } else if (x->as.get_field_.adt_def && x->as.get_field_.adt_ctor &&
+                       fi < x->as.get_field_.adt_ctor->n_fields) {
+                const struct AdtDef *ad = x->as.get_field_.adt_def;
+                field_full = x->as.get_field_.adt_ctor->fields[fi].full_type;
+                type_params = ad->type_params;
+                n_type_params = ad->n_type_params;
+            } else {
+                return NULL;
+            }
+            /* Only a field whose declared type is a bare type variable threads a
+             * recoverable index: map that variable to its type-parameter
+             * position, then index into the receiver Form. */
+            if (!field_full || field_full->kind != TY_TYVAR ||
+                !field_full->as.tyvar_.name)
                 return NULL;
             uint8_t pi = 0;
             bool found = false;
-            for (uint8_t i = 0; i < def->n_type_params; i++) {
-                if (def->type_params[i] &&
-                    strcmp(def->type_params[i], field->full_type->as.tyvar_.name) == 0) {
+            for (uint8_t i = 0; i < n_type_params; i++) {
+                if (type_params[i] &&
+                    strcmp(type_params[i], field_full->as.tyvar_.name) == 0) {
                     pi = i; found = true; break;
                 }
             }
