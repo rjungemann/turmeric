@@ -4,14 +4,16 @@
 ;;   false
 
 ;; --- Test 1: cancel-task rejects the future --------------------------------
-;; Cancel a task before it runs; await throws an exception we catch.
+;; Cancel a task before it runs; awaiting it yields a rejection value, observed
+;; with (error? ...) -- the non-deprecated replacement for the removed
+;; throw/try/catch surface (DEPR-D0 / DEPR-R0).
 (let [task (async (fn [] :int 99))]
   (do
     (cancel-task task)
-    (try
-      (do (await task) (println "not-cancelled"))
-      (catch [e]
-        (println "cancelled")))))
+    (let [r (await task)]
+      (if (error? r)
+        (println "cancelled")
+        (println "not-cancelled")))))
 
 ;; --- Test 2: uncancelled task completes normally (not-cancelled = 0) ---------
 ;; Spawn a normal (non-cancelled) task; it completes with 0 (not-cancelled).

@@ -5527,6 +5527,11 @@ static int cmd_eval_h(const char *path, bool use_color,
             /* MutableMap: self-contained open-addressing table; its inline-C ops
              * are re-implemented as native overrides (native_mutmap_*). */
             "mutmap.tur",
+            /* Uniqueness-type pattern forms (with-unique / consume / replace).
+             * Pure-Turmeric wrappers over the ^unique discipline; the compiled
+             * path auto-loads it (g_stdlib_autoload_files), so the interpreter
+             * preloads it too or those forms read as unbound under --interpret. */
+            "unique.tur",
             NULL
         };
         /* Build one (load A)(load B)... form so the whole prelude elaborates in
@@ -9840,6 +9845,30 @@ static TuriValue native_time_sleep_ms(TuriEnv *env, TuriValue *a, uint32_t n, vo
     return turi_nil();  /* deterministic no-op under --interpret */
 }
 
+/* stdlib/reactor.tur: the Reactor handle ops are thin shims over the tur_reactor_*
+ * runtime (src/async/reactor.c) -- reactor-new's inline-C body and reactor-free/
+ * reactor-poll's extern-c calls.  The tree-walker has no extern-c symbol table
+ * and cannot run the inline-C, so bind the runtime entry points by their C names
+ * (and reactor-new by name, overriding its inline-C body).  The handle is a
+ * pointer carried as int64, matching the compiled :ptr<void> carrier. */
+extern void *tur_reactor_new(void);
+extern void  tur_reactor_free(void *r);
+extern int64_t tur_reactor_poll(void *r, int64_t timeout_ms);
+static TuriValue native_reactor_new(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)a; (void)n; (void)ud;
+    return turi_int((int64_t)(intptr_t)tur_reactor_new());
+}
+static TuriValue native_reactor_free(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n >= 1 && a[0].as_int) tur_reactor_free((void *)(intptr_t)a[0].as_int);
+    return turi_nil();
+}
+static TuriValue native_reactor_poll(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2 || a[0].as_int == 0) return turi_int(0);
+    return turi_int(tur_reactor_poll((void *)(intptr_t)a[0].as_int, a[1].as_int));
+}
+
 static void wk_register_stdlib_natives(TuriEnv *env) {
     /* stdlib/time.tur (inline-C; Mock-Time capability + sleep-ms) */
     turi_env_register_native(env, "Mock-Time",       native_time_mock_create, NULL);
@@ -9954,6 +9983,11 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "list-head",       native_list_head,       NULL);
     turi_env_register_native(env, "list-tail",       native_list_tail,       NULL);
     turi_env_register_native(env, "list-length",     native_list_length,     NULL);
+    /* stdlib/reactor.tur handle ops (inline-C / extern-c over tur_reactor_*). */
+    turi_env_register_native(env, "reactor-new",      native_reactor_new,    NULL);
+    turi_env_register_native(env, "tur_reactor_new",  native_reactor_new,    NULL);
+    turi_env_register_native(env, "tur_reactor_free", native_reactor_free,   NULL);
+    turi_env_register_native(env, "tur_reactor_poll", native_reactor_poll,   NULL);
     /* Free monad (free.tur): #{Unsafe} inline-C bodies re-implemented over the
      * PureFree/Suspend TuriStruct + turi_call continuation. */
     turi_env_register_native(env, "free-bind",       native_free_bind,       NULL);
