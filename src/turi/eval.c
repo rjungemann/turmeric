@@ -625,6 +625,27 @@ const char *turi_struct_name(TuriValue v) {
     return NULL;
 }
 
+/* Recursively run rc drop-glue on a value being released.  An rc value is a
+ * "__rc" wrapper { counter-ptr, inner }: decrement its strong count and, on
+ * reaching zero, drop its inner.  A plain struct/ADT being dropped by value
+ * releases each of its fields (so a nested rc<T> field, e.g. Box's payload, gets
+ * decremented) -- mirroring the compiled drop-glue that the by-value ADT path
+ * now emits (CONV-S1 slice 2).  Other values have no drop glue. */
+static void turi_rc_drop_value(TuriValue v) {
+    if (v.tag != TURI_STRUCT || !v.as_struct) return;
+    TuriStruct *s = v.as_struct;
+    if (s->name && strcmp(s->name, "__rc") == 0 && s->n_fields >= 2) {
+        int64_t *cnt = (int64_t *)(intptr_t)s->fields[0].as_int;
+        if (cnt && *cnt > 0) {
+            (*cnt)--;
+            if (*cnt == 0) turi_rc_drop_value(s->fields[1]);
+        }
+        return;
+    }
+    for (uint32_t i = 0; i < s->n_fields; i++)
+        turi_rc_drop_value(s->fields[i]);
+}
+
 /* CONV-S1: true when a TURI_STRUCT value should be observed as a "struct" at the
  * surface -- either a plain make-struct (carries a StructDef) or a defstruct that
  * lowered to a single-variant record ADT (its CtorDef's parent AdtDef has
@@ -4680,6 +4701,14 @@ static TuriValue serial_receiver_resume(TuriEnv *env, void *state, TuriValue app
  * TuriStruct. */
 static TuriValue get_field_extract(const Expr *e, TuriValue sv) {
     uint32_t idx = e->as.get_field_.field_idx;
+    /* Auto-deref an rc<T> receiver: an rc value is a "__rc" wrapper struct
+     * { counter-ptr, inner }, so `(.field rc-val)` (and `(.f (.rcfield s))`,
+     * where the inner is itself a struct/record ADT) must resolve through the
+     * wrapper to the inner value's field -- mirroring the compiled rc<Struct> /
+     * rc<ADT> auto-deref (CONV-S1 slice 2/5).  Walk nested __rc wrappers. */
+    while (sv.tag == TURI_STRUCT && sv.as_struct && sv.as_struct->name &&
+           strcmp(sv.as_struct->name, "__rc") == 0 && sv.as_struct->n_fields >= 2)
+        sv = sv.as_struct->fields[1];
     if (sv.tag == TURI_INT) {
         if (sv.as_int == 0) {
             /* NULL carrier: a none Option / err-less Result.  A field read is the
@@ -7650,20 +7679,11 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             int64_t *cnt = (int64_t *)(intptr_t)r.as_struct->fields[0].as_int;
             if (*cnt > 0) {
                 (*cnt)--;
-                /* When count reaches 0, recursively drop any inner __rc values. */
-                if (*cnt == 0) {
-                    TuriValue inner = r.as_struct->fields[1];
-                    /* Walk the chain of nested __rc structs. */
-                    while (inner.tag == TURI_STRUCT && inner.as_struct
-                           && inner.as_struct->name
-                           && strcmp(inner.as_struct->name, "__rc") == 0
-                           && inner.as_struct->n_fields >= 2) {
-                        int64_t *icnt = (int64_t *)(intptr_t)inner.as_struct->fields[0].as_int;
-                        if (*icnt > 0) (*icnt)--;
-                        if (*icnt > 0) break; /* still alive — stop recursing */
-                        inner = inner.as_struct->fields[1];
-                    }
-                }
+                /* On reaching 0, run drop-glue over the inner value: this both
+                 * follows a chain of nested rc<rc<...>> AND descends a by-value
+                 * struct/ADT inner to release its own rc<T> fields (e.g. an rc<Box>
+                 * whose Box carries an rc<int> payload). */
+                if (*cnt == 0) turi_rc_drop_value(r.as_struct->fields[1]);
             }
         }
         return turi_nil();
