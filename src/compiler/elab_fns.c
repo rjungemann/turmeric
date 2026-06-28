@@ -4741,10 +4741,25 @@ Expr *elab_def(Elab *e, const Form *call) {
         }
     }
 
-    if (name_idx + 2 != call->as.list.len) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "def takes (def [^persistent] [^deprecated [\"msg\"]] name init)");
-        return NULL;
+    Form *init_f = NULL;
+    Form *type_f = NULL;
+
+    if (name_idx + 3 == call->as.list.len) {
+        Form *maybe_ann = call->as.list.items[name_idx + 1];
+        if (maybe_ann->tag == F_KEYWORD || maybe_ann->tag == F_TYPE_ANN) {
+            type_f = maybe_ann;
+            init_f = call->as.list.items[name_idx + 2];
+        }
+    }
+
+    if (!init_f) {
+        if (name_idx + 2 == call->as.list.len) {
+            init_f = call->as.list.items[name_idx + 1];
+        } else {
+            diag_emit(DIAG_ERROR, call->span,
+                      "def takes (def [^persistent] [^deprecated [\"msg\"]] name [: type] init)");
+            return NULL;
+        }
     }
     
     Form *name_f = call->as.list.items[name_idx];
@@ -4762,8 +4777,54 @@ Expr *elab_def(Elab *e, const Form *call) {
                   "def: '%s' is already defined", name_f->as.sym->name);
         return NULL;
     }
-    Expr *init = elab_form(e, call->as.list.items[name_idx + 1]);
+
+    Type *declared_type = NULL;
+    if (type_f) {
+        declared_type = type_expr_from_form(e, type_f, NULL, NULL, NULL, 0);
+        if (!declared_type) return NULL;
+    }
+
+    Type *saved_expected = e->expected_type;
+    if (declared_type) e->expected_type = declared_type;
+    Expr *init = elab_form(e, init_f);
+    e->expected_type = saved_expected;
     if (!init) return NULL;
+
+    if (declared_type) {
+        /* Align with elab_ascribe */
+        if (declared_type->kind == TY_APP && init->kind == EX_CALL &&
+            init->as.call_.ctor &&
+            (init->type.kind == TY_ADT || init->type.kind == TY_APP)) {
+            AdtDef *asc_def = type_adt_app_def(declared_type);
+            AdtDef *inner_def = (init->type.kind == TY_ADT)
+                ? init->type.as.adt_.def : type_adt_app_def(&init->type);
+            if (asc_def && asc_def == inner_def)
+                init->type = *declared_type;
+        }
+
+        TypeKind src_kind = init->type.kind;
+        TypeKind dst_kind = declared_type->kind;
+        if (src_kind != dst_kind) {
+            int src_size = type_size_bytes(src_kind);
+            int dst_size = type_size_bytes(dst_kind);
+            if (src_size > 0 && dst_size > 0 && src_size == dst_size) {
+                Expr *r = expr_new(e->arena, EX_REINTERPRET, *declared_type, call->span);
+                r->as.reinterpret_.expr = init;
+                r->as.reinterpret_.source_kind = src_kind;
+                r->as.reinterpret_.target_kind = dst_kind;
+                init = r;
+            }
+        }
+
+        Expr *asc = expr_new(e->arena, EX_ASCRIBE, *declared_type, call->span);
+        asc->as.ascribe_.inner = init;
+
+        if (declared_type->kind == TY_FN &&
+            (src_kind == TY_INT || src_kind == TY_PTR_VOID)) {
+            asc->type.as.fn.boxed = true;
+        }
+        init = asc;
+    }
 
     /* Phase 5: ref<T> is scope-local only — disallow at top-level def */
     if (init->type.kind == TY_REF) {

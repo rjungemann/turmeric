@@ -1,0 +1,11 @@
+;; Test explicit type annotations on top-level def definitions
+
+(def x : int 7)
+(def y : float 42.5)
+(def msg : cstr "hello")
+
+(defn main [] : int
+  (println x)
+  (println y)
+  (println msg)
+  0)

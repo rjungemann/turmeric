@@ -33,6 +33,13 @@ syntax.add {
     -- by tagging the fence itself; body is rendered as the nested C
     -- language syntax.
     { pattern = { "```c", "```" },                type = "string", syntax = "C" },
+    -- Datum comments: `#;` followed by a balanced collection, string, symbol, or number
+    { pattern = "#;%s*%b()",                      type = "comment" },
+    { pattern = "#;%s*%b[]",                      type = "comment" },
+    { pattern = "#;%s*%b{}",                      type = "comment" },
+    { pattern = "#;%s*\"[^\"]*\"",                type = "comment" },
+    { pattern = "#;%s*[%a_][%w_%-%?!%*/%+=<>']*", type = "comment" },
+    { pattern = "#;%s*-?%d+%.?%d*",               type = "comment" },
     -- Strings (double-quoted with backslash escapes).
     { pattern = { '"', '"', '\\' },              type = "string" },
     -- Docstring (;;; ... line) takes precedence over plain comments and
