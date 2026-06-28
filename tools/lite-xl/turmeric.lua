@@ -30,9 +30,9 @@ syntax.add {
   comment = ";",
   patterns = {
     -- Inline-C fence: keep the whole ```c ... ``` block visually quiet
-    -- by tagging the fence itself; body is rendered as the default
-    -- "string" style so users can tell C apart from Turmeric at a glance.
-    { pattern = { "```c", "```" },                type = "string" },
+    -- by tagging the fence itself; body is rendered as the nested C
+    -- language syntax.
+    { pattern = { "```c", "```" },                type = "string", syntax = "C" },
     -- Strings (double-quoted with backslash escapes).
     { pattern = { '"', '"', '\\' },              type = "string" },
     -- Docstring (;;; ... line) takes precedence over plain comments and
