@@ -3534,7 +3534,17 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                 rfty.kind == TY_STRUCT && rfty.as.struct_.def &&
                                 !rfty.as.struct_.def->is_opaque &&
                                 rfty.as.struct_.def->n_type_params == 0;
-                            if (fc && strcmp(fc, "int64_t") != 0) {
+                            /* A function-typed element rides as the opaque
+                             * `void *` carrier (the `__opaque` monomorph field),
+                             * but type_c_name(TY_FN) leaks the fn's result type
+                             * (`int64_t`/`double`), so the other-variant default
+                             * would land an int/double literal in a `void *`
+                             * slot (-Wint-conversion).  Emit the NULL pointer. */
+                            if (rfty.kind == TY_FN) { fc = "void *"; }
+                            if (fc && strcmp(fc, "void *") == 0) {
+                                free(arg_strs[i]);
+                                arg_strs[i] = strdup("(void *){0}");
+                            } else if (fc && strcmp(fc, "int64_t") != 0) {
                                 Buf db; buf_init(&db);
                                 buf_printf(&db, ptr_slot ? "(%s *){0}" : "(%s){0}", fc);
                                 buf_putc(&db, '\0');

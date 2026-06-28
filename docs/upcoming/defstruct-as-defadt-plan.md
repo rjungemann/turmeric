@@ -1099,13 +1099,15 @@ read, and the four most recent carrier<->by-value crossings cleared by PR #571
 (non-parametric by-value-ADT arg boxing, `fn`-field int64 carrier width,
 wide-by-value -> closure-thunk carrier heap-box, bounded-wrapper -> concrete
 aggregate-return tail bridge).
-The force-lower probe is down to **3 unique build-failing fixtures** (plus 2
+The force-lower probe is down to **1 unique build-failing fixture** (plus 2
 stdout mismatches) as of 2026-06-28, after the named parametric-monomorph layout
 keystone cleared `tuplen-struct-param-passing` + `m5-byval-marker-spec-emit`, the
 none()-base / by-value-spec carrier-return bridges cleared `positional-opaque-ok`,
 `positional-pap-opaque-ok`, `kleisli-arrow-instance`, and
-`typeclass-return-dispatch-result-wrapped`, and the instance-method ADT-return
-ctor-misemit fix cleared `serial-composite-instances`.
+`typeclass-return-dispatch-result-wrapped`, the instance-method ADT-return
+ctor-misemit fix cleared `serial-composite-instances`, the stdlib/user `Cons`
+ctor-name-collision + mis-resolution fix cleared `adt-recursive`, and the
+`Option__opaque` fn-element construct fix cleared `hkt-ap-fn-in-container`.
 
    - **Result/Option value-struct field: pointer-slot parity DONE (2026-06-28).**
      A lowered carrier-helper-backed parametric stdlib type (`Result`/`Option`)
@@ -1133,9 +1135,46 @@ ctor-misemit fix cleared `serial-composite-instances`.
      `ok`/`err`/`some`, `is-ok`/`is-some`, and value read-back via `.ok-val` /
      `unwrap`).
 
-The remaining 3 build
-blockers, by root: the `Option__opaque` specialization (`hkt-ap-fn-in-container`,
-`hkt-stdlib-option-result-instances`); and the stdlib/user `Cons`
-C-name collision (`adt-recursive`).  Driving these to zero (promote each to a
-flag-on fixture + fix) is the gating work before the experiment can graduate.
-Runway: experiment `expires_at` is `0.30.0` (current `VERSION` is `0.25.5`).
+   - **stdlib/user ctor C-name collision + ctor mis-resolution DONE
+     (2026-06-28).**  A user `(defdata List (Cons :int :List))` whose `Cons`
+     constructor shares a name with the autoloaded stdlib `:heap` `Cons` list
+     cell broke two ways once the stdlib `Cons` lowered: (1) the parametric
+     `:heap` ADT emitted a generic-base `ctor_Cons` (`tur_adt_Cons *`) that
+     collided at `cc` with the user's non-parametric `ctor_Cons` (`int64_t`) --
+     and that base is DEAD (every `:heap` construction monomorphizes to
+     `ctor_Cons__int`), so emit_module.c now skips the generic-base ctor for a
+     parametric `:heap` ADT; (2) `elab_lookup_ctor` (elab_structs.c) scanned
+     `adt_defs` forward and returned the FIRST name match -- the stdlib `Cons`
+     (registered first) -- so `(Cons 1 (Nil))` mis-resolved to the stdlib cell
+     while `match`/`list-sum` treated it as the user `List` (segfault).  It now
+     scans most-recently-registered-first (lexical-shadowing semantics; the same
+     answer `scope_lookup` gives the auto-bound ctor fn).  Both flag-independent
+     (at default stdlib `Cons` is a struct, absent from `adt_defs`).  Cleared
+     `adt-recursive`.  Canary `conv-defstruct-user-ctor-shadows-stdlib`.
+
+   - **`Option__opaque` fn-element construct mistyped DONE (2026-06-28).**
+     Wrapping a function in `some` (`(Option (fn ...))`) makes the element ride
+     as the opaque fat-closure handle, so the monomorph is `Option__opaque` with
+     a `void *` value field.  `type_c_name(TY_FN)` leaks the fn's RESULT type, so
+     `(some (fn [float] float))` minted `some__spec__...opaque_double(double)` and
+     passed the fat-closure `void *` to a `double` param (hard cc error), and the
+     `none`/default emitted `(int64_t){0}` into the `void *` slot.  Fix: the
+     `construct_recovered_byvalue` arg re-derivation (`emit_abi_register_call`,
+     emit_module.c) normalizes a `TY_FN` element to the opaque `void *` carrier,
+     and the default-of recompute (`emit_expr.c`) emits `(void *){0}` for a
+     `TY_FN`-typed field.  Both flag-independent.  Cleared
+     `hkt-ap-fn-in-container`; report archived
+     (`some-of-fn-element-spec-arg-mistyped.md`).  Canary
+     `conv-defstruct-option-fn-element`.
+
+The remaining build blocker, by root: the generic HKT instance-method bodies for
+the hand-written stdlib `Option` (`hkt-stdlib-option-result-instances`) straddle
+the carrier and by-value `Option__opaque` representations -- a `some?` by-value
+predicate spec called on a carrier `ff` param (consuming), and a continuation
+`k` returning a by-value aggregate cast through `(intptr_t)` to a carrier pointer
+(producing).  Both are in the dispatch/spec hot path and are tracked in
+`docs/reported/hkt-instance-body-carrier-byvalue-opaque-spec.md`.  This is the
+last force-lower build blocker (plus 2 stdout mismatches); driving it to zero
+(plus a carrier/by-value reconciliation of the hand-written stdlib instance
+bodies) is the gating work before the experiment can graduate.  Runway:
+experiment `expires_at` is `0.30.0` (current `VERSION` is `0.25.5`).

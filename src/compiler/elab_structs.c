@@ -3083,7 +3083,15 @@ Expr *elab_coerce(Elab *e, const Form *call) {
 
 /* Phase G0: Helper - look up CtorDef by name across all known ADTs */
 CtorDef *elab_lookup_ctor(Elab *e, const Symbol *name) {
-    for (uint32_t ai = 0; ai < e->n_adt_defs; ai++) {
+    /* Scan most-recently-registered first so a later definition shadows an
+     * earlier one of the same constructor name -- lexical-shadowing semantics,
+     * and the same answer `scope_lookup` gives for the auto-bound ctor fn.  This
+     * matters once stdlib `defstruct`s lower to record ADTs: the stdlib `Cons`
+     * (autoloaded first) would otherwise shadow a user `(defdata List (Cons ...))`
+     * registered later, mis-resolving the user's `(Cons ...)` to the stdlib cell.
+     * At default (stdlib Cons is a struct, absent from adt_defs) only the user's
+     * ctor is present, so the scan direction is immaterial there. */
+    for (uint32_t ai = e->n_adt_defs; ai-- > 0; ) {
         AdtDef *adt = e->adt_defs[ai];
         for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
             /* A constructor slot can be NULL (with a NULL ->name) when its

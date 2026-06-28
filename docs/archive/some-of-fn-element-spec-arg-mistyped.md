@@ -1,5 +1,17 @@
 # `some`/`ok` of a function element mistypes the spec arg as the fn's result
 
+> **RESOLVED (2026-06-28).** Fixed in the construct direction: the
+> `construct_recovered_byvalue` re-derivation in `emit_abi_register_call`
+> (`emit_module.c`) now normalizes a `TY_FN` element to the opaque `void *`
+> carrier, and the `none`/default recompute in `emit_expr.c` emits `(void *){0}`
+> for a `TY_FN`-typed field. `hkt-ap-fn-in-container` builds `-Wint-conversion`-
+> clean and runs correctly under `--enable=defstruct-as-defadt`; canary
+> `conv-defstruct-option-fn-element`. The sibling
+> `hkt-stdlib-option-result-instances` has a SEPARATE remaining issue (the
+> generic instance-method body straddling carrier/by-value for an opaque element)
+> tracked in
+> `docs/reported/hkt-instance-body-carrier-byvalue-opaque-spec.md`.
+
 **Severity:** low (force-lower; HKT applicative/functor over an Option/Result
 whose element is a `(fn ...)` with a non-int result). Default path unaffected.
 

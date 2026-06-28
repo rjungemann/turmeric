@@ -1,0 +1,26 @@
+;; conv-defstruct-user-ctor-shadows-stdlib -- with --enable=defstruct-as-defadt
+;; the stdlib `(defstruct Cons :heap [A] ...)` list cell lowers to a parametric
+;; `:heap` record ADT whose constructor is `ctor_Cons`.  A user `(defdata List
+;; (Cons :int :List))` declares its OWN `Cons` constructor.  Two crossings are
+;; exercised:
+;;
+;;  1. C-name: the stdlib parametric `:heap` ADT's generic-base `ctor_Cons`
+;;     (dead -- every construction monomorphizes to `ctor_Cons__int`) must not be
+;;     emitted, or it collides with the user's non-parametric `ctor_Cons`.
+;;  2. Surface resolution: `(Cons 1 (Nil))` must resolve to the user `List.Cons`
+;;     (registered AFTER the autoloaded stdlib), not the stdlib cell.
+;;     `elab_lookup_ctor` scans most-recently-registered-first for this.
+
+(defdata List
+  (Nil)
+  (Cons :int :List))
+
+(defn list-sum [lst] : int
+  (match lst
+    (Nil)       0
+    (Cons n tl) (+ n (list-sum tl))))
+
+(defn main [] : int
+  (let [lst (Cons 1 (Cons 2 (Cons 3 (Nil))))]
+    (println (list-sum lst))
+    0))
