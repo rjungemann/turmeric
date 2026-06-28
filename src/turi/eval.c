@@ -309,8 +309,15 @@ static TuriValue native_extern_exit(TuriEnv *env, TuriValue *args, uint32_t n, v
     _exit(code);
 }
 static TuriValue native_extern_free(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
-    (void)env; (void)ud;
-    if (n > 0) { void *p = (void *)(intptr_t)args[0].as_int; if (p) free(p); }
+    (void)env; (void)args; (void)n; (void)ud;
+    /* No-op under --interpret.  An inline-C `malloc(...)` body is reproduced by
+     * the tree-walker via the env value-arena (turi_val_alloc), NOT raw malloc,
+     * so a program that pairs an inline-C allocation with an extern-c `free`
+     * (e.g. tests/fixtures/typed/slice-basic's make-arr + free) would otherwise
+     * hand a non-heap arena pointer to libc free -- a hard bad-free abort.  The
+     * interpreter already runs process-lifetime (it never frees its closures or
+     * registered natives), so leaking the occasional genuinely-malloc'd carrier
+     * here is consistent and harmless; the arena is reclaimed at env teardown. */
     return turi_nil();
 }
 static TuriValue native_extern_strlen(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
@@ -4022,6 +4029,19 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
     bool has_fptr   = strstr(body,"(*)(");
     bool has_switch = strstr(body,"switch") && strstr(body,"case ");
     bool has_return = strstr(body,"return ");
+
+    /* Pattern 0: pure no-op discard body -- only `(void)<expr>;` casts, e.g.
+     * list.tur's tur-list-homog__ homogeneity check (`(void)a; (void)b;`).  Such
+     * a body has no return, no allocation, no pointer work, no side effects, and
+     * is declared to return :nil; reproduce it as turi_nil().  Guard tightly so a
+     * value-computing body that merely contains a `(void)` cast is not misread. */
+    if (strstr(body,"(void)") && !has_return && !has_malloc && !has_free &&
+        !has_arrow && !has_fptr && !has_switch &&
+        !strstr(body,"=") && !strstr(body,"printf") &&
+        !strstr(body,"while") && !strstr(body,"for")) {
+        *out = turi_nil();
+        return ic_claim("void-noop", fn, out);
+    }
 
     /* Pattern 1: Free -- only a bare destructor (`free(p);`), not a body that
      * also computes/returns a value or fat-dispatches a closure (those merely

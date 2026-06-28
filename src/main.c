@@ -7266,6 +7266,72 @@ static TuriValue native_map_eq_raw_k(TuriEnv *env, TuriValue *a, uint32_t n, voi
                                  (tur_hamt_keyeq_fn)(intptr_t)a[2].as_int, a[3]));
 }
 
+/* ----- HAMT iterator runtime bridges (Eq[Map]/Eq[Set] pure-Turmeric loop) -----
+ * map.tur's Path A Eq[Map] dispatches through map-eq-driver -> map-eq-loop, a
+ * pure-Turmeric walk whose leaf calls (hamt/iter-*, hamt/keyeq, hamt/has-dynamic?,
+ * map-hamt, map-iter-cur-val-as, map-get-dynamic-as) are thin extern-c/inline-C
+ * shims over the tur_hamt_* runtime.  The tree-walker has no extern-c symbol table
+ * and cannot run the inline-C bodies, so without these natives the leaf calls
+ * silently yield 0/nil and the loop returns a count-only "true".  Bind the
+ * underlying runtime entry points (and the inline-C map-* shims) to real natives;
+ * pointers ride the int64 carrier exactly as the compiled ABI uses them. */
+static TuriValue native_hamt_iter_alloc(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1) return turi_int(0);
+    return turi_int((int64_t)(intptr_t)tur_hamt_iter_alloc((Hamt *)(intptr_t)a[0].as_int));
+}
+static TuriValue native_hamt_iter_destroy(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n >= 1 && a[0].as_int) tur_hamt_iter_destroy((void *)(intptr_t)a[0].as_int);
+    return turi_nil();
+}
+static TuriValue native_hamt_iter_advance(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_bool(false);
+    return turi_bool(tur_hamt_iter_advance((void *)(intptr_t)a[0].as_int));
+}
+static TuriValue native_hamt_iter_cur_hash(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_int(0);
+    return turi_int(tur_hamt_iter_cur_hash((void *)(intptr_t)a[0].as_int));
+}
+static TuriValue native_hamt_iter_cur_key(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_int(0);
+    return turi_int((int64_t)(intptr_t)tur_hamt_iter_cur_key((void *)(intptr_t)a[0].as_int));
+}
+static TuriValue native_hamt_iter_cur_val(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_int(0);
+    return turi_int((int64_t)(intptr_t)tur_hamt_iter_cur_val((void *)(intptr_t)a[0].as_int));
+}
+static TuriValue native_hamt_keyeq(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1) return turi_int(0);
+    return turi_int((int64_t)(intptr_t)tur_hamt_keyeq((Hamt *)(intptr_t)a[0].as_int));
+}
+static TuriValue native_hamt_get_dynamic(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 4) return turi_int(0);
+    void *r = tur_hamt_get_dynamic((Hamt *)(intptr_t)a[0].as_int, a[1].as_int,
+                                   (void *)(intptr_t)a[2].as_int,
+                                   (void *)(intptr_t)a[3].as_int);
+    return turi_int((int64_t)(intptr_t)r);
+}
+static TuriValue native_hamt_has_dynamic(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 4) return turi_bool(false);
+    return turi_bool(tur_hamt_has_dynamic((Hamt *)(intptr_t)a[0].as_int, a[1].as_int,
+                                          (void *)(intptr_t)a[2].as_int,
+                                          (void *)(intptr_t)a[3].as_int));
+}
+/* map-hamt: read the HAMT pointer out of the { void* hamt } Map carrier. */
+static TuriValue native_map_hamt(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1) return turi_int(0);
+    return turi_int((int64_t)(intptr_t)set_hamt(a[0]));
+}
+
 /* SEQ (stdlib/seq): the lazy-Seq inline-C bridges assume the COMPILED ABI --
  * fat-closure calls via a C function pointer and a {__state,__next_fn} generator
  * struct -- so the tree-walker cannot run them.  Under --interpret a Seq factory
@@ -8538,6 +8604,13 @@ static void wk_register_map_natives(TuriEnv *env) {
     turi_env_register_native(env, "__inst_Hash_hash_float",   native_hash_f64,  NULL);
     turi_env_register_native(env, "__inst_Hash_hash_float32", native_hash_f32,  NULL);
     /* Raw runtime bridges + count/merge/free. */
+    /* map-new: map.tur's body is `malloc({void* hamt}); m->hamt = tur_hamt_new()`
+     * -- the simple inline-C executor cannot run the tur_hamt_new() call, so it
+     * would hand back a carrier whose hamt slot is garbage (map-free then frees a
+     * non-heap pointer).  The Map[K V] carrier is the same single-slot
+     * { void* hamt } box as a Set, so native_set_new (set_wrap(tur_hamt_new()))
+     * produces the exact layout the map-* natives below read via set_hamt. */
+    turi_env_register_native(env, "map-new",         native_set_new,         NULL);
     turi_env_register_native(env, "map-assoc-eq-o",  native_map_assoc_eq_o,  NULL);
     turi_env_register_native(env, "map-get-eq-o",    native_map_get_eq_o,    NULL);
     turi_env_register_native(env, "map-has-eq-o?",   native_map_has_eq_o,    NULL);
@@ -8551,6 +8624,26 @@ static void wk_register_map_natives(TuriEnv *env) {
     turi_env_register_native(env, "map-free",        native_map_free,        NULL);
     turi_env_register_native(env, "map-eq-raw?",     native_map_eq_raw,      NULL);
     turi_env_register_native(env, "map-eq-raw-k?",   native_map_eq_raw_k,    NULL);
+    /* Eq [Map] dispatches through the pure-Turmeric map-eq-driver -> map-eq-loop,
+     * which walks the HAMT via hamt/iter-* + map-get-dynamic-as helpers.  Those
+     * leaf shims are extern-c calls into the tur_hamt_* runtime (and a few
+     * inline-C map-* accessors); the tree-walker has no extern-c symbol table and
+     * cannot run the inline-C bodies, so without natives the loop short-circuits
+     * to a count-only "true".  Bind the runtime entry points by their C names so
+     * the extern-c shims resolve, and override the inline-C map-* accessors by
+     * name. */
+    turi_env_register_native(env, "tur_hamt_iter_alloc",    native_hamt_iter_alloc,    NULL);
+    turi_env_register_native(env, "tur_hamt_iter_destroy",  native_hamt_iter_destroy,  NULL);
+    turi_env_register_native(env, "tur_hamt_iter_advance",  native_hamt_iter_advance,  NULL);
+    turi_env_register_native(env, "tur_hamt_iter_cur_hash", native_hamt_iter_cur_hash, NULL);
+    turi_env_register_native(env, "tur_hamt_iter_cur_key",  native_hamt_iter_cur_key,  NULL);
+    turi_env_register_native(env, "tur_hamt_iter_cur_val",  native_hamt_iter_cur_val,  NULL);
+    turi_env_register_native(env, "tur_hamt_keyeq",         native_hamt_keyeq,         NULL);
+    turi_env_register_native(env, "tur_hamt_get_dynamic",   native_hamt_get_dynamic,   NULL);
+    turi_env_register_native(env, "tur_hamt_has_dynamic",   native_hamt_has_dynamic,   NULL);
+    turi_env_register_native(env, "map-hamt",               native_map_hamt,           NULL);
+    turi_env_register_native(env, "map-iter-cur-val-as",    native_hamt_iter_cur_val,  NULL);
+    turi_env_register_native(env, "map-get-dynamic-as",     native_hamt_get_dynamic,   NULL);
     turi_env_register_native(env, "tur-map-homog__", native_map_homog,       NULL);
 }
 
@@ -8651,6 +8744,13 @@ static TuriValue vec_retag_cell(void *vec_key, int64_t cell) {
         case TURI_FLOAT: { union { int64_t i; double d; } u; u.i = cell; return turi_float(u.d); }
         case TURI_CSTR:  return turi_cstr((const char *)(intptr_t)cell);
         case TURI_BOOL:  return turi_bool(cell != 0);
+        /* A by-value aggregate element (struct/ADT, e.g. (Option int) pushed as a
+         * TuriStruct) rides the cell as its pointer; re-tag it so the read-back
+         * value is a real TURI_STRUCT and field/.value access works (a bare
+         * turi_int would make .is-some/.value misread the struct as an int64
+         * carrier).  Guard on non-null to leave a 0/nil carrier alone. */
+        case TURI_STRUCT: return cell ? turi_struct_val((TuriStruct *)(intptr_t)cell)
+                                      : turi_int(0);
         default:         return turi_int(cell);
     }
 }
@@ -8764,19 +8864,26 @@ static TuriValue native_list_length(TuriEnv *env, TuriValue *a, uint32_t n, void
     (void)env; (void)ud;
     if (n < 1) return turi_int(0);
     int64_t count = 0;
-    int64_t ptr;
-    if (a[0].tag == TURI_STRUCT) {
-        /* defensive: a make-struct Cons head -- count it, then follow its
-         * carrier tail (any further cells are tcons boxes). */
-        bool f = false; TuriValue t = turi_struct_field(a[0], 1, &f);
-        count = 1; ptr = f ? t.as_int : 0;
-    } else {
-        ptr = a[0].as_int;
-    }
-    while (ptr) {
-        count++;
-        int64_t *cell = (int64_t *)(intptr_t)ptr;
-        ptr = cell[1];
+    TuriValue node = a[0];
+    for (;;) {
+        if (node.tag == TURI_STRUCT) {
+            /* interpreter representation: tcons builds a make-struct Cons whose
+             * tail field (index 1) is the next cell -- itself a Cons struct or
+             * the int 0 nil sentinel.  Walk the struct chain. */
+            count++;
+            bool f = false; node = turi_struct_field(node, 1, &f);
+            if (!f) break;
+            continue;
+        }
+        /* carrier representation: a malloc'd { head, tail } box chain (the
+         * untyped cons/head/tail benchmark surface); 0 is nil. */
+        int64_t ptr = node.as_int;
+        while (ptr) {
+            count++;
+            int64_t *cell = (int64_t *)(intptr_t)ptr;
+            ptr = cell[1];
+        }
+        break;
     }
     return turi_int(count);
 }
@@ -9277,10 +9384,17 @@ static TuriValue native_cons(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     cell[0] = value; cell[1] = next;
     return turi_int((int64_t)(intptr_t)cell);
 }
-/* tail: return the next pointer field of the first cons cell */
+/* tail: return the next pointer field of the first cons cell.  Handles both the
+ * interpreter struct representation (tcons -> make-struct Cons; tail is field 1)
+ * and the carrier { head, tail } box (untyped cons surface). */
 static TuriValue native_list_tail(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
-    if (n < 1 || a[0].as_int == 0) return turi_int(0);
+    if (n < 1) return turi_int(0);
+    if (a[0].tag == TURI_STRUCT) {
+        bool f = false; TuriValue t = turi_struct_field(a[0], 1, &f);
+        return f ? t : turi_int(0);
+    }
+    if (a[0].as_int == 0) return turi_int(0);
     int64_t *cell = (int64_t *)(intptr_t)a[0].as_int;
     return turi_int(cell[1]);
 }
@@ -9291,10 +9405,17 @@ static TuriValue native_list_nil_pred(TuriEnv *env, TuriValue *a, uint32_t n, vo
     rv.as_bool = (n == 0 || a[0].as_int == 0);
     return rv;
 }
-/* head: return the value field of the first cons cell */
+/* head: return the value field of the first cons cell.  Handles both the
+ * interpreter struct representation (tcons -> make-struct Cons; head is field 0,
+ * which may carry any TuriValue) and the carrier { head, tail } box. */
 static TuriValue native_list_head(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
-    if (n < 1 || a[0].as_int == 0) return turi_nil();
+    if (n < 1) return turi_nil();
+    if (a[0].tag == TURI_STRUCT) {
+        bool f = false; TuriValue h = turi_struct_field(a[0], 0, &f);
+        return f ? h : turi_nil();
+    }
+    if (a[0].as_int == 0) return turi_nil();
     int64_t *cell = (int64_t *)(intptr_t)a[0].as_int;
     return turi_int(cell[0]);
 }
