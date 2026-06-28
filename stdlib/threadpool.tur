@@ -491,12 +491,12 @@
       }
       q->buf[q->tail] = (int64_t)(uintptr_t)task;
       q->tail = (q->tail + 1) % q->alloc;
-      q->count++;
-      pthread_cond_signal(&q->not_empty);
-      pthread_mutex_unlock(&q->lock);
+  }
+  q->count++;
+  pthread_cond_signal(&q->not_empty);
+  pthread_mutex_unlock(&q->lock);
 
-      return (int64_t)(intptr_t)fc;
-      ```)
+  return (int64_t)(intptr_t)fc;
   ```)
 ;;; thread-pool-shutdown -- signal all workers to stop and join them.
 ;;;
