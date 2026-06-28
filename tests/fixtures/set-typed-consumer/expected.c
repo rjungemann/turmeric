@@ -3273,6 +3273,7 @@ static tur_adt_Set__int * set_new__spec__tur_adt_Set__int__();
 static bool __inst_Eq_eq_qu_Set__spec__bool_tur_adt_Set__int___tur_adt_Set__int__(tur_adt_Set__int *, tur_adt_Set__int *);
 static bool set_eq_full__spec__bool_tur_adt_Set__int___tur_adt_Set__int__(tur_adt_Set__int *, tur_adt_Set__int *);
 static bool set_eq_driver__spec__bool_tur_adt_Set__int___tur_adt_Set__int__(tur_adt_Set__int *, tur_adt_Set__int *);
+static int64_t set_hamt__spec__int64_t_tur_adt_Set__int__(tur_adt_Set__int *);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -4504,7 +4505,7 @@ static bool set_hyeq_hycmp_qu(int64_t a, int64_t b, int64_t cmp_fn) {
 }
 
 static void * set_hyhamt(int64_t s) {
-        struct { void *hamt; } *set = (void*)(intptr_t)s; return set->hamt; 
+        struct { void *hamt; } *set = (void*)(intptr_t)s; return (void *)(intptr_t)set->hamt; 
 }
 
 static bool set_hyeq_hyloop(void * iter, void * s2_hamt, void * keyeq) {
@@ -5814,11 +5815,11 @@ static bool set_eq_full__spec__bool_tur_adt_Set__int___tur_adt_Set__int__(tur_ad
 static bool set_eq_driver__spec__bool_tur_adt_Set__int___tur_adt_Set__int__(tur_adt_Set__int * s1, tur_adt_Set__int * s2) {
         bool __t57;
         {
-            void * iter_1065 = hamt_sliter_hyalloc((void *)(intptr_t)(set_hyhamt((int64_t)(intptr_t)(s1))));
+            void * iter_1065 = hamt_sliter_hyalloc((void *)(intptr_t)(set_hamt__spec__int64_t_tur_adt_Set__int__(s1)));
             (void)iter_1065;
-            void * keyeq_1066 = hamt_slkeyeq((void *)(intptr_t)(set_hyhamt((int64_t)(intptr_t)(s1))));
+            void * keyeq_1066 = hamt_slkeyeq((void *)(intptr_t)(set_hamt__spec__int64_t_tur_adt_Set__int__(s1)));
             (void)keyeq_1066;
-            bool result_1067 = set_hyeq_hyloop((void *)(intptr_t)(iter_1065), (void *)(intptr_t)(set_hyhamt((int64_t)(intptr_t)(s2))), (void *)(intptr_t)(keyeq_1066));
+            bool result_1067 = set_hyeq_hyloop((void *)(intptr_t)(iter_1065), (void *)(intptr_t)(set_hamt__spec__int64_t_tur_adt_Set__int__(s2)), (void *)(intptr_t)(keyeq_1066));
             (void)result_1067;
             hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_1065));
             bool __t58;
@@ -5826,6 +5827,10 @@ static bool set_eq_driver__spec__bool_tur_adt_Set__int___tur_adt_Set__int__(tur_
             __t57 = __t58;
         }
         return __t57;
+}
+
+static int64_t set_hamt__spec__int64_t_tur_adt_Set__int__(tur_adt_Set__int * s) {
+        struct { void *hamt; } *set = (void*)(intptr_t)s; return (int64_t)(intptr_t)set->hamt; 
 }
 
 
