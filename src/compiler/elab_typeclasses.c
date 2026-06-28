@@ -2329,6 +2329,23 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                 Type *fn_type = (Type *)arena_alloc(e->arena, sizeof(Type));
                                 memset(fn_type, 0, sizeof(Type));
                                 Binding *ctor_b2 = scope_lookup(e->scope, ctor_sym2);
+                                /* CONV-S1 (byvalue-field-ascribed-carrier-receiver):
+                                 * scope_lookup is value-preferring, so for a lowered
+                                 * record ADT (and any `(defdata T [A] (T [...]))`)
+                                 * the type name `Duo` resolves to the constructor
+                                 * FUNCTION (TY_FN), shadowing the type.  The else
+                                 * branch then built a def-less TY_STRUCT base, so
+                                 * `(.snd x)` on a `(Duo cstr int)` receiver in the
+                                 * instance body unwrapped the app to a def-less
+                                 * struct and the field never resolved.  Recover the
+                                 * ADT/struct type from the type namespace, mirroring
+                                 * the single-arg keyword head path above (struct
+                                 * from scope_lookup still wins first, preserving the
+                                 * MF4 struct/GADT coexistence preference). */
+                                Type *head_ty2 = NULL;
+                                if (!(ctor_b2 && ctor_b2->type.kind == TY_STRUCT &&
+                                      ctor_b2->type.as.struct_.def))
+                                    head_ty2 = elab_lookup_type_by_name(e, ctor_sym2);
                                 if (ctor_b2 && (ctor_b2->type.kind == TY_ADT ||
                                                 (ctor_b2->type.kind == TY_STRUCT &&
                                                  ctor_b2->type.as.struct_.def))) {
@@ -2336,6 +2353,18 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                     uint32_t ca = (ctor_b2->type.kind == TY_ADT)
                                         ? ctor_b2->type.as.adt_.def->n_type_params
                                         : ctor_b2->type.as.struct_.def->n_type_params;
+                                    fn_type->hkt_kind = (ca > 0)
+                                        ? kind_for_arity(ca) : KIND_ARROW2;
+                                } else if (head_ty2 && head_ty2->kind == TY_ADT &&
+                                           head_ty2->as.adt_.def) {
+                                    *fn_type = *head_ty2;
+                                    uint32_t ca = head_ty2->as.adt_.def->n_type_params;
+                                    fn_type->hkt_kind = (ca > 0)
+                                        ? kind_for_arity(ca) : KIND_ARROW2;
+                                } else if (head_ty2 && head_ty2->kind == TY_STRUCT &&
+                                           head_ty2->as.struct_.def) {
+                                    *fn_type = *head_ty2;
+                                    uint32_t ca = head_ty2->as.struct_.def->n_type_params;
                                     fn_type->hkt_kind = (ca > 0)
                                         ? kind_for_arity(ca) : KIND_ARROW2;
                                 } else {
