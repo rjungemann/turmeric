@@ -5363,7 +5363,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_BORROW_IMMUT: {
             /* (& expr) - immutable borrow */
             Type inner_type = e->as.borrow_immut_.expr->type;
+            bool saved_lv = ctx->lvalue_mode;
+            ctx->lvalue_mode = true;  /* borrow-struct-field: field operand as lvalue */
             char *inner = emit_value(ctx, body, e->as.borrow_immut_.expr);
+            ctx->lvalue_mode = saved_lv;
             if (inner_type.kind == TY_REF_IMMUT || inner_type.kind == TY_REF_MUT) {
                 /* Reborrow: the pointer value IS the borrow — return as-is */
                 return inner;
@@ -5386,7 +5389,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_BORROW_MUT: {
             /* (&mut expr) - mutable borrow */
             Type inner_type = e->as.borrow_mut_.expr->type;
+            bool saved_lv_m = ctx->lvalue_mode;
+            ctx->lvalue_mode = true;  /* borrow-struct-field: field operand as lvalue */
             char *inner = emit_value(ctx, body, e->as.borrow_mut_.expr);
+            ctx->lvalue_mode = saved_lv_m;
             if (inner_type.kind == TY_REF_MUT) {
                 /* Mutable reborrow: return pointer directly */
                 return inner;
@@ -5729,6 +5735,11 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * through the unspecialized carrier typedef so field access is
              * valid C even though the C parameter type is int64_t.
              * Phase D: for pass-by-ptr params (const T*), use -> instead of . */
+            /* borrow-struct-field: read-and-clear the borrow lvalue request so it
+             * applies only to THIS field access (the borrow operand), not the
+             * nested receiver emit below. */
+            bool gf_lvalue = ctx->lvalue_mode;
+            ctx->lvalue_mode = false;
             char *sv = emit_value(ctx, body, e->as.get_field_.struct_expr);
             /* SC7: a transparent int newtype (including the lowered record-ADT
              * form, `(defstruct Schema [A] (raw :int))`) IS its single int64
@@ -5980,9 +5991,13 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     } else if (eff_fld_rcty) {
                         buf_printf(&hb, "(%s)(%s)%s%s", eff_fld_rcty, sv, acc, mp);
                     } else if (use_arrow) {
-                        buf_printf(&hb, "(%s)(%s)->%s", cty, sv, mp);
+                        if (gf_lvalue) buf_printf(&hb, "(%s)->%s", sv, mp);
+                        else buf_printf(&hb, "(%s)(%s)->%s", cty, sv, mp);
                     } else {
-                        buf_printf(&hb, "(%s)(%s).%s", cty, sv, mp);
+                        /* borrow-struct-field: drop the outer rvalue cast so the
+                         * member is a bare lvalue for `&`. */
+                        if (gf_lvalue) buf_printf(&hb, "(%s).%s", sv, mp);
+                        else buf_printf(&hb, "(%s)(%s).%s", cty, sv, mp);
                     }
                 } else if (heap_adt_recv) {
                     /* :heap ADT receiver with a concrete monomorph layout: cast
@@ -6013,6 +6028,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * concrete by-value aggregate (accessor-unbox, above). */
                     buf_printf(&hb, "(*(%s *)(intptr_t)(((tur_adt_%s *)(intptr_t)(%s))->%s))",
                                fld_rcty, adt_mn, sv, mp);
+                } else if (gf_lvalue) {
+                    /* borrow-struct-field: bare member lvalue (no rvalue cast). */
+                    buf_printf(&hb, "((tur_adt_%s *)(intptr_t)(%s))->%s",
+                               adt_mn, sv, mp);
                 } else {
                     buf_printf(&hb, "(%s)((tur_adt_%s *)(intptr_t)(%s))->%s",
                                cty, adt_mn, sv, mp);

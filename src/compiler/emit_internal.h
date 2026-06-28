@@ -284,6 +284,12 @@ typedef struct EmitCtx {
      * function-body boundary so the first statement always re-anchors. */
     uint32_t     dbg_last_line;
     uint16_t     dbg_last_file_id;
+    /* CONV-S1 (borrow-struct-field): set while emitting the operand of an
+     * immutable/mutable borrow so EX_GET_FIELD omits its outer `(cty)` rvalue
+     * cast and yields a bare member lvalue (`(p).x`), so `&` has an lvalue
+     * operand.  Read-and-cleared at EX_GET_FIELD entry so only the outermost
+     * field access of the borrow operand is affected, not nested reads. */
+    bool         lvalue_mode;
 } EmitCtx;
 
 /* Phase 4 v1: Defer thunk tracking */
