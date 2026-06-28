@@ -617,9 +617,9 @@ static bool struct_field_collect_type_args(const StructDef *def, const Type *exp
  * only: a concrete (non-tyvar, non-app, non-fn) field never fails here -- the
  * ctor call's own type check reports a genuine mismatch.  Returns false only on a
  * structural shape disagreement that should abort inference for the field. */
-static bool adt_field_collect_type_args(const char **tps, uint8_t n_tps,
-                                        const Type *expected, Type actual,
-                                        Type *type_args, bool *have_type_args) {
+bool adt_field_collect_type_args(const char **tps, uint8_t n_tps,
+                                 const Type *expected, Type actual,
+                                 Type *type_args, bool *have_type_args) {
     if (!expected || !tps) return true;
     switch (expected->kind) {
         case TY_TYVAR: {
@@ -4082,15 +4082,20 @@ Expr *elab_match(Elab *e, const Form *call) {
                                                             ctor->field_forms[bi], &arm_senv);
                     }
                 } else if (ctor->fields[bi].full_type &&
-                               ctor->fields[bi].full_type->kind == TY_TYVAR &&
+                               (ctor->fields[bi].full_type->kind == TY_TYVAR ||
+                                ctor->fields[bi].full_type->kind == TY_APP ||
+                                ctor->fields[bi].full_type->kind == TY_FN) &&
                                adt->n_type_params > 0) {
-                    /* TS4P1/TP6: Type-variable field on a defdata constructor.
-                     * When the scrutinee has a TY_APP chain (monomorphised instance),
-                     * substitute the concrete type argument for the TY_TYVAR name.
-                     * This handles the case where ctor->field_forms[bi] is NULL
-                     * (because the field was declared as a bare type-variable symbol
-                     * like `a` in `(defdata Maybe [a] (Just a))` and the type-variable
-                     * branch in defdata parsing used `continue`, skipping field_forms). */
+                    /* TS4P1/TP6 / nested-carrier-match: a defdata constructor
+                     * field that mentions the ADT's type params -- a bare
+                     * type-variable (`a` in `(defdata Maybe [a] (Just a))`), or a
+                     * nested TY_APP / TY_FN carrying them.  When the scrutinee has
+                     * a TY_APP chain (monomorphised instance), substitute the
+                     * concrete type args through the whole field type.  This also
+                     * covers the case where ctor->field_forms[bi] is NULL because
+                     * the field was a bare type-variable symbol (the type-variable
+                     * branch in defdata parsing used `continue`, skipping
+                     * field_forms). */
                     Type *type_args = (Type *)arena_alloc(e->arena,
                         adt->n_type_params * sizeof(Type));
                     if (elab_adt_type_extract_args(&scrutinee->type, adt, type_args)) {
@@ -4106,20 +4111,28 @@ Expr *elab_match(Elab *e, const Form *call) {
                      * `int` collapsed by parse_struct_field_type for ADT-typed
                      * fields.  Falls back to type_from_kind below if the
                      * re-parse fails (e.g. unknown type).
-                     * TP6: If the field carries a TY_TYVAR full_type and the
-                     * scrutinee has a TY_APP chain, extract the concrete type
-                     * arg and substitute it in. */
-                    if (ctor->fields[bi].full_type &&
-                            ctor->fields[bi].full_type->kind == TY_TYVAR &&
-                            adt->n_type_params > 0) {
-                        Type *type_args = (Type *)arena_alloc(e->arena,
-                            adt->n_type_params * sizeof(Type));
-                        if (elab_adt_type_extract_args(&scrutinee->type, adt, type_args)) {
-                            ftype = adt_field_instantiate_type(e, adt,
-                                        ctor->fields[bi].full_type, type_args);
-                        } else {
-                            ftype = type_from_kind(ctor->fields[bi].kind);
-                        }
+                     * TP6 / nested-carrier-match: If the field type mentions any
+                     * of the ADT's type params -- a bare TY_TYVAR, or a nested
+                     * TY_APP / TY_FN that carries them (e.g. N's `(Pair2 a a)` in
+                     * `(defdata Nest [a] (N (Pair2 a a)))`) -- and the scrutinee
+                     * carries a concrete TY_APP chain, substitute the concrete
+                     * args through the whole field type so the inner bindings
+                     * thread the element type instead of leaving bare tyvars. */
+                    bool has_param =
+                        ctor->fields[bi].full_type &&
+                        (ctor->fields[bi].full_type->kind == TY_TYVAR ||
+                         ctor->fields[bi].full_type->kind == TY_APP ||
+                         ctor->fields[bi].full_type->kind == TY_FN) &&
+                        adt->n_type_params > 0;
+                    Type *type_args = has_param
+                        ? (Type *)arena_alloc(e->arena,
+                                              adt->n_type_params * sizeof(Type))
+                        : NULL;
+                    if (has_param &&
+                        elab_adt_type_extract_args(&scrutinee->type, adt,
+                                                   type_args)) {
+                        ftype = adt_field_instantiate_type(e, adt,
+                                    ctor->fields[bi].full_type, type_args);
                     } else {
                         Type *resolved = type_expr_from_form(e,
                             (Form *)ctor->field_forms[bi],

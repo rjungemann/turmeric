@@ -2290,39 +2290,58 @@ Expr *elab_call(Elab *e, Form *call) {
                     call_expr->as.call_.args[fi] = shim;
                 }
 
-                /* TS4P1: Build TY_APP result type for per-use-site ADT monomorphisation.
-                 * If all of the ADT's type parameters were bound to concrete types
-                 * by the argument list (TP5 above), upgrade the result type from
-                 * a plain TY_ADT to a TY_APP chain so the codegen can emit the
-                 * correctly-typed monomorphised struct and constructor. */
-                if (n_bound > 0 && ctor->adt->n_type_params > 0 &&
+                /* TS4P1 / nested-carrier-match: Build TY_APP result type for
+                 * per-use-site ADT monomorphisation.  Ground EVERY type param by
+                 * unifying each field's declared full_type against the argument's
+                 * actual type, descending into TY_APP / TY_FN fields -- not just
+                 * the bare-tyvar fields the TP5 consistency loop above captured.
+                 * Without this, a param that appears only inside a parametric
+                 * field (e.g. `N`'s sole field `(Pair2 a a)` in
+                 * `(defdata Nest [a] (N (Pair2 a a)))`) never binds, n_bound is
+                 * 0, and the result stays a bare `Nest` -- so a nested `match`
+                 * can't thread the concrete element type into the inner bindings.
+                 * Collecting through the app makes `(N (MkPair2 3 4))` infer
+                 * `(Nest int)`. */
+                if (ctor->adt->n_type_params > 0 &&
                     !ctor->adt->is_gadt &&
                     ctor->adt->n_type_params <= 8) {
-                    bool all_bound = true;
-                    Type adt_base = type_adt(ctor->adt);
-                    adt_base.hkt_kind = kind_for_arity(ctor->adt->n_type_params);
-                    Type app_type = adt_base;
-                    for (uint8_t pi = 0;
-                         pi < ctor->adt->n_type_params && all_bound; pi++) {
-                        const char *pname = ctor->adt->type_params[pi];
-                        bool found = false;
-                        for (uint8_t bi = 0; bi < n_bound; bi++) {
-                            if (param_bindings[bi].name &&
-                                strcmp(param_bindings[bi].name, pname) == 0) {
-                                if (param_bindings[bi].type.kind == TY_TYVAR) {
-                                    all_bound = false;
-                                } else {
-                                    app_type = type_app(e->arena, app_type,
-                                                        param_bindings[bi].type,
-                                                        call->span);
-                                }
-                                found = true;
-                                break;
-                            }
+                    uint8_t ntp = ctor->adt->n_type_params;
+                    Type targs[8];
+                    bool have[8];
+                    memset(targs, 0, sizeof(targs));
+                    memset(have, 0, sizeof(have));
+                    for (uint32_t fi = 0;
+                         fi < ctor->n_fields && fi < n_call_args; fi++) {
+                        const Type *ft = ctor->fields[fi].full_type;
+                        if (!ft) continue;
+                        /* TS4P1: unwrap an EX_REINTERPRET int64-carrier box so a
+                         * float payload infers as float, not the int carrier. */
+                        const Expr *arg_expr = call_expr->as.call_.args[fi];
+                        while (arg_expr && arg_expr->kind == EX_REINTERPRET &&
+                               arg_expr->as.reinterpret_.target_kind == TY_INT &&
+                               arg_expr->as.reinterpret_.expr) {
+                            arg_expr = arg_expr->as.reinterpret_.expr;
                         }
-                        if (!found) all_bound = false;
+                        Type actual = arg_expr
+                            ? arg_expr->type
+                            : call_expr->as.call_.args[fi]->type;
+                        adt_field_collect_type_args(ctor->adt->type_params, ntp,
+                                                    ft, actual, targs, have);
+                    }
+                    bool all_bound = true;
+                    for (uint8_t pi = 0; pi < ntp; pi++) {
+                        if (!have[pi] || targs[pi].kind == TY_TYVAR) {
+                            all_bound = false;
+                            break;
+                        }
                     }
                     if (all_bound) {
+                        Type adt_base = type_adt(ctor->adt);
+                        adt_base.hkt_kind = kind_for_arity(ntp);
+                        Type app_type = adt_base;
+                        for (uint8_t pi = 0; pi < ntp; pi++)
+                            app_type = type_app(e->arena, app_type, targs[pi],
+                                                call->span);
                         call_expr->type = app_type;
                     }
                 }

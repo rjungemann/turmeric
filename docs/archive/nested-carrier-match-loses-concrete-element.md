@@ -1,5 +1,29 @@
 # Nested carrier `match` loses the concrete element type
 
+> **RESOLVED (2026-06-28).** Fixed end-to-end on the default by-value path; no
+> `::` ascription needed. The repro now prints `7`, and the regression fixture
+> `tests/fixtures/nested-carrier-match-element-type` (int + float + three-deep,
+> all unascribed) passes in the gate suite (`bash tests/run.sh` -> 1871 passed,
+> 0 failed, leak detection ON). The fix landed exactly along the report's three
+> predicted seams (the blocker in step 3 was already de-risked by the
+> pre-existing `substitute_adt_app_type_owned`):
+>
+> 1. **Construction-site inference** (`elab_call.c`): the ctor-call result now
+>    grounds every type param via `adt_field_collect_type_args` (made non-static),
+>    descending into TY_APP/TY_FN fields -- so `(N (MkPair2 3 4))` infers
+>    `(Nest int)` instead of bare `Nest`.
+> 2. **Match field-bind** (`elab_structs.c`): both arm-binding branches now
+>    substitute the scrutinee's concrete app args through a TY_APP/TY_FN field
+>    type (not just bare TY_TYVAR), so `inner` binds as `(Pair2 int int)` and the
+>    inner `x`/`y` bind as `int`.
+> 3. **Codegen** (`emit_expr.c` + `types.c`): the match field-read now reads a
+>    non-wide by-value ADT field INLINE when the scrutinee is a monomorph app
+>    (gated on `scrut_is_app_monomorph`; the base-carrier/GADT representation
+>    keeps the int64-box deref), and the leaking `substitute_adt_app_type`
+>    callers were switched to the owned (deep-cloned) variant + `free_struct_app_type`.
+>
+> Verification trail in `docs/archive/history/`.
+
 **Severity:** low (pre-existing; has a clean `::` ascription workaround).
 
 ## Summary
