@@ -4177,6 +4177,24 @@ static const char *gde_type_head_name(const Type *t) {
     }
 }
 
+/* Surface type name of a concrete `*`-kinded primitive, as a `definstance`
+ * would spell it (`int`, `bool`, `cstr`, `float`).  Used so a primitive element
+ * type can re-resolve to its OWN instance (e.g. Tag[bool], Enc[float]) instead
+ * of the int-carrier representative baked by the elaborator.  NULL for kinds
+ * that have no distinct user-instance surface name. */
+static const char *gde_primitive_type_name(const Type *t) {
+    if (!t) return NULL;
+    switch (t->kind) {
+    case TY_INT: case TY_INT64: return "int";
+    case TY_BOOL:               return "bool";
+    case TY_CSTR:               return "cstr";
+    case TY_FLOAT: case TY_FLOAT64: return "float";
+    case TY_FLOAT32:            return "float32";
+    case TY_SYM:                return "sym";
+    default:                    return NULL;
+    }
+}
+
 /* True for a concrete `*`-kinded primitive -- these dispatch to the int-carrier
  * representative, so they keep the elaborator's baked instance. */
 static bool gde_type_is_primitive_star(const Type *t) {
@@ -4196,47 +4214,15 @@ static bool gde_type_is_primitive_star(const Type *t) {
  * the instance matching the runtime-concrete receiver `concrete`.  Returns a
  * method closure, or nil if no better instance applies (caller keeps the baked
  * callee). */
-static TuriValue gde_reresolve_method(TuriEnv *env, const Expr *dict_arg,
-                                      const Type *concrete) {
-    if (!env || !env->last_tc_env || !dict_arg || !concrete) return turi_nil();
-    /* Primitives dispatch to the int-carrier representative the elaborator already
-     * baked -- nothing to re-resolve. */
-    if (gde_type_is_primitive_star(concrete)) return turi_nil();
-    TypeClassInstance *rep = dict_arg->as.dict_.instance;
-    if (!rep || !rep->typeclass) return turi_nil();
-    TypeClassEnv *tc_env = (TypeClassEnv *)env->last_tc_env;
-    TypeClass   *tc      = rep->typeclass;
-
-    TypeClassInstance *match = NULL;
-    /* Precise: match by the concrete type's head constructor name. */
-    const char *head = gde_type_head_name(concrete);
-    if (head) {
-        for (TypeClassInstance *inst = tc_env->instances; inst; inst = inst->next) {
-            if (inst->typeclass != tc || inst->n_type_args == 0) continue;
-            const char *ihead = (inst->type_arg_syms && inst->type_arg_syms[0])
-                                ? inst->type_arg_syms[0]->name : NULL;
-            if (!ihead) ihead = gde_type_head_name(&inst->type_args[0]);
-            if (ihead && strcmp(ihead, head) == 0) { match = inst; break; }
-        }
-    }
-    /* Fallback: structured dispatch key (ARROW -> first non-primitive instance). */
-    if (!match) {
-        TypeClassDispatchKey key;
-        memset(&key, 0, sizeof(key));
-        key.typeclass       = tc;
-        key.type_args       = (Type *)concrete;
-        key.n_type_args     = 1;
-        key.constructor_kind = KIND_ARROW;
-        match = typeclass_env_lookup_instance_by_key(tc_env, &key);
-    }
-    if (!match || match == rep) return turi_nil();
-
-    /* Same method slot as the baked dict node.  The dict node's method_name is
-     * produced by the canonical injective mangler (tur_mangle_ident), so a
-     * hyphen/sigil method renders as e.g. `render-to` -> `render_hyto`, NOT the
-     * lossy `render_to` an underscore-collapse would give.  Compare the method's
-     * canonically-mangled name (and, defensively, the underscore-collapsed form)
-     * so the slot resolves regardless of which spelling the dict carries. */
+/* Build a closure for the dict node's method slot in instance `match`.  The dict
+ * node's method_name is produced by the canonical injective mangler
+ * (tur_mangle_ident), so a hyphen/sigil method renders as e.g. `render-to` ->
+ * `render_hyto`, NOT the lossy `render_to` an underscore-collapse would give.
+ * Compare the method's canonically-mangled name (and, defensively, the
+ * underscore-collapsed form) so the slot resolves regardless of which spelling
+ * the dict carries.  Returns nil if the slot has no impl in `match`. */
+static TuriValue gde_method_closure(TuriEnv *env, const Expr *dict_arg,
+                                    TypeClass *tc, TypeClassInstance *match) {
     const char *mname = dict_arg->as.dict_.method_name;
     for (uint32_t mi = 0; mi < tc->n_methods; mi++) {
         const char *orig = tc->methods[mi].name->name;
@@ -4259,6 +4245,115 @@ static TuriValue gde_reresolve_method(TuriEnv *env, const Expr *dict_arg,
         return turi_closure(cl);
     }
     return turi_nil();
+}
+
+static TuriValue gde_reresolve_method(TuriEnv *env, const Expr *dict_arg,
+                                      const Type *concrete) {
+    if (!env || !env->last_tc_env || !dict_arg || !concrete) return turi_nil();
+    bool concrete_is_primitive = gde_type_is_primitive_star(concrete);
+    TypeClassInstance *rep = dict_arg->as.dict_.instance;
+    if (!rep || !rep->typeclass) return turi_nil();
+    TypeClassEnv *tc_env = (TypeClassEnv *)env->last_tc_env;
+    TypeClass   *tc      = rep->typeclass;
+
+    TypeClassInstance *match = NULL;
+    /* Precise: match by the concrete type's head constructor name.  A primitive
+     * concrete (bool/cstr/float/...) may have its OWN instance distinct from the
+     * int-carrier representative the elaborator baked, so match it by surface
+     * name; if none exists the rep == match check below keeps the baked callee. */
+    const char *head = concrete_is_primitive ? gde_primitive_type_name(concrete)
+                                             : gde_type_head_name(concrete);
+    if (head) {
+        for (TypeClassInstance *inst = tc_env->instances; inst; inst = inst->next) {
+            if (inst->typeclass != tc || inst->n_type_args == 0) continue;
+            const char *ihead = (inst->type_arg_syms && inst->type_arg_syms[0])
+                                ? inst->type_arg_syms[0]->name : NULL;
+            if (!ihead) ihead = gde_type_head_name(&inst->type_args[0]);
+            if (!ihead) ihead = gde_primitive_type_name(&inst->type_args[0]);
+            if (ihead && strcmp(ihead, head) == 0) { match = inst; break; }
+        }
+    }
+    /* Fallback: structured dispatch key (ARROW -> first non-primitive instance).
+     * Skip for a primitive concrete -- a primitive that found no by-name instance
+     * keeps the baked representative rather than mis-matching an HKT instance. */
+    if (!match && !concrete_is_primitive) {
+        TypeClassDispatchKey key;
+        memset(&key, 0, sizeof(key));
+        key.typeclass       = tc;
+        key.type_args       = (Type *)concrete;
+        key.n_type_args     = 1;
+        key.constructor_kind = KIND_ARROW;
+        match = typeclass_env_lookup_instance_by_key(tc_env, &key);
+    }
+    if (!match || match == rep) return turi_nil();
+    return gde_method_closure(env, dict_arg, tc, match);
+}
+
+/* Re-resolve a baked-representative typeclass method using the RUNTIME type of
+ * the receiver value, rather than a statically-pinned tyvar.  This catches the
+ * constrained-instance element-dispatch case the static path misses: inside a
+ * `(definstance C [Vec] [(C A)] ...)` body, `(c (:: (vec-get v i) A))` is baked
+ * to the int-carrier representative, but at runtime the element value carries
+ * its real tag (bool/float/cstr/struct) and there may be a distinct C[bool] /
+ * C[float] / ... instance to dispatch to.
+ *
+ * SAFETY: only re-resolve for a *distinguishable* value -- bool/float/cstr or a
+ * struct/ADT.  An int-carrier value (TURI_INT) is ambiguous: Vec/Map/Set and
+ * other heap containers ride the int64 carrier too, so an int tag must keep the
+ * baked instance (re-resolving a Vec receiver to C[int] would be wrong). */
+static TuriValue gde_reresolve_method_by_value(TuriEnv *env, const Expr *dict_arg,
+                                               TuriValue recv) {
+    if (!env || !env->last_tc_env || !dict_arg) return turi_nil();
+    TypeClassInstance *rep = dict_arg->as.dict_.instance;
+    if (!rep || !rep->typeclass) return turi_nil();
+    TypeClassEnv *tc_env = (TypeClassEnv *)env->last_tc_env;
+    TypeClass   *tc      = rep->typeclass;
+
+    /* Pick a head name from the receiver's runtime tag.
+     *   - PRIMITIVE (bool/float/cstr): re-dispatch freely; a primitive that found
+     *     no instance keeps the baked rep.
+     *   - STRUCT/ADT: re-dispatch ONLY when the head matches a single instance.
+     *     Multiple same-head instances (e.g. `Enc [(Option cstr)]` vs
+     *     `Enc [(Option int)]`) are discriminated by the full applied type, which
+     *     the static elaborator dispatch already does correctly -- a coarse
+     *     by-head match here would mis-select, so defer to it.
+     *   - int-carrier / other: ambiguous (Vec/Map ride the carrier); keep baked. */
+    const char *head = NULL;
+    bool struct_recv = false;
+    switch (recv.tag) {
+    case TURI_BOOL:  head = "bool";  break;
+    case TURI_FLOAT: head = "float"; break;
+    case TURI_CSTR:  head = "cstr";  break;
+    case TURI_STRUCT:
+        struct_recv = true;
+        if (recv.as_struct) {
+            if (recv.as_struct->ctor && recv.as_struct->ctor->adt)
+                head = recv.as_struct->ctor->adt->name;
+            if (!head) head = recv.as_struct->name;
+        }
+        break;
+    default: return turi_nil();
+    }
+    if (!head) return turi_nil();
+
+    TypeClassInstance *match = NULL;
+    int n_head_matches = 0;
+    for (TypeClassInstance *inst = tc_env->instances; inst; inst = inst->next) {
+        if (inst->typeclass != tc || inst->n_type_args == 0) continue;
+        const char *ihead = (inst->type_arg_syms && inst->type_arg_syms[0])
+                            ? inst->type_arg_syms[0]->name : NULL;
+        if (!ihead) ihead = gde_type_head_name(&inst->type_args[0]);
+        if (!ihead) ihead = gde_primitive_type_name(&inst->type_args[0]);
+        if (ihead && strcmp(ihead, head) == 0) {
+            if (!match) match = inst;
+            n_head_matches++;
+        }
+    }
+    /* A struct head with >1 candidate instance is element-discriminated -- leave
+     * it to the static dispatch rather than guess. */
+    if (struct_recv && n_head_matches > 1) return turi_nil();
+    if (!match || match == rep) return turi_nil();
+    return gde_method_closure(env, dict_arg, tc, match);
 }
 
 /* Record the concrete type substitutions a call site pins onto the callee's
@@ -5907,6 +6002,20 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 /* All args ready (a zero-arg call reaches here directly with
                  * acc == NULL). */
                 TuriClosure *cl = top->last.as_closure;
+                /* generic-dict-dispatch by runtime value: a constrained-instance
+                 * element call (e.g. `(c (:: (vec-get v i) A))`) baked to the
+                 * int-carrier representative re-dispatches on the receiver's real
+                 * runtime tag.  The static (tyvar) re-resolution at call setup
+                 * misses this when the element tyvar is unbound in the frame; the
+                 * evaluated receiver value carries its concrete type, so resolve
+                 * from it here.  Only fires for a distinguishable receiver (see
+                 * gde_reresolve_method_by_value), so carrier containers keep the
+                 * baked instance. */
+                if (n >= 1 && acc && top->expr->as.call_.dict_arg) {
+                    TuriValue rv = gde_reresolve_method_by_value(
+                        env, top->expr->as.call_.dict_arg, acc[0]);
+                    if (rv.tag == TURI_CLOSURE && rv.as_closure) cl = rv.as_closure;
+                }
                 FnDef       *fn = (FnDef *)cl->fn;
                 bool foldable = !cl->native && fn && fn->body &&
                                 fn->body->kind != EX_INLINE_C;
