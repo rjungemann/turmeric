@@ -1,6 +1,5 @@
 /* elab_structs.c -- struct/ADT/GADT definitions, pattern matching, and borrow traits. */
 #include "elab_internal.h"
-#include "experiments.h"  /* CONV-S1: defstruct-as-defadt experiment gate */
 
 /* ---- file-local helper forward declarations ---- */
 static void parse_struct_field_type(const char *tname, uint32_t tlen,
@@ -1070,7 +1069,6 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
      * the gate rejects (:heap / :linear outer structs) still elaborates as a
      * struct.  See docs/upcoming/defstruct-as-defadt-plan.md. */
     if (defstruct_lowers_to_adt(e, call)) {
-        experiment_warn_if_used("defstruct-as-defadt");
         /* Redefinition guard -- must run BEFORE dispatching into elab_defdata.
          * A `defstruct` that redefines a fully-defined name (commonly an
          * auto-loaded stdlib type such as `Cons`/`Pair`) must produce the

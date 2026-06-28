@@ -29,23 +29,10 @@
 
 /* The registry.  Empty by design (see file header). */
 static const ExperimentDescriptor EXPERIMENTS[] = {
-    /* CONV-S1: lower a `defstruct` to a single-variant record `defadt`, so
-     * structs flow through the by-value ADT path -- the struct/ADT convergence
-     * lowering.  In flux: as of slice 8 a non-parametric, non-heap, non-linear
-     * struct whose fields are primitive scalars, pointer fields
-     * (rc/ref/lref/weak/ptr<void>), bare or typed `fn` fields, by-value ADT
-     * aggregates (stored INLINE by value, the way a struct inlines a nested
-     * struct field), or bare user-type fields (struct / ADT / opaque -- a
-     * by-value aggregate inlined, a :heap / carrier inner kept as the int64
-     * carrier) lowers; parametric and :heap *outer* structs still keep the struct
-     * path.  (make-struct on a lowered struct redirects to the record-ADT ctor.) */
-    { "defstruct-as-defadt",
-      "lower scalar/by-value-aggregate defstructs to single-variant record defadts",
-      "docs/upcoming/defstruct-as-defadt-plan.md",
-      "0.25.1",                  /* introduced */
-      "0.30.0",                  /* expires_at (hard contract; release-cut enforced) */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_defstruct_as_defadt },
+    /* defstruct-as-defadt GRADUATED 2026-06-28 -- a `defstruct` now lowers to a
+     * single-variant record `defadt` unconditionally (always-on; the gate lives
+     * in defstruct_lowers_to_adt, elab_structs.c).  See
+     * docs/upcoming/defstruct-as-defadt-plan.md. */
     /* B4 byvalue-recursive-carrier GRADUATED 2026-06-25 -- the recursive carrier
      * wrappers (Re/Expr, and wider products carrying an (F Self) field) now flow
      * by value through the fat-closure ABI unconditionally; the gate lives in
