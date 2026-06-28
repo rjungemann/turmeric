@@ -1,5 +1,16 @@
 # Four pre-existing stdout mismatches: image hooks + cross-module import init
 
+> **RESOLVED (2026-06-28).** All four fixtures
+> (`image-hooks-tracked`, `image-reload-hook`, `image-roundtrip`,
+> `load-in-imported-module`) now PASS on the default by-value gate
+> (`bash tests/run.sh` -> 1870 passed, 0 failed). The fix is genuine, not a
+> masked snapshot: each `expected.stdout` still encodes the CORRECT behavior
+> (e.g. `image-roundtrip` expects `init ran` only at cold-load, never on warm
+> reload) and actual output matches it -- the init hook no longer double-fires
+> on warm resume, and cross-module `(load ...)` init order is correct. Verified
+> deterministic across repeated fresh runs. Archived per the strict
+> resolved-report rule. See `docs/archive/history/` for the verification trail.
+
 **Severity:** low -- four fixture-level regressions in the gate suite
 that do not block compilation or affect the desktop-editor track.
 
