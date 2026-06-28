@@ -15,10 +15,13 @@ description: Lower `defstruct` to a single-variant record `defadt` so structs fl
 > `:linear` or `:no-auto-ctor` outer struct, and applied-type/`exists`-field
 > structs, on the StructDef path.  Full suite: **1870 passed, 0 failed**.  The
 > StructDef surface path is retained for those carve-outs; fully retiring it is
-> separate follow-up.  Remaining diagnostic-quality follow-ups (a positional+
-> keyword construction mix and the struct-accessor hint give less precise
-> messages via the constructor path than the old StructDef path did) are noted in
-> the step-4 log below.
+> separate follow-up, scoped in
+> [structdef-retirement-plan.md](structdef-retirement-plan.md) (LARGE -- ~197
+> `StructDef` sites across 19 files; natural first slice is widening the field
+> gate to applied-type fields).  The diagnostic-quality follow-ups (positional+
+> keyword construction mix and the struct-accessor hint) were RESTORED to precise
+> messages on the constructor path (commit "restore precise constructor/keyword
+> diagnostics").
 
 ## Goal
 
