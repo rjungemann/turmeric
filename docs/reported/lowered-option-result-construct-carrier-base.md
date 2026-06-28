@@ -42,12 +42,41 @@ boxed-aggregate pass must flip the representation atomically across every
 producer (construct base AND every `some`/`ok` call site) AND every consumer
 (`.is-some`/`.value`, match, the carrier<->concrete bridges, the legacy
 `tur_option_t`/`tur_result_box_t` helpers), and must be validated by a
-FORCE-LOWER sweep, not just the default suite. Given that blast radius, option 1
-(sentinel-preserving: the carrier base reproduces the legacy carrier exactly --
-`return 0` for none, `tur_box_some`/`tur_box_ok` for the rest -- which is what
-the make-struct M2b path already emits at default; the lowered ctor-form body
-just needs the same legacy-carrier synth) is the lower-risk path and should be
-tried first.
+FORCE-LOWER sweep, not just the default suite.
+
+## Option 1 (sentinel-preserving) ALSO regressed -- TRIED 2026-06-28, ABANDONED
+
+This report previously recommended option 1 (the lowered ctor-form carrier base
+reproduces the legacy carrier exactly -- `return 0` for none,
+`tur_box_some`/`tur_box_ok` for the rest -- the same synth the make-struct M2b
+path emits at default) as the lower-risk path. **That hypothesis is wrong.** A
+ctor-form sibling of the M2b synth was implemented (emit_fns.c) and validated
+with a force-lower-targeted regression test: it fixed `positional-opaque-ok` /
+`-pap` (+2) but RE-REGRESSED the entire `option-*` cluster (-6: option-basic,
+option-of-tvec-eq, option-construct-byvalue-return-spec,
+option-consumers-byvalue-arg, option-map-capturing-closure,
+option-map-literal-none-unannotated-lambda) -- net-negative, the SAME failure
+mode as option 2. The change was abandoned (not committed).
+
+Why option 1 fails too: under lowering the by-value path is ALSO live (a
+`some__spec` returns the `tur_adt_Option__int` aggregate directly, and
+consumers read it by value), so making the carrier BASE emit the legacy boxed
+carrier creates two coexisting representations for the same `(Option int)`.
+`option-basic` mixes them in one program -- `some?(none())` routes through the
+carrier base while `some?(some(42))` routes through the by-value spec -- so any
+carrier-base representation that differs from what the by-value consumers expect
+desyncs. At DEFAULT this never bites because Option/Result are not lowered, so
+the legacy carrier is the ONLY representation; the make-struct M2b synth is
+correct there precisely because there is no by-value path to disagree with.
+
+**Conclusion: there is no piecemeal carrier-base fix.** Both options regress
+`option-*`. The carrier base cannot be touched independently of the global
+representation decision. The only correct path is the atomic flip (every
+producer + consumer in one change, force-lower-swept). Until then the 2
+`positional-*` fixtures (whose `none()` base is dead but must compile) stay
+blocked -- a dead-base compile-only shim that is NEVER reachable at runtime
+might unblock just those without a representation change, but proving
+unreachability across the lowered program is itself non-trivial.
 
 The two `hkt-*` fixtures the original report listed have a DIFFERENT root (`some`
 of a `(fn [float] float)` element mistypes its spec arg as `double`), tracked in
