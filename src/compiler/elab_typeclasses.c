@@ -5256,9 +5256,29 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                     for (uint32_t i = 0; i < ctor->n_fields; i++) {
                         if (!ctor->fields[i].name) continue;
                         if (strcmp(ctor->fields[i].name, method_name) == 0) {
-                            Type ftype = ctor->fields[i].full_type
-                                ? *ctor->fields[i].full_type
-                                : type_from_kind(ctor->fields[i].kind);
+                            Type ftype;
+                            if (ctor->fields[i].full_type) {
+                                ftype = *ctor->fields[i].full_type;
+                            } else if (ctor->fields[i].kind == TY_REF ||
+                                       ctor->fields[i].kind == TY_LREF ||
+                                       ctor->fields[i].kind == TY_RC ||
+                                       ctor->fields[i].kind == TY_WEAK) {
+                                /* linear-lref-struct-field: a pointer-kind field
+                                 * (lref/ref/rc/weak) with no full_type still
+                                 * carries its pointee in inner_kind.  Without it
+                                 * `(.ptr b)` types as a bare lref<?> and `deref`
+                                 * yields TY_UNKNOWN.  Mirror the struct path's
+                                 * elab_struct_field_use_type, which threads the
+                                 * inner kind onto the reconstructed type. */
+                                ftype = type_from_kind(ctor->fields[i].kind);
+                                if (ctor->fields[i].kind == TY_REF ||
+                                    ctor->fields[i].kind == TY_LREF)
+                                    ftype.as.ref.inner = ctor->fields[i].inner_kind;
+                                else
+                                    ftype.as.rc.inner = ctor->fields[i].inner_kind;
+                            } else {
+                                ftype = type_from_kind(ctor->fields[i].kind);
+                            }
                             /* Parametric record ADT: substitute the receiver's
                              * concrete type args for the field's TY_TYVAR names so
                              * `(.val (Box 42))` reads as int, not the bare tyvar A
