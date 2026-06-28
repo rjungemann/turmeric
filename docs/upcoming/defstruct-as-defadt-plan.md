@@ -1099,16 +1099,43 @@ read, and the four most recent carrier<->by-value crossings cleared by PR #571
 (non-parametric by-value-ADT arg boxing, `fn`-field int64 carrier width,
 wide-by-value -> closure-thunk carrier heap-box, bounded-wrapper -> concrete
 aggregate-return tail bridge).
-The force-lower probe is down to **4 unique build-failing fixtures** (plus 2
+The force-lower probe is down to **3 unique build-failing fixtures** (plus 2
 stdout mismatches) as of 2026-06-28, after the named parametric-monomorph layout
 keystone cleared `tuplen-struct-param-passing` + `m5-byval-marker-spec-emit`, the
 none()-base / by-value-spec carrier-return bridges cleared `positional-opaque-ok`,
 `positional-pap-opaque-ok`, `kleisli-arrow-instance`, and
 `typeclass-return-dispatch-result-wrapped`, and the instance-method ADT-return
-ctor-misemit fix cleared `serial-composite-instances`.  The remaining 4 build
+ctor-misemit fix cleared `serial-composite-instances`.
+
+   - **Result/Option value-struct field: pointer-slot parity DONE (2026-06-28).**
+     A lowered carrier-helper-backed parametric stdlib type (`Result`/`Option`)
+     whose monomorph field resolves to a non-parametric value-struct
+     (`Result__User__cstr` embedding `User`, where `User` itself does not lower
+     because it has an applied `(Option cstr)` field) was stored INLINE by value,
+     so the embedding monomorph + its ctor referenced `User`'s full typedef -- but
+     `User` is emitted in the program body, AFTER the apps prelude, giving
+     `error: unknown type name 'User'`.  Fix mirrors the struct path's documented
+     "Direction (1)" carrier-box layout: `adt_field_c_type` (types.c) now stores
+     such a field as a heap pointer `User *`, so (1) a guarded forward
+     `typedef struct User User;` (emitted by the ADT-app dependency pre-pass, the
+     ADT analogue of the struct-app pre-pass's TY_STRUCT forward decl) satisfies
+     the C ordering -- the monomorph + ctor reference `User` only by pointer; and
+     (2) the 8-byte slot matches the prelude carrier-box layout.  Three matching
+     crossings in emit_expr.c: the monomorph ctor call heap-boxes the by-value arg
+     into the pointer slot; the `EX_DEFAULT_OF` other-variant slot becomes the NULL
+     pointer `(User *){0}`; and the `EX_GET_FIELD` by-value-receiver accessor
+     derefs the pointer slot.  All four sites gated on a `Result`/`Option` owner
+     with a non-parametric value-struct field, so the whole change is INERT at
+     default (there `Result`/`Option` are structs, never reaching the ADT path) --
+     default suite stays 1866/0 with zero snapshot churn.  Cleared
+     `result-over-struct-with-option-field-typedef-order`.  Fixture
+     `conv-defstruct-result-struct-field-typedef-order` (flag-on: construct
+     `ok`/`err`/`some`, `is-ok`/`is-some`, and value read-back via `.ok-val` /
+     `unwrap`).
+
+The remaining 3 build
 blockers, by root: the `Option__opaque` specialization (`hkt-ap-fn-in-container`,
-`hkt-stdlib-option-result-instances`); the by-value embed typedef ordering
-(`result-over-struct-with-option-field-typedef-order`); and the stdlib/user `Cons`
+`hkt-stdlib-option-result-instances`); and the stdlib/user `Cons`
 C-name collision (`adt-recursive`).  Driving these to zero (promote each to a
 flag-on fixture + fix) is the gating work before the experiment can graduate.
 Runway: experiment `expires_at` is `0.30.0` (current `VERSION` is `0.25.5`).

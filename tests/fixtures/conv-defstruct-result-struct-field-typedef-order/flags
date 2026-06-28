@@ -1,0 +1,1 @@
+--allow-experimental --enable=defstruct-as-defadt
