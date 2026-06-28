@@ -1,0 +1,37 @@
+;; Regression: nested-carrier-match-loses-concrete-element.
+;; When a parametric carrier ADT's field is itself a parametric type and you
+;; match through both layers, the concrete element type must be threaded into
+;; the inner field bindings -- WITHOUT any `::` ascription -- so an arithmetic
+;; use on them resolves the operator overload.  Before the fix the inner x/y
+;; surfaced as <struct>/tyvar and `(+ x y)` failed operator lookup (TUR-E0006).
+;; See docs/archive/nested-carrier-match-loses-concrete-element.md.
+
+(defdata Pair2 [a b] (MkPair2 a b))
+(defdata Nest  [a]   (N (Pair2 a a)))
+(defdata Deep  [a]   (D (Nest a)))
+
+;; int element threaded through one carrier layer.
+(defn sum-int [n : (Nest int)] : int
+  (match n
+    (N inner)
+      (match inner
+        (MkPair2 x y) (+ x y))))
+
+(defn main [] : int
+  ;; one layer, int -- no ascription on x/y
+  (println (sum-int (N (MkPair2 3 4))))           ; 7
+  ;; one layer, float payload preserved (not int-truncated)
+  (let [nf (N (MkPair2 3.5 4.25))]
+    (match nf
+      (N inner)
+        (match inner
+          (MkPair2 x y) (println (as int (* 100.0 (+ x y))))))) ; 775
+  ;; three carrier layers deep
+  (let [d (D (N (MkPair2 10 20)))]
+    (match d
+      (D nst)
+        (match nst
+          (N inner)
+            (match inner
+              (MkPair2 x y) (println (+ x y))))))   ; 30
+  0)

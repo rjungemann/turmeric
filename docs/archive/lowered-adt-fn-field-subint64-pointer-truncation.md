@@ -1,5 +1,17 @@
 # Lowered record-ADT fn-field read truncates a sub-int64 function pointer
 
+> **RESOLVED (2026-06-28).** Fixed and verified on the default path. The
+> `defstruct-as-defadt` lowering graduated to always-on 2026-06-28 (see
+> `src/runtime/experiments.c`), and the field-read fix (Fix direction 1 below)
+> landed with it. The repro fixture `tests/fixtures/fn-field-unboxed`
+> (`(defstruct Callback :copy [op (fn [int32] int32)])`, `(.op cb 3i32)`) now
+> PASSes in `bash tests/run.sh` (1870 passed, 0 failed) and prints `9\n49` with
+> no segfault. The emitted C now reads the field as
+> `((int32_t (*)(int32_t))(intptr_t)((int64_t)(cb).op))(...)` -- the carrier-width
+> `(int64_t)` cast, NOT the truncating `(int32_t)` cast shown in the Evidence
+> section. Archived per the strict resolved-report rule; verification trail in
+> `docs/archive/history/`.
+
 **Severity:** medium (seam-4 / defstruct-as-defadt graduation blocker; not a
 default-path bug). 1 fixture.
 

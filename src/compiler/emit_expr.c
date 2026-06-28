@@ -7796,11 +7796,16 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                                      : e->as.match_.scrutinee->type.as.adt_.def;
             }
             char adt_c_name[256];
+            /* TS4P3: Use the monomorphised struct name when the scrutinee is
+             * a concrete ADT app (e.g. tur_adt_Maybe__float instead of tur_adt_Maybe).
+             * nested-carrier-match: scrut_is_app_monomorph also gates the
+             * inline-vs-deref field read below -- only a monomorph-app scrutinee
+             * lays a non-wide by-value ADT field out INLINE; the base carrier /
+             * GADT representation always stores it as an int64 box (deref). */
+            const char *inst_name = (e->as.match_.scrutinee->type.kind == TY_APP)
+                ? type_register_adt_app(e->as.match_.scrutinee->type) : NULL;
+            bool scrut_is_app_monomorph = (inst_name != NULL);
             {
-                /* TS4P3: Use the monomorphised struct name when the scrutinee is
-                 * a concrete ADT app (e.g. tur_adt_Maybe__float instead of tur_adt_Maybe). */
-                const char *inst_name = (e->as.match_.scrutinee->type.kind == TY_APP)
-                    ? type_register_adt_app(e->as.match_.scrutinee->type) : NULL;
                 if (inst_name) {
                     snprintf(adt_c_name, sizeof(adt_c_name), "%s", inst_name);
                 } else {
@@ -7945,11 +7950,26 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                 buf_printf(body, "%s %s = (%s)__scrut%s%s;\n",
                                            ctype, bname, ctype, acc, mp);
                             } else if (emit_type_is_byvalue_adt(ctx, fb->type)) {
-                                /* B3: a by-value ADT field stored boxed (int64 heap
-                                 * pointer) in a carrier slot -- unbox by deref. */
-                                buf_printf(body,
-                                    "%s %s = *(%s *)(intptr_t)(__scrut%s%s);\n",
-                                    ctype, bname, ctype, acc, mp);
+                                if (scrut_is_app_monomorph &&
+                                    !emit_type_is_wide_byval_adt(ctx, fb->type)) {
+                                    /* nested-carrier-match: in a monomorph-app
+                                     * scrutinee a non-wide by-value ADT field
+                                     * (e.g. `(Pair2 int int)`) is stored INLINE as
+                                     * the aggregate, exactly as the typedef emitter
+                                     * lays it out (!type_is_wide_byval_adt ->
+                                     * aggregate, not int64).  Read it directly -- a
+                                     * deref / intptr_t cast of an aggregate is
+                                     * invalid C. */
+                                    buf_printf(body, "%s %s = __scrut%s%s;\n",
+                                               ctype, bname, acc, mp);
+                                } else {
+                                    /* B3: a by-value ADT field stored boxed (int64
+                                     * heap pointer) in a carrier / GADT slot --
+                                     * unbox by deref. */
+                                    buf_printf(body,
+                                        "%s %s = *(%s *)(intptr_t)(__scrut%s%s);\n",
+                                        ctype, bname, ctype, acc, mp);
+                                }
                             } else {
                                 buf_printf(body, "%s %s = (%s)__scrut%s%s;\n",
                                            ctype, bname, ctype, acc, mp);
@@ -8062,9 +8082,24 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                 buf_printf(body, "%s %s = (%s)__scrut->%s;\n",
                                            ctype, bname, ctype, mp);
                             } else if (emit_type_is_byvalue_adt(ctx, fb->type)) {
-                                buf_printf(body,
-                                    "%s %s = *(%s *)(intptr_t)(__scrut->%s);\n",
-                                    ctype, bname, ctype, mp);
+                                if (scrut_is_app_monomorph &&
+                                    !emit_type_is_wide_byval_adt(ctx, fb->type)) {
+                                    /* nested-carrier-match: in a monomorph-app
+                                     * scrutinee a non-wide by-value ADT field
+                                     * (e.g. `(Pair2 int int)`) is stored INLINE as
+                                     * the aggregate, exactly as the typedef emitter
+                                     * lays it out -- read it directly; a deref /
+                                     * intptr_t cast of an aggregate is invalid C. */
+                                    buf_printf(body, "%s %s = __scrut->%s;\n",
+                                               ctype, bname, mp);
+                                } else {
+                                    /* B3: a by-value ADT field stored boxed (int64
+                                     * heap pointer) in a carrier / GADT slot --
+                                     * unbox by deref. */
+                                    buf_printf(body,
+                                        "%s %s = *(%s *)(intptr_t)(__scrut->%s);\n",
+                                        ctype, bname, ctype, mp);
+                                }
                             } else {
                                 buf_printf(body, "%s %s = (%s)__scrut->%s;\n",
                                            ctype, bname, ctype, mp);

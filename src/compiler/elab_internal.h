@@ -1151,6 +1151,12 @@ bool defstruct_lowers_to_adt(Elab *e, const Form *call);
 bool elab_adt_type_extract_args(const Type *t, const AdtDef *def, Type *out_args);
 Type adt_field_instantiate_type(Elab *e, const AdtDef *def, const Type *t,
                                 const Type *type_args);
+/* Grounds a record-ADT ctor's type params (named in `tps`) by unifying each
+ * declared field full_type against the supplied value's actual type, descending
+ * into TY_APP/TY_FN fields.  Inference only -- a concrete field never fails. */
+bool adt_field_collect_type_args(const char **tps, uint8_t n_tps,
+                                 const Type *expected, Type actual,
+                                 Type *type_args, bool *have_type_args);
 TypeKind gadt_skolem_lookup(const SkolemEnv *env, const char *name);
 Expr *elab_defgadt(Elab *e, const Form *call);
 Expr *elab_coerce(Elab *e, const Form *call);

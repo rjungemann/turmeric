@@ -1274,7 +1274,11 @@ Type substitute_adt_app_type_owned(const Type *t, const AdtDef *def,
 static const char *adt_field_c_type(const AdtDef *owner, const CtorField *field,
                                      const Type *args) {
     if (field->full_type && owner && args) {
-        Type resolved = substitute_adt_app_type(field->full_type, owner, args);
+        /* nested-carrier-match: use the OWNED substitution (deep-cloned spine)
+         * and release it before returning -- type_c_name interns the app name, so
+         * the returned string outlives the freed Type.  The plain aliasing variant
+         * leaked the malloc'd TY_APP spine here for every concrete app field. */
+        Type resolved = substitute_adt_app_type_owned(field->full_type, owner, args);
         /* CONV-S1 seam 4 (graduation): a lowered carrier-helper-backed parametric
          * stdlib type (`Result`/`Option`) whose monomorph field resolves to a
          * non-parametric value-struct stores it as a HEAP POINTER `T *`, exactly
@@ -1296,9 +1300,12 @@ static const char *adt_field_c_type(const AdtDef *owner, const CtorField *field,
             resolved.as.struct_.def->n_type_params == 0) {
             static char ptrbuf[128];
             snprintf(ptrbuf, sizeof(ptrbuf), "%s *", type_c_name(resolved));
+            free_struct_app_type(resolved);
             return ptrbuf;
         }
-        return type_c_name(resolved);
+        const char *nm = type_c_name(resolved);
+        free_struct_app_type(resolved);
+        return nm;
     }
     switch (field->kind) {
         case TY_INT:      return "int64_t";
@@ -1610,11 +1617,12 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             const CtorField *fld = &ctor->fields[fi];
             Type fres = (fld->full_type && def)
-                ? substitute_adt_app_type(fld->full_type, def, args)
+                ? substitute_adt_app_type_owned(fld->full_type, def, args)
                 : type_simple(TY_UNKNOWN, CK_COPY);
             const char *ctype = type_is_wide_byval_adt(fres)
                 ? "int64_t"
                 : adt_field_c_type(def, fld, args);
+            free_struct_app_type(fres);
             char *fname = mangle_field_name(fld->name);
             buf_printf(out, "    %s %s;\n", ctype, fname);
             free(fname);
@@ -1646,11 +1654,12 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
              * bridge.  A <= 8 byte by-value ADT (slice 1) still stores inline. */
             const CtorField *fld = &ctor->fields[fi];
             Type fres = (fld->full_type && def)
-                ? substitute_adt_app_type(fld->full_type, def, args)
+                ? substitute_adt_app_type_owned(fld->full_type, def, args)
                 : type_simple(TY_UNKNOWN, CK_COPY);
             const char *ctype = type_is_wide_byval_adt(fres)
                 ? "int64_t"
                 : adt_field_c_type(def, fld, args);
+            free_struct_app_type(fres);
             buf_printf(out, " %s _%u;", ctype, fi);
         }
         buf_printf(out, " } %s;\n", mctor);
@@ -1704,10 +1713,11 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             const CtorField *fld = &ctor->fields[fi];
             Type fres = (fld->full_type && def)
-                ? substitute_adt_app_type(fld->full_type, def, args)
+                ? substitute_adt_app_type_owned(fld->full_type, def, args)
                 : type_simple(TY_UNKNOWN, CK_COPY);
             val_ctype[fi] = adt_field_c_type(def, fld, args);
             wide_box[fi] = type_is_wide_byval_adt(fres);
+            free_struct_app_type(fres);
         }
 
         /* CONV-S1 seam 3: a :heap monomorph ctor mallocs the by-value header and
@@ -2973,8 +2983,9 @@ bool adt_app_byval_pass_by_ptr(Type t) {
     for (uint32_t i = 0; i < c->n_fields; i++) {
         TypeKind k = c->fields[i].kind;
         if (c->fields[i].full_type) {
-            Type rf = substitute_adt_app_type(c->fields[i].full_type, def, args);
+            Type rf = substitute_adt_app_type_owned(c->fields[i].full_type, def, args);
             k = rf.kind;
+            free_struct_app_type(rf);
         }
         total += adt_field_size_bytes(k);
     }
@@ -3037,11 +3048,13 @@ bool adt_app_is_byvalue_product(Type t) {
     const CtorDef *c = def->ctors[0];
     for (uint32_t i = 0; i < c->n_fields; i++) {
         if (!c->fields[i].full_type) continue;          /* scalar storage -- by value */
-        Type rf = substitute_adt_app_type(c->fields[i].full_type, def, args);
+        Type rf = substitute_adt_app_type_owned(c->fields[i].full_type, def, args);
         TypeKind k = rf.kind;
-        if (k == TY_TYVAR || k == TY_FORALL || k == TY_EXISTS) return false;
-        if (k == TY_APP && !type_has_concrete_codegen_layout(&rf) &&
-            !(def->is_heap && adt_app_is_byvalue_product(rf))) return false;
+        bool bad = (k == TY_TYVAR || k == TY_FORALL || k == TY_EXISTS) ||
+                   (k == TY_APP && !type_has_concrete_codegen_layout(&rf) &&
+                    !(def->is_heap && adt_app_is_byvalue_product(rf)));
+        free_struct_app_type(rf);
+        if (bad) return false;
     }
     return true;
 }
