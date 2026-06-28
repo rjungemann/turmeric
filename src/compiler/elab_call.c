@@ -2116,6 +2116,19 @@ Expr *elab_call(Elab *e, Form *call) {
         if (ctor) {
             /* Use elab_call_fn but fix up the result type after */
             Expr *call_expr = elab_call_fn(e, call, fn_binding);
+            /* struct-curry-ctor: an UNDER-APPLIED constructor call partial-applies
+             * into a closure (elab_call_fn -> elab_partial_apply, result type
+             * TY_PTR_VOID) that completes to the ADT.  The result-type patch and
+             * the per-field consistency/size-index fixups below assume a saturated
+             * ctor call; running them on a closure would stamp the partial app as
+             * the full ADT (so `((Person "Ada") 36)` saw `(Person "Ada")` as a
+             * non-callable Person).  Detect the partial app by arity and return
+             * the closure untouched. */
+            if (call_expr &&
+                (call->as.list.len - 1u) < ctor->n_fields &&
+                call_expr->type.kind != TY_ADT && call_expr->type.kind != TY_APP) {
+                return call_expr;
+            }
             if (call_expr) {
                 /* Patch result type with proper AdtDef pointer */
                 call_expr->type = type_adt(ctor->adt);
@@ -2700,11 +2713,29 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
      * value -- a hard C compile error ("returning Person but int64_t expected").
      * The thunk is invoked through its typed `tur_thunk_<R>_..._t` slot, so a
      * by-value struct return round-trips correctly with no boxing. */
-    Type body_result_type = (fn_type.as.fn.result_full_type &&
-                             (fn_type.as.fn.result_full_type->kind == TY_STRUCT ||
-                              fn_type.as.fn.result_full_type->kind == TY_ADT))
-                            ? *fn_type.as.fn.result_full_type
-                            : type_from_kind(result_kind);
+    /* struct-curry-ctor: a partial application of a record-ADT CONSTRUCTOR.  A
+     * ctor binding carries result_kind TY_ADT but NO result_full_type (the
+     * direct-call path patches the AdtDef in after elab_call_fn).  Without it
+     * the CURRY-V1 logic below would type the thunk body / completion as a
+     * def-less TY_ADT, so the completed value's `.field` access cannot resolve
+     * the AdtDef.  Recover the ctor's def and stamp a synthetic full ADT result
+     * type so the thunk and its completion carry it.  (The thunk body's inner
+     * ctor call still emits `ctor_Name` because the ORIGINAL ctor binding has no
+     * result_full_type -- the emit ctor-branch gate stays satisfied.) */
+    CtorDef *pap_ctor = (!fn_is_closure && result_kind == TY_ADT)
+        ? elab_lookup_ctor(e, fn_binding->name) : NULL;
+    Type *ctor_result_full = NULL;
+    if (pap_ctor && pap_ctor->adt) {
+        ctor_result_full = (Type *)arena_alloc(e->arena, sizeof(Type));
+        *ctor_result_full = type_adt(pap_ctor->adt);
+    }
+    Type body_result_type =
+        ctor_result_full ? *ctor_result_full :
+        ((fn_type.as.fn.result_full_type &&
+          (fn_type.as.fn.result_full_type->kind == TY_STRUCT ||
+           fn_type.as.fn.result_full_type->kind == TY_ADT))
+            ? *fn_type.as.fn.result_full_type
+            : type_from_kind(result_kind));
     Expr *inner_call = expr_new(e->arena, EX_CALL, body_result_type, call->span);
     inner_call->as.call_.fn_binding = fn_binding;
     inner_call->as.call_.args = call_args;
@@ -2762,6 +2793,10 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
     }
     if (fn_type.as.fn.result_full_type) {
         thunk_type.as.fn.result_full_type = fn_type.as.fn.result_full_type;
+    } else if (ctor_result_full) {
+        /* struct-curry-ctor: carry the recovered ADT result on the thunk so the
+         * completed closure's value type resolves `.field` access. */
+        thunk_type.as.fn.result_full_type = ctor_result_full;
     }
 
     /* Thunk binding (global) */
