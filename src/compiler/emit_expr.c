@@ -586,6 +586,47 @@ static bool field_read_emits_byvalue_aggregate(EmitCtx *ctx, const Expr *e) {
  * derive-decode-struct seam).  An `if` is by-value when EITHER branch is (the
  * two branches must agree in representation anyway; a mismatch is a separate
  * bug, and suppressing the deref is the safe direction). */
+/* CONV-S1 seam 4 (bounded-wrapper struct return): true (writing the by-value
+ * type to *out_ty) when `call` directly targets a callee that EMITS a by-value
+ * concrete aggregate return -- a lowered defstruct / non-parametric record-ADT
+ * (e.g. `Pos`/`Vel`), mirroring emit_fns.c's typed_byval_adt / typed_struct
+ * signature decision.  A bounded typeclass wrapper's carrier base
+ * (`any-get [S E] [(StorageOps S E)] ... : E`) bakes one concrete instance
+ * method (`__inst_StorageOps_sop_hyget_Sparse_tyvarVel`) whose inline-C body
+ * returns `tur_adt_Vel` BY VALUE, while the base's own C return is the int64
+ * carrier -- so the base must spill that aggregate into the carrier on return.
+ * Neither the matched-spec branch nor the carrier-ABI gate in
+ * expr_emits_byvalue_carrier_abi catches it (the base carries no abi spec, and a
+ * lowered defstruct is not carrier-ABI), so detect the callee's by-value
+ * aggregate result directly.  Scoped to the return-bridge tail predicates so the
+ * general by-value-producer classification is unchanged. */
+static bool call_emits_byval_concrete_aggregate(EmitCtx *ctx, const Expr *call,
+                                                Type *out_ty) {
+    if (!call || call->kind != EX_CALL) return false;
+    const Binding *fb = call->as.call_.fn_binding;
+    if (!fb || fb->type.kind != TY_FN || !fb->type.as.fn.result_full_type)
+        return false;
+    /* Scope to a typeclass INSTANCE-METHOD callee (the same `__inst_` prefix
+     * fn_body_tail_is_carrier_producer keys on).  A bounded wrapper's carrier
+     * base bakes such a call; an ordinary recursive closure self-call (e.g. a
+     * letrec `go` returning a by-value struct) must NOT trigger the carrier
+     * return spill -- its enclosing return is the by-value aggregate, not the
+     * int64 carrier, and broadening to all by-value-aggregate calls perturbed
+     * that path. */
+    if (!fb->name || !fb->name->name ||
+        strncmp(fb->name->name, "__inst_", 7) != 0)
+        return false;
+    Type r = emit_resolve_type(ctx, *fb->type.as.fn.result_full_type);
+    bool byval_aggr =
+        (r.kind == TY_ADT || r.kind == TY_APP || r.kind == TY_STRUCT) &&
+        !type_uses_carrier_abi(r) &&
+        !type_is_heap_struct(r) && !type_is_heap_adt(r) &&
+        type_has_concrete_codegen_layout(&r) &&
+        strcmp(emit_type_c_name(ctx, r), "int64_t") != 0;
+    if (byval_aggr && out_ty) *out_ty = r;
+    return byval_aggr;
+}
+
 bool fn_body_tail_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
     if (!e) return false;
     switch (e->kind) {
@@ -603,6 +644,8 @@ bool fn_body_tail_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
         case EX_LETREC:
             return fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.let_.body);
         default:
+            if (call_emits_byval_concrete_aggregate(ctx, e, NULL))
+                return true;
             return expr_emits_byvalue_carrier_abi(ctx, e);
     }
 }
@@ -701,6 +744,13 @@ Type fn_body_tail_byvalue_carrier_type(EmitCtx *ctx, const Expr *e) {
                 strcmp(emit_type_c_name(ctx, sr), "int64_t") != 0)
                 return sr;
         }
+        /* CONV-S1 seam 4 (bounded-wrapper struct return): the body tail is a
+         * direct call to a concrete instance method whose by-value aggregate
+         * result (`Pos`/`Vel`) the carrier base must spill into its int64
+         * return.  See call_emits_byval_concrete_aggregate. */
+        Type bv;
+        if (call_emits_byval_concrete_aggregate(ctx, x, &bv))
+            return bv;
     }
     return unknown;
 }
@@ -2875,6 +2925,22 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         free(raw);
                         raw = strdup(cast.data);
                         buf_free(&cast);
+                    } else if (emit_type_is_wide_byval_adt(ctx,
+                                   e->as.call_.args[i]->type)) {
+                        /* B4 (letrec self-recursive carrier struct return): a WIDE
+                         * by-value ADT arg (a lowered :copy struct > 8 bytes, e.g.
+                         * `Box{lo hi}`) crosses into the thunk's closure param as
+                         * the int64 box-pointer carrier -- emit_fns.c /
+                         * emit_module.c declare such a param `int64_t
+                         * __tur_b4box_<name>` and the thunk deref+copies it back.
+                         * Heap-box the aggregate here so the call matches that
+                         * carrier ABI; passing the raw `tur_adt_Box` into the
+                         * int64_t slot is an incompatible-type cc error.  Affects
+                         * both the closure's own recursive self-call and the
+                         * enclosing letrec's direct invocation. */
+                        raw = emit_carrier_bridge_escaping(ctx, body, raw,
+                                  CK_CONCRETE, CK_CARRIER,
+                                  emit_resolve_type(ctx, e->as.call_.args[i]->type));
                     }
                     arg_strs[i + 1] = raw;
                 }
@@ -3857,6 +3923,36 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         raw = emit_carrier_bridge(ctx, body, raw,
                                                   CK_CONCRETE, CK_CARRIER,
                                                   emit_arg->type);
+                    }
+                }
+                /* CONV-S1 (seam-4): the non-parametric counterpart of the TY_APP
+                 * block above.  A by-value NON-parametric lowered-ADT argument (a
+                 * lowered `defstruct`, e.g. `tur_adt_Pos`) passed to a generic
+                 * carrier (int64) parameter -- a tyvar slot of an inline-C or
+                 * unspecialised generic helper (`__set-raw [A] [v : A]` ->
+                 * `_un_unset_hyraw(int64_t)`) -- must be boxed (spill + address-of +
+                 * cast) the same way the TY_APP monomorph is.  emit_type_is_byvalue_
+                 * adt covers TY_APP too, which the block above already handled, so
+                 * resolve the arg's concrete type and restrict to the bare TY_ADT
+                 * case here.  The param kind must be a genuine polymorphic carrier
+                 * slot (TY_TYVAR/FORALL/EXISTS); a concrete by-value ADT param
+                 * (pk==TY_ADT emitted by value) takes the aggregate directly and is
+                 * excluded.  A matched concrete spec resolves the param to the real
+                 * C type and carries its own bridges, so it is excluded. */
+                if (!needs_fn_cast && !matched_spec &&
+                    fn_binding->type.kind == TY_FN && emit_arg) {
+                    Type rarg = emit_resolve_type(ctx, emit_arg->type);
+                    if (rarg.kind == TY_ADT && emit_type_is_byvalue_adt(ctx, rarg)) {
+                        uint8_t n_fnparams = fn_binding->type.as.fn.arity;
+                        uint8_t param_idx = (i < n_fnparams) ? (uint8_t)i
+                            : (uint8_t)(n_fnparams > 0 ? n_fnparams - 1 : 0);
+                        TypeKind pk = fn_binding->type.as.fn.arg_kinds[param_idx];
+                        if ((pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS) &&
+                            (fn_binding->body_is_inline_c || !matched_spec)) {
+                            raw = emit_carrier_bridge(ctx, body, raw,
+                                                      CK_CONCRETE, CK_CARRIER,
+                                                      rarg);
+                        }
                     }
                 }
                 /* ACB (KB-004): when a specialized call expects a concrete aggregate
@@ -5766,6 +5862,26 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * `.value`; a tagged/positional ADT reads `.as.<Ctor>._N`. */
                 char *mp = adt_field_member_path(adt, ctor, e->as.get_field_.field_idx);
                 const char *cty = type_c_name(e->type);
+                /* CONV-S1 seam 4 (fn-field carrier read): a lowered record-ADT
+                 * stores a `fn` field -- bare OR fully-typed -- as the int64
+                 * carrier (the signature feeds type checking, never layout; the
+                 * capability call specialises the function-pointer type from the
+                 * call's arg/result types via the intptr_t-cast path).  But
+                 * type_c_name(TY_FN) returns the fn's RESULT C name (a bare
+                 * function reference convention), so a sub-word result type
+                 * (`(fn [int32] int32)`) yields `int32_t` -- and casting the int64
+                 * carrier field through `(int32_t)` TRUNCATES the function pointer
+                 * to 32 bits, jumping to a wild address at the call.  An int-result
+                 * fn happens to dodge this (cty == int64_t, an identity cast), which
+                 * is why only sub-word fn fields segfaulted.  Read the carrier at
+                 * its real storage width (int64_t) regardless of the fn's result
+                 * width; the EX_CALL fn_expr path re-specialises the pointer to the
+                 * concrete arg/result signature.  Both the outer `cty` and the
+                 * spec-recovery `fld_rcty` derive from the same truncating
+                 * type_c_name, so force the carrier width below once fld_rcty is in
+                 * hand. */
+                bool fn_carrier_field = (e->type.kind == TY_FN);
+                if (fn_carrier_field) cty = "int64_t";
                 /* CONV-S1 seam 4 (accessor-unbox): inside an ABI spec a generic
                  * accessor reads a TYPE-ERASED field (`(.snd t)` over `(Tuple2 A
                  * B)`).  e->type collapsed the field's tyvar to the int64 carrier
@@ -5827,6 +5943,12 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
                 }
                 const char *fld_rcty = emit_type_c_name(ctx, fld_rty);
+                /* fn-field carrier read (above): the fn field is the int64 carrier,
+                 * so the spec-recovery cast width is int64_t, not the fn's
+                 * (possibly sub-word) result C name.  Forcing it here keeps the
+                 * eff_fld_rcty / field_byval_unbox paths from re-introducing the
+                 * truncating cast. */
+                if (fn_carrier_field) fld_rcty = "int64_t";
                 bool field_byval_unbox =
                     cty && strcmp(cty, "int64_t") == 0 &&
                     fld_rcty && strcmp(fld_rcty, "int64_t") != 0 &&

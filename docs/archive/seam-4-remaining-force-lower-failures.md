@@ -1,5 +1,30 @@
 # seam-4 (defstruct-as-defadt): remaining force-lower failures
 
+> **RESOLVED.** All five documented roots now pass under the `TUR_FORCE_LOWER`
+> probe (`--enable=defstruct-as-defadt`):
+>
+> 1. `defopaque-struct-payload-through-unsafe-lift` -- fixed (box the by-value
+>    lowered-ADT arg to the int64 carrier at a carrier-ABI helper call site).
+> 2. `fn-field-unboxed` -- fixed (read a lowered record-ADT `fn` field at its
+>    int64 carrier width, not the fn's sub-word result width, before the call's
+>    pointer re-specialisation).
+> 3. `letrec-self-recursive-carrier-struct-return` -- fixed (heap-box a wide
+>    by-value ADT arg into the closure thunk's `__tur_b4box_*` carrier param).
+> 5. `typeclass-bounded-wrapper-heterogeneous-dispatch` -- fixed (spill an
+>    instance method's by-value aggregate return into the bounded wrapper carrier
+>    base's int64 return).
+>
+> 4. `result-over-struct-with-option-field-typedef-order` was already resolved by
+>    the landed seam-4 PR (#570) before this pass; it passes as-is.
+>
+> All fixes live in `src/compiler/emit_expr.c`; the default by-value suite stays
+> `1862 passed, 0 failed`. A probe-only force-lower sweep over the 182
+> lowering-exercising fixtures went from 15 -> 11 failures with these changes (a
+> strict subset, no new failures); the remaining 11 are pre-existing on the
+> probe-only baseline and are NOT among these five (several are probe artifacts
+> -- effect/capability `defdata` fixtures the real `--enable` gate never lowers).
+> See `docs/archive/history/seam-4-remaining-force-lower-failures.md`.
+
 **Severity:** medium (force-lower only; the default by-value path is unaffected
 -- default suite is 1863/0). Each is exercised by running the named fixture
 under the `TUR_FORCE_LOWER` probe in `defstruct_lowers_to_adt`
