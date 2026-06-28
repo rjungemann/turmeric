@@ -333,14 +333,22 @@ static inline bool adt_is_flat_product(const AdtDef *def) {
  * (`opts.name`, `sizeof(<Name>)`, `(<Name> *)p`) compile unchanged once the
  * struct lowers to an ADT -- the central inline-C-ABI graduation blocker.
  *
- * Restricted to NON-parametric records: a parametric record has no single
- * monomorphic C type for inline-C to name, so its monomorphs (types.c) keep the
- * positional `as.<Ctor>._N` layout.  The memory layout is byte-identical to the
- * old nested form for a single variant, so the two are interchangeable in
- * memory; only the C member-access spelling differs, and every generated access
- * site switches together via adt_field_member_path (emit_core.c). */
+ * Extended to PARAMETRIC records (CONV-S1 seam 4, keystone): a parametric
+ * single-variant record (the lowered `(defstruct Vec [A] ...)` / `(defstruct
+ * Tuple3 [A B C] ...)`, and a hand-written `(defdata Box [A] (Box [v : A]))`)
+ * now uses the same named layout -- BOTH the generic base `tur_adt_<Name>` and
+ * each monomorph `tur_adt_<Name>__<args>` carry the record's real field names
+ * (`{ T data; ... }`) instead of the positional `union { struct { T _0; ... }
+ * <Ctor>; } as;` wrapper.  This is what makes user / stdlib inline-C that reads
+ * a `(Vec A)` / `(Tuple3 ...)` by its field names (`v->len`, `t.e1`) compile
+ * against the lowered monomorph.  The memory layout is byte-identical to the old
+ * nested form for a single variant, so it is interchangeable in memory; only the
+ * C member-access spelling differs, and every generated access site switches
+ * together via adt_field_member_path (emit_core.c) -- the typedef (emit_module.c
+ * base, types.c monomorph), the ctor stores, field reads, and match binds all
+ * key off this one predicate. */
 static inline bool adt_uses_named_layout(const AdtDef *def) {
-    if (!def || def->n_ctors != 1 || def->is_gadt || def->n_type_params != 0)
+    if (!def || def->n_ctors != 1 || def->is_gadt)
         return false;
     const CtorDef *c = def->ctors[0];
     if (!c || !c->is_record || c->n_fields == 0) return false;

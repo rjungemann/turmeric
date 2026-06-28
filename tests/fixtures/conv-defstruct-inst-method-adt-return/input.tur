@@ -1,0 +1,37 @@
+;; conv-defstruct-inst-method-adt-return -- with --enable=defstruct-as-defadt a
+;; defstruct (Box) lowers to a record ADT.  A typeclass method declared to return
+;; the class variable (`decode [n] : a`), instantiated for the PARAMETRIC Box,
+;; has a bare-parametric ADT result with a NULL result_full_type (the
+;; non-parametric by-value branch in elab_typeclasses.c does not fire).  Called
+;; explicitly by its `__inst_` mangled name -- the return-type-polymorphic idiom
+;; (cf. stdlib Serializable's `deserialize`, serial-composite-instances) -- it
+;; must NOT be mis-emitted as `ctor___inst_...` (an undefined symbol -> link
+;; error): an instance method is a dispatch function, never an ADT constructor.
+;;
+;; The instance body is inline-C returning the int64 carrier and the result is
+;; read back through an int64-carrier inline-C accessor, exactly as
+;; serial-composite-instances marshals Pair/Option -- `(decode b)` is return-type
+;; polymorphic so it is dispatched by the resolved `__inst_` name.
+
+(defstruct Box [A] (val : A))
+
+(defclass Makeable [a]
+  (decode [n : int] : a))
+
+(definstance Makeable [Box]
+  (decode [n]
+    ```c
+    struct { int64_t v; } *p = malloc(sizeof(*p));
+    if (!p) { fprintf(stderr, "decode Box: oom\n"); exit(1); }
+    p->v = n;
+    return (int64_t)(intptr_t)p;
+    ```))
+
+;; read the single int64 carrier field of a decoded Box
+(defn rd-box [c : int] : int
+  ```c struct { int64_t v; } *p = (void*)(intptr_t)c; return p ? p->v : -1; ```)
+
+(defn main [] : int
+  (let [b (__inst_Makeable_decode_Box 42)]
+    (println (rd-box b)))             ;; 42
+  0)

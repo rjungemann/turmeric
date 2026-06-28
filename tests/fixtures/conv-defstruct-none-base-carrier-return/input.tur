@@ -1,0 +1,18 @@
+;; conv-defstruct-none-base-carrier-return -- with --enable=defstruct-as-defadt
+;; the stdlib Option lowers to a record ADT.  A construct (`(some x)` / `(none)`)
+;; ascribed back to the carrier (`:int`) inside a function whose C return is the
+;; int64 carrier builds the by-value monomorph `ctor_Option__int` in its body.
+;; Without the fix that aggregate is returned straight into the int64 return slot
+;; ("incompatible types returning tur_adt_Option__int but int64_t expected"); the
+;; M5 return bridge must heap-spill it to the carrier so the carrier accessors
+;; (`unwrap-or-carrier`) read it back.  Flag-on companion of positional-opaque-ok.
+
+;; carrier-returning helpers whose body is a by-value Option monomorph construct.
+(defn opt-some [x : int] : int (:: (some x) :int))
+(defn opt-none []        : int (:: (none)   :int))
+
+(defn main [] : int
+  (println (unwrap-or-carrier (opt-some 42) 0))   ;; 42  (some path)
+  (println (unwrap-or-carrier (opt-none) 99))     ;; 99  (none short-circuit)
+  (println (unwrap-or-carrier (opt-some 7) 0))    ;; 7
+  0)

@@ -591,6 +591,75 @@ runtime *usage* seam, below.
      regenerated.  *Cleared ~43* (`httpd-*`, `clone-*`, `eqmap-struct`, the `Pos`
      `typeclass-*` tests).  Fixture `conv-defstruct-inline-c-abi`.
 
+   - **Named parametric-monomorph layout (keystone) DONE (2026-06-28).**  A
+     parametric single-variant record's MONOMORPH (`tur_adt_Vec__int`,
+     `tur_adt_Tuple3__int__int__int`) was emitted with the positional
+     `union { struct { T _0; } <Ctor>; } as;` wrapper, so hand-written / stdlib
+     inline-C that reads the value by its real field names -- a `(Tuple3 ...)`
+     callee's `t.e1`, a `#fx{ByVal}` `(Vec A)` accessor's `v->len`/`v->data` --
+     failed to compile against the lowered monomorph (`'tur_adt_Tuple3__...' has
+     no member named 'e1'`).  Extended `adt_uses_named_layout` (types.h) to admit
+     PARAMETRIC single-variant records, so BOTH the generic base (emit_module.c)
+     and each monomorph (types.c `emit_registered_adt_app_rec`) carry the
+     record's real field names, and every store/read/match site stays in lockstep
+     through the one `adt_field_member_path` helper (the monomorph ctor stores now
+     route through it too).  The parametric inline-C compat typedef is skipped
+     when named layout applies (the surface alias supersedes it, avoiding a
+     `<Name>` double-def).  Paired with accepting a lowered `TY_ADT` head in the
+     `#fx{ByVal}` per-receiver spec-mint gate (emit_module.c) so the marker's
+     named typed-pointer spec is minted and the int64-carrier base suppressed.
+     Byte-identical memory layout -> zero flag-off snapshot drift (default suite
+     stays 1863/0; the named layout never fired for hand-written parametric
+     records because none are single-variant-record style).  Cleared
+     `tuplen-struct-param-passing` and `m5-byval-marker-spec-emit` (11 -> 9 unique
+     build-failing fixtures under force-lower).  Fixture
+     `conv-defstruct-named-monomorph-layout` (by-value TupleN-shape field access +
+     `#fx{ByVal}` Vec accessor, flag-on parity).
+
+   - **none()-base carrier return + by-value-spec carrier return DONE
+     (2026-06-28).**  Two return-direction crossings where a lowered by-value
+     record-ADT value is the tail of a function whose C return is the int64
+     carrier, each a cc error ("incompatible types returning
+     tur_adt_Option__<X> but int64_t expected"):
+     (1) the GENERIC carrier base of a construct template -- `none()` whose body
+     `(Option false (default-of A))` emits the by-value monomorph `ctor_Option__A`
+     aggregate -- and (2) a carrier-context construct via a by-value SPEC --
+     `(:: (some x) :int)` in a `: int` fn emitting `some__spec__...Option__int`.
+     Both are now detected by the return-tail walkers (`fn_body_tail_emits_byvalue
+     _carrier_abi` / `fn_body_tail_byvalue_carrier_type`, emit_expr.c) so the
+     existing M5 concrete->carrier return spill (emit_fns.c, the
+     `ret_is_int64_carrier` branch) heap-spills the aggregate to the carrier.  Two
+     new return-SCOPED helpers: `call_construct_emits_byval_aggregate` (an
+     unrecorded ADT-ctor call whose concrete app result is a by-value aggregate,
+     matching the EX_CALL ctor suffix gate) and `call_spec_result_byval_aggregate`
+     (a matched by-value spec result) -- deliberately NOT wired into the
+     broadly-used `expr_emits_byvalue_carrier_abi` (whose carrier-ABI gate keeps
+     arg-position bridges unaffected).  Inert at default (Option/Result are structs
+     there, no by-value monomorph / by-value spec).  Cleared
+     `positional-opaque-ok`, `positional-pap-opaque-ok`, `kleisli-arrow-instance`,
+     `typeclass-return-dispatch-result-wrapped` (9 -> 5 unique build-failing
+     fixtures under force-lower).  Fixture
+     `conv-defstruct-none-base-carrier-return` (carrier-ascribed `some`/`none`,
+     flag-on parity).
+
+   - **Instance-method ADT return mis-emitted as a constructor DONE
+     (2026-06-28).**  A typeclass instance method whose declared result is the
+     class variable resolved to a PARAMETRIC struct (`Serializable [Pair]`'s
+     `deserialize : Bytes -> Pair`) is called explicitly by its `__inst_` mangled
+     name (the return-type-polymorphic idiom).  At default `Pair` is a struct so
+     the method's `result_kind` is TY_STRUCT and the N-arg ctor-emit gate
+     (`result_kind == TY_ADT && !result_full_type`) skipped it; under the lowering
+     `Pair` is an ADT, and a bare *parametric* ADT return keeps `result_full_type`
+     NULL (the non-parametric by-value branch in elab_typeclasses.c does not fire),
+     so the call mis-emitted as `ctor___inst_Serializable_deserialize_Pair` -- an
+     undefined symbol (link error).  Fix: the N-arg ctor-emit gate (emit_expr.c)
+     now excludes an `__inst_`-prefixed callee -- an instance method is a dispatch
+     function, never an ADT constructor.  (`call_.ctor` is not a usable
+     discriminator: it is NULL for a curried/partially-applied ctor completion
+     too, so requiring it broke `struct-curry-ctor`.)  Default suite 1865/0.
+     Cleared `serial-composite-instances` (5 -> 4 build blockers).  Fixture
+     `conv-defstruct-inst-method-adt-return`.
+
    **Running total: 212 -> 25 unique build-failing fixtures under force-lower
    (default suite stays 1862/0).**  (Sub-root (a) -- 0-arg construct in control
    flow -- the inline-C-tail return bridge, the accessor-unbox, the
@@ -1030,11 +1099,16 @@ read, and the four most recent carrier<->by-value crossings cleared by PR #571
 (non-parametric by-value-ADT arg boxing, `fn`-field int64 carrier width,
 wide-by-value -> closure-thunk carrier heap-box, bounded-wrapper -> concrete
 aggregate-return tail bridge).
-The force-lower probe is down from **212 to 25 unique build-failing fixtures
-(~88% cleared)** as of 2026-06-27 (PR #571).  The dominant remaining cluster
-is still the by-value-aggregate <-> int64-carrier **ABI bridge** family at the
-remaining crossing sites, alongside ~22 runtime/link mismatches and smaller
-ctor-selection / parametric inline-C edges.  Driving the remaining clusters
-to zero (promote each to a flag-on fixture + fix) is the gating work before
-the experiment can graduate.  Runway: experiment `expires_at` is `0.30.0`
-(current `VERSION` is `0.25.5`).
+The force-lower probe is down to **4 unique build-failing fixtures** (plus 2
+stdout mismatches) as of 2026-06-28, after the named parametric-monomorph layout
+keystone cleared `tuplen-struct-param-passing` + `m5-byval-marker-spec-emit`, the
+none()-base / by-value-spec carrier-return bridges cleared `positional-opaque-ok`,
+`positional-pap-opaque-ok`, `kleisli-arrow-instance`, and
+`typeclass-return-dispatch-result-wrapped`, and the instance-method ADT-return
+ctor-misemit fix cleared `serial-composite-instances`.  The remaining 4 build
+blockers, by root: the `Option__opaque` specialization (`hkt-ap-fn-in-container`,
+`hkt-stdlib-option-result-instances`); the by-value embed typedef ordering
+(`result-over-struct-with-option-field-typedef-order`); and the stdlib/user `Cons`
+C-name collision (`adt-recursive`).  Driving these to zero (promote each to a
+flag-on fixture + fix) is the gating work before the experiment can graduate.
+Runway: experiment `expires_at` is `0.30.0` (current `VERSION` is `0.25.5`).
