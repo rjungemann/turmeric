@@ -125,7 +125,7 @@ Expr *elab_coerce_to_any(Elab *e, Expr *value) {
     memset(&any_type, 0, sizeof(any_type));
     any_type.kind = TY_ANY;
     Expr *inject = expr_new(e->arena, EX_UNION_INJECT, any_type, value->span);
-    inject->as.union_inject_.tag_idx = (int64_t)value->type.kind;
+    inject->as.union_inject_.tag_idx = (int64_t)any_box_tag_for_type(&value->type);
     inject->as.union_inject_.value = value;
     inject->as.union_inject_.box_struct =
         (value->type.kind == TY_STRUCT) ? value->type.as.struct_.def : NULL;

@@ -1105,7 +1105,13 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
             dd_items[ddn++] = type_param_vec_form;  /* original [A B ...] vec, kinds intact */
         dd_items[ddn++] = ctor_form;
         Form *dd_form = form_list(e->arena, call->span, dd_items, ddn);
-        return elab_defdata(e, dd_form);
+        Expr *dd_out = elab_defdata(e, dd_form);
+        /* Mark the synthesized AdtDef as struct-origin so consumers that must
+         * keep the lowering invisible (runtime type-of/cast/is?) can treat it
+         * as the struct it came from. */
+        if (dd_out && dd_out->kind == EX_DEFDATA && dd_out->as.defdata_.def)
+            dd_out->as.defdata_.def->from_struct_lowering = true;
+        return dd_out;
     }
 
     /* Phase RF0: allow re-elaboration of forward-declared stub types.
@@ -2683,6 +2689,19 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
     if (existing_gadt_b) {
         bool same_kind_forward =
             (existing_gadt_b->type.kind == TY_ADT) && elab_is_forward_type(e, name);
+        /* The value-preferring scope_lookup above returns the lowered struct's
+         * auto-bound CONSTRUCTOR (TY_FN), which shadows the struct-origin record
+         * ADT type binding; consult the type namespace to recognise it. */
+        Binding *existing_type_b = scope_lookup_type_def(e->scope, name);
+        AdtDef *lowered_struct_def = NULL;
+        if (existing_gadt_b->type.kind == TY_ADT &&
+            existing_gadt_b->type.as.adt_.def &&
+            existing_gadt_b->type.as.adt_.def->from_struct_lowering)
+            lowered_struct_def = existing_gadt_b->type.as.adt_.def;
+        else if (existing_type_b && existing_type_b->type.kind == TY_ADT &&
+                 existing_type_b->type.as.adt_.def &&
+                 existing_type_b->type.as.adt_.def->from_struct_lowering)
+            lowered_struct_def = existing_type_b->type.as.adt_.def;
         if (same_kind_forward) {
             is_forward_stub_gadt = true;
         } else if (existing_gadt_b->type.kind == TY_STRUCT) {
@@ -2694,6 +2713,20 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
                       name->name, name->name, name->name);
             /* fall through: is_forward_stub_gadt stays false, the else
              * branch below registers a fresh GADT binding and AdtDef. */
+        } else if (lowered_struct_def) {
+            /* CONV-S1 (defstruct-as-defadt): under lowering the struct IS an
+             * ADT, so structs and ADTs share one namespace -- the GADT wins and
+             * SUPERSEDES the struct-origin ADT.  Mark the loser superseded so it
+             * is skipped at C emission (no `tur_adt_<Name>` collision), then fall
+             * through to register the GADT's own binding/AdtDef.  `:Name`
+             * annotations resolve to the GADT via elab_lookup_type_by_name's
+             * prefer-non-struct-origin rule. */
+            lowered_struct_def->superseded = true;
+            diag_emit(DIAG_WARNING, name_form->span,
+                      "GADT '%s' supersedes the same-named struct '%s'; uses of "
+                      "':%s' resolve to the GADT",
+                      name->name, name->name, name->name);
+            /* fall through: register a fresh GADT binding/AdtDef. */
         } else {
             diag_emit(DIAG_ERROR, name_form->span,
                       "defgadt: '%s' is already defined", name->name);

@@ -5239,6 +5239,11 @@ static const char *adt_ctor_field_c_type(const CtorField *f, bool byval) {
  * .c references `tur_adt_Either` / `ctor_Left` with no definition.  See
  * docs/reported/load-not-expanded-in-imported-or-project-modules.md. */
 static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
+    /* CONV-S1 (defstruct-as-defadt): a struct-origin ADT superseded by a later
+     * same-name defgadt/defdata is skipped at emission -- the winner owns the
+     * `tur_adt_<Name>` C name, so emitting the loser's typedef/ctors here would
+     * be a `redefinition of 'struct tur_adt_<Name>'`. */
+    if (def && def->superseded) return;
     char adt_c_name[256];
     {
         char *_mn = mangle_field_name(def->name);
@@ -8714,6 +8719,11 @@ int emit_program(Buf *out, const Expr *program) {
         /* Phase G0/G1: ADT typedef + constructor functions */
         else if (e->kind == EX_DEFDATA || e->kind == EX_DEFGADT) {
             AdtDef *def = (e->kind == EX_DEFGADT) ? e->as.defgadt_.def : e->as.defdata_.def;
+            /* CONV-S1 (defstruct-as-defadt): skip a struct-origin ADT superseded
+             * by a later same-name defgadt/defdata -- the winner owns the
+             * `tur_adt_<Name>` C name (mirror of the guard in
+             * emit_adt_typedef_and_ctors). */
+            if (def && def->superseded) continue;
             char adt_c_name[256];
             {
                 char *_mn = mangle_field_name(def->name);

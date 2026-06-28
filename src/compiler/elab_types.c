@@ -55,9 +55,21 @@ bool check_row_type_arg_kind(Type ctor_type, uint8_t arg_index, Type arg_type,
  * or TY_STRUCT), or NULL when neither registry has the name. */
 Type *elab_lookup_type_by_name(Elab *e, const Symbol *name) {
     if (!name) return NULL;
+    /* CONV-S1 (defstruct-as-defadt): a `defstruct` and a `defgadt`/`defdata`
+     * may share a name -- the struct lowers to a struct-origin record ADT and
+     * the hand-written ADT/GADT supersedes it (the GADT-wins rule).  Both can
+     * live in e->adt_defs, so prefer a NON-superseded, non-struct-origin match
+     * and only fall back to a struct-origin def when no winner of that name
+     * exists.  A superseded def is never returned (its winner shadows it). */
+    AdtDef *struct_origin_fallback = NULL;
     for (uint32_t i = 0; i < e->n_adt_defs; i++) {
         AdtDef *d = e->adt_defs[i];
         if (d && d->name && strcmp(d->name, name->name) == 0) {
+            if (d->superseded) continue;
+            if (d->from_struct_lowering) {
+                if (!struct_origin_fallback) struct_origin_fallback = d;
+                continue;
+            }
             Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
             *t = type_adt(d);
             /* Phase G1/HKT: parameterized GADTs need a non-* kind so kind
@@ -66,6 +78,12 @@ Type *elab_lookup_type_by_name(Elab *e, const Symbol *name) {
             t->hkt_kind = kind_for_arity(d->n_type_params);
             return t;
         }
+    }
+    if (struct_origin_fallback) {
+        Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+        *t = type_adt(struct_origin_fallback);
+        t->hkt_kind = kind_for_arity(struct_origin_fallback->n_type_params);
+        return t;
     }
     for (uint32_t i = 0; i < e->n_struct_defs; i++) {
         StructDef *d = e->struct_defs[i];

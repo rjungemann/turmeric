@@ -294,6 +294,21 @@ typedef struct AdtDef {
      * Mirrors StructDef.origin_file_id so the orphan-instance check can credit
      * an ADT type-argument to the module that defines it. 0 = unknown. */
     uint16_t    origin_file_id;
+    /* CONV-S1 (defstruct-as-defadt): true iff this AdtDef was synthesized by
+     * lowering a `defstruct` (not written as a `defdata`/`defgadt`).  The
+     * lowering should be invisible at the surface, so consumers that would
+     * otherwise observe the ADT-ness -- runtime `type-of` (reports "struct"),
+     * and the defgadt same-name duplicate check (treats it like a struct for
+     * MF4 GADT-shadows-struct coexistence) -- key on this flag. */
+    bool        from_struct_lowering;
+    /* CONV-S1 (defstruct-as-defadt): once a struct lowers to an ADT, structs and
+     * ADTs share one namespace, so a later same-name `defgadt`/`defdata` may
+     * SUPERSEDE the struct-origin ADT (the GADT wins).  The superseded def is
+     * left registered (its already-elaborated ctor/accessor bindings stay valid
+     * for any code that referenced them before the redefinition) but is skipped
+     * at C emission so its `tur_adt_<Name>` typedef does not collide with the
+     * winner's.  Only ever set on a `from_struct_lowering` def. */
+    bool        superseded;
 } AdtDef;
 
 /* CONV-S2 (struct/ADT convergence): a single-variant, non-GADT ADT is
@@ -839,6 +854,18 @@ typedef struct Type {
         } generator_;
     } as;
 } Type;
+
+/* CONV-S1 (defstruct-as-defadt): the runtime `any`-box tag for a type.  A
+ * struct-origin lowered ADT boxes / casts / is?-tests as TY_STRUCT, so the
+ * runtime reflection surface (type-of/cast/is?) stays transparent to the
+ * lowering -- a value that was a `defstruct` still reports "struct".  The box
+ * site and the cast/is? target MUST agree, so both route through this. */
+static inline TypeKind any_box_tag_for_type(const Type *t) {
+    if (t && t->kind == TY_ADT && t->as.adt_.def &&
+        t->as.adt_.def->from_struct_lowering)
+        return TY_STRUCT;
+    return t ? t->kind : TY_UNKNOWN;
+}
 
 /* DV0: Dynamic var type constructor (-Xdynamic-vars).
  * Wraps the declared value type.  Only stored in DynVarEntry during elaboration;

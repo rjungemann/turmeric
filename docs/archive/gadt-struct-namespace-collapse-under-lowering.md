@@ -1,5 +1,15 @@
 # defstruct/defgadt same-name namespace collapse under defstruct-as-defadt lowering
 
+**RESOLVED.** Under lowering a `defstruct` *is* an ADT, so structs and ADTs
+share one namespace (per maintainer guidance): a later same-name `defgadt`/
+`defdata` now SUPERSEDES the struct-origin ADT (the GADT wins).  Implemented via
+an `AdtDef.superseded` flag set in the defgadt same-name check, an
+`elab_lookup_type_by_name` rule that prefers the non-struct-origin winner (and
+never returns a superseded def), and a C-emission skip for superseded defs (both
+`emit_adt_typedef_and_ctors` and the emit_program inline ADT path) so the two
+`tur_adt_<Name>` typedefs no longer collide.  `gadt-struct-namespace-prefer`
+passes under force-lower; default suite 1863/0.  Original report retained below.
+
 **Severity:** medium (force-lower only; blocks `gadt-struct-namespace-prefer`).
 Default path unaffected.
 
