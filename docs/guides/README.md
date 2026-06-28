@@ -79,6 +79,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 
 - **[type-annotations-guide.md](type-annotations-guide.md)** -- Compound type annotation syntax: `(-> a b)`, `(vec T)`, `forall`, and more
 - **[polymorphism-guide.md](polymorphism-guide.md)** -- A tour of the polymorphism mechanisms Turmeric provides -- parametric, ad-hoc, structural, row, kind, rank, and substructural
+- **[typeclass-guide.md](typeclass-guide.md)** -- Defining typeclasses with `defclass`, implementing instances with `definstance`, constraints, associated types, functional dependencies, and default implementations
 - **[hkt-guide.md](hkt-guide.md)** -- Higher-kinded types (functor, monad, applicative abstractions, performance/dispatch model)
 - **[hrt-guide.md](hrt-guide.md)** -- Higher-ranked types: rank-2/3 polymorphic function parameters
 - **[union-intersection-types-guide.md](union-intersection-types-guide.md)** -- Union (`A | B`) and intersection (`A & B`) types, `any`, gradual typing
