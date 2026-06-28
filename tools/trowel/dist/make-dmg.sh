@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# make-dmg.sh -- wrap a baked Turmeric Studio.app in a distributable DMG.
+# make-dmg.sh -- wrap a baked Trowel.app in a distributable DMG.
 # macOS only. Unsigned by default; opt in to notarization via
 # TURMERIC_NOTARY_PROFILE (a keychain notarytool profile name).
 
 set -euo pipefail
 
 if [ "$#" -lt 1 ]; then
-  echo "usage: make-dmg.sh <Turmeric Studio.app> [out-dir]" >&2
+  echo "usage: make-dmg.sh <Trowel.app> [out-dir]" >&2
   exit 1
 fi
 
@@ -26,14 +26,14 @@ if [ ! -d "$APP" ]; then
 fi
 
 mkdir -p "$OUT_DIR"
-DMG="$OUT_DIR/TurmericStudio-$VERSION-macos-$ARCH.dmg"
+DMG="$OUT_DIR/Trowel-$VERSION-macos-$ARCH.dmg"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
 cp -R "$APP" "$STAGE/"
 ln -sf /Applications "$STAGE/Applications"
 
-hdiutil create -volname "Turmeric Studio $VERSION" \
+hdiutil create -volname "Trowel $VERSION" \
                -srcfolder "$STAGE" \
                -ov -format UDZO "$DMG"
 

@@ -1,21 +1,19 @@
-# Turmeric Desktop Editor -- Windows distribution plan
+# Trowel Desktop Editor -- Windows distribution plan
 
 ## Goal
 
-Ship "Turmeric Studio" on Windows as a real, double-clickable installer
-that puts a branded Lite XL bundle + the Turmeric plugin + the color
+Ship "trowel" on Windows as a real, double-clickable installer
+that puts a branded Trowel bundle + the Turmeric plugin + the color
 theme in `Program Files`, registers `.tur` / `.tur.sweet` file
-associations, drops a Start Menu shortcut, and surfaces `Turmeric` in
+associations, drops a Start Menu shortcut, and surfaces `trowel` in
 the Windows search bar.
 
 The macOS + Linux halves live in
-[`turmeric-lite-xl-desktop-plan.md`](turmeric-lite-xl-desktop-plan.md)
-Phase 5. Windows is split into this sibling plan because its
+[`trowel-renaming-plan.md`](trowel-renaming-plan.md).
+Windows is split into this sibling plan because its
 distribution story (code signing economics, SmartScreen reputation,
 installer-toolchain choice, package-manager fan-out) is qualitatively
-different from a `.dmg` + Homebrew cask and a single AppImage. Lumping
-it together inflated the parent plan with details that are irrelevant
-to the macOS / Linux work and obscured the actual Windows risk.
+different from a `.dmg` + Homebrew cask and a single AppImage.
 
 ## Why a separate plan
 
@@ -47,26 +45,19 @@ This plan covers ONLY:
 
 It does NOT cover:
 
-- The Lite XL source vendor drop (`vendor/lite-xl/`) -- that's shared
-  with the parent plan's Phase 5 and lands there.
-- Plugin or color-theme content -- already shipped via the parent
-  plan's Phase 1 + 2.
+- The Trowel source vendor drop (`vendor/lite-xl/`) -- that's shared
+  with the parent plan and lands there.
+- Plugin or color-theme content -- already shipped.
 - The `tur` Windows port itself -- assumed to land via the `tur` build
   pipeline; this plan only handles "what happens when the editor needs
   to find `tur` on Windows."
 
-## Why Lite XL is a viable Windows base
+## Why Trowel is a viable Windows base
 
-The upstream Lite XL CI matrix already produces:
-
-- `LiteXL-v<version>-x86_64-setup.exe` (Inno Setup installer)
-- `LiteXL-v<version>-i686-setup.exe`
-- `lite-xl-v<version>-windows-x86_64.zip` (portable)
-- `lite-xl-v<version>-windows-i686.zip` (portable)
-
+The upstream Lite XL CI matrix already produces portable `.zip` and setup `.exe` installers.
 Same SDL3 base as the macOS / Linux binaries. ~3-5 MB unpacked. Native
 Win32 -- no GTK, no Qt. We re-skin this rather than building a Windows
-shell from scratch, same hybrid pattern as the parent plan.
+shell from scratch.
 
 ## Implementation phases
 
@@ -74,40 +65,39 @@ shell from scratch, same hybrid pattern as the parent plan.
 
 Smallest publishable Windows artifact. No installer, no signing.
 
-- `tools/lite-xl/install.ps1` -- PowerShell script that drops
+- `tools/trowel/install.ps1` -- PowerShell script that drops
   `turmeric.lua` + the two color themes into
-  `%USERPROFILE%\.config\lite-xl\plugins\` and
-  `%USERPROFILE%\.config\lite-xl\colors\`, writes a minimal `init.lua`
+  `%USERPROFILE%\.config\trowel\plugins\` and
+  `%USERPROFILE%\.config\trowel\colors\`, writes a minimal `init.lua`
   defaulting to `colors.turmeric-dark`. Mirrors the macOS / Linux
-  install path in `tools/lite-xl/README.md`.
-- Verify the plugin works against upstream Windows Lite XL by running
+  install path in `tools/trowel/README.md`.
+- Verify the plugin works against upstream Windows Trowel/Lite XL by running
   the plugin's existing palette-sync test in CI on a Windows runner.
 
-Acceptance: a Windows user with stock Lite XL already installed runs
+Acceptance: a Windows user with stock Trowel/Lite XL already installed runs
 `install.ps1` from PowerShell and gets the Turmeric experience without
 the bundled installer.
 
-### Phase W2 -- Branded `Turmeric Studio.exe` portable bundle (~2 days)
+### Phase W2 -- Branded `trowel.exe` portable bundle (~2 days)
 
 - Vendor upstream Lite XL into `vendor/lite-xl/` (shared with the
-  parent plan's Phase 5).
+  parent plan).
 - Build via the upstream `meson` + `ninja` recipe targeting x64. The
-  upstream build supports Windows out of the box; we add a small CMake
-  / meson option for the resource swap (see next bullet).
+  upstream build supports Windows out of the box.
 - Resource patch: replace `SciTERes.rc`-equivalent (upstream Lite XL
   ships a `lite-xl.rc` with `IDI_ICON1` and a string table for
-  CompanyName/ProductName/FileDescription/etc). Drop in a `turmeric.ico`
+  CompanyName/ProductName/FileDescription/etc). Drop in a `trowel.ico`
   built from `web/public/logo-icon.svg`. Window title is plugin-driven,
   matches the macOS path.
 - Bake the plugin and themes into the bundle's `data/` directory
   (Windows analogue of macOS `Resources/`) so they ship enabled with
   no separate install step.
-- Distribute as `TurmericStudio-<version>-windows-x86_64.zip`
+- Distribute as `Trowel-<version>-windows-x86_64.zip`
   (portable) on the GitHub release, alongside the macOS `.dmg` and
   Linux AppImage.
 
 Acceptance: a Windows user downloads the zip, extracts it, runs
-`TurmericStudio.exe`, opens a `.tur` file from the editor's `File >
+`trowel.exe`, opens a `.tur` file from the editor's `File >
 Open`, presses ctrl+r, sees output. No code signing yet -- SmartScreen
 will warn the first time; users click "Run anyway."
 
@@ -117,19 +107,19 @@ Pick **Inno Setup** -- it's what upstream Lite XL uses, the recipe
 already exists for us to copy, and it produces a small single-file
 installer with no extra runtime dep on the target machine.
 
-- `tools/lite-xl/windows/installer.iss` -- Inno Setup script:
-  - Installs into `%ProgramFiles%\Turmeric Studio\`.
+- `tools/trowel/windows/installer.iss` -- Inno Setup script:
+  - Installs into `%ProgramFiles%\trowel\`.
   - Registers `.tur` and `.tur.sweet` file associations pointing at
-    `TurmericStudio.exe` with our icon.
-  - Adds Start Menu shortcut `Turmeric Studio`.
+    `trowel.exe` with our icon.
+  - Adds Start Menu shortcut `trowel`.
   - Optional checkbox: "Add `tur` PATH lookup hint to `init.lua`" --
     runs the same `config.plugins.turmeric.tur` probe the macOS launch
     script does, since Windows GUI apps inherit the user PATH but
-    Lite XL launched via Start Menu may not have the dev PATH the
+    Trowel launched via Start Menu may not have the dev PATH the
     user uses in their terminal.
   - Uninstaller removes both the bundle and the user config it wrote
     (with confirmation).
-- Output: `TurmericStudio-<version>-windows-x86_64-setup.exe`.
+- Output: `Trowel-<version>-windows-x86_64-setup.exe`.
 
 Acceptance: a fresh Windows VM gets the editor + file associations
 from a single `.exe` double-click; uninstaller cleans up.
@@ -147,13 +137,11 @@ compare when we get to it:
   most small OSS Windows apps go this route.
 - **EV (Extended Validation) cert (~$300-600/year, plus hardware
   token).** Instant SmartScreen reputation. Requires a hardware-bound
-  certificate (Yubikey-style USB) which complicates CI -- you can sign
-  on a dedicated build machine or via a hosted signing service like
-  SignPath / DigiCert KeyLocker.
+  certificate (Yubikey-style USB) which complicates CI.
 
 When the cert lands:
 
-- Sign `TurmericStudio.exe` and the installer `.exe` via `signtool`.
+- Sign `trowel.exe` and the installer `.exe` via `signtool`.
 - Timestamp the signature (RFC 3161) so the binary stays valid past
   certificate expiry.
 - Add the signing step to the release workflow gated on a CI secret
@@ -166,16 +154,16 @@ few downloads (OV).
 
 ### Phase W5 -- Distribution channels (~2-3 days, mostly waiting)
 
-- **winget.** Submit a manifest (`tools/lite-xl/windows/winget/`) to
+- **winget.** Submit a manifest (`tools/trowel/windows/winget/`) to
   `microsoft/winget-pkgs`. Users install with
-  `winget install turmeric.studio`. ~1-3 weeks review turnaround.
-- **Chocolatey.** Submit `tools/lite-xl/windows/chocolatey/` package.
-  Users install with `choco install turmeric-studio`. ~1-2 weeks
+  `winget install trowel`. ~1-3 weeks review turnaround.
+- **Chocolatey.** Submit `tools/trowel/windows/chocolatey/` package.
+  Users install with `choco install trowel`. ~1-2 weeks
   review.
 - **GitHub release artifacts.** Direct download is already covered by
   W2/W3; channels are gravy.
 - **Microsoft Store (MSIX) -- deferred.** MSIX requires repackaging
-  into a sandboxed app container, which Lite XL's filesystem-heavy
+  into a sandboxed app container, which Trowel's filesystem-heavy
   workflow does not love. Revisit if and only if Store presence
   becomes a user-driven ask.
 
@@ -184,13 +172,13 @@ for Chocolatey.
 
 ## File layout
 
-- `tools/lite-xl/install.ps1` -- Phase W1 PowerShell installer.
-- `tools/lite-xl/windows/installer.iss` -- Phase W3 Inno Setup script.
-- `tools/lite-xl/windows/winget/manifest.yaml` -- Phase W5 winget
+- `tools/trowel/install.ps1` -- Phase W1 PowerShell installer.
+- `tools/trowel/windows/installer.iss` -- Phase W3 Inno Setup script.
+- `tools/trowel/windows/winget/manifest.yaml` -- Phase W5 winget
   manifest.
-- `tools/lite-xl/windows/chocolatey/turmeric-studio.nuspec` -- Phase W5
+- `tools/trowel/windows/chocolatey/trowel.nuspec` -- Phase W5
   Chocolatey package definition.
-- `vendor/lite-xl/` -- shared with the parent plan's Phase 5.
+- `vendor/lite-xl/` -- shared with the parent plan.
 
 ## Open questions
 
@@ -227,6 +215,5 @@ effort and no recurring cost. Everything past W1 is a polish curve.
 ## Followups (not part of this plan)
 
 - MSIX / Microsoft Store packaging (W5 footnote, deferred until ask).
-- ARM64 Windows build once Lite XL upstream adds arm64 CI lanes (they
-  don't today).
+- ARM64 Windows build once Lite XL upstream adds arm64 CI lanes.
 - Bundling `tur` directly into the Windows installer (open question 2).

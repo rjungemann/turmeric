@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Check that the Lite XL Turmeric color themes still match the Monaco
+"""Check that the Trowel Turmeric color themes still match the Monaco
 theme baked into web/main.js (the Try Turmeric in-browser editor).
 
-The Monaco theme is the source of truth; the Lite XL ports under
-tools/lite-xl/colors/ must carry the same six hex codes for the syntax
+The Monaco theme is the source of truth; the Trowel ports under
+tools/trowel/colors/ must carry the same six hex codes for the syntax
 token colors. Background / cursor / gutter colors are intentionally
-*not* checked here -- they differ because Lite XL's style API does not
+*not* checked here -- they differ because Trowel's style API does not
 expose every Monaco editor color slot.
 
 Exit codes:
@@ -20,10 +20,10 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 WEB = ROOT / "web/main.js"
-DARK = ROOT / "tools/lite-xl/colors/turmeric-dark.lua"
-LIGHT = ROOT / "tools/lite-xl/colors/turmeric-light.lua"
+DARK = ROOT / "tools/trowel/colors/turmeric-dark.lua"
+LIGHT = ROOT / "tools/trowel/colors/turmeric-light.lua"
 
-# (monaco-token-key, lite-xl-style-key) pairs we expect to match.
+# (monaco-token-key, trowel-style-key) pairs we expect to match.
 PAIRS = [
     ("comment",  "comment"),
     ("string",   "string"),
@@ -57,8 +57,8 @@ def load_monaco_theme(theme_name: str) -> dict[str, str]:
     return out
 
 
-def load_lite_xl_theme(path: pathlib.Path) -> dict[str, str]:
-    """Walk a tools/lite-xl/colors/*.lua file, follow `local NAME = "#HEX"`
+def load_trowel_theme(path: pathlib.Path) -> dict[str, str]:
+    """Walk a tools/trowel/colors/*.lua file, follow `local NAME = "#HEX"`
     bindings, and return the resolved hex for each
     `style.syntax["KEY"]` line."""
     if not path.exists():
@@ -83,20 +83,20 @@ def load_lite_xl_theme(path: pathlib.Path) -> dict[str, str]:
     return out
 
 
-def diff(monaco: dict[str, str], lite: dict[str, str], label: str) -> list[str]:
+def diff(monaco: dict[str, str], trowel_theme: dict[str, str], label: str) -> list[str]:
     fails: list[str] = []
     for mtok, ltok in PAIRS:
         m = monaco.get(mtok)
-        l = lite.get(ltok)
+        l = trowel_theme.get(ltok)
         if not m:
             fails.append(f"{label}: monaco token {mtok!r} missing")
             continue
         if not l:
-            fails.append(f"{label}: lite-xl syntax[{ltok!r}] missing")
+            fails.append(f"{label}: trowel syntax[{ltok!r}] missing")
             continue
         if m != l:
             fails.append(
-                f"{label}: monaco {mtok}={m} != lite-xl syntax[{ltok!r}]={l}"
+                f"{label}: monaco {mtok}={m} != trowel syntax[{ltok!r}]={l}"
             )
     return fails
 
@@ -107,9 +107,9 @@ def main() -> int:
         return 2
     monaco_d = load_monaco_theme(MONACO_DARK)
     monaco_l = load_monaco_theme(MONACO_LIGHT)
-    lite_d = load_lite_xl_theme(DARK)
-    lite_l = load_lite_xl_theme(LIGHT)
-    fails = diff(monaco_d, lite_d, "dark") + diff(monaco_l, lite_l, "light")
+    trowel_d = load_trowel_theme(DARK)
+    trowel_l = load_trowel_theme(LIGHT)
+    fails = diff(monaco_d, trowel_d, "dark") + diff(monaco_l, trowel_l, "light")
     if fails:
         for f in fails:
             print("FAIL:", f)

@@ -1,17 +1,17 @@
 -- mod-version:3
--- Turmeric mode for Lite XL.
+-- Turmeric mode for Trowel.
 --
 -- Spike scope:
 --   - Syntax highlighting for .tur and .tur.sweet files.
 --   - "Turmeric: Run File" command bound to ctrl+r / cmd+r that spawns
---     `tur --interpret <file>` and streams stdout/stderr into Lite XL's
+--     `tur --interpret <file>` and streams stdout/stderr into Trowel's
 --     LogView (the bottom log pane). Errors with a path:line:col prefix
 --     are logged via core.error so they show up clickable.
 --   - "Turmeric: Check File" bound to ctrl+shift+r / cmd+shift+r that
 --     runs `tur check <file>` the same way.
 --
--- Install: drop into ~/.config/lite-xl/plugins/ on macOS/Linux, or
--- %USERPROFILE%\.config\lite-xl\plugins on Windows.
+-- Install: drop into ~/.config/trowel/plugins/ on macOS/Linux, or
+-- %USERPROFILE%\.config\trowel\plugins on Windows.
 
 local core = require "core"
 local command = require "core.command"
@@ -140,7 +140,7 @@ local function nearest_doc()
 end
 
 -- Run `cmd` with the active file as $1, streaming stdout+stderr into the
--- Lite XL log pane. Lines that look like `path:line:col:` are routed
+-- Trowel log pane. Lines that look like `path:line:col:` are routed
 -- through core.error so the LogView highlights them.
 local function run_tur(args, label)
   local doc = nearest_doc()
@@ -312,7 +312,7 @@ keymap.add {
 -- -------------------------------------------------------------------------
 --
 -- Spawns one long-lived `tur lsp-lite` subprocess on first symbol lookup and
--- talks to it with newline-delimited JSON. Feeds prefix matches into Lite XL's
+-- talks to it with newline-delimited JSON. Feeds prefix matches into Trowel's
 -- built-in `autocomplete` plugin (when present); falls back to a status-bar
 -- ping otherwise. F1 prints the doc for the symbol under the cursor.
 --
@@ -490,8 +490,8 @@ config.plugins.turmeric.repl_max_lines  = config.plugins.turmeric.repl_max_lines
 
 local View      = require "core.view"
 local style     = require "core.style"
-local renderer  = renderer       -- global in Lite XL
-local system    = system         -- global in Lite XL
+local renderer  = renderer       -- global in Trowel
+local system    = system         -- global in Trowel
 
 local ReplView = View:extend()
 
@@ -609,7 +609,7 @@ function ReplView:send_run(abs_path)
   pcall(function() self.proc:write(":run " .. abs_path .. "\n") end)
 end
 
--- Lite XL hooks ------------------------------------------------------------
+-- Trowel hooks ------------------------------------------------------------
 
 function ReplView:on_text_input(text)
   self.input = self.input .. text
@@ -840,7 +840,7 @@ config.plugins.turmeric.auto_open_repl = config.plugins.turmeric.auto_open_repl 
 if config.plugins.turmeric.auto_open_repl then
   -- Defer one tick so the root view / project tree have finished initial
   -- layout before we split. core.add_thread with no yield runs at the next
-  -- frame, which is the canonical "after-startup" hook in Lite XL plugins.
+  -- frame, which is the canonical "after-startup" hook in Trowel plugins.
   core.add_thread(function()
     coroutine.yield(0.1)
     open_repl_view("down")
@@ -853,7 +853,7 @@ if config.plugins.turmeric.auto_open_repl then
   end)
 end
 
--- Optional integration with Lite XL's built-in `autocomplete` plugin.
+-- Optional integration with Trowel's built-in `autocomplete` plugin.
 -- It exposes `autocomplete.add({ name=..., files=..., items={...} })`.
 -- We seed an empty list and refresh it as the user types.
 local ok_ac, autocomplete = pcall(require, "plugins.autocomplete")

@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
 # install.sh -- drop the Turmeric plugin + color themes into a user's
-# existing Lite XL configuration (the "I already have Lite XL, just give me
-# the plugin" path from Phase 5 of turmeric-lite-xl-desktop-plan.md).
+# existing Trowel configuration.
 #
 # Usage:
-#   bash tools/lite-xl/install.sh [--copy] [--config-dir <path>]
+#   bash tools/trowel/install.sh [--copy] [--config-dir <path>]
 #
 # Defaults:
-#   --config-dir = ${LITE_XL_CONFIG:-$HOME/.config/lite-xl}
+#   --config-dir = ${TROWEL_CONFIG:-$HOME/.config/trowel}
 #   symlinks (so future updates of this repo propagate); pass --copy to
 #   install standalone copies instead.
 
 set -euo pipefail
 
-CFG_DIR="${LITE_XL_CONFIG:-$HOME/.config/lite-xl}"
+CFG_DIR="${TROWEL_CONFIG:-$HOME/.config/trowel}"
 MODE="symlink"
 
 while [ $# -gt 0 ]; do
@@ -29,7 +28,7 @@ while [ $# -gt 0 ]; do
 done
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-SRC="$ROOT/tools/lite-xl"
+SRC="$ROOT/tools/trowel"
 
 mkdir -p "$CFG_DIR/plugins" "$CFG_DIR/colors"
 
@@ -47,12 +46,16 @@ place "$SRC/turmeric.lua"               "$CFG_DIR/plugins/turmeric.lua"
 place "$SRC/colors/turmeric-dark.lua"   "$CFG_DIR/colors/turmeric-dark.lua"
 place "$SRC/colors/turmeric-light.lua"  "$CFG_DIR/colors/turmeric-light.lua"
 
+if [ -f "$SRC/dist/plugins/welcome.lua" ]; then
+  place "$SRC/dist/plugins/welcome.lua" "$CFG_DIR/plugins/welcome.lua"
+fi
+
 cat <<EOF
 
-Done. Open any .tur or .tur.sweet file in Lite XL and press cmd+r (macOS)
+Done. Open any .tur or .tur.sweet file in Trowel and press cmd+r (macOS)
 or ctrl+r to run it through the Turmeric interpreter.
 
-If \`tur\` is not on the PATH that Lite XL inherits (common on macOS when
+If \`tur\` is not on the PATH that Trowel inherits (common on macOS when
 launched from Finder), add this to $CFG_DIR/init.lua:
 
   local config = require "core.config"

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # bake-bundle.sh -- overlay the Turmeric plugin / themes / icon / Info.plist
 # onto an already-built upstream `lite-xl.app` to produce
-# `Turmeric Studio.app`. macOS only.
+# `Trowel.app`. macOS only.
 #
 # Usage:
-#   bash tools/lite-xl/dist/bake-bundle.sh <path/to/lite-xl.app> [out-dir]
+#   bash tools/trowel/dist/bake-bundle.sh <path/to/lite-xl.app> [out-dir]
 #
 # Signing is opt-in via TURMERIC_SIGN_IDENTITY (a Developer ID Application
 # identity in the keychain). Unsigned bundles are fine for local install /
@@ -20,8 +20,8 @@ fi
 SRC_APP="$1"
 OUT_DIR="${2:-dist-out}"
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-DIST="$ROOT/tools/lite-xl/dist"
-PLUGIN_DIR="$ROOT/tools/lite-xl"
+DIST="$ROOT/tools/trowel/dist"
+PLUGIN_DIR="$ROOT/tools/trowel"
 VERSION="$(cat "$ROOT/VERSION" 2>/dev/null || echo "0.0.0")"
 
 if [ "$(uname -s)" != "Darwin" ]; then
@@ -34,23 +34,29 @@ if [ ! -d "$SRC_APP" ]; then
 fi
 
 mkdir -p "$OUT_DIR"
-DST_APP="$OUT_DIR/Turmeric Studio.app"
+DST_APP="$OUT_DIR/Trowel.app"
 rm -rf "$DST_APP"
 cp -R "$SRC_APP" "$DST_APP"
+
+# Rename the executable binary to trowel
+if [ -f "$DST_APP/Contents/MacOS/lite-xl" ]; then
+  mv "$DST_APP/Contents/MacOS/lite-xl" "$DST_APP/Contents/MacOS/trowel"
+fi
 
 RES="$DST_APP/Contents/Resources"
 mkdir -p "$RES/plugins" "$RES/colors"
 
-# Plugin + themes + bundled init.lua.
+# Plugin + themes + welcome plugin + bundled init.lua.
 cp "$PLUGIN_DIR/turmeric.lua"               "$RES/plugins/turmeric.lua"
 cp "$PLUGIN_DIR/colors/turmeric-dark.lua"   "$RES/colors/turmeric-dark.lua"
 cp "$PLUGIN_DIR/colors/turmeric-light.lua"  "$RES/colors/turmeric-light.lua"
+cp "$DIST/plugins/welcome.lua"               "$RES/plugins/welcome.lua"
 cp "$DIST/init.lua"                         "$RES/init.lua"
 
-# Icon (built by tools/lite-xl/build-app-icon.sh if absent).
-ICON_SRC="$PLUGIN_DIR/turmeric.icns"
+# Icon (built by tools/trowel/build-app-icon.sh if absent).
+ICON_SRC="$PLUGIN_DIR/trowel.icns"
 if [ -f "$ICON_SRC" ]; then
-  cp "$ICON_SRC" "$RES/turmeric.icns"
+  cp "$ICON_SRC" "$RES/trowel.icns"
 else
   echo "bake-bundle.sh: warning -- $ICON_SRC missing (run build-app-icon.sh first)" >&2
 fi

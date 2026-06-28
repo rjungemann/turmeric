@@ -12672,7 +12672,7 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "dap") == 0) {
         return cmd_dap();
     }
-    /* lsp-lite: completion/calltip/doc backend for the Lite XL plugin and
+    /* lsp-lite: completion/calltip/doc backend for the Trowel plugin and
      * other lightweight editors. Newline-delimited JSON over stdio; stdout
      * is reserved for protocol traffic. */
     if (strcmp(cmd, "lsp-lite") == 0) {

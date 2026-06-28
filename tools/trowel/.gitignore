@@ -1,0 +1,4 @@
+# Build artifacts from build-app-icon.sh.
+Trowel.app/
+trowel.icns
+trowel.iconset/

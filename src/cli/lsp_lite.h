@@ -1,7 +1,7 @@
 #ifndef TUR_CLI_LSP_LITE_H
 #define TUR_CLI_LSP_LITE_H
 
-/* `tur lsp-lite` -- minimal completion/calltip/doc helper for the Lite XL
+/* `tur lsp-lite` -- minimal completion/calltip/doc helper for the Trowel
  * Turmeric plugin (and any other lightweight editor that prefers a
  * line-delimited JSON protocol over full LSP).
  *

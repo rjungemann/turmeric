@@ -2,7 +2,7 @@
  *
  * Protocol: newline-delimited JSON over stdio. One request per line, one
  * response per line. Pretty-printing / Content-Length framing intentionally
- * avoided -- the consumer (Lite XL plugin) reads byte streams with line
+ * avoided -- the consumer (Trowel plugin) reads byte streams with line
  * buffering and the lightweight framing keeps the Lua side trivial.
  *
  * Request shape:

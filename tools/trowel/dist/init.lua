@@ -1,9 +1,8 @@
--- init.lua -- shipped inside the Turmeric Studio bundle. Enables the
--- Turmeric plugin + selects the Turmeric color theme by default.
+-- init.lua -- shipped inside the Trowel bundle. Enables the
+-- Turmeric plugin + selects the Trowel color theme by default.
 --
--- Per Phase 5 of turmeric-lite-xl-desktop-plan.md the bundle does not ship
--- `tur` itself; the user is expected to have it on PATH. The plugin
--- surfaces a clear error in the log pane otherwise.
+-- The bundle does not ship `tur` itself; the user is expected to have it on PATH.
+-- The plugin surfaces a clear error in the log pane otherwise.
 
 local core   = require "core"
 local config = require "core.config"
@@ -18,3 +17,8 @@ if not config._user_theme_set then
     core.reload_module("colors.turmeric-dark")
   end)
 end
+
+-- Explicitly load our custom welcome splash screen
+core.try(function()
+  core.reload_module("plugins.welcome")
+end)

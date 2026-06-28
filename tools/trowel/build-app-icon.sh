@@ -2,24 +2,32 @@
 # Build a macOS .icns from web/public/logo-icon.svg and assemble a
 # sibling .app bundle that wears it. The bundle's binary, code resources,
 # and data directory are all symlinks back into the user's stock
-# /Applications/Lite XL.app -- nothing is duplicated, nothing in
+# Trowel.app or Lite XL.app -- nothing is duplicated, nothing in
 # /Applications is modified. The sibling lives at
-# tools/lite-xl/Turmeric.app and is meant as a temporary "look, our icon
-# in the dock!" affordance ahead of the Phase 5 bundled distribution.
+# tools/trowel/Trowel.app and is meant as a temporary "look, our icon
+# in the dock!" affordance ahead of the packaged distribution.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-LITE_XL_APP="${TUR_LITE_XL_APP:-/Applications/Lite XL.app}"
-OUT_APP="$ROOT/tools/lite-xl/Turmeric.app"
-ICONSET="$ROOT/tools/lite-xl/turmeric.iconset"
-ICNS="$ROOT/tools/lite-xl/turmeric.icns"
+
+TROWEL_APP="${TUR_TROWEL_APP:-}"
+if [ -z "$TROWEL_APP" ]; then
+    if [ -d "/Applications/Trowel.app" ]; then
+        TROWEL_APP="/Applications/Trowel.app"
+    elif [ -d "/Applications/Lite XL.app" ]; then
+        TROWEL_APP="/Applications/Lite XL.app"
+    else
+        echo "build-app-icon: no base Trowel or Lite XL application bundle found in /Applications" >&2
+        echo "  install Trowel or Lite XL first." >&2
+        exit 1
+    fi
+fi
+
+OUT_APP="$ROOT/tools/trowel/Trowel.app"
+ICONSET="$ROOT/tools/trowel/trowel.iconset"
+ICNS="$ROOT/tools/trowel/trowel.icns"
 SRC_SVG="$ROOT/web/public/logo-icon.svg"
 
-if [ ! -d "$LITE_XL_APP" ]; then
-    echo "build-app-icon: $LITE_XL_APP missing" >&2
-    echo "  install Lite XL first (https://lite-xl.com)" >&2
-    exit 1
-fi
 if [ ! -f "$SRC_SVG" ]; then
     echo "build-app-icon: $SRC_SVG missing" >&2
     exit 1
@@ -61,25 +69,31 @@ rm -rf "$OUT_APP"
 mkdir -p "$OUT_APP/Contents/MacOS" "$OUT_APP/Contents/Resources"
 # Binary: real COPY rather than a symlink. macOS resolves binary symlinks
 # and reports the underlying bundle to LaunchServices, which means the
-# dock icon and process display name would come from /Applications/Lite
-# XL.app instead of ours. Copying the ~3 MB binary is the cheap price of
-# a distinct bundle. The whole Turmeric.app dir is gitignored as a
+# dock icon and process display name would come from the parent app
+# instead of ours. Copying the binary is the cheap price of
+# a distinct bundle. The whole Trowel.app dir is gitignored as a
 # build artifact.
-cp "$LITE_XL_APP/Contents/MacOS/lite-xl" "$OUT_APP/Contents/MacOS/lite-xl"
-chmod +x "$OUT_APP/Contents/MacOS/lite-xl"
+if [ -f "$TROWEL_APP/Contents/MacOS/trowel" ]; then
+    BASE_BIN="trowel"
+else
+    BASE_BIN="lite-xl"
+fi
+cp "$TROWEL_APP/Contents/MacOS/$BASE_BIN" "$OUT_APP/Contents/MacOS/trowel"
+chmod +x "$OUT_APP/Contents/MacOS/trowel"
+
 # Data dirs: symlink every immediate Resources entry except an existing
 # icon, which we override with ours.
-for entry in "$LITE_XL_APP/Contents/Resources/"*; do
+for entry in "$TROWEL_APP/Contents/Resources/"*; do
     name="$(basename "$entry")"
     case "$name" in
         icon.icns|icon-*.icns) continue ;;
     esac
     ln -s "$entry" "$OUT_APP/Contents/Resources/$name"
 done
-cp "$ICNS" "$OUT_APP/Contents/Resources/turmeric.icns"
+cp "$ICNS" "$OUT_APP/Contents/Resources/trowel.icns"
 
-# Minimal Info.plist. We keep CFBundleExecutable=lite-xl because that's
-# the binary name; CFBundleIconFile points at our .icns; identifier and
+# Minimal Info.plist. We keep CFBundleExecutable=trowel because that's
+# our binary name; CFBundleIconFile points at our .icns; identifier and
 # display name are ours.
 cat > "$OUT_APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -87,12 +101,12 @@ cat > "$OUT_APP/Contents/Info.plist" <<'PLIST'
 <plist version="1.0">
 <dict>
   <key>CFBundleDevelopmentRegion</key>           <string>en</string>
-  <key>CFBundleDisplayName</key>                 <string>Turmeric</string>
-  <key>CFBundleExecutable</key>                  <string>lite-xl</string>
-  <key>CFBundleIconFile</key>                    <string>turmeric</string>
-  <key>CFBundleIdentifier</key>                  <string>dev.turmeric.editor</string>
+  <key>CFBundleDisplayName</key>                 <string>Trowel</string>
+  <key>CFBundleExecutable</key>                  <string>trowel</string>
+  <key>CFBundleIconFile</key>                    <string>trowel</string>
+  <key>CFBundleIdentifier</key>                  <string>com.trowel.editor</string>
   <key>CFBundleInfoDictionaryVersion</key>       <string>6.0</string>
-  <key>CFBundleName</key>                        <string>Turmeric</string>
+  <key>CFBundleName</key>                        <string>Trowel</string>
   <key>CFBundlePackageType</key>                 <string>APPL</string>
   <key>CFBundleShortVersionString</key>          <string>0.1</string>
   <key>CFBundleVersion</key>                     <string>0.1</string>

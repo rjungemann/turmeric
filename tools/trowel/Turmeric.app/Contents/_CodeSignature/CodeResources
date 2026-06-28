@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>files</key>
+	<dict>
+		<key>Resources/turmeric.icns</key>
+		<data>
+		aiY6iZptx47K946ynxSanr1pYU8=
+		</data>
+	</dict>
+	<key>files2</key>
+	<dict>
+		<key>Resources/colors</key>
+		<dict>
+			<key>symlink</key>
+			<string>/Applications/Lite XL.app/Contents/Resources/colors</string>
+		</dict>
+		<key>Resources/core</key>
+		<dict>
+			<key>symlink</key>
+			<string>/Applications/Lite XL.app/Contents/Resources/core</string>
+		</dict>
+		<key>Resources/dirmonitor.lua</key>
+		<dict>
+			<key>symlink</key>
+			<string>/Applications/Lite XL.app/Contents/Resources/dirmonitor.lua</string>
+		</dict>
+		<key>Resources/fonts</key>
+		<dict>
+			<key>symlink</key>
+			<string>/Applications/Lite XL.app/Contents/Resources/fonts</string>
+		</dict>
+		<key>Resources/globals.lua</key>
+		<dict>
+			<key>symlink</key>
+			<string>/Applications/Lite XL.app/Contents/Resources/globals.lua</string>
+		</dict>
+		<key>Resources/licenses.md</key>
+		<dict>
+			<key>symlink</key>
+			<string>/Applications/Lite XL.app/Contents/Resources/licenses.md</string>
+		</dict>
+		<key>Resources/plugins</key>
+		<dict>
+			<key>symlink</key>
+			<string>/Applications/Lite XL.app/Contents/Resources/plugins</string>
+		</dict>
+		<key>Resources/process.lua</key>
+		<dict>
+			<key>symlink</key>
+			<string>/Applications/Lite XL.app/Contents/Resources/process.lua</string>
+		</dict>
+		<key>Resources/regex.lua</key>
+		<dict>
+			<key>symlink</key>
+			<string>/Applications/Lite XL.app/Contents/Resources/regex.lua</string>
+		</dict>
+		<key>Resources/renderer.lua</key>
+		<dict>
+			<key>symlink</key>
+			<string>/Applications/Lite XL.app/Contents/Resources/renderer.lua</string>
+		</dict>
+		<key>Resources/string.lua</key>
+		<dict>
+			<key>symlink</key>
+			<string>/Applications/Lite XL.app/Contents/Resources/string.lua</string>
+		</dict>
+		<key>Resources/system.lua</key>
+		<dict>
+			<key>symlink</key>
+			<string>/Applications/Lite XL.app/Contents/Resources/system.lua</string>
+		</dict>
+		<key>Resources/turmeric.icns</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			Op4af0chRhP9uFEHzw2eFThgwQmlV5MOzWWdvlSlFu8=
+			</data>
+		</dict>
+		<key>Resources/utf8extra.lua</key>
+		<dict>
+			<key>symlink</key>
+			<string>/Applications/Lite XL.app/Contents/Resources/utf8extra.lua</string>
+		</dict>
+	</dict>
+	<key>rules</key>
+	<dict>
+		<key>^Resources/</key>
+		<true/>
+		<key>^Resources/.*\.lproj/</key>
+		<dict>
+			<key>optional</key>
+			<true/>
+			<key>weight</key>
+			<real>1000</real>
+		</dict>
+		<key>^Resources/.*\.lproj/locversion.plist$</key>
+		<dict>
+			<key>omit</key>
+			<true/>
+			<key>weight</key>
+			<real>1100</real>
+		</dict>
+		<key>^Resources/Base\.lproj/</key>
+		<dict>
+			<key>weight</key>
+			<real>1010</real>
+		</dict>
+		<key>^version.plist$</key>
+		<true/>
+	</dict>
+	<key>rules2</key>
+	<dict>
+		<key>.*\.dSYM($|/)</key>
+		<dict>
+			<key>weight</key>
+			<real>11</real>
+		</dict>
+		<key>^(.*/)?\.DS_Store$</key>
+		<dict>
+			<key>omit</key>
+			<true/>
+			<key>weight</key>
+			<real>2000</real>
+		</dict>
+		<key>^(Frameworks|SharedFrameworks|PlugIns|Plug-ins|XPCServices|Helpers|MacOS|Library/(Automator|Spotlight|LoginItems))/</key>
+		<dict>
+			<key>nested</key>
+			<true/>
+			<key>weight</key>
+			<real>10</real>
+		</dict>
+		<key>^.*</key>
+		<true/>
+		<key>^Info\.plist$</key>
+		<dict>
+			<key>omit</key>
+			<true/>
+			<key>weight</key>
+			<real>20</real>
+		</dict>
+		<key>^PkgInfo$</key>
+		<dict>
+			<key>omit</key>
+			<true/>
+			<key>weight</key>
+			<real>20</real>
+		</dict>
+		<key>^Resources/</key>
+		<dict>
+			<key>weight</key>
+			<real>20</real>
+		</dict>
+		<key>^Resources/.*\.lproj/</key>
+		<dict>
+			<key>optional</key>
+			<true/>
+			<key>weight</key>
+			<real>1000</real>
+		</dict>
+		<key>^Resources/.*\.lproj/locversion.plist$</key>
+		<dict>
+			<key>omit</key>
+			<true/>
+			<key>weight</key>
+			<real>1100</real>
+		</dict>
+		<key>^Resources/Base\.lproj/</key>
+		<dict>
+			<key>weight</key>
+			<real>1010</real>
+		</dict>
+		<key>^[^/]+$</key>
+		<dict>
+			<key>nested</key>
+			<true/>
+			<key>weight</key>
+			<real>10</real>
+		</dict>
+		<key>^embedded\.provisionprofile$</key>
+		<dict>
+			<key>weight</key>
+			<real>20</real>
+		</dict>
+		<key>^version\.plist$</key>
+		<dict>
+			<key>weight</key>
+			<real>20</real>
+		</dict>
+	</dict>
+</dict>
+</plist>

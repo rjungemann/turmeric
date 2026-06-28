@@ -1,21 +1,21 @@
-# Lite XL Turmeric Editor Enhancements Plan
+# Trowel Turmeric Editor Enhancements Plan
 
 ## Goal
 
-Add three major user-experience (UX) enhancements to the Lite XL editor integration for Turmeric (`tools/lite-xl/turmeric.lua`):
+Add three major user-experience (UX) enhancements to the Trowel editor integration for Turmeric (`tools/trowel/turmeric.lua`):
 1. **Lisp-style Word Selection**: Make double-clicking on hyphenated variable names (e.g., `make-struct` or `compose-lens`) select the entire name rather than stopping at the hyphen.
 2. **Context-Aware Auto-Indentation**: Adjust newline indentation dynamically based on the current style. Parenthesized Turmeric files (`.tur`) should use Lisp-aware double-space matching for open delimiters, while Sweet-expression files (`.tur.sweet`) should preserve or increment block indentation.
-3. **Toolbar Integration (ToolbarView)**: Integrate a custom run-control toolbar using Lite XL's standard `ToolbarView` API, adding a "Play" button to build/execute files and a "Console" button to open/toggle the ReplView pane.
+3. **Toolbar Integration (ToolbarView)**: Integrate a custom run-control toolbar using Trowel's standard `ToolbarView` API, adding a "Play" button to build/execute files and a "Console" button to open/toggle the ReplView pane.
 
 ---
 
 ## 1. Lisp-style Word Selection & Hyphens
 
 ### Current Behavior
-In stock Lite XL, double-clicking on an identifier like `compose-lens` selects only `compose` or `lens`, because the hyphen `-` is defined as a non-word character (like `+`, `*`, `/`, etc.) in the global `config.non_word_chars`.
+In stock Trowel/Lite XL, double-clicking on an identifier like `compose-lens` selects only `compose` or `lens`, because the hyphen `-` is defined as a non-word character (like `+`, `*`, `/`, etc.) in the global `config.non_word_chars`.
 
 ### Technical Strategy
-In Lite XL, word boundaries and double-click selection targets are resolved by the `Doc:is_non_word_char(char)` method of the document. Instead of altering `config.non_word_chars` globally (which would break selection in C, Python, or Markdown files), we can override this method specifically on Turmeric documents.
+In Trowel, word boundaries and double-click selection targets are resolved by the `Doc:is_non_word_char(char)` method of the document. Instead of altering `config.non_word_chars` globally (which would break selection in C, Python, or Markdown files), we can override this method specifically on Turmeric documents.
 
 When a document's syntax is `"Turmeric"`, we will dynamically shadow `Doc:is_non_word_char` to exclude characters like `-`, `?`, `!`, `*`, `/`, `+`, `=`, `<`, `>`, and `'`, which are standard, valid characters in Turmeric and Lisp identifiers.
 
@@ -45,10 +45,10 @@ end
 ## 2. Context-Aware Auto-Indentation
 
 ### Current Behavior
-When pressing Enter, Lite XL copies the exact indentation level of the previous line. This works for flat line-by-line languages, but causes severe misalignment in deeply nested Lisp code and disrupts block transitions in Sweet-expression indentation.
+When pressing Enter, Trowel copies the exact indentation level of the previous line. This works for flat line-by-line languages, but causes severe misalignment in deeply nested Lisp code and disrupts block transitions in Sweet-expression indentation.
 
 ### Technical Strategy
-We will override the default `newline` action in `tools/lite-xl/turmeric.lua` when the active document has `"Turmeric"` syntax. The behavior will fork based on the file type:
+We will override the default `newline` action in `tools/trowel/turmeric.lua` when the active document has `"Turmeric"` syntax. The behavior will fork based on the file type:
 
 #### A. Parenthesized Lisp Indentation (`.tur` files)
 When pressing Enter inside a `.tur` file, the indentation of the new line should align with open delimiters:
@@ -68,10 +68,10 @@ For Sweet-expressions, indentation defines block structure. When pressing Enter:
 
 ## 3. Toolbar Integration (ToolbarView)
 
-To improve accessibility and replicate a full "Studio" IDE feeling, we will implement a graphical toolbar at the top of the editor.
+To improve accessibility and replicate a full IDE feeling, we will implement a graphical toolbar at the top of the editor.
 
 ### API Reference & Integration
-Lite XL provides an optional `ToolbarView` component. We will integrate it dynamically in the Turmeric plugin, ensuring that the editor falls back gracefully if the toolbar package is not installed.
+Trowel provides an optional `ToolbarView` component. We will integrate it dynamically in the Turmeric plugin, ensuring that the editor falls back gracefully if the toolbar package is not installed.
 
 ```lua
 -- Safe requirement of the ToolbarView plugin
@@ -97,15 +97,15 @@ end
    - The "Play" button should render with a green highlight or accent color when hovered.
    - The "REPL Console" button should use a dark grey / terminal slate accent.
 3. **Icons & Fallbacks**:
-   - If Lite XL is compiled with FontAwesome/MaterialIcons, specify the glyphs (e.g. `\u{f04b}` for play, `\u{f120}` for terminal).
-   - If stock Lite XL text icons are used, provide clean text-based fallbacks (e.g., `▶` for Run, `>_` for REPL).
+   - If Trowel is compiled with FontAwesome/MaterialIcons, specify the glyphs (e.g. `\u{f04b}` for play, `\u{f120}` for terminal).
+   - If stock text icons are used, provide clean text-based fallbacks (e.g., `▶` for Run, `>_` for REPL).
 
 ---
 
 ## Actionable Milestones & Tasks
 
 ### Milestone 1: Lisp Word Character Selection
-- [ ] Implement the `Doc:is_non_word_char` interceptor in `tools/lite-xl/turmeric.lua`.
+- [ ] Implement the `Doc:is_non_word_char` interceptor in `tools/trowel/turmeric.lua`.
 - [ ] Validate that double-clicking `compose-lens` selects the whole word in `.tur` files.
 - [ ] Verify that C/C++ files retain their standard hyphen-operator selection boundaries.
 
@@ -115,6 +115,6 @@ end
 - [ ] Write tests for both `.tur` (double-space open paren match) and `.sweet` (increment on keywords/delimiters).
 
 ### Milestone 3: Graphical Toolbar
-- [ ] Hook into Lite XL's standard `ToolbarView` lifecycle.
+- [ ] Hook into Trowel's standard `ToolbarView` lifecycle.
 - [ ] Create robust font-character and text-character fallbacks for the buttons.
 - [ ] Bind "Play" to `cmd+r` (`turmeric:run-file`) and "Console" to the REPL toggle action.

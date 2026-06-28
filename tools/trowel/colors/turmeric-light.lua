@@ -1,7 +1,7 @@
 -- mod-version:3
--- Turmeric light color scheme for Lite XL.
+-- Turmeric light color scheme for Trowel.
 -- Ported from the Monaco theme baked into web/main.js. Keep in sync
--- via tests/lite-xl/check-palette-sync.py.
+-- via tests/trowel/check-palette-sync.py.
 local style  = require "core.style"
 local common = require "core.common"
 

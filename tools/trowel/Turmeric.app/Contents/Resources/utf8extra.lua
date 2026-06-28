@@ -1,0 +1,1 @@
+/Applications/Lite XL.app/Contents/Resources/utf8extra.lua

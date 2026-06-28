@@ -1,12 +1,12 @@
 [Desktop Entry]
 Type=Application
-Name=Turmeric Studio
+Name=trowel
 GenericName=Code Editor
 Comment=A lightweight code editor for Turmeric
-Exec=turmeric-studio %F
-Icon=turmeric-studio
+Exec=trowel %F
+Icon=trowel
 Terminal=false
 Categories=Development;IDE;TextEditor;
 MimeType=text/plain;text/x-turmeric;
 Keywords=text;editor;turmeric;programming;lisp;
-StartupWMClass=lite-xl
+StartupWMClass=trowel

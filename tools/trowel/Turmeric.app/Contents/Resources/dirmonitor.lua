@@ -1,0 +1,1 @@
+/Applications/Lite XL.app/Contents/Resources/dirmonitor.lua

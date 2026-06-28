@@ -139,22 +139,22 @@ emit-c file:
     ./build/tur emit-c {{file}}
 
 # ---------------------------------------------------------------------------
-# Desktop editor (Lite XL plugin)
+# Desktop editor (Trowel plugin)
 # ---------------------------------------------------------------------------
 
-# Launch Lite XL with the in-tree Turmeric plugin symlinked into the user
+# Launch Trowel with the in-tree Turmeric plugin symlinked into the user
 # config and the in-tree `./build/tur` pre-configured as the compiler. Any
-# positional args are passed through to Lite XL (typically file paths).
+# positional args are passed through to Trowel (typically file paths).
 #
 # Symlinks (idempotent):
-#   ~/.config/lite-xl/plugins/turmeric.lua -> tools/lite-xl/turmeric.lua
+#   ~/.config/trowel/plugins/turmeric.lua -> tools/trowel/turmeric.lua
 # Writes (overwrites):
-#   ~/.config/lite-xl/init.lua             (pins config.plugins.turmeric.tur)
+#   ~/.config/trowel/init.lua             (pins config.plugins.turmeric.tur)
 #
-# Set TUR_LITE_XL to override the Lite XL binary; otherwise we probe
-# `lite-xl` on PATH, then the macOS .app bundle.
-lite-xl *ARGS: build
-    bash tools/lite-xl/launch.sh {{ARGS}}
+# Set TUR_TROWEL to override the Trowel binary; otherwise we probe
+# `trowel` on PATH, then the macOS .app bundle.
+trowel *ARGS: build
+    bash tools/trowel/launch.sh {{ARGS}}
 
 # ---------------------------------------------------------------------------
 # Games / Examples (CMake targets — require Raylib)
