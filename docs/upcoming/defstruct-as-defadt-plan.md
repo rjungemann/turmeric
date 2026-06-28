@@ -591,8 +591,8 @@ runtime *usage* seam, below.
      regenerated.  *Cleared ~43* (`httpd-*`, `clone-*`, `eqmap-struct`, the `Pos`
      `typeclass-*` tests).  Fixture `conv-defstruct-inline-c-abi`.
 
-   **Running total: 212 -> 29 unique build-failing fixtures under force-lower
-   (default suite stays 1863/0).**  (Sub-root (a) -- 0-arg construct in control
+   **Running total: 212 -> 25 unique build-failing fixtures under force-lower
+   (default suite stays 1862/0).**  (Sub-root (a) -- 0-arg construct in control
    flow -- the inline-C-tail return bridge, the accessor-unbox, the
    assignment-position straddle, the inline-C instance-method signature, the
    by-value struct-field receiver / by-value ADT field storage, the parametric
@@ -605,6 +605,32 @@ runtime *usage* seam, below.
    wrapper (`(Schema A)`), the by-value-ADT `any` box/unbox, the vec-element carrier<->by-value read/escape
    bridges, the bare-receiver record-ADT field-tyvar collapse, and the
    :heap-ADT by-value-aggregate-element field read are all LANDED.)
+
+   - **Four residual carrier<->by-value crossings DONE (2026-06-27, PR #571).**
+     Four distinct mishandlings of a lowered record-ADT at carrier<->by-value
+     boundaries, each surfacing only when a struct with non-primitive fields
+     was forced through the lowered path; all fixes in emit_expr.c, default
+     suite stays 1862/0:
+     (1) **non-parametric by-value lowered-ADT arg -> int64-carrier param of a
+     generic inline-C helper** was not boxed -- added the non-parametric
+     counterpart of the existing TY_APP-monomorph boxing block in the
+     regular-call arg loop (clears `defopaque-struct-payload-through-unsafe-lift`);
+     (2) **`fn`-field read on a lowered record-ADT truncated to int32** because
+     `type_c_name(TY_FN)` returns the fn's result C name -- the record-ADT
+     EX_GET_FIELD path now forces both `cty` and `fld_rcty` to the int64
+     carrier width for an fn-field (clears `fn-field-unboxed`);
+     (3) **wide (>8 byte) by-value ADT arg into a closure thunk's
+     `__tur_b4box_*` carrier param** was passed raw -- now heap-boxed via
+     `emit_carrier_bridge_escaping` in the closure-call arg loop (covers
+     recursive self-call + letrec direct invocation; clears
+     `letrec-self-recursive-carrier-struct-return`);
+     (4) **bounded-wrapper carrier base whose tail calls a concrete instance
+     method returning a by-value aggregate** -- the two return-bridge tail
+     predicates now detect an `__inst_`-scoped callee with a by-value concrete
+     aggregate result so the existing concrete->carrier return spill fires
+     (clears `typeclass-bounded-wrapper-heterogeneous-dispatch`).
+     (`result-over-struct-with-option-field-typedef-order` was already
+     resolved by the landed seam-4 PR.)
 
    - **:heap-ADT by-value-aggregate-element field read DONE (2026-06-27).**  A
      direct field read on a :heap record-ADT receiver whose element is a by-value
@@ -995,16 +1021,20 @@ What remains is **step 4 (full graduation)**: make lowering unconditional (delet
 the gate + `g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]` row), retire the
 `StructDef` surface path, and regen snapshots.  **Seam 4 is IN PROGRESS** (see the
 step-4 entry above for the measured scope and the running cleared-cluster log).
-The default `bash tests/run.sh` is **green (1857 passed, 0 failed)** with eight
+The default `bash tests/run.sh` is **green (1862 passed, 0 failed)** with many
 flag-independent seam-4 fixes landed -- including the big lever (the C-ABI-
 compatible flat named layout + `typedef <Name>` alias for single-variant record
-ADTs), ABI-bridge sub-root (a) (0-arg construct selection in control flow), and
-the inline-C-tail return bridge.
-The force-lower probe is down from **212 to 96 real (non-snapshot) blockers (55%
-cleared)**.  The dominant remaining cluster is now the by-value-aggregate <->
-int64-carrier **ABI bridge** family (`incompatible types when
-returning/initializing/assigning`, `aggregate value used where an integer was
-expected`) -- seam-1 widened to more crossing sites, the natural next lever --
-followed by ~22 runtime/link mismatches and smaller ctor-selection / parametric
-inline-C edges.  Driving the remaining clusters to zero (promote each to a flag-on
-fixture + fix) is the gating work before the experiment can graduate.
+ADTs), ABI-bridge sub-root (a) (0-arg construct selection in control flow), the
+inline-C-tail return bridge, the `:heap`-ADT by-value-aggregate-element field
+read, and the four most recent carrier<->by-value crossings cleared by PR #571
+(non-parametric by-value-ADT arg boxing, `fn`-field int64 carrier width,
+wide-by-value -> closure-thunk carrier heap-box, bounded-wrapper -> concrete
+aggregate-return tail bridge).
+The force-lower probe is down from **212 to 25 unique build-failing fixtures
+(~88% cleared)** as of 2026-06-27 (PR #571).  The dominant remaining cluster
+is still the by-value-aggregate <-> int64-carrier **ABI bridge** family at the
+remaining crossing sites, alongside ~22 runtime/link mismatches and smaller
+ctor-selection / parametric inline-C edges.  Driving the remaining clusters
+to zero (promote each to a flag-on fixture + fix) is the gating work before
+the experiment can graduate.  Runway: experiment `expires_at` is `0.30.0`
+(current `VERSION` is `0.25.5`).
