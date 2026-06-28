@@ -714,8 +714,34 @@ local function open_repl_view(split_dir)
   return view
 end
 
+local function find_repl_node()
+  local found
+  local function walk(node)
+    if not node then return end
+    if node.views then
+      for _, v in ipairs(node.views) do
+        if v:is(ReplView) then found = node; return end
+      end
+    end
+    if node.a then walk(node.a) end
+    if node.b then walk(node.b) end
+  end
+  walk(core.root_view.root_node)
+  return found
+end
+
+local function toggle_repl_view()
+  local view = find_repl_view()
+  local node = find_repl_node()
+  if view and node then
+    node:close_view(core.root_view, view)
+  else
+    open_repl_view("down")
+  end
+end
+
 command.add(nil, {
-  ["turmeric:start-repl"] = function() open_repl_view("down") end,
+  ["turmeric:start-repl"] = function() toggle_repl_view() end,
   ["turmeric:stop-repl"]  = function()
     local v = find_repl_view()
     if v then v:stop() end
