@@ -846,6 +846,140 @@ if ok_ac and autocomplete and autocomplete.add then
 end
 
 -- -------------------------------------------------------------------------
+-- Lisp-style Word Selection & Hyphens
+-- -------------------------------------------------------------------------
+local Doc = require "core.doc"
+local orig_is_non_word_char = Doc.is_non_word_char
+function Doc:is_non_word_char(char)
+  if self.syntax and self.syntax.name == "Turmeric" then
+    -- Treat hyphens, question marks, and Lisp operators as word characters
+    local lisp_chars = {
+      ["-"] = true, ["?"] = true, ["!"] = true, ["*"] = true, ["/"] = true,
+      ["+"] = true, ["="] = true, ["<"] = true, [">"] = true, ["'"] = true
+    }
+    if lisp_chars[char] then
+      return false
+    end
+  end
+  return orig_is_non_word_char(self, char)
+end
+
+-- -------------------------------------------------------------------------
+-- Context-Aware Auto-Indentation
+-- -------------------------------------------------------------------------
+local function turmeric_doc_predicate()
+  return core.active_view and core.active_view.doc and core.active_view.doc.syntax and core.active_view.doc.syntax.name == "Turmeric"
+end
+
+command.add(turmeric_doc_predicate, {
+  ["turmeric:newline"] = function()
+    local dv = core.active_view
+    local doc = dv.doc
+    local is_sweet = doc.filename and doc.filename:match("%.sweet$")
+
+    -- 1. Grab previous line info before inserting newline
+    local line, col = doc:get_selection()
+    local prev_line_text = doc.lines[line] or ""
+
+    -- 2. Call default newline command to insert \n and carry previous indent
+    command.perform("docview:newline")
+
+    -- Now we are on the new line. Let's get our new cursor position
+    local r_line, r_col = doc:get_selection()
+
+    if is_sweet then
+      -- --- Sweet-exp Auto-Indentation ---
+      local prev_clean = prev_line_text:gsub("%s+$", "") -- trim trailing whitespace
+      local ends_with_open = prev_clean:match("[%(%[%{%$]$")
+      local starts_with_block = prev_clean:match("^%s*defn%A") or
+                                prev_clean:match("^%s*let%A") or
+                                prev_clean:match("^%s*loop%A") or
+                                prev_clean:match("^%s*if%A") or
+                                prev_clean:match("^%s*cond%A") or
+                                prev_clean:match("^%s*match%A")
+      if ends_with_open or starts_with_block then
+        doc:text_input("  ")
+      end
+    else
+      -- --- Parenthesized Lisp Auto-Indentation ---
+      local start_scan = math.max(1, r_line - 50)
+      local unmatched_pos = nil
+
+      -- We'll track nested delimiters
+      local stack = {}
+      for l = r_line - 1, start_scan, -1 do
+        local text = doc.lines[l] or ""
+        -- Scan character by character from the end of the line backwards
+        for idx = #text, 1, -1 do
+          local c = text:sub(idx, idx)
+          if c == ')' or c == ']' or c == '}' then
+            table.insert(stack, c)
+          elseif c == '(' or c == '[' or c == '{' then
+            if #stack > 0 then
+              table.remove(stack) -- closed
+            else
+              -- Found an unmatched opening delimiter!
+              unmatched_pos = { line = l, col = idx }
+              break
+            end
+          end
+        end
+        if unmatched_pos then break end
+      end
+
+      if unmatched_pos then
+        -- If we found an unmatched opening delimiter:
+        -- Let's see if there is any non-space text after it on its line.
+        local delim_line_text = doc.lines[unmatched_pos.line] or ""
+        local after_delim = delim_line_text:sub(unmatched_pos.col + 1)
+        local first_arg_idx = after_delim:find("%S")
+
+        -- Delete the default copied indentation on the current line first
+        local current_line_text = doc.lines[r_line] or ""
+        local copied_indent = current_line_text:match("^%s*") or ""
+        if #copied_indent > 0 then
+          doc:set_selection(r_line, 1, r_line, #copied_indent + 1)
+          doc:delete_to()
+        end
+
+        if first_arg_idx then
+          -- Standard Lisp List Alignment: Align with the first argument
+          local target_indent_size = unmatched_pos.col + first_arg_idx - 1
+          doc:text_input(string.rep(" ", target_indent_size))
+        else
+          -- Lisp Body Indentation: Align with the open delimiter's line's indent + 2 spaces
+          local base_indent = delim_line_text:match("^%s*") or ""
+          doc:text_input(base_indent .. "  ")
+        end
+      end
+    end
+  end,
+})
+
+keymap.add {
+  ["return"] = "turmeric:newline"
+}
+
+-- -------------------------------------------------------------------------
+-- ToolbarView Integration
+-- -------------------------------------------------------------------------
+local ok_tb, Toolbar = pcall(require, "plugins.toolbar")
+if ok_tb and Toolbar then
+  if Toolbar.add_button then
+    Toolbar:add_button {
+      icon = "play",
+      command = "turmeric:run-file",
+      tooltip = "Run Turmeric File (Cmd+R)"
+    }
+    Toolbar:add_button {
+      icon = "terminal",
+      command = "turmeric:start-repl",
+      tooltip = "Open REPL Pane"
+    }
+  end
+end
+
+-- -------------------------------------------------------------------------
 -- Sidebar visibility -- Processing-style "file vs project" launch
 -- -------------------------------------------------------------------------
 --
