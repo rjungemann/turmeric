@@ -3,6 +3,27 @@
 > **Status:** Phases 1, 2, and 3 landed. Phase 1.5 (cross-tab `load`
 > bridge via concatenation) is the only remaining piece of the
 > original plan.
+
+## Status (as of 2026-06-28)
+
+- [x] **Phase 1 -- multi-tab UI + persistence + migration.** Landed in
+      `web/main.js` (tab keys `tur.try.tabs.v1` at line 105) and
+      `web/styles.css`. Coverage in `web/tests/mobile.tabs.spec.js` and
+      `web/tests/mobile.tabs-migration.spec.js`.
+- [x] **Drag-reorder (sub-task of Phase 1, prerequisite for 1.5).** Landed.
+- [ ] **Phase 1.5 -- cross-tab `load` concatenation bridge.** NOT landed.
+      Verified: `grep -n "load-bridge\|spliceForRun\|spliceTabs\|;; ---\|concatenat" web/main.js` returns nothing,
+      and no `web/tests/mobile.load-bridge.spec.js` exists.
+- [x] **Phase 2 -- download project as zip.** Landed: `buildZip()` at
+      `web/main.js:1483`, `downloadProject()` at `:1618`. Coverage in
+      `web/tests/mobile.download.spec.js`.
+- [x] **Phase 3 -- load project from zip.** Landed: `readStoreZip()` at
+      `web/main.js:1646`, `loadProjectFromBytes()` at `:1804`. Coverage in
+      `web/tests/mobile.load.spec.js`.
+
+Only Phase 1.5 remains.
+
+
 > **Type:** Web platform / Try Turmeric
 > **Predecessor:** [`docs/archive/try-turmeric-pwa-mobile-plan.md`](../../archive/try-turmeric-pwa-mobile-plan.md)
 

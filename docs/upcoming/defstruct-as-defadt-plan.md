@@ -6,6 +6,31 @@ description: Lower `defstruct` to a single-variant record `defadt` so structs fl
 
 # `defstruct` -> `defadt` lowering
 
+## Status (as of 2026-06-28)
+
+- [x] **Slices 1-8 (gate-on lowering for scalar / pointer / fn / typed-fn /
+      struct-field / `:heap` / parametric / parametric-`:heap` fields)** -- DONE.
+- [x] **Graduation (step 7 / step 4 below): lowering is unconditional.** The
+      `EXPERIMENTS[]` row for `defstruct-as-defadt`, the `g_opt_defstruct_as_defadt`
+      global, and the per-fixture `--enable` flags are deleted (verified:
+      `grep -c g_opt_defstruct_as_defadt src/runtime/experiments.c` -> 0;
+      `defstruct_lowers_to_adt` at `src/compiler/elab_structs.c:861` is the
+      sole remaining gate, used only for the legitimate `:linear` /
+      `:no-auto-ctor` / applied-type-field carve-outs).
+- [x] **Default suite green** (1862-1866 passed / 0 failed depending on
+      snapshot regen state).
+- [x] **Force-lower build-blocker count: ZERO.**
+- [x] **24 flag-on `conv-defstruct-*` canary fixtures** present under
+      `tests/fixtures/` (one per slice + per cleared sub-root).
+- [ ] **StructDef surface path retirement** -- tracked separately in
+      [`structdef-retirement-plan.md`](structdef-retirement-plan.md) (~197
+      `StructDef` sites across 19 files; first slice is widening the field gate
+      to applied-type fields).
+- [ ] **Snapshot regen sweep for the ~166 lowered-fixture `expected.c` files**
+      -- coordinate with the StructDef retirement window.
+
+The rest of this document is preserved as the paper trail.
+
 > **GRADUATED 2026-06-28.** Lowering is now **unconditional (always-on)**: a
 > `defstruct` lowers to a single-variant record `defadt` with no flag.  The
 > `defstruct-as-defadt` experiment is retired -- the `EXPERIMENTS[]` row, the

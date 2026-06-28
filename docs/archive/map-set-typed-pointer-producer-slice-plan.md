@@ -6,6 +6,30 @@ description: Replicate the Vec producer-monomorphization slice (commit "monomorp
 
 # Map/Set Typed-Pointer Producer Slice -- Plan
 
+## Status (as of 2026-06-28)
+
+This plan is **COMPLETE.** Re-verified against the tree:
+
+- [x] **Step 1 -- `type_is_heap_collection` allow-list.** Done. Verified in
+      `src/compiler/emit_module.c:2011-2014`: the predicate (still named
+      `type_is_heap_vec`) admits `Vec`, `Map`, `Set`, `MutableMap`. `Cons`
+      is intentionally excluded per the Out-of-scope section.
+- [x] **Step 2 -- carrier-force K/V element slots.** Done; covered by
+      `tce3-map-cstr-val` and friends.
+- [x] **Step 3 -- `__TUR_RET__` on heap-returning producers.**
+  - [x] **Vec** -- #400 (prior baseline).
+  - [x] **MutableMap** -- commit `4e7a8f77` (#411).
+  - [x] **Map** -- #555 (representation flip from transparent int newtype to
+        `(hamt :ptr<void>)`, then producer-typing).
+  - [x] **Set** -- landed alongside Eq[Set] by-value receiver in the same
+        window as the typed-collection-eq-consumers plan.
+- [x] **Step 4 -- signature/bridge plumbing.** Already generic; no changes
+      needed.
+
+All four `:heap` collections (Vec, MutableMap, Map, Set) now type their
+producers end-to-end. The legacy "COMPLETE -- 2026-06-25" banner and the
+"for review" body below are preserved as the paper trail.
+
 ## COMPLETE -- 2026-06-25
 
 **This plan is fully landed; all four `:heap` collections now type their

@@ -6,6 +6,32 @@ description: Unify structs and ADTs by treating `defstruct S [...]` as sugar for
 
 # Struct / ADT Convergence -- Plan
 
+## Status (as of 2026-06-28)
+
+- [x] **CONV-S0** -- record-style `defadt` variants. LANDED.
+- [x] **CONV-S1** -- `defstruct` lowers to `defadt`. **GRADUATED 2026-06-28**;
+      lowering is unconditional. See
+      [`defstruct-as-defadt-plan.md`](defstruct-as-defadt-plan.md). The B4
+      fat-closure ABI bridge it depended on also shipped (archived).
+- [x] **CONV-S2** -- single-variant flat-layout codegen. LANDED.
+- [x] **CONV-S3** -- `match` on struct values. LANDED (desugars to `let` over
+      field accessors).
+- [x] **CONV-S4 (KW half)** -- keyword construction on record variants. LANDED.
+- [x] **CONV-S4 (`with` half, single-variant)** -- LANDED via
+      `elab_with_record_adt`.
+- [ ] **CONV-S4 (`with` on a narrowed multi-variant)** -- still deferred
+      (requires variant narrowing in the type system).
+- [x] **CONV-S5** -- `:copy` traverses ADT variants. LANDED.
+- [ ] **CONV-S6** -- diagnostic wording pass. Pending; best done once
+      StructDef retirement (separate plan) lands.
+- [x] **CONV-S7 (partial)** -- record variants + match-on-struct documented.
+      The full struct-guide / ADT-guide merge into one "product and sum types"
+      guide is still open.
+
+The surface convergence is effectively done; only diagnostic wording (S6) and
+the documentation merge (S7 full) remain. The legacy "Implementation status"
+section below is preserved as the paper trail.
+
 ## Implementation status (2026-06-25)
 
 **CONV-S1 by-value merge: bridging slices B1-B3 landed; B4 (recursive HKT

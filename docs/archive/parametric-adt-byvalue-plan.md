@@ -6,6 +6,26 @@ description: Make a concrete monomorphisation of a single-variant parametric fla
 
 # Parametric ADT by-value monomorphisation -- plan
 
+## Status (as of 2026-06-28)
+
+- [x] **P1 (gate + plumbing, hard-off)** -- LANDED.
+- [x] **P2 (Crossing A: match / field-access / result-init on app receiver)** -- LANDED.
+- [x] **P3 (Crossing B: by-value app value into a carrier ctor field)** -- LANDED.
+- [x] **P4 (flip `g_adt_app_byvalue` on)** -- LANDED. Verified:
+      `src/compiler/types.c:3028` declares `static const bool g_adt_app_byvalue = true;`
+      and `adt_app_is_byvalue_product` lives at `types.c:3030` (also exported via
+      `types.h:1605`).
+- [x] **Step 5 (`:heap` typed-pointer ADT ABI)** -- DONE. The companion
+      `defstruct-as-defadt-plan.md` has graduated, so the parametric `:heap`
+      lowering tail referenced here is closed (Vec/Map/Set/List all lower under
+      the now-always-on gate). Fixtures `conv-byval-adt-app-pair`,
+      `conv-heap-adt-typed-pointer`, `conv-heap-adt-carrier-base`,
+      `conv-heap-adt-carrier-ascribe` are all present.
+- [x] **Downstream gate (CONV-S1 graduation)** -- DONE in the companion plan.
+
+This plan is effectively COMPLETE; the legacy "Status at a glance (2026-06-25)"
+below is preserved as the paper trail.
+
 ## Status at a glance (2026-06-25)
 
 - **P1 (gate + plumbing, hard-off)** -- **LANDED**.

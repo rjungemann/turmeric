@@ -6,6 +6,30 @@ description: Create typed Map/Set/Cons consumers so the producer-typing slice ha
 
 # Typed Eq[Map] / Eq[Set] / Eq[Cons] Consumers -- Plan
 
+## Status (as of 2026-06-28)
+
+This plan is **COMPLETE.** Re-verified against the tree:
+
+- [x] **Step 1 -- `emit_abi_clone_name` / `type_c_name` TY_APP divergence.**
+      Already resolved when this plan was written; no compiler change was
+      needed.
+- [x] **Step 2 -- Path A for `Eq[Cons]`.** Landed (#553); `cons-eq-go` in
+      `stdlib/list.tur` is the by-value receiver body.
+- [x] **Step 3 -- iteration-primitive choice (fold-with-typed-continuation).**
+      Shipped under "Phase TCO-Eq-MapSet"; `hamt/iter-alloc` +
+      `hamt/iter-advance!` are the cursor APIs.
+- [x] **Steps 4-6 -- `set-eq-full` / `map-eq?` / `mutmap-eq?` rewrites.** All
+      three instance bodies are pure Turmeric over the cursor.
+- [x] **Step 7 -- typed consumers present.** Verified in
+      `src/compiler/emit_module.c:2011-2014`: `type_is_heap_vec` allow-list
+      contains Vec, Map, Set, and MutableMap. Per-collection typed-consumer
+      fixtures exist (`set-typed-consumer`, `map-of-tvec-eq`, etc.).
+- [x] **Step 8 -- unblock the producer-slice plan.** Done; see
+      [`map-set-typed-pointer-producer-slice-plan.md`](map-set-typed-pointer-producer-slice-plan.md).
+
+The legacy "COMPLETE -- 2026-06-25" banner below is preserved as the paper
+trail.
+
 ## COMPLETE -- 2026-06-25
 
 **All eight steps are landed; every collection-Eq instance now has a typed

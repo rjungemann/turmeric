@@ -1,5 +1,27 @@
 # Run-loads-definitions-into-REPL (DrRacket-style) -- plan
 
+## Status (as of 2026-06-28)
+
+- [x] **L1 -- recon memo.** Landed at `docs/notes/tur-repl-reload-semantics.md`.
+- [x] **L2 -- cmd+r -> REPL `:run`.** Landed. `turmeric:run-file` in
+      `tools/trowel/turmeric.lua:769` now saves the buffer, opens the
+      ReplView, and calls `view:send_run(path)` (defined at
+      `tools/trowel/turmeric.lua:606`) which writes `:run <abs-path>\n` to the
+      running interpreter. The interpreter side handles `:run` and `:reload`
+      at `src/turi/repl.c:939` / `:946` (`:run` resets the session before
+      loading and auto-invokes `(main)` per the help text at line 521).
+- [ ] **L3 -- diagnostic surfacing / clickable file:line:col.** Not yet
+      wired in `tools/trowel/turmeric.lua`; only the comment at lines 8/143
+      mentions the log-pane routing. No click-handler attached to the REPL
+      output.
+- [ ] **L4 -- stale-buffer chip.** Not yet implemented (no `stale` / `dirty`
+      tracking in `tools/trowel/turmeric.lua`).
+- [ ] **L5 -- `cmd+enter` to send selection / current form.** Deferred per
+      the plan; the recon memo at `docs/notes/tur-repl-reload-semantics.md`
+      sketches the eventual `send-form-at-cursor` path but no implementation.
+
+Critical path (L1 + L2) is COMPLETE; remaining work (L3-L5) is polish.
+
 ## Goal
 
 After pressing Run on a `.tur` file in the Lite XL editor, every
