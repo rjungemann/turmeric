@@ -1,13 +1,16 @@
 # Turmeric as a Godot 4 Scripting Language -- Plan
 
-> **Status:** In progress -- G0-G3, G5, G6, G7 done; G4 partial
-> (debugger deferred). defgodot-script ships the plan-shape
-> :exports / :signals block surface; verified headless against
-> stock Godot 4.x.
-> **Last Updated:** 2026-06-25
+> **Status:** v1 scope complete -- G0-G3, G5, G6, G7 done; G4 partial
+> (debugger deferred to [godot-binding-debugger-plan.md](./godot-binding-debugger-plan.md)).
+> defgodot-script ships the plan-shape :exports / :signals block
+> surface; verified headless against stock Godot 4.x.
+> A post-v1 T3/T4 follow-up series (ClassDB allowlist expansion,
+> typed emit-side wrappers, hot-reload state preservation, preload)
+> landed 2026-06-26 -- tracked below, not gating v1.
+> **Last Updated:** 2026-06-28
 > **Type:** Integration / Game Engine
 
-## Implementation Status (2026-06-25)
+## Implementation Status (2026-06-28)
 
 Phase work has been landing in the sibling repo `../turmeric-godot/`.
 Headless verification runs via
@@ -48,6 +51,37 @@ investigation surfaced are all closed (2026-06-25):
   `F_TYPE_ANN` node the reader emits for structural `name : type`
   annotations, so a macro can read the inner type symbol --
   [archived report](../../archive/ct-primitives-cannot-walk-type-ann-nodes.md).
+
+**Post-v1 follow-up (T3/T4 series, landed 2026-06-26 in `../turmeric-godot/`):**
+
+These extend the v1 surface but are not part of the v1 gate. Tracked
+here for visibility; promote to a dedicated plan if scope grows.
+
+- **T3.A** -- ClassDB ALLOWLIST grew to 53 classes; bundles in-flight
+  bridge/AOT work.
+- **T3.B** -- Generator emits singleton + static method wrappers.
+- **T3.C** -- Dictionary + Array builders, mutators, typed accessors.
+- **T3.D** -- PackedXxxArray + RID marshalling and natives.
+- **T3.E** -- Variadic dispatch via `godot-call-pack`; generator stops
+  skipping `is_vararg` (Object::emit_signal/call/call_deferred,
+  Node::rpc/rpc_id, SceneTree::call_group, ...).
+- **T4.A starter** -- Cross-script Callable fallback discoverable as
+  `(cross-call OBJ METHOD args...)` / `(cross-call-pack ...)`; thin
+  named wrappers over the existing `godot-call` -> `Object::callv` ->
+  target Callable chain. Fast direct-symbol path (per-script
+  build-graph, RTLD_GLOBAL) stays deferred.
+- **T4.B starter** -- Hot-reload preserves `@export` inspector values
+  via `cb_get_property_state` wired into `GDExtensionScriptInstanceInfo3`.
+  Snapshot/replay around `TurmericScript::_reload(keep_state=true)`;
+  retype-an-export drops the stale value cleanly. Structured
+  property-schema migration + in-flight method safety still deferred.
+- **T4.C** -- Typed `(cls/emit-SIGNAL ...)` wrappers (emit-side
+  companion to existing `cls/on-`); wrong payload shape is TUR-E0001
+  at elaboration. Regenerated facade: 53 classes, 2234 methods, 102
+  signals, 102 new emit wrappers.
+- **T4.D** -- `(preload "res://...")` returns a cached `ResourceHandle`;
+  top-level use checks the path at reload via `ResourceLoader.exists`
+  and fails fast with `preload: missing resource '...'`.
 
 **Spun out into their own plans:**
 
