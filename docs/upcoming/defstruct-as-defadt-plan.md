@@ -1099,15 +1099,21 @@ read, and the four most recent carrier<->by-value crossings cleared by PR #571
 (non-parametric by-value-ADT arg boxing, `fn`-field int64 carrier width,
 wide-by-value -> closure-thunk carrier heap-box, bounded-wrapper -> concrete
 aggregate-return tail bridge).
-The force-lower probe is down to **1 unique build-failing fixture** (plus 2
-stdout mismatches) as of 2026-06-28, after the named parametric-monomorph layout
-keystone cleared `tuplen-struct-param-passing` + `m5-byval-marker-spec-emit`, the
-none()-base / by-value-spec carrier-return bridges cleared `positional-opaque-ok`,
+The force-lower probe is at **ZERO unique build-failing fixtures** as of
+2026-06-28, after the named parametric-monomorph layout keystone cleared
+`tuplen-struct-param-passing` + `m5-byval-marker-spec-emit`, the none()-base /
+by-value-spec carrier-return bridges cleared `positional-opaque-ok`,
 `positional-pap-opaque-ok`, `kleisli-arrow-instance`, and
 `typeclass-return-dispatch-result-wrapped`, the instance-method ADT-return
 ctor-misemit fix cleared `serial-composite-instances`, the stdlib/user `Cons`
-ctor-name-collision + mis-resolution fix cleared `adt-recursive`, and the
-`Option__opaque` fn-element construct fix cleared `hkt-ap-fn-in-container`.
+ctor-name-collision + mis-resolution fix cleared `adt-recursive`, the
+`Option__opaque` fn-element construct fix cleared `hkt-ap-fn-in-container`, and
+the Option HKT instance-body carrier<->by-value straddle fix cleared
+`hkt-stdlib-option-result-instances`.  (A full force-lower sweep over every
+fixture confirms 0 lowering-introduced build errors -- the only standalone
+`tur build` failures are the `httpd-*`/`reactor-*`/`future-*` harness-link
+families, which fail identically with and without the flag because they need
+`tests/run.sh`'s `-lturi`/spice setup, not because of lowering.)
 
    - **Result/Option value-struct field: pointer-slot parity DONE (2026-06-28).**
      A lowered carrier-helper-backed parametric stdlib type (`Result`/`Option`)
@@ -1167,14 +1173,34 @@ ctor-name-collision + mis-resolution fix cleared `adt-recursive`, and the
      (`some-of-fn-element-spec-arg-mistyped.md`).  Canary
      `conv-defstruct-option-fn-element`.
 
-The remaining build blocker, by root: the generic HKT instance-method bodies for
-the hand-written stdlib `Option` (`hkt-stdlib-option-result-instances`) straddle
-the carrier and by-value `Option__opaque` representations -- a `some?` by-value
-predicate spec called on a carrier `ff` param (consuming), and a continuation
-`k` returning a by-value aggregate cast through `(intptr_t)` to a carrier pointer
-(producing).  Both are in the dispatch/spec hot path and are tracked in
-`docs/reported/hkt-instance-body-carrier-byvalue-opaque-spec.md`.  This is the
-last force-lower build blocker (plus 2 stdout mismatches); driving it to zero
-(plus a carrier/by-value reconciliation of the hand-written stdlib instance
-bodies) is the gating work before the experiment can graduate.  Runway:
-experiment `expires_at` is `0.30.0` (current `VERSION` is `0.25.5`).
+   - **Option HKT instance-body carrier<->by-value straddle DONE (2026-06-28).**
+     The last force-lower build blocker: the generic HKT instance-method bodies
+     for the hand-written stdlib `Option` (`hkt-stdlib-option-result-instances`)
+     straddle the carrier and by-value `Option__opaque` representations once
+     `Option` lowers.  Three crossings, all flag-independent (the report is
+     archived; canary `conv-defstruct-option-hkt-instance-bodies`):
+     (1) **consuming** -- `(some? ff)` where `ff` is an `int64_t` carrier param
+     but the fn-element specializes the predicate to the by-value
+     `some___spec__bool_tur_adt_Option__opaque`: the spec-call arg bridge
+     (emit_expr.c) now unboxes an `EX_VAR` whose binding has
+     `emit_carrier_holds_byval` into the by-value spec param (suppressed when the
+     active spec already passes it by-value);
+     (2) **producing** -- in by-value `bind`, the continuation `k` returns the
+     by-value aggregate directly (`(R (*)(void*, A...))k.fn`), so a new
+     `closure_call_emits_byval_aggregate` predicate keeps
+     `fn_body_tail_emits_byvalue_carrier_abi` from re-bridging the if-arm merge
+     through the int64 carrier (the `(tur_option_t *)(intptr_t)(<aggregate>)`
+     reconstruct);
+     (3) **construct closure-as-int** -- a `(:: (fn ..) int)` capturing closure
+     (`void *`) fed to the int64-carrier construct spec
+     `some__spec__...Option__int_int64_t`: the regular-call `needs_fn_cast`
+     TY_TYVAR branch now also casts to int64 when the matched spec resolves the
+     param to the int64 carrier.
+
+With this, the **force-lower build-blocker count is ZERO**.  What remains before
+the gate can be deleted: regenerate the ~166 codegen (snapshot) `expected.c`
+files for the lowered fixtures, audit the residual run-time/stdout
+behavioural diffs (the harness-link `httpd-*`/`reactor-*`/`future-*` families
+are not lowering issues -- they need `tests/run.sh`'s link setup), then delete
+the gate + `g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]` row, retire the
+`StructDef` surface path, and land the snapshot regen in one change.

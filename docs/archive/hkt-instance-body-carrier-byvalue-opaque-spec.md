@@ -1,5 +1,22 @@
 # Generic HKT instance body mixes carrier and by-value `Option__opaque` specs
 
+> **RESOLVED (2026-06-28).** All three crossings fixed, flag-independent
+> (default suite stays 1869/0):
+> (1) **consuming** -- the spec-call arg bridge (`emit_expr.c`) now unboxes an
+> `EX_VAR` whose binding has `emit_carrier_holds_byval` (the int64 carrier
+> holding a by-value monomorph) into the matched by-value spec param, suppressed
+> when the active spec already passes it by-value;
+> (2) **producing** -- a new `closure_call_emits_byval_aggregate` predicate
+> teaches `fn_body_tail_emits_byvalue_carrier_abi` that a `phase_f_concrete`
+> poly-fn (continuation `k`) call already returns the by-value aggregate, so the
+> if-arm merge no longer re-bridges it through the int64 carrier;
+> (3) **construct closure-as-int** -- the regular-call `needs_fn_cast` TY_TYVAR
+> branch now also casts a `void *` closure to int64 when the matched construct
+> spec resolves the param to the int64 carrier (`some__spec__...int64_t`).
+> `hkt-stdlib-option-result-instances` builds `-Wint-conversion`-clean and runs
+> correctly under `--enable=defstruct-as-defadt`; canary
+> `conv-defstruct-option-hkt-instance-bodies`.
+
 **Severity:** low (force-lower / `--enable=defstruct-as-defadt`; the hand-written
 stdlib `Applicative`/`Monad [Option]` instance bodies). Default path unaffected.
 

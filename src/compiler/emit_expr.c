@@ -690,6 +690,35 @@ static bool call_spec_result_byval_aggregate(EmitCtx *ctx, const Expr *call,
     return byval_aggr;
 }
 
+/* CONV-S1 seam 4 (closure call returning a by-value aggregate): a monadic
+ * continuation call `(k x)` inside a by-value bind/ap spec (`(bind [ma k]
+ * (if (some? ma) (k (.value ma)) (none)))`) is a poly (fat-closure) call whose
+ * wrapper RETURNS the by-value carrier-ABI aggregate directly -- the EX_CALL
+ * emit casts `k.fn` to `(R (*)(void*, A...))` and the call result IS the
+ * aggregate (the `phase_f_concrete` path, ~emit_expr.c:2836).  So the call tail
+ * already emits by-value and must NOT be re-bridged through the int64 carrier
+ * (the `(tur_option_t *)(intptr_t)(...)` reconstruct would treat the aggregate
+ * as a carrier pointer -- "aggregate value used where an integer was
+ * expected").  Mirror the `phase_f_concrete` gate + a by-value-aggregate
+ * result. */
+static bool type_kind_is_poly_concrete(TypeKind k);
+static bool closure_call_emits_byval_aggregate(EmitCtx *ctx, const Expr *e) {
+    if (!e || e->kind != EX_CALL || !e->as.call_.is_poly_call) return false;
+    if (e->as.call_.poly_arg_mask) return false;
+    const Binding *fb = e->as.call_.fn_binding;
+    bool typed_carrier = fb && fb->poly_type && fb->poly_type->kind == TY_FN;
+    if (!typed_carrier && !type_kind_is_poly_concrete(e->type.kind)) return false;
+    if (!typed_carrier) {
+        for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+            if (!type_kind_is_poly_concrete(e->as.call_.args[i]->type.kind))
+                return false;
+    }
+    Type rt = emit_resolve_type(ctx, e->type);
+    return (rt.kind == TY_APP || rt.kind == TY_ADT) &&
+           !type_uses_carrier_abi(rt) && !type_is_heap_adt(rt) &&
+           strcmp(emit_type_c_name(ctx, rt), "int64_t") != 0;
+}
+
 bool fn_body_tail_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
     if (!e) return false;
     switch (e->kind) {
@@ -712,6 +741,8 @@ bool fn_body_tail_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
             if (call_construct_emits_byval_aggregate(ctx, e, NULL))
                 return true;
             if (call_spec_result_byval_aggregate(ctx, e, NULL))
+                return true;
+            if (closure_call_emits_byval_aggregate(ctx, e))
                 return true;
             return expr_emits_byvalue_carrier_abi(ctx, e);
     }
@@ -3916,7 +3947,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             cast_to_void_ptr = false;
                         }
                     } else if ((pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS)
-                               && (fn_binding->body_is_inline_c || !matched_spec)) {
+                               && (fn_binding->body_is_inline_c || !matched_spec ||
+                                   (matched_spec &&
+                                    strcmp(emit_type_c_name(ctx,
+                                        matched_spec->arg_types[i]), "int64_t") == 0))) {
                         /* Polymorphic param emitted as the int64 carrier: an
                          * inline-C body keeps `val` typed int64_t regardless of A,
                          * and the generic (non-spec, !matched_spec) emit of a
@@ -3925,8 +3959,11 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * TY_FN/TY_PTR_VOID actual (a closure stashed into the
                          * carrier slot) must be bridged through (int64_t)(intptr_t)
                          * -- otherwise clang trips -Wint-conversion.  A matched
-                         * spec resolves A to a concrete C type, so it keeps the
-                         * existing (no-cast) handling. */
+                         * spec usually resolves A to a concrete C type (no-cast),
+                         * but when it resolves to the int64 carrier itself -- a
+                         * by-value construct spec `some__spec__...Option__int_int64_t`
+                         * whose value param is the int64 carrier, fed a `(:: (fn ..)
+                         * int)` closure (`void *`) -- the cast is still needed. */
                         needs_fn_cast = true;
                         cast_to_void_ptr = false;
                     } else if (pk == TY_CSTR && scalar_carrier_cty) {
@@ -4184,6 +4221,30 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             arg_spec_returns_byvalue_aggregate = true;
                     }
                 }
+                /* CONV-S1 seam 4 (carrier-held by-value receiver -> by-value spec
+                 * arg): `emit_arg` is a VAR bound to a param declared `int64_t`
+                 * (the uniform dispatch ABI) whose elaborated type is a by-value
+                 * aggregate ADT app -- e.g. `ff : (Option (fn ...))` in the
+                 * GENERIC carrier-base body of `__inst_Applicative_ap_Option`.
+                 * The body reads its fields by deref-ing the int64 carrier
+                 * (`emit_carrier_holds_byval`), but a consume specialized to the
+                 * by-value monomorph (`some?` -> `some___spec__...Option__opaque`)
+                 * wants the aggregate by value.  The arg's own type is the
+                 * by-value app (so the TY_INT / carrier-abi disjuncts miss it),
+                 * yet the value emitted IS the int64 carrier -- so unbox it.
+                 * Suppressed when the active spec already passes this param as a
+                 * concrete by-value app (mirrors the EX_GET_FIELD
+                 * `recv_spec_byval_adt` guard), where `raw` is the aggregate. */
+                bool emit_arg_holds_carrier_byval = false;
+                if (emit_arg && emit_arg->kind == EX_VAR &&
+                    emit_arg->as.var.binding &&
+                    emit_arg->as.var.binding->emit_carrier_holds_byval) {
+                    Type vspec;
+                    bool passed_byval = emit_var_spec_arg_type(ctx, emit_arg, &vspec) &&
+                        vspec.kind == TY_APP && type_app_is_concrete_adt(&vspec) &&
+                        !type_is_heap_adt(vspec);
+                    emit_arg_holds_carrier_byval = !passed_byval;
+                }
                 if (!needs_fn_cast && matched_spec &&
                     emit_arg &&
                     !expr_is_pbp_param(ctx, emit_arg) &&
@@ -4219,7 +4280,8 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                       fn_body_tail_is_carrier_producer(emit_arg) &&
                       !find_matched_abi_spec(ctx, emit_arg,
                                              emit_arg->as.call_.fn_binding) &&
-                      !expr_emits_byvalue_carrier_abi(ctx, emit_arg)))) {
+                      !expr_emits_byvalue_carrier_abi(ctx, emit_arg)) ||
+                     emit_arg_holds_carrier_byval)) {
                     raw = emit_carrier_bridge(ctx, body, raw,
                                              CK_CARRIER, CK_CONCRETE,
                                              matched_spec->arg_types[i]);

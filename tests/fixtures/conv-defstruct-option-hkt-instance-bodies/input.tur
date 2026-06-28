@@ -1,0 +1,40 @@
+;; conv-defstruct-option-hkt-instance-bodies -- with --enable=defstruct-as-defadt
+;; the stdlib Option lowers to a record ADT, and its hand-written GENERIC HKT
+;; instance bodies (Functor/Applicative/Monad/Alternative) are emitted with the
+;; uniform int64 carrier ABI while a fn-element receiver specializes to the
+;; by-value `Option__opaque` monomorph.  Two carrier<->by-value crossings the
+;; generic carrier-base body straddles:
+;;
+;;  1. CONSUMING: `(some? ff)` where `ff` is an `int64_t` carrier param but the
+;;     fn-element type specializes the predicate to the by-value
+;;     `some___spec__bool_tur_adt_Option__opaque` -- the arg must be unboxed
+;;     (`emit_carrier_holds_byval` drives the deref).
+;;  2. PRODUCING: in by-value `bind`, the continuation `k` returns the by-value
+;;     aggregate directly (`(R (*)(void*, A...))k.fn`), so the if-arm merge must
+;;     NOT re-bridge it through the int64 carrier.
+;;  Plus: a `(:: (fn ..) int)` closure (`void *`) fed to the int64-carrier
+;;     `some__spec__...int64_t` construct param is cast to int64.
+
+(defn opt-val   [o : int] : int
+  ```c struct { bool is_some; int64_t value; } *p = (void*)(intptr_t)o;
+       return (p && p->is_some) ? p->value : -999; ```)
+(defn opt-some? [o : int] : int
+  ```c struct { bool is_some; int64_t value; } *p = (void*)(intptr_t)o;
+       return (p && p->is_some) ? 1 : 0; ```)
+
+(defn main [] : int
+  ;; Functor: fmap over some
+  (println (opt-val (fmap (:: (some 21) (Option int)) (fn [x] (* x 2)))))     ; 42
+  ;; Monad: bind sequences (continuation returns the container by value)
+  (println (opt-val (bind (:: (some 20) (Option int))
+                          (fn [x] (some (+ x 1))))))                          ; 21
+  (println (opt-some? (bind (:: (none) (Option int))
+                            (fn [x] (some (+ x 1))))))                        ; 0
+  ;; Applicative: ap with a captured fn ascribed to the int carrier
+  (let [bump 1
+        ff (:: (some (:: (fn [x : int] : int (+ x bump)) int)) (Option int))
+        fa (:: (some 41) (Option int))]
+    (println (opt-val (ap ff fa))))                                          ; 42
+  ;; Alternative: alt-or picks first some
+  (println (opt-val (alt-or (:: (none) (Option int)) (:: (some 7) (Option int))))) ; 7
+  0)
