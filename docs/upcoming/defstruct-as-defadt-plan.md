@@ -6,6 +6,20 @@ description: Lower `defstruct` to a single-variant record `defadt` so structs fl
 
 # `defstruct` -> `defadt` lowering
 
+> **GRADUATED 2026-06-28.** Lowering is now **unconditional (always-on)**: a
+> `defstruct` lowers to a single-variant record `defadt` with no flag.  The
+> `defstruct-as-defadt` experiment is retired -- the `EXPERIMENTS[]` row, the
+> `g_opt_defstruct_as_defadt` global, and the per-fixture `--enable` flags are
+> gone (`--enable=defstruct-as-defadt` now reports TUR-E0310 unknown experiment).
+> The gate (`defstruct_lowers_to_adt`, elab_structs.c) still legitimately keeps a
+> `:linear` or `:no-auto-ctor` outer struct, and applied-type/`exists`-field
+> structs, on the StructDef path.  Full suite: **1870 passed, 0 failed**.  The
+> StructDef surface path is retained for those carve-outs; fully retiring it is
+> separate follow-up.  Remaining diagnostic-quality follow-ups (a positional+
+> keyword construction mix and the struct-accessor hint give less precise
+> messages via the constructor path than the old StructDef path did) are noted in
+> the step-4 log below.
+
 ## Goal
 
 A `defstruct` is the single-variant, record-shaped case of an algebraic data
@@ -1086,10 +1100,20 @@ bridges, the carrier-bridge warning sweep, AND the parametric-`:heap` gate flip 
 the autoloaded stdlib `Vec`/`Set`/`Map`/`List` now lower to record ADTs under the
 flag, build `-Wint-conversion`-clean, and run at parity with the struct path.
 
-What remains is **step 4 (full graduation)**: make lowering unconditional (delete
-the gate + `g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]` row), retire the
-`StructDef` surface path, and regen snapshots.  **Seam 4 is IN PROGRESS** (see the
-step-4 entry above for the measured scope and the running cleared-cluster log).
+**Step 4 (full graduation) is DONE (2026-06-28).**  Lowering is unconditional
+(the gate + `g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]` row are deleted) and
+snapshots are regenerated.  Flipping always-on surfaced a residual tail the
+force-lower BUILD sweep could not see (diagnostic / stdout / crash, not build
+errors); all were cleared in the graduation commit: the phantom-opaque
+aggregate-element segfault (ADT-app element now recognized by
+`type_phantom_hides_aggregate`), the float-element carrier truncation
+(`ok__spec__int64_t_double` now bit-packs a float into a tyvar-erased carrier
+field), the stdlib-name-redefinition UBSan crash (a redefinition guard in
+elab_defstruct + a defensive `TY_ADT` guard in elab_defdata), the `:no-auto-ctor`
+carve-out (kept on the StructDef path), the SZ8 size-projection recovery for a
+lowered record-ADT field receiver, and 13 `errors/*` diagnostic-contract updates.
+The `StructDef` surface path is retained for the `:linear` / `:no-auto-ctor` /
+applied-type-field carve-outs; fully retiring it is separate follow-up.
 The default `bash tests/run.sh` is **green (1862 passed, 0 failed)** with many
 flag-independent seam-4 fixes landed -- including the big lever (the C-ABI-
 compatible flat named layout + `typedef <Name>` alias for single-variant record
