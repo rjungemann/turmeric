@@ -8739,13 +8739,28 @@ static int dbg_bp_match(TuriDebugger *dbg, Span s) {
     return -1;
 }
 
-/* Parse "<line>" or "<file>:<line>" into a breakpoint and record it. */
+/* Parse "<line>" or "<file>:<line>" into a breakpoint and record it. Supports "break <line> if <expr>". */
 static void dbg_add_breakpoint(TuriDebugger *dbg, const char *arg) {
     if (dbg->n_bps >= DBG_MAX_BPS) {
         fprintf(dbg->out, "breakpoint table full (max %d)\n", DBG_MAX_BPS);
         return;
     }
     DbgBreakpoint bp = {{0}, 0, {0}};
+    const char *if_part = strstr(arg, " if ");
+    char cond[256] = {0};
+    char target[128] = {0};
+    if (if_part) {
+        size_t tlen = (size_t)(if_part - arg);
+        if (tlen >= sizeof target) tlen = sizeof target - 1;
+        memcpy(target, arg, tlen);
+        target[tlen] = '\0';
+        snprintf(cond, sizeof cond, "%s", if_part + 4);
+        /* Trim spaces from cond */
+        size_t cn = strlen(cond);
+        while (cn > 0 && (cond[cn - 1] == ' ' || cond[cn - 1] == '\t')) cond[--cn] = '\0';
+        arg = target;
+    }
+
     const char *colon = strrchr(arg, ':');
     if (colon) {
         size_t flen = (size_t)(colon - arg);
@@ -8757,9 +8772,17 @@ static void dbg_add_breakpoint(TuriDebugger *dbg, const char *arg) {
         bp.line = (uint32_t)strtoul(arg, NULL, 10);
     }
     if (bp.line == 0) { fprintf(dbg->out, "bad breakpoint: '%s'\n", arg); return; }
+    if (cond[0]) {
+        snprintf(bp.cond, sizeof bp.cond, "%s", cond);
+    }
     dbg->bps[dbg->n_bps++] = bp;
-    fprintf(dbg->out, "breakpoint %d set at %s%s%u\n",
-            dbg->n_bps, bp.file, bp.file[0] ? ":" : "", bp.line);
+    if (cond[0]) {
+        fprintf(dbg->out, "breakpoint %d set at %s%s%u if %s\n",
+                dbg->n_bps, bp.file, bp.file[0] ? ":" : "", bp.line, bp.cond);
+    } else {
+        fprintf(dbg->out, "breakpoint %d set at %s%s%u\n",
+                dbg->n_bps, bp.file, bp.file[0] ? ":" : "", bp.line);
+    }
 }
 
 static void dbg_delete_breakpoint(TuriDebugger *dbg, const char *arg) {
@@ -8774,7 +8797,7 @@ static void dbg_delete_breakpoint(TuriDebugger *dbg, const char *arg) {
 static void dbg_print_help(TuriDebugger *dbg) {
     fprintf(dbg->out,
         "commands:\n"
-        "  break <line> | break <file>:<line>   set a breakpoint   (b)\n"
+        "  break <line> [if <expr>]              set a breakpoint   (b)\n"
         "  delete [n]                            clear breakpoint n (all if omitted)\n"
         "  continue                              run to next breakpoint    (c)\n"
         "  step                                  step into / next line     (s)\n"
@@ -8783,6 +8806,7 @@ static void dbg_print_help(TuriDebugger *dbg) {
         "  backtrace                             print the call stack    (bt, where)\n"
         "  locals                                print all locals in scope (l)\n"
         "  print <name>                          print one binding         (p)\n"
+        "  eval <expr>                           evaluate arbitrary expr   (e)\n"
         "  list                                  show source around here   (ls)\n"
         "  quit                                  abort the program         (q)\n"
         "  help                                  this message              (h)\n");
@@ -8855,6 +8879,19 @@ static void dbg_repl(TuriEnv *env, TuriDebugger *dbg, EvalFrame *frame,
         if (!strcmp(cmd, "print") || !strcmp(cmd, "p")) {
             if (*arg) dbg_print_var(env, dbg, frame, arg);
             else fprintf(dbg->out, "usage: print <name>\n");
+            continue;
+        }
+        if (!strcmp(cmd, "eval") || !strcmp(cmd, "e")) {
+            if (*arg) {
+                char val[512];
+                if (turi_debug_eval_expr(env, 0, arg, val, sizeof val)) {
+                    fprintf(dbg->out, "%s\n", val);
+                } else {
+                    fprintf(dbg->out, "%s\n", val);
+                }
+            } else {
+                fprintf(dbg->out, "usage: eval <expr>\n");
+            }
             continue;
         }
         if (!strcmp(cmd, "list") || !strcmp(cmd, "ls")) {
@@ -8987,6 +9024,16 @@ void turi_debug_register_break_builtin(TuriEnv *env) {
     turi_env_register_native(env, "break", native_dbg_break, NULL);
 }
 
+static bool dbg_default_cond_fn(TuriEnv *env, const char *condition, void *ud) {
+    (void)ud;
+    char val[256];
+    if (!turi_debug_eval_expr(env, 0, condition, val, sizeof val)) {
+        return true; /* evaluation failed -- fall back to stop */
+    }
+    /* Stop if the evaluated value is truthy (not false and not nil) */
+    return (strcmp(val, "false") != 0 && strcmp(val, "nil") != 0);
+}
+
 void turi_debug_enable(TuriEnv *env, FILE *in, FILE *out) {
     if (!env || env->debugger) return;
     TuriDebugger *dbg = (TuriDebugger *)calloc(1, sizeof(TuriDebugger));
@@ -8994,6 +9041,7 @@ void turi_debug_enable(TuriEnv *env, FILE *in, FILE *out) {
     dbg->in   = in  ? in  : stdin;
     dbg->out  = out ? out : stdout;
     dbg->step = DBG_STEP_NONE;
+    dbg->cond_fn = dbg_default_cond_fn;
     env->debugger = dbg;
     /* Register the (break) builtin so source-driven breakpoints resolve. */
     turi_debug_register_break_builtin(env);
@@ -9176,6 +9224,102 @@ bool turi_debug_eval_name(TuriEnv *env, int idx, const char *name,
         return true;
     }
     return false;
+}
+
+static void format_turi_value_as_expr(char *buf, size_t cap, TuriValue v) {
+    switch (v.tag) {
+    case TURI_NIL:
+        snprintf(buf, cap, "nil");
+        break;
+    case TURI_BOOL:
+        snprintf(buf, cap, "%s", v.as_bool ? "true" : "false");
+        break;
+    case TURI_INT:
+        snprintf(buf, cap, "%lld", (long long)v.as_int);
+        break;
+    case TURI_FLOAT:
+        snprintf(buf, cap, "%g", v.as_float);
+        break;
+    case TURI_CSTR:
+        snprintf(buf, cap, "\"%s\"", v.as_cstr);
+        break;
+    case TURI_STRUCT:
+        if (v.as_struct && v.as_struct->def && v.as_struct->def->name) {
+            snprintf(buf, cap, "(unsafe-cast %lld : %s)", 
+                     (long long)(intptr_t)v.as_struct, v.as_struct->def->name);
+        } else {
+            snprintf(buf, cap, "%lld", (long long)(intptr_t)v.as_struct);
+        }
+        break;
+    default:
+        snprintf(buf, cap, "%lld", (long long)v.as_int);
+        break;
+    }
+}
+
+bool turi_debug_eval_expr(TuriEnv *env, int idx, const char *src,
+                          char *out_repr, size_t cap) {
+    TuriDebugger *d = dbg_of(env);
+    if (!d || !src || !out_repr || cap == 0) return false;
+    EvalFrame *fr = dbg_lexframe(d, idx);
+    if (!fr) {
+        snprintf(out_repr, cap, "error: no frame at index %d", idx);
+        return false;
+    }
+
+    /* 1. Walk visible local variables in the paused frame (innermost binding first). */
+    const char *seen[256];
+    TuriValue seen_vals[256];
+    int n_seen = 0;
+
+    for (EvalFrame *f = fr; f; f = f->parent) {
+        for (EvalBinding *b = f->bindings; b; b = b->next) {
+            bool dup = false;
+            for (int i = 0; i < n_seen; i++) {
+                if (strcmp(seen[i], b->name) == 0) { dup = true; break; }
+            }
+            if (dup) continue;
+            if (n_seen < 256) {
+                seen[n_seen] = b->name;
+                seen_vals[n_seen] = b->value;
+                n_seen++;
+            }
+        }
+    }
+
+    /* 2. Construct wrapped source string wrapping the expression in a local let-form:
+     * (let [a <val> b <val> ...] <src>) */
+    Buf wrapped_src;
+    buf_init(&wrapped_src);
+    buf_puts(&wrapped_src, "(let [");
+    for (int i = 0; i < n_seen; i++) {
+        char val_buf[256];
+        format_turi_value_as_expr(val_buf, sizeof val_buf, seen_vals[i]);
+        buf_printf(&wrapped_src, "%s %s ", seen[i], val_buf);
+    }
+    buf_puts(&wrapped_src, "] ");
+    buf_puts(&wrapped_src, src);
+    buf_puts(&wrapped_src, ")");
+    buf_putc(&wrapped_src, '\0');
+
+    /* Set in_repl to prevent nested debugger stops. */
+    bool was_in_repl = d->in_repl;
+    d->in_repl = true;
+
+    TuriValue result = turi_eval(env, wrapped_src.data);
+
+    d->in_repl = was_in_repl;
+    buf_free(&wrapped_src);
+
+    /* 3. Format the result and return */
+    if (turi_is_error(result)) {
+        const char *msg = turi_error_message(result);
+        snprintf(out_repr, cap, "%s", msg ? msg : "evaluation failed");
+        return false;
+    }
+
+    turi_value_repr(out_repr, cap, result);
+    return true;
 }
 
 void turi_debug_disable(TuriEnv *env) {

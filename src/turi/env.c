@@ -508,3 +508,15 @@ void turi_env_set(TuriEnv *env, const char *name, TuriValue value) {
     env->globals = b;
     ht_insert(&env->globals_ht, b);
 }
+
+EnvBinding *turi_env_find_binding(TuriEnv *env, const char *name) {
+    return ht_find(&env->globals_ht, name);
+}
+
+void turi_env_rebuild_hash_table(TuriEnv *env) {
+    free(env->globals_ht.slots);
+    ht_init(&env->globals_ht);
+    for (EnvBinding *k = env->globals; k; k = k->next) {
+        ht_insert(&env->globals_ht, k);
+    }
+}

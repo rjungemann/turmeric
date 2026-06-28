@@ -204,18 +204,17 @@ DWARF, you still need the printers, so skip the multi-month detour.
 
 ### In-frame expression evaluator (cross-cutting; split-out plan)
 
-Split into its own plan:
-[debugger-inframe-eval-plan.md](./debugger-inframe-eval-plan.md).
+**Status: landed.** Split into its own plan (now archived):
+[debugger-inframe-eval-plan.md](../archive/debugger-inframe-eval-plan.md).
 
 Not a sequential phase -- a cross-cutting enhancement to the Phase 2 / 3
-interpreter track. Both phases ship a *narrow shim* for evaluating in a paused
-frame: Phase 2's `print <name>` and Phase 3's `evaluate`/hover resolve a single
-binding, and DAP conditional breakpoints accept only `<name> <op> <literal>`.
-The split-out plan generalizes that to evaluating an **arbitrary Turmeric
+interpreter track. It generalizes evaluation to an **arbitrary Turmeric
 expression** in a paused frame's lexical scope, which unlocks full-expression
-conditional breakpoints (`break <line> if <expr>`) and arbitrary `evaluate`.
-The hard part is recovering enough type information from the paused frame's
-runtime values to re-elaborate a fresh expression against them.
+conditional breakpoints (`break <line> if <expr>`) and arbitrary `evaluate` in
+the DAP server and hover. It features a robust "lexical-injection" design that wraps
+expressions in a local `(let [a <val> ...] <expr>)` form to perfectly satisfy both the
+elaborator type-checking and interpreter evaluation, with automatic translation of
+flat C-style comparisons (`i == 3` -> `(= i 3)`) for standard DAP client compatibility.
 
 ## Dependencies between phases
 

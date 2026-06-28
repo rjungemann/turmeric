@@ -228,75 +228,95 @@ static void dap_drain_output(DapState *s) {
 
 /* ---------------------------------------------------------------------------
  * Conditional-breakpoint evaluation
- *
- * The Phase 2 debugger never evaluated arbitrary expressions in a paused frame.
- * We support the common shape used by DAP conditional breakpoints -- a single
- * comparison `<name> <op> <literal>` with op in == != < > <= >= -- by resolving
- * the name in frame 0 and comparing its rendered value to the literal.  An
- * unparseable condition (or an unresolved name) falls back to "stop", so a
- * condition we cannot evaluate never silently swallows a breakpoint.
  * --------------------------------------------------------------------------- */
 
-static const char *dap_find_op(const char *s, int *op_len) {
-    /* two-char ops first so "<=" is not read as "<" */
-    static const char *ops2[] = { "==", "!=", "<=", ">=", NULL };
-    for (int i = 0; ops2[i]; i++) {
-        const char *h = strstr(s, ops2[i]);
-        if (h) { *op_len = 2; return h; }
+static void dap_rewrite_condition(const char *cond, char *out, size_t cap) {
+    /* Check if it's already a Lisp-style expression starting with '(' */
+    const char *p = cond;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '(') {
+        snprintf(out, cap, "%s", cond);
+        return;
     }
-    for (const char *p = s; *p; p++)
-        if (*p == '<' || *p == '>') { *op_len = 1; return p; }
-    return NULL;
-}
 
-static void dap_trim(char *s) {
-    size_t n = strlen(s);
-    while (n > 0 && (s[n-1] == ' ' || s[n-1] == '\t')) s[--n] = '\0';
-    size_t i = 0;
-    while (s[i] == ' ' || s[i] == '\t') i++;
-    if (i) memmove(s, s + i, n - i + 1);
-}
-
-static bool dap_eval_condition(TuriEnv *env, const char *cond) {
+    /* Standard DAP/C-style expression: name op literal */
     int op_len = 0;
-    const char *op = dap_find_op(cond, &op_len);
-    if (!op) return true;   /* not a comparison -- best effort: stop */
+    const char *op = strstr(cond, "==");
+    if (op) { op_len = 2; }
+    else {
+        op = strstr(cond, "!=");
+        if (op) { op_len = 2; }
+        else {
+            op = strstr(cond, "<=");
+            if (op) { op_len = 2; }
+            else {
+                op = strstr(cond, ">=");
+                if (op) { op_len = 2; }
+                else {
+                    op = strchr(cond, '<');
+                    if (op) { op_len = 1; }
+                    else {
+                        op = strchr(cond, '>');
+                        if (op) { op_len = 1; }
+                    }
+                }
+            }
+        }
+    }
 
-    char lhs[128], rhs[128];
+    if (!op) {
+        /* No operator found, evaluate as-is */
+        snprintf(out, cap, "%s", cond);
+        return;
+    }
+
+    char lhs[128], rhs[128], op_str[8];
     size_t llen = (size_t)(op - cond);
     if (llen >= sizeof lhs) llen = sizeof lhs - 1;
     memcpy(lhs, cond, llen); lhs[llen] = '\0';
     snprintf(rhs, sizeof rhs, "%s", op + op_len);
-    dap_trim(lhs); dap_trim(rhs);
+    
+    /* Trim spaces */
+    size_t ln = strlen(lhs);
+    while (ln > 0 && (lhs[ln - 1] == ' ' || lhs[ln - 1] == '\t')) lhs[--ln] = '\0';
+    size_t li = 0;
+    while (lhs[li] == ' ' || lhs[li] == '\t') li++;
+    if (li) memmove(lhs, lhs + li, ln - li + 1);
 
-    /* strip surrounding quotes from a string literal */
     size_t rn = strlen(rhs);
-    if (rn >= 2 && rhs[0] == '"' && rhs[rn-1] == '"') {
-        memmove(rhs, rhs + 1, rn - 2); rhs[rn-2] = '\0';
+    while (rn > 0 && (rhs[rn - 1] == ' ' || rhs[rn - 1] == '\t')) rhs[--rn] = '\0';
+    size_t ri = 0;
+    while (rhs[ri] == ' ' || rhs[ri] == '\t') ri++;
+    if (ri) memmove(rhs, rhs + ri, rn - ri + 1);
+
+    /* Determine operator string */
+    if (op_len == 2) {
+        if (op[0] == '=') strcpy(op_str, "=");
+        else if (op[0] == '!') strcpy(op_str, "!=");
+        else if (op[0] == '<') strcpy(op_str, "<=");
+        else if (op[0] == '>') strcpy(op_str, ">=");
+    } else {
+        op_str[0] = op[0];
+        op_str[1] = '\0';
     }
 
-    char val[256];
-    if (!turi_debug_eval_name(env, 0, lhs, val, sizeof val))
-        return true;   /* unknown name -- best effort: stop */
-
-    bool eq = strcmp(val, rhs) == 0;
-    if (op_len == 2 && op[0] == '=') return eq;        /* == */
-    if (op_len == 2 && op[0] == '!') return !eq;       /* != */
-
-    /* ordered comparison: numeric */
-    char *le = NULL, *re = NULL;
-    double lv = strtod(val, &le), rv = strtod(rhs, &re);
-    if (le == val || re == rhs) return eq;             /* non-numeric: degrade */
-    if (op_len == 2 && op[0] == '<') return lv <= rv;  /* <= */
-    if (op_len == 2 && op[0] == '>') return lv >= rv;  /* >= */
-    if (op[0] == '<') return lv < rv;
-    if (op[0] == '>') return lv > rv;
-    return eq;
+    if (strcmp(op_str, "!=") == 0) {
+        snprintf(out, cap, "(not (= %s %s))", lhs, rhs);
+    } else {
+        snprintf(out, cap, "(%s %s %s)", op_str, lhs, rhs);
+    }
 }
 
 static bool dap_on_cond(TuriEnv *env, const char *condition, void *ud) {
     (void)ud;
-    return dap_eval_condition(env, condition);
+    char rewritten[512];
+    dap_rewrite_condition(condition, rewritten, sizeof rewritten);
+    char val[256];
+    if (!turi_debug_eval_expr(env, 0, rewritten, val, sizeof val)) {
+        return true; /* evaluation failed -- fall back to stop */
+    }
+    /* Stop if the evaluated value is truthy (not false and not nil) */
+    return (strcmp(val, "false") != 0 && strcmp(val, "nil") != 0);
 }
 
 /* ---------------------------------------------------------------------------
@@ -437,7 +457,7 @@ static void dap_evaluate(DapState *s, int64_t req_seq, const char *args) {
     int64_t frame_id = lsp_json_int(args, "frameId");
     if (frame_id < 0) frame_id = 0;
     char val[512];
-    if (s->env && turi_debug_eval_name(s->env, (int)frame_id, expr, val, sizeof val)) {
+    if (s->env && turi_debug_eval_expr(s->env, (int)frame_id, expr, val, sizeof val)) {
         Buf body; buf_init(&body);
         buf_puts(&body, "{\"result\":\"");
         dap_json_escape(&body, val);
@@ -445,7 +465,7 @@ static void dap_evaluate(DapState *s, int64_t req_seq, const char *args) {
         dap_send_response(s, req_seq, "evaluate", dap_cstr(&body), true);
         buf_free(&body);
     } else {
-        dap_send_error(s, req_seq, "evaluate", "not in scope");
+        dap_send_error(s, req_seq, "evaluate", val[0] ? val : "not in scope");
     }
 }
 

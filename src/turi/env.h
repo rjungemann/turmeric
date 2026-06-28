@@ -314,4 +314,10 @@ TuriValue turi_env_get(TuriEnv *env, const char *name);
 /* Set (or replace) a global binding by name. */
 void turi_env_set(TuriEnv *env, const char *name, TuriValue value);
 
+/* Helper for debugger: find an EnvBinding in env's globals. */
+struct EnvBinding *turi_env_find_binding(TuriEnv *env, const char *name);
+
+/* Helper for debugger: rebuild env's globals hash table after local overrides are cleared. */
+void turi_env_rebuild_hash_table(TuriEnv *env);
+
 #endif /* TURI_ENV_H */

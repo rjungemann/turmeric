@@ -170,6 +170,13 @@ void turi_debug_frame_locals(TuriEnv *env, int idx,
 bool turi_debug_eval_name(TuriEnv *env, int idx, const char *name,
                           char *out_repr, size_t cap);
 
+/* Evaluate `src` as an arbitrary Turmeric expression in the lexical scope of
+ * paused frame `idx` (0 = innermost). Renders the result into out_repr.
+ * Returns false (with a short message in out_repr) on parse, elaboration, or
+ * runtime error. */
+bool turi_debug_eval_expr(TuriEnv *env, int idx, const char *src,
+                          char *out_repr, size_t cap);
+
 /* ---------------------------------------------------------------------------
  * SB3 / SB4: Sandbox resource-limit and capability API
  * --------------------------------------------------------------------------- */
