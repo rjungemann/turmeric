@@ -616,6 +616,32 @@ runtime *usage* seam, below.
      `conv-defstruct-named-monomorph-layout` (by-value TupleN-shape field access +
      `#fx{ByVal}` Vec accessor, flag-on parity).
 
+   - **none()-base carrier return + by-value-spec carrier return DONE
+     (2026-06-28).**  Two return-direction crossings where a lowered by-value
+     record-ADT value is the tail of a function whose C return is the int64
+     carrier, each a cc error ("incompatible types returning
+     tur_adt_Option__<X> but int64_t expected"):
+     (1) the GENERIC carrier base of a construct template -- `none()` whose body
+     `(Option false (default-of A))` emits the by-value monomorph `ctor_Option__A`
+     aggregate -- and (2) a carrier-context construct via a by-value SPEC --
+     `(:: (some x) :int)` in a `: int` fn emitting `some__spec__...Option__int`.
+     Both are now detected by the return-tail walkers (`fn_body_tail_emits_byvalue
+     _carrier_abi` / `fn_body_tail_byvalue_carrier_type`, emit_expr.c) so the
+     existing M5 concrete->carrier return spill (emit_fns.c, the
+     `ret_is_int64_carrier` branch) heap-spills the aggregate to the carrier.  Two
+     new return-SCOPED helpers: `call_construct_emits_byval_aggregate` (an
+     unrecorded ADT-ctor call whose concrete app result is a by-value aggregate,
+     matching the EX_CALL ctor suffix gate) and `call_spec_result_byval_aggregate`
+     (a matched by-value spec result) -- deliberately NOT wired into the
+     broadly-used `expr_emits_byvalue_carrier_abi` (whose carrier-ABI gate keeps
+     arg-position bridges unaffected).  Inert at default (Option/Result are structs
+     there, no by-value monomorph / by-value spec).  Cleared
+     `positional-opaque-ok`, `positional-pap-opaque-ok`, `kleisli-arrow-instance`,
+     `typeclass-return-dispatch-result-wrapped` (9 -> 5 unique build-failing
+     fixtures under force-lower).  Fixture
+     `conv-defstruct-none-base-carrier-return` (carrier-ascribed `some`/`none`,
+     flag-on parity).
+
    **Running total: 212 -> 25 unique build-failing fixtures under force-lower
    (default suite stays 1862/0).**  (Sub-root (a) -- 0-arg construct in control
    flow -- the inline-C-tail return bridge, the accessor-unbox, the
@@ -1055,17 +1081,17 @@ read, and the four most recent carrier<->by-value crossings cleared by PR #571
 (non-parametric by-value-ADT arg boxing, `fn`-field int64 carrier width,
 wide-by-value -> closure-thunk carrier heap-box, bounded-wrapper -> concrete
 aggregate-return tail bridge).
-The force-lower probe is down to **9 unique build-failing fixtures** (plus 2
+The force-lower probe is down to **5 unique build-failing fixtures** (plus 2
 stdout mismatches) as of 2026-06-28, after the named parametric-monomorph layout
-keystone cleared `tuplen-struct-param-passing` + `m5-byval-marker-spec-emit`.
-The remaining 9 build blockers, by root: the stdlib `none()` carrier-base vs
-by-value-ctor return bridge (`positional-opaque-ok`, `positional-pap-opaque-ok`,
-`kleisli-arrow-instance`); the `Option__opaque` specialization
-(`hkt-ap-fn-in-container`, `hkt-stdlib-option-result-instances`); the by-value
-embed typedef ordering (`result-over-struct-with-option-field-typedef-order`);
-the stdlib/user `Cons` C-name collision (`adt-recursive`); the aggregate->int64
-inject / Result-box cast (`typeclass-return-dispatch-result-wrapped`); and one
-link failure (`serial-composite-instances`).  Driving these to zero (promote each
-to a flag-on fixture + fix) is the gating work before the experiment can
-graduate.  Runway: experiment `expires_at` is `0.30.0` (current `VERSION` is
-`0.25.5`).
+keystone cleared `tuplen-struct-param-passing` + `m5-byval-marker-spec-emit`, and
+the none()-base / by-value-spec carrier-return bridges cleared
+`positional-opaque-ok`, `positional-pap-opaque-ok`, `kleisli-arrow-instance`, and
+`typeclass-return-dispatch-result-wrapped`.  The remaining 5 build blockers, by
+root: the `Option__opaque` specialization (`hkt-ap-fn-in-container`,
+`hkt-stdlib-option-result-instances`); the by-value embed typedef ordering
+(`result-over-struct-with-option-field-typedef-order`); the stdlib/user `Cons`
+C-name collision (`adt-recursive`); and one link failure
+(`serial-composite-instances`, an `__inst_`-prefixed ctor mis-mangle).  Driving
+these to zero (promote each to a flag-on fixture + fix) is the gating work before
+the experiment can graduate.  Runway: experiment `expires_at` is `0.30.0`
+(current `VERSION` is `0.25.5`).

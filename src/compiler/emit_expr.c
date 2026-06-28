@@ -627,6 +627,69 @@ static bool call_emits_byval_concrete_aggregate(EmitCtx *ctx, const Expr *call,
     return byval_aggr;
 }
 
+/* CONV-S1 seam 4 (none-base carrier return): true when `call` is a lowered
+ * construct-template call (`(none)` -> `(Option false (default-of A))`, `(some
+ * x)`, `(ok x)`) whose resolved result is a CONCRETE by-value record-ADT
+ * aggregate -- exactly the case the EX_CALL ctor path (emit_expr.c:3351) emits as
+ * the per-monomorph `ctor_<Name>__<args>` aggregate.  In a carrier-returning fn
+ * (e.g. the generic base `none()` whose C return is int64) that aggregate tail
+ * must be heap-spilled to the int64 carrier by the M5 return bridge.  Scoped to a
+ * construct template with no matched by-value spec (the spec branch handles the
+ * recorded case) so it is the fallback for the unrecorded carrier-base tail.
+ * Inert at default: there Option/Result are structs, the ctor is the int64
+ * carrier, and the resolved result's c-name is `int64_t` (excluded). */
+static bool call_construct_emits_byval_aggregate(EmitCtx *ctx, const Expr *call,
+                                                 Type *out_ty) {
+    if (!call || call->kind != EX_CALL) return false;
+    const Binding *fb = call->as.call_.fn_binding;
+    if (!fb) return false;
+    /* An ADT-constructor call -- a 0-arg ctor (fb : TY_ADT) or an N-arg ctor
+     * (fb : TY_FN -> TY_ADT with no result_full_type), the same shapes the
+     * EX_CALL ctor path at emit_expr.c:3283/3315 emits via `ctor_<Name>...`. */
+    bool is_adt_ctor = fb->type.kind == TY_ADT ||
+        (fb->type.kind == TY_FN &&
+         fb->type.as.fn.result_kind == TY_ADT &&
+         !fb->type.as.fn.result_full_type);
+    if (!is_adt_ctor) return false;
+    if (find_matched_abi_spec(ctx, call, fb) != NULL) return false;
+    Type r = emit_resolve_type(ctx, call->type);
+    /* Match the EX_CALL ctor suffix gate (emit_expr.c:3351): a concrete ADT app
+     * (`type_app_is_concrete_adt`) that is not a carrier/heap value and whose
+     * c-name is a real aggregate emits `ctor_<Name>__<args>` by value. */
+    bool byval_aggr =
+        r.kind == TY_APP && type_app_is_concrete_adt(&r) &&
+        !type_uses_carrier_abi(r) &&
+        !type_is_heap_struct(r) && !type_is_heap_adt(r) &&
+        strcmp(emit_type_c_name(ctx, r), "int64_t") != 0;
+    if (byval_aggr && out_ty) *out_ty = r;
+    return byval_aggr;
+}
+
+/* CONV-S1 seam 4 (none-base carrier return, spec sibling): true when `call` has a
+ * matched ABI spec whose resolved result is a CONCRETE by-value aggregate (e.g.
+ * `(:: (some x) :int)` -> `some__spec__tur_adt_Option__int_int64_t` returning
+ * `tur_adt_Option__int`).  When such a call is the tail of a carrier-returning fn
+ * (`opt-some [x] : int`), the aggregate must be heap-spilled to the int64 carrier
+ * -- the by-value-spec analogue of call_construct_emits_byval_aggregate.  Scoped
+ * to the return-tail walkers only (NOT expr_emits_byvalue_carrier_abi, whose
+ * carrier-ABI gate intentionally excludes by-value specs so arg-position bridges
+ * are unaffected).  Inert at default: no by-value spec exists there. */
+static bool call_spec_result_byval_aggregate(EmitCtx *ctx, const Expr *call,
+                                              Type *out_ty) {
+    if (!call || call->kind != EX_CALL) return false;
+    const EmitAbiSpecialization *spec =
+        find_matched_abi_spec(ctx, call, call->as.call_.fn_binding);
+    if (!spec) return false;
+    Type sr = emit_resolve_type(ctx, spec->result_type);
+    bool byval_aggr =
+        (sr.kind == TY_APP || sr.kind == TY_ADT || sr.kind == TY_STRUCT) &&
+        !type_uses_carrier_abi(sr) &&
+        !type_is_heap_struct(sr) && !type_is_heap_adt(sr) &&
+        strcmp(emit_type_c_name(ctx, sr), "int64_t") != 0;
+    if (byval_aggr && out_ty) *out_ty = sr;
+    return byval_aggr;
+}
+
 bool fn_body_tail_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
     if (!e) return false;
     switch (e->kind) {
@@ -645,6 +708,10 @@ bool fn_body_tail_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
             return fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.let_.body);
         default:
             if (call_emits_byval_concrete_aggregate(ctx, e, NULL))
+                return true;
+            if (call_construct_emits_byval_aggregate(ctx, e, NULL))
+                return true;
+            if (call_spec_result_byval_aggregate(ctx, e, NULL))
                 return true;
             return expr_emits_byvalue_carrier_abi(ctx, e);
     }
@@ -691,6 +758,24 @@ Type fn_body_tail_byvalue_carrier_type(EmitCtx *ctx, const Expr *e) {
             if (type_uses_carrier_abi(sr) &&
                 strcmp(emit_type_c_name(ctx, sr), "int64_t") != 0)
                 return sr;
+        }
+        /* CONV-S1 seam 4 (none-base carrier return): an unrecorded construct
+         * template tail (`(none)`/`(some x)`) emits the by-value monomorph
+         * aggregate; report that aggregate type so the carrier-return spill boxes
+         * it.  Mirrors the bool predicate's call_construct_emits_byval_aggregate. */
+        {
+            Type cagg = unknown;
+            if (call_construct_emits_byval_aggregate(ctx, x, &cagg))
+                return cagg;
+        }
+        /* CONV-S1 seam 4 (spec sibling): a matched by-value spec tail
+         * (`some__spec__...Option__int`) reports its concrete aggregate result so
+         * the carrier-return spill boxes it -- the existing spec branch above only
+         * returns carrier-ABI (heap) specs. */
+        {
+            Type sagg = unknown;
+            if (call_spec_result_byval_aggregate(ctx, x, &sagg))
+                return sagg;
         }
         /* CONV-S1 seam 4 (assignment-straddle): an inline-C callee whose declared
          * result is a parametric ADT app (`(Result cstr cstr)`) is lowered by
