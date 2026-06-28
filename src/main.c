@@ -1802,14 +1802,8 @@ static int cmd_build(const char *input, const char *out_path,
      * pointers through int64_t, which GCC's TBAA miscompiles at -O2. */
     const char *cc_flags = getenv("TUR_CC_FLAGS");
     if (!cc_flags || !*cc_flags) {
-        /* -Wno-error=int-conversion: Apple clang 17 promoted -Wint-conversion
-         * to a default error, which trips on codegen that punts int64_t<->void*
-         * casts (channel/bytes/vec lowering still returns `(void*)ch` from an
-         * int64_t-typed function).  Keep the diagnostic visible as a warning;
-         * fixing the underlying codegen casts is tracked in
-         * docs/reported/clang17-wint-conversion-codegen.md. */
         if (wasm_target)
-            cc_flags = "-O2 -std=c99 -Wall -Wno-error=int-conversion -fno-strict-aliasing -s WASM=1";
+            cc_flags = "-O2 -std=c99 -Wall -fno-strict-aliasing -s WASM=1";
         else if (g_emit_debug_lines)
             /* Debugger Phase 4 (--debug): -g for DWARF, -Og for a debugging-
              * friendly optimization level that still maps cleanly onto the
@@ -1819,9 +1813,9 @@ static int cmd_build(const char *input, const char *out_path,
              * reference libturi-only symbols this build does not link; -O0 keeps
              * them and the link fails.  -Og keeps that DCE while preserving
              * line-accurate stepping. */
-            cc_flags = "-g -Og -std=c99 -Wall -Wno-error=int-conversion -fno-strict-aliasing";
+            cc_flags = "-g -Og -std=c99 -Wall -fno-strict-aliasing";
         else
-            cc_flags = "-O2 -std=c99 -Wall -Wno-error=int-conversion -fno-strict-aliasing";
+            cc_flags = "-O2 -std=c99 -Wall -fno-strict-aliasing";
     }
 
     /* Collect cmake dep flags from cmake/spice-deps-manifest.json if present */
@@ -4070,7 +4064,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
 
     /* See the note on -fno-strict-aliasing and -Wno-error=int-conversion above. */
     const char *cc_flags = getenv("TUR_CC_FLAGS");
-    if (!cc_flags || !*cc_flags) cc_flags = "-O2 -std=c99 -Wall -Wno-error=int-conversion -fno-strict-aliasing";
+    if (!cc_flags || !*cc_flags) cc_flags = "-O2 -std=c99 -Wall -fno-strict-aliasing";
 
     /* Collect cmake dep flags from cmake/spice-deps-manifest.json if present */
     Buf cmake_flags;

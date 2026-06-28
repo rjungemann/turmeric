@@ -59,7 +59,7 @@
   if (!buf) { fprintf(stderr, "bytes-alloc: out of memory\n"); exit(1); }
   buf[0] = (int64_t)n;
   memset(buf + 1, 0, (size_t)n);
-  return buf;
+  return (int64_t)(intptr_t)buf;
   ```)
 ;; Return the length of a bytes value.
 ;;; bytes-len -- return the number of data bytes stored in a bytes value.
@@ -103,7 +103,7 @@
 
 (defn bytes-free [b : Bytes] : void
   ```c
-  free(b);
+  free((void *)(intptr_t)b);
   ```)
 ;; Concatenate two bytes values into a new one.
 ;;; bytes-concat -- concatenate two bytes values into a new heap-allocated bytes value.
@@ -131,7 +131,7 @@
   uint8_t *dst = (uint8_t*)(out + 1);
   if (la > 0) memcpy(dst, (int64_t*)a + 1, (size_t)la);
   if (lb > 0) memcpy(dst + la, (int64_t*)b + 1, (size_t)lb);
-  return out;
+  return (int64_t)(intptr_t)out;
   ```)
 ;; ---------------------------------------------------------------------------
 ;; Serializable typeclass
@@ -297,7 +297,7 @@
     if (!out) { fprintf(stderr, "deserialize cstr: oom\n"); exit(1); }
     if (slen > 0) memcpy(out, p + 4, (size_t)slen);
     out[slen] = '\0';
-    return (int64_t)(uintptr_t)out;
+    return (const char *)out;
     ```))
 ;; bytes (ptr<void>) -- prefix with 8-byte length, then raw data
 ;;; Serializable [ptr<void>] -- serialize/deserialize a bytes value as an 8-byte LE length followed by raw data.
@@ -347,7 +347,7 @@
     if (!out) { fprintf(stderr, "deserialize bytes: oom\n"); exit(1); }
     out[0] = dlen;
     if (dlen > 0) memcpy(out + 1, p + 8, (size_t)dlen);
-    return (int64_t)(uintptr_t)out;
+    return (void *)out;
     ```))
 ;; ---------------------------------------------------------------------------
 ;; Composite instances

@@ -1299,6 +1299,8 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             } else if (strcmp(bind_c, "int64_t") == 0 &&
                 (init_kind == TY_FN || init_kind == TY_PTR_VOID || init_is_ptr_repr)) {
                 buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n", bind_c, bn, iv);
+            } else if (bind_is_ptr_repr && init_cn && strcmp(init_cn, "int64_t") == 0) {
+                buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n", bind_c, bn, bind_c, iv);
             } else {
                 buf_printf(body, "%s %s = %s;\n", bind_c, bn, iv);
             }
@@ -1509,6 +1511,8 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             } else if (strcmp(bind_c, "int64_t") == 0 &&
                 (init_kind == TY_FN || init_kind == TY_PTR_VOID || init_is_ptr_repr)) {
                 buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n", bind_c, bn, iv);
+            } else if (bind_is_ptr_repr && init_cn && strcmp(init_cn, "int64_t") == 0) {
+                buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n", bind_c, bn, bind_c, iv);
             } else {
                 buf_printf(body, "%s %s = %s;\n", bind_c, bn, iv);
             }
@@ -2967,6 +2971,14 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         (uint8_t)(i + 1) < thunk_binding->type.as.fn.arity) {
                         formal = thunk_binding->type.as.fn.arg_kinds[i + 1];
                     }
+                    Type formal_full_type = {0};
+                    bool have_formal_full = false;
+                    if (thunk_binding->type.kind == TY_FN &&
+                        thunk_binding->type.as.fn.arg_full_types &&
+                        thunk_binding->type.as.fn.arg_full_types[i + 1]) {
+                        formal_full_type = *thunk_binding->type.as.fn.arg_full_types[i + 1];
+                        have_formal_full = true;
+                    }
                     TypeKind actual = e->as.call_.args[i]->type.kind;
                     /* SF-application carrier bridge: the thunk's formal slot may be
                      * declared TY_INT *or* TY_FN; both lower to the int64_t carrier
@@ -2977,7 +2989,8 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         (formal == TY_INT || formal == TY_FN);
                     bool formal_is_ptr =
                         (formal == TY_PTR_VOID || formal == TY_RC ||
-                         formal == TY_REF || formal == TY_WEAK);
+                         formal == TY_REF || formal == TY_WEAK ||
+                         (have_formal_full && strchr(type_c_name(formal_full_type), '*') != NULL));
                     /* The actual C value is int64_t when:
                      *   - the arg expression is a bare ^fat-bound variable
                      *     (^fat lowers to int64_t even when its elab type is TY_FN), or
@@ -2999,13 +3012,14 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         raw = strdup(cast.data);
                         buf_free(&cast);
                     } else if (formal_is_ptr && arg_is_int64_carrier) {
-                        /* Reverse direction: formal slot is a pointer (void *),
+                        /* Reverse direction: formal slot is a pointer,
                          * but the arg's C value is the int64_t carrier (because
                          * the binding holds a function-typed value via the
                          * fn-carrier ABI, or because it was annotated ^fat).
                          * Bridge through intptr_t so the pointer slot accepts it. */
                         Buf cast; buf_init(&cast);
-                        buf_printf(&cast, "(void *)(intptr_t)(%s)", raw);
+                        const char *f_cname = have_formal_full ? type_c_name(formal_full_type) : "void *";
+                        buf_printf(&cast, "(%s)(intptr_t)(%s)", f_cname, raw);
                         buf_putc(&cast, '\0');
                         free(raw);
                         raw = strdup(cast.data);
@@ -3230,7 +3244,9 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                              arg_types[i].kind == TY_REF ||
                              arg_types[i].kind == TY_WEAK ||
                              (arg_types[i].kind == TY_FN &&
-                              arg_types[i].as.fn.boxed));
+                              arg_types[i].as.fn.boxed) ||
+                             (arg_types[i].kind == TY_STRUCT &&
+                              strchr(emit_type_c_name(ctx, arg_types[i]), '*') != NULL));
                         bool var_is_int64_carrier =
                             arg && arg->kind == EX_VAR && arg->as.var.binding &&
                             arg->as.var.binding->is_fat;
@@ -3251,7 +3267,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                     (arg->type.kind == TY_FN &&
                                      arg->type.as.fn.boxed));
                         if (slot_is_ptr && var_is_int64_carrier) {
-                            buf_printf(&out, ", (void *)(intptr_t)(%s)", arg_strs[i]);
+                            buf_printf(&out, ", (%s)(intptr_t)(%s)", emit_type_c_name(ctx, arg_types[i]), arg_strs[i]);
                         } else if (!slot_is_ptr && arg_is_fat_box) {
                             buf_printf(&out, ", (int64_t)(intptr_t)(%s)", arg_strs[i]);
                         } else {
@@ -4587,6 +4603,18 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                        type_is_heap_adt(matched_spec->arg_types[i])))) {
                     Buf _hb; buf_init(&_hb);
                     buf_printf(&_hb, "(int64_t)(intptr_t)(%s)", raw);
+                    buf_putc(&_hb, '\0');
+                    free(raw);
+                    raw = strdup(_hb.data);
+                    buf_free(&_hb);
+                }
+                if (emit_arg &&
+                    callee_param_is_typed_heap_ptr &&
+                    !expr_emits_byvalue_carrier_abi(ctx, emit_arg)) {
+                    Type pf = *fn_binding->type.as.fn.arg_full_types[i];
+                    const char *pty = emit_type_c_name(ctx, pf);
+                    Buf _hb; buf_init(&_hb);
+                    buf_printf(&_hb, "(%s)(intptr_t)(%s)", pty, raw);
                     buf_putc(&_hb, '\0');
                     free(raw);
                     raw = strdup(_hb.data);

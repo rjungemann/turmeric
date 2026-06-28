@@ -344,7 +344,7 @@
   [s (Set A)]
   #fx{}
   : ptr<void>
-  ```c struct { void *hamt; } *set = (void*)(intptr_t)s; return set->hamt; ```)
+  ```c struct { void *hamt; } *set = (void*)(intptr_t)s; return (__TUR_RET__)(intptr_t)set->hamt; ```)
 ;;; set-eq-loop -- pure-Turmeric structural-equality walk over s1's HAMT.
 ;;;
 ;;; Path A specializes this per A at the `Eq [Set]` dispatch site; the

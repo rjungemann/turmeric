@@ -1130,7 +1130,7 @@ static char *emit_cloneable_ctx(EmitCtx *ctx, Buf *body, const Expr *e,
                      closure->fn->n_params > 0 ? closure->fn->params[0]->id : 0);
         }
         buf_printf(hb,
-            "    return (intptr_t)%s((int64_t)env, (int64_t)(intptr_t)__k);\n}\n",
+            "    return (intptr_t)%s((void *)(intptr_t)env, (void *)(intptr_t)__k);\n}\n",
             thunk_name);
         free(thunk_name);
     } else {
@@ -1429,7 +1429,7 @@ static char *emit_serial_ctx(EmitCtx *ctx, Buf *body, const Expr *e,
                      closure->fn->n_params > 0 ? closure->fn->params[0]->id : 0);
         }
         buf_printf(hb,
-            "    return (intptr_t)%s((int64_t)env, (int64_t)(intptr_t)__cap);\n}\n",
+            "    return (intptr_t)%s((void *)(intptr_t)env, (void *)(intptr_t)__cap);\n}\n",
             thunk_name);
         free(thunk_name);
     } else {

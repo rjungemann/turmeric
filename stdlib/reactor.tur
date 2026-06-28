@@ -143,7 +143,10 @@
 ;;; Since: Phase R1
 
 
-(defn reactor-new [] #fx{} : Reactor (:: (tur_reactor_new) :Reactor))
+(defn reactor-new [] #fx{} : Reactor
+  ```c
+  return (int64_t)(intptr_t)tur_reactor_new();
+  ```)
 ;;; reactor-free -- free a reactor and unregister all attached sources.
 ;;;
 ;;; Parameters:

@@ -450,6 +450,65 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
     bool use_abi_spec = ctx->current_abi_specialization &&
         ctx->current_abi_specialization->fn == fd;
+
+    const char *current_fn_ret_ctype_eff = NULL;
+    bool is_main_check = fd->binding && fd->binding->name && fd->binding->name->name &&
+        strcmp(fd->binding->name->name, "main") == 0;
+    if (e->type.kind == TY_FN && !is_main_check) {
+        Type carrier_override = emit_carrier_return_override(fd);
+        if (use_abi_spec) {
+            Type rt = ctx->current_abi_specialization->result_type;
+            bool is_inst = fd->binding && fd->binding->name &&
+                fd->binding->name->name &&
+                strncmp(fd->binding->name->name, "__inst_", 7) == 0;
+            Type rt_resolved = emit_resolve_type(ctx, rt);
+            if (g_m7_hkt_enabled && is_inst &&
+                rt_resolved.kind == TY_APP &&
+                !type_is_heap_struct(rt_resolved) &&
+                type_has_concrete_codegen_layout(&rt_resolved)) {
+                current_fn_ret_ctype_eff = emit_type_c_name(ctx, rt);
+            } else if (is_inst && type_uses_carrier_abi(rt_resolved)
+                && ctx->current_abi_specialization->typeclass_inst == NULL) {
+                current_fn_ret_ctype_eff = "int64_t";
+            } else {
+                current_fn_ret_ctype_eff = emit_type_c_name(ctx, rt);
+            }
+        } else if (carrier_override.kind == TY_STRUCT) {
+            current_fn_ret_ctype_eff = emit_type_c_name(ctx, carrier_override);
+        } else if (e->type.as.fn.result_full_type &&
+                   fd->binding && fd->binding->name && fd->binding->name->name &&
+                   strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
+                   type_uses_carrier_abi(emit_resolve_type(ctx,
+                       *e->type.as.fn.result_full_type))) {
+            current_fn_ret_ctype_eff = "int64_t";
+        } else if (e->type.as.fn.result_full_type &&
+                   emit_inst_fn_return_carrier(fd,
+                       e->type.as.fn.result_full_type)) {
+            current_fn_ret_ctype_eff = emit_inst_fn_return_carrier(fd,
+                e->type.as.fn.result_full_type);
+        } else if (e->type.as.fn.result_full_type) {
+            Type rft = *e->type.as.fn.result_full_type;
+            const char *fn_ret_td = e->type.as.fn.result_fat
+                ? NULL : emit_fn_return_typedef(fd, &rft);
+            current_fn_ret_ctype_eff = fn_ret_td ? fn_ret_td : emit_type_c_name(ctx, rft);
+        } else if (fd->binding && fd->binding->name && fd->binding->name->name &&
+                   strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
+                   fd->body && type_uses_carrier_abi(fd->body->type)) {
+            const char *_body_c2 = emit_type_c_name(ctx, fd->body->type);
+            if (_body_c2 && strcmp(_body_c2, "int64_t") != 0) {
+                current_fn_ret_ctype_eff = "int64_t";
+            } else {
+                current_fn_ret_ctype_eff = emit_type_c_name(ctx,
+                    emit_type_from_kind(e->type.as.fn.result_kind));
+            }
+        } else {
+            current_fn_ret_ctype_eff = emit_type_c_name(ctx,
+                emit_type_from_kind(e->type.as.fn.result_kind));
+        }
+    }
+    const char *saved_current_fn_ret_ctype = ctx->current_fn_ret_ctype;
+    ctx->current_fn_ret_ctype = current_fn_ret_ctype_eff;
+
     /* Use raw name (without ID suffix) for function name */
     const char *fn_name = ctx->fn_name_override
         ? ctx->fn_name_override
@@ -1446,15 +1505,18 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                     "return (int64_t)(intptr_t)__tur_ret_p; }\n",
                     struct_cty, struct_cty, struct_cty, ret_val);
             }
-        } else if (fd->body->type.kind == TY_FN &&
+        } else if ((fd->body->type.kind == TY_FN ||
+                    fd->body->type.kind == TY_PTR_VOID ||
+                    fd->body->type.kind == TY_CSTR ||
+                    (fd->body->type.kind == TY_STRUCT && strchr(type_c_name(fd->body->type), '*') != NULL)) &&
                    (result_kind == TY_INT || ret_is_int64_carrier)) {
-            /* A function-typed body returned through the int64_t closure
+            /* A function-typed, pointer-typed, or cstr body returned through the int64_t
              * carrier: a bare non-capturing fn reference is a `void *(...)`
              * function pointer, and a fat box is declared `void *`, but the C
              * return type is the int64_t carrier.  Without the (int64_t)(intptr_t)
-             * bridge, clang trips -Wint-conversion / -Wincompatible-function-
-             * pointer-types on the implicit pointer-to-int conversion.  (A void*
-             * carrier return needs no cast: the body value is already a pointer.) */
+             * bridge, clang trips -Wint-conversion on the implicit pointer-to-int
+             * conversion.  (A void* carrier return needs no cast: the body value
+             * is already a pointer.) */
             buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
         } else if (use_abi_spec
                    && ctx->current_abi_specialization->typeclass_inst != NULL
@@ -1589,6 +1651,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     ctx->closure = saved_closure;
     free((void*)ctx->env_var_name);
     ctx->env_var_name = saved_env_var_name;
+    ctx->current_fn_ret_ctype = saved_current_fn_ret_ctype;
 
     ctx->indent -= 4;
     buf_printf(file, "}\n\n");

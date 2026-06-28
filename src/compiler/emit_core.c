@@ -2433,8 +2433,11 @@ char *inline_c_substitute(EmitCtx *ctx, Buf *body, InlineC *ic) {
             const char *resolved = "int64_t";
             const EmitAbiSpecialization *spec =
                 ctx ? ctx->current_abi_specialization : NULL;
-            if (spec)
+            if (spec) {
                 resolved = type_c_name(spec->result_type);
+            } else if (ctx && ctx->current_fn_ret_ctype) {
+                resolved = ctx->current_fn_ret_ctype;
+            }
             buf_puts(&result, resolved);
             i += 11; matched = true;
         }

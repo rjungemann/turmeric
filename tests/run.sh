@@ -72,11 +72,7 @@ fi
 # Override with TUR_CC_FLAGS="-O1 -std=c99" for faster (but less safe) builds.
 # NOTE: -O0 causes SIGTRAP on Apple Silicon; -O1 exposes latent UB in some
 #       emitted functions missing a return path — keep -O2 for safety.
-# NOTE: -Wno-error=int-conversion: Apple clang 17 promoted -Wint-conversion
-#       to a default error; the codegen still emits int64_t<->void* casts in
-#       channel/bytes/vec lowering. Kept as a warning, not an error. Tracked
-#       in docs/reported/clang17-wint-conversion-codegen.md.
-export TUR_CC_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -Wall -Wno-error=int-conversion -fno-strict-aliasing -Lbuild/src}"
+export TUR_CC_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -Wall -fno-strict-aliasing -Lbuild/src}"
 
 # T19: ThreadSanitizer (TSan) support.
 # Set TUR_TSAN=1 to compile and run all fixtures with -fsanitize=thread.

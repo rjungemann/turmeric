@@ -241,6 +241,7 @@ typedef struct EmitCtx {
     uint32_t        n_carrier_call_bindings;
     uint32_t        cap_carrier_call_bindings;
     const EmitAbiSpecialization *current_abi_specialization;
+    const char *current_fn_ret_ctype;
     /* Variant 2 (generic-struct-opaque-element): the EX_FN_DEF whose body the ABI
      * scan is currently descending into (top-level scan only).  Used to tell a
      * generic *relay* call (inside a generic body, resolvable by binding

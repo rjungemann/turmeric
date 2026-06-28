@@ -93,7 +93,7 @@
   g->cancelled = false;
   g->done = false;
   g->cancel_reason = 0;
-  return (void *)g;
+  return (int64_t)(intptr_t)g;
   ```)
 ;;; fiber-cancelled? -- check whether the current fiber has been cancelled.
 ;;;

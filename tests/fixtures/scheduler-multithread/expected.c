@@ -4306,7 +4306,7 @@ static bool set_hyeq_hycmp_qu(int64_t a, int64_t b, int64_t cmp_fn) {
 }
 
 static void * set_hyhamt(int64_t s) {
-        struct { void *hamt; } *set = (void*)(intptr_t)s; return set->hamt; 
+        struct { void *hamt; } *set = (void*)(intptr_t)s; return (void *)(intptr_t)set->hamt; 
 }
 
 static bool set_hyeq_hyloop(void * iter, void * s2_hamt, void * keyeq) {
@@ -5548,7 +5548,7 @@ static int64_t replace(int64_t old, int64_t new) {
 }
 
 static int64_t fiber_hynew(void * fn, int64_t stack_size) {
-        return (void *)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
+        return (int64_t)(intptr_t)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
   
 }
 

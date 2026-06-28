@@ -78,7 +78,7 @@
 
 (defn str-free [s] : int
   ```c
-  free(s);
+  free((void *)(intptr_t)s);
   return 0;
   ```)
 ;;; str-concat -- concatenate two NUL-terminated strings into a new heap buffer.
@@ -105,7 +105,7 @@
   memcpy(out, sa, la);
   memcpy(out + la, sb, lb);
   out[la + lb] = '\0';
-  return (int64_t)(intptr_t)out;
+  return (const char *)out;
   ```)
 ;;; Eq [str] -- eq? delegates to str-eq? for byte-level string equality.
 ;; Phase E1: Eq instance for str -- wires eq? to str-eq?

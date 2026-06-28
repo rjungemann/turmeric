@@ -59,7 +59,7 @@
 
 (defn file-stream-open [path : cstr mode : cstr] : FileStream
   ```c
-  return (void*)fopen(path, mode);
+  return (int64_t)(intptr_t)fopen(path, mode);
   ```)
 ;;; file-stream-ok? -- return true if the FileStream wraps a real FILE*.
 ;;;
@@ -203,7 +203,7 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
 
 (defn Real-FileSystem-free [fs : FileSystem] : void
   ```c
-  free(fs);
+  free((void *)(intptr_t)fs);
   ```)
 ;; ============================================================================
 ;; Additional I/O helper functions
@@ -306,7 +306,7 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
   ```c
   #include <dirent.h>
   DIR* d = opendir(path);
-  if (!d) return NULL;
+  if (!d) return 0;
 
   /* Count entries first */
   struct dirent* entry;
@@ -319,7 +319,7 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
 
   /* Allocate array of pointers */
   char** entries = (char**)malloc((count + 1) * sizeof(char*));
-  if (!entries) { closedir(d); return NULL; }
+  if (!entries) { closedir(d); return 0; }
 
   int i = 0;
   while ((entry = readdir(d))) {
@@ -328,7 +328,7 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
   }
   entries[i] = NULL;
   closedir(d);
-  return (void*)entries;
+  return (int64_t)(intptr_t)entries;
   ```)
 ;;; free-dir-listing -- free a directory listing returned by list-dir.
 ;;;
