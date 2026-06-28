@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.25.5` -- explicit `#fx{...}` reader form for effect rows; legacy `#{...}` / `@{...}` rows are tagged for deprecation diagnostics.
+**Latest release:** `v0.25.6` -- Trowel desktop editor (Lite XL plugin) plus multi-tab web REPL with zip project import/export.
 
 ## What
 

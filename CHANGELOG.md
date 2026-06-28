@@ -4,6 +4,42 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.25.6] -- 2026-06-28
+
+### Added
+
+- **Trowel desktop editor.** New Lite XL-based editor for Turmeric
+  (phases 1-5): plugin with syntax coloring including inline-C blocks,
+  Try Turmeric color themes, Iosevka 12pt default, `new-project`
+  command, `tur lsp-lite` autocomplete client, embedded REPL pane,
+  branded `Turmeric.app` icon, and macOS/Linux distribution
+  scaffolding.
+- **Web REPL multi-tab editor.** Drag-reorderable tabs, project
+  download as zip, project load from zip, mobile overflow menu, and
+  Playwright multi-tab specs.
+- **Debugger upgrades.** DAP gains an in-frame expression evaluator
+  and conditional breakpoints; LLDB pretty-printers for core types;
+  VS Code Native Debugging configuration and integration docs.
+
+### Changed
+
+- **`defstruct`-as-`defadt` seam 4 graduation.** Force-lower blockers
+  dropped from 212 to 60 across the suite via the seam-4 work
+  (adt-recursive, hkt-ap-fn-in-container, Option/Result pointer-slot
+  parity, by-value ADT return bridges).
+
+### Fixed
+
+- **Nested-carrier match losing concrete element type.**
+- **stdlib `future`/`taskgroup` nested-function hoisting** so the
+  GCC nested-function extension is no longer required; `str.tur`
+  returns typed correctly.
+- **macOS `ucontext_t` ABI mismatch** that made `TuriEnv` layout
+  translation-unit-dependent.
+- **Apple clang 17 `-Werror=int-conversion`** noise in generated C
+  suppressed at the build-system level.
+- **Desktop editor datum-comment highlighting.**
+
 ## [0.25.5] -- 2026-06-26
 
 ### Added
