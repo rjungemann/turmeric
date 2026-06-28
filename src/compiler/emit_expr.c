@@ -3505,9 +3505,22 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                         fty = aargs[k]; break; }
                             }
                             const char *fc = emit_type_c_name(ctx, fty);
+                            /* CONV-S1 seam 4 (typedef ordering): a Result/Option
+                             * monomorph's value-struct field is stored as a heap
+                             * pointer `T *` (adt_field_c_type), so the unused-slot
+                             * default for the other variant (`err`'s ok_val,
+                             * `none`'s value) must be the NULL pointer `(T *){0}`,
+                             * not the aggregate `(T){0}` -- the slot type is `T *`. */
+                            Type rfty = emit_resolve_type(ctx, fty);
+                            bool ptr_slot = cdef && cdef->name &&
+                                (strcmp(cdef->name, "Result") == 0 ||
+                                 strcmp(cdef->name, "Option") == 0) &&
+                                rfty.kind == TY_STRUCT && rfty.as.struct_.def &&
+                                !rfty.as.struct_.def->is_opaque &&
+                                rfty.as.struct_.def->n_type_params == 0;
                             if (fc && strcmp(fc, "int64_t") != 0) {
                                 Buf db; buf_init(&db);
-                                buf_printf(&db, "(%s){0}", fc);
+                                buf_printf(&db, ptr_slot ? "(%s *){0}" : "(%s){0}", fc);
                                 buf_putc(&db, '\0');
                                 free(arg_strs[i]);
                                 arg_strs[i] = strdup(db.data);
@@ -3614,6 +3627,34 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         free(arg_strs[i]);
                         arg_strs[i] = strdup(c.data);
                         buf_free(&c);
+                    }
+                    /* CONV-S1 seam 4 (typedef ordering): a lowered `Result`/`Option`
+                     * monomorph ctor stores a non-parametric value-struct field as a
+                     * heap pointer `T *` (adt_field_c_type) -- matching the struct
+                     * path's carrier-box layout and letting a forward decl satisfy
+                     * the typedef ordering.  The ctor PARAM is therefore `T *`, but
+                     * the arg here is the `T` value, so heap-box it (malloc + copy)
+                     * and pass the pointer.  Inert at default (Result/Option are
+                     * structs there, so this monomorph ctor never fires). */
+                    if (suffix && arg && e->as.call_.ctor &&
+                        e->as.call_.ctor->adt && e->as.call_.ctor->adt->name &&
+                        (strcmp(e->as.call_.ctor->adt->name, "Result") == 0 ||
+                         strcmp(e->as.call_.ctor->adt->name, "Option") == 0)) {
+                        Type at = emit_resolve_type(ctx, arg->type);
+                        if (at.kind == TY_STRUCT && at.as.struct_.def &&
+                            !at.as.struct_.def->is_opaque &&
+                            at.as.struct_.def->n_type_params == 0) {
+                            const char *cn = type_c_name(at);
+                            char *tmp = fresh_tmp(ctx);
+                            indent_buf(body, ctx->indent);
+                            buf_printf(body, "%s *%s = (%s *)malloc(sizeof(%s));\n",
+                                       cn, tmp, cn, cn);
+                            indent_buf(body, ctx->indent);
+                            buf_printf(body, "*%s = (%s);\n", tmp, arg_strs[i]);
+                            free(arg_strs[i]);
+                            arg_strs[i] = strdup(tmp);
+                            free(tmp);
+                        }
                     }
                 }
                 char *_mc = mangle_field_name(fn_binding->name->name);
@@ -6203,7 +6244,20 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     bool rec_wide = rec_aggregate &&
                         type_is_wide_byval_adt(eff_fld_rty);
                     const char *acc = use_arrow ? "->" : ".";
-                    if (rec_wide) {
+                    /* CONV-S1 seam 4 (typedef ordering): a lowered Result/Option
+                     * monomorph stores a non-parametric value-struct field as a
+                     * heap pointer `T *` (adt_field_c_type) -- so the accessor must
+                     * DEREF the slot to recover the `T` value, not cast it.  Mirrors
+                     * the construction-side box.  Inert at default. */
+                    bool ros_ptr_slot = adt && adt->name &&
+                        (strcmp(adt->name, "Result") == 0 ||
+                         strcmp(adt->name, "Option") == 0) &&
+                        fld_rty.kind == TY_STRUCT && fld_rty.as.struct_.def &&
+                        !fld_rty.as.struct_.def->is_opaque &&
+                        fld_rty.as.struct_.def->n_type_params == 0;
+                    if (ros_ptr_slot) {
+                        buf_printf(&hb, "(*(%s)%s%s)", sv, acc, mp);
+                    } else if (rec_wide) {
                         buf_printf(&hb, "(*(%s *)(intptr_t)((%s)%s%s))",
                                    eff_fld_rcty, sv, acc, mp);
                     } else if (inline_byval || rec_aggregate) {

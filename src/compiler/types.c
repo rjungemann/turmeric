@@ -1275,6 +1275,29 @@ static const char *adt_field_c_type(const AdtDef *owner, const CtorField *field,
                                      const Type *args) {
     if (field->full_type && owner && args) {
         Type resolved = substitute_adt_app_type(field->full_type, owner, args);
+        /* CONV-S1 seam 4 (graduation): a lowered carrier-helper-backed parametric
+         * stdlib type (`Result`/`Option`) whose monomorph field resolves to a
+         * non-parametric value-struct stores it as a HEAP POINTER `T *`, exactly
+         * as the struct path does (struct_field_c_type, "Direction (1)").  Two
+         * wins: (1) the monomorph + its ctor reference `T` only by pointer, so a
+         * guarded forward `typedef struct T T;` (emitted by the dependency
+         * pre-pass) suffices and the embedding monomorph no longer needs `T`'s
+         * full typedef flushed ahead of it (the struct-with-Option-field typedef
+         * ordering blocker); (2) the 8-byte slot matches the carrier-box layout
+         * the prelude helpers (`tur_box_ok`/`tur_box_some`) produce.  Inert at
+         * default: there `Result`/`Option` are structs, so this ADT path is never
+         * reached for them.  The ctor heap-boxes the by-value param into the slot
+         * (see the byval ctor branch's struct-pointer box). */
+        if (owner->name &&
+            (strcmp(owner->name, "Result") == 0 ||
+             strcmp(owner->name, "Option") == 0) &&
+            resolved.kind == TY_STRUCT && resolved.as.struct_.def &&
+            !resolved.as.struct_.def->is_opaque &&
+            resolved.as.struct_.def->n_type_params == 0) {
+            static char ptrbuf[128];
+            snprintf(ptrbuf, sizeof(ptrbuf), "%s *", type_c_name(resolved));
+            return ptrbuf;
+        }
         return type_c_name(resolved);
     }
     switch (field->kind) {
@@ -1542,6 +1565,23 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                         break;
                     }
                 }
+            }
+            /* CONV-S1 seam 4 (typedef ordering): a `Result`/`Option` monomorph
+             * field that resolves to a non-parametric value-struct is stored as a
+             * pointer `T *` (adt_field_c_type, above), so -- exactly as the
+             * struct-app emitter does -- emit a guarded forward `typedef struct T
+             * T;` here.  The user struct is NOT in either app registry (it is
+             * non-parametric), so the recursion above cannot reach it; the forward
+             * decl is all a pointer field/param needs, and the later full typedef
+             * is an accepted redundant typedef under -std=c99. */
+            if (resolved.kind == TY_STRUCT && resolved.as.struct_.def &&
+                resolved.as.struct_.def->name &&
+                !resolved.as.struct_.def->is_opaque) {
+                const char *un = resolved.as.struct_.def->name;
+                buf_printf(out, "#ifndef TUR_FWD_%s\n", un);
+                buf_printf(out, "#define TUR_FWD_%s\n", un);
+                buf_printf(out, "typedef struct %s %s;\n", un, un);
+                buf_printf(out, "#endif\n");
             }
             free_struct_app_type(resolved);
         }
