@@ -1,5 +1,84 @@
 # Lowered Option/Result `#{Construct}` carrier base returns by-value into int64
 
+## RESOLVED 2026-06-28 -- return-tail-scoped carrier-return bridge
+
+**This is fixed in the current tree and verified by a force-lower sweep.** The
+carrier base of a lowered parametric Option/Result `#{Construct}`
+(`some`/`none`/`ok`/`err`) now compiles and runs correctly: when the C return
+type is the uniform `int64_t` carrier but the body tail produces a by-value
+`tur_adt_Option__A` / `tur_adt_Result__A__B` aggregate (the lowered
+make-struct -> monomorph ctor), the function-return path heap-spills the
+aggregate and returns its pointer as the int64 carrier.
+
+Root fix (landed by #572, `9b4dab0`): the concrete->carrier **return bridge**
+at `src/compiler/emit_fns.c:1569-1603`, gated by
+`fn_body_tail_emits_byvalue_carrier_abi` / `fn_body_tail_byvalue_carrier_type`
+(`src/compiler/emit_expr.c`). It emits:
+
+```c
+static int64_t none() {
+    { tur_adt_Option__A *__tur_ret_p = (tur_adt_Option__A *)malloc(sizeof(tur_adt_Option__A));
+      *__tur_ret_p = ctor_Option__A(false, (int64_t){0});
+      return (int64_t)(intptr_t)__tur_ret_p; }
+}
+```
+
+The heap-boxed pointer is byte-compatible with the carrier convention every
+consumer already derefs (`{is_some,value}` / `{is_ok,ok_val,err_val}`), so
+producer and consumer agree without a global representation flip.
+
+### Why this succeeded where the report's two attempts (below) regressed
+
+Both abandoned attempts touched the wrong seam:
+
+- **Option 1 (sentinel-preserving)** rewrote the *base's representation*
+  (`return 0` / `tur_box_some`), creating a carrier shape that disagreed with
+  the by-value consumers the same `(Option int)` reaches elsewhere -> desynced
+  the `option-*` cluster.
+- **Option 2 (boxed-aggregate)** broadened the *general* expression predicate
+  `expr_emits_byvalue_carrier_abi`, so the heap-box bridge over-fired in
+  non-return positions -- e.g. `(some 42)` in a let-init was boxed into an
+  aggregate-typed binding ("invalid initializer").
+
+The landed fix instead heap-spills the **same** by-value aggregate the by-value
+world uses, **only at the function-return tail** (`fn_body_tail_*`, not the
+general expr predicate). That keeps one representation (a heap pointer to the
+by-value aggregate) and never fires in expression position, sidestepping both
+failure modes. The report's "no piecemeal fix is possible" conclusion was
+premature: the piecemeal fix exists -- it just had to land at the return seam,
+not the base body or the general predicate.
+
+### Verification
+
+- Reproduced the original failure mode with a temporary `TUR_FORCE_LOWER`
+  bypass at the top of `defstruct_lowers_to_adt` (forces every well-formed
+  `defstruct` to lower), then removed it.
+- Under that force-lower probe, all fixtures this report named build **and**
+  run with correct stdout: `positional-opaque-ok`, `positional-pap-opaque-ok`,
+  `kleisli-arrow-instance`, `hkt-ap-fn-in-container`,
+  `hkt-stdlib-option-result-instances`, plus the entire regressed cluster the
+  two attempts broke -- `option-basic`, `option-of-tvec-eq`,
+  `option-construct-byvalue-return-spec`, `option-consumers-byvalue-arg`,
+  `option-map-capturing-closure`, `option-map-literal-none-unannotated-lambda`,
+  `list-length-byvalue-aggregate-element`,
+  `list-homog-byvalue-aggregate-element`,
+  `constrained-instance-dispatch-parametric-container-element`.
+- The remaining force-lower-only failures are unrelated to this report
+  (compound / applied-type struct fields the field-lowerability gate
+  legitimately keeps on the struct path, plus two negative-test diagnostics) --
+  not the carrier-base bug.
+- Default gate green: `bash tests/run.sh` => `1871 passed, 0 failed`.
+
+The two `hkt-*` fixtures' separate root (a `some` of a `(fn [float] float)`
+element mistyping its spec arg as `double`) remains tracked in
+`docs/reported/some-of-fn-element-spec-arg-mistyped.md` if still open.
+
+---
+
+(Original report below, retained for the paper trail.)
+
+# Lowered Option/Result `#{Construct}` carrier base returns by-value into int64
+
 **STILL OPEN. A boxed-aggregate attempt was made and REVERTED -- it was net-
 negative under force-lower** (commits `seam-4: boxed-aggregate carrier base ...`
 + `... recognize lowered by-value Option/Result spec result ...`, reverted by
