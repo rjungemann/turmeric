@@ -2254,7 +2254,16 @@ static bool type_phantom_hides_aggregate(const Type *t) {
     if (!type_extract_struct_app(t, &def, args, &n_args) || !def || !def->is_opaque)
         return false;
     for (uint8_t i = 0; i < n_args; i++) {
-        if (!type_has_concrete_codegen_layout(&args[i])) continue;
+        /* Under the defstruct-as-defadt lowering the by-value aggregate element
+         * is an ADT app (`Option__int`), not a struct app.
+         * `type_has_concrete_codegen_layout` only recognizes struct apps, so it
+         * returns false for an ADT-app aggregate -- check the ADT predicate too,
+         * else the loop `continue`s past the element, the phantom-opaque spec is
+         * not minted, and the carrier walk segfaults on the shifted cell layout.
+         * `adt_app_is_byvalue_product` excludes `:heap` ADTs (a single 8-byte
+         * pointer carrier -- no spec needed), matching the struct branch. */
+        bool byval_adt = adt_app_is_byvalue_product(args[i]);
+        if (!type_has_concrete_codegen_layout(&args[i]) && !byval_adt) continue;
         /* The element shifts the cell layout only when it is a BY-VALUE aggregate
          * embedded inline (e.g. `Option__int`) -- a non-opaque, non-:heap struct.
          * Scalar/pointer elements (int, cstr, float) and :heap handles (Vec, Cons)
@@ -2265,6 +2274,9 @@ static bool type_phantom_hides_aggregate(const Type *t) {
         uint8_t en = 0;
         if (type_extract_struct_app(&args[i], &ed, eargs, &en) &&
             ed && !ed->is_opaque && !ed->is_heap) {
+            return true;
+        }
+        if (byval_adt) {
             return true;
         }
     }
@@ -3183,6 +3195,16 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                     if (!expected_full) continue;
                     Type a = emit_abi_instantiate_type(expected_full, ub, un,
                                                        ctx->type_arena);
+                    /* A function-typed construct element rides as the opaque
+                     * fat-closure handle: the monomorph's element field is
+                     * `void *` (the `__opaque` carrier), and the spec body is a
+                     * literal `ctor_<Mono>(true, x)`.  type_c_name(TY_FN) leaks
+                     * the fn's RESULT type (`double` for `(fn [float] float)`),
+                     * which would mis-name the spec arg + declare the param as
+                     * `double` while the call passes a `void *` -- a hard cc
+                     * error.  Normalize a TY_FN element to the opaque carrier so
+                     * the spec param matches the ctor's `void *` field. */
+                    if (a.kind == TY_FN) a = TYPE_PTR_VOID;
                     if (a.kind != TY_TYVAR && a.kind != TY_UNKNOWN)
                         arg_types[i] = a;
                 }
@@ -5350,8 +5372,18 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
     char adt_ptr_name[260];
     snprintf(adt_ptr_name, sizeof(adt_ptr_name), "%s *", adt_c_name);
 
+    /* A parametric `:heap` ADT (lowered stdlib Vec/Map/Set/MutableMap/Cons)
+     * never calls its generic-base ctor -- every construction site knows the
+     * element type and monomorphizes to `ctor_<Name>__<args>`.  The generic
+     * base `ctor_<Name>` is therefore dead code, and emitting it collides with
+     * an unrelated ADT (or struct) whose constructor happens to share the name
+     * (e.g. a user `(defdata List (Cons :int :List))` vs the stdlib `:heap`
+     * `Cons` list cell).  Skip it.  A NON-parametric `:heap` ADT has no
+     * monomorphs, so its base ctor IS the constructor and must stay. */
+    bool skip_heap_generic_base = heap && def->n_type_params > 0;
+
     /* Emit constructor functions */
-    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+    for (uint32_t ci = 0; ci < def->n_ctors && !skip_heap_generic_base; ci++) {
         CtorDef *ctor = def->ctors[ci];
         char *mctor = mangle_field_name(ctor->name);
         buf_printf(out, "static %s ctor_%s(",
@@ -8816,8 +8848,12 @@ int emit_program(Buf *out, const Expr *program) {
              * emit_adt_typedef_and_ctors). */
             if (byval) emit_adt_byval_drop_glue(&early_file, def, adt_c_name);
 
+            /* Skip the dead generic-base ctor of a parametric `:heap` ADT --
+             * see the mirror note in emit_adt_typedef_and_ctors above. */
+            bool skip_heap_generic_base = heap && def->n_type_params > 0;
+
             /* Emit constructor functions */
-            for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+            for (uint32_t ci = 0; ci < def->n_ctors && !skip_heap_generic_base; ci++) {
                 CtorDef *ctor = def->ctors[ci];
                 char *mctor = mangle_field_name(ctor->name);
                 buf_printf(&early_file, "static %s ctor_%s(",

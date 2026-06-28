@@ -6,6 +6,23 @@ description: Lower `defstruct` to a single-variant record `defadt` so structs fl
 
 # `defstruct` -> `defadt` lowering
 
+> **GRADUATED 2026-06-28.** Lowering is now **unconditional (always-on)**: a
+> `defstruct` lowers to a single-variant record `defadt` with no flag.  The
+> `defstruct-as-defadt` experiment is retired -- the `EXPERIMENTS[]` row, the
+> `g_opt_defstruct_as_defadt` global, and the per-fixture `--enable` flags are
+> gone (`--enable=defstruct-as-defadt` now reports TUR-E0310 unknown experiment).
+> The gate (`defstruct_lowers_to_adt`, elab_structs.c) still legitimately keeps a
+> `:linear` or `:no-auto-ctor` outer struct, and applied-type/`exists`-field
+> structs, on the StructDef path.  Full suite: **1870 passed, 0 failed**.  The
+> StructDef surface path is retained for those carve-outs; fully retiring it is
+> separate follow-up, scoped in
+> [structdef-retirement-plan.md](structdef-retirement-plan.md) (LARGE -- ~197
+> `StructDef` sites across 19 files; natural first slice is widening the field
+> gate to applied-type fields).  The diagnostic-quality follow-ups (positional+
+> keyword construction mix and the struct-accessor hint) were RESTORED to precise
+> messages on the constructor path (commit "restore precise constructor/keyword
+> diagnostics").
+
 ## Goal
 
 A `defstruct` is the single-variant, record-shaped case of an algebraic data
@@ -1086,10 +1103,20 @@ bridges, the carrier-bridge warning sweep, AND the parametric-`:heap` gate flip 
 the autoloaded stdlib `Vec`/`Set`/`Map`/`List` now lower to record ADTs under the
 flag, build `-Wint-conversion`-clean, and run at parity with the struct path.
 
-What remains is **step 4 (full graduation)**: make lowering unconditional (delete
-the gate + `g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]` row), retire the
-`StructDef` surface path, and regen snapshots.  **Seam 4 is IN PROGRESS** (see the
-step-4 entry above for the measured scope and the running cleared-cluster log).
+**Step 4 (full graduation) is DONE (2026-06-28).**  Lowering is unconditional
+(the gate + `g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]` row are deleted) and
+snapshots are regenerated.  Flipping always-on surfaced a residual tail the
+force-lower BUILD sweep could not see (diagnostic / stdout / crash, not build
+errors); all were cleared in the graduation commit: the phantom-opaque
+aggregate-element segfault (ADT-app element now recognized by
+`type_phantom_hides_aggregate`), the float-element carrier truncation
+(`ok__spec__int64_t_double` now bit-packs a float into a tyvar-erased carrier
+field), the stdlib-name-redefinition UBSan crash (a redefinition guard in
+elab_defstruct + a defensive `TY_ADT` guard in elab_defdata), the `:no-auto-ctor`
+carve-out (kept on the StructDef path), the SZ8 size-projection recovery for a
+lowered record-ADT field receiver, and 13 `errors/*` diagnostic-contract updates.
+The `StructDef` surface path is retained for the `:linear` / `:no-auto-ctor` /
+applied-type-field carve-outs; fully retiring it is separate follow-up.
 The default `bash tests/run.sh` is **green (1862 passed, 0 failed)** with many
 flag-independent seam-4 fixes landed -- including the big lever (the C-ABI-
 compatible flat named layout + `typedef <Name>` alias for single-variant record
@@ -1099,13 +1126,21 @@ read, and the four most recent carrier<->by-value crossings cleared by PR #571
 (non-parametric by-value-ADT arg boxing, `fn`-field int64 carrier width,
 wide-by-value -> closure-thunk carrier heap-box, bounded-wrapper -> concrete
 aggregate-return tail bridge).
-The force-lower probe is down to **3 unique build-failing fixtures** (plus 2
-stdout mismatches) as of 2026-06-28, after the named parametric-monomorph layout
-keystone cleared `tuplen-struct-param-passing` + `m5-byval-marker-spec-emit`, the
-none()-base / by-value-spec carrier-return bridges cleared `positional-opaque-ok`,
+The force-lower probe is at **ZERO unique build-failing fixtures** as of
+2026-06-28, after the named parametric-monomorph layout keystone cleared
+`tuplen-struct-param-passing` + `m5-byval-marker-spec-emit`, the none()-base /
+by-value-spec carrier-return bridges cleared `positional-opaque-ok`,
 `positional-pap-opaque-ok`, `kleisli-arrow-instance`, and
-`typeclass-return-dispatch-result-wrapped`, and the instance-method ADT-return
-ctor-misemit fix cleared `serial-composite-instances`.
+`typeclass-return-dispatch-result-wrapped`, the instance-method ADT-return
+ctor-misemit fix cleared `serial-composite-instances`, the stdlib/user `Cons`
+ctor-name-collision + mis-resolution fix cleared `adt-recursive`, the
+`Option__opaque` fn-element construct fix cleared `hkt-ap-fn-in-container`, and
+the Option HKT instance-body carrier<->by-value straddle fix cleared
+`hkt-stdlib-option-result-instances`.  (A full force-lower sweep over every
+fixture confirms 0 lowering-introduced build errors -- the only standalone
+`tur build` failures are the `httpd-*`/`reactor-*`/`future-*` harness-link
+families, which fail identically with and without the flag because they need
+`tests/run.sh`'s `-lturi`/spice setup, not because of lowering.)
 
    - **Result/Option value-struct field: pointer-slot parity DONE (2026-06-28).**
      A lowered carrier-helper-backed parametric stdlib type (`Result`/`Option`)
@@ -1133,9 +1168,66 @@ ctor-misemit fix cleared `serial-composite-instances`.
      `ok`/`err`/`some`, `is-ok`/`is-some`, and value read-back via `.ok-val` /
      `unwrap`).
 
-The remaining 3 build
-blockers, by root: the `Option__opaque` specialization (`hkt-ap-fn-in-container`,
-`hkt-stdlib-option-result-instances`); and the stdlib/user `Cons`
-C-name collision (`adt-recursive`).  Driving these to zero (promote each to a
-flag-on fixture + fix) is the gating work before the experiment can graduate.
-Runway: experiment `expires_at` is `0.30.0` (current `VERSION` is `0.25.5`).
+   - **stdlib/user ctor C-name collision + ctor mis-resolution DONE
+     (2026-06-28).**  A user `(defdata List (Cons :int :List))` whose `Cons`
+     constructor shares a name with the autoloaded stdlib `:heap` `Cons` list
+     cell broke two ways once the stdlib `Cons` lowered: (1) the parametric
+     `:heap` ADT emitted a generic-base `ctor_Cons` (`tur_adt_Cons *`) that
+     collided at `cc` with the user's non-parametric `ctor_Cons` (`int64_t`) --
+     and that base is DEAD (every `:heap` construction monomorphizes to
+     `ctor_Cons__int`), so emit_module.c now skips the generic-base ctor for a
+     parametric `:heap` ADT; (2) `elab_lookup_ctor` (elab_structs.c) scanned
+     `adt_defs` forward and returned the FIRST name match -- the stdlib `Cons`
+     (registered first) -- so `(Cons 1 (Nil))` mis-resolved to the stdlib cell
+     while `match`/`list-sum` treated it as the user `List` (segfault).  It now
+     scans most-recently-registered-first (lexical-shadowing semantics; the same
+     answer `scope_lookup` gives the auto-bound ctor fn).  Both flag-independent
+     (at default stdlib `Cons` is a struct, absent from `adt_defs`).  Cleared
+     `adt-recursive`.  Canary `conv-defstruct-user-ctor-shadows-stdlib`.
+
+   - **`Option__opaque` fn-element construct mistyped DONE (2026-06-28).**
+     Wrapping a function in `some` (`(Option (fn ...))`) makes the element ride
+     as the opaque fat-closure handle, so the monomorph is `Option__opaque` with
+     a `void *` value field.  `type_c_name(TY_FN)` leaks the fn's RESULT type, so
+     `(some (fn [float] float))` minted `some__spec__...opaque_double(double)` and
+     passed the fat-closure `void *` to a `double` param (hard cc error), and the
+     `none`/default emitted `(int64_t){0}` into the `void *` slot.  Fix: the
+     `construct_recovered_byvalue` arg re-derivation (`emit_abi_register_call`,
+     emit_module.c) normalizes a `TY_FN` element to the opaque `void *` carrier,
+     and the default-of recompute (`emit_expr.c`) emits `(void *){0}` for a
+     `TY_FN`-typed field.  Both flag-independent.  Cleared
+     `hkt-ap-fn-in-container`; report archived
+     (`some-of-fn-element-spec-arg-mistyped.md`).  Canary
+     `conv-defstruct-option-fn-element`.
+
+   - **Option HKT instance-body carrier<->by-value straddle DONE (2026-06-28).**
+     The last force-lower build blocker: the generic HKT instance-method bodies
+     for the hand-written stdlib `Option` (`hkt-stdlib-option-result-instances`)
+     straddle the carrier and by-value `Option__opaque` representations once
+     `Option` lowers.  Three crossings, all flag-independent (the report is
+     archived; canary `conv-defstruct-option-hkt-instance-bodies`):
+     (1) **consuming** -- `(some? ff)` where `ff` is an `int64_t` carrier param
+     but the fn-element specializes the predicate to the by-value
+     `some___spec__bool_tur_adt_Option__opaque`: the spec-call arg bridge
+     (emit_expr.c) now unboxes an `EX_VAR` whose binding has
+     `emit_carrier_holds_byval` into the by-value spec param (suppressed when the
+     active spec already passes it by-value);
+     (2) **producing** -- in by-value `bind`, the continuation `k` returns the
+     by-value aggregate directly (`(R (*)(void*, A...))k.fn`), so a new
+     `closure_call_emits_byval_aggregate` predicate keeps
+     `fn_body_tail_emits_byvalue_carrier_abi` from re-bridging the if-arm merge
+     through the int64 carrier (the `(tur_option_t *)(intptr_t)(<aggregate>)`
+     reconstruct);
+     (3) **construct closure-as-int** -- a `(:: (fn ..) int)` capturing closure
+     (`void *`) fed to the int64-carrier construct spec
+     `some__spec__...Option__int_int64_t`: the regular-call `needs_fn_cast`
+     TY_TYVAR branch now also casts to int64 when the matched spec resolves the
+     param to the int64 carrier.
+
+With this, the **force-lower build-blocker count is ZERO**.  What remains before
+the gate can be deleted: regenerate the ~166 codegen (snapshot) `expected.c`
+files for the lowered fixtures, audit the residual run-time/stdout
+behavioural diffs (the harness-link `httpd-*`/`reactor-*`/`future-*` families
+are not lowering issues -- they need `tests/run.sh`'s link setup), then delete
+the gate + `g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]` row, retire the
+`StructDef` surface path, and land the snapshot regen in one change.

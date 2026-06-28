@@ -1,1 +1,1 @@
-field 'age' expects int, got cstr
+function 'Person' arg 2: expected int, got cstr

@@ -1,0 +1,30 @@
+;; conv-defstruct-option-fn-element -- with --enable=defstruct-as-defadt the
+;; stdlib Option lowers to a record ADT.  Wrapping a FUNCTION in `some` makes the
+;; element ride as the opaque fat-closure handle, so the monomorph is
+;; `Option__opaque` whose value field is the `void *` carrier.
+;;
+;; type_c_name(TY_FN) leaks the fn's RESULT type, so before the fix:
+;;  - `(some (fn [float] float))` minted `some__spec__...opaque_double(double)` and
+;;    passed the fat-closure `void *` to a `double` param (hard cc error), and
+;;  - the `none`/default emitted `ctor_Option__opaque(false, (int64_t){0})` into a
+;;    `void *` slot.
+;; The fix normalizes a TY_FN construct element to the opaque `void *` carrier.
+
+(defn opt-fval-x100 [o : int] : int
+  ```c struct { bool is_some; double value; } *p = (void*)(intptr_t)o;
+       return (p && p->is_some) ? (int64_t)(p->value * 100.0) : -999; ```)
+
+(defn opt-some? [o : int] : int
+  ```c struct { bool is_some; int64_t value; } *p = (void*)(intptr_t)o;
+       return (p && p->is_some) ? 1 : 0; ```)
+
+(defn main [] : int
+  ;; float-result fn wrapped in some: ap grounds the result to (Option float)
+  (let [ff (:: (some (fn [x : float] : float (+ x 0.5))) (Option (fn [float] float)))
+        fa (:: (some 41.25) (Option float))]
+    (println (opt-fval-x100 (ap ff fa))))                            ; 4175
+  ;; none on the function side short-circuits (void* default, no warning)
+  (let [ff (:: (none) (Option (fn [int] int)))
+        fa (:: (some 41) (Option int))]
+    (println (opt-some? (ap ff fa))))                                ; 0
+  0)

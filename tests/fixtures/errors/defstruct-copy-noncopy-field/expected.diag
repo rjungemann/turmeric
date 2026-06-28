@@ -1,1 +1,1 @@
-defstruct: field 'r' has non-copy type :ref<int> and cannot be used in :copy struct
+cannot contain non-copy field 'r'

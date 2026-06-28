@@ -1,6 +1,5 @@
 /* elab_structs.c -- struct/ADT/GADT definitions, pattern matching, and borrow traits. */
 #include "elab_internal.h"
-#include "experiments.h"  /* CONV-S1: defstruct-as-defadt experiment gate */
 
 /* ---- file-local helper forward declarations ---- */
 static void parse_struct_field_type(const char *tname, uint32_t tlen,
@@ -850,14 +849,16 @@ static bool defstruct_newstyle_fields_all_primitive(Elab *e, const Form *call,
 }
 
 /* CONV-S1 (defstruct-as-defadt): decide whether a `defstruct` form qualifies for
- * the slice-1 lowering -- flag on, old-syntax single field vector,
- * non-parametric, not :heap / :linear, every field a primitive scalar.  Shared
- * by the top-level type pre-pass (which must then register an ADT stub rather
- * than a struct stub) and elab_defstruct (which performs the rewrite), so they
- * agree on which names become ADTs.  Re-derives the annotation / field shape
- * straight from the form (cheap; the form is small). */
+ * lowering to a single-variant record `defadt`.  GRADUATED (always-on): a
+ * `defstruct` lowers whenever its shape is supported -- old OR new field syntax,
+ * scalar / pointer / fn / aggregate / parametric / `:heap` fields.  The
+ * field-lowerability checks below still legitimately keep a `:linear` outer
+ * struct, or one carrying an applied-type / `exists` field, on the StructDef
+ * path.  Shared by the top-level type pre-pass (which must then register an ADT
+ * stub rather than a struct stub) and elab_defstruct (which performs the
+ * rewrite), so they agree on which names become ADTs.  Re-derives the annotation
+ * / field shape straight from the form (cheap; the form is small). */
 bool defstruct_lowers_to_adt(Elab *e, const Form *call) {
-    if (!g_opt_defstruct_as_defadt) return false;
     if (call->tag != F_LIST || call->as.list.len < 3) return false;
     const Form *name_form = call->as.list.items[1];
     if (name_form->tag != F_SYM) return false;
@@ -865,10 +866,13 @@ bool defstruct_lowers_to_adt(Elab *e, const Form *call) {
     while (idx < call->as.list.len) {
         const Form *kw = call->as.list.items[idx];
         if (kw->tag != F_KEYWORD) break;
-        if (kw->as.sym == e->kw_copy || kw->as.sym == e->kw_move ||
-            kw->as.sym == e->kw_no_auto_ctor) { idx++; continue; }
+        if (kw->as.sym == e->kw_copy || kw->as.sym == e->kw_move) { idx++; continue; }
         if (kw->as.sym == e->kw_linear)
             return false;  /* :linear keeps the struct path */
+        if (kw->as.sym == e->kw_no_auto_ctor)
+            return false;  /* :no-auto-ctor opts out of the auto-bound ctor,
+                            * which the record-ADT path always binds -- keep the
+                            * struct path so the `(Name ...)` call stays rejected. */
         /* seam 3 (DONE): a `:heap` struct -- BOTH non-parametric and parametric
          * (the stdlib Vec/Map/Set/MutableMap/Cons) -- lowers to a `:heap` record
          * defadt.  The typed-pointer ABI foundation (`defdata :heap`, the
@@ -1065,7 +1069,42 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
      * the gate rejects (:heap / :linear outer structs) still elaborates as a
      * struct.  See docs/upcoming/defstruct-as-defadt-plan.md. */
     if (defstruct_lowers_to_adt(e, call)) {
-        experiment_warn_if_used("defstruct-as-defadt");
+        /* Redefinition guard -- must run BEFORE dispatching into elab_defdata.
+         * A `defstruct` that redefines a fully-defined name (commonly an
+         * auto-loaded stdlib type such as `Cons`/`Pair`) must produce the
+         * defstruct-specific "already defined" diagnostic, not crash inside
+         * elab_defdata's forward-stub-reuse path.  A same-name GADT may
+         * legitimately coexist with a struct (MF4), so don't block that. */
+        {
+            /* Scan the def registries directly rather than via scope_lookup:
+             * the top-level pre-pass registers a forward stub for THIS
+             * redefinition (n_ctors == 0), which masks the already-FILLED-IN
+             * stdlib/earlier definition in the scope.  Mirror the struct-path
+             * DS4-2 check (n_fields/n_ctors > 0 == filled in == redefinition; an
+             * empty forward stub is still re-elaborable).  A same-name GADT may
+             * coexist with a struct (MF4), so it is not "fully defined" here. */
+            bool prior_fully_defined = false;
+            for (uint32_t ai = 0; ai < e->n_adt_defs && !prior_fully_defined; ai++) {
+                AdtDef *ad = e->adt_defs[ai];
+                if (ad && ad->name && strcmp(ad->name, name->name) == 0 &&
+                    ad->n_ctors > 0 && !ad->is_gadt)
+                    prior_fully_defined = true;
+            }
+            for (uint32_t si = 0; si < e->n_struct_defs && !prior_fully_defined; si++) {
+                StructDef *sd = e->struct_defs[si];
+                if (sd && sd->name && strcmp(sd->name, name->name) == 0 &&
+                    sd->n_fields > 0)
+                    prior_fully_defined = true;
+            }
+            if (prior_fully_defined) {
+                diag_emit(DIAG_ERROR, name_form->span,
+                          "defstruct: '%s' is already defined (an auto-loaded "
+                          "stdlib module or earlier form in this file defines "
+                          "a type with this name; pick a distinct name)",
+                          name->name);
+                return NULL;
+            }
+        }
         /* Build the record-variant field vector [name : type ...].  Old syntax
          * already has fields_form in that shape; new syntax has separate
          * (name type) forms (call->items[fields_start_idx ..]) that we flatten to
@@ -1965,7 +2004,12 @@ Expr *elab_defdata(Elab *e, const Form *call) {
     bool is_forward_stub_adt = false;
     Binding *existing_adt_b = scope_lookup(e->scope, name);
     if (existing_adt_b) {
-        if (elab_is_forward_type(e, name)) {
+        /* Reuse the pre-registered stub ONLY when it is genuinely an ADT stub.
+         * A forward-typed binding whose payload is not a TY_ADT (e.g. a stdlib
+         * type of the same name shadowed by a forward entry) would otherwise be
+         * dereferenced as `as.adt_.def` below -- a wild pointer / UBSan
+         * misaligned-access crash.  Treat that as a redefinition. */
+        if (elab_is_forward_type(e, name) && existing_adt_b->type.kind == TY_ADT) {
             is_forward_stub_adt = true;
         } else {
             diag_emit(DIAG_ERROR, name_form->span,
@@ -3083,7 +3127,15 @@ Expr *elab_coerce(Elab *e, const Form *call) {
 
 /* Phase G0: Helper - look up CtorDef by name across all known ADTs */
 CtorDef *elab_lookup_ctor(Elab *e, const Symbol *name) {
-    for (uint32_t ai = 0; ai < e->n_adt_defs; ai++) {
+    /* Scan most-recently-registered first so a later definition shadows an
+     * earlier one of the same constructor name -- lexical-shadowing semantics,
+     * and the same answer `scope_lookup` gives for the auto-bound ctor fn.  This
+     * matters once stdlib `defstruct`s lower to record ADTs: the stdlib `Cons`
+     * (autoloaded first) would otherwise shadow a user `(defdata List (Cons ...))`
+     * registered later, mis-resolving the user's `(Cons ...)` to the stdlib cell.
+     * At default (stdlib Cons is a struct, absent from adt_defs) only the user's
+     * ctor is present, so the scan direction is immaterial there. */
+    for (uint32_t ai = e->n_adt_defs; ai-- > 0; ) {
         AdtDef *adt = e->adt_defs[ai];
         for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
             /* A constructor slot can be NULL (with a NULL ->name) when its
