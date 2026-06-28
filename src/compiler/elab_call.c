@@ -3784,6 +3784,18 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             /* Allow nil as a null pointer for ptr<void> parameters. */
             arg_ok = true;
         }
+        if (!arg_ok && expected_arg_kind == TY_PTR_VOID &&
+            args[i]->kind == EX_INT_LIT && args[i]->as.i == 0) {
+            /* Allow the `0` literal as a null pointer for a ptr<void> parameter.
+             * `make-struct` of a non-parametric struct skips its field typecheck,
+             * so `(make-struct Error "msg" 0)` with `cause : ptr<void>` accepts
+             * the `0`-as-NULL idiom; under defstruct-as-defadt that make-struct
+             * lowers to the auto-bound ctor CALL `(Error "msg" 0)`, which hits
+             * this strict arg check.  Match make-struct's leniency for the
+             * unambiguous NULL literal (sibling of the nil and fn ptr<void>
+             * coercions above); a non-zero int still errors. */
+            arg_ok = true;
+        }
         if (!arg_ok && expected_arg_kind == TY_FN && args[i]->type.kind == TY_PTR_VOID) {
             /* A#1: a fat (^fat) parameter consumes a closure in fat-box form.  A
              * capturing closure value (EX_CLOSURE, TY_PTR_VOID) is already a fat
