@@ -9,6 +9,14 @@
 #include <string.h>
 #include <ctype.h>
 
+/* CONV-S1 seam 4 (keystone): named-layout helpers defined in emit_core.c.
+ * Forward-declared here (types.c does not include emit_internal.h) so the
+ * single-variant record monomorph emit routes its field stores through the same
+ * member-path the typedef / field-read / match sites use. */
+char *mangle_field_name(const char *name);
+char *adt_field_member_path(const struct AdtDef *def, const struct CtorDef *ctor,
+                            uint32_t fi);
+
 /* ptr-generic-parameterised-type: intern compound type-name strings (e.g.
  * "double *", "ptr<float>") so type_c_name/type_name can return a stable,
  * reachable pointer.  Without this, building names with tur_strdup on every
@@ -1549,6 +1557,31 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
     buf_printf(out, "#ifndef TUR_TY_%s\n", adt_inst_name);
     buf_printf(out, "#define TUR_TY_%s\n", adt_inst_name);
     bool flat = adt_is_flat_product(def);
+    /* CONV-S1 seam 4 (keystone): a single-variant record monomorph carries the
+     * record's real field names (`{ T data; ... }`) -- the parametric analogue
+     * of the non-parametric named layout -- so inline-C that reads it by field
+     * name (`v->len`, `t.e1`) compiles.  Byte-identical to the positional
+     * `union { struct { T _0; } <Ctor>; } as;` form; every access site routes
+     * through adt_field_member_path, which keys off this same predicate. */
+    bool named = adt_uses_named_layout(def);
+    if (named) {
+        CtorDef *ctor = def->ctors[0];
+        buf_printf(out, "typedef struct %s {\n", adt_inst_name);
+        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+            const CtorField *fld = &ctor->fields[fi];
+            Type fres = (fld->full_type && def)
+                ? substitute_adt_app_type(fld->full_type, def, args)
+                : type_simple(TY_UNKNOWN, CK_COPY);
+            const char *ctype = type_is_wide_byval_adt(fres)
+                ? "int64_t"
+                : adt_field_c_type(def, fld, args);
+            char *fname = mangle_field_name(fld->name);
+            buf_printf(out, "    %s %s;\n", ctype, fname);
+            free(fname);
+        }
+        buf_printf(out, "} %s;\n", adt_inst_name);
+        buf_printf(out, "#endif\n\n");
+    } else {
     buf_printf(out, "typedef struct %s {\n", adt_inst_name);
     if (!flat) buf_printf(out, "    int tag;\n");
     buf_printf(out, "    union {\n");
@@ -1586,6 +1619,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
     buf_printf(out, "    } as;\n");
     buf_printf(out, "} %s;\n", adt_inst_name);
     buf_printf(out, "#endif\n\n");
+    }
 
     /* Build the type-arg suffix (e.g. "__float"). */
     Buf suffix; buf_init(&suffix);
@@ -1649,17 +1683,24 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
             buf_printf(out, "%s _%u", val_ctype[fi], fi);
         }
         buf_printf(out, ") {\n");
+        /* CONV-S1 seam 4 (keystone): route every field store through
+         * adt_field_member_path so a named-layout monomorph writes `__r->len`
+         * and a positional one writes `__r->as.<Ctor>._N`, in lockstep with the
+         * typedef + field-read sites. */
         if (app_heap) {
             buf_printf(out, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
                        adt_inst_name, adt_inst_name, adt_inst_name);
             if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-                buf_printf(out, "    __r->as.%s._%u = _%u;\n", mctor, fi, fi);
+                char *mp = adt_field_member_path(def, ctor, fi);
+                buf_printf(out, "    __r->%s = _%u;\n", mp, fi);
+                free(mp);
             }
             buf_printf(out, "    return __r;\n");
         } else if (app_byval) {
             buf_printf(out, "    %s __r;\n", adt_inst_name);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                char *mp = adt_field_member_path(def, ctor, fi);
                 /* CONV-S1 seam 4 (B4 wide element in a by-value product): the
                  * typedef stores a >8-byte by-value ADT field as the int64 box
                  * pointer (line ~1459, type_is_wide_byval_adt), so the by-value
@@ -1669,12 +1710,12 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                 if (wide_box[fi]) {
                     buf_printf(out,
                         "    { %s *__b = (%s *)malloc(sizeof(%s)); *__b = _%u;"
-                        " __r.as.%s._%u = (int64_t)(intptr_t)__b; }\n",
-                        val_ctype[fi], val_ctype[fi], val_ctype[fi], fi,
-                        mctor, fi);
+                        " __r.%s = (int64_t)(intptr_t)__b; }\n",
+                        val_ctype[fi], val_ctype[fi], val_ctype[fi], fi, mp);
                 } else {
-                    buf_printf(out, "    __r.as.%s._%u = _%u;\n", mctor, fi, fi);
+                    buf_printf(out, "    __r.%s = _%u;\n", mp, fi);
                 }
+                free(mp);
             }
             buf_printf(out, "    return __r;\n");
         } else {
@@ -1682,17 +1723,18 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                        adt_inst_name, adt_inst_name, adt_inst_name);
             if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                char *mp = adt_field_member_path(def, ctor, fi);
                 if (wide_box[fi]) {
                     /* heap-box the wide by-value element; the box is owned by this
                      * carrier node and lives as long as it does. */
                     buf_printf(out,
                         "    { %s *__b = (%s *)malloc(sizeof(%s)); *__b = _%u;"
-                        " __r->as.%s._%u = (int64_t)(intptr_t)__b; }\n",
-                        val_ctype[fi], val_ctype[fi], val_ctype[fi], fi,
-                        mctor, fi);
+                        " __r->%s = (int64_t)(intptr_t)__b; }\n",
+                        val_ctype[fi], val_ctype[fi], val_ctype[fi], fi, mp);
                 } else {
-                    buf_printf(out, "    __r->as.%s._%u = _%u;\n", mctor, fi, fi);
+                    buf_printf(out, "    __r->%s = _%u;\n", mp, fi);
                 }
+                free(mp);
             }
             buf_printf(out, "    return (int64_t)(intptr_t)__r;\n");
         }

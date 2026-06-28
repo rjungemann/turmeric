@@ -1,0 +1,45 @@
+;; conv-defstruct-named-monomorph-layout -- with --enable=defstruct-as-defadt a
+;; parametric single-variant record's MONOMORPH carries the record's real field
+;; names (keystone, CONV-S1 seam 4).  A lowered `(Box3 int int int)` /
+;; `(Vec int)` is emitted as `typedef struct tur_adt_<Name>__<args> { T a; ... }`
+;; instead of the positional `union { struct { T _0; } <Ctor>; } as;`, so:
+;;   (1) hand-written inline-C that reads the by-value monomorph by field name
+;;       (`b.a + b.b + b.c`) compiles -- this is the TupleN-by-parameter shape;
+;;   (2) a `#fx{ByVal}`-marked `(Vec A)` accessor whose body derefs the named
+;;       header (`v->len`, `v->data`) compiles, with the marker minting a
+;;       per-receiver spec (its int64-carrier base is suppressed).
+;; Both fail to build without the named-monomorph layout (the lowered monomorph
+;; has positional `_0/_1` members, so `.a` / `v->len` is "no member named ...").
+
+;; (1) A >16-byte by-value parametric record passed by pointer; the inline-C
+;; callee reads it by its real field names off the monomorph aggregate.
+(defstruct Box3 [A B C] (a : A) (b : B) (c : C))
+
+(defn sum3 [t : (Box3 int int int)] : int
+  ```c return t.a + t.b + t.c; ```)
+
+;; (2) The m5 `#fx{ByVal}` Vec accessor shape: the marker routes the call through
+;; a per-receiver spec whose `(Vec int)` param is the named-layout typed pointer,
+;; so the inline-C body's `v->len` / `v->data` resolve.
+(defn vget-byval [A]
+  [v : (Vec A) i : int]
+  #fx{ByVal}
+  : A
+  ```c
+  if (i >= 0 && (size_t)i < (size_t)v->len) {
+    return (int64_t)((int64_t *)v->data)[i];
+  }
+  return -1;
+  ```)
+
+(defn third [A] [v : (Vec A)] : A
+  (vget-byval v 2))
+
+(defn main [] : int
+  (println (sum3 (Box3 10 20 30)))
+  (let [a (:: (vec-of) (Vec int))]
+    (vec-push! a 100)
+    (vec-push! a 200)
+    (vec-push! a 300)
+    (println (third a)))
+  0)

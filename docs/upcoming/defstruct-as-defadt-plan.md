@@ -591,6 +591,31 @@ runtime *usage* seam, below.
      regenerated.  *Cleared ~43* (`httpd-*`, `clone-*`, `eqmap-struct`, the `Pos`
      `typeclass-*` tests).  Fixture `conv-defstruct-inline-c-abi`.
 
+   - **Named parametric-monomorph layout (keystone) DONE (2026-06-28).**  A
+     parametric single-variant record's MONOMORPH (`tur_adt_Vec__int`,
+     `tur_adt_Tuple3__int__int__int`) was emitted with the positional
+     `union { struct { T _0; } <Ctor>; } as;` wrapper, so hand-written / stdlib
+     inline-C that reads the value by its real field names -- a `(Tuple3 ...)`
+     callee's `t.e1`, a `#fx{ByVal}` `(Vec A)` accessor's `v->len`/`v->data` --
+     failed to compile against the lowered monomorph (`'tur_adt_Tuple3__...' has
+     no member named 'e1'`).  Extended `adt_uses_named_layout` (types.h) to admit
+     PARAMETRIC single-variant records, so BOTH the generic base (emit_module.c)
+     and each monomorph (types.c `emit_registered_adt_app_rec`) carry the
+     record's real field names, and every store/read/match site stays in lockstep
+     through the one `adt_field_member_path` helper (the monomorph ctor stores now
+     route through it too).  The parametric inline-C compat typedef is skipped
+     when named layout applies (the surface alias supersedes it, avoiding a
+     `<Name>` double-def).  Paired with accepting a lowered `TY_ADT` head in the
+     `#fx{ByVal}` per-receiver spec-mint gate (emit_module.c) so the marker's
+     named typed-pointer spec is minted and the int64-carrier base suppressed.
+     Byte-identical memory layout -> zero flag-off snapshot drift (default suite
+     stays 1863/0; the named layout never fired for hand-written parametric
+     records because none are single-variant-record style).  Cleared
+     `tuplen-struct-param-passing` and `m5-byval-marker-spec-emit` (11 -> 9 unique
+     build-failing fixtures under force-lower).  Fixture
+     `conv-defstruct-named-monomorph-layout` (by-value TupleN-shape field access +
+     `#fx{ByVal}` Vec accessor, flag-on parity).
+
    **Running total: 212 -> 25 unique build-failing fixtures under force-lower
    (default suite stays 1862/0).**  (Sub-root (a) -- 0-arg construct in control
    flow -- the inline-C-tail return bridge, the accessor-unbox, the
@@ -1030,11 +1055,17 @@ read, and the four most recent carrier<->by-value crossings cleared by PR #571
 (non-parametric by-value-ADT arg boxing, `fn`-field int64 carrier width,
 wide-by-value -> closure-thunk carrier heap-box, bounded-wrapper -> concrete
 aggregate-return tail bridge).
-The force-lower probe is down from **212 to 25 unique build-failing fixtures
-(~88% cleared)** as of 2026-06-27 (PR #571).  The dominant remaining cluster
-is still the by-value-aggregate <-> int64-carrier **ABI bridge** family at the
-remaining crossing sites, alongside ~22 runtime/link mismatches and smaller
-ctor-selection / parametric inline-C edges.  Driving the remaining clusters
-to zero (promote each to a flag-on fixture + fix) is the gating work before
-the experiment can graduate.  Runway: experiment `expires_at` is `0.30.0`
-(current `VERSION` is `0.25.5`).
+The force-lower probe is down to **9 unique build-failing fixtures** (plus 2
+stdout mismatches) as of 2026-06-28, after the named parametric-monomorph layout
+keystone cleared `tuplen-struct-param-passing` + `m5-byval-marker-spec-emit`.
+The remaining 9 build blockers, by root: the stdlib `none()` carrier-base vs
+by-value-ctor return bridge (`positional-opaque-ok`, `positional-pap-opaque-ok`,
+`kleisli-arrow-instance`); the `Option__opaque` specialization
+(`hkt-ap-fn-in-container`, `hkt-stdlib-option-result-instances`); the by-value
+embed typedef ordering (`result-over-struct-with-option-field-typedef-order`);
+the stdlib/user `Cons` C-name collision (`adt-recursive`); the aggregate->int64
+inject / Result-box cast (`typeclass-return-dispatch-result-wrapped`); and one
+link failure (`serial-composite-instances`).  Driving these to zero (promote each
+to a flag-on fixture + fix) is the gating work before the experiment can
+graduate.  Runway: experiment `expires_at` is `0.30.0` (current `VERSION` is
+`0.25.5`).

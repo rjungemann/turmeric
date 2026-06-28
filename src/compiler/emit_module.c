@@ -3345,7 +3345,14 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 while (head.kind == TY_APP && head.as.app.fn) {
                     head = *head.as.app.fn;
                 }
-                if (head.kind == TY_STRUCT && head.as.struct_.def) {
+                /* CONV-S1 seam 4 (defstruct-as-defadt): under the lowering a
+                 * `(Vec int)` arg's head is the lowered Vec's record ADT
+                 * (`TY_ADT`), not a `TY_STRUCT`.  The marked helper still wants a
+                 * per-receiver-type spec so its named-layout typed-pointer body
+                 * (`v->len`) compiles and `emit_abi_fn_skip_generic` suppresses
+                 * the broken int64-carrier base.  Accept a concrete ADT head. */
+                if ((head.kind == TY_STRUCT && head.as.struct_.def) ||
+                    (head.kind == TY_ADT && head.as.adt_.def)) {
                     needs_byvalue_spec = true; break;
                 }
             }
@@ -5309,7 +5316,8 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
      * carrier (same offsets) and is referenced ONLY by hand-written inline-C;
      * generated code always uses `tur_adt_<Name>` / its monomorphs.  Guarded so
      * the multi-path emit (early_file + impl_early) does not redefine it. */
-    if (def->n_type_params > 0 && def->n_ctors == 1 && def->ctors[0]->is_record) {
+    if (def->n_type_params > 0 && def->n_ctors == 1 && def->ctors[0]->is_record &&
+        !adt_uses_named_layout(def)) {
         CtorDef *crec = def->ctors[0];
         bool all_named = crec->n_fields > 0;
         for (uint32_t fi = 0; fi < crec->n_fields; fi++)
@@ -8781,7 +8789,7 @@ int emit_program(Buf *out, const Expr *program) {
              * (`Tuple2 *p; p->e1 = ...`) compiles.  Byte-compatible carrier form;
              * referenced only by hand-written inline-C. */
             if (def->n_type_params > 0 && def->n_ctors == 1 &&
-                def->ctors[0]->is_record) {
+                def->ctors[0]->is_record && !adt_uses_named_layout(def)) {
                 CtorDef *crec = def->ctors[0];
                 bool all_named = crec->n_fields > 0;
                 for (uint32_t fi = 0; fi < crec->n_fields; fi++)
