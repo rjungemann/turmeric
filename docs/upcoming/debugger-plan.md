@@ -180,22 +180,21 @@ not the macro definition.
 
 ### Phase 5 -- Rich type display in native debuggers
 
-**Status: in progress (N1 + N2 core landed).** Split into its own plan:
-[debugger-native-types-plan.md](./debugger-native-types-plan.md); progress
+**Status: N1, N2, N4, and N5 landed; N3 remaining.** Split into its own plan (now archived):
+[debugger-native-types-plan.md](../archive/debugger-native-types-plan.md); progress
 write-up in
 [debugger-phase5-native-types-progress.md](../artifacts/debugger-phase5-native-types-progress.md).
 
 N1 (codegen type-name audit) confirmed that the default by-value
 monomorphization already mints deterministic, discoverable C type names for the
-aggregate carriers (`Option__int`, `Result`, `Cons__int`, `Point`, ...) and
+aggregate carriers (`tur_adt_Option__int`, `tur_adt_Result`, `tur_adt_Cons__int`, `Point`, ...) and
 documented which value categories are still erased to the bare `int64_t`
-carrier (opaques, ADTs, standalone `none`). N2 shipped
-`tools/debug/turmeric_gdb.py` -- gdb pretty-printers that render `Option` as
-`(some 42)` and `Result` as `(ok 14)` on top of the C-DWARF the C compiler
-already emits. The `tur_phase5_gdb` ctest (`tests/run-phase5-gdb.sh` over
-`tests/fixtures/debugger-phase5/`) pins the type names into DWARF and asserts
-the rendered Turmeric shapes; it skips the gdb half cleanly when gdb is absent.
-Remaining: N3 (ADT/vec/HAMT synthetic children), N4 (lldb parity), N5 (VS Code).
+carrier (opaques, ADTs, standalone `none`). N2 and N4 shipped Python
+pretty-printers for gdb (`tools/debug/turmeric_gdb.py`) and lldb (`tools/debug/turmeric_lldb.py`)
+that render `Option` as `(some 42)` and `Result` as `(ok 14)` on top of the C-DWARF the C compiler already emits.
+N5 shipped native VS Code integration via a CodeLLDB / lldb-dap configuration snippet and full documentation.
+The `tur_phase5_gdb` ctest (`tests/run-phase5-gdb.sh` over `tests/fixtures/debugger-phase5/`) pins the type names
+into DWARF and asserts the rendered Turmeric shapes. Remaining: N3 (ADT/vec/HAMT synthetic children).
 
 Short version: ship Python pretty-printers for gdb and lldb on top of the
 C-DWARF the C compiler already emits, plus a small VS Code integration via
