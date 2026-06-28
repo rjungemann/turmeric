@@ -88,11 +88,11 @@ class ConsPrinter:
 
 def build_pretty_printer():
     pp = gdb.printing.RegexpCollectionPrettyPrinter("turmeric")
-    # `^Name(__...)?$` matches both the generic preamble typedef (`Option`)
-    # and every monomorphized spec (`Option__int`, `Result__int_cstr`, ...).
-    pp.add_printer('Option', r'^Option(__.*)?$', OptionPrinter)
-    pp.add_printer('Result', r'^Result(__.*)?$', ResultPrinter)
-    pp.add_printer('Cons',   r'^Cons(__.*)?$',   ConsPrinter)
+    # `^(tur_adt_)?Name(__...)?$` matches both the generic preamble typedef (`Option`)
+    # and every monomorphized spec (including `tur_adt_Option__int`, `tur_adt_Result__int_cstr`, ...).
+    pp.add_printer('Option', r'^(tur_adt_)?Option(__.*)?$', OptionPrinter)
+    pp.add_printer('Result', r'^(tur_adt_)?Result(__.*)?$', ResultPrinter)
+    pp.add_printer('Cons',   r'^(tur_adt_)?Cons(__.*)?$',   ConsPrinter)
     return pp
 
 

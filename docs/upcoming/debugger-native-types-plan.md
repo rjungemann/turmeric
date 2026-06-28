@@ -86,13 +86,13 @@ fallback for cases where the C compiler mangles names unpredictably.
 **Status: landed.** Audit + progress write-up in
 [debugger-phase5-native-types-progress.md](../artifacts/debugger-phase5-native-types-progress.md).
 The default by-value monomorphization already emits the deterministic
-`<TypeName>__<args>` scheme (`Option__int`, `Result`, `Cons__int`, ...), so no
+`tur_adt_<TypeName>__<args>` scheme (`tur_adt_Option__int`, `tur_adt_Result`, `tur_adt_Cons__int`, ...), so no
 codegen change was needed to create the names; the audit pinned them and
 documented which value categories are still erased to the bare `int64_t`
 carrier (opaques, ADTs, standalone `none`). The fixture is
 `tests/fixtures/debugger-phase5/` and the gate is the `tur_phase5_gdb` ctest
 (`tests/run-phase5-gdb.sh`), which asserts the names appear in the binary's
-DWARF (`ptype Option__int` / `ptype Result`) as well as in the emitted C.
+DWARF (`ptype tur_adt_Option__int` / `ptype Result` with `typedef tur_adt_Result Result`) as well as in the emitted C.
 
 **Outcome:** every Turmeric type that the debugger should pretty-print
 emits a C type whose name a pretty-printer can match on.
@@ -100,7 +100,7 @@ emits a C type whose name a pretty-printer can match on.
 - Audit `emit-c` and `emit-h` to confirm the C names it generates for
   options, results, ADTs, opaques, vecs, HAMTs, structs.
 - Where names are anonymous or collide, switch to a deterministic scheme:
-  `__tur_<kind>_<mangled-type-args>`.
+  `tur_adt_<kind>_<mangled-type-args>`.
 - Add a fixture under `tests/fixtures/debugger/type-names/` that compiles a
   small program and asserts (via `nm` / DWARF dump) that the expected type
   names appear in the binary.
@@ -116,7 +116,7 @@ if necessary.
 
 **Status: core landed.** `tools/debug/turmeric_gdb.py` ships `OptionPrinter`,
 `ResultPrinter`, and a best-effort `ConsPrinter`, auto-registered via a
-`RegexpCollectionPrettyPrinter` keyed on the N1 type names. gdb renders
+`RegexpCollectionPrettyPrinter` keyed on the N1 type names (supporting optional `tur_adt_` prefixes). gdb renders
 `Option` as `(some 42)` and `Result` as `(ok 14)`; structs are left to gdb's
 default aggregate display (they already read well) so the printers do not
 shadow `Vec`/`Map`/user structs. Verified by the `tur_phase5_gdb` ctest.

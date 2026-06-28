@@ -63,9 +63,9 @@ expect() {
 # -- N1a) emit-c carries the discoverable carrier type names (no gdb needed) --
 emitted=$("$TUR" emit-c "$FIX" 2>/dev/null)
 expect "emit-c names the by-value Option carrier" "$emitted" \
-  "typedef struct Option__int" "bool is_some" "int64_t value"
+  "tur_adt_Option__int" "bool is_some" "int64_t value"
 expect "emit-c names the by-value Result carrier" "$emitted" \
-  "typedef struct Result" "bool is_ok" "int64_t ok_val" "int64_t err_val"
+  "tur_adt_Result" "bool is_ok" "int64_t ok_val" "int64_t err_val"
 
 # -- build the debug binary (shared by N1b + N2) -----------------------------
 BIN="$(mktemp -u "${TMPDIR:-/tmp}/tur-phase5-XXXXXX")"
@@ -81,10 +81,10 @@ if ! command -v gdb >/dev/null 2>&1; then
 else
   # -- N1b) the carrier type names round-trip into DWARF ----------------------
   types=$(gdb -batch -nx \
-    -ex "ptype Option__int" \
+    -ex "ptype tur_adt_Option__int" \
     -ex "ptype Result" "$BIN" 2>&1)
-  expect "DWARF carries Option__int{is_some,value}" "$types" \
-    "Option__int" "is_some" "value"
+  expect "DWARF carries tur_adt_Option__int{is_some,value}" "$types" \
+    "tur_adt_Option__int" "is_some" "value"
   expect "DWARF carries Result{is_ok,ok_val,err_val}" "$types" \
     "Result" "is_ok" "ok_val" "err_val"
 

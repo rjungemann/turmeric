@@ -23,15 +23,15 @@ dispatchable without a follow-up codegen wrapper).
 | Turmeric type | C type at a value/local site | Layout | Notes |
 |---|---|---|---|
 | `defstruct Point :copy [x y]` | `Point` | `{int64_t x; int64_t y;}` | by-value; already reads well in gdb |
-| `option<int>` (monomorphized) | `Option__int` | `{bool is_some; int64_t value;}` | by-value when the type arg is known |
-| `option<T>` over a pointer payload | `Option__opaque` | `{bool is_some; void *value;}` | by-value |
-| `result<...>` | `Result` (generic) / `Result__<args>` | `{bool is_ok; int64_t ok_val; int64_t err_val;}` | by-value when the result flows to a by-value consumer |
-| `cons` cell | `Cons__int` (and `Cons__<T>`) | `{int64_t head; int64_t tail;}` | by-value cell; `tail` is an `int64_t` carrier link |
+| `option<int>` (monomorphized) | `tur_adt_Option__int` | `{bool is_some; int64_t value;}` | by-value when the type arg is known |
+| `option<T>` over a pointer payload | `tur_adt_Option__opaque` | `{bool is_some; void *value;}` | by-value |
+| `result<...>` | `tur_adt_Result` / `Result` (generic) | `{bool is_ok; int64_t ok_val; int64_t err_val;}` | by-value when the result flows to a by-value consumer |
+| `cons` cell | `tur_adt_Cons__int` | `{int64_t head; int64_t tail;}` | by-value cell; `tail` is an `int64_t` carrier link |
 | `vec<T>` | `Vec` | `{void *data; int64_t len; int64_t cap;}` | runtime preamble type |
 | HAMT map | `Map` | trie handle | runtime preamble type |
 
-Naming scheme: `<TypeName>__<mangled-type-args>` with `__` separators
-(`Option__int`, `Result__int_cstr`, `Cons__int`, ...). This matches what
+Naming scheme: `(tur_adt_)?<TypeName>__<mangled-type-args>` with `__` separators
+(`tur_adt_Option__int`, `tur_adt_Result`, `tur_adt_Cons__int`, ...). This matches what
 Rust/Swift do and is exactly what the N1 plan proposed (option 1, type-name
 encoding). No codegen change was required to *create* these names -- the
 by-value monomorphization already emits them; N1's contribution is the audit +
@@ -82,7 +82,7 @@ two robust points above so the regression is deterministic.
 
 `tests/fixtures/debugger-phase5/` + `tests/run-phase5-gdb.sh` assert the
 carrier type names appear both in the emitted C and (when gdb is present) in
-the binary's DWARF via `ptype Option__int` / `ptype Result`. Registered as the
+the binary's DWARF via `ptype tur_adt_Option__int` / `ptype Result` (with `typedef tur_adt_Result Result`). Registered as the
 `tur_phase5_gdb` ctest.
 
 ## N2 -- gdb pretty-printers for the core types
@@ -90,7 +90,7 @@ the binary's DWARF via `ptype Option__int` / `ptype Result`. Registered as the
 `tools/debug/turmeric_gdb.py` ships `OptionPrinter`, `ResultPrinter`, and a
 best-effort `ConsPrinter`, auto-registered via a
 `RegexpCollectionPrettyPrinter` keyed on the N1 type names
-(`^Option(__.*)?$`, `^Result(__.*)?$`, `^Cons(__.*)?$`). Structs are left to
+(`^(tur_adt_)?Option(__.*)?$`, `^(tur_adt_)?Result(__.*)?$`, `^(tur_adt_)?Cons(__.*)?$`). Structs are left to
 gdb's default aggregate display (they already read well), so the printers do
 not shadow `Vec` / `Map` / user structs.
 
@@ -129,9 +129,12 @@ polish and is tracked with N3/N4/N5.
 - **N4:** lldb parity (`turmeric_lldb.py`) sharing the field-access logic.
 - **N5:** VS Code integration via CodeLLDB / lldb-dap.
 
-## Bugs surfaced
+## Bugs surfaced (and resolved)
 
 - `docs/reported/byvalue-result-field-access-casts-aggregate-to-pointer.md` --
-  `(.ok-val r)` on a by-value `Result` local emits a carrier-pointer cast and
-  fails to compile; the by-value `Option` accessor does not. Worked around in
-  the fixture by reading the `Result` in an inline-C body.
+  **Resolved.** By-value `Result` field access codegen has been fixed.
+  The receiver now takes the direct `(r).field` path instead of casting aggregates to pointers, unblocking native debugger type display work.
+- **`-Wint-conversion` with Pointer-to-Integer Constructors:**
+  **Resolved.** Modern `clang` systems treat implicit pointer-to-integer conversion as a hard error. In `src/compiler/emit_expr.c`, pointer-like arguments (like `TY_CSTR`, `TY_PTR_VOID`, `TY_REF`, etc.) flowing into unspecialized carrier parameters are now surgically cast to `(int64_t)(intptr_t)` only when the destination field is a carrier-erased generic slot (`field_is_carrier` is true).
+- **Monomorphized Type Naming Alignment (`tur_adt_`):**
+  **Resolved.** ADT monomorphization naming on `main` changed to use the `tur_adt_` prefix (e.g. `tur_adt_Option__int`, `tur_adt_Result`). The pretty printers in `tools/debug/turmeric_gdb.py` and the ctest script `tests/run-phase5-gdb.sh` have been updated to support `tur_adt_` prefixes, and all assertions are fully green.

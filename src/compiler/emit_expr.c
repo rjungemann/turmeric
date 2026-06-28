@@ -3667,17 +3667,37 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_free(&c);
                         free(tmp);
                     }
-                    /* CONV-S1 (slice 8): a :heap struct argument is a typed
-                     * pointer (`Big *`), but a constructor stores it in the int64
+                    /* CONV-S1 (slice 8): a :heap struct argument or other pointer-like/function-pointer
+                     * argument is a pointer, but a constructor stores it in the int64
                      * carrier field slot.  Cast the pointer to int64 explicitly
                      * -- the same coercion the fn-field path does above, and the
                      * one a struct literal applies to its :heap field -- otherwise
                      * clang emits a -Wint-conversion warning at the ctor call.
-                     * A :heap struct is never an inline by-value field, so this
-                     * never collides with the slice-4 inline path. */
+                     * We only apply the cast for general pointers when the destination
+                     * field is indeed a carrier-erased generic slot (field_is_carrier == true);
+                     * concrete fields expecting typed pointers should receive them directly. */
+                    bool field_is_carrier = false;
+                    if (e->as.call_.ctor && i < e->as.call_.ctor->n_fields) {
+                        const Type *fft = e->as.call_.ctor->fields[i].full_type;
+                        field_is_carrier = fft && fft->kind == TY_TYVAR;
+                    }
+                    Type resolved_arg_type = emit_resolve_type(ctx, arg->type);
+                    TypeKind rk = resolved_arg_type.kind;
+                    bool is_ptr_like = (rk == TY_PTR_VOID ||
+                                        rk == TY_RC ||
+                                        rk == TY_REF ||
+                                        rk == TY_WEAK ||
+                                        rk == TY_CSTR ||
+                                        rk == TY_REF_IMMUT ||
+                                        rk == TY_REF_MUT ||
+                                        rk == TY_FN ||
+                                        rk == TY_CONT ||
+                                        rk == TY_CLONEABLE_CONT ||
+                                        rk == TY_FORALL);
                     if (!suffix && !field_inline && arg &&
-                        (type_is_heap_struct(emit_resolve_type(ctx, arg->type)) ||
-                         type_is_heap_adt(emit_resolve_type(ctx, arg->type)))) {
+                        (type_is_heap_struct(resolved_arg_type) ||
+                         type_is_heap_adt(resolved_arg_type) ||
+                         (field_is_carrier && is_ptr_like))) {
                         Buf c; buf_init(&c);
                         buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
                         buf_putc(&c, '\0');
