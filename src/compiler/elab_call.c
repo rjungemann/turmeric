@@ -125,7 +125,7 @@ Expr *elab_coerce_to_any(Elab *e, Expr *value) {
     memset(&any_type, 0, sizeof(any_type));
     any_type.kind = TY_ANY;
     Expr *inject = expr_new(e->arena, EX_UNION_INJECT, any_type, value->span);
-    inject->as.union_inject_.tag_idx = (int64_t)value->type.kind;
+    inject->as.union_inject_.tag_idx = (int64_t)any_box_tag_for_type(&value->type);
     inject->as.union_inject_.value = value;
     inject->as.union_inject_.box_struct =
         (value->type.kind == TY_STRUCT) ? value->type.as.struct_.def : NULL;
@@ -2116,6 +2116,19 @@ Expr *elab_call(Elab *e, Form *call) {
         if (ctor) {
             /* Use elab_call_fn but fix up the result type after */
             Expr *call_expr = elab_call_fn(e, call, fn_binding);
+            /* struct-curry-ctor: an UNDER-APPLIED constructor call partial-applies
+             * into a closure (elab_call_fn -> elab_partial_apply, result type
+             * TY_PTR_VOID) that completes to the ADT.  The result-type patch and
+             * the per-field consistency/size-index fixups below assume a saturated
+             * ctor call; running them on a closure would stamp the partial app as
+             * the full ADT (so `((Person "Ada") 36)` saw `(Person "Ada")` as a
+             * non-callable Person).  Detect the partial app by arity and return
+             * the closure untouched. */
+            if (call_expr &&
+                (call->as.list.len - 1u) < ctor->n_fields &&
+                call_expr->type.kind != TY_ADT && call_expr->type.kind != TY_APP) {
+                return call_expr;
+            }
             if (call_expr) {
                 /* Patch result type with proper AdtDef pointer */
                 call_expr->type = type_adt(ctor->adt);
@@ -2700,11 +2713,29 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
      * value -- a hard C compile error ("returning Person but int64_t expected").
      * The thunk is invoked through its typed `tur_thunk_<R>_..._t` slot, so a
      * by-value struct return round-trips correctly with no boxing. */
-    Type body_result_type = (fn_type.as.fn.result_full_type &&
-                             (fn_type.as.fn.result_full_type->kind == TY_STRUCT ||
-                              fn_type.as.fn.result_full_type->kind == TY_ADT))
-                            ? *fn_type.as.fn.result_full_type
-                            : type_from_kind(result_kind);
+    /* struct-curry-ctor: a partial application of a record-ADT CONSTRUCTOR.  A
+     * ctor binding carries result_kind TY_ADT but NO result_full_type (the
+     * direct-call path patches the AdtDef in after elab_call_fn).  Without it
+     * the CURRY-V1 logic below would type the thunk body / completion as a
+     * def-less TY_ADT, so the completed value's `.field` access cannot resolve
+     * the AdtDef.  Recover the ctor's def and stamp a synthetic full ADT result
+     * type so the thunk and its completion carry it.  (The thunk body's inner
+     * ctor call still emits `ctor_Name` because the ORIGINAL ctor binding has no
+     * result_full_type -- the emit ctor-branch gate stays satisfied.) */
+    CtorDef *pap_ctor = (!fn_is_closure && result_kind == TY_ADT)
+        ? elab_lookup_ctor(e, fn_binding->name) : NULL;
+    Type *ctor_result_full = NULL;
+    if (pap_ctor && pap_ctor->adt) {
+        ctor_result_full = (Type *)arena_alloc(e->arena, sizeof(Type));
+        *ctor_result_full = type_adt(pap_ctor->adt);
+    }
+    Type body_result_type =
+        ctor_result_full ? *ctor_result_full :
+        ((fn_type.as.fn.result_full_type &&
+          (fn_type.as.fn.result_full_type->kind == TY_STRUCT ||
+           fn_type.as.fn.result_full_type->kind == TY_ADT))
+            ? *fn_type.as.fn.result_full_type
+            : type_from_kind(result_kind));
     Expr *inner_call = expr_new(e->arena, EX_CALL, body_result_type, call->span);
     inner_call->as.call_.fn_binding = fn_binding;
     inner_call->as.call_.args = call_args;
@@ -2762,6 +2793,10 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
     }
     if (fn_type.as.fn.result_full_type) {
         thunk_type.as.fn.result_full_type = fn_type.as.fn.result_full_type;
+    } else if (ctor_result_full) {
+        /* struct-curry-ctor: carry the recovered ADT result on the thunk so the
+         * completed closure's value type resolves `.field` access. */
+        thunk_type.as.fn.result_full_type = ctor_result_full;
     }
 
     /* Thunk binding (global) */
@@ -3080,6 +3115,16 @@ static Expr *try_eta_expand_generic_fn_arg(Elab *e, const Form *arg_form,
 /* Phase 2: Elaborate a function call (f a b c) */
 static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     uint32_t n_args = call->as.list.len - 1;
+
+    /* defstruct-as-defadt (exg5-exists-cycle): read-and-clear the make-struct
+     * leniency flag at entry.  It is set by the make-struct -> ctor-call rewrite
+     * (elab_structs.c) ONLY for a non-parametric record ADT, so the ctor call's
+     * own positional args relax to default make-struct's no-field-typecheck
+     * parity (e.g. a `0`/NULL ptr<void> for an rc<T>/ptr<T> field).  Clearing it
+     * here means the args elaborated below -- and any nested calls they spawn --
+     * do not inherit the leniency; only THIS call's direct args are relaxed. */
+    bool ms_lenient = e->make_struct_lenient_args;
+    e->make_struct_lenient_args = false;
 
     /* Get the function type */
     Type fn_type = fn_binding->type;
@@ -3784,6 +3829,18 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             /* Allow nil as a null pointer for ptr<void> parameters. */
             arg_ok = true;
         }
+        if (!arg_ok && expected_arg_kind == TY_PTR_VOID &&
+            args[i]->kind == EX_INT_LIT && args[i]->as.i == 0) {
+            /* Allow the `0` literal as a null pointer for a ptr<void> parameter.
+             * `make-struct` of a non-parametric struct skips its field typecheck,
+             * so `(make-struct Error "msg" 0)` with `cause : ptr<void>` accepts
+             * the `0`-as-NULL idiom; under defstruct-as-defadt that make-struct
+             * lowers to the auto-bound ctor CALL `(Error "msg" 0)`, which hits
+             * this strict arg check.  Match make-struct's leniency for the
+             * unambiguous NULL literal (sibling of the nil and fn ptr<void>
+             * coercions above); a non-zero int still errors. */
+            arg_ok = true;
+        }
         if (!arg_ok && expected_arg_kind == TY_FN && args[i]->type.kind == TY_PTR_VOID) {
             /* A#1: a fat (^fat) parameter consumes a closure in fat-box form.  A
              * capturing closure value (EX_CLOSURE, TY_PTR_VOID) is already a fat
@@ -4083,6 +4140,15 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             }
         }
 
+        if (!arg_ok && ms_lenient) {
+            /* defstruct-as-defadt (exg5-exists-cycle): this is the make-struct ->
+             * ctor-call rewrite of a NON-parametric record ADT.  Default
+             * make-struct does no field typecheck, so accept the value as-is to
+             * preserve parity (e.g. `0`/NULL ptr<void> into an rc<T>/ptr<T>
+             * field).  ms_lenient was cleared at entry, so this only relaxes the
+             * direct ctor args, never anything nested. */
+            arg_ok = true;
+        }
         if (!arg_ok) {
             /* Phase 8: Enhanced type mismatch with error code */
             /* IT1: Use union-specific error code when union type is involved */

@@ -1,0 +1,39 @@
+;; conv-defstruct-control-flow-construct: a return-only-poly 0-arg construct
+;; (`(none)`) in a by-value control-flow merge must select its by-value spec,
+;; not the int64 carrier base.
+;;
+;; Under the defstruct-as-defadt flag Option lowers to a by-value record ADT.
+;; In `(if b (some x) (none))` the `(some x)` branch drives `{A -> int}` from its
+;; argument and emits `some__spec__tur_adt_Option__int_int64_t`, but `(none)` is
+;; binding-less: its own type stays the abstract `(Option A)` and only the
+;; consuming context (a let-binding's declared type, the if's own type, or a
+;; by-value param) knows the concrete `(Option int)`.  Before the seam-4 (a) fix
+;; the merge emitted the carrier `none()` into a by-value `tur_adt_Option__int`
+;; slot -- a hard cc error.  The fix publishes the concrete merge type to the
+;; value-tail construct calls during the ABI scan so `none__spec__tur_adt_Option__int`
+;; is interned + selected, exactly as the return-tail position already did.
+
+;; let-init merge
+(defn pick-let [b : bool] : int
+  (let [o (if b (some 11) (none))]
+    (if (.is-some o) (.value o) -1)))
+
+;; argument-position merge: the if feeds a by-value `(Option int)` param
+(defn unwrap-or-zero [o : (Option int)] : int
+  (if (.is-some o) (.value o) 0))
+
+(defn pick-arg [b : bool] : int
+  (unwrap-or-zero (if b (some 7) (none))))
+
+;; return-tail merge (the position that already worked -- guards no regression)
+(defn pick-ret [b : bool] : (Option int)
+  (if b (some 5) (none)))
+
+(defn main [] : int
+  (println (pick-let true))            ;; 11
+  (println (pick-let false))           ;; -1
+  (println (pick-arg true))            ;; 7
+  (println (pick-arg false))           ;; 0
+  (println (unwrap-or-zero (pick-ret true)))   ;; 5
+  (println (unwrap-or-zero (pick-ret false)))  ;; 0
+  0)

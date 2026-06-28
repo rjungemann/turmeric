@@ -997,6 +997,25 @@ char *mangle_field_name(const char *name) {
     return p;
 }
 
+/* CONV-S1 seam 4: build the C member-access path (without a leading '.'/'->')
+ * for constructor field `fi`.  A flat, named-layout ADT (adt_uses_named_layout)
+ * is accessed by its mangled field name (`value`, `max_age`); every other ADT
+ * keeps the positional tagged-union path (`as.<Ctor>._N`).  Caller frees.
+ * Single source of truth for the typedef/ctor/field-access/match/drop-glue
+ * emit sites so they never disagree on the layout. */
+char *adt_field_member_path(const AdtDef *def, const CtorDef *ctor, uint32_t fi) {
+    if (adt_uses_named_layout(def))
+        return mangle_field_name(ctor->fields[fi].name);
+    char *mctor = mangle_field_name(ctor->name);
+    Buf b; buf_init(&b);
+    buf_printf(&b, "as.%s._%u", mctor, fi);
+    buf_putc(&b, '\0');
+    char *r = strdup(b.data);
+    buf_free(&b);
+    free(mctor);
+    return r;
+}
+
 /* Return a sanitized C identifier for a Binding, without the ID suffix.
  * Used for function names and parameters. Caller frees.
  *
@@ -1167,6 +1186,23 @@ static bool emit_inst_head_matches(Type pattern, Type concrete) {
         while (head.kind == TY_APP && head.as.app.fn) head = *head.as.app.fn;
         if (head.kind == TY_STRUCT &&
             head.as.struct_.def == pattern.as.struct_.def) {
+            return true;
+        }
+    }
+    /* CONV-S1 seam 4: the ADT mirror of the G2 head match.  An instance written
+     * over a bare type constructor whose head is a record ADT (`definstance Dec
+     * [Option]`, head `Option`) -- including a `defstruct` lowered to a record
+     * defadt -- matches any concrete application `(Option int)`.  Without this a
+     * nested/return dispatch that recovers an APPLIED element type (`build`'s
+     * `(dec i)` re-resolving to `(Option int)`) cannot find the `Dec [Option]`
+     * instance FnDef, falls back to the int-carrier representative, and mints an
+     * ill-typed `__inst_Dec_dec_int__spec` returning the wrong element. */
+    if (pattern.kind == TY_ADT && pattern.as.adt_.def &&
+        pattern.as.adt_.def->n_type_params > 0 && concrete.kind == TY_APP) {
+        Type head = concrete;
+        while (head.kind == TY_APP && head.as.app.fn) head = *head.as.app.fn;
+        if (head.kind == TY_ADT &&
+            head.as.adt_.def == pattern.as.adt_.def) {
             return true;
         }
     }
@@ -1431,6 +1467,33 @@ bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
                     disp_ty = *f->full_type;
                     have_disp = true;
                 }
+            } else {
+                /* constrained-instance-element-dispatch (lowered record ADT
+                 * receiver): under defstruct-as-defadt the parametric container
+                 * is an ADT, not a struct -- `(Option cstr)` is a TY_APP over the
+                 * lowered record ADT def, which type_extract_struct_app rejects.
+                 * Mirror the struct path with the ADT-app helpers: extract the
+                 * AdtDef + element args, then substitute them into the ctor
+                 * field's declared full_type (the tyvar `A`) so the inner
+                 * `(enc (.value x))` re-dispatches on the concrete element. */
+                AdtDef *ad = NULL;
+                Type aargs[16];
+                uint8_t an = 0;
+                const CtorField *cf =
+                    (recv->as.get_field_.adt_ctor &&
+                     fidx < recv->as.get_field_.adt_ctor->n_fields)
+                        ? &recv->as.get_field_.adt_ctor->fields[fidx] : NULL;
+                if (cf && cf->full_type && cf->full_type->kind == TY_TYVAR &&
+                    type_extract_adt_app(&rt, &ad, aargs, &an) && ad) {
+                    Type fr = substitute_adt_app_type_owned(cf->full_type, ad, aargs);
+                    if (fr.kind != TY_TYVAR && fr.kind != TY_UNKNOWN) {
+                        disp_ty = fr;
+                        have_disp = true;
+                        disp_ty_owned = (fr.kind == TY_APP);
+                    } else {
+                        free_struct_app_type(fr);
+                    }
+                }
             }
         }
     }
@@ -1497,11 +1560,20 @@ bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
         const TypeClassInstance *inst =
             ctx->current_abi_specialization->fn->owner_instance;
         Type recv = ctx->current_abi_specialization->bindings[0].type;
-        StructDef *rsd = NULL; Type rargs[16]; uint8_t rn = 0;
-        if (type_extract_struct_app(&recv, &rsd, rargs, &rn)) {
+        StructDef *rsd = NULL; AdtDef *rad = NULL; Type rargs[16]; uint8_t rn = 0;
+        /* CONV-S2: the class-var receiver may be a lowered record ADT-app
+         * (`(Vec bool)`/`(Cons (Option int))`) under defstruct-as-defadt, which
+         * type_extract_struct_app rejects -- so a constrained instance over a
+         * lowered container (`(definstance Tag [Vec] [(Tag A)] ...)`) left its
+         * element constraint var unbound and the inner `(tag (:: (vec-get v i)
+         * A))` kept the baked carrier representative (wrong instance / a segfault
+         * when the element's real ABI differs). Extract the ADT-app element args
+         * too. */
+        if (type_extract_struct_app(&recv, &rsd, rargs, &rn) ||
+            type_extract_adt_app(&recv, &rad, rargs, &rn)) {
             /* Route the param_idx->element mapping through the shared chokepoint
-             * kernel (struct-strict extraction stays here), then pick the entry
-             * naming this still-unbound constraint var. */
+             * kernel (extraction stays here), then pick the entry naming this
+             * still-unbound constraint var. */
             AbiTypeBinding cb[ABI_TYPE_BINDINGS_MAX];
             uint8_t ncb = emit_abi_constraint_var_bindings(inst, rargs, rn, cb,
                                                            ABI_TYPE_BINDINGS_MAX);
@@ -2704,6 +2776,19 @@ void emit_dict_name(char *buf, size_t buflen, const TypeClassInstance *inst) {
                          inst->type_args[i].as.struct_.def->name)
                     component = inst->type_args[i].as.struct_.def->name;
                 break;
+            case TY_ADT:
+                /* CONV-S1 (defstruct-as-defadt): a record-ADT instance head names
+                 * its dict by the constructor, exactly as TY_STRUCT -- otherwise
+                 * every non-parametric ADT-headed instance collapses to dict_<C>_T
+                 * and the emitted dict struct/singleton collide (ODR redefinition).
+                 * Mirrors build_inst_type_suffix's TY_ADT arm so the elab-side and
+                 * emit-side dict names stay in lockstep. */
+                if (inst->type_arg_syms && inst->type_arg_syms[i])
+                    component = inst->type_arg_syms[i]->name;
+                else if (inst->type_args[i].as.adt_.def &&
+                         inst->type_args[i].as.adt_.def->name)
+                    component = inst->type_args[i].as.adt_.def->name;
+                break;
             case TY_APP: {
                 const char *fn_part  = "T";
                 const char *arg_part = "T";
@@ -3163,6 +3248,14 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
     /* No crossing needed. */
     if (src_ck == sink_ck) return src_str;
 
+    /* SC7: a transparent int newtype (including the lowered single-int-field
+     * record-ADT form) has the SAME C representation -- a bare int64 -- in both
+     * the carrier and the concrete world, so the crossing is the identity in
+     * either direction.  Return the source verbatim before the aggregate-spill
+     * path below would take its address (`(int64_t)(intptr_t)(&tmp)`) and hand a
+     * stack pointer to an int64-by-value formal. */
+    if (type_is_transparent_int_newtype(concrete_ty)) return src_str;
+
     /* M3 audit: identify which call site reaches the bridge; trace tagged so
      * the per-fixture cost of removing it is measurable.  Enable with
      * TUR_M3_AUDIT=1. */
@@ -3319,12 +3412,16 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                      * (heap-tagged, carrier_is_inline, pointer deref) so we
                      * stay consistent with the rest of the bridge. */
                     Type field_ty;
+                    bool field_ty_owned = false;
                     if (f->full_type && def->n_type_params > 0) {
                         /* substitute_struct_app_type allocates spine nodes for
-                         * compound results; for the field types we care about
-                         * here (bare TY_TYVAR -> scalar/cstr/value-struct) the
-                         * result is a leaf and there is nothing to free. */
+                         * compound results.  A by-value aggregate element
+                         * (`(Result (Option int) cstr)`'s ok_val -> `(Option int)`)
+                         * substitutes to a TY_APP whose spine must be released --
+                         * the leaf-only assumption no longer holds once a record
+                         * carries a nested parametric field. */
                         field_ty = substitute_struct_app_type(f->full_type, def, type_args);
+                        field_ty_owned = (field_ty.kind == TY_APP);
                     } else if (f->full_type) {
                         field_ty = *f->full_type;
                     } else {
@@ -3349,6 +3446,25 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                         buf_printf(&out,
                             "((union { int64_t s; %s d; }){.s = %s->%s}).d",
                             fcname, src_tmp, fname);
+                    } else if ((fk == TY_APP || fk == TY_STRUCT || fk == TY_ADT) &&
+                               !type_is_heap_struct(field_ty) &&
+                               !type_is_heap_adt(field_ty) &&
+                               type_has_concrete_codegen_layout(&field_ty) &&
+                               fcname && strcmp(fcname, "int64_t") != 0) {
+                        /* nested-construct-byvalue (Gap #4 / site 5, struct path):
+                         * a WIDE by-value aggregate field (`(Result (Option int)
+                         * cstr)`'s ok_val -> `(Option int)`) is stored BOXED in the
+                         * canonical carrier box (malloc'd pointer cast to int64), so
+                         * a direct `(Option__int)(box->ok_val)` cast is an illegal
+                         * int64->aggregate conversion.  Deref-unbox instead --
+                         * mirrors the lowered-ADT readback below.  A :heap struct
+                         * field stays a pointer slot (handled by is_struct_ptr_slot
+                         * in the next arm); an opaque/transparent newtype carried
+                         * INLINE as the int64 carrier (c-name `int64_t`, e.g. a
+                         * `defopaque :ptr<void>` Device) must NOT be deref'd -- it is
+                         * the value, not a box pointer. */
+                        buf_printf(&out, "(*(%s *)(intptr_t)(%s->%s))",
+                                   fcname, src_tmp, fname);
                     } else if (fk == TY_CSTR || fk == TY_PTR_VOID || is_struct_ptr_slot) {
                         buf_printf(&out, "(%s)(intptr_t)(%s->%s)",
                                    fcname, src_tmp, fname);
@@ -3358,12 +3474,89 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                          * does the right thing on the int64 carrier slot. */
                         buf_printf(&out, "(%s)(%s->%s)", fcname, src_tmp, fname);
                     }
+                    if (field_ty_owned) free_struct_app_type(field_ty);
                 }
                 buf_printf(&out, "}");
                 if (is_option)
                     buf_printf(&out, " : (%s){0})", cname);
                 free(src_tmp);
                 used_canonical = true;
+            }
+            /* CONV-S1 seam 4: the same canonical NULL-safe readback for a LOWERED
+             * Option/Result record ADT (`tur_adt_Option__Device`).  The struct
+             * path above keys on type_extract_struct_app and misses an ADT app, so
+             * a `none` (NULL carrier) would otherwise hit the unguarded deref below
+             * and segfault.  Read the canonical box fields by name (the ctor field
+             * names match tur_option_t/tur_result_box_t) and write the ADT
+             * aggregate through its member path, guarding Option with a NULL test
+             * that collapses to a zeroed `{0}` (is_some=false). */
+            if (!used_canonical) {
+                Type rty = emit_resolve_type(ctx, concrete_ty);
+                AdtDef *adt = (rty.kind == TY_APP) ? type_adt_app_def(&rty)
+                            : (rty.kind == TY_ADT ? rty.as.adt_.def : NULL);
+                if (adt && adt->name && adt->n_ctors == 1 &&
+                    adt->ctors[0]->is_record &&
+                    (strcmp(adt->name, "Option") == 0 ||
+                     strcmp(adt->name, "Result") == 0)) {
+                    const CtorDef *ctor = adt->ctors[0];
+                    bool is_option = strcmp(adt->name, "Option") == 0;
+                    const char *box_t = is_option ? "tur_option_t"
+                                                  : "tur_result_box_t";
+                    char *src_tmp = fresh_tmp(ctx);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s *%s = (%s *)(intptr_t)(%s);\n",
+                               box_t, src_tmp, box_t, src_str);
+                    if (is_option) buf_printf(&out, "(%s ? ", src_tmp);
+                    buf_printf(&out, "(%s){", cname);
+                    for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                        if (fi > 0) buf_puts(&out, ", ");
+                        char *mp = adt_field_member_path(adt, ctor, fi);
+                        char *bf = mangle_field_name(ctor->fields[fi].name);
+                        Type field_ty = adt_field_type_for_app(&rty,
+                                            &ctor->fields[fi]);
+                        if (field_ty.kind == TY_UNKNOWN)
+                            field_ty = type_simple(ctor->fields[fi].kind, CK_COPY);
+                        const char *fcname = emit_type_c_name(ctx, field_ty);
+                        TypeKind fk = field_ty.kind;
+                        buf_printf(&out, ".%s = ", mp);
+                        if (fk == TY_BOOL) {
+                            buf_printf(&out, "%s->%s", src_tmp, bf);
+                        } else if (fk == TY_INT || fk == TY_INT64 ||
+                                   fk == TY_UINT64) {
+                            buf_printf(&out, "%s->%s", src_tmp, bf);
+                        } else if (fk == TY_FLOAT || fk == TY_FLOAT64 ||
+                                   fk == TY_FLOAT32) {
+                            buf_printf(&out,
+                                "((union { int64_t s; %s d; }){.s = %s->%s}).d",
+                                fcname, src_tmp, bf);
+                        } else if (fk == TY_CSTR || fk == TY_PTR_VOID) {
+                            buf_printf(&out, "(%s)(intptr_t)(%s->%s)",
+                                       fcname, src_tmp, bf);
+                        } else if ((fk == TY_STRUCT || fk == TY_ADT ||
+                                    fk == TY_APP) &&
+                                   !type_is_heap_struct(field_ty) &&
+                                   !type_is_heap_adt(field_ty) &&
+                                   type_has_concrete_codegen_layout(&field_ty) &&
+                                   fcname && strcmp(fcname, "int64_t") != 0) {
+                            /* nested-construct-byvalue (Gap #4 / site 5): a WIDE
+                             * by-value aggregate field (`(Result Box cstr)`'s
+                             * ok_val holding a `tur_adt_Box`) is stored BOXED in the
+                             * canonical carrier box (malloc'd pointer cast to
+                             * int64), so a direct `(tur_adt_Box)(box->ok_val)` cast
+                             * is an illegal int64->aggregate conversion.  Deref-
+                             * unbox the heap pointer instead. */
+                            buf_printf(&out, "(*(%s *)(intptr_t)(%s->%s))",
+                                       fcname, src_tmp, bf);
+                        } else {
+                            buf_printf(&out, "(%s)(%s->%s)", fcname, src_tmp, bf);
+                        }
+                        free(mp); free(bf);
+                    }
+                    buf_printf(&out, "}");
+                    if (is_option) buf_printf(&out, " : (%s){0})", cname);
+                    free(src_tmp);
+                    used_canonical = true;
+                }
             }
             if (!used_canonical) {
                 /* Pointer carrier: dereference the heap pointer. */
@@ -3402,12 +3595,16 @@ char *emit_carrier_bridge_escaping(EmitCtx *ctx, Buf *body,
      * standard bridge; everything else is byte-for-byte identical, so delegate.
      *  - src_ck == sink_ck: no crossing.
      *  - carrier->concrete: a read-back, never takes an address.
-     *  - :heap struct: the pointer IS the carrier (shared by identity).
+     *  - :heap struct / :heap ADT: the pointer IS the carrier (shared by
+     *    identity).  Under the defstruct->defadt lowering Vec/Map/Set/List are
+     *    heap ADTs, not heap structs, so a nested heap-container element
+     *    (`(Vec (Vec int))`) must delegate here too -- otherwise it falls into
+     *    the aggregate heap-promote below and boxes the pointer into a `T **`.
      *  - inline scalar: a union reinterpret, no address taken.
      *  - pointer-sized leaf (cstr/ptr<void>/int*): already int64-compatible,
      *    no address taken. */
     if (src_ck != CK_CONCRETE || sink_ck != CK_CARRIER ||
-        type_is_heap_struct(concrete_ty) ||
+        type_is_heap_struct(concrete_ty) || type_is_heap_adt(concrete_ty) ||
         carrier_is_inline(concrete_ty.kind)) {
         return emit_carrier_bridge(ctx, body, src_str, src_ck, sink_ck,
                                    concrete_ty);

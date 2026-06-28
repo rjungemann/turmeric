@@ -1,0 +1,24 @@
+;; conv-defstruct-ascribed-monomorph-ctor: a parametric struct whose type
+;; parameter is NOT pinned by any field type, constructed via make-struct and
+;; ascribed to a concrete monomorph.
+;;
+;; Under the defstruct-as-defadt flag `BoxW [a]` lowers to a parametric record
+;; ADT.  `(make-struct BoxW 5)` cannot infer `a` from the int-typed field, so
+;; the ctor call's result type is left bare (`BoxW`); only the ascription
+;; `(:: ... (BoxW int))` knows the monomorph.  Codegen must select the
+;; per-monomorph ctor `ctor_BoxW__int` (by-value, returns tur_adt_BoxW__int),
+;; not the int64-carrier base `ctor_BoxW` -- otherwise the ascribed binding
+;; `tur_adt_BoxW__int b = ctor_BoxW(...)` is an invalid initializer at cc.
+;;
+;; Regression for seam-4: elab_ascribe now pushes a concrete same-ADT app type
+;; onto an under-applied constructor call so the monomorph ctor is chosen.
+(defstruct BoxW [a]
+  (raw :int))
+
+(defn boxw-raw [b : (BoxW int)] : int
+  (.raw b))
+
+(defn main [] : int
+  (let [b (:: (make-struct BoxW 41) (BoxW int))]
+    (println (+ (boxw-raw b) 1)))   ;; 42
+  0)

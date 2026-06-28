@@ -46,6 +46,59 @@ void emit_set_field_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
     uint32_t fi = e->as.set_field_.field_idx;
     char *rv = emit_value(ctx, body, e->as.set_field_.receiver);
     char *vv = emit_value(ctx, body, e->as.set_field_.value);
+
+    /* CONV-S1 seam 4: a lowered record-ADT receiver -- write the field through
+     * the ADT member path (`.as.<Ctor>._N` for the positional layout, `.value`
+     * for a flat-named record).  A :heap receiver is a typed pointer (`->`); a
+     * by-value receiver is the aggregate lvalue (`.`); the abstract carrier base
+     * casts the int64 to the monomorph pointer first. */
+    if (!def && e->as.set_field_.adt_def) {
+        const AdtDef *adt = e->as.set_field_.adt_def;
+        const CtorDef *ctor = e->as.set_field_.adt_ctor;
+        char *mp = adt_field_member_path(adt, ctor, fi);
+        Buf lhs; buf_init(&lhs);
+        Type recv_rty = emit_resolve_type(ctx, e->as.set_field_.receiver->type);
+        const char *recv_cn = type_c_name(recv_rty);
+        bool recv_is_ptr = recv_cn && strchr(recv_cn, '*') != NULL;
+        if (e->as.set_field_.receiver_is_rc) {
+            char *madt = mangle_field_name(adt->name);
+            buf_printf(&lhs, "((tur_adt_%s *)((RcControlBlock *)(%s))->value)->%s",
+                       madt, rv, mp);
+            free(madt);
+        } else if (type_is_heap_adt(recv_rty)) {
+            if (recv_is_ptr)
+                buf_printf(&lhs, "(%s)->%s", rv, mp);
+            else
+                buf_printf(&lhs, "((%s *)(intptr_t)(%s))->%s",
+                           type_c_name(recv_rty), rv, mp);
+        } else {
+            buf_printf(&lhs, "(%s).%s", rv, mp);
+        }
+        buf_putc(&lhs, '\0');
+        /* Mirror the struct path's ownership transfer for the old field value:
+         * an rc field's prior pointer is decremented (the new value carries its
+         * own +1), a weak field's is weak-decremented, a ref/lref field freed.
+         * Guarded by `if (lhs)` so a NULL sentinel (e.g. the construction-time
+         * placeholder) is a no-op. */
+        TypeKind afk = ctor->fields[fi].kind;
+        if (afk == TY_RC) {
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "if (%s) { rc_strong_decrement(%s); rc_free_queue_drain(); }\n",
+                       lhs.data, lhs.data);
+        } else if (afk == TY_WEAK) {
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "if (%s) rc_weak_decrement(%s);\n", lhs.data, lhs.data);
+        } else if (afk == TY_REF || afk == TY_LREF) {
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "if (%s) free(%s);\n", lhs.data, lhs.data);
+        }
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s = %s;\n", lhs.data, vv);
+        buf_free(&lhs);
+        free(rv); free(vv); free(mp);
+        return;
+    }
+
     char *mfn = mangle_field_name(def->fields[fi].name);
 
     /* Build the lvalue expression for the field slot. */
@@ -502,6 +555,18 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                         } else if (inst->type_args[i].as.struct_.def &&
                                    inst->type_args[i].as.struct_.def->name) {
                             component = inst->type_args[i].as.struct_.def->name;
+                        }
+                        break;
+                    case TY_ADT:
+                        /* CONV-S1 (defstruct-as-defadt): a record-ADT head names its
+                         * dict struct/singleton by the constructor, mirroring
+                         * TY_STRUCT / emit_dict_name -- otherwise two ADT-headed
+                         * instances both emit dict_<C>_T and collide (ODR). */
+                        if (inst->type_arg_syms && inst->type_arg_syms[i]) {
+                            component = inst->type_arg_syms[i]->name;
+                        } else if (inst->type_args[i].as.adt_.def &&
+                                   inst->type_args[i].as.adt_.def->name) {
+                            component = inst->type_args[i].as.adt_.def->name;
                         }
                         break;
                     case TY_APP: {

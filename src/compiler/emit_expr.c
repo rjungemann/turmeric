@@ -62,14 +62,28 @@ static bool fn_field_full_type_mentions_tyvar(const Type *fn_type) {
  * The two emit sites (pack, open) must agree, so both consult this predicate. */
 static bool exists_payload_is_byval_aggregate(Type t) {
     if (type_is_heap_struct(t)) return false;          /* typed pointer T * */
+    if (type_is_heap_adt(t)) return false;             /* typed pointer T * */
     if (type_is_transparent_int_newtype(t)) return false;  /* int64 */
     StructDef *def = NULL;
     if (t.kind == TY_STRUCT) {
         def = t.as.struct_.def;
-    } else if (t.kind == TY_APP) {
-        Type args[16];
-        uint8_t n_args = 0;
-        type_extract_struct_app(&t, &def, args, &n_args);
+    } else if (t.kind == TY_APP &&
+               type_extract_struct_app(&t, &def, (Type[16]){0},
+                                       &(uint8_t){0})) {
+        /* struct-app extracted into def */
+    } else if (t.kind == TY_ADT || t.kind == TY_APP) {
+        /* CONV-S2: under defstruct-as-defadt a packed by-value struct is a
+         * lowered record ADT (`Wm`, `LinesR`, `(World int int)`).  It is a
+         * by-value aggregate just like the struct case, so it must be heap-boxed
+         * into the existential's int64 `value` slot rather than ride the scalar
+         * `(int64_t)(aggregate)` cast (a hard cc error).  Decide by the resolved
+         * C name being a real aggregate (not the int64 carrier). */
+        AdtDef *adef = NULL;
+        if (t.kind == TY_ADT) adef = t.as.adt_.def;
+        else type_extract_adt_app(&t, &adef, (Type[16]){0}, &(uint8_t){0});
+        if (!adef || adef->is_heap) return false;
+        const char *acn = type_struct_value_c_name(t);
+        return acn && strcmp(acn, "int64_t") != 0;
     } else {
         return false;
     }
@@ -474,13 +488,13 @@ static char *emit_byval_recursive_carrier_reconstruct(EmitCtx *ctx, Type t,
     Type r = emit_resolve_type(ctx, t);
     const AdtDef *def = r.as.adt_.def;
     const char *cname = type_c_name(r);
-    char *mctor = mangle_field_name(def->ctors[0]->name);
+    char *mp = adt_field_member_path(def, def->ctors[0], 0);
     Buf b; buf_init(&b);
-    buf_printf(&b, "(%s){ .as.%s._0 = (%s) }", cname, mctor, carrier);
+    buf_printf(&b, "(%s){ .%s = (%s) }", cname, mp, carrier);
     buf_putc(&b, '\0');
     char *out = strdup(b.data);
     buf_free(&b);
-    free(mctor);
+    free(mp);
     return out;
 }
 
@@ -529,11 +543,31 @@ static bool field_read_emits_byvalue_aggregate(EmitCtx *ctx, const Expr *e) {
                fidx < rt.as.struct_.def->n_fields) {
         const StructField *f = &rt.as.struct_.def->fields[fidx];
         if (f->full_type) { fr = *f->full_type; have_fr = true; }
+    } else {
+        /* Lowered record ADT-app receiver (`(Cons (Option int))`): the field is
+         * a ctor field whose full_type is the container's type-param; substitute
+         * the receiver's element args, as the struct path does. */
+        AdtDef *ad = NULL; Type aargs[16]; uint8_t an = 0;
+        const CtorDef *ctor = e->as.get_field_.adt_ctor;
+        if (ctor && fidx < ctor->n_fields &&
+            type_extract_adt_app(&rt, &ad, aargs, &an) && ad) {
+            const CtorField *cf = &ctor->fields[fidx];
+            if (cf->full_type && cf->full_type->kind == TY_TYVAR) {
+                fr = substitute_adt_app_type_owned(cf->full_type, ad, aargs);
+                fr_owned = (fr.kind == TY_APP);
+                have_fr = true;
+            } else if (cf->full_type) {
+                fr = *cf->full_type;
+                have_fr = true;
+            }
+        }
     }
     if (!have_fr) return false;
 
-    bool result = type_uses_carrier_abi(fr) && !type_is_heap_struct(fr) &&
-                  type_has_concrete_codegen_layout(&fr);
+    bool result = !type_is_heap_struct(fr) && !type_is_heap_adt(fr) &&
+                  ((type_uses_carrier_abi(fr) &&
+                    type_has_concrete_codegen_layout(&fr)) ||
+                   (fr.kind == TY_APP && type_app_is_concrete_adt(&fr)));
     if (fr_owned) free_struct_app_type(fr);
     return result;
 }
@@ -612,6 +646,58 @@ Type fn_body_tail_byvalue_carrier_type(EmitCtx *ctx, const Expr *e) {
         if (spec) {
             Type sr = emit_resolve_type(ctx, spec->result_type);
             if (type_uses_carrier_abi(sr) &&
+                strcmp(emit_type_c_name(ctx, sr), "int64_t") != 0)
+                return sr;
+        }
+        /* CONV-S1 seam 4 (assignment-straddle): an inline-C callee whose declared
+         * result is a parametric ADT app (`(Result cstr cstr)`) is lowered by
+         * value (a flat aggregate, not the carrier), yet emit_fns.c still emits
+         * the inline-C body with an int64 carrier C return.  A control-form merge
+         * temp (if/do/let) that sources its value from such a call must be the
+         * by-value aggregate so the carrier->concrete deref bridge can populate it
+         * -- mirror the make-struct/spec recoveries above.  No abi spec exists for
+         * a plain monomorphic inline-C call, so the spec branch misses it.  Inert
+         * at default: there the lowered-by-value rep does not apply, so the result
+         * type IS the carrier and its c-name is `int64_t` (excluded below). */
+        const Binding *cb = x->as.call_.fn_binding;
+        if (cb && cb->body_is_inline_c && cb->type.kind == TY_FN &&
+            cb->type.as.fn.result_full_type) {
+            Type sr = emit_resolve_type(ctx, *cb->type.as.fn.result_full_type);
+            /* CONV-S1 seam 4 (inline-C generic-element result): a `: A` inline-C
+             * body (e.g. `vec-get`) always returns the int64 carrier regardless
+             * of the element type, and at a non-spec call site the bare tyvar `A`
+             * has no binding so emit_resolve leaves it abstract.  The TYPER, by
+             * contrast, already grounded the CALL's own result type to the
+             * concrete element (`(Option int)` here, via the `(:: ... (Option
+             * int))` read).  Fall back to that grounded type so a by-value
+             * aggregate element read through the int64 carrier gets the
+             * carrier->concrete deref bridge.  Gated on the declared result being
+             * a bare tyvar, so concrete inline-C results are untouched. */
+            if (cb->type.as.fn.result_full_type->kind == TY_TYVAR &&
+                (sr.kind == TY_TYVAR ||
+                 strcmp(emit_type_c_name(ctx, sr), "int64_t") == 0)) {
+                Type cr = emit_resolve_type(ctx, x->type);
+                if (cr.kind == TY_APP || cr.kind == TY_ADT) sr = cr;
+            }
+            /* Gate on !type_uses_carrier_abi(sr): the by-value-temp strategy only
+             * applies when the lowered aggregate flows by value.  At default the
+             * same `(Result cstr cstr)` IS the carrier (type_uses_carrier_abi
+             * true), where the existing carrier-temp + single M5 deref already
+             * handles the merge -- firing here would declare a by-value temp and
+             * double-bridge.  This keeps the extension strictly lowering-only. */
+            /* Also require !type_has_concrete_codegen_layout(sr): the inline-C
+             * body is EMITTED returning the int64 carrier ONLY when emit_fns'
+             * typed_byval_adt does NOT apply -- i.e. a parametric ADT-app result
+             * (`(Result cstr cstr)` / `(Option Device)`, no single C layout) falls
+             * to the int64 default and needs the carrier->by-value bridge.  A
+             * NON-parametric concrete record result (`Pos`) instead returns BY
+             * VALUE (typed_byval_adt fires), so it must NOT be treated as a carrier
+             * producer here -- otherwise the consume-side bridge double-derefs an
+             * aggregate (the typeclass-fundep-collect regression). */
+            if ((sr.kind == TY_APP || sr.kind == TY_ADT) &&
+                !type_uses_carrier_abi(sr) &&
+                !type_is_heap_struct(sr) && !type_is_heap_adt(sr) &&
+                !type_has_concrete_codegen_layout(&sr) &&
                 strcmp(emit_type_c_name(ctx, sr), "int64_t") != 0)
                 return sr;
         }
@@ -840,6 +926,25 @@ static void emit_control_result_temp_decl(EmitCtx *ctx, Buf *body, Type type,
     emit_temp_decl(ctx, body, type, name, NULL);
 }
 
+/* CONV-S1 seam 4 (assignment-straddle): bridge the value `v` of a control-form
+ * tail (`last`) into a by-value merge temp that emit_control_result_temp_decl
+ * declared via its branch-1 (fn_body_tail_byvalue_carrier_type) recovery.  When
+ * the tail is a carrier producer whose by-value aggregate return is nonetheless
+ * EMITTED as the int64 carrier (an inline-C / #{Construct} producer under the
+ * defstruct-as-defadt lowering), `emit_value` yields the carrier handle but the
+ * temp is the by-value aggregate -- deref it carrier->concrete so the assign
+ * type-checks.  emit_if_value applies the same bridge per arm inline; this is the
+ * do/let companion.  Inert (returns `v` unchanged) when the temp is not by-value
+ * or the tail already emits the by-value aggregate. */
+static char *bridge_control_value_to_byvalue_temp(EmitCtx *ctx, Buf *body,
+                                                   char *v, const Expr *last) {
+    Type bv = fn_body_tail_byvalue_carrier_type(ctx, last);
+    if (bv.kind != TY_UNKNOWN &&
+        !fn_body_tail_emits_byvalue_carrier_abi(ctx, last))
+        return emit_carrier_bridge(ctx, body, v, CK_CARRIER, CK_CONCRETE, bv);
+    return v;
+}
+
 /* Fat-closure-env scoped free (docs/reported/fat-closure-env-leak.md): decide
  * whether let-binding `idx` of `e` holds a freshly-constructed fat closure whose
  * heap env can be `free`d when the let scope exits.  Sound iff:
@@ -1031,9 +1136,31 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             bool bind_is_ptr_repr = strchr(bind_c, '*') != NULL;
             bool init_is_pbp = expr_is_pbp_param(ctx,
                                                  e->as.let_.bindings[i].init);
+            /* CONV-S1 seam 4 (inline-C carrier init -> by-value binding): the
+             * initializer is a call to an inline-C function whose by-value ADT-app
+             * result (`(Result Device int)` under lowering) is nonetheless EMITTED
+             * as the int64 carrier (emit_fns lowers an inline-C TY_APP result to
+             * int64), but the binding is the by-value aggregate.  Deref the carrier
+             * into the aggregate so the initialiser type-checks -- the consume-side
+             * companion of the assignment-straddle merge bridge.  Gated on the
+             * by-value-vs-emit disagreement, so inert when the init already yields
+             * the aggregate. */
+            Type init_bv = fn_body_tail_byvalue_carrier_type(
+                ctx, e->as.let_.bindings[i].init);
+            bool init_carrier_to_byval = !bind_is_ptr_repr &&
+                strcmp(bind_c, "int64_t") != 0 &&
+                init_bv.kind != TY_UNKNOWN &&
+                !fn_body_tail_emits_byvalue_carrier_abi(
+                    ctx, e->as.let_.bindings[i].init);
             if (init_is_pbp && !bind_is_ptr_repr &&
                 strcmp(bind_c, "int64_t") != 0) {
                 buf_printf(body, "%s %s = *(%s);\n", bind_c, bn, iv);
+            } else if (init_carrier_to_byval) {
+                char *bridged = emit_carrier_bridge(ctx, body, iv,
+                                    CK_CARRIER, CK_CONCRETE, init_bv);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = %s;\n", bind_c, bn, bridged);
+                iv = bridged;  /* emit_carrier_bridge freed the old iv */
             } else if (strcmp(bind_c, "int64_t") == 0 &&
                 (init_kind == TY_FN || init_kind == TY_PTR_VOID || init_is_ptr_repr)) {
                 buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n", bind_c, bn, iv);
@@ -1062,6 +1189,8 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
          * it. */
         if (!nil_result && !expr_is_divergent(e->as.let_.body)) {
             char *bv = emit_value(ctx, body, e->as.let_.body);
+            bv = bridge_control_value_to_byvalue_temp(ctx, body, bv,
+                                                      e->as.let_.body);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s = %s;\n", tmp, bv);
             free(bv);
@@ -1079,6 +1208,8 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         emit_stmt(ctx, body, e->as.let_.body);
     } else {
         char *bv = emit_value(ctx, body, e->as.let_.body);
+        bv = bridge_control_value_to_byvalue_temp(ctx, body, bv,
+                                                  e->as.let_.body);
         indent_buf(body, ctx->indent);
         buf_printf(body, "%s = %s;\n", tmp, bv);
         free(bv);
@@ -1215,9 +1346,31 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             bool bind_is_ptr_repr = strchr(bind_c, '*') != NULL;
             bool init_is_pbp = expr_is_pbp_param(ctx,
                                                  e->as.let_.bindings[i].init);
+            /* CONV-S1 seam 4 (inline-C carrier init -> by-value binding): the
+             * initializer is a call to an inline-C function whose by-value ADT-app
+             * result (`(Result Device int)` under lowering) is nonetheless EMITTED
+             * as the int64 carrier (emit_fns lowers an inline-C TY_APP result to
+             * int64), but the binding is the by-value aggregate.  Deref the carrier
+             * into the aggregate so the initialiser type-checks -- the consume-side
+             * companion of the assignment-straddle merge bridge.  Gated on the
+             * by-value-vs-emit disagreement, so inert when the init already yields
+             * the aggregate. */
+            Type init_bv = fn_body_tail_byvalue_carrier_type(
+                ctx, e->as.let_.bindings[i].init);
+            bool init_carrier_to_byval = !bind_is_ptr_repr &&
+                strcmp(bind_c, "int64_t") != 0 &&
+                init_bv.kind != TY_UNKNOWN &&
+                !fn_body_tail_emits_byvalue_carrier_abi(
+                    ctx, e->as.let_.bindings[i].init);
             if (init_is_pbp && !bind_is_ptr_repr &&
                 strcmp(bind_c, "int64_t") != 0) {
                 buf_printf(body, "%s %s = *(%s);\n", bind_c, bn, iv);
+            } else if (init_carrier_to_byval) {
+                char *bridged = emit_carrier_bridge(ctx, body, iv,
+                                    CK_CARRIER, CK_CONCRETE, init_bv);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = %s;\n", bind_c, bn, bridged);
+                iv = bridged;  /* emit_carrier_bridge freed the old iv */
             } else if (strcmp(bind_c, "int64_t") == 0 &&
                 (init_kind == TY_FN || init_kind == TY_PTR_VOID || init_is_ptr_repr)) {
                 buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n", bind_c, bn, iv);
@@ -1234,6 +1387,8 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     if (body_has_return_or_throw) {
         if (!nil_result && !expr_is_divergent(e->as.let_.body)) {
             char *bv = emit_value(ctx, body, e->as.let_.body);
+            bv = bridge_control_value_to_byvalue_temp(ctx, body, bv,
+                                                      e->as.let_.body);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s = %s;\n", tmp, bv);
             free(bv);
@@ -1464,6 +1619,7 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     emit_control_result_temp_decl(ctx, body, last->type, last, result);
                 }
                 char *v = emit_value(ctx, body, last);
+                v = bridge_control_value_to_byvalue_temp(ctx, body, v, last);
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s = %s;\n", result, v);
                 free(v);
@@ -1648,6 +1804,7 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             result = fresh_tmp(ctx);
             emit_control_result_temp_decl(ctx, body, last->type, last, result);
             char *v = emit_value(ctx, body, last);
+            v = bridge_control_value_to_byvalue_temp(ctx, body, v, last);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s = %s;\n", result, v);
             free(v);
@@ -1991,6 +2148,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(&out,
                     "TUR_TAG(%lld, ((union { double d; int64_t i; }){.d = (%s)}).i)",
                     (long long)tag, inner);
+            } else if (emit_type_is_byvalue_adt(ctx,
+                           e->as.union_inject_.value->type)) {
+                /* CONV-S1 seam 4: under the defstruct->defadt lowering a by-value
+                 * struct is a record ADT, so box_struct (a StructDef*) is NULL --
+                 * but the aggregate still cannot ride the int64 carrier.  Heap-box
+                 * it exactly as the struct path does, using the ADT monomorph C
+                 * name; EX_ANY_CAST unboxes via the same predicate on the target. */
+                const char *cn = emit_type_c_name(ctx,
+                    emit_resolve_type(ctx, e->as.union_inject_.value->type));
+                buf_printf(&out,
+                    "__extension__ ({ %s *__tur_box = (%s *)malloc(sizeof(%s)); "
+                    "*__tur_box = (%s); TUR_TAG(%lld, (int64_t)(intptr_t)__tur_box); })",
+                    cn, cn, cn, inner, (long long)tag);
             } else {
                 buf_printf(&out, "TUR_TAG(%lld, (int64_t)(intptr_t)(%s))",
                            (long long)tag, inner);
@@ -2045,6 +2215,17 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     "__tur_any_cast_check(TUR_GETTAG(__tur_c), %lld); "
                     "((union { int64_t i; double d; }){.i = TUR_UNTAG(__tur_c)}).d; })",
                     inner, (long long)target_tag);
+            } else if (emit_type_is_byvalue_adt(ctx, e->type)) {
+                /* CONV-S1 seam 4: by-value record-ADT target (lowered defstruct).
+                 * target_struct is NULL, but the payload was heap-boxed on inject,
+                 * so unbox by dereferencing the pointer -- the ADT analogue of the
+                 * struct deref above. */
+                const char *cn = emit_type_c_name(ctx, emit_resolve_type(ctx, e->type));
+                buf_printf(&out,
+                    "__extension__ ({ tur_tagged_t __tur_c = (%s); "
+                    "__tur_any_cast_check(TUR_GETTAG(__tur_c), %lld); "
+                    "*(%s *)(intptr_t)TUR_UNTAG(__tur_c); })",
+                    inner, (long long)target_tag, cn);
             } else {
                 Type target = type_simple(e->as.any_cast_.target_kind, CK_COPY);
                 buf_printf(&out,
@@ -3074,6 +3255,26 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * emits `ctor_AltF__bool`, matching the by-value layout the
                  * consumer reads instead of the int64-carrier `ctor_AltF`. */
                 Type rty = emit_resolve_type(ctx, e->type);
+                /* SC7 (lowered transparent int-newtype): under the
+                 * defstruct->defadt lowering a phantom int-newtype
+                 * (`(defstruct Schema [A] (raw :int))`) is a single-variant
+                 * record ADT whose runtime representation is still its bare
+                 * int64 payload (type_c_name -> "int64_t").  Its constructor is
+                 * the identity on that payload -- emit the single arg cast to
+                 * int64 directly, exactly as EX_MAKE_STRUCT does, so we never
+                 * call (or need) the aggregate `ctor_Schema__int` and the result
+                 * matches the int64 carrier every consumer expects. */
+                if (e->as.call_.n_args == 1 &&
+                    type_is_transparent_int_newtype(rty)) {
+                    char *fv = emit_value(ctx, body, e->as.call_.args[0]);
+                    Buf id; buf_init(&id);
+                    buf_printf(&id, "(int64_t)(%s)", fv);
+                    buf_putc(&id, '\0');
+                    free(fv);
+                    char *result = strdup(id.data);
+                    buf_free(&id);
+                    return result;
+                }
                 /* CONV-S1: only trust the receiver-type suffix when the app is
                  * fully concrete.  A lowered record-ADT constructor body
                  * (`none`'s `(Option false (default-of A))`) carries an erased
@@ -3206,7 +3407,18 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * (slice 4) takes the aggregate directly, so it skips the box. */
                     if (!suffix && !field_inline && arg &&
                         emit_type_is_byvalue_adt(ctx, arg->type)) {
-                        const char *cn = type_c_name(emit_resolve_type(ctx, arg->type));
+                        /* nested-construct-byvalue (Gap #4): when this construct is
+                         * a spec body (`ok__spec__..._Option__cstr`) the boxed arg
+                         * is the spec's param `x`, whose static type collapsed the
+                         * element to the carrier representative (`Option__int`).
+                         * Box at the spec's concrete arg type (`Option__cstr`) so
+                         * the heap copy width and the `*tmp = (x)` assignment agree
+                         * with the param's C type. */
+                        Type box_ty = arg->type;
+                        Type spec_ty;
+                        if (emit_var_spec_arg_type(ctx, arg, &spec_ty))
+                            box_ty = spec_ty;
+                        const char *cn = type_c_name(emit_resolve_type(ctx, box_ty));
                         char *tmp = fresh_tmp(ctx);
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "%s *%s = (%s *)malloc(sizeof(%s));\n",
@@ -3687,10 +3899,35 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (spec_cname && strcmp(spec_cname, "int64_t") == 0)
                         spec_lowers_to_int64 = true;
                 }
+                /* nested-construct-byvalue (Gap #4): when the argument is a call
+                 * whose OWN matched ABI spec already returns the concrete by-value
+                 * aggregate (`ok_val__spec__tur_adt_Box_...` returns a `tur_adt_Box`
+                 * by value, not the int64 carrier), the value is ALREADY concrete --
+                 * applying the carrier->concrete deref-unbox on top double-unboxes
+                 * (`*(tur_adt_Box*)(intptr_t)(<aggregate>)`).  Recognize the
+                 * by-value-returning arg spec and skip the bridge.  Scalar-element
+                 * accessors (`ok_val__spec__int64_t_...`) still return the carrier
+                 * int64 and are bridged as before. */
+                bool arg_spec_returns_byvalue_aggregate = false;
+                if (emit_arg && emit_arg->kind == EX_CALL &&
+                    emit_arg->as.call_.fn_binding &&
+                    emit_arg->as.call_.fn_binding->type.kind == TY_FN) {
+                    const EmitAbiSpecialization *as = find_matched_abi_spec(
+                        ctx, emit_arg, emit_arg->as.call_.fn_binding);
+                    if (as) {
+                        Type rt = emit_resolve_type(ctx, as->result_type);
+                        const char *rc = emit_type_c_name(ctx, rt);
+                        if (rc && strcmp(rc, "int64_t") != 0 &&
+                            type_kind_is_aggregate(rt.kind) &&
+                            !type_uses_carrier_abi(rt))
+                            arg_spec_returns_byvalue_aggregate = true;
+                    }
+                }
                 if (!needs_fn_cast && matched_spec &&
                     emit_arg &&
                     !expr_is_pbp_param(ctx, emit_arg) &&
                     !spec_lowers_to_int64 &&
+                    !arg_spec_returns_byvalue_aggregate &&
                     type_kind_is_aggregate(matched_spec->arg_types[i].kind) &&
                     /* G9: a by-value aggregate field read (`(.head xs)` off a
                      * monomorphized cell) is ALREADY the concrete aggregate; the
@@ -3700,6 +3937,27 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     (emit_arg->type.kind == TY_INT ||
                      (type_kind_is_aggregate(emit_arg->type.kind) &&
                       type_uses_carrier_abi(emit_arg->type) &&
+                      !expr_emits_byvalue_carrier_abi(ctx, emit_arg)) ||
+                     /* CONV-S1 seam 4 (carrier-producer arg -> by-value spec
+                      * param): the arg is a direct call to a carrier producer -- an
+                      * inline-C / #{Construct} / `__inst_` method whose by-value
+                      * ADT-app result (`(Result bool cstr)` / `(Option Device)`
+                      * under lowering) is EMITTED as the int64 carrier, so its
+                      * `emit_arg->type` reads by-value (type_uses_carrier_abi
+                      * false) and the two checks above miss it.  Deref the carrier
+                      * into the spec's by-value param -- the call-arg companion of
+                      * the let-init / merge carrier->by-value bridges.  REQUIRES no
+                      * matched ABI spec on the arg: a by-value spec clone of an
+                      * instance method (`__inst_..__spec__Pos`) already returns the
+                      * aggregate by value and must NOT be deref'd (it is also an
+                      * `__inst_` carrier producer by name, so the spec check is what
+                      * distinguishes the two -- the default
+                      * typeclass-assoc-type-parametric-struct-element regression). */
+                     (emit_arg->kind == EX_CALL &&
+                      emit_arg->as.call_.fn_binding &&
+                      fn_body_tail_is_carrier_producer(emit_arg) &&
+                      !find_matched_abi_spec(ctx, emit_arg,
+                                             emit_arg->as.call_.fn_binding) &&
                       !expr_emits_byvalue_carrier_abi(ctx, emit_arg)))) {
                     raw = emit_carrier_bridge(ctx, body, raw,
                                              CK_CARRIER, CK_CONCRETE,
@@ -5105,7 +5363,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_BORROW_IMMUT: {
             /* (& expr) - immutable borrow */
             Type inner_type = e->as.borrow_immut_.expr->type;
+            bool saved_lv = ctx->lvalue_mode;
+            ctx->lvalue_mode = true;  /* borrow-struct-field: field operand as lvalue */
             char *inner = emit_value(ctx, body, e->as.borrow_immut_.expr);
+            ctx->lvalue_mode = saved_lv;
             if (inner_type.kind == TY_REF_IMMUT || inner_type.kind == TY_REF_MUT) {
                 /* Reborrow: the pointer value IS the borrow — return as-is */
                 return inner;
@@ -5128,7 +5389,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_BORROW_MUT: {
             /* (&mut expr) - mutable borrow */
             Type inner_type = e->as.borrow_mut_.expr->type;
+            bool saved_lv_m = ctx->lvalue_mode;
+            ctx->lvalue_mode = true;  /* borrow-struct-field: field operand as lvalue */
             char *inner = emit_value(ctx, body, e->as.borrow_mut_.expr);
+            ctx->lvalue_mode = saved_lv_m;
             if (inner_type.kind == TY_REF_MUT) {
                 /* Mutable reborrow: return pointer directly */
                 return inner;
@@ -5471,7 +5735,23 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * through the unspecialized carrier typedef so field access is
              * valid C even though the C parameter type is int64_t.
              * Phase D: for pass-by-ptr params (const T*), use -> instead of . */
+            /* borrow-struct-field: read-and-clear the borrow lvalue request so it
+             * applies only to THIS field access (the borrow operand), not the
+             * nested receiver emit below. */
+            bool gf_lvalue = ctx->lvalue_mode;
+            ctx->lvalue_mode = false;
             char *sv = emit_value(ctx, body, e->as.get_field_.struct_expr);
+            /* SC7: a transparent int newtype (including the lowered record-ADT
+             * form, `(defstruct Schema [A] (raw :int))`) IS its single int64
+             * field -- the access is the identity.  Catch it here, before the
+             * ADT positional/named member-path branch, so `(.raw (fmap s f))`
+             * over a `(Schema int)` result reads the int64 carrier directly
+             * rather than `.as.Schema._0` on a non-aggregate value.  Mirrors the
+             * TY_STRUCT transparent-newtype shortcut further below. */
+            if (type_is_transparent_int_newtype(
+                    e->as.get_field_.struct_expr->type)) {
+                return sv;
+            }
             /* CONV-S0/S4: receiver is a single-variant record ADT (def == NULL).
              * The value is the heap-pointer int64 carrier; read the field out of
              * the sole variant's union member.  The flat-product typedef has no
@@ -5482,7 +5762,78 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 const CtorDef *ctor = e->as.get_field_.adt_ctor;
                 char *adt_mn = mangle_field_name(adt->name);
                 char *mctor  = mangle_field_name(ctor->name);
+                /* CONV-S1 seam 4: member-access path -- a flat named record reads
+                 * `.value`; a tagged/positional ADT reads `.as.<Ctor>._N`. */
+                char *mp = adt_field_member_path(adt, ctor, e->as.get_field_.field_idx);
                 const char *cty = type_c_name(e->type);
+                /* CONV-S1 seam 4 (accessor-unbox): inside an ABI spec a generic
+                 * accessor reads a TYPE-ERASED field (`(.snd t)` over `(Tuple2 A
+                 * B)`).  e->type collapsed the field's tyvar to the int64 carrier
+                 * (cty == "int64_t"), but the spec's bindings resolve it to a
+                 * concrete BY-VALUE aggregate (`(Tuple2 cstr int)`).  The field is
+                 * stored as the int64 B4 box pointer, so the read must DEREF-unbox
+                 * it to the aggregate instead of returning the int64.  Gated on the
+                 * e->type-vs-spec disagreement, so it is inert wherever no spec
+                 * resolution changes the field type (the default path). */
+                Type fld_rty = emit_resolve_type(ctx, e->type);
+                bool fld_rty_owned = false;
+                /* constrained-instance-element-dispatch (lowered record ADT
+                 * receiver): the receiver may be a spec param whose ACTIVE arg
+                 * type is a concrete by-value ADT app (`(Option cstr)`) while its
+                 * declared/use type is the bare carrier ADT (`Option`).  e->type
+                 * collapsed the field to the int64 carrier, so the resolve above
+                 * left fld_rty int64.  Recover the field's concrete element by
+                 * substituting the receiver app's args into the ctor field's
+                 * declared full_type, and remember the receiver is by-value so the
+                 * read goes directly off the aggregate (below). */
+                Type recv_spec_ty = {0};
+                bool have_recv_spec = false;
+                bool recv_spec_byval_adt = false;
+                {
+                    const Expr *rv0 = e->as.get_field_.struct_expr;
+                    while (rv0 && rv0->kind == EX_ASCRIBE)
+                        rv0 = rv0->as.ascribe_.inner;
+                    if (rv0 && rv0->kind == EX_VAR &&
+                        emit_var_spec_arg_type(ctx, rv0, &recv_spec_ty) &&
+                        recv_spec_ty.kind == TY_APP &&
+                        type_app_is_concrete_adt(&recv_spec_ty)) {
+                        have_recv_spec = true;
+                        /* by-value (non-heap) receiver reads its field directly off
+                         * the aggregate; a :heap receiver derefs the monomorph
+                         * pointer (heap_adt_recv path below) -- both need the
+                         * recovered concrete element field type. */
+                        recv_spec_byval_adt = !type_is_heap_adt(recv_spec_ty);
+                        const char *frc0 = emit_type_c_name(ctx, fld_rty);
+                        if (ctor && e->as.get_field_.field_idx < ctor->n_fields &&
+                            frc0 && strcmp(frc0, "int64_t") == 0) {
+                            AdtDef *rad = NULL; Type raargs[16]; uint8_t ran = 0;
+                            const CtorField *rcf =
+                                &ctor->fields[e->as.get_field_.field_idx];
+                            if (rcf->full_type &&
+                                rcf->full_type->kind == TY_TYVAR &&
+                                type_extract_adt_app(&recv_spec_ty, &rad, raargs,
+                                                     &ran) && rad) {
+                                Type sub = substitute_adt_app_type_owned(
+                                    rcf->full_type, rad, raargs);
+                                if (sub.kind != TY_TYVAR &&
+                                    sub.kind != TY_UNKNOWN) {
+                                    fld_rty = sub;
+                                    fld_rty_owned = (sub.kind == TY_APP);
+                                } else {
+                                    free_struct_app_type(sub);
+                                }
+                            }
+                        }
+                    }
+                }
+                const char *fld_rcty = emit_type_c_name(ctx, fld_rty);
+                bool field_byval_unbox =
+                    cty && strcmp(cty, "int64_t") == 0 &&
+                    fld_rcty && strcmp(fld_rcty, "int64_t") != 0 &&
+                    (fld_rty.kind == TY_APP || fld_rty.kind == TY_STRUCT) &&
+                    !type_is_heap_struct(fld_rty) && !type_is_heap_adt(fld_rty) &&
+                    ctor && e->as.get_field_.field_idx < ctor->n_fields &&
+                    !adt_field_is_inline_byval(&ctor->fields[e->as.get_field_.field_idx]);
                 bool adt_through_rc =
                     e->as.get_field_.struct_expr->type.kind == TY_RC;
                 /* Parametric-by-value: the receiver may be a concrete flat-product
@@ -5493,8 +5844,71 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * TYPE via the app-aware predicate so a parametric monomorph reads
                  * its field directly off the aggregate instead of falling through
                  * to the (wrong) carrier-pointer deref. */
-                bool adt_recv_byvalue =
+                /* CONV-S1 seam 4 (carrier-held by-value-ADT receiver): the
+                 * receiver's USE type is a by-value ADT (`(Option cstr)` under
+                 * lowering) but it is HELD as the int64 carrier -- e.g. a typeclass
+                 * instance method's dispatch class-var param `x` declared
+                 * `int64_t` (the uniform dict ABI) that the call site spilled +
+                 * addressed.  Reading the field off the by-value aggregate
+                 * (`(x).as...`) is wrong; cast the int64 carrier to the receiver's
+                 * concrete monomorph pointer and deref.  Detect via the receiver
+                 * VAR's BINDING type lowering to int64 (not flagged as a by-value
+                 * carrier param) while its use type is a by-value aggregate.  Inert
+                 * at default: there the same use type is the int64 carrier, so
+                 * emit_type_is_byvalue_adt is false. */
+                bool recv_held_as_carrier = false;
+                {
+                    const Expr *rv = e->as.get_field_.struct_expr;
+                    while (rv && rv->kind == EX_ASCRIBE) rv = rv->as.ascribe_.inner;
+                    if (rv && rv->kind == EX_VAR && rv->as.var.binding)
+                        recv_held_as_carrier =
+                            rv->as.var.binding->emit_carrier_holds_byval;
+                }
+                /* applied-unary-instance-head: emit_carrier_holds_byval is set on
+                 * the param binding while emitting the CARRIER BASE (`x` is the
+                 * int64 carrier there) and persists on the shared binding into the
+                 * BY-VALUE spec emission.  When the active spec passes this param
+                 * as a concrete by-value ADT app (`tur_adt_Option__cstr x`), the
+                 * carrier-pointer deref (`(intptr_t)(x)` on an aggregate -- a hard
+                 * cc error) is wrong; the field reads directly off the aggregate.
+                 * Suppress the stale flag for this emission. */
+                if (recv_spec_byval_adt) recv_held_as_carrier = false;
+                bool recv_carrier_byval = recv_held_as_carrier &&
                     emit_type_is_byvalue_adt(ctx, e->as.get_field_.struct_expr->type);
+                bool adt_recv_byvalue =
+                    (emit_type_is_byvalue_adt(ctx, e->as.get_field_.struct_expr->type)
+                     || recv_spec_byval_adt) &&
+                    !recv_held_as_carrier;
+                /* CONV-S1 seam 4 (:heap ADT receiver, concrete element): a
+                 * `(defstruct Cons :heap [A] (head A) (tail :int))` lowers to a
+                 * :heap record ADT whose monomorph cell stores a by-value
+                 * aggregate element INLINE (`tur_adt_Cons__Option__int`).
+                 * `(.head xs)` must cast the heap pointer to that MONOMORPH and
+                 * read the field at its real (aggregate) type, not the generic
+                 * `tur_adt_Cons` carrier (whose `_0` is int64) with an int64->
+                 * aggregate cast.  Gate the c-name (which REGISTERS the monomorph
+                 * as a side effect) on the cheap is_heap_adt check so a non-heap
+                 * receiver never reaches it and unrelated monomorphization is
+                 * undisturbed. */
+                const char *heap_recv_cn = NULL;
+                bool heap_adt_recv = false;
+                if (type_is_heap_adt(e->as.get_field_.struct_expr->type)) {
+                    /* Prefer the spec-recovered concrete receiver app (`(Cons
+                     * float)` -> `tur_adt_Cons__float *`) so a constrained
+                     * instance spec reads its :heap field off the right monomorph
+                     * rather than the element-erased generic `tur_adt_Cons *`
+                     * (whose `_0` is int64). */
+                    Type heap_recv_rt = (have_recv_spec &&
+                                         type_is_heap_adt(recv_spec_ty))
+                        ? recv_spec_ty
+                        : emit_resolve_type(ctx,
+                              e->as.get_field_.struct_expr->type);
+                    if (type_is_heap_adt(heap_recv_rt)) {
+                        heap_recv_cn = emit_type_c_name(ctx, heap_recv_rt);
+                        heap_adt_recv = heap_recv_cn &&
+                            strchr(heap_recv_cn, '*') != NULL;
+                    }
+                }
                 Buf hb; buf_init(&hb);
                 if (adt_through_rc) {
                     /* CONV-S1 (slice 2): rc<ADT> receiver.  rc/of mallocs
@@ -5505,13 +5919,20 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * the two layouts so the deref reaches the variant field. */
                     if (adt_is_byvalue_product(adt)) {
                         buf_printf(&hb,
-                                   "(%s)((tur_adt_%s *)((RcControlBlock *)(%s))->value)->as.%s._%u",
-                                   cty, adt_mn, sv, mctor, e->as.get_field_.field_idx);
+                                   "(%s)((tur_adt_%s *)((RcControlBlock *)(%s))->value)->%s",
+                                   cty, adt_mn, sv, mp);
                     } else {
                         buf_printf(&hb,
-                                   "(%s)((tur_adt_%s *)(intptr_t)(*(int64_t *)((RcControlBlock *)(%s))->value))->as.%s._%u",
-                                   cty, adt_mn, sv, mctor, e->as.get_field_.field_idx);
+                                   "(%s)((tur_adt_%s *)(intptr_t)(*(int64_t *)((RcControlBlock *)(%s))->value))->%s",
+                                   cty, adt_mn, sv, mp);
                     }
+                } else if (recv_carrier_byval) {
+                    /* carrier-held by-value-ADT receiver: cast the int64 carrier to
+                     * the receiver's concrete monomorph pointer and deref (above). */
+                    const char *recv_cn = emit_type_c_name(ctx,
+                        emit_resolve_type(ctx, e->as.get_field_.struct_expr->type));
+                    buf_printf(&hb, "(%s)((%s *)(intptr_t)(%s))->%s",
+                               cty, recv_cn, sv, mp);
                 } else if (adt_recv_byvalue) {
                     /* CONV-S1: by-value receiver -- read the field directly off the
                      * aggregate, no carrier pointer deref.  Gated by
@@ -5540,23 +5961,84 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     bool inline_byval = ctor &&
                         e->as.get_field_.field_idx < ctor->n_fields &&
                         adt_field_is_inline_byval(&ctor->fields[e->as.get_field_.field_idx]);
-                    if (inline_byval) {
-                        buf_printf(&hb, "(%s)%sas.%s._%u",
-                                   sv, use_arrow ? "->" : ".", mctor,
-                                   e->as.get_field_.field_idx);
+                    /* construct-template accessor unbox (by-value receiver): the
+                     * field's spec-resolved CONCRETE type (fld_rty -- `User`/`Point`
+                     * when the accessor spec `ok_val__spec__tur_adt_User_...` is
+                     * active and resolves the bare-tyvar field) is a by-value
+                     * aggregate the generic `cty` (int64) cast would corrupt.  A
+                     * narrow element is stored INLINE (read the aggregate directly);
+                     * a WIDE element is the int64 box pointer (deref it); a scalar
+                     * element (cstr/float) casts to the element type. */
+                    Type eff_fld_rty = fld_rty;
+                    const char *eff_fld_rcty =
+                        (fld_rcty && strcmp(fld_rcty, "int64_t") != 0
+                         && cty && strcmp(cty, "int64_t") == 0)
+                            ? fld_rcty : NULL;
+                    bool rec_aggregate = eff_fld_rcty &&
+                        (eff_fld_rty.kind == TY_APP ||
+                         eff_fld_rty.kind == TY_STRUCT ||
+                         eff_fld_rty.kind == TY_ADT) &&
+                        !type_is_heap_struct(eff_fld_rty) &&
+                        !type_is_heap_adt(eff_fld_rty);
+                    bool rec_wide = rec_aggregate &&
+                        type_is_wide_byval_adt(eff_fld_rty);
+                    const char *acc = use_arrow ? "->" : ".";
+                    if (rec_wide) {
+                        buf_printf(&hb, "(*(%s *)(intptr_t)((%s)%s%s))",
+                                   eff_fld_rcty, sv, acc, mp);
+                    } else if (inline_byval || rec_aggregate) {
+                        buf_printf(&hb, "(%s)%s%s", sv, acc, mp);
+                    } else if (eff_fld_rcty) {
+                        buf_printf(&hb, "(%s)(%s)%s%s", eff_fld_rcty, sv, acc, mp);
                     } else if (use_arrow) {
-                        buf_printf(&hb, "(%s)(%s)->as.%s._%u",
-                                   cty, sv, mctor, e->as.get_field_.field_idx);
+                        if (gf_lvalue) buf_printf(&hb, "(%s)->%s", sv, mp);
+                        else buf_printf(&hb, "(%s)(%s)->%s", cty, sv, mp);
                     } else {
-                        buf_printf(&hb, "(%s)(%s).as.%s._%u",
-                                   cty, sv, mctor, e->as.get_field_.field_idx);
+                        /* borrow-struct-field: drop the outer rvalue cast so the
+                         * member is a bare lvalue for `&`. */
+                        if (gf_lvalue) buf_printf(&hb, "(%s).%s", sv, mp);
+                        else buf_printf(&hb, "(%s)(%s).%s", cty, sv, mp);
                     }
+                } else if (heap_adt_recv) {
+                    /* :heap ADT receiver with a concrete monomorph layout: cast
+                     * the heap pointer to the MONOMORPH cell type and read the
+                     * field at its real C type.  An aggregate field is stored
+                     * inline (read directly, no cast -- a cast-to-aggregate is
+                     * invalid C); a scalar/pointer field casts to the SPEC-
+                     * RECOVERED element type (fld_rcty -- `double`/`const char *`)
+                     * when the erased carrier `cty` is int64, so a float/cstr
+                     * element is not value-truncated or pointer-mangled through an
+                     * int64 cast. */
+                    bool fld_aggregate =
+                        (fld_rty.kind == TY_APP || fld_rty.kind == TY_STRUCT ||
+                         fld_rty.kind == TY_ADT) &&
+                        !type_is_heap_struct(fld_rty) && !type_is_heap_adt(fld_rty);
+                    const char *heap_fld_cast =
+                        (fld_rcty && strcmp(fld_rcty, "int64_t") != 0 &&
+                         cty && strcmp(cty, "int64_t") == 0)
+                            ? fld_rcty : cty;
+                    if (fld_aggregate)
+                        buf_printf(&hb, "((%s)(intptr_t)(%s))->%s",
+                                   heap_recv_cn, sv, mp);
+                    else
+                        buf_printf(&hb, "(%s)((%s)(intptr_t)(%s))->%s",
+                                   heap_fld_cast, heap_recv_cn, sv, mp);
+                } else if (field_byval_unbox) {
+                    /* deref-unbox the carrier-stored B4 box pointer to the spec's
+                     * concrete by-value aggregate (accessor-unbox, above). */
+                    buf_printf(&hb, "(*(%s *)(intptr_t)(((tur_adt_%s *)(intptr_t)(%s))->%s))",
+                               fld_rcty, adt_mn, sv, mp);
+                } else if (gf_lvalue) {
+                    /* borrow-struct-field: bare member lvalue (no rvalue cast). */
+                    buf_printf(&hb, "((tur_adt_%s *)(intptr_t)(%s))->%s",
+                               adt_mn, sv, mp);
                 } else {
-                    buf_printf(&hb, "(%s)((tur_adt_%s *)(intptr_t)(%s))->as.%s._%u",
-                               cty, adt_mn, sv, mctor, e->as.get_field_.field_idx);
+                    buf_printf(&hb, "(%s)((tur_adt_%s *)(intptr_t)(%s))->%s",
+                               cty, adt_mn, sv, mp);
                 }
                 buf_putc(&hb, '\0');
-                free(sv); free(adt_mn); free(mctor);
+                free(sv); free(adt_mn); free(mctor); free(mp);
+                if (fld_rty_owned) free_struct_app_type(fld_rty);
                 char *r = strdup(hb.data);
                 buf_free(&hb);
                 return r;
@@ -7028,6 +7510,9 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             Binding *fb = pat->bindings[bi];
                             const char *ctype = type_c_name(fb->type);
                             char *bname = name_for_binding(ctx, fb);
+                            /* CONV-S1 seam 4: flat named record binds `.field`; a
+                             * tagged/positional ADT binds `.as.<Ctor>._N`. */
+                            char *mp = adt_field_member_path(pat->ctor->adt, pat->ctor, bi);
                             indent_buf(body, ctx->indent);
                             /* slice 4: an inline by-value aggregate field is the
                              * aggregate value itself in the union slot -- bind it
@@ -7036,8 +7521,8 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             bool inline_byval = adt_byval && bi < pat->ctor->n_fields &&
                                 adt_field_is_inline_byval(&pat->ctor->fields[bi]);
                             if (inline_byval) {
-                                buf_printf(body, "%s %s = __scrut%sas.%s._%u;\n",
-                                           ctype, bname, acc, _mctor, bi);
+                                buf_printf(body, "%s %s = __scrut%s%s;\n",
+                                           ctype, bname, acc, mp);
                             } else if (emit_type_is_byval_recursive_carrier(ctx, fb->type) ||
                                        (emit_type_is_wide_byval_adt(ctx, fb->type) &&
                                         strcmp(ctype, "int64_t") == 0)) {
@@ -7051,19 +7536,20 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                  * below.  The value crosses to a fat closure as
                                  * the carrier (reinterpret <=8 / box pointer >8)
                                  * and is materialized at the boundary. */
-                                buf_printf(body, "%s %s = (%s)__scrut%sas.%s._%u;\n",
-                                           ctype, bname, ctype, acc, _mctor, bi);
+                                buf_printf(body, "%s %s = (%s)__scrut%s%s;\n",
+                                           ctype, bname, ctype, acc, mp);
                             } else if (emit_type_is_byvalue_adt(ctx, fb->type)) {
                                 /* B3: a by-value ADT field stored boxed (int64 heap
                                  * pointer) in a carrier slot -- unbox by deref. */
                                 buf_printf(body,
-                                    "%s %s = *(%s *)(intptr_t)(__scrut%sas.%s._%u);\n",
-                                    ctype, bname, ctype, acc, _mctor, bi);
+                                    "%s %s = *(%s *)(intptr_t)(__scrut%s%s);\n",
+                                    ctype, bname, ctype, acc, mp);
                             } else {
-                                buf_printf(body, "%s %s = (%s)__scrut%sas.%s._%u;\n",
-                                           ctype, bname, ctype, acc, _mctor, bi);
+                                buf_printf(body, "%s %s = (%s)__scrut%s%s;\n",
+                                           ctype, bname, ctype, acc, mp);
                             }
                             free(bname);
+                            free(mp);
                         }
                         free(_mctor);
                     }
@@ -7154,6 +7640,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             const char *ctype = type_c_name(fb->type);
                             /* Use name_for_binding to get the canonical C name */
                             char *bname = name_for_binding(ctx, fb);
+                            char *mp = adt_field_member_path(pat->ctor->adt, pat->ctor, bi);
                             indent_buf(body, ctx->indent);
                             /* CONV-S1/B3: a by-value ADT field is stored boxed
                              * (int64 heap pointer) in the carrier tagged union;
@@ -7166,17 +7653,18 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                  * (>8): heap-box POINTER.  Only the erased int64
                                  * carrier binding takes this path; a concrete wide
                                  * by-value ADT binding keeps the B3 deref. */
-                                buf_printf(body, "%s %s = (%s)__scrut->as.%s._%u;\n",
-                                           ctype, bname, ctype, _mctor, bi);
+                                buf_printf(body, "%s %s = (%s)__scrut->%s;\n",
+                                           ctype, bname, ctype, mp);
                             } else if (emit_type_is_byvalue_adt(ctx, fb->type)) {
                                 buf_printf(body,
-                                    "%s %s = *(%s *)(intptr_t)(__scrut->as.%s._%u);\n",
-                                    ctype, bname, ctype, _mctor, bi);
+                                    "%s %s = *(%s *)(intptr_t)(__scrut->%s);\n",
+                                    ctype, bname, ctype, mp);
                             } else {
-                                buf_printf(body, "%s %s = (%s)__scrut->as.%s._%u;\n",
-                                           ctype, bname, ctype, _mctor, bi);
+                                buf_printf(body, "%s %s = (%s)__scrut->%s;\n",
+                                           ctype, bname, ctype, mp);
                             }
                             free(bname);
+                            free(mp);
                         }
                         free(_mctor);
                     }

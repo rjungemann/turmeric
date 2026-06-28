@@ -1,0 +1,18 @@
+;; conv-defstruct-seq-pair-lowering: under the defstruct-as-defadt flag the
+;; stdlib `Tuple2` struct lowers to a record ADT (`tur_adt_Tuple2`).  The seq
+;; pair helpers (seq-make-pair / seq-pair-first / seq-pair-second) carry an
+;; opaque int64 handle to a private 2-int64 cell -- they must NOT reference the
+;; `Tuple2` C type name (which no longer exists once lowered) or its flat
+;; e1/e2 fields (the ADT layout nests them under as.Tuple2._N).
+;;
+;; Regression for the seam-4 graduation bug: those inline-C helpers spelled
+;; `Tuple2 *pair = (Tuple2 *)...; pair->e1`, so every seq fixture that built a
+;; pair failed with `unknown type name 'Tuple2'`.  They now use a private flat
+;; struct, making them representation-independent.
+(load "stdlib/seq/combine.tur")
+
+(defn main [] : void
+  (let [show (fn [p]
+               (println (seq-pair-first p))
+               (println (seq-pair-second p)))]
+    (seq-for-each show (seq/zip (seq/range 0 3) (seq/range 10 13)))))

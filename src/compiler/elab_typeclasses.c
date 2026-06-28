@@ -134,6 +134,16 @@ static Form *type_to_form(Elab *e, const Type *t, Span span) {
         return form_sym(e->arena, span,
             intern_cstr(e->st, t->as.struct_.def->name));
     }
+    /* CONV-S2: under defstruct-as-defadt a typed-collection element is a lowered
+     * record ADT (`Vec`/`Map`/...), so its bare name and TY_APP head are TY_ADT,
+     * not TY_STRUCT.  Mirror the struct cases so the comparator-synthesis
+     * ascription form (`(:: a (Vec int))`) is built for an ADT element; without
+     * it type_to_form returns NULL, the dispatch synthesis declines, and the
+     * element comparator collapses to the wrong (int) instance. */
+    if (t->kind == TY_ADT && t->as.adt_.def && t->as.adt_.def->name) {
+        return form_sym(e->arena, span,
+            intern_cstr(e->st, t->as.adt_.def->name));
+    }
     if (t->kind == TY_APP) {
         /* Walk the TY_APP chain to collect [head, arg1, arg2, ...]
          * (left-associative -- arg1 is the innermost). */
@@ -144,15 +154,19 @@ static Form *type_to_form(Elab *e, const Type *t, Span span) {
             if (head->as.app.arg) args[n_args++] = head->as.app.arg;
             head = head->as.app.fn;
         }
-        if (!head || head->kind != TY_STRUCT ||
-            !head->as.struct_.def || !head->as.struct_.def->name) {
+        const char *head_name =
+            (head && head->kind == TY_STRUCT && head->as.struct_.def)
+                ? head->as.struct_.def->name
+          : (head && head->kind == TY_ADT && head->as.adt_.def)
+                ? head->as.adt_.def->name
+          : NULL;
+        if (!head_name) {
             return NULL;
         }
         /* Build (StructName arg1-form arg2-form ...) in original order. */
         uint32_t n_items = 1 + n_args;
         Form **items = (Form **)arena_alloc(e->arena, n_items * sizeof(Form *));
-        items[0] = form_sym(e->arena, span,
-            intern_cstr(e->st, head->as.struct_.def->name));
+        items[0] = form_sym(e->arena, span, intern_cstr(e->st, head_name));
         /* args were collected innermost-first; reverse to original order. */
         for (uint8_t i = 0; i < n_args; i++) {
             Form *af = type_to_form(e, args[n_args - 1 - i], span);
@@ -1701,6 +1715,30 @@ static bool build_inst_type_suffix(const Type *type_args,
                     type_component = "T";
                 }
                 break;
+            case TY_ADT:
+                /* CONV-S1 (defstruct-as-defadt): a record-ADT head -- a lowered
+                 * `defstruct` or a hand-written single-variant `(defdata T ...)` --
+                 * mangles by its constructor name exactly as TY_STRUCT does.
+                 * Without this the switch fell through to `default: "T"`, so every
+                 * non-parametric ADT-headed instance of a class collapsed to the
+                 * same `_T` suffix and the idempotent re-instance guard silently
+                 * swallowed all but the first (e.g. `Backend [CanvasBackend]`,
+                 * `[SurfaceBackend]`, `[PngBackend]` -> one surviving instance).
+                 * Flag-independent: also fixes hand-written record-ADT instances. */
+                if (type_arg_syms && type_arg_syms[j]) {
+                    uint32_t sym_len = type_arg_syms[j]->len;
+                    if (sym_len >= sizeof(ctor_name_buf))
+                        sym_len = (uint32_t)(sizeof(ctor_name_buf) - 1);
+                    memcpy(ctor_name_buf, type_arg_syms[j]->name, sym_len);
+                    ctor_name_buf[sym_len] = '\0';
+                    tur_mangle_ident(ctor_name_buf, ctor_mangle_buf, sizeof(ctor_mangle_buf));
+                    type_component = ctor_mangle_buf;
+                } else if (type_args[j].as.adt_.def && type_args[j].as.adt_.def->name) {
+                    type_component = type_args[j].as.adt_.def->name;
+                } else {
+                    type_component = "T";
+                }
+                break;
             case TY_APP: {
                 /* Phase HKT §3: partial type application -- encode as "ctor_arg" */
                 const char *ctor_part = "T";
@@ -2098,7 +2136,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         return NULL;
     }
     const Symbol *tc_name = tc_form->as.sym;
-    
+
     /* Look up the typeclass */
     TypeClass *tc = typeclass_env_lookup_typeclass(&e->typeclass_env, tc_name);
     if (!tc) {
@@ -2293,6 +2331,23 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                 Type *fn_type = (Type *)arena_alloc(e->arena, sizeof(Type));
                                 memset(fn_type, 0, sizeof(Type));
                                 Binding *ctor_b2 = scope_lookup(e->scope, ctor_sym2);
+                                /* CONV-S1 (byvalue-field-ascribed-carrier-receiver):
+                                 * scope_lookup is value-preferring, so for a lowered
+                                 * record ADT (and any `(defdata T [A] (T [...]))`)
+                                 * the type name `Duo` resolves to the constructor
+                                 * FUNCTION (TY_FN), shadowing the type.  The else
+                                 * branch then built a def-less TY_STRUCT base, so
+                                 * `(.snd x)` on a `(Duo cstr int)` receiver in the
+                                 * instance body unwrapped the app to a def-less
+                                 * struct and the field never resolved.  Recover the
+                                 * ADT/struct type from the type namespace, mirroring
+                                 * the single-arg keyword head path above (struct
+                                 * from scope_lookup still wins first, preserving the
+                                 * MF4 struct/GADT coexistence preference). */
+                                Type *head_ty2 = NULL;
+                                if (!(ctor_b2 && ctor_b2->type.kind == TY_STRUCT &&
+                                      ctor_b2->type.as.struct_.def))
+                                    head_ty2 = elab_lookup_type_by_name(e, ctor_sym2);
                                 if (ctor_b2 && (ctor_b2->type.kind == TY_ADT ||
                                                 (ctor_b2->type.kind == TY_STRUCT &&
                                                  ctor_b2->type.as.struct_.def))) {
@@ -2300,6 +2355,18 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                     uint32_t ca = (ctor_b2->type.kind == TY_ADT)
                                         ? ctor_b2->type.as.adt_.def->n_type_params
                                         : ctor_b2->type.as.struct_.def->n_type_params;
+                                    fn_type->hkt_kind = (ca > 0)
+                                        ? kind_for_arity(ca) : KIND_ARROW2;
+                                } else if (head_ty2 && head_ty2->kind == TY_ADT &&
+                                           head_ty2->as.adt_.def) {
+                                    *fn_type = *head_ty2;
+                                    uint32_t ca = head_ty2->as.adt_.def->n_type_params;
+                                    fn_type->hkt_kind = (ca > 0)
+                                        ? kind_for_arity(ca) : KIND_ARROW2;
+                                } else if (head_ty2 && head_ty2->kind == TY_STRUCT &&
+                                           head_ty2->as.struct_.def) {
+                                    *fn_type = *head_ty2;
+                                    uint32_t ca = head_ty2->as.struct_.def->n_type_params;
                                     fn_type->hkt_kind = (ca > 0)
                                         ? kind_for_arity(ca) : KIND_ARROW2;
                                 } else {
@@ -2677,6 +2744,31 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                         }
                                     }
                                 }
+                                /* CONV-S2: under defstruct-as-defadt the instance
+                                 * head is a lowered record ADT (`[Cons]`/`[Vec]`),
+                                 * so the constraint var (`A` in `[(Tag A)]`) is one
+                                 * of the ADT's type params, not a struct's.  Mirror
+                                 * the struct lookup so its param_idx is recorded;
+                                 * without it p_idx stays -1 and the emit-side
+                                 * constraint-var->element mapping (a helper call or
+                                 * lifted closure inside the instance body) never
+                                 * grounds A, baking the carrier representative. */
+                                if (!found) {
+                                    for (uint8_t j = 0; j < n_type_args && p_idx < 0; j++) {
+                                        if (type_args[j].kind == TY_ADT &&
+                                            type_args[j].as.adt_.def) {
+                                            AdtDef *adef = type_args[j].as.adt_.def;
+                                            for (uint8_t k = 0; k < adef->n_type_params; k++) {
+                                                if (adef->type_params[k] &&
+                                                    strcmp(adef->type_params[k],
+                                                           type_param_name->name) == 0) {
+                                                    p_idx = (int8_t)k;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -2755,6 +2847,24 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                             StructDef *sdef = type_args[j].as.struct_.def;
                                             for (uint8_t k = 0; k < sdef->n_type_params; k++) {
                                                 if (strcmp(sdef->type_params[k],
+                                                           type_param_name->name) == 0) {
+                                                    p_idx = (int8_t)k;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                /* CONV-S2: lowered record ADT instance head -- see
+                                 * the paren-format block above. */
+                                if (!found) {
+                                    for (uint8_t j = 0; j < n_type_args && p_idx < 0; j++) {
+                                        if (type_args[j].kind == TY_ADT &&
+                                            type_args[j].as.adt_.def) {
+                                            AdtDef *adef = type_args[j].as.adt_.def;
+                                            for (uint8_t k = 0; k < adef->n_type_params; k++) {
+                                                if (adef->type_params[k] &&
+                                                    strcmp(adef->type_params[k],
                                                            type_param_name->name) == 0) {
                                                     p_idx = (int8_t)k;
                                                     break;
@@ -4282,6 +4392,15 @@ static Expr *make_dict_expr(Elab *e, TypeClassInstance *inst, Span span) {
                          inst->type_args[i].as.struct_.def->name)
                     component = inst->type_args[i].as.struct_.def->name;
                 break;
+            case TY_ADT:
+                /* CONV-S1 (defstruct-as-defadt): match emit_dict_name's TY_ADT arm
+                 * so the DICT expr's dict_name agrees with the emitted struct. */
+                if (inst->type_arg_syms && inst->type_arg_syms[i])
+                    component = inst->type_arg_syms[i]->name;
+                else if (inst->type_args[i].as.adt_.def &&
+                         inst->type_args[i].as.adt_.def->name)
+                    component = inst->type_args[i].as.adt_.def->name;
+                break;
             default: break;
         }
         char comp_buf[128];
@@ -4580,12 +4699,61 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
             }
         }
         if (!is_hkt && tc->n_type_params == 1 && tc->type_params[0]) {
+            /* nested-construct/constrained-instance return dispatch: besides
+             * binding the class var (`a -> (Option cstr)`), also bind the matched
+             * instance's OWN head tyvars by unifying its head (`(Option A)`)
+             * against the pinned dispatch value (`(Option cstr)`) -> `A -> cstr`.
+             * A constrained instance body (`(definstance Dec [Option] [(Dec A)]
+             * ...)`) writes its nested construct/return-dispatch seams in terms
+             * of `A`; without grounding it the spec collapses every element to the
+             * int64-carrier representative (`dec_int`, `Option__int`) and a
+             * cstr/float/struct consumer misreads the carrier int.  Mirrors the
+             * receiver-dispatch path's head-tyvar collection. */
+            /* The instance's constraint vars (`A` of `[(Dec A)]`) are NOT in the
+             * bare head `Option`; recover them from the pinned dispatch value's
+             * app args at each constraint's param_idx -- `a = (Option cstr)` ->
+             * A = arg[0] = cstr. */
+            Type barg_spine[8]; uint8_t n_barg = 0;
+            {
+                Type tcur = bound; Type stack[8]; uint8_t ns = 0;
+                while (tcur.kind == TY_APP && tcur.as.app.fn && tcur.as.app.arg) {
+                    if (ns < 8) stack[ns++] = *tcur.as.app.arg;
+                    tcur = *tcur.as.app.fn;
+                }
+                for (int s = (int)ns - 1; s >= 0 && n_barg < 8; s--)
+                    barg_spine[n_barg++] = stack[s];
+            }
+            const Symbol *hb_names[ABI_TYPE_BINDINGS_MAX];
+            Type hb_types[ABI_TYPE_BINDINGS_MAX];
+            uint8_t hb_n = 0;
+            uint8_t neg_pos = 0;  /* positional index for standalone (param_idx<0) constraints */
+            for (uint8_t ci = 0;
+                 ci < inst->n_type_param_constraints &&
+                 hb_n < ABI_TYPE_BINDINGS_MAX - 1; ci++) {
+                const TypeConstraint *cstr = &inst->type_param_constraints[ci];
+                if (!cstr->tyvar || !cstr->tyvar->name) continue;
+                /* A constraint tied to a head type-param position uses param_idx;
+                 * a STANDALONE constraint (`[Option] [(Dec A)]`, param_idx == -1)
+                 * binds positionally against the dispatch value's app args -- the
+                 * `[(Dec A)]` element corresponds to `(Option cstr)`'s arg[0]. */
+                int pidx = cstr->param_idx >= 0 ? cstr->param_idx : (int)neg_pos;
+                if (cstr->param_idx < 0) neg_pos++;
+                if (pidx < 0 || pidx >= (int)n_barg) continue;
+                hb_names[hb_n] = cstr->tyvar;
+                hb_types[hb_n] = barg_spine[pidx];
+                hb_n++;
+            }
+            uint8_t total = (uint8_t)(1 + hb_n);
             AbiTypeBinding *bindings = (AbiTypeBinding *)arena_alloc(
-                e->arena, sizeof(AbiTypeBinding));
+                e->arena, total * sizeof(AbiTypeBinding));
             bindings[0].name = tc->type_params[0]->name;
             bindings[0].type = bound;
+            for (uint8_t k = 0; k < hb_n; k++) {
+                bindings[1 + k].name = hb_names[k]->name;
+                bindings[1 + k].type = hb_types[k];
+            }
             out->as.call_.abi_bindings = bindings;
-            out->as.call_.n_abi_bindings = 1;
+            out->as.call_.n_abi_bindings = total;
         }
         /* M7 layer-4 (flag-gated): a return-directed HKT method -- Applicative
          * `pure`/`wrap`, `[x : a] : (f a)` -- has its class var `f` ONLY in the
@@ -5119,9 +5287,29 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                     for (uint32_t i = 0; i < ctor->n_fields; i++) {
                         if (!ctor->fields[i].name) continue;
                         if (strcmp(ctor->fields[i].name, method_name) == 0) {
-                            Type ftype = ctor->fields[i].full_type
-                                ? *ctor->fields[i].full_type
-                                : type_from_kind(ctor->fields[i].kind);
+                            Type ftype;
+                            if (ctor->fields[i].full_type) {
+                                ftype = *ctor->fields[i].full_type;
+                            } else if (ctor->fields[i].kind == TY_REF ||
+                                       ctor->fields[i].kind == TY_LREF ||
+                                       ctor->fields[i].kind == TY_RC ||
+                                       ctor->fields[i].kind == TY_WEAK) {
+                                /* linear-lref-struct-field: a pointer-kind field
+                                 * (lref/ref/rc/weak) with no full_type still
+                                 * carries its pointee in inner_kind.  Without it
+                                 * `(.ptr b)` types as a bare lref<?> and `deref`
+                                 * yields TY_UNKNOWN.  Mirror the struct path's
+                                 * elab_struct_field_use_type, which threads the
+                                 * inner kind onto the reconstructed type. */
+                                ftype = type_from_kind(ctor->fields[i].kind);
+                                if (ctor->fields[i].kind == TY_REF ||
+                                    ctor->fields[i].kind == TY_LREF)
+                                    ftype.as.ref.inner = ctor->fields[i].inner_kind;
+                                else
+                                    ftype.as.rc.inner = ctor->fields[i].inner_kind;
+                            } else {
+                                ftype = type_from_kind(ctor->fields[i].kind);
+                            }
                             /* Parametric record ADT: substitute the receiver's
                              * concrete type args for the field's TY_TYVAR names so
                              * `(.val (Box 42))` reads as int, not the bare tyvar A
@@ -5139,6 +5327,23 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                                     ftype = adt_field_instantiate_type(e, adt,
                                         ctor->fields[i].full_type, type_args);
                             }
+                            /* Bare/unparameterized receiver (`r : Result`, a
+                             * TY_ADT with no type-arg application) leaves a tyvar
+                             * field type unbound; the value rides the int64
+                             * carrier exactly as at default, so collapse the
+                             * residual tyvar to the field's carrier kind (TY_INT).
+                             * Without this `(.ok-val r)` types as a bare tyvar and
+                             * fails overload resolution in an untyped context like
+                             * `(println (.ok-val r))`.  Mirrors the struct path's
+                             * elab_struct_field_use_type, which already collapses
+                             * an unbound field tyvar.  Gated to the bare receiver:
+                             * an APPLIED receiver `(Tuple2 A B)` inside a generic
+                             * body keeps its field tyvar so the ABI spec can later
+                             * resolve it to a concrete by-value aggregate (the
+                             * accessor-unbox path). */
+                            if (ftype.kind == TY_TYVAR &&
+                                field_owner_type->kind != TY_APP)
+                                ftype = type_from_kind(ctor->fields[i].kind);
                             Expr *out = expr_new(e->arena, EX_GET_FIELD, ftype,
                                                  call->span);
                             out->as.get_field_.struct_expr = obj;
@@ -5262,6 +5467,21 @@ skip_struct_field_lookup:;
                         Type field_type = ctor->fields[i].full_type
                             ? *ctor->fields[i].full_type
                             : type_from_kind(ctor->fields[i].kind);
+                        /* lowered-adt-ctor-skips-fn-field-type-param-inference:
+                         * substitute the receiver's concrete type args into the
+                         * fn-field's signature so `(.get l p)` on `l : (Lens Person
+                         * cstr)` reads `get` as `(fn [Person] cstr)` -- otherwise
+                         * the result stays the bare tyvar `A` and the call types as
+                         * a tyvar (TUR-E0006 in an untyped context).  Mirrors the
+                         * plain dot-read path's app-arg substitution above. */
+                        if (ctor->fields[i].full_type && adt->n_type_params > 0 &&
+                            base.kind == TY_APP) {
+                            Type *type_args = (Type *)arena_alloc(
+                                e->arena, adt->n_type_params * sizeof(Type));
+                            if (elab_adt_type_extract_args(&base, adt, type_args))
+                                field_type = adt_field_instantiate_type(
+                                    e, adt, ctor->fields[i].full_type, type_args);
+                        }
                         Expr *get_field = expr_new(e->arena, EX_GET_FIELD,
                                                    field_type, call->span);
                         get_field->as.get_field_.struct_expr = obj;

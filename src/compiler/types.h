@@ -294,6 +294,21 @@ typedef struct AdtDef {
      * Mirrors StructDef.origin_file_id so the orphan-instance check can credit
      * an ADT type-argument to the module that defines it. 0 = unknown. */
     uint16_t    origin_file_id;
+    /* CONV-S1 (defstruct-as-defadt): true iff this AdtDef was synthesized by
+     * lowering a `defstruct` (not written as a `defdata`/`defgadt`).  The
+     * lowering should be invisible at the surface, so consumers that would
+     * otherwise observe the ADT-ness -- runtime `type-of` (reports "struct"),
+     * and the defgadt same-name duplicate check (treats it like a struct for
+     * MF4 GADT-shadows-struct coexistence) -- key on this flag. */
+    bool        from_struct_lowering;
+    /* CONV-S1 (defstruct-as-defadt): once a struct lowers to an ADT, structs and
+     * ADTs share one namespace, so a later same-name `defgadt`/`defdata` may
+     * SUPERSEDE the struct-origin ADT (the GADT wins).  The superseded def is
+     * left registered (its already-elaborated ctor/accessor bindings stay valid
+     * for any code that referenced them before the redefinition) but is skipped
+     * at C emission so its `tur_adt_<Name>` typedef does not collide with the
+     * winner's.  Only ever set on a `from_struct_lowering` def. */
+    bool        superseded;
 } AdtDef;
 
 /* CONV-S2 (struct/ADT convergence): a single-variant, non-GADT ADT is
@@ -306,6 +321,32 @@ typedef struct AdtDef {
  * constructors, and the match sites stay in lockstep. */
 static inline bool adt_is_flat_product(const AdtDef *def) {
     return def && def->n_ctors == 1 && !def->is_gadt;
+}
+
+/* CONV-S1 seam 4: a NON-PARAMETRIC, single-variant, record-style ADT (the
+ * lowered-`defstruct` shape, and a hand-written `(defdata P (P [f : T ...]))`)
+ * is emitted with a FLAT, C-ABI-compatible layout -- `typedef struct
+ * tur_adt_<Name> { <ty> <field>; ... } tur_adt_<Name>;` with the record's real
+ * field names -- plus a `typedef tur_adt_<Name> <Name>;` surface alias, instead
+ * of the tagged `union { struct { T _0; ... } <Ctor>; } as;` wrapper.  This
+ * makes inline-C that reads the value by its surface type/field names
+ * (`opts.name`, `sizeof(<Name>)`, `(<Name> *)p`) compile unchanged once the
+ * struct lowers to an ADT -- the central inline-C-ABI graduation blocker.
+ *
+ * Restricted to NON-parametric records: a parametric record has no single
+ * monomorphic C type for inline-C to name, so its monomorphs (types.c) keep the
+ * positional `as.<Ctor>._N` layout.  The memory layout is byte-identical to the
+ * old nested form for a single variant, so the two are interchangeable in
+ * memory; only the C member-access spelling differs, and every generated access
+ * site switches together via adt_field_member_path (emit_core.c). */
+static inline bool adt_uses_named_layout(const AdtDef *def) {
+    if (!def || def->n_ctors != 1 || def->is_gadt || def->n_type_params != 0)
+        return false;
+    const CtorDef *c = def->ctors[0];
+    if (!c || !c->is_record || c->n_fields == 0) return false;
+    for (uint32_t i = 0; i < c->n_fields; i++)
+        if (!c->fields[i].name) return false;
+    return true;
 }
 
 /* CONV-S1: a single-variant, non-GADT, NON-PARAMETRIC flat product can flow
@@ -813,6 +854,18 @@ typedef struct Type {
         } generator_;
     } as;
 } Type;
+
+/* CONV-S1 (defstruct-as-defadt): the runtime `any`-box tag for a type.  A
+ * struct-origin lowered ADT boxes / casts / is?-tests as TY_STRUCT, so the
+ * runtime reflection surface (type-of/cast/is?) stays transparent to the
+ * lowering -- a value that was a `defstruct` still reports "struct".  The box
+ * site and the cast/is? target MUST agree, so both route through this. */
+static inline TypeKind any_box_tag_for_type(const Type *t) {
+    if (t && t->kind == TY_ADT && t->as.adt_.def &&
+        t->as.adt_.def->from_struct_lowering)
+        return TY_STRUCT;
+    return t ? t->kind : TY_UNKNOWN;
+}
 
 /* DV0: Dynamic var type constructor (-Xdynamic-vars).
  * Wraps the declared value type.  Only stored in DynVarEntry during elaboration;
@@ -1508,6 +1561,22 @@ bool         type_extract_struct_app(const Type *t, struct StructDef **out_def,
 Type         substitute_struct_app_type(const Type *t,
                                         const struct StructDef *def,
                                         const Type *args);
+/* ADT-app analogues of the struct-app helpers above: extract an ADT-headed
+ * TY_APP chain into (AdtDef*, args[], n), and substitute those args for the
+ * TY_TYVAR names in a field's declared full_type.  substitute_adt_app_type
+ * allocates a fresh malloc'd spine for a TY_APP result (same ownership as the
+ * struct path -- free with free_struct_app_type). */
+bool         type_extract_adt_app(const Type *t, struct AdtDef **out_def,
+                                  Type *out_args, uint8_t *out_n);
+Type         substitute_adt_app_type(const Type *t,
+                                     const struct AdtDef *def,
+                                     const Type *args);
+/* Owned variant -- deep-clones the substituted arg so the result aliases
+ * nothing in args[] and is safe to free with free_struct_app_type.  Use this
+ * at any call site that releases the result. */
+Type         substitute_adt_app_type_owned(const Type *t,
+                                           const struct AdtDef *def,
+                                           const Type *args);
 /* Release the malloc'd TY_APP spine nodes that substitute_struct_app_type /
  * clone_struct_app_type allocate for a compound (TY_APP) result.  A no-op on a
  * leaf Type, so it is safe to call unconditionally on any substitute result. */
@@ -1559,6 +1628,8 @@ bool         type_has_concrete_codegen_layout(const Type *t);
 bool         type_app_is_concrete_adt(const Type *t);
 /* The AdtDef at the head of an ADT application, or NULL if not an ADT app. */
 AdtDef      *type_adt_app_def(const Type *t);
+/* Resolve an ADT ctor field's type against a concrete ADT-app receiver type. */
+Type         adt_field_type_for_app(const Type *recv, const CtorField *field);
 /* end-to-end-monomorphization: the by-value struct C name (`Vec__int`) for a
  * struct/struct-app, WITHOUT the trailing " *" the heap pointer lowering adds. */
 const char  *type_struct_value_c_name(Type t);

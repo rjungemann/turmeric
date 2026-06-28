@@ -1,0 +1,37 @@
+;; conv-defstruct-return-bridge-inline-c: under the defstruct-as-defadt flag,
+;; Result lowers to a by-value record ADT.  A pure-Turmeric defn whose declared
+;; return is `(Result cstr cstr)` is then emitted with the by-value C return type
+;; `tur_adt_Result__cstr__cstr`, but an inline-C helper with the SAME declared
+;; type is still emitted with the int64 carrier C return (an inline-C TY_APP
+;; result lowers to int64_t).  A pure-Turmeric wrapper that tail-calls such a
+;; helper therefore returns an int64 into a by-value slot.
+;;
+;; Regression for seam-4 return-bridge: under lowering `type_uses_carrier_abi`
+;; reports the by-value `(Result cstr cstr)` as non-carrier, so the carrier->by-
+;; value return bridge's `type_uses_carrier_abi(body type)` gate missed it -- the
+;; tail still EMITS the int64 carrier.  fn_body_tail_returns_carrier_value now
+;; recognises a tail call to an inline-C fn with a by-value ADT-app result, and
+;; fn_body_tail_is_carrier_producer recognises the same inline-C shape, so the
+;; bridge unboxes the carrier into the by-value return.
+
+(defn captures-get [caps : int key : cstr] : (Result cstr cstr)
+  ```c
+  return tur_box_ok((int64_t)(intptr_t)"hello");
+  ```)
+
+(defn captures-fail [caps : int key : cstr] : (Result cstr cstr)
+  ```c
+  return tur_box_err((int64_t)(intptr_t)"missing");
+  ```)
+
+;; Pure-Turmeric wrappers: by-value return, inline-C carrier tail call.
+(defn capture [caps : int name : cstr] : (Result cstr cstr)
+  (captures-get caps name))
+
+(defn capture-fail [caps : int name : cstr] : (Result cstr cstr)
+  (captures-fail caps name))
+
+(defn main [] : int
+  (println (ok-val  (capture       0 "x")))   ;; hello
+  (println (err-val (capture-fail  0 "y")))   ;; missing
+  0)

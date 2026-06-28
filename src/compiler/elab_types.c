@@ -55,9 +55,21 @@ bool check_row_type_arg_kind(Type ctor_type, uint8_t arg_index, Type arg_type,
  * or TY_STRUCT), or NULL when neither registry has the name. */
 Type *elab_lookup_type_by_name(Elab *e, const Symbol *name) {
     if (!name) return NULL;
+    /* CONV-S1 (defstruct-as-defadt): a `defstruct` and a `defgadt`/`defdata`
+     * may share a name -- the struct lowers to a struct-origin record ADT and
+     * the hand-written ADT/GADT supersedes it (the GADT-wins rule).  Both can
+     * live in e->adt_defs, so prefer a NON-superseded, non-struct-origin match
+     * and only fall back to a struct-origin def when no winner of that name
+     * exists.  A superseded def is never returned (its winner shadows it). */
+    AdtDef *struct_origin_fallback = NULL;
     for (uint32_t i = 0; i < e->n_adt_defs; i++) {
         AdtDef *d = e->adt_defs[i];
         if (d && d->name && strcmp(d->name, name->name) == 0) {
+            if (d->superseded) continue;
+            if (d->from_struct_lowering) {
+                if (!struct_origin_fallback) struct_origin_fallback = d;
+                continue;
+            }
             Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
             *t = type_adt(d);
             /* Phase G1/HKT: parameterized GADTs need a non-* kind so kind
@@ -66,6 +78,12 @@ Type *elab_lookup_type_by_name(Elab *e, const Symbol *name) {
             t->hkt_kind = kind_for_arity(d->n_type_params);
             return t;
         }
+    }
+    if (struct_origin_fallback) {
+        Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+        *t = type_adt(struct_origin_fallback);
+        t->hkt_kind = kind_for_arity(struct_origin_fallback->n_type_params);
+        return t;
     }
     for (uint32_t i = 0; i < e->n_struct_defs; i++) {
         StructDef *d = e->struct_defs[i];
@@ -2387,6 +2405,27 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
     Expr *inner = elab_form(e, expr_form);
     e->expected_type = saved_expected;
     if (!inner) return NULL;
+
+    /* CONV-S1 (defstruct-as-defadt, seam 4): ascribing a concrete ADT app onto
+     * an ADT constructor call whose own type is left bare/under-applied.  A
+     * parametric struct whose type parameter is not pinned by its field types
+     * (e.g. `(defstruct ArrW [a] (raw :int))` -- `a` never appears in a field)
+     * gives `(make-struct ArrW 0)` the bare TY_ADT result type; only the
+     * ascription `(:: ... (ArrW int))` knows the monomorph.  Without refining
+     * the ctor call's type, codegen emits the int64-carrier base `ctor_ArrW`
+     * but the ascribed binding is declared `tur_adt_ArrW__int`, so the
+     * initializer is a hard cc type error.  When the ascription names a concrete
+     * app of the SAME ADT the ctor builds, push that app type onto the ctor call
+     * so the per-monomorph ctor (`ctor_ArrW__int`) is selected. */
+    if (ascribed->kind == TY_APP && inner->kind == EX_CALL &&
+        inner->as.call_.ctor &&
+        (inner->type.kind == TY_ADT || inner->type.kind == TY_APP)) {
+        AdtDef *asc_def = type_adt_app_def(ascribed);
+        AdtDef *inner_def = (inner->type.kind == TY_ADT)
+            ? inner->type.as.adt_.def : type_adt_app_def(&inner->type);
+        if (asc_def && asc_def == inner_def)
+            inner->type = *ascribed;
+    }
 
     /* TS3.3: if both source and target are scalar same-size kinds and they
      * differ, insert an EX_REINTERPRET. */

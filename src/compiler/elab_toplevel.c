@@ -103,7 +103,10 @@ Expr *elab_any_cast(Elab *e, const Form *call) {
                       "unknown type '%s' in 'cast'", type_form->as.sym->name);
             return NULL;
         }
-        target_kind = named->kind;
+        /* CONV-S1: a struct-origin lowered ADT casts as TY_STRUCT to match the
+         * box tag, keeping the cast transparent to the defstruct-as-defadt
+         * lowering. */
+        target_kind = any_box_tag_for_type(named);
         result_type = *named;
         if (named->kind == TY_STRUCT) target_struct = named->as.struct_.def;
     } else {
@@ -147,7 +150,9 @@ Expr *elab_is_q(Elab *e, const Form *call) {
                       "unknown type '%s' in 'is?'", type_form->as.sym->name);
             return NULL;
         }
-        test_kind = named->kind;
+        /* CONV-S1: struct-origin lowered ADT tests as TY_STRUCT, matching the
+         * box tag set by elab_coerce_to_any. */
+        test_kind = any_box_tag_for_type(named);
     }
     Type bool_t = type_simple(TY_BOOL, CK_COPY);
     Expr *out = expr_new(e->arena, EX_ANY_IS, bool_t, call->span);

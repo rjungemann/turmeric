@@ -433,6 +433,42 @@ Type adt_field_instantiate_type(Elab *e, const AdtDef *def, const Type *t,
             Type arg = adt_field_instantiate_type(e, def, t->as.app.arg, type_args);
             return type_app(e->arena, fn, arg, (Span){0});
         }
+        case TY_FN: {
+            /* lowered-adt-ctor-skips-fn-field-type-param-inference: a record-ADT
+             * type parameter may appear only inside a fn-typed field
+             * (`(get (fn [S] A))`).  Substitute it through the fn's arg/result
+             * slots so `(.get l p)` over `l : (Lens Person cstr)` reads the field
+             * as `(fn [Person] cstr)` instead of leaving `S`/`A` as bare tyvars
+             * (which lower to the int64 carrier and fail untyped overload
+             * resolution).  Mirrors struct_field_instantiate_type's TY_FN arm. */
+            Type out = *t;
+            uint8_t arity = t->as.fn.arity;
+            struct Type **new_args = arity
+                ? (struct Type **)arena_alloc(e->arena, arity * sizeof(struct Type *))
+                : NULL;
+            for (uint8_t i = 0; i < arity; i++) {
+                Type slot = (t->as.fn.arg_full_types && t->as.fn.arg_full_types[i])
+                    ? *t->as.fn.arg_full_types[i]
+                    : type_from_kind(t->as.fn.arg_kinds[i]);
+                Type inst = adt_field_instantiate_type(e, def, &slot, type_args);
+                out.as.fn.arg_kinds[i] = inst.kind;
+                struct Type *boxed = (struct Type *)arena_alloc(e->arena, sizeof(Type));
+                *boxed = inst;
+                new_args[i] = boxed;
+            }
+            out.as.fn.arg_full_types = new_args;
+            {
+                Type rslot = t->as.fn.result_full_type
+                    ? *t->as.fn.result_full_type
+                    : type_from_kind(t->as.fn.result_kind);
+                Type rinst = adt_field_instantiate_type(e, def, &rslot, type_args);
+                out.as.fn.result_kind = rinst.kind;
+                struct Type *rboxed = (struct Type *)arena_alloc(e->arena, sizeof(Type));
+                *rboxed = rinst;
+                out.as.fn.result_full_type = rboxed;
+            }
+            return out;
+        }
         default:
             return *t;
     }
@@ -571,6 +607,75 @@ static bool struct_field_collect_type_args(const StructDef *def, const Type *exp
             return type_eq(*expected, actual);
         default:
             return type_eq(*expected, actual);
+    }
+}
+
+/* lowered-adt-ctor-skips-fn-field-type-param-inference: the record-ADT analogue
+ * of struct_field_collect_type_args.  Grounds a record-ADT ctor's type parameters
+ * (named in `tps`) by unifying each declared field full_type against the supplied
+ * value's actual type, descending into a FN-typed field so a parameter that
+ * appears only inside a fn field (`(get (fn [S] A))`) still infers.  Inference
+ * only: a concrete (non-tyvar, non-app, non-fn) field never fails here -- the
+ * ctor call's own type check reports a genuine mismatch.  Returns false only on a
+ * structural shape disagreement that should abort inference for the field. */
+static bool adt_field_collect_type_args(const char **tps, uint8_t n_tps,
+                                        const Type *expected, Type actual,
+                                        Type *type_args, bool *have_type_args) {
+    if (!expected || !tps) return true;
+    switch (expected->kind) {
+        case TY_TYVAR: {
+            if (!expected->as.tyvar_.name) return true;
+            uint8_t idx = 0; bool found = false;
+            for (uint8_t i = 0; i < n_tps; i++)
+                if (tps[i] && strcmp(tps[i], expected->as.tyvar_.name) == 0) {
+                    idx = i; found = true; break;
+                }
+            if (!found) return true;
+            if (!have_type_args[idx]) {
+                type_args[idx] = actual;
+                have_type_args[idx] = true;
+                return true;
+            }
+            return type_eq(type_args[idx], actual);
+        }
+        case TY_APP:
+            if (actual.kind != TY_APP || !expected->as.app.fn ||
+                !expected->as.app.arg || !actual.as.app.fn || !actual.as.app.arg)
+                return false;
+            return adt_field_collect_type_args(tps, n_tps, expected->as.app.fn,
+                                               *actual.as.app.fn, type_args,
+                                               have_type_args) &&
+                   adt_field_collect_type_args(tps, n_tps, expected->as.app.arg,
+                                               *actual.as.app.arg, type_args,
+                                               have_type_args);
+        case TY_FN: {
+            if (actual.kind != TY_FN) return false;
+            if (expected->as.fn.arity != actual.as.fn.arity) return false;
+            for (uint8_t i = 0; i < expected->as.fn.arity; i++) {
+                Type exp_arg = (expected->as.fn.arg_full_types &&
+                                expected->as.fn.arg_full_types[i])
+                    ? *expected->as.fn.arg_full_types[i]
+                    : type_from_kind(expected->as.fn.arg_kinds[i]);
+                Type act_arg = (actual.as.fn.arg_full_types &&
+                                actual.as.fn.arg_full_types[i])
+                    ? *actual.as.fn.arg_full_types[i]
+                    : type_from_kind(actual.as.fn.arg_kinds[i]);
+                if (!adt_field_collect_type_args(tps, n_tps, &exp_arg, act_arg,
+                                                 type_args, have_type_args))
+                    return false;
+            }
+            Type exp_res = expected->as.fn.result_full_type
+                ? *expected->as.fn.result_full_type
+                : type_from_kind(expected->as.fn.result_kind);
+            Type act_res = actual.as.fn.result_full_type
+                ? *actual.as.fn.result_full_type
+                : type_from_kind(actual.as.fn.result_kind);
+            return adt_field_collect_type_args(tps, n_tps, &exp_res, act_res,
+                                               type_args, have_type_args);
+        }
+        default:
+            /* Concrete field (int/cstr/...): nothing to bind, never fail. */
+            return true;
     }
 }
 
@@ -1000,7 +1105,13 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
             dd_items[ddn++] = type_param_vec_form;  /* original [A B ...] vec, kinds intact */
         dd_items[ddn++] = ctor_form;
         Form *dd_form = form_list(e->arena, call->span, dd_items, ddn);
-        return elab_defdata(e, dd_form);
+        Expr *dd_out = elab_defdata(e, dd_form);
+        /* Mark the synthesized AdtDef as struct-origin so consumers that must
+         * keep the lowering invisible (runtime type-of/cast/is?) can treat it
+         * as the struct it came from. */
+        if (dd_out && dd_out->kind == EX_DEFDATA && dd_out->as.defdata_.def)
+            dd_out->as.defdata_.def->from_struct_lowering = true;
+        return dd_out;
     }
 
     /* Phase RF0: allow re-elaboration of forward-declared stub types.
@@ -1649,6 +1760,27 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
         }
     }
     if (fkind == TY_UNKNOWN) {
+        /* CONV-S1 seam 4: a KEYWORD field type (`:A`) naming a declared type
+         * parameter.  The defstruct-as-defadt lowering carries defstruct's `:A`
+         * field-type syntax verbatim into the record variant, but the bare-symbol
+         * TP1 check above (adt_field_type_from_form, F_SYM only) misses the
+         * keyword form, so a parametric `(defstruct Box [A] (val :A) ...)` lowered
+         * to `(defdata Box [A] (Box [val : A] ...))` errored "unrecognized type
+         * :A".  Resolve a keyword that matches a declared type param to a tyvar
+         * field, exactly as the bare `A` symbol form is. */
+        for (uint8_t pi = 0; pi < def->n_type_params; pi++) {
+            if (def->type_params[pi] &&
+                strlen(def->type_params[pi]) == tlen &&
+                memcmp(def->type_params[pi], tname, tlen) == 0) {
+                Type *tv = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *tv = type_tyvar_named(def->type_params[pi]);
+                ctor->fields[fi].kind = TY_INT;
+                ctor->fields[fi].inner_kind = TY_UNKNOWN;
+                ctor->fields[fi].full_type = tv;
+                if (ctor->field_forms) ctor->field_forms[fi] = ft_form;
+                return true;
+            }
+        }
         /* Phase RF0: fall back to user-defined type lookup. */
         const Symbol *type_sym = symtab_intern(e->st, strslice(tname, tlen));
         Binding *tb = scope_lookup_type_def(e->scope, type_sym);
@@ -1683,6 +1815,16 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
                  * (typed-pointer carrier, heap-bridge-guarded, slice 8). */
                 record_full = sd && !sd->is_opaque &&
                               (sd->is_heap || !sd->needs_drop_glue);
+                /* CONV-S1 (opaque field nominal identity): a bare `defopaque`
+                 * field (`tag : Tag` over `:int`) is a TRANSPARENT int newtype --
+                 * stored as the int64 carrier (adt_field_is_inline_byval excludes
+                 * opaques, so no inline-aggregate misclassification) but with a
+                 * nominal identity the struct path preserves via
+                 * elab_struct_field_use_type.  Record its full_type so a lowered
+                 * record-ADT field reads back as the opaque type (`(.tag w) : Tag`)
+                 * instead of collapsing to its `:int` carrier -- matching the
+                 * struct path and clearing the re-pin the field otherwise needs. */
+                if (sd && sd->is_opaque) record_full = true;
             } else {
                 AdtDef *ad = tb->type.as.adt_.def;
                 /* by-value ADT product (inlined, slice 4), a :heap record ADT
@@ -2548,6 +2690,19 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
     if (existing_gadt_b) {
         bool same_kind_forward =
             (existing_gadt_b->type.kind == TY_ADT) && elab_is_forward_type(e, name);
+        /* The value-preferring scope_lookup above returns the lowered struct's
+         * auto-bound CONSTRUCTOR (TY_FN), which shadows the struct-origin record
+         * ADT type binding; consult the type namespace to recognise it. */
+        Binding *existing_type_b = scope_lookup_type_def(e->scope, name);
+        AdtDef *lowered_struct_def = NULL;
+        if (existing_gadt_b->type.kind == TY_ADT &&
+            existing_gadt_b->type.as.adt_.def &&
+            existing_gadt_b->type.as.adt_.def->from_struct_lowering)
+            lowered_struct_def = existing_gadt_b->type.as.adt_.def;
+        else if (existing_type_b && existing_type_b->type.kind == TY_ADT &&
+                 existing_type_b->type.as.adt_.def &&
+                 existing_type_b->type.as.adt_.def->from_struct_lowering)
+            lowered_struct_def = existing_type_b->type.as.adt_.def;
         if (same_kind_forward) {
             is_forward_stub_gadt = true;
         } else if (existing_gadt_b->type.kind == TY_STRUCT) {
@@ -2559,6 +2714,20 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
                       name->name, name->name, name->name);
             /* fall through: is_forward_stub_gadt stays false, the else
              * branch below registers a fresh GADT binding and AdtDef. */
+        } else if (lowered_struct_def) {
+            /* CONV-S1 (defstruct-as-defadt): under lowering the struct IS an
+             * ADT, so structs and ADTs share one namespace -- the GADT wins and
+             * SUPERSEDES the struct-origin ADT.  Mark the loser superseded so it
+             * is skipped at C emission (no `tur_adt_<Name>` collision), then fall
+             * through to register the GADT's own binding/AdtDef.  `:Name`
+             * annotations resolve to the GADT via elab_lookup_type_by_name's
+             * prefer-non-struct-origin rule. */
+            lowered_struct_def->superseded = true;
+            diag_emit(DIAG_WARNING, name_form->span,
+                      "GADT '%s' supersedes the same-named struct '%s'; uses of "
+                      "':%s' resolve to the GADT",
+                      name->name, name->name, name->name);
+            /* fall through: register a fresh GADT binding/AdtDef. */
         } else {
             diag_emit(DIAG_ERROR, name_form->span,
                       "defgadt: '%s' is already defined", name->name);
@@ -4276,7 +4445,70 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
             for (uint32_t i = 2; i < call->as.list.len; i++)
                 items[i - 1] = call->as.list.items[i];
             Form *ctor_call = form_list(e->arena, call->span, items, nitems);
-            return elab_call(e, ctor_call);
+            /* make-struct of a NON-parametric record ADT did no field typecheck
+             * at default (it accepted `0`/NULL ptr<void> for an rc<T> or ptr<T>
+             * field, etc.).  The ctor-call rewrite would now subject those args
+             * to elab_call's strict positional check.  Set the leniency flag so
+             * the ctor call's OWN args relax to that parity; elab_call_fn reads-
+             * and-clears it so nested arg-elaboration calls do not inherit it.
+             * Only for the non-parametric case -- parametric ctors still
+             * infer/check. */
+            bool saved_ms_lenient = e->make_struct_lenient_args;
+            e->make_struct_lenient_args = (ad->n_type_params == 0);
+            Expr *ce = elab_call(e, ctor_call);
+            e->make_struct_lenient_args = saved_ms_lenient;
+            /* lowered-adt-ctor-skips-fn-field-type-param-inference: the struct
+             * make-struct path runs struct_field_collect_type_args to ground the
+             * struct's type params from the supplied field values -- crucially
+             * descending into a FN-typed field so a param that appears only inside
+             * a fn field (Lens's `(get (fn [S] A))`) still infers.  The ADT ctor
+             * short-circuit above delegates to elab_call, whose
+             * call_collect_type_bindings bails on a fat-boxed/ptr<void> fn arg, so
+             * `S`/`A` stay unbound and a later `(.get l p)` types as a bare tyvar.
+             * Port the inference: re-elaborate the positional value forms, unify
+             * each ctor field's declared full_type against the value's actual type
+             * (descending into fn fields), and stamp the grounded app result type
+             * onto the ctor call so the binding's type carries `(Lens Person cstr)`.
+             * Gated to a parametric record ctor with at least one fn-typed field,
+             * positional form -- inert for every other make-struct. */
+            if (ce && ad->n_type_params > 0 &&
+                ad->ctors[0]->n_fields == (nitems - 1) &&
+                nitems >= 2 && items[1] && items[1]->tag != F_KEYWORD) {
+                bool any_fn = false;
+                for (uint32_t i = 0; i < ad->ctors[0]->n_fields; i++) {
+                    const Type *ft = ad->ctors[0]->fields[i].full_type;
+                    if (ft && ft->kind == TY_FN) { any_fn = true; break; }
+                }
+                if (any_fn) {
+                    Type *targs = (Type *)arena_alloc(
+                        e->arena, ad->n_type_params * sizeof(Type));
+                    bool *have = (bool *)arena_alloc(
+                        e->arena, ad->n_type_params * sizeof(bool));
+                    memset(targs, 0, ad->n_type_params * sizeof(Type));
+                    memset(have, 0, ad->n_type_params * sizeof(bool));
+                    bool ok = true;
+                    for (uint32_t i = 0; i < ad->ctors[0]->n_fields && ok; i++) {
+                        const Type *ft = ad->ctors[0]->fields[i].full_type;
+                        if (!ft) continue;
+                        Expr *av = elab_form(e, items[i + 1]);
+                        if (!av) { ok = false; break; }
+                        adt_field_collect_type_args(ad->type_params,
+                                                    ad->n_type_params, ft,
+                                                    av->type, targs, have);
+                    }
+                    bool all = ok;
+                    for (uint8_t i = 0; i < ad->n_type_params; i++)
+                        if (!have[i]) all = false;
+                    if (all) {
+                        Type rt = struct_binding->type;  /* TY_ADT base */
+                        rt.hkt_kind = kind_for_arity(ad->n_type_params);
+                        for (uint8_t i = 0; i < ad->n_type_params; i++)
+                            rt = type_app(e->arena, rt, targs[i], call->span);
+                        ce->type = rt;
+                    }
+                }
+            }
+            return ce;
         }
     }
     if (!struct_binding || struct_binding->type.kind != TY_STRUCT) {

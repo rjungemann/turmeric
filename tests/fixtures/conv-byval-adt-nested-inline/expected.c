@@ -2706,40 +2706,39 @@ typedef struct Schema {
 } Schema;
 
 typedef struct tur_adt_Pt {
-    union {
-        struct { double _0; double _1; } Pt;
-    } as;
+    double x;
+    double y;
 } tur_adt_Pt;
+typedef tur_adt_Pt Pt;
 
 static tur_adt_Pt ctor_Pt(double _0, double _1) {
     tur_adt_Pt __r;
-    __r.as.Pt._0 = _0;
-    __r.as.Pt._1 = _1;
+    __r.x = _0;
+    __r.y = _1;
     return __r;
 }
 
 typedef struct tur_adt_Line {
-    union {
-        struct { tur_adt_Pt _0; tur_adt_Pt _1; } Line;
-    } as;
+    tur_adt_Pt a;
+    tur_adt_Pt b;
 } tur_adt_Line;
+typedef tur_adt_Line Line;
 
 static tur_adt_Line ctor_Line(tur_adt_Pt _0, tur_adt_Pt _1) {
     tur_adt_Line __r;
-    __r.as.Line._0 = _0;
-    __r.as.Line._1 = _1;
+    __r.a = _0;
+    __r.b = _1;
     return __r;
 }
 
 typedef struct tur_adt_Box {
-    union {
-        struct { tur_adt_Pt _0; } Box;
-    } as;
+    tur_adt_Pt p;
 } tur_adt_Box;
+typedef tur_adt_Box Box;
 
 static tur_adt_Box ctor_Box(tur_adt_Pt _0) {
     tur_adt_Box __r;
-    __r.as.Box._0 = _0;
+    __r.p = _0;
     return __r;
 }
 
@@ -5565,14 +5564,14 @@ static double first_hyx(const tur_adt_Line * l) {
         {
             const tur_adt_Line *__scrut = (l);
             {
-                tur_adt_Pt a_1256 = __scrut->as.Line._0;
-                tur_adt_Pt b_1257 = __scrut->as.Line._1;
+                tur_adt_Pt a_1256 = __scrut->a;
+                tur_adt_Pt b_1257 = __scrut->b;
                 double __t57 = 0;
                 {
                     tur_adt_Pt __scrut = (a_1256);
                     {
-                        double x_1258 = (double)__scrut.as.Pt._0;
-                        double y_1259 = (double)__scrut.as.Pt._1;
+                        double x_1258 = (double)__scrut.x;
+                        double y_1259 = (double)__scrut.y;
                         __t57 = x_1258;
                         goto ____t58;
                     }
@@ -5591,14 +5590,14 @@ static double second_hyy(const tur_adt_Line * l) {
         {
             const tur_adt_Line *__scrut = (l);
             {
-                tur_adt_Pt a_1261 = __scrut->as.Line._0;
-                tur_adt_Pt b_1262 = __scrut->as.Line._1;
+                tur_adt_Pt a_1261 = __scrut->a;
+                tur_adt_Pt b_1262 = __scrut->b;
                 double __t61 = 0;
                 {
                     tur_adt_Pt __scrut = (b_1262);
                     {
-                        double x_1263 = (double)__scrut.as.Pt._0;
-                        double y_1264 = (double)__scrut.as.Pt._1;
+                        double x_1263 = (double)__scrut.x;
+                        double y_1264 = (double)__scrut.y;
                         __t61 = y_1264;
                         goto ____t62;
                     }
@@ -5613,7 +5612,7 @@ static double second_hyy(const tur_adt_Line * l) {
 }
 
 static double box_hyx(tur_adt_Box b) {
-        return (double)((b).as.Box._0).as.Pt._0;
+        return (double)((b).p).x;
 }
 
 int main(int argc, char **argv) {

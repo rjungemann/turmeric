@@ -527,29 +527,446 @@ runtime *usage* seam, below.
    non-parametric-`:heap` / parametric / parametric-`:heap`) now lowers.
 4. **Full graduation:** delete the gate + `g_opt_defstruct_as_defadt` + the
    `EXPERIMENTS[]` row, make lowering unconditional, retire the `StructDef` surface
-   path, and regenerate snapshots.  NOT yet ready, and the gap is **large**: a
-   force-lower probe (a temporary `getenv("TUR_FORCE_LOWER")` bypass at the top of
-   `defstruct_lowers_to_adt` that makes lowering unconditional) shows **~229 unique
-   fixtures fail** -- the bulk are `tur build` failures in fixtures never written
-   for the flag, exercising struct-specific features the ADT lowering path does not
-   yet cover.  Rough clusters from the probe:
-   - **constrained-generic / instance dispatch** (`constrained-generic-*`,
-     `constrained-instance-*`, `applied-struct-instance-element-discrimination`) --
-     element/receiver dispatch over a lowered struct;
-   - **clone / linear / borrow** (`clone-{list,option,pair,vec}`, `borrow-struct-
-     field`, `future-linear`, `backtrack-clone-ref`) -- substructural paths;
-   - **defstruct feature edges** (`defstruct-inline-c-byvalue*`,
-     `defstruct-byvalue-struct-field`, `defstruct-opaque-field-readback`,
-     `defstruct-fn-field-single-arg`, `dot-parametric-fn-field-call`);
-   - **HKT cata carriers** (`hkt-cata-*`) -- B4 territory, already deemed
-     out-of-scope/moot for real `defstruct`s (a struct cannot express a
-     functor-applied-to-self field), so these likely get *excluded* at graduation
-     rather than fixed;
-   - **exists-pack / opaque / heap-make-struct** edges.
+   path, and regenerate snapshots.  NOT yet ready, and the gap is **large**.
+
+   **Measured force-lower scope (2026-06-26).** A force-lower probe (a temporary
+   `getenv("TUR_FORCE_LOWER")` bypass at the top of `defstruct_lowers_to_adt` that
+   forces every well-formed `defstruct` to lower) shows **323 failing fixtures
+   total** when forcing *literally every* struct (including `:linear` outer
+   structs and applied-type/`exists` fields the field-lowerability gate still
+   legitimately rejects).  Keeping the field-lowerability checks and forcing only
+   the flag, the realistic graduation baseline is **312 fixtures**, of which
+   **~166 are codegen (snapshot) mismatches** -- expected drift resolved by
+   regenerating `expected.c` at graduation, NOT bugs -- leaving **212 real
+   `tur build`/`emit-c`/`stdout` blockers** at the start of this work.  (The
+   earlier "~60" / "~229" estimates in this plan were stale; 212 real is the
+   measured number.)
+
+   **Cleared this session (4 commits, flag-independent, default suite stays
+   green; 212 -> 142 real blockers).**
+   - **Instance/dict name manglers lacked a `TY_ADT` arm** -- the four parallel
+     manglers (`build_inst_type_suffix`, `emit_dict_name`, the DICT-expr
+     `dict_name`, the `emit_stmt.c` inline builder) fell through to `"T"` for an
+     ADT-headed instance, so every non-parametric ADT-headed instance of a class
+     collapsed to the `_T` suffix.  The idempotent re-instance guard then silently
+     swallowed all but the first instance (spurious "no instance", TUR-E0001), and
+     the emitted `dict_<Class>_T` collided (ODR).  *Cleared ~19*
+     (`constrained-generic-*`, `constrained-instance-*`, `instance-*`,
+     `typeclass-*`).  Fixture `conv-defstruct-multi-instance-dispatch`.
+   - **seq pair helpers hardcoded the `Tuple2` C type** in inline-C
+     (`Tuple2 *p; p->e1`), which lowering renames to `tur_adt_Tuple2` with a
+     nested `as.Tuple2._N` layout.  Rewrote them over a private flat
+     `struct __seq_pair2` (opaque int64 handle either way).  *Cleared ~37* (the
+     whole `seq-*` cluster).  Fixture `conv-defstruct-seq-pair-lowering`.
+   - **Ascribed under-applied parametric ctor selected the carrier base.**  A
+     parametric struct whose type param is not pinned by a field
+     (`(defstruct BoxW [a] (raw :int))`) leaves `(make-struct BoxW 5)` bare
+     `TY_ADT`; only the `(:: ... (BoxW int))` ascription knows the monomorph.
+     `elab_ascribe` now pushes the concrete same-ADT app onto the ctor call so the
+     monomorph ctor is chosen.  *Cleared ~14* (`instance-closure-return-*`,
+     `poly-to-fat-*`).  Fixture `conv-defstruct-ascribed-monomorph-ctor`.
+   - **Monomorphised ADT ctor functions were emitted unguarded** (the typedef had
+     an `#ifndef TUR_TY_<name>` guard, the ctor did not), so a monomorph reached
+     by two emit paths redefined `ctor_<name>` at cc.  Added the matching
+     `#ifndef TUR_FN_<name>` guard.  Correct ODR fix; the two triggering fixtures
+     carry separate downstream issues so it clears none on its own.
+   - **Flat named C-ABI layout for single-variant record ADTs (the big lever).**
+     The central inline-C-ABI blocker: hand-written inline-C that reads a struct by
+     its surface C type and flat field names (`httpd-set-cookie!`'s `opts.name`, the
+     `clone-*` instances' `sizeof(Opt)` / `(Opt *)p`, the `Pos`-based `typeclass-*`
+     tests) broke once the struct lowered, because the ADT was a tagged
+     `union { struct { T _0; ... } <Ctor>; } as;` named `tur_adt_<Name>` with no
+     surface alias (`unknown type name '<Name>'` / `'tur_adt_<Name>' has no member
+     '<field>'`).  A NON-parametric single-variant record now emits a FLAT named
+     aggregate `typedef struct tur_adt_<Name> { T <field>; ... } tur_adt_<Name>;`
+     plus a `typedef tur_adt_<Name> <Name>;` surface alias.  The single-variant
+     memory layout is byte-identical to the old nested form, so only the C member
+     spelling changes; a new `adt_uses_named_layout` predicate gates it and a single
+     `adt_field_member_path` helper (emit_core.c) routes the spelling
+     (`.field` vs `.as.<Ctor>._N`) through every site (typedef + ctor on the main
+     path and the early-file mirror, drop/walk glue, EX_GET_FIELD, match field-bind,
+     B4 carrier-reconstruct).  Parametric monomorphs (types.c) keep the positional
+     layout (no single C type to name).  Flag-independent; two hand-written
+     snapshots (`conv-single-variant-flat`, `conv-byval-adt-nested-inline`)
+     regenerated.  *Cleared ~43* (`httpd-*`, `clone-*`, `eqmap-struct`, the `Pos`
+     `typeclass-*` tests).  Fixture `conv-defstruct-inline-c-abi`.
+
+   **Running total: 212 -> 29 unique build-failing fixtures under force-lower
+   (default suite stays 1863/0).**  (Sub-root (a) -- 0-arg construct in control
+   flow -- the inline-C-tail return bridge, the accessor-unbox, the
+   assignment-position straddle, the inline-C instance-method signature, the
+   by-value struct-field receiver / by-value ADT field storage, the parametric
+   keyword type-param field, set!-over-lowered-record-ADT, the parametric-record
+   inline-C compat typedef, the inline-C-carrier-result -> by-value-sink bridges
+   (let-init / call-arg, NULL-safe lowered Option), the carrier-producer-arg
+   (__inst_/construct) -> by-value-spec-param bridge, the wide-by-value-element
+   accessor-unbox + ctor-box, the abi-spec interning recognizing a lowered
+   by-value TY_ADT result, the M7-HKT transparent-int-newtype phantom
+   wrapper (`(Schema A)`), the by-value-ADT `any` box/unbox, the vec-element carrier<->by-value read/escape
+   bridges, the bare-receiver record-ADT field-tyvar collapse, and the
+   :heap-ADT by-value-aggregate-element field read are all LANDED.)
+
+   - **:heap-ADT by-value-aggregate-element field read DONE (2026-06-27).**  A
+     direct field read on a :heap record-ADT receiver whose element is a by-value
+     aggregate -- `(.head xs)` / `(.tail xs)` where `xs : (Cons (Option int))`
+     and `Cons` is `(defstruct Cons :heap [A] (head A) (tail :int))` -- emitted a
+     generic-`tur_adt_Cons`-carrier cast then C-cast an int64 to the aggregate
+     (`conversion to non-scalar type`).  Fix is `:heap`-SCOPED: a nested
+     by-value-product element (`(Option int)`) is accepted by
+     `adt_app_is_byvalue_product` / `type_app_is_concrete_adt` ONLY when the
+     outer ADT is `:heap`, so `type_c_name((Cons (Option int)))` yields the
+     monomorph pointer and the new EX_GET_FIELD `:heap`-ADT-receiver branch reads
+     the inline aggregate field off `tur_adt_Cons__Option__int *`.  A NON-heap
+     nested aggregate (`(Result (Option cstr) cstr)`) already round-trips via the
+     struct-app monomorph path and is left untouched -- the `:heap` gate is what
+     keeps the constrained-instance-body specs (and the global
+     `type_has_concrete_codegen_layout`) undisturbed.  The c-name lookup in the
+     field-read branch is itself gated on the cheap `is_heap_adt` check so it
+     never registers monomorphs for unrelated non-heap receivers.  Cleared
+     `list-length-byvalue-aggregate-element` and
+     `list-homog-byvalue-aggregate-element` (build + run).
+     (`constrained-loop-vec-push-byvalue-result-element` shifts from a runtime
+     segfault to a build error -- the `:heap` Vec-element flip surfaces its
+     latent constrained-instance-body monomorphization defects; it and the
+     already-segfaulting `nested-construct-byvalue-decode` are tracked in
+     `docs/reported/constrained-instance-body-nested-construct-monomorphization.md`.
+     A prior write-up mis-stated these two as regressions from this work -- a
+     testing artifact from stashing the force-lower probe; the TRUE force-lower
+     baseline shows both already segfaulting.)
+
+   - **by-value-ADT `any` box/unbox DONE (2026-06-27).**  Coercing a by-value
+     struct into the `any` top type heap-boxes it (malloc + copy, store the
+     pointer in the tagged payload) on inject and dereferences it on `(cast x
+     T)`.  The elaborator records this via `box_struct`/`target_struct`, both
+     `StructDef*` -- NULL under the lowering, where the by-value struct is a
+     record ADT, so EX_UNION_INJECT fell to `TUR_TAG(tag, (int64_t)(intptr_t)
+     (p))` (casting an aggregate to int64 -- "aggregate value used where an
+     integer was expected") and EX_ANY_CAST to `(tur_adt_Point)(intptr_t)
+     TUR_UNTAG(...)` (casting an int64 to a non-scalar).  Both arms now detect a
+     by-value ADT via `emit_type_is_byvalue_adt` (inject: the value's type;
+     cast: the result type `e->type`) and emit the same heap-box / pointer-deref
+     the struct path does, keyed on the ADT monomorph C name.  Cleared
+     `any-box-struct` and `if-narrow-chained` (the latter's `(is? v Point)`
+     narrowing unboxes through the identical path).  (`type-of` on the boxed
+     value now reports `adt` rather than `struct` under lowering -- correct
+     post-graduation, since a defstruct *is* sugar for a record ADT; the
+     `any-box-struct` snapshot regenerates to `adt` when the gate flips.)
+     Remaining cluster-C members `typeclass-return-dispatch-result-wrapped`
+     (Result-box cast) and `exists-pack-constrained-byval-struct` (existential
+     pack value slot) are distinct aggregate->carrier sites, still open.
+
+   - **bare-receiver record-ADT field-tyvar collapse DONE (2026-06-27).**  A
+     field read on a BARE (unparameterized) record-ADT receiver -- `(.ok-val r)`
+     where `r : Result` is used with no type args -- typed as the field's raw
+     tyvar `A` under lowering, because the dot-access ADT branch only substitutes
+     the field tyvar when the receiver is an applied `TY_APP`.  An untyped
+     consumer (`(println (.ok-val r))`) then failed overload resolution
+     (TUR-E0006 "first arg type tyvar").  The value rides the int64 carrier
+     exactly as at default, so the dot-access branch now collapses a residual
+     field tyvar to the field's carrier kind (TY_INT) -- but ONLY for the bare
+     `TY_ADT` receiver; an applied `(Tuple2 A B)` inside a generic body keeps its
+     field tyvar so the ABI spec still resolves it to a concrete by-value
+     aggregate (the accessor-unbox path, guarded by the
+     `conv-defstruct-accessor-unbox` canary).  Cleared `byval-result-field-access`.
+     The sibling `dot-parametric-fn-field-call` /
+     `make-struct-parametric-fn-field-infer` cluster (the lowered ADT ctor
+     skipping make-struct's fn-field type-param inference) is a DISTINCT root,
+     reported in
+     `docs/reported/lowered-adt-ctor-skips-fn-field-type-param-inference.md`.
+
+   - **vec by-value/heap-ADT element read + escape bridges DONE (2026-06-27).**
+     Reading a by-value aggregate element back out of a `Vec` -- `(:: (vec-get v
+     i) (Option int))` -- failed to build (`tur_adt_Option__int x = vec_hyget(...)`,
+     an int64-from-aggregate invalid initializer).  `vec-get` is inline-C with a
+     generic `: A` result that always returns the int64 carrier, but at a non-spec
+     call site the bare tyvar `A` left `fn_body_tail_byvalue_carrier_type` blind,
+     so no carrier->by-value deref bridge was minted.  Fall back to the CALL's own
+     elaborated result type (which the typer already grounded to `(Option int)`)
+     when the inline-C result is a bare tyvar, so the let-init bridge derefs the
+     heap-promoted element.  Separately, `emit_carrier_bridge_escaping` only
+     short-circuited a `:heap` *struct* element to the pointer-is-carrier path;
+     under lowering `Vec`/`Map`/`Set`/`List` are `:heap` *ADTs*, so a nested
+     heap-container element (`(Vec (Vec int))`) fell into the aggregate
+     heap-promote path and boxed the pointer into a `T **` (read back out of
+     bounds).  Adding `type_is_heap_adt` to the delegation guard casts the pointer
+     to the carrier directly.  Cleared `vec-push-byvalue-aggregate-escapes-frame`
+     and `vec-push-heap-struct-element-carrier-cast` (build + run).
+     `constrained-loop-vec-push-byvalue-result-element` now BUILDS but segfaults
+     at runtime -- a deeper residual (nested return-dispatch redirect over a
+     by-value element; its own header notes three combined defects), tracked
+     separately.
+
+   - **M7-HKT transparent-int-newtype phantom wrapper DONE (2026-06-27).**  A
+     phantom int-newtype `(defstruct Schema [A] (raw :int))` used as an HKT
+     container (Functor/Applicative/Alternative [Schema]): under lowering it
+     becomes a single-variant *record* ADT, but it is still an int64 carrier at
+     runtime (one concrete `:int` field).  `type_is_transparent_int_newtype` now
+     recognizes that lowered record-ADT shape (gated on the record style + a
+     genuinely-concrete `:int` field, so a positional `(defdata Fix [^f] (Roll
+     :int))` or a tyvar-field `(Box a)` is *not* mis-collapsed), which lets the
+     SC7 chainable-HKT-return propagation concretize the `(fmap s f)` call result
+     to `(Schema int)` -- fixing the "no typeclass method found for 'raw'"
+     elaboration error on `(.raw (fmap s f))`.  Codegen then follows through: the
+     ADT arm of `type_c_name` returns `int64_t`, the record-ADT ctor emits its
+     int64 payload directly (no aggregate `ctor_Schema__int`), the EX_GET_FIELD
+     ADT branch reads the carrier identity, `type_struct_pass_by_ptr` never
+     pointer-wraps it, and `emit_carrier_bridge` treats the crossing as a no-op
+     (no address-of-a-stack-temp handed to an int64-by-value formal).  Cleared
+     `schema-hkt-functor`, `schema-hkt-alternative`, `schema-applicative-user`,
+     `schema-applicative-user-errors`; default suite 1863/0.  (The `hkt-ap-fn-in-
+     container` / `hkt-stdlib-option-result-instances` pair is a *distinct*
+     `Option__opaque` specialization cluster, not this root.)
+
+   - **wide by-value element: accessor unbox + ctor box DONE (2026-06-27).**  A
+     by-value Result/Option carrying a value-struct element (User/Point) read via
+     a return-only-poly accessor (`ok-val`/`unwrap`): the accessor spec body's
+     by-value-receiver branch now reads the spec-resolved field type (inline for a
+     narrow element, box-deref for a WIDE one), and the parametric monomorph
+     ctor's `app_byval` branch now heap-boxes a wide element (matching the typedef
+     + carrier ctor).  Clears `polymorphic-ok-err-value-struct-payload`,
+     `instance-method-return-carrier-bridge`; `nested-construct-byvalue-decode`
+     now BUILDS (its remaining runtime segfault is the separate decode-seam set in
+     its report).  This resolved the BUILD-time half of the construct-template
+     accessor unbox (it worked via the active accessor spec's resolved field type,
+     not the receiver-app recovery the earlier report tried).
+
+   - **templated inline-C helper with by-value RECORD result DONE (2026-06-27).**
+     A return-only-poly templated inline-C helper (`dense-get [A] : A`,
+     `__TUR_TY_A__` body) whose result `A` resolves to a by-value record (`Pos`)
+     was not specialized per element under lowering -- it stayed on the int64
+     carrier base, so a wrapper/instance spec returning `tur_adt_Pos` did
+     `return <int64 base>(...)`.  Fixed in the abi-spec interning:
+     `emit_abi_register_call`'s return-only-poly `recovered_byvalue` recovery only
+     un-collapsed a `TY_STRUCT`/`TY_APP` by-value result; extending it to a
+     non-:heap concrete by-value `TY_ADT` (the struct->ADT flip was the only change
+     from the default path) un-collapses the result, sets `abi_changes`, and
+     interns the per-element spec with the `__TUR_TY_A__`-substituted body.  Cleared
+     `typeclass-assoc-type-method-return`, `generic-inline-c-struct-through-unsafe`,
+     `typeclass-assoc-type-parametric-struct-element`.  Report archived.
+
+   - **parametric keyword type-param field DONE (2026-06-26).**  A parametric
+     `(defstruct Box [A] (val :A) ...)` lowered to a record variant where the
+     `:A` keyword field type was not matched against the type params (the bare-`A`
+     TP1 check only sees F_SYM); resolve_ctor_field now resolves a keyword type
+     param to a tyvar field.  Cleared `m2b-default-of`, `m2b-make-struct-keyword`.
+   - **set!-over-lowered-record-ADT DONE (2026-06-26).**  `(set! (.field s) v)`
+     resolved only a StructDef receiver; a lowered record ADT (by-value or :heap)
+     errored / null-derefed.  elab_set_field resolves a record-ADT receiver to its
+     sole record ctor; EX_SET_FIELD carries adt_def/adt_ctor and
+     emit_set_field_stmt writes through the ADT member path.  Cleared
+     `struct-set-field`, `defstruct-byvalue-struct-field`,
+     `heap-make-struct-roundtrip`, `heap-generic-base`.
+
+   - **by-value ADT struct field + carrier-held receiver DONE (2026-06-26).**
+     A struct field typed as a by-value aggregate ADT (`(Option cstr)` ->
+     `tur_adt_Option__cstr`): at default the field's kind was TY_STRUCT and it
+     embedded the by-value monomorph; under lowering the kind collapses to the
+     int64 carrier and the field typedef fell to the int64 default, mismatching
+     the by-value ctor init.  emit_module.c now embeds a non-:heap ADT/app field
+     as its monomorph aggregate (+ pre-flushes the typedef).  Companion: a
+     typeclass instance method's dispatch class-var param is declared int64 (the
+     uniform dict ABI) while its elaborated type is the by-value aggregate -- a
+     new `emit_carrier_holds_byval` Binding flag drives the field read to deref
+     the carrier to the concrete monomorph pointer.  Cleared 5 fixtures
+     (`instance-method-byvalue-struct-field-receiver`,
+     `defstruct-field-byvalue-parametric-struct`,
+     `applied-struct-instance-element-discrimination`,
+     `definstance-applied-unary-head-kind`, `macro-defstruct-field-type-unquote`).
+
+   **Remaining blockers (~99), by signature.**  The biggest cluster is the
+   **by-value-aggregate <-> int64-carrier ABI bridge** family (~33): `incompatible
+   types when returning/initializing/assigning` (~20), `incompatible type for
+   argument` (~8), `aggregate value used where an integer was expected` (~4),
+   `conversion to non-scalar type requested` (~2) -- a lowered by-value record
+   flowing into/out of a carrier-ABI boundary without the box/unbox bridge.
+
+   **Deep dive (2026-06-26): the ABI-bridge cluster is NOT a single fix -- it is a
+   coordinated set of crossing-site bridges, each fixture needing several.**  A
+   focused investigation mapped the concrete sub-roots (no quick win lands a fixture
+   on its own; each is a hot-path change in the by-value/carrier construction &
+   dispatch machinery and several interact within one fixture, so they must land
+   together):
+   - **Parametric-monomorph ctor: wide (>8 byte) by-value element not boxed.**  The
+     monomorph typedef stores a wide by-value element as the int64 heap-box pointer
+     (B4), but the `app_byval` ctor branch (types.c, `emit_adt_app_instance`) stored
+     it inline -- assigning a `tur_adt_Point` aggregate into an `int64_t` slot.  Fix:
+     box wide elements in the byval ctor branch exactly as the carrier branch does
+     (verified locally; no-regression but clears nothing alone).
+   - **Generated accessor: wide by-value element not UNBOXED on read.**  The
+     `ok_val`/`err_val` monomorph accessor emits `(int64_t)(r).as.Result._1` for a
+     wide element field (the boxed pointer cast to int64) where the declared return
+     is the aggregate (`tur_adt_Point`) -- it must deref:
+     `*(tur_adt_Point *)(intptr_t)(r).as.Result._1`.
+   - **Closure / lifted-lambda return: result_kind vs C-return mismatch.**  A lifted
+     lambda `fn [x] (some x)` has logical `result_kind` = TY_APP/ADT (Option lowered
+     by-value), but its C return slot is the int64 carrier (the signature logic in
+     emit_fn_def forces int64 via `fn_body_tail_is_carrier_producer`).  The
+     concrete->carrier return bridge in `emit_tail` (emit_fns.c) is gated on
+     `result_kind == TY_INT`, so it no longer fires -> `return some__spec(x)` returns
+     a `tur_adt_Option__int` into an `int64_t` slot.  Widening the guard to the
+     carrier-producer case did NOT fix it (the lambda body's bridge predicate
+     `fn_body_tail_emits_byvalue_carrier_abi` returns false in that context --
+     `find_matched_abi_spec` does not resolve the spec for the lambda body), so the
+     real fix is deeper: the lambda-body emit path / spec resolution, not just the
+     guard.
+   - **Pure-Turmeric wrapper tail-calling an inline-C carrier helper.  DONE
+     (2026-06-26).**  A defn whose declared return is a by-value ADT app
+     (`(Result cstr cstr)`) tail-calls an inline-C helper of the same type; the
+     helper is still emitted with the int64 carrier C return (an inline-C TY_APP
+     result lowers to int64_t), so the wrapper returned the carrier into its
+     by-value slot.  Under lowering `type_uses_carrier_abi` reports the by-value
+     app non-carrier, so the M5 return bridge's gate missed it.  Fix: a new
+     `fn_body_tail_returns_carrier_value` (a tail that is a direct call to an
+     inline-C fn with a by-value ADT-app result) widens the M5 gate, and
+     `fn_body_tail_is_carrier_producer`'s inline-C arm recognises the same shape;
+     narrowly scoped (NOT if/construct merges, which (a) already lowers by value)
+     and inert at default.  Clears `result-bridge-tail-call-to-inline-c`; fixture
+     `conv-defstruct-return-bridge-inline-c`.
+   - **Carrier-instance result vs by-value-spec param at the call arg.**  `(ok-val
+     (decode 5))` where the `int` `Decode` instance returns the int64 `tur_box_ok`
+     carrier but `ok_val__spec__..._Result__int__cstr` expects the by-value
+     `tur_adt_Result__int__cstr` param -- needs an unbox bridge at the dispatch arg.
+   - **Remaining return-direction sub-cases.**  (1) *accessor-unbox* **DONE
+     (2026-06-26)**: a generic accessor (`tuple2-2nd`/`ok-val`) whose result is a
+     bare tyvar reads a by-value-element field stored as the int64 carrier; in its
+     ABI spec `e->type` collapses to int64 but the spec resolves the field to a
+     by-value aggregate, so `EX_GET_FIELD` now deref-unboxes the B4 box pointer
+     when those disagree (`poly-nested-tuple-accessor`; fixture
+     `conv-defstruct-accessor-unbox`).  *Construct-template accessor variant*
+     (investigated 2026-06-26, **BLOCKED upstream**): the same accessor over a
+     stdlib `Option`/`Result` monomorph (`unwrap__spec__tur_adt_Box_...`, body
+     `(.value o)`) emits the wrong `(int64_t)` cast on a by-value element.  The
+     leaf `EX_GET_FIELD` recovery (resolve the field through the receiver's
+     spec-resolved app via the new-ready `adt_field_type_for_app`) is correct but
+     cannot fire: the cstr/float/Box spec-clone bodies reach the read with
+     `current_abi_specialization == NULL`, so the receiver resolves only to the
+     abstract int64 carrier.  Root cause + fix directions captured in
+     `docs/reported/construct-template-accessor-spec-clone-no-active-spec.md`
+     (the fix belongs in the spec-clone body emit, not the leaf).  (2) *inline-C
+     instance-method signature* **DONE (2026-06-26)**: a `Pos r; return r;`
+     inline-C instance body whose declared result is a by-value record/product
+     (`Pos` -> `tur_adt_Pos`) was emitted with the int64 carrier signature while
+     the dispatch dict slot already used the aggregate.  emit_fns.c lowered an
+     inline-C result to int64 unless it matched a recognized typed kind
+     (ptr/TY_STRUCT/cfnptr/heap-spec); a by-value ADT/app result was
+     unrecognized.  Added a `typed_byval_adt` case (non-:heap ADT/app, carrier-ABI
+     false, concrete layout) emitting the aggregate C name, mirrored in
+     emit_module.c's forward-decl path so prototype/definition/dict-slot agree;
+     carrier-ABI ADTs stay int64.  Clears `typeclass-fundep-collect`,
+     `typeclass-multiparam-storage-dispatch`.  (3)
+     *assignment-position straddle* **DONE (2026-06-26)**: an int64 carrier value
+     (from an inline-C / construct producer whose lowered by-value ADT-app result
+     is nonetheless emitted as the carrier) stored into a by-value if/do/let merge
+     temp.  The `if` branch already bridged per arm; `do`/`let` assigned the raw
+     carrier into the by-value temp AND a stale M5 trailing deref fired on the
+     already-by-value merge (double bridge).  Fixed by (a) recovering the inline-C
+     by-value result in `fn_body_tail_byvalue_carrier_type` (gated
+     `!type_uses_carrier_abi` so it is strictly lowering-only -- at default the
+     same type IS the carrier and the carrier-temp + single M5 deref already
+     handles it), (b) a `do`/`let` companion to the if-arm bridge
+     (`bridge_control_value_to_byvalue_temp` in emit_do_value/emit_let_value/
+     emit_letrec_value), and (c) stopping `fn_body_tail_returns_carrier_value`
+     from descending into do/let (those now bridge their own tail, so the M5
+     return deref must not re-fire).  Clears `tail-call-inline-c-carrier-bridge`.
+     (`nested-construct-byvalue-decode`'s residual error is a *different* sub-root
+     -- a `#{Construct}` accessor template, `unwrap`/`ok-val`, returning a by-value
+     element as the int64 carrier; that is the accessor-unbox family, not the
+     merge straddle.)
+   - **inline-C instance method returning a by-value aggregate** (`Pos r; return
+     r;`) under an int64 carrier signature -- the compiler cannot rewrite inside
+     inline-C, so the method's C signature must be the concrete aggregate (an
+     instance-method return-ABI decision), or the body must be wrapped.
+   - **0-arg return-only-poly construct (`none`/`empty`) not spec-recorded in
+     control flow.  DONE (2026-06-26).**  In
+     `(if b (some 1) (none))` consumed/returned at type `(Option int)`, `some`
+     emits its by-value spec `some__spec__tur_adt_Option__int_int64_t` but `none`
+     emits the int64 carrier base `none()` -- so the two `if` branches disagree on
+     representation and the by-value merge temp `tur_adt_Option__int __t = none()`
+     is a hard cc error.  `find_matched_abi_spec` (emit_expr.c) returns NULL for a
+     0-arg construct UNLESS the exact call `Expr*` was recorded in
+     `specialized_call_exprs` (its only sound disambiguator -- a 0-arg construct
+     has no arg types to key on, and a by-value spec differs from the carrier base
+     ONLY in return ABI).  `some` (1-arg) gets recorded; the sibling `none` (0-arg)
+     in the same control-flow merge does NOT.  The fix is in the spec-RECORDING
+     pass (emit_module.c): when a by-value Option/Result flows through an if/let/do
+     merge or a by-value return slot, record the 0-arg construct branches
+     (`none`/`err`-less/`empty`) against the same by-value spec as their siblings.
+     The matching `none__spec__tur_adt_Option__int()` is already emitted -- only
+     the call-site selection is missing.  This single sub-root recurs across the
+     cluster wherever Option/Result construction sits in control flow.
+     **LANDED (commit "seam 4 (a)"):** a new value-tail walk
+     (`emit_abi_scan_construct_tail`, emit_module.c) publishes the concrete merge
+     type (a let-binding's declared type, or an if/do node's own type) to the
+     construct calls in the value-tail as `result_type_override`, and the
+     "no bindings & no active spec" guard now falls through when a concrete
+     construct override is present so `construct_recovered_byvalue` mints + records
+     the by-value spec.  Gated `!type_uses_carrier_abi` so it is inert on the
+     default carrier path (no snapshot drift) and flag-independent.  Clears
+     `option-control-form-construct`; fixture
+     `conv-defstruct-control-flow-construct` (let-init / arg / return merges).
+   - **existential-wrapped construct return** (`kleisli-arrow-instance`): the
+     closure body is `(pack (some x) ...)` (EX_EXISTS_PACK, kind 93), so the
+     existing concrete->carrier return bridge (emit_fns.c ~L1431, which already
+     handles a bare `some`/`ok` tail) cannot see the by-value producer through the
+     `pack`.  Needs the bridge / `fn_body_tail_*` walkers to look through
+     EX_EXISTS_PACK.
+
+   **Assessment.**  Every sub-root above lives in the most delicate central
+   codegen -- spec interning/recording (`specialized_call_exprs`), the parametric
+   monomorph ctor/accessor box-unbox, and the function return-ABI decision -- and
+   most fixtures need several at once.  Each is a real, located fix, but landing
+   them safely needs dedicated, careful work (high regression surface on the green
+   1854 suite); they do not yield to quick one-shot increments.  A pragmatic
+   graduation alternative for the residue is to keep the specific stdlib constructs
+   that straddle (return-only-poly `none`/`err` in control flow) on the carrier
+   representation rather than forcing them by-value.
+
+   Then: ~22 fixtures that **build but mismatch at runtime or only fail at link**
+   (`OK_RUNTIME_OR_LINK` -- includes the httpd `-lturi` harness-link cases that only
+   `tests/run.sh` sets up, plus genuine lowered-path correctness bugs like
+   `hkt-ap-fn-in-container` printing 4150 vs 4175); ~7 `invalid initializer` (more
+   ctor-monomorph selection edges); 3 `unknown type name 'Tuple2'` (inline-C naming
+   the **parametric** `Tuple2` directly -- needs fixture rewrite, no single C type
+   exists); a few `no typeclass method` (schema HKT) and one-offs
+   (`struct-curry-ctor`); and the moot **`hkt-cata-*`** carriers
+   (B4 territory -- excluded at graduation, not fixed).
+
+   - **parametric-record inline-C compat DONE (2026-06-26).**  Most of the
+     `unknown type name 'Tuple2'` cases were NOT a fixture-rewrite problem: stdlib
+     inline-C names the erased generic `Tuple2` struct (carrier `e1/e2` int64
+     fields) which the struct path emits at default but the ADT lowering dropped.
+     emit_adt_typedef_and_ctors (+ its early_file mirror) now re-emit that erased
+     `typedef struct <Name>` for a parametric single-variant record ADT
+     (`#ifndef TUR_COMPAT_<Name>` guarded), byte-compatible with the positional
+     carrier.  Cleared `comonad-capturing-closure`, `future-capturing-closure`,
+     `future-linear`, `future-split-free`, `hkt-stdlib-parser-instances`,
+     `promise-linear`, `tuple2-inline-c-layout` (7).  Remaining `unknown type
+     name` case is `result-over-struct-with-option-field-typedef-order` (`User`
+     typedef ordering -- a different, struct-with-Option-field seam).
+
+   - **schema-HKT `no typeclass method found for 'raw'` RESOLVED (2026-06-27).**
+     `(.raw (fmap s f))` over a phantom record newtype `(Schema A)` failed
+     because the `fmap` call result never concretized to `(Schema int)`.  The
+     real cause was upstream of the M7 head-rewrite: the SC7 chainable-HKT-return
+     propagation reads `type_is_transparent_int_newtype(body->type)` to recover
+     the `(Schema int)` body type, and that predicate only knew the `TY_STRUCT`
+     newtype shape -- under lowering Schema is a single-variant *record* ADT, so
+     the predicate returned false and the call kept the un-concretized result
+     (its `.raw` then had no record head to resolve against).  Teaching the
+     predicate the lowered record-ADT form -- gated on the record style and a
+     genuinely-concrete `:int` field so a positional `(defdata Fix [^f] (Roll
+     :int))` and a tyvar-field `(Box a)` are excluded -- fixes elaboration, and
+     the codegen follow-through (type_c_name ADT arm, transparent ctor emit,
+     EX_GET_FIELD identity, pass-by-ptr opt-out, carrier-bridge no-op) makes it
+     build + run.  Cleared `schema-hkt-functor`, `schema-hkt-alternative`,
+     `schema-applicative-user`, `schema-applicative-user-errors`.  Report archived
+     to `docs/archive/schema-hkt-method-call-result-degenerate-app.md`.
+
    Each non-moot cluster must be driven to zero -- promote a representative
    force-lower failure to a flag-on fixture, fix the lowering, repeat -- before the
-   gate can be deleted and snapshots regenerated.  This is a multi-step phase in
-   its own right, comparable in size to seams 1-3 combined.
+   gate can be deleted and snapshots regenerated.  This remains a multi-step phase
+   in its own right, larger than seams 1-3 combined; the inline-C-ABI cluster (a)
+   is the single biggest piece.
 
 ### Current state (suite green)
 
@@ -573,10 +990,21 @@ non-parametric `:heap`-struct auto-lowering, the parametric `:heap`-ADT carrier
 bridges, the carrier-bridge warning sweep, AND the parametric-`:heap` gate flip --
 the autoloaded stdlib `Vec`/`Set`/`Map`/`List` now lower to record ADTs under the
 flag, build `-Wint-conversion`-clean, and run at parity with the struct path.
+
 What remains is **step 4 (full graduation)**: make lowering unconditional (delete
 the gate + `g_opt_defstruct_as_defadt` + the `EXPERIMENTS[]` row), retire the
-`StructDef` surface path, and regen snapshots.  A force-lower probe (lowering
-*every* `defstruct` unconditionally) still surfaces ~60 build failures in fixtures
-never written for the flag -- the edge cases the flag-on path does not yet cover.
-Driving those to zero (promote each to a flag-on fixture + fix) is the gating work
-before the experiment can graduate.
+`StructDef` surface path, and regen snapshots.  **Seam 4 is IN PROGRESS** (see the
+step-4 entry above for the measured scope and the running cleared-cluster log).
+The default `bash tests/run.sh` is **green (1857 passed, 0 failed)** with eight
+flag-independent seam-4 fixes landed -- including the big lever (the C-ABI-
+compatible flat named layout + `typedef <Name>` alias for single-variant record
+ADTs), ABI-bridge sub-root (a) (0-arg construct selection in control flow), and
+the inline-C-tail return bridge.
+The force-lower probe is down from **212 to 96 real (non-snapshot) blockers (55%
+cleared)**.  The dominant remaining cluster is now the by-value-aggregate <->
+int64-carrier **ABI bridge** family (`incompatible types when
+returning/initializing/assigning`, `aggregate value used where an integer was
+expected`) -- seam-1 widened to more crossing sites, the natural next lever --
+followed by ~22 runtime/link mismatches and smaller ctor-selection / parametric
+inline-C edges.  Driving the remaining clusters to zero (promote each to a flag-on
+fixture + fix) is the gating work before the experiment can graduate.

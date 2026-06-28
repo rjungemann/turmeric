@@ -284,6 +284,12 @@ typedef struct EmitCtx {
      * function-body boundary so the first statement always re-anchors. */
     uint32_t     dbg_last_line;
     uint16_t     dbg_last_file_id;
+    /* CONV-S1 (borrow-struct-field): set while emitting the operand of an
+     * immutable/mutable borrow so EX_GET_FIELD omits its outer `(cty)` rvalue
+     * cast and yields a bare member lvalue (`(p).x`), so `&` has an lvalue
+     * operand.  Read-and-cleared at EX_GET_FIELD entry so only the outermost
+     * field access of the borrow operand is affected, not nested reads. */
+    bool         lvalue_mode;
 } EmitCtx;
 
 /* Phase 4 v1: Defer thunk tracking */
@@ -489,6 +495,7 @@ void register_defer_thunk(EmitCtx *ctx, const char *name, const Expr *body,
 void emit_pending_defer_thunks(EmitCtx *ctx, Buf *out);
 char *mangle_dynvar_name(const char *name);
 char *mangle_field_name(const char *name);
+char *adt_field_member_path(const AdtDef *def, const CtorDef *ctor, uint32_t fi);
 char *raw_name_for_binding(const Binding *b);
 char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b);
 /* GHE struct-receiver: true when a constrained-generic method call re-resolved

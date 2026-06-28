@@ -383,8 +383,8 @@ bool type_extract_struct_app(const Type *t, StructDef **out_def,
 
 /* TS4P1: Extract an ADT-headed TY_APP chain into (AdtDef*, args[], n_args).
  * Mirrors type_extract_struct_app but requires the head to be TY_ADT (not TY_STRUCT). */
-static bool type_extract_adt_app(const Type *t, AdtDef **out_def,
-                                  Type *out_args, uint8_t *out_n) {
+bool type_extract_adt_app(const Type *t, AdtDef **out_def,
+                          Type *out_args, uint8_t *out_n) {
     if (!t) return false;
     Type raw[16];
     uint8_t n_raw = 0;
@@ -484,7 +484,11 @@ bool type_app_is_concrete_adt(const Type *t) {
     uint8_t n_args = 0;
     if (!type_extract_adt_app(t, &def, args, &n_args) || !def) return false;
     for (uint8_t i = 0; i < n_args; i++) {
-        if (!type_has_concrete_codegen_layout(&args[i])) return false;
+        /* Nested by-value-product element accepted only for a :heap outer (see
+         * adt_app_is_byvalue_product) so the ctor selection picks the monomorph
+         * ctor matching the field-read consumer's layout. */
+        if (!type_has_concrete_codegen_layout(&args[i]) &&
+            !(def->is_heap && adt_app_is_byvalue_product(args[i]))) return false;
     }
     return true;
 }
@@ -516,14 +520,57 @@ AdtDef *type_adt_app_def(const Type *t) {
  * `:int` field excludes value-carrying parametric structs like
  * `(defstruct Box [A] (x A))` (whose field is the type parameter), so no
  * existing by-value parametric struct changes representation. */
+/* SC7 helper: a lowered record-ADT field is a CONCRETE `:int` (not a `:a` tyvar
+ * field whose carrier kind merely happens to be int64).  A parametric ADT's
+ * tyvar field (`(defdata Box [a] (Box a))`) reports kind == TY_INT (the int64
+ * carrier representation) but carries a TY_TYVAR full_type; such a field is a
+ * genuine by-value element slot, NOT a transparent int payload, so it must be
+ * rejected -- otherwise `(Box float)` would be mistaken for an int newtype and
+ * its aggregate value silently collapsed to int64. */
+static bool ctor_field_is_concrete_int(const CtorField *f) {
+    if (!f || f->kind != TY_INT) return false;
+    return f->full_type == NULL || f->full_type->kind == TY_INT;
+}
+
+/* SC7 helper: the transparent-int-newtype shape is the lowered-`defstruct`
+ * RECORD form -- a single named `:int` field accessed via `.field`.  A
+ * positional defdata constructor (`(defdata Fix [^f] (Roll :int))`) is a
+ * genuine ADT whose values flow through `(Roll x)` / `match`, NOT field access,
+ * so it must keep its tagged/flat-product representation even though it is
+ * structurally a parametric single-int-field single-variant ADT.  Gating on the
+ * record style (named field) is exactly what separates the lowered defstruct
+ * from a hand-written positional ADT. */
+static bool adt_ctor_is_transparent_int_record(const CtorDef *c) {
+    return c && c->is_record && c->n_fields == 1 &&
+           c->fields[0].name != NULL &&
+           ctor_field_is_concrete_int(&c->fields[0]);
+}
+
 bool type_is_transparent_int_newtype(Type t) {
     StructDef *def = NULL;
     if (t.kind == TY_STRUCT) {
         def = t.as.struct_.def;
+    } else if (t.kind == TY_ADT) {
+        /* CONV-S1 seam 4: under the defstruct->defadt lowering the same phantom
+         * int-newtype (`(defstruct Schema [A] (raw :int))`) is a single-variant
+         * record ADT, not a TY_STRUCT.  Recognize that shape so the SC7
+         * chainable-HKT-return propagation (and every other transparency check)
+         * keeps treating it as the int64 carrier it still is at runtime. */
+        AdtDef *adef = t.as.adt_.def;
+        if (!adef || adef->n_type_params == 0 || adef->n_ctors != 1) return false;
+        return adt_ctor_is_transparent_int_record(adef->ctors[0]);
     } else if (t.kind == TY_APP) {
         Type args[16];
         uint8_t n_args = 0;
-        if (!type_extract_struct_app(&t, &def, args, &n_args)) return false;
+        if (type_extract_struct_app(&t, &def, args, &n_args)) {
+            /* struct-headed app -- fall through to the struct check below */
+        } else {
+            AdtDef *adef = NULL;
+            if (!type_extract_adt_app(&t, &adef, args, &n_args) || !adef)
+                return false;
+            if (adef->n_type_params == 0 || adef->n_ctors != 1) return false;
+            return adt_ctor_is_transparent_int_record(adef->ctors[0]);
+        }
     } else {
         return false;
     }
@@ -1144,7 +1191,7 @@ static bool adt_type_param_index(const AdtDef *def, const char *name, uint8_t *o
     return false;
 }
 
-static Type substitute_adt_app_type(const Type *t, const AdtDef *def, const Type *args) {
+Type substitute_adt_app_type(const Type *t, const AdtDef *def, const Type *args) {
     if (!t) return type_from_kind(TY_UNKNOWN);
     switch (t->kind) {
         case TY_TYVAR: {
@@ -1158,6 +1205,46 @@ static Type substitute_adt_app_type(const Type *t, const AdtDef *def, const Type
         case TY_APP: {
             Type fn  = substitute_adt_app_type(t->as.app.fn,  def, args);
             Type arg = substitute_adt_app_type(t->as.app.arg, def, args);
+            Type out = {0};
+            out.kind = TY_APP;
+            out.copy_kind = CK_COPY;
+            out.hkt_kind = KIND_STAR;
+            propagate_app_discipline(&out, &fn);
+            out.as.app.fn  = (Type *)malloc(sizeof(Type));
+            out.as.app.arg = (Type *)malloc(sizeof(Type));
+            if (!out.as.app.fn || !out.as.app.arg) { fprintf(stderr, "tur: oom\n"); abort(); }
+            *out.as.app.fn  = fn;
+            *out.as.app.arg = arg;
+            return out;
+        }
+        default:
+            return *t;
+    }
+}
+
+/* Owned analogue of substitute_adt_app_type: the substituted tyvar arg is
+ * DEEP-CLONED (clone_struct_app_type) so the returned tree aliases nothing in
+ * the caller's `args[]` spine and can be released with free_struct_app_type.
+ * Mirrors substitute_struct_app_type's ownership discipline.  Use this (not the
+ * aliasing variant above) at any call site that frees the result -- the plain
+ * substitute_adt_app_type returns `args[idx]` by reference for a bare tyvar,
+ * and a free() over that (or over a spine whose leaves alias it) is a bad-free
+ * of arena-backed nodes. */
+Type substitute_adt_app_type_owned(const Type *t, const AdtDef *def,
+                                   const Type *args) {
+    if (!t) return type_from_kind(TY_UNKNOWN);
+    switch (t->kind) {
+        case TY_TYVAR: {
+            uint8_t idx = 0;
+            if (t->as.tyvar_.name &&
+                adt_type_param_index(def, t->as.tyvar_.name, &idx)) {
+                return clone_struct_app_type(args[idx]);
+            }
+            return *t;
+        }
+        case TY_APP: {
+            Type fn  = substitute_adt_app_type_owned(t->as.app.fn,  def, args);
+            Type arg = substitute_adt_app_type_owned(t->as.app.arg, def, args);
             Type out = {0};
             out.kind = TY_APP;
             out.copy_kind = CK_COPY;
@@ -1204,6 +1291,19 @@ static const char *adt_field_c_type(const AdtDef *owner, const CtorField *field,
         case TY_FLOAT64:  return "double";
         default:          return "int64_t";
     }
+}
+
+/* Resolve an ADT ctor field's declared type against a concrete ADT-app receiver
+ * type (substitutes the app's type args into the field's declared type).  See
+ * types.h.  TY_UNKNOWN when `recv` is not a resolvable ADT app. */
+Type adt_field_type_for_app(const Type *recv, const CtorField *field) {
+    Type unknown = type_simple(TY_UNKNOWN, CK_COPY);
+    if (!recv || !field || !field->full_type) return unknown;
+    AdtDef *def = NULL;
+    Type args[16];
+    uint8_t n_args = 0;
+    if (!type_extract_adt_app(recv, &def, args, &n_args) || !def) return unknown;
+    return substitute_adt_app_type(field->full_type, def, args);
 }
 
 /* Append the mangled type-arg suffix for an ADT app (e.g. "__float" for (Maybe float)). */
@@ -1407,6 +1507,38 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
 
     const char *adt_inst_name = g_adt_apps[idx].name;
 
+    /* Dependency pre-pass (typedef ordering): a ctor field whose resolved type
+     * is itself a parametric monomorph -- e.g. `Cons__Option__int` whose head
+     * field is the by-value `Option__int` -- references that nested typedef by
+     * value INSIDE this aggregate, so the dependency's typedef MUST precede
+     * ours.  The struct-app emitter already does this (emit_registered_struct_
+     * app_rec); mirror it here, recursing into both the ADT-app and struct-app
+     * registries.  The `emitting` guard above breaks the cycle for a recursive
+     * field (a `Cons` tail referencing the same `Cons` monomorph). */
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        CtorDef *ctor = def->ctors[ci];
+        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+            const CtorField *fld = &ctor->fields[fi];
+            if (!fld->full_type) continue;
+            Type resolved = substitute_adt_app_type_owned(fld->full_type, def, args);
+            if (resolved.kind == TY_APP) {
+                for (uint32_t di = 0; di < g_n_adt_apps; di++) {
+                    if (type_eq(g_adt_apps[di].type, resolved)) {
+                        emit_registered_adt_app_rec(out, di);
+                        break;
+                    }
+                }
+                for (uint32_t di = 0; di < g_n_struct_apps; di++) {
+                    if (type_eq(g_struct_apps[di].type, resolved)) {
+                        emit_registered_struct_app_rec(out, di);
+                        break;
+                    }
+                }
+            }
+            free_struct_app_type(resolved);
+        }
+    }
+
     /* Emit the typedef for this monomorphised ADT instance.
      *
      * result-typedef-duplicated-across-modules: same guard story as the
@@ -1465,7 +1597,17 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
      * CONV-S1 ctor -- no heap box, no tag.  Hard-off until the crossings wire. */
     bool app_byval = adt_app_is_byvalue_product(g_adt_apps[idx].type);
 
-    /* Emit per-constructor functions for this monomorphised ADT instance. */
+    /* Emit per-constructor functions for this monomorphised ADT instance.
+     *
+     * Same cross-emission dedup story as the typedef guard above: the typedef is
+     * keyed on TUR_TY_<name>, but the ctor functions were emitted UNGUARDED, so
+     * a monomorph reached by two emit paths (e.g. the whole-program pass and the
+     * early-file mirror, common once a lowered parametric struct's monomorph --
+     * `Option__opaque`, `Vec__opaque` -- is requested from both) produced a
+     * `redefinition of ctor_<name>` at cc.  Guard the ctor block on TUR_FN_<name>
+     * so the first definition wins, exactly as the typedef does. */
+    buf_printf(out, "#ifndef TUR_FN_%s\n", adt_inst_name);
+    buf_printf(out, "#define TUR_FN_%s\n", adt_inst_name);
     for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
         CtorDef *ctor = def->ctors[ci];
         size_t mlen = strlen(ctor->name);
@@ -1518,7 +1660,21 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
         } else if (app_byval) {
             buf_printf(out, "    %s __r;\n", adt_inst_name);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-                buf_printf(out, "    __r.as.%s._%u = _%u;\n", mctor, fi, fi);
+                /* CONV-S1 seam 4 (B4 wide element in a by-value product): the
+                 * typedef stores a >8-byte by-value ADT field as the int64 box
+                 * pointer (line ~1459, type_is_wide_byval_adt), so the by-value
+                 * ctor must heap-box it too -- not assign the aggregate param into
+                 * the int64 slot.  Matches the carrier-ctor branch below and the
+                 * accessor's wide-element deref (emit_expr.c). */
+                if (wide_box[fi]) {
+                    buf_printf(out,
+                        "    { %s *__b = (%s *)malloc(sizeof(%s)); *__b = _%u;"
+                        " __r.as.%s._%u = (int64_t)(intptr_t)__b; }\n",
+                        val_ctype[fi], val_ctype[fi], val_ctype[fi], fi,
+                        mctor, fi);
+                } else {
+                    buf_printf(out, "    __r.as.%s._%u = _%u;\n", mctor, fi, fi);
+                }
             }
             buf_printf(out, "    return __r;\n");
         } else {
@@ -1545,6 +1701,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
         free(val_ctype);
         free(mctor);
     }
+    buf_printf(out, "#endif\n");
 
     buf_free(&suffix);
     g_adt_apps[idx].emitted  = true;
@@ -2785,8 +2942,14 @@ bool adt_app_is_byvalue_product(Type t) {
     if (!type_extract_adt_app(&t, &def, args, &n_args) || !def) return false;
     if (!adt_is_flat_product(def)) return false;       /* single-variant, non-GADT */
     if (def->n_type_params == 0) return false;          /* non-parametric is CONV-S1's path */
+    /* A nested by-value-product element (`(Cons (Option int))`'s `(Option int)`)
+     * is accepted ONLY for a :heap outer.  A :heap cell stores its element inline
+     * and its field read needs the ADT monomorph layout; a non-heap nested
+     * aggregate already round-trips via the struct-app monomorph path, so leaving
+     * it untouched avoids perturbing the constrained-instance-body specs. */
     for (uint8_t i = 0; i < n_args; i++)
-        if (!type_has_concrete_codegen_layout(&args[i])) return false;
+        if (!type_has_concrete_codegen_layout(&args[i]) &&
+            !(def->is_heap && adt_app_is_byvalue_product(args[i]))) return false;
     /* Every monomorphised field must resolve to a by-value-able concrete type --
      * no residual tyvar / HKT / non-concrete application (those are M7's job). */
     const CtorDef *c = def->ctors[0];
@@ -2795,7 +2958,8 @@ bool adt_app_is_byvalue_product(Type t) {
         Type rf = substitute_adt_app_type(c->fields[i].full_type, def, args);
         TypeKind k = rf.kind;
         if (k == TY_TYVAR || k == TY_FORALL || k == TY_EXISTS) return false;
-        if (k == TY_APP && !type_has_concrete_codegen_layout(&rf)) return false;
+        if (k == TY_APP && !type_has_concrete_codegen_layout(&rf) &&
+            !(def->is_heap && adt_app_is_byvalue_product(rf))) return false;
     }
     return true;
 }
@@ -2948,6 +3112,9 @@ const char *type_c_name(Type t) {
          * is the flat `tur_adt_<Name>` aggregate, not the int64 carrier.  Gated
          * by adt_is_byvalue_product (LIVE for leaf products as of B3). */
         case TY_ADT:
+            /* SC7: a lowered transparent int-newtype ADT is just its int64
+             * payload (mirrors the TY_STRUCT / TY_APP arms above). */
+            if (type_is_transparent_int_newtype(t)) return "int64_t";
             if (adt_is_byvalue_product(t.as.adt_.def)) {
                 /* CONV-S1 seam 3: a :heap record ADT lowers to a typed pointer to
                  * its by-value header (the ADT analogue of a :heap struct's
@@ -4188,6 +4355,12 @@ bool type_is_subtype(Type sub, Type super_) {
 /* Phase D: returns true when t is a struct type whose estimated sizeof exceeds 16
  * bytes, meaning it should be passed as const T* rather than by value. */
 bool type_struct_pass_by_ptr(Type t) {
+    /* SC7: a transparent int newtype is its bare int64 payload at the C level
+     * (type_c_name -> "int64_t"), so it is always passed by value, never
+     * pass-by-pointer-wrapped.  Catch it before the struct/ADT aggregate arms
+     * below, which would otherwise treat the lowered single-int-field record
+     * ADT as an aggregate and take its address at the call site. */
+    if (type_is_transparent_int_newtype(t)) return false;
     /* end-to-end-monomorphization: a :heap type already lowers to a typed
      * pointer `T__A *`, so it is passed by value (the pointer itself), never
      * pass-by-pointer-wrapped -- wrapping would make the param a double

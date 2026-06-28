@@ -239,7 +239,61 @@ bool fn_body_tail_is_carrier_producer(const Expr *e) {
                 b->type.as.fn.result_full_type &&
                 type_uses_carrier_abi(*b->type.as.fn.result_full_type))
                 return true;
+            /* CONV-S1 seam 4 (return-bridge): under the defstruct-as-defadt
+             * lowering a parametric ADT app (`(Result cstr cstr)`) is a BY-VALUE
+             * type, so `type_uses_carrier_abi` reports false -- yet an inline-C
+             * body is still EMITTED with an int64 carrier return (emit_fns.c's
+             * signature path lowers an inline-C TY_APP result to int64_t, since it
+             * is neither a typed pointer nor a TY_STRUCT).  A pure-Turmeric wrapper
+             * whose own return is the by-value aggregate (`capture` -> the int64
+             * `captures-get`) therefore still needs the carrier->by-value bridge.
+             * Recognise a non-heap TY_APP inline-C result as a carrier producer. */
+            if (b->body_is_inline_c && b->type.kind == TY_FN &&
+                b->type.as.fn.result_full_type &&
+                b->type.as.fn.result_full_type->kind == TY_APP &&
+                !type_is_heap_struct(*b->type.as.fn.result_full_type) &&
+                !type_is_heap_adt(*b->type.as.fn.result_full_type))
+                return true;
             return false;
+        }
+        default:
+            return false;
+    }
+}
+
+/* CONV-S1 seam 4 (return-bridge): true when the body tail is a direct call to an
+ * INLINE-C function whose by-value ADT-app result is nonetheless EMITTED as the
+ * int64 carrier.  Under the defstruct-as-defadt lowering a parametric ADT app
+ * (`(Result cstr cstr)`) is a by-value type, so `type_uses_carrier_abi` reports
+ * false -- but emit_fns.c still lowers an inline-C body with a TY_APP result to an
+ * int64_t C return, so a pure-Turmeric wrapper whose own return is the by-value
+ * aggregate returns that int64 into the aggregate slot.  This narrowly widens the
+ * M5 straddle gate (whose `type_uses_carrier_abi(body type)` test misses the
+ * lowered case) to exactly that shape -- NOT to an if/construct merge tail (which
+ * the (a) fix already lowers by value, so unboxing it would be wrong).  At default
+ * (no lowering) the inline-C result is the carrier rep and the M5 gate already
+ * handles it, so this stays inert. */
+static bool fn_body_tail_returns_carrier_value(EmitCtx *ctx, const Expr *e) {
+    (void)ctx;
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_ASCRIBE:
+            return fn_body_tail_returns_carrier_value(ctx, e->as.ascribe_.inner);
+        /* NOTE: do NOT descend into EX_DO/EX_LET/EX_LETREC here.  Under the
+         * defstruct-as-defadt lowering those control forms now bridge their own
+         * tail value into a by-value merge temp (emit_expr.c's
+         * bridge_control_value_to_byvalue_temp), so the merge result is already
+         * the by-value aggregate and `return <temp>` needs no further unbox.
+         * Descending would re-fire the M5 carrier->concrete deref on a value that
+         * is no longer the carrier (the assignment-straddle double-bridge). */
+        case EX_CALL: {
+            const Binding *b = e->as.call_.fn_binding;
+            if (!b || b->type.kind != TY_FN || !b->type.as.fn.result_full_type)
+                return false;
+            Type rft = *b->type.as.fn.result_full_type;
+            return b->body_is_inline_c && rft.kind == TY_APP
+                && !type_uses_carrier_abi(rft)
+                && !type_is_heap_struct(rft) && !type_is_heap_adt(rft);
         }
         default:
             return false;
@@ -628,11 +682,27 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * matches: int64_t for the base, the typed pointer for the spec. */
             bool typed_heap_spec = body_is_inline_c && use_abi_spec &&
                                    type_is_heap_struct(rft);
+            /* CONV-S1 seam 4 (inline-C instance-method signature): under the
+             * defstruct-as-defadt lowering a by-value record/product result
+             * (e.g. `Pos` -> `tur_adt_Pos`) is a concrete aggregate, not the
+             * int64 carrier -- an inline-C body returns it by value (`Pos r;
+             * return r;`), so the C signature must be the aggregate, exactly as
+             * the dict slot (emit_stmt.c, via type_c_name(result_full_type))
+             * already is.  Mirror `typed_struct` for the ADT representation: a
+             * non-:heap ADT/ADT-app whose ABI is by-value (carrier-ABI false)
+             * with a concrete codegen layout.  Carrier-ABI ADTs (multi-variant
+             * sums returned as the int64 handle) are excluded and stay int64. */
+            Type rft_r = emit_resolve_type(ctx, rft);
+            bool typed_byval_adt = body_is_inline_c &&
+                (rft_r.kind == TY_ADT || rft_r.kind == TY_APP) &&
+                !type_uses_carrier_abi(rft_r) &&
+                !type_is_heap_adt(rft_r) &&
+                type_has_concrete_codegen_layout(&rft_r);
             if (fn_ret_td && !body_is_inline_c) {
                 buf_puts(file, fn_ret_td);
             } else if (!body_is_inline_c || typed_ptr || typed_struct ||
-                       typed_cfnptr || typed_heap_spec) {
-                buf_puts(file, emit_type_c_name(ctx, rft));
+                       typed_cfnptr || typed_heap_spec || typed_byval_adt) {
+                buf_puts(file, emit_type_c_name(ctx, typed_byval_adt ? rft_r : rft));
             } else {
                 buf_puts(file, "int64_t");
             }
@@ -842,6 +912,21 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                     type_uses_carrier_abi(emit_resolve_type(ctx, param_ty)) &&
                     strcmp(pc, "int64_t") != 0)
                     fd->params[i]->emit_byvalue_carrier_abi = true;
+                /* CONV-S1 seam 4 (carrier-held by-value-ADT receiver): the param
+                 * signature is the int64 carrier (param_ty is the dispatch class
+                 * var `a`), but the binding's elaborated type is a by-value
+                 * aggregate ADT (`(Option cstr)` under lowering).  Flag it so a
+                 * field read off this receiver derefs the carrier pointer to the
+                 * concrete monomorph instead of reading the by-value aggregate. */
+                if (fd->params[i] && strcmp(pc, "int64_t") == 0) {
+                    Type bt = emit_resolve_type(ctx, fd->params[i]->type);
+                    const char *btc = emit_type_c_name(ctx, bt);
+                    if (btc && strcmp(btc, "int64_t") != 0 &&
+                        (bt.kind == TY_ADT || bt.kind == TY_APP) &&
+                        !type_is_heap_struct(bt) && !type_is_heap_adt(bt) &&
+                        !type_uses_carrier_abi(bt))
+                        fd->params[i]->emit_carrier_holds_byval = true;
+                }
             }
         }
         const char *pn = raw_name_for_binding(fd->params[i]);
@@ -1402,7 +1487,8 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             free(bridged);
         } else if (!ret_is_int64_carrier && ret_ctype
                    && fd->body->type.kind != TY_NEVER
-                   && type_uses_carrier_abi(emit_resolve_type(ctx, fd->body->type))
+                   && (type_uses_carrier_abi(emit_resolve_type(ctx, fd->body->type))
+                       || fn_body_tail_returns_carrier_value(ctx, fd->body))
                    && fn_body_tail_is_carrier_producer(fd->body)
                    && !fn_body_tail_emits_byvalue_carrier_abi(ctx, fd->body)) {
             /* M5 straddle (root cause C): an ordinary function or lifted lambda
@@ -1464,6 +1550,31 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * (double-box).  The non-parametric mirror is the `type_is_heap_adt`
              * arm in `type_uses_carrier_abi` / the heap-struct return cast above. */
             buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
+        } else if (ret_is_int64_carrier && fd->body &&
+                   fd->body->type.kind != TY_NEVER &&
+                   e->type.kind == TY_FN &&
+                   e->type.as.fn.result_kind == TY_TYVAR &&
+                   (emit_resolve_type(ctx, fd->body->type).kind == TY_FLOAT ||
+                    emit_resolve_type(ctx, fd->body->type).kind == TY_FLOAT32 ||
+                    emit_resolve_type(ctx, fd->body->type).kind == TY_FLOAT64)) {
+            /* nested-construct-byvalue (Gap #4, float element): a generic
+             * accessor (`ok-val`) whose DECLARED result is a bare tyvar (`: A`)
+             * collapses to the int64 carrier return, but inside a `(Result float
+             * cstr)` spec its body tail is a concrete `double` field read.  A plain
+             * `return <double>;` through an `int64_t` result NUMERICALLY converts
+             * (3.25 -> 3), and the caller's union reinterpret then reads garbage.
+             * Bit-reinterpret the float into the int64 carrier so the carried
+             * value round-trips (the cstr/pointer element is already bit-
+             * preserving through the implicit pointer->int64 return cast).  Gated
+             * on a TYVAR-declared result so a genuine `: float` function carried
+             * through the int64 poly-fn slot (poly-to-fat-float-*) -- which uses a
+             * NUMERIC convention -- is untouched. */
+            Type body_rt = emit_resolve_type(ctx, fd->body->type);
+            char *bridged = emit_carrier_bridge(ctx, file, strdup(ret_val),
+                                                CK_CONCRETE, CK_CARRIER, body_rt);
+            indent_buf(file, ctx->indent);
+            buf_printf(file, "return %s;\n", bridged);
+            free(bridged);
         } else {
             buf_printf(file, "return %s;\n", ret_val);
         }

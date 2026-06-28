@@ -2706,15 +2706,15 @@ typedef struct Schema {
 } Schema;
 
 typedef struct tur_adt_S {
-    union {
-        struct { int64_t _0; int64_t _1; } S;
-    } as;
+    int64_t a;
+    int64_t b;
 } tur_adt_S;
+typedef tur_adt_S S;
 
 static tur_adt_S ctor_S(int64_t _0, int64_t _1) {
     tur_adt_S __r;
-    __r.as.S._0 = _0;
-    __r.as.S._1 = _1;
+    __r.a = _0;
+    __r.b = _1;
     return __r;
 }
 
@@ -5538,8 +5538,8 @@ static int64_t sum(tur_adt_S s) {
         {
             tur_adt_S __scrut = (s);
             {
-                int64_t a_1250 = (int64_t)__scrut.as.S._0;
-                int64_t b_1251 = (int64_t)__scrut.as.S._1;
+                int64_t a_1250 = (int64_t)__scrut.a;
+                int64_t b_1251 = (int64_t)__scrut.b;
                 __t55 = (a_1250) + (b_1251);
                 goto ____t56;
             }

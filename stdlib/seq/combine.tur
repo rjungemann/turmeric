@@ -24,7 +24,14 @@
 
 (defn seq-make-pair [a : int b : int] : int
   ```c
-  Tuple2 *p = (Tuple2 *)malloc(sizeof(Tuple2));
+  /* A seq pair is an opaque int64 handle to a 2-int64 heap cell.  Use a
+   * local C struct rather than the stdlib `Tuple2` type name so the helper
+   * is representation-independent: under the defstruct-as-defadt lowering
+   * `Tuple2` is renamed `tur_adt_Tuple2` with a nested layout, but these
+   * cells are produced and consumed only by seq-make-pair / seq-pair-first
+   * / seq-pair-second, so a private flat layout is self-consistent. */
+  struct __seq_pair2 { int64_t e1; int64_t e2; };
+  struct __seq_pair2 *p = (struct __seq_pair2 *)malloc(sizeof(struct __seq_pair2));
   p->e1 = a; p->e2 = b;
   return (int64_t)(intptr_t)p;
   ```)
