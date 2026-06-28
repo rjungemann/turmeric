@@ -126,8 +126,15 @@ config.plugins.turmeric = config.plugins.turmeric or {}
 config.plugins.turmeric.tur = config.plugins.turmeric.tur or "tur"
 
 local function nearest_doc()
+  -- Try the current active view first
   if core.active_view and core.active_view.doc then
     return core.active_view.doc
+  end
+  -- Fallback: If focus is temporarily on the Toolbar or another utility view,
+  -- query the main editor pane's active view.
+  local node = core.root_view:get_active_node_default()
+  if node and node.active_view and node.active_view.doc then
+    return node.active_view.doc
   end
   return nil
 end
@@ -963,20 +970,104 @@ keymap.add {
 -- -------------------------------------------------------------------------
 -- ToolbarView Integration
 -- -------------------------------------------------------------------------
-local ok_tb, Toolbar = pcall(require, "plugins.toolbar")
-if ok_tb and Toolbar then
-  if Toolbar.add_button then
-    Toolbar:add_button {
-      icon = "play",
-      command = "turmeric:run-file",
-      tooltip = "Run Turmeric File (Cmd+R)"
+local ok_tb, toolbar = pcall(require, "plugins.toolbarview")
+if ok_tb and toolbar and type(toolbar) == "table" and toolbar.add_item then
+  -- --- Integration with existing plugins.toolbarview ---
+  core.add_thread(function()
+    coroutine.yield(0.2)
+    pcall(function()
+      toolbar:add_item({
+        icon = "▶",
+        command = "turmeric:run-file",
+        tooltip = "Run File (Cmd+R)"
+      })
+      toolbar:add_item({
+        icon = ">_",
+        command = "turmeric:start-repl",
+        tooltip = "Open REPL Pane"
+      })
+    end)
+  end)
+else
+  -- --- Self-contained Custom ToolbarView Fallback ---
+  local TurmericToolbarView = View:extend()
+
+  function TurmericToolbarView:new()
+    TurmericToolbarView.super.new(self)
+    self.size.y = 30
+    self.buttons = {
+      { text = " ▶ Run ", command = "turmeric:run-file", color = { 60, 180, 60 } },
+      { text = " >_ REPL ", command = "turmeric:start-repl", color = { 100, 140, 240 } },
     }
-    Toolbar:add_button {
-      icon = "terminal",
-      command = "turmeric:start-repl",
-      tooltip = "Open REPL Pane"
-    }
+    self.hovered_idx = nil
   end
+
+  function TurmericToolbarView:get_name() return "Toolbar" end
+
+  function TurmericToolbarView:draw()
+    self:draw_background(style.background3 or style.background)
+    local ox, oy = self:get_content_offset()
+    local lh = style.code_font:get_height()
+    local padding = style.padding.x
+    local x = ox + padding
+    local y = oy + (self.size.y - lh) / 2
+    local fnt = style.code_font
+
+    for i, btn in ipairs(self.buttons) do
+      local w = fnt:get_width(btn.text) + padding * 2
+      local is_hovered = (self.hovered_idx == i)
+      
+      local bg_color = is_hovered and (style.background3 or style.background) or (style.background2 or style.background)
+      renderer.draw_rect(x, oy + 4, w, self.size.y - 8, bg_color)
+      
+      local text_color = is_hovered and btn.color or style.text
+      renderer.draw_text(fnt, btn.text, x + padding, y, text_color)
+      
+      btn.rect = { x = x, y = oy + 4, w = w, h = self.size.y - 8 }
+      x = x + w + padding
+    end
+  end
+
+  function TurmericToolbarView:on_mouse_moved(mx, my, dx, dy)
+    TurmericToolbarView.super.on_mouse_moved(self, mx, my, dx, dy)
+    local ox, oy = self:get_content_offset()
+    local old_hovered = self.hovered_idx
+    self.hovered_idx = nil
+    for i, btn in ipairs(self.buttons) do
+      if btn.rect and mx >= btn.rect.x and mx <= btn.rect.x + btn.rect.w and
+         my >= btn.rect.y and my <= btn.rect.y + btn.rect.h then
+        self.hovered_idx = i
+        break
+      end
+    end
+    if old_hovered ~= self.hovered_idx then
+      core.redraw()
+    end
+  end
+
+  function TurmericToolbarView:on_mouse_pressed(button, mx, my, clicks)
+    TurmericToolbarView.super.on_mouse_pressed(self, button, mx, my, clicks)
+    if button == "left" then
+      for i, btn in ipairs(self.buttons) do
+        if btn.rect and mx >= btn.rect.x and mx <= btn.rect.x + btn.rect.w and
+           my >= btn.rect.y and my <= btn.rect.y + btn.rect.h then
+          command.perform(btn.command)
+          break
+        end
+      end
+    end
+  end
+
+  core.add_thread(function()
+    coroutine.yield(0.2)
+    local toolbar = TurmericToolbarView()
+    -- Safely split active node default (always a DocView/leaf) to avoid root_node split-type restrictions.
+    -- Passes 'toolbar' directly to split and locks height on y-axis ({y = true}).
+    local node = core.root_view:get_active_node_default()
+    if node then
+      node:split("up", toolbar, {y = true})
+    end
+  end)
 end
 
 -- -------------------------------------------------------------------------
