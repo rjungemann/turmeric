@@ -114,7 +114,50 @@ fields, parametric, `:heap`, `:copy`/`:move`).
    lowering: new negative fixture `errors/struct-linear-double-use` (double-use ->
    TUR-E0101) and positive `struct-linear-lowered`; the stdlib resource types and
    all existing linear fixtures stay green (1874/0).
-5. **Delete `StructDef` -- the bulk, separately scoped. NOT STARTED (next).**
+5. **Delete `StructDef` -- the bulk, separately scoped. IN PROGRESS.**
+
+   **Step 1 -- migrate `defopaque` off `StructDef`. DONE (2026-06-29).**  The
+   slice-5 footprint below missed a *second, live* `StructDef` producer:
+   `defopaque`.  Every `(defopaque ...)` allocated a `StructDef` with
+   `is_opaque=true` (58 fixtures + 31 stdlib files), so `StructDef` could not be
+   deleted without first re-homing opaque newtypes.  An opaque newtype is now an
+   **opaque `AdtDef`** (`n_ctors == 0`, `is_opaque=true`) carried on `TY_ADT` --
+   reusing the ubiquitous ADT kind so typeclass dispatch, kind inference,
+   `type_eq`, mangling and the REPL needed no changes (a 0-ctor ADT is already
+   steered to the int64 carrier by `adt_is_byvalue_product`).  Ported the opaque
+   short-circuits onto the ADT path: `propagate_app_discipline`,
+   `type_app_is_concrete_adt`, `type_uses_carrier_abi` (opaque ADT is a plain
+   int64, not a carrier aggregate -- mirrors the old non-parametric opaque-struct
+   rule), `ascribe_to_opaque`, the ADT typedef + ADT-app forward-decl emitters
+   (skip opaque), a new `def_is_opaque_type_decl` guard at the four
+   global-emission sites (the opaque type-decl `EX_DEF` no longer carries a
+   `struct_def`), `type_phantom_hides_aggregate` + `sk_find_serializable` (CPS),
+   and the `exists`-open phantom-app projection (keep the applied form for an
+   opaque ADT head so the bound index survives per-open skolem renaming).  Suite
+   green (1874/0).  `StructDef.is_opaque` now has **zero producers**; the ~40
+   `is_opaque`-on-`StructDef` reads are dead and get removed with the type.
+
+   **Remaining steps (the deletion proper) -- two more plan-inaccuracies found:**
+   - *The residual `defstruct` `StructDef` path is NOT unused* (the claim below
+     is wrong).  An instrumented full-suite run shows **6 fixtures** still take
+     it, across three distinct field categories that the record-ADT path does not
+     yet host: (a) **effect-annotated `fn` fields** -- `run : fn #fx{Write}`
+     (Action / App / Emitter / Printer); `CtorField` carries no `effect_row`, so
+     lowering needs `effect_check` to read it from the lowered field; (b)
+     **grouped field specs** -- `[a : int [b : int]]` (Mixed); the gate
+     re-derives from the raw form and bails on the nested `F_VEC` before
+     `elab_defstruct` flattens it; (c) **applied/`Dense` fields** -- World
+     (`(Dense m A)`).  Each must lower (or be explicitly rejected) before the
+     residual path can be removed.
+   - *`TY_STRUCT{def=NULL}` is load-bearing as the tyvar / unknown-type /
+     opaque-type-constructor-argument placeholder* across `elab_types.c`,
+     `elab_fns.c`, `elab_typeclasses.c`, `kind_check.c`, `typeclass.c`.  Deleting
+     the `TY_STRUCT` kind therefore also requires migrating every def-less
+     placeholder to `TY_TYVAR` -- a sizeable sub-project of its own, not captured
+     by the "198 refs" count, and the riskiest remaining piece (it changes the
+     type-variable representation the unifier and kind checker key on).
+
+   Original footprint (still accurate for the `StructDef`-identity refs):
    With slices 1-4 done the gate lowers every `defstruct` whose fields are
    scalars / pointers / `fn` / aggregates / parametric / applied / `exists`, and
    every annotation (`:copy`/`:move`/`:heap`/`:linear`/`:no-auto-ctor`).  The only
@@ -143,20 +186,25 @@ fields, parametric, `:heap`, `:copy`/`:move`).
 
 ## Recommendation
 
-**Status (2026-06-29): slices 1-4 DONE; slice 5 is the remaining work.**  Slices
-1-4 landed as four separate commits, each with a green by-value suite, clearing
-all four carve-out groups (applied-type, `:no-auto-ctor`, `exists`, `:linear`).
-A `defstruct` now lowers to a record ADT in every case that occurs in the
-codebase; the residual `StructDef` path serves only built-in-compound field forms
-(`lref`/borrow/`forall`/session/handler/...) that no current `defstruct` uses.
+**Status (2026-06-29): slices 1-4 DONE; slice 5 step 1 (defopaque migration)
+DONE; slice 5 deletion proper is the remaining work.**  Slices 1-4 landed as four
+separate commits.  Slice 5 step 1 (migrate `defopaque` off `StructDef`) landed as
+a fifth, each with a green by-value suite (1874/0).
 
-The only remaining phase is slice 5 -- the `StructDef` deletion itself (198 refs,
-19 files, typeclass-dispatch entanglement).  It is the large, risky, all-or-
-nothing phase and should be taken on as dedicated work: unlike slices 1-4 it does
-not decompose into independently-committable, independently-green increments
-(you cannot half-delete the type), and instance selection keys on `StructDef`
-identity, so it ripples into typeclass resolution + codegen.  Before it can be a
-*clean* deletion, the residual built-in-compound field forms above need either a
-record-ADT home or an explicit rejection.  None of this is urgent: the lowering
-is correct and complete for real code today, so slice 5 stays sequenced behind
+`defopaque` was a prerequisite the original slice-5 scope missed entirely -- it
+is now migrated to an opaque `AdtDef`, so `StructDef` has **zero opaque
+producers** left.  The remaining producer is the residual `defstruct` path, which
+-- contrary to the original plan -- is still used by 6 fixtures (effect-`fn`,
+grouped-spec, and applied-field categories; see slice 5 above).
+
+The remaining deletion is larger and riskier than the original "198 refs / 19
+files" estimate because of two findings made during step 1: (a) the residual
+`defstruct` path must first host (or reject) three field-form categories before
+it can be removed, and (b) `TY_STRUCT{def=NULL}` is the elaborator's
+tyvar/unknown-type placeholder, so deleting the `TY_STRUCT` kind also means
+migrating every def-less placeholder to `TY_TYVAR`.  It remains the large,
+all-or-nothing phase: instance selection keys on `StructDef` identity, so it
+ripples into typeclass resolution + codegen.  None of this is urgent: the
+lowering is correct and complete for real code today (the residual path still
+compiles the 6 structs correctly), so the deletion stays sequenced behind
 anything that fixes real defects.
