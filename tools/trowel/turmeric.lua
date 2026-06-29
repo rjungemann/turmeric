@@ -911,7 +911,15 @@ if config.plugins.turmeric.auto_open_repl then
   -- layout before we split. core.add_thread with no yield runs at the next
   -- frame, which is the canonical "after-startup" hook in Trowel plugins.
   core.add_thread(function()
-    coroutine.yield(0.1)
+    -- Must run AFTER the toolbar split (which yields 0.2s). If the REPL
+    -- splits the editor leaf first, the toolbar's later split-with-locked-y
+    -- ends up *inside* the editor side of the REPL vsplit. Node:is_resizable
+    -- on a split node ANDs its children, so the toolbar's locked-y leaf
+    -- bubbles is_resizable("y") = false up through the editor branch and
+    -- kills the REPL divider drag (cursor never flips to sizev). Splitting
+    -- the REPL *after* the toolbar puts the toolbar outside the REPL stack,
+    -- so the REPL divider only sees two unlocked leaves.
+    coroutine.yield(0.3)
     open_repl_view("down")
     -- Re-focus the editor so the user can start typing in their file,
     -- not in the REPL prompt.
