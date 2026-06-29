@@ -503,16 +503,25 @@ typedef struct {
     const Expr    *init;     /* its pure initializer */
 } CtxLet;
 
+/* The nominal name of a TY_STRUCT or (structdef-retirement slice 5) opaque /
+ * record TY_ADT type, or NULL if `t` is neither.  An opaque newtype env (a
+ * `defopaque`) is a TY_ADT after the migration, so serial env marshaling must
+ * recognise both nominal carriers. */
+static const char *sk_nominal_type_name(Type t) {
+    if (t.kind == TY_STRUCT && t.as.struct_.def) return t.as.struct_.def->name;
+    if (t.kind == TY_ADT && t.as.adt_.def) return t.as.adt_.def->name;
+    return NULL;
+}
+
 /* cps-transform-plan (a): find a Serializable instance for `t` and return its
- * serialize/deserialize method C names. Restricted to nominal (TY_STRUCT, incl.
- * opaque) types -- primitive int/cstr envs use the inline codec. Scans the
- * program's instance definitions (codegen has no typeclass env). */
+ * serialize/deserialize method C names. Restricted to nominal (TY_STRUCT or
+ * TY_ADT, incl. opaque) types -- primitive int/cstr envs use the inline codec.
+ * Scans the program's instance definitions (codegen has no typeclass env). */
 static bool sk_find_serializable(const Expr *program, Type t,
                                  const char **ser_out, const char **deser_out) {
     if (!program || program->kind != EX_PROGRAM) return false;
-    if (t.kind != TY_STRUCT || !t.as.struct_.def || !t.as.struct_.def->name)
-        return false;
-    const char *tname = t.as.struct_.def->name;
+    const char *tname = sk_nominal_type_name(t);
+    if (!tname) return false;
     for (uint32_t i = 0; i < program->as.program.n; i++) {
         const Expr *it = program->as.program.items[i];
         if (!it || it->kind != EX_INSTANCE_DEF) continue;
@@ -520,10 +529,9 @@ static bool sk_find_serializable(const Expr *program, Type t,
         if (!inst || !inst->typeclass || !inst->typeclass->name) continue;
         if (strcmp(inst->typeclass->name->name, "Serializable") != 0) continue;
         if (inst->n_type_args < 1) continue;
-        Type at = inst->type_args[0];
-        if (at.kind != TY_STRUCT || !at.as.struct_.def || !at.as.struct_.def->name)
-            continue;
-        if (strcmp(at.as.struct_.def->name, tname) != 0) continue;
+        const char *atname = sk_nominal_type_name(inst->type_args[0]);
+        if (!atname) continue;
+        if (strcmp(atname, tname) != 0) continue;
         /* Found the matching instance. When the caller only wants existence
          * (NULL out-params, e.g. a feasibility check), don't allocate names. */
         if (!ser_out || !deser_out) return true;

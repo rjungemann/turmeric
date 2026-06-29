@@ -2845,8 +2845,18 @@ Expr *elab_open(Elab *e, const Form *call) {
                  * is the SizedBuf path and the eventual sized-world `(World n)`
                  * path.  See docs/reported/pack-open-phantom-opaque-body-type-collapses.md. */
                 Type head = ex2_peel_phantom_app(T);
+                /* structdef-retirement slice 5: a `defopaque` head is now an
+                 * opaque TY_ADT (it was a real-def TY_STRUCT before).  Keep the
+                 * applied form `(Op n)` for it -- exactly as for the struct case --
+                 * so the bound index `n` survives into v_type, gets a fresh
+                 * per-open skolem name below, and a cross-skolem `(SizedBuf na)`
+                 * vs `(SizedBuf nb)` mismatch is rejected at the call site.  A
+                 * NON-opaque ADT head (SizedVec / defgadt) still peels to bare
+                 * nominal, matching the 14+ stdlib bare-param entry points. */
                 bool head_is_real_struct =
-                    head.kind == TY_STRUCT && head.as.struct_.def != NULL;
+                    (head.kind == TY_STRUCT && head.as.struct_.def != NULL) ||
+                    (head.kind == TY_ADT && head.as.adt_.def != NULL &&
+                     head.as.adt_.def->is_opaque);
                 if (head_is_real_struct) {
                     v_type = *T;
                 } else {
