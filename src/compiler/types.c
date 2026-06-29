@@ -1271,6 +1271,32 @@ Type substitute_adt_app_type_owned(const Type *t, const AdtDef *def,
 }
 
 /* Return the C type string for a CtorField with concrete type args substituted. */
+/* CONV-S1 seam 4 / structdef-retirement slice 1: true when a `Result`/`Option`
+ * monomorph field whose resolved type is `resolved` is stored as a heap pointer
+ * `T *` (box-as-pointer) rather than inline / int64-boxed.  Applies to a
+ * non-parametric value-STRUCT field (the original carrier-box layout match) and,
+ * since the defstruct-as-defadt lowering, to a non-parametric by-value record-ADT
+ * field (a lowered defstruct -- `User` -> `tur_adt_User`).  Centralised so the
+ * typedef, ctor param/store, and field-read sites agree -- and so it takes
+ * precedence over the B4 wide-by-value-element int64 box (`type_is_wide_byval_adt`)
+ * for these fields, which would otherwise pick a conflicting int64 slot for a wide
+ * (>8-byte) record-ADT payload like `User`. */
+bool adt_field_is_ros_pointer_box(const AdtDef *owner, const Type *resolved) {
+    if (!owner || !owner->name || !resolved) return false;
+    if (strcmp(owner->name, "Result") != 0 && strcmp(owner->name, "Option") != 0)
+        return false;
+    if (resolved->kind == TY_STRUCT && resolved->as.struct_.def &&
+        !resolved->as.struct_.def->is_opaque &&
+        resolved->as.struct_.def->n_type_params == 0)
+        return true;
+    if (resolved->kind == TY_ADT && resolved->as.adt_.def &&
+        !resolved->as.adt_.def->is_heap &&
+        resolved->as.adt_.def->n_type_params == 0 &&
+        adt_is_byvalue_product(resolved->as.adt_.def))
+        return true;
+    return false;
+}
+
 static const char *adt_field_c_type(const AdtDef *owner, const CtorField *field,
                                      const Type *args) {
     if (field->full_type && owner && args) {
@@ -1292,12 +1318,7 @@ static const char *adt_field_c_type(const AdtDef *owner, const CtorField *field,
          * default: there `Result`/`Option` are structs, so this ADT path is never
          * reached for them.  The ctor heap-boxes the by-value param into the slot
          * (see the byval ctor branch's struct-pointer box). */
-        if (owner->name &&
-            (strcmp(owner->name, "Result") == 0 ||
-             strcmp(owner->name, "Option") == 0) &&
-            resolved.kind == TY_STRUCT && resolved.as.struct_.def &&
-            !resolved.as.struct_.def->is_opaque &&
-            resolved.as.struct_.def->n_type_params == 0) {
+        if (adt_field_is_ros_pointer_box(owner, &resolved)) {
             static char ptrbuf[128];
             snprintf(ptrbuf, sizeof(ptrbuf), "%s *", type_c_name(resolved));
             free_struct_app_type(resolved);
@@ -1590,6 +1611,22 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                 buf_printf(out, "typedef struct %s %s;\n", un, un);
                 buf_printf(out, "#endif\n");
             }
+            /* structdef-retirement slice 1: same forward decl for a non-parametric
+             * by-value record-ADT field stored as `tur_adt_T *` (the Result/Option
+             * box-as-pointer above).  The user ADT is not in either app registry
+             * (non-parametric), so the recursion cannot reach it; a guarded forward
+             * `typedef struct tur_adt_T tur_adt_T;` is all a pointer slot needs. */
+            if (resolved.kind == TY_ADT && resolved.as.adt_.def &&
+                resolved.as.adt_.def->name &&
+                !resolved.as.adt_.def->is_heap &&
+                resolved.as.adt_.def->n_type_params == 0) {
+                char *un = mangle_field_name(resolved.as.adt_.def->name);
+                buf_printf(out, "#ifndef TUR_FWD_tur_adt_%s\n", un);
+                buf_printf(out, "#define TUR_FWD_tur_adt_%s\n", un);
+                buf_printf(out, "typedef struct tur_adt_%s tur_adt_%s;\n", un, un);
+                buf_printf(out, "#endif\n");
+                free(un);
+            }
             free_struct_app_type(resolved);
         }
     }
@@ -1619,7 +1656,8 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
             Type fres = (fld->full_type && def)
                 ? substitute_adt_app_type_owned(fld->full_type, def, args)
                 : type_simple(TY_UNKNOWN, CK_COPY);
-            const char *ctype = type_is_wide_byval_adt(fres)
+            const char *ctype = (type_is_wide_byval_adt(fres) &&
+                                 !adt_field_is_ros_pointer_box(def, &fres))
                 ? "int64_t"
                 : adt_field_c_type(def, fld, args);
             free_struct_app_type(fres);
@@ -1656,7 +1694,8 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
             Type fres = (fld->full_type && def)
                 ? substitute_adt_app_type_owned(fld->full_type, def, args)
                 : type_simple(TY_UNKNOWN, CK_COPY);
-            const char *ctype = type_is_wide_byval_adt(fres)
+            const char *ctype = (type_is_wide_byval_adt(fres) &&
+                                 !adt_field_is_ros_pointer_box(def, &fres))
                 ? "int64_t"
                 : adt_field_c_type(def, fld, args);
             free_struct_app_type(fres);
@@ -1716,7 +1755,8 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                 ? substitute_adt_app_type_owned(fld->full_type, def, args)
                 : type_simple(TY_UNKNOWN, CK_COPY);
             val_ctype[fi] = adt_field_c_type(def, fld, args);
-            wide_box[fi] = type_is_wide_byval_adt(fres);
+            wide_box[fi] = type_is_wide_byval_adt(fres) &&
+                           !adt_field_is_ros_pointer_box(def, &fres);
             free_struct_app_type(fres);
         }
 
@@ -2809,6 +2849,17 @@ static bool adt_field_is_inline_byval_d(const CtorField *f, int depth) {
          * it as the pointer carrier, exactly as a :heap struct field is excluded. */
         return ad && !ad->is_heap && !ad->needs_drop_glue &&
                adt_is_byvalue_product_d(ad, depth - 1);
+    }
+    if (ft->kind == TY_APP) {
+        /* structdef-retirement slice 1: an APPLIED/parametric by-value monomorph
+         * field (`(Option cstr)` -> `tur_adt_Option__cstr`, `(Box int)`, `(Pair2
+         * cstr int)`) is a by-value aggregate stored INLINE exactly as a nested
+         * struct/ADT field is.  A :heap monomorph is a typed pointer (excluded,
+         * like the TY_ADT/TY_STRUCT :heap cases); a drop-glue-bearing base def is
+         * excluded to keep the owning product trivially copyable. */
+        const AdtDef *ad = type_adt_app_def(ft);
+        return ad && !ad->is_heap && !ad->needs_drop_glue &&
+               adt_app_is_byvalue_product(*ft);
     }
     return false;
 }

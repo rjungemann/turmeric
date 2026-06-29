@@ -733,6 +733,14 @@ typedef struct Elab {
      * reads-and-clears it at entry, so nested calls during arg elaboration do not
      * inherit the leniency. */
     bool              make_struct_lenient_args;
+    /* structdef-retirement slice 2 (CTOR-V0): a `:no-auto-ctor` lowered record ADT
+     * keeps its value-namespace constructor binding (make-struct rewrites
+     * `(make-struct Name ...)` to the ctor call `(Name ...)` and needs it), but a
+     * DIRECT `(Name ...)` call must still be rejected.  make-struct sets this flag
+     * around its rewrite's elab_call so the no_auto_ctor guard there lets the
+     * rewritten call through; elab_call reads-and-clears it at entry so a nested
+     * user `(Name ...)` during arg elaboration is still rejected. */
+    bool              make_struct_ctor_rewrite;
 } Elab;
 
 /* GF1: per-gen elaboration state (stack-allocated, linked by parent pointer) */

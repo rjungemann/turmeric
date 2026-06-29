@@ -765,17 +765,49 @@ void elab_register_struct_def(Elab *e, StructDef *def) {
  * new-syntax (per-field list) scans and parametric/non-parametric alike.
  * `type_tok` is the field's type form, already unwrapped from any F_TYPE_ANN.
  * Returns true when the field is representable on the record-ADT path. */
-static bool defstruct_field_type_lowerable(const Form *type_tok) {
+static bool defstruct_field_type_lowerable(Elab *e, const Form *type_tok) {
     if (type_tok->tag == F_LIST) {
-        /* slice 7: a *typed* `fn` field `(fn [..] ..)` is, exactly like a bare
-         * `fn` (slice 6), an 8-byte function-pointer carrier slot -- its
+        /* slice 7: a *typed* `fn`/`c-fn` field `(fn [..] ..)` is, exactly like a
+         * bare `fn` (slice 6), an 8-byte function-pointer carrier slot -- its
          * argument/return signature only feeds type checking, never layout -- so
-         * it lowers like a scalar carrier.  Any other compound / applied F_LIST
-         * type (e.g. `(Vec int)`, `(exists ...)`) still keeps the struct path. */
-        return type_tok->as.list.len >= 1 &&
-               type_tok->as.list.items[0]->tag == F_SYM &&
-               type_tok->as.list.items[0]->as.sym->len == 2 &&
-               memcmp(type_tok->as.list.items[0]->as.sym->name, "fn", 2) == 0;
+         * it lowers like a scalar carrier.
+         *
+         * structdef-retirement slice 1: a *user applied/parametric type* field --
+         * `(Option cstr)`, `(Box X)`, `(Dense m A)`, `(Tbl #row{..})`, TY_APP --
+         * also lowers.  The record-ADT product already stores such a field the
+         * way `defdata` does (by-value aggregate inline, or int64 carrier with
+         * `adt_field_instantiate_type` tyvar substitution at field access), so it
+         * no longer keeps the struct path.
+         *
+         * A BUILT-IN compound type form, however, is NOT a user type application
+         * and stays on the struct path: `(lref T)`/`(& T)`/borrow, the
+         * `exists`/`forall` quantifiers (slice 3), `handler`/`arrow`/session/role/
+         * global/project type forms.  These are their own TypeKinds (not TY_APP);
+         * lowering one would mis-elaborate it as a type-constructor application
+         * (`(lref int)` -> "cannot apply a type of kind '*'") and would also drop
+         * the struct-path-only diagnostics (e.g. `:copy` over a linear field). */
+        if (type_tok->as.list.len < 1 ||
+            type_tok->as.list.items[0]->tag != F_SYM)
+            return false;
+        const Symbol *head = type_tok->as.list.items[0]->as.sym;
+        if (head == e->sym_fn || head == e->sym_c_fn) return true; /* fn carrier */
+        /* structdef-retirement slice 3: an `exists`-pack field is carried as the
+         * int64 existential-record pointer (existential packing already boxes a
+         * wide aggregate payload into that carrier slot), so it lowers like any
+         * scalar carrier field.  `forall` (universal quantification) is not a
+         * value-carrying field form and stays on the struct path. */
+        if (head == e->sym_exists || head == e->sym_exists_u) return true;
+        if (head == e->sym_forall || head == e->sym_forall_u ||
+            head == e->sym_lref || head == e->sym_ampersand ||
+            head == e->sym_borrow_mut || head == e->sym_handler_type ||
+            head == e->sym_arrow ||
+            head == e->sym_session_type || head == e->sym_session_Send ||
+            head == e->sym_session_Recv || head == e->sym_session_Choose ||
+            head == e->sym_session_Branch || head == e->sym_session_Rec ||
+            head == e->sym_session_Timeout || head == e->sym_project_type ||
+            head == e->sym_global_type || head == e->sym_role_type)
+            return false;  /* built-in compound form: keep the struct path */
+        return true;  /* user applied/parametric type field (TY_APP) */
     }
     if (type_tok->tag != F_KEYWORD && type_tok->tag != F_SYM)
         return false;  /* not a leaf type token */
@@ -822,7 +854,7 @@ static bool defstruct_fields_all_primitive(Elab *e, const Form *fields_vec) {
         if (i >= n) return false;
         const Form *type_tok = fields_vec->as.list.items[i];
         if (type_tok->tag == F_TYPE_ANN) type_tok = type_tok->as.list.items[0];
-        if (!defstruct_field_type_lowerable(type_tok)) return false;
+        if (!defstruct_field_type_lowerable(e, type_tok)) return false;
         i++;
     }
     return true;
@@ -842,7 +874,7 @@ static bool defstruct_newstyle_fields_all_primitive(Elab *e, const Form *call,
         if (ff->as.list.items[0]->tag != F_SYM) return false;  /* field name */
         const Form *type_tok = ff->as.list.items[1];
         if (type_tok->tag == F_TYPE_ANN) type_tok = type_tok->as.list.items[0];
-        if (!defstruct_field_type_lowerable(type_tok)) return false;
+        if (!defstruct_field_type_lowerable(e, type_tok)) return false;
         any = true;
     }
     return any;
@@ -867,12 +899,14 @@ bool defstruct_lowers_to_adt(Elab *e, const Form *call) {
         const Form *kw = call->as.list.items[idx];
         if (kw->tag != F_KEYWORD) break;
         if (kw->as.sym == e->kw_copy || kw->as.sym == e->kw_move) { idx++; continue; }
-        if (kw->as.sym == e->kw_linear)
-            return false;  /* :linear keeps the struct path */
-        if (kw->as.sym == e->kw_no_auto_ctor)
-            return false;  /* :no-auto-ctor opts out of the auto-bound ctor,
-                            * which the record-ADT path always binds -- keep the
-                            * struct path so the `(Name ...)` call stays rejected. */
+        /* structdef-retirement slice 4: `:linear` now lowers -- the lowered ADT
+         * type carries CK_LINEAR (type_adt), so the exactly-once enforcement
+         * propagates from the type's copy_kind exactly as it did on the struct. */
+        if (kw->as.sym == e->kw_linear) { idx++; continue; }
+        /* structdef-retirement slice 2: `:no-auto-ctor` now lowers -- the record-
+         * ADT path honours it by suppressing the value-namespace constructor
+         * (elab_defdata), so the `(Name ...)` call form still gets rejected. */
+        if (kw->as.sym == e->kw_no_auto_ctor) { idx++; continue; }
         /* seam 3 (DONE): a `:heap` struct -- BOTH non-parametric and parametric
          * (the stdlib Vec/Map/Set/MutableMap/Cons) -- lowers to a `:heap` record
          * defadt.  The typed-pointer ABI foundation (`defdata :heap`, the
@@ -1132,7 +1166,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
          * defdata's argument order is name, optional :copy/:move/:heap keywords,
          * optional type-param vec, then the constructor(s).  Seam 3: a :heap
          * struct lowers to a :heap record defadt (typed-pointer ABI). */
-        Form *dd_items[6];
+        Form *dd_items[8];
         uint32_t ddn = 0;
         dd_items[ddn++] = form_sym(e->arena, name_form->span, e->sym_defdata);
         dd_items[ddn++] = name_form;
@@ -1140,6 +1174,16 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
             dd_items[ddn++] = form_keyword(e->arena, name_form->span, e->kw_copy);
         if (is_heap)
             dd_items[ddn++] = form_keyword(e->arena, name_form->span, e->kw_heap);
+        /* structdef-retirement slice 4: forward `:linear` so the lowered ADT type
+         * carries CK_LINEAR and the exactly-once enforcement propagates. */
+        if (is_linear)
+            dd_items[ddn++] = form_keyword(e->arena, name_form->span, e->kw_linear);
+        /* structdef-retirement slice 2: forward `:no-auto-ctor` so elab_defdata
+         * suppresses the value-namespace constructor (the `(Name ...)` call form
+         * stays rejected; construction is via make-struct). */
+        if (no_auto_ctor)
+            dd_items[ddn++] = form_keyword(e->arena, name_form->span,
+                                           e->kw_no_auto_ctor);
         if (type_param_vec_form)
             dd_items[ddn++] = type_param_vec_form;  /* original [A B ...] vec, kinds intact */
         dd_items[ddn++] = ctor_form;
@@ -1933,6 +1977,8 @@ Expr *elab_defdata(Elab *e, const Form *call) {
      * :heap struct -- Vec/Map/Set), set by a lowered `:heap` defstruct. */
     bool is_copy = false;
     bool is_heap = false;
+    bool is_linear = false;     /* structdef-retirement slice 4 (LT4) */
+    bool no_auto_ctor = false;  /* structdef-retirement slice 2 (CTOR-V0) */
     uint32_t ctors_start_idx = 2;
     while (ctors_start_idx < call->as.list.len) {
         Form *kw_form = call->as.list.items[ctors_start_idx];
@@ -1940,6 +1986,19 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         if (kw_form->as.sym == e->kw_copy) { is_copy = true; ctors_start_idx++; continue; }
         if (kw_form->as.sym == e->kw_move) { is_copy = false; ctors_start_idx++; continue; }
         if (kw_form->as.sym == e->kw_heap) { is_heap = true; ctors_start_idx++; continue; }
+        /* structdef-retirement slice 4: a lowered `:linear` defstruct (exactly-once)
+         * carries CK_LINEAR on its ADT type; the value/binding-level linearity
+         * enforcement then propagates from the type's copy_kind. */
+        if (kw_form->as.sym == e->kw_linear) {
+            is_linear = true; ctors_start_idx++; continue;
+        }
+        /* structdef-retirement slice 2: a lowered `:no-auto-ctor` defstruct (and,
+         * by extension, a `defdata` that opts in) suppresses the auto-bound
+         * value-namespace constructor so the `(Name ...)` call form stays rejected
+         * ("not a function"); construction goes through `make-struct`. */
+        if (kw_form->as.sym == e->kw_no_auto_ctor) {
+            no_auto_ctor = true; ctors_start_idx++; continue;
+        }
         break;
     }
 
@@ -2039,6 +2098,8 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
         def->is_copy = is_copy;
         def->is_heap = is_heap;
+        def->is_linear = is_linear; /* LT4 (structdef-retirement slice 4) */
+        def->no_auto_ctor = no_auto_ctor;
         def->needs_drop_glue = false;
         def->is_gadt = false;
         def->type_params = type_params;
@@ -2072,6 +2133,8 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
         def->is_copy = is_copy;
         def->is_heap = is_heap;
+        def->is_linear = is_linear; /* LT4 (structdef-retirement slice 4) */
+        def->no_auto_ctor = no_auto_ctor;
         /* Phase RF1: store type parameters */
         def->type_params = type_params;
         def->n_type_params = n_type_params;
@@ -2249,7 +2312,13 @@ Expr *elab_defdata(Elab *e, const Form *call) {
 
         /* Register constructor as a global binding.
          * 0-arg constructor: TY_ADT binding (it IS a value).
-         * N-arg constructor: TY_FN binding (call it like a function). */
+         * N-arg constructor: TY_FN binding (call it like a function).
+         *
+         * structdef-retirement slice 2 (CTOR-V0): a `:no-auto-ctor` def still binds
+         * the value-namespace constructor (make-struct rewrites `(make-struct Name
+         * ...)` to the ctor call `(Name ...)` and relies on it), but a DIRECT
+         * `(Name ...)` call is rejected in elab_call -- see the no_auto_ctor guard
+         * there, which fires unless the call came from the make-struct rewrite. */
         if (n_fields == 0) {
             /* 0-arg: register as TY_ADT so calls to (Red) work */
             Binding *cb = binding_new(e, ctor_name, adt_type, false, true,
@@ -4520,8 +4589,41 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
              * infer/check. */
             bool saved_ms_lenient = e->make_struct_lenient_args;
             e->make_struct_lenient_args = (ad->n_type_params == 0);
+            /* slice 2: allow the no_auto_ctor ctor call through for this rewrite. */
+            bool saved_ms_rewrite = e->make_struct_ctor_rewrite;
+            e->make_struct_ctor_rewrite = true;
             Expr *ce = elab_call(e, ctor_call);
+            e->make_struct_ctor_rewrite = saved_ms_rewrite;
             e->make_struct_lenient_args = saved_ms_lenient;
+            /* structdef-retirement slice 3 (DS1 parity for exists fields): the
+             * lenient ADT-ctor rewrite relaxes scalar/pointer arg checks to match
+             * default make-struct, but an EXISTENTIAL field MUST still be checked:
+             * an exists lowers to the int64 carrier, so a raw `42` (TY_INT) passed
+             * where `(exists [a] [(C a)] a)` is expected slips through the kind
+             * check and the generated C then reads the int as a `tur_existential_t
+             * *` and SEGVs on the next `open`/dispatch.  Re-impose the struct-path
+             * per-field full_type check for TY_EXISTS fields (positional form). */
+            if (ce && ce->kind == EX_CALL) {
+                const CtorDef *rc = ad->ctors[0];
+                uint32_t nv = ce->as.call_.n_args;
+                bool positional = (nv == 0 ||
+                                   call->as.list.items[2]->tag != F_KEYWORD);
+                if (positional && nv == rc->n_fields) {
+                    for (uint32_t fi = 0; fi < rc->n_fields; fi++) {
+                        const Type *ft = rc->fields[fi].full_type;
+                        if (ft && ft->kind == TY_EXISTS &&
+                            ce->as.call_.args[fi] &&
+                            !type_eq(ce->as.call_.args[fi]->type, *ft)) {
+                            diag_emit(DIAG_ERROR, call->as.list.items[fi + 2]->span,
+                                      "make-struct '%s': field '%s' expects %s, got %s",
+                                      ad->name, rc->fields[fi].name,
+                                      type_name(*ft),
+                                      type_name(ce->as.call_.args[fi]->type));
+                            return NULL;
+                        }
+                    }
+                }
+            }
             /* lowered-adt-ctor-skips-fn-field-type-param-inference: the struct
              * make-struct path runs struct_field_collect_type_args to ground the
              * struct's type params from the supplied field values -- crucially

@@ -51,32 +51,83 @@ fields, parametric, `:heap`, `:copy`/`:move`).
 
 ## Slices
 
-1. **Applied-type (`TY_APP`) fields -- highest value, lowest risk (NEXT).**
-   Widen `defstruct_field_type_lowerable` to accept a `TY_APP` field, then make
-   the record-ADT product's field-type resolver + codegen handle it the way a
-   `let`/param of that type is already handled (the by-value-aggregate inline
-   storage + `adt_field_instantiate_type` tyvar substitution already exist).
-   Clears the largest carve-out group.  **Caveat:** expect a codegen tail like
-   the graduation had -- each new field representation (a `(Option X)` value
-   field, a nested monomorph, the `User`-pointer-slot interaction landed during
-   graduation) needs its own crossing verified.  Drive a force-widen probe (bypass
-   only the `TY_APP` rejection) and promote each build/stdout failure to a fixture
-   + fix, exactly as the graduation did.
-2. **`:no-auto-ctor` suppression -- mechanical.**  Teach the ADT lowering to
-   suppress the auto-bound value-namespace ctor for a `:no-auto-ctor` struct (so
-   `(Name ...)` stays rejected), then lower it.  1 negative fixture.
-3. **`exists` (`TY_EXISTS`) fields -- moderate.**  Existential packing already
-   boxes aggregates into an int64 carrier slot; host a `TY_EXISTS` field on the
-   record product reusing that machinery.  The witness/dict-thunk plumbing on
-   field access needs care.
-4. **`:linear` outer structs -- hard, unexercised.**  No record-ADT modeling of
-   `CK_LINEAR` exactly-once semantics exists, and there are zero `defstruct
-   :linear` fixtures.  Natural LAST slice (or leave on StructDef longest); write
-   fixtures first.
-5. **Delete `StructDef` -- the bulk, separately scoped.**  Once the gate is
-   effectively always-true, migrate every `StructDef`-keyed site to the ADT def
-   and delete the type.  **Footprint: ~197 references across 19 files** under
-   `src/compiler/`:
+1. **Applied-type (`TY_APP`) fields -- highest value, lowest risk. DONE
+   (2026-06-29).**
+   Widened `defstruct_field_type_lowerable` to accept a *user* `TY_APP` field
+   (`(Option cstr)`, `(Box X)`, `(Dense m A)`, `(Tbl #row{..})`), while keeping
+   built-in compound forms -- `(lref T)`/`(& T)`/borrow, `exists`/`forall`,
+   `handler`/`arrow`/session/role/global/project -- on the struct path (they are
+   their own TypeKinds, not `TY_APP`, and a couple carry struct-path-only
+   diagnostics like the `:copy`-over-linear-field check).  The codegen tail the
+   caveat predicted:
+   - `adt_field_is_inline_byval` gained a `TY_APP` arm so a by-value monomorph
+     field (`tur_adt_Option__cstr`) is stored INLINE and read directly (no
+     cast-to-aggregate).
+   - the record-ADT typedef emitter pre-flushes each inline-by-value `TY_APP`
+     field monomorph (mirroring the struct path) so the embedding aggregate sees
+     a complete typedef.
+   - the `Result`/`Option` box-as-pointer (`tur_adt_T *` slot) was extended from
+     value-structs to non-parametric by-value record ADTs (a lowered `defstruct`
+     like `User`), centralised in `adt_field_is_ros_pointer_box` and given
+     precedence over the B4 wide-element int64 box; the construction, extraction,
+     forward-decl, unused-slot-default, and carrier->concrete decode sites all
+     consult it.
+   Cleared the largest carve-out group; full by-value suite green (1871/0).
+2. **`:no-auto-ctor` suppression -- mechanical. DONE (2026-06-29).**  The ADT
+   lowering now honours `:no-auto-ctor`: `defstruct_lowers_to_adt` no longer bails
+   on it; `elab_defdata` accepts a `:no-auto-ctor` keyword (the lowering forwards
+   it) and records `AdtDef.no_auto_ctor`.  The value-namespace constructor binding
+   is still created (make-struct rewrites `(make-struct Name ...)` to the ctor call
+   `(Name ...)` and needs it), but a DIRECT `(Name ...)` call is rejected in
+   elab_call -- gated by a transient `make_struct_ctor_rewrite` flag that
+   make-struct sets around its own rewrite, mirroring the struct path's
+   `!no_auto_ctor` gate.  Negative fixture `errors/struct-no-auto-ctor-rejects-call`
+   still rejects; new positive fixture `struct-no-auto-ctor-make-struct` confirms
+   make-struct + field access on the lowered record.  Suite green (1871/0).
+3. **`exists` (`TY_EXISTS`) fields -- moderate. DONE (2026-06-29).**  An
+   `exists`-pack field is carried as the int64 existential-record pointer
+   (existential packing already boxes a wide aggregate payload into that carrier
+   slot), so it lowers like any scalar carrier field once
+   `defstruct_field_type_lowerable` accepts `exists`/`exists_u` (only `forall`
+   stays excluded -- it is not a value-carrying field form).  The witness/dict
+   plumbing the caveat flagged needed no new work: `pack`/`open`/`.field`
+   dispatch over the lowered record reuse the existing existential machinery.
+   One construction-side gap had to be re-closed: the lenient ADT-ctor rewrite
+   make-struct uses relaxed the DS1 per-field check, so a raw `42` passed where
+   `(exists [a] [(C a)] a)` is expected slipped through (and SEGV'd at `open`);
+   the make-struct rewrite now re-imposes the TY_EXISTS full_type check.
+   Fixtures `exg4-pack-into-struct(-via-let)`, `exists-pack-multifield-struct`,
+   `exists-pack-constrained-byval-struct` (positives) and
+   `errors/defstruct-compound-field-mismatch` (negative) all green; suite
+   1872/0.  With slices 1-3 done the only carve-out left is `:linear` (slice 4).
+4. **`:linear` outer structs. DONE (2026-06-29).**  (The plan's "zero `defstruct
+   :linear` fixtures" premise was off -- `inline-c-struct-return-cstr-params`'s
+   `Handle` plus the stdlib `Socket`/`FileHandle`/`MutexGuard` exercise it.)  The
+   key realisation: linearity enforcement keys on the TYPE's `copy_kind` (and the
+   bindings derived from it), not on `StructDef` identity, so the record-ADT path
+   needs no new exactly-once modeling -- it only has to carry `CK_LINEAR` on the
+   lowered type.  Changes: `AdtDef` gains `is_linear`/`is_affine`; `type_adt`
+   derives `copy_kind`/`substruct` from them exactly as `type_struct` does;
+   `elab_defdata` parses a `:linear` keyword (the lowering forwards it) and sets
+   `def->is_linear`; `defstruct_field_type_lowerable`/`defstruct_lowers_to_adt`
+   stop bailing on `:linear`.  Verified the exactly-once discipline survives the
+   lowering: new negative fixture `errors/struct-linear-double-use` (double-use ->
+   TUR-E0101) and positive `struct-linear-lowered`; the stdlib resource types and
+   all existing linear fixtures stay green (1874/0).
+5. **Delete `StructDef` -- the bulk, separately scoped. NOT STARTED (next).**
+   With slices 1-4 done the gate lowers every `defstruct` whose fields are
+   scalars / pointers / `fn` / aggregates / parametric / applied / `exists`, and
+   every annotation (`:copy`/`:move`/`:heap`/`:linear`/`:no-auto-ctor`).  The only
+   shapes still on the `StructDef` path carry a *built-in compound* field form --
+   `(lref T)`, `(& T)`/borrow, `forall`, `handler`/`arrow`/session/role/global/
+   project -- which are their own `TypeKind`s, not user type applications.  **None
+   appear in stdlib or the fixture suite today**, so the gate is effectively
+   always-true in practice; a clean deletion will still want those field forms
+   either hosted on the record-ADT path or explicitly rejected first.
+   Footprint as of 2026-06-29: **198 references across 19 files** under
+   `src/compiler/`.  This phase is all-or-nothing (you cannot half-delete a type)
+   and does NOT decompose into the safely-committable increments slices 1-4 did,
+   so it remains its own dedicated work.  Original breakdown:
    - type core: `types.c` (30), `types.h` (15) -- struct identity is a
      `StructDef*`;
    - Expr/AST: `expr.h` (8) -- `make_struct_.def`, field-access/`set_field_.def`,
@@ -92,9 +143,20 @@ fields, parametric, `:heap`, `:copy`/`:move`).
 
 ## Recommendation
 
-Slices 1-2 are worth doing when there is appetite for the cleanup; they shrink
-the carve-out to just `exists` + `:linear` and are individually contained (with
-the usual codegen-tail caveat).  Slice 5 (the `StructDef` deletion) is the large,
-risky phase and should only start once slices 1-4 make the gate effectively
-always-true.  None of this is urgent: the carve-outs are correct today, so this
-is cleanup, sequenced behind anything that fixes real defects.
+**Status (2026-06-29): slices 1-4 DONE; slice 5 is the remaining work.**  Slices
+1-4 landed as four separate commits, each with a green by-value suite, clearing
+all four carve-out groups (applied-type, `:no-auto-ctor`, `exists`, `:linear`).
+A `defstruct` now lowers to a record ADT in every case that occurs in the
+codebase; the residual `StructDef` path serves only built-in-compound field forms
+(`lref`/borrow/`forall`/session/handler/...) that no current `defstruct` uses.
+
+The only remaining phase is slice 5 -- the `StructDef` deletion itself (198 refs,
+19 files, typeclass-dispatch entanglement).  It is the large, risky, all-or-
+nothing phase and should be taken on as dedicated work: unlike slices 1-4 it does
+not decompose into independently-committable, independently-green increments
+(you cannot half-delete the type), and instance selection keys on `StructDef`
+identity, so it ripples into typeclass resolution + codegen.  Before it can be a
+*clean* deletion, the residual built-in-compound field forms above need either a
+record-ADT home or an explicit rejection.  None of this is urgent: the lowering
+is correct and complete for real code today, so slice 5 stays sequenced behind
+anything that fixes real defects.
