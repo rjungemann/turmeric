@@ -1,0 +1,18 @@
+;; structdef-retirement slice 2 (CTOR-V0): a `:no-auto-ctor` defstruct now lowers
+;; to a single-variant record ADT like any other defstruct, but its value-namespace
+;; constructor stays suppressed -- the `(Point ...)` call form is rejected (see the
+;; errors/struct-no-auto-ctor-rejects-call negative fixture).  Construction goes
+;; through `make-struct`, and field access reads back through the lowered aggregate.
+(defstruct Point :copy :no-auto-ctor [x : int y : int])
+
+(defn manhattan [p : Point] : int
+  {(.x p) + (.y p)})
+
+(defn main [] : int
+  (let [p (make-struct Point 3 4)
+        q (make-struct Point 10 20)]
+    (println (.x p))          ;; 3
+    (println (.y p))          ;; 4
+    (println (manhattan p))   ;; 7
+    (println (manhattan q))   ;; 30
+    0))

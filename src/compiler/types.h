@@ -301,6 +301,11 @@ typedef struct AdtDef {
      * and the defgadt same-name duplicate check (treats it like a struct for
      * MF4 GADT-shadows-struct coexistence) -- key on this flag. */
     bool        from_struct_lowering;
+    /* structdef-retirement slice 2 (CTOR-V0): a `:no-auto-ctor` def suppresses the
+     * auto-bound value-namespace constructor, so `(Name ...)` is rejected ("not a
+     * function") and construction goes through `make-struct`.  Mirrors
+     * StructDef.no_auto_ctor for the lowered record-ADT path. */
+    bool        no_auto_ctor;
     /* CONV-S1 (defstruct-as-defadt): once a struct lowers to an ADT, structs and
      * ADTs share one namespace, so a later same-name `defgadt`/`defdata` may
      * SUPERSEDE the struct-origin ADT (the GADT wins).  The superseded def is

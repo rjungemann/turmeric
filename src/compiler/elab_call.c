@@ -1649,6 +1649,34 @@ Expr *elab_call(Elab *e, Form *call) {
      * result now flows through the closure ABI (CURRY-V0/V1).  Full
      * applications and the keyword form keep the direct make-struct fast path;
      * parameterized structs decline currying (the synthesizer returns NULL). */
+    /* structdef-retirement slice 2 (CTOR-V0): a `:no-auto-ctor` lowered record ADT
+     * keeps its ctor binding (make-struct needs it) but rejects a DIRECT
+     * `(Name ...)` call -- exactly the struct path's `!no_auto_ctor` gate below,
+     * ported to the ADT path.  make-struct's rewrite sets make_struct_ctor_rewrite
+     * to let its own call through; read-and-clear so a nested user `(Name ...)` in
+     * an arg is still rejected. */
+    {
+        bool ms_rewrite = e->make_struct_ctor_rewrite;
+        e->make_struct_ctor_rewrite = false;
+        if (!ms_rewrite) {
+            Binding *tb = scope_lookup_type_def(e->scope, name);
+            if (tb && tb->type.kind == TY_ADT && tb->type.as.adt_.def &&
+                tb->type.as.adt_.def->no_auto_ctor) {
+                AdtDef *nac = tb->type.as.adt_.def;
+                Binding *nearest = scope_lookup(e->scope, name);
+                bool is_ctor_head = nearest &&
+                    ((nearest->type.kind == TY_ADT &&
+                      nearest->type.as.adt_.def == nac) ||
+                     nearest->type.kind == TY_FN);
+                if (is_ctor_head) {
+                    diag_emit(DIAG_ERROR, head->span,
+                              "'%s' is not a function or continuation",
+                              name->name);
+                    return NULL;
+                }
+            }
+        }
+    }
     {
         Binding *struct_b = scope_lookup_type_def(e->scope, name);
         /* Only route when the NEAREST binding for `name` (in any namespace) is

@@ -896,10 +896,10 @@ bool defstruct_lowers_to_adt(Elab *e, const Form *call) {
         if (kw->as.sym == e->kw_copy || kw->as.sym == e->kw_move) { idx++; continue; }
         if (kw->as.sym == e->kw_linear)
             return false;  /* :linear keeps the struct path */
-        if (kw->as.sym == e->kw_no_auto_ctor)
-            return false;  /* :no-auto-ctor opts out of the auto-bound ctor,
-                            * which the record-ADT path always binds -- keep the
-                            * struct path so the `(Name ...)` call stays rejected. */
+        /* structdef-retirement slice 2: `:no-auto-ctor` now lowers -- the record-
+         * ADT path honours it by suppressing the value-namespace constructor
+         * (elab_defdata), so the `(Name ...)` call form still gets rejected. */
+        if (kw->as.sym == e->kw_no_auto_ctor) { idx++; continue; }
         /* seam 3 (DONE): a `:heap` struct -- BOTH non-parametric and parametric
          * (the stdlib Vec/Map/Set/MutableMap/Cons) -- lowers to a `:heap` record
          * defadt.  The typed-pointer ABI foundation (`defdata :heap`, the
@@ -1159,7 +1159,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
          * defdata's argument order is name, optional :copy/:move/:heap keywords,
          * optional type-param vec, then the constructor(s).  Seam 3: a :heap
          * struct lowers to a :heap record defadt (typed-pointer ABI). */
-        Form *dd_items[6];
+        Form *dd_items[7];
         uint32_t ddn = 0;
         dd_items[ddn++] = form_sym(e->arena, name_form->span, e->sym_defdata);
         dd_items[ddn++] = name_form;
@@ -1167,6 +1167,12 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
             dd_items[ddn++] = form_keyword(e->arena, name_form->span, e->kw_copy);
         if (is_heap)
             dd_items[ddn++] = form_keyword(e->arena, name_form->span, e->kw_heap);
+        /* structdef-retirement slice 2: forward `:no-auto-ctor` so elab_defdata
+         * suppresses the value-namespace constructor (the `(Name ...)` call form
+         * stays rejected; construction is via make-struct). */
+        if (no_auto_ctor)
+            dd_items[ddn++] = form_keyword(e->arena, name_form->span,
+                                           e->kw_no_auto_ctor);
         if (type_param_vec_form)
             dd_items[ddn++] = type_param_vec_form;  /* original [A B ...] vec, kinds intact */
         dd_items[ddn++] = ctor_form;
@@ -1960,6 +1966,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
      * :heap struct -- Vec/Map/Set), set by a lowered `:heap` defstruct. */
     bool is_copy = false;
     bool is_heap = false;
+    bool no_auto_ctor = false;  /* structdef-retirement slice 2 (CTOR-V0) */
     uint32_t ctors_start_idx = 2;
     while (ctors_start_idx < call->as.list.len) {
         Form *kw_form = call->as.list.items[ctors_start_idx];
@@ -1967,6 +1974,13 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         if (kw_form->as.sym == e->kw_copy) { is_copy = true; ctors_start_idx++; continue; }
         if (kw_form->as.sym == e->kw_move) { is_copy = false; ctors_start_idx++; continue; }
         if (kw_form->as.sym == e->kw_heap) { is_heap = true; ctors_start_idx++; continue; }
+        /* structdef-retirement slice 2: a lowered `:no-auto-ctor` defstruct (and,
+         * by extension, a `defdata` that opts in) suppresses the auto-bound
+         * value-namespace constructor so the `(Name ...)` call form stays rejected
+         * ("not a function"); construction goes through `make-struct`. */
+        if (kw_form->as.sym == e->kw_no_auto_ctor) {
+            no_auto_ctor = true; ctors_start_idx++; continue;
+        }
         break;
     }
 
@@ -2066,6 +2080,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
         def->is_copy = is_copy;
         def->is_heap = is_heap;
+        def->no_auto_ctor = no_auto_ctor;
         def->needs_drop_glue = false;
         def->is_gadt = false;
         def->type_params = type_params;
@@ -2099,6 +2114,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
         def->is_copy = is_copy;
         def->is_heap = is_heap;
+        def->no_auto_ctor = no_auto_ctor;
         /* Phase RF1: store type parameters */
         def->type_params = type_params;
         def->n_type_params = n_type_params;
@@ -2276,7 +2292,13 @@ Expr *elab_defdata(Elab *e, const Form *call) {
 
         /* Register constructor as a global binding.
          * 0-arg constructor: TY_ADT binding (it IS a value).
-         * N-arg constructor: TY_FN binding (call it like a function). */
+         * N-arg constructor: TY_FN binding (call it like a function).
+         *
+         * structdef-retirement slice 2 (CTOR-V0): a `:no-auto-ctor` def still binds
+         * the value-namespace constructor (make-struct rewrites `(make-struct Name
+         * ...)` to the ctor call `(Name ...)` and relies on it), but a DIRECT
+         * `(Name ...)` call is rejected in elab_call -- see the no_auto_ctor guard
+         * there, which fires unless the call came from the make-struct rewrite. */
         if (n_fields == 0) {
             /* 0-arg: register as TY_ADT so calls to (Red) work */
             Binding *cb = binding_new(e, ctor_name, adt_type, false, true,
@@ -4547,7 +4569,11 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
              * infer/check. */
             bool saved_ms_lenient = e->make_struct_lenient_args;
             e->make_struct_lenient_args = (ad->n_type_params == 0);
+            /* slice 2: allow the no_auto_ctor ctor call through for this rewrite. */
+            bool saved_ms_rewrite = e->make_struct_ctor_rewrite;
+            e->make_struct_ctor_rewrite = true;
             Expr *ce = elab_call(e, ctor_call);
+            e->make_struct_ctor_rewrite = saved_ms_rewrite;
             e->make_struct_lenient_args = saved_ms_lenient;
             /* lowered-adt-ctor-skips-fn-field-type-param-inference: the struct
              * make-struct path runs struct_field_collect_type_args to ground the

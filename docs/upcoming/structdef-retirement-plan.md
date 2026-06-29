@@ -73,9 +73,17 @@ fields, parametric, `:heap`, `:copy`/`:move`).
      forward-decl, unused-slot-default, and carrier->concrete decode sites all
      consult it.
    Cleared the largest carve-out group; full by-value suite green (1871/0).
-2. **`:no-auto-ctor` suppression -- mechanical.**  Teach the ADT lowering to
-   suppress the auto-bound value-namespace ctor for a `:no-auto-ctor` struct (so
-   `(Name ...)` stays rejected), then lower it.  1 negative fixture.
+2. **`:no-auto-ctor` suppression -- mechanical. DONE (2026-06-29).**  The ADT
+   lowering now honours `:no-auto-ctor`: `defstruct_lowers_to_adt` no longer bails
+   on it; `elab_defdata` accepts a `:no-auto-ctor` keyword (the lowering forwards
+   it) and records `AdtDef.no_auto_ctor`.  The value-namespace constructor binding
+   is still created (make-struct rewrites `(make-struct Name ...)` to the ctor call
+   `(Name ...)` and needs it), but a DIRECT `(Name ...)` call is rejected in
+   elab_call -- gated by a transient `make_struct_ctor_rewrite` flag that
+   make-struct sets around its own rewrite, mirroring the struct path's
+   `!no_auto_ctor` gate.  Negative fixture `errors/struct-no-auto-ctor-rejects-call`
+   still rejects; new positive fixture `struct-no-auto-ctor-make-struct` confirms
+   make-struct + field access on the lowered record.  Suite green (1871/0).
 3. **`exists` (`TY_EXISTS`) fields -- moderate.**  Existential packing already
    boxes aggregates into an int64 carrier slot; host a `TY_EXISTS` field on the
    record product reusing that machinery.  The witness/dict-thunk plumbing on
