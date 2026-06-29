@@ -6990,6 +6990,12 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             bool ascribe_to_opaque =
                 (e->type.kind == TY_STRUCT && e->type.as.struct_.def &&
                  e->type.as.struct_.def->is_opaque) ||
+                /* structdef-retirement slice 5: an opaque newtype is now a
+                 * TY_ADT with is_opaque -- ascribing into it (`(:: 7 :Tag)`) is
+                 * the same pure int64-carrier relabel as the struct-opaque case,
+                 * never a by-value aggregate carrier bridge. */
+                (e->type.kind == TY_ADT && e->type.as.adt_.def &&
+                 e->type.as.adt_.def->is_opaque) ||
                 (e->type.kind == TY_STRUCT && e->type.as.struct_.def == NULL) ||
                 e->type.kind == TY_TYVAR;
             /* constrained-generic-dispatch-float-element: `(:: (vec-get v i) A)`

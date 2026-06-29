@@ -2249,9 +2249,18 @@ static bool emit_abi_try_nested_instance_dispatch_redirect(
 static bool type_phantom_hides_aggregate(const Type *t) {
     if (!t || t->kind != TY_APP) return false;
     StructDef *def = NULL;
+    AdtDef   *adef = NULL;
     Type args[16];
     uint8_t n_args = 0;
-    if (!type_extract_struct_app(t, &def, args, &n_args) || !def || !def->is_opaque)
+    /* structdef-retirement slice 5: a parametric opaque newtype (`(defopaque List
+     * [A] :int)`) is now an opaque AdtDef, so its application `(List (Option int))`
+     * is a TY_APP over a TY_ADT head -- recognise that as well as the legacy
+     * opaque-STRUCT head, else the per-element phantom-opaque spec is not minted
+     * and the carrier walk segfaults on the shifted aggregate cell layout. */
+    bool opaque_head =
+        (type_extract_struct_app(t, &def, args, &n_args) && def && def->is_opaque) ||
+        (type_extract_adt_app(t, &adef, args, &n_args) && adef && adef->is_opaque);
+    if (!opaque_head)
         return false;
     for (uint8_t i = 0; i < n_args; i++) {
         /* Under the defstruct-as-defadt lowering the by-value aggregate element
@@ -5273,6 +5282,10 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
      * `tur_adt_<Name>` C name, so emitting the loser's typedef/ctors here would
      * be a `redefinition of 'struct tur_adt_<Name>'`. */
     if (def && def->superseded) return;
+    /* structdef-retirement slice 5: an opaque newtype is a named int64 carrier
+     * with no constructors/fields -- it has no C typedef (it lowers to int64_t
+     * everywhere).  Emitting one would produce an invalid empty union. */
+    if (def && def->is_opaque) return;
     char adt_c_name[256];
     {
         char *_mn = mangle_field_name(def->name);
@@ -8457,6 +8470,21 @@ void emit_shared_runtime_header(Buf *out) {
     buf_puts(out, "#endif /* TUR_RUNTIME_H */\n");
 }
 
+/* structdef-retirement slice 5: an `(defopaque ...)` elaborates to an EX_DEF
+ * whose binding names the opaque TYPE (a 0-ctor opaque AdtDef), not a runtime
+ * value -- it has no initializer and no C storage.  Before the migration this
+ * was recognised by def_.struct_def (an opaque StructDef); now that opaque defs
+ * are AdtDefs the EX_DEF carries no struct_def, so the global-emission sites
+ * would mistake it for a runtime global and emit a bogus `static int64_t
+ * Name_N;`.  This predicate restores the skip without StructDef. */
+static bool def_is_opaque_type_decl(const Expr *e) {
+    return e && e->kind == EX_DEF && !e->as.def_.struct_def &&
+           e->as.def_.binding &&
+           e->as.def_.binding->type.kind == TY_ADT &&
+           e->as.def_.binding->type.as.adt_.def &&
+           e->as.def_.binding->type.as.adt_.def->is_opaque;
+}
+
 int emit_program(Buf *out, const Expr *program) {
     if (!program || program->kind != EX_PROGRAM) {
         fprintf(stderr, "tur: emit: expected EX_PROGRAM\n");
@@ -9120,6 +9148,8 @@ int emit_program(Buf *out, const Expr *program) {
         } else if (e->kind == EX_DEF) {
             /* Phase 11: skip struct typedefs — already emitted in Pass 0 */
             if (e->as.def_.struct_def) continue;
+            /* slice 5: an opaque type declaration has no runtime storage. */
+            if (def_is_opaque_type_decl(e)) continue;
             char *bn = name_for_binding(&ctx, e->as.def_.binding);
             buf_printf(&file, "static %s %s;\n",
                        type_c_name(e->as.def_.binding->type), bn);
@@ -9749,6 +9779,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
             (void)type_c_name(ec->return_type);
             for (uint8_t j = 0; j < ec->n_params; j++) (void)type_c_name(ec->param_types[j]);
         } else if (e->kind == EX_DEF && !e->as.def_.struct_def) {
+            if (def_is_opaque_type_decl(e)) continue;   /* slice 5: type decl, no storage */
             if (separate_compilation && e->as.def_.binding->is_exported) {
                 (void)type_c_name(e->as.def_.binding->type);
             }
@@ -9986,6 +10017,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
             }
             buf_puts(out, ");\n");
         } else if (e->kind == EX_DEF && !e->as.def_.struct_def) {
+            if (def_is_opaque_type_decl(e)) continue;   /* slice 5: type decl, no storage */
             /* Phase M6: exported global variables need extern declarations
              * in the header so other modules can reference them. */
             if (separate_compilation && e->as.def_.binding->is_exported) {
@@ -10353,6 +10385,9 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
             /* Phase M5: module-level defers are handled after this pass. */
             continue;
         } else if (e->kind == EX_DEF) {
+            /* slice 5: an opaque type declaration (0-ctor opaque AdtDef) has no
+             * runtime storage -- skip the bogus `Name Name_N;` declaration. */
+            if (def_is_opaque_type_decl(e)) continue;
             /* project-mode-defstruct-typedef-missing: a struct-def EX_DEF
              * represents a type declaration, not a runtime value.  The
              * typedef itself is emitted into the header (emit_header);

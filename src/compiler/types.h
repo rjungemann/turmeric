@@ -320,6 +320,16 @@ typedef struct AdtDef {
      * at C emission so its `tur_adt_<Name>` typedef does not collide with the
      * winner's.  Only ever set on a `from_struct_lowering` def. */
     bool        superseded;
+    /* structdef-retirement slice 5 (defopaque migration): an opaque newtype
+     * `(defopaque Name [T...] :base [:linear|:affine])`.  An opaque def has NO
+     * constructors (n_ctors == 0) and NO fields; it is a named int64_t carrier
+     * whose phantom type parameters are erased at codegen.  Migrated off
+     * StructDef (which carried `is_opaque` before) so StructDef can be deleted;
+     * an opaque value's type is `TY_ADT` with this flag set.  Every codegen path
+     * that would emit a typedef / monomorph / by-value layout for an ADT must
+     * skip an opaque one -- it stays the int64 carrier with its name kept only
+     * for nominal identity (typeclass dispatch, REPL type tags, mangling). */
+    bool        is_opaque;
 } AdtDef;
 
 /* CONV-S2 (struct/ADT convergence): a single-variant, non-GADT ADT is

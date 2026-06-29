@@ -491,6 +491,10 @@ bool type_app_is_concrete_adt(const Type *t) {
     Type args[16];
     uint8_t n_args = 0;
     if (!type_extract_adt_app(t, &def, args, &n_args) || !def) return false;
+    /* structdef-retirement slice 5: an opaque newtype application `(Name X)` is an
+     * int64 carrier with its type args erased -- never a monomorphizable concrete
+     * ADT -- so it must not be registered/monomorphized. */
+    if (def->is_opaque) return false;
     for (uint8_t i = 0; i < n_args; i++) {
         /* Nested by-value-product element accepted only for a :heap outer (see
          * adt_app_is_byvalue_product) so the ctor selection picks the monomorph
@@ -875,6 +879,17 @@ void propagate_app_discipline(Type *app, const Type *fn) {
     while (head && head->kind == TY_APP) head = head->as.app.fn;
     if (head && head->kind == TY_STRUCT && head->as.struct_.def) {
         const StructDef *hd = head->as.struct_.def;
+        if (hd->is_linear) {
+            app->copy_kind = CK_LINEAR;
+        } else if (hd->is_affine) {
+            app->copy_kind = CK_UNIQUE;
+            app->substruct = SK_AFFINE;
+        }
+    } else if (head && head->kind == TY_ADT && head->as.adt_.def) {
+        /* structdef-retirement slice 5: a parametric opaque is now a TY_ADT head,
+         * so `(Name X)` for a `:linear`/`:affine` opaque lifts the discipline onto
+         * the TY_APP node exactly as the struct path above did. */
+        const AdtDef *hd = head->as.adt_.def;
         if (hd->is_linear) {
             app->copy_kind = CK_LINEAR;
         } else if (hd->is_affine) {
@@ -1619,6 +1634,11 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
             if (resolved.kind == TY_ADT && resolved.as.adt_.def &&
                 resolved.as.adt_.def->name &&
                 !resolved.as.adt_.def->is_heap &&
+                /* structdef-retirement slice 5: an opaque newtype ADT has no
+                 * `tur_adt_<Name>` typedef (it is the int64 carrier and is never
+                 * box-as-pointer'd -- adt_field_is_ros_pointer_box excludes it),
+                 * so a forward `typedef struct tur_adt_<Name> ...;` would dangle. */
+                !resolved.as.adt_.def->is_opaque &&
                 resolved.as.adt_.def->n_type_params == 0) {
                 char *un = mangle_field_name(resolved.as.adt_.def->name);
                 buf_printf(out, "#ifndef TUR_FWD_tur_adt_%s\n", un);

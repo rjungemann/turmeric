@@ -1047,7 +1047,12 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
          * `is_opaque` / other bools that subsequent passes (e.g. emit
          * pass 0 in emit_module.c) consult. */
         if (is_defopaque) {
-            StructDef *stub = (StructDef *)arena_alloc(arena, sizeof(StructDef));
+            /* structdef-retirement slice 5: an opaque newtype is now an opaque
+             * AdtDef (n_ctors == 0), not a StructDef, so StructDef can be retired.
+             * The stub mirrors the old struct stub: a copyable, opaque, named
+             * int64 carrier whose phantom arity makes `(Name A)` annotations
+             * kind-check before the full defopaque elaboration fills it in. */
+            AdtDef *stub = (AdtDef *)arena_alloc(arena, sizeof(AdtDef));
             memset(stub, 0, sizeof(*stub));
             stub->name = type_name->name;
             stub->is_copy = true;
@@ -1061,8 +1066,9 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
             if (f->as.list.len >= 3 && f->as.list.items[2]->tag == F_VEC) {
                 opaque_arity = (uint8_t)f->as.list.items[2]->as.list.len;
             }
-            elab_register_struct_def(&e, stub);
-            Type t = type_struct(stub);
+            stub->n_type_params = opaque_arity;
+            elab_register_adt_def(&e, stub);
+            Type t = type_adt(stub);
             t.hkt_kind = kind_for_arity(opaque_arity);
             Binding *b = binding_new(&e, type_name, t, false, true, name_f->span);
             scope_add(&e.global, b);

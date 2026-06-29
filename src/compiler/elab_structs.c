@@ -1633,7 +1633,8 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
  *         (defopaque Name [A ...] :int)         ;; phantom type parameters
  *         (defopaque Name :ptr<void> :linear)   ;; exactly-once resource handle
  *         (defopaque Name :ptr<void> :affine)   ;; at-most-once resource handle
- * Creates a StructDef with is_opaque=true; type_c_name → "int64_t" everywhere.
+ * structdef-retirement slice 5: creates an opaque AdtDef (n_ctors == 0) with
+ * is_opaque=true (migrated off StructDef); type_c_name → "int64_t" everywhere.
  * The optional trailing :linear / :affine keyword promotes the newtype to a
  * substructural resource handle (enforced only under -Xlinear / -Xsubstructural;
  * the C ABI is unaffected -- the handle still lowers to int64_t).
@@ -1711,21 +1712,23 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
             return NULL;
         }
     }
-    StructDef *def;
+    AdtDef *def;
     Binding *b;
-    /* Phase RF0: the top-level pre-pass forward-registers every defopaque as a
-     * stub def (is_copy=true) and binds the type name to type_struct(stub). If
-     * we allocated a fresh def here, the type binding -- and every `: Name`
+    /* structdef-retirement slice 5: an opaque newtype is an opaque AdtDef
+     * (n_ctors == 0), migrated off StructDef so StructDef can be retired.
+     * Phase RF0: the top-level pre-pass forward-registers every defopaque as a
+     * stub def (is_copy=true) and binds the type name to type_adt(stub). If we
+     * allocated a fresh def here, the type binding -- and every `: Name`
      * annotation resolved through it -- would keep pointing at the stub, so the
      * :linear / :affine discipline would silently never apply. Reuse the stub in
      * place (mirroring elab_defstruct) and refresh the binding's cached type so
      * copy_kind / substruct reflect the declared discipline. */
     if (existing_b && elab_is_forward_type(e, name) &&
-            existing_b->type.kind == TY_STRUCT && existing_b->type.as.struct_.def) {
+            existing_b->type.kind == TY_ADT && existing_b->type.as.adt_.def) {
         b = existing_b;
-        def = b->type.as.struct_.def;
+        def = b->type.as.adt_.def;
     } else {
-        def = (StructDef *)arena_alloc(e->arena, sizeof(StructDef));
+        def = (AdtDef *)arena_alloc(e->arena, sizeof(AdtDef));
         memset(def, 0, sizeof(*def));  /* DS5: zero all bool / scalar fields by default */
         b = NULL;
     }
@@ -1735,25 +1738,32 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
     def->is_linear = opaque_linear;
     def->is_affine = opaque_affine;
     def->is_opaque = true;
+    def->n_ctors = 0;        /* an opaque newtype has no constructors */
+    def->ctors = NULL;
     def->origin_file_id = call->span.file_id;
     /* Phantom type parameters: the carrier is still int64_t, but the newtype is
      * a type constructor (kind '* -> *' etc.) so `(Name A)` annotations parse
      * and the element/index type is tracked at the type level. */
     def->type_params = type_params_arr;
     def->n_type_params = n_type_params_v;
-    Type struct_type = type_struct(def);
-    struct_type.hkt_kind = kind_for_arity(n_type_params_v);
+    if (n_type_params_v > 0) {
+        Kind *kinds = (Kind *)arena_alloc(e->arena, n_type_params_v * sizeof(Kind));
+        for (uint8_t pi = 0; pi < n_type_params_v; pi++) kinds[pi] = KIND_STAR;
+        def->type_param_kinds = kinds;
+    }
+    Type opaque_type = type_adt(def);
+    opaque_type.hkt_kind = kind_for_arity(n_type_params_v);
     if (b) {
-        b->type = struct_type;  /* refresh cached copy_kind / substruct + hkt_kind */
+        b->type = opaque_type;  /* refresh cached copy_kind / substruct + hkt_kind */
     } else {
-        b = binding_new(e, name, struct_type, false, true, name_form->span);
+        b = binding_new(e, name, opaque_type, false, true, name_form->span);
         scope_add(&e->global, b);
-        elab_register_struct_def(e, def);
+        elab_register_adt_def(e, def);
     }
     Expr *out = expr_new(e->arena, EX_DEF, TYPE_NIL, call->span);
     out->as.def_.binding = b;
     out->as.def_.init = NULL;
-    out->as.def_.struct_def = def;
+    out->as.def_.struct_def = NULL;
     return out;
 }
 

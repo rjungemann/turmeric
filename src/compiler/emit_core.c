@@ -361,6 +361,13 @@ bool type_uses_carrier_abi(Type t) {
      * spill+address-of at carrier sinks). */
     if (t.kind == TY_APP && adt_app_is_byvalue_product(t) &&
         !type_is_heap_adt(t)) return false;
+    /* structdef-retirement slice 5: an opaque newtype is a plain int64 carrier,
+     * NOT a carrier-ABI aggregate -- so no spill/box/deref bridging applies (a
+     * bare `defopaque` value is already the int64).  Mirrors the old opaque-
+     * STRUCT rule below: carrier-ABI only when it carries phantom type params
+     * (a parametric opaque application rides the int64 handle like any TY_APP). */
+    if (t.kind == TY_ADT && t.as.adt_.def && t.as.adt_.def->is_opaque)
+        return t.as.adt_.def->n_type_params > 0;
     if (t.kind == TY_APP || t.kind == TY_ADT) return true;
     if (t.kind == TY_STRUCT && t.as.struct_.def &&
         t.as.struct_.def->n_type_params > 0) return true;
