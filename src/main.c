@@ -11556,7 +11556,7 @@ cleanup:
 
 static int usage(void) {
     fprintf(stderr,
-        "tur: the Turmeric compiler (phase 8)\n"
+        "tur: the Turmeric compiler (v" TUR_VERSION ")\n"
         "\n"
         "usage:\n"
         "  tur build <file.tur> [-o <out>]    build a single file\n"
@@ -12557,9 +12557,12 @@ int main(int argc, char **argv) {
         return cmd_explain(explain_code);
     }
     
-    /* E2: --version / -V */
-    if (argc >= 2 && (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-V") == 0)) {
-        printf("turmeric " TUR_VERSION "\n");
+    /* E2: --version / -V / -v */
+    if (argc >= 2 && (strcmp(argv[1], "--version") == 0
+                   || strcmp(argv[1], "-V") == 0
+                   || strcmp(argv[1], "-v") == 0)) {
+        printf("tur: the Turmeric compiler (v" TUR_VERSION ")\n");
+        printf("Run `tur --help` for more commands.\n");
         return 0;
     }
 

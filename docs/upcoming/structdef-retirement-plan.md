@@ -184,6 +184,78 @@ fields, parametric, `:heap`, `:copy`/`:move`).
    keys on `StructDef` identity, so this ripples into typeclass resolution +
    codegen, not just `defstruct` elaboration.
 
+## Slice 5 de-risking (prep work, separately committable)
+
+Before attempting the all-or-nothing deletion, the following can land as
+independent commits in the slices 1-4 cadence.  Each shrinks the deletion's
+blast radius or proves a precondition.
+
+**A. Close the 6-fixture residual `defstruct` -> `StructDef` path.**  Goal: get
+the residual `StructDef` producer count to zero fixtures, so the gate is
+provably dead before the type goes away.
+  - A1. **Effect-annotated `fn` fields** (Action/App/Emitter/Printer --
+    `run : fn #fx{Write}`).  Add `effect_row` to `CtorField` (or stash it
+    alongside the field type); teach `effect_check` to read the row off the
+    lowered ADT field rather than the `StructDef` field.  Lowest-risk -- purely
+    additive metadata.
+  - A2. **Grouped field specs** (`[a : int [b : int]]` -- Mixed fixture).
+    `defstruct_lowers_to_adt` re-derives from the raw form and bails on the
+    nested `F_VEC`.  Hoist the gate after `elab_defstruct` has flattened the
+    spec (or run the flattener inside the gate).  Pure gate-ordering fix.
+  - A3. **Applied `(Dense m A)` field on World.**  Slice 1 already handles
+    `TY_APP`, so the question is *why* World still trips the gate -- likely a
+    kind/sized interaction (`Dense`'s `m` size param).  ~30-min investigation
+    commit first; may already be one-line.
+
+**B. Migrate `TY_STRUCT{def=NULL}` placeholders to `TY_TYVAR`.**  The single
+biggest risk reduction.  Lands entirely before slice 5 because it does not
+require deleting `TY_STRUCT` -- only redirecting the def-less producers.
+  - B1. Inventory pass: grep every site that creates `TY_STRUCT` with
+    `def=NULL` (or reads `as.struct_.def` and tolerates NULL).  Land the
+    inventory as a comment block / short doc.  **DONE (2026-06-28):**
+    [ty-struct-null-def-inventory.md](ty-struct-null-def-inventory.md) -- 3
+    producers (P1 `elab_fns.c:2437`, P2 `elab_types.c:2321`, P3
+    `elab_typeclasses.c:2266`) and 16 explicit NULL-tolerant consumers
+    across elaboration + codegen.  Direction-A precedent
+    ([open-binder-skolems...](../archive/history/open-binder-skolems-not-distinguishable.md))
+    already migrated one parse-time producer, so P1-P3 follow the same
+    `type_tyvar_named(name)` pattern and the consumer shims it left
+    behind become the B3 work-list.
+  - B2. Per-producer migration, one commit each: tyvar placeholders ->
+    `make_tyvar(...)`; unknown-type placeholders -> existing "unknown" kind
+    (or new `TY_UNKNOWN`); opaque-type-constructor-argument placeholders ->
+    likely `TY_TYVAR` with a bound name.
+  - B3. Per-consumer migration: each NULL-tolerant read site switches to the
+    new kind.  Unifier and kind-checker changes go in their own commits with
+    focused fixtures.
+  - B4. Land a `TUR_ASSERT(def != NULL)` on `as.struct_.def` reads once all
+    producers are converted -- this *proves* the migration is complete before
+    slice 5 starts.
+
+**C. Pre-factor the typeclass dispatch site.**  Introduce a
+`type_head_key(Type *)` helper returning a stable identity for instance lookup;
+the current implementation just calls through to `StructDef*` for structs.
+Port every instance-lookup site in `elab_typeclasses.c` (25 refs) to use the
+helper.  When `StructDef` goes away the helper switches to `AdtDef*` and only
+one file changes.
+
+**D. Pre-factor `Expr` carriers off `StructDef*`.**  `expr.h` has 8 refs
+(`make_struct_.def`, `set_field_.def`, carrier `box_struct`/`target_struct`).
+A typedef alias (`typedef StructDef TypeHead;` today, `typedef AdtDef TypeHead;`
+after) lets every Expr field rename land mechanically in slice 5 instead of
+mixing with semantic changes.
+
+**E. Snapshot the StructDef footprint as a regression guard.**  Tiny test that
+greps `src/compiler/` for `StructDef` references and asserts the count stays at
+or below the current 198.  New uses creep in during long refactors; a numeric
+ratchet catches them.
+
+Recommended order: B first (highest leverage, most independent), then A in
+parallel, then C and D as small mechanical commits, then E as a guard.  With B
+done the slice-5 deletion shrinks from "rewrite type identity + migrate tyvar
+representation + delete the type + chase 6 residual fixtures" to roughly
+"rename the kind and delete the dead code."
+
 ## Recommendation
 
 **Status (2026-06-29): slices 1-4 DONE; slice 5 step 1 (defopaque migration)
