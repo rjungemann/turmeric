@@ -1,10 +1,55 @@
 ---
 title: Baseline regression — `ctor_Option__struct` emitted without definition
 severity: Blocks slice-5 B work and any other change measured against `bash tests/run.sh`.
-status: OPEN. Confirmed at `e042eb822` (main HEAD as of 2026-06-28).
+status: RESOLVED 2026-06-29. Fixed in the mangler (`src/compiler/types.c`); full
+  by-value suite green (1874/0). See "Resolution" below.
 ---
 
 # Baseline regression — `ctor_Option__struct` emitted without definition
+
+## Resolution (2026-06-29)
+
+Fixed in `append_type_mangle` (`src/compiler/types.c`).  The actual defect was a
+**name collision**, not a missing definition: three distinct inner type kinds all
+mangled to the literal `"opaque"` --
+
+- `TY_FN` (the `default:` arm) -- a `void *` by-value fat-closure handle;
+- `TY_TYVAR` (also the `default:` arm) -- an int64 carrier placeholder;
+- def-less `TY_STRUCT` (the previous interim patch routed it to `"opaque"` too).
+
+`(Option <fn>)` and `(Option <placeholder>)` therefore both emitted
+`tur_adt_Option__opaque`, with **different ABIs** (`void *` by-value vs int64
+boxed).  They share one `TUR_FN_…`/`TUR_TY_…` include guard, so the first
+definition won and every call site of the other got the wrong signature
+(`ctor_Option__opaque(bool, void *)` called with an `int64_t`, or the reverse).
+The previous interim patch (def-less `TY_STRUCT` -> `"opaque"`) made the collision
+worse by merging the placeholder onto `TY_FN`'s token.
+
+The committed snapshots already encoded the correct, non-colliding convention:
+`Option__opaque` is **always** `void *` (TY_FN) and `Option__struct` is **always**
+`int64_t` (placeholder) -- verified across all 92 snapshot fixtures.  The fix
+restores that split:
+
+- def-less `TY_STRUCT` mangles back to `"struct"` (reverting the interim patch);
+- `TY_TYVAR` and `TY_UNKNOWN` are split out of the `default:` arm and routed to
+  the **same** `"struct"` token, so the def-emitter and the call site agree on
+  the placeholder's name regardless of which placeholder representation the
+  elaborator happened to leave behind (the producer inconsistency that surfaced
+  the bug);
+- `TY_FN` (and other resolved compounds) stay on `"opaque"`.
+
+`emit-c` output now compiles cleanly and the full by-value suite is green
+(1874/0).  Snapshots regenerated in the same change.  This restores an honest
+`bash tests/run.sh` gate so slice-5 B2-B4 can resume in safely-measurable
+increments.
+
+Note: a *separate* gap remains in the multi-file split path
+(`tur build <dir>` / `emit_header`), where four monomorph typedefs
+(`Endo__int`, `Schema__int`, `Option__struct`, `Option__Zipper__struct`) are
+referenced but not emitted into `input.h`.  This does NOT affect the suite gate
+(`tests/run.sh` builds fixtures single-file via `emit_program`, the same path as
+`emit-c`) and is unrelated to the mangler -- it also drops fully-concrete
+monomorphs (`Endo__int`).  Tracked separately; not part of this fix.
 
 ## Summary
 

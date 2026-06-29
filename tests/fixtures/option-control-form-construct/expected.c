@@ -2958,18 +2958,18 @@ static int64_t ctor_Option__struct(bool _0, int64_t _1) {
 }
 
 #endif
-#ifndef TUR_TY_tur_adt_Option__Zipper__opaque
-#define TUR_TY_tur_adt_Option__Zipper__opaque
-typedef struct tur_adt_Option__Zipper__opaque {
+#ifndef TUR_TY_tur_adt_Option__Zipper__struct
+#define TUR_TY_tur_adt_Option__Zipper__struct
+typedef struct tur_adt_Option__Zipper__struct {
     bool is_some;
     int64_t value;
-} tur_adt_Option__Zipper__opaque;
+} tur_adt_Option__Zipper__struct;
 #endif
 
-#ifndef TUR_FN_tur_adt_Option__Zipper__opaque
-#define TUR_FN_tur_adt_Option__Zipper__opaque
-static int64_t ctor_Option__Zipper__opaque(bool _0, int64_t _1) {
-    tur_adt_Option__Zipper__opaque *__r = (tur_adt_Option__Zipper__opaque *)malloc(sizeof(tur_adt_Option__Zipper__opaque));
+#ifndef TUR_FN_tur_adt_Option__Zipper__struct
+#define TUR_FN_tur_adt_Option__Zipper__struct
+static int64_t ctor_Option__Zipper__struct(bool _0, int64_t _1) {
+    tur_adt_Option__Zipper__struct *__r = (tur_adt_Option__Zipper__struct *)malloc(sizeof(tur_adt_Option__Zipper__struct));
     __r->is_some = _0;
     __r->value = _1;
     return (int64_t)(intptr_t)__r;

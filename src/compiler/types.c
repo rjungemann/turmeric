@@ -620,12 +620,31 @@ static void append_type_mangle(Buf *b, Type t) {
             buf_puts(b, t.as.adt_.def && t.as.adt_.def->name ? t.as.adt_.def->name : "adt");
             break;
         case TY_STRUCT:
-            /* baseline-ctor-option-struct-mangling: a def-less TY_STRUCT is the
-             * elaborator's tyvar/unknown/opaque-container placeholder.  Mangle
-             * it as "opaque" so an Option-monomorph over the placeholder
-             * resolves to `ctor_Option__opaque` (which the def-emitter already
-             * produces) instead of an undefined `ctor_Option__struct`. */
-            buf_puts(b, t.as.struct_.def && t.as.struct_.def->name ? t.as.struct_.def->name : "opaque");
+            /* A def-less TY_STRUCT is one of the elaborator's UNRESOLVED
+             * placeholders (tyvar / unknown / opaque-container type-constructor
+             * argument -- see ty-struct-null-def-inventory.md).  It carries no
+             * concrete representation, so a monomorph over it (e.g.
+             * `(Option <placeholder>)`) is the int64 CARRIER instance: a boxed
+             * int64 payload, distinct from a `void *` by-value handle.  Mangle
+             * it -- and the other unresolved placeholders (TY_TYVAR, TY_UNKNOWN,
+             * routed through the same token below) -- to "struct" so every
+             * placeholder Option resolves to the SAME carrier monomorph
+             * `Option__struct` (int64).  This is deliberately distinct from
+             * TY_FN's "opaque" (a `void *` by-value handle); collapsing the two
+             * is the baseline-ctor-option-struct-mangling bug (the int64 ctor
+             * and the void* ctor would share one include guard and one would win
+             * with the wrong ABI). */
+            buf_puts(b, t.as.struct_.def && t.as.struct_.def->name ? t.as.struct_.def->name : "struct");
+            break;
+        case TY_UNKNOWN:
+        case TY_TYVAR:
+            /* Unresolved placeholders share the def-less TY_STRUCT carrier
+             * convention: a monomorph over them is the int64 carrier instance.
+             * Route them to the SAME "struct" token so the def-emitter and the
+             * call site agree regardless of which placeholder representation the
+             * elaborator happened to leave behind (the producer inconsistency
+             * that surfaced the baseline-ctor-option-struct-mangling bug). */
+            buf_puts(b, "struct");
             break;
         case TY_APP: {
             StructDef *def = NULL;
