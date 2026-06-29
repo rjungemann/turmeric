@@ -11566,7 +11566,7 @@ static int usage(void) {
         "  tur run <input.tur>               build + execute a single file\n"
         "  tur repl                          interactive REPL (Phase S1)\n"
         "  tur worker                        persistent fixture evaluator (Tier 3, reads dirs from stdin)\n"
-        "  tur --interpret <file.tur>        run a file through the tree-walking interpreter\n"
+        "  tur interpret <file.tur>          run a file through the tree-walking interpreter\n"
         "  tur debug <file.tur>              run a file under the interactive debugger\n"
         "  tur dap                           Debug Adapter Protocol server (JSON-RPC/stdio) for editors\n"
         "  tur lsp-lite                      lightweight completion/calltip/doc backend (NDJSON/stdio)\n"
@@ -13006,9 +13006,9 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "worker") == 0) {
         return cmd_worker();
     }
-    if (strcmp(cmd, "--interpret") == 0) {
+    if (strcmp(cmd, "interpret") == 0 || strcmp(cmd, "--interpret") == 0) {
         if (argc < 3) {
-            fprintf(stderr, "tur: --interpret requires a file argument\n");
+            fprintf(stderr, "tur: %s requires a file argument\n", cmd);
             return usage();
         }
         return cmd_eval(argv[2], !no_color && stderr_is_tty(), argv + 3, argc - 3,

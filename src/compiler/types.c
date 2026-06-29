@@ -622,7 +622,7 @@ static void append_type_mangle(Buf *b, Type t) {
         case TY_STRUCT:
             /* A def-less TY_STRUCT is one of the elaborator's UNRESOLVED
              * placeholders (tyvar / unknown / opaque-container type-constructor
-             * argument -- see ty-struct-null-def-inventory.md).  It carries no
+             * argument -- see docs/artifacts/ty-struct-null-def-inventory.md).  It carries no
              * concrete representation, so a monomorph over it (e.g.
              * `(Option <placeholder>)`) is the int64 CARRIER instance: a boxed
              * int64 payload, distinct from a `void *` by-value handle.  Mangle

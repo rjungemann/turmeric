@@ -1,5 +1,9 @@
 # `tur` CLI: `interpret` subcommand + shortest-unambiguous-prefix dispatch
 
+## Status
+
+- **2026-06-29**: Step 1 (`interpret` subcommand + silent `--interpret` alias back-compat) is **DONE**. The subcommand has been added, dynamic error message and `usage()` have been updated, all docs swept to canonical `tur interpret`, and test fixtures added. Shortest-unambiguous-prefix dispatch (Step 2) remains for future work.
+
 ## Motivation
 
 Two small ergonomic fixes to the top-level `tur` CLI:
