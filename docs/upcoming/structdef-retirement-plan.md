@@ -100,10 +100,20 @@ fields, parametric, `:heap`, `:copy`/`:move`).
    `exists-pack-constrained-byval-struct` (positives) and
    `errors/defstruct-compound-field-mismatch` (negative) all green; suite
    1872/0.  With slices 1-3 done the only carve-out left is `:linear` (slice 4).
-4. **`:linear` outer structs -- hard, unexercised.**  No record-ADT modeling of
-   `CK_LINEAR` exactly-once semantics exists, and there are zero `defstruct
-   :linear` fixtures.  Natural LAST slice (or leave on StructDef longest); write
-   fixtures first.
+4. **`:linear` outer structs. DONE (2026-06-29).**  (The plan's "zero `defstruct
+   :linear` fixtures" premise was off -- `inline-c-struct-return-cstr-params`'s
+   `Handle` plus the stdlib `Socket`/`FileHandle`/`MutexGuard` exercise it.)  The
+   key realisation: linearity enforcement keys on the TYPE's `copy_kind` (and the
+   bindings derived from it), not on `StructDef` identity, so the record-ADT path
+   needs no new exactly-once modeling -- it only has to carry `CK_LINEAR` on the
+   lowered type.  Changes: `AdtDef` gains `is_linear`/`is_affine`; `type_adt`
+   derives `copy_kind`/`substruct` from them exactly as `type_struct` does;
+   `elab_defdata` parses a `:linear` keyword (the lowering forwards it) and sets
+   `def->is_linear`; `defstruct_field_type_lowerable`/`defstruct_lowers_to_adt`
+   stop bailing on `:linear`.  Verified the exactly-once discipline survives the
+   lowering: new negative fixture `errors/struct-linear-double-use` (double-use ->
+   TUR-E0101) and positive `struct-linear-lowered`; the stdlib resource types and
+   all existing linear fixtures stay green (1874/0).
 5. **Delete `StructDef` -- the bulk, separately scoped.**  Once the gate is
    effectively always-true, migrate every `StructDef`-keyed site to the ADT def
    and delete the type.  **Footprint: ~197 references across 19 files** under

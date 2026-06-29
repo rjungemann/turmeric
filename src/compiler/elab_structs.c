@@ -899,8 +899,10 @@ bool defstruct_lowers_to_adt(Elab *e, const Form *call) {
         const Form *kw = call->as.list.items[idx];
         if (kw->tag != F_KEYWORD) break;
         if (kw->as.sym == e->kw_copy || kw->as.sym == e->kw_move) { idx++; continue; }
-        if (kw->as.sym == e->kw_linear)
-            return false;  /* :linear keeps the struct path */
+        /* structdef-retirement slice 4: `:linear` now lowers -- the lowered ADT
+         * type carries CK_LINEAR (type_adt), so the exactly-once enforcement
+         * propagates from the type's copy_kind exactly as it did on the struct. */
+        if (kw->as.sym == e->kw_linear) { idx++; continue; }
         /* structdef-retirement slice 2: `:no-auto-ctor` now lowers -- the record-
          * ADT path honours it by suppressing the value-namespace constructor
          * (elab_defdata), so the `(Name ...)` call form still gets rejected. */
@@ -1164,7 +1166,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
          * defdata's argument order is name, optional :copy/:move/:heap keywords,
          * optional type-param vec, then the constructor(s).  Seam 3: a :heap
          * struct lowers to a :heap record defadt (typed-pointer ABI). */
-        Form *dd_items[7];
+        Form *dd_items[8];
         uint32_t ddn = 0;
         dd_items[ddn++] = form_sym(e->arena, name_form->span, e->sym_defdata);
         dd_items[ddn++] = name_form;
@@ -1172,6 +1174,10 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
             dd_items[ddn++] = form_keyword(e->arena, name_form->span, e->kw_copy);
         if (is_heap)
             dd_items[ddn++] = form_keyword(e->arena, name_form->span, e->kw_heap);
+        /* structdef-retirement slice 4: forward `:linear` so the lowered ADT type
+         * carries CK_LINEAR and the exactly-once enforcement propagates. */
+        if (is_linear)
+            dd_items[ddn++] = form_keyword(e->arena, name_form->span, e->kw_linear);
         /* structdef-retirement slice 2: forward `:no-auto-ctor` so elab_defdata
          * suppresses the value-namespace constructor (the `(Name ...)` call form
          * stays rejected; construction is via make-struct). */
@@ -1971,6 +1977,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
      * :heap struct -- Vec/Map/Set), set by a lowered `:heap` defstruct. */
     bool is_copy = false;
     bool is_heap = false;
+    bool is_linear = false;     /* structdef-retirement slice 4 (LT4) */
     bool no_auto_ctor = false;  /* structdef-retirement slice 2 (CTOR-V0) */
     uint32_t ctors_start_idx = 2;
     while (ctors_start_idx < call->as.list.len) {
@@ -1979,6 +1986,12 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         if (kw_form->as.sym == e->kw_copy) { is_copy = true; ctors_start_idx++; continue; }
         if (kw_form->as.sym == e->kw_move) { is_copy = false; ctors_start_idx++; continue; }
         if (kw_form->as.sym == e->kw_heap) { is_heap = true; ctors_start_idx++; continue; }
+        /* structdef-retirement slice 4: a lowered `:linear` defstruct (exactly-once)
+         * carries CK_LINEAR on its ADT type; the value/binding-level linearity
+         * enforcement then propagates from the type's copy_kind. */
+        if (kw_form->as.sym == e->kw_linear) {
+            is_linear = true; ctors_start_idx++; continue;
+        }
         /* structdef-retirement slice 2: a lowered `:no-auto-ctor` defstruct (and,
          * by extension, a `defdata` that opts in) suppresses the auto-bound
          * value-namespace constructor so the `(Name ...)` call form stays rejected
@@ -2085,6 +2098,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
         def->is_copy = is_copy;
         def->is_heap = is_heap;
+        def->is_linear = is_linear; /* LT4 (structdef-retirement slice 4) */
         def->no_auto_ctor = no_auto_ctor;
         def->needs_drop_glue = false;
         def->is_gadt = false;
@@ -2119,6 +2133,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
         def->is_copy = is_copy;
         def->is_heap = is_heap;
+        def->is_linear = is_linear; /* LT4 (structdef-retirement slice 4) */
         def->no_auto_ctor = no_auto_ctor;
         /* Phase RF1: store type parameters */
         def->type_params = type_params;

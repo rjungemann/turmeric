@@ -277,6 +277,12 @@ typedef struct AdtDef {
     uint32_t    n_ctors;
     CtorDef   **ctors;           /* arena-allocated pointer array */
     bool        is_copy;         /* :copy annotation */
+    /* structdef-retirement slice 4: substructural annotations carried by a lowered
+     * `:linear`/`:affine` defstruct, so type_adt() stamps CK_LINEAR / CK_UNIQUE
+     * (+ SK_AFFINE) on the ADT type and the exactly-once / at-most-once
+     * enforcement propagates from the type's copy_kind exactly as on the struct. */
+    bool        is_linear;       /* :linear annotation -- exactly-once (CK_LINEAR) */
+    bool        is_affine;       /* :affine annotation -- at-most-once (CK_UNIQUE) */
     bool        needs_drop_glue; /* any ctor has rc/ref/weak fields */
     /* CONV-S1 seam 3: :heap -- this record ADT's natural monomorphic ABI is a
      * typed pointer (`tur_adt_<Name>__<args> *`) to a heap-allocated header, the
@@ -1488,7 +1494,14 @@ static inline Type type_struct(StructDef *def) {
 static inline Type type_adt(AdtDef *def) {
     Type t = {0};
     t.kind = TY_ADT;
-    t.copy_kind = def->is_copy ? CK_COPY : CK_MOVE;
+    /* structdef-retirement slice 4: a lowered `:linear`/`:affine` defstruct
+     * carries its substructural copy-kind on the ADT type exactly as type_struct
+     * does, so the exactly-once / at-most-once enforcement (which keys on
+     * Type.copy_kind and the bindings derived from it) propagates unchanged. */
+    t.copy_kind = def->is_linear ? CK_LINEAR
+                : def->is_affine ? CK_UNIQUE
+                : (def->is_copy ? CK_COPY : CK_MOVE);
+    if (def->is_affine) t.substruct = SK_AFFINE;
     t.hkt_kind = KIND_STAR;
     t.as.adt_.def = def;
     return t;
