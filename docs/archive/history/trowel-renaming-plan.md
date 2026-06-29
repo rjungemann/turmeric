@@ -185,7 +185,7 @@ Focuses on renaming local build pipelines for macOS bundles and Linux AppImages,
 
 Ensures consistent branding across historical and future documentation.
 
-1. Update references in `docs/upcoming/turmeric-studio-distribution-plan.md` to reference **trowel** and `tools/trowel/`.
+1. Update references in `docs/upcoming/trowel-distribution-plan.md` to reference **trowel** and `tools/trowel/`.
 2. Update references in `docs/upcoming/turmeric-lite-xl-windows-plan.md` to re-target the Windows installer to install **trowel** in `%ProgramFiles%\trowel\` with a Start Menu shortcut for "trowel".
 
 **Acceptance Criteria:**

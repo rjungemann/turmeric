@@ -11,7 +11,7 @@ Ship the rebranded **trowel** bundle to end users on macOS and Linux.
   - `make-dmg.sh` -- wrap into `Trowel-<version>-macos-$ARCH.dmg`.
   - `make-appimage.sh` -- bake into a build tree -> `Trowel-$VERSION-linux-$ARCH.AppImage`.
   - `Info.plist`, `init.lua`, `trowel.desktop` -- branding templates.
-  - `homebrew-cask-template.rb` -- starter cask for a future tap.
+  - `homebrew-cask-template.rb` -- starter cask for a future tap (rebranded to `trowel`, with support for the `trowel` CLI tool binary symlink).
 - `vendor/lite-xl/` + `tools/trowel/dist-out/` + `dist-out/` gitignored.
 
 Signing + notarization are opt-in via `TURMERIC_SIGN_IDENTITY` and
@@ -61,9 +61,10 @@ one that already cuts per-platform `tur` binaries -- see
 
 - Create a `homebrew-turmeric` tap under the project's GitHub org.
 - Drop `homebrew-cask-template.rb` into `Casks/trowel.rb`, populate `version` + `sha256` from the D4 artifacts, push.
+- Verify the cask correctly registers and symlinks the `trowel-cli` helper script packaged in `Trowel.app/Contents/MacOS/trowel-cli` to `/usr/local/bin/trowel` or `/opt/homebrew/bin/trowel`.
 - Document: `brew tap rjungemann/turmeric && brew install --cask trowel`.
 - Per-release: `brew bump-cask-pr --version <new>` (or a small script in `tools/trowel/dist/`).
-- Acceptance: a clean Mac with Homebrew installs the cask, the app launches, the bundled plugin works.
+- Acceptance: a clean Mac with Homebrew installs the cask, the `trowel` CLI command is available on PATH, running `trowel` launches the app, and the bundled plugin works.
 
 ### D6 -- AppImage update channel + zsync (0.5 day, deferred-deferred)
 

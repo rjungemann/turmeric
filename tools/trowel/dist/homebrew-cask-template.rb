@@ -1,22 +1,22 @@
-# Homebrew cask template for Turmeric Studio.
+# Homebrew cask template for Trowel.
 #
 # This is a TEMPLATE -- it is not auto-published. To ship a cask:
-#   1. Create a `homebrew-turmeric` tap repo under the project's GitHub org.
-#   2. Drop a populated copy of this file at Casks/turmeric-studio.rb.
+#   1. Use the `homebrew-turmeric` tap repo under the project's GitHub org.
+#   2. Drop a populated copy of this file at Casks/trowel.rb.
 #   3. After each release, run `brew bump-cask-pr` (or hand-edit version +
 #      sha256) and push.
-#   4. Users install via: `brew tap <org>/turmeric && brew install --cask turmeric-studio`.
+#   4. Users install via: `brew tap <org>/turmeric && brew install --cask trowel`.
 #
-# Replace @TURMERIC_VERSION@ and @SHA256@ at release time.
+# Replace @TROWEL_VERSION@ and @SHA256@ at release time.
 
-cask "turmeric-studio" do
-  version "@TURMERIC_VERSION@"
+cask "trowel" do
+  version "@TROWEL_VERSION@"
   sha256  "@SHA256@"
 
   arch arm: "arm64", intel: "x86_64"
 
-  url "https://github.com/rjungemann/turmeric/releases/download/v#{version}/TurmericStudio-#{version}-macos-#{arch}.dmg"
-  name "Turmeric Studio"
+  url "https://github.com/rjungemann/turmeric/releases/download/v#{version}/Trowel-#{version}-macos-#{arch}.dmg"
+  name "Trowel"
   desc "Native code editor and REPL for the Turmeric programming language"
   homepage "https://github.com/rjungemann/turmeric"
 
@@ -24,10 +24,11 @@ cask "turmeric-studio" do
   depends_on formula: "turmeric"
   depends_on macos: ">= :big_sur"
 
-  app "Turmeric Studio.app"
+  app "Trowel.app"
+  binary "#{appdir}/Trowel.app/Contents/MacOS/trowel-cli", target: "trowel"
 
   zap trash: [
-    "~/.config/lite-xl",
-    "~/Library/Saved Application State/com.turmeric.studio.savedState",
+    "~/.config/trowel",
+    "~/Library/Saved Application State/com.trowel.editor.savedState",
   ]
 end

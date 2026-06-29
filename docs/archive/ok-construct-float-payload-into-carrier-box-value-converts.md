@@ -69,9 +69,8 @@ route its payload args through that bridge.
 
 ## Status
 
-Surfaced finishing seam-4 cluster D (defstruct-as-defadt force-lower). The rest
-of that fixture's defects (the `Cons__cstr`/`Cons__float` return-element
-collapse) are fixed; this float-into-carrier-box boxing is the lone residual and
-is independent of the defstruct->defadt lowering (it is a pre-existing legacy
-carrier-box behavior, exposed here because the constrained method keeps its
-parametric result on the carrier).
+**Resolved.**
+
+- **Float carrier boxing fix:** As outlined in the Fix directions, the float-into-carrier-box value-conversion issue has been fully resolved. In `src/compiler/emit_expr.c` (at `EX_MAKE_STRUCT` / constructor arg emission), the compiler now correctly wraps float, float32, and float64 arguments destined for a carrier-erased `int64_t` constructor field in a bit-reinterpreting union wrapper (similar to `emit_carrier_bridge`), preventing truncation or numerical coercion.
+- **Seam resolution:** An outstanding residual `-Wint-conversion` compilation warning/error on modern Clang that blocked the `cstr` path of the monomorphized test fixture `constrained-defn-cons-return-monomorphize` has also been resolved. In `src/compiler/emit_fns.c`, the compiler now evaluates the resolved type (via `emit_resolve_type`) of the return value expression. When it resolves to a pointer, `cstr`, or function type returning through the `int64_t` carrier return slot, it is correctly cast to `(int64_t)(intptr_t)` to preserve correctness and compile cleanly.
+- **Verification:** The entire `constrained-defn-cons-return-monomorphize` test fixture now passes perfectly under both compilation (`tests/run.sh`) and interpreter (`tests/run-turi.sh`) suites.

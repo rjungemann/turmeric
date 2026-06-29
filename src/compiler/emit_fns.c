@@ -1505,10 +1505,17 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                     "return (int64_t)(intptr_t)__tur_ret_p; }\n",
                     struct_cty, struct_cty, struct_cty, ret_val);
             }
-        } else if ((fd->body->type.kind == TY_FN ||
-                    fd->body->type.kind == TY_PTR_VOID ||
-                    fd->body->type.kind == TY_CSTR ||
-                    (fd->body->type.kind == TY_STRUCT && strchr(type_c_name(fd->body->type), '*') != NULL)) &&
+        } else if (((emit_resolve_type(ctx, fd->body->type).kind == TY_FN ||
+                     emit_resolve_type(ctx, fd->body->type).kind == TY_PTR_VOID ||
+                     emit_resolve_type(ctx, fd->body->type).kind == TY_CSTR ||
+                     emit_resolve_type(ctx, fd->body->type).kind == TY_RC ||
+                     emit_resolve_type(ctx, fd->body->type).kind == TY_WEAK ||
+                     emit_resolve_type(ctx, fd->body->type).kind == TY_REF ||
+                     emit_resolve_type(ctx, fd->body->type).kind == TY_LREF ||
+                     emit_resolve_type(ctx, fd->body->type).kind == TY_FORALL ||
+                     emit_resolve_type(ctx, fd->body->type).kind == TY_EXISTS ||
+                     (emit_resolve_type(ctx, fd->body->type).kind == TY_STRUCT &&
+                      strchr(type_c_name(emit_resolve_type(ctx, fd->body->type)), '*') != NULL))) &&
                    (result_kind == TY_INT || ret_is_int64_carrier)) {
             /* A function-typed, pointer-typed, or cstr body returned through the int64_t
              * carrier: a bare non-capturing fn reference is a `void *(...)`

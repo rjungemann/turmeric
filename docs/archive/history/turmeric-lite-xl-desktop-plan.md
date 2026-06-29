@@ -226,7 +226,7 @@ Trowel, the first end-to-end build on each OS, Apple Developer ID
 signing + notarization, Universal DMG, release-workflow integration, and
 Homebrew tap publication -- is broken out into its own plan:
 [`trowel-renaming-plan.md`](trowel-renaming-plan.md) and
-[`turmeric-studio-distribution-plan.md`](turmeric-studio-distribution-plan.md).
+[`trowel-distribution-plan.md`](../../upcoming/trowel-distribution-plan.md).
 Windows distribution stays in
 [`turmeric-lite-xl-windows-plan.md`](turmeric-lite-xl-windows-plan.md).
 
