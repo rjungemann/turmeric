@@ -53,6 +53,11 @@ void turi_value_repr(char *buf, size_t cap, TuriValue v);
 TuriValue turi_eval_typed(TuriEnv *env, const char *src,
                            char *out_type_tag, size_t tag_cap);
 
+/* Evaluate source code, registering it under custom path for debugger/diagnostics. */
+TuriValue turi_eval_with_path(TuriEnv *env, const char *src, const char *path);
+TuriValue turi_eval_with_path_typed(TuriEnv *env, const char *src, const char *path,
+                                    char *out_type_tag, size_t tag_cap);
+
 /* Attempt to call the Show typeclass instance for val.
  * Returns a heap-allocated C string (caller must free() it), or NULL when
  * no Show instance is registered for this value's concrete type.
@@ -81,6 +86,10 @@ void turi_debug_enable(TuriEnv *env, FILE *in, FILE *out);
 /* Arm the attached debugger so it stops at the first eval node it sees (the
  * program-entry stop).  Call right before running the program (e.g. main). */
 void turi_debug_arm(TuriEnv *env);
+
+/* Arm the attached debugger for breakpoints and step requests only, bypassing the
+ * program-entry stop. */
+void turi_debug_arm_breakpoints(TuriEnv *env);
 
 /* Detach and free the debugger (no-op if none attached). */
 void turi_debug_disable(TuriEnv *env);
@@ -135,6 +144,12 @@ void turi_debug_set_pause_handler(TuriEnv *env, TuriDbgPauseFn cb, void *ud);
  * (the breakpoint always fires). */
 typedef bool (*TuriDbgCondFn)(TuriEnv *env, const char *condition, void *ud);
 void turi_debug_set_cond_handler(TuriEnv *env, TuriDbgCondFn cb, void *ud);
+
+/* Custom breakpoint matcher callback.  If set, the debugger delegates the
+ * breakpoint-hit check to this callback instead of matching against its local
+ * table.  Returns true if the line is a breakpoint. */
+typedef bool (*TuriDbgBpMatchFn)(TuriEnv *env, const char *file_path, uint32_t line, void *ud);
+void turi_debug_set_bp_match_handler(TuriEnv *env, TuriDbgBpMatchFn cb, void *ud);
 
 /* Breakpoint-table management for the DAP setBreakpoints request. */
 void turi_debug_clear_breakpoints(TuriEnv *env);

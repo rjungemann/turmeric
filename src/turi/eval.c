@@ -8211,7 +8211,7 @@ static void extract_type_tag(Type t, char *buf, size_t cap) {
     }
 }
 
-static TuriValue turi_eval_impl(TuriEnv *env, const char *src,
+static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
                                  char *out_type_tag, size_t tag_cap);
 
 /* Gap 3: forward an env's diagnostics from the process-global diag sink to the
@@ -8229,7 +8229,7 @@ static void turi_diag_sink_trampoline(DiagLevel level, const char *code,
 /* Run turi_eval_impl with this env's diagnostic sink (if any) installed into
  * the global diag layer, restoring the previous sink afterward.  Centralises
  * the save/install/restore so every public eval entry shares one code path. */
-static TuriValue turi_eval_with_sink(TuriEnv *env, const char *src,
+static TuriValue turi_eval_with_sink(TuriEnv *env, const char *src, const char *path,
                                      char *out_type_tag, size_t tag_cap) {
     /* Gap 7: snapshot this env's interpret-mode bit into the process-global
      * elaborator flag for the duration of the call, then restore.  Lets two
@@ -8241,12 +8241,12 @@ static TuriValue turi_eval_with_sink(TuriEnv *env, const char *src,
 
     TuriValue r;
     if (!env || !env->diag_sink) {
-        r = turi_eval_impl(env, src, out_type_tag, tag_cap);
+        r = turi_eval_impl(env, src, path, out_type_tag, tag_cap);
     } else {
         void      *prev_ud = NULL;
         DiagSinkFn prev    = diag_get_sink(&prev_ud);
         diag_set_sink(turi_diag_sink_trampoline, env);
-        r = turi_eval_impl(env, src, out_type_tag, tag_cap);
+        r = turi_eval_impl(env, src, path, out_type_tag, tag_cap);
         diag_set_sink(prev, prev_ud);
     }
 
@@ -8255,15 +8255,24 @@ static TuriValue turi_eval_with_sink(TuriEnv *env, const char *src,
 }
 
 TuriValue turi_eval(TuriEnv *env, const char *src) {
-    return turi_eval_with_sink(env, src, NULL, 0);
+    return turi_eval_with_sink(env, src, "<eval>", NULL, 0);
 }
 
 TuriValue turi_eval_typed(TuriEnv *env, const char *src,
                            char *out_type_tag, size_t tag_cap) {
-    return turi_eval_with_sink(env, src, out_type_tag, tag_cap);
+    return turi_eval_with_sink(env, src, "<eval>", out_type_tag, tag_cap);
 }
 
-static TuriValue turi_eval_impl(TuriEnv *env, const char *src,
+TuriValue turi_eval_with_path(TuriEnv *env, const char *src, const char *path) {
+    return turi_eval_with_sink(env, src, path, NULL, 0);
+}
+
+TuriValue turi_eval_with_path_typed(TuriEnv *env, const char *src, const char *path,
+                                    char *out_type_tag, size_t tag_cap) {
+    return turi_eval_with_sink(env, src, path, out_type_tag, tag_cap);
+}
+
+static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
                                  char *out_type_tag, size_t tag_cap) {
     if (!env || !src) return turi_error("turi_eval: null argument");
     if (out_type_tag && tag_cap > 0) out_type_tag[0] = '\0';
@@ -8355,7 +8364,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src,
      * Otherwise diagnostic snippet rendering dereferences uninitialized
      * memory (the sweet-exp xform map) and crashes. */
     memset(sfile, 0, sizeof(*sfile));
-    sfile->path        = "<eval>";
+    sfile->path        = path;
     /* Resolve in-source relative paths (#use-reader-macros) against the script's
      * directory: the eval blob's path is the synthetic "<eval>" (no dirname), so
      * without this a directive like `#use-reader-macros "macros.tur"` would look
@@ -8776,6 +8785,8 @@ typedef struct TuriDebugger {
     void          *pause_ud;
     TuriDbgCondFn  cond_fn;      /* conditional-breakpoint predicate (DAP) */
     void          *cond_ud;
+    TuriDbgBpMatchFn bp_match_fn; /* custom breakpoint matcher (Godot) */
+    void          *bp_match_ud;
     EvalFrame     *cur_frame;    /* lexical frame of the currently paused node */
     const Expr    *cur_expr;     /* the currently paused node */
     TuriDbgStop    stop_reason;  /* why we paused (for the pause handler) */
@@ -9145,19 +9156,26 @@ static void turi_dbg_before_node(TuriEnv *env, EvalFrame *frame,
     TuriDbgStop reason = TURI_DBG_STOP_STEP;
     if (dbg->break_now) { dbg->break_now = false; hit = true; reason = TURI_DBG_STOP_PAUSE; }
     else if (line_entry) {
-        int bpi = dbg_bp_match(dbg, s);
-        if (bpi >= 0) {
-            /* Conditional breakpoint: stop only when the predicate holds.  Done
-             * here (not after recording prev_line) so the line-entry test stays
-             * consistent whether or not we ultimately stop. */
-            const char *cond = dbg->bps[bpi].cond;
-            if (cond[0] != '\0' && dbg->cond_fn) {
-                dbg->cur_frame = frame; dbg->cur_expr = e;
-                if (dbg->cond_fn(env, cond, dbg->cond_ud)) {
+        if (dbg->bp_match_fn) {
+            const char *path = diag_file_path(s.file_id);
+            if (dbg->bp_match_fn(env, path ? path : "", s.line, dbg->bp_match_ud)) {
+                hit = true; reason = TURI_DBG_STOP_BREAKPOINT;
+            }
+        } else {
+            int bpi = dbg_bp_match(dbg, s);
+            if (bpi >= 0) {
+                /* Conditional breakpoint: stop only when the predicate holds.  Done
+                 * here (not after recording prev_line) so the line-entry test stays
+                 * consistent whether or not we ultimately stop. */
+                const char *cond = dbg->bps[bpi].cond;
+                if (cond[0] != '\0' && dbg->cond_fn) {
+                    dbg->cur_frame = frame; dbg->cur_expr = e;
+                    if (dbg->cond_fn(env, cond, dbg->cond_ud)) {
+                        hit = true; reason = TURI_DBG_STOP_BREAKPOINT;
+                    }
+                } else {
                     hit = true; reason = TURI_DBG_STOP_BREAKPOINT;
                 }
-            } else {
-                hit = true; reason = TURI_DBG_STOP_BREAKPOINT;
             }
         }
     }
@@ -9249,6 +9267,16 @@ void turi_debug_arm(TuriEnv *env) {
     dbg->stop_line = 0;
 }
 
+void turi_debug_arm_breakpoints(TuriEnv *env) {
+    if (!env || !env->debugger) return;
+    TuriDebugger *dbg = (TuriDebugger *)env->debugger;
+    dbg->armed     = true;
+    dbg->step      = DBG_STEP_NONE;
+    dbg->entry     = false;
+    dbg->stop_file = 0;
+    dbg->stop_line = 0;
+}
+
 /* -------- Phase 3: DAP control surface ------------------------------------ */
 
 static TuriDebugger *dbg_of(TuriEnv *env) {
@@ -9267,6 +9295,13 @@ void turi_debug_set_cond_handler(TuriEnv *env, TuriDbgCondFn cb, void *ud) {
     if (!d) return;
     d->cond_fn = cb;
     d->cond_ud = ud;
+}
+
+void turi_debug_set_bp_match_handler(TuriEnv *env, TuriDbgBpMatchFn cb, void *ud) {
+    TuriDebugger *d = dbg_of(env);
+    if (!d) return;
+    d->bp_match_fn = cb;
+    d->bp_match_ud = ud;
 }
 
 void turi_debug_clear_breakpoints(TuriEnv *env) {
