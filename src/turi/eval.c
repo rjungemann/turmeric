@@ -309,8 +309,15 @@ static TuriValue native_extern_exit(TuriEnv *env, TuriValue *args, uint32_t n, v
     _exit(code);
 }
 static TuriValue native_extern_free(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
-    (void)env; (void)ud;
-    if (n > 0) { void *p = (void *)(intptr_t)args[0].as_int; if (p) free(p); }
+    (void)env; (void)args; (void)n; (void)ud;
+    /* No-op under --interpret.  An inline-C `malloc(...)` body is reproduced by
+     * the tree-walker via the env value-arena (turi_val_alloc), NOT raw malloc,
+     * so a program that pairs an inline-C allocation with an extern-c `free`
+     * (e.g. tests/fixtures/typed/slice-basic's make-arr + free) would otherwise
+     * hand a non-heap arena pointer to libc free -- a hard bad-free abort.  The
+     * interpreter already runs process-lifetime (it never frees its closures or
+     * registered natives), so leaking the occasional genuinely-malloc'd carrier
+     * here is consistent and harmless; the arena is reclaimed at env teardown. */
     return turi_nil();
 }
 static TuriValue native_extern_strlen(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
@@ -541,6 +548,12 @@ struct TuriStruct {
     uint32_t     n_fields;
     TuriValue   *fields;   /* heap-allocated array */
     StructDef   *def;      /* compiler's struct definition (for field name lookup); may be NULL */
+    const CtorDef *ctor;   /* CONV-S1: ADT constructor this value was built from
+                            * (record ctors carry field names + a back-pointer to
+                            * their AdtDef, incl. from_struct_lowering).  NULL for
+                            * a plain make-struct value.  Lets the interpreter
+                            * recover field names + struct-ness for a defstruct
+                            * lowered to a single-variant record ADT. */
 };
 
 static TuriValue make_struct_val_def(TuriEnv *env, const char *name, uint32_t n, TuriValue *fields, StructDef *def) {
@@ -551,6 +564,7 @@ static TuriValue make_struct_val_def(TuriEnv *env, const char *name, uint32_t n,
     s->name     = name;
     s->n_fields = n;
     s->def      = def;
+    s->ctor     = NULL;
     s->fields   = n ? (TuriValue *)turi_val_alloc(env, n * sizeof(TuriValue)) : NULL;
     for (uint32_t i = 0; i < n; i++) s->fields[i] = fields[i];
     return turi_struct_val(s);
@@ -611,6 +625,39 @@ const char *turi_struct_name(TuriValue v) {
     return NULL;
 }
 
+/* Recursively run rc drop-glue on a value being released.  An rc value is a
+ * "__rc" wrapper { counter-ptr, inner }: decrement its strong count and, on
+ * reaching zero, drop its inner.  A plain struct/ADT being dropped by value
+ * releases each of its fields (so a nested rc<T> field, e.g. Box's payload, gets
+ * decremented) -- mirroring the compiled drop-glue that the by-value ADT path
+ * now emits (CONV-S1 slice 2).  Other values have no drop glue. */
+static void turi_rc_drop_value(TuriValue v) {
+    if (v.tag != TURI_STRUCT || !v.as_struct) return;
+    TuriStruct *s = v.as_struct;
+    if (s->name && strcmp(s->name, "__rc") == 0 && s->n_fields >= 2) {
+        int64_t *cnt = (int64_t *)(intptr_t)s->fields[0].as_int;
+        if (cnt && *cnt > 0) {
+            (*cnt)--;
+            if (*cnt == 0) turi_rc_drop_value(s->fields[1]);
+        }
+        return;
+    }
+    for (uint32_t i = 0; i < s->n_fields; i++)
+        turi_rc_drop_value(s->fields[i]);
+}
+
+/* CONV-S1: true when a TURI_STRUCT value should be observed as a "struct" at the
+ * surface -- either a plain make-struct (carries a StructDef) or a defstruct that
+ * lowered to a single-variant record ADT (its CtorDef's parent AdtDef has
+ * from_struct_lowering set).  Used by type-of / cast so the ADT lowering of a
+ * defstruct stays invisible, matching the compiled __tur_any_type_name. */
+static bool turi_struct_is_struct_like(TuriValue v) {
+    if (v.tag != TURI_STRUCT || !v.as_struct) return false;
+    if (v.as_struct->def) return true;
+    const CtorDef *cd = v.as_struct->ctor;
+    return cd && cd->adt && cd->adt->from_struct_lowering;
+}
+
 TuriValue turi_make_struct(TuriEnv *env, const char *name, TuriValue *fields, uint32_t n) {
     return make_struct_val_def(env, name, n, fields, NULL);
 }
@@ -631,7 +678,11 @@ static TuriValue native_panic_pred(TuriEnv *env, TuriValue *args, uint32_t n, vo
 /* Native callback for ADT constructors registered by EX_DEFDATA/EX_DEFGADT. */
 static TuriValue adt_ctor_native(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
     CtorDef *ctor = (CtorDef *)ud;
-    return make_struct_val(env, ctor->name, n, args);
+    TuriValue v = make_struct_val(env, ctor->name, n, args);
+    /* Remember the constructor so the interpreter can recover record field names
+     * and the from_struct_lowering flag (defstruct lowered to a record ADT). */
+    if (v.tag == TURI_STRUCT && v.as_struct) v.as_struct->ctor = ctor;
+    return v;
 }
 
 /* DEPR-D0: TuriThrow / make_throw_val / turi_native_throw deleted.  The
@@ -2732,6 +2783,17 @@ static bool ic_eval_operand(const char **pp,
                                 }
                             }
                         }
+                        /* 1b. CONV-S1: a defstruct lowered to a record ADT carries
+                         * no StructDef, but its CtorDef holds the field names. */
+                        if (fidx < 0 && arg->as_struct->ctor &&
+                            arg->as_struct->ctor->fields) {
+                            const CtorDef *cd = arg->as_struct->ctor;
+                            for (uint32_t fi = 0; fi < cd->n_fields && fi < arg->as_struct->n_fields; fi++) {
+                                if (cd->fields[fi].name && strcmp(cd->fields[fi].name, field_name) == 0) {
+                                    fidx = (int)fi; break;
+                                }
+                            }
+                        }
                         /* 2. Try body struct definition */
                         if (fidx < 0) {
                             const char *snames[IC_MAX_FIELDS]; size_t slens[IC_MAX_FIELDS]; int stypes[IC_MAX_FIELDS];
@@ -4023,6 +4085,19 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
     bool has_switch = strstr(body,"switch") && strstr(body,"case ");
     bool has_return = strstr(body,"return ");
 
+    /* Pattern 0: pure no-op discard body -- only `(void)<expr>;` casts, e.g.
+     * list.tur's tur-list-homog__ homogeneity check (`(void)a; (void)b;`).  Such
+     * a body has no return, no allocation, no pointer work, no side effects, and
+     * is declared to return :nil; reproduce it as turi_nil().  Guard tightly so a
+     * value-computing body that merely contains a `(void)` cast is not misread. */
+    if (strstr(body,"(void)") && !has_return && !has_malloc && !has_free &&
+        !has_arrow && !has_fptr && !has_switch &&
+        !strstr(body,"=") && !strstr(body,"printf") &&
+        !strstr(body,"while") && !strstr(body,"for")) {
+        *out = turi_nil();
+        return ic_claim("void-noop", fn, out);
+    }
+
     /* Pattern 1: Free -- only a bare destructor (`free(p);`), not a body that
      * also computes/returns a value or fat-dispatches a closure (those merely
      * happen to contain a `*_free(` token and must not be reduced to free(arg0)). */
@@ -4123,6 +4198,24 @@ static const char *gde_type_head_name(const Type *t) {
     }
 }
 
+/* Surface type name of a concrete `*`-kinded primitive, as a `definstance`
+ * would spell it (`int`, `bool`, `cstr`, `float`).  Used so a primitive element
+ * type can re-resolve to its OWN instance (e.g. Tag[bool], Enc[float]) instead
+ * of the int-carrier representative baked by the elaborator.  NULL for kinds
+ * that have no distinct user-instance surface name. */
+static const char *gde_primitive_type_name(const Type *t) {
+    if (!t) return NULL;
+    switch (t->kind) {
+    case TY_INT: case TY_INT64: return "int";
+    case TY_BOOL:               return "bool";
+    case TY_CSTR:               return "cstr";
+    case TY_FLOAT: case TY_FLOAT64: return "float";
+    case TY_FLOAT32:            return "float32";
+    case TY_SYM:                return "sym";
+    default:                    return NULL;
+    }
+}
+
 /* True for a concrete `*`-kinded primitive -- these dispatch to the int-carrier
  * representative, so they keep the elaborator's baked instance. */
 static bool gde_type_is_primitive_star(const Type *t) {
@@ -4142,47 +4235,15 @@ static bool gde_type_is_primitive_star(const Type *t) {
  * the instance matching the runtime-concrete receiver `concrete`.  Returns a
  * method closure, or nil if no better instance applies (caller keeps the baked
  * callee). */
-static TuriValue gde_reresolve_method(TuriEnv *env, const Expr *dict_arg,
-                                      const Type *concrete) {
-    if (!env || !env->last_tc_env || !dict_arg || !concrete) return turi_nil();
-    /* Primitives dispatch to the int-carrier representative the elaborator already
-     * baked -- nothing to re-resolve. */
-    if (gde_type_is_primitive_star(concrete)) return turi_nil();
-    TypeClassInstance *rep = dict_arg->as.dict_.instance;
-    if (!rep || !rep->typeclass) return turi_nil();
-    TypeClassEnv *tc_env = (TypeClassEnv *)env->last_tc_env;
-    TypeClass   *tc      = rep->typeclass;
-
-    TypeClassInstance *match = NULL;
-    /* Precise: match by the concrete type's head constructor name. */
-    const char *head = gde_type_head_name(concrete);
-    if (head) {
-        for (TypeClassInstance *inst = tc_env->instances; inst; inst = inst->next) {
-            if (inst->typeclass != tc || inst->n_type_args == 0) continue;
-            const char *ihead = (inst->type_arg_syms && inst->type_arg_syms[0])
-                                ? inst->type_arg_syms[0]->name : NULL;
-            if (!ihead) ihead = gde_type_head_name(&inst->type_args[0]);
-            if (ihead && strcmp(ihead, head) == 0) { match = inst; break; }
-        }
-    }
-    /* Fallback: structured dispatch key (ARROW -> first non-primitive instance). */
-    if (!match) {
-        TypeClassDispatchKey key;
-        memset(&key, 0, sizeof(key));
-        key.typeclass       = tc;
-        key.type_args       = (Type *)concrete;
-        key.n_type_args     = 1;
-        key.constructor_kind = KIND_ARROW;
-        match = typeclass_env_lookup_instance_by_key(tc_env, &key);
-    }
-    if (!match || match == rep) return turi_nil();
-
-    /* Same method slot as the baked dict node.  The dict node's method_name is
-     * produced by the canonical injective mangler (tur_mangle_ident), so a
-     * hyphen/sigil method renders as e.g. `render-to` -> `render_hyto`, NOT the
-     * lossy `render_to` an underscore-collapse would give.  Compare the method's
-     * canonically-mangled name (and, defensively, the underscore-collapsed form)
-     * so the slot resolves regardless of which spelling the dict carries. */
+/* Build a closure for the dict node's method slot in instance `match`.  The dict
+ * node's method_name is produced by the canonical injective mangler
+ * (tur_mangle_ident), so a hyphen/sigil method renders as e.g. `render-to` ->
+ * `render_hyto`, NOT the lossy `render_to` an underscore-collapse would give.
+ * Compare the method's canonically-mangled name (and, defensively, the
+ * underscore-collapsed form) so the slot resolves regardless of which spelling
+ * the dict carries.  Returns nil if the slot has no impl in `match`. */
+static TuriValue gde_method_closure(TuriEnv *env, const Expr *dict_arg,
+                                    TypeClass *tc, TypeClassInstance *match) {
     const char *mname = dict_arg->as.dict_.method_name;
     for (uint32_t mi = 0; mi < tc->n_methods; mi++) {
         const char *orig = tc->methods[mi].name->name;
@@ -4205,6 +4266,115 @@ static TuriValue gde_reresolve_method(TuriEnv *env, const Expr *dict_arg,
         return turi_closure(cl);
     }
     return turi_nil();
+}
+
+static TuriValue gde_reresolve_method(TuriEnv *env, const Expr *dict_arg,
+                                      const Type *concrete) {
+    if (!env || !env->last_tc_env || !dict_arg || !concrete) return turi_nil();
+    bool concrete_is_primitive = gde_type_is_primitive_star(concrete);
+    TypeClassInstance *rep = dict_arg->as.dict_.instance;
+    if (!rep || !rep->typeclass) return turi_nil();
+    TypeClassEnv *tc_env = (TypeClassEnv *)env->last_tc_env;
+    TypeClass   *tc      = rep->typeclass;
+
+    TypeClassInstance *match = NULL;
+    /* Precise: match by the concrete type's head constructor name.  A primitive
+     * concrete (bool/cstr/float/...) may have its OWN instance distinct from the
+     * int-carrier representative the elaborator baked, so match it by surface
+     * name; if none exists the rep == match check below keeps the baked callee. */
+    const char *head = concrete_is_primitive ? gde_primitive_type_name(concrete)
+                                             : gde_type_head_name(concrete);
+    if (head) {
+        for (TypeClassInstance *inst = tc_env->instances; inst; inst = inst->next) {
+            if (inst->typeclass != tc || inst->n_type_args == 0) continue;
+            const char *ihead = (inst->type_arg_syms && inst->type_arg_syms[0])
+                                ? inst->type_arg_syms[0]->name : NULL;
+            if (!ihead) ihead = gde_type_head_name(&inst->type_args[0]);
+            if (!ihead) ihead = gde_primitive_type_name(&inst->type_args[0]);
+            if (ihead && strcmp(ihead, head) == 0) { match = inst; break; }
+        }
+    }
+    /* Fallback: structured dispatch key (ARROW -> first non-primitive instance).
+     * Skip for a primitive concrete -- a primitive that found no by-name instance
+     * keeps the baked representative rather than mis-matching an HKT instance. */
+    if (!match && !concrete_is_primitive) {
+        TypeClassDispatchKey key;
+        memset(&key, 0, sizeof(key));
+        key.typeclass       = tc;
+        key.type_args       = (Type *)concrete;
+        key.n_type_args     = 1;
+        key.constructor_kind = KIND_ARROW;
+        match = typeclass_env_lookup_instance_by_key(tc_env, &key);
+    }
+    if (!match || match == rep) return turi_nil();
+    return gde_method_closure(env, dict_arg, tc, match);
+}
+
+/* Re-resolve a baked-representative typeclass method using the RUNTIME type of
+ * the receiver value, rather than a statically-pinned tyvar.  This catches the
+ * constrained-instance element-dispatch case the static path misses: inside a
+ * `(definstance C [Vec] [(C A)] ...)` body, `(c (:: (vec-get v i) A))` is baked
+ * to the int-carrier representative, but at runtime the element value carries
+ * its real tag (bool/float/cstr/struct) and there may be a distinct C[bool] /
+ * C[float] / ... instance to dispatch to.
+ *
+ * SAFETY: only re-resolve for a *distinguishable* value -- bool/float/cstr or a
+ * struct/ADT.  An int-carrier value (TURI_INT) is ambiguous: Vec/Map/Set and
+ * other heap containers ride the int64 carrier too, so an int tag must keep the
+ * baked instance (re-resolving a Vec receiver to C[int] would be wrong). */
+static TuriValue gde_reresolve_method_by_value(TuriEnv *env, const Expr *dict_arg,
+                                               TuriValue recv) {
+    if (!env || !env->last_tc_env || !dict_arg) return turi_nil();
+    TypeClassInstance *rep = dict_arg->as.dict_.instance;
+    if (!rep || !rep->typeclass) return turi_nil();
+    TypeClassEnv *tc_env = (TypeClassEnv *)env->last_tc_env;
+    TypeClass   *tc      = rep->typeclass;
+
+    /* Pick a head name from the receiver's runtime tag.
+     *   - PRIMITIVE (bool/float/cstr): re-dispatch freely; a primitive that found
+     *     no instance keeps the baked rep.
+     *   - STRUCT/ADT: re-dispatch ONLY when the head matches a single instance.
+     *     Multiple same-head instances (e.g. `Enc [(Option cstr)]` vs
+     *     `Enc [(Option int)]`) are discriminated by the full applied type, which
+     *     the static elaborator dispatch already does correctly -- a coarse
+     *     by-head match here would mis-select, so defer to it.
+     *   - int-carrier / other: ambiguous (Vec/Map ride the carrier); keep baked. */
+    const char *head = NULL;
+    bool struct_recv = false;
+    switch (recv.tag) {
+    case TURI_BOOL:  head = "bool";  break;
+    case TURI_FLOAT: head = "float"; break;
+    case TURI_CSTR:  head = "cstr";  break;
+    case TURI_STRUCT:
+        struct_recv = true;
+        if (recv.as_struct) {
+            if (recv.as_struct->ctor && recv.as_struct->ctor->adt)
+                head = recv.as_struct->ctor->adt->name;
+            if (!head) head = recv.as_struct->name;
+        }
+        break;
+    default: return turi_nil();
+    }
+    if (!head) return turi_nil();
+
+    TypeClassInstance *match = NULL;
+    int n_head_matches = 0;
+    for (TypeClassInstance *inst = tc_env->instances; inst; inst = inst->next) {
+        if (inst->typeclass != tc || inst->n_type_args == 0) continue;
+        const char *ihead = (inst->type_arg_syms && inst->type_arg_syms[0])
+                            ? inst->type_arg_syms[0]->name : NULL;
+        if (!ihead) ihead = gde_type_head_name(&inst->type_args[0]);
+        if (!ihead) ihead = gde_primitive_type_name(&inst->type_args[0]);
+        if (ihead && strcmp(ihead, head) == 0) {
+            if (!match) match = inst;
+            n_head_matches++;
+        }
+    }
+    /* A struct head with >1 candidate instance is element-discriminated -- leave
+     * it to the static dispatch rather than guess. */
+    if (struct_recv && n_head_matches > 1) return turi_nil();
+    if (!match || match == rep) return turi_nil();
+    return gde_method_closure(env, dict_arg, tc, match);
 }
 
 /* Record the concrete type substitutions a call site pins onto the callee's
@@ -4531,6 +4701,14 @@ static TuriValue serial_receiver_resume(TuriEnv *env, void *state, TuriValue app
  * TuriStruct. */
 static TuriValue get_field_extract(const Expr *e, TuriValue sv) {
     uint32_t idx = e->as.get_field_.field_idx;
+    /* Auto-deref an rc<T> receiver: an rc value is a "__rc" wrapper struct
+     * { counter-ptr, inner }, so `(.field rc-val)` (and `(.f (.rcfield s))`,
+     * where the inner is itself a struct/record ADT) must resolve through the
+     * wrapper to the inner value's field -- mirroring the compiled rc<Struct> /
+     * rc<ADT> auto-deref (CONV-S1 slice 2/5).  Walk nested __rc wrappers. */
+    while (sv.tag == TURI_STRUCT && sv.as_struct && sv.as_struct->name &&
+           strcmp(sv.as_struct->name, "__rc") == 0 && sv.as_struct->n_fields >= 2)
+        sv = sv.as_struct->fields[1];
     if (sv.tag == TURI_INT) {
         if (sv.as_int == 0) {
             /* NULL carrier: a none Option / err-less Result.  A field read is the
@@ -5853,6 +6031,20 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 /* All args ready (a zero-arg call reaches here directly with
                  * acc == NULL). */
                 TuriClosure *cl = top->last.as_closure;
+                /* generic-dict-dispatch by runtime value: a constrained-instance
+                 * element call (e.g. `(c (:: (vec-get v i) A))`) baked to the
+                 * int-carrier representative re-dispatches on the receiver's real
+                 * runtime tag.  The static (tyvar) re-resolution at call setup
+                 * misses this when the element tyvar is unbound in the frame; the
+                 * evaluated receiver value carries its concrete type, so resolve
+                 * from it here.  Only fires for a distinguishable receiver (see
+                 * gde_reresolve_method_by_value), so carrier containers keep the
+                 * baked instance. */
+                if (n >= 1 && acc && top->expr->as.call_.dict_arg) {
+                    TuriValue rv = gde_reresolve_method_by_value(
+                        env, top->expr->as.call_.dict_arg, acc[0]);
+                    if (rv.tag == TURI_CLOSURE && rv.as_closure) cl = rv.as_closure;
+                }
                 FnDef       *fn = (FnDef *)cl->fn;
                 bool foldable = !cl->native && fn && fn->body &&
                                 fn->body->kind != EX_INLINE_C;
@@ -7487,20 +7679,11 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             int64_t *cnt = (int64_t *)(intptr_t)r.as_struct->fields[0].as_int;
             if (*cnt > 0) {
                 (*cnt)--;
-                /* When count reaches 0, recursively drop any inner __rc values. */
-                if (*cnt == 0) {
-                    TuriValue inner = r.as_struct->fields[1];
-                    /* Walk the chain of nested __rc structs. */
-                    while (inner.tag == TURI_STRUCT && inner.as_struct
-                           && inner.as_struct->name
-                           && strcmp(inner.as_struct->name, "__rc") == 0
-                           && inner.as_struct->n_fields >= 2) {
-                        int64_t *icnt = (int64_t *)(intptr_t)inner.as_struct->fields[0].as_int;
-                        if (*icnt > 0) (*icnt)--;
-                        if (*icnt > 0) break; /* still alive — stop recursing */
-                        inner = inner.as_struct->fields[1];
-                    }
-                }
+                /* On reaching 0, run drop-glue over the inner value: this both
+                 * follows a chain of nested rc<rc<...>> AND descends a by-value
+                 * struct/ADT inner to release its own rc<T> fields (e.g. an rc<Box>
+                 * whose Box carries an rc<int> payload). */
+                if (*cnt == 0) turi_rc_drop_value(r.as_struct->fields[1]);
             }
         }
         return turi_nil();
@@ -7691,14 +7874,21 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         case TY_BOOL: ok = (v.tag == TURI_BOOL); break;
         case TY_CSTR: ok = (v.tag == TURI_CSTR); break;
         case TY_STRUCT:
-            ok = (v.tag == TURI_STRUCT && v.as_struct && v.as_struct->def != NULL);
+            /* A make-struct value carries a StructDef; a defstruct lowered to a
+             * record ADT instead carries a from_struct_lowering CtorDef -- both
+             * are "struct" at the surface (CONV-S1), so accept either. */
+            ok = (v.tag == TURI_STRUCT && v.as_struct &&
+                  (v.as_struct->def != NULL || turi_struct_is_struct_like(v)));
             if (ok && e->as.any_cast_.target_struct &&
                 v.as_struct->name && e->as.any_cast_.target_struct->name)
                 ok = (strcmp(v.as_struct->name,
                              e->as.any_cast_.target_struct->name) == 0);
             break;
         case TY_ADT:
-            ok = (v.tag == TURI_STRUCT && v.as_struct && v.as_struct->def == NULL);
+            /* A genuine ADT value has no StructDef and was not synthesized from a
+             * defstruct lowering. */
+            ok = (v.tag == TURI_STRUCT && v.as_struct && v.as_struct->def == NULL &&
+                  !turi_struct_is_struct_like(v));
             break;
         default: ok = true; break;
         }
@@ -7726,7 +7916,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
              * "adt" (emit_module.c), NOT the specific type name.  A plain
              * (make-struct T ...) carries its StructDef (def != NULL); an ADT
              * constructor builds via make_struct_val with def == NULL. */
-            tname = (v.as_struct && v.as_struct->def) ? "struct" : "adt";
+            tname = (v.as_struct &&
+                     (v.as_struct->def || turi_struct_is_struct_like(v)))
+                        ? "struct" : "adt";
             break;
         default: break;
         }

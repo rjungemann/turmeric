@@ -1,6 +1,6 @@
 # Turmeric Interpreter (turi) Test Parity Plan
 
-Status: proposed / research
+Status: DONE -- 100% turi parity reached (`bash tests/run-turi.sh`: 1383 passed, 0 failed, 450 inline-c carve-outs)
 Owner: unassigned
 Track: developer-experience / test-parity
 Parent: [debugger-plan.md](./debugger-plan.md)
@@ -8,6 +8,30 @@ Parent: [debugger-plan.md](./debugger-plan.md)
 ## Goal
 
 Bring the tree-walking interpreter (`turi`) to 100% test parity with the native C compiler backend. Currently, `turi` passes 1345 test fixtures but fails 39. This plan documents these failures, categorizes their root causes, and maps out incremental phases to resolve them.
+
+## Resolution (all phases landed)
+
+All 39 (later 40, after the harness picked up `if-narrow-chained` /
+`applied-struct-instance-element-discrimination`) failures are resolved; the
+`run-turi.sh` suite is fully green. The fixes, by category:
+
+1. **Stdlib inline-C divergence** -- the list/map/vec/slice natives assumed the
+   carrier representation; made `native_list_*` walk the interpreter's struct
+   chains, bound `map-new` to the `set_wrap` carrier, bridged the HAMT iterator
+   runtime for the pure-Turmeric `Eq[Map]` loop, re-tagged by-value aggregate vec
+   cells as structs, handled the `(void)x;` no-op inline-C body, and made
+   extern-c `free` a no-op (interpreter allocations are arena-owned).
+2. **Struct/ADT representation** -- a `defstruct` lowers to a record ADT, so the
+   `TuriStruct` now carries its `CtorDef`; field-name lookup (inline-C), `type-of`
+   and `cast` recover struct-ness + field names from it.
+3. **Typeclass dispatch / monomorphization** -- primitive-aware instance
+   re-resolution plus a runtime-value re-dispatch at the call site (narrow:
+   primitives always, single-instance struct heads only), and rc<T> auto-deref
+   field access + recursive rc drop-glue.
+4. **Uniqueness + async** -- preload `unique.tur` (with-unique/consume/replace),
+   register reactor handle natives over the `tur_reactor_*` runtime, and move the
+   async-cancel test off the removed throw/try/catch surface onto the rejection
+   API.
 
 ---
 
