@@ -441,4 +441,8 @@ bool diag_explain(DiagCode code, FILE *out);
  * Returns DIAG_CODE_NONE if the string is not recognised. */
 DiagCode diag_code_from_string(const char *s);
 
+/* Phase HKT-P5: Return true if `s` looks like a diagnostic code string
+ * of the form "TUR-E" (or W or D) followed by one or more decimal digits. */
+bool diag_looks_like_code(const char *s);
+
 #endif

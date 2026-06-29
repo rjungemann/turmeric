@@ -260,6 +260,23 @@ const char *diag_code_to_string(DiagCode code) {
     }
 }
 
+/* Phase HKT-P5: Return true if `s` looks like a diagnostic code string
+ * of the form "TUR-E" (or W or D) followed by one or more decimal digits. */
+bool diag_looks_like_code(const char *s) {
+    if (!s) return false;
+    /* Accept TUR-E####, TUR-W#### and TUR-D#### (deprecation band) */
+    if (strncmp(s, "TUR-", 4) != 0) return false;
+    const char *p = s + 4;
+    if (*p != 'E' && *p != 'W' && *p != 'D') return false;
+    p++;
+    if (*p == '\0') return false;   /* need at least one digit */
+    while (*p) {
+        if (*p < '0' || *p > '9') return false;
+        p++;
+    }
+    return true;
+}
+
 /* Phase HKT-P5: DiagCode lookup by string (inverse of diag_code_to_string). */
 DiagCode diag_code_from_string(const char *s) {
     if (!s) return DIAG_CODE_NONE;

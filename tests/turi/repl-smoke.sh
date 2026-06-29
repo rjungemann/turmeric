@@ -85,6 +85,27 @@ RELOAD_OUT="$(repl_out ":reload $TMP" '(answer)')"
 rm -f "$TMP"
 check ":reload file" "=> 42" "$RELOAD_OUT"
 
+# --- :explain ---
+# Case 1: Bare :explain with no recent diagnostic to explain
+EXPLAIN_NONE_OUT="$(repl_out ":explain")"
+check "bare :explain with no error" "no recent diagnostic to explain" "$EXPLAIN_NONE_OUT"
+
+# Case 2: Specific code lookup (:explain TUR-E0001)
+EXPLAIN_SPEC_OUT="$(repl_out ":explain TUR-E0001")"
+check ":explain TUR-E0001" "Type mismatch" "$EXPLAIN_SPEC_OUT"
+
+# Case 3: Specific code lookup normalized to uppercase (:explain tur-e0001)
+EXPLAIN_NORM_OUT="$(repl_out ":explain tur-e0001")"
+check ":explain tur-e0001" "Type mismatch" "$EXPLAIN_NORM_OUT"
+
+# Case 4: Specific code miss (:explain TUR-E9999)
+EXPLAIN_MISS_OUT="$(repl_out ":explain TUR-E9999")"
+check ":explain TUR-E9999" "unknown diagnostic code 'TUR-E9999'" "$EXPLAIN_MISS_OUT"
+
+# Case 5: Bare :explain after a diagnostic is triggered
+EXPLAIN_AFTER_OUT="$(repl_out "(defn f [] invalid-name)" ":explain")"
+check "bare :explain after unbound symbol" "Unbound symbol" "$EXPLAIN_AFTER_OUT"
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

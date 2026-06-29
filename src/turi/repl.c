@@ -58,6 +58,93 @@ static TuriEnv *g_completion_env = NULL;
 /* Tutorial system */
 #include "tutorial.h"
 
+static char g_last_diag_code[16] = "";  /* "" = no recent code */
+
+static void repl_diag_sink(struct TuriEnv *env, int level, const char *code,
+                           const char *file, uint32_t line,
+                           uint32_t col_start, uint32_t col_end,
+                           const char *message, void *ud) {
+    (void)env; (void)ud;
+
+    /* Capture the first TUR-E#### or TUR-W#### code */
+    if (g_last_diag_code[0] == '\0' && code && (strncmp(code, "TUR-E", 5) == 0 || strncmp(code, "TUR-W", 5) == 0)) {
+        strncpy(g_last_diag_code, code, sizeof(g_last_diag_code) - 1);
+        g_last_diag_code[sizeof(g_last_diag_code) - 1] = '\0';
+    }
+
+    /* Format and print the diagnostic to stderr since setting a sink suppresses standard rendering. */
+    const char *lvl_str = "note";
+    const char *color_code = "";
+    bool use_color = isatty(STDERR_FILENO);
+    if (level == 0)      { lvl_str = "error";   if (use_color) color_code = "\033[31m"; }
+    else if (level == 1) { lvl_str = "warning"; if (use_color) color_code = "\033[33m"; }
+    else if (level == 2) { lvl_str = "note";    if (use_color) color_code = "\033[36m"; }
+    else if (level == 3) { lvl_str = "help";    if (use_color) color_code = "\033[32m"; }
+
+    const char *reset_code = use_color ? "\033[0m" : "";
+
+    if (file && file[0] != '\0') {
+        if (code && code[0] != '\0') {
+            fprintf(stderr, "%s%s:%u:%u: %s [%s]%s: %s\n",
+                    color_code, file, line, col_start, lvl_str, code, reset_code, message);
+        } else {
+            fprintf(stderr, "%s%s:%u:%u: %s%s: %s\n",
+                    color_code, file, line, col_start, lvl_str, reset_code, message);
+        }
+
+        /* Render source snippet if we can find the SourceFile */
+        const SourceFile *sf = NULL;
+        for (uint16_t id = 0; id < 64; id++) {
+            const SourceFile *f = diag_source_file(id);
+            if (!f) break;
+            if (strcmp(f->path, file) == 0) {
+                sf = f;
+                break;
+            }
+        }
+        if (sf) {
+            Span span;
+            span.file_id = sf->file_id;
+            span.line = line;
+            span.col_start = col_start;
+            span.col_end = col_end;
+            
+            /* Helper to calculate byte offsets from line/col */
+            uint32_t offset = 0;
+            uint32_t curr_line = 1;
+            uint32_t curr_col = 1;
+            span.off_start = 0;
+            span.off_end = 0;
+            while (offset < sf->len) {
+                if (curr_line == line && curr_col == col_start) {
+                    span.off_start = offset;
+                }
+                if (curr_line == line && curr_col == col_end) {
+                    span.off_end = offset;
+                }
+                if (sf->src[offset] == '\n') {
+                    curr_line++;
+                    curr_col = 1;
+                } else {
+                    curr_col++;
+                }
+                offset++;
+            }
+            if (span.off_end == 0) span.off_end = offset;
+
+            diag_render_snippet(sf, span, NULL);
+        }
+    } else {
+        if (code && code[0] != '\0') {
+            fprintf(stderr, "%s%s [%s]%s: %s\n",
+                    color_code, lvl_str, code, reset_code, message);
+        } else {
+            fprintf(stderr, "%s%s%s: %s\n",
+                    color_code, lvl_str, reset_code, message);
+        }
+    }
+}
+
 /* -------------------------------------------------------------------------
  * Paren-balance counter — drives multi-line continuation
  * ---------------------------------------------------------------------- */
@@ -89,7 +176,7 @@ static int paren_balance(const char *s) {
 /* Known REPL meta-commands for colon-prefix completion. */
 static const char *const k_meta_cmds[] = {
     ":help", ":quit", ":q",
-    ":type", ":doc", ":reload", ":run", ":reset",
+    ":type", ":doc", ":reload", ":run", ":reset", ":explain",
     ":tutorial", ":next", ":prev", ":hint", ":skip",
     ":quit-tutorial", ":tutorial-progress",
     NULL
@@ -375,6 +462,50 @@ static void cmd_doc(TuriEnv *env, const char *sym) {
     printf("no documentation for '%s'\n", sym);
 }
 
+static void cmd_explain(TuriEnv *env, const char *arg) {
+    (void)env;
+    if (arg && arg[0] != '\0') {
+        /* Normalise ARG to upper case */
+        char code[16];
+        size_t len = strlen(arg);
+        if (len >= sizeof(code)) {
+            printf("unknown diagnostic code '%s'\n", arg);
+            return;
+        }
+        for (size_t i = 0; i < len; i++) {
+            char c = arg[i];
+            if (c >= 'a' && c <= 'z') c = c - 'a' + 'A';
+            code[i] = c;
+        }
+        code[len] = '\0';
+
+        if (diag_looks_like_code(code)) {
+            DiagCode dc = diag_code_from_string(code);
+            if (dc != DIAG_CODE_NONE) {
+                if (!diag_explain(dc, stdout)) {
+                    printf("unknown diagnostic code '%s'\n", code);
+                }
+            } else {
+                printf("unknown diagnostic code '%s'\n", code);
+            }
+        } else {
+            printf("unknown diagnostic code '%s'\n", arg);
+        }
+    } else {
+        /* Bare :explain */
+        if (g_last_diag_code[0] != '\0') {
+            DiagCode dc = diag_code_from_string(g_last_diag_code);
+            if (dc != DIAG_CODE_NONE) {
+                diag_explain(dc, stdout);
+            } else {
+                printf(":explain -- no recent diagnostic to explain. Try :explain TUR-E#### for a specific code.\n");
+            }
+        } else {
+            printf(":explain -- no recent diagnostic to explain. Try :explain TUR-E#### for a specific code.\n");
+        }
+    }
+}
+
 /* -------------------------------------------------------------------------
  * :reload <file>  — evaluate a source file into the current environment
  * ---------------------------------------------------------------------- */
@@ -415,6 +546,7 @@ static void cmd_run(TuriEnv **env_io, const char *path) {
         *env_io = NULL;
         return;
     }
+    turi_env_set_diag_sink(env, repl_diag_sink, env);
     tur_ffi_register_reload_native(env);
     *env_io = env;
 
@@ -520,6 +652,7 @@ static void print_help(void) {
         "  :reload <file>      evaluate a .tur file into the current session\n"
         "  :run <file>         reset session, load file, auto-invoke (main)\n"
         "  :reset              clear session and start fresh\n"
+        "  :explain [code]     explain the most recent error, or a TUR-E#### code\n"
         "\n"
         "Tutorial commands:\n"
         "  :tutorial              list available tutorials\n"
@@ -790,6 +923,7 @@ int turi_repl_run(bool watch_mode) {
         fprintf(stderr, "tur repl: failed to create eval environment\n");
         return 1;
     }
+    turi_env_set_diag_sink(env, repl_diag_sink, env);
 
     /* RP5: register `(reload)` unconditionally so users always have
      * a callable handle, even outside a spice project (the native
@@ -912,6 +1046,9 @@ int turi_repl_run(bool watch_mode) {
             if (strcmp(line, ":reset") == 0) {
                 turi_env_free(env);
                 env = turi_env_new();
+                if (env) {
+                    turi_env_set_diag_sink(env, repl_diag_sink, env);
+                }
                 balance = 0;
                 multi.len = 0;
                 in_sweet_form = false;
@@ -933,6 +1070,12 @@ int turi_repl_run(bool watch_mode) {
                 const char *sym = (line[4] == ' ') ? line + 5 : "";
                 if (*sym) cmd_doc(env, sym);
                 else printf(":doc requires a symbol name\n");
+                free(line);
+                continue;
+            }
+            if (strncmp(line, ":explain", 8) == 0 && (line[8] == ' ' || line[8] == '\0')) {
+                const char *arg = (line[8] == ' ') ? line + 9 : "";
+                cmd_explain(env, arg);
                 free(line);
                 continue;
             }
@@ -1094,6 +1237,8 @@ int turi_repl_run(bool watch_mode) {
                     continue;
                 }
             }
+
+            g_last_diag_code[0] = '\0';
 
             char     type_tag[64] = {0};
             TuriValue result = turi_eval_typed(env, multi.data,

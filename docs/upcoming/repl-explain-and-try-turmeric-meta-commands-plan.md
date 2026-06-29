@@ -1,5 +1,7 @@
 # REPL `:explain` + Try-Turmeric Meta-Commands Plan
 
+Status: Piece 1 (Slice A) COMPLETED. Piece 2 (Slice B) Pending.
+
 Two small, related REPL improvements:
 
 1. Add `:explain` to the native REPL so users can ask the running session to
@@ -71,7 +73,7 @@ same way -- see "Out of scope" below).
 
 ## Plan
 
-### Slice A -- `:explain` in `src/turi/repl.c`
+### Slice A -- `:explain` in `src/turi/repl.c` [COMPLETED]
 
 A1. Add a "last diagnostic code" slot.
 
