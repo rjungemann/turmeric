@@ -762,6 +762,17 @@ local function open_repl_view(split_dir)
   if split_dir then
     local new_node = node:split(split_dir)
     new_node:add_view(view)
+    -- Node:split mutates `node` in place into the parent split-node
+    -- (node.a = original leaf, node.b = new leaf for "down"/"right";
+    -- swapped for "up"/"left"). The divider lives on `node` itself.
+    -- divider is the fraction occupied by `a`, so for editor=70% / REPL=30%:
+    --   "down" (editor top, REPL bottom)  -> a=editor -> 0.7
+    --   "up"   (REPL top,   editor bottom) -> a=REPL   -> 0.3
+    if split_dir == "down" or split_dir == "right" then
+      node.divider = 0.7
+    elseif split_dir == "up" or split_dir == "left" then
+      node.divider = 0.3
+    end
   else
     node:add_view(view)
   end
