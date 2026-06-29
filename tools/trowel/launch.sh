@@ -108,7 +108,7 @@ if [ "$(uname -s)" = "Darwin" ] && [ -z "${TUR_TROWEL:-}" ]; then
         echo "trowel: open -a '$LAUNCH_APP' with tur=$ROOT/build/tur"
         # `open --args` forwards everything after it to the app's argv.
         # If there are no extra args the trailing `--args` is harmless.
-        exec open -a "$LAUNCH_APP" --args ${abs_args[@]+"${abs_args[@]}"}
+        exec open -a "$LAUNCH_APP" --env LITE_USERDIR="$CFG" --args ${abs_args[@]+"${abs_args[@]}"}
     fi
 fi
 
@@ -132,4 +132,5 @@ if [ -z "$TROWEL_BIN" ]; then
     fi
 fi
 echo "trowel: launching $TROWEL_BIN with tur=$ROOT/build/tur"
+export LITE_USERDIR="$CFG"
 exec "$TROWEL_BIN" ${abs_args[@]+"${abs_args[@]}"}

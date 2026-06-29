@@ -17,8 +17,8 @@ function EmptyView:draw()
   local cy = self.position.y + self.size.y / 2
   
   -- Load custom fonts dynamically to adapt to High DPI SCALE changes
-  local title_font = renderer.font.load(style.font:get_filename(), 36 * SCALE)
-  local subtitle_font = renderer.font.load(style.font:get_filename(), 15 * SCALE)
+  local title_font = style.font:copy(36 * SCALE)
+  local subtitle_font = style.font:copy(15 * SCALE)
   local text_font = style.font
   
   -- Draw title: "trowel"
