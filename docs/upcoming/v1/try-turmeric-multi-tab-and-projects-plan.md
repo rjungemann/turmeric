@@ -20,6 +20,11 @@
 - [x] **Phase 3 -- load project from zip.** Landed: `readStoreZip()` at
       `web/main.js:1646`, `loadProjectFromBytes()` at `:1804`. Coverage in
       `web/tests/mobile.load.spec.js`.
+- [x] **Phase 5 -- worker / headers validation.** Verified: No worker or
+      headers changes required. Client-side code is bundled in `main.js` and
+      service worker caches it correctly.
+- [ ] **Phase 6 -- zip roundtrip E2E tests.** Pending implementation of `mobile.zip-roundtrip.spec.js`.
+- [ ] **Phase 7 -- rollout verification.** Pending execution of all checks.
 
 Only Phase 1.5 remains.
 
