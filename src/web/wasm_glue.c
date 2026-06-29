@@ -24,6 +24,11 @@
 #include "fmt.h"
 #include "reader.h"
 #include "symbols.h"
+#include "turi/repl.h"
+#include "elab.h"
+#include "expr.h"
+#include "forms.h"
+#include "types.h"
 
 /* ---------------------------------------------------------------------------
  * Global state for the WASM module
@@ -33,6 +38,16 @@
 /* The single evaluation environment for the WASM module.
  * This is initialized once and reused across all eval calls. */
 static TuriEnv *g_env = NULL;
+
+static void wasm_diag_sink(struct TuriEnv *env, int level, const char *code,
+                           const char *file, uint32_t line,
+                           uint32_t col_start, uint32_t col_end,
+                           const char *message, void *ud);
+
+static void type_of_diag_sink(struct TuriEnv *env, int level, const char *code,
+                              const char *file, uint32_t line,
+                              uint32_t col_start, uint32_t col_end,
+                              const char *message, void *ud);
 
 /* ---------------------------------------------------------------------------
  * Memory management helpers
@@ -70,6 +85,7 @@ int turi_wasm_init(void) {
      * would block println/print which we want routed to the JS print callback. */
     g_env = turi_env_new();
     if (!g_env) return 1;
+    turi_env_set_diag_sink(g_env, wasm_diag_sink, g_env);
     
     /* Initialize diagnostics (no color in WASM - output goes to JS console) */
     turi_init(false);
@@ -83,6 +99,9 @@ void turi_wasm_reset(void) {
     if (g_env) {
         turi_env_free(g_env);
         g_env = turi_env_new();
+        if (g_env) {
+            turi_env_set_diag_sink(g_env, wasm_diag_sink, g_env);
+        }
     }
 }
 
@@ -100,6 +119,8 @@ void turi_wasm_reset(void) {
 char *turi_wasm_eval(const char *input) {
     if (!g_env) return turi_wasm_strdup("Error: Turmeric runtime not initialized. Call turi_wasm_init() first.");
     if (!input) return turi_wasm_strdup("Error: NULL input");
+
+    turi_repl_set_last_diag_code("");
 
     char type_tag[64] = {0};
     TuriValue result = turi_eval_typed(g_env, input, type_tag, sizeof(type_tag));
@@ -149,6 +170,8 @@ int turi_wasm_eval_ex(const char *input, char **out_result, char **out_error) {
     
     *out_result = NULL;
     *out_error = NULL;
+
+    turi_repl_set_last_diag_code("");
 
     char type_tag[64] = {0};
     TuriValue result = turi_eval_typed(g_env, input, type_tag, sizeof(type_tag));
@@ -353,6 +376,10 @@ EMSCRIPTEN_KEEPALIVE
 const char *turi_doc_lookup(const char *name) {
     if (!g_env || !name) return NULL;
 
+    /* Check built-in documentation first (e.g. +, -, let, fn, etc.) */
+    const char *builtin_doc = turi_doc_lookup_builtin(name);
+    if (builtin_doc) return builtin_doc;
+
     /* Build a Turmeric expression: (doc-lookup "name") */
     size_t name_len = strlen(name);
     /* Allocate enough room for (doc-lookup "...") + escaping headroom */
@@ -391,4 +418,173 @@ const char *turi_doc_lookup(const char *name) {
         return (const char *)(intptr_t)result.as_int;
     }
     return NULL;
+}
+
+static void wasm_diag_sink(struct TuriEnv *env, int level, const char *code,
+                           const char *file, uint32_t line,
+                           uint32_t col_start, uint32_t col_end,
+                           const char *message, void *ud) {
+    (void)env; (void)file; (void)line; (void)col_start; (void)col_end; (void)ud;
+
+    /* Capture first TUR-E#### or TUR-W#### code into the REPL's slot */
+    const char *last = turi_repl_get_last_diag_code();
+    if ((!last || last[0] == '\0') && code && (strncmp(code, "TUR-E", 5) == 0 || strncmp(code, "TUR-W", 5) == 0)) {
+        turi_repl_set_last_diag_code(code);
+    }
+
+    /* Print diagnostic to stderr so it shows up in Web Console or printErr */
+    const char *lvl_str = (level == 0) ? "error" : (level == 1) ? "warning" : (level == 2) ? "note" : "help";
+    if (file && file[0] != '\0') {
+        if (code && code[0] != '\0') {
+            fprintf(stderr, "%s:%u:%u: %s [%s]: %s\n", file, line, col_start, lvl_str, code, message);
+        } else {
+            fprintf(stderr, "%s:%u:%u: %s: %s\n", file, line, col_start, lvl_str, message);
+        }
+    } else {
+        if (code && code[0] != '\0') {
+            fprintf(stderr, "%s [%s]: %s\n", lvl_str, code, message);
+        } else {
+            fprintf(stderr, "%s: %s\n", lvl_str, message);
+        }
+    }
+}
+
+static void type_of_diag_sink(struct TuriEnv *env, int level, const char *code,
+                              const char *file, uint32_t line,
+                              uint32_t col_start, uint32_t col_end,
+                              const char *message, void *ud) {
+    (void)env; (void)code; (void)file; (void)line; (void)col_start; (void)col_end;
+    char *buf = (char *)ud;
+    if (level == 0 && buf[0] == '\0') {
+        snprintf(buf, 2048, "error: %s", message);
+    }
+}
+
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+const char *turi_type_of(const char *expr_src) {
+    static char static_buf[2048];
+    static_buf[0] = '\0';
+
+    if (!g_env || !expr_src) return "";
+
+    /* Install temporary diagnostic sink to capture type-elaboration errors */
+    turi_env_set_diag_sink(g_env, type_of_diag_sink, static_buf);
+    diag_reset();
+
+    /* Build combined source so previous definitions are visible */
+    Buf combined;
+    buf_init(&combined);
+    if (g_env->src_acc.len > 0) {
+        buf_write(&combined, g_env->src_acc.data, g_env->src_acc.len);
+    }
+    buf_puts(&combined, expr_src);
+    buf_putc(&combined, '\0');
+
+    Arena    arena;
+    arena_init(&arena, 0);
+    SymbolTable st;
+    symtab_init(&st, &arena);
+
+    SourceFile sfile = {0};
+    sfile.path        = "<type>";
+    sfile.src         = combined.data;
+    sfile.len         = combined.len - 1;
+    sfile.file_id     = 0;
+    sfile.reader_type = g_env->reader_type;
+    diag_register_file(&sfile);
+
+    uint32_t nforms = 0;
+    Form **forms = read_all_with_registry(&arena, &st, &sfile,
+                                          g_env->reader_macros, &nforms);
+    if (!forms || diag_had_error() || static_buf[0] != '\0') {
+        goto cleanup;
+    }
+
+    Expr *prog = elaborate_program(&arena, &st, forms, nforms,
+                                   /*stdlib_prefix=*/0, ".",
+                                   /*separate_compilation=*/false,
+                                   /*sandboxed=*/false,
+                                   /*tc_env=*/NULL,
+                                   /*include_dirs=*/NULL,
+                                   /*n_include_dirs=*/0,
+                                   /*out_n_fsd=*/NULL,
+                                   g_env->reader_macros);
+    if (!prog || diag_had_error() || static_buf[0] != '\0') {
+        goto cleanup;
+    }
+
+    uint32_t n = prog->as.program.n;
+    if (n == 0) {
+        snprintf(static_buf, sizeof(static_buf), "empty expression");
+    } else {
+        Expr *last = prog->as.program.items[n - 1];
+        snprintf(static_buf, sizeof(static_buf), "%s", type_name(last->type));
+    }
+
+cleanup:
+    /* Restore diagnostic sink to default WASM sink */
+    turi_env_set_diag_sink(g_env, wasm_diag_sink, g_env);
+
+    arena_free(&arena);
+    buf_free(&combined);
+
+    return static_buf;
+}
+
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+const char *turi_explain(const char *code_or_null) {
+    static char static_buf[8192];
+    static_buf[0] = '\0';
+
+    const char *code = code_or_null;
+    if (!code || code[0] == '\0') {
+        code = turi_repl_get_last_diag_code();
+    }
+
+    if (!code || code[0] == '\0') {
+        return ":explain -- no recent diagnostic to explain. Try :explain TUR-E#### for a specific code.";
+    }
+
+    /* Normalise code to upper case */
+    char norm_code[16];
+    size_t len = strlen(code);
+    if (len >= sizeof(norm_code)) {
+        snprintf(static_buf, sizeof(static_buf), "unknown diagnostic code '%s'", code);
+        return static_buf;
+    }
+    for (size_t i = 0; i < len; i++) {
+        char c = code[i];
+        if (c >= 'a' && c <= 'z') c = c - 'a' + 'A';
+        norm_code[i] = c;
+    }
+    norm_code[len] = '\0';
+
+    if (diag_looks_like_code(norm_code)) {
+        DiagCode dc = diag_code_from_string(norm_code);
+        if (dc != DIAG_CODE_NONE) {
+            FILE *f = tmpfile();
+            if (f) {
+                if (diag_explain(dc, f)) {
+                    rewind(f);
+                    size_t bytes = fread(static_buf, 1, sizeof(static_buf) - 1, f);
+                    static_buf[bytes] = '\0';
+                } else {
+                    snprintf(static_buf, sizeof(static_buf), "unknown diagnostic code '%s'", norm_code);
+                }
+                fclose(f);
+            } else {
+                snprintf(static_buf, sizeof(static_buf), "unknown diagnostic code '%s'", norm_code);
+            }
+        } else {
+            snprintf(static_buf, sizeof(static_buf), "unknown diagnostic code '%s'", norm_code);
+        }
+    } else {
+        snprintf(static_buf, sizeof(static_buf), "unknown diagnostic code '%s'", code);
+    }
+
+    return static_buf;
 }

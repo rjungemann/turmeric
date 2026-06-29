@@ -829,6 +829,10 @@ async function initWasm() {
                     pending.resolve(msg.result);
                 } else if (msg.type === 'doc-result') {
                     pending.resolve(msg.result);
+                } else if (msg.type === 'type-of-result') {
+                    pending.resolve(msg.result);
+                } else if (msg.type === 'explain-result') {
+                    pending.resolve(msg.result);
                 } else if (msg.type === 'reset-done') {
                     pending.resolve();
                 } else if (msg.type === 'error') {
@@ -850,9 +854,9 @@ async function initWasm() {
         const replInput = document.getElementById('repl-input');
         if (replInput) replInput.disabled = false;
 
+        await fetchDocNames();
         showStatus('Ready', 'success');
         loadFromUrlHash();
-        fetchDocNames();
 
         if (loadingOverlay) loadingOverlay.style.display = 'none';
 
@@ -1922,7 +1926,12 @@ function initReplInput() {
             replHistoryIndex = -1;
             input.value = '';
 
-            await executeCode(code, '<span class="console-prompt">turi&gt;</span>');
+            if (code.startsWith(':')) {
+                appendToConsole(`<span class="console-prompt">turi&gt;</span> ${escapeHtml(code)}`);
+                await dispatchReplMetaCommand(code);
+            } else {
+                await executeCode(code, '<span class="console-prompt">turi&gt;</span>');
+            }
 
             const consoleEl = document.getElementById('console');
             if (consoleEl) consoleEl.scrollTop = consoleEl.scrollHeight;
@@ -2525,10 +2534,15 @@ let docNames = [];
 async function fetchDocNames() {
     try {
         const res = await fetch('/doc-names.json');
-        if (!res.ok) return;
+        if (!res.ok) {
+            console.error('Failed to fetch doc-names.json:', res.status, res.statusText);
+            return;
+        }
         docNames = await res.json();
+        console.log('docNames loaded successfully. Length:', docNames.length);
         initDocSearch();
-    } catch (_) {
+    } catch (err) {
+        console.error('Error fetching doc-names.json:', err);
         // Non-fatal — search bar stays empty
     }
 }
@@ -2665,6 +2679,106 @@ function wasmDocLookup(name) {
         });
         evalWorker.postMessage({ type: 'doc', id, name });
     });
+}
+
+/**
+ * Look up type for `expr` via the eval Worker.
+ */
+function wasmTypeOf(expr) {
+    if (!evalWorker || wasmState !== WASM_STATE.READY) return Promise.resolve('');
+    return new Promise((resolve, reject) => {
+        const id = ++evalCallId;
+        pendingCalls.set(id, {
+            resolve,
+            reject,
+            startTime: performance.now(),
+            isEval: false,
+        });
+        evalWorker.postMessage({ type: 'type-of', id, expr });
+    });
+}
+
+/**
+ * Get detailed explanation for `code` via the eval Worker.
+ */
+function wasmExplain(code) {
+    if (!evalWorker || wasmState !== WASM_STATE.READY) return Promise.resolve('');
+    return new Promise((resolve, reject) => {
+        const id = ++evalCallId;
+        pendingCalls.set(id, {
+            resolve,
+            reject,
+            startTime: performance.now(),
+            isEval: false,
+        });
+        evalWorker.postMessage({ type: 'explain', id, code });
+    });
+}
+
+/**
+ * Dispatch web REPL meta-commands locally.
+ */
+async function dispatchReplMetaCommand(line) {
+    const parts = line.trim().split(/\s+/);
+    const cmd = parts[0].toLowerCase();
+    const arg = parts.slice(1).join(' ').trim();
+
+    if (cmd === ':help') {
+        const helpText = 
+            'Turmeric REPL Help\n' +
+            '------------------\n' +
+            '  :help               show this help text\n' +
+            '  :type <expr>        print inferred type without evaluating\n' +
+            '  :doc  <sym>         print builtin/standard operator documentation\n' +
+            '  :reset              clear session and start fresh\n' +
+            '  :explain [code]     explain the most recent error, or a TUR-E#### code\n' +
+            '\n' +
+            'Multi-line input: keep typing when parentheses are open;\n' +
+            '  an empty line to cancel an incomplete expression.';
+        appendToConsole(`<pre class="console-output" style="margin:0">${escapeHtml(helpText)}</pre>`);
+
+    } else if (cmd === ':doc') {
+        if (!arg) {
+            appendToConsole('<span class="console-error">:doc requires a symbol name</span>');
+            return;
+        }
+        const entry = docNames.find(d => d.name === arg);
+        if (entry && entry.summary) {
+            appendToConsole(`<pre class="console-output" style="margin:0">${escapeHtml(entry.summary)}</pre>`);
+        } else {
+            const docText = await wasmDocLookup(arg);
+            if (docText) {
+                appendToConsole(`<pre class="console-output" style="margin:0">${escapeHtml(docText)}</pre>`);
+            } else {
+                appendToConsole(`<span class="console-output">no documentation for \'${escapeHtml(arg)}\'</span>`);
+            }
+        }
+
+    } else if (cmd === ':type') {
+        if (!arg) {
+            appendToConsole('<span class="console-error">:type requires an expression</span>');
+            return;
+        }
+        const typeText = await wasmTypeOf(arg);
+        if (typeText.startsWith('error:')) {
+            appendToConsole(`<span class="console-error">${escapeHtml(typeText)}</span>`);
+        } else {
+            appendToConsole(`<span class="console-output">: ${escapeHtml(typeText)}</span>`);
+        }
+
+    } else if (cmd === ':explain') {
+        const explainText = await wasmExplain(arg);
+        appendToConsole(`<pre class="console-output" style="margin:0">${escapeHtml(explainText)}</pre>`);
+
+    } else if (cmd === ':reset') {
+        resetWasm();
+
+    } else if (cmd === ':quit' || cmd === ':q') {
+        appendToConsole('<span class="console-error">:quit is not supported in the browser REPL</span>');
+
+    } else {
+        appendToConsole(`<span class="console-error">unknown meta-command \'${escapeHtml(cmd)}\' -- try :help</span>`);
+    }
 }
 
 /**

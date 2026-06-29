@@ -60,6 +60,19 @@ static TuriEnv *g_completion_env = NULL;
 
 static char g_last_diag_code[16] = "";  /* "" = no recent code */
 
+const char *turi_repl_get_last_diag_code(void) {
+    return g_last_diag_code;
+}
+
+void turi_repl_set_last_diag_code(const char *code) {
+    if (code) {
+        strncpy(g_last_diag_code, code, sizeof(g_last_diag_code) - 1);
+        g_last_diag_code[sizeof(g_last_diag_code) - 1] = '\0';
+    } else {
+        g_last_diag_code[0] = '\0';
+    }
+}
+
 static void repl_diag_sink(struct TuriEnv *env, int level, const char *code,
                            const char *file, uint32_t line,
                            uint32_t col_start, uint32_t col_end,

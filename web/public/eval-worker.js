@@ -87,6 +87,37 @@ function handleMessage(msg) {
             self.postMessage({ type: 'doc-result', id, result: null });
         }
 
+    } else if (msg.type === 'type-of') {
+        try {
+            const fn = turiModule._turi_type_of;
+            if (!fn) { self.postMessage({ type: 'type-of-result', id, result: 'type-of not exported' }); return; }
+            const exprLen = turiModule.lengthBytesUTF8(msg.expr) + 1;
+            const inputPtr = turiModule._malloc(exprLen);
+            turiModule.stringToUTF8(msg.expr, inputPtr, exprLen);
+            const resultPtr = fn(inputPtr);
+            turiModule._free(inputPtr);
+            const result = resultPtr ? turiModule.UTF8ToString(resultPtr) : '';
+            self.postMessage({ type: 'type-of-result', id, result });
+        } catch (err) {
+            self.postMessage({ type: 'type-of-result', id, result: 'Error: ' + String(err) });
+        }
+
+    } else if (msg.type === 'explain') {
+        try {
+            const fn = turiModule._turi_explain;
+            if (!fn) { self.postMessage({ type: 'explain-result', id, result: 'explain not exported' }); return; }
+            const codeVal = msg.code || '';
+            const codeLen = turiModule.lengthBytesUTF8(codeVal) + 1;
+            const inputPtr = turiModule._malloc(codeLen);
+            turiModule.stringToUTF8(codeVal, inputPtr, codeLen);
+            const resultPtr = fn(inputPtr);
+            turiModule._free(inputPtr);
+            const result = resultPtr ? turiModule.UTF8ToString(resultPtr) : '';
+            self.postMessage({ type: 'explain-result', id, result });
+        } catch (err) {
+            self.postMessage({ type: 'explain-result', id, result: 'Error: ' + String(err) });
+        }
+
     } else if (msg.type === 'reset') {
         try {
             turiModule._turi_wasm_reset();

@@ -785,7 +785,7 @@ if(TUR_WASM)
                 -pthread
                 -sPTHREAD_POOL_SIZE_STRICT=0
                 -sEXIT_RUNTIME=0
-                -sEXPORTED_FUNCTIONS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_shutdown,_turi_wasm_eval,_turi_wasm_eval_ex,_turi_wasm_version,_turi_wasm_format,_turi_wasm_set_lang,_turi_wasm_get_lang,_turi_doc_lookup,_malloc,_free
+                -sEXPORTED_FUNCTIONS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_shutdown,_turi_wasm_eval,_turi_wasm_eval_ex,_turi_wasm_version,_turi_wasm_format,_turi_wasm_set_lang,_turi_wasm_get_lang,_turi_doc_lookup,_turi_type_of,_turi_explain,_malloc,_free
                 -sEXPORTED_RUNTIME_METHODS=stringToUTF8,UTF8ToString,lengthBytesUTF8
                 -sEXPORT_NAME=TurmericModule
                 -sMODULARIZE=1

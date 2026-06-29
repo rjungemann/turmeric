@@ -1,6 +1,6 @@
 # REPL `:explain` + Try-Turmeric Meta-Commands Plan
 
-Status: Piece 1 (Slice A) COMPLETED. Piece 2 (Slice B) Pending.
+Status: Piece 1 (Slice A) COMPLETED. Piece 2 (Slice B) COMPLETED.
 
 Two small, related REPL improvements:
 
@@ -118,7 +118,7 @@ A5. Tests:
     2. `:explain TUR-E0001` from a fresh session prints the type-mismatch
        explanation.
 
-### Slice B -- Web REPL meta-commands
+### Slice B -- Web REPL meta-commands [COMPLETED]
 
 B1. Add a `:`-prefix interceptor in `initReplInput` (`web/main.js:1919`):
   - Refactor the keydown body so that, after the trimmed `code` is in

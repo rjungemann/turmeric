@@ -24,4 +24,9 @@ int turi_repl_run(bool watch_mode);
  * Returns the doc string, or NULL if sym is not a known builtin. */
 const char *turi_doc_lookup_builtin(const char *sym);
 
+/* Get the last diagnostic code captured by the REPL */
+const char *turi_repl_get_last_diag_code(void);
+/* Set the last diagnostic code captured by the REPL */
+void turi_repl_set_last_diag_code(const char *code);
+
 #endif /* TURI_REPL_H */
