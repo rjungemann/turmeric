@@ -162,7 +162,7 @@ If you move `tur` somewhere without an adjacent `stdlib/`, set
 ### Works
 
 - `tur --version`
-- `tur --interpret <file.tur>` -- tree-walking interpreter; no C compile
+- `tur interpret <file.tur>` -- tree-walking interpreter; no C compile
 - `tur repl` -- interactive REPL
 - `tur check <file.tur>` -- type checking only
 - `tur doc <symbol>` -- documentation lookup
@@ -217,7 +217,7 @@ docker run --rm -it turmeric
 
 ```sh
 docker run --rm -v "$(pwd)":/workspace turmeric \
-    tur --interpret /workspace/hello.tur
+    tur interpret /workspace/hello.tur
 ```
 
 **Compile and run a file:**

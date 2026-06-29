@@ -128,7 +128,7 @@ config.plugins.turmeric = config.plugins.turmeric or {}
 config.plugins.turmeric.tur = "/usr/local/bin/tur"   -- compiler binary
 ```
 
-The Run command shells out to `tur --interpret <file>` (the tree-walking
+The Run command shells out to `tur interpret <file>` (the tree-walking
 interpreter); the prior null `ReaderMacroRegistry` segfault has been
 fixed and the archived report lives at
 [`docs/archive/tur-interpret-null-reader-macro-registry.md`](../../docs/archive/tur-interpret-null-reader-macro-registry.md).

@@ -90,7 +90,7 @@ case TY_STRUCT:
 When monomorphization mangles `(Option <X>)` and `<X>` is a `TY_STRUCT`
 with `def == NULL` (the elaborator's "tyvar / unknown / opaque container
 arg" placeholder — see
-[../upcoming/ty-struct-null-def-inventory.md](../upcoming/ty-struct-null-def-inventory.md)),
+[../artifacts/ty-struct-null-def-inventory.md](../artifacts/ty-struct-null-def-inventory.md)),
 the mangler emits the literal string `"struct"` as the type-name suffix
 and produces `ctor_Option__struct`.
 

@@ -9,7 +9,7 @@ description: Feature-by-feature parity matrix between the compiled Turmeric path
 This guide answers one question: **"does feature X behave the same under the
 interpreter as it does compiled?"** It pairs the compiled path (`tur build` /
 `tur emit-c`, which lowers to C) against the tree-walking interpreter
-(`turi`, which backs `tur --interpret`, `tur run`, `tur repl`, sandboxed
+(`turi`, which backs `tur interpret`, `tur run`, `tur repl`, sandboxed
 `turi_env_new`, and the `tests/run-turi.sh` leg of the suite).
 
 ---
@@ -177,7 +177,7 @@ test leg -- not for production hot loops. When throughput matters, `tur build`
 2. **Try it directly:**
 
    ```sh
-   ASAN_OPTIONS=detect_leaks=0 ./build/tur --interpret your-program.tur
+   ASAN_OPTIONS=detect_leaks=0 ./build/tur interpret your-program.tur
    ```
 
    A clean run means the feature interprets. An `inline-C not supported`

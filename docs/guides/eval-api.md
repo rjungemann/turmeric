@@ -470,7 +470,7 @@ from `turi_eval`; check with `turi_is_throw(v)`.
 
 ## Interpreter value semantics: `::` is value-preserving, not bit-preserving
 
-The tree-walking interpreter (`turi`, behind `tur --interpret`, `tur repl`,
+The tree-walking interpreter (`turi`, behind `tur interpret`, `tur repl`,
 sandbox `turi_eval`, and the WASM REPL) holds values as **tagged** `TuriValue`s
 (`TURI_INT` carries a 64-bit word, `TURI_FLOAT` carries a `double`), whereas the
 compiled path carries every scalar as a raw `int64_t`.  This difference is
@@ -527,7 +527,7 @@ correctly under the interpreter.
 ## Not interpreted: carve-outs
 
 A handful of language features run only on the compiled path (`tur build` /
-`tur run`).  Under the tree-walking interpreter (`tur --interpret`, `tur repl`,
+`tur run`).  Under the tree-walking interpreter (`tur interpret`, `tur repl`,
 sandbox `turi_eval`, the WASM REPL) they raise a clean, value-level
 `TURI_ERROR` -- never a wrong answer, and never the generic "unhandled
 expression kind" default.  Check for them with `turi_is_error` as usual.

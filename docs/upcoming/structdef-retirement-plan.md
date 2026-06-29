@@ -213,7 +213,7 @@ require deleting `TY_STRUCT` -- only redirecting the def-less producers.
   - B1. Inventory pass: grep every site that creates `TY_STRUCT` with
     `def=NULL` (or reads `as.struct_.def` and tolerates NULL).  Land the
     inventory as a comment block / short doc.  **DONE (2026-06-28):**
-    [ty-struct-null-def-inventory.md](ty-struct-null-def-inventory.md) -- 3
+    [ty-struct-null-def-inventory.md](../artifacts/ty-struct-null-def-inventory.md) -- 3
     producers (P1 `elab_fns.c:2437`, P2 `elab_types.c:2321`, P3
     `elab_typeclasses.c:2266`) and 16 explicit NULL-tolerant consumers
     across elaboration + codegen.  Direction-A precedent
@@ -259,7 +259,7 @@ representation + delete the type + chase 6 residual fixtures" to roughly
 ### Slice 5 status, 2026-06-29 (post-B1; baseline-mangling unblocker DONE)
 
 - **B1 DONE** -- inventory landed
-  ([ty-struct-null-def-inventory.md](ty-struct-null-def-inventory.md)).
+  ([ty-struct-null-def-inventory.md](../artifacts/ty-struct-null-def-inventory.md)).
   3 producers (P1 `elab_fns.c:2437`, P2 `elab_types.c:2321`,
   P3 `elab_typeclasses.c:2266`) and 16 explicit NULL-tolerant consumers.
 - **Baseline-mangling unblocker DONE (2026-06-29)** -- the suite gate is

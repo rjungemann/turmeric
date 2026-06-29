@@ -181,7 +181,7 @@ The compiler emits a struct per `gen` body and a `_next` function with a
 
 ### Interpreter (turi) support
 
-The tree-walking interpreter (`tur --interpret`, `tur repl`, sandbox eval)
+The tree-walking interpreter (`tur interpret`, `tur repl`, sandbox eval)
 runs generators too. Instead of the compiled state machine it executes each
 `gen` body on its own coroutine stack (the same fiber primitives that back
 effect handlers): `yield` suspends the body back to the caller, and

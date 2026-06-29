@@ -30,7 +30,7 @@ This installs the `tur` compiler via the Homebrew formula in this repo.
 docker build -t turmeric .
 docker run --rm -it turmeric                                         # REPL
 docker run --rm -v "$(pwd)":/workspace turmeric tur run /workspace/hello.tur
-docker run --rm -v "$(pwd)":/workspace turmeric tur --interpret /workspace/hello.tur
+docker run --rm -v "$(pwd)":/workspace turmeric tur interpret /workspace/hello.tur
 ```
 
 The image builds `tur` from the local source tree. See
