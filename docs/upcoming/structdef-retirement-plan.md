@@ -84,10 +84,22 @@ fields, parametric, `:heap`, `:copy`/`:move`).
    `!no_auto_ctor` gate.  Negative fixture `errors/struct-no-auto-ctor-rejects-call`
    still rejects; new positive fixture `struct-no-auto-ctor-make-struct` confirms
    make-struct + field access on the lowered record.  Suite green (1871/0).
-3. **`exists` (`TY_EXISTS`) fields -- moderate.**  Existential packing already
-   boxes aggregates into an int64 carrier slot; host a `TY_EXISTS` field on the
-   record product reusing that machinery.  The witness/dict-thunk plumbing on
-   field access needs care.
+3. **`exists` (`TY_EXISTS`) fields -- moderate. DONE (2026-06-29).**  An
+   `exists`-pack field is carried as the int64 existential-record pointer
+   (existential packing already boxes a wide aggregate payload into that carrier
+   slot), so it lowers like any scalar carrier field once
+   `defstruct_field_type_lowerable` accepts `exists`/`exists_u` (only `forall`
+   stays excluded -- it is not a value-carrying field form).  The witness/dict
+   plumbing the caveat flagged needed no new work: `pack`/`open`/`.field`
+   dispatch over the lowered record reuse the existing existential machinery.
+   One construction-side gap had to be re-closed: the lenient ADT-ctor rewrite
+   make-struct uses relaxed the DS1 per-field check, so a raw `42` passed where
+   `(exists [a] [(C a)] a)` is expected slipped through (and SEGV'd at `open`);
+   the make-struct rewrite now re-imposes the TY_EXISTS full_type check.
+   Fixtures `exg4-pack-into-struct(-via-let)`, `exists-pack-multifield-struct`,
+   `exists-pack-constrained-byval-struct` (positives) and
+   `errors/defstruct-compound-field-mismatch` (negative) all green; suite
+   1872/0.  With slices 1-3 done the only carve-out left is `:linear` (slice 4).
 4. **`:linear` outer structs -- hard, unexercised.**  No record-ADT modeling of
    `CK_LINEAR` exactly-once semantics exists, and there are zero `defstruct
    :linear` fixtures.  Natural LAST slice (or leave on StructDef longest); write

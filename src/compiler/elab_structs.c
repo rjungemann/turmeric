@@ -791,8 +791,13 @@ static bool defstruct_field_type_lowerable(Elab *e, const Form *type_tok) {
             return false;
         const Symbol *head = type_tok->as.list.items[0]->as.sym;
         if (head == e->sym_fn || head == e->sym_c_fn) return true; /* fn carrier */
-        if (head == e->sym_exists || head == e->sym_exists_u ||
-            head == e->sym_forall || head == e->sym_forall_u ||
+        /* structdef-retirement slice 3: an `exists`-pack field is carried as the
+         * int64 existential-record pointer (existential packing already boxes a
+         * wide aggregate payload into that carrier slot), so it lowers like any
+         * scalar carrier field.  `forall` (universal quantification) is not a
+         * value-carrying field form and stays on the struct path. */
+        if (head == e->sym_exists || head == e->sym_exists_u) return true;
+        if (head == e->sym_forall || head == e->sym_forall_u ||
             head == e->sym_lref || head == e->sym_ampersand ||
             head == e->sym_borrow_mut || head == e->sym_handler_type ||
             head == e->sym_arrow ||
@@ -4575,6 +4580,35 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
             Expr *ce = elab_call(e, ctor_call);
             e->make_struct_ctor_rewrite = saved_ms_rewrite;
             e->make_struct_lenient_args = saved_ms_lenient;
+            /* structdef-retirement slice 3 (DS1 parity for exists fields): the
+             * lenient ADT-ctor rewrite relaxes scalar/pointer arg checks to match
+             * default make-struct, but an EXISTENTIAL field MUST still be checked:
+             * an exists lowers to the int64 carrier, so a raw `42` (TY_INT) passed
+             * where `(exists [a] [(C a)] a)` is expected slips through the kind
+             * check and the generated C then reads the int as a `tur_existential_t
+             * *` and SEGVs on the next `open`/dispatch.  Re-impose the struct-path
+             * per-field full_type check for TY_EXISTS fields (positional form). */
+            if (ce && ce->kind == EX_CALL) {
+                const CtorDef *rc = ad->ctors[0];
+                uint32_t nv = ce->as.call_.n_args;
+                bool positional = (nv == 0 ||
+                                   call->as.list.items[2]->tag != F_KEYWORD);
+                if (positional && nv == rc->n_fields) {
+                    for (uint32_t fi = 0; fi < rc->n_fields; fi++) {
+                        const Type *ft = rc->fields[fi].full_type;
+                        if (ft && ft->kind == TY_EXISTS &&
+                            ce->as.call_.args[fi] &&
+                            !type_eq(ce->as.call_.args[fi]->type, *ft)) {
+                            diag_emit(DIAG_ERROR, call->as.list.items[fi + 2]->span,
+                                      "make-struct '%s': field '%s' expects %s, got %s",
+                                      ad->name, rc->fields[fi].name,
+                                      type_name(*ft),
+                                      type_name(ce->as.call_.args[fi]->type));
+                            return NULL;
+                        }
+                    }
+                }
+            }
             /* lowered-adt-ctor-skips-fn-field-type-param-inference: the struct
              * make-struct path runs struct_field_collect_type_args to ground the
              * struct's type params from the supplied field values -- crucially
