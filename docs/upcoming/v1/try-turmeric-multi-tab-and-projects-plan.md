@@ -24,7 +24,7 @@
       headers changes required. Client-side code is bundled in `main.js` and
       service worker caches it correctly.
 - [x] **Phase 6 -- zip roundtrip E2E tests.** Landed in `web/tests/mobile.zip-roundtrip.spec.js` which verifies download and drag-and-drop end-to-end.
-- [ ] **Phase 7 -- rollout verification.** Pending execution of all checks.
+- [x] **Phase 7 -- rollout verification.** Successfully verified. Programmatic and manual checks (matching zip structure to a standard local `tur` project structure, validating browser-side download-load round-trips via Playwright E2E tests, verifying caching/offline operation) have all been completed and confirmed successful.
 
 Only Phase 1.5 remains.
 
