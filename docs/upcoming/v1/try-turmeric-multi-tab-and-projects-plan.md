@@ -23,7 +23,7 @@
 - [x] **Phase 5 -- worker / headers validation.** Verified: No worker or
       headers changes required. Client-side code is bundled in `main.js` and
       service worker caches it correctly.
-- [ ] **Phase 6 -- zip roundtrip E2E tests.** Pending implementation of `mobile.zip-roundtrip.spec.js`.
+- [x] **Phase 6 -- zip roundtrip E2E tests.** Landed in `web/tests/mobile.zip-roundtrip.spec.js` which verifies download and drag-and-drop end-to-end.
 - [ ] **Phase 7 -- rollout verification.** Pending execution of all checks.
 
 Only Phase 1.5 remains.
