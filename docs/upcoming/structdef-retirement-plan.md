@@ -51,17 +51,28 @@ fields, parametric, `:heap`, `:copy`/`:move`).
 
 ## Slices
 
-1. **Applied-type (`TY_APP`) fields -- highest value, lowest risk (NEXT).**
-   Widen `defstruct_field_type_lowerable` to accept a `TY_APP` field, then make
-   the record-ADT product's field-type resolver + codegen handle it the way a
-   `let`/param of that type is already handled (the by-value-aggregate inline
-   storage + `adt_field_instantiate_type` tyvar substitution already exist).
-   Clears the largest carve-out group.  **Caveat:** expect a codegen tail like
-   the graduation had -- each new field representation (a `(Option X)` value
-   field, a nested monomorph, the `User`-pointer-slot interaction landed during
-   graduation) needs its own crossing verified.  Drive a force-widen probe (bypass
-   only the `TY_APP` rejection) and promote each build/stdout failure to a fixture
-   + fix, exactly as the graduation did.
+1. **Applied-type (`TY_APP`) fields -- highest value, lowest risk. DONE
+   (2026-06-29).**
+   Widened `defstruct_field_type_lowerable` to accept a *user* `TY_APP` field
+   (`(Option cstr)`, `(Box X)`, `(Dense m A)`, `(Tbl #row{..})`), while keeping
+   built-in compound forms -- `(lref T)`/`(& T)`/borrow, `exists`/`forall`,
+   `handler`/`arrow`/session/role/global/project -- on the struct path (they are
+   their own TypeKinds, not `TY_APP`, and a couple carry struct-path-only
+   diagnostics like the `:copy`-over-linear-field check).  The codegen tail the
+   caveat predicted:
+   - `adt_field_is_inline_byval` gained a `TY_APP` arm so a by-value monomorph
+     field (`tur_adt_Option__cstr`) is stored INLINE and read directly (no
+     cast-to-aggregate).
+   - the record-ADT typedef emitter pre-flushes each inline-by-value `TY_APP`
+     field monomorph (mirroring the struct path) so the embedding aggregate sees
+     a complete typedef.
+   - the `Result`/`Option` box-as-pointer (`tur_adt_T *` slot) was extended from
+     value-structs to non-parametric by-value record ADTs (a lowered `defstruct`
+     like `User`), centralised in `adt_field_is_ros_pointer_box` and given
+     precedence over the B4 wide-element int64 box; the construction, extraction,
+     forward-decl, unused-slot-default, and carrier->concrete decode sites all
+     consult it.
+   Cleared the largest carve-out group; full by-value suite green (1871/0).
 2. **`:no-auto-ctor` suppression -- mechanical.**  Teach the ADT lowering to
    suppress the auto-bound value-namespace ctor for a `:no-auto-ctor` struct (so
    `(Name ...)` stays rejected), then lower it.  1 negative fixture.

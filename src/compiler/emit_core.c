@@ -3535,6 +3535,17 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                         } else if (fk == TY_CSTR || fk == TY_PTR_VOID) {
                             buf_printf(&out, "(%s)(intptr_t)(%s->%s)",
                                        fcname, src_tmp, bf);
+                        } else if (adt_field_is_ros_pointer_box(adt, &field_ty)) {
+                            /* structdef-retirement slice 1: this Result/Option
+                             * field is the `tur_adt_T *` pointer-box slot (a
+                             * non-parametric value-struct or by-value record-ADT
+                             * payload like `(Result Box cstr)`'s ok_val).  The
+                             * monomorph literal's slot type IS the pointer, and the
+                             * carrier box already holds the heap pointer as int64,
+                             * so cast to the typed pointer -- do NOT deref (that
+                             * would store a `T` value into a `T *` slot). */
+                            buf_printf(&out, "(%s *)(intptr_t)(%s->%s)",
+                                       fcname, src_tmp, bf);
                         } else if ((fk == TY_STRUCT || fk == TY_ADT ||
                                     fk == TY_APP) &&
                                    !type_is_heap_struct(field_ty) &&
@@ -3542,12 +3553,12 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                                    type_has_concrete_codegen_layout(&field_ty) &&
                                    fcname && strcmp(fcname, "int64_t") != 0) {
                             /* nested-construct-byvalue (Gap #4 / site 5): a WIDE
-                             * by-value aggregate field (`(Result Box cstr)`'s
-                             * ok_val holding a `tur_adt_Box`) is stored BOXED in the
-                             * canonical carrier box (malloc'd pointer cast to
-                             * int64), so a direct `(tur_adt_Box)(box->ok_val)` cast
-                             * is an illegal int64->aggregate conversion.  Deref-
-                             * unbox the heap pointer instead. */
+                             * by-value aggregate field (`(Result (Option int)
+                             * cstr)`'s ok_val holding a parametric monomorph) is
+                             * stored BOXED in the canonical carrier box (malloc'd
+                             * pointer cast to int64), so a direct cast is an illegal
+                             * int64->aggregate conversion.  Deref-unbox the heap
+                             * pointer instead. */
                             buf_printf(&out, "(*(%s *)(intptr_t)(%s->%s))",
                                        fcname, src_tmp, bf);
                         } else {

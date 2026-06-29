@@ -1603,6 +1603,12 @@ const char  *adt_byval_c_name(const AdtDef *def);
  * product whose every monomorphised field is by-value-able.  LIVE (P2-P4) --
  * both crossings (match/field-access and ctor-field box/unbox) are wired. */
 bool         adt_app_is_byvalue_product(Type t);
+/* CONV-S1 seam 4 / structdef-retirement slice 1: true when a Result/Option
+ * monomorph field of resolved type `resolved` is stored as a heap pointer `T *`
+ * (box-as-pointer) -- a non-parametric value-struct or by-value record-ADT field.
+ * Takes precedence over the B4 wide-element int64 box. */
+bool         adt_field_is_ros_pointer_box(const struct AdtDef *owner,
+                                          const Type *resolved);
 /* B4 (slice 2): true when `t` is a wide (>8 byte) by-value ADT -- one that must
  * ride a heap box when stored as a parametric carrier monomorph element. */
 bool         type_is_wide_byval_adt(Type t);

@@ -8779,6 +8779,35 @@ int emit_program(Buf *out, const Expr *program) {
             bool hdr_byval = byval || heap;
             char adt_ptr_name[260];
             snprintf(adt_ptr_name, sizeof(adt_ptr_name), "%s *", adt_c_name);
+            /* structdef-retirement slice 1 (field-monomorph pre-flush): a record
+             * ADT (a lowered defstruct) may carry an inline-by-value aggregate
+             * field whose type is an applied/parametric monomorph -- `(Option
+             * cstr)` -> `tur_adt_Option__cstr`, `(Box int)`, a nested struct-app.
+             * That monomorph typedef is registered on demand and otherwise flushed
+             * AFTER these user typedefs, so the embedding aggregate would name it
+             * before its definition.  Mirror the struct path (Pass 0 above):
+             * register + flush each inline-byval field monomorph into early_file
+             * first (the `#ifndef`/`emitted` guards make the later flush a no-op).
+             * Only inline-byval aggregate fields need it; carrier/:heap fields are
+             * int64/typed-pointer slots that reference no fresh aggregate. */
+            for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+                CtorDef *pctor = def->ctors[ci];
+                for (uint32_t fi = 0; fi < pctor->n_fields; fi++) {
+                    const CtorField *pf = &pctor->fields[fi];
+                    /* Only a parametric MONOMORPH field (`(Option cstr)`, TY_APP)
+                     * needs the pre-flush: its `tur_adt_<Name>__<args>` typedef is
+                     * registered on demand and otherwise flushed after these user
+                     * typedefs.  A non-parametric by-value ADT/struct field was
+                     * already orderable before slice 1 (the field's own typedef is
+                     * emitted in Pass 0), so it is left untouched. */
+                    if (pf->full_type && pf->full_type->kind == TY_APP &&
+                        adt_field_is_inline_byval(pf)) {
+                        (void)type_c_name(*pf->full_type);
+                        type_codegen_emit_struct_apps(&early_file);
+                        type_codegen_emit_adt_apps(&early_file);
+                    }
+                }
+            }
             /* CONV-S1 seam 4: flat named C-ABI layout + surface alias (mirror of
              * emit_adt_typedef_and_ctors). */
             bool named = adt_uses_named_layout(def);

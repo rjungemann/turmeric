@@ -765,17 +765,44 @@ void elab_register_struct_def(Elab *e, StructDef *def) {
  * new-syntax (per-field list) scans and parametric/non-parametric alike.
  * `type_tok` is the field's type form, already unwrapped from any F_TYPE_ANN.
  * Returns true when the field is representable on the record-ADT path. */
-static bool defstruct_field_type_lowerable(const Form *type_tok) {
+static bool defstruct_field_type_lowerable(Elab *e, const Form *type_tok) {
     if (type_tok->tag == F_LIST) {
-        /* slice 7: a *typed* `fn` field `(fn [..] ..)` is, exactly like a bare
-         * `fn` (slice 6), an 8-byte function-pointer carrier slot -- its
+        /* slice 7: a *typed* `fn`/`c-fn` field `(fn [..] ..)` is, exactly like a
+         * bare `fn` (slice 6), an 8-byte function-pointer carrier slot -- its
          * argument/return signature only feeds type checking, never layout -- so
-         * it lowers like a scalar carrier.  Any other compound / applied F_LIST
-         * type (e.g. `(Vec int)`, `(exists ...)`) still keeps the struct path. */
-        return type_tok->as.list.len >= 1 &&
-               type_tok->as.list.items[0]->tag == F_SYM &&
-               type_tok->as.list.items[0]->as.sym->len == 2 &&
-               memcmp(type_tok->as.list.items[0]->as.sym->name, "fn", 2) == 0;
+         * it lowers like a scalar carrier.
+         *
+         * structdef-retirement slice 1: a *user applied/parametric type* field --
+         * `(Option cstr)`, `(Box X)`, `(Dense m A)`, `(Tbl #row{..})`, TY_APP --
+         * also lowers.  The record-ADT product already stores such a field the
+         * way `defdata` does (by-value aggregate inline, or int64 carrier with
+         * `adt_field_instantiate_type` tyvar substitution at field access), so it
+         * no longer keeps the struct path.
+         *
+         * A BUILT-IN compound type form, however, is NOT a user type application
+         * and stays on the struct path: `(lref T)`/`(& T)`/borrow, the
+         * `exists`/`forall` quantifiers (slice 3), `handler`/`arrow`/session/role/
+         * global/project type forms.  These are their own TypeKinds (not TY_APP);
+         * lowering one would mis-elaborate it as a type-constructor application
+         * (`(lref int)` -> "cannot apply a type of kind '*'") and would also drop
+         * the struct-path-only diagnostics (e.g. `:copy` over a linear field). */
+        if (type_tok->as.list.len < 1 ||
+            type_tok->as.list.items[0]->tag != F_SYM)
+            return false;
+        const Symbol *head = type_tok->as.list.items[0]->as.sym;
+        if (head == e->sym_fn || head == e->sym_c_fn) return true; /* fn carrier */
+        if (head == e->sym_exists || head == e->sym_exists_u ||
+            head == e->sym_forall || head == e->sym_forall_u ||
+            head == e->sym_lref || head == e->sym_ampersand ||
+            head == e->sym_borrow_mut || head == e->sym_handler_type ||
+            head == e->sym_arrow ||
+            head == e->sym_session_type || head == e->sym_session_Send ||
+            head == e->sym_session_Recv || head == e->sym_session_Choose ||
+            head == e->sym_session_Branch || head == e->sym_session_Rec ||
+            head == e->sym_session_Timeout || head == e->sym_project_type ||
+            head == e->sym_global_type || head == e->sym_role_type)
+            return false;  /* built-in compound form: keep the struct path */
+        return true;  /* user applied/parametric type field (TY_APP) */
     }
     if (type_tok->tag != F_KEYWORD && type_tok->tag != F_SYM)
         return false;  /* not a leaf type token */
@@ -822,7 +849,7 @@ static bool defstruct_fields_all_primitive(Elab *e, const Form *fields_vec) {
         if (i >= n) return false;
         const Form *type_tok = fields_vec->as.list.items[i];
         if (type_tok->tag == F_TYPE_ANN) type_tok = type_tok->as.list.items[0];
-        if (!defstruct_field_type_lowerable(type_tok)) return false;
+        if (!defstruct_field_type_lowerable(e, type_tok)) return false;
         i++;
     }
     return true;
@@ -842,7 +869,7 @@ static bool defstruct_newstyle_fields_all_primitive(Elab *e, const Form *call,
         if (ff->as.list.items[0]->tag != F_SYM) return false;  /* field name */
         const Form *type_tok = ff->as.list.items[1];
         if (type_tok->tag == F_TYPE_ANN) type_tok = type_tok->as.list.items[0];
-        if (!defstruct_field_type_lowerable(type_tok)) return false;
+        if (!defstruct_field_type_lowerable(e, type_tok)) return false;
         any = true;
     }
     return any;
