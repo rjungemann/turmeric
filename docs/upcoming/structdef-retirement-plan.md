@@ -114,10 +114,20 @@ fields, parametric, `:heap`, `:copy`/`:move`).
    lowering: new negative fixture `errors/struct-linear-double-use` (double-use ->
    TUR-E0101) and positive `struct-linear-lowered`; the stdlib resource types and
    all existing linear fixtures stay green (1874/0).
-5. **Delete `StructDef` -- the bulk, separately scoped.**  Once the gate is
-   effectively always-true, migrate every `StructDef`-keyed site to the ADT def
-   and delete the type.  **Footprint: ~197 references across 19 files** under
-   `src/compiler/`:
+5. **Delete `StructDef` -- the bulk, separately scoped. NOT STARTED (next).**
+   With slices 1-4 done the gate lowers every `defstruct` whose fields are
+   scalars / pointers / `fn` / aggregates / parametric / applied / `exists`, and
+   every annotation (`:copy`/`:move`/`:heap`/`:linear`/`:no-auto-ctor`).  The only
+   shapes still on the `StructDef` path carry a *built-in compound* field form --
+   `(lref T)`, `(& T)`/borrow, `forall`, `handler`/`arrow`/session/role/global/
+   project -- which are their own `TypeKind`s, not user type applications.  **None
+   appear in stdlib or the fixture suite today**, so the gate is effectively
+   always-true in practice; a clean deletion will still want those field forms
+   either hosted on the record-ADT path or explicitly rejected first.
+   Footprint as of 2026-06-29: **198 references across 19 files** under
+   `src/compiler/`.  This phase is all-or-nothing (you cannot half-delete a type)
+   and does NOT decompose into the safely-committable increments slices 1-4 did,
+   so it remains its own dedicated work.  Original breakdown:
    - type core: `types.c` (30), `types.h` (15) -- struct identity is a
      `StructDef*`;
    - Expr/AST: `expr.h` (8) -- `make_struct_.def`, field-access/`set_field_.def`,
@@ -133,9 +143,20 @@ fields, parametric, `:heap`, `:copy`/`:move`).
 
 ## Recommendation
 
-Slices 1-2 are worth doing when there is appetite for the cleanup; they shrink
-the carve-out to just `exists` + `:linear` and are individually contained (with
-the usual codegen-tail caveat).  Slice 5 (the `StructDef` deletion) is the large,
-risky phase and should only start once slices 1-4 make the gate effectively
-always-true.  None of this is urgent: the carve-outs are correct today, so this
-is cleanup, sequenced behind anything that fixes real defects.
+**Status (2026-06-29): slices 1-4 DONE; slice 5 is the remaining work.**  Slices
+1-4 landed as four separate commits, each with a green by-value suite, clearing
+all four carve-out groups (applied-type, `:no-auto-ctor`, `exists`, `:linear`).
+A `defstruct` now lowers to a record ADT in every case that occurs in the
+codebase; the residual `StructDef` path serves only built-in-compound field forms
+(`lref`/borrow/`forall`/session/handler/...) that no current `defstruct` uses.
+
+The only remaining phase is slice 5 -- the `StructDef` deletion itself (198 refs,
+19 files, typeclass-dispatch entanglement).  It is the large, risky, all-or-
+nothing phase and should be taken on as dedicated work: unlike slices 1-4 it does
+not decompose into independently-committable, independently-green increments
+(you cannot half-delete the type), and instance selection keys on `StructDef`
+identity, so it ripples into typeclass resolution + codegen.  Before it can be a
+*clean* deletion, the residual built-in-compound field forms above need either a
+record-ADT home or an explicit rejection.  None of this is urgent: the lowering
+is correct and complete for real code today, so slice 5 stays sequenced behind
+anything that fixes real defects.
