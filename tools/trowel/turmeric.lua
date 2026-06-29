@@ -139,6 +139,25 @@ local function nearest_doc()
   return nil
 end
 
+config.plugins.turmeric.stale_files = config.plugins.turmeric.stale_files or {}
+
+local function is_current_workspace_stale()
+  local doc = nearest_doc()
+  if not doc or not doc.filename then return false end
+  if not doc.filename:match("%.tur$") then return false end
+  
+  -- If document is dirty (unsaved changes), it is definitely stale
+  if doc:is_dirty() then return true end
+  
+  -- If document has been saved but not run yet
+  local path = system.absolute_path(doc.filename)
+  if config.plugins.turmeric.stale_files and config.plugins.turmeric.stale_files[path] then
+    return true
+  end
+  
+  return false
+end
+
 -- Run `cmd` with the active file as $1, streaming stdout+stderr into the
 -- Trowel log pane. Lines that look like `path:line:col:` are routed
 -- through core.error so the LogView highlights them.
@@ -473,6 +492,10 @@ require "core.doc".save = function(self, ...)
       uri  = "file://" .. (self.abs_filename or self.filename),
       text = table.concat(self.lines, ""),
     })
+    local path = system.absolute_path(self.filename)
+    if config.plugins.turmeric.stale_files then
+      config.plugins.turmeric.stale_files[path] = true
+    end
   end
   return rc
 end
@@ -509,7 +532,12 @@ function ReplView:new()
   self:start()
 end
 
-function ReplView:get_name() return "Turmeric REPL" end
+function ReplView:get_name()
+  if is_current_workspace_stale() then
+    return "Turmeric REPL (stale)"
+  end
+  return "Turmeric REPL"
+end
 
 function ReplView:push(text, kind)
   if text == nil or text == "" then return end
@@ -618,6 +646,33 @@ end
 function ReplView:on_mouse_pressed(button, x, y, clicks)
   ReplView.super.on_mouse_pressed(self, button, x, y, clicks)
   core.set_active_view(self)
+
+  if button == "left" then
+    local ox, oy = self:get_content_offset()
+    local relative_y = y - oy - style.padding.y
+    local lh = style.code_font:get_height() + style.padding.y / 2
+    local idx = math.floor(relative_y / lh) + 1
+    if idx >= 1 and idx <= #self.lines then
+      local entry = self.lines[idx]
+      -- Expose click-handler: look for file:line:col pattern
+      local path, line_num, col_num = entry.text:match("^([^:]+):(%d+):(%d+):")
+      if not path then
+        -- Also try to match nested or spaced patterns
+        path, line_num, col_num = entry.text:match("([^%s:]+):(%d+):(%d+):")
+      end
+      if path and line_num then
+        line_num = tonumber(line_num)
+        col_num = tonumber(col_num) or 1
+        -- Convert to absolute path if needed
+        local abs_path = system.absolute_path(path) or path
+        if system.get_file_info(abs_path) then
+          local doc = core.open_doc(abs_path)
+          core.root_view:open_doc(doc)
+          doc:set_selection(line_num, col_num, line_num, col_num)
+        end
+      end
+    end
+  end
 end
 
 -- Layout: one line per output entry, then the prompt line at the bottom
@@ -774,6 +829,9 @@ command.add(nil, {
     end
     doc:save()
     local path = system.absolute_path(doc.filename)
+    if config.plugins.turmeric.stale_files then
+      config.plugins.turmeric.stale_files[path] = false
+    end
     local view = open_repl_view("down")
     view:send_run(path)
   end,

@@ -10,17 +10,18 @@
       running interpreter. The interpreter side handles `:run` and `:reload`
       at `src/turi/repl.c:939` / `:946` (`:run` resets the session before
       loading and auto-invokes `(main)` per the help text at line 521).
-- [ ] **L3 -- diagnostic surfacing / clickable file:line:col.** Not yet
-      wired in `tools/trowel/turmeric.lua`; only the comment at lines 8/143
-      mentions the log-pane routing. No click-handler attached to the REPL
-      output.
-- [ ] **L4 -- stale-buffer chip.** Not yet implemented (no `stale` / `dirty`
-      tracking in `tools/trowel/turmeric.lua`).
-- [ ] **L5 -- `cmd+enter` to send selection / current form.** Deferred per
-      the plan; the recon memo at `docs/notes/tur-repl-reload-semantics.md`
-      sketches the eventual `send-form-at-cursor` path but no implementation.
+- [x] **L3 -- diagnostic surfacing / clickable file:line:col.** Landed in
+      `tools/trowel/turmeric.lua` via `ReplView:on_mouse_pressed` click handler
+      that extracts path, line, and col numbers from compiler diagnostics and
+      opens/jumps to the DocView file.
+- [x] **L4 -- stale-buffer chip.** Landed in `tools/trowel/turmeric.lua` via
+      `is_current_workspace_stale` helper which checks both dirty status and
+      `config.plugins.turmeric.stale_files` after a buffer is saved but before
+      it is run again. Displays `(stale)` in the REPL tab/header.
+- [x] **L5 -- `cmd+enter` to send selection / current form.** Split out into
+      its own separate plan at `docs/upcoming/v2/repl-send-form-at-cursor-plan.md`.
 
-Critical path (L1 + L2) is COMPLETE; remaining work (L3-L5) is polish.
+All phases L1-L4 are COMPLETE and L5 has been split off. Plan is ARCHIVED.
 
 ## Goal
 
