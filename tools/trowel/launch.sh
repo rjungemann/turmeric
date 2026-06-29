@@ -8,6 +8,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CFG="$HOME/.config/trowel"
 
+# Belt-and-suspenders: nuke the legacy Turmeric.app bundle on every
+# launch. Its Resources/plugins/ used to silently shadow in-tree Trowel
+# changes for hours of confused debugging. If it ever reappears, this
+# wipes it before LaunchServices can pick it up again.
+rm -rf "$ROOT/tools/trowel/Turmeric.app" \
+       "$ROOT/tools/trowel/turmeric.icns" \
+       "$ROOT/tools/trowel/turmeric.iconset"
+
 mkdir -p "$CFG/plugins" "$CFG/colors"
 ln -sf "$ROOT/tools/trowel/turmeric.lua" "$CFG/plugins/turmeric.lua"
 ln -sf "$ROOT/tools/trowel/colors/turmeric-dark.lua"  "$CFG/colors/turmeric-dark.lua"
