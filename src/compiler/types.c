@@ -620,7 +620,12 @@ static void append_type_mangle(Buf *b, Type t) {
             buf_puts(b, t.as.adt_.def && t.as.adt_.def->name ? t.as.adt_.def->name : "adt");
             break;
         case TY_STRUCT:
-            buf_puts(b, t.as.struct_.def && t.as.struct_.def->name ? t.as.struct_.def->name : "struct");
+            /* baseline-ctor-option-struct-mangling: a def-less TY_STRUCT is the
+             * elaborator's tyvar/unknown/opaque-container placeholder.  Mangle
+             * it as "opaque" so an Option-monomorph over the placeholder
+             * resolves to `ctor_Option__opaque` (which the def-emitter already
+             * produces) instead of an undefined `ctor_Option__struct`. */
+            buf_puts(b, t.as.struct_.def && t.as.struct_.def->name ? t.as.struct_.def->name : "opaque");
             break;
         case TY_APP: {
             StructDef *def = NULL;

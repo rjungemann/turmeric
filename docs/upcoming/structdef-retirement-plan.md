@@ -256,6 +256,35 @@ done the slice-5 deletion shrinks from "rewrite type identity + migrate tyvar
 representation + delete the type + chase 6 residual fixtures" to roughly
 "rename the kind and delete the dead code."
 
+### Slice 5 status, 2026-06-28 (post-B1, paused)
+
+- **B1 DONE** -- inventory landed
+  ([ty-struct-null-def-inventory.md](ty-struct-null-def-inventory.md)).
+  3 producers (P1 `elab_fns.c:2437`, P2 `elab_types.c:2321`,
+  P3 `elab_typeclasses.c:2266`) and 16 explicit NULL-tolerant consumers.
+- **B2 ATTEMPTED, REVERTED, PAUSED** -- P1 migration to unnamed `TY_TYVAR`
+  was reverted cleanly when an investigation found the baseline suite was
+  not green to begin with: `bash tests/run.sh` at HEAD `e042eb822` reports
+  **1838 passed, 44 failed**, contradicting the slices-1-5-step-1 "1874/0"
+  claims.  Without a green gate, B2 regressions cannot be distinguished
+  from pre-existing failures.
+- **Root cause of the baseline regression**: every failing fixture traces
+  to `ctor_Option__struct` being emitted without a definition, because
+  `append_type_mangle` (`types.c:622-624`) emits the literal `"struct"`
+  for a `TY_STRUCT{def=NULL}` slot in an Option monomorph.  Bug pre-dates
+  slice 5 -- exposed when `defstruct-as-defadt` graduated and more
+  `(Option <tyvar>)` shapes went through monomorphization.  See
+  [docs/reported/baseline-ctor-option-struct-mangling.md](../reported/baseline-ctor-option-struct-mangling.md)
+  for the full repro and bisect.
+- **Unblocker before resuming B2**: patch the mangler / monomorph
+  emission so an Option-monomorph over an unresolved placeholder either
+  is not emitted or matches the carrier-path convention.  Plausibly a
+  one-day fix; once landed, the gate is honest again and the B2-B4
+  per-producer migrations can land in safely-measurable increments.
+
+The slice-5 deletion itself remains gated on B + the open
+baseline-mangling fix; A/C/D/E are not affected.
+
 ## Recommendation
 
 **Status (2026-06-29): slices 1-4 DONE; slice 5 step 1 (defopaque migration)
