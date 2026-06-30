@@ -2314,13 +2314,16 @@ Expr *elab_type_app(Elab *e, const Form *call) {
                 arg_binding = scope_lookup(&e->global, arg_sym);
             }
             if (!arg_binding) {
-                /* Unknown name — treat as an opaque type constructor (like definstance does).
-                 * TY_STRUCT with no def emits void* in codegen, correct for heap-allocated
-                 * containers like option, vec, etc. */
-                memset(&arg_type, 0, sizeof(arg_type));
-                arg_type.kind = TY_STRUCT;
+                /* Unknown name — treat as an unresolved type variable (like
+                 * definstance does).  structdef-retirement slice 5 B2 (P2):
+                 * emit a named TY_TYVAR carrying the arg name rather than the
+                 * legacy def-less TY_STRUCT placeholder.  An unresolved tyvar
+                 * already lowers to the int64 carrier in codegen (types.c
+                 * type_c_name), matching the previous "container values are
+                 * int64-sized opaque handles" intent.  See
+                 * ty-struct-null-def-inventory.md P2. */
+                arg_type = type_tyvar_named(arg_sym->name);
                 arg_type.copy_kind = CK_MOVE;
-                arg_type.as.struct_.def = NULL;
             } else {
                 arg_type = arg_binding->type;
             }
