@@ -2433,13 +2433,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 fn_type_mentions_named(return_fn_type, nm) ||
                 fn_type_mentions_named(return_exists_type, nm)) occ++;
             if (occ >= 2) continue;  /* genuine: relates >=2 type positions */
-            Type unresolved; memset(&unresolved, 0, sizeof(unresolved));
-            unresolved.kind = TY_STRUCT;
+            /* structdef-retirement slice 5 B2 (P1): a single-occurrence bare
+             * type-param is an unresolved type variable, not a nominal struct.
+             * Emit a named TY_TYVAR carrying the param name rather than the
+             * legacy def-less TY_STRUCT placeholder (which codegen lowers to the
+             * same int64 carrier).  See ty-struct-null-def-inventory.md P1. */
+            Type unresolved = type_tyvar_named(nm);
             unresolved.copy_kind = CK_MOVE;
             unresolved.hkt_kind = KIND_STAR;
-            unresolved.as.struct_.def = NULL;
             params[i]->type = unresolved;
-            param_kinds[i] = TY_STRUCT;
+            param_kinds[i] = TY_TYVAR;
             param_poly_types[i] = NULL;
         }
 

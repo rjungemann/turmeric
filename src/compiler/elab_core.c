@@ -1002,7 +1002,17 @@ bool binding_mark_moved(Binding *b, Span use_span) {
 static bool binding_has_suspicious_param_annotation(const Binding *b) {
     if (!b || !b->is_param) return false;
     if (span_is_unknown(b->span)) return false;
-    if (b->type.kind != TY_STRUCT || b->type.as.struct_.def != NULL) return false;
+    /* structdef-retirement slice 5 B2 (P1): the demoted single-occurrence
+     * unresolved param is now a named TY_TYVAR rather than a def-less
+     * TY_STRUCT.  Accept both shapes during the transition.  This code is only
+     * reached for a *moved* (CK_MOVE) binding, and a genuine declared tyvar
+     * param is CK_COPY (never moved), so the source-text `:` check below
+     * remains the precise discriminator -- it does not false-fire on real
+     * polymorphic params. */
+    bool legacy_placeholder =
+        (b->type.kind == TY_STRUCT && b->type.as.struct_.def == NULL);
+    bool tyvar_placeholder = (b->type.kind == TY_TYVAR);
+    if (!legacy_placeholder && !tyvar_placeholder) return false;
     const SourceFile *file = diag_source_file(b->span.file_id);
     if (!file || !file->src || b->span.off_end > file->len) return false;
     const char *p = file->src + b->span.off_end;
