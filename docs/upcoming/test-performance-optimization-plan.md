@@ -1,6 +1,6 @@
 # Test Performance Optimization Plan (CI / Test Runner Parity)
 
-* **Status**: Proposed
+* **Status**: Partially Implemented (Phase 3 Completed)
 * **Author**: Gemini CLI
 * **Date**: June 29, 2026
 
@@ -107,14 +107,21 @@ To prevent `static` generated functions from recursively calling themselves, we 
 ### Phase 3: Cached `$TUR` Compiler Binary mtime (Stamp-Cache Optimization)
 To eliminate redundant process spawns during fixture stamp-caching, we will cache the modification time of the `$TUR` compiler binary once at the beginning of the runner script, exporting it as an environment variable (`TUR_MTIME`).
 
-#### In `tests/run.sh` & `tests/run-turi.sh`:
-```bash
-# Query and cache mtime once at start
-export TUR_MTIME="$(_tur_mtime "$TUR")"
-```
+*Feasibility Analysis*: 
+Because the parallel test harnesses run under `xargs` which spawns new `bash` child processes, child processes inherit any variables exported via `export` in the parent shell. Caching the `$TUR` binary's modification time into a `TUR_MTIME` environment variable ensures all parallel workers access the value with **zero process spawn overhead** and **zero IPC cost**.
 
-#### Refactored `stamp_key`:
+We will apply this optimization across all three test runners:
+
+#### 3.1 In `tests/run.sh` (Compiled Fixture Runner):
 ```bash
+# Locate around line 245 inside run.sh (right below _tur_mtime definition)
+_tur_mtime() {
+    stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null || echo "0"
+}
+
+# Cache compiler modification time and export it for xargs workers
+export TUR_MTIME="$(_tur_mtime "$TUR")"
+
 stamp_key() {
     local input="$1"
     local dir
@@ -124,6 +131,30 @@ stamp_key() {
     echo "$(_tur_hash_file "$input")-${ec_hash}-${TUR_MTIME}"
 }
 ```
+
+#### 3.2 In `tests/run-turi.sh` (Interpreter Fixture Runner):
+```bash
+# Locate around line 73 inside run-turi.sh
+_tur_mtime() { stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null || echo "0"; }
+
+# Cache and export compiler mtime once
+export TUR_MTIME="$(_tur_mtime "$TUR")"
+
+stamp_key() { echo "$(_tur_hash_file "$1")-${TUR_MTIME}"; }
+```
+
+#### 3.3 In `tools/run-doctests.sh` (Doctest Runner):
+```bash
+# Locate around line 35 inside run-doctests.sh
+_tur_mtime() { stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null || echo "0"; }
+
+# Cache compiler mtime
+TUR_MTIME="$(_tur_mtime "$TUR")"
+
+# Refactored stamp_key
+stamp_key() { echo "$(_tur_hash_file "$1")-${TUR_MTIME}"; }
+```
+
 *Technical Rationale*: Caching this single value avoids over 3,700 sequential `stat` process spawns during parallel execution, shaving several seconds off both cold and warm test starts.
 
 ### Phase 4: Verification and Validation
@@ -139,5 +170,5 @@ Following implementation, the test suite must be fully executed using `tur run t
 1. **Document Design Plan**: Commit this plan to `docs/upcoming/test-performance-optimization-plan.md` (Completed).
 2. **Implement Phase 1 (CTest Parallelism)**: Update `Justfile` and measure baseline timing.
 3. **Implement Phase 2 (Doctest Fixes)**: Update `tools/run-doctests.sh`, `stdlib/term.tur`, and `stdlib/math.tur` sequentially. Verify local doctest runs.
-4. **Implement Phase 3 (Stamp Cache)**: Inject cached `TUR_MTIME` logic into test runners and verify stamp validation speeds.
+4. **Implement Phase 3 (Stamp Cache)**: Inject cached `TUR_MTIME` logic into test runners and verify stamp validation speeds. (Completed)
 5. **Final Validation Gate**: Execute end-to-end local test suite and confirm target performance characteristics.

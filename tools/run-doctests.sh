@@ -34,12 +34,17 @@ FAILED=()
 # ---------------------------------------------------------------------------
 
 _tur_mtime() { stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null || echo "0"; }
+
+# Performance optimization: cache the compiler binary modification time once
+# at startup so we do not spawn a redundant stat process inside the stamp check loop.
+TUR_MTIME="$(_tur_mtime "$TUR")"
+
 _tur_hash_file() {
     if command -v md5 >/dev/null 2>&1; then md5 -q "$1" 2>/dev/null
     elif command -v md5sum >/dev/null 2>&1; then md5sum "$1" 2>/dev/null | awk '{print $1}'
     else echo "nohash"; fi
 }
-stamp_key() { echo "$(_tur_hash_file "$1")-$(_tur_mtime "$TUR")"; }
+stamp_key() { echo "$(_tur_hash_file "$1")-${TUR_MTIME}"; }
 stamp_check() {
     [ "$TUR_FORCE" = "1" ] && return 1
     local sf="$STAMP_CACHE/$(printf '%s' "$1" | tr '/ ' '__').stamp"

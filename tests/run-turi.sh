@@ -72,7 +72,12 @@ _tur_hash_file() {
     else echo "nohash"; fi
 }
 _tur_mtime() { stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null || echo "0"; }
-stamp_key() { echo "$(_tur_hash_file "$1")-$(_tur_mtime "$TUR")"; }
+
+# Performance optimization: cache the compiler binary modification time once
+# at startup so we do not spawn a redundant stat process for every single fixture.
+export TUR_MTIME="$(_tur_mtime "$TUR")"
+
+stamp_key() { echo "$(_tur_hash_file "$1")-${TUR_MTIME}"; }
 stamp_check() {
     [ "$TUR_FORCE" = "1" ] && return 1
     local sf="$STAMP_CACHE/$(printf '%s' "$1" | tr '/ ' '__').stamp"
@@ -355,7 +360,7 @@ run_turi_fixture() {
     echo "PASS" > "$RESULTS_DIR/$(printf '%s' "$name" | tr '/ ' '__').result"
 }
 
-export TUR STAMP_CACHE RESULTS_DIR TUR_FORCE
+export TUR STAMP_CACHE RESULTS_DIR TUR_FORCE TUR_MTIME
 export -f run_turi_fixture fixture_inline_c_runs fixture_has_inline_c stamp_check stamp_write stamp_key
 export -f _tur_hash_file _tur_mtime
 export -f run_turi_error_fixture err_in_denyset

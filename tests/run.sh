@@ -249,6 +249,10 @@ _tur_mtime() {
     stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null || echo "0"
 }
 
+# Performance optimization: cache the compiler binary modification time once
+# at startup so we do not spawn a redundant stat process for every single fixture.
+export TUR_MTIME="$(_tur_mtime "$TUR")"
+
 stamp_key() {
     local input="$1"
     local dir
@@ -257,7 +261,7 @@ stamp_key() {
     # snapshots invalidates the stamp and forces a fresh codegen check.
     local ec_hash=""
     [ -f "$dir/expected.c" ] && ec_hash="$(_tur_hash_file "$dir/expected.c")"
-    echo "$(_tur_hash_file "$input")-${ec_hash}-$(_tur_mtime "$TUR")"
+    echo "$(_tur_hash_file "$input")-${ec_hash}-${TUR_MTIME}"
 }
 
 stamp_check() {
@@ -647,7 +651,7 @@ export TUR BUILD_CC RESULTS_DIR TUR_EMIT_C_MODE
 export TUR_TEST_FILTER
 export TUR_TEST_SHARD SHARD_INDEX SHARD_TOTAL
 export TUR_FORCE TUR_STAMP_CACHE
-export TUR_TSAN _tur_timeout_bin
+export TUR_TSAN _tur_timeout_bin TUR_MTIME
 export -f matches_filter matches_shard write_result run_happy run_negative run_happy_worker run_negative_worker
 export -f _tur_hash_file _tur_mtime stamp_key stamp_check stamp_write _run_timed
 
