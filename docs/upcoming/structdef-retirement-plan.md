@@ -279,13 +279,29 @@ representation + delete the type + chase 6 residual fixtures" to roughly
   placeholder name), and `TY_FN` stays `"opaque"`.  Snapshots regenerated in
   the same change.  Full write-up:
   [docs/archive/baseline-ctor-option-struct-mangling.md](../archive/baseline-ctor-option-struct-mangling.md).
-- **B2 still PAUSED (now unblocked)** -- the earlier P1 migration to unnamed
-  `TY_TYVAR` was reverted because the baseline was not green; with the gate
-  honest again, the B2-B4 per-producer migrations can resume in
-  safely-measurable increments.  (Note: B2 now lands *on top of* the unified
-  placeholder mangling -- a migrated `TY_TYVAR` placeholder and a residual
-  def-less `TY_STRUCT` placeholder already mangle identically, so a partial
-  migration no longer risks a call/def name mismatch.)
+- **B2 mostly DONE (2026-06-30): 6 of 8 producers migrated to named
+  `TY_TYVAR`; 2 deferred.**  Landed as five commits, each with the by-value
+  suite green (1874/0).  A `struct_.def = NULL` sweep during the work showed
+  B1's "3 producers" count was an undercount -- there are **8**.  Migrated:
+  P1 (`elab_fns.c` single-occurrence param), P2 (`elab_types.c` unknown
+  type-app arg), P3 (`elab_typeclasses.c` unknown instance type-arg -- the
+  typeclass-dispatch-entangled one, which also carried the `type_effective_kind`
+  / `opaque_struct_arg` kind-check consumers and the `build_inst_type_suffix`
+  + two dict-name codegen mirrors), P4 (`elab_types.c` `^f`/`^^f` HKT
+  type-param ref), and P5/P6 (`elab_typeclasses.c` partial-app constructor
+  heads).  **Deferred (P7/P8):** the general unknown-type-name fallback in
+  `type_expr_from_form` is load-bearing -- built-in types with no `defstruct`
+  (`str`, ...) route through it and `type_effective_kind` reads it as an opaque
+  `KIND_ARROW` constructor.  A naive migration changed codegen across 93
+  fixtures (built + reverted); it needs the tyvar-kind question settled and
+  belongs to the slice-5 deletion, not incremental B2.  See the corrected
+  producer table + consumer list in
+  [ty-struct-null-def-inventory.md](ty-struct-null-def-inventory.md).
+- **B4 remains blocked** -- installing `TUR_ASSERT(def != NULL)` now would
+  fire on the two deferred P7/P8 fallback producers.  (Note: a migrated
+  `TY_TYVAR` placeholder and a residual def-less `TY_STRUCT` placeholder still
+  mangle identically -- both to `"struct"` -- so the partial migration does not
+  risk a call/def name mismatch.)
 - **Separate, low-priority follow-up found while fixing this**: the multi-file
   split path (`tur build <dir>` / `emit_header`) drops four ADT monomorph
   typedefs from `input.h` (incl. the fully-concrete `Endo__int`/`Schema__int`),

@@ -23,13 +23,42 @@ emits `type_tyvar_named(sym->name)` instead of an anonymous struct.  Several
 consumer sites grew "prereq shims" that accept both shapes during the
 transition; the remaining producers are what slice-5 needs cleared.
 
-## Producers (3)
+## Producers
 
-| # | Site | Purpose | Migration target |
-|---|------|---------|------------------|
-| P1 | `elab_fns.c:2437-2440` | Single-occurrence `defn` type-param dropped to "unresolved" placeholder when only one position references it. | `type_tyvar_named` carrying the param name (same as the open-binder fix). |
-| P2 | `elab_types.c:2321-2323` | Type-app argument that is an unknown name, e.g. `(Option Unknown)`. Comment: "opaque type constructor … TY_STRUCT with no def emits void* in codegen". | `type_tyvar_named(arg_sym->name)`. Codegen for an unresolved tyvar already lowers to `int64_t` (`types.c:3294-3295`), matching the documented "container values are int64_t-sized opaque handles" intent. |
-| P3 | `elab_typeclasses.c:2266-2268` | Unknown type-arg name in `definstance`, same shape as P2. Tracks the symbol via `type_arg_syms[i]`. | `type_tyvar_named(kw->name)`. |
+> **B1 undercount corrected during B2 (2026-06-30).** The original inventory
+> listed only 3 producers (P1-P3). An exhaustive `struct_.def = NULL` sweep of
+> `src/compiler/` while executing B2 found **8** def-less `TY_STRUCT` producers.
+> Six of the eight are now migrated to named `TY_TYVAR` (B2 DONE for them,
+> suite green 1874/0 after each); the remaining two are the general
+> unknown-type-name fallback, deferred to slice 5 -- see below.
+
+| # | Site | Purpose | Migration target | Status |
+|---|------|---------|------------------|--------|
+| P1 | `elab_fns.c` demote-lone-param pass | Single-occurrence `defn` type-param dropped to "unresolved" placeholder when only one position references it. | `type_tyvar_named` carrying the param name (same as the open-binder fix). | **DONE** |
+| P2 | `elab_types.c` `elab_type_app` unknown arg | Type-app argument that is an unknown name, e.g. `(Option Unknown)`. | `type_tyvar_named(arg_sym->name)`. Codegen for an unresolved tyvar already lowers to `int64_t`, matching the documented "container values are int64_t-sized opaque handles" intent. | **DONE** |
+| P3 | `elab_typeclasses.c` unknown instance type-arg | Unknown type-arg name in `definstance`, same shape as P2. Tracks the symbol via `type_arg_syms[i]`. | `type_tyvar_named(kw->name)`, marked `hkt_kind = KIND_ARROW` (opaque constructor). | **DONE** |
+| P4 | `elab_types.c` `^f`/`^^f` HKT type-param ref | Higher-kinded type-param reference in a type position; kind carried in `hkt_kind`. Missed by B1. | `type_tyvar_named(type_params[idx]->name)`, `hkt_kind` preserved. | **DONE** |
+| P5 | `elab_typeclasses.c` `(Ctor a b)` partial-app head | Unresolved fully-applied 2-param instance-head constructor. Missed by B1. | `type_tyvar_named(ctor_sym2->name)`, `hkt_kind = KIND_ARROW2`. | **DONE** |
+| P6 | `elab_typeclasses.c` `(Ctor arg)` partial-app head | Unresolved partial-app instance-head constructor. Missed by B1. | `type_tyvar_named(ctor_sym->name)`, `hkt_kind = KIND_ARROW2`. | **DONE** |
+| P7 | `elab_types.c` unknown bare type name fallback (`type_expr_from_form`, was ~561-567) | General "unknown bare type name" fallback in the type-expr elaborator. **Load-bearing**: built-in types with no `defstruct` (e.g. `str`) route through here, so `type_effective_kind` treats it as an opaque `KIND_ARROW` constructor. Naively migrating it changed codegen across **93 fixtures** (built and reverted). | Deferred to slice 5 -- must decide the tyvar's reported kind (`*` vs the current implicit `KIND_ARROW`) and reconcile with the `str`-has-no-def consumers first. | **DEFERRED** |
+| P8 | `elab_types.c` unknown keyword type name fallback (`type_expr_from_form`, was ~2010-2016) | Keyword-name analog of P7, same blast radius. | Deferred to slice 5 with P7. | **DEFERRED** |
+
+### Consumer updates B1 did not anticipate (landed with B2)
+
+B1 listed the NULL-tolerant consumers it knew about; executing B2 surfaced
+several more that had to move in lockstep:
+
+- `elab_core.c binding_has_suspicious_param_annotation` -- accepts the named
+  `TY_TYVAR` param placeholder (P1) in addition to the def-less `TY_STRUCT`.
+- `kind_check.c type_effective_kind` -- routes `TY_TYVAR` through `hkt_kind`
+  (a kind-`*` tyvar still reports `*`; a placeholder marked `KIND_ARROW`/`ARROW2`
+  reports its arrow kind, mirroring the old def-less `TY_STRUCT` behaviour).
+- `kind_check.c` `opaque_struct_arg` skip-promotion guard -- also treats an
+  arrow-kinded `TY_TYVAR` instance head as ambiguous (P3).
+- `build_inst_type_suffix` (elab) + the two dict-name mirrors
+  (`emit_stmt.c`, `emit_core.c`) -- gained a `TY_TYVAR` arm that mangles by the
+  tracked symbol name; without it every unknown-name instance collapsed to the
+  `_T` suffix / `dict_<C>_T` struct (idempotent-guard swallow + ODR collision).
 
 The construction at `elab_typeclasses.c:5195` (`base.kind = TY_STRUCT;
 base.as.struct_.def = rc_struct_def;`) is **not** a def=NULL producer -- it
@@ -90,25 +119,38 @@ once the producers are gone (B4 installs the assertion to prove it).
 
 ## Migration order for B2/B3
 
-Three small, independently-committable commits, each with the suite green:
+**B2 status (2026-06-30): 6 of 8 producers migrated (P1-P6); P7/P8 deferred.**
+Landed as five commits, each with the by-value suite green (1874/0):
 
-1. **P1**: `elab_fns.c` single-occurrence param → named tyvar.  Local to
-   one elaboration helper; the only consumer touched is `elab_fns.c:82`
-   (becomes "named tyvar?" check).
-2. **P2**: `elab_types.c` unknown type-app arg → named tyvar.  Touches the
-   EX2 phantom-binder consumers at `elab_types.c:2767/2835/2867` and the
-   `elab_call.c:5363` accept-both shim.
-3. **P3**: `elab_typeclasses.c` unknown instance type-arg → named tyvar.
-   Drops the `type_args[i]` def=NULL shim at line 2575 and the abstract
-   tyvar checks at 4611/5159/5728.
+1. **P1**: `elab_fns.c` single-occurrence param → named tyvar. Consumer
+   touched: `elab_core.c binding_has_suspicious_param_annotation`.
+2. **P2**: `elab_types.c` unknown type-app arg → named tyvar.
+3. **P3**: `elab_typeclasses.c` unknown instance type-arg → named tyvar. The
+   entangled one -- carried the `type_effective_kind` / `opaque_struct_arg`
+   kind-check consumers and the `build_inst_type_suffix` + two dict-name
+   codegen mirrors (see "Consumer updates" above).
+4. **P4**: `elab_types.c` `^f`/`^^f` HKT type-param ref → named tyvar.
+5. **P5/P6**: `elab_typeclasses.c` partial-app constructor heads → named
+   tyvar (one commit).
 
-After all three:
+**Still open (deferred to slice 5):**
 
-4. **B4**: replace the remaining `as.struct_.def == NULL` checks with the
-   named-tyvar equivalent (or delete dead branches), then install
-   `TUR_ASSERT(t.as.struct_.def != NULL)` in `type_struct`-adjacent
-   readers (`type_name`, `type_c_name`, etc.).  The assertion failing in
-   the suite at this point would identify a missed producer.
+- **P7/P8**: the general unknown-type-name fallback in `type_expr_from_form`.
+  Load-bearing for built-in types that simply have no `defstruct` (`str`,
+  ...), which `type_effective_kind` currently reads as opaque `KIND_ARROW`
+  constructors. A naive `type_tyvar_named` migration changed codegen across
+  93 fixtures; this needs the kind-reporting question settled first and is
+  properly part of the slice-5 deletion, not incremental B2.
+
+After P7/P8 are also cleared:
+
+- **B4**: replace the remaining `as.struct_.def == NULL` checks with the
+  named-tyvar equivalent (or delete dead branches), then install
+  `TUR_ASSERT(t.as.struct_.def != NULL)` in `type_struct`-adjacent
+  readers (`type_name`, `type_c_name`, etc.).  The assertion failing in
+  the suite at this point would identify a missed producer.  **Blocked on
+  P7/P8** -- installing the assert now would fire on the two remaining
+  fallback producers.
 
 ## Notes
 
