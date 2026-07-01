@@ -87,28 +87,11 @@ static bool struct_accessor_hint(Elab *e, const char *name,
                                  char *buf, size_t buflen) {
     if (!e || !name) return false;
     size_t nlen = strlen(name);
-    for (uint32_t i = 0; i < e->n_struct_defs; i++) {
-        const StructDef *sd = e->struct_defs[i];
-        if (!sd || !sd->name) continue;
-        size_t slen = strlen(sd->name);
-        if (slen + 1 >= nlen) continue;            /* need room for "-<field>" */
-        if (strncmp(name, sd->name, slen) != 0) continue;
-        if (name[slen] != '-') continue;
-        const char *field = name + slen + 1;
-        for (uint32_t f = 0; f < sd->n_fields; f++) {
-            if (sd->fields[f].name && strcmp(field, sd->fields[f].name) == 0) {
-                snprintf(buf, buflen,
-                         "struct accessor functions are not generated; read the "
-                         "field with (.%s x) and construct with (make-struct %s "
-                         "...)", field, sd->name);
-                return true;
-            }
-        }
-    }
-    /* A `defstruct` lowers to a single-variant record ADT, so the same
-     * `<name>-<field>` accessor-call mistake on a lowered struct lands in
-     * adt_defs, not struct_defs -- mirror the scan there so the hint still
-     * fires (its record fields back `(.field x)` exactly like a struct). */
+    /* A `defstruct` lowers to a single-variant record ADT, so the
+     * `<name>-<field>` accessor-call mistake lands in adt_defs; scan there so
+     * the hint fires (record fields back `(.field x)` exactly like a struct).
+     * structdef-retirement DS-C: the parallel scan over the (now always-empty)
+     * struct_defs registry is dead and removed. */
     for (uint32_t i = 0; i < e->n_adt_defs; i++) {
         const struct AdtDef *ad = e->adt_defs[i];
         if (!ad || !ad->name || ad->n_ctors != 1) continue;

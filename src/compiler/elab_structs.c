@@ -1198,12 +1198,9 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
                     ad->n_ctors > 0 && !ad->is_gadt)
                     prior_fully_defined = true;
             }
-            for (uint32_t si = 0; si < e->n_struct_defs && !prior_fully_defined; si++) {
-                StructDef *sd = e->struct_defs[si];
-                if (sd && sd->name && strcmp(sd->name, name->name) == 0 &&
-                    sd->n_fields > 0)
-                    prior_fully_defined = true;
-            }
+            /* structdef-retirement DS-C: the parallel scan over the (always-empty)
+             * struct_defs registry is dead -- a prior definition of this name is
+             * an AdtDef (every lowered defstruct/defdata) checked above. */
             if (prior_fully_defined) {
                 diag_emit(DIAG_ERROR, name_form->span,
                           "defstruct: '%s' is already defined (an auto-loaded "

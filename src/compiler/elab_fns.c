@@ -405,11 +405,8 @@ static bool fn_name_is_adt_tyvar(const Elab *e, const char *name) {
         for (uint8_t k = 0; k < d->n_type_params; k++)
             if (d->type_params[k] && strcmp(d->type_params[k], name) == 0) return true;
     }
-    for (uint32_t i = 0; i < e->n_struct_defs; i++) {
-        const StructDef *d = e->struct_defs[i];
-        for (uint8_t k = 0; k < d->n_type_params; k++)
-            if (d->type_params[k] && strcmp(d->type_params[k], name) == 0) return true;
-    }
+    /* structdef-retirement DS-C: the parallel scan over the (always-empty)
+     * struct_defs registry is dead -- every parametric type is an ADT now. */
     return false;
 }
 
