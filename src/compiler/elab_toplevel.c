@@ -93,7 +93,6 @@ Expr *elab_any_cast(Elab *e, const Form *call) {
         return NULL;
     }
     TypeKind target_kind = typekind_from_symbol(type_form->as.sym->name);
-    const StructDef *target_struct = NULL;
     Type result_type;
     if (target_kind == TY_UNKNOWN) {
         /* TY2.2: a struct/ADT name is a valid cast target. */
@@ -103,19 +102,18 @@ Expr *elab_any_cast(Elab *e, const Form *call) {
                       "unknown type '%s' in 'cast'", type_form->as.sym->name);
             return NULL;
         }
-        /* CONV-S1: a struct-origin lowered ADT casts as TY_STRUCT to match the
-         * box tag, keeping the cast transparent to the defstruct-as-defadt
-         * lowering. */
+        /* CONV-S1: a struct-origin lowered ADT casts under its box tag, keeping
+         * the cast transparent to the defstruct-as-defadt lowering. */
         target_kind = any_box_tag_for_type(named);
         result_type = *named;
-        if (named->kind == TY_STRUCT) target_struct = named->as.struct_.def;
     } else {
         result_type = type_simple(target_kind, CK_COPY);
     }
     Expr *out = expr_new(e->arena, EX_ANY_CAST, result_type, call->span);
     out->as.any_cast_.value = val;
     out->as.any_cast_.target_kind = target_kind;
-    out->as.any_cast_.target_struct = target_struct;
+    /* structdef-retirement DS-C: no StructDef target -- lowered structs are ADTs. */
+    out->as.any_cast_.target_struct = NULL;
     return out;
 }
 

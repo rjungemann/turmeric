@@ -1537,8 +1537,9 @@ Expr *elab_letrec(Elab *e, const Form *call) {
                             ret_form->tag == F_TYPE_ANN) {
                             Type *rft = fn_type_from_form(e, ret_form,
                                                           NULL, NULL, 0);
-                            if (rft && (rft->kind == TY_STRUCT ||
-                                        rft->kind == TY_APP ||
+                            /* structdef-retirement DS-C: the TY_STRUCT disjunct
+                             * is dead -- a return type is never TY_STRUCT. */
+                            if (rft && (rft->kind == TY_APP ||
                                         rft->kind == TY_ADT)) {
                                 placeholder.as.fn.result_kind      = rft->kind;
                                 placeholder.as.fn.result_full_type = rft;
@@ -2268,10 +2269,9 @@ static Expr *elab_set_field(Elab *e, const Form *call, Form *target) {
     Expr *receiver = elab_form(e, target->as.list.items[1]);
     if (!receiver) return NULL;
 
-    /* Resolve the struct def -- either directly or through the rc wrapper. */
-    StructDef *def = NULL;
-    /* CONV-S1 seam 4: under the defstruct-as-defadt lowering the receiver is a
-     * single-variant record ADT, not a StructDef. */
+    /* Resolve the receiver's record ADT -- directly or through the rc wrapper.
+     * CONV-S1 seam 4 / structdef-retirement DS-C: a defstruct receiver is a
+     * single-variant record ADT, never a StructDef. */
     const AdtDef *adt = NULL;
     const CtorDef *adt_ctor = NULL;
     bool receiver_is_rc = false;
@@ -2281,34 +2281,20 @@ static Expr *elab_set_field(Elab *e, const Form *call, Form *target) {
     bool receiver_is_heap = type_is_heap_struct(receiver->type) ||
                             type_is_heap_adt(receiver->type);
     Type rt = receiver->type;
-    const Type *receiver_struct_type = &receiver->type;
-    if (rt.kind == TY_STRUCT) {
-        def = rt.as.struct_.def;
-    } else if (rt.kind == TY_ADT && rt.as.adt_.def) {
+    /* structdef-retirement DS-C: the TY_STRUCT receiver arm, the TY_APP
+     * struct_defs scan, and the rc<Struct> (rc.struct_def) arm are all dead --
+     * a struct receiver is a record ADT (or an ADT app / rc<ADT>) now.  `def`
+     * (StructDef*) stays NULL; every receiver resolves through `adt`. */
+    if (rt.kind == TY_ADT && rt.as.adt_.def) {
         adt = rt.as.adt_.def;
     } else if (rt.kind == TY_APP) {
-        Type app_args[8];
-        for (uint32_t si = 0; si < e->n_struct_defs; si++) {
-            StructDef *candidate = e->struct_defs[si];
-            if (candidate->n_type_params == 0 || candidate->n_type_params > 8) continue;
-            if (elab_struct_type_extract_args(&rt, candidate, app_args)) {
-                def = candidate;
-                break;
-            }
-        }
         /* CONV-S1 seam 4: a lowered parametric record struct is a record ADT app
-         * (`(Box int)`); resolve its base AdtDef when no struct candidate matched. */
-        if (!def) {
-            const Type *adt_base = &rt;
-            while (adt_base && adt_base->kind == TY_APP && adt_base->as.app.fn)
-                adt_base = adt_base->as.app.fn;
-            if (adt_base && adt_base->kind == TY_ADT && adt_base->as.adt_.def)
-                adt = adt_base->as.adt_.def;
-        }
-    } else if (rt.kind == TY_RC && rt.as.rc.struct_def) {
-        def = rt.as.rc.struct_def;
-        receiver_is_rc = true;
-        receiver_struct_type = &rt;
+         * (`(Box int)`); resolve its base AdtDef. */
+        const Type *adt_base = &rt;
+        while (adt_base && adt_base->kind == TY_APP && adt_base->as.app.fn)
+            adt_base = adt_base->as.app.fn;
+        if (adt_base && adt_base->kind == TY_ADT && adt_base->as.adt_.def)
+            adt = adt_base->as.adt_.def;
     } else if (rt.kind == TY_RC && rt.as.rc.adt_def) {
         /* CONV-S1 seam 4: rc<Name> where Name is a lowered single-variant
          * record ADT (a defstruct-as-defadt struct).  Resolve the field through
@@ -2316,16 +2302,10 @@ static Expr *elab_set_field(Elab *e, const Form *call, Form *target) {
          * struct_def branch above. */
         adt = rt.as.rc.adt_def;
         receiver_is_rc = true;
-        receiver_struct_type = &rt;
     } else if (rt.kind == TY_REF_MUT) {
-        /* &mut Struct -- field write through a mutable borrow.  The
-         * borrow already permits interior mutation; no ^mut on the
-         * source binding required. */
-        Type pointee = type_from_kind(rt.as.ref_borrow.target);
-        if (pointee.kind == TY_STRUCT && receiver->type.as.ref_borrow.target == TY_STRUCT) {
-            /* type_from_kind loses the struct def; in practice &mut Struct
-             * is rare for field writes today.  Fall through to error. */
-        }
+        /* &mut Struct -- field write through a mutable borrow is not yet
+         * supported (structdef-retirement DS-C: the dead TY_STRUCT probe here is
+         * removed). */
         diag_emit(DIAG_ERROR, target->span,
                   "set! through &mut Struct is not yet supported -- "
                   "use a ^mut struct binding or rc<Struct> instead");
@@ -2340,7 +2320,7 @@ static Expr *elab_set_field(Elab *e, const Form *call, Form *target) {
     /* CONV-S1 seam 4: a lowered receiver resolved to a record ADT, not a struct.
      * It must be a single-variant record product (the shape a defstruct lowers
      * to); find the field in its sole record constructor. */
-    if (!def && adt) {
+    if (adt) {
         if (!(adt->n_ctors == 1 && adt->ctors[0]->is_record)) {
             diag_emit(DIAG_ERROR, target->span,
                       "set! (.field s): receiver must be a struct or rc<Struct>, got %s",
@@ -2348,26 +2328,24 @@ static Expr *elab_set_field(Elab *e, const Form *call, Form *target) {
             return NULL;
         }
         adt_ctor = adt->ctors[0];
-    }
-    if (!def && !adt) {
+    } else {
         diag_emit(DIAG_ERROR, target->span,
                   "set! (.field s): receiver must be a struct or rc<Struct>, got %s",
                   type_name(rt));
         return NULL;
     }
 
-    /* Find the field by name (struct or lowered record-ADT). */
+    /* Find the field by name on the lowered record-ADT constructor. */
     uint32_t fi = 0;
-    uint32_t n_fields = def ? def->n_fields : adt_ctor->n_fields;
+    uint32_t n_fields = adt_ctor->n_fields;
     for (; fi < n_fields; fi++) {
-        const char *fn = def ? def->fields[fi].name : adt_ctor->fields[fi].name;
+        const char *fn = adt_ctor->fields[fi].name;
         if (fn && strcmp(fn, fname) == 0) break;
     }
     if (fi >= n_fields) {
         diag_emit(DIAG_ERROR, head_form->span,
-                  "set! (.%s s): %s '%s' has no field '%s'",
-                  fname, def ? "struct" : "type",
-                  def ? def->name : adt->name, fname);
+                  "set! (.%s s): type '%s' has no field '%s'",
+                  fname, adt->name, fname);
         return NULL;
     }
 
@@ -2393,14 +2371,12 @@ static Expr *elab_set_field(Elab *e, const Form *call, Form *target) {
     Expr *value = elab_form(e, call->as.list.items[2]);
     if (!value) return NULL;
 
+    /* Record-ADT field type, with type-arg substitution for a parametric
+     * receiver (`(Box int)` -> field A becomes int), mirroring the read side
+     * (elab_typeclasses.c get-field).  structdef-retirement DS-C: the former
+     * TY_STRUCT `def` path (elab_struct_field_use_type) is dead. */
     Type expected_field;
-    if (def) {
-        expected_field = elab_struct_field_use_type(e, receiver_struct_type,
-                                                    def, &def->fields[fi]);
-    } else {
-        /* Record-ADT field type, with type-arg substitution for a parametric
-         * receiver (`(Box int)` -> field A becomes int), mirroring the read side
-         * (elab_typeclasses.c get-field). */
+    {
         const CtorField *cf = &adt_ctor->fields[fi];
         expected_field = cf->full_type ? *cf->full_type
                                        : type_from_kind(cf->kind);
@@ -2432,7 +2408,7 @@ static Expr *elab_set_field(Elab *e, const Form *call, Form *target) {
     out->as.set_field_.receiver = receiver;
     out->as.set_field_.value = value;
     out->as.set_field_.field_idx = fi;
-    out->as.set_field_.def = def;
+    out->as.set_field_.def = NULL;  /* structdef-retirement DS-C: no StructDef */
     out->as.set_field_.adt_def = adt;
     out->as.set_field_.adt_ctor = adt_ctor;
     out->as.set_field_.receiver_is_rc = receiver_is_rc;
