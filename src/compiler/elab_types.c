@@ -423,14 +423,15 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             }
             
             if (found) {
-                /* Return a type variable - represented as TY_STRUCT with no def
-                 * The kind is stored in type_param_kinds[param_idx] */
+                /* Return a type variable.  structdef-retirement slice 5 B2:
+                 * a `^f`/`^^f` higher-kinded type-param reference is a genuine
+                 * named type variable, so emit a named TY_TYVAR carrying the
+                 * param name (its constructor kind lives in hkt_kind) rather
+                 * than a def-less TY_STRUCT placeholder. */
                 Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-                memset(t, 0, sizeof(Type));
-                t->kind = TY_STRUCT;
+                *t = type_tyvar_named(type_params[param_idx]->name);
                 t->copy_kind = CK_MOVE;
                 t->hkt_kind = type_param_kinds[param_idx];
-                t->as.struct_.def = NULL;
                 return t;
             }
             /* If not found, fall through to look up as a type binding */
