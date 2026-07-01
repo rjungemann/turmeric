@@ -118,19 +118,27 @@ fields, parametric, `:heap`, `:copy`/`:move`).
 
    > **Re-scoped 2026-06-30 from measured state -- see
    > [structdef-deletion-scope.md](structdef-deletion-scope.md).**  After
-   > B1-B4, `StructDef` is one fix away from zero producers: an instrumented
-   > full-suite run shows the residual `defstruct`->`StructDef` path fires for
-   > **exactly one struct** (`World`, macro-generated grouped field specs in
-   > `defstruct-grouped-field-specs`).  `e->struct_defs[]` is written by only
-   > that residual path, so once grouped-specs lowers (prereq **DS-A**, the
-   > plan's task A2) no named `TY_STRUCT` is produced at all -- and with B4
-   > proving no def-less one is either, the whole `TY_STRUCT` kind is
+   > B1-B4, `StructDef` is a small, bounded number of fixes from zero producers.
+   > A registry-writer probe (the correct measure -- the single writer of
+   > `e->struct_defs[]`) shows the residual `defstruct`->`StructDef` path fires
+   > for just **two field-shape categories, six structs total**:
+   > (A2) grouped field specs -- `Mixed`/`World` in `defstruct-grouped-field-specs`
+   > -- **now lowered, DS-A DONE (2026-06-30)**; and (A1) effect-annotated fn
+   > fields -- `[run : fn #fx{Eff}]` in `Action`/`App`/`Emitter`/`Printer` --
+   > **still on the struct path**. (An earlier alloc-site probe under-reported
+   > this as "one struct, World" -- it missed the pre-pass-stub-reuse path the
+   > effect-fn structs take; corrected in the scope doc.)  Once A1 also lowers,
+   > `e->struct_defs[]` stays empty, no named `TY_STRUCT` is produced, and with
+   > B4 proving no def-less one is either, the whole `TY_STRUCT` kind is
    > uninstantiated and every `as.struct_.def` reader is dead code.  The
-   > deletion becomes a one-fix prereq + a mechanical, incrementally-committable
-   > dead-code sweep (DS-B..DS-D), NOT the all-or-nothing tyvar-representation +
+   > deletion is then a mechanical, incrementally-committable dead-code sweep
+   > (DS-B..DS-D), NOT the all-or-nothing tyvar-representation +
    > typeclass-dispatch rewrite the estimate below feared (both retired by
-   > B1-B4).  The measured footprint is 222 `StructDef` refs (the old estimate
-   > missed `turi/eval.c`'s 20, a pure consumer with `CtorDef` fallbacks).
+   > B1-B4).  Note A1 is an effect-*soundness* change (carry the field's
+   > `effect_row` onto `CtorField` so `.field`-call effect tracking survives
+   > lowering), not just a gate tweak.  Measured footprint: 222 `StructDef` refs
+   > (the old estimate missed `turi/eval.c`'s 20, a pure consumer with `CtorDef`
+   > fallbacks).
 
    **Step 1 -- migrate `defopaque` off `StructDef`. DONE (2026-06-29).**  The
    slice-5 footprint below missed a *second, live* `StructDef` producer:

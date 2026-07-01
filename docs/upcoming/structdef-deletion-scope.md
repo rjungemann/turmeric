@@ -49,24 +49,39 @@ written by **exactly one function**, `elab_register_struct_def`, called from
 - `elab_toplevel.c:1092` -- its pre-pass forward-declaration stub.
 
 An instrumented full-suite run (temporary `fprintf` at the residual `StructDef`
-allocation, `elab_structs.c:1334`) shows the residual path fires for **exactly
-one struct in the entire fixture suite**:
+registry writer (`elab_register_struct_def`, the single writer of
+`e->struct_defs[]`) shows the residual `StructDef` path fires for **two field-shape
+categories, six structs total, across the whole fixture suite**:
 
 ```
-1  B5-RESIDUAL-STRUCTDEF: World   (tests/fixtures/defstruct-grouped-field-specs)
+grouped field specs      : Mixed, World   (tests/fixtures/defstruct-grouped-field-specs)  -- plan task A2
+effect-annotated fn field: Action, App, Emitter, Printer                                   -- plan task A1
+    (effect-subtype-capability / effect-type-alias / effect-struct-field-row /
+     capability-effect-poly; each `[run : fn #fx{Eff}]`)
 ```
 
-`World` there is macro-generated grouped field specs
-(`(defworld World (pos vel))` -> `[gens : int [pos : int] [vel : int]]`). No
-stdlib type and no other fixture hits the residual path. The `defstruct` gate
-lowers everything else.
+> **Correction (2026-06-30):** an earlier probe placed at the *allocation*
+> site (`elab_structs.c:1334`) reported only `World` and led this doc to claim
+> "exactly one residual struct." That probe was wrong -- it missed the
+> pre-pass-stub-reuse path (`elab_toplevel.c:1092`), through which the
+> effect-fn structs register their `StructDef`. Probing the single registry
+> **writer** is the correct measure and reveals both categories. No stdlib type
+> hits the residual path; the gate lowers everything else.
 
-**Consequence:** once the grouped-field-specs case lowers, `defstruct_lowers_to_adt`
-is always true, `elab_register_struct_def` is never called, `e->struct_defs[]`
-stays empty, and **no named `TY_STRUCT` is ever produced**. Combined with the
-B4 proof that no def-less `TY_STRUCT` is produced either, **the entire
-`TY_STRUCT` kind becomes uninstantiated** -- every `as.struct_.def` reader and
-every `TY_STRUCT` switch arm becomes provably dead code. The deletion is then a
+- **A2 (grouped field specs) -- DONE.**  The lowering gate read the raw `call`
+  and bailed on the grouped `[name : type]` sub-vector while `elab_defstruct`
+  flattened it into a local, so the two disagreed. Fixed by a shared
+  `defstruct_flatten_grouped_field_vec` helper run in both the gate and the
+  elaborator. Mixed + World now lower; suite green (1874/0).
+- **A1 (effect-annotated fn field) -- REMAINING.**  See prerequisite below;
+  this is an effect-soundness change, not just a gate tweak.
+
+**Consequence:** once BOTH A1 and A2 lower, `defstruct_lowers_to_adt` is always
+true, `elab_register_struct_def` is never called, `e->struct_defs[]` stays
+empty, and **no named `TY_STRUCT` is ever produced**. Combined with the B4
+proof that no def-less `TY_STRUCT` is produced either, **the entire `TY_STRUCT`
+kind becomes uninstantiated** -- every `as.struct_.def` reader and every
+`TY_STRUCT` switch arm becomes provably dead code. The deletion is then a
 mechanical dead-code sweep, not a semantic rewrite.
 
 ### The typeclass-entanglement fear resolves to dead-branch deletion
@@ -86,19 +101,49 @@ the `CtorDef`-field-name fallback for the NULL case (`eval.c:2787`). So the
 interpreter needs its `StructDef` reads redirected to the `CtorDef`/`AdtDef`
 path, not new logic.
 
-## Prerequisite
+## Prerequisites (reach zero `StructDef` producers)
 
-**DS-A -- lower grouped field specs (the last producer).**  The plan's task
-`A2`. `defstruct_fields_all_primitive` (`elab_structs.c:845`) walks the field
-vector expecting `F_SYM` field names and bails (`return false`) on a grouped
-sub-vector `[b : int]` (an `F_VEC`). Direct grouped specs (`Mixed`) already
-lower -- only the macro-generated variant (`World`) still trips the gate,
-because the pre-pass at `elab_toplevel.c:1075` and the elaboration check at
-`elab_structs.c:1105` see the field form at different normalization stages. Fix:
-run the same grouped-spec flattener the elaborator uses **before/inside** the
-gate at both check sites so they agree. Small, self-contained, its own commit
-with the suite green. After it, re-run the instrumented probe and confirm the
-residual count is **zero**.
+**DS-A / A2 -- lower grouped field specs. DONE (2026-06-30).**  The lowering
+gate read the raw `call` and `defstruct_fields_all_primitive`
+(`elab_structs.c:845`) bailed on a grouped `[name : type]` sub-vector (`F_VEC`),
+while `elab_defstruct` flattened the grouped specs into a *local* before
+building fields -- so the gate and elaborator disagreed and grouped-spec
+structs took the residual `StructDef` path. Fixed by extracting the flattening
+into a shared `defstruct_flatten_grouped_field_vec` helper and running it in
+both the gate (before `defstruct_fields_all_primitive`) and `elab_defstruct`.
+Mixed + World now lower; suite green (1874/0), no snapshot churn.
+
+**DS-A2 / A1 -- lower effect-annotated fn fields. REMAINING.**  A field
+`[run : fn #fx{Eff}]` reads as the `fn` type token followed by a separate
+`F_MAP` effect row. Two parts:
+
+1. *Gate.* The gate walker (`defstruct_fields_all_primitive`) treats the
+   effect-row `F_MAP` after a `fn`/`c-fn` type as a stray non-`F_SYM` field
+   name and bails. It must skip an optional trailing `F_MAP` after a `fn` type,
+   mirroring the struct-path parser (`elab_structs.c:1582`).
+2. *Effect soundness (the load-bearing part).* This is NOT just a gate tweak.
+   `effect_check.c:161` reads `def->fields[fidx].effect_row` off the
+   **`StructDef`** when a `.field` access returns a fn field, and merges that
+   row into the current effect (calling the stored fn performs the effect). The
+   lowered record ADT has no `StructDef`, so unless the effect row is carried
+   onto the ADT field, effect tracking is **silently dropped** -- unsound. So
+   A1 must:
+   - add `EffectRow *effect_row` to `CtorField` (`types.h:196`);
+   - have the record-ADT / `defdata` field parser read the `#fx{...}` map after
+     a `fn` field into `CtorField.effect_row` (mirroring `elab_structs.c:1596`);
+   - make the lowered-record `.field` access carry that row to the
+     `EX_GET_FIELD`-equivalent node (or have `effect_check` look it up via the
+     `AdtDef`/`CtorField` when the `StructDef` is absent);
+   - extend `effect_check.c:161` to read the row from the ADT field.
+   The four fixtures above are positive tests, so the gate-only change would
+   make them *pass* while dropping effect tracking -- do NOT ship the gate skip
+   without the `CtorField.effect_row` plumbing, or effect checking regresses
+   silently. Add a negative fixture (a `.run` call in a context that forbids the
+   effect must still error) to lock the soundness in.
+
+After BOTH A1 and A2 lower, re-run the **registry-writer** probe (not the
+alloc-site one) and confirm zero `StructDef` registrations -- that is the
+zero-producer precondition for DS-B..DS-D.
 
 ## Deletion slices (after DS-A)
 
