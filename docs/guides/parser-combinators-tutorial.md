@@ -1,25 +1,25 @@
 ---
 title: Parser Combinators Tutorial
 category: Tutorials
-description: Build parser combinators from scratch on top of the backtracking (list) monad
+description: Build a small parser in pure Turmeric using algebraic data types, GADTs, and pattern matching
 ---
 
 # Parser Combinators Tutorial
 
-Build a working parser-combinator library from first principles. By the end
-of this tutorial you will:
+This tutorial builds a working parser in pure Turmeric. By the end you
+will:
 
-- Understand the shape `Parser<a> = Input -> List<(a, Input)>` and why a
-  list of results falls naturally out of nondeterministic parsing.
-- Implement the three primitive parsers (`pfail`, `item`, `satisfy`) and the
-  two core combinators (alternative `<|>` and sequencing `>>=`).
-- Derive the standard library of derived combinators -- `many`, `many1`,
-  `optional`, `between`, `sepBy`, and `choice`.
-- Parse a tiny arithmetic-expression grammar into a small AST and evaluate
-  it so that `1+2*(3+4)` round-trips to `15`.
+- Model a parse result as a parametric `defdata` sum type and walk it
+  with exhaustive `match`.
+- Recover the shapes of the classic combinators -- `pfail`, alternation,
+  sequencing, `many` -- by hand-inlining them into a recursive-descent
+  grammar. Higher-order versions land cleanly once a couple of
+  compiler gaps close; see the closing section.
+- Parse `"1+2*(3+4)"` into a **typed GADT AST** and evaluate it via
+  `match`, so the whole thing round-trips to `15`.
 
-The tutorial is implementation-focused. A separate guide will cover *using*
-the production `stdlib/parsec` module without rebuilding it.
+The focus is pedagogy, not micro-optimisation. Every line is idiomatic
+Turmeric with `defdata`, `defgadt`, `match`, and no inline C.
 
 The runnable end-to-end version of every snippet here lives in
 [`tests/fixtures/parsec-tutorial/input.tur`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/parsec-tutorial/input.tur).
@@ -28,539 +28,188 @@ The runnable end-to-end version of every snippet here lives in
 
 ## Why combinators?
 
-A parser is a function that takes input and produces zero or more parses.
-"Zero" is failure, "one" is the usual happy path, and "more than one" is the
-heart of nondeterminism: when a grammar has alternatives, a parse can
-succeed in several ways simultaneously, and *each* way carries the leftover
-input it would resume from.
+A parser is a function that takes input and either succeeds -- consuming
+some prefix and returning a value plus the leftover input -- or fails.
 
-Hand-written recursive-descent parsers mutate a shared cursor, which makes
-them awkward to compose: you cannot try a branch, fail, and back up without
-explicitly saving and restoring state. Combinators replace that ceremony
-with values. Each combinator is a small function from parser(s) to a new
-parser, and the whole library is a few pages of code.
+Hand-written recursive-descent parsers mutate a shared cursor, so trying
+one branch, failing, and backing up requires bookkeeping. Parser
+combinators replace that ceremony with values: each combinator is a
+function from parser(s) to a new parser. The result is that the parser
+reads like the grammar.
 
-By the end of this tutorial, the arithmetic parser reads almost like the
-grammar it implements:
-
-```turmeric
-;; expr   := term (('+' | '-') term)*
-;; term   := factor (('*' | '/') factor)*
-;; factor := number | '(' expr ')'
-;; number := digit+
-
-(defn factor [] : ptr<void>
-  (or-parser
-    (between (pchar 40) (pchar 41) (expr-ref))
-    (number)))
-```
-
-```sweet-exp
-#lang sweet-exp
-
-defn factor [] :ptr<void>
-  or-parser
-    between pchar(40) pchar(41) expr-ref()
-    number()
-```
-
-That target is forty lines of grammar away.
+Turmeric's ADTs and GADTs let us build the same story with the
+type-checker on our side. A `PRes A` value can only mean "failure" or
+"success carrying an A"; a valid `Expr` node can only be one of the
+constructors we declared; `match` refuses to compile if we forget a
+case. Every combinator gets stronger static guarantees than the
+equivalent Haskell tutorial would have handed us.
 
 ---
 
-## The `Input` type
+## Modelling the input
 
-The first abstraction is an explicit cursor over the source string. We avoid
-slicing -- that would allocate a new C string at every step. Instead, an
-`Input` is a `(string, position)` pair, and `input-advance` returns a fresh
-struct with `position + 1`.
+For a **byte-oriented** parser we want to walk the source one character
+at a time. The natural Turmeric type would be a `:cstr` plus a
+`(cstr-nth s i)` primitive, but that primitive isn't autoloaded yet
+(see
+[docs/reported/no-cstr-byte-primitives-pure-turmeric.md](../reported/no-cstr-byte-primitives-pure-turmeric.md)).
+
+So in this tutorial the input is a **list of ASCII codes** -- a plain
+`(cons int (cons int ...))` built with `stdlib/list`'s `list-head` and
+`list-tail`. The string `"1+2*(3+4)"` becomes:
 
 ```turmeric
-(defn input-new [s : cstr pos] : int
-  ```c
-  struct { int64_t str; int64_t pos; } *inp = malloc(sizeof(*inp));
-  inp->str = (int64_t)(intptr_t)s; inp->pos = pos;
-  return (int64_t)(intptr_t)inp;
-  ```)
-
-(defn input-at-end [inp] : bool
-  ```c
-  struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
-  return ((const char*)(intptr_t)i->str)[i->pos] == '\0';
-  ```)
-
-(defn input-current-char [inp] : int
-  ```c
-  struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
-  return (int64_t)(unsigned char)((const char*)(intptr_t)i->str)[i->pos];
-  ```)
-
-(defn input-advance [inp] : int
-  ```c
-  struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
-  struct { int64_t str; int64_t pos; } *n = malloc(sizeof(*n));
-  n->str = i->str; n->pos = i->pos + 1;
-  return (int64_t)(intptr_t)n;
-  ```)
+(list 49 43 50 42 40 51 43 52 41)
+;;    '1' '+' '2' '*' '(' '3' '+' '4' ')'
 ```
 
-Every operation on `Input` is O(1) and (apart from `input-advance`) does no
-allocation. Storing the string as `int64_t` rather than `:cstr` makes it
-trivial to capture inside fat closures.
+Two helpers make the rest of the code read cleanly. End-of-input is a
+`0` list carrier (nil):
+
+```turmeric
+(defn at-end? [xs : int] : bool (= xs 0))
+
+(defn is-digit? [c : int] : bool
+  (if (< c 48) false (if (> c 57) false true)))
+```
+
+`list-head xs` returns the current byte and `list-tail xs` advances the
+cursor.
 
 ---
 
-## The shape of `Parser<a>`
+## The result type
 
-A parser of values of type `a` takes an `Input` and returns a *list* of
-`(value, leftover-input)` pairs:
-
-```
-Parser<a> = Input -> List<(a, Input)>
-```
-
-Why a list? Because alternation is built in: if a grammar can match two
-ways, we keep both successes side-by-side rather than picking one and
-losing the option to back up. Failure is just the empty list. Determinism
-is "the list happens to have one element".
-
-We reuse the *backtracking monad* (see
-[backtracking-guide.md](backtracking-guide.md)) for the result list. Its
-three constants are:
-
-- `mzero` -- the empty result list (parse failure).
-- `mreturn x` -- the singleton result list (one success).
-- `mplus xs ys` -- concatenate two result lists (combine alternatives).
-
-A parser is represented as a fat closure that takes one `int64_t` argument
-(the `Input` pointer) and returns one `int64_t` (the head of a `Cell` list
-of `(value, Input)` pairs).
-
-Each result `Cell` looks like this in C:
-
-```c
-struct Cell { int64_t value; int64_t next; };
-struct Pair { int64_t first; int64_t second; };
-```
-
-The cells form the backtracking list; each cell's `value` is a `Pair`
-holding the parsed value and the leftover `Input`.
-
-We need one helper to actually *call* a parser:
+A parse either fails or succeeds and returns leftover input. That's a
+two-armed sum, parameterised over the success payload:
 
 ```turmeric
-(defn apply-parser [p inp] : int
-  ```c
-  int64_t *fat = (int64_t*)(intptr_t)p;
-  return TUR_APPLY1(fat, inp);
-  ```)
+(defdata PRes [a]
+  (PFail)
+  (POK a :int))
 ```
 
-```sweet-exp
-defn apply-parser [p inp] :int
-  ```c
-  int64_t *fat = (int64_t*)(intptr_t)p;
-  return TUR_APPLY1(fat, inp);
-  ```
+- `(PFail)` -- no parse.
+- `(POK v rest)` -- parsed `v`, leftover input list is `rest` (again a
+  `:int` list carrier -- `0` for end-of-input).
+
+> **Syntax note.** The field type on `(POK a :int)` must be
+> keyword-prefixed. Writing `(POK a int)` errors out with
+> "defdata: constructor field type must be a keyword like `:int`".
+> `defgadt` (below) accepts both spellings. Tracked in
+> [docs/reported/defdata-parametric-inference-and-elab-match-segv.md](../reported/defdata-parametric-inference-and-elab-match-segv.md).
+
+Every parser in the tutorial has the shape
+
+```
+Parser<A> = (fn [xs : int] : (PRes A))
 ```
 
-Everything else in the tutorial is built on top of `apply-parser` and the
-three monad operations.
+where `xs` is the current input list.
 
 ---
 
-## Three primitive parsers
+## The combinators, hand-inlined
 
-### `pfail` -- always fail
+The classic library exposes `pure`, `pfail`, `<|>` (alternation),
+`>>=` (sequencing), and `many`. In this tutorial we don't write them as
+higher-order functions -- see the closing section for why -- but every
+one shows up as a *pattern* inside the grammar. Once you see the
+patterns you can lift them into standalone combinators the moment the
+reported gaps close.
 
-The simplest parser ignores its input and returns no results.
-
-```turmeric
-(defn pfail-impl [inp] : int (mzero))
-
-(defn pfail [] ^fat :ptr<void>
-  (fn [inp] (pfail-impl inp)))
-```
-
-```sweet-exp
-defn pfail-impl [inp] :int
-  mzero()
-
-defn pfail [] ^fat :ptr<void>
-  fn [inp]
-    pfail-impl(inp)
-```
-
-The `^fat` marker on the return type is not cosmetic: the inner `fn` captures
-nothing, so the compiler would otherwise emit it as a bare C function pointer,
-which is *not* callable through `apply-fat`. `^fat` makes the compiler box the
-bare pointer into a fat closure at the tail, so consumers can fat-call it. We
-will see this marker repeatedly. (Comparing to `stdlib/parsec` explains why.)
-
-### `item` -- consume one character
-
-If the input is at end, fail. Otherwise return the current character paired
-with the advanced input.
+### `pfail` -- "no parse here"
 
 ```turmeric
-(defn item-impl [inp] : int
-  (if (input-at-end inp)
-    (mzero)
-    (mreturn (pair-new (input-current-char inp) (input-advance inp)))))
-
-(defn item [] ^fat :ptr<void>
-  (fn [inp] (item-impl inp)))
+(:: (PFail) (PRes Expr))
 ```
 
-```sweet-exp
-defn item-impl [inp] :int
-  if input-at-end(inp)
-    mzero()
-    mreturn $ pair-new input-current-char(inp) input-advance(inp)
+That's it. The `(:: e T)` ascription is required because bare
+`(PFail)` can't infer its parameter `a` in every context (see the
+tracked bug).
 
-defn item [] ^fat :ptr<void>
-  fn [inp]
-    item-impl(inp)
-```
+### Sequencing (the `>>=` pattern)
 
-### `satisfy` -- one character matching a predicate
-
-`satisfy` is `item` filtered by a predicate. The predicate is a fat closure
-of type `int -> int` (we use `0` for false, `1` for true).
+"Parse a `p`, then use its value to build the next parser" reads as a
+`match` on the previous parser's result:
 
 ```turmeric
-(defn apply-fat [f arg] : int
-  ```c
-  int64_t *fat = (int64_t*)(intptr_t)f;
-  return TUR_APPLY1(fat, arg);
-  ```)
-
-(defn satisfy-impl [_pred inp] : int
-  (if (input-at-end inp)
-    (mzero)
-    (let [c (input-current-char inp)]
-      (if (= (apply-fat _pred c) 0)
-        (mzero)
-        (mreturn (pair-new c (input-advance inp)))))))
-
-(defn satisfy [pred] : ptr<void>
-  (let [_pred pred] (fn [inp] (satisfy-impl _pred inp))))
+(match (number xs)
+  (PFail)             (:: (PFail) (PRes Expr))
+  (POK n rest)        (POK (ENum n) rest))
 ```
 
-```sweet-exp
-defn apply-fat [f arg] :int
-  ```c
-  int64_t *fat = (int64_t*)(intptr_t)f;
-  return TUR_APPLY1(fat, arg);
-  ```
+The `(POK n rest)` arm gets both the value and the leftover input,
+which is exactly what `>>=` would have handed us. The failure branch
+short-circuits.
 
-defn satisfy-impl [_pred inp] :int
-  if input-at-end(inp)
-    mzero()
-    let [c input-current-char(inp)]
-      if {apply-fat(_pred c) = 0}
-        mzero()
-        mreturn $ pair-new c input-advance(inp)
+### Alternation (the `<|>` pattern)
 
-defn satisfy [pred] :ptr<void>
-  let [_pred pred]
-    fn [inp]
-      satisfy-impl(_pred inp)
-```
-
-From `satisfy` we can derive specific parsers without writing any more
-closure plumbing. `pchar` recognises a single literal character; `digit`
-recognises any ASCII digit:
+"Try `p`; if it fails, try `q`" is a conditional on the first byte
+followed by a `match` on the result:
 
 ```turmeric
-(defn pchar-impl [_c inp] : int
-  (if (input-at-end inp)
-    (mzero)
-    (if (= (input-current-char inp) _c)
-      (mreturn (pair-new _c (input-advance inp)))
-      (mzero))))
-
-(defn pchar [c] : ptr<void>
-  (let [_c c] (fn [inp] (pchar-impl _c inp))))
-
-(defn is-digit [c] : int
-  ```c return (c >= '0' && c <= '9') ? 1 : 0; ```)
-
-(defn digit-pred [] : ptr<void>
-  (let [dummy 0] (fn [c] (let [_ dummy] (is-digit c)))))
-
-(defn digit [] : ptr<void>
-  (satisfy (digit-pred)))
+(if (= c 40)                       ;; '(' -> try parenthesised expr
+  (match (expr-parse (list-tail xs))
+    (PFail)             (:: (PFail) (PRes Expr))
+    (POK inner rest)    ...)
+  (match (number xs)                ;; else -> fall through to number
+    ...))
 ```
 
-`pchar` could just as well be written as `(satisfy (eq c))`; we keep an
-explicit `pchar-impl` because `pchar` is the most common primitive and it
-avoids one closure allocation per character.
+### Repetition (`many`)
+
+Greedy zero-or-more is a tail-recursive loop that accumulates matches
+and stops when a match fails. `digits->int` inlines both the loop and
+the "fold into an int" step:
+
+```turmeric
+(defn digits->int-loop [xs : int acc : int] : (PRes int)
+  (if (at-end? xs)
+    (POK acc xs)
+    (let [c (list-head xs)]
+      (if (is-digit? c)
+        (digits->int-loop (list-tail xs) (+ (* acc 10) (- c 48)))
+        (POK acc xs)))))
+```
+
+The recursion is self-tail-call, so the compiler turns it into
+iteration -- no stack growth, no O(n) intermediate allocations.
 
 ---
 
-## The two core combinators
+## The AST as a GADT
 
-Two combinators take us from primitives to a real library. They are exactly
-the list monad's `mplus` and `mbind`, specialised to parser closures.
-
-### Alternative -- `or-parser` (`<|>`)
-
-"Try `p`; if it fails, try `q`" is just *both* parsers run on the same
-input, with their result lists concatenated. Backtracking is free:
-unsuccessful alternatives become empty lists that `mplus` swallows.
+Every constructor pins the `[a]` parameter to `int`. In a richer
+calculator you could add `(EEq (Expr int) (Expr int) : (Expr bool))`
+and the type checker would then refuse `EAdd (EEq ...) (ENum 1)` at
+compile time. That's the GADT payoff -- illegal ASTs stop being
+representable.
 
 ```turmeric
-(defn or-parser-impl [lp lq inp] : int
-  (mplus (apply-parser lp inp) (apply-parser lq inp)))
+(defgadt Expr [a]
+  (ENum int                     : (Expr int))
+  (EAdd (Expr int) (Expr int)   : (Expr int))
+  (ESub (Expr int) (Expr int)   : (Expr int))
+  (EMul (Expr int) (Expr int)   : (Expr int))
+  (EDiv (Expr int) (Expr int)   : (Expr int)))
 
-(defn or-parser [p q] : ptr<void>
-  (let [lp p
-        lq q]
-    (fn [inp] (or-parser-impl lp lq inp))))
+(defn apply-op [op : int lhs : Expr rhs : Expr] : Expr
+  (if (= op 43) (EAdd lhs rhs)
+    (if (= op 45) (ESub lhs rhs)
+      (if (= op 42) (EMul lhs rhs)
+        (if (= op 47) (EDiv lhs rhs)
+          (ENum 0))))))
 ```
 
-```sweet-exp
-defn or-parser-impl [lp lq inp] :int
-  mplus apply-parser(lp inp) apply-parser(lq inp)
-
-defn or-parser [p q] :ptr<void>
-  let [lp p
-       lq q]
-    fn [inp]
-      or-parser-impl(lp lq inp)
-```
-
-### Sequencing -- `bind-parser` (`>>=`)
-
-"Run `p`; for each success `(value, leftover)`, pass `value` into `f`, run
-the parser `f` returns on `leftover`." Concretely it is `mbind` on result
-lists, except the per-result computation has to *call* the parser that `f`
-returns instead of just returning a list.
-
-```turmeric
-(defn bind-parser-inner [lf pair] : int
-  (let [lf2 lf]
-    (apply-parser (apply-fat lf2 (pair-first pair)) (pair-second pair))))
-
-(defn bind-parser-impl [lp lf inp] : int
-  (let [lf2 lf]
-    (mbind (apply-parser lp inp)
-      (fn [pair] (let [_ lf2] (bind-parser-inner lf2 pair))))))
-
-(defn bind-parser [p ^fat f] : ptr<void>
-  (let [lp p
-        lf f]
-    (fn [inp] (bind-parser-impl lp lf inp))))
-```
-
-```sweet-exp
-defn bind-parser-inner [lf pair] :int
-  let [lf2 lf]
-    apply-parser apply-fat(lf2 pair-first(pair)) pair-second(pair)
-
-defn bind-parser-impl [lp lf inp] :int
-  let [lf2 lf]
-    mbind apply-parser(lp inp)
-      fn [pair]
-        let [_ lf2]
-          bind-parser-inner(lf2 pair)
-
-defn bind-parser [p ^fat f] :ptr<void>
-  let [lp p
-       lf f]
-    fn [inp]
-      bind-parser-impl(lp lf inp)
-```
-
-The `^fat` marker on `f` tells the compiler that `bind-parser` calls its
-continuation through the fat-closure ABI (`apply-fat`). When a caller passes
-a captureless `(fn ...)`, the compiler boxes it into a one-cell fat closure
-at the call site, so the continuation dispatches correctly with no manual
-workaround. (Comparing to `stdlib/parsec` explains the underlying ABI.)
-
-`or-parser` and `bind-parser` are everything. Every other combinator is a
-short, mechanical definition on top of them, and `mzero`/`mreturn` give us
-the unit and zero of the parser monoid.
+`apply-op` dispatches on the ASCII operator code. It falls through to
+`(ENum 0)` on an unknown byte, which never happens if the grammar is
+correct -- and if it does, `eval-expr` will still produce a defined
+value.
 
 ---
 
-## Derived combinators
-
-### `then-parser` (`>>`) -- discard the first result
-
-Useful for delimiters where the punctuation is consumed but not kept.
-
-```turmeric
-(defn then-parser-impl [lp lq inp] : int
-  (let [lq2 lq]
-    (mbind (apply-parser lp inp)
-      (fn [pair] (let [_ lq2] (apply-parser lq2 (pair-second pair)))))))
-
-(defn then-parser [p q] : ptr<void>
-  (let [lp p
-        lq q]
-    (fn [inp] (then-parser-impl lp lq inp))))
-```
-
-```sweet-exp
-defn then-parser-impl [lp lq inp] :int
-  let [lq2 lq]
-    mbind apply-parser(lp inp)
-      fn [pair]
-        let [_ lq2]
-          apply-parser(lq2 pair-second(pair))
-
-defn then-parser [p q] :ptr<void>
-  let [lp p
-       lq q]
-    fn [inp]
-      then-parser-impl(lp lq inp)
-```
-
-### `pure` -- succeed with a fixed value, consuming nothing
-
-```turmeric
-(defn pure-impl [_v inp] : int (mreturn (pair-new _v inp)))
-
-(defn pure [v] : ptr<void>
-  (let [_v v] (fn [inp] (pure-impl _v inp))))
-```
-
-```sweet-exp
-defn pure-impl [_v inp] :int
-  mreturn $ pair-new _v inp
-
-defn pure [v] :ptr<void>
-  let [_v v]
-    fn [inp]
-      pure-impl(_v inp)
-```
-
-### `many` -- greedy zero-or-more
-
-`many` is the only combinator where we drop down into inline-C, because
-naive recursion through `bind-parser` allocates a fresh result list per
-iteration and we want one tight loop. Conceptually it runs `p` until it
-fails, collecting matches into a `Cell` list and returning the final
-leftover input.
-
-```turmeric
-(defn many-c-impl [p_raw inp] : int
-  ```c
-  typedef struct { int64_t value; int64_t next; } Cell;
-  typedef struct { int64_t first; int64_t second; } Pair;
-  typedef struct { int64_t str; int64_t pos; } Input;
-  int64_t *fat_p = (int64_t*)(intptr_t)p_raw;
-  int64_t current_inp = inp;
-  Cell *rev_list = NULL;
-  for (;;) {
-      int64_t matches = TUR_APPLY1(fat_p, current_inp);
-      if (!matches) break;
-      Cell *match_cell = (Cell*)(intptr_t)matches;
-      Pair *pr = (Pair*)(intptr_t)match_cell->value;
-      Input *old_i = (Input*)(intptr_t)current_inp;
-      Input *new_i = (Input*)(intptr_t)pr->second;
-      if (new_i->pos <= old_i->pos) break;
-      Cell *nc = malloc(sizeof(Cell));
-      nc->value = pr->first; nc->next = (int64_t)(intptr_t)rev_list; rev_list = nc;
-      current_inp = pr->second;
-  }
-  /* reverse and wrap as a singleton parse result */
-  Cell *fwd = NULL;
-  while (rev_list) {
-      Cell *tmp = (Cell*)(intptr_t)rev_list->next;
-      rev_list->next = (int64_t)(intptr_t)fwd; fwd = rev_list; rev_list = tmp;
-  }
-  Pair *result_pair = malloc(sizeof(Pair));
-  result_pair->first = (int64_t)(intptr_t)fwd; result_pair->second = current_inp;
-  Cell *result_cell = malloc(sizeof(Cell));
-  result_cell->value = (int64_t)(intptr_t)result_pair; result_cell->next = 0;
-  return (int64_t)(intptr_t)result_cell;
-  ```)
-
-(defn many [p] : ptr<void>
-  (let [_p p] (fn [inp] (many-c-impl _p inp))))
-```
-
-### `many1`, `optional`, `between`
-
-The remaining combinators are pure derivations:
-
-```turmeric
-(defn many1-impl [_p inp] : int
-  (if (input-at-end inp)
-    (mzero)
-    (let [first-results (apply-parser _p inp)]
-      (if (= first-results 0) (mzero) (many-c-impl _p inp)))))
-
-(defn many1 [p] : ptr<void>
-  (let [_p p] (fn [inp] (many1-impl _p inp))))
-
-(defn optional-impl [_p inp] : int
-  (mplus (apply-parser _p inp) (mreturn (pair-new 0 inp))))
-
-(defn optional [p] : ptr<void>
-  (let [_p p] (fn [inp] (optional-impl _p inp))))
-
-(defn between [open close p] : ptr<void>
-  (let [_open  open
-        _close close
-        _p     p]
-    (then-parser _open
-      (bind-parser _p
-        (fn [x]
-          (let [_ _close]
-            (then-parser _close (pure x))))))))
-```
-
-```sweet-exp
-defn many1-impl [_p inp] :int
-  if input-at-end(inp)
-    mzero()
-    let [first-results apply-parser(_p inp)]
-      if {first-results = 0}
-        mzero()
-        many-c-impl(_p inp)
-
-defn many1 [p] :ptr<void>
-  let [_p p]
-    fn [inp]
-      many1-impl(_p inp)
-
-defn optional-impl [_p inp] :int
-  mplus(apply-parser(_p inp) mreturn(pair-new(0 inp)))
-
-defn optional [p] :ptr<void>
-  let [_p p]
-    fn [inp]
-      optional-impl(_p inp)
-
-defn between [open close p] :ptr<void>
-  let [_open  open
-       _close close
-       _p     p]
-    then-parser _open
-      bind-parser _p
-        fn [x]
-          let [_ _close]
-            then-parser _close pure(x)
-```
-
-`between` is the first combinator that actually uses `bind-parser` to build
-something interesting. Its inner lambda captures `_close` from the outer
-scope -- which, as the next subsection shows, is required, not optional.
-
-`sepBy1` and `choice` follow the same pattern. `sepBy1 p sep` reads a `p`,
-then `many (sep >> p)`, and conses them into a list; `choice` folds
-`or-parser` over a list of alternatives. The fixture ships them and they
-are short, mechanical exercises -- try writing them out before peeking.
-
----
-
-## Worked example: arithmetic
-
-We will parse the grammar
+## The grammar
 
 ```
 expr   := term (('+' | '-') term)*
@@ -569,196 +218,220 @@ factor := number | '(' expr ')'
 number := digit+
 ```
 
-into a tiny AST:
-
-```turmeric
-;; Expr variants:
-;;   ENum int       -- tag = 0
-;;   EBin op l r    -- tag = 1, op is ASCII '+', '-', '*', '/'
-
-(defn mk-enum [n] : int
-  ```c
-  struct { int64_t tag; int64_t a; int64_t b; int64_t c; } *e = malloc(sizeof(*e));
-  e->tag = 0; e->a = n; e->b = 0; e->c = 0;
-  return (int64_t)(intptr_t)e;
-  ```)
-
-(defn mk-ebin [op l r] : int
-  ```c
-  struct { int64_t tag; int64_t a; int64_t b; int64_t c; } *e = malloc(sizeof(*e));
-  e->tag = 1; e->a = op; e->b = l; e->c = r;
-  return (int64_t)(intptr_t)e;
-  ```)
-```
+The two-level `expr` / `term` split is what buys precedence: `*` and
+`/` are one level deeper than `+` and `-`, so they bind tighter.
 
 ### `number`
 
-`many1 digit` returns a list of ASCII digits. We fold it into an integer
-and wrap it as `ENum`.
+`many1 digit` semantics: require at least one digit, then greedily
+accumulate.
 
 ```turmeric
-(defn number [] : ptr<void>
-  (bind-parser (many1 (digit))
-    (fn [digs]
-      (pure (mk-enum (digits->int digs))))))
+(defn number [xs : int] : (PRes int)
+  (if (at-end? xs)
+    (:: (PFail) (PRes int))
+    (let [c (list-head xs)]
+      (if (is-digit? c)
+        (digits->int-loop (list-tail xs) (- c 48))
+        (:: (PFail) (PRes int))))))
 ```
 
-```sweet-exp
-defn number [] :ptr<void>
-  bind-parser many1(digit())
-    fn [digs]
-      pure $ mk-enum digits->int(digs)
-```
+### `factor` -- alternation
 
-The continuation `(fn [digs] ...)` captures nothing, but we no longer need a
-dead capture to coerce it into a fat closure: `bind-parser` declares its
-continuation `^fat` (The two core combinators), so the compiler boxes this captureless
-lambda at the call site automatically. See Comparing to `stdlib/parsec`.
-
-### `factor`, `term`, `expr`
-
-`expr` and `factor` are mutually recursive, so we go through a *thunk* --
-a closure that, when invoked, calls `(expr)` and runs the result.
+The alternation `number | '(' expr ')'` is a conditional on the first
+byte. Recovery on `')'` mismatch produces a hard `PFail` -- packing
+what a real library would spell as `between (pchar 40) (pchar 41) expr`:
 
 ```turmeric
-(defn expr-thunk-impl [inp] : int
-  (apply-parser (expr) inp))
-
-(defn expr-ref [] ^fat :ptr<void>
-  (fn [inp] (expr-thunk-impl inp)))
-
-(defn factor [] : ptr<void>
-  (or-parser
-    (between (pchar 40) (pchar 41) (expr-ref))
-    (number)))
+(defn factor [xs : int] : (PRes Expr)
+  (if (at-end? xs)
+    (:: (PFail) (PRes Expr))
+    (let [c (list-head xs)]
+      (if (= c 40)
+        (match (expr-parse (list-tail xs))
+          (PFail)          (:: (PFail) (PRes Expr))
+          (POK inner rest)
+          (if (at-end? rest)
+            (:: (PFail) (PRes Expr))
+            (if (= (list-head rest) 41)
+              (:: (POK inner (list-tail rest)) (PRes Expr))
+              (:: (PFail) (PRes Expr)))))
+        (match (number xs)
+          (PFail)          (:: (PFail) (PRes Expr))
+          (POK n rest)     (POK (ENum n) rest))))))
 ```
 
-For `term` and `expr` we build the standard left-associative chain. Each
-"tail" is a `(operator, operand)` pair; we collect all tails with `many`
-and then `fold-bin-tail` walks them left-to-right, growing an `EBin` AST.
+### Left-associative chains (`term` and `expr`)
+
+`term := factor (('*'|'/') factor)*` is a `factor` followed by an
+inlined `many` over `(op, factor)` pairs, folded left-to-right:
 
 ```turmeric
-(defn term-tail-pair [] : ptr<void>
-  (bind-parser (term-op)
-    (fn [op]
-      (bind-parser (factor)
-        (fn [rhs] (pure (pair-new op rhs)))))))
+(defn term-tail [xs : int lhs : Expr] : (PRes Expr)
+  (if (at-end? xs)
+    (POK lhs xs)
+    (let [c (list-head xs)]
+      (if (if (= c 42) true (= c 47))
+        (match (factor (list-tail xs))
+          (PFail)          (:: (PFail) (PRes Expr))
+          (POK rhs rest)   (term-tail rest (apply-op c lhs rhs)))
+        (POK lhs xs)))))
 
-(defn term [] : ptr<void>
-  (bind-parser (factor)
-    (fn [lhs]
-      (bind-parser (many (term-tail-pair))
-        (fn [tails] (pure (fold-bin-tail lhs tails)))))))
+(defn term [xs : int] : (PRes Expr)
+  (match (factor xs)
+    (PFail)              (:: (PFail) (PRes Expr))
+    (POK lhs rest)       (term-tail rest lhs)))
 ```
 
-`expr` is the same shape with `expr-op` and `term` instead of `term-op`
-and `factor`. The continuations capture `op`/`lhs` (or nothing at all);
-either way `bind-parser`'s `^fat` continuation parameter boxes them
-correctly, and inner lambdas can reference an enclosing `fn`'s parameter
-directly without rebinding it to a local first.
-
-### Evaluation
-
-The AST evaluator is a five-line recursive walk:
+`term-tail` is where left-associativity comes from: we apply the op
+*before* recursing, so `2*3*4` folds into `EMul (EMul 2 3) 4`, not
+`EMul 2 (EMul 3 4)`. `expr` and `expr-tail` are the same shape with
+`+`/`-` and `term` swapped in.
 
 ```turmeric
-(defn eval-expr [e] : int
-  (if (= (expr-tag e) 0)
-    (expr-a e)
-    (let [op (expr-a e)
-          lv (eval-expr (expr-b e))
-          rv (eval-expr (expr-c e))]
-      (if (= op 43) (+ lv rv)
-        (if (= op 45) (- lv rv)
-          (if (= op 42) (* lv rv)
-            (if (= op 47) (/ lv rv) 0)))))))
+(defn expr-tail [xs : int lhs : Expr] : (PRes Expr)
+  (if (at-end? xs)
+    (POK lhs xs)
+    (let [c (list-head xs)]
+      (if (if (= c 43) true (= c 45))
+        (match (term (list-tail xs))
+          (PFail)          (:: (PFail) (PRes Expr))
+          (POK rhs rest)   (expr-tail rest (apply-op c lhs rhs)))
+        (POK lhs xs)))))
+
+(defn expr-parse [xs : int] : (PRes Expr)
+  (match (term xs)
+    (PFail)              (:: (PFail) (PRes Expr))
+    (POK lhs rest)       (expr-tail rest lhs)))
+```
+
+`factor` calls `expr-parse` (mutual recursion): the grammar closes on
+itself through the parenthesised alternative.
+
+---
+
+## Evaluation
+
+Evaluation is a five-line walk of the GADT. No tag comparisons, no
+default arm, no fall-through -- `match` proves every constructor is
+handled:
+
+```turmeric
+(defn eval-expr [e : Expr] : int
+  (match e
+    (ENum n)   n
+    (EAdd l r) (+ (eval-expr l) (eval-expr r))
+    (ESub l r) (- (eval-expr l) (eval-expr r))
+    (EMul l r) (* (eval-expr l) (eval-expr r))
+    (EDiv l r) (/ (eval-expr l) (eval-expr r))))
 ```
 
 ### The round-trip
 
 ```turmeric
-(defn main []
-  (let [results (run-parser-full (expr) "1+2*(3+4)")
-        ast     (first-value results)
-        answer  (eval-expr ast)]
-    (println answer)))  ; => 15
+(defn main [] : int
+  (let [input (list 49 43 50 42 40 51 43 52 41)]   ;; "1+2*(3+4)"
+    (match (expr-parse input)
+      (PFail)          (do (println 0) 1)
+      (POK ast rest)   (do (println (eval-expr ast)) 0))))
 ```
 
-```sweet-exp
-defn main []
-  let [results run-parser-full(expr() "1+2*(3+4)")
-       ast     first-value(results)
-       answer  eval-expr(ast)]
-    println(answer)  ; => 15
-```
-
-Running the fixture prints `15`. The same parsers would happily produce an
-AST for arbitrary expressions; swapping `eval-expr` for a pretty-printer
-would give a normaliser without touching the parser code.
+Running the fixture prints `15`. Swap `eval-expr` for a pretty-printer
+and you have a normaliser without touching the parser code -- that's
+the separation of syntax and semantics the ADT/GADT split buys you.
 
 ---
 
-## Comparing to `stdlib/parsec`
+## Where the types earned their keep
 
-The tutorial code and [`stdlib/parsec.tur`](../../stdlib/parsec.tur) share a
-common shape, but the production library is tighter in three ways.
+Looking back at what the type system gave us:
 
-**Inline-C in `mbind`.** `stdlib/parsec` implements `mbind` directly in
-inline C, walking the result list once and stitching new cells in place.
-Our tutorial calls `mbind` through `bind-parser-inner`, which adds two
-function calls per result. For a JSON-sized parse this matters; for a
-forty-character arithmetic expression it does not.
+- **`match` on `PRes`** is exhaustiveness-checked. We physically cannot
+  forget the failure branch -- the compiler would refuse the definition.
+- **`(PRes Expr)`** carries the success payload's type. `number`
+  returns `(PRes int)`; `factor` returns `(PRes Expr)`. A cross-wire
+  is a type error, not a runtime crash.
+- **The `Expr` GADT** rules out impossible AST shapes. There is no
+  "unknown tag" case to guard against because there is no way to
+  construct one.
+- **`is-digit?`** returns `:bool`, not `:int`. The rule against `:int`
+  stand-ins (`CLAUDE.md`) is directly why.
 
-**Captureless-lambda ABI.** A `fn` body that captures no free variables is
-optimised to a bare C function pointer (`int64_t (*)(int64_t)`), which is
-*not* callable through `apply-fat` (which expects a fat closure laid out as
-`int64_t (*)(void*, int64_t)` in slot 0). Feed a bare pointer to `apply-fat`
-and it reads the first instruction byte as a thunk address and segfaults.
+None of these are aesthetic wins. Each rules out an entire class of
+bugs at compile time. That is the reason to reach for GADTs and ADTs
+even for a tutorial-sized parser.
 
-Under the unified closure representation (#276 and the typed-invocation
-work that followed), every closure value -- bare or fat -- is carried as a
-single `int64_t` handle; the remaining question is what the call site knows
-about the closure's signature. The compiler tracks the bare-vs-fat
-*production* in the type system and boxes a captureless lambda into a
-one-cell fat closure wherever a *fat-expecting sink* is annotated `^fat` --
-either a parameter (`[p ^fat f]`, as on `bind-parser`) or a constructor's
-return type (`^fat :ptr<void>`, as on `pfail`/`item`). Earlier versions of
-this tutorial (and `stdlib/parsec`) forced the fat ABI by hand with a dead
-`(let [sentinel 0] ...)` capture; that workaround is obsolete now that the
-sinks carry `^fat`. Inner lambdas may also reference an enclosing `fn`'s
-parameter directly -- the old "bind parameters to locals first" rule no
-longer applies. See
-[fat-closure-annotation-guide.md](fat-closure-annotation-guide.md) for the
-full annotation reference and
-[c-integration-guide.md Callbacks](c-integration-guide.md#callbacks-fat-parameters-are-int64_t-in-inline-c)
-for the inline-C carrier rule (`^fat` params are `int64_t` at the C level).
+---
 
-**Pointer-to-int casting.** Both the tutorial and the production library
-pass parser pointers around as `:int` (raw `int64_t`) and reinterpret them
-in inline C with `(int64_t*)(intptr_t)p`. This is the standard
-turmeric-side convention for handing closures across function boundaries;
-the `:ptr<void>` return type on the parser constructors is purely a hint
-to the type checker.
+## From direct-style to higher-order combinators
+
+The natural next step is to lift the patterns above into standalone
+combinators:
+
+```turmeric
+(defn or-parser [p : Parser<A> q : Parser<A>] : Parser<A>
+  (fn [xs] (match (p xs)
+             (POK v rest)  (POK v rest)
+             (PFail)       (q xs))))
+
+(defn bind-parser [p : Parser<A> f : (fn [A] Parser<B>)] : Parser<B>
+  (fn [xs] (match (p xs)
+             (PFail)       (PFail)
+             (POK v rest)  ((f v) rest))))
+```
+
+At the time of writing these don't compile as cleanly as they should
+because of two elaborator gaps tracked in
+[docs/reported/defdata-parametric-inference-and-elab-match-segv.md](../reported/defdata-parametric-inference-and-elab-match-segv.md):
+
+1. Parametric `defdata` return-type inference is weak, so every
+   bare `(PFail)` needs a `(:: (PFail) (PRes T))` ascription for the
+   surrounding match to type-check.
+2. Some unascribed nested matches on parametric datatypes SEGV in
+   `elab_match` instead of producing a diagnostic.
+
+Once those close, the arithmetic parser will collapse to something
+like
+
+```turmeric
+(defn factor [] : Parser<Expr>
+  (or-parser
+    (between (pchar 40) (pchar 41) (expr-ref))
+    (map-parser ENum (many1 (digit)))))
+```
+
+That is what the finished tutorial should look like. Everything above
+is the direct-style version we can compile *today*.
 
 ---
 
 ## Where to go next
 
-- **Exercise:** write a JSON parser. The hard cases (strings with escapes,
-  numbers with exponents) need only the combinators in this tutorial. The
-  `parsec-json-subset` fixture in `tests/fixtures/` is a starting point.
+- **Exercise:** write a JSON parser. Strings-with-escapes and
+  numbers-with-exponents are the hard cases and need only the patterns
+  here. See `tests/fixtures/parsec-json-subset/` for a starting
+  point.
 - **Production library:** [`stdlib/parsec.tur`](../../stdlib/parsec.tur)
-  has the inline-C-optimised versions of every combinator here plus a few
-  more (`pstring`, `parse-value`, `print-char-list`, ...).
-- **Advanced topics for a future guide:** error positions and recovery,
-  packrat memoisation, and left-recursion elimination. None of those
-  fit cleanly on top of the tutorial library; they are interesting in
-  their own right.
+  has performance-tuned versions of every combinator plus `pstring`,
+  `parse-value`, and friends -- built on top of inline-C for the tight
+  loops.
+- **Real strings:** once
+  [docs/reported/no-cstr-byte-primitives-pure-turmeric.md](../reported/no-cstr-byte-primitives-pure-turmeric.md)
+  closes, the input list of ASCII ints goes away and the parser takes
+  a `:cstr` directly.
+- **Error positions and recovery:** the current library returns "no
+  result" on failure. A production parser threads the furthest position
+  reached, so error messages can say *where* parsing died.
+- **Packrat memoisation:** caching `parser` x `input-pos` results
+  turns exponential grammars into linear ones. It fits neatly on top
+  of the interface here.
 
-## See Also
+## See also
 
-- [`stdlib/parsec.tur`](https://github.com/rjungemann/turmeric/tree/main/stdlib/parsec.tur) -- production parser-combinator library
-- [backtracking-guide.md](backtracking-guide.md) -- list monad / nondeterminism
-- [stm-tutorial.md](stm-tutorial.md) -- style template (sweet-exp pairing)
-- [c-integration-guide.md](c-integration-guide.md) -- inline-C, fat closures, `TUR_APPLY1`
-- [`tests/fixtures/parsec-tutorial/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/parsec-tutorial/) -- the runnable fixture for this tutorial
+- [gadts-guide.md](gadts-guide.md) -- `defgadt`, `match`, type refinement
+- [backtracking-guide.md](backtracking-guide.md) -- the list monad and
+  nondeterminism (the direction a full-fat combinator library would go)
+- [`stdlib/parsec.tur`](https://github.com/rjungemann/turmeric/tree/main/stdlib/parsec.tur)
+  -- the production parser-combinator library
+- [`tests/fixtures/parsec-tutorial/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/parsec-tutorial/)
+  -- the runnable fixture for this tutorial

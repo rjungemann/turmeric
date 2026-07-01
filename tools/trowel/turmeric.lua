@@ -896,7 +896,68 @@ keymap.add {
 }
 
 -- -------------------------------------------------------------------------
--- Auto-open the REPL on startup
+-- REPL Settings & Layout Persistence
+-- -------------------------------------------------------------------------
+
+local function find_repl_node()
+  local found
+  local function walk(node)
+    if not node then return end
+    if node.views then
+      for _, v in ipairs(node.views) do
+        if v:is(ReplView) then found = node; return end
+      end
+    end
+    if node.a then walk(node.a) end
+    if node.b then walk(node.b) end
+  end
+  walk(core.root_view.root_node)
+  return found
+end
+
+local function load_state()
+  local path = USERDIR .. "/turmeric_state.lua"
+  local f = io.open(path, "r")
+  if f then
+    f:close()
+    local ok, state = pcall(dofile, path)
+    if ok and type(state) == "table" then
+      return state.shown, state.divider
+    end
+  end
+  return nil, 0.5
+end
+
+local function save_state()
+  local view = find_repl_view()
+  local node = find_repl_node()
+  local shown = false
+  local divider = 0.5
+  if view and node then
+    shown = true
+    local parent = node:get_parent_node(core.root_view.root_node)
+    if parent then
+      divider = parent.divider or 0.5
+    end
+  end
+  
+  local path = USERDIR .. "/turmeric_state.lua"
+  local f = io.open(path, "w")
+  if f then
+    f:write(string.format("return { shown = %s, divider = %f }\n", tostring(shown), divider))
+    f:close()
+  end
+end
+
+-- Intercept core.quit to save state on shutdown
+local orig_quit = core.quit
+core.quit = function(force)
+  pcall(save_state)
+  return orig_quit(force)
+end
+
+-- -------------------------------------------------------------------------
+-- Auto-open / Restore REPL on startup
 -- -------------------------------------------------------------------------
 --
 -- DrRacket-style "definitions on top, interactions on the bottom" layout:
@@ -920,12 +981,33 @@ if config.plugins.turmeric.auto_open_repl then
     -- the REPL *after* the toolbar puts the toolbar outside the REPL stack,
     -- so the REPL divider only sees two unlocked leaves.
     coroutine.yield(0.3)
-    open_repl_view("down")
-    -- Re-focus the editor so the user can start typing in their file,
-    -- not in the REPL prompt.
-    local node = core.root_view.root_node
-    if node and node.a and node.a.active_view then
-      core.set_active_view(node.a.active_view)
+
+    -- Honor persisted state from a prior session when present: the user's
+    -- last shown/hidden choice and divider position win over the config
+    -- default. Fall back to the config value on first launch.
+    local shown, divider = load_state()
+    if shown == nil then
+      shown = config.plugins.turmeric.auto_open_repl
+    end
+
+    if shown then
+      open_repl_view("down")
+
+      -- Restore the exact split size/divider
+      local node = find_repl_node()
+      if node then
+        local parent = node:get_parent_node(core.root_view.root_node)
+        if parent then
+          parent.divider = divider or 0.5
+        end
+      end
+
+      -- Re-focus the editor so the user can start typing in their file,
+      -- not in the REPL prompt.
+      local root_node = core.root_view.root_node
+      if root_node and root_node.a and root_node.a.active_view then
+        core.set_active_view(root_node.a.active_view)
+      end
     end
   end)
 end
