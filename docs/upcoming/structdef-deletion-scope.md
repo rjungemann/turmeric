@@ -146,33 +146,32 @@ capability field is rejected TUR-E0009) locks the soundness in. Suite green
    silently. Add a negative fixture (a `.run` call in a context that forbids the
    effect must still error) to lock the soundness in.
 
-**DS-A3 -- handle the list-form built-in compound field types. REMAINING (the
-last producer).**  The sole remaining `StructDef` producer is a `defstruct`
-field written as an F_LIST built-in compound type -- `(lref int)`, `(& int)`,
-`(borrow-mut int)`, `(forall ...)`, `(handler ...)`, `(arrow ...)`, session/
-role/global/project forms -- as opposed to the leaf/keyword spellings
-(`lref<int>`, `fn`), which already lower. Only `(lref int)` occurs today (one
-negative fixture). Three ways to close it:
+**DS-A3 -- handle the list-form built-in compound field types. DONE
+(2026-06-30, option (b): lower them).**  The sole remaining `StructDef`
+producer was a `defstruct` field written as an F_LIST built-in compound type;
+only `(lref int)` occurred (one negative fixture). Chosen approach: **lower the
+borrow family onto the record-ADT path.**
+  - `struct_field_type_from_form` now routes `(lref T)`/`(borrow-mut T)` to the
+    real type elaborator (TY_LREF/TY_REF_MUT), as it already did for
+    fn/arrow/forall/exists; `(& T)` routes via the existing has_amp path.
+  - `defstruct_field_type_lowerable` drops lref/&/borrow-mut from the reject
+    list.
+  - the ADT `:copy` check reproduces the struct path's precise `TUR-E0102`
+    "cannot copy linear field" diagnostic, so the lowering is
+    diagnostic-transparent (the Bad fixture's `expected.diag` is unchanged).
 
-- **(a) Reject at the gate (recommended, simplest).**  Make a `defstruct`
-  field whose type is an F_LIST built-in compound form a hard error at
-  elaboration ("field type `(lref int)`: use the `lref<int>` form; compound
-  built-in type forms are not supported as struct fields"), emitted BEFORE the
-  residual `StructDef` path (so no `StructDef` is allocated). Update the Bad
-  fixture's `expected.diag` to the new message (it is already a negative test).
-  Cost: removes the ability to write these forms in *list* syntax in a field
-  (the keyword forms still work); no valid fixture/stdlib uses them.
-- **(b) Lower them onto the record-ADT path.**  Teach the ADT field parser to
-  represent each built-in compound `TypeKind` as a carrier field (as the struct
-  path does), so `(lref int)` lowers and the ADT's own `:copy`/linear checks
-  reproduce `TUR-E0102`. Preserves the capability; more work (per-form, and the
-  linear-field diagnostic must be reproduced on the ADT path).
-- **(c) Do not delete `StructDef`.**  Keep the residual path alive solely for
-  these forms. Rejected: it defeats slice 5's goal.
+  *Still gated on the struct path* (no record-ADT field representation yet, and
+  unused by any defstruct in the suite/stdlib): `forall`, `handler`/`arrow`,
+  session/role/global/project. DS-C/DS-D must host or reject these before the
+  final type removal; the DS-B assert (below) will fire if one is ever used.
 
-Once DS-A3 lands, ship the DS-B hard assert (written, verified to catch a
-regression) and confirm the suite is green with it live -- that is the
-zero-producer precondition for DS-C/DS-D.
+**DS-B -- prove zero producers. DONE (2026-06-30).**  `assert(0)` installed in
+`elab_register_struct_def` (single writer of `e->struct_defs[]`), with the
+registration kept for NDEBUG release safety. The full by-value suite is **green
+(1875/0) with the assert live** -- proving no `defstruct` produces a `StructDef`
+across every fixture. Combined with B4 (no def-less `TY_STRUCT`), **the
+`TY_STRUCT` kind is now uninstantiated**; DS-C/DS-D are unblocked and the assert
+ratchets against regressions while they land.
 
 > **Nearly there, but NOT zero yet -- DS-B found a third residual
 > (2026-06-30).**  After A1+A2, a *hard-assert* DS-B guard in
@@ -194,11 +193,9 @@ zero-producer precondition for DS-C/DS-D.
 > - It appears in exactly **one negative fixture** (testing the "cannot copy
 >   linear field" diagnostic, `TUR-E0102`).
 >
-> So one more prerequisite -- call it **DS-A3** -- stands between here and zero
-> producers: handle the list-form built-in compound field types. Options in
-> "Prerequisites" below. The DS-B hard assert is written and proven-useful (it
-> caught this), but is held out of tree until DS-A3 lands, or it would fail the
-> suite on Bad.
+> **Resolved (2026-06-30):** DS-A3 lowered the borrow family (option (b)) and
+> DS-B's hard assert is now in tree and green -- zero producers reached. See the
+> DS-A3 / DS-B entries below.
 
 ## Deletion slices (after DS-A)
 

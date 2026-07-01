@@ -134,13 +134,17 @@ fields, parametric, `:heap`, `:copy`/`:move`).
    > residual (2026-06-30):** one negative fixture, `(defstruct Bad :copy
    > [r (lref int)])`, a *list-form* built-in compound field type.  (The keyword
    > form `lref<int>` and all other struct fields lower; only the F_LIST
-   > `(lref int)` does not, and it is the sole `StructDef` producer left in the
-   > whole suite.)  So one more prerequisite -- **DS-A3** -- must handle the
-   > list-form built-in compound field types (reject at the gate, or lower them)
-   > before producers hit zero.  After that, `e->struct_defs[]` stays empty, no
-   > named `TY_STRUCT` is produced, and with B4 proving no def-less one is
-   > either, the whole `TY_STRUCT` kind is uninstantiated and every
-   > `as.struct_.def` reader is dead code.  The
+   > `(lref int)` did not.)  **DS-A3 (2026-06-30) lowered the borrow family**
+   > (`(lref T)`/`(& T)`/`(borrow-mut T)`) onto the record-ADT path,
+   > reproducing the `TUR-E0102` linear-field diagnostic so the change is
+   > diagnostic-transparent; **DS-B then installed `assert(0)` in
+   > `elab_register_struct_def`, and the suite is green (1875/0) with it live --
+   > proving ZERO `StructDef` producers.**  (A few exotic compound field forms
+   > -- forall/handler/arrow/session/role/global/project -- remain gated on the
+   > struct path but are unused anywhere; DS-C/DS-D host or reject them.)  So
+   > `e->struct_defs[]` stays empty, no named `TY_STRUCT` is produced, and with
+   > B4 proving no def-less one is either, the whole `TY_STRUCT` kind is
+   > uninstantiated and every `as.struct_.def` reader is dead code.  The
    > deletion is then a mechanical, incrementally-committable dead-code sweep
    > (DS-B..DS-D), NOT the all-or-nothing tyvar-representation +
    > typeclass-dispatch rewrite the estimate below feared (both retired by
