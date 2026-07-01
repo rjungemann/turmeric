@@ -1072,25 +1072,20 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
             t.hkt_kind = kind_for_arity(opaque_arity);
             Binding *b = binding_new(&e, type_name, t, false, true, name_f->span);
             scope_add(&e.global, b);
-        } else if (is_defstruct && defstruct_lowers_to_adt(&e, f)) {
-            /* CONV-S1 (defstruct-as-defadt): a qualifying defstruct lowers to a
+        } else if (is_defstruct) {
+            /* CONV-S1 (defstruct-as-defadt): a defstruct lowers to a
              * single-variant record defadt, so pre-register an ADT stub (not a
              * struct stub) -- the later elab_defstruct rewrite to elab_defdata
-             * fills this stub exactly as a real defdata would. */
+             * fills this stub exactly as a real defdata would.
+             * structdef-retirement DS-C: defstruct_lowers_to_adt is always true
+             * now (every field shape lowers or is rejected at the ADT field
+             * parser), so the former `else if (is_defstruct)` StructDef-stub
+             * branch was unreachable and is removed. */
             AdtDef *stub = (AdtDef *)arena_alloc(arena, sizeof(AdtDef));
             memset(stub, 0, sizeof(*stub));
             stub->name = type_name->name;
             elab_register_adt_def(&e, stub);
             Type t = type_adt(stub);
-            Binding *b = binding_new(&e, type_name, t, false, true, name_f->span);
-            scope_add(&e.global, b);
-        } else if (is_defstruct) {
-            StructDef *stub = (StructDef *)arena_alloc(arena, sizeof(StructDef));
-            memset(stub, 0, sizeof(*stub));
-            stub->name = type_name->name;
-            stub->origin_file_id = name_f->span.file_id;
-            elab_register_struct_def(&e, stub);
-            Type t = type_struct(stub);
             Binding *b = binding_new(&e, type_name, t, false, true, name_f->span);
             scope_add(&e.global, b);
         } else if (is_defgadt) {

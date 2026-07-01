@@ -213,16 +213,15 @@ Expr *elab_rc_of(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* rc<T> where T is the inner expression's type.  DS3: when wrapping a
-     * struct, carry the StructDef on the rc type so consumers
-     * (e.g. `(.field rc-of-struct)`, `(set! (.field rc-of-s) v)`) can
-     * resolve fields without losing the def. */
+    /* rc<T> where T is the inner expression's type.  CONV-S1 (slice 2): when
+     * wrapping a single-variant record ADT (every lowered `defstruct` is one),
+     * carry its AdtDef so `(.field rc-of-adt)` / `(set! (.field ..) v)` can
+     * auto-deref through the rc and resolve fields.
+     * structdef-retirement DS-C: the former `TY_STRUCT` arm (carrying a
+     * `StructDef` on the rc) is dead -- structs lower to record ADTs, so `inner`
+     * is never `TY_STRUCT`; a former struct wraps through the `TY_ADT` arm. */
     Type rc_type;
-    if (inner->type.kind == TY_STRUCT && inner->type.as.struct_.def) {
-        rc_type = type_rc_struct(inner->type.as.struct_.def);
-    } else if (inner->type.kind == TY_ADT && inner->type.as.adt_.def) {
-        /* CONV-S1 (slice 2): wrapping a single-variant record ADT carries its
-         * AdtDef so `(.field rc-of-adt)` can auto-deref through the rc. */
+    if (inner->type.kind == TY_ADT && inner->type.as.adt_.def) {
         rc_type = type_rc_adt(inner->type.as.adt_.def);
     } else {
         rc_type = type_rc(inner->type.kind);
