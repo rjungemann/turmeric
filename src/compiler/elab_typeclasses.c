@@ -2408,10 +2408,15 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                     fn_type->hkt_kind = (ca > 0)
                                         ? kind_for_arity(ca) : KIND_ARROW2;
                                 } else {
-                                    fn_type->kind = TY_STRUCT;
+                                    /* structdef-retirement slice 5 B2: an
+                                     * unresolved partial-app constructor head is
+                                     * a named TY_TYVAR (kind '* -> * -> *' in
+                                     * hkt_kind) rather than a def-less
+                                     * TY_STRUCT; the name is carried for dispatch
+                                     * / orphan-check identity. */
+                                    *fn_type = type_tyvar_named(ctor_sym2->name);
                                     fn_type->copy_kind = CK_MOVE;
                                     fn_type->hkt_kind = KIND_ARROW2;
-                                    fn_type->as.struct_.def = NULL;
                                 }
                                 /* inner = app(Ctor, a0);  outer = app(inner, a1).
                                  * Each application steps the kind one rung down the
@@ -2572,10 +2577,14 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                 ? kind_for_arity(ctor_arity)
                                 : KIND_ARROW2;
                         } else {
-                            fn_type->kind = TY_STRUCT;
+                            /* structdef-retirement slice 5 B2: an unresolved
+                             * partial-app constructor head is a named TY_TYVAR
+                             * (kind '* -> * -> *' in hkt_kind) rather than a
+                             * def-less TY_STRUCT; carry the name for dispatch /
+                             * orphan-check identity. */
+                            *fn_type = type_tyvar_named(ctor_sym->name);
                             fn_type->copy_kind = CK_MOVE;
                             fn_type->hkt_kind = KIND_ARROW2;
-                            fn_type->as.struct_.def = NULL;
                         }
                         /* Build arg type on arena */
                         Type *arg_type_ptr = (Type *)arena_alloc(e->arena, sizeof(Type));
