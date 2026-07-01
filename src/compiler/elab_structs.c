@@ -874,7 +874,6 @@ static Form *defstruct_flatten_grouped_field_vec(Elab *e, const Form *fields_vec
 }
 
 static bool defstruct_fields_all_primitive(Elab *e, const Form *fields_vec) {
-    (void)e;
     if (!fields_vec || fields_vec->tag != F_VEC) return false;
     uint32_t n = fields_vec->as.list.len;
     if (n == 0) return false;
@@ -887,6 +886,21 @@ static bool defstruct_fields_all_primitive(Elab *e, const Form *fields_vec) {
         if (type_tok->tag == F_TYPE_ANN) type_tok = type_tok->as.list.items[0];
         if (!defstruct_field_type_lowerable(e, type_tok)) return false;
         i++;
+        /* structdef-retirement slice 5 A1: a `fn`/`c-fn` field may carry a
+         * trailing `#fx{...}` effect-row F_MAP (e.g. `[run : fn #fx{Write}]`).
+         * The record-ADT path now preserves it on CtorField.effect_row, so skip
+         * it here rather than treating it as a stray non-field-name and bailing
+         * to the residual StructDef path. */
+        if (i < n && fields_vec->as.list.items[i]->tag == F_MAP) {
+            bool prev_is_fn =
+                (type_tok->tag == F_SYM &&
+                 (type_tok->as.sym == e->sym_fn || type_tok->as.sym == e->sym_c_fn)) ||
+                (type_tok->tag == F_LIST && type_tok->as.list.len >= 1 &&
+                 type_tok->as.list.items[0]->tag == F_SYM &&
+                 (type_tok->as.list.items[0]->as.sym == e->sym_fn ||
+                  type_tok->as.list.items[0]->as.sym == e->sym_c_fn));
+            if (prev_is_fn) i++;
+        }
     }
     return true;
 }
@@ -2241,6 +2255,10 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         /* Type forms (one per field) to resolve, gathered uniformly for both
          * styles so the field-resolution loop below is shared. */
         Form **field_type_forms = NULL;
+        /* structdef-retirement slice 5 A1: optional `#fx{...}` effect-row form
+         * per field (record style only), parallel to fields[]; NULL when the
+         * field has no effect annotation. */
+        Form **field_effect_forms = NULL;
 
         if (is_record) {
             /* Vector holds `name : type` pairs.  The reader collapses `: T`
@@ -2253,32 +2271,60 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                           ctor_name->name);
                 return NULL;
             }
-            if (n_items % 2 != 0) {
-                diag_emit(DIAG_ERROR, rec_vec->span,
-                          "defdata: record-style variant '%s' field list must be "
-                          "[name : type ...] pairs", ctor_name->name);
-                return NULL;
-            }
-            n_fields = n_items / 2;
+            /* Walk name/type pairs with a cursor rather than fixed `fi*2`
+             * indexing: structdef-retirement slice 5 A1 -- a `fn`-typed field may
+             * be followed by a trailing `#fx{...}` effect-row F_MAP (the shape a
+             * lowered `defstruct` capability field `[run : fn #fx{Write}]`
+             * produces), which is NOT a name/type pair.  Attach it to that field
+             * and skip it, so the record parser accepts the effect annotation the
+             * struct path already understood. n_items is an upper bound on
+             * n_fields. */
             rec_field_names = (const Symbol **)arena_alloc(e->arena,
-                                  n_fields * sizeof(Symbol *));
+                                  n_items * sizeof(Symbol *));
             field_type_forms = (Form **)arena_alloc(e->arena,
-                                  n_fields * sizeof(Form *));
-            for (uint32_t fi = 0; fi < n_fields; fi++) {
-                Form *name_f = rec_vec->as.list.items[fi * 2];
-                Form *type_f = rec_vec->as.list.items[fi * 2 + 1];
+                                  n_items * sizeof(Form *));
+            field_effect_forms = (Form **)arena_alloc(e->arena,
+                                  n_items * sizeof(Form *));
+            uint32_t nf = 0, ci = 0;
+            while (ci < n_items) {
+                Form *name_f = rec_vec->as.list.items[ci++];
                 if (name_f->tag != F_SYM) {
                     diag_emit(DIAG_ERROR, name_f->span,
                               "defdata: record-style variant '%s' expected a field "
                               "name symbol", ctor_name->name);
                     return NULL;
                 }
-                rec_field_names[fi] = name_f->as.sym;
+                if (ci >= n_items) {
+                    diag_emit(DIAG_ERROR, rec_vec->span,
+                              "defdata: record-style variant '%s' field list must be "
+                              "[name : type ...] pairs", ctor_name->name);
+                    return NULL;
+                }
+                Form *type_f = rec_vec->as.list.items[ci++];
                 /* Unwrap `: T` (F_TYPE_ANN) to the bare type form. */
                 if (type_f->tag == F_TYPE_ANN)
                     type_f = type_f->as.list.items[0];
-                field_type_forms[fi] = type_f;
+                rec_field_names[nf] = name_f->as.sym;
+                field_type_forms[nf] = type_f;
+                field_effect_forms[nf] = NULL;
+                /* A1: a trailing F_MAP after a `fn`/`c-fn` field type is that
+                 * field's effect row (mirrors the struct path, elab_structs.c
+                 * ~1582). Only consume it for a fn field so a stray F_MAP after a
+                 * non-fn field still surfaces as the missing-field-name error. */
+                bool type_is_fn =
+                    (type_f->tag == F_SYM &&
+                     (type_f->as.sym == e->sym_fn || type_f->as.sym == e->sym_c_fn)) ||
+                    (type_f->tag == F_LIST && type_f->as.list.len >= 1 &&
+                     type_f->as.list.items[0]->tag == F_SYM &&
+                     (type_f->as.list.items[0]->as.sym == e->sym_fn ||
+                      type_f->as.list.items[0]->as.sym == e->sym_c_fn));
+                if (type_is_fn && ci < n_items &&
+                    rec_vec->as.list.items[ci]->tag == F_MAP) {
+                    field_effect_forms[nf] = rec_vec->as.list.items[ci++];
+                }
+                nf++;
             }
+            n_fields = nf;
         } else {
             n_fields = ctor_form->as.list.len - 1;
             if (n_fields > 0) {
@@ -2306,6 +2352,28 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                 return NULL;
             }
             ctor->fields[fi].name = rec_field_names ? rec_field_names[fi]->name : NULL;
+
+            /* structdef-retirement slice 5 A1: parse the optional `#fx{...}`
+             * effect-row annotation collected for a `fn`-typed field, mirroring
+             * the struct path (elab_structs.c ~1596).  This is what keeps
+             * capability-field effect tracking sound after a `defstruct` with a
+             * `[run : fn #fx{Eff}]` field lowers to this record ADT: effect_check
+             * reads the row off the CtorField when a `(.run v)` call fires. */
+            ctor->fields[fi].effect_row = NULL;
+            if (field_effect_forms && field_effect_forms[fi]) {
+                Form *row_form = field_effect_forms[fi];
+                warn_legacy_fx_row(row_form);
+                uint8_t n_sym = (uint8_t)row_form->as.list.len;
+                const Symbol **syms = (const Symbol **)arena_alloc(e->arena,
+                                        (n_sym ? n_sym : 1) * sizeof(Symbol *));
+                uint8_t n_valid = 0;
+                for (uint32_t j = 0; j < row_form->as.list.len; j++) {
+                    Form *item = row_form->as.list.items[j];
+                    if (item->tag == F_SYM) syms[n_valid++] = item->as.sym;
+                }
+                ctor->fields[fi].effect_row =
+                    effect_row_unresolved(e->arena, syms, n_valid);
+            }
 
             /* CONV-S5: a :copy ADT requires every variant's payload to be
              * copy-compatible.  A non-copy field (rc/ref/weak/lref ownership)

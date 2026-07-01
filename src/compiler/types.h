@@ -207,6 +207,12 @@ typedef struct CtorField {
      * name backs field access `(.radius v)` and by-name match binding, exactly
      * like a struct field.  Interned/NUL-terminated. */
     const char *name;
+    /* structdef-retirement slice 5 A1: effect-row annotation on a `fn`-typed
+     * field, e.g. `[run : fn #fx{Write}]`.  Mirrors StructField.effect_row so a
+     * lowered `defstruct` (record ADT) keeps the capability-field effect
+     * tracking: effect_check merges this row when a `(.run v)` call invokes the
+     * stored fn.  NULL for non-fn fields or fn fields with no effect annotation. */
+    struct EffectRow *effect_row;
 } CtorField;
 
 /* Phase SZ6: Type-level size index term.
