@@ -842,6 +842,37 @@ static bool defstruct_field_type_lowerable(Elab *e, const Form *type_tok) {
     }
 }
 
+/* defstruct-grouped-field-spec-vectors: flatten an old-syntax field vector so a
+ * grouped `[name : type]` sub-vector splices into the surrounding token stream
+ * (the shape a `~@(map (fn [c] `[~c : T]) comps)` macro splice produces).  This
+ * is the SAME flattening elab_defstruct applies to the actual field list; the
+ * lowering gate must run it too, or the gate (reading the raw `call`) and the
+ * elaborator (which flattens) disagree and a grouped-spec defstruct wrongly
+ * takes the residual StructDef path.  Returns the input vec unchanged when there
+ * is no grouping.  structdef-retirement slice 5 DS-A. */
+static Form *defstruct_flatten_grouped_field_vec(Elab *e, const Form *fields_vec) {
+    if (!fields_vec || fields_vec->tag != F_VEC) return (Form *)fields_vec;
+    bool has_grouped = false;
+    for (uint32_t i = 0; i < fields_vec->as.list.len; i++)
+        if (fields_vec->as.list.items[i]->tag == F_VEC) { has_grouped = true; break; }
+    if (!has_grouped) return (Form *)fields_vec;
+    uint32_t flat_n = 0;
+    for (uint32_t i = 0; i < fields_vec->as.list.len; i++) {
+        const Form *it = fields_vec->as.list.items[i];
+        flat_n += (it->tag == F_VEC) ? it->as.list.len : 1;
+    }
+    Form **flat = (Form **)arena_alloc(e->arena, (flat_n ? flat_n : 1) * sizeof(Form *));
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < fields_vec->as.list.len; i++) {
+        Form *it = fields_vec->as.list.items[i];
+        if (it->tag == F_VEC)
+            for (uint32_t j = 0; j < it->as.list.len; j++) flat[k++] = it->as.list.items[j];
+        else
+            flat[k++] = it;
+    }
+    return form_vec(e->arena, fields_vec->span, flat, flat_n);
+}
+
 static bool defstruct_fields_all_primitive(Elab *e, const Form *fields_vec) {
     (void)e;
     if (!fields_vec || fields_vec->tag != F_VEC) return false;
@@ -936,7 +967,11 @@ bool defstruct_lowers_to_adt(Elab *e, const Form *call) {
     if (idx >= call->as.list.len) return false;
     const Form *fields = call->as.list.items[idx];
     if (fields->tag == F_VEC)
-        return defstruct_fields_all_primitive(e, fields);     /* old syntax */
+        /* DS-A: flatten grouped `[name : type]` sub-vectors first so the gate
+         * agrees with elab_defstruct's own flattening (else a grouped-spec
+         * struct wrongly takes the residual StructDef path). */
+        return defstruct_fields_all_primitive(
+            e, defstruct_flatten_grouped_field_vec(e, fields));   /* old syntax */
     return defstruct_newstyle_fields_all_primitive(e, call, idx);  /* new syntax */
 }
 
@@ -1059,36 +1094,12 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
                       "defstruct field list must be a vector [f1 : T1 f2 : T2 ...]");
             return NULL;
         }
-        /* defstruct-grouped-field-spec-vectors: a field-list element that is
-         * itself a vector is a grouped `[name : type]` spec -- flatten it into
-         * the surrounding `name`, `: type` token stream so it is equivalent to
-         * writing the field inline.  This is the shape a
-         * `~@(map (fn [c] `[~c : (T ~c)]) comps)` splice produces, letting one
-         * variadic macro build the field list.  Types are never bare vectors
-         * (they are keyword/symbol/list, wrapped in F_TYPE_ANN), so a top-level
-         * F_VEC element is unambiguously a grouped spec. */
-        bool has_grouped = false;
-        for (uint32_t i = 0; i < fields_form->as.list.len; i++) {
-            if (fields_form->as.list.items[i]->tag == F_VEC) { has_grouped = true; break; }
-        }
-        if (has_grouped) {
-            uint32_t flat_n = 0;
-            for (uint32_t i = 0; i < fields_form->as.list.len; i++) {
-                Form *it = fields_form->as.list.items[i];
-                flat_n += (it->tag == F_VEC) ? it->as.list.len : 1;
-            }
-            Form **flat = (Form **)arena_alloc(e->arena, (flat_n ? flat_n : 1) * sizeof(Form *));
-            uint32_t k = 0;
-            for (uint32_t i = 0; i < fields_form->as.list.len; i++) {
-                Form *it = fields_form->as.list.items[i];
-                if (it->tag == F_VEC) {
-                    for (uint32_t j = 0; j < it->as.list.len; j++) flat[k++] = it->as.list.items[j];
-                } else {
-                    flat[k++] = it;
-                }
-            }
-            fields_form = form_vec(e->arena, fields_form->span, flat, flat_n);
-        }
+        /* defstruct-grouped-field-spec-vectors: flatten grouped `[name : type]`
+         * sub-vectors into the surrounding `name`, `: type` token stream (the
+         * shape a `~@(map (fn [c] `[~c : (T ~c)]) comps)` splice produces).
+         * DS-A: shared with the lowering gate via defstruct_flatten_grouped_field_vec
+         * so the two cannot disagree on whether a grouped-spec struct lowers. */
+        fields_form = defstruct_flatten_grouped_field_vec(e, fields_form);
     }
 
     /* CONV-S1 (defstruct-as-defadt experiment): lower a `defstruct` to a
