@@ -1,5 +1,6 @@
 /* elab_structs.c -- struct/ADT/GADT definitions, pattern matching, and borrow traits. */
 #include "elab_internal.h"
+#include <assert.h>   /* structdef-retirement slice 5 DS-B: zero-producer guard */
 
 /* ---- file-local helper forward declarations ---- */
 static void parse_struct_field_type(const char *tname, uint32_t tlen,
@@ -341,6 +342,18 @@ static Type *struct_field_type_from_form(Elab *e, const Form *form,
          * must have 2 to 8 element types" error).  type_expr_from_form has
          * the real fn-type parser; route there directly. */
         if (head == e->sym_fn || head == e->sym_c_fn || head == e->sym_arrow) {
+            return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
+        }
+        /* structdef-retirement slice 5 DS-A3: a list-form built-in compound type
+         * -- `(lref T)`, `(borrow-mut T)` -- is its own TypeKind (TY_LREF /
+         * TY_REF_MUT), not a type application.  Route it to the real type
+         * elaborator so a lowered `defstruct` field resolves to the correct kind
+         * instead of the generic type-app loop below mis-parsing `(lref int)` as
+         * apply(lref, int) (TUR-E0012).  `(& T)` immutable borrow already routes
+         * via the has_amp path below.  This lets the borrow-family field forms
+         * lower to the record-ADT path, where the ADT's own :copy/linear check
+         * reproduces the struct-path diagnostic. */
+        if (head == e->sym_lref || head == e->sym_borrow_mut) {
             return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
         }
         bool has_pipe = false, has_amp = false;
@@ -729,6 +742,18 @@ void elab_add_forward_type(Elab *e, const Symbol *sym) {
 
 /* Helper: add StructDef to the elab registry */
 void elab_register_struct_def(Elab *e, StructDef *def) {
+    /* structdef-retirement slice 5 DS-B: with the effect-fn (A1), grouped-spec
+     * (A2/DS-A) and borrow-family (DS-A3) field shapes all lowering,
+     * `defstruct_lowers_to_adt` is true for every field shape the suite
+     * exercises, so no `defstruct` produces a `StructDef` -- this registry is
+     * dead (verified: zero registrations across the whole suite).  Assert it in
+     * debug so a regression, or a still-gated exotic compound field form
+     * (forall/handler/arrow/session/role/global/project) actually being used,
+     * fails the suite immediately; the registration below is kept for NDEBUG
+     * release safety.  DS-C/DS-D delete the registry and its two now-dead
+     * callers outright. */
+    assert(0 && "elab_register_struct_def: a defstruct did not lower to a record "
+                "ADT -- StructDef producer reachable (structdef-retirement DS-B)");
     if (e->n_struct_defs >= e->cap_struct_defs) {
         e->cap_struct_defs = e->cap_struct_defs ? e->cap_struct_defs * 2 : 8;
         e->struct_defs = (StructDef **)realloc(e->struct_defs,
@@ -797,9 +822,16 @@ static bool defstruct_field_type_lowerable(Elab *e, const Form *type_tok) {
          * scalar carrier field.  `forall` (universal quantification) is not a
          * value-carrying field form and stays on the struct path. */
         if (head == e->sym_exists || head == e->sym_exists_u) return true;
+        /* structdef-retirement slice 5 DS-A3: the borrow-family list forms
+         * `(lref T)` / `(& T)` / `(borrow-mut T)` now lower -- struct_field_type
+         * _from_form routes them to the real type elaborator (TY_LREF /
+         * TY_REF_IMMUT / TY_REF_MUT), and the record-ADT :copy/linear check
+         * reproduces the struct-path diagnostic.  The remaining built-in compound
+         * forms (forall, handler/arrow, session/role/global/project) are their
+         * own TypeKinds with no record-ADT field representation yet, so they stay
+         * on the struct path until they are hosted or explicitly rejected. */
         if (head == e->sym_forall || head == e->sym_forall_u ||
-            head == e->sym_lref || head == e->sym_ampersand ||
-            head == e->sym_borrow_mut || head == e->sym_handler_type ||
+            head == e->sym_handler_type ||
             head == e->sym_arrow ||
             head == e->sym_session_type || head == e->sym_session_Send ||
             head == e->sym_session_Recv || head == e->sym_session_Choose ||
@@ -807,7 +839,7 @@ static bool defstruct_field_type_lowerable(Elab *e, const Form *type_tok) {
             head == e->sym_session_Timeout || head == e->sym_project_type ||
             head == e->sym_global_type || head == e->sym_role_type)
             return false;  /* built-in compound form: keep the struct path */
-        return true;  /* user applied/parametric type field (TY_APP) */
+        return true;  /* user applied/parametric type field (TY_APP) or borrow */
     }
     if (type_tok->tag != F_KEYWORD && type_tok->tag != F_SYM)
         return false;  /* not a leaf type token */
@@ -2381,6 +2413,21 @@ Expr *elab_defdata(Elab *e, const Form *call) {
              * here, pinpointing the offending field and variant. */
             if (def->is_copy &&
                 !typekind_is_copy_for_struct(ctor->fields[fi].kind)) {
+                /* structdef-retirement slice 5 DS-A3: a lowered `defstruct` with a
+                 * linear (`lref`) field reaches here now that borrow-family field
+                 * forms lower.  Reproduce the struct path's precise TUR-E0102
+                 * "cannot copy linear field" diagnostic (elab_structs.c ~1583)
+                 * for a linear field rather than the generic non-copy message,
+                 * so the surface diagnostic is unchanged by the lowering. */
+                if (typekind_default_copy_kind(ctor->fields[fi].kind) == CK_LINEAR &&
+                    ctor->fields[fi].name) {
+                    diag_emit_with_code(DIAG_ERROR, field_type_forms[fi]->span,
+                                        TUR_E0102_LINEAR_COPY,
+                                        "cannot copy linear field '%s' -- "
+                                        "linear values cannot appear in :copy structs",
+                                        ctor->fields[fi].name);
+                    return NULL;
+                }
                 const char *fdesc = ctor->fields[fi].name;
                 if (fdesc) {
                     diag_emit(DIAG_ERROR, field_type_forms[fi]->span,
