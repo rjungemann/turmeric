@@ -123,11 +123,15 @@ fields, parametric, `:heap`, `:copy`/`:move`).
    > `e->struct_defs[]`) shows the residual `defstruct`->`StructDef` path fires
    > for just **two field-shape categories, six structs total**:
    > (A2) grouped field specs -- `Mixed`/`World` in `defstruct-grouped-field-specs`
-   > -- **now lowered, DS-A DONE (2026-06-30)**; and (A1) effect-annotated fn
-   > fields -- `[run : fn #fx{Eff}]` in `Action`/`App`/`Emitter`/`Printer` --
-   > **still on the struct path**. (An earlier alloc-site probe under-reported
-   > this as "one struct, World" -- it missed the pre-pass-stub-reuse path the
-   > effect-fn structs take; corrected in the scope doc.)  Once A1 also lowers,
+   > -- **DS-A DONE (2026-06-30)**; and (A1) effect-annotated fn fields --
+   > `[run : fn #fx{Eff}]` in `Action`/`App`/`Emitter`/`Printer` -- **A1 DONE
+   > (2026-06-30)**, carrying the field's `effect_row` onto `CtorField` so
+   > effect tracking survives lowering (negative fixture
+   > `errors/struct-lowered-capability-effect-leak` locks the soundness in).
+   > (An earlier alloc-site probe under-reported this as "one struct, World" --
+   > it missed the pre-pass-stub-reuse path the effect-fn structs take;
+   > corrected in the scope doc.)  **With A1+A2 done, a registry-writer probe
+   > confirms ZERO `StructDef` registrations across the suite** -- so
    > `e->struct_defs[]` stays empty, no named `TY_STRUCT` is produced, and with
    > B4 proving no def-less one is either, the whole `TY_STRUCT` kind is
    > uninstantiated and every `as.struct_.def` reader is dead code.  The

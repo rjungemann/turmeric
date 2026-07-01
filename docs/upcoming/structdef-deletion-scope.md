@@ -113,9 +113,14 @@ into a shared `defstruct_flatten_grouped_field_vec` helper and running it in
 both the gate (before `defstruct_fields_all_primitive`) and `elab_defstruct`.
 Mixed + World now lower; suite green (1874/0), no snapshot churn.
 
-**DS-A2 / A1 -- lower effect-annotated fn fields. REMAINING.**  A field
+**DS-A2 / A1 -- lower effect-annotated fn fields. DONE (2026-06-30).**  A field
 `[run : fn #fx{Eff}]` reads as the `fn` type token followed by a separate
-`F_MAP` effect row. Two parts:
+`F_MAP` effect row. Both parts landed (gate skip + effect-soundness plumbing:
+`CtorField.effect_row`, record-parser attach, `effect_check` reads it off
+`adt_ctor` when the `StructDef` is absent). New negative fixture
+`errors/struct-lowered-capability-effect-leak` (a `#fx{}` fn calling the lowered
+capability field is rejected TUR-E0009) locks the soundness in. Suite green
+(1875/0). The original description of the two parts, for the record:
 
 1. *Gate.* The gate walker (`defstruct_fields_all_primitive`) treats the
    effect-row `F_MAP` after a `fn`/`c-fn` type as a stray non-`F_SYM` field
@@ -144,6 +149,13 @@ Mixed + World now lower; suite green (1874/0), no snapshot churn.
 After BOTH A1 and A2 lower, re-run the **registry-writer** probe (not the
 alloc-site one) and confirm zero `StructDef` registrations -- that is the
 zero-producer precondition for DS-B..DS-D.
+
+> **DONE (2026-06-30): zero producers reached.**  With A2 (DS-A) and A1 both
+> landed, a registry-writer probe (`elab_register_struct_def`) fires **zero**
+> times across the whole fixture suite. `e->struct_defs[]` stays empty, so no
+> named `TY_STRUCT` is produced, and (with B4) no def-less one either -- the
+> `TY_STRUCT` kind is now uninstantiated. **DS-B..DS-D (the dead-code sweep and
+> type/kind removal) are unblocked.**
 
 ## Deletion slices (after DS-A)
 
