@@ -64,36 +64,24 @@ static bool exists_payload_is_byval_aggregate(Type t) {
     if (type_is_heap_struct(t)) return false;          /* typed pointer T * */
     if (type_is_heap_adt(t)) return false;             /* typed pointer T * */
     if (type_is_transparent_int_newtype(t)) return false;  /* int64 */
-    StructDef *def = NULL;
-    if (t.kind == TY_STRUCT) {
-        def = t.as.struct_.def;
-    } else if (t.kind == TY_APP &&
-               type_extract_struct_app(&t, &def, (Type[16]){0},
-                                       &(uint8_t){0})) {
-        /* struct-app extracted into def */
-    } else if (t.kind == TY_ADT || t.kind == TY_APP) {
+    /* structdef-retirement DS-C: a packed by-value aggregate payload is a
+     * lowered record ADT now (the TY_STRUCT / struct-app branches and the
+     * def-based aggregate tail are dead). */
+    if (t.kind == TY_ADT || t.kind == TY_APP) {
         /* CONV-S2: under defstruct-as-defadt a packed by-value struct is a
          * lowered record ADT (`Wm`, `LinesR`, `(World int int)`).  It is a
-         * by-value aggregate just like the struct case, so it must be heap-boxed
-         * into the existential's int64 `value` slot rather than ride the scalar
-         * `(int64_t)(aggregate)` cast (a hard cc error).  Decide by the resolved
-         * C name being a real aggregate (not the int64 carrier). */
+         * by-value aggregate, so it must be heap-boxed into the existential's
+         * int64 `value` slot rather than ride the scalar `(int64_t)(aggregate)`
+         * cast (a hard cc error).  Decide by the resolved C name being a real
+         * aggregate (not the int64 carrier). */
         AdtDef *adef = NULL;
         if (t.kind == TY_ADT) adef = t.as.adt_.def;
         else type_extract_adt_app(&t, &adef, (Type[16]){0}, &(uint8_t){0});
         if (!adef || adef->is_heap) return false;
         const char *acn = type_struct_value_c_name(t);
         return acn && strcmp(acn, "int64_t") != 0;
-    } else {
-        return false;
     }
-    if (!def || def->is_opaque) return false;
-    /* type_struct_value_c_name resolves phantom params to int64 -- a multi-field
-     * world like (World m A B) lowers to the real aggregate `World__int__int__int`,
-     * while a genuine int64 carrier (or an unresolved generic body) lowers to
-     * "int64_t". Only the former needs heap-boxing. */
-    const char *cn = type_struct_value_c_name(t);
-    return cn && strcmp(cn, "int64_t") != 0;
+    return false;
 }
 
 /* KB-021/KB-031: a type's dictionary-dispatch instance body uses the carrier
@@ -521,32 +509,16 @@ static bool field_read_emits_byvalue_aggregate(EmitCtx *ctx, const Expr *e) {
         have_rt = emit_spec_arg_type_for_binding(ctx, se->as.var.binding, &rt);
     if (!have_rt) rt = emit_resolve_type(ctx, se->type);
 
-    StructDef *sd = NULL;
-    Type sargs[16];
-    uint8_t sn = 0;
     uint32_t fidx = e->as.get_field_.field_idx;
     Type fr;
     bool fr_owned = false;
     bool have_fr = false;
-    if (type_extract_struct_app(&rt, &sd, sargs, &sn) && sd && fidx < sd->n_fields) {
-        const StructField *f = &sd->fields[fidx];
-        if (f->full_type && f->full_type->kind == TY_TYVAR) {
-            fr = substitute_struct_app_type(f->full_type, sd, sargs);
-            fr_owned = (fr.kind == TY_APP);
-            have_fr = true;
-        } else if (f->full_type) {
-            fr = *f->full_type;
-            have_fr = true;
-        }
-    } else if (rt.kind == TY_STRUCT && rt.as.struct_.def &&
-               rt.as.struct_.def->n_type_params == 0 &&
-               fidx < rt.as.struct_.def->n_fields) {
-        const StructField *f = &rt.as.struct_.def->fields[fidx];
-        if (f->full_type) { fr = *f->full_type; have_fr = true; }
-    } else {
-        /* Lowered record ADT-app receiver (`(Cons (Option int))`): the field is
-         * a ctor field whose full_type is the container's type-param; substitute
-         * the receiver's element args, as the struct path does. */
+    /* structdef-retirement DS-C: a get-field receiver is a lowered record ADT --
+     * the TY_STRUCT and struct-app branches are dead.
+     * Lowered record ADT-app receiver (`(Cons (Option int))`): the field is a
+     * ctor field whose full_type is the container's type-param; substitute the
+     * receiver's element args. */
+    {
         AdtDef *ad = NULL; Type aargs[16]; uint8_t an = 0;
         const CtorDef *ctor = e->as.get_field_.adt_ctor;
         if (ctor && fidx < ctor->n_fields &&
@@ -2303,16 +2275,11 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * as the tagged payload.  Unbox is the reverse (deref) in EX_ANY_CAST. */
             char *inner = emit_value(ctx, body, e->as.union_inject_.value);
             Buf out; buf_init(&out);
-            const StructDef *bs = e->as.union_inject_.box_struct;
             int64_t tag = e->as.union_inject_.tag_idx;
-            if (bs) {
-                /* heap-box: ({ T *__b = malloc(sizeof(T)); *__b = <inner>;
-                 *             TUR_TAG(tag, (int64_t)(intptr_t)__b); }) */
-                buf_printf(&out,
-                    "__extension__ ({ %s *__tur_box = (%s *)malloc(sizeof(%s)); "
-                    "*__tur_box = (%s); TUR_TAG(%lld, (int64_t)(intptr_t)__tur_box); })",
-                    bs->name, bs->name, bs->name, inner, (long long)tag);
-            } else if (tag == (int64_t)TY_FLOAT) {
+            /* structdef-retirement DS-C: box_struct (a StructDef*) is always NULL
+             * now -- a by-value struct is a record ADT, heap-boxed by the
+             * byvalue-ADT branch below; the StructDef heap-box arm is removed. */
+            if (tag == (int64_t)TY_FLOAT) {
                 /* TY2.2: a double does not survive an integer cast -- store its
                  * IEEE-754 bit pattern in the payload via a union reinterpret. */
                 buf_printf(&out,
@@ -2369,16 +2336,12 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * the target TypeKind; tur_panic on mismatch, otherwise unbox.
              * TY2.2: a struct target unboxes by dereferencing the heap pointer. */
             char *inner = emit_value(ctx, body, e->as.any_cast_.value);
-            const StructDef *ts = e->as.any_cast_.target_struct;
             int64_t target_tag = (int64_t)e->as.any_cast_.target_kind;
             Buf out; buf_init(&out);
-            if (ts) {
-                buf_printf(&out,
-                    "__extension__ ({ tur_tagged_t __tur_c = (%s); "
-                    "__tur_any_cast_check(TUR_GETTAG(__tur_c), %lld); "
-                    "*(%s *)(intptr_t)TUR_UNTAG(__tur_c); })",
-                    inner, (long long)target_tag, ts->name);
-            } else if (target_tag == (int64_t)TY_FLOAT) {
+            /* structdef-retirement DS-C: target_struct (a StructDef*) is always
+             * NULL now -- a struct target is a record ADT, unboxed by the
+             * byvalue-ADT branch below; the StructDef deref arm is removed. */
+            if (target_tag == (int64_t)TY_FLOAT) {
                 /* TY2.2: reverse the float bit-reinterpret stored on inject. */
                 buf_printf(&out,
                     "__extension__ ({ tur_tagged_t __tur_c = (%s); "
@@ -5069,15 +5032,9 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             char dg_name_buf[256];
             char wg_name_buf[256];
             bool struct_with_rc_fields = false;
-            if (e->as.rc_of_.expr->type.kind == TY_STRUCT) {
-                StructDef *sdef = e->as.rc_of_.expr->type.as.struct_.def;
-                if (sdef && sdef->needs_drop_glue) {
-                    snprintf(dg_name_buf, sizeof(dg_name_buf), "drop_glue_%s", sdef->name);
-                    snprintf(wg_name_buf, sizeof(wg_name_buf), "walk_glue_%s", sdef->name);
-                    drop_fn_name = dg_name_buf;
-                    struct_with_rc_fields = true;
-                }
-            } else if (e->as.rc_of_.expr->type.kind == TY_ADT) {
+            /* structdef-retirement DS-C: the TY_STRUCT rc/of arm is dead -- a
+             * struct value is a record ADT now (handled below). */
+            if (e->as.rc_of_.expr->type.kind == TY_ADT) {
                 /* CONV-S1 (slice 2): a by-value ADT is laid out like a struct, so
                  * an `rc/of` over one with rc/ref/weak fields needs the same
                  * field-releasing drop/walk glue (keyed off the C type name). */
