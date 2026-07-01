@@ -2938,24 +2938,6 @@ static tur_adt_Schema__int ctor_Schema__int(int64_t _0) {
 }
 
 #endif
-#ifndef TUR_TY_tur_adt_Option__struct
-#define TUR_TY_tur_adt_Option__struct
-typedef struct tur_adt_Option__struct {
-    bool is_some;
-    int64_t value;
-} tur_adt_Option__struct;
-#endif
-
-#ifndef TUR_FN_tur_adt_Option__struct
-#define TUR_FN_tur_adt_Option__struct
-static int64_t ctor_Option__struct(bool _0, int64_t _1) {
-    tur_adt_Option__struct *__r = (tur_adt_Option__struct *)malloc(sizeof(tur_adt_Option__struct));
-    __r->is_some = _0;
-    __r->value = _1;
-    return (int64_t)(intptr_t)__r;
-}
-
-#endif
 #ifndef TUR_TY_tur_adt_Option__Zipper__struct
 #define TUR_TY_tur_adt_Option__Zipper__struct
 typedef struct tur_adt_Option__Zipper__struct {
@@ -4164,7 +4146,7 @@ static int64_t some(int64_t x) {
 }
 
 static int64_t none() {
-        return ctor_Option__struct(false, (int64_t){0});
+        return ctor_Option(false, (int64_t){0});
 }
 
 static bool some_qu(int64_t o) {

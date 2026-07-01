@@ -552,7 +552,14 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             if (pt) return pt;
         }
 
-        /* Unknown - return as opaque struct */
+        /* Unknown -- return an unresolved named type variable.
+         * structdef-retirement slice 5 (P7): an unknown bare type name is an
+         * unresolved type variable, not a nominal struct.  Emit a named
+         * TY_TYVAR (codegen lowers it to the same int64 carrier) rather than a
+         * def-less TY_STRUCT placeholder.  The knock-on: a container element
+         * that lands here (`(Option Unknown)`) now stays polymorphic
+         * (uniform-carrier `ctor_Option`) instead of minting a placeholder
+         * `Option__struct` monomorph -- the more honest lowering. */
         if (e->strict_unknown_types) {
             diag_emit(DIAG_ERROR, form->span,
                       "unknown type name '%.*s' in #row{...} element position",
@@ -560,11 +567,8 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             return NULL;
         }
         Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-        memset(t, 0, sizeof(Type));
-        t->kind = TY_STRUCT;
+        *t = type_tyvar_named(sym->name);
         t->copy_kind = CK_MOVE;
-        t->hkt_kind = KIND_STAR;
-        t->as.struct_.def = NULL;
         return t;
     } else if (form->tag == F_LIST) {
         /* Variadic HKT rows (Layer 5): type-level row algebra.
@@ -2001,7 +2005,10 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             if (pt) return pt;
         }
 
-        /* Unknown keyword type — return opaque struct placeholder */
+        /* Unknown keyword type -- return an unresolved named type variable.
+         * structdef-retirement slice 5 (P8): keyword analog of the bare-symbol
+         * fallback above -- emit a named TY_TYVAR rather than a def-less
+         * TY_STRUCT. */
         if (e->strict_unknown_types) {
             diag_emit(DIAG_ERROR, form->span,
                       "unknown type name ':%.*s' in #row{...} element position",
@@ -2009,11 +2016,8 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             return NULL;
         }
         Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-        memset(t, 0, sizeof(Type));
-        t->kind = TY_STRUCT;
+        *t = type_tyvar_named(sym->name);
         t->copy_kind = CK_MOVE;
-        t->hkt_kind = KIND_STAR;
-        t->as.struct_.def = NULL;
         return t;
     } else if (form->tag == F_TYPE_ANN) {
         /* Unwrap the `: type-expr` annotation wrapper and process the inner form */
