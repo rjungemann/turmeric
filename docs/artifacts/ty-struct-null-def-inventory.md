@@ -153,14 +153,22 @@ Landed as five commits, each with the by-value suite green (1874/0):
   **polymorphic** and `None` emits the uniform-carrier `ctor_Option` instead.
   The uniform-carrier form is arguably the *more correct* lowering (the minted
   `Option__struct` monomorph is a placeholder artifact), so most of the 93 are
-  benign snapshot drift that a regen would absorb -- **but not all**:
-  `conv-defstruct-result-struct-field-typedef-order` is a genuine `tur build`
-  failure (`incompatible types ... 'tur_adt_User' from 'tur_adt_User *'`), a
-  value-vs-pointer mismatch the uniform-carrier path mishandles for a by-value
-  struct field inside a Result. So P7/P8 is: (a) settle whether the
-  polymorphic lowering is the intended one, (b) fix the by-value/pointer
-  Result-field bug it exposes, then (c) regen the ~93 snapshots in the same
-  change. Self-contained but distinctly slice-5-sized.
+  benign snapshot drift that a regen would absorb -- **but one was a genuine
+  build failure**: `conv-defstruct-result-struct-field-typedef-order`
+  (`incompatible types ... 'tur_adt_User' from 'tur_adt_User *'`).
+
+  **That build failure is now FIXED (2026-06-30), independently of P7/P8.**
+  Root cause: the Result/Option monomorph ctor loop *double-processed* the
+  unused-variant slot -- the `EX_DEFAULT_OF` block materialised it as the
+  pointer-box NULL `(T *){0}`, then the by-value boxing site re-wrapped it as
+  `malloc + *tmp = (T *){0}` (storing a `T *` into a `T` slot). Guarding the
+  boxing site with `arg->kind != EX_DEFAULT_OF` (`emit_expr.c`) passes the
+  default directly; no-op on the current suite (the double-box only surfaces
+  once the container element is a named tyvar). With that landed, P7/P8 now
+  reduces to: (a) confirm the polymorphic uniform-carrier lowering is the
+  intended one, then (b) regen the ~93 snapshots in the same change. Still
+  slice-5-scoped (it is a real codegen-semantics decision + wide regen), but
+  the one hard build blocker is gone.
 
 After P7/P8 are also cleared:
 
