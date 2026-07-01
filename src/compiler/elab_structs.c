@@ -330,18 +330,42 @@ static Type *struct_field_type_from_form(Elab *e, const Form *form,
     if (form->tag == F_LIST && form->as.list.len >= 1 &&
         form->as.list.items[0]->tag == F_SYM) {
         const Symbol *head = form->as.list.items[0]->as.sym;
-        if (head == e->sym_forall || head == e->sym_exists ||
-            head == e->sym_forall_u || head == e->sym_exists_u) {
+        /* structdef-retirement slice 5 DS-A4: reject the built-in compound field
+         * forms that have no record-ADT field representation yet -- `forall`,
+         * `handler`, `arrow` (`->`), session types, project/global/role.  A
+         * defstruct with such a field now takes the ADT path (defstruct_lowers
+         * _to_adt is true) and errors CLEANLY here instead of silently falling to
+         * the legacy StructDef path -- which is what makes the residual StructDef
+         * producer unreachable (the deletion precondition).  `exists`, `fn`/`c-fn`
+         * and the borrow family DO lower and are handled below.  Lowering these
+         * forms is tracked in docs/upcoming/structdef-exotic-field-forms-plan.md. */
+        if (head == e->sym_forall || head == e->sym_forall_u ||
+            head == e->sym_handler_type || head == e->sym_arrow ||
+            head == e->sym_session_type || head == e->sym_session_Send ||
+            head == e->sym_session_Recv || head == e->sym_session_Choose ||
+            head == e->sym_session_Branch || head == e->sym_session_Rec ||
+            head == e->sym_session_Timeout || head == e->sym_project_type ||
+            head == e->sym_global_type || head == e->sym_role_type) {
+            diag_emit(DIAG_ERROR, form->span,
+                      "type form '(%.*s ...)' is not yet supported as a struct/ADT "
+                      "field; this built-in compound type form cannot be stored in "
+                      "a field (tracked in "
+                      "docs/upcoming/structdef-exotic-field-forms-plan.md)",
+                      (int)head->len, head->name);
+            return NULL;
+        }
+        if (head == e->sym_exists || head == e->sym_exists_u) {
             return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
         }
         /* parametric-defstruct-fn-field-gaps (Gap 1): a fn-typed field
-         * `(fn [A...] R)` / `(c-fn [A...] R)` / `(-> A... R)` is a function
-         * type, not a type-application.  Without this dispatch the generic
-         * type-app loop below recurses into the `[A...]` param vector and
-         * mis-parses it as a TupleN literal (a 1-arg fn hits the "tuple type
-         * must have 2 to 8 element types" error).  type_expr_from_form has
-         * the real fn-type parser; route there directly. */
-        if (head == e->sym_fn || head == e->sym_c_fn || head == e->sym_arrow) {
+         * `(fn [A...] R)` / `(c-fn [A...] R)` is a function type, not a
+         * type-application.  Without this dispatch the generic type-app loop
+         * below recurses into the `[A...]` param vector and mis-parses it as a
+         * TupleN literal (a 1-arg fn hits the "tuple type must have 2 to 8
+         * element types" error).  type_expr_from_form has the real fn-type
+         * parser; route there directly.  (`arrow`/`->` is rejected above until it
+         * is lowered like `fn`.) */
+        if (head == e->sym_fn || head == e->sym_c_fn) {
             return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
         }
         /* structdef-retirement slice 5 DS-A3: a list-form built-in compound type
@@ -822,24 +846,17 @@ static bool defstruct_field_type_lowerable(Elab *e, const Form *type_tok) {
          * scalar carrier field.  `forall` (universal quantification) is not a
          * value-carrying field form and stays on the struct path. */
         if (head == e->sym_exists || head == e->sym_exists_u) return true;
-        /* structdef-retirement slice 5 DS-A3: the borrow-family list forms
-         * `(lref T)` / `(& T)` / `(borrow-mut T)` now lower -- struct_field_type
-         * _from_form routes them to the real type elaborator (TY_LREF /
-         * TY_REF_IMMUT / TY_REF_MUT), and the record-ADT :copy/linear check
-         * reproduces the struct-path diagnostic.  The remaining built-in compound
-         * forms (forall, handler/arrow, session/role/global/project) are their
-         * own TypeKinds with no record-ADT field representation yet, so they stay
-         * on the struct path until they are hosted or explicitly rejected. */
-        if (head == e->sym_forall || head == e->sym_forall_u ||
-            head == e->sym_handler_type ||
-            head == e->sym_arrow ||
-            head == e->sym_session_type || head == e->sym_session_Send ||
-            head == e->sym_session_Recv || head == e->sym_session_Choose ||
-            head == e->sym_session_Branch || head == e->sym_session_Rec ||
-            head == e->sym_session_Timeout || head == e->sym_project_type ||
-            head == e->sym_global_type || head == e->sym_role_type)
-            return false;  /* built-in compound form: keep the struct path */
-        return true;  /* user applied/parametric type field (TY_APP) or borrow */
+        /* structdef-retirement slice 5 DS-A3/DS-A4: every list-form field type is
+         * now "lowerable" in the sense that it takes the record-ADT path -- the
+         * borrow family (`(lref T)`/`(& T)`/`(borrow-mut T)`) resolves to a real
+         * carrier field, and the remaining built-in compound forms (forall,
+         * handler/arrow, session/role/global/project) are REJECTED there with a
+         * clean diagnostic (struct_field_type_from_form) rather than kept on the
+         * legacy StructDef path.  Returning true here is what makes the residual
+         * StructDef producer path unreachable (the deletion precondition); the
+         * eventual lowering of those forms is tracked in
+         * docs/upcoming/structdef-exotic-field-forms-plan.md. */
+        return true;
     }
     if (type_tok->tag != F_KEYWORD && type_tok->tag != F_SYM)
         return false;  /* not a leaf type token */
