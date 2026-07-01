@@ -1749,27 +1749,20 @@ Expr *elab_defn(Elab *e, const Form *call) {
                         param_kinds[n_params - 1] = TY_ADT;
                         params[n_params - 1]->type = type_adt(param_adt);
                     } else {
-                        /* Phase D: try to look up as a struct name (mirrors return-type path). */
-                        StructDef *param_struct = NULL;
-                        for (uint32_t si = 0; si < e->n_struct_defs; si++) {
-                            if (strcmp(e->struct_defs[si]->name, kw->name) == 0) {
-                                param_struct = e->struct_defs[si];
-                                break;
-                            }
-                        }
-                        if (param_struct) {
-                            param_kinds[n_params - 1] = TY_STRUCT;
-                            params[n_params - 1]->type = type_struct(param_struct);
-                        } else {
-                        /* Phase HRT/G2: Unknown keyword -- treat as an implicit type variable.
-                         * A parameter annotation like :a where 'a' is not a known type or ADT
-                         * is an implicit type variable. Mark the binding TY_TYVAR so that inside
-                         * a GADT match arm, the per-arm skolem env can resolve it to a concrete type. */
+                        /* structdef-retirement DS-C: the Phase-D struct-name
+                         * lookup here (scan struct_defs -> type_struct) is dead --
+                         * struct_defs is always empty and a struct name resolves
+                         * to the param_adt branch above.
+                         * Phase HRT/G2: an unknown keyword is an implicit type
+                         * variable.  A parameter annotation like :a where 'a' is
+                         * not a known type or ADT is an implicit type variable.
+                         * Mark the binding TY_TYVAR so that inside a GADT match
+                         * arm, the per-arm skolem env can resolve it to a concrete
+                         * type. */
                         param_kinds[n_params - 1] = TY_TYVAR;
                         params[n_params - 1]->type = type_tyvar_named(kw->name);
                         param_poly_types[n_params - 1] = (Type *)arena_alloc(e->arena, sizeof(Type));
                         *param_poly_types[n_params - 1] = params[n_params - 1]->type;
-                        } /* end struct else */
                     }
                     } /* end TA1 else */
                 }
@@ -1857,7 +1850,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* body_start is the index of the first element after params (could be return type or body) */
     TypeKind return_kind = TY_NIL;
     AdtDef *return_adt_def = NULL; /* Phase G3: set when return type is an ADT name */
-    StructDef *return_struct_def = NULL; /* LT4: set when return type is a struct name */
+    /* structdef-retirement DS-C: return_struct_def (LT4) removed -- a struct
+     * return name is a record ADT (return_adt_def); no StructDef is produced. */
     Type *return_session_type = NULL; /* SS3a/SS7: full session/role return type */
     Type *return_app_type = NULL; /* PTC4: full TY_APP return type for concrete type threading */
     Type *return_exists_type = NULL; /* F1-1: full TY_EXISTS/TY_FORALL return type so callers see the forall_ payload (without it elab_open SEGVs reading body) */
@@ -2051,17 +2045,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
                             break;
                         }
                     }
-                    /* LT4: Try to look up as struct name */
+                    /* structdef-retirement DS-C: the LT4 struct-name lookup
+                     * (scan struct_defs -> return_struct_def/TY_STRUCT) is dead --
+                     * struct_defs is always empty; a struct return name resolves
+                     * to return_adt_def above. */
                     if (!return_adt_def) {
-                        for (uint32_t si = 0; si < e->n_struct_defs; si++) {
-                            if (strcmp(e->struct_defs[si]->name, kw->name) == 0) {
-                                return_struct_def = e->struct_defs[si];
-                                return_kind = TY_STRUCT;
-                                break;
-                            }
-                        }
-                    }
-                    if (!return_adt_def && !return_struct_def) {
                         /* GS4 compatibility: unknown return type keywords remain
                          * named type variables so :a and : a both work for generic
                          * binder forms. */
@@ -2361,15 +2349,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 rft = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *rft = type_adt(return_adt_def);
             }
-            if (return_struct_def) {
-                rft = (Type *)arena_alloc(e->arena, sizeof(Type));
-                memset(rft, 0, sizeof(Type));
-                rft->kind = TY_STRUCT;
-                rft->copy_kind = return_struct_def->is_linear ? CK_LINEAR
-                               : (return_struct_def->is_copy ? CK_COPY : CK_MOVE);
-                rft->hkt_kind = KIND_STAR;
-                rft->as.struct_.def = return_struct_def;
-            }
+            /* structdef-retirement DS-C: the return_struct_def branch (build a
+             * TY_STRUCT full-type) is dead -- return_struct_def is always NULL. */
             if (return_session_type) rft = return_session_type;
             if (return_tyvar_type)   rft = return_tyvar_type;
             if (return_fn_type && !rft) rft = return_fn_type;
@@ -2524,15 +2505,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * callee's tyvar (no concrete witness to substitute). */
     Type *prev_body_expected = e->expected_type;
     Type *body_expected = NULL;
-    if (return_struct_def) {
-        body_expected = (Type *)arena_alloc(e->arena, sizeof(Type));
-        memset(body_expected, 0, sizeof(Type));
-        body_expected->kind = TY_STRUCT;
-        body_expected->copy_kind = return_struct_def->is_linear ? CK_LINEAR
-                                : (return_struct_def->is_copy ? CK_COPY : CK_MOVE);
-        body_expected->hkt_kind = KIND_STAR;
-        body_expected->as.struct_.def = return_struct_def;
-    } else if (return_adt_def) {
+    /* structdef-retirement DS-C: the return_struct_def branch (a TY_STRUCT
+     * expected body type) is dead -- return_struct_def is always NULL. */
+    if (return_adt_def) {
         body_expected = (Type *)arena_alloc(e->arena, sizeof(Type));
         *body_expected = type_adt(return_adt_def);
     } else if (return_app_type) {
@@ -2693,11 +2668,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
         ReturnClass ret_cls = (n_fn_type_params == 0 && !fn_declared_unsafe)
                                   ? RET_CLASS_COMMITTED
                                   : RET_CLASS_CARRIER_FN;
+        /* structdef-retirement DS-C: the return-struct-def argument is always
+         * NULL now (no defstruct produces a StructDef); pass NULL. */
         ReturnConflict rc = return_position_conflict(
-            return_struct_def, return_adt_def, return_kind, body->type, ret_cls);
+            NULL, return_adt_def, return_kind, body->type, ret_cls);
         if (rc != RET_CONFLICT_NONE) {
-            const char *want = return_struct_def ? return_struct_def->name
-                             : return_adt_def    ? return_adt_def->name
+            const char *want = return_adt_def ? return_adt_def->name
                              : typekind_to_string(return_kind);
             Buf gb; buf_init(&gb);
             type_print(&gb, body->type);
@@ -3036,19 +3012,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
         *rft = type_adt(return_adt_def);
         fn_type.as.fn.result_full_type = rft;
     }
-    /* LT4: attach full struct return type if declared.
-     * Stored so that emit.c can retrieve the StructDef (and hence the struct name)
-     * without going through type_from_kind, which doesn't carry the def pointer. */
-    if (return_struct_def) {
-        Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
-        memset(rft, 0, sizeof(Type));   /* fully zero before writing fields */
-        rft->kind = TY_STRUCT;
-        rft->copy_kind = return_struct_def->is_linear ? CK_LINEAR
-                       : (return_struct_def->is_copy ? CK_COPY : CK_MOVE);
-        rft->hkt_kind = KIND_STAR;
-        rft->as.struct_.def = return_struct_def;
-        fn_type.as.fn.result_full_type = rft;
-    }
+    /* structdef-retirement DS-C: the LT4 struct-return full-type attach is dead
+     * -- return_struct_def is always NULL; a struct return is a record ADT
+     * (handled by the return_adt_def branch above). */
     /* SS3a: attach full session return type if declared.
      * Without this, callers using type_from_kind(TY_SESSION) get a bare shell
      * with NULL protocol pointer, causing silent elaboration failures when the
