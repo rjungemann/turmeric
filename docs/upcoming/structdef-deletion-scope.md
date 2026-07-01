@@ -160,10 +160,16 @@ borrow family onto the record-ADT path.**
     "cannot copy linear field" diagnostic, so the lowering is
     diagnostic-transparent (the Bad fixture's `expected.diag` is unchanged).
 
-  *Still gated on the struct path* (no record-ADT field representation yet, and
-  unused by any defstruct in the suite/stdlib): `forall`, `handler`/`arrow`,
-  session/role/global/project. DS-C/DS-D must host or reject these before the
-  final type removal; the DS-B assert (below) will fire if one is ever used.
+  *Update -- DS-A4 (2026-06-30):* the remaining exotic forms (`forall`,
+  `handler`, `arrow`, session/role/global/project) are now **rejected** as
+  struct/ADT fields (a clean diagnostic in `struct_field_type_from_form`), so
+  every `defstruct` takes the record-ADT path and the residual `StructDef`
+  producer path is **unreachable** -- not merely unused. This is the true
+  zero-producer precondition for DS-C/DS-D. Lowering those forms so they are
+  supported as fields again is tracked separately in
+  [structdef-exotic-field-forms-plan.md](structdef-exotic-field-forms-plan.md)
+  (independent of, and after, the deletion). New negative fixture:
+  `errors/defstruct-exotic-compound-field-rejected`.
 
 **DS-B -- prove zero producers. DONE (2026-06-30).**  `assert(0)` installed in
 `elab_register_struct_def` (single writer of `e->struct_defs[]`), with the
