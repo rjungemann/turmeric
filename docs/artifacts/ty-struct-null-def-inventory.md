@@ -135,12 +135,32 @@ Landed as five commits, each with the by-value suite green (1874/0):
 
 **Still open (deferred to slice 5):**
 
-- **P7/P8**: the general unknown-type-name fallback in `type_expr_from_form`.
-  Load-bearing for built-in types that simply have no `defstruct` (`str`,
-  ...), which `type_effective_kind` currently reads as opaque `KIND_ARROW`
-  constructors. A naive `type_tyvar_named` migration changed codegen across
-  93 fixtures; this needs the kind-reporting question settled first and is
+- **P7/P8**: the general unknown-type-name fallback in `type_expr_from_form`
+  (bare-symbol + keyword variants). Load-bearing for built-in types that
+  simply have no `defstruct` (`str`, ...), which `type_effective_kind`
+  currently reads as opaque `KIND_ARROW` constructors. A naive
+  `type_tyvar_named` migration changed codegen across **93 fixtures** (built +
+  reverted); this needs the kind-reporting question settled first and is
   properly part of the slice-5 deletion, not incremental B2.
+
+  **Root cause of the codegen delta (measured 2026-06-30, via a
+  build-and-revert probe on `defn-basic`).** When an Option/Result element
+  type comes from this fallback, the def-less `TY_STRUCT` element is treated
+  as a *concrete opaque type* and the container is **monomorphised** -- e.g.
+  `None` emits `ctor_Option__struct` with a minted `tur_adt_Option__struct`
+  typedef (the `"struct"` mangle token). Migrating the element to a named
+  `TY_TYVAR` makes it a *genuine type variable*, so the container stays
+  **polymorphic** and `None` emits the uniform-carrier `ctor_Option` instead.
+  The uniform-carrier form is arguably the *more correct* lowering (the minted
+  `Option__struct` monomorph is a placeholder artifact), so most of the 93 are
+  benign snapshot drift that a regen would absorb -- **but not all**:
+  `conv-defstruct-result-struct-field-typedef-order` is a genuine `tur build`
+  failure (`incompatible types ... 'tur_adt_User' from 'tur_adt_User *'`), a
+  value-vs-pointer mismatch the uniform-carrier path mishandles for a by-value
+  struct field inside a Result. So P7/P8 is: (a) settle whether the
+  polymorphic lowering is the intended one, (b) fix the by-value/pointer
+  Result-field bug it exposes, then (c) regen the ~93 snapshots in the same
+  change. Self-contained but distinctly slice-5-sized.
 
 After P7/P8 are also cleared:
 
