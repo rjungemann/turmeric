@@ -575,10 +575,10 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                  *    body literal 1 has kind TY_INT.
                  * 4. body->type fallback when no binding is available. */
                 Type ret_type;
-                Type carrier_override = emit_carrier_return_override(method_impl);
-                if (carrier_override.kind == TY_STRUCT) {
-                    ret_type = carrier_override;
-                } else if (method_impl->binding
+                /* structdef-retirement DS-C: emit_carrier_return_override is dead
+                 * (a method body is never TY_STRUCT); the `carrier_override.kind
+                 * == TY_STRUCT` branch is removed. */
+                if (method_impl->binding
                            && method_impl->binding->type.kind == TY_FN) {
                     Type *rft = method_impl->binding->type.as.fn.result_full_type;
                     ret_type = rft ? *rft

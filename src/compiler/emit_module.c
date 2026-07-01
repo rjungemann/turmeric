@@ -4972,11 +4972,11 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
         if (e->type.kind == TY_FN) {
             TypeKind result = e->type.as.fn.result_kind;
             /* RT/SC5: carrier-return bridge -- must mirror the definition path
-             * in emit_fns.c so the forward declaration agrees with the body. */
-            Type carrier_override = emit_carrier_return_override(fd);
-            if (carrier_override.kind == TY_STRUCT) {
-                buf_puts(out, type_c_name(carrier_override));
-            } else if (e->type.as.fn.result_full_type &&
+             * in emit_fns.c so the forward declaration agrees with the body.
+             * structdef-retirement DS-C: emit_carrier_return_override is dead (a
+             * method body is never TY_STRUCT), so the `carrier_override.kind ==
+             * TY_STRUCT` branch is removed, matching emit_fns.c. */
+            if (e->type.as.fn.result_full_type &&
                        fd->binding && fd->binding->name && fd->binding->name->name &&
                        strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
                        type_uses_carrier_abi(*e->type.as.fn.result_full_type)) {
