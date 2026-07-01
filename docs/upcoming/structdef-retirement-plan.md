@@ -130,11 +130,17 @@ fields, parametric, `:heap`, `:copy`/`:move`).
    > `errors/struct-lowered-capability-effect-leak` locks the soundness in).
    > (An earlier alloc-site probe under-reported this as "one struct, World" --
    > it missed the pre-pass-stub-reuse path the effect-fn structs take;
-   > corrected in the scope doc.)  **With A1+A2 done, a registry-writer probe
-   > confirms ZERO `StructDef` registrations across the suite** -- so
-   > `e->struct_defs[]` stays empty, no named `TY_STRUCT` is produced, and with
-   > B4 proving no def-less one is either, the whole `TY_STRUCT` kind is
-   > uninstantiated and every `as.struct_.def` reader is dead code.  The
+   > corrected in the scope doc.)  **A hard-assert DS-B guard then found a THIRD
+   > residual (2026-06-30):** one negative fixture, `(defstruct Bad :copy
+   > [r (lref int)])`, a *list-form* built-in compound field type.  (The keyword
+   > form `lref<int>` and all other struct fields lower; only the F_LIST
+   > `(lref int)` does not, and it is the sole `StructDef` producer left in the
+   > whole suite.)  So one more prerequisite -- **DS-A3** -- must handle the
+   > list-form built-in compound field types (reject at the gate, or lower them)
+   > before producers hit zero.  After that, `e->struct_defs[]` stays empty, no
+   > named `TY_STRUCT` is produced, and with B4 proving no def-less one is
+   > either, the whole `TY_STRUCT` kind is uninstantiated and every
+   > `as.struct_.def` reader is dead code.  The
    > deletion is then a mechanical, incrementally-committable dead-code sweep
    > (DS-B..DS-D), NOT the all-or-nothing tyvar-representation +
    > typeclass-dispatch rewrite the estimate below feared (both retired by

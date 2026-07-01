@@ -146,16 +146,59 @@ capability field is rejected TUR-E0009) locks the soundness in. Suite green
    silently. Add a negative fixture (a `.run` call in a context that forbids the
    effect must still error) to lock the soundness in.
 
-After BOTH A1 and A2 lower, re-run the **registry-writer** probe (not the
-alloc-site one) and confirm zero `StructDef` registrations -- that is the
-zero-producer precondition for DS-B..DS-D.
+**DS-A3 -- handle the list-form built-in compound field types. REMAINING (the
+last producer).**  The sole remaining `StructDef` producer is a `defstruct`
+field written as an F_LIST built-in compound type -- `(lref int)`, `(& int)`,
+`(borrow-mut int)`, `(forall ...)`, `(handler ...)`, `(arrow ...)`, session/
+role/global/project forms -- as opposed to the leaf/keyword spellings
+(`lref<int>`, `fn`), which already lower. Only `(lref int)` occurs today (one
+negative fixture). Three ways to close it:
 
-> **DONE (2026-06-30): zero producers reached.**  With A2 (DS-A) and A1 both
-> landed, a registry-writer probe (`elab_register_struct_def`) fires **zero**
-> times across the whole fixture suite. `e->struct_defs[]` stays empty, so no
-> named `TY_STRUCT` is produced, and (with B4) no def-less one either -- the
-> `TY_STRUCT` kind is now uninstantiated. **DS-B..DS-D (the dead-code sweep and
-> type/kind removal) are unblocked.**
+- **(a) Reject at the gate (recommended, simplest).**  Make a `defstruct`
+  field whose type is an F_LIST built-in compound form a hard error at
+  elaboration ("field type `(lref int)`: use the `lref<int>` form; compound
+  built-in type forms are not supported as struct fields"), emitted BEFORE the
+  residual `StructDef` path (so no `StructDef` is allocated). Update the Bad
+  fixture's `expected.diag` to the new message (it is already a negative test).
+  Cost: removes the ability to write these forms in *list* syntax in a field
+  (the keyword forms still work); no valid fixture/stdlib uses them.
+- **(b) Lower them onto the record-ADT path.**  Teach the ADT field parser to
+  represent each built-in compound `TypeKind` as a carrier field (as the struct
+  path does), so `(lref int)` lowers and the ADT's own `:copy`/linear checks
+  reproduce `TUR-E0102`. Preserves the capability; more work (per-form, and the
+  linear-field diagnostic must be reproduced on the ADT path).
+- **(c) Do not delete `StructDef`.**  Keep the residual path alive solely for
+  these forms. Rejected: it defeats slice 5's goal.
+
+Once DS-A3 lands, ship the DS-B hard assert (written, verified to catch a
+regression) and confirm the suite is green with it live -- that is the
+zero-producer precondition for DS-C/DS-D.
+
+> **Nearly there, but NOT zero yet -- DS-B found a third residual
+> (2026-06-30).**  After A1+A2, a *hard-assert* DS-B guard in
+> `elab_register_struct_def` (stronger than the earlier fprintf probe, which
+> under-counted the error-path fixtures) fired for exactly **one** fixture:
+> `errors/defstruct-copy-noncopy-compound-field`, `(defstruct Bad :copy
+> [r (lref int)])`. So the built-in-compound-field category the plan flagged
+> ("(lref T)/(& T)/forall/handler/...") is NOT empty in the suite after all --
+> the plan's "None appear in the fixture suite today" was wrong.
+>
+> The residual is very narrow:
+> - **Keyword/leaf forms lower.**  `[ptr : lref<int>]` (linear-lref-struct-field),
+>   `[handler : fn]`, etc. all lower fine -- only Bad tripped the assert.
+> - **Only the LIST form `(lref int)` does not.**  It reaches
+>   `defstruct_field_type_lowerable`'s F_LIST arm, which keeps the built-in
+>   compound forms on the struct path; naive lowering mis-parses `(lref int)`
+>   as a type application (`TUR-E0012 cannot apply a type of kind '*'`), so the
+>   ADT field parser would need per-form support.
+> - It appears in exactly **one negative fixture** (testing the "cannot copy
+>   linear field" diagnostic, `TUR-E0102`).
+>
+> So one more prerequisite -- call it **DS-A3** -- stands between here and zero
+> producers: handle the list-form built-in compound field types. Options in
+> "Prerequisites" below. The DS-B hard assert is written and proven-useful (it
+> caught this), but is held out of tree until DS-A3 lands, or it would fail the
+> suite on Bad.
 
 ## Deletion slices (after DS-A)
 
