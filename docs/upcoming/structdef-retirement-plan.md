@@ -297,11 +297,19 @@ representation + delete the type + chase 6 residual fixtures" to roughly
   belongs to the slice-5 deletion, not incremental B2.  See the corrected
   producer table + consumer list in
   [ty-struct-null-def-inventory.md](ty-struct-null-def-inventory.md).
-- **B4 remains blocked** -- installing `TUR_ASSERT(def != NULL)` now would
-  fire on the two deferred P7/P8 fallback producers.  (Note: a migrated
-  `TY_TYVAR` placeholder and a residual def-less `TY_STRUCT` placeholder still
-  mangle identically -- both to `"struct"` -- so the partial migration does not
-  risk a call/def name mismatch.)
+- **B2 now COMPLETE (2026-06-30): all 8 producers migrated (P1-P8).**  P7/P8
+  (the general unknown-type-name fallback) landed after the `EX_DEFAULT_OF`
+  boxing guard removed the one hard build failure from their blast radius; the
+  migration is a pure element-lowering change (unresolved container elements
+  stay polymorphic on the uniform carrier instead of minting a placeholder
+  `Option__struct` monomorph) plus a 92-snapshot regen.  `src/compiler/` now
+  has **zero** `struct_.def = NULL` producers and no live
+  `type_from_kind(TY_STRUCT)` calls; every remaining `kind = TY_STRUCT` site
+  assigns a non-NULL `def`.
+- **B4 now UNBLOCKED** -- with every producer migrated, installing
+  `TUR_ASSERT(def != NULL)` in the `type_struct`-adjacent readers should hold;
+  a firing assert would reveal a def-less `TY_STRUCT` from a path outside the
+  inventory.  This is the next step toward the slice-5 deletion.
 - **Separate, low-priority follow-up found while fixing this**: the multi-file
   split path (`tur build <dir>` / `emit_header`) drops four ADT monomorph
   typedefs from `input.h` (incl. the fully-concrete `Endo__int`/`Schema__int`),

@@ -40,8 +40,17 @@ transition; the remaining producers are what slice-5 needs cleared.
 | P4 | `elab_types.c` `^f`/`^^f` HKT type-param ref | Higher-kinded type-param reference in a type position; kind carried in `hkt_kind`. Missed by B1. | `type_tyvar_named(type_params[idx]->name)`, `hkt_kind` preserved. | **DONE** |
 | P5 | `elab_typeclasses.c` `(Ctor a b)` partial-app head | Unresolved fully-applied 2-param instance-head constructor. Missed by B1. | `type_tyvar_named(ctor_sym2->name)`, `hkt_kind = KIND_ARROW2`. | **DONE** |
 | P6 | `elab_typeclasses.c` `(Ctor arg)` partial-app head | Unresolved partial-app instance-head constructor. Missed by B1. | `type_tyvar_named(ctor_sym->name)`, `hkt_kind = KIND_ARROW2`. | **DONE** |
-| P7 | `elab_types.c` unknown bare type name fallback (`type_expr_from_form`, was ~561-567) | General "unknown bare type name" fallback in the type-expr elaborator. **Load-bearing**: built-in types with no `defstruct` (e.g. `str`) route through here, so `type_effective_kind` treats it as an opaque `KIND_ARROW` constructor. Naively migrating it changed codegen across **93 fixtures** (built and reverted). | Deferred to slice 5 -- must decide the tyvar's reported kind (`*` vs the current implicit `KIND_ARROW`) and reconcile with the `str`-has-no-def consumers first. | **DEFERRED** |
-| P8 | `elab_types.c` unknown keyword type name fallback (`type_expr_from_form`, was ~2010-2016) | Keyword-name analog of P7, same blast radius. | Deferred to slice 5 with P7. | **DEFERRED** |
+| P7 | `elab_types.c` unknown bare type name fallback (`type_expr_from_form`) | General "unknown bare type name" fallback in the type-expr elaborator. | `type_tyvar_named(sym->name)`. Codegen effect: a container element that lands here (bare `none`, unresolved element) stays polymorphic (uniform-carrier `ctor_Option`) instead of minting a placeholder `Option__struct` monomorph -- 92 snapshots regenerated, verified uniform by a global diff scan. | **DONE** |
+| P8 | `elab_types.c` unknown keyword type name fallback (`type_expr_from_form`) | Keyword-name analog of P7. | `type_tyvar_named(sym->name)`. | **DONE** |
+
+> **All 8 producers migrated (2026-06-30).** `src/compiler/` now has **zero**
+> `struct_.def = NULL` producers and no live `type_from_kind(TY_STRUCT)` calls;
+> every remaining `kind = TY_STRUCT` site assigns a non-NULL `def`. The one
+> build failure P7/P8 originally exposed
+> (`conv-defstruct-result-struct-field-typedef-order`) was fixed first by the
+> `EX_DEFAULT_OF` boxing guard, so P7/P8 landed as a pure
+> element-lowering + snapshot regen. **B4 (the `def != NULL` assertion) is now
+> unblocked.**
 
 ### Consumer updates B1 did not anticipate (landed with B2)
 
@@ -119,8 +128,8 @@ once the producers are gone (B4 installs the assertion to prove it).
 
 ## Migration order for B2/B3
 
-**B2 status (2026-06-30): 6 of 8 producers migrated (P1-P6); P7/P8 deferred.**
-Landed as five commits, each with the by-value suite green (1874/0):
+**B2 status (2026-06-30): ALL 8 producers migrated (P1-P8).** B4 unblocked.
+Landed as seven commits, each with the by-value suite green (1874/0):
 
 1. **P1**: `elab_fns.c` single-occurrence param → named tyvar. Consumer
    touched: `elab_core.c binding_has_suspicious_param_annotation`.
@@ -132,16 +141,17 @@ Landed as five commits, each with the by-value suite green (1874/0):
 4. **P4**: `elab_types.c` `^f`/`^^f` HKT type-param ref → named tyvar.
 5. **P5/P6**: `elab_typeclasses.c` partial-app constructor heads → named
    tyvar (one commit).
+6. **EX_DEFAULT_OF boxing guard** (`emit_expr.c`): a prerequisite de-risking
+   fix -- see below -- that removed the one hard build failure from P7/P8's
+   blast radius before the migration landed.
+7. **P7/P8**: `elab_types.c` general unknown-type-name fallback (bare + keyword)
+   → named tyvar, **+ 92 regenerated snapshots** in the same commit.
 
-**Still open (deferred to slice 5):**
+**P7/P8 -- the once-deferred, now-landed pair:**
 
-- **P7/P8**: the general unknown-type-name fallback in `type_expr_from_form`
-  (bare-symbol + keyword variants). Load-bearing for built-in types that
-  simply have no `defstruct` (`str`, ...), which `type_effective_kind`
-  currently reads as opaque `KIND_ARROW` constructors. A naive
-  `type_tyvar_named` migration changed codegen across **93 fixtures** (built +
-  reverted); this needs the kind-reporting question settled first and is
-  properly part of the slice-5 deletion, not incremental B2.
+  These were the general unknown-type-name fallback in `type_expr_from_form`.
+  The concern was blast radius: naively migrating changed codegen across 93
+  fixtures. The investigation resolved it.
 
   **Root cause of the codegen delta (measured 2026-06-30, via a
   build-and-revert probe on `defn-basic`).** When an Option/Result element
@@ -164,21 +174,23 @@ Landed as five commits, each with the by-value suite green (1874/0):
   `malloc + *tmp = (T *){0}` (storing a `T *` into a `T` slot). Guarding the
   boxing site with `arg->kind != EX_DEFAULT_OF` (`emit_expr.c`) passes the
   default directly; no-op on the current suite (the double-box only surfaces
-  once the container element is a named tyvar). With that landed, P7/P8 now
-  reduces to: (a) confirm the polymorphic uniform-carrier lowering is the
-  intended one, then (b) regen the ~93 snapshots in the same change. Still
-  slice-5-scoped (it is a real codegen-semantics decision + wide regen), but
-  the one hard build blocker is gone.
+  once the container element is a named tyvar). With that landed, P7/P8 came
+  down to: (a) the polymorphic uniform-carrier lowering IS the intended one
+  (the `Option__struct` monomorph was a def-less-element artifact -- every
+  affected fixture still builds/runs/matches stdout, so the drift is pure
+  cosmetics of the emitted C), and (b) a **92-snapshot regen** landed in the
+  same commit. **P7/P8 DONE (2026-06-30); suite green (1874/0).**
 
-After P7/P8 are also cleared:
+Now unblocked:
 
 - **B4**: replace the remaining `as.struct_.def == NULL` checks with the
   named-tyvar equivalent (or delete dead branches), then install
   `TUR_ASSERT(t.as.struct_.def != NULL)` in `type_struct`-adjacent
   readers (`type_name`, `type_c_name`, etc.).  The assertion failing in
-  the suite at this point would identify a missed producer.  **Blocked on
-  P7/P8** -- installing the assert now would fire on the two remaining
-  fallback producers.
+  the suite at this point would identify a missed producer.  **Ready to
+  attempt** -- all 8 producers are migrated, so the assert should hold; a
+  firing assert would reveal a def-less `TY_STRUCT` arising from a path not
+  in this inventory.
 
 ## Notes
 
