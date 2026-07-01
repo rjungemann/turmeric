@@ -306,10 +306,15 @@ representation + delete the type + chase 6 residual fixtures" to roughly
   has **zero** `struct_.def = NULL` producers and no live
   `type_from_kind(TY_STRUCT)` calls; every remaining `kind = TY_STRUCT` site
   assigns a non-NULL `def`.
-- **B4 now UNBLOCKED** -- with every producer migrated, installing
-  `TUR_ASSERT(def != NULL)` in the `type_struct`-adjacent readers should hold;
-  a firing assert would reveal a def-less `TY_STRUCT` from a path outside the
-  inventory.  This is the next step toward the slice-5 deletion.
+- **B4 now DONE (2026-06-30)** -- `assert(def != NULL)` installed at the three
+  hot reader/mangler sites (`type_name`, `type_c_name`, `append_type_mangle`),
+  each retaining its NULL fallback for NDEBUG release safety.  Full by-value
+  suite green (1874/0) with all three asserts live, proving no def-less
+  `TY_STRUCT` is constructed across every fixture's codegen + diagnostics.
+  With B (B1-B4) complete, the tyvar/placeholder representation is fully
+  migrated: the slice-5 deletion no longer has to "migrate the tyvar
+  representation" -- it shrinks to renaming the `TY_STRUCT` kind and deleting
+  the dead `StructDef`-identity code, per the slice-5 note above.
 - **Separate, low-priority follow-up found while fixing this**: the multi-file
   split path (`tur build <dir>` / `emit_header`) drops four ADT monomorph
   typedefs from `input.h` (incl. the fully-concrete `Endo__int`/`Schema__int`),

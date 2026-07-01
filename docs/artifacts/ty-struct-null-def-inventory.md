@@ -181,16 +181,21 @@ Landed as seven commits, each with the by-value suite green (1874/0):
   cosmetics of the emitted C), and (b) a **92-snapshot regen** landed in the
   same commit. **P7/P8 DONE (2026-06-30); suite green (1874/0).**
 
-Now unblocked:
+**B4 DONE (2026-06-30):**
 
-- **B4**: replace the remaining `as.struct_.def == NULL` checks with the
-  named-tyvar equivalent (or delete dead branches), then install
-  `TUR_ASSERT(t.as.struct_.def != NULL)` in `type_struct`-adjacent
-  readers (`type_name`, `type_c_name`, etc.).  The assertion failing in
-  the suite at this point would identify a missed producer.  **Ready to
-  attempt** -- all 8 producers are migrated, so the assert should hold; a
-  firing assert would reveal a def-less `TY_STRUCT` arising from a path not
-  in this inventory.
+- Installed `assert(t.as.struct_.def != NULL)` at the three hot reader/mangler
+  sites that special-cased the def-less shape -- `type_name` (printer),
+  `type_c_name` (codegen C-type), and `append_type_mangle` (monomorph
+  mangler) -- each keeping its NULL fallback for NDEBUG release safety. The
+  full by-value suite is **green (1874/0) with all three asserts live**, which
+  proves across every fixture's codegen + diagnostics that no def-less
+  `TY_STRUCT` is constructed. A future regression that reintroduces one fires
+  the assert in debug.
+- Note: the "dozens of `as.struct_.def &&` guards" elsewhere
+  (`elab_call.c`, `emit_expr.c`, ...) are now provably always-true, but they
+  are left in place -- collapsing them is churny cleanup that belongs to the
+  slice-5 `StructDef` deletion proper, not B4. B4's deliverable is the
+  completeness proof, which is done.
 
 ## Notes
 
