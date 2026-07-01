@@ -2259,50 +2259,32 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                  * still prefer a struct binding from scope_lookup
                                  * first, preserving the GADT/struct coexistence
                                  * (MF4) struct-preference. */
-                                Type *head_ty = NULL;
-                                if (!(sb && sb->type.kind == TY_STRUCT &&
-                                      sb->type.as.struct_.def))
-                                    head_ty = elab_lookup_type_by_name(e, kw);
-                                if (sb && sb->type.kind == TY_STRUCT && sb->type.as.struct_.def) {
-                                    type_args[i] = sb->type;
-                                } else if (head_ty && head_ty->kind == TY_ADT &&
-                                           head_ty->as.adt_.def) {
-                                    /* A defdata/defgadt (or lowered defstruct) type
-                                     * constructor used as an instance head, e.g.
-                                     * (definstance Functor [Either] ...).  Preserve
-                                     * the ADT type so the orphan-instance check can
-                                     * credit the owning module, and carry the symbol
-                                     * for method-name mangling. */
+                                /* structdef-retirement DS-C: the TY_STRUCT
+                                 * instance-head branches (scope binding and type
+                                 * lookup) are dead -- a defstruct head is a
+                                 * TY_ADT now.  Resolve via the type namespace
+                                 * first (a defdata/defgadt/lowered-defstruct type
+                                 * constructor -- preferred so the orphan check
+                                 * credits the owning module), then the value
+                                 * binding, else an unresolved tyvar. */
+                                Type *head_ty = elab_lookup_type_by_name(e, kw);
+                                if (head_ty && head_ty->kind == TY_ADT &&
+                                    head_ty->as.adt_.def) {
                                     type_args[i] = *head_ty;
                                     type_arg_syms[i] = kw;
-                                } else if (head_ty && head_ty->kind == TY_STRUCT &&
-                                           head_ty->as.struct_.def) {
-                                    type_args[i] = *head_ty;
                                 } else if (sb && sb->type.kind == TY_ADT && sb->type.as.adt_.def) {
                                     type_args[i] = sb->type;
                                     type_arg_syms[i] = kw;
                                 } else {
-                                    /* Phase HKT H3: Unknown name — treat as an
-                                     * unresolved type variable.
-                                     * structdef-retirement slice 5 B2 (P3): emit
-                                     * a named TY_TYVAR carrying the symbol name
-                                     * instead of the legacy def-less TY_STRUCT.
-                                     * An unresolved tyvar already lowers to the
-                                     * int64 carrier in codegen (the previous
-                                     * 'void *' container ABI), and the symbol is
-                                     * still tracked via type_arg_syms[i] below
-                                     * for method-name mangling.  See
-                                     * ty-struct-null-def-inventory.md P3. */
+                                    /* Phase HKT H3 / P3: unknown name -- an
+                                     * unresolved type variable.  Emit a named
+                                     * TY_TYVAR marked as an opaque kind-'* -> *'
+                                     * constructor (a genuine kind-* tyvar keeps
+                                     * hkt_kind == KIND_STAR, so the kind checker
+                                     * can tell them apart); the symbol is tracked
+                                     * via type_arg_syms[i] for method mangling. */
                                     type_args[i] = type_tyvar_named(kw->name);
                                     type_args[i].copy_kind = CK_MOVE;
-                                    /* Mark this unresolved instance head as an
-                                     * opaque type constructor of kind '* -> *'
-                                     * (mirrors the effective kind the old
-                                     * def-less TY_STRUCT reported in
-                                     * type_effective_kind).  A genuine kind-*
-                                     * tyvar keeps hkt_kind == KIND_STAR, so the
-                                     * kind checker can still tell the two
-                                     * apart. */
                                     type_args[i].hkt_kind = KIND_ARROW;
                                 }
                                 type_arg_syms[i] = kw;
