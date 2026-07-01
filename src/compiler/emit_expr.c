@@ -3522,19 +3522,17 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                              * `none`'s value) must be the NULL pointer `(T *){0}`,
                              * not the aggregate `(T){0}` -- the slot type is `T *`. */
                             Type rfty = emit_resolve_type(ctx, fty);
+                            /* structdef-retirement slice 1 / DS-C: a by-value
+                             * record-ADT field rides as `tur_adt_T *`, so the
+                             * other variant's unused slot is `(T *){0}`.  The
+                             * former TY_STRUCT disjunct is dead. */
                             bool ptr_slot = cdef && cdef->name &&
                                 (strcmp(cdef->name, "Result") == 0 ||
                                  strcmp(cdef->name, "Option") == 0) &&
-                                ((rfty.kind == TY_STRUCT && rfty.as.struct_.def &&
-                                  !rfty.as.struct_.def->is_opaque &&
-                                  rfty.as.struct_.def->n_type_params == 0) ||
-                                 /* structdef-retirement slice 1: by-value record-ADT
-                                  * field also rides as `tur_adt_T *`, so the other
-                                  * variant's unused slot is `(T *){0}`. */
                                  (rfty.kind == TY_ADT && rfty.as.adt_.def &&
                                   !rfty.as.adt_.def->is_heap &&
                                   rfty.as.adt_.def->n_type_params == 0 &&
-                                  adt_is_byvalue_product(rfty.as.adt_.def)));
+                                  adt_is_byvalue_product(rfty.as.adt_.def));
                             /* A function-typed element rides as the opaque
                              * `void *` carrier (the `__opaque` monomorph field),
                              * but type_c_name(TY_FN) leaks the fn's result type
@@ -3729,18 +3727,16 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * *){0}`) would store a `T *` literal into a `T` slot, a
                          * type error.  Only a real by-value payload arg is boxed. */
                         Type at = emit_resolve_type(ctx, arg->type);
-                        bool box_struct = at.kind == TY_STRUCT && at.as.struct_.def &&
-                            !at.as.struct_.def->is_opaque &&
-                            at.as.struct_.def->n_type_params == 0;
-                        /* structdef-retirement slice 1: same heap-box for a
-                         * non-parametric by-value record-ADT arg (a lowered
-                         * defstruct -- `User` is now a TY_ADT), so it matches the
-                         * `tur_adt_User *` pointer slot adt_field_c_type emits. */
+                        /* structdef-retirement slice 1 / DS-C: a non-parametric
+                         * by-value record-ADT arg (a lowered defstruct -- `User`
+                         * is a TY_ADT) is heap-boxed to match the `tur_adt_User *`
+                         * pointer slot adt_field_c_type emits.  The former
+                         * TY_STRUCT box_struct arm is dead. */
                         bool box_adt = at.kind == TY_ADT && at.as.adt_.def &&
                             !at.as.adt_.def->is_heap &&
                             at.as.adt_.def->n_type_params == 0 &&
                             adt_is_byvalue_product(at.as.adt_.def);
-                        if (box_struct || box_adt) {
+                        if (box_adt) {
                             const char *cn = type_c_name(at);
                             char *tmp = fresh_tmp(ctx);
                             indent_buf(body, ctx->indent);
@@ -6383,19 +6379,16 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * heap pointer `T *` (adt_field_c_type) -- so the accessor must
                      * DEREF the slot to recover the `T` value, not cast it.  Mirrors
                      * the construction-side box.  Inert at default. */
+                    /* structdef-retirement slice 1 / DS-C: a by-value record-ADT
+                     * field rides as `tur_adt_T *`; deref the slot to recover the
+                     * `T` value.  The former TY_STRUCT disjunct is dead. */
                     bool ros_ptr_slot = adt && adt->name &&
                         (strcmp(adt->name, "Result") == 0 ||
                          strcmp(adt->name, "Option") == 0) &&
-                        ((fld_rty.kind == TY_STRUCT && fld_rty.as.struct_.def &&
-                          !fld_rty.as.struct_.def->is_opaque &&
-                          fld_rty.as.struct_.def->n_type_params == 0) ||
-                         /* structdef-retirement slice 1: by-value record-ADT field
-                          * rides as `tur_adt_T *`; deref the slot to recover the
-                          * `T` value, mirroring the construction-side box. */
                          (fld_rty.kind == TY_ADT && fld_rty.as.adt_.def &&
                           !fld_rty.as.adt_.def->is_heap &&
                           fld_rty.as.adt_.def->n_type_params == 0 &&
-                          adt_is_byvalue_product(fld_rty.as.adt_.def)));
+                          adt_is_byvalue_product(fld_rty.as.adt_.def));
                     if (ros_ptr_slot) {
                         buf_printf(&hb, "(*(%s)%s%s)", sv, acc, mp);
                     } else if (rec_wide) {
