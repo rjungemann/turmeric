@@ -3752,10 +3752,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * the arg here is the `T` value, so heap-box it (malloc + copy)
                      * and pass the pointer.  Inert at default (Result/Option are
                      * structs there, so this monomorph ctor never fires). */
-                    if (suffix && arg && e->as.call_.ctor &&
+                    if (suffix && arg && arg->kind != EX_DEFAULT_OF &&
+                        e->as.call_.ctor &&
                         e->as.call_.ctor->adt && e->as.call_.ctor->adt->name &&
                         (strcmp(e->as.call_.ctor->adt->name, "Result") == 0 ||
                          strcmp(e->as.call_.ctor->adt->name, "Option") == 0)) {
+                        /* An EX_DEFAULT_OF arg is the *unused* variant slot (e.g.
+                         * `err`'s ok_val): the EX_DEFAULT_OF block above already
+                         * materialised it in the slot's true C type -- the NULL
+                         * pointer `(T *){0}` for a ros-pointer-box value-struct
+                         * field, or `(T){0}` otherwise -- so it is passed
+                         * directly.  Heap-boxing it here (malloc + `*tmp = (T
+                         * *){0}`) would store a `T *` literal into a `T` slot, a
+                         * type error.  Only a real by-value payload arg is boxed. */
                         Type at = emit_resolve_type(ctx, arg->type);
                         bool box_struct = at.kind == TY_STRUCT && at.as.struct_.def &&
                             !at.as.struct_.def->is_opaque &&
