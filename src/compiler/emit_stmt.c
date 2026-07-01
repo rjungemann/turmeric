@@ -557,6 +557,19 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                             component = inst->type_args[i].as.struct_.def->name;
                         }
                         break;
+                    case TY_TYVAR:
+                        /* structdef-retirement slice 5 B2 (P3): an unresolved
+                         * instance head (unknown name like "option"/"vec") is
+                         * now a named TY_TYVAR carrying its source symbol in
+                         * type_arg_syms.  Name the dict struct by it, mirroring
+                         * TY_STRUCT -- else two such instances both emit
+                         * dict_<C>_T and collide (ODR). */
+                        if (inst->type_arg_syms && inst->type_arg_syms[i]) {
+                            component = inst->type_arg_syms[i]->name;
+                        } else if (inst->type_args[i].as.tyvar_.name) {
+                            component = inst->type_args[i].as.tyvar_.name;
+                        }
+                        break;
                     case TY_ADT:
                         /* CONV-S1 (defstruct-as-defadt): a record-ADT head names its
                          * dict struct/singleton by the constructor, mirroring

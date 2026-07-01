@@ -2786,6 +2786,17 @@ void emit_dict_name(char *buf, size_t buflen, const TypeClassInstance *inst) {
                          inst->type_args[i].as.struct_.def->name)
                     component = inst->type_args[i].as.struct_.def->name;
                 break;
+            case TY_TYVAR:
+                /* structdef-retirement slice 5 B2 (P3): unresolved instance head
+                 * (unknown name) is a named TY_TYVAR carrying its source symbol;
+                 * name the dict by it, mirroring TY_STRUCT / emit_stmt.c so the
+                 * elab-side and emit-side dict names stay in lockstep and two
+                 * distinct unknown-name instances don't collide on dict_<C>_T. */
+                if (inst->type_arg_syms && inst->type_arg_syms[i])
+                    component = inst->type_arg_syms[i]->name;
+                else if (inst->type_args[i].as.tyvar_.name)
+                    component = inst->type_args[i].as.tyvar_.name;
+                break;
             case TY_ADT:
                 /* CONV-S1 (defstruct-as-defadt): a record-ADT instance head names
                  * its dict by the constructor, exactly as TY_STRUCT -- otherwise

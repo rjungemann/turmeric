@@ -154,6 +154,15 @@ static Kind type_effective_kind(Type t) {
                            : KIND_STAR;
             }
             return KIND_ARROW;
+        case TY_TYVAR:
+            /* structdef-retirement slice 5 B2: an unresolved type variable
+             * carries its constructor kind in hkt_kind.  A genuine kind-*
+             * tyvar (hkt_kind == KIND_STAR) reports *, exactly as it did when
+             * it fell to the default arm; a placeholder marked as an opaque
+             * type constructor (the migrated def-less TY_STRUCT instance head,
+             * hkt_kind == KIND_ARROW) reports its arrow kind, mirroring the
+             * value type_effective_kind returned for the old TY_STRUCT shape. */
+            return t.hkt_kind;
         case TY_REC:    return KIND_ARROW;  /* Phase HKT-P2 */
         /* KB-027: rc<T> and weak<T> are built-in type constructors of kind
          * '* -> *', so a Functor/Foldable instance on the bare `rc` constructor
@@ -436,7 +445,15 @@ static void kind_infer_from_instances(Arena *a, Expr **items, uint32_t n) {
                  * still drive inference. */
                 bool opaque_struct_arg =
                     (inst->type_args[i].kind == TY_STRUCT &&
-                     inst->type_args[i].as.struct_.def == NULL);
+                     inst->type_args[i].as.struct_.def == NULL) ||
+                    /* structdef-retirement slice 5 B2: the migrated unresolved
+                     * instance head is now a named TY_TYVAR carrying an arrow
+                     * kind.  Like the old def-less TY_STRUCT it is ambiguous
+                     * (an unknown name standing in for a constructor or a
+                     * built-in), so it must not silently promote a
+                     * STAR-declared class either. */
+                    (inst->type_args[i].kind == TY_TYVAR &&
+                     inst->type_args[i].hkt_kind != KIND_STAR);
                 /* KB-027: rc<T>/weak<T> report KIND_ARROW (they are genuine
                  * constructors), but in v1 they also stand in as concrete
                  * carrier handles for STAR-declared classes (Clone [rc]).
