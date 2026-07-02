@@ -731,18 +731,11 @@ typedef struct Type {
         /* Phase 9: rc<T> and weak<T> store the inner type T */
         struct {
             TypeKind inner;   /* The type T that rc<T> or weak<T> points to */
-            /* Phase DS3: when inner == TY_STRUCT and the rc<T> was parsed from
-             * an `rc<Name>` defstruct field annotation, this is the StructDef *
-             * for `Name`.  NULL otherwise.  Used so that `(.field rc-of-s)` and
-             * `(set! (.field rc-of-s) v)` can resolve struct fields without
-             * losing the def through the rc wrapper. */
-            struct StructDef *struct_def;
-            /* CONV-S1 (slice 2): mirror of struct_def for an `rc<Name>` whose
-             * `Name` is a single-variant record ADT (a lowered struct, or a
-             * hand-written record `defdata`).  Carries the AdtDef * so
-             * `(.field rc-of-adt)` auto-derefs through the rc to the variant's
-             * named field.  NULL unless inner == TY_ADT.  struct_def and adt_def
-             * are mutually exclusive (inner is TY_STRUCT xor TY_ADT). */
+            /* CONV-S1 (slice 2): for an `rc<Name>` whose `Name` is a
+             * single-variant record ADT (a lowered struct, or a hand-written
+             * record `defdata`), carries the AdtDef * so `(.field rc-of-adt)`
+             * auto-derefs through the rc to the variant's named field.  NULL
+             * unless inner == TY_ADT. */
             struct AdtDef *adt_def;
         } rc;
         /* Phase 12: Borrow types store the referenced type T */
@@ -769,10 +762,6 @@ typedef struct Type {
             TypeKind returns;  /* The type T that cont<T> returns */
             int      flavor;   /* ContFlavor; 0 = CONT_CLONEABLE (default) */
         } cont;
-        /* Phase 11: Struct types */
-        struct {
-            StructDef *def;    /* The struct type descriptor */
-        } struct_;
         /* Phase HKT-P1: Type application — (type-app F A) */
         struct {
             struct Type *fn;   /* The type constructor being applied (kind * -> * or * -> * -> *) */
@@ -1227,25 +1216,13 @@ static inline Type type_rc(TypeKind inner) {
     t.kind = TY_RC;
     t.copy_kind = CK_MOVE;  /* rc<T> is move-only by default */
     t.as.rc.inner = inner;
-    t.as.rc.struct_def = NULL;
+    t.as.rc.adt_def = NULL;
     t.n_lifetimes = 0;
     return t;
 }
 
-/* Phase DS3: rc<Struct> with the struct def carried alongside so that
- * field access through the rc can resolve the layout. */
-static inline Type type_rc_struct(struct StructDef *def) {
-    Type t = {0};
-    t.kind = TY_RC;
-    t.copy_kind = CK_MOVE;
-    t.as.rc.inner = TY_STRUCT;
-    t.as.rc.struct_def = def;
-    t.n_lifetimes = 0;
-    return t;
-}
-
-/* CONV-S1 (slice 2): rc<ADT> with the ADT def carried alongside, mirroring
- * type_rc_struct, so field access through the rc resolves the variant layout. */
+/* CONV-S1 (slice 2): rc<ADT> with the ADT def carried alongside, so field
+ * access through the rc resolves the variant layout. */
 static inline Type type_rc_adt(struct AdtDef *def) {
     Type t = {0};
     t.kind = TY_RC;
@@ -1262,7 +1239,7 @@ static inline Type type_weak(TypeKind inner) {
     t.kind = TY_WEAK;
     t.copy_kind = CK_MOVE;  /* weak<T> is move-only */
     t.as.rc.inner = inner;  /* Reuse the same field as rc */
-    t.as.rc.struct_def = NULL;
+    t.as.rc.adt_def = NULL;
     t.n_lifetimes = 0;
     return t;
 }
@@ -1484,23 +1461,6 @@ static inline Type type_cloneable_cont(TypeKind returns) {
     t.copy_kind = CK_COPY;  /* Cloneable continuations can be copied (multi-shot) */
     t.n_lifetimes = 0;
     t.as.cont.returns = returns;
-    return t;
-}
-
-/* Phase 11: Struct type constructor */
-/* Create a TY_STRUCT type referencing the given StructDef.
- * copy_kind is CK_LINEAR for :linear structs, CK_COPY for :copy, CK_MOVE otherwise.
- * An :affine struct is CK_UNIQUE (at-most-one alias) and carries SK_AFFINE on the
- * substructural axis so it may be silently dropped but never duplicated. */
-static inline Type type_struct(StructDef *def) {
-    Type t = {0};
-    t.kind = TY_STRUCT;
-    t.copy_kind = def->is_linear ? CK_LINEAR
-                : def->is_affine ? CK_UNIQUE
-                : (def->is_copy ? CK_COPY : CK_MOVE);
-    if (def->is_affine) t.substruct = SK_AFFINE;
-    t.hkt_kind = KIND_STAR;
-    t.as.struct_.def = def;
     return t;
 }
 

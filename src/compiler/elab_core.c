@@ -187,9 +187,6 @@ static bool type_is_concrete_for_disjoint(Type *t) {
         case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
         case TY_FLOAT32: case TY_FLOAT64:
             return true;
-        case TY_STRUCT:
-            /* NULL def means it's a type variable -- not a concrete named struct */
-            return t->as.struct_.def != NULL;
         case TY_ADT:
             return t->as.adt_.def != NULL;
         default:
@@ -206,9 +203,9 @@ bool typekind_is_concrete_for_disjoint(TypeKind k) {
         case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
         case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
         case TY_FLOAT32: case TY_FLOAT64:
-        /* For struct/ADT we cannot check concreteness without the full Type* here;
+        /* For ADT we cannot check concreteness without the full Type* here;
          * the caller should use type_is_concrete_for_disjoint() instead when possible. */
-        case TY_STRUCT: case TY_ADT:
+        case TY_ADT:
             return true;
         default:
             return false;
@@ -231,11 +228,6 @@ bool types_provably_disjoint(Type *a, Type *b) {
     /* Two different primitive kinds are disjoint */
     if (ka != kb) return true;
     /* Same kind -- check identity for nominal types */
-    if (ka == TY_STRUCT) {
-        StructDef *da = a->as.struct_.def;
-        StructDef *db = b->as.struct_.def;
-        if (da && db && da->name && db->name && da->name != db->name) return true;
-    }
     if (ka == TY_ADT) {
         AdtDef *da = a->as.adt_.def;
         AdtDef *db = b->as.adt_.def;
@@ -1003,16 +995,12 @@ static bool binding_has_suspicious_param_annotation(const Binding *b) {
     if (!b || !b->is_param) return false;
     if (span_is_unknown(b->span)) return false;
     /* structdef-retirement slice 5 B2 (P1): the demoted single-occurrence
-     * unresolved param is now a named TY_TYVAR rather than a def-less
-     * TY_STRUCT.  Accept both shapes during the transition.  This code is only
+     * unresolved param is now a named TY_TYVAR.  This code is only
      * reached for a *moved* (CK_MOVE) binding, and a genuine declared tyvar
      * param is CK_COPY (never moved), so the source-text `:` check below
      * remains the precise discriminator -- it does not false-fire on real
      * polymorphic params. */
-    bool legacy_placeholder =
-        (b->type.kind == TY_STRUCT && b->type.as.struct_.def == NULL);
-    bool tyvar_placeholder = (b->type.kind == TY_TYVAR);
-    if (!legacy_placeholder && !tyvar_placeholder) return false;
+    if (b->type.kind != TY_TYVAR) return false;
     const SourceFile *file = diag_source_file(b->span.file_id);
     if (!file || !file->src || b->span.off_end > file->len) return false;
     const char *p = file->src + b->span.off_end;
@@ -1781,7 +1769,7 @@ Binding *binding_new(Elab *e, const Symbol *name, Type type,
 bool return_type_nominal_conflict(const StructDef *ret_struct,
                                   const AdtDef *ret_adt, Type body) {
     if (!ret_struct && !ret_adt) return false;
-    const StructDef *bs = (body.kind == TY_STRUCT) ? body.as.struct_.def : NULL;
+    const StructDef *bs = NULL;
     const AdtDef    *ba = (body.kind == TY_ADT)    ? body.as.adt_.def    : NULL;
     /* A non-nominal body (primitive, opaque-int carrier, tyvar, applied type,
      * unknown/inline-C) is tolerated: those are exactly the int64 carrier /

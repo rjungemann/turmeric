@@ -134,8 +134,7 @@ Expr *elab_coerce_to_any(Elab *e, Expr *value) {
     Expr *inject = expr_new(e->arena, EX_UNION_INJECT, any_type, value->span);
     inject->as.union_inject_.tag_idx = (int64_t)any_box_tag_for_type(&value->type);
     inject->as.union_inject_.value = value;
-    inject->as.union_inject_.box_struct =
-        (value->type.kind == TY_STRUCT) ? value->type.as.struct_.def : NULL;
+    inject->as.union_inject_.box_struct = NULL;
     return inject;
 }
 
@@ -1252,15 +1251,6 @@ static bool elab_user_method_instance_matches(Elab *e, const Symbol *name,
             }
             continue;
         }
-        if (rk == TY_APP && itk == TY_STRUCT) {
-            const Type *head = recv;
-            while (head && head->kind == TY_APP) head = head->as.app.fn;
-            if (head && head->kind == TY_STRUCT &&
-                inst->type_args[0].as.struct_.def &&
-                inst->type_args[0].as.struct_.def != head->as.struct_.def)
-                continue;
-            return true;
-        }
         return true;   /* both non-primitive, no discriminator -> accept */
     }
     return false;
@@ -1340,98 +1330,10 @@ static bool lint_is_panic_site(const char *nm, bool *is_unwrap_out) {
         strcmp(nm, "invariant!") == 0     || strcmp(nm, "invariant-msg!") == 0;
 }
 
-/* struct-return-through-closure-loses-type (CURRY-V2): synthesize (once, cached
- * at global scope) a real backing constructor function for a non-generic struct,
- * so an under-applied positional `(Name a)` can partial-apply into a closure that
- * completes to the struct.  The function is named `__ctor_<Name>` (never `Name`,
- * so it cannot clash with the struct's type binding or its typeclass-instance
- * ABI -- the failure that made the archived plan drop a same-named value
- * binding).  Its body is `(make-struct Name p0 p1 ...)`, elaborated through the
- * normal make-struct path; with CURRY-V0/V1 the by-value struct result flows
- * through the closure ABI correctly.  Returns NULL when currying cannot be
- * offered (parameterized struct -- partial type inference is out of scope here).
- */
-static Binding *synthesize_struct_ctor(Elab *e, Binding *struct_b, Span span) {
-    StructDef *def = struct_b->type.as.struct_.def;
-    if (!def || def->n_fields == 0) return NULL;
-    /* Parameterized structs need type-arg inference across a partial argument
-     * set; leave them on the full-application make-struct path. */
-    if (def->n_type_params > 0) return NULL;
-
-    char ctor_name[160];
-    int cnl = snprintf(ctor_name, sizeof(ctor_name), "__ctor_%s", def->name);
-    const Symbol *ctor_sym = symtab_intern(e->st, strslice(ctor_name, (cnl > 0 ? (uint32_t)cnl : 0)));
-
-    /* Cached? Reuse the previously-synthesized binding. */
-    Binding *cached = scope_lookup(&e->global, ctor_sym);
-    if (cached && cached->type.kind == TY_FN) return cached;
-
-    uint32_t n = def->n_fields;
-    if (n > MAX_FN_ARITY) return NULL;
-
-    /* Build params typed by each field's use-type, and the make-struct body
-     * Form `(make-struct Name p0 ...)` referencing them by symbol. */
-    Binding **params = (Binding **)arena_alloc(e->arena, n * sizeof(Binding *));
-    Type *param_types = (Type *)arena_alloc(e->arena, n * sizeof(Type));
-    TypeKind arg_kinds[MAX_FN_ARITY];
-    Form **ms_items = (Form **)arena_alloc(e->arena, (n + 2u) * sizeof(Form *));
-    ms_items[0] = form_sym(e->arena, span, e->sym_make_struct);
-    ms_items[1] = form_sym(e->arena, span,
-                           symtab_intern(e->st, strslice(def->name, (uint32_t)strlen(def->name))));
-    for (uint32_t i = 0; i < n; i++) {
-        char pn[32];
-        int pnl = snprintf(pn, sizeof(pn), "__ctorp%u_%u", e->next_id++, i);
-        const Symbol *psym = symtab_intern(e->st, strslice(pn, (pnl > 0 ? (uint32_t)pnl : 0)));
-        Type pt = elab_struct_field_use_type(e, NULL, def, &def->fields[i]);
-        Binding *pb = binding_new(e, psym, pt, false, false, span);
-        params[i] = pb;
-        param_types[i] = pt;
-        arg_kinds[i] = pt.kind;
-        ms_items[2u + i] = form_sym(e->arena, span, psym);
-    }
-    Form *body_form = form_list(e->arena, span, ms_items, n + 2u);
-
-    /* Elaborate the body with the params in an inner scope. */
-    Scope inner;
-    scope_init(&inner, &e->global);
-    Scope *saved_scope = e->scope;
-    e->scope = &inner;
-    for (uint32_t i = 0; i < n; i++) scope_add(&inner, params[i]);
-    Expr *body = elab_form(e, body_form);
-    e->scope = saved_scope;
-    scope_free(&inner);
-    if (!body) return NULL;
-
-    /* fn_type: (field0 .. fieldN) -> Struct, carrying the full struct result
-     * type so emit lowers the C return type to the by-value struct. */
-    Type fn_type = type_fn(arg_kinds, (uint8_t)n, TY_STRUCT);
-    Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
-    *rft = struct_b->type;
-    fn_type.as.fn.result_full_type = rft;
-
-    Binding *ctor_b = binding_new(e, ctor_sym, fn_type, false, true, span);
-    scope_add(&e->global, ctor_b);
-
-    FnDef *fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
-    memset(fd, 0, sizeof(FnDef));
-    fd->binding = ctor_b;
-    fd->params = params;
-    fd->n_params = (uint8_t)n;
-    fd->param_types = param_types;
-    fd->body = body;
-    fd->is_variadic = false;
-    fd->inferred_effect_row = NULL;
-    fd->closure = NULL;
-    constraint_set_init(&fd->constraints);
-    lifetime_context_init(&fd->lifetime_ctx);
-    fd->return_type = struct_b->type;
-
-    Expr *fn_def_expr = expr_new(e->arena, EX_FN_DEF, fn_type, span);
-    fn_def_expr->as.fn_def_.fn = fd;
-    elab_register_file_def(e, fn_def_expr);
-
-    return ctor_b;
-}
+/* structdef-retirement DS-D: synthesize_struct_ctor (the CURRY-V2 backing
+ * constructor synthesizer for by-value structs) is deleted -- its only caller
+ * was gated on a binding whose type had kind TY_STRUCT, which never occurs now
+ * that structs lower to record ADTs. */
 
 Expr *elab_call(Elab *e, Form *call) {
     /* Already established: call->tag == F_LIST and len >= 1. */
@@ -1660,54 +1562,10 @@ Expr *elab_call(Elab *e, Form *call) {
             }
         }
     }
-    {
-        Binding *struct_b = scope_lookup_type_def(e->scope, name);
-        /* Only route when the NEAREST binding for `name` (in any namespace) is
-         * itself this struct binding.  This makes anything that shadows the
-         * struct name win instead: a local value (`(let [Point f] (Point ...))`),
-         * a user `defn`, and -- crucially -- an ADT constructor that happens to
-         * share a name with an (often stdlib) struct, e.g. a user `(defdata List
-         * (Cons :int :List))` whose `Cons` must not be hijacked by stdlib's
-         * `Cons` struct.  scope_lookup_type_def only matches TY_STRUCT/TY_ADT, so
-         * `Cons` resolves there to the struct while `scope_lookup` resolves to the
-         * newer constructor; requiring identity lets the constructor win. */
-        Binding *nearest = scope_lookup(e->scope, name);
-        if (nearest && nearest == struct_b && struct_b->type.kind == TY_STRUCT &&
-            struct_b->type.as.struct_.def &&
-            !struct_b->type.as.struct_.def->no_auto_ctor) {
-            StructDef *cdef = struct_b->type.as.struct_.def;
-            uint32_t n_given = call->as.list.len - 1u;
-            bool positional = (n_given == 0 ||
-                               call->as.list.items[1]->tag != F_KEYWORD);
-            /* struct-return-through-closure-loses-type (CURRY-V2): an
-             * under-applied *positional* constructor call curries -- it
-             * partial-applies a synthesized backing constructor function and
-             * yields a closure that completes to the struct.  Full applications
-             * and any keyword form keep the direct make-struct fast path. */
-            if (positional && n_given >= 1 && n_given < cdef->n_fields) {
-                Binding *ctor_b = synthesize_struct_ctor(e, struct_b, call->span);
-                if (ctor_b) {
-                    Expr **pa_args = (Expr **)arena_alloc(e->arena, n_given * sizeof(Expr *));
-                    for (uint32_t i = 0; i < n_given; i++) {
-                        pa_args[i] = elab_form(e, call->as.list.items[1 + i]);
-                        if (!pa_args[i]) return NULL;
-                    }
-                    return elab_partial_apply(e, call, ctor_b, ctor_b->type,
-                                              pa_args, n_given);
-                }
-                /* synthesis declined (e.g. parameterized struct): fall through
-                 * to make-struct, which reports the arity mismatch. */
-            }
-            uint32_t mn = call->as.list.len + 1u;
-            Form **mi = (Form **)arena_alloc(e->arena, mn * sizeof(Form *));
-            mi[0] = form_sym(e->arena, head->span, e->sym_make_struct);
-            mi[1] = head; /* struct name symbol */
-            for (uint32_t i = 1; i < call->as.list.len; i++)
-                mi[i + 1u] = call->as.list.items[i];
-            Form *ms = form_list(e->arena, call->span, mi, mn);
-            return elab_make_struct(e, ms);
-        }
-    }
+    /* structdef-retirement DS-D: the direct `(Name ...)` struct-constructor
+     * routing block (gated on the nearest binding being a TY_STRUCT type def)
+     * is dead -- no binding's type ever has kind TY_STRUCT; a struct name is a
+     * record ADT and routes through the ADT constructor path. */
     /* M2b: (default-of T) is a builtin zero-value form, BUT a user program may
      * legitimately declare a typeclass method named `default-of` (the canonical
      * return-position-only dispatch example).  When such a class is in scope,
@@ -4921,7 +4779,6 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         bool result_is_concrete_composite =
             (result_type.kind == TY_APP) ||
             (result_type.kind == TY_ADT && result_type.as.adt_.def) ||
-            (result_type.kind == TY_STRUCT && result_type.as.struct_.def) ||
             (result_type.kind == TY_EXISTS) ||
             (result_type.kind == TY_FORALL) ||
             (result_type.kind == TY_FN);
@@ -5213,8 +5070,7 @@ Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span 
      * through a carrier-spill shim to satisfy the int64 tur_poly_fn_t.fn ABI. */
     if (inner_b->type.kind == TY_FN && inner_b->type.as.fn.result_full_type) {
         const Type *irf = inner_b->type.as.fn.result_full_type;
-        bool aggr = (irf->kind == TY_STRUCT && irf->as.struct_.def) ||
-                    irf->kind == TY_APP;
+        bool aggr = irf->kind == TY_APP;
         if (aggr) {
             Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
             *rft = *irf;
@@ -5343,12 +5199,12 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
         const Type *body = poly->as.forall_.body;
         if (body && body->kind == TY_FN) {
             const Type *rfull = body->as.fn.result_full_type;
-            if (rfull && ((rfull->kind == TY_STRUCT && rfull->as.struct_.def == NULL)
-                          || rfull->kind == TY_TYVAR)) {
+            if (rfull && rfull->kind == TY_TYVAR) {
                 /* Result is a type variable — instantiate from first arg's type.
-                 * Accepts both the legacy anonymous TY_STRUCT{def=NULL}
-                 * placeholder and the named TY_TYVAR introduced by Direction A
-                 * step 2a (see docs/reported/open-binder-skolems-not-distinguishable.md). */
+                 * (The legacy anonymous TY_STRUCT{def=NULL} placeholder no longer
+                 * exists; a bare-tyvar result is always the named TY_TYVAR from
+                 * Direction A step 2a --
+                 * see docs/reported/open-binder-skolems-not-distinguishable.md.) */
                 result_kind = (n_args > 0 && args[0]) ? args[0]->type.kind : TY_INT;
             } else if (rfull) {
                 result_kind = rfull->kind;

@@ -357,8 +357,6 @@ static bool thunk_type_has_concrete_c_abi(Type t) {
         case TY_ROLE:
         case TY_GENERATOR:
             return true;
-        case TY_STRUCT:
-            return t.as.struct_.def && !t.as.struct_.def->is_opaque;
         case TY_ADT:
             return t.as.adt_.def != NULL;
         default:
@@ -438,8 +436,7 @@ char *ensure_typed_thunk_typedef(EmitCtx *ctx, Buf *out,
  * Mirrors EX_EXISTS_DISPATCH's carrier-ABI predicate -- an abstract tyvar
  * (TY_TYVAR) or a TY_STRUCT with a NULL def erases to the int64 carrier. */
 static bool exwit_type_is_classvar(Type t) {
-    return t.kind == TY_TYVAR ||
-           (t.kind == TY_STRUCT && t.as.struct_.def == NULL);
+    return t.kind == TY_TYVAR;
 }
 
 /* Does the real instance method receive its parameter of concrete type `pt` by
@@ -461,10 +458,7 @@ static bool exwit_type_is_byval_struct(Type t) {
     if (type_is_heap_adt(t)) return false;
     if (type_is_transparent_int_newtype(t)) return false;
     StructDef *def = NULL;
-    if (t.kind == TY_STRUCT) {
-        def = t.as.struct_.def;
-        if (!def || def->is_opaque) return false;
-    } else if (t.kind == TY_APP &&
+    if (t.kind == TY_APP &&
                type_extract_struct_app(&t, &def, (Type[16]){0}, &(uint8_t){0})) {
         if (!def || def->is_opaque) return false;
     } else if (t.kind == TY_ADT || t.kind == TY_APP) {
@@ -699,9 +693,7 @@ char *ensure_aggregate_spill_shim(EmitCtx *ctx, const char *real_fn,
      * concrete codegen layout whose C name is not the int64 carrier. */
     const char *rc = type_c_name(result_type);
     if (!rc || strcmp(rc, "int64_t") == 0) return NULL;
-    bool is_aggr = (result_type.kind == TY_STRUCT &&
-                    result_type.as.struct_.def) ||
-                   (result_type.kind == TY_APP &&
+    bool is_aggr = (result_type.kind == TY_APP &&
                     type_has_concrete_codegen_layout(&result_type) &&
                     !type_uses_carrier_abi(result_type));
     if (!is_aggr) return NULL;
@@ -1983,8 +1975,7 @@ static bool type_is_heap_vec(Type t) {
     const char *name = NULL;
     if (type_is_heap_struct(t)) {
         StructDef *def = NULL;
-        if (t.kind == TY_STRUCT) def = t.as.struct_.def;
-        else if (t.kind == TY_APP) {
+        if (t.kind == TY_APP) {
             Type args[16]; uint8_t n = 0;
             if (!type_extract_struct_app(&t, &def, args, &n)) return false;
         }
@@ -2597,29 +2588,6 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                  * `elem_buf` (both outermost-first).  These are the same names
                  * the instance body's `(:: x (MutableMap K V))` ascription uses
                  * (the elab-side multi-param fix records them as tyvars). */
-                const Type *recv_head = recv;
-                while (recv_head && recv_head->kind == TY_APP)
-                    recv_head = recv_head->as.app.fn;
-                if (recv_head && recv_head->kind == TY_STRUCT &&
-                    recv_head->as.struct_.def) {
-                    StructDef *rsd = recv_head->as.struct_.def;
-                    for (uint8_t p = 0; p < rsd->n_type_params && p < n_elem &&
-                                        naug < ABI_TYPE_BINDINGS_MAX; p++) {
-                        const char *nm = rsd->type_params[p];
-                        if (!nm) continue;
-                        bool seen = false;
-                        for (uint8_t q = 0; q < naug; q++) {
-                            if (spec_bindings_aug[q].name &&
-                                strcmp(spec_bindings_aug[q].name, nm) == 0) {
-                                seen = true; break;
-                            }
-                        }
-                        if (seen) continue;
-                        spec_bindings_aug[naug].name = nm;
-                        spec_bindings_aug[naug].type = elem_buf[p];
-                        naug++;
-                    }
-                }
                 if (naug > aspec->n_bindings) {
                     spec_bindings = spec_bindings_aug;
                     spec_n_bindings = naug;
@@ -2721,28 +2689,6 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
              * type (TY_APP or TY_STRUCT-with-tparams).  Concrete-→-concrete
              * (e.g. `Eq[int]` called from a relay polymorphic body) is a
              * no-op and the original arg_types[] stays. */
-            if (fd->owner_instance && fd->owner_instance->n_type_args == 1
-                && n_bindings == 1
-                && type_eq(generic_arg, fd->owner_instance->type_args[0])
-                && fd->owner_instance->type_args[0].kind == TY_STRUCT
-                && fd->owner_instance->type_args[0].as.struct_.def
-                && fd->owner_instance->type_args[0].as.struct_.def->n_type_params > 0
-                && (bindings[0].type.kind == TY_APP
-                    || (bindings[0].type.kind == TY_STRUCT
-                        && bindings[0].type.as.struct_.def
-                        && bindings[0].type.as.struct_.def->n_type_params > 0))
-                /* M4 follow-up: only substitute when the binding's type is
-                 * fully concrete.  If unresolved TYVARs remain (e.g. the
-                 * recursive Eq Cons dispatch composes the outer spec's
-                 * typeclass-var "a" → (Cons int) with the recursive call's
-                 * (Cons A) where A is the Cons struct's distinct tyvar —
-                 * different name, no substitution happens), don't override
-                 * arg_types[i].  Otherwise the clone_name uses the
-                 * unresolved type's TYVAR-int64 fallback and we mint a
-                 * spec whose signature contradicts its body. */
-                && !emit_abi_type_has_concrete_named_tyvar(&bindings[0].type)) {
-                arg_types[i] = bindings[0].type;
-            }
             /* constrained-instance-element-dispatch (ADT class var): the M4c
              * branch above only fires for a TY_STRUCT class var.  When the
              * instance is on a parametric ADT head (`(definstance Enc [Option]
@@ -2844,9 +2790,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             while (ch.kind == TY_APP && ch.as.app.fn) ch = *ch.as.app.fn;
             bool same_family =
                 (gh.kind == TY_ADT && ch.kind == TY_ADT && gh.as.adt_.def &&
-                 gh.as.adt_.def == ch.as.adt_.def) ||
-                (gh.kind == TY_STRUCT && ch.kind == TY_STRUCT && gh.as.struct_.def &&
-                 gh.as.struct_.def == ch.as.struct_.def);
+                 gh.as.adt_.def == ch.as.adt_.def);
             if (same_family && concrete_mres.kind == TY_APP &&
                 !emit_abi_type_has_concrete_named_tyvar(&concrete_mres)) {
                 AbiTypeBinding ub[ABI_TYPE_BINDINGS_MAX]; uint8_t un = 0;
@@ -2921,8 +2865,6 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
          * int64 carrier. */
         const char *rec_c = emit_type_c_name(ctx, recovered);
         bool recovered_byvalue =
-            (recovered.kind == TY_STRUCT && recovered.as.struct_.def &&
-             !type_uses_carrier_abi(recovered)) ||
             /* CONV-S1 seam 4: under the defstruct-as-defadt lowering a by-value
              * record result is a TY_ADT (`tur_adt_Pos`), not a TY_STRUCT -- the
              * struct->ADT flip is the only change from the default path, where this
@@ -2930,7 +2872,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
              * concrete by-value ADT (and ADT-app) too so a return-only-poly
              * templated inline-C helper (`dense-get [A] : A`) is specialized per
              * element type instead of staying on the lossy int64 carrier base. */
-            ((recovered.kind == TY_APP || recovered.kind == TY_STRUCT ||
+            ((recovered.kind == TY_APP ||
               recovered.kind == TY_ADT) &&
              type_has_concrete_codegen_layout(&recovered) &&
              !type_is_heap_struct(recovered) && !type_is_heap_adt(recovered) &&
@@ -3152,10 +3094,8 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 while (rh.kind == TY_APP && rh.as.app.fn) rh = *rh.as.app.fn;
                 Type ch = generic_result;
                 while (ch.kind == TY_APP && ch.as.app.fn) ch = *ch.as.app.fn;
-                if ((rh.kind == TY_STRUCT && ch.kind == TY_STRUCT &&
-                     rh.as.struct_.def && rh.as.struct_.def == ch.as.struct_.def) ||
-                    (rh.kind == TY_ADT && ch.kind == TY_ADT &&
-                     rh.as.adt_.def && rh.as.adt_.def == ch.as.adt_.def)) {
+                if (rh.kind == TY_ADT && ch.kind == TY_ADT &&
+                    rh.as.adt_.def && rh.as.adt_.def == ch.as.adt_.def) {
                     result_type = spec_ret;
                     construct_recovered_byvalue = true;
                     abi_changes = true;
@@ -3382,16 +3322,10 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                  * per-receiver-type spec so its named-layout typed-pointer body
                  * (`v->len`) compiles and `emit_abi_fn_skip_generic` suppresses
                  * the broken int64-carrier base.  Accept a concrete ADT head. */
-                if ((head.kind == TY_STRUCT && head.as.struct_.def) ||
-                    (head.kind == TY_ADT && head.as.adt_.def)) {
+                if (head.kind == TY_ADT && head.as.adt_.def) {
                     needs_byvalue_spec = true; break;
                 }
             }
-        }
-        if (!needs_byvalue_spec &&
-            result_type.kind == TY_STRUCT &&
-            !type_uses_carrier_abi(result_type)) {
-            needs_byvalue_spec = true;
         }
         /* zero-arg-construct-ground-byvalue-return: a 0-arg `#{Construct}`
          * constructor (`(none)`) called in a ground by-value context resolves

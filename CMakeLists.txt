@@ -424,12 +424,8 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_kind_arity_unit"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
-# end-to-end-monomorphization: :heap typed-pointer ABI lowering unit test
-add_test(
-  NAME tur_heap_abi_unit
-  COMMAND "${CMAKE_BINARY_DIR}/tur_heap_abi_unit"
-  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-)
+# structdef-retirement DS-D: tur_heap_abi_unit retired with StructDef (the :heap
+# typed-pointer lowering is now on the record-ADT path, fixture-covered).
 # Variadic HKT rows (Direction 1): kind-level List Type (KIND_TYPEROW) unit test
 add_test(
   NAME tur_kind_row_unit

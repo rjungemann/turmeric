@@ -79,11 +79,6 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
             }
         }
         Type *t = type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
-        if (t && t->kind == TY_STRUCT && t->as.struct_.def == NULL) {
-            Type *tv = (Type *)arena_alloc(e->arena, sizeof(Type));
-            *tv = type_tyvar_named(sym->name);
-            return tv;
-        }
         return t;
     }
     if (form->tag == F_LIST && form->as.list.len >= 1 &&
@@ -3924,24 +3919,10 @@ Expr *elab_fn(Elab *e, const Form *call) {
                         }
                     }
                 }
-                /* struct name */
-                if (!resolved_nominal) {
-                    for (uint32_t si = 0; si < e->n_struct_defs; si++) {
-                        if (strcmp(e->struct_defs[si]->name, kw->name) == 0) {
-                            StructDef *sd = e->struct_defs[si];
-                            return_kind = TY_STRUCT;
-                            return_full_type = (Type *)arena_alloc(e->arena, sizeof(Type));
-                            memset(return_full_type, 0, sizeof(Type));
-                            return_full_type->kind = TY_STRUCT;
-                            return_full_type->copy_kind = sd->is_linear ? CK_LINEAR
-                                                        : (sd->is_copy ? CK_COPY : CK_MOVE);
-                            return_full_type->hkt_kind = KIND_STAR;
-                            return_full_type->as.struct_.def = sd;
-                            resolved_nominal = true;
-                            break;
-                        }
-                    }
-                }
+                /* structdef-retirement DS-D: the struct-name loop (scan
+                 * e->struct_defs -> TY_STRUCT full-type) is dead -- the
+                 * struct_defs registry is always empty; a struct return name
+                 * resolves as a record ADT above or falls through to a tyvar. */
                 if (!resolved_nominal) {
                     return_kind = TY_TYVAR;
                     return_full_type = (Type *)arena_alloc(e->arena, sizeof(Type));
@@ -3969,8 +3950,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
                      * lifted thunk's C return type to int64_t while the body
                      * returns the struct by value -- a hard C compile error. */
                     if (!return_full_type &&
-                        (ann->kind == TY_APP || ann->kind == TY_ADT ||
-                         (ann->kind == TY_STRUCT && ann->as.struct_.def != NULL))) {
+                        (ann->kind == TY_APP || ann->kind == TY_ADT)) {
                         return_full_type = ann;
                     }
                 }
@@ -4098,8 +4078,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
             *rft = body->type;
             return_fn_type = rft;
         } else if (!return_full_type &&
-                   (body->type.kind == TY_APP || body->type.kind == TY_ADT ||
-                    (body->type.kind == TY_STRUCT && body->type.as.struct_.def)) &&
+                   (body->type.kind == TY_APP || body->type.kind == TY_ADT) &&
                    !fn_type_has_named_tyvar(&body->type)) {
             /* closure-result-monomorphization Phase 2 grounding: an unannotated
              * lambda whose body is a carrier-ABI aggregate (e.g. a monadic

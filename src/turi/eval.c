@@ -4191,7 +4191,6 @@ static const char *gde_type_head_name(const Type *t) {
     if (!t) return NULL;
     while (t->kind == TY_APP && t->as.app.fn) t = t->as.app.fn;
     switch (t->kind) {
-    case TY_STRUCT: return t->as.struct_.def ? t->as.struct_.def->name : NULL;
     case TY_ADT:    return t->as.adt_.def ? t->as.adt_.def->name : NULL;
     case TY_REC:    return t->as.rec.name;
     default:        return NULL;
@@ -8201,12 +8200,6 @@ static void extract_type_tag(Type t, char *buf, size_t cap) {
     case TY_CSTR:    snprintf(buf, cap, "cstr");     break;
     case TY_PTR_VOID: snprintf(buf, cap, "ptr<void>"); break;
     case TY_FN:      snprintf(buf, cap, "fn");       break;
-    case TY_STRUCT:
-        if (t.as.struct_.def && t.as.struct_.def->name)
-            snprintf(buf, cap, "%s", t.as.struct_.def->name);
-        else
-            snprintf(buf, cap, "struct");
-        break;
     default:         snprintf(buf, cap, "unknown");  break;
     }
 }
@@ -9594,9 +9587,13 @@ const char *turi_try_show(TuriEnv *env, TuriValue val) {
     for (TypeClassInstance *inst = tc_env->instances; inst; inst = inst->next) {
         if (inst->typeclass != show_tc) continue;
         if (inst->n_type_args < 1) continue;
+        /* structdef-retirement DS-D: a lowered struct is a record TY_ADT, so an
+         * instance head no longer carries a TY_STRUCT def -- match the ADT-headed
+         * instance against the struct's name (the lowered ADT shares it). */
         Type t = inst->type_args[0];
-        if (t.kind != TY_STRUCT || !t.as.struct_.def) continue;
-        if (t.as.struct_.def != sdef) continue;
+        const char *inst_name = (t.kind == TY_ADT && t.as.adt_.def)
+                                    ? t.as.adt_.def->name : NULL;
+        if (!inst_name || !sdef->name || strcmp(inst_name, sdef->name) != 0) continue;
         if (show_mi < inst->n_method_impls && inst->method_impls[show_mi])
             show_impl = inst->method_impls[show_mi];
         break;

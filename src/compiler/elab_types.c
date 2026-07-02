@@ -20,12 +20,7 @@ bool check_row_type_arg_kind(Type ctor_type, uint8_t arg_index, Type arg_type,
     const Kind *param_kinds = NULL;
     uint8_t     n_params    = 0;
     const char *ctor_name   = NULL;
-    if (ctor_type.kind == TY_STRUCT && ctor_type.as.struct_.def) {
-        const StructDef *cdef = ctor_type.as.struct_.def;
-        param_kinds = cdef->type_param_kinds;
-        n_params    = cdef->n_type_params;
-        ctor_name   = cdef->name;
-    } else if (ctor_type.kind == TY_ADT && ctor_type.as.adt_.def) {
+    if (ctor_type.kind == TY_ADT && ctor_type.as.adt_.def) {
         const AdtDef *adef = ctor_type.as.adt_.def;
         param_kinds = adef->type_param_kinds;
         n_params    = adef->n_type_params;
@@ -84,15 +79,6 @@ Type *elab_lookup_type_by_name(Elab *e, const Symbol *name) {
         *t = type_adt(struct_origin_fallback);
         t->hkt_kind = kind_for_arity(struct_origin_fallback->n_type_params);
         return t;
-    }
-    for (uint32_t i = 0; i < e->n_struct_defs; i++) {
-        StructDef *d = e->struct_defs[i];
-        if (d && d->name && strcmp(d->name, name->name) == 0) {
-            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-            *t = type_struct(d);
-            t->hkt_kind = kind_for_arity(d->n_type_params);
-            return t;
-        }
     }
     return NULL;
 }
@@ -1116,17 +1102,6 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 reject_fn_type_colon(e, params_vec->as.list.items[pi2]);
                 Type *at = type_expr_from_form(e, params_vec->as.list.items[pi2],
                                                rec_name, type_params, type_param_kinds, n_type_params);
-                /* poly-closure-inner-dispatch-result-erased (Part 1): re-stamp a
-                 * nameless TY_STRUCT(def=NULL) type-param placeholder as a named
-                 * TY_TYVAR so call_collect_type_bindings can bind A/B/C from a
-                 * captured (fn [A] B) parameter at call sites. */
-                if (at && at->kind == TY_STRUCT && at->as.struct_.def == NULL &&
-                    params_vec->as.list.items[pi2]->tag == F_SYM) {
-                    Type *tv = (Type *)arena_alloc(e->arena, sizeof(Type));
-                    *tv = type_tyvar_named(params_vec->as.list.items[pi2]->as.sym->name);
-                    tv->hkt_kind = at->hkt_kind;
-                    at = tv;
-                }
                 fn_arg_full[pi2] = at;
                 /* Type variables map to the int64 carrier kind; use TY_INT so
                  * the fn's result_kind/arg_kinds stay consistent with the ->
@@ -1138,8 +1113,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                  * its bare TypeKind; preserve the full type. */
                 if (at && (at->kind == TY_TYVAR ||
                            at->kind == TY_FN || at->kind == TY_APP ||
-                           at->kind == TY_ADT ||
-                           (at->kind == TY_STRUCT && at->as.struct_.def != NULL))) {
+                           at->kind == TY_ADT)) {
                     any_compound_arg = true;
                 }
                 /* c-fn-ptr-element-and-size-precision-gap fix: when this is a
@@ -1185,16 +1159,6 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             reject_fn_type_colon(e, form->as.list.items[idx]);
             Type *ret_t = type_expr_from_form(e, form->as.list.items[idx],
                                                rec_name, type_params, type_param_kinds, n_type_params);
-            /* poly-closure-inner-dispatch-result-erased (Part 1): re-stamp a
-             * nameless TY_STRUCT(def=NULL) result placeholder as a named TY_TYVAR
-             * so Direction 3 in emit can resolve the real dispatch C type. */
-            if (ret_t && ret_t->kind == TY_STRUCT && ret_t->as.struct_.def == NULL &&
-                form->as.list.items[idx]->tag == F_SYM) {
-                Type *tv = (Type *)arena_alloc(e->arena, sizeof(Type));
-                *tv = type_tyvar_named(form->as.list.items[idx]->as.sym->name);
-                tv->hkt_kind = ret_t->hkt_kind;
-                ret_t = tv;
-            }
             /* Type variables lower to the int64 carrier for the kind slot. */
             TypeKind ret_kind = ret_t ? (ret_t->kind == TY_TYVAR ? TY_INT : ret_t->kind)
                                       : TY_INT;
@@ -1218,8 +1182,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             if (ret_t &&
                 (ret_t->kind == TY_TYVAR ||
                  ret_t->kind == TY_FN || ret_t->kind == TY_APP ||
-                 ret_t->kind == TY_ADT ||
-                 (ret_t->kind == TY_STRUCT && ret_t->as.struct_.def != NULL))) {
+                 ret_t->kind == TY_ADT)) {
                 fn_t->as.fn.result_full_type = ret_t;
             }
             /* c-fn-ptr-element-and-size-precision-gap fix: a cfnptr result that
@@ -1334,11 +1297,9 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 next_mut      = false;
                 next_affine   = false;   /* ST0 */
                 next_relevant = false;   /* ST0 */
-                /* Type variables (anonymous TY_STRUCT{def=NULL} or named
-                 * TY_TYVAR) and quantified types are represented as TY_INT
-                 * (int64_t) at the C level. */
-                if ((at->kind == TY_STRUCT && at->as.struct_.def == NULL)
-                    || at->kind == TY_TYVAR) {
+                /* Type variables (named TY_TYVAR) and quantified types are
+                 * represented as TY_INT (int64_t) at the C level. */
+                if (at->kind == TY_TYVAR) {
                     arg_kinds[arg_idx] = TY_INT; /* type variable -> universal int64_t */
                     any_poly_arg = true;
                 } else if (at->kind == TY_FORALL || at->kind == TY_EXISTS) {
@@ -1364,8 +1325,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
              * the full type so the call site (and the typed-thunk dispatch) emit
              * the real C return type instead of int64_t. */
             bool aggregate_result = false;
-            if ((result_type->kind == TY_STRUCT && result_type->as.struct_.def == NULL)
-                || result_type->kind == TY_TYVAR) {
+            if (result_type->kind == TY_TYVAR) {
                 result_kind = TY_INT;
                 poly_result = true;
             } else {
@@ -1376,8 +1336,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 aggregate_result =
                     result_type->kind == TY_FN ||
                     result_type->kind == TY_APP ||
-                    result_type->kind == TY_ADT ||
-                    (result_type->kind == TY_STRUCT && result_type->as.struct_.def != NULL);
+                    result_type->kind == TY_ADT;
             }
 
             Type *fn_t = (Type *)arena_alloc(e->arena, sizeof(Type));
@@ -1975,24 +1934,6 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 if (cand->type.kind == TY_ADT && cand->type.as.adt_.def) {
                     Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
                     *t = type_adt(cand->type.as.adt_.def);
-                    return t;
-                }
-                if (cand->type.kind == TY_STRUCT && cand->type.as.struct_.def) {
-                    Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-                    memset(t, 0, sizeof(Type));
-                    t->kind = TY_STRUCT;
-                    /* opaque-ascription-cast-marks-value-move-once: carry the
-                     * substructural class from the registered def (CK_COPY for a
-                     * plain opaque, CK_LINEAR/CK_UNIQUE for :linear/:affine)
-                     * instead of hardcoding CK_MOVE. Hardcoding made a redundant
-                     * `(:: v :Name)` keyword ascription over an *unrestricted*
-                     * opaque spuriously poison v as move-once -- diverging from
-                     * the F_SYM path, which resolves through type_struct(def) and
-                     * gets the copy_kind right. */
-                    t->copy_kind = cand->type.copy_kind;
-                    t->substruct = cand->type.substruct;
-                    t->hkt_kind = KIND_STAR;
-                    t->as.struct_.def = cand->type.as.struct_.def;
                     return t;
                 }
             }
@@ -2770,10 +2711,7 @@ static bool ex2_3_type_has_phantom_residue(const Type *t, int depth) {
              * survived elaboration -- treat as phantom-skolem escape.
              * Accepts the anonymous TY_STRUCT{def=NULL} shape and the
              * named TY_TYVAR shape introduced by Direction A step 2a. */
-            if (t->as.app.arg
-                    && ((t->as.app.arg->kind == TY_STRUCT
-                         && t->as.app.arg->as.struct_.def == NULL)
-                        || t->as.app.arg->kind == TY_TYVAR)) {
+            if (t->as.app.arg && t->as.app.arg->kind == TY_TYVAR) {
                 return true;
             }
             if (ex2_3_type_has_phantom_residue(t->as.app.fn,  depth + 1)) return true;
@@ -2840,8 +2778,7 @@ Expr *elab_open(Elab *e, const Form *call) {
     if (packed->type.kind == TY_EXISTS) {
         const Type *T = packed->type.as.forall_.body;
         if (T) {
-            if ((T->kind == TY_STRUCT && T->as.struct_.def == NULL)
-                || T->kind == TY_TYVAR) {
+            if (T->kind == TY_TYVAR) {
                 v_type = TYPE_INT;  /* type variable → int64_t */
             } else if (T->kind == TY_APP) {
                 /* Peel iff the head is an ADT (SizedVec / defgadt path): call
@@ -2862,7 +2799,6 @@ Expr *elab_open(Elab *e, const Form *call) {
                  * NON-opaque ADT head (SizedVec / defgadt) still peels to bare
                  * nominal, matching the 14+ stdlib bare-param entry points. */
                 bool head_is_real_struct =
-                    (head.kind == TY_STRUCT && head.as.struct_.def != NULL) ||
                     (head.kind == TY_ADT && head.as.adt_.def != NULL &&
                      head.as.adt_.def->is_opaque);
                 if (head_is_real_struct) {
@@ -2872,8 +2808,7 @@ Expr *elab_open(Elab *e, const Form *call) {
                     /* If the peeled head is itself a free type variable, fall
                      * back to int64_t (consistent with the bare-tyvar case).
                      * Accepts anonymous TY_STRUCT{def=NULL} and named TY_TYVAR. */
-                    if ((v_type.kind == TY_STRUCT && v_type.as.struct_.def == NULL)
-                        || v_type.kind == TY_TYVAR) {
+                    if (v_type.kind == TY_TYVAR) {
                         v_type = TYPE_INT;
                     }
                 }

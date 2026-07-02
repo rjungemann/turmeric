@@ -155,10 +155,6 @@ int type_eq(Type a, Type b) {
                   || b.as.handler_.result_kind == TY_UNKNOWN;
         return rows_eq && vk_ok && rk_ok;
     }
-    /* Phase 11: Struct types - identity by StructDef pointer */
-    if (a.kind == TY_STRUCT) {
-        return a.as.struct_.def == b.as.struct_.def;
-    }
     /* Named type variables -- compare by name pointer (interned strings, so
      * pointer equality is name equality).  Two unnamed tyvars are still equal
      * (the historical default); but two distinctly-named tyvars are NOT.  This
@@ -370,24 +366,10 @@ static uint32_t g_cap_fn_ptr_typedefs = 0;
 
 bool type_extract_struct_app(const Type *t, StructDef **out_def,
                                     Type *out_args, uint8_t *out_n) {
-    if (!t) return false;
-    Type raw[16];
-    uint8_t n_raw = 0;
-    const Type *cur = t;
-    while (cur && cur->kind == TY_APP && n_raw < 16) {
-        if (!cur->as.app.arg) return false;
-        raw[n_raw++] = *cur->as.app.arg;
-        cur = cur->as.app.fn;
-    }
-    if (!cur || cur->kind != TY_STRUCT || !cur->as.struct_.def) return false;
-    StructDef *def = cur->as.struct_.def;
-    if (def->n_type_params == 0 || n_raw != def->n_type_params) return false;
-    if (out_def) *out_def = def;
-    if (out_n) *out_n = n_raw;
-    if (out_args) {
-        for (uint8_t i = 0; i < n_raw; i++) out_args[i] = raw[n_raw - 1 - i];
-    }
-    return true;
+    /* structdef-retirement: no Type ever has kind TY_STRUCT, so a struct-headed
+     * TY_APP chain can never form -- this extractor always fails. */
+    (void)t; (void)out_def; (void)out_args; (void)out_n;
+    return false;
 }
 
 /* TS4P1: Extract an ADT-headed TY_APP chain into (AdtDef*, args[], n_args).
@@ -450,17 +432,6 @@ bool type_has_concrete_codegen_layout(const Type *t) {
         case TY_ROLE:
         case TY_GENERATOR:
             return true;
-        case TY_STRUCT:
-            /* An opaque newtype (e.g. (defopaque Foo ...)) lowers to the
-             * int64_t carrier -- a concrete, monomorphizable layout keyed by
-             * its nominal name in append_type_mangle.  As an *element* of a
-             * parametric struct (Pair<int Foo>) it therefore contributes a
-             * well-defined int64_t field, so the containing struct-app must be
-             * specialized rather than falling back to the broken generic
-             * carrier template.  (An opaque struct never reaches this gate as a
-             * by-value *head*: type_c_name lowers it to int64_t directly, so it
-             * is never register_struct_app'd.) */
-            return t->as.struct_.def && t->as.struct_.def->n_type_params == 0;
         case TY_APP: {
             StructDef *def = NULL;
             Type args[16];
@@ -561,9 +532,7 @@ static bool adt_ctor_is_transparent_int_record(const CtorDef *c) {
 
 bool type_is_transparent_int_newtype(Type t) {
     StructDef *def = NULL;
-    if (t.kind == TY_STRUCT) {
-        def = t.as.struct_.def;
-    } else if (t.kind == TY_ADT) {
+    if (t.kind == TY_ADT) {
         /* CONV-S1 seam 4: under the defstruct->defadt lowering the same phantom
          * int-newtype (`(defstruct Schema [A] (raw :int))`) is a single-variant
          * record ADT, not a TY_STRUCT.  Recognize that shape so the SC7
@@ -619,32 +588,6 @@ static void append_type_mangle(Buf *b, Type t) {
         case TY_REF_MUT:  buf_puts(b, "ref_mut"); break;
         case TY_ADT:
             buf_puts(b, t.as.adt_.def && t.as.adt_.def->name ? t.as.adt_.def->name : "adt");
-            break;
-        case TY_STRUCT:
-            /* A def-less TY_STRUCT is one of the elaborator's UNRESOLVED
-             * placeholders (tyvar / unknown / opaque-container type-constructor
-             * argument -- see docs/artifacts/ty-struct-null-def-inventory.md).  It carries no
-             * concrete representation, so a monomorph over it (e.g.
-             * `(Option <placeholder>)`) is the int64 CARRIER instance: a boxed
-             * int64 payload, distinct from a `void *` by-value handle.  Mangle
-             * it -- and the other unresolved placeholders (TY_TYVAR, TY_UNKNOWN,
-             * routed through the same token below) -- to "struct" so every
-             * placeholder Option resolves to the SAME carrier monomorph
-             * `Option__struct` (int64).  This is deliberately distinct from
-             * TY_FN's "opaque" (a `void *` by-value handle); collapsing the two
-             * is the baseline-ctor-option-struct-mangling bug (the int64 ctor
-             * and the void* ctor would share one include guard and one would win
-             * with the wrong ABI). */
-            /* structdef-retirement slice 5 B4: the def-less arm is now dead (all
-             * placeholder producers migrated to named TY_TYVAR, which mangles via
-             * the TY_TYVAR case below).  Assert def != NULL in debug -- a fire
-             * means a def-less TY_STRUCT was mangled from a path outside the B1
-             * inventory -- while keeping the "struct" fallback so an NDEBUG build
-             * still shares the carrier convention with the TY_TYVAR/TY_UNKNOWN
-             * arm. */
-            assert(t.as.struct_.def != NULL &&
-                   "def-less TY_STRUCT reached append_type_mangle (structdef-retirement B4)");
-            buf_puts(b, t.as.struct_.def && t.as.struct_.def->name ? t.as.struct_.def->name : "struct");
             break;
         case TY_UNKNOWN:
         case TY_TYVAR:
@@ -911,15 +854,7 @@ Type substitute_struct_app_type(const Type *t, const StructDef *def, const Type 
 void propagate_app_discipline(Type *app, const Type *fn) {
     const Type *head = fn;
     while (head && head->kind == TY_APP) head = head->as.app.fn;
-    if (head && head->kind == TY_STRUCT && head->as.struct_.def) {
-        const StructDef *hd = head->as.struct_.def;
-        if (hd->is_linear) {
-            app->copy_kind = CK_LINEAR;
-        } else if (hd->is_affine) {
-            app->copy_kind = CK_UNIQUE;
-            app->substruct = SK_AFFINE;
-        }
-    } else if (head && head->kind == TY_ADT && head->as.adt_.def) {
+    if (head && head->kind == TY_ADT && head->as.adt_.def) {
         /* structdef-retirement slice 5: a parametric opaque is now a TY_ADT head,
          * so `(Name X)` for a `:linear`/`:affine` opaque lifts the discipline onto
          * the TY_APP node exactly as the struct path above did. */
@@ -1172,30 +1107,6 @@ static const char *struct_field_c_type(const StructDef *owner, const StructField
     }
     if (field->full_type && owner && args) {
         Type resolved = substitute_struct_app_type(field->full_type, owner, args);
-        /* Direction (1) of
-         * docs/reported/polymorphic-ok-in-typeclass-instance-method-with-value-struct-payload.md:
-         * for the stdlib carrier-helper-backed parametric structs (Result,
-         * Option), force the parametric field's slot to a heap pointer when
-         * the resolved type-arg is a non-parametric value-struct. The struct
-         * layout then has a fixed 8-byte slot regardless of T's size and
-         * matches the carrier-box layout (tur_result_box_t / tur_option_t)
-         * that the prelude helpers produce -- so tur_box_ok / tur_box_some emit a
-         * carrier whose layout downstream consumers can read directly as
-         * the by-value Result__T__B / Option__T struct. */
-        if (owner && owner->name &&
-            (strcmp(owner->name, "Result") == 0 ||
-             strcmp(owner->name, "Option") == 0) &&
-            resolved.kind == TY_STRUCT && resolved.as.struct_.def &&
-            !resolved.as.struct_.def->is_opaque &&
-            resolved.as.struct_.def->n_type_params == 0) {
-            static char buf[128];
-            snprintf(buf, sizeof(buf), "%s *", type_c_name(resolved));
-            /* resolved is a fully owned clone (substitute_struct_app_type
-             * deep-clones); type_c_name only reads it, so release it. No-op
-             * for the non-APP scalar this branch handles. */
-            free_struct_app_type(resolved);
-            return buf;
-        }
         const char *name = type_c_name(resolved);
         /* resolved is a fully owned clone; type_c_name only reads it (and clones
          * again internally when registering), so release it here. */
@@ -1334,10 +1245,6 @@ bool adt_field_is_ros_pointer_box(const AdtDef *owner, const Type *resolved) {
     if (!owner || !owner->name || !resolved) return false;
     if (strcmp(owner->name, "Result") != 0 && strcmp(owner->name, "Option") != 0)
         return false;
-    if (resolved->kind == TY_STRUCT && resolved->as.struct_.def &&
-        !resolved->as.struct_.def->is_opaque &&
-        resolved->as.struct_.def->n_type_params == 0)
-        return true;
     if (resolved->kind == TY_ADT && resolved->as.adt_.def &&
         !resolved->as.adt_.def->is_heap &&
         resolved->as.adt_.def->n_type_params == 0 &&
@@ -1511,25 +1418,6 @@ static void emit_registered_struct_app_rec(Buf *out, uint32_t idx) {
                     }
                 }
             }
-            /* G5 Site 2 (typedef ordering): a struct-app field that references a
-             * USER struct by pointer (e.g. `Result__User__cstr { User *ok_val; }`)
-             * is flushed -- via the embedding struct's field flush -- ahead of the
-             * user struct typedef itself (which #482 pushes later once it gains an
-             * `(Option ...)` field dependency).  The user struct is NOT in the
-             * struct-app registry, so the TY_APP recursion above cannot emit it.
-             * Emit a guarded forward `typedef struct User User;` so the `User *`
-             * reference resolves; the later full `typedef struct User {...} User;`
-             * is an accepted redundant typedef (verified under -std=c99 -Wall).
-             * Pointer fields only need the name, so the forward decl suffices. */
-            if (resolved.kind == TY_STRUCT && resolved.as.struct_.def &&
-                resolved.as.struct_.def->name &&
-                !resolved.as.struct_.def->is_opaque) {
-                const char *un = resolved.as.struct_.def->name;
-                buf_printf(out, "#ifndef TUR_FWD_%s\n", un);
-                buf_printf(out, "#define TUR_FWD_%s\n", un);
-                buf_printf(out, "typedef struct %s %s;\n", un, un);
-                buf_printf(out, "#endif\n");
-            }
             /* Phase E: emit fn-ptr typedef before the struct that uses it. */
             if (resolved.kind == TY_FN && fn_type_is_concrete_for_ptr(&resolved)) {
                 const char *td = register_fn_ptr_typedef(&resolved);
@@ -1642,23 +1530,6 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                         break;
                     }
                 }
-            }
-            /* CONV-S1 seam 4 (typedef ordering): a `Result`/`Option` monomorph
-             * field that resolves to a non-parametric value-struct is stored as a
-             * pointer `T *` (adt_field_c_type, above), so -- exactly as the
-             * struct-app emitter does -- emit a guarded forward `typedef struct T
-             * T;` here.  The user struct is NOT in either app registry (it is
-             * non-parametric), so the recursion above cannot reach it; the forward
-             * decl is all a pointer field/param needs, and the later full typedef
-             * is an accepted redundant typedef under -std=c99. */
-            if (resolved.kind == TY_STRUCT && resolved.as.struct_.def &&
-                resolved.as.struct_.def->name &&
-                !resolved.as.struct_.def->is_opaque) {
-                const char *un = resolved.as.struct_.def->name;
-                buf_printf(out, "#ifndef TUR_FWD_%s\n", un);
-                buf_printf(out, "#define TUR_FWD_%s\n", un);
-                buf_printf(out, "typedef struct %s %s;\n", un, un);
-                buf_printf(out, "#endif\n");
             }
             /* structdef-retirement slice 1: same forward decl for a non-parametric
              * by-value record-ADT field stored as `tur_adt_T *` (the Result/Option
@@ -1909,6 +1780,10 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
  * tracked, optional follow-up. */
 const char *type_name(Type t) {
     switch (t.kind) {
+        /* TY_STRUCT is a retired Type.kind (no Type ever carries it); the
+         * enumerator survives only as a reflection/mangle tag.  Unreachable
+         * here -- route it to the same placeholder as TY_UNKNOWN. */
+        case TY_STRUCT:
         case TY_UNKNOWN: return "?";
         case TY_NIL:     return "nil";
         case TY_BOOL:    return "bool";
@@ -2076,17 +1951,6 @@ const char *type_name(Type t) {
             buf_free(&tmp);
             return r;
         }
-        /* Phase 11: Struct types */
-        case TY_STRUCT:
-            /* structdef-retirement slice 5 B4: every def-less TY_STRUCT
-             * placeholder producer has been migrated to a named TY_TYVAR, so a
-             * def==NULL TY_STRUCT must no longer reach here.  Assert the
-             * invariant in debug (a fire identifies a missed producer / a path
-             * outside the B1 inventory); keep the "<struct>" fallback for
-             * NDEBUG release safety. */
-            assert(t.as.struct_.def != NULL &&
-                   "def-less TY_STRUCT reached type_name (structdef-retirement B4)");
-            return t.as.struct_.def ? t.as.struct_.def->name : "<struct>";
         /* Phase G0: ADT types */
         case TY_ADT:
             return t.as.adt_.def ? t.as.adt_.def->name : "<adt>";
@@ -2428,6 +2292,9 @@ const char *type_name(Type t) {
 
 static void type_name_buf(Buf *b, Type t) {
     switch (t.kind) {
+        /* TY_STRUCT is a retired Type.kind: unreachable, route to the
+         * TY_UNKNOWN placeholder. */
+        case TY_STRUCT:
         case TY_UNKNOWN: buf_puts(b, "?"); break;
         case TY_NIL:     buf_puts(b, "nil"); break;
         case TY_BOOL:    buf_puts(b, "bool"); break;
@@ -2568,15 +2435,6 @@ static void type_name_buf(Buf *b, Type t) {
             buf_puts(b, "cloneable_cont<");
             type_name_buf(b, type_from_kind(t.as.cont.returns));
             buf_puts(b, ">");
-            break;
-        }
-        /* Phase 11: Struct types */
-        case TY_STRUCT: {
-            if (t.as.struct_.def) {
-                buf_puts(b, t.as.struct_.def->name);
-            } else {
-                buf_puts(b, "<struct>");
-            }
             break;
         }
         /* Phase G0: ADT types */
@@ -2901,10 +2759,6 @@ static bool adt_is_byvalue_product_d(const AdtDef *def, int depth);
 static bool adt_field_is_inline_byval_d(const CtorField *f, int depth) {
     if (depth <= 0 || !f || !f->full_type) return false;
     const Type *ft = f->full_type;
-    if (ft->kind == TY_STRUCT) {
-        const StructDef *sd = ft->as.struct_.def;
-        return sd && !sd->is_opaque && !sd->is_heap && !sd->needs_drop_glue;
-    }
     if (ft->kind == TY_ADT) {
         const AdtDef *ad = ft->as.adt_.def;
         /* seam 3: a :heap ADT is a typed POINTER, not an inline aggregate -- store
@@ -3020,13 +2874,6 @@ static size_t adt_ctor_field_size_bytes(const CtorField *f, int depth) {
             for (uint32_t i = 0; i < ic->n_fields; i++)
                 t += adt_ctor_field_size_bytes(&ic->fields[i], depth - 1);
             return t;
-        }
-        if (f->full_type->kind == TY_STRUCT && f->full_type->as.struct_.def) {
-            /* Struct field byte sizes are not computed here (types.c does not
-             * pull in elab's type_size_bytes); approximate each struct field as
-             * 8 bytes, which is monotone and conservative for the threshold. */
-            const StructDef *sd = f->full_type->as.struct_.def;
-            return (size_t)sd->n_fields * 8;
         }
     }
     return adt_field_size_bytes(f->kind);
@@ -3301,25 +3148,6 @@ const char *type_c_name(Type t) {
             return "int64_t";
         case TY_CLONEABLE_CONT:
             return "tur_cloneable_cont *";
-        /* Phase 11: Struct types lower to the struct name in C */
-        case TY_STRUCT:
-            /* Phase HKT H3: TY_STRUCT without a concrete StructDef represented an
-             * opaque HKT type-constructor argument (stored as int64_t).
-             * structdef-retirement slice 5 B4: those placeholder producers are
-             * all migrated to named TY_TYVAR now, so def==NULL must no longer
-             * reach here.  Assert in debug (a fire = a missed producer); keep the
-             * int64_t fallback for NDEBUG release safety. */
-            /* SI4-C: defopaque types are also int64_t in C (named only for REPL tags). */
-            assert(t.as.struct_.def != NULL &&
-                   "def-less TY_STRUCT reached type_c_name (structdef-retirement B4)");
-            if (!t.as.struct_.def) return "int64_t";
-            if (t.as.struct_.def->is_opaque) return "int64_t";
-            /* SC7: a transparent int newtype is just its int64 payload. */
-            if (type_is_transparent_int_newtype(t)) return "int64_t";
-            /* end-to-end-monomorphization: :heap structs lower to a typed pointer. */
-            if (t.as.struct_.def->is_heap)
-                return heap_ptr_c_name(t.as.struct_.def->name);
-            return t.as.struct_.def->name;
         /* Phase G0: ADT types are passed as int64_t (opaque heap pointer).
          * CONV-S1: a non-parametric flat-product ADT flows by value -- its C type
          * is the flat `tur_adt_<Name>` aggregate, not the int64 carrier.  Gated
@@ -3337,7 +3165,10 @@ const char *type_c_name(Type t) {
                 return adt_byval_c_name(t.as.adt_.def);
             }
             return "int64_t";
-        /* Phase G2: unresolved type variable — treated as int64_t at codegen level */
+        /* Phase G2: unresolved type variable — treated as int64_t at codegen level.
+         * TY_STRUCT is a retired Type.kind (unreachable): share the int64_t
+         * carrier convention its def-less/opaque arm used to emit. */
+        case TY_STRUCT:
         case TY_TYVAR:
             return "int64_t";
         /* Phase HKT-P1: Type application — generic struct values with
@@ -4580,10 +4411,6 @@ bool type_struct_pass_by_ptr(Type t) {
      * pointer `T__A **` and every field access read the wrong memory. */
     if (type_is_heap_struct(t)) return false;
     switch (t.kind) {
-        case TY_STRUCT: {
-            StructDef *def = t.as.struct_.def;
-            return def && !def->is_opaque && def->n_type_params == 0 && def->pass_by_ptr;
-        }
         case TY_APP: {
             /* Parametric-by-value: a large concrete flat-product ADT-app passes
              * as `const tur_adt_<Name>__A *`, mirroring the struct convention. */
@@ -4611,8 +4438,6 @@ bool type_struct_pass_by_ptr(Type t) {
  * typed pointer `T__A *` to a heap-allocated header (the parametric-type ABI
  * matrix's typed-pointer class). */
 bool type_is_heap_struct(Type t) {
-    if (t.kind == TY_STRUCT)
-        return t.as.struct_.def && t.as.struct_.def->is_heap;
     if (t.kind == TY_APP) {
         StructDef *def = NULL;
         Type args[16]; uint8_t n_args = 0;
@@ -4645,10 +4470,6 @@ bool type_is_heap_adt(Type t) {
  * onto the heap. Returns "int64_t" (via the generic fallback) when t has no
  * concrete layout. */
 const char *type_struct_value_c_name(Type t) {
-    if (t.kind == TY_STRUCT && t.as.struct_.def
-        && !t.as.struct_.def->is_opaque
-        && !type_is_transparent_int_newtype(t))
-        return t.as.struct_.def->name;
     if (t.kind == TY_APP && !type_is_transparent_int_newtype(t)
         && type_has_concrete_codegen_layout(&t))
         return register_struct_app(t);

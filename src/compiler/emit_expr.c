@@ -6514,13 +6514,6 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * through `((Cons *)(intptr_t)(xs))->head` instead.  A
                      * monomorphized spec receiver (`Cons__int *`) has no tyvar
                      * and keeps the direct pointer deref. */
-                    if (recv_rty.kind == TY_STRUCT && recv_rty.as.struct_.def &&
-                        recv_rty.as.struct_.def->n_type_params > 0) {
-                        /* bare parametric struct head (the abstract class-var
-                         * receiver in the carrier base clone) -- not yet
-                         * monomorphized, so the C param is the int64 carrier. */
-                        recv_is_ptr = false;
-                    }
                     for (Type ty = recv_rty; ty.kind == TY_APP && ty.as.app.fn; ) {
                         if (ty.as.app.arg && type_contains_unresolved_tyvar(*ty.as.app.arg)) {
                             recv_is_ptr = false;
@@ -6588,10 +6581,6 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (type_extract_struct_app(&spec_arg, &sa_def, sa_args, &sa_n)
                         && sa_def && sa_def == def) {
                         through_carrier = false;
-                    } else if (spec_arg.kind == TY_STRUCT && spec_arg.as.struct_.def
-                               && !spec_arg.as.struct_.def->is_opaque
-                               && spec_arg.as.struct_.def->n_type_params == 0) {
-                        through_carrier = false;
                     }
                 }
             }
@@ -6654,21 +6643,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                 substitute_struct_app_type(f->full_type, def, extracted_args);
                             field_resolved_owned = true;
                         }
-                    } else if (rt.kind == TY_STRUCT && rt.as.struct_.def &&
-                               rt.as.struct_.def->n_type_params == 0 &&
-                               e->as.get_field_.field_idx < rt.as.struct_.def->n_fields) {
-                        /* The spec arg type is the monomorphized container struct
-                         * (e.g. `Option__Box`): its field already carries the
-                         * concrete element type as its declared full_type. */
-                        const StructField *f =
-                            &rt.as.struct_.def->fields[e->as.get_field_.field_idx];
-                        if (f->full_type) field_resolved = *f->full_type;
                     }
-                }
-                if (field_resolved.kind == TY_STRUCT && field_resolved.as.struct_.def &&
-                    !field_resolved.as.struct_.def->is_opaque &&
-                    field_resolved.as.struct_.def->n_type_params == 0) {
-                    field_is_heap_ptr_for_value_struct = true;
                 }
                 if (field_resolved_owned) free_struct_app_type(field_resolved);
             }
@@ -6947,15 +6922,12 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * so it must not go through the by-value carrier bridge either.
              * See docs/reported/parameterized-defopaque.md. */
             bool ascribe_to_opaque =
-                (e->type.kind == TY_STRUCT && e->type.as.struct_.def &&
-                 e->type.as.struct_.def->is_opaque) ||
                 /* structdef-retirement slice 5: an opaque newtype is now a
                  * TY_ADT with is_opaque -- ascribing into it (`(:: 7 :Tag)`) is
                  * the same pure int64-carrier relabel as the struct-opaque case,
                  * never a by-value aggregate carrier bridge. */
                 (e->type.kind == TY_ADT && e->type.as.adt_.def &&
                  e->type.as.adt_.def->is_opaque) ||
-                (e->type.kind == TY_STRUCT && e->type.as.struct_.def == NULL) ||
                 e->type.kind == TY_TYVAR;
             /* constrained-generic-dispatch-float-element: `(:: (vec-get v i) A)`
              * -- the documented carrier-helper ascription idiom -- recovers the
@@ -7463,8 +7435,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (j > 0) buf_puts(&sig, ", ");
                 Type pt = m->param_types[j];
                 bool is_classvar =
-                    pt.kind == TY_TYVAR ||
-                    (pt.kind == TY_STRUCT && pt.as.struct_.def == NULL);
+                    pt.kind == TY_TYVAR;
                 buf_puts(&sig, is_classvar ? "int64_t" : type_c_name(pt));
             }
             buf_putc(&sig, '\0');

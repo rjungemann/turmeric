@@ -488,30 +488,12 @@ set_target_properties(tur_kind_arity_unit PROPERTIES
 )
 
 # ---------------------------------------------------------------------------
-# end-to-end-monomorphization (M3->M7 Vec typed-pointer slice): :heap typed-
-# pointer ABI lowering unit test
+# structdef-retirement DS-D: the :heap typed-pointer ABI lowering unit test
+# (tur_heap_abi_unit) pinned type_c_name over a hand-built StructDef.  StructDef
+# has been deleted; the :heap typed-pointer lowering now lives on the record-ADT
+# monomorph/app path and is covered end-to-end by the fixture suite, so the
+# isolated StructDef unit pin was retired with the type.
 # ---------------------------------------------------------------------------
-add_executable(tur_heap_abi_unit
-    ${CMAKE_SOURCE_DIR}/tests/compiler/test_heap_abi.c
-    $<TARGET_OBJECTS:tur_core>
-)
-target_include_directories(tur_heap_abi_unit PRIVATE ${TUR_INCLUDE_DIRS})
-target_compile_options(tur_heap_abi_unit PRIVATE
-    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
-    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
-    $<$<CONFIG:Release>: -O2 -DNDEBUG>
-)
-target_link_options(tur_heap_abi_unit PRIVATE -pthread
-    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
-)
-target_link_libraries(tur_heap_abi_unit PRIVATE m)
-if(HAVE_EDITLINE)
-    target_link_libraries(tur_heap_abi_unit PRIVATE ${LIBEDIT_LIB})
-    target_compile_definitions(tur_heap_abi_unit PRIVATE TURI_HAVE_EDITLINE=1)
-endif()
-set_target_properties(tur_heap_abi_unit PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
-)
 
 # ---------------------------------------------------------------------------
 # Variadic HKT rows (Direction 1): kind-level `List Type` (KIND_TYPEROW) unit test

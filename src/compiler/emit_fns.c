@@ -840,35 +840,12 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * See docs/reported/polymorphic-ok-fails-for-value-struct-payload.md. */
     bool needs_box_spill[16];
     for (uint8_t i = 0; i < 16; i++) needs_box_spill[i] = false;
-    /* M2b: the box-spill recognizer was originally inline-C only (the body's
-     * `(int64_t)(intptr_t)x` cast required `x` to be a pointer).  Now that
-     * `#{Construct}` bodies can be written as `(make-struct …)` instead, the
-     * same monomorphization shape (value-struct payload through a carrier-ABI
-     * result) still needs the box-spill — the prereq-6 synthesis below
-     * heap-spills the param value into the struct's pointer-typed payload
-     * slot.  Enable the recognizer for `#{Construct}` make-struct bodies as
-     * well as inline-C ones.  See
-     * docs/reported/m2b-stdlib-migration-blocked-on-carrier-fallback.md. */
-    bool body_is_make_struct = fd->body && fd->body->kind == EX_MAKE_STRUCT;
-    bool boxspill_eligible_body =
-        body_is_inline_c ||
-        (body_is_make_struct && fd->binding && fd->binding->is_construct_template);
-    if (use_abi_spec && boxspill_eligible_body) {
-        Type ret = ctx->current_abi_specialization->result_type;
-        bool return_uses_carrier =
-            type_uses_carrier_abi(emit_resolve_type(ctx, ret));
-        if (return_uses_carrier) {
-            for (uint8_t i = 0; i < fd->n_params && i < 16; i++) {
-                Type pty = ctx->current_abi_specialization->arg_types[i];
-                bool is_value_struct =
-                    pty.kind == TY_STRUCT && pty.as.struct_.def &&
-                    !pty.as.struct_.def->is_opaque &&
-                    pty.as.struct_.def->n_type_params == 0 &&
-                    !type_uses_carrier_abi(emit_resolve_type(ctx, pty));
-                if (is_value_struct) needs_box_spill[i] = true;
-            }
-        }
-    }
+    /* The box-spill recognizer keyed on a value-struct parameter (a Type of
+     * kind TY_STRUCT).  No Type ever carries that kind now -- value records
+     * lower to TY_ADT/TY_APP -- so the population never fired and has been
+     * removed.  `needs_box_spill` therefore stays all-false; the rename +
+     * heap-spill stanza below remain as an inert safety net for future
+     * inline-C `#{Construct}` bodies that cast a pointer-carried param. */
     /* B4 (byvalue-recursive-carrier, slice 2): the inverse of box-spill.  A
      * CLOSURE thunk whose parameter is a WIDE (>8 byte) by-value ADT receives it
      * across the fat-closure boundary as an int64 heap-box POINTER (the value

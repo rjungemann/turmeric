@@ -178,18 +178,13 @@ TypeClassInstance *typeclass_env_lookup_instance(const TypeClassEnv *env,
                 break;
             }
             TypeKind eff_kind = type_args[i].kind;
-            const StructDef *eff_struct_def = NULL;
             const AdtDef *eff_adt_def = NULL;
             if (eff_kind == TY_APP) {
                 /* Walk to the head of the TY_APP chain (a type constructor --
-                 * TY_STRUCT, or TY_ADT once a parametric struct lowers to a
-                 * record defadt). */
+                 * a record defadt once a parametric struct lowers). */
                 const Type *head = &type_args[i];
                 while (head && head->kind == TY_APP) head = head->as.app.fn;
-                if (head && head->kind == TY_STRUCT) {
-                    eff_kind = TY_STRUCT;
-                    eff_struct_def = head->as.struct_.def;
-                } else if (head && head->kind == TY_ADT) {
+                if (head && head->kind == TY_ADT) {
                     /* CONV-S1: an ADT-app receiver (e.g. `(Option int)` after
                      * Option lowers) normalises to its TY_ADT head so it matches
                      * a TY_ADT-headed instance and -- via eff_adt_def below --
@@ -199,12 +194,6 @@ TypeClassInstance *typeclass_env_lookup_instance(const TypeClassEnv *env,
                     eff_kind = TY_ADT;
                     eff_adt_def = head->as.adt_.def;
                 }
-            } else if (eff_kind == TY_STRUCT) {
-                /* Phase RT: a plain struct lookup type carries its own
-                 * StructDef; record it so the struct-identity check below
-                 * discriminates between distinct struct instances (e.g.
-                 * HasSchema[User] vs HasSchema[Post]). */
-                eff_struct_def = type_args[i].as.struct_.def;
             } else if (eff_kind == TY_ADT) {
                 eff_adt_def = type_args[i].as.adt_.def;
             }
@@ -221,35 +210,18 @@ TypeClassInstance *typeclass_env_lookup_instance(const TypeClassEnv *env,
              * the raw TY_APP, so the kinds never line up and dispatch reports a
              * spurious TUR_E0020 ambiguity. */
             TypeKind inst_eff_kind = inst->type_args[i].kind;
-            const StructDef *inst_eff_struct_def = NULL;
             const AdtDef *inst_eff_adt_def = NULL;
             if (inst_eff_kind == TY_APP) {
                 const Type *ihead = &inst->type_args[i];
                 while (ihead && ihead->kind == TY_APP) ihead = ihead->as.app.fn;
-                if (ihead && ihead->kind == TY_STRUCT) {
-                    inst_eff_kind = TY_STRUCT;
-                    inst_eff_struct_def = ihead->as.struct_.def;
-                } else if (ihead && ihead->kind == TY_ADT) {
+                if (ihead && ihead->kind == TY_ADT) {
                     inst_eff_kind = TY_ADT;
                     inst_eff_adt_def = ihead->as.adt_.def;
                 }
-            } else if (inst_eff_kind == TY_STRUCT) {
-                inst_eff_struct_def = inst->type_args[i].as.struct_.def;
             } else if (inst_eff_kind == TY_ADT) {
                 inst_eff_adt_def = inst->type_args[i].as.adt_.def;
             }
             if (inst_eff_kind != eff_kind) {
-                match = false;
-                break;
-            }
-            /* Additional struct-identity check: a TY_APP'd receiver must
-             * match the instance's struct constructor (Eq[Vec] vs Eq[Map],
-             * etc.).  Without this, Eq[TY_APP(Vec, int)] would match
-             * Eq[Map] because both have type_args[0].kind == TY_STRUCT. */
-            if (eff_struct_def &&
-                inst_eff_kind == TY_STRUCT &&
-                inst_eff_struct_def != NULL &&
-                inst_eff_struct_def != eff_struct_def) {
                 match = false;
                 break;
             }
