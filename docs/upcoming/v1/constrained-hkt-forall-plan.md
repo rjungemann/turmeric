@@ -248,7 +248,9 @@ No-go signal, the record encoding ships. It needs none of slices 1-3; the one
 thing it gives up is composing optics by ordinary function composition (a
 generic `lens-compose` setter uses the whole `s` twice, which linearity rejects
 for an abstract move-only `S` -- hand-compose at concrete `:copy` whole types).
-Slices 1-3 remain the foundation for the van Laarhoven form once mode B lands.
+Slices 1-3 remain the foundation for the van Laarhoven form once mode B lands;
+that work is scoped in the follow-up
+[constrained-hkt-forall-mode-b-plan.md](constrained-hkt-forall-mode-b-plan.md).
 
 **Original goal.** Ship a single stdlib module `stdlib/lens.tur` that defines
 `type Lens a b = forall [(f :: * -> *)] [(Functor f)] (-> (-> b (f b))
