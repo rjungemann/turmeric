@@ -1,6 +1,6 @@
 # Test Performance Optimization Plan (CI / Test Runner Parity)
 
-* **Status**: Partially Implemented (Phase 3 Completed)
+* **Status**: Partially Implemented (Phases 2 & 3 Completed)
 * **Author**: Gemini CLI
 * **Date**: June 29, 2026
 
@@ -169,6 +169,6 @@ Following implementation, the test suite must be fully executed using `tur run t
 
 1. **Document Design Plan**: Commit this plan to `docs/upcoming/test-performance-optimization-plan.md` (Completed).
 2. **Implement Phase 1 (CTest Parallelism)**: Update `Justfile` and measure baseline timing.
-3. **Implement Phase 2 (Doctest Fixes)**: Update `tools/run-doctests.sh`, `stdlib/term.tur`, and `stdlib/math.tur` sequentially. Verify local doctest runs.
+3. **Implement Phase 2 (Doctest Fixes)**: Update `tools/run-doctests.sh`, `stdlib/term.tur`, and `stdlib/math.tur` sequentially. Verify local doctest runs. (Completed)
 4. **Implement Phase 3 (Stamp Cache)**: Inject cached `TUR_MTIME` logic into test runners and verify stamp validation speeds. (Completed)
 5. **Final Validation Gate**: Execute end-to-end local test suite and confirm target performance characteristics.

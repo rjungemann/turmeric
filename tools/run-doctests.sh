@@ -116,9 +116,17 @@ for tur_file in "${tur_files[@]}"; do
     module_ok=true
     idx=0
 
-    # Build parallel arrays from the files
-    mapfile -t expected_arr < "$expected_file"
-    mapfile -t names_arr    < "$names_file"
+    # Build parallel arrays from the files (Bash 3.2 compatible; macOS ships
+    # without `mapfile`, so use portable `while read` loops instead).
+    expected_arr=()
+    while IFS= read -r line || [ -n "$line" ]; do
+        expected_arr+=("$line")
+    done < "$expected_file"
+
+    names_arr=()
+    while IFS= read -r line || [ -n "$line" ]; do
+        names_arr+=("$line")
+    done < "$names_file"
 
     while IFS= read -r actual_line || [ -n "$actual_line" ]; do
         exp="${expected_arr[$idx]:-}"

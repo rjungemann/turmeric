@@ -5780,32 +5780,27 @@ static int64_t replace(int64_t old, int64_t new) {
 }
 
 static double sqrt(double x) {
-        double sqrt(double);
-  return sqrt(x);
+        return __builtin_sqrt(x);
   
 }
 
 static double fabs(double x) {
-        double fabs(double);
-  return fabs(x);
+        return __builtin_fabs(x);
   
 }
 
 static double floor(double x) {
-        double floor(double);
-  return floor(x);
+        return __builtin_floor(x);
   
 }
 
 static double ceil(double x) {
-        double ceil(double);
-  return ceil(x);
+        return __builtin_ceil(x);
   
 }
 
 static double pow(double x, double y) {
-        double pow(double, double);
-  return pow(x, y);
+        return __builtin_pow(x, y);
   
 }
 

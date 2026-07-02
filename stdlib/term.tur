@@ -78,8 +78,15 @@
 (defn term/set-raw [fd : int] : int
   ```c
   #include <termios.h>
+  #include <unistd.h>
   static struct termios saved_termios;
   struct termios raw;
+  // Guard against SIGTTOU: if this process is not the foreground process
+  // group on the terminal (e.g. running under xargs/subshell workers in the
+  // doctest harness), skip terminal state modification to avoid a kernel
+  // stop signal that manifests as a silent, infinite hang.
+  pid_t fg = tcgetpgrp((int)fd);
+  if (fg == -1 || fg != getpgrp()) return -1;
   if (tcgetattr((int)fd, &saved_termios) != 0) return -1;
   raw = saved_termios;
   cfmakeraw(&raw);
@@ -103,7 +110,10 @@
 (defn term/set-cooked [fd : int] : int
   ```c
   #include <termios.h>
+  #include <unistd.h>
   static struct termios saved_termios;
+  pid_t fg = tcgetpgrp((int)fd);
+  if (fg == -1 || fg != getpgrp()) return -1;
   return (int64_t)tcsetattr((int)fd, TCSAFLUSH, &saved_termios);
   ```)
 ;; -- ANSI color helpers -------------------------------------------------------

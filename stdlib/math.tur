@@ -21,8 +21,7 @@
 ;;; Since: Phase B1
 (defn sqrt [x : float] : float
   ```c
-  double sqrt(double);
-  return sqrt(x);
+  return __builtin_sqrt(x);
   ```)
 ;;; fabs -- absolute value of a float.
 ;;;
@@ -39,8 +38,7 @@
 
 (defn fabs [x : float] : float
   ```c
-  double fabs(double);
-  return fabs(x);
+  return __builtin_fabs(x);
   ```)
 ;;; floor -- largest integer not greater than x.
 ;;;
@@ -57,8 +55,7 @@
 
 (defn floor [x : float] : float
   ```c
-  double floor(double);
-  return floor(x);
+  return __builtin_floor(x);
   ```)
 ;;; ceil -- smallest integer not less than x.
 ;;;
@@ -75,8 +72,7 @@
 
 (defn ceil [x : float] : float
   ```c
-  double ceil(double);
-  return ceil(x);
+  return __builtin_ceil(x);
   ```)
 ;;; pow -- x raised to the power y.
 ;;;
@@ -94,8 +90,7 @@
 
 (defn pow [x : float y : float] : float
   ```c
-  double pow(double, double);
-  return pow(x, y);
+  return __builtin_pow(x, y);
   ```)
 ;;; int->float -- convert an integer to a float via numeric cast.
 ;;;
