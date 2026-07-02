@@ -167,9 +167,14 @@ static Type *session_dual(Elab *e, Type *proto, Span span) {
 /* SS2: Build an EX_INLINE_C node with substitution placeholders.
  * code_str/code_len: the template (may contain __TUR_VAL_N__)
  * ret_type: the Turmeric type of the expression
- * chan_binding: if non-NULL, stored as EX_VAR in val_exprs[0] for __TUR_VAL_0__ */
+ * chan_binding: if non-NULL, stored as EX_VAR in val_exprs[0] for __TUR_VAL_0__
+ * chan_fallback: EF-4 -- when chan_binding is NULL but the channel operand is a
+ *   non-variable expression (e.g. a Session/Role struct-field read `(.s box)`),
+ *   the elaborated operand expr is stored in val_exprs[0] directly.  Pass NULL
+ *   for a template that carries no __TUR_VAL_0__ (e.g. make-session). */
 static Expr *session_inline_c(Elab *e, const char *code_str, uint32_t code_len,
-                               Type ret_type, Binding *chan_binding, Span span) {
+                               Type ret_type, Binding *chan_binding,
+                               Expr *chan_fallback, Span span) {
     Expr *out = expr_new(e->arena, EX_INLINE_C, ret_type, span);
     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
     ic->code = strslice(code_str, code_len);
@@ -181,6 +186,14 @@ static Expr *session_inline_c(Elab *e, const char *code_str, uint32_t code_len,
         Expr *chan_var = expr_new(e->arena, EX_VAR, chan_binding->type, span);
         chan_var->as.var.binding = chan_binding;
         ic->val_exprs[0] = chan_var;
+        ic->n_val_exprs = 1;
+    } else if (chan_fallback) {
+        /* EF-4: no plain-variable binding, but a real channel operand expr (a
+         * field read).  Substitute it for __TUR_VAL_0__ so a Session/Role field
+         * endpoint can be closed/received directly, instead of leaving val_exprs
+         * empty (which left __TUR_VAL_0__ unsubstituted / crashed emit). */
+        ic->val_exprs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+        ic->val_exprs[0] = chan_fallback;
         ic->n_val_exprs = 1;
     } else {
         ic->val_exprs = NULL;
@@ -222,7 +235,7 @@ Expr *elab_session_make(Elab *e, const Form *call) {
      * separate EX_INLINE_C init expressions: tur_session_new() for fst and
      * __TUR_CAP_0__ (referencing fst's binding) for snd. */
     Type pair_type = type_session_pair(sess_p, sess_dp);
-    return session_inline_c(e, "/*make-session*/", 16, pair_type, NULL, call->span);
+    return session_inline_c(e, "/*make-session*/", 16, pair_type, NULL, NULL, call->span);
 }
 
 /* Helper: validate that an expression is a Session[...] channel and extract
@@ -294,7 +307,12 @@ Expr *elab_session_send(Elab *e, const Form *call) {
         chan_var->as.var.binding = chan_binding;
         ic->val_exprs[0] = chan_var;
     } else {
-        ic->val_exprs[0] = NULL;
+        /* EF-4: the channel operand is not a plain variable (e.g. a Session
+         * struct-field read `(.s box)`).  Use the elaborated operand expr
+         * directly so __TUR_VAL_0__ substitutes to the field access -- a NULL
+         * here crashed emit_value.  A Session-field read emits `(void *)(box).s`,
+         * which flows into tur_session_send's TurChannel* param unchanged. */
+        ic->val_exprs[0] = chan;
     }
     ic->val_exprs[1] = val;
     sess_q_alloc->as.inline_c_.inline_c = ic;
@@ -338,7 +356,7 @@ Expr *elab_session_recv(Elab *e, const Form *call) {
     Type *sess_q = (Type *)arena_alloc(e->arena, sizeof(Type));
     *sess_q = type_session(cont_proto_alloc);  /* Session[Q] */
     Type pair_type = type_session_recv_pair(val_tp, sess_q);
-    return session_inline_c(e, "/*recv-pair*/", 13, pair_type, chan_binding, call->span);
+    return session_inline_c(e, "/*recv-pair*/", 13, pair_type, chan_binding, NULL, call->span);
 }
 
 /* (close chan) — consume chan : Session[Close]; return nil.
@@ -385,7 +403,7 @@ Expr *elab_session_close(Elab *e, const Form *call) {
         static const char role_close_code[] = "tur_role_close((void *)__TUR_VAL_0__)";
         Type nil_t = TYPE_NIL;
         return session_inline_c(e, role_close_code, sizeof(role_close_code) - 1,
-                                nil_t, chan_binding, call->span);
+                                nil_t, chan_binding, chan, call->span);
     }
 
     Type *proto = session_protocol_of(e, chan, "close", call->span);
@@ -413,7 +431,7 @@ Expr *elab_session_close(Elab *e, const Form *call) {
     /* SS2: call tur_session_close(__TUR_VAL_0__); return nil. */
     static const char close_code[] = "tur_session_close(__TUR_VAL_0__)";
     return session_inline_c(e, close_code, sizeof(close_code) - 1,
-                             TYPE_NIL, chan_binding, call->span);
+                             TYPE_NIL, chan_binding, chan, call->span);
 }
 
 /* (offer chan) — consume chan : Session[Branch[P, Q]]; return Either(Session[P], Session[Q]).
@@ -459,7 +477,7 @@ Expr *elab_session_offer(Elab *e, const Form *call) {
     Type offer_type = type_session_offer(sess_p, sess_q);
     static const char offer_code[] = "tur_session_recv_tag(__TUR_VAL_0__)";
     return session_inline_c(e, offer_code, sizeof(offer_code) - 1,
-                             offer_type, chan_binding, call->span);
+                             offer_type, chan_binding, NULL, call->span);
 }
 
 /* (choose-left chan) — consume chan : Session[Choose[P, Q]]; return Session[P].
@@ -506,7 +524,13 @@ Expr *elab_session_choose_left(Elab *e, const Form *call) {
         chan_var->as.var.binding = chan_binding;
         ic->val_exprs[0] = chan_var;
         ic->n_val_exprs = 1;
-    } else { ic->val_exprs = NULL; ic->n_val_exprs = 0; }
+    } else {
+        /* EF-4: field-read (non-variable) channel operand -- substitute the
+         * elaborated expr for __TUR_VAL_0__ rather than leaving it unbound. */
+        ic->val_exprs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+        ic->val_exprs[0] = chan;
+        ic->n_val_exprs = 1;
+    }
     out->as.inline_c_.inline_c = ic;
     return out;
 }
@@ -555,7 +579,13 @@ Expr *elab_session_choose_right(Elab *e, const Form *call) {
         chan_var->as.var.binding = chan_binding;
         ic->val_exprs[0] = chan_var;
         ic->n_val_exprs = 1;
-    } else { ic->val_exprs = NULL; ic->n_val_exprs = 0; }
+    } else {
+        /* EF-4: field-read (non-variable) channel operand -- substitute the
+         * elaborated expr for __TUR_VAL_0__ rather than leaving it unbound. */
+        ic->val_exprs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+        ic->val_exprs[0] = chan;
+        ic->n_val_exprs = 1;
+    }
     out->as.inline_c_.inline_c = ic;
     return out;
 }
@@ -648,7 +678,9 @@ Expr *elab_session_recv_timeout(Elab *e, const Form *call) {
         cv->as.var.binding = chan_binding;
         rto_ic->val_exprs[0] = cv;
     } else {
-        rto_ic->val_exprs[0] = NULL;
+        /* EF-4: field-read (non-variable) channel operand -- use the elaborated
+         * expr directly rather than a NULL val-expr (which crashed emit). */
+        rto_ic->val_exprs[0] = chan;
     }
     rto_ic->val_exprs[1] = dur;
     rto_out->as.inline_c_.inline_c = rto_ic;

@@ -200,6 +200,20 @@ static void struct_field_storage_from_type(const Type *t, TypeKind *out_kind, Ty
              * rather than relying on `default:` so the intent is documented. */
             *out_kind = TY_HANDLER;
             return;
+        case TY_SESSION:
+        case TY_ROLE:
+            /* EF-4: a `(Session P)` / `(project G R)` / `(Role G R)` field is a
+             * runtime channel/role endpoint (a `TurChannel *` / role pointer at
+             * the C level).  Keep the TY_SESSION / TY_ROLE kind (do not remap to
+             * TY_INT), exactly as the TY_HANDLER case above: the record ADT's C
+             * emitter maps both to the int64 pointer carrier via
+             * adt_field_scalar_c_type's default, while the constructor's argument
+             * type-check reads this kind and so accepts a session/role value
+             * (remapping to TY_INT would make the ctor demand an `int` and reject
+             * the endpoint).  Both are CK_LINEAR; the exactly-once discipline
+             * rides the field type's copy_kind, like the borrow family. */
+            *out_kind = t->kind;
+            return;
         case TY_REF:
         case TY_LREF:
             *out_kind = t->kind;
@@ -239,33 +253,42 @@ static Type *struct_field_type_from_form(Elab *e, const Form *form,
     if (form->tag == F_LIST && form->as.list.len >= 1 &&
         form->as.list.items[0]->tag == F_SYM) {
         const Symbol *head = form->as.list.items[0]->as.sym;
-        /* structdef-retirement slice 5 DS-A4: reject the built-in compound field
-         * forms that have no record-ADT field representation yet -- `forall`,
-         * session types, project/global/role.  A
-         * defstruct with such a field now takes the ADT path (defstruct_lowers
-         * _to_adt is true) and errors CLEANLY here instead of silently falling to
-         * the legacy StructDef path -- which is what makes the residual StructDef
+        /* structdef-retirement slice 5 DS-A4 / EF-4: reject the built-in compound
+         * field forms that have NO usable field representation.  The session
+         * PROTOCOL DESCRIPTORS (`Send`/`Recv`/`Choose`/`Branch`/`Rec`/`Timeout`)
+         * are type-level constructs -- a value is always a `Session[P]`, never a
+         * bare `(Send ...)`; a descriptor is only meaningful NESTED inside
+         * `(Session ...)`, where type_expr_from_form parses it recursively.
+         * `Global` (`(Global Name)`) is a compile-time-only choreography type
+         * (types.h: "no runtime representation").  `forall` (EF-3) is SHELVED
+         * (2026-07-02): its storage is free -- it rides the exists int64 carrier
+         * and struct_field_storage_from_type maps TY_FORALL -> TY_INT -- but a
+         * poly value read from a field has no consumption path under erasure-based
+         * HRT (a rank-N argument must be a named function, not a field-read
+         * expression), so a lowered forall field would be write-only; kept
+         * rejected until HRT can instantiate a poly value from a field.  A
+         * defstruct with such a field takes the ADT path (defstruct_lowers_to_adt
+         * is true) and errors CLEANLY here instead of silently falling to the
+         * legacy StructDef path -- which is what makes the residual StructDef
          * producer unreachable (the deletion precondition).  `exists`, `fn`/`c-fn`,
-         * `arrow` (`->`), `handler` and the borrow family DO lower and are handled
-         * below.  Lowering the remaining forms is tracked in
-         * docs/upcoming/structdef-exotic-field-forms-plan.md.  `forall` (EF-3) is
-         * SHELVED there (2026-07-02): its storage is free -- it rides the exists
-         * int64 carrier and struct_field_storage_from_type already maps TY_FORALL
-         * -> TY_INT -- but a poly value read from a field has no consumption path
-         * under erasure-based HRT (a rank-N argument must be a named function, not
-         * a field-read expression), so a lowered forall field would be write-only.
-         * Kept rejected until HRT can instantiate a poly value from a field. */
+         * `arrow` (`->`), `handler`, the borrow family, and the value-carrying
+         * session heads `Session`/`project`/`Role` (EF-4) DO lower and are handled
+         * below.  Tracked in
+         * docs/upcoming/structdef-exotic-field-forms-plan.md. */
         if (head == e->sym_forall || head == e->sym_forall_u ||
-            head == e->sym_session_type || head == e->sym_session_Send ||
+            head == e->sym_session_Send ||
             head == e->sym_session_Recv || head == e->sym_session_Choose ||
             head == e->sym_session_Branch || head == e->sym_session_Rec ||
-            head == e->sym_session_Timeout || head == e->sym_project_type ||
-            head == e->sym_global_type || head == e->sym_role_type) {
+            head == e->sym_session_Timeout ||
+            head == e->sym_global_type) {
             diag_emit(DIAG_ERROR, form->span,
-                      "type form '(%.*s ...)' is not yet supported as a struct/ADT "
-                      "field; this built-in compound type form cannot be stored in "
-                      "a field (tracked in "
-                      "docs/upcoming/structdef-exotic-field-forms-plan.md)",
+                      "type form '(%.*s ...)' is not supported as a struct/ADT "
+                      "field; this built-in compound type form has no runtime "
+                      "value to store in a field (a session protocol descriptor "
+                      "is only meaningful nested inside `(Session ...)`; `Global` "
+                      "is a compile-time-only choreography type; `forall` is the "
+                      "EF-3 gate).  See "
+                      "docs/upcoming/structdef-exotic-field-forms-plan.md",
                       (int)head->len, head->name);
             return NULL;
         }
@@ -291,6 +314,22 @@ static Type *struct_field_type_from_form(Elab *e, const Form *form,
          * carrier slot.  A handler is a CK_COPY value, so no linear/affine or
          * `:copy` diagnostic applies (unlike the borrow family). */
         if (head == e->sym_handler_type) {
+            return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
+        }
+        /* EF-4: the value-carrying session heads -- `(Session P)` (a linear
+         * channel endpoint), `(project G R)` (which resolves to `Session[P]` for
+         * the projected role), and `(Role G R)` (a linear endpoint of a global
+         * protocol).  Each is its own TypeKind (TY_SESSION / TY_ROLE), not a type
+         * application; type_expr_from_form has the session-type parser (SS0b/SS5/
+         * SS6).  Route there so the field resolves to TY_SESSION / TY_ROLE, which
+         * struct_field_storage_from_type keeps as the storage kind (the C emitter
+         * maps both to the int64 pointer carrier, like a handler field).  Both are
+         * CK_LINEAR, so the ADT `:copy` check reproduces TUR-E0102 for such a
+         * field in a `:copy` struct -- exactly as the borrow family (lref) does.
+         * The protocol DESCRIPTORS (Send/Recv/...) and `Global` are rejected above
+         * (no runtime value). */
+        if (head == e->sym_session_type || head == e->sym_project_type ||
+            head == e->sym_role_type) {
             return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
         }
         /* structdef-retirement slice 5 DS-A3: a list-form built-in compound type

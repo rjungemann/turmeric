@@ -12,7 +12,7 @@ Per-form plans:
 - [EF-2: `handler`](structdef-exotic-field-handler-plan.md)
 - [EF-3: `forall`](structdef-exotic-field-forall-plan.md) (design
   decision first: lower, reject, or shelve)
-- [EF-4: session / `project` / `global` / `role`](structdef-exotic-field-session-plan.md)
+- [EF-4: session / `project` / `global` / `role`](../archive/structdef-exotic-field-session-plan.md)
 
 Do EF-1 first (shortest delta, no new storage case), then EF-2
 (establishes the "add a storage case" pattern), then EF-3 (design
@@ -28,11 +28,15 @@ types is a **hard error**:
 type form '(handler ...)' is not yet supported as a struct/ADT field; ...
 ```
 
-The rejected forms are: `(forall ...)`, the session
+The originally-rejected forms were: `(forall ...)`, the session
 types
 (`(Send ..)`/`(Recv ..)`/`(Choose ..)`/`(Branch ..)`/`(Rec ..)`/`(Timeout ..)`),
 `(project ..)`, `(global ..)`, `(role ..)`. `(arrow ...)` / `(-> ...)`
-(EF-1) and `(handler ...)` (EF-2) now lower; see below.
+(EF-1), `(handler ...)` (EF-2), and the value-carrying session heads
+`(Session ..)` / `(project ..)` / `(Role ..)` (EF-4) now lower; see below.
+Still rejected: `(forall ...)` (EF-3 gate), the session protocol descriptors
+(`Send`/`Recv`/`Choose`/`Branch`/`Rec`/`Timeout` -- type-level, no runtime
+value), and `(Global ..)` (compile-time-only choreography).
 
 This rejection was deliberate and load-bearing for the StructDef
 deletion, **not** a considered decision that these forms should never
@@ -70,6 +74,16 @@ off the StructDef path, so lowering them does not block the deletion.
   into the carrier slot, mirroring the `fn`-field cast. A handler is
   `CK_COPY`, so no linear/`:copy` diagnostic applies.
 - `exists`-pack fields (slice 3).
+- the value-carrying session heads `(Session P)` / `(project G R)` /
+  `(Role G R)` (EF-4) -- linear channel/role endpoints (`TY_SESSION` /
+  `TY_ROLE`).  Routed to `type_expr_from_form`, with explicit
+  `case TY_SESSION` / `case TY_ROLE` in `struct_field_storage_from_type` that
+  keep the kind (int64 pointer carrier, like `TY_HANDLER`); the ctor-arg emit
+  casts the endpoint pointer through `intptr_t` into the carrier.  Both are
+  CK_LINEAR, so a `:copy` container is rejected exactly as the borrow family.
+  The session protocol descriptors and `Global` stay rejected (no runtime
+  value).  EF-4 also fixed a latent crash in `elab_sessions.c` where `send`/
+  `close` on a non-variable channel operand (a field read) set a NULL val-expr.
 - the borrow family `(lref T)` / `(& T)` / `(borrow-mut T)` (DS-A3) --
   routed to the real type elaborator in
   `struct_field_type_from_form`, storage derived by
@@ -134,7 +148,7 @@ Update as each per-form plan lands.
 | EF-1 | `arrow`, `->`                             | shipped (`685a0bf` route, `ffed924` fixture) | [arrow](structdef-exotic-field-arrow-plan.md)     |
 | EF-2 | `handler`                                 | shipped | [handler](structdef-exotic-field-handler-plan.md) |
 | EF-3 | `forall`                                  | shelved (2026-07-02: storage is free but no consumption path in erasure-based HRT, zero producers -- see plan Phase 1 outcome) | [forall](structdef-exotic-field-forall-plan.md)   |
-| EF-4 | session core, `project`, `global`, `role` | pending | [session](structdef-exotic-field-session-plan.md) |
+| EF-4 | `Session`/`project`/`Role` lower; descriptors + `Global` reject | shipped | [session](../archive/structdef-exotic-field-session-plan.md) |
 
 ## Relationship to the StructDef deletion
 
