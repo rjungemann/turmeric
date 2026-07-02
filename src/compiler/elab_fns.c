@@ -2663,10 +2663,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
         ReturnClass ret_cls = (n_fn_type_params == 0 && !fn_declared_unsafe)
                                   ? RET_CLASS_COMMITTED
                                   : RET_CLASS_CARRIER_FN;
-        /* structdef-retirement DS-C: the return-struct-def argument is always
-         * NULL now (no defstruct produces a StructDef); pass NULL. */
         ReturnConflict rc = return_position_conflict(
-            NULL, return_adt_def, return_kind, body->type, ret_cls);
+            return_adt_def, return_kind, body->type, ret_cls);
         if (rc != RET_CONFLICT_NONE) {
             const char *want = return_adt_def ? return_adt_def->name
                              : typekind_to_string(return_kind);

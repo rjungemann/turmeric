@@ -314,20 +314,8 @@ static void lifetimes_format(Buf *b, Type t) {
 
 static void type_name_buf(Buf *b, Type t);
 
-typedef struct RegisteredStructApp {
-    Type type;
-    char *name;
-    bool emitted;
-    bool emitting;
-    bool pass_by_ptr;    /* Phase D: sizeof(T) > 16 -- pass as const T* */
-} RegisteredStructApp;
-
-static RegisteredStructApp *g_struct_apps = NULL;
-static uint32_t g_n_struct_apps = 0;
-static uint32_t g_cap_struct_apps = 0;
-
 /* TS4P1: Registered polymorphic ADT application (monomorphised instance).
- * Mirrors RegisteredStructApp for ADT-headed TY_APP types. */
+ * (The former struct-app registry was removed in structdef-retirement DS-D.) */
 typedef struct RegisteredAdtApp {
     Type         type;     /* the TY_APP type (cloned via clone_struct_app_type) */
     char        *name;     /* mangled C typedef name, e.g. "tur_adt_Maybe__float" */
@@ -364,16 +352,7 @@ static RegisteredFnPtrTypedef *g_fn_ptr_typedefs = NULL;
 static uint32_t g_n_fn_ptr_typedefs = 0;
 static uint32_t g_cap_fn_ptr_typedefs = 0;
 
-bool type_extract_struct_app(const Type *t, StructDef **out_def,
-                                    Type *out_args, uint8_t *out_n) {
-    /* structdef-retirement: no Type ever has kind TY_STRUCT, so a struct-headed
-     * TY_APP chain can never form -- this extractor always fails. */
-    (void)t; (void)out_def; (void)out_args; (void)out_n;
-    return false;
-}
-
-/* TS4P1: Extract an ADT-headed TY_APP chain into (AdtDef*, args[], n_args).
- * Mirrors type_extract_struct_app but requires the head to be TY_ADT (not TY_STRUCT). */
+/* TS4P1: Extract an ADT-headed TY_APP chain into (AdtDef*, args[], n_args). */
 bool type_extract_adt_app(const Type *t, AdtDef **out_def,
                           Type *out_args, uint8_t *out_n) {
     if (!t) return false;
@@ -432,18 +411,12 @@ bool type_has_concrete_codegen_layout(const Type *t) {
         case TY_ROLE:
         case TY_GENERATOR:
             return true;
-        case TY_APP: {
-            StructDef *def = NULL;
-            Type args[16];
-            uint8_t n_args = 0;
-            if (!type_extract_struct_app(t, &def, args, &n_args) || !def || def->is_opaque) {
-                return false;
-            }
-            for (uint8_t i = 0; i < n_args; i++) {
-                if (!type_has_concrete_codegen_layout(&args[i])) return false;
-            }
-            return true;
-        }
+        case TY_APP:
+            /* structdef-retirement DS-D: a struct-headed TY_APP can never form
+             * (no Type has kind TY_STRUCT), so a parametric-struct monomorph has
+             * no concrete by-value layout here.  Concrete parametric ADTs are
+             * recognised separately by type_app_is_concrete_adt. */
+            return false;
         default:
             return false;
     }
@@ -531,7 +504,6 @@ static bool adt_ctor_is_transparent_int_record(const CtorDef *c) {
 }
 
 bool type_is_transparent_int_newtype(Type t) {
-    StructDef *def = NULL;
     if (t.kind == TY_ADT) {
         /* CONV-S1 seam 4: under the defstruct->defadt lowering the same phantom
          * int-newtype (`(defstruct Schema [A] (raw :int))`) is a single-variant
@@ -542,24 +514,17 @@ bool type_is_transparent_int_newtype(Type t) {
         if (!adef || adef->n_type_params == 0 || adef->n_ctors != 1) return false;
         return adt_ctor_is_transparent_int_record(adef->ctors[0]);
     } else if (t.kind == TY_APP) {
+        /* structdef-retirement DS-D: no struct-headed app forms, so an applied
+         * transparent int newtype is always the ADT-headed shape. */
         Type args[16];
         uint8_t n_args = 0;
-        if (type_extract_struct_app(&t, &def, args, &n_args)) {
-            /* struct-headed app -- fall through to the struct check below */
-        } else {
-            AdtDef *adef = NULL;
-            if (!type_extract_adt_app(&t, &adef, args, &n_args) || !adef)
-                return false;
-            if (adef->n_type_params == 0 || adef->n_ctors != 1) return false;
-            return adt_ctor_is_transparent_int_record(adef->ctors[0]);
-        }
-    } else {
-        return false;
+        AdtDef *adef = NULL;
+        if (!type_extract_adt_app(&t, &adef, args, &n_args) || !adef)
+            return false;
+        if (adef->n_type_params == 0 || adef->n_ctors != 1) return false;
+        return adt_ctor_is_transparent_int_record(adef->ctors[0]);
     }
-    if (!def || def->is_opaque) return false;
-    if (def->n_type_params == 0) return false;   /* must be parametric */
-    if (def->n_fields != 1) return false;        /* single field */
-    return def->fields[0].kind == TY_INT;        /* declared :int (concrete) */
+    return false;
 }
 
 static void append_type_mangle(Buf *b, Type t) {
@@ -600,28 +565,19 @@ static void append_type_mangle(Buf *b, Type t) {
             buf_puts(b, "struct");
             break;
         case TY_APP: {
-            StructDef *def = NULL;
+            /* structdef-retirement DS-D: no struct-headed app forms, so a mangled
+             * application is always ADT-headed (e.g. (Maybe float)). */
             Type args[16];
-            uint8_t n_args = 0;
-            if (type_extract_struct_app(&t, &def, args, &n_args) && def) {
-                buf_puts(b, def->name);
-                for (uint8_t i = 0; i < n_args; i++) {
+            AdtDef *adef = NULL;
+            uint8_t an_args = 0;
+            if (type_extract_adt_app(&t, &adef, args, &an_args) && adef) {
+                buf_puts(b, adef->name);
+                for (uint8_t i = 0; i < an_args; i++) {
                     buf_puts(b, "__");
                     append_type_mangle(b, args[i]);
                 }
             } else {
-                /* TS4P1: Also handle ADT-headed applications (e.g. (Maybe float)). */
-                AdtDef *adef = NULL;
-                uint8_t an_args = 0;
-                if (type_extract_adt_app(&t, &adef, args, &an_args) && adef) {
-                    buf_puts(b, adef->name);
-                    for (uint8_t i = 0; i < an_args; i++) {
-                        buf_puts(b, "__");
-                        append_type_mangle(b, args[i]);
-                    }
-                } else {
-                    buf_puts(b, "app");
-                }
+                buf_puts(b, "app");
             }
             break;
         }
@@ -654,9 +610,6 @@ void free_struct_app_type(Type t) {
     }
 }
 
-/* Phase D: forward declaration — substitute_struct_app_type is defined below. */
-Type substitute_struct_app_type(const Type *t, const StructDef *def, const Type *args);
-
 /* Propagate a parametric opaque's substructural discipline into a TY_APP node.
  * A `(defopaque Name [T] :int :linear)` applied as `(Name X)` should yield a
  * TY_APP whose copy_kind / substruct reflect the head's :linear (or :affine)
@@ -679,86 +632,6 @@ void propagate_app_discipline(Type *app, const Type *fn) {
             app->copy_kind = CK_UNIQUE;
             app->substruct = SK_AFFINE;
         }
-    }
-}
-
-static const char *register_struct_app(Type t) {
-    if (!type_has_concrete_codegen_layout(&t)) return "int64_t";
-    for (uint32_t i = 0; i < g_n_struct_apps; i++) {
-        if (type_eq(g_struct_apps[i].type, t)) return g_struct_apps[i].name;
-    }
-    if (g_n_struct_apps >= g_cap_struct_apps) {
-        uint32_t new_cap = g_cap_struct_apps ? g_cap_struct_apps * 2 : 8;
-        RegisteredStructApp *new_items = (RegisteredStructApp *)realloc(
-            g_struct_apps, new_cap * sizeof(RegisteredStructApp));
-        if (!new_items) { fprintf(stderr, "tur: oom\n"); abort(); }
-        g_struct_apps = new_items;
-        g_cap_struct_apps = new_cap;
-    }
-    Buf name; buf_init(&name);
-    append_type_mangle(&name, t);
-    buf_putc(&name, '\0');
-    g_struct_apps[g_n_struct_apps].type = clone_struct_app_type(t);
-    g_struct_apps[g_n_struct_apps].name = tur_strdup(name.data);
-    g_struct_apps[g_n_struct_apps].emitted = false;
-    g_struct_apps[g_n_struct_apps].emitting = false;
-    /* structdef-retirement DS-D: the Phase-D pass_by_ptr computation keyed on a
-     * StructDef (extracted from the app head).  No app head is a struct anymore
-     * -- a parametric aggregate is a record ADT, whose monomorph pass-by-ptr is
-     * decided on the ADT-app path (type_adt_app_pass_by_ptr / adt_app_is_byvalue
-     * _product).  This struct-app registry only supplies the mangled type name;
-     * pass_by_ptr stays false here. */
-    g_struct_apps[g_n_struct_apps].pass_by_ptr = false;
-    buf_free(&name);
-    if (!g_struct_apps[g_n_struct_apps].name) { fprintf(stderr, "tur: oom\n"); abort(); }
-    return g_struct_apps[g_n_struct_apps++].name;
-}
-
-static bool struct_type_param_index(const StructDef *def, const char *name, uint8_t *out_idx) {
-    if (!def || !name) return false;
-    for (uint8_t i = 0; i < def->n_type_params; i++) {
-        if (def->type_params[i] && strcmp(def->type_params[i], name) == 0) {
-            if (out_idx) *out_idx = i;
-            return true;
-        }
-    }
-    return false;
-}
-
-Type substitute_struct_app_type(const Type *t, const StructDef *def, const Type *args) {
-    if (!t) return type_from_kind(TY_UNKNOWN);
-    switch (t->kind) {
-        case TY_TYVAR: {
-            uint8_t idx = 0;
-            if (t->as.tyvar_.name && struct_type_param_index(def, t->as.tyvar_.name, &idx)) {
-                /* Deep-clone the substituted arg so the returned tree is fully
-                 * owned (no aliasing into the caller's `args[]` spine) and can
-                 * be released with free_struct_app_type.  A TY_APP arg (e.g. the
-                 * concrete (Tuple2 cstr int) bound to a tyvar) would otherwise be
-                 * shared, making any free() at the call site a double-free of
-                 * the original tree's nodes.  clone is a no-op copy for non-APP
-                 * args. */
-                return clone_struct_app_type(args[idx]);
-            }
-            return *t;
-        }
-        case TY_APP: {
-            Type fn = substitute_struct_app_type(t->as.app.fn, def, args);
-            Type arg = substitute_struct_app_type(t->as.app.arg, def, args);
-            Type out = {0};
-            out.kind = TY_APP;
-            out.copy_kind = CK_COPY;
-            out.hkt_kind = KIND_STAR;
-            propagate_app_discipline(&out, &fn);
-            out.as.app.fn = (Type *)malloc(sizeof(Type));
-            out.as.app.arg = (Type *)malloc(sizeof(Type));
-            if (!out.as.app.fn || !out.as.app.arg) { fprintf(stderr, "tur: oom\n"); abort(); }
-            *out.as.app.fn = fn;
-            *out.as.app.arg = arg;
-            return out;
-        }
-        default:
-            return *t;
     }
 }
 
@@ -870,67 +743,6 @@ const char *register_fn_ptr_typedef(const Type *fn_type) {
         ? fn_type->as.fn.result_full_type : NULL;
 
     return entry->typedef_name;
-}
-
-static const char *struct_field_c_type(const StructDef *owner, const StructField *field, const Type *args) {
-    if (field->kind == TY_FN) {
-        /* Phase E: emit typed function pointer when the fn type is fully concrete. */
-        if (field->full_type && field->full_type->kind == TY_FN) {
-            /* Non-parametric or fn field doesn't use type params: use directly. */
-            if (!owner || owner->n_type_params == 0 || !args) {
-                const char *td = register_fn_ptr_typedef(field->full_type);
-                if (td) return td;
-            } else {
-                /* Parametric struct: substitute and check if result is concrete. */
-                Type resolved = substitute_struct_app_type(field->full_type, owner, args);
-                if (resolved.kind == TY_FN) {
-                    const char *td = register_fn_ptr_typedef(&resolved);
-                    if (td) { free_struct_app_type(resolved); return td; }
-                }
-                free_struct_app_type(resolved);
-            }
-        }
-        return "int64_t";
-    }
-    if (field->full_type && owner && args) {
-        Type resolved = substitute_struct_app_type(field->full_type, owner, args);
-        const char *name = type_c_name(resolved);
-        /* resolved is a fully owned clone; type_c_name only reads it (and clones
-         * again internally when registering), so release it here. */
-        free_struct_app_type(resolved);
-        return name;
-    }
-    switch (field->kind) {
-        case TY_INT:      return "int64_t";
-        case TY_BOOL:     return "bool";
-        case TY_FLOAT:    return "double";
-        case TY_CSTR:     return "const char *";
-        case TY_PTR_VOID: return "void *";
-        case TY_RC:
-        case TY_WEAK:     return "RcControlBlock *";
-        case TY_REF:
-        case TY_LREF:     return "void *";
-        /* defstruct-byvalue-struct-field-stored-as-int-carrier: a field typed
-         * by a bare by-value struct is stored INLINE as that aggregate (not the
-         * int64 carrier).  full_type carries the nominal struct; type_c_name
-         * names the C aggregate.  (Parametric owners with `args` are handled by
-         * the substitute-and-name branch above; this reaches non-parametric
-         * owners where args == NULL.) */
-        case TY_STRUCT:
-            if (field->full_type) return type_c_name(*field->full_type);
-            return "int64_t";
-        case TY_INT8:     return "int8_t";
-        case TY_INT16:    return "int16_t";
-        case TY_INT32:    return "int32_t";
-        case TY_INT64:    return "int64_t";
-        case TY_UINT8:    return "uint8_t";
-        case TY_UINT16:   return "uint16_t";
-        case TY_UINT32:   return "uint32_t";
-        case TY_UINT64:   return "uint64_t";
-        case TY_FLOAT32:  return "float";
-        case TY_FLOAT64:  return "double";
-        default:          return "int64_t";
-    }
 }
 
 /* TS4P1: Helpers for ADT-app monomorphisation. */
@@ -1178,99 +990,6 @@ char *type_adt_app_ctor_suffix(Type t) {
     return result;
 }
 
-static void emit_registered_struct_app_rec(Buf *out, uint32_t idx) {
-    if (idx >= g_n_struct_apps) return;
-    if (g_struct_apps[idx].emitted || g_struct_apps[idx].emitting) return;
-    g_struct_apps[idx].emitting = true;
-
-    StructDef *def = NULL;
-    Type args[16];
-    uint8_t n_args = 0;
-    if (!type_extract_struct_app(&g_struct_apps[idx].type, &def, args, &n_args) || !def) {
-        g_struct_apps[idx].emitting = false;
-        return;
-    }
-
-    for (uint32_t fi = 0; fi < def->n_fields; fi++) {
-        const StructField *field = &def->fields[fi];
-        if (field->full_type) {
-            Type resolved = substitute_struct_app_type(field->full_type, def, args);
-            if (resolved.kind == TY_APP) {
-                const char *dep_name = type_c_name(resolved);
-                (void)dep_name;
-                for (uint32_t di = 0; di < g_n_struct_apps; di++) {
-                    if (type_eq(g_struct_apps[di].type, resolved)) {
-                        emit_registered_struct_app_rec(out, di);
-                        break;
-                    }
-                }
-            }
-            /* Phase E: emit fn-ptr typedef before the struct that uses it. */
-            if (resolved.kind == TY_FN && fn_type_is_concrete_for_ptr(&resolved)) {
-                const char *td = register_fn_ptr_typedef(&resolved);
-                if (td) {
-                    /* Find and emit the typedef if not yet emitted. */
-                    for (uint32_t di = 0; di < g_n_fn_ptr_typedefs; di++) {
-                        if (!g_fn_ptr_typedefs[di].emitted &&
-                                strcmp(g_fn_ptr_typedefs[di].typedef_name, td) == 0) {
-                            g_fn_ptr_typedefs[di].emitted = true;
-                            const char *ret_c = type_c_name(
-                                type_from_kind(g_fn_ptr_typedefs[di].result_kind));
-                            buf_printf(out, "typedef %s (*%s)(", ret_c, td);
-                            uint8_t ar = g_fn_ptr_typedefs[di].arity;
-                            if (ar == 0) {
-                                buf_puts(out, "void");
-                            } else {
-                                for (uint8_t j = 0; j < ar; j++) {
-                                    if (j > 0) buf_puts(out, ", ");
-                                    buf_puts(out, type_c_name(type_from_kind(
-                                        g_fn_ptr_typedefs[di].arg_kinds[j])));
-                                }
-                            }
-                            buf_puts(out, ");\n");
-                            break;
-                        }
-                    }
-                }
-            }
-            /* resolved is a fully owned clone used above only for dependency
-             * emission and type_eq lookups; free it. No-op for non-APP. */
-            free_struct_app_type(resolved);
-        }
-    }
-
-    /* result-typedef-duplicated-across-modules: wrap each monomorphic
-     * instantiation in a per-instantiation include guard so that when two
-     * modules' .h files (each emitting the same `Result__cstr__cstr` typedef
-     * from their own exported signatures) get transitively included in the
-     * same TU, the second definition is skipped instead of triggering
-     * `redefinition of 'Result__cstr__cstr'`. C treats each
-     * `typedef struct { ... } Name;` as a fresh anonymous struct tag, so
-     * even textually identical typedefs collide without this guard. */
-    buf_printf(out, "#ifndef TUR_TY_%s\n", g_struct_apps[idx].name);
-    buf_printf(out, "#define TUR_TY_%s\n", g_struct_apps[idx].name);
-    buf_printf(out, "typedef struct %s {\n", g_struct_apps[idx].name);
-    for (uint32_t fi = 0; fi < def->n_fields; fi++) {
-        const StructField *field = &def->fields[fi];
-        char *mfn = NULL;
-        const char *ctype = struct_field_c_type(def, field, args);
-        /* Legacy field-name fold -- MUST match mangle_field_name (emit_core.c),
-         * which every field-access site uses. Struct fields keep the legacy
-         * '-' -> '_' spelling (not the injective scheme): they are referenced by
-         * this name from inline-C and often coincide with parameter names. */
-        mfn = tur_strdup(field->name);
-        if (!mfn) { fprintf(stderr, "tur: oom\n"); abort(); }
-        for (char *p = mfn; *p; p++) {
-            if (!isalnum((unsigned char)*p) && *p != '_') *p = '_';
-        }
-        buf_printf(out, "    %s %s;\n", ctype, mfn);
-        free(mfn);
-    }
-    buf_printf(out, "} %s;\n", g_struct_apps[idx].name);
-    buf_printf(out, "#endif\n\n");
-    g_struct_apps[idx].emitted = true;
-    g_struct_apps[idx].emitting = false;
-}
 
 /* TS4P1: Emit the typedef and per-constructor functions for one registered ADT app. */
 static const char *heap_ptr_c_name(const char *base);  /* defined below */
@@ -1308,12 +1027,6 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                 for (uint32_t di = 0; di < g_n_adt_apps; di++) {
                     if (type_eq(g_adt_apps[di].type, resolved)) {
                         emit_registered_adt_app_rec(out, di);
-                        break;
-                    }
-                }
-                for (uint32_t di = 0; di < g_n_struct_apps; di++) {
-                    if (type_eq(g_struct_apps[di].type, resolved)) {
-                        emit_registered_struct_app_rec(out, di);
                         break;
                     }
                 }
@@ -2978,14 +2691,11 @@ const char *type_c_name(Type t) {
                     return nm;
                 }
             }
-            if (type_has_concrete_codegen_layout(&t)) {
-                /* A concrete parametric monomorph's C name is its registered
-                 * mangled name.  (A :heap parametric record ADT is handled above
-                 * via type_adt_app_def -> heap_ptr_c_name; the former struct-app
-                 * :heap and phantom-typeparam branches here keyed on a StructDef
-                 * head and are dead -- structdef-retirement DS-D.) */
-                return register_struct_app(t);
-            }
+            /* structdef-retirement DS-D: the former struct-app monomorph naming
+             * branch (register_struct_app, gated on type_has_concrete_codegen_
+             * layout of a struct-headed app) is dead -- no struct-headed app
+             * forms.  Concrete parametric ADTs are named above via
+             * type_register_adt_app; everything else is the int64 carrier. */
             return "int64_t";
         }
         /* Phase HKT-P2: Recursive types — opaque int64_t handle in v1 */
@@ -3614,23 +3324,6 @@ const char *typekind_to_string(TypeKind k) {
     }
 }
 
-void type_codegen_reset_struct_apps(void) {
-    for (uint32_t i = 0; i < g_n_struct_apps; i++) {
-        free_struct_app_type(g_struct_apps[i].type);
-        free(g_struct_apps[i].name);
-    }
-    free(g_struct_apps);
-    g_struct_apps = NULL;
-    g_n_struct_apps = 0;
-    g_cap_struct_apps = 0;
-}
-
-void type_codegen_emit_struct_apps(Buf *out) {
-    for (uint32_t i = 0; i < g_n_struct_apps; i++) {
-        emit_registered_struct_app_rec(out, i);
-    }
-}
-
 /* TS4P1: Reset the ADT-app registry (called before each compilation unit). */
 void type_codegen_reset_adt_apps(void) {
     for (uint32_t i = 0; i < g_n_adt_apps; i++) {
@@ -4140,12 +3833,8 @@ bool type_struct_pass_by_ptr(Type t) {
              * as `const tur_adt_<Name>__A *`, mirroring the struct convention. */
             if (adt_app_is_byvalue_product(t))
                 return adt_app_byval_pass_by_ptr(t);
-            /* Look up in the registry (registers on first encounter). */
-            if (!type_has_concrete_codegen_layout(&t)) return false;
-            register_struct_app(t);
-            for (uint32_t i = 0; i < g_n_struct_apps; i++) {
-                if (type_eq(g_struct_apps[i].type, t)) return g_struct_apps[i].pass_by_ptr;
-            }
+            /* structdef-retirement DS-D: the former struct-app registry lookup is
+             * dead -- no struct-headed app has a concrete by-value layout. */
             return false;
         }
         case TY_ADT:
@@ -4162,12 +3851,11 @@ bool type_struct_pass_by_ptr(Type t) {
  * typed pointer `T__A *` to a heap-allocated header (the parametric-type ABI
  * matrix's typed-pointer class). */
 bool type_is_heap_struct(Type t) {
-    if (t.kind == TY_APP) {
-        StructDef *def = NULL;
-        Type args[16]; uint8_t n_args = 0;
-        if (type_extract_struct_app(&t, &def, args, &n_args))
-            return def && def->is_heap;
-    }
+    /* structdef-retirement DS-D: no struct-headed app forms, so a `:heap` struct
+     * application no longer exists -- a lowered `:heap` defstruct is a `:heap`
+     * record ADT, recognised by type_is_heap_adt.  Retained (called at many live
+     * sites) but now always false. */
+    (void)t;
     return false;
 }
 
@@ -4194,8 +3882,8 @@ bool type_is_heap_adt(Type t) {
  * onto the heap. Returns "int64_t" (via the generic fallback) when t has no
  * concrete layout. */
 const char *type_struct_value_c_name(Type t) {
-    if (t.kind == TY_APP && !type_is_transparent_int_newtype(t)
-        && type_has_concrete_codegen_layout(&t))
-        return register_struct_app(t);
+    /* structdef-retirement DS-D: the struct-app monomorph name branch is dead
+     * (no struct-headed app has a concrete by-value layout); the generic
+     * type_c_name handles every remaining case (ADT monomorphs included). */
     return type_c_name(t);
 }

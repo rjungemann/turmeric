@@ -141,39 +141,6 @@ static Type *adt_rc_inner_full_type(Elab *e, const char *tname, uint32_t tlen) {
 }
 
 
-static bool struct_type_param_index(const StructDef *def, const char *name, uint8_t *out_idx) {
-    if (!def || !name) return false;
-    for (uint8_t i = 0; i < def->n_type_params; i++) {
-        if (def->type_params[i] && strcmp(def->type_params[i], name) == 0) {
-            if (out_idx) *out_idx = i;
-            return true;
-        }
-    }
-    return false;
-}
-
-
-
-/* defstruct-field-byvalue-parametric-struct-layout: is `t` a concrete,
- * by-value (non-`:heap`) parametric struct application -- e.g. `(Option cstr)`?
- * Such a value is an embedded aggregate (`Option__cstr`), NOT the int64 carrier,
- * so a field of this type must be laid out inline by value just like a bare
- * nullary by-value struct field.  Heap containers (`(Cons int)`, `(Vec int)`)
- * are already int64-carried typed pointers and stay on the carrier; opaque
- * newtypes and transparent-int newtypes also stay int64.  A non-concrete app
- * (a field `(Option A)` over the owner's own type parameter) has no fixed size
- * and likewise stays on the carrier. */
-static bool struct_field_app_is_byvalue_struct(const Type *t) {
-    if (!t || t->kind != TY_APP) return false;
-    if (!type_has_concrete_codegen_layout(t)) return false;
-    if (type_is_heap_struct(*t)) return false;
-    if (type_is_transparent_int_newtype(*t)) return false;
-    StructDef *def = NULL;
-    Type args[16];
-    uint8_t n_args = 0;
-    if (!type_extract_struct_app(t, &def, args, &n_args)) return false;
-    return def && !def->is_opaque;
-}
 
 static void struct_field_storage_from_type(const Type *t, TypeKind *out_kind, TypeKind *out_inner) {
     *out_kind = TY_UNKNOWN;
@@ -181,14 +148,9 @@ static void struct_field_storage_from_type(const Type *t, TypeKind *out_kind, Ty
     if (!t) return;
     switch (t->kind) {
         case TY_APP:
-            /* defstruct-field-byvalue-parametric-struct-layout: store a concrete
-             * by-value parametric struct (`(Option cstr)`) inline as the embedded
-             * aggregate, matching the value make-struct provides and the `.field`
-             * accessor expects.  Carrier-shaped apps fall through to int64. */
-            if (struct_field_app_is_byvalue_struct(t)) {
-                *out_kind = TY_STRUCT;
-                return;
-            }
+            /* structdef-retirement DS-D: a parametric struct application no longer
+             * has a concrete by-value struct layout (a parametric aggregate is a
+             * record ADT); every TY_APP field rides the int64 carrier here. */
             *out_kind = TY_INT;
             return;
         case TY_TYVAR:
@@ -313,28 +275,6 @@ static Type *struct_field_type_from_form(Elab *e, const Form *form,
     return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
 }
 
-bool elab_struct_type_extract_args(const Type *t, const StructDef *def, Type *out_args) {
-    if (!t || !def || def->n_type_params == 0 || !out_args) return false;
-    const Type *cur = t;
-    uint8_t n_raw = 0;
-    Type *raw = (Type *)malloc(def->n_type_params * sizeof(Type));
-    if (!raw) return false;
-    while (cur && cur->kind == TY_APP && n_raw < def->n_type_params) {
-        if (!cur->as.app.arg) break;
-        raw[n_raw++] = *cur->as.app.arg;
-        cur = cur->as.app.fn;
-    }
-    /* structdef-retirement DS-D: no Type is ever TY_STRUCT, so this never
-     * matches -- a struct application resolves through the ADT path instead. */
-    bool ok = false;
-    (void)cur;
-    if (ok) {
-        for (uint8_t i = 0; i < n_raw; i++) out_args[i] = raw[n_raw - 1 - i];
-    }
-    free(raw);
-    return ok;
-}
-
 /* TP6: Unpack a TY_APP chain on an ADT type to recover concrete type arguments.
  * Analogous to elab_struct_type_extract_args but for AdtDef instead of StructDef. */
 bool elab_adt_type_extract_args(const Type *t, const AdtDef *def, Type *out_args) {
@@ -419,80 +359,6 @@ Type adt_field_instantiate_type(Elab *e, const AdtDef *def, const Type *t,
     }
 }
 
-static Type struct_field_instantiate_type(Elab *e, const StructDef *def, const Type *t,
-                                          const Type *type_args) {
-    if (!t) return TYPE_UNKNOWN;
-    switch (t->kind) {
-        case TY_TYVAR: {
-            uint8_t idx = 0;
-            if (t->as.tyvar_.name && struct_type_param_index(def, t->as.tyvar_.name, &idx)) {
-                return type_args[idx];
-            }
-            return *t;
-        }
-        case TY_APP: {
-            Type fn = struct_field_instantiate_type(e, def, t->as.app.fn, type_args);
-            Type arg = struct_field_instantiate_type(e, def, t->as.app.arg, type_args);
-            return type_app(e->arena, fn, arg, (Span){0});
-        }
-        case TY_FN: {
-            /* make-struct-parametric-fn-field-inference: substitute struct type
-             * parameters that appear inside a fn-typed field's signature, so the
-             * field's instantiated use-type (validation + codegen) reflects the
-             * inferred args rather than leaving the tyvars (which render/lower as
-             * a bare int carrier). */
-            Type out = *t;
-            uint8_t arity = t->as.fn.arity;
-            struct Type **new_args = arity
-                ? (struct Type **)arena_alloc(e->arena, arity * sizeof(struct Type *))
-                : NULL;
-            for (uint8_t i = 0; i < arity; i++) {
-                Type slot = (t->as.fn.arg_full_types && t->as.fn.arg_full_types[i])
-                    ? *t->as.fn.arg_full_types[i]
-                    : type_from_kind(t->as.fn.arg_kinds[i]);
-                Type inst = struct_field_instantiate_type(e, def, &slot, type_args);
-                out.as.fn.arg_kinds[i] = inst.kind;
-                struct Type *boxed = (struct Type *)arena_alloc(e->arena, sizeof(Type));
-                *boxed = inst;
-                new_args[i] = boxed;
-            }
-            out.as.fn.arg_full_types = new_args;
-            {
-                Type rslot = t->as.fn.result_full_type
-                    ? *t->as.fn.result_full_type
-                    : type_from_kind(t->as.fn.result_kind);
-                Type rinst = struct_field_instantiate_type(e, def, &rslot, type_args);
-                out.as.fn.result_kind = rinst.kind;
-                struct Type *rboxed = (struct Type *)arena_alloc(e->arena, sizeof(Type));
-                *rboxed = rinst;
-                out.as.fn.result_full_type = rboxed;
-            }
-            return out;
-        }
-        case TY_UNION: {
-            uint8_t n = t->as.union_.n_members;
-            Type **members = (Type **)arena_alloc(e->arena, (n ? n : 1) * sizeof(Type *));
-            for (uint8_t i = 0; i < n; i++) {
-                members[i] = (Type *)arena_alloc(e->arena, sizeof(Type));
-                *members[i] = struct_field_instantiate_type(e, def, t->as.union_.members[i], type_args);
-            }
-            return type_union_build(e->arena, members, n);
-        }
-        case TY_INTERSECTION: {
-            uint8_t n = t->as.intersection_.n_members;
-            Type **members = (Type **)arena_alloc(e->arena, (n ? n : 1) * sizeof(Type *));
-            for (uint8_t i = 0; i < n; i++) {
-                members[i] = (Type *)arena_alloc(e->arena, sizeof(Type));
-                *members[i] = struct_field_instantiate_type(e, def, t->as.intersection_.members[i], type_args);
-            }
-            return type_intersection_build(e->arena, members, n);
-        }
-        default:
-            return *t;
-    }
-}
-
-
 /* lowered-adt-ctor-skips-fn-field-type-param-inference: the record-ADT analogue
  * of struct_field_collect_type_args.  Grounds a record-ADT ctor's type parameters
  * (named in `tps`) by unifying each declared field full_type against the supplied
@@ -560,36 +426,6 @@ bool adt_field_collect_type_args(const char **tps, uint8_t n_tps,
             /* Concrete field (int/cstr/...): nothing to bind, never fail. */
             return true;
     }
-}
-
-Type elab_struct_field_use_type(Elab *e, const Type *container_type,
-                                const StructDef *def, const StructField *field) {
-    if (field->full_type) {
-        if (def && def->n_type_params > 0 && container_type) {
-            Type *type_args = (Type *)arena_alloc(e->arena, def->n_type_params * sizeof(Type));
-            if (elab_struct_type_extract_args(container_type, def, type_args)) {
-                return struct_field_instantiate_type(e, def, field->full_type, type_args);
-            }
-            /* CS1b: a bare TY_STRUCT (without applied type args) for a parameterized
-             * struct is the carrier representation: all fields are stored as int64_t.
-             * Use TYPE_INT so field-access expressions in carrier-path instance
-             * bodies type-check against the scalar carrier type. */
-            if (container_type->kind == TY_STRUCT) {
-                return TYPE_INT;
-            }
-        }
-        return *field->full_type;
-    }
-    if (field->kind == TY_REF || field->kind == TY_LREF || field->kind == TY_RC || field->kind == TY_WEAK) {
-        Type t = type_from_kind(field->kind);
-        if (field->kind == TY_REF || field->kind == TY_LREF) {
-            t.as.ref.inner = field->inner_kind;
-        } else {
-            t.as.rc.inner = field->inner_kind;
-        }
-        return t;
-    }
-    return type_from_kind(field->kind);
 }
 
 /* Phase RF0: Check if a symbol was registered as a forward-declared type stub */

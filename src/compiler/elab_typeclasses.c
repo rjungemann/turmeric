@@ -3020,8 +3020,9 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                      * pass 2. */
         /* Gap 1 (instance-method-return-not-unified): the declared return's
          * concrete nominal def (after Phase RT substitution), so pass 2 can
-         * reject a body that yields a different nominal type.  At most one set. */
-        const StructDef *ret_struct;
+         * reject a body that yields a different nominal type.  (structdef-
+         * retirement DS-D: the former StructDef ret_struct is gone -- every
+         * former struct is a record ADT.) */
         const AdtDef    *ret_adt;
         /* float-register-class-returns: the declared return's TypeKind (after
          * Phase RT substitution), so pass 2 can reject a float-vs-non-float
@@ -3030,7 +3031,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         /* carrier-aware-return-unification Phase 0: the full declared return
          * Type (after Phase RT substitution), retained so the Phase 3 classifier
          * can tell a grounded concrete commit from a carrier-participating
-         * (free-tyvar / applied) return.  ret_kind / ret_struct / ret_adt are
+         * (free-tyvar / applied) return.  ret_kind / ret_adt are
          * its decomposition; ret_full keeps the whole type for that future
          * carrier-vs-committed decision. */
         Type             ret_full;
@@ -3808,7 +3809,6 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         passes[i].n_method_params = n_method_params;
         passes[i].method_fd       = method_fd;
         passes[i].arrow_return    = arrow_return;
-        passes[i].ret_struct = NULL;
         passes[i].ret_adt    = (return_type.kind == TY_ADT)    ? return_type.as.adt_.def    : NULL;
         passes[i].ret_kind   = return_type.kind;
         passes[i].ret_full   = return_type;  /* Phase 0: retain the whole type */
@@ -3950,11 +3950,10 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                     ? RET_CLASS_COMMITTED
                     : RET_CLASS_CARRIER_METHOD;
             ReturnConflict rc = return_position_conflict(
-                mp->ret_struct, mp->ret_adt, mp->ret_kind, method_body->type,
+                mp->ret_adt, mp->ret_kind, method_body->type,
                 meth_cls);
             if (rc != RET_CONFLICT_NONE) {
-                const char *want = mp->ret_struct ? mp->ret_struct->name
-                                 : mp->ret_adt    ? mp->ret_adt->name
+                const char *want = mp->ret_adt ? mp->ret_adt->name
                                  : typekind_to_string(mp->ret_kind);
                 const char *meth = (tc->methods[i].name) ? tc->methods[i].name->name : "?";
                 Buf gb; buf_init(&gb);

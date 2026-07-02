@@ -259,34 +259,11 @@ static const char *emit_binding_repr_c_name(EmitCtx *ctx, Type binding_ty,
     while (p && p->kind == EX_ASCRIBE) p = p->as.ascribe_.inner;
     if (!p) return emit_type_c_name(ctx, binding_ty);
 
-    /* M4 follow-up: when the init is an EX_ASCRIBE that casts a PLAIN
-     * TY_INT (not a carrier-returning call) to a TY_APP whose spine
-     * resolves to a concrete struct (e.g. `(:: t (Cons int))` where t is
-     * a raw int param), the ascription bridge at `emit_expr.c:4240`
-     * dereferences the int handle to a by-value struct.  Declare the
-     * binding with the target's by-value C type so the bridge's output
-     * type-checks against the binding's declaration.
-     *
-     * Narrow gate: only fire when p (the producer past EX_ASCRIBE
-     * unwrapping) is itself a bare TY_INT value (literal or non-carrier
-     * EX_VAR).  The carrier-relabel case (`(:: (vec-of) (Vec int))`)
-     * has p as an EX_CALL whose spec returns a carrier; that path falls
-     * through to the existing carrier handling below. */
-    if (init && init->kind == EX_ASCRIBE
-        && init->as.ascribe_.inner->type.kind == TY_INT
-        && binding_ty.kind == TY_APP
-        && (p->kind == EX_INT_LIT
-            || (p->kind == EX_VAR && p->as.var.binding
-                && !p->as.var.binding->emit_byvalue_carrier_abi
-                && p->type.kind == TY_INT))) {
-        Type resolved = emit_resolve_type(ctx, binding_ty);
-        StructDef *rd = NULL;
-        Type rargs[16]; uint8_t rn = 0;
-        if (type_extract_struct_app(&resolved, &rd, rargs, &rn)
-            && rd && !rd->is_opaque) {
-            return emit_type_c_name(ctx, resolved);
-        }
-    }
+    /* M4 follow-up: the former "ascribe a plain TY_INT to a TY_APP that
+     * resolves to a concrete struct" bridge declared the binding with the
+     * struct's by-value C type.  structdef-retirement DS-D: no struct-headed
+     * app resolves to a concrete by-value layout anymore (a parametric
+     * aggregate is a record ADT), so that gate never fired -- removed. */
 
     /* The carrier (int64_t) cases -- declare int64_t so a carrier initialiser
      * type-checks and downstream carrier-ABI uses (vec-push!, dispatch) agree:
@@ -4356,19 +4333,13 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                          fn_binding->type.as.fn.arg_full_types &&
                          i < fn_binding->type.as.fn.arity &&
                          fn_binding->type.as.fn.arg_full_types[i]) {
-                    Type pty = *fn_binding->type.as.fn.arg_full_types[i];
-                    StructDef *pdef = NULL; Type pargs[16]; uint8_t pn = 0;
-                    bool is_opt_res =
-                        type_extract_struct_app(&pty, &pdef, pargs, &pn) &&
-                        pdef && pdef->name &&
-                        (strcmp(pdef->name, "Option") == 0 ||
-                         strcmp(pdef->name, "Result") == 0);
-                    if (is_opt_res &&
-                        type_has_concrete_codegen_layout(&pty) &&
-                        !type_is_heap_struct(pty)) {
-                        raw = emit_carrier_bridge(ctx, body, raw,
-                                                 CK_CARRIER, CK_CONCRETE, pty);
-                    }
+                    /* structdef-retirement DS-D: the former carrier->concrete
+                     * bridge for a struct-headed Option/Result param
+                     * (type_extract_struct_app) never fired once Option/Result
+                     * lowered to record ADTs -- no struct-headed app forms.  A
+                     * lowered Option/Result construct-template arg already crosses
+                     * correctly via the general carrier handling. */
+                    (void)0;
                 }
                 /* Phase D / tuplen-struct-param: a pass-by-pointer struct
                  * *parameter* is materialized in C as `const T*`, but several
@@ -4385,12 +4356,9 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * emitted `callee(const T*)` against a by-value formal -- a hard
                  * cc type error.
                  *
-                 * expr_is_pbp_param is checked first: it is side-effect-free,
-                 * whereas type_struct_pass_by_ptr registers the struct app as a
-                 * side effect (types.c:register_struct_app), which would emit a
-                 * spurious typedef for non-pbp aggregate args. A genuine pbp
-                 * param's struct type is already registered (its signature was
-                 * emitted with pass-by-ptr), so the guard adds no registration. */
+                 * expr_is_pbp_param is checked first (side-effect-free) as the
+                 * primary gate before the type_struct_pass_by_ptr aggregate
+                 * check. */
                 else if (!needs_fn_cast && emit_arg &&
                          expr_is_pbp_param(ctx, emit_arg) &&
                          (matched_spec
@@ -5806,194 +5774,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_COMPOSE_HANDLERS: return emit_effects_compose_handlers(ctx, body, e);
         case EX_RESUME:          return emit_effects_resume(ctx, body, e);
         case EX_DISCONTINUE:     return emit_effects_discontinue(ctx, body, e);
-        case EX_MAKE_STRUCT: {
-            /* (make-struct StructName v1 v2 ...) - emit C99 compound literal */
-            /* structdef-retirement: make-struct no longer carries a StructDef
-             * (the elaborator lowers every record to a single-variant ADT and
-             * rewrites construction to the auto-bound variant constructor, so
-             * this EX_MAKE_STRUCT emit path is dead -- def is always NULL). */
-            StructDef *def = NULL;
-            /* SC7: a transparent int newtype IS its single int64 field -- emit
-             * the field value directly (cast to int64), no compound literal. */
-            if (type_is_transparent_int_newtype(e->type)) {
-                char *fv = emit_value(ctx, body, e->as.make_struct_.field_values[0]);
-                Buf id; buf_init(&id);
-                buf_printf(&id, "(int64_t)(%s)", fv);
-                buf_putc(&id, '\0');
-                free(fv);
-                char *result = strdup(id.data);
-                buf_free(&id);
-                return result;
-            }
-            Buf lit; buf_init(&lit);
-            /* end-to-end-monomorphization: for a :heap-tagged type, make-struct
-             * builds the by-value header literal (`(Vec__int){...}`) and then
-             * heap-boxes it, returning the typed pointer `Vec__int *` (== the
-             * type of `(Vec A)`).  So the compound literal must use the by-value
-             * name, not the pointer name type_c_name now returns for a heap
-             * type.  Non-heap types are unchanged. */
-            Type ms_resolved = emit_resolve_type(ctx, e->type);
-            bool ms_heap = type_is_heap_struct(ms_resolved);
-            const char *struct_c_name = ms_heap
-                ? type_struct_value_c_name(ms_resolved)
-                : emit_type_c_name(ctx, e->type);
-            /* M2b: when the make-struct's e->type carries unresolved tyvars
-             * (e.g. body of `(defn ok [A B] [x : A] : (Result A B)
-             *   (make-struct Result :err-val (default-of B) ...))` — B isn't a
-             * param, so the current ABI spec's `bindings[]` doesn't bind it),
-             * struct_c_name collapses to "int64_t" because type_c_name(TY_APP)
-             * falls back when type_has_concrete_codegen_layout is false.  The
-             * StructDef plus its FIELDS were elaborated correctly, so the body
-             * already emits `.is_ok = ...` per-field assignments — only the
-             * outer cast is wrong.  When the enclosing spec's result_type has
-             * the same StructDef, use its concrete C name instead.  Narrowly
-             * scoped: never fires outside specialization, and never fires when
-             * the resolver already produced a non-carrier name.
-             *
-             * The same recovered spine args are also used to type per-field
-             * `(default-of T)` values whose T resolves to a bare unresolved
-             * TYVAR -- without this, the compound literal lands as
-             * `.cstr_field = (int64_t){0}`, which is an int-to-ptr conversion
-             * error in C. */
-            Type rt_recovered_args[16]; uint8_t n_rt_recovered = 0;
-            bool have_rt_recovered = false;
-            if (def && ctx->current_abi_specialization) {
-                Type rt = ctx->current_abi_specialization->result_type;
-                StructDef *rt_def = NULL;
-                if (type_extract_struct_app(&rt, &rt_def, rt_recovered_args,
-                                            &n_rt_recovered)
-                    && rt_def == def) {
-                    have_rt_recovered = true;
-                    /* nested-construct-byvalue (Gaps #2/#3): a by-value construct
-                     * spec recovered top-down (some__spec__Option__cstr) stores
-                     * the collapsed element in its bindings (A -> int64_t), so
-                     * emit_resolve_type(e->type) yields the WRONG concrete name
-                     * (Option__int) -- not "int64_t", so the recovery below was
-                     * skipped and the body built the int-element struct.  When
-                     * this make-struct IS the construct spec's own body, trust the
-                     * spec's authoritative result_type name (Option__cstr). */
-                    bool is_construct_body =
-                        ctx->current_abi_specialization->fn &&
-                        ctx->current_abi_specialization->fn->binding &&
-                        ctx->current_abi_specialization->fn->binding->is_construct_template &&
-                        ctx->current_abi_specialization->fn->body == e;
-                    if (strcmp(struct_c_name, "int64_t") == 0 || is_construct_body) {
-                        /* For a heap type, recover the by-value header name (not
-                         * the pointer name) so the compound literal is valid. */
-                        const char *recovered = ms_heap
-                            ? type_struct_value_c_name(emit_resolve_type(ctx, rt))
-                            : emit_type_c_name(ctx, rt);
-                        if (recovered && strcmp(recovered, "int64_t") != 0) {
-                            struct_c_name = recovered;
-                        }
-                    }
-                }
-            }
-            buf_printf(&lit, "(%s){", struct_c_name);
-            bool any_field_emitted = false;
-            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++) {
-                const Expr *fve = e->as.make_struct_.field_values[i];
-                /* M2b dead-slot elision: when the field's value is
-                 * `(default-of T)` (zero-valued, no side effects), drop the
-                 * entire `.field = (T){0}` slot — C99 compound literals
-                 * zero-initialize any field not named in the designator list,
-                 * so the elided field still ends up zeroed.  This is the
-                 * "Risk" section's elision rule from the M2b design doc: the
-                 * default-of value for a sum-type's dead slot becomes a no-op
-                 * at the emit level.  Per-field; skips bool/discriminator
-                 * fields' default-of values too (always benign — they zero to
-                 * `false`, the natural default). */
-                if (fve && fve->kind == EX_DEFAULT_OF) continue;
-                char *fv = NULL;
-                if (fve->kind == EX_DEFAULT_OF && have_rt_recovered
-                    && def->fields[i].full_type
-                    && def->fields[i].full_type->kind == TY_TYVAR
-                    && def->fields[i].full_type->as.tyvar_.name) {
-                    const char *fty_name = def->fields[i].full_type->as.tyvar_.name;
-                    uint8_t tp_idx = UINT8_MAX;
-                    for (uint8_t tp = 0; tp < def->n_type_params; tp++) {
-                        if (def->type_params[tp]
-                            && strcmp(def->type_params[tp], fty_name) == 0) {
-                            tp_idx = tp; break;
-                        }
-                    }
-                    if (tp_idx != UINT8_MAX && tp_idx < n_rt_recovered) {
-                        const char *fty = emit_type_c_name(ctx,
-                            rt_recovered_args[tp_idx]);
-                        if (fty) {
-                            Buf fb; buf_init(&fb);
-                            buf_printf(&fb, "(%s){0}", fty);
-                            buf_putc(&fb, '\0');
-                            fv = strdup(fb.data);
-                            buf_free(&fb);
-                        }
-                    }
-                }
-                if (!fv) fv = emit_value(ctx, body, fve);
-                bool is_fn_field = (def->fields[i].kind == TY_FN);
-                bool val_is_fn = (fve->type.kind == TY_FN);
-                if (any_field_emitted) buf_puts(&lit, ", ");
-                any_field_emitted = true;
-                char *mfn = mangle_field_name(def->fields[i].name);
-                if (is_fn_field && val_is_fn) {
-                    /* Phase E: use typed fn-ptr cast for concrete fields; fall
-                     * back to int64_t carrier for generic/bare :fn fields. */
-                    const char *fn_td = (def->fields[i].full_type &&
-                                         def->fields[i].full_type->kind == TY_FN)
-                        ? register_fn_ptr_typedef(def->fields[i].full_type) : NULL;
-                    if (fn_td) {
-                        buf_printf(&lit, ".%s = (%s)%s", mfn, fn_td, fv);
-                    } else {
-                        buf_printf(&lit, ".%s = (int64_t)(intptr_t)%s", mfn, fv);
-                    }
-                } else {
-                    /* Bridge when a pointer-typed value is assigned to an int64_t
-                     * carrier field (e.g. packed existential into :exists field). */
-                    TypeKind vek = e->as.make_struct_.field_values[i]->type.kind;
-                    bool val_is_c_ptr = (vek == TY_PTR_VOID || vek == TY_RC
-                                         || vek == TY_REF || vek == TY_WEAK
-                                         || vek == TY_EXISTS || vek == TY_FORALL
-                                         || vek == TY_CSTR);
-                    bool field_is_c_ptr = (def->fields[i].kind == TY_PTR_VOID
-                                           || def->fields[i].kind == TY_RC
-                                           || def->fields[i].kind == TY_WEAK
-                                           || def->fields[i].kind == TY_REF
-                                           || def->fields[i].kind == TY_LREF
-                                           || def->fields[i].kind == TY_CSTR);
-                    if (val_is_c_ptr && !field_is_c_ptr) {
-                        buf_printf(&lit, ".%s = (int64_t)(intptr_t)%s", mfn, fv);
-                    } else {
-                        buf_printf(&lit, ".%s = %s", mfn, fv);
-                    }
-                }
-                free(mfn);
-                free(fv);
-            }
-            /* If every field was elided (every value was `(default-of T)`),
-             * emit `{0}` rather than the empty `{}` (which is a GNU extension,
-             * not standard C99). */
-            if (!any_field_emitted) buf_puts(&lit, "0");
-            buf_puts(&lit, "}");
-            buf_putc(&lit, '\0');
-            /* end-to-end-monomorphization: heap-box the by-value header literal.
-             * Emits `T *tmp = malloc(sizeof(T)); *tmp = (T){...};` and returns
-             * the typed pointer `tmp`, which is the C representation of the
-             * :heap type `(T A)`.  This is the boxing step that replaces a
-             * separate `heap-box` primitive -- the constructor itself owns it. */
-            if (ms_heap && strcmp(struct_c_name, "int64_t") != 0) {
-                char *tmp = fresh_tmp(ctx);
-                indent_buf(body, ctx->indent);
-                buf_printf(body, "%s *%s = (%s *)malloc(sizeof(%s));\n",
-                           struct_c_name, tmp, struct_c_name, struct_c_name);
-                indent_buf(body, ctx->indent);
-                buf_printf(body, "*%s = %s;\n", tmp, lit.data);
-                buf_free(&lit);
-                return tmp;
-            }
-            char *result = strdup(lit.data);
-            buf_free(&lit);
-            return result;
-        }
+        case EX_MAKE_STRUCT:
+            /* structdef-retirement DS-D: every record type lowers to a
+             * single-variant ADT and `(make-struct ...)` is rewritten to the
+             * auto-bound variant constructor during elaboration (elab_structs.c),
+             * so no EX_MAKE_STRUCT node is ever produced.  Reaching here means a
+             * StructDef-era node leaked into emit -- an internal invariant break. */
+            fprintf(stderr, "tur: internal error: EX_MAKE_STRUCT reached emit_value "
+                    "(structdef-retirement: make-struct lowers to a variant ctor)\n");
+            abort();
         case EX_SET_LIT: {
             /* Phase X3: #s(e1 e2 ...) -> tur_set_from_items(n, (int64_t[]){v1, v2, ...}) */
             uint32_t n = e->as.set_lit_.n;
@@ -6655,34 +6444,11 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 return emit_carrier_bridge(ctx, body, inner_val,
                                            CK_CARRIER, CK_CONCRETE, e->type);
             }
-            /* M4 follow-up: also unbox an int→TY_APP cast when the TY_APP
-             * resolves to a concrete struct app — but only when the inner
-             * is a PLAIN int (not a carrier-handle).  Mirrors the
-             * `emit_binding_repr_c_name` gate so emit decisions stay in
-             * sync.  The carrier-relabel case (`(:: (vec-of) (Vec int))`)
-             * has inner as a carrier-call whose value is already a Vec*;
-             * dereferencing it would double-deref. */
-            const Expr *inner_p = e->as.ascribe_.inner;
-            while (inner_p && inner_p->kind == EX_ASCRIBE) inner_p = inner_p->as.ascribe_.inner;
-            bool inner_is_plain_int =
-                inner_p && (inner_p->kind == EX_INT_LIT
-                    || (inner_p->kind == EX_VAR && inner_p->as.var.binding
-                        && !inner_p->as.var.binding->emit_byvalue_carrier_abi
-                        && inner_p->type.kind == TY_INT));
-            if (!ascribe_to_opaque
-                && e->as.ascribe_.inner->type.kind == TY_INT
-                && e->type.kind == TY_APP
-                && inner_is_plain_int) {
-                Type resolved = emit_resolve_type(ctx, e->type);
-                StructDef *rd = NULL;
-                Type rargs[16]; uint8_t rn = 0;
-                if (type_extract_struct_app(&resolved, &rd, rargs, &rn)
-                    && rd && !rd->is_opaque) {
-                    return emit_carrier_bridge(ctx, body, inner_val,
-                                               CK_CARRIER, CK_CONCRETE,
-                                               resolved);
-                }
-            }
+            /* M4 follow-up: the former "unbox an int->TY_APP cast when the
+             * TY_APP resolves to a concrete struct app" bridge is gone --
+             * structdef-retirement DS-D: no struct-headed app resolves to a
+             * concrete by-value layout (a parametric aggregate is a record ADT),
+             * so the gate never fired. */
             /* M4c-pre-ext symmetric `(:: x :int)` spill bridge (RETIRED --
              * M5 D.4, end-to-end-monomorphization plan): a by-value concrete
              * struct ascribed back to `:int` inside a Path A spec body used to

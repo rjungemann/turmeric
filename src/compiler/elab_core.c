@@ -1762,17 +1762,16 @@ Binding *binding_new(Elab *e, const Symbol *name, Type type,
 }
 
 /* Gap 1 (instance-method-return-not-unified): see elab_internal.h. */
-bool return_type_nominal_conflict(const StructDef *ret_struct,
-                                  const AdtDef *ret_adt, Type body) {
-    if (!ret_struct && !ret_adt) return false;
-    const StructDef *bs = NULL;
-    const AdtDef    *ba = (body.kind == TY_ADT)    ? body.as.adt_.def    : NULL;
+bool return_type_nominal_conflict(const AdtDef *ret_adt, Type body) {
+    if (!ret_adt) return false;
+    const AdtDef *ba = (body.kind == TY_ADT) ? body.as.adt_.def : NULL;
     /* A non-nominal body (primitive, opaque-int carrier, tyvar, applied type,
      * unknown/inline-C) is tolerated: those are exactly the int64 carrier /
-     * by-value bridges the ABI relies on, not a soundly-rejectable mismatch. */
-    if (!bs && !ba) return false;
-    if (ret_struct) return bs != ret_struct;  /* different struct, or an ADT body */
-    return ba != ret_adt;                      /* different ADT, or a struct body */
+     * by-value bridges the ABI relies on, not a soundly-rejectable mismatch.
+     * (structdef-retirement DS-D: the former StructDef ret_struct arm is gone --
+     * every former struct is a record ADT.) */
+    if (!ba) return false;
+    return ba != ret_adt;   /* different ADT, or a non-ADT nominal body */
 }
 
 /* float-register-class-returns: see elab_internal.h. */
@@ -1879,12 +1878,10 @@ bool return_type_bool_integer_conflict(TypeKind declared, Type body) {
  * The commit-direction pointer-scalar (cstr-declared, integer body, TUR-E0708)
  * and nominal-identity clash (TUR-E0001) are unconditional.  The int-literal ->
  * float widening is the caller's pre-step. */
-ReturnConflict return_position_conflict(const StructDef *ret_struct,
-                                        const AdtDef *ret_adt,
+ReturnConflict return_position_conflict(const AdtDef *ret_adt,
                                         TypeKind ret_kind, Type body,
                                         ReturnClass cls) {
-    if ((ret_struct || ret_adt) &&
-        return_type_nominal_conflict(ret_struct, ret_adt, body))
+    if (ret_adt && return_type_nominal_conflict(ret_adt, body))
         return RET_CONFLICT_NOMINAL;
 
     /* Register-class: commit-direction-only for a typeclass instance method;
