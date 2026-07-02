@@ -1,6 +1,6 @@
 ;; structdef-retirement slice 5 DS-A4: a defstruct field whose type is a
 ;; built-in compound form with no record-ADT field representation yet
-;; (handler/forall/session/role/global/project, and arrow/`->` for now) is
+;; (handler/forall/session/role/global/project) is
 ;; rejected with a clean diagnostic, rather than silently taking the legacy
 ;; StructDef path.  This keeps the residual StructDef producer path unreachable
 ;; (the precondition for deleting StructDef).  See
