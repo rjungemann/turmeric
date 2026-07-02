@@ -3,7 +3,18 @@ title: Applying a closure-returning polymorphic combinator doesn't infer its ele
 severity: MEDIUM. Blocks *using* fully-polymorphic higher-order combinators;
 they must still be spelled monomorphically at each element type.
 status: OPEN. Split off 2026-07-02 from poly-defn-inner-lambda-codegen.md (the
-codegen-drop half of that report is resolved).
+codegen-drop half of that report is resolved). Re-verified 2026-07-02 against
+./build/tur: the application-site error (line 19 of the repro,
+`match: arm types are incompatible -- expected tyvar (from earlier arm), got int`)
+still fires exactly as documented. Additionally, the definition-only variant
+(`or-parser` defined, `main` returns 0) that this report claims "now builds
+and runs" now ALSO fails inside the combinator's own body:
+`match: arm types are incompatible -- expected adt (from earlier arm), got app`
+on the `(q xs)` arm. That may be a regression in the inner-lambda elaboration
+after the codegen-drop fix, or a second inference gap in the same area; either
+way, the "Not the codegen drop" section below is now stale for this exact
+fixture -- the monomorphic sibling still works, but the polymorphic
+definition-only case no longer does.
 ---
 
 # Closure-returning combinator application doesn't ground its element tyvar
