@@ -1,0 +1,41 @@
+;; poly-combinator-application-element-inference:
+;; Applying a closure-returning polymorphic combinator (`or-parser`) at a
+;; concrete element type must ground the combinator's type parameter [A]
+;; through the returned closure's result.  Before the fix, `(or-parser af ao)`
+;; grounded A := int on the combinator call itself, but the LET binding took
+;; the shared closure thunk's ungrounded `(fn [int] (PRes A))`, so `(combined 7)`
+;; typed as `(PRes A)` and the downstream match rejected its arms with
+;; "match: arm types are incompatible -- expected tyvar, got int".
+;;
+;; The fix adds a TY_FN case to call_instantiate_type (so a fn-typed result
+;; grounds) and reconciles the closure thunk type against the LET binding's
+;; own grounded type when the returned closure is called.
+
+(defdata PRes [a]
+  (PFail)
+  (POK a int))
+
+(defn or-parser [A] [p : (fn [int] (PRes A)) q : (fn [int] (PRes A))]
+    : (fn [int] (PRes A))
+  (fn [xs : int] : (PRes A)
+    (match (p xs)
+      (POK v rest) (POK v rest)
+      (PFail)      (q xs))))
+
+(defn always-fail [xs : int] : (PRes int) (PFail))
+(defn always-ok   [xs : int] : (PRes int) (POK 42 xs))
+
+;; A second instantiation at a different element type in the same program
+;; exercises genuine per-use grounding (not a coincidental int default).
+(defn s-fail [xs : int] : (PRes cstr) (PFail))
+(defn s-ok   [xs : int] : (PRes cstr) (POK "hi" xs))
+
+(defn main [] : int
+  (let [cs (or-parser s-fail s-ok)]
+    (match (cs 0)
+      (POK v rest) (println v)      ;; v : cstr
+      (PFail)      (println "no")))
+  (let [combined (or-parser always-fail always-ok)]  ;; A grounds to int
+    (match (combined 7)
+      (POK v rest) v                ;; v : int
+      (PFail)      (- 0 1))))
