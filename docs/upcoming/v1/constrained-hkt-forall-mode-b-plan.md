@@ -289,6 +289,88 @@ runtime dict dispatch. The dispatch emit is a close analogue of the existing
 witness path; the new part is sourcing the witness from a parameter and
 resolving *which* method slot at elaboration.
 
+### Slice MB2.5 -- aggregate `(f a)` functors: the M7 by-value boundary
+
+**Status.** Not started. This is the largest single block of remaining work in
+the constrained-HKT track and the true blocker for a *general* van Laarhoven
+lens over arbitrary functors. It is scoped here so MB3/MB4 can reference it, but
+see the "Do lenses actually need this?" note below -- the answer is very likely
+**no**, and MB2.5 can stay unbuilt while MB4 lands.
+
+**What works today (MB2).** A constrained rank-2 body that calls `fmap` on its
+constrained var works *as long as the functor is carrier-compatible* -- a
+parametric opaque (`defopaque Box<a> :int` and friends) or any heap-backed type
+whose runtime value is one int64 pointer. The dict-dispatch path (MB2) lowers
+`fmap` to an indirect vtable call, and because the functor's `(f a)` value is a
+single carrier word, the dispatched method's argument and return both flow
+through the uniform int64 carrier with no ABI mismatch.
+
+**What is blocked.** A *by-value aggregate* functor -- `Option`, a `list`, a
+by-value product/sum whose `adt_is_byvalue_product` layout is a multi-word
+struct (`tur_adt_Option__int`, not one int64) -- fails codegen when used as the
+`(f a)` in a constrained HKT body, even under `TUR_M7_HKT=1`. The concrete
+symptom is:
+
+```
+incompatible types when returning type 'int64_t' but 'tur_adt_Option__int' was expected
+```
+
+**Root cause.** The M6/M7 carve-out deliberately keeps constrained higher-kinded
+poly-fns on the **uniform carrier ABI**: inside the rank-2 body every value is an
+int64 carrier word, so the body compiles once regardless of the instantiating
+functor. That is exactly what makes rank-2 type-erasure cheap. But a by-value
+aggregate functor's `(f b)` result is a real multi-word struct, not a carrier
+word. The dict-dispatched method returns the struct by value, the body expects
+the carrier int64, and the two C types collide at the `return` site. Carrier-
+compatible functors dodge this only because their `(f a)` *is* already one word.
+Completing this means giving the constrained HKT body a by-value spelling for the
+functor -- i.e. finishing M7's by-value higher-kinded-typeclass monomorphization,
+where the body is re-emitted per concrete functor with specs named
+`Functor_fmap__spec__Option__int` (see `g_m7_hkt_enabled` and
+[docs/guides/monomorphization-abi-guide.md](../../guides/monomorphization-abi-guide.md)).
+
+**Two fix paths.**
+
+- **Path A -- reuse the slice-3 aggregate-carrier bridge (smaller).** Slice 3
+  already built `emit_agg_box` / `emit_agg_unbox` (heap-box an aggregate into one
+  carrier word, deref back out) plus the carrier-spill shim gated on
+  `boxes_aggregate`. Extend that bridge across the *dict-dispatch return*: box the
+  method's aggregate `(f b)` result into a carrier word at the call boundary and
+  unbox it back at the body's consuming site. This keeps the uniform-carrier body
+  and pays one heap box/unbox per dispatched aggregate result -- the same tax
+  slice 3 already accepts for aggregate rank-2 *arguments*. Lower risk, bounded
+  blast radius (touches only the MB2 dispatch emit + the slice-3 bridge), but
+  leaves an allocation on the hot path.
+
+- **Path B -- complete M7 by-value HKT monomorphization (larger).** Re-emit the
+  constrained HKT body per concrete functor so the functor is spelled by value
+  end-to-end, no carrier, no box. This is the residual Phase 5 carrier-bridge
+  work tracked in
+  [docs/archive/m7-phase5-carrier-bridge-audit.md](../../archive/m7-phase5-carrier-bridge-audit.md)
+  and [docs/archive/m7-stdlib-migration-execution.md](../../archive/m7-stdlib-migration-execution.md).
+  It is the *right* long-term answer (zero-overhead aggregate functors) but is a
+  large, cross-cutting monomorphization effort touching elaboration spec-keying,
+  emit spec naming, and the residual carrier bridges -- out of proportion to
+  what MB4 (lenses) needs on its own.
+
+**Do lenses actually need this? -- almost certainly not.** The van Laarhoven
+encoding only ever instantiates the functor at **`Const r`** (for `view`) and
+**`Identity`** (for `set`/`over`). Both can be defined as **carrier-compatible
+opaques** -- a `Const r` whose runtime value is just the boxed `r`, and an
+`Identity a` whose runtime value is just the boxed `a`, each one int64 carrier
+word. Under that definition MB4's lenses go entirely through the MB2 carrier-
+compatible path and **never touch the aggregate-functor boundary**. So MB2.5 is
+*not* on the MB4 critical path: build MB4 against carrier-compatible `Const` /
+`Identity`, and defer MB2.5 until a user genuinely needs `fmap`-over-`Option`
+inside a constrained rank-2 body. When that day comes, prefer **Path A** first
+(cheap, contained) and only reach for **Path B** if the box/unbox overhead shows
+up in a profile.
+
+**Fixtures (when built).** `hrt-hkt-aggregate-functor-dispatch/` -- a constrained
+`forall f. Functor f => (f int) -> (f int)` body invoked at `Option` (by-value
+aggregate), asserting the dispatched `fmap` returns the expected `Some`/`None`
+without the `int64_t` vs `tur_adt_Option__int` codegen error.
+
 ### Slice MB3 -- curried rank-2 whose result is a function (`--enable=hrt-curried-result`)
 
 **Goal.** Support a rank-2 poly fn whose result is itself a function
