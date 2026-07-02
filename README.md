@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.25.6` -- multi-tab web REPL with zip project import/export.
+**Latest release:** `v0.26.0` -- structdef retirement lowers `:linear` defstructs, `defopaque`, and more types (`arrow`, `handler`, `Session`) to record ADTs; new `interpret` subcommand and REPL `:explain` meta-command round out the introspection story.
 
 ## What
 

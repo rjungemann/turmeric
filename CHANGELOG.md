@@ -4,6 +4,42 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.26.0] -- 2026-07-02
+
+### Added
+
+- **`interpret` CLI subcommand** and REPL `:explain` meta-command
+  (native + web), rounding out the introspection story.
+- **REPL clickable diagnostics (L3)** and stale-buffer tracking (L4)
+  for the web REPL; L5 split out for follow-up.
+- **CLI auto-suggest** for mistyped subcommands.
+
+### Changed
+
+- **structdef-retirement, slices 4 + 5 + DS-D.** Lower `:linear`
+  defstructs and `defopaque` to record ADTs; remove the `TY_STRUCT`
+  type representation and the dead struct-app registry / typedef
+  chain; migrate single-occurrence param placeholders to named
+  tyvars.
+- **element-field plan (EF-1..EF-4).** Route `(arrow ...)`/`(-> ...)`,
+  `(handler E V R)`, and `Session`/`project`/`Role` as struct/ADT
+  fields; shelve `forall` as a field (design decision); reject bare
+  descriptors + `Global` at that position.
+- **`with` on narrowed multi-variant ADTs (CONV-S4N)** and unified
+  struct/variant construction diagnostic wording (CONV-S6).
+- **`cstr` byte primitives reimplemented in pure Turmeric.**
+- **turi stdlib inline-C parity** for the list/map/vec/slice
+  representation bridges.
+- **Test-performance-optimization-plan phases 2 + 3** land, cutting
+  suite wall-clock.
+- **Parser combinator tutorial rewritten.**
+
+### Fixed
+
+- **Three parametric-ADT / codegen reports** archived after fix.
+- **Option-monomorph mangler collision** over unresolved placeholders.
+- **`ok`-construct float-payload-into-carrier-box value coercion.**
+
 ## [0.25.6] -- 2026-06-28
 
 ### Added
