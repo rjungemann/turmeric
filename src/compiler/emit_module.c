@@ -457,15 +457,13 @@ static bool exwit_type_is_byval_struct(Type t) {
     if (type_is_heap_struct(t)) return false;
     if (type_is_heap_adt(t)) return false;
     if (type_is_transparent_int_newtype(t)) return false;
-    StructDef *def = NULL;
-    if (t.kind == TY_APP &&
-               type_extract_struct_app(&t, &def, (Type[16]){0}, &(uint8_t){0})) {
-        if (!def || def->is_opaque) return false;
-    } else if (t.kind == TY_ADT || t.kind == TY_APP) {
+    if (t.kind == TY_ADT || t.kind == TY_APP) {
         /* CONV-S2: a packed by-value payload struct is a lowered record ADT
          * (`Wm`/`LinesR`) under defstruct-as-defadt; it is a by-value aggregate
          * that the existential witness thunk must deref from the box pointer
-         * before forwarding to the real instance fn. */
+         * before forwarding to the real instance fn.  (structdef-retirement
+         * DS-D: no struct-headed TY_APP forms, so the former struct-app arm is
+         * gone.) */
         AdtDef *adef = NULL;
         if (t.kind == TY_ADT) adef = t.as.adt_.def;
         else type_extract_adt_app(&t, &adef, (Type[16]){0}, &(uint8_t){0});
@@ -974,28 +972,11 @@ static void emit_abi_unify_collect(const Type *pattern, const Type *concrete,
                                binds, n_binds, max_binds);
         return;
     }
-    /* A concrete monomorphized struct (Option__cstr, n_type_params == 0) carries
-     * its element only in field full_types; recover the spine elements via
-     * type_extract_struct_app so a pattern `(Option A)` matched against the
-     * monomorphized `Option__cstr` still binds A -> cstr. */
-    if (pattern->kind == TY_APP && concrete->kind == TY_STRUCT) {
-        Type c = *concrete;
-        StructDef *sd = NULL; Type sargs[16]; uint8_t sn = 0;
-        if (type_extract_struct_app(&c, &sd, sargs, &sn) && sn > 0) {
-            /* Walk the pattern app-spine outermost-first, pairing with sargs. */
-            const Type *p = pattern; uint8_t depth = 0;
-            const Type *pstack[16];
-            while (p && p->kind == TY_APP && depth < 16) {
-                pstack[depth++] = p->as.app.arg;
-                p = p->as.app.fn;
-            }
-            /* pstack is innermost-last; sargs is outermost-first.  Pair index i
-             * of sargs with pstack[depth-1-i]. */
-            for (uint8_t i = 0; i < sn && i < depth; i++)
-                emit_abi_unify_collect(pstack[depth - 1 - i], &sargs[i],
-                                       binds, n_binds, max_binds);
-        }
-    }
+    /* structdef-retirement DS-D: the former TY_STRUCT concrete-monomorph arm
+     * (recovering spine elements from a struct-headed app via
+     * type_extract_struct_app) is dead -- no Type has kind TY_STRUCT.  A
+     * monomorphized parametric aggregate is a record ADT and matches through the
+     * TY_APP/TY_APP arm above. */
 }
 
 static const Expr *emit_abi_find_fn_expr(const Expr **items, uint32_t n_items, const Binding *binding) {
@@ -1120,14 +1101,13 @@ static bool emit_ground_constraint_var(FnDef *fd,
             return false;
         }
         Type recv = bindings[0].type;
-        StructDef *rsd = NULL; Type rargs[16]; uint8_t rn = 0;
+        Type rargs[16]; uint8_t rn = 0;
         AdtDef *rad = NULL;
-        bool extracted =
-            type_extract_struct_app(&recv, &rsd, rargs, &rn) ||
-            /* lowered record ADT receiver (`(Vec bool)`/`(Cons (Option int))`):
-             * extract its element args the same way so the constraint var grounds
-             * via param_idx under defstruct-as-defadt. */
-            type_extract_adt_app(&recv, &rad, rargs, &rn);
+        /* lowered record ADT receiver (`(Vec bool)`/`(Cons (Option int))`):
+         * extract its element args so the constraint var grounds via param_idx
+         * under defstruct-as-defadt.  (structdef-retirement DS-D: the former
+         * struct-app extraction is gone -- no struct-headed app forms.) */
+        bool extracted = type_extract_adt_app(&recv, &rad, rargs, &rn);
         if (extracted && (uint8_t)tc->param_idx < rn) {
             Type g = rargs[tc->param_idx];
             if (g.kind != TY_TYVAR && g.kind != TY_UNKNOWN) {
@@ -1868,91 +1848,12 @@ static bool emit_inner_closure_needs_float_spec(Binding *inner,
  * clone) when the redirect applies. */
 static bool emit_abi_try_byval_twin_redirect(EmitCtx *ctx, const Expr *call,
                                              const Expr **items, uint32_t n_items) {
-    if (!ctx->current_abi_specialization || call->as.call_.fn_expr) return false;
-    Binding *fn_binding = call->as.call_.fn_binding;
-    if (!fn_binding || fn_binding->type.kind != TY_FN || !fn_binding->is_global
-        || fn_binding->closure_fn_binding) return false;
-    if (!fn_binding->name || !fn_binding->name->name) return false;
-    uint8_t nargs = call->as.call_.n_args;
-    /* Cheap O(1) gates first: receiver param must be the int64 carrier. */
-    if (nargs < 1 || fn_binding->type.as.fn.arity != nargs
-        || fn_binding->type.as.fn.arg_kinds[0] != TY_INT) return false;
-
-    char twin_name[256];
-    int nlen = snprintf(twin_name, sizeof twin_name, "%s-byval", fn_binding->name->name);
-    if (nlen <= 0 || nlen >= (int)sizeof twin_name) return false;
-    Binding *twin_binding = NULL; const Expr *twin_fe = NULL;
-    for (uint32_t i = 0; i < n_items; i++) {
-        const Expr *it = items[i];
-        if (it && it->kind == EX_FN_DEF && it->as.fn_def_.fn
-            && it->as.fn_def_.fn->binding && it->as.fn_def_.fn->binding->name
-            && it->as.fn_def_.fn->binding->name->name
-            && strcmp(it->as.fn_def_.fn->binding->name->name, twin_name) == 0) {
-            twin_binding = it->as.fn_def_.fn->binding; twin_fe = it; break;
-        }
-    }
-    FnDef *twin_fd = twin_fe ? twin_fe->as.fn_def_.fn : NULL;
-    if (!twin_fd || twin_fd->n_params != nargs) return false;
-
-    const EmitAbiSpecialization *aspec = ctx->current_abi_specialization;
-    const AbiTypeBinding *sb = aspec->bindings;
-    uint8_t snb = aspec->n_bindings;
-
-    /* Resolve the call arg types through the active spec. */
-    Type twin_args[MAX_FN_ARITY];
-    Type resolved_recv = emit_type_from_kind(TY_UNKNOWN);
-    for (uint8_t i = 0; i < nargs; i++) {
-        Type at = call->as.call_.args[i]->type;
-        if (sb && snb > 0) at = emit_abi_instantiate_type(&at, sb, snb, ctx->type_arena);
-        /* Gap 1 (instance-method spec receiver): a bare-EX_VAR arg bound to a
-         * param of the active spec arrives with the param's elab-time type,
-         * which for an instance-method spec receiver is the ELEMENT-ERASED
-         * bare `TY_STRUCT Vec` (no tyvar for `emit_abi_instantiate_type` to
-         * substitute).  The spec's own `arg_types[pi]` already carries the
-         * monomorphized `Vec__int`, so prefer it -- this lets the redirect fire
-         * for `(vec-get x i)` inside `__inst_*__spec__*` the same way it does
-         * for a plain constrained-poly defn spec (where the receiver elab type
-         * is `(Vec A)` and instantiates cleanly). */
-        const Expr *av = call->as.call_.args[i];
-        if (av && av->kind == EX_VAR)
-            emit_spec_arg_type_for_binding(ctx, av->as.var.binding, &at);
-        twin_args[i] = at;
-        if (i == 0) resolved_recv = at;
-    }
-    StructDef *rsd = NULL; Type rargs[8]; uint8_t rn = 0;
-    if (!type_extract_struct_app(&resolved_recv, &rsd, rargs, &rn) || !rsd) return false;
-
-    /* Derive twin bindings by unifying the twin's abstract receiver param
-     * (e.g. (Vec A)) against the resolved receiver (e.g. Vec int). */
-    StructDef *asd = NULL; Type aargs[8]; uint8_t an = 0;
-    if (!type_extract_struct_app(&twin_fd->params[0]->type, &asd, aargs, &an)
-        || asd != rsd || an != rn) return false;
-    AbiTypeBinding twin_b[ABI_TYPE_BINDINGS_MAX]; uint8_t twin_nb = 0;
-    for (uint8_t p = 0; p < an && twin_nb < ABI_TYPE_BINDINGS_MAX; p++) {
-        if (aargs[p].kind == TY_TYVAR && aargs[p].as.tyvar_.name) {
-            twin_b[twin_nb].name = aargs[p].as.tyvar_.name;
-            twin_b[twin_nb].type = rargs[p];
-            twin_nb++;
-        }
-    }
-
-    /* Consistency: the twin's params instantiated through twin_b must equal
-     * the resolved call arg types (rejects carrier-int callers). */
-    for (uint8_t i = 0; i < nargs; i++) {
-        Type tp = emit_abi_instantiate_type(&twin_fd->params[i]->type, twin_b, twin_nb,
-                                            ctx->type_arena);
-        if (!type_eq(tp, twin_args[i])) return false;
-    }
-
-    Type twin_result = call->type;
-    if (sb && snb > 0)
-        twin_result = emit_abi_instantiate_type(&twin_result, sb, snb, ctx->type_arena);
-
-    EmitAbiSpecialization *tw = emit_abi_intern_spec(ctx, twin_binding, twin_fe, twin_fd,
-        twin_b, twin_nb, twin_args, nargs, twin_result, call, false);
-    if (!tw || !tw->clone_name) return false;
-    emit_abi_record_specialized_call(ctx, call, tw->clone_name);
-    return true;
+    /* structdef-retirement DS-D: the by-value twin redirect applied only to a
+     * struct-headed receiver app (type_extract_struct_app), which can no longer
+     * form -- no Type has kind TY_STRUCT.  A parametric aggregate is a record
+     * ADT with its own monomorph ABI, so this redirect never fires. */
+    (void)ctx; (void)call; (void)items; (void)n_items;
+    return false;
 }
 
 /* end-to-end-monomorphization (bucket A): a concrete `:heap` type whose struct
@@ -1973,14 +1874,10 @@ static bool emit_abi_try_byval_twin_redirect(EmitCtx *ctx, const Expr *call,
  * emit_expr.c via the `callee_param_is_typed_heap_ptr` guard. */
 static bool type_is_heap_vec(Type t) {
     const char *name = NULL;
-    if (type_is_heap_struct(t)) {
-        StructDef *def = NULL;
-        if (t.kind == TY_APP) {
-            Type args[16]; uint8_t n = 0;
-            if (!type_extract_struct_app(&t, &def, args, &n)) return false;
-        }
-        name = def ? def->name : NULL;
-    } else if (type_is_heap_adt(t)) {
+    /* structdef-retirement DS-D: type_is_heap_struct is always false now (no
+     * struct-headed app forms), so a heap collection is always the lowered
+     * record-ADT form. */
+    if (type_is_heap_adt(t)) {
         /* CONV-S2: under defstruct-as-defadt the heap collections (Vec/Map/Set/
          * MutableMap) are lowered record ADTs, so the inline-C float/cstr-safety
          * gate (which forces non-heap scalar element slots back to the int64
@@ -2069,27 +1966,22 @@ static bool emit_abi_try_nested_instance_dispatch_redirect(
      * type-param names (which is exactly what the instance body's `(.head xs)`
      * tyvar reads resolve against). */
     Type resolved_copy = *resolved;
-    StructDef *rsd = NULL; Type rargs[8]; uint8_t rn = 0;
+    Type rargs[8]; uint8_t rn = 0;
     const char *const *rparam_names = NULL;
     uint8_t rn_params = 0;
-    if (type_extract_struct_app(&resolved_copy, &rsd, rargs, &rn) && rsd) {
-        rparam_names = rsd->type_params;
-        rn_params = rsd->n_type_params;
-    } else {
-        /* constrained-generic-nested-container-element-dispatch: under
-         * defstruct-as-defadt the recovered receiver/element is a lowered record
-         * ADT-app (`(Option int)`), which type_extract_struct_app rejects.  Pull
-         * the element bindings from the ADT def's type-param names instead, so a
-         * nested container element (`(Cons (Option int))` -> the `(Option int)`
-         * inner instance) mints its own per-element spec rather than baking the
-         * innermost int representative. */
-        AdtDef *rad = NULL; uint8_t adn = 0;
-        if (!type_extract_adt_app(&resolved_copy, &rad, rargs, &adn) || !rad)
-            return false;
-        rparam_names = rad->type_params;
-        rn_params = rad->n_type_params;
-        rn = adn;
-    }
+    /* constrained-generic-nested-container-element-dispatch: under
+     * defstruct-as-defadt the recovered receiver/element is a lowered record
+     * ADT-app (`(Option int)`).  Pull the element bindings from the ADT def's
+     * type-param names, so a nested container element (`(Cons (Option int))` ->
+     * the `(Option int)` inner instance) mints its own per-element spec rather
+     * than baking the innermost int representative.  (structdef-retirement
+     * DS-D: the former struct-app extraction is gone -- no struct-headed app.) */
+    AdtDef *rad = NULL; uint8_t adn = 0;
+    if (!type_extract_adt_app(&resolved_copy, &rad, rargs, &adn) || !rad)
+        return false;
+    rparam_names = rad->type_params;
+    rn_params = rad->n_type_params;
+    rn = adn;
     if (rn_params != rn || rn == 0 || !rparam_names) return false;
     AbiTypeBinding eb[ABI_TYPE_BINDINGS_MAX]; uint8_t enb = 0;
     for (uint8_t p = 0; p < rn && enb < ABI_TYPE_BINDINGS_MAX; p++) {
@@ -2239,18 +2131,15 @@ static bool emit_abi_try_nested_instance_dispatch_redirect(
  * false and keep the existing zero-churn carrier emission. */
 static bool type_phantom_hides_aggregate(const Type *t) {
     if (!t || t->kind != TY_APP) return false;
-    StructDef *def = NULL;
     AdtDef   *adef = NULL;
     Type args[16];
     uint8_t n_args = 0;
     /* structdef-retirement slice 5: a parametric opaque newtype (`(defopaque List
-     * [A] :int)`) is now an opaque AdtDef, so its application `(List (Option int))`
-     * is a TY_APP over a TY_ADT head -- recognise that as well as the legacy
-     * opaque-STRUCT head, else the per-element phantom-opaque spec is not minted
-     * and the carrier walk segfaults on the shifted aggregate cell layout. */
+     * [A] :int)`) is an opaque AdtDef, so its application `(List (Option int))`
+     * is a TY_APP over a TY_ADT head.  (structdef-retirement DS-D: the former
+     * opaque-STRUCT head is gone -- no struct-headed app forms.) */
     bool opaque_head =
-        (type_extract_struct_app(t, &def, args, &n_args) && def && def->is_opaque) ||
-        (type_extract_adt_app(t, &adef, args, &n_args) && adef && adef->is_opaque);
+        type_extract_adt_app(t, &adef, args, &n_args) && adef && adef->is_opaque;
     if (!opaque_head)
         return false;
     for (uint8_t i = 0; i < n_args; i++) {
@@ -2265,17 +2154,12 @@ static bool type_phantom_hides_aggregate(const Type *t) {
         bool byval_adt = adt_app_is_byvalue_product(args[i]);
         if (!type_has_concrete_codegen_layout(&args[i]) && !byval_adt) continue;
         /* The element shifts the cell layout only when it is a BY-VALUE aggregate
-         * embedded inline (e.g. `Option__int`) -- a non-opaque, non-:heap struct.
-         * Scalar/pointer elements (int, cstr, float) and :heap handles (Vec, Cons)
-         * occupy the single 8-byte carrier slot, so the carrier walk stays correct
-         * and no spec is needed (keeps the existing zero-churn emission). */
-        StructDef *ed = NULL;
-        Type eargs[16];
-        uint8_t en = 0;
-        if (type_extract_struct_app(&args[i], &ed, eargs, &en) &&
-            ed && !ed->is_opaque && !ed->is_heap) {
-            return true;
-        }
+         * embedded inline (e.g. `Option__int`) -- a lowered record ADT that is
+         * not opaque and not :heap.  Scalar/pointer elements (int, cstr, float)
+         * and :heap handles (Vec, Cons) occupy the single 8-byte carrier slot,
+         * so the carrier walk stays correct and no spec is needed (keeps the
+         * existing zero-churn emission).  (structdef-retirement DS-D: the former
+         * by-value struct-app element check is gone -- no struct-headed app.) */
         if (byval_adt) {
             return true;
         }
@@ -2386,36 +2270,15 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                                cb->type.as.fn.result_full_type)
                 ? *cb->type.as.fn.result_full_type
                 : type_simple(TY_UNKNOWN, CK_COPY);
-            StructDef *sd1 = NULL, *sd2 = NULL;
-            Type e1[16], e2[16];
-            uint8_t n1 = 0, n2 = 0;
-            if (type_extract_struct_app(&spec_res, &sd1, e1, &n1) &&
-                type_extract_struct_app(&callee_res, &sd2, e2, &n2) &&
-                sd1 && sd1 == sd2 && n1 == n2 && n1 > 0) {
-                uint8_t nb = 0;
-                for (uint8_t k = 0; k < n1 && nb < ABI_TYPE_BINDINGS_MAX; k++) {
-                    if (e2[k].kind == TY_TYVAR && e2[k].as.tyvar_.name &&
-                        type_has_concrete_codegen_layout(&e1[k])) {
-                        rehydrated[nb].name = e2[k].as.tyvar_.name;
-                        rehydrated[nb].type = e1[k];
-                        nb++;
-                    }
-                }
-                if (nb > 0) {
-                    bindings = rehydrated;
-                    n_bindings = nb;
-                    family_elem_rehydrated = true;
-                }
-            }
-            /* CONV-S1: the same family recovery for a lowered record-ADT result.
-             * `type_extract_struct_app` only matches a TY_STRUCT head, so once
-             * `Option`/`Result`/... lower to record defadts the recovery above
-             * misses `(none)`/`(err)` in an HKT instance body -- the call reaches
-             * emit with no bindings, `recovered` stays the abstract `(Option A)`,
-             * and the construct-by-value path declines (non-concrete), so the body
-             * emits the carrier `none()` into a by-value slot.  Mirror the struct
-             * extraction for an ADT app: walk both the spec result and the callee
-             * result to their head ADT + element args and synthesize `{A -> int}`. */
+            /* CONV-S1: family recovery for a lowered record-ADT result.  When
+             * `Option`/`Result`/... lower to record defadts, a `(none)`/`(err)`
+             * in an HKT instance body reaches emit with no bindings, `recovered`
+             * stays the abstract `(Option A)`, and the construct-by-value path
+             * declines (non-concrete), so the body emits the carrier `none()`
+             * into a by-value slot.  Walk both the spec result and the callee
+             * result to their head ADT + element args and synthesize `{A -> int}`.
+             * (structdef-retirement DS-D: the former struct-app family recovery
+             * that ran first is gone -- no struct-headed app forms.) */
             if (!family_elem_rehydrated) {
                 AdtDef *ad1 = NULL, *ad2 = NULL;
                 Type ae1[16], ae2[16];
@@ -8394,7 +8257,6 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
 void emit_shared_runtime_header(Buf *out) {
     /* Reset the per-TU codegen registries the preamble consults, mirroring the
      * setup emit_program does before its own preamble emission. */
-    type_codegen_reset_struct_apps();
     type_codegen_reset_adt_apps();
     type_codegen_reset_fn_ptr_typedefs();
     sym_codegen_reset();
@@ -8531,7 +8393,6 @@ int emit_program(Buf *out, const Expr *program) {
      * freed in bulk at the end of this function. */
     Arena type_arena; arena_init(&type_arena, 0);
     ctx.type_arena = &type_arena;
-    type_codegen_reset_struct_apps();
     type_codegen_reset_adt_apps();
     type_codegen_reset_fn_ptr_typedefs();
     sym_codegen_reset();   /* SYM1: clear interned-symbol records for this TU */
@@ -8623,7 +8484,6 @@ int emit_program(Buf *out, const Expr *program) {
                     if (pf->full_type && pf->full_type->kind == TY_APP &&
                         adt_field_is_inline_byval(pf)) {
                         (void)type_c_name(*pf->full_type);
-                        type_codegen_emit_struct_apps(&early_file);
                         type_codegen_emit_adt_apps(&early_file);
                     }
                 }
@@ -9097,8 +8957,6 @@ int emit_program(Buf *out, const Expr *program) {
      * emitted after extern_decls and fwd_decls (defer bodies may call
      * extern-c functions or forward-declared Turmeric functions). */
     emit_pending_defer_thunks(&ctx, &defer_thunks);
-    Buf concrete_struct_apps; buf_init(&concrete_struct_apps);
-    type_codegen_emit_struct_apps(&concrete_struct_apps);
     Buf concrete_adt_apps; buf_init(&concrete_adt_apps);
     type_codegen_emit_adt_apps(&concrete_adt_apps);
     /* SYM1: interned runtime symbol records (struct __tur_sym + one per keyword).
@@ -9113,19 +8971,17 @@ int emit_program(Buf *out, const Expr *program) {
      *  1. early_file  - struct typedefs + drop glue (visible to everything)
      *  2. concrete_adt_apps - monomorphized polymorphic ADT typedefs + ctor fns
      *  3. concrete_fn_ptr_typedefs - typed fn-ptr typedefs for parametric struct fields
-     *  4. concrete_struct_apps - monomorphized generic struct typedefs
-     *  5. extern_decls - user extern-c declarations
-     *  6. fwd_decls   - Turmeric function forward declarations (visible to handlers)
-     *  7. defer_thunks - defer body functions (may call extern-c or Turmeric fns)
-     *  8. pending_handler_fns - effect handler functions (can call Turmeric fns)
-     *  9. file        - Turmeric function definitions (can reference handler fns by name)
-     * 10. main()      - entry point body
+     *  4. extern_decls - user extern-c declarations
+     *  5. fwd_decls   - Turmeric function forward declarations (visible to handlers)
+     *  6. defer_thunks - defer body functions (may call extern-c or Turmeric fns)
+     *  7. pending_handler_fns - effect handler functions (can call Turmeric fns)
+     *  8. file        - Turmeric function definitions (can reference handler fns by name)
+     *  9. main()      - entry point body
      */
     if (early_file.len)  { buf_write(out, early_file.data, early_file.len); buf_putc(out, '\n'); }
     if (sym_records.len) { buf_write(out, sym_records.data, sym_records.len); buf_putc(out, '\n'); }
     if (concrete_adt_apps.len) { buf_write(out, concrete_adt_apps.data, concrete_adt_apps.len); buf_putc(out, '\n'); }
     if (concrete_fn_ptr_typedefs.len) { buf_write(out, concrete_fn_ptr_typedefs.data, concrete_fn_ptr_typedefs.len); buf_putc(out, '\n'); }
-    if (concrete_struct_apps.len) { buf_write(out, concrete_struct_apps.data, concrete_struct_apps.len); buf_putc(out, '\n'); }
     if (thunk_typedefs.len) { buf_write(out, thunk_typedefs.data, thunk_typedefs.len); buf_putc(out, '\n'); }
     if (extern_decls.len){ buf_write(out, extern_decls.data, extern_decls.len); buf_putc(out, '\n'); }
     if (fwd_decls.len)   { buf_write(out, fwd_decls.data, fwd_decls.len); buf_putc(out, '\n'); }
@@ -9141,7 +8997,6 @@ int emit_program(Buf *out, const Expr *program) {
     buf_free(&defer_thunks);
     buf_free(&cprelude);
     inline_c_dedup_free(&cprelude_dedup);
-    buf_free(&concrete_struct_apps);
     buf_free(&concrete_adt_apps);
     buf_free(&concrete_fn_ptr_typedefs);
     buf_free(&sym_records);
@@ -9433,7 +9288,6 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
         }
     }
 
-    type_codegen_reset_struct_apps();
     type_codegen_reset_adt_apps();
     type_codegen_reset_fn_ptr_typedefs();
 
@@ -9578,7 +9432,6 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
         }
     }
 
-    type_codegen_emit_struct_apps(out);
     type_codegen_emit_adt_apps(out);
     type_codegen_emit_fn_ptr_typedefs(out);
 
@@ -9757,7 +9610,6 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
         return -1;
     }
 
-    type_codegen_reset_struct_apps();
     type_codegen_reset_adt_apps();
     type_codegen_reset_fn_ptr_typedefs();
     sym_codegen_reset();   /* SYM1/SYM2: clear interned-symbol records for this TU */

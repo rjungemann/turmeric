@@ -1420,34 +1420,16 @@ bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
             if (se->kind == EX_VAR)
                 have_rt = emit_spec_arg_type_for_binding(ctx, se->as.var.binding, &rt);
             if (!have_rt) rt = emit_resolve_type(ctx, se->type);
-            StructDef *sd = NULL;
-            Type sargs[16];
-            uint8_t sn = 0;
             uint32_t fidx = recv->as.get_field_.field_idx;
-            if (type_extract_struct_app(&rt, &sd, sargs, &sn) && sd &&
-                fidx < sd->n_fields) {
-                /* Parametric receiver, e.g. `(Option cstr)`: substitute the
-                 * extracted element args into the field's declared type-param. */
-                const StructField *f = &sd->fields[fidx];
-                if (f->full_type && f->full_type->kind == TY_TYVAR) {
-                    Type fr = substitute_struct_app_type(f->full_type, sd, sargs);
-                    if (fr.kind != TY_TYVAR && fr.kind != TY_UNKNOWN) {
-                        disp_ty = fr;
-                        have_disp = true;
-                        disp_ty_owned = (fr.kind == TY_APP);
-                    } else {
-                        free_struct_app_type(fr);
-                    }
-                }
-            } else {
-                /* constrained-instance-element-dispatch (lowered record ADT
-                 * receiver): under defstruct-as-defadt the parametric container
-                 * is an ADT, not a struct -- `(Option cstr)` is a TY_APP over the
-                 * lowered record ADT def, which type_extract_struct_app rejects.
-                 * Mirror the struct path with the ADT-app helpers: extract the
-                 * AdtDef + element args, then substitute them into the ctor
-                 * field's declared full_type (the tyvar `A`) so the inner
-                 * `(enc (.value x))` re-dispatches on the concrete element. */
+            /* constrained-instance-element-dispatch (lowered record ADT
+             * receiver): under defstruct-as-defadt the parametric container
+             * is an ADT -- `(Option cstr)` is a TY_APP over the lowered record
+             * ADT def.  Extract the AdtDef + element args, then substitute them
+             * into the ctor field's declared full_type (the tyvar `A`) so the
+             * inner `(enc (.value x))` re-dispatches on the concrete element.
+             * (structdef-retirement DS-D: the former struct-app receiver path is
+             * gone -- no struct-headed app forms.) */
+            {
                 AdtDef *ad = NULL;
                 Type aargs[16];
                 uint8_t an = 0;
@@ -1532,17 +1514,16 @@ bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
         const TypeClassInstance *inst =
             ctx->current_abi_specialization->fn->owner_instance;
         Type recv = ctx->current_abi_specialization->bindings[0].type;
-        StructDef *rsd = NULL; AdtDef *rad = NULL; Type rargs[16]; uint8_t rn = 0;
-        /* CONV-S2: the class-var receiver may be a lowered record ADT-app
-         * (`(Vec bool)`/`(Cons (Option int))`) under defstruct-as-defadt, which
-         * type_extract_struct_app rejects -- so a constrained instance over a
-         * lowered container (`(definstance Tag [Vec] [(Tag A)] ...)`) left its
-         * element constraint var unbound and the inner `(tag (:: (vec-get v i)
-         * A))` kept the baked carrier representative (wrong instance / a segfault
-         * when the element's real ABI differs). Extract the ADT-app element args
-         * too. */
-        if (type_extract_struct_app(&recv, &rsd, rargs, &rn) ||
-            type_extract_adt_app(&recv, &rad, rargs, &rn)) {
+        AdtDef *rad = NULL; Type rargs[16]; uint8_t rn = 0;
+        /* CONV-S2: the class-var receiver is a lowered record ADT-app
+         * (`(Vec bool)`/`(Cons (Option int))`) under defstruct-as-defadt -- so a
+         * constrained instance over a lowered container (`(definstance Tag [Vec]
+         * [(Tag A)] ...)`) would otherwise leave its element constraint var
+         * unbound and the inner `(tag (:: (vec-get v i) A))` keep the baked
+         * carrier representative (wrong instance / a segfault when the element's
+         * real ABI differs).  (structdef-retirement DS-D: the former struct-app
+         * extraction is gone -- no struct-headed app forms.) */
+        if (type_extract_adt_app(&recv, &rad, rargs, &rn)) {
             /* Route the param_idx->element mapping through the shared chokepoint
              * kernel (extraction stays here), then pick the entry naming this
              * still-unbound constraint var. */
@@ -3232,15 +3213,9 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
         bool essential = type_is_heap_struct(concrete_ty) ||
                          carrier_is_inline(concrete_ty.kind);
         if (!essential) {
-            StructDef *adef = NULL;
-            Type aargs[16];
-            uint8_t an = 0;
-            if (type_extract_struct_app(&concrete_ty, &adef, aargs, &an) &&
-                adef && adef->name &&
-                (strcmp(adef->name, "Option") == 0 ||
-                 strcmp(adef->name, "Result") == 0)) {
-                essential = true;
-            }
+            /* structdef-retirement DS-D: the former struct-app Option/Result
+             * check (type_extract_struct_app) is dead -- no struct-headed app
+             * forms; a lowered Option/Result monomorph is an ADT app. */
             /* Pointer-sized leaves (cstr, ptr<void>, int/int64) cross with no
              * reinterpret and are trivially safe -- not part of the
              * struct-fallback set the tripwire watches. */
@@ -3313,122 +3288,11 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
              * layout instead. The non-Result/Option fallback keeps the
              * legacy deref so unrelated parametric structs (Pair, user
              * defstructs) are unaffected. */
-            StructDef *def = NULL;
-            Type type_args[16];
-            uint8_t n_args = 0;
+            /* structdef-retirement DS-D: the former struct-app Option/Result
+             * canonical readback (keyed on type_extract_struct_app) is dead --
+             * no struct-headed app forms.  The lowered record-ADT readback
+             * below handles Option/Result monomorphs. */
             bool used_canonical = false;
-            if (type_extract_struct_app(&concrete_ty, &def, type_args, &n_args) &&
-                def && def->name &&
-                (strcmp(def->name, "Result") == 0 || strcmp(def->name, "Option") == 0)) {
-                bool is_option = strcmp(def->name, "Option") == 0;
-                const char *box_t = is_option ? "tur_option_t" : "tur_result_box_t";
-                char *src_tmp = fresh_tmp(ctx);
-                indent_buf(body, ctx->indent);
-                buf_printf(body, "%s *%s = (%s *)(intptr_t)(%s);\n",
-                           box_t, src_tmp, box_t, src_str);
-                /* option-lowering-mid-migration: `none` is the NULL carrier
-                 * (`0`), so the canonical readback must NOT dereference it.
-                 * Guard the whole field-by-field reconstruction with a NULL
-                 * check that collapses to a zeroed `Option__T` (is_some=false,
-                 * value=0) -- exactly the none value -- when the carrier is 0.
-                 * Result has no NULL carrier (ok/err both heap-allocate), so it
-                 * keeps the unguarded read. */
-                if (is_option)
-                    buf_printf(&out, "(%s ? ", src_tmp);
-                buf_printf(&out, "(%s){", cname);
-                for (uint32_t fi = 0; fi < def->n_fields; fi++) {
-                    const StructField *f = &def->fields[fi];
-                    if (fi > 0) buf_puts(&out, ", ");
-                    /* C field name == Turmeric field name with '-' -> '_'. */
-                    char fname[64];
-                    size_t fl = 0;
-                    for (const char *p = f->name; *p && fl + 1 < sizeof(fname); p++) {
-                        fname[fl++] = (*p == '-') ? '_' : *p;
-                    }
-                    fname[fl] = 0;
-                    buf_printf(&out, ".%s = ", fname);
-                    if (f->kind == TY_BOOL) {
-                        /* The carrier box stores is_ok / is_some as `bool` at
-                         * offset 0 -- read straight through. */
-                        buf_printf(&out, "%s->%s", src_tmp, fname);
-                        continue;
-                    }
-                    /* Substitute the field's tyvar against the call's args
-                     * (e.g. ok-val: TY_TYVAR "A" -> type_args[0]) and ask the
-                     * existing bridge to do the carrier->concrete cast for
-                     * that one scalar/pointer/composite field. The recursive
-                     * call is bounded -- field types are strictly smaller than
-                     * the whole struct -- and reuses every special case
-                     * (heap-tagged, carrier_is_inline, pointer deref) so we
-                     * stay consistent with the rest of the bridge. */
-                    Type field_ty;
-                    bool field_ty_owned = false;
-                    if (f->full_type && def->n_type_params > 0) {
-                        /* substitute_struct_app_type allocates spine nodes for
-                         * compound results.  A by-value aggregate element
-                         * (`(Result (Option int) cstr)`'s ok_val -> `(Option int)`)
-                         * substitutes to a TY_APP whose spine must be released --
-                         * the leaf-only assumption no longer holds once a record
-                         * carries a nested parametric field. */
-                        field_ty = substitute_struct_app_type(f->full_type, def, type_args);
-                        field_ty_owned = (field_ty.kind == TY_APP);
-                    } else if (f->full_type) {
-                        field_ty = *f->full_type;
-                    } else {
-                        field_ty = type_simple(f->kind, CK_COPY);
-                    }
-                    /* The carrier box always stores ok_val/err_val/value as
-                     * int64_t. Cast it back to the substituted field type:
-                     * value-shaped scalars (TY_INT and same-size widths) are
-                     * identity; sub-word integrals truncate via plain C cast;
-                     * float widths bit-reinterpret via a union; pointer-shaped
-                     * types (cstr, ptr_void, and the value-struct slot forced
-                     * to `T *` by the carve-out at types.c:1049-1062) cast
-                     * through `intptr_t`. */
-                    const char *fcname = emit_type_c_name(ctx, field_ty);
-                    TypeKind fk = field_ty.kind;
-                    if (fk == TY_INT || fk == TY_INT64 || fk == TY_UINT64) {
-                        buf_printf(&out, "%s->%s", src_tmp, fname);
-                    } else if (fk == TY_FLOAT || fk == TY_FLOAT64 || fk == TY_FLOAT32) {
-                        buf_printf(&out,
-                            "((union { int64_t s; %s d; }){.s = %s->%s}).d",
-                            fcname, src_tmp, fname);
-                    } else if ((fk == TY_APP || fk == TY_STRUCT || fk == TY_ADT) &&
-                               !type_is_heap_struct(field_ty) &&
-                               !type_is_heap_adt(field_ty) &&
-                               type_has_concrete_codegen_layout(&field_ty) &&
-                               fcname && strcmp(fcname, "int64_t") != 0) {
-                        /* nested-construct-byvalue (Gap #4 / site 5, struct path):
-                         * a WIDE by-value aggregate field (`(Result (Option int)
-                         * cstr)`'s ok_val -> `(Option int)`) is stored BOXED in the
-                         * canonical carrier box (malloc'd pointer cast to int64), so
-                         * a direct `(Option__int)(box->ok_val)` cast is an illegal
-                         * int64->aggregate conversion.  Deref-unbox instead --
-                         * mirrors the lowered-ADT readback below.  A :heap struct
-                         * field stays a pointer slot (handled by is_struct_ptr_slot
-                         * in the next arm); an opaque/transparent newtype carried
-                         * INLINE as the int64 carrier (c-name `int64_t`, e.g. a
-                         * `defopaque :ptr<void>` Device) must NOT be deref'd -- it is
-                         * the value, not a box pointer. */
-                        buf_printf(&out, "(*(%s *)(intptr_t)(%s->%s))",
-                                   fcname, src_tmp, fname);
-                    } else if (fk == TY_CSTR || fk == TY_PTR_VOID) {
-                        buf_printf(&out, "(%s)(intptr_t)(%s->%s)",
-                                   fcname, src_tmp, fname);
-                    } else {
-                        /* Integral narrowing (bool, int8/16/32, uint8/16/32)
-                         * and any other small-scalar field: a plain C cast
-                         * does the right thing on the int64 carrier slot. */
-                        buf_printf(&out, "(%s)(%s->%s)", fcname, src_tmp, fname);
-                    }
-                    if (field_ty_owned) free_struct_app_type(field_ty);
-                }
-                buf_printf(&out, "}");
-                if (is_option)
-                    buf_printf(&out, " : (%s){0})", cname);
-                free(src_tmp);
-                used_canonical = true;
-            }
             /* CONV-S1 seam 4: the same canonical NULL-safe readback for a LOWERED
              * Option/Result record ADT (`tur_adt_Option__Device`).  The struct
              * path above keys on type_extract_struct_app and misses an ADT app, so
