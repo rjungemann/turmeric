@@ -141,7 +141,28 @@ independent so we can stop after any slice.
 **Goal.** Thread a resolved dictionary into a constrained rank-2 poly fn via
 B1's explicit leading dict argument, for the **caller-chooses-`f`** case.
 
-**Step 0 -- soundness gate (LANDED).** Before dict passing exists, passing a
+**Status: LANDED (single-constraint, non-HKT).** Under
+`--enable=forall-dict-pass`, a genuinely polymorphic single-constraint
+constrained function passed as a rank-2 argument now dispatches its class method
+through a runtime dictionary, so the *correct* instance runs at each invocation:
+`poly-show` invoked at `int` and `bool` inside a callee prints `int:7` /
+`bool:true` through one compiled body (fixture `forall-dict-show/`). The pieces,
+as spec'd below: a **dict-clone** FnDef (`make_dict_clone`, `elab_call.c`) shares
+the original's body + params and prepends one int64 dict param, marked
+(`FnDef.dict_clone_*`) so `emit_call_name` (`emit_core.c`) emits the class-method
+call as `((<ret>(*)(int64_t...))((void **)(intptr_t)<dict>)[<slot>])(...)` (the
+existential-witness shape, dict from a param); `make_poly_wrapper_ex` wraps the
+clone (its dict param is a forwarded arg) -- or, for a *monomorphic* inner,
+accepts and ignores `n_lead_ignore` dict slots so mode B cleanly subsumes mode A;
+`elab_poly_call` resolves each constraint's instance (reusing the mode-A
+re-discharge) and prepends its `&dict_C_T_singleton` as a leading carrier arg
+(B1, no carrier widening). A `Binding.source_fn_def` link reaches the original
+FnDef from the passed binding. The soundness gate below still fires when the flag
+is off. **Not yet:** multiple constraints and HKT `(f a)` method receivers
+(MB2) -- both currently error clearly; the `poly_arg_mask` is shifted by the
+dict count but the HKT arg-coercion is untouched.
+
+**Step 0 -- soundness gate (LANDED, flag off).** Before dict passing exists, passing a
 *genuinely polymorphic* constrained function (one whose own body dispatches a
 class method on its constrained type variable -- `fn_constraints` non-empty) as
 a rank-2 value **silently miscompiles**: `make_poly_wrapper` wraps the

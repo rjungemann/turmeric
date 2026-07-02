@@ -184,6 +184,14 @@ extern bool g_opt_forall_constraints;
  * the EXPERIMENTS[] `opt_global` for "hkt-hrt". */
 extern bool g_opt_hkt_hrt;
 
+/* MB1 of constrained-hkt-forall-mode-b-plan: enable bit for the
+ * `forall-dict-pass` experiment.  When set, a genuinely polymorphic constrained
+ * function passed as a rank-2 argument is compiled to dispatch its class methods
+ * through a runtime dictionary threaded via the poly carrier (a dict-clone of
+ * the function + a leading dict argument resolved at each invocation), instead
+ * of being rejected (TUR-E0308) as it is without the flag. */
+extern bool g_opt_forall_dict_pass;
+
 
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signatures

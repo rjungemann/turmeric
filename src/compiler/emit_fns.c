@@ -441,6 +441,19 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
 
 void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     FnDef *fd = e->as.fn_def_.fn;
+    /* MB1 (constrained-hkt-forall-mode-b-plan): while this dict-clone's body is
+     * emitted, route its class-method calls on the constrained var through the
+     * dict param (emit_call_name).  emit_fn_def is single-exit (no early
+     * returns) and never recurses into another emit_fn_def, so set here and
+     * clear at the end. */
+    const char   *saved_dd_cname = ctx->dict_dispatch_param_cname;
+    TypeClass    *saved_dd_class = ctx->dict_dispatch_class;
+    char         *dd_cname_owned = NULL;
+    if (fd->dict_clone_class && fd->dict_clone_param) {
+        dd_cname_owned = raw_name_for_binding(fd->dict_clone_param);
+        ctx->dict_dispatch_param_cname = dd_cname_owned;
+        ctx->dict_dispatch_class = fd->dict_clone_class;
+    }
     /* SYM5: detect the opt-in str->sym definition (from sym-dynamic.tur).  Its
      * presence is what links the runtime intern table, so it gates the
      * static-record seeding constructor emitted by sym_codegen_emit. */
@@ -1640,4 +1653,8 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         buf_puts(real_file, "}\n\n");
         free(wrap_name);
     }
+    /* MB1: restore dict-dispatch mode. */
+    ctx->dict_dispatch_param_cname = saved_dd_cname;
+    ctx->dict_dispatch_class = saved_dd_class;
+    free(dd_cname_owned);
 }

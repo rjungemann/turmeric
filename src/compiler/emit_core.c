@@ -1675,6 +1675,43 @@ static char *capture_env_access(EmitCtx *ctx, const Binding *b);
 
 char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
     const Expr *cur = NULL;
+    /* MB1 (constrained-hkt-forall-mode-b-plan): while emitting a dict-clone
+     * body, a class-method call on the constrained type variable (one carrying a
+     * `dict_arg` for the clone's class) dispatches through the runtime dict param
+     * -- `((<ret> (*)(int64_t...))((void **)(intptr_t)<dict>)[<slot>])` -- exactly
+     * like the existential witness path, but sourcing the witness from the dict
+     * parameter instead of an `open`-bound table.  The method slot is its index
+     * in the class dict layout (dict struct fields are emitted in class-method
+     * order, emit_stmt.c). */
+    if (ctx && ctx->dict_dispatch_class && call && call->kind == EX_CALL &&
+        call->as.call_.dict_arg && call->as.call_.dict_arg->kind == EX_DICT &&
+        call->as.call_.dict_arg->as.dict_.instance &&
+        call->as.call_.dict_arg->as.dict_.instance->typeclass ==
+            ctx->dict_dispatch_class &&
+        call->as.call_.dict_arg->as.dict_.method_name[0] != '\0') {
+        const TypeClass *tc = ctx->dict_dispatch_class;
+        const char *mname = call->as.call_.dict_arg->as.dict_.method_name;
+        int slot = -1;
+        for (uint8_t i = 0; i < tc->n_methods; i++) {
+            char mm[64];
+            tur_mangle_ident(tc->methods[i].name->name, mm, sizeof(mm));
+            if (strcmp(mm, mname) == 0) { slot = (int)i; break; }
+        }
+        if (slot >= 0) {
+            uint32_t na = call->as.call_.n_args;
+            Buf b2; buf_init(&b2);
+            buf_printf(&b2, "((%s (*)(", emit_type_c_name(ctx, call->type));
+            if (na == 0) buf_puts(&b2, "void");
+            for (uint32_t i = 0; i < na; i++)
+                buf_printf(&b2, "%sint64_t", i ? ", " : "");
+            buf_printf(&b2, "))((void **)(intptr_t)%s)[%d])",
+                       ctx->dict_dispatch_param_cname, slot);
+            buf_putc(&b2, '\0');
+            char *out = strdup(b2.data);
+            buf_free(&b2);
+            return out;
+        }
+    }
     /* GHE: typeclass-method dispatch inside a monomorphized constrained generic
      * takes precedence over the generic-function specialization lookup below. */
     {

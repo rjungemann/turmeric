@@ -242,6 +242,13 @@ typedef struct EmitCtx {
     uint32_t        cap_carrier_call_bindings;
     const EmitAbiSpecialization *current_abi_specialization;
     const char *current_fn_ret_ctype;
+    /* MB1 (constrained-hkt-forall-mode-b-plan): set while emitting a dict-clone
+     * FnDef body (see FnDef.dict_clone_*).  A class-method call carrying a
+     * `dict_arg` for `dict_dispatch_class` is emitted as a runtime dispatch
+     * through the dict param `dict_dispatch_param_cname` (an int64 carrier),
+     * indexing the class method's slot in the dict layout.  Both NULL normally. */
+    const char     *dict_dispatch_param_cname;
+    struct TypeClass *dict_dispatch_class;
     /* Variant 2 (generic-struct-opaque-element): the EX_FN_DEF whose body the ABI
      * scan is currently descending into (top-level scan only).  Used to tell a
      * generic *relay* call (inside a generic body, resolvable by binding

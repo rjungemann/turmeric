@@ -59,6 +59,13 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.27.0",                    /* expires_at (hard contract; release-cut enforced) */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_hkt_hrt },
+    { "forall-dict-pass",
+      "runtime dictionary passing for a polymorphic constrained function used as a rank-2 argument (mode B)",
+      "docs/upcoming/v1/constrained-hkt-forall-mode-b-plan.md",
+      "0.25.6",                    /* introduced */
+      "0.27.0",                    /* expires_at (hard contract; release-cut enforced) */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_forall_dict_pass },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

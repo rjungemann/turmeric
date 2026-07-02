@@ -1129,7 +1129,13 @@ Expr *elab_def(Elab *e, const Form *call);
 /* elab_call.c */
 Expr *elab_call(Elab *e, Form *call);
 Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span span, bool typed_concrete);
+/* MB1 (constrained-hkt-forall-mode-b): variant with `n_lead_ignore` leading
+ * dict-carrier params the wrapper accepts but does not forward to the inner. */
+Binding *make_poly_wrapper_ex(Elab *e, Binding *inner_b, uint8_t inner_arity,
+                              uint8_t n_lead_ignore, Span span, bool typed_concrete);
 Binding *poly_arg_fn_binding(Expr *arg);
+/* MB1: build a dict-clone of a single-constraint polymorphic constrained fn. */
+Binding *make_dict_clone(Elab *e, Binding *inner_b, Span span);
 
 /* elab_module.c */
 Expr *elab_load(Elab *e, const Form *call);

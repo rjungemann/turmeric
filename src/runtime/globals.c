@@ -199,6 +199,10 @@ bool g_opt_forall_constraints = false;
  * EXPERIMENTS[] descriptor in experiments.c. */
 bool g_opt_hkt_hrt = false;
 
+/* MB1 of constrained-hkt-forall-mode-b-plan: `forall-dict-pass` experiment
+ * enable bit.  Default off. */
+bool g_opt_forall_dict_pass = false;
+
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signature registry (see globals.h).
  * --------------------------------------------------------------------------- */

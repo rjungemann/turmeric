@@ -4381,40 +4381,78 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                 /* HRT4: pass-through — binding is already a tur_poly_fn_t, no wrapper needed. */
                 wrap->as.poly_wrap_.wrapper_binding = NULL;
             } else {
-                /* MB1 (constrained-hkt-forall-mode-b-plan): a *genuinely
-                 * polymorphic* constrained function (one whose own body
-                 * dispatches a class method on its constrained type variable --
-                 * `fn_constraints` non-empty) cannot be passed as a rank-2 value
-                 * soundly today.  The rank-2 wrapper wraps the function's single
-                 * carrier-representative monomorph (the `int`/int64 instance), so
-                 * every invocation through the erased carrier runs that one
-                 * instance regardless of the caller-chosen type -- e.g. `(f true)`
-                 * silently runs the `Show int` method on a bool.  Making this
-                 * work needs runtime dictionary passing (mode B / MB1), which is
-                 * not yet implemented; reject it here rather than miscompile.
-                 * (A *monomorphic* function passed as a constrained rank-2 arg --
-                 * the shipped mode-A `Show`-passthrough case -- has no
-                 * `fn_constraints` and is unaffected.) */
-                if (inner_fn_b->fn_constraints &&
-                    inner_fn_b->fn_constraints->n_constraints > 0) {
+                bool forall_constrained = rank2_forall_ty &&
+                    rank2_forall_ty->as.forall_.n_constraints > 0;
+                uint8_t nc = rank2_forall_ty
+                    ? rank2_forall_ty->as.forall_.n_constraints : 0;
+                bool inner_poly_constrained = inner_fn_b->fn_constraints &&
+                    inner_fn_b->fn_constraints->n_constraints > 0;
+                if (g_opt_forall_dict_pass && forall_constrained) {
+                    /* MB1 (constrained-hkt-forall-mode-b-plan): under
+                     * --enable=forall-dict-pass the carrier ABI of a constrained
+                     * rank-2 forall carries one dictionary per constraint (leading
+                     * args, resolved at each invocation).  A *polymorphic*
+                     * constrained inner is wrapped as a dict-clone that dispatches
+                     * its class method through that dict; a *monomorphic* inner
+                     * accepts and ignores the dict slots. */
+                    experiment_warn_if_used("forall-dict-pass");
+                    if (inner_poly_constrained) {
+                        if (nc != 1 ||
+                            inner_fn_b->fn_constraints->n_constraints != 1) {
+                            diag_emit(DIAG_ERROR, args[i]->span,
+                                "forall-dict-pass: only a single typeclass "
+                                "constraint is supported so far (got %u on the "
+                                "forall, %u on '%s')", (unsigned)nc,
+                                (unsigned)inner_fn_b->fn_constraints->n_constraints,
+                                inner_fn_b->name ? inner_fn_b->name->name : "?");
+                            return NULL;
+                        }
+                        Binding *clone = make_dict_clone(e, inner_fn_b, args[i]->span);
+                        if (!clone) {
+                            diag_emit(DIAG_ERROR, args[i]->span,
+                                "forall-dict-pass: could not build a dict-clone "
+                                "for '%s' (its definition must be a plain defn)",
+                                inner_fn_b->name ? inner_fn_b->name->name : "?");
+                            return NULL;
+                        }
+                        Binding *wrapper_b = make_poly_wrapper_ex(
+                            e, clone, clone->type.as.fn.arity, 0, args[i]->span, false);
+                        if (!wrapper_b) return NULL;
+                        wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
+                    } else {
+                        uint8_t inner_arity = (inner_fn_b->type.kind == TY_FN)
+                            ? inner_fn_b->type.as.fn.arity : 1;
+                        if (inner_fn_b->closure_fn_binding) inner_arity--;
+                        Binding *wrapper_b = make_poly_wrapper_ex(
+                            e, inner_fn_b, inner_arity, nc, args[i]->span, false);
+                        if (!wrapper_b) return NULL;
+                        wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
+                    }
+                } else if (inner_poly_constrained) {
+                    /* Soundness gate (flag off): passing a genuinely polymorphic
+                     * constrained function as a rank-2 value would monomorphize to
+                     * the single carrier representative and miscompile for any
+                     * other type -- e.g. `(f true)` runs `Show int` on a bool.
+                     * Needs mode B (--enable=forall-dict-pass). */
                     diag_emit(DIAG_ERROR, args[i]->span,
                               "cannot pass the polymorphic constrained function "
                               "'%s' as a rank-2 argument: its body dispatches a "
                               "typeclass method on its own type variable, which "
                               "needs runtime dictionary passing through the poly "
-                              "carrier -- not yet implemented (see "
-                              "docs/upcoming/v1/constrained-hkt-forall-mode-b-plan.md). "
-                              "Pass a monomorphic function instead (TUR-E0308)",
+                              "carrier -- enable it with --enable=forall-dict-pass "
+                              "(see docs/upcoming/v1/constrained-hkt-forall-mode-b-plan.md) "
+                              "or pass a monomorphic function (TUR-E0308)",
                               inner_fn_b->name ? inner_fn_b->name->name : "?");
                     return NULL;
+                } else {
+                    uint8_t inner_arity = (inner_fn_b->type.kind == TY_FN)
+                        ? inner_fn_b->type.as.fn.arity : 1;
+                    /* Closures have an env param counted in arity — subtract it */
+                    if (inner_fn_b->closure_fn_binding) inner_arity--;
+                    Binding *wrapper_b = make_poly_wrapper(e, inner_fn_b, inner_arity, args[i]->span, false);
+                    if (!wrapper_b) return NULL;
+                    wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
                 }
-                uint8_t inner_arity = (inner_fn_b->type.kind == TY_FN)
-                    ? inner_fn_b->type.as.fn.arity : 1;
-                /* Closures have an env param counted in arity — subtract it */
-                if (inner_fn_b->closure_fn_binding) inner_arity--;
-                Binding *wrapper_b = make_poly_wrapper(e, inner_fn_b, inner_arity, args[i]->span, false);
-                if (!wrapper_b) return NULL;
-                wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
             }
             args[i] = wrap;
         }
@@ -5172,18 +5210,98 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     return out;
 }
 
+/* MB1 (constrained-hkt-forall-mode-b-plan): build a dict-clone of a
+ * single-constraint polymorphic constrained function `inner_b` (its body
+ * dispatches a class method on its constrained type variable).  The clone shares
+ * the original's body and trailing params but prepends one int64 dict param; the
+ * FnDef is marked (dict_clone_*) so emit routes the class-method call through the
+ * dict param.  Registers the clone as a file def and returns its binding, or
+ * NULL if the original FnDef is not found / arity would overflow. */
+Binding *make_dict_clone(Elab *e, Binding *inner_b, Span span) {
+    if (!inner_b || !inner_b->fn_constraints ||
+        inner_b->fn_constraints->n_constraints != 1)
+        return NULL;
+    TypeClass *cls = inner_b->fn_constraints->constraints[0].typeclass;
+    if (!cls || inner_b->type.kind != TY_FN) return NULL;
+    /* The original FnDef, reached directly from the binding (MB1 link). */
+    FnDef *orig = inner_b->source_fn_def;
+    if (!orig || !orig->params || !orig->body) return NULL;
+    uint8_t on = orig->n_params;
+    if ((uint32_t)on + 1 > MAX_FN_ARITY) return NULL;
+
+    /* clone name + dict param */
+    char cn[64];
+    snprintf(cn, sizeof(cn), "%s__dict_%u",
+             (inner_b->name && inner_b->name->name) ? inner_b->name->name : "fn",
+             e->next_id++);
+    const Symbol *csym = symtab_intern(e->st, strslice(cn, (uint32_t)strlen(cn)));
+    char dn[48];
+    snprintf(dn, sizeof(dn), "__dict_%u", e->next_id++);
+    const Symbol *dsym = symtab_intern(e->st, strslice(dn, (uint32_t)strlen(dn)));
+    Binding *dparam = binding_new(e, dsym, type_from_kind(TY_INT), false, false, span);
+
+    uint8_t np = on + 1;
+    Binding **params = (Binding **)arena_alloc(e->arena, np * sizeof(Binding *));
+    Type *ptypes = (Type *)arena_alloc(e->arena, np * sizeof(Type));
+    TypeKind akinds[MAX_FN_ARITY];
+    params[0] = dparam;
+    ptypes[0] = type_from_kind(TY_INT);
+    akinds[0] = TY_INT;
+    for (uint8_t i = 0; i < on; i++) {
+        params[i + 1] = orig->params[i];
+        ptypes[i + 1] = orig->param_types[i];
+        akinds[i + 1] = (i < inner_b->type.as.fn.arity)
+            ? inner_b->type.as.fn.arg_kinds[i] : orig->param_types[i].kind;
+    }
+    TypeKind rk = inner_b->type.as.fn.result_kind;
+    Type ftype = type_fn(akinds, np, rk);
+    if (inner_b->type.as.fn.result_full_type)
+        ftype.as.fn.result_full_type = inner_b->type.as.fn.result_full_type;
+
+    Binding *cb = binding_new(e, csym, ftype, false, true, span);
+    scope_add(&e->global, cb);
+    FnDef *cf = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
+    memset(cf, 0, sizeof(FnDef));
+    cf->binding = cb;
+    cf->params = params;
+    cf->n_params = np;
+    cf->param_types = ptypes;
+    cf->return_type = orig->return_type;
+    cf->body = orig->body;
+    cf->dict_clone_param = dparam;
+    cf->dict_clone_class = cls;
+    constraint_set_init(&cf->constraints);
+    Expr *cdef = expr_new(e->arena, EX_FN_DEF, ftype, span);
+    cdef->as.fn_def_.fn = cf;
+    elab_register_file_def(e, cdef);
+    return cb;
+}
+
 /* Phase HRT1: create a poly wrapper thunk for passing a function to a rank-2 param.
  * The wrapper has signature: int64_t __poly_N(void *env, int64_t x0, ..., int64_t x_{arity-1})
  * Its body calls inner_b(x0, ..., x_{arity-1}), ignoring env.
  * Registers the wrapper as a file-level EX_FN_DEF and returns the wrapper Binding. */
 Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span span, bool typed_concrete) {
+    return make_poly_wrapper_ex(e, inner_b, inner_arity, 0, span, typed_concrete);
+}
+
+/* MB1 (constrained-hkt-forall-mode-b-plan): `n_lead_ignore` leading int64
+ * carrier params (dictionary pointers) sit between the env slot and the
+ * forwarded args and are NOT passed to the inner fn -- the carrier ABI of a
+ * constrained rank-2 forall always carries one dict per constraint, but a
+ * *monomorphic* inner ignores them (a genuinely polymorphic inner is wrapped as
+ * a dict-clone whose dict param IS one of the forwarded args, so it uses
+ * n_lead_ignore = 0). */
+Binding *make_poly_wrapper_ex(Elab *e, Binding *inner_b, uint8_t inner_arity,
+                              uint8_t n_lead_ignore, Span span,
+                              bool typed_concrete) {
     /* Wrapper name */
     char wname[32];
     snprintf(wname, sizeof(wname), "__poly_%u", e->next_id++);
     const Symbol *wsym = symtab_intern(e->st, strslice(wname, (uint32_t)strlen(wname)));
 
-    /* Wrapper params: env (ptr<void>) + inner_arity int64_t args */
-    uint8_t w_arity = inner_arity + 1;
+    /* Wrapper params: env (ptr<void>) + n_lead_ignore dict slots + inner_arity args */
+    uint8_t w_arity = inner_arity + n_lead_ignore + 1;
     if (w_arity > MAX_FN_ARITY) {
         diag_emit(DIAG_ERROR, span, "rank-2 wrapper: too many arguments");
         return NULL;
@@ -5198,6 +5316,17 @@ Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span 
     Binding *env_pb = binding_new(e, env_psym, TYPE_PTR_VOID, false, false, span);
     wparams[0] = env_pb;
     wparam_types[0] = TYPE_PTR_VOID;
+
+    /* MB1: ignored leading dict slots (int64 carriers), never forwarded. */
+    for (uint8_t j = 0; j < n_lead_ignore; j++) {
+        char dpn[44];
+        snprintf(dpn, sizeof(dpn), "__poly_dictskip%u_%u", j, e->next_id++);
+        const Symbol *ds = symtab_intern(e->st, strslice(dpn, (uint32_t)strlen(dpn)));
+        Binding *dpb = binding_new(e, ds, type_from_kind(TY_INT), false, false, span);
+        wparams[1 + j] = dpb;
+        wparam_types[1 + j] = type_from_kind(TY_INT);
+    }
+    uint8_t argbase = 1 + n_lead_ignore;  /* first forwarded-arg param index */
 
     /* poly-wrapper-forces-int64-args-non-int-fat-sink.md: by default the
      * wrapper carries each argument as the int64_t carrier, which is correct
@@ -5240,8 +5369,8 @@ Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span 
         const Symbol *apsym = symtab_intern(e->st, strslice(apname, (uint32_t)strlen(apname)));
         Type apt = type_from_kind(real_arg_kinds[i]);
         Binding *apb = binding_new(e, apsym, apt, false, false, span);
-        wparams[i + 1] = apb;
-        wparam_types[i + 1] = apt;
+        wparams[argbase + i] = apb;
+        wparam_types[argbase + i] = apt;
         arg_bs[i] = apb;
     }
 
@@ -5290,7 +5419,8 @@ Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span 
     /* Build wrapper fn type */
     TypeKind warg_kinds[MAX_FN_ARITY];
     warg_kinds[0] = TY_PTR_VOID;
-    for (uint8_t i = 0; i < inner_arity; i++) warg_kinds[i + 1] = real_arg_kinds[i];
+    for (uint8_t j = 0; j < n_lead_ignore; j++) warg_kinds[1 + j] = TY_INT;
+    for (uint8_t i = 0; i < inner_arity; i++) warg_kinds[argbase + i] = real_arg_kinds[i];
     Type wfn_type = type_fn(warg_kinds, w_arity, inner_result_kind);
     /* M7: when the inner fn returns a by-value aggregate (a Monad/HKT
      * continuation returning `(m b)` -> e.g. `Option__int`), carry its FULL
@@ -5454,6 +5584,10 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
      * (elab_call.c ~4951).  A bound var pinned only through the return context
      * (not by any argument) is left abstract here and discharged by the caller's
      * own context. */
+    /* MB1: dictionaries resolved for each constraint, to prepend as leading
+     * carrier args (in constraint order) when forall-dict-pass is enabled. */
+    Expr *mb1_dicts[16];
+    uint8_t mb1_n_dicts = 0;
     if (poly && poly->kind == TY_FORALL && poly->as.forall_.n_constraints > 0) {
         const Type *cbody = poly->as.forall_.body;
         if (cbody && cbody->kind == TY_FN && cbody->as.fn.arg_full_types) {
@@ -5494,6 +5628,17 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                               (tc->name && tc->name->name) ? tc->name->name : "?",
                               type_name(concrete), vname);
                     return NULL;
+                }
+                /* MB1 (constrained-hkt-forall-mode-b-plan): materialize the
+                 * resolved instance's dictionary as a leading carrier argument so
+                 * the callee (a dict-clone) dispatches its class method through it
+                 * at runtime.  Bare-value EX_DICT form ->
+                 * `(int64_t)(intptr_t)(&dict_C_T_singleton)`. */
+                if (g_opt_forall_dict_pass && mb1_n_dicts < 16) {
+                    Expr *de = expr_new(e->arena, EX_DICT, TYPE_PTR_VOID, call->span);
+                    de->as.dict_.instance = inst;
+                    de->as.dict_.method_name[0] = '\0';
+                    mb1_dicts[mb1_n_dicts++] = de;
                 }
             }
         }
@@ -5588,5 +5733,20 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
     out->as.call_.dict_arg = NULL;
     out->as.call_.is_poly_call = true;
     out->as.call_.poly_arg_mask = poly_arg_mask;
+    /* MB1: prepend the resolved dictionaries as leading carrier args (constraint
+     * order), matching the dict slots the wrapper carries.  Done after the
+     * result-type / poly_arg_mask logic (which reasons about the real args) so
+     * those are unperturbed; the emitted N-ary carrier call passes them through. */
+    if (g_opt_forall_dict_pass && mb1_n_dicts > 0) {
+        uint32_t total = (uint32_t)mb1_n_dicts + out->as.call_.n_args;
+        Expr **na = (Expr **)arena_alloc(e->arena, total * sizeof(Expr *));
+        for (uint8_t k = 0; k < mb1_n_dicts; k++) na[k] = mb1_dicts[k];
+        for (uint32_t k = 0; k < out->as.call_.n_args; k++)
+            na[mb1_n_dicts + k] = out->as.call_.args[k];
+        /* Shift the nested-poly-arg mask by the number of prepended dicts. */
+        out->as.call_.poly_arg_mask = poly_arg_mask << mb1_n_dicts;
+        out->as.call_.args = na;
+        out->as.call_.n_args = total;
+    }
     return out;
 }

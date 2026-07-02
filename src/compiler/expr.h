@@ -231,6 +231,11 @@ struct Binding {
      * type its arguments pin -- the constraint is checked abstractly in the
      * body but must be re-checked when the defn is instantiated. */
     const ConstraintSet *fn_constraints;
+    /* MB1 (constrained-hkt-forall-mode-b-plan): for a top-level `defn` binding,
+     * the FnDef it defines -- lets make_dict_clone reach the original body/params
+     * from the binding without scanning file-scope defs (user defns are not yet
+     * registered there during elaboration).  NULL for non-defn bindings. */
+    struct FnDef *source_fn_def;
     /* bare-fat-result-monomorphization-plan (Phase B):
      *
      * bare_fat_result_kind -- on a bare `^fat g` *parameter* binding, the
@@ -502,6 +507,16 @@ struct FnDef {
      * M4b/M4c per-instantiation emit path on non-HKT classes (HKT-class
      * instance methods keep the uniform carrier ABI per Plan M6/M7). */
     struct TypeClassInstance *owner_instance;
+    /* MB1 (constrained-hkt-forall-mode-b-plan): when `dict_clone_class` is
+     * non-NULL this FnDef is a *dict-clone* -- a copy of a polymorphic
+     * constrained function (used as a rank-2 value) that shares the original's
+     * body and trailing params but prepends `dict_clone_param` (an int64 carrier
+     * holding a dictionary pointer).  While its body is emitted, a class-method
+     * call on the constrained type variable (one carrying a `dict_arg` for
+     * `dict_clone_class`) dispatches through that dict param at runtime instead
+     * of the baked representative instance. */
+    Binding             *dict_clone_param;
+    struct TypeClass    *dict_clone_class;
 };
 
 /* Phase 2: ExternC represents an (extern-c ...) declaration. */
