@@ -2,19 +2,37 @@
 title: Applying a closure-returning polymorphic combinator doesn't infer its element type
 severity: MEDIUM. Blocks *using* fully-polymorphic higher-order combinators;
 they must still be spelled monomorphically at each element type.
-status: OPEN. Split off 2026-07-02 from poly-defn-inner-lambda-codegen.md (the
-codegen-drop half of that report is resolved). Re-verified 2026-07-02 against
-./build/tur: the application-site error (line 19 of the repro,
-`match: arm types are incompatible -- expected tyvar (from earlier arm), got int`)
-still fires exactly as documented. Additionally, the definition-only variant
-(`or-parser` defined, `main` returns 0) that this report claims "now builds
-and runs" now ALSO fails inside the combinator's own body:
-`match: arm types are incompatible -- expected adt (from earlier arm), got app`
-on the `(q xs)` arm. That may be a regression in the inner-lambda elaboration
-after the codegen-drop fix, or a second inference gap in the same area; either
-way, the "Not the codegen drop" section below is now stale for this exact
-fixture -- the monomorphic sibling still works, but the polymorphic
-definition-only case no longer does.
+status: RESOLVED 2026-07-02. The application-site inference gap is fixed
+(see "Resolution" below). The definition-only variant that the earlier note
+claimed also failed no longer reproduces against the current `./build/tur`
+(it builds and runs), so that half was already closed; the fix here addresses
+the remaining application-site failure. Regression fixture:
+tests/fixtures/poly-combinator-application-element-inference/.
+---
+
+## Resolution (2026-07-02)
+
+Two coupled gaps kept the combinator's `[A]` from grounding when the returned
+closure was applied:
+
+1. `call_instantiate_type` (src/compiler/elab_call.c) had **no `TY_FN` case**,
+   so substituting the callee's `result_full_type` -- itself the returned
+   closure `(fn [int] (PRes A))` -- returned it unchanged, leaving `A` a bare
+   tyvar. A `TY_FN` case now deep-copies the fn and recursively substitutes its
+   `arg_full_types` / `result_full_type` (keeping the derived `arg_kinds` /
+   `result_kind` shells in sync).
+
+2. Even with the combinator call's result grounded to `(fn [int] (PRes int))`
+   on the LET binding's own type, calling the closure (`(combined 7)`) in
+   `elab_call_fn` took the **shared closure thunk binding's** type verbatim --
+   still `(fn [int] (PRes A))`. When the binding's own type is a fully-ground
+   `TY_FN` whose result refines the thunk's tyvar-bearing result, the closure
+   path now unifies the two result types (`(PRes A)` vs `(PRes int)` -> `A =
+   int`) and substitutes, so `(combined 7)` types as `(PRes int)` and the
+   downstream `match` arms agree.
+
+Verified: the repro returns 42; a `cstr` instantiation and an `int`
+instantiation coexist correctly in one program; full suite green.
 ---
 
 # Closure-returning combinator application doesn't ground its element tyvar

@@ -396,6 +396,44 @@ static Type call_instantiate_type(Elab *e, const Type *t,
             Type arg = call_instantiate_type(e, t->as.app.arg, bindings, n_bindings);
             return type_app(e->arena, fn, arg, (Span){0});
         }
+        case TY_FN: {
+            /* poly-combinator-application-element-inference: a callee whose
+             * declared RESULT is itself a function type carrying the callee's
+             * tyvars -- e.g. `or-parser : (fn [int] (PRes A))` returning a
+             * closure over `(PRes A)` -- must have those tyvars substituted so
+             * the returned closure's result grounds (`(PRes A)` -> `(PRes int)`)
+             * once `A` is bound from the arguments.  Without a TY_FN case here
+             * the whole fn type fell through to `default` and came back
+             * unchanged, so `(combined 7)` stayed `(PRes A)` and the downstream
+             * `match` rejected its arms (`expected tyvar, got int`).  Deep-copy
+             * the fn and substitute the full-type arrays, keeping the derived
+             * TypeKind shells (arg_kinds/result_kind) in sync with the
+             * instantiated payloads. */
+            Type ft = *t;
+            uint8_t ar = t->as.fn.arity;
+            if (t->as.fn.arg_full_types) {
+                Type **afts = (Type **)arena_alloc(e->arena, (ar ? ar : 1) * sizeof(Type *));
+                for (uint8_t k = 0; k < ar; k++) {
+                    if (t->as.fn.arg_full_types[k]) {
+                        afts[k] = (Type *)arena_alloc(e->arena, sizeof(Type));
+                        *afts[k] = call_instantiate_type(e, t->as.fn.arg_full_types[k],
+                                                         bindings, n_bindings);
+                        if (k < MAX_FN_ARITY) ft.as.fn.arg_kinds[k] = afts[k]->kind;
+                    } else {
+                        afts[k] = NULL;
+                    }
+                }
+                ft.as.fn.arg_full_types = afts;
+            }
+            if (t->as.fn.result_full_type) {
+                Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *rft = call_instantiate_type(e, t->as.fn.result_full_type,
+                                             bindings, n_bindings);
+                ft.as.fn.result_full_type = rft;
+                ft.as.fn.result_kind = rft->kind;
+            }
+            return ft;
+        }
         case TY_UNION: {
             uint8_t n = t->as.union_.n_members;
             Type **members = (Type **)arena_alloc(e->arena, (n ? n : 1) * sizeof(Type *));
@@ -3149,6 +3187,31 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     if (fn_binding->closure_fn_binding) {
         /* This is a closure - get the thunk function type */
         fn_type = fn_binding->closure_fn_binding->type;
+        /* poly-combinator-application-element-inference: the closure came from
+         * applying a polymorphic combinator (e.g. `(or-parser af ao)` returning
+         * `(fn [int] (PRes A))`).  The call site already grounded that
+         * application's element tyvar and recorded the result on the LET
+         * binding's OWN type (`combined : (fn [int] (PRes int))`), but the
+         * shared closure thunk binding still carries the ungrounded `(PRes A)`.
+         * Taking the thunk type verbatim reintroduces the bare tyvar, so
+         * `(combined 7)` types as `(PRes A)` and the downstream `match` rejects
+         * its arms.  When the binding's own type is a fully-ground TY_FN whose
+         * result refines the thunk's tyvar-bearing result, unify the two result
+         * types (`(PRes A)` vs `(PRes int)` -> `A = int`) and substitute so the
+         * call's result type grounds. */
+        if (fn_type.kind == TY_FN && fn_type.as.fn.result_full_type &&
+            call_type_has_named_tyvar(fn_type.as.fn.result_full_type) &&
+            fn_binding->type.kind == TY_FN &&
+            fn_binding->type.as.fn.result_full_type &&
+            !call_type_has_named_tyvar(fn_binding->type.as.fn.result_full_type)) {
+            CallTypeBinding cbind[16];
+            uint8_t n_cbind = 0;
+            if (call_collect_type_bindings(fn_type.as.fn.result_full_type,
+                                           *fn_binding->type.as.fn.result_full_type,
+                                           cbind, &n_cbind) && n_cbind > 0) {
+                fn_type = call_instantiate_type(e, &fn_type, cbind, n_cbind);
+            }
+        }
     } else if (fn_binding->type.kind == TY_PTR_VOID && !fn_binding->is_fat) {
         /* CRU B-4: retire the :ptr<void>-as-closure overload.  A *raw*
          * :ptr<void> (not a fat sink) is a plain pointer, not a callable
