@@ -201,15 +201,16 @@ static Type *struct_field_type_from_form(Elab *e, const Form *form,
         const Symbol *head = form->as.list.items[0]->as.sym;
         /* structdef-retirement slice 5 DS-A4: reject the built-in compound field
          * forms that have no record-ADT field representation yet -- `forall`,
-         * `handler`, `arrow` (`->`), session types, project/global/role.  A
+         * `handler`, session types, project/global/role.  A
          * defstruct with such a field now takes the ADT path (defstruct_lowers
          * _to_adt is true) and errors CLEANLY here instead of silently falling to
          * the legacy StructDef path -- which is what makes the residual StructDef
-         * producer unreachable (the deletion precondition).  `exists`, `fn`/`c-fn`
-         * and the borrow family DO lower and are handled below.  Lowering these
-         * forms is tracked in docs/upcoming/structdef-exotic-field-forms-plan.md. */
+         * producer unreachable (the deletion precondition).  `exists`, `fn`/`c-fn`,
+         * `arrow` (`->`) and the borrow family DO lower and are handled below.
+         * Lowering the remaining forms is tracked in
+         * docs/upcoming/structdef-exotic-field-forms-plan.md. */
         if (head == e->sym_forall || head == e->sym_forall_u ||
-            head == e->sym_handler_type || head == e->sym_arrow ||
+            head == e->sym_handler_type ||
             head == e->sym_session_type || head == e->sym_session_Send ||
             head == e->sym_session_Recv || head == e->sym_session_Choose ||
             head == e->sym_session_Branch || head == e->sym_session_Rec ||
@@ -232,9 +233,10 @@ static Type *struct_field_type_from_form(Elab *e, const Form *form,
          * below recurses into the `[A...]` param vector and mis-parses it as a
          * TupleN literal (a 1-arg fn hits the "tuple type must have 2 to 8
          * element types" error).  type_expr_from_form has the real fn-type
-         * parser; route there directly.  (`arrow`/`->` is rejected above until it
-         * is lowered like `fn`.) */
-        if (head == e->sym_fn || head == e->sym_c_fn) {
+         * parser; route there directly.  `arrow`/`->` (`(-> A B)`) is an
+         * alternate spelling of the fn type and shares that parser (it lowers
+         * to TY_FN), so it routes through the same dispatch (EF-1). */
+        if (head == e->sym_fn || head == e->sym_c_fn || head == e->sym_arrow) {
             return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
         }
         /* structdef-retirement slice 5 DS-A3: a list-form built-in compound type
