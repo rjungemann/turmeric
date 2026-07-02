@@ -1,5 +1,17 @@
 # Higher-kinded rank-2: by-value aggregate containers don't fit the erased carrier
 
+> **RESOLVED.** By-value aggregate containers now flow through the erased poly
+> carrier. A **forall** carrier (uniform int64) heap-boxes an aggregate arg at
+> the invocation and derefs it in the poly-wrapper (`poly_agg_arg_mask`), and
+> boxes an aggregate result via the carrier-spill shim (gated by
+> `poly_wrap_.boxes_aggregate`) which the call site unboxes; a **typed** `:fn`
+> carrier / monad continuation is left byte-for-byte unchanged (consumed by value
+> via the concrete-cast call site). The `TUR-E0295`/`E0296` validation stays;
+> `TUR-E0297` is retired. See `emit_agg_box`/`emit_agg_unbox` (emit_expr.c),
+> `make_poly_wrapper` + the `elab_poly_call` result-type propagation
+> (elab_call.c), and `ensure_aggregate_spill_shim` (emit_module.c). Fixtures:
+> `hrt-hkt-aggregate-container/`, `hrt-rank2-aggregate-arg/`.
+
 **Summary.** Slice 3 of `constrained-hkt-forall-plan` lets a rank-2 `forall`
 parameter quantify a higher-kinded `f : * -> *` and instantiate it to a
 concrete container at call sites. This works end-to-end for *carrier-compatible*

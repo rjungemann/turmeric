@@ -96,17 +96,10 @@ static bool hrt_validate_hk_actual(Elab *e, Kind f_kind, Type actual,
                   kind_to_string(f_kind));
         return false;
     }
-    /* A by-value aggregate product container does not fit the erased int64
-     * poly carrier; reject rather than emit broken C (deferred). */
-    if (adt_app_is_byvalue_product(actual)) {
-        diag_emit(DIAG_ERROR, span,
-                  "%s: by-value aggregate container is not yet supported through "
-                  "the erased poly carrier -- use a parametric opaque/heap "
-                  "container, or see "
-                  "docs/reported/hrt-hkt-aggregate-container-carrier.md "
-                  "(TUR-E0297)", ctx_what);
-        return false;
-    }
+    /* A by-value aggregate product container now flows through the erased int64
+     * poly carrier via the heap-box bridge (emit_agg_box/unbox + the poly-wrapper
+     * poly_agg_arg_mask and the carrier-spill shim), so it is accepted -- no
+     * longer the deferred TUR-E0297 case. */
     return true;
 }
 
@@ -4383,6 +4376,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             }
             Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, args[i]->span);
             wrap->as.poly_wrap_.inner = args[i];
+            wrap->as.poly_wrap_.boxes_aggregate = true;  /* Slice 3: forall carrier */
             if (inner_fn_b->is_poly_fn) {
                 /* HRT4: pass-through — binding is already a tur_poly_fn_t, no wrapper needed. */
                 wrap->as.poly_wrap_.wrapper_binding = NULL;
@@ -5229,6 +5223,7 @@ Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span 
         ? inner_b->type.as.fn.result_kind : TY_INT;
     Expr **call_args = (Expr **)arena_alloc(e->arena, (inner_arity ? inner_arity : 1) * sizeof(Expr *));
     uint32_t call_poly_mask = 0;
+    uint32_t call_agg_mask = 0;
     for (uint8_t i = 0; i < inner_arity; i++) {
         Expr *av = expr_new(e->arena, EX_VAR, type_from_kind(real_arg_kinds[i]), span);
         av->as.var.binding = arg_bs[i];
@@ -5240,6 +5235,19 @@ Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span 
             if (aft && aft->kind == TY_FORALL) {
                 call_poly_mask |= (1u << i);
             }
+            /* Slice 3 (constrained-hkt-forall codegen): a by-value aggregate
+             * param `(f a)` = `(Option int)` arrives through the carrier as an
+             * int64 heap-box pointer; mark it so the inner call derefs it back
+             * to the aggregate.  `av` stays int64 (the carrier value the wrapper
+             * param holds); the emit unbox reads the target C type from the
+             * callee's own parameter full type. */
+            else if (aft &&
+                     ((aft->kind == TY_APP && adt_app_is_byvalue_product(*aft)) ||
+                      (aft->kind == TY_ADT && aft->as.adt_.def &&
+                       !aft->as.adt_.def->is_heap &&
+                       adt_is_byvalue_product(aft->as.adt_.def)))) {
+                call_agg_mask |= (1u << i);
+            }
         }
     }
     Expr *call_body = expr_new(e->arena, EX_CALL, type_from_kind(inner_result_kind), span);
@@ -5250,6 +5258,7 @@ Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span 
     call_body->as.call_.dict_arg = NULL;
     call_body->as.call_.is_poly_call = false;
     call_body->as.call_.poly_arg_mask = call_poly_mask;
+    call_body->as.call_.poly_agg_arg_mask = call_agg_mask;
 
     /* Build wrapper fn type */
     TypeKind warg_kinds[MAX_FN_ARITY];
@@ -5390,6 +5399,7 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                     Expr *orig_arg = args[i];
                     Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, orig_arg->span);
                     wrap->as.poly_wrap_.inner = orig_arg;
+                    wrap->as.poly_wrap_.boxes_aggregate = true;  /* Slice 3: forall carrier */
                     if (inner_b->is_poly_fn) {
                         /* HRT4: pass-through — already a tur_poly_fn_t. */
                         wrap->as.poly_wrap_.wrapper_binding = NULL;
@@ -5478,6 +5488,56 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                  * Direction A step 2a --
                  * see docs/reported/open-binder-skolems-not-distinguishable.md.) */
                 result_kind = (n_args > 0 && args[0]) ? args[0]->type.kind : TY_INT;
+                /* Slice 3 (constrained-hkt-forall codegen): when the result
+                 * tyvar is instantiated to a by-value aggregate (e.g. `(Option
+                 * int)`), carry its FULL type so the carrier unbox recognizes it
+                 * -- otherwise type_from_kind(TY_APP) drops the def and the
+                 * aggregate result is silently erased.  Pin the result tyvar to
+                 * the argument whose body param names it; fall back to arg 0
+                 * (the classic `a -> a` shape). */
+                const Type *pin = NULL;
+                if (rfull->as.tyvar_.name && body->as.fn.arg_full_types) {
+                    for (uint32_t j = 0;
+                         j < n_args && j < (uint32_t)body->as.fn.arity; j++) {
+                        const Type *aft = body->as.fn.arg_full_types[j];
+                        if (aft && aft->kind == TY_TYVAR && aft->as.tyvar_.name &&
+                            strcmp(aft->as.tyvar_.name, rfull->as.tyvar_.name) == 0) {
+                            pin = &args[j]->type;
+                            break;
+                        }
+                    }
+                }
+                if (!pin && n_args > 0 && args[0]) pin = &args[0]->type;
+                if (pin && (pin->kind == TY_APP || pin->kind == TY_ADT)) {
+                    Type *rf = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *rf = *pin;
+                    result_full = rf;
+                    result_kind = pin->kind;
+                }
+            } else if (rfull && rfull->kind == TY_APP) {
+                /* Slice 3 (constrained-hkt-forall codegen): the result is `(f a)`
+                 * (e.g. a lens/optic `(f a)` or `(f int) -> (f int)`).
+                 * Instantiate the bound vars from the arguments via the
+                 * structural unifier so the concrete container type (`(Option
+                 * int)`) flows out instead of a def-less TY_APP. */
+                result_kind = rfull->kind;
+                if (body->as.fn.arg_full_types) {
+                    CallTypeBinding binds[16];
+                    uint8_t nb = 0;
+                    for (uint32_t j = 0;
+                         j < n_args && j < (uint32_t)body->as.fn.arity; j++) {
+                        if (body->as.fn.arg_full_types[j])
+                            call_collect_type_bindings(body->as.fn.arg_full_types[j],
+                                                       args[j]->type, binds, &nb);
+                    }
+                    Type inst = call_instantiate_type(e, rfull, binds, nb);
+                    if (inst.kind == TY_APP || inst.kind == TY_ADT) {
+                        Type *rf = (Type *)arena_alloc(e->arena, sizeof(Type));
+                        *rf = inst;
+                        result_full = rf;
+                        result_kind = inst.kind;
+                    }
+                }
             } else if (rfull) {
                 result_kind = rfull->kind;
             } else {

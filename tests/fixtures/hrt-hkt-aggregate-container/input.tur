@@ -1,0 +1,23 @@
+;; Slice 3 codegen (constrained-hkt-forall-plan): a by-value AGGREGATE container
+;; -- the stdlib `Option` (a defstruct -> flat by-value product) -- now flows
+;; through the erased poly carrier.  A by-value aggregate arg is heap-boxed at
+;; the invocation and dereferenced in the poly-wrapper; an aggregate result is
+;; boxed by the carrier-spill shim and unboxed at the call site.  This lifts the
+;; former TUR-E0297 restriction.
+(defn opt-sum [x : (Option int)] : int
+  (if (some? x) (unwrap x) 0))
+
+;; f := Option in the argument position (aggregate arg -> int result).
+(defn use-arg [g (forall [(f :: * -> *)] (-> (f int) int))] : int
+  (g (some 33)))
+
+;; f := Option in both positions (aggregate arg -> aggregate result).
+(defn opt-id [x : (Option int)] : (Option int) x)
+
+(defn use-both [g (forall [(f :: * -> *)] (-> (f int) (f int)))] : (Option int)
+  (g (some 9)))
+
+(defn main [] : int
+  (println (use-arg opt-sum))
+  (println (unwrap (use-both opt-id)))
+  0)

@@ -189,17 +189,21 @@ downstream. Fixtures: `hrt-hkt-option-instantiation/`,
 `hrt-hkt-list-instantiation/`, `errors/hrt-hkt-non-application-arg/`,
 `errors/hrt-hkt-kind-mismatch/`.
 
-**Scope note -- carrier ABI.** Turmeric's HRT is type-erased, so a
+**Scope note -- carrier ABI (now lifted).** Turmeric's HRT is type-erased, so a
 *carrier-compatible* container (a parametric opaque / heap constructor, whose
-value is the int64 carrier) flows through `tur_poly_fn_t` unchanged and works
-end-to-end today. A **by-value aggregate product** container (a `defstruct` /
-flat `defadt`, e.g. the stdlib `Option`) does not fit the erased carrier; it is
-rejected cleanly with `TUR-E0297` rather than miscompiled. Lifting that -- via
-the existing B4 box-at-store / deref-at-thunk bridge -- is tracked in
-`docs/reported/hrt-hkt-aggregate-container-carrier.md` and is a prerequisite for
-a lens over ordinary by-value containers. This matches the plan's original
-framing: this slice delivers the *unifier/kind-tracking* novelty at the type
-level; the aggregate-carrier codegen is deferred to the slice that needs it.
+value is the int64 carrier) flows through `tur_poly_fn_t` unchanged. A **by-value
+aggregate product** container (a `defstruct` / flat `defadt`, e.g. the stdlib
+`Option`) also flows now, via the carrier heap-box bridge: a **forall** carrier
+(uniform int64) boxes an aggregate arg at the invocation and derefs it in the
+poly-wrapper (`poly_agg_arg_mask`), and boxes an aggregate result through the
+carrier-spill shim (gated by `poly_wrap_.boxes_aggregate`) which the call site
+unboxes -- while a **typed** `:fn` carrier / monad continuation is untouched
+(consumed by value via the concrete-cast call site). The `elab_poly_call`
+result-type propagation carries the concrete aggregate out of a `(f a)` / bare
+tyvar result. `TUR-E0297` is retired; the resolved report is archived at
+`docs/archive/hrt-hkt-aggregate-container-carrier.md`. Fixtures:
+`hrt-hkt-aggregate-container/`, `hrt-rank2-aggregate-arg/`. This clears the
+Slice 4 "No-go signal" for a lens over ordinary by-value containers.
 
 **Goal.** Allow a call site to pass a value whose type instantiates an
 `f : * -> *` bound variable to a concrete `* -> *` constructor

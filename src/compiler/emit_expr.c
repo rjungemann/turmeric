@@ -422,6 +422,34 @@ static char *emit_byval_recursive_carrier_reconstruct(EmitCtx *ctx, Type t,
     return out;
 }
 
+/* Higher-kinded poly carrier (constrained-hkt-forall slice 3 codegen): a
+ * by-value aggregate container `(f a)` (e.g. `(Option int)`) crossing the erased
+ * `tur_poly_fn_t` carrier is represented as an int64 heap-box pointer -- malloc +
+ * copy on the way in, deref on the way out, mirroring the EX_ANY inject/cast
+ * boxing above and the B4 wide-byval convention.  Both helpers return a freshly
+ * malloc'd string the caller owns. */
+static char *emit_agg_box(EmitCtx *ctx, Type t, const char *val) {
+    const char *cn = emit_type_c_name(ctx, emit_resolve_type(ctx, t));
+    Buf b; buf_init(&b);
+    buf_printf(&b,
+        "__extension__ ({ %s *__tur_pbox = (%s *)malloc(sizeof(%s)); "
+        "*__tur_pbox = (%s); (int64_t)(intptr_t)__tur_pbox; })",
+        cn, cn, cn, val);
+    buf_putc(&b, '\0');
+    char *out = strdup(b.data);
+    buf_free(&b);
+    return out;
+}
+static char *emit_agg_unbox(EmitCtx *ctx, Type t, const char *val) {
+    const char *cn = emit_type_c_name(ctx, emit_resolve_type(ctx, t));
+    Buf b; buf_init(&b);
+    buf_printf(&b, "(*(%s *)(intptr_t)(%s))", cn, val);
+    buf_putc(&b, '\0');
+    char *out = strdup(b.data);
+    buf_free(&b);
+    return out;
+}
+
 /* G9 (carrier<->concrete): true when a field read `(.field recv)` materializes
  * a by-value (non-:heap) aggregate in C -- e.g. `(.head xs)` where xs is a
  * monomorphized `Cons__Option__int *`, so `(xs)->head` is an embedded
@@ -2691,6 +2719,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             }
                         }
                     }
+                    /* Slice 3 (constrained-hkt-forall codegen): a by-value
+                     * aggregate container arg (`(Option int)`, a flat product)
+                     * cannot ride the int64 carrier by value -- heap-box it and
+                     * pass the pointer as int64.  The wrapper thunk derefs it
+                     * (make_poly_wrapper sets poly_agg_arg_mask).  Carrier-
+                     * compatible containers (parametric opaque / :heap ADT) are
+                     * NOT byvalue aggregates, so they pass through untouched. */
+                    if (!phase_f_concrete &&
+                        emit_type_is_byvalue_adt(ctx, e->as.call_.args[i]->type)) {
+                        char *boxed = emit_agg_box(ctx, e->as.call_.args[i]->type, raw);
+                        free(raw);
+                        raw = boxed;
+                    }
                     /* B4 (byvalue-recursive-carrier): a single-carrier recursive
                      * wrapper (Re/Expr) arg whose VALUE is the erased int64
                      * carrier (a match binding / spec param emitted as int64_t)
@@ -2768,6 +2809,17 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_putc(&out, '\0');
                 char *result = strdup(out.data);
                 buf_free(&out);
+                /* Slice 3 (constrained-hkt-forall codegen): a by-value aggregate
+                 * RESULT comes back through the carrier as an int64 heap-box
+                 * pointer (the wrapper's carrier-spill shim boxed it) -- deref it
+                 * back to the aggregate the surrounding context expects.  Only in
+                 * the generic path; phase_f_concrete never carries an aggregate
+                 * result (aggregates are not poly-concrete). */
+                if (!phase_f_concrete && emit_type_is_byvalue_adt(ctx, e->type)) {
+                    char *unboxed = emit_agg_unbox(ctx, e->type, result);
+                    free(result);
+                    result = unboxed;
+                }
                 for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
                 free(arg_strs);
                 free(fn_name);
@@ -3971,6 +4023,21 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     free(raw);
                     raw = strdup(cast.data);
                     buf_free(&cast);
+                }
+                /* Slice 3 (constrained-hkt-forall codegen): a poly-wrapper's
+                 * inner-call arg that arrived through the carrier as an int64
+                 * heap-box pointer to a by-value aggregate -- deref it back to
+                 * the aggregate the callee parameter expects.  The target C type
+                 * is the callee's own parameter full type. */
+                if (e->as.call_.poly_agg_arg_mask & (1u << i) &&
+                    fn_binding && fn_binding->type.kind == TY_FN &&
+                    fn_binding->type.as.fn.arg_full_types &&
+                    i < fn_binding->type.as.fn.arity &&
+                    fn_binding->type.as.fn.arg_full_types[i]) {
+                    char *ub = emit_agg_unbox(ctx,
+                        *fn_binding->type.as.fn.arg_full_types[i], raw);
+                    free(raw);
+                    raw = ub;
                 }
                 /* vec-push-heap-struct-element-not-carrier-cast: the symmetric
                  * direction of the ACB bridge below.  When the callee param is a
@@ -6256,10 +6323,20 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * it through a carrier-spill shim that boxes the aggregate. */
             const Binding *wbnd = e->as.poly_wrap_.wrapper_binding;
             char *spill = NULL;
-            if (wbnd && wbnd->type.kind == TY_FN) {
+            /* Slice 3 (constrained-hkt-forall codegen): only a FORALL carrier sink
+             * boxes an aggregate return (the generic int64 carrier consumer
+             * unboxes it).  A typed `:fn` carrier / monad continuation is consumed
+             * BY VALUE via a concrete-cast call site, so it must NOT be spilled --
+             * gating on boxes_aggregate keeps that path byte-for-byte unchanged. */
+            if (e->as.poly_wrap_.boxes_aggregate && wbnd && wbnd->type.kind == TY_FN) {
                 Type wres = wbnd->type.as.fn.result_full_type
                     ? *wbnd->type.as.fn.result_full_type
                     : emit_type_from_kind(wbnd->type.as.fn.result_kind);
+                /* Slice 3 (constrained-hkt-forall codegen): resolve a parametric
+                 * `(F A)` result to its concrete monomorph (TY_ADT) so the spill
+                 * shim's concrete-layout check recognizes a by-value aggregate
+                 * return (a raw TY_APP has no by-value layout on its own). */
+                wres = emit_resolve_type(ctx, wres);
                 uint8_t warity = wbnd->type.as.fn.arity;
                 /* params after the env slot (index 0) */
                 Type wparams[MAX_FN_ARITY];
@@ -6273,6 +6350,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                        spill ? spill : wn);
             buf_putc(&out, '\0');
             free(wn);
+            free(spill);
             char *result = strdup(out.data);
             buf_free(&out);
             return result;

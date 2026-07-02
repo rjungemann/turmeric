@@ -694,6 +694,19 @@ char *ensure_aggregate_spill_shim(EmitCtx *ctx, const char *real_fn,
     bool is_aggr = (result_type.kind == TY_APP &&
                     type_has_concrete_codegen_layout(&result_type) &&
                     !type_uses_carrier_abi(result_type));
+    /* Slice 3 (constrained-hkt-forall codegen): a by-value aggregate return --
+     * a parametric product app `(Option int)` (a TY_APP whose base is a flat
+     * by-value product) or a resolved concrete TY_ADT -- also needs spilling.
+     * Its C name is a struct, not the int64 carrier, so it cannot ride the
+     * tur_poly_fn_t.fn ABI without boxing. */
+    if (!is_aggr && !type_uses_carrier_abi(result_type)) {
+        if (result_type.kind == TY_APP && adt_app_is_byvalue_product(result_type))
+            is_aggr = true;
+        else if (result_type.kind == TY_ADT && result_type.as.adt_.def &&
+                 !result_type.as.adt_.def->is_heap &&
+                 adt_is_byvalue_product(result_type.as.adt_.def))
+            is_aggr = true;
+    }
     if (!is_aggr) return NULL;
 
     Buf nb; buf_init(&nb);
@@ -718,6 +731,14 @@ char *ensure_aggregate_spill_shim(EmitCtx *ctx, const char *real_fn,
     if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
 
     Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    /* The shim is emitted into an early section, ahead of real_fn's own forward
+     * declaration; emit a matching prototype first so the call is not an
+     * implicit int-returning declaration (which then conflicts with the real
+     * aggregate-returning signature). */
+    buf_printf(target, "static %s %s(void *", rc, real_fn);
+    for (uint8_t i = 0; i < n_params; i++)
+        buf_printf(target, ", %s", type_c_name(param_types[i]));
+    buf_puts(target, ");\n");
     buf_printf(target, "static int64_t %s(void *__e", name);
     for (uint8_t i = 0; i < n_params; i++)
         buf_printf(target, ", %s a%u", type_c_name(param_types[i]), (unsigned)i);
