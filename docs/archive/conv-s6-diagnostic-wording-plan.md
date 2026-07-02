@@ -8,6 +8,19 @@ description: One-pass rewording of struct construction, field access, pattern ma
 
 ## Status
 
+**RESOLVED 2026-07-02.** Executed against the post-StructDef-retirement
+codebase. By that point the "two physical emission sites per code" the plan
+anticipated had already collapsed to a single unified path (`make-struct`
+rewrites to the record-ADT constructor call), so S6-2's consolidation reduced
+to introducing one shared surface-classifier helper
+(`conv_surface_is_struct` / `conv_surface_phrase` in `elab_structs.c`,
+declared in `elab_internal.h`) that both the constructor-call path
+(`elab_call.c`) and the `with` path (`elab_structs.c`) call. `AdtDef` already
+carried the origin flag (`from_struct_lowering`), so S6-1 needed no new field.
+All wording (S6-3), surface-coverage fixtures (S6-4), and `tur explain`
+entries for TUR-E0292/E0293/E0294/E0296/E0297/E0298/E0299 (S6-5) landed. Full
+suite green. TUR-E0298 left unchanged per the open question.
+
 Split out from the parent `struct-adt-convergence-plan.md` (archived
 2026-06-28). Deferred until [`structdef-retirement-plan.md`](structdef-retirement-plan.md)
 lands -- doing the wording pass before the retirement means doing it twice

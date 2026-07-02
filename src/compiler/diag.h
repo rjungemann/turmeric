@@ -84,6 +84,14 @@ typedef enum DiagCode {
     /* ST0: Substructural type errors (-Xsubstructural) */
     TUR_E0150_AFFINE_USED_TWICE,   /* affine value used more than once */
     TUR_E0151_RELEVANT_DROPPED,    /* relevant value dropped without being used */
+    /* CONV-S6: product-shape (struct/record-variant) construction errors */
+    TUR_E0292_MISSING_FIELD,    /* construction omits a required field */
+    TUR_E0293_DUPLICATE_FIELD,  /* construction names the same field twice */
+    TUR_E0294_UNKNOWN_FIELD,    /* construction names a field the type lacks */
+    TUR_E0296_WITH_NOT_COPY,    /* `with` used on a move-only (non-:copy) type */
+    TUR_E0297_WITH_UNKNOWN_FIELD, /* `with` override names a field the type lacks */
+    TUR_E0298_WITH_DUPLICATE_FIELD, /* `with` overrides the same field twice */
+    TUR_E0299_MIXED_POS_KW,     /* construction mixes positional and keyword args */
     /* IT1: Union type errors (-Xunion-types) */
     TUR_E0300_UNION_TYPE_MISMATCH,   /* value type not a member of union type */
     TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH, /* match on union type missing arm for one or more members */

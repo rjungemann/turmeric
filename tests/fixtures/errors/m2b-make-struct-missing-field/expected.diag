@@ -1,2 +1,2 @@
 TUR-E0292
-missing field 'snd'
+missing field 'snd' in struct 'M2bPair'

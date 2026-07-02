@@ -17,6 +17,35 @@ static Type *adt_field_type_from_form(Arena *arena, const Form *ft_form,
     const char **type_params, uint8_t n_type_params);
 static void infer_type_param_kinds(AdtDef *def);
 
+/* CONV-S6 (diagnostic wording pass): product-shaped construction diagnostics
+ * (missing / duplicate / unknown field, mixed positional+keyword args, and the
+ * `with` copy/field errors) all fire against a single-variant record ADT.  That
+ * ADT may have been written as a `defdata`/`defgadt` variant OR lowered from a
+ * `defstruct`.  The user should see the surface they actually wrote, so these
+ * helpers classify the surface and format the shared noun phrase:
+ *
+ *   from a `defstruct`      -> "struct 'Person'"
+ *   any other record variant -> "variant 'Circle' of type 'Shape'"
+ *
+ * A single-variant from-struct lowering keeps its name in both slots
+ * (def->name == ctor->name), so the "variant X of type X" form would be
+ * redundant -- hence the dedicated "struct" wording. */
+bool conv_surface_is_struct(const AdtDef *def) {
+    return def && def->from_struct_lowering && def->n_ctors == 1;
+}
+
+const char *conv_surface_phrase(const AdtDef *def, const CtorDef *ctor,
+                                char *buf, size_t buflen) {
+    if (conv_surface_is_struct(def)) {
+        snprintf(buf, buflen, "struct '%s'", def->name);
+    } else {
+        snprintf(buf, buflen, "variant '%s' of type '%s'",
+                 ctor ? ctor->name : (def ? def->name : "?"),
+                 def ? def->name : "?");
+    }
+    return buf;
+}
+
 /* Phase 11: defstruct - define a struct type
  * Syntax: (defstruct Name [:copy] [field1 :type1 field2 :type2 ...])
  * 
@@ -3921,11 +3950,13 @@ static Expr *elab_with_record_adt(Elab *e, const Form *call,
                                   const CtorDef *ctor) {
     Span sp = call->span;
     if (!ctor->adt->is_copy) {
+        bool is_struct = conv_surface_is_struct(ctor->adt);
         diag_emit(DIAG_ERROR, call->span,
-                  "TUR-E0296: with requires a :copy type -- '%s' is move-only, "
+                  "TUR-E0296: with requires a :copy %s -- '%s' is move-only, "
                   "so copying its unchanged fields out of the source would "
-                  "consume it. Declare it `(defdata %s :copy ...)` to use with.",
-                  ctor->adt->name, ctor->adt->name);
+                  "consume it. Declare it `(%s %s :copy ...)` to use with.",
+                  is_struct ? "struct" : "variant", ctor->adt->name,
+                  is_struct ? "defstruct" : "defdata", ctor->adt->name);
         return NULL;
     }
 
@@ -3950,9 +3981,10 @@ static Expr *elab_with_record_adt(Elab *e, const Form *call,
             if (dn && strlen(dn) == klen && memcmp(dn, kn, klen) == 0) { fi = i; break; }
         }
         if (fi == UINT32_MAX) {
+            char surf[160];
+            conv_surface_phrase(ctor->adt, ctor, surf, sizeof(surf));
             diag_emit(DIAG_ERROR, fname->span,
-                      "TUR-E0297: with unknown field '%s' for variant '%s'",
-                      kn, ctor->name);
+                      "TUR-E0297: with: unknown field '%s' on %s", kn, surf);
             return NULL;
         }
         if (ovr_val[fi]) {

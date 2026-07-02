@@ -1163,6 +1163,13 @@ TypeKind gadt_skolem_lookup(const SkolemEnv *env, const char *name);
 Expr *elab_defgadt(Elab *e, const Form *call);
 Expr *elab_coerce(Elab *e, const Form *call);
 CtorDef *elab_lookup_ctor(Elab *e, const Symbol *name);
+/* CONV-S6: classify + describe a product-shape construction surface for
+ * diagnostics.  `conv_surface_is_struct` is true for a single-variant ADT
+ * lowered from `defstruct`; `conv_surface_phrase` writes "struct 'Foo'" or
+ * "variant 'Circle' of type 'Shape'" into `buf` and returns it. */
+bool conv_surface_is_struct(const AdtDef *def);
+const char *conv_surface_phrase(const AdtDef *def, const CtorDef *ctor,
+                                char *buf, size_t buflen);
 Expr *elab_match(Elab *e, const Form *call);
 Expr *elab_make_struct(Elab *e, const Form *call);
 Expr *elab_with(Elab *e, const Form *call); /* WITH-V0 */

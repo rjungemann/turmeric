@@ -1,2 +1,2 @@
 TUR-E0293
-duplicate field 'age'
+duplicate field 'age' in struct 'Person' construction

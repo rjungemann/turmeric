@@ -1936,9 +1936,11 @@ Expr *elab_call(Elab *e, Form *call) {
              * `defstruct` lowered to a record ADT keeps the precise error
              * instead of falling through to a confusing "not callable". */
             if (any_kw && !first_kw) {
+                char surf[160];
+                conv_surface_phrase(kwctor->adt, kwctor, surf, sizeof(surf));
                 diag_emit(DIAG_ERROR, call->span,
-                          "TUR-E0299: constructor '%s': cannot mix positional "
-                          "and keyword arguments", kwctor->name);
+                          "TUR-E0299: %s construction: cannot mix positional "
+                          "and keyword arguments", surf);
                 return NULL;
             }
             if (first_kw) {
@@ -1962,9 +1964,11 @@ Expr *elab_call(Elab *e, Form *call) {
                     Form *kw = call->as.list.items[1 + pi * 2];
                     Form *val = call->as.list.items[2 + pi * 2];
                     if (kw->tag != F_KEYWORD) {
+                        char surf[160];
+                        conv_surface_phrase(kwctor->adt, kwctor, surf, sizeof(surf));
                         diag_emit(DIAG_ERROR, kw->span,
-                                  "TUR-E0299: constructor '%s': cannot mix "
-                                  "positional and keyword arguments", kwctor->name);
+                                  "TUR-E0299: %s construction: cannot mix "
+                                  "positional and keyword arguments", surf);
                         return NULL;
                     }
                     int fidx = -1;
@@ -1975,15 +1979,19 @@ Expr *elab_call(Elab *e, Form *call) {
                         }
                     }
                     if (fidx < 0) {
+                        char surf[160];
+                        conv_surface_phrase(kwctor->adt, kwctor, surf, sizeof(surf));
                         diag_emit(DIAG_ERROR, kw->span,
-                                  "TUR-E0294: constructor '%s': unknown field '%s'",
-                                  kwctor->name, kw->as.sym->name);
+                                  "TUR-E0294: unknown field '%s' on %s",
+                                  kw->as.sym->name, surf);
                         return NULL;
                     }
                     if (pos_items[fidx + 1]) {
+                        char surf[160];
+                        conv_surface_phrase(kwctor->adt, kwctor, surf, sizeof(surf));
                         diag_emit(DIAG_ERROR, kw->span,
-                                  "TUR-E0293: constructor '%s': duplicate field '%s'",
-                                  kwctor->name, kw->as.sym->name);
+                                  "TUR-E0293: duplicate field '%s' in %s construction",
+                                  kw->as.sym->name, surf);
                         return NULL;
                     }
                     pos_items[fidx + 1] = val;
@@ -1992,9 +2000,11 @@ Expr *elab_call(Elab *e, Form *call) {
                  * too-few-pairs case). */
                 for (uint32_t fi = 0; fi < kwctor->n_fields; fi++) {
                     if (!pos_items[fi + 1]) {
+                        char surf[160];
+                        conv_surface_phrase(kwctor->adt, kwctor, surf, sizeof(surf));
                         diag_emit(DIAG_ERROR, call->span,
-                                  "TUR-E0292: constructor '%s': missing field '%s'",
-                                  kwctor->name, kwctor->fields[fi].name);
+                                  "TUR-E0292: missing field '%s' in %s",
+                                  kwctor->fields[fi].name, surf);
                         return NULL;
                     }
                 }
