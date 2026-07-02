@@ -38,6 +38,13 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * by value through the fat-closure ABI unconditionally; the gate lives in
      * adt_is_byvalue_product_d (types.c).  See
      * docs/upcoming/v2/b4-fat-closure-byvalue-adt-abi-plan.md. */
+    { "forall-kinds",
+      "explicit kind annotations on forall/exists bound variables, e.g. (f :: * -> *)",
+      "docs/upcoming/v1/constrained-hkt-forall-plan.md",
+      "0.25.6",                    /* introduced */
+      "0.27.0",                    /* expires_at (hard contract; release-cut enforced) */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_forall_kinds },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

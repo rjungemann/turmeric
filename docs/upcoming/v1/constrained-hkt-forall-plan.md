@@ -66,7 +66,18 @@ Each slice ships behind a fresh experimental flag and adds fixtures before
 landing. The flags are independent so we can stop after any slice without
 regressing the shipped HRT path.
 
-### Slice 1 -- Kind-annotated `forall` bound variables (`-Xforall-kinds`)
+### Slice 1 -- Kind-annotated `forall` bound variables (`--enable=forall-kinds`)
+
+**Status: landed.** Ships behind the `forall-kinds` experiment
+(`--enable=forall-kinds`, registered in `src/runtime/experiments.c`; the
+`-X` surface is retired). The quantifier parser in `elab_types.c` accepts a
+`(name :: <kind>)` binder alongside the bare-symbol form, lowers the
+arrow-kind grammar via `parse_kind_binder`/`parse_kind_seq`/`parse_kind_atom`,
+and plumbs the resulting `Kind` into `var_kinds[]`/`ext_kinds[]` so the body
+resolver sees `f` as higher-kinded in `(f a)`. Diagnostics `TUR-E0292`
+(malformed kind form) and `TUR-E0293` (arity exceeds `KIND_ARROW5`) are wired.
+Fixtures: `hrt-forall-kind-annotation/`,
+`errors/hrt-forall-kind-arrow-malformed/`.
 
 **Goal.** Replace the lowercase-letter kind heuristic with an explicit
 kind annotation on each bound variable, so `forall [(f :: * -> *)]` parses

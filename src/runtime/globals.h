@@ -161,6 +161,13 @@ extern bool g_werror_inline_c_narrow_params;
  * set it.  Read by experiment_warn_if_used in src/runtime/experiments.c. */
 extern bool g_allow_experimental;
 
+/* Slice 1 of constrained-hkt-forall-plan: enable bit for the `forall-kinds`
+ * experiment.  When set, a `forall`/`exists` bound variable may carry an
+ * explicit kind annotation `(f :: * -> *)` instead of relying on the
+ * lowercase-letter heuristic.  Points at the EXPERIMENTS[] `opt_global` for
+ * "forall-kinds"; read by the quantifier parser in elab_types.c. */
+extern bool g_opt_forall_kinds;
+
 
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signatures

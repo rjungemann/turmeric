@@ -184,6 +184,11 @@ bool g_werror_inline_c_narrow_params = false;
  * Turmeric project's own CI matrix runs. */
 bool g_allow_experimental = false;
 
+/* Slice 1 of constrained-hkt-forall-plan: `forall-kinds` experiment enable bit.
+ * Default off; flipped by --enable=forall-kinds (or :experiments) via the
+ * EXPERIMENTS[] descriptor in experiments.c. */
+bool g_opt_forall_kinds = false;
+
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signature registry (see globals.h).
  * --------------------------------------------------------------------------- */
