@@ -168,6 +168,14 @@ extern bool g_allow_experimental;
  * "forall-kinds"; read by the quantifier parser in elab_types.c. */
 extern bool g_opt_forall_kinds;
 
+/* Slice 2 of constrained-hkt-forall-plan: enable bit for the
+ * `forall-constraints` experiment.  When set, a `forall` type may carry a
+ * constraint vector `[(Show a) ...]`, and each rank-2 instantiation site inside
+ * a callee re-discharges those constraints against the concrete type filling
+ * the bound variable (TUR-E0294 if no instance is in scope).  Points at the
+ * EXPERIMENTS[] `opt_global` for "forall-constraints". */
+extern bool g_opt_forall_constraints;
+
 
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signatures

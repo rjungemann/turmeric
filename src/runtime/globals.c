@@ -189,6 +189,11 @@ bool g_allow_experimental = false;
  * EXPERIMENTS[] descriptor in experiments.c. */
 bool g_opt_forall_kinds = false;
 
+/* Slice 2 of constrained-hkt-forall-plan: `forall-constraints` experiment
+ * enable bit.  Default off; flipped by --enable=forall-constraints (or
+ * :experiments) via the EXPERIMENTS[] descriptor in experiments.c. */
+bool g_opt_forall_constraints = false;
+
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signature registry (see globals.h).
  * --------------------------------------------------------------------------- */

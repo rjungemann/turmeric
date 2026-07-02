@@ -110,7 +110,32 @@ current heuristic (back-compat).
 site still rejects rank-2 args whose poly fn type quantifies a non-star
 var (slice 3 lifts that).
 
-### Slice 2 -- Constraint enforcement on `forall` (`-Xforall-constraints`)
+### Slice 2 -- Constraint enforcement on `forall` (`--enable=forall-constraints`)
+
+**Status: landed (mode A, static enforcement).** Ships behind the
+`forall-constraints` experiment. The parser now accepts a constraint vector on
+`forall` (gated; `elab_types.c`), reusing the existing exists constraint-parse
+path, and `elab_poly_call` (`elab_call.c`) re-discharges each constraint at the
+rank-2 instantiation site: it pins the constrained bound variable to the
+concrete type from the matching argument and requires an in-scope instance,
+raising `TUR-E0294` if none exists. Fixtures: `hrt-forall-constraint-show/`,
+`hrt-forall-constraint-multi/`, `errors/hrt-forall-constraint-missing-instance/`.
+
+**Mode decision -- (A), not (B).** Turmeric's HRT is *type-erased*: a rank-2
+argument is a monomorphic function passed through the int64 `tur_poly_fn_t`
+carrier, so for the `Show`-shaped constraints this slice targets, the passed
+function already carries the right behavior and no runtime dictionary needs to
+be threaded. The constraint's teeth are therefore a **static** obligation
+checked at each instantiation site (mode A) -- which fully satisfies this
+slice's goal and fixtures with **no carrier change and no poly-fn fixture
+regen** (the plan's "largest blast radius" is avoided). Mode (B) -- widening
+`tur_poly_fn_t` with a `void *dict` slot and threading dictionaries -- is only
+actually required when the *callee* picks the type at runtime (the van
+Laarhoven lens: `Identity` vs `Const r`). That work is deferred to the slice
+that needs it (slice 3/4), where the existing `EX_EXISTS_DISPATCH` witness-table
+machinery (runtime dict -> method pointer -> indirect call) is the template to
+reuse. If a future slice requires the callee to choose a *constrained* `f`,
+revisit (B) then.
 
 **Goal.** Have `forall [a] [(Show a)] (-> a cstr)` actually require the
 caller to supply a `Show` dictionary for the chosen `a` at each instantiation

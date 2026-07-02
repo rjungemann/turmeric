@@ -5246,6 +5246,61 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
         }
     }
 
+    /* Slice 2 (constrained-hkt-forall-plan): re-discharge any typeclass
+     * constraints carried on the rank-2 forall at THIS instantiation site.
+     * Turmeric's HRT is type-erased -- the poly fn is a monomorphic function
+     * passed through the int64 carrier -- so no runtime dictionary is threaded;
+     * the constraint's teeth are a static check that the concrete type filling
+     * each constrained bound variable has an in-scope instance.  Mirrors the
+     * exists/pack enforcement (elab_types.c) and the defn-constraint re-discharge
+     * (elab_call.c ~4951).  A bound var pinned only through the return context
+     * (not by any argument) is left abstract here and discharged by the caller's
+     * own context. */
+    if (poly && poly->kind == TY_FORALL && poly->as.forall_.n_constraints > 0) {
+        const Type *cbody = poly->as.forall_.body;
+        if (cbody && cbody->kind == TY_FN && cbody->as.fn.arg_full_types) {
+            for (uint8_t ci = 0; ci < poly->as.forall_.n_constraints; ci++) {
+                TypeClass *tc = poly->as.forall_.constraint_classes[ci];
+                uint8_t    vi = poly->as.forall_.constraint_var_idx[ci];
+                if (!tc || vi >= poly->as.forall_.n_vars) continue;
+                const char *vname = poly->as.forall_.var_names[vi];
+                if (!vname) continue;
+                /* Pin the bound var to a concrete type: the first body parameter
+                 * whose full type is a TY_TYVAR named `vname` binds it to the
+                 * matching actual argument's type. */
+                Type concrete;
+                bool pinned = false;
+                for (uint32_t j = 0;
+                     j < n_args && j < (uint32_t)cbody->as.fn.arity; j++) {
+                    const Type *aft = cbody->as.fn.arg_full_types[j];
+                    if (aft && aft->kind == TY_TYVAR && aft->as.tyvar_.name &&
+                        strcmp(aft->as.tyvar_.name, vname) == 0) {
+                        concrete = args[j]->type;
+                        pinned = true;
+                        break;
+                    }
+                }
+                if (!pinned) continue;   /* resolved via return context; defer */
+                /* Only discharge against a ground type -- a tyvar/unknown/applied
+                 * binding means the call sits inside another generic body and the
+                 * obligation is still abstract (same guard as elab_call.c:4975). */
+                if (concrete.kind == TY_TYVAR || concrete.kind == TY_UNKNOWN ||
+                    concrete.kind == TY_APP) continue;
+                TypeClassInstance *inst = typeclass_env_lookup_instance(
+                    &e->typeclass_env, tc, &concrete, 1);
+                if (!inst) {
+                    diag_emit(DIAG_ERROR, call->span,
+                              "no '%s' instance for '%s' at this rank-2 "
+                              "instantiation site -- required by the constraint "
+                              "on '%s' in the poly fn's forall type (TUR-E0294)",
+                              (tc->name && tc->name->name) ? tc->name->name : "?",
+                              type_name(concrete), vname);
+                    return NULL;
+                }
+            }
+        }
+    }
+
     /* Determine return type by instantiation.
      * For (forall [a] (-> a a)): result matches first arg's type.
      * For (forall [s] (-> s int)): result is int (concrete). */

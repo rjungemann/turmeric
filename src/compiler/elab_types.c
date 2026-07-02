@@ -1018,15 +1018,25 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                     constraint_form = form->as.list.items[cursor + 1];
                     body_form = form->as.list.items[cursor + 2];
                     if (is_forall_form) {
-                        diag_emit(DIAG_ERROR, constraint_form->span,
-                                  "'forall' does not accept a constraint vector "
-                                  "(use defclass / definstance constraints instead)");
-                        return NULL;
+                        /* Slice 2 (constrained-hkt-forall): a constraint vector
+                         * on `forall` is gated behind the `forall-constraints`
+                         * experiment.  Enforcement happens at each rank-2
+                         * instantiation site (elab_poly_call), not here. */
+                        if (!g_opt_forall_constraints) {
+                            diag_emit(DIAG_ERROR, constraint_form->span,
+                                      "'forall' constraint vector requires "
+                                      "--enable=forall-constraints "
+                                      "(use defclass / definstance constraints "
+                                      "otherwise)");
+                            return NULL;
+                        }
+                        experiment_warn_if_used("forall-constraints");
                     }
                     if (constraint_form->tag != F_VEC) {
                         diag_emit(DIAG_ERROR, constraint_form->span,
-                                  "'exists' constraint vector must be a vector, "
-                                  "e.g. [(Show a)]");
+                                  "'%s' constraint vector must be a vector, "
+                                  "e.g. [(Show a)]",
+                                  is_forall_form ? "forall" : "exists");
                         return NULL;
                     }
                 }
@@ -1138,32 +1148,36 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                         cvar_idx = (uint8_t *)arena_alloc(
                             e->arena, nc * sizeof(uint8_t));
                         for (uint32_t i = 0; i < nc; i++) {
+                            const char *qname = is_forall_form ? "forall"
+                                                                : "exists";
                             Form *cf = constraint_form->as.list.items[i];
                             if (cf->tag != F_LIST || cf->as.list.len != 2) {
                                 diag_emit(DIAG_ERROR, cf->span,
-                                          "exists: constraint must be a 2-element "
-                                          "list (TypeclassName var), e.g. (Show a)");
+                                          "%s: constraint must be a 2-element "
+                                          "list (TypeclassName var), e.g. (Show a)",
+                                          qname);
                                 return NULL;
                             }
                             Form *tc_form = cf->as.list.items[0];
                             Form *var_ref = cf->as.list.items[1];
                             if (tc_form->tag != F_SYM) {
                                 diag_emit(DIAG_ERROR, tc_form->span,
-                                          "exists: constraint head must be a typeclass name");
+                                          "%s: constraint head must be a typeclass name",
+                                          qname);
                                 return NULL;
                             }
                             if (var_ref->tag != F_SYM) {
                                 diag_emit(DIAG_ERROR, var_ref->span,
-                                          "exists: constraint argument must be one of "
-                                          "the bound variable names");
+                                          "%s: constraint argument must be one of "
+                                          "the bound variable names", qname);
                                 return NULL;
                             }
                             TypeClass *tc = typeclass_env_lookup_typeclass(
                                 &e->typeclass_env, tc_form->as.sym);
                             if (!tc) {
                                 diag_emit(DIAG_ERROR, tc_form->span,
-                                          "exists: unknown typeclass '%s'",
-                                          tc_form->as.sym->name);
+                                          "%s: unknown typeclass '%s'",
+                                          qname, tc_form->as.sym->name);
                                 return NULL;
                             }
                             /* Find the var index.  Match against the resolved
@@ -1179,9 +1193,9 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                             }
                             if (vi == (uint8_t)0xFF) {
                                 diag_emit(DIAG_ERROR, var_ref->span,
-                                          "exists: constraint variable '%s' is not "
+                                          "%s: constraint variable '%s' is not "
                                           "one of the bound variables",
-                                          var_ref->as.sym->name);
+                                          qname, var_ref->as.sym->name);
                                 return NULL;
                             }
                             cclasses[i] = tc;

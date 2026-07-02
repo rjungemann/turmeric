@@ -45,6 +45,13 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.27.0",                    /* expires_at (hard contract; release-cut enforced) */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_forall_kinds },
+    { "forall-constraints",
+      "typeclass constraint vectors on forall types, e.g. (forall [a] [(Show a)] (-> a cstr)), enforced at rank-2 instantiation sites",
+      "docs/upcoming/v1/constrained-hkt-forall-plan.md",
+      "0.25.6",                    /* introduced */
+      "0.27.0",                    /* expires_at (hard contract; release-cut enforced) */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_forall_constraints },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };
