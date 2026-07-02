@@ -1,0 +1,46 @@
+;;; tur/cstr -- byte primitives on raw :cstr values.
+;;;
+;;; Small pure-Turmeric surface for reading the length of a NUL-terminated
+;;; C string and the byte at a given index. Sits below `stdlib/str.tur`,
+;;; which wraps a `:cstr` in a length-tagged view struct. Use these when
+;;; you just want to walk a literal like `"1+2*(3+4)"` byte by byte
+;;; without allocating a view.
+;;;
+;;; Not autoloaded: `(import cstr :refer [cstr-len cstr-nth])` explicitly.
+;;; See docs/archive/no-cstr-byte-primitives-pure-turmeric.md for why (an
+;;; earlier attempt to autoload perturbed Vec element-type inference).
+;;;
+;;; Since: 2026-07-01
+(defmodule cstr
+  (export cstr-len cstr-nth)
+
+  ;;; cstr-len -- byte length of a NUL-terminated C string.
+  ;;;
+  ;;; Parameters:
+  ;;;   s -- NUL-terminated C string pointer
+  ;;;
+  ;;; Returns:
+  ;;;   Length in bytes, excluding the trailing NUL.
+  ;;;
+  ;;; Example:
+  ;;;   (cstr-len "hello")  ; => 5
+  (defn cstr-len [s : cstr] : int
+    ```c
+    return (int64_t)strlen((const char *)(intptr_t)s);
+    ```)
+
+  ;;; cstr-nth -- byte at index i in a NUL-terminated C string.
+  ;;;
+  ;;; Parameters:
+  ;;;   s -- NUL-terminated C string pointer
+  ;;;   i -- zero-based byte index; caller must ensure 0 <= i < (cstr-len s)
+  ;;;
+  ;;; Returns:
+  ;;;   The unsigned byte value at position i.
+  ;;;
+  ;;; Example:
+  ;;;   (cstr-nth "1+2" 1)  ; => 43  ('+')
+  (defn cstr-nth [s : cstr i : int] : int
+    ```c
+    return (int64_t)(unsigned char)((const char *)(intptr_t)s)[i];
+    ```))

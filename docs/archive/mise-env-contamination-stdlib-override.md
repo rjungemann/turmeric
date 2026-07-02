@@ -1,7 +1,7 @@
 ---
 title: Mise global environment contamination overrides repository development settings
 severity: MEDIUM. Causes widespread local build and test failures for active developers.
-status: OPEN. Found 2026-06-29 during interpret subcommand implementation.
+status: RESOLVED 2026-07-01. `tests/run.sh` now `unset TUR_STDLIB_DIR` near the top so the local `./build/tur` always loads the workspace `./stdlib`, regardless of any mise-exported global env.
 ---
 
 # Mise global environment contamination overrides repository development settings

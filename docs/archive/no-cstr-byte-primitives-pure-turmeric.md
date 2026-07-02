@@ -1,7 +1,7 @@
 ---
 title: No pure-Turmeric byte primitives on cstr (cstr-len, cstr-nth)
 severity: LOW. Documentation/tutorial gap; workaround exists.
-status: OPEN. Found 2026-07-01 while rewriting parser-combinators tutorial.
+status: RESOLVED 2026-07-01. Added `stdlib/cstr.tur` exposing `cstr-len` and `cstr-nth` as an importable (not autoloaded) module: `(import cstr :refer [cstr-len cstr-nth])`. Keeping it out of `g_stdlib_autoload_files[]` sidesteps the Vec element-type inference perturbation the earlier autoload attempt hit, and adds zero fixture failures. Tutorials that want raw byte access on `:cstr` literals can now add one import line instead of hand-rolling a `(list 49 43 ...)` fallback.
 ---
 
 # No pure-Turmeric byte primitives on cstr

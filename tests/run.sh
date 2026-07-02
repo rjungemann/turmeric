@@ -16,6 +16,13 @@
 set -u
 cd "$(dirname "$0")/.."
 
+# Isolate the test suite from any globally exported TUR_STDLIB_DIR (e.g. from
+# a mise-managed global `turmeric` install). Otherwise the locally built
+# ./build/tur loads stdlib sources from the global install path, and
+# __tur_autolink__ references (e.g. src/runtime/hamt.c) resolve into a tree
+# that has no such files, spuriously failing the whole suite.
+unset TUR_STDLIB_DIR
+
 TUR="./build/tur"
 [ -x "$TUR" ] || { echo "tests: $TUR not built; run 'make' first" >&2; exit 2; }
 
