@@ -133,7 +133,7 @@ Update as each per-form plan lands.
 |------|-------------------------------------------|---------|---------------------------------------------------|
 | EF-1 | `arrow`, `->`                             | shipped (`685a0bf` route, `ffed924` fixture) | [arrow](structdef-exotic-field-arrow-plan.md)     |
 | EF-2 | `handler`                                 | shipped | [handler](structdef-exotic-field-handler-plan.md) |
-| EF-3 | `forall`                                  | pending | [forall](structdef-exotic-field-forall-plan.md)   |
+| EF-3 | `forall`                                  | shelved (2026-07-02: storage is free but no consumption path in erasure-based HRT, zero producers -- see plan Phase 1 outcome) | [forall](structdef-exotic-field-forall-plan.md)   |
 | EF-4 | session core, `project`, `global`, `role` | pending | [session](structdef-exotic-field-session-plan.md) |
 
 ## Relationship to the StructDef deletion
