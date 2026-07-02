@@ -1701,9 +1701,36 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
             uint32_t na = call->as.call_.n_args;
             Buf b2; buf_init(&b2);
             buf_printf(&b2, "((%s (*)(", emit_type_c_name(ctx, call->type));
-            if (na == 0) buf_puts(&b2, "void");
-            for (uint32_t i = 0; i < na; i++)
-                buf_printf(&b2, "%sint64_t", i ? ", " : "");
+            /* MB2 (constrained-hkt-forall-mode-b-plan): the dispatched signature
+             * must mirror the dict field layout (emit_stmt.c) exactly -- a
+             * poly-fn method param (e.g. `fmap`'s `g : (fn [a] b)`) is a
+             * `tur_poly_fn_t`, not the int64 carrier; a class-var-typed param
+             * (`(f a)`) is the carrier.  Derive the per-param C type from the
+             * representative instance's method impl; fall back to all-int64 (the
+             * MB1 case: every param is the class-var receiver). */
+            const TypeClassInstance *repr =
+                call->as.call_.dict_arg->as.dict_.instance;
+            const FnDef *mimpl = (repr && slot < repr->n_method_impls)
+                ? repr->method_impls[slot] : NULL;
+            if (mimpl && mimpl->n_params == na && mimpl->param_types) {
+                if (na == 0) buf_puts(&b2, "void");
+                for (uint32_t i = 0; i < na; i++) {
+                    if (i) buf_puts(&b2, ", ");
+                    if (mimpl->params && mimpl->params[i]->is_poly_fn) {
+                        buf_puts(&b2, "tur_poly_fn_t");
+                    } else {
+                        Type pt = mimpl->param_types[i];
+                        if (type_struct_pass_by_ptr(pt))
+                            buf_printf(&b2, "const %s *", type_c_name(pt));
+                        else
+                            buf_puts(&b2, type_c_name(pt));
+                    }
+                }
+            } else {
+                if (na == 0) buf_puts(&b2, "void");
+                for (uint32_t i = 0; i < na; i++)
+                    buf_printf(&b2, "%sint64_t", i ? ", " : "");
+            }
             buf_printf(&b2, "))((void **)(intptr_t)%s)[%d])",
                        ctx->dict_dispatch_param_cname, slot);
             buf_putc(&b2, '\0');

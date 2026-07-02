@@ -234,11 +234,42 @@ the `forall-dict-pass` flag (existing fixtures never take the path) and by
 gating on `fn_constraints != empty`, so unconstrained and monomorphic rank-2
 passing are untouched. The soundness gate (step 0) is low-risk and shipped.
 
-### Slice MB2 -- method dispatch through the passed dict inside the body (`--enable=forall-dict-dispatch`)
+### Slice MB2 -- HKT method dispatch through the passed dict (folded into `--enable=forall-dict-pass`)
 
-**Goal.** Inside a constrained rank-2 poly-fn body, lower a class-method call on
-the constrained var (`fmap` on `(f a)`) to an indirect vtable call through the
-dict parameter -- the `EX_EXISTS_DISPATCH` shape keyed on a dict *param*.
+**Status: LANDED.** MB1's dict dispatch now extends to a *higher-kinded*
+constraint (`Functor f`, `f :: * -> *`): the same compiled body dispatches
+`fmap` through the runtime dict at each caller-chosen functor. Fixture
+`forall-dict-fmap/`: one `poly-fmap` invoked at `Functor Box` (maps: 5->105) and
+`Functor Kt` (const: ->5) -- observably distinct instances through one body.
+This is the dispatch the van Laarhoven lens needs. The pieces added on top of
+MB1 (all under the same `forall-dict-pass` flag, so no separate flag was
+needed):
+- **Defn higher-kinded type params (`^f`)** -- a prerequisite: a `^f` defn/`fn`
+  type parameter is kind `* -> *` (the defn analog of `(defclass Functor [^f]
+  ...)`), so a function can be written polymorphic over a functor and use it
+  as `(f a)`. `elab_fns.c`, mirroring the `^&` row-kind marker. Fixture
+  `hk-defn-type-param/`.
+- **Dispatch signature mirrors the dict field layout** -- `emit_call_name`
+  derives each dispatched param's C type from the representative instance's
+  method impl (a poly-fn method arg -- `fmap`'s `g : (fn [a] b)` -- is a
+  `tur_poly_fn_t`, not the int64 carrier), instead of MB1's all-int64.
+- **Higher-kinded constraint pinning** -- the invocation's re-discharge loop
+  (`elab_poly_call`) pins `f` to the *container constructor* of a `(f a)`-typed
+  argument (decompose `(Box int)` -> `Box`, resolve `Functor Box`), then
+  prepends its dict; MB1 pinned only bare-tyvar `a` args.
+- **Emit fix** -- the dict-clone's result type must not mention the tyvar
+  (`(f a)` -> the int64 carrier), or the boxing wrapper is flagged
+  generic-unsafe and skipped (`make_dict_clone`, `type_mentions_tyvar`).
+
+**Scope.** Carrier-compatible functors (parametric opaque / heap). A by-value
+*aggregate* functor (`Option`) as `(f a)` still hits the incomplete M7
+higher-kinded-typeclass by-value monomorphization (a separate, large area; see
+`g_m7_hkt_enabled`) -- out of MB2's scope.
+
+**Original goal.** Inside a constrained rank-2 poly-fn body, lower a class-method
+call on the constrained var (`fmap` on `(f a)`) to an indirect vtable call
+through the dict parameter -- the `EX_EXISTS_DISPATCH` shape keyed on a dict
+*param*.
 
 **Work.**
 - Elaboration: in a constrained poly-fn body, a call to a method of the

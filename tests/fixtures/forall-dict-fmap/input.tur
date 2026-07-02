@@ -1,0 +1,34 @@
+;; MB2 (constrained-hkt-forall-mode-b-plan): runtime dictionary passing for a
+;; HIGHER-KINDED constraint.  `poly-fmap` is polymorphic over a `* -> *` functor
+;; `f` (declared `^f`) with a `Functor f` constraint, and its body calls `fmap`
+;; on the abstract `(f int)`.  Passed as a rank-2 argument and invoked at two
+;; different functors, the SAME compiled body dispatches `fmap` through the
+;; runtime dictionary the caller resolves -- `Functor Box` (maps: 5 -> 105) vs
+;; `Functor Kt` (const: ignores the function -> 5).  This is the dispatch the
+;; van Laarhoven lens needs (fmap on the caller-chosen Const/Identity functor).
+(defopaque Box [a] :int)
+(defn mk-box [A] [x : A] : (Box A) ```c return (int64_t)x; ```)
+(defn un-box [A] [b : (Box A)] : A ```c return (int64_t)b; ```)
+(definstance Functor [Box]
+  (fmap [c g] (mk-box (g (un-box c)))))
+
+(defopaque Kt [a] :int)
+(defn mk-kt [A] [x : A] : (Kt A) ```c return (int64_t)x; ```)
+(defn un-kt [A] [k : (Kt A)] : A ```c return (int64_t)k; ```)
+(definstance Functor [Kt]
+  (fmap [c g] c))
+
+(defn bump [v : int] : int (+ v 100))
+
+(defn poly-fmap [^f] [^Functor f x : (f int)] : (f int)
+  (fmap x bump))
+
+(defn use-box [g (forall [(f :: * -> *)] [(Functor f)] (-> (f int) (f int)))] : int
+  (un-box (g (mk-box 5))))
+(defn use-kt [g (forall [(f :: * -> *)] [(Functor f)] (-> (f int) (f int)))] : int
+  (un-kt (g (mk-kt 5))))
+
+(defn main [] : int
+  (println (use-box poly-fmap))   ; 105 (Functor Box)
+  (println (use-kt  poly-fmap))   ; 5   (Functor Kt)
+  0)

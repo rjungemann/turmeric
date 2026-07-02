@@ -291,6 +291,25 @@ static bool call_type_has_named_tyvar(const Type *t) {
  * structure.  Used by the poly-HOF eta-expansion look-ahead to decide whether a
  * sibling bare-tyvar parameter pins a tyvar appearing in a function-typed
  * parameter (e.g. `f : (fn [A] int)` mentions "A", pinned by `a : A`). */
+/* MB2: true if `t` mentions any type variable (a bare TY_TYVAR or a tyvar
+ * nested in an application / function type). */
+static bool type_mentions_tyvar(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_TYVAR: return true;
+        case TY_APP:
+            return type_mentions_tyvar(t->as.app.fn) ||
+                   type_mentions_tyvar(t->as.app.arg);
+        case TY_FN:
+            if (type_mentions_tyvar(t->as.fn.result_full_type)) return true;
+            if (t->as.fn.arg_full_types)
+                for (uint8_t i = 0; i < t->as.fn.arity; i++)
+                    if (type_mentions_tyvar(t->as.fn.arg_full_types[i])) return true;
+            return false;
+        default: return false;
+    }
+}
+
 static bool type_mentions_tyvar_name(const Type *t, const char *name) {
     if (!t || !name) return false;
     switch (t->kind) {
@@ -5255,7 +5274,13 @@ Binding *make_dict_clone(Elab *e, Binding *inner_b, Span span) {
     }
     TypeKind rk = inner_b->type.as.fn.result_kind;
     Type ftype = type_fn(akinds, np, rk);
-    if (inner_b->type.as.fn.result_full_type)
+    /* MB2: the dict-clone dispatches through the carrier and returns the int64
+     * carrier -- do NOT copy a result_full_type that mentions the (higher-kinded)
+     * type variable (e.g. `(f int)`), or the wrapper that boxes this clone is
+     * flagged generic-unsafe and skipped at emit.  A concrete-typed result is
+     * left to the aggregate-functor (M7) path, out of MB2's scope. */
+    if (inner_b->type.as.fn.result_full_type &&
+        !type_mentions_tyvar(inner_b->type.as.fn.result_full_type))
         ftype.as.fn.result_full_type = inner_b->type.as.fn.result_full_type;
 
     Binding *cb = binding_new(e, csym, ftype, false, true, span);
@@ -5608,6 +5633,23 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                     if (aft && aft->kind == TY_TYVAR && aft->as.tyvar_.name &&
                         strcmp(aft->as.tyvar_.name, vname) == 0) {
                         concrete = args[j]->type;
+                        pinned = true;
+                        break;
+                    }
+                    /* MB2 (constrained-hkt-forall-mode-b-plan): a *higher-kinded*
+                     * constraint (`Functor f`) pins `f` to the container
+                     * constructor of a `(f a)`-typed argument -- decompose the
+                     * actual `(Box int)` to its base constructor `Box`.  The
+                     * instance lookup then resolves `Functor Box`. */
+                    if (aft && aft->kind == TY_APP && aft->as.app.fn &&
+                        aft->as.app.fn->kind == TY_TYVAR &&
+                        aft->as.app.fn->as.tyvar_.name &&
+                        strcmp(aft->as.app.fn->as.tyvar_.name, vname) == 0 &&
+                        args[j]->type.kind == TY_APP) {
+                        const Type *base = &args[j]->type;
+                        while (base->kind == TY_APP && base->as.app.fn)
+                            base = base->as.app.fn;
+                        concrete = *base;
                         pinned = true;
                         break;
                     }
