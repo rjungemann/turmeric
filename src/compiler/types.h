@@ -721,6 +721,16 @@ typedef struct Type {
         /* Phase G0: ADT types */
         struct {
             AdtDef *def;
+            /* CONV-S4N: arm-local variant narrowing.  Inside a `match` arm that
+             * has destructured a multi-variant ADT to one record variant, the
+             * scrutinee symbol's binding carries the full ADT head but with
+             * `is_narrowed` set and `narrowed_ctor_idx` naming the proven ctor
+             * (an index into `def->ctors[]`).  Only `elab_with` and record-field
+             * access consult these fields; every other predicate and `type_eq`
+             * ignore them, so a narrowed view is interchangeable with the full
+             * ADT everywhere else. */
+            bool     is_narrowed;
+            uint32_t narrowed_ctor_idx;
         } adt_;
         /* Phase HRT0: Universally/existentially quantified types.
          * Phase EX1b: constraint storage for `(exists [a] [(C a) ...] body)`. */
@@ -1427,6 +1437,19 @@ static inline Type type_adt(AdtDef *def) {
     t.hkt_kind = KIND_STAR;
     t.as.adt_.def = def;
     return t;
+}
+
+/* CONV-S4N: true when `st` is (the head of) an ADT that a `match` arm has
+ * narrowed to a single *record* variant -- the case `with` can reconstruct.
+ * `st` must already be the unwrapped TY_ADT head (callers strip the TY_APP
+ * spine first).  Bounds-checks the recorded ctor index against the def. */
+static inline bool adt_is_narrowed_to_record_variant(Type st) {
+    if (st.kind != TY_ADT || !st.as.adt_.def) return false;
+    if (!st.as.adt_.is_narrowed) return false;
+    const AdtDef *def = st.as.adt_.def;
+    if (st.as.adt_.narrowed_ctor_idx >= def->n_ctors) return false;
+    const CtorDef *c = def->ctors[st.as.adt_.narrowed_ctor_idx];
+    return c && c->is_record;
 }
 
 /* Phase HRT/G2: Create a named type variable type for parameters like :a */

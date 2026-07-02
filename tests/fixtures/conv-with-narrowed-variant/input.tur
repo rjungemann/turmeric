@@ -1,0 +1,31 @@
+;; CONV-S4N (with on a narrowed multi-variant ADT): inside a `match` arm that
+;; has destructured a multi-variant :copy ADT to one record variant, the
+;; scrutinee binding is narrowed to that variant for the arm body, so
+;; `(with s [...])` reconstructs through the proven variant -- filling
+;; unchanged fields with `(.field s)` and overriding the listed ones.  A
+;; when-guarded arm narrows the same way (the narrowing is in scope for the
+;; whole arm body).
+
+(defdata Shape :copy
+  (Circle [radius : int])
+  (Rect   [w : int h : int]))
+
+(defn describe [s : Shape] : int
+  (match s
+    (Circle r) r
+    (Rect w h) (+ w h)))
+
+(defn grow [s : Shape] : Shape
+  (match s
+    (Circle r) when (> r 0) (with s [radius {r * 2}])  ; narrows under a guard
+    (Circle r) s
+    (Rect w h) (with s [w {w * 2} h {h + 1}])))         ; override two fields
+
+(defn main [] : int
+  (let [c  (Circle 5)
+        c2 (grow c)
+        r  (Rect 3 4)
+        r2 (grow r)]
+    (println (describe c2))   ; 10
+    (println (describe r2))   ; 6 + 5 = 11
+    0))

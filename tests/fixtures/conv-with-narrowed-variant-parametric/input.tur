@@ -1,0 +1,25 @@
+;; CONV-S4N (parametric): the narrowed view preserves the ADT's type arguments,
+;; so `with` on a `(Box int)` scrutinee narrowed to the `Just` record variant
+;; infers the field type through the narrowing and reconstructs a `(Box int)`.
+
+(defdata Box :copy [T]
+  (Just [val : T])
+  (Empty))
+
+(defn bump [b : (Box int)] : (Box int)
+  (match b
+    (Just v) (with b [val {v + 100}])
+    (Empty)  b))
+
+(defn getv [b : (Box int)] : int
+  (match b
+    (Just v) v
+    (Empty)  (- 0 1)))
+
+(defn main [] : int
+  (let [b  (Just 5)
+        b2 (bump b)
+        e  (Empty)]
+    (println (getv b2))   ; 105
+    (println (getv e))    ; -1
+    0))
