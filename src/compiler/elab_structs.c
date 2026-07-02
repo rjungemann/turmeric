@@ -219,7 +219,13 @@ static Type *struct_field_type_from_form(Elab *e, const Form *form,
          * producer unreachable (the deletion precondition).  `exists`, `fn`/`c-fn`,
          * `arrow` (`->`), `handler` and the borrow family DO lower and are handled
          * below.  Lowering the remaining forms is tracked in
-         * docs/upcoming/structdef-exotic-field-forms-plan.md. */
+         * docs/upcoming/structdef-exotic-field-forms-plan.md.  `forall` (EF-3) is
+         * SHELVED there (2026-07-02): its storage is free -- it rides the exists
+         * int64 carrier and struct_field_storage_from_type already maps TY_FORALL
+         * -> TY_INT -- but a poly value read from a field has no consumption path
+         * under erasure-based HRT (a rank-N argument must be a named function, not
+         * a field-read expression), so a lowered forall field would be write-only.
+         * Kept rejected until HRT can instantiate a poly value from a field. */
         if (head == e->sym_forall || head == e->sym_forall_u ||
             head == e->sym_session_type || head == e->sym_session_Send ||
             head == e->sym_session_Recv || head == e->sym_session_Choose ||
