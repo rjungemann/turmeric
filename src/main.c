@@ -11554,6 +11554,44 @@ cleanup:
     free(names);
 }
 
+/* Top-level subcommands, in canonical spelling. Kept in one place so
+ * resolve_command() can prefix-match against them; the actual dispatch
+ * chain in main() still uses strcmp against these same names. */
+static const char *const CANONICAL_COMMANDS[] = {
+    "emit-c", "emit-h", "emit-cmake", "check", "audit-spans",
+    "lsp", "mcp", "dap", "lsp-lite",
+    "build", "run", "repl", "worker", "interpret", "debug",
+    "eval", "doc", "image-info", "image-verify", "explain",
+    "format", "fmt", "parse-check", "test",
+    "new", "init", "add", "add-cmake", "fetch",
+    "install", "uninstall", "list", "upgrade", "experiments",
+    NULL,
+};
+
+/* Sentinel: `tok` is a prefix of more than one canonical command. */
+static const char *const COMMAND_AMBIGUOUS = (const char *)(intptr_t)-1;
+
+/* Resolve a bare argv[1] token to a canonical command name.
+ *   - exact match wins outright.
+ *   - unique prefix -> canonical.
+ *   - >1 prefix hits -> COMMAND_AMBIGUOUS.
+ *   - flags (leading '-') and 0 hits -> NULL. */
+static const char *resolve_command(const char *tok) {
+    if (!tok || !*tok || tok[0] == '-') return NULL;
+    for (int i = 0; CANONICAL_COMMANDS[i] != NULL; i++) {
+        if (strcmp(tok, CANONICAL_COMMANDS[i]) == 0) return CANONICAL_COMMANDS[i];
+    }
+    size_t n = strlen(tok);
+    const char *hit = NULL;
+    for (int i = 0; CANONICAL_COMMANDS[i] != NULL; i++) {
+        if (strncmp(tok, CANONICAL_COMMANDS[i], n) == 0) {
+            if (hit != NULL) return COMMAND_AMBIGUOUS;
+            hit = CANONICAL_COMMANDS[i];
+        }
+    }
+    return hit;
+}
+
 static int usage(void) {
     fprintf(stderr,
         "tur: the Turmeric compiler (v" TUR_VERSION ")\n"
@@ -12563,6 +12601,12 @@ int main(int argc, char **argv) {
 
     if (argc < 2) return usage();
     const char *cmd = argv[1];
+
+    {
+        const char *resolved = resolve_command(cmd);
+        if (resolved == COMMAND_AMBIGUOUS) return usage();
+        if (resolved != NULL) cmd = resolved;
+    }
 
     if (strcmp(cmd, "emit-c") == 0) {
         /* SC2: collect -I flags up front so both emit-c forms see them. */

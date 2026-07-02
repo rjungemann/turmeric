@@ -2,7 +2,8 @@
 
 ## Status
 
-- **2026-06-29**: Step 1 (`interpret` subcommand + silent `--interpret` alias back-compat) is **DONE**. The subcommand has been added, dynamic error message and `usage()` have been updated, all docs swept to canonical `tur interpret`, and test fixtures added. Shortest-unambiguous-prefix dispatch (Step 2) remains for future work.
+- **2026-06-29**: Step 1 (`interpret` subcommand + silent `--interpret` alias back-compat) is **DONE**. The subcommand has been added, dynamic error message and `usage()` have been updated, all docs swept to canonical `tur interpret`, and test fixtures added.
+- **2026-07-01**: Step 2 (shortest-unambiguous-prefix dispatch) is **DONE**. `CANONICAL_COMMANDS[]` + `resolve_command()` land in `src/main.c` next to `usage()`; `main()` calls the resolver right after binding `cmd = argv[1]` and rewrites `cmd` to the canonical spelling before the existing `strcmp` chain. Flags (`-…`) are skipped so `--interpret`, `--help`, `--version` still work. Two new hook.sh fixtures: `cli-prefix-unique` (`tur int tiny.tur` → runs) and `cli-prefix-ambiguous` (`tur i tiny.tur` → non-zero exit + usage on stderr). Full suite: 86 pre-existing failures both before and after, zero regressions from this change. Plan archived.
 
 ## Motivation
 
