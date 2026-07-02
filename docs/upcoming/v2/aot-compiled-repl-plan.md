@@ -6,7 +6,7 @@
 
 ## Goal
 
-Design and implement an AOT-compiled REPL substrate for the Turmeric compiler (`tur`). This plan addresses the upstream gap identified in [Trowel: Toggle Between `tur` (AOT) and `turi` (Interpreter) Backends -- Plan](trowel-tur-turi-backend-toggle-plan.md), enabling `backend = "tur"` + `interpret_repl = false` to run a fully native, compiled REPL session in the editor (or directly from the CLI via `tur repl --compiled`).
+Design and implement an AOT-compiled REPL substrate for the Turmeric compiler (`tur`). The goal is to enable a fully native, compiled REPL session from the CLI via `tur repl --compiled`, giving users real-time parity with the compiled path (inline-C, optimizations, target memory layout, carrier-crossing ABI semantics).
 
 ---
 
@@ -163,7 +163,6 @@ turmeric> (add-r 10)
 - Evaluating pure expressions (e.g., `(+ 2 3)`) typechecks, compiles to C, builds a `.so`, dynamically loads it, and returns `5`.
 - Defining a function (e.g., `(defn f [x] (* x 2))`) compiles successfully, and subsequent evaluations of `(f 10)` return `20` using native, compiled execution.
 - Inline-C blocks (e.g., `` (`c "printf(\"Hello from C\\n\")" `) ``) compile and run perfectly inside the REPL.
-- In Trowel, toggling the backend to `tur` and setting `interpret_repl = false` spawns `tur repl --compiled`, seamlessly routing evaluations through the AOT-backed substrate.
 
 ---
 

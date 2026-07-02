@@ -12813,9 +12813,9 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "dap") == 0) {
         return cmd_dap();
     }
-    /* lsp-lite: completion/calltip/doc backend for the Trowel plugin and
-     * other lightweight editors. Newline-delimited JSON over stdio; stdout
-     * is reserved for protocol traffic. */
+    /* lsp-lite: completion/calltip/doc backend for lightweight editors.
+     * Newline-delimited JSON over stdio; stdout is reserved for protocol
+     * traffic. */
     if (strcmp(cmd, "lsp-lite") == 0) {
         diag_init(false);
         resolve_stdlib_root();   /* sets TUR_STDLIB_DIR so lsp_lite can find docstrings.tur */

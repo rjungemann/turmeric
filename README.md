@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.25.6` -- Trowel desktop editor (Lite XL plugin) plus multi-tab web REPL with zip project import/export.
+**Latest release:** `v0.25.6` -- multi-tab web REPL with zip project import/export.
 
 ## What
 

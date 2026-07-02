@@ -38,10 +38,8 @@ the `ReaderMacroRegistry` global before it has been initialized on the
 `--interpret` codepath. The AOT `run` path initializes it earlier in
 `main`; the `--interpret` shortcut appears to skip that setup.
 
-**Related work:** Phase 1 of
-`docs/upcoming/turmeric-scite-desktop-plan.md` (and the in-progress
-Lite XL replacement plan) bind Run to `tur --interpret`. With this bug
-open they fall back to `tur run` instead.
+**Related work:** editor integration plans of the era bound Run to
+`tur --interpret`. With this bug open they fell back to `tur run` instead.
 
 ---
 
@@ -85,9 +83,7 @@ reported different sizes, immediately localizing the cause to a
 struct-layout disagreement rather than a missing init.
 
 **Verification:** `./build/tur --interpret /tmp/spike-hello.tur` now
-prints `hello from spike` and exits 0; the Lite XL plugin's
-`turmeric:run-file` flipped back from the `tur run` workaround to
-`tur --interpret` (its documented v1 target). The 206 pre-existing
+prints `hello from spike` and exits 0. The 206 pre-existing
 `-Wint-conversion` fixture build failures observed during the gate
 suite are orthogonal -- they reproduce without this fix on Apple
 clang 17, which promoted that warning to a default error.

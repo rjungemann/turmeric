@@ -97,9 +97,9 @@ viable shapes:
   loaded file inside `src_acc` and truncate it before re-appending. More
   surface area; same observable behaviour as A for the cmd+r case. Defer.
 
-L2 takes shape A: add `:run <file>` to `src/turi/repl.c`, rewire the Lite XL
-`turmeric:run-file` command to push `:run <abs-path>` (then `(main)` is
-auto-invoked by `:run`, no client-side probe needed).
+L2 takes shape A: add `:run <file>` to `src/turi/repl.c`, and push
+`:run <abs-path>` from any client (the `(main)` call is auto-invoked by
+`:run`, so no client-side probe is needed).
 
 L3 (diagnostic surfacing) and L4 (stale chip) are unblocked by A. L5
 (send-form-at-cursor) just sends the form text to the existing prompt path,

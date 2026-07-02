@@ -139,24 +139,6 @@ emit-c file:
     ./build/tur emit-c {{file}}
 
 # ---------------------------------------------------------------------------
-# Desktop editor (Trowel plugin)
-# ---------------------------------------------------------------------------
-
-# Launch Trowel with the in-tree Turmeric plugin symlinked into the user
-# config and the in-tree `./build/tur` pre-configured as the compiler. Any
-# positional args are passed through to Trowel (typically file paths).
-#
-# Symlinks (idempotent):
-#   ~/.config/trowel/plugins/turmeric.lua -> tools/trowel/turmeric.lua
-# Writes (overwrites):
-#   ~/.config/trowel/init.lua             (pins config.plugins.turmeric.tur)
-#
-# Set TUR_TROWEL to override the Trowel binary; otherwise we probe
-# `trowel` on PATH, then the macOS .app bundle.
-trowel *ARGS: build
-    bash tools/trowel/launch.sh {{ARGS}}
-
-# ---------------------------------------------------------------------------
 # Games / Examples (CMake targets — require Raylib)
 # ---------------------------------------------------------------------------
 

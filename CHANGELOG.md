@@ -8,12 +8,6 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
-- **Trowel desktop editor.** New Lite XL-based editor for Turmeric
-  (phases 1-5): plugin with syntax coloring including inline-C blocks,
-  Try Turmeric color themes, Iosevka 12pt default, `new-project`
-  command, `tur lsp-lite` autocomplete client, embedded REPL pane,
-  branded `Turmeric.app` icon, and macOS/Linux distribution
-  scaffolding.
 - **Web REPL multi-tab editor.** Drag-reorderable tabs, project
   download as zip, project load from zip, mobile overflow menu, and
   Playwright multi-tab specs.
@@ -38,7 +32,6 @@ All notable changes to Turmeric are documented here.
   translation-unit-dependent.
 - **Apple clang 17 `-Werror=int-conversion`** noise in generated C
   suppressed at the build-system level.
-- **Desktop editor datum-comment highlighting.**
 
 ## [0.25.5] -- 2026-06-26
 
