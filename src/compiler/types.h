@@ -417,66 +417,12 @@ size_t adt_byval_value_size_bytes(const AdtDef *def);
 bool adt_field_is_inline_byval(const CtorField *f);
 const char *adt_field_inline_c_name(const CtorField *f);
 
-/* Phase 11: Struct field descriptor.
- * Stored inline in StructDef.fields[]. */
-typedef struct StructField {
-    TypeKind kind;               /* field type kind */
-    TypeKind inner_kind;         /* for rc/ref/weak, the inner type; TY_UNKNOWN otherwise */
-    const char *name;            /* field name (interned string, NUL-terminated) */
-    /* Phase 16 v2: effect-row annotation for :fn fields (NULL = no annotation) */
-    struct EffectRow *effect_row;
-    /* F8 (cross-plan-followups): full Type for compound field annotations
-     * (TY_EXISTS, TY_APP, TY_FORALL).  NULL when the field's type is a
-     * simple keyword/sym that the kind/inner_kind summary already
-     * captures fully; consumers that only need the summary kind keep
-     * working unchanged.  Field-access elaboration uses this to return
-     * the full type at use sites (e.g. so `(open (.field s) ...)` sees
-     * the right TY_EXISTS payload instead of falling into the
-     * TY_PTR_VOID branch of EX_EXISTS_OPEN). */
-    struct Type *full_type;
-} StructField;
-
-/* Phase 11: Struct type descriptor.
- * Created by elab_defstruct; pointed to from Type.as.struct_.def. */
-typedef struct StructDef {
-    const char *name;       /* struct name (interned string, NUL-terminated) */
-    uint32_t n_fields;
-    StructField *fields;    /* field array (malloc'd) */
-    bool is_copy;           /* :copy annotation */
-    bool is_linear;         /* LT4: :linear annotation -- exactly-once (CK_LINEAR) */
-    bool is_affine;         /* :affine annotation -- at-most-once (SK_AFFINE / CK_UNIQUE) */
-    /* end-to-end-monomorphization (M3->M7, Vec typed-pointer vertical slice):
-     * :heap marks a parameterized type whose natural monomorphic ABI is a typed
-     * POINTER (`T__A *`) to a heap-allocated header, not a by-value struct -- the
-     * parametric-type ABI matrix's "typed pointer" class (Vec/Map/Set/MutableMap/
-     * Cons/GVec). type_c_name lowers a :heap-tagged TY_STRUCT/TY_APP to `Name *`.
-     * Inert until a type is tagged; see
-     * docs/upcoming/v2/vec-typed-pointer-vertical-slice-plan.md. */
-    bool is_heap;
-    bool needs_drop_glue;   /* true if any field is rc/ref/weak */
-    /* SI4-C: opaque newtype -- always int64_t in C; name only used for REPL type tags. */
-    bool is_opaque;
-    /* Phase HKT-P4: file that defined this struct (for orphan instance check).
-     * file_id mirrors Span.file_id; 0 means unknown/builtin. */
-    uint16_t origin_file_id;
-    /* Phase TM0: type parameters for parameterized structs (e.g. Map[K V], Vec[A]). */
-    const char **type_params;   /* arena-allocated array of type param name strings */
-    uint8_t     n_type_params;
-    /* TP4: arena-alloc'd Kind array, one per type_params entry.
-     * Initialised to KIND_STAR; infer_struct_type_param_kinds refines based on
-     * usage in StructField.full_type.  NULL when n_type_params == 0. */
-    Kind       *type_param_kinds;
-    /* Phase D: sum of field sizes exceeds 16 bytes -- pass as const T* at C ABI level.
-     * Only meaningful for non-parameterized structs (n_type_params == 0); for generic
-     * structs the per-instantiation RegisteredStructApp.pass_by_ptr flag is used. */
-    bool        pass_by_ptr;
-    /* struct-ergonomics CTOR-V0: when set (via the :no-auto-ctor defstruct
-     * annotation) the elaborator does NOT auto-bind a value-namespace
-     * constructor function for this struct, and `(Name ...)` call syntax is
-     * not routed to make-struct.  Escape hatch for the rare case where the
-     * struct name is already bound as a value elsewhere. */
-    bool        no_auto_ctor;
-} StructDef;
+/* structdef-retirement DS-D: the `StructField` / `StructDef` type descriptors
+ * are deleted.  Every `defstruct` lowers to a single-variant record `AdtDef`
+ * (see types below); there is no `TY_STRUCT` Type.kind, no `e->struct_defs[]`
+ * registry, and no struct-headed `TY_APP`.  `TY_STRUCT` survives only as a
+ * runtime any-box reflection tag (`type-of`/`cast`/`is?` report "struct" for a
+ * lowered record), not as a `Type.kind`. */
 
 /* Phase 11: canonical default copy-kind by kind (typeclass path is primary; this
  * keeps concrete move/copy semantics deterministic for elaboration/codegen). */

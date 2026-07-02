@@ -897,15 +897,15 @@ Expr *elab_coerce_to_any(Elab *e, Expr *value);
  * width-compatible "mismatch" (return 42 where :cstr is declared) cannot be
  * soundly rejected without fighting the carrier -- those are the bridges the
  * ABI relies on.  What CAN be rejected is a clash of distinct NOMINAL
- * identities: the declared return is a concrete struct / opaque newtype / ADT
- * (carrying a def pointer) and the body yields a DIFFERENT concrete struct /
- * opaque / ADT.  Two distinct nominal defs never share a carrier
- * representation, so this is always a real error.  ret_struct / ret_adt are the
- * declared return's def pointers (at most one set); body is the elaborated
- * body's type.  Returns true on a conflict; a primitive / carrier / tyvar /
- * applied / unknown body is tolerated. */
-bool return_type_nominal_conflict(const StructDef *ret_struct,
-                                  const AdtDef *ret_adt, Type body);
+ * identities: the declared return is a concrete record ADT / opaque newtype
+ * (carrying a def pointer) and the body yields a DIFFERENT concrete ADT.  Two
+ * distinct nominal defs never share a carrier representation, so this is always
+ * a real error.  ret_adt is the declared return's ADT def pointer; body is the
+ * elaborated body's type.  Returns true on a conflict; a primitive / carrier /
+ * tyvar / applied / unknown body is tolerated.  (structdef-retirement DS-D: the
+ * former StructDef ret_struct parameter is gone -- every former struct is a
+ * record ADT.) */
+bool return_type_nominal_conflict(const AdtDef *ret_adt, Type body);
 
 /* float-register-class-returns: sibling of return_type_nominal_conflict that
  * catches the one carrier-tolerated return mismatch that is NOT a benign
@@ -1004,8 +1004,7 @@ typedef enum {
  * widen an int-literal -> float body in place with
  * rc_widen_int_literal_to_float_return BEFORE calling, and should skip the
  * lazy-probe placeholder and inline-C (fiat TY_NIL) bodies as before. */
-ReturnConflict return_position_conflict(const StructDef *ret_struct,
-                                        const AdtDef *ret_adt,
+ReturnConflict return_position_conflict(const AdtDef *ret_adt,
                                         TypeKind ret_kind, Type body,
                                         ReturnClass cls);
 
@@ -1168,9 +1167,6 @@ Expr *elab_match(Elab *e, const Form *call);
 Expr *elab_make_struct(Elab *e, const Form *call);
 Expr *elab_with(Elab *e, const Form *call); /* WITH-V0 */
 Expr *elab_default_of(Elab *e, const Form *call);  /* M2b */
-bool elab_struct_type_extract_args(const Type *t, const StructDef *def, Type *out_args);
-Type elab_struct_field_use_type(Elab *e, const Type *container_type,
-                                const StructDef *def, const StructField *field);
 Expr *elab_borrow_immut(Elab *e, const Form *call);
 Expr *elab_borrow_mut(Elab *e, const Form *call);
 
