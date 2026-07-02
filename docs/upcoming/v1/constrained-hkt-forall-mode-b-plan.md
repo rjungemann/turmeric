@@ -291,11 +291,13 @@ resolving *which* method slot at elaboration.
 
 ### Slice MB2.5 -- aggregate `(f a)` functors: the M7 by-value boundary
 
-**Status.** Not started. This is the largest single block of remaining work in
-the constrained-HKT track and the true blocker for a *general* van Laarhoven
-lens over arbitrary functors. It is scoped here so MB3/MB4 can reference it, but
-see the "Do lenses actually need this?" note below -- the answer is very likely
-**no**, and MB2.5 can stay unbuilt while MB4 lands.
+**Status.** LANDED (Path A -- the carrier-boundary variant; see "What shipped"
+below). A constrained rank-2 body `forall f. Functor f => (f int) -> (f int)`
+that calls `fmap` on its constrained var now compiles and runs at a by-value
+aggregate functor (`Maybe`/`Option`-shaped), not just carrier-compatible ones.
+The rest of this section is kept as the original analysis; "What shipped" records
+the actual (smaller-than-expected) fix. The van Laarhoven note below still holds
+-- MB4 lenses can go through carrier-compatible `Const`/`Identity` regardless.
 
 **What works today (MB2).** A constrained rank-2 body that calls `fmap` on its
 constrained var works *as long as the functor is carrier-compatible* -- a
@@ -366,10 +368,41 @@ inside a constrained rank-2 body. When that day comes, prefer **Path A** first
 (cheap, contained) and only reach for **Path B** if the box/unbox overhead shows
 up in a profile.
 
-**Fixtures (when built).** `hrt-hkt-aggregate-functor-dispatch/` -- a constrained
-`forall f. Functor f => (f int) -> (f int)` body invoked at `Option` (by-value
-aggregate), asserting the dispatched `fmap` returns the expected `Some`/`None`
-without the `int64_t` vs `tur_adt_Option__int` codegen error.
+**What shipped.** The fix was Path A, but *smaller* than "extend the box/unbox
+bridge across the dispatch return" -- the insight is that a runtime dict ALWAYS
+speaks the carrier ABI (its slot stores the carrier instance method), so the
+aggregate box/unbox already happens at the poly-carrier boundary (the caller
+boxes the arg and unboxes the return, exactly as for carrier-compatible
+functors). Nothing new needs to box at the dispatch site; the dispatch just has
+to stay on the carrier and stop fighting the M7 by-value spec machinery. Four
+edits, all keeping the carrier-compatible (Box) path byte-identical:
+
+- `emit_core.c` -- factor the dict-param-dispatch test into the shared predicate
+  `emit_call_is_dict_param_dispatch`; derive the dispatched fn-ptr cast's RETURN
+  type from the representative instance method's declared result (mirroring the
+  dict struct field, `emit_stmt.c:581-603`) -- the carrier int64, not
+  `call->type`'s by-value aggregate.
+- `emit_expr.c` -- `find_matched_abi_spec` returns NULL for a dict-param-dispatch
+  call, so the carrier args are no longer deref'd to the aggregate against the
+  carrier dict slot.
+- `emit_fns.c` -- a dict-clone wrapper (`fd->dict_clone_class`) returns the int64
+  carrier in all three return-type sites (signature, `ret_ctype`, return
+  statement) and returns the dispatch result directly instead of malloc-boxing.
+- `emit_module.c` -- mirror the carrier return in the forward decl, and skip
+  minting a by-value instance spec for a class-method call on a higher-kinded
+  constrained var inside a constrained poly-fn / its dict-clone (both share the
+  body `Expr`) -- such a spec is dead (nothing calls it) and ill-typed for a
+  by-value aggregate. Restricted to higher-kinded classes so ground-kind
+  constrained-defn monomorphization (M4c) is untouched.
+
+Path B (full M7 by-value HKT monomorphization) is therefore NOT needed for
+correctness here; it remains the *zero-overhead* answer (no carrier round-trip)
+if a profile ever shows the boundary box/unbox mattering.
+
+**Fixture.** `hrt-hkt-aggregate-functor-dispatch/` -- runs the SAME compiled
+`poly-fmap` body at a by-value `Maybe` (Some -> 105, None -> -1) and a
+carrier-compatible `Box` (-> 105), on the default by-value gate. It previously
+died with `int64_t` vs `tur_adt_Maybe__int`; it now passes.
 
 ### Slice MB3 -- curried rank-2 whose result is a function (`--enable=hrt-curried-result`)
 
