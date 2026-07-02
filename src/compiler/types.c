@@ -654,192 +654,6 @@ void free_struct_app_type(Type t) {
     }
 }
 
-/* phantom-typeparam-lowering: a field type "erases" its (unresolved) type
- * parameters when its C codegen layout does not depend on what those params are
- * instantiated to.  This is true for concrete types, and for type applications
- * headed by an *opaque* constructor (an int64 carrier regardless of its args,
- * e.g. `(Dense m A)`).  It is false for a bare type-parameter field (`(fst A)`
- * in `(defstruct Pair [A B] (fst A) (snd B))`) and for an application headed by
- * a *non-opaque* struct/adt whose own layout still depends on a param.
- *
- * Only when *every* field of a struct erases its params is the struct's layout
- * independent of the parameters -- i.e. they are genuinely *phantom* -- so the
- * struct-app may be safely monomorphised by defaulting the unresolved args to
- * int64.  For a struct like Tuple3 whose fields *are* the params, this returns
- * false, so the app stays a generic int64 carrier and ABI specialization (which
- * keys off the generic-vs-instantiated C name differing) keeps working. */
-static bool field_type_erases_params(const Type *t, int depth) {
-    if (!t || depth > 32) return false;
-    if (type_has_concrete_codegen_layout(t)) return true;
-    switch (t->kind) {
-        case TY_TYVAR:
-            return false;
-        case TY_APP: {
-            StructDef *sdef = NULL;
-            AdtDef    *adef = NULL;
-            Type args[16];
-            uint8_t n_args = 0;
-            if (type_extract_struct_app(t, &sdef, args, &n_args) && sdef) {
-                if (sdef->is_opaque) return true;  /* int64 carrier, args erased */
-                for (uint8_t i = 0; i < n_args; i++)
-                    if (!field_type_erases_params(&args[i], depth + 1)) return false;
-                return true;
-            }
-            if (type_extract_adt_app(t, &adef, args, &n_args) && adef) {
-                /* ADT applications lower to an int64 heap handle regardless of
-                 * their type arguments, so the params are layout-erased. */
-                return true;
-            }
-            return false;
-        }
-        default:
-            return false;
-    }
-}
-
-/* True when defaulting `def`'s unresolved type params to int64 preserves the C
- * struct layout (all params are phantom).  See field_type_erases_params. */
-static bool struct_app_params_are_phantom(const StructDef *def) {
-    if (!def || def->is_opaque || def->n_type_params == 0) return false;
-    for (uint32_t fi = 0; fi < def->n_fields; fi++) {
-        if (!field_type_erases_params(def->fields[fi].full_type, 0)) return false;
-    }
-    return true;
-}
-
-/* phantom-typeparam-lowering: does `t` mention the tyvar named `name` at a
- * layout-significant position?  Mirrors field_type_erases_params' treatment of
- * opaque-headed apps (their args are erased to an int64 carrier, so a tyvar
- * inside `(Dense m A)` is NOT layout-significant) while a bare tyvar field, or
- * one nested inside a non-opaque carrier, IS. */
-static bool type_app_mentions_tyvar_by_value(const Type *t, const char *name,
-                                             int depth) {
-    if (!t || !name || depth > 32) return false;
-    switch (t->kind) {
-        case TY_TYVAR:
-            return t->as.tyvar_.name && strcmp(t->as.tyvar_.name, name) == 0;
-        case TY_APP: {
-            StructDef *sdef = NULL;
-            AdtDef    *adef = NULL;
-            Type args[16];
-            uint8_t n_args = 0;
-            if (type_extract_struct_app(t, &sdef, args, &n_args) && sdef
-                && sdef->is_opaque)
-                return false;  /* opaque carrier: args layout-erased */
-            if (type_extract_adt_app(t, &adef, args, &n_args) && adef)
-                return false;  /* ADT app: int64 heap handle, args erased */
-            if (t->as.app.fn
-                && type_app_mentions_tyvar_by_value(t->as.app.fn, name, depth + 1))
-                return true;
-            if (t->as.app.arg
-                && type_app_mentions_tyvar_by_value(t->as.app.arg, name, depth + 1))
-                return true;
-            return false;
-        }
-        default:
-            return false;
-    }
-}
-
-/* phantom-typeparam-lowering: does any field of `def` carry the `idx`-th type
- * parameter *by value* -- i.e. mention it at a layout-significant position
- * (a bare `(raw B)` field, or nested inside a non-opaque carrier), so that the
- * struct's C layout depends on what that parameter is instantiated to?
- *
- * A field whose `full_type` is recorded is inspected with
- * field_type_erases_params semantics: an opaque-headed app like `(Dense m A)`
- * erases its args, so it does NOT make the param non-phantom; a bare tyvar
- * field does.  A field with no recorded `full_type` (e.g. Vec's `:ptr<void>`
- * storage) is a concrete carrier slot that mentions no parameter, so it never
- * pins a param either.  When NO field pins parameter `idx`, that parameter is
- * phantom and may be defaulted to int64 without changing the layout. */
-static bool struct_param_is_phantom(const StructDef *def, uint8_t idx) {
-    if (!def || def->is_opaque || idx >= def->n_type_params) return false;
-    const char *pname = def->type_params ? def->type_params[idx] : NULL;
-    if (!pname) return false;
-    for (uint32_t fi = 0; fi < def->n_fields; fi++) {
-        const Type *ft = def->fields[fi].full_type;
-        if (!ft) continue;  /* concrete carrier slot: pins no parameter */
-        if (type_app_mentions_tyvar_by_value(ft, pname, 0)) return false;
-    }
-    return true;
-}
-
-/* phantom-typeparam-lowering: clone a struct-app TY_APP spine, replacing any
- * *phantom* type argument -- one that is not a concrete codegen layout (e.g. an
- * unresolved TY_TYVAR like `m` in `(PairD m A)` when neither m nor A appears as
- * a bare field type) -- with the int64 default.  A phantom parameter never
- * affects the struct's C layout, so all phantom instantiations share a single
- * monomorph (`PairD__int__int`); this lets make-struct/let-binding sites lower
- * to the real aggregate struct instead of collapsing the value to `int64_t`,
- * which produces invalid `(int64_t){.fst = ...}` designated initializers.
- *
- * Sets *changed to true when at least one arg was defaulted.  The returned Type
- * owns freshly malloc'd spine nodes (free with free_struct_app_type). */
-static Type normalize_struct_app_phantom_args(Type t, bool *changed) {
-    if (t.kind != TY_APP) return t;
-    Type out = t;
-    out.as.app.fn = (Type *)malloc(sizeof(Type));
-    out.as.app.arg = (Type *)malloc(sizeof(Type));
-    if (!out.as.app.fn || !out.as.app.arg) { fprintf(stderr, "tur: oom\n"); abort(); }
-    *out.as.app.fn = normalize_struct_app_phantom_args(*t.as.app.fn, changed);
-    if (t.as.app.arg && !type_has_concrete_codegen_layout(t.as.app.arg)) {
-        *out.as.app.arg = type_from_kind(TY_INT);
-        if (changed) *changed = true;
-    } else {
-        *out.as.app.arg = clone_struct_app_type(*t.as.app.arg);
-    }
-    return out;
-}
-
-/* phantom-typeparam-lowering (per-parameter): clone a struct-app TY_APP spine,
- * defaulting a non-concrete arg to int64 only when its corresponding type
- * *parameter* is phantom (struct_param_is_phantom).  A non-phantom arg is
- * cloned verbatim, so if it is still non-concrete the spine stays non-concrete
- * and the caller leaves the value as an int64 carrier.  `idx` is the parameter
- * index of the spine's outermost arg; it decreases while descending `fn` toward
- * the head.  This monomorphises a struct that mixes a phantom size index with a
- * concrete by-value field -- e.g. `(defstruct Mixed [m A B] (idx (Dense m A))
- * (raw B))`: `m` and `A` (phantom, only inside the opaque `(Dense m A)`) default
- * to int64, while a concrete `B` is preserved, yielding `Mixed__int__int__int`
- * instead of the broken `(int64_t){.idx = ..., .raw = ...}` initializer. */
-static Type normalize_struct_app_partial_phantom(Type t, const StructDef *def,
-                                                 int idx, bool *changed) {
-    if (t.kind != TY_APP) return t;
-    Type out = t;
-    out.as.app.fn = (Type *)malloc(sizeof(Type));
-    out.as.app.arg = (Type *)malloc(sizeof(Type));
-    if (!out.as.app.fn || !out.as.app.arg) { fprintf(stderr, "tur: oom\n"); abort(); }
-    *out.as.app.fn =
-        normalize_struct_app_partial_phantom(*t.as.app.fn, def, idx - 1, changed);
-    bool arg_concrete =
-        t.as.app.arg && type_has_concrete_codegen_layout(t.as.app.arg);
-    bool param_phantom =
-        idx >= 0 && idx <= UINT8_MAX && struct_param_is_phantom(def, (uint8_t)idx);
-    if (t.as.app.arg && !arg_concrete && param_phantom) {
-        *out.as.app.arg = type_from_kind(TY_INT);
-        if (changed) *changed = true;
-    } else {
-        *out.as.app.arg = clone_struct_app_type(*t.as.app.arg);
-    }
-    return out;
-}
-
-/* phantom-typeparam-lowering: a struct mixes phantom and by-value params when at
- * least one param is phantom (defaultable) and at least one is non-phantom (a
- * genuine by-value carrier field).  Only such structs route through the partial
- * normalizer; all-phantom structs are handled by the all-or-nothing path, and
- * structs with no phantom param have nothing to default. */
-static bool struct_app_has_mixed_phantom(const StructDef *def) {
-    if (!def || def->is_opaque || def->n_type_params == 0) return false;
-    bool any_phantom = false, any_byvalue = false;
-    for (uint8_t p = 0; p < def->n_type_params; p++) {
-        if (struct_param_is_phantom(def, p)) any_phantom = true;
-        else any_byvalue = true;
-    }
-    return any_phantom && any_byvalue;
-}
-
 /* Phase D: forward declaration — substitute_struct_app_type is defined below. */
 Type substitute_struct_app_type(const Type *t, const StructDef *def, const Type *args);
 
@@ -868,16 +682,6 @@ void propagate_app_discipline(Type *app, const Type *fn) {
     }
 }
 
-/* Phase D: approximate field size (bytes) from a TypeKind for pass-by-ptr threshold. */
-static size_t phase_d_field_size(TypeKind k) {
-    switch (k) {
-        case TY_BOOL: case TY_INT8: case TY_UINT8:   return 1;
-        case TY_INT16: case TY_UINT16:                return 2;
-        case TY_INT32: case TY_UINT32: case TY_FLOAT32: return 4;
-        default:                                       return 8;
-    }
-}
-
 static const char *register_struct_app(Type t) {
     if (!type_has_concrete_codegen_layout(&t)) return "int64_t";
     for (uint32_t i = 0; i < g_n_struct_apps; i++) {
@@ -898,30 +702,13 @@ static const char *register_struct_app(Type t) {
     g_struct_apps[g_n_struct_apps].name = tur_strdup(name.data);
     g_struct_apps[g_n_struct_apps].emitted = false;
     g_struct_apps[g_n_struct_apps].emitting = false;
-    /* Phase D: compute pass_by_ptr by summing field sizes with concrete args substituted. */
-    {
-        StructDef *def = NULL;
-        Type args[16];
-        uint8_t n_args = 0;
-        bool pbp = false;
-        if (type_extract_struct_app(&t, &def, args, &n_args) && def && !def->is_opaque) {
-            size_t total = 0;
-            for (uint32_t fi = 0; fi < def->n_fields; fi++) {
-                TypeKind fk = def->fields[fi].kind;
-                if (def->fields[fi].full_type && n_args > 0) {
-                    Type resolved = substitute_struct_app_type(def->fields[fi].full_type, def, args);
-                    fk = resolved.kind;
-                    /* resolved is a fully owned clone (substitute_struct_app_type
-                     * deep-clones); free it now that we have its kind. No-op for
-                     * non-APP scalars. */
-                    free_struct_app_type(resolved);
-                }
-                total += phase_d_field_size(fk);
-            }
-            pbp = (total > 16);
-        }
-        g_struct_apps[g_n_struct_apps].pass_by_ptr = pbp;
-    }
+    /* structdef-retirement DS-D: the Phase-D pass_by_ptr computation keyed on a
+     * StructDef (extracted from the app head).  No app head is a struct anymore
+     * -- a parametric aggregate is a record ADT, whose monomorph pass-by-ptr is
+     * decided on the ADT-app path (type_adt_app_pass_by_ptr / adt_app_is_byvalue
+     * _product).  This struct-app registry only supplies the mangled type name;
+     * pass_by_ptr stays false here. */
+    g_struct_apps[g_n_struct_apps].pass_by_ptr = false;
     buf_free(&name);
     if (!g_struct_apps[g_n_struct_apps].name) { fprintf(stderr, "tur: oom\n"); abort(); }
     return g_struct_apps[g_n_struct_apps++].name;
@@ -3192,75 +2979,12 @@ const char *type_c_name(Type t) {
                 }
             }
             if (type_has_concrete_codegen_layout(&t)) {
-                const char *base = register_struct_app(t);
-                /* end-to-end-monomorphization: a :heap-tagged parameterized type
-                 * (Vec/Map/Set/...) lowers to a typed pointer `T__A *` to its
-                 * heap-allocated header, not the by-value struct. The by-value
-                 * struct typedef is still registered (above) -- the pointer just
-                 * points at it. */
-                StructDef *hdef = NULL;
-                Type happ_args[16];
-                uint8_t happ_n = 0;
-                if (type_extract_struct_app(&t, &hdef, happ_args, &happ_n)
-                    && hdef && hdef->is_heap) {
-                    return heap_ptr_c_name(base);
-                }
-                return base;
-            }
-            /* phantom-typeparam-lowering: a struct-app whose only non-concrete
-             * args are *phantom* type parameters (used solely inside a field's
-             * type application, never as a bare field type) still has a fixed C
-             * layout.  Default the phantom args to int64 and register the
-             * resulting monomorph, so make-struct/let-binding sites emit the
-             * real aggregate (`PairD__int__int`) instead of collapsing to
-             * `int64_t` and producing an invalid `(int64_t){.fst = ...}`. */
-            {
-                StructDef *def = NULL;
-                Type args[16];
-                uint8_t n_args = 0;
-                if (type_extract_struct_app(&t, &def, args, &n_args)
-                    && def && !def->is_opaque
-                    && struct_app_params_are_phantom(def)) {
-                    bool changed = false;
-                    Type norm = normalize_struct_app_phantom_args(t, &changed);
-                    const char *name = "int64_t";
-                    if (changed && type_has_concrete_codegen_layout(&norm)) {
-                        name = register_struct_app(norm);
-                    }
-                    free_struct_app_type(norm);
-                    return name;
-                }
-            }
-            /* phantom-typeparam-lowering (mixed): a struct that threads a phantom
-             * size index through a field's opaque type application while ALSO
-             * carrying a concrete by-value field -- e.g.
-             * `(defstruct Mixed [m A B] (idx (Dense m A)) (raw B))` -- is not
-             * all-phantom, so the block above does not fire, yet once `B` is
-             * resolved the value has a real aggregate layout.  Default just the
-             * phantom args (`m`, `A`) to int64 and, if the spine then has a
-             * concrete layout, register the monomorph (`Mixed__int__int__int`).
-             * This keeps make-struct from collapsing to the invalid
-             * `(int64_t){.idx = ..., .raw = ...}` designated initializer.  When a
-             * non-phantom arg is still unresolved the spine stays non-concrete
-             * and we fall through to the int64 carrier, preserving ABI
-             * specialization for generic bodies. */
-            {
-                StructDef *def = NULL;
-                Type args[16];
-                uint8_t n_args = 0;
-                if (type_extract_struct_app(&t, &def, args, &n_args)
-                    && def && !def->is_opaque
-                    && struct_app_has_mixed_phantom(def)) {
-                    bool changed = false;
-                    Type norm = normalize_struct_app_partial_phantom(
-                        t, def, (int)n_args - 1, &changed);
-                    const char *name = "int64_t";
-                    if (changed && type_has_concrete_codegen_layout(&norm)) {
-                        name = register_struct_app(norm);
-                    }
-                    free_struct_app_type(norm);
-                    if (name && strcmp(name, "int64_t") != 0) return name;
-                }
+                /* A concrete parametric monomorph's C name is its registered
+                 * mangled name.  (A :heap parametric record ADT is handled above
+                 * via type_adt_app_def -> heap_ptr_c_name; the former struct-app
+                 * :heap and phantom-typeparam branches here keyed on a StructDef
+                 * head and are dead -- structdef-retirement DS-D.) */
+                return register_struct_app(t);
             }
             return "int64_t";
         }

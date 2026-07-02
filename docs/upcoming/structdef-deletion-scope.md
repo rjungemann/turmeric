@@ -248,6 +248,62 @@ regenerated snapshots in the same commit.
     keep working; DS-D only removes the dead `StructDef`-typed plumbing behind
     them.
 
+### DS-D progress (2026-07-02) -- landed in three commits, suite green (1878/0)
+
+DS-D is executed in incremental, suite-green commits rather than one atomic
+change (the DS-C dead-code sweep turned out to be the bulk of it, and it
+decomposes cleanly):
+
+- **Part 1 -- sever the `TY_STRUCT` type representation + DS-C consumer sweep.**
+  Removed the `as.struct_` union member, the `rc.struct_def` field, and the
+  `type_struct()`/`type_rc_struct()` constructors from `types.h`; deleted every
+  now-dead `case TY_STRUCT:` / `if (kind == TY_STRUCT)` / `as.struct_.def` reader
+  across elaboration, codegen, passes, typeclass dispatch and the interpreter
+  (the residual `defstruct` / `make-struct` / `with` StructDef paths in
+  `elab_structs.c` deleted, replaced by terminal diagnostics; the retired
+  `tur_heap_abi_unit` StructDef unit test removed).  **The `TY_STRUCT`
+  enumerator is RETAINED** -- it is no longer a `Type.kind`, only the runtime
+  any-box reflection tag (`any_box_tag_for_type`, `emit_module`'s `"struct"`
+  tag, the interpreter's stringifier) so `type-of`/`cast`/`is?` on a lowered
+  `defstruct` still reports `"struct"`.  This is a deliberate deviation from the
+  bullet above's "remove the `TY_STRUCT` enumerator": the tag is load-bearing
+  and its numeric value is baked into codegen snapshots.
+- **Part 2 -- remove the `StructDef` registry + `Expr` `StructDef` carriers.**
+  Deleted `elab_register_struct_def`, `e->struct_defs`/`n_struct_defs`/
+  `cap_struct_defs` (+ init/free) and the always-empty registry-scan fallbacks;
+  removed the always-NULL `Expr` carrier fields (`def_.struct_def`,
+  `make_struct_.def`, `get_field_.def`, `set_field_.def`,
+  `union_inject_.box_struct`, `any_cast_.target_struct`) and fixed every reader
+  (the ~239-line dead StructDef field-access tail in `emit_expr` collapsed to an
+  emit-invariant abort; effect-`fn` field rows read off `CtorField` per A1).
+  Regenerated `crossing-routing-audit.txt`.
+- **Part 3 -- interpreter + struct-app phantom-lowering cleanup.**  `TuriStruct`
+  dropped its always-NULL `StructDef *def` (the live path is the `CtorDef *ctor`
+  field); `turi/eval.c` is now `StructDef`-free.  In `types.c` the dead
+  struct-app phantom-typeparam lowering (`register_struct_app`'s Phase-D
+  `pass_by_ptr` block and `type_c_name`'s phantom/`:heap`-struct `TY_APP`
+  branches, all gated on the now-always-false `type_extract_struct_app`) and its
+  eight orphaned helpers were removed.
+
+**Residual (the last mile, deliberately deferred as a focused follow-up).**
+`StructDef`/`StructField` are still *defined* in `types.h`, referenced ONLY by
+the dead-for-real-types struct-app monomorph chain
+(`type_extract_struct_app` -- a `return false` stub since B-track --
+`substitute_struct_app_type`, `struct_field_c_type`, `emit_registered_struct_app_rec`,
+`struct_type_param_index`) plus ~30 dead `if (type_extract_struct_app(...))`
+caller branches in `emit_module`/`emit_core`/`emit_expr`/`types.c` and a couple
+of `StructDef *` params in `elab_*`.  Every one is unreachable for real types
+(no `TY_APP` head is a struct), but the chain is interlocked with the *live*
+parametric-monomorph naming/registry (`register_struct_app` still supplies
+mangled monomorph names and `type_struct_pass_by_ptr` reads the registry), where
+a wrong edit is a *silent* wrong-C miscompile rather than a test failure.  So
+the physical typedef excision -- delete the four dead functions, drop their ~30
+dead caller branches, drop the residual `StructDef *` params, then delete the
+`StructDef`/`StructField` typedefs -- is scoped as its own carefully-verified
+sweep (ideally with `--dump-*`/snapshot diffing on the parametric-container
+fixtures), NOT folded into the tail of the DS-C/registry/carrier work.  The
+`TY_STRUCT` enumerator stays regardless (reflection tag).
+
 ## Risk / sequencing notes
 
 - **Not actually all-or-nothing anymore.**  DS-A + DS-B are independently

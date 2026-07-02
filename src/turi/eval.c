@@ -542,12 +542,11 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e);
  * ---------------------------------------------------------------------- */
 
 /* Full definition of TuriStruct (forward-declared in value.h).
- * Fields are stored in order matching StructDef->fields[]. */
+ * Fields are stored in constructor order. */
 struct TuriStruct {
     const char  *name;     /* struct name (for debugging) */
     uint32_t     n_fields;
     TuriValue   *fields;   /* heap-allocated array */
-    StructDef   *def;      /* compiler's struct definition (for field name lookup); may be NULL */
     const CtorDef *ctor;   /* CONV-S1: ADT constructor this value was built from
                             * (record ctors carry field names + a back-pointer to
                             * their AdtDef, incl. from_struct_lowering).  NULL for
@@ -556,14 +555,13 @@ struct TuriStruct {
                             * lowered to a single-variant record ADT. */
 };
 
-static TuriValue make_struct_val_def(TuriEnv *env, const char *name, uint32_t n, TuriValue *fields, StructDef *def) {
+static TuriValue make_struct_val_def(TuriEnv *env, const char *name, uint32_t n, TuriValue *fields) {
     /* Escaping payload: the TuriStruct + its fields array are returned and may
      * be captured/stored, so they live in env's value pool (reclaimed by
      * turi_env_free), never individually freed. */
     TuriStruct *s = (TuriStruct *)turi_val_alloc(env, sizeof(TuriStruct));
     s->name     = name;
     s->n_fields = n;
-    s->def      = def;
     s->ctor     = NULL;
     s->fields   = n ? (TuriValue *)turi_val_alloc(env, n * sizeof(TuriValue)) : NULL;
     for (uint32_t i = 0; i < n; i++) s->fields[i] = fields[i];
@@ -582,28 +580,6 @@ static TuriValue turi_default_of(TuriEnv *env, const Type *t) {
         case TY_BOOL: return turi_bool(false);
         case TY_NIL:  return turi_nil();
         default: break;
-    }
-    /* Struct or parametric struct application `(S A B ...)`: build a zeroed
-     * TuriStruct.  type_extract_struct_app recovers the StructDef + the
-     * application's type args (so a parametric field's actual type is known),
-     * which substitute_struct_app_type then resolves before recursing. */
-    StructDef *def = NULL;
-    Type       args[MAX_FN_ARITY];
-    uint8_t    nargs = 0;
-    if (type_extract_struct_app(t, &def, args, &nargs) && def) {
-        uint32_t nf = def->n_fields;
-        if (nf == 0) return make_struct_val_def(env, def->name, 0, NULL, def);
-        TuriValue *fields = (TuriValue *)malloc((size_t)nf * sizeof(TuriValue));
-        if (!fields) return turi_int(0);
-        for (uint32_t i = 0; i < nf; i++) {
-            StructField *f = &def->fields[i];
-            Type ft = f->full_type ? *f->full_type : (Type){ .kind = f->kind };
-            Type resolved = (nargs > 0) ? substitute_struct_app_type(&ft, def, args) : ft;
-            fields[i] = turi_default_of(env, &resolved);
-        }
-        TuriValue v = make_struct_val_def(env, def->name, nf, fields, def);
-        free(fields);
-        return v;
     }
     return turi_int(0);
 }
@@ -647,23 +623,22 @@ static void turi_rc_drop_value(TuriValue v) {
 }
 
 /* CONV-S1: true when a TURI_STRUCT value should be observed as a "struct" at the
- * surface -- either a plain make-struct (carries a StructDef) or a defstruct that
- * lowered to a single-variant record ADT (its CtorDef's parent AdtDef has
- * from_struct_lowering set).  Used by type-of / cast so the ADT lowering of a
- * defstruct stays invisible, matching the compiled __tur_any_type_name. */
+ * surface -- a defstruct that lowered to a single-variant record ADT (its
+ * CtorDef's parent AdtDef has from_struct_lowering set).  Used by type-of / cast
+ * so the ADT lowering of a defstruct stays invisible, matching the compiled
+ * __tur_any_type_name. */
 static bool turi_struct_is_struct_like(TuriValue v) {
     if (v.tag != TURI_STRUCT || !v.as_struct) return false;
-    if (v.as_struct->def) return true;
     const CtorDef *cd = v.as_struct->ctor;
     return cd && cd->adt && cd->adt->from_struct_lowering;
 }
 
 TuriValue turi_make_struct(TuriEnv *env, const char *name, TuriValue *fields, uint32_t n) {
-    return make_struct_val_def(env, name, n, fields, NULL);
+    return make_struct_val_def(env, name, n, fields);
 }
 
 static TuriValue make_struct_val(TuriEnv *env, const char *name, uint32_t n, TuriValue *fields) {
-    return make_struct_val_def(env, name, n, fields, NULL);
+    return make_struct_val_def(env, name, n, fields);
 }
 
 /* panic? : (val) -> bool — true if val is the (panic) struct from catch-unwind */
@@ -2772,19 +2747,10 @@ static bool ic_eval_operand(const char **pp,
                 if (ic_read_ident(&r2, field_name, sizeof(field_name)) > 0) {
                     size_t flen = strlen(field_name);
                     if (arg->tag == TURI_STRUCT && arg->as_struct) {
-                        /* TuriStruct: look up field index from StructDef, body struct, or common table */
+                        /* TuriStruct: look up field index from CtorDef, body struct, or common table */
                         int fidx = -1;
-                        /* 1. Use StructDef field names if available */
-                        if (fidx < 0 && arg->as_struct->def) {
-                            StructDef *sdef = arg->as_struct->def;
-                            for (uint32_t fi = 0; fi < sdef->n_fields && fi < arg->as_struct->n_fields; fi++) {
-                                if (sdef->fields[fi].name && strcmp(sdef->fields[fi].name, field_name) == 0) {
-                                    fidx = (int)fi; break;
-                                }
-                            }
-                        }
-                        /* 1b. CONV-S1: a defstruct lowered to a record ADT carries
-                         * no StructDef, but its CtorDef holds the field names. */
+                        /* 1. CONV-S1: a defstruct lowered to a record ADT carries
+                         * its field names on its CtorDef. */
                         if (fidx < 0 && arg->as_struct->ctor &&
                             arg->as_struct->ctor->fields) {
                             const CtorDef *cd = arg->as_struct->ctor;
@@ -3550,14 +3516,6 @@ static TuriValue ic_exec_accessor(TuriEnv *env, const char *body,
 
     /* Find field index */
     int fidx = (nf>0) ? ic_field_index(fn_start,fn_len,fnames,flens,nf) : -1;
-    /* If arg is TURI_STRUCT with StructDef, use field names from StructDef */
-    if (fidx < 0 && args[0].tag == TURI_STRUCT && args[0].as_struct && args[0].as_struct->def) {
-        StructDef *sdef = args[0].as_struct->def;
-        for (uint32_t fi = 0; fi < sdef->n_fields; fi++) {
-            if (sdef->fields[fi].name && strncmp(sdef->fields[fi].name, fn_start, fn_len) == 0
-                && strlen(sdef->fields[fi].name) == fn_len) { fidx = (int)fi; break; }
-        }
-    }
     if (fidx < 0) fidx = ic_common_field_idx(fn_start, fn_len);
     if (fidx < 0) return turi_nil();
 
@@ -3844,13 +3802,6 @@ static TuriValue ic_exec_snprintf_fmt(TuriEnv *env, const char *body,
                 const char *snames[IC_MAX_FIELDS]; size_t slens[IC_MAX_FIELDS]; int stypes[IC_MAX_FIELDS];
                 int sn = ic_extract_struct_fields_typed(body, snames, slens, stypes);
                 int fidx = (sn>0)?ic_field_index(cond_field,flen,snames,slens,sn):-1;
-                /* Also try StructDef field names */
-                if (fidx<0 && arg->tag==TURI_STRUCT && arg->as_struct && arg->as_struct->def) {
-                    StructDef *sdef=arg->as_struct->def;
-                    for (uint32_t fi=0; fi<sdef->n_fields; fi++) {
-                        if (sdef->fields[fi].name && strcmp(sdef->fields[fi].name,cond_field)==0) { fidx=(int)fi; break; }
-                    }
-                }
                 if (fidx<0) fidx=ic_common_field_idx(cond_field,flen);
                 if (fidx>=0) {
                     if (arg->tag==TURI_STRUCT&&arg->as_struct&&(uint32_t)fidx<arg->as_struct->n_fields)
@@ -5348,8 +5299,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
             case EX_MAKE_STRUCT: {
                 uint32_t n = control->as.make_struct_.n_fields;
                 if (n == 0) {
-                    StructDef *sd = NULL;
-                    cur = make_struct_val_def(env, sd ? sd->name : "<struct>", 0, NULL, sd);
+                    cur = make_struct_val_def(env, "<struct>", 0, NULL);
                     descending = false;
                     break;
                 }
@@ -6238,10 +6188,8 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     control = me->as.make_struct_.field_values[top->index];
                     cf = top->frame; tail = false; descending = true;  /* fields non-tail */
                 } else {
-                    StructDef *sd = NULL;
                     /* make_struct_val_def copies the fields, so free after. */
-                    cur = make_struct_val_def(env, sd ? sd->name : "<struct>",
-                                              n, fields, sd);
+                    cur = make_struct_val_def(env, "<struct>", n, fields);
                     free(fields);
                     len--;  /* pop; keep returning the struct value */
                 }
@@ -7868,17 +7816,13 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         case TY_BOOL: ok = (v.tag == TURI_BOOL); break;
         case TY_CSTR: ok = (v.tag == TURI_CSTR); break;
         case TY_STRUCT:
-            /* A make-struct value carries a StructDef; a defstruct lowered to a
-             * record ADT instead carries a from_struct_lowering CtorDef -- both
-             * are "struct" at the surface (CONV-S1), so accept either. */
-            ok = (v.tag == TURI_STRUCT && v.as_struct &&
-                  (v.as_struct->def != NULL || turi_struct_is_struct_like(v)));
+            /* A defstruct lowered to a record ADT carries a from_struct_lowering
+             * CtorDef -- it is "struct" at the surface (CONV-S1). */
+            ok = (v.tag == TURI_STRUCT && v.as_struct && turi_struct_is_struct_like(v));
             break;
         case TY_ADT:
-            /* A genuine ADT value has no StructDef and was not synthesized from a
-             * defstruct lowering. */
-            ok = (v.tag == TURI_STRUCT && v.as_struct && v.as_struct->def == NULL &&
-                  !turi_struct_is_struct_like(v));
+            /* A genuine ADT value was not synthesized from a defstruct lowering. */
+            ok = (v.tag == TURI_STRUCT && v.as_struct && !turi_struct_is_struct_like(v));
             break;
         default: ok = true; break;
         }
@@ -7903,11 +7847,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         case TURI_STRUCT:
             /* W4: match the compiled __tur_any_type_name, which carries only
              * kind granularity -- every struct is "struct" and every ADT is
-             * "adt" (emit_module.c), NOT the specific type name.  A plain
-             * (make-struct T ...) carries its StructDef (def != NULL); an ADT
-             * constructor builds via make_struct_val with def == NULL. */
-            tname = (v.as_struct &&
-                     (v.as_struct->def || turi_struct_is_struct_like(v)))
+             * "adt" (emit_module.c), NOT the specific type name.  A defstruct
+             * lowered to a record ADT reads as "struct" via its CtorDef. */
+            tname = (v.as_struct && turi_struct_is_struct_like(v))
                         ? "struct" : "adt";
             break;
         default: break;
@@ -8650,7 +8592,8 @@ static void turi_value_repr_d(char *buf, size_t cap, TuriValue v, int depth) {
         TuriStruct *s = v.as_struct;
         if (!s) { snprintf(buf, cap, "#<struct>"); break; }
         const char *n = s->name ? s->name : "?";
-        if (!s->def || s->n_fields == 0) {
+        const CtorDef *cd = s->ctor;
+        if (!cd || !cd->fields || s->n_fields == 0) {
             snprintf(buf, cap, "#<struct %s>", n);
             break;
         }
@@ -8665,7 +8608,7 @@ static void turi_value_repr_d(char *buf, size_t cap, TuriValue v, int depth) {
         for (uint32_t i = 0; i < s->n_fields && pos < cap - 1; i++) {
             char fval[128];
             turi_value_repr_d(fval, sizeof(fval), s->fields[i], depth - 1);
-            const char *fname = (i < s->def->n_fields) ? s->def->fields[i].name : "?";
+            const char *fname = (i < cd->n_fields) ? cd->fields[i].name : "?";
             const char *sep = (i == 0) ? " " : ", ";
             pos += (size_t)snprintf(buf + pos, cap - pos, "%s%s = %s", sep, fname, fval);
         }
@@ -9455,9 +9398,9 @@ static void format_turi_value_as_expr(char *buf, size_t cap, TuriValue v) {
         snprintf(buf, cap, "\"%s\"", v.as_cstr);
         break;
     case TURI_STRUCT:
-        if (v.as_struct && v.as_struct->def && v.as_struct->def->name) {
-            snprintf(buf, cap, "(unsafe-cast %lld : %s)", 
-                     (long long)(intptr_t)v.as_struct, v.as_struct->def->name);
+        if (v.as_struct && v.as_struct->name) {
+            snprintf(buf, cap, "(unsafe-cast %lld : %s)",
+                     (long long)(intptr_t)v.as_struct, v.as_struct->name);
         } else {
             snprintf(buf, cap, "%lld", (long long)(intptr_t)v.as_struct);
         }
@@ -9545,9 +9488,9 @@ void turi_debug_disable(TuriEnv *env) {
 
 const char *turi_try_show(TuriEnv *env, TuriValue val) {
     if (!env || !env->last_tc_env) return NULL;
-    if (val.tag != TURI_STRUCT || !val.as_struct || !val.as_struct->def)
+    if (val.tag != TURI_STRUCT || !val.as_struct || !val.as_struct->name)
         return NULL;
-    StructDef *sdef = val.as_struct->def;
+    const char *struct_name = val.as_struct->name;
     TypeClassEnv *tc_env = (TypeClassEnv *)env->last_tc_env;
 
     /* Find the Show typeclass in the registry. */
@@ -9584,7 +9527,7 @@ const char *turi_try_show(TuriEnv *env, TuriValue val) {
         Type t = inst->type_args[0];
         const char *inst_name = (t.kind == TY_ADT && t.as.adt_.def)
                                     ? t.as.adt_.def->name : NULL;
-        if (!inst_name || !sdef->name || strcmp(inst_name, sdef->name) != 0) continue;
+        if (!inst_name || strcmp(inst_name, struct_name) != 0) continue;
         if (show_mi < inst->n_method_impls && inst->method_impls[show_mi])
             show_impl = inst->method_impls[show_mi];
         break;
