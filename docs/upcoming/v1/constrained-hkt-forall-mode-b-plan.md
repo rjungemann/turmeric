@@ -141,25 +141,77 @@ independent so we can stop after any slice.
 **Goal.** Thread a resolved dictionary into a constrained rank-2 poly fn via
 B1's explicit leading dict argument, for the **caller-chooses-`f`** case.
 
-**Work.**
-- Elaboration: when a rank-2 parameter's type is a constrained `TY_FORALL`
-  (`n_constraints > 0`), give its poly-fn body an extra leading `ptr<Dict>`
-  parameter per constraint (extend `make_poly_wrapper`, `elab_call.c:~5158`, to
-  prepend dict params; the wrapper forwards them to the inner fn).
-- At each invocation (`elab_poly_call`, the mode-A re-discharge loop already
-  pins the constrained var to a concrete type): instead of only *checking* the
-  instance, materialize its dict singleton as a leading argument
-  (`EX_DICT` bare-value form, `emit_expr.c:2332`) and prepend it to the call.
-- Keep mode A's `TUR-E0305` as the "no instance" error (now a hard blocker,
-  since we need the dict, not just the check).
-- Fixtures: `forall-dict-show/` (a constrained `forall a. Show a => a -> cstr`
-  whose body calls `show` via the passed dict, verified by an instance that
-  differs observably from any monomorphic passthrough),
-  `errors/forall-dict-missing/`.
+**Step 0 -- soundness gate (LANDED).** Before dict passing exists, passing a
+*genuinely polymorphic* constrained function (one whose own body dispatches a
+class method on its constrained type variable -- `fn_constraints` non-empty) as
+a rank-2 value **silently miscompiles**: `make_poly_wrapper` wraps the
+function's single carrier-representative monomorph (the `int`/int64 instance),
+so every invocation through the erased carrier runs that one instance regardless
+of the caller-chosen type -- e.g. `(f true)` runs `Show int` on a bool and
+prints `i1` instead of `T`. This is now rejected with **`TUR-E0308`** at the
+rank-2 pass site (`elab_call.c`, the `EX_POLY_WRAP` wrap block) rather than
+miscompiled. A *monomorphic* function passed as a constrained rank-2 arg (the
+shipped mode-A `Show`-passthrough case, `hrt-forall-constraint-show/`) has no
+`fn_constraints` and is unaffected. Fixture:
+`errors/forall-poly-constrained-rank2-needs-dict/`. Implementing dict passing
+below **replaces** this gate with the real thing.
 
-**Risk.** Low-medium. No carrier change (B1). Touches `make_poly_wrapper` arg
-shaping and the invocation arg list; existing unconstrained poly fns are
-untouched (dict params only appear when `n_constraints > 0`).
+**Why the rest is large (recon summary).** The remaining work is not "add a
+param" -- it requires compiling the passed constrained function to **dispatch
+its class method through a runtime dictionary** instead of the baked
+representative. Today (`elab_typeclasses.c:5290-5347`) a method call on an
+abstract constrained var is deliberately bound to the `int` carrier
+representative (`__inst_Show_show_int`) plus an `EX_DICT` *annotation*, and the
+concrete instance is recovered **only at emit inside an active ABI
+specialization** (`emit_core.c:1347` gates `emit_reresolve_method_call` on
+`ctx->current_abi_specialization`). A rank-2 value is never ABI-specialized --
+it is reached only through the erased carrier -- so the representative is what
+runs. `make_poly_wrapper` (`elab_call.c:5152`) hardcodes `dict_arg = NULL` and
+an empty constraint set (`:5258`, `:5297`), and there is **no** existing
+non-existential path that dispatches a method through a dict *parameter*
+(`EX_DICT` always emits `_singleton`, `emit_expr.c:2360-2372`).
+
+**Work (real dict passing).**
+- **A dict-taking clone of the passed constrained function.** The core new
+  piece: emit a variant of the function whose body dispatches its constrained
+  method(s) through a leading `ptr<Dict>` parameter instead of the baked
+  `__inst_..._int`. The cleanest route is a new **"dict specialization"** in the
+  ABI-spec machinery (`emit_module.c:2191` mints specs; `emit_core.c:1567`
+  re-resolves method calls): when the active spec is a dict-spec, have
+  `emit_reresolve_method_call` return a *dict-param dispatch* expression rather
+  than a concrete `__inst_..._T` symbol. This reuses the spec-clone emission
+  and the `dict_arg` annotation the call already carries.
+- **The dispatch emit.** Mirror the existential witness path
+  (`emit_expr.c:6978-7013`):
+  `((<ret> (*)(<sig>))(((void **)<dict_param>)[<method_idx>]))(args...)`, with
+  the class-var args erased to `int64_t` and the slice-3 by-value-aggregate
+  carrier bridge (`emit_expr.c:2559-2598`) applied for a `(f a)` method
+  arg/return. `<method_idx>` is the method's slot in the class dict layout (all
+  instances of a class share the field order, so the dict is a flat
+  `void*`-array of method pointers, exactly as the witness table is indexed).
+- **`make_poly_wrapper`** (`elab_call.c:5152`): when `inner_fn_b->fn_constraints`
+  is non-empty and `forall-dict-pass` is enabled, prepend one `ptr<Dict>` param
+  per constraint, wrap the *dict-spec clone* (not the representative monomorph),
+  and forward the dict param(s) into the inner call.
+- **Invocation** (`elab_poly_call`, the mode-A re-discharge loop that already
+  pins the constrained var to a concrete type): instead of only *checking* the
+  instance, resolve it (`typeclass_env_lookup_instance`, `typeclass.c:151`),
+  materialize its dict singleton via the bare-value `EX_DICT` form
+  (`emit_expr.c:2371`, `(int64_t)(intptr_t)(&dict_C_T_singleton)`), and prepend
+  it as a leading argument. The dict rides the existing int64 carrier -- **B1,
+  no carrier widening**. The N-ary carrier call form (`emit_expr.c:2789-2799`,
+  already used for arity > 1) carries the extra leading arg.
+- Keep mode A's `TUR-E0305` as the "no instance" error (now a hard blocker,
+  since we need the dict, not just the check), and delete the `TUR-E0308` gate.
+- Fixtures: `forall-dict-show/` -- `poly-show` (the step-0 repro) passed as a
+  rank-2 arg and invoked at `int` and `bool`, printing `i7` then `T` (the
+  observable proof the right instance runs per call); `errors/forall-dict-missing/`.
+
+**Risk.** Medium-high for the real work -- the dict-spec is a new mode in the
+delicate ABI-specialization core (`emit_module.c` / `emit_core.c`). Contained by
+the `forall-dict-pass` flag (existing fixtures never take the path) and by
+gating on `fn_constraints != empty`, so unconstrained and monomorphic rank-2
+passing are untouched. The soundness gate (step 0) is low-risk and shipped.
 
 ### Slice MB2 -- method dispatch through the passed dict inside the body (`--enable=forall-dict-dispatch`)
 

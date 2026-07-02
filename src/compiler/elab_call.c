@@ -4381,6 +4381,33 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                 /* HRT4: pass-through — binding is already a tur_poly_fn_t, no wrapper needed. */
                 wrap->as.poly_wrap_.wrapper_binding = NULL;
             } else {
+                /* MB1 (constrained-hkt-forall-mode-b-plan): a *genuinely
+                 * polymorphic* constrained function (one whose own body
+                 * dispatches a class method on its constrained type variable --
+                 * `fn_constraints` non-empty) cannot be passed as a rank-2 value
+                 * soundly today.  The rank-2 wrapper wraps the function's single
+                 * carrier-representative monomorph (the `int`/int64 instance), so
+                 * every invocation through the erased carrier runs that one
+                 * instance regardless of the caller-chosen type -- e.g. `(f true)`
+                 * silently runs the `Show int` method on a bool.  Making this
+                 * work needs runtime dictionary passing (mode B / MB1), which is
+                 * not yet implemented; reject it here rather than miscompile.
+                 * (A *monomorphic* function passed as a constrained rank-2 arg --
+                 * the shipped mode-A `Show`-passthrough case -- has no
+                 * `fn_constraints` and is unaffected.) */
+                if (inner_fn_b->fn_constraints &&
+                    inner_fn_b->fn_constraints->n_constraints > 0) {
+                    diag_emit(DIAG_ERROR, args[i]->span,
+                              "cannot pass the polymorphic constrained function "
+                              "'%s' as a rank-2 argument: its body dispatches a "
+                              "typeclass method on its own type variable, which "
+                              "needs runtime dictionary passing through the poly "
+                              "carrier -- not yet implemented (see "
+                              "docs/upcoming/v1/constrained-hkt-forall-mode-b-plan.md). "
+                              "Pass a monomorphic function instead (TUR-E0308)",
+                              inner_fn_b->name ? inner_fn_b->name->name : "?");
+                    return NULL;
+                }
                 uint8_t inner_arity = (inner_fn_b->type.kind == TY_FN)
                     ? inner_fn_b->type.as.fn.arity : 1;
                 /* Closures have an env param counted in arity — subtract it */
