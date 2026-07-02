@@ -125,21 +125,6 @@ Kind kind_unify(Kind k1, Kind k2, Span span) {
  * All other types default to KIND_STAR in H1. */
 static Kind type_effective_kind(Type t) {
     switch (t.kind) {
-        case TY_STRUCT:
-            /* Non-parametric struct types (a StructDef with no type params) have
-             * kind * — they are fully-applied types like Pair, Error, etc.  A
-             * *parametric* struct referenced bare (e.g. `Schema` in
-             * (definstance Functor [Schema]) where `(defstruct Schema [A] ...)`)
-             * is a genuine type constructor of kind * -> * (or higher), so it
-             * reports its arity-based kind.  Opaque type constructor references
-             * (def == NULL) are used in HKT contexts (e.g. option in
-             * (definstance Functor [option])) and default to KIND_ARROW. */
-            if (t.as.struct_.def != NULL) {
-                return (t.as.struct_.def->n_type_params > 0)
-                           ? kind_for_arity(t.as.struct_.def->n_type_params)
-                           : KIND_STAR;
-            }
-            return KIND_ARROW;
         case TY_ADT:
             /* Mirror TY_STRUCT: a parametric ADT referenced bare (e.g. `ExprF`
              * in (definstance Functor [ExprF]) where (defdata ExprF [a] ...))
@@ -444,8 +429,6 @@ static void kind_infer_from_instances(Arena *a, Expr **items, uint32_t n) {
                  * opaque-struct args; real constructor args (TY_APP, TY_REC)
                  * still drive inference. */
                 bool opaque_struct_arg =
-                    (inst->type_args[i].kind == TY_STRUCT &&
-                     inst->type_args[i].as.struct_.def == NULL) ||
                     /* structdef-retirement slice 5 B2: the migrated unresolved
                      * instance head is now a named TY_TYVAR carrying an arrow
                      * kind.  Like the old def-less TY_STRUCT it is ambiguous
@@ -461,18 +444,6 @@ static void kind_infer_from_instances(Arena *a, Expr **items, uint32_t n) {
                 bool builtin_carrier_arg =
                     (inst->type_args[i].kind == TY_RC ||
                      inst->type_args[i].kind == TY_WEAK);
-                /* SC7: a user parametric struct (def != NULL, n_type_params > 0)
-                 * now reports KIND_ARROW so it can satisfy an explicitly
-                 * higher-kinded class (Functor [Schema]).  But like an opaque
-                 * struct it is ambiguous -- the same name serves as a concrete
-                 * fully-applied type in a STAR-declared class (Measurable [Box]).
-                 * So it must NOT silently promote a STAR class; promotion stays
-                 * gated on an explicit '^f' annotation (cur_kind already ARROW,
-                 * handled by the trusted-annotation branch below). */
-                bool parametric_struct_arg =
-                    (inst->type_args[i].kind == TY_STRUCT &&
-                     inst->type_args[i].as.struct_.def != NULL &&
-                     inst->type_args[i].as.struct_.def->n_type_params > 0);
                 /* Same as SC7 for a parametric ADT/GADT: a bare parametric ADT
                  * (e.g. `Bound` from (defgadt Bound [A] ...)) now reports
                  * KIND_ARROW so it can satisfy an explicitly higher-kinded class
@@ -486,7 +457,7 @@ static void kind_infer_from_instances(Arena *a, Expr **items, uint32_t n) {
                      inst->type_args[i].as.adt_.def != NULL &&
                      inst->type_args[i].as.adt_.def->n_type_params > 0);
                 if (!opaque_struct_arg && !builtin_carrier_arg &&
-                        !parametric_struct_arg && !parametric_adt_arg) {
+                        !parametric_adt_arg) {
                     tc->type_param_kinds[i] = arg_kind;
                 }
             }

@@ -709,7 +709,7 @@ struct Expr {
         struct { Expr **items; uint32_t n; }                               do_;
         struct { Expr *cond; Expr *body; }                                 while_;
         struct { Binding *target; Expr *value; }                           set_;
-        struct { Binding *binding; Expr *init; StructDef *struct_def; }     def_;
+        struct { Binding *binding; Expr *init; }                           def_;
         struct { const BuiltinSpec *spec; Expr **args; uint32_t n; }       builtin;
 
         /* Phase 2 */
@@ -867,20 +867,19 @@ struct Expr {
         } dict_; /* (dict Instance) */
 
         /* Phase 11: Struct operations */
-        struct { StructDef *def; Expr **field_values; uint32_t n_fields; } make_struct_; /* (make-struct Name v1...) */
-        struct { Expr *struct_expr; uint32_t field_idx; StructDef *def;
-                 /* CONV-S0/S4: when the receiver is a single-variant record ADT
-                  * (not a struct), `def` is NULL and these carry the sole
-                  * variant; codegen reads `((tur_adt_X *)v)->as.Ctor._<idx>`. */
+        struct { Expr **field_values; uint32_t n_fields; } make_struct_; /* (make-struct Name v1...) */
+        struct { Expr *struct_expr; uint32_t field_idx;
+                 /* CONV-S0/S4: the receiver is a single-variant record ADT;
+                  * adt_def/adt_ctor carry the sole variant and codegen reads
+                  * `((tur_adt_X *)v)->as.Ctor._<idx>`. */
                  const struct AdtDef *adt_def; const struct CtorDef *adt_ctor;
                } get_field_; /* (.field s) - field read */
-        /* Phase DS3: (set! (.field s) v) - struct field write.  receiver_is_rc
-         * is true when the receiver expression is rc<Struct> (auto-deref); in
-         * that case codegen casts through the rc-block's value pointer. */
-        /* CONV-S1 seam 4: under the defstruct-as-defadt lowering the receiver is
-         * a single-variant record ADT, not a StructDef.  adt_def/adt_ctor are set
-         * (def == NULL) so codegen writes the field through the ADT member path. */
-        struct { Expr *receiver; Expr *value; uint32_t field_idx; StructDef *def; bool receiver_is_rc; const struct AdtDef *adt_def; const struct CtorDef *adt_ctor; } set_field_;
+        /* Phase DS3: (set! (.field s) v) - field write.  receiver_is_rc is true
+         * when the receiver expression is rc<ADT> (auto-deref); codegen casts
+         * through the rc-block's value pointer.
+         * CONV-S1 seam 4: the receiver is a single-variant record ADT;
+         * adt_def/adt_ctor drive the ADT member path. */
+        struct { Expr *receiver; Expr *value; uint32_t field_idx; bool receiver_is_rc; const struct AdtDef *adt_def; const struct CtorDef *adt_ctor; } set_field_;
 
         struct { Expr **items; uint32_t n; }                               program;
 
@@ -967,22 +966,15 @@ struct Expr {
         struct {
             int64_t     tag_idx;  /* member index (for TY_UNION) or TypeKind (for TY_ANY) */
             struct Expr *value;   /* the value being injected */
-            /* TY2.2: when the injected value is a by-value struct it cannot ride
-             * the int64_t carrier; box_struct names the StructDef so codegen
-             * emits a heap copy (malloc + store) and stores the pointer. NULL
-             * for carrier-compatible payloads (int/bool/float/nil/cstr/ptr/ADT). */
-            const struct StructDef *box_struct;
         } union_inject_;
         /* IT4 gradual typing */
         struct { struct Expr *value; } any_type_of_;   /* (type-of x) — x must be TY_ANY */
         /* TY3: (is? x T) — runtime type test; emits TUR_GETTAG(x) == test_tag. */
         struct { struct Expr *value; int64_t test_tag; } any_is_;
-        /* TY2.3: (cast x T) — checked downcast; panics on tag mismatch.
-         * target_struct is non-NULL when T is a struct (heap-unbox via deref). */
+        /* TY2.3: (cast x T) — checked downcast; panics on tag mismatch. */
         struct {
             struct Expr *value;
             TypeKind     target_kind;
-            const struct StructDef *target_struct;
         } any_cast_;
         /* DV0: Dynamic var declaration */
         struct {

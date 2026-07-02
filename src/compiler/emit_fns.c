@@ -840,35 +840,12 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * See docs/reported/polymorphic-ok-fails-for-value-struct-payload.md. */
     bool needs_box_spill[16];
     for (uint8_t i = 0; i < 16; i++) needs_box_spill[i] = false;
-    /* M2b: the box-spill recognizer was originally inline-C only (the body's
-     * `(int64_t)(intptr_t)x` cast required `x` to be a pointer).  Now that
-     * `#{Construct}` bodies can be written as `(make-struct …)` instead, the
-     * same monomorphization shape (value-struct payload through a carrier-ABI
-     * result) still needs the box-spill — the prereq-6 synthesis below
-     * heap-spills the param value into the struct's pointer-typed payload
-     * slot.  Enable the recognizer for `#{Construct}` make-struct bodies as
-     * well as inline-C ones.  See
-     * docs/reported/m2b-stdlib-migration-blocked-on-carrier-fallback.md. */
-    bool body_is_make_struct = fd->body && fd->body->kind == EX_MAKE_STRUCT;
-    bool boxspill_eligible_body =
-        body_is_inline_c ||
-        (body_is_make_struct && fd->binding && fd->binding->is_construct_template);
-    if (use_abi_spec && boxspill_eligible_body) {
-        Type ret = ctx->current_abi_specialization->result_type;
-        bool return_uses_carrier =
-            type_uses_carrier_abi(emit_resolve_type(ctx, ret));
-        if (return_uses_carrier) {
-            for (uint8_t i = 0; i < fd->n_params && i < 16; i++) {
-                Type pty = ctx->current_abi_specialization->arg_types[i];
-                bool is_value_struct =
-                    pty.kind == TY_STRUCT && pty.as.struct_.def &&
-                    !pty.as.struct_.def->is_opaque &&
-                    pty.as.struct_.def->n_type_params == 0 &&
-                    !type_uses_carrier_abi(emit_resolve_type(ctx, pty));
-                if (is_value_struct) needs_box_spill[i] = true;
-            }
-        }
-    }
+    /* The box-spill recognizer keyed on a value-struct parameter (a Type of
+     * kind TY_STRUCT).  No Type ever carries that kind now -- value records
+     * lower to TY_ADT/TY_APP -- so the population never fired and has been
+     * removed.  `needs_box_spill` therefore stays all-false; the rename +
+     * heap-spill stanza below remain as an inert safety net for future
+     * inline-C `#{Construct}` bodies that cast a pointer-carried param. */
     /* B4 (byvalue-recursive-carrier, slice 2): the inverse of box-spill.  A
      * CLOSURE thunk whose parameter is a WIDE (>8 byte) by-value ADT receives it
      * across the fat-closure boundary as an int64 heap-box POINTER (the value
@@ -1081,78 +1058,11 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      *   (b) a spec whose declared result type lowers to the int64 carrier
      *       (typeclass-method dispatch context: the method's signature is
      *       int64-in/int64-out so the dict slot is uniformly typed). */
-    bool carrier_spec_return = false;
-    if (use_abi_spec) {
-        const char *rc = emit_type_c_name(ctx,
-            ctx->current_abi_specialization->result_type);
-        carrier_spec_return = rc && strcmp(rc, "int64_t") == 0;
-    }
-    if ((!use_abi_spec || carrier_spec_return)
-        && fd->binding && fd->binding->is_construct_template
-        && fd->body && fd->body->kind == EX_MAKE_STRUCT) {
-        StructDef *def = fd->body->as.make_struct_.def;
-        if (def && def->name) {
-            int disc_field_idx = -1;
-            for (uint32_t fi = 0; fi < def->n_fields; fi++) {
-                if (def->fields[fi].kind == TY_BOOL) {
-                    disc_field_idx = (int)fi;
-                    break;
-                }
-            }
-            bool disc_value = false;
-            int payload_param_idx = -1;
-            bool disc_known = false;
-            if (disc_field_idx >= 0
-                && (uint32_t)disc_field_idx < fd->body->as.make_struct_.n_fields) {
-                Expr *dv = fd->body->as.make_struct_.field_values[disc_field_idx];
-                if (dv && dv->kind == EX_BOOL_LIT) {
-                    disc_value = dv->as.b;
-                    disc_known = true;
-                    /* Find a non-discriminator field whose value is a direct
-                     * parameter reference (i.e. the carrier payload). */
-                    for (uint32_t fi = 0; fi < fd->body->as.make_struct_.n_fields; fi++) {
-                        if ((int)fi == disc_field_idx) continue;
-                        Expr *fv = fd->body->as.make_struct_.field_values[fi];
-                        if (!fv || fv->kind != EX_VAR) continue;
-                        Binding *b = fv->as.var.binding;
-                        for (uint8_t pi = 0; pi < fd->n_params; pi++) {
-                            if (fd->params[pi] == b) {
-                                payload_param_idx = (int)pi;
-                                break;
-                            }
-                        }
-                        if (payload_param_idx >= 0) break;
-                    }
-                }
-            }
-
-            const char *helper = NULL;
-            if (disc_known) {
-                if (strcmp(def->name, "Result") == 0)
-                    helper = disc_value ? "tur_box_ok" : "tur_box_err";
-                else if (strcmp(def->name, "Option") == 0)
-                    helper = disc_value ? "tur_box_some" : NULL;
-            }
-
-            if (disc_known && (helper || (!disc_value
-                                          && strcmp(def->name, "Option") == 0))) {
-                indent_buf(file, ctx->indent + 4);
-                if (!helper) {
-                    /* none: zero-payload, returns NULL Option. */
-                    buf_puts(file, "return 0;\n");
-                } else if (payload_param_idx >= 0) {
-                    const char *pn = raw_name_for_binding(fd->params[payload_param_idx]);
-                    buf_printf(file, "return %s((int64_t)(intptr_t)%s);\n", helper, pn);
-                    free((void*)pn);
-                } else {
-                    /* No payload param found (shouldn't happen for ok/err/some);
-                     * fall back to a NULL carrier so the emitted C compiles. */
-                    buf_puts(file, "return 0;\n");
-                }
-                m2b_carrier_synth = true;
-            }
-        }
-    }
+    /* structdef-retirement DS-C: the M2b make-struct-return carrier synth
+     * was keyed on the StructDef* in the make-struct node, which is now
+     * always NULL (structs lower to ADTs).  The branch never fired, so
+     * m2b_carrier_synth stays false and the normal body-emit path handles
+     * every #{Construct} constructor. */
 
     {
         /* M2b retirement of the M2a inference path: the shape-inference

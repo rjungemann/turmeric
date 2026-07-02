@@ -158,22 +158,16 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
          * Propagate the effect-row annotation on the :fn struct field (if any). */
         if (e->as.call_.fn_expr &&
             e->as.call_.fn_expr->kind == EX_GET_FIELD) {            Expr *gf = e->as.call_.fn_expr;
-            StructDef *def = gf->as.get_field_.def;
             uint32_t fidx = gf->as.get_field_.field_idx;
             EffectRow *field_effect_row = NULL;
-            if (def && fidx < def->n_fields)
-                field_effect_row = def->fields[fidx].effect_row;
-            else {
-                /* structdef-retirement slice 5 A1: a lowered `defstruct` is a
-                 * single-variant record ADT (def == NULL), so the capability
-                 * field's effect row now lives on the CtorField.  Read it off
-                 * adt_ctor so `(.run v)` on a lowered `[run : fn #fx{Eff}]`
-                 * field still contributes its effect -- without this the lowering
-                 * would silently drop effect tracking. */
-                const struct CtorDef *ac = gf->as.get_field_.adt_ctor;
-                if (ac && fidx < ac->n_fields)
-                    field_effect_row = ac->fields[fidx].effect_row;
-            }
+            /* structdef-retirement slice 5 A1 / DS-D: a `defstruct` is a
+             * single-variant record ADT, so the capability field's effect row
+             * lives on the CtorField.  Read it off adt_ctor so `(.run v)` on a
+             * lowered `[run : fn #fx{Eff}]` field still contributes its effect --
+             * without this the lowering would silently drop effect tracking. */
+            const struct CtorDef *ac = gf->as.get_field_.adt_ctor;
+            if (ac && fidx < ac->n_fields)
+                field_effect_row = ac->fields[fidx].effect_row;
             if (field_effect_row) {
                 EffectRow *field_row = effect_row_apply_subst(
                     field_effect_row, subst, a);
@@ -1204,21 +1198,10 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
         }
     }
 
-    /* --- Step 0c: Resolve effect rows on struct fields.
-     * Struct fields with :fn #{...} annotations store ERK_UNRESOLVED rows that
-     * must be resolved before the fixed-point inference can propagate them. */
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        Expr *item = program->as.program.items[i];
-        if (!item || item->kind != EX_DEF || !item->as.def_.struct_def) continue;
-        StructDef *sd = item->as.def_.struct_def;
-        for (uint32_t fi = 0; fi < sd->n_fields; fi++) {
-            if (sd->fields[fi].effect_row &&
-                sd->fields[fi].effect_row->kind == ERK_UNRESOLVED) {
-                sd->fields[fi].effect_row =
-                    effect_row_resolve(sd->fields[fi].effect_row, env, a);
-            }
-        }
-    }
+    /* structdef-retirement DS-D: the former Step 0c resolved ERK_UNRESOLVED
+     * effect rows off EX_DEF struct fields (def_.struct_def).  A defstruct is now
+     * a record ADT and its capability-field effect rows resolve on the CtorField
+     * along the defdata path, so this StructDef-keyed pre-pass is dead. */
 
     /* --- Step 1: Collect all top-level FnDef nodes into an index. --- */
     FnIndex idx;

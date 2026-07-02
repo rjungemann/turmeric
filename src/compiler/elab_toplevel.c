@@ -112,8 +112,6 @@ Expr *elab_any_cast(Elab *e, const Form *call) {
     Expr *out = expr_new(e->arena, EX_ANY_CAST, result_type, call->span);
     out->as.any_cast_.value = val;
     out->as.any_cast_.target_kind = target_kind;
-    /* structdef-retirement DS-C: no StructDef target -- lowered structs are ADTs. */
-    out->as.any_cast_.target_struct = NULL;
     return out;
 }
 
@@ -1300,7 +1298,6 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     }
     if (rc != 0) {
         scope_free(&e.global);
-        free(e.struct_defs);
         free(e.adt_defs);
         free(e.forward_type_syms);
         free(e.handled_effect_names);
@@ -1484,7 +1481,6 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     }
 
     scope_free(&e.global);
-    free(e.struct_defs);
     free(e.adt_defs);
     free(e.forward_type_syms);
     free(e.handled_effect_names);

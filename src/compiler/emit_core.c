@@ -369,8 +369,6 @@ bool type_uses_carrier_abi(Type t) {
     if (t.kind == TY_ADT && t.as.adt_.def && t.as.adt_.def->is_opaque)
         return t.as.adt_.def->n_type_params > 0;
     if (t.kind == TY_APP || t.kind == TY_ADT) return true;
-    if (t.kind == TY_STRUCT && t.as.struct_.def &&
-        t.as.struct_.def->n_type_params > 0) return true;
     return false;
 }
 
@@ -1176,15 +1174,6 @@ static bool emit_inst_head_matches(Type pattern, Type concrete) {
      * FnDef lookup agrees with the name resolver instead of falling through to
      * reconstruction.  Without it a nested dispatch on a parametric-container
      * element cannot find the inner instance's FnDef to mint its by-value spec. */
-    if (pattern.kind == TY_STRUCT && pattern.as.struct_.def &&
-        pattern.as.struct_.def->n_type_params > 0 && concrete.kind == TY_APP) {
-        Type head = concrete;
-        while (head.kind == TY_APP && head.as.app.fn) head = *head.as.app.fn;
-        if (head.kind == TY_STRUCT &&
-            head.as.struct_.def == pattern.as.struct_.def) {
-            return true;
-        }
-    }
     /* CONV-S1 seam 4: the ADT mirror of the G2 head match.  An instance written
      * over a bare type constructor whose head is a record ADT (`definstance Dec
      * [Option]`, head `Option`) -- including a `defstruct` lowered to a record
@@ -1450,19 +1439,6 @@ bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
                         free_struct_app_type(fr);
                     }
                 }
-            } else if (rt.kind == TY_STRUCT && rt.as.struct_.def &&
-                       rt.as.struct_.def->n_type_params == 0 &&
-                       fidx < rt.as.struct_.def->n_fields) {
-                /* Monomorphized receiver, e.g. the specialized `Option__cstr`
-                 * struct def: the field already carries its concrete element type,
-                 * but only as the declared full_type (the summary `kind` is still
-                 * the int64 carrier).  Dispatch on full_type when it grounds. */
-                const StructField *f = &rt.as.struct_.def->fields[fidx];
-                if (f->full_type && f->full_type->kind != TY_TYVAR &&
-                    f->full_type->kind != TY_UNKNOWN) {
-                    disp_ty = *f->full_type;
-                    have_disp = true;
-                }
             } else {
                 /* constrained-instance-element-dispatch (lowered record ADT
                  * receiver): under defstruct-as-defadt the parametric container
@@ -1628,32 +1604,6 @@ static char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call) {
     }
 
     const char *component = emit_inst_suffix_component(resolved.kind);
-    /* WKC3: a named struct/ADT key resolves to TY_STRUCT; its instance is
-     * mangled by the (sanitized) type name, mirroring the EX_INSTANCE_DEF and
-     * dict-name switches.  Without this, an aggregate-keyed constrained-generic
-     * call falls back to the int carrier representative (the same failure float
-     * keys hit before TY_FLOAT was added to the suffix manglers). */
-    char struct_comp[256];
-    if (!component && resolved.kind == TY_STRUCT &&
-        resolved.as.struct_.def && resolved.as.struct_.def->name) {
-        tur_mangle_ident(resolved.as.struct_.def->name, struct_comp,
-                         sizeof(struct_comp));
-        component = struct_comp;
-    }
-    /* GDE2: a TY_APP receiver (e.g. Map[cstr int]) needs the head constructor
-     * name as the instance suffix component, mirroring the HKT-instance naming
-     * on the definition side (__inst_Eq_eq__Map for definstance Eq [Map]).
-     * Walk the app-chain to the constructor, which must be a TY_STRUCT. */
-    char app_comp[256];
-    if (!component && resolved.kind == TY_APP) {
-        Type head = resolved;
-        while (head.kind == TY_APP && head.as.app.fn)
-            head = *head.as.app.fn;
-        if (head.kind == TY_STRUCT && head.as.struct_.def && head.as.struct_.def->name) {
-            tur_mangle_ident(head.as.struct_.def->name, app_comp, sizeof(app_comp));
-            component = app_comp;
-        }
-    }
     if (!component) return NULL;
 
     const TypeClass *tc = dict->as.dict_.instance->typeclass;
@@ -2768,13 +2718,6 @@ void emit_dict_name(char *buf, size_t buflen, const TypeClassInstance *inst) {
             case TY_FLOAT:    component = "float";    break;
             case TY_FLOAT32:  component = "float32";  break;
             case TY_FLOAT64:  component = "float64";  break;
-            case TY_STRUCT:
-                if (inst->type_arg_syms && inst->type_arg_syms[i])
-                    component = inst->type_arg_syms[i]->name;
-                else if (inst->type_args[i].as.struct_.def &&
-                         inst->type_args[i].as.struct_.def->name)
-                    component = inst->type_args[i].as.struct_.def->name;
-                break;
             case TY_TYVAR:
                 /* structdef-retirement slice 5 B2 (P3): unresolved instance head
                  * (unknown name) is a named TY_TYVAR carrying its source symbol;
@@ -2806,9 +2749,6 @@ void emit_dict_name(char *buf, size_t buflen, const TypeClassInstance *inst) {
                     Type *fn = inst->type_args[i].as.app.fn;
                     if (fn->kind == TY_REC && fn->as.rec.name)
                         fn_part = fn->as.rec.name;
-                    else if (fn->kind == TY_STRUCT && fn->as.struct_.def &&
-                             fn->as.struct_.def->name)
-                        fn_part = fn->as.struct_.def->name;
                 }
                 if (inst->type_args[i].as.app.arg) {
                     const char *n = type_name(*inst->type_args[i].as.app.arg);
@@ -3447,9 +3387,6 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                      * through `intptr_t`. */
                     const char *fcname = emit_type_c_name(ctx, field_ty);
                     TypeKind fk = field_ty.kind;
-                    bool is_struct_ptr_slot =
-                        (fk == TY_STRUCT && field_ty.as.struct_.def &&
-                         field_ty.as.struct_.def->n_type_params == 0);
                     if (fk == TY_INT || fk == TY_INT64 || fk == TY_UINT64) {
                         buf_printf(&out, "%s->%s", src_tmp, fname);
                     } else if (fk == TY_FLOAT || fk == TY_FLOAT64 || fk == TY_FLOAT32) {
@@ -3475,7 +3412,7 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                          * the value, not a box pointer. */
                         buf_printf(&out, "(*(%s *)(intptr_t)(%s->%s))",
                                    fcname, src_tmp, fname);
-                    } else if (fk == TY_CSTR || fk == TY_PTR_VOID || is_struct_ptr_slot) {
+                    } else if (fk == TY_CSTR || fk == TY_PTR_VOID) {
                         buf_printf(&out, "(%s)(intptr_t)(%s->%s)",
                                    fcname, src_tmp, fname);
                     } else {

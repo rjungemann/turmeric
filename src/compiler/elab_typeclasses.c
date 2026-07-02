@@ -129,11 +129,6 @@ static Form *type_to_form(Elab *e, const Type *t, Span span) {
         return form_keyword(e->arena, span,
             intern_cstr(e->st, kw));
     }
-    if (t->kind == TY_STRUCT && t->as.struct_.def && t->as.struct_.def->name) {
-        /* Bare struct name: just an F_SYM. */
-        return form_sym(e->arena, span,
-            intern_cstr(e->st, t->as.struct_.def->name));
-    }
     /* CONV-S2: under defstruct-as-defadt a typed-collection element is a lowered
      * record ADT (`Vec`/`Map`/...), so its bare name and TY_APP head are TY_ADT,
      * not TY_STRUCT.  Mirror the struct cases so the comparator-synthesis
@@ -155,9 +150,7 @@ static Form *type_to_form(Elab *e, const Type *t, Span span) {
             head = head->as.app.fn;
         }
         const char *head_name =
-            (head && head->kind == TY_STRUCT && head->as.struct_.def)
-                ? head->as.struct_.def->name
-          : (head && head->kind == TY_ADT && head->as.adt_.def)
+            (head && head->kind == TY_ADT && head->as.adt_.def)
                 ? head->as.adt_.def->name
           : NULL;
         if (!head_name) {
@@ -197,7 +190,7 @@ static Form *type_to_form(Elab *e, const Type *t, Span span) {
  * the helper itself, not just the dispatcher.
  *
  * Returns NULL if the struct is not a recognised typed collection. */
-static const Symbol *helper_eq_symbol_for_struct(Elab *e, const StructDef *sd,
+static const Symbol *helper_eq_symbol_for_struct(Elab *e, const AdtDef *sd,
                                                   uint8_t *out_n_comparators) {
     if (!sd || !sd->name) return NULL;
     if (strcmp(sd->name, "Vec") == 0) {
@@ -279,38 +272,6 @@ static Form *build_comparator_lambda(Elab *e, const Type *elem_type, Span span) 
     lambda_items[1] = params_vec;
     lambda_items[2] = dot_eq_call;
     return form_list(e->arena, span, lambda_items, 3);
-}
-
-/* GHE5/#4 (non-int fields): produce a zero-valued Form for one struct field's
- * storage kind, used as a dummy argument to `make-struct` so that the
- * MapKey[K] typeclass dispatch sees a value of the right type.  mk-cmp
- * ignores the argument value entirely -- it only needs the type.
- *
- * For non-parameterised structs make-struct does not type-check simple
- * (non-full_type) field values, so the forms produced here satisfy dispatch
- * even when their elaborated type is the default-width variant (e.g.
- * form_float(0.0) elab → TY_FLOAT for a TY_FLOAT32 field).  We still emit
- * the semantically-closest form to remain forward-compatible if make-struct's
- * type checking is tightened in future.
- *
- * Returns NULL for field kinds we cannot synthesise a zero literal for
- * (e.g. TY_FN, TY_RC, TY_REF -- such fields make the struct unsuitable as a
- * map-key witness anyway). */
-static Form *zero_form_for_field(Elab *e, const StructField *f, Span span) {
-    switch (f->kind) {
-        case TY_BOOL:
-            return form_bool(e->arena, span, false);
-        case TY_CSTR:
-            return form_str(e->arena, span, "", 0);
-        case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
-            return form_float(e->arena, span, 0.0);
-        case TY_INT:
-        case TY_INT8:  case TY_INT16:  case TY_INT32:  case TY_INT64:
-        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
-            return form_int(e->arena, span, 0);
-        default:
-            return NULL;
-    }
 }
 
 /* GHE5/#4: build `(mk-cmp (:: 0 K))` -- the MapKey[K] carrier comparator for
@@ -410,7 +371,6 @@ static Expr *arrow_fat_shim(Elab *e, Expr *a) {
 static bool typeclass_type_arg_concrete(const Type *t) {
     if (!t) return false;
     switch (t->kind) {
-        case TY_STRUCT: return t->as.struct_.def != NULL;
         case TY_ADT:    return t->as.adt_.def != NULL;
         case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
         case TY_UINT64: case TY_BOOL: case TY_CSTR: case TY_FLOAT:
@@ -438,7 +398,9 @@ static Expr *try_synth_recursive_eq(Elab *e, TypeClassInstance *outer_inst,
     if (!outer_inst || outer_inst->n_type_args == 0) return NULL;
     if (obj->type.kind != TY_APP || !obj->type.as.app.arg) return NULL;
     /* Look up the helper for this typed-collection. */
-    const StructDef *sd = outer_inst->type_args[0].as.struct_.def;
+    const AdtDef *sd = (outer_inst->type_args[0].kind == TY_ADT)
+                           ? outer_inst->type_args[0].as.adt_.def
+                           : NULL;
 
     /* GHE5/#4: content-keyed structural equality for Map[K V].  For a Map the
      * outermost TY_APP arg is V and the inner is K (Map[K V] = app(app(Map,K),V)).
@@ -470,34 +432,6 @@ static Expr *try_synth_recursive_eq(Elab *e, TypeClassInstance *outer_inst,
         Form *kf = NULL;
         if (k_type->kind == TY_CSTR) {
             kf = build_mapkey_cmp_form(e, k_type, span);
-        } else if (k_type->kind == TY_STRUCT && k_type->as.struct_.def &&
-                   !k_type->as.struct_.def->is_opaque &&
-                   k_type->as.struct_.def->n_fields > 0) {
-            /* Build (mk-cmp (make-struct K z1 z2 ...)) for any struct whose
-             * fields all have synthesisable zero literals (int, bool, float,
-             * cstr, and their fixed-width variants).  Uses zero_form_for_field
-             * so non-:int field types (e.g. :float32, :cstr, :bool) are now
-             * handled too. */
-            const StructDef *kd = k_type->as.struct_.def;
-            uint32_t n_ms = (uint32_t)kd->n_fields + 2; /* make-struct Name f... */
-            Form **ms_items = (Form **)arena_alloc(e->arena, n_ms * sizeof(Form *));
-            ms_items[0] = form_sym(e->arena, span,
-                                   intern_cstr(e->st, "make-struct"));
-            ms_items[1] = form_sym(e->arena, span,
-                                   intern_cstr(e->st, kd->name));
-            bool ok = true;
-            for (uint8_t fi = 0; fi < kd->n_fields; fi++) {
-                Form *zf = zero_form_for_field(e, &kd->fields[fi], span);
-                if (!zf) { ok = false; break; }
-                ms_items[2 + fi] = zf;
-            }
-            if (ok) {
-                Form *ms = form_list(e->arena, span, ms_items, n_ms);
-                Form **mk_items = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
-                mk_items[0] = form_sym(e->arena, span, intern_cstr(e->st, "mk-cmp"));
-                mk_items[1] = ms;
-                kf = form_list(e->arena, span, mk_items, 2);
-            }
         }
         if (kf) {
             Form *vf = build_comparator_lambda(e, v_type, span);
@@ -1698,23 +1632,6 @@ static bool build_inst_type_suffix(const Type *type_args,
             case TY_FLOAT64: type_component = "float64"; break;
             case TY_SYM:     type_component = "Sym";     break;
             case TY_FN:      type_component = "arrow";   break;
-            case TY_STRUCT:
-                /* Phase HKT H3: use the original symbol name when available,
-                 * falling back to "T" for unnamed struct type args. */
-                if (type_arg_syms && type_arg_syms[j]) {
-                    uint32_t sym_len = type_arg_syms[j]->len;
-                    if (sym_len >= sizeof(ctor_name_buf))
-                        sym_len = (uint32_t)(sizeof(ctor_name_buf) - 1);
-                    memcpy(ctor_name_buf, type_arg_syms[j]->name, sym_len);
-                    ctor_name_buf[sym_len] = '\0';
-                    tur_mangle_ident(ctor_name_buf, ctor_mangle_buf, sizeof(ctor_mangle_buf));
-                    type_component = ctor_mangle_buf;
-                } else if (type_args[j].as.struct_.def) {
-                    type_component = type_args[j].as.struct_.def->name;
-                } else {
-                    type_component = "T";
-                }
-                break;
             case TY_TYVAR:
                 /* structdef-retirement slice 5 B2 (P3): an unresolved instance
                  * head (an unknown name like `option`/`vec`) is now a named
@@ -2129,9 +2046,6 @@ static bool parse_instance_head_arg(Elab *e, const Form *f, Type *out) {
         *out = type_simple(ank, CK_COPY); return true;
     }
     Binding *asb = scope_lookup(e->scope, akw);
-    if (asb && asb->type.kind == TY_STRUCT && asb->type.as.struct_.def) {
-        *out = asb->type; return true;
-    }
     if (asb && asb->type.kind == TY_ADT && asb->type.as.adt_.def) {
         *out = asb->type; return true;
     }
@@ -2364,29 +2278,16 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                  * the single-arg keyword head path above (struct
                                  * from scope_lookup still wins first, preserving the
                                  * MF4 struct/GADT coexistence preference). */
-                                Type *head_ty2 = NULL;
-                                if (!(ctor_b2 && ctor_b2->type.kind == TY_STRUCT &&
-                                      ctor_b2->type.as.struct_.def))
-                                    head_ty2 = elab_lookup_type_by_name(e, ctor_sym2);
-                                if (ctor_b2 && (ctor_b2->type.kind == TY_ADT ||
-                                                (ctor_b2->type.kind == TY_STRUCT &&
-                                                 ctor_b2->type.as.struct_.def))) {
+                                Type *head_ty2 = elab_lookup_type_by_name(e, ctor_sym2);
+                                if (ctor_b2 && ctor_b2->type.kind == TY_ADT) {
                                     *fn_type = ctor_b2->type;
-                                    uint32_t ca = (ctor_b2->type.kind == TY_ADT)
-                                        ? ctor_b2->type.as.adt_.def->n_type_params
-                                        : ctor_b2->type.as.struct_.def->n_type_params;
+                                    uint32_t ca = ctor_b2->type.as.adt_.def->n_type_params;
                                     fn_type->hkt_kind = (ca > 0)
                                         ? kind_for_arity(ca) : KIND_ARROW2;
                                 } else if (head_ty2 && head_ty2->kind == TY_ADT &&
                                            head_ty2->as.adt_.def) {
                                     *fn_type = *head_ty2;
                                     uint32_t ca = head_ty2->as.adt_.def->n_type_params;
-                                    fn_type->hkt_kind = (ca > 0)
-                                        ? kind_for_arity(ca) : KIND_ARROW2;
-                                } else if (head_ty2 && head_ty2->kind == TY_STRUCT &&
-                                           head_ty2->as.struct_.def) {
-                                    *fn_type = *head_ty2;
-                                    uint32_t ca = head_ty2->as.struct_.def->n_type_params;
                                     fn_type->hkt_kind = (ca > 0)
                                         ? kind_for_arity(ca) : KIND_ARROW2;
                                 } else {
@@ -2472,9 +2373,6 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                 Binding *asb = scope_lookup(e->scope, akw);
                                 if (ank != TY_UNKNOWN) {
                                     app_arg_type = type_simple(ank, CK_COPY);
-                                } else if (asb && asb->type.kind == TY_STRUCT &&
-                                           asb->type.as.struct_.def) {
-                                    app_arg_type = asb->type;
                                 } else if (asb && asb->type.kind == TY_ADT &&
                                            asb->type.as.adt_.def) {
                                     app_arg_type = asb->type;
@@ -2529,17 +2427,11 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                          * struct-preference). */
                         Type head_ct;
                         bool have_head_ct = false;
-                        if (ctor_b && ctor_b->type.kind == TY_STRUCT &&
-                            ctor_b->type.as.struct_.def) {
-                            head_ct = ctor_b->type; have_head_ct = true;
-                        } else {
+                        {
                             Type *ht = elab_lookup_type_by_name(e, ctor_sym);
-                            if (ht && ((ht->kind == TY_ADT && ht->as.adt_.def) ||
-                                       (ht->kind == TY_STRUCT && ht->as.struct_.def))) {
+                            if (ht && ht->kind == TY_ADT && ht->as.adt_.def) {
                                 head_ct = *ht; have_head_ct = true;
-                            } else if (ctor_b && (ctor_b->type.kind == TY_ADT ||
-                                       (ctor_b->type.kind == TY_STRUCT &&
-                                        ctor_b->type.as.struct_.def))) {
+                            } else if (ctor_b && ctor_b->type.kind == TY_ADT) {
                                 head_ct = ctor_b->type; have_head_ct = true;
                             }
                         }
@@ -2552,9 +2444,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                          * assumption only for an opaque (def == NULL) constructor. */
                         if (have_head_ct) {
                             *fn_type = head_ct;
-                            uint32_t ctor_arity = (head_ct.kind == TY_ADT)
-                                ? head_ct.as.adt_.def->n_type_params
-                                : head_ct.as.struct_.def->n_type_params;
+                            uint32_t ctor_arity = head_ct.as.adt_.def->n_type_params;
                             fn_type->hkt_kind = (ctor_arity > 0)
                                 ? kind_for_arity(ctor_arity)
                                 : KIND_ARROW2;
@@ -2601,8 +2491,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                          * arg) and next is a type.  Accepts the legacy anonymous
                          * TY_STRUCT{def=NULL} shape and the named TY_TYVAR
                          * introduced by Direction A step 2a. */
-                        if ((type_args[i].kind == TY_STRUCT && type_args[i].as.struct_.def == NULL)
-                            || type_args[i].kind == TY_TYVAR) {
+                        if (type_args[i].kind == TY_TYVAR) {
                             Type *next_type = &type_args[i + 1];
                             /* Next can be any concrete type (primitive, TY_STRUCT, or TY_APP) */
                             if (next_type->kind != TY_UNKNOWN) {
@@ -2757,22 +2646,6 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                         constrained_type = TYPE_CSTR; found = true;
                                     }
                                 }
-                                /* PTC4: unresolved symbol may be a struct type param */
-                                if (!found) {
-                                    for (uint8_t j = 0; j < n_type_args && p_idx < 0; j++) {
-                                        if (type_args[j].kind == TY_STRUCT &&
-                                            type_args[j].as.struct_.def) {
-                                            StructDef *sdef = type_args[j].as.struct_.def;
-                                            for (uint8_t k = 0; k < sdef->n_type_params; k++) {
-                                                if (strcmp(sdef->type_params[k],
-                                                           type_param_name->name) == 0) {
-                                                    p_idx = (int8_t)k;
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
                                 /* CONV-S2: under defstruct-as-defadt the instance
                                  * head is a lowered record ADT (`[Cons]`/`[Vec]`),
                                  * so the constraint var (`A` in `[(Tag A)]`) is one
@@ -2866,22 +2739,6 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                     } else if (type_arg_form->as.sym->len == 4 &&
                                                memcmp(type_arg_form->as.sym->name, "cstr", 4) == 0) {
                                         constrained_type = TYPE_CSTR; found = true;
-                                    }
-                                }
-                                /* PTC4: unresolved symbol may be a struct type param */
-                                if (!found) {
-                                    for (uint8_t j = 0; j < n_type_args && p_idx < 0; j++) {
-                                        if (type_args[j].kind == TY_STRUCT &&
-                                            type_args[j].as.struct_.def) {
-                                            StructDef *sdef = type_args[j].as.struct_.def;
-                                            for (uint8_t k = 0; k < sdef->n_type_params; k++) {
-                                                if (strcmp(sdef->type_params[k],
-                                                           type_param_name->name) == 0) {
-                                                    p_idx = (int8_t)k;
-                                                    break;
-                                                }
-                                            }
-                                        }
                                     }
                                 }
                                 /* CONV-S2: lowered record ADT instance head -- see
@@ -3421,37 +3278,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                      * struct param (grounded at the call site).  A naive head
                      * subst would give `((Result B) b)` -- wrong slot order, and
                      * the opaque fixed arm collapses the result to the carrier. */
-                    if (inst->partial_hole_pos != 0xFF &&
-                        type_args[ti].kind == TY_APP &&
-                        type_args[ti].as.app.fn &&
-                        type_args[ti].as.app.fn->kind == TY_STRUCT &&
-                        type_args[ti].as.app.fn->as.struct_.def) {
-                        Type elem = *return_type.as.app.arg;  /* `b` */
-                        Type rhead = *type_args[ti].as.app.fn;
-                        const StructDef *sd = rhead.as.struct_.def;
-                        uint8_t hole = inst->partial_hole_pos;
-                        Type cur = rhead;
-                        for (uint8_t s = 0; s < sd->n_type_params; s++) {
-                            Type slot;
-                            if (s == hole) {
-                                slot = elem;
-                            } else {
-                                memset(&slot, 0, sizeof(slot));
-                                slot.kind = TY_TYVAR;
-                                slot.copy_kind = CK_COPY;
-                                slot.as.tyvar_.name = sd->type_params[s];
-                            }
-                            Type *fnp = (Type *)arena_alloc(e->arena, sizeof(Type));
-                            Type *argp = (Type *)arena_alloc(e->arena, sizeof(Type));
-                            *fnp = cur; *argp = slot;
-                            memset(&cur, 0, sizeof(cur));
-                            cur.kind = TY_APP; cur.copy_kind = CK_MOVE;
-                            cur.as.app.fn = fnp; cur.as.app.arg = argp;
-                            cur.hkt_kind = (s + 1 < sd->n_type_params)
-                                           ? KIND_ARROW : KIND_STAR;
-                        }
-                        return_type = cur;
-                    } else {
+                    {
                         Type *new_fn = (Type *)arena_alloc(e->arena, sizeof(Type));
                         *new_fn = type_args[ti];
                         return_type.as.app.fn = new_fn;
@@ -3663,59 +3490,6 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                     tc->assoc_type_names, tc->n_assoc_types,
                                     inst->assoc_types, inst->n_assoc_types);
                             }
-                            /* M7 partial-app wildcard head (`(Result _ B)`): the
-                             * naive class-var subst `f -> (Result B)` turns the
-                             * receiver `(f a)` into `((Result B) a)` -- the fixed
-                             * arm B lands in slot 0 and the element a in slot 1,
-                             * the WRONG order (and the doubly-applied head can't be
-                             * c-named, so it lowers to the int64 carrier and no
-                             * by-value spec is minted).  Rebuild the full ctor
-                             * application placing the element in the HOLE slot and
-                             * the fixed type in the other slot, so the param's full
-                             * type grounds to the by-value `Result__int__int`. */
-                            if (inst->partial_hole_pos != 0xFF && n_type_args > 0 &&
-                                type_args[0].kind == TY_APP && type_args[0].as.app.fn &&
-                                type_args[0].as.app.arg) {
-                                Type cls_param =
-                                    tc->methods[i].param_types[n_method_params];
-                                Type head = *type_args[0].as.app.fn;
-                                if (cls_param.kind == TY_APP && cls_param.as.app.arg &&
-                                    head.kind == TY_STRUCT && head.as.struct_.def) {
-                                    Type elem  = *cls_param.as.app.arg; /* `a` */
-                                    const StructDef *sd = head.as.struct_.def;
-                                    uint8_t hole = inst->partial_hole_pos;
-                                    Type cur = head;  /* KIND_ARROW2 head */
-                                    for (uint8_t s = 0; s < sd->n_type_params; s++) {
-                                        Type slot;
-                                        if (s == hole) {
-                                            slot = elem;   /* the mapped element `a` */
-                                        } else {
-                                            /* Fixed slot: a tyvar named after the
-                                             * struct's own param so the call-site
-                                             * struct-param grounding (`B -> int`)
-                                             * resolves it.  The instance head's arm
-                                             * is parsed as an opaque NULL-def struct,
-                                             * which cannot be grounded by name. */
-                                            memset(&slot, 0, sizeof(slot));
-                                            slot.kind = TY_TYVAR;
-                                            slot.copy_kind = CK_COPY;
-                                            slot.as.tyvar_.name = sd->type_params[s];
-                                        }
-                                        Type *fnp = (Type *)arena_alloc(e->arena, sizeof(Type));
-                                        Type *argp = (Type *)arena_alloc(e->arena, sizeof(Type));
-                                        *fnp = cur;
-                                        *argp = slot;
-                                        memset(&cur, 0, sizeof(cur));
-                                        cur.kind = TY_APP;
-                                        cur.copy_kind = CK_MOVE;
-                                        cur.as.app.fn = fnp;
-                                        cur.as.app.arg = argp;
-                                        cur.hkt_kind = (s + 1 < sd->n_type_params)
-                                                       ? KIND_ARROW : KIND_STAR;
-                                    }
-                                    param_type = cur;
-                                }
-                            }
                         }
                     }
 
@@ -3747,10 +3521,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                          * method body sees; lower the ABI/signature type to the
                          * int64 carrier for applied/parametric types, matching the
                          * dispatch ABI used for concrete instances elsewhere. */
-                        if (elab_param_type.kind == TY_APP ||
-                            (elab_param_type.kind == TY_STRUCT &&
-                             elab_param_type.as.struct_.def &&
-                             elab_param_type.as.struct_.def->n_type_params > 0)) {
+                        if (elab_param_type.kind == TY_APP) {
                             param_type = TYPE_INT;
                         } else {
                             param_type = elab_param_type;
@@ -3793,10 +3564,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                          * otherwise a concrete by-value struct receiver (e.g. an ascribed
                          * `(Result int int)`) is marshalled by-address into the int64_t
                          * impl signature and emits invalid C. */
-                        if (elab_param_type.kind == TY_STRUCT && elab_param_type.as.struct_.def &&
-                            elab_param_type.as.struct_.def->n_type_params > 0) {
-                            param_type = TYPE_INT;
-                        } else if (elab_param_type.kind == TY_APP) {
+                        if (elab_param_type.kind == TY_APP) {
                             param_type = TYPE_INT;
                         } else {
                             param_type = elab_param_type;
@@ -3956,10 +3724,8 @@ Expr *elab_definstance(Elab *e, const Form *call) {
          * applied/opaque heads (TY_APP, e.g. the receiver `(Dense Pos)`) keep
          * the documented int64 carrier ABI -- they are erased everywhere else,
          * and forcing them by-value here would diverge from the dispatch ABI. */
-        else if ((return_type.kind == TY_STRUCT && return_type.as.struct_.def &&
-                  return_type.as.struct_.def->n_type_params == 0) ||
-                 (return_type.kind == TY_ADT && return_type.as.adt_.def &&
-                  return_type.as.adt_.def->n_type_params == 0)) {
+        else if (return_type.kind == TY_ADT && return_type.as.adt_.def &&
+                 return_type.as.adt_.def->n_type_params == 0) {
             Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
             *rft = return_type;
             fn_type.as.fn.result_full_type = rft;
@@ -4042,7 +3808,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         passes[i].n_method_params = n_method_params;
         passes[i].method_fd       = method_fd;
         passes[i].arrow_return    = arrow_return;
-        passes[i].ret_struct = (return_type.kind == TY_STRUCT) ? return_type.as.struct_.def : NULL;
+        passes[i].ret_struct = NULL;
         passes[i].ret_adt    = (return_type.kind == TY_ADT)    ? return_type.as.adt_.def    : NULL;
         passes[i].ret_kind   = return_type.kind;
         passes[i].ret_full   = return_type;  /* Phase 0: retain the whole type */
@@ -4069,32 +3835,6 @@ Expr *elab_definstance(Elab *e, const Form *call) {
             }
         }
         if (!dup) e->sig_tyvars[e->n_sig_tyvars++] = nm;
-    }
-
-    /* M5 (multi-param struct instance): also bring the instance head's full
-     * type-ctor param list (e.g. K and V of `MutableMap [K V]`) into sig-tyvar
-     * scope, not only the constraint-named ones.  Without this, an
-     * *unconstrained* param (`K`, with no `(Eq K)`) used in a method-body
-     * ascription `(MutableMap K V)` falls back to an opaque TY_STRUCT instead
-     * of an abstract tyvar, so the call's abi_bindings record it as a concrete
-     * struct and a by-value helper called from the instance body never gets a
-     * by-value spec interned.  See
-     * docs/reported/m5-multiparam-instance-unconstrained-tyvar-blocks-byval-spec.md. */
-    for (uint8_t ta = 0; ta < n_type_args; ta++) {
-        if (type_args[ta].kind != TY_STRUCT || !type_args[ta].as.struct_.def)
-            continue;
-        StructDef *hsd = type_args[ta].as.struct_.def;
-        for (uint8_t k = 0; k < hsd->n_type_params && e->n_sig_tyvars < 32; k++) {
-            const char *nm = hsd->type_params[k];
-            if (!nm) continue;
-            bool dup = false;
-            for (uint8_t s = 0; s < e->n_sig_tyvars; s++) {
-                if (e->sig_tyvars[s] && strcmp(e->sig_tyvars[s], nm) == 0) {
-                    dup = true; break;
-                }
-            }
-            if (!dup) e->sig_tyvars[e->n_sig_tyvars++] = nm;
-        }
     }
 
     /* Pass 2: every sibling's FnDef shell and `method_impls` slot is now
@@ -4311,14 +4051,8 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         const char *cur_basename =
             tc_path_basename(diag_file_path(call->span.file_id));
         for (uint8_t i = 0; i < n_type_args && !owns_a_type_arg; i++) {
-            if (type_args[i].kind == TY_STRUCT && type_args[i].as.struct_.def) {
-                if (type_args[i].as.struct_.def->origin_file_id == call->span.file_id) {
-                    owns_a_type_arg = true;
-                }
-                continue;
-            }
             /* An ADT (defdata/defgadt) type-arg, like Functor [Either], is owned
-             * by the module that declares it -- mirror the TY_STRUCT path. */
+             * by the module that declares it. */
             if (type_args[i].kind == TY_ADT && type_args[i].as.adt_.def) {
                 if (type_args[i].as.adt_.def->origin_file_id == call->span.file_id) {
                     owns_a_type_arg = true;
@@ -4332,9 +4066,6 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                 const Type *fn = type_args[i].as.app.fn;
                 if (fn->kind == TY_ADT && fn->as.adt_.def &&
                     fn->as.adt_.def->origin_file_id == call->span.file_id) {
-                    owns_a_type_arg = true;
-                } else if (fn->kind == TY_STRUCT && fn->as.struct_.def &&
-                           fn->as.struct_.def->origin_file_id == call->span.file_id) {
                     owns_a_type_arg = true;
                 }
                 continue;
@@ -4414,13 +4145,6 @@ static Expr *make_dict_expr(Elab *e, TypeClassInstance *inst, Span span) {
             case TY_NIL:      component = "nil";      break;
             case TY_PTR_VOID: component = "ptr_void"; break;
             case TY_SYM:      component = "Sym";      break;
-            case TY_STRUCT:
-                if (inst->type_arg_syms && inst->type_arg_syms[i])
-                    component = inst->type_arg_syms[i]->name;
-                else if (inst->type_args[i].as.struct_.def &&
-                         inst->type_args[i].as.struct_.def->name)
-                    component = inst->type_args[i].as.struct_.def->name;
-                break;
             case TY_ADT:
                 /* CONV-S1 (defstruct-as-defadt): match emit_dict_name's TY_ADT arm
                  * so the DICT expr's dict_name agrees with the emitted struct. */
@@ -4636,8 +4360,7 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
          * instance (the original bug, back when `deserialize` returned `:int`
          * and the class var was absent from the signature) or hard-errored. */
         bool bound_is_abstract_tyvar =
-            bound.kind == TY_TYVAR ||
-            (bound.kind == TY_STRUCT && bound.as.struct_.def == NULL);
+            bound.kind == TY_TYVAR;
         if (bound_is_abstract_tyvar) {
             for (TypeClassInstance *it = env->instances; it; it = it->next) {
                 if (it->typeclass != tc) continue;
@@ -5096,9 +4819,7 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                         if (wtc->type_param_kinds[i] != KIND_STAR) { w_is_hkt = true; break; }
                 }
                 bool recv_parametric =
-                    obj_w->type.kind == TY_APP ||
-                    (obj_w->type.kind == TY_STRUCT && obj_w->type.as.struct_.def &&
-                     obj_w->type.as.struct_.def->n_type_params > 0);
+                    obj_w->type.kind == TY_APP;
                 if (!w_is_hkt && wtc->n_type_params == 1 && wtc->type_params[0] &&
                     recv_parametric) {
                     const Symbol *hb_names[ABI_TYPE_BINDINGS_MAX];
@@ -5184,8 +4905,6 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                 Type result_type = tc->methods[mi].return_type;
                 if (result_type.kind == TY_UNKNOWN ||
                     result_type.kind == TY_NIL ||
-                    (result_type.kind == TY_STRUCT &&
-                     result_type.as.struct_.def == NULL) ||
                     result_type.kind == TY_TYVAR) {
                     result_type = TYPE_INT;
                 }
@@ -5216,88 +4935,15 @@ Expr *elab_method_call(Elab *e, const Form *call) {
             base = type_from_kind(base.as.ref_borrow.target);
             field_owner_type = &base;
         }
-        /* DS3-2b: auto-deref rc<Struct> receivers so (.field rc-of-s)
-         * resolves through the struct def carried on the rc type. */
-        StructDef *rc_struct_def = NULL;
-        if (base.kind == TY_RC && base.as.rc.struct_def) {
-            rc_struct_def = base.as.rc.struct_def;
-            base.kind = TY_STRUCT;
-            base.as.struct_.def = rc_struct_def;
-            field_owner_type = &base;
-        }
-        /* CONV-S1 (slice 2): the same auto-deref for an rc<ADT> receiver, so
+        /* CONV-S1 (slice 2): auto-deref for an rc<ADT> receiver, so
          * `(.field rc-of-adt)` resolves through the record variant carried on
          * the rc type.  obj keeps its rc<ADT> type; codegen derefs the control
          * block's value pointer to reach the aggregate. */
-        else if (base.kind == TY_RC && base.as.rc.adt_def) {
+        if (base.kind == TY_RC && base.as.rc.adt_def) {
             struct AdtDef *rc_adt = base.as.rc.adt_def;  /* read before union rewrite */
             base.kind = TY_ADT;
             base.as.adt_.def = rc_adt;
             field_owner_type = &base;
-        }
-        StructDef *app_struct_def = NULL;
-        if (base.kind == TY_APP) {
-            Type app_args[8];
-            for (uint32_t si = 0; si < e->n_struct_defs; si++) {
-                StructDef *candidate = e->struct_defs[si];
-                if (candidate->n_type_params == 0 || candidate->n_type_params > 8) continue;
-                if (elab_struct_type_extract_args(&base, candidate, app_args)) {
-                    app_struct_def = candidate;
-                    base = type_struct(candidate);
-                    field_owner_type = &obj->type;
-                    break;
-                }
-            }
-        }
-        if (base.kind == TY_STRUCT) {
-            /* Object is a struct — try field lookup */
-            StructDef *def = app_struct_def ? app_struct_def : base.as.struct_.def;
-            /* Gap H item 2: when a typeclass method is declared with a typed
-             * parameter `[w : W]`, the elaborator can produce a TY_STRUCT
-             * with a NULL def for the receiver inside the method body if
-             * the class type variable W never got concretely bound (or
-             * binding propagation hit a soft spot). Pre-fix this segfaulted
-             * dereferencing `def->n_fields`; now we skip the field-access
-             * fast path and fall through to the regular typeclass-dispatch
-             * lookup below, which emits a clean diagnostic if no instance
-             * matches. Filed under
-             * docs/reported/typeclass-constrained-defn-rejected.md. */
-            if (!def) {
-                /* Treat as "not a struct after all" -- bail to dispatch path. */
-                goto skip_struct_field_lookup;
-            }
-            for (uint32_t i = 0; i < def->n_fields; i++) {
-                /* A field name can be NULL when `def` is an incompletely
-                 * elaborated struct -- e.g. one whose owning module hit an
-                 * earlier error (a failed associated-type / instance binding)
-                 * and we are now in error-recovery, continuing to elaborate
-                 * later forms.  Pre-guard the strcmp so a partially-populated
-                 * field table degrades to the regular dispatch path (which
-                 * emits a clean diagnostic) instead of SEGV-ing on
-                 * strcmp(NULL, ...).  Mirrors the `!def` bail above. */
-                if (!def->fields[i].name) continue;
-                if (strcmp(def->fields[i].name, method_name) == 0) {
-                    /* Found matching field — build EX_GET_FIELD */
-                    Type field_type = elab_struct_field_use_type(e, field_owner_type, def, &def->fields[i]);
-                    Expr *out = expr_new(e->arena, EX_GET_FIELD, field_type, call->span);
-                    out->as.get_field_.struct_expr = obj;
-                    out->as.get_field_.field_idx = i;
-                    out->as.get_field_.def = def;
-                    /* LT1/T3: Extracting an lref<T> field from a :move struct transfers
-                     * linear ownership of that field out of the struct.  Mark the struct
-                     * binding as moved so a second extraction of the same field triggers
-                     * TUR_E0005 (use-after-move).  :linear struct receivers are already
-                     * handled by the F_SYM is_linear_consumed path above. */
-                    if (def->fields[i].kind == TY_LREF &&
-                            obj->kind == EX_VAR && type_is_move(obj->as.var.binding->type)) {
-                        binding_mark_moved(obj->as.var.binding, call->span);
-                    }
-                    return out;
-                }
-            }
-            /* Struct but no matching field — fall through to typeclass method lookup */
-            /* In Phase PTC4, this allows (.method obj) to dispatch to typeclass
-             * methods even when obj is a struct that doesn't have that field. */
         }
         /* CONV-S0/S4: field access on a single-variant record ADT.  A
          * single-variant, non-GADT ADT whose sole constructor is record-style
@@ -5377,7 +5023,6 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                                                  call->span);
                             out->as.get_field_.struct_expr = obj;
                             out->as.get_field_.field_idx = i;
-                            out->as.get_field_.def = NULL;
                             out->as.get_field_.adt_def = adt;
                             out->as.get_field_.adt_ctor = ctor;
                             return out;
@@ -5386,7 +5031,6 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                 }
             }
         }
-skip_struct_field_lookup:;
     }
 
     /* Phase 16 v2: capability field call — (.field-name cap arg1 arg2 ...)
@@ -5399,80 +5043,6 @@ skip_struct_field_lookup:;
         Type base = obj->type;
         if (base.kind == TY_REF_IMMUT || base.kind == TY_REF_MUT) {
             base = type_from_kind(base.as.ref_borrow.target);
-        }
-        if (base.kind == TY_APP) {
-            Type app_args[8];
-            for (uint32_t si = 0; si < e->n_struct_defs; si++) {
-                StructDef *candidate = e->struct_defs[si];
-                if (candidate->n_type_params == 0 || candidate->n_type_params > 8) continue;
-                if (elab_struct_type_extract_args(&base, candidate, app_args)) {
-                    base = type_struct(candidate);
-                    break;
-                }
-            }
-        }
-        if (base.kind == TY_STRUCT) {
-            StructDef *def = base.as.struct_.def;
-            /* Gap H item 2 (mirrored from the earlier struct-field-lookup
-             * branch at L3320-3336): the class-var receiver can be left as
-             * a TY_STRUCT with NULL def when the class type variable was
-             * never concretely bound -- e.g. inside a constrained-poly
-             * defn `[(Eq A)] [x : A]` whose receiver's resolved type stays
-             * an unbound stand-in.  Dereferencing `def->n_fields` here
-             * segfaulted (the original report's "elab_typeclasses.c:3388
-             * SEGV").  Bail out to the regular typeclass-dispatch lookup
-             * below, which emits a clean diagnostic if no instance matches.
-             *
-             * Filed under docs/reported/m5-eq-vec-rewrite-fn-arg-loses-
-             * annotation.md (gap 2). */
-            if (!def) goto skip_capability_field_lookup;
-            for (uint32_t i = 0; i < def->n_fields; i++) {
-                if (strcmp(def->fields[i].name, method_name) == 0 &&
-                    def->fields[i].kind == TY_FN) {
-                    /* Build EX_GET_FIELD for the function pointer */
-                    Type field_type = elab_struct_field_use_type(e, &obj->type, def, &def->fields[i]);
-                    Expr *get_field = expr_new(e->arena, EX_GET_FIELD, field_type, call->span);
-                    get_field->as.get_field_.struct_expr = obj;
-                    get_field->as.get_field_.field_idx = i;
-                    get_field->as.get_field_.def = def;
-
-                    /* Elaborate arguments */
-                    uint32_t n_args = call->as.list.len - 2;
-                    Expr **args = (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *));
-                    for (uint32_t j = 0; j < n_args; j++) {
-                        args[j] = elab_form(e, call->as.list.items[2 + j]);
-                        if (!args[j]) return NULL;
-                    }
-
-                    /* Build indirect EX_CALL through fn_expr.  Type the call by
-                     * the field's declared return type so the result is not
-                     * collapsed to :int (which mis-dispatched downstream calls
-                     * like (println (.get b p)) through the int instance and
-                     * printed the cstr pointer as a raw integer).  See
-                     * docs/reported/dot-method-call-misroutes-to-typeclass.md
-                     * (issue #3). */
-                    Type result_type = TYPE_INT;
-                    if (field_type.kind == TY_FN) {
-                        Type rt = field_type.as.fn.result_full_type
-                                      ? *field_type.as.fn.result_full_type
-                                      : type_from_kind(field_type.as.fn.result_kind);
-                        /* Only adopt a concrete result type.  A bare `fn` field
-                         * (no declared signature) leaves the result kind void/
-                         * unknown; typing the call by it would emit a `void`
-                         * temp.  Keep the int64 carrier in that case -- the
-                         * prior behaviour -- and only refine when the field
-                         * declares a real return type (e.g. (fn [S] cstr)). */
-                        if (rt.kind != TY_UNKNOWN && rt.kind != TY_NIL)
-                            result_type = rt;
-                    }
-                    Expr *call_out = expr_new(e->arena, EX_CALL, result_type, call->span);
-                    call_out->as.call_.fn_binding = NULL;
-                    call_out->as.call_.fn_expr = get_field;
-                    call_out->as.call_.args = args;
-                    call_out->as.call_.n_args = n_args;
-                    return call_out;
-                }
-            }
         }
         /* CONV-S1 (slice 6): the same capability-field call through an `fn` field
          * of a single-variant record ADT -- a record ADT *is* a product, so
@@ -5515,7 +5085,6 @@ skip_struct_field_lookup:;
                                                    field_type, call->span);
                         get_field->as.get_field_.struct_expr = obj;
                         get_field->as.get_field_.field_idx = i;
-                        get_field->as.get_field_.def = NULL;
                         get_field->as.get_field_.adt_def = adt;
                         get_field->as.get_field_.adt_ctor = ctor;
 
@@ -5545,56 +5114,12 @@ skip_struct_field_lookup:;
                 }
             }
         }
-skip_capability_field_lookup:;
     }
 
-    /* Phase 16 v2 fallback: when receiver has TY_UNKNOWN or TY_INT type
-     * (untyped parameters default to TY_INT), search all registered struct defs
-     * for a :fn field matching the method name.
-     * This allows (.method-name cap args...) when cap has no explicit type annotation,
-     * as long as exactly one struct in scope has a TY_FN field with that name. */
-    if (call->as.list.len > 2 &&
-        (obj->type.kind == TY_UNKNOWN || obj->type.kind == TY_INT)) {
-        StructDef *matched_def = NULL;
-        uint32_t matched_idx = 0;
-        bool ambiguous = false;
-        for (uint32_t sd = 0; sd < e->n_struct_defs; sd++) {
-            StructDef *sdef = e->struct_defs[sd];
-            for (uint32_t i = 0; i < sdef->n_fields; i++) {
-                if (sdef->fields[i].kind == TY_FN &&
-                    strlen(sdef->fields[i].name) == method_name_len &&
-                    memcmp(sdef->fields[i].name, method_name, method_name_len) == 0) {
-                    if (matched_def != NULL && matched_def != sdef) {
-                        ambiguous = true;
-                    } else {
-                        matched_def = sdef;
-                        matched_idx = i;
-                    }
-                }
-            }
-        }
-        if (matched_def && !ambiguous) {
-            Type field_type = type_from_kind(TY_FN);
-            Expr *get_field = expr_new(e->arena, EX_GET_FIELD, field_type, call->span);
-            get_field->as.get_field_.struct_expr = obj;
-            get_field->as.get_field_.field_idx = matched_idx;
-            get_field->as.get_field_.def = matched_def;
-
-            uint32_t n_args = call->as.list.len - 2;
-            Expr **args = (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *));
-            for (uint32_t j = 0; j < n_args; j++) {
-                args[j] = elab_form(e, call->as.list.items[2 + j]);
-                if (!args[j]) return NULL;
-            }
-
-            Expr *call_out = expr_new(e->arena, EX_CALL, TYPE_INT, call->span);
-            call_out->as.call_.fn_binding = NULL;
-            call_out->as.call_.fn_expr = get_field;
-            call_out->as.call_.args = args;
-            call_out->as.call_.n_args = n_args;
-            return call_out;
-        }
-    }
+    /* structdef-retirement DS-D: the "search all registered struct defs for a
+     * matching :fn field" fallback (for an untyped `(.method cap ...)` receiver)
+     * is removed with the StructDef registry -- every former struct is a record
+     * ADT and its capability fields dispatch through the ADT field paths above. */
 
     /* IT4: Typeclass intersection dispatch on union types.
      * When obj : (A | B), and every member type has an instance for .method,
@@ -5754,7 +5279,6 @@ skip_capability_field_lookup:;
      * silent miscompile that SIGSEGV'd at runtime. */
     bool obj_is_abstract_tyvar =
         obj->type.kind == TY_TYVAR ||
-        (obj->type.kind == TY_STRUCT && obj->type.as.struct_.def == NULL) ||
         obj_is_unascribed_carrier_elem(obj);
     if (obj_is_abstract_tyvar) {
         TypeClassInstance *carrier_inst = NULL;
@@ -5892,15 +5416,6 @@ skip_capability_field_lookup:;
                     if (type_ok && (itk == TY_FN || obj->type.kind == TY_FN)) {
                         type_ok = (itk == TY_FN && obj->type.kind == TY_FN);
                     }
-                    if (type_ok && obj->type.kind == TY_APP && itk == TY_STRUCT) {
-                        const Type *head = &obj->type;
-                        while (head && head->kind == TY_APP) head = head->as.app.fn;
-                        if (head && head->kind == TY_STRUCT &&
-                            inst->type_args[0].as.struct_.def != NULL &&
-                            inst->type_args[0].as.struct_.def != head->as.struct_.def) {
-                            type_ok = false;
-                        }
-                    }
                     /* ECS E2d-P6 (Issue 3): when BOTH the receiver and the
                      * instance head are fully-applied type constructors -- e.g. a
                      * receiver `(Dense Pos)` against instances `[(Dense Pos) Pos]`
@@ -5933,11 +5448,6 @@ skip_capability_field_lookup:;
                      * match -- the "works by luck because the register classes
                      * match" case CLAUDE.md flags).  Carrier/erased heads
                      * (NULL def) stay wildcards. */
-                    if (type_ok && obj->type.kind == TY_STRUCT && itk == TY_STRUCT &&
-                        obj->type.as.struct_.def && inst->type_args[0].as.struct_.def &&
-                        obj->type.as.struct_.def != inst->type_args[0].as.struct_.def) {
-                        type_ok = false;
-                    }
                     if (type_ok && obj->type.kind == TY_ADT && itk == TY_ADT &&
                         obj->type.as.adt_.def && inst->type_args[0].as.adt_.def &&
                         obj->type.as.adt_.def != inst->type_args[0].as.adt_.def) {
@@ -5950,13 +5460,9 @@ skip_capability_field_lookup:;
                         const Type *ih = &inst->type_args[0];
                         while (ih && ih->kind == TY_APP) ih = ih->as.app.fn;
                         bool heads_differ = false;
-                        if (oh && ih && oh->kind == TY_STRUCT && ih->kind == TY_STRUCT &&
-                            oh->as.struct_.def && ih->as.struct_.def &&
-                            oh->as.struct_.def != ih->as.struct_.def) {
-                            heads_differ = true;
-                        } else if (oh && ih && oh->kind == TY_ADT && ih->kind == TY_ADT &&
-                                   oh->as.adt_.def && ih->as.adt_.def &&
-                                   oh->as.adt_.def != ih->as.adt_.def) {
+                        if (oh && ih && oh->kind == TY_ADT && ih->kind == TY_ADT &&
+                            oh->as.adt_.def && ih->as.adt_.def &&
+                            oh->as.adt_.def != ih->as.adt_.def) {
                             heads_differ = true;
                         }
                         if (heads_differ) {
@@ -5998,15 +5504,9 @@ skip_capability_field_lookup:;
                         const Type *ih = &inst->type_args[0];
                         while (ih && ih->kind == TY_APP) ih = ih->as.app.fn;
                         bool o_adt = oh && oh->kind == TY_ADT && oh->as.adt_.def;
-                        bool o_str = oh && oh->kind == TY_STRUCT && oh->as.struct_.def;
                         bool i_adt = ih && ih->kind == TY_ADT && ih->as.adt_.def;
-                        bool i_str = ih && ih->kind == TY_STRUCT && ih->as.struct_.def;
-                        if ((o_adt || o_str) && (i_adt || i_str)) {
-                            bool same =
-                                (o_adt && i_adt &&
-                                 oh->as.adt_.def == ih->as.adt_.def) ||
-                                (o_str && i_str &&
-                                 oh->as.struct_.def == ih->as.struct_.def);
+                        if (o_adt && i_adt) {
+                            bool same = oh->as.adt_.def == ih->as.adt_.def;
                             if (!same) type_ok = false;
                         }
                     }
@@ -6313,10 +5813,8 @@ resolved_user_fallback:;
         {
             const Type *rft = best_method->binding->type.as.fn.result_full_type;
             if (rft &&
-                ((rft->kind == TY_STRUCT && rft->as.struct_.def &&
-                  rft->as.struct_.def->n_type_params == 0) ||
-                 (rft->kind == TY_ADT && rft->as.adt_.def &&
-                  rft->as.adt_.def->n_type_params == 0))) {
+                rft->kind == TY_ADT && rft->as.adt_.def &&
+                rft->as.adt_.def->n_type_params == 0) {
                 result_type = *rft;
             }
             /* ECS E2d-P6 (parametric associated-type element): the impl's
@@ -6340,10 +5838,8 @@ resolved_user_fallback:;
                 if (hb_n > 0) {
                     Type grounded = elab_subst_class_tyvars(
                         e->arena, *rft, hb_names, hb_n, hb_types, hb_n);
-                    if ((grounded.kind == TY_STRUCT && grounded.as.struct_.def &&
-                         grounded.as.struct_.def->n_type_params == 0) ||
-                        (grounded.kind == TY_ADT && grounded.as.adt_.def &&
-                         grounded.as.adt_.def->n_type_params == 0)) {
+                    if (grounded.kind == TY_ADT && grounded.as.adt_.def &&
+                        grounded.as.adt_.def->n_type_params == 0) {
                         result_type = grounded;
                     }
                 }
@@ -6534,45 +6030,6 @@ resolved_user_fallback:;
                     }
                 }
             }
-            /* M7 partial-app wildcard head: the reconstructed result `(Result b
-             * B)` names the FIXED arm with the struct's own param (`B`).  That
-             * tyvar is grounded from the concrete RECEIVER's matching slot, but
-             * m7_collect (which unifies the CLASS param `(f a)`) never sees it.
-             * Bind it here -- before the grounding check -- so the result fully
-             * grounds and the by-value spec is committed (otherwise the free `B`
-             * forces a carrier fallback). */
-            if (best_inst->partial_hole_pos != 0xFF) {
-                Type rhead = obj_orig_type;
-                Type recv_args[8]; uint8_t n_recv = 0;
-                {
-                    Type spine[8]; uint8_t ns = 0;
-                    Type t = obj_orig_type;
-                    while (t.kind == TY_APP && t.as.app.fn && t.as.app.arg) {
-                        if (ns < 8) spine[ns++] = *t.as.app.arg;
-                        t = *t.as.app.fn;
-                    }
-                    rhead = t;
-                    for (int s = (int)ns - 1; s >= 0 && n_recv < 8; s--)
-                        recv_args[n_recv++] = spine[s];
-                }
-                if (rhead.kind == TY_STRUCT && rhead.as.struct_.def) {
-                    const StructDef *sd = rhead.as.struct_.def;
-                    for (uint8_t s = 0; s < sd->n_type_params && s < n_recv; s++) {
-                        if (s == best_inst->partial_hole_pos) continue;
-                        const char *nm = sd->type_params[s];
-                        if (!nm) continue;
-                        bool seen = false;
-                        for (uint8_t k = 0; k < m7_nb; k++)
-                            if (m7_bind_names[k] &&
-                                strcmp(m7_bind_names[k]->name, nm) == 0) { seen = true; break; }
-                        if (seen || m7_nb >= 16) continue;
-                        m7_bind_names[m7_nb] = symtab_intern(e->st,
-                            strslice(nm, (uint32_t)strlen(nm)));
-                        m7_bind_types[m7_nb] = recv_args[s];
-                        m7_nb++;
-                    }
-                }
-            }
             if (m7_nb > 0) {
                 Type substituted = elab_subst_class_tyvars(
                     e->arena, *rft, m7_bind_names, m7_nb, m7_bind_types, m7_nb);
@@ -6711,105 +6168,6 @@ resolved_user_fallback:;
                 bindings[bi].name = m7_bind_names[k]->name;
                 bindings[bi].type = m7_bind_types[k];
                 bi++;
-            }
-            /* M7 two-param-constructor grounding: a multi-param constructor
-             * (`(Result a b)`) leaks the STRUCT's OWN param tyvars (`A`/`B`) into
-             * the instance body's construct/if types when a branch constrains only
-             * one slot -- `(ok (g ...))` is `(Result c B)`, not `(Result c d)`, so
-             * the by-value emit can't ground `B` and falls back to the carrier.
-             * Bind each struct param positionally to the method result's element
-             * tyvar value: align the constructor's `type_params` [A,B] with the
-             * applied result `(p c d)`'s elements [c,d], and bind `A->value(c)`,
-             * `B->value(d)`.  This lets emit_resolve_type ground a leaked struct
-             * tyvar.  (One-param constructors: the single struct param maps to the
-             * single element and never leaks, so this is inert for fmap/bind/etc.) */
-            if (hkt_head.kind == TY_STRUCT && hkt_head.as.struct_.def &&
-                hkt_head.as.struct_.def->n_type_params >= 1 && m7_cm) {
-                const StructDef *sd = hkt_head.as.struct_.def;
-                /* Collect the method result's applied-element tyvar names,
-                 * left-to-right: `(p c d)` = app(app(p,c),d) -> spine args
-                 * [d,c] outermost-first; reverse to [c,d]. */
-                const char *res_elems[8]; uint8_t n_res = 0;
-                {
-                    Type spine_args[8]; uint8_t ns = 0;
-                    Type t = m7_cm->return_type;
-                    while (t.kind == TY_APP && t.as.app.fn && t.as.app.arg) {
-                        if (ns < 8) spine_args[ns++] = *t.as.app.arg;
-                        t = *t.as.app.fn;
-                    }
-                    for (int i = (int)ns - 1; i >= 0 && n_res < 8; i--)
-                        res_elems[n_res++] =
-                            (spine_args[i].kind == TY_TYVAR)
-                                ? spine_args[i].as.tyvar_.name : NULL;
-                }
-                for (uint8_t i = 0; i < sd->n_type_params && i < n_res &&
-                                    bi < total; i++) {
-                    const char *sp = sd->type_params[i];
-                    const char *re = res_elems[i];
-                    if (!sp || !re || strcmp(sp, re) == 0) continue;
-                    for (uint8_t k = 0; k < m7_nb; k++) {
-                        if (m7_bind_names[k] &&
-                            strcmp(m7_bind_names[k]->name, re) == 0) {
-                            bindings[bi].name = sp;
-                            bindings[bi].type = m7_bind_types[k];
-                            bi++;
-                            break;
-                        }
-                    }
-                }
-            } else if (best_inst->partial_hole_pos != 0xFF && m7_cm) {
-                /* M7 PARTIAL-application wildcard head (e.g. `(Result _ B)`):
-                 * the class var bound to a partial application `(Result int)`
-                 * (a TY_APP), so the bare-struct grounding above was skipped and
-                 * the constructor's OWN struct params (`A`/`B`) never grounded --
-                 * leaving the instance on the carrier ABI (a capturing element fn
-                 * then drops its env -> segfault).  Ground them directly: the
-                 * HOLE slot takes the mapped result element `b` (so both `if`
-                 * branches agree on `(Result b B_fixed)`), and each FIXED slot
-                 * takes the concrete type from the matching receiver argument.
-                 * This mints the by-value spec just like the bare-ctor case. */
-                uint8_t hole = best_inst->partial_hole_pos;
-                const StructDef *sd = NULL;
-                Type recv_args[8]; uint8_t n_recv = 0;
-                {
-                    Type spine_args[8]; uint8_t ns = 0;
-                    Type t = obj_orig_type;
-                    while (t.kind == TY_APP && t.as.app.fn && t.as.app.arg) {
-                        if (ns < 8) spine_args[ns++] = *t.as.app.arg;
-                        t = *t.as.app.fn;
-                    }
-                    if (t.kind == TY_STRUCT && t.as.struct_.def)
-                        sd = t.as.struct_.def;
-                    for (int i = (int)ns - 1; i >= 0 && n_recv < 8; i--)
-                        recv_args[n_recv++] = spine_args[i];
-                }
-                if (sd && sd->n_type_params >= 1) {
-                    /* The result element `b` from the single-app result `(f b)`. */
-                    const char *hole_elem = NULL;
-                    if (m7_cm->return_type.kind == TY_APP &&
-                        m7_cm->return_type.as.app.arg &&
-                        m7_cm->return_type.as.app.arg->kind == TY_TYVAR)
-                        hole_elem = m7_cm->return_type.as.app.arg->as.tyvar_.name;
-                    for (uint8_t i = 0; i < sd->n_type_params && bi < total; i++) {
-                        const char *sp = sd->type_params[i];
-                        if (!sp) continue;
-                        if (i == hole) {
-                            if (!hole_elem) continue;
-                            for (uint8_t k = 0; k < m7_nb; k++)
-                                if (m7_bind_names[k] &&
-                                    strcmp(m7_bind_names[k]->name, hole_elem) == 0) {
-                                    bindings[bi].name = sp;
-                                    bindings[bi].type = m7_bind_types[k];
-                                    bi++;
-                                    break;
-                                }
-                        } else if (i < n_recv) {
-                            bindings[bi].name = sp;
-                            bindings[bi].type = recv_args[i];
-                            bi++;
-                        }
-                    }
-                }
             }
             out->as.call_.abi_bindings = bindings;
             out->as.call_.n_abi_bindings = bi;

@@ -16,7 +16,6 @@ static TypeKind gadt_field_typekind_from_form(const Form *f);
 static Type *adt_field_type_from_form(Arena *arena, const Form *ft_form,
     const char **type_params, uint8_t n_type_params);
 static void infer_type_param_kinds(AdtDef *def);
-static void infer_struct_type_param_kinds(StructDef *def, Kind *field_type_param_kinds);
 
 /* Phase 11: defstruct - define a struct type
  * Syntax: (defstruct Name [:copy] [field1 :type1 field2 :type2 ...])
@@ -115,26 +114,7 @@ Binding *scope_lookup_type_def(Scope *s, const Symbol *name) {
     return NULL;
 }
 
-/* Phase DS3: when a defstruct field is annotated `rc<Name>`, look up `Name`
- * as a struct so the resulting Type can carry the StructDef alongside the
- * inner TypeKind.  Returns NULL when Name isn't an in-scope struct (the
- * field still works as an opaque RcControlBlock *, just without field-
- * resolution support through the rc wrapper). */
-static StructDef *lookup_rc_inner_struct_def(Elab *e, const char *tname, uint32_t tlen) {
-    if (tlen <= 4 || memcmp(tname, "rc<", 3) != 0 || tname[tlen - 1] != '>') {
-        return NULL;
-    }
-    const char *inner_name = tname + 3;
-    uint32_t inner_len = tlen - 4;  /* strip "rc<" and ">" */
-    const Symbol *sym = symtab_intern(e->st, strslice(inner_name, inner_len));
-    Binding *tb = scope_lookup_type_def(e->scope, sym);
-    if (tb && tb->type.kind == TY_STRUCT) {
-        return tb->type.as.struct_.def;
-    }
-    return NULL;
-}
-
-/* CONV-S1 (slice 5): the ADT-record analogue of lookup_rc_inner_struct_def.
+/* CONV-S1 (slice 5): the rc<Name> inner-def resolver for a record-variant field.
  * When a record-variant field is annotated `rc<Name>` and `Name` resolves to an
  * in-scope struct or single-variant record ADT, build the inner-carrying rc Type
  * (`type_rc_struct` / `type_rc_adt`) so field access through the rc receiver can
@@ -153,10 +133,6 @@ static Type *adt_rc_inner_full_type(Elab *e, const char *tname, uint32_t tlen) {
     Binding *tb = scope_lookup_type_def(e->scope, sym);
     if (!tb) return NULL;
     Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-    if (tb->type.kind == TY_STRUCT) {
-        *t = type_rc_struct(tb->type.as.struct_.def);
-        return t;
-    }
     if (tb->type.kind == TY_ADT) {
         *t = type_rc_adt(tb->type.as.adt_.def);
         return t;
@@ -176,76 +152,7 @@ static bool struct_type_param_index(const StructDef *def, const char *name, uint
     return false;
 }
 
-static bool struct_type_has_named_tyvar(const StructDef *def, const Type *t) {
-    if (!def || !t) return false;
-    switch (t->kind) {
-        case TY_TYVAR:
-            return t->as.tyvar_.name && struct_type_param_index(def, t->as.tyvar_.name, NULL);
-        case TY_APP:
-            return struct_type_has_named_tyvar(def, t->as.app.fn)
-                || struct_type_has_named_tyvar(def, t->as.app.arg);
-        case TY_UNION:
-            for (uint8_t i = 0; i < t->as.union_.n_members; i++) {
-                if (struct_type_has_named_tyvar(def, t->as.union_.members[i])) return true;
-            }
-            return false;
-        case TY_INTERSECTION:
-            for (uint8_t i = 0; i < t->as.intersection_.n_members; i++) {
-                if (struct_type_has_named_tyvar(def, t->as.intersection_.members[i])) return true;
-            }
-            return false;
-        default:
-            return false;
-    }
-}
 
-/* defstruct-byvalue-struct-field-stored-as-int-carrier: decide the STORAGE
- * kind for a defstruct field whose type is a bare (nullary) user struct/ADT,
- * and record its nominal `full_type` for read-back.  Three cases:
- *
- *   - opaque newtype  -> int64 carrier (TY_INT); full_type kept so `(.f x)`
- *     reads back as the declared opaque, not `:int`.  type_c_name lowers the
- *     opaque to int64_t, so storage stays carrier-consistent.
- *   - ADT             -> int64 carrier (TY_INT); full_type kept (ADT carriers
- *     are int64-consistent on both the store and the access path).
- *   - by-value struct -> stored INLINE by value (TY_STRUCT) with full_type, so
- *     make-struct initializes the inline aggregate and `(.f x)` reads the
- *     struct back -- both representations agree.  A direct self-reference
- *     (`(defstruct Node [next : Node])`) would be an infinite-size aggregate,
- *     so it stays on the int64 carrier (a self-link is necessarily a pointer).
- *
- * `owner` is the struct currently being defined (for the self-reference check);
- * it may be NULL/partially-filled for a forward stub, which is fine -- the
- * pointer-identity compare just won't match and we keep the by-value path.
- */
-static TypeKind struct_field_user_type_storage(const Binding *tb,
-                                               const StructDef *owner,
-                                               Type **out_full_type,
-                                               Arena *arena) {
-    bool is_byvalue_struct =
-        tb->type.kind == TY_STRUCT &&
-        tb->type.as.struct_.def &&
-        !tb->type.as.struct_.def->is_opaque &&
-        tb->type.as.struct_.def != owner;  /* not a direct self-link */
-    if (is_byvalue_struct) {
-        Type *t = (Type *)arena_alloc(arena, sizeof(Type));
-        *t = tb->type;
-        *out_full_type = t;
-        return TY_STRUCT;
-    }
-    /* Opaque newtype: int64 carrier storage, but keep the nominal type so
-     * `(.f x)` reads back as the declared opaque rather than `:int`.  ADTs and
-     * self-referential struct links stay on the bare int64 carrier with no
-     * recorded full_type (their existing carrier-consistent behavior). */
-    if (tb->type.kind == TY_STRUCT &&
-        tb->type.as.struct_.def &&
-        tb->type.as.struct_.def->is_opaque) {
-        Type *t = (Type *)arena_alloc(arena, sizeof(Type));
-        *t = tb->type;
-        *out_full_type = t;
-    }
-    return TY_INT;
-}
 
 /* defstruct-field-byvalue-parametric-struct-layout: is `t` a concrete,
  * by-value (non-`:heap`) parametric struct application -- e.g. `(Option cstr)`?
@@ -417,8 +324,10 @@ bool elab_struct_type_extract_args(const Type *t, const StructDef *def, Type *ou
         raw[n_raw++] = *cur->as.app.arg;
         cur = cur->as.app.fn;
     }
-    bool ok = (cur && cur->kind == TY_STRUCT && cur->as.struct_.def == def &&
-               n_raw == def->n_type_params);
+    /* structdef-retirement DS-D: no Type is ever TY_STRUCT, so this never
+     * matches -- a struct application resolves through the ADT path instead. */
+    bool ok = false;
+    (void)cur;
     if (ok) {
         for (uint8_t i = 0; i < n_raw; i++) out_args[i] = raw[n_raw - 1 - i];
     }
@@ -583,68 +492,6 @@ static Type struct_field_instantiate_type(Elab *e, const StructDef *def, const T
     }
 }
 
-static bool struct_field_collect_type_args(const StructDef *def, const Type *expected,
-                                           Type actual, Type *type_args, bool *have_type_args) {
-    if (!expected || !def) return true;
-    switch (expected->kind) {
-        case TY_TYVAR: {
-            uint8_t idx = 0;
-            if (!expected->as.tyvar_.name ||
-                !struct_type_param_index(def, expected->as.tyvar_.name, &idx)) {
-                return true;
-            }
-            if (!have_type_args[idx]) {
-                type_args[idx] = actual;
-                have_type_args[idx] = true;
-                return true;
-            }
-            return type_eq(type_args[idx], actual);
-        }
-        case TY_APP:
-            if (actual.kind != TY_APP || !expected->as.app.fn || !expected->as.app.arg ||
-                !actual.as.app.fn || !actual.as.app.arg) {
-                return false;
-            }
-            return struct_field_collect_type_args(def, expected->as.app.fn, *actual.as.app.fn,
-                                                  type_args, have_type_args) &&
-                   struct_field_collect_type_args(def, expected->as.app.arg, *actual.as.app.arg,
-                                                  type_args, have_type_args);
-        case TY_FN: {
-            /* make-struct-parametric-fn-field-inference: a struct type parameter
-             * may appear only inside a fn-typed field (e.g. `(run (fn [A] A))`).
-             * Descend into the declared fn type and unify each arg/result slot
-             * (which may be a tyvar) against the supplied function value's
-             * corresponding slot, so `A` infers from `inc`'s `(fn [int] int)`. */
-            if (actual.kind != TY_FN) return false;
-            if (expected->as.fn.arity != actual.as.fn.arity) return false;
-            for (uint8_t i = 0; i < expected->as.fn.arity; i++) {
-                Type exp_arg = (expected->as.fn.arg_full_types && expected->as.fn.arg_full_types[i])
-                    ? *expected->as.fn.arg_full_types[i]
-                    : type_from_kind(expected->as.fn.arg_kinds[i]);
-                Type act_arg = (actual.as.fn.arg_full_types && actual.as.fn.arg_full_types[i])
-                    ? *actual.as.fn.arg_full_types[i]
-                    : type_from_kind(actual.as.fn.arg_kinds[i]);
-                if (!struct_field_collect_type_args(def, &exp_arg, act_arg,
-                                                    type_args, have_type_args)) {
-                    return false;
-                }
-            }
-            Type exp_res = expected->as.fn.result_full_type
-                ? *expected->as.fn.result_full_type
-                : type_from_kind(expected->as.fn.result_kind);
-            Type act_res = actual.as.fn.result_full_type
-                ? *actual.as.fn.result_full_type
-                : type_from_kind(actual.as.fn.result_kind);
-            return struct_field_collect_type_args(def, &exp_res, act_res,
-                                                  type_args, have_type_args);
-        }
-        case TY_UNION:
-        case TY_INTERSECTION:
-            return type_eq(*expected, actual);
-        default:
-            return type_eq(*expected, actual);
-    }
-}
 
 /* lowered-adt-ctor-skips-fn-field-type-param-inference: the record-ADT analogue
  * of struct_field_collect_type_args.  Grounds a record-ADT ctor's type parameters
@@ -739,7 +586,6 @@ Type elab_struct_field_use_type(Elab *e, const Type *container_type,
             t.as.ref.inner = field->inner_kind;
         } else {
             t.as.rc.inner = field->inner_kind;
-            if (field->inner_kind == TY_STRUCT && def) t.as.rc.struct_def = (StructDef *)def;
         }
         return t;
     }
@@ -764,27 +610,10 @@ void elab_add_forward_type(Elab *e, const Symbol *sym) {
     e->forward_type_syms[e->n_forward_type_syms++] = sym;
 }
 
-/* Helper: add StructDef to the elab registry */
-void elab_register_struct_def(Elab *e, StructDef *def) {
-    /* structdef-retirement slice 5 DS-B: with the effect-fn (A1), grouped-spec
-     * (A2/DS-A) and borrow-family (DS-A3) field shapes all lowering,
-     * `defstruct_lowers_to_adt` is true for every field shape the suite
-     * exercises, so no `defstruct` produces a `StructDef` -- this registry is
-     * dead (verified: zero registrations across the whole suite).  Assert it in
-     * debug so a regression, or a still-gated exotic compound field form
-     * (forall/handler/arrow/session/role/global/project) actually being used,
-     * fails the suite immediately; the registration below is kept for NDEBUG
-     * release safety.  DS-C/DS-D delete the registry and its two now-dead
-     * callers outright. */
-    assert(0 && "elab_register_struct_def: a defstruct did not lower to a record "
-                "ADT -- StructDef producer reachable (structdef-retirement DS-B)");
-    if (e->n_struct_defs >= e->cap_struct_defs) {
-        e->cap_struct_defs = e->cap_struct_defs ? e->cap_struct_defs * 2 : 8;
-        e->struct_defs = (StructDef **)realloc(e->struct_defs,
-            e->cap_struct_defs * sizeof(StructDef *));
-    }
-    e->struct_defs[e->n_struct_defs++] = def;
-}
+/* structdef-retirement DS-D: elab_register_struct_def and the e->struct_defs[]
+ * registry it wrote are deleted.  Every defstruct lowers to a record ADT, so no
+ * StructDef is ever produced and the registry stayed empty (proven by DS-B's
+ * live assert across a green suite). */
 
 /* CONV-S1 (defstruct-as-defadt): true iff every field in an old-syntax
  * defstruct field vector is lowerable to a record-`defadt` field with a
@@ -1268,435 +1097,16 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         return dd_out;
     }
 
-    /* Phase RF0: allow re-elaboration of forward-declared stub types.
-     * MF4: only reuse the existing binding as a stub when its kind matches
-     * the kind we're elaborating (TY_STRUCT here).  A same-name GADT
-     * binding (TY_ADT) is a separate registration and coexists -- the new
-     * struct gets a fresh binding, and type-annotation lookups resolve
-     * via the GADT-prefers-struct rule in elab_lookup_type_by_name. */
-    bool is_forward_stub = false;
-    Binding *existing_b = scope_lookup(e->scope, name);
-    if (existing_b) {
-        bool same_kind_forward =
-            (existing_b->type.kind == TY_STRUCT) && elab_is_forward_type(e, name);
-        if (same_kind_forward) {
-            /* DS4-2: a forward-registered stub is only re-elaborable while
-             * it is still an empty placeholder (n_fields == 0).  Once
-             * another defstruct has filled it in -- whether earlier in
-             * this file or, more commonly, in an auto-loaded stdlib
-             * module -- a second defstruct of the same name would also
-             * emit a duplicate `typedef struct <Name>` at codegen.  Reject
-             * here so the user gets an elaborator diagnostic instead of a
-             * cc error. */
-            StructDef *existing_def = existing_b->type.as.struct_.def;
-            if (existing_def && existing_def->n_fields > 0) {
-                diag_emit(DIAG_ERROR, name_form->span,
-                          "defstruct: '%s' is already defined "
-                          "(an auto-loaded stdlib module or earlier "
-                          "form in this file defines a struct with "
-                          "this name; pick a distinct name)",
-                          name->name);
-                return NULL;
-            }
-            is_forward_stub = true;
-        } else if (existing_b->type.kind == TY_ADT) {
-            /* MF4: an existing same-name GADT does not block a new struct.
-             * Fall through to register a fresh struct binding alongside the
-             * GADT entry in adt_defs[].  Type annotations resolve to the
-             * GADT under elab_lookup_type_by_name's prefer-GADT rule. */
-        } else {
-            diag_emit(DIAG_ERROR, name_form->span,
-                      "defstruct: '%s' is already defined", name->name);
-            return NULL;
-        }
-    }
-
-    /* Phase TM0: count actual fields for both old-style and new-style syntax. */
-    uint32_t actual_n_fields = 0;
-    if (new_field_syntax) {
-        /* New style: each remaining item in call->as.list is an F_LIST (field-name :type) */
-        for (uint32_t fi = fields_start_idx; fi < call->as.list.len; fi++) {
-            Form *ff = call->as.list.items[fi];
-            if (ff->tag == F_LIST && ff->as.list.len >= 2) {
-                actual_n_fields++;
-            }
-        }
-        if (actual_n_fields == 0) {
-            diag_emit(DIAG_ERROR, call->span,
-                      "defstruct requires at least one field definition");
-            return NULL;
-        }
-    } else {
-        /* Old style: fields_form is the vector [name :type ...] */
-        uint32_t n_items = fields_form->as.list.len;
-        if (n_items == 0) {
-            diag_emit(DIAG_ERROR, fields_form->span,
-                      "defstruct field list cannot be empty");
-            return NULL;
-        }
-        /* Phase 16 v2: Field list may contain optional #{...} after :fn type annotations.
-         * Pre-scan to count actual fields and validate structure. */
-        uint32_t scan = 0;
-        while (scan < n_items) {
-            if (fields_form->as.list.items[scan]->tag != F_SYM) {
-                diag_emit(DIAG_ERROR, fields_form->as.list.items[scan]->span,
-                          "defstruct field list: expected field name symbol");
-                return NULL;
-            }
-            scan++; /* consume name */
-            if (scan >= n_items) {
-                diag_emit(DIAG_ERROR, fields_form->span,
-                          "defstruct field list must have [name :type ...] pairs");
-                return NULL;
-            }
-            const Form *type_tok = fields_form->as.list.items[scan];
-            if (type_tok->tag == F_TYPE_ANN) type_tok = type_tok->as.list.items[0];
-            /* F8 (cross-plan-followups): F_LIST permitted -- compound type
-             * forms like (exists [a] [(Show a)] a), (Vec int), (forall ...).
-             * Actual parsing happens in the main loop via
-             * type_expr_from_form. */
-            if (type_tok->tag != F_KEYWORD && type_tok->tag != F_SYM &&
-                type_tok->tag != F_LIST) {
-                diag_emit(DIAG_ERROR, fields_form->span,
-                          "defstruct field list must have [name :type ...] pairs");
-                return NULL;
-            }
-            const char *tname = NULL;
-            uint32_t tlen = 0;
-            if (type_tok->tag == F_KEYWORD || type_tok->tag == F_SYM) {
-                tname = type_tok->as.sym->name;
-                tlen  = type_tok->as.sym->len;
-            }
-            scan++; /* consume type keyword (or compound type form) */
-            /* Optional #{...} effect-row only for :fn fields */
-            bool is_fn_field = (tname && tlen == 2 && memcmp(tname, "fn", 2) == 0);
-            if (is_fn_field && scan < n_items &&
-                fields_form->as.list.items[scan]->tag == F_MAP) {
-                scan++; /* consume #{...} annotation */
-            }
-            actual_n_fields++;
-        }
-    }
-
-    /* Phase RF0: Allocate (or reuse the forward stub) StructDef and register
-     * in global scope BEFORE parsing fields, so that self-referential and
-     * mutually-recursive field type annotations resolve correctly. */
-    StructDef *def;
-    Binding *b;
-    if (is_forward_stub) {
-        /* Reuse the pre-registered stub and fill it in */
-        b = existing_b;
-        def = b->type.as.struct_.def;
-        def->n_fields = actual_n_fields;
-        def->fields = (StructField *)arena_alloc(e->arena, actual_n_fields * sizeof(StructField));
-        memset(def->fields, 0, actual_n_fields * sizeof(StructField));  /* F8: zero full_type and other fields */
-        def->is_copy = is_copy;
-        def->is_linear = is_linear; /* LT4 */
-        def->is_heap = is_heap;
-        def->no_auto_ctor = no_auto_ctor; /* CTOR-V0 */
-        def->needs_drop_glue = false;
-        def->origin_file_id = call->span.file_id;
-        /* Phase TM0 */
-        def->type_params = type_params_arr;
-        def->n_type_params = n_type_params_v;
-        b->type.hkt_kind = kind_for_arity(n_type_params_v);
-        /* Already in global scope and elab registry from the pre-pass */
-    } else {
-        def = (StructDef *)arena_alloc(e->arena, sizeof(StructDef));
-        memset(def, 0, sizeof(*def));  /* DS5: zero is_opaque and any future bool fields */
-        def->name = name->name;
-        def->n_fields = actual_n_fields;
-        def->fields = (StructField *)arena_alloc(e->arena, actual_n_fields * sizeof(StructField));
-        memset(def->fields, 0, actual_n_fields * sizeof(StructField));  /* F8: zero full_type and other fields */
-        def->is_copy = is_copy;
-        def->is_linear = is_linear; /* LT4 */
-        def->is_heap = is_heap;
-        def->no_auto_ctor = no_auto_ctor; /* CTOR-V0 */
-        /* Phase HKT-P4: record the file that defined this struct. */
-        def->origin_file_id = call->span.file_id;
-        /* Phase TM0 */
-        def->type_params = type_params_arr;
-        def->n_type_params = n_type_params_v;
-
-        Type struct_type = type_struct(def);
-        struct_type.hkt_kind = kind_for_arity(n_type_params_v);
-        b = binding_new(e, name, struct_type, false, true, name_form->span);
-        scope_add(&e->global, b);
-        elab_register_struct_def(e, def);
-    }
-
-    /* Parse fields -- two paths: new-style (field-list forms) vs old-style (flat vector). */
-    if (new_field_syntax) {
-        /* Phase TM0 new-style: each (field-name :type) is a separate F_LIST item. */
-        uint32_t fi = 0;
-        for (uint32_t ci = fields_start_idx; ci < call->as.list.len && fi < actual_n_fields; ci++) {
-            Form *ff = call->as.list.items[ci];
-            if (ff->tag != F_LIST || ff->as.list.len < 2) continue;
-            Form *field_name_form = ff->as.list.items[0];
-            Form *field_type_form = ff->as.list.items[1];
-            const Form *type_name_form = (field_type_form->tag == F_TYPE_ANN)
-                ? field_type_form->as.list.items[0] : field_type_form;
-            TypeKind fkind = TY_UNKNOWN, finner = TY_UNKNOWN;
-            Type *full_type = NULL;
-            /* KB-024: track the resolved compound Type (when the field came
-             * from an F_LIST) so the :copy diagnostic can print the actual
-             * type name even when we don't store it as full_type. */
-            Type *compound_type = NULL;
-
-            /* F8 (cross-plan-followups): if the field type is a compound
-             * form (F_LIST -- e.g. (exists [a] [(C a)] a), (Vec int)),
-             * route through type_expr_from_form to get a full Type and
-             * derive the C-level kind from that.  TY_APP, TY_EXISTS,
-             * TY_FORALL all lower to int64_t at the C level (opaque
-             * heap pointer), so storage layout is unchanged. */
-            if (type_name_form->tag == F_LIST) {
-                Type *t = (n_type_params_v > 0)
-                    ? struct_field_type_from_form(e, type_name_form,
-                                                  field_type_params, field_type_param_kinds, n_type_params_v)
-                    : type_expr_from_form(e, (Form *)type_name_form,
-                                          NULL, NULL, NULL, 0);
-                if (!t) return NULL;
-                if (n_type_params_v > 0 || t->kind == TY_APP || t->kind == TY_EXISTS ||
-                    t->kind == TY_FORALL || t->kind == TY_FN) {
-                    full_type = t;
-                }
-                compound_type = t;
-                struct_field_storage_from_type(t, &fkind, &finner);
-            } else {
-                const char *tname = type_name_form->as.sym->name;
-                uint32_t tlen = type_name_form->as.sym->len;
-                if (n_type_params_v > 0) {
-                    Type *t = struct_field_type_from_form(e, type_name_form,
-                        field_type_params, field_type_param_kinds, n_type_params_v);
-                    if (!t) return NULL;
-                    struct_field_storage_from_type(t, &fkind, &finner);
-                    if (struct_type_has_named_tyvar(def, t)) full_type = t;
-                } else {
-                    parse_struct_field_type(tname, tlen, &fkind, &finner);
-                }
-                if (fkind == TY_UNKNOWN) {
-                    const Symbol *type_sym = symtab_intern(e->st, strslice(tname, tlen));
-                    Binding *tb = scope_lookup_type_def(e->scope, type_sym);
-                    if (tb && (tb->type.kind == TY_STRUCT || tb->type.kind == TY_ADT)) {
-                        finner = TY_UNKNOWN;
-                        fkind = struct_field_user_type_storage(tb, def, &full_type, e->arena);
-                    } else {
-                        diag_emit(DIAG_ERROR, field_type_form->span,
-                                  "defstruct field '%s' has unrecognized type :%s",
-                                  field_name_form->as.sym->name, tname);
-                        return NULL;
-                    }
-                } else if (fkind == TY_RC && finner == TY_UNKNOWN) {
-                    /* DS3: rc<Name> over a user-defined struct -- carry the
-                     * StructDef so receivers of rc<Name>-typed values can do
-                     * field access / set! through the rc wrapper. */
-                    StructDef *inner_def = lookup_rc_inner_struct_def(e, tname, tlen);
-                    if (inner_def) {
-                        finner = TY_STRUCT;
-                        Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-                        *t = type_rc_struct(inner_def);
-                        full_type = t;
-                    }
-                }
-            }
-            if (is_copy && typekind_default_copy_kind(fkind) == CK_LINEAR) {
-                diag_emit_with_code(DIAG_ERROR, field_type_form->span,
-                                    TUR_E0102_LINEAR_COPY,
-                                    "cannot copy linear field '%s' -- "
-                                    "linear values cannot appear in :copy structs",
-                                    field_name_form->as.sym->name);
-                return NULL;
-            }
-            if (is_copy && !typekind_is_copy_for_struct(fkind)) {
-                Type *diag_type = full_type ? full_type : compound_type;
-                if (diag_type) {
-                    diag_emit(DIAG_ERROR, field_type_form->span,
-                              "defstruct: field '%s' has non-copy type %s and cannot be used in :copy struct",
-                              field_name_form->as.sym->name,
-                              type_name(*diag_type));
-                } else {
-                    diag_emit(DIAG_ERROR, field_type_form->span,
-                              "defstruct: field '%s' has non-copy type :%s and cannot be used in :copy struct",
-                              field_name_form->as.sym->name,
-                              type_name_form->as.sym->name);
-                }
-                return NULL;
-            }
-            def->fields[fi].name = field_name_form->as.sym->name;
-            def->fields[fi].kind = fkind;
-            def->fields[fi].inner_kind = finner;
-            def->fields[fi].effect_row = NULL;
-            def->fields[fi].full_type = full_type;
-            if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
-                def->needs_drop_glue = true;
-            }
-            fi++;
-        }
-    } else {
-        /* Old-style: flat [name :type name :type ...] vector */
-        uint32_t n_items = fields_form->as.list.len;
-        uint32_t scan = 0;
-        for (uint32_t fi = 0; fi < actual_n_fields; fi++) {
-            Form *field_name_form = fields_form->as.list.items[scan++];
-            Form *field_type_form = fields_form->as.list.items[scan++];
-            const Form *type_name_form = (field_type_form->tag == F_TYPE_ANN)
-                ? field_type_form->as.list.items[0] : field_type_form;
-            TypeKind fkind = TY_UNKNOWN, finner = TY_UNKNOWN;
-            Type *full_type = NULL;
-            /* KB-024: track the resolved compound Type (when the field came
-             * from an F_LIST) so the :copy diagnostic can print the actual
-             * type name even when we don't store it as full_type. */
-            Type *compound_type = NULL;
-
-            /* F8 (cross-plan-followups): F_LIST compound field type
-             * (e.g. (exists ...), (Vec int)) -- route through
-             * type_expr_from_form and store the full Type on the
-             * StructField for use sites. */
-            if (type_name_form->tag == F_LIST) {
-                Type *t = (n_type_params_v > 0)
-                    ? struct_field_type_from_form(e, type_name_form,
-                                                  field_type_params, field_type_param_kinds, n_type_params_v)
-                    : type_expr_from_form(e, (Form *)type_name_form,
-                                          NULL, NULL, NULL, 0);
-                if (!t) return NULL;
-                if (n_type_params_v > 0 || t->kind == TY_APP || t->kind == TY_EXISTS ||
-                    t->kind == TY_FORALL || t->kind == TY_FN) {
-                    full_type = t;
-                }
-                compound_type = t;
-                struct_field_storage_from_type(t, &fkind, &finner);
-            } else {
-                const char *tname = type_name_form->as.sym->name;
-                uint32_t tlen = type_name_form->as.sym->len;
-                if (n_type_params_v > 0) {
-                    Type *t = struct_field_type_from_form(e, type_name_form,
-                        field_type_params, field_type_param_kinds, n_type_params_v);
-                    if (!t) return NULL;
-                    struct_field_storage_from_type(t, &fkind, &finner);
-                    if (struct_type_has_named_tyvar(def, t)) full_type = t;
-                } else {
-                    parse_struct_field_type(tname, tlen, &fkind, &finner);
-                }
-
-                if (fkind == TY_UNKNOWN) {
-                    /* Phase RF0: fall back to user-defined type lookup.  Any struct or
-                     * ADT is heap-allocated and stored as an opaque int64_t pointer, so
-                     * it is safe to use as a recursive field type without any layout change. */
-                    const Symbol *type_sym = symtab_intern(e->st, strslice(tname, tlen));
-                    Binding *tb = scope_lookup_type_def(e->scope, type_sym);
-                    if (tb && (tb->type.kind == TY_STRUCT || tb->type.kind == TY_ADT)) {
-                        finner = TY_UNKNOWN;
-                        fkind = struct_field_user_type_storage(tb, def, &full_type, e->arena);
-                    } else {
-                        diag_emit(DIAG_ERROR, field_type_form->span,
-                                  "defstruct field '%s' has unrecognized type :%s",
-                                  field_name_form->as.sym->name, tname);
-                        return NULL;
-                    }
-                } else if (fkind == TY_RC && finner == TY_UNKNOWN) {
-                    StructDef *inner_def = lookup_rc_inner_struct_def(e, tname, tlen);
-                    if (inner_def) {
-                        finner = TY_STRUCT;
-                        Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-                        *t = type_rc_struct(inner_def);
-                        full_type = t;
-                    }
-                }
-            }
-
-            /* LT1: E0102 -- linear fields cannot appear in :copy structs.
-             * A field of type lref<T> (CK_LINEAR) makes the struct non-copyable,
-             * which is incompatible with :copy semantics. :move structs may hold lref<T>. */
-            if (is_copy && typekind_default_copy_kind(fkind) == CK_LINEAR) {
-                diag_emit_with_code(DIAG_ERROR, field_type_form->span,
-                                    TUR_E0102_LINEAR_COPY,
-                                    "cannot copy linear field '%s' -- "
-                                    "linear values cannot appear in :copy structs",
-                                    field_name_form->as.sym->name);
-                return NULL;
-            }
-            /* :copy struct validation: all fields must be copy */
-            if (is_copy && !typekind_is_copy_for_struct(fkind)) {
-                Type *diag_type = full_type ? full_type : compound_type;
-                if (diag_type) {
-                    diag_emit(DIAG_ERROR, field_type_form->span,
-                              "defstruct: field '%s' has non-copy type %s and cannot be used in :copy struct",
-                              field_name_form->as.sym->name,
-                              type_name(*diag_type));
-                } else {
-                    diag_emit(DIAG_ERROR, field_type_form->span,
-                              "defstruct: field '%s' has non-copy type :%s and cannot be used in :copy struct",
-                              field_name_form->as.sym->name,
-                              type_name_form->as.sym->name);
-                }
-                return NULL;
-            }
-
-            def->fields[fi].name = field_name_form->as.sym->name;
-            def->fields[fi].kind = fkind;
-            def->fields[fi].inner_kind = finner;
-            def->fields[fi].effect_row = NULL;
-            def->fields[fi].full_type = full_type;
-
-            /* Phase 16 v2: parse optional #{...} effect-row annotation for :fn fields */
-            if (fkind == TY_FN && scan < n_items &&
-                fields_form->as.list.items[scan]->tag == F_MAP) {
-                Form *row_form = fields_form->as.list.items[scan++];
-                warn_legacy_fx_row(row_form);
-                uint8_t n_sym = (uint8_t)row_form->as.list.len;
-                const Symbol **syms = (const Symbol **)arena_alloc(e->arena,
-                                        (n_sym ? n_sym : 1) * sizeof(Symbol *));
-                uint8_t n_valid = 0;
-                for (uint32_t j = 0; j < row_form->as.list.len; j++) {
-                    Form *item = row_form->as.list.items[j];
-                    if (item->tag == F_SYM) {
-                        syms[n_valid++] = item->as.sym;
-                    }
-                }
-                def->fields[fi].effect_row = effect_row_unresolved(e->arena, syms, n_valid);
-            }
-
-            /* Check if this field requires drop glue */
-            if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
-                def->needs_drop_glue = true;
-            }
-        }
-    }
-
-    /* TP4: Infer type-param kinds from actual usage in field types.
-     * Replaces the position-based struct_type_param_kind heuristic. */
-    if (n_type_params_v > 0 && field_type_param_kinds) {
-        infer_struct_type_param_kinds(def, field_type_param_kinds);
-    }
-
-    /* Phase D: decide pass-by-pointer threshold for non-parameterized structs.
-     * For generic structs (n_type_params > 0) the decision is deferred to
-     * RegisteredStructApp.pass_by_ptr, computed per-instantiation. */
-    if (def->n_type_params == 0 && !def->is_opaque) {
-        size_t _d_total = 0;
-        for (uint32_t _dfi = 0; _dfi < def->n_fields; _dfi++) {
-            int _fsz = type_size_bytes(def->fields[_dfi].kind);
-            _d_total += (_fsz > 0) ? (size_t)_fsz : 8;
-        }
-        def->pass_by_ptr = (_d_total > 16);
-    }
-
-    /* CTOR-V0: the auto-bound constructor is provided by routing `(Name args...)`
-     * call syntax to make-struct in elab_call (positional and keyword), rather
-     * than by synthesizing a `defn` named after the struct.  A same-named value
-     * binding was found to interfere with typeclass-instance ABI/dispatch over
-     * the struct, and currying a struct-returning constructor cannot work anyway
-     * (by-value struct results do not survive the type-erased closure ABI -- see
-     * docs/reported/struct-return-through-closure-loses-type.md).  Routing keeps
-     * the ergonomic call form without those costs. */
-
-    /* Return EX_DEF with struct_def populated.
-     * Registration in global scope and elab registry was done above (RF0). */
-    Expr *out = expr_new(e->arena, EX_DEF, TYPE_NIL, call->span);
-    out->as.def_.binding = b;
-    out->as.def_.init = NULL;
-    out->as.def_.struct_def = def;
-    return out;
+    /* structdef-retirement DS-D: the residual StructDef elaboration path has
+     * been deleted.  Every defstruct now lowers to a record ADT above;
+     * defstruct_lowers_to_adt is true for all field shapes the ADT field
+     * parser accepts, and any unsupported compound field form is rejected by
+     * struct_field_type_from_form with its own diagnostic before we get here.
+     * Reaching this point would mean the gate rejected a shape the field
+     * parser accepted -- treat it as an unsupported field form. */
+    diag_emit(DIAG_ERROR, call->span,
+              "defstruct '%s': unsupported field form", name->name);
+    return NULL;
 }
 
 /* SI4-C: defopaque -- named opaque int64_t newtype for REPL type tags.
@@ -1834,7 +1244,6 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
     Expr *out = expr_new(e->arena, EX_DEF, TYPE_NIL, call->span);
     out->as.def_.binding = b;
     out->as.def_.init = NULL;
-    out->as.def_.struct_def = NULL;
     return out;
 }
 
@@ -1971,23 +1380,10 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
              * field read as a concrete by-value aggregate and emit a spurious
              * concrete->carrier address-of bridge (a silent miscompile). */
             bool record_full = false;
-            if (tb->type.kind == TY_STRUCT) {
-                StructDef *sd = tb->type.as.struct_.def;
-                /* by-value struct (inlined, slice 4) or :heap struct
-                 * (typed-pointer carrier, heap-bridge-guarded, slice 8). */
-                record_full = sd && !sd->is_opaque &&
-                              (sd->is_heap || !sd->needs_drop_glue);
-                /* CONV-S1 (opaque field nominal identity): a bare `defopaque`
-                 * field (`tag : Tag` over `:int`) is a TRANSPARENT int newtype --
-                 * stored as the int64 carrier (adt_field_is_inline_byval excludes
-                 * opaques, so no inline-aggregate misclassification) but with a
-                 * nominal identity the struct path preserves via
-                 * elab_struct_field_use_type.  Record its full_type so a lowered
-                 * record-ADT field reads back as the opaque type (`(.tag w) : Tag`)
-                 * instead of collapsing to its `:int` carrier -- matching the
-                 * struct path and clearing the re-pin the field otherwise needs. */
-                if (sd && sd->is_opaque) record_full = true;
-            } else {
+            /* structdef-retirement DS-D: no Type is ever TY_STRUCT, so the
+             * former struct branch (reading the removed `.as.struct_` member) is
+             * dead -- the guard above only admits TY_ADT here. */
+            {
                 AdtDef *ad = tb->type.as.adt_.def;
                 /* by-value ADT product (inlined, slice 4), a :heap record ADT
                  * (typed-pointer carrier, seam 3 -- the ADT analogue of a :heap
@@ -2640,70 +2036,7 @@ static void infer_type_param_kinds(AdtDef *def) {
     }
 }
 
-/* TP4: Recursively fix up hkt_kind on TY_TYVAR nodes embedded in a Type tree.
- * Called after struct type-param kind inference to propagate inferred kinds
- * into the TY_TYVAR nodes stored in StructField.full_type. */
-static void fix_tyvar_hkt_kinds(Type *t, const char **type_params,
-                                 Kind *type_param_kinds, uint8_t n) {
-    if (!t) return;
-    switch (t->kind) {
-        case TY_TYVAR:
-            if (t->as.tyvar_.name) {
-                for (uint8_t i = 0; i < n; i++) {
-                    if (type_params[i] &&
-                        strcmp(type_params[i], t->as.tyvar_.name) == 0) {
-                        t->hkt_kind = type_param_kinds[i];
-                        break;
-                    }
-                }
-            }
-            break;
-        case TY_APP:
-            fix_tyvar_hkt_kinds(t->as.app.fn,  type_params, type_param_kinds, n);
-            fix_tyvar_hkt_kinds(t->as.app.arg, type_params, type_param_kinds, n);
-            break;
-        default:
-            break;
-    }
-}
 
-/* TP4: Infer Kind for each type parameter of a struct from the declared
- * StructField.full_type nodes.  Analogous to infer_type_param_kinds for AdtDef.
- *   - TY_TYVAR on the fn-side of TY_APP                → KIND_ARROW
- *   - TY_TYVAR used directly (or not seen)              → KIND_STAR (default)
- * Stores the inferred kinds on def->type_param_kinds and fixes up hkt_kind
- * on all TY_TYVAR nodes in stored full_type values. */
-static void infer_struct_type_param_kinds(StructDef *def, Kind *field_type_param_kinds) {
-    if (!def || !field_type_param_kinds || def->n_type_params == 0) return;
-
-    for (uint32_t fi = 0; fi < def->n_fields; fi++) {
-        const Type *ft = def->fields[fi].full_type;
-        if (!ft) continue;
-        if (ft->kind == TY_APP) {
-            const Type *fn_side = ft->as.app.fn;
-            if (fn_side && fn_side->kind == TY_TYVAR && fn_side->as.tyvar_.name) {
-                for (uint8_t pi = 0; pi < def->n_type_params; pi++) {
-                    if (def->type_params[pi] &&
-                        strcmp(def->type_params[pi], fn_side->as.tyvar_.name) == 0) {
-                        field_type_param_kinds[pi] = KIND_ARROW;
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    def->type_param_kinds = field_type_param_kinds;
-
-    /* Fix up hkt_kind on stored TY_TYVAR nodes so they reflect inferred kinds. */
-    for (uint32_t fi = 0; fi < def->n_fields; fi++) {
-        if (def->fields[fi].full_type) {
-            fix_tyvar_hkt_kinds(def->fields[fi].full_type,
-                                def->type_params, field_type_param_kinds,
-                                def->n_type_params);
-        }
-    }
-}
 
 /* Phase G2: Build a SkolemEnv for a GADT constructor arm.
  * Parses the constructor's result_type_form (e.g. "(Expr int)") against
@@ -3370,134 +2703,6 @@ CtorDef *elab_lookup_ctor(Elab *e, const Symbol *name) {
     return NULL;
 }
 
-/* CONV-S3: desugar `(match s (Struct f0 f1 ...) body)` into a sequential let
- * over the existing field accessors and elaborate it.  `pat_idx` is the index
- * of the sole arm's pattern in `call`; `sd` is the matched struct.  Returns the
- * elaborated let, or NULL after emitting a diagnostic. */
-static Expr *elab_struct_match_desugar(Elab *e, const Form *call,
-                                       uint32_t pat_idx, bool has_guard,
-                                       StructDef *sd) {
-    Form *pat_form = call->as.list.items[pat_idx];
-    if (has_guard) {
-        diag_emit(DIAG_ERROR, pat_form->span,
-                  "match on struct '%s': when-guards are not supported in a "
-                  "single-variant struct match", sd->name);
-        return NULL;
-    }
-    Form *body_form = call->as.list.items[pat_idx + 1];
-    Form *scrut_form = call->as.list.items[1];
-
-    /* Resolve one binding-variable form per struct field (or NULL = ignore). */
-    Form **field_vars = (Form **)arena_alloc(e->arena,
-                            (sd->n_fields ? sd->n_fields : 1) * sizeof(Form *));
-    for (uint32_t i = 0; i < sd->n_fields; i++) field_vars[i] = NULL;
-
-    uint32_t n_items = pat_form->as.list.len - 1; /* exclude struct name head */
-    bool by_name = (n_items >= 1 && pat_form->as.list.items[1]->tag == F_KEYWORD);
-
-    if (by_name) {
-        if (n_items % 2 != 0) {
-            diag_emit(DIAG_ERROR, pat_form->span,
-                      "match on struct '%s': by-name pattern must be "
-                      ":field var pairs", sd->name);
-            return NULL;
-        }
-        for (uint32_t pi = 0; pi < n_items / 2; pi++) {
-            Form *kw = pat_form->as.list.items[1 + pi * 2];
-            Form *var = pat_form->as.list.items[2 + pi * 2];
-            if (kw->tag != F_KEYWORD || var->tag != F_SYM) {
-                diag_emit(DIAG_ERROR, kw->span,
-                          "match on struct '%s': by-name pattern must be "
-                          ":field var pairs", sd->name);
-                return NULL;
-            }
-            int fidx = -1;
-            for (uint32_t i = 0; i < sd->n_fields; i++) {
-                if (sd->fields[i].name &&
-                    strcmp(sd->fields[i].name, kw->as.sym->name) == 0) {
-                    fidx = (int)i; break;
-                }
-            }
-            if (fidx < 0) {
-                diag_emit(DIAG_ERROR, kw->span,
-                          "match on struct '%s': no field '%s'",
-                          sd->name, kw->as.sym->name);
-                return NULL;
-            }
-            if (field_vars[fidx]) {
-                diag_emit(DIAG_ERROR, kw->span,
-                          "match on struct '%s': field '%s' bound more than once",
-                          sd->name, kw->as.sym->name);
-                return NULL;
-            }
-            field_vars[fidx] = var;
-        }
-    } else {
-        if (n_items != sd->n_fields) {
-            diag_emit(DIAG_ERROR, pat_form->span,
-                      "match on struct '%s' expects %u field(s), got %u",
-                      sd->name, sd->n_fields, n_items);
-            return NULL;
-        }
-        for (uint32_t i = 0; i < sd->n_fields; i++)
-            field_vars[i] = pat_form->as.list.items[1 + i];
-    }
-
-    /* Receiver for the field reads.  When the scrutinee is already a bare
-     * variable we read fields directly off it (field projection is a borrow,
-     * not a move, so multiple reads are fine) -- this avoids copying the struct
-     * into a temp, which the by-pointer struct ABI does not support in a let
-     * binder.  For a compound scrutinee we bind it to a fresh temp so it is
-     * evaluated exactly once. */
-    bool scrut_is_var = (scrut_form->tag == F_SYM);
-    Form *recv_form = scrut_form;
-    const Symbol *wildcard = intern_cstr(e->st, "_");
-    uint32_t cap = 2 + sd->n_fields * 2;
-    Form **bind_items = (Form **)arena_alloc(e->arena, cap * sizeof(Form *));
-    uint32_t bn = 0;
-    if (!scrut_is_var) {
-        char gbuf[64];
-        snprintf(gbuf, sizeof(gbuf), "__tur_smatch_%u", e->next_gensym_id++);
-        const Symbol *g_sym = symtab_intern(e->st, strslice(gbuf, (uint32_t)strlen(gbuf)));
-        recv_form = form_sym(e->arena, pat_form->span, g_sym);
-        bind_items[bn++] = recv_form;
-        bind_items[bn++] = scrut_form;
-    }
-    for (uint32_t i = 0; i < sd->n_fields; i++) {
-        Form *var = field_vars[i];
-        if (!var || (var->tag == F_SYM && var->as.sym == wildcard)) continue;
-        char dotbuf[160];
-        int dl = snprintf(dotbuf, sizeof(dotbuf), ".%s", sd->fields[i].name);
-        if (dl <= 0 || (size_t)dl >= sizeof(dotbuf)) {
-            diag_emit(DIAG_ERROR, pat_form->span,
-                      "match on struct '%s': field name too long", sd->name);
-            return NULL;
-        }
-        const Symbol *dot_sym = symtab_intern(e->st, strslice(dotbuf, (uint32_t)dl));
-        Form *acc_items[2];
-        acc_items[0] = form_sym(e->arena, pat_form->span, dot_sym);
-        acc_items[1] = recv_form;
-        Form *acc = form_list(e->arena, pat_form->span, acc_items, 2);
-        bind_items[bn++] = var;
-        bind_items[bn++] = acc;
-    }
-
-    /* A struct match that binds no fields (e.g. all `_`) still must elaborate
-     * the body; with a bare-var scrutinee there are zero bindings, so emit a
-     * trivial `(let [] body)` -- or just the body.  An empty let vector is
-     * valid. */
-    Form *bind_vec = form_vec(e->arena, pat_form->span, bind_items, bn);
-
-    /* (let <bind_vec> body) */
-    const Symbol *let_sym = intern_cstr(e->st, "let");
-    Form *let_items[3];
-    let_items[0] = form_sym(e->arena, call->span, let_sym);
-    let_items[1] = bind_vec;
-    let_items[2] = body_form;
-    Form *let_form = form_list(e->arena, call->span, let_items, 3);
-    return elab_form(e, let_form);
-}
-
 /* Phase G0: match expression
  * Syntax: (match scrutinee
  *   (Ctor1 x y) body1
@@ -3591,32 +2796,10 @@ Expr *elab_match(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* CONV-S3 (struct/ADT convergence): `match` on a struct value.
-     * A struct is the single-variant case of a tagged union, so
-     * `(match s (Person name age) body)` is trivially exhaustive.  We detect
-     * it syntactically -- the sole arm's pattern head names a struct type --
-     * and desugar to a `let` over the existing field accessors, reusing all
-     * struct field-access codegen and exhaustiveness-by-construction.  The
-     * scrutinee is elaborated exactly once (inside the generated let), so move
-     * and linear tracking are unaffected.  Positional `(Person name age)` and
-     * by-name `(Person :name n :age a)` binding are both accepted. */
-    if (n_arms == 1) {
-        Form *pat0 = call->as.list.items[arm_start[0]];
-        if (pat0->tag == F_LIST && pat0->as.list.len >= 1 &&
-            pat0->as.list.items[0]->tag == F_SYM &&
-            !elab_lookup_ctor(e, pat0->as.list.items[0]->as.sym)) {
-            const Symbol *head_sym = pat0->as.list.items[0]->as.sym;
-            Binding *tb = scope_lookup_type_def(e->scope, head_sym);
-            if (tb && tb->type.kind == TY_STRUCT && tb->type.as.struct_.def) {
-                Expr *de = elab_struct_match_desugar(e, call, arm_start[0],
-                                                     arm_has_guard[0],
-                                                     tb->type.as.struct_.def);
-                if (de) return de;
-                /* de == NULL: a diagnostic was already emitted -> propagate. */
-                return NULL;
-            }
-        }
-    }
+    /* CONV-S3 (struct/ADT convergence): the old `match` on a *struct* value
+     * dispatch is dead post structdef-retirement (DS-D) -- a lowered struct is
+     * a single-variant record ADT, so it flows through the normal ADT match
+     * path below.  No Type is ever TY_STRUCT, so there is nothing to detect. */
 
     /* Elaborate scrutinee */
     Expr *scrutinee = elab_form(e, call->as.list.items[1]);
@@ -4826,250 +4009,15 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
             return ce;
         }
     }
-    if (!struct_binding || struct_binding->type.kind != TY_STRUCT) {
-        diag_emit(DIAG_ERROR, name_form->span,
-                  "make-struct: '%s' is not a defined struct type",
-                  name_form->as.sym->name);
-        return NULL;
-    }
-
-    StructDef *def = struct_binding->type.as.struct_.def;
-    uint32_t n_given = call->as.list.len - 2; /* args after name */
-    Type *inferred_type_args = NULL;
-    bool *have_type_args = NULL;
-
-    if (def->n_type_params > 0) {
-        inferred_type_args = (Type *)arena_alloc(e->arena, def->n_type_params * sizeof(Type));
-        have_type_args = (bool *)arena_alloc(e->arena, def->n_type_params * sizeof(bool));
-        memset(inferred_type_args, 0, def->n_type_params * sizeof(Type));
-        memset(have_type_args, 0, def->n_type_params * sizeof(bool));
-    }
-
-    /* M2b: detect keyword form `(make-struct Name :field val :field val ...)`.
-     * The form is keyword-style iff the first arg after the struct name is an
-     * F_KEYWORD.  Field order may differ from def->fields[]; we reorder into
-     * value_forms[] indexed by field position before falling through to the
-     * positional elaboration path.  Diagnostics:
-     *   TUR-E0292 -- missing field
-     *   TUR-E0293 -- duplicate field
-     *   TUR-E0294 -- unknown field */
-    Form **value_forms = (Form **)arena_alloc(e->arena, def->n_fields * sizeof(Form *));
-    bool is_keyword_form = (n_given > 0 && call->as.list.items[2]->tag == F_KEYWORD);
-    if (is_keyword_form) {
-        /* Pair count must be even. */
-        if ((n_given % 2u) != 0u) {
-            diag_emit(DIAG_ERROR, call->span,
-                      "make-struct '%s': keyword form requires :field value pairs (odd number of args)",
-                      def->name);
-            return NULL;
-        }
-        uint32_t n_pairs = n_given / 2u;
-        for (uint32_t i = 0; i < def->n_fields; i++) value_forms[i] = NULL;
-        for (uint32_t p = 0; p < n_pairs; p++) {
-            Form *kw = call->as.list.items[2 + p * 2];
-            Form *vf = call->as.list.items[2 + p * 2 + 1];
-            if (kw->tag != F_KEYWORD) {
-                diag_emit(DIAG_ERROR, kw->span,
-                          "TUR-E0299: make-struct '%s': cannot mix positional and "
-                          "keyword arguments -- use all positional (%s v1 v2 ...) or "
-                          "all keyword (%s :f1 v1 :f2 v2 ...)",
-                          def->name, def->name, def->name);
-                return NULL;
-            }
-            const char *kname = kw->as.sym->name;
-            uint32_t klen = kw->as.sym->len;
-            /* Resolve to field index. */
-            uint32_t fi = UINT32_MAX;
-            for (uint32_t i = 0; i < def->n_fields; i++) {
-                const char *fname = def->fields[i].name;
-                if (fname && strlen(fname) == klen && memcmp(fname, kname, klen) == 0) {
-                    fi = i; break;
-                }
-            }
-            if (fi == UINT32_MAX) {
-                diag_emit(DIAG_ERROR, kw->span,
-                          "TUR-E0294: make-struct unknown field '%s' for struct '%s'",
-                          kname, def->name);
-                return NULL;
-            }
-            if (value_forms[fi] != NULL) {
-                diag_emit(DIAG_ERROR, kw->span,
-                          "TUR-E0293: make-struct duplicate field '%s'", kname);
-                return NULL;
-            }
-            value_forms[fi] = vf;
-        }
-        for (uint32_t i = 0; i < def->n_fields; i++) {
-            if (value_forms[i] == NULL) {
-                diag_emit(DIAG_ERROR, call->span,
-                          "TUR-E0292: make-struct missing field '%s'", def->fields[i].name);
-                return NULL;
-            }
-        }
-    } else {
-        /* KW-V0: a stray keyword anywhere in an otherwise-positional call is a
-         * mixed-form error (the leading arg was positional, so this is not the
-         * keyword path).  Catch it explicitly rather than letting it surface as
-         * a confusing arity mismatch. */
-        for (uint32_t a = 0; a < n_given; a++) {
-            if (call->as.list.items[2 + a]->tag == F_KEYWORD) {
-                diag_emit(DIAG_ERROR, call->as.list.items[2 + a]->span,
-                          "TUR-E0299: make-struct '%s': cannot mix positional and "
-                          "keyword arguments -- use all positional (%s v1 v2 ...) or "
-                          "all keyword (%s :f1 v1 :f2 v2 ...)",
-                          def->name, def->name, def->name);
-                return NULL;
-            }
-        }
-        if (n_given != def->n_fields) {
-            diag_emit(DIAG_ERROR, call->span,
-                      "make-struct '%s': expected %u field value(s), got %u",
-                      def->name, def->n_fields, n_given);
-            return NULL;
-        }
-        for (uint32_t i = 0; i < def->n_fields; i++) {
-            value_forms[i] = call->as.list.items[2 + i];
-        }
-    }
-
-    /* Elaborate each field value */
-    Expr **field_values = (Expr **)arena_alloc(e->arena, def->n_fields * sizeof(Expr *));
-    for (uint32_t i = 0; i < def->n_fields; i++) {
-        Expr *fv = elab_form(e, value_forms[i]);
-        if (!fv) return NULL;
-        field_values[i] = fv;
-
-        if (def->n_type_params > 0 && def->fields[i].full_type) {
-            if (!struct_field_collect_type_args(def, def->fields[i].full_type,
-                                                fv->type, inferred_type_args, have_type_args)) {
-                Type expected = elab_struct_field_use_type(e, &fv->type, def, &def->fields[i]);
-                if (fv->type.kind != TY_PTR_VOID && !type_eq(fv->type, expected)) {
-                    diag_emit(DIAG_ERROR, value_forms[i]->span,
-                              "make-struct '%s': field '%s' expects %s, got %s",
-                              def->name, def->fields[i].name,
-                              type_name(expected), type_name(fv->type));
-                    return NULL;
-                }
-            }
-        }
-
-        /* Move-at-make-struct for rc-managed payloads, mirroring the
-         * F1-2-3 scan in elab_pack.  Ownership of an rc / weak / existential
-         * reference transfers into the new struct field; the source binding
-         * must not auto-drop at its enclosing scope's exit too. */
-        if (fv->kind == EX_VAR && fv->as.var.binding) {
-            TypeKind vk = fv->type.kind;
-            if (vk == TY_RC || vk == TY_WEAK || vk == TY_EXISTS) {
-                (void)binding_mark_moved(fv->as.var.binding,
-                                         value_forms[i]->span);
-            }
-        }
-    }
-
-    /* SC7: a phantom type parameter (one that appears in no field, e.g. the
-     * `A` of `(defstruct Schema [A] (raw :int))`) cannot be inferred from the
-     * field values.  Fall back to the return-type-directed expected-type
-     * channel: when the make-struct sits under an ascription `(:: e (Schema T))`
-     * (or any context that pushed `(Schema T)` onto e->expected_type), pull the
-     * missing parameter(s) from that applied type.  This walks the left-nested
-     * TY_APP spine `(((Def a) b) c)` and matches the base struct by identity. */
-    if (have_type_args && def->n_type_params > 0 && e->expected_type) {
-        Type *exp = e->expected_type;
-        /* Collect the app-spine arguments (outermost last). */
-        Type spine_args[16];
-        uint8_t n_spine = 0;
-        Type *cur = exp;
-        while (cur && cur->kind == TY_APP && n_spine < 16) {
-            spine_args[n_spine++] = *cur->as.app.arg;
-            cur = cur->as.app.fn;
-        }
-        if (cur && cur->kind == TY_STRUCT && cur->as.struct_.def == def &&
-            n_spine == def->n_type_params) {
-            for (uint8_t i = 0; i < def->n_type_params; i++) {
-                if (!have_type_args[i]) {
-                    /* spine_args is innermost-first reversed: arg for param i is
-                     * spine_args[n_spine - 1 - i]. */
-                    inferred_type_args[i] = spine_args[n_spine - 1 - i];
-                    have_type_args[i] = true;
-                }
-            }
-        }
-    }
-
-    /* Build the result type */
-    for (uint8_t i = 0; i < def->n_type_params; i++) {
-        if (have_type_args && !have_type_args[i]) {
-            diag_emit(DIAG_ERROR, name_form->span,
-                      "make-struct '%s': could not infer type parameter '%s' from field values "
-                      "(it appears in no field; add a type ascription, e.g. (:: (make-struct %s ...) (%s ...)))",
-                      def->name, def->type_params[i], def->name, def->name);
-            return NULL;
-        }
-    }
-    for (uint32_t i = 0; i < def->n_fields; i++) {
-        if (def->fields[i].full_type) {
-            Type expected = elab_struct_field_use_type(e, NULL, def, &def->fields[i]);
-            if (have_type_args && def->n_type_params > 0) {
-                Type ctor_type = type_struct(def);
-                ctor_type.hkt_kind = kind_for_arity(def->n_type_params);
-                Type applied = ctor_type;
-                for (uint8_t tp = 0; tp < def->n_type_params; tp++) {
-                    applied = type_app(e->arena, applied, inferred_type_args[tp], call->span);
-                }
-                expected = elab_struct_field_use_type(e, &applied, def, &def->fields[i]);
-            }
-            if (field_values[i]->type.kind != TY_PTR_VOID && !type_eq(field_values[i]->type, expected)) {
-                diag_emit(DIAG_ERROR, value_forms[i]->span,
-                          "make-struct '%s': field '%s' expects %s, got %s",
-                          def->name, def->fields[i].name,
-                          type_name(expected), type_name(field_values[i]->type));
-                return NULL;
-            }
-        } else {
-            /* Scalar fields carry no full_type, so the strict type_eq path above
-             * skips them.  Historically that left a hole: a cstr value silently
-             * stored into an int field (or vice versa) reinterpreted the pointer
-             * bits as a number.  Catch that unambiguous cross-class mismatch --
-             * a numeric field given a string value, or a string field given a
-             * numeric value -- while still permitting numeric->numeric coercion
-             * (int literal into an int8/float field, etc.) which existing call
-             * sites rely on. */
-            TypeKind want = def->fields[i].kind;
-            TypeKind got  = field_values[i]->type.kind;
-            /* Only for non-parametric structs: a parametric field's stored kind
-             * is the int64 *carrier* for its type variable, into which a cstr
-             * (A := cstr) is legitimately bridged -- the guard must not fire
-             * there.  Concrete (non-parametric) fields have no such carrier. */
-            if (def->n_type_params == 0 &&
-                got != TY_PTR_VOID && got != TY_UNKNOWN && want != TY_UNKNOWN) {
-                bool want_str = (want == TY_CSTR);
-                bool got_str  = (got == TY_CSTR);
-                bool want_num = typekind_is_numeric(want);
-                bool got_num  = typekind_is_numeric(got);
-                if ((want_str && got_num) || (want_num && got_str)) {
-                    diag_emit(DIAG_ERROR, value_forms[i]->span,
-                              "make-struct '%s': field '%s' expects %s, got %s",
-                              def->name, def->fields[i].name,
-                              type_name(type_from_kind(want)),
-                              type_name(field_values[i]->type));
-                    return NULL;
-                }
-            }
-        }
-    }
-    Type result_type = type_struct(def);
-    if (def->n_type_params > 0) {
-        result_type = struct_binding->type;
-        for (uint8_t i = 0; i < def->n_type_params; i++) {
-            result_type = type_app(e->arena, result_type, inferred_type_args[i], call->span);
-        }
-    }
-
-    Expr *out = expr_new(e->arena, EX_MAKE_STRUCT, result_type, call->span);
-    out->as.make_struct_.def = def;
-    out->as.make_struct_.field_values = field_values;
-    out->as.make_struct_.n_fields = def->n_fields;
-    return out;
+    /* structdef-retirement DS-D: a lowered struct resolves to a single-variant
+     * record ADT and is fully handled by the constructor rewrite above.  The
+     * former StructDef make-struct path (field reorder / per-field typecheck /
+     * EX_MAKE_STRUCT emission) is dead -- no name resolves to a TY_STRUCT.
+     * Reaching here means the name is not a make-struct-able record type. */
+    diag_emit(DIAG_ERROR, name_form->span,
+              "make-struct: '%s' is not a defined struct type",
+              name_form->as.sym->name);
+    return NULL;
 }
 
 /* CONV-S4: functional update for a single-variant record ADT.  Mirrors the
@@ -5226,99 +4174,13 @@ Expr *elab_with(Elab *e, const Form *call) {
         return elab_with_record_adt(e, call, src_form, ovr_form,
                                     st.as.adt_.def->ctors[0]);
     }
-    if (st.kind != TY_STRUCT || !st.as.struct_.def) {
-        diag_emit(DIAG_ERROR, src_form->span,
-                  "with: source must be a struct value, got %s",
-                  type_name(src->type));
-        return NULL;
-    }
-    StructDef *def = st.as.struct_.def;
-    if (!def->is_copy) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "TUR-E0296: with requires a :copy struct -- '%s' is move-only, "
-                  "so copying its unchanged fields out of the source would consume "
-                  "it. Declare it `(defstruct %s :copy ...)` to use with.",
-                  def->name, def->name);
-        return NULL;
-    }
-
-    /* Map each override field name to its declared field index. */
-    Form **ovr_val = (Form **)arena_alloc(e->arena,
-        (def->n_fields ? def->n_fields : 1) * sizeof(Form *));
-    for (uint32_t i = 0; i < def->n_fields; i++) ovr_val[i] = NULL;
-    uint32_t n_pairs = ovr_form->as.list.len / 2u;
-    for (uint32_t p = 0; p < n_pairs; p++) {
-        Form *fname = ovr_form->as.list.items[p * 2u];
-        Form *fval  = ovr_form->as.list.items[p * 2u + 1u];
-        if (fname->tag != F_SYM) {
-            diag_emit(DIAG_ERROR, fname->span,
-                      "with: override field must be a bare field-name symbol");
-            return NULL;
-        }
-        const char *kn = fname->as.sym->name;
-        uint32_t klen = fname->as.sym->len;
-        uint32_t fi = UINT32_MAX;
-        for (uint32_t i = 0; i < def->n_fields; i++) {
-            const char *dn = def->fields[i].name;
-            if (dn && strlen(dn) == klen && memcmp(dn, kn, klen) == 0) { fi = i; break; }
-        }
-        if (fi == UINT32_MAX) {
-            diag_emit(DIAG_ERROR, fname->span,
-                      "TUR-E0297: with unknown field '%s' for struct '%s'",
-                      kn, def->name);
-            return NULL;
-        }
-        if (ovr_val[fi]) {
-            diag_emit(DIAG_ERROR, fname->span,
-                      "TUR-E0298: with duplicate override field '%s'", kn);
-            return NULL;
-        }
-        ovr_val[fi] = fval;
-    }
-
-    /* Build the lowered (let [G src] (make-struct Name ...)) form. */
-    Span sp = call->span;
-    char g_name[32];
-    snprintf(g_name, sizeof(g_name), "__with_%u", e->next_id++);
-    const Symbol *g_sym = symtab_intern(e->st, strslice(g_name, (uint32_t)strlen(g_name)));
-    Form *g_form = form_sym(e->arena, sp, g_sym);
-
-    const Symbol *def_name_sym = symtab_intern(e->st,
-        strslice(def->name, (uint32_t)strlen(def->name)));
-
-    uint32_t ms_n = 2u + def->n_fields;
-    Form **ms = (Form **)arena_alloc(e->arena, ms_n * sizeof(Form *));
-    ms[0] = form_sym(e->arena, sp, e->sym_make_struct);
-    ms[1] = form_sym(e->arena, sp, def_name_sym);
-    for (uint32_t i = 0; i < def->n_fields; i++) {
-        if (ovr_val[i]) {
-            ms[2u + i] = ovr_val[i];
-        } else {
-            /* non-overridden field: (.fieldname G) */
-            char acc[160];
-            int al = snprintf(acc, sizeof(acc), ".%s", def->fields[i].name);
-            const Symbol *acc_sym = symtab_intern(e->st,
-                strslice(acc, (al > 0 ? (uint32_t)al : 0)));
-            Form *ai[2];
-            ai[0] = form_sym(e->arena, sp, acc_sym);
-            ai[1] = g_form;
-            ms[2u + i] = form_list(e->arena, sp, ai, 2);
-        }
-    }
-    Form *ms_form = form_list(e->arena, sp, ms, ms_n);
-
-    Form *bind_items[2];
-    bind_items[0] = g_form;
-    bind_items[1] = src_form;
-    Form *bind_vec = form_vec(e->arena, sp, bind_items, 2);
-
-    Form *let_items[3];
-    let_items[0] = form_sym(e->arena, sp, e->sym_let);
-    let_items[1] = bind_vec;
-    let_items[2] = ms_form;
-    Form *let_form = form_list(e->arena, sp, let_items, 3);
-
-    return elab_form(e, let_form);
+    /* structdef-retirement DS-D: a lowered struct is a single-variant record
+     * ADT handled by elab_with_record_adt above; the old StructDef `with`
+     * lowering is dead (no source resolves to a TY_STRUCT). */
+    diag_emit(DIAG_ERROR, src_form->span,
+              "with: source must be a struct value, got %s",
+              type_name(src->type));
+    return NULL;
 }
 
 /* Elaborate (& expr) - create an immutable borrow
