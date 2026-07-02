@@ -1083,7 +1083,7 @@ command.add(turmeric_doc_predicate, {
     local prev_line_text = doc.lines[line] or ""
 
     -- 2. Call default newline command to insert \n and carry previous indent
-    command.perform("docview:newline")
+    command.perform("doc:newline")
 
     -- Now we are on the new line. Let's get our new cursor position
     local r_line, r_col = doc:get_selection()
