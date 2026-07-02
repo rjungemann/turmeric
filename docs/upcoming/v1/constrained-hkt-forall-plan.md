@@ -173,7 +173,33 @@ radius in this plan -- every poly-fn fixture's expected.c regenerates.
 Schedule alongside a coordinated fixture regen window (see CLAUDE.md
 "Fixture churn" policy).
 
-### Slice 3 -- Rank-N over higher-kinded vars at call sites (`-Xhkt-hrt`)
+### Slice 3 -- Rank-N over higher-kinded vars at call sites (`--enable=hkt-hrt`)
+
+**Status: landed (type-level; carrier-compatible containers).** Ships behind
+the `hkt-hrt` experiment. A rank-2 `forall` parameter may now quantify a
+higher-kinded `f :: * -> *` used as `(f a)` in its body; both the pass site
+(`elab_call.c`, the `EX_POLY_WRAP` block) and the invocation site
+(`elab_poly_call`) gate on the flag and validate the instantiation: the type
+filling `f` must be a type application whose base constructor kind matches f's
+kind. Diagnostics: `TUR-E0295` (non-application argument), `TUR-E0296` (kind
+mismatch). A prerequisite parser fix now preserves `arg_full_types` for a
+`(F A)` argument in a `(-> ...)` type (previously dropped unless an arg was a
+bare tyvar/quantifier), without which the `(f a)` body param was invisible
+downstream. Fixtures: `hrt-hkt-option-instantiation/`,
+`hrt-hkt-list-instantiation/`, `errors/hrt-hkt-non-application-arg/`,
+`errors/hrt-hkt-kind-mismatch/`.
+
+**Scope note -- carrier ABI.** Turmeric's HRT is type-erased, so a
+*carrier-compatible* container (a parametric opaque / heap constructor, whose
+value is the int64 carrier) flows through `tur_poly_fn_t` unchanged and works
+end-to-end today. A **by-value aggregate product** container (a `defstruct` /
+flat `defadt`, e.g. the stdlib `Option`) does not fit the erased carrier; it is
+rejected cleanly with `TUR-E0297` rather than miscompiled. Lifting that -- via
+the existing B4 box-at-store / deref-at-thunk bridge -- is tracked in
+`docs/reported/hrt-hkt-aggregate-container-carrier.md` and is a prerequisite for
+a lens over ordinary by-value containers. This matches the plan's original
+framing: this slice delivers the *unifier/kind-tracking* novelty at the type
+level; the aggregate-carrier codegen is deferred to the slice that needs it.
 
 **Goal.** Allow a call site to pass a value whose type instantiates an
 `f : * -> *` bound variable to a concrete `* -> *` constructor

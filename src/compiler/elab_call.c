@@ -1,5 +1,114 @@
 /* elab_call.c -- function-call elaboration, partial application, polymorphic dispatch. */
 #include "elab_internal.h"
+#include "experiments.h"  /* Slice 3 (constrained-hkt-forall): hkt-hrt gate */
+
+/* --- Slice 3 (constrained-hkt-forall-plan): higher-kinded rank-2 helpers ----
+ *
+ * A rank-2 `forall` parameter may quantify a higher-kinded variable
+ * (`(f :: * -> *)`, kind established by slice 1) and use it applied as `(f a)`
+ * in its body.  At each instantiation site -- both where the poly fn is passed
+ * (its container parameter's concrete type) and where it is invoked inside the
+ * callee (the actual argument's type) -- the type filling `f` must be a type
+ * application whose base constructor's kind matches `f`'s declared kind.
+ *
+ * Turmeric's HRT is type-erased, so a carrier-compatible container (a
+ * parametric opaque/heap constructor) flows through the int64 `tur_poly_fn_t`
+ * carrier unchanged; a by-value *aggregate* product container does not fit the
+ * carrier and would emit broken C, so it is rejected here as not-yet-supported
+ * rather than miscompiled (deferred; see
+ * docs/reported/hrt-hkt-aggregate-container-carrier.md). */
+
+/* Does this forall quantify a higher-kinded (arrow-kind) bound variable?
+ * KIND_STAR (plain type var) and KIND_ROW/KIND_TYPEROW (effect/type rows) do
+ * not count. */
+static bool forall_has_higher_kinded_var(const Type *forall_ty) {
+    if (!forall_ty || forall_ty->kind != TY_FORALL) return false;
+    if (!forall_ty->as.forall_.var_kinds) return false;
+    for (uint8_t i = 0; i < forall_ty->as.forall_.n_vars; i++) {
+        Kind k = forall_ty->as.forall_.var_kinds[i];
+        if (k != KIND_STAR && k != KIND_ROW && k != KIND_TYPEROW) return true;
+    }
+    return false;
+}
+
+/* Gate a higher-kinded rank-2 use behind --enable=hkt-hrt.  A no-op (returns
+ * true) for a plain rank-2 forall.  Returns false after emitting the gate error
+ * when the feature is used but not enabled. */
+static bool hrt_hk_gate(Elab *e, const Type *forall_ty, Span span) {
+    (void)e;
+    if (!forall_has_higher_kinded_var(forall_ty)) return true;
+    if (!g_opt_hkt_hrt) {
+        diag_emit(DIAG_ERROR, span,
+                  "rank-2 polymorphic parameter over a higher-kinded variable "
+                  "(kind '* -> *' or higher) requires --enable=hkt-hrt");
+        return false;
+    }
+    experiment_warn_if_used("hkt-hrt");
+    return true;
+}
+
+/* If `body_param` is `(f a)` where `f` is one of the forall's higher-kinded
+ * bound variables, return f's declared kind via *out_kind and true; else false.
+ * Only single-application `(f a)` formals participate (the shape the lens/optic
+ * use-cases and the slice-3 fixtures exercise). */
+static bool hrt_body_param_hk_var_kind(const Type *forall_ty,
+                                       const Type *body_param, Kind *out_kind) {
+    if (!body_param || body_param->kind != TY_APP || !body_param->as.app.fn)
+        return false;
+    const Type *head = body_param->as.app.fn;
+    if (head->kind != TY_TYVAR || !head->as.tyvar_.name) return false;
+    for (uint8_t i = 0; i < forall_ty->as.forall_.n_vars; i++) {
+        const char *vn = forall_ty->as.forall_.var_names[i];
+        Kind vk = forall_ty->as.forall_.var_kinds
+                    ? forall_ty->as.forall_.var_kinds[i] : KIND_STAR;
+        if (vn && strcmp(vn, head->as.tyvar_.name) == 0 &&
+            vk != KIND_STAR && vk != KIND_ROW && vk != KIND_TYPEROW) {
+            if (out_kind) *out_kind = vk;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Validate that `actual` is a type application whose base constructor kind
+ * matches `f_kind`, and that its container is carrier-compatible.  `ctx_what`
+ * names the site for the diagnostic ("rank-2 argument" / "rank-2 call").
+ * Returns false after emitting TUR-E0295/E0296/E0297 on violation. */
+static bool hrt_validate_hk_actual(Elab *e, Kind f_kind, Type actual,
+                                   Span span, const char *ctx_what) {
+    (void)e;
+    if (actual.kind != TY_APP) {
+        diag_emit(DIAG_ERROR, span,
+                  "%s: expected a type application instantiating the "
+                  "higher-kinded variable (e.g. (Box int)), but got a "
+                  "non-application type (TUR-E0295)", ctx_what);
+        return false;
+    }
+    /* Walk the application spine to the base constructor and compare its
+     * unapplied kind against f's declared kind. */
+    const Type *base = &actual;
+    while (base->kind == TY_APP && base->as.app.fn) base = base->as.app.fn;
+    if (base->hkt_kind != f_kind) {
+        diag_emit(DIAG_ERROR, span,
+                  "%s: container constructor of kind '%s' cannot instantiate a "
+                  "higher-kinded variable of kind '%s' (TUR-E0296)",
+                  ctx_what, kind_to_string(base->hkt_kind),
+                  kind_to_string(f_kind));
+        return false;
+    }
+    /* A by-value aggregate product container does not fit the erased int64
+     * poly carrier; reject rather than emit broken C (deferred). */
+    if (adt_app_is_byvalue_product(actual)) {
+        diag_emit(DIAG_ERROR, span,
+                  "%s: by-value aggregate container is not yet supported through "
+                  "the erased poly carrier -- use a parametric opaque/heap "
+                  "container, or see "
+                  "docs/reported/hrt-hkt-aggregate-container-carrier.md "
+                  "(TUR-E0297)", ctx_what);
+        return false;
+    }
+    return true;
+}
 
 /* ---- file-local helper forward declarations ---- */
 static Expr *elab_call_hamt_fn(Elab *e, Span span, const Symbol *fn_name, uint32_t n_args, Expr **args);
@@ -3644,6 +3753,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         /* Phase HRT1: Detect rank-2 poly param and wrap arg in EX_POLY_WRAP.
          * arg_full_types[fn_arg_idx] is TY_FORALL → this is a rank-2 param. */
         bool is_rank2_param = false;
+        const Type *rank2_forall_ty = NULL;  /* Slice 3: the param's TY_FORALL */
         if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
             uint32_t fn_arg_idx2 = i;
             if (fn_binding->closure_fn_binding) fn_arg_idx2 = i + 1;
@@ -3655,6 +3765,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                  * TY_EXISTS argument from `pack`. */
                 if (aft && aft->kind == TY_FORALL) {
                     is_rank2_param = true;
+                    rank2_forall_ty = aft;
                 }
             }
         }
@@ -4242,6 +4353,33 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                 diag_emit(DIAG_ERROR, args[i]->span,
                           "rank-2 argument must be a named function (capturing closures not yet supported)");
                 return NULL;
+            }
+            /* Slice 3 (constrained-hkt-forall): gate + validate a higher-kinded
+             * rank-2 parameter.  When the forall quantifies an `f :: * -> *`
+             * used as `(f a)` in a body parameter, the passed function's
+             * corresponding parameter must be a type application whose base
+             * constructor kind matches f's kind. */
+            if (rank2_forall_ty && forall_has_higher_kinded_var(rank2_forall_ty)) {
+                if (!hrt_hk_gate(e, rank2_forall_ty, args[i]->span)) return NULL;
+                const Type *fbody = rank2_forall_ty->as.forall_.body;
+                if (fbody && fbody->kind == TY_FN && fbody->as.fn.arg_full_types &&
+                    inner_fn_b->type.kind == TY_FN &&
+                    inner_fn_b->type.as.fn.arg_full_types) {
+                    uint8_t env_off = inner_fn_b->closure_fn_binding ? 1 : 0;
+                    for (uint8_t bp = 0; bp < fbody->as.fn.arity; bp++) {
+                        Kind fk;
+                        if (!hrt_body_param_hk_var_kind(rank2_forall_ty,
+                                fbody->as.fn.arg_full_types[bp], &fk))
+                            continue;
+                        uint8_t ap = bp + env_off;
+                        if (ap >= inner_fn_b->type.as.fn.arity) continue;
+                        Type *act = inner_fn_b->type.as.fn.arg_full_types[ap];
+                        if (!act) continue;
+                        if (!hrt_validate_hk_actual(e, fk, *act, args[i]->span,
+                                                    "rank-2 argument"))
+                            return NULL;
+                    }
+                }
             }
             Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, args[i]->span);
             wrap->as.poly_wrap_.inner = args[i];
@@ -5212,6 +5350,29 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
      * If body->arg_full_types[i] is TY_FORALL, wrap that arg with EX_POLY_WRAP
      * and mark it in poly_arg_mask so emit can pass it by pointer. */
     const Type *poly = fn_binding->poly_type;
+
+    /* Slice 3 (constrained-hkt-forall): gate + validate a higher-kinded rank-2
+     * invocation.  When the callee applies a poly fn whose forall quantifies an
+     * `f :: * -> *` used as `(f a)`, the actual argument at that position must be
+     * a type application whose base constructor kind matches f's kind. */
+    if (poly && poly->kind == TY_FORALL &&
+        forall_has_higher_kinded_var(poly)) {
+        if (!hrt_hk_gate(e, poly, call->span)) return NULL;
+        const Type *hbody = poly->as.forall_.body;
+        if (hbody && hbody->kind == TY_FN && hbody->as.fn.arg_full_types) {
+            for (uint8_t bp = 0;
+                 bp < hbody->as.fn.arity && bp < n_args; bp++) {
+                Kind fk;
+                if (!hrt_body_param_hk_var_kind(poly,
+                        hbody->as.fn.arg_full_types[bp], &fk))
+                    continue;
+                if (!hrt_validate_hk_actual(e, fk, args[bp]->type,
+                                            args[bp]->span, "rank-2 call"))
+                    return NULL;
+            }
+        }
+    }
+
     uint32_t poly_arg_mask = 0;
     if (poly && poly->kind == TY_FORALL) {
         const Type *pbody = poly->as.forall_.body;

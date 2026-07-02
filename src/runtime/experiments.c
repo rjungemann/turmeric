@@ -52,6 +52,13 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.27.0",                    /* expires_at (hard contract; release-cut enforced) */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_forall_constraints },
+    { "hkt-hrt",
+      "rank-2 forall over a higher-kinded variable, e.g. (forall [(f :: * -> *)] (-> (f int) int)), validated at instantiation sites",
+      "docs/upcoming/v1/constrained-hkt-forall-plan.md",
+      "0.25.6",                    /* introduced */
+      "0.27.0",                    /* expires_at (hard contract; release-cut enforced) */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_hkt_hrt },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

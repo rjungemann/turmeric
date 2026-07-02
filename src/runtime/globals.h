@@ -176,6 +176,14 @@ extern bool g_opt_forall_kinds;
  * EXPERIMENTS[] `opt_global` for "forall-constraints". */
 extern bool g_opt_forall_constraints;
 
+/* Slice 3 of constrained-hkt-forall-plan: enable bit for the `hkt-hrt`
+ * experiment.  When set, a rank-2 `forall` parameter may quantify a
+ * higher-kinded variable (`(f :: * -> *)`) used as `(f a)` in the body, and
+ * the call/instantiation sites validate that the type filling `f` is a type
+ * application whose constructor kind matches (TUR-E0295/TUR-E0296).  Points at
+ * the EXPERIMENTS[] `opt_global` for "hkt-hrt". */
+extern bool g_opt_hkt_hrt;
+
 
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signatures

@@ -1405,6 +1405,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             bool arg_affine_local[MAX_FN_ARITY];    /* ST0 */
             bool arg_relevant_local[MAX_FN_ARITY];  /* ST0 */
             bool any_poly_arg = false;
+            bool any_app_arg = false;  /* Slice 3: a (F A) arg needs its full type kept */
             for (uint8_t _ai = 0; _ai < MAX_FN_ARITY; _ai++) arg_linear_local[_ai] = false;
             for (uint8_t _ai = 0; _ai < MAX_FN_ARITY; _ai++) arg_unique_local[_ai] = false;
             for (uint8_t _ai = 0; _ai < MAX_FN_ARITY; _ai++) arg_unique_mut_local[_ai] = false;
@@ -1466,6 +1467,13 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                     any_poly_arg = true;
                 } else {
                     arg_kinds[arg_idx] = at->kind;
+                    /* Slice 3 (constrained-hkt-forall): a type-application arg
+                     * such as `(f a)` (higher-kinded instantiation) or a
+                     * concrete `(Box int)` must keep its full type so the
+                     * rank-2 validation and instantiation can see the container
+                     * shape -- otherwise arg_full_types is dropped and the
+                     * `(f a)` body param becomes invisible downstream. */
+                    if (at->kind == TY_APP) any_app_arg = true;
                 }
                 arg_idx++;
             }
@@ -1502,7 +1510,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             *fn_t = type_fn(arg_kinds, n_args, result_kind);
 
             /* Store full type info if any polymorphic args or an aggregate/poly result */
-            if (any_poly_arg || poly_result || aggregate_result) {
+            if (any_poly_arg || any_app_arg || poly_result || aggregate_result) {
                 Type **aFT = (Type **)arena_alloc(e->arena, n_args * sizeof(Type *));
                 for (uint8_t i = 0; i < n_args; i++) aFT[i] = arg_full_types_local[i];
                 fn_t->as.fn.arg_full_types = aFT;

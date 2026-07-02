@@ -1,0 +1,14 @@
+;; Slice 3 (constrained-hkt-forall-plan): the passed function's container
+;; parameter is a `Trip` (kind `* -> * -> *`), but the rank-2 slot expects a
+;; `f :: * -> *` container.  The base constructor's kind does not match f's
+;; kind, so the instantiation is rejected with TUR-E0296.
+(defopaque Trip [a b] :int)
+
+(defn triplen [x : (Trip int bool)] : int 7)
+
+(defn use-c [g (forall [(f :: * -> *)] (-> (f int) int))] : int
+  0)
+
+(defn main [] : int
+  (println (use-c triplen))
+  0)
