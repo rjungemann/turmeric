@@ -2548,6 +2548,29 @@ CtorDef *elab_lookup_ctor(Elab *e, const Symbol *name) {
  *   _           default-body)
  * Arms are interleaved: pattern body pattern body ...
  */
+/* poly-defn-inner-lambda-codegen: two match arms over the same parametric ADT
+ * may disagree only in that one produced the bare TY_ADT carrier (a constructor
+ * applied to a polymorphic tyvar argument whose element could not be pinned to a
+ * ground type -- e.g. `(POK v rest)` with `v : A`) while a peer arm produced the
+ * full TY_APP (`(PRes A)`, from a forward-referenced sibling call or the
+ * enclosing lambda's declared return).  They denote the same type; treat them as
+ * compatible and promote the unified result to the more specific TY_APP so the
+ * match (and the enclosing defn/lambda's declared return) keeps the element
+ * type.  On success *out receives the promoted (more specific) type. */
+static bool match_arm_type_compatible(Type a, Type b, Type *out) {
+    if (type_eq(a, b)) { *out = a; return true; }
+    AdtDef *ad = (a.kind == TY_ADT) ? a.as.adt_.def
+               : (a.kind == TY_APP) ? type_adt_app_def(&a) : NULL;
+    AdtDef *bd = (b.kind == TY_ADT) ? b.as.adt_.def
+               : (b.kind == TY_APP) ? type_adt_app_def(&b) : NULL;
+    if (ad && ad == bd && a.kind != b.kind) {
+        /* One bare TY_ADT, one TY_APP over the same def: keep the TY_APP. */
+        *out = (a.kind == TY_APP) ? a : b;
+        return true;
+    }
+    return false;
+}
+
 Expr *elab_match(Elab *e, const Form *call) {
     /* call->as.list.items[0] = "match"
      * call->as.list.items[1] = scrutinee
@@ -3116,9 +3139,10 @@ Expr *elab_match(Elab *e, const Form *call) {
                 linear_state_restore(match_lin_bindings, match_lin_before, n_match_lin);
             }
             /* Phase G0: Arm body type consistency check for wildcard/variable arms. */
+            Type _wc_unified;
             if (result_type.kind != TY_UNKNOWN
                     && body->type.kind != TY_UNKNOWN
-                    && !type_eq(result_type, body->type)) {
+                    && !match_arm_type_compatible(result_type, body->type, &_wc_unified)) {
                 diag_emit_with_code(DIAG_ERROR, body_form->span,
                                     TUR_E0001_TYPE_MISMATCH,
                                     "match: arm types are incompatible -- "
@@ -3129,6 +3153,7 @@ Expr *elab_match(Elab *e, const Form *call) {
             }
             arms[ai].body = body;
             if (result_type.kind == TY_UNKNOWN) result_type = body->type;
+            else if (body->type.kind != TY_UNKNOWN) result_type = _wc_unified;
         } else if (pat_form->tag == F_LIST) {
             /* Constructor pattern: (CtorName var1 var2 ...) */
             if (pat_form->as.list.len < 1) {
@@ -3538,9 +3563,10 @@ Expr *elab_match(Elab *e, const Form *call) {
              * first arm, emit TUR_E0001_TYPE_MISMATCH.  For GADT arms, also
              * emit a note listing the active skolem equalities so the user can
              * see which type refinement is in effect. */
+            Type _arm_unified;
             if (result_type.kind != TY_UNKNOWN
                     && body->type.kind != TY_UNKNOWN
-                    && !type_eq(result_type, body->type)) {
+                    && !match_arm_type_compatible(result_type, body->type, &_arm_unified)) {
                 if (adt->is_gadt && arm_senv.n > 0) {
                     char skolem_note[256];
                     int pos = 0;
@@ -3570,6 +3596,7 @@ Expr *elab_match(Elab *e, const Form *call) {
             arms[ai].body = body;
             arms[ai].guard = guard_expr;
             if (result_type.kind == TY_UNKNOWN) result_type = body->type;
+            else if (body->type.kind != TY_UNKNOWN) result_type = _arm_unified;
             /* LT1: Capture outer linear state after this arm's body. */
             if (n_match_lin > 0) {
                 arm_lin_states[ai] = linear_state_capture_current(match_lin_bindings, n_match_lin);

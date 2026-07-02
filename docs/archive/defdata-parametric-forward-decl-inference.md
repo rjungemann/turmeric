@@ -2,10 +2,33 @@
 title: Sibling forward-referenced defn's compound return type isn't visible to callers
 severity: LOW-MEDIUM. Forces per-arm `(::)` ascription in mutually recursive
 functions whose return type is a parametric ADT.
-status: OPEN. Found 2026-07-01 while cleaning up the parsec-tutorial fixture.
+status: RESOLVED 2026-07-02. Pass-1 forward-decl scan now records compound
+parametric-ADT return types as a full TY_APP.
 ---
 
 # Forward-declared compound return type isn't visible to sibling callers
+
+## Resolution (2026-07-02)
+
+Fixed in `src/compiler/elab_toplevel.c`.  The Pass-1 defn forward-declaration
+scan now handles a compound `(F A B)` return whose head symbol resolves to an
+ADT/struct stub registered by RF0 (e.g. `(PRes Expr)`, `(Option Foo)`,
+`(Vec T)`).  A new shallow, kind-check-free walker (`fwd_shallow_result_app` /
+`fwd_shallow_type_arg`) builds the `TY_APP` chain by hand and stamps it onto the
+forward decl's `result_full_type`; a sibling caller declared *earlier* in the
+module then reads the concrete type args off the scrutinee, so the pattern
+bindings no longer fall back to the placeholder carrier.
+
+`fn_type_from_form` is deliberately **not** used for this: at Pass-1 time the
+ADT stubs are not yet kinded, so it would emit a spurious `TUR-E0012` kind
+mismatch (`cannot apply a type of kind '*' as a type constructor`) for every
+parametric return in the stdlib.  The shallow walker skips kind checking
+entirely, exactly as the report's "shallow walker that only reads pre-registered
+names" direction anticipated.
+
+The exact reduced repro below now `emit-c`s, builds, and runs with no per-arm
+`(::)` ascription.  The regression fixture `parametric-fwd-decl-sibling-return`
+guards it.
 
 ## Symptom
 

@@ -921,6 +921,81 @@ int elab_expand_module_loads(Elab *e, Arena *arena, SymbolTable *st,
     return lx.rc;
 }
 
+/* defdata-parametric-forward-decl-inference: resolve one type-argument form
+ * of a compound return annotation to a Type during the Pass-1 forward-decl
+ * scan.  This runs against RF0 stubs only (no registered defns, ADT kinds not
+ * yet finalized), so it must NOT kind-check -- fn_type_from_form would emit a
+ * spurious TUR-E0012 applying a not-yet-kinded stub.  Recognises the defn's own
+ * type params (kept as named tyvars), registered ADT names, the scalar
+ * primitives, and nested applications; anything else stays a named tyvar
+ * filler (harmless -- the real defn pass recomputes the type in Pass 2). */
+static Type fwd_shallow_type_arg(Elab *e, const Form *af,
+                                 const Symbol **tps, uint8_t n_tp);
+
+static Type *fwd_shallow_result_app(Elab *e, const Form *appform,
+                                    const Symbol **tps, uint8_t n_tp) {
+    if (!appform || appform->tag != F_LIST || appform->as.list.len < 1)
+        return NULL;
+    const Form *head = appform->as.list.items[0];
+    if (head->tag != F_SYM) return NULL;
+    AdtDef *def = NULL;
+    for (uint32_t ai = 0; ai < e->n_adt_defs; ai++) {
+        if (strcmp(e->adt_defs[ai]->name, head->as.sym->name) == 0) {
+            def = e->adt_defs[ai];
+            break;
+        }
+    }
+    if (!def) return NULL;
+    Type cur = type_adt(def);
+    for (uint32_t i = 1; i < appform->as.list.len; i++) {
+        Type arg = fwd_shallow_type_arg(e, appform->as.list.items[i], tps, n_tp);
+        /* Build the TY_APP node by hand -- no kind_of_type_app call. */
+        Type app;
+        memset(&app, 0, sizeof(app));
+        app.kind = TY_APP;
+        app.copy_kind = CK_COPY;
+        app.hkt_kind = KIND_STAR;
+        app.as.app.fn = (Type *)arena_alloc(e->arena, sizeof(Type));
+        *app.as.app.fn = cur;
+        app.as.app.arg = (Type *)arena_alloc(e->arena, sizeof(Type));
+        *app.as.app.arg = arg;
+        cur = app;
+    }
+    Type *out = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *out = cur;
+    return out;
+}
+
+static Type fwd_shallow_type_arg(Elab *e, const Form *af,
+                                 const Symbol **tps, uint8_t n_tp) {
+    if (af && af->tag == F_LIST) {
+        Type *nested = fwd_shallow_result_app(e, af, tps, n_tp);
+        if (nested) return *nested;
+        return type_tyvar_named("_");
+    }
+    if (af && (af->tag == F_SYM || af->tag == F_KEYWORD)) {
+        const char *nm = af->as.sym->name;
+        for (uint8_t ti = 0; ti < n_tp; ti++) {
+            if (tps[ti] && strcmp(tps[ti]->name, nm) == 0) {
+                return type_tyvar_named(tps[ti]->name);
+            }
+        }
+        if (strcmp(nm, "int") == 0)   return TYPE_INT;
+        if (strcmp(nm, "bool") == 0)  return TYPE_BOOL;
+        if (strcmp(nm, "cstr") == 0)  return TYPE_CSTR;
+        if (strcmp(nm, "float") == 0) return TYPE_FLOAT;
+        if (strcmp(nm, "void") == 0 || strcmp(nm, "nil") == 0)
+            return TYPE_NIL;
+        for (uint32_t ai = 0; ai < e->n_adt_defs; ai++) {
+            if (strcmp(e->adt_defs[ai]->name, nm) == 0) {
+                return type_adt(e->adt_defs[ai]);
+            }
+        }
+        return type_tyvar_named(nm);
+    }
+    return type_tyvar_named("_");
+}
+
 Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         Form *const *forms, uint32_t nforms,
                         uint32_t stdlib_prefix,
@@ -1149,6 +1224,12 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         if (name_f->tag == F_SYM) {
                             /* Parse return type annotation if present */
                             TypeKind return_kind = TY_INT; /* default */
+                            /* defdata-parametric-forward-decl-inference: full
+                             * TY_APP result type for a compound parametric-ADT
+                             * return (e.g. (PRes Expr)), stamped onto the
+                             * forward decl so a sibling caller declared earlier
+                             * sees the concrete type args. */
+                            Type *fwd_result_full = NULL;
                             uint32_t params_idx_local = name_idx + 1; /* params usually here */
                             /* poly-defn-recursive-return-type-inference: a defn with
                              * explicit type parameters spells as
@@ -1219,9 +1300,72 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                                     /* Compound return type: peek at the head symbol to
                                      * recognize Session[P] returns for pass-1 forward decls. */
                                     Form *head_f = ret_f->as.list.items[0];
-                                    if (head_f->tag == F_SYM &&
-                                            strcmp(head_f->as.sym->name, "Session") == 0) {
+                                    /* The compound annotation payload is either a bare
+                                     * symbol (`Session`) or an application list
+                                     * (`(PRes Expr)`); recover the type-constructor
+                                     * symbol from whichever shape it is. */
+                                    const Symbol *tycon_sym = NULL;
+                                    if (head_f->tag == F_SYM) {
+                                        tycon_sym = head_f->as.sym;
+                                    } else if (head_f->tag == F_LIST &&
+                                               head_f->as.list.len > 0 &&
+                                               head_f->as.list.items[0]->tag == F_SYM) {
+                                        tycon_sym = head_f->as.list.items[0]->as.sym;
+                                    }
+                                    if (tycon_sym &&
+                                            strcmp(tycon_sym->name, "Session") == 0) {
                                         return_kind = TY_SESSION;
+                                    } else if (tycon_sym) {
+                                        /* defdata-parametric-forward-decl-inference:
+                                         * a compound `(F A B)` return whose head is a
+                                         * registered ADT/struct stub (RF0 has run) --
+                                         * e.g. (PRes Expr), (Option Foo), (Vec T).
+                                         * Build the full TY_APP so a sibling caller
+                                         * declared earlier in the module resolves the
+                                         * scrutinee's concrete type args (otherwise the
+                                         * pattern binding falls back to the placeholder
+                                         * carrier and downstream constructor arms
+                                         * mismatch). Gated on a registered ADT head so
+                                         * fn_type_from_form only walks pre-registered
+                                         * names and cannot emit a spurious diagnostic. */
+                                        bool head_is_adt = false;
+                                        for (uint32_t ai = 0; ai < e.n_adt_defs; ai++) {
+                                            if (strcmp(e.adt_defs[ai]->name,
+                                                       tycon_sym->name) == 0) {
+                                                head_is_adt = true;
+                                                break;
+                                            }
+                                        }
+                                        if (head_is_adt) {
+                                            /* Collect the defn's own type params (poly
+                                             * defn) so a return like (PRes A) keeps A as
+                                             * a named tyvar rather than an unknown name. */
+                                            const Symbol *tp_syms[MAX_FN_ARITY];
+                                            Kind tp_kinds[MAX_FN_ARITY];
+                                            uint8_t n_tp = 0;
+                                            if (params_idx_local > name_idx + 1 &&
+                                                (uint32_t)f->as.list.len > name_idx + 1 &&
+                                                f->as.list.items[name_idx + 1]->tag == F_VEC) {
+                                                Form *tpv = f->as.list.items[name_idx + 1];
+                                                for (uint32_t ti = 0;
+                                                     ti < tpv->as.list.len && n_tp < MAX_FN_ARITY;
+                                                     ti++) {
+                                                    Form *tf = tpv->as.list.items[ti];
+                                                    if (tf->tag == F_SYM) {
+                                                        tp_syms[n_tp] = tf->as.sym;
+                                                        tp_kinds[n_tp] = KIND_STAR;
+                                                        n_tp++;
+                                                    }
+                                                }
+                                            }
+                                            (void)tp_kinds;
+                                            Type *ann = fwd_shallow_result_app(
+                                                &e, head_f, tp_syms, n_tp);
+                                            if (ann && ann->kind == TY_APP) {
+                                                return_kind = TY_APP;
+                                                fwd_result_full = ann;
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1235,6 +1379,11 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                                 ? fwd_decl_scan_params(f->as.list.items[name_idx + 1], arg_kinds)
                                 : 0;
                             Type fn_type = type_fn(arg_kinds, param_arity, return_kind);
+                            /* defdata-parametric-forward-decl-inference: carry the
+                             * full compound result type on the forward decl. */
+                            if (fwd_result_full) {
+                                fn_type.as.fn.result_full_type = fwd_result_full;
+                            }
                             /* MF3: if the name is already in global scope (e.g. an
                              * auto-loaded stdlib defn), do NOT pre-register a
                              * duplicate forward decl. Pass 2's elab_defn will then

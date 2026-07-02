@@ -1,10 +1,36 @@
 ---
 title: Multi-file split path drops ADT monomorph typedefs from the header
 severity: LOW. Does not affect the `tests/run.sh` gate (suite builds single-file).
-status: OPEN. Found 2026-06-29 while resolving baseline-ctor-option-struct-mangling.
+status: RESOLVED 2026-07-02. emit_header now runs the full body scan +
+per-ctor inline-by-value field pre-registration before flushing ADT typedefs.
 ---
 
 # Multi-file split path drops ADT monomorph typedefs from the header
+
+## Resolution (2026-07-02)
+
+Fixed in `src/compiler/emit_header` (`src/compiler/emit_module.c`), taking the
+report's second fix direction ("have `emit_header` run the same full type-scan
+`emit_program` does").  The header is the sole emitter of the concrete ADT-app
+typedefs for the separate-compilation path -- the `.c` `#include`s it and never
+flushes its own set -- but its registration previously only walked *exported
+signatures*.  Before the flush, `emit_header` now:
+
+1. runs `scan_adt_apps_in_expr` over every flattened item (the same full body
+   walk `emit_program` does), and
+2. mirrors `emit_program`'s per-ctor pre-registration of inline-by-value
+   parametric fields (`type_c_name` on each `TY_APP` field that
+   `adt_field_is_inline_byval`), which is how the `Endo__int` / `Schema__int`
+   concrete monomorphs and the `Option__struct` placeholder they carry get
+   registered.
+
+`./build/tur build tests/fixtures/defstruct-fn-field-single-arg` (the repro,
+directory-descent without a manifest -> split path) now compiles and the
+resulting binary prints `42`.
+
+The `tests/run.sh` gate builds every fixture single-file, so it does not
+exercise the split path; this fix is verified by the manual directory build
+above rather than a run.sh fixture.
 
 ## Summary
 

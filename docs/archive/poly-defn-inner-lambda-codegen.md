@@ -1,10 +1,55 @@
 ---
 title: Polymorphic defn whose body returns an inner lambda drops the lambda in codegen
 severity: MEDIUM. Blocks fully-polymorphic higher-order combinators.
-status: OPEN. Found 2026-07-01 while rewriting the parsec-tutorial fixture in HOC style.
+status: RESOLVED 2026-07-02. The inner lambda's carrier base is now emitted when
+its enclosing carrier-emitted defn takes its address.
 ---
 
 # Polymorphic defn + inner-lambda body: codegen references an undefined `__fn_NNNN`
+
+## Resolution (2026-07-02)
+
+Two layers were involved.
+
+**Elaboration.**  The reduced repro also failed *earlier*, at the inner match:
+`(POK v rest)` (with `v : A`) inferred the bare `TY_ADT` `PRes` while the peer
+arm `(q xs)` inferred the full `(PRes A)`, so the arms would not unify
+("expected adt, got app").  The narrowest correct fix is in the match-arm
+consistency check (`src/compiler/elab_structs.c`, new
+`match_arm_type_compatible`): a bare `TY_ADT` arm and a `TY_APP` arm over the
+*same* ADT def are compatible, and the unified result is promoted to the more
+specific `TY_APP`.  (An earlier attempt to force the constructor itself to
+build `(PRes A)` in `elab_call.c` was reverted -- it also fired for generic
+library constructor bodies like `tuple2`, where the bare-`TY_ADT` carrier
+result is intentional, and segfaulted `conv-defstruct-accessor-unbox`.)
+
+**Codegen (the reported drop).**  The inner lambda `__fn_N` is generic-unsafe
+(its signature names the enclosing `A`), so `emit_abi_fn_skip_generic` skips its
+carrier base on the theory that it is emitted only through per-callsite
+specialization clones.  But an ABI-invariant generic like `or-parser` -- whose
+`:fn` params/result are boxed closures on the int64 carrier -- is itself
+carrier-emitted (not generic-unsafe) and takes the *address* of that thunk in
+its env-construction.  The carrier-relay closure previously only chased *calls*
+from *generic-unsafe* enclosers, so it missed this address-of reference.  Fix in
+`src/compiler/emit_module.c`: `emit_abi_carrier_relay_walk` now handles
+`EX_CLOSURE` / `EX_VAR` references to lifted-lambda thunks (noting a carrier
+call so the thunk's base is kept), and the driver visits every function that
+will itself be emitted, not just the generic-unsafe ones.
+
+The reduced repro below now elaborates, builds, and runs.  The regression
+fixture `poly-defn-inner-lambda` guards it.
+
+### Known follow-on (separate issue)
+
+*Applying* such a combinator at a concrete element type -- e.g.
+`(or-parser always-fail always-ok)` where the arguments are
+`(fn [int] (PRes int))` -- still fails to infer `A = int` through the
+closure-returning HOF, surfacing as "match: arm types are incompatible --
+expected tyvar, got int" at the *use* site.  That is the return-type / closure-
+result monomorphization gap tracked by the end-to-end monomorphization plan,
+not the codegen drop this report is about; the monomorphic sibling (`or-int`,
+no `[A]`) compiles and runs.  Filed separately as
+[poly-combinator-application-element-inference.md](../reported/poly-combinator-application-element-inference.md).
 
 ## Symptom
 
