@@ -285,24 +285,52 @@ decomposes cleanly):
   branches, all gated on the now-always-false `type_extract_struct_app`) and its
   eight orphaned helpers were removed.
 
-**Residual (the last mile, deliberately deferred as a focused follow-up).**
-`StructDef`/`StructField` are still *defined* in `types.h`, referenced ONLY by
-the dead-for-real-types struct-app monomorph chain
-(`type_extract_struct_app` -- a `return false` stub since B-track --
-`substitute_struct_app_type`, `struct_field_c_type`, `emit_registered_struct_app_rec`,
-`struct_type_param_index`) plus ~30 dead `if (type_extract_struct_app(...))`
-caller branches in `emit_module`/`emit_core`/`emit_expr`/`types.c` and a couple
-of `StructDef *` params in `elab_*`.  Every one is unreachable for real types
-(no `TY_APP` head is a struct), but the chain is interlocked with the *live*
-parametric-monomorph naming/registry (`register_struct_app` still supplies
-mangled monomorph names and `type_struct_pass_by_ptr` reads the registry), where
-a wrong edit is a *silent* wrong-C miscompile rather than a test failure.  So
-the physical typedef excision -- delete the four dead functions, drop their ~30
-dead caller branches, drop the residual `StructDef *` params, then delete the
-`StructDef`/`StructField` typedefs -- is scoped as its own carefully-verified
-sweep (ideally with `--dump-*`/snapshot diffing on the parametric-container
-fixtures), NOT folded into the tail of the DS-C/registry/carrier work.  The
-`TY_STRUCT` enumerator stays regardless (reflection tag).
+### Residual (the last mile) -- DONE (2026-07-02), suite green (1877/0)
+
+The physical typedef excision is landed in two suite-green commits.  The chain
+was interlocked with the *live* parametric-monomorph naming/registry, where a
+wrong edit is a *silent* wrong-C miscompile rather than a test failure, so it
+was verified empirically before deletion:
+
+- **Proof the struct-app registry is dead.**  A temporary `assert(0)` at the
+  registration site (`register_struct_app`, past its `type_has_concrete_codegen_
+  layout` self-guard) and at the emission site (`emit_registered_struct_app_rec`,
+  past the `type_extract_struct_app` early-return) both held across the full
+  by-value suite: `type_has_concrete_codegen_layout` is *always* false for a
+  `TY_APP` (it routed through the `return false` `type_extract_struct_app` stub),
+  so no `register_struct_app` / emit ever fires.  All three `register_struct_app`
+  call sites (`type_c_name`, `type_struct_pass_by_ptr`, `type_struct_value_c_name`)
+  are gated on that same always-false predicate.
+
+- **Commit 1 -- delete the dead struct-app monomorph chain.**  Removed
+  `type_extract_struct_app`, `register_struct_app`, `substitute_struct_app_type`,
+  `struct_field_c_type`, `struct_type_param_index`, `emit_registered_struct_app_rec`,
+  the `RegisteredStructApp` registry (`g_struct_apps` + globals) and its
+  `type_codegen_{reset,emit}_struct_apps` API + all `emit_module` call sites and
+  the dead `concrete_struct_apps` buffer; collapsed ~30 dead
+  `type_extract_struct_app(...)` caller branches to their live ADT-app path
+  across `types.c`/`emit_module.c`/`emit_core.c`/`emit_expr.c`/`elab_structs.c`;
+  collapsed the now-always-false `TY_APP` arms of `type_has_concrete_codegen_
+  layout`, `type_is_transparent_int_newtype`, `append_type_mangle`, `type_c_name`,
+  `type_struct_pass_by_ptr`, `type_struct_value_c_name`, `type_is_heap_struct`;
+  collapsed the dead `EX_MAKE_STRUCT` emit case (the elaborator lowers make-struct
+  to a variant ctor, so the node is never produced) to an emit-invariant abort.
+  Regenerated `docs/artifacts/crossing-routing-audit.txt`.
+
+- **Commit 2 -- delete the typedefs.**  Removed the dead struct
+  field-instantiation cluster in `elab_structs.c` (`struct_type_param_index`,
+  `struct_field_instantiate_type`, `elab_struct_type_extract_args`,
+  `elab_struct_field_use_type` -- the last had no callers), dropped the
+  always-NULL `const StructDef *ret_struct` parameter from
+  `return_type_nominal_conflict` / `return_position_conflict` and the
+  `ret_struct` field from the typeclass method-pass struct (a former struct
+  return is now always a record ADT), then deleted the `StructField` / `StructDef`
+  typedefs from `types.h`.
+
+No `TY_APP` head is a struct, no `e->struct_defs[]` registry, no `TY_STRUCT`
+`Type.kind`, and no `StructDef`/`StructField` typedef remain.  The `TY_STRUCT`
+enumerator stays (runtime any-box reflection tag only).  No fixture/snapshot
+drift (dead-branch deletion moves no codegen).
 
 ## Risk / sequencing notes
 
@@ -326,7 +354,10 @@ fixtures), NOT folded into the tail of the DS-C/registry/carrier work.  The
 
 ## Bottom line
 
-The deletion the plan sized as a large, risky, all-or-nothing rewrite is, after
-B1-B4, a **one-fix prerequisite (DS-A) + a mechanical dead-code sweep**. The
-semantic risk (tyvar representation, typeclass dispatch) is already retired; what
-remains is volume, and it decomposes into safely-committable, suite-green steps.
+The deletion the plan sized as a large, risky, all-or-nothing rewrite was, after
+B1-B4, a **one-fix prerequisite (DS-A) + a mechanical dead-code sweep** -- now
+**COMPLETE** (DS-A through DS-D plus the last-mile typedef excision, 2026-07-02).
+The semantic risk (tyvar representation, typeclass dispatch) was already retired;
+the remaining volume decomposed into safely-committable, suite-green steps.
+`StructDef`/`StructField` no longer exist; `TY_STRUCT` survives only as a runtime
+reflection tag.
