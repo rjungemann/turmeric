@@ -1,0 +1,27 @@
+;; parametric-fwd-decl-sibling-return: `factor` matches on the result of a
+;; sibling defn (`expr-parse`) declared LATER whose return type is a parametric
+;; ADT `(PRes Expr)`.  Before the Pass-1 forward-decl scan recorded the compound
+;; return type, the pattern binding fell back to the placeholder carrier and the
+;; `(POK inner rest)` arm mistyped to `(PRes int)`, mismatching the sibling
+;; `(PFail)` arm's `(PRes Expr)`.  No per-arm `(::)` ascription is needed now.
+;; See docs/archive/defdata-parametric-forward-decl-inference.md.
+
+(defdata PRes [a]
+  (PFail)
+  (POK a int))
+
+(defgadt Expr [a] (ENum int : (Expr int)))
+
+(defn factor [xs : int] : (PRes Expr)
+  (match (expr-parse xs)
+    (PFail)          (PFail)
+    (POK inner rest) (POK inner rest)))
+
+(defn expr-parse [xs : int] : (PRes Expr)
+  (:: (PFail) (PRes Expr)))
+
+(defn main [] : int
+  (match (factor 0)
+    (PFail)          (println 1)
+    (POK inner rest) (println 2))
+  0)

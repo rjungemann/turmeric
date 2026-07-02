@@ -4656,6 +4656,33 @@ static bool emit_abi_carrier_relay_walk(EmitCtx *ctx, const Expr *enclosing_fn,
             }
             break;
         }
+        case EX_CLOSURE: {
+            /* poly-defn-inner-lambda-codegen: a capturing closure takes the
+             * ADDRESS of its lifted-lambda thunk (stashed into the env struct).
+             * When the enclosing function is carrier-emitted, that reference is
+             * live, so the thunk's carrier base must be emitted too -- even
+             * though the thunk's own signature is generic-unsafe (it names the
+             * enclosing generic defn's tyvar, e.g. an inner `(fn [xs] : (PRes
+             * A))`).  Note a carrier call on the thunk binding so
+             * emit_abi_fn_skip_generic keeps it. */
+            struct Closure *c = e->as.closure_.closure;
+            if (c && c->fn && c->fn->binding &&
+                c->fn->binding->is_lifted_lambda &&
+                !emit_abi_has_carrier_call(ctx, c->fn->binding)) {
+                emit_abi_note_carrier_call(ctx, c->fn->binding);
+                changed = true;
+            }
+            break;
+        }
+        case EX_VAR:
+            /* Same reasoning for a captureless lifted lambda referenced by
+             * address (a bare `__fn_N` fn-pointer value handed to a caller). */
+            if (e->as.var.binding && e->as.var.binding->is_lifted_lambda &&
+                !emit_abi_has_carrier_call(ctx, e->as.var.binding)) {
+                emit_abi_note_carrier_call(ctx, e->as.var.binding);
+                changed = true;
+            }
+            break;
         default:
             break;
     }
@@ -4671,11 +4698,17 @@ static void emit_abi_carrier_relay_closure(EmitCtx *ctx, const Expr **items, uin
             const Expr *e = items[i];
             if (e->kind != EX_FN_DEF || !e->as.fn_def_.fn) continue;
             FnDef *fd = e->as.fn_def_.fn;
-            /* Only carrier-emitted generic-unsafe functions reference relay
-             * callees through a carrier body; specialized enclosers resolve
-             * their relays via binding composition and never get here. */
-            if (!emit_abi_fn_is_generic_unsafe(e)) continue;
-            if (!emit_abi_has_carrier_call(ctx, fd->binding)) continue;
+            /* Walk every function that will itself be emitted.  For the
+             * generic-unsafe carrier-emitted enclosers, this preserves the
+             * original relay-call noting (the EX_CALL case gates its noting on
+             * the encloser being generic-unsafe, so a non-generic-unsafe
+             * encloser notes no calls).  Visiting the non-generic-unsafe
+             * enclosers too is what closes the poly-defn-inner-lambda-codegen
+             * gap: an ABI-invariant generic like `(defn or-parser [A] ...)` is
+             * carrier-emitted (not generic-unsafe) yet takes the address of a
+             * generic-unsafe inner lifted-lambda thunk, which the EX_CLOSURE /
+             * EX_VAR cases now carrier-note. */
+            if (emit_abi_fn_skip_generic(ctx, e)) continue;
             changed |= emit_abi_carrier_relay_walk(ctx, e, fd->body, items, n_items);
         }
     }
@@ -9429,6 +9462,38 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
             (void)type_c_name(spec->result_type);
             for (uint8_t j = 0; j < spec->n_args; j++)
                 (void)type_c_name(spec->arg_types[j]);
+        }
+    }
+
+    /* split-path-missing-adt-monomorph-typedefs: the header is the SOLE emitter
+     * of the concrete ADT-app typedefs for the separate-compilation path -- the
+     * .c `#include`s this header and never flushes its own set.  The
+     * exported-signature registration above only sees monomorphs that appear in
+     * an exported prototype; a monomorph reachable only from a function BODY, or
+     * embedded in a lowered defstruct's inline-by-value field (e.g. the
+     * `Endo__int` / `Schema__int` concrete monomorphs and the `Option__struct`
+     * placeholder those fields carry), is otherwise missed -- so the .c names a
+     * typedef the header never defined.  Mirror emit_program's full body scan
+     * plus its per-ctor inline-by-value field pre-registration so the split
+     * header carries the identical monomorph set. */
+    for (uint32_t i = 0; i < h_n_items; i++) {
+        scan_adt_apps_in_expr(h_items[i]);
+    }
+    for (uint32_t i = 0; i < h_n_items; i++) {
+        const Expr *e = h_items[i];
+        if (e->kind != EX_DEFDATA && e->kind != EX_DEFGADT) continue;
+        AdtDef *def = (e->kind == EX_DEFGADT) ? e->as.defgadt_.def
+                                              : e->as.defdata_.def;
+        if (!def || def->superseded) continue;
+        for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+            CtorDef *pctor = def->ctors[ci];
+            for (uint32_t fi = 0; fi < pctor->n_fields; fi++) {
+                const CtorField *pf = &pctor->fields[fi];
+                if (pf->full_type && pf->full_type->kind == TY_APP &&
+                    adt_field_is_inline_byval(pf)) {
+                    (void)type_c_name(*pf->full_type);
+                }
+            }
         }
     }
 

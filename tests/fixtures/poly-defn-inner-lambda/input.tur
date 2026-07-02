@@ -1,0 +1,21 @@
+;; poly-defn-inner-lambda: a polymorphic combinator `(or-parser [A] ...)` whose
+;; body returns an inner `fn` value.  The inner lambda's C body (`__fn_N`) used
+;; to be dropped in codegen -- it is generic-unsafe (its signature names the
+;; enclosing tyvar `A`), so it was skipped as "emitted only via spec clones",
+;; yet the carrier-emitted `or-parser` takes its address, leaving a dangling
+;; `__fn_N` reference.  See docs/archive/poly-defn-inner-lambda-codegen.md.
+
+(defdata PRes [a]
+  (PFail)
+  (POK a int))
+
+(defn or-parser [A] [p : (fn [int] (PRes A)) q : (fn [int] (PRes A))]
+    : (fn [int] (PRes A))
+  (fn [xs : int] : (PRes A)
+    (match (p xs)
+      (POK v rest) (POK v rest)
+      (PFail)      (q xs))))
+
+(defn main [] : int
+  (println 42)
+  0)
