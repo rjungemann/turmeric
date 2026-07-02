@@ -1,37 +1,28 @@
 ;; Pure-Turmeric parser-combinator tutorial companion fixture.
 ;;
-;; Zero inline-C.  The tutorial's design uses closures for combinators; the
-;; production parsec.tur uses fat-closures backed by inline-C.  For this
-;; pure-Turmeric fixture we sidestep both:
+;; Zero inline-C.  The grammar is expressed via higher-order combinators
+;; (or-*, map-*, psat) that build closure-valued parsers.
 ;;
 ;;   * Input is a linked list of ints (character codes) rather than a cstr.
 ;;     This removes the only "must poke bytes" primitive so we don't need
 ;;     inline-C to read a character.
-;;   * Parsers are ordinary (defn ...) functions that return (PRes A), where
-;;     PRes is a defdata sum type carrying the leftover input.
-;;   * Expr AST is a (defgadt Expr [a]) with ENum/EAdd/ESub/EMul/EDiv.
+;;   * A parser is `(fn [xs : int] : (PRes A))` -- takes a list carrier,
+;;     returns success + leftover or failure.
+;;   * Expr AST is a `(defgadt Expr [a])` with ENum/EAdd/ESub/EMul/EDiv.
 ;;   * The arithmetic grammar `1+2*(3+4)` is hardcoded as its ASCII codes.
-
-;; ---- Result: option-of-(value, remaining-list) ------------------------------
 ;;
-;; A parse either succeeds (POK v rest) or fails (PFail).
-;; rest is the leftover input list (:int carrier: 0 for end-of-input).
+;; The combinators are spelled monomorphically -- one instance per element
+;; type (`or-int` / `or-expr`, `map-int-to-expr`).  Turmeric can already
+;; write them polymorphically at elaboration time, but the codegen for a
+;; polymorphic defn whose body returns an inner lambda hits an open bug
+;; (see docs/reported/poly-defn-inner-lambda-codegen.md); the monomorphic
+;; spellings compile end-to-end today and demonstrate the same shape.
+
+;; ---- Result: success (value + leftover) or failure ---------------------------
 
 (defdata PRes [a]
   (PFail)
-  (POK a :int))
-
-;; ---- Char list helpers ------------------------------------------------------
-;;
-;; The input `1+2*(3+4)` is passed as a list of ASCII codes:
-;;   49 43 50 42 40 51 43 52 41
-
-(defn at-end?  [xs : int] : bool (= xs 0))
-
-;; ---- Predicate: is-digit ----------------------------------------------------
-
-(defn is-digit? [c : int] : bool
-  (if (< c 48) false (if (> c 57) false true)))
+  (POK a int))
 
 ;; ---- Expr AST (GADT) --------------------------------------------------------
 
@@ -49,6 +40,74 @@
         (if (= op 47) (EDiv lhs rhs)
           (ENum 0))))))
 
+;; ---- Char-list helpers ------------------------------------------------------
+
+(defn at-end?  [xs : int] : bool (= xs 0))
+
+(defn is-digit? [c : int] : bool
+  (if (< c 48) false (if (> c 57) false true)))
+
+;; ---- Primitive: consume one char matching a predicate -----------------------
+
+(defn psat [pred : (fn [int] bool)] : (fn [int] (PRes int))
+  (fn [xs : int] : (PRes int)
+    (if (at-end? xs)
+      (PFail)
+      (let [c (list-head xs)]
+        (if (pred c) (POK c (list-tail xs)) (PFail))))))
+
+(defn eq-char [target : int] : (fn [int] bool)
+  (fn [c : int] : bool (= c target)))
+
+(defn pchar [target : int] : (fn [int] (PRes int))
+  (psat (eq-char target)))
+
+;; ---- Combinators (monomorphic) ----------------------------------------------
+;;
+;; `or-*`  : Try p; if PFail, run q.
+;; `map-*` : Run p; on success, transform the payload with f.
+
+(defn or-int [p : (fn [int] (PRes int)) q : (fn [int] (PRes int))]
+    : (fn [int] (PRes int))
+  (fn [xs : int] : (PRes int)
+    (match (p xs)
+      (POK v rest) (POK v rest)
+      (PFail)      (q xs))))
+
+(defn or-expr [p : (fn [int] (PRes Expr)) q : (fn [int] (PRes Expr))]
+    : (fn [int] (PRes Expr))
+  (fn [xs : int] : (PRes Expr)
+    (match (p xs)
+      (POK v rest) (POK v rest)
+      (PFail)      (q xs))))
+
+(defn map-int-to-expr [f : (fn [int] Expr) p : (fn [int] (PRes int))]
+    : (fn [int] (PRes Expr))
+  (fn [xs : int] : (PRes Expr)
+    (match (p xs)
+      (PFail)      (PFail)
+      (POK v rest) (POK (f v) rest))))
+
+;; ---- Primitive parsers ------------------------------------------------------
+
+(defn digit [xs : int] : (PRes int)
+  ((psat is-digit?) xs))
+
+;; Accumulate remaining digits into an int (many).  Always succeeds.
+(defn digits-int-loop [xs : int acc : int] : (PRes int)
+  (if (at-end? xs)
+    (POK acc xs)
+    (let [c (list-head xs)]
+      (if (is-digit? c)
+        (digits-int-loop (list-tail xs) (+ (* acc 10) (- c 48)))
+        (POK acc xs)))))
+
+;; number: require at least one digit, then fold the rest.
+(defn number [xs : int] : (PRes int)
+  (match (digit xs)
+    (PFail)      (PFail)
+    (POK d rest) (digits-int-loop rest (- d 48))))
+
 ;; ---- Grammar ----------------------------------------------------------------
 ;;
 ;; expr   := term (('+' | '-') term)*
@@ -56,45 +115,39 @@
 ;; factor := number | '(' expr ')'
 ;; number := digit+
 
-;; digits->int-loop: consume digits, accumulating into an int.  Always succeeds
-;; (returns POK acc xs when the next char isn't a digit or we're at end).
-(defn digits->int-loop [xs : int acc : int] : (PRes int)
-  (if (at-end? xs)
-    (POK acc xs)
-    (let [c (list-head xs)]
-      (if (is-digit? c)
-        (digits->int-loop (list-tail xs) (+ (* acc 10) (- c 48)))
-        (POK acc xs)))))
+;; Wrap the constructor as a first-class function value.
+(defn to-enum [n : int] : Expr (ENum n))
 
-;; number: many1 digit -- require at least one digit.
-(defn number [xs : int] : (PRes int)
-  (if (at-end? xs)
-    (:: (PFail) (PRes int))
-    (let [c (list-head xs)]
-      (if (is-digit? c)
-        (digits->int-loop (list-tail xs) (- c 48))
-        (:: (PFail) (PRes int))))))
+(defn number-as-expr [xs : int] : (PRes Expr)
+  ((map-int-to-expr to-enum number) xs))
 
-;; factor := number -> ENum | '(' expr ')'.
-(defn factor [xs : int] : (PRes Expr)
+;; Parenthesised expr: '(' expr ')'.  Named for use inside `factor` via
+;; the `or-expr` combinator.
+;;
+;; The `(:: (POK inner (list-tail rest)) (PRes Expr))` ascription is
+;; load-bearing because `expr-parse` is defined later in the file
+;; (mutual recursion), so its parametric return type isn't visible when
+;; `paren-expr` is elaborated; the match arm binder falls back to a
+;; placeholder element type and the bare `(POK ...)` call needs a hint.
+;; See docs/reported/defdata-parametric-forward-decl-inference.md.
+(defn paren-expr [xs : int] : (PRes Expr)
   (if (at-end? xs)
-    (:: (PFail) (PRes Expr))
+    (PFail)
     (let [c (list-head xs)]
       (if (= c 40)
         (match (expr-parse (list-tail xs))
-          (PFail)
-          (:: (PFail) (PRes Expr))
+          (PFail)          (PFail)
           (POK inner rest)
           (if (at-end? rest)
-            (:: (PFail) (PRes Expr))
+            (PFail)
             (if (= (list-head rest) 41)
               (:: (POK inner (list-tail rest)) (PRes Expr))
-              (:: (PFail) (PRes Expr)))))
-        (match (number xs)
-          (PFail)
-          (:: (PFail) (PRes Expr))
-          (POK n rest)
-          (POK (ENum n) rest))))))
+              (PFail))))
+        (PFail)))))
+
+;; factor := paren-expr | number-as-expr
+(defn factor [xs : int] : (PRes Expr)
+  ((or-expr paren-expr number-as-expr) xs))
 
 ;; term-tail: greedy left-associative fold of `('*'|'/') factor` tails.
 (defn term-tail [xs : int lhs : Expr] : (PRes Expr)
@@ -103,18 +156,14 @@
     (let [c (list-head xs)]
       (if (if (= c 42) true (= c 47))
         (match (factor (list-tail xs))
-          (PFail)
-          (:: (PFail) (PRes Expr))
-          (POK rhs rest)
-          (term-tail rest (apply-op c lhs rhs)))
+          (PFail)          (PFail)
+          (POK rhs rest)   (term-tail rest (apply-op c lhs rhs)))
         (POK lhs xs)))))
 
 (defn term [xs : int] : (PRes Expr)
   (match (factor xs)
-    (PFail)
-    (:: (PFail) (PRes Expr))
-    (POK lhs rest)
-    (term-tail rest lhs)))
+    (PFail)          (PFail)
+    (POK lhs rest)   (term-tail rest lhs)))
 
 ;; expr-tail: greedy left-associative fold of `('+'|'-') term` tails.
 (defn expr-tail [xs : int lhs : Expr] : (PRes Expr)
@@ -123,18 +172,14 @@
     (let [c (list-head xs)]
       (if (if (= c 43) true (= c 45))
         (match (term (list-tail xs))
-          (PFail)
-          (:: (PFail) (PRes Expr))
-          (POK rhs rest)
-          (expr-tail rest (apply-op c lhs rhs)))
+          (PFail)          (PFail)
+          (POK rhs rest)   (expr-tail rest (apply-op c lhs rhs)))
         (POK lhs xs)))))
 
 (defn expr-parse [xs : int] : (PRes Expr)
   (match (term xs)
-    (PFail)
-    (:: (PFail) (PRes Expr))
-    (POK lhs rest)
-    (expr-tail rest lhs)))
+    (PFail)          (PFail)
+    (POK lhs rest)   (expr-tail rest lhs)))
 
 ;; ---- Evaluator --------------------------------------------------------------
 
@@ -152,7 +197,5 @@
   ;; "1+2*(3+4)" as ASCII codes
   (let [input (list 49 43 50 42 40 51 43 52 41)]
     (match (expr-parse input)
-      (PFail)
-      (do (println 0) 1)
-      (POK ast rest)
-      (do (println (eval-expr ast)) 0))))
+      (PFail)          (do (println 0) 1)
+      (POK ast rest)   (do (println (eval-expr ast)) 0))))

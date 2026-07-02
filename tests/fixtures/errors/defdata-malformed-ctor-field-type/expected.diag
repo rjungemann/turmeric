@@ -1,2 +1,0 @@
-defdata: constructor field type must be a keyword like :int, :bool, :cstr
-unknown function or operator 'MkAcc'

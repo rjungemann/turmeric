@@ -1896,11 +1896,9 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
         return true;
     }
 
-    /* Positional variants require keyword type names (`:int`); record-style
-     * variants (CONV-S0) also accept bare symbol type names (`int`), mirroring
-     * defstruct field syntax. */
-    bool ok_tag = (ft_form->tag == F_KEYWORD) ||
-                  (record_style && ft_form->tag == F_SYM);
+    /* Both positional and record-style variants accept keyword (`:int`) or
+     * bare symbol (`int`) type names, mirroring defgadt / defstruct syntax. */
+    bool ok_tag = (ft_form->tag == F_KEYWORD) || (ft_form->tag == F_SYM);
     if (!ok_tag) {
         diag_emit(DIAG_ERROR, ft_form->span,
                   "defdata: constructor field type must be a keyword like :int, :bool, :cstr");

@@ -2170,7 +2170,25 @@ Expr *elab_call(Elab *e, Form *call) {
                           name->name, n_args_given);
                 return NULL;
             }
-            Expr *out = expr_new(e->arena, EX_CALL, fn_binding->type, call->span);
+            /* Parametric 0-arg constructor result-type inference: a nullary
+             * constructor of a parametric ADT (e.g. `(PFail)` from
+             * `(defdata PRes [a] (PFail) (POK a int))`) carries no field
+             * arguments to bind the type parameters from, so it defaults to
+             * the bare TY_ADT.  When the enclosing expected type is a
+             * concrete TY_APP over the same ADT (`(PRes Expr)` from the
+             * function return type, a match arm's peer type, an ascription,
+             * etc.), use it as the result type so bare `(PFail)` unifies
+             * with concrete `(POK v rest)` peers.  See
+             * docs/reported/defdata-parametric-inference-and-elab-match-segv.md. */
+            Type result_type = fn_binding->type;
+            if (ctor->adt->n_type_params > 0 && e->expected_type &&
+                e->expected_type->kind == TY_APP) {
+                AdtDef *exp_def = type_adt_app_def(e->expected_type);
+                if (exp_def == ctor->adt) {
+                    result_type = *e->expected_type;
+                }
+            }
+            Expr *out = expr_new(e->arena, EX_CALL, result_type, call->span);
             out->as.call_.fn_binding = fn_binding;
             out->as.call_.args = NULL;
             out->as.call_.n_args = 0;
@@ -2344,6 +2362,40 @@ Expr *elab_call(Elab *e, Form *call) {
                         if (!have[pi] || targs[pi].kind == TY_TYVAR) {
                             all_bound = false;
                             break;
+                        }
+                    }
+                    /* When the arg binding collapsed to a bare TY_TYVAR (a
+                     * polymorphic value passed through a tyvar field, e.g.
+                     * `v : A` in a combinator body), consult the enclosing
+                     * expected type -- if it names the same ADT def, adopt
+                     * its concrete args so the ctor result becomes a real
+                     * TY_APP instead of the bare TY_ADT fallback.  Gated on
+                     * a matching expected type so it never fires in the
+                     * classic Functor / cata paths where fmap's arms build
+                     * bare-ADT results uniformly and no outer expected type
+                     * is present. */
+                    if (!all_bound && e->expected_type &&
+                        e->expected_type->kind == TY_APP &&
+                        type_adt_app_def(e->expected_type) == ctor->adt) {
+                        Type ex_args[8];
+                        AdtDef *ex_def = NULL;
+                        uint8_t ex_n = 0;
+                        if (type_extract_adt_app(e->expected_type, &ex_def,
+                                                 ex_args, &ex_n) &&
+                            ex_def == ctor->adt && ex_n == ntp) {
+                            bool recovered = true;
+                            for (uint8_t pi = 0; pi < ntp; pi++) {
+                                if (!have[pi]) {
+                                    targs[pi] = ex_args[pi];
+                                    have[pi] = true;
+                                } else if (targs[pi].kind == TY_TYVAR) {
+                                    targs[pi] = ex_args[pi];
+                                }
+                                if (targs[pi].kind == TY_TYVAR) {
+                                    recovered = false;
+                                }
+                            }
+                            if (recovered) all_bound = true;
                         }
                     }
                     if (all_bound) {

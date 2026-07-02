@@ -4011,6 +4011,18 @@ Expr *elab_fn(Elab *e, const Form *call) {
     uint32_t n_body = call->as.list.len - body_start;
     e->fn_body_depth++;
     if (fn_declared_unsafe) e->unsafe_depth++;
+    /* Propagate the lambda's declared return type onto the expected-type
+     * channel during body elaboration.  Mirrors what elab_defn already does
+     * for top-level defns, so bare parametric-ADT constructor calls
+     * (`(PFail)` in `(fn [xs] : (PRes A) ...)`) infer their type parameter
+     * from the declared return -- otherwise a lambda body's constructors
+     * lack the enclosing expected type that elab_defn provides. */
+    Type *saved_fn_body_expected = e->expected_type;
+    if (return_full_type) {
+        e->expected_type = return_full_type;
+    } else if (return_fn_type) {
+        e->expected_type = return_fn_type;
+    }
     {
         /* Internal defines: splice (define name init) into nested let forms. */
         Form *spliced = splice_internal_defines(e,
@@ -4056,6 +4068,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
             body->as.do_.n = n_body;
         }
     }
+    e->expected_type = saved_fn_body_expected;
     if (fn_declared_unsafe) e->unsafe_depth--;
     e->fn_body_depth--;
     e->n_sig_tyvars = saved_n_sig_tyvars;

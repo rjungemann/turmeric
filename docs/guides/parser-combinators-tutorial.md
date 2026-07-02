@@ -1,20 +1,18 @@
 ---
 title: Parser Combinators Tutorial
 category: Tutorials
-description: Build a small parser in pure Turmeric using algebraic data types, GADTs, and pattern matching
+description: Build a small parser in pure Turmeric using algebraic data types, GADTs, higher-order combinators, and pattern matching
 ---
 
 # Parser Combinators Tutorial
 
-This tutorial builds a working parser in pure Turmeric. By the end you
-will:
+This tutorial builds a working parser-combinator library in pure
+Turmeric. By the end you will:
 
 - Model a parse result as a parametric `defdata` sum type and walk it
   with exhaustive `match`.
-- Recover the shapes of the classic combinators -- `pfail`, alternation,
-  sequencing, `many` -- by hand-inlining them into a recursive-descent
-  grammar. Higher-order versions land cleanly once a couple of
-  compiler gaps close; see the closing section.
+- Assemble the classic combinators -- `psat`, `pchar`, `or-*`,
+  `map-*` -- and use them to compose the grammar.
 - Parse `"1+2*(3+4)"` into a **typed GADT AST** and evaluate it via
   `match`, so the whole thing round-trips to `15`.
 
@@ -34,12 +32,12 @@ some prefix and returning a value plus the leftover input -- or fails.
 Hand-written recursive-descent parsers mutate a shared cursor, so trying
 one branch, failing, and backing up requires bookkeeping. Parser
 combinators replace that ceremony with values: each combinator is a
-function from parser(s) to a new parser. The result is that the parser
-reads like the grammar.
+function *from parsers to a new parser*. The result reads like the
+grammar.
 
 Turmeric's ADTs and GADTs let us build the same story with the
-type-checker on our side. A `PRes A` value can only mean "failure" or
-"success carrying an A"; a valid `Expr` node can only be one of the
+type-checker on our side. A `(PRes A)` value can only mean "failure" or
+"success carrying an `A`"; a valid `Expr` node can only be one of the
 constructors we declared; `match` refuses to compile if we forget a
 case. Every combinator gets stronger static guarantees than the
 equivalent Haskell tutorial would have handed us.
@@ -54,7 +52,7 @@ at a time. The natural Turmeric type would be a `:cstr` plus a
 (see
 [docs/reported/no-cstr-byte-primitives-pure-turmeric.md](../reported/no-cstr-byte-primitives-pure-turmeric.md)).
 
-So in this tutorial the input is a **list of ASCII codes** -- a plain
+So the input is a **list of ASCII codes** -- a plain
 `(cons int (cons int ...))` built with `stdlib/list`'s `list-head` and
 `list-tail`. The string `"1+2*(3+4)"` becomes:
 
@@ -86,18 +84,12 @@ two-armed sum, parameterised over the success payload:
 ```turmeric
 (defdata PRes [a]
   (PFail)
-  (POK a :int))
+  (POK a int))
 ```
 
 - `(PFail)` -- no parse.
-- `(POK v rest)` -- parsed `v`, leftover input list is `rest` (again a
-  `:int` list carrier -- `0` for end-of-input).
-
-> **Syntax note.** The field type on `(POK a :int)` must be
-> keyword-prefixed. Writing `(POK a int)` errors out with
-> "defdata: constructor field type must be a keyword like `:int`".
-> `defgadt` (below) accepts both spellings. Tracked in
-> [docs/reported/defdata-parametric-inference-and-elab-match-segv.md](../reported/defdata-parametric-inference-and-elab-match-segv.md).
+- `(POK v rest)` -- parsed `v`, leftover input list is `rest` (an
+  `int` list carrier -- `0` for end-of-input).
 
 Every parser in the tutorial has the shape
 
@@ -109,72 +101,94 @@ where `xs` is the current input list.
 
 ---
 
-## The combinators, hand-inlined
+## The primitive: `psat`
 
-The classic library exposes `pure`, `pfail`, `<|>` (alternation),
-`>>=` (sequencing), and `many`. In this tutorial we don't write them as
-higher-order functions -- see the closing section for why -- but every
-one shows up as a *pattern* inside the grammar. Once you see the
-patterns you can lift them into standalone combinators the moment the
-reported gaps close.
-
-### `pfail` -- "no parse here"
+The one *primitive* parser -- the atom every other combinator is built
+on -- consumes a single character if it matches a predicate:
 
 ```turmeric
-(:: (PFail) (PRes Expr))
+(defn psat [pred : (fn [int] bool)] : (fn [int] (PRes int))
+  (fn [xs : int] : (PRes int)
+    (if (at-end? xs)
+      (PFail)
+      (let [c (list-head xs)]
+        (if (pred c) (POK c (list-tail xs)) (PFail))))))
 ```
 
-That's it. The `(:: e T)` ascription is required because bare
-`(PFail)` can't infer its parameter `a` in every context (see the
-tracked bug).
-
-### Sequencing (the `>>=` pattern)
-
-"Parse a `p`, then use its value to build the next parser" reads as a
-`match` on the previous parser's result:
+`psat` returns a *closure* -- a function value that captures `pred`.
+Every combinator below follows the same shape: take some parsers (and
+maybe a helper), return a new parser (a `(fn [int] (PRes A))`
+closure). Once you have `psat`, `pchar` and `digit` are one-liners:
 
 ```turmeric
-(match (number xs)
-  (PFail)             (:: (PFail) (PRes Expr))
-  (POK n rest)        (POK (ENum n) rest))
+(defn eq-char [target : int] : (fn [int] bool)
+  (fn [c : int] : bool (= c target)))
+
+(defn pchar [target : int] : (fn [int] (PRes int))
+  (psat (eq-char target)))
+
+(defn digit [xs : int] : (PRes int)
+  ((psat is-digit?) xs))
 ```
 
-The `(POK n rest)` arm gets both the value and the leftover input,
-which is exactly what `>>=` would have handed us. The failure branch
-short-circuits.
+`pchar` currying: `eq-char` builds a predicate closure and `psat`
+lifts it into a parser. `digit` invokes `(psat is-digit?)` eagerly and
+eta-expands the result so it can be used as a plain top-level parser.
 
-### Alternation (the `<|>` pattern)
+---
 
-"Try `p`; if it fails, try `q`" is a conditional on the first byte
-followed by a `match` on the result:
+## Combinators
+
+The combinators are the recurring shapes -- alternation, mapping,
+sequencing -- lifted out of ad-hoc grammar code so we can compose them
+freely. The tutorial spells each one *monomorphically* (one instance
+per element type: `or-int` / `or-expr`, `map-int-to-expr`) because
+Turmeric's codegen currently has an open bug on polymorphic-`defn`
+bodies that return an inner lambda; see
+[docs/reported/poly-defn-inner-lambda-codegen.md](../reported/poly-defn-inner-lambda-codegen.md).
+Both spellings would elaborate; only the monomorphic ones compile
+end-to-end today.
+
+### Alternation -- `or-*`
+
+"Try `p`; if it fails, try `q`":
 
 ```turmeric
-(if (= c 40)                       ;; '(' -> try parenthesised expr
-  (match (expr-parse (list-tail xs))
-    (PFail)             (:: (PFail) (PRes Expr))
-    (POK inner rest)    ...)
-  (match (number xs)                ;; else -> fall through to number
-    ...))
+(defn or-int [p : (fn [int] (PRes int)) q : (fn [int] (PRes int))]
+    : (fn [int] (PRes int))
+  (fn [xs : int] : (PRes int)
+    (match (p xs)
+      (POK v rest) (POK v rest)
+      (PFail)      (q xs))))
+
+(defn or-expr [p : (fn [int] (PRes Expr)) q : (fn [int] (PRes Expr))]
+    : (fn [int] (PRes Expr))
+  (fn [xs : int] : (PRes Expr)
+    (match (p xs)
+      (POK v rest) (POK v rest)
+      (PFail)      (q xs))))
 ```
 
-### Repetition (`many`)
+The two are line-for-line identical except for the element type. In a
+future Turmeric they'd collapse to one `(or-parser [A] ...)` `defn`.
 
-Greedy zero-or-more is a tail-recursive loop that accumulates matches
-and stops when a match fails. `digits->int` inlines both the loop and
-the "fold into an int" step:
+### Mapping -- `map-*-to-*`
+
+"Run `p`; on success, transform the payload":
 
 ```turmeric
-(defn digits->int-loop [xs : int acc : int] : (PRes int)
-  (if (at-end? xs)
-    (POK acc xs)
-    (let [c (list-head xs)]
-      (if (is-digit? c)
-        (digits->int-loop (list-tail xs) (+ (* acc 10) (- c 48)))
-        (POK acc xs)))))
+(defn map-int-to-expr [f : (fn [int] Expr) p : (fn [int] (PRes int))]
+    : (fn [int] (PRes Expr))
+  (fn [xs : int] : (PRes Expr)
+    (match (p xs)
+      (PFail)      (PFail)
+      (POK v rest) (POK (f v) rest))))
 ```
 
-The recursion is self-tail-call, so the compiler turns it into
-iteration -- no stack growth, no O(n) intermediate allocations.
+Note the bare `(PFail)` on the failure arm: the enclosing
+`fn`'s declared return `(PRes Expr)` propagates into the arm body, so
+no `(:: (PFail) (PRes Expr))` ascription is needed. Same for the
+`(PFail)` inside `or-*`.
 
 ---
 
@@ -221,47 +235,73 @@ number := digit+
 The two-level `expr` / `term` split is what buys precedence: `*` and
 `/` are one level deeper than `+` and `-`, so they bind tighter.
 
-### `number`
-
-`many1 digit` semantics: require at least one digit, then greedily
-accumulate.
+### `number` -- one-or-more digits, folded
 
 ```turmeric
-(defn number [xs : int] : (PRes int)
+(defn digits-int-loop [xs : int acc : int] : (PRes int)
   (if (at-end? xs)
-    (:: (PFail) (PRes int))
+    (POK acc xs)
     (let [c (list-head xs)]
       (if (is-digit? c)
-        (digits->int-loop (list-tail xs) (- c 48))
-        (:: (PFail) (PRes int))))))
+        (digits-int-loop (list-tail xs) (+ (* acc 10) (- c 48)))
+        (POK acc xs)))))
+
+(defn number [xs : int] : (PRes int)
+  (match (digit xs)
+    (PFail)      (PFail)
+    (POK d rest) (digits-int-loop rest (- d 48))))
 ```
 
-### `factor` -- alternation
+`digit` (from earlier) is the "at-least-one" gate; `digits-int-loop`
+is the tail-recursive `many` that greedily accumulates the rest into
+an int. The recursion is self-tail-call, so the compiler turns it into
+iteration -- no stack growth, no O(n) intermediate allocations.
 
-The alternation `number | '(' expr ')'` is a conditional on the first
-byte. Recovery on `')'` mismatch produces a hard `PFail` -- packing
-what a real library would spell as `between (pchar 40) (pchar 41) expr`:
+### `factor` -- alternation via `or-expr`
 
 ```turmeric
-(defn factor [xs : int] : (PRes Expr)
+(defn to-enum [n : int] : Expr (ENum n))
+
+(defn number-as-expr [xs : int] : (PRes Expr)
+  ((map-int-to-expr to-enum number) xs))
+
+(defn paren-expr [xs : int] : (PRes Expr)
   (if (at-end? xs)
-    (:: (PFail) (PRes Expr))
+    (PFail)
     (let [c (list-head xs)]
       (if (= c 40)
         (match (expr-parse (list-tail xs))
-          (PFail)          (:: (PFail) (PRes Expr))
+          (PFail)          (PFail)
           (POK inner rest)
           (if (at-end? rest)
-            (:: (PFail) (PRes Expr))
+            (PFail)
             (if (= (list-head rest) 41)
               (:: (POK inner (list-tail rest)) (PRes Expr))
-              (:: (PFail) (PRes Expr)))))
-        (match (number xs)
-          (PFail)          (:: (PFail) (PRes Expr))
-          (POK n rest)     (POK (ENum n) rest))))))
+              (PFail))))
+        (PFail)))))
+
+(defn factor [xs : int] : (PRes Expr)
+  ((or-expr paren-expr number-as-expr) xs))
 ```
 
-### Left-associative chains (`term` and `expr`)
+`factor` is now a one-liner over `or-expr`: try `paren-expr` first,
+fall back to `number-as-expr`. `number-as-expr` shows the `map` shape
+in action -- `to-enum` wraps `ENum` as a plain function value (a
+GADT constructor can't yet be passed directly as a first-class value)
+and `map-int-to-expr` lifts it into a `Parser<Expr>`.
+
+`paren-expr` still needs to reach into `match` for the closing `)`
+handling; not every one-off pattern collapses into a combinator.
+
+One `(:: (POK inner (list-tail rest)) (PRes Expr))` ascription lingers
+in `paren-expr`. It's load-bearing: `expr-parse` is defined *later* in
+the file (mutual recursion), so when `paren-expr` is elaborated the
+callee's parametric return type isn't yet visible; the match binder
+falls back to a placeholder element type and the bare `(POK ...)`
+needs a hint. Tracked in
+[docs/reported/defdata-parametric-forward-decl-inference.md](../reported/defdata-parametric-forward-decl-inference.md).
+
+### Left-associative chains -- `term` and `expr`
 
 `term := factor (('*'|'/') factor)*` is a `factor` followed by an
 inlined `many` over `(op, factor)` pairs, folded left-to-right:
@@ -273,14 +313,14 @@ inlined `many` over `(op, factor)` pairs, folded left-to-right:
     (let [c (list-head xs)]
       (if (if (= c 42) true (= c 47))
         (match (factor (list-tail xs))
-          (PFail)          (:: (PFail) (PRes Expr))
+          (PFail)          (PFail)
           (POK rhs rest)   (term-tail rest (apply-op c lhs rhs)))
         (POK lhs xs)))))
 
 (defn term [xs : int] : (PRes Expr)
   (match (factor xs)
-    (PFail)              (:: (PFail) (PRes Expr))
-    (POK lhs rest)       (term-tail rest lhs)))
+    (PFail)          (PFail)
+    (POK lhs rest)   (term-tail rest lhs)))
 ```
 
 `term-tail` is where left-associativity comes from: we apply the op
@@ -295,18 +335,20 @@ inlined `many` over `(op, factor)` pairs, folded left-to-right:
     (let [c (list-head xs)]
       (if (if (= c 43) true (= c 45))
         (match (term (list-tail xs))
-          (PFail)          (:: (PFail) (PRes Expr))
+          (PFail)          (PFail)
           (POK rhs rest)   (expr-tail rest (apply-op c lhs rhs)))
         (POK lhs xs)))))
 
 (defn expr-parse [xs : int] : (PRes Expr)
   (match (term xs)
-    (PFail)              (:: (PFail) (PRes Expr))
-    (POK lhs rest)       (expr-tail rest lhs)))
+    (PFail)          (PFail)
+    (POK lhs rest)   (expr-tail rest lhs)))
 ```
 
-`factor` calls `expr-parse` (mutual recursion): the grammar closes on
-itself through the parenthesised alternative.
+The chain-fold pattern -- match the head, keep folding tails, wrap
+each application through `apply-op` -- is itself a candidate for a
+future `chainl1` combinator once the underlying compiler bugs close.
+Today it reads clearly enough as its own `defn`.
 
 ---
 
@@ -363,48 +405,6 @@ even for a tutorial-sized parser.
 
 ---
 
-## From direct-style to higher-order combinators
-
-The natural next step is to lift the patterns above into standalone
-combinators:
-
-```turmeric
-(defn or-parser [p : Parser<A> q : Parser<A>] : Parser<A>
-  (fn [xs] (match (p xs)
-             (POK v rest)  (POK v rest)
-             (PFail)       (q xs))))
-
-(defn bind-parser [p : Parser<A> f : (fn [A] Parser<B>)] : Parser<B>
-  (fn [xs] (match (p xs)
-             (PFail)       (PFail)
-             (POK v rest)  ((f v) rest))))
-```
-
-At the time of writing these don't compile as cleanly as they should
-because of two elaborator gaps tracked in
-[docs/reported/defdata-parametric-inference-and-elab-match-segv.md](../reported/defdata-parametric-inference-and-elab-match-segv.md):
-
-1. Parametric `defdata` return-type inference is weak, so every
-   bare `(PFail)` needs a `(:: (PFail) (PRes T))` ascription for the
-   surrounding match to type-check.
-2. Some unascribed nested matches on parametric datatypes SEGV in
-   `elab_match` instead of producing a diagnostic.
-
-Once those close, the arithmetic parser will collapse to something
-like
-
-```turmeric
-(defn factor [] : Parser<Expr>
-  (or-parser
-    (between (pchar 40) (pchar 41) (expr-ref))
-    (map-parser ENum (many1 (digit)))))
-```
-
-That is what the finished tutorial should look like. Everything above
-is the direct-style version we can compile *today*.
-
----
-
 ## Where to go next
 
 - **Exercise:** write a JSON parser. Strings-with-escapes and
@@ -419,6 +419,10 @@ is the direct-style version we can compile *today*.
   [docs/reported/no-cstr-byte-primitives-pure-turmeric.md](../reported/no-cstr-byte-primitives-pure-turmeric.md)
   closes, the input list of ASCII ints goes away and the parser takes
   a `:cstr` directly.
+- **Polymorphic combinators:** once
+  [docs/reported/poly-defn-inner-lambda-codegen.md](../reported/poly-defn-inner-lambda-codegen.md)
+  closes, the `or-int` / `or-expr` (and every other monomorphic pair
+  in the tutorial) collapses to a single `(or-parser [A] p q)`.
 - **Error positions and recovery:** the current library returns "no
   result" on failure. A production parser threads the furthest position
   reached, so error messages can say *where* parsing died.
