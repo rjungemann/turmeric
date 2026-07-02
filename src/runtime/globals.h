@@ -192,6 +192,15 @@ extern bool g_opt_hkt_hrt;
  * of being rejected (TUR-E0308) as it is without the flag. */
 extern bool g_opt_forall_dict_pass;
 
+/* MB3 of constrained-hkt-forall-mode-b-plan: enable bit for the
+ * `hrt-curried-result` experiment.  When set, a rank-2 poly fn whose forall body
+ * RESULT is itself a function type (e.g. `forall a. a -> (a -> a)`) instantiates
+ * that result to a concrete callable closure type, so `(l x)` yields a closure
+ * that `((l x) y)` can apply -- instead of collapsing to a bare, non-callable
+ * `type_from_kind(TY_FN)` (TUR-E0002 "returns ?").  This is what lets a van
+ * Laarhoven optic compose by ordinary function application. */
+extern bool g_opt_hrt_curried_result;
+
 
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signatures

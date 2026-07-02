@@ -203,6 +203,11 @@ bool g_opt_hkt_hrt = false;
  * enable bit.  Default off. */
 bool g_opt_forall_dict_pass = false;
 
+/* MB3 of constrained-hkt-forall-mode-b-plan: `hrt-curried-result` experiment
+ * enable bit.  Default off.  Gates the curried rank-2 result-is-a-function
+ * elaboration ((l x) yields a callable closure). */
+bool g_opt_hrt_curried_result = false;
+
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signature registry (see globals.h).
  * --------------------------------------------------------------------------- */

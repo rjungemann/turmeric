@@ -1,0 +1,30 @@
+;; MB3 (constrained-hkt-forall-mode-b-plan): a curried rank-2 poly fn whose
+;; forall body RESULT is itself a function.  `(l x)` yields a CLOSURE that
+;; `((l x) y)` then applies -- the shape van Laarhoven optics compose through.
+;; Without --enable=hrt-curried-result the poly-call result collapses to a bare,
+;; non-callable `TY_FN` (TUR-E0002 "returns ?"); with it, `(l x)` carries a
+;; concrete callable closure type and the chained application fat-dispatches
+;; through the returned closure box (slot 0 = thunk, box = env).
+
+;; Case 1: l : forall a. a -> (a -> a).  konst ignores the second argument.
+(defn konst [A] [x : A] : (-> A A)
+  (fn [y : A] : A x))
+
+(defn use-konst [l (forall [a] (-> a (-> a a)))] : int
+  ((l 3) 5))                     ; (konst 3) then applied to 5 -> 3
+
+;; Case 2: l : forall a. (a -> a) -> (a -> a).  The returned closure CAPTURES
+;; and applies the function argument, so a wrong (thin-pointer) dispatch would
+;; segfault rather than silently return the right constant.
+(defn twice-fn [A] [g : (-> A A)] : (-> A A)
+  (fn [x : A] : A (g (g x))))
+
+(defn inc [n : int] : int (+ n 1))
+
+(defn use-twice [l (forall [a] (-> (-> a a) (-> a a)))] : int
+  ((l inc) 10))                  ; (twice-fn inc) then applied to 10 -> 12
+
+(defn main [] : int
+  (println (use-konst konst))    ; 3
+  (println (use-twice twice-fn)) ; 12
+  0)

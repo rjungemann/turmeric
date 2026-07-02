@@ -406,20 +406,38 @@ died with `int64_t` vs `tur_adt_Maybe__int`; it now passes.
 
 ### Slice MB3 -- curried rank-2 whose result is a function (`--enable=hrt-curried-result`)
 
+**Status.** LANDED. A rank-2 poly fn whose forall body result is itself a
+function now instantiates that result to a concrete callable closure type, so
+`(l x)` yields a closure and `((l x) y)` applies it -- the shape van Laarhoven
+optics compose through.
+
 **Goal.** Support a rank-2 poly fn whose result is itself a function
 (`(a -> f a) -> (s -> f s)`), i.e. `(l g)` returns a closure that is then
 applied. This is blocker (2) from slice 4 and is what enables optic composition
 by ordinary function composition.
 
-**Work.**
-- `elab_poly_call`: when the forall body's result type is a `TY_FN`, the poly
-  call yields a closure value (a `tur_poly_fn_t` / fat closure) rather than a
-  scalar; the subsequent application dispatches through that returned closure.
-- Interacts with slice 3's result-type propagation (`elab_call.c`, the
-  `elab_poly_call` result determination) -- extend it to carry a `TY_FN`
-  (closure) result and mark the call so emit boxes the returned closure.
-- Fixtures: `hrt-curried-fn-result/` -- `((l x) y)` where `l` is rank-2 and
-  `(l x)` is a closure.
+**What shipped.** Two edits behind `--enable=hrt-curried-result` (default off; the
+gate is `g_opt_hrt_curried_result`, warned via TUR-W0060 at the elaboration
+entry):
+
+- `elab_call.c` (`elab_poly_call` result determination) -- when the forall body's
+  result is a `TY_FN`, instantiate it through the argument bindings
+  (`call_collect_type_bindings` / `call_instantiate_type`, mirroring the `TY_APP`
+  result branch) and set `result_full` to the concrete fn type. Without this the
+  result collapsed to a bare `type_from_kind(TY_FN)` -- no arity/result -- so the
+  chained application errored with TUR-E0002 "returns ?".
+- `elab_call.c` (`elab_call_head_expr`) -- when the call head is itself a poly
+  call (`is_poly_call`) whose static type is a function, mark the head temp's fn
+  type `boxed` so emit fat-dispatches through slot 0 of the returned closure box
+  (thunk in slot 0, box as env). The poly carrier erases the result to the int64
+  carrier and the concrete callee hands back a uniform fat box; calling it as a
+  thin function pointer jumps into the env struct (SIGSEGV). Mirrors the existing
+  cata-carrier `boxed` marking.
+
+- Fixture: `hrt-curried-fn-result/` -- `((l x) y)` at two shapes: `l : forall a.
+  a -> (a -> a)` (konst, returns a constant closure -> 3) and `l : forall a.
+  (a -> a) -> (a -> a)` (returns a closure that captures and applies the fn
+  argument, so a wrong dispatch would crash rather than pass -> 12).
 
 **Alternative that sidesteps MB3:** ship the lens **uncurried**
 (`forall f. Functor f => (a -> f a) -> s -> f s`, a 2-arg body) so no

@@ -66,6 +66,13 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.27.0",                    /* expires_at (hard contract; release-cut enforced) */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_forall_dict_pass },
+    { "hrt-curried-result",
+      "curried rank-2 poly fn whose forall body result is itself a function, e.g. (forall [a] (-> a (-> a a))), so (l x) yields a callable closure (mode B)",
+      "docs/upcoming/v1/constrained-hkt-forall-mode-b-plan.md",
+      "0.25.6",                    /* introduced */
+      "0.27.0",                    /* expires_at (hard contract; release-cut enforced) */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_hrt_curried_result },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

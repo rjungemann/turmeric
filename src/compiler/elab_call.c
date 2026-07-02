@@ -877,6 +877,21 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
          * a distinct lambda per arm -- so closure_fn_binding stays NULL;
          * instead mark the head temp's fn type `boxed` so emit takes the
          * runtime slot-0 fat-dispatch path (ER2, emit_expr.c). */
+        /* MB3 (constrained-hkt-forall-mode-b-plan): the head is a rank-2 POLY
+         * CALL whose result is a function -- `(l x)` for `l : forall a. a ->
+         * (a -> a)`.  The poly carrier erases the result to the int64 carrier,
+         * and the concrete callee (`konst`) hands back a uniform fat closure box
+         * (slot 0 = thunk, the box itself = env).  So the chained application
+         * `((l x) y)` MUST fat-dispatch through slot 0, not call the box pointer
+         * as a thin function pointer (a jump into the env struct -> SIGSEGV).
+         * There is no single named thunk (the returned closure is chosen at
+         * runtime), so closure_fn_binding stays NULL; mark the head temp `boxed`
+         * for the runtime slot-0 fat-dispatch path, mirroring the cata carrier
+         * case below. */
+        if (!tmp_b->closure_fn_binding && g_opt_hrt_curried_result &&
+            source_expr->as.call_.is_poly_call) {
+            tmp_b->type.as.fn.boxed = true;
+        }
         if (!tmp_b->closure_fn_binding &&
             source_expr->as.call_.fn_binding &&
             source_expr->as.call_.fn_binding->type.kind == TY_FN &&
@@ -5750,6 +5765,34 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                         *rf = inst;
                         result_full = rf;
                         result_kind = inst.kind;
+                    }
+                }
+            } else if (rfull && rfull->kind == TY_FN &&
+                       g_opt_hrt_curried_result) {
+                /* MB3 (constrained-hkt-forall-mode-b-plan): the forall body's
+                 * result is itself a function -- `forall a. a -> (a -> a)`, i.e.
+                 * `(l x)` yields a CLOSURE that `((l x) y)` then applies (van
+                 * Laarhoven optic composition).  Instantiate the result fn type
+                 * through the argument bindings so the outer call carries a
+                 * concrete, callable `TY_FN` type instead of the bare
+                 * `type_from_kind(TY_FN)` (which is non-callable -- TUR-E0002
+                 * "returns ?").  Mirrors the TY_APP result branch below. */
+                experiment_warn_if_used("hrt-curried-result");
+                result_kind = TY_FN;
+                if (body->as.fn.arg_full_types) {
+                    CallTypeBinding binds[16];
+                    uint8_t nb = 0;
+                    for (uint32_t j = 0;
+                         j < n_args && j < (uint32_t)body->as.fn.arity; j++) {
+                        if (body->as.fn.arg_full_types[j])
+                            call_collect_type_bindings(body->as.fn.arg_full_types[j],
+                                                       args[j]->type, binds, &nb);
+                    }
+                    Type inst = call_instantiate_type(e, rfull, binds, nb);
+                    if (inst.kind == TY_FN) {
+                        Type *rf = (Type *)arena_alloc(e->arena, sizeof(Type));
+                        *rf = inst;
+                        result_full = rf;
                     }
                 }
             } else if (rfull) {
