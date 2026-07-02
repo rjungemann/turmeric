@@ -8412,7 +8412,7 @@ void emit_shared_runtime_header(Buf *out) {
  * would mistake it for a runtime global and emit a bogus `static int64_t
  * Name_N;`.  This predicate restores the skip without StructDef. */
 static bool def_is_opaque_type_decl(const Expr *e) {
-    return e && e->kind == EX_DEF && !e->as.def_.struct_def &&
+    return e && e->kind == EX_DEF &&
            e->as.def_.binding &&
            e->as.def_.binding->type.kind == TY_ADT &&
            e->as.def_.binding->type.as.adt_.def &&
@@ -8576,150 +8576,8 @@ int emit_program(Buf *out, const Expr *program) {
      * Pass 0: Emit struct typedefs + drop glue (must precede function forward decls). */
     for (uint32_t i = 0; i < n_items; i++) {
         const Expr *e = items[i];
-        if (e->kind == EX_DEF && e->as.def_.struct_def) {
-            StructDef *def = e->as.def_.struct_def;
-            /* SI4-C: opaque types are just int64_t in C -- no typedef needed. */
-            if (def->is_opaque) continue;
-            /* Phase E: pre-register fn-ptr typedefs for concrete fn fields so
-             * they are emitted before the struct typedef that references them. */
-            for (uint32_t j = 0; j < def->n_fields; j++) {
-                StructField *f = &def->fields[j];
-                if (f->kind == TY_FN && f->full_type && f->full_type->kind == TY_FN) {
-                    const char *td = register_fn_ptr_typedef(f->full_type);
-                    if (td) {
-                        type_codegen_emit_fn_ptr_typedefs(&early_file);
-                    }
-                }
-                /* defstruct-field-byvalue-parametric-struct-layout: a field
-                 * whose type is a concrete by-value parametric struct (e.g.
-                 * `(Option cstr)`) is embedded inline as the monomorphized
-                 * aggregate (`Option__cstr`).  That typedef is registered
-                 * on-demand and otherwise flushed AFTER the user struct
-                 * typedefs, so it would be referenced before its definition.
-                 * Register + flush it into early_file here (the `#ifndef`
-                 * guard + `emitted` flag make the later flush a no-op) so the
-                 * embedding struct sees a complete type. */
-                if (f->kind == TY_STRUCT && f->full_type
-                    && f->full_type->kind == TY_APP) {
-                    (void)type_c_name(*f->full_type);  /* register_struct_app */
-                    type_codegen_emit_struct_apps(&early_file);
-                }
-                /* CONV-S1 seam 4: a by-value ADT-app field (lowered `(Option
-                 * cstr)` -> `tur_adt_Option__cstr`) embeds the monomorph
-                 * aggregate, whose typedef is registered on demand and otherwise
-                 * flushed after the user struct typedefs -- register + flush it
-                 * into early_file so the embedding struct sees a complete type. */
-                if (f->full_type && (f->full_type->kind == TY_ADT
-                                     || f->full_type->kind == TY_APP)
-                    && !type_is_heap_adt(*f->full_type)) {
-                    (void)type_register_adt_app(*f->full_type);
-                    type_codegen_emit_adt_apps(&early_file);
-                }
-            }
-            /* Emit: typedef struct Name { fields... } Name; */
-            buf_printf(&early_file, "typedef struct %s {\n", def->name);
-            for (uint32_t j = 0; j < def->n_fields; j++) {
-                StructField *f = &def->fields[j];
-                const char *ctype;
-                /* Phase E: typed function pointer for concrete fn fields. */
-                if (f->kind == TY_FN && f->full_type && f->full_type->kind == TY_FN) {
-                    const char *td = register_fn_ptr_typedef(f->full_type);
-                    ctype = td ? td : "int64_t";
-                } else if (f->kind == TY_STRUCT && f->full_type) {
-                    /* defstruct-byvalue-struct-field-stored-as-int-carrier:
-                     * a bare by-value struct field is stored inline as that
-                     * aggregate, named by type_c_name (int64_t for opaque). */
-                    ctype = type_c_name(*f->full_type);
-                } else if (f->full_type &&
-                           (f->full_type->kind == TY_ADT ||
-                            f->full_type->kind == TY_APP) &&
-                           !type_is_heap_adt(*f->full_type) &&
-                           strcmp(type_c_name(*f->full_type), "int64_t") != 0) {
-                    /* CONV-S1 seam 4 (by-value ADT struct field): under the
-                     * defstruct-as-defadt lowering a parametric ADT-app field
-                     * (`(Option cstr)` -> `tur_adt_Option__cstr`) is the by-value
-                     * monomorph aggregate -- the SAME slot a by-value struct field
-                     * gets (at default the field's type was a struct and took the
-                     * branch above).  The monomorph ctors/specs return it by value,
-                     * so the field storage must be the aggregate, not the int64
-                     * carrier (which the switch default below would pick once the
-                     * field kind flipped struct -> ADT).  :heap ADTs stay the typed
-                     * pointer / carrier. */
-                    ctype = type_c_name(*f->full_type);
-                } else switch (f->kind) {
-                    case TY_INT:      ctype = "int64_t"; break;
-                    case TY_BOOL:     ctype = "bool"; break;
-                    case TY_FLOAT:    ctype = "double"; break;
-                    case TY_CSTR:     ctype = "const char *"; break;
-                    case TY_PTR_VOID: ctype = "void *"; break;
-                    case TY_RC:
-                    case TY_WEAK:     ctype = "RcControlBlock *"; break;
-                    case TY_REF:
-                    case TY_LREF:     ctype = "void *"; break;
-                    /* Phase N6: new numeric field types */
-                    case TY_INT8:     ctype = "int8_t"; break;
-                    case TY_INT16:    ctype = "int16_t"; break;
-                    case TY_INT32:    ctype = "int32_t"; break;
-                    case TY_UINT8:    ctype = "uint8_t"; break;
-                    case TY_UINT16:   ctype = "uint16_t"; break;
-                    case TY_UINT32:   ctype = "uint32_t"; break;
-                    case TY_UINT64:   ctype = "uint64_t"; break;
-                    case TY_FLOAT32:  ctype = "float"; break;
-                    default:          ctype = "int64_t"; break;
-                }
-                char *mfn = mangle_field_name(f->name);
-                buf_printf(&early_file, "    %s %s;\n", ctype, mfn);
-                free(mfn);
-            }
-            buf_printf(&early_file, "} %s;\n\n", def->name);
-            /* If any RC/ref/weak field, emit drop glue function */
-            if (def->needs_drop_glue) {
-                buf_printf(&early_file, "static void drop_glue_%s(void *ptr) {\n", def->name);
-                buf_printf(&early_file, "    if (!ptr) return;\n");
-                buf_printf(&early_file, "    %s *s = (%s *)ptr;\n", def->name, def->name);
-                /* Drop fields in REVERSE order */
-                for (int32_t j = (int32_t)def->n_fields - 1; j >= 0; j--) {
-                    StructField *f = &def->fields[j];
-                    char *mfn = mangle_field_name(f->name);
-                    if (f->kind == TY_RC) {
-                        buf_printf(&early_file, "    if (s->%s) { rc_strong_decrement(s->%s); rc_free_queue_drain(); }\n",
-                                   mfn, mfn);
-                    } else if (f->kind == TY_WEAK) {
-                        buf_printf(&early_file, "    if (s->%s) rc_weak_decrement(s->%s);\n",
-                                   mfn, mfn);
-                    } else if (f->kind == TY_REF || f->kind == TY_LREF) {
-                        buf_printf(&early_file, "    if (s->%s) free(s->%s);\n",
-                                   mfn, mfn);
-                    }
-                    free(mfn);
-                }
-                buf_printf(&early_file, "    free(ptr);\n");
-                buf_printf(&early_file, "}\n\n");
-
-                /* DS3: walk glue -- mirrors drop glue but calls a child
-                 * callback for each rc-typed field instead of releasing.
-                 * The cycle walker uses this to trace through struct
-                 * payloads tagged RCK_STRUCT.  Weak / ref / lref fields
-                 * are not strong owners and are not enumerated. */
-                buf_printf(&early_file,
-                           "static void walk_glue_%s(void *ptr, RcWalkChildFn cb, void *ctx) {\n",
-                           def->name);
-                buf_printf(&early_file, "    if (!ptr || !cb) return;\n");
-                buf_printf(&early_file, "    %s *s = (%s *)ptr;\n", def->name, def->name);
-                for (uint32_t j = 0; j < def->n_fields; j++) {
-                    StructField *f = &def->fields[j];
-                    if (f->kind == TY_RC) {
-                        char *mfn = mangle_field_name(f->name);
-                        buf_printf(&early_file, "    if (s->%s) cb(s->%s, ctx);\n",
-                                   mfn, mfn);
-                        free(mfn);
-                    }
-                }
-                buf_printf(&early_file, "}\n\n");
-            }
-        }
         /* Phase G0/G1: ADT typedef + constructor functions */
-        else if (e->kind == EX_DEFDATA || e->kind == EX_DEFGADT) {
+        if (e->kind == EX_DEFDATA || e->kind == EX_DEFGADT) {
             AdtDef *def = (e->kind == EX_DEFGADT) ? e->as.defgadt_.def : e->as.defdata_.def;
             /* CONV-S1 (defstruct-as-defadt): skip a struct-origin ADT superseded
              * by a later same-name defgadt/defdata -- the winner owns the
@@ -9080,8 +8938,6 @@ int emit_program(Buf *out, const Expr *program) {
             /* Phase G0: ADT typedefs and constructor functions already emitted in Pass 0 */
             continue;
         } else if (e->kind == EX_DEF) {
-            /* Phase 11: skip struct typedefs — already emitted in Pass 0 */
-            if (e->as.def_.struct_def) continue;
             /* slice 5: an opaque type declaration has no runtime storage. */
             if (def_is_opaque_type_decl(e)) continue;
             char *bn = name_for_binding(&ctx, e->as.def_.binding);
@@ -9586,91 +9442,6 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
     uint32_t h_n_items;
     const Expr **h_items = flatten_program_items(program, &h_n_items);
 
-    /* project-mode-defstruct-typedef-missing: emit `typedef struct Name {
-     * fields... } Name;` into the header so both this module's .c and any
-     * importing modules see the type.  Mirrors the Pass 0 in emit_program
-     * (single-file mode) at the top of this file, minus the drop_glue/
-     * walk_glue functions -- those stay `static` in the implementation file. */
-    if (separate_compilation) {
-        for (uint32_t i = 0; i < h_n_items; i++) {
-            const Expr *e = h_items[i];
-            if (e->kind != EX_DEF || !e->as.def_.struct_def) continue;
-            StructDef *def = e->as.def_.struct_def;
-            if (def->is_opaque) continue;
-            /* Pre-register fn-ptr typedefs for concrete fn fields so they
-             * land before the struct typedef that references them. */
-            for (uint32_t j = 0; j < def->n_fields; j++) {
-                StructField *f = &def->fields[j];
-                if (f->kind == TY_FN && f->full_type && f->full_type->kind == TY_FN) {
-                    const char *td = register_fn_ptr_typedef(f->full_type);
-                    if (td) type_codegen_emit_fn_ptr_typedefs(out);
-                }
-            }
-            /* spice-defn-return-result-kind-mismatch: wrap the typedef in
-             * a `#ifndef TUR_STRUCT_<Name>_DEFINED` guard.  Project-mode
-             * preload (load_project_prelude) now seeds Option/Result/Pair
-             * /Tuple* into every TU so type-app kind checks work; without
-             * a guard each TU header re-emits the typedef and any TU that
-             * includes two of them triggers `redefinition of 'Result'`. */
-            buf_printf(out, "#ifndef TUR_STRUCT_%s_DEFINED\n", def->name);
-            buf_printf(out, "#define TUR_STRUCT_%s_DEFINED\n", def->name);
-            buf_printf(out, "typedef struct %s {\n", def->name);
-            for (uint32_t j = 0; j < def->n_fields; j++) {
-                StructField *f = &def->fields[j];
-                const char *ctype;
-                if (f->kind == TY_FN && f->full_type && f->full_type->kind == TY_FN) {
-                    const char *td = register_fn_ptr_typedef(f->full_type);
-                    ctype = td ? td : "int64_t";
-                } else if (f->kind == TY_STRUCT && f->full_type) {
-                    /* defstruct-byvalue-struct-field-stored-as-int-carrier:
-                     * a bare by-value struct field is stored inline as that
-                     * aggregate, named by type_c_name (int64_t for opaque). */
-                    ctype = type_c_name(*f->full_type);
-                } else if (f->full_type &&
-                           (f->full_type->kind == TY_ADT ||
-                            f->full_type->kind == TY_APP) &&
-                           !type_is_heap_adt(*f->full_type) &&
-                           strcmp(type_c_name(*f->full_type), "int64_t") != 0) {
-                    /* CONV-S1 seam 4 (by-value ADT struct field): under the
-                     * defstruct-as-defadt lowering a parametric ADT-app field
-                     * (`(Option cstr)` -> `tur_adt_Option__cstr`) is the by-value
-                     * monomorph aggregate -- the SAME slot a by-value struct field
-                     * gets (at default the field's type was a struct and took the
-                     * branch above).  The monomorph ctors/specs return it by value,
-                     * so the field storage must be the aggregate, not the int64
-                     * carrier (which the switch default below would pick once the
-                     * field kind flipped struct -> ADT).  :heap ADTs stay the typed
-                     * pointer / carrier. */
-                    ctype = type_c_name(*f->full_type);
-                } else switch (f->kind) {
-                    case TY_INT:      ctype = "int64_t"; break;
-                    case TY_BOOL:     ctype = "bool"; break;
-                    case TY_FLOAT:    ctype = "double"; break;
-                    case TY_CSTR:     ctype = "const char *"; break;
-                    case TY_PTR_VOID: ctype = "void *"; break;
-                    case TY_RC:
-                    case TY_WEAK:     ctype = "RcControlBlock *"; break;
-                    case TY_REF:
-                    case TY_LREF:     ctype = "void *"; break;
-                    case TY_INT8:     ctype = "int8_t"; break;
-                    case TY_INT16:    ctype = "int16_t"; break;
-                    case TY_INT32:    ctype = "int32_t"; break;
-                    case TY_UINT8:    ctype = "uint8_t"; break;
-                    case TY_UINT16:   ctype = "uint16_t"; break;
-                    case TY_UINT32:   ctype = "uint32_t"; break;
-                    case TY_UINT64:   ctype = "uint64_t"; break;
-                    case TY_FLOAT32:  ctype = "float"; break;
-                    default:          ctype = "int64_t"; break;
-                }
-                char *mfn = mangle_field_name(f->name);
-                buf_printf(out, "    %s %s;\n", ctype, mfn);
-                free(mfn);
-            }
-            buf_printf(out, "} %s;\n", def->name);
-            buf_printf(out, "#endif\n\n");
-        }
-    }
-
     for (uint32_t i = 0; i < h_n_items; i++) {
         const Expr *e = h_items[i];
         if (e->kind == EX_FN_DEF) {
@@ -9712,7 +9483,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
             ExternC *ec = e->as.extern_c_.ext;
             (void)type_c_name(ec->return_type);
             for (uint8_t j = 0; j < ec->n_params; j++) (void)type_c_name(ec->param_types[j]);
-        } else if (e->kind == EX_DEF && !e->as.def_.struct_def) {
+        } else if (e->kind == EX_DEF) {
             if (def_is_opaque_type_decl(e)) continue;   /* slice 5: type decl, no storage */
             if (separate_compilation && e->as.def_.binding->is_exported) {
                 (void)type_c_name(e->as.def_.binding->type);
@@ -9950,7 +9721,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
                 buf_puts(out, type_c_name(ec->param_types[j]));
             }
             buf_puts(out, ");\n");
-        } else if (e->kind == EX_DEF && !e->as.def_.struct_def) {
+        } else if (e->kind == EX_DEF) {
             if (def_is_opaque_type_decl(e)) continue;   /* slice 5: type decl, no storage */
             /* Phase M6: exported global variables need extern declarations
              * in the header so other modules can reference them. */
@@ -10322,51 +10093,6 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
             /* slice 5: an opaque type declaration (0-ctor opaque AdtDef) has no
              * runtime storage -- skip the bogus `Name Name_N;` declaration. */
             if (def_is_opaque_type_decl(e)) continue;
-            /* project-mode-defstruct-typedef-missing: a struct-def EX_DEF
-             * represents a type declaration, not a runtime value.  The
-             * typedef itself is emitted into the header (emit_header);
-             * skip the bogus `Name Name_N;` variable declaration here. */
-            if (e->as.def_.struct_def) {
-                /* project-mode-rc-runtime-preamble-missing: if the struct owns
-                 * RC/ref/weak fields it needs drop_glue_<Name>/walk_glue_<Name>
-                 * (referenced by rc_cb_alloc_struct in this module's code).
-                 * Single-file mode emits these in Pass 0; the separate-comp path
-                 * must emit them here, file-local to this module's .c.  Mirrors
-                 * the single-file emission above. */
-                StructDef *sdef = e->as.def_.struct_def;
-                if (!sdef->is_opaque && sdef->needs_drop_glue) {
-                    buf_printf(&file, "static void drop_glue_%s(void *ptr) {\n", sdef->name);
-                    buf_printf(&file, "    if (!ptr) return;\n");
-                    buf_printf(&file, "    %s *s = (%s *)ptr;\n", sdef->name, sdef->name);
-                    for (int32_t j = (int32_t)sdef->n_fields - 1; j >= 0; j--) {
-                        StructField *f = &sdef->fields[j];
-                        char *mfn = mangle_field_name(f->name);
-                        if (f->kind == TY_RC) {
-                            buf_printf(&file, "    if (s->%s) { rc_strong_decrement(s->%s); rc_free_queue_drain(); }\n", mfn, mfn);
-                        } else if (f->kind == TY_WEAK) {
-                            buf_printf(&file, "    if (s->%s) rc_weak_decrement(s->%s);\n", mfn, mfn);
-                        } else if (f->kind == TY_REF || f->kind == TY_LREF) {
-                            buf_printf(&file, "    if (s->%s) free(s->%s);\n", mfn, mfn);
-                        }
-                        free(mfn);
-                    }
-                    buf_printf(&file, "    free(ptr);\n");
-                    buf_printf(&file, "}\n\n");
-                    buf_printf(&file, "static void walk_glue_%s(void *ptr, RcWalkChildFn cb, void *ctx) {\n", sdef->name);
-                    buf_printf(&file, "    if (!ptr || !cb) return;\n");
-                    buf_printf(&file, "    %s *s = (%s *)ptr;\n", sdef->name, sdef->name);
-                    for (uint32_t j = 0; j < sdef->n_fields; j++) {
-                        StructField *f = &sdef->fields[j];
-                        if (f->kind == TY_RC) {
-                            char *mfn = mangle_field_name(f->name);
-                            buf_printf(&file, "    if (s->%s) cb(s->%s, ctx);\n", mfn, mfn);
-                            free(mfn);
-                        }
-                    }
-                    buf_printf(&file, "}\n\n");
-                }
-                continue;
-            }
             char *bn = name_for_binding(&ctx, e->as.def_.binding);
             /* Phase M6: exported def bindings get extern linkage in separate
              * compilation mode so other modules can reference them. */

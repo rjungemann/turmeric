@@ -9,47 +9,6 @@ static bool type_kind_is_aggregate(TypeKind k) {
     return k == TY_STRUCT || k == TY_ADT || k == TY_APP;
 }
 
-/* heap-struct-field-extraction-collapses-to-carrier: true when `t` still
- * carries a free type variable -- i.e. it has not been monomorphized by the
- * active spec.  Used by the :heap field-deref lowering to tell an abstract
- * carrier receiver (`(Cons A)`, lowered C type int64) apart from a concrete
- * monomorphized one (`(Cons int)` -> `Cons__int *`). */
-static bool type_contains_unresolved_tyvar(Type t) {
-    switch (t.kind) {
-        case TY_TYVAR:
-            return true;
-        case TY_APP:
-            return (t.as.app.fn && type_contains_unresolved_tyvar(*t.as.app.fn)) ||
-                   (t.as.app.arg && type_contains_unresolved_tyvar(*t.as.app.arg));
-        default:
-            return false;
-    }
-}
-
-/* parametric-struct-fn-field-call-passes-concrete-arg-to-carrier-ptr: true when
- * a struct field's fn `full_type` is written over type variables (its arg or
- * result full types mention a TY_TYVAR), e.g. `get : (fn [S] A)` on a parametric
- * `(defstruct Lens [S A] ...)`.  Such a field lowers its kinds to the int64
- * carrier, so register_fn_ptr_typedef hands back the carrier typedef rather than
- * the concrete signature the receiver instantiates -- a direct call through it
- * would pass concrete args to int64 params.  The caller uses this to force the
- * intptr_t-cast call path, which specialises the pointer to the call's concrete
- * arg/result C types. */
-static bool fn_field_full_type_mentions_tyvar(const Type *fn_type) {
-    if (!fn_type || fn_type->kind != TY_FN) return false;
-    if (fn_type->as.fn.result_full_type &&
-            type_contains_unresolved_tyvar(*fn_type->as.fn.result_full_type))
-        return true;
-    if (fn_type->as.fn.arg_full_types) {
-        for (uint8_t i = 0; i < fn_type->as.fn.arity; i++) {
-            if (fn_type->as.fn.arg_full_types[i] &&
-                    type_contains_unresolved_tyvar(*fn_type->as.fn.arg_full_types[i]))
-                return true;
-        }
-    }
-    return false;
-}
-
 /* world-resize / multi-field existential payloads: true when `t` lowers to a
  * by-value C aggregate (`World__int__int__int` etc.) that is WIDER than the
  * single int64 the existential carrier (`tur_exists_t`) holds. Such a payload
@@ -2558,54 +2517,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 char *fn_ptr_val = emit_value(ctx, body, gf);
                 const char *ret_c = type_c_name(e->type);
 
-                /* Phase E: detect concrete typed fn-ptr field. */
+                /* Phase E: detect concrete typed fn-ptr field.
+                 * structdef-retirement: the former StructDef path stored a typed
+                 * `fn` field as a directly-callable concrete function pointer.
+                 * A record-ADT field (the only shape now) stores every `fn` --
+                 * typed or bare -- as the int64 carrier, so it is NOT directly
+                 * callable; leave is_typed_fn_field false so the intptr_t-cast
+                 * path below specialises the pointer to the call's arg/result C
+                 * types, exactly as for a bare `fn` field. */
                 bool is_typed_fn_field = false;
-                if (gf->kind == EX_GET_FIELD) {
-                    StructDef *gf_def = gf->as.get_field_.def;
-                    uint32_t  gf_fi   = gf->as.get_field_.field_idx;
-                    /* CONV-S1 (slice 6): a capability call through an `fn` field
-                     * of a record ADT has def == NULL; read the field's kind /
-                     * full_type from the CtorField instead of a StructField. */
-                    TypeKind gf_kind = TY_UNKNOWN;
-                    const Type *gf_full = NULL;
-                    if (gf_def) {
-                        gf_kind = gf_def->fields[gf_fi].kind;
-                        gf_full = gf_def->fields[gf_fi].full_type;
-                    } else if (gf->as.get_field_.adt_ctor) {
-                        const CtorField *cf =
-                            &gf->as.get_field_.adt_ctor->fields[gf_fi];
-                        gf_kind = cf->kind;
-                        gf_full = cf->full_type;
-                    }
-                    if (gf_kind == TY_FN && gf_full &&
-                            gf_full->kind == TY_FN && gf_def) {
-                        /* CONV-S1 (slice 7): the struct path stores a typed `fn`
-                         * field as a concrete function pointer, so it can be
-                         * called directly.  A record-ADT field (gf_def == NULL)
-                         * stores every `fn` -- typed or bare -- as the int64
-                         * carrier, so it is NOT directly callable; leave
-                         * is_typed_fn_field false so the intptr_t-cast path below
-                         * specialises the pointer to the call's arg/result C
-                         * types, exactly as for a bare `fn` field. */
-                        is_typed_fn_field =
-                            (register_fn_ptr_typedef(gf_full) != NULL);
-                        /* parametric-struct-fn-field-call-passes-concrete-arg-to-
-                         * carrier-ptr: when the owning struct is parametric and the
-                         * field's fn signature is written over the struct's own type
-                         * parameters (e.g. `get : (fn [S] A)` on `(defstruct Lens
-                         * [S A] ...)`), the kinds are erased to the int64 carrier, so
-                         * register_fn_ptr_typedef yields the *carrier* typedef
-                         * (`tur_fnptr_int64_t_int64_t_t`), NOT the concrete signature
-                         * the receiver instantiates to.  A direct call through that
-                         * carrier-typed pointer passes the concrete arg (a `Person`)
-                         * to an `int64_t` parameter -- a hard `cc` type error.  Treat
-                         * it as untyped so the intptr_t-cast path below specialises
-                         * the pointer to the call's concrete arg/result C types. */
-                        if (is_typed_fn_field &&
-                                fn_field_full_type_mentions_tyvar(gf_full))
-                            is_typed_fn_field = false;
-                    }
-                }
                 /* M4-rest (end-to-end-monomorphization-plan): a typeclass
                  * dictionary method slot is already typed in the dict struct
                  * generated by emit_stmt.c, so the dispatch can call the slot
@@ -5888,7 +5808,11 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_DISCONTINUE:     return emit_effects_discontinue(ctx, body, e);
         case EX_MAKE_STRUCT: {
             /* (make-struct StructName v1 v2 ...) - emit C99 compound literal */
-            StructDef *def = e->as.make_struct_.def;
+            /* structdef-retirement: make-struct no longer carries a StructDef
+             * (the elaborator lowers every record to a single-variant ADT and
+             * rewrites construction to the auto-bound variant constructor, so
+             * this EX_MAKE_STRUCT emit path is dead -- def is always NULL). */
+            StructDef *def = NULL;
             /* SC7: a transparent int newtype IS its single int64 field -- emit
              * the field value directly (cast to int64), no compound literal. */
             if (type_is_transparent_int_newtype(e->type)) {
@@ -6122,7 +6046,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * the sole variant's union member.  The flat-product typedef has no
              * tag word but keeps `union { struct { ... } Ctor; } as`, so the
              * `->as.Ctor._<idx>` path is unchanged from the tagged case. */
-            if (!e->as.get_field_.def && e->as.get_field_.adt_def) {
+            if (e->as.get_field_.adt_def) {
                 const AdtDef *adt = e->as.get_field_.adt_def;
                 const CtorDef *ctor = e->as.get_field_.adt_ctor;
                 char *adt_mn = mangle_field_name(adt->name);
@@ -6451,245 +6375,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_free(&hb);
                 return r;
             }
-            StructDef *def = e->as.get_field_.def;
-            /* byvalue-field-access-through-ascribed-carrier-receiver: a field
-             * read off an *ascribed* receiver -- `(.snd (:: x (Duo cstr int)))`
-             * -- wraps the param in one or more EX_ASCRIBE nodes (erased at
-             * codegen).  The carrier-vs-by-value classification below keys on
-             * the receiver being a bare EX_VAR param (its binding's
-             * `emit_byvalue_carrier_abi` flag, and its presence in the active
-             * spec's arg_types[]).  Strip the ascription wrappers so the param
-             * binding is visible -- otherwise the receiver looks like a non-VAR
-             * expression, `through_carrier` stays false, and an int64 carrier
-             * gets a direct `(x).snd` (invalid C).  The ascribed type itself is
-             * still carried by `struct_expr->type` / the resolved `def`. */
-            const Expr *recv_expr = e->as.get_field_.struct_expr;
-            while (recv_expr->kind == EX_ASCRIBE)
-                recv_expr = recv_expr->as.ascribe_.inner;
-            /* SC7: a transparent int newtype IS its single field -- the access
-             * is the identity (the value already holds the int64 payload). */
-            if (type_is_transparent_int_newtype(e->as.get_field_.struct_expr->type)) {
-                return sv;
-            }
-            const char *fname_raw = def->fields[e->as.get_field_.field_idx].name;
-            char *fname = mangle_field_name(fname_raw);
-            /* end-to-end-monomorphization: a :heap receiver is a typed pointer
-             * (`Vec__int *`) in monomorphic code -- field access dereferences
-             * directly (`(sv)->field`), bypassing the carrier/by-value/pbp
-             * dichotomy below.  Resolve the receiver type through the active
-             * spec so an element-erased / tyvar receiver still classifies. */
-            {
-                /* heap-struct-field-extraction-collapses-to-carrier: prefer the
-                 * active spec's concrete arg type for the receiver param, so a
-                 * monomorphized instance-method receiver (`xs : Cons__float *`)
-                 * is recovered as `(Cons float)` rather than the polymorphic
-                 * source `(Cons A)` / bare `Cons` that emit_resolve_type leaves
-                 * unsubstituted -- the same recovery #475 applied to the value-
-                 * struct deref.  Without it the spec clone falls back to the
-                 * generic-layout cast and reads `head` at the int64 carrier. */
-                Type recv_rty;
-                if (!emit_var_spec_arg_type(ctx, recv_expr, &recv_rty))
-                    recv_rty = emit_resolve_type(ctx,
-                        e->as.get_field_.struct_expr->type);
-                if (type_is_heap_struct(recv_rty)) {
-                    /* A :heap receiver is a typed pointer (`Vec__int *`) only in
-                     * concrete monomorphic positions, where its lowered C type is
-                     * a pointer.  In the abstract polymorphic *base* (e.g. the
-                     * carrier body of `(defn vec-len-byval [A] [v : (Vec A)]
-                     * (.len v))`, kept alive for the Eq[Vec] uniform dict slot)
-                     * the receiver arrives as the int64 carrier, so it must be
-                     * cast through the canonical layout-generic header
-                     * (`((Vec *)(intptr_t)sv)->field`) -- the same deref the
-                     * non-heap `through_carrier` path below emits.  Discriminate
-                     * on whether the lowered receiver type is a pointer. */
-                    const char *recv_cn = emit_type_c_name(ctx, recv_rty);
-                    bool recv_is_ptr = recv_cn && strchr(recv_cn, '*') != NULL;
-                    /* heap-struct-field-extraction-collapses-to-carrier: an
-                     * abstract receiver `(Cons A)` whose element A is still an
-                     * unresolved tyvar (the carrier base clone, no active spec
-                     * monomorphizing this param) lowers `Cons *` from type_c_name
-                     * -- but the C parameter is actually the int64 carrier, so a
-                     * bare `(xs)->head` derefs an int64_t (a hard cc error).
-                     * Treat an unground app spine as the carrier so it casts
-                     * through `((Cons *)(intptr_t)(xs))->head` instead.  A
-                     * monomorphized spec receiver (`Cons__int *`) has no tyvar
-                     * and keeps the direct pointer deref. */
-                    for (Type ty = recv_rty; ty.kind == TY_APP && ty.as.app.fn; ) {
-                        if (ty.as.app.arg && type_contains_unresolved_tyvar(*ty.as.app.arg)) {
-                            recv_is_ptr = false;
-                            break;
-                        }
-                        ty = *ty.as.app.fn;
-                    }
-                    Buf hb; buf_init(&hb);
-                    if (recv_is_ptr)
-                        buf_printf(&hb, "(%s)->%s", sv, fname);
-                    else
-                        buf_printf(&hb, "((%s *)(intptr_t)(%s))->%s", def->name, sv, fname);
-                    buf_putc(&hb, '\0');
-                    free(sv);
-                    free(fname);
-                    char *r = strdup(hb.data);
-                    buf_free(&hb);
-                    return r;
-                }
-            }
-            bool through_rc = e->as.get_field_.struct_expr->type.kind == TY_RC;
-            bool through_carrier = !through_rc
-                && e->as.get_field_.struct_expr->type.kind == TY_STRUCT
-                && def->n_type_params > 0;
-            /* M5 single-body-two-ABIs (docs/upcoming/m5-residual-straddle-
-             * retirement.md, Finding 5): a by-value Vec/Cons helper written in
-             * pure Turmeric -- e.g. `(defn vec-len-byval [A] [v : (Vec A)]
-             * (.len v))` -- has a `(Vec A)` (TY_APP) receiver.  Its
-             * monomorphized spec receives `v` by value (direct `.field`), but
-             * its carrier base (kept alive for the uniform dictionary slot,
-             * reached on untyped/abstract-element dispatch) gets `v` as the
-             * int64 carrier and must deref through the carrier typedef
-             * (`.len`/`.data`/`.cap` offsets are element-agnostic).  Gate
-             * precisely on the param's tracked representation: cast only when
-             * the receiver is a carrier-represented EX_VAR param (its
-             * `emit_byvalue_carrier_abi` flag is false -- C type is the int64
-             * carrier).  A by-value TY_APP receiver (Option/Result/Tuple specs,
-             * value-struct payloads -- flag true) keeps direct field access. */
-            if (!through_rc && !through_carrier && def->n_type_params > 0
-                && e->as.get_field_.struct_expr->type.kind == TY_APP
-                && recv_expr->kind == EX_VAR
-                && recv_expr->as.var.binding
-                && !recv_expr->as.var.binding->emit_byvalue_carrier_abi) {
-                through_carrier = true;
-            }
-            /* M4c Path A.2 (docs/upcoming/m4c-execution-plan.md): inside an
-             * instance-method spec where the receiver is a class-var param,
-             * the spec's arg type is the concrete monomorphized struct
-             * (e.g. Tuple2__int__int) — by-value, no `n_type_params`.  The
-             * elab-time receiver type is still bare `Tuple2` (TY_STRUCT
-             * with type_params), so `through_carrier` defaults to true.
-             * Override: walk to the param binding and consult the spec's
-             * `arg_types[]`; a concrete by-value struct → direct `.field`
-             * access, no carrier cast. */
-            if (through_carrier
-                && ctx->current_abi_specialization
-                && ctx->current_abi_specialization->fn
-                && ctx->current_abi_specialization->fn->owner_instance
-                && recv_expr->kind == EX_VAR) {
-                Type spec_arg;
-                if (emit_spec_arg_type_for_binding(ctx, recv_expr->as.var.binding,
-                                                   &spec_arg)) {
-                    StructDef *sa_def = NULL;
-                    Type sa_args[16]; uint8_t sa_n = 0;
-                    if (type_extract_struct_app(&spec_arg, &sa_def, sa_args, &sa_n)
-                        && sa_def && sa_def == def) {
-                        through_carrier = false;
-                    }
-                }
-            }
-            /* byvalue-result-field-access-casts-aggregate-to-pointer.md: a
-             * by-value carrier-ABI local/param (e.g. `(let [r (parse 7)] ...)`
-             * where parse returns a bare `Result`/`Option`) is declared as the
-             * concrete aggregate struct, not the int64 carrier -- its binding
-             * carries `emit_byvalue_carrier_abi = true`.  But `through_carrier`
-             * defaults true for any `Result`/`Option` receiver (n_type_params >
-             * 0), so the access would emit `((Result *)(intptr_t)(r))->ok_val`,
-             * casting an aggregate value to a pointer (a hard cc error).  When
-             * the receiver is such a by-value var, take the direct `(r).field`
-             * path instead. */
-            if (through_carrier && recv_expr->kind == EX_VAR
-                && recv_expr->as.var.binding
-                && recv_expr->as.var.binding->emit_byvalue_carrier_abi) {
-                through_carrier = false;
-            }
-            bool through_pbp = !through_rc && !through_carrier
-                && expr_is_pbp_param(ctx, recv_expr);
-            /* Direction (1) of polymorphic-ok-in-typeclass-instance-method-...:
-             * for Result__T__B / Option__T whose parametric field landed on a
-             * value-struct, the field slot is a heap pointer (`T *`) not the
-             * inline T value, so the access dereferences. Mirrors the
-             * struct_field_c_type rule that picks the pointer layout. */
-            bool field_is_heap_ptr_for_value_struct = false;
-            if (def && def->name &&
-                (strcmp(def->name, "Result") == 0 ||
-                 strcmp(def->name, "Option") == 0)) {
-                /* Resolve any TY_TYVARs in the receiver's type via the
-                 * current spec context so the struct-app args are the
-                 * concrete monomorphized types (e.g. User), not the
-                 * unbound A/B tyvars from the polymorphic source.  When the
-                 * receiver is a spec parameter (an instance method's `self`),
-                 * emit_resolve_type leaves a parametric param type such as
-                 * `(Option A)` unsubstituted, so prefer the spec's concrete
-                 * arg type -- otherwise the element binding is lost and a
-                 * value-struct element field is mistaken for the scalar
-                 * carrier (the by-value field deref below never fires). */
-                Type rt;
-                if (!emit_var_spec_arg_type(ctx, recv_expr, &rt))
-                    rt = emit_resolve_type(ctx, e->as.get_field_.struct_expr->type);
-                Type field_resolved = e->type;
-                /* substitute_struct_app_type returns a TY_APP result whose spine
-                 * nodes are freshly malloc'd (e.g. resolving `(NonEmpty A)` to
-                 * `(NonEmpty int)` for a `(Option (NonEmpty A))` field); we only
-                 * inspect it below, so free it after use.  The default
-                 * `field_resolved = e->type` is borrowed -- only free the
-                 * substituted result. */
-                bool field_resolved_owned = false;
-                if (rt.kind == TY_APP || rt.kind == TY_STRUCT) {
-                    Type extracted_args[16];
-                    uint8_t n_extracted = 0;
-                    StructDef *extracted_def = NULL;
-                    if (type_extract_struct_app(&rt, &extracted_def, extracted_args, &n_extracted) &&
-                        extracted_def && extracted_def == def) {
-                        const StructField *f = &def->fields[e->as.get_field_.field_idx];
-                        if (f->full_type) {
-                            field_resolved =
-                                substitute_struct_app_type(f->full_type, def, extracted_args);
-                            field_resolved_owned = true;
-                        }
-                    }
-                }
-                if (field_resolved_owned) free_struct_app_type(field_resolved);
-            }
-            Buf lit; buf_init(&lit);
-            if (through_rc) {
-                if (field_is_heap_ptr_for_value_struct)
-                    buf_printf(&lit, "(*((%s *)((RcControlBlock *)(%s))->value)->%s)",
-                               def->name, sv, fname);
-                else
-                    buf_printf(&lit, "((%s *)((RcControlBlock *)(%s))->value)->%s",
-                               def->name, sv, fname);
-            } else if (through_carrier) {
-                /* option-lowering-mid-migration: an Option carrier may be the
-                 * NULL `none` handle (`0`), so a `.is-some` / `.value` access
-                 * through the carrier must NULL-guard the deref -- mirroring
-                 * `tur_is_some`'s own `__o != 0 && ...` check -- instead of
-                 * blindly dereferencing and segfaulting on none.  is-some reads
-                 * back false, value reads back 0 (meaningless past a false
-                 * is-some, but never a wild deref).  Result has no NULL carrier,
-                 * so it keeps the unguarded access. */
-                bool option_carrier = def && def->name &&
-                                      strcmp(def->name, "Option") == 0;
-                if (field_is_heap_ptr_for_value_struct)
-                    buf_printf(&lit, "(*((%s *)(intptr_t)(%s))->%s)", def->name, sv, fname);
-                else if (option_carrier)
-                    buf_printf(&lit, "((%s) ? ((%s *)(intptr_t)(%s))->%s : 0)",
-                               sv, def->name, sv, fname);
-                else
-                    buf_printf(&lit, "((%s *)(intptr_t)(%s))->%s", def->name, sv, fname);
-            } else if (through_pbp) {
-                if (field_is_heap_ptr_for_value_struct)
-                    buf_printf(&lit, "(*(%s)->%s)", sv, fname);
-                else
-                    buf_printf(&lit, "(%s)->%s", sv, fname);
-            } else {
-                if (field_is_heap_ptr_for_value_struct)
-                    buf_printf(&lit, "(*(%s).%s)", sv, fname);
-                else
-                    buf_printf(&lit, "(%s).%s", sv, fname);
-            }
-            buf_putc(&lit, '\0');
+            /* structdef-retirement: the former StructDef field-access path is
+             * dead.  Every record now lowers to a single-variant record ADT
+             * (handled by the adt_def branch above), and a transparent int
+             * newtype is caught by the identity shortcut earlier.  Reaching
+             * here means the receiver resolved to neither a record ADT nor a
+             * transparent newtype -- an internal invariant break. */
+            fprintf(stderr, "tur: emit: EX_GET_FIELD with no backing record ADT\n");
             free(sv);
-            free(fname);
-            char *result = strdup(lit.data);
-            buf_free(&lit);
-            return result;
+            abort();
         }
         /* Phase HRT1: rank-2 polymorphic function wrapper */
         case EX_POLY_WRAP: {

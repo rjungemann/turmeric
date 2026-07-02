@@ -134,7 +134,6 @@ Expr *elab_coerce_to_any(Elab *e, Expr *value) {
     Expr *inject = expr_new(e->arena, EX_UNION_INJECT, any_type, value->span);
     inject->as.union_inject_.tag_idx = (int64_t)any_box_tag_for_type(&value->type);
     inject->as.union_inject_.value = value;
-    inject->as.union_inject_.box_struct = NULL;
     return inject;
 }
 
@@ -958,12 +957,7 @@ static const Form *sz_recover_type_form(Elab *e, const Expr *x) {
             const Type *field_full = NULL;
             const char **type_params = NULL;
             uint8_t n_type_params = 0;
-            const StructDef *def = x->as.get_field_.def;
-            if (def && fi < def->n_fields) {
-                field_full = def->fields[fi].full_type;
-                type_params = def->type_params;
-                n_type_params = def->n_type_params;
-            } else if (x->as.get_field_.adt_def && x->as.get_field_.adt_ctor &&
+            if (x->as.get_field_.adt_def && x->as.get_field_.adt_ctor &&
                        fi < x->as.get_field_.adt_ctor->n_fields) {
                 const struct AdtDef *ad = x->as.get_field_.adt_def;
                 field_full = x->as.get_field_.adt_ctor->fields[fi].full_type;

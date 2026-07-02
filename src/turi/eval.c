@@ -5348,7 +5348,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
             case EX_MAKE_STRUCT: {
                 uint32_t n = control->as.make_struct_.n_fields;
                 if (n == 0) {
-                    StructDef *sd = control->as.make_struct_.def;
+                    StructDef *sd = NULL;
                     cur = make_struct_val_def(env, sd ? sd->name : "<struct>", 0, NULL, sd);
                     descending = false;
                     break;
@@ -6238,7 +6238,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     control = me->as.make_struct_.field_values[top->index];
                     cf = top->frame; tail = false; descending = true;  /* fields non-tail */
                 } else {
-                    StructDef *sd = me->as.make_struct_.def;
+                    StructDef *sd = NULL;
                     /* make_struct_val_def copies the fields, so free after. */
                     cur = make_struct_val_def(env, sd ? sd->name : "<struct>",
                                               n, fields, sd);
@@ -6626,13 +6626,8 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* --- Def (top-level binding) ---------------------------------------- */
     case EX_DEF: {
-        TuriValue v;
-        if (e->as.def_.struct_def) {
-            v = turi_struct_type_val(e->as.def_.struct_def->name);
-        } else {
-            v = eval_expr(env, frame, e->as.def_.init);
-            if (turi_is_error(v) || env->returning || env->throwing || env->aborting) return v;
-        }
+        TuriValue v = eval_expr(env, frame, e->as.def_.init);
+        if (turi_is_error(v) || env->returning || env->throwing || env->aborting) return v;
         turi_env_set(env, e->as.def_.binding->name->name, v);
         return v;
     }
@@ -7878,10 +7873,6 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
              * are "struct" at the surface (CONV-S1), so accept either. */
             ok = (v.tag == TURI_STRUCT && v.as_struct &&
                   (v.as_struct->def != NULL || turi_struct_is_struct_like(v)));
-            if (ok && e->as.any_cast_.target_struct &&
-                v.as_struct->name && e->as.any_cast_.target_struct->name)
-                ok = (strcmp(v.as_struct->name,
-                             e->as.any_cast_.target_struct->name) == 0);
             break;
         case TY_ADT:
             /* A genuine ADT value has no StructDef and was not synthesized from a

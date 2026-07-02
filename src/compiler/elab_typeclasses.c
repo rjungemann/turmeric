@@ -5023,7 +5023,6 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                                                  call->span);
                             out->as.get_field_.struct_expr = obj;
                             out->as.get_field_.field_idx = i;
-                            out->as.get_field_.def = NULL;
                             out->as.get_field_.adt_def = adt;
                             out->as.get_field_.adt_ctor = ctor;
                             return out;
@@ -5086,7 +5085,6 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                                                    field_type, call->span);
                         get_field->as.get_field_.struct_expr = obj;
                         get_field->as.get_field_.field_idx = i;
-                        get_field->as.get_field_.def = NULL;
                         get_field->as.get_field_.adt_def = adt;
                         get_field->as.get_field_.adt_ctor = ctor;
 
@@ -5118,53 +5116,10 @@ Expr *elab_method_call(Elab *e, const Form *call) {
         }
     }
 
-    /* Phase 16 v2 fallback: when receiver has TY_UNKNOWN or TY_INT type
-     * (untyped parameters default to TY_INT), search all registered struct defs
-     * for a :fn field matching the method name.
-     * This allows (.method-name cap args...) when cap has no explicit type annotation,
-     * as long as exactly one struct in scope has a TY_FN field with that name. */
-    if (call->as.list.len > 2 &&
-        (obj->type.kind == TY_UNKNOWN || obj->type.kind == TY_INT)) {
-        StructDef *matched_def = NULL;
-        uint32_t matched_idx = 0;
-        bool ambiguous = false;
-        for (uint32_t sd = 0; sd < e->n_struct_defs; sd++) {
-            StructDef *sdef = e->struct_defs[sd];
-            for (uint32_t i = 0; i < sdef->n_fields; i++) {
-                if (sdef->fields[i].kind == TY_FN &&
-                    strlen(sdef->fields[i].name) == method_name_len &&
-                    memcmp(sdef->fields[i].name, method_name, method_name_len) == 0) {
-                    if (matched_def != NULL && matched_def != sdef) {
-                        ambiguous = true;
-                    } else {
-                        matched_def = sdef;
-                        matched_idx = i;
-                    }
-                }
-            }
-        }
-        if (matched_def && !ambiguous) {
-            Type field_type = type_from_kind(TY_FN);
-            Expr *get_field = expr_new(e->arena, EX_GET_FIELD, field_type, call->span);
-            get_field->as.get_field_.struct_expr = obj;
-            get_field->as.get_field_.field_idx = matched_idx;
-            get_field->as.get_field_.def = matched_def;
-
-            uint32_t n_args = call->as.list.len - 2;
-            Expr **args = (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *));
-            for (uint32_t j = 0; j < n_args; j++) {
-                args[j] = elab_form(e, call->as.list.items[2 + j]);
-                if (!args[j]) return NULL;
-            }
-
-            Expr *call_out = expr_new(e->arena, EX_CALL, TYPE_INT, call->span);
-            call_out->as.call_.fn_binding = NULL;
-            call_out->as.call_.fn_expr = get_field;
-            call_out->as.call_.args = args;
-            call_out->as.call_.n_args = n_args;
-            return call_out;
-        }
-    }
+    /* structdef-retirement DS-D: the "search all registered struct defs for a
+     * matching :fn field" fallback (for an untyped `(.method cap ...)` receiver)
+     * is removed with the StructDef registry -- every former struct is a record
+     * ADT and its capability fields dispatch through the ADT field paths above. */
 
     /* IT4: Typeclass intersection dispatch on union types.
      * When obj : (A | B), and every member type has an instance for .method,

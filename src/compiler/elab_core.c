@@ -1467,10 +1467,6 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->kw_affine = intern_cstr(st, "affine");
     e->kw_heap = intern_cstr(st, "heap");
     e->kw_no_auto_ctor = intern_cstr(st, "no-auto-ctor"); /* CTOR-V0 opt-out */
-    /* Phase 11: struct registry */
-    e->struct_defs = NULL;
-    e->n_struct_defs = 0;
-    e->cap_struct_defs = 0;
     /* Phase G0: ADT registry */
     e->adt_defs = NULL;
     e->n_adt_defs = 0;

@@ -460,10 +460,6 @@ typedef struct Elab {
     uint32_t unsafe_total_lines;    /* total lines in unsafe blocks */
     /* Phase 19: cont? predicate */
     const Symbol *sym_cont_pred; /* cont? */
-    /* Phase 11: Struct registry - maps struct names to StructDef */
-    StructDef **struct_defs;
-    uint32_t n_struct_defs;
-    uint32_t cap_struct_defs;
     /* Phase G0: ADT registry - maps ADT names to AdtDef */
     AdtDef **adt_defs;
     uint32_t n_adt_defs;
@@ -1143,7 +1139,6 @@ Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had_error)
 
 /* elab_structs.c */
 void elab_add_forward_type(Elab *e, const Symbol *sym);
-void elab_register_struct_def(Elab *e, StructDef *def);
 Expr *elab_defstruct(Elab *e, const Form *call);
 Expr *elab_defopaque(Elab *e, const Form *call);
 void elab_register_adt_def(Elab *e, AdtDef *def);

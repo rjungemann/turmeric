@@ -2408,7 +2408,6 @@ static Expr *elab_set_field(Elab *e, const Form *call, Form *target) {
     out->as.set_field_.receiver = receiver;
     out->as.set_field_.value = value;
     out->as.set_field_.field_idx = fi;
-    out->as.set_field_.def = NULL;  /* structdef-retirement DS-C: no StructDef */
     out->as.set_field_.adt_def = adt;
     out->as.set_field_.adt_ctor = adt_ctor;
     out->as.set_field_.receiver_is_rc = receiver_is_rc;

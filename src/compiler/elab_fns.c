@@ -4790,6 +4790,5 @@ Expr *elab_def(Elab *e, const Form *call) {
     Expr *out = expr_new(e->arena, EX_DEF, TYPE_NIL, call->span);
     out->as.def_.binding = b;
     out->as.def_.init = init;
-    out->as.def_.struct_def = NULL;
     return out;
 }

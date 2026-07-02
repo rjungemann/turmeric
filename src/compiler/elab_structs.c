@@ -610,27 +610,10 @@ void elab_add_forward_type(Elab *e, const Symbol *sym) {
     e->forward_type_syms[e->n_forward_type_syms++] = sym;
 }
 
-/* Helper: add StructDef to the elab registry */
-void elab_register_struct_def(Elab *e, StructDef *def) {
-    /* structdef-retirement slice 5 DS-B: with the effect-fn (A1), grouped-spec
-     * (A2/DS-A) and borrow-family (DS-A3) field shapes all lowering,
-     * `defstruct_lowers_to_adt` is true for every field shape the suite
-     * exercises, so no `defstruct` produces a `StructDef` -- this registry is
-     * dead (verified: zero registrations across the whole suite).  Assert it in
-     * debug so a regression, or a still-gated exotic compound field form
-     * (forall/handler/arrow/session/role/global/project) actually being used,
-     * fails the suite immediately; the registration below is kept for NDEBUG
-     * release safety.  DS-C/DS-D delete the registry and its two now-dead
-     * callers outright. */
-    assert(0 && "elab_register_struct_def: a defstruct did not lower to a record "
-                "ADT -- StructDef producer reachable (structdef-retirement DS-B)");
-    if (e->n_struct_defs >= e->cap_struct_defs) {
-        e->cap_struct_defs = e->cap_struct_defs ? e->cap_struct_defs * 2 : 8;
-        e->struct_defs = (StructDef **)realloc(e->struct_defs,
-            e->cap_struct_defs * sizeof(StructDef *));
-    }
-    e->struct_defs[e->n_struct_defs++] = def;
-}
+/* structdef-retirement DS-D: elab_register_struct_def and the e->struct_defs[]
+ * registry it wrote are deleted.  Every defstruct lowers to a record ADT, so no
+ * StructDef is ever produced and the registry stayed empty (proven by DS-B's
+ * live assert across a green suite). */
 
 /* CONV-S1 (defstruct-as-defadt): true iff every field in an old-syntax
  * defstruct field vector is lowerable to a record-`defadt` field with a
@@ -1261,7 +1244,6 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
     Expr *out = expr_new(e->arena, EX_DEF, TYPE_NIL, call->span);
     out->as.def_.binding = b;
     out->as.def_.init = NULL;
-    out->as.def_.struct_def = NULL;
     return out;
 }
 
