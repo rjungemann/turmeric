@@ -2820,7 +2820,16 @@ void emit_dict_name(char *buf, size_t buflen, const TypeClassInstance *inst) {
             case TY_APP: {
                 const char *fn_part  = "T";
                 const char *arg_part = "T";
-                if (inst->type_args[i].as.app.fn) {
+                /* MB4 (constrained-hkt-forall-mode-b-plan): keep this in lockstep
+                 * with emit_stmt.c's instance-def naming, which prefers the source
+                 * symbol (`type_arg_syms`) for a partially-applied instance head
+                 * like `(Const r)`.  Reading only the TY_REC name here left the
+                 * pass-site dict as `dict_Functor_T_...` while the definition
+                 * emitted `dict_Functor_Const_...` -- an undeclared-symbol link
+                 * error when an MB1 dict for a parametric functor is passed. */
+                if (inst->type_arg_syms && inst->type_arg_syms[i]) {
+                    fn_part = inst->type_arg_syms[i]->name;
+                } else if (inst->type_args[i].as.app.fn) {
                     Type *fn = inst->type_args[i].as.app.fn;
                     if (fn->kind == TY_REC && fn->as.rec.name)
                         fn_part = fn->as.rec.name;

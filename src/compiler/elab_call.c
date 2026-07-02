@@ -5286,6 +5286,19 @@ Binding *make_dict_clone(Elab *e, Binding *inner_b, Span span) {
         ptypes[i + 1] = orig->param_types[i];
         akinds[i + 1] = (i < inner_b->type.as.fn.arity)
             ? inner_b->type.as.fn.arg_kinds[i] : orig->param_types[i].kind;
+        /* MB4 (constrained-hkt-forall-mode-b-plan): a function-typed parameter
+         * (a van Laarhoven lens's `g : (-> A (f A))`) crosses the poly carrier
+         * as a uniform fat box.  Mark it `boxed` so the clone body fat-dispatches
+         * it through slot 0 instead of calling the box as a thin function pointer
+         * (a jump into the closure env -> SIGSEGV when the caller passes a
+         * capturing closure, as `set`/`over` do).  The pass site boxes a thin fn
+         * argument to match (elab_poly_call, EX_FN_TO_FAT above).  The body shares
+         * `orig`'s param bindings, so mark the binding's own type -- `orig` is
+         * only ever emitted as this dict-clone, never directly. */
+        if (ptypes[i + 1].kind == TY_FN && !ptypes[i + 1].as.fn.boxed) {
+            ptypes[i + 1].as.fn.boxed = true;
+            if (params[i + 1]) params[i + 1]->type.as.fn.boxed = true;
+        }
     }
     TypeKind rk = inner_b->type.as.fn.result_kind;
     Type ftype = type_fn(akinds, np, rk);
@@ -5668,6 +5681,37 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                         pinned = true;
                         break;
                     }
+                    /* MB4 (constrained-hkt-forall-mode-b-plan): the constraint
+                     * var `f` may appear NESTED inside a body parameter rather
+                     * than as a top-level `(f a)` argument -- a van Laarhoven lens
+                     * takes `g : (-> A (f A))`, so `f` heads the RESULT of a
+                     * function-typed parameter.  Structurally collect the bindings
+                     * from this argument (call_collect_type_bindings recurses
+                     * through the fn type, binding `f := (Const int)` from a
+                     * concrete `g : (-> int (Const int int))`) and pin `f` to its
+                     * bound constructor, decomposed to the base head so the
+                     * instance lookup resolves `Functor Const`. */
+                    if (aft) {
+                        CallTypeBinding fbinds[16]; uint8_t fnb = 0;
+                        if (call_collect_type_bindings(aft, args[j]->type,
+                                                       fbinds, &fnb)) {
+                            for (uint8_t bi = 0; bi < fnb; bi++) {
+                                if (!fbinds[bi].name ||
+                                    strcmp(fbinds[bi].name, vname) != 0)
+                                    continue;
+                                const Type *base = &fbinds[bi].type;
+                                while (base->kind == TY_APP && base->as.app.fn)
+                                    base = base->as.app.fn;
+                                if (base->kind != TY_TYVAR &&
+                                    base->kind != TY_UNKNOWN) {
+                                    concrete = *base;
+                                    pinned = true;
+                                }
+                                break;
+                            }
+                        }
+                        if (pinned) break;
+                    }
                 }
                 if (!pinned) continue;   /* resolved via return context; defer */
                 /* Only discharge against a ground type -- a tyvar/unknown/applied
@@ -5807,6 +5851,35 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
          * typed thunk; emit casts fn.fn to the concrete R(*)(void*, A...)). */
         result_kind = poly->as.fn.result_kind;
         result_full = poly->as.fn.result_full_type;
+    }
+
+    /* MB4 (constrained-hkt-forall-mode-b-plan): box thin function-typed args to a
+     * uniform fat box.  Done HERE -- after constraint pinning and result-type
+     * determination, which both read the argument's real function type -- because
+     * EX_FN_TO_FAT rewrites the arg's static type to `ptr<void>`, which would
+     * otherwise hide `f` from the `(-> A (f A))` pinning.  A function value
+     * crossing the poly carrier is a uniform fat box (the dict-clone fat-dispatches
+     * its function params through slot 0, make_dict_clone), so a thin
+     * (non-capturing) fn argument must be boxed; a capturing closure already
+     * carries one (TY_PTR_VOID / boxed TY_FN) and is left untouched. */
+    if (g_opt_forall_dict_pass && poly && poly->kind == TY_FORALL) {
+        const Type *pbody = poly->as.forall_.body;
+        if (pbody && pbody->kind == TY_FN && pbody->as.fn.arg_full_types) {
+            for (uint32_t i = 0; i < n_args &&
+                 i < (uint32_t)pbody->as.fn.arity; i++) {
+                const Type *aft = pbody->as.fn.arg_full_types[i];
+                if (aft && aft->kind == TY_FN &&
+                    args[i]->type.kind == TY_FN &&
+                    !args[i]->type.as.fn.boxed &&
+                    args[i]->type.as.fn.arity >= 1 &&
+                    args[i]->type.as.fn.arity <= 5) {
+                    Expr *shim = expr_new(e->arena, EX_FN_TO_FAT,
+                                          TYPE_PTR_VOID, args[i]->span);
+                    shim->as.fn_to_fat_.inner = args[i];
+                    args[i] = shim;
+                }
+            }
+        }
     }
 
     Type result_ty = result_full ? *result_full : type_from_kind(result_kind);

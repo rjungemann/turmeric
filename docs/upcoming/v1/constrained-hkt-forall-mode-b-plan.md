@@ -449,6 +449,44 @@ van Laarhoven `view`/`set`/`over`.
 
 ### Slice MB4 -- van Laarhoven `Lens'` in stdlib (`--enable=van-laarhoven-lens`)
 
+**Status.** PARTIAL. The encoding is proven expressible and the No-go signal is
+NOT triggered -- `Const`/`Identity` (carrier-compatible opaques) flow as `(f a)`
+through the carrier for both the argument and the result positions, so
+`view`/`set`/`over` work end to end at concrete focus types (fixture
+`van-laarhoven-lens-concrete/` returns 3/30/4/99, exercising the full mode-B
+stack: MB1/MB2 dict passing + dispatch, the parametric `(Const r)` dict, MB3-era
+closure crossing, and the fat-box crossing of the functor-wrapping function).
+What is NOT yet available is an *ergonomic generic* `(view lens s)` that infers
+the focus type from the lens argument -- that needs generic-type-param inference
+through a rank-2 poly argument, a separate inference feature that regresses the
+existing rank-2 fixtures when attempted naively. So the shipped lens stays the
+profunctor-by-record encoding for now; the van Laarhoven form ships as a
+demonstrated-at-concrete-types fixture, and the guide rewrite is deferred until
+the generic form lands. See
+[docs/reported/van-laarhoven-generic-inference-gap.md](../../reported/van-laarhoven-generic-inference-gap.md).
+
+**Compiler advances that landed for MB4** (suite-green, independently useful):
+
+- **Parametric-instance dict naming** (`emit_core.c` `emit_dict_name`): the
+  pass-site dict name for a partially-applied instance head (`(Const r)`) now
+  reads the source symbol (`type_arg_syms`), matching the definition site --
+  previously `dict_Functor_T_...` vs `dict_Functor_Const_...`, an
+  undeclared-symbol link error when an MB1 dict for a parametric functor was
+  passed.
+- **HK constraint pinning through a nested function parameter** (`elab_call.c`
+  `elab_poly_call`): the `Functor f` dict resolves when `f` appears inside a
+  function-typed parameter `g : (-> A (f A))` (a lens), not just as a top-level
+  `(f a)` argument (MB2's shape).  Uses `call_collect_type_bindings` to bind `f`
+  from the concrete argument, decomposed to the base constructor.
+- **Fat-box crossing of the functor-wrapping function** (`elab_call.c`
+  `make_dict_clone` + the poly-call pass site): a function value crossing the
+  poly carrier is a uniform fat box.  The dict-clone marks its function-typed
+  params `boxed` (fat-dispatch through slot 0), and the pass site boxes a thin
+  (non-capturing) fn argument via `EX_FN_TO_FAT` -- done *after* constraint
+  pinning and result-type determination so the arg's real function type stays
+  visible to `f`-inference.  Without this a capturing closure (`set`/`over`'s
+  `\a -> Identity (h a)`) was called as a thin function pointer -> SIGSEGV.
+
 **Goal.** Re-express `stdlib/lens.tur`'s optic over the van Laarhoven encoding
 (or add it alongside the record encoding), with `Identity` / `Const r` functor
 instances and `view`/`set`/`over` derived by instantiating `f`. Acceptance gate.

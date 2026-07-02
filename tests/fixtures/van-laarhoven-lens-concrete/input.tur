@@ -1,0 +1,67 @@
+;; MB4 (constrained-hkt-forall-mode-b-plan): the van Laarhoven lens encoding,
+;; expressed end to end on Turmeric's type-erased HRT.  A lens is a constrained
+;; rank-2 poly fn `forall f. Functor f => (A -> f A) -> S -> f S`; `view`
+;; instantiates the functor at `Const` (ignore the update, keep the focus) and
+;; `set`/`over` at `Identity` (run the update).  This exercises the whole mode-B
+;; stack together: MB1/MB2 dict passing + dispatch for the caller-chosen functor,
+;; the parametric `(Const r)` instance's dict, and -- crucially -- the fat-box
+;; crossing of the functor-wrapping function `g` (a capturing closure for
+;; set/over) through the poly carrier.
+;;
+;; The functors are carrier-compatible opaques (one int64 word), so `Const`/
+;; `Identity` flow as `(f a)` through the carrier for both the argument and the
+;; result positions of the lens -- the MB4 "can Const/Identity flow?" gate.
+;;
+;; NOTE: view/set/over here are written per-focus (concrete `S`/`A`).  A fully
+;; generic `(view lens s)` that infers the focus type from the lens argument
+;; needs generic-type-param inference through a rank-2 poly argument, which is
+;; not yet available -- see docs/reported/van-laarhoven-generic-inference-gap.md.
+
+;; Const r a -- phantom second index; fmap ignores the function.
+(defopaque Const [r a] :int)
+(defn mk-const [A] [x : A] : (Const A A) ```c return (int64_t)x; ```)
+(defn get-const [R A] [c : (Const R A)] : R ```c return (int64_t)c; ```)
+(definstance Functor [(Const r)]
+  (fmap [c g] (mk-const (get-const c))))
+
+;; Identity a -- fmap maps.
+(defopaque Identity [a] :int)
+(defn mk-id [A] [x : A] : (Identity A) ```c return (int64_t)x; ```)
+(defn run-id [A] [i : (Identity A)] : A ```c return (int64_t)i; ```)
+(definstance Functor [Identity]
+  (fmap [i g] (mk-id (g (run-id i)))))
+
+(defstruct Point :copy :heap [x : int y : int])
+
+;; A concrete lens focusing Point.x, polymorphic over the functor f.
+(defn point-x [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)
+  (fmap (g (.x s))
+        (fn [nx : int] : Point (make-struct Point :x nx :y (.y s)))))
+
+;; view l s = get-const (l (\x -> Const x) s)   -- f := Const, thin g.
+(defn view-px
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> int (f int)) Point (f Point)))
+     s : Point] : int
+  (get-const (l (fn [x : int] : (Const int int) (mk-const x)) s)))
+
+;; set l b s = run-id (l (\_ -> Identity b) s)   -- f := Identity, capturing g.
+(defn set-px
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> int (f int)) Point (f Point)))
+     b : int s : Point] : Point
+  (run-id (l (fn [a : int] : (Identity int) (mk-id b)) s)))
+
+;; over l h s = run-id (l (\a -> Identity (h a)) s) -- f := Identity, capturing g.
+(defn over-px
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> int (f int)) Point (f Point)))
+     h : (-> int int) s : Point] : Point
+  (run-id (l (fn [a : int] : (Identity int) (mk-id (h a))) s)))
+
+(defn main [] : int
+  (let [p (make-struct Point :x 3 :y 4)]
+    (println (view-px point-x p))                              ; 3
+    (let [p2 (over-px point-x (fn [v : int] : int (* v 10)) p)]
+      (println (view-px point-x p2))                           ; 30
+      (println (.y p2)))                                       ; 4 (unfocused field preserved)
+    (let [p3 (set-px point-x 99 p)]
+      (println (view-px point-x p3))))                         ; 99
+  0)
