@@ -20,7 +20,7 @@
  * parenthesized higher-order argument is validated for well-formedness but
  * contributes exactly one to the outer arity, same as a bare `*`.
  *
- * Diagnostics: TUR-E0292 (unknown/malformed kind form), TUR-E0293 (arity
+ * Diagnostics: TUR-E0303 (unknown/malformed kind form), TUR-E0304 (arity
  * exceeds KIND_ARROW5 -- raise the ceiling first).  Both are emitted at the
  * offending span; the helpers return false without touching *out on failure. */
 
@@ -33,7 +33,7 @@ static bool parse_kind_atom(Elab *e, Form *f, Kind *out) {
         if (strcmp(f->as.sym->name, "*") == 0) { *out = KIND_STAR; return true; }
         diag_emit(DIAG_ERROR, f->span,
                   "malformed kind form: expected '*' or a parenthesized kind, "
-                  "got '%s' (TUR-E0292)", f->as.sym->name);
+                  "got '%s' (TUR-E0303)", f->as.sym->name);
         return false;
     }
     if (f->tag == F_LIST) {
@@ -41,7 +41,7 @@ static bool parse_kind_atom(Elab *e, Form *f, Kind *out) {
     }
     diag_emit(DIAG_ERROR, f->span,
               "malformed kind form: expected '*' or a parenthesized kind "
-              "(TUR-E0292)");
+              "(TUR-E0303)");
     return false;
 }
 
@@ -52,7 +52,7 @@ static bool parse_kind_seq(Elab *e, Form **items, uint32_t n, Span span,
                            Kind *out) {
     if (n == 0) {
         diag_emit(DIAG_ERROR, span,
-                  "malformed kind form: empty kind (TUR-E0292)");
+                  "malformed kind form: empty kind (TUR-E0303)");
         return false;
     }
     /* Even length means a dangling '->' with no trailing atom (or, for n==2,
@@ -61,7 +61,7 @@ static bool parse_kind_seq(Elab *e, Form **items, uint32_t n, Span span,
     if ((n & 1u) == 0) {
         diag_emit(DIAG_ERROR, span,
                   "malformed kind form: kind must be `*` or `k -> k -> ... -> *`, "
-                  "not ending in '->' (TUR-E0292)");
+                  "not ending in '->' (TUR-E0303)");
         return false;
     }
     uint32_t n_atoms = 0;
@@ -73,7 +73,7 @@ static bool parse_kind_seq(Elab *e, Form **items, uint32_t n, Span span,
         } else if (items[i]->tag != F_SYM || items[i]->as.sym != e->sym_arrow) {
             diag_emit(DIAG_ERROR, items[i]->span,
                       "malformed kind form: expected '->' between kind atoms "
-                      "(TUR-E0292)");
+                      "(TUR-E0303)");
             return false;
         }
     }
@@ -81,7 +81,7 @@ static bool parse_kind_seq(Elab *e, Form **items, uint32_t n, Span span,
     if (arity > 5) {
         diag_emit(DIAG_ERROR, span,
                   "kind arity %u exceeds KIND_ARROW5 -- raise the ceiling first "
-                  "(TUR-E0293)", (unsigned)arity);
+                  "(TUR-E0304)", (unsigned)arity);
         return false;
     }
     *out = kind_for_arity(arity);
@@ -97,7 +97,7 @@ static bool parse_kind_binder(Elab *e, Form *vf, const Symbol **out_name,
     if (vf->as.list.len < 3) {
         diag_emit(DIAG_ERROR, vf->span,
                   "kind-annotated bound variable must be `(name :: <kind>)`, "
-                  "e.g. (f :: * -> *) (TUR-E0292)");
+                  "e.g. (f :: * -> *) (TUR-E0303)");
         return false;
     }
     Form *name_f = vf->as.list.items[0];
@@ -105,13 +105,13 @@ static bool parse_kind_binder(Elab *e, Form *vf, const Symbol **out_name,
     if (name_f->tag != F_SYM) {
         diag_emit(DIAG_ERROR, name_f->span,
                   "kind-annotated bound variable name must be a symbol "
-                  "(TUR-E0292)");
+                  "(TUR-E0303)");
         return false;
     }
     if (dc_f->tag != F_SYM || dc_f->as.sym != e->sym_ascribe) {
         diag_emit(DIAG_ERROR, dc_f->span,
                   "kind-annotated bound variable must use `::` between the name "
-                  "and its kind, e.g. (f :: * -> *) (TUR-E0292)");
+                  "and its kind, e.g. (f :: * -> *) (TUR-E0303)");
         return false;
     }
     Kind k;

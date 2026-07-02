@@ -6,7 +6,7 @@
 > boxes an aggregate result via the carrier-spill shim (gated by
 > `poly_wrap_.boxes_aggregate`) which the call site unboxes; a **typed** `:fn`
 > carrier / monad continuation is left byte-for-byte unchanged (consumed by value
-> via the concrete-cast call site). The `TUR-E0295`/`E0296` validation stays;
+> via the concrete-cast call site). The `TUR-E0306`/`E0307` validation stays;
 > `TUR-E0297` is retired. See `emit_agg_box`/`emit_agg_unbox` (emit_expr.c),
 > `make_poly_wrapper` + the `elab_poly_call` result-type propagation
 > (elab_call.c), and `ensure_aggregate_spill_shim` (emit_module.c). Fixtures:

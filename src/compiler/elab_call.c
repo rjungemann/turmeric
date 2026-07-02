@@ -73,7 +73,7 @@ static bool hrt_body_param_hk_var_kind(const Type *forall_ty,
 /* Validate that `actual` is a type application whose base constructor kind
  * matches `f_kind`, and that its container is carrier-compatible.  `ctx_what`
  * names the site for the diagnostic ("rank-2 argument" / "rank-2 call").
- * Returns false after emitting TUR-E0295/E0296/E0297 on violation. */
+ * Returns false after emitting TUR-E0306/E0307 on violation. */
 static bool hrt_validate_hk_actual(Elab *e, Kind f_kind, Type actual,
                                    Span span, const char *ctx_what) {
     (void)e;
@@ -81,7 +81,7 @@ static bool hrt_validate_hk_actual(Elab *e, Kind f_kind, Type actual,
         diag_emit(DIAG_ERROR, span,
                   "%s: expected a type application instantiating the "
                   "higher-kinded variable (e.g. (Box int)), but got a "
-                  "non-application type (TUR-E0295)", ctx_what);
+                  "non-application type (TUR-E0306)", ctx_what);
         return false;
     }
     /* Walk the application spine to the base constructor and compare its
@@ -91,7 +91,7 @@ static bool hrt_validate_hk_actual(Elab *e, Kind f_kind, Type actual,
     if (base->hkt_kind != f_kind) {
         diag_emit(DIAG_ERROR, span,
                   "%s: container constructor of kind '%s' cannot instantiate a "
-                  "higher-kinded variable of kind '%s' (TUR-E0296)",
+                  "higher-kinded variable of kind '%s' (TUR-E0307)",
                   ctx_what, kind_to_string(base->hkt_kind),
                   kind_to_string(f_kind));
         return false;
@@ -5463,7 +5463,7 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                     diag_emit(DIAG_ERROR, call->span,
                               "no '%s' instance for '%s' at this rank-2 "
                               "instantiation site -- required by the constraint "
-                              "on '%s' in the poly fn's forall type (TUR-E0294)",
+                              "on '%s' in the poly fn's forall type (TUR-E0305)",
                               (tc->name && tc->name->name) ? tc->name->name : "?",
                               type_name(concrete), vname);
                     return NULL;

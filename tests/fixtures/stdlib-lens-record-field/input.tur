@@ -1,0 +1,21 @@
+;; Slice 4 (constrained-hkt-forall-plan) acceptance gate: the stdlib lens module
+;; exercised end-to-end -- view / set / over on a record field.  Uses the
+;; profunctor-by-record encoding (see stdlib/lens.tur for why the van Laarhoven
+;; `forall f. Functor f => ...` form is deferred).
+(load "stdlib/lens.tur")
+
+(defstruct Point :copy :heap [x : int y : int])
+
+;; A field lens for Point.x
+(defn point-x [] : (Lens Point int)
+  (lens
+    (fn [p : Point] : int (.x p))
+    (fn [nx : int p : Point] : Point (make-struct Point :x nx :y (.y p)))))
+
+(defn main [] : int
+  (let [px (point-x)
+        p  (make-struct Point :x 3 :y 9)]
+    (println (view px p))                                     ; 3
+    (println (.x (set px 42 p)))                              ; 42
+    (println (.x (over px (fn [v : int] : int (* v 10)) p)))) ; 30
+  0)

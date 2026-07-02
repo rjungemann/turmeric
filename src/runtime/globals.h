@@ -172,7 +172,7 @@ extern bool g_opt_forall_kinds;
  * `forall-constraints` experiment.  When set, a `forall` type may carry a
  * constraint vector `[(Show a) ...]`, and each rank-2 instantiation site inside
  * a callee re-discharges those constraints against the concrete type filling
- * the bound variable (TUR-E0294 if no instance is in scope).  Points at the
+ * the bound variable (TUR-E0305 if no instance is in scope).  Points at the
  * EXPERIMENTS[] `opt_global` for "forall-constraints". */
 extern bool g_opt_forall_constraints;
 
@@ -180,7 +180,7 @@ extern bool g_opt_forall_constraints;
  * experiment.  When set, a rank-2 `forall` parameter may quantify a
  * higher-kinded variable (`(f :: * -> *)`) used as `(f a)` in the body, and
  * the call/instantiation sites validate that the type filling `f` is a type
- * application whose constructor kind matches (TUR-E0295/TUR-E0296).  Points at
+ * application whose constructor kind matches (TUR-E0306/TUR-E0307).  Points at
  * the EXPERIMENTS[] `opt_global` for "hkt-hrt". */
 extern bool g_opt_hkt_hrt;
 
