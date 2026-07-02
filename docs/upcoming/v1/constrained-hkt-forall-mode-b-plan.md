@@ -225,9 +225,27 @@ instances and `view`/`set`/`over` derived by instantiating `f`. Acceptance gate.
 - End-to-end fixture `stdlib-van-laarhoven-lens/` exercising view/set/over on a
   record field, and -- if MB3 landed -- a composed lens via ordinary function
   composition.
-- Update `docs/guides/lens-guide.md` to show the van Laarhoven form as the
-  primary encoding, keeping the record encoding as the composition-free
-  lightweight option.
+- **Rewrite `docs/guides/lens-guide.md` to teach the shipped encoding cleanly,
+  with no historical scaffolding.** The current guide documents the record
+  encoding *and* an "why not van Laarhoven" section explaining the deferral, the
+  mode-A/mode-B blocker, the two compiler errors, and the composition tradeoff.
+  Once the van Laarhoven form ships, **delete all of that** -- a learner reading
+  the guide should see only the encoding they will use and how to use it, not a
+  changelog of what used to be impossible. Specifically:
+    - Remove the "The encoding, and why not van Laarhoven" section and the
+      "one tradeoff: composition" section in their entirety.
+    - Present van Laarhoven `Lens'` as *the* lens type, with `view`/`set`/`over`
+      and composition (`.`/`compose` if MB3 landed, else the uncurried form)
+      shown as plain, working idioms.
+    - If the record encoding is retained at all, keep it to a short "lightweight
+      alternative" note stated on its own merits (no getter/setter allocation,
+      no functor instances) -- **not** framed as a workaround for a former
+      restriction, and with no reference to mode A/B, erasure, or the old
+      No-go.
+    - Move any genuinely useful design rationale that must be preserved into
+      this plan or an archived report, not the user-facing guide.
+  The parent plan and this plan remain the place for the historical decision
+  trail; the guide is for learning the language as it is.
 
 **No-go signal.** If MB1/MB2 land but `Const`/`Identity` cannot be made to flow
 as `(f a)` through the carrier for *both* the arg and result positions of the
