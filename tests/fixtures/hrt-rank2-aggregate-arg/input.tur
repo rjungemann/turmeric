@@ -1,0 +1,11 @@
+;; Slice 3 codegen (constrained-hkt-forall-plan): a by-value aggregate value
+;; flowing through a PLAIN rank-2 `forall a. a -> a` poly carrier (no
+;; higher-kinded var, so no experiment flag needed).  Before the carrier
+;; heap-box bridge this emitted broken C ("aggregate value used where an integer
+;; was expected"); now the aggregate is boxed in and the result unboxed out.
+(defn use-id [g (forall [a] (-> a a)) x : (Option int)] : (Option int)
+  (g x))
+
+(defn main [] : int
+  (println (unwrap (use-id (fn [y] y) (some 5))))
+  0)

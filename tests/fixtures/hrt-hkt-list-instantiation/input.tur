@@ -1,0 +1,22 @@
+;; Slice 3 (constrained-hkt-forall-plan): a second higher-kinded instantiation,
+;; f := Lst, exercising a different `* -> *` constructor through the same rank-2
+;; poly parameter.  Lst is a parametric opaque (int-carried) container so it is
+;; carrier-compatible with the erased poly carrier.
+(defopaque Lst [a] :int)
+
+(defn lst-one [x : int] : (Lst int)
+  ```c
+  return x;
+  ```)
+
+(defn lst-head [xs : (Lst int)] : int
+  ```c
+  return (int64_t)xs;
+  ```)
+
+(defn use-c [g (forall [(f :: * -> *)] (-> (f int) int))] : int
+  (g (lst-one 99)))
+
+(defn main [] : int
+  (println (use-c lst-head))
+  0)

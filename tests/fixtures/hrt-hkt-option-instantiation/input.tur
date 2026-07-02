@@ -1,0 +1,25 @@
+;; Slice 3 (constrained-hkt-forall-plan): instantiate a higher-kinded rank-2
+;; variable `f :: * -> *` with a concrete `* -> *` constructor.  `use-c` takes
+;; a poly fn `forall f. (f int) -> int` and applies it at `f := Opt` inside its
+;; body.  `Opt` is a parametric opaque (int-carried) container -- carrier-
+;; compatible, so it flows through the erased poly carrier.  (An aggregate
+;; container like the stdlib `Option` is rejected with TUR-E0297 today; see
+;; docs/reported/hrt-hkt-aggregate-container-carrier.md.)
+(defopaque Opt [a] :int)
+
+(defn opt-some [x : int] : (Opt int)
+  ```c
+  return x;
+  ```)
+
+(defn opt-get [o : (Opt int)] : int
+  ```c
+  return (int64_t)o;
+  ```)
+
+(defn use-c [g (forall [(f :: * -> *)] (-> (f int) int))] : int
+  (g (opt-some 42)))
+
+(defn main [] : int
+  (println (use-c opt-get))
+  0)

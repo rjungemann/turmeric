@@ -1,0 +1,6 @@
+;; Slice 1 (constrained-hkt-forall-plan): a malformed arrow-kind form is a hard
+;; error.  `* ->` ends in an arrow with no trailing atom, so the kind grammar
+;; `* | k -> k -> ... -> *` rejects it (TUR-E0303).
+(deftype Bad (forall [(f :: * ->)] (-> int int)))
+
+(defn main [] : int 0)

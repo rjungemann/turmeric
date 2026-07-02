@@ -1,5 +1,127 @@
 /* elab_types.c -- type-expression forms: defkind/defrec/deftype/type-app, ascribe/pack/open. */
 #include "elab_internal.h"
+#include "experiments.h"  /* Slice 1 (constrained-hkt-forall): forall-kinds gate */
+
+/* --- Slice 1 (constrained-hkt-forall-plan): kind-annotation parsing ---------
+ *
+ * A `forall`/`exists` bound variable may carry an explicit kind annotation
+ * spelled `(name :: <kind>)`, where <kind> is the arrow-kind grammar built
+ * from `*` and `->`:
+ *
+ *   *                 -> KIND_STAR      (arity 0)
+ *   * -> *            -> KIND_ARROW     (arity 1)
+ *   * -> * -> *       -> KIND_ARROW2    (arity 2)
+ *   (* -> *) -> *     -> KIND_ARROW     (arity 1; the argument is itself
+ *                                        higher-kinded, but a constructor's
+ *                                        *arity* only counts its arguments)
+ *
+ * The `Kind` encoding (types.h) is arity-only: it records how many type
+ * arguments a constructor takes, not the kinds of those arguments.  So a
+ * parenthesized higher-order argument is validated for well-formedness but
+ * contributes exactly one to the outer arity, same as a bare `*`.
+ *
+ * Diagnostics: TUR-E0303 (unknown/malformed kind form), TUR-E0304 (arity
+ * exceeds KIND_ARROW5 -- raise the ceiling first).  Both are emitted at the
+ * offending span; the helpers return false without touching *out on failure. */
+
+static bool parse_kind_seq(Elab *e, Form **items, uint32_t n, Span span,
+                           Kind *out);
+
+/* Parse a single kind atom: `*` or a parenthesized kind sub-expression. */
+static bool parse_kind_atom(Elab *e, Form *f, Kind *out) {
+    if (f->tag == F_SYM) {
+        if (strcmp(f->as.sym->name, "*") == 0) { *out = KIND_STAR; return true; }
+        diag_emit(DIAG_ERROR, f->span,
+                  "malformed kind form: expected '*' or a parenthesized kind, "
+                  "got '%s' (TUR-E0303)", f->as.sym->name);
+        return false;
+    }
+    if (f->tag == F_LIST) {
+        return parse_kind_seq(e, f->as.list.items, f->as.list.len, f->span, out);
+    }
+    diag_emit(DIAG_ERROR, f->span,
+              "malformed kind form: expected '*' or a parenthesized kind "
+              "(TUR-E0303)");
+    return false;
+}
+
+/* Parse a top-level arrow-kind sequence `atom (-> atom)*`.  The overall arity
+ * is the number of arrows (== #atoms - 1); each atom is validated but its own
+ * internal arity does not fold into the outer count. */
+static bool parse_kind_seq(Elab *e, Form **items, uint32_t n, Span span,
+                           Kind *out) {
+    if (n == 0) {
+        diag_emit(DIAG_ERROR, span,
+                  "malformed kind form: empty kind (TUR-E0303)");
+        return false;
+    }
+    /* Even length means a dangling '->' with no trailing atom (or, for n==2,
+     * an atom followed by '->').  A well-formed chain always has odd length:
+     * atom (-> atom)* == 1 + 2k tokens. */
+    if ((n & 1u) == 0) {
+        diag_emit(DIAG_ERROR, span,
+                  "malformed kind form: kind must be `*` or `k -> k -> ... -> *`, "
+                  "not ending in '->' (TUR-E0303)");
+        return false;
+    }
+    uint32_t n_atoms = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        if ((i & 1u) == 0) {
+            Kind sub;
+            if (!parse_kind_atom(e, items[i], &sub)) return false;
+            n_atoms++;
+        } else if (items[i]->tag != F_SYM || items[i]->as.sym != e->sym_arrow) {
+            diag_emit(DIAG_ERROR, items[i]->span,
+                      "malformed kind form: expected '->' between kind atoms "
+                      "(TUR-E0303)");
+            return false;
+        }
+    }
+    uint32_t arity = n_atoms - 1;
+    if (arity > 5) {
+        diag_emit(DIAG_ERROR, span,
+                  "kind arity %u exceeds KIND_ARROW5 -- raise the ceiling first "
+                  "(TUR-E0304)", (unsigned)arity);
+        return false;
+    }
+    *out = kind_for_arity(arity);
+    return true;
+}
+
+/* Parse a kind-annotated forall/exists binder `(name :: <kind>)`.  On success
+ * writes the bound name symbol to *out_name and its kind to *out_kind; returns
+ * false (after emitting a diagnostic) on any malformed shape. */
+static bool parse_kind_binder(Elab *e, Form *vf, const Symbol **out_name,
+                              Kind *out_kind) {
+    /* Shape: (name :: <kind-tokens...>) -- at least name, '::', one atom. */
+    if (vf->as.list.len < 3) {
+        diag_emit(DIAG_ERROR, vf->span,
+                  "kind-annotated bound variable must be `(name :: <kind>)`, "
+                  "e.g. (f :: * -> *) (TUR-E0303)");
+        return false;
+    }
+    Form *name_f = vf->as.list.items[0];
+    Form *dc_f   = vf->as.list.items[1];
+    if (name_f->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_f->span,
+                  "kind-annotated bound variable name must be a symbol "
+                  "(TUR-E0303)");
+        return false;
+    }
+    if (dc_f->tag != F_SYM || dc_f->as.sym != e->sym_ascribe) {
+        diag_emit(DIAG_ERROR, dc_f->span,
+                  "kind-annotated bound variable must use `::` between the name "
+                  "and its kind, e.g. (f :: * -> *) (TUR-E0303)");
+        return false;
+    }
+    Kind k;
+    if (!parse_kind_seq(e, vf->as.list.items + 2, vf->as.list.len - 2,
+                        vf->span, &k))
+        return false;
+    *out_name = name_f->as.sym;
+    *out_kind = k;
+    return true;
+}
 
 /* Variadic HKT rows: validate one type-application argument's kind against the
  * constructor's positional parameter kind, for the row concern only. Returns
@@ -896,15 +1018,25 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                     constraint_form = form->as.list.items[cursor + 1];
                     body_form = form->as.list.items[cursor + 2];
                     if (is_forall_form) {
-                        diag_emit(DIAG_ERROR, constraint_form->span,
-                                  "'forall' does not accept a constraint vector "
-                                  "(use defclass / definstance constraints instead)");
-                        return NULL;
+                        /* Slice 2 (constrained-hkt-forall): a constraint vector
+                         * on `forall` is gated behind the `forall-constraints`
+                         * experiment.  Enforcement happens at each rank-2
+                         * instantiation site (elab_poly_call), not here. */
+                        if (!g_opt_forall_constraints) {
+                            diag_emit(DIAG_ERROR, constraint_form->span,
+                                      "'forall' constraint vector requires "
+                                      "--enable=forall-constraints "
+                                      "(use defclass / definstance constraints "
+                                      "otherwise)");
+                            return NULL;
+                        }
+                        experiment_warn_if_used("forall-constraints");
                     }
                     if (constraint_form->tag != F_VEC) {
                         diag_emit(DIAG_ERROR, constraint_form->span,
-                                  "'exists' constraint vector must be a vector, "
-                                  "e.g. [(Show a)]");
+                                  "'%s' constraint vector must be a vector, "
+                                  "e.g. [(Show a)]",
+                                  is_forall_form ? "forall" : "exists");
                         return NULL;
                     }
                 }
@@ -950,29 +1082,51 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 /* Parse each bound variable */
                 for (uint8_t i = 0; i < n_bound; i++) {
                     Form *vf = vars_form->as.list.items[i];
-                    if (vf->tag != F_SYM) {
+                    const Symbol *var_sym = NULL;
+                    Kind          var_kind;
+                    if (vf->tag == F_SYM) {
+                        var_sym = vf->as.sym;
+                        /* ET2-A: lowercase binders are row variables (effect
+                         * rows); uppercase binders remain type variables
+                         * (KIND_STAR). */
+                        bool is_row_binder = (var_sym->name[0] >= 'a'
+                                              && var_sym->name[0] <= 'z');
+                        var_kind = is_row_binder ? KIND_ROW : KIND_STAR;
+                    } else if (vf->tag == F_LIST) {
+                        /* Slice 1 (constrained-hkt-forall): explicit kind
+                         * annotation `(name :: <kind>)`, gated behind the
+                         * `forall-kinds` experiment. */
+                        if (!g_opt_forall_kinds) {
+                            diag_emit(DIAG_ERROR, vf->span,
+                                      "kind-annotated '%s' bound variable "
+                                      "'(name :: <kind>)' requires "
+                                      "--enable=forall-kinds",
+                                      is_forall_form ? "forall" : "exists");
+                            return NULL;
+                        }
+                        experiment_warn_if_used("forall-kinds");
+                        if (!parse_kind_binder(e, vf, &var_sym, &var_kind))
+                            return NULL;
+                    } else {
                         diag_emit(DIAG_ERROR, vf->span,
-                                  "'%s' bound variable must be a symbol",
+                                  "'%s' bound variable must be a symbol or a "
+                                  "kind-annotated '(name :: <kind>)' form",
                                   is_forall_form ? "forall" : "exists");
                         return NULL;
                     }
                     /* Reject shadowing of outer type params */
                     for (uint8_t j = 0; j < n_type_params; j++) {
-                        if (type_params[j] == vf->as.sym) {
+                        if (type_params[j] == var_sym) {
                             diag_emit(DIAG_WARNING, vf->span,
                                       "'%s' bound variable '%s' shadows an outer type variable",
                                       is_forall_form ? "forall" : "exists",
-                                      vf->as.sym->name);
+                                      var_sym->name);
                         }
                     }
-                    var_names[i] = vf->as.sym->name;
-                    /* ET2-A: lowercase binders are row variables (effect rows);
-                     * uppercase binders remain type variables (KIND_STAR). */
-                    bool is_row_binder = (vf->as.sym->name[0] >= 'a'
-                                          && vf->as.sym->name[0] <= 'z');
-                    var_kinds[i] = is_row_binder ? KIND_ROW : KIND_STAR;
-                    ext_params[n_type_params + i] = vf->as.sym;
-                    ext_kinds[n_type_params + i] = is_row_binder ? KIND_ROW : KIND_STAR;
+                    var_names[i] = var_sym->name;
+                    var_kinds[i] = var_kind;
+                    ext_params[n_type_params + i] = var_sym;
+                    ext_kinds[n_type_params + i] = var_kind;
                 }
 
                 /* Parse the body type with bound vars in scope */
@@ -994,49 +1148,54 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                         cvar_idx = (uint8_t *)arena_alloc(
                             e->arena, nc * sizeof(uint8_t));
                         for (uint32_t i = 0; i < nc; i++) {
+                            const char *qname = is_forall_form ? "forall"
+                                                                : "exists";
                             Form *cf = constraint_form->as.list.items[i];
                             if (cf->tag != F_LIST || cf->as.list.len != 2) {
                                 diag_emit(DIAG_ERROR, cf->span,
-                                          "exists: constraint must be a 2-element "
-                                          "list (TypeclassName var), e.g. (Show a)");
+                                          "%s: constraint must be a 2-element "
+                                          "list (TypeclassName var), e.g. (Show a)",
+                                          qname);
                                 return NULL;
                             }
                             Form *tc_form = cf->as.list.items[0];
                             Form *var_ref = cf->as.list.items[1];
                             if (tc_form->tag != F_SYM) {
                                 diag_emit(DIAG_ERROR, tc_form->span,
-                                          "exists: constraint head must be a typeclass name");
+                                          "%s: constraint head must be a typeclass name",
+                                          qname);
                                 return NULL;
                             }
                             if (var_ref->tag != F_SYM) {
                                 diag_emit(DIAG_ERROR, var_ref->span,
-                                          "exists: constraint argument must be one of "
-                                          "the bound variable names");
+                                          "%s: constraint argument must be one of "
+                                          "the bound variable names", qname);
                                 return NULL;
                             }
                             TypeClass *tc = typeclass_env_lookup_typeclass(
                                 &e->typeclass_env, tc_form->as.sym);
                             if (!tc) {
                                 diag_emit(DIAG_ERROR, tc_form->span,
-                                          "exists: unknown typeclass '%s'",
-                                          tc_form->as.sym->name);
+                                          "%s: unknown typeclass '%s'",
+                                          qname, tc_form->as.sym->name);
                                 return NULL;
                             }
-                            /* Find the var index */
+                            /* Find the var index.  Match against the resolved
+                             * bound-var symbols (ext_params) so kind-annotated
+                             * `(name :: <kind>)` binders are found too. */
                             uint8_t vi = (uint8_t)0xFF;
                             for (uint8_t j = 0; j < n_bound; j++) {
-                                if (vars_form->as.list.items[j]->tag == F_SYM
-                                        && vars_form->as.list.items[j]->as.sym
-                                            == var_ref->as.sym) {
+                                if (ext_params[n_type_params + j]
+                                        == var_ref->as.sym) {
                                     vi = j;
                                     break;
                                 }
                             }
                             if (vi == (uint8_t)0xFF) {
                                 diag_emit(DIAG_ERROR, var_ref->span,
-                                          "exists: constraint variable '%s' is not "
+                                          "%s: constraint variable '%s' is not "
                                           "one of the bound variables",
-                                          var_ref->as.sym->name);
+                                          qname, var_ref->as.sym->name);
                                 return NULL;
                             }
                             cclasses[i] = tc;
@@ -1246,6 +1405,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             bool arg_affine_local[MAX_FN_ARITY];    /* ST0 */
             bool arg_relevant_local[MAX_FN_ARITY];  /* ST0 */
             bool any_poly_arg = false;
+            bool any_app_arg = false;  /* Slice 3: a (F A) arg needs its full type kept */
             for (uint8_t _ai = 0; _ai < MAX_FN_ARITY; _ai++) arg_linear_local[_ai] = false;
             for (uint8_t _ai = 0; _ai < MAX_FN_ARITY; _ai++) arg_unique_local[_ai] = false;
             for (uint8_t _ai = 0; _ai < MAX_FN_ARITY; _ai++) arg_unique_mut_local[_ai] = false;
@@ -1307,6 +1467,13 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                     any_poly_arg = true;
                 } else {
                     arg_kinds[arg_idx] = at->kind;
+                    /* Slice 3 (constrained-hkt-forall): a type-application arg
+                     * such as `(f a)` (higher-kinded instantiation) or a
+                     * concrete `(Box int)` must keep its full type so the
+                     * rank-2 validation and instantiation can see the container
+                     * shape -- otherwise arg_full_types is dropped and the
+                     * `(f a)` body param becomes invisible downstream. */
+                    if (at->kind == TY_APP) any_app_arg = true;
                 }
                 arg_idx++;
             }
@@ -1343,7 +1510,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             *fn_t = type_fn(arg_kinds, n_args, result_kind);
 
             /* Store full type info if any polymorphic args or an aggregate/poly result */
-            if (any_poly_arg || poly_result || aggregate_result) {
+            if (any_poly_arg || any_app_arg || poly_result || aggregate_result) {
                 Type **aFT = (Type **)arena_alloc(e->arena, n_args * sizeof(Type *));
                 for (uint8_t i = 0; i < n_args; i++) aFT[i] = arg_full_types_local[i];
                 fn_t->as.fn.arg_full_types = aFT;

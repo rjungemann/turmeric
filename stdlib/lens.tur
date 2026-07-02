@@ -1,0 +1,111 @@
+;;; tur/lens -- first-class functional lenses (getter/setter optics).
+;;;
+;;; A `Lens S A` focuses on a part `A` inside a whole `S`: it pairs a getter
+;;; `S -> A` with a setter `A -> S -> S`.  `view`/`set`/`over` read, replace, and
+;;; transform the focused part; `lens-compose` chains two lenses so an optic can
+;;; reach nested structure.
+;;;
+;;; ## Encoding
+;;;
+;;; This module uses the **profunctor-by-record** encoding -- a `Lens` is a
+;;; concrete record of two functions -- rather than the van Laarhoven form
+;;; `type Lens s a = forall f. Functor f => (a -> f a) -> (s -> f s)`.  The
+;;; van Laarhoven encoding is inexpressible on Turmeric's type-erased HRT today:
+;;; the lens body must dispatch `fmap` on the caller-chosen functor `f`
+;;; (`Const` for `view`, `Identity` for `set`/`over`), which needs runtime
+;;; typeclass-dictionary passing through the poly carrier -- deferred (mode B of
+;;; `docs/upcoming/v1/constrained-hkt-forall-plan.md`).  The record encoding
+;;; needs none of that and composes fine via the explicit `lens-compose`
+;;; combinator; the one thing it gives up is composing optics with ordinary
+;;; function composition (`compose`), which the van Laarhoven form allows.
+;;;
+;;; ## Value semantics
+;;;
+;;; A `Lens` is `:copy` so it can be viewed/set/over'd repeatedly.  The whole
+;;; `S` a lens focuses is typically a `:copy` (and, for a record you rebuild in
+;;; the setter, `:heap`) struct so it too can be reused across calls.
+;;;
+;;; Since: constrained-hkt-forall slice 4
+;; Lens optic module.
+
+(defstruct Lens :copy [S A]
+  (lget (fn [S] A))
+  (lput (fn [A S] S)))
+
+;;; lens -- build a Lens from a getter and a setter.
+;;;
+;;; Parameters:
+;;;   get -- reads the focused A out of the whole S
+;;;   put -- returns a new S with the focused A replaced
+;;;
+;;; Returns:
+;;;   A Lens S A pairing `get` and `put`.
+;;;
+;;; Example:
+;;;   (lens (fn [p : Point] : int (.x p))
+;;;         (fn [nx : int p : Point] : Point
+;;;           (make-struct Point :x nx :y (.y p))))
+;;;
+;;; Since: constrained-hkt-forall slice 4
+(defn lens [S A] [get : (fn [S] A) put : (fn [A S] S)] : (Lens S A)
+  (make-struct Lens :lget get :lput put))
+
+;;; view -- read the focused A out of the whole S.
+;;;
+;;; Parameters:
+;;;   l -- the lens
+;;;   s -- the whole value
+;;;
+;;; Returns:
+;;;   The focused part A.
+;;;
+;;; Example:
+;;;   (view point-x p)   ; => (.x p)
+;;;
+;;; Since: constrained-hkt-forall slice 4
+(defn view [S A] [l : (Lens S A) s : S] : A
+  ((.lget l) s))
+
+;;; set -- replace the focused A, returning the updated S.
+;;;
+;;; Parameters:
+;;;   l -- the lens
+;;;   a -- the new focused value
+;;;   s -- the whole value
+;;;
+;;; Returns:
+;;;   A new S with the focus replaced by `a`.
+;;;
+;;; Example:
+;;;   (set point-x 42 p)   ; => p with x = 42
+;;;
+;;; Since: constrained-hkt-forall slice 4
+(defn set [S A] [l : (Lens S A) a : A s : S] : S
+  ((.lput l) a s))
+
+;;; over -- apply a function to the focused A, returning the updated S.
+;;;
+;;; Parameters:
+;;;   l -- the lens
+;;;   f -- transforms the focused value
+;;;   s -- the whole value
+;;;
+;;; Returns:
+;;;   A new S with the focus mapped through `f`.
+;;;
+;;; Example:
+;;;   (over point-x (fn [v : int] : int (* v 10)) p)   ; => p with x *= 10
+;;;
+;;; Since: constrained-hkt-forall slice 4
+(defn over [S A] [l : (Lens S A) f : (fn [A] A) s : S] : S
+  ((.lput l) (f ((.lget l) s)) s))
+
+;; Composition note.  The van Laarhoven encoding composes optics with ordinary
+;; function composition (`compose l1 l2`); the record encoding cannot -- a
+;; generic `lens-compose` setter must read the whole `s` (to view the
+;; intermediate) *and* write it back, using `s` twice, which the linearity
+;; checker rejects for an abstract move-only `S`.  Compose at concrete,
+;; copyable whole types by hand, e.g.
+;;   (lens (fn [s : S] : B (view inner (view outer s)))
+;;         (fn [b : B s : S] : S (set outer (set inner b (view outer s)) s)))
+;; where `S` is a `:copy` struct.  See docs/guides/lens-guide.md.

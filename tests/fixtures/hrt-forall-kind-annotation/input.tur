@@ -1,0 +1,14 @@
+;; Slice 1 (constrained-hkt-forall-plan): explicit kind annotations on forall
+;; bound variables.  `(f :: * -> *)` marks f as a higher-kinded (* -> *) slot,
+;; so the body may form the type application (f int).  The call site cannot yet
+;; instantiate f (that is slice 3); this fixture exercises parsing + kind
+;; wiring through deftype aliases.
+(deftype Lens (forall [(f :: * -> *)] (-> (-> int (f int)) (-> int (f int)))))
+
+;; A plain-`*` annotated binder is accepted too, and coexists with the
+;; lowercase-letter heuristic for unannotated binders.
+(deftype Id (forall [(a :: *)] (-> a a)))
+
+(defn main [] : int
+  (println "forall-kinds ok")
+  0)

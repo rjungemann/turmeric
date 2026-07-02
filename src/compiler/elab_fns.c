@@ -931,6 +931,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     strslice(psym->name + 2, psym->len - 2));
                 fn_type_params[i] = bare;
                 fn_type_param_kinds[i] = KIND_TYPEROW;
+            } else if (psym->len > 1 && psym->name[0] == '^') {
+                /* MB2 (constrained-hkt-forall-mode-b-plan): a `^f` type parameter
+                 * is higher-kinded (`* -> *`), the defn analog of the
+                 * `(defclass Functor [^f] ...)` marker -- so the body may use it
+                 * applied as `(f a)`.  Strip the caret; annotations reference the
+                 * bare name.  (Higher arities via `^^f` are not needed yet.) */
+                const Symbol *bare = symtab_intern(e->st,
+                    strslice(psym->name + 1, psym->len - 1));
+                fn_type_params[i] = bare;
+                fn_type_param_kinds[i] = KIND_ARROW;
             } else {
                 fn_type_params[i] = psym;
                 fn_type_param_kinds[i] = KIND_STAR;
@@ -3347,6 +3357,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     FnDef *fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
     memset(fd, 0, sizeof(FnDef));
     fd->binding = b;
+    if (b) b->source_fn_def = fd;  /* MB1: Binding -> FnDef link */
     fd->params = params;
     fd->n_params = n_params;
     fd->body = body;
@@ -3552,6 +3563,16 @@ Expr *elab_fn(Elab *e, const Form *call) {
                     strslice(psym->name + 2, psym->len - 2));
                 fn_type_params[i] = bare;
                 fn_type_param_kinds[i] = KIND_TYPEROW;
+            } else if (psym->len > 1 && psym->name[0] == '^') {
+                /* MB2 (constrained-hkt-forall-mode-b-plan): a `^f` type parameter
+                 * is higher-kinded (`* -> *`), the defn analog of the
+                 * `(defclass Functor [^f] ...)` marker -- so the body may use it
+                 * applied as `(f a)`.  Strip the caret; annotations reference the
+                 * bare name.  (Higher arities via `^^f` are not needed yet.) */
+                const Symbol *bare = symtab_intern(e->st,
+                    strslice(psym->name + 1, psym->len - 1));
+                fn_type_params[i] = bare;
+                fn_type_param_kinds[i] = KIND_ARROW;
             } else {
                 fn_type_params[i] = psym;
                 fn_type_param_kinds[i] = KIND_STAR;
@@ -4240,6 +4261,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
     FnDef *fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
     memset(fd, 0, sizeof(FnDef));
     fd->binding = b;
+    if (b) b->source_fn_def = fd;  /* MB1: Binding -> FnDef link */
     fd->params = params;
     fd->n_params = n_params;
     fd->body = body;

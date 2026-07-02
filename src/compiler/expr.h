@@ -231,6 +231,11 @@ struct Binding {
      * type its arguments pin -- the constraint is checked abstractly in the
      * body but must be re-checked when the defn is instantiated. */
     const ConstraintSet *fn_constraints;
+    /* MB1 (constrained-hkt-forall-mode-b-plan): for a top-level `defn` binding,
+     * the FnDef it defines -- lets make_dict_clone reach the original body/params
+     * from the binding without scanning file-scope defs (user defns are not yet
+     * registered there during elaboration).  NULL for non-defn bindings. */
+    struct FnDef *source_fn_def;
     /* bare-fat-result-monomorphization-plan (Phase B):
      *
      * bare_fat_result_kind -- on a bare `^fat g` *parameter* binding, the
@@ -502,6 +507,16 @@ struct FnDef {
      * M4b/M4c per-instantiation emit path on non-HKT classes (HKT-class
      * instance methods keep the uniform carrier ABI per Plan M6/M7). */
     struct TypeClassInstance *owner_instance;
+    /* MB1 (constrained-hkt-forall-mode-b-plan): when `dict_clone_class` is
+     * non-NULL this FnDef is a *dict-clone* -- a copy of a polymorphic
+     * constrained function (used as a rank-2 value) that shares the original's
+     * body and trailing params but prepends `dict_clone_param` (an int64 carrier
+     * holding a dictionary pointer).  While its body is emitted, a class-method
+     * call on the constrained type variable (one carrying a `dict_arg` for
+     * `dict_clone_class`) dispatches through that dict param at runtime instead
+     * of the baked representative instance. */
+    Binding             *dict_clone_param;
+    struct TypeClass    *dict_clone_class;
 };
 
 /* Phase 2: ExternC represents an (extern-c ...) declaration. */
@@ -727,6 +742,9 @@ struct Expr {
                  uint32_t poly_arg_mask; /* Phase HRT3: bitmask of args that are nested poly fns.
                                           * In poly_call: bit i → pass arg by pointer (stack-alloc).
                                           * In direct call: bit i → deref int64_t arg as tur_poly_fn_t*. */
+                 uint32_t poly_agg_arg_mask; /* Slice 3 (constrained-hkt-forall): in a poly-wrapper's
+                                              * direct inner call, bit i → the int64 arg is a heap-box
+                                              * pointer to a by-value aggregate; deref it to the param type. */
                  AbiTypeBinding *abi_bindings; /* GS5/CS3: named-tyvar substitution captured at the call site;
                                                 * NULL when the call has no named-tyvar bindings. Arena-owned. */
                  uint8_t  n_abi_bindings;
@@ -902,6 +920,12 @@ struct Expr {
              * named function.  The emitter packs it into tur_poly_fn_t at the
              * call site instead of emitting a (tur_poly_fn_t){ NULL, wrapper }. */
             bool            is_closure;
+            /* Slice 3 (constrained-hkt-forall): true when the sink is a FORALL
+             * carrier (rank-2 poly param), so a by-value aggregate result must be
+             * heap-boxed by a carrier-spill shim to ride the uniform int64
+             * carrier.  False for a typed `:fn` carrier / monad continuation,
+             * which the concrete-cast call site consumes by value (no spill). */
+            bool            boxes_aggregate;
         } poly_wrap_;
         struct { struct Expr *inner; } ascribe_; /* (:: expr type) — type erased at codegen */
         /* A#1: fat-closure auto-shim.  inner is a bare (non-capturing) fn value;

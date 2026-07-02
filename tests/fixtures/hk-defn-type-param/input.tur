@@ -1,0 +1,13 @@
+;; MB2 prerequisite (constrained-hkt-forall-mode-b-plan): a `^f` defn type
+;; parameter is higher-kinded (`* -> *`), the defn analog of `(defclass Functor
+;; [^f] ...)`, so the body may use it applied as `(f a)`.  Here the identity on
+;; a `* -> *` container.
+(defopaque Box [a] :int)
+(defn mk-box [x : int] : (Box int) ```c return x; ```)
+(defn un-box [b : (Box int)] : int ```c return (int64_t)b; ```)
+
+(defn pf [^f] [x : (f int)] : (f int) x)
+
+(defn main [] : int
+  (println (un-box (pf (mk-box 42))))
+  0)

@@ -66,7 +66,18 @@ Each slice ships behind a fresh experimental flag and adds fixtures before
 landing. The flags are independent so we can stop after any slice without
 regressing the shipped HRT path.
 
-### Slice 1 -- Kind-annotated `forall` bound variables (`-Xforall-kinds`)
+### Slice 1 -- Kind-annotated `forall` bound variables (`--enable=forall-kinds`)
+
+**Status: landed.** Ships behind the `forall-kinds` experiment
+(`--enable=forall-kinds`, registered in `src/runtime/experiments.c`; the
+`-X` surface is retired). The quantifier parser in `elab_types.c` accepts a
+`(name :: <kind>)` binder alongside the bare-symbol form, lowers the
+arrow-kind grammar via `parse_kind_binder`/`parse_kind_seq`/`parse_kind_atom`,
+and plumbs the resulting `Kind` into `var_kinds[]`/`ext_kinds[]` so the body
+resolver sees `f` as higher-kinded in `(f a)`. Diagnostics `TUR-E0303`
+(malformed kind form) and `TUR-E0304` (arity exceeds `KIND_ARROW5`) are wired.
+Fixtures: `hrt-forall-kind-annotation/`,
+`errors/hrt-forall-kind-arrow-malformed/`.
 
 **Goal.** Replace the lowercase-letter kind heuristic with an explicit
 kind annotation on each bound variable, so `forall [(f :: * -> *)]` parses
@@ -87,7 +98,7 @@ current heuristic (back-compat).
 - Parser: extend `elab_types.c:980-985` to recognise the
   `(name :: kind)` shape; lower the kind to a `Kind` value via a new
   `parse_kind_form` helper. ~40 LOC.
-- Add `TUR-E0292` ("unknown / malformed kind form") and `TUR-E0293`
+- Add `TUR-E0303` ("unknown / malformed kind form") and `TUR-E0304`
   ("kind arity exceeds KIND_ARROW5 -- raise the ceiling first").
 - Plumb `var_kinds[i]` into the existing `ext_kinds[]` extension at
   `elab_types.c:983-984` so the body type-resolver sees `f` as a
@@ -99,7 +110,32 @@ current heuristic (back-compat).
 site still rejects rank-2 args whose poly fn type quantifies a non-star
 var (slice 3 lifts that).
 
-### Slice 2 -- Constraint enforcement on `forall` (`-Xforall-constraints`)
+### Slice 2 -- Constraint enforcement on `forall` (`--enable=forall-constraints`)
+
+**Status: landed (mode A, static enforcement).** Ships behind the
+`forall-constraints` experiment. The parser now accepts a constraint vector on
+`forall` (gated; `elab_types.c`), reusing the existing exists constraint-parse
+path, and `elab_poly_call` (`elab_call.c`) re-discharges each constraint at the
+rank-2 instantiation site: it pins the constrained bound variable to the
+concrete type from the matching argument and requires an in-scope instance,
+raising `TUR-E0305` if none exists. Fixtures: `hrt-forall-constraint-show/`,
+`hrt-forall-constraint-multi/`, `errors/hrt-forall-constraint-missing-instance/`.
+
+**Mode decision -- (A), not (B).** Turmeric's HRT is *type-erased*: a rank-2
+argument is a monomorphic function passed through the int64 `tur_poly_fn_t`
+carrier, so for the `Show`-shaped constraints this slice targets, the passed
+function already carries the right behavior and no runtime dictionary needs to
+be threaded. The constraint's teeth are therefore a **static** obligation
+checked at each instantiation site (mode A) -- which fully satisfies this
+slice's goal and fixtures with **no carrier change and no poly-fn fixture
+regen** (the plan's "largest blast radius" is avoided). Mode (B) -- widening
+`tur_poly_fn_t` with a `void *dict` slot and threading dictionaries -- is only
+actually required when the *callee* picks the type at runtime (the van
+Laarhoven lens: `Identity` vs `Const r`). That work is deferred to the slice
+that needs it (slice 3/4), where the existing `EX_EXISTS_DISPATCH` witness-table
+machinery (runtime dict -> method pointer -> indirect call) is the template to
+reuse. If a future slice requires the callee to choose a *constrained* `f`,
+revisit (B) then.
 
 **Goal.** Have `forall [a] [(Show a)] (-> a cstr)` actually require the
 caller to supply a `Show` dictionary for the chosen `a` at each instantiation
@@ -126,7 +162,7 @@ site inside the callee.
   - The lens use-case **needs (B)** because the callee picks `f` (Identity
     vs `Const r`) and must dispatch `fmap` at runtime. (A) cannot encode
     that.
-- Diagnostics: `TUR-E0294` ("no `Show` instance for `int` at this rank-2
+- Diagnostics: `TUR-E0305` ("no `Show` instance for `int` at this rank-2
   instantiation site -- required by `forall [a] [(Show a)] ...`").
 - Fixtures: `hrt-forall-constraint-show/`,
   `hrt-forall-constraint-multi/`,
@@ -137,7 +173,37 @@ radius in this plan -- every poly-fn fixture's expected.c regenerates.
 Schedule alongside a coordinated fixture regen window (see CLAUDE.md
 "Fixture churn" policy).
 
-### Slice 3 -- Rank-N over higher-kinded vars at call sites (`-Xhkt-hrt`)
+### Slice 3 -- Rank-N over higher-kinded vars at call sites (`--enable=hkt-hrt`)
+
+**Status: landed (type-level; carrier-compatible containers).** Ships behind
+the `hkt-hrt` experiment. A rank-2 `forall` parameter may now quantify a
+higher-kinded `f :: * -> *` used as `(f a)` in its body; both the pass site
+(`elab_call.c`, the `EX_POLY_WRAP` block) and the invocation site
+(`elab_poly_call`) gate on the flag and validate the instantiation: the type
+filling `f` must be a type application whose base constructor kind matches f's
+kind. Diagnostics: `TUR-E0306` (non-application argument), `TUR-E0307` (kind
+mismatch). A prerequisite parser fix now preserves `arg_full_types` for a
+`(F A)` argument in a `(-> ...)` type (previously dropped unless an arg was a
+bare tyvar/quantifier), without which the `(f a)` body param was invisible
+downstream. Fixtures: `hrt-hkt-option-instantiation/`,
+`hrt-hkt-list-instantiation/`, `errors/hrt-hkt-non-application-arg/`,
+`errors/hrt-hkt-kind-mismatch/`.
+
+**Scope note -- carrier ABI (now lifted).** Turmeric's HRT is type-erased, so a
+*carrier-compatible* container (a parametric opaque / heap constructor, whose
+value is the int64 carrier) flows through `tur_poly_fn_t` unchanged. A **by-value
+aggregate product** container (a `defstruct` / flat `defadt`, e.g. the stdlib
+`Option`) also flows now, via the carrier heap-box bridge: a **forall** carrier
+(uniform int64) boxes an aggregate arg at the invocation and derefs it in the
+poly-wrapper (`poly_agg_arg_mask`), and boxes an aggregate result through the
+carrier-spill shim (gated by `poly_wrap_.boxes_aggregate`) which the call site
+unboxes -- while a **typed** `:fn` carrier / monad continuation is untouched
+(consumed by value via the concrete-cast call site). The `elab_poly_call`
+result-type propagation carries the concrete aggregate out of a `(f a)` / bare
+tyvar result. `TUR-E0297` is retired; the resolved report is archived at
+`docs/archive/hrt-hkt-aggregate-container-carrier.md`. Fixtures:
+`hrt-hkt-aggregate-container/`, `hrt-rank2-aggregate-arg/`. This clears the
+Slice 4 "No-go signal" for a lens over ordinary by-value containers.
 
 **Goal.** Allow a call site to pass a value whose type instantiates an
 `f : * -> *` bound variable to a concrete `* -> *` constructor
@@ -164,7 +230,29 @@ Schedule alongside a coordinated fixture regen window (see CLAUDE.md
 
 ### Slice 4 -- Lens-shaped end-to-end fixture + stdlib helper
 
-**Goal.** Ship a single stdlib module `stdlib/lens.tur` that defines
+**Status: landed via the profunctor-by-record fallback (No-go signal fired).**
+`stdlib/lens.tur` ships `Lens [S A]` (a `:copy` record of a getter and a setter)
+plus `lens`/`view`/`set`/`over`, exercised end-to-end by
+`stdlib-lens-record-field/` (view/set/over on a record field). The doc is
+`docs/guides/lens-guide.md`.
+
+**Why the fallback.** The van Laarhoven `type Lens = forall f. Functor f =>
+(a -> f a) -> (s -> f s)` form was attempted and empirically confirmed
+inexpressible on today's machinery, for two reasons the compiler surfaces
+directly: (1) the lens body must dispatch `fmap` on the *caller-chosen* functor
+`f` (`Const` for `view`, `Identity` for `set`/`over`), which needs runtime
+dictionary passing through the erased carrier -- **mode B**, deferred at slice 2;
+and (2) the curried rank-2 result `(s -> f s)` is a function that is then
+applied, which the rank-2 machinery does not thread. So per this slice's own
+No-go signal, the record encoding ships. It needs none of slices 1-3; the one
+thing it gives up is composing optics by ordinary function composition (a
+generic `lens-compose` setter uses the whole `s` twice, which linearity rejects
+for an abstract move-only `S` -- hand-compose at concrete `:copy` whole types).
+Slices 1-3 remain the foundation for the van Laarhoven form once mode B lands;
+that work is scoped in the follow-up
+[constrained-hkt-forall-mode-b-plan.md](constrained-hkt-forall-mode-b-plan.md).
+
+**Original goal.** Ship a single stdlib module `stdlib/lens.tur` that defines
 `type Lens a b = forall [(f :: * -> *)] [(Functor f)] (-> (-> b (f b))
 (-> a (f a)))` plus `view`, `set`, `over`, and one worked example
 (record field lens). This is the acceptance gate.

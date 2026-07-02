@@ -38,6 +38,41 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * by value through the fat-closure ABI unconditionally; the gate lives in
      * adt_is_byvalue_product_d (types.c).  See
      * docs/upcoming/v2/b4-fat-closure-byvalue-adt-abi-plan.md. */
+    { "forall-kinds",
+      "explicit kind annotations on forall/exists bound variables, e.g. (f :: * -> *)",
+      "docs/upcoming/v1/constrained-hkt-forall-plan.md",
+      "0.25.6",                    /* introduced */
+      "0.27.0",                    /* expires_at (hard contract; release-cut enforced) */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_forall_kinds },
+    { "forall-constraints",
+      "typeclass constraint vectors on forall types, e.g. (forall [a] [(Show a)] (-> a cstr)), enforced at rank-2 instantiation sites",
+      "docs/upcoming/v1/constrained-hkt-forall-plan.md",
+      "0.25.6",                    /* introduced */
+      "0.27.0",                    /* expires_at (hard contract; release-cut enforced) */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_forall_constraints },
+    { "hkt-hrt",
+      "rank-2 forall over a higher-kinded variable, e.g. (forall [(f :: * -> *)] (-> (f int) int)), validated at instantiation sites",
+      "docs/upcoming/v1/constrained-hkt-forall-plan.md",
+      "0.25.6",                    /* introduced */
+      "0.27.0",                    /* expires_at (hard contract; release-cut enforced) */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_hkt_hrt },
+    { "forall-dict-pass",
+      "runtime dictionary passing for a polymorphic constrained function used as a rank-2 argument (mode B)",
+      "docs/upcoming/v1/constrained-hkt-forall-mode-b-plan.md",
+      "0.25.6",                    /* introduced */
+      "0.27.0",                    /* expires_at (hard contract; release-cut enforced) */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_forall_dict_pass },
+    { "hrt-curried-result",
+      "curried rank-2 poly fn whose forall body result is itself a function, e.g. (forall [a] (-> a (-> a a))), so (l x) yields a callable closure (mode B)",
+      "docs/upcoming/v1/constrained-hkt-forall-mode-b-plan.md",
+      "0.25.6",                    /* introduced */
+      "0.27.0",                    /* expires_at (hard contract; release-cut enforced) */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_hrt_curried_result },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

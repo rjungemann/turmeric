@@ -1,0 +1,12 @@
+;; Slice 3 (constrained-hkt-forall-plan): the callee applies the poly fn to a
+;; bare `int` where the higher-kinded parameter `(f int)` is expected.  `int` is
+;; not a type application, so it cannot instantiate `f :: * -> *` -- a hard
+;; TUR-E0306 rather than a silently-erased wrong call.
+(defopaque Opt [a] :int)
+
+(defn use-c [g (forall [(f :: * -> *)] (-> (f int) int))] : int
+  (g 5))
+
+(defn main [] : int
+  (println (use-c (fn [x] 7)))
+  0)

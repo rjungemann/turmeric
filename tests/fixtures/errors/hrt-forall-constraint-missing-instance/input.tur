@@ -1,0 +1,18 @@
+;; Slice 2 (constrained-hkt-forall-plan): a rank-2 `forall` constraint that
+;; cannot be discharged.  `use-show` applies its poly fn at `a = int`, but the
+;; only `Show` instance in scope is for `cstr`, so `Show int` is missing at the
+;; instantiation site -- a hard TUR-E0305 rather than a silently-wrong call.
+;; `const-str` is a plain `int -> cstr` (it does not itself call `show`), so the
+;; error is raised by the rank-2 re-discharge, not by the passed function body.
+(defclass Show [a] (show [x] : cstr))
+(definstance Show [cstr]
+  (show [x] : cstr x))
+
+(defn const-str [x : int] : cstr "unused")
+
+(defn use-show [f (forall [a] [(Show a)] (-> a cstr))] : cstr
+  (f 42))
+
+(defn main [] : int
+  (println (use-show const-str))
+  0)

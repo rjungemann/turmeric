@@ -1,0 +1,23 @@
+;; Slice 2 (constrained-hkt-forall-plan): multiple constraints on a rank-2
+;; `forall` parameter.  `use-two` accepts `forall a b. (Show a, Show b) =>
+;; a -> b -> cstr` and applies it at `a = int`, `b = int` inside its body.
+;; Both constraints are re-discharged independently at the instantiation site.
+(defclass Show [a] (show [x] : cstr))
+(definstance Show [int]
+  (show [x] : cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "%lld", (long long)x);
+    return (const char *)buf;
+    ```))
+
+;; Uses both parameters, so the poly fn genuinely ranges over `a` and `b`.
+(defn pick [x : int y : int] : cstr
+  (if (> x y) (show x) (show y)))
+
+(defn use-two [f (forall [a b] [(Show a) (Show b)] (-> a b cstr))] : cstr
+  (f 4 2))
+
+(defn main [] : int
+  (println (use-two pick))
+  0)

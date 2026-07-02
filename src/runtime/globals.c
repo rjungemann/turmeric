@@ -184,6 +184,30 @@ bool g_werror_inline_c_narrow_params = false;
  * Turmeric project's own CI matrix runs. */
 bool g_allow_experimental = false;
 
+/* Slice 1 of constrained-hkt-forall-plan: `forall-kinds` experiment enable bit.
+ * Default off; flipped by --enable=forall-kinds (or :experiments) via the
+ * EXPERIMENTS[] descriptor in experiments.c. */
+bool g_opt_forall_kinds = false;
+
+/* Slice 2 of constrained-hkt-forall-plan: `forall-constraints` experiment
+ * enable bit.  Default off; flipped by --enable=forall-constraints (or
+ * :experiments) via the EXPERIMENTS[] descriptor in experiments.c. */
+bool g_opt_forall_constraints = false;
+
+/* Slice 3 of constrained-hkt-forall-plan: `hkt-hrt` experiment enable bit.
+ * Default off; flipped by --enable=hkt-hrt (or :experiments) via the
+ * EXPERIMENTS[] descriptor in experiments.c. */
+bool g_opt_hkt_hrt = false;
+
+/* MB1 of constrained-hkt-forall-mode-b-plan: `forall-dict-pass` experiment
+ * enable bit.  Default off. */
+bool g_opt_forall_dict_pass = false;
+
+/* MB3 of constrained-hkt-forall-mode-b-plan: `hrt-curried-result` experiment
+ * enable bit.  Default off.  Gates the curried rank-2 result-is-a-function
+ * elaboration ((l x) yields a callable closure). */
+bool g_opt_hrt_curried_result = false;
+
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signature registry (see globals.h).
  * --------------------------------------------------------------------------- */

@@ -1,0 +1,33 @@
+;; MB1 (constrained-hkt-forall-mode-b-plan): runtime dictionary passing.  A
+;; genuinely polymorphic constrained function `poly-show` (its body dispatches
+;; `show` on its own type variable) is passed as a rank-2 argument and invoked
+;; at TWO different types inside the callee.  Under --enable=forall-dict-pass the
+;; caller resolves the `Show` instance per call and threads its dictionary
+;; through the poly carrier, so the RIGHT instance runs each time -- `(f 7)` uses
+;; `Show int` and `(f true)` uses `Show bool`, through the one compiled body.
+;; (Without the flag this is rejected with TUR-E0308; before mode B it silently
+;; ran `Show int` on the bool.)
+(defclass Show [a] (show [x] : cstr))
+(definstance Show [int]
+  (show [x] : cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "int:%lld", (long long)x);
+    return (const char *)buf;
+    ```))
+(definstance Show [bool]
+  (show [x] : cstr
+    ```c
+    return x ? "bool:true" : "bool:false";
+    ```))
+
+(defn poly-show [a] [^Show a x : a] : cstr (show x))
+
+(defn use-both [f (forall [a] [(Show a)] (-> a cstr))] : cstr
+  (println (f 7))
+  (println (f true))
+  "done")
+
+(defn main [] : int
+  (println (use-both poly-show))
+  0)

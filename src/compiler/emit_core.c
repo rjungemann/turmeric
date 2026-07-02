@@ -1673,8 +1673,102 @@ bool emit_reresolved_receiver_is_by_ptr(EmitCtx *ctx, const Expr *call) {
 
 static char *capture_env_access(EmitCtx *ctx, const Binding *b);
 
+bool emit_call_is_dict_param_dispatch(EmitCtx *ctx, const Expr *call) {
+    return ctx && ctx->dict_dispatch_class && call && call->kind == EX_CALL &&
+        call->as.call_.dict_arg && call->as.call_.dict_arg->kind == EX_DICT &&
+        call->as.call_.dict_arg->as.dict_.instance &&
+        call->as.call_.dict_arg->as.dict_.instance->typeclass ==
+            ctx->dict_dispatch_class &&
+        call->as.call_.dict_arg->as.dict_.method_name[0] != '\0';
+}
+
 char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
     const Expr *cur = NULL;
+    /* MB1 (constrained-hkt-forall-mode-b-plan): while emitting a dict-clone
+     * body, a class-method call on the constrained type variable (one carrying a
+     * `dict_arg` for the clone's class) dispatches through the runtime dict param
+     * -- `((<ret> (*)(int64_t...))((void **)(intptr_t)<dict>)[<slot>])` -- exactly
+     * like the existential witness path, but sourcing the witness from the dict
+     * parameter instead of an `open`-bound table.  The method slot is its index
+     * in the class dict layout (dict struct fields are emitted in class-method
+     * order, emit_stmt.c). */
+    if (emit_call_is_dict_param_dispatch(ctx, call)) {
+        const TypeClass *tc = ctx->dict_dispatch_class;
+        const char *mname = call->as.call_.dict_arg->as.dict_.method_name;
+        int slot = -1;
+        for (uint8_t i = 0; i < tc->n_methods; i++) {
+            char mm[64];
+            tur_mangle_ident(tc->methods[i].name->name, mm, sizeof(mm));
+            if (strcmp(mm, mname) == 0) { slot = (int)i; break; }
+        }
+        if (slot >= 0) {
+            uint32_t na = call->as.call_.n_args;
+            const TypeClassInstance *repr =
+                call->as.call_.dict_arg->as.dict_.instance;
+            const FnDef *mimpl = (repr && slot < repr->n_method_impls)
+                ? repr->method_impls[slot] : NULL;
+            Buf b2; buf_init(&b2);
+            /* MB2.5 (constrained-hkt-forall-mode-b-plan): the dispatched RETURN
+             * type must mirror the dict field (emit_stmt.c:581-603), which stores
+             * the carrier instance method -- for a class-var-typed result (`(f b)`)
+             * that is the int64 carrier, NOT the call's by-value aggregate result
+             * (`call->type` resolves to `Maybe int` for a by-value functor).  Using
+             * `call->type` here made the fn-ptr cast return `tur_adt_Maybe__int`
+             * while the dict slot returns int64 -- an incompatible-types cc error.
+             * Derive it from the representative instance method's declared result,
+             * exactly as the dict struct field does; carrier-compatible functors
+             * (Box) already yield int64 this way, so this is inert for them. */
+            const char *ret_c = NULL;
+            if (mimpl && mimpl->binding &&
+                mimpl->binding->type.kind == TY_FN) {
+                Type *rft = mimpl->binding->type.as.fn.result_full_type;
+                Type ret_type = rft ? *rft
+                    : emit_type_from_kind(
+                          mimpl->binding->type.as.fn.result_kind);
+                if (ret_type.kind == TY_FN) {
+                    const char *carrier =
+                        emit_inst_fn_return_carrier(mimpl, &ret_type);
+                    ret_c = carrier ? carrier : type_c_name(ret_type);
+                } else {
+                    ret_c = type_c_name(ret_type);
+                }
+            }
+            if (!ret_c) ret_c = emit_type_c_name(ctx, call->type);
+            buf_printf(&b2, "((%s (*)(", ret_c);
+            /* MB2 (constrained-hkt-forall-mode-b-plan): the dispatched signature
+             * must mirror the dict field layout (emit_stmt.c) exactly -- a
+             * poly-fn method param (e.g. `fmap`'s `g : (fn [a] b)`) is a
+             * `tur_poly_fn_t`, not the int64 carrier; a class-var-typed param
+             * (`(f a)`) is the carrier.  Derive the per-param C type from the
+             * representative instance's method impl; fall back to all-int64 (the
+             * MB1 case: every param is the class-var receiver). */
+            if (mimpl && mimpl->n_params == na && mimpl->param_types) {
+                if (na == 0) buf_puts(&b2, "void");
+                for (uint32_t i = 0; i < na; i++) {
+                    if (i) buf_puts(&b2, ", ");
+                    if (mimpl->params && mimpl->params[i]->is_poly_fn) {
+                        buf_puts(&b2, "tur_poly_fn_t");
+                    } else {
+                        Type pt = mimpl->param_types[i];
+                        if (type_struct_pass_by_ptr(pt))
+                            buf_printf(&b2, "const %s *", type_c_name(pt));
+                        else
+                            buf_puts(&b2, type_c_name(pt));
+                    }
+                }
+            } else {
+                if (na == 0) buf_puts(&b2, "void");
+                for (uint32_t i = 0; i < na; i++)
+                    buf_printf(&b2, "%sint64_t", i ? ", " : "");
+            }
+            buf_printf(&b2, "))((void **)(intptr_t)%s)[%d])",
+                       ctx->dict_dispatch_param_cname, slot);
+            buf_putc(&b2, '\0');
+            char *out = strdup(b2.data);
+            buf_free(&b2);
+            return out;
+        }
+    }
     /* GHE: typeclass-method dispatch inside a monomorphized constrained generic
      * takes precedence over the generic-function specialization lookup below. */
     {
@@ -2726,7 +2820,16 @@ void emit_dict_name(char *buf, size_t buflen, const TypeClassInstance *inst) {
             case TY_APP: {
                 const char *fn_part  = "T";
                 const char *arg_part = "T";
-                if (inst->type_args[i].as.app.fn) {
+                /* MB4 (constrained-hkt-forall-mode-b-plan): keep this in lockstep
+                 * with emit_stmt.c's instance-def naming, which prefers the source
+                 * symbol (`type_arg_syms`) for a partially-applied instance head
+                 * like `(Const r)`.  Reading only the TY_REC name here left the
+                 * pass-site dict as `dict_Functor_T_...` while the definition
+                 * emitted `dict_Functor_Const_...` -- an undeclared-symbol link
+                 * error when an MB1 dict for a parametric functor is passed. */
+                if (inst->type_arg_syms && inst->type_arg_syms[i]) {
+                    fn_part = inst->type_arg_syms[i]->name;
+                } else if (inst->type_args[i].as.app.fn) {
                     Type *fn = inst->type_args[i].as.app.fn;
                     if (fn->kind == TY_REC && fn->as.rec.name)
                         fn_part = fn->as.rec.name;
