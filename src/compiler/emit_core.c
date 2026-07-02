@@ -374,22 +374,11 @@ bool type_uses_carrier_abi(Type t) {
     return false;
 }
 
-/* RT/SC5: see emit_internal.h.  A by-value (non-carrier) struct body type is
- * the signal: the declared return is the dispatch tyvar (which would otherwise
- * emit the int64_t carrier), but the instance resolves it to a concrete struct.
- * For carrier-ABI bodies (ADT, type-app, parametric struct) the int64_t carrier
- * is already consistent, so no override is needed.  For non-struct bodies (int,
- * cstr, inline-C TY_NIL, type variables) there is nothing to override.  The
- * override is idempotent for functions that already declare a concrete struct
- * return (it re-emits the same struct type). */
-Type emit_carrier_return_override(const FnDef *fd) {
-    Type none = (Type){ 0 };
-    none.kind = TY_UNKNOWN;
-    if (!fd || !fd->body) return none;
-    Type bt = fd->body->type;
-    if (bt.kind == TY_STRUCT && !type_uses_carrier_abi(bt)) return bt;
-    return none;
-}
+/* structdef-retirement DS-C: emit_carrier_return_override (RT/SC5) is deleted.
+ * Its signal was a by-value (non-carrier) TY_STRUCT method body type -- which no
+ * longer occurs, since every struct lowers to a record ADT.  The function always
+ * returned the "none" sentinel, so all five call sites' `carrier_override.kind
+ * == TY_STRUCT` branches were dead and have been removed. */
 
 void indent_buf(Buf *b, int n) {
     for (int i = 0; i < n; i++) buf_putc(b, ' ');
@@ -2785,6 +2774,17 @@ void emit_dict_name(char *buf, size_t buflen, const TypeClassInstance *inst) {
                 else if (inst->type_args[i].as.struct_.def &&
                          inst->type_args[i].as.struct_.def->name)
                     component = inst->type_args[i].as.struct_.def->name;
+                break;
+            case TY_TYVAR:
+                /* structdef-retirement slice 5 B2 (P3): unresolved instance head
+                 * (unknown name) is a named TY_TYVAR carrying its source symbol;
+                 * name the dict by it, mirroring TY_STRUCT / emit_stmt.c so the
+                 * elab-side and emit-side dict names stay in lockstep and two
+                 * distinct unknown-name instances don't collide on dict_<C>_T. */
+                if (inst->type_arg_syms && inst->type_arg_syms[i])
+                    component = inst->type_arg_syms[i]->name;
+                else if (inst->type_args[i].as.tyvar_.name)
+                    component = inst->type_args[i].as.tyvar_.name;
                 break;
             case TY_ADT:
                 /* CONV-S1 (defstruct-as-defadt): a record-ADT instance head names

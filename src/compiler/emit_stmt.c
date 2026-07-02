@@ -42,7 +42,6 @@ void emit_set_deref_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
  * one (the new value carries its own +1).  For rc<Struct> receivers,
  * accesses the field through the rc-block's value pointer. */
 void emit_set_field_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
-    StructDef *def = e->as.set_field_.def;
     uint32_t fi = e->as.set_field_.field_idx;
     char *rv = emit_value(ctx, body, e->as.set_field_.receiver);
     char *vv = emit_value(ctx, body, e->as.set_field_.value);
@@ -51,8 +50,11 @@ void emit_set_field_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
      * the ADT member path (`.as.<Ctor>._N` for the positional layout, `.value`
      * for a flat-named record).  A :heap receiver is a typed pointer (`->`); a
      * by-value receiver is the aggregate lvalue (`.`); the abstract carrier base
-     * casts the int64 to the monomorph pointer first. */
-    if (!def && e->as.set_field_.adt_def) {
+     * casts the int64 to the monomorph pointer first.
+     * structdef-retirement DS-C: every set-field receiver is a lowered record
+     * ADT now (set_field_.def is always NULL); the former StructDef write path
+     * that followed is dead and has been removed. */
+    {
         const AdtDef *adt = e->as.set_field_.adt_def;
         const CtorDef *ctor = e->as.set_field_.adt_ctor;
         char *mp = adt_field_member_path(adt, ctor, fi);
@@ -98,65 +100,9 @@ void emit_set_field_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         free(rv); free(vv); free(mp);
         return;
     }
-
-    char *mfn = mangle_field_name(def->fields[fi].name);
-
-    /* Build the lvalue expression for the field slot. */
-    Buf lhs; buf_init(&lhs);
-    if (e->as.set_field_.receiver_is_rc) {
-        buf_printf(&lhs, "((%s *)((RcControlBlock *)(%s))->value)->%s",
-                   def->name, rv, mfn);
-    } else if (type_is_heap_struct(emit_resolve_type(ctx,
-                   e->as.set_field_.receiver->type))) {
-        /* end-to-end-monomorphization: a :heap receiver is a typed pointer in
-         * concrete positions (`(p)->field`); in the abstract polymorphic base
-         * it arrives as the int64 carrier and must be cast through the canonical
-         * layout-generic header (`((Vec *)(intptr_t)rv)->field`).  Discriminate
-         * on the lowered C type of the receiver. */
-        Type recv_rty = emit_resolve_type(ctx, e->as.set_field_.receiver->type);
-        const char *recv_cn = type_c_name(recv_rty);
-        bool recv_is_ptr = recv_cn && strchr(recv_cn, '*') != NULL;
-        if (recv_is_ptr)
-            buf_printf(&lhs, "(%s)->%s", rv, mfn);
-        else
-            buf_printf(&lhs, "((%s *)(intptr_t)(%s))->%s", def->name, rv, mfn);
-    } else {
-        buf_printf(&lhs, "(%s).%s", rv, mfn);
-    }
-    buf_putc(&lhs, '\0');
-
-    TypeKind fk = def->fields[fi].kind;
-    if (fk == TY_RC) {
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "if (%s) { rc_strong_decrement(%s); rc_free_queue_drain(); }\n",
-                   lhs.data, lhs.data);
-    } else if (fk == TY_WEAK) {
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "if (%s) rc_weak_decrement(%s);\n", lhs.data, lhs.data);
-    } else if (fk == TY_REF || fk == TY_LREF) {
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "if (%s) free(%s);\n", lhs.data, lhs.data);
-    }
-
-    indent_buf(body, ctx->indent);
-    /* Phase E: for typed fn-ptr fields, cast through the typedef rather than
-     * storing a raw int64_t.  For bare :fn fields (full_type == NULL) keep the
-     * existing int64_t assignment so nothing regresses. */
-    if (fk == TY_FN && e->as.set_field_.value->type.kind == TY_FN
-            && def->fields[fi].full_type
-            && def->fields[fi].full_type->kind == TY_FN) {
-        const char *fn_td = register_fn_ptr_typedef(def->fields[fi].full_type);
-        if (fn_td) {
-            buf_printf(body, "%s = (%s)%s;\n", lhs.data, fn_td, vv);
-        } else {
-            buf_printf(body, "%s = %s;\n", lhs.data, vv);
-        }
-    } else {
-        buf_printf(body, "%s = %s;\n", lhs.data, vv);
-    }
-
-    buf_free(&lhs);
-    free(rv); free(vv); free(mfn);
+    /* structdef-retirement DS-C: unreachable -- a set-field always has a lowered
+     * record-ADT receiver.  Free and return rather than deref a NULL def. */
+    free(rv); free(vv);
 }
 
 
@@ -545,16 +491,21 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                     case TY_FLOAT32:  component = "float32";  break;
                     case TY_FLOAT64:  component = "float64";  break;
                     case TY_SYM:      component = "Sym";      break;
-                    case TY_STRUCT:
-                        /* Phase HKT §1: Use the original type arg symbol name
-                         * (e.g. "option", "vec") so that two instances of the
-                         * same HKT typeclass get distinct dict struct names.
-                         * Fall back to the struct def name, then "T". */
+                    /* structdef-retirement DS-C: the former TY_STRUCT instance-head
+                     * arm is dead -- a named struct head is now a TY_ADT (below)
+                     * and an unknown head is a TY_TYVAR (below); no instance
+                     * type-arg is ever TY_STRUCT. */
+                    case TY_TYVAR:
+                        /* structdef-retirement slice 5 B2 (P3): an unresolved
+                         * instance head (unknown name like "option"/"vec") is
+                         * now a named TY_TYVAR carrying its source symbol in
+                         * type_arg_syms.  Name the dict struct by it, mirroring
+                         * TY_STRUCT -- else two such instances both emit
+                         * dict_<C>_T and collide (ODR). */
                         if (inst->type_arg_syms && inst->type_arg_syms[i]) {
                             component = inst->type_arg_syms[i]->name;
-                        } else if (inst->type_args[i].as.struct_.def &&
-                                   inst->type_args[i].as.struct_.def->name) {
-                            component = inst->type_args[i].as.struct_.def->name;
+                        } else if (inst->type_args[i].as.tyvar_.name) {
+                            component = inst->type_args[i].as.tyvar_.name;
                         }
                         break;
                     case TY_ADT:
@@ -624,10 +575,10 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                  *    body literal 1 has kind TY_INT.
                  * 4. body->type fallback when no binding is available. */
                 Type ret_type;
-                Type carrier_override = emit_carrier_return_override(method_impl);
-                if (carrier_override.kind == TY_STRUCT) {
-                    ret_type = carrier_override;
-                } else if (method_impl->binding
+                /* structdef-retirement DS-C: emit_carrier_return_override is dead
+                 * (a method body is never TY_STRUCT); the `carrier_override.kind
+                 * == TY_STRUCT` branch is removed. */
+                if (method_impl->binding
                            && method_impl->binding->type.kind == TY_FN) {
                     Type *rft = method_impl->binding->type.as.fn.result_full_type;
                     ret_type = rft ? *rft

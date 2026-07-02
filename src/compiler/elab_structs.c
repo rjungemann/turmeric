@@ -1,5 +1,6 @@
 /* elab_structs.c -- struct/ADT/GADT definitions, pattern matching, and borrow traits. */
 #include "elab_internal.h"
+#include <assert.h>   /* structdef-retirement slice 5 DS-B: zero-producer guard */
 
 /* ---- file-local helper forward declarations ---- */
 static void parse_struct_field_type(const char *tname, uint32_t tlen,
@@ -329,18 +330,54 @@ static Type *struct_field_type_from_form(Elab *e, const Form *form,
     if (form->tag == F_LIST && form->as.list.len >= 1 &&
         form->as.list.items[0]->tag == F_SYM) {
         const Symbol *head = form->as.list.items[0]->as.sym;
-        if (head == e->sym_forall || head == e->sym_exists ||
-            head == e->sym_forall_u || head == e->sym_exists_u) {
+        /* structdef-retirement slice 5 DS-A4: reject the built-in compound field
+         * forms that have no record-ADT field representation yet -- `forall`,
+         * `handler`, `arrow` (`->`), session types, project/global/role.  A
+         * defstruct with such a field now takes the ADT path (defstruct_lowers
+         * _to_adt is true) and errors CLEANLY here instead of silently falling to
+         * the legacy StructDef path -- which is what makes the residual StructDef
+         * producer unreachable (the deletion precondition).  `exists`, `fn`/`c-fn`
+         * and the borrow family DO lower and are handled below.  Lowering these
+         * forms is tracked in docs/upcoming/structdef-exotic-field-forms-plan.md. */
+        if (head == e->sym_forall || head == e->sym_forall_u ||
+            head == e->sym_handler_type || head == e->sym_arrow ||
+            head == e->sym_session_type || head == e->sym_session_Send ||
+            head == e->sym_session_Recv || head == e->sym_session_Choose ||
+            head == e->sym_session_Branch || head == e->sym_session_Rec ||
+            head == e->sym_session_Timeout || head == e->sym_project_type ||
+            head == e->sym_global_type || head == e->sym_role_type) {
+            diag_emit(DIAG_ERROR, form->span,
+                      "type form '(%.*s ...)' is not yet supported as a struct/ADT "
+                      "field; this built-in compound type form cannot be stored in "
+                      "a field (tracked in "
+                      "docs/upcoming/structdef-exotic-field-forms-plan.md)",
+                      (int)head->len, head->name);
+            return NULL;
+        }
+        if (head == e->sym_exists || head == e->sym_exists_u) {
             return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
         }
         /* parametric-defstruct-fn-field-gaps (Gap 1): a fn-typed field
-         * `(fn [A...] R)` / `(c-fn [A...] R)` / `(-> A... R)` is a function
-         * type, not a type-application.  Without this dispatch the generic
-         * type-app loop below recurses into the `[A...]` param vector and
-         * mis-parses it as a TupleN literal (a 1-arg fn hits the "tuple type
-         * must have 2 to 8 element types" error).  type_expr_from_form has
-         * the real fn-type parser; route there directly. */
-        if (head == e->sym_fn || head == e->sym_c_fn || head == e->sym_arrow) {
+         * `(fn [A...] R)` / `(c-fn [A...] R)` is a function type, not a
+         * type-application.  Without this dispatch the generic type-app loop
+         * below recurses into the `[A...]` param vector and mis-parses it as a
+         * TupleN literal (a 1-arg fn hits the "tuple type must have 2 to 8
+         * element types" error).  type_expr_from_form has the real fn-type
+         * parser; route there directly.  (`arrow`/`->` is rejected above until it
+         * is lowered like `fn`.) */
+        if (head == e->sym_fn || head == e->sym_c_fn) {
+            return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
+        }
+        /* structdef-retirement slice 5 DS-A3: a list-form built-in compound type
+         * -- `(lref T)`, `(borrow-mut T)` -- is its own TypeKind (TY_LREF /
+         * TY_REF_MUT), not a type application.  Route it to the real type
+         * elaborator so a lowered `defstruct` field resolves to the correct kind
+         * instead of the generic type-app loop below mis-parsing `(lref int)` as
+         * apply(lref, int) (TUR-E0012).  `(& T)` immutable borrow already routes
+         * via the has_amp path below.  This lets the borrow-family field forms
+         * lower to the record-ADT path, where the ADT's own :copy/linear check
+         * reproduces the struct-path diagnostic. */
+        if (head == e->sym_lref || head == e->sym_borrow_mut) {
             return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
         }
         bool has_pipe = false, has_amp = false;
@@ -729,6 +766,18 @@ void elab_add_forward_type(Elab *e, const Symbol *sym) {
 
 /* Helper: add StructDef to the elab registry */
 void elab_register_struct_def(Elab *e, StructDef *def) {
+    /* structdef-retirement slice 5 DS-B: with the effect-fn (A1), grouped-spec
+     * (A2/DS-A) and borrow-family (DS-A3) field shapes all lowering,
+     * `defstruct_lowers_to_adt` is true for every field shape the suite
+     * exercises, so no `defstruct` produces a `StructDef` -- this registry is
+     * dead (verified: zero registrations across the whole suite).  Assert it in
+     * debug so a regression, or a still-gated exotic compound field form
+     * (forall/handler/arrow/session/role/global/project) actually being used,
+     * fails the suite immediately; the registration below is kept for NDEBUG
+     * release safety.  DS-C/DS-D delete the registry and its two now-dead
+     * callers outright. */
+    assert(0 && "elab_register_struct_def: a defstruct did not lower to a record "
+                "ADT -- StructDef producer reachable (structdef-retirement DS-B)");
     if (e->n_struct_defs >= e->cap_struct_defs) {
         e->cap_struct_defs = e->cap_struct_defs ? e->cap_struct_defs * 2 : 8;
         e->struct_defs = (StructDef **)realloc(e->struct_defs,
@@ -797,17 +846,17 @@ static bool defstruct_field_type_lowerable(Elab *e, const Form *type_tok) {
          * scalar carrier field.  `forall` (universal quantification) is not a
          * value-carrying field form and stays on the struct path. */
         if (head == e->sym_exists || head == e->sym_exists_u) return true;
-        if (head == e->sym_forall || head == e->sym_forall_u ||
-            head == e->sym_lref || head == e->sym_ampersand ||
-            head == e->sym_borrow_mut || head == e->sym_handler_type ||
-            head == e->sym_arrow ||
-            head == e->sym_session_type || head == e->sym_session_Send ||
-            head == e->sym_session_Recv || head == e->sym_session_Choose ||
-            head == e->sym_session_Branch || head == e->sym_session_Rec ||
-            head == e->sym_session_Timeout || head == e->sym_project_type ||
-            head == e->sym_global_type || head == e->sym_role_type)
-            return false;  /* built-in compound form: keep the struct path */
-        return true;  /* user applied/parametric type field (TY_APP) */
+        /* structdef-retirement slice 5 DS-A3/DS-A4: every list-form field type is
+         * now "lowerable" in the sense that it takes the record-ADT path -- the
+         * borrow family (`(lref T)`/`(& T)`/`(borrow-mut T)`) resolves to a real
+         * carrier field, and the remaining built-in compound forms (forall,
+         * handler/arrow, session/role/global/project) are REJECTED there with a
+         * clean diagnostic (struct_field_type_from_form) rather than kept on the
+         * legacy StructDef path.  Returning true here is what makes the residual
+         * StructDef producer path unreachable (the deletion precondition); the
+         * eventual lowering of those forms is tracked in
+         * docs/upcoming/structdef-exotic-field-forms-plan.md. */
+        return true;
     }
     if (type_tok->tag != F_KEYWORD && type_tok->tag != F_SYM)
         return false;  /* not a leaf type token */
@@ -842,8 +891,38 @@ static bool defstruct_field_type_lowerable(Elab *e, const Form *type_tok) {
     }
 }
 
+/* defstruct-grouped-field-spec-vectors: flatten an old-syntax field vector so a
+ * grouped `[name : type]` sub-vector splices into the surrounding token stream
+ * (the shape a `~@(map (fn [c] `[~c : T]) comps)` macro splice produces).  This
+ * is the SAME flattening elab_defstruct applies to the actual field list; the
+ * lowering gate must run it too, or the gate (reading the raw `call`) and the
+ * elaborator (which flattens) disagree and a grouped-spec defstruct wrongly
+ * takes the residual StructDef path.  Returns the input vec unchanged when there
+ * is no grouping.  structdef-retirement slice 5 DS-A. */
+static Form *defstruct_flatten_grouped_field_vec(Elab *e, const Form *fields_vec) {
+    if (!fields_vec || fields_vec->tag != F_VEC) return (Form *)fields_vec;
+    bool has_grouped = false;
+    for (uint32_t i = 0; i < fields_vec->as.list.len; i++)
+        if (fields_vec->as.list.items[i]->tag == F_VEC) { has_grouped = true; break; }
+    if (!has_grouped) return (Form *)fields_vec;
+    uint32_t flat_n = 0;
+    for (uint32_t i = 0; i < fields_vec->as.list.len; i++) {
+        const Form *it = fields_vec->as.list.items[i];
+        flat_n += (it->tag == F_VEC) ? it->as.list.len : 1;
+    }
+    Form **flat = (Form **)arena_alloc(e->arena, (flat_n ? flat_n : 1) * sizeof(Form *));
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < fields_vec->as.list.len; i++) {
+        Form *it = fields_vec->as.list.items[i];
+        if (it->tag == F_VEC)
+            for (uint32_t j = 0; j < it->as.list.len; j++) flat[k++] = it->as.list.items[j];
+        else
+            flat[k++] = it;
+    }
+    return form_vec(e->arena, fields_vec->span, flat, flat_n);
+}
+
 static bool defstruct_fields_all_primitive(Elab *e, const Form *fields_vec) {
-    (void)e;
     if (!fields_vec || fields_vec->tag != F_VEC) return false;
     uint32_t n = fields_vec->as.list.len;
     if (n == 0) return false;
@@ -856,6 +935,21 @@ static bool defstruct_fields_all_primitive(Elab *e, const Form *fields_vec) {
         if (type_tok->tag == F_TYPE_ANN) type_tok = type_tok->as.list.items[0];
         if (!defstruct_field_type_lowerable(e, type_tok)) return false;
         i++;
+        /* structdef-retirement slice 5 A1: a `fn`/`c-fn` field may carry a
+         * trailing `#fx{...}` effect-row F_MAP (e.g. `[run : fn #fx{Write}]`).
+         * The record-ADT path now preserves it on CtorField.effect_row, so skip
+         * it here rather than treating it as a stray non-field-name and bailing
+         * to the residual StructDef path. */
+        if (i < n && fields_vec->as.list.items[i]->tag == F_MAP) {
+            bool prev_is_fn =
+                (type_tok->tag == F_SYM &&
+                 (type_tok->as.sym == e->sym_fn || type_tok->as.sym == e->sym_c_fn)) ||
+                (type_tok->tag == F_LIST && type_tok->as.list.len >= 1 &&
+                 type_tok->as.list.items[0]->tag == F_SYM &&
+                 (type_tok->as.list.items[0]->as.sym == e->sym_fn ||
+                  type_tok->as.list.items[0]->as.sym == e->sym_c_fn));
+            if (prev_is_fn) i++;
+        }
     }
     return true;
 }
@@ -936,7 +1030,11 @@ bool defstruct_lowers_to_adt(Elab *e, const Form *call) {
     if (idx >= call->as.list.len) return false;
     const Form *fields = call->as.list.items[idx];
     if (fields->tag == F_VEC)
-        return defstruct_fields_all_primitive(e, fields);     /* old syntax */
+        /* DS-A: flatten grouped `[name : type]` sub-vectors first so the gate
+         * agrees with elab_defstruct's own flattening (else a grouped-spec
+         * struct wrongly takes the residual StructDef path). */
+        return defstruct_fields_all_primitive(
+            e, defstruct_flatten_grouped_field_vec(e, fields));   /* old syntax */
     return defstruct_newstyle_fields_all_primitive(e, call, idx);  /* new syntax */
 }
 
@@ -1059,36 +1157,12 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
                       "defstruct field list must be a vector [f1 : T1 f2 : T2 ...]");
             return NULL;
         }
-        /* defstruct-grouped-field-spec-vectors: a field-list element that is
-         * itself a vector is a grouped `[name : type]` spec -- flatten it into
-         * the surrounding `name`, `: type` token stream so it is equivalent to
-         * writing the field inline.  This is the shape a
-         * `~@(map (fn [c] `[~c : (T ~c)]) comps)` splice produces, letting one
-         * variadic macro build the field list.  Types are never bare vectors
-         * (they are keyword/symbol/list, wrapped in F_TYPE_ANN), so a top-level
-         * F_VEC element is unambiguously a grouped spec. */
-        bool has_grouped = false;
-        for (uint32_t i = 0; i < fields_form->as.list.len; i++) {
-            if (fields_form->as.list.items[i]->tag == F_VEC) { has_grouped = true; break; }
-        }
-        if (has_grouped) {
-            uint32_t flat_n = 0;
-            for (uint32_t i = 0; i < fields_form->as.list.len; i++) {
-                Form *it = fields_form->as.list.items[i];
-                flat_n += (it->tag == F_VEC) ? it->as.list.len : 1;
-            }
-            Form **flat = (Form **)arena_alloc(e->arena, (flat_n ? flat_n : 1) * sizeof(Form *));
-            uint32_t k = 0;
-            for (uint32_t i = 0; i < fields_form->as.list.len; i++) {
-                Form *it = fields_form->as.list.items[i];
-                if (it->tag == F_VEC) {
-                    for (uint32_t j = 0; j < it->as.list.len; j++) flat[k++] = it->as.list.items[j];
-                } else {
-                    flat[k++] = it;
-                }
-            }
-            fields_form = form_vec(e->arena, fields_form->span, flat, flat_n);
-        }
+        /* defstruct-grouped-field-spec-vectors: flatten grouped `[name : type]`
+         * sub-vectors into the surrounding `name`, `: type` token stream (the
+         * shape a `~@(map (fn [c] `[~c : (T ~c)]) comps)` splice produces).
+         * DS-A: shared with the lowering gate via defstruct_flatten_grouped_field_vec
+         * so the two cannot disagree on whether a grouped-spec struct lowers. */
+        fields_form = defstruct_flatten_grouped_field_vec(e, fields_form);
     }
 
     /* CONV-S1 (defstruct-as-defadt experiment): lower a `defstruct` to a
@@ -1124,12 +1198,9 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
                     ad->n_ctors > 0 && !ad->is_gadt)
                     prior_fully_defined = true;
             }
-            for (uint32_t si = 0; si < e->n_struct_defs && !prior_fully_defined; si++) {
-                StructDef *sd = e->struct_defs[si];
-                if (sd && sd->name && strcmp(sd->name, name->name) == 0 &&
-                    sd->n_fields > 0)
-                    prior_fully_defined = true;
-            }
+            /* structdef-retirement DS-C: the parallel scan over the (always-empty)
+             * struct_defs registry is dead -- a prior definition of this name is
+             * an AdtDef (every lowered defstruct/defdata) checked above. */
             if (prior_fully_defined) {
                 diag_emit(DIAG_ERROR, name_form->span,
                           "defstruct: '%s' is already defined (an auto-loaded "
@@ -2230,6 +2301,10 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         /* Type forms (one per field) to resolve, gathered uniformly for both
          * styles so the field-resolution loop below is shared. */
         Form **field_type_forms = NULL;
+        /* structdef-retirement slice 5 A1: optional `#fx{...}` effect-row form
+         * per field (record style only), parallel to fields[]; NULL when the
+         * field has no effect annotation. */
+        Form **field_effect_forms = NULL;
 
         if (is_record) {
             /* Vector holds `name : type` pairs.  The reader collapses `: T`
@@ -2242,32 +2317,60 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                           ctor_name->name);
                 return NULL;
             }
-            if (n_items % 2 != 0) {
-                diag_emit(DIAG_ERROR, rec_vec->span,
-                          "defdata: record-style variant '%s' field list must be "
-                          "[name : type ...] pairs", ctor_name->name);
-                return NULL;
-            }
-            n_fields = n_items / 2;
+            /* Walk name/type pairs with a cursor rather than fixed `fi*2`
+             * indexing: structdef-retirement slice 5 A1 -- a `fn`-typed field may
+             * be followed by a trailing `#fx{...}` effect-row F_MAP (the shape a
+             * lowered `defstruct` capability field `[run : fn #fx{Write}]`
+             * produces), which is NOT a name/type pair.  Attach it to that field
+             * and skip it, so the record parser accepts the effect annotation the
+             * struct path already understood. n_items is an upper bound on
+             * n_fields. */
             rec_field_names = (const Symbol **)arena_alloc(e->arena,
-                                  n_fields * sizeof(Symbol *));
+                                  n_items * sizeof(Symbol *));
             field_type_forms = (Form **)arena_alloc(e->arena,
-                                  n_fields * sizeof(Form *));
-            for (uint32_t fi = 0; fi < n_fields; fi++) {
-                Form *name_f = rec_vec->as.list.items[fi * 2];
-                Form *type_f = rec_vec->as.list.items[fi * 2 + 1];
+                                  n_items * sizeof(Form *));
+            field_effect_forms = (Form **)arena_alloc(e->arena,
+                                  n_items * sizeof(Form *));
+            uint32_t nf = 0, ci = 0;
+            while (ci < n_items) {
+                Form *name_f = rec_vec->as.list.items[ci++];
                 if (name_f->tag != F_SYM) {
                     diag_emit(DIAG_ERROR, name_f->span,
                               "defdata: record-style variant '%s' expected a field "
                               "name symbol", ctor_name->name);
                     return NULL;
                 }
-                rec_field_names[fi] = name_f->as.sym;
+                if (ci >= n_items) {
+                    diag_emit(DIAG_ERROR, rec_vec->span,
+                              "defdata: record-style variant '%s' field list must be "
+                              "[name : type ...] pairs", ctor_name->name);
+                    return NULL;
+                }
+                Form *type_f = rec_vec->as.list.items[ci++];
                 /* Unwrap `: T` (F_TYPE_ANN) to the bare type form. */
                 if (type_f->tag == F_TYPE_ANN)
                     type_f = type_f->as.list.items[0];
-                field_type_forms[fi] = type_f;
+                rec_field_names[nf] = name_f->as.sym;
+                field_type_forms[nf] = type_f;
+                field_effect_forms[nf] = NULL;
+                /* A1: a trailing F_MAP after a `fn`/`c-fn` field type is that
+                 * field's effect row (mirrors the struct path, elab_structs.c
+                 * ~1582). Only consume it for a fn field so a stray F_MAP after a
+                 * non-fn field still surfaces as the missing-field-name error. */
+                bool type_is_fn =
+                    (type_f->tag == F_SYM &&
+                     (type_f->as.sym == e->sym_fn || type_f->as.sym == e->sym_c_fn)) ||
+                    (type_f->tag == F_LIST && type_f->as.list.len >= 1 &&
+                     type_f->as.list.items[0]->tag == F_SYM &&
+                     (type_f->as.list.items[0]->as.sym == e->sym_fn ||
+                      type_f->as.list.items[0]->as.sym == e->sym_c_fn));
+                if (type_is_fn && ci < n_items &&
+                    rec_vec->as.list.items[ci]->tag == F_MAP) {
+                    field_effect_forms[nf] = rec_vec->as.list.items[ci++];
+                }
+                nf++;
             }
+            n_fields = nf;
         } else {
             n_fields = ctor_form->as.list.len - 1;
             if (n_fields > 0) {
@@ -2296,12 +2399,49 @@ Expr *elab_defdata(Elab *e, const Form *call) {
             }
             ctor->fields[fi].name = rec_field_names ? rec_field_names[fi]->name : NULL;
 
+            /* structdef-retirement slice 5 A1: parse the optional `#fx{...}`
+             * effect-row annotation collected for a `fn`-typed field, mirroring
+             * the struct path (elab_structs.c ~1596).  This is what keeps
+             * capability-field effect tracking sound after a `defstruct` with a
+             * `[run : fn #fx{Eff}]` field lowers to this record ADT: effect_check
+             * reads the row off the CtorField when a `(.run v)` call fires. */
+            ctor->fields[fi].effect_row = NULL;
+            if (field_effect_forms && field_effect_forms[fi]) {
+                Form *row_form = field_effect_forms[fi];
+                warn_legacy_fx_row(row_form);
+                uint8_t n_sym = (uint8_t)row_form->as.list.len;
+                const Symbol **syms = (const Symbol **)arena_alloc(e->arena,
+                                        (n_sym ? n_sym : 1) * sizeof(Symbol *));
+                uint8_t n_valid = 0;
+                for (uint32_t j = 0; j < row_form->as.list.len; j++) {
+                    Form *item = row_form->as.list.items[j];
+                    if (item->tag == F_SYM) syms[n_valid++] = item->as.sym;
+                }
+                ctor->fields[fi].effect_row =
+                    effect_row_unresolved(e->arena, syms, n_valid);
+            }
+
             /* CONV-S5: a :copy ADT requires every variant's payload to be
              * copy-compatible.  A non-copy field (rc/ref/weak/lref ownership)
              * makes the value move-only, which contradicts :copy.  Reject it
              * here, pinpointing the offending field and variant. */
             if (def->is_copy &&
                 !typekind_is_copy_for_struct(ctor->fields[fi].kind)) {
+                /* structdef-retirement slice 5 DS-A3: a lowered `defstruct` with a
+                 * linear (`lref`) field reaches here now that borrow-family field
+                 * forms lower.  Reproduce the struct path's precise TUR-E0102
+                 * "cannot copy linear field" diagnostic (elab_structs.c ~1583)
+                 * for a linear field rather than the generic non-copy message,
+                 * so the surface diagnostic is unchanged by the lowering. */
+                if (typekind_default_copy_kind(ctor->fields[fi].kind) == CK_LINEAR &&
+                    ctor->fields[fi].name) {
+                    diag_emit_with_code(DIAG_ERROR, field_type_forms[fi]->span,
+                                        TUR_E0102_LINEAR_COPY,
+                                        "cannot copy linear field '%s' -- "
+                                        "linear values cannot appear in :copy structs",
+                                        ctor->fields[fi].name);
+                    return NULL;
+                }
                 const char *fdesc = ctor->fields[fi].name;
                 if (fdesc) {
                     diag_emit(DIAG_ERROR, field_type_forms[fi]->span,

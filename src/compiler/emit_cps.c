@@ -503,12 +503,12 @@ typedef struct {
     const Expr    *init;     /* its pure initializer */
 } CtxLet;
 
-/* The nominal name of a TY_STRUCT or (structdef-retirement slice 5) opaque /
- * record TY_ADT type, or NULL if `t` is neither.  An opaque newtype env (a
- * `defopaque`) is a TY_ADT after the migration, so serial env marshaling must
- * recognise both nominal carriers. */
+/* The nominal name of a record / opaque TY_ADT type, or NULL otherwise.  Every
+ * nominal carrier (a lowered `defstruct`, a `defdata`, and an opaque `defopaque`
+ * newtype) is a TY_ADT after the structdef-retirement migration, so serial env
+ * marshaling only has to recognise TY_ADT.  (DS-C: the former TY_STRUCT arm is
+ * dead -- no TY_STRUCT value is ever constructed.) */
 static const char *sk_nominal_type_name(Type t) {
-    if (t.kind == TY_STRUCT && t.as.struct_.def) return t.as.struct_.def->name;
     if (t.kind == TY_ADT && t.as.adt_.def) return t.as.adt_.def->name;
     return NULL;
 }

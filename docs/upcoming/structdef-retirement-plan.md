@@ -116,6 +116,44 @@ fields, parametric, `:heap`, `:copy`/`:move`).
    all existing linear fixtures stay green (1874/0).
 5. **Delete `StructDef` -- the bulk, separately scoped. IN PROGRESS.**
 
+   > **Re-scoped 2026-06-30 from measured state -- see
+   > [structdef-deletion-scope.md](structdef-deletion-scope.md).**  After
+   > B1-B4, `StructDef` is a small, bounded number of fixes from zero producers.
+   > A registry-writer probe (the correct measure -- the single writer of
+   > `e->struct_defs[]`) shows the residual `defstruct`->`StructDef` path fires
+   > for just **two field-shape categories, six structs total**:
+   > (A2) grouped field specs -- `Mixed`/`World` in `defstruct-grouped-field-specs`
+   > -- **DS-A DONE (2026-06-30)**; and (A1) effect-annotated fn fields --
+   > `[run : fn #fx{Eff}]` in `Action`/`App`/`Emitter`/`Printer` -- **A1 DONE
+   > (2026-06-30)**, carrying the field's `effect_row` onto `CtorField` so
+   > effect tracking survives lowering (negative fixture
+   > `errors/struct-lowered-capability-effect-leak` locks the soundness in).
+   > (An earlier alloc-site probe under-reported this as "one struct, World" --
+   > it missed the pre-pass-stub-reuse path the effect-fn structs take;
+   > corrected in the scope doc.)  **A hard-assert DS-B guard then found a THIRD
+   > residual (2026-06-30):** one negative fixture, `(defstruct Bad :copy
+   > [r (lref int)])`, a *list-form* built-in compound field type.  (The keyword
+   > form `lref<int>` and all other struct fields lower; only the F_LIST
+   > `(lref int)` did not.)  **DS-A3 (2026-06-30) lowered the borrow family**
+   > (`(lref T)`/`(& T)`/`(borrow-mut T)`) onto the record-ADT path,
+   > reproducing the `TUR-E0102` linear-field diagnostic so the change is
+   > diagnostic-transparent; **DS-B then installed `assert(0)` in
+   > `elab_register_struct_def`, and the suite is green (1875/0) with it live --
+   > proving ZERO `StructDef` producers.**  (A few exotic compound field forms
+   > -- forall/handler/arrow/session/role/global/project -- remain gated on the
+   > struct path but are unused anywhere; DS-C/DS-D host or reject them.)  So
+   > `e->struct_defs[]` stays empty, no named `TY_STRUCT` is produced, and with
+   > B4 proving no def-less one is either, the whole `TY_STRUCT` kind is
+   > uninstantiated and every `as.struct_.def` reader is dead code.  The
+   > deletion is then a mechanical, incrementally-committable dead-code sweep
+   > (DS-B..DS-D), NOT the all-or-nothing tyvar-representation +
+   > typeclass-dispatch rewrite the estimate below feared (both retired by
+   > B1-B4).  Note A1 is an effect-*soundness* change (carry the field's
+   > `effect_row` onto `CtorField` so `.field`-call effect tracking survives
+   > lowering), not just a gate tweak.  Measured footprint: 222 `StructDef` refs
+   > (the old estimate missed `turi/eval.c`'s 20, a pure consumer with `CtorDef`
+   > fallbacks).
+
    **Step 1 -- migrate `defopaque` off `StructDef`. DONE (2026-06-29).**  The
    slice-5 footprint below missed a *second, live* `StructDef` producer:
    `defopaque`.  Every `(defopaque ...)` allocated a `StructDef` with
@@ -279,13 +317,42 @@ representation + delete the type + chase 6 residual fixtures" to roughly
   placeholder name), and `TY_FN` stays `"opaque"`.  Snapshots regenerated in
   the same change.  Full write-up:
   [docs/archive/baseline-ctor-option-struct-mangling.md](../archive/baseline-ctor-option-struct-mangling.md).
-- **B2 still PAUSED (now unblocked)** -- the earlier P1 migration to unnamed
-  `TY_TYVAR` was reverted because the baseline was not green; with the gate
-  honest again, the B2-B4 per-producer migrations can resume in
-  safely-measurable increments.  (Note: B2 now lands *on top of* the unified
-  placeholder mangling -- a migrated `TY_TYVAR` placeholder and a residual
-  def-less `TY_STRUCT` placeholder already mangle identically, so a partial
-  migration no longer risks a call/def name mismatch.)
+- **B2 mostly DONE (2026-06-30): 6 of 8 producers migrated to named
+  `TY_TYVAR`; 2 deferred.**  Landed as five commits, each with the by-value
+  suite green (1874/0).  A `struct_.def = NULL` sweep during the work showed
+  B1's "3 producers" count was an undercount -- there are **8**.  Migrated:
+  P1 (`elab_fns.c` single-occurrence param), P2 (`elab_types.c` unknown
+  type-app arg), P3 (`elab_typeclasses.c` unknown instance type-arg -- the
+  typeclass-dispatch-entangled one, which also carried the `type_effective_kind`
+  / `opaque_struct_arg` kind-check consumers and the `build_inst_type_suffix`
+  + two dict-name codegen mirrors), P4 (`elab_types.c` `^f`/`^^f` HKT
+  type-param ref), and P5/P6 (`elab_typeclasses.c` partial-app constructor
+  heads).  **Deferred (P7/P8):** the general unknown-type-name fallback in
+  `type_expr_from_form` is load-bearing -- built-in types with no `defstruct`
+  (`str`, ...) route through it and `type_effective_kind` reads it as an opaque
+  `KIND_ARROW` constructor.  A naive migration changed codegen across 93
+  fixtures (built + reverted); it needs the tyvar-kind question settled and
+  belongs to the slice-5 deletion, not incremental B2.  See the corrected
+  producer table + consumer list in
+  [ty-struct-null-def-inventory.md](ty-struct-null-def-inventory.md).
+- **B2 now COMPLETE (2026-06-30): all 8 producers migrated (P1-P8).**  P7/P8
+  (the general unknown-type-name fallback) landed after the `EX_DEFAULT_OF`
+  boxing guard removed the one hard build failure from their blast radius; the
+  migration is a pure element-lowering change (unresolved container elements
+  stay polymorphic on the uniform carrier instead of minting a placeholder
+  `Option__struct` monomorph) plus a 92-snapshot regen.  `src/compiler/` now
+  has **zero** `struct_.def = NULL` producers and no live
+  `type_from_kind(TY_STRUCT)` calls; every remaining `kind = TY_STRUCT` site
+  assigns a non-NULL `def`.
+- **B4 now DONE (2026-06-30)** -- `assert(def != NULL)` installed at the three
+  hot reader/mangler sites (`type_name`, `type_c_name`, `append_type_mangle`),
+  each retaining its NULL fallback for NDEBUG release safety.  Full by-value
+  suite green (1874/0) with all three asserts live, proving no def-less
+  `TY_STRUCT` is constructed across every fixture's codegen + diagnostics.
+  With B (B1-B4) complete, the tyvar/placeholder representation is fully
+  migrated: the slice-5 deletion no longer has to "migrate the tyvar
+  representation" -- it shrinks to renaming the `TY_STRUCT` kind and deleting
+  the dead `StructDef`-identity code, per the slice-5 note above.
 - **Separate, low-priority follow-up found while fixing this**: the multi-file
   split path (`tur build <dir>` / `emit_header`) drops four ADT monomorph
   typedefs from `input.h` (incl. the fully-concrete `Endo__int`/`Schema__int`),

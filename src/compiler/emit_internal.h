@@ -457,15 +457,6 @@ bool emit_spec_result_mismatch(Type call_result, Type spec_result);
 FnDef *emit_concrete_inst_method_fndef(EmitCtx *ctx, const TypeClass *tc,
                                        Type resolved,
                                        const char *method_field_name);
-/* RT/SC5: carrier-return bridge.  A typeclass instance method whose declared
- * return is the dispatch type variable lowers to the int64_t carrier, but its
- * body resolves to a concrete by-value struct for that instance.  When the
- * struct is non-carrier (a plain, non-parametric defstruct), the function must
- * be emitted with that concrete struct return type so its signature agrees with
- * the dictionary slot and the resolved (ascribed) call site -- both of which
- * already use the concrete body type.  Returns the concrete struct Type to emit
- * in place of the carrier, or a TY_UNKNOWN type when no override applies. */
-Type emit_carrier_return_override(const FnDef *fd);
 /* Debugger Phase 4 (--debug): emit a `#line N "path/to/file.tur"` directive
  * into `out` for `span`, so the C compiler maps the following generated code
  * back to the Turmeric source for gdb/lldb.  A no-op unless g_emit_debug_lines

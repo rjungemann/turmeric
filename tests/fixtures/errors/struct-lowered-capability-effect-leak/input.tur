@@ -1,0 +1,19 @@
+;; structdef-retirement slice 5 A1 soundness canary.
+;;
+;; A `defstruct` with an effect-annotated capability field
+;; (`[run : fn #fx{Emit}]`) now LOWERS to a single-variant record ADT. The
+;; lowering must preserve the field's effect row on the CtorField so that
+;; effect checking still sees the effect when the field is invoked. If the
+;; lowering dropped the row, `leak` below (declared pure, `#fx{}`) would wrongly
+;; compile even though calling `.run` performs Emit.
+;;
+;; Expect TUR-E0009: leak performs Emit but its declared row #fx{} omits it.
+
+(defeffect Emit [s :cstr] :nil)
+
+(defstruct Emitter :copy [run : fn #fx{Emit}])
+
+(defn leak [em : Emitter] #fx{} : int
+  (do (.run em "boom") 0))
+
+(defn main [] : int 0)

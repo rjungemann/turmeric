@@ -423,14 +423,15 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             }
             
             if (found) {
-                /* Return a type variable - represented as TY_STRUCT with no def
-                 * The kind is stored in type_param_kinds[param_idx] */
+                /* Return a type variable.  structdef-retirement slice 5 B2:
+                 * a `^f`/`^^f` higher-kinded type-param reference is a genuine
+                 * named type variable, so emit a named TY_TYVAR carrying the
+                 * param name (its constructor kind lives in hkt_kind) rather
+                 * than a def-less TY_STRUCT placeholder. */
                 Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-                memset(t, 0, sizeof(Type));
-                t->kind = TY_STRUCT;
+                *t = type_tyvar_named(type_params[param_idx]->name);
                 t->copy_kind = CK_MOVE;
                 t->hkt_kind = type_param_kinds[param_idx];
-                t->as.struct_.def = NULL;
                 return t;
             }
             /* If not found, fall through to look up as a type binding */
@@ -551,7 +552,14 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             if (pt) return pt;
         }
 
-        /* Unknown - return as opaque struct */
+        /* Unknown -- return an unresolved named type variable.
+         * structdef-retirement slice 5 (P7): an unknown bare type name is an
+         * unresolved type variable, not a nominal struct.  Emit a named
+         * TY_TYVAR (codegen lowers it to the same int64 carrier) rather than a
+         * def-less TY_STRUCT placeholder.  The knock-on: a container element
+         * that lands here (`(Option Unknown)`) now stays polymorphic
+         * (uniform-carrier `ctor_Option`) instead of minting a placeholder
+         * `Option__struct` monomorph -- the more honest lowering. */
         if (e->strict_unknown_types) {
             diag_emit(DIAG_ERROR, form->span,
                       "unknown type name '%.*s' in #row{...} element position",
@@ -559,11 +567,8 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             return NULL;
         }
         Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-        memset(t, 0, sizeof(Type));
-        t->kind = TY_STRUCT;
+        *t = type_tyvar_named(sym->name);
         t->copy_kind = CK_MOVE;
-        t->hkt_kind = KIND_STAR;
-        t->as.struct_.def = NULL;
         return t;
     } else if (form->tag == F_LIST) {
         /* Variadic HKT rows (Layer 5): type-level row algebra.
@@ -2000,7 +2005,10 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             if (pt) return pt;
         }
 
-        /* Unknown keyword type — return opaque struct placeholder */
+        /* Unknown keyword type -- return an unresolved named type variable.
+         * structdef-retirement slice 5 (P8): keyword analog of the bare-symbol
+         * fallback above -- emit a named TY_TYVAR rather than a def-less
+         * TY_STRUCT. */
         if (e->strict_unknown_types) {
             diag_emit(DIAG_ERROR, form->span,
                       "unknown type name ':%.*s' in #row{...} element position",
@@ -2008,11 +2016,8 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             return NULL;
         }
         Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-        memset(t, 0, sizeof(Type));
-        t->kind = TY_STRUCT;
+        *t = type_tyvar_named(sym->name);
         t->copy_kind = CK_MOVE;
-        t->hkt_kind = KIND_STAR;
-        t->as.struct_.def = NULL;
         return t;
     } else if (form->tag == F_TYPE_ANN) {
         /* Unwrap the `: type-expr` annotation wrapper and process the inner form */
@@ -2314,13 +2319,16 @@ Expr *elab_type_app(Elab *e, const Form *call) {
                 arg_binding = scope_lookup(&e->global, arg_sym);
             }
             if (!arg_binding) {
-                /* Unknown name — treat as an opaque type constructor (like definstance does).
-                 * TY_STRUCT with no def emits void* in codegen, correct for heap-allocated
-                 * containers like option, vec, etc. */
-                memset(&arg_type, 0, sizeof(arg_type));
-                arg_type.kind = TY_STRUCT;
+                /* Unknown name — treat as an unresolved type variable (like
+                 * definstance does).  structdef-retirement slice 5 B2 (P2):
+                 * emit a named TY_TYVAR carrying the arg name rather than the
+                 * legacy def-less TY_STRUCT placeholder.  An unresolved tyvar
+                 * already lowers to the int64 carrier in codegen (types.c
+                 * type_c_name), matching the previous "container values are
+                 * int64-sized opaque handles" intent.  See
+                 * ty-struct-null-def-inventory.md P2. */
+                arg_type = type_tyvar_named(arg_sym->name);
                 arg_type.copy_kind = CK_MOVE;
-                arg_type.as.struct_.def = NULL;
             } else {
                 arg_type = arg_binding->type;
             }

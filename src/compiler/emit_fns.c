@@ -455,7 +455,9 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     bool is_main_check = fd->binding && fd->binding->name && fd->binding->name->name &&
         strcmp(fd->binding->name->name, "main") == 0;
     if (e->type.kind == TY_FN && !is_main_check) {
-        Type carrier_override = emit_carrier_return_override(fd);
+        /* structdef-retirement DS-C: emit_carrier_return_override is dead (a
+         * method body is never TY_STRUCT), so the `carrier_override.kind ==
+         * TY_STRUCT` branch that used to sit here is removed. */
         if (use_abi_spec) {
             Type rt = ctx->current_abi_specialization->result_type;
             bool is_inst = fd->binding && fd->binding->name &&
@@ -473,8 +475,6 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             } else {
                 current_fn_ret_ctype_eff = emit_type_c_name(ctx, rt);
             }
-        } else if (carrier_override.kind == TY_STRUCT) {
-            current_fn_ret_ctype_eff = emit_type_c_name(ctx, carrier_override);
         } else if (e->type.as.fn.result_full_type &&
                    fd->binding && fd->binding->name && fd->binding->name->name &&
                    strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
@@ -646,9 +646,10 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* Return type from fn_type */
     if (e->type.kind == TY_FN) {
         TypeKind result = e->type.as.fn.result_kind;
-        /* RT/SC5: carrier-return bridge for instance methods that resolve a
-         * dispatch tyvar to a non-carrier by-value struct. */
-        Type carrier_override = is_main ? (Type){0} : emit_carrier_return_override(fd);
+        /* structdef-retirement DS-C: the RT/SC5 carrier-return-override bridge
+         * (emit_carrier_return_override) is dead -- a method body is never
+         * TY_STRUCT -- so its assignment and the `carrier_override.kind ==
+         * TY_STRUCT` branch below are removed. */
         if (is_main) {
             buf_puts(file, "int");  /* C main must always return int */
         } else if (use_abi_spec) {
@@ -688,8 +689,6 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             } else {
                 buf_puts(file, emit_type_c_name(ctx, rt));
             }
-        } else if (carrier_override.kind == TY_STRUCT) {
-            buf_puts(file, emit_type_c_name(ctx, carrier_override));
         } else if (!is_main && e->type.as.fn.result_full_type &&
                    fd->binding && fd->binding->name && fd->binding->name->name &&
                    strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
@@ -1377,7 +1376,9 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         const char *ret_ctype = NULL;
         bool inst_method_carrier_spill = false;
         if (e->type.kind == TY_FN && !is_main) {
-            Type carrier_override = emit_carrier_return_override(fd);
+            /* structdef-retirement DS-C: emit_carrier_return_override is dead
+             * (method body never TY_STRUCT); its `carrier_override.kind ==
+             * TY_STRUCT` branch below is removed. */
             if (use_abi_spec) {
                 Type rt = ctx->current_abi_specialization->result_type;
                 bool is_inst = fd->binding && fd->binding->name &&
@@ -1406,8 +1407,6 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 } else {
                     ret_ctype = emit_type_c_name(ctx, rt);
                 }
-            } else if (carrier_override.kind == TY_STRUCT) {
-                ret_ctype = emit_type_c_name(ctx, carrier_override);
             } else if (e->type.as.fn.result_full_type &&
                        fd->binding && fd->binding->name && fd->binding->name->name &&
                        strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&

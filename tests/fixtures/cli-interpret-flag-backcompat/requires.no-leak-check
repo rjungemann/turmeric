@@ -1,0 +1,1 @@
+tur interpret runs the tree-walking interpreter, which intentionally never frees its process-lifetime closures/natives (see CLAUDE.md leak policy); exempt this hook fixture from LeakSanitizer.

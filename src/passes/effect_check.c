@@ -160,9 +160,23 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
             e->as.call_.fn_expr->kind == EX_GET_FIELD) {            Expr *gf = e->as.call_.fn_expr;
             StructDef *def = gf->as.get_field_.def;
             uint32_t fidx = gf->as.get_field_.field_idx;
-            if (def && fidx < def->n_fields && def->fields[fidx].effect_row) {
+            EffectRow *field_effect_row = NULL;
+            if (def && fidx < def->n_fields)
+                field_effect_row = def->fields[fidx].effect_row;
+            else {
+                /* structdef-retirement slice 5 A1: a lowered `defstruct` is a
+                 * single-variant record ADT (def == NULL), so the capability
+                 * field's effect row now lives on the CtorField.  Read it off
+                 * adt_ctor so `(.run v)` on a lowered `[run : fn #fx{Eff}]`
+                 * field still contributes its effect -- without this the lowering
+                 * would silently drop effect tracking. */
+                const struct CtorDef *ac = gf->as.get_field_.adt_ctor;
+                if (ac && fidx < ac->n_fields)
+                    field_effect_row = ac->fields[fidx].effect_row;
+            }
+            if (field_effect_row) {
                 EffectRow *field_row = effect_row_apply_subst(
-                    def->fields[fidx].effect_row, subst, a);
+                    field_effect_row, subst, a);
                 row = effect_row_merge(a, row, field_row);
             }
             /* Also recurse into the struct expression and arguments. */

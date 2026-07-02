@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <assert.h>   /* structdef-retirement slice 5 B4: def-less TY_STRUCT guard */
 
 /* CONV-S1 seam 4 (keystone): named-layout helpers defined in emit_core.c.
  * Forward-declared here (types.c does not include emit_internal.h) so the
@@ -634,6 +635,15 @@ static void append_type_mangle(Buf *b, Type t) {
              * is the baseline-ctor-option-struct-mangling bug (the int64 ctor
              * and the void* ctor would share one include guard and one would win
              * with the wrong ABI). */
+            /* structdef-retirement slice 5 B4: the def-less arm is now dead (all
+             * placeholder producers migrated to named TY_TYVAR, which mangles via
+             * the TY_TYVAR case below).  Assert def != NULL in debug -- a fire
+             * means a def-less TY_STRUCT was mangled from a path outside the B1
+             * inventory -- while keeping the "struct" fallback so an NDEBUG build
+             * still shares the carrier convention with the TY_TYVAR/TY_UNKNOWN
+             * arm. */
+            assert(t.as.struct_.def != NULL &&
+                   "def-less TY_STRUCT reached append_type_mangle (structdef-retirement B4)");
             buf_puts(b, t.as.struct_.def && t.as.struct_.def->name ? t.as.struct_.def->name : "struct");
             break;
         case TY_UNKNOWN:
@@ -2068,6 +2078,14 @@ const char *type_name(Type t) {
         }
         /* Phase 11: Struct types */
         case TY_STRUCT:
+            /* structdef-retirement slice 5 B4: every def-less TY_STRUCT
+             * placeholder producer has been migrated to a named TY_TYVAR, so a
+             * def==NULL TY_STRUCT must no longer reach here.  Assert the
+             * invariant in debug (a fire identifies a missed producer / a path
+             * outside the B1 inventory); keep the "<struct>" fallback for
+             * NDEBUG release safety. */
+            assert(t.as.struct_.def != NULL &&
+                   "def-less TY_STRUCT reached type_name (structdef-retirement B4)");
             return t.as.struct_.def ? t.as.struct_.def->name : "<struct>";
         /* Phase G0: ADT types */
         case TY_ADT:
@@ -3285,10 +3303,15 @@ const char *type_c_name(Type t) {
             return "tur_cloneable_cont *";
         /* Phase 11: Struct types lower to the struct name in C */
         case TY_STRUCT:
-            /* Phase HKT H3: TY_STRUCT without a concrete StructDef represents an
-             * opaque HKT type-constructor argument; it is stored as int64_t at
-             * runtime (container values are int64_t-sized opaque handles). */
+            /* Phase HKT H3: TY_STRUCT without a concrete StructDef represented an
+             * opaque HKT type-constructor argument (stored as int64_t).
+             * structdef-retirement slice 5 B4: those placeholder producers are
+             * all migrated to named TY_TYVAR now, so def==NULL must no longer
+             * reach here.  Assert in debug (a fire = a missed producer); keep the
+             * int64_t fallback for NDEBUG release safety. */
             /* SI4-C: defopaque types are also int64_t in C (named only for REPL tags). */
+            assert(t.as.struct_.def != NULL &&
+                   "def-less TY_STRUCT reached type_c_name (structdef-retirement B4)");
             if (!t.as.struct_.def) return "int64_t";
             if (t.as.struct_.def->is_opaque) return "int64_t";
             /* SC7: a transparent int newtype is just its int64 payload. */

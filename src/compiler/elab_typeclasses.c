@@ -1715,6 +1715,31 @@ static bool build_inst_type_suffix(const Type *type_args,
                     type_component = "T";
                 }
                 break;
+            case TY_TYVAR:
+                /* structdef-retirement slice 5 B2 (P3): an unresolved instance
+                 * head (an unknown name like `option`/`vec`) is now a named
+                 * TY_TYVAR carried with its source symbol in type_arg_syms,
+                 * exactly as the old def-less TY_STRUCT was.  Mangle by that
+                 * name so two distinct unknown-name instances of the same class
+                 * (TestFunctor[option] vs TestFunctor[vec]) get distinct
+                 * suffixes -- without this both collapse to `_T` and the
+                 * idempotent re-instance guard swallows the second. */
+                if (type_arg_syms && type_arg_syms[j]) {
+                    uint32_t sym_len = type_arg_syms[j]->len;
+                    if (sym_len >= sizeof(ctor_name_buf))
+                        sym_len = (uint32_t)(sizeof(ctor_name_buf) - 1);
+                    memcpy(ctor_name_buf, type_arg_syms[j]->name, sym_len);
+                    ctor_name_buf[sym_len] = '\0';
+                    tur_mangle_ident(ctor_name_buf, ctor_mangle_buf, sizeof(ctor_mangle_buf));
+                    type_component = ctor_mangle_buf;
+                } else if (type_args[j].as.tyvar_.name) {
+                    tur_mangle_ident(type_args[j].as.tyvar_.name,
+                                     ctor_mangle_buf, sizeof(ctor_mangle_buf));
+                    type_component = ctor_mangle_buf;
+                } else {
+                    type_component = "T";
+                }
+                break;
             case TY_ADT:
                 /* CONV-S1 (defstruct-as-defadt): a record-ADT head -- a lowered
                  * `defstruct` or a hand-written single-variant `(defdata T ...)` --
@@ -2234,38 +2259,33 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                  * still prefer a struct binding from scope_lookup
                                  * first, preserving the GADT/struct coexistence
                                  * (MF4) struct-preference. */
-                                Type *head_ty = NULL;
-                                if (!(sb && sb->type.kind == TY_STRUCT &&
-                                      sb->type.as.struct_.def))
-                                    head_ty = elab_lookup_type_by_name(e, kw);
-                                if (sb && sb->type.kind == TY_STRUCT && sb->type.as.struct_.def) {
-                                    type_args[i] = sb->type;
-                                } else if (head_ty && head_ty->kind == TY_ADT &&
-                                           head_ty->as.adt_.def) {
-                                    /* A defdata/defgadt (or lowered defstruct) type
-                                     * constructor used as an instance head, e.g.
-                                     * (definstance Functor [Either] ...).  Preserve
-                                     * the ADT type so the orphan-instance check can
-                                     * credit the owning module, and carry the symbol
-                                     * for method-name mangling. */
+                                /* structdef-retirement DS-C: the TY_STRUCT
+                                 * instance-head branches (scope binding and type
+                                 * lookup) are dead -- a defstruct head is a
+                                 * TY_ADT now.  Resolve via the type namespace
+                                 * first (a defdata/defgadt/lowered-defstruct type
+                                 * constructor -- preferred so the orphan check
+                                 * credits the owning module), then the value
+                                 * binding, else an unresolved tyvar. */
+                                Type *head_ty = elab_lookup_type_by_name(e, kw);
+                                if (head_ty && head_ty->kind == TY_ADT &&
+                                    head_ty->as.adt_.def) {
                                     type_args[i] = *head_ty;
                                     type_arg_syms[i] = kw;
-                                } else if (head_ty && head_ty->kind == TY_STRUCT &&
-                                           head_ty->as.struct_.def) {
-                                    type_args[i] = *head_ty;
                                 } else if (sb && sb->type.kind == TY_ADT && sb->type.as.adt_.def) {
                                     type_args[i] = sb->type;
                                     type_arg_syms[i] = kw;
                                 } else {
-                                    /* Phase HKT H3: Unknown name — treat as an opaque type constructor.
-                                     * TY_STRUCT without a StructDef causes codegen to emit 'void *' for
-                                     * all parameters that inherit this type, which is the correct C type
-                                     * for containers represented as heap pointers (option, vec, etc.).
-                                     * Track the symbol name so method name mangling can use it. */
-                                    memset(&type_args[i], 0, sizeof(type_args[i]));
-                                    type_args[i].kind = TY_STRUCT;
+                                    /* Phase HKT H3 / P3: unknown name -- an
+                                     * unresolved type variable.  Emit a named
+                                     * TY_TYVAR marked as an opaque kind-'* -> *'
+                                     * constructor (a genuine kind-* tyvar keeps
+                                     * hkt_kind == KIND_STAR, so the kind checker
+                                     * can tell them apart); the symbol is tracked
+                                     * via type_arg_syms[i] for method mangling. */
+                                    type_args[i] = type_tyvar_named(kw->name);
                                     type_args[i].copy_kind = CK_MOVE;
-                                    type_args[i].as.struct_.def = NULL;
+                                    type_args[i].hkt_kind = KIND_ARROW;
                                 }
                                 type_arg_syms[i] = kw;
                             }
@@ -2370,10 +2390,15 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                     fn_type->hkt_kind = (ca > 0)
                                         ? kind_for_arity(ca) : KIND_ARROW2;
                                 } else {
-                                    fn_type->kind = TY_STRUCT;
+                                    /* structdef-retirement slice 5 B2: an
+                                     * unresolved partial-app constructor head is
+                                     * a named TY_TYVAR (kind '* -> * -> *' in
+                                     * hkt_kind) rather than a def-less
+                                     * TY_STRUCT; the name is carried for dispatch
+                                     * / orphan-check identity. */
+                                    *fn_type = type_tyvar_named(ctor_sym2->name);
                                     fn_type->copy_kind = CK_MOVE;
                                     fn_type->hkt_kind = KIND_ARROW2;
-                                    fn_type->as.struct_.def = NULL;
                                 }
                                 /* inner = app(Ctor, a0);  outer = app(inner, a1).
                                  * Each application steps the kind one rung down the
@@ -2534,10 +2559,14 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                 ? kind_for_arity(ctor_arity)
                                 : KIND_ARROW2;
                         } else {
-                            fn_type->kind = TY_STRUCT;
+                            /* structdef-retirement slice 5 B2: an unresolved
+                             * partial-app constructor head is a named TY_TYVAR
+                             * (kind '* -> * -> *' in hkt_kind) rather than a
+                             * def-less TY_STRUCT; carry the name for dispatch /
+                             * orphan-check identity. */
+                            *fn_type = type_tyvar_named(ctor_sym->name);
                             fn_type->copy_kind = CK_MOVE;
                             fn_type->hkt_kind = KIND_ARROW2;
-                            fn_type->as.struct_.def = NULL;
                         }
                         /* Build arg type on arena */
                         Type *arg_type_ptr = (Type *)arena_alloc(e->arena, sizeof(Type));

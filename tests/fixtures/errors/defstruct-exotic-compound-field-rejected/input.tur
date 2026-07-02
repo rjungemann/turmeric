@@ -1,0 +1,13 @@
+;; structdef-retirement slice 5 DS-A4: a defstruct field whose type is a
+;; built-in compound form with no record-ADT field representation yet
+;; (handler/forall/session/role/global/project, and arrow/`->` for now) is
+;; rejected with a clean diagnostic, rather than silently taking the legacy
+;; StructDef path.  This keeps the residual StructDef producer path unreachable
+;; (the precondition for deleting StructDef).  See
+;; docs/upcoming/structdef-exotic-field-forms-plan.md for lowering them later.
+
+(defeffect Write [msg :cstr] :nil)
+
+(defstruct Cap [h (handler Write cstr nil)])
+
+(defn main [] : int 0)
