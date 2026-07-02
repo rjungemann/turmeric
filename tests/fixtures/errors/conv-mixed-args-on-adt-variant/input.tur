@@ -1,0 +1,5 @@
+;; CONV-S6: TUR-E0299 on a record variant names the "variant Foo of type Bar"
+;; surface.
+(defdata Shape (Circle [radius : float]) (Square [side : float]))
+(defn main [] : int
+  (let [c (Circle 2.0 :radius 3.0)] 0))

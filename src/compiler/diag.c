@@ -220,6 +220,14 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0200_UNIQUE_ALIASED:             return "TUR-E0200";
         case TUR_E0201_UNIQUE_COPY:                return "TUR-E0201";
         case TUR_E0202_UNIQUE_IN_RC:               return "TUR-E0202";
+        /* CONV-S6: product-shape construction errors */
+        case TUR_E0292_MISSING_FIELD:             return "TUR-E0292";
+        case TUR_E0293_DUPLICATE_FIELD:           return "TUR-E0293";
+        case TUR_E0294_UNKNOWN_FIELD:             return "TUR-E0294";
+        case TUR_E0296_WITH_NOT_COPY:             return "TUR-E0296";
+        case TUR_E0297_WITH_UNKNOWN_FIELD:        return "TUR-E0297";
+        case TUR_E0298_WITH_DUPLICATE_FIELD:      return "TUR-E0298";
+        case TUR_E0299_MIXED_POS_KW:              return "TUR-E0299";
         /* IT1: Union type errors */
         case TUR_E0300_UNION_TYPE_MISMATCH:        return "TUR-E0300";
         case TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH: return "TUR-E0301";
@@ -345,6 +353,14 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0200") == 0) return TUR_E0200_UNIQUE_ALIASED;
     if (strcmp(s, "TUR-E0201") == 0) return TUR_E0201_UNIQUE_COPY;
     if (strcmp(s, "TUR-E0202") == 0) return TUR_E0202_UNIQUE_IN_RC;
+    /* CONV-S6: product-shape construction errors */
+    if (strcmp(s, "TUR-E0292") == 0) return TUR_E0292_MISSING_FIELD;
+    if (strcmp(s, "TUR-E0293") == 0) return TUR_E0293_DUPLICATE_FIELD;
+    if (strcmp(s, "TUR-E0294") == 0) return TUR_E0294_UNKNOWN_FIELD;
+    if (strcmp(s, "TUR-E0296") == 0) return TUR_E0296_WITH_NOT_COPY;
+    if (strcmp(s, "TUR-E0297") == 0) return TUR_E0297_WITH_UNKNOWN_FIELD;
+    if (strcmp(s, "TUR-E0298") == 0) return TUR_E0298_WITH_DUPLICATE_FIELD;
+    if (strcmp(s, "TUR-E0299") == 0) return TUR_E0299_MIXED_POS_KW;
     /* IT1: Union type errors */
     if (strcmp(s, "TUR-E0300") == 0) return TUR_E0300_UNION_TYPE_MISMATCH;
     if (strcmp(s, "TUR-E0301") == 0) return TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH;
@@ -1031,6 +1047,134 @@ static const DiagExplanation diag_explanations_[] = {
       "(must-use, but duplication is allowed).\n"
       "\n"
       "Enable with: tur -Xsubstructural myfile.tur\n",
+    },
+    /* CONV-S6: product-shape (struct / record-variant) construction explanations.
+     * Struct and single-variant record ADT share one construction path; each
+     * example block shows both the `defstruct` and the `defdata` surface. */
+    { TUR_E0292_MISSING_FIELD,
+      "TUR-E0292: Missing field in construction\n"
+      "\n"
+      "Keyword construction of a struct or record variant left a declared\n"
+      "field unset.  Every field must be supplied.\n"
+      "\n"
+      "Example (defstruct surface):\n"
+      "  (defstruct Person :copy [name : cstr age : int])\n"
+      "  (Person :name \"Bob\")   ; error: missing field 'age' in struct 'Person'\n"
+      "\n"
+      "Example (defdata surface):\n"
+      "  (defdata Shape (Circle [radius : float]))\n"
+      "  (Circle)                ; error: missing field 'radius' in\n"
+      "                          ;        variant 'Circle' of type 'Shape'\n"
+      "\n"
+      "Supply the missing field, or construct positionally in field order.\n",
+    },
+    { TUR_E0293_DUPLICATE_FIELD,
+      "TUR-E0293: Duplicate field in construction\n"
+      "\n"
+      "Keyword construction named the same field twice.  Each field may be\n"
+      "given at most once.\n"
+      "\n"
+      "Example (defstruct surface):\n"
+      "  (defstruct Person :copy [name : cstr age : int])\n"
+      "  (Person :name \"Bob\" :age 40 :age 41)\n"
+      "  ; error: duplicate field 'age' in struct 'Person' construction\n"
+      "\n"
+      "Example (defdata surface):\n"
+      "  (defdata Shape (Circle [radius : float]))\n"
+      "  (Circle :radius 1.0 :radius 2.0)\n"
+      "  ; error: duplicate field 'radius' in\n"
+      "  ;        variant 'Circle' of type 'Shape' construction\n"
+      "\n"
+      "Remove the redundant keyword.\n",
+    },
+    { TUR_E0294_UNKNOWN_FIELD,
+      "TUR-E0294: Unknown field in construction\n"
+      "\n"
+      "Keyword construction named a field the struct or record variant does\n"
+      "not declare.\n"
+      "\n"
+      "Example (defstruct surface):\n"
+      "  (defstruct Person :copy [name : cstr age : int])\n"
+      "  (Person :name \"Bob\" :years 40)\n"
+      "  ; error: unknown field 'years' on struct 'Person'\n"
+      "\n"
+      "Example (defdata surface):\n"
+      "  (defdata Shape (Circle [radius : float]))\n"
+      "  (Circle :diameter 2.0)\n"
+      "  ; error: unknown field 'diameter' on variant 'Circle' of type 'Shape'\n"
+      "\n"
+      "Check the field name against the declaration.\n",
+    },
+    { TUR_E0296_WITH_NOT_COPY,
+      "TUR-E0296: `with` requires a :copy type\n"
+      "\n"
+      "The functional-update form `with` copies the source's unchanged fields\n"
+      "into the new value.  On a move-only (non-:copy) type that copy would\n"
+      "consume the source, so `with` is rejected.\n"
+      "\n"
+      "Example (defstruct surface):\n"
+      "  (defstruct Acct [balance : int])\n"
+      "  (with a [balance 50])\n"
+      "  ; error: with requires a :copy struct -- 'Acct' is move-only;\n"
+      "  ;        declare it `(defstruct Acct :copy ...)` to use with.\n"
+      "\n"
+      "Example (defdata surface):\n"
+      "  (defdata Acct (Acct [balance : int]))\n"
+      "  (with a [balance 50])\n"
+      "  ; error: with requires a :copy variant -- 'Acct' is move-only;\n"
+      "  ;        declare it `(defdata Acct :copy ...)` to use with.\n"
+      "\n"
+      "Add the :copy annotation to the declaration.\n",
+    },
+    { TUR_E0297_WITH_UNKNOWN_FIELD,
+      "TUR-E0297: `with` override names an unknown field\n"
+      "\n"
+      "A `with` override named a field the struct or record variant does not\n"
+      "declare.\n"
+      "\n"
+      "Example (defstruct surface):\n"
+      "  (defstruct Point :copy [x : int y : int])\n"
+      "  (with p [z 3])\n"
+      "  ; error: with: unknown field 'z' on struct 'Point'\n"
+      "\n"
+      "Example (defdata surface):\n"
+      "  (defdata Point :copy (Point [x : int y : int]))\n"
+      "  (with p [z 3])\n"
+      "  ; error: with: unknown field 'z' on variant 'Point' of type 'Point'\n"
+      "\n"
+      "Check the override field name against the declaration.\n",
+    },
+    { TUR_E0298_WITH_DUPLICATE_FIELD,
+      "TUR-E0298: `with` overrides the same field twice\n"
+      "\n"
+      "A `with` clause listed the same override field more than once.  Each\n"
+      "overridden field may appear at most once.\n"
+      "\n"
+      "Example:\n"
+      "  (defstruct Point :copy [x : int y : int])\n"
+      "  (with p [x 1 x 2])   ; error: with duplicate override field 'x'\n"
+      "\n"
+      "Remove the redundant override.\n",
+    },
+    { TUR_E0299_MIXED_POS_KW,
+      "TUR-E0299: Cannot mix positional and keyword arguments\n"
+      "\n"
+      "A struct or record-variant construction mixed positional arguments with\n"
+      "keyword (:field value) arguments.  Choose one style for the whole call.\n"
+      "\n"
+      "Example (defstruct surface):\n"
+      "  (defstruct Person :copy [name : cstr age : int])\n"
+      "  (Person \"Bob\" :age 40)\n"
+      "  ; error: struct 'Person' construction: cannot mix positional and\n"
+      "  ;        keyword arguments\n"
+      "\n"
+      "Example (defdata surface):\n"
+      "  (defdata Shape (Circle [radius : float]) (Square [side : float]))\n"
+      "  (Circle 2.0 :radius 3.0)\n"
+      "  ; error: variant 'Circle' of type 'Shape' construction: cannot mix\n"
+      "  ;        positional and keyword arguments\n"
+      "\n"
+      "Use all positional (in field order) or all keyword arguments.\n",
     },
     /* IT1: Union type explanations */
     { TUR_E0300_UNION_TYPE_MISMATCH,

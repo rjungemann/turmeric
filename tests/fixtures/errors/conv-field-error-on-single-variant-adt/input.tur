@@ -1,0 +1,6 @@
+;; CONV-S6: a hand-written single-variant `(defdata Foo (Foo [...]))` is NOT a
+;; lowered struct, so the field error still says "variant Foo of type Foo" --
+;; the user chose `defdata`, so we name the variant surface, not "struct".
+(defdata Foo (Foo [x : int]))
+(defn main [] : int
+  (let [f (Foo :y 1)] 0))

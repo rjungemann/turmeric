@@ -1,0 +1,5 @@
+;; CONV-S6: a field error on a record variant of a multi-variant `defadt` reads
+;; as "variant Circle of type Shape" -- the variant AND its enclosing type.
+(defdata Shape (Circle [radius : float]) (Square [side : float]))
+(defn main [] : int
+  (let [c (Circle :diameter 2.0)] 0))
