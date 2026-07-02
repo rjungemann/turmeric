@@ -59,6 +59,9 @@ off the StructDef path, so lowering them does not block the deletion.
 - `fn` / `c-fn` field, incl. the `#fx{..}` effect-row annotation (A1)
   -- the effect row rides on `CtorField.effect_row` and `effect_check`
   reads it off the lowered `adt_ctor`.
+- `arrow` / `->` field `(-> A B)` (EF-1) -- an alternate spelling of the
+  `fn` type; shares the fn-type parser, lowers to `TY_FN`, and rides the
+  same int64 carrier slot as the `fn` field. No new storage case.
 - `exists`-pack fields (slice 3).
 - the borrow family `(lref T)` / `(& T)` / `(borrow-mut T)` (DS-A3) --
   routed to the real type elaborator in
@@ -121,7 +124,7 @@ Update as each per-form plan lands.
 
 | Task | Heads                                     | Status  | Plan                                              |
 |------|-------------------------------------------|---------|---------------------------------------------------|
-| EF-1 | `arrow`, `->`                             | pending | [arrow](structdef-exotic-field-arrow-plan.md)     |
+| EF-1 | `arrow`, `->`                             | shipped (`685a0bf` route, `ffed924` fixture) | [arrow](structdef-exotic-field-arrow-plan.md)     |
 | EF-2 | `handler`                                 | pending | [handler](structdef-exotic-field-handler-plan.md) |
 | EF-3 | `forall`                                  | pending | [forall](structdef-exotic-field-forall-plan.md)   |
 | EF-4 | session core, `project`, `global`, `role` | pending | [session](structdef-exotic-field-session-plan.md) |
