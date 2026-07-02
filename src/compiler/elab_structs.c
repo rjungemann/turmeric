@@ -3093,6 +3093,18 @@ Expr *elab_match(Elab *e, const Form *call) {
                                               : scrutinee->type.as.adt_.def;
     }
 
+    /* CONV-S4N: per-arm variant narrowing target.  When the scrutinee is a
+     * bare symbol bound to a variable, we narrow that binding's type to the
+     * matched variant for the duration of each constructor arm (restoring it
+     * after).  Reusing the binding -- rather than shadowing it with a fresh one
+     * -- keeps the arm body pointing at the same C variable, so codegen is
+     * unchanged; only the arm-local *type* changes so `with`/field-access can
+     * see the proven variant. */
+    Binding *scrut_narrow_binding =
+        (call->as.list.items[1]->tag == F_SYM && scrutinee->kind == EX_VAR)
+            ? scrutinee->as.var.binding
+            : NULL;
+
     /* Allocate arms array */
     MatchArm *arms = (MatchArm *)arena_alloc(e->arena, n_arms * sizeof(MatchArm));
 
@@ -3192,9 +3204,11 @@ Expr *elab_match(Elab *e, const Form *call) {
             const Symbol *ctor_sym = ctor_name_form->as.sym;
             /* Look up constructor in this ADT */
             CtorDef *ctor = NULL;
+            uint32_t ctor_idx = 0;   /* CONV-S4N: index into adt->ctors[] */
             for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
                 if (strcmp(adt->ctors[ci]->name, ctor_sym->name) == 0) {
                     ctor = adt->ctors[ci];
+                    ctor_idx = ci;
                     break;
                 }
             }
@@ -3457,6 +3471,40 @@ Expr *elab_match(Elab *e, const Form *call) {
                 pat->bindings[bi] = fb;
             }
 
+            /* CONV-S4N: per-arm variant narrowing.  When the scrutinee is a
+             * bare symbol bound to a variable and this arm has destructured a
+             * *multi-variant*, *:copy* ADT to a specific variant, narrow that
+             * binding's type to the matched ctor for the arm body (and guard).
+             * That lets `(with s [...])` and `(.field s)` inside the arm see the
+             * proven variant (single-variant record ADTs already work via the
+             * n_ctors==1 gate).  Gated to :copy so we do not disturb the
+             * move/linear tracking of a move-only scrutinee.  We narrow to
+             * positional variants too (not just record ones) so `elab_with` can
+             * tell "narrowed to a fieldless variant" apart from "no narrowing
+             * context at all" and diagnose each precisely.  The original type is
+             * restored at arm exit, so narrowing never leaks past the arm. */
+            Type scrut_narrow_saved = {0};
+            bool scrut_narrowed = false;
+            if (scrut_narrow_binding && adt->n_ctors > 1 && adt->is_copy) {
+                scrut_narrow_saved = scrut_narrow_binding->type;
+                Type narrowed = scrut_narrow_binding->type;
+                /* Copy the TY_APP spine so setting the narrowing marker on the
+                 * head TY_ADT does not mutate any shared Type node. */
+                Type *cur = &narrowed;
+                while (cur->kind == TY_APP && cur->as.app.fn) {
+                    Type *fn_copy = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *fn_copy = *cur->as.app.fn;
+                    cur->as.app.fn = fn_copy;
+                    cur = fn_copy;
+                }
+                if (cur->kind == TY_ADT) {
+                    cur->as.adt_.is_narrowed = true;
+                    cur->as.adt_.narrowed_ctor_idx = ctor_idx;
+                }
+                scrut_narrow_binding->type = narrowed;
+                scrut_narrowed = true;
+            }
+
             /* LT1: Restore outer linear state before this arm's body. */
             if (n_match_lin > 0) {
                 linear_state_restore(match_lin_bindings, match_lin_before, n_match_lin);
@@ -3487,6 +3535,10 @@ Expr *elab_match(Elab *e, const Form *call) {
                     free(covered); return NULL;
                 }
             }
+
+            /* CONV-S4N: restore the scrutinee binding's full type -- narrowing
+             * is arm-local and must not leak to later arms or past the match. */
+            if (scrut_narrowed) scrut_narrow_binding->type = scrut_narrow_saved;
 
             e->scope = saved_scope;
             scope_free(&arm_scope);
@@ -4056,10 +4108,59 @@ Expr *elab_with(Elab *e, const Form *call) {
      * constructor instead of make-struct.  Field-order independence,
      * per-field type checking, and inference all come from reusing the ctor. */
     if (st.kind == TY_ADT && st.as.adt_.def &&
-        adt_is_flat_product(st.as.adt_.def) &&
-        st.as.adt_.def->n_ctors == 1 && st.as.adt_.def->ctors[0]->is_record) {
-        return elab_with_record_adt(e, call, src_form, ovr_form,
-                                    st.as.adt_.def->ctors[0]);
+        ((adt_is_flat_product(st.as.adt_.def) &&
+          st.as.adt_.def->n_ctors == 1 && st.as.adt_.def->ctors[0]->is_record) ||
+         adt_is_narrowed_to_record_variant(st))) {
+        /* CONV-S4N: for a narrowed multi-variant ADT the proven variant is the
+         * recorded ctor; for the single-variant product it is the sole ctor.
+         * `elab_with_record_adt` reconstructs through that ctor -- the lowered
+         * `(Ctor <f0> ...)` call produces a tagged value of the full ADT type,
+         * exactly as an arm body `(Circle r)` does today. */
+        const CtorDef *ctor = adt_is_narrowed_to_record_variant(st)
+            ? st.as.adt_.def->ctors[st.as.adt_.narrowed_ctor_idx]
+            : st.as.adt_.def->ctors[0];
+        return elab_with_record_adt(e, call, src_form, ovr_form, ctor);
+    }
+    /* CONV-S4N: the arm narrowed the scrutinee, but to a POSITIONAL variant --
+     * it has no field names for `with` to reference.  Point the user at the
+     * fact that only record-style variants (named fields) are updatable. */
+    if (st.kind == TY_ADT && st.as.adt_.def && st.as.adt_.is_narrowed &&
+        st.as.adt_.narrowed_ctor_idx < st.as.adt_.def->n_ctors) {
+        const CtorDef *ctor = st.as.adt_.def->ctors[st.as.adt_.narrowed_ctor_idx];
+        diag_emit(DIAG_ERROR, src_form->span,
+                  "TUR-E0302: with cannot update variant '%s' of '%s' -- it is "
+                  "positional (no field names). 'with' can only reconstruct a "
+                  "record-style variant whose fields are named; rewrite '%s' as "
+                  "(%s [f0 : T0 ...]) to use named-field updates.",
+                  ctor->name, st.as.adt_.def->name, ctor->name, ctor->name);
+        return NULL;
+    }
+    /* CONV-S4N: `with` on a multi-variant ADT outside a narrowing context.
+     * The value could be any variant, so a single reconstructing ctor call is
+     * ambiguous.  Point the user at the fix -- wrap the `with` in a `match` arm
+     * that proves which variant is held. */
+    if (st.kind == TY_ADT && st.as.adt_.def && st.as.adt_.def->n_ctors > 1) {
+        const AdtDef *def = st.as.adt_.def;
+        char variants[256];
+        int vp = 0;
+        for (uint32_t ci = 0; ci < def->n_ctors && vp < 230; ci++) {
+            if (ci > 0) vp += snprintf(variants + vp, sizeof(variants) - vp, ", ");
+            vp += snprintf(variants + vp, sizeof(variants) - vp, "%s",
+                           def->ctors[ci]->name ? def->ctors[ci]->name : "?");
+        }
+        variants[vp] = '\0';
+        const char *first_rec = NULL;
+        for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+            if (def->ctors[ci]->is_record) { first_rec = def->ctors[ci]->name; break; }
+        }
+        diag_emit(DIAG_ERROR, src_form->span,
+                  "TUR-E0302: with on a multi-variant ADT requires a narrowing "
+                  "context. '%s' has %u variants (%s); 'with' can only "
+                  "reconstruct one. Wrap the call in a 'match' arm: "
+                  "(match s (%s r) (with s [field ...]))",
+                  def->name, def->n_ctors, variants,
+                  first_rec ? first_rec : def->ctors[0]->name);
+        return NULL;
     }
     /* structdef-retirement DS-D: a lowered struct is a single-variant record
      * ADT handled by elab_with_record_adt above; the old StructDef `with`

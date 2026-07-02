@@ -4955,9 +4955,20 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                 adt_base = adt_base->as.app.fn;
             if (adt_base && adt_base->kind == TY_ADT && adt_base->as.adt_.def) {
                 const AdtDef *adt = adt_base->as.adt_.def;
+                /* CONV-S4N: the sole ctor of a single-variant record product,
+                 * OR -- for a scrutinee a `match` arm has narrowed to one record
+                 * variant -- the proven variant.  Reading `(.field s)` off a
+                 * narrowed multi-variant scrutinee reads that variant's field out
+                 * of the tagged union (the value's tag proves the variant), the
+                 * same member path a match field-bind uses. */
+                const CtorDef *ctor = NULL;
                 if (adt_is_flat_product(adt) && adt->n_ctors == 1 &&
                     adt->ctors[0]->is_record) {
-                    const CtorDef *ctor = adt->ctors[0];
+                    ctor = adt->ctors[0];
+                } else if (adt_is_narrowed_to_record_variant(*adt_base)) {
+                    ctor = adt->ctors[adt_base->as.adt_.narrowed_ctor_idx];
+                }
+                if (ctor) {
                     for (uint32_t i = 0; i < ctor->n_fields; i++) {
                         if (!ctor->fields[i].name) continue;
                         if (strcmp(ctor->fields[i].name, method_name) == 0) {

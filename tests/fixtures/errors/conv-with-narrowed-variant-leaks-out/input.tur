@@ -1,0 +1,15 @@
+;; CONV-S4N (narrowing is arm-local): the narrowed variant view lives only for
+;; the arm body.  After the `match` completes, the scrutinee is the full ADT
+;; again, so a later `(with s [...])` outside any arm is still rejected -- the
+;; narrowing must not leak past the arm.
+(defdata Shape :copy
+  (Circle [radius : int])
+  (Rect   [w : int h : int]))
+
+(defn f [s : Shape] : Shape
+  (let [dummy (match s
+                (Circle r) r
+                (Rect w h) w)]
+    (with s [radius 1])))   ; s is Shape here again -- rejected
+
+(defn main [] : int 0)

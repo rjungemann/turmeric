@@ -8,10 +8,54 @@ description: Extend `(with v [...])` to the case where `v` is a multi-variant AD
 
 ## Status
 
+**LANDED 2026-07-02.** The multi-variant case below is implemented and
+gated by `bash tests/run.sh` (1889 passed, 0 failed). Design choice (1)
+-- implicit narrowing of a bare-symbol scrutinee -- was taken, realised by
+mutating the scrutinee binding's type to the matched variant for the arm's
+duration and restoring it at arm exit (rather than a fresh shadow binding,
+which broke codegen -- the shadow had no C declaration). Field access
+`(.field s)` and `when`-guarded arms narrow for free through the same
+mechanism.
+
+Two deviations from the draft:
+
+- **Error code is `TUR-E0302`, not `TUR-E0300`.** `TUR-E0300` /
+  `TUR-E0301` were already taken by the union-types band
+  ([`diag.h:88`](../../src/compiler/diag.h)); `TUR-E0302` is the next free
+  code and is emitted as a bare string (matching the sibling `with`
+  diagnostics `TUR-E0296`-`E0298`, which are not enum constants).
+- **`adt_is_flat_product` is *not* ANDed into the `with` gate for the
+  narrowed case.** That predicate requires `n_ctors == 1`, so ANDing it in
+  would reject every multi-variant scrutinee -- the draft snippet in S4N-2
+  was self-contradictory. The narrowed branch reconstructs through the
+  proven ctor, whose call already produces a correctly-tagged value of the
+  full ADT type, so no flat-product guard is needed (or wanted).
+
 Split out from the parent `struct-adt-convergence-plan.md` (archived
 2026-06-28). The two already-landed halves of CONV-S4 (keyword construction
 on record variants; `with` on a *single*-variant record ADT) graduated with
 the parent plan. What remains is the multi-variant case below.
+
+### Landed surface
+
+- `Type::as.adt_` gained `is_narrowed` / `narrowed_ctor_idx`
+  ([`types.h`](../../src/compiler/types.h)); `type_eq` and every other
+  predicate ignore them, so a narrowed view is interchangeable with the full
+  ADT everywhere except `elab_with` and field access.
+- `elab_match` ([`elab_structs.c`](../../src/compiler/elab_structs.c))
+  narrows a bare-symbol, `:copy`, multi-variant scrutinee to the matched
+  ctor for the arm body + guard, then restores.
+- `elab_with` reconstructs through the narrowed record variant, and
+  diagnoses both the no-narrowing-context and narrowed-to-positional cases.
+- `elab_method_call` ([`elab_typeclasses.c`](../../src/compiler/elab_typeclasses.c))
+  reads a field off a narrowed multi-variant scrutinee (the open question
+  on field access is thereby resolved -- it works for free; a sanity
+  fixture is folded into the primary set).
+- Fixtures: `conv-with-narrowed-variant` (two variants + `when`-guard),
+  `conv-with-narrowed-variant-parametric`, and error fixtures
+  `conv-with-multi-variant-no-narrow-rejects`,
+  `conv-with-narrowed-non-record-variant-rejects`,
+  `conv-with-narrowed-variant-leaks-out`.
 
 ## Problem
 

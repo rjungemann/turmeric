@@ -1,0 +1,11 @@
+;; CONV-S4N: `with` on a multi-variant ADT outside a narrowing context is
+;; rejected -- the value could be any variant, so a single reconstructing ctor
+;; call is ambiguous.  TUR-E0302 lists every variant and points at the fix.
+(defdata Shape :copy
+  (Circle [radius : int])
+  (Rect   [w : int h : int]))
+
+(defn bad [s : Shape] : Shape
+  (with s [radius 9]))
+
+(defn main [] : int 0)
