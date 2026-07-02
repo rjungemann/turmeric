@@ -1,11 +1,14 @@
-;; structdef-retirement slice 5 DS-A4: a defstruct field whose type is a
-;; built-in compound form with no record-ADT field representation yet
-;; (forall/session/role/global/project) is
-;; rejected with a clean diagnostic, rather than silently taking the legacy
-;; StructDef path.  This keeps the residual StructDef producer path unreachable
-;; (the precondition for deleting StructDef).  `fn`/`arrow`/`handler` now lower
-;; (EF-1/EF-2); see docs/upcoming/structdef-exotic-field-forms-plan.md for
-;; lowering the remaining forms later.
+;; structdef-retirement slice 5 DS-A4 / EF-4: a defstruct field whose type is a
+;; built-in compound form with NO runtime value to store in a field is rejected
+;; with a clean diagnostic, rather than silently taking the legacy StructDef
+;; path.  This keeps the residual StructDef producer path unreachable (the
+;; precondition for deleting StructDef).
+;;
+;; `fn`/`arrow`/`handler` (EF-1/EF-2) and the value-carrying session heads
+;; `Session`/`project`/`Role` (EF-4) now lower.  The still-rejected forms are the
+;; session PROTOCOL DESCRIPTORS (Send/Recv/Choose/Branch/Rec/Timeout -- type-level
+;; only), `Global` (compile-time-only choreography), and `forall` (the EF-3 gate).
+;; See docs/upcoming/structdef-exotic-field-forms-plan.md.
 
 (defstruct Cap [h (forall [a] a)])
 

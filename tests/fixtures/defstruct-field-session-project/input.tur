@@ -1,0 +1,51 @@
+;; EF-4: a `(project G R)` form is a valid defstruct/ADT field type.
+;;
+;; `(project Ping A)` resolves to the concrete projected session type
+;; `Session[Send int (Recv int Close)]` -- a TY_SESSION endpoint value.  It
+;; lowers exactly like a `(Session P)` field (same TY_SESSION storage case);
+;; previously it hit the DS-A4 "not supported as a struct/ADT field" hard error
+;; (docs/upcoming/structdef-exotic-field-forms-plan.md).
+;;
+;; Role A's endpoint is stored in an AEnd struct; role B runs on a thread.
+;; Main reads the projected endpoint back out of the field, sends 42, recvs the
+;; echo, and prints it.
+;;
+;; Expected output: 42
+
+(defprotocol Ping [A B]
+  (-> A B int)
+  (-> B A int))
+
+(defn spawn [f : ptr<void>] : ptr<void>
+  ```c
+  pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(tid, NULL, tur_session_thread_wrapper, f);
+  return (void *)tid;
+  ```)
+
+(defn join [t : ptr<void>] : int
+  ```c
+  pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  return 0;
+  ```)
+
+(defstruct AEnd [ch : (project Ping A)])
+
+(defn role-b [^linear ch : (project Ping B)] : nil
+  (let [[v ch] (recv ch)]
+    (let [ch (send ch v)]
+      (close ch))))
+
+(defn main [] : int
+  (let [[ca cb] (make-session (Send int (Recv int Close)))]
+    (let [box (AEnd ca)]
+      (let [t (spawn (fn [] (role-b cb)))]
+        ;; read the projected A endpoint back out of the field, then use it
+        (let [c0 (.ch box)]
+          (let [c1 (send c0 42)]
+            (let [[v c2] (recv c1)]
+              (println v)
+              (close c2)
+              (join t)))))))
+  0)

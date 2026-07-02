@@ -1,0 +1,10 @@
+;; EF-4 Phase 6: a session PROTOCOL DESCRIPTOR (Send/Recv/Choose/Branch/Rec/
+;; Timeout) is a type-level construct, not a runtime value -- a value is always
+;; a `Session[P]`, and a descriptor is only meaningful nested inside
+;; `(Session ...)`.  So a bare descriptor field is permanently rejected (unlike
+;; the value-carrying `Session`/`project`/`Role` heads, which lower in EF-4).
+;; See docs/upcoming/structdef-exotic-field-forms-plan.md.
+
+(defstruct Bad [s : (Send int Close)])
+
+(defn main [] : int 0)

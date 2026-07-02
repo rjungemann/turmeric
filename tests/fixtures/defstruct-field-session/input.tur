@@ -1,0 +1,43 @@
+;; EF-4: a `(Session P)` form is a valid defstruct/ADT field type.
+;;
+;; A Session[P] value is a linear channel endpoint (a TurChannel* at the C
+;; level).  It lowers to TY_SESSION and rides the int64 pointer carrier slot of
+;; the record ADT (like a handler/fn field), stored by the explicit TY_SESSION
+;; case in struct_field_storage_from_type.  Previously this hit the DS-A4 "not
+;; supported as a struct/ADT field" hard error
+;; (docs/upcoming/structdef-exotic-field-forms-plan.md).
+;;
+;; The Send endpoint is stored in a Chan struct; a receiver thread recvs and
+;; prints the value; the main thread reads the field back and sends 42.
+;;
+;; Expected output: 42
+
+(defn spawn [f : ptr<void>] : ptr<void>
+  ```c
+  pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(tid, NULL, tur_session_thread_wrapper, f);
+  return (void *)tid;
+  ```)
+
+(defn join [t : ptr<void>] : int
+  ```c
+  pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  return 0;
+  ```)
+
+(defstruct Chan [s : (Session (Send int Close))])
+
+(defn main [] : int
+  (let [[s r] (make-session (Send int Close))]
+    (let [box (Chan s)]
+      (let [t (spawn (fn []
+                       (let [[n r2] (recv r)]
+                         (println n)
+                         (close r2))))]
+        ;; read the Session endpoint back out of the field, then use it
+        (let [s1 (.s box)]
+          (let [s2 (send s1 42)]
+            (close s2)
+            (join t))))))
+  0)

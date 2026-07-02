@@ -3515,6 +3515,24 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         arg_strs[i] = strdup(c.data);
                         buf_free(&c);
                     }
+                    /* EF-4: a session/role-typed ctor field also rides the int64
+                     * carrier, but a `(Session P)` / `(Role G R)` VALUE is a
+                     * `TurChannel *` / role pointer.  Cast through intptr_t so the
+                     * pointer -> int64 store is explicit, mirroring the handler
+                     * cast above; else clang trips -Wint-conversion at the ctor
+                     * call.  Keyed on the ctor field's declared kind. */
+                    bool field_is_session = e->as.call_.ctor &&
+                        i < e->as.call_.ctor->n_fields &&
+                        (e->as.call_.ctor->fields[i].kind == TY_SESSION ||
+                         e->as.call_.ctor->fields[i].kind == TY_ROLE);
+                    if (!suffix && field_is_session && arg) {
+                        Buf c; buf_init(&c);
+                        buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
+                        buf_putc(&c, '\0');
+                        free(arg_strs[i]);
+                        arg_strs[i] = strdup(c.data);
+                        buf_free(&c);
+                    }
                     /* CONV-S1/B3: a by-value ADT argument flowing into a carrier
                      * constructor's int64 field slot must be boxed (heap copy ->
                      * int64) -- the field-store crossing.  Only for the plain
