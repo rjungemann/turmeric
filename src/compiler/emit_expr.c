@@ -86,6 +86,15 @@ bool emit_spec_result_mismatch(Type call_result, Type spec_result) {
 static const EmitAbiSpecialization *find_matched_abi_spec(
         EmitCtx *ctx, const Expr *e, const Binding *fn_binding) {
     if (!ctx || !e || e->kind != EX_CALL) return NULL;
+    /* MB2.5 (constrained-hkt-forall-mode-b-plan): a class-method call that
+     * dispatches through the runtime dict param speaks the carrier ABI (the dict
+     * slot stores the carrier instance method).  It must NOT pick up an M7
+     * by-value instance spec: matching one would deref the carrier args to the
+     * aggregate (`*(tur_adt_Maybe__int *)x`) while the dict slot takes int64, a cc
+     * type error.  The aggregate box/unbox already happens at the poly-carrier
+     * boundary (the caller).  Carrier-compatible functors (Box) never mint a
+     * by-value spec, so this only affects by-value aggregate functors. */
+    if (emit_call_is_dict_param_dispatch(ctx, e)) return NULL;
     /* M5 emit-side: when emit_module.c interned a spec for this exact call
      * Expr* (recorded in specialized_call_exprs / specialized_call_names),
      * emit_call_name returns that spec's clone_name.  Look up the spec by

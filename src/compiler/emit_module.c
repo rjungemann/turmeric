@@ -2192,6 +2192,45 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                                    const Expr **items, uint32_t n_items,
                                    const Type *result_type_override) {
     if (!call || call->kind != EX_CALL || !call->as.call_.fn_binding) return;
+    /* MB2.5 (constrained-hkt-forall-mode-b-plan): a class-method call on a
+     * HIGHER-KINDED constrained variable inside a constrained rank-2 poly-fn (or
+     * its dict-clone) is dispatched through the runtime dict param at emit
+     * (emit_call_name), NOT monomorphized.  Minting a by-value instance spec for
+     * it here produces a DEAD clone (nothing calls it -- find_matched_abi_spec
+     * returns NULL for the dispatch site) that is also ill-typed for a by-value
+     * aggregate functor (its `(f a)` result temp collapses to the int64 carrier
+     * while the ctor returns the aggregate -- the M7-by-value gap).  Skip it: the
+     * dict slot already holds the carrier instance method, and the aggregate
+     * box/unbox happens at the poly-carrier boundary.  Both the dict-clone
+     * (`poly-fmap__dict_N`) and the original constrained poly-fn (`poly-fmap`)
+     * share the same body Expr, so BOTH scan passes reach the call; guard both.
+     * Restricted to higher-kinded classes (Functor's class var is `* -> *`), so
+     * ground-kind constrained-defn monomorphization (M4c Path A) is untouched. */
+    {
+        const Expr *sf = ctx->current_scan_fn;
+        FnDef *sfd = (sf && sf->kind == EX_FN_DEF) ? sf->as.fn_def_.fn : NULL;
+        const Expr *da = call->as.call_.dict_arg;
+        if (sfd && da && da->kind == EX_DICT && da->as.dict_.instance &&
+            da->as.dict_.instance->typeclass &&
+            da->as.dict_.method_name[0] != '\0') {
+            TypeClass *dcls = da->as.dict_.instance->typeclass;
+            bool cls_is_hkt = false;
+            if (dcls->type_param_kinds)
+                for (uint8_t k = 0; k < dcls->n_type_params; k++)
+                    if (dcls->type_param_kinds[k] != KIND_STAR)
+                        { cls_is_hkt = true; break; }
+            bool enclosing_dispatches_cls =
+                (sfd->dict_clone_class == dcls);
+            if (!enclosing_dispatches_cls && sfd->binding &&
+                sfd->binding->fn_constraints) {
+                const ConstraintSet *cs = sfd->binding->fn_constraints;
+                for (uint8_t c = 0; c < cs->n_constraints; c++)
+                    if (cs->constraints[c].typeclass == dcls)
+                        { enclosing_dispatches_cls = true; break; }
+            }
+            if (cls_is_hkt && enclosing_dispatches_cls) return;
+        }
+    }
     /* nested-construct-byvalue (Gap #4 liveness): when scanning inside an active
      * spec, a return/argument-dispatched method call may re-dispatch to a
      * concrete instance (e.g. `(dec tag)` -> `__inst_Dec_dec_cstr`) at emit time.
@@ -4827,7 +4866,12 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
              * structdef-retirement DS-C: emit_carrier_return_override is dead (a
              * method body is never TY_STRUCT), so the `carrier_override.kind ==
              * TY_STRUCT` branch is removed, matching emit_fns.c. */
-            if (e->type.as.fn.result_full_type &&
+            if (fd->dict_clone_class) {
+                /* MB2.5 (constrained-hkt-forall-mode-b-plan): a dict-clone wrapper
+                 * returns the int64 carrier (mirror emit_fns.c's dict_clone_class
+                 * branch in both the header and body-return paths). */
+                buf_puts(out, "int64_t");
+            } else if (e->type.as.fn.result_full_type &&
                        fd->binding && fd->binding->name && fd->binding->name->name &&
                        strncmp(fd->binding->name->name, "__inst_", 7) == 0 &&
                        type_uses_carrier_abi(*e->type.as.fn.result_full_type)) {

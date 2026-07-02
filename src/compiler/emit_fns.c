@@ -471,7 +471,17 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         /* structdef-retirement DS-C: emit_carrier_return_override is dead (a
          * method body is never TY_STRUCT), so the `carrier_override.kind ==
          * TY_STRUCT` branch that used to sit here is removed. */
-        if (use_abi_spec) {
+        if (fd->dict_clone_class) {
+            /* MB2.5 (constrained-hkt-forall-mode-b-plan): a dict-clone wrapper
+             * dispatches through the carrier dict and lives behind the poly
+             * carrier, so its result is ALWAYS the int64 carrier -- even when the
+             * class-var-applied result `(f a)` resolves to a by-value aggregate
+             * (`Maybe int`).  The aggregate box/unbox happens at the caller
+             * (poly-carrier) boundary.  Carrier-compatible functors (Box) already
+             * land on int64 via result_kind, so this is inert for them and only
+             * corrects the by-value aggregate case. */
+            current_fn_ret_ctype_eff = "int64_t";
+        } else if (use_abi_spec) {
             Type rt = ctx->current_abi_specialization->result_type;
             bool is_inst = fd->binding && fd->binding->name &&
                 fd->binding->name->name &&
@@ -665,6 +675,14 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
          * TY_STRUCT` branch below are removed. */
         if (is_main) {
             buf_puts(file, "int");  /* C main must always return int */
+        } else if (fd->dict_clone_class) {
+            /* MB2.5 (constrained-hkt-forall-mode-b-plan): a dict-clone wrapper
+             * returns the int64 carrier (see the body-side + current_fn_ret_ctype
+             * overrides and the forward decl in emit_module.c -- keep all four in
+             * lockstep).  A by-value aggregate functor's `(f a)` result otherwise
+             * resolves the header to the aggregate C type while the body returns
+             * the carrier, a return-type cc error. */
+            buf_puts(file, "int64_t");
         } else if (use_abi_spec) {
             /* Direction (1) of the open report: a typeclass instance
              * method (__inst_*) whose return type uses the carrier ABI
@@ -1302,7 +1320,11 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             /* structdef-retirement DS-C: emit_carrier_return_override is dead
              * (method body never TY_STRUCT); its `carrier_override.kind ==
              * TY_STRUCT` branch below is removed. */
-            if (use_abi_spec) {
+            if (fd->dict_clone_class) {
+                /* MB2.5: keep the return ret_ctype in lockstep with the signature
+                 * override above -- a dict-clone wrapper returns the int64 carrier. */
+                ret_ctype = "int64_t";
+            } else if (use_abi_spec) {
                 Type rt = ctx->current_abi_specialization->result_type;
                 bool is_inst = fd->binding && fd->binding->name &&
                     fd->binding->name->name &&
@@ -1371,6 +1393,16 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         /* Special case: if this is main and it returns int64_t, cast to int */
         if (is_main && result_kind == TY_INT) {
             buf_printf(file, "return (int)%s;\n", ret_val);
+        } else if (fd->dict_clone_class) {
+            /* MB2.5 (constrained-hkt-forall-mode-b-plan): a dict-clone wrapper's
+             * body is a single dispatch through the carrier dict, which already
+             * yields the int64 carrier (emit_call_name + the M7-spec suppression
+             * keep it carrier even for by-value aggregate functors).  Return that
+             * carrier directly -- NONE of the by-value/aggregate spill heuristics
+             * below apply, and firing one would malloc-box a value that is already
+             * the carrier (double-box).  The `(int64_t)(intptr_t)` cast is a no-op
+             * on an int64 and harmless if the body tail is a bare pointer. */
+            buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
         } else if (inst_method_carrier_spill) {
             /* Direction (1): instance method whose declared result is a
              * parameterized struct (e.g. (Result T E)) returns the carrier

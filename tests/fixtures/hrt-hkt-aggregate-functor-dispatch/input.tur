@@ -1,0 +1,49 @@
+;; MB2.5 (constrained-hkt-forall-mode-b-plan): a BY-VALUE AGGREGATE functor as
+;; the `(f a)` in a constrained rank-2 body.  `poly-fmap` is polymorphic over a
+;; `* -> *` functor `f` (declared `^f`) with a `Functor f` constraint, and calls
+;; `fmap` on the abstract `(f int)`.  Unlike MB2's carrier-compatible functors
+;; (an opaque-over-int Box, one carrier word), `Maybe` is a by-value aggregate
+;; struct (`{present, val}`), so its `(f int)` value is multi-word -- the case
+;; that previously failed codegen with "incompatible types when returning type
+;; 'int64_t' but 'tur_adt_Maybe__int' was expected".  The dict dispatch stays on
+;; the carrier ABI (the dict slot holds the carrier instance); the aggregate
+;; box/unbox happens at the poly-carrier boundary in `use-maybe`.  The SAME
+;; compiled `poly-fmap` body is also invoked at a carrier-compatible `Box` to
+;; show the two coexist.
+(defstruct Maybe [A] (present :bool) (val A))
+
+(defn mk-some [A] [x : A] : (Maybe A)
+  (make-struct Maybe :present true :val x))
+(defn mk-none [A] : (Maybe A)
+  (make-struct Maybe :present false :val (default-of A)))
+
+(definstance Functor [Maybe]
+  (fmap [c g]
+    (if (.present c)
+      (make-struct Maybe :present true :val (g (.val c)))
+      (make-struct Maybe :present false :val (g (.val c))))))
+
+(defopaque Box [a] :int)
+(defn mk-box [A] [x : A] : (Box A) ```c return (int64_t)x; ```)
+(defn un-box [A] [b : (Box A)] : A ```c return (int64_t)b; ```)
+(definstance Functor [Box]
+  (fmap [c g] (mk-box (g (un-box c)))))
+
+(defn bump [v : int] : int (+ v 100))
+
+(defn poly-fmap [^f] [^Functor f x : (f int)] : (f int)
+  (fmap x bump))
+
+(defn use-maybe [g (forall [(f :: * -> *)] [(Functor f)] (-> (f int) (f int)))
+                 m : (Maybe int)] : int
+  (let [r (g m)]
+    (if (.present r) (.val r) -1)))
+
+(defn use-box [g (forall [(f :: * -> *)] [(Functor f)] (-> (f int) (f int)))] : int
+  (un-box (g (mk-box 5))))
+
+(defn main [] : int
+  (println (use-maybe poly-fmap (mk-some 5)))   ; 105 (Some 5 -> Some 105)
+  (println (use-maybe poly-fmap (mk-none)))     ; -1  (None stays None)
+  (println (use-box   poly-fmap))               ; 105 (Box 5 -> Box 105)
+  0)

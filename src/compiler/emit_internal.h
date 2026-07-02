@@ -497,6 +497,14 @@ char *mangle_field_name(const char *name);
 char *adt_field_member_path(const AdtDef *def, const CtorDef *ctor, uint32_t fi);
 char *raw_name_for_binding(const Binding *b);
 char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b);
+/* MB2.5 (constrained-hkt-forall-mode-b-plan): true when `call` is a class-method
+ * call inside a dict-clone body that dispatches through the runtime dict param
+ * (the same condition emit_call_name uses to route the call through
+ * `((void **)dict)[slot]`).  Such a call speaks the carrier ABI end to end -- the
+ * dict slot stores the carrier instance method -- so any by-value aggregate
+ * marshalling (M7 spec matching, carrier->concrete arg deref) must be suppressed
+ * on it; the aggregate box/unbox happens at the caller (poly-carrier) boundary. */
+bool emit_call_is_dict_param_dispatch(EmitCtx *ctx, const Expr *call);
 /* GHE struct-receiver: true when a constrained-generic method call re-resolved
  * in the active ABI spec targets a struct/ADT-receiver instance whose method
  * takes the receiver by `const T *`, so the by-value receiver arg must be passed
