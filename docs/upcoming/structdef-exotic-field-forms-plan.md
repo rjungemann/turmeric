@@ -28,10 +28,11 @@ types is a **hard error**:
 type form '(handler ...)' is not yet supported as a struct/ADT field; ...
 ```
 
-The rejected forms are: `(forall ...)`, `(handler ...)`, `(arrow ...)`
-/ `(-> ...)`, the session types
+The rejected forms are: `(forall ...)`, `(handler ...)`, the session
+types
 (`(Send ..)`/`(Recv ..)`/`(Choose ..)`/`(Branch ..)`/`(Rec ..)`/`(Timeout ..)`),
-`(project ..)`, `(global ..)`, `(role ..)`.
+`(project ..)`, `(global ..)`, `(role ..)`. `(arrow ...)` / `(-> ...)`
+now lowers (EF-1); see below.
 
 This rejection was deliberate and load-bearing for the StructDef
 deletion, **not** a considered decision that these forms should never
