@@ -3497,6 +3497,24 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         arg_strs[i] = strdup(c.data);
                         buf_free(&c);
                     }
+                    /* EF-2: a handler-typed ctor field rides the int64 carrier slot
+                     * (like an fn field -- see the CONV-S1 slice-6 cast above), but a
+                     * handler VALUE is a `tur_handler_table_t *` pointer.  Cast it
+                     * through intptr_t so the pointer -> int64 conversion is explicit,
+                     * else clang trips -Wint-conversion at the ctor call.  Keyed on
+                     * the ctor field's declared kind so it fires for both a by-value
+                     * product (int64 field slot) and a carrier ctor. */
+                    bool field_is_handler = e->as.call_.ctor &&
+                        i < e->as.call_.ctor->n_fields &&
+                        e->as.call_.ctor->fields[i].kind == TY_HANDLER;
+                    if (!suffix && field_is_handler && arg) {
+                        Buf c; buf_init(&c);
+                        buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
+                        buf_putc(&c, '\0');
+                        free(arg_strs[i]);
+                        arg_strs[i] = strdup(c.data);
+                        buf_free(&c);
+                    }
                     /* CONV-S1/B3: a by-value ADT argument flowing into a carrier
                      * constructor's int64 field slot must be boxed (heap copy ->
                      * int64) -- the field-store crossing.  Only for the plain

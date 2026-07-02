@@ -1,0 +1,23 @@
+; EF-2 (effect-row regression guard): a multi-effect handler type
+; (handler #fx{Ask Tell} int int) stored as a defstruct field.
+;
+; The handled effect row rides on the field's TY_HANDLER full_type, so reading
+; the field back with (.h ...) and pairing it with (with-handler ...) must still
+; discharge BOTH Ask and Tell in the body.  If the row were dropped on the way
+; through the field the with-handler body would fail its effect check -- so this
+; fixture pins effect-row preservation across the field store/read.
+
+(defeffect Ask [] :int)
+(defeffect Tell [s :cstr] :nil)
+
+(defstruct HRow2 [h : (handler #fx{Ask Tell} int int)])
+
+(defn main [] : int
+  (let [row (HRow2
+              (compose-handlers
+                (handler (Ask [] k) (resume k 41))
+                (handler (Tell [s] k) (do (println s) (resume k nil)))))]
+    (with-handler (.h row)
+      (do (perform (Tell "hi"))
+          (println (+ (perform (Ask)) 1))   ; 42
+          0))))

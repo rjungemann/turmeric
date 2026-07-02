@@ -160,6 +160,17 @@ static void struct_field_storage_from_type(const Type *t, TypeKind *out_kind, Ty
         case TY_ADT:
             *out_kind = TY_INT;
             return;
+        case TY_HANDLER:
+            /* EF-2: a `(handler E V R)` field is a runtime handler object.  Keep
+             * TY_HANDLER as the storage kind (do not remap to TY_INT): the record
+             * ADT's C emitter maps it to the int64 handler-pointer carrier via
+             * adt_field_scalar_c_type's default, exactly as a `fn` field's TY_FN
+             * kind does, while the constructor's argument type-check reads this
+             * kind and so accepts a handler value (remapping to TY_INT would make
+             * the ctor demand an `int` and reject the handler).  Made explicit
+             * rather than relying on `default:` so the intent is documented. */
+            *out_kind = TY_HANDLER;
+            return;
         case TY_REF:
         case TY_LREF:
             *out_kind = t->kind;
@@ -201,16 +212,15 @@ static Type *struct_field_type_from_form(Elab *e, const Form *form,
         const Symbol *head = form->as.list.items[0]->as.sym;
         /* structdef-retirement slice 5 DS-A4: reject the built-in compound field
          * forms that have no record-ADT field representation yet -- `forall`,
-         * `handler`, session types, project/global/role.  A
+         * session types, project/global/role.  A
          * defstruct with such a field now takes the ADT path (defstruct_lowers
          * _to_adt is true) and errors CLEANLY here instead of silently falling to
          * the legacy StructDef path -- which is what makes the residual StructDef
          * producer unreachable (the deletion precondition).  `exists`, `fn`/`c-fn`,
-         * `arrow` (`->`) and the borrow family DO lower and are handled below.
-         * Lowering the remaining forms is tracked in
+         * `arrow` (`->`), `handler` and the borrow family DO lower and are handled
+         * below.  Lowering the remaining forms is tracked in
          * docs/upcoming/structdef-exotic-field-forms-plan.md. */
         if (head == e->sym_forall || head == e->sym_forall_u ||
-            head == e->sym_handler_type ||
             head == e->sym_session_type || head == e->sym_session_Send ||
             head == e->sym_session_Recv || head == e->sym_session_Choose ||
             head == e->sym_session_Branch || head == e->sym_session_Rec ||
@@ -237,6 +247,15 @@ static Type *struct_field_type_from_form(Elab *e, const Form *form,
          * alternate spelling of the fn type and shares that parser (it lowers
          * to TY_FN), so it routes through the same dispatch (EF-1). */
         if (head == e->sym_fn || head == e->sym_c_fn || head == e->sym_arrow) {
+            return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
+        }
+        /* EF-2: a `(handler E V R)` field is a runtime handler object -- its own
+         * TypeKind (TY_HANDLER), not a type application.  type_expr_from_form has
+         * the handler-type parser (ET3-A); route there so the field resolves to
+         * TY_HANDLER, which struct_field_storage_from_type maps to the int64
+         * carrier slot.  A handler is a CK_COPY value, so no linear/affine or
+         * `:copy` diagnostic applies (unlike the borrow family). */
+        if (head == e->sym_handler_type) {
             return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
         }
         /* structdef-retirement slice 5 DS-A3: a list-form built-in compound type
@@ -495,13 +514,15 @@ static bool defstruct_field_type_lowerable(Elab *e, const Form *type_tok) {
          * `adt_field_instantiate_type` tyvar substitution at field access), so it
          * no longer keeps the struct path.
          *
-         * A BUILT-IN compound type form, however, is NOT a user type application
-         * and stays on the struct path: `(lref T)`/`(& T)`/borrow, the
-         * `exists`/`forall` quantifiers (slice 3), `handler`/`arrow`/session/role/
-         * global/project type forms.  These are their own TypeKinds (not TY_APP);
-         * lowering one would mis-elaborate it as a type-constructor application
-         * (`(lref int)` -> "cannot apply a type of kind '*'") and would also drop
-         * the struct-path-only diagnostics (e.g. `:copy` over a linear field). */
+         * A BUILT-IN compound type form is its own TypeKind (not TY_APP), so it
+         * cannot go through the generic type-application loop -- lowering it that
+         * way would mis-elaborate `(lref int)` as a type-constructor application
+         * (`"cannot apply a type of kind '*'"`) and would drop the struct-path-only
+         * diagnostics (e.g. `:copy` over a linear field).  Each is instead routed
+         * to `type_expr_from_form` in `struct_field_type_from_form`: the borrow
+         * family (`(lref T)`/`(& T)`/`(borrow-mut T)`), `fn`/`arrow`, `handler`
+         * (EF-2), and the `exists` pack (slice 3) all lower to real carrier
+         * fields; `forall`/session/role/global/project are rejected there for now. */
         if (type_tok->as.list.len < 1 ||
             type_tok->as.list.items[0]->tag != F_SYM)
             return false;
@@ -516,8 +537,9 @@ static bool defstruct_field_type_lowerable(Elab *e, const Form *type_tok) {
         /* structdef-retirement slice 5 DS-A3/DS-A4: every list-form field type is
          * now "lowerable" in the sense that it takes the record-ADT path -- the
          * borrow family (`(lref T)`/`(& T)`/`(borrow-mut T)`) resolves to a real
-         * carrier field, and the remaining built-in compound forms (forall,
-         * handler/arrow, session/role/global/project) are REJECTED there with a
+         * carrier field, `fn`/`arrow`/`handler` resolve to their carrier kinds
+         * (TY_FN / TY_HANDLER), and the remaining built-in compound forms
+         * (forall, session/role/global/project) are REJECTED there with a
          * clean diagnostic (struct_field_type_from_form) rather than kept on the
          * legacy StructDef path.  Returning true here is what makes the residual
          * StructDef producer path unreachable (the deletion precondition); the

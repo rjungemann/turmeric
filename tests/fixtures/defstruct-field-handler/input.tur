@@ -1,0 +1,19 @@
+; EF-2: a (handler E V R) form is a valid defstruct/ADT field type.
+;
+; A handler is a runtime handler object; it lowers to TY_HANDLER and rides the
+; int64 carrier slot of the record ADT (like a fn-typed field), stored by the
+; explicit TY_HANDLER case in struct_field_storage_from_type.  Previously this
+; hit the DS-A4 "not yet supported as a struct/ADT field" hard error
+; (docs/upcoming/structdef-exotic-field-handler-plan.md).
+
+(defeffect Ask [] :int)
+
+(defstruct HRow [h : (handler Ask int int)])
+
+(defn main [] : int
+  (let [row (HRow (handler (Ask [] k) (resume k 41)))]
+    ; the handler is stored in the field, read back with (.h ...), and used
+    ; to discharge the Ask effect performed in the body.
+    (with-handler (.h row)
+      (do (println (+ (perform (Ask)) 1))   ; 42
+          0))))

@@ -28,11 +28,11 @@ types is a **hard error**:
 type form '(handler ...)' is not yet supported as a struct/ADT field; ...
 ```
 
-The rejected forms are: `(forall ...)`, `(handler ...)`, the session
+The rejected forms are: `(forall ...)`, the session
 types
 (`(Send ..)`/`(Recv ..)`/`(Choose ..)`/`(Branch ..)`/`(Rec ..)`/`(Timeout ..)`),
 `(project ..)`, `(global ..)`, `(role ..)`. `(arrow ...)` / `(-> ...)`
-now lowers (EF-1); see below.
+(EF-1) and `(handler ...)` (EF-2) now lower; see below.
 
 This rejection was deliberate and load-bearing for the StructDef
 deletion, **not** a considered decision that these forms should never
@@ -62,6 +62,13 @@ off the StructDef path, so lowering them does not block the deletion.
 - `arrow` / `->` field `(-> A B)` (EF-1) -- an alternate spelling of the
   `fn` type; shares the fn-type parser, lowers to `TY_FN`, and rides the
   same int64 carrier slot as the `fn` field. No new storage case.
+- `handler` field `(handler E V R)` (EF-2) -- a runtime handler object;
+  routed to `type_expr_from_form` (which builds `TY_HANDLER`), with a new
+  explicit `case TY_HANDLER` in `struct_field_storage_from_type` that keeps
+  the kind (the C emitter maps it to the int64 handler-pointer carrier, like
+  `TY_FN`). The ctor-arg emit casts the handler pointer through `intptr_t`
+  into the carrier slot, mirroring the `fn`-field cast. A handler is
+  `CK_COPY`, so no linear/`:copy` diagnostic applies.
 - `exists`-pack fields (slice 3).
 - the borrow family `(lref T)` / `(& T)` / `(borrow-mut T)` (DS-A3) --
   routed to the real type elaborator in
@@ -125,7 +132,7 @@ Update as each per-form plan lands.
 | Task | Heads                                     | Status  | Plan                                              |
 |------|-------------------------------------------|---------|---------------------------------------------------|
 | EF-1 | `arrow`, `->`                             | shipped (`685a0bf` route, `ffed924` fixture) | [arrow](structdef-exotic-field-arrow-plan.md)     |
-| EF-2 | `handler`                                 | pending | [handler](structdef-exotic-field-handler-plan.md) |
+| EF-2 | `handler`                                 | shipped | [handler](structdef-exotic-field-handler-plan.md) |
 | EF-3 | `forall`                                  | pending | [forall](structdef-exotic-field-forall-plan.md)   |
 | EF-4 | session core, `project`, `global`, `role` | pending | [session](structdef-exotic-field-session-plan.md) |
 
