@@ -12,7 +12,7 @@ Per-form plans:
 - [EF-2: `handler`](structdef-exotic-field-handler-plan.md)
 - [EF-3: `forall`](structdef-exotic-field-forall-plan.md) (design
   decision first: lower, reject, or shelve)
-- [EF-4: session / `project` / `global` / `role`](structdef-exotic-field-session-plan.md)
+- [EF-4: session / `project` / `global` / `role`](../archive/structdef-exotic-field-session-plan.md)
 
 Do EF-1 first (shortest delta, no new storage case), then EF-2
 (establishes the "add a storage case" pattern), then EF-3 (design
@@ -148,7 +148,7 @@ Update as each per-form plan lands.
 | EF-1 | `arrow`, `->`                             | shipped (`685a0bf` route, `ffed924` fixture) | [arrow](structdef-exotic-field-arrow-plan.md)     |
 | EF-2 | `handler`                                 | shipped | [handler](structdef-exotic-field-handler-plan.md) |
 | EF-3 | `forall`                                  | shelved (2026-07-02: storage is free but no consumption path in erasure-based HRT, zero producers -- see plan Phase 1 outcome) | [forall](structdef-exotic-field-forall-plan.md)   |
-| EF-4 | `Session`/`project`/`Role` lower; descriptors + `Global` reject | shipped | [session](structdef-exotic-field-session-plan.md) |
+| EF-4 | `Session`/`project`/`Role` lower; descriptors + `Global` reject | shipped | [session](../archive/structdef-exotic-field-session-plan.md) |
 
 ## Relationship to the StructDef deletion
 
