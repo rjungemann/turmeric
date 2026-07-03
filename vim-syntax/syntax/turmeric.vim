@@ -28,7 +28,7 @@ syn match   turmericStringEsc  /\\x[0-9a-fA-F]\{2}/        contained
 syn match   turmericBadEsc     /\\[^"\\/abfnrtv0uUx]/       contained
 
 " ---- C inline blocks ----
-syn region  turmericCBlock start=/```c\?/ end=/```/ keepend
+syn region  turmericCBlock start=/```c\?/ end=/```/ keepend contains=NONE
 
 " ---- Numbers ----
 syn match   turmericHex   /\<0[xX][0-9a-fA-F]\+\>/

@@ -1149,6 +1149,18 @@ static int generate_main_c(Buf *out, const char **h_files, int n_files, const ch
  * found" errors for intra-spice and cross-spice imports.  --no-auto-spice
  * is honored if the user passed it at the top level. */
 int tur_check_only(const char *path) {
+    /* LSP/MCP diagnostics run experiment-hot: enable every registered
+     * in-flight feature (kind annotations, constrained forall, HKT rank-2,
+     * dictionary passing, curried rank-2 results, ...) so the editor sees
+     * the same "this parses" answer a developer would get with the matching
+     * --enable= flags on the CLI.  Warnings are silenced -- they would
+     * otherwise show up on every keystroke as diagnostics. */
+    g_allow_experimental = true;
+    for (size_t xi = 0, xn = experiment_count(); xi < xn; xi++) {
+        const ExperimentDescriptor *d = experiment_at(xi);
+        if (d) experiment_enable(d->name, XF_SRC_CLI);
+    }
+
     char **inc = NULL;
     int    n_inc = 0;
     char **owned = NULL;
