@@ -1,0 +1,59 @@
+;; WF1 (van-laarhoven-wide-functor-carrier-plan): the concrete van Laarhoven
+;; lens fixture with the functor `Identity` redeclared as a WIDE by-value
+;; aggregate -- a two-word `:copy` struct rather than the one-int64 opaque.  Its
+;; `(f a)` no longer fits in the mode-B int64 carrier, so it must be boxed into
+;; the carrier at the dict-dispatched `fmap` (WF1), unboxed out of the fat-boxed
+;; functor-wrapping `g` (WF2), and boxed back at the lens result (WF3).  Behind
+;; `--enable=vl-wide-functor`, `view`/`set`/`over` return the same 3/30/4/99 as
+;; the opaque-`Identity` version (van-laarhoven-lens-concrete).  This is the
+;; report's minimal repro, flipped from a TUR-E0309 error to a passing program.
+
+;; Const r a -- phantom second index; a one-int64 carrier-compatible opaque, so
+;; `view` stays on the untouched carrier path even here.
+(defopaque Const [r a] :int)
+(defn mk-const [A] [x : A] : (Const A A) ```c return (int64_t)x; ```)
+(defn get-const [R A] [c : (Const R A)] : R ```c return (int64_t)c; ```)
+(definstance Functor [(Const r)]
+  (fmap [c g] (mk-const (get-const c))))
+
+;; Identity a -- WIDE: a two-word `:copy` struct, not the one-int64 opaque.
+(defstruct Identity :copy [A] (wrapped : A) (tag : int))
+(defn mk-id  [A] [x : A]            : (Identity A) (make-struct Identity :wrapped x :tag 0))
+(defn run-id [A] [i : (Identity A)] : A            (.wrapped i))
+(definstance Functor [Identity]
+  (fmap [i g] (mk-id (g (run-id i)))))
+
+(defstruct Point :copy :heap [x : int y : int])
+
+;; A concrete lens focusing Point.x, polymorphic over the functor f.
+(defn point-x [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)
+  (fmap (g (.x s))
+        (fn [nx : int] : Point (make-struct Point :x nx :y (.y s)))))
+
+;; view l s = get-const (l (\x -> Const x) s)   -- f := Const, thin g.
+(defn view-px
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> int (f int)) Point (f Point)))
+     s : Point] : int
+  (get-const (l (fn [x : int] : (Const int int) (mk-const x)) s)))
+
+;; set l b s = run-id (l (\_ -> Identity b) s)   -- f := Identity, capturing g.
+(defn set-px
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> int (f int)) Point (f Point)))
+     b : int s : Point] : Point
+  (run-id (l (fn [a : int] : (Identity int) (mk-id b)) s)))
+
+;; over l h s = run-id (l (\a -> Identity (h a)) s) -- f := Identity, capturing g.
+(defn over-px
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> int (f int)) Point (f Point)))
+     h : (-> int int) s : Point] : Point
+  (run-id (l (fn [a : int] : (Identity int) (mk-id (h a))) s)))
+
+(defn main [] : int
+  (let [p (make-struct Point :x 3 :y 4)]
+    (println (view-px point-x p))                              ; 3
+    (let [p2 (over-px point-x (fn [v : int] : int (* v 10)) p)]
+      (println (view-px point-x p2))                           ; 30
+      (println (.y p2)))                                       ; 4 (unfocused field preserved)
+    (let [p3 (set-px point-x 99 p)]
+      (println (view-px point-x p3))))                         ; 99
+  0)

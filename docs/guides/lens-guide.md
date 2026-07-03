@@ -92,11 +92,19 @@ and composition -- is expressible. `stdlib/lens.tur` nonetheless still ships the
 **profunctor-by-record** encoding (a `Lens` is a concrete record of a getter and a
 setter) as the default, for two reasons:
 
-- **General functors.** The working `view`/`set`/`over`/composition rely on
-  `Const`/`Identity` being *carrier-compatible* opaques (one int64 word), so
-  `(f a)` flows through the type-erased carrier. A functor whose `(f a)` is a wider
-  by-value aggregate is still the mode-B "No-go" -- now rejected up front with
-  **TUR-E0309** (rather than segfaulting), tracked as
+- **General functors.** Any `Functor` instance works -- not only
+  carrier-compatible opaques. `Const`/`Identity` as one-int64 opaques ride the
+  mode-B carrier directly. A functor whose `(f a)` is a WIDE by-value aggregate
+  (a `:copy` struct / flat-product ADT wider than one int64 word) now works too,
+  behind `--enable=vl-wide-functor`: codegen boxes the aggregate into the carrier
+  at each lens crossing and unboxes it back, across `view`/`set`/`over`, generic
+  focus inference, and composition (fixtures
+  `van-laarhoven-lens-wide-{identity,generic,compose,mixed}/`, each matching its
+  opaque twin's numbers). That box pays one heap alloc + copy + free per crossing
+  until the zero-overhead by-value HKT monomorphization lands (Path B of
+  [../upcoming/v1/van-laarhoven-wide-functor-carrier-plan.md](../upcoming/v1/van-laarhoven-wide-functor-carrier-plan.md)).
+  With the flag OFF a wide functor is still rejected up front with **TUR-E0309**
+  (never a segfault), tracked as
   [../reported/van-laarhoven-functor-must-be-int-carrier.md](../reported/van-laarhoven-functor-must-be-int-carrier.md).
 - **Maturity.** The van Laarhoven path runs behind the `--enable=forall-*` /
   `hkt-hrt` / `forall-dict-pass` experiments; the record encoding needs none of

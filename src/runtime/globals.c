@@ -208,6 +208,11 @@ bool g_opt_forall_dict_pass = false;
  * elaboration ((l x) yields a callable closure). */
 bool g_opt_hrt_curried_result = false;
 
+/* WF1 of van-laarhoven-wide-functor-carrier-plan: `vl-wide-functor` experiment
+ * enable bit.  Default off.  Gates the wide-by-value functor carrier bridge at
+ * the van Laarhoven lens boundary (and lifts TUR-E0309 when set). */
+bool g_opt_vl_wide_functor = false;
+
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signature registry (see globals.h).
  * --------------------------------------------------------------------------- */

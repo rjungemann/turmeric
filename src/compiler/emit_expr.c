@@ -1,6 +1,7 @@
 /* emit_expr.c -- expression-position C emission (emit_value and friends). */
 #include "emit_internal.h"
 #include "emit_cps.h"   /* cps-transform-plan: EX_CALLCC lowering */
+#include "globals.h"    /* g_opt_vl_wide_functor (WF3) */
 
 /* ACB: true when kind represents a concrete aggregate type (struct, ADT, or
  * type-application) that the carrier ABI stores as a heap pointer.  Used by
@@ -4315,6 +4316,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * erased TY_INT below would otherwise reconstruct it through a
                      * stale `tur_option_t *` carrier cast. */
                     !field_read_emits_byvalue_aggregate(ctx, emit_arg) &&
+                    /* WF3 (van-laarhoven-wide-functor-carrier-plan): a poly call
+                     * whose `(f S)` result is a wide by-value aggregate ALREADY
+                     * unboxed its carrier result to the concrete aggregate at the
+                     * poly-carrier boundary (emit_expr.c:2841).  Feeding that value
+                     * to a by-value spec param (a generic `run-id`/`get-const`
+                     * consuming `(f S)`) must NOT deref it a second time -- the
+                     * carrier-producer disjunct below would otherwise double-unbox
+                     * (`*(T*)(intptr_t)(<aggregate>)`, an aggregate used as an
+                     * integer).  Opaque functors are one word (no boundary unbox)
+                     * and never reach this, so gate on the flag. */
+                    !(g_opt_vl_wide_functor && emit_arg->kind == EX_CALL &&
+                      emit_arg->as.call_.is_poly_call &&
+                      emit_type_is_byvalue_adt(ctx, emit_arg->type)) &&
                     (emit_arg->type.kind == TY_INT ||
                      (type_kind_is_aggregate(emit_arg->type.kind) &&
                       type_uses_carrier_abi(emit_arg->type) &&

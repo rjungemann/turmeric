@@ -73,6 +73,13 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.27.0",                    /* expires_at (hard contract; release-cut enforced) */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_hrt_curried_result },
+    { "vl-wide-functor",
+      "van Laarhoven lens focusing through a WIDE by-value functor (a :copy struct / flat-product ADT wider than the one-int64 carrier), boxed across the lens crossings; lifts TUR-E0309 (Path A of van-laarhoven-wide-functor-carrier-plan)",
+      "docs/upcoming/v1/van-laarhoven-wide-functor-carrier-plan.md",
+      "0.26.1",                    /* introduced */
+      "0.29.0",                    /* expires_at (hard contract; release-cut enforced) */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_vl_wide_functor },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

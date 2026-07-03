@@ -527,6 +527,17 @@ struct FnDef {
      * of the baked representative instance. */
     Binding             *dict_clone_param;
     struct TypeClass    *dict_clone_class;
+    /* WF1/WF2 (van-laarhoven-wide-functor-carrier-plan): set on the
+     * functor-wrapping closure `g : (-> A (f A))` of a van Laarhoven lens when
+     * `f` is pinned to a WIDE by-value aggregate functor (a `:copy` struct /
+     * flat-product ADT wider than the one-int64 carrier word).  Such a closure
+     * would otherwise return its `(f A)` aggregate BY VALUE, but it crosses the
+     * mode-B poly carrier and is fat-dispatched (slot 0) by the generic
+     * dict-clone as an `int64_t`-returning thunk.  When set, emit gives the
+     * closure the int64 carrier return type and heap-boxes the aggregate result
+     * (the inverse box the lens's poly-carrier boundary already unboxes).  Gated
+     * on --enable=vl-wide-functor; never set for carrier-compatible functors. */
+    bool                 box_aggregate_result;
 };
 
 /* Phase 2: ExternC represents an (extern-c ...) declaration. */

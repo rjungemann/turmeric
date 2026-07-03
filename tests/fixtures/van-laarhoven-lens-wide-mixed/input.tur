@@ -1,0 +1,61 @@
+;; WF4 (van-laarhoven-wide-functor-carrier-plan): a carrier-compatible functor
+;; and a WIDE by-value functor COEXIST in one compiled program, driven through
+;; the same lens `point-x`.  `view` instantiates the lens at `Const` (opaque, one
+;; carrier word), `over-op` at `OId` (opaque `Identity`, one word -- rides the
+;; carrier untouched), and `over-wide` at `WId` (a two-word `:copy` struct -- its
+;; functor-wrapping `g` is boxed by the WF bridge).  The WF gating keys on each
+;; functor's layout, so the opaque path is byte-for-byte the mode-B carrier path
+;; while the wide path is boxed -- both dispatch through the same compiled lens.
+
+(defopaque Const [r a] :int)
+(defn mk-const [A] [x : A] : (Const A A) ```c return (int64_t)x; ```)
+(defn get-const [R A] [c : (Const R A)] : R ```c return (int64_t)c; ```)
+(definstance Functor [(Const r)]
+  (fmap [c g] (mk-const (get-const c))))
+
+;; OId a -- carrier-compatible: a one-int64 opaque `Identity`.
+(defopaque OId [a] :int)
+(defn mk-oid  [A] [x : A]        : (OId A) ```c return (int64_t)x; ```)
+(defn run-oid [A] [i : (OId A)]  : A       ```c return (int64_t)i; ```)
+(definstance Functor [OId]
+  (fmap [i g] (mk-oid (g (run-oid i)))))
+
+;; WId a -- WIDE: a two-word `:copy` struct `Identity`.
+(defstruct WId :copy [A] (wrapped : A) (tag : int))
+(defn mk-wid  [A] [x : A]        : (WId A) (make-struct WId :wrapped x :tag 0))
+(defn run-wid [A] [i : (WId A)]  : A       (.wrapped i))
+(definstance Functor [WId]
+  (fmap [i g] (mk-wid (g (run-wid i)))))
+
+(defstruct Point :copy :heap [x : int y : int])
+
+(defn point-x [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)
+  (fmap (g (.x s))
+        (fn [nx : int] : Point (make-struct Point :x nx :y (.y s)))))
+
+(defn view-px
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> int (f int)) Point (f Point)))
+     s : Point] : int
+  (get-const (l (fn [x : int] : (Const int int) (mk-const x)) s)))
+
+;; over through the OPAQUE (carrier-compatible) functor.
+(defn over-op
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> int (f int)) Point (f Point)))
+     h : (-> int int) s : Point] : Point
+  (run-oid (l (fn [a : int] : (OId int) (mk-oid (h a))) s)))
+
+;; over through the WIDE by-value functor.
+(defn over-wide
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> int (f int)) Point (f Point)))
+     h : (-> int int) s : Point] : Point
+  (run-wid (l (fn [a : int] : (WId int) (mk-wid (h a))) s)))
+
+(defn main [] : int
+  (let [p (make-struct Point :x 3 :y 4)]
+    (println (view-px point-x p))                                    ; 3
+    (let [po (over-op   point-x (fn [v : int] : int (+ v 100)) p)]   ; opaque functor
+      (println (view-px point-x po)))                                ; 103
+    (let [pw (over-wide point-x (fn [v : int] : int (* v 10)) p)]    ; wide functor
+      (println (view-px point-x pw))                                 ; 30
+      (println (.y pw))))                                            ; 4 (preserved)
+  0)

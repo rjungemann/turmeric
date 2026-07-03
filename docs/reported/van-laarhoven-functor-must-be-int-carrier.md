@@ -8,16 +8,22 @@ severity: MEDIUM. Expressiveness gap in the mode-B forall / HKT surface. The
   a wider by-value aggregate is the mode-B "No-go" that the lens guide already
   flags, and it forces every VL fixture to redeclare `Const`/`Identity` as
   `defopaque ... :int`.
-status: OPEN (diagnostic landed 2026-07-03). Filed 2026-07-02. The restriction
-  is documented in `docs/guides/lens-guide.md:95-98` as a known mode-B
-  limitation; this report captures it as a tracked expressiveness gap so it
+status: OPEN on the default path; Path A landed behind `--enable=vl-wide-functor`
+  (2026-07-03). Filed 2026-07-02. Diagnostic (TUR-E0309) landed 2026-07-03.
+  This report captures the restriction as a tracked expressiveness gap so it
   doesn't get lost behind the "van Laarhoven works now" framing in the guide.
-  The *silent* half of the gap is now closed: a wide by-value aggregate functor
-  at the lens boundary is rejected up front with **TUR-E0309** instead of
-  type-checking clean and then segfaulting / mis-codegening (see "Diagnostic
-  landed" below). The underlying expressiveness gap -- actually *supporting* a
-  wide functor -- remains open pending the monomorphization / wider-carrier
-  work, so this stays in `docs/reported/`.
+  The *silent* half of the gap is closed: without the flag a wide by-value
+  aggregate functor at the lens boundary is rejected up front with **TUR-E0309**
+  instead of type-checking clean and then segfaulting / mis-codegening (see
+  "Diagnostic landed" below). The *expressiveness* half is now closed behind an
+  experiment: Path A (WF1-WF4 of
+  `docs/upcoming/v1/van-laarhoven-wide-functor-carrier-plan.md`) boxes a wide
+  by-value functor across the lens crossings, so `view`/`set`/`over`, generic
+  focus inference, and composition all work with a `:copy`-struct functor under
+  `--enable=vl-wide-functor` (fixtures `van-laarhoven-lens-wide-*`). The report
+  stays in `docs/reported/` because the DEFAULT path (flag off) still errors and
+  the flag has not graduated -- archive it to `docs/archive/` once
+  `vl-wide-functor` is default-on / graduated (or once Path B retires the box).
 ---
 
 # Van Laarhoven functors are restricted to one-int64 carriers
@@ -154,6 +160,30 @@ is gated. Implementation: the re-discharge loop in `elab_poly_call`
 The remaining work below (actually *threading* a wide functor) is unchanged
 by this -- TUR-E0309 turns a segfault into a clear "not supported yet," it
 does not lift the restriction.
+
+## Path A landed behind `--enable=vl-wide-functor` (2026-07-03)
+
+The expressiveness gap is now closed behind an experiment flag. Path A
+(WF1-WF4 of
+[../upcoming/v1/van-laarhoven-wide-functor-carrier-plan.md](../upcoming/v1/van-laarhoven-wide-functor-carrier-plan.md))
+threads a wide by-value functor through the lens boundary by boxing the
+`(f a)` aggregate into the mode-B int64 carrier at each crossing and unboxing
+it back -- reusing the direct-shape MB2.5 bridge. The single load-bearing
+crossing turned out to be the functor-wrapping closure `g : (-> A (f A))`:
+under `--enable=vl-wide-functor` its FnDef is flagged so emit gives it the
+int64 carrier return and heap-boxes the aggregate; the generic dict-clone then
+fat-dispatches it int64-in/int64-out and the poly-carrier boundary unboxes the
+lens result. A second fix removed a double-unbox on the generic/composed result
+path. With the flag, `view`/`set`/`over`, generic focus inference, and
+composition all work with a `:copy`-struct functor (fixtures
+`tests/fixtures/van-laarhoven-lens-wide-{identity,capture,generic,compose,mixed}/`),
+matching their opaque twins' numbers.
+
+This is an experiment, not a graduation: with the flag OFF, TUR-E0309 still
+fires (gated on `!g_opt_vl_wide_functor`), so the default path stays a clean
+error. The wide path pays one heap box + copy + free per crossing until Path B
+(by-value HKT monomorphization) retires the carrier round-trip. Archive this
+report only once `vl-wide-functor` is default-on / graduated.
 
 ## Root cause (direction)
 
