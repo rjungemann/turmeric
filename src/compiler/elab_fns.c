@@ -331,9 +331,18 @@ static void fn_collect_sig_tyvars(Elab *e, const Type *t) {
             if (t->as.tyvar_.name) {
                 for (uint8_t i = 0; i < e->n_sig_tyvars; i++) {
                     if (e->sig_tyvars[i] &&
-                        strcmp(e->sig_tyvars[i], t->as.tyvar_.name) == 0) return;
+                        strcmp(e->sig_tyvars[i], t->as.tyvar_.name) == 0) {
+                        /* van-laarhoven-lens-composition: a later occurrence with
+                         * a constructor kind (e.g. `f` heading `(f int)`) upgrades
+                         * a kind-* record so a nested lambda recovers `* -> *`. */
+                        if (t->hkt_kind != KIND_STAR &&
+                            e->sig_tyvar_kinds[i] == KIND_STAR)
+                            e->sig_tyvar_kinds[i] = t->hkt_kind;
+                        return;
+                    }
                 }
                 if (e->n_sig_tyvars < 32) {
+                    e->sig_tyvar_kinds[e->n_sig_tyvars] = t->hkt_kind;
                     e->sig_tyvars[e->n_sig_tyvars++] = t->as.tyvar_.name;
                 }
             }

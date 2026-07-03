@@ -499,6 +499,13 @@ typedef struct Elab {
      * match arm whose result type is a named type variable NOT in this set is
      * a skolem that escapes the arm into a concrete return position. */
     const char *sig_tyvars[32];
+    /* van-laarhoven-lens-composition: the constructor kind (hkt_kind) of each
+     * `sig_tyvars` entry, recorded in lockstep.  Lets a free type variable in a
+     * NESTED lambda's type annotation recover the enclosing signature's
+     * higher-kinded quantifier (e.g. a composed lens body's `(f Point)` where
+     * `f : * -> *` is bound by the outer rank-2 fn) instead of defaulting to
+     * kind `*` and tripping TUR-E0012. */
+    Kind         sig_tyvar_kinds[32];
     uint8_t      n_sig_tyvars;
     /* Phase G3: coerce special form */
     const Symbol *sym_coerce;

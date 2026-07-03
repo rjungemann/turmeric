@@ -677,6 +677,22 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
         Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
         *t = type_tyvar_named(sym->name);
         t->copy_kind = CK_MOVE;
+        /* van-laarhoven-lens-composition: this bare name is not a LOCAL type
+         * param, but it may be a higher-kinded type variable quantified by an
+         * ENCLOSING fn signature -- e.g. a composed lens body's inner lambda
+         * `(fn [p : Point] : (f Point) ...)` where `f : * -> *` is bound by the
+         * outer rank-2 fn.  The enclosing signature already recorded `f`'s
+         * constructor kind in `sig_tyvar_kinds` (before the body was elaborated),
+         * so recover it here; otherwise `(f Point)` would apply a kind-* head and
+         * trip TUR-E0012.  A genuinely free name keeps the kind-* default. */
+        for (uint8_t si = 0; si < e->n_sig_tyvars; si++) {
+            if (e->sig_tyvars[si] &&
+                strcmp(e->sig_tyvars[si], sym->name) == 0) {
+                if (e->sig_tyvar_kinds[si] != KIND_STAR)
+                    t->hkt_kind = e->sig_tyvar_kinds[si];
+                break;
+            }
+        }
         return t;
     } else if (form->tag == F_LIST) {
         /* Variadic HKT rows (Layer 5): type-level row algebra.

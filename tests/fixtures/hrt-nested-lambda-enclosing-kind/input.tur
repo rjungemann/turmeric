@@ -1,0 +1,41 @@
+;; van-laarhoven-lens-composition (kind-recovery slice): a nested lambda inside a
+;; higher-kinded rank-2 body may annotate its type with the ENCLOSING signature's
+;; higher-kinded type variable.  Here `h` is annotated `(f int)`, where `f : * ->
+;; *` is bound by the enclosing `point-x`'s rank-2 forall (`[^f] [^Functor f ...]`).
+;;
+;; Before the fix, the inner lambda's `(f int)` annotation resolved `f` as a fresh
+;; kind-`*` type variable (nested lambdas only see their own local type params),
+;; so applying it as `(f int)` tripped TUR-E0012 ("cannot apply a type of kind '*'
+;; as a type constructor").  The enclosing signature records each quantifier's
+;; constructor kind (sig_tyvar_kinds), so the nested annotation now recovers
+;; `f : * -> *` and kind-checks.
+;;
+;; `h` is used LOCALLY (it is not forwarded into another constrained rank-2 fn),
+;; so this exercises only the kind recovery.  Forwarding a `(f X)`-typed value
+;; into another constrained rank-2 fn -- full van Laarhoven lens COMPOSITION --
+;; additionally needs dictionary forwarding and is still open; see
+;; docs/reported/van-laarhoven-lens-composition.md.
+
+(defopaque Const [r a] :int)
+(defn mk-const [A] [x : A] : (Const A A) ```c return (int64_t)x; ```)
+(defn get-const [R A] [c : (Const R A)] : R ```c return (int64_t)c; ```)
+(definstance Functor [(Const r)]
+  (fmap [c g] (mk-const (get-const c))))
+
+(defstruct Point :copy :heap [x : int y : int])
+
+(defn point-x [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)
+  ;; h : int -> (f int) -- the return annotation names the enclosing rank-2 `f`.
+  (let [h (fn [n : int] : (f int) (g n))]
+    (fmap (h (.x s))
+          (fn [nx : int] : Point (make-struct Point :x nx :y (.y s))))))
+
+(defn view [S A]
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> A (f A)) S (f S)))
+     s : S] : A
+  (get-const (l (fn [x : A] : (Const A A) (mk-const x)) s)))
+
+(defn main [] : int
+  (let [p (make-struct Point :x 3 :y 4)]
+    (println (view point-x p)))   ; 3
+  0)

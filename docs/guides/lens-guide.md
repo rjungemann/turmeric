@@ -84,10 +84,14 @@ and a setter -- because two things the record encoding gets for free are still
 missing from the van Laarhoven form here:
 
 - **Composition.** Optic composition is the whole point of the van Laarhoven
-  form, but a composed lens whose inner closure returns `(f B)` for the enclosing
-  rank-2 `f` currently fails to kind-check (TUR-E0012: `f` cannot be applied as a
-  constructor inside the composed body). Until that lands, van Laarhoven optics
-  do not compose with ordinary function composition either.
+  form, and it does not work yet. A composed lens is a constrained rank-2 body
+  that calls another constrained rank-2 lens forwarding its own abstract functor
+  `f`. The kind-checking half now works (a nested `(f B)` annotation recovers the
+  enclosing `f : * -> *`), but the call to the inner lens still fails: discharging
+  its `Functor f` obligation needs the enclosing function's dictionary to be
+  *forwarded* (the pin is an abstract `f`, not a ground type), which the mode-B
+  machinery currently defers. See
+  [docs/reported/van-laarhoven-lens-composition.md](../reported/van-laarhoven-lens-composition.md).
 - **General functors.** The working `view`/`set`/`over` rely on `Const`/`Identity`
   being *carrier-compatible* opaques (one int64 word), so `(f a)` flows through
   the type-erased carrier. A functor whose `(f a)` is a wider by-value aggregate
@@ -116,9 +120,11 @@ hand at concrete, copyable whole types:
 ```
 
 where the whole types (`Line`, `Point`) are `:copy` so `l`/`s` can be used more
-than once. When van Laarhoven composition kind-checks, the van Laarhoven form
-(and free composition) becomes a real alternative; until then, hand-composition
-is the idiom.
+than once. When van Laarhoven composition lands (it needs dictionary forwarding
+for the nested constrained rank-2 call --
+[report](../reported/van-laarhoven-lens-composition.md)), the van Laarhoven form
+and free composition become a real alternative; until then, hand-composition is
+the idiom.
 
 ## Related
 
