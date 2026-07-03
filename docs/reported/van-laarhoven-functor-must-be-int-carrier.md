@@ -8,10 +8,16 @@ severity: MEDIUM. Expressiveness gap in the mode-B forall / HKT surface. The
   a wider by-value aggregate is the mode-B "No-go" that the lens guide already
   flags, and it forces every VL fixture to redeclare `Const`/`Identity` as
   `defopaque ... :int`.
-status: OPEN. Filed 2026-07-02. The restriction is documented in
-  `docs/guides/lens-guide.md:95-98` as a known mode-B limitation; this report
-  captures it as a tracked expressiveness gap so it doesn't get lost behind
-  the "van Laarhoven works now" framing in the guide.
+status: OPEN (diagnostic landed 2026-07-03). Filed 2026-07-02. The restriction
+  is documented in `docs/guides/lens-guide.md:95-98` as a known mode-B
+  limitation; this report captures it as a tracked expressiveness gap so it
+  doesn't get lost behind the "van Laarhoven works now" framing in the guide.
+  The *silent* half of the gap is now closed: a wide by-value aggregate functor
+  at the lens boundary is rejected up front with **TUR-E0309** instead of
+  type-checking clean and then segfaulting / mis-codegening (see "Diagnostic
+  landed" below). The underlying expressiveness gap -- actually *supporting* a
+  wide functor -- remains open pending the monomorphization / wider-carrier
+  work, so this stays in `docs/reported/`.
 ---
 
 # Van Laarhoven functors are restricted to one-int64 carriers
@@ -108,15 +114,46 @@ Current behavior with
   abstract-`f` boundary, but the monomorphized call site wants a
   struct-pointer-shaped value.
 
-So the gap is **silent at the type layer** -- no `TUR-E...` diagnostic
-points at the functor, and under the suite's default CC flags the build
-succeeds and produces a miscompiled binary. That is worse than a hard
-error: the same program is rejected on a strict clang and mis-runs on a
-lenient one. A diagnostic that rejects wide by-value functors at the
-mode-B boundary (or at least surfaces a `TUR-W...` warning) is a smaller
-independent fix worth landing before the full monomorphization work --
-today the only signal a user gets that they've hit this restriction is a
-segfault or a `-Wint-conversion` line from the host C compiler.
+So the gap **used to be silent at the type layer** -- no `TUR-E...`
+diagnostic pointed at the functor, and under the suite's default CC flags
+the build succeeded and produced a miscompiled binary. That is worse than a
+hard error: the same program was rejected on a strict clang and mis-ran on a
+lenient one. A diagnostic that rejects wide by-value functors at the mode-B
+boundary was flagged here as a smaller independent fix worth landing before
+the full monomorphization work -- and it has now landed (see below).
+
+## Diagnostic landed (2026-07-03)
+
+The silent-miscompile half is fixed. When a van Laarhoven lens is invoked
+and its abstract functor `f` is pinned -- through the nested
+functor-wrapping function `g : (-> A (f A))` -- to a **wide by-value
+aggregate** (a non-opaque, non-`:heap` single-variant flat product: a
+`:copy` struct or record ADT wider than the one int64 carrier word), the
+elaborator now emits **TUR-E0309** at the invocation site instead of
+accepting the program:
+
+```
+error: van Laarhoven functor 'Identity' is a wide by-value aggregate, but
+the mode-B carrier for the constraint on 'f' is a single int64 word -- a
+functor whose '(f a)' does not fit in one word cannot be threaded through
+the abstract-functor boundary of a rank-2 lens.  Wrap it in a one-word
+carrier (e.g. 'defopaque Identity [a] :int') or focus through a
+carrier-compatible functor (TUR-E0309)
+```
+
+Carrier-compatible functors are unaffected: an opaque (`is_opaque`, a named
+int64 -- `Const`/`Identity` as the working fixtures declare them) and a
+`:heap` def (a typed pointer) are both one carrier word and pass. The
+direct-argument MB2 shape (`x : (f a)`, not a lens) still supports aggregate
+functors via the MB2.5 carrier round-trip -- only the nested-fn (lens) pin
+is gated. Implementation: the re-discharge loop in `elab_poly_call`
+(`src/compiler/elab_call.c`), keyed on the nested-fn pin plus
+`adt_is_flat_product && !is_opaque && !is_heap`. Fixture:
+`tests/fixtures/errors/van-laarhoven-wide-byvalue-functor/`.
+
+The remaining work below (actually *threading* a wide functor) is unchanged
+by this -- TUR-E0309 turns a segfault into a clear "not supported yet," it
+does not lift the restriction.
 
 ## Root cause (direction)
 
