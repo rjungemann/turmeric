@@ -1412,22 +1412,32 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         if (is_main && result_kind == TY_INT) {
             buf_printf(file, "return (int)%s;\n", ret_val);
         } else if (fd->box_aggregate_result) {
-            /* WF1/WF2 (van-laarhoven-wide-functor-carrier-plan): the functor-
-             * wrapping closure's body tail produces its `(f A)` aggregate BY VALUE
-             * (e.g. `mk_id__spec(...)` -> `tur_adt_Identity__int`).  Heap-box it
-             * and return the pointer as the int64 carrier -- the inverse of the
-             * poly-carrier boundary unbox the lens caller already emits (mirrors
-             * emit_agg_box).  The concrete aggregate type comes from the closure's
-             * declared result full type. */
-            Type rt = e->type.as.fn.result_full_type
-                ? emit_resolve_type(ctx, *e->type.as.fn.result_full_type)
-                : emit_resolve_type(ctx, fd->body->type);
-            const char *scty = emit_type_c_name(ctx, rt);
-            buf_printf(file,
-                "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
-                "*__tur_ret_p = %s; "
-                "return (int64_t)(intptr_t)__tur_ret_p; }\n",
-                scty, scty, scty, ret_val);
+            /* WF1/WF2/WF3 (van-laarhoven-wide-functor-carrier-plan): a functor-
+             * wrapping closure `g` for a wide-functor lens must return the int64
+             * carrier (the generic dict-clone fat-dispatches it int64-in/int64-out
+             * and the lens caller unboxes at the poly-carrier boundary).  Its body
+             * tail comes in two shapes:
+             *   - a by-value aggregate (`mk_id__spec(...)` -> `tur_adt_Identity__int`)
+             *     in the concrete / ABI-specialized emit -- heap-box it (the
+             *     inverse of the caller's unbox, mirroring emit_agg_box); or
+             *   - the int64 carrier already (`mk_hyid(...)`) in the GENERIC base
+             *     emit (the functor is abstract there) -- return it directly, or
+             *     malloc-boxing a carrier word would double-box. */
+            if (fd->body && fn_body_tail_emits_byvalue_carrier_abi(ctx, fd->body)) {
+                Type src = fn_body_tail_byvalue_carrier_type(ctx, fd->body);
+                if (src.kind == TY_UNKNOWN)
+                    src = e->type.as.fn.result_full_type
+                        ? emit_resolve_type(ctx, *e->type.as.fn.result_full_type)
+                        : emit_resolve_type(ctx, fd->body->type);
+                const char *scty = emit_type_c_name(ctx, src);
+                buf_printf(file,
+                    "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
+                    "*__tur_ret_p = %s; "
+                    "return (int64_t)(intptr_t)__tur_ret_p; }\n",
+                    scty, scty, scty, ret_val);
+            } else {
+                buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
+            }
         } else if (fd->dict_clone_class) {
             /* MB2.5 (constrained-hkt-forall-mode-b-plan): a dict-clone wrapper's
              * body is a single dispatch through the carrier dict, which already

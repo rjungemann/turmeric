@@ -1,0 +1,62 @@
+;; WF3 (van-laarhoven-wide-functor-carrier-plan): the fully GENERIC van
+;; Laarhoven `view`/`set`/`over` (each carrying its own `[S A]` type params, the
+;; focus inferred from the lens `l`) focusing through a WIDE by-value functor.
+;;
+;; This is the shape that exposes the lens `(f S)` RESULT crossing (WF3): unlike
+;; the per-focus `concrete` combinators, the generic `set`/`over` are themselves
+;; ABI-specialized, and the functor-wrapping `g` is specialized to return
+;; `(Identity A)` by value.  Two things must hold for the wide functor:
+;;   - the poly-carrier boundary unboxes the clone's `(f S)` result exactly ONCE
+;;     (a second carrier->concrete deref on the by-value spec arg would treat an
+;;     aggregate as an integer -- the WF3 double-unbox this slice fixes); and
+;;   - the ABI-specialized `g` boxes its by-value `(Identity A)` result into the
+;;     carrier (keyed on the FUNCTOR layout, not the focus `A` -- Open Question
+;;     #3), so the generic dict-clone's int64 fat-dispatch reads a valid word.
+;; view/set/over return the same 3/30/4/99 as the opaque generic twin.
+
+(defopaque Const [r a] :int)
+(defn mk-const [A] [x : A] : (Const A A) ```c return (int64_t)x; ```)
+(defn get-const [R A] [c : (Const R A)] : R ```c return (int64_t)c; ```)
+(definstance Functor [(Const r)]
+  (fmap [c g] (mk-const (get-const c))))
+
+;; Identity a -- WIDE: a two-word `:copy` struct.
+(defstruct Identity :copy [A] (wrapped : A) (tag : int))
+(defn mk-id  [A] [x : A]            : (Identity A) (make-struct Identity :wrapped x :tag 0))
+(defn run-id [A] [i : (Identity A)] : A            (.wrapped i))
+(definstance Functor [Identity]
+  (fmap [i g] (mk-id (g (run-id i)))))
+
+(defstruct Point :copy :heap [x : int y : int])
+
+(defn point-x [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)
+  (fmap (g (.x s))
+        (fn [nx : int] : Point (make-struct Point :x nx :y (.y s)))))
+
+;; GENERIC view : the focus type A is inferred from the lens `l`.
+(defn view [S A]
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> A (f A)) S (f S)))
+     s : S] : A
+  (get-const (l (fn [x : A] : (Const A A) (mk-const x)) s)))
+
+;; GENERIC set : f := Identity (WIDE), capturing g.
+(defn set [S A]
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> A (f A)) S (f S)))
+     b : A s : S] : S
+  (run-id (l (fn [a : A] : (Identity A) (mk-id b)) s)))
+
+;; GENERIC over : f := Identity (WIDE), capturing g.
+(defn over [S A]
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> A (f A)) S (f S)))
+     h : (-> A A) s : S] : S
+  (run-id (l (fn [a : A] : (Identity A) (mk-id (h a))) s)))
+
+(defn main [] : int
+  (let [p (make-struct Point :x 3 :y 4)]
+    (println (view point-x p))                              ; 3
+    (let [p2 (over point-x (fn [v : int] : int (* v 10)) p)]
+      (println (view point-x p2))                           ; 30
+      (println (.y p2)))                                    ; 4 (unfocused field preserved)
+    (let [p3 (set point-x 99 p)]
+      (println (view point-x p3))))                         ; 99
+  0)

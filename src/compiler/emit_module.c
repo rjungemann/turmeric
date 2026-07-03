@@ -4817,7 +4817,14 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
      * this override-skip, a `Dec[int]` spec returning `(Result int cstr)`
      * still lowers to `int64_t`, and the caller's bridge has to unbox — the
      * very bridge crossing Path A is trying to retire. */
-    if (g_m7_hkt_enabled && is_instance_method &&
+    if (spec->fn->box_aggregate_result) {
+        /* WF1/WF2/WF3 (van-laarhoven-wide-functor-carrier-plan): an
+         * ABI-specialized functor-wrapping closure `g` returns its wide `(f A)`
+         * aggregate boxed into the int64 carrier -- mirror emit_fns.c's
+         * box_aggregate_result branch so the spec forward decl agrees with the
+         * definition (which heap-boxes the by-value spec result). */
+        buf_puts(out, "int64_t");
+    } else if (g_m7_hkt_enabled && is_instance_method &&
         spec->result_type.kind == TY_APP &&
         !type_is_heap_struct(spec->result_type) &&
         type_has_concrete_codegen_layout(&spec->result_type)) {

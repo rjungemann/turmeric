@@ -6212,21 +6212,18 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                     continue;
                 const Type *grf = gfd->binding->type.as.fn.result_full_type;
                 if (!grf) continue;
-                /* The concrete `(f A)` result must be a wide by-value aggregate:
+                /* The `(f A)` result must be a wide by-value aggregate functor:
                  * a non-opaque, non-:heap flat-product ADT (matches the E0309
-                 * gate's functor test, and the direct-shape MB2.5 predicate). */
-                bool wide = false;
-                if (grf->kind == TY_APP) {
-                    AdtDef *ad = type_adt_app_def(grf);
-                    wide = ad && !ad->is_opaque && !ad->is_heap &&
-                           adt_is_flat_product(ad) &&
-                           adt_app_is_byvalue_product(*grf);
-                } else if (grf->kind == TY_ADT && grf->as.adt_.def) {
-                    const AdtDef *ad = grf->as.adt_.def;
-                    wide = !ad->is_opaque && !ad->is_heap &&
-                           adt_is_flat_product(ad) &&
-                           adt_is_byvalue_product(ad);
-                }
+                 * gate's functor test).  Key on the FUNCTOR def's layout, NOT on
+                 * the focus `A` being concrete -- in the generic `set`/`over`
+                 * shape the closure result is `(Identity A)` with `A` still a
+                 * type variable, but its box-ness is decided by `Identity`, not
+                 * by `A` (plan Open Question #3).  A carrier-compatible functor
+                 * (opaque `Const`/`Identity`, `:heap`) is one word and skips. */
+                const AdtDef *ad = (grf->kind == TY_APP) ? type_adt_app_def(grf)
+                    : (grf->kind == TY_ADT ? grf->as.adt_.def : NULL);
+                bool wide = ad && !ad->is_opaque && !ad->is_heap &&
+                            adt_is_flat_product(ad);
                 if (wide) {
                     gfd->box_aggregate_result = true;
                     experiment_warn_if_used("vl-wide-functor");
