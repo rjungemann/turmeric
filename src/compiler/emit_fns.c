@@ -471,7 +471,14 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         /* structdef-retirement DS-C: emit_carrier_return_override is dead (a
          * method body is never TY_STRUCT), so the `carrier_override.kind ==
          * TY_STRUCT` branch that used to sit here is removed. */
-        if (fd->dict_clone_class) {
+        if (fd->box_aggregate_result) {
+            /* WF1/WF2 (van-laarhoven-wide-functor-carrier-plan): this functor-
+             * wrapping closure `g` returns its wide `(f A)` aggregate boxed into
+             * the int64 carrier (the box the lens's poly-carrier boundary
+             * unboxes), so the generic dict-clone's int64-returning fat-dispatch
+             * of `g` reads a valid carrier word. */
+            current_fn_ret_ctype_eff = "int64_t";
+        } else if (fd->dict_clone_class) {
             /* MB2.5 (constrained-hkt-forall-mode-b-plan): a dict-clone wrapper
              * dispatches through the carrier dict and lives behind the poly
              * carrier, so its result is ALWAYS the int64 carrier -- even when the
@@ -675,6 +682,12 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
          * TY_STRUCT` branch below are removed. */
         if (is_main) {
             buf_puts(file, "int");  /* C main must always return int */
+        } else if (fd->box_aggregate_result) {
+            /* WF1/WF2 (van-laarhoven-wide-functor-carrier-plan): a functor-
+             * wrapping closure `g` boxes its wide `(f A)` aggregate into the int64
+             * carrier (keep in lockstep with current_fn_ret_ctype + the body-side
+             * return-boxing below). */
+            buf_puts(file, "int64_t");
         } else if (fd->dict_clone_class) {
             /* MB2.5 (constrained-hkt-forall-mode-b-plan): a dict-clone wrapper
              * returns the int64 carrier (see the body-side + current_fn_ret_ctype
@@ -1320,7 +1333,12 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             /* structdef-retirement DS-C: emit_carrier_return_override is dead
              * (method body never TY_STRUCT); its `carrier_override.kind ==
              * TY_STRUCT` branch below is removed. */
-            if (fd->dict_clone_class) {
+            if (fd->box_aggregate_result) {
+                /* WF1/WF2 (van-laarhoven-wide-functor-carrier-plan): the closure
+                 * returns its wide `(f A)` aggregate boxed into the int64 carrier;
+                 * the explicit heap-spill return below performs the box. */
+                ret_ctype = "int64_t";
+            } else if (fd->dict_clone_class) {
                 /* MB2.5: keep the return ret_ctype in lockstep with the signature
                  * override above -- a dict-clone wrapper returns the int64 carrier. */
                 ret_ctype = "int64_t";
@@ -1393,6 +1411,23 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         /* Special case: if this is main and it returns int64_t, cast to int */
         if (is_main && result_kind == TY_INT) {
             buf_printf(file, "return (int)%s;\n", ret_val);
+        } else if (fd->box_aggregate_result) {
+            /* WF1/WF2 (van-laarhoven-wide-functor-carrier-plan): the functor-
+             * wrapping closure's body tail produces its `(f A)` aggregate BY VALUE
+             * (e.g. `mk_id__spec(...)` -> `tur_adt_Identity__int`).  Heap-box it
+             * and return the pointer as the int64 carrier -- the inverse of the
+             * poly-carrier boundary unbox the lens caller already emits (mirrors
+             * emit_agg_box).  The concrete aggregate type comes from the closure's
+             * declared result full type. */
+            Type rt = e->type.as.fn.result_full_type
+                ? emit_resolve_type(ctx, *e->type.as.fn.result_full_type)
+                : emit_resolve_type(ctx, fd->body->type);
+            const char *scty = emit_type_c_name(ctx, rt);
+            buf_printf(file,
+                "{ %s *__tur_ret_p = (%s *)malloc(sizeof(%s)); "
+                "*__tur_ret_p = %s; "
+                "return (int64_t)(intptr_t)__tur_ret_p; }\n",
+                scty, scty, scty, ret_val);
         } else if (fd->dict_clone_class) {
             /* MB2.5 (constrained-hkt-forall-mode-b-plan): a dict-clone wrapper's
              * body is a single dispatch through the carrier dict, which already

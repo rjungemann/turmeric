@@ -201,6 +201,17 @@ extern bool g_opt_forall_dict_pass;
  * Laarhoven optic compose by ordinary function application. */
 extern bool g_opt_hrt_curried_result;
 
+/* WF1 of van-laarhoven-wide-functor-carrier-plan: enable bit for the
+ * `vl-wide-functor` experiment.  When set, a van Laarhoven lens may focus
+ * through a functor whose `(f a)` is a WIDE by-value aggregate (a `:copy`
+ * struct / single-variant flat-product ADT wider than the one-int64 carrier
+ * word).  Codegen boxes the aggregate into the carrier at each lens crossing
+ * (the dict-dispatched `fmap`, the fat-boxed functor-wrapping `g`, and the
+ * lens result) and unboxes it back on the way out, mirroring the direct-shape
+ * MB2.5 bridge.  When the flag is OFF such a functor is still rejected up front
+ * with TUR-E0309 (never a segfault). */
+extern bool g_opt_vl_wide_functor;
+
 
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signatures

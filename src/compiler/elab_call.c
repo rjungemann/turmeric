@@ -5989,9 +5989,18 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                  * def (a typed pointer) are BOTH one carrier word and pass; the
                  * direct-argument MB2 shape supports aggregate `(f a)` (MB2.5),
                  * so only the nested-fn (lens) pin is gated. */
+                /* WF1 (van-laarhoven-wide-functor-carrier-plan): under
+                 * --enable=vl-wide-functor the wide-by-value functor is boxed
+                 * across the lens crossings (Path A), so the gate is lifted; the
+                 * lifecycle warning fires at that point.  With the flag OFF the
+                 * gate stays, keeping the default path a clean error rather than
+                 * a segfault. */
                 if (nested_functor_pin && concrete.kind == TY_ADT) {
                     const AdtDef *fd = concrete.as.adt_.def;
                     if (fd && !fd->is_opaque && !fd->is_heap &&
+                        adt_is_flat_product(fd) && g_opt_vl_wide_functor) {
+                        experiment_warn_if_used("vl-wide-functor");
+                    } else if (fd && !fd->is_opaque && !fd->is_heap &&
                         adt_is_flat_product(fd)) {
                         diag_emit(DIAG_ERROR, call->span,
                                   "van Laarhoven functor '%s' is a wide "
@@ -6166,6 +6175,57 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                                           TYPE_PTR_VOID, args[i]->span);
                     shim->as.fn_to_fat_.inner = args[i];
                     args[i] = shim;
+                }
+            }
+        }
+    }
+
+    /* WF1/WF2 (van-laarhoven-wide-functor-carrier-plan): when a functor-wrapping
+     * fn argument `g : (-> A (f A))` is passed to a van Laarhoven lens whose `f`
+     * is a WIDE by-value aggregate functor, its `(f A)` result would be returned
+     * by value -- but `g` crosses the mode-B poly carrier and is fat-dispatched
+     * (slot 0) by the generic dict-clone as an int64-returning thunk.  Flag the
+     * closure/fn FnDef so emit gives it the int64 carrier return type and
+     * heap-boxes the aggregate (the box the lens's poly-carrier boundary already
+     * unboxes).  Gated on --enable=vl-wide-functor; carrier-compatible functors
+     * (opaque `Const`/`Identity`, `:heap`) are one word and skip this. */
+    if (g_opt_vl_wide_functor && poly && poly->kind == TY_FORALL) {
+        const Type *pbody = poly->as.forall_.body;
+        if (pbody && pbody->kind == TY_FN && pbody->as.fn.arg_full_types) {
+            for (uint32_t i = 0; i < n_args &&
+                 i < (uint32_t)pbody->as.fn.arity; i++) {
+                const Type *aft = pbody->as.fn.arg_full_types[i];
+                if (!aft || aft->kind != TY_FN) continue;
+                /* Reach the closure/fn FnDef behind the (possibly boxed) arg. */
+                Expr *a = args[i];
+                while (a && a->kind == EX_FN_TO_FAT) a = a->as.fn_to_fat_.inner;
+                FnDef *gfd = NULL;
+                if (a && a->kind == EX_CLOSURE && a->as.closure_.closure)
+                    gfd = a->as.closure_.closure->fn;
+                else if (a && a->kind == EX_VAR && a->as.var.binding)
+                    gfd = a->as.var.binding->source_fn_def;
+                if (!gfd || !gfd->binding || gfd->binding->type.kind != TY_FN)
+                    continue;
+                const Type *grf = gfd->binding->type.as.fn.result_full_type;
+                if (!grf) continue;
+                /* The concrete `(f A)` result must be a wide by-value aggregate:
+                 * a non-opaque, non-:heap flat-product ADT (matches the E0309
+                 * gate's functor test, and the direct-shape MB2.5 predicate). */
+                bool wide = false;
+                if (grf->kind == TY_APP) {
+                    AdtDef *ad = type_adt_app_def(grf);
+                    wide = ad && !ad->is_opaque && !ad->is_heap &&
+                           adt_is_flat_product(ad) &&
+                           adt_app_is_byvalue_product(*grf);
+                } else if (grf->kind == TY_ADT && grf->as.adt_.def) {
+                    const AdtDef *ad = grf->as.adt_.def;
+                    wide = !ad->is_opaque && !ad->is_heap &&
+                           adt_is_flat_product(ad) &&
+                           adt_is_byvalue_product(ad);
+                }
+                if (wide) {
+                    gfd->box_aggregate_result = true;
+                    experiment_warn_if_used("vl-wide-functor");
                 }
             }
         }

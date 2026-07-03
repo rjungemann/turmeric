@@ -4887,7 +4887,13 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
              * structdef-retirement DS-C: emit_carrier_return_override is dead (a
              * method body is never TY_STRUCT), so the `carrier_override.kind ==
              * TY_STRUCT` branch is removed, matching emit_fns.c. */
-            if (fd->dict_clone_class) {
+            if (fd->box_aggregate_result) {
+                /* WF1/WF2 (van-laarhoven-wide-functor-carrier-plan): a functor-
+                 * wrapping closure `g` boxes its wide `(f A)` aggregate into the
+                 * int64 carrier (mirror emit_fns.c's box_aggregate_result branch
+                 * in the header and body-return paths). */
+                buf_puts(out, "int64_t");
+            } else if (fd->dict_clone_class) {
                 /* MB2.5 (constrained-hkt-forall-mode-b-plan): a dict-clone wrapper
                  * returns the int64 carrier (mirror emit_fns.c's dict_clone_class
                  * branch in both the header and body-return paths). */
