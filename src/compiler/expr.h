@@ -284,6 +284,16 @@ struct Binding {
      * ambiguous over the erased int64 carrier type.  NULL for ordinary
      * bindings.  See docs/archive/existential-open-witness-dispatch.md. */
     const struct Type  *exists_open_type;
+    /* van-laarhoven-lens-composition (Gap B2): a synthetic binding standing for
+     * the ENCLOSING constrained rank-2 fn's own `Functor f` dictionary.  Emitting
+     * a reference to it yields the enclosing dict-clone's dict PARAMETER
+     * (ctx->dict_dispatch_param_cname).  Because it is a real binding, an adapter
+     * lambda that forwards the dict into a nested constrained rank-2 call captures
+     * it through the ordinary free-variable machinery -- so the lifted lambda gets
+     * the caller's actual dict, not a hardcoded singleton.  `ambient_repr` is the
+     * representative instance used for the plain carrier-base fallback. */
+    bool                is_ambient_dict;
+    struct TypeClassInstance *ambient_repr;
 };
 
 /* GF1: Generator definition -- one per (gen ...) expression */
@@ -882,6 +892,13 @@ struct Expr {
             TypeClassInstance *instance;
             char dict_name[128];  /* "dict_<Class>_<type>" singleton name */
             char method_name[64]; /* sanitized method field name; '\0' = address-only mode */
+            /* van-laarhoven-lens-composition: an AMBIENT dict value -- the dict for
+             * the ENCLOSING constrained rank-2 fn's own constraint, forwarded into
+             * a nested constrained rank-2 call at the same abstract functor.  When
+             * emitted inside a dict-clone body it lowers to the clone's dict
+             * PARAMETER (ctx->dict_dispatch_param_cname); otherwise it falls back to
+             * `instance`'s singleton (the plain carrier-base form). */
+            bool is_ambient;
         } dict_; /* (dict Instance) */
 
         /* Phase 11: Struct operations */

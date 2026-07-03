@@ -2367,6 +2367,20 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         /* Phase H §1: dictionary passing — either load method field (for dict
          * dispatch via fn_expr) or emit singleton address (bare dict value). */
         case EX_DICT: {
+            /* van-laarhoven-lens-composition (Gap B): an AMBIENT dict value
+             * forwards the enclosing constrained rank-2 fn's dict.  Inside a
+             * dict-clone body that dict is the clone's own dict PARAMETER; lower
+             * to it directly.  Outside a clone (the plain carrier base) fall
+             * through to the representative instance's singleton. */
+            if (e->as.dict_.is_ambient && ctx->dict_dispatch_param_cname) {
+                Buf ab; buf_init(&ab);
+                buf_printf(&ab, "(int64_t)(intptr_t)%s",
+                           ctx->dict_dispatch_param_cname);
+                buf_putc(&ab, '\0');
+                char *ar = strdup(ab.data);
+                buf_free(&ab);
+                return ar;
+            }
             char dict_name[128];
             emit_dict_name(dict_name, sizeof(dict_name), e->as.dict_.instance);
             Buf out; buf_init(&out);

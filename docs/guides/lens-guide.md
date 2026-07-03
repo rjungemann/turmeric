@@ -1,7 +1,7 @@
 ---
 title: Lenses
 category: Standard Library
-description: First-class functional lenses (view / set / over) via stdlib/lens.tur, the profunctor-by-record encoding, and why the van Laarhoven form is deferred.
+description: First-class functional lenses (view / set / over) via stdlib/lens.tur, the profunctor-by-record encoding, and why it stays the shipped default even though the experimental van Laarhoven form now supports view/set/over, generic focus inference, and composition.
 ---
 
 # Lenses
@@ -50,7 +50,7 @@ can be reused across calls; if the setter rebuilds the record (the common case),
 make it `:copy :heap` so it is pointer-carried and cheap to thread. A move-only
 `S` can still be used, but only linearly (each whole consumed once).
 
-## The encoding, and why not van Laarhoven
+## The encoding, and why still profunctor-by-record
 
 The classic Haskell optic is the **van Laarhoven** form:
 
@@ -59,27 +59,50 @@ type Lens s a = forall f. Functor f => (a -> f a) -> (s -> f s)
 ```
 
 whose elegance is that optics compose with ordinary function composition and
-`view`/`set`/`over` fall out by instantiating `f` to `Const`/`Identity`. That
-form is **not expressible on Turmeric today**, for two reasons the compiler
-surfaces directly:
+`view`/`set`/`over` fall out by instantiating `f` to `Const`/`Identity`.
 
-1. **The lens body must dispatch `fmap` on an abstract functor.** Inside the
-   lens, `fmap` runs over `(f a)` where `f` is chosen by the *caller*
-   (`view` picks `Const`, `set`/`over` pick `Identity`). Turmeric's HRT is
-   type-erased: a rank-2 poly fn is compiled once and called through the int64
-   carrier, so the lens body cannot statically resolve `fmap`, and there is no
-   runtime typeclass-dictionary passed through the carrier to resolve it
-   dynamically. That dictionary path is **mode B** of the
-   [constrained-hkt-forall plan](../upcoming/v1/constrained-hkt-forall-plan.md),
-   deliberately deferred (slice 2 shipped the static, mode-A form).
-2. **The curried rank-2 result is a function.** `l g` returns `s -> f s`, which
-   is then applied -- a poly-carrier call whose result is itself a closure --
-   which the current rank-2 machinery does not thread.
+The van Laarhoven `view`/`set`/`over` now **do** type-check and run on Turmeric.
+The two compiler reasons this section used to cite as blockers have both been
+resolved by the mode-B slices of the
+[constrained-hkt-forall plan](../upcoming/v1/constrained-hkt-forall-plan.md):
 
-So `stdlib/lens.tur` uses the **profunctor-by-record** encoding instead: a
-`Lens` is a concrete record of a getter and a setter. It needs none of the
-higher-kinded / constrained-quantifier machinery, and `view`/`set`/`over` are
-ordinary function calls.
+1. **Dispatching `fmap` on an abstract functor.** The lens body runs `fmap` over
+   `(f a)` for a caller-chosen `f` (`view` picks `Const`, `set`/`over` pick
+   `Identity`). Mode B threads the resolved typeclass **dictionary** through the
+   int64 carrier so the body dispatches `fmap` on the caller's instance at
+   runtime (MB1/MB2). A *generic* `view`/`set`/`over` that infers its focus type
+   from the lens argument also works now (the focus tyvar binds through the
+   rank-2 forall parameter). Both are demonstrated end to end by the fixtures
+   `tests/fixtures/van-laarhoven-lens-concrete/` and
+   `tests/fixtures/van-laarhoven-lens-generic/` (each returns 3/30/4/99).
+2. **The curried rank-2 result is a function.** `l g` returning `s -> f s`, then
+   applied, is threaded by MB3 (`--enable=hrt-curried-result`).
+
+And van Laarhoven optics now **compose**, too: a composed lens focuses through an
+adapter lambda handed to another lens
+(`(defn line-a-x [^f] [^Functor f g ...] (line-a (fn [p] : (f Point) (point-x g p)) s))`),
+and `view`/`set`/`over` thread through the composition -- the adapter captures the
+caller-chosen functor's dictionary, so the inner lens dispatches the right
+instance at runtime (fixture `tests/fixtures/van-laarhoven-lens-compose/`, 7 / 700
+/ 2 / 0 / 42). Same-focus *delegation* between lenses works as well
+(`van-laarhoven-lens-delegate/`).
+
+So the full van Laarhoven form -- `view`/`set`/`over`, generic focus inference,
+and composition -- is expressible. `stdlib/lens.tur` nonetheless still ships the
+**profunctor-by-record** encoding (a `Lens` is a concrete record of a getter and a
+setter) as the default, for two reasons:
+
+- **General functors.** The working `view`/`set`/`over`/composition rely on
+  `Const`/`Identity` being *carrier-compatible* opaques (one int64 word), so
+  `(f a)` flows through the type-erased carrier. A functor whose `(f a)` is a wider
+  by-value aggregate is still the mode-B "No-go".
+- **Maturity.** The van Laarhoven path runs behind the `--enable=forall-*` /
+  `hkt-hrt` / `forall-dict-pass` experiments; the record encoding needs none of
+  that machinery and is stable today.
+
+The record encoding stays the shipped default and `view`/`set`/`over` are ordinary
+function calls; the van Laarhoven form is available (and demonstrated by the
+fixtures) for code that opts into the experiments.
 
 ### The one tradeoff: composition
 
@@ -101,12 +124,18 @@ hand at concrete, copyable whole types:
 ```
 
 where the whole types (`Line`, `Point`) are `:copy` so `l`/`s` can be used more
-than once. If mode-B dictionary passing lands, the van Laarhoven form (and free
-composition) becomes expressible; until then, hand-composition is the idiom.
+than once. This is the idiom for the record encoding. The experimental van
+Laarhoven form now supports free composition directly (see
+[the archived resolution](../archive/van-laarhoven-lens-composition.md)), so code
+that opts into the `--enable=forall-*` experiments can compose optics with
+ordinary function composition instead.
 
 ## Related
 
 - [`stdlib/lens.tur`](../../stdlib/lens.tur) -- the module
 - [constrained-hkt-forall plan](../upcoming/v1/constrained-hkt-forall-plan.md) --
   the van Laarhoven roadmap (slices 1-4) and the mode-A/mode-B decision
-- [hrt-guide.md](hrt-guide.md) -- the rank-2 `forall` mechanism lenses would use
+- [constrained-hkt-forall mode-B plan](../upcoming/v1/constrained-hkt-forall-mode-b-plan.md) --
+  MB1-MB4: the dictionary passing + dispatch that makes the van Laarhoven
+  `view`/`set`/`over` above run
+- [hrt-guide.md](hrt-guide.md) -- the rank-2 `forall` mechanism lenses use

@@ -1,0 +1,62 @@
+;; van-laarhoven-lens-composition (dictionary-forwarding slice): a constrained
+;; rank-2 lens whose body calls ANOTHER constrained rank-2 lens at its OWN abstract
+;; functor `f`.  `my-x` delegates to `point-x`, forwarding `f` and (crucially) the
+;; runtime `Functor f` dictionary it received.
+;;
+;; Before the fix the nested `(point-x g s)` deferred its `Functor f` obligation
+;; (the pin is the enclosing abstract `f`, not a ground type), so it resolved to
+;; point-x's plain carrier base -- an arbitrary hardcoded instance plus a thin
+;; fn-pointer call on the fat-boxed `g` -> SIGSEGV.  Now, inside a constrained
+;; rank-2 body, a nested call to another single-`Functor`-constrained rank-2 fn at
+;; the same abstract functor is routed through the callee's dict-clone with the
+;; enclosing fn's dict forwarded (an AMBIENT dict that lowers to the caller's own
+;; dict parameter).  So `view my-x` (functor := Const) and `over my-x`
+;; (functor := Identity) both dispatch the correct instance through the forwarded
+;; dict -- returning 3 / 30 / 4.
+;;
+;; This is the foundational half of van Laarhoven lens COMPOSITION.  The remaining
+;; half -- an ADAPTER lambda `(fn [p] : (f Point) (point-x g p))` handed to another
+;; constrained rank-2 lens -- additionally needs the lifted lambda to capture the
+;; ambient dict and rank-2 arg-type preservation; see
+;; docs/reported/van-laarhoven-lens-composition.md.
+
+(defopaque Const [r a] :int)
+(defn mk-const [A] [x : A] : (Const A A) ```c return (int64_t)x; ```)
+(defn get-const [R A] [c : (Const R A)] : R ```c return (int64_t)c; ```)
+(definstance Functor [(Const r)]
+  (fmap [c g] (mk-const (get-const c))))
+
+(defopaque Identity [a] :int)
+(defn mk-id [A] [x : A] : (Identity A) ```c return (int64_t)x; ```)
+(defn run-id [A] [i : (Identity A)] : A ```c return (int64_t)i; ```)
+(definstance Functor [Identity]
+  (fmap [i g] (mk-id (g (run-id i)))))
+
+(defstruct Point :copy :heap [x : int y : int])
+
+(defn point-x [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)
+  (fmap (g (.x s))
+        (fn [nx : int] : Point (make-struct Point :x nx :y (.y s)))))
+
+;; A lens that DELEGATES to point-x, forwarding its own abstract functor `f`
+;; (and the dict for `Functor f`).
+(defn my-x [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)
+  (point-x g s))
+
+(defn view [S A]
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> A (f A)) S (f S)))
+     s : S] : A
+  (get-const (l (fn [x : A] : (Const A A) (mk-const x)) s)))
+
+(defn over [S A]
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> A (f A)) S (f S)))
+     h : (-> A A) s : S] : S
+  (run-id (l (fn [a : A] : (Identity A) (mk-id (h a))) s)))
+
+(defn main [] : int
+  (let [p (make-struct Point :x 3 :y 4)]
+    (println (view my-x p))                     ; 3  -- Const dict forwarded
+    (let [p2 (over my-x (fn [v : int] : int (* v 10)) p)]
+      (println (view my-x p2))                  ; 30 -- Identity dict forwarded
+      (println (.y p2))))                       ; 4
+  0)

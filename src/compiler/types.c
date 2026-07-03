@@ -2419,8 +2419,16 @@ size_t adt_byval_value_size_bytes(const AdtDef *def) {
  * erased int64 binding) so an ordinary wide by-value ADT match keeps its
  * existing B3 treatment. */
 bool type_is_wide_byval_adt(Type t) {
-    if (t.kind == TY_ADT && t.as.adt_.def)
+    if (t.kind == TY_ADT && t.as.adt_.def) {
+        /* van-laarhoven-lens-composition (Gap B2): a `:heap` struct/ADT is a typed
+         * POINTER (rides the int64 carrier as an 8-byte pointer), never a wide
+         * by-value aggregate -- so it must not take the box+deref closure-param
+         * bridge, or a struct-typed lens-adapter param (`p : Point`, Point being
+         * `:heap`) is wrongly dereferenced through a bogus box pointer -> SIGSEGV.
+         * Mirrors the `def->is_heap` guard already in adt_app_byval_pass_by_ptr. */
+        if (t.as.adt_.def->is_heap) return false;
         return adt_byval_value_size_bytes(t.as.adt_.def) > 8;
+    }
     return false;
 }
 

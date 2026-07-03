@@ -4691,6 +4691,27 @@ static bool emit_abi_carrier_relay_walk(EmitCtx *ctx, const Expr *enclosing_fn,
         case EX_CAST:
             changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.cast_.expr, items, n_items);
             break;
+        case EX_FN_TO_FAT:
+            /* van-laarhoven-generic-inference-gap (gap 1, codegen): a thin
+             * (non-capturing) lifted lambda boxed into a fat carrier
+             * (`(fn [x : A] ...)` handed to a rank-2 lens param inside a generic
+             * `view`) crosses as `EX_FN_TO_FAT` wrapping the bare fn-pointer
+             * reference.  Recurse into the inner reference so the EX_VAR / EX_FN
+             * case below notes a carrier call on the lifted thunk -- otherwise its
+             * generic-unsafe carrier base (`int64_t __fn_N(int64_t x)`) is skipped
+             * and the fat box references an undeclared symbol. */
+            changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.fn_to_fat_.inner, items, n_items);
+            break;
+        case EX_FN:
+            /* A lifted non-capturing lambda referenced directly as a fn value
+             * (not yet lowered to EX_VAR); note its carrier base the same way. */
+            if (e->as.fn_.fn && e->as.fn_.fn->binding &&
+                e->as.fn_.fn->binding->is_lifted_lambda &&
+                !emit_abi_has_carrier_call(ctx, e->as.fn_.fn->binding)) {
+                emit_abi_note_carrier_call(ctx, e->as.fn_.fn->binding);
+                changed = true;
+            }
+            break;
         case EX_REINTERPRET:
             changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn, e->as.reinterpret_.expr, items, n_items);
             break;

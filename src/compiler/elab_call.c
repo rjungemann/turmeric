@@ -477,10 +477,23 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
                                   expected->as.fn.arg_full_types[i])
                     ? expected->as.fn.arg_full_types[i] : NULL;
                 if (!ea) continue;  /* concrete arg position -- nothing to bind */
-                Type aa = (actual.as.fn.arg_full_types &&
-                           actual.as.fn.arg_full_types[i])
+                bool aa_have_full = actual.as.fn.arg_full_types &&
+                                    actual.as.fn.arg_full_types[i];
+                Type aa = aa_have_full
                     ? *actual.as.fn.arg_full_types[i]
                     : type_from_kind(actual.as.fn.arg_kinds[i]);
+                /* van-laarhoven-lens-composition (Gap B2): a nested rank-2 fn-typed
+                 * argument (a lens adapter `(fn [p : Point] : (f Point) ...)`) does
+                 * not preserve its CONCRETE param full types, so `aa` here is a
+                 * def-less kind reconstruction (a bare `Point` shell).  When the
+                 * expected position carries no named tyvar (nothing to bind) and the
+                 * kinds already agree, skip it rather than `type_eq`-ing a concrete
+                 * `Point` against the def-less shell and spuriously failing -- the
+                 * concrete-compat check ran at the call's kind level already.  Full
+                 * types present on both sides are still compared strictly. */
+                if (!aa_have_full && ea->kind == aa.kind &&
+                    !call_type_has_named_tyvar(ea))
+                    continue;
                 ok = ok && call_collect_type_bindings(ea, aa, bindings, n_bindings);
             }
             const Type *er = expected->as.fn.result_full_type;
@@ -498,6 +511,102 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
         default:
             return type_eq(*expected, actual);
     }
+}
+
+/* van-laarhoven-generic-inference-gap (gap 1): bind an ENCLOSING generic
+ * callee's outer type params from a rank-2 (forall-typed) parameter.
+ *
+ * When a generic function such as
+ *   (defn view [S A] [l (forall [f] [(Functor f)] (-> (-> A (f A)) S (f S)))
+ *                     s : S] : A ...)
+ * is called, the outer tyvar `A` appears ONLY inside the forall-typed parameter
+ * `l`.  The plain `call_collect_type_bindings` has no TY_FORALL case (it falls to
+ * `type_eq`, which fails between two distinct foralls), so `A` never binds and
+ * `view`'s result type stays an abstract tyvar (TUR-E0006).
+ *
+ * `call_collect_forall_outer_rec` descends the expected forall body against the
+ * actual argument's body, collecting bindings for the callee's outer tyvars while
+ * treating the forall's OWN bound vars (`f`) as match-anything wildcards that
+ * never bind -- so `(f A)` vs `(g int)` pins `A := int` without the quantified `f`
+ * (whose name need not match the actual's bound var) polluting or rejecting.
+ *
+ * It is deliberately PURELY ADDITIVE: it only records outer-tyvar bindings and
+ * never rejects the argument (the authoritative arg-type check and the rank-2
+ * EX_POLY_WRAP machinery run separately).  So a non-generic callee whose forall
+ * param's body mentions only forall-bound vars (e.g. `use-konst`'s
+ * `(forall [a] (-> a (-> a a)))`) contributes no bindings and is left untouched. */
+static bool call_forall_name_in(const char **names, uint8_t n, const char *name) {
+    if (!name || !names) return false;
+    for (uint8_t i = 0; i < n; i++)
+        if (names[i] && strcmp(names[i], name) == 0) return true;
+    return false;
+}
+
+static void call_collect_forall_outer_rec(const Type *expected, const Type *actual,
+                                          const char **shadow, uint8_t n_shadow,
+                                          CallTypeBinding *bindings,
+                                          uint8_t *n_bindings) {
+    if (!expected || !actual) return;
+    switch (expected->kind) {
+        case TY_TYVAR: {
+            const char *nm = expected->as.tyvar_.name;
+            if (!nm) return;
+            if (call_forall_name_in(shadow, n_shadow, nm)) return; /* wildcard */
+            uint8_t idx;
+            if (call_find_type_binding(bindings, *n_bindings, nm, &idx)) return;
+            if (actual->kind == TY_TYVAR) return; /* nothing concrete to pin */
+            if (*n_bindings >= 16) return;
+            bindings[*n_bindings].name = nm;
+            bindings[*n_bindings].type = *actual;
+            (*n_bindings)++;
+            return;
+        }
+        case TY_APP:
+            if (actual->kind != TY_APP || !expected->as.app.fn ||
+                !expected->as.app.arg || !actual->as.app.fn || !actual->as.app.arg)
+                return;
+            call_collect_forall_outer_rec(expected->as.app.fn, actual->as.app.fn,
+                                          shadow, n_shadow, bindings, n_bindings);
+            call_collect_forall_outer_rec(expected->as.app.arg, actual->as.app.arg,
+                                          shadow, n_shadow, bindings, n_bindings);
+            return;
+        case TY_FN: {
+            if (actual->kind != TY_FN) return;
+            uint8_t n = expected->as.fn.arity < actual->as.fn.arity
+                ? expected->as.fn.arity : actual->as.fn.arity;
+            for (uint8_t i = 0; i < n; i++) {
+                const Type *ea = expected->as.fn.arg_full_types
+                    ? expected->as.fn.arg_full_types[i] : NULL;
+                const Type *aa = actual->as.fn.arg_full_types
+                    ? actual->as.fn.arg_full_types[i] : NULL;
+                if (ea && aa)
+                    call_collect_forall_outer_rec(ea, aa, shadow, n_shadow,
+                                                  bindings, n_bindings);
+            }
+            if (expected->as.fn.result_full_type && actual->as.fn.result_full_type)
+                call_collect_forall_outer_rec(expected->as.fn.result_full_type,
+                                              actual->as.fn.result_full_type,
+                                              shadow, n_shadow, bindings, n_bindings);
+            return;
+        }
+        default:
+            return;
+    }
+}
+
+static void call_collect_forall_outer_bindings(const Type *expected, Type actual,
+                                               CallTypeBinding *bindings,
+                                               uint8_t *n_bindings) {
+    if (!expected || expected->kind != TY_FORALL || !expected->as.forall_.body)
+        return;
+    /* Peel the actual argument's own outer forall (a rank-2 poly value such as
+     * `point-x` arrives as a TY_FORALL) so body-vs-body unification lines up. */
+    const Type *abody = (actual.kind == TY_FORALL && actual.as.forall_.body)
+        ? actual.as.forall_.body : &actual;
+    call_collect_forall_outer_rec(expected->as.forall_.body, abody,
+                                  expected->as.forall_.var_names,
+                                  expected->as.forall_.n_vars,
+                                  bindings, n_bindings);
 }
 
 static Type call_instantiate_type(Elab *e, const Type *t,
@@ -4136,7 +4245,18 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             uint32_t fn_arg_idx_app = fn_binding->closure_fn_binding ? i + 1 : i;
             Type *expected_full = (fn_arg_idx_app < fn_type.as.fn.arity)
                 ? fn_type.as.fn.arg_full_types[fn_arg_idx_app] : NULL;
-            if (expected_full && call_type_has_named_tyvar(expected_full)) {
+            if (expected_full && expected_full->kind == TY_FORALL) {
+                /* van-laarhoven-generic-inference-gap (gap 1): the callee's outer
+                 * type params (e.g. view's focus type `A`) may appear only inside
+                 * a rank-2 forall-typed parameter.  Bind them by descending into
+                 * the forall body (forall-bound vars treated as wildcards), so a
+                 * generic `(view lens s)` infers its focus type from the lens
+                 * instead of leaving the result an abstract tyvar.  Purely
+                 * additive: `arg_ok` is left to the checks above / the rank-2
+                 * EX_POLY_WRAP path, so a non-generic forall param is untouched. */
+                call_collect_forall_outer_bindings(
+                    expected_full, args[i]->type, type_bindings, &n_type_bindings);
+            } else if (expected_full && call_type_has_named_tyvar(expected_full)) {
                 arg_ok = call_collect_type_bindings(expected_full, args[i]->type,
                                                     type_bindings, &n_type_bindings);
             } else if (arg_ok && expected_arg_kind == TY_APP &&
@@ -5287,10 +5407,76 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         }
     }
 
+    /* van-laarhoven-lens-composition (Gap B): forward the ENCLOSING constrained
+     * rank-2 fn's dict into this nested call to ANOTHER constrained rank-2 fn at
+     * the same abstract functor.  Inside `(defn wrap [^f] [^Functor f ...] (point-x
+     * g s))`, the call to `point-x` pins its `Functor f` obligation to `wrap`'s
+     * own abstract `f` -- deferred above, so the call would otherwise resolve to
+     * point-x's plain carrier base (an arbitrary hardcoded instance + a thin
+     * fn-ptr call on the boxed `g` -> SIGSEGV).  Redirect to point-x's dict-clone
+     * and prepend an AMBIENT dict value, which lowers to `wrap`'s own dict param
+     * when `wrap` is itself emitted as a dict-clone. */
+    Binding *fwd_bound = bound_fn;
+    Expr   **fwd_args  = args;
+    uint32_t fwd_nargs = n_args;
+    if (g_opt_forall_dict_pass && e->cur_hkt_constraint_class &&
+        e->cur_hkt_constraint_tyvar && fn_binding && bound_fn == fn_binding &&
+        fn_binding->fn_constraints &&
+        fn_binding->fn_constraints->n_constraints == 1 &&
+        fn_binding->fn_constraints->constraints[0].typeclass ==
+            e->cur_hkt_constraint_class &&
+        fn_binding->source_fn_def) {
+        const TypeConstraint *con0 = &fn_binding->fn_constraints->constraints[0];
+        uint8_t bidx0 = 0;
+        bool pins_ambient = false;
+        if (con0->tyvar && con0->tyvar->name &&
+            call_find_type_binding(type_bindings, n_type_bindings,
+                                   con0->tyvar->name, &bidx0)) {
+            Type c0 = type_bindings[bidx0].type;
+            pins_ambient = (c0.kind == TY_TYVAR && c0.as.tyvar_.name &&
+                            strcmp(c0.as.tyvar_.name,
+                                   e->cur_hkt_constraint_tyvar) == 0);
+        }
+        if (pins_ambient) {
+            Binding *clone = make_dict_clone(e, fn_binding, call->span);
+            if (clone) {
+                /* Reference the enclosing fn's synthetic ambient-dict binding as
+                 * the leading dict arg.  As a real binding it is captured by an
+                 * adapter lambda's free-var scan (Gap B2), so the lifted lambda
+                 * forwards the caller's actual dict; directly in the caller's own
+                 * dict-clone body it lowers to that clone's dict parameter. */
+                Expr *amb;
+                if (e->cur_hkt_dict_binding) {
+                    amb = expr_new(e->arena, EX_VAR,
+                                   e->cur_hkt_dict_binding->type, call->span);
+                    amb->as.var.binding = e->cur_hkt_dict_binding;
+                } else {
+                    TypeClassInstance *repr = NULL;
+                    for (TypeClassInstance *it = e->typeclass_env.instances; it;
+                         it = it->next)
+                        if (it->typeclass == e->cur_hkt_constraint_class) {
+                            repr = it; break;
+                        }
+                    amb = expr_new(e->arena, EX_DICT, TYPE_PTR_VOID, call->span);
+                    amb->as.dict_.instance = repr;
+                    amb->as.dict_.method_name[0] = '\0';
+                    amb->as.dict_.is_ambient = true;
+                }
+                Expr **na = (Expr **)arena_alloc(e->arena,
+                                                 (n_args + 1) * sizeof(Expr *));
+                na[0] = amb;
+                for (uint32_t k = 0; k < n_args; k++) na[k + 1] = args[k];
+                fwd_bound = clone;
+                fwd_args  = na;
+                fwd_nargs = n_args + 1;
+            }
+        }
+    }
+
     Expr *out = expr_new(e->arena, EX_CALL, call_result_type, call->span);
-    out->as.call_.fn_binding = bound_fn;
-    out->as.call_.args = args;
-    out->as.call_.n_args = n_args;
+    out->as.call_.fn_binding = fwd_bound;
+    out->as.call_.args = fwd_args;
+    out->as.call_.n_args = fwd_nargs;
     out->as.call_.fn_expr = NULL;
     /* GS5/CS3: hand the named-tyvar substitution to emit so it can drive ABI
      * specialization without re-deriving it from the call's argument types. */

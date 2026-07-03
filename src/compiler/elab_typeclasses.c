@@ -3834,7 +3834,10 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                 dup = true; break;
             }
         }
-        if (!dup) e->sig_tyvars[e->n_sig_tyvars++] = nm;
+        if (!dup) {
+            e->sig_tyvar_kinds[e->n_sig_tyvars] = KIND_STAR;
+            e->sig_tyvars[e->n_sig_tyvars++] = nm;
+        }
     }
 
     /* Pass 2: every sibling's FnDef shell and `method_impls` slot is now

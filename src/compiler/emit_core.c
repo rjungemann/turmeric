@@ -1999,6 +1999,26 @@ static char *capture_env_access(EmitCtx *ctx, const Binding *b) {
 char *name_for_binding(EmitCtx *ctx, const Binding *b) {
     char *captured = capture_env_access(ctx, b);
     if (captured) return captured;
+    /* van-laarhoven-lens-composition (Gap B2): the synthetic ambient-dict binding.
+     * If captured (inside an adapter lambda) the check above already returned the
+     * env slot.  Uncaptured, it stands for the enclosing dict-clone's dict PARAM;
+     * lower to it.  In the plain carrier base (no dict param) fall back to the
+     * representative instance's singleton. */
+    if (b && b->is_ambient_dict) {
+        if (ctx->dict_dispatch_param_cname)
+            return strdup(ctx->dict_dispatch_param_cname);
+        if (b->ambient_repr) {
+            char dn[128];
+            emit_dict_name(dn, sizeof(dn), b->ambient_repr);
+            Buf ab; buf_init(&ab);
+            buf_printf(&ab, "(int64_t)(intptr_t)(&%s_singleton)", dn);
+            buf_putc(&ab, '\0');
+            char *r = strdup(ab.data);
+            buf_free(&ab);
+            return r;
+        }
+        return strdup("0");
+    }
     /* Check if this binding is a function parameter in the current context */
     if (ctx->fn_params) {
         for (uint8_t i = 0; i < ctx->n_fn_params; i++) {
