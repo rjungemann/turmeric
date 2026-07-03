@@ -477,10 +477,23 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
                                   expected->as.fn.arg_full_types[i])
                     ? expected->as.fn.arg_full_types[i] : NULL;
                 if (!ea) continue;  /* concrete arg position -- nothing to bind */
-                Type aa = (actual.as.fn.arg_full_types &&
-                           actual.as.fn.arg_full_types[i])
+                bool aa_have_full = actual.as.fn.arg_full_types &&
+                                    actual.as.fn.arg_full_types[i];
+                Type aa = aa_have_full
                     ? *actual.as.fn.arg_full_types[i]
                     : type_from_kind(actual.as.fn.arg_kinds[i]);
+                /* van-laarhoven-lens-composition (Gap B2): a nested rank-2 fn-typed
+                 * argument (a lens adapter `(fn [p : Point] : (f Point) ...)`) does
+                 * not preserve its CONCRETE param full types, so `aa` here is a
+                 * def-less kind reconstruction (a bare `Point` shell).  When the
+                 * expected position carries no named tyvar (nothing to bind) and the
+                 * kinds already agree, skip it rather than `type_eq`-ing a concrete
+                 * `Point` against the def-less shell and spuriously failing -- the
+                 * concrete-compat check ran at the call's kind level already.  Full
+                 * types present on both sides are still compared strictly. */
+                if (!aa_have_full && ea->kind == aa.kind &&
+                    !call_type_has_named_tyvar(ea))
+                    continue;
                 ok = ok && call_collect_type_bindings(ea, aa, bindings, n_bindings);
             }
             const Type *er = expected->as.fn.result_full_type;
@@ -5427,16 +5440,28 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         if (pins_ambient) {
             Binding *clone = make_dict_clone(e, fn_binding, call->span);
             if (clone) {
-                TypeClassInstance *repr = NULL;
-                for (TypeClassInstance *it = e->typeclass_env.instances; it;
-                     it = it->next)
-                    if (it->typeclass == e->cur_hkt_constraint_class) {
-                        repr = it; break;
-                    }
-                Expr *amb = expr_new(e->arena, EX_DICT, TYPE_PTR_VOID, call->span);
-                amb->as.dict_.instance = repr;
-                amb->as.dict_.method_name[0] = '\0';
-                amb->as.dict_.is_ambient = true;
+                /* Reference the enclosing fn's synthetic ambient-dict binding as
+                 * the leading dict arg.  As a real binding it is captured by an
+                 * adapter lambda's free-var scan (Gap B2), so the lifted lambda
+                 * forwards the caller's actual dict; directly in the caller's own
+                 * dict-clone body it lowers to that clone's dict parameter. */
+                Expr *amb;
+                if (e->cur_hkt_dict_binding) {
+                    amb = expr_new(e->arena, EX_VAR,
+                                   e->cur_hkt_dict_binding->type, call->span);
+                    amb->as.var.binding = e->cur_hkt_dict_binding;
+                } else {
+                    TypeClassInstance *repr = NULL;
+                    for (TypeClassInstance *it = e->typeclass_env.instances; it;
+                         it = it->next)
+                        if (it->typeclass == e->cur_hkt_constraint_class) {
+                            repr = it; break;
+                        }
+                    amb = expr_new(e->arena, EX_DICT, TYPE_PTR_VOID, call->span);
+                    amb->as.dict_.instance = repr;
+                    amb->as.dict_.method_name[0] = '\0';
+                    amb->as.dict_.is_ambient = true;
+                }
                 Expr **na = (Expr **)arena_alloc(e->arena,
                                                  (n_args + 1) * sizeof(Expr *));
                 na[0] = amb;

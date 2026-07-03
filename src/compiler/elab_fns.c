@@ -2517,8 +2517,10 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * current_fn_name resets) so a nested defn's own constraint shadows it. */
     TypeClass  *saved_cur_hkt_class = e->cur_hkt_constraint_class;
     const char *saved_cur_hkt_tyvar = e->cur_hkt_constraint_tyvar;
+    Binding    *saved_cur_hkt_dict  = e->cur_hkt_dict_binding;
     e->cur_hkt_constraint_class = NULL;
     e->cur_hkt_constraint_tyvar = NULL;
+    e->cur_hkt_dict_binding     = NULL;
     if (n_constraints == 1 && constraint_list &&
         constraint_list[0].typeclass && constraint_list[0].tyvar) {
         const Symbol *ctv = constraint_list[0].tyvar;
@@ -2527,6 +2529,20 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 fn_type_param_kinds[tpi] != KIND_STAR) {
                 e->cur_hkt_constraint_class = constraint_list[0].typeclass;
                 e->cur_hkt_constraint_tyvar = ctv->name;
+                /* Synthetic ambient-dict binding for this fn's `Functor f` dict.
+                 * Referencing it forwards the enclosing dict (Gap B2); an adapter
+                 * lambda captures it through the ordinary free-var machinery. */
+                const Symbol *adsym = symtab_intern(e->st,
+                    strslice("__hkt_dict", 10));
+                Binding *adb = binding_new(e, adsym, type_from_kind(TY_INT),
+                                           false, false, call->span);
+                adb->is_ambient_dict = true;
+                for (TypeClassInstance *it = e->typeclass_env.instances; it;
+                     it = it->next)
+                    if (it->typeclass == e->cur_hkt_constraint_class) {
+                        adb->ambient_repr = it; break;
+                    }
+                e->cur_hkt_dict_binding = adb;
                 break;
             }
         }
@@ -2580,6 +2596,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 e->current_fn_name = NULL;
                 e->cur_hkt_constraint_class = saved_cur_hkt_class;
                 e->cur_hkt_constraint_tyvar = saved_cur_hkt_tyvar;
+                e->cur_hkt_dict_binding = saved_cur_hkt_dict;
                 e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                 e->scope = inner.parent;
                 scope_free(&inner);
@@ -2599,6 +2616,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 e->current_fn_name = NULL;
                 e->cur_hkt_constraint_class = saved_cur_hkt_class;
                 e->cur_hkt_constraint_tyvar = saved_cur_hkt_tyvar;
+                e->cur_hkt_dict_binding = saved_cur_hkt_dict;
                 e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                 e->scope = inner.parent;
                 scope_free(&inner);
@@ -2619,6 +2637,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     e->current_fn_name = NULL;
                     e->cur_hkt_constraint_class = saved_cur_hkt_class;
                     e->cur_hkt_constraint_tyvar = saved_cur_hkt_tyvar;
+                    e->cur_hkt_dict_binding = saved_cur_hkt_dict;
                     e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                     e->scope = inner.parent;
                     scope_free(&inner);
@@ -2651,6 +2670,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     e->current_fn_name = NULL;
     e->cur_hkt_constraint_class = saved_cur_hkt_class;
     e->cur_hkt_constraint_tyvar = saved_cur_hkt_tyvar;
+    e->cur_hkt_dict_binding = saved_cur_hkt_dict;
     e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
 
     /* bare-fat-result-monomorphization: close the canonical-body capture frame.

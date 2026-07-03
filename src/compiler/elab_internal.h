@@ -458,6 +458,10 @@ typedef struct Elab {
      * outside such a body. */
     struct TypeClass *cur_hkt_constraint_class;
     const char       *cur_hkt_constraint_tyvar;
+    /* van-laarhoven-lens-composition (Gap B2): the synthetic ambient-dict binding
+     * for the current constrained rank-2 fn (see Binding.is_ambient_dict).  A
+     * nested forwarding call references it so an adapter lambda captures it. */
+    struct Binding   *cur_hkt_dict_binding;
     uint32_t unsafe_depth;
     uint32_t macro_expand_depth;
     /* Phase U5: Unsafe linting configuration */

@@ -1,0 +1,74 @@
+;; van-laarhoven-lens-composition (RESOLVED): composing two van Laarhoven lenses
+;; with ordinary function composition.  `line-a-x` focuses `Line -> a:Point ->
+;; x:int` by chaining `line-a` (Line -> Point) and `point-x` (Point -> int) via an
+;; ADAPTER lambda `(fn [p : Point] : (f Point) (point-x g p))` handed to `line-a`.
+;;
+;; This exercises the full composition stack that Gap B2 unblocked:
+;;   - nested-lambda kind recovery: the adapter's `(f Point)` annotation recovers
+;;     the enclosing rank-2 `f : * -> *`;
+;;   - rank-2 arg-type preservation: the adapter (whose concrete param full types
+;;     are not preserved) unifies against `line-a`'s `g : (-> Point (f Point))`
+;;     under `f' := f`;
+;;   - ambient-dict capture: the adapter is lifted to a closure, and it CAPTURES
+;;     the enclosing `Functor f` dictionary so the nested `(point-x g p)` dispatches
+;;     the caller-chosen functor (Const for view, Identity for set/over) through the
+;;     forwarded dict;
+;;   - :heap struct fat-box crossing: the adapter's `p : Point` (Point is `:heap`)
+;;     rides the fat-closure boundary as a typed pointer, not a boxed by-value
+;;     aggregate.
+;;
+;; view / over / set all compose: 7 / 700 / (siblings preserved) / 42.
+
+(defopaque Const [r a] :int)
+(defn mk-const [A] [x : A] : (Const A A) ```c return (int64_t)x; ```)
+(defn get-const [R A] [c : (Const R A)] : R ```c return (int64_t)c; ```)
+(definstance Functor [(Const r)]
+  (fmap [c g] (mk-const (get-const c))))
+
+(defopaque Identity [a] :int)
+(defn mk-id [A] [x : A] : (Identity A) ```c return (int64_t)x; ```)
+(defn run-id [A] [i : (Identity A)] : A ```c return (int64_t)i; ```)
+(definstance Functor [Identity]
+  (fmap [i g] (mk-id (g (run-id i)))))
+
+(defstruct Point :copy :heap [x : int y : int])
+(defstruct Line  :copy :heap [a : Point b : Point])
+
+(defn point-x [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)
+  (fmap (g (.x s))
+        (fn [nx : int] : Point (make-struct Point :x nx :y (.y s)))))
+
+(defn line-a [^f] [^Functor f g : (-> Point (f Point)) s : Line] : (f Line)
+  (fmap (g (.a s))
+        (fn [np : Point] : Line (make-struct Line :a np :b (.b s)))))
+
+;; The composed lens: Line -> a:Point -> x:int, via an adapter lambda.
+(defn line-a-x [^f] [^Functor f g : (-> int (f int)) s : Line] : (f Line)
+  (line-a (fn [p : Point] : (f Point) (point-x g p)) s))
+
+(defn view [S A]
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> A (f A)) S (f S)))
+     s : S] : A
+  (get-const (l (fn [x : A] : (Const A A) (mk-const x)) s)))
+
+(defn over [S A]
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> A (f A)) S (f S)))
+     h : (-> A A) s : S] : S
+  (run-id (l (fn [a : A] : (Identity A) (mk-id (h a))) s)))
+
+(defn set [S A]
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> A (f A)) S (f S)))
+     b : A s : S] : S
+  (run-id (l (fn [a : A] : (Identity A) (mk-id b)) s)))
+
+(defn main [] : int
+  (let [ln (make-struct Line :a (make-struct Point :x 7 :y 2)
+                             :b (make-struct Point :x 0 :y 0))]
+    (println (view line-a-x ln))                       ; 7
+    (let [ln2 (over line-a-x (fn [v : int] : int (* v 100)) ln)]
+      (println (view line-a-x ln2))                    ; 700
+      (println (.y (.a ln2)))                          ; 2  -- sibling field preserved
+      (println (.x (.b ln2))))                         ; 0  -- other branch preserved
+    (let [ln3 (set line-a-x 42 ln)]
+      (println (view line-a-x ln3))))                  ; 42
+  0)

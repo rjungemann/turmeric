@@ -284,6 +284,16 @@ struct Binding {
      * ambiguous over the erased int64 carrier type.  NULL for ordinary
      * bindings.  See docs/archive/existential-open-witness-dispatch.md. */
     const struct Type  *exists_open_type;
+    /* van-laarhoven-lens-composition (Gap B2): a synthetic binding standing for
+     * the ENCLOSING constrained rank-2 fn's own `Functor f` dictionary.  Emitting
+     * a reference to it yields the enclosing dict-clone's dict PARAMETER
+     * (ctx->dict_dispatch_param_cname).  Because it is a real binding, an adapter
+     * lambda that forwards the dict into a nested constrained rank-2 call captures
+     * it through the ordinary free-variable machinery -- so the lifted lambda gets
+     * the caller's actual dict, not a hardcoded singleton.  `ambient_repr` is the
+     * representative instance used for the plain carrier-base fallback. */
+    bool                is_ambient_dict;
+    struct TypeClassInstance *ambient_repr;
 };
 
 /* GF1: Generator definition -- one per (gen ...) expression */

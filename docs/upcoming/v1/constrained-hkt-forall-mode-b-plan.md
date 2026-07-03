@@ -470,6 +470,15 @@ keeps its carrier base. The naive-attempt regressions the earlier note feared
 (`currying-rank2-partial`, `phase-f-poly-concrete`, `hrt-*`) are avoided because
 the binder never gates `arg_ok`. See
 [docs/archive/van-laarhoven-generic-inference-gap.md](../../archive/van-laarhoven-generic-inference-gap.md).
+Lens **composition** now works too: a composed lens focuses through an adapter
+lambda handed to another lens, and `view`/`set`/`over` thread through it (fixture
+`van-laarhoven-lens-compose/`, 7/700/2/0/42; same-focus delegation in
+`van-laarhoven-lens-delegate/`). That needed four fixes -- nested-lambda kind
+recovery, dictionary forwarding for a nested constrained rank-2 call (with
+ambient-dict capture into the lifted adapter), rank-2 arg-type preservation, and a
+`:heap`-struct fat-box-crossing guard -- all detailed in the archived resolution
+[docs/archive/van-laarhoven-lens-composition.md](../../archive/van-laarhoven-lens-composition.md).
+
 One milder, independent sub-item remains open (class-method result functor
 inference):
 [docs/reported/method-result-functor-inference.md](../../reported/method-result-functor-inference.md).

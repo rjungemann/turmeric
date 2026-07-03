@@ -1,7 +1,7 @@
 ---
 title: Lenses
 category: Standard Library
-description: First-class functional lenses (view / set / over) via stdlib/lens.tur, the profunctor-by-record encoding, and why it stays the shipped default even though the van Laarhoven view/set/over now type-check.
+description: First-class functional lenses (view / set / over) via stdlib/lens.tur, the profunctor-by-record encoding, and why it stays the shipped default even though the experimental van Laarhoven form now supports view/set/over, generic focus inference, and composition.
 ---
 
 # Lenses
@@ -78,28 +78,31 @@ resolved by the mode-B slices of the
 2. **The curried rank-2 result is a function.** `l g` returning `s -> f s`, then
    applied, is threaded by MB3 (`--enable=hrt-curried-result`).
 
-So the lens itself is expressible. `stdlib/lens.tur` nonetheless still ships the
-**profunctor-by-record** encoding -- a `Lens` is a concrete record of a getter
-and a setter -- because two things the record encoding gets for free are still
-missing from the van Laarhoven form here:
+And van Laarhoven optics now **compose**, too: a composed lens focuses through an
+adapter lambda handed to another lens
+(`(defn line-a-x [^f] [^Functor f g ...] (line-a (fn [p] : (f Point) (point-x g p)) s))`),
+and `view`/`set`/`over` thread through the composition -- the adapter captures the
+caller-chosen functor's dictionary, so the inner lens dispatches the right
+instance at runtime (fixture `tests/fixtures/van-laarhoven-lens-compose/`, 7 / 700
+/ 2 / 0 / 42). Same-focus *delegation* between lenses works as well
+(`van-laarhoven-lens-delegate/`).
 
-- **Composition.** Optic composition is the whole point of the van Laarhoven
-  form, and it does not fully work yet. The pieces are landing: a constrained
-  rank-2 lens can now *delegate* to another at its own abstract functor,
-  forwarding the runtime dictionary (a nested `(f B)` annotation recovers the
-  enclosing `f : * -> *`, and the nested `Functor f` obligation is discharged by
-  forwarding the caller's dict). What is still missing is the *adapter lambda*
-  that composition needs -- `(fn [p] : (f Point) (point-x g p))` handed to another
-  lens -- which requires capturing the ambient dictionary into the lifted closure
-  and preserving the rank-2 `(f X)` argument type. See
-  [docs/reported/van-laarhoven-lens-composition.md](../reported/van-laarhoven-lens-composition.md).
-- **General functors.** The working `view`/`set`/`over` rely on `Const`/`Identity`
-  being *carrier-compatible* opaques (one int64 word), so `(f a)` flows through
-  the type-erased carrier. A functor whose `(f a)` is a wider by-value aggregate
-  is still the mode-B "No-go".
+So the full van Laarhoven form -- `view`/`set`/`over`, generic focus inference,
+and composition -- is expressible. `stdlib/lens.tur` nonetheless still ships the
+**profunctor-by-record** encoding (a `Lens` is a concrete record of a getter and a
+setter) as the default, for two reasons:
 
-The record encoding needs none of that machinery, so it stays the shipped
-default and `view`/`set`/`over` are ordinary function calls.
+- **General functors.** The working `view`/`set`/`over`/composition rely on
+  `Const`/`Identity` being *carrier-compatible* opaques (one int64 word), so
+  `(f a)` flows through the type-erased carrier. A functor whose `(f a)` is a wider
+  by-value aggregate is still the mode-B "No-go".
+- **Maturity.** The van Laarhoven path runs behind the `--enable=forall-*` /
+  `hkt-hrt` / `forall-dict-pass` experiments; the record encoding needs none of
+  that machinery and is stable today.
+
+The record encoding stays the shipped default and `view`/`set`/`over` are ordinary
+function calls; the van Laarhoven form is available (and demonstrated by the
+fixtures) for code that opts into the experiments.
 
 ### The one tradeoff: composition
 
@@ -121,11 +124,11 @@ hand at concrete, copyable whole types:
 ```
 
 where the whole types (`Line`, `Point`) are `:copy` so `l`/`s` can be used more
-than once. When van Laarhoven composition lands (it needs dictionary forwarding
-for the nested constrained rank-2 call --
-[report](../reported/van-laarhoven-lens-composition.md)), the van Laarhoven form
-and free composition become a real alternative; until then, hand-composition is
-the idiom.
+than once. This is the idiom for the record encoding. The experimental van
+Laarhoven form now supports free composition directly (see
+[the archived resolution](../archive/van-laarhoven-lens-composition.md)), so code
+that opts into the `--enable=forall-*` experiments can compose optics with
+ordinary function composition instead.
 
 ## Related
 
