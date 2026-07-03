@@ -500,6 +500,102 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
     }
 }
 
+/* van-laarhoven-generic-inference-gap (gap 1): bind an ENCLOSING generic
+ * callee's outer type params from a rank-2 (forall-typed) parameter.
+ *
+ * When a generic function such as
+ *   (defn view [S A] [l (forall [f] [(Functor f)] (-> (-> A (f A)) S (f S)))
+ *                     s : S] : A ...)
+ * is called, the outer tyvar `A` appears ONLY inside the forall-typed parameter
+ * `l`.  The plain `call_collect_type_bindings` has no TY_FORALL case (it falls to
+ * `type_eq`, which fails between two distinct foralls), so `A` never binds and
+ * `view`'s result type stays an abstract tyvar (TUR-E0006).
+ *
+ * `call_collect_forall_outer_rec` descends the expected forall body against the
+ * actual argument's body, collecting bindings for the callee's outer tyvars while
+ * treating the forall's OWN bound vars (`f`) as match-anything wildcards that
+ * never bind -- so `(f A)` vs `(g int)` pins `A := int` without the quantified `f`
+ * (whose name need not match the actual's bound var) polluting or rejecting.
+ *
+ * It is deliberately PURELY ADDITIVE: it only records outer-tyvar bindings and
+ * never rejects the argument (the authoritative arg-type check and the rank-2
+ * EX_POLY_WRAP machinery run separately).  So a non-generic callee whose forall
+ * param's body mentions only forall-bound vars (e.g. `use-konst`'s
+ * `(forall [a] (-> a (-> a a)))`) contributes no bindings and is left untouched. */
+static bool call_forall_name_in(const char **names, uint8_t n, const char *name) {
+    if (!name || !names) return false;
+    for (uint8_t i = 0; i < n; i++)
+        if (names[i] && strcmp(names[i], name) == 0) return true;
+    return false;
+}
+
+static void call_collect_forall_outer_rec(const Type *expected, const Type *actual,
+                                          const char **shadow, uint8_t n_shadow,
+                                          CallTypeBinding *bindings,
+                                          uint8_t *n_bindings) {
+    if (!expected || !actual) return;
+    switch (expected->kind) {
+        case TY_TYVAR: {
+            const char *nm = expected->as.tyvar_.name;
+            if (!nm) return;
+            if (call_forall_name_in(shadow, n_shadow, nm)) return; /* wildcard */
+            uint8_t idx;
+            if (call_find_type_binding(bindings, *n_bindings, nm, &idx)) return;
+            if (actual->kind == TY_TYVAR) return; /* nothing concrete to pin */
+            if (*n_bindings >= 16) return;
+            bindings[*n_bindings].name = nm;
+            bindings[*n_bindings].type = *actual;
+            (*n_bindings)++;
+            return;
+        }
+        case TY_APP:
+            if (actual->kind != TY_APP || !expected->as.app.fn ||
+                !expected->as.app.arg || !actual->as.app.fn || !actual->as.app.arg)
+                return;
+            call_collect_forall_outer_rec(expected->as.app.fn, actual->as.app.fn,
+                                          shadow, n_shadow, bindings, n_bindings);
+            call_collect_forall_outer_rec(expected->as.app.arg, actual->as.app.arg,
+                                          shadow, n_shadow, bindings, n_bindings);
+            return;
+        case TY_FN: {
+            if (actual->kind != TY_FN) return;
+            uint8_t n = expected->as.fn.arity < actual->as.fn.arity
+                ? expected->as.fn.arity : actual->as.fn.arity;
+            for (uint8_t i = 0; i < n; i++) {
+                const Type *ea = expected->as.fn.arg_full_types
+                    ? expected->as.fn.arg_full_types[i] : NULL;
+                const Type *aa = actual->as.fn.arg_full_types
+                    ? actual->as.fn.arg_full_types[i] : NULL;
+                if (ea && aa)
+                    call_collect_forall_outer_rec(ea, aa, shadow, n_shadow,
+                                                  bindings, n_bindings);
+            }
+            if (expected->as.fn.result_full_type && actual->as.fn.result_full_type)
+                call_collect_forall_outer_rec(expected->as.fn.result_full_type,
+                                              actual->as.fn.result_full_type,
+                                              shadow, n_shadow, bindings, n_bindings);
+            return;
+        }
+        default:
+            return;
+    }
+}
+
+static void call_collect_forall_outer_bindings(const Type *expected, Type actual,
+                                               CallTypeBinding *bindings,
+                                               uint8_t *n_bindings) {
+    if (!expected || expected->kind != TY_FORALL || !expected->as.forall_.body)
+        return;
+    /* Peel the actual argument's own outer forall (a rank-2 poly value such as
+     * `point-x` arrives as a TY_FORALL) so body-vs-body unification lines up. */
+    const Type *abody = (actual.kind == TY_FORALL && actual.as.forall_.body)
+        ? actual.as.forall_.body : &actual;
+    call_collect_forall_outer_rec(expected->as.forall_.body, abody,
+                                  expected->as.forall_.var_names,
+                                  expected->as.forall_.n_vars,
+                                  bindings, n_bindings);
+}
+
 static Type call_instantiate_type(Elab *e, const Type *t,
                                   CallTypeBinding *bindings, uint8_t n_bindings) {
     if (!t) return TYPE_UNKNOWN;
@@ -4136,7 +4232,18 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             uint32_t fn_arg_idx_app = fn_binding->closure_fn_binding ? i + 1 : i;
             Type *expected_full = (fn_arg_idx_app < fn_type.as.fn.arity)
                 ? fn_type.as.fn.arg_full_types[fn_arg_idx_app] : NULL;
-            if (expected_full && call_type_has_named_tyvar(expected_full)) {
+            if (expected_full && expected_full->kind == TY_FORALL) {
+                /* van-laarhoven-generic-inference-gap (gap 1): the callee's outer
+                 * type params (e.g. view's focus type `A`) may appear only inside
+                 * a rank-2 forall-typed parameter.  Bind them by descending into
+                 * the forall body (forall-bound vars treated as wildcards), so a
+                 * generic `(view lens s)` infers its focus type from the lens
+                 * instead of leaving the result an abstract tyvar.  Purely
+                 * additive: `arg_ok` is left to the checks above / the rank-2
+                 * EX_POLY_WRAP path, so a non-generic forall param is untouched. */
+                call_collect_forall_outer_bindings(
+                    expected_full, args[i]->type, type_bindings, &n_type_bindings);
+            } else if (expected_full && call_type_has_named_tyvar(expected_full)) {
                 arg_ok = call_collect_type_bindings(expected_full, args[i]->type,
                                                     type_bindings, &n_type_bindings);
             } else if (arg_ok && expected_arg_kind == TY_APP &&

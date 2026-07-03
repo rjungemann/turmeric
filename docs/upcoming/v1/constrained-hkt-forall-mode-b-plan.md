@@ -449,21 +449,30 @@ van Laarhoven `view`/`set`/`over`.
 
 ### Slice MB4 -- van Laarhoven `Lens'` in stdlib (`--enable=van-laarhoven-lens`)
 
-**Status.** PARTIAL. The encoding is proven expressible and the No-go signal is
-NOT triggered -- `Const`/`Identity` (carrier-compatible opaques) flow as `(f a)`
-through the carrier for both the argument and the result positions, so
-`view`/`set`/`over` work end to end at concrete focus types (fixture
+**Status.** LANDED (concrete + generic). The encoding is proven expressible and
+the No-go signal is NOT triggered -- `Const`/`Identity` (carrier-compatible
+opaques) flow as `(f a)` through the carrier for both the argument and the result
+positions, so `view`/`set`/`over` work end to end (fixture
 `van-laarhoven-lens-concrete/` returns 3/30/4/99, exercising the full mode-B
 stack: MB1/MB2 dict passing + dispatch, the parametric `(Const r)` dict, MB3-era
 closure crossing, and the fat-box crossing of the functor-wrapping function).
-What is NOT yet available is an *ergonomic generic* `(view lens s)` that infers
-the focus type from the lens argument -- that needs generic-type-param inference
-through a rank-2 poly argument, a separate inference feature that regresses the
-existing rank-2 fixtures when attempted naively. So the shipped lens stays the
-profunctor-by-record encoding for now; the van Laarhoven form ships as a
-demonstrated-at-concrete-types fixture, and the guide rewrite is deferred until
-the generic form lands. See
-[docs/reported/van-laarhoven-generic-inference-gap.md](../../reported/van-laarhoven-generic-inference-gap.md).
+
+The *ergonomic generic* `(view lens s)` -- each combinator carrying its own outer
+`[S A]` params and inferring the focus type from the lens argument -- now works
+too (fixture `van-laarhoven-lens-generic/`, also 3/30/4/99). The blocker was
+generic-type-param inference through a rank-2 forall argument: the outer tyvar
+`A` appears only inside the forall-typed lens parameter, and the call-site binder
+had no `TY_FORALL` case. The fix is a purely-additive
+`call_collect_forall_outer_bindings` (elab_call.c) that descends the forall body
+treating the forall's own bound vars as wildcards, plus an `EX_FN_TO_FAT`/`EX_FN`
+case in the emit carrier-relay walk so the generic body's fat-boxed inner lambda
+keeps its carrier base. The naive-attempt regressions the earlier note feared
+(`currying-rank2-partial`, `phase-f-poly-concrete`, `hrt-*`) are avoided because
+the binder never gates `arg_ok`. See
+[docs/archive/van-laarhoven-generic-inference-gap.md](../../archive/van-laarhoven-generic-inference-gap.md).
+One milder, independent sub-item remains open (class-method result functor
+inference):
+[docs/reported/method-result-functor-inference.md](../../reported/method-result-functor-inference.md).
 
 **Compiler advances that landed for MB4** (suite-green, independently useful):
 

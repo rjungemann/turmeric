@@ -1,0 +1,64 @@
+;; van-laarhoven-generic-inference-gap (resolved): a fully GENERIC van Laarhoven
+;; `view`/`set`/`over` that infers the focus type from the lens argument, rather
+;; than the per-focus (concrete `S`/`A`) combinators in
+;; `van-laarhoven-lens-concrete/`.
+;;
+;; Each combinator carries its own outer type params `[S A]`; the focus type `A`
+;; appears ONLY inside the rank-2, constrained forall-typed parameter `l`
+;; (`forall f. Functor f => (A -> f A) -> S -> f S`).  Binding `A` from that
+;; forall-typed argument is gap 1 of the report: `call_collect_type_bindings`
+;; grew no `TY_FORALL` case, so `A` stayed abstract and `(view point-x p)` printed
+;; a bare tyvar (TUR-E0006) instead of `3`.  The fix descends into the forall body
+;; at the outer-type-param binding site -- shadowing the forall's own bound var
+;; `f` -- so `A` binds (`:= int`) while the quantified `f` is left alone; the
+;; lifted inner lambda's carrier base is then kept alive across the fat-box
+;; crossing.  See docs/archive/van-laarhoven-generic-inference-gap.md.
+
+;; Const r a -- phantom second index; fmap ignores the function.
+(defopaque Const [r a] :int)
+(defn mk-const [A] [x : A] : (Const A A) ```c return (int64_t)x; ```)
+(defn get-const [R A] [c : (Const R A)] : R ```c return (int64_t)c; ```)
+(definstance Functor [(Const r)]
+  (fmap [c g] (mk-const (get-const c))))
+
+;; Identity a -- fmap maps.
+(defopaque Identity [a] :int)
+(defn mk-id [A] [x : A] : (Identity A) ```c return (int64_t)x; ```)
+(defn run-id [A] [i : (Identity A)] : A ```c return (int64_t)i; ```)
+(definstance Functor [Identity]
+  (fmap [i g] (mk-id (g (run-id i)))))
+
+(defstruct Point :copy :heap [x : int y : int])
+
+;; A concrete lens focusing Point.x, polymorphic over the functor f.
+(defn point-x [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)
+  (fmap (g (.x s))
+        (fn [nx : int] : Point (make-struct Point :x nx :y (.y s)))))
+
+;; GENERIC view : the focus type A is inferred from the lens `l`.
+(defn view [S A]
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> A (f A)) S (f S)))
+     s : S] : A
+  (get-const (l (fn [x : A] : (Const A A) (mk-const x)) s)))
+
+;; GENERIC set : f := Identity, capturing g.
+(defn set [S A]
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> A (f A)) S (f S)))
+     b : A s : S] : S
+  (run-id (l (fn [a : A] : (Identity A) (mk-id b)) s)))
+
+;; GENERIC over : f := Identity, capturing g.
+(defn over [S A]
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> A (f A)) S (f S)))
+     h : (-> A A) s : S] : S
+  (run-id (l (fn [a : A] : (Identity A) (mk-id (h a))) s)))
+
+(defn main [] : int
+  (let [p (make-struct Point :x 3 :y 4)]
+    (println (view point-x p))                              ; 3
+    (let [p2 (over point-x (fn [v : int] : int (* v 10)) p)]
+      (println (view point-x p2))                           ; 30
+      (println (.y p2)))                                    ; 4 (unfocused field preserved)
+    (let [p3 (set point-x 99 p)]
+      (println (view point-x p3))))                         ; 99
+  0)
