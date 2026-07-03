@@ -3236,7 +3236,7 @@ Expr *elab_match(Elab *e, const Form *call) {
             bool _s_wc = e->in_match_arm; e->in_match_arm = true;
             Expr *body = elab_form(e, body_form);
             e->in_match_arm = _s_wc;
-            if (!body) { free(covered); return NULL; }
+            if (!body) { goto match_fail; }
             /* LT1: Capture outer linear state after this arm's body. */
             if (n_match_lin > 0) {
                 arm_lin_states[ai] = linear_state_capture_current(match_lin_bindings, n_match_lin);
@@ -3257,7 +3257,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                                     "expected %s (from earlier arm), got %s",
                                     typekind_to_string(result_type.kind),
                                     typekind_to_string(body->type.kind));
-                free(covered); return NULL;
+                goto match_fail;
             }
             arms[ai].body = body;
             if (result_type.kind == TY_UNKNOWN) result_type = body->type;
@@ -3267,13 +3267,13 @@ Expr *elab_match(Elab *e, const Form *call) {
             if (pat_form->as.list.len < 1) {
                 diag_emit(DIAG_ERROR, pat_form->span,
                           "match: empty constructor pattern");
-                free(covered); return NULL;
+                goto match_fail;
             }
             Form *ctor_name_form = pat_form->as.list.items[0];
             if (ctor_name_form->tag != F_SYM) {
                 diag_emit(DIAG_ERROR, ctor_name_form->span,
                           "match: constructor pattern must start with a constructor name");
-                free(covered); return NULL;
+                goto match_fail;
             }
             const Symbol *ctor_sym = ctor_name_form->as.sym;
             /* Look up constructor in this ADT */
@@ -3290,7 +3290,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                 diag_emit(DIAG_ERROR, ctor_name_form->span,
                           "match: '%s' is not a constructor of '%s'",
                           ctor_sym->name, adt->name);
-                free(covered); return NULL;
+                goto match_fail;
             }
 
             /* CONV-S0: by-name binding for record-style variants.
@@ -3305,21 +3305,21 @@ Expr *elab_match(Elab *e, const Form *call) {
                               "match: constructor '%s' is positional; by-name "
                               "binding (`:field var`) requires a record-style variant",
                               ctor->name);
-                    free(covered); return NULL;
+                    goto match_fail;
                 }
                 uint32_t n_pairs = (pat_form->as.list.len - 1);
                 if (n_pairs % 2 != 0) {
                     diag_emit(DIAG_ERROR, pat_form->span,
                               "match: by-name pattern for '%s' must be "
                               "`:field var` pairs", ctor->name);
-                    free(covered); return NULL;
+                    goto match_fail;
                 }
                 n_pairs /= 2;
                 if (n_pairs != ctor->n_fields) {
                     diag_emit(DIAG_ERROR, pat_form->span,
                               "match: by-name pattern for '%s' must bind all %u "
                               "fields, got %u", ctor->name, ctor->n_fields, n_pairs);
-                    free(covered); return NULL;
+                    goto match_fail;
                 }
                 Form **pos_items = (Form **)arena_alloc(e->arena,
                                        (ctor->n_fields + 1) * sizeof(Form *));
@@ -3332,7 +3332,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                         diag_emit(DIAG_ERROR, kw->span,
                                   "match: by-name pattern for '%s' must be "
                                   "`:field var` pairs", ctor->name);
-                        free(covered); return NULL;
+                        goto match_fail;
                     }
                     int fidx = -1;
                     for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
@@ -3345,13 +3345,13 @@ Expr *elab_match(Elab *e, const Form *call) {
                         diag_emit(DIAG_ERROR, kw->span,
                                   "match: '%s' is not a field of variant '%s'",
                                   kw->as.sym->name, ctor->name);
-                        free(covered); return NULL;
+                        goto match_fail;
                     }
                     if (pos_items[fidx + 1]) {
                         diag_emit(DIAG_ERROR, kw->span,
                                   "match: field '%s' bound more than once in "
                                   "pattern for '%s'", kw->as.sym->name, ctor->name);
-                        free(covered); return NULL;
+                        goto match_fail;
                     }
                     pos_items[fidx + 1] = var;
                 }
@@ -3364,7 +3364,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                 diag_emit(DIAG_ERROR, pat_form->span,
                           "match: constructor '%s' expects %u fields, got %u",
                           ctor->name, ctor->n_fields, n_bindings);
-                free(covered); return NULL;
+                goto match_fail;
             }
 
             pat->ctor = ctor;
@@ -3415,7 +3415,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                     scope_free(&arm_scope);
                     e->g2_skolem_env = saved_senv;
                     e->g2_current_ctor = saved_ctor;
-                    free(covered); return NULL;
+                    goto match_fail;
                 }
                 Type ftype;
                 if (adt->is_gadt && ctor->field_forms && ctor->field_forms[bi]) {
@@ -3596,7 +3596,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                     scope_free(&arm_scope);
                     e->g2_skolem_env = saved_senv;
                     e->g2_current_ctor = saved_ctor;
-                    free(covered); return NULL;
+                    goto match_fail;
                 }
                 if (guard_expr->type.kind != TY_BOOL) {
                     diag_emit(DIAG_ERROR, guard_form_raw->span,
@@ -3606,7 +3606,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                     scope_free(&arm_scope);
                     e->g2_skolem_env = saved_senv;
                     e->g2_current_ctor = saved_ctor;
-                    free(covered); return NULL;
+                    goto match_fail;
                 }
             }
 
@@ -3669,7 +3669,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                           "active refinements: %s",
                           ctor->name, adt->name, skolem_note);
             }
-            if (!body || lt1_arm_fail || st1_arm_fail) { free(covered); return NULL; }
+            if (!body || lt1_arm_fail || st1_arm_fail) { goto match_fail; }
 
             /* Phase G2/HRT: detect skolem escape -- the arm body result is a GADT
              * type variable that the enclosing function does not quantify.
@@ -3701,7 +3701,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                               "(constructor '%s' of '%s'): the arm body has an "
                               "unresolved GADT type variable as its result type",
                               ctor->name, adt->name);
-                    free(covered); return NULL;
+                    goto match_fail;
                 }
             }
 
@@ -3738,7 +3738,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                                     "expected %s (from earlier arm), got %s",
                                     typekind_to_string(result_type.kind),
                                     typekind_to_string(body->type.kind));
-                free(covered); return NULL;
+                goto match_fail;
             }
 
             arms[ai].body = body;
@@ -3757,7 +3757,7 @@ Expr *elab_match(Elab *e, const Form *call) {
         } else {
             diag_emit(DIAG_ERROR, pat_form->span,
                       "match: pattern must be a constructor list or _ wildcard");
-            free(covered); return NULL;
+            goto match_fail;
         }
     }
 
@@ -3793,19 +3793,19 @@ Expr *elab_match(Elab *e, const Form *call) {
                 (ref_ai >= 0) ? arm_lin_states[ref_ai][li] : false;
         }
         for (uint32_t ai = 0; ai < n_arms; ai++) free(arm_lin_states[ai]);
-        free(arm_lin_states);
-        free(arm_diverges);
-        free(match_lin_before);
-        free(match_lin_bindings);
-        if (!lin_ok) { free(covered); return NULL; }
+        free(arm_lin_states);   arm_lin_states   = NULL;
+        free(arm_diverges);     arm_diverges     = NULL;
+        free(match_lin_before); match_lin_before = NULL;
+        free(match_lin_bindings); match_lin_bindings = NULL;
+        if (!lin_ok) { goto match_fail; }
     } else {
         /* linear_state_snapshot_bindings always allocates its buffers (cap=16),
          * even when the outer scope holds no linear bindings (n_match_lin == 0).
          * The merge block above only frees them when n_match_lin > 0, so free
          * the snapshot here to avoid a LeakSanitizer-visible leak on every match
          * with no outer linear bindings. */
-        free(match_lin_before);
-        free(match_lin_bindings);
+        free(match_lin_before); match_lin_before = NULL;
+        free(match_lin_bindings); match_lin_bindings = NULL;
     }
 
     /* Exhaustiveness check */
@@ -3859,7 +3859,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                     diag_emit(DIAG_ERROR, call->span,
                               "match: non-exhaustive patterns — constructor '%s' of '%s' not covered",
                               c->name, adt->name);
-                    free(covered); return NULL;
+                    goto match_fail;
                 }
             }
         } else {
@@ -3868,7 +3868,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                     diag_emit(DIAG_ERROR, call->span,
                               "match: non-exhaustive patterns — constructor '%s' of '%s' not covered",
                               adt->ctors[ci]->name, adt->name);
-                    free(covered); return NULL;
+                    goto match_fail;
                 }
             }
         }
@@ -3882,6 +3882,25 @@ Expr *elab_match(Elab *e, const Form *call) {
     out->as.match_.arms = arms;
     out->as.match_.n_arms = n_arms;
     return out;
+
+    /* Shared error epilogue: every failing exit inside the arm loop and the
+     * post-loop checks jumps here so the linear-state snapshot buffers
+     * (`match_lin_bindings` / `match_lin_before`), the per-arm state arrays
+     * (`arm_lin_states` rows + array, `arm_diverges`), and `covered` are freed
+     * on the error path -- previously only `covered` was freed, leaking the
+     * snapshot buffers on any match that failed to elaborate.  The merge/else
+     * blocks above NULL out the linear buffers after freeing them, so the
+     * NULL-safe frees here never double-free. */
+match_fail:
+    if (arm_lin_states) {
+        for (uint32_t ai = 0; ai < n_arms; ai++) free(arm_lin_states[ai]);
+        free(arm_lin_states);
+    }
+    free(arm_diverges);
+    free(match_lin_before);
+    free(match_lin_bindings);
+    free(covered);
+    return NULL;
 }
 
 /* Phase 11: make-struct - construct a struct value

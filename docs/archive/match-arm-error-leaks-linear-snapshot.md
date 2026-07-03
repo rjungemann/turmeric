@@ -1,5 +1,16 @@
 # `match` arm error leaks the linear-state snapshot buffers
 
+> **Resolved.** `elab_match` (`src/compiler/elab_structs.c`) now routes every
+> failing exit through a single `match_fail:` epilogue that frees `covered`, the
+> linear snapshot buffers (`match_lin_bindings` / `match_lin_before`), and the
+> per-arm arrays (`arm_lin_states` rows + array, `arm_diverges`). The 22
+> `free(covered); return NULL;` bail-outs became `goto match_fail;`, and the
+> merge/else blocks NULL out the linear buffers after freeing so the epilogue's
+> NULL-safe frees never double-free. Verified: `ASAN_OPTIONS=detect_leaks=1
+> ./build/tur check leak.tur` is now leak-clean, and `bash tests/run.sh` passes
+> (1925/1925).
+
+
 **Severity:** low. Error path only -- it fires when a `match` fails to elaborate
 (bad constructor, malformed arm, ...) and the process is about to exit with a
 diagnostic anyway. The successful compile / codegen path is leak-clean, so
