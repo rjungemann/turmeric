@@ -45,6 +45,15 @@ add_test(
   COMMAND bash tests/run-tur-run-alias.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Regression for tur-run-just-assignment-eval-plan: `name := VALUE`
+# assignments used to be raw byte fragments; verify the balanced scanner
+# + RHS expression evaluator handle function calls, `/` and `+` concat,
+# conditionals, and forward-reference errors.
+add_test(
+  NAME tur_run_rhs_eval
+  COMMAND bash tests/run-tur-run-rhs-eval.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 add_test(
   NAME tur_fmt_tests
   COMMAND bash tests/run-fmt.sh

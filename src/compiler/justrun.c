@@ -350,19 +350,10 @@ static int check_unsupported(const char *line, int lineno, const char *path) {
         }
     }
 
-    /* Conditional expression: if COND { ... } else { ... } */
-    if (jr_starts_with(p, "if ") && strchr(p, '{') && strchr(p, '}')) {
-        /* Only flag bare top-level if, not shell if-statements in body lines */
-        if (line[0] != ' ' && line[0] != '\t') {
-            fprintf(stderr,
-                "tur run: unsupported Justfile feature at %s:%d: "
-                "conditional expression\n"
-                "        Install `just` (https://just.systems) for "
-                "conditionals.\n",
-                path, lineno);
-            return 1;
-        }
-    }
+    /* Top-level `if` conditionals are only valid inside assignment RHS (which
+     * the RHS evaluator handles). A bare top-level `if` statement is not a
+     * just construct, so fall through and let the normal parser flag it as a
+     * junk line. */
 
     /* Alias is handled directly in the parse loop now (see parse_justfile). */
 
@@ -500,6 +491,283 @@ static void parse_body_prefix(const char *p, JLine *jline, const char **cmd_star
 }
 
 /* ================================================================== */
+/* RHS scanner + expression evaluator                                  */
+/* ================================================================== */
+
+/* Forward decl -- implementation lives after eval_builtin. */
+static char *eval_builtin(const char *name, const char **args, int n_args,
+                            const JFile *jf);
+
+/* Balanced RHS scanner: reads from `p` until end-of-logical-line, balancing
+ * (), {}, [] and skipping over "..." / '...' literals. Honors '#' as an
+ * end-of-line comment marker only at bracket depth 0 outside strings.
+ * Returns malloc'd trimmed text; sets *end to the first unconsumed byte
+ * (the '#', '\0', or '\n'). */
+static char *parse_rhs_expr_text(const char *p, const char **end) {
+    while (*p == ' ' || *p == '\t') p++;
+    const char *body_start = p;
+    int paren = 0, brace = 0, brack = 0;
+    while (*p) {
+        char c = *p;
+        if (c == '"' || c == '\'') {
+            char q = c;
+            p++;
+            while (*p && *p != q && *p != '\n') {
+                if (*p == '\\' && p[1]) p += 2;
+                else p++;
+            }
+            if (*p == q) p++;
+            continue;
+        }
+        if (c == '\n' || c == '\r' || c == '\0') break;
+        if (c == '#' && paren == 0 && brace == 0 && brack == 0) break;
+        if (c == '(') paren++;
+        else if (c == ')') paren--;
+        else if (c == '{') brace++;
+        else if (c == '}') brace--;
+        else if (c == '[') brack++;
+        else if (c == ']') brack--;
+        p++;
+    }
+    const char *tail = p;
+    while (tail > body_start && (tail[-1] == ' ' || tail[-1] == '\t')) tail--;
+    if (end) *end = p;
+    return jr_strndup(body_start, (size_t)(tail - body_start));
+}
+
+/* Recursive-descent evaluator state. */
+typedef struct {
+    const char *p;
+    const char *path;
+    int         lineno;
+    JFile      *jf;
+    int         error;
+} REval;
+
+static void re_skip_ws(REval *r) {
+    while (*r->p == ' ' || *r->p == '\t' || *r->p == '\n' || *r->p == '\r')
+        r->p++;
+}
+
+static void re_error(REval *r, const char *msg) {
+    if (!r->error) {
+        fprintf(stderr, "tur run: %s:%d: %s\n",
+                r->path ? r->path : "<justfile>", r->lineno, msg);
+        r->error = 1;
+    }
+}
+
+static char *re_expr(REval *r);  /* forward */
+
+static char *re_string_literal(REval *r) {
+    char q = *r->p++;
+    size_t cap = 32;
+    char *buf = (char *)malloc(cap);
+    size_t bl = 0;
+    while (*r->p && *r->p != q && *r->p != '\n') {
+        if (bl + 2 >= cap) { cap *= 2; buf = (char *)realloc(buf, cap); }
+        if (*r->p == '\\' && r->p[1]) {
+            char c = r->p[1];
+            switch (c) {
+                case 'n':  buf[bl++] = '\n'; break;
+                case 't':  buf[bl++] = '\t'; break;
+                case 'r':  buf[bl++] = '\r'; break;
+                case '\\': buf[bl++] = '\\'; break;
+                case '"':  buf[bl++] = '"';  break;
+                case '\'': buf[bl++] = '\''; break;
+                default:   buf[bl++] = c;    break;
+            }
+            r->p += 2;
+        } else {
+            buf[bl++] = *r->p++;
+        }
+    }
+    if (*r->p == q) r->p++;
+    else re_error(r, "unterminated string literal");
+    buf[bl] = '\0';
+    return buf;
+}
+
+static char *re_primary(REval *r) {
+    re_skip_ws(r);
+    if (*r->p == '"' || *r->p == '\'') return re_string_literal(r);
+    if (*r->p == '(') {
+        r->p++;
+        char *v = re_expr(r);
+        re_skip_ws(r);
+        if (*r->p == ')') r->p++;
+        else re_error(r, "expected ')'");
+        return v;
+    }
+    /* 'if' EXPR COMPOP EXPR '{' EXPR '}' 'else' '{' EXPR '}' */
+    if (strncmp(r->p, "if", 2) == 0 &&
+        (r->p[2] == ' ' || r->p[2] == '\t' || r->p[2] == '(')) {
+        r->p += 2;
+        char *lhs = re_expr(r);
+        re_skip_ws(r);
+        int neq;
+        if (strncmp(r->p, "==", 2) == 0) { neq = 0; r->p += 2; }
+        else if (strncmp(r->p, "!=", 2) == 0) { neq = 1; r->p += 2; }
+        else {
+            re_error(r, "expected '==' or '!=' in conditional");
+            free(lhs);
+            return jr_strdup("");
+        }
+        char *rhs = re_expr(r);
+        re_skip_ws(r);
+        if (*r->p != '{') { re_error(r, "expected '{' after conditional"); }
+        else r->p++;
+        char *then_v = re_expr(r);
+        re_skip_ws(r);
+        if (*r->p == '}') r->p++;
+        else re_error(r, "expected '}' after then-branch");
+        re_skip_ws(r);
+        if (strncmp(r->p, "else", 4) != 0 ||
+            !(r->p[4] == ' ' || r->p[4] == '\t' || r->p[4] == '{')) {
+            re_error(r, "expected 'else' in conditional");
+        } else {
+            r->p += 4;
+        }
+        re_skip_ws(r);
+        if (*r->p != '{') { re_error(r, "expected '{' after else"); }
+        else r->p++;
+        char *else_v = re_expr(r);
+        re_skip_ws(r);
+        if (*r->p == '}') r->p++;
+        else re_error(r, "expected '}' after else-branch");
+        int cond = (strcmp(lhs, rhs) == 0);
+        if (neq) cond = !cond;
+        char *chosen = cond ? then_v : else_v;
+        char *other  = cond ? else_v : then_v;
+        free(lhs); free(rhs); free(other);
+        return chosen;
+    }
+    /* identifier: function call or variable lookup */
+    if (isalpha((unsigned char)*r->p) || *r->p == '_') {
+        const char *ns = r->p;
+        while (*r->p && (isalnum((unsigned char)*r->p) || *r->p == '_'))
+            r->p++;
+        char *name = jr_strndup(ns, (size_t)(r->p - ns));
+        re_skip_ws(r);
+        if (*r->p == '(') {
+            r->p++;
+            char *args[8];
+            int   n_args = 0;
+            re_skip_ws(r);
+            if (*r->p != ')') {
+                while (1) {
+                    if (n_args >= 8) {
+                        re_error(r, "too many arguments (max 8)");
+                        break;
+                    }
+                    args[n_args++] = re_expr(r);
+                    re_skip_ws(r);
+                    if (*r->p == ',') { r->p++; re_skip_ws(r); continue; }
+                    break;
+                }
+            }
+            re_skip_ws(r);
+            if (*r->p == ')') r->p++;
+            else re_error(r, "expected ')' in function call");
+            char *result = eval_builtin(name, (const char **)args, n_args, r->jf);
+            for (int i = 0; i < n_args; i++) free(args[i]);
+            if (!result) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                    "unknown or failed built-in function '%s'", name);
+                re_error(r, msg);
+                result = jr_strdup("");
+            }
+            free(name);
+            return result;
+        }
+        /* Variable lookup in already-parsed assignments. */
+        for (int i = 0; i < r->jf->n_vars; i++) {
+            if (strcmp(r->jf->vars[i].name, name) == 0) {
+                char *v = jr_strdup(r->jf->vars[i].value);
+                free(name);
+                return v;
+            }
+        }
+        /* Fall through to environment. */
+        const char *ev = getenv(name);
+        if (ev) {
+            char *v = jr_strdup(ev);
+            free(name);
+            return v;
+        }
+        char msg[256];
+        snprintf(msg, sizeof(msg), "unknown variable '%s'", name);
+        re_error(r, msg);
+        free(name);
+        return jr_strdup("");
+    }
+    re_error(r, "expected expression");
+    return jr_strdup("");
+}
+
+/* Concat with '/' -- join with a single slash unless one side already
+ * has one at the boundary. Concat with '+' -- plain string append. */
+static char *re_concat(char *a, char op, char *b) {
+    size_t la = strlen(a), lb = strlen(b);
+    size_t skip_b = 0;
+    int    need_slash = 0;
+    if (op == '/') {
+        int a_has = (la > 0 && a[la - 1] == '/');
+        int b_has = (lb > 0 && b[0] == '/');
+        if (a_has && b_has) skip_b = 1;
+        else if (!a_has && !b_has) need_slash = 1;
+    }
+    size_t out_len = la + (lb - skip_b) + (size_t)need_slash;
+    char  *out = (char *)malloc(out_len + 1);
+    memcpy(out, a, la);
+    size_t off = la;
+    if (need_slash) out[off++] = '/';
+    memcpy(out + off, b + skip_b, lb - skip_b);
+    out[out_len] = '\0';
+    free(a);
+    free(b);
+    return out;
+}
+
+static char *re_expr(REval *r) {
+    char *left = re_primary(r);
+    while (!r->error) {
+        re_skip_ws(r);
+        char op;
+        if (*r->p == '/') op = '/';
+        else if (*r->p == '+') op = '+';
+        else break;
+        r->p++;
+        char *right = re_primary(r);
+        left = re_concat(left, op, right);
+    }
+    return left;
+}
+
+/* Parse+evaluate the RHS of an assignment. Returns malloc'd value on
+ * success, NULL on error (message already printed). */
+static char *eval_rhs(const char *text, JFile *jf, const char *path,
+                        int lineno) {
+    REval r;
+    r.p      = text;
+    r.path   = path;
+    r.lineno = lineno;
+    r.jf     = jf;
+    r.error  = 0;
+    char *v = re_expr(&r);
+    re_skip_ws(&r);
+    if (!r.error && *r.p) {
+        char msg[256];
+        snprintf(msg, sizeof(msg),
+            "unexpected token in assignment RHS starting at '%.32s'", r.p);
+        re_error(&r, msg);
+    }
+    if (r.error) { free(v); return NULL; }
+    return v;
+}
+
+/* ================================================================== */
 /* Justfile parser                                                     */
 /* ================================================================== */
 
@@ -628,7 +896,14 @@ static int parse_justfile(const char *text, const char *path, JFile *jf) {
                     size_t name_len = (size_t)(name_end - vp);
                     const char *val_start = assign_pos + 2;
                     const char *end;
-                    char *val = parse_value(val_start, &end);
+                    char *raw = parse_rhs_expr_text(val_start, &end);
+                    char *val = eval_rhs(raw, jf, path, lineno);
+                    free(raw);
+                    if (!val) {
+                        free(pending_doc);
+                        free(line);
+                        return 2;
+                    }
                     JVar *var = &jf->vars[jf->n_vars++];
                     var->name     = jr_strndup(vp, name_len);
                     var->value    = val;
