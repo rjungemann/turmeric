@@ -6196,9 +6196,13 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                  i < (uint32_t)pbody->as.fn.arity; i++) {
                 const Type *aft = pbody->as.fn.arg_full_types[i];
                 if (!aft || aft->kind != TY_FN) continue;
-                /* Reach the closure/fn FnDef behind the (possibly boxed) arg. */
+                /* Reach the closure/fn FnDef behind the (possibly boxed /
+                 * ascribed) arg -- an inline `(fn ...)` may arrive wrapped in an
+                 * EX_FN_TO_FAT shim and/or an erased EX_ASCRIBE. */
                 Expr *a = args[i];
-                while (a && a->kind == EX_FN_TO_FAT) a = a->as.fn_to_fat_.inner;
+                while (a && (a->kind == EX_FN_TO_FAT || a->kind == EX_ASCRIBE))
+                    a = (a->kind == EX_FN_TO_FAT) ? a->as.fn_to_fat_.inner
+                                                  : a->as.ascribe_.inner;
                 FnDef *gfd = NULL;
                 if (a && a->kind == EX_CLOSURE && a->as.closure_.closure)
                     gfd = a->as.closure_.closure->fn;

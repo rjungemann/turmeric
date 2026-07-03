@@ -1,0 +1,75 @@
+;; WF2 (van-laarhoven-wide-functor-carrier-plan): crash-harness for the
+;; fat-boxed functor-wrapping `g : (-> A (f A))` crossing.  `set`/`over` use a
+;; *capturing* g (it closes over `b` / `h`), and the wide functor's SECOND word
+;; (`tag`) carries meaningful data that `fmap` reads and preserves.  So `fmap`
+;; reads BOTH words of its `(f a)` argument -- word 0 via `run-id`, word 1 via
+;; `id-tag`.  If only the first word of the fat-dispatched g result crossed the
+;; mode-B poly carrier (the pre-fix miscompile), `id-tag` reads garbage and
+;; `over-tag`/`set-tag` fail to return 42 (or segfault) rather than silently
+;; passing -- the same crash-hardening the MB4 fixtures rely on.  Behind
+;; --enable=vl-wide-functor the full two-word `(f A)` aggregate crosses intact.
+
+;; Const r a -- carrier-compatible one-int64 opaque; `view` stays on the
+;; untouched carrier path.
+(defopaque Const [r a] :int)
+(defn mk-const [A] [x : A] : (Const A A) ```c return (int64_t)x; ```)
+(defn get-const [R A] [c : (Const R A)] : R ```c return (int64_t)c; ```)
+(definstance Functor [(Const r)]
+  (fmap [c g] (mk-const (get-const c))))
+
+;; Identity a -- WIDE: a two-word `:copy` struct.  `mk-id` stamps tag = 42.
+(defstruct Identity :copy [A] (wrapped : A) (tag : int))
+(defn mk-id  [A] [x : A]            : (Identity A) (make-struct Identity :wrapped x :tag 42))
+(defn run-id [A] [i : (Identity A)] : A            (.wrapped i))
+(defn id-tag [A] [i : (Identity A)] : int          (.tag i))
+;; fmap PRESERVES the input tag -- reading word 1 of its (f a) argument -- so a
+;; dropped tag word surfaces as a wrong result, not a coincidental pass.
+(definstance Functor [Identity]
+  (fmap [i g] (make-struct Identity :wrapped (g (run-id i)) :tag (id-tag i))))
+
+(defstruct Point :copy :heap [x : int y : int])
+
+(defn point-x [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)
+  (fmap (g (.x s))
+        (fn [nx : int] : Point (make-struct Point :x nx :y (.y s)))))
+
+;; view l s = get-const (l (\x -> Const x) s)   -- f := Const, thin g.
+(defn view-px
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> int (f int)) Point (f Point)))
+     s : Point] : int
+  (get-const (l (fn [x : int] : (Const int int) (mk-const x)) s)))
+
+;; set l b s = run-id (l (\_ -> Identity b) s)   -- f := Identity, capturing g.
+(defn set-px
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> int (f int)) Point (f Point)))
+     b : int s : Point] : Point
+  (run-id (l (fn [a : int] : (Identity int) (mk-id b)) s)))
+
+;; over l h s = run-id (l (\a -> Identity (h a)) s) -- f := Identity, capturing g.
+(defn over-px
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> int (f int)) Point (f Point)))
+     h : (-> int int) s : Point] : Point
+  (run-id (l (fn [a : int] : (Identity int) (mk-id (h a))) s)))
+
+;; over-tag l h s = id-tag (l (\a -> Identity (h a)) s) -- observes word 1.
+(defn over-tag
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> int (f int)) Point (f Point)))
+     h : (-> int int) s : Point] : int
+  (id-tag (l (fn [a : int] : (Identity int) (mk-id (h a))) s)))
+
+;; set-tag l b s = id-tag (l (\_ -> Identity b) s) -- observes word 1.
+(defn set-tag
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> int (f int)) Point (f Point)))
+     b : int s : Point] : int
+  (id-tag (l (fn [a : int] : (Identity int) (mk-id b)) s)))
+
+(defn main [] : int
+  (let [p (make-struct Point :x 3 :y 4)]
+    (println (view-px point-x p))                              ; 3
+    (let [p2 (over-px point-x (fn [v : int] : int (* v 10)) p)]
+      (println (.x p2)))                                       ; 30
+    (println (over-tag point-x (fn [v : int] : int (* v 10)) p)) ; 42
+    (let [p3 (set-px point-x 99 p)]
+      (println (.x p3)))                                       ; 99
+    (println (set-tag point-x 99 p)))                          ; 42
+  0)
