@@ -5904,6 +5904,12 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                  * matching actual argument's type. */
                 Type concrete;
                 bool pinned = false;
+                /* True when `f` is pinned NESTED inside a function-typed
+                 * parameter (the van Laarhoven lens shape `g : (-> A (f A))`,
+                 * MB4 branch below).  Only this pin gates the wide-by-value
+                 * functor rejection (TUR-E0309); the direct-argument MB2 pin's
+                 * aggregate `(f a)` crossing IS supported (MB2.5). */
+                bool nested_functor_pin = false;
                 for (uint32_t j = 0;
                      j < n_args && j < (uint32_t)cbody->as.fn.arity; j++) {
                     const Type *aft = cbody->as.fn.arg_full_types[j];
@@ -5955,6 +5961,7 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                                     base->kind != TY_UNKNOWN) {
                                     concrete = *base;
                                     pinned = true;
+                                    nested_functor_pin = true;
                                 }
                                 break;
                             }
@@ -5968,6 +5975,39 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                  * obligation is still abstract (same guard as elab_call.c:4975). */
                 if (concrete.kind == TY_TYVAR || concrete.kind == TY_UNKNOWN ||
                     concrete.kind == TY_APP) continue;
+                /* van-laarhoven-functor-must-be-int-carrier: the mode-B carrier
+                 * is a single int64 word, so a functor whose `(f a)` is a wide
+                 * by-value aggregate -- a non-opaque, non-`:heap` single-variant
+                 * flat product (a `:copy` struct / record ADT, more than one
+                 * word of state) -- cannot be threaded through the abstract-`f`
+                 * boundary of a van Laarhoven lens.  Elaboration used to accept
+                 * it and codegen emitted int64<->struct-pointer reinterpretations
+                 * that segfault at runtime (or fail the C stage with
+                 * -Wint-conversion under a strict compiler).  Reject it here with
+                 * a clear diagnostic instead of a silent miscompile.  An opaque
+                 * (`is_opaque`, a named int64 -- `Const`/`Identity`) and a :heap
+                 * def (a typed pointer) are BOTH one carrier word and pass; the
+                 * direct-argument MB2 shape supports aggregate `(f a)` (MB2.5),
+                 * so only the nested-fn (lens) pin is gated. */
+                if (nested_functor_pin && concrete.kind == TY_ADT) {
+                    const AdtDef *fd = concrete.as.adt_.def;
+                    if (fd && !fd->is_opaque && !fd->is_heap &&
+                        adt_is_flat_product(fd)) {
+                        diag_emit(DIAG_ERROR, call->span,
+                                  "van Laarhoven functor '%s' is a wide "
+                                  "by-value aggregate, but the mode-B carrier "
+                                  "for the constraint on '%s' is a single int64 "
+                                  "word -- a functor whose '(%s a)' does not fit "
+                                  "in one word cannot be threaded through the "
+                                  "abstract-functor boundary of a rank-2 lens.  "
+                                  "Wrap it in a one-word carrier (e.g. "
+                                  "'defopaque %s [a] :int') or focus through a "
+                                  "carrier-compatible functor (TUR-E0309)",
+                                  type_name(concrete), vname, vname,
+                                  type_name(concrete));
+                        return NULL;
+                    }
+                }
                 TypeClassInstance *inst = typeclass_env_lookup_instance(
                     &e->typeclass_env, tc, &concrete, 1);
                 if (!inst) {

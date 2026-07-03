@@ -1,0 +1,39 @@
+;; van-laarhoven-functor-must-be-int-carrier: a van Laarhoven lens threads its
+;; abstract functor `(f a)` through the mode-B int64 carrier (one word).  A
+;; carrier-compatible functor -- a `defopaque ... :int` such as Const/Identity,
+;; or a :heap type -- rides the carrier fine.  A WIDE by-value aggregate functor
+;; (here Identity is a two-word `:copy` struct, not the one-int64 opaque) does
+;; NOT fit in one word and used to be accepted by `tur check`, then codegen a
+;; int64<->struct reinterpretation that segfaults at runtime.  It is now
+;; rejected up front with TUR-E0309 at the lens invocation site.
+(defopaque Const [r a] :int)
+(defn mk-const [A] [x : A] : (Const A A) ```c return (int64_t)x; ```)
+(defn get-const [R A] [c : (Const R A)] : R ```c return (int64_t)c; ```)
+(definstance Functor [(Const r)]
+  (fmap [c g] (mk-const (get-const c))))
+
+;; WIDE functor: a two-word `:copy` struct rather than a one-int64 opaque.
+(defstruct Identity :copy [A] (wrapped : A) (tag : int))
+(defn mk-id  [A] [x : A]            : (Identity A) (make-struct Identity :wrapped x :tag 0))
+(defn run-id [A] [i : (Identity A)] : A            (.wrapped i))
+(definstance Functor [Identity]
+  (fmap [i g] (mk-id (g (run-id i)))))
+
+(defstruct Point :copy :heap [x : int y : int])
+
+(defn point-x [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)
+  (fmap (g (.x s))
+        (fn [nx : int] : Point (make-struct Point :x nx :y (.y s)))))
+
+;; set l b s = run-id (l (\_ -> Identity b) s) -- pins f := Identity (the wide
+;; struct) through the nested functor-wrapping function `g`.
+(defn set-px
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> int (f int)) Point (f Point)))
+     b : int s : Point] : Point
+  (run-id (l (fn [a : int] : (Identity int) (mk-id b)) s)))
+
+(defn main [] : int
+  (let [p (make-struct Point :x 3 :y 4)]
+    (let [p3 (set-px point-x 99 p)]
+      (println (.x p3))))
+  0)
