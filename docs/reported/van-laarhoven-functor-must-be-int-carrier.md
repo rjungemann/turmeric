@@ -1,0 +1,178 @@
+---
+title: Van Laarhoven `view`/`set`/`over` only works when the functor `f` is a
+  one-int64 carrier (opaque wrapping `:int`)
+severity: MEDIUM. Expressiveness gap in the mode-B forall / HKT surface. The
+  lens focus types (`S`, `A`) are unconstrained -- ordinary `defstruct`s,
+  primitives, and opaques all focus fine -- but the *functor* handed to the
+  lens must be carrier-compatible (one int64 word). A functor whose `(f a)` is
+  a wider by-value aggregate is the mode-B "No-go" that the lens guide already
+  flags, and it forces every VL fixture to redeclare `Const`/`Identity` as
+  `defopaque ... :int`.
+status: OPEN. Filed 2026-07-02. The restriction is documented in
+  `docs/guides/lens-guide.md:95-98` as a known mode-B limitation; this report
+  captures it as a tracked expressiveness gap so it doesn't get lost behind
+  the "van Laarhoven works now" framing in the guide.
+---
+
+# Van Laarhoven functors are restricted to one-int64 carriers
+
+## Symptom
+
+The van Laarhoven optic
+
+```
+type Lens s a = forall f. Functor f => (a -> f a) -> (s -> f s)
+```
+
+type-checks and runs end-to-end for `view`/`set`/`over`/composition on
+Turmeric today (see `tests/fixtures/van-laarhoven-lens-{concrete,generic,
+compose,delegate}/`). But every one of those fixtures declares the functors
+the same way:
+
+```turmeric
+(defopaque Const    [r a] :int)
+(defopaque Identity [a]   :int)
+```
+
+That is not incidental -- it is forced. If `f` is any functor whose `(f a)`
+does not fit in one int64 word (a by-value aggregate `defstruct`, a wider
+opaque, a tuple), the mode-B dictionary-passed carrier cannot thread `(f a)`
+through the abstract-functor call boundary and the program is rejected /
+mis-codegened.
+
+The focus side is unconstrained -- `Point`/`Line`/`int` in the fixtures are
+ordinary `defstruct :copy :heap` and primitives -- so this is purely a
+*functor* restriction, not a lens restriction.
+
+## Why this is a gap, not the intended design
+
+The whole point of `forall f. Functor f => ...` is that the lens body doesn't
+know or care what shape `(f a)` has -- it just calls `fmap` on it. Mode B
+gets us most of the way there by threading the resolved dictionary through
+the int64 carrier so `fmap` dispatches on the caller's instance at runtime.
+The remaining restriction -- that `(f a)` itself has to fit in the carrier
+slot -- is a consequence of the current *carrier* being a single int64, not
+of anything in the van Laarhoven encoding.
+
+`stdlib/lens.tur` therefore still ships the profunctor-by-record encoding as
+the default and points at this exact restriction as the reason
+(`lens-guide.md:95-98`). The record encoding sidesteps the issue by never
+threading `(f a)` at all -- but it also gives up ordinary-function-composition
+of optics (`lens-guide.md:107-131`), which is the whole reason to want van
+Laarhoven in the first place.
+
+## Minimal repro
+
+Take the `van-laarhoven-lens-concrete/` fixture and replace only the
+functor -- swap the one-int64 opaque `Identity` for a two-word parametric
+`defstruct`:
+
+```turmeric
+(defstruct Identity :copy [A] (wrapped : A) (tag : int))
+(defn mk-id  [A] [x : A]           : (Identity A) (make-struct Identity :wrapped x :tag 0))
+(defn run-id [A] [i : (Identity A)] : A            (.wrapped i))
+(definstance Functor [Identity]
+  (fmap [i g] (mk-id (g (run-id i)))))
+```
+
+The lens (`point-x`), the wholes/parts (`Point`, `int`), and `set-px` /
+`over-px` / `view-px` are all unchanged; only `Identity` moves from a
+one-int64 opaque to a two-word `:copy` struct.
+
+Current behavior with
+`--enable=forall-kinds,forall-constraints,hkt-hrt,forall-dict-pass
+--allow-experimental` (v0.26.0):
+
+- `tur check` **passes** -- the elaborator accepts the program.
+- `tur build` (with the suite's usual `TUR_CC_FLAGS=-O2 -std=c99 -Wall
+  -fno-strict-aliasing`) **succeeds** -- codegen emits int64-to-pointer
+  conversions that `cc` reports as `-Wint-conversion` **warnings**, not
+  errors, so a binary is produced.
+- Running the binary **segfaults** (exit 139) -- the int64 carrier is
+  being reinterpreted as a `Point *` at the abstract-`f` boundary, so the
+  synthesized "pointer" walks into unmapped memory the first time the
+  monomorphized site tries to dereference it.
+- Invoking `tur run` outside the suite (where the host clang defaults to
+  treating `-Wint-conversion` as an error) also fails at the C stage with
+  e.g.
+
+  ```
+  error: incompatible integer to pointer conversion assigning to
+    'tur_adt_Point *' (aka 'struct tur_adt_Point *') from 'int64_t'
+    (aka 'long long') [-Wint-conversion]
+      __t20->s = s;
+  ```
+
+  which is the mode-B carrier mismatch surfaced at the C layer: the
+  compiler is threading `(f a)` as a one-int64 word through the
+  abstract-`f` boundary, but the monomorphized call site wants a
+  struct-pointer-shaped value.
+
+So the gap is **silent at the type layer** -- no `TUR-E...` diagnostic
+points at the functor, and under the suite's default CC flags the build
+succeeds and produces a miscompiled binary. That is worse than a hard
+error: the same program is rejected on a strict clang and mis-runs on a
+lenient one. A diagnostic that rejects wide by-value functors at the
+mode-B boundary (or at least surfaces a `TUR-W...` warning) is a smaller
+independent fix worth landing before the full monomorphization work --
+today the only signal a user gets that they've hit this restriction is a
+segfault or a `-Wint-conversion` line from the host C compiler.
+
+## Root cause (direction)
+
+The mode-B slices (MB1-MB4 in
+`docs/upcoming/v1/constrained-hkt-forall-mode-b-plan.md`) thread the
+`Functor f` dictionary through an int64-typed value, and every call across
+the abstract-`f` boundary (adapter lambdas, `fmap` invocations, the outer
+lens application) marshals `(f a)` as a single int64. That is fine as long
+as `(f a)` is a one-word opaque -- `Const [r a] :int` and `Identity [a] :int`
+box their payload into an int64 by construction -- but it is not fine for a
+by-value aggregate.
+
+The long-term fix is the end-to-end monomorphization direction
+([../upcoming/end-to-end-monomorphization-plan.md](../upcoming/end-to-end-monomorphization-plan.md))
+-- once each `forall f. ... => ...` is specialized per instantiating `f` at
+codegen, `(f a)` flows through its own natural ABI and the int64-carrier
+restriction dissolves. Shorter-term patches (a wider carrier, boxing
+by-value functors at the boundary) are possible but pay the usual hybrid
+cost.
+
+## Impact
+
+- Every VL fixture has to redeclare `Const`/`Identity` locally as one-word
+  opaques. There is no shared stdlib home for VL functors because a shared
+  home would have to commit to the one-int64 shape and advertise the
+  restriction alongside it.
+- Any user who reaches for van Laarhoven optics with a "real" functor
+  (`Vec`, `Map`, a by-value `Writer`, anything with more than a single
+  scalar of state) is silently pushed back to the record encoding.
+- The "van Laarhoven works on Turmeric now" claim in `lens-guide.md:64` is
+  narrowly true but easy to over-read; this report exists so the
+  functor-side restriction is discoverable as a tracked gap rather than a
+  buried footnote.
+
+## Fix directions
+
+1. End-to-end monomorphization (see plan above) -- correct long-term
+   answer; retires the int64-carrier boundary entirely.
+2. Widen the mode-B carrier -- e.g. a two-word or pointer-to-payload
+   carrier for `(f a)` at the abstract-`f` boundary -- so at least
+   two-word by-value functors pass through. Cheaper than (1) but still
+   hybrid.
+3. Auto-box by-value functors at the abstract-`f` boundary -- a compiler
+   inserts allocate/free around each `(f a)` crossing when `f`'s
+   instantiation is wide. Keeps the carrier narrow at the cost of an
+   allocation per crossing.
+
+## Related
+
+- [../guides/lens-guide.md](../guides/lens-guide.md) -- the shipped guide
+  that documents this restriction inline (`lens-guide.md:95-98`) and
+  explains why the record encoding stays the default.
+- [../upcoming/v1/constrained-hkt-forall-mode-b-plan.md](../upcoming/v1/constrained-hkt-forall-mode-b-plan.md)
+  -- MB1-MB4, the dictionary-passing scheme whose int64 carrier drives
+  this restriction.
+- [../upcoming/end-to-end-monomorphization-plan.md](../upcoming/end-to-end-monomorphization-plan.md)
+  -- the long-term direction that removes the restriction at its root.
+- `tests/fixtures/van-laarhoven-lens-{concrete,generic,compose,delegate}/`
+  -- the working VL fixtures, all of which use `:int` opaque functors.

@@ -95,7 +95,8 @@ setter) as the default, for two reasons:
 - **General functors.** The working `view`/`set`/`over`/composition rely on
   `Const`/`Identity` being *carrier-compatible* opaques (one int64 word), so
   `(f a)` flows through the type-erased carrier. A functor whose `(f a)` is a wider
-  by-value aggregate is still the mode-B "No-go".
+  by-value aggregate is still the mode-B "No-go" -- tracked as
+  [../reported/van-laarhoven-functor-must-be-int-carrier.md](../reported/van-laarhoven-functor-must-be-int-carrier.md).
 - **Maturity.** The van Laarhoven path runs behind the `--enable=forall-*` /
   `hkt-hrt` / `forall-dict-pass` experiments; the record encoding needs none of
   that machinery and is stable today.
