@@ -1,0 +1,17 @@
+;; method-result-functor-inference: a bare class-method call whose declared
+;; result is `(f b)` recovers the functor `f` from the receiver's concrete
+;; type.  `(fmap (mk-box 5) inc)` grounds its result to `(Box int)` -- even
+;; though `Box` is an opaque int-carrier newtype and the Functor instance body
+;; delegates to the carrier helper `mk-box` (so it is not by-value-constructible)
+;; -- so the downstream `(un-box r)` matches `(Box A)` without an ascription.
+
+(defopaque Box [a] :int)
+(defn mk-box [A] [x : A] : (Box A) ```c return (int64_t)x; ```)
+(defn un-box [A] [b : (Box A)] : A ```c return (int64_t)b; ```)
+(definstance Functor [Box]
+  (fmap [b g] (mk-box (g (un-box b)))))
+
+(defn main [] : int
+  (let [r (fmap (mk-box 5) (fn [x : int] : int (+ x 1)))]
+    (println (un-box r)))   ; wanted: 6
+  0)
