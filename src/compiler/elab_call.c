@@ -5394,10 +5394,64 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         }
     }
 
+    /* van-laarhoven-lens-composition (Gap B): forward the ENCLOSING constrained
+     * rank-2 fn's dict into this nested call to ANOTHER constrained rank-2 fn at
+     * the same abstract functor.  Inside `(defn wrap [^f] [^Functor f ...] (point-x
+     * g s))`, the call to `point-x` pins its `Functor f` obligation to `wrap`'s
+     * own abstract `f` -- deferred above, so the call would otherwise resolve to
+     * point-x's plain carrier base (an arbitrary hardcoded instance + a thin
+     * fn-ptr call on the boxed `g` -> SIGSEGV).  Redirect to point-x's dict-clone
+     * and prepend an AMBIENT dict value, which lowers to `wrap`'s own dict param
+     * when `wrap` is itself emitted as a dict-clone. */
+    Binding *fwd_bound = bound_fn;
+    Expr   **fwd_args  = args;
+    uint32_t fwd_nargs = n_args;
+    if (g_opt_forall_dict_pass && e->cur_hkt_constraint_class &&
+        e->cur_hkt_constraint_tyvar && fn_binding && bound_fn == fn_binding &&
+        fn_binding->fn_constraints &&
+        fn_binding->fn_constraints->n_constraints == 1 &&
+        fn_binding->fn_constraints->constraints[0].typeclass ==
+            e->cur_hkt_constraint_class &&
+        fn_binding->source_fn_def) {
+        const TypeConstraint *con0 = &fn_binding->fn_constraints->constraints[0];
+        uint8_t bidx0 = 0;
+        bool pins_ambient = false;
+        if (con0->tyvar && con0->tyvar->name &&
+            call_find_type_binding(type_bindings, n_type_bindings,
+                                   con0->tyvar->name, &bidx0)) {
+            Type c0 = type_bindings[bidx0].type;
+            pins_ambient = (c0.kind == TY_TYVAR && c0.as.tyvar_.name &&
+                            strcmp(c0.as.tyvar_.name,
+                                   e->cur_hkt_constraint_tyvar) == 0);
+        }
+        if (pins_ambient) {
+            Binding *clone = make_dict_clone(e, fn_binding, call->span);
+            if (clone) {
+                TypeClassInstance *repr = NULL;
+                for (TypeClassInstance *it = e->typeclass_env.instances; it;
+                     it = it->next)
+                    if (it->typeclass == e->cur_hkt_constraint_class) {
+                        repr = it; break;
+                    }
+                Expr *amb = expr_new(e->arena, EX_DICT, TYPE_PTR_VOID, call->span);
+                amb->as.dict_.instance = repr;
+                amb->as.dict_.method_name[0] = '\0';
+                amb->as.dict_.is_ambient = true;
+                Expr **na = (Expr **)arena_alloc(e->arena,
+                                                 (n_args + 1) * sizeof(Expr *));
+                na[0] = amb;
+                for (uint32_t k = 0; k < n_args; k++) na[k + 1] = args[k];
+                fwd_bound = clone;
+                fwd_args  = na;
+                fwd_nargs = n_args + 1;
+            }
+        }
+    }
+
     Expr *out = expr_new(e->arena, EX_CALL, call_result_type, call->span);
-    out->as.call_.fn_binding = bound_fn;
-    out->as.call_.args = args;
-    out->as.call_.n_args = n_args;
+    out->as.call_.fn_binding = fwd_bound;
+    out->as.call_.args = fwd_args;
+    out->as.call_.n_args = fwd_nargs;
     out->as.call_.fn_expr = NULL;
     /* GS5/CS3: hand the named-tyvar substitution to emit so it can drive ABI
      * specialization without re-deriving it from the call's argument types. */

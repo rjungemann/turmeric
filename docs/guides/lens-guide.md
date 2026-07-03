@@ -84,13 +84,14 @@ and a setter -- because two things the record encoding gets for free are still
 missing from the van Laarhoven form here:
 
 - **Composition.** Optic composition is the whole point of the van Laarhoven
-  form, and it does not work yet. A composed lens is a constrained rank-2 body
-  that calls another constrained rank-2 lens forwarding its own abstract functor
-  `f`. The kind-checking half now works (a nested `(f B)` annotation recovers the
-  enclosing `f : * -> *`), but the call to the inner lens still fails: discharging
-  its `Functor f` obligation needs the enclosing function's dictionary to be
-  *forwarded* (the pin is an abstract `f`, not a ground type), which the mode-B
-  machinery currently defers. See
+  form, and it does not fully work yet. The pieces are landing: a constrained
+  rank-2 lens can now *delegate* to another at its own abstract functor,
+  forwarding the runtime dictionary (a nested `(f B)` annotation recovers the
+  enclosing `f : * -> *`, and the nested `Functor f` obligation is discharged by
+  forwarding the caller's dict). What is still missing is the *adapter lambda*
+  that composition needs -- `(fn [p] : (f Point) (point-x g p))` handed to another
+  lens -- which requires capturing the ambient dictionary into the lifted closure
+  and preserving the rank-2 `(f X)` argument type. See
   [docs/reported/van-laarhoven-lens-composition.md](../reported/van-laarhoven-lens-composition.md).
 - **General functors.** The working `view`/`set`/`over` rely on `Const`/`Identity`
   being *carrier-compatible* opaques (one int64 word), so `(f a)` flows through

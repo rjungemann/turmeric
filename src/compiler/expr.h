@@ -882,6 +882,13 @@ struct Expr {
             TypeClassInstance *instance;
             char dict_name[128];  /* "dict_<Class>_<type>" singleton name */
             char method_name[64]; /* sanitized method field name; '\0' = address-only mode */
+            /* van-laarhoven-lens-composition: an AMBIENT dict value -- the dict for
+             * the ENCLOSING constrained rank-2 fn's own constraint, forwarded into
+             * a nested constrained rank-2 call at the same abstract functor.  When
+             * emitted inside a dict-clone body it lowers to the clone's dict
+             * PARAMETER (ctx->dict_dispatch_param_cname); otherwise it falls back to
+             * `instance`'s singleton (the plain carrier-base form). */
+            bool is_ambient;
         } dict_; /* (dict Instance) */
 
         /* Phase 11: Struct operations */

@@ -2510,6 +2510,27 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* Phase R6: Track current function name for linting */
     e->current_fn_name = name_f->as.sym;
     if (fn_declared_unsafe) e->unsafe_depth++;
+    /* van-laarhoven-lens-composition: expose this fn's single higher-kinded
+     * constraint (`^Functor f`, tyvar `f : * -> *`) to its body so a nested call
+     * to another constrained rank-2 fn at the same abstract functor can forward
+     * this fn's dict.  Saved/restored around the body (paired with the
+     * current_fn_name resets) so a nested defn's own constraint shadows it. */
+    TypeClass  *saved_cur_hkt_class = e->cur_hkt_constraint_class;
+    const char *saved_cur_hkt_tyvar = e->cur_hkt_constraint_tyvar;
+    e->cur_hkt_constraint_class = NULL;
+    e->cur_hkt_constraint_tyvar = NULL;
+    if (n_constraints == 1 && constraint_list &&
+        constraint_list[0].typeclass && constraint_list[0].tyvar) {
+        const Symbol *ctv = constraint_list[0].tyvar;
+        for (uint8_t tpi = 0; tpi < n_fn_type_params; tpi++) {
+            if (fn_type_params[tpi] == ctv &&
+                fn_type_param_kinds[tpi] != KIND_STAR) {
+                e->cur_hkt_constraint_class = constraint_list[0].typeclass;
+                e->cur_hkt_constraint_tyvar = ctv->name;
+                break;
+            }
+        }
+    }
     /* generic-return-type-not-inferred-from-context: push the declared
      * return type onto the expected-type channel for the body's tail.
      * elab_call clears it before sub-arg elaboration, so this only binds
@@ -2557,6 +2578,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 e->n_sig_tyvars = saved_n_sig_tyvars;
                 e->expected_type = prev_body_expected;
                 e->current_fn_name = NULL;
+                e->cur_hkt_constraint_class = saved_cur_hkt_class;
+                e->cur_hkt_constraint_tyvar = saved_cur_hkt_tyvar;
                 e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                 e->scope = inner.parent;
                 scope_free(&inner);
@@ -2574,6 +2597,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 e->expected_type = prev_body_expected;
                 /* Phase R6: Reset current function name */
                 e->current_fn_name = NULL;
+                e->cur_hkt_constraint_class = saved_cur_hkt_class;
+                e->cur_hkt_constraint_tyvar = saved_cur_hkt_tyvar;
                 e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                 e->scope = inner.parent;
                 scope_free(&inner);
@@ -2592,6 +2617,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     e->expected_type = prev_body_expected;
                     /* Phase R6: Reset current function name */
                     e->current_fn_name = NULL;
+                    e->cur_hkt_constraint_class = saved_cur_hkt_class;
+                    e->cur_hkt_constraint_tyvar = saved_cur_hkt_tyvar;
                     e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                     e->scope = inner.parent;
                     scope_free(&inner);
@@ -2622,6 +2649,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
     e->n_sig_tyvars = saved_n_sig_tyvars;
     /* Phase R6: Reset current function name */
     e->current_fn_name = NULL;
+    e->cur_hkt_constraint_class = saved_cur_hkt_class;
+    e->cur_hkt_constraint_tyvar = saved_cur_hkt_tyvar;
     e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
 
     /* bare-fat-result-monomorphization: close the canonical-body capture frame.

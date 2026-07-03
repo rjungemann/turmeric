@@ -449,6 +449,15 @@ typedef struct Elab {
     uint32_t cap_handled_effects;
     uint32_t fn_body_depth;
     const Symbol *current_fn_name;  /* Phase R6: track current function name for linting */
+    /* van-laarhoven-lens-composition: while elaborating the body of a constrained
+     * rank-2 (higher-kinded) fn -- `(defn f [^g] [^Functor g ...] ...)` -- these
+     * hold that fn's single HKT constraint's class and the abstract type-variable
+     * name it constrains (`g`).  A nested call to ANOTHER constrained rank-2 fn
+     * whose constraint pins to this same abstract variable forwards this fn's dict
+     * instead of deferring (which segfaults on a hardcoded/absent instance).  NULL
+     * outside such a body. */
+    struct TypeClass *cur_hkt_constraint_class;
+    const char       *cur_hkt_constraint_tyvar;
     uint32_t unsafe_depth;
     uint32_t macro_expand_depth;
     /* Phase U5: Unsafe linting configuration */
