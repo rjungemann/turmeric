@@ -4,6 +4,25 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.26.2] -- 2026-07-02
+
+### Added
+
+- **Wide by-value van Laarhoven functors through the lens boundary**,
+  behind `--enable=vl-wide-functor` (WF1).
+
+### Changed
+
+- **Syntax and LSP tweaks** across the main driver, stdlib docstrings,
+  and vim highlighting.
+
+### Fixed
+
+- **Match-arm error path** no longer leaks linear-state snapshot
+  buffers.
+- **Wide by-value van Laarhoven functors** now report a targeted
+  `TUR-E0309` diagnostic instead of miscompiling.
+
 ## [0.26.1] -- 2026-07-02
 
 ### Added

@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.26.1` -- constrained HKT + rank-2 `forall` land (slices 1-4), with class-method result functors and van Laarhoven lens focus types now inferred from context.
+**Latest release:** `v0.26.2` -- wide by-value van Laarhoven functors compose through the lens boundary behind `--enable=vl-wide-functor`, with a targeted `TUR-E0309` for unsupported shapes.
 
 ## What
 
