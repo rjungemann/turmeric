@@ -2013,6 +2013,33 @@ static bool m7_type_has_free_tyvar(Type t) {
     }
 }
 
+/* method-result-functor-inference: is this fully-ground applied result type
+ * representationally the int64 carrier?  True for an opaque newtype head
+ * (`(defopaque Box [a] :int)` -- n_ctors == 0, is_opaque) and a transparent
+ * int-record newtype -- BOTH lower to `int64_t`, so committing the grounded
+ * `(Box int)` as the call's static result type is ABI-identical to the
+ * carrier the (carrier-bodied) instance method actually returns.  This lets a
+ * downstream `(un-box r)` recover `f := Box` from the receiver's `(Box int)`
+ * even when the instance body delegates to a carrier helper and so is NOT
+ * by-value-constructible (m7_body_byvalue_ok == false).  Kept narrow to the
+ * int64-carrier representations: a genuine by-value aggregate (Option/Result
+ * with multiple fields) must still mint a by-value spec before its precise
+ * result type may be committed, or the consumer reads the aggregate layout
+ * off a carrier int64 (the carrier-vs-by-value mismatch). */
+static bool m7_result_is_int_carrier(Type t) {
+    if (type_is_transparent_int_newtype(t)) return true;
+    if (t.kind == TY_APP) {
+        AdtDef *adef = NULL;
+        Type args[16];
+        uint8_t na = 0;
+        if (type_extract_adt_app(&t, &adef, args, &na) && adef)
+            return adef->is_opaque;
+    }
+    if (t.kind == TY_ADT)
+        return t.as.adt_.def && t.as.adt_.def->is_opaque;
+    return false;
+}
+
 /* Parse a single instance-head argument form into a Type.  A primitive type
  * keyword (`int`, `cstr`, ...) or a known struct/ADT name resolves to its
  * concrete type; any other bare name is treated as a head *type variable*
@@ -6052,9 +6079,31 @@ resolved_user_fallback:;
                  * keeps the carrier result_type so dispatch falls back to the
                  * uniform carrier ABI instead of emitting a broken half-by-value
                  * spec with a dangling carrier-base dict reference. */
-                if (!m7_type_has_free_tyvar(substituted) && m7_body_byvalue_ok) {
-                    result_type = substituted;
-                    m7_byvalue_grounded = true;
+                if (!m7_type_has_free_tyvar(substituted)) {
+                    if (m7_body_byvalue_ok) {
+                        result_type = substituted;
+                        m7_byvalue_grounded = true;
+                    } else if (result_type.kind == TY_APP &&
+                               m7_result_is_int_carrier(substituted)) {
+                        /* method-result-functor-inference: the instance body
+                         * delegates to a carrier helper (`(mk-box ...)`), so it
+                         * is not by-value-constructible -- but the grounded
+                         * result is an int64-carrier newtype (`(Box int)`),
+                         * whose representation is ALREADY the carrier the method
+                         * returns.  Commit the precise applied result type so a
+                         * downstream `(un-box r)` matches `(Box A)`, WITHOUT
+                         * setting m7_byvalue_grounded: dispatch stays on the
+                         * uniform carrier ABI and no by-value spec is minted.
+                         *
+                         * Gate on `result_type.kind == TY_APP`: we only REFINE
+                         * the def-less `(type-app ? ?)` carrier shell.  An
+                         * instance that overrode the class's `(f b)` with a
+                         * concrete scalar return (`fmap ... : float`) already
+                         * has result_type == float here -- leave it alone so the
+                         * divergent scalar is not clobbered by the recovered
+                         * `(f int)` (typeclass-instance-float-return). */
+                        result_type = substituted;
+                    }
                 }
             }
         }
