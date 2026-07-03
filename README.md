@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.26.0` -- structdef retirement lowers `:linear` defstructs, `defopaque`, and more types (`arrow`, `handler`, `Session`) to record ADTs; new `interpret` subcommand and REPL `:explain` meta-command round out the introspection story.
+**Latest release:** `v0.26.1` -- constrained HKT + rank-2 `forall` land (slices 1-4), with class-method result functors and van Laarhoven lens focus types now inferred from context.
 
 ## What
 

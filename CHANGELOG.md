@@ -4,6 +4,28 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.26.1] -- 2026-07-02
+
+### Added
+
+- **Constrained HKT + rank-2 `forall`, slices 1-4.** Kind annotations,
+  constraint propagation, higher-kinded rank-2 quantification, and
+  van Laarhoven lenses (`view`/`set`/`over`).
+
+### Changed
+
+- **Class-method result functor inferred from the receiver**, so
+  `fmap`/`bind` sites no longer need explicit functor annotations.
+- **Generic focus type flows through rank-2 `forall` lens arguments**,
+  making van Laarhoven `view`/`set`/`over` inferable at use sites.
+- **`tur run` improvements.**
+
+### Fixed
+
+- **Poly combinator element tyvar** grounded through the returned
+  closure's application, unblocking inference of polymorphic
+  combinators that return functions.
+
 ## [0.26.0] -- 2026-07-02
 
 ### Added
