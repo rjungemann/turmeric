@@ -73,12 +73,39 @@ unsigned long long mono_spec_concrete_emit_info(size_t i, const void **lens_fn,
                                                 const void **functor_ty);
 
 /* VBM3: if `lensparam_binding` is the abstract lens param `l` of a consumer
- * whose lens uniquely resolves to a concrete `<lens>__mono_<hash>` body (not
- * ambiguous), return true and hand back the lens name + hash so the poly-call
- * emit can redirect `(l g s)` to the by-value mono body.  False otherwise. */
+ * whose lens UNIQUELY resolves (|set| == 1) to a concrete `<lens>__mono_<hash>`
+ * body, return true and hand back the lens name + hash so the poly-call emit can
+ * redirect `(l g s)` to the by-value mono body.  False for the unresolved
+ * (|set| == 0) and ambiguous (|set| >= 2) cases -- the latter is CM2/CM3's
+ * consumer-clone case, not an in-place redirect. */
 bool   mono_spec_redirect_for_binding(const void *lensparam_binding,
                                       const char **lens_name,
                                       unsigned long long *mono_hash);
+
+/* CM1 (van-laarhoven-consumer-mono-plan): the FULL resolved concrete-lens set for
+ * a consumer lens param.  `mono_specs_resolve_program` grows this set to a
+ * fixpoint over the call graph (direct named-lens args + transitively forwarded
+ * lens params).  |set| == 1 is the VBM3 unique-redirect case; |set| >= 2 is the
+ * ambiguous case CM2 emits one consumer clone per element for; |set| == 0 is a
+ * runtime-selected lens with no static concrete lens (Path A / CM4 residual).
+ * These accessors expose the set to the CM2 clone emit and CM3 call rewrite. */
+
+/* Number of distinct concrete lenses resolved for consumer lens param
+ * `lensparam_binding` (0 for an unknown binding or an unresolved param). */
+size_t mono_spec_lens_set_count(const void *lensparam_binding);
+
+/* Read the i-th resolved lens for `lensparam_binding`: its defn name, resolved
+ * `const FnDef *` (may be NULL if unfound), and `<lens>__mono_<hash>` emit key.
+ * Any out-ptr may be NULL.  Returns false if `i` is out of range. */
+bool   mono_spec_lens_set_get(const void *lensparam_binding, size_t i,
+                              const char **lens_name, const void **lens_fn,
+                              unsigned long long *mono_hash);
+
+/* Copy up to `sites_cap` of the i-th resolved lens's call-site `const Expr *`
+ * pointers into `sites_out` (the sites CM3 rewrites).  Returns the TOTAL site
+ * count (which may exceed `sites_cap`; 0 for an out-of-range `i`). */
+size_t mono_spec_lens_set_sites(const void *lensparam_binding, size_t i,
+                                const void **sites_out, size_t sites_cap);
 
 /* Print the registry: one `mono-spec-abstract <hash> fn=.. lens-param=.. f=..
  * focus=.. whole=..` line per abstract key, then one `mono-spec <hash>

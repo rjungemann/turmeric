@@ -1,0 +1,7 @@
+; van-laarhoven by-value monomorphization specs: 2 abstract, 2 concrete
+mono-spec-abstract f547cd744ad7470f fn=set-px lens-param=l f=Identity focus=int whole=Point
+mono-spec-abstract 48838d5c20f5970f fn=over-px lens-param=l f=Identity focus=int whole=Point
+mono-spec 89e16e7f8669ca4e lens=point-x f=Identity focus=int whole=Point
+mono-spec 29dc1a87dc9f86df lens=point-y f=Identity focus=int whole=Point
+mono-spec-set fn=set-px lens-param=l -> {point-x, point-y}
+mono-spec-set fn=over-px lens-param=l -> {point-x, point-y}

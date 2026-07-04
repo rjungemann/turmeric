@@ -18,6 +18,27 @@
 #define MONO_SPEC_FIELD 96
 #define MONO_SPEC_MAX   1024
 
+/* CM1 (van-laarhoven-consumer-mono-plan): the resolve pass no longer collapses a
+ * consumer lens param to a single unique/ambiguous verdict.  It builds the full
+ * SET of concrete lenses the param is reached with across the call graph.  Caps
+ * bound the fixpoint; a hit is a `log`-style stderr note (never a silent
+ * truncation) and the over-cap lenses/sites stay on Path A. */
+#define MONO_SPEC_LENSSET_MAX     32   /* distinct concrete lenses per lens param */
+#define MONO_SPEC_SITES_MAX       64   /* recorded call sites per (param, lens) */
+#define MONO_SPEC_FIXPOINT_PASSES 64   /* fixpoint iteration backstop */
+
+/* One resolved concrete lens for a consumer lens param: the concrete lens FnDef,
+ * its `<lens>__mono_<hash>`, and every call-site `Expr *` that passes it (the
+ * sites CM3 rewrites).  Sites are deduped by pointer identity. */
+typedef struct {
+    const void *lens_fn;                 /* concrete lens `const FnDef *` (may be NULL) */
+    char        lens_name[MONO_SPEC_FIELD];
+    uint64_t    mono_hash;               /* the `<lens>__mono_<hash>` emit key */
+    const void *sites[MONO_SPEC_SITES_MAX]; /* call-site `const Expr *` passing this lens */
+    size_t      n_sites;
+    bool        sites_capped;
+} LensResolution;
+
 /* An ABSTRACT spec key registered by VBM1 at the `(l g s)` pin. */
 typedef struct {
     char     enclosing[MONO_SPEC_FIELD];
@@ -30,16 +51,15 @@ typedef struct {
     bool     have_functor_ty;
     uint64_t hash;
     /* VBM3: the abstract lens param's `Binding *` (the `l` of `set-px`), so the
-     * poly-call emit can recognize `(l g s)` and redirect it.  Plus the resolved
-     * redirect target -- filled in by the resolve pass: the concrete lens name +
-     * its `<lens>__mono_<hash>` key -- and `redirect_ambiguous` when the same
-     * consumer param resolves to more than one distinct lens (then the redirect
-     * is unsafe and suppressed). */
+     * poly-call emit can recognize `(l g s)` and redirect it. */
     const void *lensparam_binding;
-    char        redirect_lens[MONO_SPEC_FIELD];
-    uint64_t    redirect_hash;
-    bool        redirect_resolved;
-    bool        redirect_ambiguous;
+    /* CM1: the resolved concrete-lens SET for this (consumer, lens-param).  The
+     * VBM3 in-place redirect fires only when `n_lens_set == 1` (the unique case);
+     * `n_lens_set >= 2` is the ambiguous case CM2/CM3 cover with consumer clones;
+     * `n_lens_set == 0` is unresolved (runtime-selected lens -> Path A). */
+    LensResolution lens_set[MONO_SPEC_LENSSET_MAX];
+    size_t         n_lens_set;
+    bool           lens_set_capped;
 } MonoSpecKey;
 
 static MonoSpecKey g_specs[MONO_SPEC_MAX];
@@ -147,12 +167,52 @@ bool mono_spec_redirect_for_binding(const void *lensparam_binding,
     for (size_t i = 0; i < g_n_specs; i++) {
         const MonoSpecKey *k = &g_specs[i];
         if (k->lensparam_binding != lensparam_binding) continue;
-        if (!k->redirect_resolved || k->redirect_ambiguous) return false;
-        if (lens_name) *lens_name = k->redirect_lens;
-        if (mono_hash) *mono_hash = (unsigned long long)k->redirect_hash;
+        /* CM1: the in-place VBM3 redirect is only safe when the param resolves to
+         * exactly ONE concrete lens.  `== 0` (unresolved) and `>= 2` (ambiguous,
+         * CM2/CM3's consumer-clone case) both fall through to Path A here. */
+        if (k->n_lens_set != 1) return false;
+        if (lens_name) *lens_name = k->lens_set[0].lens_name;
+        if (mono_hash) *mono_hash = (unsigned long long)k->lens_set[0].mono_hash;
         return true;
     }
     return false;
+}
+
+/* CM1: the abstract spec whose lens param is `lensparam_binding` (NULL if none). */
+static const MonoSpecKey *spec_for_binding(const void *lensparam_binding) {
+    if (!lensparam_binding) return NULL;
+    for (size_t i = 0; i < g_n_specs; i++)
+        if (g_specs[i].lensparam_binding == lensparam_binding) return &g_specs[i];
+    return NULL;
+}
+
+size_t mono_spec_lens_set_count(const void *lensparam_binding) {
+    const MonoSpecKey *k = spec_for_binding(lensparam_binding);
+    return k ? k->n_lens_set : 0;
+}
+
+bool mono_spec_lens_set_get(const void *lensparam_binding, size_t i,
+                            const char **lens_name, const void **lens_fn,
+                            unsigned long long *mono_hash) {
+    const MonoSpecKey *k = spec_for_binding(lensparam_binding);
+    if (!k || i >= k->n_lens_set) return false;
+    const LensResolution *r = &k->lens_set[i];
+    if (lens_name) *lens_name = r->lens_name;
+    if (lens_fn)   *lens_fn   = r->lens_fn;
+    if (mono_hash) *mono_hash = (unsigned long long)r->mono_hash;
+    return true;
+}
+
+size_t mono_spec_lens_set_sites(const void *lensparam_binding, size_t i,
+                                const void **sites_out, size_t sites_cap) {
+    const MonoSpecKey *k = spec_for_binding(lensparam_binding);
+    if (!k || i >= k->n_lens_set) return 0;
+    const LensResolution *r = &k->lens_set[i];
+    if (sites_out) {
+        size_t n = r->n_sites < sites_cap ? r->n_sites : sites_cap;
+        for (size_t j = 0; j < n; j++) sites_out[j] = r->sites[j];
+    }
+    return r->n_sites;
 }
 
 /* Register (dedup by content hash) one resolved CONCRETE spec key, carrying the
@@ -204,15 +264,83 @@ static const char *arg_global_fn_name(const Expr *arg) {
 
 static const FnDef *find_fndef(const Expr *prog, const char *name);
 
+/* Peel wrappers off a call arg and return its `Binding *` if it bottoms out at a
+ * variable (a lens threaded through a param), else NULL. */
+static const Binding *arg_var_binding(const Expr *arg) {
+    while (arg) {
+        if (arg->kind == EX_ASCRIBE)          arg = arg->as.ascribe_.inner;
+        else if (arg->kind == EX_FN_TO_FAT)   arg = arg->as.fn_to_fat_.inner;
+        else if (arg->kind == EX_POLY_TO_FAT) arg = arg->as.poly_to_fat_.inner;
+        else if (arg->kind == EX_POLY_WRAP)   arg = arg->as.poly_wrap_.inner;
+        else break;
+    }
+    if (arg && arg->kind == EX_VAR && arg->as.var.binding)
+        return arg->as.var.binding;
+    return NULL;
+}
+
+/* CM1: add concrete lens `(lens_name, lens_fn, mono_hash)` to `k`'s resolved set,
+ * deduping the lens by FnDef identity (or name when the FnDef is unknown) and the
+ * site by pointer.  Sets `*grew` when the set gains a new lens OR a new site --
+ * the fixpoint monotonicity signal.  Cap hits emit a one-shot stderr note and
+ * leave the over-cap element on Path A (never a silent truncation). */
+static void lens_set_add(MonoSpecKey *k, const char *lens_name,
+                         const void *lens_fn, uint64_t mono_hash,
+                         const Expr *site, bool *grew) {
+    LensResolution *slot = NULL;
+    for (size_t i = 0; i < k->n_lens_set; i++) {
+        LensResolution *r = &k->lens_set[i];
+        if ((lens_fn && r->lens_fn == lens_fn) ||
+            (!lens_fn && strcmp(r->lens_name, lens_name) == 0)) { slot = r; break; }
+    }
+    if (!slot) {
+        if (k->n_lens_set >= MONO_SPEC_LENSSET_MAX) {
+            if (!k->lens_set_capped) {
+                k->lens_set_capped = true;
+                fprintf(stderr,
+                        "; note: consumer-mono lens-set cap (%d) hit for '%s' "
+                        "lens-param '%s'; over-cap lenses stay on Path A\n",
+                        MONO_SPEC_LENSSET_MAX, k->enclosing, k->callee);
+            }
+            return;
+        }
+        slot = &k->lens_set[k->n_lens_set++];
+        field_copy(slot->lens_name, lens_name);
+        slot->lens_fn = lens_fn;
+        slot->mono_hash = mono_hash;
+        slot->n_sites = 0;
+        slot->sites_capped = false;
+        if (grew) *grew = true;
+    }
+    if (!site) return;
+    for (size_t i = 0; i < slot->n_sites; i++)
+        if (slot->sites[i] == site) return; /* dedup site by pointer */
+    if (slot->n_sites >= MONO_SPEC_SITES_MAX) {
+        if (!slot->sites_capped) {
+            slot->sites_capped = true;
+            fprintf(stderr,
+                    "; note: consumer-mono site cap (%d) hit for '%s' lens '%s'\n",
+                    MONO_SPEC_SITES_MAX, k->enclosing, slot->lens_name);
+        }
+        return;
+    }
+    slot->sites[slot->n_sites++] = site;
+    if (grew) *grew = true;
+}
+
 typedef struct {
     const char  *enclosing; /* enclosing fn name whose calls we resolve */
     uint32_t     lens_idx;  /* arg slot holding the concrete lens */
     MonoSpecKey *abs;       /* the abstract key being resolved (mutable) */
     const Expr  *prog;      /* program root, for lens-name -> FnDef */
+    bool        *grew;      /* set true when abs's lens set grows (fixpoint) */
 } ResolveCtx;
 
-/* Recursively visit `e`, registering a concrete spec for every EX_CALL of
- * `rc->enclosing` whose lens-slot arg resolves to a named lens defn. */
+/* Recursively visit `e`, growing `rc->abs`'s concrete-lens set for every EX_CALL
+ * of `rc->enclosing`.  A lens-slot arg that names a global lens defn adds that
+ * concrete lens directly; an arg that forwards ANOTHER consumer's (already
+ * resolved) lens param inherits that param's whole set (the transitive step the
+ * fixpoint drives to closure). */
 static void resolve_walk(const Expr *e, const ResolveCtx *rc) {
     if (!e) return;
     if (e->kind == EX_CALL) {
@@ -220,21 +348,29 @@ static void resolve_walk(const Expr *e, const ResolveCtx *rc) {
         if (fb && fb->name && fb->name->name &&
             strcmp(fb->name->name, rc->enclosing) == 0 &&
             rc->lens_idx < e->as.call_.n_args) {
-            const char *lens = arg_global_fn_name(e->as.call_.args[rc->lens_idx]);
-            if (lens) {
-                uint64_t h = mono_concrete_register(lens, rc->abs,
-                                                    find_fndef(rc->prog, lens));
-                /* VBM3: record the redirect target on the abstract spec.  If this
-                 * consumer's lens param resolves to more than one DISTINCT lens
-                 * across its call sites, mark it ambiguous -- the in-place
-                 * redirect is only safe when the param is monomorphic in `l`. */
-                if (rc->abs->redirect_resolved &&
-                    strcmp(rc->abs->redirect_lens, lens) != 0)
-                    rc->abs->redirect_ambiguous = true;
-                else if (!rc->abs->redirect_resolved) {
-                    field_copy(rc->abs->redirect_lens, lens);
-                    rc->abs->redirect_hash = h;
-                    rc->abs->redirect_resolved = true;
+            const Expr *larg = e->as.call_.args[rc->lens_idx];
+            const char *lens = arg_global_fn_name(larg);
+            const FnDef *lens_fn = lens ? find_fndef(rc->prog, lens) : NULL;
+            if (lens && lens_fn) {
+                /* Directly a global lens defn: one concrete lens for this site. */
+                uint64_t h = mono_concrete_register(lens, rc->abs, lens_fn);
+                lens_set_add(rc->abs, lens, lens_fn, h, e, rc->grew);
+            } else {
+                /* Transitive: the arg is a variable.  If it is a consumer lens
+                 * param whose own set is already (partly) resolved, fold that set
+                 * in, keying each element to THIS call site (the one CM3 rewrites
+                 * inside the forwarding consumer's clone).  Grows monotonically to
+                 * a fixpoint since the lens universe is finite. */
+                const Binding *vb = arg_var_binding(larg);
+                const MonoSpecKey *src = spec_for_binding(vb);
+                if (src) {
+                    for (size_t j = 0; j < src->n_lens_set; j++) {
+                        const LensResolution *r = &src->lens_set[j];
+                        uint64_t h = mono_concrete_register(r->lens_name, rc->abs,
+                                                            r->lens_fn);
+                        lens_set_add(rc->abs, r->lens_name, r->lens_fn, h, e,
+                                     rc->grew);
+                    }
                 }
             }
         }
@@ -405,29 +541,51 @@ static void clear_g_box_walk(const Expr *e, const Binding *lensb) {
 void mono_specs_resolve_program(const void *prog_) {
     const Expr *prog = (const Expr *)prog_;
     if (!prog || prog->kind != EX_PROGRAM || g_n_specs == 0) return;
+    /* CM1 fixpoint: each pass grows every consumer lens param's concrete-lens set
+     * (directly from named-lens call args, transitively from forwarded params);
+     * repeat until a pass adds nothing.  Terminates because sets only grow toward
+     * the finite universe of concrete lens FnDefs.  The pass cap is a backstop --
+     * if it ever trips, something is adding non-monotonically; note it loudly. */
+    size_t pass = 0;
+    for (;;) {
+        bool grew = false;
+        for (size_t i = 0; i < g_n_specs; i++) {
+            MonoSpecKey *k = &g_specs[i];
+            /* The abstract lens param lives on the enclosing fn; find its slot. */
+            const FnDef *enc = find_fndef(prog, k->enclosing);
+            if (!enc) continue;
+            int lens_idx = -1;
+            for (uint8_t p = 0; p < enc->n_params; p++) {
+                const Binding *pb = enc->params ? enc->params[p] : NULL;
+                if (pb && pb->name && pb->name->name &&
+                    strcmp(pb->name->name, k->callee) == 0) {
+                    lens_idx = p;
+                    break;
+                }
+            }
+            if (lens_idx < 0) continue;
+            ResolveCtx rc = { k->enclosing, (uint32_t)lens_idx, k, prog, &grew };
+            resolve_walk(prog, &rc);
+        }
+        if (!grew) break;
+        if (++pass >= MONO_SPEC_FIXPOINT_PASSES) {
+            fprintf(stderr,
+                    "; note: consumer-mono resolve fixpoint hit the %d-pass cap; "
+                    "lens sets may be incomplete (over-cap uses stay on Path A)\n",
+                    MONO_SPEC_FIXPOINT_PASSES);
+            break;
+        }
+    }
+    /* VBM4-residual: a consumer whose lens param resolves UNIQUELY (|set| == 1)
+     * has its `(l g s)` redirected to the by-value `<lens>__mono`.  Clear the `g`
+     * closure's box flag so it returns `(f A)` by value -- removing the last small
+     * heap box.  The ambiguous case (|set| >= 2) keeps its boxed `g` here; CM2
+     * de-boxes each consumer clone independently. */
     for (size_t i = 0; i < g_n_specs; i++) {
         MonoSpecKey *k = &g_specs[i];
-        /* The abstract lens param lives on the enclosing fn; find its slot. */
+        if (k->n_lens_set != 1 || !k->lensparam_binding) continue;
         const FnDef *enc = find_fndef(prog, k->enclosing);
-        if (!enc) continue;
-        int lens_idx = -1;
-        for (uint8_t p = 0; p < enc->n_params; p++) {
-            const Binding *pb = enc->params ? enc->params[p] : NULL;
-            if (pb && pb->name && pb->name->name &&
-                strcmp(pb->name->name, k->callee) == 0) {
-                lens_idx = p;
-                break;
-            }
-        }
-        if (lens_idx < 0) continue;
-        ResolveCtx rc = { k->enclosing, (uint32_t)lens_idx, k, prog };
-        resolve_walk(prog, &rc);
-        /* VBM4-residual: this consumer's `(l g s)` will be redirected to the
-         * by-value `point_x__mono` iff the lens resolves uniquely.  When it does,
-         * clear the `g` closure's box flag so it returns `(f A)` by value (the
-         * mono body takes a by-value `g`) -- removing the last small heap box. */
-        if (k->redirect_resolved && !k->redirect_ambiguous &&
-            enc->params && k->lensparam_binding)
+        if (enc && enc->params && enc->body)
             clear_g_box_walk(enc->body, (const Binding *)k->lensparam_binding);
     }
 }
@@ -452,6 +610,18 @@ void mono_specs_dump(FILE *out) {
                 "mono-spec %016llx lens=%s f=%s focus=%s whole=%s\n",
                 (unsigned long long)k->hash, k->lens, k->functor, k->focus,
                 k->whole);
+    }
+    /* CM1: the resolved concrete-lens SET per consumer lens param, so the
+     * fixpoint is reviewable by eye.  A `{}` set is an unresolved (runtime-
+     * selected) lens; a singleton is the VBM3 unique-redirect case; `>= 2` is the
+     * ambiguous case CM2/CM3 specialize with consumer clones. */
+    for (size_t i = 0; i < g_n_specs; i++) {
+        const MonoSpecKey *k = &g_specs[i];
+        fprintf(out, "mono-spec-set fn=%s lens-param=%s -> {", k->enclosing,
+                k->callee);
+        for (size_t j = 0; j < k->n_lens_set; j++)
+            fprintf(out, "%s%s", j ? ", " : "", k->lens_set[j].lens_name);
+        fprintf(out, "}%s\n", k->lens_set_capped ? " (capped)" : "");
     }
 }
 

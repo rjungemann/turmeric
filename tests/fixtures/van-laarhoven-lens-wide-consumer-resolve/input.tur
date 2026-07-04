@@ -1,0 +1,55 @@
+;; CM1 (van-laarhoven-consumer-mono-plan): the consumer lens-param resolution
+;; SET.  VBM3 only redirected a consumer whose lens param resolved to ONE
+;; concrete lens; a consumer reached with two distinct wide lenses was flagged
+;; ambiguous and dropped to Path A.  CM1 replaces that binary unique/ambiguous
+;; verdict with the FULL set of concrete lenses the param is reached with.
+;;
+;; Here `set-px` and `over-px` are each called with BOTH `point-x` and `point-y`
+;; (two distinct wide f:=Identity lenses on Point), so each consumer's lens param
+;; `l` resolves to the SET `{point-x, point-y}` -- the ambiguous case CM2/CM3
+;; will specialize with one consumer clone per element.  The two concrete lenses
+;; collapse to two concrete emit keys (point-x, point-y), and the resolve prints
+;; a `mono-spec-set` line per consumer showing the set.  Registry-only: codegen
+;; is unchanged this slice (the clone emit is CM2).
+;;
+;; `main` keeps every call site live so the specs register + resolve, but prints
+;; nothing, so stdout is exactly the `--dump-mono-specs` output -- an
+;; order-independent assertion of the set resolution.
+
+;; Identity a -- WIDE: a two-word `:copy` struct, not the one-int64 opaque.
+(defstruct Identity :copy [A] (wrapped : A) (tag : int))
+(defn mk-id  [A] [x : A]            : (Identity A) (make-struct Identity :wrapped x :tag 0))
+(defn run-id [A] [i : (Identity A)] : A            (.wrapped i))
+(definstance Functor [Identity]
+  (fmap [i g] (mk-id (g (run-id i)))))
+
+(defstruct Point :copy :heap [x : int y : int])
+
+;; Two concrete lenses focusing distinct Point fields, each polymorphic over f.
+(defn point-x [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)
+  (fmap (g (.x s))
+        (fn [nx : int] : Point (make-struct Point :x nx :y (.y s)))))
+
+(defn point-y [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)
+  (fmap (g (.y s))
+        (fn [ny : int] : Point (make-struct Point :x (.x s) :y ny))))
+
+;; set l b s = run-id (l (\_ -> Identity b) s)   -- f := Identity, capturing g.
+(defn set-px
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> int (f int)) Point (f Point)))
+     b : int s : Point] : Point
+  (run-id (l (fn [a : int] : (Identity int) (mk-id b)) s)))
+
+;; over l h s = run-id (l (\a -> Identity (h a)) s) -- f := Identity, capturing g.
+(defn over-px
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> int (f int)) Point (f Point)))
+     h : (-> int int) s : Point] : Point
+  (run-id (l (fn [a : int] : (Identity int) (mk-id (h a))) s)))
+
+(defn main [] : int
+  (let [p   (make-struct Point :x 3 :y 4)
+        px1 (set-px point-x 99 p)                              ; l := point-x
+        py1 (set-px point-y 88 p)                              ; l := point-y (distinct)
+        px2 (over-px point-x (fn [v : int] : int (* v 10)) p)  ; l := point-x
+        py2 (over-px point-y (fn [v : int] : int (* v 10)) p)] ; l := point-y (distinct)
+    0))
