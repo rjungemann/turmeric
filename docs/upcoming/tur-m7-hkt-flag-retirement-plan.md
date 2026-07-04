@@ -1,8 +1,32 @@
 # TUR_M7_HKT Flag Retirement Plan
 
-**Status:** proposed (Phase R1 partially verified 2026-07-03; R2-R4 not started)
+**Status:** DONE (Phases R1-R4 completed 2026-07-04)
 **Track:** one-track-to-v1 cleanup
 **Author:** investigation 2026-07-02
+
+## Completion (2026-07-04)
+
+All four phases are done; `TUR_M7_HKT` / `g_m7_hkt_enabled` no longer exist.
+
+- **R2 (branch surface):** collapsed all `g_m7_hkt_enabled` conditionals to
+  their by-value branch across `emit_stmt.c` (1), `emit_fns.c` (5),
+  `emit_module.c` (6), `elab_typeclasses.c` (8), and `elab_call.c` (1), plus
+  stale flag comments in `elab_types.c`.
+- **R3 (flag removal):** deleted `g_m7_hkt_enabled` (globals.c/.h), the
+  `getenv("TUR_M7_HKT")` block (main.c), replaced the CLAUDE.md "default
+  by-value path is the gate" paragraph, and moved the three resolved archive
+  plans under `docs/archive/history/`.
+- **R4 (verify):** `bash tests/run.sh` -> `1937 passed, 0 failed` (the tree
+  is fully green now; the plan's old "1843/65" baseline predates several
+  unrelated fixes). The two deferred `pure`/`empty` and method-level HKT
+  tyvar reports have themselves been resolved and archived since this plan
+  was written, so there is nothing left to re-confirm in `docs/reported/`.
+
+The remaining `TUR_M7_HKT` mentions in `docs/artifacts/*.tur` and the
+`docs/upcoming/v1|v2/*.md` planning docs are historical record (probe
+programs and prior design narratives); they are intentionally left as-is.
+
+Original plan text follows.
 
 ## Progress (verified 2026-07-03)
 
