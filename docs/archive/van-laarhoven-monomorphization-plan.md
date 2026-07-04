@@ -2,15 +2,25 @@
 title: Path B -- by-value HKT monomorphization across the van Laarhoven lens
   boundary (retire the carrier round-trip for wide functors)
 category: Planning
+status: LANDED / ARCHIVED (2026-07-04). All four slices shipped -- VBM1 (spec
+  discovery), VBM2a/VBM2b (cross-procedural resolution + by-value body emit),
+  VBM3 (dispatch redirect + residual (f A) box removal), and VBM4 (graduate
+  `vl-wide-functor` to default-on, retire TUR-E0309). Wide by-value functors now
+  work at the van Laarhoven lens boundary unconditionally, and `--enable=vl-wide-mono`
+  makes a uniquely-resolved lens site zero-overhead by value. The ONE remaining
+  item -- consumer monomorphization for ambiguous lens params, then retiring
+  `--enable=vl-wide-mono` and deleting the Path A wide branch -- is carried
+  forward in the successor plan
+  [`van-laarhoven-consumer-mono-plan.md`](van-laarhoven-consumer-mono-plan.md).
+  This plan is archived; see the per-slice Status blocks below for what landed.
 description: Follow-up to van-laarhoven-wide-functor-carrier-plan (Path A / WF1-WF4).
   Path A boxes a wide by-value functor into the mode-B int64 carrier at each lens
   crossing so `view`/`set`/`over` and composition WORK with a `:copy`-struct
   functor -- but every crossing pays one heap box + copy + free. Path B retires
   those crossings by monomorphizing the lens body per concrete instantiating
   functor: `(f a)` is spelled by value end to end, no carrier, no box. MEDIUM-HIGH.
-  Sliced. Deferred until Path A ships and a profile shows the box/unbox on a hot
-  path; this plan is the pre-committed shape so the deferral is a decision with a
-  trigger, not an indefinite punt.
+  Sliced. All slices LANDED 2026-07-04; the consumer-mono + flag-retirement tail
+  moved to van-laarhoven-consumer-mono-plan.md.
 ---
 
 # Path B -- by-value HKT monomorphization across the van Laarhoven lens boundary
