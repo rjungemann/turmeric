@@ -202,6 +202,13 @@ bool g_opt_hrt_curried_result = false;
  * the van Laarhoven lens boundary (and lifts TUR-E0309 when set). */
 bool g_opt_vl_wide_functor = false;
 
+/* VBM1 of van-laarhoven-monomorphization-plan: `vl-wide-mono` experiment enable
+ * bit (Path B).  Default off.  When set, elab_poly_call registers a by-value HKT
+ * monomorphization spec key per wide-functor van Laarhoven lens site.  Paired
+ * with `--dump-mono-specs` (g_dump_mono_specs) to review the keying. */
+bool g_opt_vl_wide_mono = false;
+bool g_dump_mono_specs = false;
+
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signature registry (see globals.h).
  * --------------------------------------------------------------------------- */

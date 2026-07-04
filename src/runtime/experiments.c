@@ -81,6 +81,13 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.29.0",                    /* expires_at (hard contract; release-cut enforced) */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_vl_wide_functor },
+    { "vl-wide-mono",
+      "by-value HKT monomorphization across the van Laarhoven lens boundary (Path B): register a specialization key per lens site whose pinned functor is a WIDE by-value aggregate so a future emit can spell (f a) by value with no carrier box; VBM1 populates the registry (--dump-mono-specs) while codegen stays on Path A",
+      "docs/upcoming/van-laarhoven-monomorphization-plan.md",
+      "0.26.4",                    /* introduced */
+      "0.29.0",                    /* expires_at (hard contract; release-cut enforced) */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_vl_wide_mono },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

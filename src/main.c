@@ -67,6 +67,7 @@
 /* Global configuration variables — defined in globals.c */
 #include "globals.h"
 #include "experiments.h"  /* XF1: --enable=<name> experimental-flag registry */
+#include "mono_specs.h"   /* VBM1: --dump-mono-specs registry dump */
 /* LSP server */
 #include "lsp/lsp.h"
 #include "lsp/lsp_sym.h"
@@ -376,6 +377,11 @@ static int run_core_passes(PassContext *ctx) {
             /* Phase HKT-P6: verify kind info is preserved after elaboration */
             assert(kind_verify_program(ctx->prog) && "Kind info cleared after PASS_ELABORATE");
 #endif
+            /* VBM1 (van-laarhoven-monomorphization-plan): --dump-mono-specs
+             * prints the by-value HKT monomorphization spec registry populated
+             * during elaboration (dump-only; codegen unchanged). */
+            if (g_dump_mono_specs)
+                mono_specs_dump(stdout);
             /* debugger Phase 1: audit breakpoint-span coverage on the freshly
              * elaborated tree, before any transform pass introduces synthetic
              * (legitimately span-less) nodes.  Stop the pipeline afterwards --
@@ -5984,6 +5990,7 @@ static void wk_apply_flags(const char *flags_str) {
         else if (strcmp(tok, "--dump-effects")      == 0) g_dump_effects             = true;
         else if (strcmp(tok, "--dump-cps-coloring") == 0) g_dump_cps_coloring        = true;
         else if (strcmp(tok, "--dump-cps")          == 0) g_dump_cps                 = true;
+        else if (strcmp(tok, "--dump-mono-specs")   == 0) g_dump_mono_specs          = true;
         else if (strcmp(tok, "--dump-sizes")        == 0) g_dump_sizes               = true;
         else if (strcmp(tok, "--emit-abi-trace")    == 0) g_emit_abi_trace           = true;
         else if (strcmp(tok, "--lint-effects")      == 0) g_lint_effects             = true;
@@ -12555,6 +12562,15 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--dump-cps") == 0) {
             /* CPS2: print the ANF/CPS IR for each colored defn */
             g_dump_cps = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--dump-mono-specs") == 0) {
+            /* VBM1 (van-laarhoven-monomorphization-plan): print the by-value HKT
+             * monomorphization spec registry after elaboration. */
+            g_dump_mono_specs = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }
