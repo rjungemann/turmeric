@@ -101,17 +101,37 @@ static tur_adt_Identity__Point point_x__mono_...(int64_t g, int64_t s) {
 `set-px`/`over-px`/`view-px` return **3 / 30 / 4 / 99**; full suite **1940 passed,
 0 failed**.
 
-## What remains: VBM3 (dispatch redirect)
+## What remains: VBM3 (dispatch redirect) -- requires VALUE-based consumer mono
 
 The mono body is emitted but not yet CALLED. `set-px`/`over-px` still dispatch
 through the Path A carrier lens clone (`point_hyx_un_undict_...`, int64 return
-unboxed by `run_id__spec__..._Identity__Point`). VBM3 redirects the lens
-invocation at the concrete call site (`emit_expr.c` poly-call box/unbox path) to
-`point_x__mono_<hash>` with by-value args + return, skipping the carrier clone
-and its `emit_agg_box`/`emit_agg_unbox`. The VBM2a concrete registry
-(`mono_spec_concrete_emit_info`) already names the `(lens_fn, functor, focus,
-whole)` target; VBM3 is the call-site lookup + emit. VBM4 then graduates
-`vl-wide-functor` (deletes the Path A box on the wide branch + TUR-E0309).
+unboxed by `run_id__spec__..._Identity__Point`).
+
+The subtlety the plan's VBM3 sketch understated: the box crossing is the
+`(l g s)` call INSIDE `set-px`/`over-px`, where `l` is the ABSTRACT lens param.
+The concrete lens (`point-x`) is bound only at `main`'s `(set-px point-x ...)`
+(VBM2a's whole point). So the redirect cannot be a local rewrite of the
+`(l g s)` poly-call -- it needs **value-based consumer monomorphization**:
+
+1. Emit `set_px__mono` / `over_px__mono`, each specialized to the concrete lens
+   `l := point-x`, whose body's `(l g s)` becomes a direct by-value
+   `point_x__mono(g, s)` (no carrier dict clone, no `emit_agg_box`/`_unbox`).
+2. Emit by-value `g` closures: the Path A `g` (`__fn_1305` / `__fn_1314`) still
+   `malloc`s its `Identity int` box; `point_x__mono` expects `g` to return the
+   `(f a)` aggregate by value, so the specialized consumer must build a by-value
+   `g` (the WF2 crossing, inverted).
+3. Redirect `main`'s `(set-px point-x ...)` / `(over-px point-x ...)` to the
+   specialized consumers.
+
+This is a DISTINCT, sizable mechanism: the ABI-spec machinery VBM2b reused
+specializes on TYPE bindings, but `l := point-x` is a VALUE binding, which it
+does not do. VBM3 is comparable in size to VBM2b (a value-specialization pass +
+by-value `g` emit + call-site redirect), not a small follow-on. The VBM2a
+concrete registry (`mono_spec_concrete_emit_info`) names the target; the abstract
+registry names the `(consumer, lens-param)` pairs to specialize.
+
+VBM4 then graduates `vl-wide-functor` (deletes the Path A box on the wide branch
++ TUR-E0309).
 
 ## Minimal repro
 
