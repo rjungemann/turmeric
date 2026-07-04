@@ -1,24 +1,29 @@
 ---
 title: VBM2b + VBM3 -- by-value monomorphized van Laarhoven lens now emits AND
-  is live; the (f S) result box is eliminated end-to-end
-severity: RESOLVED (VBM2a/VBM2b/VBM3). The by-value lens body + fmap/run-id/mk-id
-  twins emit as correct C, and the lens call sites are redirected to it, so the
-  `(f S)` result heap box is gone on the live path; full suite green. Kept OPEN
-  only for VBM4 (graduate `vl-wide-functor` / delete Path A on the wide branch)
-  and the residual `(f A)` `g` box (a small optimization, below).
-status: VBM3 DONE (2026-07-04). VBM2a (resolution) + VBM2b (by-value body emit) +
-  VBM3 (dispatch redirect) all landed behind `--enable=vl-wide-mono`.
-  `emit_program` emits `point_x__mono_<hash>` returning `(Identity Point)` BY
+  is live; BOTH the (f S) result box and the (f A) g box are eliminated end-to-end
+severity: RESOLVED (VBM2a/VBM2b/VBM3 + residual). The by-value lens body +
+  fmap/run-id/mk-id twins emit as correct C, the lens call sites are redirected to
+  it, AND the redirected consumers' `g` closures now return `(f A)` BY VALUE -- so
+  both the `(f S)` result box and the `(f A)` `g` box are gone on the live path;
+  full suite green. Kept OPEN only for VBM4 (graduate `vl-wide-functor` / delete
+  Path A on the wide branch / retire the now-dead carrier lens clone).
+status: VBM3 + residual DONE (2026-07-04). VBM2a (resolution) + VBM2b (by-value
+  body emit) + VBM3 (dispatch redirect) + the residual `(f A)` `g`-box removal all
+  landed behind `--enable=vl-wide-mono`. `emit_program` emits
+  `point_x__mono_<hash>` taking a BY-VALUE `g` and returning `(Identity Point)` BY
   VALUE with by-value `fmap`/`run-id`/`mk-id` twins, and the poly-call emit
   REDIRECTS every `(l g s)` whose consumer's lens param uniquely resolves to that
   mono lens straight to `point_x__mono` -- so `set-px`/`over-px` now emit
   `run_id__spec(point_x__mono(g, s))` with NO carrier dict dispatch and NO
   `emit_agg_box`/`emit_agg_unbox` around the `(f S)` crossing (the
-  `dict_Functor_Identity_singleton` has zero uses).  `view-px` (Const,
+  `dict_Functor_Identity_singleton` has zero uses).  When a consumer resolves
+  uniquely and unambiguously, its `g` closure clears `box_aggregate_result`, so
+  `__fn_1305`/`__fn_1314` now return `tur_adt_Identity__int` BY VALUE (no malloc)
+  and `point_x__mono` consumes it with NO unbox.  `view-px` (Const,
   carrier-compatible) is untouched.  Full suite: 1940 passed, 0 failed; fixtures
-  return 3/30/4/99.  Residual: `g` still returns its `(f A)` through the int64
-  carrier (the mono body unboxes it once), so `__fn_1305`'s small `(f A)` box
-  survives -- VBM4's by-value `g` removes it.  Filed 2026-07-04.
+  return 3/30/4/99.  The ONLY remaining malloc in the mono body is the genuine
+  setter closure env (present in Path A too, not an aggregate box).  Filed
+  2026-07-04.
 ---
 
 # VBM2b: by-value lens body emits (box eliminated); VBM3 redirect remains
@@ -105,15 +110,24 @@ static tur_adt_Identity__Point point_x__mono_...(int64_t g, int64_t s) {
 ## VBM3 (dispatch redirect) -- DONE, via an in-place redirect (no consumer mono)
 
 An earlier revision of this report expected VBM3 to need value-based consumer
-monomorphization (specializing `set-px`/`over-px` per concrete lens + by-value
-`g` closures).  It did not, because of one design change to the mono body:
+monomorphization (specializing `set-px`/`over-px` per concrete lens + separate
+by-value `g` closures).  It did not: the redirect is a local poly-call rewrite,
+and the by-value `g` falls out of clearing one flag on the shared consumer body:
 
-- **The mono body takes the ordinary Path A `g` (carrier).** Instead of casting
-  `g.fn` to return `(f A)` by value, `point_x__mono`'s `g` call is cast to return
-  the int64 carrier and the box is deref'd ONCE (`*(Identity int *)(g(...))`),
-  feeding the by-value `fmap` twin.  So `point_x__mono` accepts the EXACT `g`
-  `set-px`/`over-px` already build -- no by-value `g` closure needed.  (Gated in
-  the fat-closure dispatch emit, `emit_expr.c`, on `is_vl_wide_mono`.)
+- **The mono body takes a BY-VALUE `g` and returns `(f S)` by value.**
+  `point_x__mono`'s `g` call is cast to return `(f A)` = `tur_adt_Identity__int`
+  by value (NO carrier deref) and fed straight to the by-value `fmap` twin.
+- **The redirected consumer's `g` closure returns `(f A)` by value.** When VBM2a
+  resolves a consumer's lens param uniquely and unambiguously to a mono lens, the
+  resolve walk clears `box_aggregate_result` on that consumer's `g` closure
+  FnDef, so `__fn_1305`/`__fn_1314` return `tur_adt_Identity__int` directly (no
+  `malloc`), matching the mono body's by-value `g` parameter.  Consumers that
+  DON'T resolve uniquely (or resolve ambiguously) keep the boxed `g` for Path A.
+
+The two flips are coupled -- the mono body's by-value `g` param and the
+consumer's by-value `g` closure must change together -- and both are gated on the
+unique/non-ambiguous resolution so the carrier path is untouched for everyone
+else.
 
 Given that, the redirect is a local poly-call rewrite -- no new consumer bodies:
 
@@ -133,11 +147,14 @@ Result: `set_hypx` emits `return run_id__spec(point_x__mono(g, s))` -- no
 `l.fn(...)`, no `dict_Functor_Identity_singleton` use, no `(f S)` box.  The Path A
 carrier clone (`point_hyx_un_undict_...`) is now dead (still emitted, unused).
 
-## What remains: VBM4 + the residual `(f A)` box
+## What remains: VBM4 only
 
-- The `g` closure (`__fn_1305`/`__fn_1314`) still `malloc`s its `(f A)` =
-  `Identity int` box, which `point_x__mono` unboxes once.  A by-value `g` (WF2
-  inverted) removes that last small box -- a follow-on optimization.
+The residual `(f A)` `g` box is GONE (see the VBM3 section above): the redirected
+consumers' `g` closures return `(f A)` by value and `point_x__mono` consumes it
+with no unbox, so the mono body's ONLY remaining `malloc` is the genuine setter
+closure env (`__env_1293`) -- a real closure capture that Path A allocates too,
+not an aggregate box.
+
 - VBM4 graduates `vl-wide-functor`: delete the Path A box on the wide branch and
   TUR-E0309, and retire the now-dead carrier lens clone on the redirected path.
 

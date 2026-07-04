@@ -329,6 +329,79 @@ static const FnDef *find_fndef(const Expr *prog, const char *name) {
     return NULL;
 }
 
+/* VBM4-residual: peel wrappers off a call arg and return its closure FnDef (the
+ * `g : (-> A (f A))` closure), or NULL. */
+static FnDef *arg_closure_fndef(const Expr *arg) {
+    while (arg) {
+        if (arg->kind == EX_ASCRIBE)          arg = arg->as.ascribe_.inner;
+        else if (arg->kind == EX_FN_TO_FAT)   arg = arg->as.fn_to_fat_.inner;
+        else if (arg->kind == EX_POLY_TO_FAT) arg = arg->as.poly_to_fat_.inner;
+        else if (arg->kind == EX_POLY_WRAP)   arg = arg->as.poly_wrap_.inner;
+        else break;
+    }
+    if (!arg) return NULL;
+    if (arg->kind == EX_CLOSURE && arg->as.closure_.closure)
+        return arg->as.closure_.closure->fn;
+    if (arg->kind == EX_FN) return arg->as.fn_.fn;
+    if (arg->kind == EX_VAR && arg->as.var.binding)
+        return arg->as.var.binding->source_fn_def;
+    return NULL;
+}
+
+/* VBM4-residual: find the `(l g s)` call in a redirected consumer's body (`l` ==
+ * `lensb`) and clear `box_aggregate_result` on the `g` closure, so it returns its
+ * `(f A)` aggregate BY VALUE instead of the int64 carrier box.  Safe only because
+ * the consumer is redirected to `point_x__mono` (which now takes a by-value `g`);
+ * a NON-redirected consumer keeps its boxed `g` for the Path A carrier dispatch. */
+static void clear_g_box_walk(const Expr *e, const Binding *lensb) {
+    if (!e) return;
+    if (e->kind == EX_CALL && e->as.call_.fn_binding == lensb) {
+        for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+            FnDef *g = arg_closure_fndef(e->as.call_.args[i]);
+            if (g && g->box_aggregate_result) g->box_aggregate_result = false;
+        }
+    }
+    switch (e->kind) {
+        case EX_PROGRAM:
+            for (uint32_t i = 0; i < e->as.program.n; i++)
+                clear_g_box_walk(e->as.program.items[i], lensb);
+            break;
+        case EX_FN_DEF: if (e->as.fn_def_.fn) clear_g_box_walk(e->as.fn_def_.fn->body, lensb); break;
+        case EX_FN: if (e->as.fn_.fn) clear_g_box_walk(e->as.fn_.fn->body, lensb); break;
+        case EX_CLOSURE:
+            if (e->as.closure_.closure && e->as.closure_.closure->fn)
+                clear_g_box_walk(e->as.closure_.closure->fn->body, lensb);
+            break;
+        case EX_LET: case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                clear_g_box_walk(e->as.let_.bindings[i].init, lensb);
+            clear_g_box_walk(e->as.let_.body, lensb);
+            break;
+        case EX_IF:
+            clear_g_box_walk(e->as.if_.cond, lensb);
+            clear_g_box_walk(e->as.if_.then_, lensb);
+            clear_g_box_walk(e->as.if_.else_or_null, lensb);
+            break;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                clear_g_box_walk(e->as.do_.items[i], lensb);
+            break;
+        case EX_CALL:
+            clear_g_box_walk(e->as.call_.fn_expr, lensb);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                clear_g_box_walk(e->as.call_.args[i], lensb);
+            break;
+        case EX_RETURN: clear_g_box_walk(e->as.return_.value, lensb); break;
+        case EX_ASCRIBE: clear_g_box_walk(e->as.ascribe_.inner, lensb); break;
+        case EX_MATCH:
+            clear_g_box_walk(e->as.match_.scrutinee, lensb);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                clear_g_box_walk(e->as.match_.arms[i].body, lensb);
+            break;
+        default: break;
+    }
+}
+
 void mono_specs_resolve_program(const void *prog_) {
     const Expr *prog = (const Expr *)prog_;
     if (!prog || prog->kind != EX_PROGRAM || g_n_specs == 0) return;
@@ -349,6 +422,13 @@ void mono_specs_resolve_program(const void *prog_) {
         if (lens_idx < 0) continue;
         ResolveCtx rc = { k->enclosing, (uint32_t)lens_idx, k, prog };
         resolve_walk(prog, &rc);
+        /* VBM4-residual: this consumer's `(l g s)` will be redirected to the
+         * by-value `point_x__mono` iff the lens resolves uniquely.  When it does,
+         * clear the `g` closure's box flag so it returns `(f A)` by value (the
+         * mono body takes a by-value `g`) -- removing the last small heap box. */
+        if (k->redirect_resolved && !k->redirect_ambiguous &&
+            enc->params && k->lensparam_binding)
+            clear_g_box_walk(enc->body, (const Binding *)k->lensparam_binding);
     }
 }
 
