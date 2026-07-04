@@ -6044,7 +6044,8 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                             }
                             mono_spec_register(enclosing, callee,
                                                type_name(concrete),
-                                               focus_buf, whole_buf);
+                                               focus_buf, whole_buf,
+                                               vname, &concrete);
                         }
                     } else if (fd && !fd->is_opaque && !fd->is_heap &&
                         adt_is_flat_product(fd)) {

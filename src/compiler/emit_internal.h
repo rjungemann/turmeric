@@ -143,6 +143,14 @@ typedef struct EmitAbiSpecialization {
      * keep the uniform carrier ABI per Plan M6/M7 — see the plan doc's HKT
      * carve-out). */
     struct TypeClassInstance *typeclass_inst;
+    /* VBM2b (van-laarhoven-monomorphization-plan): true when this spec is a
+     * by-value monomorphized van Laarhoven lens body (`<lens>__mono_<hash>`),
+     * whose HKT tyvar `f` is pinned to a concrete WIDE by-value functor.  While
+     * its body is scanned/emitted the MB2.5 HKT carve-out
+     * (emit_abi_register_call) is OPENED so the `fmap` dispatch inside mints a
+     * by-value instance twin instead of the int64-carrier method -- the box
+     * this whole path exists to remove. */
+    bool is_vl_wide_mono;
 } EmitAbiSpecialization;
 
 typedef struct EmitCtx {

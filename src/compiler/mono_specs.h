@@ -36,7 +36,8 @@
  * transient buffers. */
 void   mono_spec_register(const char *enclosing_fn, const char *callee,
                           const char *functor_name, const char *focus_ty,
-                          const char *whole_ty);
+                          const char *whole_ty, const char *tyvar,
+                          const void *functor_ty);
 
 /* Number of distinct ABSTRACT keys registered this compile. */
 size_t mono_spec_count(void);
@@ -51,6 +52,24 @@ void   mono_specs_resolve_program(const void *prog);
 
 /* Number of distinct CONCRETE (resolved) keys registered this compile. */
 size_t mono_spec_concrete_count(void);
+
+/* Read the i-th resolved concrete key's fields (any out-ptr may be NULL).
+ * Returns the deterministic content hash (0 if `i` is out of range).  The
+ * returned strings point into the registry and stay valid until
+ * `mono_specs_reset`.  VBM2b's emit pass iterates these to emit one
+ * `<lens>__mono_<hash>` by-value body per key. */
+unsigned long long mono_spec_concrete_get(size_t i, const char **lens,
+                                          const char **functor,
+                                          const char **focus,
+                                          const char **whole);
+
+/* Read the i-th concrete key's emit handles: the resolved lens `const FnDef *`
+ * (may be NULL if the concrete lens defn wasn't found), the HKT tyvar name
+ * (`f`), and the concrete functor ctor `const Type *` (NULL if unresolved).
+ * Returns the content hash (0 if out of range). */
+unsigned long long mono_spec_concrete_emit_info(size_t i, const void **lens_fn,
+                                                const char **tyvar,
+                                                const void **functor_ty);
 
 /* Print the registry: one `mono-spec-abstract <hash> fn=.. lens-param=.. f=..
  * focus=.. whole=..` line per abstract key, then one `mono-spec <hash>

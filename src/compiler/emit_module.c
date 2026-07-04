@@ -3,6 +3,7 @@
 #include "emit_cps.h"   /* cps-transform-plan: DK substrate prelude + wiring */
 #include "globals.h"   /* Phase I: g_emit_abi_trace */
 #include "mangle.h"    /* tur_mangle_ident (constrained-byval witness thunks) */
+#include "mono_specs.h" /* VBM2b: by-value van Laarhoven lens mono spec registry */
 
 /* ------------ program-level emit ------------ */
 
@@ -2228,7 +2229,16 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                     if (cs->constraints[c].typeclass == dcls)
                         { enclosing_dispatches_cls = true; break; }
             }
-            if (cls_is_hkt && enclosing_dispatches_cls) return;
+            /* VBM2b: inside a by-value monomorphized lens spec body the HKT
+             * carve-out is OPENED -- the functor tyvar is pinned to a concrete
+             * WIDE by-value aggregate, so the `fmap` dispatch SHOULD mint a
+             * by-value instance twin (returning the aggregate by value) rather
+             * than fall through to the int64-carrier method.  That twin is the
+             * box elimination Path B exists for. */
+            bool vl_wide_mono_body = ctx->current_abi_specialization &&
+                ctx->current_abi_specialization->is_vl_wide_mono;
+            if (cls_is_hkt && enclosing_dispatches_cls && !vl_wide_mono_body)
+                return;
         }
     }
     /* nested-construct-byvalue (Gap #4 liveness): when scanning inside an active
@@ -9054,6 +9064,160 @@ int emit_program(Buf *out, const Expr *program) {
         ctx.fn_name_override_external = false;
         ctx.current_abi_specialization = NULL;
         ctx.current_scan_fn = NULL;
+    }
+
+    /* VBM2b (van-laarhoven-monomorphization-plan): emit one by-value
+     * monomorphized lens body per resolved concrete spec (VBM2a).  Drive the
+     * shared ABI-spec body emit with the HKT tyvar `f` bound to the concrete
+     * functor, so `(f a)`, `(f S)`, and the lens result are spelled by value
+     * with `f` substituted.  Registry-only until VBM3 redirects dispatch; the
+     * body is emitted (and forward-declared) but not yet called.  Gated on
+     * --enable=vl-wide-mono, so nothing outside that experiment is affected. */
+    if (g_opt_vl_wide_mono) {
+        size_t nmono = mono_spec_concrete_count();
+        for (size_t mi = 0; mi < nmono; mi++) {
+            const void *lens_fn_v = NULL, *functor_ty_v = NULL;
+            const char *tyvar = NULL;
+            unsigned long long h = mono_spec_concrete_emit_info(
+                mi, &lens_fn_v, &tyvar, &functor_ty_v);
+            if (!lens_fn_v || !functor_ty_v || !tyvar || !*tyvar) continue;
+            FnDef *lfd = (FnDef *)lens_fn_v;
+            const Type *fty = (const Type *)functor_ty_v;
+            if (!lfd->binding || !lfd->param_types || lfd->n_params == 0) continue;
+            /* Locate the EX_FN_DEF wrapping this lens FnDef. */
+            const Expr *lens_expr = NULL;
+            for (uint32_t i = 0; i < program->as.program.n; i++) {
+                const Expr *it = program->as.program.items[i];
+                if (it && it->kind == EX_FN_DEF && it->as.fn_def_.fn == lfd) {
+                    lens_expr = it; break;
+                }
+            }
+            if (!lens_expr) continue;
+            /* Bind the functor tyvar to the concrete functor, instantiate the
+             * lens signature by value. */
+            AbiTypeBinding b; b.name = tyvar; b.type = *fty;
+            Type arg_types[MAX_FN_ARITY];
+            uint8_t nargs = lfd->n_params <= MAX_FN_ARITY ? lfd->n_params
+                                                          : MAX_FN_ARITY;
+            for (uint8_t a = 0; a < nargs; a++)
+                arg_types[a] = emit_abi_instantiate_type(
+                    &lfd->param_types[a], &b, 1, ctx.type_arena);
+            Type result_type = emit_abi_instantiate_type(
+                &lfd->return_type, &b, 1, ctx.type_arena);
+            EmitAbiSpecialization *sp = emit_abi_intern_spec(
+                &ctx, lfd->binding, lens_expr, lfd, &b, 1,
+                arg_types, nargs, result_type, NULL, true);
+            if (!sp) continue;
+            /* Name it `<lens>__mono_<hash>` (mirrors the __spec naming). */
+            {
+                Buf nm; buf_init(&nm);
+                append_sanitized_c_token(
+                    &nm, lfd->binding->name ? lfd->binding->name->name : "lens");
+                buf_printf(&nm, "__mono_%016llx", h);
+                buf_putc(&nm, '\0');
+                free(sp->clone_name);
+                sp->clone_name = strdup(nm.data);
+                buf_free(&nm);
+            }
+            if (sp->emitted) continue;
+            sp->is_vl_wide_mono = true;
+            /* Scan the lens body under this spec so the `fmap` dispatch mints a
+             * by-value instance twin (MB2.5 carve-out opened above for
+             * is_vl_wide_mono).  Any specs minted here are appended after the
+             * main emit loop already ran, so emit them below.
+             *
+             * emit_abi_scan_expr may intern specs, which can realloc the
+             * abi_specializations array and dangle `sp` -- capture its index and
+             * re-fetch after every call that can grow the array. */
+            uint32_t sp_idx = (uint32_t)(sp - ctx.abi_specializations);
+            uint32_t before_scan = ctx.n_abi_specializations;
+            ctx.current_abi_specialization = sp;
+            ctx.current_scan_fn = lens_expr;
+            emit_abi_scan_expr(&ctx, lfd->body,
+                               (const Expr **)program->as.program.items,
+                               program->as.program.n);
+            sp = &ctx.abi_specializations[sp_idx];
+            ctx.current_scan_fn = NULL;
+            ctx.current_abi_specialization = NULL;
+            /* The scan mints the `fmap` twin with an int64-carrier RECEIVER, but
+             * under `f := Identity` the lens body feeds it a by-value `(f a)`
+             * (the substituted `g : (-> A (f A))` returns the aggregate by
+             * value).  Retype each newly-minted instance-method twin's receiver
+             * to the by-value `(f a)` the call actually passes.  Do this BEFORE
+             * the recursive body scan below, so that scan sees the by-value
+             * receiver (via emit_spec_arg_type_for_binding, which consults
+             * arg_types[]) and mints by-value inner twins (`run-id : Identity int
+             * -> int`) too.  Keep clone_name as-is (the scan already recorded it
+             * in specialized_call_*; the C signature renders from arg_types). */
+            if (lfd->body && lfd->body->kind == EX_CALL &&
+                lfd->body->as.call_.n_args >= 1) {
+                ctx.current_abi_specialization = sp;
+                Type recv_ty = emit_resolve_type(
+                    &ctx, lfd->body->as.call_.args[0]->type);
+                ctx.current_abi_specialization = NULL;
+                if ((recv_ty.kind == TY_ADT &&
+                     type_has_concrete_codegen_layout(&recv_ty)) ||
+                    (recv_ty.kind == TY_APP &&
+                     type_app_is_concrete_adt(&recv_ty))) {
+                    for (uint32_t ni = before_scan;
+                         ni < ctx.n_abi_specializations; ni++) {
+                        EmitAbiSpecialization *nsp = &ctx.abi_specializations[ni];
+                        if (nsp->emitted || !nsp->fn || !nsp->fn->owner_instance ||
+                            nsp->n_args < 1)
+                            continue;
+                        if (type_eq(nsp->arg_types[0], recv_ty)) continue;
+                        nsp->arg_types[0] = recv_ty;
+                    }
+                }
+            }
+            sp = &ctx.abi_specializations[sp_idx];
+            /* Recursively scan each newly-minted twin's own body so its inner
+             * calls (`run-id`, `mk-id`, ...) also get by-value twins -- the full
+             * helper chain, not just the top `fmap` dispatch.  Worklist over the
+             * growing tail; re-fetch by index after each scan (realloc-safe). */
+            for (uint32_t wi = before_scan; wi < ctx.n_abi_specializations; wi++) {
+                EmitAbiSpecialization *wsp = &ctx.abi_specializations[wi];
+                if (!wsp->fn || !wsp->fn->body || !wsp->fn_expr) continue;
+                const Expr *wfn = wsp->fn_expr;
+                ctx.current_abi_specialization = wsp;
+                ctx.current_scan_fn = wfn;
+                emit_abi_scan_expr(&ctx, wsp->fn->body,
+                                   (const Expr **)program->as.program.items,
+                                   program->as.program.n);
+                ctx.current_scan_fn = NULL;
+                ctx.current_abi_specialization = NULL;
+            }
+            sp = &ctx.abi_specializations[sp_idx];
+            /* Forward-declare the mono body + every newly-minted nested spec
+             * (the by-value fmap / mk-id twins) up front, so calls among them
+             * resolve regardless of definition order (else a call before the
+             * definition defaults to `int` and the C stage conflicts). */
+            emit_abi_forward_decl(&file, sp);
+            for (uint32_t ni = before_scan; ni < ctx.n_abi_specializations; ni++)
+                emit_abi_forward_decl(&file, &ctx.abi_specializations[ni]);
+            /* Emit any newly-minted nested specs (the by-value fmap twin). */
+            for (uint32_t ni = before_scan; ni < ctx.n_abi_specializations; ni++) {
+                EmitAbiSpecialization *nsp = &ctx.abi_specializations[ni];
+                if (nsp->emitted) continue;
+                ctx.current_abi_specialization = nsp;
+                ctx.fn_name_override = nsp->clone_name;
+                ctx.fn_name_override_external = false;
+                emit_fn_def(&ctx, &file, nsp->fn_expr);
+                nsp->emitted = true;
+                ctx.fn_name_override = NULL;
+                ctx.current_abi_specialization = NULL;
+                ctx.current_scan_fn = NULL;
+            }
+            /* Emit the lens body itself (fmap now routes to the twin). */
+            ctx.current_abi_specialization = sp;
+            ctx.fn_name_override = sp->clone_name;
+            ctx.fn_name_override_external = false;
+            emit_fn_def(&ctx, &file, sp->fn_expr);
+            sp->emitted = true;
+            ctx.fn_name_override = NULL;
+            ctx.current_abi_specialization = NULL;
+            ctx.current_scan_fn = NULL;
+        }
     }
 
     /* Phase M5: emit module-level defer thunks + atexit constructor. */

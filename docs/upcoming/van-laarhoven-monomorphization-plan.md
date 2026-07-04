@@ -147,16 +147,18 @@ during method-level tyvar rewrite. Contained by keeping every read behind
 >   key `lens=point-x f=Identity focus=int whole=Point`. Registry-only (codegen
 >   unchanged); reviewable via `--dump-mono-specs` (fixture
 >   `van-laarhoven-lens-wide-mono-resolve`).
-> - **VBM2b -- per-spec by-value body emit: DEFERRED.** Blocked on the
->   documented **M7-by-value gap** the MB2.5 carve-out
->   (`src/compiler/emit_module.c:2209`) leaves open: the shared `__spec` body
->   emit this slice was to "lift and share" would mint an ill-typed clone whose
->   `(f a)` temp collapses to the int64 carrier while the aggregate ctor returns
->   by value. Tracked in
->   [../reported/vbm2-byvalue-lens-body-emit.md](../reported/vbm2-byvalue-lens-body-emit.md)
->   with fix directions. VBM3 (dispatch redirect) and VBM4 (graduate
->   `vl-wide-functor`) depend on VBM2b; Path A remains the shipped wide-functor
->   answer until it lands.
+> - **VBM2b -- per-spec by-value body emit: WIRED, IN PROGRESS.** `emit_program`
+>   now drives the shared ABI-spec body emit per concrete spec, OPENING the MB2.5
+>   carve-out (`src/compiler/emit_module.c:2209`) for the mono lens body so the
+>   `fmap` dispatch mints a by-value instance twin: `point_x__mono_<hash>` returns
+>   `(Identity Point)` BY VALUE and **the `(f S)` result heap box is eliminated**.
+>   One cascade level remains -- the by-value RECEIVER of the nested
+>   instance-method body (`run-id` inside the `fmap` twin) isn't lowered by-value,
+>   so the two `vl-wide-mono` fixtures build-red on a receiver spill. Tracked with
+>   the exact remaining emitter feature in
+>   [../reported/vbm2-byvalue-lens-body-emit.md](../reported/vbm2-byvalue-lens-body-emit.md).
+>   VBM3 (dispatch redirect) and VBM4 (graduate `vl-wide-functor`) depend on
+>   finishing VBM2b; Path A remains the shipped wide-functor answer until it lands.
 
 **Goal.** For each spec key registered in VBM1, emit one lens body in which
 `(f a)`, `(f b)`, `(f S)`, and the functor-wrapping `g : (-> A (f A))` are

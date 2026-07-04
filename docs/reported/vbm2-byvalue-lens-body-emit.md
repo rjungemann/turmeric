@@ -7,11 +7,18 @@ severity: LOW-MEDIUM. Not a miscompile or a correctness bug -- purely the
   box/unbox (`--enable=vl-wide-functor`); VBM2b would make it FREE (no box).
   The blocker is that the reusable per-spec body emit the plan told VBM2 to
   "lift and share" cannot yet emit a correct by-value HKT lens body.
-status: OPEN. VBM2a (the cross-procedural spec resolution) landed
-  2026-07-04 behind `--enable=vl-wide-mono` (registry-only, codegen unchanged).
-  VBM2b (the per-spec by-value body emit) is deferred pending the M7-by-value
-  gap below; VBM3 (dispatch redirect) and VBM4 (graduate `vl-wide-functor`)
-  depend on VBM2b. Filed 2026-07-04.
+status: IN PROGRESS. VBM2a (cross-procedural spec resolution) landed 2026-07-04.
+  VBM2b (per-spec by-value body emit) is now WIRED behind `--enable=vl-wide-mono`
+  and gets most of the way: it emits `point_x__mono_<hash>` returning
+  `(Identity Point)` BY VALUE, and mints by-value `fmap` / `mk-id` instance
+  twins so the `(f S)` RESULT heap box is eliminated. It does not yet fully
+  compile: the last cascade level -- the by-value RECEIVER of the nested
+  instance-method body (`run-id : Identity int -> int` inside the `fmap` twin) --
+  is not minted, so emit_fn_def spills the by-value receiver as `int64_t __t77 =
+  i` and calls the carrier `run_hyid`, a C type error. The two `vl-wide-mono`
+  fixtures therefore build-red pending that one emitter feature (below). All
+  non-`vl-wide-mono` fixtures are unaffected (the whole path is gated). Filed
+  2026-07-04; VBM3/VBM4 depend on finishing VBM2b.
 ---
 
 # VBM2b: by-value lens body emit is blocked on the M7-by-value gap
@@ -39,6 +46,31 @@ two halves:
   `(f S)`, and the functor-wrapping `g : (-> A (f A))` are spelled BY VALUE with
   the concrete `f` substituted, and the `fmap` dispatch becomes a direct call to
   the by-value instance method. This is not yet emitted.
+
+## Current state (2026-07-04): how far VBM2b gets
+
+`emit_program` (src/compiler/emit_module.c) now, under `--enable=vl-wide-mono`,
+drives the shared ABI-spec body emit for each concrete lens spec:
+
+1. Interns a spec for the lens FnDef with the HKT tyvar `f` pinned to the
+   concrete functor, names it `point_x__mono_<hash>`, result type by value.
+2. Scans the lens body with the MB2.5 carve-out (emit_module.c:2209) OPENED for
+   `is_vl_wide_mono` specs, so the `fmap` dispatch mints a by-value `fmap`
+   instance twin (`__inst_Functor_fmap_Identity__spec__...`) returning
+   `(Identity Point)` by value + a by-value `mk-id` twin -- **the `(f S)` result
+   box is gone**.
+3. Retypes the twin's receiver to the by-value `(f a)` the lens body passes, then
+   recursively scans the twin bodies, then forward-declares + emits everything.
+
+The emitted `point_x__mono` and the `fmap`/`mk-id` twins are correct by-value C.
+The ONE remaining defect: the `fmap` twin body calls `run-id` on its by-value
+receiver `i`, but no by-value `run-id : Identity int -> int` twin is minted, so
+emit_fn_def emits the carrier spill `int64_t __t77 = i; ... run_hyid(&__t77)` --
+which is ill-typed (`int64_t` from a `tur_adt_Identity__int`). That is the
+by-value-RECEIVER half of the M7 gap: the shared body emit does not yet lower a
+nested instance-method call's by-value struct receiver to a by-value inner twin.
+Closing it (mint + route the by-value `run-id`, and teach emit_fns.c's receiver
+spill to use the by-value type) finishes VBM2b.
 
 ## Root cause (why VBM2b can't just reuse the __spec machinery)
 
