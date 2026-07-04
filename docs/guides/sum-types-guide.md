@@ -158,6 +158,38 @@ match outer
               Just(k)  k
 ```
 
+## Updating a record variant inside a `match` arm
+
+Inside a `match` arm that has destructured a bare-symbol scrutinee to a
+specific record variant, the scrutinee is **narrowed** to that variant for the
+duration of the arm. That means `(with s [field val ...])` can reconstruct
+through the matched ctor without the caller re-listing every field, and
+`(.field s)` reads the variant's field directly:
+
+```turmeric
+(defadt Shape :copy
+  (Circle [radius : float])
+  (Rect   [w : float h : float]))
+
+(defn grow [s : Shape] : Shape
+  (match s
+    (Circle r) (with s [radius {r * 2.0}])   ; s narrowed to Circle for this arm
+    (Rect w h) (with s [w {w * 2.0}])))       ; s narrowed to Rect for this arm
+```
+
+- The scrutinee must be a **bare symbol** (`match s ...`), not a compound
+  expression. Compound scrutinees have no name to narrow.
+- The ADT (and the matched variant) must be `:copy`. Move-only ADTs still
+  reject at TUR-E0296.
+- The matched variant must be **record-style**. Narrowing to a positional
+  variant rejects with a message pointing at the missing field names.
+- Narrowing is **per-arm**: once the arm exits, the scrutinee's type widens
+  back to the full ADT, so a later `(with s ...)` outside the arm still needs
+  its own narrowing context.
+- A `when`-guarded arm narrows through the guard too, and a bare `(with s ...)`
+  on a multi-variant ADT outside any arm rejects with **TUR-E0302** telling
+  you to wrap the update in a `match` arm.
+
 ## Exhaustiveness
 
 A `match` whose scrutinee is a known sum type must cover **every**

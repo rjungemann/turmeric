@@ -1,72 +1,156 @@
-# Paper trail: return-directed `pure`/`empty` context inference (if-sibling)
+---
+title: Return-directed typeclass methods (`pure`, `empty`) require an explicit
+  type ascription at every call site
+severity: MEDIUM. Ergonomic gap in the migrated by-value Applicative /
+  Alternative surface. Does not break correctness -- the compiler emits a clear
+  diagnostic asking for the ascription -- but it forces `(:: (pure ...) (Opt
+  int))` boilerplate at every call site that could otherwise be inferred from
+  the surrounding context.
+status: RESOLVED 2026-07-04. Filed 2026-07-02 during the `TUR_M7_HKT`
+  retirement investigation (docs/upcoming/tur-m7-hkt-flag-retirement-plan.md).
+  Independent of the retirement -- fixing this does not require the flag, and
+  retiring the flag does not require fixing this.
+---
 
-Resolved 2026-07-04. Companion to the resolved report at
-`docs/archive/return-directed-methods-pure-empty-inference.md`.
+> **RESOLVED (2026-07-04).** All three shapes now infer the container without a
+> per-call-site ascription:
+>
+> - **Fix direction #1 (context threading) -- already in place.** A `let` with a
+>   type annotation (`(let [x : (Option int) (pure 42)] ...)`), an enclosing
+>   `defn` return type (`(defn f [] : (Option int) (pure 42))`), and an `if` /
+>   `match` nested under either of those already thread the annotation onto
+>   `e->expected_type`, so the return-directed method grounds. Verified with
+>   the by-value `Option` `Applicative`/`Alternative` instances; each compiles
+>   and runs to the correct instance with no `(:: (pure ...) T)`.
+> - **Fix direction #2 (sibling-arm join) -- implemented for `if`.** With no
+>   outer expected type and exactly one branch a return-directed method call
+>   (`(pure x)` / `(empty a)`), `elab_if` now probes the concrete sibling branch
+>   under a diag-capture frame (move/linear state snapshot+restore) to discover
+>   the join type and threads it as the expected type for both arms -- in either
+>   branch order. `(if c (pure 1) known-opt)` and `(if c known-opt (pure 1))`
+>   both ground now. New helper
+>   `elab_symbol_is_return_dispatch_method` (elab_typeclasses.c) recognises the
+>   method; `if_form_is_return_dispatch` gates the probe in elab_forms.c.
+>   Regression fixture: `tests/fixtures/hkt-return-dispatch-if-sibling/`.
+> - **Genuinely-ambiguous case still errors, as intended.** `(let [x (pure 42)]
+>   ...)` with no context anywhere continues to ask for the ascription.
+>
+> **Known remaining sub-case (not fixed here):** a bare `match` used as a value
+> with *no* outer expected type, where only a sibling arm is concrete
+> (`(match c (A) (pure 1) (B) known-opt)`), still requires an ascription on the
+> method arm. `match`'s multi-path arm elaboration (per-arm pattern scope) makes
+> the sibling-probe used for `if` unsafe to apply verbatim; in practice a `match`
+> value almost always sits under a `defn` return type or a typed `let` binding
+> (fix #1), which already grounds it. Left for the end-to-end monomorphization
+> work (fix direction #3) that already needs per-call-site typing.
+>
+> **stdlib `::` pass (2026-07-04).** Audited every `(:: ...)` in `stdlib/`. There
+> are no return-directed-method (`pure`/`empty`) workaround ascriptions to
+> remove: the stdlib's `pure`/`empty` stay on the carrier, so their in-tree uses
+> are carrier-ascribed by necessity (the pure/empty ascriptions live only in
+> test fixtures and docstrings). The remaining `::` sites are load-bearing
+> carrier/newtype conversions (`(:: fd :int)`, `(:: r :ptr<void>)`) and
+> deliberate by-value HKT carrier-representative pins (`(:: (make-struct Schema
+> ..) (Schema int))`) -- a probe removal of the `Schema` pins and the `Set`
+> `eq?` ascriptions either changed codegen (set-typed-consumer snapshot) or
+> touches the documented by-value representative pattern, so they were kept.
+>
+> Superseded by the paper trail in
+> [../archive/history/return-directed-methods-pure-empty-inference.md](../archive/history/return-directed-methods-pure-empty-inference.md).
 
-## What was already working (fix direction #1)
+# Return-directed methods don't propagate context-supplied element types
 
-Before this change the elaborator already threaded `e->expected_type` from:
+## Symptom
 
-- a `let` binding's type annotation (`elab_forms.c`, the
-  `generic-return-type-not-inferred-from-context` path around the
-  `let_init_expected` push), and
-- an enclosing `defn` return type (`elab_fns.c`, `return_full_type` push).
+Applicative `pure` and Alternative `empty` are declared with a phantom element
+type parameter (`pure :: a -> f a`, `empty :: f a`). When called in a position
+where the surrounding context fully determines `f a` (a `let` with an
+ascription, a function return type, a match arm sibling), the elaborator still
+refuses to ground the method and asks for a manual ascription.
 
-A return-directed method (`pure`/`empty`, whose class tyvar `f` appears only in
-the result) grounds off that channel in `elab_try_return_dispatch`
-(`elab_typeclasses.c`). So `(let [x : (Option int) (pure 42)] ...)` and
-`(defn f [] : (Option int) (pure 42))`, and `if`/`match` nested under either,
-already worked. The report's premise that these "aren't consulted" was stale --
-they are; only the pure sibling-arm-without-outer-context case was open.
+```turmeric
+(defmodule main)
 
-## What this change added (fix direction #2, `if` only)
+(defn main [] : int
+  (let [x (pure 42)]
+    0))
+```
 
-`elab_if` (`src/compiler/elab_forms.c`): when `e->expected_type` is NULL and
-exactly one branch is a return-directed method call, probe the concrete sibling
-branch to discover the join type and thread it as the expected type for both
-arms.
+```
+error: cannot infer type for return-directed method 'pure'; add a type
+  ascription, e.g. (:: (pure ...) T)
+```
 
-- Probe runs under `diag_push_capture()` / `diag_pop_capture()` with
-  `move_state_snapshot_bindings` / `linear_state_snapshot_bindings` +
-  `..._restore`, so a failed or side-effecting probe leaves no diagnostics and
-  no move/linear-state change. The real arm elaboration then re-runs normally.
-- The probe type is used only when the sibling elaborated cleanly
-  (`perr == 0`) to a concrete result kind (not UNKNOWN / NEVER / NIL).
-- Works in both branch orders (`(if c (pure 1) known)` and
-  `(if c known (pure 1))`).
+Adding `(:: (pure 42) (Opt int))` (or an outer annotation the context could
+supply) makes the program compile.
 
-New predicate `elab_symbol_is_return_dispatch_method(Elab*, const Symbol*)`
-(`src/compiler/elab_typeclasses.c`, declared in `elab_internal.h`) mirrors the
-method-finding phase of `elab_try_return_dispatch` and is gated on no shadowing
-binding (a user/local defn of the same name wins). `if_form_is_return_dispatch`
-(static, `elab_forms.c`) wraps it for the `if` arm forms.
+## Why this is a gap, not the intended design
 
-Regression fixture: `tests/fixtures/hkt-return-dispatch-if-sibling/` (stdout).
-Covers `pure` in either arm and `empty` grounded from a concrete sibling.
+The diagnostic is the intended fallback when there is genuinely no context.
+The gap is that even when context exists, it isn't threaded to the method.
+Concretely:
 
-## Deliberately not done
+- `(let [x : (Opt int) (pure 42)] ...)` -- the binding's declared type carries
+  the full `f a`, but the method call is elaborated before the binding site's
+  annotation is consulted.
+- `(defn f [] : (Opt int) (pure 42))` -- the enclosing return type is
+  available but not propagated as an `expected_type` into the method call.
+- `(match cond (True) (pure 1) (False) (some-known-opt))` -- the sibling arm
+  has a concrete `(Opt int)`, but the earlier `pure 1` arm is elaborated first
+  with no `expected_type`.
 
-- **`match` sibling-without-outer-context.** `match`'s per-arm pattern scope
-  makes the `if`-style sibling probe unsafe to apply verbatim (a probed arm body
-  may reference pattern variables not in scope outside its arm). A `match` used
-  as a value almost always sits under a typed binding / return type (fix #1),
-  which already grounds it. Deferred to the end-to-end monomorphization work
-  (fix direction #3).
-- **stdlib `::` removals.** No return-directed-method workaround ascriptions
-  exist in `stdlib/` to remove. A probe removal of the `Schema` by-value
-  representative pins (`(:: (make-struct Schema ..) (Schema int))`) and the
-  `Set` `eq?` param ascriptions was reverted -- the `Set` one changed codegen
-  (set-typed-consumer snapshot) and the `Schema` ones touch the documented
-  by-value carrier-representative pattern.
+All three shapes could ground the method without user-visible ascriptions.
 
-## Side finding filed separately
+## Root cause (direction)
 
-`docs/reported/byvalue-option-if-join-function-call-arm-aggregate-cast.md` --
-a pre-existing codegen defect (unrelated to this fix): a by-value `Option`
-flowing through an `if` whose arm is a *function call* returning that Option is
-cast aggregate->pointer in emitted C. Reproduces with a plain `some` arm and no
-return-directed method, so it is out of scope here.
+`elab_call` / the typeclass dispatch layer looks up a method's tyvars from
+argument types (`a` in `pure :: a -> f a` grounds to `int` from the `42`), but
+the *container* tyvar `f` appears only in the result. The current code paths
+that could ground it -- `expected_type` from the caller's context, or a
+same-scope sibling in a `match`/`if` -- either aren't consulted or aren't
+consulted early enough.
 
-## Suite
+## Impact
 
-`bash tests/run.sh` -> `1932 passed, 0 failed`.
+Every use of `pure` / `empty` in migrated stdlib code needs an explicit
+ascription, which defeats a large chunk of the ergonomic argument for the
+by-value HKT surface. In practice this pushes users toward instance-specific
+constructors (`(Some 42)` instead of `(pure 42)`), which works around the
+issue but undermines Applicative as a general interface.
+
+## Fix directions
+
+1. Thread `expected_type` from `let`-with-annotation, `defn` return type, and
+   match-arm-context into the method call site so a return-directed method
+   can consult it before demanding an ascription.
+2. For `match` / `if`, resolve the join type of the arms lazily: if the first
+   arm is a return-directed method call and a later arm is ground, retype the
+   method against the joined arm type instead of failing on the first arm.
+3. Long-term, aligns with the end-to-end monomorphization plan
+   ([../upcoming/end-to-end-monomorphization-plan.md](../upcoming/end-to-end-monomorphization-plan.md))
+   which already needs per-call-site typing information for by-value HKT
+   dispatch.
+
+## Related
+
+- [class-method-level-hkt-tyvar-grounding.md](class-method-level-hkt-tyvar-grounding.md)
+  -- a distinct HKT-dispatch inference gap surfaced in the same investigation.
+- [../upcoming/tur-m7-hkt-flag-retirement-plan.md](../upcoming/tur-m7-hkt-flag-retirement-plan.md)
+  -- the flag retirement is independent of this fix and should not wait.
+
+## Progress Update (2026-07-03)
+
+Substantially improved on v0.26.2 (commit 69e573fd7). Verified against HEAD:
+
+- `(let [x : (Option int) (pure 42)] 0)` -- **now compiles clean** (Fix
+  Direction #1, let-with-annotation, fixed).
+- `(defn f [] : (Option int) (pure 42))` -- **now compiles clean** (Fix
+  Direction #1, defn return-type, fixed).
+- Bare `(let [x (pure 42)] 0)` with no context still emits the fallback
+  diagnostic (intended -- there is genuinely no context).
+
+Commit 634191596 ("Infer class-method result functor from the receiver",
+#594) is the load-bearing change. Remaining gap: match/if arm-sibling
+propagation (Fix Direction #2) is untested here and likely still open;
+retitle or narrow this report to that residual, or archive if the sibling
+case is subsumed by class-method-level-hkt-tyvar-grounding.md.

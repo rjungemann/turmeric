@@ -1,92 +1,104 @@
-# Paper trail: by-value Option/Result if-join with a function-call arm
+---
+title: By-value `Option`/`Result` flowing through an `if` join with a
+  function-call arm is cast aggregate->pointer in codegen
+severity: MEDIUM. Codegen defect. A well-typed program (`tur check` passes)
+  fails to compile the emitted C with "aggregate value used where an integer
+  was expected". Blocks a natural `(if c (some ..) (returns-option ..))`
+  join pattern; a workaround exists (use direct constructors in both arms, or
+  bind through a typed helper), so it does not block the one track.
+status: RESOLVED 2026-07-04. Filed 2026-07-04 while landing the
+  return-directed-methods if-sibling inference fix
+  (docs/archive/return-directed-methods-pure-empty-inference.md). Independent of
+  that fix -- the same failure reproduces with a plain `some` arm and no
+  return-directed method involved.
+---
 
-Resolved 2026-07-04. Companion to the resolved report at
-`docs/archive/byvalue-option-if-join-function-call-arm-aggregate-cast.md`.
+> **RESOLVED (2026-07-04).** The `if`-join per-arm coercion in `emit_if_value`
+> (`src/compiler/emit_expr.c`) no longer bridges an arm that already yields the
+> by-value aggregate directly. Root cause was as predicted: an ordinary
+> top-level defn returning a concrete by-value `(Option/Result ...)` (`(known)`)
+> was not recognised as a by-value producer, so the merge-temp coercion applied
+> the carrier `(T *)(intptr_t)(...)` reconstruct to a struct rvalue.
+>
+> Fix: new predicate `call_ordinary_defn_byval_aggregate` (emit_expr.c) mirrors
+> `emit_fns.c`'s C-return-type decision -- a non-inline-C **global, non-generic**
+> defn's signature is the concrete aggregate C name (the `int64_t` fallback is
+> inline-C only), so the call yields that aggregate by value. Wired into both
+> `fn_body_tail_emits_byvalue_carrier_abi` (skip the bridge) and
+> `fn_body_tail_byvalue_carrier_type` (declare the merge temp by value, so a
+> two-call `if` join also works). Gated to exclude the shapes that legitimately
+> emit the int64 carrier: generic/poly bases (`is_poly_fn` / `poly_type`), local
+> letrec closures (`!is_global`), inline-C bodies, and -- crucially --
+> `#{Construct}` templates (`some`/`none`/`ok`/`err`), whose lowering is
+> context-dependent (they emit their carrier base inside a carrier-returning
+> spec like `option_map`). The construct-template exclusion was required: a first
+> cut regressed `option-map-capturing-closure`.
+>
+> Verified for Option and Result, in both branch orders, both-call arms, and a
+> let-tail arm. Regression fixture:
+> `tests/fixtures/byvalue-option-if-join-call-arm/`. Suite: 1933 passed, 0
+> failed. Paper trail:
+> [../archive/history/byvalue-option-if-join-function-call-arm-aggregate-cast.md](../archive/history/byvalue-option-if-join-function-call-arm-aggregate-cast.md).
+>
+> **Adjacent pre-existing bug found, filed separately (out of scope):**
+> `docs/reported/byvalue-result-param-ok-predicate-materialize-bad-cast.md` --
+> calling `ok?` on a by-value `(Result A B)` *parameter* miscompiles the
+> parameter materialization (the Option analogue `some?` is fine). Independent of
+> the if-join; reproduces with no `if` at all.
 
-## Diagnosis
+# By-value Option through an `if` join with a function-call arm miscompiles
 
-`emit_if_value` (`src/compiler/emit_expr.c`) declares the merge temp by value
-when either arm is a recognised by-value carrier-ABI producer
-(`fn_body_tail_byvalue_carrier_type`), then per arm either assigns directly (if
-the arm already emits by value, `fn_body_tail_emits_byvalue_carrier_abi`) or
-bridges carrier->concrete (`emit_carrier_bridge`, a `(T *)(intptr_t)(...)`
-reconstruct).
+## Symptom
 
-For `(if b (some 99) (known))` with `(defn known [] : (Option int) (some 5))`:
+A well-typed `if` whose result type is a by-value `(Option int)` and one of
+whose arms is a *function call* returning that Option emits C that casts the
+call's aggregate return value to a pointer:
 
-- `(some 99)` lowers to a by-value `some__spec__...` and is recognised
-  (`call_spec_result_byval_aggregate`), so `if_bv = tur_adt_Option__int` and the
-  temp is declared by value.
-- `(known)` -- an ordinary direct call whose C signature is
-  `static tur_adt_Option__int known()` (already by value) -- was recognised by
-  NONE of the leaf predicates, so the else arm got the carrier bridge:
-  `tur_option_t *__t57 = (tur_option_t *)(intptr_t)(known());` -- casting the
-  struct rvalue to a pointer. cc: "aggregate value used where an integer was
-  expected".
+```turmeric
+(defn opt-val [o : (Option int)] : int (if (some? o) (.value o) -1))
+(defn known [] : (Option int) (some 5))
 
-## Fix
+(defn pick [b : bool] : int
+  (opt-val (if b (some 99) (known))))          ; known() is a call arm
 
-New leaf predicate `call_ordinary_defn_byval_aggregate(ctx, call, out_ty)`:
+(defn main [] : int (println (pick true)) 0)
+```
 
-- `call` is a non-poly `EX_CALL` whose `fn_binding` is a GLOBAL, non-generic
-  (`!is_poly_fn && !poly_type`), non-inline-C, non-`#{Construct}` defn with a
-  declared `result_full_type`.
-- Mirrors `emit_fns.c`'s C-return-type decision: for a non-inline-C body the
-  signature is `emit_type_c_name(ctx, result_full_type)` (the `int64_t` fallback
-  there is inline-C only). So the call yields the aggregate by value whenever
-  that c-name is a real struct name (`!= "int64_t"`, not a `T *` pointer) for a
-  non-heap ADT/APP/STRUCT.
-- Deliberately does NOT gate on `!type_uses_carrier_abi(r)`: a concrete
-  `(Option int)` is carrier-ABI at the type level yet is still emitted by value
-  from an ordinary defn body. (This is why reusing
-  `call_emits_byval_concrete_aggregate` verbatim -- which has that gate and is
-  `__inst_`-scoped -- did not work.)
+`tur check` passes, but `tur run` / `tur build` fails at the C compiler:
 
-Wired into:
+```
+error: aggregate value used where an integer was expected
+    tur_option_t *__t57 = (tur_option_t *)(intptr_t)(known());
+                          ^~~~~~~~~~~~
+```
 
-- `fn_body_tail_emits_byvalue_carrier_abi` default (leaf) case -> the arm is not
-  bridged.
-- `fn_body_tail_byvalue_carrier_type` `EX_CALL` case -> the type is recovered so
-  a two-call `if` join (`(if b (ka) (kb))`, both ordinary defns) also declares
-  the merge temp by value.
+## Scope / what does and does not trip it
 
-## Gating iterations (what the exclusions are for)
+- Trips it: an arm that is a **call returning a by-value Option/Result**
+  (`(known)` above). Reproduces with a plain `(some ..)` in the sibling arm --
+  no typeclass method or return-directed dispatch is involved.
+- Does **not** trip it: both arms being direct constructors, e.g.
+  `(if b (some 99) (some 5))` or `(if b (some 5) (pure 99))`, compile and run
+  fine. Binding the `if` in a `let` does not change the outcome either way; the
+  determining factor is the function-call arm.
 
-1. `!type_has_concrete_codegen_layout` in the first cut made the predicate never
-   fire: `type_has_concrete_codegen_layout((Option int))` is false for the
-   abstract TY_APP even though `emit_type_c_name` already yields
-   `tur_adt_Option__int`. Replaced with the direct c-name test (mirrors what
-   emit_fns actually emits).
-2. `#{Construct}` templates (`some`/`none`/`ok`/`err`) had to be excluded: they
-   lower context-dependently and inside a carrier-returning generic spec
-   (`option_map__spec__...`) emit their bare int64-carrier base `some(..)`, not
-   the by-value monomorph. A first cut without this exclusion regressed
-   `option-map-capturing-closure` (`__t = some(..)` assigned an int64 to an
-   aggregate temp). Those construct calls stay owned by
-   `call_construct_emits_byval_aggregate` / `call_spec_result_byval_aggregate`,
-   which distinguish the by-value-spec case from the carrier base.
+## Root cause (direction)
 
-## Verification
+The `if`-join emit path materialises the branch value through the `int64`
+carrier (`(tur_option_t *)(intptr_t)(...)`), which is correct for a carrier
+handle but wrong for a by-value aggregate return: `known()` already yields a
+`tur_option_t` by value, so the `(T*)(intptr_t)` carrier cast is applied to a
+struct rvalue. The direct-constructor arms avoid it because the constructor is
+lowered straight into the aggregate temporary. This is the same family as
+`docs/archive/history/byvalue-result-field-access-casts-aggregate-to-pointer.md`
+(aggregate-vs-carrier confusion at a by-value boundary), here at the if-join
+temporary rather than a field access.
 
-`tests/fixtures/byvalue-option-if-join-call-arm/` (stdout): Option through an
-`if` join with a call arm in either position, both-call arms, and a let-tail
-arm. Result verified out-of-tree via an inline-C `{is_ok,ok_val,err_val}`
-extractor (the in-tree `ok?`-on-param path hits a separate pre-existing bug --
-see below).
+Likely fix site: the branch-result coercion in the `EX_IF` emit path
+(`src/compiler/emit_*.c`) should skip the carrier `(T*)(intptr_t)` cast when the
+branch expression's type is a by-value aggregate register class.
 
-`bash tests/run.sh` -> `1933 passed, 0 failed`.
+## Workaround
 
-## Adjacent pre-existing bug found (filed, not fixed here)
-
-`docs/reported/byvalue-result-param-ok-predicate-materialize-bad-cast.md`:
-`(defn f [r : (Result int cstr)] : int (if (ok? r) 1 0))` miscompiles the
-by-value Result parameter materialization (`tur_adt_Result__int__cstr __t = r;`
-where `r` is the int64 carrier). The Option analogue (`some?` on an `(Option
-int)` param) is fine. Reproduces with no `if` join of calls and on the pre-fix
-compiler, so it is independent of this fix.
-
-There is also a type-inference gap (not filed separately, noted here): an `if`
-join whose ground arm is `(ok N)` does not pin the `err` phantom `B` from the
-sibling arm (`(if b (ok 3) (known-res))` -> `B` stays a free tyvar, TUR-E0001),
-so the `ok` arm needs an ascription. This is the Result analogue of the
-return-directed-methods sibling-inference case and is left to that track.
+Use direct constructors in both arms, or route the call arm's Option through a
+typed accessor before the join.

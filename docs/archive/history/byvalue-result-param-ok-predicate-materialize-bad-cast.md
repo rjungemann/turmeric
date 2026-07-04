@@ -1,84 +1,100 @@
-# Paper trail: by-value Result parameter + carrier-`:int` predicate
+---
+title: Calling `ok?` (or another Result predicate/accessor) on a by-value
+  `(Result A B)` parameter miscompiles the parameter materialization
+severity: MEDIUM. Codegen defect. A well-typed program (`tur check` passes)
+  fails to compile the emitted C: the by-value Result parameter is copied into a
+  temp declared as the aggregate but initialized from the int64 carrier
+  (`tur_adt_Result__int__cstr __t = r;` where `r` is `int64_t`), then re-cast
+  through the carrier. The Option analogue (`some?` on an `(Option A)` param)
+  does NOT trip it, so it blocks a natural Result consumer shape while Option
+  works.
+status: RESOLVED 2026-07-04. Filed 2026-07-04 while landing the if-join
+  aggregate-cast fix
+  (docs/archive/byvalue-option-if-join-function-call-arm-aggregate-cast.md).
+  Independent of and pre-existing that fix -- it reproduces with no `if` join of
+  calls, and on the pre-fix compiler.
+---
 
-Resolved 2026-07-04. Companion to the resolved report at
-`docs/archive/byvalue-result-param-ok-predicate-materialize-bad-cast.md`.
+> **RESOLVED (2026-07-04).** Two argument-emission transforms were compounding
+> on a pass-by-pointer (`>16`-byte) Result parameter passed to a carrier-`:int`
+> sink (`ok?`/`ok-val`/`err?`/`err-val`):
+>
+> 1. the concrete->carrier arg bridge (the `adt_app_is_byvalue_product` /
+>    carrier-param block in `emit_expr.c`) spilled `T __t = r;` -- but `r` is
+>    already a `const T *` pointer, so `aggregate = pointer` (cc: invalid
+>    initializer); then
+> 2. the pass-by-ptr `(*(...))` deref (for callees that take the struct by
+>    value) wrapped the bridge's `(int64_t)(intptr_t)(&__t)` in another `*`.
+>
+> Root insight: a pass-by-pointer struct *parameter* is a pointer to the
+> by-value aggregate, which is *exactly* a carrier handle (the non-pbp bridge
+> path spills the value and hands back `&tmp` for the same reason). So the
+> crossing is a plain `(int64_t)(intptr_t)(r)` cast, no spill. The by-value
+> `tur_adt_Result__int__cstr` layout coincides with the carrier
+> `tur_result_box_t` (`{bool is_ok; int64_t; int64_t}`), so
+> `tur_is_ok`/`ok-val`/... read it correctly.
+>
+> Fix (`emit_expr.c`): in the carrier-param arg-bridge block, when the arg
+> `expr_is_pbp_param`, emit the pointer->int64 cast directly and set a
+> `pbp_carrier_cast` flag; the later pass-by-ptr `(*(...))` deref is guarded on
+> `!pbp_carrier_cast` so the two no longer compound. The deref still fires for a
+> genuine by-value-struct callee (Tuple3+ into inline-C/extern-C), where the
+> carrier cast never runs.
+>
+> Verified for `ok?`/`ok-val`/`err?`/`err-val` on `(Result int cstr)` and
+> `(Result cstr int)`, both ok and err values; the Option analogue still works.
+> Regression fixture: `tests/fixtures/byvalue-result-param-predicate/`. Suite:
+> 1934 passed, 0 failed. Paper trail:
+> [../archive/history/byvalue-result-param-ok-predicate-materialize-bad-cast.md](../archive/history/byvalue-result-param-ok-predicate-materialize-bad-cast.md).
 
-## Diagnosis
+# By-value Result parameter + `ok?` predicate miscompiles
 
-`(defn f [r : (Result int cstr)] : int (if (ok? r) 1 0))` emitted:
+## Symptom
 
-```c
-static int64_t f(const tur_adt_Result__int__cstr * r) {   // r is a POINTER (pbp: >16 bytes)
-    tur_adt_Result__int__cstr __t56 = r;                  // BUG 1: aggregate = pointer
-    if (ok_qu((*((int64_t)(intptr_t)(&__t56))))) { ... }   // BUG 2: extra `*` deref of an int64
-}
+```turmeric
+(defn f [r : (Result int cstr)] : int (if (ok? r) 1 0))
+(defn main [] : int (println (f (:: (ok 3) (Result int cstr)))) 0)
 ```
 
-Two independent arg-emission transforms fired on the same argument (traced with
-a temporary `TUR_M3_AUDIT`/`TUR_DBG_BR` instrumentation, since removed):
+`tur check` passes; `tur run` / `tur build` fails at the C compiler:
 
-1. The concrete->carrier arg bridge in `emit_expr.c` -- the block gated on
-   `emit_arg->type.kind == TY_APP && adt_app_is_byvalue_product(...)` with a
-   carrier param kind (here `ok?`'s param is `r : int`, `pk == TY_INT`) -- called
-   `emit_carrier_bridge(CK_CONCRETE, CK_CARRIER)`, whose aggregate path spills
-   `cname __t = src;` + `(int64_t)(intptr_t)(&__t)`. With `src == "r"` and `r` a
-   `const T *`, the spill is `aggregate = pointer` (cc: invalid initializer).
-2. The pass-by-ptr `(*(%s))` deref (`expr_is_pbp_param` + inline-C/extern-C
-   callee + `type_struct_pass_by_ptr`), meant to hand a by-value copy to a callee
-   that takes the struct by value, wrapped the bridge's output in another `*`.
-
-`ok?` is `(defn ok? [r : int] #fx{} : bool ```c return tur_is_ok(r); ```)` -- a
-carrier-`:int` sink, not a by-value-struct callee, so the pass-by-ptr deref was
-never appropriate for it in the first place.
-
-The Option analogue does not trip it: `(Option int)` is <=16 bytes so its param
-is passed by value, and `some?` resolves to a by-value spec
-`some___spec__bool_tur_adt_Option__int(o)` -- the carrier is never formed.
-
-## Fix
-
-Key insight: a pass-by-pointer struct *parameter* is a pointer to the by-value
-aggregate, which IS a valid carrier handle -- the non-pbp branch of
-`emit_carrier_bridge` spills the value precisely to hand back `&tmp`. And the
-by-value `tur_adt_Result__int__cstr` layout (`{bool is_ok; int64_t ok_val;
-const char *err_val}`) coincides with the carrier `tur_result_box_t` (`{bool
-is_ok; int64_t ok_val; int64_t err_val}`) -- `is_ok` at offset 0, `ok_val` at 8
--- so `tur_is_ok` / `ok-val` / `err?` / `err-val` read a pointer to the by-value
-aggregate correctly.
-
-So the crossing is a plain `(int64_t)(intptr_t)(r)` cast, no spill. In the
-carrier-param arg-bridge block:
-
-```c
-if (expr_is_pbp_param(ctx, emit_arg)) {
-    raw = "(int64_t)(intptr_t)(" raw ")";   // pointer IS the carrier handle
-    pbp_carrier_cast = true;
-} else {
-    raw = emit_carrier_bridge(ctx, body, raw, CK_CONCRETE, CK_CARRIER, emit_arg->type);
-}
+```
+error: invalid initializer
+    tur_adt_Result__int__cstr __t56 = r;
+                                      ^
+error: invalid type argument of unary '*' (have 'long int')
+    if (ok_qu((*((int64_t)(intptr_t)(&__t56))))) {
+               ^
 ```
 
-and the later pass-by-ptr `(*(...))` deref is guarded on `!pbp_carrier_cast` so
-the two transforms no longer compound. A genuine by-value-struct callee (Tuple3+
-into an inline-C/extern-C formal) still gets the deref: there the carrier-cast
-block does not run (its param is a concrete struct, not the int64 carrier), so
-`pbp_carrier_cast` stays false.
+The emitted `f` copies the parameter `r` into a by-value aggregate temp
+`__t56`, but `r` is held in C as the `int64_t` carrier -- so the initializer is
+`aggregate = int64_t` (rejected), and the follow-on `ok?` call then re-casts
+`&__t56` back through the carrier.
 
-## Scope / caveat
+## Scope
 
-The layout coincidence holds for 8-byte-shaped payloads (`int`, `cstr`, `ptr`,
-pointer-boxed value). For a genuinely sub-word Result payload (`bool`,
-`int8/16/32`, `float32`) the by-value aggregate packs at native widths while the
-carrier box uses int64 slots, so `ok-val`/`err-val` (later fields) would misread
--- but `ok?`/`err?` (reading only `is_ok` at offset 0) are always fine, and the
-same width caveat already applies to every carrier<->by-value crossing in the
-tree. The prior behaviour did not compile at all; this makes the common
-(pointer-shaped-payload) case correct.
+- Trips it: a **by-value `(Result A B)` parameter** consumed by `ok?` (and,
+  independently, by `ok-val` / `err?` / `err-val`) inside the function body.
+- Does **not** trip it: the Option analogue
+  `(defn f [o : (Option int)] : int (if (some? o) 1 0))` compiles and runs. The
+  divergence is Result-specific (the 3-field `{is_ok, ok_val, err_val}` carrier
+  layout vs Option's 2-field `{is_some, value}`).
 
-## Verification
+## Root cause (direction)
 
-`tests/fixtures/byvalue-result-param-predicate/` (stdout): `ok?`/`ok-val`/`err?`
-on `(Result int cstr)` params, ok and err values. Also checked out-of-tree:
-`(Result cstr int)`, and the Option control still compiles/runs.
+The parameter-materialization seam for a carrier-ABI Result param disagrees on
+representation: the temp is declared as the by-value monomorph
+`tur_adt_Result__int__cstr` but the source `r` is the int64 carrier, and the
+predicate call wants the carrier pointer. Either the temp should be the carrier
+(`int64_t`, matching `r`) or `r` should be materialized into the aggregate via
+the canonical carrier->concrete unbox (`emit_carrier_bridge`), not a bare
+`= r`. The Option path picks a consistent representation; the Result path (wider
+carrier record) does not. Likely the same aggregate-vs-carrier family as
+`docs/archive/history/byvalue-result-field-access-casts-aggregate-to-pointer.md`.
 
-`bash tests/run.sh` -> `1934 passed, 0 failed`.
+## Workaround
+
+Extract the Result via an inline-C accessor over `&r` (reading the
+`{is_ok, ok_val, err_val}` layout directly), or route the value through the
+carrier before applying the predicate.
