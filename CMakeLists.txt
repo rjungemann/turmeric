@@ -271,6 +271,22 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_ffi_dispatch_unit"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# UC-2: user-level experiments file reader unit test
+# (docs/upcoming/user-config-experiments-plan.md). Standalone executable
+# defined in src/CMakeLists.txt as tur_experiments_user_config.
+add_test(
+  NAME tur_experiments_user_config
+  COMMAND "${CMAKE_BINARY_DIR}/tur_experiments_user_config"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# UC-3: end-to-end precedence/suppression matrix for the user-level
+# experiments file, driven through the built `tur` against synthetic
+# $XDG_CONFIG_HOME homes (docs/upcoming/user-config-experiments-plan.md).
+add_test(
+  NAME tur_experiments_user_config_e2e
+  COMMAND bash tests/run-experiments-user-config.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # RP3: integration test for the REPL's auto spice-image loader. Runs
 # `tur repl` inside fixture projects and asserts the discover/build/
 # dlopen/manifest pipeline behaves correctly (initial load, freshness
@@ -560,6 +576,7 @@ set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
                      tur_eval_async_effects tur_eval_async_timeout
                      tur_eval_async_cancel tur_eval_async_error tur_eval_async_io
                      tur_eval_stm tur_env_teardown tur_embed_peripherals
+                     tur_experiments_user_config_e2e
   PROPERTIES DEPENDS tur
 )
 

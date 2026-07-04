@@ -1141,6 +1141,12 @@ static int generate_main_c(Buf *out, const char **h_files, int n_files, const ch
     return 0;
 }
 
+/* UC-3 (user-config-experiments-plan): whether the user-level experiments
+ * file has already been consulted this process (or deliberately bypassed, as
+ * the LSP hot path does).  The read happens at most once; suppression by a
+ * project manifest is decided on that first consult. */
+static bool g_user_config_experiments_done = false;
+
 /* Run type-check only on `path`; discard generated C.
  * Used by the LSP server. Must be called with diag_lsp_begin active.
  *
@@ -1160,6 +1166,12 @@ int tur_check_only(const char *path) {
         const ExperimentDescriptor *d = experiment_at(xi);
         if (d) experiment_enable(d->name, XF_SRC_CLI);
     }
+    /* UC-3: everything is already on at XF_SRC_CLI above, so the user-level
+     * experiments file would be a redundant no-op -- and a malformed one
+     * must not crash an editor keystroke.  Mark it consulted so the later
+     * discover_manifest_reader_macros call skips the read entirely (and the
+     * source column stays 'cli'). */
+    g_user_config_experiments_done = true;
 
     char **inc = NULL;
     int    n_inc = 0;
@@ -2226,14 +2238,36 @@ static void apply_manifest_experiments(const PkgManifest *m) {
     }
 }
 
+/* UC-3 (user-config-experiments-plan): consult the user-level experiments
+ * file ($XDG_CONFIG_HOME/turmeric/experiments.tur) at most once per process.
+ * Suppressed entirely when the current compile runs inside a manifested
+ * project that declared its own :experiments list -- even the empty
+ * `:experiments []` (Goal 2): the project owner's stated intent governs, and
+ * user preferences do not silently union in.  `m_or_null` is the resolved
+ * project manifest, or NULL for a scratch file / non-project invocation.
+ * CLI --enable= (applied earlier at XF_SRC_CLI) still wins over whatever this
+ * turns on, because a higher-numbered source always beats a lower one. */
+static void apply_user_config_experiments(const PkgManifest *m_or_null) {
+    if (g_user_config_experiments_done) return;
+    g_user_config_experiments_done = true;
+    if (m_or_null && m_or_null->has_experiments_key) return;  /* suppressed */
+    experiments_read_user_config();
+}
+
 static char **discover_manifest_reader_macros(const char *input_path,
                                               int *n_out) {
     *n_out = 0;
     if (!input_path) return NULL;
     char *sroot = find_spice_root(input_path);
-    if (!sroot) return NULL;
+    if (!sroot) {
+        /* No enclosing project: the user-level experiments file applies
+         * unconditionally (nothing to suppress it). */
+        apply_user_config_experiments(NULL);
+        return NULL;
+    }
     char mp[4096];
     if (!pkg_resolve_manifest_path(sroot, mp, sizeof(mp))) {
+        apply_user_config_experiments(NULL);
         free(sroot);
         return NULL;
     }
@@ -2241,8 +2275,17 @@ static char **discover_manifest_reader_macros(const char *input_path,
     memset(&m, 0, sizeof(m));
     char **out = NULL;
     if (pkg_manifest_read(mp, &m)) {
+        /* User file first (suppressed if the manifest declares :experiments),
+         * then the manifest's own list, then -- earlier -- CLI --enable=.
+         * Precedence is by source rank, so the read order does not matter for
+         * the source column; we read user-config first only to skip it when
+         * the manifest carries the key. */
+        apply_user_config_experiments(&m);
         apply_manifest_experiments(&m);
         out = resolve_manifest_reader_macros(sroot, &m, n_out);
+    } else {
+        /* Manifest present but unreadable -- treat as no project key. */
+        apply_user_config_experiments(NULL);
     }
     pkg_manifest_free(&m);
     free(sroot);
@@ -5836,6 +5879,29 @@ static int cmd_repl(bool watch_mode) {
      * entry point -- flag it so the INT-1 reader conditional picks :turi and
      * so elab_call keeps the runtime-native dispatch fallback (UCH1). */
     g_interpret_mode = true;
+
+    /* UC-3 (user-config-experiments-plan): honor the user-level experiments
+     * file for the interactive REPL, unless the enclosing project's build.tur
+     * declares its own :experiments (which suppresses it).  CLI --enable=
+     * (already applied in the global flag pass) still wins.  We read the
+     * manifest only to decide suppression; the REPL's manifest-experiment
+     * behavior is otherwise unchanged. */
+    {
+        char cwd[4096];
+        char *root = getcwd(cwd, sizeof(cwd)) ? find_project_root(cwd) : NULL;
+        char mp[4096];
+        PkgManifest m;
+        memset(&m, 0, sizeof(m));
+        if (root && pkg_resolve_manifest_path(root, mp, sizeof(mp))
+            && pkg_manifest_read(mp, &m)) {
+            apply_user_config_experiments(&m);
+        } else {
+            apply_user_config_experiments(NULL);
+        }
+        pkg_manifest_free(&m);
+        free(root);
+    }
+
     return turi_repl_run(watch_mode);
 }
 
@@ -12076,9 +12142,10 @@ static const char *xf_lifecycle_str(ExperimentLifecycle lc) {
 
 static const char *xf_source_str(ExperimentSource src) {
     switch (src) {
-        case XF_SRC_CLI:      return "cli";
-        case XF_SRC_MANIFEST: return "manifest";
-        default:              return "-";
+        case XF_SRC_CLI:         return "cli";
+        case XF_SRC_MANIFEST:    return "manifest";
+        case XF_SRC_USER_CONFIG: return "user-config";
+        default:                 return "-";
     }
 }
 
@@ -12110,6 +12177,28 @@ static int cmd_experiments(int argc, char **argv) {
             fprintf(stderr, "tur experiments: unexpected argument '%s'\n", argv[i]);
             return 2;
         }
+    }
+
+    /* UC-3: reflect the ambient configuration in the source column so a user
+     * can see where each enabled flag came from.  CLI --enable= was already
+     * applied in the global flag pass; consult the enclosing project manifest
+     * (if any) and the user-level experiments file here, honoring the same
+     * suppression rule as a compile. */
+    {
+        char cwd[4096];
+        char *root = getcwd(cwd, sizeof(cwd)) ? find_project_root(cwd) : NULL;
+        char mp[4096];
+        PkgManifest m;
+        memset(&m, 0, sizeof(m));
+        if (root && pkg_resolve_manifest_path(root, mp, sizeof(mp))
+            && pkg_manifest_read(mp, &m)) {
+            apply_user_config_experiments(&m);
+            apply_manifest_experiments(&m);
+        } else {
+            apply_user_config_experiments(NULL);
+        }
+        pkg_manifest_free(&m);
+        free(root);
     }
 
     size_t n = experiment_count();
