@@ -5,12 +5,43 @@ severity: MEDIUM. Blocks Traversable-shaped classes -- those whose methods
   introduce a *second* HKT tyvar beyond the class's `^f`. Foldable /
   Traversable / Distributive cannot be expressed with typed by-value
   signatures until this is resolved.
-status: OPEN. Filed 2026-07-02 during the `TUR_M7_HKT` retirement
-  investigation (docs/upcoming/tur-m7-hkt-flag-retirement-plan.md).
-  Independent of the retirement.
+status: RESOLVED 2026-07-04. Arm-join unification now descends below a shared
+  `TY_APP` head and grounds an ungrounded method-level tyvar against its
+  concrete peer (see "Resolution" below). Regression fixture:
+  tests/fixtures/class-method-hkt-tyvar-grounding/. Filed 2026-07-02 during
+  the `TUR_M7_HKT` retirement investigation
+  (docs/upcoming/tur-m7-hkt-flag-retirement-plan.md); independent of the
+  retirement.
 ---
 
 # Method-introduced HKT tyvar doesn't ground through the method body
+
+## Resolution (2026-07-04)
+
+The failure was in `match_arm_type_compatible` (src/compiler/elab_structs.c).
+When two arms produced `TY_APP` nodes over the **same** ADT head that differed
+only by an ungrounded `TY_TYVAR` nested in an argument position -- arm 1's
+`(Some (None))` typed `(Opt (t b))` with `b` ungrounded, arm 2's `helper (g x)`
+typed the concrete `(Opt (Opt int))` -- the compatibility check bailed with
+"expected app, got app" because `type_eq` rejected the two spines and the only
+other case handled was bare-`TY_ADT`-vs-`TY_APP`.
+
+The fix (direction 1 from the original report) adds `arm_arg_join`, a recursive
+structural join that runs **only** once both arms are `TY_APP` over the same
+head. Descending below that shared head, an ungrounded `TY_TYVAR` / `TY_UNKNOWN`
+on either side grounds to its concrete peer, and the join rebuilds the promoted
+(more specific) spine into the match's result type. The strict top-level guard
+is unchanged, so a bare top-level tyvar arm -- the distinct `pure`/`empty`
+inference gap -- is unaffected, and genuine head mismatches (`Opt` vs `Box`,
+`int` vs `cstr`) still error.
+
+`match_arm_type_compatible` now takes the `Elab *` so the joined spine can be
+arena-allocated; both call sites (wildcard-arm and constructor-arm join) pass
+it through.
+
+The end-to-end path -- `trav`'s method-level `b` grounding through the instance
+body and monomorphizing at a concrete call site -- builds and runs (fixture
+returns/prints the expected value). Full suite: 1932 passed, 0 failed.
 
 ## Symptom
 
