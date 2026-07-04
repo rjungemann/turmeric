@@ -147,18 +147,20 @@ during method-level tyvar rewrite. Contained by keeping every read behind
 >   key `lens=point-x f=Identity focus=int whole=Point`. Registry-only (codegen
 >   unchanged); reviewable via `--dump-mono-specs` (fixture
 >   `van-laarhoven-lens-wide-mono-resolve`).
-> - **VBM2b -- per-spec by-value body emit: WIRED, IN PROGRESS.** `emit_program`
->   now drives the shared ABI-spec body emit per concrete spec, OPENING the MB2.5
->   carve-out (`src/compiler/emit_module.c:2209`) for the mono lens body so the
->   `fmap` dispatch mints a by-value instance twin: `point_x__mono_<hash>` returns
->   `(Identity Point)` BY VALUE and **the `(f S)` result heap box is eliminated**.
->   One cascade level remains -- the by-value RECEIVER of the nested
->   instance-method body (`run-id` inside the `fmap` twin) isn't lowered by-value,
->   so the two `vl-wide-mono` fixtures build-red on a receiver spill. Tracked with
->   the exact remaining emitter feature in
+> - **VBM2b -- per-spec by-value body emit: DONE (emit).** `emit_program` drives
+>   the shared ABI-spec body emit per concrete spec, OPENING the MB2.5 carve-out
+>   (`src/compiler/emit_module.c:2209`) for the mono lens body so the `fmap`
+>   dispatch monomorphizes to by-value instance twins.
+>   `point_x__mono_<hash>` returns `(Identity Point)` BY VALUE with by-value
+>   `fmap` / `run-id` / `mk-id` twins -- **the `(f S)` result heap box is
+>   eliminated** (the whole helper chain lowered by value: the receiver-element
+>   tyvar is recovered from the class method signature and bound, and four
+>   shared-emit unbox/deref sites are gated on a new `is_vl_wide_mono` flag).
+>   Emits correct, compiling, box-free C; **full suite 1940 passed, 0 failed**.
+>   The mono body is emitted but not yet CALLED -- VBM3 redirects the lens call
+>   sites to it (until then Path A drives dispatch, so `set-px`/`over-px`/`view-px`
+>   still return 3/30/4/99). See
 >   [../reported/vbm2-byvalue-lens-body-emit.md](../reported/vbm2-byvalue-lens-body-emit.md).
->   VBM3 (dispatch redirect) and VBM4 (graduate `vl-wide-functor`) depend on
->   finishing VBM2b; Path A remains the shipped wide-functor answer until it lands.
 
 **Goal.** For each spec key registered in VBM1, emit one lens body in which
 `(f a)`, `(f b)`, `(f S)`, and the functor-wrapping `g : (-> A (f A))` are

@@ -1,29 +1,26 @@
 ---
-title: VBM2b -- by-value monomorphized van Laarhoven lens body emits + eliminates
-  the (f S) result box, but one nested-receiver cascade level (the M7-by-value
-  gap) remains before it compiles
-severity: LOW-MEDIUM. Not a miscompile of shipping code -- the whole path is
-  gated behind `--enable=vl-wide-mono`, and the wide-by-value functor lens
-  already WORKS via Path A's carrier box/unbox (`--enable=vl-wide-functor`).
-  VBM2b makes it FREE (no box). The residual is the last step of the by-value
-  emit: a nested instance-method call's by-value struct receiver is not lowered
-  to a by-value twin, so the two gated fixtures build-red.
-status: IN PROGRESS. VBM2a (cross-procedural spec resolution) landed 2026-07-04
-  (green). VBM2b (per-spec by-value body emit) is WIRED behind
-  `--enable=vl-wide-mono` and gets most of the way: it emits
-  `point_x__mono_<hash>` returning `(Identity Point)` BY VALUE and mints by-value
-  `fmap` + `mk-id` instance twins, so **the `(f S)` result heap box is
-  eliminated**. It does not yet fully compile: the `fmap` twin calls `run-id` on
-  its by-value receiver, but no by-value `run-id : Identity int -> int` twin is
-  minted, so `emit_fn_def` spills the by-value receiver as `int64_t __t77 = i`
-  and calls the carrier `run_hyid` -- a C type error. The two `vl-wide-mono`
-  fixtures build-red pending that one emitter step; ALL non-`vl-wide-mono`
-  fixtures are unaffected (the path is fully gated). The target shape is
-  hand-validated (see below): the fully by-value lens returns 3/30/4/99 with zero
-  heap boxes. VBM3/VBM4 depend on finishing VBM2b. Filed 2026-07-04.
+title: VBM2b -- by-value monomorphized van Laarhoven lens body now emits,
+  compiles, and eliminates the (f S) result box; only the dispatch redirect
+  (VBM3) remains to make it live
+severity: RESOLVED (emit). The by-value lens body + fmap/run-id/mk-id twins emit
+  as correct, compiling, box-free C; the full suite is green. What remains is
+  VBM3 -- routing the lens call sites (`set-px`/`over-px`) at the concrete
+  invocation to `point_x__mono_<hash>` instead of the Path A carrier clone -- and
+  VBM4 (graduate `vl-wide-functor`). Kept OPEN only because those follow-on
+  slices are unlanded.
+status: EMIT DONE (2026-07-04). VBM2a (cross-procedural spec resolution) +
+  VBM2b (per-spec by-value body emit) both landed behind `--enable=vl-wide-mono`.
+  `emit_program` emits `point_x__mono_<hash>` returning `(Identity Point)` BY
+  VALUE, with by-value `fmap` / `run-id` / `mk-id` instance twins -- **the `(f S)`
+  result heap box is eliminated** (the only `malloc` left in the mono body is the
+  setter closure's env, identical to Path A). Full suite: 1940 passed, 0 failed.
+  The mono body is emitted but not yet CALLED: `set-px`/`over-px` still dispatch
+  through the Path A carrier clone, so the fixtures return 3/30/4/99 unchanged.
+  VBM3 redirects those call sites to the mono body; VBM4 then graduates
+  `vl-wide-functor`. Filed 2026-07-04.
 ---
 
-# VBM2b: by-value lens body emits; one nested-receiver cascade level remains
+# VBM2b: by-value lens body emits (box eliminated); VBM3 redirect remains
 
 ## Summary
 
@@ -47,11 +44,9 @@ two halves:
   concrete key, emit one `<lens>__mono_<hash>` body in which `(f a)`, `(f S)` and
   the functor-wrapping `g : (-> A (f A))` are spelled BY VALUE with the concrete
   `f` substituted, and the `fmap` dispatch is a direct call to a by-value
-  instance twin. This IS now emitted (`point_x__mono_<hash>` + by-value `fmap` /
-  `mk-id` twins, result box gone) -- but does not yet compile because the twin's
-  own nested `run-id` receiver is not lowered by-value.
+  instance twin. **DONE** -- emits correct, compiling, box-free C; suite green.
 
-## How far VBM2b gets today (2026-07-04)
+## How VBM2b emits (2026-07-04, complete)
 
 `emit_program` (`src/compiler/emit_module.c`, the block after the main ABI-spec
 emit loop), under `--enable=vl-wide-mono`, for each concrete spec resolved by
@@ -63,98 +58,67 @@ VBM2a:
    `EmitAbiSpecialization.is_vl_wide_mono` flag (`emit_internal.h`) marks it.
 2. Scans the lens body (`emit_abi_scan_expr`) with the MB2.5 HKT carve-out
    (`emit_module.c` ~2209) OPENED for `is_vl_wide_mono` specs, so the `fmap`
-   dispatch is monomorphized: it mints a by-value `fmap` instance twin
-   (`__inst_Functor_fmap_Identity__spec__...` returning `tur_adt_Identity__Point`
-   BY VALUE) and a by-value `mk-id` twin. **The `(f S)` result heap box is
-   eliminated** -- no `malloc`, no `*(Identity Point *)` unbox.
+   dispatch is monomorphized: it mints a by-value `fmap` instance twin returning
+   `tur_adt_Identity__Point` BY VALUE plus a by-value `mk-id` twin.
 3. Retypes each minted instance-method twin's receiver to the by-value `(f a)`
-   the lens body actually passes (the substituted `g` returns the aggregate by
-   value), BEFORE recursively scanning the twin bodies, then forward-declares
-   (`emit_abi_forward_decl`) and emits everything. A realloc-safe re-fetch guards
-   the spec pointer across interning (the array can move under
-   `emit_abi_scan_expr`).
+   the lens body passes, AND binds the twin's receiver element tyvar (`a := int`,
+   recovered from the class method signature `fmap : (f a) -> (a -> b) -> (f b)`,
+   whose `param_types[0]` keeps the `(f a)` shape the carrier FnDef lost -- the
+   mint had bound only the result element `b := Point`). Then recursively scans
+   the twin bodies so the nested `run-id` also mints a by-value twin
+   (`run_id__spec__int64_t_tur_adt_Identity__int(tur_adt_Identity__int i) { return
+   i.wrapped; }`). Forward-declares + emits everything; a realloc-safe re-fetch
+   guards the spec pointer across interning.
 
-The emitted `point_x__mono` and the `fmap` / `mk-id` twins are correct by-value
-C. What it produces (abbreviated):
+Four shared-emit sites are gated on `is_vl_wide_mono` so the by-value world isn't
+re-carrier'd: the WF3 poly-call result unbox (`emit_expr.c` ~2916), the
+poly-agg arg deref (~4188), the carrier-producer->by-value-param double-unbox
+(~4483), and a tyvar-headed-app resolution in `emit_carrier_bridge`
+(`emit_core.c`) that spills a spec-body `(f a)` receiver at its concrete by-value
+type instead of the int64 carrier.
+
+The emitted C (the whole point of Path B -- **no `(f S)` heap box**):
 
 ```c
+static int64_t
+run_id__spec__int64_t_tur_adt_Identity__int(tur_adt_Identity__int i) {
+    return (int64_t)(i).wrapped;                    // by-value receiver
+}
 static tur_adt_Identity__Point
 __inst_Functor_fmap_Identity__spec__...(tur_adt_Identity__int i, tur_poly_fn_t g) {
-    int64_t __t77 = i;                                   // <-- BUG: int64_t, should be
-                                                         //     tur_adt_Identity__int
-    return mk_id__spec__...Point...(
-        ((tur_adt_Point *(*)(void*, int64_t))g.fn)(g.env, run_hyid(&__t77)));  // carrier run-id
+    return mk_id__spec__...Point...(                // returns Identity Point BY VALUE
+        ((tur_adt_Point *(*)(void*, int64_t))g.fn)(
+            g.env, run_id__spec__int64_t_tur_adt_Identity__int(i)));
 }
 static tur_adt_Identity__Point point_x__mono_...(int64_t g, int64_t s) {
-    ... build setter env ...
-    return __inst_Functor_fmap_Identity__spec__...(          // by-value fmap twin, NO unbox
-        (*(tur_adt_Identity__int *)(...g(g.env, s->x)...)),  // g returns by-value (f int)
+    ... build setter env (the only malloc -- the closure env, as in Path A) ...
+    return __inst_Functor_fmap_Identity__spec__...(  // by-value fmap twin, NO unbox
+        ((tur_adt_Identity__int (*)(void*, int64_t))...g...)(g.env, s->x),  // g by value
         setter);
 }
 ```
 
-## Exact remaining blocker
+`set-px`/`over-px`/`view-px` return **3 / 30 / 4 / 99**; full suite **1940 passed,
+0 failed**.
 
-The `fmap` twin body calls `run-id` on its by-value receiver `i`. No by-value
-`run-id : Identity int -> int` twin is minted, so the call stays on the carrier
-`run_hyid` and `emit_fn_def` spills the receiver as `int64_t __t77 = i` (an
-`int64_t` initialized from a two-word `tur_adt_Identity__int`) -- a C type error.
+## What remains: VBM3 (dispatch redirect)
 
-Root cause of the miss: `run-id` is called *inside the generic `Functor Identity`
-instance body* (`(fmap [i g] (mk-id (g (run-id i))))`), where `run-id`'s type
-param `A` is an unresolved tyvar -- the call node carries no concrete
-`abi_bindings`. During the recursive scan of the `fmap` twin, the mint path
-(`emit_abi_register_call`) does not propagate the active twin spec's element
-binding (`A := int`) down to that nested call, so it never sees a concrete
-by-value receiver to specialize. Confirmed empirically: the scan mints exactly
-`__inst_Functor_fmap_Identity__spec__...` and `mk_id__spec__...Point...` and
-nothing for `run-id`.
-
-This is the by-value-RECEIVER half of the documented M7-by-value gap: the shared
-body emit lowers a by-value RESULT (return-position dispatch) but not a by-value
-struct RECEIVER threaded into a nested generic call.
-
-## Two ways to finish it
-
-1. **General (preferred): mint + route the by-value `run-id` twin.** Make the
-   recursive scan resolve a nested generic call's tyvars through the active
-   spec's bindings (the twin knows `A := int`), so `run-id`'s by-value receiver
-   is seen and `emit_abi_intern_spec` mints
-   `run_id__spec__int_tur_adt_Identity__int`. The existing carrier->by-value twin
-   redirect (`emit_abi_try_byval_twin_redirect`, `emit_module.c` ~2275) then
-   retargets the `run_hyid` call to it and the spill disappears. This generalizes
-   to any lens whose instance body threads its by-value receiver through nested
-   accessors.
-
-2. **Narrow correctness patch: type the receiver spill by-value.** Independently,
-   the spill `int64_t __t77 = i` is simply mistyped -- if it were
-   `tur_adt_Identity__int __t77 = i`, then `run_hyid((int64_t)(intptr_t)(&__t77))`
-   passes a valid pointer to a real `Identity int` and the carrier `run-id`
-   dereferences it correctly (no inner twin needed; the receiver rides a stack
-   temp, not a heap box). This compiles and is correct, but leaves one small
-   carrier hop for `(f a)` -- acceptable, since the expensive `(f S)` box is
-   already gone. Find the spill in the ABI-spec-body arg emit (the `&temp`
-   receiver bridge in `emit_fns.c` / `emit_expr.c`) and use the receiver's
-   resolved by-value type for the temp.
-
-Either closes VBM2b; option 1 is the more complete monomorphization.
-
-## Hand-validation (the target shape is correct)
-
-The fully by-value lens was validated by grafting the ideal shape into the
-emitted C (setter closure reused, `g` result unboxed once, `fmap` inlined by
-value): `set-px`/`over-px`/`view-px` return **3 / 30 / 4 / 99** with **zero heap
-allocations on the lens path** -- no `emit_agg_box`, no `*(Identity Point *)`
-unbox. So the design is sound; only the codegen step above is outstanding.
+The mono body is emitted but not yet CALLED. `set-px`/`over-px` still dispatch
+through the Path A carrier lens clone (`point_hyx_un_undict_...`, int64 return
+unboxed by `run_id__spec__..._Identity__Point`). VBM3 redirects the lens
+invocation at the concrete call site (`emit_expr.c` poly-call box/unbox path) to
+`point_x__mono_<hash>` with by-value args + return, skipping the carrier clone
+and its `emit_agg_box`/`emit_agg_unbox`. The VBM2a concrete registry
+(`mono_spec_concrete_emit_info`) already names the `(lens_fn, functor, focus,
+whole)` target; VBM3 is the call-site lookup + emit. VBM4 then graduates
+`vl-wide-functor` (deletes the Path A box on the wide branch + TUR-E0309).
 
 ## Minimal repro
 
 `tests/fixtures/van-laarhoven-lens-wide-mono/input.tur` (and the resolve variant)
-with `--enable=...,vl-wide-functor,vl-wide-mono`. `tur build`/`tur run` fails at
-the C stage on the `int64_t __t77 = i` line; `tur emit-c` succeeds (the defect is
-in the emitted C, not the compiler, which is stable -- the earlier
-interning-realloc use-after-free is fixed). `--dump-mono-specs` shows the VBM2a
-resolution:
+with `--enable=...,vl-wide-functor,vl-wide-mono`. `tur emit-c` shows the by-value
+mono body; `tur build`/`tur run` returns 3/30/4/99. `--dump-mono-specs` shows the
+VBM2a resolution:
 
 ```
 ; van-laarhoven by-value monomorphization specs: 2 abstract, 1 concrete
@@ -163,23 +127,23 @@ mono-spec-abstract <h> fn=over-px lens-param=l f=Identity focus=int whole=Point
 mono-spec <h> lens=point-x f=Identity focus=int whole=Point   <- VBM2a resolved
 ```
 
-## Fix directions (file:line)
+## Where it lives (file:line)
 
 - `src/compiler/emit_module.c` (VBM2b block, after the main ABI-spec emit loop) --
-  the mono-body emit + carve-out opening + recursive twin scan + receiver retype.
-- `src/compiler/emit_module.c:2209` -- the MB2.5 carve-out, OPENED for
-  `is_vl_wide_mono` specs (done).
-- `src/compiler/emit_module.c` ~2275 (`emit_abi_try_byval_twin_redirect`) -- the
-  carrier->by-value twin redirect that would retarget `run_hyid` once a by-value
-  `run-id` twin exists.
-- `src/compiler/emit_module.c:2191` (`emit_abi_register_call`) -- where nested
-  generic-call tyvar resolution must consult the active spec's bindings so the
-  by-value `run-id` twin is minted (option 1).
-- The `&temp` receiver spill in the ABI-spec body arg emit
-  (`emit_fns.c` / `emit_expr.c`) -- type the temp by-value (option 2).
+  the mono-body emit + carve-out opening + receiver retype + element-tyvar bind +
+  recursive twin scan + forward-decl.
+- `src/compiler/emit_module.c` ~2209 -- the MB2.5 carve-out, OPENED for
+  `is_vl_wide_mono` specs.
+- `src/compiler/emit_internal.h` -- `EmitAbiSpecialization.is_vl_wide_mono`.
+- `src/compiler/emit_expr.c` ~2916 / ~4188 / ~4483 -- the three unbox/deref gates
+  keyed on `is_vl_wide_mono`.
+- `src/compiler/emit_core.c` (`emit_carrier_bridge`) -- the tyvar-headed-app
+  resolution that types a spec-body `(f a)` receiver spill by value.
 - `src/compiler/mono_specs.c` / `.h` -- the VBM2a concrete registry + emit-info
   accessors (`mono_spec_concrete_emit_info`) that hand the lens FnDef + functor
   Type + tyvar to the emit block.
 
-Absent the final step, Path A remains the shipped answer for the wide-by-value
-functor lens (correct, one box/copy/free per crossing), exactly as before VBM2a.
+VBM3 (the remaining slice) redirects the lens call sites to the emitted mono
+body; until it lands, Path A drives dispatch (the mono body is emitted but
+unused), so behaviour is identical to before -- the box is eliminated in the
+emitted body, and made live by VBM3.

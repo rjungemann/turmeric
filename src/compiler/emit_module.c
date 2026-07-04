@@ -9167,6 +9167,53 @@ int emit_program(Buf *out, const Expr *program) {
                             continue;
                         if (type_eq(nsp->arg_types[0], recv_ty)) continue;
                         nsp->arg_types[0] = recv_ty;
+                        /* The twin was minted binding only the RESULT element
+                         * (`b := Point`) from the fmap result; its RECEIVER
+                         * `i : (f a)` leaves `a` unbound (return-directed method
+                         * inference), so `(f a)` in the twin body collapses to the
+                         * int64 carrier.  Recover `a`'s name from the CLASS method
+                         * signature (`fmap : (f a) -> (a -> b) -> (f b)`, whose
+                         * `param_types[0]` keeps the `(f a)` shape the carrier
+                         * FnDef lost) and bind it to the receiver's concrete
+                         * element (`int` from recv_ty = `Identity int`), so the
+                         * recursive scan + body emit see `i` by value throughout. */
+                        {
+                            const TypeClassInstance *inst = nsp->fn->owner_instance;
+                            const TypeClass *tc = inst ? inst->typeclass : NULL;
+                            const Type *mparam = NULL;
+                            if (tc && inst->method_impls) {
+                                for (uint8_t mi = 0;
+                                     mi < inst->n_method_impls && mi < tc->n_methods;
+                                     mi++) {
+                                    if (inst->method_impls[mi] == nsp->fn &&
+                                        tc->methods[mi].param_types &&
+                                        tc->methods[mi].n_params >= 1) {
+                                        mparam = &tc->methods[mi].param_types[0];
+                                        break;
+                                    }
+                                }
+                            }
+                            if (mparam && mparam->kind == TY_APP &&
+                                mparam->as.app.arg &&
+                                mparam->as.app.arg->kind == TY_TYVAR &&
+                                mparam->as.app.arg->as.tyvar_.name &&
+                                recv_ty.as.app.arg &&
+                                nsp->n_bindings < ABI_TYPE_BINDINGS_MAX) {
+                                const char *avar =
+                                    mparam->as.app.arg->as.tyvar_.name;
+                                bool present = false;
+                                for (uint8_t bi = 0; bi < nsp->n_bindings; bi++)
+                                    if (nsp->bindings[bi].name &&
+                                        strcmp(nsp->bindings[bi].name, avar) == 0)
+                                        { present = true; break; }
+                                if (!present) {
+                                    nsp->bindings[nsp->n_bindings].name = avar;
+                                    nsp->bindings[nsp->n_bindings].type =
+                                        *recv_ty.as.app.arg;
+                                    nsp->n_bindings++;
+                                }
+                            }
+                        }
                     }
                 }
             }
