@@ -1,0 +1,14 @@
+;; defstruct-bracket-fields-with-type-params: a bracket field vector
+;; `[a : T b : U ...]` following a type-param vector `[S A]` must keep EVERY
+;; field, not just the first.  Previously the field vec after a type-param vec
+;; was mis-parsed as a single new-syntax `(name type)` form, so only `a`
+;; survived and `.b` / `.c` failed far from the definition site.
+;;
+;; Here the three-param struct declares three fields; constructing with three
+;; args and summing all three must work (arity-3 ctor, three struct members).
+(defstruct Triple [S A B] [a : int b : int c : int])
+
+(defn main [] : int
+  (let [t (Triple 3 7 30)]
+    (println (+ (.a t) (+ (.b t) (.c t))))   ; 40
+    0))

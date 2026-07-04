@@ -61,3 +61,28 @@ type-param vector is consumed.
   three-field struct and an arity-3 constructor.
 - Until fixed, prefer the `(name type)` field form for structs with 2+ type
   parameters (what `stdlib/lens.tur` does).
+
+## Resolution (fixed)
+
+Root cause pinpointed and fixed in `src/compiler/elab_structs.c`
+(`elab_defstruct`). When a leading all-symbol vector `[S A ...]` is recognised
+as a type-param list, the elaborator set `new_field_syntax = true` and then
+treated the *following* form as new-syntax `(name type)` list forms. A bracket
+field vector `[a : int b : int ...]` is a **single** `F_VEC`, so the new-syntax
+collector read only its `items[0]`/`items[1]` and emitted a one-field struct
+with an arity-1 constructor -- every field after the first silently vanished.
+
+Correction to the original report: this was **not** specific to 2+ type params
+-- it dropped fields with *any* type-param count (including a single `[A]`).
+The lowering gate `defstruct_lowers_to_adt` already classified an
+`F_VEC`-after-type-params as *old* (bracket) syntax; `elab_defstruct` disagreed.
+
+Fix: after consuming the type-param vector, if the next field form is an
+`F_VEC`, clear `new_field_syntax` so the old-syntax field-vec path (which
+flattens and keeps every field) handles it, keeping the elaborator in step with
+the gate. `type_param_vec_form` is still forwarded to `elab_defdata`, so the
+struct stays parametric.
+
+Fixture added: `tests/fixtures/defstruct-bracket-fields-multi-type-param/`
+(`(defstruct Triple [S A B] [a : int b : int c : int])` -> three struct members,
+arity-3 constructor, `.a`/`.b`/`.c` all readable).
