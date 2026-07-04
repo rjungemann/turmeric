@@ -61,7 +61,6 @@ type-param vector is consumed.
   three-field struct and an arity-3 constructor.
 - Until fixed, prefer the `(name type)` field form for structs with 2+ type
   parameters (what `stdlib/lens.tur` does).
-
 ## Resolution (fixed)
 
 Root cause pinpointed and fixed in `src/compiler/elab_structs.c`

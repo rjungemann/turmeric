@@ -65,7 +65,6 @@ already applies to `.fn`. Alternatively, broaden `type_kind_is_poly_concrete`
 to admit `cstr`/`ptr` so those returns take the already-correct
 `phase_f_concrete` cast path -- but that also changes argument handling, so the
 narrower result-cast fix is lower risk.
-
 ## Resolution
 
 Took the narrower result-cast direction in `src/compiler/emit_expr.c`, in the

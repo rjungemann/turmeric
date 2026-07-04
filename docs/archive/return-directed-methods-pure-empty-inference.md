@@ -137,3 +137,20 @@ issue but undermines Applicative as a general interface.
   -- a distinct HKT-dispatch inference gap surfaced in the same investigation.
 - [../upcoming/tur-m7-hkt-flag-retirement-plan.md](../upcoming/tur-m7-hkt-flag-retirement-plan.md)
   -- the flag retirement is independent of this fix and should not wait.
+
+## Progress Update (2026-07-03)
+
+Substantially improved on v0.26.2 (commit 69e573fd7). Verified against HEAD:
+
+- `(let [x : (Option int) (pure 42)] 0)` -- **now compiles clean** (Fix
+  Direction #1, let-with-annotation, fixed).
+- `(defn f [] : (Option int) (pure 42))` -- **now compiles clean** (Fix
+  Direction #1, defn return-type, fixed).
+- Bare `(let [x (pure 42)] 0)` with no context still emits the fallback
+  diagnostic (intended -- there is genuinely no context).
+
+Commit 634191596 ("Infer class-method result functor from the receiver",
+#594) is the load-bearing change. Remaining gap: match/if arm-sibling
+propagation (Fix Direction #2) is untested here and likely still open;
+retitle or narrow this report to that residual, or archive if the sibling
+case is subsumed by class-method-level-hkt-tyvar-grounding.md.

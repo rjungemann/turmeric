@@ -146,3 +146,12 @@ Fix directions:
 - `tests/fixtures/hkt-instances/input.tur` -- the existing Traversable
   fixture using carrier-erased `: int` signatures; a natural regression
   target once this is fixed.
+
+## Progress Update (2026-07-03)
+
+Re-verified against HEAD (v0.26.2, commit 69e573fd7). Minimal repro still errors
+identically: `TUR-E0001 match: arm types are incompatible -- expected app (from
+earlier arm), got app` at the `(helper (g x))` arm. No commit between the file
+date and HEAD touches arm-join unification for method-level tyvars; #594
+("Infer class-method result functor from the receiver") addresses the
+receiver-side inference, not the method-body arm-join. Report stays OPEN.
