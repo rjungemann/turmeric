@@ -1,6 +1,7 @@
 /* elab_call.c -- function-call elaboration, partial application, polymorphic dispatch. */
 #include "elab_internal.h"
 #include "experiments.h"  /* Slice 3 (constrained-hkt-forall): hkt-hrt gate */
+#include "mono_specs.h"   /* VBM1 (van-laarhoven-monomorphization): spec registry */
 
 /* --- Slice 3 (constrained-hkt-forall-plan): higher-kinded rank-2 helpers ----
  *
@@ -5996,6 +5997,55 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                     if (fd && !fd->is_opaque && !fd->is_heap &&
                         adt_is_flat_product(fd) && g_opt_vl_wide_functor) {
                         experiment_warn_if_used("vl-wide-functor");
+                        /* VBM1 (van-laarhoven-monomorphization-plan): this is a
+                         * wide by-value functor pinned through the nested-fn lens
+                         * shape -- exactly the class Path B specializes.  Record
+                         * a spec key (enclosing fn, callee, functor, focus,
+                         * whole) so `--dump-mono-specs` can surface the keying
+                         * before VBM2 wires per-spec emit.  Registry-only: the
+                         * Path A carrier-box path above still does the codegen. */
+                        if (g_opt_vl_wide_mono) {
+                            experiment_warn_if_used("vl-wide-mono");
+                            const char *enclosing =
+                                (e->current_fn_name && e->current_fn_name->name)
+                                    ? e->current_fn_name->name : "?";
+                            const char *callee =
+                                (fn_binding && fn_binding->name &&
+                                 fn_binding->name->name)
+                                    ? fn_binding->name->name : "?";
+                            /* focus A = domain of the functor-wrapping arg
+                             * `g : (-> A (f A))`; whole S = the non-fn lens arg.
+                             * Scan the forall-body params against the actuals. */
+                            char focus_buf[96];
+                            char whole_buf[96];
+                            snprintf(focus_buf, sizeof focus_buf, "?");
+                            snprintf(whole_buf, sizeof whole_buf, "?");
+                            for (uint32_t wk = 0;
+                                 wk < n_args &&
+                                 wk < (uint32_t)cbody->as.fn.arity; wk++) {
+                                const Type *waft = cbody->as.fn.arg_full_types
+                                    ? cbody->as.fn.arg_full_types[wk] : NULL;
+                                if (waft && waft->kind == TY_FN) {
+                                    if (args[wk] &&
+                                        args[wk]->type.kind == TY_FN &&
+                                        args[wk]->type.as.fn.arity >= 1) {
+                                        Type dom = (args[wk]->type.as.fn.arg_full_types &&
+                                                    args[wk]->type.as.fn.arg_full_types[0])
+                                            ? *args[wk]->type.as.fn.arg_full_types[0]
+                                            : type_from_kind(
+                                                  args[wk]->type.as.fn.arg_kinds[0]);
+                                        snprintf(focus_buf, sizeof focus_buf,
+                                                 "%s", type_name(dom));
+                                    }
+                                } else if (args[wk]) {
+                                    snprintf(whole_buf, sizeof whole_buf,
+                                             "%s", type_name(args[wk]->type));
+                                }
+                            }
+                            mono_spec_register(enclosing, callee,
+                                               type_name(concrete),
+                                               focus_buf, whole_buf);
+                        }
                     } else if (fd && !fd->is_opaque && !fd->is_heap &&
                         adt_is_flat_product(fd)) {
                         diag_emit(DIAG_ERROR, call->span,

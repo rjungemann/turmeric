@@ -197,6 +197,17 @@ extern bool g_opt_hrt_curried_result;
  * with TUR-E0309 (never a segfault). */
 extern bool g_opt_vl_wide_functor;
 
+/* VBM1 (docs/upcoming/van-laarhoven-monomorphization-plan.md): the
+ * `vl-wide-mono` experiment (Path B).  When set, elab_poly_call registers a
+ * by-value HKT monomorphization spec key for each van Laarhoven lens site whose
+ * pinned functor `f` is a WIDE by-value aggregate (see mono_specs.c).  VBM1 only
+ * POPULATES the registry -- codegen still takes the Path A carrier-box path (so
+ * this flag is used together with `vl-wide-functor`); VBM2+ wire the per-spec
+ * body emit.  `g_dump_mono_specs` (from `--dump-mono-specs`) prints the
+ * registry after elaboration. */
+extern bool g_opt_vl_wide_mono;
+extern bool g_dump_mono_specs;
+
 
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signatures
