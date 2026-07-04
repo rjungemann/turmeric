@@ -1,0 +1,24 @@
+;; hrt-poly-call-nonint-return-int-conversion: a rank-2 `forall` poly fn whose
+;; RESULT is a pointer-class type (cstr) invoked through the generic carrier
+;; path.  The carrier's `.fn` field is typed int64_t, so without a cast back to
+;; the concrete pointer type the poly-call expression is int64_t-typed and
+;; flows into a `const char *` slot, tripping -Wint-conversion.  The generic
+;; path now casts the carrier result through intptr_t to the concrete pointer
+;; type, so the C compiler sees a real `const char *` with no warning.
+
+(defn my-show [x : int] : cstr "hi")
+
+;; unary poly-call returning cstr -- exercises the generic unary branch.
+(defn use-show [f (forall [a] (-> a cstr))] : cstr
+  (f 42))
+
+(defn pick [x : int y : int] : cstr "yo")
+
+;; 2-ary poly-call returning cstr -- exercises the generic N-ary branch.
+(defn use-pick [f (forall [a] (-> a a cstr))] : cstr
+  (f 1 2))
+
+(defn main [] : int
+  (println (use-show my-show))
+  (println (use-pick pick))
+  0)
