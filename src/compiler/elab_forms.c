@@ -1915,6 +1915,17 @@ static bool if_branches_unify_via_tyvar(Type then_ty, Type else_ty, Type *out) {
     return true;
 }
 
+/* True when `f` is a call whose head names a return-only-dispatch typeclass
+ * method with no shadowing binding (e.g. `(pure x)`, `(empty)`) -- a method
+ * whose instance can only be selected from an expected result type.  Used by
+ * elab_if to let a concrete sibling arm supply that type. */
+static bool if_form_is_return_dispatch(Elab *e, const Form *f) {
+    if (!f || f->tag != F_LIST || f->as.list.len < 1) return false;
+    const Form *head = f->as.list.items[0];
+    if (head->tag != F_SYM) return false;
+    return elab_symbol_is_return_dispatch_method(e, head->as.sym);
+}
+
 Expr *elab_if(Elab *e, const Form *call) {
     if (call->as.list.len != 3 && call->as.list.len != 4) {
         diag_emit(DIAG_ERROR, call->span,
@@ -1961,6 +1972,43 @@ Expr *elab_if(Elab *e, const Form *call) {
         return NULL;
     }
 
+    /* return-directed-methods-pure-empty-inference (fix direction #2): with no
+     * outer expected type and exactly one branch a return-directed method call
+     * (its typeclass instance is selectable only from an expected result type,
+     * e.g. `(pure x)` / `(empty)`), probe the concrete sibling branch to
+     * discover the join type and thread it as the expected type for both arms.
+     * Without this `(if c (pure 1) known-opt)` cannot ground `pure` even though
+     * the sibling arm pins the container.  The probe runs under a diag capture
+     * frame with move/linear state snapshot+restore, so a failed or
+     * side-effecting probe leaves no trace. */
+    Type *saved_if_expected = e->expected_type;
+    Type sibling_ty = TYPE_UNKNOWN;
+    bool have_sibling_ty = false;
+    if (!e->expected_type && else_form) {
+        bool then_rd = if_form_is_return_dispatch(e, then_form);
+        bool else_rd = if_form_is_return_dispatch(e, else_form);
+        Form *probe = NULL;
+        if (then_rd && !else_rd)      probe = else_form;
+        else if (else_rd && !then_rd) probe = then_form;
+        if (probe) {
+            Binding **pmb = NULL; bool *pbs = NULL;
+            uint32_t pnmb = move_state_snapshot_bindings(e->scope, &pmb, &pbs);
+            Binding **plb = NULL; bool *plbf = NULL;
+            uint32_t pnl = linear_state_snapshot_bindings(e->scope, &plb, &plbf);
+            diag_push_capture();
+            Expr *pe = elab_form(e, probe);
+            uint32_t perr = diag_pop_capture();
+            move_state_restore(pmb, pbs, pnmb);
+            linear_state_restore(plb, plbf, pnl);
+            free(pmb); free(pbs); free(plb); free(plbf);
+            if (pe && perr == 0 && pe->type.kind != TY_UNKNOWN &&
+                pe->type.kind != TY_NEVER && pe->type.kind != TY_NIL) {
+                sibling_ty = pe->type;
+                have_sibling_ty = true;
+            }
+        }
+    }
+
     Binding **move_bindings = NULL;
     bool *before_states = NULL;
     uint32_t n_move_bindings = move_state_snapshot_bindings(e->scope, &move_bindings, &before_states);
@@ -1971,7 +2019,9 @@ Expr *elab_if(Elab *e, const Form *call) {
     uint32_t n_lin = 0;
     n_lin = linear_state_snapshot_bindings(e->scope, &lin_bindings, &lin_before);
 
+    if (have_sibling_ty) e->expected_type = &sibling_ty;
     Expr *then_ = elab_form(e, then_form);
+    if (have_sibling_ty) e->expected_type = saved_if_expected;
     if (!then_) {
         free(move_bindings);
         free(before_states);
@@ -1998,7 +2048,9 @@ Expr *elab_if(Elab *e, const Form *call) {
     Expr *else_ = NULL;
     Type result_t = TYPE_NIL;
     if (call->as.list.len == 4) {
+        if (have_sibling_ty) e->expected_type = &sibling_ty;
         else_ = elab_form(e, else_form);
+        if (have_sibling_ty) e->expected_type = saved_if_expected;
         if (!else_) {
             move_state_restore(move_bindings, before_states, n_move_bindings);
             free(then_states);

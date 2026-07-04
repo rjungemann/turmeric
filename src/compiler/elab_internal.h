@@ -1260,6 +1260,13 @@ Expr *elab_method_call(Elab *e, const Form *call);
 Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
                                bool *handled);
 
+/* True when `name` resolves to a return-only-dispatch typeclass method (its
+ * dispatch tyvar appears only in the result) with no shadowing binding, so its
+ * instance can only be picked from an expected result type.  elab_if uses this
+ * to let a concrete sibling arm supply the expected type for such a method
+ * (return-directed-methods-pure-empty-inference, fix direction #2). */
+bool elab_symbol_is_return_dispatch_method(Elab *e, const Symbol *name);
+
 /* elab_concurrent.c */
 Expr *elab_thread_spawn(Elab *e, const Form *call);
 Expr *elab_async(Elab *e, const Form *call);
