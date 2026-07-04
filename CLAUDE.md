@@ -13,14 +13,11 @@ minimal repro, root cause with file:line when known, fix directions). But
 this is an aid, not a gate -- do not let it stop you from pressing on toward
 v1.
 
-### Test suites -- the default (by-value) path is the gate
+### Test suites -- `bash tests/run.sh` is the gate
 
-Turmeric has a single maintainer and no external consumers, so we do **not**
-need both the default suite and the legacy `TUR_M7_HKT=0` (carrier) suite to
-be green at once. The **default `bash tests/run.sh` (by-value) is the gate**;
-the carrier path is being superseded and may degrade as classes migrate to
-by-value -- that is expected, not a regression to chase. Do not hold the one
-track hostage to keeping the legacy carrier suite green.
+`bash tests/run.sh` (the by-value HKT path) is the gate. The legacy
+`TUR_M7_HKT=0` carrier path has been retired -- there is no longer a second
+suite to keep green.
 
 ### Archiving resolved reports -- STRICT RULE
 
