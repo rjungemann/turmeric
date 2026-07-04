@@ -905,6 +905,21 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         }
     }
 
+    /* defstruct-bracket-fields-with-type-params: after a leading type-param
+     * vector [S A ...] is consumed, a following bracket field vector
+     * `[a : T b : U ...]` is old-style fields WITH type params -- NOT the
+     * new-syntax `(name type)` list form.  The new-syntax collector below reads
+     * only items[0]/items[1] of the single field vector, silently dropping every
+     * field after the first (with any type-param count, 1 or more).  Route a
+     * bracket field vec back through the old-syntax field-vec path, which flattens
+     * and keeps every field.  This mirrors defstruct_lowers_to_adt's gate, which
+     * already classifies an F_VEC-after-type-params as old syntax; keeping the two
+     * in step is what prevents the silent field drop. */
+    if (new_field_syntax && fields_start_idx < call->as.list.len &&
+        call->as.list.items[fields_start_idx]->tag == F_VEC) {
+        new_field_syntax = false;
+    }
+
     if (call->as.list.len < fields_start_idx + 1) {
         diag_emit(DIAG_ERROR, call->span,
                   "defstruct requires a field list");
