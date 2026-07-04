@@ -4,6 +4,16 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+### Removed
+
+- **`--allow-experimental` was retired** (UC-4). Enabling an experiment --
+  via `--enable=<name>`, a `build.tur` `:experiments` list, or
+  `~/.config/turmeric/experiments.tur` -- is now itself the acknowledgment,
+  so the separate gate added nothing. The `TUR-W0060`/`TUR-W0061` lifecycle
+  warnings now fire whenever an experiment is enabled, with no way to silence
+  them. Passing `--allow-experimental` is a hard error with a targeted
+  "retired" message for one release; remove the flag from any scripts.
+
 ## [0.26.2] -- 2026-07-02
 
 ### Added

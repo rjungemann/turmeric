@@ -1,7 +1,7 @@
 # Plan: read `~/.config/turmeric/experiments.tur` as a user-level experiment default
 
 **Status:** UC-1..UC-3 landed (PR #602); UC-4 (retire
-`--allow-experimental`) and UC-5 (docs) not started. **Area:**
+`--allow-experimental`) done; UC-5 (docs) not started. **Area:**
 `src/runtime/experiments.{c,h}`, `src/main.c`, one new small reader.
 **Goal:** let a user declare a per-machine baseline of enabled experiments in
 `$XDG_CONFIG_HOME/turmeric/experiments.tur`, honored by every turmeric entry
@@ -306,7 +306,7 @@ during implementation).
 | UC-1 | **done** (PR #602) | Add `XF_SRC_USER_CONFIG` to the enum; switch `experiment_enable` to "higher source wins"; add the `tur experiments` source arm; no readers yet. | `src/runtime/experiments.{c,h}`, `src/main.c` |
 | UC-2 | **done** (PR #602) | Dedicated reader `experiments_read_user_config` + platform path resolution helper. Unit test via a small C harness. | `src/runtime/experiments.c`, `tests/unit/experiments_user_config.c` |
 | UC-3 | **done** (PR #602) | Add `has_experiments_key` to `PkgManifest`; call `apply_user_config_experiments` from every manifest-resolving entry point (CLI compile, `tur repl`, `tur check`, `tur build`, `tur run`). Fixtures cover: no manifest + user file / manifest with key / manifest with empty `:experiments []` / CLI overrides both. | `src/main.c`, `tests/run-experiments-user-config.sh` |
-| UC-4 | not started | Retire `--allow-experimental`: remove the bit, delete the CLI arm, make `experiment_warn_if_used` unconditional; add the "retired in <version>" targeted error for one release. | `src/runtime/experiments.{c,h}`, `src/main.c`, CLAUDE.md |
+| UC-4 | **done** | Retire `--allow-experimental`: remove the `g_allow_experimental` bit, delete the CLI arm, make `experiment_warn_if_used` unconditional; add the "retired in <version>" targeted error for one release. Negative fixture `errors/allow-experimental-retired` asserts the message; the `--allow-experimental` token is stripped from every fixture `flags` file; `TUR-W0060`/`TUR-W0061` `--explain` text and the flags guide updated. | `src/runtime/experiments.{c,h}`, `src/runtime/globals.{c,h}`, `src/main.c`, `src/compiler/diag.c`, `docs/guides/experimental-flags-guide.md`, `CHANGELOG.md`, `tests/fixtures/**` |
 | UC-5 | not started | Docs: `docs/guides/experimental-flags-guide.md` grows a "user-level default" section; CLAUDE.md's experiments rule notes the third source. Trowel's plan can drop its "interim" path. | `docs/guides/experimental-flags-guide.md`, CLAUDE.md |
 
 UC-1 through UC-3 form the shipping unit -- they landed together in PR

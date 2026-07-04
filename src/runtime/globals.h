@@ -146,12 +146,6 @@ extern bool g_werror_deprecated;
  * parameters reaching inline-C bodies. */
 extern bool g_werror_inline_c_narrow_params;
 
-/* XF1 (experimental-flag-mechanism-plan): --allow-experimental suppresses the
- * per-use TUR-W006x experimental-feature warnings.  Deliberately ugly --
- * intended for the Turmeric project's own CI matrix; spice users should not
- * set it.  Read by experiment_warn_if_used in src/runtime/experiments.c. */
-extern bool g_allow_experimental;
-
 /* Slice 1 of constrained-hkt-forall-plan: enable bit for the `forall-kinds`
  * experiment.  When set, a `forall`/`exists` bound variable may carry an
  * explicit kind annotation `(f :: * -> *)` instead of relying on the
