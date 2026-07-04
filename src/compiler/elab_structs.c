@@ -2653,16 +2653,70 @@ CtorDef *elab_lookup_ctor(Elab *e, const Symbol *name) {
  * compatible and promote the unified result to the more specific TY_APP so the
  * match (and the enclosing defn/lambda's declared return) keeps the element
  * type.  On success *out receives the promoted (more specific) type. */
-static bool match_arm_type_compatible(Type a, Type b, Type *out) {
+/* class-method-level-hkt-tyvar-grounding: deep structural join for the
+ * ARGUMENTS of a shared TY_APP spine.  Two arms of a `match` may denote the
+ * same applied type while differing only in that one side still carries an
+ * ungrounded type variable (a method-level HKT tyvar like the `b` in a
+ * Traversable-style `trav : (t a) -> (fn [a] (Opt b)) -> (Opt (t b))`) where
+ * the peer arm produced a concrete type.  Within a matching constructor spine
+ * we treat an ungrounded TY_TYVAR / TY_UNKNOWN as a unification variable: it
+ * grounds to whatever the peer has in that position, and the join promotes the
+ * more specific type.  This is scoped to descent BELOW a shared TY_APP head --
+ * the top-level entry point keeps its strict same-head guard, so a bare
+ * top-level tyvar arm (the distinct pure/empty inference gap) is unaffected. */
+static bool arm_arg_join(Elab *e, Type a, Type b, Type *out) {
     if (type_eq(a, b)) { *out = a; return true; }
+    /* An ungrounded tyvar/unknown on either side grounds to the peer. */
+    if (a.kind == TY_TYVAR || a.kind == TY_UNKNOWN) { *out = b; return true; }
+    if (b.kind == TY_TYVAR || b.kind == TY_UNKNOWN) { *out = a; return true; }
+    /* Two applications: join head and argument, rebuild the promoted spine. */
+    if (a.kind == TY_APP && b.kind == TY_APP &&
+        a.as.app.fn && b.as.app.fn && a.as.app.arg && b.as.app.arg) {
+        Type jfn, jarg;
+        if (arm_arg_join(e, *a.as.app.fn, *b.as.app.fn, &jfn) &&
+            arm_arg_join(e, *a.as.app.arg, *b.as.app.arg, &jarg)) {
+            Type *pfn  = (Type *)arena_alloc(e->arena, sizeof(Type));
+            Type *parg = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *pfn = jfn; *parg = jarg;
+            Type app = a; /* inherit copy_kind / substruct flags */
+            app.kind = TY_APP;
+            app.as.app.fn = pfn;
+            app.as.app.arg = parg;
+            *out = app;
+            return true;
+        }
+        return false;
+    }
+    /* One bare TY_ADT, one TY_APP over the same def: keep the TY_APP. */
     AdtDef *ad = (a.kind == TY_ADT) ? a.as.adt_.def
                : (a.kind == TY_APP) ? type_adt_app_def(&a) : NULL;
     AdtDef *bd = (b.kind == TY_ADT) ? b.as.adt_.def
                : (b.kind == TY_APP) ? type_adt_app_def(&b) : NULL;
     if (ad && ad == bd && a.kind != b.kind) {
-        /* One bare TY_ADT, one TY_APP over the same def: keep the TY_APP. */
         *out = (a.kind == TY_APP) ? a : b;
         return true;
+    }
+    return false;
+}
+
+static bool match_arm_type_compatible(Elab *e, Type a, Type b, Type *out) {
+    if (type_eq(a, b)) { *out = a; return true; }
+    AdtDef *ad = (a.kind == TY_ADT) ? a.as.adt_.def
+               : (a.kind == TY_APP) ? type_adt_app_def(&a) : NULL;
+    AdtDef *bd = (b.kind == TY_ADT) ? b.as.adt_.def
+               : (b.kind == TY_APP) ? type_adt_app_def(&b) : NULL;
+    if (ad && ad == bd) {
+        if (a.kind != b.kind) {
+            /* One bare TY_ADT, one TY_APP over the same def: keep the TY_APP. */
+            *out = (a.kind == TY_APP) ? a : b;
+            return true;
+        }
+        if (a.kind == TY_APP && b.kind == TY_APP) {
+            /* Both applied over the same head: structurally join the argument
+             * spines, grounding any method-level tyvar against its concrete
+             * peer.  See arm_arg_join above. */
+            return arm_arg_join(e, a, b, out);
+        }
     }
     return false;
 }
@@ -3250,7 +3304,7 @@ Expr *elab_match(Elab *e, const Form *call) {
             Type _wc_unified;
             if (result_type.kind != TY_UNKNOWN
                     && body->type.kind != TY_UNKNOWN
-                    && !match_arm_type_compatible(result_type, body->type, &_wc_unified)) {
+                    && !match_arm_type_compatible(e, result_type, body->type, &_wc_unified)) {
                 diag_emit_with_code(DIAG_ERROR, body_form->span,
                                     TUR_E0001_TYPE_MISMATCH,
                                     "match: arm types are incompatible -- "
@@ -3714,7 +3768,7 @@ Expr *elab_match(Elab *e, const Form *call) {
             Type _arm_unified;
             if (result_type.kind != TY_UNKNOWN
                     && body->type.kind != TY_UNKNOWN
-                    && !match_arm_type_compatible(result_type, body->type, &_arm_unified)) {
+                    && !match_arm_type_compatible(e, result_type, body->type, &_arm_unified)) {
                 if (adt->is_gadt && arm_senv.n > 0) {
                     char skolem_note[256];
                     int pos = 0;
