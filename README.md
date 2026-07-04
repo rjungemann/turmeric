@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.26.2` -- wide by-value van Laarhoven functors compose through the lens boundary behind `--enable=vl-wide-functor`, with a targeted `TUR-E0309` for unsupported shapes.
+**Latest release:** `v0.26.3` -- retires `--allow-experimental` and the `TUR_M7_HKT` carrier gate, adds a user-level `~/.config/turmeric/experiments.tur` file, and fixes several by-value Option/Result and HKT codegen defects.
 
 ## What
 

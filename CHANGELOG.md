@@ -4,15 +4,43 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.26.3] -- 2026-07-03
+
+### Added
+
+- **User-level experiments file** (UC-2/UC-3). A
+  `~/.config/turmeric/experiments.tur` list enables experiments across
+  projects; CLI `--enable=` and manifest `:experiments` still take
+  precedence.
+
+### Changed
+
+- **`TUR_M7_HKT` feature gate retired** (#603). By-value HKT is the
+  only path; the conditional carrier code and env-var branch were
+  collapsed.
+- **CI skips the CPM.cmake fetch** when running in CI environments,
+  avoiding an unnecessary network dependency.
+
 ### Removed
 
-- **`--allow-experimental` was retired** (UC-4). Enabling an experiment --
-  via `--enable=<name>`, a `build.tur` `:experiments` list, or
-  `~/.config/turmeric/experiments.tur` -- is now itself the acknowledgment,
-  so the separate gate added nothing. The `TUR-W0060`/`TUR-W0061` lifecycle
-  warnings now fire whenever an experiment is enabled, with no way to silence
-  them. Passing `--allow-experimental` is a hard error with a targeted
+- **`--allow-experimental` was retired** (UC-4). Enabling an experiment
+  -- via `--enable=<name>`, a `build.tur` `:experiments` list, or
+  `~/.config/turmeric/experiments.tur` -- is now itself the
+  acknowledgment. The `TUR-W0060`/`TUR-W0061` lifecycle warnings fire
+  whenever an experiment is enabled, with no way to silence them.
+  Passing `--allow-experimental` is a hard error with a targeted
   "retired" message for one release; remove the flag from any scripts.
+
+### Fixed
+
+- **By-value Option/Result if-join and Result-parameter codegen** now
+  produce correct C output (#601).
+- **`-Wint-conversion` on HRT poly-calls** with pointer-class return
+  types eliminated (#600).
+- **Defstruct bracket fields** are no longer dropped when they follow
+  a type-param vector (#599).
+- **Method-level HKT tyvars** now ground through match-arm unification
+  (#598).
 
 ## [0.26.2] -- 2026-07-02
 
