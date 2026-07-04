@@ -1,0 +1,37 @@
+;; byvalue-option-if-join-function-call-arm-aggregate-cast: a by-value Option
+;; flowing through an `if` join whose arm is a *function call* returning that
+;; Option must not be carrier-cast (aggregate->pointer) in codegen.  Before the
+;; fix the call-arm was bridged `(tur_option_t *)(intptr_t)(known())`, casting a
+;; struct rvalue to a pointer -- "aggregate value used where an integer was
+;; expected" at the C compiler.  Option is auto-preloaded.
+
+(defn opt-val [o : (Option int)] : int
+  (if (some? o) (.value o) -1))
+
+;; ordinary top-level defn returning a by-value (Option int)
+(defn known [] : (Option int) (some 5))
+
+;; call arm in the else position
+(defn pick-a [b : bool] : int
+  (opt-val (if b (some 99) (known))))
+
+;; call arm in the then position (reversed)
+(defn pick-b [b : bool] : int
+  (opt-val (if b (known) (some 99))))
+
+;; both arms are calls
+(defn pick-c [b : bool] : int
+  (opt-val (if b (known) (known))))
+
+;; call arm reached through a let tail
+(defn pick-d [b : bool] : int
+  (opt-val (if b (some 7) (let [x 1] (known)))))
+
+(defn main [] : int
+  (println (pick-a true))    ; 99
+  (println (pick-a false))   ; 5
+  (println (pick-b true))    ; 5
+  (println (pick-b false))   ; 99
+  (println (pick-c true))    ; 5
+  (println (pick-d false))   ; 5
+  0)

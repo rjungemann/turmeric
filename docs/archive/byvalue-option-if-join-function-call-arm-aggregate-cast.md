@@ -6,11 +6,45 @@ severity: MEDIUM. Codegen defect. A well-typed program (`tur check` passes)
   was expected". Blocks a natural `(if c (some ..) (returns-option ..))`
   join pattern; a workaround exists (use direct constructors in both arms, or
   bind through a typed helper), so it does not block the one track.
-status: OPEN. Filed 2026-07-04 while landing the return-directed-methods
-  if-sibling inference fix (docs/reported/return-directed-methods-pure-empty-
-  inference.md). Independent of that fix -- the same failure reproduces with a
-  plain `some` arm and no return-directed method involved.
+status: RESOLVED 2026-07-04. Filed 2026-07-04 while landing the
+  return-directed-methods if-sibling inference fix
+  (docs/archive/return-directed-methods-pure-empty-inference.md). Independent of
+  that fix -- the same failure reproduces with a plain `some` arm and no
+  return-directed method involved.
 ---
+
+> **RESOLVED (2026-07-04).** The `if`-join per-arm coercion in `emit_if_value`
+> (`src/compiler/emit_expr.c`) no longer bridges an arm that already yields the
+> by-value aggregate directly. Root cause was as predicted: an ordinary
+> top-level defn returning a concrete by-value `(Option/Result ...)` (`(known)`)
+> was not recognised as a by-value producer, so the merge-temp coercion applied
+> the carrier `(T *)(intptr_t)(...)` reconstruct to a struct rvalue.
+>
+> Fix: new predicate `call_ordinary_defn_byval_aggregate` (emit_expr.c) mirrors
+> `emit_fns.c`'s C-return-type decision -- a non-inline-C **global, non-generic**
+> defn's signature is the concrete aggregate C name (the `int64_t` fallback is
+> inline-C only), so the call yields that aggregate by value. Wired into both
+> `fn_body_tail_emits_byvalue_carrier_abi` (skip the bridge) and
+> `fn_body_tail_byvalue_carrier_type` (declare the merge temp by value, so a
+> two-call `if` join also works). Gated to exclude the shapes that legitimately
+> emit the int64 carrier: generic/poly bases (`is_poly_fn` / `poly_type`), local
+> letrec closures (`!is_global`), inline-C bodies, and -- crucially --
+> `#{Construct}` templates (`some`/`none`/`ok`/`err`), whose lowering is
+> context-dependent (they emit their carrier base inside a carrier-returning
+> spec like `option_map`). The construct-template exclusion was required: a first
+> cut regressed `option-map-capturing-closure`.
+>
+> Verified for Option and Result, in both branch orders, both-call arms, and a
+> let-tail arm. Regression fixture:
+> `tests/fixtures/byvalue-option-if-join-call-arm/`. Suite: 1933 passed, 0
+> failed. Paper trail:
+> [../archive/history/byvalue-option-if-join-function-call-arm-aggregate-cast.md](../archive/history/byvalue-option-if-join-function-call-arm-aggregate-cast.md).
+>
+> **Adjacent pre-existing bug found, filed separately (out of scope):**
+> `docs/reported/byvalue-result-param-ok-predicate-materialize-bad-cast.md` --
+> calling `ok?` on a by-value `(Result A B)` *parameter* miscompiles the
+> parameter materialization (the Option analogue `some?` is fine). Independent of
+> the if-join; reproduces with no `if` at all.
 
 # By-value Option through an `if` join with a function-call arm miscompiles
 
