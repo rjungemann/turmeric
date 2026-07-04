@@ -179,11 +179,6 @@ bool g_werror_deprecated = false;
  * warnings to errors. */
 bool g_werror_inline_c_narrow_params = false;
 
-/* XF1 (experimental-flag-mechanism-plan): --allow-experimental suppresses the
- * TUR-W006x experimental-feature warnings.  Default off; intended only for the
- * Turmeric project's own CI matrix runs. */
-bool g_allow_experimental = false;
-
 /* Slice 1 of constrained-hkt-forall-plan: `forall-kinds` experiment enable bit.
  * Default off; flipped by --enable=forall-kinds (or :experiments) via the
  * EXPERIMENTS[] descriptor in experiments.c. */

@@ -1760,8 +1760,9 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "This is expected when you opt in with `--enable=<name>`.  To proceed\n"
       "anyway, keep the flag; the feature works, it is just not stable.  Do NOT\n"
-      "depend on the surface from a published spice yet.  The project's own CI\n"
-      "silences this with --allow-experimental; spice users should not.\n",
+      "depend on the surface from a published spice yet.  The warning fires\n"
+      "regardless of how the experiment was enabled -- there is no gate to\n"
+      "silence it.\n",
     },
     /* XF: beta experimental feature in use */
     { TUR_W0061_EXPERIMENTAL_BETA,
@@ -1772,8 +1773,9 @@ static const DiagExplanation diag_explanations_[] = {
       "warning names the version it graduates in and fires once per compile.\n"
       "\n"
       "When the feature graduates the flag becomes an accept-and-warn no-op, so\n"
-      "code written against the beta surface keeps compiling.  The project's own\n"
-      "CI silences this with --allow-experimental; spice users should not.\n",
+      "code written against the beta surface keeps compiling.  The warning fires\n"
+      "regardless of how the experiment was enabled -- there is no gate to\n"
+      "silence it.\n",
     },
     /* serial-shift-unsupported-context-miscompile */
     { TUR_E0706_SERIAL_CONTEXT_NOT_CAPTURABLE,

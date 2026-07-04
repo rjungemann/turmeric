@@ -1,0 +1,6 @@
+;; UC-4: --allow-experimental was retired.  Passing it must fail with a
+;; targeted "retired" diagnostic (exit 2) rather than being silently accepted
+;; or reported as a generic unknown flag.  The source itself is trivially
+;; valid -- the error fires during CLI parse, before this file is read.
+(defn main [] : int
+  0)

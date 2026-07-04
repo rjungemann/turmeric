@@ -1,1 +1,1 @@
---enable=forall-kinds,forall-constraints,hkt-hrt,forall-dict-pass --allow-experimental
+--enable=forall-kinds,forall-constraints,hkt-hrt,forall-dict-pass

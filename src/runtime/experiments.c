@@ -143,13 +143,12 @@ ExperimentSource experiment_source_at(size_t i) {
     return g_src[i];
 }
 
-/* --allow-experimental: suppress TUR-W006x.  Intended for the Turmeric
- * project's own CI matrix; spice users should not set this.  Defined in
- * globals.c, declared in globals.h. */
-extern bool g_allow_experimental;
-
+/* UC-4 (user-config-experiments-plan): the TUR-W006x lifecycle warnings now
+ * fire unconditionally.  Enabling an experiment (via --enable=<name>,
+ * build.tur, or ~/.config/turmeric/experiments.tur) is itself the
+ * acknowledgment; there is no longer a --allow-experimental gate to suppress
+ * them. */
 void experiment_warn_if_used(const char *name) {
-    if (g_allow_experimental) return;
     long idx = experiment_index(name);
     if (idx < 0 || idx >= XF_MAX) return;
     if (g_src[idx] == XF_SRC_NONE) return;   /* not enabled -> nothing to warn */

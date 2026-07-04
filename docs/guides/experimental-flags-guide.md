@@ -65,9 +65,11 @@ times the feature is used in the file. Each warning links to the feature's
 plan document.
 
 The warnings always fire when the flag is enabled -- that is the design
-point: the cost of the opt-in scales with its riskiness. Suppressing them
-requires `--allow-experimental`, a deliberately ugly flag intended for the
-Turmeric project's own CI matrix runs. **Spice users should not set it.**
+point: the cost of the opt-in scales with its riskiness. There is no gate to
+silence them; enabling an experiment (via `--enable=<name>`, `build.tur`, or
+`~/.config/turmeric/experiments.tur`) is itself the acknowledgment. The
+`--allow-experimental` suppression flag was retired -- passing it is now a
+hard error that points you here.
 
 ## `tur experiments`
 
@@ -118,9 +120,9 @@ experiment. Walk it back:
    feature can change shape in the next release, and a `beta` feature
    graduates (and its flag becomes a no-op) on the version named in the
    `TUR-W0061` message.
-4. **The warning is noisy in CI you control (and only then)** -- the Turmeric
-   project's own matrix runs silence it with `--allow-experimental`. Spice
-   authors should leave the warnings on.
+4. **The warning is informational, not suppressible.** There is no flag to
+   silence it -- `--allow-experimental` was retired. If an experiment is
+   enabled, the `TUR-W006x` line fires once per compile; that is intended.
 
 ## What is *not* an experimental flag
 

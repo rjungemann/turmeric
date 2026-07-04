@@ -1159,9 +1159,9 @@ int tur_check_only(const char *path) {
      * in-flight feature (kind annotations, constrained forall, HKT rank-2,
      * dictionary passing, curried rank-2 results, ...) so the editor sees
      * the same "this parses" answer a developer would get with the matching
-     * --enable= flags on the CLI.  Warnings are silenced -- they would
-     * otherwise show up on every keystroke as diagnostics. */
-    g_allow_experimental = true;
+     * --enable= flags on the CLI.  The TUR-W006x lifecycle warnings write to
+     * stderr, not the JSON diagnostics stream, so they never surface as
+     * editor diagnostics. */
     for (size_t xi = 0, xn = experiment_count(); xi < xn; xi++) {
         const ExperimentDescriptor *d = experiment_at(xi);
         if (d) experiment_enable(d->name, XF_SRC_CLI);
@@ -5998,7 +5998,6 @@ static void wk_apply_flags(const char *flags_str) {
         else if (strcmp(tok, "--lint-inline-c-unsafe") == 0) g_lint_inline_c_unsafe = true;
         else if (strcmp(tok, "--Werror=inline-c-narrow-params") == 0 ||
                  strcmp(tok, "-Werror=inline-c-narrow-params") == 0) g_werror_inline_c_narrow_params = true;
-        else if (strcmp(tok, "--allow-experimental") == 0) g_allow_experimental = true;
         else if (strncmp(tok, "--enable=", 9) == 0) {
             /* XF1: parent already validated the names (TUR-E0310); the worker
              * just re-applies them so gated features elaborate identically. */
@@ -12660,14 +12659,18 @@ int main(int argc, char **argv) {
             argc--;
             i--;
         } else if (strcmp(argv[i], "--allow-experimental") == 0) {
-            /* XF1: suppress TUR-W006x.  Intended for the Turmeric project's
-             * own CI matrix; spice users should not set this. */
-            g_allow_experimental = true;
-            for (int j = i; j < argc - 1; j++) {
-                argv[j] = argv[j + 1];
-            }
-            argc--;
-            i--;
+            /* UC-4 (user-config-experiments-plan): --allow-experimental was
+             * retired.  Enabling an experiment (via --enable=<name>,
+             * build.tur, or ~/.config/turmeric/experiments.tur) is now itself
+             * the acknowledgment; the separate gate added nothing.  Reject it
+             * with a targeted message for one release rather than silently
+             * accepting or emitting a generic "unknown flag". */
+            fprintf(stderr,
+                    "error: --allow-experimental was retired in v" TUR_VERSION
+                    "; enabling an experiment (via --enable=<name>, build.tur, "
+                    "or ~/.config/turmeric/experiments.tur) is now the "
+                    "acknowledgment. Remove the flag.\n");
+            return 2;
         }
     }
     
