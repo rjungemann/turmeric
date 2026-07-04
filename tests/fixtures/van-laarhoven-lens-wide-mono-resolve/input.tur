@@ -1,0 +1,63 @@
+;; VBM2 (van-laarhoven-monomorphization-plan, Path B): the cross-procedural
+;; resolution pass.  VBM1 registered ABSTRACT lens specs at the `(l g s)` pin
+;; inside `set-px` / `over-px`, where the lens is the abstract param `l`.  VBM2's
+;; `mono_specs_resolve_program` walks the elaborated program and joins each
+;; abstract spec to the CONCRETE lens actually passed at every top-level call of
+;; its enclosing fn -- here both `(set-px point-x ...)` and `(over-px point-x
+;; ...)` pass the concrete lens `point-x` with f=Identity, focus=int, whole=Point,
+;; so the two abstract specs collapse to ONE concrete emit key
+;; `lens=point-x f=Identity focus=int whole=Point`.  `view-px` pins the opaque
+;; carrier-compatible `Const` and is NOT registered abstractly, so it produces no
+;; concrete key.
+;;
+;; `main` performs the lens operations (keeping every call site live so the
+;; specs register + resolve) but prints nothing, so stdout is exactly the
+;; `--dump-mono-specs` output -- an unambiguous, order-independent assertion of
+;; the resolution.  Registry-only: codegen is unchanged (the per-spec by-value
+;; body emit is VBM2b, tracked separately).
+
+;; Const r a -- phantom second index; a one-int64 carrier-compatible opaque.
+(defopaque Const [r a] :int)
+(defn mk-const [A] [x : A] : (Const A A) ```c return (int64_t)x; ```)
+(defn get-const [R A] [c : (Const R A)] : R ```c return (int64_t)c; ```)
+(definstance Functor [(Const r)]
+  (fmap [c g] (mk-const (get-const c))))
+
+;; Identity a -- WIDE: a two-word `:copy` struct, not the one-int64 opaque.
+(defstruct Identity :copy [A] (wrapped : A) (tag : int))
+(defn mk-id  [A] [x : A]            : (Identity A) (make-struct Identity :wrapped x :tag 0))
+(defn run-id [A] [i : (Identity A)] : A            (.wrapped i))
+(definstance Functor [Identity]
+  (fmap [i g] (mk-id (g (run-id i)))))
+
+(defstruct Point :copy :heap [x : int y : int])
+
+;; A concrete lens focusing Point.x, polymorphic over the functor f.
+(defn point-x [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)
+  (fmap (g (.x s))
+        (fn [nx : int] : Point (make-struct Point :x nx :y (.y s)))))
+
+;; view l s = get-const (l (\x -> Const x) s)   -- f := Const, thin g.
+(defn view-px
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> int (f int)) Point (f Point)))
+     s : Point] : int
+  (get-const (l (fn [x : int] : (Const int int) (mk-const x)) s)))
+
+;; set l b s = run-id (l (\_ -> Identity b) s)   -- f := Identity, capturing g.
+(defn set-px
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> int (f int)) Point (f Point)))
+     b : int s : Point] : Point
+  (run-id (l (fn [a : int] : (Identity int) (mk-id b)) s)))
+
+;; over l h s = run-id (l (\a -> Identity (h a)) s) -- f := Identity, capturing g.
+(defn over-px
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> int (f int)) Point (f Point)))
+     h : (-> int int) s : Point] : Point
+  (run-id (l (fn [a : int] : (Identity int) (mk-id (h a))) s)))
+
+(defn main [] : int
+  (let [p  (make-struct Point :x 3 :y 4)
+        v  (view-px point-x p)
+        p2 (over-px point-x (fn [v : int] : int (* v 10)) p)
+        p3 (set-px point-x 99 p)]
+    0))

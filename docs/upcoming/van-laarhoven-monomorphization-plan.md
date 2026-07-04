@@ -137,6 +137,27 @@ during method-level tyvar rewrite. Contained by keeping every read behind
 
 ### Slice VBM2 -- emit a specialized lens body per `(f, a, b, s)` (folded into `--enable=vl-wide-mono`)
 
+> **Status (2026-07-04).** Split in practice into VBM2a + VBM2b:
+> - **VBM2a -- cross-procedural spec resolution: LANDED.** VBM1 keyed specs on
+>   the *abstract* lens param `l` (the concrete lens FnDef is not resolvable at
+>   the `(l g s)` pin -- OQ #1/#2). VBM2a's `mono_specs_resolve_program`
+>   (`src/compiler/mono_specs.c`) walks the elaborated program and joins each
+>   abstract spec to the concrete lens passed at every top-level call of its
+>   enclosing fn, collapsing (`set-px`, `over-px`) @ `Identity` to one concrete
+>   key `lens=point-x f=Identity focus=int whole=Point`. Registry-only (codegen
+>   unchanged); reviewable via `--dump-mono-specs` (fixture
+>   `van-laarhoven-lens-wide-mono-resolve`).
+> - **VBM2b -- per-spec by-value body emit: DEFERRED.** Blocked on the
+>   documented **M7-by-value gap** the MB2.5 carve-out
+>   (`src/compiler/emit_module.c:2209`) leaves open: the shared `__spec` body
+>   emit this slice was to "lift and share" would mint an ill-typed clone whose
+>   `(f a)` temp collapses to the int64 carrier while the aggregate ctor returns
+>   by value. Tracked in
+>   [../reported/vbm2-byvalue-lens-body-emit.md](../reported/vbm2-byvalue-lens-body-emit.md)
+>   with fix directions. VBM3 (dispatch redirect) and VBM4 (graduate
+>   `vl-wide-functor`) depend on VBM2b; Path A remains the shipped wide-functor
+>   answer until it lands.
+
 **Goal.** For each spec key registered in VBM1, emit one lens body in which
 `(f a)`, `(f b)`, `(f S)`, and the functor-wrapping `g : (-> A (f A))` are
 spelled by value with the concrete `f` substituted. The dispatch to `fmap`

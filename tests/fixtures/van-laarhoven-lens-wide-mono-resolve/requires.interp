@@ -1,0 +1,1 @@
+VBM2: run via the single-process `tur run` path so the compile-time --dump-mono-specs output (flushed to stdout before the built binary execs) is captured for the expected.stdout assertion; the default compiled path sends the dump to the uncaptured build-phase stdout.
