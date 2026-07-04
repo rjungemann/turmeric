@@ -74,15 +74,14 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.27.0",                    /* expires_at (hard contract; release-cut enforced) */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_hrt_curried_result },
-    { "vl-wide-functor",
-      "van Laarhoven lens focusing through a WIDE by-value functor (a :copy struct / flat-product ADT wider than the one-int64 carrier), boxed across the lens crossings; lifts TUR-E0309 (Path A of van-laarhoven-wide-functor-carrier-plan)",
-      "docs/upcoming/v1/van-laarhoven-wide-functor-carrier-plan.md",
-      "0.26.1",                    /* introduced */
-      "0.29.0",                    /* expires_at (hard contract; release-cut enforced) */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_vl_wide_functor },
+    /* vl-wide-functor GRADUATED 2026-07-04 (VBM4 of van-laarhoven-monomorphization-
+     * plan) -- a van Laarhoven lens now focuses through a WIDE by-value functor
+     * (a :copy struct / flat-product ADT wider than the one-int64 carrier)
+     * unconditionally; TUR-E0309 is retired and the Path A carrier box/unbox
+     * bridge is always-on (gated only by the wide-ness test, not a flag).  The
+     * zero-overhead Path B redirect layers on top via --enable=vl-wide-mono. */
     { "vl-wide-mono",
-      "by-value HKT monomorphization across the van Laarhoven lens boundary (Path B): register a specialization key per lens site whose pinned functor is a WIDE by-value aggregate so a future emit can spell (f a) by value with no carrier box; VBM1 populates the registry (--dump-mono-specs) while codegen stays on Path A",
+      "by-value HKT monomorphization across the van Laarhoven lens boundary (Path B): register a specialization key per lens site whose pinned functor is a WIDE by-value aggregate and redirect uniquely-resolved lens call sites to a by-value mono body that spells (f a) by value with no carrier box; layered on the (now unconditional) Path A carrier bridge",
       "docs/upcoming/van-laarhoven-monomorphization-plan.md",
       "0.26.4",                    /* introduced */
       "0.29.0",                    /* expires_at (hard contract; release-cut enforced) */

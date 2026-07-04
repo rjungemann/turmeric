@@ -1,7 +1,7 @@
 /* emit_expr.c -- expression-position C emission (emit_value and friends). */
 #include "emit_internal.h"
 #include "emit_cps.h"   /* cps-transform-plan: EX_CALLCC lowering */
-#include "globals.h"    /* g_opt_vl_wide_functor (WF3) */
+#include "globals.h"    /* g_opt_vl_wide_mono (VBM3 redirect) */
 #include "mono_specs.h" /* VBM3: van Laarhoven lens dispatch redirect */
 
 /* ACB: true when kind represents a concrete aggregate type (struct, ADT, or
@@ -4492,8 +4492,9 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * carrier-producer disjunct below would otherwise double-unbox
                      * (`*(T*)(intptr_t)(<aggregate>)`, an aggregate used as an
                      * integer).  Opaque functors are one word (no boundary unbox)
-                     * and never reach this, so gate on the flag. */
-                    !(g_opt_vl_wide_functor && emit_arg->kind == EX_CALL &&
+                     * and never reach this (the by-value-ADT test below excludes
+                     * them), so the guard is unconditional since VBM4. */
+                    !(emit_arg->kind == EX_CALL &&
                       emit_arg->as.call_.is_poly_call &&
                       emit_type_is_byvalue_adt(ctx, emit_arg->type)) &&
                     /* VBM2b: the WF3 gate above, for the by-value monomorphized

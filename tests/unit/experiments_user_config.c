@@ -101,7 +101,7 @@ int main(void) {
           "forall-kinds enabled from user config");
     CHECK(experiment_is_enabled("hkt-hrt") == true,
           "hkt-hrt enabled from user config");
-    CHECK(experiment_is_enabled("vl-wide-functor") == false,
+    CHECK(experiment_is_enabled("forall-dict-pass") == false,
           "unlisted experiment stays off");
 
     /* Source column reports user-config for a flag that came from the file. */

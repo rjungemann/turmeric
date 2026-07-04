@@ -186,25 +186,26 @@ extern bool g_opt_forall_dict_pass;
  * Laarhoven optic compose by ordinary function application. */
 extern bool g_opt_hrt_curried_result;
 
-/* WF1 of van-laarhoven-wide-functor-carrier-plan: enable bit for the
- * `vl-wide-functor` experiment.  When set, a van Laarhoven lens may focus
- * through a functor whose `(f a)` is a WIDE by-value aggregate (a `:copy`
- * struct / single-variant flat-product ADT wider than the one-int64 carrier
- * word).  Codegen boxes the aggregate into the carrier at each lens crossing
- * (the dict-dispatched `fmap`, the fat-boxed functor-wrapping `g`, and the
- * lens result) and unboxes it back on the way out, mirroring the direct-shape
- * MB2.5 bridge.  When the flag is OFF such a functor is still rejected up front
- * with TUR-E0309 (never a segfault). */
-extern bool g_opt_vl_wide_functor;
+/* vl-wide-functor GRADUATED 2026-07-04 (VBM4).  A van Laarhoven lens may focus
+ * through a WIDE by-value aggregate functor (a `:copy` struct / single-variant
+ * flat-product ADT wider than the one-int64 carrier word) unconditionally -- no
+ * flag, TUR-E0309 retired.  Path A boxes the aggregate into the carrier at each
+ * lens crossing (the dict-dispatched `fmap`, the fat-boxed functor-wrapping `g`,
+ * and the lens result) and unboxes it back on the way out, mirroring the
+ * direct-shape MB2.5 bridge; the wide-ness test (non-opaque, non-:heap
+ * flat-product) still gates it, so carrier-compatible functors are untouched.
+ * The former `g_opt_vl_wide_functor` bool is gone; its guards are now
+ * unconditional. */
 
 /* VBM1 (docs/upcoming/van-laarhoven-monomorphization-plan.md): the
  * `vl-wide-mono` experiment (Path B).  When set, elab_poly_call registers a
  * by-value HKT monomorphization spec key for each van Laarhoven lens site whose
- * pinned functor `f` is a WIDE by-value aggregate (see mono_specs.c).  VBM1 only
- * POPULATES the registry -- codegen still takes the Path A carrier-box path (so
- * this flag is used together with `vl-wide-functor`); VBM2+ wire the per-spec
- * body emit.  `g_dump_mono_specs` (from `--dump-mono-specs`) prints the
- * registry after elaboration. */
+ * pinned functor `f` is a WIDE by-value aggregate (see mono_specs.c), and the
+ * poly-call emit redirects every lens call site that resolves uniquely to a
+ * by-value mono body -- no `(f S)`/`(f A)` heap box on that path.  Layered on
+ * top of the (now unconditional) Path A carrier bridge, which remains the
+ * fallback for lens uses that do not resolve uniquely.  `g_dump_mono_specs`
+ * (from `--dump-mono-specs`) prints the registry after elaboration. */
 extern bool g_opt_vl_wide_mono;
 extern bool g_dump_mono_specs;
 

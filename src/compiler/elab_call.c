@@ -5976,27 +5976,24 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                  * is a single int64 word, so a functor whose `(f a)` is a wide
                  * by-value aggregate -- a non-opaque, non-`:heap` single-variant
                  * flat product (a `:copy` struct / record ADT, more than one
-                 * word of state) -- cannot be threaded through the abstract-`f`
-                 * boundary of a van Laarhoven lens.  Elaboration used to accept
-                 * it and codegen emitted int64<->struct-pointer reinterpretations
-                 * that segfault at runtime (or fail the C stage with
-                 * -Wint-conversion under a strict compiler).  Reject it here with
-                 * a clear diagnostic instead of a silent miscompile.  An opaque
-                 * (`is_opaque`, a named int64 -- `Const`/`Identity`) and a :heap
-                 * def (a typed pointer) are BOTH one carrier word and pass; the
-                 * direct-argument MB2 shape supports aggregate `(f a)` (MB2.5),
-                 * so only the nested-fn (lens) pin is gated. */
-                /* WF1 (van-laarhoven-wide-functor-carrier-plan): under
-                 * --enable=vl-wide-functor the wide-by-value functor is boxed
-                 * across the lens crossings (Path A), so the gate is lifted; the
-                 * lifecycle warning fires at that point.  With the flag OFF the
-                 * gate stays, keeping the default path a clean error rather than
-                 * a segfault. */
+                 * word of state) -- does not fit the one-word carrier directly.
+                 * VBM4 handles it by boxing the aggregate into the carrier (Path
+                 * A) rather than reinterpreting int64<->struct-pointer (which
+                 * used to segfault at runtime).  An opaque (`is_opaque`, a named
+                 * int64 -- `Const`/`Identity`) and a :heap def (a typed pointer)
+                 * are BOTH one carrier word and skip boxing; the direct-argument
+                 * MB2 shape supports aggregate `(f a)` (MB2.5), so only the
+                 * nested-fn (lens) pin takes the box. */
+                /* WF1 (van-laarhoven-wide-functor-carrier-plan): the wide-by-value
+                 * functor is boxed across the lens crossings (Path A).  Graduated
+                 * 2026-07-04 (VBM4) -- this is unconditional now; TUR-E0309 is
+                 * retired.  The wide-ness test below (non-opaque, non-:heap
+                 * flat-product) is the only gate, so carrier-compatible functors
+                 * are untouched. */
                 if (nested_functor_pin && concrete.kind == TY_ADT) {
                     const AdtDef *fd = concrete.as.adt_.def;
                     if (fd && !fd->is_opaque && !fd->is_heap &&
-                        adt_is_flat_product(fd) && g_opt_vl_wide_functor) {
-                        experiment_warn_if_used("vl-wide-functor");
+                        adt_is_flat_product(fd)) {
                         /* VBM1 (van-laarhoven-monomorphization-plan): this is a
                          * wide by-value functor pinned through the nested-fn lens
                          * shape -- exactly the class Path B specializes.  Record
@@ -6047,21 +6044,6 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                                                focus_buf, whole_buf,
                                                vname, &concrete, fn_binding);
                         }
-                    } else if (fd && !fd->is_opaque && !fd->is_heap &&
-                        adt_is_flat_product(fd)) {
-                        diag_emit(DIAG_ERROR, call->span,
-                                  "van Laarhoven functor '%s' is a wide "
-                                  "by-value aggregate, but the mode-B carrier "
-                                  "for the constraint on '%s' is a single int64 "
-                                  "word -- a functor whose '(%s a)' does not fit "
-                                  "in one word cannot be threaded through the "
-                                  "abstract-functor boundary of a rank-2 lens.  "
-                                  "Wrap it in a one-word carrier (e.g. "
-                                  "'defopaque %s [a] :int') or focus through a "
-                                  "carrier-compatible functor (TUR-E0309)",
-                                  type_name(concrete), vname, vname,
-                                  type_name(concrete));
-                        return NULL;
                     }
                 }
                 TypeClassInstance *inst = typeclass_env_lookup_instance(
@@ -6234,9 +6216,10 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
      * (slot 0) by the generic dict-clone as an int64-returning thunk.  Flag the
      * closure/fn FnDef so emit gives it the int64 carrier return type and
      * heap-boxes the aggregate (the box the lens's poly-carrier boundary already
-     * unboxes).  Gated on --enable=vl-wide-functor; carrier-compatible functors
-     * (opaque `Const`/`Identity`, `:heap`) are one word and skip this. */
-    if (g_opt_vl_wide_functor && poly && poly->kind == TY_FORALL) {
+     * unboxes).  Unconditional since VBM4 graduated vl-wide-functor; the
+     * wide-ness test below still skips carrier-compatible functors (opaque
+     * `Const`/`Identity`, `:heap`), which are one word. */
+    if (poly && poly->kind == TY_FORALL) {
         const Type *pbody = poly->as.forall_.body;
         if (pbody && pbody->kind == TY_FN && pbody->as.fn.arg_full_types) {
             for (uint32_t i = 0; i < n_args &&
@@ -6273,7 +6256,6 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                             adt_is_flat_product(ad);
                 if (wide) {
                     gfd->box_aggregate_result = true;
-                    experiment_warn_if_used("vl-wide-functor");
                 }
             }
         }

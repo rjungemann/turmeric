@@ -87,7 +87,7 @@ assert_exit 1 "3. empty :experiments [] suppresses the user file" \
 
 # --- Scenario 4: manifest with :experiments [other] -> suppressed ----------
 S4="$WORK/s4"; mkdir -p "$S4/src"
-printf '(defpackage "demo" :version "0.1.0" :experiments [vl-wide-functor])\n' \
+printf '(defpackage "demo" :version "0.1.0" :experiments [vl-wide-mono])\n' \
     > "$S4/build.tur"
 cp "$PROBE_SRC" "$S4/src/input.tur"
 assert_exit 1 "4. non-overlapping :experiments suppresses the user file" \

@@ -1,13 +1,14 @@
-;; VBM1 (van-laarhoven-monomorphization-plan, Path B): the wide-by-value
-;; `Identity` lens repro run with BOTH `--enable=vl-wide-functor` (Path A
-;; carrier codegen) AND `--enable=vl-wide-mono` (Path B spec discovery).  With
-;; vl-wide-mono on, elab_poly_call registers a by-value HKT monomorphization
-;; spec key for each wide-functor lens site (here `set-px` and `over-px`, both
-;; pinning `f := Identity`, focus=int, whole=Point; `view-px` pins the opaque
-;; carrier-compatible `Const` and is NOT registered).  `--dump-mono-specs`
-;; prints those keys.  VBM1 is registry-only -- codegen still takes the Path A
-;; box/unbox crossings -- so `view`/`set`/`over` return the same 3/30/4/99 as
-;; van-laarhoven-lens-wide-identity, proving the discovery pass is inert.
+;; VBM2b/VBM3 (van-laarhoven-monomorphization-plan, Path B): the wide-by-value
+;; `Identity` lens repro run under `--enable=vl-wide-mono`.  Wide functors are
+;; always allowed since VBM4 (no vl-wide-functor flag); vl-wide-mono layers the
+;; zero-overhead Path B on top.  elab_poly_call registers a by-value HKT
+;; monomorphization spec key for each wide-functor lens site (here `set-px` and
+;; `over-px`, both pinning `f := Identity`, focus=int, whole=Point; `view-px`
+;; pins the opaque carrier-compatible `Const` and is NOT registered), the resolve
+;; pass joins each to its concrete lens (`point-x`), and the poly-call emit
+;; REDIRECTS the uniquely-resolved sites to a by-value mono body with no `(f S)`/
+;; `(f A)` heap box.  `view`/`set`/`over` return the same 3/30/4/99 as
+;; van-laarhoven-lens-wide-identity, now box-free on the redirected path.
 
 ;; Const r a -- phantom second index; a one-int64 carrier-compatible opaque, so
 ;; `view` stays on the untouched carrier path even here.

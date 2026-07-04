@@ -8,22 +8,17 @@ severity: MEDIUM. Expressiveness gap in the mode-B forall / HKT surface. The
   a wider by-value aggregate is the mode-B "No-go" that the lens guide already
   flags, and it forces every VL fixture to redeclare `Const`/`Identity` as
   `defopaque ... :int`.
-status: OPEN on the default path; Path A landed behind `--enable=vl-wide-functor`
-  (2026-07-03). Filed 2026-07-02. Diagnostic (TUR-E0309) landed 2026-07-03.
-  This report captures the restriction as a tracked expressiveness gap so it
-  doesn't get lost behind the "van Laarhoven works now" framing in the guide.
-  The *silent* half of the gap is closed: without the flag a wide by-value
-  aggregate functor at the lens boundary is rejected up front with **TUR-E0309**
-  instead of type-checking clean and then segfaulting / mis-codegening (see
-  "Diagnostic landed" below). The *expressiveness* half is now closed behind an
-  experiment: Path A (WF1-WF4 of
-  `docs/upcoming/v1/van-laarhoven-wide-functor-carrier-plan.md`) boxes a wide
-  by-value functor across the lens crossings, so `view`/`set`/`over`, generic
-  focus inference, and composition all work with a `:copy`-struct functor under
-  `--enable=vl-wide-functor` (fixtures `van-laarhoven-lens-wide-*`). The report
-  stays in `docs/reported/` because the DEFAULT path (flag off) still errors and
-  the flag has not graduated -- archive it to `docs/archive/` once
-  `vl-wide-functor` is default-on / graduated (or once Path B retires the box).
+status: RESOLVED (2026-07-04, VBM4). `vl-wide-functor` graduated to default-on:
+  a wide by-value aggregate functor at the van Laarhoven lens boundary is now
+  ALWAYS accepted (no flag) and Path A boxes it across the lens crossings, so
+  `view`/`set`/`over`, generic focus inference, and composition all work with a
+  `:copy`-struct functor unconditionally. TUR-E0309 is retired (the diagnostic
+  is deleted from elab_poly_call). The zero-overhead Path B (no box) is available
+  under `--enable=vl-wide-mono` (van-laarhoven-monomorphization-plan). Filed
+  2026-07-02; diagnostic landed 2026-07-03; Path A landed behind the flag
+  2026-07-03; graduated 2026-07-04. Archived per the frontmatter's own
+  archive-on-graduation condition. Fixtures: `van-laarhoven-lens-wide-*` (Path A
+  runs with no wide flag; `-mono`/`-mono-resolve` exercise Path B).
 ---
 
 # Van Laarhoven functors are restricted to one-int64 carriers

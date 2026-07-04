@@ -1,1 +1,1 @@
---enable=forall-kinds,forall-constraints,hkt-hrt,forall-dict-pass,vl-wide-functor
+--enable=forall-kinds,forall-constraints,hkt-hrt,forall-dict-pass

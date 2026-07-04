@@ -1,12 +1,14 @@
 ---
 title: VBM2b + VBM3 -- by-value monomorphized van Laarhoven lens now emits AND
   is live; BOTH the (f S) result box and the (f A) g box are eliminated end-to-end
-severity: RESOLVED (VBM2a/VBM2b/VBM3 + residual). The by-value lens body +
+severity: RESOLVED (VBM2a/VBM2b/VBM3 + residual + VBM4). The by-value lens body +
   fmap/run-id/mk-id twins emit as correct C, the lens call sites are redirected to
-  it, AND the redirected consumers' `g` closures now return `(f A)` BY VALUE -- so
-  both the `(f S)` result box and the `(f A)` `g` box are gone on the live path;
-  full suite green. Kept OPEN only for VBM4 (graduate `vl-wide-functor` / delete
-  Path A on the wide branch / retire the now-dead carrier lens clone).
+  it, the redirected consumers' `g` closures return `(f A)` BY VALUE (both boxes
+  gone on the live path), AND VBM4 graduated `vl-wide-functor` to default-on
+  (wide functors always allowed, TUR-E0309 retired) with `vl-wide-mono` layering
+  Path B on top; full suite green. The only deferred item is the standard
+  experiment-lifecycle retirement of `vl-wide-mono` itself (and, with it, Path
+  A), which needs consumer monomorphization for the ambiguous case first.
 status: VBM3 + residual DONE (2026-07-04). VBM2a (resolution) + VBM2b (by-value
   body emit) + VBM3 (dispatch redirect) + the residual `(f A)` `g`-box removal all
   landed behind `--enable=vl-wide-mono`. `emit_program` emits
@@ -147,7 +149,26 @@ Result: `set_hypx` emits `return run_id__spec(point_x__mono(g, s))` -- no
 `l.fn(...)`, no `dict_Functor_Identity_singleton` use, no `(f S)` box.  The Path A
 carrier clone (`point_hyx_un_undict_...`) is now dead (still emitted, unused).
 
-## What remains: VBM4 only
+## VBM4 (graduation) -- DONE (2026-07-04)
+
+`vl-wide-functor` graduated to default-on: wide by-value aggregate functors at
+the van Laarhoven lens boundary are ALWAYS accepted (no flag), **TUR-E0309 is
+retired** (deleted from `elab_poly_call`), the `EXPERIMENTS[]` row and the
+`g_opt_vl_wide_functor` global are gone, and every former gate (the wide-allow
+pin, the WF1 `g`-box, the WF3 double-unbox guard) is now unconditional -- still
+narrowed by the wide-ness test, so carrier-compatible functors are untouched.
+`--enable=vl-wide-mono` layers Path B (the zero-overhead redirect) on top.
+
+**Path A is kept, not deleted** (deviation from the plan's letter, deliberate).
+Making Path A the *unconditional default* is what makes retiring TUR-E0309 safe:
+every wide functor has a working path. Path B only redirects lens sites that
+resolve uniquely; an ambiguous consumer (a lens param used with two distinct
+wide lenses) still needs the Path A carrier bridge. Deleting Path A now would
+miscompile that legal-but-unsupported shape. Path A retirement stays tied to the
+deferred `vl-wide-mono` default-on step, which needs consumer monomorphization
+for the ambiguous case first.
+
+## What remains: deferred experiment-lifecycle step only
 
 The residual `(f A)` `g` box is GONE (see the VBM3 section above): the redirected
 consumers' `g` closures return `(f A)` by value and `point_x__mono` consumes it
@@ -155,8 +176,9 @@ with no unbox, so the mono body's ONLY remaining `malloc` is the genuine setter
 closure env (`__env_1293`) -- a real closure capture that Path A allocates too,
 not an aggregate box.
 
-- VBM4 graduates `vl-wide-functor`: delete the Path A box on the wide branch and
-  TUR-E0309, and retire the now-dead carrier lens clone on the redirected path.
+- Deferred (future release): retire `--enable=vl-wide-mono` itself (default-on),
+  and at that point delete the Path A carrier bridge on the wide branch, once
+  consumer monomorphization covers the ambiguous (non-uniquely-resolved) case.
 
 ## Minimal repro
 

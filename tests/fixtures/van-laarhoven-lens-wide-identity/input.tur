@@ -3,10 +3,11 @@
 ;; aggregate -- a two-word `:copy` struct rather than the one-int64 opaque.  Its
 ;; `(f a)` no longer fits in the mode-B int64 carrier, so it must be boxed into
 ;; the carrier at the dict-dispatched `fmap` (WF1), unboxed out of the fat-boxed
-;; functor-wrapping `g` (WF2), and boxed back at the lens result (WF3).  Behind
-;; `--enable=vl-wide-functor`, `view`/`set`/`over` return the same 3/30/4/99 as
-;; the opaque-`Identity` version (van-laarhoven-lens-concrete).  This is the
-;; report's minimal repro, flipped from a TUR-E0309 error to a passing program.
+;; functor-wrapping `g` (WF2), and boxed back at the lens result (WF3).  Wide
+;; by-value functors are always allowed since VBM4 (no flag), so `view`/`set`/
+;; `over` return the same 3/30/4/99 as the opaque-`Identity` version
+;; (van-laarhoven-lens-concrete).  This is the report's minimal repro, flipped
+;; from a TUR-E0309 error to a passing program.
 
 ;; Const r a -- phantom second index; a one-int64 carrier-compatible opaque, so
 ;; `view` stays on the untouched carrier path even here.

@@ -6,8 +6,9 @@
 ;; `id-tag`.  If only the first word of the fat-dispatched g result crossed the
 ;; mode-B poly carrier (the pre-fix miscompile), `id-tag` reads garbage and
 ;; `over-tag`/`set-tag` fail to return 42 (or segfault) rather than silently
-;; passing -- the same crash-hardening the MB4 fixtures rely on.  Behind
-;; --enable=vl-wide-functor the full two-word `(f A)` aggregate crosses intact.
+;; passing -- the same crash-hardening the MB4 fixtures rely on.  Wide by-value
+;; functors are always allowed since VBM4; the full two-word `(f A)` aggregate
+;; crosses intact via the Path A carrier box.
 
 ;; Const r a -- carrier-compatible one-int64 opaque; `view` stays on the
 ;; untouched carrier path.

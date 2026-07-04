@@ -256,10 +256,40 @@ never both.
 
 ### Slice VBM4 -- graduate `--enable=vl-wide-functor`; retire Path A on the wide path (folded into `--enable=vl-wide-mono` for one release, then default-on)
 
+> **Status (2026-07-04): DONE.** `vl-wide-functor` graduated to default-on:
+> wide by-value aggregate functors at the van Laarhoven lens boundary are now
+> ALWAYS accepted (no flag) and **TUR-E0309 is retired** (the diagnostic is
+> deleted from `elab_poly_call`). The `EXPERIMENTS[]` row and the
+> `g_opt_vl_wide_functor` global are gone; every former gate (the wide-allow
+> pin, the WF1 `g`-box, the WF3 double-unbox guard) is now unconditional, still
+> narrowed by the wide-ness test (non-opaque, non-:heap flat-product), so
+> carrier-compatible functors are untouched. `--enable=vl-wide-mono` (Path B)
+> layers the zero-overhead redirect on top.
+>
+> **Deviation from the letter of the plan (deliberate, safer).** Path A's
+> box/unbox on the wide branch is **kept, not deleted.** Making Path A the
+> *unconditional default* is exactly what lets TUR-E0309 retire safely: every
+> wide functor -- redirected by Path B or not -- has a working path. Path B only
+> redirects lens sites that resolve *uniquely and unambiguously*; a lens used
+> with two distinct wide lenses (ambiguous) still needs the Path A carrier
+> bridge. Deleting Path A now would reintroduce a miscompile for that
+> unsupported-but-legal shape. Path A retirement stays tied to the deferred
+> `vl-wide-mono` default-on step (below), where consumer monomorphization would
+> cover the ambiguous case first.
+>
+> Fixtures: the former error fixture `errors/van-laarhoven-wide-byvalue-functor`
+> is relocated to `van-laarhoven-lens-wide-byvalue-accept` (runs a wide functor
+> with NO wide flag -> 99); every `van-laarhoven-lens-wide-*` fixture dropped
+> `vl-wide-functor` from its flags (`-mono`/`-mono-resolve` keep `vl-wide-mono`).
+> `docs/reported/van-laarhoven-functor-must-be-int-carrier.md` archived. Full
+> suite green.
+
 **Goal.** Once VBM1-VBM3 are on, the Path A box/unbox on the wide-functor
-branch is unreachable. Delete it, graduate `--enable=vl-wide-functor` to
-default-on (which retires TUR-E0309 for good), and eventually collapse
-`--enable=vl-wide-mono` itself.
+branch is unreachable *for uniquely-resolved sites*. Graduate
+`--enable=vl-wide-functor` to default-on (which retires TUR-E0309 for good),
+keep Path A as the fallback for non-uniquely-resolved sites, and eventually
+collapse `--enable=vl-wide-mono` itself -- deleting Path A at that point, once
+consumer monomorphization covers the ambiguous case.
 
 **Work.**
 

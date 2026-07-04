@@ -107,17 +107,19 @@ shapes of functor work through that carrier:
   `(defopaque Identity [a] :int)`). These ride the carrier directly at no
   runtime cost beyond the dict dispatch.
 - **Wide by-value functors** -- a `:copy` struct or flat-product ADT whose
-  `(f a)` is wider than one word. These work behind
-  `--enable=vl-wide-functor`: codegen boxes the aggregate into the carrier at
-  each lens crossing and unboxes it back on the other side. `view`/`set`/`over`,
-  generic focus inference, and composition all thread through unchanged. The
-  box pays one heap alloc + copy + free per crossing until the zero-overhead
-  by-value HKT monomorphization lands
-  ([../upcoming/van-laarhoven-wide-functor-carrier-plan.md](../upcoming/van-laarhoven-wide-functor-carrier-plan.md),
-  Path B).
+  `(f a)` is wider than one word. These work with **no flag** (graduated
+  2026-07-04): codegen boxes the aggregate into the carrier at each lens
+  crossing and unboxes it back on the other side. `view`/`set`/`over`, generic
+  focus inference, and composition all thread through unchanged. The box pays
+  one heap alloc + copy + free per crossing.
 
-With `--enable=vl-wide-functor` off, a wide-by-value functor is rejected up
-front with **TUR-E0309** rather than silently miscompiling.
+For the zero-overhead path, add **`--enable=vl-wide-mono`**: every lens call
+site whose lens uniquely resolves is redirected to a by-value monomorphized
+body that spells `(f a)` by value with **no heap box** on either the `(f S)`
+result or the `(f A)` functor-wrapping result. Lens uses that do not resolve
+uniquely fall back to the (boxed) Path A carrier bridge. See
+[../upcoming/van-laarhoven-monomorphization-plan.md](../upcoming/van-laarhoven-monomorphization-plan.md)
+(Path B).
 
 ## Related
 
@@ -127,5 +129,7 @@ front with **TUR-E0309** rather than silently miscompiling.
 - [constrained-hkt-forall mode-B plan](../upcoming/constrained-hkt-forall-mode-b-plan.md) --
   the dictionary passing + dispatch the van Laarhoven form runs on
 - [van-laarhoven-wide-functor-carrier-plan](../upcoming/van-laarhoven-wide-functor-carrier-plan.md) --
-  the wide-by-value functor bridge behind `--enable=vl-wide-functor`
+  the wide-by-value functor carrier bridge (Path A, now always-on)
+- [van-laarhoven-monomorphization-plan](../upcoming/van-laarhoven-monomorphization-plan.md) --
+  the zero-overhead by-value monomorphization (Path B, `--enable=vl-wide-mono`)
 - [hrt-guide.md](hrt-guide.md) -- the rank-2 `forall` mechanism lenses use
