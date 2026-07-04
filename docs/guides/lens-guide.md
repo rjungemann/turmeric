@@ -1,7 +1,7 @@
 ---
 title: Lenses
 category: Standard Library
-description: First-class functional lenses (view / set / over) via stdlib/lens.tur, the profunctor-by-record encoding, and why it stays the shipped default even though the experimental van Laarhoven form now supports view/set/over, generic focus inference, and composition.
+description: First-class functional lenses (view / set / over) via stdlib/lens.tur, the profunctor-by-record encoding shipped by default, and the van Laarhoven form available behind experiment flags.
 ---
 
 # Lenses
@@ -50,71 +50,28 @@ can be reused across calls; if the setter rebuilds the record (the common case),
 make it `:copy :heap` so it is pointer-carried and cheap to thread. A move-only
 `S` can still be used, but only linearly (each whole consumed once).
 
-## The encoding, and why still profunctor-by-record
+## The two encodings
 
-The classic Haskell optic is the **van Laarhoven** form:
+Turmeric supports two lens encodings. The **profunctor-by-record** form ships as
+the default in `stdlib/lens.tur` and needs no experiment flags. The **van
+Laarhoven** form -- the classic Haskell optic
 
 ```
 type Lens s a = forall f. Functor f => (a -> f a) -> (s -> f s)
 ```
 
-whose elegance is that optics compose with ordinary function composition and
-`view`/`set`/`over` fall out by instantiating `f` to `Const`/`Identity`.
+-- is available behind the `--enable=forall-*` / `hkt-hrt` / `forall-dict-pass`
+experiments and supports `view`/`set`/`over`, generic focus inference, and
+composition with ordinary function composition. It carries the caller's
+`Functor` dictionary through the poly carrier at runtime, so the lens body
+dispatches `fmap` on whichever instance the caller picks (`Const` for `view`,
+`Identity` for `set`/`over`).
 
-The van Laarhoven `view`/`set`/`over` now **do** type-check and run on Turmeric.
-The two compiler reasons this section used to cite as blockers have both been
-resolved by the mode-B slices of the
-[constrained-hkt-forall plan](../upcoming/v1/constrained-hkt-forall-plan.md):
+The record encoding stays the default because it needs no experiments to run
+and it works with **any** `Functor`-like use, not just those whose `(f a)` fits
+the poly carrier. See [Functor width](#functor-width) below.
 
-1. **Dispatching `fmap` on an abstract functor.** The lens body runs `fmap` over
-   `(f a)` for a caller-chosen `f` (`view` picks `Const`, `set`/`over` pick
-   `Identity`). Mode B threads the resolved typeclass **dictionary** through the
-   int64 carrier so the body dispatches `fmap` on the caller's instance at
-   runtime (MB1/MB2). A *generic* `view`/`set`/`over` that infers its focus type
-   from the lens argument also works now (the focus tyvar binds through the
-   rank-2 forall parameter). Both are demonstrated end to end by the fixtures
-   `tests/fixtures/van-laarhoven-lens-concrete/` and
-   `tests/fixtures/van-laarhoven-lens-generic/` (each returns 3/30/4/99).
-2. **The curried rank-2 result is a function.** `l g` returning `s -> f s`, then
-   applied, is threaded by MB3 (`--enable=hrt-curried-result`).
-
-And van Laarhoven optics now **compose**, too: a composed lens focuses through an
-adapter lambda handed to another lens
-(`(defn line-a-x [^f] [^Functor f g ...] (line-a (fn [p] : (f Point) (point-x g p)) s))`),
-and `view`/`set`/`over` thread through the composition -- the adapter captures the
-caller-chosen functor's dictionary, so the inner lens dispatches the right
-instance at runtime (fixture `tests/fixtures/van-laarhoven-lens-compose/`, 7 / 700
-/ 2 / 0 / 42). Same-focus *delegation* between lenses works as well
-(`van-laarhoven-lens-delegate/`).
-
-So the full van Laarhoven form -- `view`/`set`/`over`, generic focus inference,
-and composition -- is expressible. `stdlib/lens.tur` nonetheless still ships the
-**profunctor-by-record** encoding (a `Lens` is a concrete record of a getter and a
-setter) as the default, for two reasons:
-
-- **General functors.** Any `Functor` instance works -- not only
-  carrier-compatible opaques. `Const`/`Identity` as one-int64 opaques ride the
-  mode-B carrier directly. A functor whose `(f a)` is a WIDE by-value aggregate
-  (a `:copy` struct / flat-product ADT wider than one int64 word) now works too,
-  behind `--enable=vl-wide-functor`: codegen boxes the aggregate into the carrier
-  at each lens crossing and unboxes it back, across `view`/`set`/`over`, generic
-  focus inference, and composition (fixtures
-  `van-laarhoven-lens-wide-{identity,generic,compose,mixed}/`, each matching its
-  opaque twin's numbers). That box pays one heap alloc + copy + free per crossing
-  until the zero-overhead by-value HKT monomorphization lands (Path B of
-  [../upcoming/v1/van-laarhoven-wide-functor-carrier-plan.md](../upcoming/v1/van-laarhoven-wide-functor-carrier-plan.md)).
-  With the flag OFF a wide functor is still rejected up front with **TUR-E0309**
-  (never a segfault), tracked as
-  [../reported/van-laarhoven-functor-must-be-int-carrier.md](../reported/van-laarhoven-functor-must-be-int-carrier.md).
-- **Maturity.** The van Laarhoven path runs behind the `--enable=forall-*` /
-  `hkt-hrt` / `forall-dict-pass` experiments; the record encoding needs none of
-  that machinery and is stable today.
-
-The record encoding stays the shipped default and `view`/`set`/`over` are ordinary
-function calls; the van Laarhoven form is available (and demonstrated by the
-fixtures) for code that opts into the experiments.
-
-### The one tradeoff: composition
+### Composition -- the one tradeoff of the record form
 
 The record encoding gives up composing optics with ordinary function
 composition. A generic `lens-compose` would need its setter to read the whole
@@ -134,18 +91,41 @@ hand at concrete, copyable whole types:
 ```
 
 where the whole types (`Line`, `Point`) are `:copy` so `l`/`s` can be used more
-than once. This is the idiom for the record encoding. The experimental van
-Laarhoven form now supports free composition directly (see
-[the archived resolution](../archive/van-laarhoven-lens-composition.md)), so code
-that opts into the `--enable=forall-*` experiments can compose optics with
-ordinary function composition instead.
+than once.
+
+The van Laarhoven form composes freely (`l1 . l2` is just function
+composition); reach for it when you need optic composition and can accept the
+experiment flags.
+
+## Functor width
+
+The van Laarhoven form threads `(f a)` through a one-int64 poly carrier. Two
+shapes of functor work through that carrier:
+
+- **Carrier-compatible functors** -- an opaque or `:heap` type whose `(f a)`
+  fits in one int64 word (e.g. `(defopaque Const [r a] :int)`,
+  `(defopaque Identity [a] :int)`). These ride the carrier directly at no
+  runtime cost beyond the dict dispatch.
+- **Wide by-value functors** -- a `:copy` struct or flat-product ADT whose
+  `(f a)` is wider than one word. These work behind
+  `--enable=vl-wide-functor`: codegen boxes the aggregate into the carrier at
+  each lens crossing and unboxes it back on the other side. `view`/`set`/`over`,
+  generic focus inference, and composition all thread through unchanged. The
+  box pays one heap alloc + copy + free per crossing until the zero-overhead
+  by-value HKT monomorphization lands
+  ([../upcoming/van-laarhoven-wide-functor-carrier-plan.md](../upcoming/van-laarhoven-wide-functor-carrier-plan.md),
+  Path B).
+
+With `--enable=vl-wide-functor` off, a wide-by-value functor is rejected up
+front with **TUR-E0309** rather than silently miscompiling.
 
 ## Related
 
 - [`stdlib/lens.tur`](../../stdlib/lens.tur) -- the module
-- [constrained-hkt-forall plan](../upcoming/v1/constrained-hkt-forall-plan.md) --
-  the van Laarhoven roadmap (slices 1-4) and the mode-A/mode-B decision
-- [constrained-hkt-forall mode-B plan](../upcoming/v1/constrained-hkt-forall-mode-b-plan.md) --
-  MB1-MB4: the dictionary passing + dispatch that makes the van Laarhoven
-  `view`/`set`/`over` above run
+- [constrained-hkt-forall plan](../upcoming/constrained-hkt-forall-plan.md) --
+  the van Laarhoven roadmap and the mode-A/mode-B decision
+- [constrained-hkt-forall mode-B plan](../upcoming/constrained-hkt-forall-mode-b-plan.md) --
+  the dictionary passing + dispatch the van Laarhoven form runs on
+- [van-laarhoven-wide-functor-carrier-plan](../upcoming/van-laarhoven-wide-functor-carrier-plan.md) --
+  the wide-by-value functor bridge behind `--enable=vl-wide-functor`
 - [hrt-guide.md](hrt-guide.md) -- the rank-2 `forall` mechanism lenses use
