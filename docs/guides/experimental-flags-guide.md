@@ -38,15 +38,41 @@ keywords):
   :experiments [:fancy-rows :deep-refinements])
 ```
 
-Both shapes resolve to the same internal set. When the same name appears in
-both, **the CLI wins** (it is the more specific, per-invocation override).
+Or, per-user, in `$XDG_CONFIG_HOME/turmeric/experiments.tur` (falling back to
+`$HOME/.config/turmeric/experiments.tur`; on Windows, `%APPDATA%\turmeric\experiments.tur`):
 
-An unknown name -- on the CLI or in the manifest -- is a **hard error**, not a
-warning, so typos surface immediately:
+```turmeric
+;; ~/.config/turmeric/experiments.tur
+;;
+;; Experiments to enable by default in every turmeric invocation that
+;; is NOT running inside a project whose build.tur declares its own
+;; :experiments list.
+
+:enable [fancy-rows
+         deep-refinements]
+```
+
+All three shapes resolve to the same internal set. Precedence, lowest to
+highest:
+
+1. **User file** (`~/.config/turmeric/experiments.tur`) -- your per-machine
+   baseline.
+2. **Project manifest** (`build.tur` `:experiments`) -- the project's stated
+   set. **Any `:experiments` key -- even the empty list `:experiments []` --
+   fully suppresses the user file.** The project owner has stated their
+   intent; user preferences do not silently union in.
+3. **CLI** (`--enable=<name>`) -- the per-invocation override; wins over both.
+
+An unknown name -- on the CLI, in the manifest, or in the user file -- is a
+**hard error**, not a warning, so typos surface immediately:
 
 ```
 error [TUR-E0310]: unknown experiment 'fancy-roows'; run 'tur experiments' for the list
 ```
+
+Unknown *keys* in the user file (anything other than `:enable`) are a
+`TUR-W0062` warning and otherwise ignored -- forward-compatible with future
+additions.
 
 Run `tur experiments` to see the exact set of recognized names.
 
@@ -84,7 +110,8 @@ tur experiments --json   # machine-readable (the docs site consumes this)
 The table shows each entry's name, lifecycle, the version it was introduced
 in, its expiry, whether it is enabled in the current invocation, and the
 plan link. When an experiment is enabled, the table also shows where the
-enable came from (`cli` or `manifest`) so a surprise is easy to debug.
+enable came from (`cli`, `manifest`, or `user-config`) so a surprise is easy
+to debug.
 
 ## Expiry policy
 
@@ -114,13 +141,19 @@ experiment. Walk it back:
    building (or one of its enclosing workspace manifests) may have opted in.
    Run `tur experiments` from that directory -- the `ENABLED` column shows
    the source.
-3. **Is the warning expected?** If you genuinely want the feature, the
+3. **Is your user file enabling it?** Check
+   `$XDG_CONFIG_HOME/turmeric/experiments.tur` (or
+   `~/.config/turmeric/experiments.tur`). `tur experiments` will show
+   `user-config` in the source column for anything that came from there.
+   Remember: this file is suppressed when the current project's `build.tur`
+   carries any `:experiments` key, including the empty list.
+4. **Is the warning expected?** If you genuinely want the feature, the
    warning is informational: the feature works, it is just not stable. Do
    **not** depend on its surface from a published spice yet -- a `prototype`
    feature can change shape in the next release, and a `beta` feature
    graduates (and its flag becomes a no-op) on the version named in the
    `TUR-W0061` message.
-4. **The warning is informational, not suppressible.** There is no flag to
+5. **The warning is informational, not suppressible.** There is no flag to
    silence it -- `--allow-experimental` was retired. If an experiment is
    enabled, the `TUR-W006x` line fires once per compile; that is intended.
 

@@ -214,6 +214,12 @@ carrying a known cost we are not ready to impose on everyone) ship behind
   past it until the entry is graduated (deleted; feature goes always-on) or
   shelved.
 
+Enable sources, in ascending precedence: user file
+(`~/.config/turmeric/experiments.tur` `:enable [...]`), project manifest
+(`build.tur` `:experiments`), CLI (`--enable=<name>`). Any `:experiments`
+key in the project manifest -- including the empty list -- fully suppresses
+the user file; CLI always wins.
+
 This does **not** apply to diagnostic strictness (`--strict-effects`, ...),
 codegen/operator knobs (`--dump-*`, `--emit-abi-trace`), build-system options
 (`--build-dir`, `-I`), or already-shipping partial features that went
