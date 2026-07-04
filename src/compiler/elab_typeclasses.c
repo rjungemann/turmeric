@@ -4255,6 +4255,59 @@ static Type method_callable_result_type(const Binding *binding, Type fallback) {
     return fallback;
 }
 
+/* Predicate mirroring the method-finding phase of elab_try_return_dispatch:
+ * true when `name` resolves to a return-only-dispatch typeclass method (a class
+ * type param appears in the method's return type but in none of its parameter
+ * types) and no ordinary binding shadows it.  Used by elab_if to recognise an
+ * arm whose instance can only be picked from an expected result type, so a
+ * concrete sibling arm can supply that type (return-directed-methods-pure-empty-
+ * inference, fix direction #2). */
+bool elab_symbol_is_return_dispatch_method(Elab *e, const Symbol *name) {
+    if (!name) return false;
+    /* A user/local defn of the same name wins (mirrors the `!fn_binding` gate
+     * at the elab_try_return_dispatch call site); it is not return-directed. */
+    if (scope_lookup(e->scope, name)) return false;
+
+    TypeClassEnv *env = &e->typeclass_env;
+    for (TypeClass *c = env->typeclasses; c != NULL; c = c->next) {
+        for (uint8_t mi = 0; mi < c->n_methods; mi++) {
+            const TypeClassMethod *m = &c->methods[mi];
+            if (!(m->name->len == name->len &&
+                  memcmp(m->name->name, name->name, name->len) == 0)) {
+                continue;
+            }
+            /* Some class type param must appear ONLY in the return type. */
+            bool any_tp_in_param = false;
+            for (uint8_t ti = 0; ti < c->n_type_params && !any_tp_in_param; ti++) {
+                const Symbol *tp = c->type_params[ti];
+                if (!tp) continue;
+                for (uint8_t pi = 0; pi < m->n_params; pi++) {
+                    if (rt_type_mentions_tyvar(&m->param_types[pi], tp->name)) {
+                        any_tp_in_param = true;
+                        break;
+                    }
+                }
+            }
+            if (any_tp_in_param) continue;
+            for (uint8_t ti = 0; ti < c->n_type_params; ti++) {
+                const Symbol *tp = c->type_params[ti];
+                if (!tp) continue;
+                if (!rt_type_mentions_tyvar(&m->return_type, tp->name)) continue;
+                bool in_param = false;
+                for (uint8_t pi = 0; pi < m->n_params; pi++) {
+                    if (rt_type_mentions_tyvar(&m->param_types[pi], tp->name)) {
+                        in_param = true;
+                        break;
+                    }
+                }
+                if (in_param) continue;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
                                bool *handled) {
     if (handled) *handled = false;

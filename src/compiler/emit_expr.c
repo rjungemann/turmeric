@@ -573,6 +573,67 @@ static bool call_emits_byval_concrete_aggregate(EmitCtx *ctx, const Expr *call,
     return byval_aggr;
 }
 
+/* byvalue-option-if-join-function-call-arm-aggregate-cast: true (writing the
+ * by-value type to *out_ty) when `call` directly targets an ORDINARY top-level
+ * defn whose declared result is a concrete by-value aggregate -- e.g. `(known)`
+ * with `(defn known [] : (Option int) ..)`.  Such a callee has a fixed by-value
+ * C signature (`static tur_adt_Option__int known()`), so the call already yields
+ * the aggregate; a carrier->concrete merge bridge (`(tur_option_t *)(intptr_t)
+ * (known())`) would cast that struct rvalue to a pointer, which cc rejects as
+ * "aggregate value used where an integer was expected".
+ *
+ * Scoped away from the two shapes the __inst_ / letrec-closure comment on
+ * call_emits_byval_concrete_aggregate warns about: this requires a GLOBAL, NON-
+ * generic (`!is_poly_fn && !poly_type`) callee, so a generic carrier base (whose
+ * C return is the int64 carrier) and a local letrec closure self-call (whose
+ * enclosing return is already the aggregate, not the carrier) are both excluded.
+ * The __inst_ instance methods stay owned by call_emits_byval_concrete_aggregate
+ * (they are not `is_global` defns). */
+static bool call_ordinary_defn_byval_aggregate(EmitCtx *ctx, const Expr *call,
+                                               Type *out_ty) {
+    if (!call || call->kind != EX_CALL || call->as.call_.is_poly_call)
+        return false;
+    const Binding *fb = call->as.call_.fn_binding;
+    if (!fb || fb->type.kind != TY_FN || !fb->type.as.fn.result_full_type)
+        return false;
+    if (!fb->is_global || fb->is_poly_fn || fb->poly_type) return false;
+    if (fb->body_is_inline_c) return false;  /* handled by the inline-C seam */
+    /* A `#{Construct}` template (some/none/ok/err) has context-dependent
+     * lowering: in a carrier-returning context (e.g. inside a generic
+     * `option_map` spec) it emits its bare int64-carrier base `some(..)`, not
+     * the by-value monomorph -- so it is NOT unconditionally a by-value
+     * aggregate producer.  Those are already classified by
+     * call_construct_emits_byval_aggregate / call_spec_result_byval_aggregate,
+     * which distinguish the by-value-spec case from the carrier base.  Excluding
+     * them here keeps this predicate to ordinary user defns with a fixed
+     * by-value C signature. */
+    if (fb->is_construct_template) return false;
+    /* Mirror emit_fns.c's C-return-type decision for a non-inline-C defn: the
+     * signature is `emit_type_c_name(ctx, result_full_type)` (the concrete
+     * aggregate), NOT the int64 carrier -- the `int64_t` fallback there is
+     * reached only by inline-C bodies.  So the call yields the aggregate by
+     * value whenever that c-name is a real struct name: not `int64_t`, and not a
+     * `T *` pointer (a heap handle rides the int64 carrier).  The c-name test is
+     * the source of truth -- `type_has_concrete_codegen_layout` reports false for
+     * the abstract `(Option int)` TY_APP even where emit_type_c_name already
+     * yields `tur_adt_Option__int`, so it must not gate here.  Likewise, unlike
+     * call_emits_byval_concrete_aggregate, this does NOT gate on
+     * `!type_uses_carrier_abi` -- a concrete `(Option int)` return is carrier-ABI
+     * at the type level yet is still emitted by value from an ordinary
+     * (non-generic) defn body. */
+    Type r = emit_resolve_type(ctx, *fb->type.as.fn.result_full_type);
+    const char *cn = emit_type_c_name(ctx, r);
+    size_t cnlen = cn ? strlen(cn) : 0;
+    bool byval_aggr =
+        (r.kind == TY_ADT || r.kind == TY_APP || r.kind == TY_STRUCT) &&
+        !type_is_heap_struct(r) && !type_is_heap_adt(r) &&
+        cn && strcmp(cn, "int64_t") != 0 &&
+        /* a real aggregate C name, not a pointer (`T *`) carrier handle */
+        cn[cnlen - 1] != '*';
+    if (byval_aggr && out_ty) *out_ty = r;
+    return byval_aggr;
+}
+
 /* CONV-S1 seam 4 (none-base carrier return): true when `call` is a lowered
  * construct-template call (`(none)` -> `(Option false (default-of A))`, `(some
  * x)`, `(ok x)`) whose resolved result is a CONCRETE by-value record-ADT
@@ -684,6 +745,8 @@ bool fn_body_tail_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
         default:
             if (call_emits_byval_concrete_aggregate(ctx, e, NULL))
                 return true;
+            if (call_ordinary_defn_byval_aggregate(ctx, e, NULL))
+                return true;
             if (call_construct_emits_byval_aggregate(ctx, e, NULL))
                 return true;
             if (call_spec_result_byval_aggregate(ctx, e, NULL))
@@ -735,6 +798,17 @@ Type fn_body_tail_byvalue_carrier_type(EmitCtx *ctx, const Expr *e) {
             if (type_uses_carrier_abi(sr) &&
                 strcmp(emit_type_c_name(ctx, sr), "int64_t") != 0)
                 return sr;
+        }
+        /* byvalue-option-if-join-function-call-arm-aggregate-cast: an ordinary
+         * top-level defn call whose declared result is a concrete by-value
+         * aggregate (`(known)` : `(Option int)`) already yields that aggregate;
+         * report its type so a merge temp is declared by value and its arm is not
+         * carrier->concrete bridged.  Mirrors the bool predicate's
+         * call_ordinary_defn_byval_aggregate. */
+        {
+            Type oagg = unknown;
+            if (call_ordinary_defn_byval_aggregate(ctx, x, &oagg))
+                return oagg;
         }
         /* CONV-S1 seam 4 (none-base carrier return): an unrecorded construct
          * template tail (`(none)`/`(some x)`) emits the by-value monomorph
@@ -3899,6 +3973,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     emit_arg = arg_expr->as.reinterpret_.expr;
                 }
                 char *raw = emit_value(ctx, body, emit_arg);
+                /* byvalue-result-param-ok-predicate-materialize-bad-cast: set
+                 * once a pass-by-pointer struct *parameter* argument has been
+                 * converted to the int64 carrier by a pointer cast (its C value
+                 * is already `const T *`, i.e. a pointer to the by-value
+                 * aggregate, which IS a valid carrier handle).  Suppresses the
+                 * later pass-by-ptr `(*(...))` deref (which is for callees that
+                 * take the struct by value), so the two do not compound into
+                 * `(*((int64_t)(intptr_t)(&tmp)))`. */
+                bool pbp_carrier_cast = false;
                 /* Phase HKT H3/H4: When a function-reference (TY_FN) is passed to an
                  * int64_t parameter, emit an explicit (int64_t)(intptr_t) cast so the
                  * generated C99 code is valid.  Function pointers cannot be implicitly
@@ -4206,9 +4289,29 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             fn_binding->type.as.fn.arg_full_types[param_idx]);
                     if (pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS ||
                         pk == TY_ADT || pk == TY_INT || app_param_carrier) {
-                        raw = emit_carrier_bridge(ctx, body, raw,
-                                                  CK_CONCRETE, CK_CARRIER,
-                                                  emit_arg->type);
+                        /* byvalue-result-param-ok-predicate-materialize-bad-cast:
+                         * a pass-by-pointer struct *parameter* (`r : (Result int
+                         * cstr)`, materialized in C as `const T *`) is already a
+                         * pointer to the by-value aggregate -- which is exactly a
+                         * carrier handle (the non-pbp branch of emit_carrier_bridge
+                         * spills the value and hands back `&tmp`).  So the crossing
+                         * is a plain pointer->int64 cast; the generic bridge would
+                         * instead spill `T tmp = r;` (aggregate = pointer -- a hard
+                         * cc error) and then the pass-by-ptr `(*(...))` deref below
+                         * would compound it.  Emit the cast directly and flag it so
+                         * that deref is skipped. */
+                        if (expr_is_pbp_param(ctx, emit_arg)) {
+                            Buf _pb; buf_init(&_pb);
+                            buf_printf(&_pb, "(int64_t)(intptr_t)(%s)", raw);
+                            free(raw);
+                            raw = strdup(_pb.data);
+                            buf_free(&_pb);
+                            pbp_carrier_cast = true;
+                        } else {
+                            raw = emit_carrier_bridge(ctx, body, raw,
+                                                      CK_CONCRETE, CK_CARRIER,
+                                                      emit_arg->type);
+                        }
                     }
                 }
                 /* CONV-S1 (seam-4): the non-parametric counterpart of the TY_APP
@@ -4523,7 +4626,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * expr_is_pbp_param is checked first (side-effect-free) as the
                  * primary gate before the type_struct_pass_by_ptr aggregate
                  * check. */
-                else if (!needs_fn_cast && emit_arg &&
+                else if (!needs_fn_cast && emit_arg && !pbp_carrier_cast &&
                          expr_is_pbp_param(ctx, emit_arg) &&
                          (matched_spec
                           ? type_kind_is_aggregate(matched_spec->arg_types[i].kind)

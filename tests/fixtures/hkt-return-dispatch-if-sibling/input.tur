@@ -1,0 +1,30 @@
+;; return-directed-methods-pure-empty-inference (fix #2): an `if` whose one arm
+;; is a return-directed method call (`pure` / `empty`, whose Applicative /
+;; Alternative instance is selectable only from an expected result type) and
+;; whose other arm is concrete grounds the method from the sibling arm -- no
+;; per-call-site `(:: (pure ...) (Option int))` ascription needed, in either
+;; branch order.  Option and the class stubs are auto-preloaded.
+
+(defn opt-val [o : (Option int)] : int
+  (if (some? o) (.value o) -1))
+
+;; pure in the then-arm, concrete some in the else-arm
+(defn pick-a [b : bool] : int
+  (opt-val (if b (pure 99) (some 5))))
+
+;; concrete some in the then-arm, pure in the else-arm (reversed order)
+(defn pick-b [b : bool] : int
+  (opt-val (if b (some 5) (pure 99))))
+
+;; empty (Alternative) grounded from a concrete sibling arm
+(defn pick-c [b : bool] : int
+  (opt-val (if b (empty 0) (some 7))))
+
+(defn main [] : int
+  (println (pick-a true))    ; 99
+  (println (pick-a false))   ; 5
+  (println (pick-b true))    ; 5
+  (println (pick-b false))   ; 99
+  (println (pick-c true))    ; -1  (empty -> none)
+  (println (pick-c false))   ; 7
+  0)
