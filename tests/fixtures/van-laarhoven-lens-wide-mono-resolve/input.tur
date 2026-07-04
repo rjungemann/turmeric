@@ -1,17 +1,22 @@
-;; VBM2b/VBM3 (van-laarhoven-monomorphization-plan, Path B): the wide-by-value
-;; `Identity` lens repro run under `--enable=vl-wide-mono`.  Wide functors are
-;; always allowed since VBM4 (no vl-wide-functor flag); vl-wide-mono layers the
-;; zero-overhead Path B on top.  elab_poly_call registers a by-value HKT
-;; monomorphization spec key for each wide-functor lens site (here `set-px` and
-;; `over-px`, both pinning `f := Identity`, focus=int, whole=Point; `view-px`
-;; pins the opaque carrier-compatible `Const` and is NOT registered), the resolve
-;; pass joins each to its concrete lens (`point-x`), and the poly-call emit
-;; REDIRECTS the uniquely-resolved sites to a by-value mono body with no `(f S)`/
-;; `(f A)` heap box.  `view`/`set`/`over` return the same 3/30/4/99 as
-;; van-laarhoven-lens-wide-identity, now box-free on the redirected path.
+;; VBM2 (van-laarhoven-monomorphization-plan, Path B): the cross-procedural
+;; resolution pass.  VBM1 registered ABSTRACT lens specs at the `(l g s)` pin
+;; inside `set-px` / `over-px`, where the lens is the abstract param `l`.  VBM2's
+;; `mono_specs_resolve_program` walks the elaborated program and joins each
+;; abstract spec to the CONCRETE lens actually passed at every top-level call of
+;; its enclosing fn -- here both `(set-px point-x ...)` and `(over-px point-x
+;; ...)` pass the concrete lens `point-x` with f=Identity, focus=int, whole=Point,
+;; so the two abstract specs collapse to ONE concrete emit key
+;; `lens=point-x f=Identity focus=int whole=Point`.  `view-px` pins the opaque
+;; carrier-compatible `Const` and is NOT registered abstractly, so it produces no
+;; concrete key.
+;;
+;; `main` performs the lens operations (keeping every call site live so the
+;; specs register + resolve) but prints nothing, so stdout is exactly the
+;; `--dump-mono-specs` output -- an unambiguous, order-independent assertion of
+;; the resolution.  Registry-only: codegen is unchanged (the per-spec by-value
+;; body emit is VBM2b, tracked separately).
 
-;; Const r a -- phantom second index; a one-int64 carrier-compatible opaque, so
-;; `view` stays on the untouched carrier path even here.
+;; Const r a -- phantom second index; a one-int64 carrier-compatible opaque.
 (defopaque Const [r a] :int)
 (defn mk-const [A] [x : A] : (Const A A) ```c return (int64_t)x; ```)
 (defn get-const [R A] [c : (Const R A)] : R ```c return (int64_t)c; ```)
@@ -51,11 +56,8 @@
   (run-id (l (fn [a : int] : (Identity int) (mk-id (h a))) s)))
 
 (defn main [] : int
-  (let [p (make-struct Point :x 3 :y 4)]
-    (println (view-px point-x p))                              ; 3
-    (let [p2 (over-px point-x (fn [v : int] : int (* v 10)) p)]
-      (println (view-px point-x p2))                           ; 30
-      (println (.y p2)))                                       ; 4 (unfocused field preserved)
-    (let [p3 (set-px point-x 99 p)]
-      (println (view-px point-x p3))))                         ; 99
-  0)
+  (let [p  (make-struct Point :x 3 :y 4)
+        v  (view-px point-x p)
+        p2 (over-px point-x (fn [v : int] : int (* v 10)) p)
+        p3 (set-px point-x 99 p)]
+    0))

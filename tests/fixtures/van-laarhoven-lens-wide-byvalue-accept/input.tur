@@ -1,11 +1,18 @@
-;; van-laarhoven-functor-must-be-int-carrier: a van Laarhoven lens threads its
+;; VBM4 (van-laarhoven-monomorphization-plan): a van Laarhoven lens threads its
 ;; abstract functor `(f a)` through the mode-B int64 carrier (one word).  A
 ;; carrier-compatible functor -- a `defopaque ... :int` such as Const/Identity,
 ;; or a :heap type -- rides the carrier fine.  A WIDE by-value aggregate functor
 ;; (here Identity is a two-word `:copy` struct, not the one-int64 opaque) does
-;; NOT fit in one word and used to be accepted by `tur check`, then codegen a
-;; int64<->struct reinterpretation that segfaults at runtime.  It is now
-;; rejected up front with TUR-E0309 at the lens invocation site.
+;; NOT fit in one word; it used to be rejected with TUR-E0309.  Since VBM4
+;; graduated `vl-wide-functor` to default-on, it is ALWAYS accepted -- no flag --
+;; and codegen boxes the aggregate into the carrier (Path A) at each lens
+;; crossing instead of reinterpreting int64<->struct-pointer.  This fixture runs
+;; the wide functor with NO wide flag (only the forall/dict flags), proving the
+;; graduation: `set-px point-x 99 p` returns a Point with x=99.
+;;
+;; (`--enable=vl-wide-mono` would additionally redirect the uniquely-resolved
+;; lens site to a zero-overhead by-value mono body; see
+;; van-laarhoven-lens-wide-mono.)
 (defopaque Const [r a] :int)
 (defn mk-const [A] [x : A] : (Const A A) ```c return (int64_t)x; ```)
 (defn get-const [R A] [c : (Const R A)] : R ```c return (int64_t)c; ```)

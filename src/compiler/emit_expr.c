@@ -1,7 +1,8 @@
 /* emit_expr.c -- expression-position C emission (emit_value and friends). */
 #include "emit_internal.h"
 #include "emit_cps.h"   /* cps-transform-plan: EX_CALLCC lowering */
-#include "globals.h"    /* g_opt_vl_wide_functor (WF3) */
+#include "globals.h"    /* g_opt_vl_wide_mono (VBM3 redirect) */
+#include "mono_specs.h" /* VBM3: van Laarhoven lens dispatch redirect */
 
 /* ACB: true when kind represents a concrete aggregate type (struct, ADT, or
  * type-application) that the carrier ABI stores as a heap pointer.  Used by
@@ -2755,6 +2756,33 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
 
             /* Phase HRT1: poly call through rank-2 fn param: emit fn_name.fn(fn_name.env, arg0, ...) */
             if (e->as.call_.is_poly_call) {
+                /* VBM3: redirect a van Laarhoven lens invocation `(l g s)` --
+                 * where `l` is a consumer's abstract lens param that uniquely
+                 * resolves to a concrete wide-by-value-functor lens with a
+                 * `<lens>__mono_<hash>` body -- straight to that by-value mono
+                 * body, dropping the carrier dict-dispatch and its `(f S)` box.
+                 * The mono body takes the ordinary Path A `g` (carrier) and the
+                 * whole `s`; the dict arg (slot 0) is dropped.  Only fires on a
+                 * unique, non-ambiguous resolution (see mono_specs). */
+                if (g_opt_vl_wide_mono && fn_binding &&
+                    e->as.call_.n_args >= 3) {
+                    const char *rlens = NULL; unsigned long long rhash = 0;
+                    if (mono_spec_redirect_for_binding(fn_binding, &rlens, &rhash)) {
+                        uint32_t na = e->as.call_.n_args;
+                        /* args = [dict, g, s]: g and s are the trailing two. */
+                        char *g_str = emit_value(ctx, body, e->as.call_.args[na - 2]);
+                        char *s_str = emit_value(ctx, body, e->as.call_.args[na - 1]);
+                        Buf mo; buf_init(&mo);
+                        emit_vl_mono_name(&mo, rlens, rhash);
+                        buf_printf(&mo, "((int64_t)(intptr_t)(%s), (int64_t)(intptr_t)(%s))",
+                                   g_str, s_str);
+                        buf_putc(&mo, '\0');
+                        char *result = strdup(mo.data);
+                        buf_free(&mo);
+                        free(g_str); free(s_str);
+                        return result;
+                    }
+                }
                 char *fn_name = emit_call_name(ctx, e, fn_binding);
                 uint32_t n = e->as.call_.n_args;
 
@@ -2913,11 +2941,17 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * back to the aggregate the surrounding context expects.  Only in
                  * the generic path; phase_f_concrete never carries an aggregate
                  * result (aggregates are not poly-concrete). */
-                if (!phase_f_concrete && emit_type_is_byvalue_adt(ctx, e->type)) {
+                if (!phase_f_concrete && emit_type_is_byvalue_adt(ctx, e->type) &&
+                    !(ctx->current_abi_specialization &&
+                      ctx->current_abi_specialization->is_vl_wide_mono)) {
                     char *unboxed = emit_agg_unbox(ctx, e->type, result);
                     free(result);
                     result = unboxed;
                 }
+                /* VBM2b/VBM3/residual: inside a by-value monomorphized lens body
+                 * the functor is spelled by value end to end -- `g : (-> A (f A))`
+                 * returns its `(f A)` aggregate BY VALUE (its box flag is cleared
+                 * for redirected consumers, see mono_specs), so no unbox fires. */
                 /* hrt-poly-call-nonint-return-int-conversion: the generic carrier
                  * `.fn` field is typed int64_t, so a poly call whose result is a
                  * pointer-class type (cstr, ptr<T>, rc/ref, ...) yields an
@@ -3210,7 +3244,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     return result;
                 }
             }
-            
+
             /* ER2: Callback call through a local TY_FN parameter.
              * When a function parameter is annotated with :(fn [...] #{} :T), it is
              * stored as int64_t in C (a function address or closure pointer cast to
@@ -4182,7 +4216,13 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     fn_binding && fn_binding->type.kind == TY_FN &&
                     fn_binding->type.as.fn.arg_full_types &&
                     i < fn_binding->type.as.fn.arity &&
-                    fn_binding->type.as.fn.arg_full_types[i]) {
+                    fn_binding->type.as.fn.arg_full_types[i] &&
+                    /* VBM2b: in a by-value monomorphized lens body the `(f a)`
+                     * arg is produced BY VALUE (the `g` poly call returns the
+                     * aggregate directly), not as an int64 heap-box pointer, so
+                     * the Path A deref-back must NOT fire. */
+                    !(ctx->current_abi_specialization &&
+                      ctx->current_abi_specialization->is_vl_wide_mono)) {
                     char *ub = emit_agg_unbox(ctx,
                         *fn_binding->type.as.fn.arg_full_types[i], raw);
                     free(raw);
@@ -4452,9 +4492,20 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * carrier-producer disjunct below would otherwise double-unbox
                      * (`*(T*)(intptr_t)(<aggregate>)`, an aggregate used as an
                      * integer).  Opaque functors are one word (no boundary unbox)
-                     * and never reach this, so gate on the flag. */
-                    !(g_opt_vl_wide_functor && emit_arg->kind == EX_CALL &&
+                     * and never reach this (the by-value-ADT test below excludes
+                     * them), so the guard is unconditional since VBM4. */
+                    !(emit_arg->kind == EX_CALL &&
                       emit_arg->as.call_.is_poly_call &&
+                      emit_type_is_byvalue_adt(ctx, emit_arg->type)) &&
+                    /* VBM2b: the WF3 gate above, for the by-value monomorphized
+                     * lens body -- the `g : (-> A (f A))` call emits its `(f a)`
+                     * aggregate BY VALUE (not the boxed carrier), so a by-value
+                     * ADT arg from any call must NOT be deref'd again.  The
+                     * fat-closure `g` call is not is_poly_call, so the gate above
+                     * misses it; catch it on the active-spec flag instead. */
+                    !(ctx->current_abi_specialization &&
+                      ctx->current_abi_specialization->is_vl_wide_mono &&
+                      emit_arg->kind == EX_CALL &&
                       emit_type_is_byvalue_adt(ctx, emit_arg->type)) &&
                     (emit_arg->type.kind == TY_INT ||
                      (type_kind_is_aggregate(emit_arg->type.kind) &&

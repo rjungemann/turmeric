@@ -377,11 +377,22 @@ static int run_core_passes(PassContext *ctx) {
             /* Phase HKT-P6: verify kind info is preserved after elaboration */
             assert(kind_verify_program(ctx->prog) && "Kind info cleared after PASS_ELABORATE");
 #endif
-            /* VBM1 (van-laarhoven-monomorphization-plan): --dump-mono-specs
-             * prints the by-value HKT monomorphization spec registry populated
-             * during elaboration (dump-only; codegen unchanged). */
-            if (g_dump_mono_specs)
+            /* VBM1/VBM2 (van-laarhoven-monomorphization-plan): resolve each
+             * abstract lens spec discovered during elaboration to the concrete
+             * lens passed at its enclosing fn's top-level invocations (VBM2's
+             * cross-procedural collapse -- plan OQ #1/#2), then --dump-mono-specs
+             * prints both the abstract and resolved-concrete registries.
+             * Registry-only: codegen is unchanged (the per-spec by-value body
+             * emit is tracked separately). */
+            if (g_opt_vl_wide_mono)
+                mono_specs_resolve_program(ctx->prog);
+            if (g_dump_mono_specs) {
                 mono_specs_dump(stdout);
+                /* `tur run` calls this pass in-process then execv's the compiled
+                 * binary, which discards any unflushed stdio buffer.  Flush so the
+                 * dump survives to a redirected (fully-buffered) stdout. */
+                fflush(stdout);
+            }
             /* debugger Phase 1: audit breakpoint-span coverage on the freshly
              * elaborated tree, before any transform pass introduces synthetic
              * (legitimately span-less) nodes.  Stop the pipeline afterwards --

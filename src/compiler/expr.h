@@ -535,8 +535,11 @@ struct FnDef {
      * mode-B poly carrier and is fat-dispatched (slot 0) by the generic
      * dict-clone as an `int64_t`-returning thunk.  When set, emit gives the
      * closure the int64 carrier return type and heap-boxes the aggregate result
-     * (the inverse box the lens's poly-carrier boundary already unboxes).  Gated
-     * on --enable=vl-wide-functor; never set for carrier-compatible functors. */
+     * (the inverse box the lens's poly-carrier boundary already unboxes).  Set
+     * unconditionally for wide functors since VBM4 (never for carrier-compatible
+     * ones); the VBM3 resolve pass CLEARS it on closures whose consumer resolves
+     * uniquely to a mono lens (--enable=vl-wide-mono), so those return `(f A)` by
+     * value straight into the by-value mono body. */
     bool                 box_aggregate_result;
 };
 

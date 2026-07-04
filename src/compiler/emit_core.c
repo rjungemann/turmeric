@@ -3310,6 +3310,21 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
      * stack pointer to an int64-by-value formal. */
     if (type_is_transparent_int_newtype(concrete_ty)) return src_str;
 
+    /* VBM2b (van-laarhoven-monomorphization): inside a monomorphized spec body a
+     * by-value `(f a)` receiver may still be spelled with its generic tyvar arg
+     * (`(Identity A)`), which `emit_type_c_name` collapses to the int64 carrier
+     * -- so the spill temp comes out `int64_t __t = i` and mistypes a real
+     * aggregate.  When the active spec resolves that tyvar-headed app to a
+     * concrete by-value ADT app, spill at the concrete type instead.  No-op
+     * outside a spec, and for an already-concrete or still-unbound app (the
+     * resolve is idempotent / leaves it non-concrete). */
+    if (ctx && ctx->current_abi_specialization && concrete_ty.kind == TY_APP &&
+        !type_app_is_concrete_adt(&concrete_ty)) {
+        Type resolved = emit_resolve_type(ctx, concrete_ty);
+        if (resolved.kind == TY_APP && type_app_is_concrete_adt(&resolved))
+            concrete_ty = resolved;
+    }
+
     /* M3 audit: identify which call site reaches the bridge; trace tagged so
      * the per-fixture cost of removing it is measurable.  Enable with
      * TUR_M3_AUDIT=1. */

@@ -2,15 +2,25 @@
 title: Path B -- by-value HKT monomorphization across the van Laarhoven lens
   boundary (retire the carrier round-trip for wide functors)
 category: Planning
+status: LANDED / ARCHIVED (2026-07-04). All four slices shipped -- VBM1 (spec
+  discovery), VBM2a/VBM2b (cross-procedural resolution + by-value body emit),
+  VBM3 (dispatch redirect + residual (f A) box removal), and VBM4 (graduate
+  `vl-wide-functor` to default-on, retire TUR-E0309). Wide by-value functors now
+  work at the van Laarhoven lens boundary unconditionally, and `--enable=vl-wide-mono`
+  makes a uniquely-resolved lens site zero-overhead by value. The ONE remaining
+  item -- consumer monomorphization for ambiguous lens params, then retiring
+  `--enable=vl-wide-mono` and deleting the Path A wide branch -- is carried
+  forward in the successor plan
+  [`van-laarhoven-consumer-mono-plan.md`](van-laarhoven-consumer-mono-plan.md).
+  This plan is archived; see the per-slice Status blocks below for what landed.
 description: Follow-up to van-laarhoven-wide-functor-carrier-plan (Path A / WF1-WF4).
   Path A boxes a wide by-value functor into the mode-B int64 carrier at each lens
   crossing so `view`/`set`/`over` and composition WORK with a `:copy`-struct
   functor -- but every crossing pays one heap box + copy + free. Path B retires
   those crossings by monomorphizing the lens body per concrete instantiating
   functor: `(f a)` is spelled by value end to end, no carrier, no box. MEDIUM-HIGH.
-  Sliced. Deferred until Path A ships and a profile shows the box/unbox on a hot
-  path; this plan is the pre-committed shape so the deferral is a decision with a
-  trigger, not an indefinite punt.
+  Sliced. All slices LANDED 2026-07-04; the consumer-mono + flag-retirement tail
+  moved to van-laarhoven-consumer-mono-plan.md.
 ---
 
 # Path B -- by-value HKT monomorphization across the van Laarhoven lens boundary
@@ -137,6 +147,31 @@ during method-level tyvar rewrite. Contained by keeping every read behind
 
 ### Slice VBM2 -- emit a specialized lens body per `(f, a, b, s)` (folded into `--enable=vl-wide-mono`)
 
+> **Status (2026-07-04).** Split in practice into VBM2a + VBM2b:
+> - **VBM2a -- cross-procedural spec resolution: LANDED.** VBM1 keyed specs on
+>   the *abstract* lens param `l` (the concrete lens FnDef is not resolvable at
+>   the `(l g s)` pin -- OQ #1/#2). VBM2a's `mono_specs_resolve_program`
+>   (`src/compiler/mono_specs.c`) walks the elaborated program and joins each
+>   abstract spec to the concrete lens passed at every top-level call of its
+>   enclosing fn, collapsing (`set-px`, `over-px`) @ `Identity` to one concrete
+>   key `lens=point-x f=Identity focus=int whole=Point`. Registry-only (codegen
+>   unchanged); reviewable via `--dump-mono-specs` (fixture
+>   `van-laarhoven-lens-wide-mono-resolve`).
+> - **VBM2b -- per-spec by-value body emit: DONE (emit).** `emit_program` drives
+>   the shared ABI-spec body emit per concrete spec, OPENING the MB2.5 carve-out
+>   (`src/compiler/emit_module.c:2209`) for the mono lens body so the `fmap`
+>   dispatch monomorphizes to by-value instance twins.
+>   `point_x__mono_<hash>` returns `(Identity Point)` BY VALUE with by-value
+>   `fmap` / `run-id` / `mk-id` twins -- **the `(f S)` result heap box is
+>   eliminated** (the whole helper chain lowered by value: the receiver-element
+>   tyvar is recovered from the class method signature and bound, and four
+>   shared-emit unbox/deref sites are gated on a new `is_vl_wide_mono` flag).
+>   Emits correct, compiling, box-free C; **full suite 1940 passed, 0 failed**.
+>   The mono body is emitted but not yet CALLED -- VBM3 redirects the lens call
+>   sites to it (until then Path A drives dispatch, so `set-px`/`over-px`/`view-px`
+>   still return 3/30/4/99). See
+>   [../reported/vbm2-byvalue-lens-body-emit.md](../reported/vbm2-byvalue-lens-body-emit.md).
+
 **Goal.** For each spec key registered in VBM1, emit one lens body in which
 `(f a)`, `(f b)`, `(f S)`, and the functor-wrapping `g : (-> A (f A))` are
 spelled by value with the concrete `f` substituted. The dispatch to `fmap`
@@ -179,6 +214,25 @@ site and share it, rather than re-invent per-body substitution.
 
 ### Slice VBM3 -- dispatch redirect: point lens call sites at the spec (folded into `--enable=vl-wide-mono`)
 
+> **Status (2026-07-04): DONE (+ residual (f A) box eliminated).** The `(l g s)`
+> poly-call emit now redirects a lens invocation whose consumer's lens param
+> uniquely resolves to a wide-by-value mono lens straight to
+> `<lens>__mono_<hash>((int64)g, (int64)s)`, dropping the dict and skipping the
+> whole carrier box/unbox scaffold -- `set-px`/`over-px` emit
+> `run_id__spec(point_x__mono(g, s))` with **no `(f S)` box and zero
+> `dict_Functor_Identity_singleton` uses**.  No consumer monomorphization was
+> needed: the redirect is a local poly-call rewrite keyed on the lens param's
+> `Binding *` (recorded by VBM2a, with an `ambiguous` guard when a consumer takes
+> more than one lens).  The residual `(f A)` `g` box is ALSO gone: the mono body
+> takes a BY-VALUE `g`, and the resolve walk clears `box_aggregate_result` on the
+> `g` closure of every consumer that resolves uniquely and unambiguously, so
+> `__fn_1305`/`__fn_1314` return `tur_adt_Identity__int` by value (no `malloc`)
+> and `point_x__mono` consumes it with no unbox.  Consumers that don't resolve
+> uniquely keep the boxed `g` for Path A.  Full suite 1940 passed, 0 failed;
+> fixtures return 3/30/4/99.  The only remaining `malloc` in the mono body is the
+> genuine setter closure env.  See
+> [../reported/vbm2-byvalue-lens-body-emit.md](../reported/vbm2-byvalue-lens-body-emit.md).
+
 **Goal.** At every lens invocation whose resolved `f` is a wide by-value
 functor, the emitted C call targets the `__mono_<hash>` spec directly -- no
 carrier dict clone, no fat-boxed `g`, no `emit_agg_box`/`emit_agg_unbox` around
@@ -212,10 +266,40 @@ never both.
 
 ### Slice VBM4 -- graduate `--enable=vl-wide-functor`; retire Path A on the wide path (folded into `--enable=vl-wide-mono` for one release, then default-on)
 
+> **Status (2026-07-04): DONE.** `vl-wide-functor` graduated to default-on:
+> wide by-value aggregate functors at the van Laarhoven lens boundary are now
+> ALWAYS accepted (no flag) and **TUR-E0309 is retired** (the diagnostic is
+> deleted from `elab_poly_call`). The `EXPERIMENTS[]` row and the
+> `g_opt_vl_wide_functor` global are gone; every former gate (the wide-allow
+> pin, the WF1 `g`-box, the WF3 double-unbox guard) is now unconditional, still
+> narrowed by the wide-ness test (non-opaque, non-:heap flat-product), so
+> carrier-compatible functors are untouched. `--enable=vl-wide-mono` (Path B)
+> layers the zero-overhead redirect on top.
+>
+> **Deviation from the letter of the plan (deliberate, safer).** Path A's
+> box/unbox on the wide branch is **kept, not deleted.** Making Path A the
+> *unconditional default* is exactly what lets TUR-E0309 retire safely: every
+> wide functor -- redirected by Path B or not -- has a working path. Path B only
+> redirects lens sites that resolve *uniquely and unambiguously*; a lens used
+> with two distinct wide lenses (ambiguous) still needs the Path A carrier
+> bridge. Deleting Path A now would reintroduce a miscompile for that
+> unsupported-but-legal shape. Path A retirement stays tied to the deferred
+> `vl-wide-mono` default-on step (below), where consumer monomorphization would
+> cover the ambiguous case first.
+>
+> Fixtures: the former error fixture `errors/van-laarhoven-wide-byvalue-functor`
+> is relocated to `van-laarhoven-lens-wide-byvalue-accept` (runs a wide functor
+> with NO wide flag -> 99); every `van-laarhoven-lens-wide-*` fixture dropped
+> `vl-wide-functor` from its flags (`-mono`/`-mono-resolve` keep `vl-wide-mono`).
+> `docs/reported/van-laarhoven-functor-must-be-int-carrier.md` archived. Full
+> suite green.
+
 **Goal.** Once VBM1-VBM3 are on, the Path A box/unbox on the wide-functor
-branch is unreachable. Delete it, graduate `--enable=vl-wide-functor` to
-default-on (which retires TUR-E0309 for good), and eventually collapse
-`--enable=vl-wide-mono` itself.
+branch is unreachable *for uniquely-resolved sites*. Graduate
+`--enable=vl-wide-functor` to default-on (which retires TUR-E0309 for good),
+keep Path A as the fallback for non-uniquely-resolved sites, and eventually
+collapse `--enable=vl-wide-mono` itself -- deleting Path A at that point, once
+consumer monomorphization covers the ambiguous case.
 
 **Work.**
 
