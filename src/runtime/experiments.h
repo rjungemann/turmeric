@@ -39,16 +39,20 @@ const ExperimentDescriptor *experiment_at(size_t i);
 const ExperimentDescriptor *experiment_lookup(const char *name);
 
 /* How an experiment came to be enabled, for the `tur experiments` source
- * column ("CLI wins on conflict"). */
+ * column.  Numerically ascending == precedence lowest-to-highest, so
+ * "higher-numbered source wins" (see experiment_enable): CLI beats manifest
+ * beats user-config beats not-yet-set. */
 typedef enum ExperimentSource {
     XF_SRC_NONE = 0,
-    XF_SRC_MANIFEST,
-    XF_SRC_CLI,
+    XF_SRC_USER_CONFIG,   /* ~/.config/turmeric/experiments.tur      */
+    XF_SRC_MANIFEST,      /* project build.tur :experiments          */
+    XF_SRC_CLI,           /* --enable=<name> or LSP force-enable-all */
 } ExperimentSource;
 
 /* Turn an experiment on.  Returns false if `name` is not a known experiment
- * (the caller then emits TUR-E0310).  `src` records the origin; CLI overrides
- * a prior manifest enable but not vice-versa. */
+ * (the caller then emits TUR-E0310).  `src` records the origin; a
+ * higher-numbered source overrides a lower-numbered one (CLI beats manifest
+ * beats user-config), but never the reverse. */
 bool experiment_enable(const char *name, ExperimentSource src);
 
 /* True iff the named experiment is known and currently enabled. */
@@ -66,5 +70,22 @@ void experiment_warn_if_used(const char *name);
 /* Reset the once-per-compile warning dedup state.  Called at the start of
  * each compile (alongside diag_reset). */
 void experiment_reset_warnings(void);
+
+/* UC-2 (user-config-experiments-plan): read the user-level experiments file
+ * -- $XDG_CONFIG_HOME/turmeric/experiments.tur (fallback
+ * $HOME/.config/turmeric/experiments.tur, or %APPDATA%\turmeric\experiments.tur
+ * on Windows) -- and enable every name in its `:enable [...]` list at
+ * XF_SRC_USER_CONFIG.  A no-op that returns false when the file is absent or
+ * no home/config directory can be resolved.  An unknown *experiment name*
+ * exits the process with TUR-E0310 (the file path is included in the
+ * message), matching the manifest path's "typos surface immediately"
+ * contract.  An unknown *key* emits TUR-W0062 and is otherwise ignored
+ * (forward-compatible with future keys).
+ *
+ * Returns true iff a file was actually read.  Suppression -- skipping the
+ * read when a project manifest declares its own :experiments -- is decided
+ * by the caller before invoking this; see apply_user_config_experiments in
+ * main.c. */
+bool experiments_read_user_config(void);
 
 #endif /* TUR_EXPERIMENTS_H */

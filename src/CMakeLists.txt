@@ -438,6 +438,33 @@ set_target_properties(tur_ffi_dispatch_unit PROPERTIES
 )
 
 # ---------------------------------------------------------------------------
+# UC-2: user-level experiments file reader unit test
+# (docs/upcoming/user-config-experiments-plan.md).  Exercises
+# experiments_read_user_config against a temp $XDG_CONFIG_HOME.
+# ---------------------------------------------------------------------------
+add_executable(tur_experiments_user_config
+    ${CMAKE_SOURCE_DIR}/tests/unit/experiments_user_config.c
+    $<TARGET_OBJECTS:tur_core>
+)
+target_include_directories(tur_experiments_user_config PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_experiments_user_config PRIVATE
+    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_experiments_user_config PRIVATE -pthread
+    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+)
+target_link_libraries(tur_experiments_user_config PRIVATE m)
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_experiments_user_config PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur_experiments_user_config PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
+set_target_properties(tur_experiments_user_config PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
 # ACB: emit_carrier_bridge unit test
 # ---------------------------------------------------------------------------
 add_executable(tur_codegen_carrier_bridge

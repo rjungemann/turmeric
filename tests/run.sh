@@ -23,6 +23,18 @@ cd "$(dirname "$0")/.."
 # that has no such files, spuriously failing the whole suite.
 unset TUR_STDLIB_DIR
 
+# UC-3 (user-config-experiments-plan): the compiler now reads a user-level
+# experiments file at $XDG_CONFIG_HOME/turmeric/experiments.tur (fallback
+# $HOME/.config/turmeric/experiments.tur). A contributor whose real home
+# directory carries one would otherwise see local-only experiment enables
+# leak into the suite. Point XDG_CONFIG_HOME at an empty temp dir (and clear
+# HOME's fallback effect by keeping XDG set) so every run sees no user file.
+_TUR_EMPTY_XDG="$(mktemp -d "${TMPDIR:-/tmp}/tur-xdg-empty.XXXXXX")"
+export XDG_CONFIG_HOME="$_TUR_EMPTY_XDG"
+# NOTE: the EXIT trap that removes this dir is installed alongside the
+# RESULTS_DIR cleanup below (a later `trap ... EXIT` would otherwise replace
+# an earlier one).
+
 TUR="./build/tur"
 [ -x "$TUR" ] || { echo "tests: $TUR not built; run 'make' first" >&2; exit 2; }
 
@@ -143,7 +155,7 @@ if [ "$JOBS" -lt 1 ]; then JOBS=1; fi
 if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 
 RESULTS_DIR="$(mktemp -d -t tur-tests-results-XXXXXX)"
-trap 'rm -rf "$RESULTS_DIR"' EXIT
+trap 'rm -rf "$RESULTS_DIR" "$_TUR_EMPTY_XDG"' EXIT
 
 # A killed or interrupted run must NEVER print a success-looking summary.
 # Without this guard, a SIGINT/SIGTERM that the parent shell survives (e.g. the

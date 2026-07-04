@@ -604,6 +604,10 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
         } else if (strcmp(kw, "experiments") == 0) {
             /* XF1: opt-in experimental features for this spice. */
             parse_experiments(vf, &out->experiments, &out->n_experiments);
+            /* UC-3: record that the key was present even when the list is
+             * empty -- an empty :experiments [] still suppresses the
+             * user-level experiments file. */
+            out->has_experiments_key = true;
         } else if (strcmp(kw, "reader-macros") == 0) {
             /* RM4: vector of paths to reader-macro definition files. */
             parse_str_vec(vf, &out->reader_macros, &out->n_reader_macros);

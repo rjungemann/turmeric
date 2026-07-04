@@ -145,6 +145,11 @@ typedef struct PkgManifest {
      * time (CLI wins on conflict). An unknown name is a hard TUR-E0310 error. */
     char       **experiments;
     int          n_experiments;
+    /* UC-3 (user-config-experiments-plan): true iff the manifest carried an
+     * :experiments key at all -- even the empty list `:experiments []`.
+     * Distinguishes "no key" from "empty key"; the latter still suppresses
+     * the user-level ~/.config/turmeric/experiments.tur file (Goal 2). */
+    bool         has_experiments_key;
 } PkgManifest;
 
 /* ------------------------------------------------------------------ */
