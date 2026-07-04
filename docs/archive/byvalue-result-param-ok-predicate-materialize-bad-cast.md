@@ -8,11 +8,44 @@ severity: MEDIUM. Codegen defect. A well-typed program (`tur check` passes)
   through the carrier. The Option analogue (`some?` on an `(Option A)` param)
   does NOT trip it, so it blocks a natural Result consumer shape while Option
   works.
-status: OPEN. Filed 2026-07-04 while landing the if-join aggregate-cast fix
+status: RESOLVED 2026-07-04. Filed 2026-07-04 while landing the if-join
+  aggregate-cast fix
   (docs/archive/byvalue-option-if-join-function-call-arm-aggregate-cast.md).
   Independent of and pre-existing that fix -- it reproduces with no `if` join of
   calls, and on the pre-fix compiler.
 ---
+
+> **RESOLVED (2026-07-04).** Two argument-emission transforms were compounding
+> on a pass-by-pointer (`>16`-byte) Result parameter passed to a carrier-`:int`
+> sink (`ok?`/`ok-val`/`err?`/`err-val`):
+>
+> 1. the concrete->carrier arg bridge (the `adt_app_is_byvalue_product` /
+>    carrier-param block in `emit_expr.c`) spilled `T __t = r;` -- but `r` is
+>    already a `const T *` pointer, so `aggregate = pointer` (cc: invalid
+>    initializer); then
+> 2. the pass-by-ptr `(*(...))` deref (for callees that take the struct by
+>    value) wrapped the bridge's `(int64_t)(intptr_t)(&__t)` in another `*`.
+>
+> Root insight: a pass-by-pointer struct *parameter* is a pointer to the
+> by-value aggregate, which is *exactly* a carrier handle (the non-pbp bridge
+> path spills the value and hands back `&tmp` for the same reason). So the
+> crossing is a plain `(int64_t)(intptr_t)(r)` cast, no spill. The by-value
+> `tur_adt_Result__int__cstr` layout coincides with the carrier
+> `tur_result_box_t` (`{bool is_ok; int64_t; int64_t}`), so
+> `tur_is_ok`/`ok-val`/... read it correctly.
+>
+> Fix (`emit_expr.c`): in the carrier-param arg-bridge block, when the arg
+> `expr_is_pbp_param`, emit the pointer->int64 cast directly and set a
+> `pbp_carrier_cast` flag; the later pass-by-ptr `(*(...))` deref is guarded on
+> `!pbp_carrier_cast` so the two no longer compound. The deref still fires for a
+> genuine by-value-struct callee (Tuple3+ into inline-C/extern-C), where the
+> carrier cast never runs.
+>
+> Verified for `ok?`/`ok-val`/`err?`/`err-val` on `(Result int cstr)` and
+> `(Result cstr int)`, both ok and err values; the Option analogue still works.
+> Regression fixture: `tests/fixtures/byvalue-result-param-predicate/`. Suite:
+> 1934 passed, 0 failed. Paper trail:
+> [../archive/history/byvalue-result-param-ok-predicate-materialize-bad-cast.md](../archive/history/byvalue-result-param-ok-predicate-materialize-bad-cast.md).
 
 # By-value Result parameter + `ok?` predicate miscompiles
 

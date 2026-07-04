@@ -1,0 +1,20 @@
+;; byvalue-result-param-ok-predicate-materialize-bad-cast: consuming a by-value
+;; (Result A B) *parameter* with ok?/ok-val/err?/err-val must not miscompile the
+;; parameter materialization.  A (Result int cstr) is >16 bytes so it is passed
+;; by pointer (`const T *`); that pointer is already a valid carrier handle for
+;; the `:int`-sink predicates, so it crosses with a plain pointer->int64 cast --
+;; not a spill of the pointer as a value (`T tmp = r;`) compounded with a
+;; pass-by-ptr deref.  Result and its accessors are auto-preloaded.
+
+(defn classify [r : (Result int cstr)] : int
+  (if (ok? r) (ok-val r) -1))
+
+(defn is-err [r : (Result int cstr)] : int
+  (if (err? r) 1 0))
+
+(defn main [] : int
+  (println (classify (:: (ok 42) (Result int cstr))))     ; 42
+  (println (classify (:: (err "bad") (Result int cstr))))  ; -1
+  (println (is-err (:: (ok 42) (Result int cstr))))        ; 0
+  (println (is-err (:: (err "bad") (Result int cstr))))    ; 1
+  0)

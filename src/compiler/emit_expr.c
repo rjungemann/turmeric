@@ -3949,6 +3949,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     emit_arg = arg_expr->as.reinterpret_.expr;
                 }
                 char *raw = emit_value(ctx, body, emit_arg);
+                /* byvalue-result-param-ok-predicate-materialize-bad-cast: set
+                 * once a pass-by-pointer struct *parameter* argument has been
+                 * converted to the int64 carrier by a pointer cast (its C value
+                 * is already `const T *`, i.e. a pointer to the by-value
+                 * aggregate, which IS a valid carrier handle).  Suppresses the
+                 * later pass-by-ptr `(*(...))` deref (which is for callees that
+                 * take the struct by value), so the two do not compound into
+                 * `(*((int64_t)(intptr_t)(&tmp)))`. */
+                bool pbp_carrier_cast = false;
                 /* Phase HKT H3/H4: When a function-reference (TY_FN) is passed to an
                  * int64_t parameter, emit an explicit (int64_t)(intptr_t) cast so the
                  * generated C99 code is valid.  Function pointers cannot be implicitly
@@ -4256,9 +4265,29 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             fn_binding->type.as.fn.arg_full_types[param_idx]);
                     if (pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS ||
                         pk == TY_ADT || pk == TY_INT || app_param_carrier) {
-                        raw = emit_carrier_bridge(ctx, body, raw,
-                                                  CK_CONCRETE, CK_CARRIER,
-                                                  emit_arg->type);
+                        /* byvalue-result-param-ok-predicate-materialize-bad-cast:
+                         * a pass-by-pointer struct *parameter* (`r : (Result int
+                         * cstr)`, materialized in C as `const T *`) is already a
+                         * pointer to the by-value aggregate -- which is exactly a
+                         * carrier handle (the non-pbp branch of emit_carrier_bridge
+                         * spills the value and hands back `&tmp`).  So the crossing
+                         * is a plain pointer->int64 cast; the generic bridge would
+                         * instead spill `T tmp = r;` (aggregate = pointer -- a hard
+                         * cc error) and then the pass-by-ptr `(*(...))` deref below
+                         * would compound it.  Emit the cast directly and flag it so
+                         * that deref is skipped. */
+                        if (expr_is_pbp_param(ctx, emit_arg)) {
+                            Buf _pb; buf_init(&_pb);
+                            buf_printf(&_pb, "(int64_t)(intptr_t)(%s)", raw);
+                            free(raw);
+                            raw = strdup(_pb.data);
+                            buf_free(&_pb);
+                            pbp_carrier_cast = true;
+                        } else {
+                            raw = emit_carrier_bridge(ctx, body, raw,
+                                                      CK_CONCRETE, CK_CARRIER,
+                                                      emit_arg->type);
+                        }
                     }
                 }
                 /* CONV-S1 (seam-4): the non-parametric counterpart of the TY_APP
@@ -4573,7 +4602,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * expr_is_pbp_param is checked first (side-effect-free) as the
                  * primary gate before the type_struct_pass_by_ptr aggregate
                  * check. */
-                else if (!needs_fn_cast && emit_arg &&
+                else if (!needs_fn_cast && emit_arg && !pbp_carrier_cast &&
                          expr_is_pbp_param(ctx, emit_arg) &&
                          (matched_spec
                           ? type_kind_is_aggregate(matched_spec->arg_types[i].kind)
