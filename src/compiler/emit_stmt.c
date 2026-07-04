@@ -1,6 +1,5 @@
 /* emit_stmt.c -- statement-position C emission (emit_stmt and friends). */
 #include "emit_internal.h"
-#include "globals.h"   /* g_m7_hkt_enabled */
 #include "mangle.h"
 
 void emit_while_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
@@ -441,28 +440,21 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
              * (kind-*) instances the dict slot would reference a body that the
              * body-skip dropped.  Both halves key off emit_instance_is_live so
              * the dict initializer never references a skipped base/body (and
-             * vice versa).  HKT instances are gated on g_m7_hkt_enabled (legacy
-             * carrier path keeps them); ground instances apply unconditionally. */
+             * vice versa). */
             {
-                bool is_hkt = false;
-                if (tc->type_param_kinds) {
-                    for (uint8_t i = 0; i < tc->n_type_params; i++)
-                        if (tc->type_param_kinds[i] != KIND_STAR) { is_hkt = true; break; }
-                }
                 /* Skip the dict (struct + singleton) for a DEAD instance, in
                  * lockstep with emit_abi_fn_skip_generic (emit_module.c)
-                 * skipping its method bodies.  Both HKT (M7, gated on
-                 * g_m7_hkt_enabled) and ground (kind-*) instances key off the
-                 * same emit_instance_is_live, so the dict initializer never
-                 * references a skipped __inst_<Class>_<method>_<T> body and a
-                 * dead instance contributes neither dict nor body.  Ground
-                 * coverage closes the json Decode
-                 * `__inst_Decode_decode_int undeclared` miscompile (a ground
-                 * dict was previously emitted unconditionally while its body
-                 * could be dropped).  Ground instances like Eq are unaffected
-                 * unless genuinely dead (no method directly called). */
-                bool eligible = is_hkt ? g_m7_hkt_enabled : true;
-                if (eligible && !emit_instance_is_live(ctx, inst))
+                 * skipping its method bodies.  Both HKT (M7) and ground
+                 * (kind-*) instances key off the same emit_instance_is_live,
+                 * so the dict initializer never references a skipped
+                 * __inst_<Class>_<method>_<T> body and a dead instance
+                 * contributes neither dict nor body.  Ground coverage closes
+                 * the json Decode `__inst_Decode_decode_int undeclared`
+                 * miscompile (a ground dict was previously emitted
+                 * unconditionally while its body could be dropped).  Ground
+                 * instances like Eq are unaffected unless genuinely dead (no
+                 * method directly called). */
+                if (!emit_instance_is_live(ctx, inst))
                     break;  /* skip emitting the dead instance's dict */
             }
 

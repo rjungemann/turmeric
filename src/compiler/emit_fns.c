@@ -1,6 +1,6 @@
 /* emit_fns.c -- function-definition C emission (emit_fn_def). */
 #include "emit_internal.h"
-#include "globals.h"   /* M7: g_m7_hkt_enabled (flag-gated by-value HKT dispatch) */
+#include "globals.h"   /* g_cps_path, g_panic_trace */
 
 /* ============================================================================
  * CF1: Self-tail-call optimization (self-TCO).
@@ -494,7 +494,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 fd->binding->name->name &&
                 strncmp(fd->binding->name->name, "__inst_", 7) == 0;
             Type rt_resolved = emit_resolve_type(ctx, rt);
-            if (g_m7_hkt_enabled && is_inst &&
+            if (is_inst &&
                 rt_resolved.kind == TY_APP &&
                 !type_is_heap_struct(rt_resolved) &&
                 type_has_concrete_codegen_layout(&rt_resolved)) {
@@ -717,11 +717,11 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 fd->binding && fd->binding->name && fd->binding->name->name &&
                 strncmp(fd->binding->name->name, "__inst_", 7) == 0;
             Type rt_resolved = emit_resolve_type(ctx, rt);
-            /* M7 layer-4 (flag-gated): a per-(f, A) by-value HKT instance-method
-             * spec returns the resolved struct by value (keep in sync with the
+            /* M7 layer-4: a per-(f, A) by-value HKT instance-method spec
+             * returns the resolved struct by value (keep in sync with the
              * body-side return-type branch and the forward decl in
              * emit_module.c). */
-            if (g_m7_hkt_enabled && is_instance_method &&
+            if (is_instance_method &&
                 rt_resolved.kind == TY_APP &&
                 !type_is_heap_struct(rt_resolved) &&
                 type_has_concrete_codegen_layout(&rt_resolved)) {
@@ -1352,13 +1352,13 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                  * The signature emit at L412 + the forward decl at
                  * emit_module.c:1853 use the same gate; keep them in sync. */
                 Type rt_resolved = emit_resolve_type(ctx, rt);
-                /* M7 layer-4 (flag-gated): a per-(f, A) by-value HKT
-                 * instance-method spec returns the resolved struct (`Option__int`)
-                 * BY VALUE, not the int64 carrier -- this is the whole point of
-                 * the spec.  Detect it by the concrete by-value TY_APP result
-                 * (same guards as construct_recovered_byvalue) and skip the
-                 * carrier spill below. */
-                if (g_m7_hkt_enabled && is_inst &&
+                /* M7 layer-4: a per-(f, A) by-value HKT instance-method spec
+                 * returns the resolved struct (`Option__int`) BY VALUE, not the
+                 * int64 carrier -- this is the whole point of the spec.  Detect
+                 * it by the concrete by-value TY_APP result (same guards as
+                 * construct_recovered_byvalue) and skip the carrier spill
+                 * below. */
+                if (is_inst &&
                     rt_resolved.kind == TY_APP &&
                     !type_is_heap_struct(rt_resolved) &&
                     type_has_concrete_codegen_layout(&rt_resolved)) {
@@ -1466,36 +1466,33 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             /* M7 (flag-gated): in a GENERIC carrier base instance method whose
              * declared result is a parameterized struct with a free element
              * tyvar -- e.g. `Decode`'s `(Result a cstr)` -- `rt` resolves to the
-             * int64 carrier (no instance specialization active here).  But under
-             * the flag the concrete instance body recovers its construct BY VALUE
+             * int64 carrier (no instance specialization active here).  But the
+             * concrete instance body recovers its construct BY VALUE
              * (`(ok (make-struct Point ...))` -> `ok__spec` returning
              * `Result__Point__cstr`), so `ret_val` is a by-value aggregate.
              * Spilling it as `sizeof(int64_t)` + `*(int64_t*)p = <struct>` is a
              * hard cc error (aggregate into integer).  When the body's own type
              * is a concrete non-carrier aggregate, spill THAT type so the malloc
-             * size and the cast match the actual value.  Flag-off the body stays
-             * a carrier int64 here, so this is inert (byte-identical) flag-off.
+             * size and the cast match the actual value.
              * See docs/reported/m7-hkt-bimap-... family / instance-method-
              * return-carrier-bridge fixture. */
-            if (g_m7_hkt_enabled && struct_cty &&
+            if (struct_cty &&
                 strcmp(struct_cty, "int64_t") == 0 && fd->body) {
                 const char *body_cty = emit_type_c_name(ctx, fd->body->type);
                 if (body_cty && strcmp(body_cty, "int64_t") != 0)
                     struct_cty = body_cty;
             }
-            if (g_m7_hkt_enabled && struct_cty &&
+            if (struct_cty &&
                 strcmp(struct_cty, "int64_t") == 0) {
-                /* M7 (flag-gated): the body already produced the carrier int64
-                 * handle -- e.g. a partial-application `(Result _ E)` instance
-                 * whose pure-Turmeric body lowered to the carrier `ok`/`err` (the
-                 * spill type stays int64 because the result element doesn't ground
-                 * by value).  There is nothing to box: malloc'ing another int64
-                 * and storing the handle into it DOUBLE-boxes (the by-value
-                 * consumer then reads a pointer-to-handle as the struct -> garbage,
-                 * the `(Result _ E)` fmr returning 0 for 42).  Return the carrier
-                 * value directly.  Gated on the flag because the legacy carrier
-                 * path (flag-off) relies on the existing spill shape (range-*
-                 * GADT fixtures). */
+                /* M7: the body already produced the carrier int64 handle --
+                 * e.g. a partial-application `(Result _ E)` instance whose
+                 * pure-Turmeric body lowered to the carrier `ok`/`err` (the
+                 * spill type stays int64 because the result element doesn't
+                 * ground by value).  There is nothing to box: malloc'ing another
+                 * int64 and storing the handle into it DOUBLE-boxes (the
+                 * by-value consumer then reads a pointer-to-handle as the struct
+                 * -> garbage, the `(Result _ E)` fmr returning 0 for 42).
+                 * Return the carrier value directly. */
                 buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
             } else {
                 buf_printf(file,

@@ -2414,7 +2414,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     }
 
     if (!bindings || n_bindings == 0) {
-        /* M7 layer-4 (flag-gated): a 0-arg `#{Construct}` (`(none)`) in an HKT
+        /* M7 layer-4: a 0-arg `#{Construct}` (`(none)`) in an HKT
          * instance-method body has no abi_bindings of its own, but when scanned
          * inside an active by-value HKT instance-method spec the
          * construct_recovered_byvalue path below recovers it by value from the
@@ -2422,7 +2422,6 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
          * `none__spec` is interned (otherwise the body emits the carrier `none()`
          * and the by-value `Option__int` slot misreads it). */
         bool m7_construct_in_byval_spec =
-            g_m7_hkt_enabled &&
             call->as.call_.fn_binding &&
             call->as.call_.fn_binding->is_construct_template &&
             !call->as.call_.fn_expr &&
@@ -2856,7 +2855,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * bindings recovers the concrete `(ReF bool)` -- a parametric ADT app.  This
      * is the producer-side companion of A: it lets the by-value-ADT abi_changes
      * gate below fire so the inner fmap is monomorphized per element. */
-    if (!result_type_override && g_m7_hkt_enabled && fd && fd->owner_instance &&
+    if (!result_type_override && fd && fd->owner_instance &&
         generic_result.kind == TY_APP && bindings && n_bindings > 0 &&
         !(result_type.kind == TY_APP && type_app_is_concrete_adt(&result_type))) {
         Type recovered = emit_abi_instantiate_type(
@@ -3155,7 +3154,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * spec body then resolves its constructs to `ctor_*__bool` under the active
      * element bindings.  int/cstr elements are 8-byte and layout-identical to the
      * carrier, but minting a (dedup'd) spec for them is still correct. */
-    if (!abi_changes && g_m7_hkt_enabled && fd && fd->owner_instance &&
+    if (!abi_changes && fd && fd->owner_instance &&
         result_type.kind == TY_APP && type_app_is_concrete_adt(&result_type) &&
         !emit_abi_type_has_concrete_named_tyvar(&result_type)) {
         abi_changes = true;
@@ -3396,13 +3395,13 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         }
     }
 
-    /* M7 layer-4 (flag-gated): a by-value HKT instance-method spec replaces the
-     * direct dispatch call, so the carrier base method would otherwise be
-     * skipped by emit_abi_fn_skip_generic -- but the per-instance dispatch dict
-     * still references it (indirect/polymorphic HKT dispatch keeps the carrier
-     * ABI per the M6/M7 carve-out).  Note a carrier call so the base stays
-     * emitted and the dict's `int64_t (*)(...)` field resolves. */
-    if (g_m7_hkt_enabled && fd && fd->owner_instance &&
+    /* M7 layer-4: a by-value HKT instance-method spec replaces the direct
+     * dispatch call, so the carrier base method would otherwise be skipped by
+     * emit_abi_fn_skip_generic -- but the per-instance dispatch dict still
+     * references it (indirect/polymorphic HKT dispatch keeps the carrier ABI
+     * per the M6/M7 carve-out).  Note a carrier call so the base stays emitted
+     * and the dict's `int64_t (*)(...)` field resolves. */
+    if (fd && fd->owner_instance &&
         result_type.kind == TY_APP &&
         !type_is_heap_struct(result_type) &&
         type_has_concrete_codegen_layout(&result_type)) {
@@ -4541,7 +4540,7 @@ static bool emit_abi_fn_skip_generic(const EmitCtx *ctx, const Expr *e) {
             for (uint8_t i = 0; i < tc->n_type_params; i++)
                 if (tc->type_param_kinds[i] != KIND_STAR) { is_hkt = true; break; }
         }
-        if (g_m7_hkt_enabled && is_hkt) {
+        if (is_hkt) {
             /* Phase 5 carrier-bridge deletion -- dead-instance elimination: an
              * auto-preloaded HKT instance carrier base used to be kept
              * unconditionally (the dict singleton references it).  But when the
@@ -4824,12 +4823,12 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
          * box_aggregate_result branch so the spec forward decl agrees with the
          * definition (which heap-boxes the by-value spec result). */
         buf_puts(out, "int64_t");
-    } else if (g_m7_hkt_enabled && is_instance_method &&
+    } else if (is_instance_method &&
         spec->result_type.kind == TY_APP &&
         !type_is_heap_struct(spec->result_type) &&
         type_has_concrete_codegen_layout(&spec->result_type)) {
-        /* M7 layer-4 (flag-gated): per-(f, A) by-value HKT instance-method spec
-         * returns the resolved struct by value (sync with emit_fns.c). */
+        /* M7 layer-4: per-(f, A) by-value HKT instance-method spec returns the
+         * resolved struct by value (sync with emit_fns.c). */
         buf_puts(out, type_c_name(spec->result_type));
     } else if (is_instance_method && type_uses_carrier_abi(spec->result_type)
         && spec->typeclass_inst == NULL) {

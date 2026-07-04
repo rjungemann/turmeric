@@ -562,7 +562,7 @@ static const Symbol *class_type_param_match(const char *kw_name, uint32_t kw_len
     return NULL;
 }
 
-/* M7 HKT (flag-gated by g_m7_hkt_enabled): is `sym` a candidate method-level
+/* M7 HKT: is `sym` a candidate method-level
  * type variable -- a lowercase-leading symbol that is neither a primitive type
  * keyword, a special type-form head (fn/c-fn/void/any), nor a class type param?
  *
@@ -665,14 +665,11 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
      * monadic shapes (fn returning an applied HKT type) hit it.  See
      * docs/reported/m7-hkt-fn-returning-applied-type-kind-mismatch.md. */
     Kind *eff_kinds = (Kind *)class_type_param_kinds;
-    /* M7: collecting method-level element tyvars is a PARSE concern, independent
-     * of the by-value EMIT flag.  Un-gated so a typed HKT class signature
-     * (`(foldr [ta : (t a) ...] : b)`) parses in BOTH flag states -- flag-off it
-     * still parses and the emit treats the element types as the int64 carrier
-     * (the by-value emit paths remain gated on g_m7_hkt_enabled).  This is what
-     * lets a stdlib sig be migrated to the typed form without breaking the
-     * TUR_M7_HKT=0 opt-out's parse.  Inert for existing classes whose method
-     * signatures contain no method-level tyvars (eff_tp == class params). */
+    /* M7: collecting method-level element tyvars is a PARSE concern.  A typed
+     * HKT class signature (`(foldr [ta : (t a) ...] : b)`) parses and the
+     * by-value emit paths pick up the element types.  Inert for existing
+     * classes whose method signatures contain no method-level tyvars (eff_tp ==
+     * class params). */
     {
         enum { M7_MAX_TP = 16 };
         const Symbol **buf =
@@ -3286,13 +3283,13 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                 }
             }
         }
-        /* M7 layer 0 (flag-gated): an HKT-applied return like `(g b)` arrives as
+        /* M7 layer 0: an HKT-applied return like `(g b)` arrives as
          * TY_APP(TY_TYVAR g, TY_TYVAR b).  Substitute the HKT class param in the
          * application HEAD (`g`) with this instance's constructor (type_args[ti],
          * e.g. Option), leaving the element tyvar (`b`) abstract for per-call
          * refinement.  Result: `(Option b)`.  Only the outermost head is
          * rewritten (the common `(f a)` / `(f b)` shape). */
-        else if (g_m7_hkt_enabled && return_type.kind == TY_APP &&
+        else if (return_type.kind == TY_APP &&
                  return_type.as.app.fn &&
                  return_type.as.app.fn->kind == TY_TYVAR &&
                  return_type.as.app.fn->as.tyvar_.name) {
@@ -3537,14 +3534,13 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                      * (e.g. `comp [f g] : a`, whose untyped params default to the
                      * carrier): the arrow instance head makes the params arrows. */
                     if (param_was_tyvar_subst) {
-                        /* M7 fix direction 1 (flag-gated): box any fn that sits
-                         * in HKT-element position of the body param type, so
+                        /* M7 fix direction 1: box any fn that sits in
+                         * HKT-element position of the body param type, so
                          * calling an HKT-wrapped function (`((.value ff) x)` in
                          * the Applicative `ap` shape) fat-dispatches through the
                          * box instead of bare-calling the box address. */
-                        if (g_m7_hkt_enabled)
-                            elab_param_type = m7_box_hkt_element_fns(e->arena,
-                                                                     elab_param_type);
+                        elab_param_type = m7_box_hkt_element_fns(e->arena,
+                                                                 elab_param_type);
                         /* The substituted full type (elab_param_type) is what the
                          * method body sees; lower the ABI/signature type to the
                          * int64 carrier for applied/parametric types, matching the
@@ -3620,7 +3616,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                      * (Monad `bind`, Traversable `traverse`) unpacks its wrapped
                      * result through the carrier and regresses under the
                      * tur_poly_fn_t switch, so it stays as-is. */
-                    if (g_m7_hkt_enabled && !param_is_poly &&
+                    if (!param_is_poly &&
                         param_type.kind == TY_FN) {
                         param_is_poly = true;
                     }
@@ -3758,11 +3754,11 @@ Expr *elab_definstance(Elab *e, const Form *call) {
             *rft = return_type;
             fn_type.as.fn.result_full_type = rft;
         }
-        /* M7 layer 2 (flag-gated): carry an HKT-applied TY_APP return (`(Option b)`
-         * after layer-0 head substitution) through result_full_type so the call
-         * site receives the named applied head + element tyvar to refine, instead
-         * of an anonymous `(type-app ? ?)`. */
-        else if (g_m7_hkt_enabled && return_type.kind == TY_APP) {
+        /* M7 layer 2: carry an HKT-applied TY_APP return (`(Option b)` after
+         * layer-0 head substitution) through result_full_type so the call site
+         * receives the named applied head + element tyvar to refine, instead of
+         * an anonymous `(type-app ? ?)`. */
+        else if (return_type.kind == TY_APP) {
             Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
             *rft = return_type;
             fn_type.as.fn.result_full_type = rft;
@@ -4589,16 +4585,16 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
             out->as.call_.abi_bindings = bindings;
             out->as.call_.n_abi_bindings = total;
         }
-        /* M7 layer-4 (flag-gated): a return-directed HKT method -- Applicative
-         * `pure`/`wrap`, `[x : a] : (f a)` -- has its class var `f` ONLY in the
-         * result, so the instance is picked from the ascribed return type
-         * (`bound` = the constructor, e.g. Option) and the element `a` is
-         * recovered from the argument types.  Mirror the receiver-dispatch path's
-         * by-value spec interning (elab_method_call) so the instance method emits
-         * a by-value `(Option int)` return instead of the int64 carrier (which
-         * the by-value consumer would then misread -> silent miscompile).  Gated
-         * on a by-value-constructible body, exactly as the receiver path is. */
-        if (g_m7_hkt_enabled && is_hkt && tc->n_type_params >= 1 &&
+        /* M7 layer-4: a return-directed HKT method -- Applicative `pure`/`wrap`,
+         * `[x : a] : (f a)` -- has its class var `f` ONLY in the result, so the
+         * instance is picked from the ascribed return type (`bound` = the
+         * constructor, e.g. Option) and the element `a` is recovered from the
+         * argument types.  Mirror the receiver-dispatch path's by-value spec
+         * interning (elab_method_call) so the instance method emits a by-value
+         * `(Option int)` return instead of the int64 carrier (which the by-value
+         * consumer would then misread -> silent miscompile).  Gated on a
+         * by-value-constructible body, exactly as the receiver path is. */
+        if (is_hkt && tc->n_type_params >= 1 &&
             tc->type_params[0] && impl->body &&
             impl->body->kind != EX_INLINE_C &&
             m7_body_constructs_byvalue(impl->body)) {
@@ -6041,7 +6037,7 @@ resolved_user_fallback:;
      * `extract`).  An unmigrated stdlib class declaring a `: int` carrier return
      * classifies as neither -> stays on the uniform carrier dispatch. */
     const TypeClassMethod *m7_cm = NULL;
-    if (g_m7_hkt_enabled && best_inst && best_inst->typeclass) {
+    if (best_inst && best_inst->typeclass) {
         TypeClass *tc0 = best_inst->typeclass;
         for (uint8_t mi = 0; mi < tc0->n_methods; mi++)
             if (tc0->methods[mi].name &&
@@ -6058,7 +6054,7 @@ resolved_user_fallback:;
           m7_body_constructs_byvalue(best_method->body)) ||
          (m7_result_is_bare_elem &&
           m7_body_returns_byvalue_element(best_method->body)));
-    if (g_m7_hkt_enabled && best_inst && best_inst->typeclass &&
+    if (best_inst && best_inst->typeclass &&
         best_method->binding->type.kind == TY_FN && m7_cm &&
         (m7_result_is_applied || m7_result_is_bare_elem)) {
         const TypeClassMethod *cm = m7_cm;
@@ -6228,19 +6224,19 @@ resolved_user_fallback:;
             out->as.call_.abi_bindings = bindings;
             out->as.call_.n_abi_bindings = total;
         }
-        /* M7 layer-4 prep (flag-gated): for an HKT class, attach the class var
+        /* M7 layer-4 prep: for an HKT class, attach the class var
          * (`g -> Option`) plus the element tyvars collected by layers 1+3
          * (`a -> int`, `b -> int`) as the dispatch call's abi_bindings, so
          * emit_abi_register_call can mint a per-(f, A) by-value instance-method
          * spec instead of falling through to the carrier-double-boxing path. */
-        /* M7 layer-4 (flag-gated): only by-value-expressible (pure-Turmeric)
-         * instance bodies can be monomorphized by value.  Carrier inline-C
-         * instance bodies (the current stdlib HKT instances) must stay on the
-         * uniform-carrier dispatch until Phase 4.2 rewrites them; attaching the
-         * element bindings to them would mint a by-value spec whose signature
-         * contradicts the carrier inline-C body.  Gate on the body kind
-         * (m7_body_byvalue_ok, computed up front above). */
-        if (g_m7_hkt_enabled && is_hkt && m7_body_byvalue_ok &&
+        /* M7 layer-4: only by-value-expressible (pure-Turmeric) instance bodies
+         * can be monomorphized by value.  Carrier inline-C instance bodies (the
+         * current stdlib HKT instances) must stay on the uniform-carrier
+         * dispatch until Phase 4.2 rewrites them; attaching the element bindings
+         * to them would mint a by-value spec whose signature contradicts the
+         * carrier inline-C body.  Gate on the body kind (m7_body_byvalue_ok,
+         * computed up front above). */
+        if (is_hkt && m7_body_byvalue_ok &&
             (m7_byvalue_grounded || m7_symbolic_elem) &&
             tc->n_type_params >= 1 && tc->type_params[0]) {
             uint8_t total = (uint8_t)(1 + m7_nb + 4);  /* +4: struct-param grounding */
