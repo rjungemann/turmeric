@@ -2844,6 +2844,30 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     free(result);
                     result = unboxed;
                 }
+                /* hrt-poly-call-nonint-return-int-conversion: the generic carrier
+                 * `.fn` field is typed int64_t, so a poly call whose result is a
+                 * pointer-class type (cstr, ptr<T>, rc/ref, ...) yields an
+                 * int64_t-typed expression that flows into a pointer C slot and
+                 * trips -Wint-conversion.  Cast the int64 carrier result back to
+                 * the concrete pointer type through intptr_t, mirroring the cast
+                 * the phase_f_concrete branch already applies to `.fn`.  Correct
+                 * on LP64 (same width); silences the warning and is portable. */
+                if (!phase_f_concrete) {
+                    TypeKind rk = emit_resolve_type(ctx, e->type).kind;
+                    bool ptr_class = (rk == TY_CSTR || rk == TY_PTR_VOID ||
+                                      rk == TY_RC || rk == TY_REF ||
+                                      rk == TY_WEAK || rk == TY_REF_IMMUT ||
+                                      rk == TY_REF_MUT);
+                    if (ptr_class) {
+                        Buf c; buf_init(&c);
+                        buf_printf(&c, "((%s)(intptr_t)(%s))",
+                                   emit_type_c_name(ctx, e->type), result);
+                        buf_putc(&c, '\0');
+                        free(result);
+                        result = strdup(c.data);
+                        buf_free(&c);
+                    }
+                }
                 for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
                 free(arg_strs);
                 free(fn_name);

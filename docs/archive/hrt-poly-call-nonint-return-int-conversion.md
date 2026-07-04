@@ -65,3 +65,23 @@ already applies to `.fn`. Alternatively, broaden `type_kind_is_poly_concrete`
 to admit `cstr`/`ptr` so those returns take the already-correct
 `phase_f_concrete` cast path -- but that also changes argument handling, so the
 narrower result-cast fix is lower risk.
+
+## Resolution
+
+Took the narrower result-cast direction in `src/compiler/emit_expr.c`, in the
+`is_poly_call` block right after the generic-path `result` is built. When
+`!phase_f_concrete` and the resolved `e->type` kind is a pointer-class kind
+(`TY_CSTR`, `TY_PTR_VOID`, `TY_RC`, `TY_REF`, `TY_WEAK`, `TY_REF_IMMUT`,
+`TY_REF_MUT`), the int64 carrier result is wrapped as
+`((<ret>)(intptr_t)(<call>))`, giving the expression the concrete pointer C
+type. This covers both the generic unary and N-ary branches (both build the
+same `result`) and sits after the by-value-aggregate unbox (pointer-class and
+by-value ADT are mutually exclusive, so no interaction).
+
+The emitted call for the minimal repro is now
+`((const char *)(intptr_t)(f.fn(f.env, (int64_t)(INT64_C(42)))))` -- no
+`-Wint-conversion`.
+
+Regression fixture: `tests/fixtures/hrt-poly-call-cstr-result/` covers both a
+unary and a 2-ary poly-call returning `cstr`. Full suite green
+(1932 passed, 0 failed).
