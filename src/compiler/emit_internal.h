@@ -345,6 +345,10 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                           CarrierKind src_ck, CarrierKind sink_ck,
                           Type concrete_ty);
 
+/* VBM3: append the `<lens>__mono_<hash>` symbol (shared by the by-value lens
+ * body emit and the poly-call redirect). */
+void emit_vl_mono_name(Buf *out, const char *lens_name, unsigned long long hash);
+
 /* Like emit_carrier_bridge, but for a CK_CONCRETE -> CK_CARRIER crossing whose
  * carrier value is STORED in a heap container that outlives the current
  * expression (e.g. vec-push! / map-set! / set-add! of a by-value aggregate

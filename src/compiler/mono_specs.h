@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdio.h>
+#include <stdbool.h>
 
 /* VBM1/VBM2 (docs/upcoming/van-laarhoven-monomorphization-plan.md): the by-value
  * HKT monomorphization spec registry.
@@ -37,7 +38,7 @@
 void   mono_spec_register(const char *enclosing_fn, const char *callee,
                           const char *functor_name, const char *focus_ty,
                           const char *whole_ty, const char *tyvar,
-                          const void *functor_ty);
+                          const void *functor_ty, const void *lensparam_binding);
 
 /* Number of distinct ABSTRACT keys registered this compile. */
 size_t mono_spec_count(void);
@@ -70,6 +71,14 @@ unsigned long long mono_spec_concrete_get(size_t i, const char **lens,
 unsigned long long mono_spec_concrete_emit_info(size_t i, const void **lens_fn,
                                                 const char **tyvar,
                                                 const void **functor_ty);
+
+/* VBM3: if `lensparam_binding` is the abstract lens param `l` of a consumer
+ * whose lens uniquely resolves to a concrete `<lens>__mono_<hash>` body (not
+ * ambiguous), return true and hand back the lens name + hash so the poly-call
+ * emit can redirect `(l g s)` to the by-value mono body.  False otherwise. */
+bool   mono_spec_redirect_for_binding(const void *lensparam_binding,
+                                      const char **lens_name,
+                                      unsigned long long *mono_hash);
 
 /* Print the registry: one `mono-spec-abstract <hash> fn=.. lens-param=.. f=..
  * focus=.. whole=..` line per abstract key, then one `mono-spec <hash>

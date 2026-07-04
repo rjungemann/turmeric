@@ -1,23 +1,24 @@
 ---
-title: VBM2b -- by-value monomorphized van Laarhoven lens body now emits,
-  compiles, and eliminates the (f S) result box; only the dispatch redirect
-  (VBM3) remains to make it live
-severity: RESOLVED (emit). The by-value lens body + fmap/run-id/mk-id twins emit
-  as correct, compiling, box-free C; the full suite is green. What remains is
-  VBM3 -- routing the lens call sites (`set-px`/`over-px`) at the concrete
-  invocation to `point_x__mono_<hash>` instead of the Path A carrier clone -- and
-  VBM4 (graduate `vl-wide-functor`). Kept OPEN only because those follow-on
-  slices are unlanded.
-status: EMIT DONE (2026-07-04). VBM2a (cross-procedural spec resolution) +
-  VBM2b (per-spec by-value body emit) both landed behind `--enable=vl-wide-mono`.
+title: VBM2b + VBM3 -- by-value monomorphized van Laarhoven lens now emits AND
+  is live; the (f S) result box is eliminated end-to-end
+severity: RESOLVED (VBM2a/VBM2b/VBM3). The by-value lens body + fmap/run-id/mk-id
+  twins emit as correct C, and the lens call sites are redirected to it, so the
+  `(f S)` result heap box is gone on the live path; full suite green. Kept OPEN
+  only for VBM4 (graduate `vl-wide-functor` / delete Path A on the wide branch)
+  and the residual `(f A)` `g` box (a small optimization, below).
+status: VBM3 DONE (2026-07-04). VBM2a (resolution) + VBM2b (by-value body emit) +
+  VBM3 (dispatch redirect) all landed behind `--enable=vl-wide-mono`.
   `emit_program` emits `point_x__mono_<hash>` returning `(Identity Point)` BY
-  VALUE, with by-value `fmap` / `run-id` / `mk-id` instance twins -- **the `(f S)`
-  result heap box is eliminated** (the only `malloc` left in the mono body is the
-  setter closure's env, identical to Path A). Full suite: 1940 passed, 0 failed.
-  The mono body is emitted but not yet CALLED: `set-px`/`over-px` still dispatch
-  through the Path A carrier clone, so the fixtures return 3/30/4/99 unchanged.
-  VBM3 redirects those call sites to the mono body; VBM4 then graduates
-  `vl-wide-functor`. Filed 2026-07-04.
+  VALUE with by-value `fmap`/`run-id`/`mk-id` twins, and the poly-call emit
+  REDIRECTS every `(l g s)` whose consumer's lens param uniquely resolves to that
+  mono lens straight to `point_x__mono` -- so `set-px`/`over-px` now emit
+  `run_id__spec(point_x__mono(g, s))` with NO carrier dict dispatch and NO
+  `emit_agg_box`/`emit_agg_unbox` around the `(f S)` crossing (the
+  `dict_Functor_Identity_singleton` has zero uses).  `view-px` (Const,
+  carrier-compatible) is untouched.  Full suite: 1940 passed, 0 failed; fixtures
+  return 3/30/4/99.  Residual: `g` still returns its `(f A)` through the int64
+  carrier (the mono body unboxes it once), so `__fn_1305`'s small `(f A)` box
+  survives -- VBM4's by-value `g` removes it.  Filed 2026-07-04.
 ---
 
 # VBM2b: by-value lens body emits (box eliminated); VBM3 redirect remains
@@ -101,37 +102,44 @@ static tur_adt_Identity__Point point_x__mono_...(int64_t g, int64_t s) {
 `set-px`/`over-px`/`view-px` return **3 / 30 / 4 / 99**; full suite **1940 passed,
 0 failed**.
 
-## What remains: VBM3 (dispatch redirect) -- requires VALUE-based consumer mono
+## VBM3 (dispatch redirect) -- DONE, via an in-place redirect (no consumer mono)
 
-The mono body is emitted but not yet CALLED. `set-px`/`over-px` still dispatch
-through the Path A carrier lens clone (`point_hyx_un_undict_...`, int64 return
-unboxed by `run_id__spec__..._Identity__Point`).
+An earlier revision of this report expected VBM3 to need value-based consumer
+monomorphization (specializing `set-px`/`over-px` per concrete lens + by-value
+`g` closures).  It did not, because of one design change to the mono body:
 
-The subtlety the plan's VBM3 sketch understated: the box crossing is the
-`(l g s)` call INSIDE `set-px`/`over-px`, where `l` is the ABSTRACT lens param.
-The concrete lens (`point-x`) is bound only at `main`'s `(set-px point-x ...)`
-(VBM2a's whole point). So the redirect cannot be a local rewrite of the
-`(l g s)` poly-call -- it needs **value-based consumer monomorphization**:
+- **The mono body takes the ordinary Path A `g` (carrier).** Instead of casting
+  `g.fn` to return `(f A)` by value, `point_x__mono`'s `g` call is cast to return
+  the int64 carrier and the box is deref'd ONCE (`*(Identity int *)(g(...))`),
+  feeding the by-value `fmap` twin.  So `point_x__mono` accepts the EXACT `g`
+  `set-px`/`over-px` already build -- no by-value `g` closure needed.  (Gated in
+  the fat-closure dispatch emit, `emit_expr.c`, on `is_vl_wide_mono`.)
 
-1. Emit `set_px__mono` / `over_px__mono`, each specialized to the concrete lens
-   `l := point-x`, whose body's `(l g s)` becomes a direct by-value
-   `point_x__mono(g, s)` (no carrier dict clone, no `emit_agg_box`/`_unbox`).
-2. Emit by-value `g` closures: the Path A `g` (`__fn_1305` / `__fn_1314`) still
-   `malloc`s its `Identity int` box; `point_x__mono` expects `g` to return the
-   `(f a)` aggregate by value, so the specialized consumer must build a by-value
-   `g` (the WF2 crossing, inverted).
-3. Redirect `main`'s `(set-px point-x ...)` / `(over-px point-x ...)` to the
-   specialized consumers.
+Given that, the redirect is a local poly-call rewrite -- no new consumer bodies:
 
-This is a DISTINCT, sizable mechanism: the ABI-spec machinery VBM2b reused
-specializes on TYPE bindings, but `l := point-x` is a VALUE binding, which it
-does not do. VBM3 is comparable in size to VBM2b (a value-specialization pass +
-by-value `g` emit + call-site redirect), not a small follow-on. The VBM2a
-concrete registry (`mono_spec_concrete_emit_info`) names the target; the abstract
-registry names the `(consumer, lens-param)` pairs to specialize.
+1. VBM2a records, per abstract spec, the lens param's `Binding *` and (from the
+   resolve walk) the concrete lens it uniquely resolves to (marking `ambiguous`
+   if a consumer's param takes more than one distinct lens).  See
+   `mono_spec_redirect_for_binding` (`mono_specs.c`).
+2. In the `is_poly_call` emit (`emit_expr.c`), a `(l g s)` whose `fn_binding` is
+   such a lens param is emitted as `<lens>__mono_<hash>((int64)g, (int64)s)` --
+   dropping the dict (slot 0) -- and returned directly, skipping the whole
+   carrier dispatch + `(f S)` box/unbox scaffold.  The shared `emit_vl_mono_name`
+   (`emit_module.c`) keeps the call symbol identical to the body's.
+3. The mono body's forward decl is emitted into `fwd_decls` (assembled before
+   `file`) so the redirect call in the earlier `set_hypx` body resolves.
 
-VBM4 then graduates `vl-wide-functor` (deletes the Path A box on the wide branch
-+ TUR-E0309).
+Result: `set_hypx` emits `return run_id__spec(point_x__mono(g, s))` -- no
+`l.fn(...)`, no `dict_Functor_Identity_singleton` use, no `(f S)` box.  The Path A
+carrier clone (`point_hyx_un_undict_...`) is now dead (still emitted, unused).
+
+## What remains: VBM4 + the residual `(f A)` box
+
+- The `g` closure (`__fn_1305`/`__fn_1314`) still `malloc`s its `(f A)` =
+  `Identity int` box, which `point_x__mono` unboxes once.  A by-value `g` (WF2
+  inverted) removes that last small box -- a follow-on optimization.
+- VBM4 graduates `vl-wide-functor`: delete the Path A box on the wide branch and
+  TUR-E0309, and retire the now-dead carrier lens clone on the redirected path.
 
 ## Minimal repro
 

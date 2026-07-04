@@ -383,6 +383,14 @@ static void append_sanitized_c_token(Buf *out, const char *raw) {
     }
 }
 
+/* VBM3: build the `<lens>__mono_<hash>` symbol shared by the by-value lens body
+ * emit and the poly-call redirect, so both agree on the name.  Exported (see
+ * emit_internal.h). */
+void emit_vl_mono_name(Buf *out, const char *lens_name, unsigned long long hash) {
+    append_sanitized_c_token(out, (lens_name && *lens_name) ? lens_name : "lens");
+    buf_printf(out, "__mono_%016llx", hash);
+}
+
 static char *typed_thunk_typedef_name(Type result_type, Type *param_types, uint8_t n_params) {
     Buf name;
     buf_init(&name);
@@ -9108,12 +9116,11 @@ int emit_program(Buf *out, const Expr *program) {
                 &ctx, lfd->binding, lens_expr, lfd, &b, 1,
                 arg_types, nargs, result_type, NULL, true);
             if (!sp) continue;
-            /* Name it `<lens>__mono_<hash>` (mirrors the __spec naming). */
+            /* Name it `<lens>__mono_<hash>` (shared with the VBM3 redirect). */
             {
                 Buf nm; buf_init(&nm);
-                append_sanitized_c_token(
-                    &nm, lfd->binding->name ? lfd->binding->name->name : "lens");
-                buf_printf(&nm, "__mono_%016llx", h);
+                emit_vl_mono_name(
+                    &nm, lfd->binding->name ? lfd->binding->name->name : NULL, h);
                 buf_putc(&nm, '\0');
                 free(sp->clone_name);
                 sp->clone_name = strdup(nm.data);
@@ -9236,12 +9243,13 @@ int emit_program(Buf *out, const Expr *program) {
             }
             sp = &ctx.abi_specializations[sp_idx];
             /* Forward-declare the mono body + every newly-minted nested spec
-             * (the by-value fmap / mk-id twins) up front, so calls among them
-             * resolve regardless of definition order (else a call before the
-             * definition defaults to `int` and the C stage conflicts). */
-            emit_abi_forward_decl(&file, sp);
+             * (the by-value fmap / mk-id twins) into `fwd_decls` (which the final
+             * assembly emits BEFORE `file`), so the VBM3 redirect call in an
+             * earlier consumer body (`set_hypx` -> `point_x__mono`) resolves, and
+             * so calls among the twins resolve regardless of definition order. */
+            emit_abi_forward_decl(&fwd_decls, sp);
             for (uint32_t ni = before_scan; ni < ctx.n_abi_specializations; ni++)
-                emit_abi_forward_decl(&file, &ctx.abi_specializations[ni]);
+                emit_abi_forward_decl(&fwd_decls, &ctx.abi_specializations[ni]);
             /* Emit any newly-minted nested specs (the by-value fmap twin). */
             for (uint32_t ni = before_scan; ni < ctx.n_abi_specializations; ni++) {
                 EmitAbiSpecialization *nsp = &ctx.abi_specializations[ni];

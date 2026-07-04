@@ -204,6 +204,20 @@ site and share it, rather than re-invent per-body substitution.
 
 ### Slice VBM3 -- dispatch redirect: point lens call sites at the spec (folded into `--enable=vl-wide-mono`)
 
+> **Status (2026-07-04): DONE.** The `(l g s)` poly-call emit now redirects a
+> lens invocation whose consumer's lens param uniquely resolves to a wide-by-value
+> mono lens straight to `<lens>__mono_<hash>((int64)g, (int64)s)`, dropping the
+> dict and skipping the whole carrier box/unbox scaffold -- `set-px`/`over-px`
+> emit `run_id__spec(point_x__mono(g, s))` with **no `(f S)` box and zero
+> `dict_Functor_Identity_singleton` uses**.  No consumer monomorphization or
+> by-value `g` closures were needed: the mono body was changed to accept the
+> ordinary Path A `g` (carrier) and unbox its `(f A)` once, so the redirect is a
+> local poly-call rewrite keyed on the lens param's `Binding *` (recorded by
+> VBM2a, with an `ambiguous` guard when a consumer takes more than one lens).
+> Full suite 1940 passed, 0 failed; fixtures return 3/30/4/99.  Residual: the `g`
+> closure's small `(f A)` box survives (VBM4's by-value `g` removes it).  See
+> [../reported/vbm2-byvalue-lens-body-emit.md](../reported/vbm2-byvalue-lens-body-emit.md).
+
 **Goal.** At every lens invocation whose resolved `f` is a wide by-value
 functor, the emitted C call targets the `__mono_<hash>` spec directly -- no
 carrier dict clone, no fat-boxed `g`, no `emit_agg_box`/`emit_agg_unbox` around

@@ -2,6 +2,7 @@
 #include "emit_internal.h"
 #include "emit_cps.h"   /* cps-transform-plan: EX_CALLCC lowering */
 #include "globals.h"    /* g_opt_vl_wide_functor (WF3) */
+#include "mono_specs.h" /* VBM3: van Laarhoven lens dispatch redirect */
 
 /* ACB: true when kind represents a concrete aggregate type (struct, ADT, or
  * type-application) that the carrier ABI stores as a heap pointer.  Used by
@@ -2755,6 +2756,33 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
 
             /* Phase HRT1: poly call through rank-2 fn param: emit fn_name.fn(fn_name.env, arg0, ...) */
             if (e->as.call_.is_poly_call) {
+                /* VBM3: redirect a van Laarhoven lens invocation `(l g s)` --
+                 * where `l` is a consumer's abstract lens param that uniquely
+                 * resolves to a concrete wide-by-value-functor lens with a
+                 * `<lens>__mono_<hash>` body -- straight to that by-value mono
+                 * body, dropping the carrier dict-dispatch and its `(f S)` box.
+                 * The mono body takes the ordinary Path A `g` (carrier) and the
+                 * whole `s`; the dict arg (slot 0) is dropped.  Only fires on a
+                 * unique, non-ambiguous resolution (see mono_specs). */
+                if (g_opt_vl_wide_mono && fn_binding &&
+                    e->as.call_.n_args >= 3) {
+                    const char *rlens = NULL; unsigned long long rhash = 0;
+                    if (mono_spec_redirect_for_binding(fn_binding, &rlens, &rhash)) {
+                        uint32_t na = e->as.call_.n_args;
+                        /* args = [dict, g, s]: g and s are the trailing two. */
+                        char *g_str = emit_value(ctx, body, e->as.call_.args[na - 2]);
+                        char *s_str = emit_value(ctx, body, e->as.call_.args[na - 1]);
+                        Buf mo; buf_init(&mo);
+                        emit_vl_mono_name(&mo, rlens, rhash);
+                        buf_printf(&mo, "((int64_t)(intptr_t)(%s), (int64_t)(intptr_t)(%s))",
+                                   g_str, s_str);
+                        buf_putc(&mo, '\0');
+                        char *result = strdup(mo.data);
+                        buf_free(&mo);
+                        free(g_str); free(s_str);
+                        return result;
+                    }
+                }
                 char *fn_name = emit_call_name(ctx, e, fn_binding);
                 uint32_t n = e->as.call_.n_args;
 
@@ -2788,6 +2816,18 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (!type_kind_is_poly_concrete(e->as.call_.args[i]->type.kind))
                         phase_f_concrete = false;
                 }
+                /* VBM2b/VBM3: inside a by-value monomorphized lens body the
+                 * `g : (-> A (f A))` call has a CONCRETE wide-by-value `(f A)`
+                 * result (f is pinned), so phase-F would cast `g.fn` to return
+                 * that aggregate by value -- but `g` is the caller's Path A
+                 * closure, which returns the int64 carrier box.  Force the carrier
+                 * dispatch (int64 return) so the box is deref'd once below (the
+                 * WF3 unbox), letting `point_x__mono` accept the ordinary Path A
+                 * `g` -- which is what makes the VBM3 in-place redirect trivial. */
+                if (ctx->current_abi_specialization &&
+                    ctx->current_abi_specialization->is_vl_wide_mono &&
+                    emit_type_is_wide_byval_adt(ctx, e->type))
+                    phase_f_concrete = false;
 
                 char **arg_strs = n ? (char **)malloc(n * sizeof(char *)) : NULL;
                 if (n && !arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
@@ -2913,18 +2953,18 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * back to the aggregate the surrounding context expects.  Only in
                  * the generic path; phase_f_concrete never carries an aggregate
                  * result (aggregates are not poly-concrete). */
-                if (!phase_f_concrete && emit_type_is_byvalue_adt(ctx, e->type) &&
-                    !(ctx->current_abi_specialization &&
-                      ctx->current_abi_specialization->is_vl_wide_mono)) {
+                if (!phase_f_concrete && emit_type_is_byvalue_adt(ctx, e->type)) {
                     char *unboxed = emit_agg_unbox(ctx, e->type, result);
                     free(result);
                     result = unboxed;
                 }
-                /* VBM2b: inside a by-value monomorphized lens body the pinned
-                 * functor is spelled by value end to end -- the `g : (-> A (f A))`
-                 * poly call returns its `(f A)` aggregate BY VALUE, not boxed
-                 * through the carrier, so the WF3 unbox above must NOT fire.  The
-                 * by-value result flows straight into the by-value `fmap` twin. */
+                /* VBM2b/VBM3: the `g` poly call now takes the carrier path above
+                 * (phase_f forced off for a wide-by-value `(f A)` result), so its
+                 * int64 box IS deref'd here -- `point_x__mono` consumes the
+                 * ordinary Path A `g` and unboxes its `(f A)` once, then feeds the
+                 * by-value `fmap` twin.  The expensive `(f S)` result box is still
+                 * gone (the twin returns by value); only the small `(f A)` box the
+                 * caller's `g` already builds survives, which VBM4 removes. */
                 /* hrt-poly-call-nonint-return-int-conversion: the generic carrier
                  * `.fn` field is typed int64_t, so a poly call whose result is a
                  * pointer-class type (cstr, ptr<T>, rc/ref, ...) yields an
@@ -3164,6 +3204,20 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * cast is xmm0-correct.  Identity outside a spec. */
                     Type _disp_result = emit_resolve_type(ctx, e->type);
                     const char *ret_c = type_c_name(_disp_result);
+                    /* VBM2b/VBM3: inside a by-value monomorphized lens body, the
+                     * `g : (-> A (f A))` fat-closure call has a CONCRETE wide-by-
+                     * value `(f A)` result -- but `g` is the caller's ordinary
+                     * Path A closure, which boxes and returns the int64 carrier.
+                     * Cast slot 0 to return int64 (carrier) and deref the box once
+                     * below, so `point_x__mono` accepts the ordinary `g` and the
+                     * VBM3 in-place redirect needs no by-value `g` closure.  The
+                     * expensive `(f S)` result box is still gone (the `fmap` twin
+                     * returns by value); only the small `(f A)` box survives. */
+                    bool vlmono_g_carrier =
+                        ctx->current_abi_specialization &&
+                        ctx->current_abi_specialization->is_vl_wide_mono &&
+                        emit_type_is_byvalue_adt(ctx, _disp_result);
+                    if (vlmono_g_carrier) ret_c = "int64_t";
                     Type arg_types[MAX_FN_ARITY];
                     char **arg_strs = (char **)malloc(n * sizeof(char *));
                     if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
@@ -3171,7 +3225,8 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         arg_types[i] = emit_resolve_type(ctx, e->as.call_.args[i]->type);
                         arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
                     }
-                    char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file,
+                    char *thunk_typedef = vlmono_g_carrier ? NULL :
+                        ensure_typed_thunk_typedef(ctx, ctx->file,
                         _disp_result, n > 0 ? arg_types : NULL, (uint8_t)n);
                     Buf out; buf_init(&out);
                     if (thunk_typedef) {
@@ -3210,6 +3265,13 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_putc(&out, '\0');
                     char *result = strdup(out.data);
                     buf_free(&out);
+                    /* VBM2b/VBM3: deref the carrier box `g` returned back to the
+                     * concrete `(f A)` aggregate the by-value `fmap` twin expects. */
+                    if (vlmono_g_carrier) {
+                        char *unboxed = emit_agg_unbox(ctx, _disp_result, result);
+                        free(result);
+                        result = unboxed;
+                    }
                     free(thunk_typedef);
                     for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
                     free(arg_strs);
@@ -3217,7 +3279,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     return result;
                 }
             }
-            
+
             /* ER2: Callback call through a local TY_FN parameter.
              * When a function parameter is annotated with :(fn [...] #{} :T), it is
              * stored as int64_t in C (a function address or closure pointer cast to
@@ -3257,6 +3319,18 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             disp_result = rfull_resolved;
                     }
                     const char *ret_c = type_c_name(disp_result);
+                    /* VBM2b/VBM3: the `g : (-> A (f A))` fat call in a by-value
+                     * monomorphized lens body has a CONCRETE wide-by-value `(f A)`
+                     * result, but `g` is the caller's ordinary Path A closure
+                     * (returns the int64 carrier box).  Cast slot 0 to return
+                     * int64 and deref the box once below, so `point_x__mono`
+                     * accepts the ordinary `g` -- the VBM3 in-place redirect then
+                     * needs no by-value `g` closure. */
+                    bool vlmono_g_carrier =
+                        ctx->current_abi_specialization &&
+                        ctx->current_abi_specialization->is_vl_wide_mono &&
+                        emit_type_is_byvalue_adt(ctx, disp_result);
+                    if (vlmono_g_carrier) ret_c = "int64_t";
                     Type arg_types[MAX_FN_ARITY];
                     char **arg_strs = (n > 0)
                         ? (char **)malloc(n * sizeof(char *)) : NULL;
@@ -3288,7 +3362,8 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         }
                         arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
                     }
-                    char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file,
+                    char *thunk_typedef = vlmono_g_carrier ? NULL :
+                        ensure_typed_thunk_typedef(ctx, ctx->file,
                         disp_result, n > 0 ? arg_types : NULL, (uint8_t)n);
                     Buf out; buf_init(&out);
                     if (thunk_typedef) {
@@ -3350,6 +3425,13 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_putc(&out, '\0');
                     char *result = strdup(out.data);
                     buf_free(&out);
+                    /* VBM2b/VBM3: deref the carrier box `g` returned back to the
+                     * concrete `(f A)` aggregate the by-value `fmap` twin expects. */
+                    if (vlmono_g_carrier) {
+                        char *unboxed = emit_agg_unbox(ctx, disp_result, result);
+                        free(result);
+                        result = unboxed;
+                    }
                     free(thunk_typedef);
                     for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
                     free(arg_strs);

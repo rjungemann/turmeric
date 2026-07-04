@@ -29,6 +29,17 @@ typedef struct {
     Type     functor_ty;                 /* the resolved concrete functor ctor */
     bool     have_functor_ty;
     uint64_t hash;
+    /* VBM3: the abstract lens param's `Binding *` (the `l` of `set-px`), so the
+     * poly-call emit can recognize `(l g s)` and redirect it.  Plus the resolved
+     * redirect target -- filled in by the resolve pass: the concrete lens name +
+     * its `<lens>__mono_<hash>` key -- and `redirect_ambiguous` when the same
+     * consumer param resolves to more than one distinct lens (then the redirect
+     * is unsafe and suppressed). */
+    const void *lensparam_binding;
+    char        redirect_lens[MONO_SPEC_FIELD];
+    uint64_t    redirect_hash;
+    bool        redirect_resolved;
+    bool        redirect_ambiguous;
 } MonoSpecKey;
 
 static MonoSpecKey g_specs[MONO_SPEC_MAX];
@@ -72,7 +83,7 @@ static void field_copy(char *dst, const char *src) {
 void mono_spec_register(const char *enclosing_fn, const char *callee,
                         const char *functor_name, const char *focus_ty,
                         const char *whole_ty, const char *tyvar,
-                        const void *functor_ty) {
+                        const void *functor_ty, const void *lensparam_binding) {
     if (g_n_specs >= MONO_SPEC_MAX) return;
     MonoSpecKey k;
     memset(&k, 0, sizeof k);
@@ -82,6 +93,7 @@ void mono_spec_register(const char *enclosing_fn, const char *callee,
     field_copy(k.focus, focus_ty);
     field_copy(k.whole, whole_ty);
     field_copy(k.tyvar, tyvar);
+    k.lensparam_binding = lensparam_binding;
     if (functor_ty) { k.functor_ty = *(const Type *)functor_ty; k.have_functor_ty = true; }
     /* Content hash over the five resolved fields.  Byte-identical keys collapse
      * (a lens invoked twice from the same enclosing fn registers once).  Two
@@ -128,12 +140,26 @@ unsigned long long mono_spec_concrete_emit_info(size_t i, const void **lens_fn,
     return (unsigned long long)k->hash;
 }
 
+bool mono_spec_redirect_for_binding(const void *lensparam_binding,
+                                    const char **lens_name,
+                                    unsigned long long *mono_hash) {
+    if (!lensparam_binding) return false;
+    for (size_t i = 0; i < g_n_specs; i++) {
+        const MonoSpecKey *k = &g_specs[i];
+        if (k->lensparam_binding != lensparam_binding) continue;
+        if (!k->redirect_resolved || k->redirect_ambiguous) return false;
+        if (lens_name) *lens_name = k->redirect_lens;
+        if (mono_hash) *mono_hash = (unsigned long long)k->redirect_hash;
+        return true;
+    }
+    return false;
+}
+
 /* Register (dedup by content hash) one resolved CONCRETE spec key, carrying the
  * emit handles (resolved lens FnDef + functor ctor Type + HKT tyvar name) VBM2b
  * needs to emit the specialized by-value body. */
-static void mono_concrete_register(const char *lens, const MonoSpecKey *abs,
-                                   const void *lens_fn) {
-    if (g_n_concrete >= MONO_SPEC_MAX) return;
+static uint64_t mono_concrete_register(const char *lens, const MonoSpecKey *abs,
+                                       const void *lens_fn) {
     MonoConcreteKey k;
     memset(&k, 0, sizeof k);
     field_copy(k.lens, lens);
@@ -150,8 +176,9 @@ static void mono_concrete_register(const char *lens, const MonoSpecKey *abs,
     h = h * 1099511628211ULL + fnv1a(k.whole);
     k.hash = h;
     for (size_t i = 0; i < g_n_concrete; i++)
-        if (g_concrete[i].hash == h) return; /* dedup */
-    g_concrete[g_n_concrete++] = k;
+        if (g_concrete[i].hash == h) return h; /* dedup */
+    if (g_n_concrete < MONO_SPEC_MAX) g_concrete[g_n_concrete++] = k;
+    return h;
 }
 
 /* ------------------------------------------------------------------ *
@@ -178,10 +205,10 @@ static const char *arg_global_fn_name(const Expr *arg) {
 static const FnDef *find_fndef(const Expr *prog, const char *name);
 
 typedef struct {
-    const char        *enclosing; /* enclosing fn name whose calls we resolve */
-    uint32_t           lens_idx;  /* arg slot holding the concrete lens */
-    const MonoSpecKey *abs;       /* the abstract key being resolved */
-    const Expr        *prog;      /* program root, for lens-name -> FnDef */
+    const char  *enclosing; /* enclosing fn name whose calls we resolve */
+    uint32_t     lens_idx;  /* arg slot holding the concrete lens */
+    MonoSpecKey *abs;       /* the abstract key being resolved (mutable) */
+    const Expr  *prog;      /* program root, for lens-name -> FnDef */
 } ResolveCtx;
 
 /* Recursively visit `e`, registering a concrete spec for every EX_CALL of
@@ -194,9 +221,22 @@ static void resolve_walk(const Expr *e, const ResolveCtx *rc) {
             strcmp(fb->name->name, rc->enclosing) == 0 &&
             rc->lens_idx < e->as.call_.n_args) {
             const char *lens = arg_global_fn_name(e->as.call_.args[rc->lens_idx]);
-            if (lens)
-                mono_concrete_register(lens, rc->abs,
-                                       find_fndef(rc->prog, lens));
+            if (lens) {
+                uint64_t h = mono_concrete_register(lens, rc->abs,
+                                                    find_fndef(rc->prog, lens));
+                /* VBM3: record the redirect target on the abstract spec.  If this
+                 * consumer's lens param resolves to more than one DISTINCT lens
+                 * across its call sites, mark it ambiguous -- the in-place
+                 * redirect is only safe when the param is monomorphic in `l`. */
+                if (rc->abs->redirect_resolved &&
+                    strcmp(rc->abs->redirect_lens, lens) != 0)
+                    rc->abs->redirect_ambiguous = true;
+                else if (!rc->abs->redirect_resolved) {
+                    field_copy(rc->abs->redirect_lens, lens);
+                    rc->abs->redirect_hash = h;
+                    rc->abs->redirect_resolved = true;
+                }
+            }
         }
     }
     switch (e->kind) {
@@ -293,7 +333,7 @@ void mono_specs_resolve_program(const void *prog_) {
     const Expr *prog = (const Expr *)prog_;
     if (!prog || prog->kind != EX_PROGRAM || g_n_specs == 0) return;
     for (size_t i = 0; i < g_n_specs; i++) {
-        const MonoSpecKey *k = &g_specs[i];
+        MonoSpecKey *k = &g_specs[i];
         /* The abstract lens param lives on the enclosing fn; find its slot. */
         const FnDef *enc = find_fndef(prog, k->enclosing);
         if (!enc) continue;
