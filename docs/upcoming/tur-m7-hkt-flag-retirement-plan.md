@@ -1,8 +1,52 @@
 # TUR_M7_HKT Flag Retirement Plan
 
-**Status:** proposed
+**Status:** proposed (Phase R1 partially verified 2026-07-03; R2-R4 not started)
 **Track:** one-track-to-v1 cleanup
 **Author:** investigation 2026-07-02
+
+## Progress (verified 2026-07-03)
+
+No code has been retired yet -- the branch surface and the flag itself are
+still in place. A re-inspection turned up the following updates to the
+"Current state" numbers below:
+
+- **Phase R1 (downstream-dependency sweep):** partially done. `grep -R
+  TUR_M7_HKT` across `src/` still shows only the read site
+  (`src/main.c:12276-12278`), the default (`src/runtime/globals.c:112`), and
+  the extern (`src/runtime/globals.h:83`). All doc references live under
+  `docs/archive/` (already-resolved plans) plus this file and CLAUDE.md; no
+  live `docs/reported/` item references the flag. The sibling
+  `../turmeric-spices/` checkout has **zero** hits for either `TUR_M7_HKT`
+  or `g_m7_hkt_enabled`. Deferred reports
+  ([../reported/return-directed-methods-pure-empty-inference.md](../reported/return-directed-methods-pure-empty-inference.md),
+  [../reported/class-method-level-hkt-tyvar-grounding.md](../reported/class-method-level-hkt-tyvar-grounding.md))
+  are still open and neither cites `TUR_M7_HKT=0` as a workaround -- clear
+  to proceed.
+- **Branch surface has grown slightly, not shrunk.** Current real
+  `g_m7_hkt_enabled` conditionals (comments excluded):
+  - `src/compiler/elab_typeclasses.c` -- 8 sites (was ~4 areas in original
+    inventory; unchanged in shape but counted per-conditional now).
+  - `src/compiler/emit_module.c` -- 6 sites.
+  - `src/compiler/emit_fns.c` -- 5 sites.
+  - `src/compiler/emit_stmt.c` -- 1 site (the `eligible = is_hkt ? ... :
+    true` guard).
+  - **`src/compiler/elab_call.c:4115` -- 1 site (NEW, not in the original
+    inventory).** Fold this into the Phase R2 file list.
+  - Total: ~21 real conditionals across 5 files (plus ~7 explanatory
+    comments referencing the flag).
+- **Phase R2 file order stands**, with `elab_call.c` inserted between
+  `elab_typeclasses.c` and the emit-side files (its read is on the
+  elaborator side of the pipeline):
+  1. `emit_stmt.c` -> 2. `emit_fns.c` -> 3. `emit_module.c` ->
+  4. `elab_typeclasses.c` -> 5. `elab_call.c`.
+- **Phases R3-R4 not started.** Flag definition, read site, CLAUDE.md
+  policy paragraph, and the three archive files still live where they
+  were.
+
+Next actionable step: begin Phase R2 by collapsing `emit_stmt.c:464`'s
+`is_hkt ? g_m7_hkt_enabled : true` down to `is_hkt` and running the suite
+(with the mandatory 600000 ms timeout) to confirm the 65-failure baseline
+holds.
 
 ## TL;DR
 
