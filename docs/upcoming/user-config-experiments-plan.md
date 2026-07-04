@@ -1,7 +1,8 @@
 # Plan: read `~/.config/turmeric/experiments.tur` as a user-level experiment default
 
-**Status:** proposal (not started). **Area:** `src/runtime/experiments.{c,h}`,
-`src/main.c`, one new small reader.
+**Status:** UC-1..UC-3 landed (PR #602); UC-4 (retire
+`--allow-experimental`) and UC-5 (docs) not started. **Area:**
+`src/runtime/experiments.{c,h}`, `src/main.c`, one new small reader.
 **Goal:** let a user declare a per-machine baseline of enabled experiments in
 `$XDG_CONFIG_HOME/turmeric/experiments.tur`, honored by every turmeric entry
 point (CLI, LSP, REPL, `tur build`, `tur check`) exactly when the current
@@ -300,18 +301,44 @@ during implementation).
 
 ## Milestones
 
-| # | Deliverable | Files touched |
-|---|---|---|
-| UC-1 | Add `XF_SRC_USER_CONFIG` to the enum; switch `experiment_enable` to "higher source wins"; add the `tur experiments` source arm; no readers yet. | `src/runtime/experiments.{c,h}`, `src/main.c` |
-| UC-2 | Dedicated reader `experiments_read_user_config` + platform path resolution helper. Unit test via a small C harness. | `src/runtime/experiments.c`, `tests/unit/experiments_user_config.c` |
-| UC-3 | Add `has_experiments_key` to `PkgManifest`; call `apply_user_config_experiments` from every manifest-resolving entry point (CLI compile, `tur repl`, `tur check`, `tur build`, `tur run`). Fixtures cover: no manifest + user file / manifest with key / manifest with empty `:experiments []` / CLI overrides both. | `src/main.c`, `tests/fixtures/experiments-user-config-*` |
-| UC-4 | Retire `--allow-experimental`: remove the bit, delete the CLI arm, make `experiment_warn_if_used` unconditional; add the "retired in <version>" targeted error for one release. | `src/runtime/experiments.{c,h}`, `src/main.c`, CLAUDE.md |
-| UC-5 | Docs: `docs/guides/experimental-flags-guide.md` grows a "user-level default" section; CLAUDE.md's experiments rule notes the third source. Trowel's plan can drop its "interim" path. | `docs/guides/experimental-flags-guide.md`, CLAUDE.md |
+| # | Status | Deliverable | Files touched |
+|---|---|---|---|
+| UC-1 | **done** (PR #602) | Add `XF_SRC_USER_CONFIG` to the enum; switch `experiment_enable` to "higher source wins"; add the `tur experiments` source arm; no readers yet. | `src/runtime/experiments.{c,h}`, `src/main.c` |
+| UC-2 | **done** (PR #602) | Dedicated reader `experiments_read_user_config` + platform path resolution helper. Unit test via a small C harness. | `src/runtime/experiments.c`, `tests/unit/experiments_user_config.c` |
+| UC-3 | **done** (PR #602) | Add `has_experiments_key` to `PkgManifest`; call `apply_user_config_experiments` from every manifest-resolving entry point (CLI compile, `tur repl`, `tur check`, `tur build`, `tur run`). Fixtures cover: no manifest + user file / manifest with key / manifest with empty `:experiments []` / CLI overrides both. | `src/main.c`, `tests/run-experiments-user-config.sh` |
+| UC-4 | not started | Retire `--allow-experimental`: remove the bit, delete the CLI arm, make `experiment_warn_if_used` unconditional; add the "retired in <version>" targeted error for one release. | `src/runtime/experiments.{c,h}`, `src/main.c`, CLAUDE.md |
+| UC-5 | not started | Docs: `docs/guides/experimental-flags-guide.md` grows a "user-level default" section; CLAUDE.md's experiments rule notes the third source. Trowel's plan can drop its "interim" path. | `docs/guides/experimental-flags-guide.md`, CLAUDE.md |
 
-UC-1 through UC-3 form the shipping unit -- they can land in one PR or
-three, but UC-2 is dead code until UC-3 calls it. UC-4 is a separate,
-observably-breaking PR; land after UC-1..3 have soaked for a release.
-UC-5 trails.
+UC-1 through UC-3 form the shipping unit -- they landed together in PR
+#602. UC-4 is a separate, observably-breaking PR; land after UC-1..3 have
+soaked for a release. UC-5 trails.
+
+### Deviations from this plan as built (UC-1..UC-3, PR #602)
+
+- **UC-3 integration coverage is a dedicated ctest runner, not
+  `tests/fixtures/experiments-user-config-*`.** `tests/run.sh` now pins
+  `XDG_CONFIG_HOME` to an empty temp dir (Risk 2), so the standard fixture
+  harness cannot vary the user file per case. Instead
+  `tests/run-experiments-user-config.sh` (ctest
+  `tur_experiments_user_config_e2e`) drives the built `tur` against
+  synthetic XDG homes and asserts the full matrix: no-manifest+user file,
+  no-manifest+no file, empty `:experiments []` suppression,
+  non-overlapping `:experiments` suppression, CLI-beats-both, the
+  `tur experiments` source column, unknown-name `TUR-E0310`, and
+  unknown-key `TUR-W0062`.
+- **`apply_user_config_experiments` is centralized in the reader-macro
+  discovery funnel** (`discover_manifest_reader_macros`), which every
+  single-file/project compile entry point already flows through -- so CLI
+  compile / `tur check` / `tur build` / `tur run` are covered by one
+  insertion rather than five. `tur repl` and `tur experiments` each get an
+  explicit call (they do not use that funnel); the LSP hot path sets the
+  once-guard so a malformed file cannot crash an editor keystroke.
+- **`tur experiments` now consults the ambient config** (project manifest
+  + user file) before printing, so its source column reflects reality --
+  the plan's Testing section implied this but did not list `tur
+  experiments` as a call site.
+- **`--allow-experimental` is untouched** (that is UC-4): the existing
+  `flags` fixtures that pass it still work.
 
 ## Testing
 
