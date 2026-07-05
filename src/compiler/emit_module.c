@@ -2374,9 +2374,22 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
              * binding -- such a spec (`__inst_Dec_dec_int__spec__Box`) would be
              * dead code, and ill-typed when the representative's inline-C body
              * (returning the int64 carrier) is cloned under a by-value struct
-             * result. */
-            emit_abi_note_carrier_call(ctx, redisp->binding);
-            return;
+             * result.
+             *
+             * CM4: EXCEPT inside a by-value wide-functor mono body (Path B),
+             * where the HKT method dispatch (`fmap`) MUST mint the by-value
+             * instance twin -- the box elimination Path B exists for.  A functor
+             * instance whose method reads the receiver's fields (e.g. an Identity
+             * `fmap` preserving the tag) re-resolves here just like Dec, but the
+             * carrier note would leave `point_x__mono` calling the int64-carrier
+             * `fmap` with a by-value aggregate.  Mirror the MB2.5 carve-out: fall
+             * through to the intern below so the rehydrated `f := <functor>`
+             * bindings mint `__inst_Functor_fmap_<F>__spec__...`. */
+            if (!(ctx->current_abi_specialization &&
+                  ctx->current_abi_specialization->is_vl_wide_mono)) {
+                emit_abi_note_carrier_call(ctx, redisp->binding);
+                return;
+            }
         }
     }
     /* Option C: a carrier accessor (vec-get) carries its element type in the
