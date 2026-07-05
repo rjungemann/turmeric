@@ -11,6 +11,23 @@ static bool type_kind_is_aggregate(TypeKind k) {
     return k == TY_STRUCT || k == TY_ADT || k == TY_APP;
 }
 
+/* CM3 (van-laarhoven-consumer-mono-plan): peel type-erasing wrappers off a
+ * consumer call's lens argument and return the named global lens it resolves to
+ * (NULL for an anonymous / runtime-selected lens -- those stay on Path A). */
+static const char *cm_call_lens_name(const Expr *arg) {
+    while (arg) {
+        if (arg->kind == EX_ASCRIBE)          arg = arg->as.ascribe_.inner;
+        else if (arg->kind == EX_FN_TO_FAT)   arg = arg->as.fn_to_fat_.inner;
+        else if (arg->kind == EX_POLY_TO_FAT) arg = arg->as.poly_to_fat_.inner;
+        else if (arg->kind == EX_POLY_WRAP)   arg = arg->as.poly_wrap_.inner;
+        else break;
+    }
+    if (arg && arg->kind == EX_VAR && arg->as.var.binding &&
+        arg->as.var.binding->name && arg->as.var.binding->name->name)
+        return arg->as.var.binding->name->name;
+    return NULL;
+}
+
 /* world-resize / multi-field existential payloads: true when `t` lowers to a
  * by-value C aggregate (`World__int__int__int` etc.) that is WIDER than the
  * single int64 the existential carrier (`tur_exists_t`) holds. Such a payload
@@ -2610,6 +2627,54 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             abort();
         case EX_CALL: {
             Binding *fn_binding = e->as.call_.fn_binding;
+
+            /* CM3 (van-laarhoven-consumer-mono-plan): rewrite a call to an
+             * ambiguous consumer -- `(consumer concrete-lens args...)` -- to the
+             * box-free clone `<consumer>__lens_<hash>(args...)`, dropping the lens
+             * arg.  Fires only when THIS site's lens arg is a statically-known
+             * concrete lens in the consumer's resolved set; a runtime-selected
+             * lens has no clone and falls through to the Path A carrier call.  The
+             * clone's ABI matches the carrier, so each retained arg is emitted and
+             * cast to its own concrete C type (which is the clone's param type). */
+            if (g_opt_vl_wide_mono && fn_binding && fn_binding->name &&
+                fn_binding->name->name) {
+                int lens_idx = -1;
+                const void *lb = mono_spec_consumer_call_lookup(
+                    fn_binding->name->name, &lens_idx);
+                if (lb && lens_idx >= 0 &&
+                    (uint32_t)lens_idx < e->as.call_.n_args) {
+                    const char *lname =
+                        cm_call_lens_name(e->as.call_.args[lens_idx]);
+                    unsigned long long lh =
+                        lname ? mono_spec_lens_clone_hash(lb, lname) : 0;
+                    if (lh) {
+                        Buf callb; buf_init(&callb);
+                        emit_vl_consumer_mono_name(&callb,
+                                                   fn_binding->name->name, lh);
+                        buf_putc(&callb, '(');
+                        bool first = true;
+                        for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                            if ((int)i == lens_idx) continue;
+                            char *av = emit_value(ctx, body,
+                                                  e->as.call_.args[i]);
+                            if (!first) buf_puts(&callb, ", ");
+                            first = false;
+                            Type at = e->as.call_.args[i]->type;
+                            if (type_kind_is_aggregate(at.kind))
+                                buf_printf(&callb, "(%s)(intptr_t)(%s)",
+                                           emit_type_c_name(ctx, at), av);
+                            else
+                                buf_puts(&callb, av);
+                            free(av);
+                        }
+                        buf_putc(&callb, ')');
+                        buf_putc(&callb, '\0');
+                        char *r = strdup(callb.data);
+                        buf_free(&callb);
+                        return r;
+                    }
+                }
+            }
 
             /* Phase 16 v2: indirect capability field call — fn_expr is EX_GET_FIELD.
              * Emit: ((ret_t (*)(arg_t, ...))(intptr_t)(struct_val).field_name)(args...)

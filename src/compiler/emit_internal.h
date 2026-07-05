@@ -362,6 +362,11 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
  * body emit and the poly-call redirect). */
 void emit_vl_mono_name(Buf *out, const char *lens_name, unsigned long long hash);
 
+/* CM2: append the `<consumer>__lens_<lenshash>` consumer-clone symbol (shared by
+ * the clone emit and the CM3 call-site rewrite). */
+void emit_vl_consumer_mono_name(Buf *out, const char *consumer_name,
+                                unsigned long long lens_hash);
+
 /* Like emit_carrier_bridge, but for a CK_CONCRETE -> CK_CARRIER crossing whose
  * carrier value is STORED in a heap container that outlives the current
  * expression (e.g. vec-push! / map-set! / set-add! of a by-value aggregate

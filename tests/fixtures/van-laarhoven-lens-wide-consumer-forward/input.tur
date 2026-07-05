@@ -1,0 +1,33 @@
+;; CM3 (van-laarhoven-consumer-mono-plan): a SECOND-level consumer.  `tweak`
+;; forwards its lens param `l` to `set-px` and is itself called with two distinct
+;; wide lenses (`point-x`, `point-y`).  `tweak` has no `(l g s)` pin of its own,
+;; so its lens param never gets a mono spec, so the CM1 fixpoint cannot resolve
+;; `set-px`'s set through it and `tweak` is not cloned.  The call sites therefore
+;; fall back to the Path A carrier -- SAFELY (correct results, no miscompile).
+;; This fixture pins that fallback: whether the transitive optimization is wired
+;; (see docs/reported/cm3-transitive-consumer-mono.md) or not, the observable
+;; output must stay 99/4/3/88.  Runtime-only (no expected.c) since the carrier
+;; codegen is not the thing under test here.
+
+(defstruct Identity :copy [A] (wrapped : A) (tag : int))
+(defn mk-id  [A] [x : A]            : (Identity A) (make-struct Identity :wrapped x :tag 0))
+(defn run-id [A] [i : (Identity A)] : A            (.wrapped i))
+(definstance Functor [Identity]
+  (fmap [i g] (mk-id (g (run-id i)))))
+(defstruct Point :copy :heap [x : int y : int])
+(defn point-x [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)
+  (fmap (g (.x s)) (fn [nx : int] : Point (make-struct Point :x nx :y (.y s)))))
+(defn point-y [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)
+  (fmap (g (.y s)) (fn [ny : int] : Point (make-struct Point :x (.x s) :y ny))))
+(defn set-px [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> int (f int)) Point (f Point))) b : int s : Point] : Point
+  (run-id (l (fn [a : int] : (Identity int) (mk-id b)) s)))
+;; tweak forwards its lens param l to set-px (a second-level consumer, no (l g s) pin of its own)
+(defn tweak [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> int (f int)) Point (f Point))) b : int s : Point] : Point
+  (set-px l b s))
+(defn main [] : int
+  (let [p  (make-struct Point :x 3 :y 4)
+        p1 (tweak point-x 99 p)
+        p2 (tweak point-y 88 p)]
+    (println (.x p1)) (println (.y p1))
+    (println (.x p2)) (println (.y p2))
+    0))

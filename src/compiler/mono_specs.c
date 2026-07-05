@@ -53,6 +53,10 @@ typedef struct {
     /* VBM3: the abstract lens param's `Binding *` (the `l` of `set-px`), so the
      * poly-call emit can recognize `(l g s)` and redirect it. */
     const void *lensparam_binding;
+    /* CM3: the lens param's positional slot in the consumer's arg list (the arg
+     * a call site passes the concrete lens in), filled by the resolve pass; -1
+     * until resolved.  CM3 uses it to elide the lens arg at the rewritten call. */
+    int lens_idx;
     /* CM1: the resolved concrete-lens SET for this (consumer, lens-param).  The
      * VBM3 in-place redirect fires only when `n_lens_set == 1` (the unique case);
      * `n_lens_set >= 2` is the ambiguous case CM2/CM3 cover with consumer clones;
@@ -114,6 +118,7 @@ void mono_spec_register(const char *enclosing_fn, const char *callee,
     field_copy(k.whole, whole_ty);
     field_copy(k.tyvar, tyvar);
     k.lensparam_binding = lensparam_binding;
+    k.lens_idx = -1;
     if (functor_ty) { k.functor_ty = *(const Type *)functor_ty; k.have_functor_ty = true; }
     /* Content hash over the five resolved fields.  Byte-identical keys collapse
      * (a lens invoked twice from the same enclosing fn registers once).  Two
@@ -133,6 +138,8 @@ void mono_spec_register(const char *enclosing_fn, const char *callee,
     g_specs[g_n_specs++] = k;
 }
 
+static const MonoSpecKey *spec_for_binding(const void *lensparam_binding);
+
 size_t mono_spec_count(void) { return g_n_specs; }
 size_t mono_spec_concrete_count(void) { return g_n_concrete; }
 
@@ -142,6 +149,31 @@ const void *mono_spec_abstract_binding(size_t i) {
 
 const char *mono_spec_abstract_enclosing(size_t i) {
     return i < g_n_specs ? g_specs[i].enclosing : NULL;
+}
+
+const void *mono_spec_consumer_call_lookup(const char *callee_name,
+                                           int *lens_idx_out) {
+    if (!callee_name) return NULL;
+    for (size_t i = 0; i < g_n_specs; i++) {
+        const MonoSpecKey *k = &g_specs[i];
+        if (k->n_lens_set < 2) continue;   /* only ambiguous consumers are cloned */
+        if (k->lens_idx < 0) continue;
+        if (strcmp(k->enclosing, callee_name) != 0) continue;
+        if (lens_idx_out) *lens_idx_out = k->lens_idx;
+        return k->lensparam_binding;
+    }
+    return NULL;
+}
+
+unsigned long long mono_spec_lens_clone_hash(const void *lensparam_binding,
+                                             const char *lens_name) {
+    if (!lens_name) return 0;
+    const MonoSpecKey *k = spec_for_binding(lensparam_binding);
+    if (!k) return 0;
+    for (size_t j = 0; j < k->n_lens_set; j++)
+        if (strcmp(k->lens_set[j].lens_name, lens_name) == 0)
+            return (unsigned long long)k->lens_set[j].mono_hash;
+    return 0;
 }
 
 const char *mono_spec_abstract_tyvar(size_t i, const void **functor_ty) {
@@ -579,6 +611,7 @@ void mono_specs_resolve_program(const void *prog_) {
                 }
             }
             if (lens_idx < 0) continue;
+            k->lens_idx = lens_idx;   /* CM3: remember the lens arg slot */
             ResolveCtx rc = { k->enclosing, (uint32_t)lens_idx, k, prog, &grew };
             resolve_walk(prog, &rc);
         }

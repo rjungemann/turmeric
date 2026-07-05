@@ -3326,11 +3326,11 @@ static int64_t run_id__spec__int64_t_tur_adt_Identity__int(tur_adt_Identity__int
 static tur_adt_Identity__Point point_y__mono_29dc1a87dc9f86df(int64_t, int64_t);
 static tur_adt_Identity__Point __inst_Functor_fmap_Identity__spec__tur_adt_Identity__Point_int64_t_int64_t__h1(tur_adt_Identity__int, tur_poly_fn_t);
 static tur_adt_Identity__int __fn_1301__byval(void *, int64_t);
-static int64_t set_px__lens_89e16e7f8669ca4e(tur_poly_fn_t, int64_t, int64_t);
-static int64_t set_px__lens_29dc1a87dc9f86df(tur_poly_fn_t, int64_t, int64_t);
+static tur_adt_Point * set_px__lens_89e16e7f8669ca4e(int64_t, tur_adt_Point *);
+static tur_adt_Point * set_px__lens_29dc1a87dc9f86df(int64_t, tur_adt_Point *);
 static tur_adt_Identity__int __fn_1310__byval(void *, int64_t);
-static int64_t over_px__lens_89e16e7f8669ca4e(tur_poly_fn_t, tur_poly_fn_t, int64_t);
-static int64_t over_px__lens_29dc1a87dc9f86df(tur_poly_fn_t, tur_poly_fn_t, int64_t);
+static tur_adt_Point * over_px__lens_89e16e7f8669ca4e(tur_poly_fn_t, tur_adt_Point *);
+static tur_adt_Point * over_px__lens_29dc1a87dc9f86df(tur_poly_fn_t, tur_adt_Point *);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -5945,13 +5945,13 @@ int main(int argc, char **argv) {
         {
             tur_adt_Point * p_1315 = ctor_Point(INT64_C(3), INT64_C(4));
             (void)p_1315;
-            tur_adt_Point * p1_1330 = set_hypx((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_1320 }, INT64_C(99), (tur_adt_Point *)(intptr_t)(p_1315));
+            tur_adt_Point * p1_1330 = set_px__lens_89e16e7f8669ca4e(INT64_C(99), (tur_adt_Point *)(intptr_t)(p_1315));
             (void)p1_1330;
-            tur_adt_Point * p2_1345 = set_hypx((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_1335 }, INT64_C(88), (tur_adt_Point *)(intptr_t)(p_1315));
+            tur_adt_Point * p2_1345 = set_px__lens_29dc1a87dc9f86df(INT64_C(88), (tur_adt_Point *)(intptr_t)(p_1315));
             (void)p2_1345;
-            tur_adt_Point * p3_1369 = over_hypx((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_1350 }, (tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_1363 }, (tur_adt_Point *)(intptr_t)(p_1315));
+            tur_adt_Point * p3_1369 = over_px__lens_89e16e7f8669ca4e((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_1363 }, (tur_adt_Point *)(intptr_t)(p_1315));
             (void)p3_1369;
-            tur_adt_Point * p4_1393 = over_hypx((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_1374 }, (tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_1387 }, (tur_adt_Point *)(intptr_t)(p_1315));
+            tur_adt_Point * p4_1393 = over_px__lens_29dc1a87dc9f86df((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_1387 }, (tur_adt_Point *)(intptr_t)(p_1315));
             (void)p4_1393;
             printf("%lld\n", (long long)((int64_t)((tur_adt_Point *)(intptr_t)(p1_1330))->x));
             printf("%lld\n", (long long)((int64_t)((tur_adt_Point *)(intptr_t)(p1_1330))->y));
@@ -6024,20 +6024,20 @@ static tur_adt_Identity__int __fn_1301__byval(void * __env_p_1304, int64_t a) {
         return mk_id__spec__tur_adt_Identity__int_int64_t(__env___env_1303__byval->b);
 }
 
-static int64_t set_px__lens_89e16e7f8669ca4e(tur_poly_fn_t l, int64_t b, int64_t s) {
+static tur_adt_Point * set_px__lens_89e16e7f8669ca4e(int64_t b, tur_adt_Point * s) {
         struct __env_1303__byval *__t79 = (struct __env_1303__byval *)malloc(sizeof(struct __env_1303__byval));
         __t79->__fn = (int64_t)(intptr_t)__fn_1301__byval;
         __t79->b = b;
         void *__t80 = __t79;
-        return (int64_t)(intptr_t)run_id__spec__tur_adt_Point___tur_adt_Identity__Point(point_x__mono_89e16e7f8669ca4e((int64_t)(intptr_t)(__t80), (int64_t)(intptr_t)(s)));
+        return run_id__spec__tur_adt_Point___tur_adt_Identity__Point(point_x__mono_89e16e7f8669ca4e((int64_t)(intptr_t)(__t80), (int64_t)(intptr_t)(s)));
 }
 
-static int64_t set_px__lens_29dc1a87dc9f86df(tur_poly_fn_t l, int64_t b, int64_t s) {
+static tur_adt_Point * set_px__lens_29dc1a87dc9f86df(int64_t b, tur_adt_Point * s) {
         struct __env_1303__byval *__t81 = (struct __env_1303__byval *)malloc(sizeof(struct __env_1303__byval));
         __t81->__fn = (int64_t)(intptr_t)__fn_1301__byval;
         __t81->b = b;
         void *__t82 = __t81;
-        return (int64_t)(intptr_t)run_id__spec__tur_adt_Point___tur_adt_Identity__Point(point_y__mono_29dc1a87dc9f86df((int64_t)(intptr_t)(__t82), (int64_t)(intptr_t)(s)));
+        return run_id__spec__tur_adt_Point___tur_adt_Identity__Point(point_y__mono_29dc1a87dc9f86df((int64_t)(intptr_t)(__t82), (int64_t)(intptr_t)(s)));
 }
 
 struct __env_1312__byval { int64_t __fn; tur_poly_fn_t h; };
@@ -6046,20 +6046,20 @@ static tur_adt_Identity__int __fn_1310__byval(void * __env_p_1313, int64_t a) {
         return mk_id__spec__tur_adt_Identity__int_int64_t(((int64_t (*)(void*, int64_t))__env___env_1312__byval->h.fn)(__env___env_1312__byval->h.env, a));
 }
 
-static int64_t over_px__lens_89e16e7f8669ca4e(tur_poly_fn_t l, tur_poly_fn_t h, int64_t s) {
+static tur_adt_Point * over_px__lens_89e16e7f8669ca4e(tur_poly_fn_t h, tur_adt_Point * s) {
         struct __env_1312__byval *__t83 = (struct __env_1312__byval *)malloc(sizeof(struct __env_1312__byval));
         __t83->__fn = (int64_t)(intptr_t)__fn_1310__byval;
         __t83->h = h;
         void *__t84 = __t83;
-        return (int64_t)(intptr_t)run_id__spec__tur_adt_Point___tur_adt_Identity__Point(point_x__mono_89e16e7f8669ca4e((int64_t)(intptr_t)(__t84), (int64_t)(intptr_t)(s)));
+        return run_id__spec__tur_adt_Point___tur_adt_Identity__Point(point_x__mono_89e16e7f8669ca4e((int64_t)(intptr_t)(__t84), (int64_t)(intptr_t)(s)));
 }
 
-static int64_t over_px__lens_29dc1a87dc9f86df(tur_poly_fn_t l, tur_poly_fn_t h, int64_t s) {
+static tur_adt_Point * over_px__lens_29dc1a87dc9f86df(tur_poly_fn_t h, tur_adt_Point * s) {
         struct __env_1312__byval *__t85 = (struct __env_1312__byval *)malloc(sizeof(struct __env_1312__byval));
         __t85->__fn = (int64_t)(intptr_t)__fn_1310__byval;
         __t85->h = h;
         void *__t86 = __t85;
-        return (int64_t)(intptr_t)run_id__spec__tur_adt_Point___tur_adt_Identity__Point(point_y__mono_29dc1a87dc9f86df((int64_t)(intptr_t)(__t86), (int64_t)(intptr_t)(s)));
+        return run_id__spec__tur_adt_Point___tur_adt_Identity__Point(point_y__mono_29dc1a87dc9f86df((int64_t)(intptr_t)(__t86), (int64_t)(intptr_t)(s)));
 }
 
 

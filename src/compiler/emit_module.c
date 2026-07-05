@@ -395,8 +395,8 @@ void emit_vl_mono_name(Buf *out, const char *lens_name, unsigned long long hash)
  * symbol for a consumer clone.  Keyed on the concrete lens hash so two call
  * sites passing the same lens to the same consumer share one clone (OQ #2) while
  * distinct lenses stay distinct clones. */
-static void emit_vl_consumer_mono_name(Buf *out, const char *consumer_name,
-                                       unsigned long long lens_hash) {
+void emit_vl_consumer_mono_name(Buf *out, const char *consumer_name,
+                                unsigned long long lens_hash) {
     append_sanitized_c_token(out,
                              (consumer_name && *consumer_name) ? consumer_name
                                                                : "consumer");
@@ -9488,13 +9488,52 @@ int emit_program(Buf *out, const Expr *program) {
                 gfd->box_aggregate_result = saved_box;
             }
 
-            /* --- One consumer clone per concrete lens. --- */
+            /* --- Reduced consumer view: drop the lens param. --- */
+            /* CM3 elides the lens arg at the call site, so the clone signature
+             * must drop it too.  Build a shallow FnDef/Expr copy (shared by all
+             * this consumer's lens clones) whose params omit the lens slot; the
+             * shared body still names `l` only in the redirected `(l g s)` (never
+             * emitted as a value), so its binding need not stay a param. */
+            int cm_lens_idx = -1;
+            uint8_t c_n0 = cfd->n_params <= MAX_FN_ARITY ? cfd->n_params
+                                                         : MAX_FN_ARITY;
+            for (uint8_t p = 0; p < c_n0; p++)
+                if ((const void *)cfd->params[p] == lb) { cm_lens_idx = p; break; }
+            if (cm_lens_idx < 0) continue;   /* lens not a positional param */
+            uint8_t c_n = (uint8_t)(c_n0 - 1);
+            Binding **r_params = (Binding **)arena_alloc(
+                ctx.type_arena, sizeof(Binding *) * (c_n ? c_n : 1));
+            Type *r_ptypes = (Type *)arena_alloc(
+                ctx.type_arena, sizeof(Type) * (c_n ? c_n : 1));
+            /* Use the consumer's CONCRETE arg/return types (arg_full_types /
+             * result_full_type -- the same source the carrier body's signature
+             * uses) so the clone's ABI matches the carrier's; CM3's call rewrite
+             * then reuses the ordinary arg emission with no extra casts. */
+            Type **aft = (cexpr->type.kind == TY_FN)
+                ? cexpr->type.as.fn.arg_full_types : NULL;
             Type c_args[MAX_FN_ARITY];
-            uint8_t c_n = cfd->n_params <= MAX_FN_ARITY ? cfd->n_params
-                                                        : MAX_FN_ARITY;
-            for (uint8_t a = 0; a < c_n; a++)
-                c_args[a] = cfd->param_types ? cfd->param_types[a] : (Type){0};
-            Type c_res = cfd->return_type;
+            for (uint8_t p = 0, q = 0; p < c_n0; p++) {
+                if (p == cm_lens_idx) continue;
+                r_params[q] = cfd->params[p];
+                Type pty = (aft && aft[p]) ? *aft[p]
+                    : (cfd->param_types ? cfd->param_types[p] : (Type){0});
+                r_ptypes[q] = pty;
+                c_args[q] = pty;
+                q++;
+            }
+            FnDef *r_fn = (FnDef *)arena_alloc(ctx.type_arena, sizeof(FnDef));
+            *r_fn = *cfd;
+            r_fn->n_params = c_n;
+            r_fn->params = r_params;
+            r_fn->param_types = r_ptypes;
+            Expr *r_expr = (Expr *)arena_alloc(ctx.type_arena, sizeof(Expr));
+            *r_expr = *cexpr;
+            r_expr->as.fn_def_.fn = r_fn;
+            Type c_res = (cexpr->type.kind == TY_FN &&
+                          cexpr->type.as.fn.result_full_type)
+                ? *cexpr->type.as.fn.result_full_type : cfd->return_type;
+
+            /* --- One consumer clone per concrete lens. --- */
             for (size_t li = 0; li < nset; li++) {
                 const char *lens_name = NULL; const void *lens_fn = NULL;
                 unsigned long long lh = 0;
@@ -9535,8 +9574,8 @@ int emit_program(Buf *out, const Expr *program) {
                 EmitAbiSpecialization *cl = &ctx.abi_specializations[cl_idx];
                 memset(cl, 0, sizeof *cl);
                 cl->inner_closure_spec_idx = (int32_t)gt_idx;
-                cl->fn_expr = cexpr;
-                cl->fn = cfd;
+                cl->fn_expr = r_expr;
+                cl->fn = r_fn;
                 cl->binding = cfd->binding;
                 cl->n_bindings = 0;
                 cl->n_args = c_n;

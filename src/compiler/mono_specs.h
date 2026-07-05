@@ -55,6 +55,20 @@ const char *mono_spec_abstract_enclosing(size_t i);
  * `f := <functor>` and resolve the shared `g` twin's `(f A)` result by value. */
 const char *mono_spec_abstract_tyvar(size_t i, const void **functor_ty);
 
+/* CM3: if a call to `callee_name` targets a consumer whose lens param has
+ * consumer-mono clones (|set| >= 2), return that lens param's `Binding *` and set
+ * `*lens_idx_out` to the lens arg's positional slot; NULL otherwise.  The call
+ * emit reads the concrete lens from arg `lens_idx`, then `mono_spec_lens_clone_hash`
+ * gives the `<lens>__mono_<hash>` hash that names the `<consumer>__lens_<hash>`
+ * clone; a non-concrete (runtime-selected) lens has no clone and stays on Path A. */
+const void *mono_spec_consumer_call_lookup(const char *callee_name,
+                                           int *lens_idx_out);
+
+/* CM3: the mono hash for concrete lens `lens_name` in the set resolved for
+ * consumer lens param `lensparam_binding` (0 if the lens is not in the set). */
+unsigned long long mono_spec_lens_clone_hash(const void *lensparam_binding,
+                                             const char *lens_name);
+
 /* VBM2: resolve every abstract spec to its concrete lens by scanning the
  * elaborated program `prog` (an `Expr *` program node) for calls of each
  * abstract spec's enclosing fn, and register a concrete `(lens_fn, functor,
