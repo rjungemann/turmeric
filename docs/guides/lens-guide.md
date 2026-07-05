@@ -1,10 +1,10 @@
 ---
-title: Lenses
+title: Lens Guide
 category: Standard Library
 description: First-class functional lenses (view / set / over) via stdlib/lens.tur, the profunctor-by-record encoding shipped by default, and the van Laarhoven form available behind experiment flags.
 ---
 
-# Lenses
+# Lens Guide
 
 A **lens** is a first-class getter/setter for a part `A` of a whole `S`. It lets
 you read, replace, and transform a nested field without hand-writing the
