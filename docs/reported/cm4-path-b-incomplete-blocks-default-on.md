@@ -38,19 +38,23 @@ Each fails at the C-compile step (Path B emits ill-typed C), not at runtime.
    `current_abi_specialization == NULL && generic` (the concrete ABI-spec body,
    which has an active spec, still redirects). `wide-generic` now passes on
    Path B; `wide-compose` advances to gap 2 below.
-2. **Lens composition** (`wide-compose`). OPEN. `line-a-x` composes `line-a` and
-   `point-x` via `(line-a (fn [p] (point-x g p)) s)`. Inside the by-value mono
-   body `line_a_x__mono`, the nested lens is lowered through a dict-clone
-   `line_a__dict_..._spec_...` that MB2.5 forces to return the int64 carrier
-   (`emit_fns.c` `fd->dict_clone_class` -> `ret_ctype = "int64_t"`), but the
-   forward decl (`emit_module.c` `emit_abi_forward_decl`, which does NOT apply the
-   dict_clone_class override) and `line_a_x__mono`'s `return` both expect the
-   by-value `tur_adt_Identity__Line`. Symptoms: `conflicting types for
-   'line_a__dict_..._spec_...'` (decl by-value vs def int64) and `incompatible
-   types when returning int64 but tur_adt_Identity__Line was expected`. Fix
-   direction: a dict-clone consumed by-value inside a mono body must return the
-   wide `(f S)` by value -- either a by-value dict-clone variant or a
-   carrier->concrete bridge at the `line_a_x__mono` call site. Deep MB2.5/WF3.
+2. **Lens composition** (`wide-compose`). OPEN (partially advanced). `line-a-x`
+   composes `line-a` and `point-x` via `(line-a (fn [p] (point-x g p)) s)`.
+   Inside the by-value mono body `line_a_x__mono`, the nested `line-a` is lowered
+   through a dict-clone `line_a__dict_..._spec_...` that MB2.5 forces to the int64
+   carrier. **Advanced:** `emit_abi_forward_decl` now applies the same
+   `dict_clone_class` -> int64 override as `emit_fns.c`, so the decl/def agree
+   (the `conflicting types` error is gone). **Remaining:** the composition's
+   internal ADAPTER closure `(fn [p] (point-x g p))` is built by value in
+   `line_a_x__mono` (is_vl_wide_mono) but crosses into the CARRIER dict-clone,
+   which dispatches `fmap` through the runtime dict (int64). Two ABI-boundary
+   bridges are still missing: (a) box the adapter's by-value `(f Point)` result
+   before the carrier `fmap` slot (`incompatible type for argument 1 of ...
+   __dict_...`), and (b) unbox the dict-clone's int64 result back to
+   `tur_adt_Identity__Line` at the `line_a_x__mono` return. Root: a composed
+   wide lens straddles by-value (outer) and carrier (inner dict-clone) ABIs, and
+   the adapter needs the carrier ABI on that crossing (the same g-ABI-per-context
+   problem CM2's twin solved, now at the composition seam). Deep MB2.5/WF3.
 3. **Receiver-reading `fmap` instances** (`wide-capture`, concrete focus/whole).
    OPEN. Its `Functor Identity` preserves the tag -- `(fmap [i g] (make-struct
    Identity :wrapped (g (run-id i)) :tag (id-tag i)))` -- reading the receiver `i`

@@ -4947,6 +4947,13 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
          * box_aggregate_result branch so the spec forward decl agrees with the
          * definition (which heap-boxes the by-value spec result). */
         buf_puts(out, "int64_t");
+    } else if (spec->fn->dict_clone_class) {
+        /* MB2.5: a dict-clone wrapper dispatches through the runtime dict and
+         * always returns the int64 carrier (emit_fns.c forces this) -- even when
+         * its `(f a)` result resolves to a by-value aggregate.  Mirror that here
+         * so the forward decl agrees with the definition (a composed wide lens
+         * `line-a-x` lowers its nested `line-a` through such a dict-clone). */
+        buf_puts(out, "int64_t");
     } else if (is_instance_method &&
         spec->result_type.kind == TY_APP &&
         !type_is_heap_struct(spec->result_type) &&
