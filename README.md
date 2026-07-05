@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.26.4` -- lands VBM1 + VBM2a of the by-value van Laarhoven monomorphization path: per-concrete-functor spec discovery at lens call sites, plus a cross-procedural resolve pass that collapses abstract lens pins to concrete emit keys.
+**Latest release:** `v0.26.5` -- graduates `vl-wide-mono` (Path B default-on): CM1-CM4 consumer monomorphization, box-free consumer clones for ambiguous lens params, and by-value propagation across composed van Laarhoven lenses.
 
 ## What
 

@@ -4,8 +4,21 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.26.5] -- 2026-07-05
+
 ### Added
 
+- **Consumer monomorphization graduated; `vl-wide-mono` retired**
+  (CM1-CM4). By-value HKT across the van Laarhoven lens boundary
+  (Path B) is now unconditional; the `--enable=vl-wide-mono`
+  experiment is gone. CM1 resolves each consumer's lens param to the
+  full set of concrete lenses reachable at its call sites via a
+  fixpoint. CM2 emits box-free consumer clones
+  (`<consumer>__lens_<hash>`) for ambiguous (|set|>=2) params. CM3
+  rewrites those call sites to the clones, dropping the lens arg.
+  CM3-transitive specializes forwarding consumers through the call
+  graph. CM4 gates composed lenses back to Path A via a
+  `has_composed_lens` poison so the graduation is safe.
 - **By-value propagation for composed van Laarhoven lenses** (CB1-CB5).
   A composed lens (`line-a-x`, whose body tails into another lens via an
   adapter lambda) and any consumer passed one now thread `(f a)` by value
@@ -13,11 +26,19 @@ All notable changes to Turmeric are documented here.
   resolve pass re-admits composed lenses and registers their nested lenses'
   `<lens>__mono` bodies; the poly-call emit redirects each nested
   application to the nested mono body; VBM2b mints a by-value twin of the
-  adapter closure. Closes the last CM4 correctness carve-out; the
-  `has_composed_lens` poison survives only as a backstop for shapes the
-  by-value lowering does not cover (they stay on the Path A carrier).
-  `van-laarhoven-lens-wide-compose` runs by value with an `expected.c`
-  codegen snapshot.
+  adapter closure. `van-laarhoven-lens-wide-compose` runs by value with an
+  `expected.c` codegen snapshot.
+- **REPL terminal escape-sequence handling** for cursor / key events in
+  `src/turi/repl.c`.
+
+### Changed
+
+- **Docs**: `docs/guides/lens-guide.md` now documents Path B as always-on
+  with the simple-vs-composed distinction and the two Path A fallbacks
+  (runtime-selected + composed lenses). Resolved `docs/upcoming/` plans
+  moved to `docs/archive/`; the residual by-value-propagation slice for
+  composed lenses is captured in
+  `docs/upcoming/v2/van-laarhoven-composed-byvalue-plan.md`.
 
 ## [0.26.4] -- 2026-07-04
 
