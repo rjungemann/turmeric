@@ -50,17 +50,26 @@ by a driver `DK_*` frame. The same shape applies here:
 
 ### Phase C1 -- `catch-unwind` on a work-stack panic signal
 
-- Add `env->panicking_unwind` (+ payload: msg/type/value/file/line, already on
-  `env` as `catch_panic_*`) as a propagating signal, exactly parallel to
-  `env->aborting`. A `panic` raises it instead of `longjmp(catch_jmp)` when a
-  driver `DK_CATCH_UNWIND` boundary is in scope.
-- Add `DK_CATCH_UNWIND`: a driver case for `EX_CATCH_UNWIND` applies the body
-  thunk on the work-stack (have_apply / `DK_CALL_RET`) beneath the boundary
-  frame; on return it consumes a matching panic signal (delivers the caught
-  payload, restores saved handler/defer/module/no_unwind) or propagates.
-- Extend the one `replace_all` site set: add `|| env->panicking_unwind` to the
-  propagation guards (or fold it into a single `env->signaled()` helper to avoid
-  a fourth flag proliferating through 94 sites).
+- Promote the existing `env->panicking` bool (`src/turi/eval.c:7462,7488`, set
+  on panic start and cleared when the setjmp landing pad catches it) into a
+  first-class *propagating* signal, parallel to `env->aborting` -- i.e. reuse
+  the name, don't add a second `panicking_unwind` field alongside it. Payload
+  is already on `env` as `catch_panic_msg`/`catch_panic_type`/`catch_panic_value`
+  /`catch_panic_file`/`catch_panic_line`. A `panic` raises the signal (and
+  fills the payload) instead of `longjmp(catch_jmp)` when a driver
+  `DK_CATCH_UNWIND` boundary is in scope.
+- Add `DK_CATCH_UNWIND`: modeled on `DK_RESET` (the closest SR template -- see
+  the existing kinds `DK_RESET`/`DK_ESCAPE`/`DK_CONT_FOLD` around
+  `src/turi/eval.c:4370-4415`). A driver case for `EX_CATCH_UNWIND` applies the
+  body thunk on the work-stack (have_apply / `DK_CALL_RET`) beneath the
+  boundary frame; on return it consumes a matching panic signal (delivers the
+  caught payload, restores saved handler/defer/module/no_unwind) or
+  propagates.
+- Extend the one `replace_all` site set: add `|| env->panicking` to the
+  propagation guards (94 sites in `src/turi/eval.c` today match
+  `env->returning ... env->throwing ... env->aborting`). Strongly prefer
+  folding into a single `env->signaled()` helper -- a fourth raw flag through
+  94 sites is exactly the churn SR paid down.
 - Keep `catch_jmp`/`longjmp` for the **non-driver** path (panic raised while no
   `DK_CATCH_UNWIND` is on the work-stack, e.g. inside a still-black-boxed form),
   exactly as SR kept synchronous fallbacks.
@@ -71,7 +80,10 @@ by a driver `DK_*` frame. The same shape applies here:
 
 - Model the transaction boundary as a `DK_ATOMICALLY` frame: drive the body
   beneath it; on `retry` (an STM signal) re-drive the body in the same slot
-  (a loop-native style re-request, like `DK_CONT_FOLD`), rather than recursing.
+  (a loop-native style re-request, like the existing `DK_CONT_FOLD` at
+  `src/turi/eval.c:4370-4415`), rather than recursing. The `EX_STM` /
+  `EX_ATOMICALLY` cases (`src/turi/eval.c:7980,7993`) currently loop in C
+  through `eval_atomically()`; they are the black boxes this phase replaces.
 - Reconcile with `g_stm_tx` / the STM log lifetime across work-stack suspension.
 
 ### Phase C3 -- fibers (`async` / `await` / `handle`)
@@ -84,8 +96,9 @@ by a driver `DK_*` frame. The same shape applies here:
 
 ## Retiring the guard (Phase C4)
 
-Once C1-C3 land and the audit probe set (extend `tests/turi/eval-tco`) shows no
-form trips the guard at 1,000,000 deep:
+Once C1-C3 land and the audit probe set (extend `tests/turi/eval-tco.tur`,
+driven by `tests/turi/eval-tco.sh`) shows no form trips the guard at
+1,000,000 deep:
 
 - Remove the `eval_depth++` / `>= max_eval_depth` checks in `eval_apply` and
   `eval_expr` (`src/turi/eval.c`), the `max_eval_depth` field plumbing, and the
@@ -96,14 +109,32 @@ form trips the guard at 1,000,000 deep:
 
 ## Validation
 
-`bash tests/run.sh` (1783/0 baseline) + the `tur_eval_tco` audit suite, each with
-the 10-minute timeout. Add a regression per phase mirroring the SR slices
-(`cu-rec`, `atom-rec`, `fiber-rec` at 200000). `run-turi` baseline 23.
+`bash tests/run.sh` (regenerate the pass/fail baseline on the day the phase
+lands -- the fixture set moves; CLAUDE.md rounds to ~1442, the on-disk count
+is ~1580, both are older than this line will be) + the `tur_eval_tco` audit
+target, each with the 10-minute timeout. Add a regression per phase mirroring
+the SR slices (`cu-rec`, `atom-rec`, `fiber-rec` at 200000).
 
-## Out of scope / open question
+## Out of scope / semantic-parity stance
 
-Whether the interpreter *should* heap-bound forms the compiled backend crashes on
-is a real semantic-parity question (a program that nests `catch-unwind` 1M deep
-runs under the interpreter but SIGSEGVs compiled). Resolve this before C4: either
-accept the divergence (interpreter is a superset) or gate these forms' depth to a
-compiled-comparable static limit so both backends fail the same way.
+The interpreter will heap-bound these forms even though the compiled backend
+still C-recurses on them (a program that nests `catch-unwind` 1M deep runs
+under the interpreter and SIGSEGVs compiled). **We accept this divergence as
+temporary, not as a language decision.** The interpreter runs on a work-stack
+driver; the compiled backend runs directly on the C stack; the two paths were
+always going to converge on heap-bounding at different times, and gating the
+interpreter down to match a limit the compiler will eventually lift is
+back-pressure in the wrong direction.
+
+The compiled path has a coherent design that closes the gap -- a heap-allocated
+handler chain replacing `setjmp`/`longjmp` for `catch-unwind`, a heap-anchored
+tx-log for `atomically`, and a CPS/first-class-continuation direction for
+`async`/`handle`. That work is scoped in the sibling
+[compiled-c-crossing-tco-plan.md](./compiled-c-crossing-tco-plan.md); it is
+ABI-level and not on the near-term roadmap, but it exists and it is the reason
+the divergence is a temporal gap, not a permanent semantic split.
+
+Concretely for this plan: land C1-C4 without gating on compiled parity, and
+document the interpreter-superset stance in the user-facing docs so a program
+that relies on 1M-deep `catch-unwind` under the interpreter cannot be surprised
+when the compiler crashes on the same input.

@@ -228,6 +228,21 @@ static char *tur_completion_generator(const char *text, int state) {
 #endif /* TURI_HAVE_EDITLINE */
 
 /* -------------------------------------------------------------------------
+ * Shell-integration markers (OSC 133 semantic prompts).
+ *
+ * A host terminal (e.g. Trowel, iTerm2, WezTerm) uses these to track idle
+ * vs. busy state without pattern-matching the prompt string. Enabled when
+ * stdout is a TTY; opt out with TUR_NO_SHELL_INTEGRATION=1.
+ * ---------------------------------------------------------------------- */
+static bool g_shell_integration = false;
+
+static void repl_emit_prompt_marker(void) {
+    if (!g_shell_integration) return;
+    fputs("\x1b]133;A\x07", stdout);
+    fflush(stdout);
+}
+
+/* -------------------------------------------------------------------------
  * Line input abstraction (editline when available, fgets fallback)
  * ---------------------------------------------------------------------- */
 
@@ -235,6 +250,7 @@ static char *tur_completion_generator(const char *text, int state) {
  * must free) or NULL on EOF/error.  Uses add_history when editline is
  * available and the line is non-empty. */
 static char *repl_readline(const char *prompt) {
+    repl_emit_prompt_marker();
 #ifdef TURI_HAVE_EDITLINE
     char *line = readline(prompt);
     if (line && line[0] != '\0') add_history(line);
@@ -903,6 +919,9 @@ static bool check_tutorial_step(TuriEnv *env, const char *input) {
 
 int turi_repl_run(bool watch_mode) {
     bool use_color = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
+    const char *no_shell_integ = getenv("TUR_NO_SHELL_INTEGRATION");
+    g_shell_integration = isatty(STDOUT_FILENO)
+        && (!no_shell_integ || strcmp(no_shell_integ, "1") != 0);
 
     turi_init(use_color);
     
