@@ -4,6 +4,21 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **By-value propagation for composed van Laarhoven lenses** (CB1-CB5).
+  A composed lens (`line-a-x`, whose body tails into another lens via an
+  adapter lambda) and any consumer passed one now thread `(f a)` by value
+  end to end on Path B -- no carrier box at any composition crossing. The
+  resolve pass re-admits composed lenses and registers their nested lenses'
+  `<lens>__mono` bodies; the poly-call emit redirects each nested
+  application to the nested mono body; VBM2b mints a by-value twin of the
+  adapter closure. Closes the last CM4 correctness carve-out; the
+  `has_composed_lens` poison survives only as a backstop for shapes the
+  by-value lowering does not cover (they stay on the Path A carrier).
+  `van-laarhoven-lens-wide-compose` runs by value with an `expected.c`
+  codegen snapshot.
+
 ## [0.26.4] -- 2026-07-04
 
 ### Added

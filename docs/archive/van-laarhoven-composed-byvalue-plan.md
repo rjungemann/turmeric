@@ -1,10 +1,41 @@
 # Plan: By-Value Propagation for Composed van Laarhoven Lenses (Path B)
 
-> **Status:** Proposed
-> **Last Updated:** 2026-07-05
+> **Status:** RESOLVED 2026-07-05 (CB1-CB5 landed).  Composed van Laarhoven
+> lenses now thread `(f a)` by value end to end on Path B -- no carrier box at
+> any composition crossing.  The last correctness carve-out from the CM4
+> graduation is closed: the `has_composed_lens` poison survives only as the CB5
+> backstop for shapes CB2/CB3 cannot lower (runtime-selected nested lens,
+> non-lens tail, missing adapter, depth past the cap), which stay on Path A.
+> `van-laarhoven-lens-wide-compose` runs `7 / 700 / 2 / 0 / 42` by value with an
+> `expected.c` codegen snapshot; full suite 1943 passed, 0 failed.
 > **Type:** Compiler / Codegen
 > **Predecessors:** van-laarhoven-monomorphization-plan.md (VBM1-VBM4),
 > van-laarhoven-consumer-mono-plan.md (CM1-CM4)
+
+## What shipped (CB1-CB5)
+
+- **CB1** (`mono_specs.c`): `resolve_walk` re-admits a composed lens -- it
+  registers the composed lens's concrete key AND, via `register_nested_lenses`,
+  the concrete keys of every nested lens applied in its body (mapping each MB1
+  dict-clone back to its original defn through the shared body, `resolve_orig_lens`),
+  so their `<lens>__mono` bodies get emitted.  `fn_is_lens` discriminates a
+  nested-lens application from any other global call.
+- **CB2** (`emit_expr.c`): inside an `is_vl_wide_mono` body a DIRECT nested-lens
+  application `(point-x g p)` / `(line-a adapter s)` -- lowered through the lens's
+  `<lens>__dict_N` clone -- redirects to the nested `<lens>__mono_<hash>` (via
+  `mono_spec_mono_hash_for_lens`, dict-suffix stripped), dropping the carrier dict.
+- **CB3** (`emit_module.c`): VBM2b emits SIMPLE lens monos first (pass 0),
+  COMPOSED ones second (pass 1), so the shared by-value `fmap` twin exists with
+  its retyped receiver before a composed adapter reuses it.  For a composed lens
+  it mints a by-value twin of the ADAPTER closure (result `(f Focus)` built as
+  `(<functor> <focus>)`, `box_aggregate_result` cleared, `inner_closure_spec_idx`
+  linked) so the `EX_CLOSURE` construction stores the twin's thunk.
+- **CB4**: `van-laarhoven-lens-wide-compose` gains an `expected.c` snapshot that
+  locks in the by-value chain (`line_a_x__mono` -> `line_a__mono` /
+  `__fn_1317__byval` -> `point_x__mono`) with no carrier box.
+- **CB5** (`mono_specs.c`): `composed_lens_byvalueable` admits a composed lens to
+  Path B only when its shape matches what CB2/CB3 lower (recursively, bounded
+  depth); everything else keeps the `has_composed_lens` Path A backstop.
 
 ## Goal
 

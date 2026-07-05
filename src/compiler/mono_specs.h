@@ -106,6 +106,14 @@ unsigned long long mono_spec_concrete_emit_info(size_t i, const void **lens_fn,
                                                 const char **tyvar,
                                                 const void **functor_ty);
 
+/* CB2 (van-laarhoven-composed-byvalue-plan): the `<lens>__mono_<hash>` hash for
+ * the concrete key matching lens defn `lens_name` (and functor ctor name
+ * `functor_name`, when non-NULL).  Used by the direct-lens redirect inside a
+ * composed lens's by-value mono body to target a NESTED lens's mono body
+ * (`(point-x g p)` -> `point_x__mono`).  0 when no such concrete key exists. */
+unsigned long long mono_spec_mono_hash_for_lens(const char *lens_name,
+                                                const char *functor_name);
+
 /* VBM3: if `lensparam_binding` is the abstract lens param `l` of a consumer
  * whose lens UNIQUELY resolves (|set| == 1) to a concrete `<lens>__mono_<hash>`
  * body, return true and hand back the lens name + hash so the poly-call emit can

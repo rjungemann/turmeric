@@ -2701,6 +2701,51 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
             }
 
+            /* CB2 (van-laarhoven-composed-byvalue-plan): inside a by-value
+             * monomorphized COMPOSED lens body (is_vl_wide_mono), a DIRECT
+             * application of a NESTED lens -- `(point-x g p)` inside the adapter,
+             * `(line-a adapter s)` at the tail -- is lowered through the lens's
+             * MB1 dict-clone `<lens>__dict_N` and would otherwise dispatch through
+             * the runtime carrier dict, reintroducing the box the whole path
+             * removes.  Redirect it to the nested lens's own `<lens>__mono_<hash>`
+             * body (registered by CB1), passing the trailing two args (`g`/adapter
+             * and the whole `s`) by value and dropping the leading carrier dict.
+             * Keyed off the concrete lens name (dict-suffix stripped) + the
+             * concrete registry; a non-lens call has no mono and is untouched. */
+            if (fn_binding && fn_binding->name && fn_binding->name->name &&
+                ctx->current_abi_specialization &&
+                ctx->current_abi_specialization->is_vl_wide_mono &&
+                e->as.call_.n_args >= 2) {
+                const char *nm = fn_binding->name->name;
+                const char *cut = strstr(nm, "__dict_");
+                size_t blen = cut ? (size_t)(cut - nm) : strlen(nm);
+                char base[128];
+                if (blen > 0 && blen < sizeof base) {
+                    memcpy(base, nm, blen);
+                    base[blen] = '\0';
+                    unsigned long long h =
+                        mono_spec_mono_hash_for_lens(base, NULL);
+                    if (h) {
+                        uint32_t na = e->as.call_.n_args;
+                        char *g_str =
+                            emit_value(ctx, body, e->as.call_.args[na - 2]);
+                        char *s_str =
+                            emit_value(ctx, body, e->as.call_.args[na - 1]);
+                        Buf mo; buf_init(&mo);
+                        emit_vl_mono_name(&mo, base, h);
+                        buf_printf(&mo,
+                                   "((int64_t)(intptr_t)(%s), "
+                                   "(int64_t)(intptr_t)(%s))",
+                                   g_str, s_str);
+                        buf_putc(&mo, '\0');
+                        char *result = strdup(mo.data);
+                        buf_free(&mo);
+                        free(g_str); free(s_str);
+                        return result;
+                    }
+                }
+            }
+
             /* Phase 16 v2: indirect capability field call — fn_expr is EX_GET_FIELD.
              * Emit: ((ret_t (*)(arg_t, ...))(intptr_t)(struct_val).field_name)(args...)
              * Effect-row annotation is advisory (erased to a plain function pointer).

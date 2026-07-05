@@ -229,6 +229,20 @@ unsigned long long mono_spec_concrete_emit_info(size_t i, const void **lens_fn,
     return (unsigned long long)k->hash;
 }
 
+unsigned long long mono_spec_mono_hash_for_lens(const char *lens_name,
+                                                const char *functor_name) {
+    if (!lens_name) return 0;
+    for (size_t i = 0; i < g_n_concrete; i++) {
+        const MonoConcreteKey *k = &g_concrete[i];
+        if (strcmp(k->lens, lens_name) != 0) continue;
+        if (functor_name && *functor_name &&
+            strcmp(k->functor, functor_name) != 0)
+            continue;
+        return (unsigned long long)k->hash;
+    }
+    return 0;
+}
+
 bool mono_spec_redirect_for_binding(const void *lensparam_binding,
                                     const char **lens_name,
                                     unsigned long long *mono_hash) {
@@ -433,6 +447,243 @@ static bool lens_is_simple_for_pathb(const FnDef *lens) {
     return strcmp(da->as.dict_.method_name, "fmap") == 0;
 }
 
+/* CB1 (van-laarhoven-composed-byvalue-plan): peel a type to its head constructor
+ * and, if the head is a type variable, return its (interned) name; NULL else. */
+static const char *ty_head_tyvar_name(const Type *t) {
+    while (t && t->kind == TY_APP && t->as.app.fn) t = t->as.app.fn;
+    if (t && t->kind == TY_TYVAR) return t->as.tyvar_.name;
+    return NULL;
+}
+
+/* CB1: structural test that `fn` is a van Laarhoven lens -- it returns `(f S)`
+ * (a type application headed by an HKT tyvar `f`) and carries a function-typed
+ * parameter `g : (-> A (f A))` whose result is headed by the SAME `f`.  This is
+ * the shape `point-x` / `line-a` / `line-a-x` share; ordinary helpers do not
+ * match, so it discriminates a nested-lens application from any other global
+ * call in a composed lens body. */
+static bool fn_is_lens(const FnDef *fn) {
+    if (!fn || !fn->body || fn->n_params == 0 || !fn->param_types) return false;
+    if (fn->return_type.kind != TY_APP) return false;
+    const char *fv = ty_head_tyvar_name(&fn->return_type);
+    if (!fv) return false;
+    for (uint8_t p = 0; p < fn->n_params; p++) {
+        const Type *pt = &fn->param_types[p];
+        if (pt->kind != TY_FN) continue;
+        const Type *res = pt->as.fn.result_full_type;
+        if (!res || res->kind != TY_APP) continue;
+        const char *rv = ty_head_tyvar_name(res);
+        if (rv && strcmp(rv, fv) == 0) return true;
+    }
+    return false;
+}
+
+/* CB1: a nested lens is applied through its MB1 *dict-clone* (`point-x__dict_N`,
+ * `dict_clone_class` set) inside a composed lens body -- the clone shares the
+ * ORIGINAL lens FnDef's `body`.  Map a dict-clone back to its original (the
+ * non-clone top-level defn sharing that body) so we register / redirect the
+ * original's by-value `<lens>__mono` body (whose `fmap` mints the by-value twin),
+ * not the clone's (which dispatches through its runtime dict param). */
+static const FnDef *resolve_orig_lens(const Expr *prog, const FnDef *fn) {
+    if (!fn || !fn->dict_clone_class) return fn;   /* already the original */
+    if (prog && prog->kind == EX_PROGRAM && fn->body) {
+        for (uint32_t i = 0; i < prog->as.program.n; i++) {
+            const Expr *it = prog->as.program.items[i];
+            if (it && it->kind == EX_FN_DEF && it->as.fn_def_.fn &&
+                !it->as.fn_def_.fn->dict_clone_class &&
+                it->as.fn_def_.fn->body == fn->body)
+                return it->as.fn_def_.fn;
+        }
+    }
+    return fn;   /* fallback: no original found (should not happen) */
+}
+
+/* CB1: recursively register the concrete keys for the nested lenses APPLIED in a
+ * COMPOSED lens body, so their by-value `<lens>__mono` bodies get emitted (VBM2b)
+ * and CB2's nested redirect can target them.  `abs` supplies the shared functor
+ * pin; `prog` resolves global lens names to FnDefs.  `seen`/`n_seen` dedup lens
+ * FnDefs and, together with `depth`, bound the walk against self-reference / deep
+ * nesting (CB5) -- a nested lens that is itself composed contributes its own
+ * nested lenses down to the depth cap. */
+#define MONO_NESTED_SEEN_MAX 32
+#define MONO_NESTED_DEPTH_MAX 8
+static void register_nested_lenses(const Expr *e, const MonoSpecKey *abs,
+                                   const Expr *prog, const FnDef **seen,
+                                   size_t *n_seen, int depth);
+
+static void nested_register_one(const FnDef *nlens, const MonoSpecKey *abs,
+                                const Expr *prog, const FnDef **seen,
+                                size_t *n_seen, int depth) {
+    if (!nlens || depth > MONO_NESTED_DEPTH_MAX) return;
+    for (size_t i = 0; i < *n_seen; i++) if (seen[i] == nlens) return;
+    if (*n_seen >= MONO_NESTED_SEEN_MAX) return;
+    seen[(*n_seen)++] = nlens;
+    const char *nm = (nlens->binding && nlens->binding->name)
+        ? nlens->binding->name->name : NULL;
+    if (!nm) return;
+    mono_concrete_register(nm, abs, nlens);
+    if (!lens_is_simple_for_pathb(nlens) && nlens->body)
+        register_nested_lenses(nlens->body, abs, prog, seen, n_seen, depth + 1);
+}
+
+static void register_nested_lenses(const Expr *e, const MonoSpecKey *abs,
+                                   const Expr *prog, const FnDef **seen,
+                                   size_t *n_seen, int depth) {
+    if (!e) return;
+    if (e->kind == EX_CALL) {
+        const Binding *fb = e->as.call_.fn_binding;
+        if (fb && fb->name && fb->name->name) {
+            const FnDef *nlens = resolve_orig_lens(prog,
+                                                   find_fndef(prog, fb->name->name));
+            if (nlens && fn_is_lens(nlens))
+                nested_register_one(nlens, abs, prog, seen, n_seen, depth);
+        }
+    }
+    switch (e->kind) {
+        case EX_PROGRAM:
+            for (uint32_t i = 0; i < e->as.program.n; i++)
+                register_nested_lenses(e->as.program.items[i], abs, prog,
+                                       seen, n_seen, depth);
+            break;
+        case EX_FN_DEF:
+            if (e->as.fn_def_.fn)
+                register_nested_lenses(e->as.fn_def_.fn->body, abs, prog,
+                                       seen, n_seen, depth);
+            break;
+        case EX_FN:
+            if (e->as.fn_.fn)
+                register_nested_lenses(e->as.fn_.fn->body, abs, prog,
+                                       seen, n_seen, depth);
+            break;
+        case EX_CLOSURE:
+            if (e->as.closure_.closure && e->as.closure_.closure->fn)
+                register_nested_lenses(e->as.closure_.closure->fn->body, abs,
+                                       prog, seen, n_seen, depth);
+            break;
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                register_nested_lenses(e->as.let_.bindings[i].init, abs, prog,
+                                       seen, n_seen, depth);
+            register_nested_lenses(e->as.let_.body, abs, prog, seen, n_seen, depth);
+            break;
+        case EX_IF:
+            register_nested_lenses(e->as.if_.cond, abs, prog, seen, n_seen, depth);
+            register_nested_lenses(e->as.if_.then_, abs, prog, seen, n_seen, depth);
+            register_nested_lenses(e->as.if_.else_or_null, abs, prog, seen,
+                                   n_seen, depth);
+            break;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                register_nested_lenses(e->as.do_.items[i], abs, prog, seen,
+                                       n_seen, depth);
+            break;
+        case EX_WHILE:
+            register_nested_lenses(e->as.while_.cond, abs, prog, seen, n_seen, depth);
+            register_nested_lenses(e->as.while_.body, abs, prog, seen, n_seen, depth);
+            break;
+        case EX_SET:  register_nested_lenses(e->as.set_.value, abs, prog, seen, n_seen, depth); break;
+        case EX_DEF:  register_nested_lenses(e->as.def_.init, abs, prog, seen, n_seen, depth); break;
+        case EX_CALL:
+            register_nested_lenses(e->as.call_.fn_expr, abs, prog, seen, n_seen, depth);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                register_nested_lenses(e->as.call_.args[i], abs, prog, seen,
+                                       n_seen, depth);
+            break;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                register_nested_lenses(e->as.builtin.args[i], abs, prog, seen,
+                                       n_seen, depth);
+            break;
+        case EX_RETURN:  register_nested_lenses(e->as.return_.value, abs, prog, seen, n_seen, depth); break;
+        case EX_ASCRIBE: register_nested_lenses(e->as.ascribe_.inner, abs, prog, seen, n_seen, depth); break;
+        case EX_FN_TO_FAT:   register_nested_lenses(e->as.fn_to_fat_.inner, abs, prog, seen, n_seen, depth); break;
+        case EX_POLY_TO_FAT: register_nested_lenses(e->as.poly_to_fat_.inner, abs, prog, seen, n_seen, depth); break;
+        case EX_POLY_WRAP:   register_nested_lenses(e->as.poly_wrap_.inner, abs, prog, seen, n_seen, depth); break;
+        case EX_MATCH:
+            register_nested_lenses(e->as.match_.scrutinee, abs, prog, seen, n_seen, depth);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                register_nested_lenses(e->as.match_.arms[i].body, abs, prog, seen, n_seen, depth);
+                register_nested_lenses(e->as.match_.arms[i].guard, abs, prog, seen, n_seen, depth);
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+/* CB5 (van-laarhoven-composed-byvalue-plan): peel `e` to its tail expression
+ * (through ascribe/return/let/do wrappers). */
+static const Expr *peel_to_tail(const Expr *e) {
+    for (;;) {
+        if (!e) return NULL;
+        switch (e->kind) {
+            case EX_ASCRIBE: e = e->as.ascribe_.inner; continue;
+            case EX_RETURN:  e = e->as.return_.value;  continue;
+            case EX_LET:
+            case EX_LETREC:  e = e->as.let_.body;      continue;
+            case EX_DO:
+                if (e->as.do_.n == 0) return NULL;
+                e = e->as.do_.items[e->as.do_.n - 1];
+                continue;
+            default: return e;
+        }
+    }
+}
+
+/* CB5: a COMPOSED lens is Path-B eligible only when it matches the shape CB2/CB3
+ * lower by value: its body tails into `(<nested-lens> adapter s)` (a lens call,
+ * NOT an `fmap` dispatch) whose callee resolves to a lens FnDef, AND it carries
+ * an adapter closure `(fn [p] ...)` whose own tail resolves to a lens FnDef
+ * (recursively, for depth > 2).  Anything else -- a runtime-selected nested lens,
+ * a non-lens tail, a missing adapter -- has no by-value lowering and MUST stay on
+ * the Path A carrier (the `has_composed_lens` backstop), so it is never admitted
+ * here.  Bounded by `depth` against self-reference / deep nesting. */
+static bool composed_lens_byvalueable(const FnDef *lens, const Expr *prog,
+                                      int depth) {
+    if (!lens || !lens->body || depth > MONO_NESTED_DEPTH_MAX) return false;
+    const Expr *tail = peel_to_tail(lens->body);
+    if (!tail || tail->kind != EX_CALL) return false;
+    /* A simple lens (fmap dispatch) is handled elsewhere; not composed. */
+    if (tail->as.call_.dict_arg && tail->as.call_.dict_arg->kind == EX_DICT)
+        return false;
+    /* Tail callee must resolve to a lens FnDef. */
+    const Binding *tfb = tail->as.call_.fn_binding;
+    if (!tfb || !tfb->name || !tfb->name->name) return false;
+    const FnDef *tlens = resolve_orig_lens(prog, find_fndef(prog, tfb->name->name));
+    if (!tlens || !fn_is_lens(tlens)) return false;
+    if (!lens_is_simple_for_pathb(tlens) &&
+        !composed_lens_byvalueable(tlens, prog, depth + 1))
+        return false;
+    /* Must carry an adapter closure whose own tail resolves to a lens FnDef. */
+    for (uint32_t i = 0; i < tail->as.call_.n_args; i++) {
+        const Expr *a = tail->as.call_.args[i];
+        while (a) {
+            if (a->kind == EX_ASCRIBE)          a = a->as.ascribe_.inner;
+            else if (a->kind == EX_FN_TO_FAT)   a = a->as.fn_to_fat_.inner;
+            else if (a->kind == EX_POLY_TO_FAT) a = a->as.poly_to_fat_.inner;
+            else if (a->kind == EX_POLY_WRAP)   a = a->as.poly_wrap_.inner;
+            else break;
+        }
+        const FnDef *afn = NULL;
+        if (a && a->kind == EX_CLOSURE && a->as.closure_.closure)
+            afn = a->as.closure_.closure->fn;
+        else if (a && a->kind == EX_FN)
+            afn = a->as.fn_.fn;
+        if (!afn || !afn->body) continue;
+        const Expr *atail = peel_to_tail(afn->body);
+        if (!atail || atail->kind != EX_CALL) continue;
+        const Binding *afb = atail->as.call_.fn_binding;
+        if (!afb || !afb->name || !afb->name->name) continue;
+        const FnDef *anl = resolve_orig_lens(prog,
+                                             find_fndef(prog, afb->name->name));
+        if (anl && fn_is_lens(anl) &&
+            (lens_is_simple_for_pathb(anl) ||
+             composed_lens_byvalueable(anl, prog, depth + 1)))
+            return true;   /* found a valid composition adapter */
+    }
+    return false;
+}
+
 typedef struct {
     const char  *enclosing; /* enclosing fn name whose calls we resolve */
     uint32_t     lens_idx;  /* arg slot holding the concrete lens */
@@ -457,16 +708,33 @@ static void resolve_walk(const Expr *e, const ResolveCtx *rc) {
             const char *lens = arg_global_fn_name(larg);
             const FnDef *lens_fn = lens ? find_fndef(rc->prog, lens) : NULL;
             if (lens && lens_fn) {
-                /* CM4 gate: a COMPOSED lens is not Path-B eligible -- poison this
-                 * consumer's key so it falls fully back to Path A, and do NOT
-                 * register a concrete key (which would emit an ill-typed
-                 * `<lens>__mono` body) nor add it to the set. */
-                if (!lens_is_simple_for_pathb(lens_fn)) {
+                /* CB1 (van-laarhoven-composed-byvalue-plan): register the concrete
+                 * lens (simple OR composed) and add it to the consumer's set.  A
+                 * COMPOSED lens additionally registers the concrete keys of the
+                 * nested lenses applied in its body, so their by-value
+                 * `<lens>__mono` bodies are emitted (VBM2b) and CB2's nested
+                 * redirect can target them -- the whole composed chain threads
+                 * `(f a)` by value with no carrier box (superseding the CM4
+                 * `has_composed_lens` Path A gate). */
+                bool simple = lens_is_simple_for_pathb(lens_fn);
+                if (!simple &&
+                    !composed_lens_byvalueable(lens_fn, rc->prog, 1)) {
+                    /* CB5 backstop: a composed lens whose shape CB2/CB3 cannot
+                     * lower by value (runtime-selected nested lens, non-lens tail,
+                     * missing adapter, depth past the cap) stays on Path A -- do
+                     * NOT register a concrete key (which would emit an ill-typed
+                     * `<lens>__mono`) and poison the consumer so even simple lenses
+                     * sharing it stay on the carrier. */
                     rc->abs->has_composed_lens = true;
                 } else {
-                    /* Directly a global lens defn: one concrete lens for this site. */
                     uint64_t h = mono_concrete_register(lens, rc->abs, lens_fn);
                     lens_set_add(rc->abs, lens, lens_fn, h, e, rc->grew);
+                    if (!simple && lens_fn->body) {
+                        const FnDef *seen[MONO_NESTED_SEEN_MAX];
+                        size_t n_seen = 0;
+                        register_nested_lenses(lens_fn->body, rc->abs, rc->prog,
+                                               seen, &n_seen, 1);
+                    }
                 }
             } else {
                 /* Transitive: the arg is a variable.  If it is a consumer lens
