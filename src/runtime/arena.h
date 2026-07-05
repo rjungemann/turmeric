@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 typedef struct ArenaSlab ArenaSlab;
 
@@ -18,5 +19,23 @@ void *arena_alloc(Arena *a, size_t size);
 void *arena_alloc_aligned(Arena *a, size_t size, size_t align);
 char *arena_strdup(Arena *a, const char *s, size_t len);
 void  arena_free(Arena *a);
+
+/* Rewind every slab to empty without releasing the backing memory, so the arena
+ * can be reused for a fresh generation of allocations in O(slabs).  This is the
+ * scratch-region reset primitive for the turi value-pool scratch/permanent split
+ * (turi-value-pool-scratch-promotion-plan): a long-lived TuriEnv rewinds its
+ * scratch pool at each top-level eval boundary after promoting escapees.
+ *
+ * In a Debug build (NDEBUG undefined) the reclaimed bytes are overwritten with a
+ * poison pattern first, so any pointer that survived into the rewound region and
+ * is dereferenced afterwards crashes loudly under ASan instead of reading stale
+ * (but still-mapped) data -- the "poison-on-reset debug mode" the plan calls for. */
+void  arena_reset(Arena *a);
+
+/* True when p points into any slab currently owned by a.  Used by the promotion
+ * walk to decide whether a payload pointer is scratch-allocated (copy + forward)
+ * or lives elsewhere -- permanent pool, eval arenas, sym arena, static data --
+ * and must be left untouched.  O(slabs). */
+bool  arena_owns(const Arena *a, const void *p);
 
 #endif

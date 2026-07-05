@@ -67,17 +67,24 @@ regen-snapshots *ARGS:
         [ -f "$input" ] || input="$dir/${name}.tur"
         [ -f "$input" ] || continue
         COUNT=$((COUNT + 1))
+        # Honor a fixture's per-fixture compiler flags, exactly as tests/run.sh
+        # does.  A fixture whose snapshot needs an experiment gate (e.g.
+        # --enable=forall-constraints) records it in a `flags` file; emitting
+        # without those flags errors out and would falsely report drift.
+        # Unquoted on use so multiple flags word-split (matches run.sh).
+        fixture_flags=""
+        [ -f "$dir/flags" ] && fixture_flags=$(cat "$dir/flags")
         if [ "$CHECK_MODE" = "1" ]; then
             # Compare emit-c output to the snapshot by piping straight into
             # diff.  Do NOT round-trip through `$(...)` + `echo`: command
             # substitution strips trailing newlines, which falsely reports
             # drift on every snapshot even when the bytes are identical.
-            if ! "$TUR" emit-c "$input" 2>/dev/null | diff -q - "$dir/expected.c" >/dev/null 2>&1; then
+            if ! "$TUR" $fixture_flags emit-c "$input" 2>/dev/null | diff -q - "$dir/expected.c" >/dev/null 2>&1; then
                 echo "DRIFT: $name"
                 FAILED=$((FAILED + 1))
             fi
         else
-            "$TUR" emit-c "$input" > "$dir/expected.c" 2>/dev/null || true
+            "$TUR" $fixture_flags emit-c "$input" > "$dir/expected.c" 2>/dev/null || true
         fi
     done
     if [ "$CHECK_MODE" = "1" ]; then

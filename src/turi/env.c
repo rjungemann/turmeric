@@ -232,9 +232,12 @@ TuriEnv *turi_env_new(void) {
     TuriEnv *env = (TuriEnv *)calloc(1, sizeof(TuriEnv));
     if (!env) return NULL;
     arena_init(&env->sym_arena, 0);
-    /* turi-env-owned-value-arena-pool-plan: value-payload pool. Init before any
-     * builtin registration, which allocates native closures from it. */
-    arena_init(&env->value_arena, 0);
+    /* turi-env-owned-value-arena-pool-plan: value-payload pools. Init before any
+     * builtin registration, which allocates native closures from scratch.
+     * turi-value-pool-scratch-promotion-plan: scratch is the default allocation
+     * target; perm receives promoted escapees (empty until promotion runs). */
+    arena_init(&env->value_scratch, 0);
+    arena_init(&env->value_perm, 0);
     symtab_init(&env->st, &env->sym_arena);
     buf_init(&env->src_acc);
     env->max_eval_depth = (uint32_t)turi_default_max_eval_depth();
@@ -333,8 +336,10 @@ void turi_env_free(TuriEnv *env) {
     /* turi-env-owned-value-arena-pool-plan: reclaim all escaping value payloads
      * (closures, structs, captured frames/bindings, cons cells, ...) in one
      * shot, plus the process-global fallback pool the error/rejection
-     * constructors use (the env adopts it on free; single-env pattern). */
-    arena_free(&env->value_arena);
+     * constructors use (the env adopts it on free; single-env pattern).
+     * turi-value-pool-scratch-promotion-plan: free both value regions. */
+    arena_free(&env->value_scratch);
+    arena_free(&env->value_perm);
     turi_val_global_pool_free();
 
     /* Free global bindings */
@@ -471,6 +476,11 @@ void turi_env_register_native_ex(TuriEnv *env, const char *name,
 void turi_env_set_interpret_mode(TuriEnv *env, bool interpret) {
     if (!env) return;
     env->interpret_mode = interpret;
+}
+
+void turi_env_set_scratch_promotion(TuriEnv *env, bool enable) {
+    if (!env) return;
+    env->scratch_promotion = enable;
 }
 
 void turi_env_set_shared_spice_image(TuriEnv *env, struct TurSpiceImage *image) {

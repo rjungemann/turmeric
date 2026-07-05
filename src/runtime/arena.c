@@ -94,3 +94,29 @@ void arena_free(Arena *a) {
     a->total_bytes = 0;
     a->total_allocs = 0;
 }
+
+/* Poison byte for reclaimed scratch memory; 0xDE reads back as an obviously-bad
+ * pointer (0xDEDEDEDE...) if a straggler is dereferenced. */
+#define ARENA_POISON 0xDE
+
+void arena_reset(Arena *a) {
+    for (ArenaSlab *s = a->head; s; s = s->next) {
+#ifndef NDEBUG
+        /* Poison the bytes we are about to hand out again so a missed pointer
+         * into the rewound region crashes loudly instead of reading stale data. */
+        if (s->used) memset(s->data, ARENA_POISON, s->used);
+#endif
+        s->used = 0;
+    }
+    a->total_bytes = 0;
+    a->total_allocs = 0;
+}
+
+bool arena_owns(const Arena *a, const void *p) {
+    if (!p) return false;
+    const unsigned char *cp = (const unsigned char *)p;
+    for (const ArenaSlab *s = a->head; s; s = s->next) {
+        if (cp >= s->data && cp < s->data + s->cap) return true;
+    }
+    return false;
+}

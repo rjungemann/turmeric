@@ -163,10 +163,11 @@ fallback bump-pool reachable from a single process-global the env adopts on
 
 Phase 1 makes teardown clean but does not shrink a never-destroyed env. The
 optional two-region (scratch/permanent + escape-promotion) follow-up that bounds
-a notebook-kernel-style host was split into its own plan:
-`docs/upcoming/turi-value-pool-scratch-promotion-plan.md`. It is deferred
-(only matters for the immortal-env host pattern); Phase 1 stands alone and
-delivers goals (1) and (2) without it.
+a notebook-kernel-style host was split into its own plan and has since LANDED
+(Phase A, opt-in): `docs/archive/turi-value-pool-scratch-promotion-plan.md`. Its
+remaining carrier-pointer / control-flow relocation tail is tracked in
+`docs/upcoming/turi-value-pool-carrier-relocation-plan.md`. Phase 1 stands alone
+and delivers goals (1) and (2) without either.
 
 ## API / behavior changes
 

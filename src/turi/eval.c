@@ -8198,6 +8198,284 @@ TuriValue turi_eval_with_path_typed(TuriEnv *env, const char *src, const char *p
     return turi_eval_with_sink(env, src, path, out_type_tag, tag_cap);
 }
 
+/* ===========================================================================
+ * turi-value-pool-scratch-promotion-plan: scratch/permanent value-pool split
+ * with escape promotion.
+ *
+ * With env->scratch_promotion enabled (opt-in; off by default), turi_eval
+ * rewinds env->value_scratch at each top-level boundary so transient per-eval
+ * allocation does not accumulate in a long-lived env.  Any value that must
+ * survive the rewind -- the eval's result and every global binding, plus the
+ * closures/frames/structs they reach -- is first deep-copied into
+ * env->value_perm, with pointers rewritten to the copies.
+ *
+ * The walk is deliberately CONSERVATIVE: it relocates only the value shapes it
+ * can prove are safe to copy (scalars, strings, closures, captured
+ * frames/bindings/tyvars, structs + fields).  When an escaping value reaches
+ * something it cannot safely relocate -- a carrier-encoded pointer boxed as a
+ * bare int, a live continuation / generator / handler / future, a mutable ref
+ * or opaque native user-data resident in scratch -- the whole cycle is left
+ * intact (no rewind).  Correctness never depends on catching every shape: a
+ * missed shape means "this eval does not shrink", never "use-after-reset".  A
+ * Debug build additionally poisons the rewound region (arena_reset) so any
+ * straggler that slipped through crashes loudly under ASan instead of reading
+ * stale bytes.
+ * ======================================================================== */
+
+/* Open-addressing pointer->pointer map: doubles as the check pass's visited set
+ * (value ignored) and the copy pass's old->new forwarding table (Cheney-style,
+ * out of band so a mid-walk bail never stamps the scratch objects). */
+typedef struct { void *key; void *val; } PromoSlot;
+typedef struct {
+    PromoSlot *slots;
+    uint32_t   cap;    /* power of two, or 0 before first insert */
+    uint32_t   count;
+} PromoMap;
+
+static void promo_map_init(PromoMap *m) { m->slots = NULL; m->cap = 0; m->count = 0; }
+static void promo_map_free(PromoMap *m) { free(m->slots); m->slots = NULL; m->cap = 0; m->count = 0; }
+
+static uint32_t promo_hash(const void *p) {
+    uintptr_t x = (uintptr_t)p;
+    x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
+    return (uint32_t)x;
+}
+
+static void promo_map_grow(PromoMap *m) {
+    uint32_t ncap = m->cap ? m->cap * 2 : 64;
+    PromoSlot *ns = (PromoSlot *)calloc(ncap, sizeof(PromoSlot));
+    if (!ns) { fprintf(stderr, "tur: out of memory (promotion map)\n"); abort(); }
+    for (uint32_t i = 0; i < m->cap; i++) {
+        if (!m->slots[i].key) continue;
+        uint32_t j = promo_hash(m->slots[i].key) & (ncap - 1);
+        while (ns[j].key) j = (j + 1) & (ncap - 1);
+        ns[j] = m->slots[i];
+    }
+    free(m->slots);
+    m->slots = ns;
+    m->cap = ncap;
+}
+
+/* Return the stored value for key, or NULL if absent. */
+static void *promo_map_get(PromoMap *m, const void *key) {
+    if (!m->cap) return NULL;
+    uint32_t j = promo_hash(key) & (m->cap - 1);
+    while (m->slots[j].key) {
+        if (m->slots[j].key == key) return m->slots[j].val;
+        j = (j + 1) & (m->cap - 1);
+    }
+    return NULL;
+}
+
+/* Insert key->val (val may be a non-NULL marker for the visited set). */
+static void promo_map_put(PromoMap *m, void *key, void *val) {
+    if (!m->cap || m->count * 10 >= m->cap * 7) promo_map_grow(m);
+    uint32_t j = promo_hash(key) & (m->cap - 1);
+    while (m->slots[j].key) {
+        if (m->slots[j].key == key) { m->slots[j].val = val; return; }
+        j = (j + 1) & (m->cap - 1);
+    }
+    m->slots[j].key = key;
+    m->slots[j].val = val;
+    m->count++;
+}
+
+/* True when env is at a clean top-level boundary with no live control-flow or
+ * async state that could hold scratch pointers outside the promotion roots.
+ * Any such state means the rewind is unsafe -- keep scratch this cycle. */
+static bool promo_env_quiescent(const TuriEnv *env) {
+    return !env->handler_stack && !env->defer_stack &&
+           !env->sched_ready_head && !env->sched_ready_tail &&
+           !env->current_fiber && !env->all_futures &&
+           !env->timers_head && !env->io_pending_head &&
+           !env->returning && !env->throwing && !env->aborting &&
+           !env->panicking && !env->in_no_unwind;
+}
+
+#define PROMO_SCRATCH(env, p) arena_owns(&(env)->value_scratch, (const void *)(p))
+
+/* ---- Pass 1: read-only promotability check ---------------------------------
+ * Returns false as soon as a scratch-resident value cannot be safely relocated. */
+static bool promo_check(TuriEnv *env, TuriValue v, PromoMap *seen);
+
+static bool promo_check_frame(TuriEnv *env, EvalFrame *f, PromoMap *seen) {
+    while (f) {
+        if (!PROMO_SCRATCH(env, f)) return true;   /* already permanent */
+        if (promo_map_get(seen, f)) return true;   /* cycle / shared */
+        promo_map_put(seen, f, f);
+        for (EvalBinding *b = f->bindings; b; b = b->next) {
+            if (PROMO_SCRATCH(env, b) && promo_map_get(seen, b)) continue;
+            if (PROMO_SCRATCH(env, b)) promo_map_put(seen, b, b);
+            if (!promo_check(env, b->value, seen)) return false;
+        }
+        /* tyvars carry Type descriptors (elaborator memory), no TuriValues. */
+        f = f->parent;
+    }
+    return true;
+}
+
+static bool promo_check(TuriEnv *env, TuriValue v, PromoMap *seen) {
+    switch (v.tag) {
+    case TURI_NIL: case TURI_BOOL: case TURI_FLOAT:
+        return true;
+    case TURI_INT:
+        /* A bare int that happens to address the scratch region is almost
+         * certainly a carrier-encoded pointer (cons cell, set, vec, ADT box)
+         * we cannot walk -- refuse to rewind under it. */
+        return !PROMO_SCRATCH(env, (void *)(intptr_t)v.as_int);
+    case TURI_CSTR: case TURI_ERROR: case TURI_REJECTION: case TURI_STRUCT_TYPE:
+        return true;   /* strings copy safely whether scratch or not */
+    case TURI_CLOSURE: {
+        TuriClosure *cl = v.as_closure;
+        if (!cl || !PROMO_SCRATCH(env, cl)) return true;
+        if (promo_map_get(seen, cl)) return true;
+        promo_map_put(seen, cl, cl);
+        /* Opaque native user-data resident in scratch cannot be relocated. */
+        if (cl->native && PROMO_SCRATCH(env, cl->native_ud)) return false;
+        return promo_check_frame(env, cl->captured, seen);
+    }
+    case TURI_STRUCT: {
+        TuriStruct *s = v.as_struct;
+        if (!s || !PROMO_SCRATCH(env, s)) return true;
+        if (promo_map_get(seen, s)) return true;
+        promo_map_put(seen, s, s);
+        for (uint32_t i = 0; i < s->n_fields; i++)
+            if (!promo_check(env, s->fields[i], seen)) return false;
+        return true;
+    }
+    case TURI_REF:
+        /* A mutable borrow into scratch aliases a slot we do not own -- unsafe. */
+        return !PROMO_SCRATCH(env, v.as_ref);
+    case TURI_EFFECT_CONT: return !PROMO_SCRATCH(env, v.as_cont);
+    case TURI_THROW:       return !PROMO_SCRATCH(env, v.as_throw);
+    case TURI_FUTURE:      return !PROMO_SCRATCH(env, v.as_future);
+    case TURI_GEN:         return !PROMO_SCRATCH(env, v.as_gen);
+    case TURI_HANDLER:     return !PROMO_SCRATCH(env, v.as_handler);
+    }
+    return false;  /* unknown tag: refuse to rewind */
+}
+
+/* ---- Pass 2: deep copy scratch payloads into value_perm --------------------
+ * Only runs after promo_check confirmed the whole root set is relocatable, so
+ * every case here is reachable-and-safe; unhandled shapes were rejected already. */
+static TuriValue promo_copy(TuriEnv *env, TuriValue v, PromoMap *fwd);
+
+static EvalBinding *promo_copy_bindings(TuriEnv *env, EvalBinding *b, PromoMap *fwd) {
+    if (!b || !PROMO_SCRATCH(env, b)) return b;
+    void *seen = promo_map_get(fwd, b);
+    if (seen) return (EvalBinding *)seen;
+    EvalBinding *nb = (EvalBinding *)turi_val_perm_alloc(env, sizeof *nb);
+    promo_map_put(fwd, b, nb);
+    nb->name  = b->name;                       /* interned in sym_arena */
+    nb->value = promo_copy(env, b->value, fwd);
+    nb->next  = promo_copy_bindings(env, b->next, fwd);
+    return nb;
+}
+
+static TyvarBind *promo_copy_tyvars(TuriEnv *env, TyvarBind *t, PromoMap *fwd) {
+    if (!t || !PROMO_SCRATCH(env, t)) return t;
+    void *seen = promo_map_get(fwd, t);
+    if (seen) return (TyvarBind *)seen;
+    TyvarBind *nt = (TyvarBind *)turi_val_perm_alloc(env, sizeof *nt);
+    promo_map_put(fwd, t, nt);
+    nt->name = t->name;                        /* interned */
+    nt->type = t->type;                        /* elaborator Type (not scratch) */
+    nt->next = promo_copy_tyvars(env, t->next, fwd);
+    return nt;
+}
+
+static EvalFrame *promo_copy_frame(TuriEnv *env, EvalFrame *f, PromoMap *fwd) {
+    if (!f || !PROMO_SCRATCH(env, f)) return f;
+    void *seen = promo_map_get(fwd, f);
+    if (seen) return (EvalFrame *)seen;
+    EvalFrame *nf = (EvalFrame *)turi_val_perm_alloc(env, sizeof *nf);
+    promo_map_put(fwd, f, nf);
+    nf->parent   = promo_copy_frame(env, f->parent, fwd);
+    nf->bindings = promo_copy_bindings(env, f->bindings, fwd);
+    nf->tyvars   = promo_copy_tyvars(env, f->tyvars, fwd);
+    return nf;
+}
+
+static TuriValue promo_copy(TuriEnv *env, TuriValue v, PromoMap *fwd) {
+    switch (v.tag) {
+    case TURI_CSTR:
+        if (PROMO_SCRATCH(env, v.as_cstr)) v.as_cstr = turi_val_perm_strdup(env, v.as_cstr);
+        return v;
+    case TURI_ERROR: case TURI_REJECTION:
+        if (PROMO_SCRATCH(env, v.as_error)) v.as_error = turi_val_perm_strdup(env, v.as_error);
+        return v;
+    case TURI_STRUCT_TYPE:
+        if (PROMO_SCRATCH(env, v.as_cstr)) v.as_cstr = turi_val_perm_strdup(env, v.as_cstr);
+        return v;
+    case TURI_CLOSURE: {
+        TuriClosure *cl = v.as_closure;
+        if (!cl || !PROMO_SCRATCH(env, cl)) return v;
+        void *seen = promo_map_get(fwd, cl);
+        if (seen) return turi_closure((TuriClosure *)seen);
+        TuriClosure *nc = (TuriClosure *)turi_val_perm_alloc(env, sizeof *nc);
+        promo_map_put(fwd, cl, nc);
+        *nc = *cl;                             /* fn/native/native_ud/module/... */
+        nc->captured = promo_copy_frame(env, cl->captured, fwd);
+        if (nc->module && PROMO_SCRATCH(env, nc->module))
+            nc->module = turi_val_perm_strdup(env, nc->module);
+        return turi_closure(nc);
+    }
+    case TURI_STRUCT: {
+        TuriStruct *s = v.as_struct;
+        if (!s || !PROMO_SCRATCH(env, s)) return v;
+        void *seen = promo_map_get(fwd, s);
+        if (seen) return turi_struct_val((TuriStruct *)seen);
+        TuriStruct *ns = (TuriStruct *)turi_val_perm_alloc(env, sizeof *ns);
+        promo_map_put(fwd, s, ns);
+        *ns = *s;                              /* name/n_fields/ctor */
+        if (s->n_fields && s->fields) {
+            ns->fields = (TuriValue *)turi_val_perm_alloc(env, s->n_fields * sizeof(TuriValue));
+            for (uint32_t i = 0; i < s->n_fields; i++)
+                ns->fields[i] = promo_copy(env, s->fields[i], fwd);
+        }
+        if (ns->name && PROMO_SCRATCH(env, ns->name))
+            ns->name = turi_val_perm_strdup(env, ns->name);
+        return turi_struct_val(ns);
+    }
+    default:
+        /* Scalars and the shapes promo_check proved are non-scratch: unchanged. */
+        return v;
+    }
+}
+
+/* Promote everything that escapes this top-level eval (its result plus every
+ * global) into value_perm, then rewind value_scratch.  A no-op unless promotion
+ * is enabled; conservatively skips the rewind whenever safety cannot be proven. */
+static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
+    if (!env || !env->scratch_promotion) return;
+    if (!promo_env_quiescent(env)) return;
+
+    /* Pass 1: is the whole root set relocatable? */
+    PromoMap seen;
+    promo_map_init(&seen);
+    bool ok = promo_check(env, *result, &seen);
+    if (ok) {
+        for (EnvBinding *b = env->globals; b; b = b->next) {
+            if (!promo_check(env, b->value, &seen)) { ok = false; break; }
+        }
+    }
+    promo_map_free(&seen);
+    if (!ok) return;   /* keep scratch intact this cycle */
+
+    /* Pass 2: copy roots into perm, rewriting pointers (shared fwd table keeps
+     * cross-root sharing and cycles consistent). */
+    PromoMap fwd;
+    promo_map_init(&fwd);
+    TuriValue promoted = promo_copy(env, *result, &fwd);
+    for (EnvBinding *b = env->globals; b; b = b->next)
+        b->value = promo_copy(env, b->value, &fwd);
+    promo_map_free(&fwd);
+    *result = promoted;
+
+    /* Everything reachable now lives in value_perm; reclaim the scratch region. */
+    arena_reset(&env->value_scratch);
+}
+
 static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
                                  char *out_type_tag, size_t tag_cap) {
     if (!env || !src) return turi_error("turi_eval: null argument");
@@ -8473,6 +8751,11 @@ eval_done:;
             if (last_expr) extract_type_tag(last_expr->type, out_type_tag, tag_cap);
         }
     }
+
+    /* turi-value-pool-scratch-promotion-plan: at this top-level boundary,
+     * promote escapees and rewind the scratch value pool (no-op unless the env
+     * opted in via turi_env_set_scratch_promotion). */
+    turi_promote_escaping(env, &last);
 
     return last;
 }
