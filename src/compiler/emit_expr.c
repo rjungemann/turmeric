@@ -28,6 +28,21 @@ static const char *cm_call_lens_name(const Expr *arg) {
     return NULL;
 }
 
+/* CM3-transitive: peel wrappers off a consumer call's lens arg and return its
+ * `Binding *` if it is a variable (a forwarded lens param), else NULL. */
+static const void *cm_call_lens_binding(const Expr *arg) {
+    while (arg) {
+        if (arg->kind == EX_ASCRIBE)          arg = arg->as.ascribe_.inner;
+        else if (arg->kind == EX_FN_TO_FAT)   arg = arg->as.fn_to_fat_.inner;
+        else if (arg->kind == EX_POLY_TO_FAT) arg = arg->as.poly_to_fat_.inner;
+        else if (arg->kind == EX_POLY_WRAP)   arg = arg->as.poly_wrap_.inner;
+        else break;
+    }
+    if (arg && arg->kind == EX_VAR && arg->as.var.binding)
+        return arg->as.var.binding;
+    return NULL;
+}
+
 /* world-resize / multi-field existential payloads: true when `t` lowers to a
  * by-value C aggregate (`World__int__int__int` etc.) that is WIDER than the
  * single int64 the existential carrier (`tur_exists_t`) holds. Such a payload
@@ -2643,8 +2658,18 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     fn_binding->name->name, &lens_idx);
                 if (lb && lens_idx >= 0 &&
                     (uint32_t)lens_idx < e->as.call_.n_args) {
-                    const char *lname =
-                        cm_call_lens_name(e->as.call_.args[lens_idx]);
+                    const Expr *larg = e->as.call_.args[lens_idx];
+                    const char *lname = cm_call_lens_name(larg);
+                    /* CM3-transitive: inside a forwarding consumer's clone the
+                     * lens arg IS that clone's bound lens param -- resolve it to
+                     * the clone's concrete lens so `(inner l ...)` rewrites to the
+                     * inner consumer's matching clone (the "singleton lens set"). */
+                    const EmitAbiSpecialization *cur =
+                        ctx->current_abi_specialization;
+                    if (cur && cur->is_consumer_mono &&
+                        cur->consumer_lens_binding &&
+                        cm_call_lens_binding(larg) == cur->consumer_lens_binding)
+                        lname = cur->consumer_lens_name;
                     unsigned long long lh =
                         lname ? mono_spec_lens_clone_hash(lb, lname) : 0;
                     if (lh) {

@@ -585,9 +585,161 @@ static void clear_g_box_walk(const Expr *e, const Binding *lensb) {
     }
 }
 
+/* CM3-transitive: fill `lens_idx` (the lens param's positional slot) for every
+ * spec whose enclosing fn is resolvable and slot is not yet known. */
+static void compute_lens_indices(const Expr *prog) {
+    for (size_t i = 0; i < g_n_specs; i++) {
+        MonoSpecKey *k = &g_specs[i];
+        if (k->lens_idx >= 0) continue;
+        const FnDef *enc = find_fndef(prog, k->enclosing);
+        if (!enc) continue;
+        for (uint8_t p = 0; p < enc->n_params; p++) {
+            const Binding *pb = enc->params ? enc->params[p] : NULL;
+            if (pb && pb->name && pb->name->name &&
+                strcmp(pb->name->name, k->callee) == 0) {
+                k->lens_idx = p;
+                break;
+            }
+        }
+    }
+}
+
+/* CM3-transitive: is `b` a positional parameter binding of `fd`? */
+static bool is_param_of(const FnDef *fd, const Binding *b) {
+    if (!fd || !b || !fd->params) return false;
+    for (uint8_t p = 0; p < fd->n_params; p++)
+        if ((const Binding *)fd->params[p] == b) return true;
+    return false;
+}
+
+typedef struct {
+    const FnDef *enc;   /* nearest lexically-enclosing fn (NULL at top level) */
+    bool        *grew;  /* set when a new forwarding spec is registered */
+} FwdCtx;
+
+/* CM3-transitive: register a mono spec for a FORWARDING lens param.  When a call
+ * `(C p ...)` inside fn `E` passes `E`'s own parameter `p` into consumer `C`'s
+ * lens slot, `p` is a lens threaded one level deeper.  Register an abstract spec
+ * `(E, p)` that INHERITS `C`'s functor/focus/whole (the consumer fixes those), so
+ * the CM1 fixpoint can resolve `p` from `E`'s own call sites and `C` then inherits
+ * `p`'s set transitively.  Dedups by content hash in `mono_spec_register`. */
+static void register_forwarding_walk(const Expr *e, FwdCtx *fc) {
+    if (!e) return;
+    const FnDef *save = fc->enc;
+    if (e->kind == EX_FN_DEF && e->as.fn_def_.fn) fc->enc = e->as.fn_def_.fn;
+    else if (e->kind == EX_FN && e->as.fn_.fn) fc->enc = e->as.fn_.fn;
+    else if (e->kind == EX_CLOSURE && e->as.closure_.closure &&
+             e->as.closure_.closure->fn)
+        fc->enc = e->as.closure_.closure->fn;
+    if (e->kind == EX_CALL && fc->enc) {
+        const Binding *fb = e->as.call_.fn_binding;
+        if (fb && fb->name && fb->name->name) {
+            for (size_t i = 0; i < g_n_specs; i++) {
+                const MonoSpecKey *C = &g_specs[i];
+                if (C->lens_idx < 0) continue;   /* slot not yet known */
+                if (strcmp(C->enclosing, fb->name->name) != 0) continue;
+                if ((uint32_t)C->lens_idx >= e->as.call_.n_args) continue;
+                const Binding *vb =
+                    arg_var_binding(e->as.call_.args[C->lens_idx]);
+                if (!vb || !is_param_of(fc->enc, vb)) continue;
+                const char *ename = (fc->enc->binding && fc->enc->binding->name)
+                    ? fc->enc->binding->name->name : NULL;
+                const char *pname = vb->name ? vb->name->name : NULL;
+                if (!ename || !pname) continue;
+                size_t before = g_n_specs;
+                mono_spec_register(ename, pname, C->functor, C->focus, C->whole,
+                                   C->tyvar,
+                                   C->have_functor_ty ? &C->functor_ty : NULL,
+                                   vb);
+                if (g_n_specs != before && fc->grew) *fc->grew = true;
+            }
+        }
+    }
+    switch (e->kind) {
+        case EX_PROGRAM:
+            for (uint32_t i = 0; i < e->as.program.n; i++)
+                register_forwarding_walk(e->as.program.items[i], fc);
+            break;
+        case EX_FN_DEF:
+            if (e->as.fn_def_.fn) register_forwarding_walk(e->as.fn_def_.fn->body, fc);
+            break;
+        case EX_FN:
+            if (e->as.fn_.fn) register_forwarding_walk(e->as.fn_.fn->body, fc);
+            break;
+        case EX_CLOSURE:
+            if (e->as.closure_.closure && e->as.closure_.closure->fn)
+                register_forwarding_walk(e->as.closure_.closure->fn->body, fc);
+            break;
+        case EX_LET: case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                register_forwarding_walk(e->as.let_.bindings[i].init, fc);
+            register_forwarding_walk(e->as.let_.body, fc);
+            break;
+        case EX_IF:
+            register_forwarding_walk(e->as.if_.cond, fc);
+            register_forwarding_walk(e->as.if_.then_, fc);
+            register_forwarding_walk(e->as.if_.else_or_null, fc);
+            break;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                register_forwarding_walk(e->as.do_.items[i], fc);
+            break;
+        case EX_WHILE:
+            register_forwarding_walk(e->as.while_.cond, fc);
+            register_forwarding_walk(e->as.while_.body, fc);
+            break;
+        case EX_SET:  register_forwarding_walk(e->as.set_.value, fc); break;
+        case EX_DEF:  register_forwarding_walk(e->as.def_.init, fc); break;
+        case EX_CALL:
+            register_forwarding_walk(e->as.call_.fn_expr, fc);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                register_forwarding_walk(e->as.call_.args[i], fc);
+            break;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                register_forwarding_walk(e->as.builtin.args[i], fc);
+            break;
+        case EX_RETURN:  register_forwarding_walk(e->as.return_.value, fc); break;
+        case EX_ASCRIBE: register_forwarding_walk(e->as.ascribe_.inner, fc); break;
+        case EX_FN_TO_FAT:   register_forwarding_walk(e->as.fn_to_fat_.inner, fc); break;
+        case EX_POLY_TO_FAT: register_forwarding_walk(e->as.poly_to_fat_.inner, fc); break;
+        case EX_POLY_WRAP:   register_forwarding_walk(e->as.poly_wrap_.inner, fc); break;
+        case EX_MATCH:
+            register_forwarding_walk(e->as.match_.scrutinee, fc);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                register_forwarding_walk(e->as.match_.arms[i].body, fc);
+                register_forwarding_walk(e->as.match_.arms[i].guard, fc);
+            }
+            break;
+        default: break;
+    }
+    fc->enc = save;
+}
+
 void mono_specs_resolve_program(const void *prog_) {
     const Expr *prog = (const Expr *)prog_;
     if (!prog || prog->kind != EX_PROGRAM || g_n_specs == 0) return;
+    /* CM3-transitive: before resolving, register a spec for every forwarding lens
+     * param (a consumer that threads its param into another consumer's lens slot)
+     * so the fixpoint below can resolve it.  Iterate to a fixpoint -- a param may
+     * forward through several levels -- computing slots for freshly-added specs
+     * each round.  Monotonic: specs only accrue, bounded by the finite set of
+     * (fn, param) pairs. */
+    compute_lens_indices(prog);
+    for (size_t fpass = 0; ; fpass++) {
+        bool grew = false;
+        FwdCtx fc = { NULL, &grew };
+        register_forwarding_walk(prog, &fc);
+        if (grew) compute_lens_indices(prog);
+        if (!grew) break;
+        if (fpass + 1 >= MONO_SPEC_FIXPOINT_PASSES) {
+            fprintf(stderr,
+                    "; note: consumer-mono forwarding-spec fixpoint hit the "
+                    "%d-pass cap; some forwarded lenses stay on Path A\n",
+                    MONO_SPEC_FIXPOINT_PASSES);
+            break;
+        }
+    }
     /* CM1 fixpoint: each pass grows every consumer lens param's concrete-lens set
      * (directly from named-lens call args, transitively from forwarded params);
      * repeat until a pass adds nothing.  Terminates because sets only grow toward

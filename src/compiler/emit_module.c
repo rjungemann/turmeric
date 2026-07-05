@@ -9399,19 +9399,21 @@ int emit_program(Buf *out, const Expr *program) {
             }
             if (!cfd || !cexpr || !cfd->binding) continue;
 
-            /* Locate g's lifted closure FnDef (shared across this consumer's
-             * lens clones).  If g is not a lifted closure we cannot build the
-             * by-value twin -- leave the consumer on Path A. */
+            /* Locate g's lifted closure FnDef (shared across this consumer's lens
+             * clones).  A DIRECT consumer has an `(l g s)` pin and thus a `g`; a
+             * FORWARDING consumer (it threads `l` into ANOTHER consumer, no pin of
+             * its own -- CM3-transitive) has none, so it needs no twin and its
+             * clone body's inner consumer call is rewritten by CM3 instead. */
             const Binding *gb = cm_find_g_binding(cfd->body, (const Binding *)lb);
             const Expr *gexpr = gb ? emit_abi_find_fn_expr(
                 (const Expr **)program->as.program.items,
                 program->as.program.n, gb) : NULL;
-            if (!gb || !gexpr || gexpr->kind != EX_FN_DEF ||
-                !gexpr->as.fn_def_.fn)
-                continue;
-            FnDef *gfd = gexpr->as.fn_def_.fn;
+            FnDef *gfd = (gexpr && gexpr->kind == EX_FN_DEF)
+                ? gexpr->as.fn_def_.fn : NULL;
+            int32_t gt_idx = -1;   /* index of the shared g twin, -1 if none */
 
-            /* --- One shared by-value g twin for this consumer. --- */
+            /* --- One shared by-value g twin for this consumer (direct only). --- */
+            if (gfd) {
             /* Bind the HKT tyvar `f` to the concrete functor so g's `(f A)` result
              * (and any `(f _)` in its signature) resolves BY VALUE (`Identity int`)
              * instead of the abstract carrier -- the same substitution the VBM2b
@@ -9449,7 +9451,7 @@ int emit_program(Buf *out, const Expr *program) {
                 &ctx, gfd->binding, gexpr, gfd, &fb, 1, g_args, g_n, g_res,
                 NULL, false);
             if (!gt) continue;
-            uint32_t gt_idx = (uint32_t)(gt - ctx.abi_specializations);
+            gt_idx = (int32_t)(gt - ctx.abi_specializations);
             /* Name the twin + its env distinctly from the boxed carrier `g`. */
             {
                 char *gbase = raw_name_for_binding(gfd->binding);
@@ -9487,6 +9489,7 @@ int emit_program(Buf *out, const Expr *program) {
                 ctx.current_scan_fn = NULL;
                 gfd->box_aggregate_result = saved_box;
             }
+            }   /* end if (gfd) -- direct consumer twin */
 
             /* --- Reduced consumer view: drop the lens param. --- */
             /* CM3 elides the lens arg at the call site, so the clone signature

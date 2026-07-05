@@ -1,5 +1,21 @@
 # CM3 transitive consumer-mono: a forwarding consumer's lens is not specialized
 
+**RESOLVED.** Both fix-direction pieces landed. (1) `mono_specs.c`
+`register_forwarding_walk` (run to a fixpoint in `mono_specs_resolve_program`
+before the CM1 resolve) registers a spec for a forwarding lens param `(E, p)`
+inheriting the callee consumer's functor/focus/whole, so the fixpoint resolves it
+and the inner consumer inherits its set transitively. (2) `emit_expr.c`'s CM3
+rewrite resolves a lens arg that IS the current clone's bound lens param to the
+clone's concrete lens (the "singleton lens set"), so `(inner l ...)` inside a
+forwarding clone rewrites to the inner consumer's matching clone; `emit_module.c`
+emits a twin-less clone for a forwarding consumer (no `(l g s)` pin). Verified on
+direct-forward, multi-level (fixpoint), and self-recursive (OQ #3 -- a clone calls
+its OWN clone, emit terminates) shapes; fixture
+`van-laarhoven-lens-wide-consumer-forward` (run + `expected.c`) pins the box-free
+`tweak__lens_* -> set_px__lens_*` chain. CM4 is no longer blocked by this shape.
+
+---
+
 **Severity:** medium (a missed optimization today -- correct via Path A fallback;
 becomes a **CM4 blocker**, since CM4 deletes the Path A wide branch this case
 still relies on).
