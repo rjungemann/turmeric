@@ -202,15 +202,16 @@ bool g_opt_hrt_curried_result = false;
  * functor unconditionally (no flag, TUR-E0309 retired).  The Path A carrier
  * box/unbox bridge is always-on; the wide-ness test (non-opaque, non-:heap
  * flat-product) still gates it, so carrier-compatible functors are untouched.
- * `--enable=vl-wide-mono` layers the zero-overhead Path B redirect on top. */
+ * The zero-overhead Path B redirect (formerly --enable=vl-wide-mono) layers on
+ * top unconditionally since its 2026-07-05 graduation (see below). */
 
-/* VBM1 of van-laarhoven-monomorphization-plan: `vl-wide-mono` experiment enable
- * bit (Path B).  Default off.  When set, elab_poly_call registers a by-value HKT
- * monomorphization spec key per wide-functor van Laarhoven lens site, and the
- * lens call sites that resolve uniquely are redirected to a by-value mono body
- * (no `(f S)`/`(f A)` heap box).  Paired with `--dump-mono-specs`
- * (g_dump_mono_specs) to review the keying. */
-bool g_opt_vl_wide_mono = false;
+/* vl-wide-mono GRADUATED 2026-07-05 (CM4 of van-laarhoven-consumer-mono-plan) --
+ * the by-value HKT monomorphization (Path B) registration, unique-redirect, and
+ * consumer-clone emit are now unconditional; the former `g_opt_vl_wide_mono`
+ * enable bit is retired.  SIMPLE lenses (a direct `fmap` tail) redirect to a
+ * by-value mono body with no `(f S)`/`(f A)` heap box; COMPOSED lenses fall back
+ * to the Path A carrier bridge (mono_specs.c lens_is_simple_for_pathb).  Paired
+ * with `--dump-mono-specs` (g_dump_mono_specs) to review the keying. */
 bool g_dump_mono_specs = false;
 
 /* ---------------------------------------------------------------------------

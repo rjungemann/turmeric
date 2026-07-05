@@ -64,6 +64,16 @@ typedef struct {
     LensResolution lens_set[MONO_SPEC_LENSSET_MAX];
     size_t         n_lens_set;
     bool           lens_set_capped;
+    /* CM4 partial-graduation gate: set when this consumer lens param was EVER
+     * passed a COMPOSED lens (one whose body tails into another lens rather than
+     * a direct `fmap` dispatch -- see lens_is_simple_for_pathb).  A composed lens
+     * straddles the by-value outer `g` and its carrier-lowered nested lenses
+     * (docs/reported CM4 gap 2 / docs/upcoming/v2 by-value-propagation plan),
+     * which the by-value mono body cannot yet emit.  A poisoned key falls FULLY
+     * back to Path A: every Path-B accessor below reports "nothing" for it, so
+     * even simple lenses sharing the same consumer stay on the carrier rather
+     * than risk a mixed by-value/carrier miscompile. */
+    bool           has_composed_lens;
 } MonoSpecKey;
 
 static MonoSpecKey g_specs[MONO_SPEC_MAX];
@@ -156,6 +166,7 @@ const void *mono_spec_consumer_call_lookup(const char *callee_name,
     if (!callee_name) return NULL;
     for (size_t i = 0; i < g_n_specs; i++) {
         const MonoSpecKey *k = &g_specs[i];
+        if (k->has_composed_lens) continue; /* poisoned -> Path A, never cloned */
         if (k->n_lens_set < 2) continue;   /* only ambiguous consumers are cloned */
         if (k->lens_idx < 0) continue;
         if (strcmp(k->enclosing, callee_name) != 0) continue;
@@ -180,7 +191,7 @@ unsigned long long mono_spec_lens_clone_hash(const void *lensparam_binding,
                                              const char *lens_name) {
     if (!lens_name) return 0;
     const MonoSpecKey *k = spec_for_binding(lensparam_binding);
-    if (!k) return 0;
+    if (!k || k->has_composed_lens) return 0;
     for (size_t j = 0; j < k->n_lens_set; j++)
         if (strcmp(k->lens_set[j].lens_name, lens_name) == 0)
             return (unsigned long long)k->lens_set[j].mono_hash;
@@ -225,6 +236,7 @@ bool mono_spec_redirect_for_binding(const void *lensparam_binding,
     for (size_t i = 0; i < g_n_specs; i++) {
         const MonoSpecKey *k = &g_specs[i];
         if (k->lensparam_binding != lensparam_binding) continue;
+        if (k->has_composed_lens) return false; /* poisoned -> Path A */
         /* CM1: the in-place VBM3 redirect is only safe when the param resolves to
          * exactly ONE concrete lens.  `== 0` (unresolved) and `>= 2` (ambiguous,
          * CM2/CM3's consumer-clone case) both fall through to Path A here. */
@@ -246,14 +258,15 @@ static const MonoSpecKey *spec_for_binding(const void *lensparam_binding) {
 
 size_t mono_spec_lens_set_count(const void *lensparam_binding) {
     const MonoSpecKey *k = spec_for_binding(lensparam_binding);
-    return k ? k->n_lens_set : 0;
+    if (!k || k->has_composed_lens) return 0;   /* poisoned -> Path A */
+    return k->n_lens_set;
 }
 
 bool mono_spec_lens_set_get(const void *lensparam_binding, size_t i,
                             const char **lens_name, const void **lens_fn,
                             unsigned long long *mono_hash) {
     const MonoSpecKey *k = spec_for_binding(lensparam_binding);
-    if (!k || i >= k->n_lens_set) return false;
+    if (!k || k->has_composed_lens || i >= k->n_lens_set) return false;
     const LensResolution *r = &k->lens_set[i];
     if (lens_name) *lens_name = r->lens_name;
     if (lens_fn)   *lens_fn   = r->lens_fn;
@@ -386,6 +399,40 @@ static void lens_set_add(MonoSpecKey *k, const char *lens_name,
     if (grew) *grew = true;
 }
 
+/* CM4 partial-graduation: a lens is "simple" (by-value Path B eligible) iff its
+ * body tail is a direct functor-method (`fmap`) dispatch -- it builds `(f A)` in
+ * one step through the caller's `Functor` dict (e.g. `point-x`'s
+ * `(fmap (g (.x s)) ...)`).  A COMPOSED lens (e.g. `line-a-x`, whose body is
+ * `(line-a (fn [p] (point-x g p)) s)`) instead tails into a call to ANOTHER lens
+ * with no dict dispatch: the nested lens is carrier-lowered while the outer `g`
+ * is by value, and the two ABIs collide in the by-value mono body (CM4 gap 2).
+ * Such lenses stay on Path A.  Peel ascribe/return/let/do wrappers to the tail. */
+static bool lens_is_simple_for_pathb(const FnDef *lens) {
+    if (!lens || !lens->body) return false;
+    const Expr *e = lens->body;
+    for (;;) {
+        if (!e) return false;
+        switch (e->kind) {
+            case EX_ASCRIBE: e = e->as.ascribe_.inner; continue;
+            case EX_RETURN:  e = e->as.return_.value;  continue;
+            case EX_LET:
+            case EX_LETREC:  e = e->as.let_.body;      continue;
+            case EX_DO:
+                if (e->as.do_.n == 0) return false;
+                e = e->as.do_.items[e->as.do_.n - 1];
+                continue;
+            default: break;
+        }
+        break;
+    }
+    /* Tail must be an `fmap` typeclass-method dispatch: an EX_CALL carrying an
+     * EX_DICT `dict_arg` whose method is `fmap`. */
+    if (e->kind != EX_CALL) return false;
+    const Expr *da = e->as.call_.dict_arg;
+    if (!da || da->kind != EX_DICT) return false;
+    return strcmp(da->as.dict_.method_name, "fmap") == 0;
+}
+
 typedef struct {
     const char  *enclosing; /* enclosing fn name whose calls we resolve */
     uint32_t     lens_idx;  /* arg slot holding the concrete lens */
@@ -410,9 +457,17 @@ static void resolve_walk(const Expr *e, const ResolveCtx *rc) {
             const char *lens = arg_global_fn_name(larg);
             const FnDef *lens_fn = lens ? find_fndef(rc->prog, lens) : NULL;
             if (lens && lens_fn) {
-                /* Directly a global lens defn: one concrete lens for this site. */
-                uint64_t h = mono_concrete_register(lens, rc->abs, lens_fn);
-                lens_set_add(rc->abs, lens, lens_fn, h, e, rc->grew);
+                /* CM4 gate: a COMPOSED lens is not Path-B eligible -- poison this
+                 * consumer's key so it falls fully back to Path A, and do NOT
+                 * register a concrete key (which would emit an ill-typed
+                 * `<lens>__mono` body) nor add it to the set. */
+                if (!lens_is_simple_for_pathb(lens_fn)) {
+                    rc->abs->has_composed_lens = true;
+                } else {
+                    /* Directly a global lens defn: one concrete lens for this site. */
+                    uint64_t h = mono_concrete_register(lens, rc->abs, lens_fn);
+                    lens_set_add(rc->abs, lens, lens_fn, h, e, rc->grew);
+                }
             } else {
                 /* Transitive: the arg is a variable.  If it is a consumer lens
                  * param whose own set is already (partly) resolved, fold that set
@@ -422,6 +477,9 @@ static void resolve_walk(const Expr *e, const ResolveCtx *rc) {
                 const Binding *vb = arg_var_binding(larg);
                 const MonoSpecKey *src = spec_for_binding(vb);
                 if (src) {
+                    /* Poison propagates transitively: forwarding a poisoned
+                     * consumer's lens param keeps the receiver on Path A too. */
+                    if (src->has_composed_lens) rc->abs->has_composed_lens = true;
                     for (size_t j = 0; j < src->n_lens_set; j++) {
                         const LensResolution *r = &src->lens_set[j];
                         uint64_t h = mono_concrete_register(r->lens_name, rc->abs,

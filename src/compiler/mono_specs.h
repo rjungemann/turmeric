@@ -29,8 +29,9 @@
  * `--dump-mono-specs` prints both the abstract keys and the resolved concrete
  * keys so the keying can be reviewed by eye.
  *
- * Registration is guarded on `g_opt_vl_wide_mono`; the dump on
- * `g_dump_mono_specs`. */
+ * Registration is unconditional since the vl-wide-mono graduation (2026-07-05);
+ * COMPOSED lenses are gated back to Path A in mono_specs.c
+ * (lens_is_simple_for_pathb).  The dump is gated on `g_dump_mono_specs`. */
 
 /* VBM1: register (dedup by content hash) one ABSTRACT lens spec key.  NULL
  * fields are recorded as "?".  Strings are snapshotted, so callers may pass

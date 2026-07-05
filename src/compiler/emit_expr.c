@@ -1,7 +1,7 @@
 /* emit_expr.c -- expression-position C emission (emit_value and friends). */
 #include "emit_internal.h"
 #include "emit_cps.h"   /* cps-transform-plan: EX_CALLCC lowering */
-#include "globals.h"    /* g_opt_vl_wide_mono (VBM3 redirect) */
+#include "globals.h"    /* g_dump_mono_specs, emit knobs */
 #include "mono_specs.h" /* VBM3: van Laarhoven lens dispatch redirect */
 
 /* ACB: true when kind represents a concrete aggregate type (struct, ADT, or
@@ -2651,7 +2651,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * lens has no clone and falls through to the Path A carrier call.  The
              * clone's ABI matches the carrier, so each retained arg is emitted and
              * cast to its own concrete C type (which is the clone's param type). */
-            if (g_opt_vl_wide_mono && fn_binding && fn_binding->name &&
+            if (fn_binding && fn_binding->name &&
                 fn_binding->name->name) {
                 int lens_idx = -1;
                 const void *lb = mono_spec_consumer_call_lookup(
@@ -2854,7 +2854,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * The mono body takes the ordinary Path A `g` (carrier) and the
                  * whole `s`; the dict arg (slot 0) is dropped.  Only fires on a
                  * unique, non-ambiguous resolution (see mono_specs). */
-                if (g_opt_vl_wide_mono && fn_binding &&
+                if (fn_binding &&
                     e->as.call_.n_args >= 3) {
                     const char *rlens = NULL; unsigned long long rhash = 0;
                     bool redirect = false;

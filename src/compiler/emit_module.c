@@ -9192,9 +9192,10 @@ int emit_program(Buf *out, const Expr *program) {
      * shared ABI-spec body emit with the HKT tyvar `f` bound to the concrete
      * functor, so `(f a)`, `(f S)`, and the lens result are spelled by value
      * with `f` substituted.  Registry-only until VBM3 redirects dispatch; the
-     * body is emitted (and forward-declared) but not yet called.  Gated on
-     * --enable=vl-wide-mono, so nothing outside that experiment is affected. */
-    if (g_opt_vl_wide_mono) {
+     * body is emitted (and forward-declared) but not yet called.  Graduated
+     * (vl-wide-mono, 2026-07-05): unconditional; the loop no-ops when the
+     * concrete registry is empty (no simple wide-functor lens was resolved). */
+    {
         size_t nmono = mono_spec_concrete_count();
         for (size_t mi = 0; mi < nmono; mi++) {
             const void *lens_fn_v = NULL, *functor_ty_v = NULL;
@@ -9398,8 +9399,10 @@ int emit_program(Buf *out, const Expr *program) {
      * `inner_closure_spec_idx` so its `(l g s)` builds `g` by value.  The boxed
      * Path A carrier `g` (and carrier consumer body) stay live for un-rewritten /
      * runtime-selected sites -- CM3 rewrites the static sites.  Emitted but not
-     * yet called this slice (call rewrite is CM3). */
-    if (g_opt_vl_wide_mono) {
+     * yet called this slice (call rewrite is CM3).  Graduated (vl-wide-mono,
+     * 2026-07-05): unconditional; no-ops when no ambiguous (|set|>=2) consumer
+     * was resolved. */
+    {
         size_t nabs = mono_spec_count();
         for (size_t si = 0; si < nabs; si++) {
             const void *lb = mono_spec_abstract_binding(si);

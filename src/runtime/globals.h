@@ -197,16 +197,18 @@ extern bool g_opt_hrt_curried_result;
  * The former `g_opt_vl_wide_functor` bool is gone; its guards are now
  * unconditional. */
 
-/* VBM1 (docs/upcoming/van-laarhoven-monomorphization-plan.md): the
- * `vl-wide-mono` experiment (Path B).  When set, elab_poly_call registers a
- * by-value HKT monomorphization spec key for each van Laarhoven lens site whose
- * pinned functor `f` is a WIDE by-value aggregate (see mono_specs.c), and the
- * poly-call emit redirects every lens call site that resolves uniquely to a
- * by-value mono body -- no `(f S)`/`(f A)` heap box on that path.  Layered on
- * top of the (now unconditional) Path A carrier bridge, which remains the
- * fallback for lens uses that do not resolve uniquely.  `g_dump_mono_specs`
- * (from `--dump-mono-specs`) prints the registry after elaboration. */
-extern bool g_opt_vl_wide_mono;
+/* VBM1-CM4 (docs/upcoming/van-laarhoven-monomorphization-plan.md +
+ * van-laarhoven-consumer-mono-plan.md): the by-value HKT monomorphization path
+ * (Path B) GRADUATED 2026-07-05 -- the former `vl-wide-mono` experiment is
+ * retired and its registration/redirect/clone emit are unconditional.
+ * elab_poly_call registers a spec key for each van Laarhoven lens site whose
+ * pinned functor `f` is a WIDE by-value aggregate (see mono_specs.c); the
+ * poly-call emit redirects every SIMPLE lens call site that resolves uniquely
+ * to a by-value mono body -- no `(f S)`/`(f A)` heap box on that path.  COMPOSED
+ * lenses (lens_is_simple_for_pathb == false) fall back to the (unconditional)
+ * Path A carrier bridge, which also backs runtime-selected sites.
+ * `g_dump_mono_specs` (from `--dump-mono-specs`) prints the registry after
+ * elaboration. */
 extern bool g_dump_mono_specs;
 
 

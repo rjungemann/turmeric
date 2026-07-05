@@ -6000,9 +6000,11 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                          * a spec key (enclosing fn, callee, functor, focus,
                          * whole) so `--dump-mono-specs` can surface the keying
                          * before VBM2 wires per-spec emit.  Registry-only: the
-                         * Path A carrier-box path above still does the codegen. */
-                        if (g_opt_vl_wide_mono) {
-                            experiment_warn_if_used("vl-wide-mono");
+                         * Path A carrier-box path above still does the codegen.
+                         * Graduated (vl-wide-mono, 2026-07-05): registration is
+                         * unconditional; a composed lens is later gated back to
+                         * Path A in mono_specs.c (lens_is_simple_for_pathb). */
+                        {
                             const char *enclosing =
                                 (e->current_fn_name && e->current_fn_name->name)
                                     ? e->current_fn_name->name : "?";

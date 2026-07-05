@@ -4,15 +4,15 @@
 ;; or a :heap type -- rides the carrier fine.  A WIDE by-value aggregate functor
 ;; (here Identity is a two-word `:copy` struct, not the one-int64 opaque) does
 ;; NOT fit in one word; it used to be rejected with TUR-E0309.  Since VBM4
-;; graduated `vl-wide-functor` to default-on, it is ALWAYS accepted -- no flag --
-;; and codegen boxes the aggregate into the carrier (Path A) at each lens
-;; crossing instead of reinterpreting int64<->struct-pointer.  This fixture runs
-;; the wide functor with NO wide flag (only the forall/dict flags), proving the
-;; graduation: `set-px point-x 99 p` returns a Point with x=99.
+;; graduated `vl-wide-functor` to default-on, it is ALWAYS accepted -- no flag.
+;; This fixture runs the wide functor with only the forall/dict flags, proving
+;; the graduation: `set-px point-x 99 p` returns a Point with x=99.
 ;;
-;; (`--enable=vl-wide-mono` would additionally redirect the uniquely-resolved
-;; lens site to a zero-overhead by-value mono body; see
-;; van-laarhoven-lens-wide-mono.)
+;; Since vl-wide-mono also graduated (2026-07-05), this uniquely-resolved SIMPLE
+;; lens site (`set-px point-x`) now redirects to a zero-overhead by-value mono
+;; body (Path B) by default -- the runtime result is identical (x=99); see
+;; van-laarhoven-lens-wide-mono.  The Path A carrier bridge remains the fallback
+;; for COMPOSED lenses (van-laarhoven-lens-wide-compose).
 (defopaque Const [r a] :int)
 (defn mk-const [A] [x : A] : (Const A A) ```c return (int64_t)x; ```)
 (defn get-const [R A] [c : (Const R A)] : R ```c return (int64_t)c; ```)

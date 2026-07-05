@@ -1,7 +1,7 @@
 ;; VBM2b/VBM3 (van-laarhoven-monomorphization-plan, Path B): the wide-by-value
-;; `Identity` lens repro run under `--enable=vl-wide-mono`.  Wide functors are
-;; always allowed since VBM4 (no vl-wide-functor flag); vl-wide-mono layers the
-;; zero-overhead Path B on top.  elab_poly_call registers a by-value HKT
+;; `Identity` lens repro.  Wide functors are always allowed since VBM4 (no
+;; vl-wide-functor flag); the zero-overhead Path B redirect graduated 2026-07-05
+;; (CM4) and is now unconditional -- no flag.  elab_poly_call registers a by-value HKT
 ;; monomorphization spec key for each wide-functor lens site (here `set-px` and
 ;; `over-px`, both pinning `f := Identity`, focus=int, whole=Point; `view-px`
 ;; pins the opaque carrier-compatible `Const` and is NOT registered), the resolve
