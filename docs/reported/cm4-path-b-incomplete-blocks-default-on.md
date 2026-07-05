@@ -38,8 +38,38 @@ Each fails at the C-compile step (Path B emits ill-typed C), not at runtime.
    `current_abi_specialization == NULL && generic` (the concrete ABI-spec body,
    which has an active spec, still redirects). `wide-generic` now passes on
    Path B; `wide-compose` advances to gap 2 below.
-2. **Lens composition** (`wide-compose`). OPEN (substantially advanced; now a
-   RUNTIME-boxing issue, no longer a compile error). Fixed so far: (i) the
+2. **Lens composition** (`wide-compose`). OPEN. **ROOT CAUSE FOUND (ASan).** The
+   composed lens `line-a-x` receives a BY-VALUE `g` from the wide consumer
+   (`over__spec` builds `g.__fn = __fn_1335__spec` -- returns `Identity__int` BY
+   VALUE), but its nested `point-x` lowered to the CARRIER `point_hyx_...`, which
+   invokes `g` with a carrier cast `((int64_t (*)(void*, int64_t))g[0])(...)`. So
+   it reads only the FIRST word of the by-value struct (`700 = h(a)`) as if it
+   were a boxed pointer and feeds it to `fmap`, whose `run_hyid(0x2bc)` derefs
+   `700` as a `tur_adt_Identity *` -> SEGV. In short: the composition mixes a
+   BY-VALUE outer `g` with CARRIER-lowered nested lenses (`point_hyx`,
+   `line_a__dict`), and the two ABIs collide.
+
+   **The real fix is by-value propagation into the nested lens calls**, NOT the
+   carrier bridges I tried: the nested `(point-x g p)` inside `line_a_x__mono`'s
+   adapter must redirect to the by-value `point_x__mono` (which already exists!),
+   and the nested `(line-a adapter s)` must resolve to a by-value `line_a__mono`
+   (needs to be generated) -- so the whole composed chain stays by value and
+   never boxes. This is a new redirect for a DIRECT concrete-lens application in
+   an is_vl_wide_mono context (the existing VBM3 redirect only fires for a lens
+   PARAM `(l g s)`, not a global lens `(point-x g p)`), plus generating a mono
+   for the nested lens. Substantial but principled; it dissolves the box/unbox
+   problem entirely rather than patching it.
+
+   **Superseded band-aids (the carrier approach, now known wrong for this shape):**
+   `emit_abi_forward_decl`'s `dict_clone_class` -> int64 reconciliation is a
+   genuine decl/def fix and stays; the ER2 carrier `g`-call fix (6118) makes the
+   dict-clone READ the by-value `g` as a carrier -- it turns the compile error
+   into the SEGV above, so it is part of the wrong (carrier) direction. Both are
+   inert on green tests (composition is flagless -> Path A). Do NOT build further
+   on the carrier bridges; take the by-value-propagation path.
+
+   (Historical, pre-root-cause notes:) now a RUNTIME issue, no longer a compile
+   error. Fixed so far: (i) the
    decl/def reconciliation (above); (ii) the dict-clone's `g`-call now returns the
    int64 carrier (`emit_expr.c` ER2 fat-param path, gated on
    `dict_clone_class` + a concrete non-carrier aggregate result), matching the
