@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.26.3` -- retires `--allow-experimental` and the `TUR_M7_HKT` carrier gate, adds a user-level `~/.config/turmeric/experiments.tur` file, and fixes several by-value Option/Result and HKT codegen defects.
+**Latest release:** `v0.26.4` -- lands VBM1 + VBM2a of the by-value van Laarhoven monomorphization path: per-concrete-functor spec discovery at lens call sites, plus a cross-procedural resolve pass that collapses abstract lens pins to concrete emit keys.
 
 ## What
 

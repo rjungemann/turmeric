@@ -4,6 +4,25 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.26.4] -- 2026-07-04
+
+### Added
+
+- **By-value van Laarhoven monomorphization: spec discovery** (VBM1,
+  #605). Under `--enable=vl-wide-mono`, wide-functor lens call sites
+  register per-concrete-functor specs the emitter will later drive.
+- **Cross-procedural concrete-lens resolution** (VBM2a, #606). A new
+  `mono_specs_resolve_program` pass joins each abstract lens spec to
+  the concrete lens passed at every top-level call of its enclosing
+  fn, collapsing abstract `(l g s)` pins to a resolved emit key.
+  `--dump-mono-specs` prints both the abstract and resolved tables.
+
+### Changed
+
+- **CLAUDE.md: green-suite gate excised.** `bash tests/run.sh` is a
+  signal, not a gate. A red suite -- intermediate or otherwise --
+  never blocks a commit, PR, or calling a change done.
+
 ## [0.26.3] -- 2026-07-03
 
 ### Added
