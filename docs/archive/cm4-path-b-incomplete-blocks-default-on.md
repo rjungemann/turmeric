@@ -1,5 +1,20 @@
 # CM4 default-on is blocked: Path B (consumer-mono) is incomplete
 
+> **RESOLVED 2026-07-05 (partial graduation).** Path B is now default-on and the
+> `--enable=vl-wide-mono` flag is retired. Ground-truth sweep of every
+> `van-laarhoven-lens-wide-*` fixture through Path B showed only gap 2 (lens
+> **composition**) mis-compiles; gaps 1 (generic consumers) and 3
+> (receiver-reading `fmap`) both compile and run by value. The shipped gate
+> (`lens_is_simple_for_pathb` + `has_composed_lens` poisoning, `mono_specs.c`)
+> keeps COMPOSED lenses -- and any consumer ever passed one -- on the Path A
+> carrier bridge, so default-on is safe (full suite green, 1943 passed). The
+> remaining by-value-propagation fix that brings composed lenses onto Path B is
+> tracked in
+> [../upcoming/v2/van-laarhoven-composed-byvalue-plan.md](../upcoming/v2/van-laarhoven-composed-byvalue-plan.md).
+> Below is the original open-report analysis, kept for the paper trail.
+
+---
+
 **Severity:** high for CM4 (it is the graduation gate). Not a bug in shipping
 behavior today -- Path B is opt-in (`--enable=vl-wide-mono`) and every failing
 shape works on the default Path A carrier. The problem is only exposed by making
