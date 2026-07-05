@@ -38,7 +38,25 @@ Each fails at the C-compile step (Path B emits ill-typed C), not at runtime.
    `current_abi_specialization == NULL && generic` (the concrete ABI-spec body,
    which has an active spec, still redirects). `wide-generic` now passes on
    Path B; `wide-compose` advances to gap 2 below.
-2. **Lens composition** (`wide-compose`). OPEN (partially advanced). `line-a-x`
+2. **Lens composition** (`wide-compose`). OPEN (substantially advanced; now a
+   RUNTIME-boxing issue, no longer a compile error). Fixed so far: (i) the
+   decl/def reconciliation (above); (ii) the dict-clone's `g`-call now returns the
+   int64 carrier (`emit_expr.c` ER2 fat-param path, gated on
+   `dict_clone_class` + a concrete non-carrier aggregate result), matching the
+   boxing adapter and the carrier `fmap` slot -- the 6118 arg-type error is gone.
+   REMAINING: `line_a_x__mono` returns the dict-clone's int64 carrier but declares
+   the by-value `(Identity Line)`. Adding a carrier->concrete unbox at the call
+   result (`*(tur_adt_Identity__Line *)(intptr_t)(...)`) makes it COMPILE but
+   SEGFAULT -- the int64 the dict-clone returns is not the boxed-aggregate pointer
+   the unbox assumes, so the whole adapter -> dict-clone -> carrier-fmap -> unbox
+   chain is not runtime-consistent. The real fix is to make the carrier box/unbox
+   line up end-to-end (the carrier `fmap` must box the `(f S)` the same way the
+   unbox reads it), or -- cleaner -- to propagate the by-value specialization INTO
+   the nested lens so `line-a` becomes a by-value `line_a__mono` (no dict-clone,
+   no boxing) instead of a carrier dict-clone. The latter is the structural fix
+   and avoids the box/unbox entirely. Deepest of the three; deep MB2.5/WF3.
+
+   (Historical detail:) `line-a-x`
    composes `line-a` and `point-x` via `(line-a (fn [p] (point-x g p)) s)`.
    Inside the by-value mono body `line_a_x__mono`, the nested `line-a` is lowered
    through a dict-clone `line_a__dict_..._spec_...` that MB2.5 forces to the int64
