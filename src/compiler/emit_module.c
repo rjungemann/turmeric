@@ -8543,6 +8543,53 @@ static bool def_is_opaque_type_decl(const Expr *e) {
            e->as.def_.binding->type.as.adt_.def->is_opaque;
 }
 
+/* CB3 (van-laarhoven-composed-byvalue-plan): a COMPOSED lens's body tails into
+ * `(<inner-lens> adapter s)` where `adapter` is `(fn [p] (<nested-lens> g p))`.
+ * Peel the body to that tail call and return the adapter closure's FnDef binding
+ * so VBM2b can mint a by-value twin of it (result `(f Focus)` by value, captured
+ * `g` the by-value twin).  NULL for a SIMPLE lens (no adapter closure). */
+static const Binding *vl_composed_adapter_binding(const Expr *body) {
+    const Expr *e = body;
+    for (;;) {
+        if (!e) return NULL;
+        switch (e->kind) {
+            case EX_ASCRIBE: e = e->as.ascribe_.inner; continue;
+            case EX_RETURN:  e = e->as.return_.value;  continue;
+            case EX_LET:
+            case EX_LETREC:  e = e->as.let_.body;      continue;
+            case EX_DO:
+                if (e->as.do_.n == 0) return NULL;
+                e = e->as.do_.items[e->as.do_.n - 1];
+                continue;
+            default: break;
+        }
+        break;
+    }
+    if (e->kind != EX_CALL) return NULL;
+    /* A SIMPLE lens tails into an `fmap` typeclass-method dispatch (an EX_DICT
+     * `dict_arg`); its closure arg is the plain `(fn [nx] ...)` mapping function,
+     * NOT a composition adapter.  Only a lens-to-lens tail (no dict_arg) has a
+     * real adapter, so bail on the fmap-dispatch shape. */
+    if (e->as.call_.dict_arg && e->as.call_.dict_arg->kind == EX_DICT)
+        return NULL;
+    for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+        const Expr *a = e->as.call_.args[i];
+        while (a) {
+            if (a->kind == EX_ASCRIBE)          a = a->as.ascribe_.inner;
+            else if (a->kind == EX_FN_TO_FAT)   a = a->as.fn_to_fat_.inner;
+            else if (a->kind == EX_POLY_TO_FAT) a = a->as.poly_to_fat_.inner;
+            else if (a->kind == EX_POLY_WRAP)   a = a->as.poly_wrap_.inner;
+            else break;
+        }
+        if (a && a->kind == EX_CLOSURE && a->as.closure_.closure &&
+            a->as.closure_.closure->fn)
+            return a->as.closure_.closure->fn->binding;
+        if (a && a->kind == EX_FN && a->as.fn_.fn)
+            return a->as.fn_.fn->binding;
+    }
+    return NULL;
+}
+
 int emit_program(Buf *out, const Expr *program) {
     if (!program || program->kind != EX_PROGRAM) {
         fprintf(stderr, "tur: emit: expected EX_PROGRAM\n");
@@ -9197,6 +9244,14 @@ int emit_program(Buf *out, const Expr *program) {
      * concrete registry is empty (no simple wide-functor lens was resolved). */
     {
         size_t nmono = mono_spec_concrete_count();
+        /* CB3 (van-laarhoven-composed-byvalue-plan): emit SIMPLE lens monos in
+         * pass 0, COMPOSED lens monos in pass 1.  A composed lens's adapter twin
+         * (CB3) scans `(nested g p)`, which shares the by-value `fmap` twin with
+         * the nested SIMPLE lens's own mono; that twin gets its by-value receiver
+         * retype only during the simple lens's own iteration, so the simple lens
+         * must be emitted first for the shared twin to exist correctly before the
+         * composed adapter reuses it. */
+        for (int pass = 0; pass < 2; pass++) {
         for (size_t mi = 0; mi < nmono; mi++) {
             const void *lens_fn_v = NULL, *functor_ty_v = NULL;
             const char *tyvar = NULL;
@@ -9206,6 +9261,9 @@ int emit_program(Buf *out, const Expr *program) {
             FnDef *lfd = (FnDef *)lens_fn_v;
             const Type *fty = (const Type *)functor_ty_v;
             if (!lfd->binding || !lfd->param_types || lfd->n_params == 0) continue;
+            /* Simple lenses (no adapter closure) in pass 0, composed in pass 1. */
+            bool is_composed = vl_composed_adapter_binding(lfd->body) != NULL;
+            if ((pass == 1) != is_composed) continue;
             /* Locate the EX_FN_DEF wrapping this lens FnDef. */
             const Expr *lens_expr = NULL;
             for (uint32_t i = 0; i < program->as.program.n; i++) {
@@ -9252,6 +9310,13 @@ int emit_program(Buf *out, const Expr *program) {
              * re-fetch after every call that can grow the array. */
             uint32_t sp_idx = (uint32_t)(sp - ctx.abi_specializations);
             uint32_t before_scan = ctx.n_abi_specializations;
+            /* A COMPOSED lens body tails into a nested lens call, not an `fmap`
+             * dispatch, and every nested call is REDIRECTED at emit time (CB2) to
+             * the nested lens's `<lens>__mono` -- so scanning it would only mint
+             * dead, ill-typed dict-clone / fmap-twin specs.  Skip the fmap-twin
+             * scan + receiver retype + recursive twin scan for composed lenses;
+             * CB3 below mints just the adapter twin. */
+            if (!is_composed) {
             ctx.current_abi_specialization = sp;
             ctx.current_scan_fn = lens_expr;
             emit_abi_scan_expr(&ctx, lfd->body,
@@ -9355,7 +9420,99 @@ int emit_program(Buf *out, const Expr *program) {
                 ctx.current_scan_fn = NULL;
                 ctx.current_abi_specialization = NULL;
             }
+            } /* end if (!is_composed) -- simple-lens fmap-twin scan machinery */
             sp = &ctx.abi_specializations[sp_idx];
+            /* CB3 (van-laarhoven-composed-byvalue-plan): for a COMPOSED lens, mint
+             * a by-value twin of the ADAPTER closure `(fn [p] (nested g p))` so
+             * this mono body builds it by value (result `(f Focus)`, captured `g`
+             * the by-value twin) and hands it to the nested lens's `<lens>__mono`.
+             * Link it via `inner_closure_spec_idx` so the EX_CLOSURE construction
+             * in this body stores the twin's thunk; mark the twin `is_vl_wide_mono`
+             * so its inner `(nested g p)` redirects (CB2) to the nested mono body.
+             * No-op for a SIMPLE lens (no adapter closure). */
+            {
+                const Binding *ab = vl_composed_adapter_binding(lfd->body);
+                const Expr *aexpr = ab ? emit_abi_find_fn_expr(
+                    (const Expr **)program->as.program.items,
+                    program->as.program.n, ab) : NULL;
+                FnDef *afd = (aexpr && aexpr->kind == EX_FN_DEF)
+                    ? aexpr->as.fn_def_.fn : NULL;
+                if (afd && afd->param_types && afd->n_params >= 1) {
+                    AbiTypeBinding ab2; ab2.name = tyvar; ab2.type = *fty;
+                    uint8_t a_n = afd->n_params <= MAX_FN_ARITY ? afd->n_params
+                                                               : MAX_FN_ARITY;
+                    Type a_args[MAX_FN_ARITY];
+                    for (uint8_t a = 0; a < a_n; a++)
+                        a_args[a] = emit_abi_instantiate_type(
+                            &afd->param_types[a], &ab2, 1, ctx.type_arena);
+                    /* The adapter's declared result `(f Focus)` is left carrier
+                     * (WF1 box) on the lifted closure, so build the by-value result
+                     * directly as `(<functor> <focus>)` -- the functor ctor applied
+                     * to the adapter's last param type (`p : Focus`), the same shape
+                     * the nested lens's `<lens>__mono` returns.  Mirrors CM2's
+                     * g-twin g_res construction. */
+                    Type a_res;
+                    {
+                        Type *fnp = (Type *)emit_abi_type_scratch(ctx.type_arena,
+                                                                  sizeof(Type));
+                        Type *argp = (Type *)emit_abi_type_scratch(ctx.type_arena,
+                                                                   sizeof(Type));
+                        *fnp = *fty;                           /* functor ctor */
+                        *argp = afd->param_types[a_n - 1];     /* focus type */
+                        memset(&a_res, 0, sizeof a_res);
+                        a_res.kind = TY_APP;
+                        a_res.as.app.fn = fnp;
+                        a_res.as.app.arg = argp;
+                    }
+                    EmitAbiSpecialization *at = emit_abi_intern_spec(
+                        &ctx, afd->binding, aexpr, afd, &ab2, 1, a_args, a_n,
+                        a_res, NULL, true);
+                    if (at) {
+                        int32_t at_idx = (int32_t)(at - ctx.abi_specializations);
+                        {
+                            char *abase = raw_name_for_binding(afd->binding);
+                            Buf nm; buf_init(&nm);
+                            buf_printf(&nm, "%s__byval",
+                                       abase ? abase : "adapter");
+                            buf_putc(&nm, '\0');
+                            free(at->clone_name);
+                            at->clone_name = strdup(nm.data);
+                            buf_free(&nm);
+                            free(abase);
+                        }
+                        at->is_vl_wide_mono = true;
+                        ctx.abi_specializations[sp_idx].inner_closure_spec_idx =
+                            at_idx;
+                        if (!ctx.abi_specializations[at_idx].emitted) {
+                            /* The adapter closure carries WF1's
+                             * `box_aggregate_result` (its `(f Point)` result is
+                             * boxed to the carrier for the Path A dict-clone).  The
+                             * by-value twin returns `(f Point)` by value straight
+                             * into the nested lens's `<lens>__mono`, so clear the
+                             * box for this emit (the boxed base was already emitted
+                             * in the main items loop); restore it after. */
+                            bool saved_box = afd->box_aggregate_result;
+                            afd->box_aggregate_result = false;
+                            /* Do NOT scan the adapter body: its `(nested g p)` is
+                             * redirected at emit (CB2) to the nested `<lens>__mono`
+                             * (already emitted in pass 0), so a scan would only mint
+                             * dead, ill-typed dict-clone / fmap-twin specs. */
+                            at = &ctx.abi_specializations[at_idx];
+                            emit_abi_forward_decl(&fwd_decls, at);
+                            ctx.current_abi_specialization = at;
+                            ctx.fn_name_override = at->clone_name;
+                            ctx.fn_name_override_external = false;
+                            emit_fn_def(&ctx, &file, aexpr);
+                            ctx.abi_specializations[at_idx].emitted = true;
+                            ctx.fn_name_override = NULL;
+                            ctx.current_abi_specialization = NULL;
+                            ctx.current_scan_fn = NULL;
+                            afd->box_aggregate_result = saved_box;
+                        }
+                        sp = &ctx.abi_specializations[sp_idx];
+                    }
+                }
+            }
             /* Forward-declare the mono body + every newly-minted nested spec
              * (the by-value fmap / mk-id twins) into `fwd_decls` (which the final
              * assembly emits BEFORE `file`), so the VBM3 redirect call in an
@@ -9386,6 +9543,7 @@ int emit_program(Buf *out, const Expr *program) {
             ctx.fn_name_override = NULL;
             ctx.current_abi_specialization = NULL;
             ctx.current_scan_fn = NULL;
+        }
         }
     }
 

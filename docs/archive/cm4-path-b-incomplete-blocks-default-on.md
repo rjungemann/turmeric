@@ -8,10 +8,14 @@
 > (`lens_is_simple_for_pathb` + `has_composed_lens` poisoning, `mono_specs.c`)
 > keeps COMPOSED lenses -- and any consumer ever passed one -- on the Path A
 > carrier bridge, so default-on is safe (full suite green, 1943 passed). The
-> remaining by-value-propagation fix that brings composed lenses onto Path B is
+> remaining by-value-propagation fix that brings composed lenses onto Path B was
 > tracked in
-> [../upcoming/v2/van-laarhoven-composed-byvalue-plan.md](../upcoming/v2/van-laarhoven-composed-byvalue-plan.md).
-> Below is the original open-report analysis, kept for the paper trail.
+> [van-laarhoven-composed-byvalue-plan.md](van-laarhoven-composed-byvalue-plan.md)
+> and **landed 2026-07-05 (CB1-CB5)** -- gap 2 below is now CLOSED: a composed
+> lens threads `(f a)` by value end to end with no carrier box; the
+> `has_composed_lens` poison survives only as the CB5 Path A backstop for shapes
+> the by-value lowering does not cover.  Below is the original open-report
+> analysis, kept for the paper trail.
 
 ---
 
@@ -53,7 +57,8 @@ Each fails at the C-compile step (Path B emits ill-typed C), not at runtime.
    `current_abi_specialization == NULL && generic` (the concrete ABI-spec body,
    which has an active spec, still redirects). `wide-generic` now passes on
    Path B; `wide-compose` advances to gap 2 below.
-2. **Lens composition** (`wide-compose`). OPEN. **ROOT CAUSE FOUND (ASan).** The
+2. **Lens composition** (`wide-compose`). RESOLVED 2026-07-05 (CB1-CB5; see
+   van-laarhoven-composed-byvalue-plan.md). **ROOT CAUSE FOUND (ASan).** The
    composed lens `line-a-x` receives a BY-VALUE `g` from the wide consumer
    (`over__spec` builds `g.__fn = __fn_1335__spec` -- returns `Identity__int` BY
    VALUE), but its nested `point-x` lowered to the CARRIER `point_hyx_...`, which
