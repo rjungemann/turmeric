@@ -1,7 +1,8 @@
 # Plan: scratch/permanent value-pool regions for a long-lived turi env
 
-**Status:** Phase A LANDED (opt-in, conservative promotion); full carrier-pointer
-/ control-flow relocation remains future work. **Area:** `src/turi/`
+**Status:** LANDED (Phase A -- opt-in, conservative promotion). The remaining
+carrier-pointer / control-flow relocation tail was split into its own follow-up:
+`docs/upcoming/turi-value-pool-carrier-relocation-plan.md`. **Area:** `src/turi/`
 (tree-walking interpreter).
 
 ## Phase A -- landed
@@ -47,16 +48,17 @@ per-unit-env path is byte-for-byte unchanged:
   `tests/run.sh` 1943/0; the `tur_env_teardown` leak gate stays clean;
   `tests/run-turi.sh` matches baseline.
 
-### Remaining (future increments)
+### Remaining (split into a follow-up plan)
 
-The genuinely hard tail the plan flagged: relocating **carrier-encoded pointer
+The genuinely hard tail the plan flagged -- relocating **carrier-encoded pointer
 values** (the by-value HKT representation stores cons/set/vec/ADT payload
 pointers as bare `int64`, indistinguishable from integers without per-carrier
 type info) and the internal C-state of live continuations/generators/fibers/
-tvars. Until those are walkable, a long-lived host that keeps such values live in
-globals gets correct behavior but no memory bound for those cycles. Extending the
-walk one such shape at a time -- against the same fixtures and poison mode -- is
-the path forward.
+tvars -- is out of Phase A's scope. Until those are walkable, a long-lived host
+that keeps such values live in globals gets correct behavior but no memory bound
+for those cycles. That work is now tracked separately, one shape at a time
+against the same fixtures and poison mode, in
+`docs/upcoming/turi-value-pool-carrier-relocation-plan.md`.
 
 ---
 
@@ -69,7 +71,7 @@ evals), without changing interpreter semantics or the host-visible value
 contract.
 
 This is the optional follow-up to the (landed) env-owned value-arena pool --
-see `docs/archive/turi-env-owned-value-arena-pool-plan.md`. It was split out of
+see `docs/archive/history/turi-env-owned-value-arena-pool-plan.md`. It was split out of
 that plan's "Phase 2" because it is materially harder and only matters for the
 immortal-env host pattern; the per-unit-env pattern is already served.
 
