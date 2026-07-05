@@ -36,9 +36,22 @@ int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap,
 
 /* Suppress LeakSanitizer in the forked child below: it inherits the parent's
  * still-live allocations, which LSan would otherwise report at the child's
- * exit and turn the expected exit code 2 into a leak-abort.  Weakly declared
- * so Release (non-ASan) builds link without the sanitizer runtime. */
-void __lsan_disable(void) __attribute__((weak));
+ * exit and turn the expected exit code 2 into a leak-abort.  Only declared
+ * under ASan builds; on macOS Mach-O `__attribute__((weak))` on a plain
+ * declaration does not produce a weak-undefined reference (that needs
+ * `weak_import`), so Release links would fail with an undefined `___lsan_disable`.
+ * Gate on the sanitizer feature macro instead. */
+#if defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+#    define TUR_HAVE_LSAN 1
+#  endif
+#endif
+#if defined(__SANITIZE_ADDRESS__)
+#  define TUR_HAVE_LSAN 1
+#endif
+#ifdef TUR_HAVE_LSAN
+void __lsan_disable(void);
+#endif
 
 static int failures = 0;
 
@@ -150,7 +163,9 @@ int main(void) {
     if (pid == 0) {
         /* child: exercise the exit(2) path.  Disable leak detection first --
          * the inherited heap is not ours to account for. */
-        if (__lsan_disable) __lsan_disable();
+#ifdef TUR_HAVE_LSAN
+        __lsan_disable();
+#endif
         experiments_read_user_config();
         _exit(0);   /* should not reach here */
     } else if (pid > 0) {

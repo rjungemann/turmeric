@@ -9,6 +9,7 @@ build-release/
 build-tsan/
 build-wasm/
 build_nosub/
+build-release-check/
 *.dSYM/
 *.o
 *.d
