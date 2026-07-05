@@ -3391,6 +3391,24 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * named TY_TYVAR, resolve it through the current spec to
                      * recover the concrete C return type (e.g. double for float). */
                     Type disp_result = emit_resolve_type(ctx, e->type);
+                    /* CM4 (composition): inside a dict-clone body (MB2.5 carrier --
+                     * it dispatches the functor method through the runtime dict as
+                     * int64), a functor-wrapping closure `g` (`(-> A (f A))`) is
+                     * passed as the carrier: the caller's adapter BOXES its wide
+                     * `(f A)` result into int64.  A composed wide lens (`line-a-x`)
+                     * lowers its nested `line-a` through such a dict-clone, so
+                     * `(g (.a s))` resolves to the by-value aggregate under the
+                     * concrete `f := Identity`, but the actual adapter returns the
+                     * int64 carrier and the receiver feeds the carrier `fmap` slot.
+                     * Force the fat-dispatch return to the int64 carrier so both
+                     * agree.  A carrier-compatible functor result is already int64,
+                     * so this only bites the by-value aggregate case. */
+                    if (ctx->current_abi_specialization &&
+                        ctx->current_abi_specialization->fn &&
+                        ctx->current_abi_specialization->fn->dict_clone_class &&
+                        type_kind_is_aggregate(disp_result.kind) &&
+                        strcmp(type_c_name(disp_result), "int64_t") != 0)
+                        disp_result = emit_type_from_kind(TY_INT);
                     if (type_uses_carrier_abi(disp_result) &&
                         fn_binding->type.kind == TY_FN &&
                         fn_binding->type.as.fn.result_full_type) {
