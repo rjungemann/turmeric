@@ -69,6 +69,13 @@ const void *mono_spec_consumer_call_lookup(const char *callee_name,
 unsigned long long mono_spec_lens_clone_hash(const void *lensparam_binding,
                                              const char *lens_name);
 
+/* CM4: true when the consumer owning `lensparam_binding` is GENERIC (its lens
+ * focus/whole pin to type variables).  The by-value redirect must be suppressed
+ * in such a consumer's generic carrier BASE body (emitted with no active ABI
+ * spec) -- there the lens-result consumer (run-id / get-const) is the carrier
+ * form; the concrete ABI-spec body still redirects. */
+bool mono_spec_consumer_is_generic(const void *lensparam_binding);
+
 /* VBM2: resolve every abstract spec to its concrete lens by scanning the
  * elaborated program `prog` (an `Expr *` program node) for calls of each
  * abstract spec's enclosing fn, and register a concrete `(lens_fn, functor,

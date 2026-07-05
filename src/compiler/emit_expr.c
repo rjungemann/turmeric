@@ -2873,7 +2873,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         redirect = true;
                     } else if (mono_spec_redirect_for_binding(fn_binding, &rlens,
                                                               &rhash)) {
-                        redirect = true;
+                        /* CM4: a GENERIC consumer's `(l g s)` redirects ONLY in
+                         * its concrete ABI-spec body (where the lens-result
+                         * consumer -- run-id / get-const -- is by-value).  Its
+                         * generic carrier BASE body (no active spec) keeps the
+                         * carrier dispatch, so a by-value point_x__mono is not
+                         * baked into the polymorphic body (which would feed the
+                         * carrier `run_hyid` a by-value aggregate). */
+                        if (cur || !mono_spec_consumer_is_generic(fn_binding))
+                            redirect = true;
                     }
                     if (redirect) {
                         uint32_t na = e->as.call_.n_args;

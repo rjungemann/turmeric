@@ -29,23 +29,40 @@ Each fails at the C-compile step (Path B emits ill-typed C), not at runtime.
 
 ## The three Path B gaps
 
-1. **Generic consumers** (`wide-generic`, `wide-compose`). `view`/`over`/`set`
-   are `[S A]`-polymorphic, so their specs key `focus=tyvar whole=tyvar`
-   (`--dump-mono-specs`). The mono body / consumer clone emit assumes a concrete
-   focus/whole; with tyvars it produces conflicting `..._dict_..._spec_...`
-   signatures and `incompatible type for argument 1 of 'run_hyid'`.
-2. **Lens composition** (`wide-compose`). `line-a-x` composes `line-a` and
-   `point-x` via an adapter `(line-a (fn [p] (point-x g p)) s)`. The nested lens
-   dispatch inside the by-value mono body is not threaded correctly
-   (`conflicting types for 'line_a__dict_..._spec_...'`).
+1. **Generic consumers** (`wide-generic`, `wide-compose`). **FIXED (CM4).**
+   `view`/`over`/`set` are `[S A]`-polymorphic, so their specs key
+   `focus=tyvar whole=tyvar`. The by-value redirect was firing in the consumer's
+   GENERIC CARRIER base body (no active ABI spec), baking `point_x__mono` into
+   the polymorphic body and feeding the carrier `run_hyid` a by-value aggregate.
+   Fix: `mono_spec_consumer_is_generic` + suppress the |set|==1 redirect when
+   `current_abi_specialization == NULL && generic` (the concrete ABI-spec body,
+   which has an active spec, still redirects). `wide-generic` now passes on
+   Path B; `wide-compose` advances to gap 2 below.
+2. **Lens composition** (`wide-compose`). OPEN. `line-a-x` composes `line-a` and
+   `point-x` via `(line-a (fn [p] (point-x g p)) s)`. Inside the by-value mono
+   body `line_a_x__mono`, the nested lens is lowered through a dict-clone
+   `line_a__dict_..._spec_...` that MB2.5 forces to return the int64 carrier
+   (`emit_fns.c` `fd->dict_clone_class` -> `ret_ctype = "int64_t"`), but the
+   forward decl (`emit_module.c` `emit_abi_forward_decl`, which does NOT apply the
+   dict_clone_class override) and `line_a_x__mono`'s `return` both expect the
+   by-value `tur_adt_Identity__Line`. Symptoms: `conflicting types for
+   'line_a__dict_..._spec_...'` (decl by-value vs def int64) and `incompatible
+   types when returning int64 but tur_adt_Identity__Line was expected`. Fix
+   direction: a dict-clone consumed by-value inside a mono body must return the
+   wide `(f S)` by value -- either a by-value dict-clone variant or a
+   carrier->concrete bridge at the `line_a_x__mono` call site. Deep MB2.5/WF3.
 3. **Receiver-reading `fmap` instances** (`wide-capture`, concrete focus/whole).
-   Its `Functor Identity` preserves the tag -- `(fmap [i g] (make-struct Identity
-   :wrapped (g (run-id i)) :tag (id-tag i)))` -- reading the receiver's word 1.
-   The by-value `fmap` twin's receiver retyping (emit_module.c VBM2b, the
-   `nsp->arg_types[0] = recv_ty` + method-param recovery block) mistypes the
-   second read: `incompatible type for argument 1 of '__inst_Functor_fmap_Identity'`.
-   The passing fixtures all use the tag-dropping `(fmap [i g] (mk-id (g (run-id
-   i))))`, so this read pattern was never exercised on Path B.
+   OPEN. Its `Functor Identity` preserves the tag -- `(fmap [i g] (make-struct
+   Identity :wrapped (g (run-id i)) :tag (id-tag i)))` -- reading the receiver `i`
+   TWICE (`run-id i` and `id-tag i`). The by-value `fmap` twin
+   (`__inst_Functor_fmap_Identity__spec__...`) is NOT minted for this shape, so
+   `point_x__mono` calls the carrier `__inst_Functor_fmap_Identity` (int64) with a
+   by-value `Identity` arg: `incompatible type for argument 1`. The twin-minting
+   scan + receiver retyping (`emit_module.c` VBM2b, the `nsp->arg_types[0] =
+   recv_ty` + method-param recovery block) does not cover a fmap whose body reads
+   the receiver beyond the single `run-id`. The passing fixtures all use the
+   tag-dropping `(fmap [i g] (mk-id (g (run-id i))))`, so this was never
+   exercised. Deep VBM2b twin-minting.
 
 ## Options for CM4
 

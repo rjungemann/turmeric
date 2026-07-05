@@ -165,6 +165,17 @@ const void *mono_spec_consumer_call_lookup(const char *callee_name,
     return NULL;
 }
 
+bool mono_spec_consumer_is_generic(const void *lensparam_binding) {
+    const MonoSpecKey *k = spec_for_binding(lensparam_binding);
+    if (!k) return false;
+    /* A generic consumer (`[S A]`-polymorphic) pins its lens focus/whole to type
+     * variables; a monomorphic consumer pins concrete types.  `tyvar` in either
+     * field is the reliable signal -- used to suppress the by-value redirect in
+     * the consumer's GENERIC CARRIER base body (its concrete ABI-spec body still
+     * redirects), since the base's lens-result consumer is the carrier form. */
+    return strcmp(k->focus, "tyvar") == 0 || strcmp(k->whole, "tyvar") == 0;
+}
+
 unsigned long long mono_spec_lens_clone_hash(const void *lensparam_binding,
                                              const char *lens_name) {
     if (!lens_name) return 0;
