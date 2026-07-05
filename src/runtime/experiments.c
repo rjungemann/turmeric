@@ -80,13 +80,13 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * unconditionally; TUR-E0309 is retired and the Path A carrier box/unbox
      * bridge is always-on (gated only by the wide-ness test, not a flag).  The
      * zero-overhead Path B redirect layers on top via --enable=vl-wide-mono. */
-    { "vl-wide-mono",
-      "by-value HKT monomorphization across the van Laarhoven lens boundary (Path B): register a specialization key per lens site whose pinned functor is a WIDE by-value aggregate and redirect uniquely-resolved lens call sites to a by-value mono body that spells (f a) by value with no carrier box; layered on the (now unconditional) Path A carrier bridge",
-      "docs/upcoming/van-laarhoven-monomorphization-plan.md",
-      "0.26.4",                    /* introduced */
-      "0.29.0",                    /* expires_at (hard contract; release-cut enforced) */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_vl_wide_mono },
+    /* vl-wide-mono GRADUATED 2026-07-05 (CM4 of van-laarhoven-consumer-mono-plan)
+     * -- by-value HKT monomorphization across the van Laarhoven lens boundary
+     * (Path B) is now unconditional: SIMPLE lenses (direct `fmap` tail) redirect
+     * to a by-value mono body with no carrier box; COMPOSED lenses fall back to
+     * the always-on Path A carrier bridge (the residual by-value-propagation fix
+     * is tracked in docs/upcoming/v2/van-laarhoven-composed-byvalue-plan.md).
+     * The `g_opt_vl_wide_mono` bit is retired. */
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

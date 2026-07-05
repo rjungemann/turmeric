@@ -383,9 +383,10 @@ static int run_core_passes(PassContext *ctx) {
              * cross-procedural collapse -- plan OQ #1/#2), then --dump-mono-specs
              * prints both the abstract and resolved-concrete registries.
              * Registry-only: codegen is unchanged (the per-spec by-value body
-             * emit is tracked separately). */
-            if (g_opt_vl_wide_mono)
-                mono_specs_resolve_program(ctx->prog);
+             * emit is tracked separately).  Graduated (vl-wide-mono, 2026-07-05):
+             * the resolve pass is unconditional; it no-ops when no wide-functor
+             * lens pin populated the registry during elaboration. */
+            mono_specs_resolve_program(ctx->prog);
             if (g_dump_mono_specs) {
                 mono_specs_dump(stdout);
                 /* `tur run` calls this pass in-process then execv's the compiled

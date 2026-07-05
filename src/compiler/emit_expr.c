@@ -1,7 +1,7 @@
 /* emit_expr.c -- expression-position C emission (emit_value and friends). */
 #include "emit_internal.h"
 #include "emit_cps.h"   /* cps-transform-plan: EX_CALLCC lowering */
-#include "globals.h"    /* g_opt_vl_wide_mono (VBM3 redirect) */
+#include "globals.h"    /* g_dump_mono_specs, emit knobs */
 #include "mono_specs.h" /* VBM3: van Laarhoven lens dispatch redirect */
 
 /* ACB: true when kind represents a concrete aggregate type (struct, ADT, or
@@ -9,6 +9,38 @@
  * KB-004 and KB-010 bridge insertion sites. */
 static bool type_kind_is_aggregate(TypeKind k) {
     return k == TY_STRUCT || k == TY_ADT || k == TY_APP;
+}
+
+/* CM3 (van-laarhoven-consumer-mono-plan): peel type-erasing wrappers off a
+ * consumer call's lens argument and return the named global lens it resolves to
+ * (NULL for an anonymous / runtime-selected lens -- those stay on Path A). */
+static const char *cm_call_lens_name(const Expr *arg) {
+    while (arg) {
+        if (arg->kind == EX_ASCRIBE)          arg = arg->as.ascribe_.inner;
+        else if (arg->kind == EX_FN_TO_FAT)   arg = arg->as.fn_to_fat_.inner;
+        else if (arg->kind == EX_POLY_TO_FAT) arg = arg->as.poly_to_fat_.inner;
+        else if (arg->kind == EX_POLY_WRAP)   arg = arg->as.poly_wrap_.inner;
+        else break;
+    }
+    if (arg && arg->kind == EX_VAR && arg->as.var.binding &&
+        arg->as.var.binding->name && arg->as.var.binding->name->name)
+        return arg->as.var.binding->name->name;
+    return NULL;
+}
+
+/* CM3-transitive: peel wrappers off a consumer call's lens arg and return its
+ * `Binding *` if it is a variable (a forwarded lens param), else NULL. */
+static const void *cm_call_lens_binding(const Expr *arg) {
+    while (arg) {
+        if (arg->kind == EX_ASCRIBE)          arg = arg->as.ascribe_.inner;
+        else if (arg->kind == EX_FN_TO_FAT)   arg = arg->as.fn_to_fat_.inner;
+        else if (arg->kind == EX_POLY_TO_FAT) arg = arg->as.poly_to_fat_.inner;
+        else if (arg->kind == EX_POLY_WRAP)   arg = arg->as.poly_wrap_.inner;
+        else break;
+    }
+    if (arg && arg->kind == EX_VAR && arg->as.var.binding)
+        return arg->as.var.binding;
+    return NULL;
 }
 
 /* world-resize / multi-field existential payloads: true when `t` lowers to a
@@ -2611,6 +2643,64 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_CALL: {
             Binding *fn_binding = e->as.call_.fn_binding;
 
+            /* CM3 (van-laarhoven-consumer-mono-plan): rewrite a call to an
+             * ambiguous consumer -- `(consumer concrete-lens args...)` -- to the
+             * box-free clone `<consumer>__lens_<hash>(args...)`, dropping the lens
+             * arg.  Fires only when THIS site's lens arg is a statically-known
+             * concrete lens in the consumer's resolved set; a runtime-selected
+             * lens has no clone and falls through to the Path A carrier call.  The
+             * clone's ABI matches the carrier, so each retained arg is emitted and
+             * cast to its own concrete C type (which is the clone's param type). */
+            if (fn_binding && fn_binding->name &&
+                fn_binding->name->name) {
+                int lens_idx = -1;
+                const void *lb = mono_spec_consumer_call_lookup(
+                    fn_binding->name->name, &lens_idx);
+                if (lb && lens_idx >= 0 &&
+                    (uint32_t)lens_idx < e->as.call_.n_args) {
+                    const Expr *larg = e->as.call_.args[lens_idx];
+                    const char *lname = cm_call_lens_name(larg);
+                    /* CM3-transitive: inside a forwarding consumer's clone the
+                     * lens arg IS that clone's bound lens param -- resolve it to
+                     * the clone's concrete lens so `(inner l ...)` rewrites to the
+                     * inner consumer's matching clone (the "singleton lens set"). */
+                    const EmitAbiSpecialization *cur =
+                        ctx->current_abi_specialization;
+                    if (cur && cur->is_consumer_mono &&
+                        cur->consumer_lens_binding &&
+                        cm_call_lens_binding(larg) == cur->consumer_lens_binding)
+                        lname = cur->consumer_lens_name;
+                    unsigned long long lh =
+                        lname ? mono_spec_lens_clone_hash(lb, lname) : 0;
+                    if (lh) {
+                        Buf callb; buf_init(&callb);
+                        emit_vl_consumer_mono_name(&callb,
+                                                   fn_binding->name->name, lh);
+                        buf_putc(&callb, '(');
+                        bool first = true;
+                        for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                            if ((int)i == lens_idx) continue;
+                            char *av = emit_value(ctx, body,
+                                                  e->as.call_.args[i]);
+                            if (!first) buf_puts(&callb, ", ");
+                            first = false;
+                            Type at = e->as.call_.args[i]->type;
+                            if (type_kind_is_aggregate(at.kind))
+                                buf_printf(&callb, "(%s)(intptr_t)(%s)",
+                                           emit_type_c_name(ctx, at), av);
+                            else
+                                buf_puts(&callb, av);
+                            free(av);
+                        }
+                        buf_putc(&callb, ')');
+                        buf_putc(&callb, '\0');
+                        char *r = strdup(callb.data);
+                        buf_free(&callb);
+                        return r;
+                    }
+                }
+            }
+
             /* Phase 16 v2: indirect capability field call — fn_expr is EX_GET_FIELD.
              * Emit: ((ret_t (*)(arg_t, ...))(intptr_t)(struct_val).field_name)(args...)
              * Effect-row annotation is advisory (erased to a plain function pointer).
@@ -2764,10 +2854,36 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * The mono body takes the ordinary Path A `g` (carrier) and the
                  * whole `s`; the dict arg (slot 0) is dropped.  Only fires on a
                  * unique, non-ambiguous resolution (see mono_specs). */
-                if (g_opt_vl_wide_mono && fn_binding &&
+                if (fn_binding &&
                     e->as.call_.n_args >= 3) {
                     const char *rlens = NULL; unsigned long long rhash = 0;
-                    if (mono_spec_redirect_for_binding(fn_binding, &rlens, &rhash)) {
+                    bool redirect = false;
+                    /* CM2: inside a consumer clone the lens param `l` is bound to
+                     * ONE concrete lens; resolve `(l g s)` straight to that lens's
+                     * mono body (the same target the |set|==1 VBM3 redirect picks,
+                     * just chosen per-clone instead of from the global set).  The
+                     * clone's `g` is already emitted by value via the linked twin
+                     * (thunk_sym_override), so no box toggle is needed here. */
+                    const EmitAbiSpecialization *cur =
+                        ctx->current_abi_specialization;
+                    if (cur && cur->is_consumer_mono &&
+                        cur->consumer_lens_binding == fn_binding) {
+                        rlens = cur->consumer_lens_name;
+                        rhash = cur->consumer_lens_hash;
+                        redirect = true;
+                    } else if (mono_spec_redirect_for_binding(fn_binding, &rlens,
+                                                              &rhash)) {
+                        /* CM4: a GENERIC consumer's `(l g s)` redirects ONLY in
+                         * its concrete ABI-spec body (where the lens-result
+                         * consumer -- run-id / get-const -- is by-value).  Its
+                         * generic carrier BASE body (no active spec) keeps the
+                         * carrier dispatch, so a by-value point_x__mono is not
+                         * baked into the polymorphic body (which would feed the
+                         * carrier `run_hyid` a by-value aggregate). */
+                        if (cur || !mono_spec_consumer_is_generic(fn_binding))
+                            redirect = true;
+                    }
+                    if (redirect) {
                         uint32_t na = e->as.call_.n_args;
                         /* args = [dict, g, s]: g and s are the trailing two. */
                         char *g_str = emit_value(ctx, body, e->as.call_.args[na - 2]);
@@ -3275,6 +3391,24 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * named TY_TYVAR, resolve it through the current spec to
                      * recover the concrete C return type (e.g. double for float). */
                     Type disp_result = emit_resolve_type(ctx, e->type);
+                    /* CM4 (composition): inside a dict-clone body (MB2.5 carrier --
+                     * it dispatches the functor method through the runtime dict as
+                     * int64), a functor-wrapping closure `g` (`(-> A (f A))`) is
+                     * passed as the carrier: the caller's adapter BOXES its wide
+                     * `(f A)` result into int64.  A composed wide lens (`line-a-x`)
+                     * lowers its nested `line-a` through such a dict-clone, so
+                     * `(g (.a s))` resolves to the by-value aggregate under the
+                     * concrete `f := Identity`, but the actual adapter returns the
+                     * int64 carrier and the receiver feeds the carrier `fmap` slot.
+                     * Force the fat-dispatch return to the int64 carrier so both
+                     * agree.  A carrier-compatible functor result is already int64,
+                     * so this only bites the by-value aggregate case. */
+                    if (ctx->current_abi_specialization &&
+                        ctx->current_abi_specialization->fn &&
+                        ctx->current_abi_specialization->fn->dict_clone_class &&
+                        type_kind_is_aggregate(disp_result.kind) &&
+                        strcmp(type_c_name(disp_result), "int64_t") != 0)
+                        disp_result = emit_type_from_kind(TY_INT);
                     if (type_uses_carrier_abi(disp_result) &&
                         fn_binding->type.kind == TY_FN &&
                         fn_binding->type.as.fn.result_full_type) {

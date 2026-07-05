@@ -2,3 +2,5 @@
 mono-spec-abstract f547cd744ad7470f fn=set-px lens-param=l f=Identity focus=int whole=Point
 mono-spec-abstract 48838d5c20f5970f fn=over-px lens-param=l f=Identity focus=int whole=Point
 mono-spec 89e16e7f8669ca4e lens=point-x f=Identity focus=int whole=Point
+mono-spec-set fn=set-px lens-param=l -> {point-x}
+mono-spec-set fn=over-px lens-param=l -> {point-x}

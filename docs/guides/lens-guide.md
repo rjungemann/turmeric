@@ -113,12 +113,30 @@ shapes of functor work through that carrier:
   focus inference, and composition all thread through unchanged. The box pays
   one heap alloc + copy + free per crossing.
 
-For the zero-overhead path, add **`--enable=vl-wide-mono`**: every lens call
-site whose lens uniquely resolves is redirected to a by-value monomorphized
+The **zero-overhead by-value path (Path B)** graduated 2026-07-05 and is now
+**always on -- no flag**. Every lens call site whose lens **statically and
+uniquely resolves** to a *simple* lens is redirected to a by-value monomorphized
 body that spells `(f a)` by value with **no heap box** on either the `(f S)`
-result or the `(f A)` functor-wrapping result. Lens uses that do not resolve
-uniquely fall back to the (boxed) Path A carrier bridge. See
+result or the `(f A)` functor-wrapping result. A consumer lens param that
+resolves to *several* distinct simple lenses gets one box-free clone per lens
+(consumer monomorphization). Two shapes still ride the boxed Path A carrier
+bridge as a correctness fallback:
+
+- **Runtime-selected lenses** -- a lens chosen at run time (not a named-function
+  argument) has no static resolution, so there is nothing to redirect.
+- **Composed lenses** -- a lens whose body tails into *another lens* rather than
+  a direct `fmap` dispatch (e.g. `line-a-x` = `line-a . point-x`). The nested
+  lens is carrier-lowered while the outer functor is by value, and the two ABIs
+  do not yet meet; such a lens (and any consumer ever passed one) falls fully
+  back to Path A. A *simple* lens, by contrast, has a single `fmap` dispatch at
+  its body tail. The remaining by-value-propagation fix that lets composed
+  lenses join Path B is tracked in
+  [../upcoming/v2/van-laarhoven-composed-byvalue-plan.md](../upcoming/v2/van-laarhoven-composed-byvalue-plan.md).
+
+See
 [../upcoming/van-laarhoven-monomorphization-plan.md](../upcoming/van-laarhoven-monomorphization-plan.md)
+and
+[../upcoming/van-laarhoven-consumer-mono-plan.md](../upcoming/van-laarhoven-consumer-mono-plan.md)
 (Path B).
 
 ## Related
@@ -131,5 +149,10 @@ uniquely fall back to the (boxed) Path A carrier bridge. See
 - [van-laarhoven-wide-functor-carrier-plan](../upcoming/van-laarhoven-wide-functor-carrier-plan.md) --
   the wide-by-value functor carrier bridge (Path A, now always-on)
 - [van-laarhoven-monomorphization-plan](../upcoming/van-laarhoven-monomorphization-plan.md) --
-  the zero-overhead by-value monomorphization (Path B, `--enable=vl-wide-mono`)
+  the zero-overhead by-value monomorphization (Path B, graduated 2026-07-05)
+- [van-laarhoven-consumer-mono-plan](../upcoming/van-laarhoven-consumer-mono-plan.md) --
+  consumer monomorphization: box-free clones for a lens param resolving to
+  several simple lenses (Path B, graduated 2026-07-05)
+- [van-laarhoven-composed-byvalue-plan](../upcoming/v2/van-laarhoven-composed-byvalue-plan.md) --
+  the remaining by-value-propagation fix that brings COMPOSED lenses onto Path B
 - [hrt-guide.md](hrt-guide.md) -- the rank-2 `forall` mechanism lenses use
