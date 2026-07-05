@@ -1,5 +1,22 @@
 # CM2 consumer-clone emit needs per-clone identity for the passed `g` closure
 
+**RESOLVED (CM2 landed).** Implemented in `src/compiler/emit_module.c` (the CM2
+emit loop after the VBM2b mono block), `emit_expr.c` (the consumer-clone redirect
+override), and `mono_specs.c` (the abstract-spec accessors).  The realization was
+simpler than the fix-direction feared: because the consumer fixes the functor,
+the inner `g` is IDENTICAL across a consumer's lens clones, so ONE shared
+by-value `g` twin (`<g>__byval`, emitted with a distinct env via
+`env_name_override`) backs every clone -- no clone-vs-clone collision, and the
+boxed Path A carrier `g` stays live for un-rewritten sites.  Each clone
+(`<consumer>__lens_<hash>`) links the twin via `inner_closure_spec_idx` so its
+`(l g s)` builds `g` by value (`thunk_sym_override`) and redirects to the matching
+`<lens>__mono`.  The by-value `(f A)` twin result is built explicitly as
+`(<functor> <focus>)` (g's lifted `return_type` is left abstract).  Fixture:
+`van-laarhoven-lens-wide-consumer-clone` (run + `expected.c` snapshot).  Call-site
+rewrite to the clones is CM3; this slice emits them (dead until then).
+
+---
+
 **Severity:** medium (blocks Slice CM2 of
 [`van-laarhoven-consumer-mono-plan`](../upcoming/van-laarhoven-consumer-mono-plan.md);
 CM1 landed and is unaffected). Not a miscompile in shipping code -- the

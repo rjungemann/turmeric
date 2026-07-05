@@ -151,6 +151,19 @@ typedef struct EmitAbiSpecialization {
      * by-value instance twin instead of the int64-carrier method -- the box
      * this whole path exists to remove. */
     bool is_vl_wide_mono;
+    /* CM2 (van-laarhoven-consumer-mono-plan): true when this spec is a CONSUMER
+     * clone -- one specialization of an ambiguous consumer (a lens param reached
+     * with >= 2 distinct wide lenses) with the lens param bound to ONE concrete
+     * lens.  `consumer_lens_binding` is that lens param's `Binding *`; while the
+     * clone body is emitted, the `(l g s)` poly-call redirect resolves `l` to
+     * `consumer_lens_name`/`consumer_lens_hash` (its `<lens>__mono_<hash>` body),
+     * exactly as the |set|==1 VBM3 redirect does for a uniquely-resolved param.
+     * The clone links `inner_closure_spec_idx` to the shared by-value `g` twin so
+     * its `(l g s)` builds `g` by value (the twin thunk), not the boxed carrier. */
+    bool is_consumer_mono;
+    const void *consumer_lens_binding;
+    const char *consumer_lens_name;       /* stable ptr into the mono-spec registry */
+    unsigned long long consumer_lens_hash;
 } EmitAbiSpecialization;
 
 typedef struct EmitCtx {

@@ -391,6 +391,18 @@ void emit_vl_mono_name(Buf *out, const char *lens_name, unsigned long long hash)
     buf_printf(out, "__mono_%016llx", hash);
 }
 
+/* CM2 (van-laarhoven-consumer-mono-plan): the `<consumer>__lens_<lenshash>`
+ * symbol for a consumer clone.  Keyed on the concrete lens hash so two call
+ * sites passing the same lens to the same consumer share one clone (OQ #2) while
+ * distinct lenses stay distinct clones. */
+static void emit_vl_consumer_mono_name(Buf *out, const char *consumer_name,
+                                       unsigned long long lens_hash) {
+    append_sanitized_c_token(out,
+                             (consumer_name && *consumer_name) ? consumer_name
+                                                               : "consumer");
+    buf_printf(out, "__lens_%016llx", lens_hash);
+}
+
 static char *typed_thunk_typedef_name(Type result_type, Type *param_types, uint8_t n_params) {
     Buf name;
     buf_init(&name);
@@ -1017,6 +1029,87 @@ static const Expr *emit_abi_find_fn_expr(const Expr **items, uint32_t n_items, c
         }
     }
     return NULL;
+}
+
+/* CM2 (van-laarhoven-consumer-mono-plan): peel type-erasing wrappers off a lens
+ * invocation's `g` argument and return its lambda-lifted closure `Binding *` (the
+ * key `emit_abi_find_fn_expr` needs to locate the twin body).  NULL for a
+ * non-closure `g`. */
+static const Binding *cm_g_closure_binding(const Expr *arg) {
+    while (arg) {
+        if (arg->kind == EX_ASCRIBE)          arg = arg->as.ascribe_.inner;
+        else if (arg->kind == EX_FN_TO_FAT)   arg = arg->as.fn_to_fat_.inner;
+        else if (arg->kind == EX_POLY_TO_FAT) arg = arg->as.poly_to_fat_.inner;
+        else if (arg->kind == EX_POLY_WRAP)   arg = arg->as.poly_wrap_.inner;
+        else break;
+    }
+    if (arg && arg->kind == EX_CLOSURE && arg->as.closure_.closure &&
+        arg->as.closure_.closure->fn)
+        return arg->as.closure_.closure->fn->binding;
+    if (arg && arg->kind == EX_FN && arg->as.fn_.fn)
+        return arg->as.fn_.fn->binding;
+    return NULL;
+}
+
+/* CM2: find the `(l g s)` call in a consumer body (`fn_binding == lensb`) and
+ * return `g`'s lifted closure binding.  Mirrors mono_specs.c's walk shape. */
+static const Binding *cm_find_g_binding(const Expr *e, const Binding *lensb) {
+    if (!e) return NULL;
+    if (e->kind == EX_CALL && e->as.call_.fn_binding == lensb &&
+        e->as.call_.n_args >= 2) {
+        const Binding *g =
+            cm_g_closure_binding(e->as.call_.args[e->as.call_.n_args - 2]);
+        if (g) return g;
+    }
+    switch (e->kind) {
+        case EX_FN_DEF: return e->as.fn_def_.fn ? cm_find_g_binding(e->as.fn_def_.fn->body, lensb) : NULL;
+        case EX_FN:     return e->as.fn_.fn ? cm_find_g_binding(e->as.fn_.fn->body, lensb) : NULL;
+        case EX_CLOSURE:
+            return (e->as.closure_.closure && e->as.closure_.closure->fn)
+                ? cm_find_g_binding(e->as.closure_.closure->fn->body, lensb) : NULL;
+        case EX_LET: case EX_LETREC: {
+            for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                const Binding *r = cm_find_g_binding(e->as.let_.bindings[i].init, lensb);
+                if (r) return r;
+            }
+            return cm_find_g_binding(e->as.let_.body, lensb);
+        }
+        case EX_IF: {
+            const Binding *r = cm_find_g_binding(e->as.if_.cond, lensb);
+            if (r) return r;
+            r = cm_find_g_binding(e->as.if_.then_, lensb);
+            if (r) return r;
+            return cm_find_g_binding(e->as.if_.else_or_null, lensb);
+        }
+        case EX_DO: {
+            for (uint32_t i = 0; i < e->as.do_.n; i++) {
+                const Binding *r = cm_find_g_binding(e->as.do_.items[i], lensb);
+                if (r) return r;
+            }
+            return NULL;
+        }
+        case EX_CALL: {
+            const Binding *r = cm_find_g_binding(e->as.call_.fn_expr, lensb);
+            if (r) return r;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                r = cm_find_g_binding(e->as.call_.args[i], lensb);
+                if (r) return r;
+            }
+            return NULL;
+        }
+        case EX_RETURN:  return cm_find_g_binding(e->as.return_.value, lensb);
+        case EX_ASCRIBE: return cm_find_g_binding(e->as.ascribe_.inner, lensb);
+        case EX_MATCH: {
+            const Binding *r = cm_find_g_binding(e->as.match_.scrutinee, lensb);
+            if (r) return r;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                r = cm_find_g_binding(e->as.match_.arms[i].body, lensb);
+                if (r) return r;
+            }
+            return NULL;
+        }
+        default: return NULL;
+    }
 }
 
 /* M6 / gap G6(c): find a CAPTURED closure PASSED as a call argument inside a
@@ -9272,6 +9365,206 @@ int emit_program(Buf *out, const Expr *program) {
             ctx.fn_name_override = NULL;
             ctx.current_abi_specialization = NULL;
             ctx.current_scan_fn = NULL;
+        }
+    }
+
+    /* CM2 (van-laarhoven-consumer-mono-plan): emit one consumer clone per
+     * (ambiguous consumer, concrete lens).  A consumer whose lens param resolves
+     * to >= 2 distinct wide lenses (CM1) cannot use the in-place VBM3 redirect
+     * (one body can't redirect to two lenses), so emit a specialized body per
+     * lens, each redirecting `(l g s)` to that lens's `<lens>__mono`.  The inner
+     * `g` closure is IDENTICAL across the clones (the consumer fixes the functor),
+     * so one shared by-value `g` twin backs every clone; each clone links it via
+     * `inner_closure_spec_idx` so its `(l g s)` builds `g` by value.  The boxed
+     * Path A carrier `g` (and carrier consumer body) stay live for un-rewritten /
+     * runtime-selected sites -- CM3 rewrites the static sites.  Emitted but not
+     * yet called this slice (call rewrite is CM3). */
+    if (g_opt_vl_wide_mono) {
+        size_t nabs = mono_spec_count();
+        for (size_t si = 0; si < nabs; si++) {
+            const void *lb = mono_spec_abstract_binding(si);
+            if (!lb) continue;
+            size_t nset = mono_spec_lens_set_count(lb);
+            if (nset < 2) continue;   /* only ambiguous consumers get clones */
+            const char *enc_name = mono_spec_abstract_enclosing(si);
+            const Expr *cexpr = NULL; FnDef *cfd = NULL;
+            for (uint32_t i = 0; i < program->as.program.n; i++) {
+                const Expr *it = program->as.program.items[i];
+                if (it && it->kind == EX_FN_DEF && it->as.fn_def_.fn &&
+                    it->as.fn_def_.fn->binding && it->as.fn_def_.fn->binding->name &&
+                    it->as.fn_def_.fn->binding->name->name && enc_name &&
+                    strcmp(it->as.fn_def_.fn->binding->name->name, enc_name) == 0) {
+                    cfd = it->as.fn_def_.fn; cexpr = it; break;
+                }
+            }
+            if (!cfd || !cexpr || !cfd->binding) continue;
+
+            /* Locate g's lifted closure FnDef (shared across this consumer's
+             * lens clones).  If g is not a lifted closure we cannot build the
+             * by-value twin -- leave the consumer on Path A. */
+            const Binding *gb = cm_find_g_binding(cfd->body, (const Binding *)lb);
+            const Expr *gexpr = gb ? emit_abi_find_fn_expr(
+                (const Expr **)program->as.program.items,
+                program->as.program.n, gb) : NULL;
+            if (!gb || !gexpr || gexpr->kind != EX_FN_DEF ||
+                !gexpr->as.fn_def_.fn)
+                continue;
+            FnDef *gfd = gexpr->as.fn_def_.fn;
+
+            /* --- One shared by-value g twin for this consumer. --- */
+            /* Bind the HKT tyvar `f` to the concrete functor so g's `(f A)` result
+             * (and any `(f _)` in its signature) resolves BY VALUE (`Identity int`)
+             * instead of the abstract carrier -- the same substitution the VBM2b
+             * lens mono body uses. */
+            const void *fty_v = NULL;
+            const char *ftyvar = mono_spec_abstract_tyvar(si, &fty_v);
+            /* g's declared result `(f A)` is left abstract on the lifted closure
+             * (its `app.fn` is unresolved), so build the by-value result directly
+             * as `(<functor> <focus>)` -- the functor ctor from the abstract spec
+             * applied to g's value-param type (`a : A`).  This is the same
+             * `(Identity int)` the lens mono body feeds back into `fmap`. */
+            if (!ftyvar || !*ftyvar || !fty_v) continue;
+            AbiTypeBinding fb;
+            fb.name = ftyvar;
+            fb.type = *(const Type *)fty_v;
+            uint8_t g_n = gfd->n_params <= MAX_FN_ARITY ? gfd->n_params
+                                                        : MAX_FN_ARITY;
+            if (g_n < 1 || !gfd->param_types) continue;
+            Type g_args[MAX_FN_ARITY];
+            for (uint8_t a = 0; a < g_n; a++) g_args[a] = gfd->param_types[a];
+            Type g_res;
+            {
+                Type *fnp = (Type *)emit_abi_type_scratch(ctx.type_arena,
+                                                          sizeof(Type));
+                Type *argp = (Type *)emit_abi_type_scratch(ctx.type_arena,
+                                                           sizeof(Type));
+                *fnp = *(const Type *)fty_v;              /* the functor ctor */
+                *argp = gfd->param_types[g_n - 1];        /* the focus type `A` */
+                memset(&g_res, 0, sizeof g_res);
+                g_res.kind = TY_APP;
+                g_res.as.app.fn = fnp;
+                g_res.as.app.arg = argp;
+            }
+            EmitAbiSpecialization *gt = emit_abi_intern_spec(
+                &ctx, gfd->binding, gexpr, gfd, &fb, 1, g_args, g_n, g_res,
+                NULL, false);
+            if (!gt) continue;
+            uint32_t gt_idx = (uint32_t)(gt - ctx.abi_specializations);
+            /* Name the twin + its env distinctly from the boxed carrier `g`. */
+            {
+                char *gbase = raw_name_for_binding(gfd->binding);
+                Buf nm; buf_init(&nm);
+                buf_printf(&nm, "%s__byval", gbase ? gbase : "g");
+                buf_putc(&nm, '\0');
+                free(gt->clone_name); gt->clone_name = strdup(nm.data);
+                buf_free(&nm);
+                if (gfd->closure && gfd->closure->env_name) {
+                    Buf en; buf_init(&en);
+                    buf_printf(&en, "%s__byval",
+                               gfd->closure->env_name->name);
+                    buf_putc(&en, '\0');
+                    gt->env_name_override = emit_arena_symbol(ctx.type_arena,
+                                                             en.data);
+                    buf_free(&en);
+                }
+                free(gbase);
+            }
+            /* Emit the twin body by value.  Clearing g's box flag for THIS emit
+             * only re-boxes nothing: the boxed carrier `g` was already emitted in
+             * the main items loop above; we restore the flag right after. */
+            if (!ctx.abi_specializations[gt_idx].emitted) {
+                bool saved_box = gfd->box_aggregate_result;
+                gfd->box_aggregate_result = false;
+                gt = &ctx.abi_specializations[gt_idx];
+                emit_abi_forward_decl(&fwd_decls, gt);
+                ctx.current_abi_specialization = gt;
+                ctx.fn_name_override = gt->clone_name;
+                ctx.fn_name_override_external = false;
+                emit_fn_def(&ctx, &file, gt->fn_expr);
+                ctx.abi_specializations[gt_idx].emitted = true;
+                ctx.fn_name_override = NULL;
+                ctx.current_abi_specialization = NULL;
+                ctx.current_scan_fn = NULL;
+                gfd->box_aggregate_result = saved_box;
+            }
+
+            /* --- One consumer clone per concrete lens. --- */
+            Type c_args[MAX_FN_ARITY];
+            uint8_t c_n = cfd->n_params <= MAX_FN_ARITY ? cfd->n_params
+                                                        : MAX_FN_ARITY;
+            for (uint8_t a = 0; a < c_n; a++)
+                c_args[a] = cfd->param_types ? cfd->param_types[a] : (Type){0};
+            Type c_res = cfd->return_type;
+            for (size_t li = 0; li < nset; li++) {
+                const char *lens_name = NULL; const void *lens_fn = NULL;
+                unsigned long long lh = 0;
+                if (!mono_spec_lens_set_get(lb, li, &lens_name, &lens_fn, &lh))
+                    continue;
+                /* Dedup by clone name: a consumer reached via more than one lens
+                 * pin (same functor/focus/whole) would otherwise emit the same
+                 * `<consumer>__lens_<hash>` symbol twice -> C redefinition.  Two
+                 * sites passing the same lens already share one clone (OQ #2). */
+                {
+                    Buf probe; buf_init(&probe);
+                    emit_vl_consumer_mono_name(
+                        &probe,
+                        cfd->binding->name ? cfd->binding->name->name : NULL, lh);
+                    buf_putc(&probe, '\0');
+                    bool dup = false;
+                    for (uint32_t i = 0; i < ctx.n_abi_specializations; i++)
+                        if (ctx.abi_specializations[i].clone_name &&
+                            strcmp(ctx.abi_specializations[i].clone_name,
+                                   probe.data) == 0) { dup = true; break; }
+                    buf_free(&probe);
+                    if (dup) continue;
+                }
+                /* Append a FRESH spec directly: emit_abi_intern_spec would dedup
+                 * the lenses (identical binding/args/result, no tyvar bindings)
+                 * and collapse them onto one clone. */
+                if (ctx.n_abi_specializations >= ctx.cap_abi_specializations) {
+                    uint32_t new_cap = ctx.cap_abi_specializations
+                        ? ctx.cap_abi_specializations * 2 : 8;
+                    EmitAbiSpecialization *ns = (EmitAbiSpecialization *)realloc(
+                        ctx.abi_specializations,
+                        new_cap * sizeof(EmitAbiSpecialization));
+                    if (!ns) { fprintf(stderr, "tur: oom\n"); abort(); }
+                    ctx.abi_specializations = ns;
+                    ctx.cap_abi_specializations = new_cap;
+                }
+                uint32_t cl_idx = ctx.n_abi_specializations++;
+                EmitAbiSpecialization *cl = &ctx.abi_specializations[cl_idx];
+                memset(cl, 0, sizeof *cl);
+                cl->inner_closure_spec_idx = (int32_t)gt_idx;
+                cl->fn_expr = cexpr;
+                cl->fn = cfd;
+                cl->binding = cfd->binding;
+                cl->n_bindings = 0;
+                cl->n_args = c_n;
+                for (uint8_t a = 0; a < c_n; a++) cl->arg_types[a] = c_args[a];
+                cl->result_type = c_res;
+                cl->is_consumer_mono = true;
+                cl->consumer_lens_binding = lb;
+                cl->consumer_lens_name = lens_name;
+                cl->consumer_lens_hash = lh;
+                {
+                    Buf nm; buf_init(&nm);
+                    emit_vl_consumer_mono_name(
+                        &nm,
+                        cfd->binding->name ? cfd->binding->name->name : NULL, lh);
+                    buf_putc(&nm, '\0');
+                    cl->clone_name = strdup(nm.data);
+                    buf_free(&nm);
+                }
+                emit_abi_forward_decl(&fwd_decls, cl);
+                ctx.current_abi_specialization = cl;
+                ctx.fn_name_override = cl->clone_name;
+                ctx.fn_name_override_external = false;
+                emit_fn_def(&ctx, &file, cl->fn_expr);
+                ctx.abi_specializations[cl_idx].emitted = true;
+                ctx.fn_name_override = NULL;
+                ctx.current_abi_specialization = NULL;
+                ctx.current_scan_fn = NULL;
+            }
         }
     }
 

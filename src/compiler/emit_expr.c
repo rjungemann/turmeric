@@ -2767,7 +2767,25 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (g_opt_vl_wide_mono && fn_binding &&
                     e->as.call_.n_args >= 3) {
                     const char *rlens = NULL; unsigned long long rhash = 0;
-                    if (mono_spec_redirect_for_binding(fn_binding, &rlens, &rhash)) {
+                    bool redirect = false;
+                    /* CM2: inside a consumer clone the lens param `l` is bound to
+                     * ONE concrete lens; resolve `(l g s)` straight to that lens's
+                     * mono body (the same target the |set|==1 VBM3 redirect picks,
+                     * just chosen per-clone instead of from the global set).  The
+                     * clone's `g` is already emitted by value via the linked twin
+                     * (thunk_sym_override), so no box toggle is needed here. */
+                    const EmitAbiSpecialization *cur =
+                        ctx->current_abi_specialization;
+                    if (cur && cur->is_consumer_mono &&
+                        cur->consumer_lens_binding == fn_binding) {
+                        rlens = cur->consumer_lens_name;
+                        rhash = cur->consumer_lens_hash;
+                        redirect = true;
+                    } else if (mono_spec_redirect_for_binding(fn_binding, &rlens,
+                                                              &rhash)) {
+                        redirect = true;
+                    }
+                    if (redirect) {
                         uint32_t na = e->as.call_.n_args;
                         /* args = [dict, g, s]: g and s are the trailing two. */
                         char *g_str = emit_value(ctx, body, e->as.call_.args[na - 2]);

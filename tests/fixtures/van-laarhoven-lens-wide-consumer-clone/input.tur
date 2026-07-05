@@ -1,0 +1,50 @@
+;; CM2 (van-laarhoven-consumer-mono-plan): consumer clone emit.  `set-px` and
+;; `over-px` are each called with two distinct wide lenses (`point-x`, `point-y`),
+;; so CM1 marks each consumer's lens param `l` ambiguous (|set| == 2) and the
+;; in-place VBM3 redirect cannot fire.  CM2 emits one specialized consumer body
+;; per concrete lens -- `set_px__lens_<hash>` / `over_px__lens_<hash>` -- each
+;; redirecting `(l g s)` to the matching `<lens>__mono` with the inner `g` closure
+;; built by value through a shared `__fn_N__byval` twin (no `(f S)` box).
+;;
+;; This slice emits the clones but does NOT yet rewrite the call sites (that is
+;; CM3), so `main` still reaches the consumers through the Path A carrier bodies
+;; -- the run output below validates that the carrier path keeps working with the
+;; clones present.  The `expected.c` snapshot pins the box-free clone + twin emit.
+
+(defstruct Identity :copy [A] (wrapped : A) (tag : int))
+(defn mk-id  [A] [x : A]            : (Identity A) (make-struct Identity :wrapped x :tag 0))
+(defn run-id [A] [i : (Identity A)] : A            (.wrapped i))
+(definstance Functor [Identity]
+  (fmap [i g] (mk-id (g (run-id i)))))
+
+(defstruct Point :copy :heap [x : int y : int])
+
+(defn point-x [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)
+  (fmap (g (.x s))
+        (fn [nx : int] : Point (make-struct Point :x nx :y (.y s)))))
+
+(defn point-y [^f] [^Functor f g : (-> int (f int)) s : Point] : (f Point)
+  (fmap (g (.y s))
+        (fn [ny : int] : Point (make-struct Point :x (.x s) :y ny))))
+
+(defn set-px
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> int (f int)) Point (f Point)))
+     b : int s : Point] : Point
+  (run-id (l (fn [a : int] : (Identity int) (mk-id b)) s)))
+
+(defn over-px
+    [l (forall [(f :: * -> *)] [(Functor f)] (-> (-> int (f int)) Point (f Point)))
+     h : (-> int int) s : Point] : Point
+  (run-id (l (fn [a : int] : (Identity int) (mk-id (h a))) s)))
+
+(defn main [] : int
+  (let [p   (make-struct Point :x 3 :y 4)
+        p1  (set-px point-x 99 p)                              ; l := point-x
+        p2  (set-px point-y 88 p)                              ; l := point-y
+        p3  (over-px point-x (fn [v : int] : int (* v 10)) p)  ; l := point-x
+        p4  (over-px point-y (fn [v : int] : int (* v 10)) p)] ; l := point-y
+    (println (.x p1)) (println (.y p1))                        ; 99 4
+    (println (.x p2)) (println (.y p2))                        ; 3 88
+    (println (.x p3)) (println (.y p3))                        ; 30 4
+    (println (.x p4)) (println (.y p4))                        ; 3 40
+    0))

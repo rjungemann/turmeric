@@ -136,6 +136,21 @@ void mono_spec_register(const char *enclosing_fn, const char *callee,
 size_t mono_spec_count(void) { return g_n_specs; }
 size_t mono_spec_concrete_count(void) { return g_n_concrete; }
 
+const void *mono_spec_abstract_binding(size_t i) {
+    return i < g_n_specs ? g_specs[i].lensparam_binding : NULL;
+}
+
+const char *mono_spec_abstract_enclosing(size_t i) {
+    return i < g_n_specs ? g_specs[i].enclosing : NULL;
+}
+
+const char *mono_spec_abstract_tyvar(size_t i, const void **functor_ty) {
+    if (i >= g_n_specs) { if (functor_ty) *functor_ty = NULL; return NULL; }
+    const MonoSpecKey *k = &g_specs[i];
+    if (functor_ty) *functor_ty = k->have_functor_ty ? &k->functor_ty : NULL;
+    return k->tyvar;
+}
+
 unsigned long long mono_spec_concrete_get(size_t i, const char **lens,
                                           const char **functor,
                                           const char **focus,

@@ -43,6 +43,18 @@ void   mono_spec_register(const char *enclosing_fn, const char *callee,
 /* Number of distinct ABSTRACT keys registered this compile. */
 size_t mono_spec_count(void);
 
+/* CM2: the i-th abstract spec's lens-param `Binding *` and enclosing consumer fn
+ * name (NULL when out of range).  Drive the consumer-clone emit by iterating
+ * `mono_spec_count()` and, for each binding whose `mono_spec_lens_set_count` is
+ * >= 2, emitting one clone per resolved lens. */
+const void *mono_spec_abstract_binding(size_t i);
+const char *mono_spec_abstract_enclosing(size_t i);
+
+/* CM2: the i-th abstract spec's HKT tyvar name (`f`) and concrete functor ctor
+ * `const Type *` (NULL if unresolved), so the consumer-clone emit can bind
+ * `f := <functor>` and resolve the shared `g` twin's `(f A)` result by value. */
+const char *mono_spec_abstract_tyvar(size_t i, const void **functor_ty);
+
 /* VBM2: resolve every abstract spec to its concrete lens by scanning the
  * elaborated program `prog` (an `Expr *` program node) for calls of each
  * abstract spec's enclosing fn, and register a concrete `(lens_fn, functor,
