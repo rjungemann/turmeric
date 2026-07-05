@@ -4,6 +4,37 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.26.6] -- 2026-07-05
+
+### Added
+
+- **turi value-pool: scratch/permanent split with escape promotion**
+  (Phase A, #609). Bounds steady-state memory for a single long-lived
+  `TuriEnv` (notebook-kernel pattern) without changing interpreter
+  semantics. Split `TuriEnv.value_arena` into `value_scratch` (default
+  alloc target) and `value_perm` (promoted survivors). Opt in with
+  `turi_env_set_scratch_promotion`; at each `turi_eval` top-level
+  boundary a Cheney-style two-pass deep copy relocates provably-safe
+  escapees (scalars, strings, closures + captured frames/bindings/
+  tyvars, structs) into perm, then rewinds scratch. Conservative bail
+  on carrier-encoded bare-int pointers, live continuations/generators/
+  handlers/futures, and scratch-resident refs. Off by default; the
+  existing per-unit-env path is unchanged.
+
+### Fixed
+
+- **CI regen-snapshots `--check` now honors per-fixture `flags`
+  files**. Previously ran `tur emit-c` without them, mis-reporting
+  experiment-gated snapshots (e.g. `van-laarhoven-lens-wide-*`) as
+  drift and threatening to regenerate them to empty.
+
+### Changed
+
+- **Docs**: the value-pool scratch-promotion plan is archived
+  (executed); a follow-up
+  `docs/upcoming/turi-value-pool-carrier-relocation-plan.md` captures
+  the remaining carrier/live-C-state relocation tail.
+
 ## [0.26.5] -- 2026-07-05
 
 ### Added

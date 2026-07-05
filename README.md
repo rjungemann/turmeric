@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.26.5` -- graduates `vl-wide-mono` (Path B default-on): CM1-CM4 consumer monomorphization, box-free consumer clones for ambiguous lens params, and by-value propagation across composed van Laarhoven lenses.
+**Latest release:** `v0.26.6` -- Phase A of the turi value-pool scratch/permanent split with opt-in escape promotion, bounding steady-state memory for long-lived notebook-kernel envs.
 
 ## What
 
