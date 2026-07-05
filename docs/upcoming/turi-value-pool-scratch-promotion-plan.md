@@ -1,5 +1,67 @@
 # Plan: scratch/permanent value-pool regions for a long-lived turi env
 
+**Status:** Phase A LANDED (opt-in, conservative promotion); full carrier-pointer
+/ control-flow relocation remains future work. **Area:** `src/turi/`
+(tree-walking interpreter).
+
+## Phase A -- landed
+
+The foundation and a conservative, correctness-first slice of the promotion walk
+shipped, gated strictly opt-in and OFF by default so the entire existing
+per-unit-env path is byte-for-byte unchanged:
+
+- **`arena_reset` + `arena_owns` primitives** (`runtime/arena.{c,h}`).
+  `arena_reset` rewinds every slab to empty in O(slabs) and, in a Debug build,
+  poisons the reclaimed bytes (0xDE) first -- the plan's "poison-on-reset debug
+  mode", so any straggler pointer into the rewound region crashes loudly under
+  ASan. `arena_owns` is the scratch/not-scratch provenance check the walk needs.
+- **Two-region split** on `TuriEnv`: the single `value_arena` became
+  `value_scratch` (default target of every `turi_val_*` allocation) +
+  `value_perm` (receives promoted escapees). With promotion off, `value_scratch`
+  is never rewound and is a transparent rename of the old pool.
+  `turi_val_perm_{alloc,calloc,strdup}` allocate into perm.
+- **Escape promotion** (`turi_promote_escaping` in `eval.c`), run at each
+  `turi_eval` top-level boundary when enabled. Two passes over the root set (the
+  result + every global): a read-only promotability check, then a Cheney-style
+  deep copy into perm using an out-of-band forwarding map (so cycles/sharing --
+  cyclic `letrec` closures via captured frames -- copy once and a mid-walk bail
+  never stamps scratch objects). Then `arena_reset(value_scratch)`.
+- **Opt-in API**: `turi_env_set_scratch_promotion(env, bool)` (off by default).
+- **Conservative by construction.** The walk relocates only the shapes it can
+  prove safe: scalars, strings, closures (+ captured frames/bindings/tyvars),
+  structs (+ fields). When an escaping value reaches something it cannot safely
+  relocate -- a **carrier-encoded pointer boxed as a bare int** (cons/set/vec/ADT
+  carriers), a live continuation/generator/handler/future/throw, a scratch-
+  resident mutable ref or opaque native `ud`, or any pending async/control state
+  on the env -- that eval declines to rewind (keeps scratch intact) rather than
+  risk a dangling pointer. A missed shape therefore means "this eval does not
+  shrink", never "use-after-reset". This is the safe base the plan's
+  "incrementally, one payload shape at a time" recommendation asks for.
+- **Tests**: `tests/turi/env-longlived.c` (`tur_env_longlived` ctest) asserts
+  (1) steady state -- scratch is rewound each cycle (`total_bytes == 0`) and perm
+  reaches a fixed point, versus a promotion-off control env whose scratch grows
+  without bound; (2) cross-reset correctness -- structs, ADT values, plain and
+  mutually-recursive closures, and nested structs stay valid across 100+ scratch
+  rewinds (poison-on-reset would crash a mis-copy); (3) the conservative bail --
+  a live generator left as a global blocks the rewind and stays intact.
+  `tests/run.sh` 1943/0; the `tur_env_teardown` leak gate stays clean;
+  `tests/run-turi.sh` matches baseline.
+
+### Remaining (future increments)
+
+The genuinely hard tail the plan flagged: relocating **carrier-encoded pointer
+values** (the by-value HKT representation stores cons/set/vec/ADT payload
+pointers as bare `int64`, indistinguishable from integers without per-carrier
+type info) and the internal C-state of live continuations/generators/fibers/
+tvars. Until those are walkable, a long-lived host that keeps such values live in
+globals gets correct behavior but no memory bound for those cycles. Extending the
+walk one such shape at a time -- against the same fixtures and poison mode -- is
+the path forward.
+
+---
+
+**Original proposal (retained for context) follows.**
+
 **Status:** proposal (not started). **Area:** `src/turi/` (tree-walking interpreter).
 **Goal:** bound peak memory **within a single long-lived `TuriEnv`** (a
 notebook-kernel-style host that shares one env across thousands of top-level

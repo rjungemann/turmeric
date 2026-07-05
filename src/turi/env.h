@@ -127,13 +127,30 @@ typedef struct TuriEnv {
     Buf         src_acc;         /* Accumulated prior source text */
     uint32_t    prior_toplevel;  /* Count of top-level exprs from prior evals */
     ArenaNode  *eval_arenas;     /* Linked list of per-call arenas (never freed) */
-    /* turi-env-owned-value-arena-pool-plan: a dedicated pool for TuriValue heap
+    /* turi-env-owned-value-arena-pool-plan: dedicated pools for TuriValue heap
      * payloads (closures, structs, captured frames/bindings, cons cells, ...),
      * distinct from eval_arenas (which holds AST/elaboration memory). Created in
      * turi_env_new, reclaimed wholesale in turi_env_free, so an embedding host
-     * gets leak-clean teardown. Allocate from it via the turi_val_* helpers in
-     * value.h. The Arena chains its own slabs, so one is enough. */
-    Arena       value_arena;
+     * gets leak-clean teardown. Allocate via the turi_val_* helpers in value.h.
+     *
+     * turi-value-pool-scratch-promotion-plan splits the single pool into two:
+     *  - value_scratch : default target of every turi_val_* allocation. When
+     *    scratch promotion is OFF (the default) it is never rewound and behaves
+     *    exactly like the old single value_arena -- everything lives until
+     *    turi_env_free.  When promotion is ON, it is arena_reset at each
+     *    top-level eval boundary after escapees are copied out.
+     *  - value_perm : receives the promoted deep-copies of values that must
+     *    survive a scratch reset (result + globals). Empty until promotion runs. */
+    Arena       value_scratch;
+    Arena       value_perm;
+    /* turi-value-pool-scratch-promotion-plan: opt-in bound on steady-state memory
+     * for a single long-lived env (notebook-kernel pattern). When true, turi_eval
+     * promotes every escaping value into value_perm and rewinds value_scratch at
+     * each top-level boundary, so transient per-eval allocation does not
+     * accumulate across evals. OFF by default: the per-unit-env embedding pattern
+     * (create/eval/free) needs no promotion and the default path is unchanged.
+     * Set via turi_env_set_scratch_promotion. */
+    bool        scratch_promotion;
     EnvBinding *globals;         /* Global name→TuriValue map (linked list) */
     bool        sandboxed;       /* Deprecated alias: true when caps == TURI_CAP_NONE */
     TuriCaps    caps;            /* SB4: capability bitmask (TURI_CAP_ALL = unrestricted) */
@@ -307,6 +324,22 @@ void turi_env_track_coro_stack(TuriEnv *env, void *base, size_t size);
  * without committing to copy-on-write arena machinery.  Safe only when no
  * borrower triggers `(reload)` on the shared image. */
 void turi_env_set_shared_spice_image(TuriEnv *env, struct TurSpiceImage *image);
+
+/* turi-value-pool-scratch-promotion-plan: opt into bounded steady-state memory
+ * for a single long-lived env shared across many top-level evals (a notebook
+ * kernel / long-lived REPL service).  With promotion ON, turi_eval deep-copies
+ * every value that escapes a top-level eval (its result plus every global) into
+ * a permanent pool and rewinds the scratch pool, so transient per-eval
+ * allocations are reclaimed instead of accumulating.
+ *
+ * OFF by default -- the create-per-unit-of-work embedding pattern needs no
+ * promotion and behaves exactly as before.  Enable only for the immortal-env
+ * pattern.  Safe to toggle between top-level eval cycles, not from inside an
+ * async/handler frame.  The promotion is conservative: when an eval leaves live
+ * state the walk cannot prove safe to relocate (carrier-encoded pointer values,
+ * live continuations/generators/fibers, pending async work), that eval's scratch
+ * is left intact rather than corrupted -- it simply does not shrink that cycle. */
+void turi_env_set_scratch_promotion(TuriEnv *env, bool enable);
 
 /* Look up a global binding by name.  Returns TURI_ERROR if not found. */
 TuriValue turi_env_get(TuriEnv *env, const char *name);

@@ -438,6 +438,20 @@ add_test(
 set_tests_properties(tur_env_teardown PROPERTIES
   ENVIRONMENT "ASAN_OPTIONS=detect_leaks=1"
 )
+# turi-value-pool-scratch-promotion-plan: long-lived-env steady-state + cross-
+# reset correctness harness. Exercises the scratch/permanent split with escape
+# promotion enabled. Leak detection OFF: the control env deliberately runs with
+# promotion disabled (the process-lifetime interpreter pattern) and never frees
+# its transient value pool until turi_env_free, so LSan would flag that choice;
+# ASan's use-after-poison checking (the point of this test) stays on.
+add_test(
+  NAME tur_env_longlived
+  COMMAND "${CMAKE_BINARY_DIR}/tur_env_longlived"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_env_longlived PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
+)
 add_test(
   NAME tur_codegen_reinterpret
   COMMAND "${CMAKE_BINARY_DIR}/tur_codegen_reinterpret"
@@ -575,7 +589,7 @@ set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
                      tur_eval_async_basic tur_eval_async_composition
                      tur_eval_async_effects tur_eval_async_timeout
                      tur_eval_async_cancel tur_eval_async_error tur_eval_async_io
-                     tur_eval_stm tur_env_teardown tur_embed_peripherals
+                     tur_eval_stm tur_env_teardown tur_env_longlived tur_embed_peripherals
                      tur_experiments_user_config_e2e
   PROPERTIES DEPENDS tur
 )

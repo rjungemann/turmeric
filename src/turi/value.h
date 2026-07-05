@@ -94,18 +94,32 @@ static inline bool turi_is_throw(TuriValue v) { return v.tag == TURI_THROW; }
  *
  * All heap payloads that *escape* an eval -- closures, structs, captured
  * frames/bindings, cons cells, boxes, ... -- are bump-allocated from the env's
- * value_arena instead of raw libc, so turi_env_free reclaims them en masse.
+ * value pool instead of raw libc, so turi_env_free reclaims them en masse.
  * Pool memory is NEVER individually freed: do not pass a turi_val_* pointer to
  * free().  Transients that are explicitly freed within one C call keep using
  * malloc/free.
+ *
+ * turi-value-pool-scratch-promotion-plan splits the pool into a scratch region
+ * (the default target here) and a permanent region (turi_val_perm_*).  With
+ * scratch promotion disabled -- the default -- scratch is never rewound, so this
+ * is a transparent rename of the old single value_arena.
  * --------------------------------------------------------------------------- */
 
-/* Bump-allocate n uninitialised bytes from env's value pool. */
+/* Bump-allocate n uninitialised bytes from env's scratch value pool. */
 void *turi_val_alloc(TuriEnv *env, size_t n);
-/* Bump-allocate n zeroed bytes from env's value pool. */
+/* Bump-allocate n zeroed bytes from env's scratch value pool. */
 void *turi_val_calloc(TuriEnv *env, size_t n);
-/* Copy s into env's value pool (returns NULL when s is NULL). */
+/* Copy s into env's scratch value pool (returns NULL when s is NULL). */
 char *turi_val_strdup(TuriEnv *env, const char *s);
+
+/* turi-value-pool-scratch-promotion-plan: allocate into env's PERMANENT value
+ * pool instead of scratch.  Reserved for the promotion walk, which deep-copies
+ * escaping values here so they survive the scratch rewind.  Ordinary eval code
+ * never calls these -- it allocates from scratch and lets promotion relocate
+ * whatever escapes. */
+void *turi_val_perm_alloc(TuriEnv *env, size_t n);
+void *turi_val_perm_calloc(TuriEnv *env, size_t n);
+char *turi_val_perm_strdup(TuriEnv *env, const char *s);
 
 /* Env-less fallback pool for the error/rejection constructors below, whose
  * signatures carry no env.  Backed by a process-global arena that turi_env_free

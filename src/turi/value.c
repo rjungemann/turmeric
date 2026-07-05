@@ -1,5 +1,5 @@
 #include "value.h"
-#include "env.h"     /* TuriEnv layout + value_arena (turi-env-owned-value-arena-pool-plan) */
+#include "env.h"     /* TuriEnv layout + value_scratch/value_perm pools */
 #include "arena.h"
 
 #include <stdarg.h>
@@ -14,18 +14,35 @@
  * --------------------------------------------------------------------------- */
 
 void *turi_val_alloc(TuriEnv *env, size_t n) {
-    return arena_alloc(&env->value_arena, n);
+    return arena_alloc(&env->value_scratch, n);
 }
 
 void *turi_val_calloc(TuriEnv *env, size_t n) {
-    void *p = arena_alloc(&env->value_arena, n);
+    void *p = arena_alloc(&env->value_scratch, n);
     if (n) memset(p, 0, n);
     return p;
 }
 
 char *turi_val_strdup(TuriEnv *env, const char *s) {
     if (!s) return NULL;
-    return arena_strdup(&env->value_arena, s, strlen(s));
+    return arena_strdup(&env->value_scratch, s, strlen(s));
+}
+
+/* turi-value-pool-scratch-promotion-plan: permanent-pool variants used only by
+ * the promotion walk to relocate escaping values out of scratch. */
+void *turi_val_perm_alloc(TuriEnv *env, size_t n) {
+    return arena_alloc(&env->value_perm, n);
+}
+
+void *turi_val_perm_calloc(TuriEnv *env, size_t n) {
+    void *p = arena_alloc(&env->value_perm, n);
+    if (n) memset(p, 0, n);
+    return p;
+}
+
+char *turi_val_perm_strdup(TuriEnv *env, const char *s) {
+    if (!s) return NULL;
+    return arena_strdup(&env->value_perm, s, strlen(s));
 }
 
 /* Process-global fallback pool for the env-less error/rejection constructors.

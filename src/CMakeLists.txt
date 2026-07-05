@@ -374,6 +374,24 @@ set_target_properties(tur_env_teardown PROPERTIES
 )
 
 # ---------------------------------------------------------------------------
+# turi-value-pool-scratch-promotion-plan: long-lived-env steady-state harness
+# ---------------------------------------------------------------------------
+add_executable(tur_env_longlived ${CMAKE_SOURCE_DIR}/tests/turi/env-longlived.c)
+target_include_directories(tur_env_longlived PRIVATE ${TUR_INCLUDE_DIRS})
+target_link_libraries(tur_env_longlived PRIVATE libturi)
+target_compile_options(tur_env_longlived PRIVATE
+    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_env_longlived PRIVATE -pthread
+    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+)
+set_target_properties(tur_env_longlived PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
 # libturi-per-embed-env-and-peripherals: Gaps 1-4 embed-API harness
 # ---------------------------------------------------------------------------
 add_executable(tur_embed_peripherals ${CMAKE_SOURCE_DIR}/tests/turi/embed-peripherals.c)
