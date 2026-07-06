@@ -1033,21 +1033,10 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                     /* Middle slot is the constraint vector. */
                     constraint_form = form->as.list.items[cursor + 1];
                     body_form = form->as.list.items[cursor + 2];
-                    if (is_forall_form) {
-                        /* Slice 2 (constrained-hkt-forall): a constraint vector
-                         * on `forall` is gated behind the `forall-constraints`
-                         * experiment.  Enforcement happens at each rank-2
-                         * instantiation site (elab_poly_call), not here. */
-                        if (!g_opt_forall_constraints) {
-                            diag_emit(DIAG_ERROR, constraint_form->span,
-                                      "'forall' constraint vector requires "
-                                      "--enable=forall-constraints "
-                                      "(use defclass / definstance constraints "
-                                      "otherwise)");
-                            return NULL;
-                        }
-                        experiment_warn_if_used("forall-constraints");
-                    }
+                    /* forall-constraints GRADUATED 2026-07-06: a constraint
+                     * vector on `forall` is always parsed here and always
+                     * enforced at each rank-2 instantiation site
+                     * (elab_poly_call). */
                     if (constraint_form->tag != F_VEC) {
                         diag_emit(DIAG_ERROR, constraint_form->span,
                                   "'%s' constraint vector must be a vector, "
@@ -1109,18 +1098,9 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                                               && var_sym->name[0] <= 'z');
                         var_kind = is_row_binder ? KIND_ROW : KIND_STAR;
                     } else if (vf->tag == F_LIST) {
-                        /* Slice 1 (constrained-hkt-forall): explicit kind
-                         * annotation `(name :: <kind>)`, gated behind the
-                         * `forall-kinds` experiment. */
-                        if (!g_opt_forall_kinds) {
-                            diag_emit(DIAG_ERROR, vf->span,
-                                      "kind-annotated '%s' bound variable "
-                                      "'(name :: <kind>)' requires "
-                                      "--enable=forall-kinds",
-                                      is_forall_form ? "forall" : "exists");
-                            return NULL;
-                        }
-                        experiment_warn_if_used("forall-kinds");
+                        /* forall-kinds GRADUATED 2026-07-06: an explicit kind
+                         * annotation `(name :: <kind>)` on a bound variable is
+                         * always accepted. */
                         if (!parse_kind_binder(e, vf, &var_sym, &var_kind))
                             return NULL;
                     } else {

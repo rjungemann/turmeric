@@ -1,1 +1,1 @@
---enable=forall-constraints,forall-dict-pass
+--enable=forall-dict-pass

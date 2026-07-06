@@ -173,29 +173,17 @@ bool g_werror_deprecated = false;
  * warnings to errors. */
 bool g_werror_inline_c_narrow_params = false;
 
-/* Slice 1 of constrained-hkt-forall-plan: `forall-kinds` experiment enable bit.
- * Default off; flipped by --enable=forall-kinds (or :experiments) via the
- * EXPERIMENTS[] descriptor in experiments.c. */
-bool g_opt_forall_kinds = false;
-
-/* Slice 2 of constrained-hkt-forall-plan: `forall-constraints` experiment
- * enable bit.  Default off; flipped by --enable=forall-constraints (or
- * :experiments) via the EXPERIMENTS[] descriptor in experiments.c. */
-bool g_opt_forall_constraints = false;
-
-/* Slice 3 of constrained-hkt-forall-plan: `hkt-hrt` experiment enable bit.
- * Default off; flipped by --enable=hkt-hrt (or :experiments) via the
- * EXPERIMENTS[] descriptor in experiments.c. */
-bool g_opt_hkt_hrt = false;
+/* forall-kinds / forall-constraints / hkt-hrt GRADUATED 2026-07-06 -- always-on;
+ * their enable bits and elaboration gates are gone.  See
+ * docs/archive/constrained-hkt-forall-plan.md. */
 
 /* MB1 of constrained-hkt-forall-mode-b-plan: `forall-dict-pass` experiment
  * enable bit.  Default off. */
 bool g_opt_forall_dict_pass = false;
 
-/* MB3 of constrained-hkt-forall-mode-b-plan: `hrt-curried-result` experiment
- * enable bit.  Default off.  Gates the curried rank-2 result-is-a-function
- * elaboration ((l x) yields a callable closure). */
-bool g_opt_hrt_curried_result = false;
+/* hrt-curried-result GRADUATED 2026-07-06 -- always-on; the curried rank-2
+ * result-is-a-function elaboration ((l x) yields a callable closure) no longer
+ * needs an enable bit.  See docs/archive/constrained-hkt-forall-mode-b-plan.md. */
 
 /* vl-wide-functor GRADUATED 2026-07-04 (VBM4 of van-laarhoven-monomorphization-
  * plan) -- a van Laarhoven lens may now focus through a WIDE by-value aggregate

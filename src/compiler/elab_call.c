@@ -32,21 +32,10 @@ static bool forall_has_higher_kinded_var(const Type *forall_ty) {
     return false;
 }
 
-/* Gate a higher-kinded rank-2 use behind --enable=hkt-hrt.  A no-op (returns
- * true) for a plain rank-2 forall.  Returns false after emitting the gate error
- * when the feature is used but not enabled. */
-static bool hrt_hk_gate(Elab *e, const Type *forall_ty, Span span) {
-    (void)e;
-    if (!forall_has_higher_kinded_var(forall_ty)) return true;
-    if (!g_opt_hkt_hrt) {
-        diag_emit(DIAG_ERROR, span,
-                  "rank-2 polymorphic parameter over a higher-kinded variable "
-                  "(kind '* -> *' or higher) requires --enable=hkt-hrt");
-        return false;
-    }
-    experiment_warn_if_used("hkt-hrt");
-    return true;
-}
+/* hkt-hrt GRADUATED 2026-07-06: a rank-2 forall over a higher-kinded variable is
+ * always accepted; the former --enable=hkt-hrt gate is gone.  The instantiation
+ * sites still validate the actual container kind (hrt_validate_hk_actual below).
+ */
 
 /* If `body_param` is `(f a)` where `f` is one of the forall's higher-kinded
  * bound variables, return f's declared kind via *out_kind and true; else false.
@@ -1036,7 +1025,8 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
          * runtime), so closure_fn_binding stays NULL; mark the head temp `boxed`
          * for the runtime slot-0 fat-dispatch path, mirroring the cata carrier
          * case below. */
-        if (!tmp_b->closure_fn_binding && g_opt_hrt_curried_result &&
+        /* hrt-curried-result GRADUATED 2026-07-06: always mark the boxed head. */
+        if (!tmp_b->closure_fn_binding &&
             source_expr->as.call_.is_poly_call) {
             tmp_b->type.as.fn.boxed = true;
         }
@@ -4567,7 +4557,6 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
              * corresponding parameter must be a type application whose base
              * constructor kind matches f's kind. */
             if (rank2_forall_ty && forall_has_higher_kinded_var(rank2_forall_ty)) {
-                if (!hrt_hk_gate(e, rank2_forall_ty, args[i]->span)) return NULL;
                 const Type *fbody = rank2_forall_ty->as.forall_.body;
                 if (fbody && fbody->kind == TY_FN && fbody->as.fn.arg_full_types &&
                     inner_fn_b->type.kind == TY_FN &&
@@ -5841,7 +5830,6 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
      * a type application whose base constructor kind matches f's kind. */
     if (poly && poly->kind == TY_FORALL &&
         forall_has_higher_kinded_var(poly)) {
-        if (!hrt_hk_gate(e, poly, call->span)) return NULL;
         const Type *hbody = poly->as.forall_.body;
         if (hbody && hbody->kind == TY_FN && hbody->as.fn.arg_full_types) {
             for (uint8_t bp = 0;
@@ -6159,9 +6147,8 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                         result_kind = inst.kind;
                     }
                 }
-            } else if (rfull && rfull->kind == TY_FN &&
-                       g_opt_hrt_curried_result) {
-                /* MB3 (constrained-hkt-forall-mode-b-plan): the forall body's
+            } else if (rfull && rfull->kind == TY_FN) {
+                /* hrt-curried-result GRADUATED 2026-07-06: the forall body's
                  * result is itself a function -- `forall a. a -> (a -> a)`, i.e.
                  * `(l x)` yields a CLOSURE that `((l x) y)` then applies (van
                  * Laarhoven optic composition).  Instantiate the result fn type
@@ -6169,7 +6156,6 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                  * concrete, callable `TY_FN` type instead of the bare
                  * `type_from_kind(TY_FN)` (which is non-callable -- TUR-E0002
                  * "returns ?").  Mirrors the TY_APP result branch below. */
-                experiment_warn_if_used("hrt-curried-result");
                 result_kind = TY_FN;
                 if (body->as.fn.arg_full_types) {
                     CallTypeBinding binds[16];

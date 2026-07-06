@@ -60,9 +60,13 @@ Laarhoven** form -- the classic Haskell optic
 type Lens s a = forall f. Functor f => (a -> f a) -> (s -> f s)
 ```
 
--- is available behind the `--enable=forall-*` / `hkt-hrt` / `forall-dict-pass`
-experiments and supports `view`/`set`/`over`, generic focus inference, and
-composition with ordinary function composition. It carries the caller's
+-- now works out of the box for the kind/constraint/higher-rank machinery it
+needs (the `forall-kinds`, `forall-constraints`, `hkt-hrt`, and
+`hrt-curried-result` experiments have graduated to always-on); only the runtime
+dictionary passing it relies on still sits behind `--enable=forall-dict-pass`.
+It supports `view`/`set`/`over`, generic focus
+inference, and composition with ordinary function composition. It carries the
+caller's
 `Functor` dictionary through the poly carrier at runtime, so the lens body
 dispatches `fmap` on whichever instance the caller picks (`Const` for `view`,
 `Identity` for `set`/`over`).
