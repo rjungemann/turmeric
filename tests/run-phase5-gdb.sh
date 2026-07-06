@@ -65,7 +65,7 @@ emitted=$("$TUR" emit-c "$FIX" 2>/dev/null)
 expect "emit-c names the by-value Option carrier" "$emitted" \
   "tur_adt_Option__int" "bool is_some" "int64_t value"
 expect "emit-c names the by-value Result carrier" "$emitted" \
-  "tur_adt_Result" "bool is_ok" "int64_t ok_val" "int64_t err_val"
+  "tur_adt_Result__int__cstr" "bool is_ok" "int64_t ok_val" "const char * err_val"
 
 # -- build the debug binary (shared by N1b + N2) -----------------------------
 BIN="$(mktemp -u "${TMPDIR:-/tmp}/tur-phase5-XXXXXX")"
@@ -80,13 +80,16 @@ if ! command -v gdb >/dev/null 2>&1; then
   echo "PASS phase5: gdb not available -- skipping DWARF + pretty-printer checks"
 else
   # -- N1b) the carrier type names round-trip into DWARF ----------------------
+  # The Result parameter is the concrete `(Result int cstr)`, which monomorphizes
+  # to the by-value struct `tur_adt_Result__int__cstr` (a bare generic `Result`
+  # is passed as the int64 carrier and never materializes a struct in DWARF).
   types=$(gdb -batch -nx \
     -ex "ptype tur_adt_Option__int" \
-    -ex "ptype tur_adt_Result" "$BIN" 2>&1)
+    -ex "ptype tur_adt_Result__int__cstr" "$BIN" 2>&1)
   expect "DWARF carries tur_adt_Option__int{is_some,value}" "$types" \
     "tur_adt_Option__int" "is_some" "value"
-  expect "DWARF carries tur_adt_Result{is_ok,ok_val,err_val}" "$types" \
-    "tur_adt_Result" "is_ok" "ok_val" "err_val"
+  expect "DWARF carries tur_adt_Result__int__cstr{is_ok,ok_val,err_val}" "$types" \
+    "tur_adt_Result__int__cstr" "is_ok" "ok_val" "err_val"
 
   # -- N2) pretty-printers render Turmeric shapes ----------------------------
   SYM=$(gdb -batch -nx -ex "info functions probe" "$BIN" 2>&1 \
