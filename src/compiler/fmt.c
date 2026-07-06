@@ -151,6 +151,14 @@ static void print_str_escaped_b(Buf *b, StrSlice s) {
     buf_putc(b, '"');
 }
 
+/* fx-row-syntax-rename-plan: an F_MAP form carries its source spelling in
+ * `fx_prov`.  `#fx{...}` (PROV_FX_EXPLICIT) is the preferred effect-row
+ * spelling and MUST round-trip as `#fx{`; the legacy `#{...}`/`@{...}` and
+ * plain maps print as `#{`.  Returns the opening delimiter to emit. */
+static const char *fx_map_open(const Form *f) {
+    return (f->fx_prov == PROV_FX_EXPLICIT) ? "#fx{" : "#{";
+}
+
 static void fmt_form_flat(Buf *b, const Form *f) {
     switch (f->tag) {
         case F_NIL:   buf_puts(b, "nil"); break;
@@ -182,7 +190,7 @@ static void fmt_form_flat(Buf *b, const Form *f) {
             buf_putc(b, ']');
             break;
         case F_MAP:
-            buf_puts(b, "#{");
+            buf_puts(b, fx_map_open(f));
             for (uint32_t i = 0; i < f->as.list.len; i++) {
                 if (i) buf_putc(b, ' ');
                 fmt_form_flat(b, f->as.list.items[i]);
@@ -755,9 +763,10 @@ static void fmt_vec_broken(FmtState *s, const Form *f) {
 
 /* #{k v\n  k v} */
 static void fmt_map_broken(FmtState *s, const Form *f) {
-    uint32_t inner = s->col + 2; /* two past '#{' */
+    const char *open = fx_map_open(f);
+    uint32_t inner = s->col + (uint32_t)strlen(open); /* past the '#{'/'#fx{' */
     uint32_t n = f->as.list.len;
-    fs_puts(s, "#{");
+    fs_puts(s, open);
     uint32_t i = 0;
     while (i < n) {
         if (i) fs_newline_indent(s, inner);

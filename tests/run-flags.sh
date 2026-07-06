@@ -517,12 +517,12 @@ fi
 # E2: --version / -V (Tier 1)
 # ---------------------------------------------------------------------------
 
-# tur --version: should print "turmeric <version>" and exit 0
+# tur --version: should print "tur: the Turmeric compiler (v<version>)" and exit 0
 out=$("$TUR" --version 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "version-long" "expected exit 0, got $rc"
-elif ! echo "$out" | grep -q "^turmeric "; then
-    fail "version-long" "output '$out' did not start with 'turmeric '"
+elif ! echo "$out" | grep -q "^tur: the Turmeric compiler "; then
+    fail "version-long" "output '$out' did not start with 'tur: the Turmeric compiler '"
 else
     pass "version-long"
 fi
@@ -531,8 +531,8 @@ fi
 out=$("$TUR" -V 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "version-short" "expected exit 0, got $rc"
-elif ! echo "$out" | grep -q "^turmeric "; then
-    fail "version-short" "output '$out' did not start with 'turmeric '"
+elif ! echo "$out" | grep -q "^tur: the Turmeric compiler "; then
+    fail "version-short" "output '$out' did not start with 'tur: the Turmeric compiler '"
 else
     pass "version-short"
 fi

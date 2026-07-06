@@ -18,71 +18,66 @@
 ;; Uniqueness-type pattern forms.
 (defmodule tur/unique
   (export with-unique consume replace)
-
-;;; with-unique -- scope a uniquely-owned binding over a body.
-;;;
-;;; Expands to a `let` whose binding is annotated `^unique`, so the bound value
-;;; is checked for the at-most-one-reference discipline across the body without
-;;; the caller hand-writing the annotation.
-;;;
-;;; Parameters:
-;;;   binding -- a two-element form `[name init]`: the binding name and its
-;;;              uniquely-owned initializer
-;;;   body    -- one or more expressions evaluated with `name` in scope
-;;;
-;;; Returns:
-;;;   The value of the last body expression.
-;;;
-;;; Example:
-;;;   (with-unique [u (make-ref 42)]   ; u : ^unique
-;;;     (use-once u))                  ; consumed exactly once
-;;;
-;;; Since: UT3
-(defmacro with-unique [binding & body]
-  (let [bname (first binding) binit (second binding)]
-    (list let `[^unique ~bname ~binit] (list do ~@body))))
-
-;;; consume -- thread a unique value through a single transforming call.
-;;;
-;;; Hands the uniquely-owned `x` to `f`, transferring ownership into the call.
-;;; The point is to make the consume-and-pass step explicit at the call site;
-;;; it lowers to a plain application `(f x)`.
-;;;
-;;; Parameters:
-;;;   x -- the uniquely-owned value to consume
-;;;   f -- a function that takes ownership of `x` and returns a result
-;;;
-;;; Returns:
-;;;   The result of `(f x)`.
-;;;
-;;; Example:
-;;;   (consume buf buf-finish)   ; => the result of (buf-finish buf)
-;;;
-;;; Since: UT3
-(defn consume [A B] [^unique x : A f : (fn [A] B)] : B
-  (f x))
-
-;;; replace -- displace a unique value, returning the old one.
-;;;
-;;; The value-semantics stand-in for `mem::replace`: consumes the uniquely-owned
-;;; `old` and yields it back to the caller as the displaced value, while taking
-;;; ownership of `new` as the replacement.  A full replace-through-a-cell
-;;; (writing `new` back into a mutable `ref<T>` slot) awaits a ref-set
-;;; primitive; this form captures the consume-old / accept-new shape at the call
-;;; site without new codegen.
-;;;
-;;; Parameters:
-;;;   old -- the uniquely-owned value being displaced
-;;;   new -- the replacement value, consumed into the swap
-;;;
-;;; Returns:
-;;;   The displaced `old` value, for the caller to inspect or drop.
-;;;
-;;; Example:
-;;;   (let [displaced (replace current next)]
-;;;     (drop! displaced))   ; old `current` handed back for disposal
-;;;
-;;; Since: UT3
-(defn replace [A] [^unique old : A new : A] : A
-  old)
-) ; end (defmodule tur/unique ...)
+  ;;; with-unique -- scope a uniquely-owned binding over a body.
+  ;;;
+  ;;; Expands to a `let` whose binding is annotated `^unique`, so the bound value
+  ;;; is checked for the at-most-one-reference discipline across the body without
+  ;;; the caller hand-writing the annotation.
+  ;;;
+  ;;; Parameters:
+  ;;;   binding -- a two-element form `[name init]`: the binding name and its
+  ;;;              uniquely-owned initializer
+  ;;;   body    -- one or more expressions evaluated with `name` in scope
+  ;;;
+  ;;; Returns:
+  ;;;   The value of the last body expression.
+  ;;;
+  ;;; Example:
+  ;;;   (with-unique [u (make-ref 42)]   ; u : ^unique
+  ;;;     (use-once u))                  ; consumed exactly once
+  ;;;
+  ;;; Since: UT3
+  (defmacro with-unique [binding & body]
+    (let [bname (first binding) binit (second binding)]
+      (list let `[^unique ~bname ~binit] (list do ~@body))))
+  ;;; consume -- thread a unique value through a single transforming call.
+  ;;;
+  ;;; Hands the uniquely-owned `x` to `f`, transferring ownership into the call.
+  ;;; The point is to make the consume-and-pass step explicit at the call site;
+  ;;; it lowers to a plain application `(f x)`.
+  ;;;
+  ;;; Parameters:
+  ;;;   x -- the uniquely-owned value to consume
+  ;;;   f -- a function that takes ownership of `x` and returns a result
+  ;;;
+  ;;; Returns:
+  ;;;   The result of `(f x)`.
+  ;;;
+  ;;; Example:
+  ;;;   (consume buf buf-finish)   ; => the result of (buf-finish buf)
+  ;;;
+  ;;; Since: UT3
+  (defn consume [A B] [^unique x : A f : (fn [A] B)] : B (f x))
+  ;;; replace -- displace a unique value, returning the old one.
+  ;;;
+  ;;; The value-semantics stand-in for `mem::replace`: consumes the uniquely-owned
+  ;;; `old` and yields it back to the caller as the displaced value, while taking
+  ;;; ownership of `new` as the replacement.  A full replace-through-a-cell
+  ;;; (writing `new` back into a mutable `ref<T>` slot) awaits a ref-set
+  ;;; primitive; this form captures the consume-old / accept-new shape at the call
+  ;;; site without new codegen.
+  ;;;
+  ;;; Parameters:
+  ;;;   old -- the uniquely-owned value being displaced
+  ;;;   new -- the replacement value, consumed into the swap
+  ;;;
+  ;;; Returns:
+  ;;;   The displaced `old` value, for the caller to inspect or drop.
+  ;;;
+  ;;; Example:
+  ;;;   (let [displaced (replace current next)]
+  ;;;     (drop! displaced))   ; old `current` handed back for disposal
+  ;;;
+  ;;; Since: UT3
+  (defn replace [A] [^unique old : A new : A] : A old))
+; end (defmodule tur/unique ...)

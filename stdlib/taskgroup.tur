@@ -588,6 +588,7 @@
 ;;
 ;; Hoisted from a GCC nested-function definition inside spawn-timeout-thread.
 ;; Same pattern as future-timeout-thread / threadpool.tur::tp-worker.
+
 (defn spawn-timeout-thread-fn [raw : ptr<void>] : ptr<void>
   ```c
   typedef struct { void *tg; int ms; } TimeoutArg;
@@ -612,7 +613,6 @@
   free(a);
   return NULL;
   ```)
-
 ;;; spawn-timeout-thread -- spawn a background thread that cancels the group after ms milliseconds.
 ;;;
 ;;; Parameters:
@@ -624,6 +624,7 @@
 ;;;
 ;;; Since: Phase T22
 ;; Helper: spawn a timeout thread that cancels the group
+
 
 (defn spawn-timeout-thread [^borrow group : TaskGroup ms : int] : ptr<void>
   ```c

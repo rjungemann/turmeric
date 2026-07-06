@@ -887,7 +887,6 @@
   return (int64_t)(intptr_t)out;
   ```)
 ;; ---- AW-008: Future timeout ---
-
 ;; Hoisted thread-fn helpers for future-timeout / future-with-timeout.
 ;; Originally these were nested function definitions inside the parent
 ;; defn's inline-C block (a GCC extension); clang rejects nested
@@ -895,6 +894,7 @@
 ;; stdlib/threadpool.tur:tp-worker. The pthread_create site casts the
 ;; mangled C name to (void *(*)(void *)).
 ;;; future-timeout-thread -- pthread body for future-timeout. INTERNAL.
+
 (defn future-timeout-thread [raw : ptr<void>] : ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
@@ -910,8 +910,8 @@
   pthread_mutex_unlock(&a->fc->lock);
   free(a); return NULL;
   ```)
-
 ;;; future-with-timeout-tfn -- pthread body for the timeout half of future-with-timeout. INTERNAL.
+
 (defn future-with-timeout-tfn [raw : ptr<void>] : ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
@@ -927,8 +927,8 @@
   pthread_mutex_unlock(&a->out->lock);
   free(a); return NULL;
   ```)
-
 ;;; future-with-timeout-wfn -- pthread body for the wait half of future-with-timeout. INTERNAL.
+
 (defn future-with-timeout-wfn [raw : ptr<void>] : ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
@@ -943,7 +943,6 @@
   pthread_mutex_unlock(&a->out->lock);
   free(a); return NULL;
   ```)
-
 ;; Create a future that times out after ms milliseconds with error -1.
 ;;; future-timeout -- create a future that settles with error -1 after ms milliseconds.
 ;;;
