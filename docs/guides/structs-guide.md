@@ -153,6 +153,8 @@ the value namespace, so you can drop the `make-struct` keyword entirely:
 ```
 
 ```sweet-exp
+defstruct Point :copy [x : int y : int]
+
 let [p Point(3 4)]
   ...
 ```
@@ -188,7 +190,10 @@ Keyword order is free; the elaborator reorders into declared-field order:
 ```
 
 ```sweet-exp
-Person(:name "Bob" :age 40)
+defstruct Person :copy [name : cstr age : int]
+
+Person(:name "Bob" :age 40)             ; auto-bound ctor, keyword form
+make-struct(Person :age 40 :name "Bob") ; make-struct, reversed order
 ```
 
 Keyword construction is checked strictly: every field must be supplied
@@ -212,8 +217,11 @@ unchanged fields out of a move-only source would consume it):
 ```
 
 ```sweet-exp
+defstruct Person :copy [name : cstr age : int active : int]
+
 let [p Person("Bob" 40 1)
-     q with(p [name "Alice"])]
+     q with(p [name "Alice"])          ; => Person "Alice" 40 1
+     r with(p [active 0 age 41])]      ; override order is free
   ...
 ```
 
