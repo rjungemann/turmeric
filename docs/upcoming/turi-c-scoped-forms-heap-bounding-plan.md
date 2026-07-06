@@ -128,6 +128,36 @@ by a driver `DK_*` frame. The same shape applies here:
   (b) a larger CEK-style reification of the handler/async continuation. Scope
   this phase only after C1/C2 land and measure what actually still trips.
 
+> **Measurement (2026-07-06, after C1/C2 landed).** Probed on the interpreter
+> with a 2 MB stack:
+>
+> - **`handle`/`perform`/`resume` -- still trips** ("recursion limit exceeded")
+>   at 200000, for both a recursive call in the handler's `resume` value arg
+>   (`(handle (+ 1 (perform (Ask))) (Ask [] k) (resume k (h-rec (- n 1))))`) and
+>   a recursive call in the handle *body* (`(handle (+ (perform (Ask)) (h2 (- n
+>   1))) (Ask [] k) (resume k 1))`).  Root cause: `ws_capturable`
+>   (`src/turi/eval.c`) recurses into a direct foldable callee's body, so a
+>   *self-recursive* handler chain always exceeds its depth budget (64) and the
+>   whole `handle` falls to the **fiber path** (`eval_handle` /
+>   `eval_perform_fiber` / `eval_resume_cont`), which C-recurses one
+>   `ucontext`/fiber per level.  The work-stack `DK_PROMPT` path (SR DC work) is
+>   already heap-bounded; it is the *fiber fallback* that trips.  There is no
+>   small "drive the operand" slice here -- bounding it is the plan's option (a)
+>   (heap-bound the fiber's re-entry) or (b) (CEK reification), i.e. the real
+>   C3 work.
+> - **`async`/`await` -- does not trip** at 20000 (no guard fire, no SIGSEGV),
+>   but a deeply *recursive* `async`/`await` chain
+>   (`(+ 1 (await (async (fn [] (a-rec (- n 1))))))`) returns a **garbage value**
+>   (simple non-recursive `(await (async (fn [] 42)))` is correct).  This is a
+>   distinct fiber-runtime correctness defect (deep nested-fiber recursion), not
+>   a heap-bounding trip -- worth a `docs/reported/` note when C3 is picked up.
+>
+> Net: C1 + C2 removed the two genuinely tractable interpreter C-recursion
+> sources (`catch-unwind` was already bounded; `atomically` now is).  What
+> remains for the guard-retirement (C4) is exactly the `ucontext` fiber runtime
+> under `handle`/`async`, which is the large, architectural piece this section
+> already flags -- start it as its own focused effort.
+
 ## Retiring the guard (Phase C4)
 
 Once C1-C3 land and the audit probe set (extend `tests/turi/eval-tco.tur`,
