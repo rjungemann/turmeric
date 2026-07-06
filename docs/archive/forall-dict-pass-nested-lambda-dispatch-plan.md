@@ -11,15 +11,19 @@ Positive fixture: `tests/fixtures/van-laarhoven-lens-show-mapper/`.  Phase 4's
 (graduated the flag; this shape was guarded with TUR-E0311 rather than lowered).
 **Tracked bug:** `docs/archive/forall-dict-pass-nested-lambda-method.md` (resolved).
 
-## Residual follow-up (still guarded)
+## Residual follow-up (RESOLVED 2026-07-06)
 
-The captureless-mapper-to-closure conversion carries exactly ONE env dict and
-promotes a mapper that has no other captures.  Three shapes remain guarded by
+The captureless-mapper-to-closure conversion carried exactly ONE env dict and
+promoted a mapper with no other captures.  Three shapes were left guarded by
 TUR-E0311 -- a **multi-class mapper** (N dicts), a **capturing mapper**, and
-**deeper nesting** -- and are broken out into their own tracked plan so they do
-not get lost against this landed one:
+**deeper nesting** -- and were broken out into their own tracked plan.  All three
+now lower; see the resolved plan:
 
-**->** `docs/upcoming/v1/forall-dict-pass-nested-mapper-general-plan.md`.
+**->** `docs/archive/forall-dict-pass-nested-mapper-general-plan.md`.
+
+Only one residual remains guarded by TUR-E0311: a dispatch inside a lifted lambda
+that is DIRECTLY APPLIED in place (`((fn [y] (show y)) x)`), which has no closure
+env to carry the dict.  That is kept as a defensive assertion by design.
 
 ## The hole
 

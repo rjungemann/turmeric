@@ -278,14 +278,18 @@ typedef struct EmitCtx {
     uint8_t          dict_dispatch_n;
     struct TypeClass *dict_dispatch_classes[MAX_FN_CONSTRAINTS];
     const char      *dict_dispatch_param_cnames[MAX_FN_CONSTRAINTS];
-    /* forall-dict-pass-nested-lambda-dispatch-plan (Phase 3): set while emitting
-     * a nested MAPPER lambda that was converted into a dict-capturing closure
-     * (FnDef.dict_env_class / dict_env_binding).  A class-method call whose class
-     * matches `cur_dict_env_class` dispatches through the CAPTURED dict -- an
-     * `env->dict` load via capture_env_access(cur_dict_env_binding) -- indexing
-     * the method slot, instead of the baked representative instance. */
-    struct TypeClass *cur_dict_env_class;
-    struct Binding   *cur_dict_env_binding;
+    /* forall-dict-pass-nested-lambda-dispatch-plan (Phase 3) +
+     * forall-dict-pass-nested-mapper-general-plan (Phase 1): set while emitting a
+     * nested MAPPER lambda that was converted into a dict-capturing closure
+     * (FnDef.dict_env_classes / dict_env_bindings).  A class-method call whose
+     * class matches ANY of `cur_dict_env_classes[0..cur_dict_env_n)` dispatches
+     * through that class's CAPTURED dict -- an `env->dict` load via
+     * capture_env_access(cur_dict_env_bindings[k]) -- indexing the method slot,
+     * instead of the baked representative instance.  The vectors are parallel;
+     * `cur_dict_env_n == 0` normally. */
+    uint8_t           cur_dict_env_n;
+    struct TypeClass *cur_dict_env_classes[MAX_FN_CONSTRAINTS];
+    struct Binding   *cur_dict_env_bindings[MAX_FN_CONSTRAINTS];
     /* Variant 2 (generic-struct-opaque-element): the EX_FN_DEF whose body the ABI
      * scan is currently descending into (top-level scan only).  Used to tell a
      * generic *relay* call (inside a generic body, resolvable by binding
@@ -554,6 +558,10 @@ bool emit_call_is_dict_param_dispatch(EmitCtx *ctx, const Expr *call);
 /* forall-dict-pass-multi-constraint-hkt-plan (Task 1.4): index of the dict slot
  * whose class owns the method call, or -1 when it is not a dict-param dispatch. */
 int emit_call_dict_param_dispatch_index(EmitCtx *ctx, const Expr *call);
+/* forall-dict-pass-nested-mapper-general-plan (Phase 1): index of the captured
+ * env-dict slot whose class owns the method call, or -1 when it is not an
+ * env-dict dispatch. */
+int emit_call_dict_env_dispatch_index(EmitCtx *ctx, const Expr *call);
 /* MB2 (constrained-hkt-forall-mode-b-plan): true when a function body tail is a
  * generic (tyvar-returning) call that emits as the int64 carrier and is NOT
  * resolved to a concrete by-value spec -- so a pointer-returning function must
