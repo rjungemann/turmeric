@@ -84,7 +84,7 @@ fi
 guarded_count=0
 for h in "$LIB_BD/obj"/*.h; do
     [ -f "$h" ] || continue
-    if grep -q "TUR_TY_Result__cstr__cstr" "$h"; then
+    if grep -q "TUR_TY_tur_adt_Result__cstr__cstr" "$h"; then
         guarded_count=$((guarded_count + 1))
     fi
 done

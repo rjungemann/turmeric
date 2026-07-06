@@ -1027,7 +1027,7 @@ RMC_STDERR=$(mktemp)
 "$TUR" run "$RMC_ENTRY" >/dev/null 2>"$RMC_STDERR"
 rmc_rc=$?
 if [ "$rmc_rc" -ne 0 ] && \
-   grep -qF "unexpected character '#'" "$RMC_STDERR" && \
+   grep -qF "unknown data-literal dispatch tag '#bogus{...}'" "$RMC_STDERR" && \
    grep -qF "while loading module 'lib/syntax'" "$RMC_STDERR"; then
     echo "PASS T1: import-chain note attached to reader error in imported module"
     PASS=$((PASS + 1))

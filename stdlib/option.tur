@@ -26,7 +26,7 @@
 
 (defn some [A]
   [x : A]
-  #{Construct}
+  #fx{Construct}
   : (Option A)
   (make-struct Option :is-some true :value x))
 ;;; none -- return the none Option[A] (NULL).
@@ -40,7 +40,7 @@
 ;;; Since: Phase TC1
 
 (defn none [A]
-  #{Construct}
+  #fx{Construct}
   : (Option A)
   (make-struct Option :is-some false :value (default-of A)))
 ;;; some? -- check whether an Option[A] contains a value.
@@ -104,7 +104,7 @@
 ;;; docs/reported/unwrap-or-byvalue-cascade.md.
 
 (defn unwrap-or-carrier [o : int dflt : int]
-  #{}
+  #fx{}
   : int
   ```c
   return tur_is_some(o) ? tur_opt_value(o) : dflt;
@@ -120,7 +120,7 @@
 ;;; Since: Phase TC1
 
 (defn option-free [o : int]
-  #{}
+  #fx{}
   : void
   ```c
   if (o) free((void*)(intptr_t)o);
