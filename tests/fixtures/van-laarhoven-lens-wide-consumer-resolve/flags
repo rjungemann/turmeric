@@ -1,1 +1,1 @@
---enable=forall-kinds,forall-constraints,hkt-hrt,forall-dict-pass --dump-mono-specs
+--enable=forall-dict-pass --dump-mono-specs

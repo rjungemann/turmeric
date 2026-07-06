@@ -6,7 +6,8 @@
  * genuinely-in-flight compiler feature opts in with `--enable=<name>` on the
  * CLI or `:experiments [...]` in build.tur; every such feature is declared
  * once in the EXPERIMENTS[] table in experiments.c with all of its metadata
- * filled in, including a hard `expires_at` the release-cut script enforces.
+ * filled in, including an `expires_at` soft deadline: on that version's cut,
+ * review the row and either graduate, shelve, or bump it.
  *
  * See docs/upcoming/v1/experimental-flag-mechanism-plan.md and
  * docs/guides/experimental-flags-guide.md. */
@@ -21,8 +22,8 @@ typedef enum ExperimentLifecycle {
 } ExperimentLifecycle;
 
 /* One row of the registry.  Every field is mandatory -- no flag may be added
- * without all of them populated (the release-cut enforcement keys on
- * expires_at, the docs site on the rest). */
+ * without all of them populated (the release-cut skills surface expires_at as a
+ * soft deadline to review, the docs site renders the rest). */
 typedef struct ExperimentDescriptor {
     const char          *name;        /* kebab-case, no leading '-' */
     const char          *summary;     /* one-line, shown in `tur experiments` */
@@ -33,7 +34,7 @@ typedef struct ExperimentDescriptor {
     bool                *opt_global;   /* points at g_opt_<name> (the enable bit) */
 } ExperimentDescriptor;
 
-/* --- Table iteration (for `tur experiments` and release-cut enforcement) --- */
+/* --- Table iteration (for `tur experiments` and the release-cut skills) --- */
 size_t                      experiment_count(void);
 const ExperimentDescriptor *experiment_at(size_t i);
 const ExperimentDescriptor *experiment_lookup(const char *name);
