@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.26.6` -- Phase A of the turi value-pool scratch/permanent split with opt-in escape promotion, bounding steady-state memory for long-lived notebook-kernel envs.
+**Latest release:** `v0.27.0` -- Manifest `:exports` now accepts the `#map{...}` data-literal form alongside the plain-map spelling.
 
 ## What
 

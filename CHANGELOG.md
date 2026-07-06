@@ -4,6 +4,25 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.27.0] -- 2026-07-05
+
+### Added
+
+- **Manifest `:exports` accepts `#map{...}` literal syntax**. The
+  `:exports` clause in `build.tur` now recognizes the `#map{k v ...}`
+  data-literal form alongside the existing plain-map spelling, with
+  dedicated diagnostics for malformed keys/values. See
+  `docs/upcoming/exports-map-syntax-tighten-plan.md`.
+
+### Fixed
+
+- **REPL reload** rebuilt against the current wasm; `mise.toml` trimmed
+  of stale entries.
+
+### Docs
+
+- Lens guide typo fixes.
+
 ## [0.26.6] -- 2026-07-05
 
 ### Added
