@@ -1,0 +1,9 @@
+expected.stdout is the compile-time `--dump-mono-specs` output (main prints
+nothing at runtime). The tree-walking interpreter has no monomorphization pass,
+so `tur --interpret` produces no mono-spec lines and cannot match. run.sh
+captures the dump via the single-process `tur run` path (requires.interp); this
+marker tells run-turi.sh to skip the pure-interpret run rather than diff empty
+stdout against the mono-spec assertion. The arity-mismatch bug this fixture
+exercised (turi-interp-forall-dict-wide-consumer-arity) is fixed independently;
+the sibling -clone and -forward fixtures assert real runtime output and pass
+under --interpret.
