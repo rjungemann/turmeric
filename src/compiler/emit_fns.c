@@ -1201,7 +1201,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
 
     /* Phase R6: Inject g_panic_trace initialization at start of main */
-    if (is_main && g_panic_trace) {
+    if (is_main && g_emit_panic_trace) {
         ctx->indent += 4;
         indent_buf(file, ctx->indent);
         buf_puts(file, "g_panic_trace = 1;\n");

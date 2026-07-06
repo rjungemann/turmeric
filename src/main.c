@@ -12386,7 +12386,7 @@ int main(int argc, char **argv) {
     bool explain_mode = false;
     const char *explain_code = NULL;
     g_panic_abort = parse_panic_abort(argc, argv);
-    g_panic_trace = parse_panic_trace(argc, argv);
+    g_emit_panic_trace = parse_panic_trace(argc, argv);
     g_warn_unused_result = parse_warn_unused_result(argc, argv);
     g_lint_panic = parse_lint_panic(argc, argv);
     /* Phase C2: --no-contracts strips contract checks (release builds). */
