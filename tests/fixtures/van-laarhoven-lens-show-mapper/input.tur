@@ -1,0 +1,63 @@
+;; forall-dict-pass-nested-lambda-dispatch-plan (acceptance): the (Functor f,
+;; Show a) lens shape with `show` dispatched INSIDE the van Laarhoven mapper
+;; `(fn [x] (show x))` -- the shape that used to silently miscompile (Show int on
+;; a bool) and was then guarded by TUR-E0311.  It now lowers: the captureless
+;; mapper is converted into a closure that CAPTURES the constraint's runtime dict
+;; and dispatches `show` through the env-loaded dict, so `show` runs the right
+;; instance per caller-chosen focus type, through the one compiled body.
+
+;; Identity a -- fmap runs the mapped function (so `show` actually runs).
+(defopaque Identity [a] :int)
+(defn mk-id [A] [x : A] : (Identity A) ```c return (int64_t)x; ```)
+(defn run-id [A] [i : (Identity A)] : A ```c return (int64_t)i; ```)
+(definstance Functor [Identity]
+  (fmap [i g] (mk-id (g (run-id i)))))
+
+;; Const r a -- fmap IGNORES the mapped function.
+(defopaque Const [r a] :int)
+(defn mk-const [A] [x : A] : (Const A A) ```c return (int64_t)x; ```)
+(defn get-const [R A] [c : (Const R A)] : R ```c return (int64_t)c; ```)
+(definstance Functor [(Const r)]
+  (fmap [c g] (mk-const (get-const c))))
+
+(defclass Show [a] (show [x] : cstr))
+(definstance Show [int]
+  (show [x] : cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "int:%lld", (long long)x);
+    return (const char *)buf;
+    ```))
+(definstance Show [bool]
+  (show [x] : cstr
+    ```c
+    return x ? "bool:true" : "bool:false";
+    ```))
+
+;; show-lens: forall f a. (Functor f, Show a) => (a -> f a) -> a -> (f cstr)
+;; `show x` lives INSIDE the mapper passed to fmap -- dispatched through the
+;; captured Show dict; `fmap` through the Functor dict.  Both f and a are chosen
+;; per call.
+(defn show-lens [^f a] [^Functor f ^Show a g : (-> a (f a)) s : a] : (f cstr)
+  (fmap (g s) (fn [x : a] : cstr (show x))))
+
+(defn shown-int
+    [l (forall [(f :: * -> *) a] [(Functor f) (Show a)] (-> (-> a (f a)) a (f cstr)))
+     s : int] : cstr
+  (run-id (l (fn [x : int] : (Identity int) (mk-id x)) s)))
+
+(defn shown-bool
+    [l (forall [(f :: * -> *) a] [(Functor f) (Show a)] (-> (-> a (f a)) a (f cstr)))
+     s : bool] : cstr
+  (run-id (l (fn [x : bool] : (Identity bool) (mk-id x)) s)))
+
+(defn peek-int
+    [l (forall [(f :: * -> *) a] [(Functor f) (Show a)] (-> (-> a (f a)) a (f cstr)))
+     s : int] : int
+  (get-const (l (fn [x : int] : (Const int int) (mk-const x)) s)))
+
+(defn main [] : int
+  (println (shown-int show-lens 7))       ; int:7    (Identity + Show int, show in mapper)
+  (println (shown-bool show-lens true))   ; bool:true (Identity + Show bool, show in mapper)
+  (println (peek-int show-lens 42))       ; 42       (Const ignores the mapper)
+  0)

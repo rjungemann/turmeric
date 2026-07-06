@@ -461,6 +461,9 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
 
 void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     FnDef *fd = e->as.fn_def_.fn;
+    /* forall-dict-pass-nested-lambda-dispatch-plan (Phase 2): a mapper's dead
+     * poly-wrapper, orphaned when the mapper became a dict-capturing closure. */
+    if (fd && fd->skip_emission) return;
     /* MB1 (constrained-hkt-forall-mode-b-plan): while this dict-clone's body is
      * emitted, route its class-method calls on the constrained var through the
      * dict param (emit_call_name).  emit_fn_def is single-exit (no early
@@ -488,6 +491,14 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         ctx->dict_dispatch_param_cname = dd_cnames_owned[0];
         ctx->dict_dispatch_class = fd->dict_clone_classes[0];
     }
+    /* forall-dict-pass-nested-lambda-dispatch-plan (Phase 3): while emitting a
+     * dict-capturing mapper closure, install its (class, captured-dict-binding)
+     * so a class-method call on the constraint var dispatches through the
+     * env-loaded dict.  Saved/restored like the dict_dispatch pair above. */
+    TypeClass *saved_de_class = ctx->cur_dict_env_class;
+    Binding   *saved_de_binding = ctx->cur_dict_env_binding;
+    ctx->cur_dict_env_class = fd->dict_env_class;
+    ctx->cur_dict_env_binding = fd->dict_env_binding;
     /* SYM5: detect the opt-in str->sym definition (from sym-dynamic.tur).  Its
      * presence is what links the runtime intern table, so it gates the
      * static-record seeding constructor emitted by sym_codegen_emit. */
@@ -1794,4 +1805,6 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     memcpy(ctx->dict_dispatch_classes, saved_dd_classes, sizeof saved_dd_classes);
     memcpy(ctx->dict_dispatch_param_cnames, saved_dd_cnames, sizeof saved_dd_cnames);
     for (uint8_t k = 0; k < MAX_FN_CONSTRAINTS; k++) free(dd_cnames_owned[k]);
+    ctx->cur_dict_env_class = saved_de_class;
+    ctx->cur_dict_env_binding = saved_de_binding;
 }

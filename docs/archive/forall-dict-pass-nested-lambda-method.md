@@ -1,7 +1,16 @@
 # forall-dict-pass: constraint method inside a nested lambda is rejected, not lowered
 
 **Severity:** medium (expressiveness hole; guarded, so no miscompile)
-**Status:** OPEN -- guarded with TUR-E0311, not yet lowered.
+**Status:** RESOLVED (primary case) 2026-07-06 -- a captureless nested mapper
+that dispatches a SINGLE constraint method (the canonical van Laarhoven
+`(fn [x] (show x))`) is now LOWERED: the mapper is converted into a closure that
+captures the constraint's runtime dict and dispatches through the env-loaded dict
+(`docs/archive/forall-dict-pass-nested-lambda-dispatch-plan.md`). Positive fixture
+`tests/fixtures/van-laarhoven-lens-show-mapper/`. A narrow residual (a mapper
+that dispatches >1 class, or a capturing mapper, or a dispatch in a deeper nested
+lambda) is still guarded with TUR-E0311 -- negative fixture
+`tests/fixtures/errors/forall-dict-nested-lambda-multiclass/`; tracked as future
+work in the plan above.
 **Area:** `src/compiler/elab_call.c` (dict-clone lowering), `src/compiler/emit_core.c`
 (dict-param dispatch).
 

@@ -5004,6 +5004,10 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
         const Expr *e = items[i];
         if (e->kind != EX_FN_DEF) continue;
         FnDef *fd = e->as.fn_def_.fn;
+        /* forall-dict-pass-nested-lambda-dispatch-plan: a mapper's dead
+         * poly-wrapper (orphaned when the mapper became a dict-capturing closure)
+         * has no body, so it must not get a forward declaration either. */
+        if (fd->skip_emission) continue;
         if (strcmp(fd->binding->name->name, "main") == 0) continue;
         if (emit_abi_fn_skip_generic(ctx, e)) continue;
         /* spice-defn-return-result-kind-mismatch: stdlib defns are preloaded

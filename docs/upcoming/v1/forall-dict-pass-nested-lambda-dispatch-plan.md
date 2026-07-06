@@ -1,9 +1,29 @@
 # Lowering constraint-method dispatch inside a nested lambda (forall-dict-pass)
 
-**Status:** OPEN.
+**Status:** LANDED (primary case) 2026-07-06 -- the canonical captureless
+single-dispatch mapper `(fn [x] (show x))` is lowered end to end (Phases 1-3);
+the TUR-E0311 guard is NARROWED to a residual (a mapper dispatching >1 class, a
+capturing mapper, or a dispatch in a deeper nested lambda), covered by the
+negative fixture `tests/fixtures/errors/forall-dict-nested-lambda-multiclass/`.
+Positive fixture: `tests/fixtures/van-laarhoven-lens-show-mapper/`.  Phase 4's
+"remove the guard entirely" is deferred to the residual follow-up below.
 **Predecessor:** `docs/archive/forall-dict-pass-multi-constraint-hkt-plan.md`
 (graduated the flag; this shape was guarded with TUR-E0311 rather than lowered).
-**Tracked bug:** `docs/reported/forall-dict-pass-nested-lambda-method.md`.
+**Tracked bug:** `docs/archive/forall-dict-pass-nested-lambda-method.md` (resolved).
+
+## Residual follow-up (still guarded)
+
+The captureless-mapper-to-closure conversion carries exactly ONE env dict and
+promotes a mapper that has no other captures.  Three shapes remain guarded:
+
+- **Multi-class mapper** -- dispatches two+ distinct constraint classes from one
+  nested lambda; the env would need a slot per class.  Generalize the converter
+  to capture N dicts (an env struct field per dispatched class).
+- **Capturing mapper** -- already an `EX_CLOSURE` (captures a value like set/over's
+  `b`); the converter currently only promotes captureless mappers.  Extend it to
+  ADD the dict capture(s) to an existing closure's env.
+- **Deeper nesting** -- a dispatch two lambdas deep; each intermediate lambda must
+  thread the dict through its own env.
 
 ## The hole
 

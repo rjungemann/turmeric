@@ -278,6 +278,14 @@ typedef struct EmitCtx {
     uint8_t          dict_dispatch_n;
     struct TypeClass *dict_dispatch_classes[MAX_FN_CONSTRAINTS];
     const char      *dict_dispatch_param_cnames[MAX_FN_CONSTRAINTS];
+    /* forall-dict-pass-nested-lambda-dispatch-plan (Phase 3): set while emitting
+     * a nested MAPPER lambda that was converted into a dict-capturing closure
+     * (FnDef.dict_env_class / dict_env_binding).  A class-method call whose class
+     * matches `cur_dict_env_class` dispatches through the CAPTURED dict -- an
+     * `env->dict` load via capture_env_access(cur_dict_env_binding) -- indexing
+     * the method slot, instead of the baked representative instance. */
+    struct TypeClass *cur_dict_env_class;
+    struct Binding   *cur_dict_env_binding;
     /* Variant 2 (generic-struct-opaque-element): the EX_FN_DEF whose body the ABI
      * scan is currently descending into (top-level scan only).  Used to tell a
      * generic *relay* call (inside a generic body, resolvable by binding

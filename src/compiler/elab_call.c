@@ -4634,38 +4634,24 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                                 (unsigned)inner_nc, (unsigned)MAX_FN_CONSTRAINTS);
                             return NULL;
                         }
-                        /* Task 3.1 residual guard: a class-method dispatch on a
-                         * constrained type variable nested inside a lambda
-                         * argument (a van Laarhoven mapper that calls `show` on
-                         * the focus) is lifted to its own top-level C function
-                         * with no dict param in scope, so it would silently
-                         * mis-resolve to the carrier-representative instance.
-                         * Reject with a specific diagnostic rather than
-                         * miscompile.  Dispatching a constraint method directly
-                         * in the body (e.g. `(let [tag (show s)] ...)`) is fully
-                         * supported and not flagged here. */
-                        if (inner_fn_b->source_fn_def &&
-                            dict_clone_dispatch_in_nested_lambda(
-                                inner_fn_b->source_fn_def->body,
-                                inner_fn_b->fn_constraints, false)) {
-                            diag_emit(DIAG_ERROR, args[i]->span,
-                                "forall-dict-pass: '%s' dispatches a typeclass "
-                                "method on its constrained type variable from "
-                                "inside a nested lambda; the lambda is lifted "
-                                "without the runtime dictionary in scope, so the "
-                                "dispatch cannot be routed. Dispatch the method "
-                                "directly in the function body (bind it in a "
-                                "`let`) instead of inside a closure passed to "
-                                "another call (TUR-E0311)",
-                                inner_fn_b->name ? inner_fn_b->name->name : "?");
-                            return NULL;
-                        }
+                        /* make_dict_clone converts every SIMPLE nested mapper
+                         * that dispatches a constraint method into a
+                         * dict-capturing closure (Phase 2), and itself rejects
+                         * any residual un-lowerable nested dispatch with
+                         * TUR-E0311 (so both this site and the Gap B composition
+                         * site are covered).  A NULL return here is therefore
+                         * either that E0311 (already emitted) or a benign
+                         * build-failure -- only emit the generic diagnostic when
+                         * make_dict_clone did NOT already emit one. */
+                        bool had_err_before = diag_had_error();
                         Binding *clone = make_dict_clone(e, inner_fn_b, args[i]->span);
                         if (!clone) {
-                            diag_emit(DIAG_ERROR, args[i]->span,
-                                "forall-dict-pass: could not build a dict-clone "
-                                "for '%s' (its definition must be a plain defn)",
-                                inner_fn_b->name ? inner_fn_b->name->name : "?");
+                            if (had_err_before || !diag_had_error())
+                                diag_emit(DIAG_ERROR, args[i]->span,
+                                    "forall-dict-pass: could not build a "
+                                    "dict-clone for '%s' (its definition must be "
+                                    "a plain defn)",
+                                    inner_fn_b->name ? inner_fn_b->name->name : "?");
                             return NULL;
                         }
                         Binding *wrapper_b = make_poly_wrapper_ex(
@@ -5636,6 +5622,295 @@ static bool dict_clone_dispatch_in_nested_lambda(const Expr *e,
     return dict_clone_nested_dispatch_rec(e, cs, inside_lambda, 0);
 }
 
+/* forall-dict-pass-nested-lambda-dispatch-plan (Phase 2): scan a mapper lambda's
+ * OWN body (depth 0) for the constraint class it dispatches on its tyvar
+ * receiver.  Sets *out_class to that class when the mapper dispatches EXACTLY one
+ * constraint class directly in its body; sets *complex when the shape is not the
+ * simple case we can lower -- more than one distinct class, or a dispatch buried
+ * in a DEEPER nested lambda (which would be lifted again with no env of its
+ * own).  Those residual shapes fall through to the TUR-E0311 guard. */
+static void mapper_scan_dispatch(const Expr *e, const ConstraintSet *cs,
+                                 int depth, const TypeClass **out_class,
+                                 bool *complex) {
+    if (!e || *complex || depth > 32) return;
+#define MS(x) mapper_scan_dispatch((x), cs, depth, out_class, complex)
+    switch (e->kind) {
+        case EX_CALL: {
+            if (e->as.call_.dict_arg &&
+                e->as.call_.dict_arg->kind == EX_DICT &&
+                e->as.call_.dict_arg->as.dict_.instance &&
+                e->as.call_.dict_arg->as.dict_.instance->typeclass &&
+                e->as.call_.n_args >= 1 && e->as.call_.args &&
+                e->as.call_.args[0] &&
+                e->as.call_.args[0]->type.kind == TY_TYVAR) {
+                const TypeClass *mtc =
+                    e->as.call_.dict_arg->as.dict_.instance->typeclass;
+                bool is_constraint = false;
+                for (uint8_t c = 0; c < cs->n_constraints; c++)
+                    if (cs->constraints[c].typeclass == mtc) { is_constraint = true; break; }
+                if (is_constraint) {
+                    if (depth > 0) { *complex = true; return; }  /* deeper lambda */
+                    if (*out_class && *out_class != mtc) { *complex = true; return; }
+                    *out_class = mtc;
+                }
+            }
+            if (e->as.call_.fn_expr) MS(e->as.call_.fn_expr);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) MS(e->as.call_.args[i]);
+            return;
+        }
+        case EX_VAR: {
+            const Binding *vb = e->as.var.binding;
+            if (vb && vb->is_lifted_lambda && vb->source_fn_def &&
+                vb->source_fn_def->body && !vb->source_fn_def->dict_env_class)
+                mapper_scan_dispatch(vb->source_fn_def->body, cs, depth + 1,
+                                     out_class, complex);
+            return;
+        }
+        case EX_FN:
+            if (e->as.fn_.fn)
+                mapper_scan_dispatch(e->as.fn_.fn->body, cs, depth + 1,
+                                     out_class, complex);
+            return;
+        case EX_FN_DEF:
+            if (e->as.fn_def_.fn)
+                mapper_scan_dispatch(e->as.fn_def_.fn->body, cs, depth + 1,
+                                     out_class, complex);
+            return;
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++) MS(e->as.let_.bindings[i].init);
+            MS(e->as.let_.body);
+            return;
+        case EX_IF: MS(e->as.if_.cond); MS(e->as.if_.then_); MS(e->as.if_.else_or_null); return;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++) MS(e->as.do_.items[i]);
+            return;
+        case EX_WHILE: MS(e->as.while_.cond); MS(e->as.while_.body); return;
+        case EX_MATCH:
+            MS(e->as.match_.scrutinee);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                MS(e->as.match_.arms[i].body); MS(e->as.match_.arms[i].guard);
+            }
+            return;
+        case EX_POLY_WRAP: MS(e->as.poly_wrap_.inner); return;
+        case EX_FN_TO_FAT: MS(e->as.fn_to_fat_.inner); return;
+        case EX_ASCRIBE:   MS(e->as.ascribe_.inner); return;
+        default: return;
+    }
+#undef MS
+}
+
+/* Rewrite a poly-wrap `pw` that boxes an already-converted dict-capturing mapper
+ * `M` into the is-closure form so EX_CLOSURE emit builds the env (the
+ * wrapper-binding path emits a NULL env).  Idempotent per pw.  Handles the case
+ * where the SAME lifted mapper is boxed at more than one poly-wrap site: the
+ * first call converts M; every poly-wrap over M (including later ones) is
+ * rewritten here so none is left dangling at the pre-conversion arity. */
+static void rewrite_poly_wrap_to_dict_closure(Elab *e, Expr *pw, FnDef *M,
+                                              Span span) {
+    if (!pw || pw->kind != EX_POLY_WRAP || pw->as.poly_wrap_.is_closure ||
+        !M->closure)
+        return;
+    Type clo_ty = M->dict_env_mapper_ty;
+    clo_ty.as.fn.boxed = true;
+    Expr *cloexpr = expr_new(e->arena, EX_CLOSURE, clo_ty, span);
+    cloexpr->as.closure_.closure = M->closure;
+    /* The mapper's old captureless poly-wrapper is now dead (the EX_CLOSURE form
+     * replaces it) and would emit a stale call to the pre-conversion mapper --
+     * mark its FnDef skip-emission.  The wrapper binding has no source_fn_def
+     * back-link (make_poly_wrapper_ex does not set one), so find its EX_FN_DEF
+     * among the file defs by binding identity. */
+    Binding *old_wrapper = pw->as.poly_wrap_.wrapper_binding;
+    if (old_wrapper) {
+        for (uint32_t d = 0; d < e->n_file_scope_defs; d++) {
+            Expr *wd = e->file_scope_defs[d];
+            if (wd && wd->kind == EX_FN_DEF && wd->as.fn_def_.fn &&
+                wd->as.fn_def_.fn->binding == old_wrapper) {
+                wd->as.fn_def_.fn->skip_emission = true;
+                break;
+            }
+        }
+    }
+    pw->as.poly_wrap_.is_closure = true;
+    pw->as.poly_wrap_.wrapper_binding = NULL;
+    pw->as.poly_wrap_.inner = cloexpr;
+}
+
+/* Convert a captureless mapper lambda `M` (reached through a poly-wrap `pw`) into
+ * a closure that CAPTURES the constraint's dict binding, so its class-method call
+ * dispatches through the env-loaded dict at emit (emit_call_name).  Prepends the
+ * void* env param, builds the Closure, marks the FnDef (dict_env_*), and rewrites
+ * `pw` into the is-closure form so EX_CLOSURE emit builds the env (mirrors the
+ * capturing-mapper path elab_fns.c already produces for a value capture).
+ * Returns false (no-op) if M is not the simple captureless shape. */
+static bool convert_mapper_to_dict_closure(Elab *e, Expr *pw, FnDef *M,
+                                           Binding *dict_binding,
+                                           const TypeClass *C, Span span) {
+    if (!pw || !M || !dict_binding || !C) return false;
+    if (M->dict_env_class) return true;   /* already converted (idempotent) */
+    if (M->closure) return false;         /* already a capturing closure */
+    if ((uint32_t)M->n_params + 1 > MAX_FN_ARITY) return false;
+    if (M->binding->type.kind != TY_FN) return false;
+
+    /* The mapper's user-facing (pre-env) fn type becomes the closure value type. */
+    Type mapper_ty = M->binding->type;
+
+    /* Prepend a void* env parameter. */
+    uint8_t new_np = (uint8_t)(M->n_params + 1);
+    Binding **np = (Binding **)arena_alloc(e->arena, new_np * sizeof(Binding *));
+    Type *npt = (Type *)arena_alloc(e->arena, new_np * sizeof(Type));
+    char epn[40];
+    snprintf(epn, sizeof(epn), "__env_p_%u", e->next_id++);
+    Binding *envp = binding_new(e, symtab_intern(e->st, strslice(epn, (uint32_t)strlen(epn))),
+                                TYPE_PTR_VOID, false, false, span);
+    np[0] = envp; npt[0] = TYPE_PTR_VOID;
+    for (uint8_t i = 0; i < M->n_params; i++) {
+        np[i + 1] = M->params[i];
+        npt[i + 1] = M->param_types ? M->param_types[i] : M->params[i]->type;
+    }
+    M->params = np; M->n_params = new_np; M->param_types = npt;
+
+    /* Rebuild M's fn type with the void* env kind prepended.  Copy the whole
+     * type by value (preserving result info and EVERY per-arg flag array --
+     * arg_linear/unique/affine/relevant/borrow/fat/poly_fn/...), then shift the
+     * fixed-size per-arg arrays up by one and put env in slot 0.  A partial
+     * rebuild via type_fn() would zero-init the flag arrays and silently drop,
+     * e.g., a ^poly_fn marker on a shifted param -> ABI-mismatched call. */
+    uint8_t old_arity = mapper_ty.as.fn.arity;
+    Type new_ty = mapper_ty;
+    new_ty.as.fn.arity = new_np;
+    for (uint8_t i = old_arity; i >= 1; i--) {
+        new_ty.as.fn.arg_kinds[i]      = new_ty.as.fn.arg_kinds[i - 1];
+        new_ty.as.fn.arg_linear[i]     = new_ty.as.fn.arg_linear[i - 1];
+        new_ty.as.fn.arg_unique[i]     = new_ty.as.fn.arg_unique[i - 1];
+        new_ty.as.fn.arg_unique_mut[i] = new_ty.as.fn.arg_unique_mut[i - 1];
+        new_ty.as.fn.arg_affine[i]     = new_ty.as.fn.arg_affine[i - 1];
+        new_ty.as.fn.arg_relevant[i]   = new_ty.as.fn.arg_relevant[i - 1];
+        new_ty.as.fn.arg_borrow[i]     = new_ty.as.fn.arg_borrow[i - 1];
+        new_ty.as.fn.arg_fat[i]        = new_ty.as.fn.arg_fat[i - 1];
+        new_ty.as.fn.arg_poly_fn[i]    = new_ty.as.fn.arg_poly_fn[i - 1];
+    }
+    new_ty.as.fn.arg_kinds[0]      = TY_PTR_VOID;
+    new_ty.as.fn.arg_linear[0]     = false;
+    new_ty.as.fn.arg_unique[0]     = false;
+    new_ty.as.fn.arg_unique_mut[0] = false;
+    new_ty.as.fn.arg_affine[0]     = false;
+    new_ty.as.fn.arg_relevant[0]   = false;
+    new_ty.as.fn.arg_borrow[0]     = false;
+    new_ty.as.fn.arg_fat[0]        = false;
+    new_ty.as.fn.arg_poly_fn[0]    = false;
+    if (mapper_ty.as.fn.arg_full_types) {
+        Type **shifted = (Type **)arena_alloc(e->arena, new_np * sizeof(Type *));
+        shifted[0] = NULL;
+        for (uint8_t i = 0; i < old_arity; i++) shifted[i + 1] = mapper_ty.as.fn.arg_full_types[i];
+        new_ty.as.fn.arg_full_types = shifted;
+    }
+    M->binding->type = new_ty;
+    /* The lifted mapper's EX_FN_DEF (registered as a file def) carries its own
+     * copy of the fn type, which emit_fn_def reads for the parameter signature.
+     * Keep it in sync with the env-prepended type, or emit pairs the new params
+     * with the old (arity-1) type list and produces a malformed signature. */
+    for (uint32_t d = 0; d < e->n_file_scope_defs; d++) {
+        Expr *fd_expr = e->file_scope_defs[d];
+        if (fd_expr && fd_expr->kind == EX_FN_DEF &&
+            fd_expr->as.fn_def_.fn == M) {
+            fd_expr->type = new_ty;
+            break;
+        }
+    }
+
+    /* Build the Closure capturing the dict binding. */
+    struct Closure *clo = (struct Closure *)arena_alloc(e->arena, sizeof(struct Closure));
+    clo->fn = M;
+    Binding **caps = (Binding **)arena_alloc(e->arena, sizeof(Binding *));
+    caps[0] = dict_binding;
+    clo->captures = caps;
+    clo->n_captures = 1;
+    char en[32];
+    snprintf(en, sizeof(en), "__env_%u", e->next_id++);
+    clo->env_name = symtab_intern(e->st, strslice(en, (uint32_t)strlen(en)));
+    M->closure = clo;
+    M->dict_env_class = (TypeClass *)C;
+    M->dict_env_binding = dict_binding;
+    M->dict_env_mapper_ty = mapper_ty;
+
+    rewrite_poly_wrap_to_dict_closure(e, pw, M, span);
+    return true;
+}
+
+/* Peel ascribe/fn-to-fat wrappers to the lifted-mapper FnDef a poly-wrap boxes,
+ * or NULL if the inner is not a captureless lifted lambda. */
+static FnDef *poly_wrap_lifted_mapper(const Expr *pw) {
+    if (!pw || pw->kind != EX_POLY_WRAP) return NULL;
+    const Expr *in = pw->as.poly_wrap_.inner;
+    while (in && (in->kind == EX_ASCRIBE || in->kind == EX_FN_TO_FAT))
+        in = in->kind == EX_ASCRIBE ? in->as.ascribe_.inner : in->as.fn_to_fat_.inner;
+    if (!in || in->kind != EX_VAR) return NULL;
+    const Binding *vb = in->as.var.binding;
+    if (vb && vb->is_lifted_lambda && vb->source_fn_def && vb->source_fn_def->body)
+        return vb->source_fn_def;
+    return NULL;
+}
+
+/* Walk the dict-clone body and convert every simple captureless mapper that
+ * dispatches a single constraint class into a dict-capturing closure (Phase 2).
+ * `dparams` are the clone's per-constraint dict bindings (constraint order). */
+static void dict_clone_lower_nested_mappers(Elab *e, Expr *node,
+                                            const ConstraintSet *cs,
+                                            Binding **dparams, Span span,
+                                            int depth) {
+    if (!node || depth > 64) return;
+#define LW(x) dict_clone_lower_nested_mappers(e, (x), cs, dparams, span, depth + 1)
+    switch (node->kind) {
+        case EX_POLY_WRAP: {
+            FnDef *M = poly_wrap_lifted_mapper(node);
+            if (M && M->dict_env_class) {
+                /* A SECOND poly-wrap over an already-converted mapper (the same
+                 * lifted lambda boxed at two sites): rewrite this one too, so it
+                 * does not stay dangling at the pre-conversion arity. */
+                rewrite_poly_wrap_to_dict_closure(e, node, M, span);
+            } else if (M) {
+                const TypeClass *C = NULL;
+                bool complex = false;
+                mapper_scan_dispatch(M->body, cs, 0, &C, &complex);
+                if (C && !complex) {
+                    /* Find the dict binding for class C (constraint order). */
+                    Binding *db = NULL;
+                    for (uint8_t c = 0; c < cs->n_constraints; c++)
+                        if (cs->constraints[c].typeclass == C) { db = dparams[c]; break; }
+                    if (db) convert_mapper_to_dict_closure(e, node, M, db, C, span);
+                }
+            }
+            LW(node->as.poly_wrap_.inner);
+            return;
+        }
+        case EX_CALL:
+            if (node->as.call_.fn_expr) LW(node->as.call_.fn_expr);
+            for (uint32_t i = 0; i < node->as.call_.n_args; i++) LW(node->as.call_.args[i]);
+            return;
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < node->as.let_.n; i++) LW(node->as.let_.bindings[i].init);
+            LW(node->as.let_.body);
+            return;
+        case EX_IF: LW(node->as.if_.cond); LW(node->as.if_.then_); LW(node->as.if_.else_or_null); return;
+        case EX_DO:
+            for (uint32_t i = 0; i < node->as.do_.n; i++) LW(node->as.do_.items[i]);
+            return;
+        case EX_WHILE: LW(node->as.while_.cond); LW(node->as.while_.body); return;
+        case EX_MATCH:
+            LW(node->as.match_.scrutinee);
+            for (uint32_t i = 0; i < node->as.match_.n_arms; i++) {
+                LW(node->as.match_.arms[i].body); LW(node->as.match_.arms[i].guard);
+            }
+            return;
+        case EX_FN_TO_FAT: LW(node->as.fn_to_fat_.inner); return;
+        case EX_ASCRIBE:   LW(node->as.ascribe_.inner); return;
+        default: return;
+    }
+#undef LW
+}
+
 /* MB1 / forall-dict-pass-multi-constraint-hkt-plan (Task 1.2): build a
  * dict-clone of a polymorphic constrained function `inner_b` (its body
  * dispatches class methods on its constrained type variables).  The clone shares
@@ -5672,17 +5947,31 @@ Binding *make_dict_clone(Elab *e, Binding *inner_b, Span span) {
     Binding **params = (Binding **)arena_alloc(e->arena, np * sizeof(Binding *));
     Type *ptypes = (Type *)arena_alloc(e->arena, np * sizeof(Type));
     TypeKind akinds[MAX_FN_ARITY];
-    /* One leading int64 dict param per constraint, in constraint order. */
+    /* One leading int64 dict param per constraint, in constraint order.  Phase 1
+     * (forall-dict-pass-nested-lambda-dispatch-plan): memoize the dict param
+     * bindings on the ORIGINAL FnDef so every clone of the same original reuses
+     * the same binding identities/cnames -- a nested mapper lambda shared across
+     * those clones can then capture one dict binding and read it from its env. */
     Binding *dparams[MAX_FN_CONSTRAINTS];
+    bool reuse_memo = (orig->n_memo_dict == nc);
     for (uint8_t c = 0; c < nc; c++) {
-        char dn[48];
-        snprintf(dn, sizeof(dn), "__dict_%u", e->next_id++);
-        const Symbol *dsym = symtab_intern(e->st, strslice(dn, (uint32_t)strlen(dn)));
-        Binding *dparam = binding_new(e, dsym, type_from_kind(TY_INT), false, false, span);
+        Binding *dparam;
+        if (reuse_memo) {
+            dparam = orig->memo_dict_params[c];
+        } else {
+            char dn[48];
+            snprintf(dn, sizeof(dn), "__dict_%u", e->next_id++);
+            const Symbol *dsym = symtab_intern(e->st, strslice(dn, (uint32_t)strlen(dn)));
+            dparam = binding_new(e, dsym, type_from_kind(TY_INT), false, false, span);
+        }
         dparams[c] = dparam;
         params[c] = dparam;
         ptypes[c] = type_from_kind(TY_INT);
         akinds[c] = TY_INT;
+    }
+    if (!reuse_memo) {
+        for (uint8_t c = 0; c < nc; c++) orig->memo_dict_params[c] = dparams[c];
+        orig->n_memo_dict = nc;
     }
     for (uint8_t i = 0; i < on; i++) {
         params[i + nc] = orig->params[i];
@@ -5737,6 +6026,36 @@ Binding *make_dict_clone(Elab *e, Binding *inner_b, Span span) {
      * result through int64), so its poly wrapper must carry int64 too rather than
      * the method's declared C return type. */
     cb->source_fn_def = cf;
+    /* forall-dict-pass-nested-lambda-dispatch-plan (Phase 2): convert every
+     * simple captureless nested mapper that dispatches a constraint method into
+     * a dict-capturing closure, so its method call dispatches through the
+     * env-loaded dict (emit_call_name) instead of the baked representative.  The
+     * body is shared across clones of the same original, so the conversion is
+     * idempotent (skips an already-converted mapper) and each clone's env-build
+     * reuses the memoized dict binding declared as that clone's leading param.
+     * Shapes we cannot lower (a capturing mapper, a mapper dispatching >1 class,
+     * or a dispatch buried in a deeper nested lambda) are left untouched and
+     * caught by the TUR-E0311 guard at the rank-2 pass site. */
+    dict_clone_lower_nested_mappers(e, cf->body, inner_b->fn_constraints,
+                                    dparams, span, 0);
+    /* Any residual dispatch still buried in an UNconverted nested lambda is a
+     * shape we cannot lower (a capturing mapper, a mapper dispatching >1 class,
+     * or a deeper nested lambda).  Reject with TUR-E0311 here -- inside
+     * make_dict_clone, so BOTH the rank-2 pass site and the lens-composition
+     * (Gap B) site are covered -- rather than silently mis-resolving to the
+     * carrier-representative instance.  Dispatching a constraint method directly
+     * in the body (e.g. `(let [tag (show s)] ...)`) is always supported. */
+    if (dict_clone_dispatch_in_nested_lambda(cf->body, inner_b->fn_constraints,
+                                             false)) {
+        diag_emit(DIAG_ERROR, span,
+            "forall-dict-pass: '%s' dispatches a typeclass method on its "
+            "constrained type variable from inside a nested lambda that cannot "
+            "be lowered (a capturing mapper, more than one class, or a deeper "
+            "nested lambda). Dispatch the method directly in the function body "
+            "(bind it in a `let`) instead (TUR-E0311)",
+            inner_b->name ? inner_b->name->name : "?");
+        return NULL;
+    }
     Expr *cdef = expr_new(e->arena, EX_FN_DEF, ftype, span);
     cdef->as.fn_def_.fn = cf;
     elab_register_file_def(e, cdef);

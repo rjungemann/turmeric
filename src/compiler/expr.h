@@ -541,6 +541,33 @@ struct FnDef {
     Binding             *dict_clone_params[MAX_FN_CONSTRAINTS];
     struct TypeClass    *dict_clone_classes[MAX_FN_CONSTRAINTS];
     uint8_t              n_dict_clone;
+    /* forall-dict-pass-nested-lambda-dispatch-plan (Phase 1): memoized on the
+     * ORIGINAL constrained FnDef the first time it is dict-cloned.  Every clone
+     * of the same original reuses these per-constraint dict param Bindings so
+     * their identity + cname are STABLE across clones -- a nested mapper lambda
+     * (shared across all clones) can then capture one consistently and read the
+     * dict from its closure env.  `n_memo_dict == 0` means "not yet cloned". */
+    Binding             *memo_dict_params[MAX_FN_CONSTRAINTS];
+    uint8_t              n_memo_dict;
+    /* forall-dict-pass-nested-lambda-dispatch-plan (Phase 2): set on a nested
+     * MAPPER lambda (lifted out of a dict-clone body) that dispatches a
+     * typeclass method on the dict-clone's constrained type variable.  The
+     * mapper is converted to a closure that CAPTURES the constraint's dict
+     * binding (`dict_env_binding`); while its body is emitted, a class-method
+     * call whose class is `dict_env_class` dispatches through that captured
+     * dict (an `env->dict` load) instead of the baked representative instance.
+     * NULL `dict_env_class` means "not a dict-capturing mapper". */
+    struct TypeClass    *dict_env_class;
+    Binding             *dict_env_binding;
+    /* The mapper's user-facing (pre-env-prepend) fn type, kept so a SECOND
+     * poly-wrap referencing the same already-converted mapper can be rewritten
+     * to the same EX_CLOSURE form (its value type is this, boxed). */
+    Type                 dict_env_mapper_ty;
+    /* forall-dict-pass-nested-lambda-dispatch-plan (Phase 2): set on the now-dead
+     * poly-wrapper of a mapper that was converted to a dict-capturing closure --
+     * the closure form (EX_CLOSURE) replaces the wrapper, so emitting it would
+     * reference the mapper with the pre-conversion arity.  emit_fn_def skips it. */
+    bool                 skip_emission;
     /* WF1/WF2 (van-laarhoven-wide-functor-carrier-plan): set on the
      * functor-wrapping closure `g : (-> A (f A))` of a van Laarhoven lens when
      * `f` is pinned to a WIDE by-value aggregate functor (a `:copy` struct /
