@@ -30,35 +30,9 @@ Run these in parallel and report findings before proceeding:
    to the user before proceeding.
 6. `git log v<OLD>..HEAD --oneline` -- there must be at least one
    commit since the last tag. If zero, refuse to release.
-7. **Experiment expiry gate (XF4, experimental-flag-mechanism-plan).**
-   Every entry in the experimental-feature registry carries a hard
-   `expires_at` version. Before bumping VERSION, list the registry and
-   refuse the cut if any entry expires at or before the NEW version while
-   still present:
-
-   ```sh
-   ./build/tur experiments --json   # build first if ./build/tur is stale
-   ```
-
-   Parse the JSON array. For each entry, compare its `expires_at`
-   (MAJOR.MINOR.PATCH, numeric per-component) against the NEW version from
-   Step 1. If `expires_at <= NEW`, the experiment has reached its expiry
-   and MUST be resolved before the cut can proceed -- in a **separate PR**,
-   the release author either:
-     - **graduates** it (delete the row from `src/runtime/experiments.c`;
-       the feature becomes always-on -- its `opt_global` bool stays `true`,
-       mirroring the drop-`-X` no-op pattern), or
-     - **shelves** it (remove the row and the feature).
-
-   Report the offending entries (name + expires_at) and stop. Do not
-   proceed, and do not edit `experiments.c` yourself as part of the release
-   -- that is a deliberate, reviewed change. An empty registry passes this
-   gate trivially.
 
 If any check fails, stop and report. Do not proceed without the user
-explicitly overriding. The experiment-expiry gate (check 7) is the one
-precondition that must NOT be overridden by bumping past it -- resolve the
-entry first.
+explicitly overriding.
 
 ## Step 1: Compute the new version
 
@@ -236,6 +210,3 @@ End by reporting:
   for users discovering the release.
 - Refuse to use `git push --force` for any step here.
 - Refuse to amend a commit that has already been pushed.
-- Refuse to cut a release while any registry experiment's `expires_at` is
-  `<=` the new version (precondition 7). The entry must be graduated or
-  shelved in a separate, reviewed PR first.
