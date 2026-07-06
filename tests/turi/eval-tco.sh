@@ -49,6 +49,7 @@ check_line "rc-go 200000 = 0 (SR N4 Slice 6 recursive resume-cont! heap-bounded)
 check_line "ip-go 200000 = 0 (SR N4 Slice 7 recursive is_pure fold heap-bounded)" "0"
 check_line "cu-rec 200000 = 200000 (C1 nested catch-unwind heap-bounded)" "200000"
 check_line "cu-catch-deep 200000 = 200000 (C1 deep panic signal to catch heap-bounded)" "200000"
+check_line "at-rec 200000 = 200000 (C2 nested atomically heap-bounded)" "200000"
 
 echo ""
 echo "$PASS passed, $FAIL failed"

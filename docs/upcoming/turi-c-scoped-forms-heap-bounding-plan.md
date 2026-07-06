@@ -96,6 +96,22 @@ by a driver `DK_*` frame. The same shape applies here:
 
 ### Phase C2 -- `atomically` / STM transaction on the work-stack
 
+> **Status (landed 2026-07-06).** Implemented in `src/turi/eval.c`: a
+> `DK_ATOMICALLY` driver descend + consume case for `EX_ATOMICALLY` (heap
+> `TuriStmTx` linked on `g_stm_tx`, committed / retry-errored on the consume
+> side, mirroring `eval_atomically`), and a `DK_STM_SEQ` driver case for
+> `EX_STM` that drives the body items on the work-stack with the retry/abort
+> short-circuit (so recursion inside an stm item folds onto the heap). The
+> synchronous `eval_atomically` / `eval_expr_impl` `EX_STM` loop is kept for
+> non-driver callers (e.g. an `or-else` arm). Unlike C1, nested `atomically`
+> *did* C-recurse pre-C2 and tripped the guard ("recursion limit exceeded") at
+> 200000; it now folds. Retry semantics are unchanged: the single-threaded
+> interpreter still errors on a requested retry (no way to make progress), so
+> C2 does **not** re-drive the body -- the plan's "re-drive on retry" is a no-op
+> here because a serial re-run can never make progress (see the TI4 note at
+> `eval.c` `TuriStmTx`). Regression `at-rec` at 200000 added to
+> `tests/turi/eval-tco.{tur,sh}`.
+
 - Model the transaction boundary as a `DK_ATOMICALLY` frame: drive the body
   beneath it; on `retry` (an STM signal) re-drive the body in the same slot
   (a loop-native style re-request, like the existing `DK_CONT_FOLD` at

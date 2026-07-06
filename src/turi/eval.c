@@ -4500,6 +4500,19 @@ typedef enum {
                       * (err payload).  A normal value is wrapped (ok value).
                       * Keeps deeply-nested catch-unwind on the heap instead of
                       * one setjmp/eval_apply C frame per level. */
+    DK_ATOMICALLY,   /* C2 (turi-c-scoped-forms-heap-bounding): an (atomically
+                      * (stm ...)) transaction boundary on the work-stack.  aux =
+                      * heap TuriStmTx* (linked on g_stm_tx); the stm body is
+                      * driven beneath it (DK_STM_SEQ).  On normal completion the
+                      * write-log is committed; a requested retry/abort yields the
+                      * single-threaded no-progress error.  Keeps deeply-nested
+                      * atomically on the heap instead of one eval_atomically C
+                      * frame per level. */
+    DK_STM_SEQ,      /* C2: the (stm e1 e2 ...) body sequence driven on the
+                      * work-stack (the recursion inside an stm item folds here).
+                      * expr = the EX_STM, index = next item, frame = enclosing.
+                      * A retry/abort request on g_stm_tx short-circuits the rest
+                      * of the block (matching the eval_expr_impl EX_STM loop). */
 } DriveKind;
 
 typedef struct {
@@ -5726,6 +5739,36 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * dispatches the application next iteration. */
                 break;
             }
+            case EX_ATOMICALLY: {
+                /* C2: model the transaction boundary on the work-stack (no
+                 * eval_atomically C frame), so nested atomically folds onto the
+                 * heap.  Register a heap TuriStmTx on g_stm_tx (so the tvar/retry
+                 * ops still find it), push DK_ATOMICALLY, and drive the (stm ...)
+                 * body beneath it.  DK_ATOMICALLY commits (or errors on retry)
+                 * when the body value returns.  (eval_expr_impl keeps a
+                 * synchronous EX_ATOMICALLY -> eval_atomically for non-driver
+                 * callers, e.g. an or-else arm that recurses into atomically.) */
+                TuriStmTx *tx = (TuriStmTx *)calloc(1, sizeof(TuriStmTx));
+                tx->prev = g_stm_tx;
+                g_stm_tx = tx;
+                DRIVE_PUSH(((DriveCont){ .kind = DK_ATOMICALLY, .aux = tx }));
+                control = control->as.atomically_.stm_expr;   /* the EX_STM */
+                tail = false; descending = true;
+                break;
+            }
+            case EX_STM: {
+                /* C2: drive the stm body sequence on the work-stack so recursion
+                 * inside an item folds (DK_STM_SEQ).  A retry/abort request
+                 * short-circuits the rest, matching the eval_expr_impl EX_STM
+                 * loop.  The last item's value is the block's value. */
+                uint32_t n = control->as.stm_.n_body;
+                if (n == 0) { cur = turi_nil(); descending = false; break; }
+                DRIVE_PUSH(((DriveCont){ .kind = DK_STM_SEQ, .expr = control,
+                                         .frame = cf, .index = 0 }));
+                control = control->as.stm_.body[0];
+                tail = false; descending = true;   /* stm items are non-tail */
+                break;
+            }
             case EX_RESET: {
                 /* SR N4: model the plain reset boundary on the work-stack (no
                  * setjmp), so deeply-nested resets fold onto the heap instead of
@@ -6001,6 +6044,51 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     cur = turi_ok_result_box(env, cur.as_int);
                 }
                 free(b);
+                len--;
+                break;
+            }
+            case DK_STM_SEQ: {
+                /* C2: an stm body item produced `cur`.  On any propagating signal
+                 * or error, abandon the block (propagate).  Otherwise record the
+                 * value; a retry/abort request short-circuits the rest (matching
+                 * the eval_expr_impl EX_STM loop), else advance to the next item.
+                 * The last item's value is the stm block's value. */
+                if (signaled) { len--; break; }
+                const Expr *se = top->expr;
+                uint32_t    n  = se->as.stm_.n_body;
+                top->last = cur;
+                if (g_stm_tx && (g_stm_tx->retry_requested || g_stm_tx->aborted)) {
+                    cur = top->last; len--; break;
+                }
+                top->index++;
+                if (top->index < n) {
+                    control = se->as.stm_.body[top->index];
+                    cf = top->frame; tail = false; descending = true;
+                } else {
+                    cur = top->last; len--;
+                }
+                break;
+            }
+            case DK_ATOMICALLY: {
+                /* C2: the stm body produced `cur`.  Unlink the transaction; then
+                 * propagate any error/signal, error on a requested retry/abort
+                 * (single-threaded: no way to make progress), or commit the
+                 * write-log.  Mirrors eval_atomically exactly. */
+                TuriStmTx *tx = (TuriStmTx *)top->aux;
+                g_stm_tx = tx->prev;
+                if (signaled) {
+                    /* fall through: propagate cur unchanged */
+                } else if (tx->retry_requested || tx->aborted) {
+                    cur = turi_error("eval: atomically: transaction requested retry "
+                                     "with no way to make progress (single-threaded "
+                                     "interpreter cannot block on another writer)");
+                } else {
+                    for (int i = 0; i < tx->w_count; i++) {
+                        tx->w_tv[i]->value = tx->w_val[i];
+                        tx->w_tv[i]->version++;
+                    }
+                }
+                free(tx->w_tv); free(tx->w_val); free(tx);
                 len--;
                 break;
             }

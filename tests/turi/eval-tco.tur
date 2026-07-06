@@ -231,3 +231,16 @@
 (defn cu-catch-deep [n :int] :int
   (do (catch-unwind (fn [] : int (deep-panic n))) n))
 (println (cu-catch-deep 200000))
+
+;; --- Test 20 (C2): deeply NESTED atomically is heap-bounded -----------------
+;; Each level runs the next recursion inside its own (atomically (stm ...)).
+;; Before Phase C2 the transaction boundary was an eval_atomically C frame plus
+;; an eval_expr of the stm body, so this nesting C-recursed and tripped the
+;; eval_depth guard ("recursion limit exceeded") at 200000.  The driver now
+;; models the boundary on the work-stack (DK_ATOMICALLY) and the stm body
+;; sequence too (DK_STM_SEQ), so the recursion inside the block folds onto the
+;; heap.  Each atomically commits its (empty) write-log and returns the body
+;; value, so at-rec N = N.
+(defn at-rec [n :int] :int
+  (if (= n 0) 0 (atomically (stm (+ 1 (at-rec (- n 1)))))))
+(println (at-rec 200000))
