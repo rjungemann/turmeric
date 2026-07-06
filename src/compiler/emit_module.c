@@ -9887,7 +9887,7 @@ int emit_program(Buf *out, const Expr *program) {
         /* Only generate main() if user didn't define one */
         buf_puts(out, "int main(int argc, char **argv) {\n");
         /* Phase R6: Set g_panic_trace from compiler flag */
-        if (g_panic_trace) {
+        if (g_emit_panic_trace) {
             buf_puts(out, "    g_panic_trace = 1;\n");
         }
         /* CLI-ARGS: Build *args* list from argv[1..] as a linked list of char* (as int64_t). */
@@ -10995,7 +10995,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
         /* Only generate main() if user didn't define one (single-file mode) */
         buf_puts(out, "int main(int argc, char **argv) {\n");
         /* Phase R6: Set g_panic_trace from compiler flag */
-        if (g_panic_trace) {
+        if (g_emit_panic_trace) {
             buf_puts(out, "    g_panic_trace = 1;\n");
         }
         /* CLI-ARGS: Build *args* list from argv[1..] as a linked list of char* (as int64_t). */

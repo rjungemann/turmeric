@@ -143,7 +143,9 @@
 ;;; Since: Phase R1
 
 
-(defn reactor-new [] #fx{} : Reactor
+(defn reactor-new []
+  #fx{}
+  : Reactor
   ```c
   return (int64_t)(intptr_t)tur_reactor_new();
   ```)
@@ -157,7 +159,10 @@
 ;;;
 ;;; Since: Phase R1
 
-(defn reactor-free [r : Reactor] #fx{} : nil (tur_reactor_free (:: r :ptr<void>)))
+(defn reactor-free [r : Reactor]
+  #fx{}
+  : nil
+  (tur_reactor_free (:: r :ptr<void>)))
 ;; ---- Source registration ----
 ;;; reactor-add-fd -- watch a file descriptor for I/O events.
 ;;;

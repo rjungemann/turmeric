@@ -131,10 +131,11 @@
 ;;;   (tlength (:: (list (some 1) (some 2)) (Cons (Option int))))  ; => 2
 ;;;
 ;;; Since: Phase G4 (carrier<->concrete ABI crossing audit)
-(defn tlength [A] [xs : (Cons A)] : int
-  (if (= (:: xs :int) 0)
-    0
-    (+ 1 (tlength (:: (.tail xs) (Cons A))))))
+
+(defn tlength [A]
+  [xs : (Cons A)]
+  : int
+  (if (= (:: xs :int) 0) 0 (+ 1 (tlength (:: (.tail xs) (Cons A))))))
 ;;; list-length -- count the number of elements in a typed list.
 ;;;
 ;;; Parameters:
@@ -206,15 +207,16 @@
 ;;;               (:: (tcons 1 (tnil)) (Cons int)))  ; => true
 ;;;
 ;;; Since: Phase TCE (typed-collection-eq-consumers)
-(defn cons-eq-go [A] [(Eq A)] [c1 : (Cons A) c2 : (Cons A)] : bool
+
+(defn cons-eq-go [A]
+  [(Eq A)]
+  [c1 : (Cons A) c2 : (Cons A)]
+  : bool
   (if (eq? (.head c1) (.head c2))
-    (let [t1 (.tail c1)
-          t2 (.tail c2)]
+    (let [t1 (.tail c1) t2 (.tail c2)]
       (if (= t1 0)
         (= t2 0)
-        (if (= t2 0)
-          false
-          (cons-eq-go (:: t1 (Cons A)) (:: t2 (Cons A))))))
+        (if (= t2 0) false (cons-eq-go (:: t1 (Cons A)) (:: t2 (Cons A))))))
     false))
 ;;; Eq [Cons] -- element-wise equality using the element type's Eq instance.
 ;; TC1-9: Phase PTC4 -- constrained Eq instance for List[A] (Cons cells).
@@ -224,13 +226,10 @@
 (definstance Eq [Cons]
   [(Eq A)]
   (eq? [x y]
-    (let [t1 (:: x :int)
-          t2 (:: y :int)]
+    (let [t1 (:: x :int) t2 (:: y :int)]
       (if (= t1 0)
         (= t2 0)
-        (if (= t2 0)
-          false
-          (cons-eq-go (:: t1 (Cons A)) (:: t2 (Cons A))))))))
+        (if (= t2 0) false (cons-eq-go (:: t1 (Cons A)) (:: t2 (Cons A))))))))
 ;;; __cons-fmap -- apply a typed thunk to every head element of a Cons list.
 ;;;
 ;;; Walks the cons chain, allocates a new cell for each node, and writes
@@ -252,7 +251,8 @@
     0
     ;; tcons returns (Cons A); bind it to an :int local so the if's two branches
     ;; share the carrier type and the emitted C stays -Wint-conversion-clean.
-    (let [out (:: (tcons (f (list-head cell)) (__cons-fmap (list-tail cell) f)) :int)]
+    (let [out (:: (tcons (f (list-head cell)) (__cons-fmap (list-tail cell) f))
+                :int)]
       out)))
 ;;; tur-list-homog__ -- internal: compile-time element homogeneity check.
 ;;;
@@ -317,9 +317,7 @@
 (defmacro list [& xs]
   (if (empty? xs)
     (list tnil)
-    (list do
-      (list list-homog-chain__ ~@xs)
-      (list list-build__ ~@xs))))
+    (list do (list list-homog-chain__ ~@xs) (list list-build__ ~@xs))))
 ;;; list* -- prepend values onto an existing list tail.
 ;;;
 ;;; Parameters:

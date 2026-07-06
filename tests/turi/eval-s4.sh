@@ -22,8 +22,9 @@ check() {
     fi
 }
 
-check "7"   # test-struct: (.x p) + (.y p) = 3 + 4
-check "42"  # test-try-catch: caught exception returns 42
-check "99"  # test-try-finally: caught, returns 99
+check "7"          # test-struct: (.x p) + (.y p) = 3 + 4
+check "42"         # test-catch: catch-unwind contained the panic, returned 42
+check "defer-ran"  # test-defer: the defer fired during panic unwind
+check "99"         # test-defer: catch-unwind contained the panic, returned 99
 
 echo "PASS: eval-s4"

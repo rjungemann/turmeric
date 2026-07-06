@@ -634,7 +634,10 @@
 ;;; Since: Phase P1
 ;; Seal transient into an immutable map. The transient must not be used after this.
 
-(defn hamt/persistent! [t : ptr<void>] #fx{} : ptr<void> (tur_hamt_persistent t))
+(defn hamt/persistent! [t : ptr<void>]
+  #fx{}
+  : ptr<void>
+  (tur_hamt_persistent t))
 ;; ============================================================================
 ;; Autolink hint -- consumed by `tur build`/`tur run` (src/main.c).
 ;; The __tur_autolink__ comment causes src/runtime/hamt.c to be compiled

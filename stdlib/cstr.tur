@@ -13,7 +13,6 @@
 ;;; Since: 2026-07-01
 (defmodule cstr
   (export cstr-len cstr-nth)
-
   ;;; cstr-len -- byte length of a NUL-terminated C string.
   ;;;
   ;;; Parameters:
@@ -28,7 +27,6 @@
     ```c
     return (int64_t)strlen((const char *)(intptr_t)s);
     ```)
-
   ;;; cstr-nth -- byte at index i in a NUL-terminated C string.
   ;;;
   ;;; Parameters:

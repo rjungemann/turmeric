@@ -5367,13 +5367,6 @@ static void wk_register_backtrack_natives(TuriEnv *env);
 static void wk_register_proc_fs_natives(TuriEnv *env);
 static void wk_register_serial_natives(TuriEnv *env);
 
-/* 3c: TUR_TURI_FULL_PRELUDE=1 opts the interpreter into loading the carved
- * stdlib modules (contract/mutmap/json/schema) on top of the default prelude.
- * Off by default; matches the `=1` convention used by TUR_TSAN. */
-static bool turi_full_prelude_enabled(void) {
-    const char *e = getenv("TUR_TURI_FULL_PRELUDE");
-    return e && strcmp(e, "1") == 0;
-}
 
 /* Contract runtime helpers (defined below; forward-declared so cmd_eval can
  * register them as native overrides for contract.tur's inline-C bodies). */
@@ -5627,41 +5620,16 @@ static int cmd_eval_h(const char *path, bool use_color,
         (void)sv;
         buf_free(&src);
     }
-    /* 3c (turi-open-reports-prereqs.md): opt-in full prelude.  The default
-     * prelude above covers the typed-stdlib core; when TUR_TURI_FULL_PRELUDE=1
-     * the interpreter ADDITIONALLY loads the modules the compiled path
-     * auto-loads but the interpreter carves out
-     * (docs/artifacts/turi-preload-carve-out.txt): json, schema.  This makes the
-     * interpreter prelude match the compiled auto-load set so the carved bucket
-     * can be iterated/measured fixture-by-fixture under --interpret, without
-     * committing the extra parse/elab cost to every run.  Off by default; loaded
-     * BEFORE the native overrides so those still win, and each module is loaded
-     * in its own turi_eval so one failing module does not block the rest.
-     * (contract.tur and mutmap.tur graduated to the default prelude above.) */
-    if (turi_full_prelude_enabled()) {
-        static const char *full_extra[] = {
-            "json.tur", "schema.tur", NULL
-        };
-        for (int i = 0; full_extra[i] != NULL; i++) {
-            char pb[4096];
-            tur_stdlib_path(full_extra[i], pb, sizeof(pb));
-            Buf src; buf_init(&src);
-            buf_write(&src, "(load \"", 7);
-            buf_write(&src, pb, strlen(pb));
-            buf_write(&src, "\")\n", 3);
-            buf_putc(&src, '\0');
-            TuriValue sv = turi_eval(env, src.data);
-            (void)sv;
-            buf_free(&src);
-        }
-    }
-    /* JR0 (turi-json-schema-interpreter-plan, Layer 1): auto-load json.tur so
-     * the #json(...) reader-macro lowering's json node constructors (and
-     * json/encode|decode|type|get accessors) resolve under --interpret.  The
-     * loaded inline-C bodies are overridden by the layout-exact natives
-     * registered in wk_register_json_natives below.  Skipped when the opt-in
-     * full prelude already loaded json.tur (avoids a redefinition). */
-    if (!turi_full_prelude_enabled()) {
+    /* JR0/RD (turi-json-schema-interpreter-plan, Layers 1-2): auto-load
+     * json.tur, then schema.tur on top of it, so the #json(...) reader-macro
+     * lowering's json node constructors (json/encode|decode|type|get) and the
+     * #json-str<T>(...) typed-decode reader family resolve under --interpret.
+     * The loaded inline-C bodies are overridden by the layout-exact natives
+     * registered in wk_register_{json,schema}_natives below.  Loaded BEFORE the
+     * native overrides so those still win.  These two modules are therefore
+     * unconditionally preloaded under --interpret (they are gaps only relative
+     * to the static prelude[] above; docs/artifacts/turi-preload-carve-out.txt). */
+    {
         char pb[4096];
         tur_stdlib_path("json.tur", pb, sizeof(pb));
         char load_form[4200];
@@ -5669,11 +5637,7 @@ static int cmd_eval_h(const char *path, bool use_color,
         TuriValue sv = turi_eval(env, load_form);
         (void)sv;
     }
-    /* RD (Layer 2): auto-load schema.tur on top of json.tur so the
-     * #json-str<T>(...) typed decode reader family resolves; the inline-C
-     * schema engine is overridden by wk_register_schema_natives below.  Skipped
-     * when the full prelude already loaded schema.tur. */
-    if (!turi_full_prelude_enabled()) {
+    {
         char pb[4096];
         tur_stdlib_path("schema.tur", pb, sizeof(pb));
         char load_form[4200];
@@ -12386,7 +12350,7 @@ int main(int argc, char **argv) {
     bool explain_mode = false;
     const char *explain_code = NULL;
     g_panic_abort = parse_panic_abort(argc, argv);
-    g_panic_trace = parse_panic_trace(argc, argv);
+    g_emit_panic_trace = parse_panic_trace(argc, argv);
     g_warn_unused_result = parse_warn_unused_result(argc, argv);
     g_lint_panic = parse_lint_panic(argc, argv);
     /* Phase C2: --no-contracts strips contract checks (release builds). */

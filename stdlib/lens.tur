@@ -27,11 +27,7 @@
 ;;;
 ;;; Since: constrained-hkt-forall slice 4
 ;; Lens optic module.
-
-(defstruct Lens :copy [S A]
-  (lget (fn [S] A))
-  (lput (fn [A S] S)))
-
+(defstruct Lens :copy [S A] (lget (fn [S] A)) (lput (fn [A S] S)))
 ;;; lens -- build a Lens from a getter and a setter.
 ;;;
 ;;; Parameters:
@@ -47,9 +43,11 @@
 ;;;           (make-struct Point :x nx :y (.y p))))
 ;;;
 ;;; Since: constrained-hkt-forall slice 4
-(defn lens [S A] [get : (fn [S] A) put : (fn [A S] S)] : (Lens S A)
-  (make-struct Lens :lget get :lput put))
 
+(defn lens [S A]
+  [get : (fn [S] A) put : (fn [A S] S)]
+  : (Lens S A)
+  (make-struct Lens :lget get :lput put))
 ;;; view -- read the focused A out of the whole S.
 ;;;
 ;;; Parameters:
@@ -63,9 +61,8 @@
 ;;;   (view point-x p)   ; => (.x p)
 ;;;
 ;;; Since: constrained-hkt-forall slice 4
-(defn view [S A] [l : (Lens S A) s : S] : A
-  ((.lget l) s))
 
+(defn view [S A] [l : (Lens S A) s : S] : A ((.lget l) s))
 ;;; set -- replace the focused A, returning the updated S.
 ;;;
 ;;; Parameters:
@@ -80,9 +77,8 @@
 ;;;   (set point-x 42 p)   ; => p with x = 42
 ;;;
 ;;; Since: constrained-hkt-forall slice 4
-(defn set [S A] [l : (Lens S A) a : A s : S] : S
-  ((.lput l) a s))
 
+(defn set [S A] [l : (Lens S A) a : A s : S] : S ((.lput l) a s))
 ;;; over -- apply a function to the focused A, returning the updated S.
 ;;;
 ;;; Parameters:
@@ -97,9 +93,11 @@
 ;;;   (over point-x (fn [v : int] : int (* v 10)) p)   ; => p with x *= 10
 ;;;
 ;;; Since: constrained-hkt-forall slice 4
-(defn over [S A] [l : (Lens S A) f : (fn [A] A) s : S] : S
-  ((.lput l) (f ((.lget l) s)) s))
 
+(defn over [S A]
+  [l : (Lens S A) f : (fn [A] A) s : S]
+  : S
+  ((.lput l) (f ((.lget l) s)) s))
 ;; Composition note.  The van Laarhoven encoding composes optics with ordinary
 ;; function composition (`compose l1 l2`); the record encoding cannot -- a
 ;; generic `lens-compose` setter must read the whole `s` (to view the

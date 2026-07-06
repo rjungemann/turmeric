@@ -292,6 +292,7 @@ user-defined precedence macro to handle.
 {1 + 2}              ; => (+ 1 2)
 {a * b}              ; => (* a b)
 { {a + b} * c }      ; => (* (+ a b) c)
+{a + b * c}          ; => ($nfx$ a + b * c)  -- mixed operators
 ```
 
 ---

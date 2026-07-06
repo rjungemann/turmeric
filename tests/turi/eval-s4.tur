@@ -1,32 +1,37 @@
-;; Phase S4 eval tests: structs, exceptions, defer
+;; Phase S4 eval tests: structs, exceptions (panic / catch-unwind), defer.
+;;
+;; Rewritten off the removed `(try ... (throw x) (catch [e] ...))` surface --
+;; that form never existed in the language (the compiler rejects `throw` as an
+;; unknown operator). The real mechanism is `panic` + `catch-unwind` (which
+;; returns a Result) and `defer`. These probes use only names the REPL
+;; `:reload` prelude binds, so they run under `tur repl`.
 
-;; --- Test 1: struct literal + field access ---
-;; (make-struct Point 3 4), then (.x p) + (.y p) → 7
-(defstruct Point [x :int y :int])
+;; --- Test 1: struct literal + field access --- => 7
+(defstruct Point [x : int y : int])
 
-(defn test-struct [] :int
+(defn test-struct [] : int
   (let [p (make-struct Point 3 4)]
     (+ (.x p) (.y p))))
 
-;; --- Test 2: try/catch basic --- → 42
-(defn test-try-catch [] :int
-  (try
-    (throw "oops")
-    (catch [e]
-      42)))
+;; --- Test 2: catch-unwind contains a panic --- => 42
+;; Reaching the `42` at all proves the panic was contained: an uncontained
+;; panic aborts the process before this returns.
+(defn test-catch [] : int
+  (let [r (catch-unwind (fn [] : int (panic "oops")))]
+    42))
 
-;; --- Test 3: try/catch/finally → 99 ---
-(defn test-try-finally [] :int
-  (let [x (try
-    (throw "bail")
-    (catch [e]
-      99))]
-    x))
+;; --- Test 3: defer fires during panic unwind, panic stays contained --- => 99
+;; `unwinds` panics; its `defer` must still run (prints the marker) as the stack
+;; unwinds to the catch-unwind boundary, after which `test-defer` returns 99.
+(defn unwinds [] : int
+  (defer (println "defer-ran"))
+  (panic "bail"))
 
-;; --- Test 4: uncaught exception converts to TURI_ERROR ---
-;; (throw-uncaught) is NOT evaluated here; the REPL test calls safe wrappers only.
+(defn test-defer [] : int
+  (let [r (catch-unwind (fn [] : int (unwinds)))]
+    99))
 
-;; Print results
-(println (test-struct))       ;; => 7
-(println (test-try-catch))    ;; => 42
-(println (test-try-finally))  ;; => 99
+;; Print results (this is exactly the REPL output tests/turi/eval-s4.sh checks).
+(println (test-struct))   ;; => 7
+(println (test-catch))    ;; => 42
+(println (test-defer))    ;; => defer-ran, then 99

@@ -90,7 +90,9 @@
 ;;; Example:
 ;;;   (assert-error (fn [] : int (panic "boom")))  ; => true
 
-(defn assert-error-result-is-err? [r : int] #fx{Unsafe} : bool
+(defn assert-error-result-is-err? [r : int]
+  #fx{Unsafe}
+  : bool
   ```c
   return !tur_is_ok(r);
   ```)
