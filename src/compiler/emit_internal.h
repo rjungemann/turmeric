@@ -535,6 +535,11 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b);
  * marshalling (M7 spec matching, carrier->concrete arg deref) must be suppressed
  * on it; the aggregate box/unbox happens at the caller (poly-carrier) boundary. */
 bool emit_call_is_dict_param_dispatch(EmitCtx *ctx, const Expr *call);
+/* MB2 (constrained-hkt-forall-mode-b-plan): true when a function body tail is a
+ * generic (tyvar-returning) call that emits as the int64 carrier and is NOT
+ * resolved to a concrete by-value spec -- so a pointer-returning function must
+ * bridge int64->pointer at its return.  Defined in emit_expr.c. */
+bool emit_tail_call_returns_tyvar_carrier(EmitCtx *ctx, const Expr *e);
 /* GHE struct-receiver: true when a constrained-generic method call re-resolved
  * in the active ABI spec targets a struct/ADT-receiver instance whose method
  * takes the receiver by `const T *`, so the by-value receiver arg must be passed

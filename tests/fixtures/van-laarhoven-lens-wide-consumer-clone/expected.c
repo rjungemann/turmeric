@@ -3700,7 +3700,7 @@ static int64_t __fn_1310(void * __env_p_1313, int64_t a) {
 static int64_t point_hyx_un_undict_un1316(int64_t __dict_1317, int64_t g, int64_t s) {
         struct __env_1285 *__t20 = (struct __env_1285 *)malloc(sizeof(struct __env_1285));
         __t20->__fn = (tur_thunk_tur_adt_Point___int64_t_t)__fn_1283;
-        __t20->s = s;
+        __t20->s = (tur_adt_Point *)(intptr_t)s;
         void *__t21 = __t20;
         void *__t22 = (void *)(intptr_t)(__t21);
         return (int64_t)(intptr_t)((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_1317)[0])(((int64_t (*)(void*, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(g)))[0])((void *)(intptr_t)(g), (int64_t)((tur_adt_Point *)(intptr_t)(s))->x), (tur_poly_fn_t){ __t22, (int64_t(*)(void*,int64_t))(*( tur_thunk_tur_adt_Point___int64_t_t *)(__t22)) });
@@ -3713,7 +3713,7 @@ static int64_t __poly_1320(void * __poly_env_1321, int64_t __poly_x0_1323, int64
 static int64_t point_hyy_un_undict_un1331(int64_t __dict_1332, int64_t g, int64_t s) {
         struct __env_1294 *__t23 = (struct __env_1294 *)malloc(sizeof(struct __env_1294));
         __t23->__fn = (tur_thunk_tur_adt_Point___int64_t_t)__fn_1292;
-        __t23->s = s;
+        __t23->s = (tur_adt_Point *)(intptr_t)s;
         void *__t24 = __t23;
         void *__t25 = (void *)(intptr_t)(__t24);
         return (int64_t)(intptr_t)((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_1332)[0])(((int64_t (*)(void*, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(g)))[0])((void *)(intptr_t)(g), (int64_t)((tur_adt_Point *)(intptr_t)(s))->y), (tur_poly_fn_t){ __t25, (int64_t(*)(void*,int64_t))(*( tur_thunk_tur_adt_Point___int64_t_t *)(__t25)) });
@@ -3726,7 +3726,7 @@ static int64_t __poly_1335(void * __poly_env_1336, int64_t __poly_x0_1338, int64
 static int64_t point_hyx_un_undict_un1346(int64_t __dict_1347, int64_t g, int64_t s) {
         struct __env_1285 *__t26 = (struct __env_1285 *)malloc(sizeof(struct __env_1285));
         __t26->__fn = (tur_thunk_tur_adt_Point___int64_t_t)__fn_1283;
-        __t26->s = s;
+        __t26->s = (tur_adt_Point *)(intptr_t)s;
         void *__t27 = __t26;
         void *__t28 = (void *)(intptr_t)(__t27);
         return (int64_t)(intptr_t)((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_1347)[0])(((int64_t (*)(void*, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(g)))[0])((void *)(intptr_t)(g), (int64_t)((tur_adt_Point *)(intptr_t)(s))->x), (tur_poly_fn_t){ __t28, (int64_t(*)(void*,int64_t))(*( tur_thunk_tur_adt_Point___int64_t_t *)(__t28)) });
@@ -3747,7 +3747,7 @@ static int64_t __poly_1363(void * __poly_env_1364, int64_t __poly_x0_1366) {
 static int64_t point_hyy_un_undict_un1370(int64_t __dict_1371, int64_t g, int64_t s) {
         struct __env_1294 *__t29 = (struct __env_1294 *)malloc(sizeof(struct __env_1294));
         __t29->__fn = (tur_thunk_tur_adt_Point___int64_t_t)__fn_1292;
-        __t29->s = s;
+        __t29->s = (tur_adt_Point *)(intptr_t)s;
         void *__t30 = __t29;
         void *__t31 = (void *)(intptr_t)(__t30);
         return (int64_t)(intptr_t)((int64_t (*)(int64_t, tur_poly_fn_t))((void **)(intptr_t)__dict_1371)[0])(((int64_t (*)(void*, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(g)))[0])((void *)(intptr_t)(g), (int64_t)((tur_adt_Point *)(intptr_t)(s))->y), (tur_poly_fn_t){ __t31, (int64_t(*)(void*,int64_t))(*( tur_thunk_tur_adt_Point___int64_t_t *)(__t31)) });
@@ -5999,7 +5999,7 @@ static int64_t run_id__spec__int64_t_tur_adt_Identity__int(tur_adt_Identity__int
 static tur_adt_Identity__Point point_x__mono_89e16e7f8669ca4e(int64_t g, int64_t s) {
         struct __env_1285 *__t73 = (struct __env_1285 *)malloc(sizeof(struct __env_1285));
         __t73->__fn = (tur_thunk_tur_adt_Point___int64_t_t)__fn_1283;
-        __t73->s = s;
+        __t73->s = (tur_adt_Point *)(intptr_t)s;
         void *__t74 = __t73;
         void *__t75 = (void *)(intptr_t)(__t74);
         return __inst_Functor_fmap_Identity__spec__tur_adt_Identity__Point_int64_t_int64_t(((tur_adt_Identity__int (*)(void*, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(g)))[0])((void *)(intptr_t)(g), (int64_t)((tur_adt_Point *)(intptr_t)(s))->x), (tur_poly_fn_t){ __t75, (int64_t(*)(void*,int64_t))(*( tur_thunk_tur_adt_Point___int64_t_t *)(__t75)) });
@@ -6012,7 +6012,7 @@ static tur_adt_Identity__Point __inst_Functor_fmap_Identity__spec__tur_adt_Ident
 static tur_adt_Identity__Point point_y__mono_29dc1a87dc9f86df(int64_t g, int64_t s) {
         struct __env_1294 *__t76 = (struct __env_1294 *)malloc(sizeof(struct __env_1294));
         __t76->__fn = (tur_thunk_tur_adt_Point___int64_t_t)__fn_1292;
-        __t76->s = s;
+        __t76->s = (tur_adt_Point *)(intptr_t)s;
         void *__t77 = __t76;
         void *__t78 = (void *)(intptr_t)(__t77);
         return __inst_Functor_fmap_Identity__spec__tur_adt_Identity__Point_int64_t_int64_t__h1(((tur_adt_Identity__int (*)(void*, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(g)))[0])((void *)(intptr_t)(g), (int64_t)((tur_adt_Point *)(intptr_t)(s))->y), (tur_poly_fn_t){ __t78, (int64_t(*)(void*,int64_t))(*( tur_thunk_tur_adt_Point___int64_t_t *)(__t78)) });

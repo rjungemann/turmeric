@@ -1,0 +1,55 @@
+;; MB1 (constrained-hkt-forall-mode-b-plan) regression, Deficit 1: the dict-clone
+;; must thread the class method's DECLARED result type, not assume every method
+;; returns the int64 carrier.  Two genuinely polymorphic constrained functions
+;; are passed as rank-2 args under --enable=forall-dict-pass and each dispatches a
+;; method on its own type variable at TWO different types inside the callee:
+;;
+;;   - `poly-show` dispatches `Show::show`, a POINTER-returning method (: cstr).
+;;     Before the fix the dict-clone loaded the dispatch result as a raw int64 and
+;;     returned it where `const char *` was expected -- a -Wint-conversion (hard
+;;     error under clang).
+;;   - `poly-rank` dispatches `Rank::rank`, a SCALAR-returning method (: int).
+;;
+;; Both flow through the one compiled dict-clone body, resolving the right
+;; instance per call: `(f 7)` uses the `int` instance, `(f true)` the `bool` one.
+(defclass Show [a] (show [x] : cstr))
+(definstance Show [int]
+  (show [x] : cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "int:%lld", (long long)x);
+    return (const char *)buf;
+    ```))
+(definstance Show [bool]
+  (show [x] : cstr
+    ```c
+    return x ? "bool:true" : "bool:false";
+    ```))
+
+(defclass Rank [a] (rank [x] : int))
+(definstance Rank [int]
+  (rank [x] : int
+    ```c
+    return (int64_t)x + 1;
+    ```))
+(definstance Rank [bool]
+  (rank [x] : int
+    ```c
+    return x ? 100 : 200;
+    ```))
+
+(defn poly-show [a] [^Show a x : a] : cstr (show x))
+(defn poly-rank [a] [^Rank a x : a] : int (rank x))
+
+(defn use-show [f (forall [a] [(Show a)] (-> a cstr))] : cstr
+  (println (f 7))
+  (println (f true))
+  "shown")
+
+(defn use-rank [f (forall [a] [(Rank a)] (-> a int))] : int
+  (+ (f 7) (f true)))   ; rank int 7 -> 8, rank bool true -> 100, sum 108
+
+(defn main [] : int
+  (println (use-show poly-show))
+  (println (use-rank poly-rank))
+  0)

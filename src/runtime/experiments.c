@@ -62,9 +62,15 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       &g_opt_hkt_hrt },
     { "forall-dict-pass",
       "runtime dictionary passing for a polymorphic constrained function used as a rank-2 argument (mode B)",
-      "docs/upcoming/v1/constrained-hkt-forall-mode-b-plan.md",
+      "docs/upcoming/v1/forall-dict-pass-multi-constraint-hkt-plan.md",
       "0.25.6",                    /* introduced */
-      "0.27.0",                    /* expires_at (hard contract; release-cut enforced) */
+      "0.28.0",                    /* expires_at (hard contract; release-cut enforced) --
+                                    * bumped from 0.27.0: Deficit 1 (dict-clone method
+                                    * return-type threading) is fixed (see
+                                    * docs/archive/forall-dict-pass-codegen-and-scope.md);
+                                    * Deficit 2 (multi-constraint / HKT-receiver dicts)
+                                    * keeps the flag experimental and is tracked by the
+                                    * plan_path plan above. */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_forall_dict_pass },
     { "hrt-curried-result",
