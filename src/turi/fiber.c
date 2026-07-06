@@ -345,6 +345,10 @@ TuriValue turi_await_future(TuriEnv *env, TuriFuture *f) {
 #if defined(__APPLE__)
 #  pragma clang diagnostic pop
 #endif
+            /* Control is back on the scheduler stack; if the fiber finished,
+             * release its (now idle) execution stack immediately rather than
+             * holding it until env teardown. */
+            turi_fiber_reclaim_if_done(env, fiber);
             env->current_fiber = NULL;
             continue;
         }
@@ -392,6 +396,10 @@ void turi_run_event_loop(TuriEnv *env) {
 #if defined(__APPLE__)
 #  pragma clang diagnostic pop
 #endif
+            /* Control is back on the scheduler stack; if the fiber finished,
+             * release its (now idle) execution stack immediately rather than
+             * holding it until env teardown. */
+            turi_fiber_reclaim_if_done(env, fiber);
             env->current_fiber = NULL;
             continue;
         }
@@ -536,6 +544,10 @@ static TuriValue native_with_timeout(TuriEnv *env, TuriValue *args, uint32_t n,
 #if defined(__APPLE__)
 #  pragma clang diagnostic pop
 #endif
+            /* Control is back on the scheduler stack; if the fiber finished,
+             * release its (now idle) execution stack immediately rather than
+             * holding it until env teardown. */
+            turi_fiber_reclaim_if_done(env, fiber);
             env->current_fiber = NULL;
         } else {
             poll_io(env, 5);
@@ -770,6 +782,10 @@ static TuriValue native_async_race(TuriEnv *env, TuriValue *args, uint32_t n, vo
 #if defined(__APPLE__)
 #  pragma clang diagnostic pop
 #endif
+            /* Control is back on the scheduler stack; if the fiber finished,
+             * release its (now idle) execution stack immediately rather than
+             * holding it until env teardown. */
+            turi_fiber_reclaim_if_done(env, fiber);
             env->current_fiber = NULL;
         } else {
             poll_io(env, 5);
@@ -830,13 +846,31 @@ void turi_sched_init(TuriEnv *env) {
 /* turi-value-pool-residual-sites: track a coroutine stack for bulk reclaim in
  * turi_sched_free.  The node lives in the value pool (freed with the env); the
  * base pointer is munmap/free'd in the teardown walk below. */
-void turi_env_track_coro_stack(TuriEnv *env, void *base, size_t size) {
-    if (!base) return;
+TuriCoroStack *turi_env_track_coro_stack(TuriEnv *env, void *base, size_t size) {
+    if (!base) return NULL;
     TuriCoroStack *node = (TuriCoroStack *)turi_val_alloc(env, sizeof(TuriCoroStack));
     node->base = base;
     node->size = size;
     node->next = env->coro_stacks;
     env->coro_stacks = node;
+    return node;
+}
+
+/* turi-async-fiber-stack-reclaim: munmap/free a DONE fiber's stack early.  See
+ * the header declaration for the calling contract.  The teardown walk in
+ * turi_sched_free skips nodes whose base is NULL, so tombstoning here makes the
+ * two reclaim paths mutually exclusive. */
+void turi_fiber_reclaim_if_done(TuriEnv *env, TuriFiber *fiber) {
+    (void)env;
+    if (!fiber || fiber->state != TURI_FIBER_DONE || !fiber->stack) return;
+#ifndef __EMSCRIPTEN__
+    munmap(fiber->stack, TURI_ASYNC_STACK_SIZE);
+#else
+    free(fiber->stack);
+#endif
+    if (fiber->stack_node) fiber->stack_node->base = NULL;
+    fiber->stack      = NULL;
+    fiber->stack_node = NULL;
 }
 
 void turi_sched_free(TuriEnv *env) {

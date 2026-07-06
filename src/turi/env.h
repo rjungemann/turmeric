@@ -309,7 +309,9 @@ void turi_env_free(TuriEnv *env);
  * fiber's or generator's mmap'd/malloc'd stack) so it is reclaimed by
  * turi_env_free instead of leaking for the process lifetime. The node is
  * allocated from the env value pool; `base`/`size` are the dealloc args. */
-void turi_env_track_coro_stack(TuriEnv *env, void *base, size_t size);
+/* Returns the tracking node so callers (async fibers) can hold a back-pointer
+ * for early reclaim; generators may ignore the return value. */
+TuriCoroStack *turi_env_track_coro_stack(TuriEnv *env, void *base, size_t size);
 
 /* Gap 8 (libturi-per-embed-env-and-peripherals): share one loaded spice image
  * across many per-script envs read-only, instead of each env auto-discovering

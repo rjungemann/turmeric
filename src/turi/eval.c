@@ -7489,8 +7489,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             return turi_error("eval: malloc failed for async fiber stack");
         }
 #endif
-        /* turi-value-pool-residual-sites: track for reclaim in turi_env_free. */
-        turi_env_track_coro_stack(env, fiber->stack, TURI_ASYNC_STACK_SIZE);
+        /* turi-value-pool-residual-sites: track for reclaim in turi_env_free.
+         * turi-async-fiber-stack-reclaim: keep the node so the scheduler can
+         * munmap this stack early once the fiber reaches TURI_FIBER_DONE,
+         * instead of holding it until env teardown (O(N) growth otherwise). */
+        fiber->stack_node =
+            turi_env_track_coro_stack(env, fiber->stack, TURI_ASYNC_STACK_SIZE);
 
 #if !defined(__EMSCRIPTEN__) && defined(__APPLE__)
 #  pragma clang diagnostic push

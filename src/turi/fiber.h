@@ -140,6 +140,12 @@ struct TuriFiber {
     TuriFuture      *own_future;       /* future this fiber resolves/rejects */
     TuriFuture      *awaiting_future;  /* future this fiber is blocked on */
     TuriFiber       *sched_next;       /* intrusive linked list for scheduler */
+    /* turi-async-fiber-stack-reclaim: back-pointer to this fiber's tracked
+     * coro-stack node, so the stack can be munmap'd early on TURI_FIBER_DONE
+     * and the teardown-walk node tombstoned (base = NULL) to avoid a double
+     * free.  NULL for fibers whose stack is not pool-tracked (should not
+     * happen for async fibers). */
+    struct TuriCoroStack *stack_node;
     /* Eval context */
     TuriEnv         *env;
     TuriValue        fn_closure_val; /* pre-evaluated closure to call */
@@ -196,6 +202,15 @@ void turi_future_add_waker(TuriFuture *f, TuriFiber *fiber);
 
 /* Add a fiber to the ready queue. */
 void turi_sched_enqueue(TuriEnv *env, TuriFiber *fiber);
+
+/* turi-async-fiber-stack-reclaim: release a finished fiber's execution stack
+ * early.  Call from the SCHEDULER side only, right after a
+ * `swapcontext(&sched_ctx, &fiber->ctx)` returns: if the fiber reached
+ * TURI_FIBER_DONE it is no longer running on its stack, so the mapping can be
+ * munmap'd now instead of accumulating until env teardown.  Tombstones the
+ * matching coro-stack node so turi_sched_free does not double-free.  A no-op
+ * for fibers that are not yet done or whose stack was already reclaimed. */
+void turi_fiber_reclaim_if_done(TuriEnv *env, TuriFiber *fiber);
 
 /* Run the event loop until all fibers and timers complete. */
 void turi_run_event_loop(TuriEnv *env);
