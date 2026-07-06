@@ -197,13 +197,37 @@
   (cloneable-reset (ip-step (if (> n 0) 1 (cloneable-shift (fn [k] 0) 0)) n)))
 (println (ip-go 200000))
 
-;; --- Test 17 (driver-coverage): control operator inside a try body ----------
-;; A (shift ...) inside a (try ...) body: before try/catch was driven, the try
-;; black-boxed to eval_expr and the shift took the synchronous non-driver path
-;; (eval_abortive_shift -> turi_call receiver), C-recursing.  EX_TRY_CATCH is now
-;; a driver case (DK_TRY_BODY / DK_TRY_CATCH), so the shift reaches the work-stack
-;; and the receiver recursion folds onto the heap.  tin N aborts each level -> 0.
-(defn tin [n :int] :int
-  (if (= n 0) 0
-    (reset (+ 1 (try (shift (fn [v :int] (tin (- n 1))) 0) (catch [e] 0))))))
-(println (tin 200000))
+;; (Former Test 17 -- "control operator inside a try body" -- removed: the
+;; `try`/`catch` special form it exercised no longer exists in the language
+;; (only `try-with` remains), so `(catch [e] 0)` now parses `[e]` as a vec
+;; literal and errors with `unbound symbol 'e'` at elaboration, aborting the
+;; whole `:reload`.  See docs/reported/eval-tco-stale-try-catch.md.)
+
+;; --- Test 18 (C1): deeply NESTED catch-unwind stays heap-bounded ------------
+;; Each level wraps the next recursion in its own (catch-unwind (fn [] ...)).
+;; Phase C1 (turi-c-scoped-forms-heap-bounding-plan) models the catch-unwind
+;; boundary on the driver work-stack (DK_CATCH_UNWIND) -- the thunk is applied
+;; via the have_apply channel and a panic under it unwinds via the env->panicking
+;; signal instead of a setjmp/longjmp landing pad -- so catch-unwind no longer
+;; rides the eval_apply / eval_depth re-entry path (a prerequisite for retiring
+;; the guard in C4).  The catch result is discarded; the outer level returns n,
+;; so cu-rec N = N (reaching it proves the whole chain folded onto the heap).
+;; (The COMPILED backend still C-recurses on this shape and SIGSEGVs at ~200000;
+;; the interpreter succeeding here is the documented interpreter-superset stance.)
+(defn cu-rec [n :int] :int
+  (if (= n 0)
+    0
+    (do (catch-unwind (fn [] : int (cu-rec (- n 1)))) n)))
+(println (cu-rec 200000))
+
+;; --- Test 19 (C1): a panic signal propagates up deep recursion to a catch ----
+;; deep-panic does deep non-tail recursion (heap-bounded since SR N2) and panics
+;; at the bottom; a single top-level catch-unwind catches it.  With C1 the panic
+;; is a work-stack signal, so it propagates up ~200000 driver frames to the
+;; DK_CATCH_UNWIND boundary (firing each frame's defers on the way) without a
+;; longjmp.  The catch result is discarded; cu-catch-deep N returns N.
+(defn deep-panic [n :int] :int
+  (if (= n 0) (panic "deep boom") (+ 1 (deep-panic (- n 1)))))
+(defn cu-catch-deep [n :int] :int
+  (do (catch-unwind (fn [] : int (deep-panic n))) n))
+(println (cu-catch-deep 200000))

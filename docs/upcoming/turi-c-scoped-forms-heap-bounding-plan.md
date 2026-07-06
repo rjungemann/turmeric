@@ -50,6 +50,24 @@ by a driver `DK_*` frame. The same shape applies here:
 
 ### Phase C1 -- `catch-unwind` on a work-stack panic signal
 
+> **Status (landed 2026-07-06).** Implemented in `src/turi/eval.c`:
+> `DK_CATCH_UNWIND` (a driver descend + consume case modeled on `DK_RESET`),
+> `panicking` promoted to a propagating signal folded into a single
+> `env_signaled()` helper (replacing the raw `returning || throwing || aborting`
+> disjunction at ~94 sites), a `g_catch_stack` of `TuriCatchBoundary`s that lets
+> a `panic` pick the innermost boundary and unwind via the signal (driver) or
+> `longjmp` (setjmp fallback, kept for `catch-panic-of` and non-driver callers),
+> and defer-during-unwind firing that clears `panicking` per defer body while a
+> new `g_firing_panic_defer` flag preserves double-panic detection. Regressions
+> `cu-rec` / `cu-catch-deep` at 200000 added to `tests/turi/eval-tco.{tur,sh}`.
+> Note found in flight: the interpreter's *pre-C1* nested `catch-unwind` was
+> already effectively heap-bounded (the SR driver folds the recursion; it reaches
+> 5M deep on a 2MB stack without tripping the guard), so C1 is a work-stack
+> *modeling* change (moving `catch-unwind` off the `eval_apply`/`eval_depth`
+> re-entry path -- a C4 prerequisite) rather than a crash fix. The **compiled**
+> backend still SIGSEGVs on the same shape at ~200000 (verified), which is the
+> documented interpreter-superset divergence.
+
 - Promote the existing `env->panicking` bool (`src/turi/eval.c:7462,7488`, set
   on panic start and cleared when the setjmp landing pad catches it) into a
   first-class *propagating* signal, parallel to `env->aborting` -- i.e. reuse
