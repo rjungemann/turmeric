@@ -140,9 +140,12 @@ cannot drift silently.
   interpreter stops at elaboration), so there is nothing to evaluate -- carved
   as unreachable, not unimplemented. This is the **only** carved `EX_*` kind
   (`tools/check_turi_parity.py` reports 116/117 handled, 1 carved, 0 gaps).
-- **Module preload gap.** `json.tur` and `schema.tur` are reader-gated: the
-  interpreter loads them only behind `-Xjson-reader` / `-Xschema-reader` (or
-  `TUR_TURI_FULL_PRELUDE=1`), matching the compiled auto-load set on demand.
+- **Module preload gap.** `json.tur` and `schema.tur` sit outside the static
+  `prelude[]` array the parity ratchet tracks, but the JR0/RD reader-macro
+  auto-load blocks (right after `prelude[]` in `cmd_eval_h`) preload them
+  unconditionally, so their public names resolve under `--interpret`. They stay
+  listed in `turi-preload-carve-out.txt` because they are gaps relative to
+  `prelude[]`, not because they are unavailable at runtime.
 
 The interpreter also intentionally **never frees** its registered natives and
 process-lifetime closures, so the harnesses that exercise it default to

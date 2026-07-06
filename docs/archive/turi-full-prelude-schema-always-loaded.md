@@ -1,5 +1,7 @@
 # turi_full_prelude gate is dead: json/schema are now always preloaded
 
+**Status: RESOLVED** (retired the vestigial flag; see Resolution below).
+
 **Summary:** `tests/run-turi-full-prelude.sh` asserts `TUR_TURI_FULL_PRELUDE`
 toggles a *carved* module's availability, probing `schema/alt`. But the
 interpreter now preloads `json.tur` and `schema.tur` **unconditionally**, so
@@ -51,3 +53,27 @@ Pick one, as a maintainer intent call:
 
 Option 1 matches the observed direction of travel (contract/mutmap already
 graduated into the default prelude per the code comment).
+
+## Resolution
+
+Took option 1 -- retired the vestigial flag. Since the JR0/RD reader-macro
+auto-load blocks (`cmd_eval_h`, `src/main.c`) already load `json.tur` +
+`schema.tur` unconditionally under `--interpret`, the `TUR_TURI_FULL_PRELUDE=1`
+opt-in loaded them a redundant second way and observably did nothing.
+
+- `src/main.c`: removed `turi_full_prelude_enabled()` and the `full_extra[]`
+  opt-in block; the JR0/RD blocks now load json/schema unconditionally (their
+  previous `if (!turi_full_prelude_enabled())` guards are gone).
+- `tests/run-turi-full-prelude.sh` + its `CMakeLists.txt` `add_test` were
+  removed -- the gate cannot hold (no module is flag-sensitive, because none is
+  flag-gated anymore).
+- `docs/artifacts/turi-preload-carve-out.txt` + `docs/guides/turi-parity-guide.md`
+  updated: json/schema stay documented as gaps *relative to the static
+  `prelude[]`* the parity ratchet tracks, with a note that they are in fact
+  preloaded unconditionally via JR0/RD (their names resolve under `--interpret`).
+
+Verified: `schema/alt` still resolves under `--interpret` (rc=0);
+`TUR_TURI_FULL_PRELUDE=1` is now a no-op; `check_turi_native_parity.py` stays
+green (json/schema still absent from `prelude[]`); `tests/run-turi.sh` unchanged
+at 1426 passed (the 3 remaining `van-laarhoven-*-consumer-*` fixtures are a
+separate report).

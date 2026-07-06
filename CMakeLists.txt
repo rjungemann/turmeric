@@ -353,17 +353,6 @@ add_test(
   COMMAND bash tests/run-turi.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
-# Prereq 3c (turi-open-reports-prereqs.md): TUR_TURI_FULL_PRELUDE=1 opts the
-# interpreter into loading the carved stdlib modules (contract/mutmap/json/
-# schema) on top of the default prelude.  Asserts the flag toggles a carved
-# module's availability (off -> unbound, on -> defined) and honors the =1
-# convention.
-add_test(
-  NAME turi_full_prelude
-  COMMAND bash tests/run-turi-full-prelude.sh
-  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-)
-
 # Phase S0: tur repl / libturi smoke tests
 add_test(
   NAME tur_repl_tests

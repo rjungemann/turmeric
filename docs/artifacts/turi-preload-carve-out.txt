@@ -1,20 +1,24 @@
 # turi interpreter preload carve-outs
 #
 # Modules the COMPILED path auto-loads (stdlib_files[], src/main.c) but the
-# --interpret/tur eval prelude (prelude[] in cmd_eval, src/main.c) intentionally
-# does NOT preload.  Each is a known preload gap: its public names are "unknown
-# function / unbound variable" under --interpret until the module joins the
-# prelude (the harness-flip "missing native" bucket).  Listing a module here
-# asserts the gap is deliberate; check_turi_native_parity.py fails the build if
-# a gap module is missing here, or if an entry here is no longer a gap (stale).
+# --interpret/tur eval STATIC prelude (prelude[] in cmd_eval_h, src/main.c) does
+# NOT list.  check_turi_native_parity.py computes the gap set as
+# compiled-auto-load minus that prelude[] array; every gap module must carry a
+# one-line rationale here (an undocumented gap fails the build; a stale entry --
+# one now in prelude[] or no longer auto-loaded -- also fails).
 #
-# Setting TUR_TURI_FULL_PRELUDE=1 (prereq 3c) opts the interpreter into loading
-# exactly these carved modules on top of the default prelude, for iterating /
-# measuring the bucket under --interpret without changing the default path.
+# NOTE: "gap relative to prelude[]" is not the same as "unavailable at runtime".
+# json.tur and schema.tur are preloaded unconditionally by the JR0/RD
+# reader-macro auto-load blocks that run right after prelude[] (so #json(...) and
+# #json-str<T>(...) lowerings resolve), so their public names DO resolve under
+# --interpret; they are simply loaded outside the prelude[] array the parity
+# ratchet tracks.  (The retired TUR_TURI_FULL_PRELUDE=1 opt-in used to load them
+# a second way -- JR0/RD already covers it unconditionally, so the flag and its
+# gate test were removed.)
 #
 # Format:  <module>.tur -- <one-line rationale>
 # See docs/archive/history/turi-harness-flip-reconciliation.md and
 #     docs/archive/history/turi-open-reports-prereqs.md (prereqs 2c, 3a, 3b).
 
-json.tur    -- reader-backed (-Xdata-literals/-Xjson gated); preloaded only behind the same -X flag as the compiled path, not unconditionally.
-schema.tur  -- reader-backed (-X gated) and depends on json.tur; same conditional-preload story as json.tur.
+json.tur    -- reader-backed (#json / -Xjson); not in the static prelude[], but unconditionally preloaded by the JR0 reader-macro auto-load block after prelude[].
+schema.tur  -- reader-backed (#json-str<T>) and depends on json.tur; not in prelude[], unconditionally preloaded by the RD block right after json.tur.
