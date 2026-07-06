@@ -244,3 +244,26 @@
 (defn at-rec [n :int] :int
   (if (= n 0) 0 (atomically (stm (+ 1 (at-rec (- n 1)))))))
 (println (at-rec 200000))
+
+;; --- Test 21 (C3): deeply NESTED effect handler is heap-bounded -------------
+;; Two recursive-handler shapes that both used to trip the eval_depth guard
+;; ("recursion limit exceeded") at 200000, because ws_capturable's static depth
+;; budget rejected the self-recursive handler and the whole (handle ...) fell to
+;; the ucontext fiber path (eval_handle), which C-recurses one fiber per level:
+;;   - hb-rec: recursion in the handle BODY -- fixed by cycle-aware ws_capturable
+;;     (Phase C3 Step 1), so the handle runs on the work-stack DK_PROMPT path and
+;;     the body recursion folds.
+;;   - hr-rec: recursion in the resume VALUE arg -- fixed by driving that arg on
+;;     the work-stack (Phase C3 Step 2, DK_RESUME) instead of eval_expr.
+;; Each level's handler resumes k, so both fold to n.
+(defeffect TcoAsk [] :int)
+(defn hb-rec [n :int] :int
+  (if (= n 0) 0
+    (handle (+ (perform (TcoAsk)) (hb-rec (- n 1)))
+      (TcoAsk [] k) (resume k 1))))
+(println (hb-rec 200000))
+(defn hr-rec [n :int] :int
+  (if (= n 0) 0
+    (handle (+ 1 (perform (TcoAsk)))
+      (TcoAsk [] k) (resume k (hr-rec (- n 1))))))
+(println (hr-rec 200000))

@@ -122,6 +122,42 @@ by a driver `DK_*` frame. The same shape applies here:
 
 ### Phase C3 -- fibers (`async` / `await` / `handle`)
 
+> **Status (landed 2026-07-06).** Took approach (a) -- keep fibers, but stop
+> *recursive handlers* from falling to the fiber path in the first place, so
+> they run on the already-bounded work-stack `DK_PROMPT` path. Two fixes in
+> `src/turi/eval.c`:
+>
+> 1. **Cycle-aware `ws_capturable`** -- the static capturability analysis
+>    recurses into a direct foldable callee's body, so a self-/mutually-recursive
+>    handler always exceeded its depth budget (64) and forced the whole `handle`
+>    to `eval_handle` (a `ucontext` fiber per level). It now records the fns on
+>    the analysis path and treats a re-entry as capturable (the recursive call
+>    folds on the work-stack by the inductive hypothesis). Fixes recursion in a
+>    handle **body**.
+> 2. **Driven `resume` value arg (`DK_RESUME`)** -- `EX_RESUME` used to
+>    `eval_expr` its value argument, so `(resume k (rec ...))` C-recursed. The
+>    value is now driven on the work-stack under a `DK_RESUME` frame that does
+>    the ws/fiber dispatch when the value returns; `ws_capturable`'s `EX_RESUME`
+>    rule is relaxed to allow a *capturable* (driven) value. Fixes recursion in a
+>    resume **value**.
+>
+> Both recursive-handler shapes (`hb-rec`, `hr-rec`) now run 200000 deep without
+> tripping the guard (were "recursion limit exceeded"); added to
+> `tests/turi/eval-tco.{tur,sh}` (22/22). All 235 effect / delimited-control /
+> generator / continuation turi fixtures pass; full `run-turi.sh` 1425/3
+> (pre-existing HKT). Two pre-existing defects found and filed, **not** fixed
+> here (neither blocks C4 -- neither trips the guard):
+>
+> - `docs/reported/turi-ws-perform-capture-accumulator-leak.md` -- the DC
+>   work-stack `perform` capture orphans a frame's arg-accumulator `malloc`;
+>   a growth leak now exercised at scale by recursive handlers (masked by the
+>   `detect_leaks=0` interpreter harness policy).
+> - `docs/reported/turi-async-await-deep-recursion-garbage.md` -- deeply
+>   recursive `async`/`await` returns a garbage pointer past depth ~100-500 (a
+>   fiber-scheduler / future correctness bug, not a heap-bounding trip). `async`/
+>   `await` does not C-recurse to the guard, so it is out of the guard-retirement
+>   critical path; fixing the correctness bug is scoped to the reported note.
+
 - Largest piece: the effect/async runtime is `ucontext`-based. Either (a) keep
   fibers but ensure a fiber's *own* recursion is heap-bounded (it already runs on
   the driver inside the fiber), and bound only the per-suspension cost, or

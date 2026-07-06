@@ -4513,6 +4513,14 @@ typedef enum {
                       * expr = the EX_STM, index = next item, frame = enclosing.
                       * A retry/abort request on g_stm_tx short-circuits the rest
                       * of the block (matching the eval_expr_impl EX_STM loop). */
+    DK_RESUME,       /* C3: a (resume k value) whose `value` is driven on the
+                      * work-stack (was eval_expr), so recursion in the resume
+                      * value arg folds instead of C-recursing.  last = the
+                      * evaluated continuation k, frame = enclosing, tail = the
+                      * resume's tail-ness.  On the value's return, DK_RESUME
+                      * dispatches: a ws continuation re-installs its prompt +
+                      * clone (as the descend case did), a fiber continuation
+                      * calls eval_resume_cont with the driven value. */
 } DriveKind;
 
 typedef struct {
@@ -4977,6 +4985,18 @@ static bool ws_has_perform(const Expr *e) {
     }
 }
 
+/* C3: cycle guard for ws_capturable's descent into recursive callee bodies.
+ * A self-/mutually-recursive foldable call folds on the work-stack (DK_CALL_RET),
+ * so by the inductive hypothesis its performs are capturable -- but the static
+ * `depth` budget alone rejects every recursive handler (the descent re-enters the
+ * same fn until depth hits 0 -> false -> fiber path, which C-recurses one
+ * ucontext per level).  Recording the fns currently on the analysis path lets a
+ * re-entry short-circuit to `true`, so recursive handlers run on the bounded
+ * DK_PROMPT path instead. */
+#define WSCAP_MAX_FNS 128
+static _Thread_local const void *g_wscap_fns[WSCAP_MAX_FNS];
+static _Thread_local int         g_wscap_n;
+
 /* Decide whether a handle body can run on the work-stack: true iff every
  * perform reachable from `e` is reached through driver-transparent forms (so
  * the perform lands in eval_drive_ex's descending switch with the prompt
@@ -5042,8 +5062,12 @@ static bool ws_capturable(TuriEnv *env, EvalFrame *frame, const Expr *e, int dep
         return ws_capturable(env, frame, e->as.with_handler_.body, depth);
     }
     case EX_RESUME:
+        /* C3: k is still evaluated via eval_expr (must be perform-free), but the
+         * value arg is now driven on the work-stack (DK_RESUME), so it only needs
+         * to be capturable -- a performing/recursive resume value no longer
+         * forces the fiber path. */
         return !ws_has_perform(e->as.resume_.resume->k) &&
-               !ws_has_perform(e->as.resume_.resume->value);
+               ws_capturable(env, frame, e->as.resume_.resume->value, depth);
     case EX_CALL: {
         for (uint32_t i = 0; i < e->as.call_.n_args; i++)
             if (!ws_capturable(env, frame, e->as.call_.args[i], depth)) return false;
@@ -5055,7 +5079,16 @@ static bool ws_capturable(TuriEnv *env, EvalFrame *frame, const Expr *e, int dep
                 fv.as_closure->fn && ((FnDef *)fv.as_closure->fn)->body) {
                 FnDef *fn = (FnDef *)fv.as_closure->fn;
                 if (fn->body->kind == EX_INLINE_C) return true;  /* leaf, no perform */
-                return ws_capturable(env, fv.as_closure->captured, fn->body, depth - 1);
+                /* C3: cycle detection -- a recursive call to a fn already on the
+                 * analysis path folds on the work-stack, so treat it as capturable
+                 * (the surrounding non-recursive parts are still checked). */
+                for (int i = 0; i < g_wscap_n; i++)
+                    if (g_wscap_fns[i] == (const void *)fn) return true;
+                if (g_wscap_n >= WSCAP_MAX_FNS) return false;   /* too many fns: give up */
+                g_wscap_fns[g_wscap_n++] = (const void *)fn;
+                bool cap = ws_capturable(env, fv.as_closure->captured, fn->body, depth - 1);
+                g_wscap_n--;
+                return cap;
             }
         }
         /* Native / indirect callee: cannot fold; safe iff no performing value is
@@ -5660,39 +5693,17 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 if (turi_is_error(k) || env_signaled(env)) {
                     cur = k; descending = false; break;
                 }
-                TuriValue v = eval_expr(env, cf, re->value);
-                if (turi_is_error(v) || env_signaled(env)) {
-                    cur = v; descending = false; break;
-                }
                 if (k.tag != TURI_EFFECT_CONT) {
                     cur = turi_error("eval: resume: not a continuation");
                     descending = false; break;
                 }
-                if (!k.as_cont->ws) {
-                    cur = eval_resume_cont(env, cf, k.as_cont, v);  /* fiber cont */
-                    descending = false; break;
-                }
-                TuriWsCont *wc = k.as_cont->ws;
-                /* True multishot: re-install the prompt and push an INDEPENDENT
-                 * clone of the captured slice, then feed v to the hole.  Cloning
-                 * keeps repeated resumes (and resumes of an escaped k) from
-                 * sharing the original's owned frames / arg accumulators. */
-                DRIVE_PUSH(((DriveCont){ .kind = DK_PROMPT, .aux = (void *)wc->handler,
-                                         .frame = wc->handler_frame, .tail = tail,
-                                         .index = 1,
-                                         .saved_module = env->current_module,
-                                         .was_no_unwind = env->in_no_unwind }));
-                if (wc->n_frames) {
-                    DriveCont *clone = (DriveCont *)malloc(wc->n_frames * sizeof(DriveCont));
-                    clone_ws_slice(env, wc->frames, wc->n_frames, clone);
-                    for (size_t i = 0; i < wc->n_frames; i++)
-                        DRIVE_PUSH(clone[i]);
-                    free(clone);
-                }
-                env->current_module = wc->perf_module;
-                env->in_no_unwind   = wc->perf_no_unwind;
-                env->defer_stack    = wc->perf_defer;
-                cur = v; descending = false;
+                /* C3: drive re->value on the work-stack (was eval_expr) so a
+                 * recursive resume value arg -- (resume k (rec ...)) -- folds
+                 * instead of C-recursing.  DK_RESUME does the ws/fiber dispatch
+                 * once the value returns. */
+                DRIVE_PUSH(((DriveCont){ .kind = DK_RESUME, .last = k,
+                                         .frame = cf, .tail = tail }));
+                control = re->value; tail = false; descending = true;
                 break;
             }
             case EX_GET_FIELD: {
@@ -6090,6 +6101,42 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 }
                 free(tx->w_tv); free(tx->w_val); free(tx);
                 len--;
+                break;
+            }
+            case DK_RESUME: {
+                /* C3: the resume value arg produced `cur`.  On a signal/error,
+                 * propagate.  Otherwise dispatch the resume with the driven
+                 * value: a ws continuation re-installs its prompt + an
+                 * independent clone of the captured slice and feeds the value to
+                 * the hole (multishot); a fiber continuation calls
+                 * eval_resume_cont.  Mirrors the former inline EX_RESUME code. */
+                TuriValue  k    = top->last;
+                EvalFrame *rcf  = top->frame;
+                bool       rtl  = top->tail;
+                if (signaled) { len--; break; }
+                TuriValue v = cur;
+                len--;   /* pop DK_RESUME */
+                if (!k.as_cont->ws) {
+                    cur = eval_resume_cont(env, rcf, k.as_cont, v);  /* fiber cont */
+                    break;
+                }
+                TuriWsCont *wc = k.as_cont->ws;
+                DRIVE_PUSH(((DriveCont){ .kind = DK_PROMPT, .aux = (void *)wc->handler,
+                                         .frame = wc->handler_frame, .tail = rtl,
+                                         .index = 1,
+                                         .saved_module = env->current_module,
+                                         .was_no_unwind = env->in_no_unwind }));
+                if (wc->n_frames) {
+                    DriveCont *clone = (DriveCont *)malloc(wc->n_frames * sizeof(DriveCont));
+                    clone_ws_slice(env, wc->frames, wc->n_frames, clone);
+                    for (size_t i = 0; i < wc->n_frames; i++)
+                        DRIVE_PUSH(clone[i]);
+                    free(clone);
+                }
+                env->current_module = wc->perf_module;
+                env->in_no_unwind   = wc->perf_no_unwind;
+                env->defer_stack    = wc->perf_defer;
+                cur = v;   /* feed v into the cloned slice; keep returning */
                 break;
             }
             case DK_IF_BRANCH: {
