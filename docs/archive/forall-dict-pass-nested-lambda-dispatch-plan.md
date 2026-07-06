@@ -14,16 +14,12 @@ Positive fixture: `tests/fixtures/van-laarhoven-lens-show-mapper/`.  Phase 4's
 ## Residual follow-up (still guarded)
 
 The captureless-mapper-to-closure conversion carries exactly ONE env dict and
-promotes a mapper that has no other captures.  Three shapes remain guarded:
+promotes a mapper that has no other captures.  Three shapes remain guarded by
+TUR-E0311 -- a **multi-class mapper** (N dicts), a **capturing mapper**, and
+**deeper nesting** -- and are broken out into their own tracked plan so they do
+not get lost against this landed one:
 
-- **Multi-class mapper** -- dispatches two+ distinct constraint classes from one
-  nested lambda; the env would need a slot per class.  Generalize the converter
-  to capture N dicts (an env struct field per dispatched class).
-- **Capturing mapper** -- already an `EX_CLOSURE` (captures a value like set/over's
-  `b`); the converter currently only promotes captureless mappers.  Extend it to
-  ADD the dict capture(s) to an existing closure's env.
-- **Deeper nesting** -- a dispatch two lambdas deep; each intermediate lambda must
-  thread the dict through its own env.
+**->** `docs/upcoming/v1/forall-dict-pass-nested-mapper-general-plan.md`.
 
 ## The hole
 

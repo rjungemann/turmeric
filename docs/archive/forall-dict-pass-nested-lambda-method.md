@@ -10,7 +10,7 @@ captures the constraint's runtime dict and dispatches through the env-loaded dic
 that dispatches >1 class, or a capturing mapper, or a dispatch in a deeper nested
 lambda) is still guarded with TUR-E0311 -- negative fixture
 `tests/fixtures/errors/forall-dict-nested-lambda-multiclass/`; tracked as future
-work in the plan above.
+work in `docs/upcoming/v1/forall-dict-pass-nested-mapper-general-plan.md`.
 **Area:** `src/compiler/elab_call.c` (dict-clone lowering), `src/compiler/emit_core.c`
 (dict-param dispatch).
 
