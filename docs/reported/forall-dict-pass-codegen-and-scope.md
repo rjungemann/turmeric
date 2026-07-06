@@ -8,7 +8,14 @@ inner function is a constrained rank-2 arg). The three sibling flags in the
 same plan family (`forall-kinds`, `forall-constraints`, `hkt-hrt`,
 `hrt-curried-result`) are unaffected and can graduate on their own.
 
-## Status: OPEN
+## Status: OPEN (Deficit 1 RESOLVED 2026-07-06; Deficit 2 remains)
+
+**Deficit 1 (codegen return-type threading) is fixed** -- `forall-dict-show/`
+and `van-laarhoven-lens-concrete/` now emit clean C (no `-Wint-conversion`) and
+run correctly, and the full suite is green (`1944 passed, 0 failed`).  See the
+"Resolution -- Deficit 1" section below.  **Deficit 2 (multi-constraint / HKT
+method receivers) is still open** and remains the graduation blocker; the flag
+stays behind `--enable=forall-dict-pass` with a bumped `expires_at` (0.28.0).
 
 The elaboration-side plumbing for constrained rank-2 arguments lands correctly
 (the `TY_FORALL` carries a constraint vector; the call site sees it), but the
@@ -51,6 +58,49 @@ carrier ABI). The by-value ABI work landed since then (see the graduated
 broadened method return types beyond the carrier, and the dict-clone was
 never updated in step.
 
+## Resolution -- Deficit 1 (2026-07-06)
+
+Fixed in three narrow codegen threads; all keyed on the dict-clone's uniform
+int64-carrier ABI. The dict-clone body itself already casts its dispatch result
+to int64 correctly -- the mismatches were all at the *boundaries* where that
+int64 carrier meets a concrete method-result type.
+
+1. **Poly-wrapper return type** (`src/compiler/elab_call.c`,
+   `make_dict_clone` + `make_poly_wrapper_ex`). The dict-clone binding is now
+   back-linked to its `FnDef` (`cb->source_fn_def = cf`) so
+   `make_poly_wrapper_ex` can see it is a dict-clone and carry the wrapper's
+   result as `int64` (the carrier) instead of the method's declared C type
+   (`const char *` for `Show::show`). This was the exact
+   `int64_t -> const char *` error quoted above; it fixed `forall-dict-show/`
+   outright. The M7 aggregate `result_full_type` block is skipped for a
+   dict-clone wrapper for the same reason.
+
+2. **Closure-capture of a carrier-held pointer param**
+   (`src/compiler/emit_fns.c` param emitter + `src/compiler/emit_expr.c`
+   capture site, new `Binding::emit_carrier_holds_ptr`). A dict-clone's
+   poly-carrier param (`s : Point`) is the int64 carrier, but a closure that
+   captures it stores it into an env field typed `tur_adt_Point *`. The capture
+   assignment now bridges `int64 -> pointer` through `intptr_t` (field reads
+   already bridged via the heap-ADT-recv path). This cleared 5 of the 7
+   `van-laarhoven-lens-concrete/` sites.
+
+3. **Generic (tyvar-returning) call result at a pointer return**
+   (`src/compiler/emit_fns.c` return paths + `emit_tail_call_returns_tyvar_-
+   carrier` in `src/compiler/emit_expr.c`). `(run-id (l g s))` calls a generic
+   fn whose declared result is a bare tyvar (lowered to int64); when it resolves
+   to a concrete pointer composite (`Point`) the elaborator keeps the composite
+   type (a reinterpret cannot carry it) but the C value is still int64. The
+   return now bridges `int64 -> pointer` when the callee is NOT resolved to a
+   concrete by-value monomorph spec (the `vl-wide-mono` path already returns the
+   pointer, so the bridge is inert there). This cleared the last 2 sites.
+
+Regression fixture added: `tests/fixtures/forall-dict-mixed-return/` mirrors
+`forall-dict-show/` but exercises BOTH a pointer-returning method
+(`Show::show : cstr`) and a scalar-returning one (`Rank::rank : int`) through
+the one dict-clone body, with an `expected.c` snapshot locking the clean
+codegen. The three `van-laarhoven-lens-wide-*` snapshots were regenerated (the
+capture-cast improvement also removed a latent `-Wint-conversion` there).
+
 ## Deficit 2 -- scope: single constraint only, no HKT method receivers
 
 Even with the codegen fixed, the current implementation gates itself down to
@@ -75,15 +125,13 @@ Mode-B plan sketches it; nobody has done the emit-side work.
 
 Two independent fixes, in this order:
 
-1. **Codegen return-type threading** -- `src/compiler/elab_call.c` around
-   `emit_reresolve_method_call` (roughly line 5419) and its call sites at
-   `:4604`, `:6067`, `:6194`, `:6279`. Thread the method's declared return
-   type through the dispatch emit; cast the dict slot load to it. Add a
-   regression fixture that mirrors `forall-dict-show/` but exercises a
-   pointer-returning method (`Show::show`, an ADT constructor) and a
-   scalar-returning one (`Ord::compare`). This alone unblocks
-   `forall-dict-show/` and 6 of the 7 sites in
-   `van-laarhoven-lens-concrete/`.
+1. **Codegen return-type threading** -- **DONE (2026-07-06)**, see "Resolution
+   -- Deficit 1" above. The fix threaded the carrier ABI through the three
+   dict-clone boundaries (poly-wrapper result type, closure-capture of a
+   carrier-held pointer param, and generic-tyvar call result at a pointer
+   return) rather than through a single `emit_reresolve_method_call` site.
+   Regression fixture `forall-dict-mixed-return/` added; all 7 sites in
+   `van-laarhoven-lens-concrete/` and `forall-dict-show/` are clean.
 
 2. **Multi-constraint + HKT-receiver dicts** -- widen the guard at
    `elab_call.c:4614-4622` from "single constraint, star-kind receiver" to

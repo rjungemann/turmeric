@@ -247,6 +247,36 @@ static const EmitAbiSpecialization *find_matched_abi_spec(
     return NULL;
 }
 
+/* MB2 (constrained-hkt-forall-mode-b-plan): true when the tail leaf of `e` (its
+ * do/let/ascribe-unwrapped last expression) is a call to a fn whose DECLARED
+ * result is a bare type variable AND that call is NOT resolved to a concrete
+ * by-value monomorph spec here.  In that case the call is emitted returning the
+ * int64 carrier, so a function whose C return type is a concrete pointer must
+ * bridge int64->pointer at the return (else -Wint-conversion).  When a concrete
+ * spec IS matched (the wide-by-value monomorphization path calls
+ * `run_id__spec__...Point` returning the pointer), the value is already the
+ * pointer and no bridge is wanted -- so this returns false. */
+bool emit_tail_call_returns_tyvar_carrier(EmitCtx *ctx, const Expr *e) {
+    for (;;) {
+        if (!e) return false;
+        switch (e->kind) {
+            case EX_ASCRIBE: e = e->as.ascribe_.inner; continue;
+            case EX_DO:
+                if (e->as.do_.n == 0) return false;
+                e = e->as.do_.items[e->as.do_.n - 1]; continue;
+            case EX_LET:
+            case EX_LETREC: e = e->as.let_.body; continue;
+            default: break;
+        }
+        break;
+    }
+    if (!e || e->kind != EX_CALL || !e->as.call_.fn_binding ||
+        e->as.call_.fn_binding->type.kind != TY_FN ||
+        e->as.call_.fn_binding->type.as.fn.result_kind != TY_TYVAR)
+        return false;
+    return find_matched_abi_spec(ctx, e, e->as.call_.fn_binding) == NULL;
+}
+
 /* fat-closure-dispatch-aggregate-return: true when a direct call returns a
  * carrier-ABI aggregate *by value* rather than as the int64_t carrier.  A
  * non-generic defn whose declared result is a concrete carrier-ABI aggregate
@@ -5376,8 +5406,20 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         break;
                     }
                 }
-                buf_printf(body, "%s->%s = %s%s;\n",
-                           fat_tmp, field, captured_is_pbp ? "*" : "", cn);
+                /* MB2 (constrained-hkt-forall-mode-b-plan): a dict-clone's
+                 * poly-carrier param is held as the int64 carrier, but its env
+                 * field is the concrete pointer C type (`tur_adt_Point *`).  Cast
+                 * the carrier through intptr_t so the capture is not a
+                 * -Wint-conversion (pointer->intptr_t->pointer is a no-op for the
+                 * non-carrier case, so this only bites carrier-held params). */
+                if (captured->emit_carrier_holds_ptr && !captured_is_pbp) {
+                    const char *fcty = emit_type_c_name(ctx, captured->type);
+                    buf_printf(body, "%s->%s = (%s)(intptr_t)%s;\n",
+                               fat_tmp, field, fcty, cn);
+                } else {
+                    buf_printf(body, "%s->%s = %s%s;\n",
+                               fat_tmp, field, captured_is_pbp ? "*" : "", cn);
+                }
                 free(field);
                 free(cn);
             }

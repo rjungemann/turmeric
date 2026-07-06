@@ -429,6 +429,26 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
             }
         }
     }
+    /* MB2 (constrained-hkt-forall-mode-b-plan): the tail is a call to a generic
+     * fn whose declared result is a bare type variable (`run-id [A] ... : A`),
+     * lowered to the int64 carrier in C.  When A resolves to a concrete
+     * pointer-shaped composite (a :heap ADT like `Point`) the elaborator keeps the
+     * call's full type (a reinterpret cannot carry a composite) but the C value is
+     * still the int64 carrier -- returning it where the fn's C return type is
+     * `tur_adt_Point *` is a -Wint-conversion.  Bridge through intptr_t.  Inert
+     * unless the callee returns a bare tyvar AND the C return type is a pointer. */
+    if (!is_main && ctx->current_fn_ret_ctype &&
+        strchr(ctx->current_fn_ret_ctype, '*') != NULL &&
+        emit_tail_call_returns_tyvar_carrier(ctx, e)) {
+        /* MB2: bridge a generic (tyvar-returning) call's int64 carrier to the
+         * function's concrete pointer C return type.  See the mirror in the
+         * direct-return path; inert when a concrete by-value spec is matched. */
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "return (%s)(intptr_t)%s;\n",
+                   ctx->current_fn_ret_ctype, v);
+        free(v);
+        return;
+    }
     indent_buf(body, ctx->indent);
     if (is_main && result_kind == TY_INT)
         buf_printf(body, "return (int)%s;\n", v);
@@ -1005,6 +1025,16 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                         !type_is_heap_struct(bt) && !type_is_heap_adt(bt) &&
                         !type_uses_carrier_abi(bt))
                         fd->params[i]->emit_carrier_holds_byval = true;
+                    /* MB2 (constrained-hkt-forall-mode-b-plan): a dict-clone's
+                     * poly-carrier param is the int64 carrier, but a concrete
+                     * :heap-ADT / pointer binding type (`Point`) emits its env
+                     * capture field as `tur_adt_Point *`.  Flag the param so the
+                     * closure-capture site bridges int64->pointer (field reads
+                     * already bridge via the heap-ADT-recv path). */
+                    if (fd->dict_clone_class && btc &&
+                        strcmp(btc, "int64_t") != 0 &&
+                        strchr(btc, '*') != NULL)
+                        fd->params[i]->emit_carrier_holds_ptr = true;
                 }
             }
         }
@@ -1640,6 +1670,22 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             indent_buf(file, ctx->indent);
             buf_printf(file, "return %s;\n", bridged);
             free(bridged);
+        } else if (!ret_is_int64_carrier &&
+                   ctx->current_fn_ret_ctype &&
+                   strchr(ctx->current_fn_ret_ctype, '*') != NULL &&
+                   emit_tail_call_returns_tyvar_carrier(ctx, fd->body)) {
+            /* MB2 (constrained-hkt-forall-mode-b-plan): the function's C return
+             * type is a concrete pointer (a :heap ADT like `Point *`), but the
+             * body tail is a call to a generic fn whose declared result is a bare
+             * type variable (`run-id [A] ... : A`), lowered to the int64 carrier.
+             * The elaborator kept the call's full composite type (a reinterpret
+             * cannot carry a composite) so no wrap was inserted, leaving `ret_val`
+             * as the int64 carrier where a pointer is expected -- a
+             * -Wint-conversion.  Bridge through intptr_t.  Inert when the call
+             * resolves to a concrete by-value spec (the wide-monomorphization path
+             * calls `run_id__spec__...Point`, already a pointer). */
+            buf_printf(file, "return (%s)(intptr_t)%s;\n",
+                       ctx->current_fn_ret_ctype, ret_val);
         } else {
             buf_printf(file, "return %s;\n", ret_val);
         }

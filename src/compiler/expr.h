@@ -214,6 +214,16 @@ struct Binding {
      * the int64 carrier to the concrete monomorph pointer and deref, not read the
      * field off the by-value aggregate.  Set in the param emitter (emit_fns.c). */
     bool          emit_carrier_holds_byval;
+    /* MB2 (constrained-hkt-forall-mode-b-plan): true when this parameter's C
+     * signature was emitted as the int64 carrier (the uniform poly-carrier ABI of
+     * a dict-clone) even though the binding's elaborated type is a concrete
+     * POINTER-shaped value (a :heap ADT like `Point`, or a raw ptr).  Field reads
+     * already bridge such a receiver via the heap-ADT-recv path, but a closure
+     * that CAPTURES the param stores it into an env field typed at the concrete
+     * pointer C type (`tur_adt_Point *`), so the capture assignment must cast the
+     * int64 carrier through intptr_t or it is a -Wint-conversion.  Set in the
+     * param emitter (emit_fns.c), consulted at the capture site (emit_expr.c). */
+    bool          emit_carrier_holds_ptr;
     /* True when this binding names a defn whose body is an EX_INLINE_C block.
      * The formal-param emitter (emit_fns.c:423) treats inline-C defns as
      * by-value for struct params even when they would normally cross the

@@ -5570,6 +5570,13 @@ Binding *make_dict_clone(Elab *e, Binding *inner_b, Span span) {
     cf->dict_clone_param = dparam;
     cf->dict_clone_class = cls;
     constraint_set_init(&cf->constraints);
+    /* Back-link the clone binding to its FnDef so a consumer (make_poly_wrapper_ex)
+     * can see this is a dict-clone.  A dict-clone is ALWAYS emitted returning the
+     * int64 carrier (emit_fns.c forces `int64_t` for any dict_clone_class body,
+     * boxing an aggregate `(f a)` result and casting a scalar/pointer method
+     * result through int64), so its poly wrapper must carry int64 too rather than
+     * the method's declared C return type. */
+    cb->source_fn_def = cf;
     Expr *cdef = expr_new(e->arena, EX_FN_DEF, ftype, span);
     cdef->as.fn_def_.fn = cf;
     elab_register_file_def(e, cdef);
@@ -5673,9 +5680,20 @@ Binding *make_poly_wrapper_ex(Elab *e, Binding *inner_b, uint8_t inner_arity,
         arg_bs[i] = apb;
     }
 
+    /* MB2 (constrained-hkt-forall-mode-b-plan): a dict-clone is emitted returning
+     * the int64 carrier for EVERY method result (emit_fns.c forces `int64_t` off
+     * dict_clone_class), so the wrapper that boxes it must return int64 as well --
+     * deriving the result kind from the method's declared type (e.g. `cstr` for
+     * `Show::show`) would make the wrapper body `return dict_clone(...)` an
+     * int64->pointer conversion (the Deficit-1 -Wint-conversion error).  The poly
+     * carrier's caller already casts the int64 result back to the declared type. */
+    bool inner_is_dict_clone = inner_b->source_fn_def &&
+        inner_b->source_fn_def->dict_clone_class != NULL;
+
     /* Build call body: (inner_b x0 x1 ...) */
-    TypeKind inner_result_kind = (inner_b->type.kind == TY_FN)
-        ? inner_b->type.as.fn.result_kind : TY_INT;
+    TypeKind inner_result_kind = inner_is_dict_clone ? TY_INT
+        : ((inner_b->type.kind == TY_FN)
+            ? inner_b->type.as.fn.result_kind : TY_INT);
     Expr **call_args = (Expr **)arena_alloc(e->arena, (inner_arity ? inner_arity : 1) * sizeof(Expr *));
     uint32_t call_poly_mask = 0;
     uint32_t call_agg_mask = 0;
@@ -5727,7 +5745,8 @@ Binding *make_poly_wrapper_ex(Elab *e, Binding *inner_b, uint8_t inner_arity,
      * struct->struct return (valid C) rather than struct->int64 (a hard error).
      * The pack site (EX_POLY_WRAP) then routes the struct-returning wrapper
      * through a carrier-spill shim to satisfy the int64 tur_poly_fn_t.fn ABI. */
-    if (inner_b->type.kind == TY_FN && inner_b->type.as.fn.result_full_type) {
+    if (!inner_is_dict_clone &&
+        inner_b->type.kind == TY_FN && inner_b->type.as.fn.result_full_type) {
         const Type *irf = inner_b->type.as.fn.result_full_type;
         bool aggr = irf->kind == TY_APP;
         if (aggr) {
