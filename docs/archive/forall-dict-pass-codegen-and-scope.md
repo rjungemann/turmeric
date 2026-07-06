@@ -8,14 +8,20 @@ inner function is a constrained rank-2 arg). The three sibling flags in the
 same plan family (`forall-kinds`, `forall-constraints`, `hkt-hrt`,
 `hrt-curried-result`) are unaffected and can graduate on their own.
 
-## Status: OPEN (Deficit 1 RESOLVED 2026-07-06; Deficit 2 remains)
+## Status: RESOLVED (2026-07-06) -- Deficit 1 fixed; Deficit 2 split into its own plan
 
 **Deficit 1 (codegen return-type threading) is fixed** -- `forall-dict-show/`
 and `van-laarhoven-lens-concrete/` now emit clean C (no `-Wint-conversion`) and
 run correctly, and the full suite is green (`1944 passed, 0 failed`).  See the
-"Resolution -- Deficit 1" section below.  **Deficit 2 (multi-constraint / HKT
-method receivers) is still open** and remains the graduation blocker; the flag
-stays behind `--enable=forall-dict-pass` with a bumped `expires_at` (0.28.0).
+"Resolution -- Deficit 1" section below.
+
+**Deficit 2 (multi-constraint / HKT method receivers)** is no longer tracked in
+this report -- it has been promoted to a forward-looking plan with phased tasks:
+[docs/upcoming/v1/forall-dict-pass-multi-constraint-hkt-plan.md](../upcoming/v1/forall-dict-pass-multi-constraint-hkt-plan.md).
+It remains the graduation blocker; the flag stays behind
+`--enable=forall-dict-pass` with a bumped `expires_at` (0.28.0). The Deficit 2
+section below is retained as the originating analysis; the plan supersedes it
+for the actual work.
 
 The elaboration-side plumbing for constrained rank-2 arguments lands correctly
 (the `TY_FORALL` carries a constraint vector; the call site sees it), but the
@@ -105,7 +111,8 @@ capture-cast improvement also removed a latent `-Wint-conversion` there).
 
 Even with the codegen fixed, the current implementation gates itself down to
 **one** constraint and a **`* -> *`** method receiver. From
-[docs/upcoming/v1/constrained-hkt-forall-mode-b-plan.md:161](../upcoming/v1/constrained-hkt-forall-mode-b-plan.md):
+[docs/archive/constrained-hkt-forall-mode-b-plan.md](constrained-hkt-forall-mode-b-plan.md)
+(the "Not yet" note, ~line 161):
 
 > Not yet: multiple constraints and HKT `(f a)` method receivers -- both
 > currently error clearly.
@@ -133,17 +140,18 @@ Two independent fixes, in this order:
    Regression fixture `forall-dict-mixed-return/` added; all 7 sites in
    `van-laarhoven-lens-concrete/` and `forall-dict-show/` are clean.
 
-2. **Multi-constraint + HKT-receiver dicts** -- widen the guard at
-   `elab_call.c:4614-4622` from "single constraint, star-kind receiver" to
-   the general case. Requires (a) allocating N dict slots at the call site
-   instead of one, (b) resolving each method call to the right slot by
-   class-name lookup, (c) handling the receiver-is-`(f a)` case by treating
-   the outer `f` as the dispatched constraint. The mode-B plan sketches the
-   frame layout; the actual emit belongs alongside deficit 1's fixes.
+2. **Multi-constraint + HKT-receiver dicts** -- **promoted to its own plan**:
+   [docs/upcoming/v1/forall-dict-pass-multi-constraint-hkt-plan.md](../upcoming/v1/forall-dict-pass-multi-constraint-hkt-plan.md).
+   That plan documents the current single-constraint architecture (the call
+   site already resolves N dicts into `mb1_dicts`; the clone and emit dispatch
+   are the single-slot parts) and phases the work: (P1) widen the guard +
+   `make_dict_clone` + `emit_call_name` to N (class, dict-param) slots; (P2) the
+   mixed `(Functor f, Show a)` HKT+scalar shape; (P3) fixtures, snapshots, and
+   flag graduation.
 
-Until both fixes land, `forall-dict-pass` cannot graduate. The retirement
-plan for the other four flags in this family lives at
+`forall-dict-pass` cannot graduate until that plan lands. The retirement plan
+for the other four flags in this family lives at
 [docs/upcoming/retire-graduation-ready-hkt-flags-plan.md](../upcoming/retire-graduation-ready-hkt-flags-plan.md);
 `forall-dict-pass` is explicitly held back there and stays on
-`--enable=forall-dict-pass` behind a bumped `expires_at` until this report
-is resolved.
+`--enable=forall-dict-pass` behind a bumped `expires_at` (0.28.0) until the
+Deficit 2 plan lands.

@@ -1,7 +1,7 @@
 ---
 title: Retire the four graduation-ready HKT/forall experiment flags -- Plan
 category: Planning
-description: Four of the five remaining `--enable=<name>` experiment flags (forall-kinds, forall-constraints, hkt-hrt, hrt-curried-result) have no visible feature deficit -- their gated code paths pass fixtures, their plan-doc TODO sections are drained, and they are only held back by inertia. This plan graduates them to always-on in a single change, deletes the `g_opt_*` bits and the disable-side branches, and archives the plan docs. The fifth flag (forall-dict-pass) has a real codegen deficit tracked in docs/reported/forall-dict-pass-codegen-and-scope.md and stays experimental behind a bumped expires_at.
+description: Four of the five remaining `--enable=<name>` experiment flags (forall-kinds, forall-constraints, hkt-hrt, hrt-curried-result) have no visible feature deficit -- their gated code paths pass fixtures, their plan-doc TODO sections are drained, and they are only held back by inertia. This plan graduates them to always-on in a single change, deletes the `g_opt_*` bits and the disable-side branches, and archives the plan docs. The fifth flag (forall-dict-pass) had a codegen deficit (now fixed, archived at docs/archive/forall-dict-pass-codegen-and-scope.md) plus a remaining scope deficit (multi-constraint / HKT-receiver dicts) tracked in docs/upcoming/v1/forall-dict-pass-multi-constraint-hkt-plan.md; it stays experimental behind a bumped expires_at.
 ---
 
 # Retire the four graduation-ready HKT/forall experiment flags -- Plan
@@ -19,17 +19,19 @@ audit of the flags found:
 | `forall-constraints` | None. Mode-A static enforcement of `(forall [a] [(C a)] ...)`; fixtures pass. |
 | `hkt-hrt` | None. Rank-2 forall over a higher-kinded var; skolemiser + unifier already handle `KIND_ARROW{n}`. |
 | `hrt-curried-result` | None. `(forall [a] (-> a (-> a a)))` -- result-type instantiation + boxed-result closure dispatch already work. |
-| `forall-dict-pass` | **Yes** -- dict-clone codegen mis-lowers method return types, and the elaborator refuses multi-constraint / HKT-receiver dicts. See [../reported/forall-dict-pass-codegen-and-scope.md](../reported/forall-dict-pass-codegen-and-scope.md). |
+| `forall-dict-pass` | **Yes** -- dict-clone codegen return-type threading is now fixed ([../archive/forall-dict-pass-codegen-and-scope.md](../archive/forall-dict-pass-codegen-and-scope.md)), but the elaborator still refuses multi-constraint / HKT-receiver dicts. That remaining scope work is planned in [v1/forall-dict-pass-multi-constraint-hkt-plan.md](v1/forall-dict-pass-multi-constraint-hkt-plan.md). |
 
 This plan retires the top four in one change. `forall-dict-pass` stays
-`--enable`-gated with a bumped `expires_at` and a pointer at the bug report.
+`--enable`-gated with a bumped `expires_at` (0.28.0) and a pointer at the
+multi-constraint/HKT plan.
 
 ## Non-goals
 
 - **No new features.** Graduation makes the four gated code paths
   unconditional; it does not extend them.
-- **No fix for `forall-dict-pass`.** That work lives in the bug report and
-  will need its own plan when someone picks it up.
+- **No fix for `forall-dict-pass`.** Its Deficit 1 (codegen) is already fixed;
+  the remaining Deficit 2 (multi-constraint / HKT-receiver dicts) has its own
+  plan at [v1/forall-dict-pass-multi-constraint-hkt-plan.md](v1/forall-dict-pass-multi-constraint-hkt-plan.md).
 - **No changes to the descriptor format.** `ExperimentDescriptor` and the
   `EXPERIMENTS[]` conventions stay as they are.
 
@@ -101,19 +103,21 @@ the gate site whose disable branch collapses.
   - Gates: `src/compiler/elab_call.c:1039` (marks curried result boxed for
     fat dispatch) and `elab_call.c:6144` (instantiates the inner `TY_FN`
     result). Drop both guards; both paths become unconditional.
-  - Plan: `docs/upcoming/v1/constrained-hkt-forall-mode-b-plan.md` stays
-    put -- it is still referenced by the surviving `forall-dict-pass` row.
+  - Plan: the mode-B plan is archived at
+    `docs/archive/constrained-hkt-forall-mode-b-plan.md`; the live tracking for
+    the surviving `forall-dict-pass` row is
+    `docs/upcoming/v1/forall-dict-pass-multi-constraint-hkt-plan.md`.
 
 ## What stays
 
-- **`forall-dict-pass`** stays in `EXPERIMENTS[]`. Bump its `expires_at`
-  from `"0.27.0"` to `"0.29.0"` (two minors out; enough runway to fix
-  the codegen deficit without rushing) and change its `plan_path` comment
-  to point additionally at
-  `docs/reported/forall-dict-pass-codegen-and-scope.md` so the deficit is
-  discoverable from the descriptor.
-- **The mode-B plan** (`constrained-hkt-forall-mode-b-plan.md`) stays in
-  `docs/upcoming/v1/` since `forall-dict-pass` still references it.
+- **`forall-dict-pass`** stays in `EXPERIMENTS[]`. Its `expires_at` was bumped
+  from `"0.27.0"` to `"0.28.0"` (Deficit 1 fixed; Deficit 2 keeps it
+  experimental) and its `plan_path` now points at
+  `docs/upcoming/v1/forall-dict-pass-multi-constraint-hkt-plan.md`, with a
+  descriptor comment cross-linking the archived report so the fixed deficit is
+  discoverable.
+- **The mode-B plan** (`constrained-hkt-forall-mode-b-plan.md`) is archived; the
+  `forall-dict-pass` descriptor now references the Deficit-2 plan instead.
 - **All fixtures** currently passing under `--enable=<flag>` stay green,
   now without the enable line (fixture-level `--enable` lines can drop in
   the same commit).
@@ -139,10 +143,11 @@ One PR:
 2. For each of the four flags, in any order: delete row, delete global,
    delete gate. Land as separate commits within the PR so the graduations
    read cleanly in `git log`, or one commit if the diff is small.
-3. Bump `forall-dict-pass`'s `expires_at` and cross-link the bug report
-   in its descriptor comment.
+3. Bump `forall-dict-pass`'s `expires_at` (done: 0.28.0) and point its
+   `plan_path` at the Deficit-2 plan, cross-linking the archived report in the
+   descriptor comment.
 4. Move `constrained-hkt-forall-plan.md` from `docs/upcoming/v1/` to
-   `docs/archive/`; leave the mode-B plan in place.
+   `docs/archive/` (the mode-B plan is already archived).
 5. Run `bash tests/run.sh` with the 10-minute timeout; regenerate any
    fixtures whose diagnostic surface moved (expected: none).
 6. Archive this plan on merge to `docs/archive/`.
