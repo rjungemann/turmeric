@@ -5660,6 +5660,38 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 if (nf) {
                     wc->frames = (DriveCont *)turi_val_alloc(env, nf * sizeof(DriveCont));
                     memcpy(wc->frames, &st[pidx + 1], nf * sizeof(DriveCont));
+                    /* Re-home each captured frame's malloc'd arg accumulator
+                     * (DK_BUILTIN_ARG / DK_CALL_ARG / DK_MAKE_STRUCT `.aux`)
+                     * into pool memory.  The slice slots st[pidx+1 ..] are
+                     * abandoned when `len` truncates below, so after the memcpy
+                     * these malloc'd arrays are owned ONLY by wc->frames -- but
+                     * wc is pool-allocated and the driver's normal free(acc)
+                     * epilogue never runs for the truncated slots, so without
+                     * this they leak, growing O(performs)
+                     * (turi-ws-perform-capture-accumulator-leak).  A resume
+                     * deep-copies each accumulator afresh via clone_ws_slice
+                     * (fresh malloc, freed by the driver as usual), so the pool
+                     * copy is only ever the capture-time original, reclaimed at
+                     * env teardown like the rest of the continuation. */
+                    for (size_t i = 0; i < nf; i++) {
+                        if (!wc->frames[i].aux) continue;
+                        size_t cnt = 0;
+                        switch (wc->frames[i].kind) {
+                        case DK_BUILTIN_ARG:
+                            cnt = wc->frames[i].expr->as.builtin.n; break;
+                        case DK_CALL_ARG:
+                            cnt = wc->frames[i].expr->as.call_.n_args; break;
+                        case DK_MAKE_STRUCT:
+                            cnt = wc->frames[i].expr->as.make_struct_.n_fields; break;
+                        default: break;  /* aux is a defer mark / boundary, not owned here */
+                        }
+                        if (!cnt) continue;
+                        TuriValue *pool_acc =
+                            (TuriValue *)turi_val_alloc(env, cnt * sizeof(TuriValue));
+                        memcpy(pool_acc, wc->frames[i].aux, cnt * sizeof(TuriValue));
+                        free(wc->frames[i].aux);
+                        wc->frames[i].aux = pool_acc;
+                    }
                 }
                 wc->handler        = (HandleExpr *)st[pidx].aux;
                 wc->handler_frame  = st[pidx].frame;
