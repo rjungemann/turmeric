@@ -858,7 +858,6 @@ typedef struct TuriCatchBoundary {
     void    *saved_defer_stack;
     const char *saved_module;
     bool     saved_no_unwind;
-    uint32_t saved_depth;
     struct TuriCatchBoundary *prev;
 } TuriCatchBoundary;
 
@@ -1499,7 +1498,6 @@ typedef struct TuriResetBoundary {
     TuriPromptKind            kind;
     TuriValue                 result;       /* value an abortive shift delivers */
     /* env state to restore after a longjmp unwinds the intervening C frames */
-    uint32_t                  saved_depth;
     void                     *saved_handler_stack;
     void                     *saved_defer_stack;
     struct TuriResetBoundary *prev;
@@ -1526,7 +1524,6 @@ static inline TuriValue reset_consume_abort(TuriEnv *env, const TuriResetBoundar
     if (env->aborting && env->abort_target == NULL &&
         env->abort_prompt_kind == (int)b->kind) {
         env->aborting      = false;
-        env->eval_depth    = b->saved_depth;
         env->handler_stack = b->saved_handler_stack;
         env->defer_stack   = b->saved_defer_stack;
         return env->abort_value;
@@ -1546,7 +1543,6 @@ static TuriValue eval_reset_boundary(TuriEnv *env, EvalFrame *frame,
     TuriResetBoundary b;
     b.kind                = kind;
     b.result              = turi_nil();
-    b.saved_depth         = env->eval_depth;
     b.saved_handler_stack = env->handler_stack;
     b.saved_defer_stack   = env->defer_stack;
     b.prev                = g_reset_stack;
@@ -1632,7 +1628,6 @@ typedef struct TuriCont {
 typedef struct TuriEscapeBoundary {
     jmp_buf   jmp;
     TuriValue result;       /* value delivered by (k v) */
-    uint32_t  saved_depth;
     void     *saved_handler_stack;
     void     *saved_defer_stack;
 } TuriEscapeBoundary;
@@ -2187,7 +2182,6 @@ static TuriValue eval_callcc_escape(TuriEnv *env, EvalFrame *frame,
 
     TuriEscapeBoundary b;
     b.result              = turi_nil();
-    b.saved_depth         = env->eval_depth;
     b.saved_handler_stack = env->handler_stack;
     b.saved_defer_stack   = env->defer_stack;
 
@@ -2199,7 +2193,6 @@ static TuriValue eval_callcc_escape(TuriEnv *env, EvalFrame *frame,
     if (env->aborting && env->abort_target == (void *)&b) {
         env->aborting      = false;
         env->abort_target  = NULL;
-        env->eval_depth    = b.saved_depth;
         env->handler_stack = b.saved_handler_stack;
         env->defer_stack   = b.saved_defer_stack;
         return env->abort_value;
@@ -5791,7 +5784,6 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 TuriResetBoundary *b = (TuriResetBoundary *)malloc(sizeof(TuriResetBoundary));
                 b->kind                = PROMPT_PLAIN;
                 b->result              = turi_nil();
-                b->saved_depth         = env->eval_depth;
                 b->saved_handler_stack = env->handler_stack;
                 b->saved_defer_stack   = env->defer_stack;
                 b->prev                = g_reset_stack;
@@ -5856,7 +5848,6 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 TuriResetBoundary *b = (TuriResetBoundary *)malloc(sizeof(TuriResetBoundary));
                 b->kind                = is_clone ? PROMPT_CLONEABLE : PROMPT_SERIAL;
                 b->result              = turi_nil();
-                b->saved_depth         = env->eval_depth;
                 b->saved_handler_stack = env->handler_stack;
                 b->saved_defer_stack   = env->defer_stack;
                 b->prev                = g_reset_stack;
@@ -5882,7 +5873,6 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 }
                 TuriEscapeBoundary *b = (TuriEscapeBoundary *)malloc(sizeof(TuriEscapeBoundary));
                 b->result              = turi_nil();
-                b->saved_depth         = env->eval_depth;
                 b->saved_handler_stack = env->handler_stack;
                 b->saved_defer_stack   = env->defer_stack;
                 DRIVE_PUSH(((DriveCont){ .kind = DK_ESCAPE, .aux = b }));
@@ -5916,7 +5906,6 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 b->saved_defer_stack   = env->defer_stack;
                 b->saved_module        = env->current_module;
                 b->saved_no_unwind     = env->in_no_unwind;
-                b->saved_depth         = env->eval_depth;
                 b->prev                = g_catch_stack;
                 g_catch_stack = b;
                 DRIVE_PUSH(((DriveCont){ .kind = DK_CATCH_UNWIND, .aux = b }));
@@ -6020,7 +6009,6 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     env->aborting      = false;
                     env->abort_target  = NULL;
                     cur                = env->abort_value;
-                    env->eval_depth    = b->saved_depth;
                     env->handler_stack = b->saved_handler_stack;
                     env->defer_stack   = b->saved_defer_stack;
                 }
@@ -6047,7 +6035,6 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     env->handler_stack  = b->saved_handler_stack;
                     env->in_no_unwind   = b->saved_no_unwind;
                     env->current_module = b->saved_module;
-                    env->eval_depth     = b->saved_depth;
                     cur = turi_err_result_box(env);
                 } else if (turi_is_error(cur) || env_signaled(env)) {
                     /* propagate cur unchanged */
@@ -6576,9 +6563,11 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
  * so eval_apply is just the (idempotent) module-save wrapper retained for the C
  * call sites (turi_call, thunks, the fiber thunk, the driver's leaf path).
  *
- * Note: a native HOF that re-enters evaluation via turi_call still C-recurses
- * (one eval_apply_driven -> eval_drive_ex per re-entry); the env->eval_depth
- * guard remains load-bearing for that path (trampoline plan T3.4).
+ * Note: a native HOF that re-enters evaluation via turi_call routes through
+ * eval_apply_driven -> eval_drive_ex, where the callee body (and its own
+ * recursion) folds onto the heap work-stack; measured, such re-entry runs
+ * 1,000,000 deep without C-stack growth.  C4 (turi-c-scoped-forms-heap-bounding)
+ * retired the eval_depth guard on the strength of that -- see eval_apply.
  * ---------------------------------------------------------------------- */
 static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
                                    TuriValue *args, uint32_t n_args) {
@@ -6706,30 +6695,24 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
  * epilogue already restores it to the same value, so this is idempotent for the
  * turi-body path and the safety net for the native/inline-C leaf path.
  *
- * F5: this is also where the eval_depth recursion guard now lives.  Before the
- * unification, the guard rode on eval_expr, which the OLD eval_body_tco called
- * once per HOF re-entry level (evaluating the recursive call's args).  The
- * driver evaluates control flow and call args on its heap work-stack WITHOUT
- * re-entering eval_expr, so a native HOF that re-applies a recursing closure
- * (turi_call -> eval_apply -> eval_apply_driven -> eval_drive_ex -> leaf native
- * -> turi_call -> ...) would otherwise never bump eval_depth and would
- * stack-overflow instead of tripping the limit.  eval_apply is on every such
- * C-recursion cycle (and is bypassed entirely by the folded non-tail and reused
- * tail paths, which stay heap-/O(1)-bounded), so guarding it bounds exactly the
- * residual native-re-entry recursion -- nothing else. */
+ * C4 (turi-c-scoped-forms-heap-bounding): the eval_depth recursion guard that
+ * used to live here has been retired.  After SR (trampoline) + C1-C3, every
+ * interpreter recursion -- tail / non-tail, reset/shift, call/cc, serial/
+ * cloneable resume, catch-unwind, atomically, and effect handlers (both body
+ * and resume-value recursion) -- folds onto the heap work-stack and runs
+ * 1,000,000 deep without any C-stack growth per level, so there is no residual
+ * C-recursion for the guard to bound.  Sandbox resource limiting is now the
+ * job of step-fuel (turi_env_set_fuel), which bounds total work regardless of
+ * shape; turi_env_set_max_depth is retained as a no-op for API compatibility. */
 static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
                              TuriValue *args, uint32_t n_args) {
     /* C1: a panic signal in flight short-circuits any application reached via a
      * native HOF's turi_call, so the callee never runs while unwinding to the
      * DK_CATCH_UNWIND boundary (the value is discarded). */
     if (env->panicking) return turi_nil();
-    if (env->eval_depth >= env->max_eval_depth)
-        return turi_error("eval: recursion limit exceeded");
-    env->eval_depth++;
     const char *saved_module = env->current_module;
     TuriValue r = eval_apply_driven(env, cl, args, n_args);
     env->current_module = saved_module;
-    env->eval_depth--;
     return r;
 }
 
@@ -6756,12 +6739,8 @@ static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             return turi_error("eval: step fuel exhausted");
         env->step_fuel--;
     }
-    if (env->eval_depth >= env->max_eval_depth)
-        return turi_error("eval: recursion limit exceeded");
-    env->eval_depth++;
-    TuriValue r = eval_expr_impl(env, frame, e);
-    env->eval_depth--;
-    return r;
+    /* C4: the eval_depth recursion guard has been retired -- see eval_apply. */
+    return eval_expr_impl(env, frame, e);
 }
 
 static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
@@ -10209,9 +10188,11 @@ void turi_env_set_fuel(TuriEnv *env, uint64_t steps) {
     env->step_fuel       = steps;
 }
 
+/* C4: the eval_depth recursion guard was retired (interpreter recursion is now
+ * heap-bounded); this setter is kept as a no-op for API/ABI compatibility.
+ * Bound total work with turi_env_set_fuel instead. */
 void turi_env_set_max_depth(TuriEnv *env, uint32_t depth) {
-    if (!env) return;
-    env->max_eval_depth = depth;
+    (void)env; (void)depth;
 }
 
 void turi_env_allow(TuriEnv *env, TuriCaps cap) {

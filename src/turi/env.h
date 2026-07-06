@@ -180,12 +180,12 @@ typedef struct TuriEnv {
      * than by abort_prompt_kind; reset boundaries pass it through.  NULL for a
      * plain shift abort (matched by prompt kind). */
     void       *abort_target;
-    /* SB3: step-fuel resource limit (0 in both fields = unlimited) */
+    /* SB3: step-fuel resource limit (0 in both fields = unlimited).  Since C4
+     * (turi-c-scoped-forms-heap-bounding) retired the eval_depth recursion
+     * guard, step-fuel is the sole per-eval resource limit (it bounds total
+     * work regardless of recursion shape; recursion itself is heap-bounded). */
     uint64_t    step_fuel;        /* remaining fuel units; decremented each eval step */
     uint64_t    step_fuel_limit;  /* initial limit set by turi_env_set_fuel */
-    /* Phase S5: recursion depth guard */
-    uint32_t    eval_depth;
-    uint32_t    max_eval_depth;
     /* Panic state: set by EX_PANIC before firing defers; detects double-panic */
     bool        panicking;
     /* Set when currently inside a #[no-unwind] function call */

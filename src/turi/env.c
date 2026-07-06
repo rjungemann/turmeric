@@ -1,5 +1,5 @@
 #include "env.h"
-#include "eval.h"   /* TURI_DEFAULT_SANDBOX_FUEL, TURI_DEFAULT_SANDBOX_DEPTH */
+#include "eval.h"   /* TURI_DEFAULT_SANDBOX_FUEL */
 #include "fiber.h"
 #include "reader_macros.h"  /* RM Q#5: session-scoped reader-macro registry */
 #include "spice_loader.h"   /* RP3: env owns the loaded TurSpiceImage */
@@ -9,72 +9,21 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(__unix__) || defined(__APPLE__)
-#include <sys/resource.h>  /* getrlimit(RLIMIT_STACK) */
-#endif
-
 /* -------------------------------------------------------------------------
- * Recursion-depth guard sizing
+ * Recursion-depth guard: RETIRED (C4, turi-c-scoped-forms-heap-bounding)
  *
- * The depth guard in eval.c (eval_depth >= max_eval_depth) only protects
- * against a SIGSEGV if it fires *before* the native C stack overflows.
- * `eval_depth` increments once per `eval_expr` call, which is exactly the
- * count of nested eval frames on the C stack -- a faithful proxy for stack
- * nesting. Each such frame is large (`eval_expr_impl` reserves several
- * `TuriValue[MAX_EVAL_ARGS]` scratch arrays); measured at ~10 KB/frame under
- * Debug/ASan, so a ~12.5 MB stack overflows at peak `eval_depth` ~1250 --
- * far below a hardcoded 4096, which is why that guard was dead code. Derive
- * the limit from the real stack size instead, with a wide safety margin, so
- * the guard fires as a clean "recursion limit exceeded" rather than a raw
- * crash. (Release builds have smaller frames and sustain more, so sizing for
- * the Debug/ASan frame keeps both safe.)
+ * The old `eval_depth >= max_eval_depth` guard turned a would-be C-stack
+ * overflow into a graceful "recursion limit exceeded".  After the trampoline
+ * (turi-eval-trampoline-plan) and turi-c-scoped-forms-heap-bounding (C1-C3),
+ * every interpreter recursion -- tail / non-tail, reset/shift, call/cc,
+ * serial/cloneable resume, catch-unwind, atomically, and effect handlers --
+ * folds onto the heap work-stack and runs 1,000,000 deep with no C-stack growth
+ * per level, so the guard was dead for every real program and its stack-size-
+ * derived sizing (TURI_EVAL_FRAME_BYTES et al.) is gone.  Sandbox recursion
+ * limiting is now step-fuel's job (turi_env_set_fuel): it bounds total work
+ * regardless of shape, and unbounded folded recursion grows the heap
+ * work-stack (reclaimed at teardown), not the C stack.
  * ---------------------------------------------------------------------- */
-
-/* Conservative upper bound on C-stack bytes per recursion level.
- *
- * Post-trampoline (turi-eval-trampoline-plan, T1-T3.2b): deep *non-tail*
- * recursion is folded onto the heap work-stack (eval_drive) and *tail* recursion
- * reuses a single work-stack slot (turi-cek-frame-reuse-tco-plan, F1-F4); neither
- * touches this guard -- both are heap-/O(1)-bounded.  The guard binds only the
- * *residual* C-recursion: a native HOF whose callback re-enters evaluation via
- * turi_call.  After the F4 unification that cycle is
- * turi_call -> eval_apply -> eval_apply_driven -> eval_drive_ex -> (leaf native)
- * -> turi_call -> ..., and it bumps eval_depth once per `eval_apply` (where the
- * guard now lives -- the driver no longer routes per-level through eval_expr, so
- * the guard moved off eval_expr onto eval_apply; see eval.c).
- *
- * The driver-based re-entry frame is cheaper than the old
- * eval_body_tco -> eval_expr chain (measured Debug+ASan, 12.5 MB stack: HOF
- * re-entry through `option-map` now stack-overflows far deeper than the ~1625
- * eval_depth the old path hit), so 9472 B/level -- giving max_eval_depth ~811 --
- * is comfortably conservative here: the guard trips with a large margin below
- * the crash.  Keeping the value pins the user-visible recursion ceiling where it
- * was.  Release builds have smaller frames and sustain more. */
-#define TURI_EVAL_FRAME_BYTES   9472u   /* ~9.25 KB (sized for native HOF re-entry) */
-/* Fraction of the stack we let interpreter recursion consume (the rest is
- * headroom for the base call chain and any non-eval frames within a level). */
-#define TURI_EVAL_STACK_FRACTION_NUM  3u
-#define TURI_EVAL_STACK_FRACTION_DEN  5u  /* 3/5 == 60% */
-#define TURI_EVAL_DEPTH_MIN     256u
-#define TURI_EVAL_DEPTH_FALLBACK 4096u   /* used when the stack size is unknown */
-
-/* Compute a recursion-depth limit the native C stack can provably sustain. */
-static int turi_default_max_eval_depth(void) {
-#if defined(__unix__) || defined(__APPLE__)
-    struct rlimit rl;
-    if (getrlimit(RLIMIT_STACK, &rl) == 0 &&
-        rl.rlim_cur != RLIM_INFINITY && rl.rlim_cur > 0) {
-        unsigned long long usable =
-            (unsigned long long)rl.rlim_cur *
-            TURI_EVAL_STACK_FRACTION_NUM / TURI_EVAL_STACK_FRACTION_DEN;
-        unsigned long long depth = usable / TURI_EVAL_FRAME_BYTES;
-        if (depth < TURI_EVAL_DEPTH_MIN) depth = TURI_EVAL_DEPTH_MIN;
-        if (depth > (unsigned long long)INT_MAX) depth = (unsigned long long)INT_MAX;
-        return (int)depth;
-    }
-#endif
-    return (int)TURI_EVAL_DEPTH_FALLBACK;
-}
 
 /* -------------------------------------------------------------------------
  * Global-binding hash table (open addressing, linear probing)
@@ -240,7 +189,6 @@ TuriEnv *turi_env_new(void) {
     arena_init(&env->value_perm, 0);
     symtab_init(&env->st, &env->sym_arena);
     buf_init(&env->src_acc);
-    env->max_eval_depth = (uint32_t)turi_default_max_eval_depth();
     env->caps = TURI_CAP_ALL;
     /* Gap 7: default to interpret mode (every turi_env_new caller is an
      * interpreter embedder; mirrors the g_interpret_mode = true above).  An
@@ -281,9 +229,10 @@ TuriEnv *turi_env_new_sandboxed(void) {
     if (!env) return NULL;
     env->sandboxed       = true;
     env->caps            = TURI_CAP_NONE;
+    /* C4: recursion is heap-bounded, so a sandboxed env limits work via
+     * step-fuel alone (the eval_depth guard was retired). */
     env->step_fuel_limit = TURI_DEFAULT_SANDBOX_FUEL;
     env->step_fuel       = TURI_DEFAULT_SANDBOX_FUEL;
-    env->max_eval_depth  = TURI_DEFAULT_SANDBOX_DEPTH;
     return env;
 }
 
@@ -421,7 +370,6 @@ void turi_env_reset(TuriEnv *env) {
     env->in_no_unwind = false;
     env->handler_stack = NULL;
     env->defer_stack   = NULL;
-    env->eval_depth    = 0;
     env->catch_jmp     = NULL;
     env->last_tc_env   = NULL;
     env->defining_mod    = NULL;

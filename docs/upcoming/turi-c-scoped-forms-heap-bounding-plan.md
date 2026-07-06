@@ -196,16 +196,42 @@ by a driver `DK_*` frame. The same shape applies here:
 
 ## Retiring the guard (Phase C4)
 
-Once C1-C3 land and the audit probe set (extend `tests/turi/eval-tco.tur`,
-driven by `tests/turi/eval-tco.sh`) shows no form trips the guard at
-1,000,000 deep:
+> **Status (landed 2026-07-06).** Gate met: the audit set (tail / non-tail /
+> reset-shift / call-cc / serial-cloneable resume / `catch-unwind` /
+> `atomically` / effect-handler body + resume-value recursion) all run
+> **1,000,000 deep** with no guard fire and no SIGSEGV; native-HOF re-entry
+> (recursion through `option-map`) also runs 1,000,000 deep. The `eval_depth`
+> guard was retired:
+>
+> - Removed the `eval_depth++` / `>= max_eval_depth` checks from `eval_apply`
+>   and `eval_expr`.
+> - Removed the `eval_depth` / `max_eval_depth` fields from `TuriEnv`, the
+>   `saved_depth` save/restore plumbing on the reset / escape / catch-unwind
+>   boundaries, and the whole stack-size sizing block in `env.c`
+>   (`TURI_EVAL_FRAME_BYTES`, `turi_default_max_eval_depth`, the fraction/min/
+>   fallback constants, and the now-unused `<sys/resource.h>` include).
+> - Sandbox limiting is now step-fuel alone: dropped
+>   `TURI_DEFAULT_SANDBOX_DEPTH` and its assignment in `turi_env_new_sandboxed`;
+>   `turi_env_set_max_depth` is kept as a **no-op** for API/ABI compatibility
+>   (its only caller, `tests/turi/sandbox-eval.c`, still passes).
+>
+> No static AST-nesting backstop was added -- nothing exercises it (the reader/
+> elaborator, not the evaluator, would own a parse-depth cap, and no probe or
+> fixture needs one). It can be added later if a pathological deeply-nested
+> *input* ever motivates it. Validation: `eval-tco.sh` 22/22, `run-turi.sh`
+> 1425/3 (pre-existing HKT), `run.sh` 1944/1 (pre-existing forall), sandbox +
+> repl ctest 8/8.
 
-- Remove the `eval_depth++` / `>= max_eval_depth` checks in `eval_apply` and
+The original checklist (all done except the optional static guard):
+
+- ~~Remove the `eval_depth++` / `>= max_eval_depth` checks in `eval_apply` and
   `eval_expr` (`src/turi/eval.c`), the `max_eval_depth` field plumbing, and the
-  `TURI_EVAL_FRAME_BYTES` byte-estimate.
+  `TURI_EVAL_FRAME_BYTES` byte-estimate.~~ Done.
 - Keep a cheap **static AST-nesting** guard if desired (parse-time depth) as a
-  pathological-input backstop -- it does not track runtime C depth.
-- Update `TURI_DEFAULT_SANDBOX_DEPTH` / `turi_default_max_eval_depth` consumers.
+  pathological-input backstop -- it does not track runtime C depth. (Skipped --
+  see above.)
+- ~~Update `TURI_DEFAULT_SANDBOX_DEPTH` / `turi_default_max_eval_depth`
+  consumers.~~ Done (both removed; step-fuel is the sandbox limit).
 
 ## Validation
 

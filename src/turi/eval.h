@@ -196,12 +196,12 @@ bool turi_debug_eval_expr(TuriEnv *env, int idx, const char *src,
  * SB3 / SB4: Sandbox resource-limit and capability API
  * --------------------------------------------------------------------------- */
 
-/* Default limits applied by turi_env_new_sandboxed (overridable at compile time). */
+/* Default step-fuel limit applied by turi_env_new_sandboxed (overridable at
+ * compile time).  The former TURI_DEFAULT_SANDBOX_DEPTH is gone: C4
+ * (turi-c-scoped-forms-heap-bounding) retired the recursion-depth guard, so a
+ * sandbox bounds work via step-fuel alone. */
 #ifndef TURI_DEFAULT_SANDBOX_FUEL
 #  define TURI_DEFAULT_SANDBOX_FUEL  10000000u   /* 10M eval steps */
-#endif
-#ifndef TURI_DEFAULT_SANDBOX_DEPTH
-#  define TURI_DEFAULT_SANDBOX_DEPTH 256u        /* max recursion frames */
 #endif
 
 /* Set the step-fuel limit for env.  Each call to the evaluator consumes one
@@ -210,10 +210,9 @@ bool turi_debug_eval_expr(TuriEnv *env, int idx, const char *src,
  * turi_env_new_sandboxed sets a default of TURI_DEFAULT_SANDBOX_FUEL. */
 void turi_env_set_fuel(TuriEnv *env, uint64_t steps);
 
-/* Override the maximum recursion depth.
- * Default: derived from the C stack limit (getrlimit(RLIMIT_STACK)) for
- * unrestricted envs so the guard fires before the native stack overflows;
- * TURI_DEFAULT_SANDBOX_DEPTH for sandboxed. */
+/* C4: retained as a no-op for API/ABI compatibility.  The recursion-depth
+ * guard was retired (interpreter recursion is heap-bounded); bound total work
+ * with turi_env_set_fuel instead. */
 void turi_env_set_max_depth(TuriEnv *env, uint32_t depth);
 
 /* Grant a capability to an environment (no-op if already granted). */
