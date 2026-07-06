@@ -527,16 +527,20 @@ struct FnDef {
      * M4b/M4c per-instantiation emit path on non-HKT classes (HKT-class
      * instance methods keep the uniform carrier ABI per Plan M6/M7). */
     struct TypeClassInstance *owner_instance;
-    /* MB1 (constrained-hkt-forall-mode-b-plan): when `dict_clone_class` is
-     * non-NULL this FnDef is a *dict-clone* -- a copy of a polymorphic
+    /* MB1 / forall-dict-pass-multi-constraint-hkt-plan (Task 1.1): when
+     * `n_dict_clone > 0` this FnDef is a *dict-clone* -- a copy of a polymorphic
      * constrained function (used as a rank-2 value) that shares the original's
-     * body and trailing params but prepends `dict_clone_param` (an int64 carrier
-     * holding a dictionary pointer).  While its body is emitted, a class-method
-     * call on the constrained type variable (one carrying a `dict_arg` for
-     * `dict_clone_class`) dispatches through that dict param at runtime instead
-     * of the baked representative instance. */
-    Binding             *dict_clone_param;
-    struct TypeClass    *dict_clone_class;
+     * body and trailing params but prepends one int64 dict param PER constraint
+     * (each holding a dictionary pointer), in constraint order.  While its body
+     * is emitted, a class-method call on a constrained type variable (one
+     * carrying a `dict_arg` whose instance's class matches one of
+     * `dict_clone_classes[0..n)`) dispatches through the matching dict param
+     * `dict_clone_params[k]` at runtime instead of the baked representative
+     * instance.  `n_dict_clone == 0` means "not a dict-clone".  The vectors are
+     * parallel and length `n_dict_clone`. */
+    Binding             *dict_clone_params[MAX_FN_CONSTRAINTS];
+    struct TypeClass    *dict_clone_classes[MAX_FN_CONSTRAINTS];
+    uint8_t              n_dict_clone;
     /* WF1/WF2 (van-laarhoven-wide-functor-carrier-plan): set on the
      * functor-wrapping closure `g : (-> A (f A))` of a van Laarhoven lens when
      * `f` is pinned to a WIDE by-value aggregate functor (a `:copy` struct /

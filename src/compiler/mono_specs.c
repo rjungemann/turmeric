@@ -484,12 +484,12 @@ static bool fn_is_lens(const FnDef *fn) {
  * original's by-value `<lens>__mono` body (whose `fmap` mints the by-value twin),
  * not the clone's (which dispatches through its runtime dict param). */
 static const FnDef *resolve_orig_lens(const Expr *prog, const FnDef *fn) {
-    if (!fn || !fn->dict_clone_class) return fn;   /* already the original */
+    if (!fn || fn->n_dict_clone == 0) return fn;   /* already the original */
     if (prog && prog->kind == EX_PROGRAM && fn->body) {
         for (uint32_t i = 0; i < prog->as.program.n; i++) {
             const Expr *it = prog->as.program.items[i];
             if (it && it->kind == EX_FN_DEF && it->as.fn_def_.fn &&
-                !it->as.fn_def_.fn->dict_clone_class &&
+                it->as.fn_def_.fn->n_dict_clone == 0 &&
                 it->as.fn_def_.fn->body == fn->body)
                 return it->as.fn_def_.fn;
         }

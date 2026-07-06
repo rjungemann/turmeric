@@ -2321,8 +2321,10 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 for (uint8_t k = 0; k < dcls->n_type_params; k++)
                     if (dcls->type_param_kinds[k] != KIND_STAR)
                         { cls_is_hkt = true; break; }
-            bool enclosing_dispatches_cls =
-                (sfd->dict_clone_class == dcls);
+            bool enclosing_dispatches_cls = false;
+            for (uint8_t dk = 0; dk < sfd->n_dict_clone; dk++)
+                if (sfd->dict_clone_classes[dk] == dcls)
+                    { enclosing_dispatches_cls = true; break; }
             if (!enclosing_dispatches_cls && sfd->binding &&
                 sfd->binding->fn_constraints) {
                 const ConstraintSet *cs = sfd->binding->fn_constraints;
@@ -4947,7 +4949,7 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
          * box_aggregate_result branch so the spec forward decl agrees with the
          * definition (which heap-boxes the by-value spec result). */
         buf_puts(out, "int64_t");
-    } else if (spec->fn->dict_clone_class) {
+    } else if (spec->fn->n_dict_clone > 0) {
         /* MB2.5: a dict-clone wrapper dispatches through the runtime dict and
          * always returns the int64 carrier (emit_fns.c forces this) -- even when
          * its `(f a)` result resolves to a by-value aggregate.  Mirror that here
@@ -5030,7 +5032,7 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                  * int64 carrier (mirror emit_fns.c's box_aggregate_result branch
                  * in the header and body-return paths). */
                 buf_puts(out, "int64_t");
-            } else if (fd->dict_clone_class) {
+            } else if (fd->n_dict_clone > 0) {
                 /* MB2.5 (constrained-hkt-forall-mode-b-plan): a dict-clone wrapper
                  * returns the int64 carrier (mirror emit_fns.c's dict_clone_class
                  * branch in both the header and body-return paths). */

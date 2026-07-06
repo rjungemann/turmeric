@@ -3480,7 +3480,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * so this only bites the by-value aggregate case. */
                     if (ctx->current_abi_specialization &&
                         ctx->current_abi_specialization->fn &&
-                        ctx->current_abi_specialization->fn->dict_clone_class &&
+                        ctx->current_abi_specialization->fn->n_dict_clone > 0 &&
                         type_kind_is_aggregate(disp_result.kind) &&
                         strcmp(type_c_name(disp_result), "int64_t") != 0)
                         disp_result = emit_type_from_kind(TY_INT);

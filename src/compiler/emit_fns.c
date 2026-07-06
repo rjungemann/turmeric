@@ -468,11 +468,25 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * clear at the end. */
     const char   *saved_dd_cname = ctx->dict_dispatch_param_cname;
     TypeClass    *saved_dd_class = ctx->dict_dispatch_class;
-    char         *dd_cname_owned = NULL;
-    if (fd->dict_clone_class && fd->dict_clone_param) {
-        dd_cname_owned = raw_name_for_binding(fd->dict_clone_param);
-        ctx->dict_dispatch_param_cname = dd_cname_owned;
-        ctx->dict_dispatch_class = fd->dict_clone_class;
+    uint8_t       saved_dd_n = ctx->dict_dispatch_n;
+    TypeClass    *saved_dd_classes[MAX_FN_CONSTRAINTS];
+    const char   *saved_dd_cnames[MAX_FN_CONSTRAINTS];
+    memcpy(saved_dd_classes, ctx->dict_dispatch_classes, sizeof saved_dd_classes);
+    memcpy(saved_dd_cnames, ctx->dict_dispatch_param_cnames, sizeof saved_dd_cnames);
+    char         *dd_cnames_owned[MAX_FN_CONSTRAINTS] = {0};
+    if (fd->n_dict_clone > 0) {
+        /* forall-dict-pass-multi-constraint-hkt-plan (Task 1.4): install the full
+         * (class, dict-param) vector so each class-method call dispatches through
+         * the dict for its own class.  The scalar pair mirrors slot 0 for the
+         * ambient-dict lowering paths that predate the vector. */
+        ctx->dict_dispatch_n = fd->n_dict_clone;
+        for (uint8_t k = 0; k < fd->n_dict_clone; k++) {
+            dd_cnames_owned[k] = raw_name_for_binding(fd->dict_clone_params[k]);
+            ctx->dict_dispatch_param_cnames[k] = dd_cnames_owned[k];
+            ctx->dict_dispatch_classes[k] = fd->dict_clone_classes[k];
+        }
+        ctx->dict_dispatch_param_cname = dd_cnames_owned[0];
+        ctx->dict_dispatch_class = fd->dict_clone_classes[0];
     }
     /* SYM5: detect the opt-in str->sym definition (from sym-dynamic.tur).  Its
      * presence is what links the runtime intern table, so it gates the
@@ -498,7 +512,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * unboxes), so the generic dict-clone's int64-returning fat-dispatch
              * of `g` reads a valid carrier word. */
             current_fn_ret_ctype_eff = "int64_t";
-        } else if (fd->dict_clone_class) {
+        } else if (fd->n_dict_clone > 0) {
             /* MB2.5 (constrained-hkt-forall-mode-b-plan): a dict-clone wrapper
              * dispatches through the carrier dict and lives behind the poly
              * carrier, so its result is ALWAYS the int64 carrier -- even when the
@@ -708,7 +722,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * carrier (keep in lockstep with current_fn_ret_ctype + the body-side
              * return-boxing below). */
             buf_puts(file, "int64_t");
-        } else if (fd->dict_clone_class) {
+        } else if (fd->n_dict_clone > 0) {
             /* MB2.5 (constrained-hkt-forall-mode-b-plan): a dict-clone wrapper
              * returns the int64 carrier (see the body-side + current_fn_ret_ctype
              * overrides and the forward decl in emit_module.c -- keep all four in
@@ -1031,7 +1045,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                      * capture field as `tur_adt_Point *`.  Flag the param so the
                      * closure-capture site bridges int64->pointer (field reads
                      * already bridge via the heap-ADT-recv path). */
-                    if (fd->dict_clone_class && btc &&
+                    if (fd->n_dict_clone > 0 && btc &&
                         strcmp(btc, "int64_t") != 0 &&
                         strchr(btc, '*') != NULL)
                         fd->params[i]->emit_carrier_holds_ptr = true;
@@ -1368,7 +1382,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                  * returns its wide `(f A)` aggregate boxed into the int64 carrier;
                  * the explicit heap-spill return below performs the box. */
                 ret_ctype = "int64_t";
-            } else if (fd->dict_clone_class) {
+            } else if (fd->n_dict_clone > 0) {
                 /* MB2.5: keep the return ret_ctype in lockstep with the signature
                  * override above -- a dict-clone wrapper returns the int64 carrier. */
                 ret_ctype = "int64_t";
@@ -1468,7 +1482,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             } else {
                 buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
             }
-        } else if (fd->dict_clone_class) {
+        } else if (fd->n_dict_clone > 0) {
             /* MB2.5 (constrained-hkt-forall-mode-b-plan): a dict-clone wrapper's
              * body is a single dispatch through the carrier dict, which already
              * yields the int64 carrier (emit_call_name + the M7-spec suppression
@@ -1776,5 +1790,8 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* MB1: restore dict-dispatch mode. */
     ctx->dict_dispatch_param_cname = saved_dd_cname;
     ctx->dict_dispatch_class = saved_dd_class;
-    free(dd_cname_owned);
+    ctx->dict_dispatch_n = saved_dd_n;
+    memcpy(ctx->dict_dispatch_classes, saved_dd_classes, sizeof saved_dd_classes);
+    memcpy(ctx->dict_dispatch_param_cnames, saved_dd_cnames, sizeof saved_dd_cnames);
+    for (uint8_t k = 0; k < MAX_FN_CONSTRAINTS; k++) free(dd_cnames_owned[k]);
 }
