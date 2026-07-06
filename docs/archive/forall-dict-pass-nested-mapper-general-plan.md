@@ -1,12 +1,37 @@
 # Generalize nested-mapper dict capture: N dicts, capturing mappers, deeper nesting
 
-**Status:** OPEN.
+**Status:** LANDED 2026-07-06.  Phases 1-3 lower the reachable nested-mapper
+shapes end to end; Phase 4 keeps the TUR-E0311 guard as a defensive assertion
+for the single genuinely-unsupported residual (a dispatch inside a lifted lambda
+that is DIRECTLY APPLIED in place, so it has no closure env to carry a dict).
+
+Landed pieces:
+- **Phase 1 (N-dict env):** `FnDef.dict_env_classes[]`/`dict_env_bindings[]` +
+  `n_dict_env` (was scalar); `mapper_scan_dispatch` accumulates the dispatched
+  class SET; `convert_mapper_to_dict_closure` captures one dict per class; emit
+  installs `cur_dict_env_classes[]`/`bindings[]` and dispatches each class
+  through its own captured dict (`emit_call_dict_env_dispatch_index`).  Positive
+  fixture: `tests/fixtures/van-laarhoven-lens-show-rank/`.
+- **Phase 2 (capturing mappers):** `poly_wrap_closure_mapper` recognizes a
+  poly-wrapped EX_CLOSURE mapper; `convert_capturing_mapper_to_dict_closure`
+  APPENDS the dict(s) to the existing `Closure.captures`.  Positive fixture:
+  `tests/fixtures/van-laarhoven-lens-show-capture/`.  (This shape previously
+  SILENTLY MISCOMPILED -- it escaped both the converter and the guard.)
+- **Phase 3 (deeper nesting):** the lowering walk recurses into each converted
+  mapper's body and threads every dispatched dict outward -- each enclosing
+  lambda captures (`caps_out` union) and forwards the dict inward through its own
+  env.  `FnDef.dict_env_converted` gates idempotency (a forward-only intermediate
+  mapper is converted yet has `n_dict_env == 0`).  Positive fixture:
+  `tests/fixtures/van-laarhoven-lens-show-deep/`.
+- **Phase 4:** guard narrowed + documented; negative fixture repointed to the
+  direct-application residual: `tests/fixtures/errors/forall-dict-nested-lambda-direct-apply/`.
+
 **Predecessor:** `docs/archive/forall-dict-pass-nested-lambda-dispatch-plan.md`
 (landed the *primary* case -- a captureless mapper dispatching a SINGLE
 constraint class -- and narrowed the TUR-E0311 guard to the residual this plan
-covers).
+covered).
 **Guarded by:** `TUR-E0311` in `make_dict_clone` (elab_call.c).  Negative
-fixture: `tests/fixtures/errors/forall-dict-nested-lambda-multiclass/`.
+fixture: `tests/fixtures/errors/forall-dict-nested-lambda-direct-apply/`.
 
 ## What already works
 
@@ -116,12 +141,25 @@ recursive generalization:
 - A fixture with a two-deep dispatch compiles and runs; each intermediate env
   carries the dict.
 
-## Phase 4 -- retire the guard
+## Phase 4 -- retire the guard  [DONE: kept as defensive assertion]
 
-Once Phases 1-3 land, the TUR-E0311 residual guard in `make_dict_clone` should
-reject nothing reachable. Either delete it, or keep it as a defensive
-assertion for a genuinely unsupported shape (document which). Archive this plan
-and the predecessor's residual note.
+Phases 1-3 lower every nested-mapper shape the recursive walk can REACH -- a
+mapper reached through a poly-wrap (an EX_VAR to a lifted lambda, or a fat
+EX_CLOSURE), at any nesting depth, dispatching any number of classes, with or
+without its own value captures.  One shape remains genuinely unlowerable: a
+dispatch inside a lifted lambda that is **directly applied in place** --
+`((fn [y] (show y)) x)`.  That inner lambda is lambda-lifted to a top-level
+function and CALLED BY NAME (not boxed as a closure value), so there is no
+closure env in which to thread a captured dict.  Making it lowerable would mean
+rewriting a by-name direct call into a closure-construct-and-fat-call, out of
+scope here.
+
+The TUR-E0311 guard in `make_dict_clone` is therefore KEPT as a defensive
+assertion for exactly that residual (rather than silently mis-resolving to the
+carrier representative), with the diagnostic reworded to name the shape and
+point at the two workarounds (bind the method directly in a `let`, or pass the
+inner lambda as a value to another call).  Negative fixture:
+`tests/fixtures/errors/forall-dict-nested-lambda-direct-apply/`.
 
 ## Risks / notes
 

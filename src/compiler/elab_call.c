@@ -5611,6 +5611,8 @@ static bool dict_clone_nested_dispatch_rec(const Expr *e,
         case EX_POLY_WRAP:  return REC(e->as.poly_wrap_.inner);
         case EX_FN_TO_FAT:  return REC(e->as.fn_to_fat_.inner);
         case EX_ASCRIBE:    return REC(e->as.ascribe_.inner);
+        case EX_CAST:        return REC(e->as.cast_.expr);
+        case EX_REINTERPRET: return REC(e->as.reinterpret_.expr);
         default:            return false;
     }
 #undef REC
@@ -5622,18 +5624,22 @@ static bool dict_clone_dispatch_in_nested_lambda(const Expr *e,
     return dict_clone_nested_dispatch_rec(e, cs, inside_lambda, 0);
 }
 
-/* forall-dict-pass-nested-lambda-dispatch-plan (Phase 2): scan a mapper lambda's
- * OWN body (depth 0) for the constraint class it dispatches on its tyvar
- * receiver.  Sets *out_class to that class when the mapper dispatches EXACTLY one
- * constraint class directly in its body; sets *complex when the shape is not the
- * simple case we can lower -- more than one distinct class, or a dispatch buried
- * in a DEEPER nested lambda (which would be lifted again with no env of its
- * own).  Those residual shapes fall through to the TUR-E0311 guard. */
+/* forall-dict-pass-nested-lambda-dispatch-plan (Phase 2) +
+ * forall-dict-pass-nested-mapper-general-plan (Phases 1 + 3): scan a mapper
+ * lambda's OWN body for the constraint class(es) it dispatches directly on its
+ * tyvar receiver.  ACCUMULATES the set of dispatched constraint classes (dedup
+ * by class identity) into `out_classes[0..*n_out)`.  Traverses structural nodes
+ * (calls, lets, ifs, ...) but STOPS at every lambda boundary (an EX_VAR to a
+ * lifted lambda, an inline EX_FN, a poly-wrap, or a closure): a dispatch buried
+ * inside a DEEPER lambda is that lambda's OWN dispatch and is lowered by the
+ * recursive walk (dict_clone_lower_nested_mappers) descending into it, not
+ * hoisted here.  A dispatch reached through a lambda boundary this scan cannot
+ * cross (a direct-call lifted lambda) simply is not found here and falls through
+ * to the TUR-E0311 guard. */
 static void mapper_scan_dispatch(const Expr *e, const ConstraintSet *cs,
-                                 int depth, const TypeClass **out_class,
-                                 bool *complex) {
-    if (!e || *complex || depth > 32) return;
-#define MS(x) mapper_scan_dispatch((x), cs, depth, out_class, complex)
+                                 const TypeClass **out_classes, uint8_t *n_out) {
+    if (!e) return;
+#define MS(x) mapper_scan_dispatch((x), cs, out_classes, n_out)
     switch (e->kind) {
         case EX_CALL: {
             if (e->as.call_.dict_arg &&
@@ -5649,33 +5655,17 @@ static void mapper_scan_dispatch(const Expr *e, const ConstraintSet *cs,
                 for (uint8_t c = 0; c < cs->n_constraints; c++)
                     if (cs->constraints[c].typeclass == mtc) { is_constraint = true; break; }
                 if (is_constraint) {
-                    if (depth > 0) { *complex = true; return; }  /* deeper lambda */
-                    if (*out_class && *out_class != mtc) { *complex = true; return; }
-                    *out_class = mtc;
+                    bool seen = false;
+                    for (uint8_t k = 0; k < *n_out; k++)
+                        if (out_classes[k] == mtc) { seen = true; break; }
+                    if (!seen && *n_out < MAX_FN_CONSTRAINTS)
+                        out_classes[(*n_out)++] = mtc;
                 }
             }
             if (e->as.call_.fn_expr) MS(e->as.call_.fn_expr);
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) MS(e->as.call_.args[i]);
             return;
         }
-        case EX_VAR: {
-            const Binding *vb = e->as.var.binding;
-            if (vb && vb->is_lifted_lambda && vb->source_fn_def &&
-                vb->source_fn_def->body && !vb->source_fn_def->dict_env_class)
-                mapper_scan_dispatch(vb->source_fn_def->body, cs, depth + 1,
-                                     out_class, complex);
-            return;
-        }
-        case EX_FN:
-            if (e->as.fn_.fn)
-                mapper_scan_dispatch(e->as.fn_.fn->body, cs, depth + 1,
-                                     out_class, complex);
-            return;
-        case EX_FN_DEF:
-            if (e->as.fn_def_.fn)
-                mapper_scan_dispatch(e->as.fn_def_.fn->body, cs, depth + 1,
-                                     out_class, complex);
-            return;
         case EX_LET:
         case EX_LETREC:
             for (uint32_t i = 0; i < e->as.let_.n; i++) MS(e->as.let_.bindings[i].init);
@@ -5692,9 +5682,12 @@ static void mapper_scan_dispatch(const Expr *e, const ConstraintSet *cs,
                 MS(e->as.match_.arms[i].body); MS(e->as.match_.arms[i].guard);
             }
             return;
-        case EX_POLY_WRAP: MS(e->as.poly_wrap_.inner); return;
-        case EX_FN_TO_FAT: MS(e->as.fn_to_fat_.inner); return;
-        case EX_ASCRIBE:   MS(e->as.ascribe_.inner); return;
+        case EX_ASCRIBE:      MS(e->as.ascribe_.inner); return;
+        case EX_CAST:         MS(e->as.cast_.expr); return;
+        case EX_REINTERPRET:  MS(e->as.reinterpret_.expr); return;
+        /* Lambda boundaries -- do NOT descend: EX_VAR (a lifted lambda),
+         * EX_FN/EX_FN_DEF (inline lambda), EX_POLY_WRAP / EX_CLOSURE (a boxed
+         * mapper) are each their own scope, lowered by the recursive walk. */
         default: return;
     }
 #undef MS
@@ -5737,18 +5730,22 @@ static void rewrite_poly_wrap_to_dict_closure(Elab *e, Expr *pw, FnDef *M,
 }
 
 /* Convert a captureless mapper lambda `M` (reached through a poly-wrap `pw`) into
- * a closure that CAPTURES the constraint's dict binding, so its class-method call
- * dispatches through the env-loaded dict at emit (emit_call_name).  Prepends the
- * void* env param, builds the Closure, marks the FnDef (dict_env_*), and rewrites
- * `pw` into the is-closure form so EX_CLOSURE emit builds the env (mirrors the
- * capturing-mapper path elab_fns.c already produces for a value capture).
- * Returns false (no-op) if M is not the simple captureless shape. */
+ * a closure that CAPTURES one runtime dict per dispatched class, so its
+ * class-method call dispatches through the env-loaded dict at emit
+ * (emit_call_name).  Prepends the void* env param, builds the Closure with N dict
+ * captures, marks the FnDef (dict_env_*), and rewrites `pw` into the is-closure
+ * form so EX_CLOSURE emit builds the env (mirrors the capturing-mapper path
+ * elab_fns.c already produces for a value capture).  Returns false (no-op) if M
+ * is not the simple captureless shape. */
 static bool convert_mapper_to_dict_closure(Elab *e, Expr *pw, FnDef *M,
-                                           Binding *dict_binding,
-                                           const TypeClass *C, Span span) {
-    if (!pw || !M || !dict_binding || !C) return false;
-    if (M->dict_env_class) return true;   /* already converted (idempotent) */
-    if (M->closure) return false;         /* already a capturing closure */
+                                           Binding **cap_dicts, uint8_t n_cap,
+                                           Binding **disp_dicts,
+                                           const TypeClass **disp_classes,
+                                           uint8_t n_disp, Span span) {
+    if (!pw || !M || !cap_dicts || n_cap == 0) return false;
+    if (n_cap > MAX_FN_CONSTRAINTS || n_disp > MAX_FN_CONSTRAINTS) return false;
+    if (M->dict_env_converted) return true;   /* already converted (idempotent) */
+    if (M->closure) return false;             /* already a capturing closure */
     if ((uint32_t)M->n_params + 1 > MAX_FN_ARITY) return false;
     if (M->binding->type.kind != TY_FN) return false;
 
@@ -5819,19 +5816,27 @@ static bool convert_mapper_to_dict_closure(Elab *e, Expr *pw, FnDef *M,
         }
     }
 
-    /* Build the Closure capturing the dict binding. */
+    /* Build the Closure capturing every dict this mapper needs -- the classes it
+     * dispatches itself, plus (Phase 3) any dict forwarded to a nested mapper it
+     * constructs.  The dispatch (dict_env_*) vectors carry only the classes THIS
+     * mapper dispatches; forwarded-only dicts ride the env for the inner
+     * construction and are never dispatched here. */
     struct Closure *clo = (struct Closure *)arena_alloc(e->arena, sizeof(struct Closure));
     clo->fn = M;
-    Binding **caps = (Binding **)arena_alloc(e->arena, sizeof(Binding *));
-    caps[0] = dict_binding;
+    Binding **caps = (Binding **)arena_alloc(e->arena, n_cap * sizeof(Binding *));
+    for (uint8_t k = 0; k < n_cap; k++) caps[k] = cap_dicts[k];
     clo->captures = caps;
-    clo->n_captures = 1;
+    clo->n_captures = n_cap;
     char en[32];
     snprintf(en, sizeof(en), "__env_%u", e->next_id++);
     clo->env_name = symtab_intern(e->st, strslice(en, (uint32_t)strlen(en)));
     M->closure = clo;
-    M->dict_env_class = (TypeClass *)C;
-    M->dict_env_binding = dict_binding;
+    for (uint8_t k = 0; k < n_disp; k++) {
+        M->dict_env_classes[k] = (TypeClass *)disp_classes[k];
+        M->dict_env_bindings[k] = disp_dicts[k];
+    }
+    M->n_dict_env = n_disp;
+    M->dict_env_converted = true;
     M->dict_env_mapper_ty = mapper_ty;
 
     rewrite_poly_wrap_to_dict_closure(e, pw, M, span);
@@ -5852,34 +5857,178 @@ static FnDef *poly_wrap_lifted_mapper(const Expr *pw) {
     return NULL;
 }
 
-/* Walk the dict-clone body and convert every simple captureless mapper that
- * dispatches a single constraint class into a dict-capturing closure (Phase 2).
- * `dparams` are the clone's per-constraint dict bindings (constraint order). */
+/* forall-dict-pass-nested-mapper-general-plan (Phase 2): peel ascribe/fn-to-fat
+ * wrappers to the CLOSURE FnDef a poly-wrap boxes -- a mapper that already
+ * captures a value (`set`/`over` shape) is an EX_CLOSURE, not an EX_VAR to a
+ * lifted lambda -- or NULL if the inner is not a fat closure. */
+static FnDef *poly_wrap_closure_mapper(const Expr *pw) {
+    if (!pw || pw->kind != EX_POLY_WRAP) return NULL;
+    const Expr *in = pw->as.poly_wrap_.inner;
+    while (in && (in->kind == EX_ASCRIBE || in->kind == EX_FN_TO_FAT))
+        in = in->kind == EX_ASCRIBE ? in->as.ascribe_.inner : in->as.fn_to_fat_.inner;
+    if (!in || in->kind != EX_CLOSURE) return NULL;
+    struct Closure *clo = in->as.closure_.closure;
+    if (clo && clo->fn && clo->fn->body) return clo->fn;
+    return NULL;
+}
+
+/* Scan a mapper body for the constraint class(es) it dispatches DIRECTLY on its
+ * tyvar receiver, then resolve each to the clone's dict binding (constraint
+ * order).  Fills `classes[]`/`dbs[]` and returns the count (>0), or 0 when the
+ * mapper has no direct dispatch or a class is unresolvable. */
+static uint8_t mapper_dispatch_dicts(const Expr *body, const ConstraintSet *cs,
+                                     Binding **dparams,
+                                     const TypeClass **classes, Binding **dbs) {
+    uint8_t n_cls = 0;
+    mapper_scan_dispatch(body, cs, classes, &n_cls);
+    if (n_cls == 0) return 0;
+    for (uint8_t k = 0; k < n_cls; k++) {
+        Binding *db = NULL;
+        for (uint8_t c = 0; c < cs->n_constraints; c++)
+            if (cs->constraints[c].typeclass == classes[k]) { db = dparams[c]; break; }
+        if (!db) return 0;
+        dbs[k] = db;
+    }
+    return n_cls;
+}
+
+/* forall-dict-pass-nested-mapper-general-plan (Phase 2): convert a CAPTURING
+ * mapper closure `M` (it already has an env param + env-build for a value
+ * capture) into a dict-capturing closure by APPENDING one dict binding per
+ * dispatched class to its existing `Closure.captures` (growing the env struct).
+ * No poly-wrap rewrite / env-param prepend is needed -- the closure form is
+ * already what EX_CLOSURE emit expects.  Idempotent (skip if already converted).
+ * Returns false (no-op) if M is not a capturing closure. */
+static bool convert_capturing_mapper_to_dict_closure(Elab *e, FnDef *M,
+                                           Binding **cap_dicts, uint8_t n_cap,
+                                           Binding **disp_dicts,
+                                           const TypeClass **disp_classes,
+                                           uint8_t n_disp, Span span) {
+    (void)span;
+    if (!M || !cap_dicts || n_cap == 0) return false;
+    if (n_cap > MAX_FN_CONSTRAINTS || n_disp > MAX_FN_CONSTRAINTS) return false;
+    if (M->dict_env_converted) return true;   /* already converted (idempotent) */
+    if (!M->closure) return false;            /* not a capturing closure */
+    struct Closure *clo = M->closure;
+    uint32_t old_n = clo->n_captures;
+    if (old_n + (uint32_t)n_cap > 255) return false;  /* n_captures is uint8_t */
+    /* Append the dict bindings at the END so existing capture indices (and any
+     * __TUR_CAP_N__ references in the body) stay valid. */
+    Binding **caps = (Binding **)arena_alloc(e->arena,
+        (old_n + n_cap) * sizeof(Binding *));
+    for (uint32_t i = 0; i < old_n; i++) caps[i] = clo->captures[i];
+    for (uint8_t k = 0; k < n_cap; k++) caps[old_n + k] = cap_dicts[k];
+    clo->captures = caps;
+    clo->n_captures = (uint8_t)(old_n + n_cap);
+    for (uint8_t k = 0; k < n_disp; k++) {
+        M->dict_env_classes[k] = (TypeClass *)disp_classes[k];
+        M->dict_env_bindings[k] = disp_dicts[k];
+    }
+    M->n_dict_env = n_disp;
+    M->dict_env_converted = true;
+    return true;
+}
+
+/* Add binding `b` to a dedup set of dict bindings. */
+static void dict_set_add(Binding **set, uint8_t *n, Binding *b) {
+    if (!b) return;
+    for (uint8_t i = 0; i < *n; i++) if (set[i] == b) return;
+    if (*n < MAX_FN_CONSTRAINTS) set[(*n)++] = b;
+}
+
+/* Report the clone's dict params a converted mapper M captures, so an ENCLOSING
+ * lambda that constructs M's closure at runtime forwards those same dicts inward
+ * (Phase 3).  Works for a mapper converted at any depth: the captured dicts are
+ * exactly the ones in M's closure that are dparams. */
+static void collect_dparam_captures(const FnDef *M, Binding **dparams, uint8_t nc,
+                                    Binding **out, uint8_t *n_out) {
+    if (!M || !M->closure) return;
+    for (uint8_t i = 0; i < M->closure->n_captures; i++)
+        for (uint8_t c = 0; c < nc; c++)
+            if (M->closure->captures[i] == dparams[c]) {
+                dict_set_add(out, n_out, dparams[c]);
+                break;
+            }
+}
+
+/* forall-dict-pass-nested-mapper-general-plan: walk the dict-clone body (or a
+ * mapper body) converting every nested mapper that dispatches a constraint
+ * method into a dict-capturing closure.  Accumulates into `caps_out` the union
+ * of clone dict params captured by the converted mappers, so an enclosing lambda
+ * knows which dicts to forward (Phase 3).  `dparams` are the clone's
+ * per-constraint dict bindings (constraint order). */
 static void dict_clone_lower_nested_mappers(Elab *e, Expr *node,
                                             const ConstraintSet *cs,
                                             Binding **dparams, Span span,
-                                            int depth) {
+                                            int depth, Binding **caps_out,
+                                            uint8_t *n_caps_out);
+
+/* Lower a single mapper `M` reached through poly-wrap `node` (`capturing` selects
+ * the capturing-closure vs captureless promotion path).  First recurses into M's
+ * OWN body to lower any deeper nested mappers and collect the dicts they need
+ * forwarded; unions those with M's own direct dispatches; then converts M to
+ * CAPTURE the whole union while DISPATCHING only its own classes.  Reports M's
+ * captured dparams up through caps_out so M's enclosing lambda forwards them. */
+static void lower_one_mapper(Elab *e, Expr *node, FnDef *M, bool capturing,
+                             const ConstraintSet *cs, Binding **dparams,
+                             Span span, int depth, Binding **caps_out,
+                             uint8_t *n_caps_out) {
+    if (!M) return;
+    uint8_t nc = cs->n_constraints;
+    if (M->dict_env_converted) {
+        /* Shared body already lowered by an earlier clone or a sibling box site:
+         * a captureless mapper's second poly-wrap still needs the is-closure
+         * rewrite; then just report its captures upward. */
+        if (!capturing) rewrite_poly_wrap_to_dict_closure(e, node, M, span);
+        collect_dparam_captures(M, dparams, nc, caps_out, n_caps_out);
+        return;
+    }
+    /* 1. Lower deeper mappers in M's body; collect the dicts they need forwarded. */
+    Binding *fwd[MAX_FN_CONSTRAINTS];
+    uint8_t n_fwd = 0;
+    dict_clone_lower_nested_mappers(e, M->body, cs, dparams, span, depth + 1,
+                                    fwd, &n_fwd);
+    /* 2. M's own direct dispatches (constraint order). */
+    const TypeClass *own_cls[MAX_FN_CONSTRAINTS];
+    Binding *own_dbs[MAX_FN_CONSTRAINTS];
+    uint8_t n_own = mapper_dispatch_dicts(M->body, cs, dparams, own_cls, own_dbs);
+    /* 3. Capture set = union(forwarded, own).  M dispatches only `own`; the
+     * forwarded-only dicts ride the env purely to construct the inner mapper. */
+    Binding *caps[MAX_FN_CONSTRAINTS];
+    uint8_t n_cap = 0;
+    for (uint8_t i = 0; i < n_fwd; i++) dict_set_add(caps, &n_cap, fwd[i]);
+    for (uint8_t i = 0; i < n_own; i++) dict_set_add(caps, &n_cap, own_dbs[i]);
+    if (n_cap == 0) return;   /* not a dispatching/forwarding mapper */
+    bool ok = capturing
+        ? convert_capturing_mapper_to_dict_closure(e, M, caps, n_cap,
+                                                   own_dbs, own_cls, n_own, span)
+        : convert_mapper_to_dict_closure(e, node, M, caps, n_cap,
+                                         own_dbs, own_cls, n_own, span);
+    if (ok) collect_dparam_captures(M, dparams, nc, caps_out, n_caps_out);
+}
+
+static void dict_clone_lower_nested_mappers(Elab *e, Expr *node,
+                                            const ConstraintSet *cs,
+                                            Binding **dparams, Span span,
+                                            int depth, Binding **caps_out,
+                                            uint8_t *n_caps_out) {
     if (!node || depth > 64) return;
-#define LW(x) dict_clone_lower_nested_mappers(e, (x), cs, dparams, span, depth + 1)
+#define LW(x) dict_clone_lower_nested_mappers(e, (x), cs, dparams, span, \
+                                              depth + 1, caps_out, n_caps_out)
     switch (node->kind) {
         case EX_POLY_WRAP: {
+            /* A captureless lifted mapper (EX_VAR to a lifted lambda) or a
+             * capturing mapper (a fat EX_CLOSURE): lower it, threading forwarded
+             * dicts up through caps_out. */
             FnDef *M = poly_wrap_lifted_mapper(node);
-            if (M && M->dict_env_class) {
-                /* A SECOND poly-wrap over an already-converted mapper (the same
-                 * lifted lambda boxed at two sites): rewrite this one too, so it
-                 * does not stay dangling at the pre-conversion arity. */
-                rewrite_poly_wrap_to_dict_closure(e, node, M, span);
-            } else if (M) {
-                const TypeClass *C = NULL;
-                bool complex = false;
-                mapper_scan_dispatch(M->body, cs, 0, &C, &complex);
-                if (C && !complex) {
-                    /* Find the dict binding for class C (constraint order). */
-                    Binding *db = NULL;
-                    for (uint8_t c = 0; c < cs->n_constraints; c++)
-                        if (cs->constraints[c].typeclass == C) { db = dparams[c]; break; }
-                    if (db) convert_mapper_to_dict_closure(e, node, M, db, C, span);
-                }
+            if (M) {
+                lower_one_mapper(e, node, M, false, cs, dparams, span, depth,
+                                 caps_out, n_caps_out);
+            } else {
+                FnDef *CM = poly_wrap_closure_mapper(node);
+                if (CM)
+                    lower_one_mapper(e, node, CM, true, cs, dparams, span, depth,
+                                     caps_out, n_caps_out);
             }
             LW(node->as.poly_wrap_.inner);
             return;
@@ -5904,8 +6053,10 @@ static void dict_clone_lower_nested_mappers(Elab *e, Expr *node,
                 LW(node->as.match_.arms[i].body); LW(node->as.match_.arms[i].guard);
             }
             return;
-        case EX_FN_TO_FAT: LW(node->as.fn_to_fat_.inner); return;
-        case EX_ASCRIBE:   LW(node->as.ascribe_.inner); return;
+        case EX_FN_TO_FAT:   LW(node->as.fn_to_fat_.inner); return;
+        case EX_ASCRIBE:     LW(node->as.ascribe_.inner); return;
+        case EX_CAST:        LW(node->as.cast_.expr); return;
+        case EX_REINTERPRET: LW(node->as.reinterpret_.expr); return;
         default: return;
     }
 #undef LW
@@ -6026,33 +6177,45 @@ Binding *make_dict_clone(Elab *e, Binding *inner_b, Span span) {
      * result through int64), so its poly wrapper must carry int64 too rather than
      * the method's declared C return type. */
     cb->source_fn_def = cf;
-    /* forall-dict-pass-nested-lambda-dispatch-plan (Phase 2): convert every
-     * simple captureless nested mapper that dispatches a constraint method into
-     * a dict-capturing closure, so its method call dispatches through the
-     * env-loaded dict (emit_call_name) instead of the baked representative.  The
+    /* forall-dict-pass-nested-lambda-dispatch-plan (Phase 2) +
+     * forall-dict-pass-nested-mapper-general-plan (Phases 1-3): convert every
+     * nested mapper that dispatches a constraint method into a dict-capturing
+     * closure, so its method call dispatches through the env-loaded dict
+     * (emit_call_name) instead of the baked representative.  Handles N dicts per
+     * mapper (Phase 1), capturing mappers (Phase 2), and deeper nesting by
+     * forwarding each dict through every enclosing lambda's env (Phase 3).  The
      * body is shared across clones of the same original, so the conversion is
-     * idempotent (skips an already-converted mapper) and each clone's env-build
-     * reuses the memoized dict binding declared as that clone's leading param.
-     * Shapes we cannot lower (a capturing mapper, a mapper dispatching >1 class,
-     * or a dispatch buried in a deeper nested lambda) are left untouched and
-     * caught by the TUR-E0311 guard at the rank-2 pass site. */
+     * idempotent (`dict_env_converted`) and each clone's env-build reuses the
+     * memoized dict binding declared as that clone's leading param.  A dispatch
+     * this walk cannot reach (e.g. inside a directly-applied lifted lambda) is
+     * left untouched and caught by the TUR-E0311 guard at the pass site.  The
+     * top-level clone body has each dict as a real PARAM, so its own returned
+     * capture set is discarded. */
+    Binding *top_caps[MAX_FN_CONSTRAINTS];
+    uint8_t n_top_caps = 0;
     dict_clone_lower_nested_mappers(e, cf->body, inner_b->fn_constraints,
-                                    dparams, span, 0);
-    /* Any residual dispatch still buried in an UNconverted nested lambda is a
-     * shape we cannot lower (a capturing mapper, a mapper dispatching >1 class,
-     * or a deeper nested lambda).  Reject with TUR-E0311 here -- inside
-     * make_dict_clone, so BOTH the rank-2 pass site and the lens-composition
-     * (Gap B) site are covered -- rather than silently mis-resolving to the
-     * carrier-representative instance.  Dispatching a constraint method directly
-     * in the body (e.g. `(let [tag (show s)] ...)`) is always supported. */
+                                    dparams, span, 0, top_caps, &n_top_caps);
+    /* forall-dict-pass-nested-mapper-general-plan (Phase 4): Phases 1-3 lower the
+     * reachable nested-mapper shapes -- N classes per mapper, capturing mappers,
+     * and deeper nesting where each intermediate lambda forwards the dict through
+     * its env.  The one residual the walk cannot reach is a dispatch inside a
+     * lifted lambda that is DIRECTLY APPLIED in place (`((fn [y] (show y)) x)`):
+     * that lambda is lifted and called by name, with no closure env to thread a
+     * captured dict through.  Keep this as a defensive guard for that shape --
+     * inside make_dict_clone so BOTH the rank-2 pass site and the lens-
+     * composition (Gap B) site are covered -- rather than silently mis-resolving
+     * to the carrier-representative instance.  Dispatching a constraint method
+     * directly in the body (e.g. `(let [tag (show s)] ...)`), or passing the
+     * inner lambda as a value to another call, are always supported. */
     if (dict_clone_dispatch_in_nested_lambda(cf->body, inner_b->fn_constraints,
                                              false)) {
         diag_emit(DIAG_ERROR, span,
             "forall-dict-pass: '%s' dispatches a typeclass method on its "
-            "constrained type variable from inside a nested lambda that cannot "
-            "be lowered (a capturing mapper, more than one class, or a deeper "
-            "nested lambda). Dispatch the method directly in the function body "
-            "(bind it in a `let`) instead (TUR-E0311)",
+            "constrained type variable from inside a directly-applied nested "
+            "lambda that cannot be lowered (a lifted lambda called by name, with "
+            "no closure env to carry the dict). Bind the method directly in the "
+            "function body with a `let`, or pass the inner lambda as a value to "
+            "another call, instead (TUR-E0311)",
             inner_b->name ? inner_b->name->name : "?");
         return NULL;
     }

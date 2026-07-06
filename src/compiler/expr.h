@@ -549,16 +549,28 @@ struct FnDef {
      * dict from its closure env.  `n_memo_dict == 0` means "not yet cloned". */
     Binding             *memo_dict_params[MAX_FN_CONSTRAINTS];
     uint8_t              n_memo_dict;
-    /* forall-dict-pass-nested-lambda-dispatch-plan (Phase 2): set on a nested
-     * MAPPER lambda (lifted out of a dict-clone body) that dispatches a
-     * typeclass method on the dict-clone's constrained type variable.  The
-     * mapper is converted to a closure that CAPTURES the constraint's dict
-     * binding (`dict_env_binding`); while its body is emitted, a class-method
-     * call whose class is `dict_env_class` dispatches through that captured
+    /* forall-dict-pass-nested-lambda-dispatch-plan (Phase 2) +
+     * forall-dict-pass-nested-mapper-general-plan (Phase 1): set on a nested
+     * MAPPER lambda (lifted out of a dict-clone body) that dispatches one or
+     * more typeclass methods on the dict-clone's constrained type variable(s).
+     * The mapper is converted to a closure that CAPTURES one runtime dict per
+     * dispatched class (`dict_env_bindings[0..n_dict_env)`); while its body is
+     * emitted, a class-method call whose class matches ANY of
+     * `dict_env_classes[0..n_dict_env)` dispatches through that class's captured
      * dict (an `env->dict` load) instead of the baked representative instance.
-     * NULL `dict_env_class` means "not a dict-capturing mapper". */
-    struct TypeClass    *dict_env_class;
-    Binding             *dict_env_binding;
+     * The two vectors are parallel; `n_dict_env == 0` means "not a
+     * dict-capturing mapper". */
+    struct TypeClass    *dict_env_classes[MAX_FN_CONSTRAINTS];
+    Binding             *dict_env_bindings[MAX_FN_CONSTRAINTS];
+    uint8_t              n_dict_env;
+    /* forall-dict-pass-nested-mapper-general-plan (Phase 3): true once this
+     * mapper has been through the dict-capturing conversion.  Distinct from
+     * `n_dict_env > 0` because a FORWARD-ONLY intermediate mapper (it dispatches
+     * nothing itself but captures a dict to forward into a nested mapper it
+     * constructs) is converted yet has `n_dict_env == 0`.  The conversion mutates
+     * the SHARED body once per original and must stay idempotent across every
+     * clone's lowering walk, so this flag -- not `n_dict_env` -- gates re-entry. */
+    bool                 dict_env_converted;
     /* The mapper's user-facing (pre-env-prepend) fn type, kept so a SECOND
      * poly-wrap referencing the same already-converted mapper can be rewritten
      * to the same EX_CLOSURE form (its value type is this, boxed). */

@@ -1,0 +1,72 @@
+;; forall-dict-pass-nested-mapper-general-plan (Phase 2 acceptance): a van
+;; Laarhoven mapper that ALREADY captures a value (`k`, the `set`/`over` shape)
+;; AND dispatches `show` on the focus tyvar.  Such a mapper is a poly-wrapped
+;; EX_CLOSURE (not an EX_VAR to a captureless lifted lambda), so it is lowered by
+;; APPENDING the constraint's runtime dict to the closure's existing captures:
+;; the env then carries BOTH the captured value and the dict, and `show`
+;; dispatches through the env-loaded dict per caller-chosen focus type.
+;; Previously silently miscompiled (`show` resolved to the Show int carrier rep
+;; on a bool focus).
+
+;; Identity a -- fmap runs the mapped function (so `show` actually runs).
+(defopaque Identity [a] :int)
+(defn mk-id [A] [x : A] : (Identity A) ```c return (int64_t)x; ```)
+(defn run-id [A] [i : (Identity A)] : A ```c return (int64_t)i; ```)
+(definstance Functor [Identity]
+  (fmap [i g] (mk-id (g (run-id i)))))
+
+;; Const r a -- fmap IGNORES the mapped function.
+(defopaque Const [r a] :int)
+(defn mk-const [A] [x : A] : (Const A A) ```c return (int64_t)x; ```)
+(defn get-const [R A] [c : (Const R A)] : R ```c return (int64_t)c; ```)
+(definstance Functor [(Const r)]
+  (fmap [c g] (mk-const (get-const c))))
+
+(defclass Show [a] (show [x] : cstr))
+(definstance Show [int]
+  (show [x] : cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "int:%lld", (long long)x);
+    return (const char *)buf;
+    ```))
+(definstance Show [bool]
+  (show [x] : cstr
+    ```c
+    return x ? "bool:true" : "bool:false";
+    ```))
+
+;; combine s k -> "<s>#<k>" so the captured value AND the Show dispatch show up.
+(defn combine [s : cstr k : int] : cstr
+  ```c
+  char *buf = (char *)malloc(48);
+  snprintf(buf, 48, "%s#%d", s, (int)k);
+  return (const char *)buf;
+  ```)
+
+;; tag-lens: forall f a. (Functor f, Show a) => int -> (a -> f a) -> a -> (f cstr)
+;; The mapper `(fn [x] (combine (show x) k))` CAPTURES `k` and dispatches
+;; `show x` through the appended captured Show dict; `fmap` through Functor.
+(defn tag-lens [^f a] [^Functor f ^Show a k : int g : (-> a (f a)) s : a] : (f cstr)
+  (fmap (g s) (fn [x : a] : cstr (combine (show x) k))))
+
+(defn shown-int
+    [l (forall [(f :: * -> *) a] [(Functor f) (Show a)] (-> int (-> a (f a)) a (f cstr)))
+     s : int] : cstr
+  (run-id (l 5 (fn [x : int] : (Identity int) (mk-id x)) s)))
+
+(defn shown-bool
+    [l (forall [(f :: * -> *) a] [(Functor f) (Show a)] (-> int (-> a (f a)) a (f cstr)))
+     s : bool] : cstr
+  (run-id (l 9 (fn [x : bool] : (Identity bool) (mk-id x)) s)))
+
+(defn peek-int
+    [l (forall [(f :: * -> *) a] [(Functor f) (Show a)] (-> int (-> a (f a)) a (f cstr)))
+     s : int] : int
+  (get-const (l 0 (fn [x : int] : (Const int int) (mk-const x)) s)))
+
+(defn main [] : int
+  (println (shown-int tag-lens 7))       ; int:7#5    (captured k=5, Show int)
+  (println (shown-bool tag-lens true))   ; bool:true#9 (captured k=9, Show bool)
+  (println (peek-int tag-lens 42))       ; 42         (Const ignores the mapper)
+  0)

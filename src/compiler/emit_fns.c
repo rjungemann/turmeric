@@ -495,10 +495,16 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * dict-capturing mapper closure, install its (class, captured-dict-binding)
      * so a class-method call on the constraint var dispatches through the
      * env-loaded dict.  Saved/restored like the dict_dispatch pair above. */
-    TypeClass *saved_de_class = ctx->cur_dict_env_class;
-    Binding   *saved_de_binding = ctx->cur_dict_env_binding;
-    ctx->cur_dict_env_class = fd->dict_env_class;
-    ctx->cur_dict_env_binding = fd->dict_env_binding;
+    uint8_t    saved_de_n = ctx->cur_dict_env_n;
+    TypeClass *saved_de_classes[MAX_FN_CONSTRAINTS];
+    Binding   *saved_de_bindings[MAX_FN_CONSTRAINTS];
+    memcpy(saved_de_classes, ctx->cur_dict_env_classes, sizeof saved_de_classes);
+    memcpy(saved_de_bindings, ctx->cur_dict_env_bindings, sizeof saved_de_bindings);
+    ctx->cur_dict_env_n = fd->n_dict_env;
+    for (uint8_t k = 0; k < fd->n_dict_env; k++) {
+        ctx->cur_dict_env_classes[k] = fd->dict_env_classes[k];
+        ctx->cur_dict_env_bindings[k] = fd->dict_env_bindings[k];
+    }
     /* SYM5: detect the opt-in str->sym definition (from sym-dynamic.tur).  Its
      * presence is what links the runtime intern table, so it gates the
      * static-record seeding constructor emitted by sym_codegen_emit. */
@@ -1805,6 +1811,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     memcpy(ctx->dict_dispatch_classes, saved_dd_classes, sizeof saved_dd_classes);
     memcpy(ctx->dict_dispatch_param_cnames, saved_dd_cnames, sizeof saved_dd_cnames);
     for (uint8_t k = 0; k < MAX_FN_CONSTRAINTS; k++) free(dd_cnames_owned[k]);
-    ctx->cur_dict_env_class = saved_de_class;
-    ctx->cur_dict_env_binding = saved_de_binding;
+    ctx->cur_dict_env_n = saved_de_n;
+    memcpy(ctx->cur_dict_env_classes, saved_de_classes, sizeof saved_de_classes);
+    memcpy(ctx->cur_dict_env_bindings, saved_de_bindings, sizeof saved_de_bindings);
 }

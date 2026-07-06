@@ -1690,24 +1690,34 @@ int emit_call_dict_param_dispatch_index(EmitCtx *ctx, const Expr *call) {
     return -1;
 }
 
-/* forall-dict-pass-nested-lambda-dispatch-plan (Phase 3): true while emitting a
- * dict-capturing mapper closure when `call` dispatches the captured class's
- * method -- the env-loaded-dict analogue of a dict-param dispatch. */
+/* forall-dict-pass-nested-lambda-dispatch-plan (Phase 3) +
+ * forall-dict-pass-nested-mapper-general-plan (Phase 1): the index of the
+ * captured-dict slot whose class OWNS this method call, or -1 when the call is
+ * not an env-dict dispatch.  Keys on the method's instance class, so each
+ * dispatched class lands on its own captured dict regardless of capture order. */
+int emit_call_dict_env_dispatch_index(EmitCtx *ctx, const Expr *call) {
+    if (!(ctx && ctx->cur_dict_env_n > 0 && call && call->kind == EX_CALL &&
+          call->as.call_.dict_arg && call->as.call_.dict_arg->kind == EX_DICT &&
+          call->as.call_.dict_arg->as.dict_.instance &&
+          call->as.call_.dict_arg->as.dict_.instance->typeclass &&
+          call->as.call_.dict_arg->as.dict_.method_name[0] != '\0' &&
+          /* The receiver must be the constraint's own type variable -- a
+           * concrete same-class call in the same mapper body (e.g. `(show 42)`
+           * alongside `(show x)`) is instance-resolved and must NOT be routed
+           * through the polymorphic env dict.  Mirrors the elab-side gate in
+           * mapper_scan_dispatch / dict_clone_nested_dispatch_rec. */
+          call->as.call_.n_args >= 1 && call->as.call_.args &&
+          call->as.call_.args[0] &&
+          call->as.call_.args[0]->type.kind == TY_TYVAR))
+        return -1;
+    const TypeClass *mtc = call->as.call_.dict_arg->as.dict_.instance->typeclass;
+    for (uint8_t k = 0; k < ctx->cur_dict_env_n; k++)
+        if (ctx->cur_dict_env_classes[k] == mtc) return (int)k;
+    return -1;
+}
+
 bool emit_call_is_dict_env_dispatch(EmitCtx *ctx, const Expr *call) {
-    return ctx && ctx->cur_dict_env_class && call && call->kind == EX_CALL &&
-           call->as.call_.dict_arg && call->as.call_.dict_arg->kind == EX_DICT &&
-           call->as.call_.dict_arg->as.dict_.instance &&
-           call->as.call_.dict_arg->as.dict_.instance->typeclass ==
-               ctx->cur_dict_env_class &&
-           call->as.call_.dict_arg->as.dict_.method_name[0] != '\0' &&
-           /* The receiver must be the constraint's own type variable -- a
-            * concrete same-class call in the same mapper body (e.g. `(show 42)`
-            * alongside `(show x)`) is instance-resolved and must NOT be routed
-            * through the polymorphic env dict.  Mirrors the elab-side gate in
-            * mapper_scan_dispatch / dict_clone_nested_dispatch_rec. */
-           call->as.call_.n_args >= 1 && call->as.call_.args &&
-           call->as.call_.args[0] &&
-           call->as.call_.args[0]->type.kind == TY_TYVAR;
+    return emit_call_dict_env_dispatch_index(ctx, call) >= 0;
 }
 
 bool emit_call_is_dict_param_dispatch(EmitCtx *ctx, const Expr *call) {
@@ -1731,16 +1741,17 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
      * -- the CAPTURED dict read from the closure env (`env->dict`).  The rest of
      * the emission (return type, param signature, slot) is identical. */
     int ddk = emit_call_dict_param_dispatch_index(ctx, call);
+    int dek = ddk >= 0 ? -1 : emit_call_dict_env_dispatch_index(ctx, call);
     const TypeClass *disp_tc = NULL;
     char *disp_dict_src = NULL;  /* owned */
     if (ddk >= 0) {
         disp_tc = ctx->dict_dispatch_classes[ddk];
         disp_dict_src = strdup(ctx->dict_dispatch_param_cnames[ddk]);
-    } else if (emit_call_is_dict_env_dispatch(ctx, call)) {
-        disp_tc = ctx->cur_dict_env_class;
-        disp_dict_src = capture_env_access(ctx, ctx->cur_dict_env_binding);
+    } else if (dek >= 0) {
+        disp_tc = ctx->cur_dict_env_classes[dek];
+        disp_dict_src = capture_env_access(ctx, ctx->cur_dict_env_bindings[dek]);
         if (!disp_dict_src)
-            disp_dict_src = raw_name_for_binding(ctx->cur_dict_env_binding);
+            disp_dict_src = raw_name_for_binding(ctx->cur_dict_env_bindings[dek]);
     }
     if (disp_tc) {
         const TypeClass *tc = disp_tc;
