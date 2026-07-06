@@ -6,6 +6,14 @@ description: Four of the five remaining `--enable=<name>` experiment flags (fora
 
 # Retire the four graduation-ready HKT/forall experiment flags -- Plan
 
+> **Follow-up (2026-07-06):** the fifth flag, `forall-dict-pass`, has **also
+> graduated** to always-on. Its remaining scope deficit (multi-constraint +
+> HKT-receiver dicts) landed via
+> [../archive/forall-dict-pass-multi-constraint-hkt-plan.md](forall-dict-pass-multi-constraint-hkt-plan.md).
+> The `EXPERIMENTS[]` registry is now empty; the statements below that
+> `forall-dict-pass` "stays experimental" describe the state at the time of
+> *this* plan only.
+
 ## Why this exists
 
 `src/runtime/experiments.c` carries five active `--enable=<name>` rows, all

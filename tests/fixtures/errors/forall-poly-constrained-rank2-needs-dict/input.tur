@@ -1,16 +1,23 @@
-;; MB1 (constrained-hkt-forall-mode-b-plan) soundness gate: a genuinely
-;; polymorphic constrained function whose body dispatches a class method on its
-;; own type variable cannot be passed as a rank-2 value yet -- the erased carrier
-;; would run a single monomorph (the int representative) for every caller-chosen
-;; type, silently miscompiling (e.g. `(f true)` would show-int the bool).  Needs
-;; runtime dictionary passing (mode B); rejected with TUR-E0308 until then.
+;; forall-dict-pass GRADUATED (docs/archive/forall-dict-pass-multi-constraint-hkt-plan.md):
+;; a genuinely polymorphic constrained function CAN now be passed as a rank-2
+;; argument -- when the rank-2 parameter's forall type DECLARES the matching
+;; constraint, so the carrier threads one runtime dictionary per constraint (see
+;; the positive fixtures forall-dict-show / forall-dict-two-scalar).
+;;
+;; The residual soundness gate: when the forall parameter type declares NO
+;; constraint, there is no dictionary slot to carry the inner fn's own class
+;; obligation.  Its body would monomorphize to the single carrier representative
+;; and miscompile for any other type (`(f true)` would run `Show int` on a bool),
+;; so it is rejected with TUR-E0308.  Fix: declare the constraint on the forall
+;; parameter type, e.g. `(forall [a] [(Show a)] (-> a cstr))`.
 (defclass Show [a] (show [x] : cstr))
 (definstance Show [int]  (show [x] : cstr ```c char*b=malloc(24); snprintf(b,24,"i%lld",(long long)x); return b; ```))
 (definstance Show [bool] (show [x] : cstr ```c return x ? "T" : "F"; ```))
 
 (defn poly-show [a] [^Show a x : a] : cstr (show x))
 
-(defn use-both [f (forall [a] [(Show a)] (-> a cstr))] : cstr
+;; The rank-2 parameter's forall declares no `(Show a)` -- no dict slot exists.
+(defn use-both [f (forall [a] (-> a cstr))] : cstr
   (println (f 7))
   (f true))
 

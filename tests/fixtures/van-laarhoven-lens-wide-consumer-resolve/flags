@@ -1,1 +1,1 @@
---enable=forall-dict-pass --dump-mono-specs
+--dump-mono-specs

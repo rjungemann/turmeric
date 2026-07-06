@@ -1690,8 +1690,29 @@ int emit_call_dict_param_dispatch_index(EmitCtx *ctx, const Expr *call) {
     return -1;
 }
 
+/* forall-dict-pass-nested-lambda-dispatch-plan (Phase 3): true while emitting a
+ * dict-capturing mapper closure when `call` dispatches the captured class's
+ * method -- the env-loaded-dict analogue of a dict-param dispatch. */
+bool emit_call_is_dict_env_dispatch(EmitCtx *ctx, const Expr *call) {
+    return ctx && ctx->cur_dict_env_class && call && call->kind == EX_CALL &&
+           call->as.call_.dict_arg && call->as.call_.dict_arg->kind == EX_DICT &&
+           call->as.call_.dict_arg->as.dict_.instance &&
+           call->as.call_.dict_arg->as.dict_.instance->typeclass ==
+               ctx->cur_dict_env_class &&
+           call->as.call_.dict_arg->as.dict_.method_name[0] != '\0' &&
+           /* The receiver must be the constraint's own type variable -- a
+            * concrete same-class call in the same mapper body (e.g. `(show 42)`
+            * alongside `(show x)`) is instance-resolved and must NOT be routed
+            * through the polymorphic env dict.  Mirrors the elab-side gate in
+            * mapper_scan_dispatch / dict_clone_nested_dispatch_rec. */
+           call->as.call_.n_args >= 1 && call->as.call_.args &&
+           call->as.call_.args[0] &&
+           call->as.call_.args[0]->type.kind == TY_TYVAR;
+}
+
 bool emit_call_is_dict_param_dispatch(EmitCtx *ctx, const Expr *call) {
-    return emit_call_dict_param_dispatch_index(ctx, call) >= 0;
+    return emit_call_dict_param_dispatch_index(ctx, call) >= 0 ||
+           emit_call_is_dict_env_dispatch(ctx, call);
 }
 
 char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
@@ -1704,9 +1725,25 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
      * parameter instead of an `open`-bound table.  The method slot is its index
      * in the class dict layout (dict struct fields are emitted in class-method
      * order, emit_stmt.c). */
+    /* Resolve the dict SOURCE for a class-method dispatch on the constrained
+     * var: either a dict-clone param (`ddk >= 0`) or -- for a nested mapper
+     * closure converted by forall-dict-pass-nested-lambda-dispatch-plan Phase 2
+     * -- the CAPTURED dict read from the closure env (`env->dict`).  The rest of
+     * the emission (return type, param signature, slot) is identical. */
     int ddk = emit_call_dict_param_dispatch_index(ctx, call);
+    const TypeClass *disp_tc = NULL;
+    char *disp_dict_src = NULL;  /* owned */
     if (ddk >= 0) {
-        const TypeClass *tc = ctx->dict_dispatch_classes[ddk];
+        disp_tc = ctx->dict_dispatch_classes[ddk];
+        disp_dict_src = strdup(ctx->dict_dispatch_param_cnames[ddk]);
+    } else if (emit_call_is_dict_env_dispatch(ctx, call)) {
+        disp_tc = ctx->cur_dict_env_class;
+        disp_dict_src = capture_env_access(ctx, ctx->cur_dict_env_binding);
+        if (!disp_dict_src)
+            disp_dict_src = raw_name_for_binding(ctx->cur_dict_env_binding);
+    }
+    if (disp_tc) {
+        const TypeClass *tc = disp_tc;
         const char *mname = call->as.call_.dict_arg->as.dict_.method_name;
         int slot = -1;
         for (uint8_t i = 0; i < tc->n_methods; i++) {
@@ -1775,12 +1812,14 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
                     buf_printf(&b2, "%sint64_t", i ? ", " : "");
             }
             buf_printf(&b2, "))((void **)(intptr_t)%s)[%d])",
-                       ctx->dict_dispatch_param_cnames[ddk], slot);
+                       disp_dict_src, slot);
             buf_putc(&b2, '\0');
             char *out = strdup(b2.data);
             buf_free(&b2);
+            free(disp_dict_src);
             return out;
         }
+        free(disp_dict_src);
     }
     /* GHE: typeclass-method dispatch inside a monomorphized constrained generic
      * takes precedence over the generic-function specialization lookup below. */

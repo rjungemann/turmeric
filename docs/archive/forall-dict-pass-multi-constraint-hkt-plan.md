@@ -1,6 +1,17 @@
 # `forall-dict-pass` multi-constraint + HKT method-receiver dicts (Deficit 2)
 
-**Status:** OPEN -- graduation blocker for `--enable=forall-dict-pass`.
+**Status:** DONE / GRADUATED 2026-07-06. Phases 1-2 landed (multi-constraint
+dict-clone frame + mixed HKT/scalar dispatch), the acceptance fixtures
+(`forall-dict-two-scalar/`, `van-laarhoven-lens-show/`) compile clean and run,
+and Phase 3 graduated the flag: `forall-dict-pass` is removed from
+`EXPERIMENTS[]` and the runtime dictionary-passing paths are now always-on.
+The one shape still unsupported -- a constraint method dispatched from inside a
+nested lambda in the dict-clone body -- is rejected with a specific diagnostic
+(TUR-E0311, never miscompiled) and tracked as an open follow-up in
+[../reported/forall-dict-pass-nested-lambda-method.md](../reported/forall-dict-pass-nested-lambda-method.md);
+its negative fixture is `tests/fixtures/errors/forall-dict-nested-lambda-method/`.
+
+**Original status:** OPEN -- graduation blocker for `--enable=forall-dict-pass`.
 **Split from:** `docs/archive/forall-dict-pass-codegen-and-scope.md` (Deficit 2).
 **Predecessor:** `docs/archive/constrained-hkt-forall-mode-b-plan.md` (MB1/MB2 landed
 single-constraint; this plan finishes the "Not yet" note at its line ~161).
