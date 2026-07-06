@@ -52,21 +52,17 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * variable (e.g. (forall [(f :: * -> *)] (-> (f int) int))) is always
      * validated at instantiation sites; the gate in elab_call.c is removed.
      * See docs/archive/constrained-hkt-forall-plan.md. */
-    { "forall-dict-pass",
-      "runtime dictionary passing for a polymorphic constrained function used as a rank-2 argument (mode B)",
-      "docs/upcoming/v1/forall-dict-pass-multi-constraint-hkt-plan.md",
-      "0.25.6",                    /* introduced */
-      "0.28.0",                    /* expires_at (soft deadline; on that version's
-                                    * cut, review the row and graduate, shelve, or
-                                    * bump) -- bumped from 0.27.0: Deficit 1
-                                    * (dict-clone method return-type threading) is
-                                    * fixed (see
-                                    * docs/archive/forall-dict-pass-codegen-and-scope.md);
-                                    * Deficit 2 (multi-constraint / HKT-receiver dicts)
-                                    * keeps the flag experimental and is tracked by the
-                                    * plan_path plan above. */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_forall_dict_pass },
+    /* forall-dict-pass GRADUATED 2026-07-06 -- runtime dictionary passing for a
+     * polymorphic constrained function used as a rank-2 argument (mode B) is
+     * always-on.  Deficit 1 (dict-clone method return-type threading) and
+     * Deficit 2 (multi-constraint + HKT-receiver dicts) both landed; a
+     * constrained rank-2 forall carries one dictionary per constraint through
+     * the poly carrier, and each class-method call in the dict-clone body
+     * dispatches through the dict for its own class.  The one residual shape --
+     * a constraint method dispatched from inside a nested lambda -- is rejected
+     * with TUR-E0311 (never miscompiled) and tracked in
+     * docs/reported/forall-dict-pass-nested-lambda-method.md.  See
+     * docs/archive/forall-dict-pass-multi-constraint-hkt-plan.md. */
     /* hrt-curried-result GRADUATED 2026-07-06 -- a curried rank-2 poly fn whose
      * forall body result is itself a function (e.g. (forall [a] (-> a (-> a a))))
      * always instantiates the result to a concrete callable closure, so (l x)

@@ -1,0 +1,68 @@
+;; van-laarhoven-lens-show (Phase 2 acceptance): the real (Functor f, Show a)
+;; lens shape -- one HKT constraint (Functor f) whose method receiver is (f a)
+;; coexisting with a scalar constraint (Show a) exercised inside the traversal.
+;; A single compiled `show-lens` body dispatches `fmap` through the Functor dict
+;; and `show` through the Show dict, EACH keyed on the method's own class, with
+;; the caller choosing BOTH the functor f AND the focus type a per call (two
+;; distinct constraint vars pinned in one invocation, no cross-contamination).
+
+;; Identity a -- fmap runs the mapped function.
+(defopaque Identity [a] :int)
+(defn mk-id [A] [x : A] : (Identity A) ```c return (int64_t)x; ```)
+(defn run-id [A] [i : (Identity A)] : A ```c return (int64_t)i; ```)
+(definstance Functor [Identity]
+  (fmap [i g] (mk-id (g (run-id i)))))
+
+;; Const r a -- phantom second index; fmap IGNORES the mapped function.
+(defopaque Const [r a] :int)
+(defn mk-const [A] [x : A] : (Const A A) ```c return (int64_t)x; ```)
+(defn get-const [R A] [c : (Const R A)] : R ```c return (int64_t)c; ```)
+(definstance Functor [(Const r)]
+  (fmap [c g] (mk-const (get-const c))))
+
+(defclass Show [a] (show [x] : cstr))
+(definstance Show [int]
+  (show [x] : cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "int:%lld", (long long)x);
+    return (const char *)buf;
+    ```))
+(definstance Show [bool]
+  (show [x] : cstr
+    ```c
+    return x ? "bool:true" : "bool:false";
+    ```))
+
+;; show-lens: forall f a. (Functor f, Show a) => (a -> f a) -> a -> (f cstr)
+;; `show s` runs on the focus inside the traversal (dispatched through the Show
+;; dict), then `fmap` maps the shown tag over the functor (dispatched through the
+;; Functor dict).  f is pinned by g's (f a) result; a is pinned by the s : a arg.
+(defn show-lens [^f a] [^Functor f ^Show a g : (-> a (f a)) s : a] : (f cstr)
+  (let [tag (show s)]
+    (fmap (g s) (fn [x : a] : cstr tag))))
+
+;; f := Identity: fmap runs the mapper, yielding the shown tag under Identity.
+(defn shown-int
+    [l (forall [(f :: * -> *) a] [(Functor f) (Show a)] (-> (-> a (f a)) a (f cstr)))
+     s : int] : cstr
+  (run-id (l (fn [x : int] : (Identity int) (mk-id x)) s)))
+
+(defn shown-bool
+    [l (forall [(f :: * -> *) a] [(Functor f) (Show a)] (-> (-> a (f a)) a (f cstr)))
+     s : bool] : cstr
+  (run-id (l (fn [x : bool] : (Identity bool) (mk-id x)) s)))
+
+;; f := Const: fmap ignores the mapper, so the Const carries the focus straight
+;; through -- demonstrating the Functor dict (not the Show dict) selects fmap's
+;; behavior even though `show` was dispatched moments earlier in the same body.
+(defn peek-int
+    [l (forall [(f :: * -> *) a] [(Functor f) (Show a)] (-> (-> a (f a)) a (f cstr)))
+     s : int] : int
+  (get-const (l (fn [x : int] : (Const int int) (mk-const x)) s)))
+
+(defn main [] : int
+  (println (shown-int show-lens 7))       ; int:7    (Identity + Show int)
+  (println (shown-bool show-lens true))   ; bool:true (Identity + Show bool)
+  (println (peek-int show-lens 42))       ; 42       (Const ignores the mapper)
+  0)

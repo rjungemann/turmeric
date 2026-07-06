@@ -281,6 +281,12 @@ static bool call_type_has_named_tyvar(const Type *t) {
  * structure.  Used by the poly-HOF eta-expansion look-ahead to decide whether a
  * sibling bare-tyvar parameter pins a tyvar appearing in a function-typed
  * parameter (e.g. `f : (fn [A] int)` mentions "A", pinned by `a : A`). */
+/* forall-dict-pass-multi-constraint-hkt-plan (Task 3.1 residual guard):
+ * forward decl -- definition sits just above make_dict_clone. */
+static bool dict_clone_dispatch_in_nested_lambda(const Expr *e,
+                                                 const ConstraintSet *cs,
+                                                 bool inside_lambda);
+
 /* MB2: true if `t` mentions any type variable (a bare TY_TYVAR or a tyvar
  * nested in an application / function type). */
 static bool type_mentions_tyvar(const Type *t) {
@@ -4590,15 +4596,16 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                     ? rank2_forall_ty->as.forall_.n_constraints : 0;
                 bool inner_poly_constrained = inner_fn_b->fn_constraints &&
                     inner_fn_b->fn_constraints->n_constraints > 0;
-                if (g_opt_forall_dict_pass && forall_constrained) {
-                    /* MB1 (constrained-hkt-forall-mode-b-plan): under
-                     * --enable=forall-dict-pass the carrier ABI of a constrained
-                     * rank-2 forall carries one dictionary per constraint (leading
-                     * args, resolved at each invocation).  A *polymorphic*
-                     * constrained inner is wrapped as a dict-clone that dispatches
-                     * its class method through that dict; a *monomorphic* inner
-                     * accepts and ignores the dict slots. */
-                    experiment_warn_if_used("forall-dict-pass");
+                if (forall_constrained) {
+                    /* forall-dict-pass GRADUATED 2026-07-06 (MB1 of
+                     * constrained-hkt-forall-mode-b-plan): the carrier ABI of a
+                     * constrained rank-2 forall carries one dictionary per
+                     * constraint (leading args, resolved at each invocation),
+                     * always -- the former --enable=forall-dict-pass gate is
+                     * gone.  A *polymorphic* constrained inner is wrapped as a
+                     * dict-clone that dispatches its class method through that
+                     * dict; a *monomorphic* inner accepts and ignores the dict
+                     * slots. */
                     if (inner_poly_constrained) {
                         /* forall-dict-pass-multi-constraint-hkt-plan (Task 1.3):
                          * N>=1 constraints are supported -- the clone carries one
@@ -4627,6 +4634,32 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                                 (unsigned)inner_nc, (unsigned)MAX_FN_CONSTRAINTS);
                             return NULL;
                         }
+                        /* Task 3.1 residual guard: a class-method dispatch on a
+                         * constrained type variable nested inside a lambda
+                         * argument (a van Laarhoven mapper that calls `show` on
+                         * the focus) is lifted to its own top-level C function
+                         * with no dict param in scope, so it would silently
+                         * mis-resolve to the carrier-representative instance.
+                         * Reject with a specific diagnostic rather than
+                         * miscompile.  Dispatching a constraint method directly
+                         * in the body (e.g. `(let [tag (show s)] ...)`) is fully
+                         * supported and not flagged here. */
+                        if (inner_fn_b->source_fn_def &&
+                            dict_clone_dispatch_in_nested_lambda(
+                                inner_fn_b->source_fn_def->body,
+                                inner_fn_b->fn_constraints, false)) {
+                            diag_emit(DIAG_ERROR, args[i]->span,
+                                "forall-dict-pass: '%s' dispatches a typeclass "
+                                "method on its constrained type variable from "
+                                "inside a nested lambda; the lambda is lifted "
+                                "without the runtime dictionary in scope, so the "
+                                "dispatch cannot be routed. Dispatch the method "
+                                "directly in the function body (bind it in a "
+                                "`let`) instead of inside a closure passed to "
+                                "another call (TUR-E0311)",
+                                inner_fn_b->name ? inner_fn_b->name->name : "?");
+                            return NULL;
+                        }
                         Binding *clone = make_dict_clone(e, inner_fn_b, args[i]->span);
                         if (!clone) {
                             diag_emit(DIAG_ERROR, args[i]->span,
@@ -4649,19 +4682,23 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                         wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
                     }
                 } else if (inner_poly_constrained) {
-                    /* Soundness gate (flag off): passing a genuinely polymorphic
-                     * constrained function as a rank-2 value would monomorphize to
-                     * the single carrier representative and miscompile for any
+                    /* Soundness gate: the rank-2 parameter's forall type declares
+                     * NO constraint, so there is no dictionary slot to carry the
+                     * inner fn's own class obligation.  Its body would monomorphize
+                     * to the single carrier representative and miscompile for any
                      * other type -- e.g. `(f true)` runs `Show int` on a bool.
-                     * Needs mode B (--enable=forall-dict-pass). */
+                     * Declare the constraint on the forall parameter type (so the
+                     * dict is threaded through the carrier) or pass a monomorphic
+                     * function. */
                     diag_emit(DIAG_ERROR, args[i]->span,
                               "cannot pass the polymorphic constrained function "
                               "'%s' as a rank-2 argument: its body dispatches a "
-                              "typeclass method on its own type variable, which "
-                              "needs runtime dictionary passing through the poly "
-                              "carrier -- enable it with --enable=forall-dict-pass "
-                              "(see docs/upcoming/v1/constrained-hkt-forall-mode-b-plan.md) "
-                              "or pass a monomorphic function (TUR-E0308)",
+                              "typeclass method on its own type variable, but the "
+                              "rank-2 parameter's forall type declares no matching "
+                              "constraint to carry the runtime dictionary. Add the "
+                              "constraint to the forall parameter type (e.g. "
+                              "(forall [a] [(Show a)] (-> a cstr))) or pass a "
+                              "monomorphic function (TUR-E0308)",
                               inner_fn_b->name ? inner_fn_b->name->name : "?");
                     return NULL;
                 } else {
@@ -5422,7 +5459,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     Binding *fwd_bound = bound_fn;
     Expr   **fwd_args  = args;
     uint32_t fwd_nargs = n_args;
-    if (g_opt_forall_dict_pass && e->cur_hkt_constraint_class &&
+    if (e->cur_hkt_constraint_class &&
         e->cur_hkt_constraint_tyvar && fn_binding && bound_fn == fn_binding &&
         fn_binding->fn_constraints &&
         fn_binding->fn_constraints->n_constraints == 1 &&
@@ -5494,6 +5531,109 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         return call_wrap_reinterpret(e, out, result_type.kind, call->span);
     }
     return out;
+}
+
+/* forall-dict-pass-multi-constraint-hkt-plan (Task 3.1 residual guard): a
+ * class-method call on a constrained type variable (an int-representative
+ * dispatch tagged with a `dict_arg` whose class is one of the clone's
+ * constraints) is only re-routed through the runtime dict param when it is
+ * emitted INSIDE the dict-clone body proper.  A nested lambda argument -- a
+ * van Laarhoven mapper `(fn [x] (show x))` passed to `fmap` -- is lifted to
+ * its own top-level C function with NO dict param in scope, so its `show x`
+ * would silently mis-resolve to the carrier-representative instance (e.g.
+ * `Show int` on a bool).  Detect that shape here so the call site can reject
+ * it with a specific diagnostic instead of miscompiling.
+ *
+ * `inside_lambda` starts false at the body root and flips true when we descend
+ * into a lifted lambda: either an inline EX_FN body or -- the common case --
+ * the FnDef reached through an EX_VAR that references a captureless lifted
+ * lambda (`is_lifted_lambda`), which is how a mapper argument reaches the body.
+ * `depth` bounds the lifted-lambda chain so a self/mutually-recursive lifted
+ * lambda cannot loop the walk. */
+static bool dict_clone_nested_dispatch_rec(const Expr *e,
+                                           const ConstraintSet *cs,
+                                           bool inside_lambda, int depth) {
+    if (!e || !cs || depth > 32) return false;
+#define REC(x) dict_clone_nested_dispatch_rec((x), cs, inside_lambda, depth)
+    switch (e->kind) {
+        case EX_CALL: {
+            /* A constraint-var method dispatch: tagged with a dict_arg whose
+             * class is one of the clone's constraints, and whose receiver is a
+             * bare type variable (the constraint's own var, resolved to the
+             * carrier representative).  A concrete-typed receiver re-resolves
+             * correctly inside a lifted lambda and must NOT be rejected. */
+            if (inside_lambda && e->as.call_.dict_arg &&
+                e->as.call_.dict_arg->kind == EX_DICT &&
+                e->as.call_.dict_arg->as.dict_.instance &&
+                e->as.call_.dict_arg->as.dict_.instance->typeclass &&
+                e->as.call_.n_args >= 1 && e->as.call_.args &&
+                e->as.call_.args[0] &&
+                e->as.call_.args[0]->type.kind == TY_TYVAR) {
+                const TypeClass *mtc =
+                    e->as.call_.dict_arg->as.dict_.instance->typeclass;
+                for (uint8_t c = 0; c < cs->n_constraints; c++)
+                    if (cs->constraints[c].typeclass == mtc) return true;
+            }
+            if (e->as.call_.fn_expr && REC(e->as.call_.fn_expr)) return true;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (REC(e->as.call_.args[i])) return true;
+            return false;
+        }
+        case EX_VAR: {
+            /* A mapper argument is lifted to a top-level `__fn_N` and reaches
+             * the body as an EX_VAR whose binding carries the lifted FnDef.
+             * Descend into that FnDef's body as a nested lambda. */
+            const Binding *vb = e->as.var.binding;
+            if (vb && vb->is_lifted_lambda && vb->source_fn_def &&
+                vb->source_fn_def->body)
+                return dict_clone_nested_dispatch_rec(vb->source_fn_def->body,
+                                                      cs, true, depth + 1);
+            return false;
+        }
+        case EX_FN:
+            return e->as.fn_.fn &&
+                   dict_clone_nested_dispatch_rec(e->as.fn_.fn->body, cs, true,
+                                                  depth + 1);
+        case EX_FN_DEF:
+            return e->as.fn_def_.fn &&
+                   dict_clone_nested_dispatch_rec(e->as.fn_def_.fn->body, cs,
+                                                  true, depth + 1);
+        case EX_LET:
+        case EX_LETREC: {
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (REC(e->as.let_.bindings[i].init)) return true;
+            return REC(e->as.let_.body);
+        }
+        case EX_IF:
+            return REC(e->as.if_.cond) || REC(e->as.if_.then_) ||
+                   REC(e->as.if_.else_or_null);
+        case EX_DO: {
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (REC(e->as.do_.items[i])) return true;
+            return false;
+        }
+        case EX_WHILE:
+            return REC(e->as.while_.cond) || REC(e->as.while_.body);
+        case EX_MATCH: {
+            if (REC(e->as.match_.scrutinee)) return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (REC(e->as.match_.arms[i].body)) return true;
+                if (REC(e->as.match_.arms[i].guard)) return true;
+            }
+            return false;
+        }
+        case EX_POLY_WRAP:  return REC(e->as.poly_wrap_.inner);
+        case EX_FN_TO_FAT:  return REC(e->as.fn_to_fat_.inner);
+        case EX_ASCRIBE:    return REC(e->as.ascribe_.inner);
+        default:            return false;
+    }
+#undef REC
+}
+
+static bool dict_clone_dispatch_in_nested_lambda(const Expr *e,
+                                                 const ConstraintSet *cs,
+                                                 bool inside_lambda) {
+    return dict_clone_nested_dispatch_rec(e, cs, inside_lambda, 0);
 }
 
 /* MB1 / forall-dict-pass-multi-constraint-hkt-plan (Task 1.2): build a
@@ -6102,7 +6242,7 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                  * the callee (a dict-clone) dispatches its class method through it
                  * at runtime.  Bare-value EX_DICT form ->
                  * `(int64_t)(intptr_t)(&dict_C_T_singleton)`. */
-                if (g_opt_forall_dict_pass && mb1_n_dicts < 16) {
+                if (mb1_n_dicts < 16) {
                     Expr *de = expr_new(e->arena, EX_DICT, TYPE_PTR_VOID, call->span);
                     de->as.dict_.instance = inst;
                     de->as.dict_.method_name[0] = '\0';
@@ -6226,8 +6366,18 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
      * crossing the poly carrier is a uniform fat box (the dict-clone fat-dispatches
      * its function params through slot 0, make_dict_clone), so a thin
      * (non-capturing) fn argument must be boxed; a capturing closure already
-     * carries one (TY_PTR_VOID / boxed TY_FN) and is left untouched. */
-    if (g_opt_forall_dict_pass && poly && poly->kind == TY_FORALL) {
+     * carries one (TY_PTR_VOID / boxed TY_FN) and is left untouched.
+     *
+     * Only the CONSTRAINED (dict-pass) path installs a dict-clone that
+     * fat-dispatches fn params through slot 0, so restrict the boxing to a
+     * constrained forall.  An UNconstrained curried rank-2 forall (plain HRT,
+     * e.g. `(forall [a] (-> (-> a a) (-> a a)))`) has no dict-clone; its callee
+     * takes a thin fn pointer, and boxing it would fat-dispatch a thin pointer
+     * -> SIGSEGV (hrt-curried-fn-result).  Before forall-dict-pass graduated
+     * this whole block was gated behind the flag, so a flagless unconstrained
+     * forall never reached it. */
+    if (poly && poly->kind == TY_FORALL &&
+        poly->as.forall_.n_constraints > 0) {
         const Type *pbody = poly->as.forall_.body;
         if (pbody && pbody->kind == TY_FN && pbody->as.fn.arg_full_types) {
             for (uint32_t i = 0; i < n_args &&
@@ -6312,7 +6462,7 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
      * order), matching the dict slots the wrapper carries.  Done after the
      * result-type / poly_arg_mask logic (which reasons about the real args) so
      * those are unperturbed; the emitted N-ary carrier call passes them through. */
-    if (g_opt_forall_dict_pass && mb1_n_dicts > 0) {
+    if (mb1_n_dicts > 0) {
         uint32_t total = (uint32_t)mb1_n_dicts + out->as.call_.n_args;
         Expr **na = (Expr **)arena_alloc(e->arena, total * sizeof(Expr *));
         for (uint8_t k = 0; k < mb1_n_dicts; k++) na[k] = mb1_dicts[k];

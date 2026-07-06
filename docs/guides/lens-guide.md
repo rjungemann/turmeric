@@ -1,7 +1,7 @@
 ---
 title: Lens Guide
 category: Standard Library
-description: First-class functional lenses (view / set / over) via stdlib/lens.tur, the profunctor-by-record encoding shipped by default, and the van Laarhoven form available behind experiment flags.
+description: First-class functional lenses (view / set / over) via stdlib/lens.tur, the profunctor-by-record encoding shipped by default, and the van Laarhoven form -- now always-on, no experiment flags required.
 ---
 
 # Lens Guide
@@ -60,11 +60,11 @@ Laarhoven** form -- the classic Haskell optic
 type Lens s a = forall f. Functor f => (a -> f a) -> (s -> f s)
 ```
 
--- now works out of the box for the kind/constraint/higher-rank machinery it
-needs (the `forall-kinds`, `forall-constraints`, `hkt-hrt`, and
-`hrt-curried-result` experiments have graduated to always-on); only the runtime
-dictionary passing it relies on still sits behind `--enable=forall-dict-pass`.
-It supports `view`/`set`/`over`, generic focus
+-- now works out of the box: the kind/constraint/higher-rank machinery it needs
+(the `forall-kinds`, `forall-constraints`, `hkt-hrt`, and `hrt-curried-result`
+experiments) and the runtime dictionary passing it relies on (the
+`forall-dict-pass` experiment) have all graduated to always-on, so no experiment
+flags are required. It supports `view`/`set`/`over`, generic focus
 inference, and composition with ordinary function composition. It carries the
 caller's
 `Functor` dictionary through the poly carrier at runtime, so the lens body
@@ -98,8 +98,7 @@ where the whole types (`Line`, `Point`) are `:copy` so `l`/`s` can be used more
 than once.
 
 The van Laarhoven form composes freely (`l1 . l2` is just function
-composition); reach for it when you need optic composition and can accept the
-experiment flags.
+composition); reach for it when you need optic composition.
 
 ## Functor width
 

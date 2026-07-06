@@ -177,9 +177,10 @@ bool g_werror_inline_c_narrow_params = false;
  * their enable bits and elaboration gates are gone.  See
  * docs/archive/constrained-hkt-forall-plan.md. */
 
-/* MB1 of constrained-hkt-forall-mode-b-plan: `forall-dict-pass` experiment
- * enable bit.  Default off. */
-bool g_opt_forall_dict_pass = false;
+/* forall-dict-pass GRADUATED 2026-07-06 -- always-on; runtime dictionary
+ * passing for a polymorphic constrained function used as a rank-2 argument
+ * (mode B) no longer has an enable bit.  See
+ * docs/archive/forall-dict-pass-multi-constraint-hkt-plan.md. */
 
 /* hrt-curried-result GRADUATED 2026-07-06 -- always-on; the curried rank-2
  * result-is-a-function elaboration ((l x) yields a callable closure) no longer

@@ -151,13 +151,12 @@ extern bool g_werror_inline_c_narrow_params;
  * bit and its elab_types.c gate are gone.  forall-constraints and hkt-hrt
  * graduated the same day (see docs/archive/constrained-hkt-forall-plan.md). */
 
-/* MB1 of constrained-hkt-forall-mode-b-plan: enable bit for the
- * `forall-dict-pass` experiment.  When set, a genuinely polymorphic constrained
- * function passed as a rank-2 argument is compiled to dispatch its class methods
- * through a runtime dictionary threaded via the poly carrier (a dict-clone of
- * the function + a leading dict argument resolved at each invocation), instead
- * of being rejected (TUR-E0308) as it is without the flag. */
-extern bool g_opt_forall_dict_pass;
+/* forall-dict-pass GRADUATED 2026-07-06 -- always-on.  A genuinely polymorphic
+ * constrained function passed as a rank-2 argument is compiled to dispatch its
+ * class methods through a runtime dictionary threaded via the poly carrier (a
+ * dict-clone of the function + one leading dict argument per constraint,
+ * resolved at each invocation).  The enable bit is gone.  See
+ * docs/archive/forall-dict-pass-multi-constraint-hkt-plan.md. */
 
 /* hrt-curried-result GRADUATED 2026-07-06 -- a rank-2 poly fn whose forall body
  * RESULT is itself a function type (e.g. `forall a. a -> (a -> a)`) always

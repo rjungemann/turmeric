@@ -1,0 +1,33 @@
+;; forall-dict-pass-multi-constraint-hkt-plan (Task 3.1 residual guard): a
+;; constrained poly fn whose body dispatches a typeclass method on its OWN type
+;; variable from inside a nested lambda -- a van Laarhoven mapper (fn [x] (show x))
+;; passed to fmap -- cannot be dict-clone-lowered: the lambda is lifted to its own
+;; top-level C function with no runtime dictionary in scope, so `show x` would
+;; silently mis-resolve to the carrier-representative instance (Show int on a
+;; bool).  Rejected with TUR-E0311 rather than miscompiled.  Dispatching `show`
+;; directly in the body (bind it in a `let`) IS supported -- see the positive
+;; fixture van-laarhoven-lens-show.
+(defopaque Identity [a] :int)
+(defn mk-id [A] [x : A] : (Identity A) ```c return (int64_t)x; ```)
+(defn run-id [A] [i : (Identity A)] : A ```c return (int64_t)i; ```)
+(definstance Functor [Identity]
+  (fmap [i g] (mk-id (g (run-id i)))))
+
+(defclass Show [a] (show [x] : cstr))
+(definstance Show [int]
+  (show [x] : cstr ```c return "int"; ```))
+(definstance Show [bool]
+  (show [x] : cstr ```c return x ? "bool:true" : "bool:false"; ```))
+
+;; `show x` lives inside the mapper lambda passed to fmap -- the unsupported shape.
+(defn show-lens [^f a] [^Functor f ^Show a g : (-> a (f a)) s : a] : (f cstr)
+  (fmap (g s) (fn [x : a] : cstr (show x))))
+
+(defn shown-bool
+    [l (forall [(f :: * -> *) a] [(Functor f) (Show a)] (-> (-> a (f a)) a (f cstr)))
+     s : bool] : cstr
+  (run-id (l (fn [x : bool] : (Identity bool) (mk-id x)) s)))
+
+(defn main [] : int
+  (println (shown-bool show-lens true))
+  0)

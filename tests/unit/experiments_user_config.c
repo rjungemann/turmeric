@@ -98,65 +98,74 @@ int main(void) {
     if (!dir) { perror("mkdtemp"); return 3; }
     set_config_home(dir);
 
-    /* The reader is exercised against the single surviving experiment,
-     * `forall-dict-pass` (the four graduation-ready HKT/forall flags retired
-     * 2026-07-06; see docs/archive/retire-graduation-ready-hkt-flags-plan.md).
-     * When forall-dict-pass itself graduates, repoint these to whatever real
-     * experiment then survives. */
+    /* The reader is exercised against whatever experiment happens to be
+     * registered first.  forall-dict-pass -- the last surviving flag -- itself
+     * graduated 2026-07-06 (docs/archive/forall-dict-pass-multi-constraint-hkt-plan.md),
+     * so the registry may now be EMPTY ("empty by design", experiments.c).  The
+     * enable/source/CLI checks that need a live experiment run only when one is
+     * registered and use its real name; the registry-independent paths (absent
+     * file, unknown key, unknown-name exit) always run.  Adding any new
+     * experiment automatically re-covers the enable path with no test edit. */
+    const char *PROBE =
+        experiment_count() > 0 ? experiment_at(0)->name : NULL;
+    char enable_line[128];
+    if (PROBE)
+        snprintf(enable_line, sizeof(enable_line), ":enable [%s]\n", PROBE);
+    else
+        enable_line[0] = '\0';
 
     /* 1. Absent file -> no-op, returns false, nothing enabled. */
     remove_config(dir);
     CHECK(experiments_read_user_config() == false, "absent file returns false");
-    CHECK(experiment_is_enabled("forall-dict-pass") == false,
-          "absent file enables nothing");
+    if (PROBE)
+        CHECK(experiment_is_enabled(PROBE) == false,
+              "absent file enables nothing");
 
     /* 2. Valid :enable list turns the named experiment on at user-config. */
-    write_config(dir,
-        ";; test config\n"
-        ":enable [forall-dict-pass]\n");
-    CHECK(experiments_read_user_config() == true, "present file returns true");
-    CHECK(experiment_is_enabled("forall-dict-pass") == true,
-          "forall-dict-pass enabled from user config");
-    CHECK(experiment_is_enabled("no-such-experiment") == false,
-          "an unlisted / unknown experiment stays off");
+    if (PROBE) {
+        char cfg[256];
+        snprintf(cfg, sizeof(cfg), ";; test config\n%s", enable_line);
+        write_config(dir, cfg);
+        CHECK(experiments_read_user_config() == true, "present file returns true");
+        CHECK(experiment_is_enabled(PROBE) == true,
+              "probe experiment enabled from user config");
+        CHECK(experiment_is_enabled("no-such-experiment") == false,
+              "an unlisted / unknown experiment stays off");
 
-    /* Source column reports user-config for a flag that came from the file. */
-    {
+        /* Source column reports user-config for a flag that came from the file. */
         bool saw_user_config = false;
         size_t n = experiment_count();
         for (size_t i = 0; i < n; i++) {
             const ExperimentDescriptor *d = experiment_at(i);
-            if (strcmp(d->name, "forall-dict-pass") == 0) {
+            if (strcmp(d->name, PROBE) == 0)
                 saw_user_config =
                     (experiment_source_at(i) == XF_SRC_USER_CONFIG);
-            }
         }
-        CHECK(saw_user_config, "forall-dict-pass source is XF_SRC_USER_CONFIG");
-    }
+        CHECK(saw_user_config, "probe experiment source is XF_SRC_USER_CONFIG");
 
-    /* 3. CLI beats user-config: a later CLI enable of the same flag wins. */
-    CHECK(experiment_enable("forall-dict-pass", XF_SRC_CLI) == true,
-          "CLI enable of already-user-config flag succeeds");
-    {
-        size_t n = experiment_count();
+        /* 3. CLI beats user-config: a later CLI enable of the same flag wins. */
+        CHECK(experiment_enable(PROBE, XF_SRC_CLI) == true,
+              "CLI enable of already-user-config flag succeeds");
         for (size_t i = 0; i < n; i++) {
             const ExperimentDescriptor *d = experiment_at(i);
-            if (strcmp(d->name, "forall-dict-pass") == 0) {
+            if (strcmp(d->name, PROBE) == 0)
                 CHECK(experiment_source_at(i) == XF_SRC_CLI,
                       "CLI overrides user-config source");
-            }
         }
     }
 
-    /* 4. Unknown key warns (TUR-W0062) but still returns true and applies the
+    /* 4. Unknown key warns (TUR-W0062) but still returns true and applies any
      *    recognized :enable list. */
-    write_config(dir,
-        ":no-such-key [a b c]\n"
-        ":enable [forall-dict-pass]\n");
-    CHECK(experiments_read_user_config() == true,
-          "unknown key does not abort the read");
-    CHECK(experiment_is_enabled("forall-dict-pass") == true,
-          "recognized :enable still applied after unknown key");
+    {
+        char cfg[256];
+        snprintf(cfg, sizeof(cfg), ":no-such-key [a b c]\n%s", enable_line);
+        write_config(dir, cfg);
+        CHECK(experiments_read_user_config() == true,
+              "unknown key does not abort the read");
+        if (PROBE)
+            CHECK(experiment_is_enabled(PROBE) == true,
+                  "recognized :enable still applied after unknown key");
+    }
 
 #ifndef _WIN32
     /* 5. Unknown experiment name exits with code 2 (TUR-E0310). Fork so the
