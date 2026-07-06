@@ -5963,6 +5963,119 @@ static void dict_clone_lower_nested_mappers(Elab *e, Expr *node,
                                             int depth, Binding **caps_out,
                                             uint8_t *n_caps_out);
 
+/* forall-dict-pass-nested-lambda-direct-apply: an inner lambda that is DIRECTLY
+ * APPLIED in a mapper body -- `((fn [y] (show y)) x)` -- is elaborated to a
+ * captureless lifted lambda `__fn_N` that is either called by name or, more
+ * commonly, let-bound to a temp and applied through it (`let [t __fn_N] (t x)`).
+ * Its typeclass dispatch is stranded in `__fn_N`, which has no closure env to
+ * carry the clone's dict, so the nested-mapper lowering below cannot reach it
+ * and it trips the TUR-E0311 guard.  These helpers beta-reduce such an
+ * application in place -- `(__fn_N x)` becomes `(let [y x] (show y))`, splicing
+ * `__fn_N`'s body into the enclosing mapper where the existing depth-0 lowering
+ * captures the dict.  Beta-reduction is semantically neutral here (single
+ * application, each argument bound once) and idempotent (the rewritten EX_LET no
+ * longer matches).  See
+ * docs/reported/forall-dict-direct-applied-nested-lambda-dispatch.md. */
+typedef struct { const Binding *v; FnDef *fd; } LiftAlias;
+
+/* Resolve a callee binding to the captureless lifted-lambda FnDef it names --
+ * directly (a lifted-lambda binding) or through a let alias recorded in
+ * `al[0..n_al)`.  NULL if it is not such a lambda. */
+static FnDef *resolve_lifted_binding(const Binding *vb, const LiftAlias *al, int n_al) {
+    if (!vb) return NULL;
+    if (vb->is_lifted_lambda && vb->source_fn_def && vb->source_fn_def->body)
+        return vb->source_fn_def;
+    for (int i = 0; i < n_al; i++)
+        if (al[i].v == vb) return al[i].fd;
+    return NULL;
+}
+
+/* Resolve a call's callee -- held in `fn_binding` (direct-to-named form) or
+ * `fn_expr` (indirect, an EX_VAR after peeling ascribe/fn-to-fat) -- to a
+ * captureless lifted-lambda FnDef, following let aliases. */
+static FnDef *resolve_lifted_callee(const Binding *fn_binding, const Expr *fx,
+                                    const LiftAlias *al, int n_al) {
+    FnDef *fd = resolve_lifted_binding(fn_binding, al, n_al);
+    if (fd) return fd;
+    while (fx && (fx->kind == EX_ASCRIBE || fx->kind == EX_FN_TO_FAT))
+        fx = fx->kind == EX_ASCRIBE ? fx->as.ascribe_.inner : fx->as.fn_to_fat_.inner;
+    if (fx && fx->kind == EX_VAR)
+        return resolve_lifted_binding(fx->as.var.binding, al, n_al);
+    return NULL;
+}
+
+#define LIFT_ALIAS_MAX 64
+
+static void flatten_applied_lifted(Elab *e, Expr *node, const ConstraintSet *cs,
+                                   const LiftAlias *al, int n_al, int depth) {
+    if (!node || depth > 64) return;
+#define FAL(x) flatten_applied_lifted(e, (x), cs, al, n_al, depth + 1)
+    switch (node->kind) {
+        case EX_CALL: {
+            FnDef *fd = resolve_lifted_callee(node->as.call_.fn_binding,
+                                              node->as.call_.fn_expr, al, n_al);
+            if (fd && fd->n_params == node->as.call_.n_args &&
+                dict_clone_dispatch_in_nested_lambda(fd->body, cs, true)) {
+                uint32_t n = node->as.call_.n_args;
+                LetBinding *lbs = (LetBinding *)arena_alloc(e->arena,
+                    (n ? n : 1) * sizeof(LetBinding));
+                for (uint32_t i = 0; i < n; i++) {
+                    lbs[i].binding = fd->params[i];
+                    lbs[i].init    = node->as.call_.args[i];
+                }
+                Expr *body = fd->body;
+                node->kind = EX_LET;
+                node->as.let_.bindings = lbs;
+                node->as.let_.n = n;
+                node->as.let_.body = body;
+                for (uint32_t i = 0; i < n; i++) FAL(lbs[i].init);
+                FAL(body);
+                return;
+            }
+            if (node->as.call_.fn_expr) FAL(node->as.call_.fn_expr);
+            for (uint32_t i = 0; i < node->as.call_.n_args; i++) FAL(node->as.call_.args[i]);
+            return;
+        }
+        case EX_LET:
+        case EX_LETREC: {
+            LiftAlias ext[LIFT_ALIAS_MAX];
+            int n_ext = n_al < LIFT_ALIAS_MAX ? n_al : LIFT_ALIAS_MAX;
+            for (int i = 0; i < n_ext; i++) ext[i] = al[i];
+            for (uint32_t i = 0; i < node->as.let_.n; i++) {
+                FAL(node->as.let_.bindings[i].init);
+                FnDef *fd = resolve_lifted_callee(NULL, node->as.let_.bindings[i].init,
+                                                  al, n_al);
+                if (fd && node->as.let_.bindings[i].binding && n_ext < LIFT_ALIAS_MAX) {
+                    ext[n_ext].v  = node->as.let_.bindings[i].binding;
+                    ext[n_ext].fd = fd;
+                    n_ext++;
+                }
+            }
+            flatten_applied_lifted(e, node->as.let_.body, cs, ext, n_ext, depth + 1);
+            return;
+        }
+        case EX_IF: FAL(node->as.if_.cond); FAL(node->as.if_.then_); FAL(node->as.if_.else_or_null); return;
+        case EX_DO:
+            for (uint32_t i = 0; i < node->as.do_.n; i++) FAL(node->as.do_.items[i]);
+            return;
+        case EX_WHILE: FAL(node->as.while_.cond); FAL(node->as.while_.body); return;
+        case EX_MATCH:
+            FAL(node->as.match_.scrutinee);
+            for (uint32_t i = 0; i < node->as.match_.n_arms; i++) {
+                FAL(node->as.match_.arms[i].body); FAL(node->as.match_.arms[i].guard);
+            }
+            return;
+        case EX_ASCRIBE:     FAL(node->as.ascribe_.inner); return;
+        case EX_CAST:        FAL(node->as.cast_.expr); return;
+        case EX_REINTERPRET: FAL(node->as.reinterpret_.expr); return;
+        /* Lambda boundaries (EX_FN, EX_FN_DEF, EX_POLY_WRAP, EX_CLOSURE, a
+         * lifted EX_VAR not in call position) are their own mappers, lowered by
+         * the recursive dict_clone_lower_nested_mappers walk -- do not descend. */
+        default: return;
+    }
+#undef FAL
+}
+
 /* Lower a single mapper `M` reached through poly-wrap `node` (`capturing` selects
  * the capturing-closure vs captureless promotion path).  First recurses into M's
  * OWN body to lower any deeper nested mappers and collect the dicts they need
@@ -5983,6 +6096,11 @@ static void lower_one_mapper(Elab *e, Expr *node, FnDef *M, bool capturing,
         collect_dparam_captures(M, dparams, nc, caps_out, n_caps_out);
         return;
     }
+    /* 0. Beta-reduce any directly-applied captureless lifted lambda in M's body
+     * so a typeclass dispatch stranded inside one (`((fn [y] (show y)) x)`)
+     * surfaces at depth-0 where steps 1-3 can capture the dict, instead of
+     * tripping the TUR-E0311 guard. */
+    flatten_applied_lifted(e, M->body, cs, NULL, 0, 0);
     /* 1. Lower deeper mappers in M's body; collect the dicts they need forwarded. */
     Binding *fwd[MAX_FN_CONSTRAINTS];
     uint8_t n_fwd = 0;

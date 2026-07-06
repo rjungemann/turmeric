@@ -1,0 +1,38 @@
+;; forall-dict-pass-nested-lambda-direct-apply: a typeclass dispatch inside a
+;; nested lambda that is DIRECTLY APPLIED in a mapper body -- `((fn [y] (show y))
+;; x)` -- used to be rejected with TUR-E0311 because the inner lambda is lifted
+;; to a captureless top-level `__fn_N` (called by name, no closure env to carry
+;; the clone's dict).  The dict-clone lowering now BETA-REDUCES the application
+;; (`(__fn_N x)` -> `(let [y x] (show y))`), splicing the body into the enclosing
+;; mapper where the existing depth-0 lowering captures the dict.  Exercised at
+;; BOTH `Show int` and `Show bool` so the captured dict must dispatch per
+;; instance (i / t / f), not bake a single representative.
+(defopaque Identity [a] :int)
+(defn mk-id [A] [x : A] : (Identity A) ```c return (int64_t)x; ```)
+(defn run-id [A] [i : (Identity A)] : A ```c return (int64_t)i; ```)
+(definstance Functor [Identity]
+  (fmap [i g] (mk-id (g (run-id i)))))
+
+(defclass Show [a] (show [x] : cstr))
+(definstance Show [int]  (show [x] : cstr ```c return "i"; ```))
+(definstance Show [bool] (show [x] : cstr ```c return x ? "t" : "f"; ```))
+
+;; The mapper directly APPLIES a lifted inner lambda that dispatches Show.
+(defn deep-lens [^f a] [^Functor f ^Show a g : (-> a (f a)) s : a] : (f cstr)
+  (fmap (g s) (fn [x : a] : cstr ((fn [y : a] : cstr (show y)) x))))
+
+(defn use-int
+    [l (forall [(f :: * -> *) a] [(Functor f) (Show a)] (-> (-> a (f a)) a (f cstr)))
+     s : int] : cstr
+  (run-id (l (fn [x : int] : (Identity int) (mk-id x)) s)))
+
+(defn use-bool
+    [l (forall [(f :: * -> *) a] [(Functor f) (Show a)] (-> (-> a (f a)) a (f cstr)))
+     s : bool] : cstr
+  (run-id (l (fn [x : bool] : (Identity bool) (mk-id x)) s)))
+
+(defn main [] : int
+  (println (use-int  deep-lens 7))
+  (println (use-bool deep-lens true))
+  (println (use-bool deep-lens false))
+  0)
