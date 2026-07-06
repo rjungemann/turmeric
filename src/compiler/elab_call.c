@@ -4600,14 +4600,31 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                      * accepts and ignores the dict slots. */
                     experiment_warn_if_used("forall-dict-pass");
                     if (inner_poly_constrained) {
-                        if (nc != 1 ||
-                            inner_fn_b->fn_constraints->n_constraints != 1) {
+                        /* forall-dict-pass-multi-constraint-hkt-plan (Task 1.3):
+                         * N>=1 constraints are supported -- the clone carries one
+                         * dict param per constraint (make_dict_clone) and each
+                         * class-method call dispatches through the dict for its
+                         * own class.  The only residual limits are the shared
+                         * MAX_FN_CONSTRAINTS / MAX_FN_ARITY budget (the forall and
+                         * the inner fn must agree on the constraint count so the
+                         * leading dict slots line up positionally). */
+                        uint8_t inner_nc =
+                            inner_fn_b->fn_constraints->n_constraints;
+                        if (nc != inner_nc) {
                             diag_emit(DIAG_ERROR, args[i]->span,
-                                "forall-dict-pass: only a single typeclass "
-                                "constraint is supported so far (got %u on the "
-                                "forall, %u on '%s')", (unsigned)nc,
-                                (unsigned)inner_fn_b->fn_constraints->n_constraints,
+                                "forall-dict-pass: constraint count mismatch "
+                                "(%u on the forall, %u on '%s') -- the leading "
+                                "dictionary slots cannot be aligned", (unsigned)nc,
+                                (unsigned)inner_nc,
                                 inner_fn_b->name ? inner_fn_b->name->name : "?");
+                            return NULL;
+                        }
+                        if (inner_nc > MAX_FN_CONSTRAINTS) {
+                            diag_emit(DIAG_ERROR, args[i]->span,
+                                "forall-dict-pass: '%s' has %u typeclass "
+                                "constraints, over the limit of %u",
+                                inner_fn_b->name ? inner_fn_b->name->name : "?",
+                                (unsigned)inner_nc, (unsigned)MAX_FN_CONSTRAINTS);
                             return NULL;
                         }
                         Binding *clone = make_dict_clone(e, inner_fn_b, args[i]->span);
@@ -5479,47 +5496,58 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     return out;
 }
 
-/* MB1 (constrained-hkt-forall-mode-b-plan): build a dict-clone of a
- * single-constraint polymorphic constrained function `inner_b` (its body
- * dispatches a class method on its constrained type variable).  The clone shares
- * the original's body and trailing params but prepends one int64 dict param; the
- * FnDef is marked (dict_clone_*) so emit routes the class-method call through the
- * dict param.  Registers the clone as a file def and returns its binding, or
- * NULL if the original FnDef is not found / arity would overflow. */
+/* MB1 / forall-dict-pass-multi-constraint-hkt-plan (Task 1.2): build a
+ * dict-clone of a polymorphic constrained function `inner_b` (its body
+ * dispatches class methods on its constrained type variables).  The clone shares
+ * the original's body and trailing params but prepends one int64 dict param PER
+ * constraint, IN CONSTRAINT ORDER (matching the call site's `mb1_dicts` prepend
+ * order at elab_call.c so `poly_arg_mask << mb1_n_dicts` stays positionally
+ * correct).  The FnDef is marked (dict_clone_*) so emit routes each class-method
+ * call through the dict param for that method's own class.  Registers the clone
+ * as a file def and returns its binding, or NULL if the original FnDef is not
+ * found / arity would overflow. */
 Binding *make_dict_clone(Elab *e, Binding *inner_b, Span span) {
     if (!inner_b || !inner_b->fn_constraints ||
-        inner_b->fn_constraints->n_constraints != 1)
+        inner_b->fn_constraints->n_constraints < 1)
         return NULL;
-    TypeClass *cls = inner_b->fn_constraints->constraints[0].typeclass;
-    if (!cls || inner_b->type.kind != TY_FN) return NULL;
+    uint8_t nc = inner_b->fn_constraints->n_constraints;
+    if (nc > MAX_FN_CONSTRAINTS) return NULL;
+    if (inner_b->type.kind != TY_FN) return NULL;
+    for (uint8_t c = 0; c < nc; c++)
+        if (!inner_b->fn_constraints->constraints[c].typeclass) return NULL;
     /* The original FnDef, reached directly from the binding (MB1 link). */
     FnDef *orig = inner_b->source_fn_def;
     if (!orig || !orig->params || !orig->body) return NULL;
     uint8_t on = orig->n_params;
-    if ((uint32_t)on + 1 > MAX_FN_ARITY) return NULL;
+    if ((uint32_t)on + nc > MAX_FN_ARITY) return NULL;
 
-    /* clone name + dict param */
+    /* clone name */
     char cn[64];
     snprintf(cn, sizeof(cn), "%s__dict_%u",
              (inner_b->name && inner_b->name->name) ? inner_b->name->name : "fn",
              e->next_id++);
     const Symbol *csym = symtab_intern(e->st, strslice(cn, (uint32_t)strlen(cn)));
-    char dn[48];
-    snprintf(dn, sizeof(dn), "__dict_%u", e->next_id++);
-    const Symbol *dsym = symtab_intern(e->st, strslice(dn, (uint32_t)strlen(dn)));
-    Binding *dparam = binding_new(e, dsym, type_from_kind(TY_INT), false, false, span);
 
-    uint8_t np = on + 1;
+    uint8_t np = on + nc;
     Binding **params = (Binding **)arena_alloc(e->arena, np * sizeof(Binding *));
     Type *ptypes = (Type *)arena_alloc(e->arena, np * sizeof(Type));
     TypeKind akinds[MAX_FN_ARITY];
-    params[0] = dparam;
-    ptypes[0] = type_from_kind(TY_INT);
-    akinds[0] = TY_INT;
+    /* One leading int64 dict param per constraint, in constraint order. */
+    Binding *dparams[MAX_FN_CONSTRAINTS];
+    for (uint8_t c = 0; c < nc; c++) {
+        char dn[48];
+        snprintf(dn, sizeof(dn), "__dict_%u", e->next_id++);
+        const Symbol *dsym = symtab_intern(e->st, strslice(dn, (uint32_t)strlen(dn)));
+        Binding *dparam = binding_new(e, dsym, type_from_kind(TY_INT), false, false, span);
+        dparams[c] = dparam;
+        params[c] = dparam;
+        ptypes[c] = type_from_kind(TY_INT);
+        akinds[c] = TY_INT;
+    }
     for (uint8_t i = 0; i < on; i++) {
-        params[i + 1] = orig->params[i];
-        ptypes[i + 1] = orig->param_types[i];
-        akinds[i + 1] = (i < inner_b->type.as.fn.arity)
+        params[i + nc] = orig->params[i];
+        ptypes[i + nc] = orig->param_types[i];
+        akinds[i + nc] = (i < inner_b->type.as.fn.arity)
             ? inner_b->type.as.fn.arg_kinds[i] : orig->param_types[i].kind;
         /* MB4 (constrained-hkt-forall-mode-b-plan): a function-typed parameter
          * (a van Laarhoven lens's `g : (-> A (f A))`) crosses the poly carrier
@@ -5530,9 +5558,9 @@ Binding *make_dict_clone(Elab *e, Binding *inner_b, Span span) {
          * argument to match (elab_poly_call, EX_FN_TO_FAT above).  The body shares
          * `orig`'s param bindings, so mark the binding's own type -- `orig` is
          * only ever emitted as this dict-clone, never directly. */
-        if (ptypes[i + 1].kind == TY_FN && !ptypes[i + 1].as.fn.boxed) {
-            ptypes[i + 1].as.fn.boxed = true;
-            if (params[i + 1]) params[i + 1]->type.as.fn.boxed = true;
+        if (ptypes[i + nc].kind == TY_FN && !ptypes[i + nc].as.fn.boxed) {
+            ptypes[i + nc].as.fn.boxed = true;
+            if (params[i + nc]) params[i + nc]->type.as.fn.boxed = true;
         }
     }
     TypeKind rk = inner_b->type.as.fn.result_kind;
@@ -5556,8 +5584,11 @@ Binding *make_dict_clone(Elab *e, Binding *inner_b, Span span) {
     cf->param_types = ptypes;
     cf->return_type = orig->return_type;
     cf->body = orig->body;
-    cf->dict_clone_param = dparam;
-    cf->dict_clone_class = cls;
+    for (uint8_t c = 0; c < nc; c++) {
+        cf->dict_clone_params[c] = dparams[c];
+        cf->dict_clone_classes[c] = inner_b->fn_constraints->constraints[c].typeclass;
+    }
+    cf->n_dict_clone = nc;
     constraint_set_init(&cf->constraints);
     /* Back-link the clone binding to its FnDef so a consumer (make_poly_wrapper_ex)
      * can see this is a dict-clone.  A dict-clone is ALWAYS emitted returning the
@@ -5677,7 +5708,7 @@ Binding *make_poly_wrapper_ex(Elab *e, Binding *inner_b, uint8_t inner_arity,
      * int64->pointer conversion (the Deficit-1 -Wint-conversion error).  The poly
      * carrier's caller already casts the int64 result back to the declared type. */
     bool inner_is_dict_clone = inner_b->source_fn_def &&
-        inner_b->source_fn_def->dict_clone_class != NULL;
+        inner_b->source_fn_def->n_dict_clone > 0;
 
     /* Build call body: (inner_b x0 x1 ...) */
     TypeKind inner_result_kind = inner_is_dict_clone ? TY_INT

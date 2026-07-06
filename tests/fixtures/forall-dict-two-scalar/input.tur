@@ -1,0 +1,52 @@
+;; forall-dict-pass-multi-constraint-hkt-plan (Phase 1 acceptance): a genuinely
+;; polymorphic constrained function `poly` with TWO scalar constraints
+;; (Show a, Ord a) is passed as a rank-2 argument and invoked at two different
+;; types.  Under --enable=forall-dict-pass the caller resolves BOTH instances per
+;; call and threads one dictionary per constraint through the poly carrier; the
+;; dict-clone dispatches `show` through dict slot 0 and `rank` through dict slot 1,
+;; each keyed on the method's own class -- so `(f 7)` runs `Show int` + `Ord int`
+;; and `(f true)` runs `Show bool` + `Ord bool`, through the one compiled body.
+(defclass Show [a] (show [x] : cstr))
+(definstance Show [int]
+  (show [x] : cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "int:%lld", (long long)x);
+    return (const char *)buf;
+    ```))
+(definstance Show [bool]
+  (show [x] : cstr
+    ```c
+    return x ? "bool:true" : "bool:false";
+    ```))
+
+(defclass Ord [a] (rank [x] : int))
+(definstance Ord [int]
+  (rank [x] : int
+    ```c
+    return (int)x;
+    ```))
+(definstance Ord [bool]
+  (rank [x] : int
+    ```c
+    return x ? 1 : 0;
+    ```))
+
+(defn combine [s : cstr r : int] : cstr
+  ```c
+  char *buf = (char *)malloc(64);
+  snprintf(buf, 64, "%s r=%lld", s, (long long)r);
+  return (const char *)buf;
+  ```)
+
+(defn poly [a] [^Show a ^Ord a x : a] : cstr
+  (combine (show x) (rank x)))
+
+(defn use-both [f (forall [a] [(Show a) (Ord a)] (-> a cstr))] : cstr
+  (println (f 7))
+  (println (f true))
+  "done")
+
+(defn main [] : int
+  (println (use-both poly))
+  0)

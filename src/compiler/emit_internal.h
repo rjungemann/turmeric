@@ -263,13 +263,21 @@ typedef struct EmitCtx {
     uint32_t        cap_carrier_call_bindings;
     const EmitAbiSpecialization *current_abi_specialization;
     const char *current_fn_ret_ctype;
-    /* MB1 (constrained-hkt-forall-mode-b-plan): set while emitting a dict-clone
-     * FnDef body (see FnDef.dict_clone_*).  A class-method call carrying a
-     * `dict_arg` for `dict_dispatch_class` is emitted as a runtime dispatch
-     * through the dict param `dict_dispatch_param_cname` (an int64 carrier),
-     * indexing the class method's slot in the dict layout.  Both NULL normally. */
+    /* MB1 / forall-dict-pass-multi-constraint-hkt-plan (Task 1.4): set while
+     * emitting a dict-clone FnDef body (see FnDef.dict_clone_*).  A class-method
+     * call carrying a `dict_arg` whose instance's class matches one of
+     * `dict_dispatch_classes[0..dict_dispatch_n)` is emitted as a runtime
+     * dispatch through the matching dict param `dict_dispatch_param_cnames[k]`
+     * (an int64 carrier), indexing the class method's slot in the dict layout.
+     * `dict_dispatch_n == 0` normally.  The scalar
+     * `dict_dispatch_param_cname` / `dict_dispatch_class` mirror slot 0 for the
+     * single-dict ambient-dict lowering paths (lens composition) that predate
+     * the vector and still key off the first dict. */
     const char     *dict_dispatch_param_cname;
     struct TypeClass *dict_dispatch_class;
+    uint8_t          dict_dispatch_n;
+    struct TypeClass *dict_dispatch_classes[MAX_FN_CONSTRAINTS];
+    const char      *dict_dispatch_param_cnames[MAX_FN_CONSTRAINTS];
     /* Variant 2 (generic-struct-opaque-element): the EX_FN_DEF whose body the ABI
      * scan is currently descending into (top-level scan only).  Used to tell a
      * generic *relay* call (inside a generic body, resolvable by binding
@@ -535,6 +543,9 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b);
  * marshalling (M7 spec matching, carrier->concrete arg deref) must be suppressed
  * on it; the aggregate box/unbox happens at the caller (poly-carrier) boundary. */
 bool emit_call_is_dict_param_dispatch(EmitCtx *ctx, const Expr *call);
+/* forall-dict-pass-multi-constraint-hkt-plan (Task 1.4): index of the dict slot
+ * whose class owns the method call, or -1 when it is not a dict-param dispatch. */
+int emit_call_dict_param_dispatch_index(EmitCtx *ctx, const Expr *call);
 /* MB2 (constrained-hkt-forall-mode-b-plan): true when a function body tail is a
  * generic (tyvar-returning) call that emits as the int64 carrier and is NOT
  * resolved to a concrete by-value spec -- so a pointer-returning function must

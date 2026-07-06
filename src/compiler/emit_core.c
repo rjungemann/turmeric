@@ -1673,13 +1673,25 @@ bool emit_reresolved_receiver_is_by_ptr(EmitCtx *ctx, const Expr *call) {
 
 static char *capture_env_access(EmitCtx *ctx, const Binding *b);
 
+/* forall-dict-pass-multi-constraint-hkt-plan (Task 1.4): the index of the dict
+ * slot whose class OWNS this method call, or -1 when the call is not a dict-param
+ * dispatch.  Keys on the method's instance class, so `fmap`/`show` land on their
+ * respective slots regardless of constraint order. */
+int emit_call_dict_param_dispatch_index(EmitCtx *ctx, const Expr *call) {
+    if (!(ctx && ctx->dict_dispatch_n > 0 && call && call->kind == EX_CALL &&
+          call->as.call_.dict_arg && call->as.call_.dict_arg->kind == EX_DICT &&
+          call->as.call_.dict_arg->as.dict_.instance &&
+          call->as.call_.dict_arg->as.dict_.instance->typeclass &&
+          call->as.call_.dict_arg->as.dict_.method_name[0] != '\0'))
+        return -1;
+    const TypeClass *mtc = call->as.call_.dict_arg->as.dict_.instance->typeclass;
+    for (uint8_t k = 0; k < ctx->dict_dispatch_n; k++)
+        if (ctx->dict_dispatch_classes[k] == mtc) return (int)k;
+    return -1;
+}
+
 bool emit_call_is_dict_param_dispatch(EmitCtx *ctx, const Expr *call) {
-    return ctx && ctx->dict_dispatch_class && call && call->kind == EX_CALL &&
-        call->as.call_.dict_arg && call->as.call_.dict_arg->kind == EX_DICT &&
-        call->as.call_.dict_arg->as.dict_.instance &&
-        call->as.call_.dict_arg->as.dict_.instance->typeclass ==
-            ctx->dict_dispatch_class &&
-        call->as.call_.dict_arg->as.dict_.method_name[0] != '\0';
+    return emit_call_dict_param_dispatch_index(ctx, call) >= 0;
 }
 
 char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
@@ -1692,8 +1704,9 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
      * parameter instead of an `open`-bound table.  The method slot is its index
      * in the class dict layout (dict struct fields are emitted in class-method
      * order, emit_stmt.c). */
-    if (emit_call_is_dict_param_dispatch(ctx, call)) {
-        const TypeClass *tc = ctx->dict_dispatch_class;
+    int ddk = emit_call_dict_param_dispatch_index(ctx, call);
+    if (ddk >= 0) {
+        const TypeClass *tc = ctx->dict_dispatch_classes[ddk];
         const char *mname = call->as.call_.dict_arg->as.dict_.method_name;
         int slot = -1;
         for (uint8_t i = 0; i < tc->n_methods; i++) {
@@ -1762,7 +1775,7 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
                     buf_printf(&b2, "%sint64_t", i ? ", " : "");
             }
             buf_printf(&b2, "))((void **)(intptr_t)%s)[%d])",
-                       ctx->dict_dispatch_param_cname, slot);
+                       ctx->dict_dispatch_param_cnames[ddk], slot);
             buf_putc(&b2, '\0');
             char *out = strdup(b2.data);
             buf_free(&b2);

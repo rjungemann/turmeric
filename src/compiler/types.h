@@ -529,6 +529,12 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
 }
 #define MAX_FN_ARITY 16
 
+/* forall-dict-pass-multi-constraint-hkt-plan (Task 1.1): maximum number of
+ * typeclass constraints carried on a single dict-clone frame -- one leading
+ * int64 dict param per constraint.  Matches the call-site `mb1_dicts[16]`
+ * resolution cap in elab_call.c and the MAX_FN_ARITY leading-arg budget. */
+#define MAX_FN_CONSTRAINTS 16
+
 /* Phase 13: Maximum lifetime parameters per type */
 #define MAX_TYPE_LIFETIMES 4
 
