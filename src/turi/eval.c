@@ -694,6 +694,15 @@ static DeferItem *defer_push_scope_marker(TuriEnv *env) {
     return parent;
 }
 
+/* C1: true while defer bodies are firing during a *panic* unwind.  A panic
+ * raised in a defer at that point is a double panic -- but the defer body only
+ * runs because fire_defers clears env->panicking (eval short-circuits on it),
+ * so the plain `env->panicking` double-panic guard would miss it.  This flag
+ * preserves the detection: turi_runtime_panic / EX_PANIC_WITH treat a panic
+ * raised while it is set as a double panic (matches the compiled catch_unwind +
+ * Drop-panic-during-unwind abort). */
+static _Thread_local bool g_firing_panic_defer;
+
 /* Execute all defers pushed above mark (LIFO / head-first) and free them.
  * Scope-boundary markers are skipped and freed.  Head-first across nested
  * scopes yields the compiled *normal-exit* ordering: innermost scope first,
@@ -704,6 +713,8 @@ static void fire_defers_to_mark(TuriEnv *env, DeferItem *mark,
     TuriValue saved_tv   = env->throw_value;
     bool saved_returning = env->returning;
     TuriValue saved_rv   = env->return_value;
+    bool saved_panicking = env->panicking;   /* C1: defers fire during unwind */
+    bool prev_fpd        = g_firing_panic_defer;
 
     while (env->defer_stack != mark) {
         DeferItem *item = (DeferItem *)env->defer_stack;
@@ -714,9 +725,14 @@ static void fire_defers_to_mark(TuriEnv *env, DeferItem *mark,
             continue;
         }
 
-        /* Reset signals so defer body runs cleanly. */
+        /* Reset signals so defer body runs cleanly.  C1: clear `panicking` too --
+         * a defer fired mid-panic-unwind must actually execute (eval_expr/eval_apply
+         * short-circuit while a panic signal is in flight).  Set g_firing_panic_defer
+         * so a re-panic in the body is still caught as a double panic. */
         env->throwing  = false;
         env->returning = false;
+        env->panicking = false;
+        g_firing_panic_defer = saved_panicking;
 
         /* Evaluate with snapshot frame; fall back to fallback for globals. */
         EvalFrame *dframe = item->snapshot;
@@ -732,6 +748,8 @@ static void fire_defers_to_mark(TuriEnv *env, DeferItem *mark,
     env->throw_value  = saved_tv;
     env->returning    = saved_returning;
     env->return_value = saved_rv;
+    env->panicking    = saved_panicking;
+    g_firing_panic_defer = prev_fpd;
 }
 
 /* Fire defers at an *early exit* (return / throw / panic) boundary, reversing
@@ -775,14 +793,20 @@ static void fire_defers_to_mark_by_scope(TuriEnv *env, DeferItem *mark,
     TuriValue saved_tv   = env->throw_value;
     bool saved_returning = env->returning;
     TuriValue saved_rv   = env->return_value;
+    bool saved_panicking = env->panicking;   /* C1: defers fire during unwind */
+    bool prev_fpd        = g_firing_panic_defer;
 
     /* Fire runs outer-first (last recorded = outermost); within a run keep
      * head-first order (LIFO within the scope). */
     for (size_t r = n_runs; r-- > 0; ) {
         for (size_t k = run_start[r]; k < run_end[r]; k++) {
             DeferItem *item = items[k];
+            /* C1: clear `panicking` too so a defer fired mid-panic-unwind runs;
+             * g_firing_panic_defer keeps a re-panic detectable as a double panic. */
             env->throwing  = false;
             env->returning = false;
+            env->panicking = false;
+            g_firing_panic_defer = saved_panicking;
             EvalFrame *dframe = item->snapshot;
             if (dframe) dframe->parent = fallback_frame;
             eval_expr(env, dframe, item->body);
@@ -799,35 +823,89 @@ static void fire_defers_to_mark_by_scope(TuriEnv *env, DeferItem *mark,
     env->throw_value  = saved_tv;
     env->returning    = saved_returning;
     env->return_value = saved_rv;
+    env->panicking    = saved_panicking;
+    g_firing_panic_defer = prev_fpd;
+}
+
+/* SR/C1: the set of *propagating* control signals.  A signal short-circuits the
+ * ordinary `turi_is_error(v) || ...` guards throughout the evaluator so an
+ * in-flight return / throw / abortive-shift-abort / panic unwinds the work-stack
+ * (freeing frames, firing defers) up to the boundary that consumes it, instead
+ * of one C frame continuing to run past it.  `panicking` joined this set in
+ * Phase C1 (turi-c-scoped-forms-heap-bounding): a panic caught by a work-stack
+ * DK_CATCH_UNWIND boundary now propagates as a signal rather than longjmp-ing,
+ * so deeply-nested catch-unwind folds onto the heap. */
+static inline bool env_signaled(const TuriEnv *env) {
+    return env->returning || env->throwing || env->aborting || env->panicking;
+}
+
+/* Phase C1: catch-unwind boundary stack.  A panic finds the nearest boundary
+ * here to decide HOW to unwind to it:
+ *   - a work-stack (driver) DK_CATCH_UNWIND boundary  -> raise the `panicking`
+ *     signal and let it propagate through the driver's frames (heap-bounded);
+ *   - a setjmp boundary (eval_expr_impl's EX_CATCH_UNWIND / EX_CATCH_PANIC_OF,
+ *     reached from a non-driver / black-boxed caller) -> longjmp to its jmp_buf,
+ *     exactly as before.
+ * Boundaries interleave (a setjmp catch-panic-of nested inside a driver
+ * catch-unwind, or vice versa), so both kinds push onto this one stack and a
+ * panic always targets the innermost. */
+typedef struct TuriCatchBoundary {
+    bool     is_driver;             /* true: DK_CATCH_UNWIND; false: setjmp pad */
+    jmp_buf *jmp;                   /* setjmp landing pad (valid iff !is_driver) */
+    /* Driver-path env state to restore when the boundary consumes a panic
+     * (the setjmp path restores its own saved copies on the C stack). */
+    void    *saved_handler_stack;
+    void    *saved_defer_stack;
+    const char *saved_module;
+    bool     saved_no_unwind;
+    struct TuriCatchBoundary *prev;
+} TuriCatchBoundary;
+
+static _Thread_local TuriCatchBoundary *g_catch_stack;
+
+/* Fill env's in-flight panic payload for a plain (cstr-message) panic. */
+static inline void panic_fill_cstr_payload(TuriEnv *env, const char *s) {
+    strncpy(env->catch_panic_msg, s, sizeof(env->catch_panic_msg) - 1);
+    env->catch_panic_msg[sizeof(env->catch_panic_msg) - 1] = '\0';
+    /* TI5: a plain panic carries a cstr payload (the message), so
+     * catch-panic-of :cstr matches it. */
+    env->catch_panic_type  = TY_CSTR;
+    env->catch_panic_value = turi_cstr(env->catch_panic_msg);
+    env->catch_panic_file  = NULL;
+    env->catch_panic_line  = 0;
 }
 
 /* Phase R2: shared interpreter panic entry point.  Mirrors the EX_PANIC eval
  * case so native functions (result-must, option-must, option-expect, ...) raise
  * a *catchable* panic -- recoverable by catch-unwind and carrying the standard
  * panic message format and double-panic guard -- instead of calling _exit(1)
- * directly (which bypassed both catch-unwind and the defer chain).  Never
- * returns: it either longjmps to a catch boundary, or fires defers and exits. */
+ * directly (which bypassed both catch-unwind and the defer chain).
+ *
+ * Phase C1: this no longer necessarily "never returns".  When the nearest
+ * catch-unwind boundary is a work-stack DK_CATCH_UNWIND, it sets env->panicking
+ * (the propagating signal) and RETURNS to its caller, which short-circuits via
+ * env_signaled and unwinds the driver work-stack to the boundary.  Every caller
+ * already does `turi_runtime_panic(env, ...); return <ignored>;`, so returning
+ * is safe -- the returned value is discarded while the signal is in flight.  For
+ * a setjmp boundary (or no boundary) the old behaviour is preserved (longjmp /
+ * fire-defers-and-exit). */
 void turi_runtime_panic(TuriEnv *env, const char *msg) {
     const char *s = msg ? msg : "(no message)";
-    if (env->panicking) {
+    if (env->panicking || g_firing_panic_defer) {
         /* Double panic: a defer (or a panic during unwinding) panicked again. */
         fprintf(stderr, "double panic: aborting\n");
         fflush(stderr);
         fflush(stdout);
         abort();
     }
-    /* If a catch-unwind boundary is active, longjmp to it. */
-    if (env->catch_jmp && !env->in_no_unwind) {
-        strncpy(env->catch_panic_msg, s, sizeof(env->catch_panic_msg) - 1);
-        env->catch_panic_msg[sizeof(env->catch_panic_msg) - 1] = '\0';
-        /* TI5: a plain panic carries a cstr payload (the message), so
-         * catch-panic-of :cstr matches it. */
-        env->catch_panic_type  = TY_CSTR;
-        env->catch_panic_value = turi_cstr(env->catch_panic_msg);
-        env->catch_panic_file  = NULL;
-        env->catch_panic_line  = 0;
+    /* If a catch-unwind boundary is active, unwind to it. */
+    TuriCatchBoundary *cb = g_catch_stack;
+    if (cb && !env->in_no_unwind) {
+        panic_fill_cstr_payload(env, s);
         env->panicking = true;
-        longjmp(*env->catch_jmp, 1);
+        if (cb->is_driver)
+            return;                 /* raise signal; the driver unwinds to DK_CATCH_UNWIND */
+        longjmp(*cb->jmp, 1);       /* setjmp boundary: unwind the C stack to it */
     }
     env->panicking = true;
     if (env->in_no_unwind) {
@@ -1420,7 +1498,6 @@ typedef struct TuriResetBoundary {
     TuriPromptKind            kind;
     TuriValue                 result;       /* value an abortive shift delivers */
     /* env state to restore after a longjmp unwinds the intervening C frames */
-    uint32_t                  saved_depth;
     void                     *saved_handler_stack;
     void                     *saved_defer_stack;
     struct TuriResetBoundary *prev;
@@ -1447,7 +1524,6 @@ static inline TuriValue reset_consume_abort(TuriEnv *env, const TuriResetBoundar
     if (env->aborting && env->abort_target == NULL &&
         env->abort_prompt_kind == (int)b->kind) {
         env->aborting      = false;
-        env->eval_depth    = b->saved_depth;
         env->handler_stack = b->saved_handler_stack;
         env->defer_stack   = b->saved_defer_stack;
         return env->abort_value;
@@ -1467,7 +1543,6 @@ static TuriValue eval_reset_boundary(TuriEnv *env, EvalFrame *frame,
     TuriResetBoundary b;
     b.kind                = kind;
     b.result              = turi_nil();
-    b.saved_depth         = env->eval_depth;
     b.saved_handler_stack = env->handler_stack;
     b.saved_defer_stack   = env->defer_stack;
     b.prev                = g_reset_stack;
@@ -1487,11 +1562,11 @@ static TuriValue eval_abortive_shift(TuriEnv *env, EvalFrame *frame,
                                      const Expr *k_fn, const Expr *body,
                                      const char *form) {
     TuriValue v = eval_expr(env, frame, body);
-    if (turi_is_error(v) || env->returning || env->throwing || env->aborting) return v;
+    if (turi_is_error(v) || env_signaled(env)) return v;
     TuriValue fn = eval_expr(env, frame, k_fn);
-    if (turi_is_error(fn) || env->returning || env->throwing || env->aborting) return fn;
+    if (turi_is_error(fn) || env_signaled(env)) return fn;
     TuriValue r = turi_call(env, fn, &v, 1);
-    if (turi_is_error(r) || env->returning || env->throwing || env->aborting) return r;
+    if (turi_is_error(r) || env_signaled(env)) return r;
 
     TuriResetBoundary *b = reset_find(PROMPT_PLAIN);
     if (!b)
@@ -1553,7 +1628,6 @@ typedef struct TuriCont {
 typedef struct TuriEscapeBoundary {
     jmp_buf   jmp;
     TuriValue result;       /* value delivered by (k v) */
-    uint32_t  saved_depth;
     void     *saved_handler_stack;
     void     *saved_defer_stack;
 } TuriEscapeBoundary;
@@ -1651,7 +1725,7 @@ static TuriValue ts_cont_resume(TuriEnv *env, TuriCont *c, int64_t w) {
                 args[0] = fr->env_val; args[1] = turi_int(v);
             }
             TuriValue r = turi_call(env, fr->fn, args, na);
-            if (turi_is_error(r) || env->returning || env->throwing || env->aborting) return r;
+            if (turi_is_error(r) || env_signaled(env)) return r;
             if (r.tag != TURI_INT)
                 return turi_errorf("eval: cont call frame returned non-int (tag %d)", r.tag);
             v = r.as_int;
@@ -1851,7 +1925,7 @@ static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
             /* Pure terminal (e.g. the non-shift arm of an `if`): the reset value
              * is the surrounding context applied to this value. */
             pure_val = eval_expr(env, cur_frame, cur);
-            if (turi_is_error(pure_val) || env->returning || env->throwing || env->aborting) {
+            if (turi_is_error(pure_val) || env_signaled(env)) {
                 result = pure_val; done = true;
             } else {
                 is_pure = true;
@@ -1864,7 +1938,7 @@ static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
             bool err = false;
             for (uint32_t i = 0; i < cur->as.let_.n; i++) {
                 TuriValue v = eval_expr(env, nf, cur->as.let_.bindings[i].init);
-                if (turi_is_error(v) || env->returning || env->throwing || env->aborting) {
+                if (turi_is_error(v) || env_signaled(env)) {
                     result = v; done = true; err = true; break;
                 }
                 frame_bind(env, nf, cur->as.let_.bindings[i].binding->name->name, v);
@@ -1877,7 +1951,7 @@ static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
         if (cur->kind == EX_IF) {
             /* The condition is pure (grammar); the shift lives in one arm. */
             TuriValue cv = eval_expr(env, cur_frame, cur->as.if_.cond);
-            if (turi_is_error(cv) || env->returning || env->throwing || env->aborting) {
+            if (turi_is_error(cv) || env_signaled(env)) {
                 result = cv; done = true; break;
             }
             cur = turi_is_truthy(cv) ? cur->as.if_.then_ : cur->as.if_.else_or_null;
@@ -1898,7 +1972,7 @@ static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
             }
             const Expr *other = h0 ? a1 : a0;
             TuriValue ov = eval_expr(env, cur_frame, other);
-            if (turi_is_error(ov) || env->returning || env->throwing || env->aborting) {
+            if (turi_is_error(ov) || env_signaled(env)) {
                 result = ov; done = true; break;
             }
             memset(&frames[n], 0, sizeof(TsFrame));
@@ -1928,7 +2002,7 @@ static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
             bool bad = false;
             for (int32_t i = 0; i < m; i++) {   /* prelude: side effects, once */
                 TuriValue pv = eval_expr(env, cur_frame, cur->as.do_.items[i]);
-                if (turi_is_error(pv) || env->returning || env->throwing || env->aborting) {
+                if (turi_is_error(pv) || env_signaled(env)) {
                     result = pv; done = true; bad = true; break;
                 }
             }
@@ -1959,7 +2033,7 @@ static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
                         done = true; bad = true; break;
                     }
                     ev = eval_expr(env, cur_frame, arg);
-                    if (turi_is_error(ev) || env->returning || env->throwing || env->aborting) {
+                    if (turi_is_error(ev) || env_signaled(env)) {
                         result = ev; done = true; bad = true; break;
                     }
                 }
@@ -1999,7 +2073,7 @@ static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
             if (na == 2) {
                 const Expr *other = cur->as.call_.args[hole == 0 ? 1 : 0];
                 envv = eval_expr(env, cur_frame, other);
-                if (turi_is_error(envv) || env->returning || env->throwing || env->aborting) {
+                if (turi_is_error(envv) || env_signaled(env)) {
                     result = envv; done = true; break;
                 }
             }
@@ -2102,13 +2176,12 @@ static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
 static TuriValue eval_callcc_escape(TuriEnv *env, EvalFrame *frame,
                                     const Expr *fn_expr) {
     TuriValue fn = eval_expr(env, frame, fn_expr);
-    if (turi_is_error(fn) || env->returning || env->throwing || env->aborting) return fn;
+    if (turi_is_error(fn) || env_signaled(env)) return fn;
     if (fn.tag != TURI_CLOSURE)
         return turi_errorf("eval: call/cc expects a function, got tag %d", fn.tag);
 
     TuriEscapeBoundary b;
     b.result              = turi_nil();
-    b.saved_depth         = env->eval_depth;
     b.saved_handler_stack = env->handler_stack;
     b.saved_defer_stack   = env->defer_stack;
 
@@ -2120,7 +2193,6 @@ static TuriValue eval_callcc_escape(TuriEnv *env, EvalFrame *frame,
     if (env->aborting && env->abort_target == (void *)&b) {
         env->aborting      = false;
         env->abort_target  = NULL;
-        env->eval_depth    = b.saved_depth;
         env->handler_stack = b.saved_handler_stack;
         env->defer_stack   = b.saved_defer_stack;
         return env->abort_value;
@@ -2208,7 +2280,7 @@ static int64_t stm_read(TuriStmTx *tx, TuriTVar *tv) {
 static TuriTVar *stm_eval_tvar(TuriEnv *env, EvalFrame *frame,
                                const Expr *tvar_expr, TuriValue *err_out) {
     TuriValue v = eval_expr(env, frame, tvar_expr);
-    if (turi_is_error(v) || env->returning || env->throwing || env->aborting) {
+    if (turi_is_error(v) || env_signaled(env)) {
         *err_out = v;
         return NULL;
     }
@@ -2226,7 +2298,7 @@ static TuriValue eval_atomically(TuriEnv *env, EvalFrame *frame,
 
     TuriValue v = eval_expr(env, frame, stm_expr);
 
-    if (turi_is_error(v) || env->returning || env->throwing || env->aborting) {
+    if (turi_is_error(v) || env_signaled(env)) {
         g_stm_tx = tx.prev;
         free(tx.w_tv); free(tx.w_val);
         return v;
@@ -4412,6 +4484,36 @@ typedef enum {
                       * arith frames and re-requests the next call frame -- so a
                       * resumed frame that itself resumes folds onto the heap
                       * instead of C-recursing through ts_cont_resume's turi_call. */
+    DK_CATCH_UNWIND, /* C1 (turi-c-scoped-forms-heap-bounding): a (catch-unwind
+                      * thunk) boundary on the work-stack (no setjmp).  aux = heap
+                      * TuriCatchBoundary* (registered on g_catch_stack); the
+                      * thunk is applied beneath it via the have_apply channel.
+                      * A panic raised under it sets env->panicking (a signal),
+                      * which propagates up the work-stack to here -- consumed as
+                      * (err payload).  A normal value is wrapped (ok value).
+                      * Keeps deeply-nested catch-unwind on the heap instead of
+                      * one setjmp/eval_apply C frame per level. */
+    DK_ATOMICALLY,   /* C2 (turi-c-scoped-forms-heap-bounding): an (atomically
+                      * (stm ...)) transaction boundary on the work-stack.  aux =
+                      * heap TuriStmTx* (linked on g_stm_tx); the stm body is
+                      * driven beneath it (DK_STM_SEQ).  On normal completion the
+                      * write-log is committed; a requested retry/abort yields the
+                      * single-threaded no-progress error.  Keeps deeply-nested
+                      * atomically on the heap instead of one eval_atomically C
+                      * frame per level. */
+    DK_STM_SEQ,      /* C2: the (stm e1 e2 ...) body sequence driven on the
+                      * work-stack (the recursion inside an stm item folds here).
+                      * expr = the EX_STM, index = next item, frame = enclosing.
+                      * A retry/abort request on g_stm_tx short-circuits the rest
+                      * of the block (matching the eval_expr_impl EX_STM loop). */
+    DK_RESUME,       /* C3: a (resume k value) whose `value` is driven on the
+                      * work-stack (was eval_expr), so recursion in the resume
+                      * value arg folds instead of C-recursing.  last = the
+                      * evaluated continuation k, frame = enclosing, tail = the
+                      * resume's tail-ness.  On the value's return, DK_RESUME
+                      * dispatches: a ws continuation re-installs its prompt +
+                      * clone (as the descend case did), a fiber continuation
+                      * calls eval_resume_cont with the driven value. */
 } DriveKind;
 
 typedef struct {
@@ -4578,7 +4680,7 @@ static TuriValue tvar_modify_resume(TuriEnv *env, void *state, TuriValue applied
                                     bool *done, TuriValue *out) {
     TvarModifyState *s = (TvarModifyState *)state;
     *done = true;
-    if (turi_is_error(applied) || env->returning || env->throwing || env->aborting) {
+    if (turi_is_error(applied) || env_signaled(env)) {
         *out = applied;                       /* fn signalled: propagate, no commit */
     } else {
         stm_log_write(g_stm_tx, s->tv, applied.as_int);
@@ -4603,7 +4705,7 @@ static TuriValue abortive_shift_resume(TuriEnv *env, void *state, TuriValue appl
                                        bool *done, TuriValue *out) {
     AbortiveShiftState *s = (AbortiveShiftState *)state;
     *done = true;
-    if (turi_is_error(applied) || env->returning || env->throwing || env->aborting) {
+    if (turi_is_error(applied) || env_signaled(env)) {
         *out = applied;     /* receiver signalled: propagate, no abort raised */
         free(s);
         return *out;
@@ -4876,6 +4978,18 @@ static bool ws_has_perform(const Expr *e) {
     }
 }
 
+/* C3: cycle guard for ws_capturable's descent into recursive callee bodies.
+ * A self-/mutually-recursive foldable call folds on the work-stack (DK_CALL_RET),
+ * so by the inductive hypothesis its performs are capturable -- but the static
+ * `depth` budget alone rejects every recursive handler (the descent re-enters the
+ * same fn until depth hits 0 -> false -> fiber path, which C-recurses one
+ * ucontext per level).  Recording the fns currently on the analysis path lets a
+ * re-entry short-circuit to `true`, so recursive handlers run on the bounded
+ * DK_PROMPT path instead. */
+#define WSCAP_MAX_FNS 128
+static _Thread_local const void *g_wscap_fns[WSCAP_MAX_FNS];
+static _Thread_local int         g_wscap_n;
+
 /* Decide whether a handle body can run on the work-stack: true iff every
  * perform reachable from `e` is reached through driver-transparent forms (so
  * the perform lands in eval_drive_ex's descending switch with the prompt
@@ -4941,8 +5055,12 @@ static bool ws_capturable(TuriEnv *env, EvalFrame *frame, const Expr *e, int dep
         return ws_capturable(env, frame, e->as.with_handler_.body, depth);
     }
     case EX_RESUME:
+        /* C3: k is still evaluated via eval_expr (must be perform-free), but the
+         * value arg is now driven on the work-stack (DK_RESUME), so it only needs
+         * to be capturable -- a performing/recursive resume value no longer
+         * forces the fiber path. */
         return !ws_has_perform(e->as.resume_.resume->k) &&
-               !ws_has_perform(e->as.resume_.resume->value);
+               ws_capturable(env, frame, e->as.resume_.resume->value, depth);
     case EX_CALL: {
         for (uint32_t i = 0; i < e->as.call_.n_args; i++)
             if (!ws_capturable(env, frame, e->as.call_.args[i], depth)) return false;
@@ -4954,7 +5072,16 @@ static bool ws_capturable(TuriEnv *env, EvalFrame *frame, const Expr *e, int dep
                 fv.as_closure->fn && ((FnDef *)fv.as_closure->fn)->body) {
                 FnDef *fn = (FnDef *)fv.as_closure->fn;
                 if (fn->body->kind == EX_INLINE_C) return true;  /* leaf, no perform */
-                return ws_capturable(env, fv.as_closure->captured, fn->body, depth - 1);
+                /* C3: cycle detection -- a recursive call to a fn already on the
+                 * analysis path folds on the work-stack, so treat it as capturable
+                 * (the surrounding non-recursive parts are still checked). */
+                for (int i = 0; i < g_wscap_n; i++)
+                    if (g_wscap_fns[i] == (const void *)fn) return true;
+                if (g_wscap_n >= WSCAP_MAX_FNS) return false;   /* too many fns: give up */
+                g_wscap_fns[g_wscap_n++] = (const void *)fn;
+                bool cap = ws_capturable(env, fv.as_closure->captured, fn->body, depth - 1);
+                g_wscap_n--;
+                return cap;
             }
         }
         /* Native / indirect callee: cannot fold; safe iff no performing value is
@@ -4996,7 +5123,7 @@ static int eval_match_resolve(TuriEnv *env, EvalFrame *frame, const Expr *e,
                               EvalFrame **out_frame, const Expr **out_body,
                               TuriValue *out_val) {
     TuriValue val = eval_expr(env, frame, e->as.match_.scrutinee);
-    if (turi_is_error(val) || env->returning || env->throwing || env->aborting) {
+    if (turi_is_error(val) || env_signaled(env)) {
         *out_val = val; return -1;
     }
     MatchArm *arms   = e->as.match_.arms;
@@ -5061,7 +5188,7 @@ static int eval_match_resolve(TuriEnv *env, EvalFrame *frame, const Expr *e,
         if (matched) {
             if (arm->guard) {
                 TuriValue gv = eval_expr(env, arm_frame, arm->guard);
-                if (turi_is_error(gv) || env->returning || env->throwing || env->aborting) {
+                if (turi_is_error(gv) || env_signaled(env)) {
                     eval_frame_free(arm_frame); *out_val = gv; return -1;
                 }
                 if (gv.tag != TURI_BOOL || !gv.as_bool) {
@@ -5376,7 +5503,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     cur = turi_error("eval: call with no function");
                     descending = false; break;
                 }
-                if (turi_is_error(fn_val) || env->returning || env->throwing || env->aborting) {
+                if (turi_is_error(fn_val) || env_signaled(env)) {
                     cur = fn_val; descending = false; break;
                 }
                 if (!gde_resolved && control->as.call_.fn_binding)
@@ -5459,7 +5586,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 /* DC: materialise a HandleExpr from the handler value and run it
                  * on the work-stack when capturable; else fiber-fallback. */
                 TuriValue hvv = eval_expr(env, cf, control->as.with_handler_.handler);
-                if (turi_is_error(hvv) || env->returning || env->throwing || env->aborting) {
+                if (turi_is_error(hvv) || env_signaled(env)) {
                     cur = hvv; descending = false; break;
                 }
                 if (hvv.tag != TURI_HANDLER) {
@@ -5502,7 +5629,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 bool sig = false;
                 for (uint8_t i = 0; i < n; i++) {
                     pargs[i] = eval_expr(env, cf, pe->args[i]);
-                    if (turi_is_error(pargs[i]) || env->returning || env->throwing || env->aborting) {
+                    if (turi_is_error(pargs[i]) || env_signaled(env)) {
                         cur = pargs[i]; sig = true; break;
                     }
                 }
@@ -5556,42 +5683,20 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
             case EX_RESUME: {
                 ResumeExpr *re = control->as.resume_.resume;
                 TuriValue k = eval_expr(env, cf, re->k);
-                if (turi_is_error(k) || env->returning || env->throwing || env->aborting) {
+                if (turi_is_error(k) || env_signaled(env)) {
                     cur = k; descending = false; break;
-                }
-                TuriValue v = eval_expr(env, cf, re->value);
-                if (turi_is_error(v) || env->returning || env->throwing || env->aborting) {
-                    cur = v; descending = false; break;
                 }
                 if (k.tag != TURI_EFFECT_CONT) {
                     cur = turi_error("eval: resume: not a continuation");
                     descending = false; break;
                 }
-                if (!k.as_cont->ws) {
-                    cur = eval_resume_cont(env, cf, k.as_cont, v);  /* fiber cont */
-                    descending = false; break;
-                }
-                TuriWsCont *wc = k.as_cont->ws;
-                /* True multishot: re-install the prompt and push an INDEPENDENT
-                 * clone of the captured slice, then feed v to the hole.  Cloning
-                 * keeps repeated resumes (and resumes of an escaped k) from
-                 * sharing the original's owned frames / arg accumulators. */
-                DRIVE_PUSH(((DriveCont){ .kind = DK_PROMPT, .aux = (void *)wc->handler,
-                                         .frame = wc->handler_frame, .tail = tail,
-                                         .index = 1,
-                                         .saved_module = env->current_module,
-                                         .was_no_unwind = env->in_no_unwind }));
-                if (wc->n_frames) {
-                    DriveCont *clone = (DriveCont *)malloc(wc->n_frames * sizeof(DriveCont));
-                    clone_ws_slice(env, wc->frames, wc->n_frames, clone);
-                    for (size_t i = 0; i < wc->n_frames; i++)
-                        DRIVE_PUSH(clone[i]);
-                    free(clone);
-                }
-                env->current_module = wc->perf_module;
-                env->in_no_unwind   = wc->perf_no_unwind;
-                env->defer_stack    = wc->perf_defer;
-                cur = v; descending = false;
+                /* C3: drive re->value on the work-stack (was eval_expr) so a
+                 * recursive resume value arg -- (resume k (rec ...)) -- folds
+                 * instead of C-recursing.  DK_RESUME does the ws/fiber dispatch
+                 * once the value returns. */
+                DRIVE_PUSH(((DriveCont){ .kind = DK_RESUME, .last = k,
+                                         .frame = cf, .tail = tail }));
+                control = re->value; tail = false; descending = true;
                 break;
             }
             case EX_GET_FIELD: {
@@ -5620,7 +5725,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 TuriTVar *tv = stm_eval_tvar(env, cf, control->as.tvar_modify_.tvar, &err);
                 if (!tv) { cur = err; descending = false; break; }
                 TuriValue fn = eval_expr(env, cf, control->as.tvar_modify_.fn);
-                if (turi_is_error(fn) || env->returning || env->throwing || env->aborting) {
+                if (turi_is_error(fn) || env_signaled(env)) {
                     cur = fn; descending = false; break;
                 }
                 int64_t old = stm_read(g_stm_tx, tv);
@@ -5638,6 +5743,36 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * dispatches the application next iteration. */
                 break;
             }
+            case EX_ATOMICALLY: {
+                /* C2: model the transaction boundary on the work-stack (no
+                 * eval_atomically C frame), so nested atomically folds onto the
+                 * heap.  Register a heap TuriStmTx on g_stm_tx (so the tvar/retry
+                 * ops still find it), push DK_ATOMICALLY, and drive the (stm ...)
+                 * body beneath it.  DK_ATOMICALLY commits (or errors on retry)
+                 * when the body value returns.  (eval_expr_impl keeps a
+                 * synchronous EX_ATOMICALLY -> eval_atomically for non-driver
+                 * callers, e.g. an or-else arm that recurses into atomically.) */
+                TuriStmTx *tx = (TuriStmTx *)calloc(1, sizeof(TuriStmTx));
+                tx->prev = g_stm_tx;
+                g_stm_tx = tx;
+                DRIVE_PUSH(((DriveCont){ .kind = DK_ATOMICALLY, .aux = tx }));
+                control = control->as.atomically_.stm_expr;   /* the EX_STM */
+                tail = false; descending = true;
+                break;
+            }
+            case EX_STM: {
+                /* C2: drive the stm body sequence on the work-stack so recursion
+                 * inside an item folds (DK_STM_SEQ).  A retry/abort request
+                 * short-circuits the rest, matching the eval_expr_impl EX_STM
+                 * loop.  The last item's value is the block's value. */
+                uint32_t n = control->as.stm_.n_body;
+                if (n == 0) { cur = turi_nil(); descending = false; break; }
+                DRIVE_PUSH(((DriveCont){ .kind = DK_STM_SEQ, .expr = control,
+                                         .frame = cf, .index = 0 }));
+                control = control->as.stm_.body[0];
+                tail = false; descending = true;   /* stm items are non-tail */
+                break;
+            }
             case EX_RESET: {
                 /* SR N4: model the plain reset boundary on the work-stack (no
                  * setjmp), so deeply-nested resets fold onto the heap instead of
@@ -5649,7 +5784,6 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 TuriResetBoundary *b = (TuriResetBoundary *)malloc(sizeof(TuriResetBoundary));
                 b->kind                = PROMPT_PLAIN;
                 b->result              = turi_nil();
-                b->saved_depth         = env->eval_depth;
                 b->saved_handler_stack = env->handler_stack;
                 b->saved_defer_stack   = env->defer_stack;
                 b->prev                = g_reset_stack;
@@ -5714,7 +5848,6 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 TuriResetBoundary *b = (TuriResetBoundary *)malloc(sizeof(TuriResetBoundary));
                 b->kind                = is_clone ? PROMPT_CLONEABLE : PROMPT_SERIAL;
                 b->result              = turi_nil();
-                b->saved_depth         = env->eval_depth;
                 b->saved_handler_stack = env->handler_stack;
                 b->saved_defer_stack   = env->defer_stack;
                 b->prev                = g_reset_stack;
@@ -5731,7 +5864,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * DK_ESCAPE frame; invoking (k v) raises env->aborting targeting
                  * this boundary and unwinds the work-stack to DK_ESCAPE. */
                 TuriValue fn = eval_expr(env, cf, control->as.callcc_.fn);
-                if (turi_is_error(fn) || env->returning || env->throwing || env->aborting) {
+                if (turi_is_error(fn) || env_signaled(env)) {
                     cur = fn; descending = false; break;
                 }
                 if (fn.tag != TURI_CLOSURE) {
@@ -5740,7 +5873,6 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 }
                 TuriEscapeBoundary *b = (TuriEscapeBoundary *)malloc(sizeof(TuriEscapeBoundary));
                 b->result              = turi_nil();
-                b->saved_depth         = env->eval_depth;
                 b->saved_handler_stack = env->handler_stack;
                 b->saved_defer_stack   = env->defer_stack;
                 DRIVE_PUSH(((DriveCont){ .kind = DK_ESCAPE, .aux = b }));
@@ -5748,6 +5880,38 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 apply_args = (TuriValue *)malloc(sizeof(TuriValue));
                 apply_args[0] = turi_int((int64_t)(intptr_t)b);
                 apply_n    = 1;
+                have_apply = true;
+                break;
+            }
+            case EX_CATCH_UNWIND: {
+                /* C1: model the (catch-unwind thunk) boundary on the work-stack
+                 * (no setjmp), so nested catch-unwind folds onto the heap instead
+                 * of one setjmp/eval_apply C frame per level.  Register a heap
+                 * TuriCatchBoundary on g_catch_stack (so a panic can find it and
+                 * decide to unwind via the signal), push DK_CATCH_UNWIND, and
+                 * apply the 0-arg thunk beneath it.  A panic under the thunk sets
+                 * env->panicking, which propagates up to DK_CATCH_UNWIND. */
+                TuriValue thunk = eval_expr(env, cf, control->as.catch_unwind_.thunk);
+                if (turi_is_error(thunk) || env_signaled(env)) {
+                    cur = thunk; descending = false; break;
+                }
+                if (thunk.tag != TURI_CLOSURE) {
+                    cur = turi_error("eval: catch-unwind: thunk must be a closure");
+                    descending = false; break;
+                }
+                TuriCatchBoundary *b = (TuriCatchBoundary *)malloc(sizeof(TuriCatchBoundary));
+                b->is_driver           = true;
+                b->jmp                 = NULL;
+                b->saved_handler_stack = env->handler_stack;
+                b->saved_defer_stack   = env->defer_stack;
+                b->saved_module        = env->current_module;
+                b->saved_no_unwind     = env->in_no_unwind;
+                b->prev                = g_catch_stack;
+                g_catch_stack = b;
+                DRIVE_PUSH(((DriveCont){ .kind = DK_CATCH_UNWIND, .aux = b }));
+                apply_fn   = thunk;
+                apply_args = NULL;
+                apply_n    = 0;
                 have_apply = true;
                 break;
             }
@@ -5765,11 +5929,11 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 const Expr *kfn  = is0 ? control->as.shift0_.k_fn : control->as.shift_.k_fn;
                 const Expr *body = is0 ? control->as.shift0_.body : control->as.shift_.body;
                 TuriValue v = eval_expr(env, cf, body);
-                if (turi_is_error(v) || env->returning || env->throwing || env->aborting) {
+                if (turi_is_error(v) || env_signaled(env)) {
                     cur = v; descending = false; break;
                 }
                 TuriValue fn = eval_expr(env, cf, kfn);
-                if (turi_is_error(fn) || env->returning || env->throwing || env->aborting) {
+                if (turi_is_error(fn) || env_signaled(env)) {
                     cur = fn; descending = false; break;
                 }
                 AbortiveShiftState *s = (AbortiveShiftState *)malloc(sizeof(AbortiveShiftState));
@@ -5815,8 +5979,8 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
              * freed (and their body defers fired) on unwind, so this is handled
              * per-kind rather than by a blanket unwind-to-DONE. */
             DriveCont *top = &st[len - 1];
-            bool signaled = turi_is_error(cur) || env->returning || env->throwing ||
-                            env->aborting;   /* SR N4: abort unwinds like a signal */
+            bool signaled = turi_is_error(cur) || env_signaled(env);
+            /* SR N4: abort unwinds like a signal; C1: so does a panic. */
             switch (top->kind) {
             case DK_DONE:
                 result = cur;
@@ -5845,12 +6009,121 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     env->aborting      = false;
                     env->abort_target  = NULL;
                     cur                = env->abort_value;
-                    env->eval_depth    = b->saved_depth;
                     env->handler_stack = b->saved_handler_stack;
                     env->defer_stack   = b->saved_defer_stack;
                 }
                 free(b);
                 len--;
+                break;
+            }
+            case DK_CATCH_UNWIND: {
+                /* C1: the catch-unwind thunk produced `cur` (a value, or a signal
+                 * passing through).  Unlink the boundary, then:
+                 *   - a caught panic (env->panicking): consume it, restore saved
+                 *     env state, and deliver (err payload).  Defers of the unwound
+                 *     frames already fired incrementally as the signal passed
+                 *     through their DK_CALL_RET / DK_LET_BODY epilogues (like a
+                 *     throw), so none are re-fired here.
+                 *   - any other in-flight signal (return / throw / abort) or an
+                 *     error value: propagate unchanged (catch-unwind only catches
+                 *     panics).
+                 *   - a normal value: wrap in (ok value). */
+                TuriCatchBoundary *b = (TuriCatchBoundary *)top->aux;
+                g_catch_stack = b->prev;
+                if (env->panicking) {
+                    env->panicking      = false;
+                    env->handler_stack  = b->saved_handler_stack;
+                    env->in_no_unwind   = b->saved_no_unwind;
+                    env->current_module = b->saved_module;
+                    cur = turi_err_result_box(env);
+                } else if (turi_is_error(cur) || env_signaled(env)) {
+                    /* propagate cur unchanged */
+                } else {
+                    cur = turi_ok_result_box(env, cur.as_int);
+                }
+                free(b);
+                len--;
+                break;
+            }
+            case DK_STM_SEQ: {
+                /* C2: an stm body item produced `cur`.  On any propagating signal
+                 * or error, abandon the block (propagate).  Otherwise record the
+                 * value; a retry/abort request short-circuits the rest (matching
+                 * the eval_expr_impl EX_STM loop), else advance to the next item.
+                 * The last item's value is the stm block's value. */
+                if (signaled) { len--; break; }
+                const Expr *se = top->expr;
+                uint32_t    n  = se->as.stm_.n_body;
+                top->last = cur;
+                if (g_stm_tx && (g_stm_tx->retry_requested || g_stm_tx->aborted)) {
+                    cur = top->last; len--; break;
+                }
+                top->index++;
+                if (top->index < n) {
+                    control = se->as.stm_.body[top->index];
+                    cf = top->frame; tail = false; descending = true;
+                } else {
+                    cur = top->last; len--;
+                }
+                break;
+            }
+            case DK_ATOMICALLY: {
+                /* C2: the stm body produced `cur`.  Unlink the transaction; then
+                 * propagate any error/signal, error on a requested retry/abort
+                 * (single-threaded: no way to make progress), or commit the
+                 * write-log.  Mirrors eval_atomically exactly. */
+                TuriStmTx *tx = (TuriStmTx *)top->aux;
+                g_stm_tx = tx->prev;
+                if (signaled) {
+                    /* fall through: propagate cur unchanged */
+                } else if (tx->retry_requested || tx->aborted) {
+                    cur = turi_error("eval: atomically: transaction requested retry "
+                                     "with no way to make progress (single-threaded "
+                                     "interpreter cannot block on another writer)");
+                } else {
+                    for (int i = 0; i < tx->w_count; i++) {
+                        tx->w_tv[i]->value = tx->w_val[i];
+                        tx->w_tv[i]->version++;
+                    }
+                }
+                free(tx->w_tv); free(tx->w_val); free(tx);
+                len--;
+                break;
+            }
+            case DK_RESUME: {
+                /* C3: the resume value arg produced `cur`.  On a signal/error,
+                 * propagate.  Otherwise dispatch the resume with the driven
+                 * value: a ws continuation re-installs its prompt + an
+                 * independent clone of the captured slice and feeds the value to
+                 * the hole (multishot); a fiber continuation calls
+                 * eval_resume_cont.  Mirrors the former inline EX_RESUME code. */
+                TuriValue  k    = top->last;
+                EvalFrame *rcf  = top->frame;
+                bool       rtl  = top->tail;
+                if (signaled) { len--; break; }
+                TuriValue v = cur;
+                len--;   /* pop DK_RESUME */
+                if (!k.as_cont->ws) {
+                    cur = eval_resume_cont(env, rcf, k.as_cont, v);  /* fiber cont */
+                    break;
+                }
+                TuriWsCont *wc = k.as_cont->ws;
+                DRIVE_PUSH(((DriveCont){ .kind = DK_PROMPT, .aux = (void *)wc->handler,
+                                         .frame = wc->handler_frame, .tail = rtl,
+                                         .index = 1,
+                                         .saved_module = env->current_module,
+                                         .was_no_unwind = env->in_no_unwind }));
+                if (wc->n_frames) {
+                    DriveCont *clone = (DriveCont *)malloc(wc->n_frames * sizeof(DriveCont));
+                    clone_ws_slice(env, wc->frames, wc->n_frames, clone);
+                    for (size_t i = 0; i < wc->n_frames; i++)
+                        DRIVE_PUSH(clone[i]);
+                    free(clone);
+                }
+                env->current_module = wc->perf_module;
+                env->in_no_unwind   = wc->perf_no_unwind;
+                env->defer_stack    = wc->perf_defer;
+                cur = v;   /* feed v into the cloned slice; keep returning */
                 break;
             }
             case DK_IF_BRANCH: {
@@ -5948,9 +6221,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
             case DK_LET_BODY: {
                 EvalFrame *nf = top->frame;
                 /* On normal exit fire this scope's defers; on early-return/throw/
-                 * abort leave them for the enclosing DK_CALL_RET (which fires the
-                 * leaked-scope chain by-scope), matching the recursive EX_LET. */
-                if (!env->returning && !env->throwing && !env->aborting)
+                 * abort/panic leave them for the enclosing DK_CALL_RET (which
+                 * fires the leaked-scope chain by-scope), matching the recursive
+                 * EX_LET. */
+                if (!env_signaled(env))
                     fire_defers_to_mark(env, (DeferItem *)top->aux, NULL);
                 eval_frame_free(nf);
                 len--;  /* pop; propagate cur (body value or signal) */
@@ -6116,7 +6390,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * (innermost scope first, same-scope LIFO).  Both mirror the
                  * compiled tur_frame_fire_chain (see
                  * docs/reported/turi-tail-scope-defers-fire-fifo-not-lifo.md). */
-                if (env->returning || env->throwing || env->aborting)
+                if (env_signaled(env))
                     fire_defers_to_mark_by_scope(env, (DeferItem *)top->aux, NULL);
                 else
                     fire_defers_to_mark(env, (DeferItem *)top->aux, NULL);
@@ -6289,9 +6563,11 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e) {
  * so eval_apply is just the (idempotent) module-save wrapper retained for the C
  * call sites (turi_call, thunks, the fiber thunk, the driver's leaf path).
  *
- * Note: a native HOF that re-enters evaluation via turi_call still C-recurses
- * (one eval_apply_driven -> eval_drive_ex per re-entry); the env->eval_depth
- * guard remains load-bearing for that path (trampoline plan T3.4).
+ * Note: a native HOF that re-enters evaluation via turi_call routes through
+ * eval_apply_driven -> eval_drive_ex, where the callee body (and its own
+ * recursion) folds onto the heap work-stack; measured, such re-entry runs
+ * 1,000,000 deep without C-stack growth.  C4 (turi-c-scoped-forms-heap-bounding)
+ * retired the eval_depth guard on the strength of that -- see eval_apply.
  * ---------------------------------------------------------------------- */
 static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
                                    TuriValue *args, uint32_t n_args) {
@@ -6419,26 +6695,24 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
  * epilogue already restores it to the same value, so this is idempotent for the
  * turi-body path and the safety net for the native/inline-C leaf path.
  *
- * F5: this is also where the eval_depth recursion guard now lives.  Before the
- * unification, the guard rode on eval_expr, which the OLD eval_body_tco called
- * once per HOF re-entry level (evaluating the recursive call's args).  The
- * driver evaluates control flow and call args on its heap work-stack WITHOUT
- * re-entering eval_expr, so a native HOF that re-applies a recursing closure
- * (turi_call -> eval_apply -> eval_apply_driven -> eval_drive_ex -> leaf native
- * -> turi_call -> ...) would otherwise never bump eval_depth and would
- * stack-overflow instead of tripping the limit.  eval_apply is on every such
- * C-recursion cycle (and is bypassed entirely by the folded non-tail and reused
- * tail paths, which stay heap-/O(1)-bounded), so guarding it bounds exactly the
- * residual native-re-entry recursion -- nothing else. */
+ * C4 (turi-c-scoped-forms-heap-bounding): the eval_depth recursion guard that
+ * used to live here has been retired.  After SR (trampoline) + C1-C3, every
+ * interpreter recursion -- tail / non-tail, reset/shift, call/cc, serial/
+ * cloneable resume, catch-unwind, atomically, and effect handlers (both body
+ * and resume-value recursion) -- folds onto the heap work-stack and runs
+ * 1,000,000 deep without any C-stack growth per level, so there is no residual
+ * C-recursion for the guard to bound.  Sandbox resource limiting is now the
+ * job of step-fuel (turi_env_set_fuel), which bounds total work regardless of
+ * shape; turi_env_set_max_depth is retained as a no-op for API compatibility. */
 static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
                              TuriValue *args, uint32_t n_args) {
-    if (env->eval_depth >= env->max_eval_depth)
-        return turi_error("eval: recursion limit exceeded");
-    env->eval_depth++;
+    /* C1: a panic signal in flight short-circuits any application reached via a
+     * native HOF's turi_call, so the callee never runs while unwinding to the
+     * DK_CATCH_UNWIND boundary (the value is discarded). */
+    if (env->panicking) return turi_nil();
     const char *saved_module = env->current_module;
     TuriValue r = eval_apply_driven(env, cl, args, n_args);
     env->current_module = saved_module;
-    env->eval_depth--;
     return r;
 }
 
@@ -6458,18 +6732,15 @@ static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     if (env->returning) return env->return_value;
     if (env->throwing)  return env->throw_value;
     if (env->aborting)  return env->abort_value;   /* SR N4: abort in flight */
+    if (env->panicking) return env->catch_panic_value; /* C1: panic in flight */
     /* SB3: step-fuel check (skipped when limit == 0, i.e. unrestricted envs) */
     if (env->step_fuel_limit > 0) {
         if (env->step_fuel == 0)
             return turi_error("eval: step fuel exhausted");
         env->step_fuel--;
     }
-    if (env->eval_depth >= env->max_eval_depth)
-        return turi_error("eval: recursion limit exceeded");
-    env->eval_depth++;
-    TuriValue r = eval_expr_impl(env, frame, e);
-    env->eval_depth--;
-    return r;
+    /* C4: the eval_depth recursion guard has been retired -- see eval_apply. */
+    return eval_expr_impl(env, frame, e);
 }
 
 static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
@@ -6557,7 +6828,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_WHILE: {
         while (1) {
             TuriValue cond = eval_expr(env, frame, e->as.while_.cond);
-            if (turi_is_error(cond) || env->returning || env->throwing || env->aborting) return cond;
+            if (turi_is_error(cond) || env_signaled(env)) return cond;
             if (!turi_is_truthy(cond)) break;
             TuriValue body = eval_expr(env, frame, e->as.while_.body);
             if (turi_is_error(body) || env->returning) return body;
@@ -6568,14 +6839,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     /* --- Set ------------------------------------------------------------- */
     case EX_SET: {
         TuriValue v = eval_expr(env, frame, e->as.set_.value);
-        if (turi_is_error(v) || env->returning || env->throwing || env->aborting) return v;
+        if (turi_is_error(v) || env_signaled(env)) return v;
         return eval_unary_post(env, frame, e, v);   /* SR N3: writes the binding */
     }
 
     /* --- Def (top-level binding) ---------------------------------------- */
     case EX_DEF: {
         TuriValue v = eval_expr(env, frame, e->as.def_.init);
-        if (turi_is_error(v) || env->returning || env->throwing || env->aborting) return v;
+        if (turi_is_error(v) || env_signaled(env)) return v;
         turi_env_set(env, e->as.def_.binding->name->name, v);
         return v;
     }
@@ -6725,7 +6996,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
              * standalone declaration block reaches here directly. */
             if (mod->body[i]->kind == EX_INLINE_C) continue;
             last = eval_expr(env, frame, mod->body[i]);
-            if (turi_is_error(last) || env->returning || env->throwing || env->aborting) {
+            if (turi_is_error(last) || env_signaled(env)) {
                 env->defining_mod = saved_defining;
                 return last;
             }
@@ -6755,7 +7026,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         uint32_t k = 0;
         for (uint32_t si = 0; si < raw_n; si++) {
             TuriValue iv = eval_expr(env, frame, e->as.set_lit_.items[si]);
-            if (turi_is_error(iv) || env->returning || env->throwing || env->aborting) {
+            if (turi_is_error(iv) || env_signaled(env)) {
                 return iv;
             }
             raw[k++] = iv.as_int;
@@ -6801,7 +7072,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         int64_t tail = 0;  /* nil sentinel */
         for (int32_t i = (int32_t)cn - 1; i >= 0; i--) {
             TuriValue iv = eval_expr(env, frame, e->as.cons_list_.items[i]);
-            if (turi_is_error(iv) || env->returning || env->throwing || env->aborting) {
+            if (turi_is_error(iv) || env_signaled(env)) {
                 /* Partial chain is pool-owned; reclaimed at turi_env_free. */
                 return iv;
             }
@@ -6825,14 +7096,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * lets result.tur's accessors (ok-val/err-val/...) work on the native
          * box, not just on make-struct TuriStructs.  (Driver path: DK_GET_FIELD.) */
         TuriValue sv = eval_expr(env, frame, e->as.get_field_.struct_expr);
-        if (turi_is_error(sv) || env->returning || env->throwing || env->aborting) return sv;
+        if (turi_is_error(sv) || env_signaled(env)) return sv;
         return get_field_extract(e, sv);
     }
 
     /* --- Phase DS3: (set! (.field s) v) — struct field write ------------- */
     case EX_SET_FIELD: {
         TuriValue recv = eval_expr(env, frame, e->as.set_field_.receiver);
-        if (turi_is_error(recv) || env->returning || env->throwing || env->aborting) return recv;
+        if (turi_is_error(recv) || env_signaled(env)) return recv;
         /* Resolve the underlying struct.  A mutable borrow is represented as a
          * TURI_REF to the binding holding the struct; an rc<Struct> stores the
          * struct in the __rc payload (field[1]). */
@@ -6850,7 +7121,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             return turi_errorf("eval: set-field index %u out of bounds (%u fields)",
                                idx, s->n_fields);
         TuriValue v = eval_expr(env, frame, e->as.set_field_.value);
-        if (turi_is_error(v) || env->returning || env->throwing || env->aborting) return v;
+        if (turi_is_error(v) || env_signaled(env)) return v;
         s->fields[idx] = v;
         return turi_nil();
     }
@@ -6906,7 +7177,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_DEFDYNAMIC: {
         DynVarEntry *entry = e->as.defdynamic_.entry;
         TuriValue root = eval_expr(env, frame, e->as.defdynamic_.root_expr);
-        if (turi_is_error(root) || env->returning || env->throwing || env->aborting) return root;
+        if (turi_is_error(root) || env_signaled(env)) return root;
         turi_env_set(env, entry->name->name, root);
         return turi_nil();
     }
@@ -6925,7 +7196,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         uint32_t installed = 0;
         for (; installed < n_pairs; installed++) {
             TuriValue ov = eval_expr(env, frame, pairs[installed].override_expr);
-            if (turi_is_error(ov) || env->returning || env->throwing || env->aborting) {
+            if (turi_is_error(ov) || env_signaled(env)) {
                 for (uint32_t ri = 0; ri < installed; ri++)
                     turi_env_set(env, pairs[ri].entry->name->name, saved[ri]);
                 free(saved);
@@ -6944,7 +7215,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_DYNVAR_SET: {
         DynVarEntry *entry = e->as.dynvar_set_.entry;
         TuriValue v = eval_expr(env, frame, e->as.dynvar_set_.value);
-        if (turi_is_error(v) || env->returning || env->throwing || env->aborting) return v;
+        if (turi_is_error(v) || env_signaled(env)) return v;
         turi_env_set(env, entry->name->name, v);
         return turi_nil();
     }
@@ -6964,7 +7235,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
         for (uint8_t i = 0; i < n_args; i++) {
             args[i] = eval_expr(env, frame, pe->args[i]);
-            if (turi_is_error(args[i]) || env->returning || env->throwing || env->aborting) return args[i];
+            if (turi_is_error(args[i]) || env_signaled(env)) return args[i];
         }
 
         /* Always yield to the innermost handler so nested handlers can
@@ -6995,9 +7266,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     /* (compose-handlers h1 h2) — concat two handler tables (TI6). */
     case EX_COMPOSE_HANDLERS: {
         TuriValue v1 = eval_expr(env, frame, e->as.compose_handlers_.h1);
-        if (turi_is_error(v1) || env->returning || env->throwing || env->aborting) return v1;
+        if (turi_is_error(v1) || env_signaled(env)) return v1;
         TuriValue v2 = eval_expr(env, frame, e->as.compose_handlers_.h2);
-        if (turi_is_error(v2) || env->returning || env->throwing || env->aborting) return v2;
+        if (turi_is_error(v2) || env_signaled(env)) return v2;
         if (v1.tag != TURI_HANDLER || v2.tag != TURI_HANDLER)
             return turi_error("eval: compose-handlers: operands must be handler values");
         TuriHandlerVal *a = v1.as_handler, *b = v2.as_handler;
@@ -7012,7 +7283,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     /* (with-handler hv body) — apply a handler value to a body (TI6). */
     case EX_WITH_HANDLER: {
         TuriValue hvv = eval_expr(env, frame, e->as.with_handler_.handler);
-        if (turi_is_error(hvv) || env->returning || env->throwing || env->aborting) return hvv;
+        if (turi_is_error(hvv) || env_signaled(env)) return hvv;
         if (hvv.tag != TURI_HANDLER)
             return turi_error("eval: with-handler: first argument must be a handler value");
         TuriHandlerVal *hv = hvv.as_handler;
@@ -7045,9 +7316,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_RESUME: {
         ResumeExpr *re = e->as.resume_.resume;
         TuriValue k   = eval_expr(env, frame, re->k);
-        if (turi_is_error(k) || env->returning || env->throwing || env->aborting) return k;
+        if (turi_is_error(k) || env_signaled(env)) return k;
         TuriValue val = eval_expr(env, frame, re->value);
-        if (turi_is_error(val) || env->returning || env->throwing || env->aborting) return val;
+        if (turi_is_error(val) || env_signaled(env)) return val;
 
         if (k.tag != TURI_EFFECT_CONT)
             return turi_error("eval: resume: not a continuation");
@@ -7068,9 +7339,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_DISCONTINUE: {
         DiscontinueExpr *de = e->as.discontinue_.discontinue;
         TuriValue k = eval_expr(env, frame, de->k);
-        if (turi_is_error(k) || env->returning || env->throwing || env->aborting) return k;
+        if (turi_is_error(k) || env_signaled(env)) return k;
         TuriValue exc = eval_expr(env, frame, de->exception);
-        if (turi_is_error(exc) || env->returning || env->throwing || env->aborting) return exc;
+        if (turi_is_error(exc) || env_signaled(env)) return exc;
 
         if (k.tag != TURI_EFFECT_CONT)
             return turi_error("eval: discontinue: not a continuation");
@@ -7095,7 +7366,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     /* (cont? k) — true if k is an unconsumed continuation. */
     case EX_CONT_PRED: {
         TuriValue k = eval_expr(env, frame, e->as.cont_pred_.expr);
-        if (turi_is_error(k) || env->returning || env->throwing || env->aborting) return k;
+        if (turi_is_error(k) || env_signaled(env)) return k;
         return turi_bool(k.tag == TURI_EFFECT_CONT && k.as_cont != NULL);
     }
 
@@ -7142,7 +7413,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         /* Pre-evaluate fn_expr in the current (main) context to get a closure.
          * This avoids binding-name lookup issues inside the fiber. */
         TuriValue cl_val = eval_expr(env, frame, e->as.async_.fn_expr);
-        if (turi_is_error(cl_val) || env->returning || env->throwing || env->aborting) {
+        if (turi_is_error(cl_val) || env_signaled(env)) {
             return cl_val;
         }
         if (cl_val.tag != TURI_CLOSURE) {
@@ -7216,7 +7487,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     /* (await fut-expr) — wait for a Future to resolve; return its value. */
     case EX_AWAIT: {
         TuriValue fv = eval_expr(env, frame, e->as.await_.fut_expr);
-        if (turi_is_error(fv) || env->returning || env->throwing || env->aborting) return fv;
+        if (turi_is_error(fv) || env_signaled(env)) return fv;
 
         if (fv.tag != TURI_FUTURE)
             return turi_errorf("eval: await: expected a future, got tag %d", fv.tag);
@@ -7302,7 +7573,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         /* SR N3: post-operand coercion shared with the driver via
          * eval_unary_post (DK_UNARY). */
         TuriValue v = eval_expr(env, frame, e->as.cast_.expr);
-        if (turi_is_error(v) || env->returning || env->throwing || env->aborting) return v;
+        if (turi_is_error(v) || env_signaled(env)) return v;
         return eval_unary_post(env, frame, e, v);
     }
     case EX_REINTERPRET: {
@@ -7330,7 +7601,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * float->carrier leg stays TURI_FLOAT, so the carrier->float leg is
          * transparent too.  i32<->f32 and same-tag ascriptions stay transparent. */
         TuriValue v = eval_expr(env, frame, e->as.reinterpret_.expr);
-        if (turi_is_error(v) || env->returning || env->throwing || env->aborting) return v;
+        if (turi_is_error(v) || env_signaled(env)) return v;
         return eval_unary_post(env, frame, e, v);   /* SR N3: shared with DK_UNARY */
     }
 
@@ -7352,7 +7623,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * DK_UNARY) acts only on a tag mismatch so struct/closure/ADT ascriptions
          * stay transparent. */
         TuriValue v = eval_expr(env, frame, e->as.ascribe_.inner);
-        if (turi_is_error(v) || env->returning || env->throwing || env->aborting) return v;
+        if (turi_is_error(v) || env_signaled(env)) return v;
         return eval_unary_post(env, frame, e, v);
     }
 
@@ -7390,16 +7661,16 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
     case EX_DEREF: {
         TuriValue r = eval_expr(env, frame, e->as.deref_.expr);
-        if (turi_is_error(r) || env->returning || env->throwing || env->aborting) return r;
+        if (turi_is_error(r) || env_signaled(env)) return r;
         if (r.tag == TURI_REF && r.as_ref)
             return ((EvalBinding *)r.as_ref)->value;
         return r;
     }
     case EX_SET_DEREF: {
         TuriValue ref = eval_expr(env, frame, e->as.set_deref_.ref);
-        if (turi_is_error(ref) || env->returning || env->throwing || env->aborting) return ref;
+        if (turi_is_error(ref) || env_signaled(env)) return ref;
         TuriValue v = eval_expr(env, frame, e->as.set_deref_.value);
-        if (turi_is_error(v) || env->returning || env->throwing || env->aborting) return v;
+        if (turi_is_error(v) || env_signaled(env)) return v;
         if (ref.tag == TURI_REF && ref.as_ref)
             ((EvalBinding *)ref.as_ref)->value = v;
         return turi_nil();
@@ -7418,15 +7689,18 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * value, and source line so catch-panic-of can filter by type and the
          * panic-payload-* accessors can read it. */
         TuriValue pv = eval_expr(env, frame, e->as.panic_with_.payload);
-        if (turi_is_error(pv) || env->returning || env->throwing || env->aborting) return pv;
-        if (env->panicking) {
+        if (turi_is_error(pv) || env_signaled(env)) return pv;
+        if (env->panicking || g_firing_panic_defer) {
             fprintf(stderr, "double panic: aborting\n");
             fflush(stderr);
             fflush(stdout);
             abort();
         }
-        /* If a catch boundary is active, longjmp to it carrying the payload. */
-        if (env->catch_jmp && !env->in_no_unwind) {
+        /* If a catch boundary is active, unwind to it carrying the payload.  C1:
+         * a work-stack DK_CATCH_UNWIND boundary consumes the panic via the signal
+         * (set env->panicking, return); a setjmp boundary is longjmp'd to. */
+        TuriCatchBoundary *cb = g_catch_stack;
+        if (cb && !env->in_no_unwind) {
             strncpy(env->catch_panic_msg, "typed panic", sizeof(env->catch_panic_msg) - 1);
             env->catch_panic_msg[sizeof(env->catch_panic_msg) - 1] = '\0';
             env->catch_panic_type  = e->as.panic_with_.payload->type.kind;
@@ -7434,7 +7708,8 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             env->catch_panic_file  = NULL;
             env->catch_panic_line  = (int)e->span.line;
             env->panicking = true;
-            longjmp(*env->catch_jmp, 1);
+            if (cb->is_driver) return pv;   /* raise signal; driver unwinds */
+            longjmp(*cb->jmp, 1);
         }
         env->panicking = true;
         fprintf(stderr, "panic at\n");
@@ -7448,7 +7723,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_CATCH_UNWIND: {
         /* Evaluate the thunk expression to get a closure value. */
         TuriValue thunk_val = eval_expr(env, frame, e->as.catch_unwind_.thunk);
-        if (turi_is_error(thunk_val) || env->returning || env->throwing || env->aborting) return thunk_val;
+        if (turi_is_error(thunk_val) || env_signaled(env)) return thunk_val;
         if (thunk_val.tag != TURI_CLOSURE)
             return turi_error("eval: catch-unwind: thunk must be a closure");
 
@@ -7466,13 +7741,18 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * scope-exit defer firing, leaving them on the stack. */
         DeferItem *defer_mark = (DeferItem *)env->defer_stack;
         env->catch_jmp = &jb;
+        /* C1: register a setjmp boundary so a panic (in this thread's driver or a
+         * nested black box) targets the innermost catch consistently. */
+        TuriCatchBoundary cbnd = { .is_driver = false, .jmp = &jb, .prev = g_catch_stack };
+        g_catch_stack = &cbnd;
 
         TuriValue result;
         if (setjmp(jb) == 0) {
             /* Normal execution path — call the thunk with no arguments. */
             result = eval_apply(env, thunk_val.as_closure, NULL, 0);
+            g_catch_stack  = cbnd.prev;
             env->catch_jmp = prev_jmp;
-            if (turi_is_error(result) || env->returning || env->throwing || env->aborting)
+            if (turi_is_error(result) || env_signaled(env))
                 return result;
             /* Wrap the successful result in (ok value).  Use the same 3-int
              * Result-box layout { is_ok, ok_val, err_val } that the native
@@ -7484,6 +7764,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
              * the err slot carries a boxed TuriPanicPayload so panic-payload-*
              * accessors recover the caught value/type/file/line (the message is
              * the cstr value for a plain panic). */
+            g_catch_stack     = cbnd.prev;
             env->catch_jmp    = prev_jmp;
             env->panicking    = false;
             env->returning    = prev_returning;
@@ -7501,7 +7782,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     /* --- Phase TI5: catch-panic-of — type-filtered panic catch ------------- */
     case EX_CATCH_PANIC_OF: {
         TuriValue thunk_val = eval_expr(env, frame, e->as.catch_panic_of_.thunk);
-        if (turi_is_error(thunk_val) || env->returning || env->throwing || env->aborting) return thunk_val;
+        if (turi_is_error(thunk_val) || env_signaled(env)) return thunk_val;
         if (thunk_val.tag != TURI_CLOSURE)
             return turi_error("eval: catch-panic-of: thunk must be a closure");
         int want_type = (int)e->as.catch_panic_of_.type_kind;
@@ -7513,17 +7794,21 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue prev_throw    = env->throw_value;
         TuriValue prev_ret      = env->return_value;
         env->catch_jmp = &jb;
+        TuriCatchBoundary cbnd = { .is_driver = false, .jmp = &jb, .prev = g_catch_stack };
+        g_catch_stack = &cbnd;
 
         TuriValue result;
         if (setjmp(jb) == 0) {
             result = eval_apply(env, thunk_val.as_closure, NULL, 0);
+            g_catch_stack  = cbnd.prev;
             env->catch_jmp = prev_jmp;
-            if (turi_is_error(result) || env->returning || env->throwing || env->aborting)
+            if (turi_is_error(result) || env_signaled(env))
                 return result;
             return turi_ok_result_box(env, result.as_int);
         } else {
             /* A panic reached this boundary.  Restore the saved control state
              * (the payload fields in env still describe the in-flight panic). */
+            g_catch_stack     = cbnd.prev;
             env->catch_jmp    = prev_jmp;
             env->returning    = prev_returning;
             env->throwing     = prev_throwing;
@@ -7537,9 +7822,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             }
             /* Type mismatch: re-raise to the next outer boundary, or abort.
              * env->panicking stays true and the payload fields are untouched so
-             * the outer boundary sees the original panic. */
-            if (prev_jmp && !env->in_no_unwind)
-                longjmp(*prev_jmp, 1);
+             * the outer boundary sees the original panic.  C1: if the next
+             * boundary is a work-stack DK_CATCH_UNWIND, return so the panic
+             * propagates as a signal; a setjmp boundary is longjmp'd to. */
+            TuriCatchBoundary *outer = g_catch_stack;
+            if (outer && !env->in_no_unwind) {
+                if (outer->is_driver) return env->catch_panic_value;
+                longjmp(*outer->jmp, 1);
+            }
             fprintf(stderr, "panic at\npanic: %s\n", env->catch_panic_msg);
             fflush(stderr);
             fire_defers_to_mark_by_scope(env, NULL, NULL);
@@ -7551,31 +7841,31 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     /* --- Phase TI5: panic-payload-* accessors ------------------------------ */
     case EX_PANIC_PAYLOAD_TYPE: {
         TuriValue p = eval_expr(env, frame, e->as.panic_payload_type_.payload);
-        if (turi_is_error(p) || env->returning || env->throwing || env->aborting) return p;
+        if (turi_is_error(p) || env_signaled(env)) return p;
         TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
         return turi_int(pp ? pp->type_tag : 0);
     }
     case EX_PANIC_PAYLOAD_VALUE: {
         TuriValue p = eval_expr(env, frame, e->as.panic_payload_value_.payload);
-        if (turi_is_error(p) || env->returning || env->throwing || env->aborting) return p;
+        if (turi_is_error(p) || env_signaled(env)) return p;
         TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
         return pp ? pp->value : turi_nil();
     }
     case EX_PANIC_PAYLOAD_FILE: {
         TuriValue p = eval_expr(env, frame, e->as.panic_payload_file_.payload);
-        if (turi_is_error(p) || env->returning || env->throwing || env->aborting) return p;
+        if (turi_is_error(p) || env_signaled(env)) return p;
         TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
         return turi_cstr(pp && pp->file ? pp->file : "");
     }
     case EX_PANIC_PAYLOAD_LINE: {
         TuriValue p = eval_expr(env, frame, e->as.panic_payload_line_.payload);
-        if (turi_is_error(p) || env->returning || env->throwing || env->aborting) return p;
+        if (turi_is_error(p) || env_signaled(env)) return p;
         TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
         return turi_int(pp ? pp->line : 0);
     }
     case EX_PANIC_PAYLOAD_DOWNS: {
         TuriValue p = eval_expr(env, frame, e->as.panic_payload_downs_.payload);
-        if (turi_is_error(p) || env->returning || env->throwing || env->aborting) return p;
+        if (turi_is_error(p) || env_signaled(env)) return p;
         TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
         if (pp && pp->type_tag == (int)e->as.panic_payload_downs_.target_type)
             return pp->value;
@@ -7590,7 +7880,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * `*cnt` strong-count readers stay correct; cnt[1] backs the weak count
          * that ref/from-rc's uniqueness check consults (see EX_REF_FROM_RC). */
         TuriValue v = eval_expr(env, frame, e->as.rc_of_.expr);
-        if (turi_is_error(v) || env->returning || env->throwing || env->aborting) return v;
+        if (turi_is_error(v) || env_signaled(env)) return v;
         int64_t *cnt = (int64_t *)turi_val_alloc(env, 2 * sizeof(int64_t));
         cnt[0] = 1; /* strong */
         cnt[1] = 0; /* weak */
@@ -7603,7 +7893,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         if (e->as.rc_clone_.elide)
             return eval_expr(env, frame, e->as.rc_clone_.expr);
         TuriValue r = eval_expr(env, frame, e->as.rc_clone_.expr);
-        if (turi_is_error(r) || env->returning || env->throwing || env->aborting) return r;
+        if (turi_is_error(r) || env_signaled(env)) return r;
         if (r.tag == TURI_STRUCT && r.as_struct
             && r.as_struct->name && strcmp(r.as_struct->name, "__rc") == 0
             && r.as_struct->n_fields >= 2) {
@@ -7632,7 +7922,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
     case EX_RC_PTR: {
         TuriValue r = eval_expr(env, frame, e->as.rc_ptr_.expr);
-        if (turi_is_error(r) || env->returning || env->throwing || env->aborting) return r;
+        if (turi_is_error(r) || env_signaled(env)) return r;
         if (r.tag == TURI_STRUCT && r.as_struct
             && r.as_struct->name && strcmp(r.as_struct->name, "__rc") == 0
             && r.as_struct->n_fields >= 2)
@@ -7641,7 +7931,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
     case EX_RC_COUNT: {
         TuriValue r = eval_expr(env, frame, e->as.rc_count_.expr);
-        if (turi_is_error(r) || env->returning || env->throwing || env->aborting) return r;
+        if (turi_is_error(r) || env_signaled(env)) return r;
         if (r.tag == TURI_STRUCT && r.as_struct
             && r.as_struct->name && strcmp(r.as_struct->name, "__rc") == 0
             && r.as_struct->n_fields >= 2) {
@@ -7658,7 +7948,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * otherwise (a live alias would leave a dangling ref). Mirror that check
          * here instead of silently extracting the value (rc-unique-violation). */
         TuriValue rv = eval_expr(env, frame, e->as.ref_from_rc_.expr);
-        if (turi_is_error(rv) || env->returning || env->throwing || env->aborting) return rv;
+        if (turi_is_error(rv) || env_signaled(env)) return rv;
         if (rv.tag == TURI_STRUCT && rv.as_struct
             && rv.as_struct->name && strcmp(rv.as_struct->name, "__rc") == 0
             && rv.as_struct->n_fields >= 2) {
@@ -7683,7 +7973,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return eval_expr(env, frame, e->as.ref_.expr);
     case EX_REF_PRED: {
         TuriValue _rpv = eval_expr(env, frame, e->as.ref_pred_.expr);
-        if (turi_is_error(_rpv) || env->returning || env->throwing || env->aborting) return _rpv;
+        if (turi_is_error(_rpv) || env_signaled(env)) return _rpv;
         return turi_bool(_rpv.tag != TURI_NIL);
     }
 
@@ -7693,7 +7983,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * bump the control block's weak count so ref/from-rc's uniqueness check
          * can see the live weak alias (rc-unique-violation). */
         TuriValue wv = eval_expr(env, frame, e->as.weak_.expr);
-        if (turi_is_error(wv) || env->returning || env->throwing || env->aborting) return wv;
+        if (turi_is_error(wv) || env_signaled(env)) return wv;
         if (wv.tag == TURI_STRUCT && wv.as_struct
             && wv.as_struct->name && strcmp(wv.as_struct->name, "__rc") == 0
             && wv.as_struct->n_fields >= 2) {
@@ -7704,7 +7994,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
     case EX_WEAK_UPGRADE: {
         TuriValue _wuv = eval_expr(env, frame, e->as.weak_upgrade_.expr);
-        if (turi_is_error(_wuv) || env->returning || env->throwing || env->aborting) return _wuv;
+        if (turi_is_error(_wuv) || env_signaled(env)) return _wuv;
         /* In the interpreter all weak refs are always valid; wrap in some(value). */
         return make_struct_val(env, "some", 1, &_wuv);
     }
@@ -7716,7 +8006,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return eval_expr(env, frame, e->as.exists_pack_.value);
     case EX_EXISTS_OPEN: {
         TuriValue packed = eval_expr(env, frame, e->as.exists_open_.packed);
-        if (turi_is_error(packed) || env->returning || env->throwing || env->aborting) return packed;
+        if (turi_is_error(packed) || env_signaled(env)) return packed;
         EvalFrame *ef = eval_frame_new(env, frame);
         if (e->as.exists_open_.var_binding)
             frame_bind(env, ef, e->as.exists_open_.var_binding->name->name, packed);
@@ -7739,7 +8029,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue *argv = na ? (TuriValue *)malloc(na * sizeof(TuriValue)) : NULL;
         for (uint32_t i = 0; i < na; i++) {
             argv[i] = eval_expr(env, frame, e->as.exists_dispatch_.args[i]);
-            if (turi_is_error(argv[i]) || env->returning || env->throwing || env->aborting) {
+            if (turi_is_error(argv[i]) || env_signaled(env)) {
                 TuriValue r = argv[i]; free(argv); return r;
             }
         }
@@ -7805,7 +8095,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * primitive/struct/ADT mismatch; pass through ambiguous targets
          * (type vars, unknown) so a valid cast never spuriously panics. */
         TuriValue v = eval_expr(env, frame, e->as.any_cast_.value);
-        if (turi_is_error(v) || env->returning || env->throwing || env->aborting) return v;
+        if (turi_is_error(v) || env_signaled(env)) return v;
         bool ok = true;
         switch (e->as.any_cast_.target_kind) {
         case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
@@ -7835,7 +8125,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     case EX_ANY_TYPE_OF: {
         TuriValue v = eval_expr(env, frame, e->as.any_type_of_.value);
-        if (turi_is_error(v) || env->returning || env->throwing || env->aborting) return v;
+        if (turi_is_error(v) || env_signaled(env)) return v;
         const char *tname = "unknown";
         switch (v.tag) {
         case TURI_INT:     tname = "int";     break;
@@ -7860,7 +8150,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     /* --- TY3: (is? x T) — runtime type test ------------------------------ */
     case EX_ANY_IS: {
         TuriValue v = eval_expr(env, frame, e->as.any_is_.value);
-        if (turi_is_error(v) || env->returning || env->throwing || env->aborting) return v;
+        if (turi_is_error(v) || env_signaled(env)) return v;
         /* Map the runtime TuriValue tag to a TypeKind and compare to test_tag. */
         TypeKind vk = TY_UNKNOWN;
         switch (v.tag) {
@@ -7900,7 +8190,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         if (!g)
             return turi_error("eval: yield outside of a generator body");
         TuriValue v = eval_expr(env, frame, e->as.yield_.value);
-        if (turi_is_error(v) || env->returning || env->throwing || env->aborting) return v;
+        if (turi_is_error(v) || env_signaled(env)) return v;
         g->box = v.as_int;
         /* Swap back to the caller (gen-next); resumes here on the next advance. */
 #if defined(__APPLE__)
@@ -7917,7 +8207,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     /* (gen-next g) -- advance a generator; returns ptr<void> (NULL = exhausted). */
     case EX_GEN_NEXT: {
         TuriValue gv = eval_expr(env, frame, e->as.gen_next_.gen_expr);
-        if (turi_is_error(gv) || env->returning || env->throwing || env->aborting) return gv;
+        if (turi_is_error(gv) || env_signaled(env)) return gv;
         if (gv.tag != TURI_GEN)
             return turi_errorf("eval: gen-next: expected a generator, got tag %d", gv.tag);
         return gen_advance(env, gv.as_gen);
@@ -7926,7 +8216,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     /* (gen-done? g) -- has the generator been driven off its end? */
     case EX_GEN_DONE: {
         TuriValue gv = eval_expr(env, frame, e->as.gen_done_.gen_expr);
-        if (turi_is_error(gv) || env->returning || env->throwing || env->aborting) return gv;
+        if (turi_is_error(gv) || env_signaled(env)) return gv;
         if (gv.tag != TURI_GEN)
             return turi_errorf("eval: gen-done?: expected a generator, got tag %d", gv.tag);
         return turi_bool(gv.as_gen->done);
@@ -7982,7 +8272,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue v = turi_nil();
         for (uint32_t i = 0; i < e->as.stm_.n_body; i++) {
             v = eval_expr(env, frame, e->as.stm_.body[i]);
-            if (turi_is_error(v) || env->returning || env->throwing || env->aborting) return v;
+            if (turi_is_error(v) || env_signaled(env)) return v;
             /* A retry/abort request short-circuits the rest of the block. */
             if (g_stm_tx && (g_stm_tx->retry_requested || g_stm_tx->aborted))
                 return v;
@@ -8003,7 +8293,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         if (!g_stm_tx)
             return turi_error("eval: check used outside of an atomically block");
         TuriValue c = eval_expr(env, frame, e->as.check_.cond);
-        if (turi_is_error(c) || env->returning || env->throwing || env->aborting) return c;
+        if (turi_is_error(c) || env_signaled(env)) return c;
         /* Matches the compiled runtime: a failed check requests a retry. */
         if (!c.as_bool) g_stm_tx->retry_requested = true;
         return turi_nil();
@@ -8014,7 +8304,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             return turi_error("eval: or-else used outside of an atomically block");
         bool retry_before = g_stm_tx->retry_requested;
         TuriValue v = eval_expr(env, frame, e->as.or_else_.stm1);
-        if (turi_is_error(v) || env->returning || env->throwing || env->aborting) return v;
+        if (turi_is_error(v) || env_signaled(env)) return v;
         /* If stm1 (and not a prior op) requested a retry, fall back to stm2. */
         if (!retry_before && g_stm_tx->retry_requested) {
             g_stm_tx->retry_requested = false;
@@ -8025,7 +8315,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     case EX_TVAR_NEW: {
         TuriValue init = eval_expr(env, frame, e->as.tvar_new_.init);
-        if (turi_is_error(init) || env->returning || env->throwing || env->aborting) return init;
+        if (turi_is_error(init) || env_signaled(env)) return init;
         /* Escaping payload: the tvar is returned as an int carrier; pool-owned. */
         TuriTVar *tv = (TuriTVar *)turi_val_calloc(env, sizeof(TuriTVar));
         tv->value   = init.as_int;
@@ -8049,7 +8339,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriTVar *tv = stm_eval_tvar(env, frame, e->as.tvar_write_.tvar, &err);
         if (!tv) return err;
         TuriValue val = eval_expr(env, frame, e->as.tvar_write_.value);
-        if (turi_is_error(val) || env->returning || env->throwing || env->aborting) return val;
+        if (turi_is_error(val) || env_signaled(env)) return val;
         stm_log_write(g_stm_tx, tv, val.as_int);
         return turi_nil();
     }
@@ -8061,7 +8351,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriTVar *tv = stm_eval_tvar(env, frame, e->as.tvar_swap_.tvar, &err);
         if (!tv) return err;
         TuriValue nv = eval_expr(env, frame, e->as.tvar_swap_.new_val);
-        if (turi_is_error(nv) || env->returning || env->throwing || env->aborting) return nv;
+        if (turi_is_error(nv) || env_signaled(env)) return nv;
         int64_t old = stm_read(g_stm_tx, tv);
         stm_log_write(g_stm_tx, tv, nv.as_int);
         return turi_int(old);
@@ -8074,9 +8364,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriTVar *tv = stm_eval_tvar(env, frame, e->as.tvar_cas_.tvar, &err);
         if (!tv) return err;
         TuriValue ov = eval_expr(env, frame, e->as.tvar_cas_.old_val);
-        if (turi_is_error(ov) || env->returning || env->throwing || env->aborting) return ov;
+        if (turi_is_error(ov) || env_signaled(env)) return ov;
         TuriValue nv = eval_expr(env, frame, e->as.tvar_cas_.new_val);
-        if (turi_is_error(nv) || env->returning || env->throwing || env->aborting) return nv;
+        if (turi_is_error(nv) || env_signaled(env)) return nv;
         if (stm_read(g_stm_tx, tv) == ov.as_int) {
             stm_log_write(g_stm_tx, tv, nv.as_int);
             return turi_bool(true);
@@ -8096,11 +8386,11 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriTVar *tv = stm_eval_tvar(env, frame, e->as.tvar_modify_.tvar, &err);
         if (!tv) return err;
         TuriValue fn = eval_expr(env, frame, e->as.tvar_modify_.fn);
-        if (turi_is_error(fn) || env->returning || env->throwing || env->aborting) return fn;
+        if (turi_is_error(fn) || env_signaled(env)) return fn;
         int64_t old = stm_read(g_stm_tx, tv);
         TuriValue arg = turi_int(old);
         TuriValue r = turi_call(env, fn, &arg, 1);
-        if (turi_is_error(r) || env->returning || env->throwing || env->aborting) return r;
+        if (turi_is_error(r) || env_signaled(env)) return r;
         stm_log_write(g_stm_tx, tv, r.as_int);
         return turi_int(old);
     }
@@ -8288,8 +8578,7 @@ static bool promo_env_quiescent(const TuriEnv *env) {
            !env->sched_ready_head && !env->sched_ready_tail &&
            !env->current_fiber && !env->all_futures &&
            !env->timers_head && !env->io_pending_head &&
-           !env->returning && !env->throwing && !env->aborting &&
-           !env->panicking && !env->in_no_unwind;
+           !env_signaled(env) && !env->in_no_unwind;
 }
 
 #define PROMO_SCRATCH(env, p) arena_owns(&(env)->value_scratch, (const void *)(p))
@@ -9899,9 +10188,11 @@ void turi_env_set_fuel(TuriEnv *env, uint64_t steps) {
     env->step_fuel       = steps;
 }
 
+/* C4: the eval_depth recursion guard was retired (interpreter recursion is now
+ * heap-bounded); this setter is kept as a no-op for API/ABI compatibility.
+ * Bound total work with turi_env_set_fuel instead. */
 void turi_env_set_max_depth(TuriEnv *env, uint32_t depth) {
-    if (!env) return;
-    env->max_eval_depth = depth;
+    (void)env; (void)depth;
 }
 
 void turi_env_allow(TuriEnv *env, TuriCaps cap) {
