@@ -405,18 +405,49 @@ static bool parse_c_path_vec(const Form *f, const char *manifest_dir,
 }
 
 /* Parse the :exports field. Accepts either form:
- *   - a map  #{ "mod/name" [sym ...] ... }  -- the canonical spice form; the
- *     module-name keys are captured (the per-module symbol vectors are not
- *     stored here -- consumers that need them re-read the manifest form).
+ *   - a map literal `#map{ "mod/name" [sym ...] ... }` -- the canonical
+ *     spice form; the module-name keys are captured (the per-module symbol
+ *     vectors are not stored here -- consumers that need them re-read the
+ *     manifest form).  Also accepts a bare `#{...}` legacy map for
+ *     back-compat with spices that predate `#map{...}`.
  *   - a vector ["src/lib.tur" ...] or a bare string -- legacy/path form,
  *     delegated to parse_str_vec.
+ *
+ * `#fx{...}` (an effect-row literal) is REJECTED here with TUR-E0620.  The
+ * reader tags all three of `#{...}`, `#fx{...}`, and (implicitly) `#map{...}`
+ * with related F_MAP-family shapes, but effect rows are never a valid
+ * `:exports` value.  See docs/upcoming/exports-map-syntax-tighten-plan.md.
+ *
  * Storing the keys lets the build driver validate declared exports against
  * on-disk sources and lets `tur emit-cmake` enumerate the modules. */
 static bool parse_exports(const Form *f, char ***out, int *n_out) {
     *out   = NULL;
     *n_out = 0;
     if (!f) return true;
-    if (f->tag != F_MAP) return parse_str_vec(f, out, n_out);
+
+    /* Reject `#fx{...}` -- an effect-row literal masquerading as a map. */
+    if (f->tag == F_MAP && f->fx_prov == (uint8_t)PROV_FX_EXPLICIT) {
+        diag_emit(DIAG_ERROR, f->span,
+                  "TUR-E0620: `:exports` expects a map literal (`#map{...}`) or "
+                  "a vector of source paths; got an effect-row literal "
+                  "(`#fx{...}`).  Effect rows are the spelling used in function "
+                  "type annotations, not exported-module maps.  Rewrite as "
+                  "`:exports #map{ \"mod/name\" [sym ...] ... }`.");
+        return false;
+    }
+    /* Also reject `@{...}` -- another effect-row spelling in the same trap. */
+    if (f->tag == F_MAP && f->fx_prov == (uint8_t)PROV_FX_AT_LEGACY) {
+        diag_emit(DIAG_ERROR, f->span,
+                  "TUR-E0620: `:exports` expects a map literal (`#map{...}`) or "
+                  "a vector of source paths; got an effect-row literal "
+                  "(`@{...}`).  Effect rows are the spelling used in function "
+                  "type annotations, not exported-module maps.  Rewrite as "
+                  "`:exports #map{ \"mod/name\" [sym ...] ... }`.");
+        return false;
+    }
+
+    if (f->tag != F_MAP && f->tag != F_MAP_LITERAL)
+        return parse_str_vec(f, out, n_out);
 
     const FormList *fl = &f->as.list;
     *out = (char **)malloc((fl->len / 2 + 1) * sizeof(char *));

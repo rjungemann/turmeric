@@ -2,7 +2,7 @@
   :name        "tur-result-typedef-multi-module"
   :version     "0.1.0"
   :description "Pins result-typedef-duplicated-across-modules: two modules export functions returning the same (Result cstr cstr) instantiation; a third module imports both and must compile cleanly (each module's .h would otherwise emit a colliding `typedef struct Result__cstr__cstr`)."
-  :exports #fx{
+  :exports #map{
     "app/main" ["main"]
     "app/produce" ["make-ok"]
     "app/consume" ["make-err"]

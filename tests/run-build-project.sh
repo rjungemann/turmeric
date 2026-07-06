@@ -884,6 +884,52 @@ else
     fi
 fi
 
+# exports-map-syntax-tighten-plan: a manifest that uses `:exports #fx{...}`
+# (an effect-row literal) instead of a map must be rejected at parse time with
+# TUR-E0620, not silently accepted with an empty exports list.  Before the fix
+# the reader tagged `#fx{...}` with F_MAP + PROV_FX_EXPLICIT and parse_exports
+# only checked the tag, so the category-error manifest sailed through.
+FXROW="$WORK/exports-fx-row-rejected"
+mkdir -p "$FXROW/src/app"
+cat > "$FXROW/build.tur" <<'EOF'
+(defpackage tur-exports-fx-row
+  :name    "tur-exports-fx-row"
+  :version "0.1.0"
+  :exports #fx{ "app/main" ["main"] })
+EOF
+cat > "$FXROW/src/app/main.tur" <<'EOF'
+(defmodule app/main (defn main [] : int 0))
+EOF
+fxrow_out=$(cd "$WORK" && "$TUR" build "$FXROW" -o "$WORK/fxrowbin" 2>&1)
+fxrow_rc=$?
+if [ $fxrow_rc -ne 0 ] && echo "$fxrow_out" | grep -q "TUR-E0620"; then
+    pass "build-project-exports-fx-row-rejected"
+else
+    fail "build-project-exports-fx-row-rejected" "rc=$fxrow_rc out=$fxrow_out"
+fi
+
+# exports-map-syntax-tighten-plan (positive): the canonical `#map{...}` form
+# must be accepted at the same slot -- i.e. the tightening did not regress the
+# happy path.  Uses the same fixture shape as the fx-row negative above.
+MAPFORM="$WORK/exports-map-form"
+mkdir -p "$MAPFORM/src/app"
+cat > "$MAPFORM/build.tur" <<'EOF'
+(defpackage tur-exports-map-form
+  :name    "tur-exports-map-form"
+  :version "0.1.0"
+  :exports #map{ "app/main" ["main"] })
+EOF
+cat > "$MAPFORM/src/app/main.tur" <<'EOF'
+(defmodule app/main (defn main [] : int 0))
+EOF
+mapform_out=$(cd "$WORK" && "$TUR" build "$MAPFORM" -o "$WORK/mapformbin" 2>&1)
+mapform_rc=$?
+if [ $mapform_rc -eq 0 ] && [ -x "$WORK/mapformbin" ]; then
+    pass "build-project-exports-map-form-accepted"
+else
+    fail "build-project-exports-map-form-accepted" "rc=$mapform_rc out=$mapform_out"
+fi
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

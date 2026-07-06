@@ -210,6 +210,10 @@ typedef enum DiagCode {
     TUR_E0310_UNKNOWN_EXPERIMENT,
     TUR_W0060_EXPERIMENTAL_PROTOTYPE,
     TUR_W0061_EXPERIMENTAL_BETA,
+    /* exports-map-syntax-tighten-plan: `:exports` in build.tur got an
+     * effect-row literal (`#fx{...}` or `@{...}`) instead of a map literal
+     * (`#map{...}`) or a legacy bare `#{...}` map or a path vector. */
+    TUR_E0620_EXPORTS_FX_ROW,
 } DiagCode;
 
 typedef enum DiagLevel {

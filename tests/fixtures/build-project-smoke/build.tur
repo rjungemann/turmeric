@@ -2,7 +2,7 @@
   :name        "tur-build-project-smoke"
   :version     "0.1.0"
   :description "Smoke project for manifest-driven `tur build <dir>` descent."
-  :exports #fx{
+  :exports #map{
     "app/main" ["main"]
     "app/util" ["double-it"]
   })

@@ -264,6 +264,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0310_UNKNOWN_EXPERIMENT:        return "TUR-E0310";
         case TUR_W0060_EXPERIMENTAL_PROTOTYPE:    return "TUR-W0060";
         case TUR_W0061_EXPERIMENTAL_BETA:         return "TUR-W0061";
+        case TUR_E0620_EXPORTS_FX_ROW:            return "TUR-E0620";
         default:                          return "";
     }
 }
@@ -397,6 +398,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0310") == 0) return TUR_E0310_UNKNOWN_EXPERIMENT;
     if (strcmp(s, "TUR-W0060") == 0) return TUR_W0060_EXPERIMENTAL_PROTOTYPE;
     if (strcmp(s, "TUR-W0061") == 0) return TUR_W0061_EXPERIMENTAL_BETA;
+    if (strcmp(s, "TUR-E0620") == 0) return TUR_E0620_EXPORTS_FX_ROW;
     return DIAG_CODE_NONE;
 }
 
@@ -1776,6 +1778,25 @@ static const DiagExplanation diag_explanations_[] = {
       "code written against the beta surface keeps compiling.  The warning fires\n"
       "regardless of how the experiment was enabled -- there is no gate to\n"
       "silence it.\n",
+    },
+    /* exports-map-syntax-tighten-plan */
+    { TUR_E0620_EXPORTS_FX_ROW,
+      "TUR-E0620: `:exports` got an effect-row literal instead of a map\n"
+      "\n"
+      "`:exports` in build.tur expects either a map literal (`#map{ \"mod/name\"\n"
+      "[sym ...] ... }`) or a legacy path vector.  Effect-row literals\n"
+      "(`#fx{...}` and the older `@{...}`) are the spelling used in function\n"
+      "type annotations to declare an effect set, not exported-module maps.\n"
+      "\n"
+      "Older manifests used the bare `#{...}` map spelling; that continues to\n"
+      "work.  The bug is specifically the `#fx{...}` / `@{...}` reader tag.\n"
+      "\n"
+      "Fix: replace `#fx{...}` with `#map{...}`:\n"
+      "\n"
+      "  :exports #map{\n"
+      "    \"app/main\" [\"main\"]\n"
+      "    \"app/util\" [\"double-it\"]\n"
+      "  }\n",
     },
     /* serial-shift-unsupported-context-miscompile */
     { TUR_E0706_SERIAL_CONTEXT_NOT_CAPTURABLE,

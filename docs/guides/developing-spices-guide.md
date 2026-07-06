@@ -594,7 +594,7 @@ Add two keys under `:build-opts`:
                  "c/kissfft/kiss_fftr.c"
                  "c/glue/fft_shim.c"]
   }
-  :exports #fx{ "signal/fft" [fft-forward fft-inverse] })
+  :exports #map{ "signal/fft" [fft-forward fft-inverse] })
 ```
 
 ### Rules
