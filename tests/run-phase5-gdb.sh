@@ -82,11 +82,11 @@ else
   # -- N1b) the carrier type names round-trip into DWARF ----------------------
   types=$(gdb -batch -nx \
     -ex "ptype tur_adt_Option__int" \
-    -ex "ptype Result" "$BIN" 2>&1)
+    -ex "ptype tur_adt_Result" "$BIN" 2>&1)
   expect "DWARF carries tur_adt_Option__int{is_some,value}" "$types" \
     "tur_adt_Option__int" "is_some" "value"
-  expect "DWARF carries Result{is_ok,ok_val,err_val}" "$types" \
-    "Result" "is_ok" "ok_val" "err_val"
+  expect "DWARF carries tur_adt_Result{is_ok,ok_val,err_val}" "$types" \
+    "tur_adt_Result" "is_ok" "ok_val" "err_val"
 
   # -- N2) pretty-printers render Turmeric shapes ----------------------------
   SYM=$(gdb -batch -nx -ex "info functions probe" "$BIN" 2>&1 \
