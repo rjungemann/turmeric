@@ -9,7 +9,7 @@ description: The remaining close-out for the stackless catch-unwind / panic-retu
 ## Why this exists
 
 The general lowering
-([archived plan](../archive/compiled-catch-unwind-general-lowering-plan.md),
+([archived plan](./compiled-catch-unwind-general-lowering-plan.md),
 G1-G7) is complete: the scaffold is retired, the general splitter handles
 arbitrary catch-crossing bodies, cross-function/mutual recursion, value
 extraction + live err branch, int64/opaque/by-value-aggregate params, and a
@@ -111,3 +111,50 @@ pass; land the aggregate widenings independently.
 - All five probes green at 1,000,000 flat.
 - Full suite green; non-catch benches neutral-or-better ON vs OFF.
 - Post-graduation: suite green with the flags removed; no `--enable=` needed.
+
+## Close-out (executed 2026-07-07)
+
+**Part A -- sign-off probes.** The five probe inputs live in
+`tests/probes/stackless-signoff/`; `tests/stackless-signoff-probes.sh` (dedicated
+ctest target `stackless_signoff_probes`, kept OUT of `tests/run.sh`) builds and
+runs each at 1,000,000 depth under `ulimit -s 256`. All five green; each matches
+the native oracle at depth 1000.
+
+| Probe | Shape | Value @ 1e6 (256KB stack) | Native @ 1e6 (256KB) |
+| --- | --- | --- | --- |
+| `cu-rec` | nested catch-unwind, non-tail after | 1000000 (exit 0) | SIGSEGV |
+| `cu-catch-deep` | single top-level catch over deep panicking body | 1000000 (exit 0) | survives (C compiler loop-optimizes the single-catch body) |
+| `atom-rec` | `defopaque` int64-carrier param crossing catch-unwind | 1000000 (exit 0) | SIGSEGV |
+| `mutual-rec` | ping/pong cross-function group driver | 1000001 (exit 0) | SIGSEGV |
+| `fiber-rec` | deep catch-unwind inside an `async` fiber | 1000000 (exit 0) | SIGSEGV |
+
+**Part B -- non-catch hot-path neutrality.** Enabling the signal transport
+A-normalizes every panic-capable call site (hoist into an `__auto_type` temp +
+`if (tur_panicking) return {0};`).  Correctness makes this unconditional: signal
+transport is a whole-program property (any function may be called under a
+catch-unwind in another TU), so the per-call check cannot be safely gated on the
+current module.  Measured neutral on non-catch benches (`tur build`, gcc):
+
+| Bench | OFF | ON | Verdict |
+| --- | --- | --- | --- |
+| collatz sum 1..3e6 (data-dependent, call-dense, ~429M steps) | 0.701s | 0.701s | neutral |
+| `bench-parsec-json` | 0.008s | 0.008s | neutral |
+
+The always-not-taken thread-local branch is absorbed by the predictor (and often
+eliminated by the C optimizer in single-TU catch-free programs).
+
+**Part C -- graduation mechanics.** Both rows removed from `EXPERIMENTS[]`
+(`src/runtime/experiments.c`) along with the `g_opt_*` globals, the
+`experiment_warn_if_used` calls, and the stackless->panic-return-signal
+implication.  The gates in `emit_expr.c` / `emit_fns.c` / `emit_module.c` are
+unconditional; the setjmp/longjmp catch-helper variants are deleted.  The 21
+`stackless-catch-unwind-*` / `panic-catch-unwind-signal` fixture `flags` files
+are removed (feature is always-on) and all 129 `expected.c` snapshots regenerated
+(109 changed).  Full suite green: **1975 passed, 0 failed.**  `expires_at` 0.31.0
+is satisfied without a bump (rows deleted before the deadline; `tur experiments
+--json` now returns `[]`).  A void/never-typed call is not hoisted (it emits as C
+`void`); this guard was widened from `TY_NIL` to also cover `TY_NEVER`.
+
+The deferred aggregate widenings (BR-series, aggregate returns, the composed
+by-value van Laarhoven follow-on) are post-graduation improvements per the
+"Sequencing" note above and do not block this close-out.

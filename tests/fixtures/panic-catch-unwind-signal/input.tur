@@ -1,7 +1,7 @@
 ;;; D1a (panic-return-signal): the compiled backend can propagate a panic to a
 ;;; catch-unwind boundary through the thread-local tur_panicking return-path
-;;; signal instead of setjmp/longjmp.  This fixture builds with
-;;; --enable=panic-return-signal (see the sibling `flags` file) and exercises:
+;;; signal instead of setjmp/longjmp (always-on since panic-return-signal
+;;; graduated).  This fixture exercises:
 ;;;   - a caught panic that crosses a deep NON-tail recursion (deep-panic), and
 ;;;   - a normally-returning catch-unwind (ok path).
 (defn deep-panic [n : int] : int

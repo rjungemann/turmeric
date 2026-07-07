@@ -188,6 +188,18 @@ add_test(
   COMMAND bash tests/run-leak-gate.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# D4 sign-off probes for the (graduated) stackless catch-unwind lowering: the
+# five cu-rec / cu-catch-deep / atom-rec / mutual-rec / fiber-rec shapes run at
+# 1,000,000 depth under a reduced stack (ulimit -s 256).  Slow / memory-heavy,
+# so deliberately kept out of the default `tests/run.sh` fast suite; this is the
+# dedicated target the graduation plan (docs/archive/catch-unwind-graduation-plan.md,
+# Part A) calls for.  Invoke explicitly:
+#   ctest --test-dir build -R stackless_signoff_probes --output-on-failure
+add_test(
+  NAME stackless_signoff_probes
+  COMMAND bash tests/stackless-signoff-probes.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Fat-closure-env scoped-free gate. Compiles tests/fixtures/closure-env-no-leak
 # (a capturing closure built in a loop and in a repeatedly-invoked effect
 # handler) with ASan/UBSan + LeakSanitizer ON and asserts the emitted program is

@@ -615,6 +615,13 @@ typedef struct tur_panic_payload tur_panic_payload;
 typedef struct tur_handler_node { jmp_buf buf; struct tur_handler_node *parent; } tur_handler_node;
 static __thread tur_handler_node *tur_handler_chain = NULL;
 static __thread int tur_panicking = 0;
+#define TUR_SC_MAXP 8
+#define TUR_SC_MAXN 32
+typedef struct tur_cont { int tag; tur_handler_node *boundary; struct tur_cont *next; int64_t saved[TUR_SC_MAXN]; uint32_t aggr_mask; } tur_cont;
+static inline int64_t tur_sc_bits_f64(double d){ int64_t i; memcpy(&i,&d,sizeof i); return i; }
+static inline double  tur_sc_f64_from_bits(int64_t i){ double d; memcpy(&d,&i,sizeof d); return d; }
+static inline int64_t tur_sc_bits_f32(float f){ int64_t i=0; memcpy(&i,&f,sizeof f); return i; }
+static inline float   tur_sc_f32_from_bits(int64_t i){ float f; memcpy(&f,&i,sizeof f); return f; }
 static tur_panic_payload *global_panic_payload;
 static tur_panic_payload *panic_payload_new(int, void *, const char *, int);
 static void tur_panic(const char *msg) {

@@ -1,5 +1,5 @@
-;;; D3 (compiled-catch-unwind-stackless-plan), slice 1.  Under
-;;; --enable=stackless-catch-unwind (see the sibling `flags` file) a
+;;; D3 (compiled-catch-unwind-stackless-plan), slice 1.  A (now always-on since
+;;; stackless-catch-unwind graduated)
 ;;; self-recursive catch-unwind function is emitted as a heap-continuation
 ;;; trampoline, so deeply nested catch-unwind runs with a FLAT C stack.  This
 ;;; depth (500000) SIGSEGVs the native lowering (which tops out ~150000 even

@@ -1455,7 +1455,6 @@ static bool gs_basic_ok(EmitCtx *ctx, FnDef *fd) {
 
 static bool stackless_general_eligible(EmitCtx *ctx, const Expr *e, FnDef *fd,
                                        TypeKind result_kind) {
-    if (!g_opt_stackless_catch_unwind) return false;
     if (ctx->current_abi_specialization) return false;
     if (!gs_basic_ok(ctx, fd)) return false;
     (void)result_kind;
@@ -2778,7 +2777,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* G4 (cross-function / mutual recursion): a function that cross-calls other
      * trampolined members lowers as a shim into a shared group driver. */
     if (!did_general && !prereq6_synthesized_body && !m2b_carrier_synth &&
-        g_opt_stackless_catch_unwind && !ctx->current_abi_specialization &&
+        !ctx->current_abi_specialization &&
         gs_basic_ok(ctx, fd) && sc_scalar_kind(result_kind) && ctx->current_fn_ret_ctype) {
         FnDef *group[GS_MAXMEM];
         int ng = gs_find_group(ctx, fd, group);

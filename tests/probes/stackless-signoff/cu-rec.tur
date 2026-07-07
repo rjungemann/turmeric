@@ -1,0 +1,10 @@
+;; D4 sign-off probe: cu-rec -- nested catch-unwind, no panic, non-tail after.
+;; Two segments (entry, after) per level.  cu-rec N = N.
+(defn cu-rec [n : int] : int
+  (if (= n 0)
+    0
+    (do (catch-unwind (fn [] : int (cu-rec (- n 1)))) n)))
+
+(defn main [] : int
+  (println (cu-rec 1000000))
+  0)
