@@ -51,7 +51,48 @@ own continuations become heap frames too. That is a **calling-convention
 change** for the affected functions, comparable in scope to D1 and D2 combined
 (as the parent plan notes).
 
-## Two directions (decide after prototyping)
+## Prototype (landed) -- the trampoline reaches 20,000,000 with a flat stack
+
+A hand-lowered C model of both shapes lives at
+[prototypes/d3-stackless-catch-unwind.c](./prototypes/d3-stackless-catch-unwind.c)
+(build/run instructions in its header). It integrates the shipped D1 heap
+handler chain and the D1a `tur_panicking` signal, and drives the two per-level
+frames onto a heap continuation chain stepped by a single flat trampoline loop.
+
+Measured:
+
+| Shape | Native compiled (D1/D1a) | Trampoline prototype |
+| --- | --- | --- |
+| `cu-rec` (nested catch, no panic) | SIGSEGV ~150000 | 20,000,000 OK |
+| `cu-rec-p` (nested catch, per-level caught panic) | SIGSEGV ~150000 | 20,000,000 OK |
+| either, under a **64 KiB** stack `ulimit` | dies almost immediately | 1,000,000 OK |
+
+Running 1,000,000 deep under a 64 KiB stack is the categorical proof: the
+recursion depth no longer touches the native C stack at all. This validates
+direction (a)'s mechanism end-to-end and de-risks the codegen work.
+
+### The validated driver shape
+
+The trampoline is a two-action state machine over a heap continuation chain --
+the compiled lowering emits exactly this, with the per-function segments named:
+
+- **Continuation node** (`Cont`): a tagged heap record `{ tag, saved locals,
+  boundary, next }`. `next` is the caller's continuation; `boundary` is the D1
+  `tur_handler_node` this segment must pop when it resumes.
+- **`DESCEND(n, k)`**: run a function segment. At a non-tail `catch-unwind`, push
+  the boundary, heap-allocate a continuation node capturing the live locals and
+  the current `k`, and `DESCEND` into the thunk body under it -- no C recursion.
+- **`RETURN(v, k)`**: deliver a value to a continuation. The `catch-unwind`-after
+  segment pops its boundary, consumes the `tur_panicking` signal into an
+  `ok`/`err` box, restores its saved locals, and `RETURN`s to `k->next`.
+
+Each source function that crosses a catch boundary splits into one segment per
+`catch-unwind` site (entry segment + one after-segment each), plus its tail; the
+codegen names them and threads live locals through the `Cont` node instead of the
+C frame. `cu-rec` needs two segments (entry, after); `cu-rec-p` two (entry,
+add1-after).
+
+## Two directions (decide after prototyping -- prototype now done)
 
 ### (a) Selective CPS -- transform only functions that cross a catch boundary
 
@@ -76,9 +117,14 @@ of the effect surface). `catch-unwind` becomes one more prompt on that machine.
   unified work-stack driver.
 - Con: the largest piece; only worth it if D3-async lands the machine anyway.
 
-Recommendation: prototype (a) on `cu-rec` first (it is self-contained and
-measurable), and only escalate to (b) if the async/effect D3 work is being built
-concurrently and the shared machine is cheaper than two lowerings.
+Recommendation: **direction (a).** The prototype above confirms it reaches the
+target on the self-contained `cu-rec`/`cu-rec-p` shapes; escalate to (b) only if
+the async/effect D3 work is being built concurrently and the shared machine is
+cheaper than two lowerings. The next concrete step is the codegen wiring behind
+its own experiment gate (mirror `panic-return-signal`): the analysis that marks
+functions crossing a catch boundary, the segment-splitting emit, the `Cont`
+runtime, and the CPS/direct shim -- validated against the compiled `cu-rec` /
+`cu-catch-deep` probes at 200000 then 1,000,000 (the D4 sign-off).
 
 ## Dependencies and reuse
 
