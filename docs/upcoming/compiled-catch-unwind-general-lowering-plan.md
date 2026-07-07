@@ -235,21 +235,51 @@ grammar, now for any body.
 
 ### G7 -- Effects / fibers / cancel unification
 
-- `panic-return-signal` (and thus the scaffold) punts the fiber auto-cancel,
-  effect/`handle` suspension, and `with-cancel-guard` unwinds (they still
-  `longjmp`). The general lowering must either (a) route those boundaries through
-  the same driver (converging with the DK machine -- catch-unwind, prompts, and
-  fibers all become nodes on one continuation stack), or (b) keep them separate
-  with a well-defined precedence at the `tur_panic_with` dispatch. Prereq for
-  graduating both experiments to always-on.
+> **Status: DONE via option (b) -- separation + precedence.** Rather than merging
+> onto the DK machine (option (a)), the split enforces a clean separation and a
+> native-matching precedence at the panic boundary:
+>
+> - **Separation is structural.** A trampolined function's body may contain only
+>   the handled constructs (leaves, `if`/`let`/`do`, pure builtins, self/cross
+>   member calls, `catch-unwind`, `panic`). Every other control construct --
+>   effect `perform`/`handle`, `with-cancel-guard`, `defer`, `async`/`await`/
+>   `spawn` -- hits `gs_value_ok`'s `default: return false` and makes the
+>   function ineligible, so it falls back to native. The driver's flat C frame
+>   therefore never *hosts* a longjmp-based effect/cancel unwind; the only
+>   cross-boundary control flow through it is a panic. (Verified: a
+>   `catch-unwind` + `defer` function is not trampolined and runs correctly on
+>   the native path.)
+> - **Panic precedence matches native.** Two real bugs were fixed here:
+>   (1) a `panic` buried in a non-suspending `do`/`if`/`let` was fast-pathed
+>   through `emit_value`, which emits a bare `return` that abandons the driver
+>   frame while a boundary is live (so an active `catch-unwind` never saw it);
+>   `cps_emit` now forces structural emission when `gs_has_panic(e)`, routing the
+>   panic to the `EX_PANIC` arm (which `break`s into the driver's unwind loop).
+>   (2) a panic that escapes every boundary the trampoline owns reached the
+>   driver's DONE and `abort()`ed unconditionally; it now mirrors `tur_panic`'s
+>   precedence -- an **outer handler chain** (native catch / other trampoline) ->
+>   propagate by returning with the signal set; else a **fiber** `panic_jmpbuf`
+>   -> `longjmp` into it; else genuinely uncaught -> abort.
+> - Fibers interoperate: a trampolined deep `catch-unwind` runs correctly inside
+>   an `async` fiber, and an uncaught panic inside one aborts identically to
+>   native.
+> - Covered by `stackless-catch-unwind-outer-catch` (escape to an outer native
+>   catch) and `stackless-catch-unwind-thunk-panic-compound` (a thunk panicking
+>   via a `do`, caught by the trampoline's own boundary, 200k-deep flat). Full
+>   suite: 1970 passed, 0 failed; all catch-unwind fixtures match native.
+>
+> This satisfies the graduation prerequisite that both experiments have a
+> well-defined, native-matching interaction with effects/fibers/cancel. Full
+> unification onto one continuation substrate (option (a), converging with the DK
+> machine) remains possible later but is not required for correctness.
 
 ## Adjacent (not part of the lowering, but blocks G5)
 
-- **`ok-val` / `err-val` on a `Panic` result fails to infer** (observed while
-  building slice 5: no fixture extracts the caught value; the accessor reports
-  `expected Result, got int`). This is a language/elaboration gap independent of
-  codegen. File it under `docs/reported/` and fix it before G5's value
-  extraction, or G5 has nothing to test against.
+- **`ok-val` / `err-val` on a `Panic` result fails to infer** -- **RESOLVED
+  upstream** (#620 "Surface catch-unwind result as (Result A B) so ok-val/err-val
+  infer"). Confirmed while building G5: `ok-val`/`err-val` on a caught result
+  now infer and compile in both the native and stackless paths, so nothing
+  blocked G5's value extraction.
 
 ## Validation / graduation
 

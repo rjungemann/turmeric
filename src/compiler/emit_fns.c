@@ -693,6 +693,88 @@ static bool gs_stmt_ok(const Expr *e, FnDef *fd) {
     }
 }
 
+/* Does e contain a `panic` / `panic-with` that emit_value would emit INLINE?
+ * A panic is a control escape: routed through emit_value it emits a bare
+ * `return` that leaves the driver's C frame directly, abandoning any live
+ * boundary/continuation nodes (so an active catch would never see it).  When
+ * true, cps_emit must split e structurally down to the panic instead of taking
+ * the emit_value fast path, so the panic reaches the EX_PANIC arm (which emits
+ * `break` -> the driver's unwind loop pops to the nearest boundary).  Does not
+ * descend into a catch-unwind thunk -- that panic belongs to the thunk's own
+ * segment (and a catch makes e suspend, so the fast path is off anyway). */
+static bool gs_has_panic(const Expr *e) {
+    if (!e) return false;
+    if (e->kind == EX_PANIC || e->kind == EX_PANIC_WITH) return true;
+    switch (e->kind) {
+        case EX_IF:
+            return gs_has_panic(e->as.if_.cond) || gs_has_panic(e->as.if_.then_) ||
+                   gs_has_panic(e->as.if_.else_or_null);
+        case EX_LET: {
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (gs_has_panic(e->as.let_.bindings[i].init)) return true;
+            return gs_has_panic(e->as.let_.body);
+        }
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (gs_has_panic(e->as.do_.items[i])) return true;
+            return false;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (gs_has_panic(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (gs_has_panic(e->as.call_.args[i])) return true;
+            return false;
+        case EX_CAST:                return gs_has_panic(e->as.cast_.expr);
+        case EX_ASCRIBE:             return gs_has_panic(e->as.ascribe_.inner);
+        case EX_PANIC_PAYLOAD_TYPE:  return gs_has_panic(e->as.panic_payload_type_.payload);
+        case EX_PANIC_PAYLOAD_VALUE: return gs_has_panic(e->as.panic_payload_value_.payload);
+        default: return false;
+    }
+}
+
+/* The leftmost `panic` / `panic-with` node in e (eval order), or NULL.  Used to
+ * route a panic buried in a non-suspending value expression through the driver.
+ * Since a panic diverges, any pure pre-panic sub-eval is dead and skipped. */
+static const Expr *gs_leftmost_panic(const Expr *e) {
+    if (!e) return NULL;
+    if (e->kind == EX_PANIC || e->kind == EX_PANIC_WITH) return e;
+    switch (e->kind) {
+        case EX_IF: {
+            const Expr *r = gs_leftmost_panic(e->as.if_.cond); if (r) return r;
+            r = gs_leftmost_panic(e->as.if_.then_); if (r) return r;
+            return gs_leftmost_panic(e->as.if_.else_or_null);
+        }
+        case EX_LET: {
+            for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                const Expr *r = gs_leftmost_panic(e->as.let_.bindings[i].init); if (r) return r;
+            }
+            return gs_leftmost_panic(e->as.let_.body);
+        }
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++) {
+                const Expr *r = gs_leftmost_panic(e->as.do_.items[i]); if (r) return r;
+            }
+            return NULL;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++) {
+                const Expr *r = gs_leftmost_panic(e->as.builtin.args[i]); if (r) return r;
+            }
+            return NULL;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                const Expr *r = gs_leftmost_panic(e->as.call_.args[i]); if (r) return r;
+            }
+            return NULL;
+        case EX_CAST:                return gs_leftmost_panic(e->as.cast_.expr);
+        case EX_ASCRIBE:             return gs_leftmost_panic(e->as.ascribe_.inner);
+        case EX_PANIC_PAYLOAD_TYPE:  return gs_leftmost_panic(e->as.panic_payload_type_.payload);
+        case EX_PANIC_PAYLOAD_VALUE: return gs_leftmost_panic(e->as.panic_payload_value_.payload);
+        default: return NULL;
+    }
+}
+
 static bool gs_has_catch(const Expr *e, FnDef *fd) {
     if (!e) return false;
     if (e->kind == EX_CATCH_UNWIND) return true;
@@ -1112,6 +1194,11 @@ static void gs_catch_descend(GsCtx *gs, Buf *b, const Expr *S, const GsSink *sin
 static void cps_emit_value_susp(GsCtx *gs, Buf *b, const Expr *e, const GsSink *sink) {
     const Expr *S = gs_leftmost(gs, e);
     if (!S) {
+        /* No suspension.  A panic buried in a value position (e.g. an operand of
+         * a pure builtin) must still route through the driver, not emit_value's
+         * bare return -- emit the panic; it diverges, so the rest is dead. */
+        const Expr *P = gs_leftmost_panic(e);
+        if (P) { cps_emit(gs, b, P, sink); return; }
         gs->ctx->indent = gs->cur_ind;
         char *v = emit_value(gs->ctx, b, e);
         gs_deliver(gs, b, v, sink); free(v); return;
@@ -1204,7 +1291,7 @@ static void cps_emit(GsCtx *gs, Buf *b, const Expr *e, const GsSink *sink) {
         indent_buf(b, gs->cur_ind); buf_puts(b, "break;\n");
         return;
     }
-    if (!gs_suspends_live(gs, e)) {
+    if (!gs_suspends_live(gs, e) && !gs_has_panic(e)) {
         gs->ctx->indent = gs->cur_ind;
         char *v = emit_value(gs->ctx, b, e);
         gs_deliver(gs, b, v, sink); free(v); return;
@@ -1321,7 +1408,23 @@ static void gs_emit_driver(GsCtx *gs, Buf *out, int bi, bool done_typed) {
     indent_buf(out, bi); buf_puts(out, "for (;;) {\n");
     indent_buf(out, bi + 1); buf_puts(out, "if (tur_panicking) {\n");
     indent_buf(out, bi + 2); buf_puts(out, "while (__k->boundary == 0 && __k->tag != 0) { tur_cont *__pk = __k->next; free(__k); __k = __pk; }\n");
-    indent_buf(out, bi + 2); buf_puts(out, "if (__k->tag == 0) { fprintf(stderr, \"panic (uncaught, stackless)\\n\"); fflush(NULL); abort(); }\n");
+    /* G7: the panic escaped every boundary this trampoline owns (all popped in
+     * their resume segments, so tur_handler_chain now reflects the OUTER chain
+     * at entry).  Mirror native tur_panic's precedence: an outer handler ->
+     * propagate the signal by returning (the native caller's tur_panicking check
+     * or the outer catch consumes it); else a fiber panic jmpbuf -> longjmp into
+     * it; else it is genuinely uncaught -> abort. */
+    {
+        char *rz = done_typed ? sc_restore_expr(gs->mem_retctype[0], gs->mem_ret[0], "INT64_C(0)")
+                              : tur_strdup("INT64_C(0)");
+        indent_buf(out, bi + 2); buf_puts(out, "if (__k->tag == 0) {\n");
+        indent_buf(out, bi + 3); buf_puts(out, "free(__k);\n");
+        indent_buf(out, bi + 3); buf_printf(out, "if (tur_handler_chain) return %s;\n", rz);
+        indent_buf(out, bi + 3); buf_puts(out, "if (tur_current_fiber && tur_current_fiber->panic_jmpbuf_valid) longjmp(tur_current_fiber->panic_jmpbuf, 1);\n");
+        indent_buf(out, bi + 3); buf_puts(out, "fprintf(stderr, \"panic (uncaught, stackless)\\n\"); fflush(NULL); abort();\n");
+        indent_buf(out, bi + 2); buf_puts(out, "}\n");
+        free(rz);
+    }
     indent_buf(out, bi + 2); buf_puts(out, "__pc = __k->tag;\n");
     indent_buf(out, bi + 1); buf_puts(out, "}\n");
     indent_buf(out, bi + 1); buf_puts(out, "switch (__pc) {\n");

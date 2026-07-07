@@ -5988,7 +5988,12 @@ static int64_t __cu_group_0(int __pc, int64_t __a0) {
  for (;;) {
   if (tur_panicking) {
    while (__k->boundary == 0 && __k->tag != 0) { tur_cont *__pk = __k->next; free(__k); __k = __pk; }
-   if (__k->tag == 0) { fprintf(stderr, "panic (uncaught, stackless)\n"); fflush(NULL); abort(); }
+   if (__k->tag == 0) {
+    free(__k);
+    if (tur_handler_chain) return INT64_C(0);
+    if (tur_current_fiber && tur_current_fiber->panic_jmpbuf_valid) longjmp(tur_current_fiber->panic_jmpbuf, 1);
+    fprintf(stderr, "panic (uncaught, stackless)\n"); fflush(NULL); abort();
+   }
    __pc = __k->tag;
   }
   switch (__pc) {
