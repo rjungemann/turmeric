@@ -1,0 +1,23 @@
+;; BR1 (catch-unwind-byref-aggregate-params-plan): a by-CONST-POINTER aggregate
+;; param.  `(Result int int)` is a two-ctor by-value product wide enough to pass
+;; as `const tur_adt_Result__int__int *` (type_struct_pass_by_ptr), so the C
+;; param is a BORROW whose pointee lives in the caller's C frame -- a frame the
+;; trampoline collapses.  Saving the bare pointer across a descend would dangle,
+;; so a descend materializes the pointee on the heap (malloc + memcpy THROUGH the
+;; pointer) and a resume re-homes it into a stable function-scope buffer
+;; `acc__agg`, re-pointing the param at it.  This turns the const borrow into an
+;; owned copy for the trampolined region -- observationally identical to native
+;; for a read-only, identity-agnostic borrow, which the pure-accessor gate (ok?)
+;; enforces.  `acc` is threaded through the recursion and observed via `ok?`;
+;; recursion crosses the catch-unwind, so native (flag off) SIGSEGVs deep while
+;; the stackless lowering runs flat.  step(acc, n) = n + (ok? acc ? 1 : 0).
+(defn step [acc : (Result int int) n : int] : int
+  (if (= n 0)
+    (if (ok? acc) 100 200)
+    (do (catch-unwind (fn [] : int (step acc (- n 1))))
+        (+ n (if (ok? acc) 1 0)))))
+
+(defn main [] : int
+  (println (step (ok 7) 200000))
+  (println (step (err 9) 7))
+  0)

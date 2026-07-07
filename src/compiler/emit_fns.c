@@ -509,15 +509,26 @@ static bool gs_slot_type(EmitCtx *ctx, Type t, TypeKind *out_kind, const char **
  * int64 carrier), a by-value AGGREGATE -- a C struct passed by value, whose
  * ctype is a bare struct name (no `*`, not int64/scalar) -- is accepted and
  * flagged *out_aggr; it is relocated across a descend by heap-boxing (see
- * gs_save/gs_restore).  A by-const-pointer aggregate (ctype contains `*`, e.g. a
- * `Result` param) is NOT handled here (the pointee lifetime is the caller's) and
- * still bails.  Returns false for anything not rideable. */
+ * gs_save/gs_restore).  A by-const-pointer aggregate (a large by-value product
+ * passed as `const <struct> *`, e.g. a `(Result int int)` param) is ALSO
+ * accepted and additionally flagged *out_ref: its pointee -- which lives in the
+ * caller's collapsed C frame -- is materialized on the heap across a descend and
+ * re-homed into a stable function-scope buffer on resume.  For both aggregate
+ * classes *out_ctype names the (pointee) struct so sizeof works.  Returns false
+ * for anything not rideable. */
 static bool gs_param_class(EmitCtx *ctx, Type t, TypeKind *out_kind,
-                           const char **out_ctype, bool *out_aggr) {
+                           const char **out_ctype, bool *out_aggr, bool *out_ref) {
+    *out_ref = false;
     if (gs_slot_type(ctx, t, out_kind, out_ctype)) { *out_aggr = false; return true; }
     const char *ct = emit_type_c_name(ctx, t);
+    /* type_c_name yields the bare struct name for BOTH a small by-value product
+     * (passed by value) and a large one (passed as `const <struct> *`); the ABI
+     * choice is type_struct_pass_by_ptr, not a `*` in the name.  Use the Type to
+     * tell them apart rather than string-matching the ctype. */
     if (ct && ct[0] && !strchr(ct, '*')) {   /* a by-value struct name */
-        *out_kind = TY_INT; *out_ctype = ct; *out_aggr = true; return true;
+        *out_kind = TY_INT; *out_ctype = ct; *out_aggr = true;
+        *out_ref = type_struct_pass_by_ptr(emit_resolve_type(ctx, t));
+        return true;
     }
     return false;
 }
@@ -830,8 +841,18 @@ enum { GSK_RETURN = 0, GSK_ASSIGN = 1, GSK_SEQ = 2 };
 
 /* is_aggr: a by-value aggregate (C struct) param that does not fit the int64
  * slot.  It is relocated across a descend by heap-boxing (malloc + memcpy) with
- * the slot holding the box pointer -- ctype names the struct so sizeof works. */
-typedef struct { char *cname; const char *ctype; TypeKind kind; bool is_aggr; } GsVar;
+ * the slot holding the box pointer -- ctype names the struct so sizeof works.
+ *
+ * is_ref: an is_aggr param that is passed by CONST POINTER (`const <ctype> *`,
+ * a large-enough by-value product -- type_struct_pass_by_ptr).  cname is the
+ * pointer, not the struct; its pointee lives in the CALLER's C frame, which the
+ * trampoline collapses.  So a descend materializes the pointee on the heap
+ * (memcpy FROM the pointer, not from its address) and a resume copies it into a
+ * stable function-scope buffer `<cname>__agg`, re-pointing cname at it.  The
+ * borrow becomes an owned copy for the trampolined region -- sound only for a
+ * read-only, identity-agnostic const borrow (the pure-accessor gate enforces
+ * this). */
+typedef struct { char *cname; const char *ctype; TypeKind kind; bool is_aggr; bool is_ref; } GsVar;
 
 typedef struct GsSink {
     int kind;
@@ -864,16 +885,18 @@ typedef struct {
     int n_param_vars;   /* count of leading vars[] that are member params */
 } GsCtx;
 
-static int gs_add_var_a(GsCtx *gs, char *cname, const char *ctype, TypeKind k, bool is_aggr) {
+static int gs_add_var_a(GsCtx *gs, char *cname, const char *ctype, TypeKind k,
+                        bool is_aggr, bool is_ref) {
     if (gs->n_vars >= TUR_SC_MAXN) { gs->overflow = true; free(cname); return -1; }
     gs->vars[gs->n_vars].cname = cname;
     gs->vars[gs->n_vars].ctype = ctype;
     gs->vars[gs->n_vars].kind = k;
     gs->vars[gs->n_vars].is_aggr = is_aggr;
+    gs->vars[gs->n_vars].is_ref = is_ref;
     return gs->n_vars++;
 }
 static int gs_add_var(GsCtx *gs, char *cname, const char *ctype, TypeKind k) {
-    return gs_add_var_a(gs, cname, ctype, k, false);
+    return gs_add_var_a(gs, cname, ctype, k, false, false);
 }
 
 static Buf *gs_add_seg(GsCtx *gs, int tag) {
@@ -1038,12 +1061,16 @@ static const Expr *gs_leftmost(GsCtx *gs, const Expr *e) {
 static void gs_save(GsCtx *gs, Buf *b, const char *node) {
     for (int i = 0; i < gs->n_vars; i++) {
         if (gs->vars[i].is_aggr) {
-            /* Heap-box a copy of the by-value aggregate; the slot holds the box
-             * pointer.  Byte-copy matches native (a param kept live by value
-             * across the recursive call, no retain/drop). */
+            /* Heap-box a copy of the aggregate; the slot holds the box pointer.
+             * Byte-copy matches native (a param kept live by value across the
+             * recursive call, no retain/drop).  A by-ref param (is_ref) is
+             * ALREADY a pointer to the pointee, so memcpy reads through it
+             * (`memcpy(box, cname, ...)`); a by-value param needs its address
+             * taken (`memcpy(box, &cname, ...)`). */
             indent_buf(b, gs->cur_ind);
-            buf_printf(b, "{ void *__ab = malloc(sizeof(%s)); memcpy(__ab, &%s, sizeof(%s)); %s->saved[%d] = (int64_t)(intptr_t)__ab; }\n",
-                       gs->vars[i].ctype, gs->vars[i].cname, gs->vars[i].ctype, node, i);
+            buf_printf(b, "{ void *__ab = malloc(sizeof(%s)); memcpy(__ab, %s%s, sizeof(%s)); %s->saved[%d] = (int64_t)(intptr_t)__ab; }\n",
+                       gs->vars[i].ctype, gs->vars[i].is_ref ? "" : "&",
+                       gs->vars[i].cname, gs->vars[i].ctype, node, i);
             continue;
         }
         char *sv = sc_save_expr(gs->vars[i].kind, gs->vars[i].cname);
@@ -1055,6 +1082,17 @@ static void gs_save(GsCtx *gs, Buf *b, const char *node) {
 static void gs_restore(GsCtx *gs, Buf *b) {
     for (int i = 0; i < gs->n_vars; i++) {
         if (gs->vars[i].is_aggr) {
+            if (gs->vars[i].is_ref) {
+                /* Re-home the boxed pointee into this var's stable function-scope
+                 * buffer and re-point cname at it, then free the box.  cname is a
+                 * `const <ctype> *`; the buffer lives as long as the trampoline,
+                 * so the resumed segment reads a valid pointee. */
+                indent_buf(b, gs->cur_ind);
+                buf_printf(b, "{ void *__ab = (void*)(intptr_t)__k->saved[%d]; memcpy(&%s__agg, __ab, sizeof(%s)); free(__ab); %s = &%s__agg; }\n",
+                           i, gs->vars[i].cname, gs->vars[i].ctype,
+                           gs->vars[i].cname, gs->vars[i].cname);
+                continue;
+            }
             indent_buf(b, gs->cur_ind);
             buf_printf(b, "{ void *__ab = (void*)(intptr_t)__k->saved[%d]; memcpy(&%s, __ab, sizeof(%s)); free(__ab); }\n",
                        i, gs->vars[i].cname, gs->vars[i].ctype);
@@ -1129,8 +1167,20 @@ static void gs_self_descend(GsCtx *gs, Buf *b, const Expr *S, const GsSink *sink
         free(av); tmps[i] = tur_strdup(nm);
     }
     for (uint32_t i = 0; i < na; i++) {
+        GsVar *pv = &gs->vars[pbase + (int)i];
         indent_buf(b, gs->cur_ind);
-        buf_printf(b, "%s = %s;\n", gs->vars[pbase + (int)i].cname, tmps[i]);
+        if (pv->is_ref) {
+            /* The callee param is a `const <ctype> *` borrow; the arg (`tmps[i]`)
+             * is itself such a pointer whose pointee lives in this segment's
+             * scope, which the descend collapses.  Materialize the pointee into
+             * the param's stable function-scope buffer and point the param var at
+             * it, so the child entry reads a live value (memmove tolerates the
+             * arg == this same param aliasing case). */
+            buf_printf(b, "memmove(&%s__agg, %s, sizeof(%s)); %s = &%s__agg;\n",
+                       pv->cname, tmps[i], pv->ctype, pv->cname, pv->cname);
+        } else {
+            buf_printf(b, "%s = %s;\n", pv->cname, tmps[i]);
+        }
         free(tmps[i]);
     }
     free(tmps);
@@ -1263,8 +1313,18 @@ static void cps_emit_value_susp(GsCtx *gs, Buf *b, const Expr *e, const GsSink *
                 free(av); tmps[i] = tur_strdup(nm);
             }
             for (uint32_t i = 0; i < na; i++) {
+                GsVar *pv = &gs->vars[pbase + (int)i];
                 indent_buf(b, gs->cur_ind);
-                buf_printf(b, "%s = %s;\n", gs->vars[pbase + (int)i].cname, tmps[i]);
+                if (pv->is_ref) {
+                    /* A by-const-ptr aggregate param: the arg pointer's pointee
+                     * lives in this segment's scope, gone once we loop to ENTRY.
+                     * Re-home it into the param's stable buffer (memmove tolerates
+                     * the arg == this same param aliasing case). */
+                    buf_printf(b, "memmove(&%s__agg, %s, sizeof(%s)); %s = &%s__agg;\n",
+                               pv->cname, tmps[i], pv->ctype, pv->cname, pv->cname);
+                } else {
+                    buf_printf(b, "%s = %s;\n", pv->cname, tmps[i]);
+                }
                 free(tmps[i]);
             }
             free(tmps);
@@ -1380,10 +1440,10 @@ static bool gs_basic_ok(EmitCtx *ctx, FnDef *fd) {
     /* G6: the return type must be an int64-slot type (scalar / int64 carrier --
      * aggregate returns are deferred, __v is int64).  Params may additionally be
      * a by-value aggregate (heap-boxed across a descend). */
-    TypeKind k; const char *ct; bool aggr;
+    TypeKind k; const char *ct; bool aggr; bool ref;
     if (!gs_slot_type(ctx, fd->return_type, &k, &ct)) return false;
     for (uint8_t i = 0; i < fd->n_params; i++)
-        if (!gs_param_class(ctx, fd->param_types[i], &k, &ct, &aggr)) return false;
+        if (!gs_param_class(ctx, fd->param_types[i], &k, &ct, &aggr, &ref)) return false;
     return true;
 }
 
@@ -1415,9 +1475,9 @@ static bool gs_build(GsCtx *gs) {
         for (uint8_t i = 0; i < f->n_params; i++) {
             /* G6: an int64-carrier / opaque param rides the slot with kind
              * TY_INT (intptr path); a by-value aggregate rides via heap-boxing. */
-            TypeKind k; const char *ct; bool aggr;
-            if (!gs_param_class(ctx, f->param_types[i], &k, &ct, &aggr)) { gs->overflow = true; return false; }
-            gs_add_var_a(gs, atom_var(ctx, f->params[i]), ct, k, aggr);
+            TypeKind k; const char *ct; bool aggr; bool ref;
+            if (!gs_param_class(ctx, f->param_types[i], &k, &ct, &aggr, &ref)) { gs->overflow = true; return false; }
+            gs_add_var_a(gs, atom_var(ctx, f->params[i]), ct, k, aggr, ref);
         }
     }
     gs->n_param_vars = gs->n_vars;
@@ -1502,6 +1562,15 @@ static bool emit_stackless_general_body(EmitCtx *ctx, Buf *file, FnDef *fd,
     bool ok = gs_build(&gs);
     if (ok) {
         int bi = gs.base_ind;
+        /* A by-const-ptr aggregate param needs a stable function-scope buffer to
+         * re-home its heap-boxed pointee into on resume (the param pointer itself
+         * points into the caller's collapsed frame; see gs_restore / the descend
+         * arg-pass in gs_self_descend). */
+        for (int i = 0; i < gs.n_param_vars; i++) {
+            if (!gs.vars[i].is_ref) continue;
+            indent_buf(file, bi);
+            buf_printf(file, "%s %s__agg;\n", gs.vars[i].ctype, gs.vars[i].cname);
+        }
         for (int i = gs.n_param_vars; i < gs.n_vars; i++) {
             indent_buf(file, bi);
             buf_printf(file, "%s %s = 0;\n", gs.vars[i].ctype, gs.vars[i].cname);
@@ -1683,8 +1752,8 @@ static bool emit_group_member(EmitCtx *ctx, Buf *file, FnDef *fd, TypeKind resul
      * path). */
     for (int m = 0; m < ng; m++)
         for (uint8_t i = 0; i < group[m]->n_params; i++) {
-            TypeKind k; const char *ct; bool aggr;
-            if (!gs_param_class(ctx, group[m]->param_types[i], &k, &ct, &aggr) || aggr)
+            TypeKind k; const char *ct; bool aggr; bool ref;
+            if (!gs_param_class(ctx, group[m]->param_types[i], &k, &ct, &aggr, &ref) || aggr)
                 return false;
         }
     GsGroup *g = NULL;

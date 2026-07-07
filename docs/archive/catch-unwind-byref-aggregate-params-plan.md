@@ -6,6 +6,41 @@ description: Let a trampolined function take a by-const-reference aggregate para
 
 # Stackless catch-unwind -- by-const-pointer aggregate params -- Plan
 
+> **ARCHIVED -- COMPLETE (BR1-BR2).** By-const-pointer aggregate params are
+> trampolined behind `--enable=stackless-catch-unwind`. The residual widening
+> work (BR3: relax the pure-accessor eligibility gate) is tracked separately in
+> [docs/upcoming/v1/catch-unwind-byref-aggregate-br3-plan.md](../upcoming/v1/catch-unwind-byref-aggregate-br3-plan.md).
+
+## Status
+
+BR1 + BR2 landed. A by-const-pointer aggregate param (a large by-value
+product passed as `const <struct> *`, e.g. a `(Result int int)` param) is now
+trampolined: `gs_param_class` classifies it via `type_struct_pass_by_ptr` and
+flags it `is_ref`; a descend materializes the pointee on the heap
+(`memcpy(box, cname, sizeof)` -- reading THROUGH the pointer, not `&cname`);
+a resume re-homes the box into a stable function-scope buffer `<cname>__agg`
+and re-points the param at it (`gs_restore`), freeing the box; the descend
+arg-pass (`gs_self_descend` and the tail-call backedge in `cps_emit`) re-homes
+each new arg's pointee into the same buffer with `memmove` (tolerating the
+`arg == param` aliasing case). Eligibility stays conservative: the existing
+pure-accessor gate (`ok?`/`err?`/`ok-val`/`err-val`/`some?`/`none?` only, plus
+member calls) already enforces the read-only, identity-agnostic borrow the copy
+requires, and the group path still bails on any aggregate param. Validated by
+`tests/fixtures/stackless-catch-unwind-byref-aggregate-param` (matches native
+at small depth, runs flat where native SIGSEGVs) and valgrind (the aggregate
+box balances; the only residual leak is the pre-existing documented
+catch-result box leak, identical to the by-value path).
+
+Note: before this change the by-ref case did NOT bail as the "why" section
+below assumed -- `type_c_name` yields the bare struct name for both the small
+(by-value) and large (by-ref) product, so `gs_param_class` misclassified the
+by-ref param as by-value and emitted `memcpy(box, &acc, ...)` (copying from the
+address of the pointer variable). That silent miscompile is what BR1 fixes.
+
+BR3 (widen eligibility past the pure-accessor gate) remains future work,
+planned in
+[docs/upcoming/v1/catch-unwind-byref-aggregate-br3-plan.md](../upcoming/v1/catch-unwind-byref-aggregate-br3-plan.md).
+
 ## Why this exists
 
 The general lowering
