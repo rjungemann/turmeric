@@ -1,0 +1,15 @@
+;;; D3 (compiled-catch-unwind-stackless-plan), slice 1.  Under
+;;; --enable=stackless-catch-unwind (see the sibling `flags` file) a
+;;; self-recursive catch-unwind function is emitted as a heap-continuation
+;;; trampoline, so deeply nested catch-unwind runs with a FLAT C stack.  This
+;;; depth (500000) SIGSEGVs the native lowering (which tops out ~150000 even
+;;; with the D1 heap handler chain), so reaching it proves the recursion folded
+;;; off the native stack onto the heap.  cu-rec N = N.
+(defn cu-rec [n : int] : int
+  (if (= n 0)
+    0
+    (do (catch-unwind (fn [] : int (cu-rec (- n 1)))) n)))
+
+(defn main [] : int
+  (println (cu-rec 500000))
+  0)

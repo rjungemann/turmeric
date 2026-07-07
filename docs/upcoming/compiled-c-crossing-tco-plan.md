@@ -48,6 +48,17 @@ instead of driver-frame terms. The three phases map one-to-one.
 
 ### Phase D1 -- `catch-unwind` on a heap handler chain
 
+**Status: handler-chain step landed; D1a transport wired behind an experiment.**
+The heap handler chain is always-on (see "D1 -- what landed" below). The
+return-path-signal transport (D1a) is now implemented behind
+`--enable=panic-return-signal` (see
+[panic-return-signal-plan.md](./panic-return-signal-plan.md)); it is a prototype
+because it does not yet cover the fiber/effect/cancel unwinds and, as the
+measurements below establish, does not on its own reach the *nested* shape's
+target -- that is bounded by the frame-count wall the D3 stackless lowering
+removes (scoped in
+[compiled-catch-unwind-stackless-plan.md](./compiled-catch-unwind-stackless-plan.md)).
+
 - Add a thread-local `tur_handler_chain` -- a linked list of heap-allocated
   handler nodes, each carrying the saved defer mark, module state,
   no-unwind flag, and a pointer to the target continuation (the compiled
@@ -77,6 +88,78 @@ instead of driver-frame terms. The three phases map one-to-one.
 - Defers: the handler node captures the defer-stack mark at push time; a
   caught panic fires unwound defers (LIFO) *before* jumping to the
   continuation, exactly as the interpreter's `catch-unwind` W4 fix does.
+
+#### D1 -- what landed (handler chain), with measurements
+
+The **handler-chain** half of D1 shipped. Handler discovery now runs off a
+thread-local `tur_handler_chain` of heap-allocated `tur_handler_node`s, each
+**owning its own `jmp_buf`**, replacing the single global `global_panic_jmpbuf`
+that every `catch-unwind` / `catch-panic-of` boundary previously save/restored
+onto its own C-stack frame (a `jmp_buf` plus a `memcpy` copy per level). The
+box helpers heap-allocate their node; the thunk-fn helpers keep a stack node;
+`tur_panic` / `tur_panic_with` consult the chain (innermost node) instead of the
+global; the fiber shim saves/clears/restores the chain pointer instead of the
+global buffer. Transport stays `setjmp` / `longjmp`. All ~1440 fixtures stay
+green (105 preamble snapshots regenerated); a new
+`panic-catch-unwind-nested-deep` fixture (`cu-rec` at 80000) guards the win.
+
+Measured effect on the D1 target shapes (compiled backend, `-O2`, 8 MiB stack):
+
+| Shape | Before D1 | After D1 (handler chain) | Notes |
+| --- | --- | --- | --- |
+| plain deep non-tail recursion | 200000 OK | 200000 OK | baseline; ~1 small C frame/level |
+| `cu-catch-deep` (single catch, deep panic) | 200000 OK | 200000 OK | **already passed** -- `longjmp` panic is O(1) stack; the plan listed it as a D1 target but it needed no work |
+| `cu-rec` (deeply NESTED catch-unwind) | SIGSEGV below 50000 | SIGSEGV ~150000 | **~3x deeper**; the win D1 delivers |
+
+**D1a transport decision (prototyped, not yet wired):** hand-lowered C
+prototypes of both transports on `fib` (opaque input, reachable panic writer so
+the flag branch cannot be optimized away):
+
+- **Status-word fat return** is consistently **~3.5x slower at `-O2`** (0.71s
+  vs 0.20s baseline) -- exactly the register-pressure hit the plan predicted.
+- **Thread-local flag** is at worst neutral and lets the optimizer schedule the
+  split-temporary call form better; micro-timing at `-O2` is too heuristic-
+  sensitive to quote a single overhead number, but it never regressed baseline.
+
+=> **If/when the return-path signal is wired, use the thread-local flag, not the
+status word.**
+
+**Key correction to the D1 premise (important for D3 scoping):** the
+return-path signal alone does **not** make deeply *nested* `catch-unwind`
+(`cu-rec`) unbounded, and does not even reach 200000. A flag-transport prototype
+(no `jmp_buf`, no `longjmp` at all) still SIGSEGV'd at ~120000-150000 -- the same
+order of magnitude as the landed handler chain. The wall is **frame *count*,
+not frame *size***: `(do (catch-unwind (fn [] (cu-rec (- n 1)))) n)` keeps **two
+live C frames per nesting level** -- the boundary's own frame and the "return
+`n` after the catch" continuation -- neither of which a return-path signal
+removes. Only heap-allocating those continuations (a stackless / partial-CPS
+lowering of the boundary, i.e. **D3-class work**) makes the nested shape
+unbounded. The signal transport is still worth doing (it removes the `jmp_buf`
+frame *size*, roughly doubling depth on its own, and is a prerequisite for
+tail-calling across the boundary), but it should be scheduled together with the
+stackless-continuation work rather than sold as the thing that hits D4's
+1,000,000-deep target for `cu-rec`. The wiring itself is also large: codegen
+does **not** A-normalize calls (panic-capable calls are emitted mid-C-expression,
+e.g. `1 + deep(n-1)`), so a per-call-site flag check first requires hoisting
+every panic-capable call to its own statement -- an ABI-wide transform with
+heavy fixture churn.
+
+Net: D1 lands the heap handler chain (a real, measured ~3x nesting-depth win and
+the payload-on-node / interleaving-correctness the plan called for). D1a's
+transport is decided (thread-local flag) and now **wired behind
+`--enable=panic-return-signal`**: `panic` sets `tur_panicking` and returns, every
+panic-capable call site is A-normalized to a temp with an `if (tur_panicking)
+return <zero>` propagation check, and `catch-unwind` consumes the flag after the
+thunk (no `setjmp`). Validated: the default (flag-off) codegen is byte-identical
+(1953 fixtures green); with the flag on the `panic-*` catch fixtures keep their
+ok/err semantics and `cu-catch-deep` propagates a panic through 200000 non-tail
+frames. Measured caveat that confirms the analysis: signal-mode `cu-rec` reaches
+the *same* ~150000 as the D1 heap chain, **not deeper** -- because D1 already
+moved the `jmp_buf` off the frame, so removing `longjmp` adds no nesting depth;
+its value is eliminating `longjmp` and enabling tail-calls across the boundary
+(the D3 prerequisite), not depth. The nested-shape 200000/1,000,000 target
+requires the stackless-continuation work in
+[compiled-catch-unwind-stackless-plan.md](./compiled-catch-unwind-stackless-plan.md).
 
 ### Phase D2 -- `atomically` on a heap-anchored tx-log
 

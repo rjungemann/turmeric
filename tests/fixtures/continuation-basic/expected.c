@@ -612,8 +612,8 @@ static void tur_panic_print_scope_chain(void) {
 }
 
 typedef struct tur_panic_payload tur_panic_payload;
-static jmp_buf global_panic_jmpbuf;
-static int global_panic_jmpbuf_valid;
+typedef struct tur_handler_node { jmp_buf buf; struct tur_handler_node *parent; } tur_handler_node;
+static __thread tur_handler_node *tur_handler_chain = NULL;
 static tur_panic_payload *global_panic_payload;
 static tur_panic_payload *panic_payload_new(int, void *, const char *, int);
 static void tur_panic(const char *msg) {
@@ -622,10 +622,10 @@ static void tur_panic(const char *msg) {
         abort();
     }
     tur_panic_in_progress = 1;
-    if (global_panic_jmpbuf_valid) {
+    if (tur_handler_chain) {
         global_panic_payload = panic_payload_new(5, msg ? strdup(msg) : NULL, __FILE__, __LINE__);
         if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); }
-        longjmp(global_panic_jmpbuf, 1);
+        longjmp(tur_handler_chain->buf, 1);
     }
     fprintf(stderr, "panic at %s:%d: %s\n", __FILE__, __LINE__, msg ? msg : "(no message)");
     tur_panic_print_scope_chain();
@@ -653,8 +653,6 @@ struct tur_panic_payload {
 };
 
 static tur_panic_payload *global_panic_payload = NULL;
-static jmp_buf global_panic_jmpbuf;
-static int global_panic_jmpbuf_valid = 0;
 
 static tur_panic_payload *panic_payload_new(int type_tag, void *payload, const char *file, int line) {
     tur_panic_payload *p = (tur_panic_payload *)malloc(sizeof(tur_panic_payload));
@@ -699,21 +697,17 @@ struct tur_result {
 typedef void (*tur_thunk_fn)(void *env, tur_result *out);
 
 static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
-    if (global_panic_jmpbuf_valid) {
+    tur_handler_node __node; __node.parent = tur_handler_chain; tur_handler_chain = &__node;
+    if (setjmp(__node.buf) == 0) {
         thunk(env, out);
-        return false;
-    }
-    global_panic_jmpbuf_valid = 1;
-    if (setjmp(global_panic_jmpbuf) == 0) {
-        thunk(env, out);
-        global_panic_jmpbuf_valid = 0;
+        tur_handler_chain = __node.parent;
         if (global_panic_payload) {
             panic_payload_free(global_panic_payload);
             global_panic_payload = NULL;
         }
         return false;
     } else {
-        global_panic_jmpbuf_valid = 0;
+        tur_handler_chain = __node.parent;
         tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
@@ -723,21 +717,17 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
 }
 
 static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env, tur_result *out) {
-    if (global_panic_jmpbuf_valid) {
+    tur_handler_node __node; __node.parent = tur_handler_chain; tur_handler_chain = &__node;
+    if (setjmp(__node.buf) == 0) {
         thunk(env, out);
-        return false;
-    }
-    global_panic_jmpbuf_valid = 1;
-    if (setjmp(global_panic_jmpbuf) == 0) {
-        thunk(env, out);
-        global_panic_jmpbuf_valid = 0;
+        tur_handler_chain = __node.parent;
         if (global_panic_payload) {
             panic_payload_free(global_panic_payload);
             global_panic_payload = NULL;
         }
         return false;
     } else {
-        global_panic_jmpbuf_valid = 0;
+        tur_handler_chain = __node.parent;
         tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
@@ -746,7 +736,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
             return true;
         } else {
         if (global_panic_payload) {
-            /* Type mismatch - re-panic */
+            /* Type mismatch - re-panic to the next outer boundary (restored above) */
             tur_panic_with(global_panic_payload->type_tag, global_panic_payload->value,
                            global_panic_payload->file, global_panic_payload->line);
         }
@@ -757,17 +747,18 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
 
 /* Phase R2: catch-unwind special-form helpers (result-box ABI) */
 static int64_t tur_catch_unwind_box(int64_t thunk) {
-    jmp_buf __prev_buf; int __prev_valid = global_panic_jmpbuf_valid;
-    if (__prev_valid) memcpy(&__prev_buf, &global_panic_jmpbuf, sizeof(jmp_buf));
-    global_panic_jmpbuf_valid = 1;
-    if (setjmp(global_panic_jmpbuf) == 0) {
+    /* D1: the jmp_buf lives on a heap handler node, not this frame, so a
+     * nested catch-unwind holds only a pointer per level here.  The node is
+     * pushed before setjmp and popped on both exit paths; the enclosing
+     * boundary is simply __node->parent (no save/restore copy needed). */
+    tur_handler_node *__node = (tur_handler_node *)malloc(sizeof(tur_handler_node));
+    __node->parent = tur_handler_chain; tur_handler_chain = __node;
+    if (setjmp(__node->buf) == 0) {
         int64_t __v = TUR_APPLY0(thunk);
-        global_panic_jmpbuf_valid = __prev_valid;
-        if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));
+        tur_handler_chain = __node->parent; free(__node);
         return tur_box_ok(__v);
     } else {
-        global_panic_jmpbuf_valid = __prev_valid;
-        if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));
+        tur_handler_chain = __node->parent; free(__node);
         tur_panic_in_progress = 0;
         tur_panic_payload *__p = global_panic_payload;
         global_panic_payload = NULL;
@@ -776,24 +767,21 @@ static int64_t tur_catch_unwind_box(int64_t thunk) {
 }
 
 static int64_t tur_catch_panic_of_box(int expected_type, int64_t thunk) {
-    jmp_buf __prev_buf; int __prev_valid = global_panic_jmpbuf_valid;
-    if (__prev_valid) memcpy(&__prev_buf, &global_panic_jmpbuf, sizeof(jmp_buf));
-    global_panic_jmpbuf_valid = 1;
-    if (setjmp(global_panic_jmpbuf) == 0) {
+    tur_handler_node *__node = (tur_handler_node *)malloc(sizeof(tur_handler_node));
+    __node->parent = tur_handler_chain; tur_handler_chain = __node;
+    if (setjmp(__node->buf) == 0) {
         int64_t __v = TUR_APPLY0(thunk);
-        global_panic_jmpbuf_valid = __prev_valid;
-        if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));
+        tur_handler_chain = __node->parent; free(__node);
         return tur_box_ok(__v);
     } else {
-        global_panic_jmpbuf_valid = __prev_valid;
-        if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));
+        tur_handler_chain = __node->parent; free(__node);
         tur_panic_in_progress = 0;
         tur_panic_payload *__p = global_panic_payload;
         global_panic_payload = NULL;
         if (__p && __p->type_tag == expected_type) {
             return tur_box_err((int64_t)(intptr_t)__p);
         }
-        /* type mismatch: re-raise to the next outer boundary (restored above) */
+        /* type mismatch: re-raise to the next outer boundary (already popped) */
         if (__p) tur_panic_with(__p->type_tag, __p->value, __p->file, __p->line);
         return tur_box_err(0);
     }
@@ -950,9 +938,9 @@ static void tur_panic_with(int type_tag, void *payload, const char *file, int li
         abort();
     }
     tur_panic_in_progress = 1;
-    if (global_panic_jmpbuf_valid) {
+    if (tur_handler_chain) {
         global_panic_payload = panic_payload_new(type_tag, payload, file, line);
-        longjmp(global_panic_jmpbuf, 1);
+        longjmp(tur_handler_chain->buf, 1);
     } else if (tur_current_fiber && tur_current_fiber->panic_jmpbuf_valid) {
         /* Use per-fiber panic buffer - set up global payload for cleanup */
         global_panic_payload = panic_payload_new(type_tag, payload, file, line);
@@ -1020,12 +1008,12 @@ static void tur_fiber_shim(uint32_t hi, uint32_t lo) {
     FiberBlock *f = (FiberBlock *)(((uintptr_t)hi << 32) | (uintptr_t)(uint32_t)lo);
     void *task_group = f->task_group;
     if (task_group) {
-        /* Save previous global panic handler state */
-        int prev_global_valid = global_panic_jmpbuf_valid;
-        jmp_buf prev_global_buf;
-        if (prev_global_valid) memcpy(&prev_global_buf, &global_panic_jmpbuf, sizeof(jmp_buf));
-        /* Clear global to prevent interference */
-        global_panic_jmpbuf_valid = 0;
+        /* D1: save the enclosing catch-unwind handler chain and run the
+         * fiber with an empty chain so an outer boundary does not catch a
+         * panic that belongs to this fiber (the fiber uses its own
+         * panic_jmpbuf); restore the caller's chain on both exit paths. */
+        tur_handler_node *prev_chain = tur_handler_chain;
+        tur_handler_chain = NULL;
         /* Set up per-fiber panic handler */
         if (setjmp(f->panic_jmpbuf) == 0) {
             f->panic_jmpbuf_valid = 1;
@@ -1037,9 +1025,8 @@ static void tur_fiber_shim(uint32_t hi, uint32_t lo) {
                 panic_payload_free(global_panic_payload);
                 global_panic_payload = NULL;
             }
-            /* Restore previous global panic handler */
-            global_panic_jmpbuf_valid = prev_global_valid;
-            if (prev_global_valid) memcpy(&global_panic_jmpbuf, &prev_global_buf, sizeof(jmp_buf));
+            /* Restore the caller's catch-unwind handler chain */
+            tur_handler_chain = prev_chain;
         } else {
             /* Panic caught - auto-cancel task group (TG-004-3) */
             f->panic_jmpbuf_valid = 0;
@@ -1057,9 +1044,8 @@ static void tur_fiber_shim(uint32_t hi, uint32_t lo) {
                 panic_payload_free(global_panic_payload);
                 global_panic_payload = NULL;
             }
-            /* Restore previous global panic handler */
-            global_panic_jmpbuf_valid = prev_global_valid;
-            if (prev_global_valid) memcpy(&global_panic_jmpbuf, &prev_global_buf, sizeof(jmp_buf));
+            /* Restore the caller's catch-unwind handler chain */
+            tur_handler_chain = prev_chain;
         }
     } else {
         /* No task group, just run the function normally */

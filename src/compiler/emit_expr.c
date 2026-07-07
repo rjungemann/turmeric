@@ -2245,7 +2245,55 @@ static char *emit_hkt_spec_ctor_suffix(EmitCtx *ctx, const Expr *e) {
     return type_adt_app_ctor_suffix(sret);
 }
 
+/* D1a (panic-return-signal): emit the propagation check that returns a zero of
+ * the enclosing function's C return type when a panic signal is pending.  Only
+ * called under --enable=panic-return-signal. */
+static void emit_panic_signal_return(EmitCtx *ctx, Buf *body) {
+    const char *rt = ctx->current_fn_ret_ctype;
+    indent_buf(body, ctx->indent);
+    if (rt && strcmp(rt, "void") == 0) {
+        buf_puts(body, "if (tur_panicking) return;\n");
+    } else if (rt) {
+        /* A zero of the exact declared return type propagates the signal. */
+        buf_printf(body, "if (tur_panicking) return (%s){0};\n", rt);
+    } else {
+        /* D1a prototype limit: the enclosing function's C return type is not
+         * recorded here (some carrier/dict-clone closure shapes), so we cannot
+         * synthesize a well-typed propagation return.  Emit nothing rather than
+         * an ill-typed `return;` -- a panic raised through such a function does
+         * not yet propagate under this prototype (see the plan's Scope note). */
+        buf_puts(body, "/* panic-return-signal: ret ctype unknown; no propagation here */\n");
+    }
+}
+
+static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e);
+
+/* D1a: A-normalize a panic-capable call.  Under --enable=panic-return-signal
+ * every direct call is hoisted into a temporary so a tur_panicking check can
+ * follow it; a pending panic then propagates by an early return of a zero of
+ * the current function's return type.  With the flag off this is a transparent
+ * pass-through, so default codegen is byte-identical.  void/never calls carry
+ * no usable value and are checked where they appear as statements
+ * (EX_PANIC / EX_PANIC_WITH). */
 char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
+    char *v = emit_value_dispatch(ctx, body, e);
+    if (!g_opt_panic_return_signal || e->kind != EX_CALL) return v;
+    if (e->type.kind == TY_NIL) return v;  /* unit/void: no usable value to hoist */
+    /* Hoist the call into a temp so a tur_panicking check can follow it.  Use
+     * __auto_type (GNU C, supported by the gcc/clang the backend targets) so
+     * the temp takes the call's EXACT emitted C representation -- carrier int64
+     * vs by-value aggregate vs pointer -- without re-deriving it (the repr
+     * heuristic disagrees with the emitted form for some carrier calls). */
+    char tmp[64];
+    snprintf(tmp, sizeof tmp, "__ps_%d", ctx->tmp_n++);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "__auto_type %s = (%s);\n", tmp, v);
+    free(v);
+    emit_panic_signal_return(ctx, body);
+    return strdup(tmp);
+}
+
+static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
     switch (e->kind) {
         case EX_NIL_LIT:  return atom_nil();
         case EX_BOOL_LIT: return atom_bool(e->as.b);
@@ -2560,6 +2608,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     /* For non-cstr, use a generic message */
                     buf_printf(body, "tur_panic(\"(non-string panic)\");\n");
                 }
+                /* D1a: in signal mode tur_panic returns (no longjmp), so the
+                 * panicking frame must propagate the signal by returning now. */
+                if (g_opt_panic_return_signal)
+                    emit_panic_signal_return(ctx, body);
             }
             free(msg_val);
             return atom_nil();
@@ -2580,6 +2632,9 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 /* tur_panic_with takes type_tag (int), payload (void*), file, line */
                 buf_printf(body, "tur_panic_with(%d, (void*)%s, __FILE__, __LINE__);\n",
                            (int)payload->type.kind, payload_val);
+                /* D1a: in signal mode tur_panic_with returns; propagate now. */
+                if (g_opt_panic_return_signal)
+                    emit_panic_signal_return(ctx, body);
             }
             free(payload_val);
             return atom_nil();
@@ -2609,6 +2664,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_printf(body, "int64_t %s = tur_catch_panic_of_box(%d, (int64_t)(intptr_t)%s);\n",
                        result_var, (int)type_kind, thunk_val);
             free(thunk_val);
+            /* D1a: a type-mismatched catch-panic-of leaves the signal set to
+             * re-raise; propagate it to the next outer boundary. */
+            if (g_opt_panic_return_signal)
+                emit_panic_signal_return(ctx, body);
             return strdup(result_var);
         }
         case EX_PANIC_PAYLOAD_TYPE: {

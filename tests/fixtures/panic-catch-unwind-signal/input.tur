@@ -1,0 +1,17 @@
+;;; D1a (panic-return-signal): the compiled backend can propagate a panic to a
+;;; catch-unwind boundary through the thread-local tur_panicking return-path
+;;; signal instead of setjmp/longjmp.  This fixture builds with
+;;; --enable=panic-return-signal (see the sibling `flags` file) and exercises:
+;;;   - a caught panic that crosses a deep NON-tail recursion (deep-panic), and
+;;;   - a normally-returning catch-unwind (ok path).
+(defn deep-panic [n : int] : int
+  (if (= n 0)
+    (panic "boom")
+    (+ 1 (deep-panic (- n 1)))))
+
+(defn main [] : int
+  (let [caught (catch-unwind (fn [] : int (deep-panic 2000)))]
+    (if (err? caught) (println "caught") (println "no")))
+  (let [ok (catch-unwind (fn [] : int 42))]
+    (if (ok? ok) (println "ok") (println "err")))
+  0)

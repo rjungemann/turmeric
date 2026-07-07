@@ -1,0 +1,17 @@
+;;; Phase D1 (compiled-c-crossing-tco-plan): deeply NESTED catch-unwind.
+;;; Each level wraps the next recursion in its own (catch-unwind (fn [] ...)).
+;;; Before D1 each boundary pinned a jmp_buf (plus a save copy) on its own C
+;;; frame, so this shape SIGSEGV'd well below 50000.  D1 moves handler
+;;; discovery onto a thread-local chain of heap nodes that each OWN their
+;;; jmp_buf, so the per-level C-stack cost drops to a couple of pointers and
+;;; the compiled backend now runs this ~3x deeper.  80000 sits comfortably
+;;; above the old limit and below the current one, guarding the improvement.
+;;; (The catch result is discarded, so the deepest level returns n: cu-rec N = N.)
+(defn cu-rec [n : int] : int
+  (if (= n 0)
+    0
+    (do (catch-unwind (fn [] : int (cu-rec (- n 1)))) n)))
+
+(defn main [] : int
+  (println (cu-rec 80000))
+  0)

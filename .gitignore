@@ -24,6 +24,8 @@ build-release-check/
 !tests/**/*.h
 !examples/**/*.c
 !examples/**/*.h
+!docs/**/*.c
+!docs/**/*.h
 
 # Python bytecode
 __pycache__/

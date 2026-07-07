@@ -45,6 +45,26 @@ extern bool g_dump_cps_coloring;
 /* CPS3: --cps-path flag — emit CPS wrappers for colored functions */
 extern bool g_cps_path;
 
+/* D1a (compiled-c-crossing-tco-plan): --enable=panic-return-signal.  When set,
+ * the compiled backend lowers panic propagation to a thread-local tur_panicking
+ * return-path signal instead of setjmp/longjmp: panic sets the flag and returns,
+ * every panic-capable call site checks the flag and returns early, and
+ * catch-unwind consumes it after calling the thunk.  Removes the per-boundary
+ * jmp_buf frame (a further depth win on top of the D1 heap handler chain) and
+ * makes tail calls across a catch-unwind legal.  Prototype: does NOT yet cover
+ * the fiber / effect / cancel unwinds (those still longjmp), so async programs
+ * must not enable it. */
+extern bool g_opt_panic_return_signal;
+
+/* D3 (compiled-catch-unwind-stackless-plan): --enable=stackless-catch-unwind.
+ * When set, a function matching the self-recursive catch-unwind grammar (slice 1:
+ * one scalar param, `(if COND BASE (do (catch-unwind (fn [] (f RECUR))) AFTER))`)
+ * is emitted as a heap-continuation trampoline instead of native self-recursion
+ * through the boundary, so it runs with a flat C stack (heap-bounded nesting).
+ * Implies panic-return-signal (the trampoline consumes that signal). Prototype:
+ * only the slice-1 grammar is lowered; every other function falls back. */
+extern bool g_opt_stackless_catch_unwind;
+
 /* Phase U5: unsafe linting statistics */
 extern uint32_t g_unsafe_block_count;
 extern uint32_t g_unsafe_total_lines;

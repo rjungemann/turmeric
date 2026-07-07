@@ -457,6 +457,272 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
     free(v);
 }
 
+/* ------------ D3: stackless self-recursive catch-unwind (slice 1) ---------- */
+
+/* Conservative "simple expression" whitelist: an expression the trampoline can
+ * evaluate inline in a driver segment without any of the machinery it does not
+ * model (defers/frames, nested catch boundaries, panics, closures, async).
+ * Anything outside the whitelist makes the enclosing function ineligible, so the
+ * only catch boundary and the only recursion in an eligible body are the ones the
+ * grammar matches. */
+static bool su_simple_expr(const Expr *e) {
+    if (!e) return true;
+    switch (e->kind) {
+        case EX_INT_LIT: case EX_BOOL_LIT: case EX_FLOAT_LIT:
+        case EX_CSTR_LIT: case EX_NIL_LIT: case EX_VAR:
+            return true;
+        case EX_CAST:     return su_simple_expr(e->as.cast_.expr);
+        case EX_ASCRIBE:  return su_simple_expr(e->as.ascribe_.inner);
+        case EX_IF:
+            return su_simple_expr(e->as.if_.cond) &&
+                   su_simple_expr(e->as.if_.then_) &&
+                   su_simple_expr(e->as.if_.else_or_null);
+        case EX_BUILTIN: {
+            /* Arithmetic / comparison / logic builtins (`=`, `-`, ...) -- pure,
+             * never panic; recurse into operands.  (A general EX_CALL is NOT
+             * allowed: a user call could panic, and the emit_value early-return
+             * that panic-return-signal injects would exit the driver mid-step.) */
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (!su_simple_expr(e->as.builtin.args[i])) return false;
+            return true;
+        }
+        case EX_CALL: {
+            /* Only a narrow whitelist of PURE result/option accessors is allowed
+             * (so the result-using `let` form can inspect the caught box); these
+             * never panic, so the injected driver-return is dead. */
+            if (e->as.call_.fn_expr) return false;
+            Binding *fb = e->as.call_.fn_binding;
+            const char *nm = (fb && fb->name) ? fb->name->name : NULL;
+            static const char *const pure[] = {
+                "ok?", "err?", "ok-val", "err-val", "some?", "none?", NULL };
+            bool ok = false;
+            for (int i = 0; nm && pure[i]; i++)
+                if (strcmp(nm, pure[i]) == 0) { ok = true; break; }
+            if (!ok) return false;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (!su_simple_expr(e->as.call_.args[i])) return false;
+            return true;
+        }
+        default:
+            return false;   /* defer, catch-unwind, panic, async, closures, ... */
+    }
+}
+
+/* Scalar kinds the trampoline can round-trip through an int64 `saved[]` slot:
+ * machine int, bool, non-owning pointer-repr values (cstr, raw ptr) -- via an
+ * intptr_t cast -- and float/float32 -- via BIT reinterpretation.  Carrier /
+ * opaque / aggregate types are excluded on purpose (ownership / RC concerns). */
+static bool sc_scalar_kind(TypeKind k) {
+    return k == TY_INT || k == TY_BOOL || k == TY_CSTR || k == TY_PTR_VOID ||
+           k == TY_FLOAT || k == TY_FLOAT32;
+}
+
+/* Build "the int64 bits of VAL" for a scalar of kind K (caller frees). */
+static char *sc_save_expr(TypeKind k, const char *val) {
+    const char *fn = (k == TY_FLOAT) ? "tur_sc_bits_f64"
+                   : (k == TY_FLOAT32) ? "tur_sc_bits_f32" : NULL;
+    size_t n = strlen(val) + 64;
+    char *s = (char *)malloc(n);
+    if (fn) snprintf(s, n, "%s(%s)", fn, val);
+    else    snprintf(s, n, "(int64_t)(intptr_t)(%s)", val);
+    return s;
+}
+
+/* Build "the value of C type CTYPE recovered from the int64 SAVED" (caller frees). */
+static char *sc_restore_expr(const char *ctype, TypeKind k, const char *saved) {
+    size_t n = strlen(saved) + (ctype ? strlen(ctype) : 0) + 64;
+    char *s = (char *)malloc(n);
+    if (k == TY_FLOAT)        snprintf(s, n, "tur_sc_f64_from_bits(%s)", saved);
+    else if (k == TY_FLOAT32) snprintf(s, n, "tur_sc_f32_from_bits(%s)", saved);
+    else                      snprintf(s, n, "(%s)(intptr_t)(%s)", ctype, saved);
+    return s;
+}
+
+/* D3: recognise the self-recursive catch-unwind grammar and pull out its
+ * sub-expressions:
+ *
+ *   (defn f [p : int] : int
+ *     (if COND BASE (do (catch-unwind (fn [] (f RECUR))) AFTER)))
+ *
+ * The catch-unwind result is discarded (it sits before AFTER in the `do`).  Only
+ * this exact shape is lowered to the trampoline; everything else falls back to
+ * the normal (D1/D1a) emission. */
+static bool stackless_catch_eligible(EmitCtx *ctx, const Expr *e, FnDef *fd,
+                                     TypeKind result_kind,
+                                     const Expr **out_cond, const Expr **out_base,
+                                     const Expr **out_call, const Expr **out_after,
+                                     const Binding **out_result_binding) {
+    if (!g_opt_stackless_catch_unwind) return false;
+    if (!fd || fd->n_params < 1 || fd->n_params > TUR_SC_MAXP) return false;
+    if (fd->n_dict_clone > 0 || fd->n_dict_env > 0) return false;
+    if (ctx->current_abi_specialization) return false;
+    if (fd->binding && fd->binding->name && fd->binding->name->name &&
+        strcmp(fd->binding->name->name, "main") == 0) return false;
+    if (!sc_scalar_kind(result_kind)) return false;
+    if (!ctx->current_fn_ret_ctype) return false;   /* needed for the return cast */
+    if (!fd->param_types) return false;
+    for (uint8_t i = 0; i < fd->n_params; i++)
+        if (!sc_scalar_kind(fd->param_types[i].kind)) return false;
+
+    const Expr *b = fd->body;
+    if (!b || b->kind != EX_IF) return false;
+    const Expr *els = b->as.if_.else_or_null;
+    /* The recursive branch is either
+     *   (do (catch-unwind (fn [] (f RECUR))) AFTER)   -- result discarded, OR
+     *   (let [r (catch-unwind (fn [] (f RECUR)))] AFTER)  -- result inspected.
+     * For the `let` form AFTER may reference `r` (the boxed ok/err result); an
+     * eligible function is panic-free, so `r` is always ok(<recursion value>).
+     * The box carries an int, so the `let` form requires an int return. */
+    const Expr *cu = NULL, *after = NULL;
+    const Binding *r_binding = NULL;
+    if (els && els->kind == EX_DO && els->as.do_.n == 2) {
+        cu = els->as.do_.items[0];
+        after = els->as.do_.items[1];
+    } else if (els && els->kind == EX_LET && els->as.let_.n == 1 &&
+               result_kind == TY_INT) {
+        cu = els->as.let_.bindings[0].init;
+        after = els->as.let_.body;
+        r_binding = els->as.let_.bindings[0].binding;
+    } else {
+        return false;
+    }
+    if (!cu || cu->kind != EX_CATCH_UNWIND) return false;
+    const Expr *thunk = cu->as.catch_unwind_.thunk;
+    /* The thunk is a 0-arg lambda: EX_FN when it captures nothing, EX_CLOSURE
+     * when it captures recursion variables.  For a closure, every capture must
+     * be one of this function's own params, so references inside the thunk body
+     * resolve to that param's C name when we re-emit them in the driver.
+     * (Closure conversion prepends a synthetic env param, so tf->n_params is not
+     * checked -- the source lambda is 0-arg.) */
+    FnDef *tf = NULL;
+    if (thunk && thunk->kind == EX_FN) {
+        tf = thunk->as.fn_.fn;
+    } else if (thunk && thunk->kind == EX_CLOSURE && thunk->as.closure_.closure) {
+        struct Closure *cl = thunk->as.closure_.closure;
+        tf = cl->fn;
+        for (uint8_t i = 0; i < cl->n_captures; i++) {
+            bool is_param = false;
+            for (uint8_t j = 0; j < fd->n_params; j++)
+                if (cl->captures[i] == fd->params[j]) { is_param = true; break; }
+            if (!is_param) return false;
+        }
+    } else {
+        return false;
+    }
+    if (!tf || !tf->body) return false;
+    const Expr *call = tf->body;
+    if (!call || call->kind != EX_CALL) return false;
+    if (call->as.call_.fn_binding != fd->binding) return false;   /* self-call */
+    if (call->as.call_.n_args != fd->n_params || call->as.call_.fn_expr) return false;
+
+    const Expr *cond = b->as.if_.cond, *base = b->as.if_.then_;
+    if (!su_simple_expr(cond) || !su_simple_expr(base) || !su_simple_expr(after))
+        return false;
+    for (uint32_t i = 0; i < call->as.call_.n_args; i++)
+        if (!su_simple_expr(call->as.call_.args[i])) return false;
+
+    *out_cond = cond; *out_base = base; *out_call = call; *out_after = after;
+    *out_result_binding = r_binding;
+    return true;
+}
+
+/* Emit the trampoline body for an eligible function.  The C parameter doubles as
+ * the driver's scratch for the current DESCEND args and the restored per-level
+ * param in the AFTER segment; the boundary + "return AFTER" continuation move
+ * onto a heap `tur_cont` chain, so nesting is bounded by heap, not the C stack.
+ * (Matches docs/upcoming/prototypes/d3-stackless-catch-unwind.c.) */
+static void emit_stackless_catch_body(EmitCtx *ctx, Buf *file, FnDef *fd,
+                                      TypeKind result_kind,
+                                      const Expr *cond, const Expr *base,
+                                      const Expr *call, const Expr *after,
+                                      const Binding *result_binding) {
+    uint8_t np = fd->n_params;
+    char **p = (char **)malloc(sizeof(char *) * np);   /* param C names = scratch */
+    for (uint8_t i = 0; i < np; i++) p[i] = atom_var(ctx, fd->params[i]);
+    int base_ind = ctx->indent;
+    #define SI(n) do { ctx->indent = base_ind + (n); indent_buf(file, ctx->indent); } while (0)
+
+    SI(0); buf_puts(file, "tur_cont *__k = (tur_cont*)malloc(sizeof(tur_cont));\n");
+    SI(0); buf_puts(file, "__k->tag = 0; __k->boundary = 0; __k->next = 0;\n");
+    SI(0); buf_puts(file, "int __act = 0;   /* 0 = DESCEND, 1 = RETURN */\n");
+    SI(0); buf_puts(file, "int64_t __v = 0;\n");
+    SI(0); buf_puts(file, "for (;;) {\n");
+    /* A pending panic unwinds to the innermost boundary (RETURN to current k). */
+    SI(1); buf_puts(file, "if (tur_panicking) __act = 1;\n");
+    SI(1); buf_puts(file, "if (__act == 0) {\n");
+    {   /* DESCEND */
+        ctx->indent = base_ind + 2;
+        char *cv = emit_value(ctx, file, cond);
+        SI(2); buf_printf(file, "if (%s) {\n", cv); free(cv);
+        ctx->indent = base_ind + 3;
+        char *bv = emit_value(ctx, file, base);
+        char *bsv = sc_save_expr(result_kind, bv);
+        SI(3); buf_printf(file, "__v = %s; __act = 1;\n", bsv); free(bv); free(bsv);
+        SI(2); buf_puts(file, "} else {\n");
+        ctx->indent = base_ind + 3;
+        SI(3); buf_puts(file, "tur_handler_node *__b = (tur_handler_node*)malloc(sizeof(tur_handler_node));\n");
+        SI(3); buf_puts(file, "__b->parent = tur_handler_chain; tur_handler_chain = __b;\n");
+        SI(3); buf_puts(file, "tur_cont *__k2 = (tur_cont*)malloc(sizeof(tur_cont));\n");
+        SI(3); buf_puts(file, "__k2->tag = 1; __k2->boundary = __b; __k2->next = __k;\n");
+        /* Save the level's params (as int64 bits) BEFORE reassigning them. */
+        for (uint8_t i = 0; i < np; i++) {
+            char *sv = sc_save_expr(fd->param_types[i].kind, p[i]);
+            SI(3); buf_printf(file, "__k2->saved[%d] = %s;\n", i, sv); free(sv);
+        }
+        /* Compute all recursion args into temps (their own types, via
+         * __auto_type) BEFORE reassigning params, since a later arg may read an
+         * earlier (not-yet-updated) param. */
+        char **rt = (char **)malloc(sizeof(char *) * np);
+        for (uint8_t i = 0; i < np; i++) {
+            char *rv = emit_value(ctx, file, call->as.call_.args[i]);
+            char tmp[48]; snprintf(tmp, sizeof tmp, "__r%d", i);
+            SI(3); buf_printf(file, "__auto_type %s = (%s);\n", tmp, rv); free(rv);
+            rt[i] = strdup(tmp);
+        }
+        for (uint8_t i = 0; i < np; i++) { SI(3); buf_printf(file, "%s = %s;\n", p[i], rt[i]); free(rt[i]); }
+        free(rt);
+        SI(3); buf_puts(file, "__k = __k2;\n");
+        SI(2); buf_puts(file, "}\n");
+    }
+    SI(1); buf_puts(file, "} else {\n");
+    {   /* RETURN */
+        ctx->indent = base_ind + 2;
+        SI(2); buf_puts(file, "if (__k->tag == 0) {\n");
+        SI(3); buf_puts(file, "if (tur_panicking) { fprintf(stderr, \"panic (uncaught, stackless)\\n\"); fflush(NULL); abort(); }\n");
+        char *retv = sc_restore_expr(ctx->current_fn_ret_ctype, result_kind, "__v");
+        SI(3); buf_printf(file, "free(__k); return %s;\n", retv); free(retv);
+        SI(2); buf_puts(file, "}\n");
+        /* AFTER segment: pop this level's boundary, consume any caught panic,
+         * restore the level's params, compute AFTER, return to the parent cont. */
+        SI(2); buf_puts(file, "tur_handler_chain = __k->boundary->parent; free(__k->boundary);\n");
+        SI(2); buf_puts(file, "if (tur_panicking) { tur_panicking = 0; tur_panic_in_progress = 0;\n");
+        SI(3); buf_puts(file, "if (global_panic_payload) { panic_payload_free(global_panic_payload); global_panic_payload = 0; } }\n");
+        for (uint8_t i = 0; i < np; i++) {
+            char slot[48]; snprintf(slot, sizeof slot, "__k->saved[%d]", i);
+            char *rs = sc_restore_expr(emit_type_c_name(ctx, fd->param_types[i]), fd->param_types[i].kind, slot);
+            SI(2); buf_printf(file, "%s = %s;\n", p[i], rs); free(rs);
+        }
+        /* Result-using (`let`) form: bind the boxed ok(recursion value).  __v
+         * still holds the deeper level's return value (int) here; an eligible
+         * function is panic-free, so the box is always ok.  (The box leaks like
+         * the normal tur_catch_unwind_box result -- see the plan's note.) */
+        if (result_binding) {
+            char *rn = atom_var(ctx, result_binding);
+            SI(2); buf_printf(file, "int64_t %s = tur_box_ok(__v);\n", rn); free(rn);
+        }
+        char *av = emit_value(ctx, file, after);
+        char *asv = sc_save_expr(result_kind, av);
+        SI(2); buf_printf(file, "__v = %s;\n", asv); free(av); free(asv);
+        SI(2); buf_puts(file, "tur_cont *__kk = __k->next; free(__k); __k = __kk; __act = 1;\n");
+    }
+    SI(1); buf_puts(file, "}\n");
+    SI(0); buf_puts(file, "}\n");
+    #undef SI
+    ctx->indent = base_ind;
+    for (uint8_t i = 0; i < np; i++) free(p[i]);
+    free(p);
+}
+
 /* ------------ Phase 2: function emission ------------ */
 
 void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
@@ -1318,7 +1584,16 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         !(result_kind == TY_NIL && !is_main) && !is_main &&
         tco_params_simple(ctx, e, fd) && tco_mark(ctx, fd, fn_name, fd->body) > 0;
 
-    if (prereq6_synthesized_body) {
+    const Expr *__su_cond = NULL, *__su_base = NULL, *__su_call = NULL, *__su_after = NULL;
+    const Binding *__su_rbind = NULL;
+    if (!prereq6_synthesized_body && !m2b_carrier_synth &&
+        stackless_catch_eligible(ctx, e, fd, result_kind,
+                                 &__su_cond, &__su_base, &__su_call, &__su_after, &__su_rbind)) {
+        /* D3 (stackless-catch-unwind): emit the self-recursive catch-unwind
+         * function as a heap-continuation trampoline instead of native
+         * recursion, so nested catch-unwind runs with a flat C stack. */
+        emit_stackless_catch_body(ctx, file, fd, result_kind, __su_cond, __su_base, __su_call, __su_after, __su_rbind);
+    } else if (prereq6_synthesized_body) {
         /* Prereq 6: the function body was already emitted as a synthesized
          * wrapper above (heap-spill + carrier helper call + cast back to
          * the by-value struct). Skip the normal body-emit paths; the
