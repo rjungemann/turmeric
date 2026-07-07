@@ -6370,8 +6370,20 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Phase R2: forward decls so plain tur_panic can unwind to a catch-unwind
      * boundary (the payload machinery itself is emitted further below). */
     buf_puts(out, "typedef struct tur_panic_payload tur_panic_payload;\n");
-    emit_rt_global(out, shared, "jmp_buf global_panic_jmpbuf;\n", "jmp_buf global_panic_jmpbuf");
-    emit_rt_global(out, shared, "int global_panic_jmpbuf_valid;\n", "int global_panic_jmpbuf_valid");
+    /* Phase D1 (compiled-c-crossing-tco-plan): catch-unwind / catch-panic-of
+     * discover their handler through a thread-local chain of heap-allocated
+     * handler nodes rather than a single global jmp_buf that each boundary
+     * save/restores onto its own C-stack frame.  Each node OWNS its jmp_buf, so
+     * an active boundary pins only a couple of pointers on the frame instead of
+     * ~2 jmp_buf (the live buffer plus a save copy).  This more than doubles the
+     * depth to which deeply NESTED catch-unwind runs before the native C stack
+     * is exhausted.  It does NOT make the nesting unbounded: each level still
+     * holds two live C frames (the boundary's own frame + the "after the catch"
+     * continuation), which only a stackless/CPS lowering removes -- see the D1a
+     * note in the plan.  The transport stays setjmp/longjmp; the chain is purely
+     * the handler-discovery structure the plan's D1 calls for. */
+    buf_puts(out, "typedef struct tur_handler_node { jmp_buf buf; struct tur_handler_node *parent; } tur_handler_node;\n");
+    emit_rt_global(out, shared, "__thread tur_handler_node *tur_handler_chain = NULL;\n", "__thread tur_handler_node *tur_handler_chain");
     emit_rt_global(out, shared, "tur_panic_payload *global_panic_payload;\n", "tur_panic_payload *global_panic_payload");
     buf_puts(out, "static tur_panic_payload *panic_payload_new(int, void *, const char *, int);\n");
     buf_puts(out, "static void tur_panic(const char *msg) {\n");
@@ -6384,10 +6396,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * :cstr payload, fire the panicking frame's defers, and longjmp to it.
      * The defer chain stops at this function's frame tree (the catch boundary
      * lives in a different call frame), giving partial unwind for free. */
-    buf_printf(out, "    if (global_panic_jmpbuf_valid) {\n");
+    buf_printf(out, "    if (tur_handler_chain) {\n");
     buf_printf(out, "        global_panic_payload = panic_payload_new(%d, msg ? strdup(msg) : NULL, __FILE__, __LINE__);\n", (int)TY_CSTR);
     buf_puts(out, "        if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); }\n");
-    buf_puts(out, "        longjmp(global_panic_jmpbuf, 1);\n");
+    buf_puts(out, "        longjmp(tur_handler_chain->buf, 1);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    fprintf(stderr, \"panic at %s:%d: %s\\n\", __FILE__, __LINE__, msg ? msg : \"(no message)\");\n");
     buf_puts(out, "    tur_panic_print_scope_chain();\n");
@@ -6427,9 +6439,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    const char *file;\n");
     buf_puts(out, "    int line;\n");
     buf_puts(out, "};\n\n");
-    emit_rt_global(out, shared, "tur_panic_payload *global_panic_payload = NULL;\n", "tur_panic_payload *global_panic_payload");
-    emit_rt_global(out, shared, "jmp_buf global_panic_jmpbuf;\n", "jmp_buf global_panic_jmpbuf");
-    emit_rt_global(out, shared, "int global_panic_jmpbuf_valid = 0;\n\n", "int global_panic_jmpbuf_valid");
+    emit_rt_global(out, shared, "tur_panic_payload *global_panic_payload = NULL;\n\n", "tur_panic_payload *global_panic_payload");
     buf_puts(out, "static tur_panic_payload *panic_payload_new(int type_tag, void *payload, const char *file, int line) {\n");
     buf_puts(out, "    tur_panic_payload *p = (tur_panic_payload *)malloc(sizeof(tur_panic_payload));\n");
     buf_puts(out, "    if (!p) { fprintf(stderr, \"panic: oom\\n\"); abort(); }\n");
@@ -6466,21 +6476,17 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "};\n\n");
     buf_puts(out, "typedef void (*tur_thunk_fn)(void *env, tur_result *out);\n\n");
     buf_puts(out, "static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {\n");
-    buf_puts(out, "    if (global_panic_jmpbuf_valid) {\n");
+    buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain; tur_handler_chain = &__node;\n");
+    buf_puts(out, "    if (setjmp(__node.buf) == 0) {\n");
     buf_puts(out, "        thunk(env, out);\n");
-    buf_puts(out, "        return false;\n");
-    buf_puts(out, "    }\n");
-    buf_puts(out, "    global_panic_jmpbuf_valid = 1;\n");
-    buf_puts(out, "    if (setjmp(global_panic_jmpbuf) == 0) {\n");
-    buf_puts(out, "        thunk(env, out);\n");
-    buf_puts(out, "        global_panic_jmpbuf_valid = 0;\n");
+    buf_puts(out, "        tur_handler_chain = __node.parent;\n");
     buf_puts(out, "        if (global_panic_payload) {\n");
     buf_puts(out, "            panic_payload_free(global_panic_payload);\n");
     buf_puts(out, "            global_panic_payload = NULL;\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "        return false;\n");
     buf_puts(out, "    } else {\n");
-    buf_puts(out, "        global_panic_jmpbuf_valid = 0;\n");
+    buf_puts(out, "        tur_handler_chain = __node.parent;\n");
     buf_puts(out, "        tur_panic_in_progress = 0;\n");
     buf_puts(out, "        out->tag = TUR_RESULT_ERR;\n");
     buf_puts(out, "        out->u.err = global_panic_payload;\n");
@@ -6489,21 +6495,17 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env, tur_result *out) {\n");
-    buf_puts(out, "    if (global_panic_jmpbuf_valid) {\n");
+    buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain; tur_handler_chain = &__node;\n");
+    buf_puts(out, "    if (setjmp(__node.buf) == 0) {\n");
     buf_puts(out, "        thunk(env, out);\n");
-    buf_puts(out, "        return false;\n");
-    buf_puts(out, "    }\n");
-    buf_puts(out, "    global_panic_jmpbuf_valid = 1;\n");
-    buf_puts(out, "    if (setjmp(global_panic_jmpbuf) == 0) {\n");
-    buf_puts(out, "        thunk(env, out);\n");
-    buf_puts(out, "        global_panic_jmpbuf_valid = 0;\n");
+    buf_puts(out, "        tur_handler_chain = __node.parent;\n");
     buf_puts(out, "        if (global_panic_payload) {\n");
     buf_puts(out, "            panic_payload_free(global_panic_payload);\n");
     buf_puts(out, "            global_panic_payload = NULL;\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "        return false;\n");
     buf_puts(out, "    } else {\n");
-    buf_puts(out, "        global_panic_jmpbuf_valid = 0;\n");
+    buf_puts(out, "        tur_handler_chain = __node.parent;\n");
     buf_puts(out, "        tur_panic_in_progress = 0;\n");
     buf_puts(out, "        if (global_panic_payload && global_panic_payload->type_tag == expected_type) {\n");
     buf_puts(out, "            out->tag = TUR_RESULT_ERR;\n");
@@ -6512,7 +6514,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "            return true;\n");
     buf_puts(out, "        } else {\n");
     buf_puts(out, "        if (global_panic_payload) {\n");
-    buf_puts(out, "            /* Type mismatch - re-panic */\n");
+    buf_puts(out, "            /* Type mismatch - re-panic to the next outer boundary (restored above) */\n");
     buf_puts(out, "            tur_panic_with(global_panic_payload->type_tag, global_panic_payload->value,\n");
     buf_puts(out, "                           global_panic_payload->file, global_panic_payload->line);\n");
     buf_puts(out, "        }\n");
@@ -6531,17 +6533,18 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * not freed here -- ownership passes to the returned result. */
     buf_puts(out, "/* Phase R2: catch-unwind special-form helpers (result-box ABI) */\n");
     buf_puts(out, "static int64_t tur_catch_unwind_box(int64_t thunk) {\n");
-    buf_puts(out, "    jmp_buf __prev_buf; int __prev_valid = global_panic_jmpbuf_valid;\n");
-    buf_puts(out, "    if (__prev_valid) memcpy(&__prev_buf, &global_panic_jmpbuf, sizeof(jmp_buf));\n");
-    buf_puts(out, "    global_panic_jmpbuf_valid = 1;\n");
-    buf_puts(out, "    if (setjmp(global_panic_jmpbuf) == 0) {\n");
+    buf_puts(out, "    /* D1: the jmp_buf lives on a heap handler node, not this frame, so a\n");
+    buf_puts(out, "     * nested catch-unwind holds only a pointer per level here.  The node is\n");
+    buf_puts(out, "     * pushed before setjmp and popped on both exit paths; the enclosing\n");
+    buf_puts(out, "     * boundary is simply __node->parent (no save/restore copy needed). */\n");
+    buf_puts(out, "    tur_handler_node *__node = (tur_handler_node *)malloc(sizeof(tur_handler_node));\n");
+    buf_puts(out, "    __node->parent = tur_handler_chain; tur_handler_chain = __node;\n");
+    buf_puts(out, "    if (setjmp(__node->buf) == 0) {\n");
     buf_puts(out, "        int64_t __v = TUR_APPLY0(thunk);\n");
-    buf_puts(out, "        global_panic_jmpbuf_valid = __prev_valid;\n");
-    buf_puts(out, "        if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));\n");
+    buf_puts(out, "        tur_handler_chain = __node->parent; free(__node);\n");
     buf_puts(out, "        return tur_box_ok(__v);\n");
     buf_puts(out, "    } else {\n");
-    buf_puts(out, "        global_panic_jmpbuf_valid = __prev_valid;\n");
-    buf_puts(out, "        if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));\n");
+    buf_puts(out, "        tur_handler_chain = __node->parent; free(__node);\n");
     buf_puts(out, "        tur_panic_in_progress = 0;\n");
     buf_puts(out, "        tur_panic_payload *__p = global_panic_payload;\n");
     buf_puts(out, "        global_panic_payload = NULL;\n");
@@ -6549,24 +6552,21 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "static int64_t tur_catch_panic_of_box(int expected_type, int64_t thunk) {\n");
-    buf_puts(out, "    jmp_buf __prev_buf; int __prev_valid = global_panic_jmpbuf_valid;\n");
-    buf_puts(out, "    if (__prev_valid) memcpy(&__prev_buf, &global_panic_jmpbuf, sizeof(jmp_buf));\n");
-    buf_puts(out, "    global_panic_jmpbuf_valid = 1;\n");
-    buf_puts(out, "    if (setjmp(global_panic_jmpbuf) == 0) {\n");
+    buf_puts(out, "    tur_handler_node *__node = (tur_handler_node *)malloc(sizeof(tur_handler_node));\n");
+    buf_puts(out, "    __node->parent = tur_handler_chain; tur_handler_chain = __node;\n");
+    buf_puts(out, "    if (setjmp(__node->buf) == 0) {\n");
     buf_puts(out, "        int64_t __v = TUR_APPLY0(thunk);\n");
-    buf_puts(out, "        global_panic_jmpbuf_valid = __prev_valid;\n");
-    buf_puts(out, "        if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));\n");
+    buf_puts(out, "        tur_handler_chain = __node->parent; free(__node);\n");
     buf_puts(out, "        return tur_box_ok(__v);\n");
     buf_puts(out, "    } else {\n");
-    buf_puts(out, "        global_panic_jmpbuf_valid = __prev_valid;\n");
-    buf_puts(out, "        if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));\n");
+    buf_puts(out, "        tur_handler_chain = __node->parent; free(__node);\n");
     buf_puts(out, "        tur_panic_in_progress = 0;\n");
     buf_puts(out, "        tur_panic_payload *__p = global_panic_payload;\n");
     buf_puts(out, "        global_panic_payload = NULL;\n");
     buf_puts(out, "        if (__p && __p->type_tag == expected_type) {\n");
     buf_puts(out, "            return tur_box_err((int64_t)(intptr_t)__p);\n");
     buf_puts(out, "        }\n");
-    buf_puts(out, "        /* type mismatch: re-raise to the next outer boundary (restored above) */\n");
+    buf_puts(out, "        /* type mismatch: re-raise to the next outer boundary (already popped) */\n");
     buf_puts(out, "        if (__p) tur_panic_with(__p->type_tag, __p->value, __p->file, __p->line);\n");
     buf_puts(out, "        return tur_box_err(0);\n");
     buf_puts(out, "    }\n");
@@ -6741,9 +6741,9 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    }\n");
     buf_puts(out, "    tur_panic_in_progress = 1;\n");
     /* Phase TG-004-2 PR: Check global handler first (try/catch has priority), then fiber */
-    buf_puts(out, "    if (global_panic_jmpbuf_valid) {\n");
+    buf_puts(out, "    if (tur_handler_chain) {\n");
     buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line);\n");
-    buf_puts(out, "        longjmp(global_panic_jmpbuf, 1);\n");
+    buf_puts(out, "        longjmp(tur_handler_chain->buf, 1);\n");
     buf_puts(out, "    } else if (tur_current_fiber && tur_current_fiber->panic_jmpbuf_valid) {\n");
     buf_puts(out, "        /* Use per-fiber panic buffer - set up global payload for cleanup */\n");
     buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line);\n");
@@ -6806,12 +6806,12 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Phase TG-004-3 PR: Per-fiber panic handling with auto-cancel on panic */
     buf_puts(out, "    void *task_group = f->task_group;\n");
     buf_puts(out, "    if (task_group) {\n");
-    buf_puts(out, "        /* Save previous global panic handler state */\n");
-    buf_puts(out, "        int prev_global_valid = global_panic_jmpbuf_valid;\n");
-    buf_puts(out, "        jmp_buf prev_global_buf;\n");
-    buf_puts(out, "        if (prev_global_valid) memcpy(&prev_global_buf, &global_panic_jmpbuf, sizeof(jmp_buf));\n");
-    buf_puts(out, "        /* Clear global to prevent interference */\n");
-    buf_puts(out, "        global_panic_jmpbuf_valid = 0;\n");
+    buf_puts(out, "        /* D1: save the enclosing catch-unwind handler chain and run the\n");
+    buf_puts(out, "         * fiber with an empty chain so an outer boundary does not catch a\n");
+    buf_puts(out, "         * panic that belongs to this fiber (the fiber uses its own\n");
+    buf_puts(out, "         * panic_jmpbuf); restore the caller's chain on both exit paths. */\n");
+    buf_puts(out, "        tur_handler_node *prev_chain = tur_handler_chain;\n");
+    buf_puts(out, "        tur_handler_chain = NULL;\n");
     buf_puts(out, "        /* Set up per-fiber panic handler */\n");
     buf_puts(out, "        if (setjmp(f->panic_jmpbuf) == 0) {\n");
     buf_puts(out, "            f->panic_jmpbuf_valid = 1;\n");
@@ -6823,9 +6823,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "                panic_payload_free(global_panic_payload);\n");
     buf_puts(out, "                global_panic_payload = NULL;\n");
     buf_puts(out, "            }\n");
-    buf_puts(out, "            /* Restore previous global panic handler */\n");
-    buf_puts(out, "            global_panic_jmpbuf_valid = prev_global_valid;\n");
-    buf_puts(out, "            if (prev_global_valid) memcpy(&global_panic_jmpbuf, &prev_global_buf, sizeof(jmp_buf));\n");
+    buf_puts(out, "            /* Restore the caller's catch-unwind handler chain */\n");
+    buf_puts(out, "            tur_handler_chain = prev_chain;\n");
     buf_puts(out, "        } else {\n");
     buf_puts(out, "            /* Panic caught - auto-cancel task group (TG-004-3) */\n");
     buf_puts(out, "            f->panic_jmpbuf_valid = 0;\n");
@@ -6843,9 +6842,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "                panic_payload_free(global_panic_payload);\n");
     buf_puts(out, "                global_panic_payload = NULL;\n");
     buf_puts(out, "            }\n");
-    buf_puts(out, "            /* Restore previous global panic handler */\n");
-    buf_puts(out, "            global_panic_jmpbuf_valid = prev_global_valid;\n");
-    buf_puts(out, "            if (prev_global_valid) memcpy(&global_panic_jmpbuf, &prev_global_buf, sizeof(jmp_buf));\n");
+    buf_puts(out, "            /* Restore the caller's catch-unwind handler chain */\n");
+    buf_puts(out, "            tur_handler_chain = prev_chain;\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "    } else {\n");
     buf_puts(out, "        /* No task group, just run the function normally */\n");

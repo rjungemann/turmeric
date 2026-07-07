@@ -2824,12 +2824,6 @@ static int64_t ctor_Schema(int64_t _0) {
     return (int64_t)(intptr_t)__r;
 }
 
-typedef struct tur_adt_Box {
-    int64_t val;
-    int64_t tag;
-} tur_adt_Box;
-typedef tur_adt_Box Box;
-
 
 /* SYM1 (runtime-symbols-plan): interned runtime symbol records. */
 #ifndef TUR_SYM_DEFINED
@@ -2912,28 +2906,11 @@ static int64_t ctor_Option__Zipper__struct(bool _0, int64_t _1) {
 }
 
 #endif
-#ifndef TUR_TY_tur_adt_Box__cstr
-#define TUR_TY_tur_adt_Box__cstr
-typedef struct tur_adt_Box__cstr {
-    const char * val;
-    int64_t tag;
-} tur_adt_Box__cstr;
-#endif
-
-#ifndef TUR_FN_tur_adt_Box__cstr
-#define TUR_FN_tur_adt_Box__cstr
-static tur_adt_Box__cstr * ctor_Box__cstr(const char * _0, int64_t _1) {
-    tur_adt_Box__cstr *__r = (tur_adt_Box__cstr *)malloc(sizeof(tur_adt_Box__cstr));
-    __r->val = _0;
-    __r->tag = _1;
-    return __r;
-}
-
-#endif
 
 static bool __tur_fatshim_bool_int64_t_int64_t(void *__e, int64_t a0, int64_t a1) {
     return ((bool (*)(int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1);
 }
+typedef int64_t (*tur_thunk_int64_t_t)(void *);
 typedef bool (*tur_thunk_bool_int64_t_int64_t_t)(void *, int64_t, int64_t);
 typedef int64_t (*tur_thunk_int64_t_int64_t_t)(void *, int64_t);
 
@@ -3035,6 +3012,7 @@ static int64_t __inst_Hash_hash_Sym(const struct __tur_sym *);
 static int64_t __inst_MapKey_mk_hybox_Sym(const struct __tur_sym *);
 static int64_t __inst_MapKey_mk_hycmp_Sym(const struct __tur_sym *);
 static int64_t __inst_MapKey_mk_hyowned_qu_Sym(const struct __tur_sym *);
+static int64_t __fn_1266(void *);
 static void * array_hyget(void *, int64_t);
 static int64_t array_hyset(void *, int64_t, int64_t);
 static void * array_hyslice(void *, int64_t, int64_t);
@@ -3241,6 +3219,7 @@ static const char * sym_hy_gtstr(const struct __tur_sym *);
 static bool sym_eq_qu(const struct __tur_sym *, const struct __tur_sym *);
 static int64_t consume(int64_t, int64_t);
 static int64_t replace(int64_t, int64_t);
+static int64_t cu_hyrec(int64_t);
 static bool some___spec__bool_tur_adt_Option__opaque(tur_adt_Option__opaque);
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t, int64_t);
 
@@ -3571,6 +3550,12 @@ static int64_t __inst_MapKey_mk_hycmp_Sym(const struct __tur_sym * x) {
 
 static int64_t __inst_MapKey_mk_hyowned_qu_Sym(const struct __tur_sym * x) {
         return INT64_C(0);
+}
+
+struct __env_1268 { tur_thunk_int64_t_t __fn; int64_t n; };
+static int64_t __fn_1266(void * __env_p_1269) {
+        struct __env_1268 *__env___env_1268 = (struct __env_1268 *)__env_p_1269;
+        return cu_hyrec((__env___env_1268->n) - (INT64_C(1)));
 }
 
 static void * array_hyget(void * arr, int64_t idx) {
@@ -5715,6 +5700,23 @@ static int64_t replace(int64_t old, int64_t new) {
         return old;
 }
 
+static int64_t cu_hyrec(int64_t n) {
+        int64_t __t55;
+        if ((n) == (INT64_C(0))) {
+            __t55 = INT64_C(0);
+        } else {
+            struct __env_1268 *__t56 = (struct __env_1268 *)malloc(sizeof(struct __env_1268));
+            __t56->__fn = (tur_thunk_int64_t_t)__fn_1266;
+            __t56->n = n;
+            void *__t57 = __t56;
+            int64_t __catch_result_58 = tur_catch_unwind_box((int64_t)(intptr_t)__t57);
+            int64_t __t59;
+            __t59 = n;
+            __t55 = __t59;
+        }
+        return __t55;
+}
+
 int main(int argc, char **argv) {
         /* *args*: build cons list from argv[1..argc-1] */
         g_tur_args = 0;
@@ -5725,14 +5727,10 @@ int main(int argc, char **argv) {
             _c->next = g_tur_args;
             g_tur_args = (int64_t)(intptr_t)_c;
         }
-        {
-            int64_t bc_1266 = (int64_t)(intptr_t)(ctor_Box__cstr("hello", INT64_C(9)));
-            (void)bc_1266;
-            puts((const char *)((tur_adt_Box__cstr *)(intptr_t)(bc_1266))->val);
-        }
-        int64_t __t55;
-        __t55 = INT64_C(0);
-        return (int)__t55;
+        printf("%lld\n", (long long)(cu_hyrec(INT64_C(80000))));
+        int64_t __t60;
+        __t60 = INT64_C(0);
+        return (int)__t60;
 }
 
 static bool some___spec__bool_tur_adt_Option__opaque(tur_adt_Option__opaque o) {
