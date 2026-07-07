@@ -505,6 +505,23 @@ static bool gs_slot_type(EmitCtx *ctx, Type t, TypeKind *out_kind, const char **
     return false;
 }
 
+/* Classify a PARAMETER type for the trampoline.  Beyond gs_slot_type (scalar /
+ * int64 carrier), a by-value AGGREGATE -- a C struct passed by value, whose
+ * ctype is a bare struct name (no `*`, not int64/scalar) -- is accepted and
+ * flagged *out_aggr; it is relocated across a descend by heap-boxing (see
+ * gs_save/gs_restore).  A by-const-pointer aggregate (ctype contains `*`, e.g. a
+ * `Result` param) is NOT handled here (the pointee lifetime is the caller's) and
+ * still bails.  Returns false for anything not rideable. */
+static bool gs_param_class(EmitCtx *ctx, Type t, TypeKind *out_kind,
+                           const char **out_ctype, bool *out_aggr) {
+    if (gs_slot_type(ctx, t, out_kind, out_ctype)) { *out_aggr = false; return true; }
+    const char *ct = emit_type_c_name(ctx, t);
+    if (ct && ct[0] && !strchr(ct, '*')) {   /* a by-value struct name */
+        *out_kind = TY_INT; *out_ctype = ct; *out_aggr = true; return true;
+    }
+    return false;
+}
+
 /* ============================================================================
  * G3 -- general stackless catch-unwind segment splitter
  * ----------------------------------------------------------------------------
@@ -811,7 +828,10 @@ static bool gs_has_catch(const Expr *e, FnDef *fd) {
 #define GS_MAXSEG 256
 enum { GSK_RETURN = 0, GSK_ASSIGN = 1, GSK_SEQ = 2 };
 
-typedef struct { char *cname; const char *ctype; TypeKind kind; } GsVar;
+/* is_aggr: a by-value aggregate (C struct) param that does not fit the int64
+ * slot.  It is relocated across a descend by heap-boxing (malloc + memcpy) with
+ * the slot holding the box pointer -- ctype names the struct so sizeof works. */
+typedef struct { char *cname; const char *ctype; TypeKind kind; bool is_aggr; } GsVar;
 
 typedef struct GsSink {
     int kind;
@@ -844,12 +864,16 @@ typedef struct {
     int n_param_vars;   /* count of leading vars[] that are member params */
 } GsCtx;
 
-static int gs_add_var(GsCtx *gs, char *cname, const char *ctype, TypeKind k) {
+static int gs_add_var_a(GsCtx *gs, char *cname, const char *ctype, TypeKind k, bool is_aggr) {
     if (gs->n_vars >= TUR_SC_MAXN) { gs->overflow = true; free(cname); return -1; }
     gs->vars[gs->n_vars].cname = cname;
     gs->vars[gs->n_vars].ctype = ctype;
     gs->vars[gs->n_vars].kind = k;
+    gs->vars[gs->n_vars].is_aggr = is_aggr;
     return gs->n_vars++;
+}
+static int gs_add_var(GsCtx *gs, char *cname, const char *ctype, TypeKind k) {
+    return gs_add_var_a(gs, cname, ctype, k, false);
 }
 
 static Buf *gs_add_seg(GsCtx *gs, int tag) {
@@ -1013,6 +1037,15 @@ static const Expr *gs_leftmost(GsCtx *gs, const Expr *e) {
 
 static void gs_save(GsCtx *gs, Buf *b, const char *node) {
     for (int i = 0; i < gs->n_vars; i++) {
+        if (gs->vars[i].is_aggr) {
+            /* Heap-box a copy of the by-value aggregate; the slot holds the box
+             * pointer.  Byte-copy matches native (a param kept live by value
+             * across the recursive call, no retain/drop). */
+            indent_buf(b, gs->cur_ind);
+            buf_printf(b, "{ void *__ab = malloc(sizeof(%s)); memcpy(__ab, &%s, sizeof(%s)); %s->saved[%d] = (int64_t)(intptr_t)__ab; }\n",
+                       gs->vars[i].ctype, gs->vars[i].cname, gs->vars[i].ctype, node, i);
+            continue;
+        }
         char *sv = sc_save_expr(gs->vars[i].kind, gs->vars[i].cname);
         indent_buf(b, gs->cur_ind);
         buf_printf(b, "%s->saved[%d] = %s;\n", node, i, sv);
@@ -1021,6 +1054,12 @@ static void gs_save(GsCtx *gs, Buf *b, const char *node) {
 }
 static void gs_restore(GsCtx *gs, Buf *b) {
     for (int i = 0; i < gs->n_vars; i++) {
+        if (gs->vars[i].is_aggr) {
+            indent_buf(b, gs->cur_ind);
+            buf_printf(b, "{ void *__ab = (void*)(intptr_t)__k->saved[%d]; memcpy(&%s, __ab, sizeof(%s)); free(__ab); }\n",
+                       i, gs->vars[i].cname, gs->vars[i].ctype);
+            continue;
+        }
         char slot[48]; snprintf(slot, sizeof slot, "__k->saved[%d]", i);
         char *rs = sc_restore_expr(gs->vars[i].ctype, gs->vars[i].kind, slot);
         indent_buf(b, gs->cur_ind);
@@ -1338,13 +1377,13 @@ static bool gs_basic_ok(EmitCtx *ctx, FnDef *fd) {
     if (fd->closure) return false;
     if (fd->binding && fd->binding->name && fd->binding->name->name &&
         strcmp(fd->binding->name->name, "main") == 0) return false;
-    /* G6: params and the return type may be any int64-slot type (scalar OR an
-     * int64 carrier / opaque newtype), not just scalars.  By-value aggregates
-     * (non-int64 C repr) still bail. */
-    TypeKind k; const char *ct;
+    /* G6: the return type must be an int64-slot type (scalar / int64 carrier --
+     * aggregate returns are deferred, __v is int64).  Params may additionally be
+     * a by-value aggregate (heap-boxed across a descend). */
+    TypeKind k; const char *ct; bool aggr;
     if (!gs_slot_type(ctx, fd->return_type, &k, &ct)) return false;
     for (uint8_t i = 0; i < fd->n_params; i++)
-        if (!gs_slot_type(ctx, fd->param_types[i], &k, &ct)) return false;
+        if (!gs_param_class(ctx, fd->param_types[i], &k, &ct, &aggr)) return false;
     return true;
 }
 
@@ -1375,10 +1414,10 @@ static bool gs_build(GsCtx *gs) {
         gs->mem_pbase[m] = gs->n_vars;
         for (uint8_t i = 0; i < f->n_params; i++) {
             /* G6: an int64-carrier / opaque param rides the slot with kind
-             * TY_INT so sc_save/restore use the intptr path, not the float one. */
-            TypeKind k; const char *ct;
-            if (!gs_slot_type(ctx, f->param_types[i], &k, &ct)) { gs->overflow = true; return false; }
-            gs_add_var(gs, atom_var(ctx, f->params[i]), ct, k);
+             * TY_INT (intptr path); a by-value aggregate rides via heap-boxing. */
+            TypeKind k; const char *ct; bool aggr;
+            if (!gs_param_class(ctx, f->param_types[i], &k, &ct, &aggr)) { gs->overflow = true; return false; }
+            gs_add_var_a(gs, atom_var(ctx, f->params[i]), ct, k, aggr);
         }
     }
     gs->n_param_vars = gs->n_vars;
@@ -1638,6 +1677,16 @@ static void gs_emit_group_driver(EmitCtx *ctx, Buf *file, GsCtx *gs,
  * false (nothing emitted) on overflow. */
 static bool emit_group_member(EmitCtx *ctx, Buf *file, FnDef *fd, TypeKind result_kind,
                               FnDef **group, int ng) {
+    /* G6: the shared-driver shim marshals params through int64 __a slots, which
+     * cannot carry a by-value aggregate.  A group with an aggregate-param member
+     * bails to normal emission (aggregate params ride only the single-function
+     * path). */
+    for (int m = 0; m < ng; m++)
+        for (uint8_t i = 0; i < group[m]->n_params; i++) {
+            TypeKind k; const char *ct; bool aggr;
+            if (!gs_param_class(ctx, group[m]->param_types[i], &k, &ct, &aggr) || aggr)
+                return false;
+        }
     GsGroup *g = NULL;
     for (int i = 0; i < g_n_cu_groups && !g; i++)
         for (int j = 0; j < g_cu_groups[i].n_mem; j++)

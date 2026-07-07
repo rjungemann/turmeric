@@ -210,28 +210,46 @@ grammar, now for any body.
 
 ### G6 -- Non-scalar (carrier / opaque / aggregate) params
 
-> **Status: int64-carrier / opaque DONE; by-value aggregate deferred.** The
-> `sc_scalar_kind` gate on params and the return type is generalized to
-> `gs_slot_type`: any value whose C representation is a plain `int64_t` --
-> carrier handles, `defopaque` newtypes over an int/handle, `:fn` function
-> pointers, result/option boxes -- now rides the trampoline's int64 `saved[]`
-> slot, with the save/restore kind forced to `TY_INT` so the intptr path (not
-> the float bit-path) is used. Both params and the return type are covered, in
-> the single-function and group (G4) paths.
+> **Status: int64-carrier / opaque DONE; by-value aggregate params DONE
+> (single-function); aggregate returns + by-ptr aggregates deferred.**
 >
-> No retain/drop is inserted: this matches native, which keeps such a param live
-> across the recursive call *by value* with no reference-count traffic -- the
-> node merely relocates it from the C stack to the heap, not into a different
-> ownership regime. Differential-checked against native (value AND flat-stack).
-> Covered by `stackless-catch-unwind-opaque` (a `defopaque Counter :int` param,
-> step(c,n)=c+n, 200k-deep flat where native SIGSEGVs) and an opaque param across
-> mutual recursion (G4+G6). Full suite: 1968 passed, 0 failed.
+> **int64 / opaque** (`gs_slot_type`): any value whose C representation is a
+> plain `int64_t` -- carrier handles, `defopaque` newtypes over an int/handle,
+> `:fn` function pointers, result/option boxes -- rides the trampoline's int64
+> `saved[]` slot, save/restore kind forced to `TY_INT` (intptr path). Both
+> params and the return type, single-function and group (G4) paths.
 >
-> **Deferred:** a genuine by-value AGGREGATE param (a C `struct` / by-ptr ADT
-> like `Option<int>` = `tur_adt_Option__int`, or `Result` passed by const-ref)
-> is not `int64_t` and still bails to normal emission. Riding it would need a
-> typed side-area in the `tur_cont` node (the G2 option-(a) typed layout) plus
-> the RC decision if the aggregate co-owns heap -- a larger step left for later.
+> **by-value aggregate params** (`gs_param_class`, `GsVar.is_aggr`): a C struct
+> passed by value (ctype a bare struct name, e.g. `(Option int)` =
+> `struct { bool is_some; int64_t value }`) is too wide for one int64 slot, so it
+> is relocated across each descend by **heap-boxing** -- `gs_save` does
+> `malloc(sizeof(T)) + memcpy` and stores the box pointer in the slot; `gs_restore`
+> does `memcpy` back and `free`s the box (`sizeof` in the emitted C means no
+> compile-time size is needed, since `type_size_bytes` returns 0 for composites).
+> The byte-copy matches native's keep-by-value-across-the-call with no
+> retain/drop. Verified leak-clean on the happy path (valgrind: an aggregate-param
+> run leaks exactly the same as the scalar-param version -- only the pre-existing
+> result-box leak; the aggregate boxes are all freed on resume). Aggregate params
+> ride only the single-function path; a group whose member has an aggregate param
+> bails to native (the shim marshals params through int64 `__a` slots).
+>
+> No retain/drop is inserted anywhere: this matches native, which keeps such a
+> param live across the recursive call *by value* -- the node merely relocates it
+> (int64 slot or heap box), not into a different ownership regime.
+> Differential-checked against native (value AND flat-stack). Covered by
+> `stackless-catch-unwind-opaque` (a `defopaque Counter :int` param) and
+> `stackless-catch-unwind-aggregate-param` (an `(Option int)` by-value param
+> carried through recursion, observed via `some?`, 200k-deep flat where native
+> SIGSEGVs). Full suite: 1971 passed, 0 failed.
+>
+> **Deferred:** (1) an aggregate RETURN type -- `__v` is int64, so a struct
+> return would need the driver's value register widened; (2) a by-const-pointer
+> aggregate param (`Result` = `const tur_adt_Result__*`), whose pointee lifetime
+> is the caller's frame; (3) the aggregate param + group (cross-function) combo.
+> One bounded leak remains: an aggregate box saved on a self-call resume node
+> (boundary-less) that is popped during panic unwind is not freed (the resume,
+> which would free it, is skipped) -- bounded by the unwound depth and only on a
+> panic path; catch-node boxes are freed by their resume as normal.
 
 ### G7 -- Effects / fibers / cancel unification
 
