@@ -477,17 +477,11 @@ static bool su_simple_expr(const Expr *e) {
             return su_simple_expr(e->as.if_.cond) &&
                    su_simple_expr(e->as.if_.then_) &&
                    su_simple_expr(e->as.if_.else_or_null);
-        case EX_CALL: {
-            /* Direct calls only (operators lower to these); reject indirect /
-             * capability-field calls to stay conservative. */
-            if (e->as.call_.fn_expr) return false;
-            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
-                if (!su_simple_expr(e->as.call_.args[i])) return false;
-            return true;
-        }
         case EX_BUILTIN: {
             /* Arithmetic / comparison / logic builtins (`=`, `-`, ...) -- pure,
-             * never panic; recurse into operands. */
+             * never panic; recurse into operands.  (A general EX_CALL is NOT
+             * allowed: a user call could panic, and the emit_value early-return
+             * that panic-return-signal injects would exit the driver mid-step.) */
             for (uint32_t i = 0; i < e->as.builtin.n; i++)
                 if (!su_simple_expr(e->as.builtin.args[i])) return false;
             return true;
@@ -497,8 +491,17 @@ static bool su_simple_expr(const Expr *e) {
     }
 }
 
-/* D3 slice 1: recognise the single-scalar-param self-recursive catch-unwind
- * grammar and pull out its four sub-expressions:
+/* Scalar kinds the trampoline can round-trip through an int64 `saved[]` slot by
+ * plain reinterpretation (no ownership / RC / by-value-aggregate concerns):
+ * machine int, bool, and non-owning pointer-repr values (cstr, raw ptr).  Float
+ * is excluded here (it needs bit reinterpretation, not an intptr_t cast) and is
+ * a separate follow-on.  Carrier/opaque/aggregate types are excluded on purpose. */
+static bool sc_scalar_kind(TypeKind k) {
+    return k == TY_INT || k == TY_BOOL || k == TY_CSTR || k == TY_PTR_VOID;
+}
+
+/* D3: recognise the self-recursive catch-unwind grammar and pull out its
+ * sub-expressions:
  *
  *   (defn f [p : int] : int
  *     (if COND BASE (do (catch-unwind (fn [] (f RECUR))) AFTER)))
@@ -516,10 +519,11 @@ static bool stackless_catch_eligible(EmitCtx *ctx, const Expr *e, FnDef *fd,
     if (ctx->current_abi_specialization) return false;
     if (fd->binding && fd->binding->name && fd->binding->name->name &&
         strcmp(fd->binding->name->name, "main") == 0) return false;
-    if (result_kind != TY_INT) return false;
+    if (!sc_scalar_kind(result_kind)) return false;
+    if (!ctx->current_fn_ret_ctype) return false;   /* needed for the return cast */
     if (!fd->param_types) return false;
     for (uint8_t i = 0; i < fd->n_params; i++)
-        if (fd->param_types[i].kind != TY_INT) return false;
+        if (!sc_scalar_kind(fd->param_types[i].kind)) return false;
 
     const Expr *b = fd->body;
     if (!b || b->kind != EX_IF) return false;
@@ -594,23 +598,25 @@ static void emit_stackless_catch_body(EmitCtx *ctx, Buf *file, FnDef *fd,
         SI(2); buf_printf(file, "if (%s) {\n", cv); free(cv);
         ctx->indent = base_ind + 3;
         char *bv = emit_value(ctx, file, base);
-        SI(3); buf_printf(file, "__v = %s; __act = 1;\n", bv); free(bv);
+        SI(3); buf_printf(file, "__v = (int64_t)(intptr_t)(%s); __act = 1;\n", bv); free(bv);
         SI(2); buf_puts(file, "} else {\n");
         ctx->indent = base_ind + 3;
         SI(3); buf_puts(file, "tur_handler_node *__b = (tur_handler_node*)malloc(sizeof(tur_handler_node));\n");
         SI(3); buf_puts(file, "__b->parent = tur_handler_chain; tur_handler_chain = __b;\n");
         SI(3); buf_puts(file, "tur_cont *__k2 = (tur_cont*)malloc(sizeof(tur_cont));\n");
         SI(3); buf_puts(file, "__k2->tag = 1; __k2->boundary = __b; __k2->next = __k;\n");
+        /* Save the level's params (as int64 bits) BEFORE reassigning them. */
         for (uint8_t i = 0; i < np; i++) {
-            SI(3); buf_printf(file, "__k2->saved[%d] = (int64_t)(%s);\n", i, p[i]);
+            SI(3); buf_printf(file, "__k2->saved[%d] = (int64_t)(intptr_t)(%s);\n", i, p[i]);
         }
-        /* Compute all recursion args into temps BEFORE reassigning params, since
-         * a later arg may read an earlier (not-yet-updated) param. */
+        /* Compute all recursion args into temps (their own types, via
+         * __auto_type) BEFORE reassigning params, since a later arg may read an
+         * earlier (not-yet-updated) param. */
         char **rt = (char **)malloc(sizeof(char *) * np);
         for (uint8_t i = 0; i < np; i++) {
             char *rv = emit_value(ctx, file, call->as.call_.args[i]);
             char tmp[48]; snprintf(tmp, sizeof tmp, "__r%d", i);
-            SI(3); buf_printf(file, "int64_t %s = (int64_t)(%s);\n", tmp, rv); free(rv);
+            SI(3); buf_printf(file, "__auto_type %s = (%s);\n", tmp, rv); free(rv);
             rt[i] = strdup(tmp);
         }
         for (uint8_t i = 0; i < np; i++) { SI(3); buf_printf(file, "%s = %s;\n", p[i], rt[i]); free(rt[i]); }
@@ -623,7 +629,7 @@ static void emit_stackless_catch_body(EmitCtx *ctx, Buf *file, FnDef *fd,
         ctx->indent = base_ind + 2;
         SI(2); buf_puts(file, "if (__k->tag == 0) {\n");
         SI(3); buf_puts(file, "if (tur_panicking) { fprintf(stderr, \"panic (uncaught, stackless)\\n\"); fflush(NULL); abort(); }\n");
-        SI(3); buf_puts(file, "free(__k); return __v;\n");
+        SI(3); buf_printf(file, "free(__k); return (%s)(intptr_t)__v;\n", ctx->current_fn_ret_ctype);
         SI(2); buf_puts(file, "}\n");
         /* AFTER segment: pop this level's boundary, consume any caught panic,
          * restore the level's params, compute AFTER, return to the parent cont. */
@@ -631,10 +637,10 @@ static void emit_stackless_catch_body(EmitCtx *ctx, Buf *file, FnDef *fd,
         SI(2); buf_puts(file, "if (tur_panicking) { tur_panicking = 0; tur_panic_in_progress = 0;\n");
         SI(3); buf_puts(file, "if (global_panic_payload) { panic_payload_free(global_panic_payload); global_panic_payload = 0; } }\n");
         for (uint8_t i = 0; i < np; i++) {
-            SI(2); buf_printf(file, "%s = (%s)__k->saved[%d];\n", p[i], emit_type_c_name(ctx, fd->param_types[i]), i);
+            SI(2); buf_printf(file, "%s = (%s)(intptr_t)__k->saved[%d];\n", p[i], emit_type_c_name(ctx, fd->param_types[i]), i);
         }
         char *av = emit_value(ctx, file, after);
-        SI(2); buf_printf(file, "__v = %s;\n", av); free(av);
+        SI(2); buf_printf(file, "__v = (int64_t)(intptr_t)(%s);\n", av); free(av);
         SI(2); buf_puts(file, "tur_cont *__kk = __k->next; free(__k); __k = __kk; __act = 1;\n");
     }
     SI(1); buf_puts(file, "}\n");

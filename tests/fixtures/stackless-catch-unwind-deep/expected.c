@@ -5961,27 +5961,27 @@ static int64_t cu_hyrec(int64_t n) {
          if (tur_panicking) __act = 1;
          if (__act == 0) {
           if ((n) == (INT64_C(0))) {
-           __v = INT64_C(0); __act = 1;
+           __v = (int64_t)(intptr_t)(INT64_C(0)); __act = 1;
           } else {
            tur_handler_node *__b = (tur_handler_node*)malloc(sizeof(tur_handler_node));
            __b->parent = tur_handler_chain; tur_handler_chain = __b;
            tur_cont *__k2 = (tur_cont*)malloc(sizeof(tur_cont));
            __k2->tag = 1; __k2->boundary = __b; __k2->next = __k;
-           __k2->saved[0] = (int64_t)(n);
-           int64_t __r0 = (int64_t)((n) - (INT64_C(1)));
+           __k2->saved[0] = (int64_t)(intptr_t)(n);
+           __auto_type __r0 = ((n) - (INT64_C(1)));
            n = __r0;
            __k = __k2;
           }
          } else {
           if (__k->tag == 0) {
            if (tur_panicking) { fprintf(stderr, "panic (uncaught, stackless)\n"); fflush(NULL); abort(); }
-           free(__k); return __v;
+           free(__k); return (int64_t)(intptr_t)__v;
           }
           tur_handler_chain = __k->boundary->parent; free(__k->boundary);
           if (tur_panicking) { tur_panicking = 0; tur_panic_in_progress = 0;
            if (global_panic_payload) { panic_payload_free(global_panic_payload); global_panic_payload = 0; } }
-          n = (int64_t)__k->saved[0];
-          __v = n;
+          n = (int64_t)(intptr_t)__k->saved[0];
+          __v = (int64_t)(intptr_t)(n);
           tur_cont *__kk = __k->next; free(__k); __k = __kk; __act = 1;
          }
         }

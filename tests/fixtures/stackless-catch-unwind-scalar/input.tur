@@ -1,0 +1,15 @@
+;;; D3 (compiled-catch-unwind-stackless-plan): NON-INT scalar params in the
+;;; stackless self-recursive catch-unwind trampoline.  A :bool param is threaded
+;;; through the recursion (each level flips it) and saved/restored via the int64
+;;; tur_cont slots, alongside the :int param.  The recursion result is discarded,
+;;; so the top call's AFTER decides the value: flag is true at the top, so
+;;; f N true = N.  500000 folds off the native stack.
+(defn f [n : int flag : bool] : int
+  (if (= n 0)
+    (if flag 1 0)
+    (do (catch-unwind (fn [] : int (f (- n 1) (not flag))))
+        (if flag n (- 0 n)))))
+
+(defn main [] : int
+  (println (f 500000 true))
+  0)
