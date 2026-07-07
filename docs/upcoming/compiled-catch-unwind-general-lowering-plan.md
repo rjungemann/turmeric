@@ -103,6 +103,19 @@ grammar, now for any body.
 
 ### G3 -- Segment-splitting emit for a single self-recursive function
 
+> **Status (in progress).** First increment landed: the straight-line regions
+> (cond / base / after) of a stackless catch-unwind body may now be arbitrarily
+> nested **pure** control flow -- `su_simple_expr` accepts `let` and `do` (whose
+> sub-expressions are themselves simple), not just single expressions or `if`.
+> This lifts the scaffold's "simple sub-expression" restriction for panic-free
+> nested control in the segments the trampoline evaluates inline, with no driver
+> change (the widened forms carry no boundary, panic-capable call, or closure, so
+> they stay driver-safe). Covered by `tests/fixtures/stackless-catch-unwind-nested-let`
+> (native/stackless differential + 1,000,000-deep flat-stack proof). Still TODO
+> for G3: the general split itself -- multiple catch sites, self-recursion in
+> non-tail position within `after`, and retiring the fixed
+> `(if COND BASE (do (catch-unwind ...) AFTER))` shape.
+
 - Replace the grammar match with a general split of one function's body at its
   `catch-unwind` sites, self-recursion allowed anywhere (tail or non-tail),
   multiple catch sites, nested `if`/`let`/`do`. This retires

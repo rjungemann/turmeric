@@ -477,6 +477,23 @@ static bool su_simple_expr(const Expr *e) {
             return su_simple_expr(e->as.if_.cond) &&
                    su_simple_expr(e->as.if_.then_) &&
                    su_simple_expr(e->as.if_.else_or_null);
+        case EX_LET: {
+            /* A pure `let`: every binding init and the body are simple, so the
+             * whole form evaluates inline in a driver segment with no boundary,
+             * panic-capable call, or closure.  (G3: nested let/do bodies -- the
+             * straight-line regions cond/base/after may now be arbitrarily
+             * nested pure control flow, not just single expressions.) */
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (!su_simple_expr(e->as.let_.bindings[i].init)) return false;
+            return su_simple_expr(e->as.let_.body);
+        }
+        case EX_DO: {
+            /* A pure `do`: every item is simple (no defers -- an EX_DEFER is not
+             * in the whitelist, so it already fails). */
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (!su_simple_expr(e->as.do_.items[i])) return false;
+            return true;
+        }
         case EX_BUILTIN: {
             /* Arithmetic / comparison / logic builtins (`=`, `-`, ...) -- pure,
              * never panic; recurse into operands.  (A general EX_CALL is NOT
