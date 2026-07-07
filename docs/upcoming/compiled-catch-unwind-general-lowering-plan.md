@@ -210,10 +210,28 @@ grammar, now for any body.
 
 ### G6 -- Non-scalar (carrier / opaque / aggregate) params
 
-- Once G2 has a typed cont layout and G5 has ownership, params that are carrier
-  handles / opaque newtypes / by-value aggregates can be saved/restored with the
-  correct RC discipline (retain on save if the node co-owns, drop on node free).
-  This is the ownership decision the scaffold deferred, not just casting.
+> **Status: int64-carrier / opaque DONE; by-value aggregate deferred.** The
+> `sc_scalar_kind` gate on params and the return type is generalized to
+> `gs_slot_type`: any value whose C representation is a plain `int64_t` --
+> carrier handles, `defopaque` newtypes over an int/handle, `:fn` function
+> pointers, result/option boxes -- now rides the trampoline's int64 `saved[]`
+> slot, with the save/restore kind forced to `TY_INT` so the intptr path (not
+> the float bit-path) is used. Both params and the return type are covered, in
+> the single-function and group (G4) paths.
+>
+> No retain/drop is inserted: this matches native, which keeps such a param live
+> across the recursive call *by value* with no reference-count traffic -- the
+> node merely relocates it from the C stack to the heap, not into a different
+> ownership regime. Differential-checked against native (value AND flat-stack).
+> Covered by `stackless-catch-unwind-opaque` (a `defopaque Counter :int` param,
+> step(c,n)=c+n, 200k-deep flat where native SIGSEGVs) and an opaque param across
+> mutual recursion (G4+G6). Full suite: 1968 passed, 0 failed.
+>
+> **Deferred:** a genuine by-value AGGREGATE param (a C `struct` / by-ptr ADT
+> like `Option<int>` = `tur_adt_Option__int`, or `Result` passed by const-ref)
+> is not `int64_t` and still bails to normal emission. Riding it would need a
+> typed side-area in the `tur_cont` node (the G2 option-(a) typed layout) plus
+> the RC decision if the aggregate co-owns heap -- a larger step left for later.
 
 ### G7 -- Effects / fibers / cancel unification
 

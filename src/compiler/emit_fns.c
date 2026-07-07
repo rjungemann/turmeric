@@ -487,15 +487,24 @@ static char *sc_restore_expr(const char *ctype, TypeKind k, const char *saved) {
     return s;
 }
 
-/* D3: recognise the self-recursive catch-unwind grammar and pull out its
- * sub-expressions:
- *
- *   (defn f [p : int] : int
- *     (if COND BASE (do (catch-unwind (fn [] (f RECUR))) AFTER)))
- *
- * The catch-unwind result is discarded (it sits before AFTER in the `do`).  Only
- * this exact shape is lowered to the trampoline; everything else falls back to
- * the normal (D1/D1a) emission. */
+/* G6 (compiled-catch-unwind-general-lowering): decide whether a value of type T
+ * can ride the trampoline's int64 `saved[]` slot, and with which (kind, ctype)
+ * the sc_save/restore casts should treat it.  Scalars round-trip directly;
+ * anything whose C representation is a plain `int64_t` -- carrier handles,
+ * `defopaque` newtypes over an int/handle, `:fn` function pointers, result/
+ * option boxes -- rides the same slot through an intptr cast (kind forced to
+ * TY_INT so the float bit-path is not taken).  This matches native, which keeps
+ * such a param live across the recursive call by value with no retain/drop; the
+ * node relocates it to the heap, not into a different ownership regime.  A
+ * genuine by-value aggregate (a C struct / by-ptr ADT param) is NOT int64 and
+ * still bails to the fallback path. */
+static bool gs_slot_type(EmitCtx *ctx, Type t, TypeKind *out_kind, const char **out_ctype) {
+    const char *ct = emit_type_c_name(ctx, t);
+    if (sc_scalar_kind(t.kind)) { *out_kind = t.kind; *out_ctype = ct; return true; }
+    if (ct && strcmp(ct, "int64_t") == 0) { *out_kind = TY_INT; *out_ctype = ct; return true; }
+    return false;
+}
+
 /* ============================================================================
  * G3 -- general stackless catch-unwind segment splitter
  * ----------------------------------------------------------------------------
@@ -1242,9 +1251,13 @@ static bool gs_basic_ok(EmitCtx *ctx, FnDef *fd) {
     if (fd->closure) return false;
     if (fd->binding && fd->binding->name && fd->binding->name->name &&
         strcmp(fd->binding->name->name, "main") == 0) return false;
-    if (!sc_scalar_kind(fd->return_type.kind)) return false;
+    /* G6: params and the return type may be any int64-slot type (scalar OR an
+     * int64 carrier / opaque newtype), not just scalars.  By-value aggregates
+     * (non-int64 C repr) still bail. */
+    TypeKind k; const char *ct;
+    if (!gs_slot_type(ctx, fd->return_type, &k, &ct)) return false;
     for (uint8_t i = 0; i < fd->n_params; i++)
-        if (!sc_scalar_kind(fd->param_types[i].kind)) return false;
+        if (!gs_slot_type(ctx, fd->param_types[i], &k, &ct)) return false;
     return true;
 }
 
@@ -1253,7 +1266,7 @@ static bool stackless_general_eligible(EmitCtx *ctx, const Expr *e, FnDef *fd,
     if (!g_opt_stackless_catch_unwind) return false;
     if (ctx->current_abi_specialization) return false;
     if (!gs_basic_ok(ctx, fd)) return false;
-    if (!sc_scalar_kind(result_kind)) return false;
+    (void)result_kind;
     if (!ctx->current_fn_ret_ctype) return false;
     /* Single-function (G3) view: only self-calls are trampolined. */
     g_gs_mem[0] = fd; g_gs_nmem = 1;
@@ -1273,9 +1286,13 @@ static bool gs_build(GsCtx *gs) {
     for (int m = 0; m < gs->n_mem; m++) {
         FnDef *f = gs->mem[m];
         gs->mem_pbase[m] = gs->n_vars;
-        for (uint8_t i = 0; i < f->n_params; i++)
-            gs_add_var(gs, atom_var(ctx, f->params[i]),
-                       emit_type_c_name(ctx, f->param_types[i]), f->param_types[i].kind);
+        for (uint8_t i = 0; i < f->n_params; i++) {
+            /* G6: an int64-carrier / opaque param rides the slot with kind
+             * TY_INT so sc_save/restore use the intptr path, not the float one. */
+            TypeKind k; const char *ct;
+            if (!gs_slot_type(ctx, f->param_types[i], &k, &ct)) { gs->overflow = true; return false; }
+            gs_add_var(gs, atom_var(ctx, f->params[i]), ct, k);
+        }
     }
     gs->n_param_vars = gs->n_vars;
     for (int m = 0; m < gs->n_mem && !gs->overflow; m++)
