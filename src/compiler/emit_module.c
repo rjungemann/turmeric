@@ -8725,6 +8725,14 @@ int emit_program(Buf *out, const Expr *program) {
     InlineCDedup cprelude_dedup = {0};  /* file-scope-inline-c-dedup */
 
     EmitCtx ctx;
+    /* Zero every field first: this struct is initialized field-by-field below,
+     * but that list predates newer members (dict_dispatch_n/_classes,
+     * cur_dict_env_*, ...).  Leaving those as garbage stack memory let a stale
+     * dict_dispatch_n >= 17 drive the dispatch-index scan (emit_core.c:1689)
+     * past the 16-slot dict_dispatch_classes[] -- a stack-buffer-overflow that
+     * only tripped where the stack happened to hold a large value (macOS
+     * arm64 CI), while Linux stayed green.  memset mirrors hdr_ctx below. */
+    memset(&ctx, 0, sizeof(ctx));
     ctx.file = &file;
     ctx.main_ = &body;
     ctx.program_root = program;   /* cps-transform-plan (a): serial env instance scan */
@@ -10618,6 +10626,11 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     Buf thunk_typedefs2; buf_init(&thunk_typedefs2);
 
     EmitCtx ctx;
+    /* Zero every field first -- see the companion memset above; the manual
+     * field-by-field init misses newer members (dict_dispatch_n/_classes,
+     * cur_dict_env_*), and stale garbage there overflows the 16-slot dispatch
+     * arrays on some platforms (macOS arm64 CI). */
+    memset(&ctx, 0, sizeof(ctx));
     ctx.file = &file;
     ctx.main_ = &body;
     ctx.program_root = program;   /* cps-transform-plan (a): serial env instance scan */
