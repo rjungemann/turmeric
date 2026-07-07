@@ -6041,6 +6041,7 @@ int main(int argc, char **argv) {
             __t187[1] = (int64_t)(intptr_t)__fn_1268;
             void *__t188 = __t187;
             int64_t __catch_result_189 = tur_catch_unwind_box((int64_t)(intptr_t)__t188);
+            free((void *)(intptr_t)__t188);
             int64_t r_1270 = __catch_result_189;
             (void)r_1270;
             __auto_type __ps_190 = (err_qu(r_1270));
@@ -6053,6 +6054,7 @@ int main(int argc, char **argv) {
             int64_t __t191;
             __t191 = INT64_C(0);
             __t186 = __t191;
+            tur_result_box_free((int64_t)(intptr_t)r_1270);
         }
         return (int)__t186;
 }

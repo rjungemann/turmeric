@@ -5996,6 +5996,7 @@ int main(int argc, char **argv) {
             __t184[1] = (int64_t)(intptr_t)__fn_1266;
             void *__t185 = __t184;
             int64_t __catch_result_186 = tur_catch_unwind_box((int64_t)(intptr_t)__t185);
+            free((void *)(intptr_t)__t185);
             int64_t caught_1268 = __catch_result_186;
             (void)caught_1268;
             __auto_type __ps_187 = (err_qu(caught_1268));
@@ -6005,6 +6006,7 @@ int main(int argc, char **argv) {
             } else {
                 puts("no");
             }
+            tur_result_box_free((int64_t)(intptr_t)caught_1268);
         }
         {
             int64_t *__t188 = (int64_t *)malloc(2 * sizeof(int64_t));
@@ -6012,6 +6014,7 @@ int main(int argc, char **argv) {
             __t188[1] = (int64_t)(intptr_t)__fn_1269;
             void *__t189 = __t188;
             int64_t __catch_result_190 = tur_catch_unwind_box((int64_t)(intptr_t)__t189);
+            free((void *)(intptr_t)__t189);
             int64_t ok_1271 = __catch_result_190;
             (void)ok_1271;
             __auto_type __ps_191 = (ok_qu(ok_1271));
@@ -6021,6 +6024,7 @@ int main(int argc, char **argv) {
             } else {
                 puts("err");
             }
+            tur_result_box_free((int64_t)(intptr_t)ok_1271);
         }
         int64_t __t192;
         __t192 = INT64_C(0);

@@ -1227,6 +1227,31 @@ static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
     return true;
 }
 
+/* catch-unwind-thunk-closure-leak (Part 2): decide whether let-binding `idx`
+ * holds a caught Result box (`(catch-unwind ...)` / `(catch-panic-of ...)`)
+ * whose box can be `tur_result_box_free`d when the let scope exits.  Sound iff:
+ *   - the initializer is an EX_CATCH_UNWIND / EX_CATCH_PANIC_OF (so the value is
+ *     a box THIS scope owns), and
+ *   - the bound name does not escape -- it is used only as a read-only
+ *     ok?/err?/ok-val argument in the body and never escapes through a sibling
+ *     binding's initializer.
+ * Like let_binding_env_freeable, the conservative escape check only ever
+ * greenlights a free, so a false negative merely preserves the status-quo leak;
+ * it never frees a still-live box. */
+static bool let_binding_box_freeable(const Expr *e, uint32_t idx) {
+    const Expr *init = e->as.let_.bindings[idx].init;
+    const Binding *b = e->as.let_.bindings[idx].binding;
+    if (!init || !b) return false;
+    if (init->kind != EX_CATCH_UNWIND && init->kind != EX_CATCH_PANIC_OF)
+        return false;
+    if (catch_box_binding_escapes(e->as.let_.body, b)) return false;
+    for (uint32_t j = 0; j < e->as.let_.n; j++) {
+        if (j == idx) continue;
+        if (catch_box_binding_escapes(e->as.let_.bindings[j].init, b)) return false;
+    }
+    return true;
+}
+
 static bool expr_is_pbp_param(EmitCtx *ctx, const Expr *struct_expr);
 
 static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
@@ -1255,12 +1280,21 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * would skip the trailing free, which is a leak, not a UAF. */
     char **env_free_names = NULL;
     uint32_t n_env_free = 0;
+    /* catch-unwind-thunk-closure-leak (Part 2): C names of let-bound,
+     * non-escaping caught Result boxes to tur_result_box_free at scope exit. */
+    char **box_free_names = NULL;
+    uint32_t n_box_free = 0;
     if (!body_has_return_or_throw) {
         for (uint32_t i = 0; i < e->as.let_.n; i++) {
             if (let_binding_env_freeable(e, i)) {
                 env_free_names = (char **)realloc(env_free_names,
                                                   (n_env_free + 1) * sizeof(char *));
                 env_free_names[n_env_free++] =
+                    name_for_binding(ctx, e->as.let_.bindings[i].binding);
+            } else if (let_binding_box_freeable(e, i)) {
+                box_free_names = (char **)realloc(box_free_names,
+                                                  (n_box_free + 1) * sizeof(char *));
+                box_free_names[n_box_free++] =
                     name_for_binding(ctx, e->as.let_.bindings[i].binding);
             }
         }
@@ -1474,6 +1508,18 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         free(env_free_names[i]);
     }
     free(env_free_names);
+
+    /* catch-unwind-thunk-closure-leak (Part 2): release non-escaping caught
+     * Result boxes (and, for an err box, its panic payload) at scope exit -- the
+     * body was their last use.  tur_result_box_free deliberately does not free an
+     * ok box's ok_val, which ok-val may have copied out and let escape. */
+    for (uint32_t i = 0; i < n_box_free; i++) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "tur_result_box_free((int64_t)(intptr_t)%s);\n",
+                   box_free_names[i]);
+        free(box_free_names[i]);
+    }
+    free(box_free_names);
 
     ctx->indent -= 4;
     indent_buf(body, ctx->indent);
@@ -2265,6 +2311,26 @@ static void emit_panic_signal_return(EmitCtx *ctx, Buf *body) {
     }
 }
 
+/* catch-unwind-thunk-closure-leak: is a catch-unwind/-panic-of thunk a fresh
+ * closure literal whose fat box THIS call site owns?  A closure literal
+ * (EX_CLOSURE), an auto-shimmed bare fn (EX_FN_TO_FAT), or a boxed poly method
+ * (EX_POLY_TO_FAT) each materialize a freshly malloc'd fat box that is consumed
+ * synchronously by tur_catch_unwind_box (invoked, never stored in the result),
+ * so the box can be freed right after the catch.  A bare variable is NOT owned
+ * here -- `(catch-unwind my-shared-thunk)` would free a closure the caller
+ * still holds -- so it is deliberately excluded. */
+static bool catch_thunk_owns_fat_box(const Expr *thunk) {
+    if (!thunk) return false;
+    switch (thunk->kind) {
+        case EX_CLOSURE:
+        case EX_FN_TO_FAT:
+        case EX_POLY_TO_FAT:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e);
 
 /* A-normalize a panic-capable call (always-on since panic-return-signal
@@ -2652,6 +2718,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             indent_buf(body, ctx->indent);
             buf_printf(body, "int64_t %s = tur_catch_unwind_box((int64_t)(intptr_t)%s);\n",
                        result_var, thunk_val);
+            /* catch-unwind-thunk-closure-leak: reclaim the thunk fat box once the
+             * catch has consumed it, when it is a closure literal we own here (a
+             * bare-variable thunk is left alone -- it may alias a shared closure). */
+            if (catch_thunk_owns_fat_box(thunk)) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "free((void *)(intptr_t)%s);\n", thunk_val);
+            }
             free(thunk_val);
             return strdup(result_var);
         }
@@ -2666,6 +2739,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             indent_buf(body, ctx->indent);
             buf_printf(body, "int64_t %s = tur_catch_panic_of_box(%d, (int64_t)(intptr_t)%s);\n",
                        result_var, (int)type_kind, thunk_val);
+            /* catch-unwind-thunk-closure-leak: reclaim the owned thunk fat box
+             * before the re-raise check, so it is freed on both the caught and
+             * the propagate paths. */
+            if (catch_thunk_owns_fat_box(thunk)) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "free((void *)(intptr_t)%s);\n", thunk_val);
+            }
             free(thunk_val);
             /* A type-mismatched catch-panic-of leaves the signal set to
              * re-raise; propagate it to the next outer boundary. */

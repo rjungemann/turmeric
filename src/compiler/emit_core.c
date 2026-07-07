@@ -505,7 +505,18 @@ bool expr_contains_return_or_throw(const Expr *e) {
  * so the "callee position is fine" relaxation never leaks into a nested body.
  * EX_DEFER is treated as an escape because a deferred body runs at the same
  * scope-exit point as the free, making the ordering unsafe to reason about. */
-bool closure_binding_escapes(const Expr *e, const Binding *b) {
+/* Shared walker for the two scoped-free escape analyses.  `allow_box_accessors`
+ * selects the catch-unwind result-box variant (catch-unwind-thunk-closure-leak):
+ * a use of `b` as the sole argument of a read-only Result accessor -- `ok?`,
+ * `err?`, or `ok-val` -- does NOT count as an escape, because none of those
+ * retain the box or hand back box-owned-and-freed memory (ok?/err? return a
+ * bool; ok-val copies out box->ok_val, which tur_result_box_free never frees).
+ * `err-val` is deliberately NOT whitelisted: it returns the box's panic-payload
+ * pointer, which tur_result_box_free DOES free, so an extracted err payload
+ * could dangle -- treating err-val (and every other use) as an escape keeps the
+ * free sound.  With the flag off this is exactly the fat-closure-env analysis. */
+static bool binding_escapes_impl(const Expr *e, const Binding *b,
+                                 bool allow_box_accessors) {
     if (!e || !b) return true;
     size_t cap = 256;
     const Expr **stack = (const Expr **)malloc(cap * sizeof(const Expr *));
@@ -542,8 +553,24 @@ bool closure_binding_escapes(const Expr *e, const Binding *b) {
                 const Expr *fe = cur->as.call_.fn_expr;
                 if (fe && !(fe->kind == EX_VAR && fe->as.var.binding == b))
                     ESC_PUSH(fe);
-                for (uint32_t i = 0; i < cur->as.call_.n_args; i++)
-                    ESC_PUSH(cur->as.call_.args[i]);
+                /* Box-accessor whitelist: a direct call to `ok?`/`err?`/`ok-val`
+                 * reads its Result argument without retaining the box, so a `b`
+                 * argument there is not an escape -- skip pushing it. */
+                bool box_accessor = false;
+                if (allow_box_accessors && !fe) {
+                    const Binding *fb = cur->as.call_.fn_binding;
+                    const char *nm = (fb && fb->name) ? fb->name->name : NULL;
+                    box_accessor = nm && (strcmp(nm, "ok?") == 0 ||
+                                          strcmp(nm, "err?") == 0 ||
+                                          strcmp(nm, "ok-val") == 0);
+                }
+                for (uint32_t i = 0; i < cur->as.call_.n_args; i++) {
+                    const Expr *arg = cur->as.call_.args[i];
+                    if (box_accessor && arg &&
+                        arg->kind == EX_VAR && arg->as.var.binding == b)
+                        continue;
+                    ESC_PUSH(arg);
+                }
                 ESC_PUSH(cur->as.call_.dict_arg);
                 break;
             }
@@ -694,6 +721,19 @@ esc_done:
 #undef ESC_PUSH
     free(stack);
     return escapes;
+}
+
+bool closure_binding_escapes(const Expr *e, const Binding *b) {
+    return binding_escapes_impl(e, b, /*allow_box_accessors=*/false);
+}
+
+/* catch-unwind-thunk-closure-leak: true if the caught-Result binding `b` is used
+ * anywhere in `e` other than as a read-only `ok?`/`err?`/`ok-val` argument -- so
+ * a false return means the box provably does not escape and may be freed at
+ * scope exit.  Same soundness posture as closure_binding_escapes (only ever
+ * greenlights a free). */
+bool catch_box_binding_escapes(const Expr *e, const Binding *b) {
+    return binding_escapes_impl(e, b, /*allow_box_accessors=*/true);
 }
 
 /* Check whether the fall-through point after `e` is unreachable -- i.e. every
