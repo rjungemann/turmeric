@@ -166,8 +166,15 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         case EX_CATCH_UNWIND:
         case EX_CATCH_PANIC_OF: {
-            /* These produce values but also have side effects (setting up handlers) */
+            /* These produce values but also have side effects (setting up handlers).
+             * In statement position the result box is discarded, so free it here
+             * (catch-unwind-result-box-leak): an unfreed box -- and the caught
+             * panic payload an err box owns -- would leak per catch site, unbounded
+             * inside a loop.  Safe because a discarded statement-position value
+             * provably does not escape. */
             char *v = emit_value(ctx, body, e);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "tur_result_box_free((int64_t)(intptr_t)%s);\n", v);
             free(v);
             return;
         }

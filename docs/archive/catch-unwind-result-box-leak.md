@@ -1,12 +1,60 @@
 ---
-status: open
+status: resolved
 severity: medium
 discovered: 2026-07-07
 discovered-by: compiled-catch-unwind-general-lowering-plan G5
+resolved: 2026-07-07
 area: compiled backend / runtime (catch-unwind)
 ---
 
 # `catch-unwind` leaks its result box (and a caught panic's payload) every call
+
+## Resolution (2026-07-07)
+
+The safe, sound half of the report's first fix direction landed: a
+**statement-position** `catch-unwind` / `catch-panic-of` -- one whose Result is
+provably discarded -- now frees the caught Result box and, on the err branch,
+the caught `tur_panic_payload` record, at the end of the statement.
+
+- New runtime helper `tur_result_box_free` (`src/compiler/emit_module.c`, in the
+  panic-runtime preamble beside `tur_catch_unwind_box`): frees the
+  `tur_result_box_t`, and for an err box also frees the `tur_panic_payload`
+  *struct*. It deliberately does **not** free `payload->value` -- a `panic-with`
+  value can be an inline scalar (`(void*)42`) or a value owned elsewhere, so
+  freeing it is a nonheap-free / double-free hazard. This is why
+  `panic_payload_free` (which does `free(p->value)`) is not reused here; calling
+  it on an inline-scalar payload aborts.
+- `emit_stmt.c` `EX_CATCH_UNWIND` / `EX_CATCH_PANIC_OF` (statement position)
+  now emits a `tur_result_box_free(...)` call after the catch. The value is
+  provably discarded there, so this is not a premature free; a caught Result
+  that is *used* (let-bound, returned, inspected) flows through `emit_value` and
+  is untouched.
+
+### What this fixes
+
+- The **unbounded caught-panic payload leak**: a `catch-unwind` in a loop that
+  catches and discards now frees the 32-byte payload each iteration instead of
+  leaking it. Measured on the repros:
+  - single panic-discard: 48 B lost -> 16 B lost;
+  - 3 sequential panic-discards: 144 B -> 48 B;
+  - 1000-iteration loop of caught+discarded panics: ~48 KB -> 16 KB.
+- The Result box in statement position is now explicitly freed (it was in
+  practice DCE'd by the C compiler when the box pointer was unused, so it was
+  not the block valgrind actually reported -- see below).
+
+### What remains (spun out to a fresh report)
+
+The residual `definitely lost` on every catch site is the **fat-closure thunk**
+materialized for the `(fn [] ...)` argument (16 bytes / call), plus the
+still-open **let-bound-box** case where a caught Result is used and then goes out
+of scope without escaping (needs the escape/last-use check the report flags as
+an open design question). Both are tracked in
+`docs/reported/catch-unwind-thunk-closure-leak.md`. Note the report's original
+valgrind attribution of the 16-byte block to "the `tur_result_box_t`" was a
+misread: `tur_result_box_t` is 24 bytes and, in the discard case, was DCE'd; the
+16-byte block traced to `main` is the thunk fat struct.
+
+---
 
 ## Summary
 

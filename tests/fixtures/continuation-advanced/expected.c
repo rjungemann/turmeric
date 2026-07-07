@@ -787,6 +787,14 @@ static int64_t tur_catch_panic_of_box(int expected_type, int64_t thunk) {
     }
 }
 
+static void tur_result_box_free(int64_t __r) __attribute__((unused));
+static void tur_result_box_free(int64_t __r) {
+    tur_result_box_t *__b = (tur_result_box_t *)(intptr_t)__r;
+    if (!__b) return;
+    if (!__b->is_ok) free((tur_panic_payload *)(intptr_t)__b->err_val);
+    free(__b);
+}
+
 /* CPS substrate (cps-transform-plan): multi-prompt delimited-control machine.
  * Heap-reified continuation chains (DK); a reset is a prompt, a shift slices
  * the chain up to the nearest prompt. Faithful port of src/runtime/cps_prompt.c.
