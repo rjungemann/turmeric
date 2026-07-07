@@ -486,6 +486,23 @@ static bool su_simple_expr(const Expr *e) {
                 if (!su_simple_expr(e->as.builtin.args[i])) return false;
             return true;
         }
+        case EX_CALL: {
+            /* Only a narrow whitelist of PURE result/option accessors is allowed
+             * (so the result-using `let` form can inspect the caught box); these
+             * never panic, so the injected driver-return is dead. */
+            if (e->as.call_.fn_expr) return false;
+            Binding *fb = e->as.call_.fn_binding;
+            const char *nm = (fb && fb->name) ? fb->name->name : NULL;
+            static const char *const pure[] = {
+                "ok?", "err?", "ok-val", "err-val", "some?", "none?", NULL };
+            bool ok = false;
+            for (int i = 0; nm && pure[i]; i++)
+                if (strcmp(nm, pure[i]) == 0) { ok = true; break; }
+            if (!ok) return false;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (!su_simple_expr(e->as.call_.args[i])) return false;
+            return true;
+        }
         default:
             return false;   /* defer, catch-unwind, panic, async, closures, ... */
     }
@@ -533,7 +550,8 @@ static char *sc_restore_expr(const char *ctype, TypeKind k, const char *saved) {
 static bool stackless_catch_eligible(EmitCtx *ctx, const Expr *e, FnDef *fd,
                                      TypeKind result_kind,
                                      const Expr **out_cond, const Expr **out_base,
-                                     const Expr **out_call, const Expr **out_after) {
+                                     const Expr **out_call, const Expr **out_after,
+                                     const Binding **out_result_binding) {
     if (!g_opt_stackless_catch_unwind) return false;
     if (!fd || fd->n_params < 1 || fd->n_params > TUR_SC_MAXP) return false;
     if (fd->n_dict_clone > 0 || fd->n_dict_env > 0) return false;
@@ -549,8 +567,25 @@ static bool stackless_catch_eligible(EmitCtx *ctx, const Expr *e, FnDef *fd,
     const Expr *b = fd->body;
     if (!b || b->kind != EX_IF) return false;
     const Expr *els = b->as.if_.else_or_null;
-    if (!els || els->kind != EX_DO || els->as.do_.n != 2) return false;
-    const Expr *cu = els->as.do_.items[0];
+    /* The recursive branch is either
+     *   (do (catch-unwind (fn [] (f RECUR))) AFTER)   -- result discarded, OR
+     *   (let [r (catch-unwind (fn [] (f RECUR)))] AFTER)  -- result inspected.
+     * For the `let` form AFTER may reference `r` (the boxed ok/err result); an
+     * eligible function is panic-free, so `r` is always ok(<recursion value>).
+     * The box carries an int, so the `let` form requires an int return. */
+    const Expr *cu = NULL, *after = NULL;
+    const Binding *r_binding = NULL;
+    if (els && els->kind == EX_DO && els->as.do_.n == 2) {
+        cu = els->as.do_.items[0];
+        after = els->as.do_.items[1];
+    } else if (els && els->kind == EX_LET && els->as.let_.n == 1 &&
+               result_kind == TY_INT) {
+        cu = els->as.let_.bindings[0].init;
+        after = els->as.let_.body;
+        r_binding = els->as.let_.bindings[0].binding;
+    } else {
+        return false;
+    }
     if (!cu || cu->kind != EX_CATCH_UNWIND) return false;
     const Expr *thunk = cu->as.catch_unwind_.thunk;
     /* The thunk is a 0-arg lambda: EX_FN when it captures nothing, EX_CLOSURE
@@ -581,13 +616,13 @@ static bool stackless_catch_eligible(EmitCtx *ctx, const Expr *e, FnDef *fd,
     if (call->as.call_.n_args != fd->n_params || call->as.call_.fn_expr) return false;
 
     const Expr *cond = b->as.if_.cond, *base = b->as.if_.then_;
-    const Expr *after = els->as.do_.items[1];
     if (!su_simple_expr(cond) || !su_simple_expr(base) || !su_simple_expr(after))
         return false;
     for (uint32_t i = 0; i < call->as.call_.n_args; i++)
         if (!su_simple_expr(call->as.call_.args[i])) return false;
 
     *out_cond = cond; *out_base = base; *out_call = call; *out_after = after;
+    *out_result_binding = r_binding;
     return true;
 }
 
@@ -599,7 +634,8 @@ static bool stackless_catch_eligible(EmitCtx *ctx, const Expr *e, FnDef *fd,
 static void emit_stackless_catch_body(EmitCtx *ctx, Buf *file, FnDef *fd,
                                       TypeKind result_kind,
                                       const Expr *cond, const Expr *base,
-                                      const Expr *call, const Expr *after) {
+                                      const Expr *call, const Expr *after,
+                                      const Binding *result_binding) {
     uint8_t np = fd->n_params;
     char **p = (char **)malloc(sizeof(char *) * np);   /* param C names = scratch */
     for (uint8_t i = 0; i < np; i++) p[i] = atom_var(ctx, fd->params[i]);
@@ -665,6 +701,14 @@ static void emit_stackless_catch_body(EmitCtx *ctx, Buf *file, FnDef *fd,
             char slot[48]; snprintf(slot, sizeof slot, "__k->saved[%d]", i);
             char *rs = sc_restore_expr(emit_type_c_name(ctx, fd->param_types[i]), fd->param_types[i].kind, slot);
             SI(2); buf_printf(file, "%s = %s;\n", p[i], rs); free(rs);
+        }
+        /* Result-using (`let`) form: bind the boxed ok(recursion value).  __v
+         * still holds the deeper level's return value (int) here; an eligible
+         * function is panic-free, so the box is always ok.  (The box leaks like
+         * the normal tur_catch_unwind_box result -- see the plan's note.) */
+        if (result_binding) {
+            char *rn = atom_var(ctx, result_binding);
+            SI(2); buf_printf(file, "int64_t %s = tur_box_ok(__v);\n", rn); free(rn);
         }
         char *av = emit_value(ctx, file, after);
         char *asv = sc_save_expr(result_kind, av);
@@ -1541,13 +1585,14 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         tco_params_simple(ctx, e, fd) && tco_mark(ctx, fd, fn_name, fd->body) > 0;
 
     const Expr *__su_cond = NULL, *__su_base = NULL, *__su_call = NULL, *__su_after = NULL;
+    const Binding *__su_rbind = NULL;
     if (!prereq6_synthesized_body && !m2b_carrier_synth &&
         stackless_catch_eligible(ctx, e, fd, result_kind,
-                                 &__su_cond, &__su_base, &__su_call, &__su_after)) {
+                                 &__su_cond, &__su_base, &__su_call, &__su_after, &__su_rbind)) {
         /* D3 (stackless-catch-unwind): emit the self-recursive catch-unwind
          * function as a heap-continuation trampoline instead of native
          * recursion, so nested catch-unwind runs with a flat C stack. */
-        emit_stackless_catch_body(ctx, file, fd, result_kind, __su_cond, __su_base, __su_call, __su_after);
+        emit_stackless_catch_body(ctx, file, fd, result_kind, __su_cond, __su_base, __su_call, __su_after, __su_rbind);
     } else if (prereq6_synthesized_body) {
         /* Prereq 6: the function body was already emitted as a synthesized
          * wrapper above (heap-spill + carrier helper call + cast back to

@@ -1,0 +1,18 @@
+;;; D3 (compiled-catch-unwind-stackless-plan): RESULT-USING form of the
+;;; stackless self-recursive catch-unwind.  The recursive branch binds the
+;;; catch-unwind result and inspects it -- (let [r (catch-unwind ...)] ...) --
+;;; instead of discarding it.  The trampoline boxes the deeper level's return
+;;; as ok(v) (an eligible function is panic-free, so it is always ok) and binds
+;;; r for the AFTER expression, which predicates on (ok? r).  f N = N, and
+;;; 200000 folds off the native stack.  (Like the normal tur_catch_unwind_box
+;;; result, each level's box leaks -- a documented prototype trait, harmless
+;;; here since the fixture binary is not leak-checked.)
+(defn f [n : int] : int
+  (if (= n 0)
+    0
+    (let [r (catch-unwind (fn [] : int (f (- n 1))))]
+      (if (ok? r) n 0))))
+
+(defn main [] : int
+  (println (f 200000))
+  0)

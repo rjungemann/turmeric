@@ -122,23 +122,32 @@ target on the self-contained `cu-rec`/`cu-rec-p` shapes; escalate to (b) only if
 the async/effect D3 work is being built concurrently and the shared machine is
 cheaper than two lowerings.
 
-## Slices 1-4 (landed) -- codegen behind `--enable=stackless-catch-unwind`
+## Slices 1-5 (landed) -- codegen behind `--enable=stackless-catch-unwind`
 
 The codegen of direction (a) is wired behind `--enable=stackless-catch-unwind`
 (implies `panic-return-signal`; registered in `EXPERIMENTS[]`, fires TUR-W0060).
 It recognises the self-recursive grammar over **1..TUR_SC_MAXP (8) scalar
-params** and emits the trampoline directly:
+params**, in either a result-**discarding** or result-**using** recursive branch:
 
 ```
 (defn f [p0 : S0 ... pk : Sk] : R
-  (if COND BASE (do (catch-unwind (fn [] (f RECUR0 ... RECURk))) AFTER)))
+  (if COND BASE (do  (catch-unwind (fn [] (f RECUR0 ... RECURk))) AFTER)))        ; discard
+(defn f [p0 : S0 ... pk : Sk] : int
+  (if COND BASE (let [r (catch-unwind (fn [] (f RECUR0 ... RECURk)))] AFTER)))    ; use r
 ```
 
 where each `Si` and `R` is a scalar the trampoline can round-trip through an
 int64 `saved[]` slot (`sc_scalar_kind`): `int` / `bool` / `cstr` / raw pointer
 (via an `intptr_t` cast) and `float` / `float32` (via BIT reinterpretation --
 `tur_sc_bits_f64` / `tur_sc_f64_from_bits`, and the f32 pair -- so the value
-survives the int64 slot instead of being truncated by a cast).
+survives the int64 slot instead of being truncated by a cast). In the result-
+**using** `let` form `AFTER` may inspect the bound catch result `r` through the
+pure predicate accessors (`ok?` / `err?` / ...); an eligible function is
+panic-free, so `r` is always `ok(<recursion value>)`, and the box is emitted as
+`tur_box_ok(__v)` (int return only, since the box carries an int). That box
+leaks one node per level exactly as the normal `tur_catch_unwind_box` result
+does (the panic fixtures carry `requires.no-leak-check` for the same reason) --
+a documented prototype trait, not a regression.
 
 - **Eligibility** (`stackless_catch_eligible`, emit_fns.c): 1..8 scalar params
   and a scalar return with a known C return type, no ABI-spec / dict-clone, body
@@ -162,22 +171,27 @@ survives the int64 slot instead of being truncated by a cast).
 
 Measured (compiled backend): with the flag, single-param `cu-rec` runs
 **10,000,000** deep and **1,000,000 under a 64 KiB stack `ulimit`** (flat native
-stack); two-param, `bool`-param and `float`-param variants also run
-**1,000,000 under a 64 KiB stack**, and every shape matches the native result at
-small depth (differential-checked, incl. `bool`/`cstr`/`float`/`float32` params
-and returns). The default (flag-off) codegen is byte-identical and
-`bash tests/run.sh` stays green (1957). Fixtures `stackless-catch-unwind-deep`
-(1 int param), `-multiparam` (2 int params), `-scalar` (int + `bool`) and
-`-float` (int + `float`), each with a `flags` file enabling the experiment,
-guard them.
+stack); two-param, `bool`-param, `float`-param and the result-using variants also
+run flat (the result-using form validated to **200000** deep), and every shape
+matches the native result at small depth (differential-checked, incl.
+`bool`/`cstr`/`float`/`float32` params and returns, and the `let`-bound result
+form). The default (flag-off) codegen is byte-identical and `bash tests/run.sh`
+stays green (1958). Fixtures `stackless-catch-unwind-deep` (1 int param),
+`-multiparam` (2 int params), `-scalar` (int + `bool`), `-float` (int + `float`)
+and `-result` (result-using `let` form), each with a `flags` file enabling the
+experiment, guard them.
 
 ### What is NOT done yet (follow-on)
 
+- Extracting the caught **value** (`ok-val`/`err-val`) in the result-using form
+  (only the pure predicates are whitelisted; `ok-val` on a `Panic` result also
+  has an unrelated inference gap in the language today), and the `err` branch
+  (dead for eligible functions, so untested).
 - Carrier / opaque / aggregate params and returns (ownership / RC concerns, so
   they stay excluded).
-- Panicking COND/BASE/RECUR/AFTER (a call is now held non-simple, so this is
-  closed for the accepted grammar; a general lowering would need the driver to
-  not early-return on the `panic-return-signal` check).
+- Panicking COND/BASE/RECUR/AFTER (a non-accessor call is held non-simple, so
+  this is closed for the accepted grammar; a general lowering would need the
+  driver to not early-return on the `panic-return-signal` check).
 - Mutual recursion, and recursion through a catch that is not a direct self-call.
 - The general segment-splitting emit for arbitrary catch-crossing functions
   (this slice special-cases one grammar rather than splitting an arbitrary body).
