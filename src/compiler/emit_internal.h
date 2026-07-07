@@ -693,5 +693,7 @@ void emit_set_field_stmt(EmitCtx *ctx, Buf *body, const Expr *e);
 
 /* ------------ emit_fns.c: function-definition emission ------------ */
 void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e);
+/* G4: reset the per-module shared-driver group registry. */
+void gs_reset_group_registry(void);
 
 #endif

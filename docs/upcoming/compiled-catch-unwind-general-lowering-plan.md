@@ -152,14 +152,35 @@ grammar, now for any body.
 
 ### G4 -- Cross-function + mutual recursion
 
-- Extend the trampolined set across function boundaries: a trampolined `f`
-  calling a trampolined `g` DESCENDs into `g` via the driver rather than
-  C-calling. Mutual recursion falls out.
-- A **CPS/direct shim** at the boundary: entering the trampolined region from
-  native code reifies the C continuation as a heap node and enters the driver;
-  returning to native code runs the driver to completion and hands back the
-  value. This is the fiddly part -- the shim must preserve the native ABI for the
-  boundary call while the interior is trampolined.
+> **Status: DONE.** A trampolined `f` calling a trampolined `g` DESCENDs into
+> `g`'s ENTRY through one **shared group driver** instead of C-calling, so mutual
+> recursion (and longer cycles) run with a flat C stack.
+>
+> - **Group detection** (`gs_find_group`): from a candidate function, BFS the
+>   call graph over basic-eligible top-level defns, then take the greatest
+>   fixpoint that keeps only members whose user-calls all target other members
+>   (or the pure accessors) and whose group as a whole reaches a `catch-unwind`.
+>   The catch requirement is per-GROUP, so a member with no catch of its own
+>   (e.g. `b`/`c` in an `a -> b -> c -> a` cycle) still co-trampolines. Lifted
+>   closures / catch-unwind thunk functions are excluded (`fd->closure`), and a
+>   member must be the canonical defn of its binding.
+> - **Shared driver + shims**: the group emits one `static int64_t
+>   __cu_group_N(int __pc, int64_t __a0..)` whose locals are every member's
+>   params (seeded per entry from the `__a` bit-slots) + hoisted let-vars +
+>   suspension temps.  A call to member `m` sets `m`'s param locals and jumps to
+>   its ENTRY tag; the driver returns raw int64 bits.  Each member's ordinary C
+>   function becomes a **shim** -- `return <restore>(__cu_group_N(m_entry,
+>   <args as bits>, 0..));` -- preserving the native ABI at the boundary while the
+>   interior is trampolined.  The single-function (G3) path stays the fast case
+>   for non-cross-calling functions and is byte-identical.
+> - Covered by `stackless-catch-unwind-mutual` (ping/pong) and
+>   `stackless-catch-unwind-mutual-cycle` (a/b/c), each matching native at small
+>   depth and running 300k-1,000,000 deep under a 256 KiB stack where native
+>   SIGSEGVs.  Full suite: 1965 passed, 0 failed.
+>
+> Not yet covered: a group whose live-scalar/segment count exceeds the caps, or
+> `> GS_MAXMEM (8)` members, falls back to normal (native) emission.  Precise
+> per-split liveness (G1) is still the "save every live scalar" approximation.
 
 ### G5 -- Result-box ownership (value extraction, err branch, no leak)
 

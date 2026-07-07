@@ -520,11 +520,29 @@ static char *sc_restore_expr(const char *ctype, TypeKind k, const char *saved) {
  *     (or DONE -> uncaught abort), exactly as the D1a signal contract wants.
  * ==========================================================================*/
 
-/* A self-recursive call site: direct call to fd, full arity, no fn-expr. */
+/* G4 (cross-function / mutual recursion): the active "trampolined group" -- the
+ * set of functions whose calls to one another descend through one shared driver
+ * instead of C-calling.  A singleton group is the G3 single-function case.  Set
+ * before the structural predicates / collection / emission run, cleared after;
+ * the predicates treat a call to ANY member as a suspension. */
+#define GS_MAXMEM 8
+static FnDef *g_gs_mem[GS_MAXMEM];
+static int    g_gs_nmem;
+
+/* If e is a direct full-arity call to a group member, its index; else -1. */
+static int gs_call_member_idx(const Expr *e) {
+    if (!e || e->kind != EX_CALL || e->as.call_.fn_expr) return -1;
+    for (int i = 0; i < g_gs_nmem; i++)
+        if (g_gs_mem[i] && e->as.call_.fn_binding == g_gs_mem[i]->binding &&
+            e->as.call_.n_args == g_gs_mem[i]->n_params) return i;
+    return -1;
+}
+
+/* A call whose target is trampolined (self- or cross-recursion): descends
+ * through the driver.  fd is retained for call-site compatibility only. */
 static bool gs_is_self_call(const Expr *e, FnDef *fd) {
-    return e && e->kind == EX_CALL && !e->as.call_.fn_expr &&
-           e->as.call_.fn_binding == fd->binding &&
-           e->as.call_.n_args == fd->n_params;
+    (void)fd;
+    return gs_call_member_idx(e) >= 0;
 }
 
 /* The 0-arg thunk FnDef of a catch-unwind, or NULL.  A capture-free thunk is
@@ -715,6 +733,18 @@ typedef struct {
     int next_tag;
     int base_ind, cur_ind;
     bool overflow;
+    /* G4: group members sharing this driver.  For a singleton (G3) n_mem == 1
+     * and mem[0] == fd, mem_entry_tag[0] == 1, mem_pbase[0] == 0 -- identical to
+     * the single-function lowering.  A call to member m descends to its ENTRY
+     * (mem_entry_tag[m]) after setting m's params (vars[mem_pbase[m]..]); the
+     * resume restores the returned value as m's own return type. */
+    int n_mem;
+    FnDef *mem[GS_MAXMEM];
+    int mem_entry_tag[GS_MAXMEM];
+    int mem_pbase[GS_MAXMEM];
+    TypeKind mem_ret[GS_MAXMEM];
+    const char *mem_retctype[GS_MAXMEM];
+    int n_param_vars;   /* count of leading vars[] that are member params */
 } GsCtx;
 
 static int gs_add_var(GsCtx *gs, char *cname, const char *ctype, TypeKind k) {
@@ -767,9 +797,11 @@ static void gs_collect(GsCtx *gs, const Expr *e) {
             gs_add_var(gs, atom_var(gs->ctx, lb->binding), ct, lk);
         }
     }
-    if (gs_is_self_call(e, gs->fd)) {
+    int cm = gs_call_member_idx(e);
+    if (cm >= 0) {
+        /* Result temp typed by the CALLEE member's return type. */
         char nm[32]; snprintf(nm, sizeof nm, "__t%d", gs->ctx->tmp_n++);
-        int vi = gs_add_var(gs, tur_strdup(nm), gs->ret_ctype, gs->ret_kind);
+        int vi = gs_add_var(gs, tur_strdup(nm), gs->mem_retctype[cm], gs->mem_ret[cm]);
         if (vi >= 0 && gs->n_susp < TUR_SC_MAXN) {
             gs->susp_expr[gs->n_susp] = e; gs->susp_idx[gs->n_susp] = vi; gs->n_susp++;
         }
@@ -929,6 +961,9 @@ static void gs_deliver(GsCtx *gs, Buf *b, const char *val, const GsSink *sink) {
  * and re-emits `enc` (with S held as a hole) to `sink`. */
 static void gs_self_descend(GsCtx *gs, Buf *b, const Expr *S, const GsSink *sink,
                             int temp_vi, const Expr *enc) {
+    int m = gs_call_member_idx(S);           /* callee group member */
+    int pbase = gs->mem_pbase[m];
+    int entry = gs->mem_entry_tag[m];
     int id = gs->ctx->tmp_n++;
     int rtag = gs->next_tag++;
     Buf *rb = gs_add_seg(gs, rtag);
@@ -953,17 +988,17 @@ static void gs_self_descend(GsCtx *gs, Buf *b, const Expr *S, const GsSink *sink
     }
     for (uint32_t i = 0; i < na; i++) {
         indent_buf(b, gs->cur_ind);
-        buf_printf(b, "%s = %s;\n", gs->vars[i].cname, tmps[i]);
+        buf_printf(b, "%s = %s;\n", gs->vars[pbase + (int)i].cname, tmps[i]);
         free(tmps[i]);
     }
     free(tmps);
     indent_buf(b, gs->cur_ind);
-    buf_printf(b, "__k = %s; __pc = 1; break;\n", node);
+    buf_printf(b, "__k = %s; __pc = %d; break;\n", node, entry);
 
     int saved_ind = gs->cur_ind;
     gs->cur_ind = gs->base_ind + 3;
     gs_restore(gs, rb);
-    char *rv = sc_restore_expr(gs->ret_ctype, gs->ret_kind, "__v");
+    char *rv = sc_restore_expr(gs->mem_retctype[m], gs->mem_ret[m], "__v");
     if (temp_vi >= 0) {
         indent_buf(rb, gs->cur_ind);
         buf_printf(rb, "%s = %s;\n", gs->vars[temp_vi].cname, rv);
@@ -1056,10 +1091,15 @@ static void cps_emit_value_susp(GsCtx *gs, Buf *b, const Expr *e, const GsSink *
         char *v = emit_value(gs->ctx, b, e);
         gs_deliver(gs, b, v, sink); free(v); return;
     }
-    bool is_self = gs_is_self_call(S, gs->fd);
+    int scall = gs_call_member_idx(S);
+    bool is_self = scall >= 0;
     if (S == e) {
         if (is_self && sink->kind == GSK_RETURN) {
-            /* tail self-call: reassign params and loop to ENTRY, no node. */
+            /* tail call (self or cross-member): reassign the callee's params and
+             * loop to its ENTRY, no node.  Well-typed tail position guarantees
+             * the callee's return type matches this member's, so __v flows on. */
+            int pbase = gs->mem_pbase[scall];
+            int entry = gs->mem_entry_tag[scall];
             int id = gs->ctx->tmp_n++;
             uint32_t na = S->as.call_.n_args;
             char **tmps = (char **)malloc(sizeof(char *) * (na ? na : 1));
@@ -1073,12 +1113,12 @@ static void cps_emit_value_susp(GsCtx *gs, Buf *b, const Expr *e, const GsSink *
             }
             for (uint32_t i = 0; i < na; i++) {
                 indent_buf(b, gs->cur_ind);
-                buf_printf(b, "%s = %s;\n", gs->vars[i].cname, tmps[i]);
+                buf_printf(b, "%s = %s;\n", gs->vars[pbase + (int)i].cname, tmps[i]);
                 free(tmps[i]);
             }
             free(tmps);
             indent_buf(b, gs->cur_ind);
-            buf_puts(b, "__pc = 1; break;\n");
+            buf_printf(b, "__pc = %d; break;\n", entry);
             return;
         }
         if (is_self) gs_self_descend(gs, b, S, sink, -1, NULL);
@@ -1174,58 +1214,120 @@ static void cps_emit(GsCtx *gs, Buf *b, const Expr *e, const GsSink *sink) {
     }
 }
 
-static bool stackless_general_eligible(EmitCtx *ctx, const Expr *e, FnDef *fd,
-                                       TypeKind result_kind) {
-    if (!g_opt_stackless_catch_unwind) return false;
+/* Basic (member-set-independent) constraints a trampolined function must meet. */
+static bool gs_basic_ok(EmitCtx *ctx, FnDef *fd) {
     if (!fd || fd->n_params < 1 || fd->n_params > TUR_SC_MAXP) return false;
     if (fd->n_dict_clone > 0 || fd->n_dict_env > 0) return false;
-    if (ctx->current_abi_specialization) return false;
+    if (!fd->param_types || !fd->body) return false;
+    /* Must be the canonical top-level defn of its binding, and not a lifted
+     * closure / catch-unwind thunk (fd->closure set; its synthetic env param
+     * would otherwise look scalar) -- those are never trampoline members. */
+    if (!fd->binding || fd->binding->source_fn_def != fd) return false;
+    if (fd->closure) return false;
     if (fd->binding && fd->binding->name && fd->binding->name->name &&
         strcmp(fd->binding->name->name, "main") == 0) return false;
-    if (!sc_scalar_kind(result_kind)) return false;
-    if (!ctx->current_fn_ret_ctype) return false;
-    if (!fd->param_types) return false;
+    if (!sc_scalar_kind(fd->return_type.kind)) return false;
     for (uint8_t i = 0; i < fd->n_params; i++)
         if (!sc_scalar_kind(fd->param_types[i].kind)) return false;
-    const Expr *b = fd->body;
-    if (!b) return false;
-    if (!gs_has_catch(b, fd)) return false;      /* nothing to trampoline */
-    if (!gs_stmt_ok(b, fd)) return false;
-    (void)e;
     return true;
 }
 
-/* Emit the general trampoline.  Returns false (leaving `file` untouched) if a
- * hard limit is hit, so the caller falls back to the scaffold / normal path. */
+static bool stackless_general_eligible(EmitCtx *ctx, const Expr *e, FnDef *fd,
+                                       TypeKind result_kind) {
+    if (!g_opt_stackless_catch_unwind) return false;
+    if (ctx->current_abi_specialization) return false;
+    if (!gs_basic_ok(ctx, fd)) return false;
+    if (!sc_scalar_kind(result_kind)) return false;
+    if (!ctx->current_fn_ret_ctype) return false;
+    /* Single-function (G3) view: only self-calls are trampolined. */
+    g_gs_mem[0] = fd; g_gs_nmem = 1;
+    const Expr *b = fd->body;
+    bool ok = gs_has_catch(b, fd) && gs_stmt_ok(b, fd);
+    g_gs_nmem = 0;
+    (void)e;
+    return ok;
+}
+
+/* Populate the per-member var table (all members' params, recording pbase),
+ * collect hoisted let-vars + suspension temps, and emit each member's ENTRY
+ * segment.  Assumes gs->mem[..] / mem_ret / mem_retctype / mem_entry_tag are
+ * set and g_gs_mem mirrors them.  Returns false on overflow. */
+static bool gs_build(GsCtx *gs) {
+    EmitCtx *ctx = gs->ctx;
+    for (int m = 0; m < gs->n_mem; m++) {
+        FnDef *f = gs->mem[m];
+        gs->mem_pbase[m] = gs->n_vars;
+        for (uint8_t i = 0; i < f->n_params; i++)
+            gs_add_var(gs, atom_var(ctx, f->params[i]),
+                       emit_type_c_name(ctx, f->param_types[i]), f->param_types[i].kind);
+    }
+    gs->n_param_vars = gs->n_vars;
+    for (int m = 0; m < gs->n_mem && !gs->overflow; m++)
+        gs_collect(gs, gs->mem[m]->body);
+    if (gs->overflow) return false;
+
+    for (int m = 0; m < gs->n_mem; m++) {
+        Buf *entry = gs_add_seg(gs, gs->mem_entry_tag[m]);
+        if (!entry) return false;
+        gs->cur_ind = gs->base_ind + 3;
+        gs->ret_kind = gs->mem_ret[m]; gs->ret_ctype = gs->mem_retctype[m];
+        GsSink rs; memset(&rs, 0, sizeof rs);
+        rs.kind = GSK_RETURN; rs.ret_kind = gs->mem_ret[m];
+        cps_emit(gs, entry, gs->mem[m]->body, &rs);
+        if (gs->overflow) return false;
+    }
+    return true;
+}
+
+/* Emit the driver's `for(;;)` loop + `switch(__pc)` (the DONE case + one case
+ * per built segment) into `out` at indent `bi`.  The caller emits the __k /
+ * __pc / __v prologue.  `done_typed` chooses whether the DONE case returns the
+ * value cast to the (single) member's C return type (inline single-function
+ * body) or raw int64 bits (group driver; the shim casts). */
+static void gs_emit_driver(GsCtx *gs, Buf *out, int bi, bool done_typed) {
+    indent_buf(out, bi); buf_puts(out, "for (;;) {\n");
+    indent_buf(out, bi + 1); buf_puts(out, "if (tur_panicking) {\n");
+    indent_buf(out, bi + 2); buf_puts(out, "while (__k->boundary == 0 && __k->tag != 0) { tur_cont *__pk = __k->next; free(__k); __k = __pk; }\n");
+    indent_buf(out, bi + 2); buf_puts(out, "if (__k->tag == 0) { fprintf(stderr, \"panic (uncaught, stackless)\\n\"); fflush(NULL); abort(); }\n");
+    indent_buf(out, bi + 2); buf_puts(out, "__pc = __k->tag;\n");
+    indent_buf(out, bi + 1); buf_puts(out, "}\n");
+    indent_buf(out, bi + 1); buf_puts(out, "switch (__pc) {\n");
+    if (done_typed) {
+        char *rv = sc_restore_expr(gs->mem_retctype[0], gs->mem_ret[0], "__v");
+        indent_buf(out, bi + 2); buf_printf(out, "case 0: { free(__k); return %s; }\n", rv); free(rv);
+    } else {
+        indent_buf(out, bi + 2); buf_puts(out, "case 0: { free(__k); return __v; }\n");
+    }
+    for (int s = 0; s < gs->n_segs; s++) {
+        indent_buf(out, bi + 2); buf_printf(out, "case %d: {\n", gs->tags[s]);
+        buf_write(out, gs->bufs[s]->data, gs->bufs[s]->len);
+        indent_buf(out, bi + 2); buf_puts(out, "}\n");
+    }
+    indent_buf(out, bi + 1); buf_puts(out, "}\n");
+    indent_buf(out, bi); buf_puts(out, "}\n");
+}
+
+static void gs_free(GsCtx *gs) {
+    for (int i = 0; i < gs->n_vars; i++) free(gs->vars[i].cname);
+    for (int s = 0; s < gs->n_segs; s++) { buf_free(gs->bufs[s]); free(gs->bufs[s]); }
+}
+
+/* Emit the general single-function trampoline as the function body (no shim).
+ * Returns false (leaving `file` untouched) if a hard limit is hit. */
 static bool emit_stackless_general_body(EmitCtx *ctx, Buf *file, FnDef *fd,
                                         TypeKind result_kind) {
     GsCtx gs; memset(&gs, 0, sizeof gs);
-    gs.ctx = ctx; gs.fd = fd; gs.ret_kind = result_kind;
-    gs.ret_ctype = ctx->current_fn_ret_ctype;
-    gs.base_ind = ctx->indent; gs.next_tag = 2;
+    gs.ctx = ctx; gs.fd = fd; gs.base_ind = ctx->indent; gs.next_tag = 2;
+    gs.n_mem = 1; gs.mem[0] = fd; gs.mem_entry_tag[0] = 1;
+    gs.mem_ret[0] = result_kind; gs.mem_retctype[0] = ctx->current_fn_ret_ctype;
     uint8_t saved_holes = ctx->n_sub_holes;
     ctx->n_sub_holes = 0;
+    g_gs_mem[0] = fd; g_gs_nmem = 1;
 
-    for (uint8_t i = 0; i < fd->n_params; i++)
-        gs_add_var(&gs, atom_var(ctx, fd->params[i]),
-                   emit_type_c_name(ctx, fd->param_types[i]), fd->param_types[i].kind);
-    gs_collect(&gs, fd->body);
-
-    bool ok = !gs.overflow;
-    if (ok) {
-        Buf *entry = gs_add_seg(&gs, 1);
-        if (entry) {
-            gs.cur_ind = gs.base_ind + 3;
-            GsSink rs; memset(&rs, 0, sizeof rs);
-            rs.kind = GSK_RETURN; rs.ret_kind = result_kind;
-            cps_emit(&gs, entry, fd->body, &rs);
-        }
-        ok = !gs.overflow && entry != NULL;
-    }
-
+    bool ok = gs_build(&gs);
     if (ok) {
         int bi = gs.base_ind;
-        for (int i = fd->n_params; i < gs.n_vars; i++) {
+        for (int i = gs.n_param_vars; i < gs.n_vars; i++) {
             indent_buf(file, bi);
             buf_printf(file, "%s %s = 0;\n", gs.vars[i].ctype, gs.vars[i].cname);
         }
@@ -1233,29 +1335,247 @@ static bool emit_stackless_general_body(EmitCtx *ctx, Buf *file, FnDef *fd,
         indent_buf(file, bi); buf_puts(file, "__k->tag = 0; __k->boundary = 0; __k->next = 0;\n");
         indent_buf(file, bi); buf_puts(file, "int __pc = 1;\n");
         indent_buf(file, bi); buf_puts(file, "int64_t __v = 0;\n");
-        indent_buf(file, bi); buf_puts(file, "for (;;) {\n");
-        indent_buf(file, bi + 1); buf_puts(file, "if (tur_panicking) {\n");
-        indent_buf(file, bi + 2); buf_puts(file, "while (__k->boundary == 0 && __k->tag != 0) { tur_cont *__pk = __k->next; free(__k); __k = __pk; }\n");
-        indent_buf(file, bi + 2); buf_puts(file, "if (__k->tag == 0) { fprintf(stderr, \"panic (uncaught, stackless)\\n\"); fflush(NULL); abort(); }\n");
-        indent_buf(file, bi + 2); buf_puts(file, "__pc = __k->tag;\n");
-        indent_buf(file, bi + 1); buf_puts(file, "}\n");
-        indent_buf(file, bi + 1); buf_puts(file, "switch (__pc) {\n");
-        char *rv = sc_restore_expr(gs.ret_ctype, gs.ret_kind, "__v");
-        indent_buf(file, bi + 2); buf_printf(file, "case 0: { free(__k); return %s; }\n", rv); free(rv);
-        for (int s = 0; s < gs.n_segs; s++) {
-            indent_buf(file, bi + 2); buf_printf(file, "case %d: {\n", gs.tags[s]);
-            buf_write(file, gs.bufs[s]->data, gs.bufs[s]->len);
-            indent_buf(file, bi + 2); buf_puts(file, "}\n");
-        }
-        indent_buf(file, bi + 1); buf_puts(file, "}\n");
-        indent_buf(file, bi); buf_puts(file, "}\n");
+        gs_emit_driver(&gs, file, bi, /*done_typed=*/true);
         ctx->indent = bi;
     }
 
-    for (int i = 0; i < gs.n_vars; i++) free(gs.vars[i].cname);
-    for (int s = 0; s < gs.n_segs; s++) { buf_free(gs.bufs[s]); free(gs.bufs[s]); }
+    gs_free(&gs);
+    g_gs_nmem = 0;
     ctx->n_sub_holes = saved_holes;
     return ok;
+}
+
+/* ===== G4: cross-function / mutual recursion (shared group driver) ===== */
+
+static bool gs_is_pure_accessor(const Expr *e) {
+    if (!e || e->kind != EX_CALL || e->as.call_.fn_expr) return false;
+    Binding *fb = e->as.call_.fn_binding;
+    const char *nm = (fb && fb->name) ? fb->name->name : NULL;
+    static const char *const pure[] = { "ok?", "err?", "ok-val", "err-val", "some?", "none?", NULL };
+    for (int i = 0; nm && pure[i]; i++) if (strcmp(nm, pure[i]) == 0) return true;
+    return false;
+}
+
+/* Collect the distinct trampoline-candidate callees (direct calls resolvable to
+ * a top-level FnDef, excluding the pure accessors) reachable in e, descending
+ * into catch-unwind thunk bodies. */
+static void gs_callees(const Expr *e, FnDef **out, int *n, int cap) {
+    if (!e || *n >= cap) return;
+    if (e->kind == EX_CALL && !e->as.call_.fn_expr && !gs_is_pure_accessor(e)) {
+        Binding *fb = e->as.call_.fn_binding;
+        FnDef *g = (fb && fb->source_fn_def) ? fb->source_fn_def : NULL;
+        if (g) {
+            bool seen = false;
+            for (int i = 0; i < *n; i++) if (out[i] == g) seen = true;
+            if (!seen && *n < cap) out[(*n)++] = g;
+        }
+        for (uint32_t i = 0; i < e->as.call_.n_args; i++) gs_callees(e->as.call_.args[i], out, n, cap);
+        return;
+    }
+    if (e->kind == EX_CATCH_UNWIND) {
+        FnDef *tf = gs_thunk_fn(e);
+        if (tf && tf->body) gs_callees(tf->body, out, n, cap);
+        return;
+    }
+    switch (e->kind) {
+        case EX_IF: gs_callees(e->as.if_.cond, out, n, cap); gs_callees(e->as.if_.then_, out, n, cap);
+                    gs_callees(e->as.if_.else_or_null, out, n, cap); break;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++) { gs_callees(e->as.let_.bindings[i].init, out, n, cap); }
+            gs_callees(e->as.let_.body, out, n, cap); break;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++) { gs_callees(e->as.do_.items[i], out, n, cap); }
+            break;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++) { gs_callees(e->as.builtin.args[i], out, n, cap); }
+            break;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) { gs_callees(e->as.call_.args[i], out, n, cap); }
+            break;
+        case EX_CAST:       gs_callees(e->as.cast_.expr, out, n, cap); break;
+        case EX_ASCRIBE:    gs_callees(e->as.ascribe_.inner, out, n, cap); break;
+        case EX_PANIC:      gs_callees(e->as.panic_.payload, out, n, cap); break;
+        case EX_PANIC_WITH: gs_callees(e->as.panic_with_.payload, out, n, cap); break;
+        default: break;
+    }
+}
+
+/* Compute the trampolined group containing fd: the greatest set of basic-eligible
+ * functions, reachable from fd via calls, such that every member's user-calls
+ * target only members (or pure accessors) and the group as a whole reaches a
+ * catch-unwind.  Returns the member count (fd first) or 0 if fd is not a valid
+ * group member.  Leaves g_gs_* cleared. */
+static int gs_find_group(EmitCtx *ctx, FnDef *fd, FnDef **group) {
+    FnDef *cand[GS_MAXMEM]; int nc = 0;
+    cand[nc++] = fd;
+    for (int i = 0; i < nc; i++) {
+        FnDef *cs[64]; int ncs = 0;
+        gs_callees(cand[i]->body, cs, &ncs, 64);
+        for (int j = 0; j < ncs; j++) {
+            if (!gs_basic_ok(ctx, cs[j])) continue;
+            bool seen = false;
+            for (int k = 0; k < nc; k++) if (cand[k] == cs[j]) seen = true;
+            if (!seen) { if (nc >= GS_MAXMEM) return 0; cand[nc++] = cs[j]; }
+        }
+    }
+    /* Refine to a fixpoint: drop any member whose body is not structurally
+     * handled under the current member set (e.g. it calls a non-member). */
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        g_gs_nmem = nc;
+        for (int i = 0; i < nc; i++) g_gs_mem[i] = cand[i];
+        for (int i = 0; i < nc; i++) {
+            if (!gs_stmt_ok(cand[i]->body, cand[i])) {
+                for (int k = i; k < nc - 1; k++) cand[k] = cand[k + 1];
+                nc--; i--; changed = true;
+            }
+        }
+        g_gs_nmem = 0;
+    }
+    bool has_fd = false;
+    for (int i = 0; i < nc; i++) if (cand[i] == fd) has_fd = true;
+    if (!has_fd || nc < 1) return 0;
+    g_gs_nmem = nc;
+    for (int i = 0; i < nc; i++) g_gs_mem[i] = cand[i];
+    bool has_catch = false;
+    for (int i = 0; i < nc; i++) if (gs_has_catch(cand[i]->body, cand[i])) has_catch = true;
+    g_gs_nmem = 0;
+    if (!has_catch) return 0;
+    for (int i = 0; i < nc; i++) group[i] = cand[i];
+    return nc;
+}
+
+/* Registry of emitted group drivers (reset per module in emit_module). */
+typedef struct {
+    FnDef *mem[GS_MAXMEM]; int n_mem;
+    int entry[GS_MAXMEM];
+    TypeKind ret[GS_MAXMEM];
+    const char *retctype[GS_MAXMEM];
+    char name[40];
+    int max_arity;
+} GsGroup;
+static GsGroup g_cu_groups[64];
+static int g_n_cu_groups;
+static int g_cu_driver_ctr;
+
+void gs_reset_group_registry(void) { g_n_cu_groups = 0; g_cu_driver_ctr = 0; }
+
+/* Emit the shared driver function for a built group into pending_handler_fns
+ * (so it lands at file scope before any member shim). */
+static void gs_emit_group_driver(EmitCtx *ctx, Buf *file, GsCtx *gs,
+                                 const char *name, int maxar) {
+    Buf *out = ctx->pending_handler_fns ? ctx->pending_handler_fns : file;
+    buf_printf(out, "static int64_t %s(int __pc", name);
+    for (int a = 0; a < maxar; a++) buf_printf(out, ", int64_t __a%d", a);
+    buf_puts(out, ") {\n");
+    int bi = 1;
+    for (int i = 0; i < gs->n_vars; i++) {
+        indent_buf(out, bi);
+        buf_printf(out, "%s %s = 0;\n", gs->vars[i].ctype, gs->vars[i].cname);
+    }
+    /* Seed the entering member's params from the __a bit-slots. */
+    indent_buf(out, bi); buf_puts(out, "switch (__pc) {\n");
+    for (int m = 0; m < gs->n_mem; m++) {
+        indent_buf(out, bi + 1);
+        buf_printf(out, "case %d: {\n", gs->mem_entry_tag[m]);
+        for (uint8_t p = 0; p < gs->mem[m]->n_params; p++) {
+            int vi = gs->mem_pbase[m] + p;
+            char slot[16]; snprintf(slot, sizeof slot, "__a%u", (unsigned)p);
+            char *rs = sc_restore_expr(gs->vars[vi].ctype, gs->vars[vi].kind, slot);
+            indent_buf(out, bi + 2); buf_printf(out, "%s = %s;\n", gs->vars[vi].cname, rs); free(rs);
+        }
+        indent_buf(out, bi + 2); buf_puts(out, "break; }\n");
+    }
+    indent_buf(out, bi); buf_puts(out, "}\n");
+    indent_buf(out, bi); buf_puts(out, "tur_cont *__k = (tur_cont*)malloc(sizeof(tur_cont));\n");
+    indent_buf(out, bi); buf_puts(out, "__k->tag = 0; __k->boundary = 0; __k->next = 0;\n");
+    indent_buf(out, bi); buf_puts(out, "int64_t __v = 0;\n");
+    gs_emit_driver(gs, out, bi, /*done_typed=*/false);
+    buf_puts(out, "}\n");
+}
+
+/* Emit fd as a member of a cross-function trampolined group: ensure the group's
+ * shared driver exists, then emit fd's body as a shim into that driver.  Returns
+ * false (nothing emitted) on overflow. */
+static bool emit_group_member(EmitCtx *ctx, Buf *file, FnDef *fd, TypeKind result_kind,
+                              FnDef **group, int ng) {
+    GsGroup *g = NULL;
+    for (int i = 0; i < g_n_cu_groups && !g; i++)
+        for (int j = 0; j < g_cu_groups[i].n_mem; j++)
+            if (g_cu_groups[i].mem[j] == fd) { g = &g_cu_groups[i]; break; }
+
+    if (!g) {
+        if (g_n_cu_groups >= 64) return false;
+        /* The shared driver is at file scope, inside no closure/defer/handle/gen
+         * body: clear the capture context so member params resolve to plain
+         * driver locals, not env-slot accesses (captures share the outer binding,
+         * so a catch thunk that captures a param re-emits it as that local). */
+        struct Closure *sv_closure = ctx->closure;
+        const char *sv_envname = ctx->env_var_name;
+        Binding **sv_fnparams = ctx->fn_params; uint8_t sv_nfnparams = ctx->n_fn_params;
+        Binding **sv_defer = ctx->defer_captures; uint8_t sv_ndefer = ctx->n_defer_captures;
+        Binding **sv_handle = ctx->handle_captures; uint32_t sv_nhandle = ctx->n_handle_captures;
+        const char *sv_genvar = ctx->gen_var_name;
+        ctx->closure = NULL; ctx->env_var_name = NULL;
+        ctx->fn_params = NULL; ctx->n_fn_params = 0;
+        ctx->defer_captures = NULL; ctx->n_defer_captures = 0;
+        ctx->handle_captures = NULL; ctx->n_handle_captures = 0;
+        ctx->gen_var_name = NULL;
+        GsCtx gs; memset(&gs, 0, sizeof gs);
+        gs.ctx = ctx; gs.fd = group[0]; gs.base_ind = 1;
+        gs.n_mem = ng;
+        int maxar = 0;
+        for (int m = 0; m < ng; m++) {
+            gs.mem[m] = group[m];
+            gs.mem_entry_tag[m] = 1 + m;
+            gs.mem_ret[m] = group[m]->return_type.kind;
+            gs.mem_retctype[m] = emit_type_c_name(ctx, group[m]->return_type);
+            if (group[m]->n_params > maxar) maxar = group[m]->n_params;
+        }
+        gs.next_tag = ng + 1;
+        uint8_t sh = ctx->n_sub_holes; ctx->n_sub_holes = 0;
+        g_gs_nmem = ng; for (int m = 0; m < ng; m++) g_gs_mem[m] = group[m];
+        bool ok = gs_build(&gs);
+        if (!ok) { gs_free(&gs); ctx->n_sub_holes = sh; g_gs_nmem = 0; return false; }
+        char name[40]; snprintf(name, sizeof name, "__cu_group_%d", g_cu_driver_ctr++);
+        gs_emit_group_driver(ctx, file, &gs, name, maxar);
+        g = &g_cu_groups[g_n_cu_groups++];
+        g->n_mem = ng; g->max_arity = maxar;
+        snprintf(g->name, sizeof g->name, "%s", name);
+        for (int m = 0; m < ng; m++) {
+            g->mem[m] = group[m]; g->entry[m] = gs.mem_entry_tag[m];
+            g->ret[m] = gs.mem_ret[m]; g->retctype[m] = gs.mem_retctype[m];
+        }
+        gs_free(&gs); ctx->n_sub_holes = sh; g_gs_nmem = 0;
+        ctx->closure = sv_closure; ctx->env_var_name = sv_envname;
+        ctx->fn_params = sv_fnparams; ctx->n_fn_params = sv_nfnparams;
+        ctx->defer_captures = sv_defer; ctx->n_defer_captures = sv_ndefer;
+        ctx->handle_captures = sv_handle; ctx->n_handle_captures = sv_nhandle;
+        ctx->gen_var_name = sv_genvar;
+    }
+
+    int mi = -1;
+    for (int j = 0; j < g->n_mem; j++) if (g->mem[j] == fd) mi = j;
+    if (mi < 0) return false;
+
+    /* Shim: __cu_group_N(entry, <this fn's args as bit-slots>, 0-fill). */
+    Buf call; buf_init(&call);
+    buf_printf(&call, "%s(%d", g->name, g->entry[mi]);
+    for (uint8_t p = 0; p < fd->n_params; p++) {
+        char *cn = atom_var(ctx, fd->params[p]);
+        char *sv = sc_save_expr(fd->param_types[p].kind, cn);
+        buf_printf(&call, ", %s", sv);
+        free(cn); free(sv);
+    }
+    for (int p = fd->n_params; p < g->max_arity; p++) buf_puts(&call, ", 0");
+    buf_putc(&call, ')');
+    buf_putc(&call, '\0');
+    char *rv = sc_restore_expr(ctx->current_fn_ret_ctype, result_kind, call.data);
+    indent_buf(file, ctx->indent);
+    buf_printf(file, "return %s;\n", rv);
+    free(rv); buf_free(&call);
+    return true;
 }
 
 /* ------------ Phase 2: function emission ------------ */
@@ -2129,8 +2449,17 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
          * a hard limit is hit. */
         did_general = emit_stackless_general_body(ctx, file, fd, result_kind);
     }
+    /* G4 (cross-function / mutual recursion): a function that cross-calls other
+     * trampolined members lowers as a shim into a shared group driver. */
+    if (!did_general && !prereq6_synthesized_body && !m2b_carrier_synth &&
+        g_opt_stackless_catch_unwind && !ctx->current_abi_specialization &&
+        gs_basic_ok(ctx, fd) && sc_scalar_kind(result_kind) && ctx->current_fn_ret_ctype) {
+        FnDef *group[GS_MAXMEM];
+        int ng = gs_find_group(ctx, fd, group);
+        if (ng >= 2) did_general = emit_group_member(ctx, file, fd, result_kind, group, ng);
+    }
     if (did_general) {
-        /* whole body emitted by the general splitter */
+        /* whole body emitted by the general splitter / group shim */
     } else if (prereq6_synthesized_body) {
         /* Prereq 6: the function body was already emitted as a synthesized
          * wrapper above (heap-spill + carrier helper call + cast back to

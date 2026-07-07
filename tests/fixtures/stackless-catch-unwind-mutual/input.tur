@@ -1,0 +1,21 @@
+;; G4 (compiled-catch-unwind-general-lowering-plan): cross-function / MUTUAL
+;; recursion.  `ping` and `pong` call each other across a catch-unwind boundary;
+;; the single-function splitter can't express this (a cross-call is not a
+;; self-call).  Both are lowered as shims into ONE shared group driver, so the
+;; ping<->pong cycle runs with a flat C stack.  Native (flag off) keeps a live
+;; frame per level and SIGSEGVs deep; ping(n) = 1 + n (recursion discarded).
+(defn ping [n : int] : int
+  (if (= n 0)
+    0
+    (do (catch-unwind (fn [] : int (pong (- n 1))))
+        (+ 1 n))))
+
+(defn pong [n : int] : int
+  (if (= n 0)
+    0
+    (do (catch-unwind (fn [] : int (ping (- n 1))))
+        (+ 2 n))))
+
+(defn main [] : int
+  (println (ping 500000))
+  0)

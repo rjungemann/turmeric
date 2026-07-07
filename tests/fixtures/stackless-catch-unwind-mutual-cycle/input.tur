@@ -1,0 +1,20 @@
+;; G4 (compiled-catch-unwind-general-lowering-plan): a three-function recursion
+;; cycle a -> b -> c -> a where only `a` establishes the catch-unwind boundary
+;; and `b`/`c` recurse non-tail.  All three join one shared group driver (the
+;; catch requirement is per-GROUP, not per-function), so the cycle is flat-stack.
+;; a(n) = 1 + n (the recursion under a's catch is discarded).
+(defn a [n : int] : int
+  (if (= n 0)
+    0
+    (do (catch-unwind (fn [] : int (b (- n 1))))
+        (+ 1 n))))
+
+(defn b [n : int] : int
+  (if (= n 0) 0 (+ 10 (c (- n 1)))))
+
+(defn c [n : int] : int
+  (if (= n 0) 0 (+ 100 (a (- n 1)))))
+
+(defn main [] : int
+  (println (a 300000))
+  0)

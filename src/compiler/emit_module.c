@@ -8758,6 +8758,7 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.gen_var_name = NULL;
     ctx.gen_struct_type = NULL;
     ctx.gen_hdr_emitted = false;
+    gs_reset_group_registry();
     ctx.abi_specializations = NULL;
     ctx.n_abi_specializations = 0;
     ctx.cap_abi_specializations = 0;
@@ -10643,6 +10644,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     ctx.gen_var_name = NULL;
     ctx.gen_struct_type = NULL;
     ctx.gen_hdr_emitted = false;
+    gs_reset_group_registry();
     ctx.abi_specializations = NULL;
     ctx.n_abi_specializations = 0;
     ctx.cap_abi_specializations = 0;
