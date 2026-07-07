@@ -787,6 +787,14 @@ static int64_t tur_catch_panic_of_box(int expected_type, int64_t thunk) {
     }
 }
 
+static void tur_result_box_free(int64_t __r) __attribute__((unused));
+static void tur_result_box_free(int64_t __r) {
+    tur_result_box_t *__b = (tur_result_box_t *)(intptr_t)__r;
+    if (!__b) return;
+    if (!__b->is_ok) free((tur_panic_payload *)(intptr_t)__b->err_val);
+    free(__b);
+}
+
 /* Phase 19: Algebraic effect handler chain */
 typedef struct { bool consumed; void *origin_fiber; } TurContK;
 
@@ -5710,6 +5718,7 @@ static int64_t cu_hyrec(int64_t n) {
             __t56->n = n;
             void *__t57 = __t56;
             int64_t __catch_result_58 = tur_catch_unwind_box((int64_t)(intptr_t)__t57);
+            tur_result_box_free((int64_t)(intptr_t)__catch_result_58);
             int64_t __t59;
             __t59 = n;
             __t55 = __t59;

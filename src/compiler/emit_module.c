@@ -6641,6 +6641,26 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "}\n\n");
     }
 
+    /* catch-unwind-result-box-leak: free a caught Result box that codegen knows is
+     * discarded (statement-position catch-unwind / catch-panic-of).  The box is the
+     * tur_result_box_t minted by tur_box_ok/tur_box_err in the *_box helpers above;
+     * an err box additionally owns the caught tur_panic_payload record (moved out of
+     * global_panic_payload), so free that record too.  We free only the payload
+     * *struct*, never payload->value: catch-unwind's payload value is opaque -- a
+     * user may panic-with an inline scalar (e.g. (void*)42) or a value owned
+     * elsewhere, so freeing it is a nonheap-free / double-free hazard (this is why
+     * panic_payload_free, which does free(p->value), is not reused here).  An ok
+     * box's ok_val is likewise a plain value/handle the box never owned -- left
+     * untouched.  Only called where the value provably does not escape, so this is
+     * not a premature free. */
+    buf_puts(out, "static void tur_result_box_free(int64_t __r) __attribute__((unused));\n");
+    buf_puts(out, "static void tur_result_box_free(int64_t __r) {\n");
+    buf_puts(out, "    tur_result_box_t *__b = (tur_result_box_t *)(intptr_t)__r;\n");
+    buf_puts(out, "    if (!__b) return;\n");
+    buf_puts(out, "    if (!__b->is_ok) free((tur_panic_payload *)(intptr_t)__b->err_val);\n");
+    buf_puts(out, "    free(__b);\n");
+    buf_puts(out, "}\n\n");
+
     /* Phase B2 / MS1: Cloneable continuation runtime (inline in generated C).
      * Emitted when the program uses cloneable-shift/reset OR any ^multishot handler
      * (which uses tur_cloneable_cont wrappers + tur_continuation_snapshot), or when
