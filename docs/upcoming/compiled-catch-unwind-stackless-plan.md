@@ -199,11 +199,15 @@ experiment, guard them.
 These follow-ons do not widen a single axis; they converge on one general
 lowering (split an arbitrary body into continuation segments + give the caught
 result a lifetime), which subsumes and retires this scaffold. That work is
-scoped in its own plan:
-[compiled-catch-unwind-general-lowering-plan.md](./compiled-catch-unwind-general-lowering-plan.md).
+**complete and archived**:
+[compiled-catch-unwind-general-lowering-plan.md](../archive/compiled-catch-unwind-general-lowering-plan.md)
+(G1-G7). The scaffold this plan describes is deleted.
 
-Graduation still needs the general lowering plus the fiber/effect/cancel
-integration `panic-return-signal` also defers; until then it stays a prototype.
+Graduation (deleting both flags, always-on) is scoped in
+[catch-unwind-graduation-plan.md](./catch-unwind-graduation-plan.md): the D4
+sign-off probes at 1,000,000 plus the non-catch hot-path neutrality check. The
+fiber/effect/cancel integration `panic-return-signal` deferred is resolved by the
+general lowering's G7 (separation + native-matching panic precedence).
 
 The next concrete step is generalising eligibility (multi-param, then arbitrary
 catch-crossing bodies via real segment splitting), validated against the

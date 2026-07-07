@@ -4,6 +4,31 @@ category: Planning
 description: The general segment-splitting lowering that retires the pattern-matched stackless-catch-unwind scaffold (slices 1-5). It splits an arbitrary catch-crossing function body into heap-continuation segments driven by a trampoline, so any nesting of catch-unwind runs with a flat C stack -- not just the fixed self-recursive grammar. Also resolves the result-box ownership the scaffold leaks, cross-function/mutual recursion, non-scalar params, and the fiber/effect/cancel integration that panic-return-signal defers.
 ---
 
+> **ARCHIVED -- COMPLETE (G1-G7).** The general segment-splitting lowering
+> landed: the grammar-matched scaffold is deleted; the general splitter handles
+> arbitrary catch-crossing bodies (multiple catch sites, non-tail self-recursion,
+> nested if/let/do), cross-function / mutual recursion (G4), value extraction +
+> live err branch (G5), int64-carrier / opaque / by-value-aggregate params (G6),
+> and a native-matching panic precedence with effects/fibers/cancel separated by
+> eligibility (G7). Suite: 1971 passed, 0 failed; every catch-unwind fixture
+> differential-checked against native. Each phase's per-phase status note is
+> retained below.
+>
+> **Follow-ons (spun out to `docs/upcoming/`):**
+> - [catch-unwind-aggregate-returns-plan.md](../upcoming/catch-unwind-aggregate-returns-plan.md)
+>   -- aggregate RETURN types (widen the driver's `__v` value register).
+> - [catch-unwind-byref-aggregate-params-plan.md](../upcoming/catch-unwind-byref-aggregate-params-plan.md)
+>   -- by-const-pointer aggregate params (e.g. a `Result` param).
+> - [catch-unwind-aggregate-followups-plan.md](../upcoming/catch-unwind-aggregate-followups-plan.md)
+>   -- aggregate param + group combo, and the bounded panic-unwind box leak.
+> - [catch-unwind-graduation-plan.md](../upcoming/catch-unwind-graduation-plan.md)
+>   -- D4 / cross-function sign-off probes at 1,000,000, non-catch hot-path
+>   neutrality, and graduating both experiment flags to always-on.
+>
+> **Open finding:** the native `tur_catch_unwind_box` result-box + payload leak
+> is tracked in
+> [docs/reported/catch-unwind-result-box-leak.md](../reported/catch-unwind-result-box-leak.md).
+
 # General stackless catch-unwind lowering (D3-G) -- Plan
 
 ## Why this exists

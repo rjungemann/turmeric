@@ -78,10 +78,13 @@ RC-drop the box once its last use is past)? Options:
 - Arena the boxes + payloads per catch-tree and release the arena when the
   outermost boundary pops.
 
-For the `stackless-catch-unwind` lowering specifically, the same fix is tracked
-as the deferred "no-leak" item under **G5** in
-`docs/upcoming/compiled-catch-unwind-general-lowering-plan.md`; the stackless
+For the `stackless-catch-unwind` lowering specifically, the same fix was the
+deferred "no-leak" item under G5 of the now-archived general lowering
+(`docs/archive/compiled-catch-unwind-general-lowering-plan.md`); the stackless
 resume segment is a natural place to RC-drop the box once it is known not to
 escape, but it inherits this native behavior today on purpose (native is the
 correctness oracle for drop behavior, and a premature free would be a
-use-after-free the moment the box escapes as the function's `Result`).
+use-after-free the moment the box escapes as the function's `Result`). Note this
+result-box leak is distinct from the stackless-only aggregate-box panic-unwind
+leak scoped in
+`docs/upcoming/catch-unwind-aggregate-followups-plan.md` (Part B).
