@@ -6,8 +6,21 @@ description: Two smaller follow-ons to the completed general lowering (archived)
 
 # Stackless catch-unwind -- aggregate+group combo and the panic-unwind box leak -- Plan
 
+> **Resolved.** Both parts landed. Part A: by-value and by-const-ptr aggregate
+> params now ride the shared group driver (the shim boxes the arg by pointer, the
+> seed switch copies it into the by-value / re-homed param local and frees the
+> transfer box); every member's by-ptr params are registered as pbp so an
+> accessor on any member's aggregate param reads the pointer directly instead of
+> materializing a struct temp. Part B: a node-carried `uint32_t aggr_mask`
+> (recommendation (2)) frees each popped self-call resume node's aggregate boxes
+> during a panic unwind. Validated by `stackless-catch-unwind-mutual-aggregate-param`,
+> `stackless-catch-unwind-mutual-byref-aggregate-param`, and
+> `stackless-catch-unwind-panic-unwind-aggregate-leak` (the last confirmed under
+> valgrind: the per-level 16-byte aggregate boxes no longer leak on the panic
+> path, leaving only the pre-existing result-box baseline).
+
 Two independent, small follow-ons from the general lowering
-([archived plan](../archive/compiled-catch-unwind-general-lowering-plan.md), G6).
+([archived plan](./compiled-catch-unwind-general-lowering-plan.md), G6).
 Grouped because both are aggregate-heap-box housekeeping and both are narrow.
 
 ---

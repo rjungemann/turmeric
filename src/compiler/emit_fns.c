@@ -1059,6 +1059,12 @@ static const Expr *gs_leftmost(GsCtx *gs, const Expr *e) {
 }
 
 static void gs_save(GsCtx *gs, Buf *b, const char *node) {
+    /* Record which saved[] slots hold a malloc'd aggregate box so a panic that
+     * pops this node without running its resume can free them (Part B). */
+    uint32_t amask = 0;
+    for (int i = 0; i < gs->n_vars; i++) if (gs->vars[i].is_aggr) amask |= ((uint32_t)1 << i);
+    indent_buf(b, gs->cur_ind);
+    buf_printf(b, "%s->aggr_mask = 0x%xu;\n", node, amask);
     for (int i = 0; i < gs->n_vars; i++) {
         if (gs->vars[i].is_aggr) {
             /* Heap-box a copy of the aggregate; the slot holds the box pointer.
@@ -1506,7 +1512,10 @@ static bool gs_build(GsCtx *gs) {
 static void gs_emit_driver(GsCtx *gs, Buf *out, int bi, bool done_typed) {
     indent_buf(out, bi); buf_puts(out, "for (;;) {\n");
     indent_buf(out, bi + 1); buf_puts(out, "if (tur_panicking) {\n");
-    indent_buf(out, bi + 2); buf_puts(out, "while (__k->boundary == 0 && __k->tag != 0) { tur_cont *__pk = __k->next; free(__k); __k = __pk; }\n");
+    /* Part B: a self-call resume node (boundary == 0) is popped here without
+     * running its resume, so free any aggregate-param boxes it owns (aggr_mask)
+     * before the node itself -- otherwise they leak on the panic path. */
+    indent_buf(out, bi + 2); buf_puts(out, "while (__k->boundary == 0 && __k->tag != 0) { for (int __i = 0; __i < TUR_SC_MAXN; __i++) if (__k->aggr_mask & ((uint32_t)1 << __i)) free((void*)(intptr_t)__k->saved[__i]); tur_cont *__pk = __k->next; free(__k); __k = __pk; }\n");
     /* G7: the panic escaped every boundary this trampoline owns (all popped in
      * their resume segments, so tur_handler_chain now reflects the OUTER chain
      * at entry).  Mirror native tur_panic's precedence: an outer handler ->
@@ -1576,7 +1585,7 @@ static bool emit_stackless_general_body(EmitCtx *ctx, Buf *file, FnDef *fd,
             buf_printf(file, "%s %s = 0;\n", gs.vars[i].ctype, gs.vars[i].cname);
         }
         indent_buf(file, bi); buf_puts(file, "tur_cont *__k = (tur_cont*)malloc(sizeof(tur_cont));\n");
-        indent_buf(file, bi); buf_puts(file, "__k->tag = 0; __k->boundary = 0; __k->next = 0;\n");
+        indent_buf(file, bi); buf_puts(file, "__k->tag = 0; __k->boundary = 0; __k->next = 0; __k->aggr_mask = 0;\n");
         indent_buf(file, bi); buf_puts(file, "int __pc = 1;\n");
         indent_buf(file, bi); buf_puts(file, "int64_t __v = 0;\n");
         gs_emit_driver(&gs, file, bi, /*done_typed=*/true);
@@ -1718,9 +1727,32 @@ static void gs_emit_group_driver(EmitCtx *ctx, Buf *file, GsCtx *gs,
     int bi = 1;
     for (int i = 0; i < gs->n_vars; i++) {
         indent_buf(out, bi);
-        buf_printf(out, "%s %s = 0;\n", gs->vars[i].ctype, gs->vars[i].cname);
+        if (gs->vars[i].is_ref) {
+            /* by-const-ptr aggregate: a pointer local plus a stable pointee
+             * buffer (the seed / descend / resume re-home the boxed pointee into
+             * the buffer and point the local at it -- mirrors the single-function
+             * path's function-scope `<cname>__agg`).  Point it at a zeroed buffer
+             * from the start, not null: gs_save boxes EVERY member's aggregate
+             * param each descend (reading THROUGH this pointer), so a not-yet-
+             * seeded member's param must be a valid (if unused) pointee, never a
+             * null deref. */
+            buf_printf(out, "%s %s__agg; memset(&%s__agg, 0, sizeof(%s)); const %s *%s = &%s__agg;\n",
+                       gs->vars[i].ctype, gs->vars[i].cname, gs->vars[i].cname, gs->vars[i].ctype,
+                       gs->vars[i].ctype, gs->vars[i].cname, gs->vars[i].cname);
+        } else if (gs->vars[i].is_aggr) {
+            /* by-value aggregate: a zeroed struct local, seeded from its transfer
+             * box on entry and saved/restored by the heap-box path across
+             * descends.  Zero-init so a save of a not-yet-seeded member's param
+             * boxes defined bytes. */
+            buf_printf(out, "%s %s; memset(&%s, 0, sizeof(%s));\n",
+                       gs->vars[i].ctype, gs->vars[i].cname, gs->vars[i].cname, gs->vars[i].ctype);
+        } else {
+            buf_printf(out, "%s %s = 0;\n", gs->vars[i].ctype, gs->vars[i].cname);
+        }
     }
-    /* Seed the entering member's params from the __a bit-slots. */
+    /* Seed the entering member's params from the __a bit-slots.  An aggregate
+     * param arrives as a heap box pointer (the shim malloc'd + memcpy'd it); copy
+     * it into the by-value local and free the transfer box. */
     indent_buf(out, bi); buf_puts(out, "switch (__pc) {\n");
     for (int m = 0; m < gs->n_mem; m++) {
         indent_buf(out, bi + 1);
@@ -1728,14 +1760,23 @@ static void gs_emit_group_driver(EmitCtx *ctx, Buf *file, GsCtx *gs,
         for (uint8_t p = 0; p < gs->mem[m]->n_params; p++) {
             int vi = gs->mem_pbase[m] + p;
             char slot[16]; snprintf(slot, sizeof slot, "__a%u", (unsigned)p);
-            char *rs = sc_restore_expr(gs->vars[vi].ctype, gs->vars[vi].kind, slot);
-            indent_buf(out, bi + 2); buf_printf(out, "%s = %s;\n", gs->vars[vi].cname, rs); free(rs);
+            indent_buf(out, bi + 2);
+            if (gs->vars[vi].is_ref) {
+                buf_printf(out, "{ void *__ab = (void*)(intptr_t)%s; memcpy(&%s__agg, __ab, sizeof(%s)); free(__ab); %s = &%s__agg; }\n",
+                           slot, gs->vars[vi].cname, gs->vars[vi].ctype, gs->vars[vi].cname, gs->vars[vi].cname);
+            } else if (gs->vars[vi].is_aggr) {
+                buf_printf(out, "{ void *__ab = (void*)(intptr_t)%s; memcpy(&%s, __ab, sizeof(%s)); free(__ab); }\n",
+                           slot, gs->vars[vi].cname, gs->vars[vi].ctype);
+            } else {
+                char *rs = sc_restore_expr(gs->vars[vi].ctype, gs->vars[vi].kind, slot);
+                buf_printf(out, "%s = %s;\n", gs->vars[vi].cname, rs); free(rs);
+            }
         }
         indent_buf(out, bi + 2); buf_puts(out, "break; }\n");
     }
     indent_buf(out, bi); buf_puts(out, "}\n");
     indent_buf(out, bi); buf_puts(out, "tur_cont *__k = (tur_cont*)malloc(sizeof(tur_cont));\n");
-    indent_buf(out, bi); buf_puts(out, "__k->tag = 0; __k->boundary = 0; __k->next = 0;\n");
+    indent_buf(out, bi); buf_puts(out, "__k->tag = 0; __k->boundary = 0; __k->next = 0; __k->aggr_mask = 0;\n");
     indent_buf(out, bi); buf_puts(out, "int64_t __v = 0;\n");
     gs_emit_driver(gs, out, bi, /*done_typed=*/false);
     buf_puts(out, "}\n");
@@ -1746,14 +1787,14 @@ static void gs_emit_group_driver(EmitCtx *ctx, Buf *file, GsCtx *gs,
  * false (nothing emitted) on overflow. */
 static bool emit_group_member(EmitCtx *ctx, Buf *file, FnDef *fd, TypeKind result_kind,
                               FnDef **group, int ng) {
-    /* G6: the shared-driver shim marshals params through int64 __a slots, which
-     * cannot carry a by-value aggregate.  A group with an aggregate-param member
-     * bails to normal emission (aggregate params ride only the single-function
-     * path). */
+    /* Part A: an aggregate param now rides the shared driver too -- it travels
+     * by pointer across the shim/seed boundary (a heap box the driver takes
+     * ownership of), then behaves like the single-function aggregate param
+     * inside the driver.  A member that is otherwise un-rideable still bails. */
     for (int m = 0; m < ng; m++)
         for (uint8_t i = 0; i < group[m]->n_params; i++) {
             TypeKind k; const char *ct; bool aggr; bool ref;
-            if (!gs_param_class(ctx, group[m]->param_types[i], &k, &ct, &aggr, &ref) || aggr)
+            if (!gs_param_class(ctx, group[m]->param_types[i], &k, &ct, &aggr, &ref))
                 return false;
         }
     GsGroup *g = NULL;
@@ -1791,11 +1832,25 @@ static bool emit_group_member(EmitCtx *ctx, Buf *file, FnDef *fd, TypeKind resul
         }
         gs.next_tag = ng + 1;
         uint8_t sh = ctx->n_sub_holes; ctx->n_sub_holes = 0;
+        /* Register EVERY member's by-const-ptr params as pbp so an accessor /
+         * field access on any member's aggregate param (not just the triggering
+         * member's) reads the pointer directly instead of materializing it into a
+         * struct temp (which would assign a `const T *` into a `T` -- a cc error).
+         * The single-member prologue in emit_fn_def only records the triggering
+         * member's params. */
+        uint8_t sv_npbp = ctx->n_pbp_params; ctx->n_pbp_params = 0;
+        for (int m = 0; m < ng; m++)
+            for (uint8_t i = 0; i < group[m]->n_params && ctx->n_pbp_params < 16; i++) {
+                TypeKind k; const char *ct; bool aggr; bool ref;
+                if (gs_param_class(ctx, group[m]->param_types[i], &k, &ct, &aggr, &ref) && ref)
+                    ctx->pbp_param_ptrs[ctx->n_pbp_params++] = group[m]->params[i];
+            }
         g_gs_nmem = ng; for (int m = 0; m < ng; m++) g_gs_mem[m] = group[m];
         bool ok = gs_build(&gs);
-        if (!ok) { gs_free(&gs); ctx->n_sub_holes = sh; g_gs_nmem = 0; return false; }
+        if (!ok) { gs_free(&gs); ctx->n_sub_holes = sh; ctx->n_pbp_params = sv_npbp; g_gs_nmem = 0; return false; }
         char name[40]; snprintf(name, sizeof name, "__cu_group_%d", g_cu_driver_ctr++);
         gs_emit_group_driver(ctx, file, &gs, name, maxar);
+        ctx->n_pbp_params = sv_npbp;
         g = &g_cu_groups[g_n_cu_groups++];
         g->n_mem = ng; g->max_arity = maxar;
         snprintf(g->name, sizeof g->name, "%s", name);
@@ -1815,14 +1870,29 @@ static bool emit_group_member(EmitCtx *ctx, Buf *file, FnDef *fd, TypeKind resul
     for (int j = 0; j < g->n_mem; j++) if (g->mem[j] == fd) mi = j;
     if (mi < 0) return false;
 
-    /* Shim: __cu_group_N(entry, <this fn's args as bit-slots>, 0-fill). */
+    /* Shim: __cu_group_N(entry, <this fn's args as bit-slots>, 0-fill).  An
+     * aggregate arg travels by pointer: box a heap copy here whose ownership the
+     * driver's seed takes (it copies into the by-value param local and frees the
+     * box).  A by-const-ptr aggregate (is_ref) arg is already a pointer, so read
+     * through it; a by-value aggregate needs its address taken. */
     Buf call; buf_init(&call);
     buf_printf(&call, "%s(%d", g->name, g->entry[mi]);
     for (uint8_t p = 0; p < fd->n_params; p++) {
         char *cn = atom_var(ctx, fd->params[p]);
-        char *sv = sc_save_expr(fd->param_types[p].kind, cn);
-        buf_printf(&call, ", %s", sv);
-        free(cn); free(sv);
+        TypeKind k; const char *ct; bool aggr; bool ref;
+        gs_param_class(ctx, fd->param_types[p], &k, &ct, &aggr, &ref);
+        if (aggr) {
+            char bn[32]; snprintf(bn, sizeof bn, "__ab%u", (unsigned)p);
+            indent_buf(file, ctx->indent);
+            buf_printf(file, "void *%s = malloc(sizeof(%s)); memcpy(%s, %s%s, sizeof(%s));\n",
+                       bn, ct, bn, ref ? "" : "&", cn, ct);
+            buf_printf(&call, ", (int64_t)(intptr_t)%s", bn);
+        } else {
+            char *sv = sc_save_expr(fd->param_types[p].kind, cn);
+            buf_printf(&call, ", %s", sv);
+            free(sv);
+        }
+        free(cn);
     }
     for (int p = fd->n_params; p < g->max_arity; p++) buf_puts(&call, ", 0");
     buf_putc(&call, ')');

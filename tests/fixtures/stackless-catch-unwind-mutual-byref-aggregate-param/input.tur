@@ -1,0 +1,27 @@
+;; Part A (catch-unwind-aggregate-followups-plan): a by-CONST-POINTER aggregate
+;; param riding the CROSS-FUNCTION group driver.  `(Result int int)` is wide
+;; enough to pass as `const tur_adt_Result__int__int *` (type_struct_pass_by_ptr),
+;; so the C param is a BORROW into the caller's frame -- a frame the trampoline
+;; collapses.  Across the shim/seed boundary the pointee is materialized on the
+;; heap (the shim memcpys THROUGH the borrow into a box; the shared driver's seed
+;; re-homes it into a stable `acc__agg` buffer and re-points the param at it),
+;; then interior descends heap-box it exactly as the single-function path does.
+;; `ping` and `pong` mutually recurse across a catch-unwind, observing `acc` via
+;; the pure `ok?` accessor.  Native (flag off) SIGSEGVs deep; the group lowering
+;; runs flat.  ping(acc, n) = n + (ok? acc ? 1 : 0).
+(defn ping [acc : (Result int int) n : int] : int
+  (if (= n 0)
+    (if (ok? acc) 100 200)
+    (do (catch-unwind (fn [] : int (pong acc (- n 1))))
+        (+ n (if (ok? acc) 1 0)))))
+
+(defn pong [acc : (Result int int) n : int] : int
+  (if (= n 0)
+    (if (ok? acc) 300 400)
+    (do (catch-unwind (fn [] : int (ping acc (- n 1))))
+        (+ n (if (ok? acc) 2 0)))))
+
+(defn main [] : int
+  (println (ping (ok 7) 200000))
+  (println (ping (err 9) 6))
+  0)

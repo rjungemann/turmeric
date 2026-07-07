@@ -1,0 +1,26 @@
+;; Part A (catch-unwind-aggregate-followups-plan): a by-value AGGREGATE param
+;; riding the CROSS-FUNCTION group driver.  `ping` and `pong` mutually recurse
+;; across a catch-unwind while threading a `(Option int)` aggregate param.  The
+;; aggregate is `struct { bool is_some; int64_t value }` -- too wide for the
+;; trampoline's int64 __a shim slot, so it travels by pointer: the shim boxes a
+;; heap copy, the shared driver's seed copies it into the by-value param local
+;; and frees the box, and interior descends heap-box it the same way the
+;; single-function path does.  `acc` is observed via the pure `some?` accessor.
+;; Native (flag off) keeps a live frame per level and SIGSEGVs deep; the group
+;; lowering runs flat.  ping(acc, n) = n + (some? acc ? 1 : 0).
+(defn ping [acc : (Option int) n : int] : int
+  (if (= n 0)
+    (if (some? acc) 100 200)
+    (do (catch-unwind (fn [] : int (pong acc (- n 1))))
+        (+ n (if (some? acc) 1 0)))))
+
+(defn pong [acc : (Option int) n : int] : int
+  (if (= n 0)
+    (if (some? acc) 300 400)
+    (do (catch-unwind (fn [] : int (ping acc (- n 1))))
+        (+ n (if (some? acc) 2 0)))))
+
+(defn main [] : int
+  (println (ping (some 7) 200000))
+  (println (ping (none) 6))
+  0)

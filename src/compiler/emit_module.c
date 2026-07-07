@@ -6401,7 +6401,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         experiment_warn_if_used("stackless-catch-unwind");
         buf_printf(out, "#define TUR_SC_MAXP %d\n", TUR_SC_MAXP);
         buf_printf(out, "#define TUR_SC_MAXN %d\n", TUR_SC_MAXN);
-        buf_puts(out, "typedef struct tur_cont { int tag; tur_handler_node *boundary; struct tur_cont *next; int64_t saved[TUR_SC_MAXN]; } tur_cont;\n");
+        /* aggr_mask: bit i set => saved[i] holds a malloc'd aggregate-param box
+         * (see gs_save).  A node freed WITHOUT running its resume -- the panic
+         * unwind popping self-call resume nodes -- frees those boxes by this
+         * mask, so the boxes do not leak on the panic path. */
+        buf_puts(out, "typedef struct tur_cont { int tag; tur_handler_node *boundary; struct tur_cont *next; int64_t saved[TUR_SC_MAXN]; uint32_t aggr_mask; } tur_cont;\n");
         /* Float params round-trip through the int64 saved[] slots by BIT
          * reinterpretation (an intptr_t cast would truncate the value). */
         buf_puts(out, "static inline int64_t tur_sc_bits_f64(double d){ int64_t i; memcpy(&i,&d,sizeof i); return i; }\n");

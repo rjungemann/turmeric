@@ -617,7 +617,7 @@ static __thread tur_handler_node *tur_handler_chain = NULL;
 static __thread int tur_panicking = 0;
 #define TUR_SC_MAXP 8
 #define TUR_SC_MAXN 32
-typedef struct tur_cont { int tag; tur_handler_node *boundary; struct tur_cont *next; int64_t saved[TUR_SC_MAXN]; } tur_cont;
+typedef struct tur_cont { int tag; tur_handler_node *boundary; struct tur_cont *next; int64_t saved[TUR_SC_MAXN]; uint32_t aggr_mask; } tur_cont;
 static inline int64_t tur_sc_bits_f64(double d){ int64_t i; memcpy(&i,&d,sizeof i); return i; }
 static inline double  tur_sc_f64_from_bits(int64_t i){ double d; memcpy(&d,&i,sizeof d); return d; }
 static inline int64_t tur_sc_bits_f32(float f){ int64_t i=0; memcpy(&i,&f,sizeof f); return i; }
@@ -5987,11 +5987,11 @@ static int64_t __cu_group_0(int __pc, int64_t __a0) {
    break; }
  }
  tur_cont *__k = (tur_cont*)malloc(sizeof(tur_cont));
- __k->tag = 0; __k->boundary = 0; __k->next = 0;
+ __k->tag = 0; __k->boundary = 0; __k->next = 0; __k->aggr_mask = 0;
  int64_t __v = 0;
  for (;;) {
   if (tur_panicking) {
-   while (__k->boundary == 0 && __k->tag != 0) { tur_cont *__pk = __k->next; free(__k); __k = __pk; }
+   while (__k->boundary == 0 && __k->tag != 0) { for (int __i = 0; __i < TUR_SC_MAXN; __i++) if (__k->aggr_mask & ((uint32_t)1 << __i)) free((void*)(intptr_t)__k->saved[__i]); tur_cont *__pk = __k->next; free(__k); __k = __pk; }
    if (__k->tag == 0) {
     free(__k);
     if (tur_handler_chain) return INT64_C(0);
@@ -6010,6 +6010,7 @@ static int64_t __cu_group_0(int __pc, int64_t __a0) {
      __b186->parent = tur_handler_chain; tur_handler_chain = __b186;
      tur_cont *__n186 = (tur_cont*)malloc(sizeof(tur_cont));
      __n186->tag = 5; __n186->boundary = __b186; __n186->next = __k;
+     __n186->aggr_mask = 0x0u;
      __n186->saved[0] = (int64_t)(intptr_t)(n_1267);
      __n186->saved[1] = (int64_t)(intptr_t)(n_1273);
      __n186->saved[2] = (int64_t)(intptr_t)(n_1274);
@@ -6047,6 +6048,7 @@ static int64_t __cu_group_0(int __pc, int64_t __a0) {
     } else {
      tur_cont *__n188 = (tur_cont*)malloc(sizeof(tur_cont));
      __n188->tag = 6; __n188->boundary = 0; __n188->next = __k;
+     __n188->aggr_mask = 0x0u;
      __n188->saved[0] = (int64_t)(intptr_t)(n_1267);
      __n188->saved[1] = (int64_t)(intptr_t)(n_1273);
      __n188->saved[2] = (int64_t)(intptr_t)(n_1274);
@@ -6077,6 +6079,7 @@ static int64_t __cu_group_0(int __pc, int64_t __a0) {
     } else {
      tur_cont *__n189 = (tur_cont*)malloc(sizeof(tur_cont));
      __n189->tag = 7; __n189->boundary = 0; __n189->next = __k;
+     __n189->aggr_mask = 0x0u;
      __n189->saved[0] = (int64_t)(intptr_t)(n_1267);
      __n189->saved[1] = (int64_t)(intptr_t)(n_1273);
      __n189->saved[2] = (int64_t)(intptr_t)(n_1274);

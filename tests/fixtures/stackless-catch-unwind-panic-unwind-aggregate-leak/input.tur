@@ -1,0 +1,22 @@
+;; Part B (catch-unwind-aggregate-followups-plan): a panic that unwinds PAST
+;; self-call resume nodes carrying a by-value AGGREGATE param, exercising the
+;; aggregate-box leak fix.  `f` catches at the top (n=5), then recurses
+;; NON-TAIL -- `(+ 1 (f acc (- n 1)))` -- down toward n=0, each level heap-boxing
+;; the `(Option int)` param `acc` into a self-call resume node (boundary == 0).
+;; At n=0 the thunk panics; the panic unwinds through every self-call resume node
+;; up to the catch boundary at n=5.  Those nodes are popped WITHOUT running their
+;; resume, so their aggregate boxes must be freed by the node's aggr_mask -- else
+;; one box per unwound level leaks.  The catch turns the panic into an err, so
+;; f(acc, 5) = 111 (err branch); `acc` is observed via `some?` to keep it live.
+(defn f [acc : (Option int) n : int] : int
+  (if (= n 5)
+    (let [r (catch-unwind (fn [] : int (f acc 4)))]
+      (if (err? r) (if (some? acc) 111 112) 222))
+    (if (= n 0)
+      (panic-with 5)
+      (+ 1 (f acc (- n 1))))))
+
+(defn main [] : int
+  (println (f (some 7) 5))
+  (println (f (none) 5))
+  0)
