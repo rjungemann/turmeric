@@ -196,6 +196,12 @@ experiment, guard them.
 - The general segment-splitting emit for arbitrary catch-crossing functions
   (this slice special-cases one grammar rather than splitting an arbitrary body).
 
+These follow-ons do not widen a single axis; they converge on one general
+lowering (split an arbitrary body into continuation segments + give the caught
+result a lifetime), which subsumes and retires this scaffold. That work is
+scoped in its own plan:
+[compiled-catch-unwind-general-lowering-plan.md](./compiled-catch-unwind-general-lowering-plan.md).
+
 Graduation still needs the general lowering plus the fiber/effect/cancel
 integration `panic-return-signal` also defers; until then it stays a prototype.
 
