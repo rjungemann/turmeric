@@ -444,7 +444,19 @@ static bool lens_is_simple_for_pathb(const FnDef *lens) {
     if (e->kind != EX_CALL) return false;
     const Expr *da = e->as.call_.dict_arg;
     if (!da || da->kind != EX_DICT) return false;
-    return strcmp(da->as.dict_.method_name, "fmap") == 0;
+    if (strcmp(da->as.dict_.method_name, "fmap") != 0) return false;
+    /* wide-copy-struct-functor-show-dict: Path B monomorphizes ONLY the functor
+     * tyvar `f`; it cannot resolve any OTHER constraint the lens carries (e.g. a
+     * `^Show a` its mapper dispatches on the still-abstract element tyvar `a`).
+     * Such a dispatch is lowered to a runtime dict the mapper env expects as a
+     * dict-clone parameter -- which the by-value mono body has no slot for, so
+     * emitting it references an undeclared dict binding and `cc` fails.  A van
+     * Laarhoven lens always carries `^Functor f`; MORE than one constraint means
+     * an extra dict Path B cannot thread, so defer such lenses to Path A (the
+     * dict-clone, which threads every constraint dict by value/carrier and is
+     * correct, just not zero-overhead for the wide functor). */
+    if (lens->constraints.n_constraints > 1) return false;
+    return true;
 }
 
 /* CB1 (van-laarhoven-composed-byvalue-plan): peel a type to its head constructor

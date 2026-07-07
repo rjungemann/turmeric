@@ -6329,10 +6329,22 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * build the call frame, bind args). */
                 uint32_t param_offset     = cl->skip_env_param ? 1u : 0u;
                 uint32_t effective_params = (uint32_t)fn->n_params - param_offset;
-                if (effective_params != n) {
+                /* forall-dict-pass interpreter parity: a call THROUGH a rank-2
+                 * poly fn param (is_poly_call) prepends one implicit dictionary
+                 * actual per constraint on the poly param's type -- the compiled
+                 * path binds these to the callee's dict-clone params.  The
+                 * tree-walker instead dispatches typeclass methods by the
+                 * receiver's runtime value (gde_reresolve_method_by_value), so
+                 * those leading dict actuals are redundant here.  Skip them and
+                 * bind only the callee's declared value params.  See
+                 * docs/archive/turi-interp-forall-dict-wide-consumer-arity.md. */
+                uint32_t arg_base = 0;
+                if (top->expr->as.call_.is_poly_call && n > effective_params)
+                    arg_base = n - effective_params;
+                if (effective_params != n - arg_base) {
                     cur = turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
                                       fn->binding ? fn->binding->name->name : "<fn>",
-                                      (unsigned)effective_params, (unsigned)n);
+                                      (unsigned)effective_params, (unsigned)(n - arg_base));
                     free(acc); len--; break;
                 }
                 if (env->step_fuel_limit > 0) {  /* SB3: step-fuel, as the retired eval_apply_inner charged it */
@@ -6343,9 +6355,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     env->step_fuel--;
                 }
                 EvalFrame *call_frame = eval_frame_new(env, (EvalFrame *)cl->captured);
-                for (uint32_t i = 0; i < n; i++)
+                for (uint32_t i = 0; i < effective_params; i++)
                     frame_bind(env, call_frame,
-                               fn->params[param_offset + i]->name->name, acc[i]);
+                               fn->params[param_offset + i]->name->name,
+                               acc[arg_base + i]);
                 free(acc);
                 /* generic-dict-dispatch: pin this call's concrete tyvar
                  * substitutions onto the callee frame so a baked-representative
@@ -7489,8 +7502,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             return turi_error("eval: malloc failed for async fiber stack");
         }
 #endif
-        /* turi-value-pool-residual-sites: track for reclaim in turi_env_free. */
-        turi_env_track_coro_stack(env, fiber->stack, TURI_ASYNC_STACK_SIZE);
+        /* turi-value-pool-residual-sites: track for reclaim in turi_env_free.
+         * turi-async-fiber-stack-reclaim: keep the node so the scheduler can
+         * munmap this stack early once the fiber reaches TURI_FIBER_DONE,
+         * instead of holding it until env teardown (O(N) growth otherwise). */
+        fiber->stack_node =
+            turi_env_track_coro_stack(env, fiber->stack, TURI_ASYNC_STACK_SIZE);
 
 #if !defined(__EMSCRIPTEN__) && defined(__APPLE__)
 #  pragma clang diagnostic push

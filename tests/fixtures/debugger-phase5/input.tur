@@ -18,6 +18,16 @@
 ;; payload comes from `seed` (a volatile inline-C value) so the optimizer cannot
 ;; constant-fold the option away.  Driven by tests/run-phase5-gdb.sh.
 ;;
+;; The Result parameter is a CONCRETE instantiation `(Result int cstr)`, which
+;; monomorphizes to the by-value carrier struct `tur_adt_Result__int__cstr`
+;; (matching how `(Option A)` monomorphizes to `tur_adt_Option__int` at A=int).
+;; A BARE, unparameterized `Result` is a generic ADT and is passed as the int64
+;; carrier (a boxed pointer), which a pretty-printer cannot dispatch on -- so the
+;; by-value-aggregate inspection point this fixture asserts requires the concrete
+;; form.  The pretty-printer's `^(tur_adt_)?Result(__.*)?$` regex matches the
+;; monomorphized name.  See
+;; docs/archive/phase5-gdb-bare-result-lowered-to-int64-carrier.md.
+;;
 ;; See docs/upcoming/debugger-plan.md (Phase 5) and
 ;; docs/upcoming/debugger-native-types-plan.md.
 
@@ -27,10 +37,10 @@
   return v;
   ```)
 
-(defn parse [b : int] : Result
+(defn parse [b : int] : (Result int cstr)
   (if (= b 0) (err "zero") (ok (* b 2))))
 
-(defn probe [A] [o : (Option A) r : Result] : (Option A)
+(defn probe [A] [o : (Option A) r : (Result int cstr)] : (Option A)
   o)
 
 (defn main [] : int

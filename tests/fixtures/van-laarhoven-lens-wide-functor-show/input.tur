@@ -1,0 +1,40 @@
+;; wide-copy-struct-functor-show-dict: a van Laarhoven lens over a WIDE `:copy`
+;; struct functor (`Identity`, two words by value -- not the one-int64 defopaque
+;; carrier) whose mapper dispatches a SECOND constraint (`Show a`) on the element
+;; tyvar.  The wide-functor by-value monomorphization (Path B) specializes only
+;; the functor tyvar `f`, so it cannot resolve the `^Show a` dict -- emitting the
+;; mono body referenced an undeclared dict binding and `cc` failed.  Such a lens
+;; (more than the lone `^Functor f` constraint) now defers to the dict-clone
+;; (Path A), which threads every constraint dict.  Exercised at BOTH `Show int`
+;; and `Show bool` so the threaded dict must dispatch per instance.  No inline-C,
+;; so this runs under the interpreter harness too.
+(defstruct Identity :copy [a] (wrapped : a))
+(defn mk-id  [A] [x : A]            : (Identity A) (make-struct Identity :wrapped x))
+(defn run-id [A] [i : (Identity A)] : A            (.wrapped i))
+(definstance Functor [Identity]
+  (fmap [i g] (mk-id (g (run-id i)))))
+
+(defclass Show [a] (show [x] : cstr))
+(definstance Show [int]  (show [x] : cstr (if (< x 0) "neg" "nonneg")))
+(definstance Show [bool] (show [x] : cstr (if x "true" "false")))
+
+;; deep-lens carries TWO constraints: ^Functor f and ^Show a.
+(defn deep-lens [^f a] [^Functor f ^Show a g : (-> a (f a)) s : a] : (f cstr)
+  (fmap (g s) (fn [x : a] : cstr (show x))))
+
+(defn use-int
+    [l (forall [(f :: * -> *) a] [(Functor f) (Show a)] (-> (-> a (f a)) a (f cstr)))
+     s : int] : cstr
+  (run-id (l (fn [x : int] : (Identity int) (mk-id x)) s)))
+
+(defn use-bool
+    [l (forall [(f :: * -> *) a] [(Functor f) (Show a)] (-> (-> a (f a)) a (f cstr)))
+     s : bool] : cstr
+  (run-id (l (fn [x : bool] : (Identity bool) (mk-id x)) s)))
+
+(defn main [] : int
+  (println (use-int  deep-lens 7))
+  (println (use-int  deep-lens -5))
+  (println (use-bool deep-lens true))
+  (println (use-bool deep-lens false))
+  0)
