@@ -6400,6 +6400,12 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         experiment_warn_if_used("stackless-catch-unwind");
         buf_printf(out, "#define TUR_SC_MAXP %d\n", TUR_SC_MAXP);
         buf_puts(out, "typedef struct tur_cont { int tag; tur_handler_node *boundary; struct tur_cont *next; int64_t saved[TUR_SC_MAXP]; } tur_cont;\n");
+        /* Float params round-trip through the int64 saved[] slots by BIT
+         * reinterpretation (an intptr_t cast would truncate the value). */
+        buf_puts(out, "static inline int64_t tur_sc_bits_f64(double d){ int64_t i; memcpy(&i,&d,sizeof i); return i; }\n");
+        buf_puts(out, "static inline double  tur_sc_f64_from_bits(int64_t i){ double d; memcpy(&d,&i,sizeof d); return d; }\n");
+        buf_puts(out, "static inline int64_t tur_sc_bits_f32(float f){ int64_t i=0; memcpy(&i,&f,sizeof f); return i; }\n");
+        buf_puts(out, "static inline float   tur_sc_f32_from_bits(int64_t i){ float f; memcpy(&f,&i,sizeof f); return f; }\n");
     }
     emit_rt_global(out, shared, "tur_panic_payload *global_panic_payload;\n", "tur_panic_payload *global_panic_payload");
     buf_puts(out, "static tur_panic_payload *panic_payload_new(int, void *, const char *, int);\n");

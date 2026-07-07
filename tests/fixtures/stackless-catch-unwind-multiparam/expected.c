@@ -617,6 +617,10 @@ static __thread tur_handler_node *tur_handler_chain = NULL;
 static __thread int tur_panicking = 0;
 #define TUR_SC_MAXP 8
 typedef struct tur_cont { int tag; tur_handler_node *boundary; struct tur_cont *next; int64_t saved[TUR_SC_MAXP]; } tur_cont;
+static inline int64_t tur_sc_bits_f64(double d){ int64_t i; memcpy(&i,&d,sizeof i); return i; }
+static inline double  tur_sc_f64_from_bits(int64_t i){ double d; memcpy(&d,&i,sizeof d); return d; }
+static inline int64_t tur_sc_bits_f32(float f){ int64_t i=0; memcpy(&i,&f,sizeof f); return i; }
+static inline float   tur_sc_f32_from_bits(int64_t i){ float f; memcpy(&f,&i,sizeof f); return f; }
 static tur_panic_payload *global_panic_payload;
 static tur_panic_payload *panic_payload_new(int, void *, const char *, int);
 static void tur_panic(const char *msg) {
@@ -5978,13 +5982,13 @@ static int64_t f(int64_t n, int64_t acc) {
          } else {
           if (__k->tag == 0) {
            if (tur_panicking) { fprintf(stderr, "panic (uncaught, stackless)\n"); fflush(NULL); abort(); }
-           free(__k); return (int64_t)(intptr_t)__v;
+           free(__k); return (int64_t)(intptr_t)(__v);
           }
           tur_handler_chain = __k->boundary->parent; free(__k->boundary);
           if (tur_panicking) { tur_panicking = 0; tur_panic_in_progress = 0;
            if (global_panic_payload) { panic_payload_free(global_panic_payload); global_panic_payload = 0; } }
-          n = (int64_t)(intptr_t)__k->saved[0];
-          acc = (int64_t)(intptr_t)__k->saved[1];
+          n = (int64_t)(intptr_t)(__k->saved[0]);
+          acc = (int64_t)(intptr_t)(__k->saved[1]);
           __v = (int64_t)(intptr_t)((acc) + (n));
           tur_cont *__kk = __k->next; free(__k); __k = __kk; __act = 1;
          }

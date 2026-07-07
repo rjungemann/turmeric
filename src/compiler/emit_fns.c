@@ -491,13 +491,34 @@ static bool su_simple_expr(const Expr *e) {
     }
 }
 
-/* Scalar kinds the trampoline can round-trip through an int64 `saved[]` slot by
- * plain reinterpretation (no ownership / RC / by-value-aggregate concerns):
- * machine int, bool, and non-owning pointer-repr values (cstr, raw ptr).  Float
- * is excluded here (it needs bit reinterpretation, not an intptr_t cast) and is
- * a separate follow-on.  Carrier/opaque/aggregate types are excluded on purpose. */
+/* Scalar kinds the trampoline can round-trip through an int64 `saved[]` slot:
+ * machine int, bool, non-owning pointer-repr values (cstr, raw ptr) -- via an
+ * intptr_t cast -- and float/float32 -- via BIT reinterpretation.  Carrier /
+ * opaque / aggregate types are excluded on purpose (ownership / RC concerns). */
 static bool sc_scalar_kind(TypeKind k) {
-    return k == TY_INT || k == TY_BOOL || k == TY_CSTR || k == TY_PTR_VOID;
+    return k == TY_INT || k == TY_BOOL || k == TY_CSTR || k == TY_PTR_VOID ||
+           k == TY_FLOAT || k == TY_FLOAT32;
+}
+
+/* Build "the int64 bits of VAL" for a scalar of kind K (caller frees). */
+static char *sc_save_expr(TypeKind k, const char *val) {
+    const char *fn = (k == TY_FLOAT) ? "tur_sc_bits_f64"
+                   : (k == TY_FLOAT32) ? "tur_sc_bits_f32" : NULL;
+    size_t n = strlen(val) + 64;
+    char *s = (char *)malloc(n);
+    if (fn) snprintf(s, n, "%s(%s)", fn, val);
+    else    snprintf(s, n, "(int64_t)(intptr_t)(%s)", val);
+    return s;
+}
+
+/* Build "the value of C type CTYPE recovered from the int64 SAVED" (caller frees). */
+static char *sc_restore_expr(const char *ctype, TypeKind k, const char *saved) {
+    size_t n = strlen(saved) + (ctype ? strlen(ctype) : 0) + 64;
+    char *s = (char *)malloc(n);
+    if (k == TY_FLOAT)        snprintf(s, n, "tur_sc_f64_from_bits(%s)", saved);
+    else if (k == TY_FLOAT32) snprintf(s, n, "tur_sc_f32_from_bits(%s)", saved);
+    else                      snprintf(s, n, "(%s)(intptr_t)(%s)", ctype, saved);
+    return s;
 }
 
 /* D3: recognise the self-recursive catch-unwind grammar and pull out its
@@ -576,6 +597,7 @@ static bool stackless_catch_eligible(EmitCtx *ctx, const Expr *e, FnDef *fd,
  * onto a heap `tur_cont` chain, so nesting is bounded by heap, not the C stack.
  * (Matches docs/upcoming/prototypes/d3-stackless-catch-unwind.c.) */
 static void emit_stackless_catch_body(EmitCtx *ctx, Buf *file, FnDef *fd,
+                                      TypeKind result_kind,
                                       const Expr *cond, const Expr *base,
                                       const Expr *call, const Expr *after) {
     uint8_t np = fd->n_params;
@@ -598,7 +620,8 @@ static void emit_stackless_catch_body(EmitCtx *ctx, Buf *file, FnDef *fd,
         SI(2); buf_printf(file, "if (%s) {\n", cv); free(cv);
         ctx->indent = base_ind + 3;
         char *bv = emit_value(ctx, file, base);
-        SI(3); buf_printf(file, "__v = (int64_t)(intptr_t)(%s); __act = 1;\n", bv); free(bv);
+        char *bsv = sc_save_expr(result_kind, bv);
+        SI(3); buf_printf(file, "__v = %s; __act = 1;\n", bsv); free(bv); free(bsv);
         SI(2); buf_puts(file, "} else {\n");
         ctx->indent = base_ind + 3;
         SI(3); buf_puts(file, "tur_handler_node *__b = (tur_handler_node*)malloc(sizeof(tur_handler_node));\n");
@@ -607,7 +630,8 @@ static void emit_stackless_catch_body(EmitCtx *ctx, Buf *file, FnDef *fd,
         SI(3); buf_puts(file, "__k2->tag = 1; __k2->boundary = __b; __k2->next = __k;\n");
         /* Save the level's params (as int64 bits) BEFORE reassigning them. */
         for (uint8_t i = 0; i < np; i++) {
-            SI(3); buf_printf(file, "__k2->saved[%d] = (int64_t)(intptr_t)(%s);\n", i, p[i]);
+            char *sv = sc_save_expr(fd->param_types[i].kind, p[i]);
+            SI(3); buf_printf(file, "__k2->saved[%d] = %s;\n", i, sv); free(sv);
         }
         /* Compute all recursion args into temps (their own types, via
          * __auto_type) BEFORE reassigning params, since a later arg may read an
@@ -629,7 +653,8 @@ static void emit_stackless_catch_body(EmitCtx *ctx, Buf *file, FnDef *fd,
         ctx->indent = base_ind + 2;
         SI(2); buf_puts(file, "if (__k->tag == 0) {\n");
         SI(3); buf_puts(file, "if (tur_panicking) { fprintf(stderr, \"panic (uncaught, stackless)\\n\"); fflush(NULL); abort(); }\n");
-        SI(3); buf_printf(file, "free(__k); return (%s)(intptr_t)__v;\n", ctx->current_fn_ret_ctype);
+        char *retv = sc_restore_expr(ctx->current_fn_ret_ctype, result_kind, "__v");
+        SI(3); buf_printf(file, "free(__k); return %s;\n", retv); free(retv);
         SI(2); buf_puts(file, "}\n");
         /* AFTER segment: pop this level's boundary, consume any caught panic,
          * restore the level's params, compute AFTER, return to the parent cont. */
@@ -637,10 +662,13 @@ static void emit_stackless_catch_body(EmitCtx *ctx, Buf *file, FnDef *fd,
         SI(2); buf_puts(file, "if (tur_panicking) { tur_panicking = 0; tur_panic_in_progress = 0;\n");
         SI(3); buf_puts(file, "if (global_panic_payload) { panic_payload_free(global_panic_payload); global_panic_payload = 0; } }\n");
         for (uint8_t i = 0; i < np; i++) {
-            SI(2); buf_printf(file, "%s = (%s)(intptr_t)__k->saved[%d];\n", p[i], emit_type_c_name(ctx, fd->param_types[i]), i);
+            char slot[48]; snprintf(slot, sizeof slot, "__k->saved[%d]", i);
+            char *rs = sc_restore_expr(emit_type_c_name(ctx, fd->param_types[i]), fd->param_types[i].kind, slot);
+            SI(2); buf_printf(file, "%s = %s;\n", p[i], rs); free(rs);
         }
         char *av = emit_value(ctx, file, after);
-        SI(2); buf_printf(file, "__v = (int64_t)(intptr_t)(%s);\n", av); free(av);
+        char *asv = sc_save_expr(result_kind, av);
+        SI(2); buf_printf(file, "__v = %s;\n", asv); free(av); free(asv);
         SI(2); buf_puts(file, "tur_cont *__kk = __k->next; free(__k); __k = __kk; __act = 1;\n");
     }
     SI(1); buf_puts(file, "}\n");
@@ -1519,7 +1547,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         /* D3 (stackless-catch-unwind): emit the self-recursive catch-unwind
          * function as a heap-continuation trampoline instead of native
          * recursion, so nested catch-unwind runs with a flat C stack. */
-        emit_stackless_catch_body(ctx, file, fd, __su_cond, __su_base, __su_call, __su_after);
+        emit_stackless_catch_body(ctx, file, fd, result_kind, __su_cond, __su_base, __su_call, __su_after);
     } else if (prereq6_synthesized_body) {
         /* Prereq 6: the function body was already emitted as a synthesized
          * wrapper above (heap-spill + carrier helper call + cast back to

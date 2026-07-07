@@ -1,0 +1,15 @@
+;;; D3 (compiled-catch-unwind-stackless-plan): FLOAT params in the stackless
+;;; self-recursive catch-unwind trampoline.  A :float param cannot ride an int64
+;;; saved[] slot by truncating cast, so it round-trips by BIT reinterpretation
+;;; (tur_sc_bits_f64 / tur_sc_f64_from_bits).  The recursion result is discarded,
+;;; so the top call's AFTER decides the value: (+ 2.5 0.25) = 2.75.  500000 folds
+;;; off the native stack.
+(defn f [n : int acc : float] : float
+  (if (= n 0)
+    acc
+    (do (catch-unwind (fn [] : float (f (- n 1) (+ acc 1.0))))
+        (+ acc 0.25))))
+
+(defn main [] : int
+  (println (f 500000 2.5))
+  0)

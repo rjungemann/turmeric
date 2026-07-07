@@ -122,7 +122,7 @@ target on the self-contained `cu-rec`/`cu-rec-p` shapes; escalate to (b) only if
 the async/effect D3 work is being built concurrently and the shared machine is
 cheaper than two lowerings.
 
-## Slices 1-3 (landed) -- codegen behind `--enable=stackless-catch-unwind`
+## Slices 1-4 (landed) -- codegen behind `--enable=stackless-catch-unwind`
 
 The codegen of direction (a) is wired behind `--enable=stackless-catch-unwind`
 (implies `panic-return-signal`; registered in `EXPERIMENTS[]`, fires TUR-W0060).
@@ -134,9 +134,11 @@ params** and emits the trampoline directly:
   (if COND BASE (do (catch-unwind (fn [] (f RECUR0 ... RECURk))) AFTER)))
 ```
 
-where each `Si` and `R` is an int64-representable scalar: `int`, `bool`, `cstr`,
-or a raw pointer (`sc_scalar_kind`; float is a follow-on -- it needs bit
-reinterpretation, not an `intptr_t` cast).
+where each `Si` and `R` is a scalar the trampoline can round-trip through an
+int64 `saved[]` slot (`sc_scalar_kind`): `int` / `bool` / `cstr` / raw pointer
+(via an `intptr_t` cast) and `float` / `float32` (via BIT reinterpretation --
+`tur_sc_bits_f64` / `tur_sc_f64_from_bits`, and the f32 pair -- so the value
+survives the int64 slot instead of being truncated by a cast).
 
 - **Eligibility** (`stackless_catch_eligible`, emit_fns.c): 1..8 scalar params
   and a scalar return with a known C return type, no ABI-spec / dict-clone, body
@@ -148,32 +150,31 @@ reinterpretation, not an `intptr_t` cast).
   Everything else falls back to the normal (D1/D1a) emission.
 - **Emit** (`emit_stackless_catch_body`): a `for(;;)` driver over a heap
   `tur_cont` chain (emitted in the preamble; `saved[TUR_SC_MAXP]` holds the
-  level's params as int64 bits). Params round-trip through the slots by
-  `(int64_t)(intptr_t)` on save and `(ctype)(intptr_t)` on restore; the return
-  value likewise via the recorded `current_fn_ret_ctype`. RECUR args are
-  computed into `__auto_type` temps (their own types) before any param is
-  reassigned, since a later arg may read an earlier param. Reuses the D1
-  `tur_handler_node` chain for the boundary and the D1a `tur_panicking` signal
-  for a caught panic.
+  level's params as int64 bits). Per-type save/restore go through `sc_save_expr`
+  / `sc_restore_expr` (intptr_t cast for int/bool/ptr, `tur_sc_*` bit helpers
+  for float); the return value likewise via the recorded `current_fn_ret_ctype`.
+  RECUR args are computed into `__auto_type` temps (their own types) before any
+  param is reassigned, since a later arg may read an earlier param. Reuses the
+  D1 `tur_handler_node` chain for the boundary and the D1a `tur_panicking`
+  signal for a caught panic.
 - **Integration**: a first branch in `emit_fn_def`'s body-emit chain, so all the
   signature / param / ctx setup is reused and only the body is swapped.
 
 Measured (compiled backend): with the flag, single-param `cu-rec` runs
 **10,000,000** deep and **1,000,000 under a 64 KiB stack `ulimit`** (flat native
-stack); two-param and `bool`-param variants also run **1,000,000 under a 64 KiB
-stack**, and every shape matches the native result at small depth
-(differential-checked, incl. `bool`/`cstr` params and returns). The default
-(flag-off) codegen is byte-identical and `bash tests/run.sh` stays green (1955).
-Fixtures `stackless-catch-unwind-deep` (1 int param),
-`stackless-catch-unwind-multiparam` (2 int params), and
-`stackless-catch-unwind-scalar` (int + `bool` param), each with a `flags` file
-enabling the experiment, guard them.
+stack); two-param, `bool`-param and `float`-param variants also run
+**1,000,000 under a 64 KiB stack**, and every shape matches the native result at
+small depth (differential-checked, incl. `bool`/`cstr`/`float`/`float32` params
+and returns). The default (flag-off) codegen is byte-identical and
+`bash tests/run.sh` stays green (1957). Fixtures `stackless-catch-unwind-deep`
+(1 int param), `-multiparam` (2 int params), `-scalar` (int + `bool`) and
+`-float` (int + `float`), each with a `flags` file enabling the experiment,
+guard them.
 
 ### What is NOT done yet (follow-on)
 
-- Float / carrier / opaque / aggregate params and returns (float needs bit
-  reinterpretation via a union or a `tur_bits_*` helper; carrier/opaque have
-  ownership/RC concerns, so they stay excluded).
+- Carrier / opaque / aggregate params and returns (ownership / RC concerns, so
+  they stay excluded).
 - Panicking COND/BASE/RECUR/AFTER (a call is now held non-simple, so this is
   closed for the accepted grammar; a general lowering would need the driver to
   not early-return on the `panic-return-signal` check).
