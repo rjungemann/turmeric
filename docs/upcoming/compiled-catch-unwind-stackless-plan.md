@@ -1,0 +1,105 @@
+---
+title: Stackless catch-unwind in the compiled backend (D3) -- Plan
+category: Planning
+description: Phase D3 of compiled-c-crossing-tco-plan. D1 (heap handler chain) and D1a (--enable=panic-return-signal) both lifted nested catch-unwind from a SIGSEGV below 50000 to ~150000 but no further, because the wall is frame COUNT -- two live C frames per nesting level -- not the jmp_buf. This plan scopes the stackless / partial-CPS lowering of the catch-unwind boundary that removes those frames, the only thing that reaches the 200000/1,000,000 target for the nested shape.
+---
+
+# Stackless catch-unwind (D3) -- Plan
+
+## What D1 / D1a settled, and the wall they hit
+
+[compiled-c-crossing-tco-plan.md](./compiled-c-crossing-tco-plan.md):
+
+- **D1** moved handler discovery onto a thread-local chain of heap nodes that
+  each own their `jmp_buf`. Nested `cu-rec` went from SIGSEGV below 50000 to
+  ~150000.
+- **D1a** (`--enable=panic-return-signal`) replaced the `longjmp` unwind with a
+  `tur_panicking` return-path signal. Nested `cu-rec` still tops out at ~150000
+  -- *no deeper than D1*.
+
+The two together prove the wall is **frame count, not frame size**. For
+
+```
+(defn cu-rec [n :int] :int
+  (if (= n 0) 0 (do (catch-unwind (fn [] : int (cu-rec (- n 1)))) n)))
+```
+
+every nesting level holds **two live C frames** that neither the heap `jmp_buf`
+nor the return signal removes:
+
+1. `cu-rec(n)`'s own frame, live because it must `return n` *after* the
+   `catch-unwind` completes (the `catch-unwind` is in non-tail position -- there
+   is a `do ... n` after it).
+2. `tur_catch_unwind_box`'s frame, live because it must run code *after* the
+   thunk returns -- pop the handler node and box the `ok`/`err` result.
+
+`cu-catch-deep` (a single top-level catch over a deep non-tail `deep-panic`)
+already reaches 200000 under both D1 and D1a, precisely because it has *one*
+catch frame, not one per level. So D3 is specifically about the **nested**
+shape: getting the two per-level frames off the native C stack.
+
+## Why this is a backend change, not a peephole
+
+The compiled backend lowers every call to a native C call on the C stack. To
+make the `catch-unwind` continuation (`... n` after the catch; the pop+box after
+the thunk) live somewhere other than the C stack, that continuation must be
+**heap-allocated and driven by a trampoline** -- exactly the interpreter's
+driver work-stack model (DK_CATCH_UNWIND in the C1 landing), ported to compiled
+code. A trampoline is contagious: any function on a call chain that must stay
+heap-bounded has to return control to the driver instead of C-calling, so its
+own continuations become heap frames too. That is a **calling-convention
+change** for the affected functions, comparable in scope to D1 and D2 combined
+(as the parent plan notes).
+
+## Two directions (decide after prototyping)
+
+### (a) Selective CPS -- transform only functions that cross a catch boundary
+
+Identify functions that (transitively) contain a `catch-unwind` in non-tail
+position and CPS-transform *those* (and their non-tail callers up to the nearest
+boundary), leaving the rest of the program on the ordinary native-call ABI. The
+boundary between CPS'd and direct code is a shim that reifies the C continuation
+as a heap closure on entry and re-enters the trampoline.
+
+- Pro: bounded blast radius; hot non-catch code keeps the native ABI.
+- Con: the CPS/direct boundary shim is fiddly; the "which functions" analysis
+  must be conservative (a catch reachable through a higher-order call forces
+  CPS on the callee).
+
+### (b) Whole-program trampoline for the effect/async surface
+
+Fold `catch-unwind` into the same machine D3 of the parent plan will build for
+`async`/`await`/`handle` (heap-allocated continuations / a partial CPS transform
+of the effect surface). `catch-unwind` becomes one more prompt on that machine.
+
+- Pro: one mechanism for catch + effects + async; matches the interpreter's
+  unified work-stack driver.
+- Con: the largest piece; only worth it if D3-async lands the machine anyway.
+
+Recommendation: prototype (a) on `cu-rec` first (it is self-contained and
+measurable), and only escalate to (b) if the async/effect D3 work is being built
+concurrently and the shared machine is cheaper than two lowerings.
+
+## Dependencies and reuse
+
+- Builds on **D1a's return signal** as the propagation transport (a caught panic
+  is already a return-path signal; the trampoline consumes it at the reified
+  boundary instead of at a C frame). Graduating `panic-return-signal` should be
+  coordinated with this work, and D3 should extend it to the fiber/effect/cancel
+  unwinds it currently punts.
+- Reuses the **heap handler node** from D1 as the reified boundary record; the
+  node gains the heap continuation pointer the D1 bullet already anticipated
+  ("a pointer to the target continuation").
+
+## Validation / sign-off (mirrors D4)
+
+- `cu-rec` and `cu-catch-deep` at 200000 during development, then 1,000,000 for
+  the D4 sign-off, with no SIGSEGV, matching the interpreter's `eval-tco` probes.
+- `bash tests/run.sh` green with the mechanism on (once it graduates from behind
+  a flag).
+
+## Out of scope
+
+- Source-level semantics of `catch-unwind` (unchanged).
+- The `async`/`await`/`handle` continuation rewrite itself -- direction (b) only
+  *reuses* that machine if it exists; building it is the async half of D3.

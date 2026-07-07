@@ -45,6 +45,17 @@ extern bool g_dump_cps_coloring;
 /* CPS3: --cps-path flag — emit CPS wrappers for colored functions */
 extern bool g_cps_path;
 
+/* D1a (compiled-c-crossing-tco-plan): --enable=panic-return-signal.  When set,
+ * the compiled backend lowers panic propagation to a thread-local tur_panicking
+ * return-path signal instead of setjmp/longjmp: panic sets the flag and returns,
+ * every panic-capable call site checks the flag and returns early, and
+ * catch-unwind consumes it after calling the thunk.  Removes the per-boundary
+ * jmp_buf frame (a further depth win on top of the D1 heap handler chain) and
+ * makes tail calls across a catch-unwind legal.  Prototype: does NOT yet cover
+ * the fiber / effect / cancel unwinds (those still longjmp), so async programs
+ * must not enable it. */
+extern bool g_opt_panic_return_signal;
+
 /* Phase U5: unsafe linting statistics */
 extern uint32_t g_unsafe_block_count;
 extern uint32_t g_unsafe_total_lines;

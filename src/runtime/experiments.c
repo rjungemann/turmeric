@@ -81,6 +81,22 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * the always-on Path A carrier bridge (the residual by-value-propagation fix
      * is tracked in docs/upcoming/v2/van-laarhoven-composed-byvalue-plan.md).
      * The `g_opt_vl_wide_mono` bit is retired. */
+    /* panic-return-signal (D1a of compiled-c-crossing-tco-plan) -- lower panic
+     * propagation in the compiled backend to a thread-local `tur_panicking`
+     * return-path signal instead of setjmp/longjmp, so a `catch-unwind`
+     * boundary no longer pins a jmp_buf on the C stack and tail calls may cross
+     * the boundary.  PROTOTYPE: covers the direct-call panic path only; the
+     * fiber / effect / cancel unwinds still longjmp, so async programs must not
+     * enable it.  See docs/upcoming/panic-return-signal-plan.md. */
+    {
+        "panic-return-signal",
+        "compiled panic propagation via a tur_panicking return signal (no setjmp)",
+        "docs/upcoming/panic-return-signal-plan.md",
+        "0.27.0",                  /* introduced */
+        "0.31.0",                  /* expires_at (soft deadline) */
+        XF_LIFECYCLE_PROTOTYPE,
+        &g_opt_panic_return_signal,
+    },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

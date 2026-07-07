@@ -47,6 +47,9 @@ bool g_dump_cps_coloring = false;
 /* CPS3: --cps-path flag */
 bool g_cps_path = false;
 
+/* D1a (compiled-c-crossing-tco-plan): --enable=panic-return-signal */
+bool g_opt_panic_return_signal = false;
+
 /* Phase U5: Global statistics for unsafe linting */
 uint32_t g_unsafe_block_count = 0;
 uint32_t g_unsafe_total_lines = 0;

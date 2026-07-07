@@ -48,10 +48,16 @@ instead of driver-frame terms. The three phases map one-to-one.
 
 ### Phase D1 -- `catch-unwind` on a heap handler chain
 
-**Status: handler-chain step landed** (see "D1 -- what landed" below). The
-return-path-signal transport (D1a) is prototyped and measured but deliberately
-not yet wired into codegen -- the measurements below show why the payoff for
-the *nested* shape is bounded by a separate, larger piece of work.
+**Status: handler-chain step landed; D1a transport wired behind an experiment.**
+The heap handler chain is always-on (see "D1 -- what landed" below). The
+return-path-signal transport (D1a) is now implemented behind
+`--enable=panic-return-signal` (see
+[panic-return-signal-plan.md](./panic-return-signal-plan.md)); it is a prototype
+because it does not yet cover the fiber/effect/cancel unwinds and, as the
+measurements below establish, does not on its own reach the *nested* shape's
+target -- that is bounded by the frame-count wall the D3 stackless lowering
+removes (scoped in
+[compiled-catch-unwind-stackless-plan.md](./compiled-catch-unwind-stackless-plan.md)).
 
 - Add a thread-local `tur_handler_chain` -- a linked list of heap-allocated
   handler nodes, each carrying the saved defer mark, module state,
@@ -139,10 +145,21 @@ every panic-capable call to its own statement -- an ABI-wide transform with
 heavy fixture churn.
 
 Net: D1 lands the heap handler chain (a real, measured ~3x nesting-depth win and
-the payload-on-node / interleaving-correctness the plan called for); D1a's
-transport is decided (thread-local flag) but its codegen wiring is folded
-forward to sit with the D3 stackless-continuation work, since that is what the
-nested-shape 200000/1,000,000 target actually requires.
+the payload-on-node / interleaving-correctness the plan called for). D1a's
+transport is decided (thread-local flag) and now **wired behind
+`--enable=panic-return-signal`**: `panic` sets `tur_panicking` and returns, every
+panic-capable call site is A-normalized to a temp with an `if (tur_panicking)
+return <zero>` propagation check, and `catch-unwind` consumes the flag after the
+thunk (no `setjmp`). Validated: the default (flag-off) codegen is byte-identical
+(1953 fixtures green); with the flag on the `panic-*` catch fixtures keep their
+ok/err semantics and `cu-catch-deep` propagates a panic through 200000 non-tail
+frames. Measured caveat that confirms the analysis: signal-mode `cu-rec` reaches
+the *same* ~150000 as the D1 heap chain, **not deeper** -- because D1 already
+moved the `jmp_buf` off the frame, so removing `longjmp` adds no nesting depth;
+its value is eliminating `longjmp` and enabling tail-calls across the boundary
+(the D3 prerequisite), not depth. The nested-shape 200000/1,000,000 target
+requires the stackless-continuation work in
+[compiled-catch-unwind-stackless-plan.md](./compiled-catch-unwind-stackless-plan.md).
 
 ### Phase D2 -- `atomically` on a heap-anchored tx-log
 
