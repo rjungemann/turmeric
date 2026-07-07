@@ -2,7 +2,6 @@
 #include "emit_internal.h"
 #include "emit_cps.h"   /* cps-transform-plan: DK substrate prelude + wiring */
 #include "globals.h"   /* Phase I: g_emit_abi_trace */
-#include "experiments.h" /* D1a: experiment_warn_if_used(panic-return-signal) */
 #include "mangle.h"    /* tur_mangle_ident (constrained-byval witness thunks) */
 #include "mono_specs.h" /* VBM2b: by-value van Laarhoven lens mono spec registry */
 
@@ -6385,34 +6384,29 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * the handler-discovery structure the plan's D1 calls for. */
     buf_puts(out, "typedef struct tur_handler_node { jmp_buf buf; struct tur_handler_node *parent; } tur_handler_node;\n");
     emit_rt_global(out, shared, "__thread tur_handler_node *tur_handler_chain = NULL;\n", "__thread tur_handler_node *tur_handler_chain");
-    /* D1a (panic-return-signal): thread-local propagation flag.  Set by panic,
-     * checked after every panic-capable call site, consumed by catch-unwind. */
-    if (g_opt_panic_return_signal) {
-        experiment_warn_if_used("panic-return-signal");
-        emit_rt_global(out, shared, "__thread int tur_panicking = 0;\n", "__thread int tur_panicking");
-    }
-    /* G3 (compiled-catch-unwind-general-lowering): heap continuation node used
-     * by the general catch-unwind segment-splitter trampoline.  `tag` names the
-     * resume segment (0 = DONE / function return), `saved[]` (up to TUR_SC_MAXN
-     * live scalar locals) carries this level's params + hoisted let-vars +
-     * suspension result temps across a descend, and `boundary` is the D1 handler
-     * node a catch segment pops (0 for a self-call resume). */
-    if (g_opt_stackless_catch_unwind) {
-        experiment_warn_if_used("stackless-catch-unwind");
-        buf_printf(out, "#define TUR_SC_MAXP %d\n", TUR_SC_MAXP);
-        buf_printf(out, "#define TUR_SC_MAXN %d\n", TUR_SC_MAXN);
-        /* aggr_mask: bit i set => saved[i] holds a malloc'd aggregate-param box
-         * (see gs_save).  A node freed WITHOUT running its resume -- the panic
-         * unwind popping self-call resume nodes -- frees those boxes by this
-         * mask, so the boxes do not leak on the panic path. */
-        buf_puts(out, "typedef struct tur_cont { int tag; tur_handler_node *boundary; struct tur_cont *next; int64_t saved[TUR_SC_MAXN]; uint32_t aggr_mask; } tur_cont;\n");
-        /* Float params round-trip through the int64 saved[] slots by BIT
-         * reinterpretation (an intptr_t cast would truncate the value). */
-        buf_puts(out, "static inline int64_t tur_sc_bits_f64(double d){ int64_t i; memcpy(&i,&d,sizeof i); return i; }\n");
-        buf_puts(out, "static inline double  tur_sc_f64_from_bits(int64_t i){ double d; memcpy(&d,&i,sizeof d); return d; }\n");
-        buf_puts(out, "static inline int64_t tur_sc_bits_f32(float f){ int64_t i=0; memcpy(&i,&f,sizeof f); return i; }\n");
-        buf_puts(out, "static inline float   tur_sc_f32_from_bits(int64_t i){ float f; memcpy(&f,&i,sizeof f); return f; }\n");
-    }
+    /* Panic-return signal: thread-local propagation flag.  Set by panic,
+     * checked after every panic-capable call site, consumed by catch-unwind.
+     * Always-on since the panic-return-signal experiment graduated. */
+    emit_rt_global(out, shared, "__thread int tur_panicking = 0;\n", "__thread int tur_panicking");
+    /* Heap continuation node used by the general catch-unwind segment-splitter
+     * trampoline (always-on since stackless-catch-unwind graduated).  `tag`
+     * names the resume segment (0 = DONE / function return), `saved[]` (up to
+     * TUR_SC_MAXN live scalar locals) carries this level's params + hoisted
+     * let-vars + suspension result temps across a descend, and `boundary` is the
+     * handler node a catch segment pops (0 for a self-call resume). */
+    buf_printf(out, "#define TUR_SC_MAXP %d\n", TUR_SC_MAXP);
+    buf_printf(out, "#define TUR_SC_MAXN %d\n", TUR_SC_MAXN);
+    /* aggr_mask: bit i set => saved[i] holds a malloc'd aggregate-param box
+     * (see gs_save).  A node freed WITHOUT running its resume -- the panic
+     * unwind popping self-call resume nodes -- frees those boxes by this
+     * mask, so the boxes do not leak on the panic path. */
+    buf_puts(out, "typedef struct tur_cont { int tag; tur_handler_node *boundary; struct tur_cont *next; int64_t saved[TUR_SC_MAXN]; uint32_t aggr_mask; } tur_cont;\n");
+    /* Float params round-trip through the int64 saved[] slots by BIT
+     * reinterpretation (an intptr_t cast would truncate the value). */
+    buf_puts(out, "static inline int64_t tur_sc_bits_f64(double d){ int64_t i; memcpy(&i,&d,sizeof i); return i; }\n");
+    buf_puts(out, "static inline double  tur_sc_f64_from_bits(int64_t i){ double d; memcpy(&d,&i,sizeof d); return d; }\n");
+    buf_puts(out, "static inline int64_t tur_sc_bits_f32(float f){ int64_t i=0; memcpy(&i,&f,sizeof f); return i; }\n");
+    buf_puts(out, "static inline float   tur_sc_f32_from_bits(int64_t i){ float f; memcpy(&f,&i,sizeof f); return f; }\n");
     emit_rt_global(out, shared, "tur_panic_payload *global_panic_payload;\n", "tur_panic_payload *global_panic_payload");
     buf_puts(out, "static tur_panic_payload *panic_payload_new(int, void *, const char *, int);\n");
     buf_puts(out, "static void tur_panic(const char *msg) {\n");
@@ -6428,14 +6422,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_printf(out, "    if (tur_handler_chain) {\n");
     buf_printf(out, "        global_panic_payload = panic_payload_new(%d, msg ? strdup(msg) : NULL, __FILE__, __LINE__);\n", (int)TY_CSTR);
     buf_puts(out, "        if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); }\n");
-    if (g_opt_panic_return_signal) {
-        /* D1a: signal transport -- set the flag and RETURN; the caller's
-         * per-call-site check propagates it up to the catch-unwind boundary. */
-        buf_puts(out, "        tur_panicking = 1;\n");
-        buf_puts(out, "        return;\n");
-    } else {
-        buf_puts(out, "        longjmp(tur_handler_chain->buf, 1);\n");
-    }
+    /* Signal transport -- set the flag and RETURN; the caller's per-call-site
+     * check propagates it up to the catch-unwind boundary. */
+    buf_puts(out, "        tur_panicking = 1;\n");
+    buf_puts(out, "        return;\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    fprintf(stderr, \"panic at %s:%d: %s\\n\", __FILE__, __LINE__, msg ? msg : \"(no message)\");\n");
     buf_puts(out, "    tur_panic_print_scope_chain();\n");
@@ -6568,10 +6558,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * payload becomes the err value (an opaque Panic handle); it is intentionally
      * not freed here -- ownership passes to the returned result. */
     buf_puts(out, "/* Phase R2: catch-unwind special-form helpers (result-box ABI) */\n");
-    if (g_opt_panic_return_signal) {
-        /* D1a signal transport: no setjmp.  Push the boundary node (so a panic
-         * beneath knows a catch is active), call the thunk, then consult the
-         * tur_panicking flag the thunk propagated back up on return. */
+    {
+        /* Signal transport (always-on since panic-return-signal graduated): no
+         * setjmp.  Push the boundary node (so a panic beneath knows a catch is
+         * active), call the thunk, then consult the tur_panicking flag the thunk
+         * propagated back up on return. */
         buf_puts(out, "static int64_t tur_catch_unwind_box(int64_t thunk) {\n");
         buf_puts(out, "    tur_handler_node *__node = (tur_handler_node *)malloc(sizeof(tur_handler_node));\n");
         buf_puts(out, "    __node->parent = tur_handler_chain; tur_handler_chain = __node;\n");
@@ -6603,46 +6594,6 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         buf_puts(out, "    }\n");
         buf_puts(out, "    return tur_box_ok(__v);\n");
         buf_puts(out, "}\n\n");
-    } else {
-    buf_puts(out, "static int64_t tur_catch_unwind_box(int64_t thunk) {\n");
-    buf_puts(out, "    /* D1: the jmp_buf lives on a heap handler node, not this frame, so a\n");
-    buf_puts(out, "     * nested catch-unwind holds only a pointer per level here.  The node is\n");
-    buf_puts(out, "     * pushed before setjmp and popped on both exit paths; the enclosing\n");
-    buf_puts(out, "     * boundary is simply __node->parent (no save/restore copy needed). */\n");
-    buf_puts(out, "    tur_handler_node *__node = (tur_handler_node *)malloc(sizeof(tur_handler_node));\n");
-    buf_puts(out, "    __node->parent = tur_handler_chain; tur_handler_chain = __node;\n");
-    buf_puts(out, "    if (setjmp(__node->buf) == 0) {\n");
-    buf_puts(out, "        int64_t __v = TUR_APPLY0(thunk);\n");
-    buf_puts(out, "        tur_handler_chain = __node->parent; free(__node);\n");
-    buf_puts(out, "        return tur_box_ok(__v);\n");
-    buf_puts(out, "    } else {\n");
-    buf_puts(out, "        tur_handler_chain = __node->parent; free(__node);\n");
-    buf_puts(out, "        tur_panic_in_progress = 0;\n");
-    buf_puts(out, "        tur_panic_payload *__p = global_panic_payload;\n");
-    buf_puts(out, "        global_panic_payload = NULL;\n");
-    buf_puts(out, "        return tur_box_err((int64_t)(intptr_t)__p);\n");
-    buf_puts(out, "    }\n");
-    buf_puts(out, "}\n\n");
-    buf_puts(out, "static int64_t tur_catch_panic_of_box(int expected_type, int64_t thunk) {\n");
-    buf_puts(out, "    tur_handler_node *__node = (tur_handler_node *)malloc(sizeof(tur_handler_node));\n");
-    buf_puts(out, "    __node->parent = tur_handler_chain; tur_handler_chain = __node;\n");
-    buf_puts(out, "    if (setjmp(__node->buf) == 0) {\n");
-    buf_puts(out, "        int64_t __v = TUR_APPLY0(thunk);\n");
-    buf_puts(out, "        tur_handler_chain = __node->parent; free(__node);\n");
-    buf_puts(out, "        return tur_box_ok(__v);\n");
-    buf_puts(out, "    } else {\n");
-    buf_puts(out, "        tur_handler_chain = __node->parent; free(__node);\n");
-    buf_puts(out, "        tur_panic_in_progress = 0;\n");
-    buf_puts(out, "        tur_panic_payload *__p = global_panic_payload;\n");
-    buf_puts(out, "        global_panic_payload = NULL;\n");
-    buf_puts(out, "        if (__p && __p->type_tag == expected_type) {\n");
-    buf_puts(out, "            return tur_box_err((int64_t)(intptr_t)__p);\n");
-    buf_puts(out, "        }\n");
-    buf_puts(out, "        /* type mismatch: re-raise to the next outer boundary (already popped) */\n");
-    buf_puts(out, "        if (__p) tur_panic_with(__p->type_tag, __p->value, __p->file, __p->line);\n");
-    buf_puts(out, "        return tur_box_err(0);\n");
-    buf_puts(out, "    }\n");
-    buf_puts(out, "}\n\n");
     }
 
     /* catch-unwind-result-box-leak: free a caught Result box that codegen knows is
@@ -6836,13 +6787,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Phase TG-004-2 PR: Check global handler first (try/catch has priority), then fiber */
     buf_puts(out, "    if (tur_handler_chain) {\n");
     buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line);\n");
-    if (g_opt_panic_return_signal) {
-        buf_puts(out, "        if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); }\n");
-        buf_puts(out, "        tur_panicking = 1;\n");
-        buf_puts(out, "        return;\n");
-    } else {
-        buf_puts(out, "        longjmp(tur_handler_chain->buf, 1);\n");
-    }
+    /* Signal transport (always-on): fire defers, set the flag, RETURN. */
+    buf_puts(out, "        if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); }\n");
+    buf_puts(out, "        tur_panicking = 1;\n");
+    buf_puts(out, "        return;\n");
     buf_puts(out, "    } else if (tur_current_fiber && tur_current_fiber->panic_jmpbuf_valid) {\n");
     buf_puts(out, "        /* Use per-fiber panic buffer - set up global payload for cleanup */\n");
     buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line);\n");

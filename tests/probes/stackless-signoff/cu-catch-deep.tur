@@ -1,0 +1,13 @@
+;; D4 sign-off probe: cu-catch-deep -- a single top-level catch over a deep
+;; non-tail panicking body (the panic-free depth-wall shape, with a catch).
+;; deep-panic recurses non-tail and panics at the bottom; one top-level
+;; catch-unwind catches it.  cu-catch-deep N returns N.
+(defn deep-panic [n : int] : int
+  (if (= n 0) (panic "deep boom") (+ 1 (deep-panic (- n 1)))))
+
+(defn cu-catch-deep [n : int] : int
+  (do (catch-unwind (fn [] : int (deep-panic n))) n))
+
+(defn main [] : int
+  (println (cu-catch-deep 1000000))
+  0)

@@ -1,0 +1,15 @@
+;; D4 sign-off probe: fiber-rec -- a trampolined deep catch-unwind run inside an
+;; `async` fiber (G7 verified this interoperates).  The fiber body recurses with
+;; nested catch-unwind (cu-rec N = N); main awaits the future.
+(defn cu-rec [n : int] : int
+  (if (= n 0)
+    0
+    (do (catch-unwind (fn [] : int (cu-rec (- n 1)))) n)))
+
+(defn worker [] : int
+  (cu-rec 1000000))
+
+(defn main [] : nil
+  (let [fut (async worker)]
+    (let [result (await fut)]
+      (println result))))

@@ -1,0 +1,17 @@
+;; D4 sign-off probe: mutual-rec -- ping/pong cross-function recursion across a
+;; catch-unwind boundary, lowered into one shared group driver.  ping(N) = 1 + N.
+(defn ping [n : int] : int
+  (if (= n 0)
+    0
+    (do (catch-unwind (fn [] : int (pong (- n 1))))
+        (+ 1 n))))
+
+(defn pong [n : int] : int
+  (if (= n 0)
+    0
+    (do (catch-unwind (fn [] : int (ping (- n 1))))
+        (+ 2 n))))
+
+(defn main [] : int
+  (println (ping 1000000))
+  0)

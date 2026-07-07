@@ -1,5 +1,6 @@
 ;;; D3 (compiled-catch-unwind-stackless-plan), slice 2: MULTI-PARAM stackless
-;;; self-recursive catch-unwind.  Under --enable=stackless-catch-unwind the
+;;; self-recursive catch-unwind (always-on since stackless-catch-unwind
+;;; graduated).  The
 ;;; trampoline saves every int param onto the heap tur_cont node, so a
 ;;; two-param self-recursive catch-unwind also runs with a flat C stack.  The
 ;;; recursion result is discarded, so each level returns (+ acc n); at the top

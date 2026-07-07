@@ -52,12 +52,12 @@ instead of driver-frame terms. The three phases map one-to-one.
 The heap handler chain is always-on (see "D1 -- what landed" below). The
 return-path-signal transport (D1a) is now implemented behind
 `--enable=panic-return-signal` (see
-[panic-return-signal-plan.md](./panic-return-signal-plan.md)); it is a prototype
+[panic-return-signal-plan.md](../archive/panic-return-signal-plan.md)); it is a prototype
 because it does not yet cover the fiber/effect/cancel unwinds and, as the
 measurements below establish, does not on its own reach the *nested* shape's
 target -- that is bounded by the frame-count wall the D3 stackless lowering
 removes (scoped in
-[compiled-catch-unwind-stackless-plan.md](./compiled-catch-unwind-stackless-plan.md)).
+[compiled-catch-unwind-stackless-plan.md](../archive/compiled-catch-unwind-stackless-plan.md)).
 
 - Add a thread-local `tur_handler_chain` -- a linked list of heap-allocated
   handler nodes, each carrying the saved defer mark, module state,
@@ -159,7 +159,7 @@ moved the `jmp_buf` off the frame, so removing `longjmp` adds no nesting depth;
 its value is eliminating `longjmp` and enabling tail-calls across the boundary
 (the D3 prerequisite), not depth. The nested-shape 200000/1,000,000 target
 requires the stackless-continuation work in
-[compiled-catch-unwind-stackless-plan.md](./compiled-catch-unwind-stackless-plan.md).
+[compiled-catch-unwind-stackless-plan.md](../archive/compiled-catch-unwind-stackless-plan.md).
 
 ### Phase D2 -- `atomically` on a heap-anchored tx-log
 
