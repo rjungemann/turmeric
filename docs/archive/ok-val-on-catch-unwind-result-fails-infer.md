@@ -1,5 +1,16 @@
 # `ok-val` / `err-val` on a `catch-unwind` result fails to infer
 
+**Status: RESOLVED** (2026-07-07). `catch-unwind` / `catch-panic-of` now surface
+their caught result as `(Result ThunkRet Panic)` instead of the bare `:int`
+carrier, so `ok-val` / `err-val` (declared over `(Result A B)`) typecheck and
+extract the payload. The err arm is left an open type variable so the value
+stays in the int64 carrier representation the runtime hands back (a
+fully-concrete `(Result A B)` would monomorphise to a by-value record and
+mismatch that ABI); the grounded ok arm still gives `ok-val` a useful payload
+type, and the handle continues to coerce to `:int` for the `ok?`/`err?`
+predicates. Fix in `catch_unwind_result_type` (`src/compiler/elab_concurrent.c`);
+regression coverage in `tests/fixtures/catch-unwind-ok-val-extract/`.
+
 **Severity: medium** (blocks value extraction from a caught result; the boolean
 predicates `ok?`/`err?` work, so callers can branch but not read the value).
 

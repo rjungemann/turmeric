@@ -330,15 +330,43 @@ Expr *elab_panic_with(Elab *e, const Form *call) {
     return out;
 }
 
-/* Phase R2: catch-unwind/catch-panic-of yield a result box carried as :int
- * (the same int64 carrier stdlib's ok/err return).  The box is { is_ok, ok_val,
- * err_val }; the err slot holds the opaque Panic payload pointer.  Typing the
- * value :int lets the stdlib ok?/err? predicates (declared [r :int]) and the
- * inline-C result helpers consume it directly, matching how every other v1
- * Result value flows. */
-static Type catch_unwind_result_type(Elab *e, Span span) {
-    (void)e; (void)span;
-    return TYPE_INT;
+/* Phase R2/G5: catch-unwind/catch-panic-of yield a result box carried as the
+ * int64 carrier stdlib's ok/err return.  The box is { is_ok, ok_val, err_val };
+ * the err slot holds the opaque Panic payload pointer.
+ *
+ * We give the value the *surface* type (Result ThunkRet Panic) rather than the
+ * bare :int carrier.  A (Result A B) handle IS that carrier (identical layout,
+ * and both are represented as an int64 handle), so the value still coerces to
+ * :int for the stdlib ok?/err? predicates (declared [r :int]) and the inline-C
+ * result helpers -- exactly as a stdlib `(ok x)` value does.  Surfacing the
+ * Result type additionally lets the ok-val/err-val accessors (declared over
+ * (Result A B)) extract the payload, which the bare :int carrier blocked (see
+ * docs/archive/ok-val-on-catch-unwind-result-fails-infer.md).
+ *
+ * A = the thunk's return type (the ok payload); B = the opaque Panic handle
+ * (:ptr<void>).  Falls back to the bare :int carrier when the Result head is
+ * not in scope (e.g. stdlib/result.tur not imported), preserving the old
+ * behaviour for those programs. */
+static Type catch_unwind_result_type(Elab *e, Expr *thunk, Span span) {
+    Type *head = elab_lookup_type_by_name(e, intern_cstr(e->st, "Result"));
+    if (!head) return TYPE_INT;
+    Type ok_ty = TYPE_INT;
+    if (thunk && thunk->type.kind == TY_FN) {
+        if (thunk->type.as.fn.result_full_type)
+            ok_ty = *thunk->type.as.fn.result_full_type;
+        else
+            ok_ty = type_simple(thunk->type.as.fn.result_kind, CK_COPY);
+    }
+    /* Keep the err arm a free type variable rather than grounding it to the
+     * concrete Panic handle (:ptr<void>).  A fully-concrete (Result A B) is
+     * monomorphised into a by-value record struct, but the runtime hands back
+     * the int64 carrier box -- so a concrete err arm would mismatch the ABI at
+     * the `let` binding.  Leaving B open keeps the value in the carrier
+     * representation (identical to how stdlib `(ok x)` flows with a free err
+     * arm), while the grounded A still gives ok-val a useful payload type. */
+    Type err_ty = type_tyvar_named("__catch_err");
+    Type applied_a = type_app(e->arena, *head, ok_ty, span);
+    return type_app(e->arena, applied_a, err_ty, span);
 }
 
 /* Phase R2: ensure the catch-unwind thunk is a fat closure so the runtime
@@ -373,9 +401,9 @@ Expr *elab_catch_unwind(Elab *e, const Form *call) {
     }
     Expr *thunk = elab_form(e, call->as.list.items[1]);
     if (!thunk) return NULL;
+    Type result_ty = catch_unwind_result_type(e, thunk, call->span);
     thunk = catch_thunk_to_fat(e, thunk);
-    Expr *out = expr_new(e->arena, EX_CATCH_UNWIND,
-                         catch_unwind_result_type(e, call->span), call->span);
+    Expr *out = expr_new(e->arena, EX_CATCH_UNWIND, result_ty, call->span);
     out->as.catch_unwind_.thunk = thunk;
     return out;
 }
@@ -402,9 +430,9 @@ Expr *elab_catch_panic_of(Elab *e, const Form *call) {
     /* Second arg: thunk */
     Expr *thunk = elab_form(e, call->as.list.items[2]);
     if (!thunk) return NULL;
+    Type result_ty = catch_unwind_result_type(e, thunk, call->span);
     thunk = catch_thunk_to_fat(e, thunk);
-    Expr *out = expr_new(e->arena, EX_CATCH_PANIC_OF,
-                         catch_unwind_result_type(e, call->span), call->span);
+    Expr *out = expr_new(e->arena, EX_CATCH_PANIC_OF, result_ty, call->span);
     out->as.catch_panic_of_.type_kind = type_kind;
     out->as.catch_panic_of_.thunk = thunk;
     return out;
