@@ -6,6 +6,11 @@ description: Let a trampolined function take a by-const-reference aggregate para
 
 # Stackless catch-unwind -- by-const-pointer aggregate params -- Plan
 
+> **ARCHIVED -- COMPLETE (BR1-BR2).** By-const-pointer aggregate params are
+> trampolined behind `--enable=stackless-catch-unwind`. The residual widening
+> work (BR3: relax the pure-accessor eligibility gate) is tracked separately in
+> [docs/upcoming/v1/catch-unwind-byref-aggregate-br3-plan.md](../upcoming/v1/catch-unwind-byref-aggregate-br3-plan.md).
+
 ## Status
 
 BR1 + BR2 landed. A by-const-pointer aggregate param (a large by-value
@@ -32,7 +37,9 @@ below assumed -- `type_c_name` yields the bare struct name for both the small
 by-ref param as by-value and emitted `memcpy(box, &acc, ...)` (copying from the
 address of the pointer variable). That silent miscompile is what BR1 fixes.
 
-BR3 (widen eligibility past the pure-accessor gate) remains future work.
+BR3 (widen eligibility past the pure-accessor gate) remains future work,
+planned in
+[docs/upcoming/v1/catch-unwind-byref-aggregate-br3-plan.md](../upcoming/v1/catch-unwind-byref-aggregate-br3-plan.md).
 
 ## Why this exists
 
