@@ -4,6 +4,36 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.27.1] -- 2026-07-07
+
+### Added
+
+- **Stackless catch-unwind** graduated to always-on. The compiled
+  backend now models `catch-unwind` on the driver work-stack with
+  panic-as-signal semantics (Phases C1/D1 through D3-G), surfaces the
+  result as `(Result A B)` so `ok-val`/`err-val` infer, widens
+  by-const-pointer aggregate param eligibility (BR3), and aggregates
+  params in the group driver.
+- **Van Laarhoven lenses**: nested-mapper dict dispatch lowered
+  (Phases 1-3) via `forall-dict-pass`, which also graduates to
+  always-on with multi-constraint dict-clone frame support.
+- **Four HKT/forall experiment flags** graduated to always-on.
+
+### Fixed
+
+- **macOS-only dispatch-array overflow** from uninitialized main-body
+  `EmitCtx`; zero-init on entry.
+- **Panic-unwind box leak**: free the discarded catch-unwind Result
+  box and the caught panic payload; free the work-stack perform
+  capture on the panic path.
+- **Async fiber stacks** are reclaimed on completion instead of held
+  until env teardown.
+- **Dict-clone result-type threading** for polymorphic methods.
+
+### Docs
+
+- Fix drifted sweet-exp toggle pairs in guides.
+
 ## [0.27.0] -- 2026-07-05
 
 ### Added

@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.27.0` -- Manifest `:exports` now accepts the `#map{...}` data-literal form alongside the plain-map spelling.
+**Latest release:** `v0.27.1` -- Stackless catch-unwind graduates to always-on, plus van Laarhoven lenses via lowered nested-mapper dict dispatch.
 
 ## What
 
