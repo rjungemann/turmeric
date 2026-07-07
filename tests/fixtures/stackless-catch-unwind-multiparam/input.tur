@@ -1,0 +1,14 @@
+;;; D3 (compiled-catch-unwind-stackless-plan), slice 2: MULTI-PARAM stackless
+;;; self-recursive catch-unwind.  Under --enable=stackless-catch-unwind the
+;;; trampoline saves every int param onto the heap tur_cont node, so a
+;;; two-param self-recursive catch-unwind also runs with a flat C stack.  The
+;;; recursion result is discarded, so each level returns (+ acc n); at the top
+;;; call acc = 0, so f N 0 = N.  500000 folds off the native stack.
+(defn f [n : int acc : int] : int
+  (if (= n 0)
+    acc
+    (do (catch-unwind (fn [] : int (f (- n 1) (+ acc 1)))) (+ acc n))))
+
+(defn main [] : int
+  (println (f 500000 0))
+  0)

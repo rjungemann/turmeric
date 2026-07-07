@@ -3010,7 +3010,7 @@ static int64_t __inst_Hash_hash_Sym(const struct __tur_sym *);
 static int64_t __inst_MapKey_mk_hybox_Sym(const struct __tur_sym *);
 static int64_t __inst_MapKey_mk_hycmp_Sym(const struct __tur_sym *);
 static int64_t __inst_MapKey_mk_hyowned_qu_Sym(const struct __tur_sym *);
-static int64_t __fn_1266(void *);
+static int64_t __fn_1267(void *);
 static void * array_hyget(void *, int64_t);
 static int64_t array_hyset(void *, int64_t, int64_t);
 static void * array_hyslice(void *, int64_t, int64_t);
@@ -3217,7 +3217,7 @@ static const char * sym_hy_gtstr(const struct __tur_sym *);
 static bool sym_eq_qu(const struct __tur_sym *, const struct __tur_sym *);
 static int64_t consume(int64_t, int64_t);
 static int64_t replace(int64_t, int64_t);
-static int64_t cu_hyrec(int64_t);
+static int64_t f(int64_t, int64_t);
 static bool some___spec__bool_tur_adt_Option__opaque(tur_adt_Option__opaque);
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t, int64_t);
 
@@ -3596,10 +3596,10 @@ static int64_t __inst_MapKey_mk_hyowned_qu_Sym(const struct __tur_sym * x) {
         return INT64_C(0);
 }
 
-struct __env_1268 { tur_thunk_int64_t_t __fn; int64_t n; };
-static int64_t __fn_1266(void * __env_p_1269) {
-        struct __env_1268 *__env___env_1268 = (struct __env_1268 *)__env_p_1269;
-        __auto_type __ps_43 = (cu_hyrec((__env___env_1268->n) - (INT64_C(1))));
+struct __env_1269 { tur_thunk_int64_t_t __fn; int64_t n; int64_t acc; };
+static int64_t __fn_1267(void * __env_p_1270) {
+        struct __env_1269 *__env___env_1269 = (struct __env_1269 *)__env_p_1270;
+        __auto_type __ps_43 = (f((__env___env_1269->n) - (INT64_C(1)), (__env___env_1269->acc) + (INT64_C(1))));
         if (tur_panicking) return (int64_t){0};
         return __ps_43;
 }
@@ -5952,7 +5952,7 @@ static int64_t replace(int64_t old, int64_t new) {
         return old;
 }
 
-static int64_t cu_hyrec(int64_t n) {
+static int64_t f(int64_t n, int64_t acc) {
         tur_cont *__k = (tur_cont*)malloc(sizeof(tur_cont));
         __k->tag = 0; __k->boundary = 0; __k->next = 0;
         int __act = 0;   /* 0 = DESCEND, 1 = RETURN */
@@ -5961,15 +5961,18 @@ static int64_t cu_hyrec(int64_t n) {
          if (tur_panicking) __act = 1;
          if (__act == 0) {
           if ((n) == (INT64_C(0))) {
-           __v = INT64_C(0); __act = 1;
+           __v = acc; __act = 1;
           } else {
            tur_handler_node *__b = (tur_handler_node*)malloc(sizeof(tur_handler_node));
            __b->parent = tur_handler_chain; tur_handler_chain = __b;
            tur_cont *__k2 = (tur_cont*)malloc(sizeof(tur_cont));
            __k2->tag = 1; __k2->boundary = __b; __k2->next = __k;
            __k2->saved[0] = (int64_t)(n);
+           __k2->saved[1] = (int64_t)(acc);
            int64_t __r0 = (int64_t)((n) - (INT64_C(1)));
+           int64_t __r1 = (int64_t)((acc) + (INT64_C(1)));
            n = __r0;
+           acc = __r1;
            __k = __k2;
           }
          } else {
@@ -5981,7 +5984,8 @@ static int64_t cu_hyrec(int64_t n) {
           if (tur_panicking) { tur_panicking = 0; tur_panic_in_progress = 0;
            if (global_panic_payload) { panic_payload_free(global_panic_payload); global_panic_payload = 0; } }
           n = (int64_t)__k->saved[0];
-          __v = n;
+          acc = (int64_t)__k->saved[1];
+          __v = (acc) + (n);
           tur_cont *__kk = __k->next; free(__k); __k = __kk; __act = 1;
          }
         }
@@ -5997,7 +6001,7 @@ int main(int argc, char **argv) {
             _c->next = g_tur_args;
             g_tur_args = (int64_t)(intptr_t)_c;
         }
-        __auto_type __ps_182 = (cu_hyrec(INT64_C(500000)));
+        __auto_type __ps_182 = (f(INT64_C(500000), INT64_C(0)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         printf("%lld\n", (long long)(__ps_182));
         int64_t __t183;

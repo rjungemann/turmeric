@@ -122,43 +122,49 @@ target on the self-contained `cu-rec`/`cu-rec-p` shapes; escalate to (b) only if
 the async/effect D3 work is being built concurrently and the shared machine is
 cheaper than two lowerings.
 
-## Slice 1 (landed) -- codegen behind `--enable=stackless-catch-unwind`
+## Slices 1-2 (landed) -- codegen behind `--enable=stackless-catch-unwind`
 
-The first codegen slice of direction (a) is wired behind
-`--enable=stackless-catch-unwind` (implies `panic-return-signal`; registered in
-`EXPERIMENTS[]`, fires TUR-W0060). It recognises the single-scalar-param
-self-recursive grammar and emits the trampoline directly:
+The codegen of direction (a) is wired behind `--enable=stackless-catch-unwind`
+(implies `panic-return-signal`; registered in `EXPERIMENTS[]`, fires TUR-W0060).
+It recognises the self-recursive grammar over **1..TUR_SC_MAXP (8) int params**
+and emits the trampoline directly:
 
 ```
-(defn f [p : int] : int
-  (if COND BASE (do (catch-unwind (fn [] (f RECUR))) AFTER)))
+(defn f [p0 : int ... pk : int] : int
+  (if COND BASE (do (catch-unwind (fn [] (f RECUR0 ... RECURk))) AFTER)))
 ```
 
-- **Eligibility** (`stackless_catch_eligible`, emit_fns.c): one `int` param and
+- **Eligibility** (`stackless_catch_eligible`, emit_fns.c): 1..8 `int` params and
   `int` return, no ABI-spec / dict-clone, body is the `if/do/catch-unwind`
-  shape above, the thunk is a 0-arg `EX_FN`/`EX_CLOSURE` whose only capture is
-  the param and whose body is a self-call, and COND/BASE/RECUR/AFTER are
-  "simple" (literals / vars / arithmetic-comparison builtins / direct calls --
-  no defer, nested catch, panic, async, or closure). Everything else falls back
-  to the normal (D1/D1a) emission.
+  shape above, the thunk is a 0-arg `EX_FN`/`EX_CLOSURE` whose captures are all
+  params and whose body is a self-call with one arg per param, and
+  COND/BASE/RECUR*/AFTER are "simple" (literals / vars / arithmetic-comparison
+  builtins / direct calls -- no defer, nested catch, panic, async, or closure).
+  Everything else falls back to the normal (D1/D1a) emission.
 - **Emit** (`emit_stackless_catch_body`): a `for(;;)` driver over a heap
-  `tur_cont` chain (emitted in the preamble), reusing the D1 `tur_handler_node`
-  chain for the boundary and the D1a `tur_panicking` signal for a caught panic.
-  The C parameter doubles as the DESCEND scratch and the restored per-level
-  param in the AFTER segment; COND/BASE/RECUR/AFTER are emitted with the normal
-  `emit_value`, so they resolve the param to the C variable transparently.
+  `tur_cont` chain (emitted in the preamble; `saved[TUR_SC_MAXP]` holds the
+  level's params), reusing the D1 `tur_handler_node` chain for the boundary and
+  the D1a `tur_panicking` signal for a caught panic. The C parameters double as
+  the DESCEND scratch and the restored per-level params in the AFTER segment;
+  all RECUR args are computed into temps before any param is reassigned (a later
+  arg may read an earlier param); COND/BASE/RECUR/AFTER go through the normal
+  `emit_value`, so they resolve params to the C variables transparently.
 - **Integration**: a first branch in `emit_fn_def`'s body-emit chain, so all the
   signature / param / ctx setup is reused and only the body is swapped.
 
-Measured (compiled backend): with the flag, `cu-rec` runs **10,000,000** deep and
-**1,000,000 under a 64 KiB stack `ulimit`** (flat native stack); the default
-(flag-off) codegen is byte-identical and `bash tests/run.sh` stays green (1953).
-Fixture `stackless-catch-unwind-deep` (cu-rec at 500000, a `flags` file enabling
-the experiment) guards it.
+Measured (compiled backend): with the flag, single-param `cu-rec` runs
+**10,000,000** deep and **1,000,000 under a 64 KiB stack `ulimit`** (flat native
+stack); a two-param variant runs **1,000,000 under a 64 KiB stack** too and
+matches the native result at small depth. The default (flag-off) codegen is
+byte-identical and `bash tests/run.sh` stays green (1955). Fixtures
+`stackless-catch-unwind-deep` (1 param) and `stackless-catch-unwind-multiparam`
+(2 params), each with a `flags` file enabling the experiment, guard them.
 
-### What slice 1 does NOT do yet (follow-on)
+### What is NOT done yet (follow-on)
 
-- Multiple params; non-`int` scalar params/returns; float/carrier params.
+- Non-`int` scalar params/returns (pointer/opaque/bool via `intptr_t`
+  reinterpretation; float via a union) -- the `saved[]` slots are already
+  `int64_t`, so this is mostly casting.
 - Panicking or non-simple COND/BASE/RECUR/AFTER (a panic inside a sub-expression
   would hit the `emit_value` early-return injected by `panic-return-signal`,
   which exits the driver -- so those shapes are held ineligible for now).

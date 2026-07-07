@@ -509,15 +509,17 @@ static bool su_simple_expr(const Expr *e) {
 static bool stackless_catch_eligible(EmitCtx *ctx, const Expr *e, FnDef *fd,
                                      TypeKind result_kind,
                                      const Expr **out_cond, const Expr **out_base,
-                                     const Expr **out_recur, const Expr **out_after) {
+                                     const Expr **out_call, const Expr **out_after) {
     if (!g_opt_stackless_catch_unwind) return false;
-    if (!fd || fd->n_params != 1) return false;
+    if (!fd || fd->n_params < 1 || fd->n_params > TUR_SC_MAXP) return false;
     if (fd->n_dict_clone > 0 || fd->n_dict_env > 0) return false;
     if (ctx->current_abi_specialization) return false;
     if (fd->binding && fd->binding->name && fd->binding->name->name &&
         strcmp(fd->binding->name->name, "main") == 0) return false;
     if (result_kind != TY_INT) return false;
-    if (!fd->param_types || fd->param_types[0].kind != TY_INT) return false;
+    if (!fd->param_types) return false;
+    for (uint8_t i = 0; i < fd->n_params; i++)
+        if (fd->param_types[i].kind != TY_INT) return false;
 
     const Expr *b = fd->body;
     if (!b || b->kind != EX_IF) return false;
@@ -527,8 +529,8 @@ static bool stackless_catch_eligible(EmitCtx *ctx, const Expr *e, FnDef *fd,
     if (!cu || cu->kind != EX_CATCH_UNWIND) return false;
     const Expr *thunk = cu->as.catch_unwind_.thunk;
     /* The thunk is a 0-arg lambda: EX_FN when it captures nothing, EX_CLOSURE
-     * when it captures the recursion variable.  For a closure, every capture
-     * must be this function's own param, so references inside the thunk body
+     * when it captures recursion variables.  For a closure, every capture must
+     * be one of this function's own params, so references inside the thunk body
      * resolve to that param's C name when we re-emit them in the driver.
      * (Closure conversion prepends a synthetic env param, so tf->n_params is not
      * checked -- the source lambda is 0-arg.) */
@@ -538,8 +540,12 @@ static bool stackless_catch_eligible(EmitCtx *ctx, const Expr *e, FnDef *fd,
     } else if (thunk && thunk->kind == EX_CLOSURE && thunk->as.closure_.closure) {
         struct Closure *cl = thunk->as.closure_.closure;
         tf = cl->fn;
-        for (uint8_t i = 0; i < cl->n_captures; i++)
-            if (cl->captures[i] != fd->params[0]) return false;
+        for (uint8_t i = 0; i < cl->n_captures; i++) {
+            bool is_param = false;
+            for (uint8_t j = 0; j < fd->n_params; j++)
+                if (cl->captures[i] == fd->params[j]) { is_param = true; break; }
+            if (!is_param) return false;
+        }
     } else {
         return false;
     }
@@ -547,15 +553,16 @@ static bool stackless_catch_eligible(EmitCtx *ctx, const Expr *e, FnDef *fd,
     const Expr *call = tf->body;
     if (!call || call->kind != EX_CALL) return false;
     if (call->as.call_.fn_binding != fd->binding) return false;   /* self-call */
-    if (call->as.call_.n_args != 1 || call->as.call_.fn_expr) return false;
+    if (call->as.call_.n_args != fd->n_params || call->as.call_.fn_expr) return false;
 
     const Expr *cond = b->as.if_.cond, *base = b->as.if_.then_;
-    const Expr *recur = call->as.call_.args[0], *after = els->as.do_.items[1];
-    if (!su_simple_expr(cond) || !su_simple_expr(base) ||
-        !su_simple_expr(recur) || !su_simple_expr(after))
+    const Expr *after = els->as.do_.items[1];
+    if (!su_simple_expr(cond) || !su_simple_expr(base) || !su_simple_expr(after))
         return false;
+    for (uint32_t i = 0; i < call->as.call_.n_args; i++)
+        if (!su_simple_expr(call->as.call_.args[i])) return false;
 
-    *out_cond = cond; *out_base = base; *out_recur = recur; *out_after = after;
+    *out_cond = cond; *out_base = base; *out_call = call; *out_after = after;
     return true;
 }
 
@@ -566,13 +573,15 @@ static bool stackless_catch_eligible(EmitCtx *ctx, const Expr *e, FnDef *fd,
  * (Matches docs/upcoming/prototypes/d3-stackless-catch-unwind.c.) */
 static void emit_stackless_catch_body(EmitCtx *ctx, Buf *file, FnDef *fd,
                                       const Expr *cond, const Expr *base,
-                                      const Expr *recur, const Expr *after) {
-    char *p = atom_var(ctx, fd->params[0]);   /* the C param name = our scratch */
+                                      const Expr *call, const Expr *after) {
+    uint8_t np = fd->n_params;
+    char **p = (char **)malloc(sizeof(char *) * np);   /* param C names = scratch */
+    for (uint8_t i = 0; i < np; i++) p[i] = atom_var(ctx, fd->params[i]);
     int base_ind = ctx->indent;
     #define SI(n) do { ctx->indent = base_ind + (n); indent_buf(file, ctx->indent); } while (0)
 
     SI(0); buf_puts(file, "tur_cont *__k = (tur_cont*)malloc(sizeof(tur_cont));\n");
-    SI(0); buf_puts(file, "__k->tag = 0; __k->saved = 0; __k->boundary = 0; __k->next = 0;\n");
+    SI(0); buf_puts(file, "__k->tag = 0; __k->boundary = 0; __k->next = 0;\n");
     SI(0); buf_puts(file, "int __act = 0;   /* 0 = DESCEND, 1 = RETURN */\n");
     SI(0); buf_puts(file, "int64_t __v = 0;\n");
     SI(0); buf_puts(file, "for (;;) {\n");
@@ -591,9 +600,21 @@ static void emit_stackless_catch_body(EmitCtx *ctx, Buf *file, FnDef *fd,
         SI(3); buf_puts(file, "tur_handler_node *__b = (tur_handler_node*)malloc(sizeof(tur_handler_node));\n");
         SI(3); buf_puts(file, "__b->parent = tur_handler_chain; tur_handler_chain = __b;\n");
         SI(3); buf_puts(file, "tur_cont *__k2 = (tur_cont*)malloc(sizeof(tur_cont));\n");
-        SI(3); buf_printf(file, "__k2->tag = 1; __k2->saved = (int64_t)(%s); __k2->boundary = __b; __k2->next = __k;\n", p);
-        char *rv = emit_value(ctx, file, recur);
-        SI(3); buf_printf(file, "%s = %s;\n", p, rv); free(rv);
+        SI(3); buf_puts(file, "__k2->tag = 1; __k2->boundary = __b; __k2->next = __k;\n");
+        for (uint8_t i = 0; i < np; i++) {
+            SI(3); buf_printf(file, "__k2->saved[%d] = (int64_t)(%s);\n", i, p[i]);
+        }
+        /* Compute all recursion args into temps BEFORE reassigning params, since
+         * a later arg may read an earlier (not-yet-updated) param. */
+        char **rt = (char **)malloc(sizeof(char *) * np);
+        for (uint8_t i = 0; i < np; i++) {
+            char *rv = emit_value(ctx, file, call->as.call_.args[i]);
+            char tmp[48]; snprintf(tmp, sizeof tmp, "__r%d", i);
+            SI(3); buf_printf(file, "int64_t %s = (int64_t)(%s);\n", tmp, rv); free(rv);
+            rt[i] = strdup(tmp);
+        }
+        for (uint8_t i = 0; i < np; i++) { SI(3); buf_printf(file, "%s = %s;\n", p[i], rt[i]); free(rt[i]); }
+        free(rt);
         SI(3); buf_puts(file, "__k = __k2;\n");
         SI(2); buf_puts(file, "}\n");
     }
@@ -605,11 +626,13 @@ static void emit_stackless_catch_body(EmitCtx *ctx, Buf *file, FnDef *fd,
         SI(3); buf_puts(file, "free(__k); return __v;\n");
         SI(2); buf_puts(file, "}\n");
         /* AFTER segment: pop this level's boundary, consume any caught panic,
-         * restore the level's param, compute AFTER, return to the parent cont. */
+         * restore the level's params, compute AFTER, return to the parent cont. */
         SI(2); buf_puts(file, "tur_handler_chain = __k->boundary->parent; free(__k->boundary);\n");
         SI(2); buf_puts(file, "if (tur_panicking) { tur_panicking = 0; tur_panic_in_progress = 0;\n");
         SI(3); buf_puts(file, "if (global_panic_payload) { panic_payload_free(global_panic_payload); global_panic_payload = 0; } }\n");
-        SI(2); buf_printf(file, "%s = (%s)__k->saved;\n", p, emit_type_c_name(ctx, fd->param_types[0]));
+        for (uint8_t i = 0; i < np; i++) {
+            SI(2); buf_printf(file, "%s = (%s)__k->saved[%d];\n", p[i], emit_type_c_name(ctx, fd->param_types[i]), i);
+        }
         char *av = emit_value(ctx, file, after);
         SI(2); buf_printf(file, "__v = %s;\n", av); free(av);
         SI(2); buf_puts(file, "tur_cont *__kk = __k->next; free(__k); __k = __kk; __act = 1;\n");
@@ -618,6 +641,7 @@ static void emit_stackless_catch_body(EmitCtx *ctx, Buf *file, FnDef *fd,
     SI(0); buf_puts(file, "}\n");
     #undef SI
     ctx->indent = base_ind;
+    for (uint8_t i = 0; i < np; i++) free(p[i]);
     free(p);
 }
 
@@ -1482,14 +1506,14 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         !(result_kind == TY_NIL && !is_main) && !is_main &&
         tco_params_simple(ctx, e, fd) && tco_mark(ctx, fd, fn_name, fd->body) > 0;
 
-    const Expr *__su_cond = NULL, *__su_base = NULL, *__su_recur = NULL, *__su_after = NULL;
+    const Expr *__su_cond = NULL, *__su_base = NULL, *__su_call = NULL, *__su_after = NULL;
     if (!prereq6_synthesized_body && !m2b_carrier_synth &&
         stackless_catch_eligible(ctx, e, fd, result_kind,
-                                 &__su_cond, &__su_base, &__su_recur, &__su_after)) {
+                                 &__su_cond, &__su_base, &__su_call, &__su_after)) {
         /* D3 (stackless-catch-unwind): emit the self-recursive catch-unwind
          * function as a heap-continuation trampoline instead of native
          * recursion, so nested catch-unwind runs with a flat C stack. */
-        emit_stackless_catch_body(ctx, file, fd, __su_cond, __su_base, __su_recur, __su_after);
+        emit_stackless_catch_body(ctx, file, fd, __su_cond, __su_base, __su_call, __su_after);
     } else if (prereq6_synthesized_body) {
         /* Prereq 6: the function body was already emitted as a synthesized
          * wrapper above (heap-spill + carrier helper call + cast back to

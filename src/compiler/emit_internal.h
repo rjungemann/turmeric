@@ -12,6 +12,12 @@
 
 #include "emit.h"
 
+/* D3 (compiled-catch-unwind-stackless-plan): max int params a stackless
+ * self-recursive catch-unwind function may carry (the tur_cont saved[] width).
+ * >5 positional params is already a code smell (MAX_FN_ARITY is 16), so 8 is a
+ * generous cap; functions above it fall back to the normal lowering. */
+#define TUR_SC_MAXP 8
+
 #include "arena.h"
 #include "builtins.h"
 #include "cps.h"
