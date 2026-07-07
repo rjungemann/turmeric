@@ -97,6 +97,21 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
         XF_LIFECYCLE_PROTOTYPE,
         &g_opt_panic_return_signal,
     },
+    /* stackless-catch-unwind (D3 of compiled-c-crossing-tco-plan) -- emit a
+     * self-recursive catch-unwind function as a heap-continuation trampoline so
+     * nested catch-unwind runs with a flat C stack.  Implies panic-return-signal.
+     * PROTOTYPE slice 1: only the single-scalar-param grammar is lowered; every
+     * other function falls back to the normal path.  See
+     * docs/upcoming/compiled-catch-unwind-stackless-plan.md. */
+    {
+        "stackless-catch-unwind",
+        "trampoline self-recursive catch-unwind onto a heap continuation chain",
+        "docs/upcoming/compiled-catch-unwind-stackless-plan.md",
+        "0.27.0",                  /* introduced */
+        "0.31.0",                  /* expires_at (soft deadline) */
+        XF_LIFECYCLE_PROTOTYPE,
+        &g_opt_stackless_catch_unwind,
+    },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };
@@ -145,6 +160,11 @@ bool experiment_enable(const char *name, ExperimentSource src) {
      * beats not-yet-set (XF_SRC_NONE); a lower-precedence enable never
      * downgrades a higher one that already ran. */
     if (src > g_src[idx]) g_src[idx] = src;
+    /* D3 depends on the D1a signal transport: the stackless trampoline consumes
+     * the tur_panicking signal, so enabling stackless-catch-unwind implies
+     * panic-return-signal (at the same source precedence). */
+    if (strcmp(name, "stackless-catch-unwind") == 0)
+        experiment_enable("panic-return-signal", src);
     return true;
 }
 

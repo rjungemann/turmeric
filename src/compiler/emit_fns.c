@@ -457,6 +457,170 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
     free(v);
 }
 
+/* ------------ D3: stackless self-recursive catch-unwind (slice 1) ---------- */
+
+/* Conservative "simple expression" whitelist: an expression the trampoline can
+ * evaluate inline in a driver segment without any of the machinery it does not
+ * model (defers/frames, nested catch boundaries, panics, closures, async).
+ * Anything outside the whitelist makes the enclosing function ineligible, so the
+ * only catch boundary and the only recursion in an eligible body are the ones the
+ * grammar matches. */
+static bool su_simple_expr(const Expr *e) {
+    if (!e) return true;
+    switch (e->kind) {
+        case EX_INT_LIT: case EX_BOOL_LIT: case EX_FLOAT_LIT:
+        case EX_CSTR_LIT: case EX_NIL_LIT: case EX_VAR:
+            return true;
+        case EX_CAST:     return su_simple_expr(e->as.cast_.expr);
+        case EX_ASCRIBE:  return su_simple_expr(e->as.ascribe_.inner);
+        case EX_IF:
+            return su_simple_expr(e->as.if_.cond) &&
+                   su_simple_expr(e->as.if_.then_) &&
+                   su_simple_expr(e->as.if_.else_or_null);
+        case EX_CALL: {
+            /* Direct calls only (operators lower to these); reject indirect /
+             * capability-field calls to stay conservative. */
+            if (e->as.call_.fn_expr) return false;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (!su_simple_expr(e->as.call_.args[i])) return false;
+            return true;
+        }
+        case EX_BUILTIN: {
+            /* Arithmetic / comparison / logic builtins (`=`, `-`, ...) -- pure,
+             * never panic; recurse into operands. */
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (!su_simple_expr(e->as.builtin.args[i])) return false;
+            return true;
+        }
+        default:
+            return false;   /* defer, catch-unwind, panic, async, closures, ... */
+    }
+}
+
+/* D3 slice 1: recognise the single-scalar-param self-recursive catch-unwind
+ * grammar and pull out its four sub-expressions:
+ *
+ *   (defn f [p : int] : int
+ *     (if COND BASE (do (catch-unwind (fn [] (f RECUR))) AFTER)))
+ *
+ * The catch-unwind result is discarded (it sits before AFTER in the `do`).  Only
+ * this exact shape is lowered to the trampoline; everything else falls back to
+ * the normal (D1/D1a) emission. */
+static bool stackless_catch_eligible(EmitCtx *ctx, const Expr *e, FnDef *fd,
+                                     TypeKind result_kind,
+                                     const Expr **out_cond, const Expr **out_base,
+                                     const Expr **out_recur, const Expr **out_after) {
+    if (!g_opt_stackless_catch_unwind) return false;
+    if (!fd || fd->n_params != 1) return false;
+    if (fd->n_dict_clone > 0 || fd->n_dict_env > 0) return false;
+    if (ctx->current_abi_specialization) return false;
+    if (fd->binding && fd->binding->name && fd->binding->name->name &&
+        strcmp(fd->binding->name->name, "main") == 0) return false;
+    if (result_kind != TY_INT) return false;
+    if (!fd->param_types || fd->param_types[0].kind != TY_INT) return false;
+
+    const Expr *b = fd->body;
+    if (!b || b->kind != EX_IF) return false;
+    const Expr *els = b->as.if_.else_or_null;
+    if (!els || els->kind != EX_DO || els->as.do_.n != 2) return false;
+    const Expr *cu = els->as.do_.items[0];
+    if (!cu || cu->kind != EX_CATCH_UNWIND) return false;
+    const Expr *thunk = cu->as.catch_unwind_.thunk;
+    /* The thunk is a 0-arg lambda: EX_FN when it captures nothing, EX_CLOSURE
+     * when it captures the recursion variable.  For a closure, every capture
+     * must be this function's own param, so references inside the thunk body
+     * resolve to that param's C name when we re-emit them in the driver.
+     * (Closure conversion prepends a synthetic env param, so tf->n_params is not
+     * checked -- the source lambda is 0-arg.) */
+    FnDef *tf = NULL;
+    if (thunk && thunk->kind == EX_FN) {
+        tf = thunk->as.fn_.fn;
+    } else if (thunk && thunk->kind == EX_CLOSURE && thunk->as.closure_.closure) {
+        struct Closure *cl = thunk->as.closure_.closure;
+        tf = cl->fn;
+        for (uint8_t i = 0; i < cl->n_captures; i++)
+            if (cl->captures[i] != fd->params[0]) return false;
+    } else {
+        return false;
+    }
+    if (!tf || !tf->body) return false;
+    const Expr *call = tf->body;
+    if (!call || call->kind != EX_CALL) return false;
+    if (call->as.call_.fn_binding != fd->binding) return false;   /* self-call */
+    if (call->as.call_.n_args != 1 || call->as.call_.fn_expr) return false;
+
+    const Expr *cond = b->as.if_.cond, *base = b->as.if_.then_;
+    const Expr *recur = call->as.call_.args[0], *after = els->as.do_.items[1];
+    if (!su_simple_expr(cond) || !su_simple_expr(base) ||
+        !su_simple_expr(recur) || !su_simple_expr(after))
+        return false;
+
+    *out_cond = cond; *out_base = base; *out_recur = recur; *out_after = after;
+    return true;
+}
+
+/* Emit the trampoline body for an eligible function.  The C parameter doubles as
+ * the driver's scratch for the current DESCEND args and the restored per-level
+ * param in the AFTER segment; the boundary + "return AFTER" continuation move
+ * onto a heap `tur_cont` chain, so nesting is bounded by heap, not the C stack.
+ * (Matches docs/upcoming/prototypes/d3-stackless-catch-unwind.c.) */
+static void emit_stackless_catch_body(EmitCtx *ctx, Buf *file, FnDef *fd,
+                                      const Expr *cond, const Expr *base,
+                                      const Expr *recur, const Expr *after) {
+    char *p = atom_var(ctx, fd->params[0]);   /* the C param name = our scratch */
+    int base_ind = ctx->indent;
+    #define SI(n) do { ctx->indent = base_ind + (n); indent_buf(file, ctx->indent); } while (0)
+
+    SI(0); buf_puts(file, "tur_cont *__k = (tur_cont*)malloc(sizeof(tur_cont));\n");
+    SI(0); buf_puts(file, "__k->tag = 0; __k->saved = 0; __k->boundary = 0; __k->next = 0;\n");
+    SI(0); buf_puts(file, "int __act = 0;   /* 0 = DESCEND, 1 = RETURN */\n");
+    SI(0); buf_puts(file, "int64_t __v = 0;\n");
+    SI(0); buf_puts(file, "for (;;) {\n");
+    /* A pending panic unwinds to the innermost boundary (RETURN to current k). */
+    SI(1); buf_puts(file, "if (tur_panicking) __act = 1;\n");
+    SI(1); buf_puts(file, "if (__act == 0) {\n");
+    {   /* DESCEND */
+        ctx->indent = base_ind + 2;
+        char *cv = emit_value(ctx, file, cond);
+        SI(2); buf_printf(file, "if (%s) {\n", cv); free(cv);
+        ctx->indent = base_ind + 3;
+        char *bv = emit_value(ctx, file, base);
+        SI(3); buf_printf(file, "__v = %s; __act = 1;\n", bv); free(bv);
+        SI(2); buf_puts(file, "} else {\n");
+        ctx->indent = base_ind + 3;
+        SI(3); buf_puts(file, "tur_handler_node *__b = (tur_handler_node*)malloc(sizeof(tur_handler_node));\n");
+        SI(3); buf_puts(file, "__b->parent = tur_handler_chain; tur_handler_chain = __b;\n");
+        SI(3); buf_puts(file, "tur_cont *__k2 = (tur_cont*)malloc(sizeof(tur_cont));\n");
+        SI(3); buf_printf(file, "__k2->tag = 1; __k2->saved = (int64_t)(%s); __k2->boundary = __b; __k2->next = __k;\n", p);
+        char *rv = emit_value(ctx, file, recur);
+        SI(3); buf_printf(file, "%s = %s;\n", p, rv); free(rv);
+        SI(3); buf_puts(file, "__k = __k2;\n");
+        SI(2); buf_puts(file, "}\n");
+    }
+    SI(1); buf_puts(file, "} else {\n");
+    {   /* RETURN */
+        ctx->indent = base_ind + 2;
+        SI(2); buf_puts(file, "if (__k->tag == 0) {\n");
+        SI(3); buf_puts(file, "if (tur_panicking) { fprintf(stderr, \"panic (uncaught, stackless)\\n\"); fflush(NULL); abort(); }\n");
+        SI(3); buf_puts(file, "free(__k); return __v;\n");
+        SI(2); buf_puts(file, "}\n");
+        /* AFTER segment: pop this level's boundary, consume any caught panic,
+         * restore the level's param, compute AFTER, return to the parent cont. */
+        SI(2); buf_puts(file, "tur_handler_chain = __k->boundary->parent; free(__k->boundary);\n");
+        SI(2); buf_puts(file, "if (tur_panicking) { tur_panicking = 0; tur_panic_in_progress = 0;\n");
+        SI(3); buf_puts(file, "if (global_panic_payload) { panic_payload_free(global_panic_payload); global_panic_payload = 0; } }\n");
+        SI(2); buf_printf(file, "%s = (%s)__k->saved;\n", p, emit_type_c_name(ctx, fd->param_types[0]));
+        char *av = emit_value(ctx, file, after);
+        SI(2); buf_printf(file, "__v = %s;\n", av); free(av);
+        SI(2); buf_puts(file, "tur_cont *__kk = __k->next; free(__k); __k = __kk; __act = 1;\n");
+    }
+    SI(1); buf_puts(file, "}\n");
+    SI(0); buf_puts(file, "}\n");
+    #undef SI
+    ctx->indent = base_ind;
+    free(p);
+}
+
 /* ------------ Phase 2: function emission ------------ */
 
 void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
@@ -1318,7 +1482,15 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         !(result_kind == TY_NIL && !is_main) && !is_main &&
         tco_params_simple(ctx, e, fd) && tco_mark(ctx, fd, fn_name, fd->body) > 0;
 
-    if (prereq6_synthesized_body) {
+    const Expr *__su_cond = NULL, *__su_base = NULL, *__su_recur = NULL, *__su_after = NULL;
+    if (!prereq6_synthesized_body && !m2b_carrier_synth &&
+        stackless_catch_eligible(ctx, e, fd, result_kind,
+                                 &__su_cond, &__su_base, &__su_recur, &__su_after)) {
+        /* D3 (stackless-catch-unwind): emit the self-recursive catch-unwind
+         * function as a heap-continuation trampoline instead of native
+         * recursion, so nested catch-unwind runs with a flat C stack. */
+        emit_stackless_catch_body(ctx, file, fd, __su_cond, __su_base, __su_recur, __su_after);
+    } else if (prereq6_synthesized_body) {
         /* Prereq 6: the function body was already emitted as a synthesized
          * wrapper above (heap-spill + carrier helper call + cast back to
          * the by-value struct). Skip the normal body-emit paths; the

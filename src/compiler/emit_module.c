@@ -6391,6 +6391,15 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         experiment_warn_if_used("panic-return-signal");
         emit_rt_global(out, shared, "__thread int tur_panicking = 0;\n", "__thread int tur_panicking");
     }
+    /* D3 (compiled-catch-unwind-stackless-plan): heap continuation node used by
+     * the self-recursive catch-unwind trampoline.  One shared layout suffices
+     * for the slice-1 grammar (single int64-repr param, one catch site): `tag`
+     * selects the DONE vs AFTER segment, `saved` carries the level's param for
+     * the AFTER segment, `boundary` is the D1 handler node this segment pops. */
+    if (g_opt_stackless_catch_unwind) {
+        experiment_warn_if_used("stackless-catch-unwind");
+        buf_puts(out, "typedef struct tur_cont { int tag; int64_t saved; tur_handler_node *boundary; struct tur_cont *next; } tur_cont;\n");
+    }
     emit_rt_global(out, shared, "tur_panic_payload *global_panic_payload;\n", "tur_panic_payload *global_panic_payload");
     buf_puts(out, "static tur_panic_payload *panic_payload_new(int, void *, const char *, int);\n");
     buf_puts(out, "static void tur_panic(const char *msg) {\n");
