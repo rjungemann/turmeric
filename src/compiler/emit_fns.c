@@ -602,6 +602,8 @@ static bool gs_suspends(const Expr *e, FnDef *fd) {
             return false;
         case EX_CAST:    return gs_suspends(e->as.cast_.expr, fd);
         case EX_ASCRIBE: return gs_suspends(e->as.ascribe_.inner, fd);
+        case EX_PANIC_PAYLOAD_TYPE:  return gs_suspends(e->as.panic_payload_type_.payload, fd);
+        case EX_PANIC_PAYLOAD_VALUE: return gs_suspends(e->as.panic_payload_value_.payload, fd);
         default:         return false;
     }
 }
@@ -620,6 +622,8 @@ static bool gs_value_ok(const Expr *e, FnDef *fd) {
             return true;
         case EX_CAST:       return gs_value_ok(e->as.cast_.expr, fd);
         case EX_ASCRIBE:    return gs_value_ok(e->as.ascribe_.inner, fd);
+        case EX_PANIC_PAYLOAD_TYPE:  return gs_value_ok(e->as.panic_payload_type_.payload, fd);
+        case EX_PANIC_PAYLOAD_VALUE: return gs_value_ok(e->as.panic_payload_value_.payload, fd);
         case EX_PANIC:      return gs_value_ok(e->as.panic_.payload, fd);
         case EX_PANIC_WITH: return gs_value_ok(e->as.panic_with_.payload, fd);
         case EX_BUILTIN:
@@ -707,6 +711,8 @@ static bool gs_has_catch(const Expr *e, FnDef *fd) {
             return false;
         case EX_CAST:    return gs_has_catch(e->as.cast_.expr, fd);
         case EX_ASCRIBE: return gs_has_catch(e->as.ascribe_.inner, fd);
+        case EX_PANIC_PAYLOAD_TYPE:  return gs_has_catch(e->as.panic_payload_type_.payload, fd);
+        case EX_PANIC_PAYLOAD_VALUE: return gs_has_catch(e->as.panic_payload_value_.payload, fd);
         default:         return false;
     }
 }
@@ -836,6 +842,8 @@ static void gs_collect(GsCtx *gs, const Expr *e) {
             break;
         case EX_CAST:       gs_collect(gs, e->as.cast_.expr); break;
         case EX_ASCRIBE:    gs_collect(gs, e->as.ascribe_.inner); break;
+        case EX_PANIC_PAYLOAD_TYPE:  gs_collect(gs, e->as.panic_payload_type_.payload); break;
+        case EX_PANIC_PAYLOAD_VALUE: gs_collect(gs, e->as.panic_payload_value_.payload); break;
         case EX_PANIC:      gs_collect(gs, e->as.panic_.payload); break;
         case EX_PANIC_WITH: gs_collect(gs, e->as.panic_with_.payload); break;
         default: break;
@@ -872,6 +880,8 @@ static bool gs_suspends_live(GsCtx *gs, const Expr *e) {
             return false;
         case EX_CAST:    return gs_suspends_live(gs, e->as.cast_.expr);
         case EX_ASCRIBE: return gs_suspends_live(gs, e->as.ascribe_.inner);
+        case EX_PANIC_PAYLOAD_TYPE:  return gs_suspends_live(gs, e->as.panic_payload_type_.payload);
+        case EX_PANIC_PAYLOAD_VALUE: return gs_suspends_live(gs, e->as.panic_payload_value_.payload);
         default:         return false;
     }
 }
@@ -903,6 +913,8 @@ static const Expr *gs_leftmost(GsCtx *gs, const Expr *e) {
             return NULL;
         case EX_CAST:    return gs_leftmost(gs, e->as.cast_.expr);
         case EX_ASCRIBE: return gs_leftmost(gs, e->as.ascribe_.inner);
+        case EX_PANIC_PAYLOAD_TYPE:  return gs_leftmost(gs, e->as.panic_payload_type_.payload);
+        case EX_PANIC_PAYLOAD_VALUE: return gs_leftmost(gs, e->as.panic_payload_value_.payload);
         case EX_IF:      return gs_leftmost(gs, e->as.if_.cond);
         default:         return NULL;
     }
@@ -1060,10 +1072,14 @@ static void gs_catch_descend(GsCtx *gs, Buf *b, const Expr *S, const GsSink *sin
     buf_puts(rb, "tur_handler_chain = __k->boundary->parent; free(__k->boundary);\n");
     indent_buf(rb, gs->cur_ind);
     buf_printf(rb, "int64_t __box%d;\n", id);
+    /* Consume a caught panic exactly as native tur_catch_unwind_box does: box
+     * the payload pointer into the err result (do NOT free it -- err-val hands
+     * it back), so the err branch and err-val/ok-val extraction match native.
+     * The result box lives on, matching native's documented box leak. */
     indent_buf(rb, gs->cur_ind);
     buf_printf(rb, "if (tur_panicking) { tur_panicking = 0; tur_panic_in_progress = 0; "
-                   "if (global_panic_payload) { panic_payload_free(global_panic_payload); "
-                   "global_panic_payload = 0; } __box%d = tur_box_err(0); }\n", id);
+                   "tur_panic_payload *__pp%d = global_panic_payload; global_panic_payload = 0; "
+                   "__box%d = tur_box_err((int64_t)(intptr_t)__pp%d); }\n", id, id, id);
     indent_buf(rb, gs->cur_ind);
     buf_printf(rb, "else { __box%d = tur_box_ok(__v); }\n", id);
     indent_buf(rb, gs->cur_ind);
@@ -1394,6 +1410,8 @@ static void gs_callees(const Expr *e, FnDef **out, int *n, int cap) {
             break;
         case EX_CAST:       gs_callees(e->as.cast_.expr, out, n, cap); break;
         case EX_ASCRIBE:    gs_callees(e->as.ascribe_.inner, out, n, cap); break;
+        case EX_PANIC_PAYLOAD_TYPE:  gs_callees(e->as.panic_payload_type_.payload, out, n, cap); break;
+        case EX_PANIC_PAYLOAD_VALUE: gs_callees(e->as.panic_payload_value_.payload, out, n, cap); break;
         case EX_PANIC:      gs_callees(e->as.panic_.payload, out, n, cap); break;
         case EX_PANIC_WITH: gs_callees(e->as.panic_with_.payload, out, n, cap); break;
         default: break;

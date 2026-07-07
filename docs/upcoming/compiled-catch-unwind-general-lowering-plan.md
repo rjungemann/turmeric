@@ -184,15 +184,29 @@ grammar, now for any body.
 
 ### G5 -- Result-box ownership (value extraction, err branch, no leak)
 
-- Give the caught result box a lifetime tied to the continuation node that owns
-  it: free (RC-drop) the box when its resume segment finishes, or arena it per
-  call-tree. This removes the per-level box leak the scaffold documents.
-- With ownership settled, lift the scaffold's restrictions: `AFTER` may extract
-  the caught value (`ok-val`/`err-val`), and the **`err` branch** becomes live
-  (a function that actually panics under its own catch). Non-int result boxes
-  follow once the box repr per result type is handled (ties into G6).
-- Depends on the language-level `ok-val`-on-`Panic` inference gap being closed
-  first (see "Adjacent" below).
+> **Status: value extraction + err branch DONE; no-leak deferred (matches
+> native).** The catch resume now consumes a caught panic exactly as native
+> `tur_catch_unwind_box` does -- it boxes the panic payload pointer into the err
+> result (`tur_box_err((int64_t)(intptr_t)payload)`) instead of freeing it. This
+> fixed a real SIGSEGV: the earlier consume `free`d the payload, which crashed on
+> a `panic-with` int payload and lost the value.  Consequences:
+> - `AFTER` may **extract** the caught value: `ok-val` on an ok box returns the
+>   caught thunk value (covered by `stackless-catch-unwind-okval`, f(n)=7+n,
+>   1,000,000-deep flat where native SIGSEGVs); `err-val` returns the Panic
+>   handle with native-identical semantics; the pure `panic-payload-type`/
+>   `-value` accessors are now allowed in the trampolined subset.
+> - The **`err` branch is genuinely live** for a thunk that raises a typed panic
+>   (`stackless-catch-unwind-panic-with`, f(n)=n via the err path), matching
+>   native.
+> - The `ok-val`-on-`Panic` inference gap ("Adjacent" below) was already closed
+>   upstream (#620), so nothing blocked this.
+>
+> **Deferred:** the box (and its payload) still leaks -- but so does native's
+> `tur_catch_unwind_box`, and native is the correctness oracle for drop
+> behavior, so matching-native (leak) is preferred over a per-level free that
+> would be use-after-free the moment the box escapes (is returned as the
+> function's `Result`). A real RC-drop needs escape analysis; left for later.
+> Non-int result boxes ride the int64 carrier and tie into G6.
 
 ### G6 -- Non-scalar (carrier / opaque / aggregate) params
 

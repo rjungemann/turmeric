@@ -6007,7 +6007,7 @@ static int64_t f(int64_t n, bool flag) {
            __t183 = (int64_t)(intptr_t)(__k->saved[3]);
            tur_handler_chain = __k->boundary->parent; free(__k->boundary);
            int64_t __box185;
-           if (tur_panicking) { tur_panicking = 0; tur_panic_in_progress = 0; if (global_panic_payload) { panic_payload_free(global_panic_payload); global_panic_payload = 0; } __box185 = tur_box_err(0); }
+           if (tur_panicking) { tur_panicking = 0; tur_panic_in_progress = 0; tur_panic_payload *__pp185 = global_panic_payload; global_panic_payload = 0; __box185 = tur_box_err((int64_t)(intptr_t)__pp185); }
            else { __box185 = tur_box_ok(__v); }
            { tur_cont *__pk = __k->next; free(__k); __k = __pk; }
            (void)(__box185);

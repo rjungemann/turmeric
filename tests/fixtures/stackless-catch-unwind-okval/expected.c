@@ -3015,7 +3015,7 @@ static int64_t __inst_Hash_hash_Sym(const struct __tur_sym *);
 static int64_t __inst_MapKey_mk_hybox_Sym(const struct __tur_sym *);
 static int64_t __inst_MapKey_mk_hycmp_Sym(const struct __tur_sym *);
 static int64_t __inst_MapKey_mk_hyowned_qu_Sym(const struct __tur_sym *);
-static int64_t __fn_1267(void *);
+static int64_t __fn_1266(void *);
 static void * array_hyget(void *, int64_t);
 static int64_t array_hyset(void *, int64_t, int64_t);
 static void * array_hyslice(void *, int64_t, int64_t);
@@ -3097,6 +3097,7 @@ static int64_t unwrap_hyor_hycarrier(int64_t, int64_t);
 static void option_hyfree(int64_t);
 static bool ok_qu(int64_t);
 static bool err_qu(int64_t);
+static int64_t ok_hyval(int64_t);
 static void result_hyfree(int64_t);
 static bool result_hyeq_qu(int64_t, int64_t, int64_t, int64_t);
 static bool _un_untur_hyq_hyis_hyerr_qu(void *);
@@ -3222,7 +3223,7 @@ static const char * sym_hy_gtstr(const struct __tur_sym *);
 static bool sym_eq_qu(const struct __tur_sym *, const struct __tur_sym *);
 static int64_t consume(int64_t, int64_t);
 static int64_t replace(int64_t, int64_t);
-static int64_t f(int64_t, int64_t);
+static int64_t f(int64_t);
 static bool some___spec__bool_tur_adt_Option__opaque(tur_adt_Option__opaque);
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t, int64_t);
 
@@ -3601,10 +3602,10 @@ static int64_t __inst_MapKey_mk_hyowned_qu_Sym(const struct __tur_sym * x) {
         return INT64_C(0);
 }
 
-struct __env_1269 { tur_thunk_int64_t_t __fn; int64_t n; int64_t acc; };
-static int64_t __fn_1267(void * __env_p_1270) {
-        struct __env_1269 *__env___env_1269 = (struct __env_1269 *)__env_p_1270;
-        __auto_type __ps_43 = (f((__env___env_1269->n) - (INT64_C(1)), (__env___env_1269->acc) + (INT64_C(1))));
+struct __env_1268 { tur_thunk_int64_t_t __fn; int64_t n; };
+static int64_t __fn_1266(void * __env_p_1269) {
+        struct __env_1268 *__env___env_1268 = (struct __env_1268 *)__env_p_1269;
+        __auto_type __ps_43 = (f((__env___env_1268->n) - (INT64_C(1))));
         if (tur_panicking) return (int64_t){0};
         return __ps_43;
 }
@@ -4233,6 +4234,10 @@ static bool ok_qu(int64_t r) {
 static bool err_qu(int64_t r) {
         return !tur_is_ok(r);
   
+}
+
+static int64_t ok_hyval(int64_t r) {
+        return (int64_t)((tur_adt_Result *)(intptr_t)(r))->ok_val;
 }
 
 static void result_hyfree(int64_t r) {
@@ -5957,7 +5962,8 @@ static int64_t replace(int64_t old, int64_t new) {
         return old;
 }
 
-static int64_t f(int64_t n, int64_t acc) {
+static int64_t f(int64_t n) {
+        int64_t r_1271 = 0;
         int64_t __t182 = 0;
         int64_t __t183 = 0;
         tur_cont *__k = (tur_cont*)malloc(sizeof(tur_cont));
@@ -5974,14 +5980,14 @@ static int64_t f(int64_t n, int64_t acc) {
           case 0: { free(__k); return (int64_t)(intptr_t)(__v); }
           case 1: {
            if ((n) == (INT64_C(0))) {
-            __v = (int64_t)(intptr_t)(acc); __pc = __k->tag; break;
+            __v = (int64_t)(intptr_t)(INT64_C(7)); __pc = __k->tag; break;
            } else {
             tur_handler_node *__b184 = (tur_handler_node*)malloc(sizeof(tur_handler_node));
             __b184->parent = tur_handler_chain; tur_handler_chain = __b184;
             tur_cont *__n184 = (tur_cont*)malloc(sizeof(tur_cont));
             __n184->tag = 3; __n184->boundary = __b184; __n184->next = __k;
             __n184->saved[0] = (int64_t)(intptr_t)(n);
-            __n184->saved[1] = (int64_t)(intptr_t)(acc);
+            __n184->saved[1] = (int64_t)(intptr_t)(r_1271);
             __n184->saved[2] = (int64_t)(intptr_t)(__t182);
             __n184->saved[3] = (int64_t)(intptr_t)(__t183);
             __k = __n184; __pc = 2; break;
@@ -5989,14 +5995,12 @@ static int64_t f(int64_t n, int64_t acc) {
           }
           case 2: {
            __auto_type __ra185_0 = ((n) - (INT64_C(1)));
-           __auto_type __ra185_1 = ((acc) + (INT64_C(1)));
            n = __ra185_0;
-           acc = __ra185_1;
            __pc = 1; break;
           }
           case 3: {
            n = (int64_t)(intptr_t)(__k->saved[0]);
-           acc = (int64_t)(intptr_t)(__k->saved[1]);
+           r_1271 = (int64_t)(intptr_t)(__k->saved[1]);
            __t182 = (int64_t)(intptr_t)(__k->saved[2]);
            __t183 = (int64_t)(intptr_t)(__k->saved[3]);
            tur_handler_chain = __k->boundary->parent; free(__k->boundary);
@@ -6004,8 +6008,18 @@ static int64_t f(int64_t n, int64_t acc) {
            if (tur_panicking) { tur_panicking = 0; tur_panic_in_progress = 0; tur_panic_payload *__pp184 = global_panic_payload; global_panic_payload = 0; __box184 = tur_box_err((int64_t)(intptr_t)__pp184); }
            else { __box184 = tur_box_ok(__v); }
            { tur_cont *__pk = __k->next; free(__k); __k = __pk; }
-           (void)(__box184);
-           __v = (int64_t)(intptr_t)((acc) + (n)); __pc = __k->tag; break;
+           r_1271 = __box184;
+           int64_t __t186;
+           __auto_type __ps_187 = (ok_qu(r_1271));
+           if (tur_panicking) return (int64_t){0};
+           if (__ps_187) {
+               __auto_type __ps_188 = (ok_hyval(r_1271));
+               if (tur_panicking) return (int64_t){0};
+               __t186 = (INT64_C(1)) + (__ps_188);
+           } else {
+               __t186 = INT64_C(0);
+           }
+           __v = (int64_t)(intptr_t)(__t186); __pc = __k->tag; break;
           }
          }
         }
@@ -6021,12 +6035,12 @@ int main(int argc, char **argv) {
             _c->next = g_tur_args;
             g_tur_args = (int64_t)(intptr_t)_c;
         }
-        __auto_type __ps_186 = (f(INT64_C(500000), INT64_C(0)));
+        __auto_type __ps_189 = (f(INT64_C(200000)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        printf("%lld\n", (long long)(__ps_186));
-        int64_t __t187;
-        __t187 = INT64_C(0);
-        return (int)__t187;
+        printf("%lld\n", (long long)(__ps_189));
+        int64_t __t190;
+        __t190 = INT64_C(0);
+        return (int)__t190;
 }
 
 static bool some___spec__bool_tur_adt_Option__opaque(tur_adt_Option__opaque o) {
@@ -6034,9 +6048,9 @@ static bool some___spec__bool_tur_adt_Option__opaque(tur_adt_Option__opaque o) {
 }
 
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t h, int64_t t) {
-        __auto_type __ps_188 = (ctor_Cons__int(h, t));
+        __auto_type __ps_191 = (ctor_Cons__int(h, t));
         if (tur_panicking) return (tur_adt_Cons__int *){0};
-        return __ps_188;
+        return __ps_191;
 }
 
 

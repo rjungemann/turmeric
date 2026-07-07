@@ -6024,7 +6024,7 @@ static int64_t __cu_group_0(int __pc, int64_t __a0) {
     __t186 = (int64_t)(intptr_t)(__k->saved[5]);
     tur_handler_chain = __k->boundary->parent; free(__k->boundary);
     int64_t __box187;
-    if (tur_panicking) { tur_panicking = 0; tur_panic_in_progress = 0; if (global_panic_payload) { panic_payload_free(global_panic_payload); global_panic_payload = 0; } __box187 = tur_box_err(0); }
+    if (tur_panicking) { tur_panicking = 0; tur_panic_in_progress = 0; tur_panic_payload *__pp187 = global_panic_payload; global_panic_payload = 0; __box187 = tur_box_err((int64_t)(intptr_t)__pp187); }
     else { __box187 = tur_box_ok(__v); }
     { tur_cont *__pk = __k->next; free(__k); __k = __pk; }
     (void)(__box187);
@@ -6061,7 +6061,7 @@ static int64_t __cu_group_0(int __pc, int64_t __a0) {
     __t186 = (int64_t)(intptr_t)(__k->saved[5]);
     tur_handler_chain = __k->boundary->parent; free(__k->boundary);
     int64_t __box189;
-    if (tur_panicking) { tur_panicking = 0; tur_panic_in_progress = 0; if (global_panic_payload) { panic_payload_free(global_panic_payload); global_panic_payload = 0; } __box189 = tur_box_err(0); }
+    if (tur_panicking) { tur_panicking = 0; tur_panic_in_progress = 0; tur_panic_payload *__pp189 = global_panic_payload; global_panic_payload = 0; __box189 = tur_box_err((int64_t)(intptr_t)__pp189); }
     else { __box189 = tur_box_ok(__v); }
     { tur_cont *__pk = __k->next; free(__k); __k = __pk; }
     (void)(__box189);
