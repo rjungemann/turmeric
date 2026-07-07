@@ -1,0 +1,17 @@
+;; G3 (compiled-catch-unwind-general-lowering-plan): the general segment
+;; splitter, not the fixed-grammar scaffold.  This body has TWO catch sites in
+;; one `do` -- the first catches a REAL panic raised by its thunk (the scaffold
+;; assumed panic-free bodies and never exercised the err path), the second wraps
+;; the self-recursion -- followed by a non-catch tail expression.  Native (flag
+;; off) keeps a live C frame per level and SIGSEGVs deep; the stackless build
+;; trampolines it flat.  g(n) = 1 + n (the recursion's value is discarded).
+(defn g [n : int] : int
+  (if (= n 0)
+    0
+    (do (catch-unwind (fn [] : int (panic "x")))
+        (catch-unwind (fn [] : int (g (- n 1))))
+        (+ 1 n))))
+
+(defn main [] : int
+  (println (g 500000))
+  0)

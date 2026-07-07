@@ -103,18 +103,43 @@ grammar, now for any body.
 
 ### G3 -- Segment-splitting emit for a single self-recursive function
 
-> **Status (in progress).** First increment landed: the straight-line regions
-> (cond / base / after) of a stackless catch-unwind body may now be arbitrarily
-> nested **pure** control flow -- `su_simple_expr` accepts `let` and `do` (whose
-> sub-expressions are themselves simple), not just single expressions or `if`.
-> This lifts the scaffold's "simple sub-expression" restriction for panic-free
-> nested control in the segments the trampoline evaluates inline, with no driver
-> change (the widened forms carry no boundary, panic-capable call, or closure, so
-> they stay driver-safe). Covered by `tests/fixtures/stackless-catch-unwind-nested-let`
-> (native/stackless differential + 1,000,000-deep flat-stack proof). Still TODO
-> for G3: the general split itself -- multiple catch sites, self-recursion in
-> non-tail position within `after`, and retiring the fixed
-> `(if COND BASE (do (catch-unwind ...) AFTER))` shape.
+> **Status: DONE (single-function).** The grammar-matched scaffold
+> (`stackless_catch_eligible` / `emit_stackless_catch_body` / `su_simple_expr`)
+> is **deleted**; a general segment splitter (`emit_stackless_general_body` in
+> `src/compiler/emit_fns.c`) replaces it. It lowers an arbitrary catch-crossing
+> self-recursive body into heap-continuation segments driven by a
+> `for(;;)`/`switch(__pc)` trampoline:
+>
+> - **Multiple catch sites** and **catch-unwind anywhere** (statement or value
+>   position), not a single fixed site.
+> - **Non-tail self-recursion anywhere**, including nested inside a pure builtin
+>   (`(+ 1 (f ...))`) via emit_value "holes" (`ctx->sub_holes`): a suspended
+>   sub-expression is hoisted into a saved temp and the enclosing expression is
+>   re-emitted in the resume segment with the suspension replaced by that temp.
+> - **A catch whose thunk actually panics** -- the resume segment consumes the
+>   caught signal and builds an `err` box, so the **`err` branch is live** (the
+>   scaffold assumed panic-free thunks, always `ok`). Result boxes may be
+>   consumed by the pure `ok?`/`err?`/`some?`/`none?` predicates.
+> - **Nested if/let/do**; let-bound locals live across a suspension are hoisted
+>   to function scope and saved on the node.
+> - **Tail self-calls** loop back to ENTRY with no node (O(1) space).
+> - A pending panic unwinds by popping boundary-less nodes until a catch node (or
+>   DONE -> uncaught abort), matching the D1a signal contract.
+>
+> The general path is tried first and subsumes the entire former grammar; it
+> falls back to normal (native) emission only when a hard limit is hit
+> (`> TUR_SC_MAXN=32` live scalars or `> 256` segments). All eight
+> `stackless-catch-unwind-*` fixtures now lower through it and match native;
+> `stackless-catch-unwind-multi-catch` and `stackless-catch-unwind-panic-caught`
+> cover the new capabilities (multi-catch + real caught panic + err branch +
+> non-tail recursion), each differential-checked against native and running
+> 500,000 / 200,000 deep under a 128 KiB stack where native SIGSEGVs.
+>
+> Remaining for later phases: G4 (cross-function / mutual recursion via the
+> boundary shim), G5/G6 (result-box ownership -- value extraction with `ok-val`,
+> non-scalar/carrier params, RC discipline), G7 (effect/fiber/cancel unification).
+> Precise per-split liveness (G1) is still the over-approximation "save every live
+> scalar"; a real backward liveness pass is a later optimization.
 
 - Replace the grammar match with a general split of one function's body at its
   `catch-unwind` sites, self-recursion allowed anywhere (tail or non-tail),

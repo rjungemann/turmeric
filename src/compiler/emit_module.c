@@ -6391,15 +6391,17 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         experiment_warn_if_used("panic-return-signal");
         emit_rt_global(out, shared, "__thread int tur_panicking = 0;\n", "__thread int tur_panicking");
     }
-    /* D3 (compiled-catch-unwind-stackless-plan): heap continuation node used by
-     * the self-recursive catch-unwind trampoline.  One shared layout serves the
-     * grammar (up to TUR_SC_MAXP int params, one catch site): `tag` selects the
-     * DONE vs AFTER segment, `saved[]` carries the level's params for the AFTER
-     * segment, `boundary` is the D1 handler node this segment pops. */
+    /* G3 (compiled-catch-unwind-general-lowering): heap continuation node used
+     * by the general catch-unwind segment-splitter trampoline.  `tag` names the
+     * resume segment (0 = DONE / function return), `saved[]` (up to TUR_SC_MAXN
+     * live scalar locals) carries this level's params + hoisted let-vars +
+     * suspension result temps across a descend, and `boundary` is the D1 handler
+     * node a catch segment pops (0 for a self-call resume). */
     if (g_opt_stackless_catch_unwind) {
         experiment_warn_if_used("stackless-catch-unwind");
         buf_printf(out, "#define TUR_SC_MAXP %d\n", TUR_SC_MAXP);
-        buf_puts(out, "typedef struct tur_cont { int tag; tur_handler_node *boundary; struct tur_cont *next; int64_t saved[TUR_SC_MAXP]; } tur_cont;\n");
+        buf_printf(out, "#define TUR_SC_MAXN %d\n", TUR_SC_MAXN);
+        buf_puts(out, "typedef struct tur_cont { int tag; tur_handler_node *boundary; struct tur_cont *next; int64_t saved[TUR_SC_MAXN]; } tur_cont;\n");
         /* Float params round-trip through the int64 saved[] slots by BIT
          * reinterpretation (an intptr_t cast would truncate the value). */
         buf_puts(out, "static inline int64_t tur_sc_bits_f64(double d){ int64_t i; memcpy(&i,&d,sizeof i); return i; }\n");
