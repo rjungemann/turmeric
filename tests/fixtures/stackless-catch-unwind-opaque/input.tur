@@ -1,0 +1,18 @@
+;; G6 (compiled-catch-unwind-general-lowering-plan): a NON-scalar param.  The
+;; `defopaque Counter :int` newtype is an int64 carrier in C (not a machine
+;; scalar), so the scaffold and earlier general splitter rejected it.  It now
+;; rides the trampoline's int64 saved[] slot (kind forced to int for the
+;; save/restore casts), matching native which keeps it live across the recursive
+;; call by value with no retain/drop.  Recursion crosses the catch-unwind, so
+;; native (flag off) SIGSEGVs deep; step(c, n) folds to (c + n) here.
+(defopaque Counter :int)
+
+(defn step [c : Counter n : int] : int
+  (if (= n 0)
+    (:: c int)
+    (do (catch-unwind (fn [] : int (step (:: (+ (:: c int) 1) Counter) (- n 1))))
+        (+ (:: c int) n))))
+
+(defn main [] : int
+  (println (step (:: 0 Counter) 200000))
+  0)

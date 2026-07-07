@@ -1,0 +1,18 @@
+;; G3 (compiled-catch-unwind-general-lowering-plan): the straight-line regions
+;; of a stackless catch-unwind body (cond / base / after) may now be arbitrarily
+;; nested PURE control flow -- here the `after` segment is a `let` binding two
+;; temps and branching on them, not a single simple expression. The scaffold's
+;; `su_simple_expr` whitelist previously rejected `let`/`do`, forcing a fallback
+;; to the native (stack-consuming) emission; it now accepts pure let/do so this
+;; body trampolines. Native (flag off) and stackless (flag on) must agree.
+(defn f [n : int acc : int] : int
+  (if (= n 0)
+    acc
+    (do (catch-unwind (fn [] : int (f (- n 1) (+ acc 1))))
+        (let [d (- n 1)
+              s (+ acc n)]
+          (if (= d 0) s (+ s d))))))
+
+(defn main [] : int
+  (println (f 500000 0))
+  0)

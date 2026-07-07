@@ -53,7 +53,7 @@ assignment in the elaborator and the `ok-val`/`err-val` signatures.
 ## Why it matters now
 
 The general stackless catch-unwind lowering
-([compiled-catch-unwind-general-lowering-plan.md](../upcoming/compiled-catch-unwind-general-lowering-plan.md),
+([compiled-catch-unwind-general-lowering-plan.md](./compiled-catch-unwind-general-lowering-plan.md),
 phase G5) wants `AFTER` to consume the caught value. There is nothing to test
 that against until this infers, so this is a prerequisite for G5's value
 extraction. It is a pure language/elaboration gap -- independent of the compiled

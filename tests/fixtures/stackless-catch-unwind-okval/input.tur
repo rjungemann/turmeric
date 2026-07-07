@@ -1,0 +1,15 @@
+;; G5 (compiled-catch-unwind-general-lowering-plan): value EXTRACTION from the
+;; caught result.  The scaffold could only PREDICATE the box (ok?/err?); the
+;; general splitter now lets AFTER extract the caught value with `ok-val`, which
+;; the box carries (the caught thunk value).  f(n) = 7 + n.  Native (flag off)
+;; SIGSEGVs deep (recursion under the catch thunk keeps a live frame per level);
+;; the stackless build trampolines it flat.
+(defn f [n : int] : int
+  (if (= n 0)
+    7
+    (let [r (catch-unwind (fn [] : int (f (- n 1))))]
+      (if (ok? r) (+ 1 (ok-val r)) 0))))
+
+(defn main [] : int
+  (println (f 200000))
+  0)

@@ -1,0 +1,15 @@
+;; G5 (compiled-catch-unwind-general-lowering-plan): a catch-unwind whose thunk
+;; raises a TYPED panic (`panic-with`, carrying an int payload).  The resume
+;; segment consumes the D1a signal and boxes the panic payload into the err
+;; result exactly as native tur_catch_unwind_box does -- so err? is true and the
+;; payload is preserved (an earlier version freed the int payload and SIGSEGVd).
+;; f(n) = n (the thunk always panics -> err branch taken every level).
+(defn f [n : int] : int
+  (if (= n 0)
+    0
+    (let [r (catch-unwind (fn [] : int (panic-with 42)))]
+      (if (err? r) (+ 1 (f (- n 1))) 999))))
+
+(defn main [] : int
+  (println (f 200000))
+  0)

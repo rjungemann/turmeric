@@ -1,0 +1,17 @@
+;; G3 (compiled-catch-unwind-general-lowering-plan): a catch-unwind whose thunk
+;; actually PANICS, whose result box is then consumed (err? r) and whose taken
+;; branch recurses NON-TAIL (1 + (h ...)).  The scaffold could not express any
+;; of these (panic-free thunk only, result at most predicated, recursion only
+;; inside the thunk).  The general splitter lowers it to a flat-stack trampoline
+;; that matches native at shallow depth.  h(n) = n (thunk always panics -> err).
+(defn h [n : int] : int
+  (if (= n 0)
+    0
+    (let [r (catch-unwind (fn [] : int (panic "boom")))]
+      (if (err? r)
+        (+ 1 (h (- n 1)))
+        999))))
+
+(defn main [] : int
+  (println (h 200000))
+  0)

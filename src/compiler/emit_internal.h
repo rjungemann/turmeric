@@ -18,6 +18,13 @@
  * generous cap; functions above it fall back to the normal lowering. */
 #define TUR_SC_MAXP 8
 
+/* G3 (compiled-catch-unwind-general-lowering): the general segment splitter
+ * saves every live scalar local (params + hoisted let-vars + suspension result
+ * temps) at each descend, so its tur_cont saved[] is wider than the scaffold's
+ * per-param cap.  A function whose live-scalar count exceeds this falls back to
+ * the scaffold / normal lowering. */
+#define TUR_SC_MAXN 32
+
 #include "arena.h"
 #include "builtins.h"
 #include "cps.h"
@@ -345,6 +352,17 @@ typedef struct EmitCtx {
      * operand.  Read-and-cleared at EX_GET_FIELD entry so only the outermost
      * field access of the borrow operand is affected, not nested reads. */
     bool         lvalue_mode;
+    /* G3 (compiled-catch-unwind-general-lowering): the general stackless
+     * catch-unwind segment splitter fills expression "holes" -- a suspended
+     * sub-expression (a self-call or catch-unwind whose value is delivered on a
+     * later driver iteration) is replaced by a C temp when the enclosing
+     * expression is re-emitted in the resume segment.  emit_value consults this
+     * pointer-keyed override table first: an Expr* that matches `sub_holes[i]`
+     * emits `sub_names[i]` verbatim instead of recursing.  Empty (n==0) off the
+     * general path, so it never perturbs any other emission. */
+    const Expr  *sub_holes[16];
+    const char  *sub_names[16];
+    uint8_t      n_sub_holes;
 } EmitCtx;
 
 /* Phase 4 v1: Defer thunk tracking */
@@ -675,5 +693,7 @@ void emit_set_field_stmt(EmitCtx *ctx, Buf *body, const Expr *e);
 
 /* ------------ emit_fns.c: function-definition emission ------------ */
 void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e);
+/* G4: reset the per-module shared-driver group registry. */
+void gs_reset_group_registry(void);
 
 #endif

@@ -2276,6 +2276,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e);
  * no usable value and are checked where they appear as statements
  * (EX_PANIC / EX_PANIC_WITH). */
 char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
+    /* G3 general catch-unwind splitter: a registered hole emits its C temp name
+     * verbatim (the suspended sub-expression's already-delivered value). */
+    for (uint8_t i = 0; i < ctx->n_sub_holes; i++)
+        if (ctx->sub_holes[i] == e) return strdup(ctx->sub_names[i]);
     char *v = emit_value_dispatch(ctx, body, e);
     if (!g_opt_panic_return_signal || e->kind != EX_CALL) return v;
     if (e->type.kind == TY_NIL) return v;  /* unit/void: no usable value to hoist */

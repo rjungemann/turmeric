@@ -1,0 +1,19 @@
+;; G6 (compiled-catch-unwind-general-lowering-plan): a by-value AGGREGATE param.
+;; `(Option int)` is `struct { bool is_some; int64_t value }` -- passed by value,
+;; too wide for the trampoline's int64 saved[] slot.  It is relocated across each
+;; descend by heap-boxing (malloc + memcpy into a box the slot points at; the
+;; resume memcpys it back and frees the box), a byte-copy that matches native's
+;; keep-by-value-across-the-call with no retain/drop.  `acc` is carried through
+;; the recursion and observed via the pure `some?` accessor; recursion crosses
+;; the catch-unwind, so native (flag off) SIGSEGVs deep.  step(acc, n) = n +
+;; (some? acc ? 1 : 0).
+(defn step [acc : (Option int) n : int] : int
+  (if (= n 0)
+    (if (some? acc) 100 200)
+    (do (catch-unwind (fn [] : int (step acc (- n 1))))
+        (+ n (if (some? acc) 1 0)))))
+
+(defn main [] : int
+  (println (step (some 7) 200000))
+  (println (step (none) 7))
+  0)

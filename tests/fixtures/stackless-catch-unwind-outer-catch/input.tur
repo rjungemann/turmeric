@@ -1,0 +1,18 @@
+;; G7 (compiled-catch-unwind-general-lowering-plan): a panic raised inside a
+;; trampolined function that escapes ALL of that function's own catch-unwind
+;; boundaries must propagate to an OUTER (here native, non-trampolined) catch --
+;; the driver must not treat "escaped my boundaries" as "uncaught" and abort.
+;; `f` is trampolined (has a catch-unwind + self-recursion); its base-case panic
+;; is not under any of its own live boundaries, so it propagates out to main's
+;; catch-unwind, which sees an err.  Matches native's tur_panic precedence
+;; (outer handler chain -> propagate).
+(defn f [n : int] : int
+  (if (= n 0)
+    (do (panic "deep") 0)
+    (do (catch-unwind (fn [] : int 0))
+        (f (- n 1)))))
+
+(defn main [] : int
+  (let [r (catch-unwind (fn [] : int (f 3)))]
+    (if (err? r) (println "caught-outer") (println "no-catch"))
+    0))

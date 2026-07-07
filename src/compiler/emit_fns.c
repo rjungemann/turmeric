@@ -457,57 +457,6 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
     free(v);
 }
 
-/* ------------ D3: stackless self-recursive catch-unwind (slice 1) ---------- */
-
-/* Conservative "simple expression" whitelist: an expression the trampoline can
- * evaluate inline in a driver segment without any of the machinery it does not
- * model (defers/frames, nested catch boundaries, panics, closures, async).
- * Anything outside the whitelist makes the enclosing function ineligible, so the
- * only catch boundary and the only recursion in an eligible body are the ones the
- * grammar matches. */
-static bool su_simple_expr(const Expr *e) {
-    if (!e) return true;
-    switch (e->kind) {
-        case EX_INT_LIT: case EX_BOOL_LIT: case EX_FLOAT_LIT:
-        case EX_CSTR_LIT: case EX_NIL_LIT: case EX_VAR:
-            return true;
-        case EX_CAST:     return su_simple_expr(e->as.cast_.expr);
-        case EX_ASCRIBE:  return su_simple_expr(e->as.ascribe_.inner);
-        case EX_IF:
-            return su_simple_expr(e->as.if_.cond) &&
-                   su_simple_expr(e->as.if_.then_) &&
-                   su_simple_expr(e->as.if_.else_or_null);
-        case EX_BUILTIN: {
-            /* Arithmetic / comparison / logic builtins (`=`, `-`, ...) -- pure,
-             * never panic; recurse into operands.  (A general EX_CALL is NOT
-             * allowed: a user call could panic, and the emit_value early-return
-             * that panic-return-signal injects would exit the driver mid-step.) */
-            for (uint32_t i = 0; i < e->as.builtin.n; i++)
-                if (!su_simple_expr(e->as.builtin.args[i])) return false;
-            return true;
-        }
-        case EX_CALL: {
-            /* Only a narrow whitelist of PURE result/option accessors is allowed
-             * (so the result-using `let` form can inspect the caught box); these
-             * never panic, so the injected driver-return is dead. */
-            if (e->as.call_.fn_expr) return false;
-            Binding *fb = e->as.call_.fn_binding;
-            const char *nm = (fb && fb->name) ? fb->name->name : NULL;
-            static const char *const pure[] = {
-                "ok?", "err?", "ok-val", "err-val", "some?", "none?", NULL };
-            bool ok = false;
-            for (int i = 0; nm && pure[i]; i++)
-                if (strcmp(nm, pure[i]) == 0) { ok = true; break; }
-            if (!ok) return false;
-            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
-                if (!su_simple_expr(e->as.call_.args[i])) return false;
-            return true;
-        }
-        default:
-            return false;   /* defer, catch-unwind, panic, async, closures, ... */
-    }
-}
-
 /* Scalar kinds the trampoline can round-trip through an int64 `saved[]` slot:
  * machine int, bool, non-owning pointer-repr values (cstr, raw ptr) -- via an
  * intptr_t cast -- and float/float32 -- via BIT reinterpretation.  Carrier /
@@ -538,189 +487,1282 @@ static char *sc_restore_expr(const char *ctype, TypeKind k, const char *saved) {
     return s;
 }
 
-/* D3: recognise the self-recursive catch-unwind grammar and pull out its
- * sub-expressions:
+/* G6 (compiled-catch-unwind-general-lowering): decide whether a value of type T
+ * can ride the trampoline's int64 `saved[]` slot, and with which (kind, ctype)
+ * the sc_save/restore casts should treat it.  Scalars round-trip directly;
+ * anything whose C representation is a plain `int64_t` -- carrier handles,
+ * `defopaque` newtypes over an int/handle, `:fn` function pointers, result/
+ * option boxes -- rides the same slot through an intptr cast (kind forced to
+ * TY_INT so the float bit-path is not taken).  This matches native, which keeps
+ * such a param live across the recursive call by value with no retain/drop; the
+ * node relocates it to the heap, not into a different ownership regime.  A
+ * genuine by-value aggregate (a C struct / by-ptr ADT param) is NOT int64 and
+ * still bails to the fallback path. */
+static bool gs_slot_type(EmitCtx *ctx, Type t, TypeKind *out_kind, const char **out_ctype) {
+    const char *ct = emit_type_c_name(ctx, t);
+    if (sc_scalar_kind(t.kind)) { *out_kind = t.kind; *out_ctype = ct; return true; }
+    if (ct && strcmp(ct, "int64_t") == 0) { *out_kind = TY_INT; *out_ctype = ct; return true; }
+    return false;
+}
+
+/* Classify a PARAMETER type for the trampoline.  Beyond gs_slot_type (scalar /
+ * int64 carrier), a by-value AGGREGATE -- a C struct passed by value, whose
+ * ctype is a bare struct name (no `*`, not int64/scalar) -- is accepted and
+ * flagged *out_aggr; it is relocated across a descend by heap-boxing (see
+ * gs_save/gs_restore).  A by-const-pointer aggregate (ctype contains `*`, e.g. a
+ * `Result` param) is NOT handled here (the pointee lifetime is the caller's) and
+ * still bails.  Returns false for anything not rideable. */
+static bool gs_param_class(EmitCtx *ctx, Type t, TypeKind *out_kind,
+                           const char **out_ctype, bool *out_aggr) {
+    if (gs_slot_type(ctx, t, out_kind, out_ctype)) { *out_aggr = false; return true; }
+    const char *ct = emit_type_c_name(ctx, t);
+    if (ct && ct[0] && !strchr(ct, '*')) {   /* a by-value struct name */
+        *out_kind = TY_INT; *out_ctype = ct; *out_aggr = true; return true;
+    }
+    return false;
+}
+
+/* ============================================================================
+ * G3 -- general stackless catch-unwind segment splitter
+ * ----------------------------------------------------------------------------
+ * The scaffold (above) matches one fixed grammar.  This splitter lowers an
+ * ARBITRARY catch-crossing self-recursive body into heap-continuation segments
+ * driven by a `for(;;)` / `switch(__pc)` trampoline, so multiple catch sites,
+ * non-tail self-recursion (`(+ 1 (f ...))`), a catch whose thunk actually
+ * panics, and nested if/let/do all run with a flat C stack.
  *
- *   (defn f [p : int] : int
- *     (if COND BASE (do (catch-unwind (fn [] (f RECUR))) AFTER)))
- *
- * The catch-unwind result is discarded (it sits before AFTER in the `do`).  Only
- * this exact shape is lowered to the trampoline; everything else falls back to
- * the normal (D1/D1a) emission. */
-static bool stackless_catch_eligible(EmitCtx *ctx, const Expr *e, FnDef *fd,
-                                     TypeKind result_kind,
-                                     const Expr **out_cond, const Expr **out_base,
-                                     const Expr **out_call, const Expr **out_after,
-                                     const Binding **out_result_binding) {
-    if (!g_opt_stackless_catch_unwind) return false;
+ * Model (mirrors docs/upcoming/prototypes/d3-stackless-catch-unwind.c):
+ *   - Every function-scope scalar local (params + hoisted let-vars + one result
+ *     temp per suspension) rides a `tur_cont` node's saved[] across a descend.
+ *   - A "suspension" is a self-call or a catch-unwind: its value is produced on
+ *     a later driver iteration.  A suspension nested inside a pure expression is
+ *     hoisted into a temp, and the enclosing expression is re-emitted in the
+ *     resume segment with the suspension replaced by that temp (an emit_value
+ *     "hole", ctx->sub_holes).
+ *   - `__k` is always the continuation the current segment's value returns to.
+ *     Descending pushes a child node whose `next` is `__k`; a RETURN sets
+ *     `__pc = __k->tag` so the driver re-enters the matching resume segment.
+ *   - A pending panic unwinds by popping boundary-less nodes until a catch node
+ *     (or DONE -> uncaught abort), exactly as the D1a signal contract wants.
+ * ==========================================================================*/
+
+/* G4 (cross-function / mutual recursion): the active "trampolined group" -- the
+ * set of functions whose calls to one another descend through one shared driver
+ * instead of C-calling.  A singleton group is the G3 single-function case.  Set
+ * before the structural predicates / collection / emission run, cleared after;
+ * the predicates treat a call to ANY member as a suspension. */
+#define GS_MAXMEM 8
+static FnDef *g_gs_mem[GS_MAXMEM];
+static int    g_gs_nmem;
+
+/* If e is a direct full-arity call to a group member, its index; else -1. */
+static int gs_call_member_idx(const Expr *e) {
+    if (!e || e->kind != EX_CALL || e->as.call_.fn_expr) return -1;
+    for (int i = 0; i < g_gs_nmem; i++)
+        if (g_gs_mem[i] && e->as.call_.fn_binding == g_gs_mem[i]->binding &&
+            e->as.call_.n_args == g_gs_mem[i]->n_params) return i;
+    return -1;
+}
+
+/* A call whose target is trampolined (self- or cross-recursion): descends
+ * through the driver.  fd is retained for call-site compatibility only. */
+static bool gs_is_self_call(const Expr *e, FnDef *fd) {
+    (void)fd;
+    return gs_call_member_idx(e) >= 0;
+}
+
+/* The 0-arg thunk FnDef of a catch-unwind, or NULL.  A capture-free thunk is
+ * fat/poly-wrapped (EX_POLY_WRAP / EX_FN_TO_FAT) or cast-erased before it
+ * reaches the catch site; peel those to the underlying EX_FN / EX_CLOSURE.
+ * Re-emitting the inner body in the enclosing context resolves any captures to
+ * their param C names (captures share the outer binding). */
+static FnDef *gs_thunk_fn(const Expr *cu) {
+    const Expr *th = cu->as.catch_unwind_.thunk;
+    for (int guard = 0; th && guard < 8; guard++) {
+        switch (th->kind) {
+            case EX_FN:      return th->as.fn_.fn;
+            case EX_CLOSURE: return th->as.closure_.closure ? th->as.closure_.closure->fn : NULL;
+            case EX_VAR: {
+                /* A capture-free thunk is lambda-lifted to a top-level defn and
+                 * referenced by name; recover its FnDef from the binding. */
+                Binding *b = th->as.var.binding;
+                return (b && b->source_fn_def) ? b->source_fn_def : NULL;
+            }
+            case EX_POLY_WRAP: th = th->as.poly_wrap_.inner; break;
+            case EX_FN_TO_FAT: th = th->as.fn_to_fat_.inner; break;
+            case EX_CAST:      th = th->as.cast_.expr; break;
+            case EX_ASCRIBE:   th = th->as.ascribe_.inner; break;
+            default: return NULL;
+        }
+    }
+    return NULL;
+}
+
+/* Does e contain a suspension anywhere (ignoring hole state)?  Used for
+ * eligibility and var collection, before any hole is registered. */
+static bool gs_suspends(const Expr *e, FnDef *fd) {
+    if (!e) return false;
+    if (gs_is_self_call(e, fd)) return true;
+    if (e->kind == EX_CATCH_UNWIND) return true;
+    switch (e->kind) {
+        case EX_IF:
+            return gs_suspends(e->as.if_.cond, fd) ||
+                   gs_suspends(e->as.if_.then_, fd) ||
+                   gs_suspends(e->as.if_.else_or_null, fd);
+        case EX_LET: {
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (gs_suspends(e->as.let_.bindings[i].init, fd)) return true;
+            return gs_suspends(e->as.let_.body, fd);
+        }
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (gs_suspends(e->as.do_.items[i], fd)) return true;
+            return false;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (gs_suspends(e->as.builtin.args[i], fd)) return true;
+            return false;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (gs_suspends(e->as.call_.args[i], fd)) return true;
+            return false;
+        case EX_CAST:    return gs_suspends(e->as.cast_.expr, fd);
+        case EX_ASCRIBE: return gs_suspends(e->as.ascribe_.inner, fd);
+        case EX_PANIC_PAYLOAD_TYPE:  return gs_suspends(e->as.panic_payload_type_.payload, fd);
+        case EX_PANIC_PAYLOAD_VALUE: return gs_suspends(e->as.panic_payload_value_.payload, fd);
+        default:         return false;
+    }
+}
+
+static bool gs_stmt_ok(const Expr *e, FnDef *fd);
+
+/* e occupies a VALUE position: suspensions here are handled only by hole
+ * hoisting (builtins / casts / self-call args / the suspension itself), never
+ * pulled out of a nested if/let/do -- so a suspending if/let/do is illegal here
+ * (it must sit in statement/tail position, checked by gs_stmt_ok). */
+static bool gs_value_ok(const Expr *e, FnDef *fd) {
+    if (!e) return true;
+    switch (e->kind) {
+        case EX_INT_LIT: case EX_BOOL_LIT: case EX_FLOAT_LIT:
+        case EX_CSTR_LIT: case EX_NIL_LIT: case EX_VAR:
+            return true;
+        case EX_CAST:       return gs_value_ok(e->as.cast_.expr, fd);
+        case EX_ASCRIBE:    return gs_value_ok(e->as.ascribe_.inner, fd);
+        case EX_PANIC_PAYLOAD_TYPE:  return gs_value_ok(e->as.panic_payload_type_.payload, fd);
+        case EX_PANIC_PAYLOAD_VALUE: return gs_value_ok(e->as.panic_payload_value_.payload, fd);
+        case EX_PANIC:      return gs_value_ok(e->as.panic_.payload, fd);
+        case EX_PANIC_WITH: return gs_value_ok(e->as.panic_with_.payload, fd);
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (!gs_value_ok(e->as.builtin.args[i], fd)) return false;
+            return true;
+        case EX_IF: case EX_LET: case EX_DO:
+            return !gs_suspends(e, fd);   /* pure nesting only in value position */
+        case EX_CATCH_UNWIND: {
+            FnDef *tf = gs_thunk_fn(e);
+            if (!tf || !tf->body) return false;
+            return gs_stmt_ok(tf->body, fd);
+        }
+        case EX_CALL: {
+            if (gs_is_self_call(e, fd)) {
+                for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                    if (!gs_value_ok(e->as.call_.args[i], fd)) return false;
+                return true;
+            }
+            if (!e->as.call_.fn_expr) {
+                Binding *fb = e->as.call_.fn_binding;
+                const char *nm = (fb && fb->name) ? fb->name->name : NULL;
+                static const char *const pure[] = {
+                    "ok?", "err?", "ok-val", "err-val", "some?", "none?", NULL };
+                for (int i = 0; nm && pure[i]; i++)
+                    if (strcmp(nm, pure[i]) == 0) {
+                        for (uint32_t j = 0; j < e->as.call_.n_args; j++)
+                            if (!gs_value_ok(e->as.call_.args[j], fd)) return false;
+                        return true;
+                    }
+            }
+            return false;   /* any other call could panic outside a boundary */
+        }
+        default:
+            return false;
+    }
+}
+
+/* e occupies STATEMENT/TAIL position: if/let/do are split structurally so a
+ * suspension may live in a branch, a binding init, or the tail. */
+static bool gs_stmt_ok(const Expr *e, FnDef *fd) {
+    if (!e) return true;
+    switch (e->kind) {
+        case EX_IF:
+            return gs_value_ok(e->as.if_.cond, fd) &&
+                   gs_stmt_ok(e->as.if_.then_, fd) &&
+                   gs_stmt_ok(e->as.if_.else_or_null, fd);
+        case EX_LET: {
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (!gs_value_ok(e->as.let_.bindings[i].init, fd)) return false;
+            return gs_stmt_ok(e->as.let_.body, fd);
+        }
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (!gs_stmt_ok(e->as.do_.items[i], fd)) return false;
+            return true;
+        default: return gs_value_ok(e, fd);
+    }
+}
+
+/* Does e contain a `panic` / `panic-with` that emit_value would emit INLINE?
+ * A panic is a control escape: routed through emit_value it emits a bare
+ * `return` that leaves the driver's C frame directly, abandoning any live
+ * boundary/continuation nodes (so an active catch would never see it).  When
+ * true, cps_emit must split e structurally down to the panic instead of taking
+ * the emit_value fast path, so the panic reaches the EX_PANIC arm (which emits
+ * `break` -> the driver's unwind loop pops to the nearest boundary).  Does not
+ * descend into a catch-unwind thunk -- that panic belongs to the thunk's own
+ * segment (and a catch makes e suspend, so the fast path is off anyway). */
+static bool gs_has_panic(const Expr *e) {
+    if (!e) return false;
+    if (e->kind == EX_PANIC || e->kind == EX_PANIC_WITH) return true;
+    switch (e->kind) {
+        case EX_IF:
+            return gs_has_panic(e->as.if_.cond) || gs_has_panic(e->as.if_.then_) ||
+                   gs_has_panic(e->as.if_.else_or_null);
+        case EX_LET: {
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (gs_has_panic(e->as.let_.bindings[i].init)) return true;
+            return gs_has_panic(e->as.let_.body);
+        }
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (gs_has_panic(e->as.do_.items[i])) return true;
+            return false;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (gs_has_panic(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (gs_has_panic(e->as.call_.args[i])) return true;
+            return false;
+        case EX_CAST:                return gs_has_panic(e->as.cast_.expr);
+        case EX_ASCRIBE:             return gs_has_panic(e->as.ascribe_.inner);
+        case EX_PANIC_PAYLOAD_TYPE:  return gs_has_panic(e->as.panic_payload_type_.payload);
+        case EX_PANIC_PAYLOAD_VALUE: return gs_has_panic(e->as.panic_payload_value_.payload);
+        default: return false;
+    }
+}
+
+/* The leftmost `panic` / `panic-with` node in e (eval order), or NULL.  Used to
+ * route a panic buried in a non-suspending value expression through the driver.
+ * Since a panic diverges, any pure pre-panic sub-eval is dead and skipped. */
+static const Expr *gs_leftmost_panic(const Expr *e) {
+    if (!e) return NULL;
+    if (e->kind == EX_PANIC || e->kind == EX_PANIC_WITH) return e;
+    switch (e->kind) {
+        case EX_IF: {
+            const Expr *r = gs_leftmost_panic(e->as.if_.cond); if (r) return r;
+            r = gs_leftmost_panic(e->as.if_.then_); if (r) return r;
+            return gs_leftmost_panic(e->as.if_.else_or_null);
+        }
+        case EX_LET: {
+            for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                const Expr *r = gs_leftmost_panic(e->as.let_.bindings[i].init); if (r) return r;
+            }
+            return gs_leftmost_panic(e->as.let_.body);
+        }
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++) {
+                const Expr *r = gs_leftmost_panic(e->as.do_.items[i]); if (r) return r;
+            }
+            return NULL;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++) {
+                const Expr *r = gs_leftmost_panic(e->as.builtin.args[i]); if (r) return r;
+            }
+            return NULL;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                const Expr *r = gs_leftmost_panic(e->as.call_.args[i]); if (r) return r;
+            }
+            return NULL;
+        case EX_CAST:                return gs_leftmost_panic(e->as.cast_.expr);
+        case EX_ASCRIBE:             return gs_leftmost_panic(e->as.ascribe_.inner);
+        case EX_PANIC_PAYLOAD_TYPE:  return gs_leftmost_panic(e->as.panic_payload_type_.payload);
+        case EX_PANIC_PAYLOAD_VALUE: return gs_leftmost_panic(e->as.panic_payload_value_.payload);
+        default: return NULL;
+    }
+}
+
+static bool gs_has_catch(const Expr *e, FnDef *fd) {
+    if (!e) return false;
+    if (e->kind == EX_CATCH_UNWIND) return true;
+    switch (e->kind) {
+        case EX_IF:
+            return gs_has_catch(e->as.if_.cond, fd) ||
+                   gs_has_catch(e->as.if_.then_, fd) ||
+                   gs_has_catch(e->as.if_.else_or_null, fd);
+        case EX_LET: {
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (gs_has_catch(e->as.let_.bindings[i].init, fd)) return true;
+            return gs_has_catch(e->as.let_.body, fd);
+        }
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (gs_has_catch(e->as.do_.items[i], fd)) return true;
+            return false;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (gs_has_catch(e->as.builtin.args[i], fd)) return true;
+            return false;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (gs_has_catch(e->as.call_.args[i], fd)) return true;
+            return false;
+        case EX_CAST:    return gs_has_catch(e->as.cast_.expr, fd);
+        case EX_ASCRIBE: return gs_has_catch(e->as.ascribe_.inner, fd);
+        case EX_PANIC_PAYLOAD_TYPE:  return gs_has_catch(e->as.panic_payload_type_.payload, fd);
+        case EX_PANIC_PAYLOAD_VALUE: return gs_has_catch(e->as.panic_payload_value_.payload, fd);
+        default:         return false;
+    }
+}
+
+#define GS_MAXSEG 256
+enum { GSK_RETURN = 0, GSK_ASSIGN = 1, GSK_SEQ = 2 };
+
+/* is_aggr: a by-value aggregate (C struct) param that does not fit the int64
+ * slot.  It is relocated across a descend by heap-boxing (malloc + memcpy) with
+ * the slot holding the box pointer -- ctype names the struct so sizeof works. */
+typedef struct { char *cname; const char *ctype; TypeKind kind; bool is_aggr; } GsVar;
+
+typedef struct GsSink {
+    int kind;
+    TypeKind ret_kind;                                   /* GSK_RETURN */
+    const char *dest;                                    /* GSK_ASSIGN */
+    const LetBinding *binds; uint32_t bi, bn; const Expr *body;  /* GSK_ASSIGN */
+    const Expr **items; uint32_t si, sn;                 /* GSK_SEQ */
+    const struct GsSink *cont;                           /* GSK_ASSIGN / GSK_SEQ */
+} GsSink;
+
+typedef struct {
+    EmitCtx *ctx; FnDef *fd; TypeKind ret_kind; const char *ret_ctype;
+    GsVar vars[TUR_SC_MAXN]; int n_vars;
+    const Expr *susp_expr[TUR_SC_MAXN]; int susp_idx[TUR_SC_MAXN]; int n_susp;
+    Buf *bufs[GS_MAXSEG]; int tags[GS_MAXSEG]; int n_segs;
+    int next_tag;
+    int base_ind, cur_ind;
+    bool overflow;
+    /* G4: group members sharing this driver.  For a singleton (G3) n_mem == 1
+     * and mem[0] == fd, mem_entry_tag[0] == 1, mem_pbase[0] == 0 -- identical to
+     * the single-function lowering.  A call to member m descends to its ENTRY
+     * (mem_entry_tag[m]) after setting m's params (vars[mem_pbase[m]..]); the
+     * resume restores the returned value as m's own return type. */
+    int n_mem;
+    FnDef *mem[GS_MAXMEM];
+    int mem_entry_tag[GS_MAXMEM];
+    int mem_pbase[GS_MAXMEM];
+    TypeKind mem_ret[GS_MAXMEM];
+    const char *mem_retctype[GS_MAXMEM];
+    int n_param_vars;   /* count of leading vars[] that are member params */
+} GsCtx;
+
+static int gs_add_var_a(GsCtx *gs, char *cname, const char *ctype, TypeKind k, bool is_aggr) {
+    if (gs->n_vars >= TUR_SC_MAXN) { gs->overflow = true; free(cname); return -1; }
+    gs->vars[gs->n_vars].cname = cname;
+    gs->vars[gs->n_vars].ctype = ctype;
+    gs->vars[gs->n_vars].kind = k;
+    gs->vars[gs->n_vars].is_aggr = is_aggr;
+    return gs->n_vars++;
+}
+static int gs_add_var(GsCtx *gs, char *cname, const char *ctype, TypeKind k) {
+    return gs_add_var_a(gs, cname, ctype, k, false);
+}
+
+static Buf *gs_add_seg(GsCtx *gs, int tag) {
+    if (gs->n_segs >= GS_MAXSEG) { gs->overflow = true; return NULL; }
+    Buf *b = (Buf *)malloc(sizeof(Buf));
+    buf_init(b);
+    gs->bufs[gs->n_segs] = b;
+    gs->tags[gs->n_segs] = tag;
+    gs->n_segs++;
+    return b;
+}
+
+static int gs_temp_index(GsCtx *gs, const Expr *S) {
+    for (int i = 0; i < gs->n_susp; i++)
+        if (gs->susp_expr[i] == S) return gs->susp_idx[i];
+    return -1;
+}
+
+static bool gs_is_hole(EmitCtx *ctx, const Expr *e) {
+    for (uint8_t i = 0; i < ctx->n_sub_holes; i++)
+        if (ctx->sub_holes[i] == e) return true;
+    return false;
+}
+
+/* Collect the function-scope var table: params (added by the caller), then
+ * every suspending let's bindings, then one result temp per suspension. */
+static void gs_collect(GsCtx *gs, const Expr *e) {
+    if (!e || gs->overflow) return;
+    if (e->kind == EX_LET && gs_suspends(e, gs->fd)) {
+        for (uint32_t i = 0; i < e->as.let_.n; i++) {
+            const LetBinding *lb = &e->as.let_.bindings[i];
+            const char *ct = emit_type_c_name(gs->ctx, lb->init->type);
+            TypeKind lk = lb->init->type.kind;
+            /* A caught result / option (and other carrier values) is an int64
+             * handle in C even when its TypeKind is a Result/Option/App: save it
+             * through the int64 slot.  Genuinely non-scalar, non-carrier locals
+             * (by-value aggregates) still bail to the fallback path. */
+            if (!sc_scalar_kind(lk)) {
+                if (ct && strcmp(ct, "int64_t") == 0) { lk = TY_INT; }
+                else { gs->overflow = true; return; }
+            }
+            gs_add_var(gs, atom_var(gs->ctx, lb->binding), ct, lk);
+        }
+    }
+    int cm = gs_call_member_idx(e);
+    if (cm >= 0) {
+        /* Result temp typed by the CALLEE member's return type. */
+        char nm[32]; snprintf(nm, sizeof nm, "__t%d", gs->ctx->tmp_n++);
+        int vi = gs_add_var(gs, tur_strdup(nm), gs->mem_retctype[cm], gs->mem_ret[cm]);
+        if (vi >= 0 && gs->n_susp < TUR_SC_MAXN) {
+            gs->susp_expr[gs->n_susp] = e; gs->susp_idx[gs->n_susp] = vi; gs->n_susp++;
+        }
+        for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+            gs_collect(gs, e->as.call_.args[i]);
+        return;
+    }
+    if (e->kind == EX_CATCH_UNWIND) {
+        char nm[32]; snprintf(nm, sizeof nm, "__t%d", gs->ctx->tmp_n++);
+        int vi = gs_add_var(gs, tur_strdup(nm), "int64_t", TY_INT);
+        if (vi >= 0 && gs->n_susp < TUR_SC_MAXN) {
+            gs->susp_expr[gs->n_susp] = e; gs->susp_idx[gs->n_susp] = vi; gs->n_susp++;
+        }
+        FnDef *tf = gs_thunk_fn(e);
+        if (tf && tf->body) gs_collect(gs, tf->body);
+        return;
+    }
+    switch (e->kind) {
+        case EX_IF: gs_collect(gs, e->as.if_.cond); gs_collect(gs, e->as.if_.then_);
+                    gs_collect(gs, e->as.if_.else_or_null); break;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++) { gs_collect(gs, e->as.let_.bindings[i].init); }
+            gs_collect(gs, e->as.let_.body); break;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++) { gs_collect(gs, e->as.do_.items[i]); }
+            break;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++) { gs_collect(gs, e->as.builtin.args[i]); }
+            break;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) { gs_collect(gs, e->as.call_.args[i]); }
+            break;
+        case EX_CAST:       gs_collect(gs, e->as.cast_.expr); break;
+        case EX_ASCRIBE:    gs_collect(gs, e->as.ascribe_.inner); break;
+        case EX_PANIC_PAYLOAD_TYPE:  gs_collect(gs, e->as.panic_payload_type_.payload); break;
+        case EX_PANIC_PAYLOAD_VALUE: gs_collect(gs, e->as.panic_payload_value_.payload); break;
+        case EX_PANIC:      gs_collect(gs, e->as.panic_.payload); break;
+        case EX_PANIC_WITH: gs_collect(gs, e->as.panic_with_.payload); break;
+        default: break;
+    }
+}
+
+/* Hole-aware "does e still contain a live suspension?" (a registered hole is a
+ * resolved value, no longer a suspension). */
+static bool gs_suspends_live(GsCtx *gs, const Expr *e) {
+    if (!e || gs_is_hole(gs->ctx, e)) return false;
+    if (gs_is_self_call(e, gs->fd)) return true;
+    if (e->kind == EX_CATCH_UNWIND) return true;
+    switch (e->kind) {
+        case EX_IF:
+            return gs_suspends_live(gs, e->as.if_.cond) ||
+                   gs_suspends_live(gs, e->as.if_.then_) ||
+                   gs_suspends_live(gs, e->as.if_.else_or_null);
+        case EX_LET: {
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (gs_suspends_live(gs, e->as.let_.bindings[i].init)) return true;
+            return gs_suspends_live(gs, e->as.let_.body);
+        }
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (gs_suspends_live(gs, e->as.do_.items[i])) return true;
+            return false;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (gs_suspends_live(gs, e->as.builtin.args[i])) return true;
+            return false;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (gs_suspends_live(gs, e->as.call_.args[i])) return true;
+            return false;
+        case EX_CAST:    return gs_suspends_live(gs, e->as.cast_.expr);
+        case EX_ASCRIBE: return gs_suspends_live(gs, e->as.ascribe_.inner);
+        case EX_PANIC_PAYLOAD_TYPE:  return gs_suspends_live(gs, e->as.panic_payload_type_.payload);
+        case EX_PANIC_PAYLOAD_VALUE: return gs_suspends_live(gs, e->as.panic_payload_value_.payload);
+        default:         return false;
+    }
+}
+
+/* Leftmost live suspension in eval order (only into cond of an if, never into
+ * a branch/body/thunk -- those are handled structurally / as their own seg). */
+static const Expr *gs_leftmost(GsCtx *gs, const Expr *e) {
+    if (!e || gs_is_hole(gs->ctx, e)) return NULL;
+    if (gs_is_self_call(e, gs->fd)) {
+        for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+            const Expr *r = gs_leftmost(gs, e->as.call_.args[i]);
+            if (r) return r;
+        }
+        return e;
+    }
+    if (e->kind == EX_CATCH_UNWIND) return e;
+    switch (e->kind) {
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++) {
+                const Expr *r = gs_leftmost(gs, e->as.builtin.args[i]);
+                if (r) return r;
+            }
+            return NULL;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                const Expr *r = gs_leftmost(gs, e->as.call_.args[i]);
+                if (r) return r;
+            }
+            return NULL;
+        case EX_CAST:    return gs_leftmost(gs, e->as.cast_.expr);
+        case EX_ASCRIBE: return gs_leftmost(gs, e->as.ascribe_.inner);
+        case EX_PANIC_PAYLOAD_TYPE:  return gs_leftmost(gs, e->as.panic_payload_type_.payload);
+        case EX_PANIC_PAYLOAD_VALUE: return gs_leftmost(gs, e->as.panic_payload_value_.payload);
+        case EX_IF:      return gs_leftmost(gs, e->as.if_.cond);
+        default:         return NULL;
+    }
+}
+
+static void gs_save(GsCtx *gs, Buf *b, const char *node) {
+    for (int i = 0; i < gs->n_vars; i++) {
+        if (gs->vars[i].is_aggr) {
+            /* Heap-box a copy of the by-value aggregate; the slot holds the box
+             * pointer.  Byte-copy matches native (a param kept live by value
+             * across the recursive call, no retain/drop). */
+            indent_buf(b, gs->cur_ind);
+            buf_printf(b, "{ void *__ab = malloc(sizeof(%s)); memcpy(__ab, &%s, sizeof(%s)); %s->saved[%d] = (int64_t)(intptr_t)__ab; }\n",
+                       gs->vars[i].ctype, gs->vars[i].cname, gs->vars[i].ctype, node, i);
+            continue;
+        }
+        char *sv = sc_save_expr(gs->vars[i].kind, gs->vars[i].cname);
+        indent_buf(b, gs->cur_ind);
+        buf_printf(b, "%s->saved[%d] = %s;\n", node, i, sv);
+        free(sv);
+    }
+}
+static void gs_restore(GsCtx *gs, Buf *b) {
+    for (int i = 0; i < gs->n_vars; i++) {
+        if (gs->vars[i].is_aggr) {
+            indent_buf(b, gs->cur_ind);
+            buf_printf(b, "{ void *__ab = (void*)(intptr_t)__k->saved[%d]; memcpy(&%s, __ab, sizeof(%s)); free(__ab); }\n",
+                       i, gs->vars[i].cname, gs->vars[i].ctype);
+            continue;
+        }
+        char slot[48]; snprintf(slot, sizeof slot, "__k->saved[%d]", i);
+        char *rs = sc_restore_expr(gs->vars[i].ctype, gs->vars[i].kind, slot);
+        indent_buf(b, gs->cur_ind);
+        buf_printf(b, "%s = %s;\n", gs->vars[i].cname, rs);
+        free(rs);
+    }
+}
+
+static void cps_emit(GsCtx *gs, Buf *b, const Expr *e, const GsSink *sink);
+static void cps_emit_let(GsCtx *gs, Buf *b, const LetBinding *binds, uint32_t i,
+                         uint32_t n, const Expr *body, const GsSink *sink);
+static void cps_emit_do(GsCtx *gs, Buf *b, const Expr **items, uint32_t i,
+                        uint32_t n, const GsSink *sink);
+
+/* Route a produced value `val` to its sink (may continue emitting a let/do
+ * tail into the same segment, or end the segment with a RETURN + break). */
+static void gs_deliver(GsCtx *gs, Buf *b, const char *val, const GsSink *sink) {
+    switch (sink->kind) {
+        case GSK_RETURN: {
+            char *sv = sc_save_expr(sink->ret_kind, val);
+            indent_buf(b, gs->cur_ind);
+            buf_printf(b, "__v = %s; __pc = __k->tag; break;\n", sv);
+            free(sv);
+            return;
+        }
+        case GSK_ASSIGN:
+            indent_buf(b, gs->cur_ind);
+            buf_printf(b, "%s = %s;\n", sink->dest, val);
+            cps_emit_let(gs, b, sink->binds, sink->bi, sink->bn, sink->body, sink->cont);
+            return;
+        case GSK_SEQ:
+            indent_buf(b, gs->cur_ind);
+            buf_printf(b, "(void)(%s);\n", val);
+            cps_emit_do(gs, b, sink->items, sink->si, sink->sn, sink->cont);
+            return;
+    }
+}
+
+/* Descend into a self-call S.  temp_vi < 0: resume delivers S's value to `sink`
+ * (S is the whole expr).  temp_vi >= 0: resume stores S's value into that temp
+ * and re-emits `enc` (with S held as a hole) to `sink`. */
+static void gs_self_descend(GsCtx *gs, Buf *b, const Expr *S, const GsSink *sink,
+                            int temp_vi, const Expr *enc) {
+    int m = gs_call_member_idx(S);           /* callee group member */
+    int pbase = gs->mem_pbase[m];
+    int entry = gs->mem_entry_tag[m];
+    int id = gs->ctx->tmp_n++;
+    int rtag = gs->next_tag++;
+    Buf *rb = gs_add_seg(gs, rtag);
+    if (!rb) return;
+    uint32_t na = S->as.call_.n_args;
+    char node[32]; snprintf(node, sizeof node, "__n%d", id);
+
+    gs->ctx->indent = gs->cur_ind;
+    indent_buf(b, gs->cur_ind);
+    buf_printf(b, "tur_cont *%s = (tur_cont*)malloc(sizeof(tur_cont));\n", node);
+    indent_buf(b, gs->cur_ind);
+    buf_printf(b, "%s->tag = %d; %s->boundary = 0; %s->next = __k;\n", node, rtag, node, node);
+    gs_save(gs, b, node);
+    char **tmps = (char **)malloc(sizeof(char *) * (na ? na : 1));
+    for (uint32_t i = 0; i < na; i++) {
+        gs->ctx->indent = gs->cur_ind;
+        char *av = emit_value(gs->ctx, b, S->as.call_.args[i]);
+        char nm[48]; snprintf(nm, sizeof nm, "__ra%d_%u", id, i);
+        indent_buf(b, gs->cur_ind);
+        buf_printf(b, "__auto_type %s = (%s);\n", nm, av);
+        free(av); tmps[i] = tur_strdup(nm);
+    }
+    for (uint32_t i = 0; i < na; i++) {
+        indent_buf(b, gs->cur_ind);
+        buf_printf(b, "%s = %s;\n", gs->vars[pbase + (int)i].cname, tmps[i]);
+        free(tmps[i]);
+    }
+    free(tmps);
+    indent_buf(b, gs->cur_ind);
+    buf_printf(b, "__k = %s; __pc = %d; break;\n", node, entry);
+
+    int saved_ind = gs->cur_ind;
+    gs->cur_ind = gs->base_ind + 3;
+    gs_restore(gs, rb);
+    char *rv = sc_restore_expr(gs->mem_retctype[m], gs->mem_ret[m], "__v");
+    if (temp_vi >= 0) {
+        indent_buf(rb, gs->cur_ind);
+        buf_printf(rb, "%s = %s;\n", gs->vars[temp_vi].cname, rv);
+    }
+    indent_buf(rb, gs->cur_ind);
+    buf_puts(rb, "{ tur_cont *__pk = __k->next; free(__k); __k = __pk; }\n");
+    if (temp_vi >= 0) {
+        gs->ctx->sub_holes[gs->ctx->n_sub_holes] = S;
+        gs->ctx->sub_names[gs->ctx->n_sub_holes] = gs->vars[temp_vi].cname;
+        gs->ctx->n_sub_holes++;
+        cps_emit(gs, rb, enc, sink);
+        gs->ctx->n_sub_holes--;
+    } else {
+        gs_deliver(gs, rb, rv, sink);
+    }
+    free(rv);
+    gs->cur_ind = saved_ind;
+}
+
+/* Descend into a catch-unwind S: push a boundary, run the thunk body as its own
+ * segment, resume by popping the boundary and building the ok/err result box. */
+static void gs_catch_descend(GsCtx *gs, Buf *b, const Expr *S, const GsSink *sink,
+                             int temp_vi, const Expr *enc) {
+    int id = gs->ctx->tmp_n++;
+    FnDef *tf = gs_thunk_fn(S);
+    TypeKind tk = (tf && tf->body && sc_scalar_kind(tf->body->type.kind))
+                  ? tf->body->type.kind : gs->ret_kind;
+    int thunktag = gs->next_tag++;
+    int rtag = gs->next_tag++;
+    Buf *tb = gs_add_seg(gs, thunktag);
+    Buf *rb = gs_add_seg(gs, rtag);
+    if (!tb || !rb) return;
+    char node[32]; snprintf(node, sizeof node, "__n%d", id);
+
+    gs->ctx->indent = gs->cur_ind;
+    indent_buf(b, gs->cur_ind);
+    buf_printf(b, "tur_handler_node *__b%d = (tur_handler_node*)malloc(sizeof(tur_handler_node));\n", id);
+    indent_buf(b, gs->cur_ind);
+    buf_printf(b, "__b%d->parent = tur_handler_chain; tur_handler_chain = __b%d;\n", id, id);
+    indent_buf(b, gs->cur_ind);
+    buf_printf(b, "tur_cont *%s = (tur_cont*)malloc(sizeof(tur_cont));\n", node);
+    indent_buf(b, gs->cur_ind);
+    buf_printf(b, "%s->tag = %d; %s->boundary = __b%d; %s->next = __k;\n", node, rtag, node, id, node);
+    gs_save(gs, b, node);
+    indent_buf(b, gs->cur_ind);
+    buf_printf(b, "__k = %s; __pc = %d; break;\n", node, thunktag);
+
+    int saved_ind = gs->cur_ind;
+    /* thunk body segment: its value returns to the catch node (this __k). */
+    gs->cur_ind = gs->base_ind + 3;
+    GsSink tsink; memset(&tsink, 0, sizeof tsink);
+    tsink.kind = GSK_RETURN; tsink.ret_kind = tk;
+    cps_emit(gs, tb, tf ? tf->body : NULL, &tsink);
+
+    /* resume segment: pop boundary, consume any caught panic, build the box. */
+    gs->cur_ind = gs->base_ind + 3;
+    gs_restore(gs, rb);
+    indent_buf(rb, gs->cur_ind);
+    buf_puts(rb, "tur_handler_chain = __k->boundary->parent; free(__k->boundary);\n");
+    indent_buf(rb, gs->cur_ind);
+    buf_printf(rb, "int64_t __box%d;\n", id);
+    /* Consume a caught panic exactly as native tur_catch_unwind_box does: box
+     * the payload pointer into the err result (do NOT free it -- err-val hands
+     * it back), so the err branch and err-val/ok-val extraction match native.
+     * The result box lives on, matching native's documented box leak. */
+    indent_buf(rb, gs->cur_ind);
+    buf_printf(rb, "if (tur_panicking) { tur_panicking = 0; tur_panic_in_progress = 0; "
+                   "tur_panic_payload *__pp%d = global_panic_payload; global_panic_payload = 0; "
+                   "__box%d = tur_box_err((int64_t)(intptr_t)__pp%d); }\n", id, id, id);
+    indent_buf(rb, gs->cur_ind);
+    buf_printf(rb, "else { __box%d = tur_box_ok(__v); }\n", id);
+    indent_buf(rb, gs->cur_ind);
+    buf_puts(rb, "{ tur_cont *__pk = __k->next; free(__k); __k = __pk; }\n");
+    char boxnm[32]; snprintf(boxnm, sizeof boxnm, "__box%d", id);
+    if (temp_vi >= 0) {
+        indent_buf(rb, gs->cur_ind);
+        buf_printf(rb, "%s = %s;\n", gs->vars[temp_vi].cname, boxnm);
+        gs->ctx->sub_holes[gs->ctx->n_sub_holes] = S;
+        gs->ctx->sub_names[gs->ctx->n_sub_holes] = gs->vars[temp_vi].cname;
+        gs->ctx->n_sub_holes++;
+        cps_emit(gs, rb, enc, sink);
+        gs->ctx->n_sub_holes--;
+    } else {
+        gs_deliver(gs, rb, boxnm, sink);
+    }
+    gs->cur_ind = saved_ind;
+}
+
+/* A value-position expression that contains a live suspension. */
+static void cps_emit_value_susp(GsCtx *gs, Buf *b, const Expr *e, const GsSink *sink) {
+    const Expr *S = gs_leftmost(gs, e);
+    if (!S) {
+        /* No suspension.  A panic buried in a value position (e.g. an operand of
+         * a pure builtin) must still route through the driver, not emit_value's
+         * bare return -- emit the panic; it diverges, so the rest is dead. */
+        const Expr *P = gs_leftmost_panic(e);
+        if (P) { cps_emit(gs, b, P, sink); return; }
+        gs->ctx->indent = gs->cur_ind;
+        char *v = emit_value(gs->ctx, b, e);
+        gs_deliver(gs, b, v, sink); free(v); return;
+    }
+    int scall = gs_call_member_idx(S);
+    bool is_self = scall >= 0;
+    if (S == e) {
+        if (is_self && sink->kind == GSK_RETURN) {
+            /* tail call (self or cross-member): reassign the callee's params and
+             * loop to its ENTRY, no node.  Well-typed tail position guarantees
+             * the callee's return type matches this member's, so __v flows on. */
+            int pbase = gs->mem_pbase[scall];
+            int entry = gs->mem_entry_tag[scall];
+            int id = gs->ctx->tmp_n++;
+            uint32_t na = S->as.call_.n_args;
+            char **tmps = (char **)malloc(sizeof(char *) * (na ? na : 1));
+            for (uint32_t i = 0; i < na; i++) {
+                gs->ctx->indent = gs->cur_ind;
+                char *av = emit_value(gs->ctx, b, S->as.call_.args[i]);
+                char nm[48]; snprintf(nm, sizeof nm, "__ra%d_%u", id, i);
+                indent_buf(b, gs->cur_ind);
+                buf_printf(b, "__auto_type %s = (%s);\n", nm, av);
+                free(av); tmps[i] = tur_strdup(nm);
+            }
+            for (uint32_t i = 0; i < na; i++) {
+                indent_buf(b, gs->cur_ind);
+                buf_printf(b, "%s = %s;\n", gs->vars[pbase + (int)i].cname, tmps[i]);
+                free(tmps[i]);
+            }
+            free(tmps);
+            indent_buf(b, gs->cur_ind);
+            buf_printf(b, "__pc = %d; break;\n", entry);
+            return;
+        }
+        if (is_self) gs_self_descend(gs, b, S, sink, -1, NULL);
+        else         gs_catch_descend(gs, b, S, sink, -1, NULL);
+        return;
+    }
+    int vi = gs_temp_index(gs, S);
+    if (vi < 0) { gs->overflow = true; return; }
+    if (is_self) gs_self_descend(gs, b, S, sink, vi, e);
+    else         gs_catch_descend(gs, b, S, sink, vi, e);
+}
+
+static void cps_emit_let(GsCtx *gs, Buf *b, const LetBinding *binds, uint32_t i,
+                         uint32_t n, const Expr *body, const GsSink *sink) {
+    if (i >= n) { cps_emit(gs, b, body, sink); return; }
+    char *dn = atom_var(gs->ctx, binds[i].binding);
+    GsSink as; memset(&as, 0, sizeof as);
+    as.kind = GSK_ASSIGN; as.dest = dn;
+    as.binds = binds; as.bi = i + 1; as.bn = n; as.body = body; as.cont = sink;
+    cps_emit(gs, b, binds[i].init, &as);
+    free(dn);
+}
+
+static void cps_emit_do(GsCtx *gs, Buf *b, const Expr **items, uint32_t i,
+                        uint32_t n, const GsSink *sink) {
+    if (n == 0) { gs_deliver(gs, b, "INT64_C(0)", sink); return; }
+    if (i >= n - 1) { cps_emit(gs, b, items[i], sink); return; }
+    GsSink ss; memset(&ss, 0, sizeof ss);
+    ss.kind = GSK_SEQ; ss.items = items; ss.si = i + 1; ss.sn = n; ss.cont = sink;
+    cps_emit(gs, b, items[i], &ss);
+}
+
+static void cps_emit(GsCtx *gs, Buf *b, const Expr *e, const GsSink *sink) {
+    if (gs->overflow) return;
+    if (!e) { gs_deliver(gs, b, "INT64_C(0)", sink); return; }
+    /* Panic must NOT flow through emit_value (which would inject a bare
+     * `return` and escape the driver): set the signal and let the loop-top
+     * unwind pop to the nearest boundary. */
+    if (e->kind == EX_PANIC) {
+        const Expr *pl = e->as.panic_.payload;
+        gs->ctx->indent = gs->cur_ind;
+        char *m = emit_value(gs->ctx, b, pl);
+        indent_buf(b, gs->cur_ind);
+        if (pl->type.kind == TY_CSTR) buf_printf(b, "tur_panic(%s);\n", m);
+        else                          buf_puts(b, "tur_panic(\"(non-string panic)\");\n");
+        free(m);
+        indent_buf(b, gs->cur_ind); buf_puts(b, "break;\n");
+        return;
+    }
+    if (e->kind == EX_PANIC_WITH) {
+        const Expr *pl = e->as.panic_with_.payload;
+        gs->ctx->indent = gs->cur_ind;
+        char *pv = emit_value(gs->ctx, b, pl);
+        indent_buf(b, gs->cur_ind);
+        buf_printf(b, "tur_panic_with(%d, (void*)%s, __FILE__, __LINE__);\n",
+                   (int)pl->type.kind, pv);
+        free(pv);
+        indent_buf(b, gs->cur_ind); buf_puts(b, "break;\n");
+        return;
+    }
+    if (!gs_suspends_live(gs, e) && !gs_has_panic(e)) {
+        gs->ctx->indent = gs->cur_ind;
+        char *v = emit_value(gs->ctx, b, e);
+        gs_deliver(gs, b, v, sink); free(v); return;
+    }
+    switch (e->kind) {
+        case EX_IF: {
+            if (gs_suspends_live(gs, e->as.if_.cond)) {
+                cps_emit_value_susp(gs, b, e, sink); return;
+            }
+            gs->ctx->indent = gs->cur_ind;
+            char *cv = emit_value(gs->ctx, b, e->as.if_.cond);
+            indent_buf(b, gs->cur_ind);
+            buf_printf(b, "if (%s) {\n", cv); free(cv);
+            int si = gs->cur_ind;
+            gs->cur_ind = si + 1;
+            cps_emit(gs, b, e->as.if_.then_, sink);
+            gs->cur_ind = si; indent_buf(b, gs->cur_ind); buf_puts(b, "} else {\n");
+            gs->cur_ind = si + 1;
+            cps_emit(gs, b, e->as.if_.else_or_null, sink);
+            gs->cur_ind = si; indent_buf(b, gs->cur_ind); buf_puts(b, "}\n");
+            return;
+        }
+        case EX_LET:
+            cps_emit_let(gs, b, e->as.let_.bindings, 0, e->as.let_.n, e->as.let_.body, sink);
+            return;
+        case EX_DO:
+            cps_emit_do(gs, b, (const Expr **)e->as.do_.items, 0, e->as.do_.n, sink);
+            return;
+        default:
+            cps_emit_value_susp(gs, b, e, sink);
+            return;
+    }
+}
+
+/* Basic (member-set-independent) constraints a trampolined function must meet. */
+static bool gs_basic_ok(EmitCtx *ctx, FnDef *fd) {
     if (!fd || fd->n_params < 1 || fd->n_params > TUR_SC_MAXP) return false;
     if (fd->n_dict_clone > 0 || fd->n_dict_env > 0) return false;
-    if (ctx->current_abi_specialization) return false;
+    if (!fd->param_types || !fd->body) return false;
+    /* Must be the canonical top-level defn of its binding, and not a lifted
+     * closure / catch-unwind thunk (fd->closure set; its synthetic env param
+     * would otherwise look scalar) -- those are never trampoline members. */
+    if (!fd->binding || fd->binding->source_fn_def != fd) return false;
+    if (fd->closure) return false;
     if (fd->binding && fd->binding->name && fd->binding->name->name &&
         strcmp(fd->binding->name->name, "main") == 0) return false;
-    if (!sc_scalar_kind(result_kind)) return false;
-    if (!ctx->current_fn_ret_ctype) return false;   /* needed for the return cast */
-    if (!fd->param_types) return false;
+    /* G6: the return type must be an int64-slot type (scalar / int64 carrier --
+     * aggregate returns are deferred, __v is int64).  Params may additionally be
+     * a by-value aggregate (heap-boxed across a descend). */
+    TypeKind k; const char *ct; bool aggr;
+    if (!gs_slot_type(ctx, fd->return_type, &k, &ct)) return false;
     for (uint8_t i = 0; i < fd->n_params; i++)
-        if (!sc_scalar_kind(fd->param_types[i].kind)) return false;
-
-    const Expr *b = fd->body;
-    if (!b || b->kind != EX_IF) return false;
-    const Expr *els = b->as.if_.else_or_null;
-    /* The recursive branch is either
-     *   (do (catch-unwind (fn [] (f RECUR))) AFTER)   -- result discarded, OR
-     *   (let [r (catch-unwind (fn [] (f RECUR)))] AFTER)  -- result inspected.
-     * For the `let` form AFTER may reference `r` (the boxed ok/err result); an
-     * eligible function is panic-free, so `r` is always ok(<recursion value>).
-     * The box carries an int, so the `let` form requires an int return. */
-    const Expr *cu = NULL, *after = NULL;
-    const Binding *r_binding = NULL;
-    if (els && els->kind == EX_DO && els->as.do_.n == 2) {
-        cu = els->as.do_.items[0];
-        after = els->as.do_.items[1];
-    } else if (els && els->kind == EX_LET && els->as.let_.n == 1 &&
-               result_kind == TY_INT) {
-        cu = els->as.let_.bindings[0].init;
-        after = els->as.let_.body;
-        r_binding = els->as.let_.bindings[0].binding;
-    } else {
-        return false;
-    }
-    if (!cu || cu->kind != EX_CATCH_UNWIND) return false;
-    const Expr *thunk = cu->as.catch_unwind_.thunk;
-    /* The thunk is a 0-arg lambda: EX_FN when it captures nothing, EX_CLOSURE
-     * when it captures recursion variables.  For a closure, every capture must
-     * be one of this function's own params, so references inside the thunk body
-     * resolve to that param's C name when we re-emit them in the driver.
-     * (Closure conversion prepends a synthetic env param, so tf->n_params is not
-     * checked -- the source lambda is 0-arg.) */
-    FnDef *tf = NULL;
-    if (thunk && thunk->kind == EX_FN) {
-        tf = thunk->as.fn_.fn;
-    } else if (thunk && thunk->kind == EX_CLOSURE && thunk->as.closure_.closure) {
-        struct Closure *cl = thunk->as.closure_.closure;
-        tf = cl->fn;
-        for (uint8_t i = 0; i < cl->n_captures; i++) {
-            bool is_param = false;
-            for (uint8_t j = 0; j < fd->n_params; j++)
-                if (cl->captures[i] == fd->params[j]) { is_param = true; break; }
-            if (!is_param) return false;
-        }
-    } else {
-        return false;
-    }
-    if (!tf || !tf->body) return false;
-    const Expr *call = tf->body;
-    if (!call || call->kind != EX_CALL) return false;
-    if (call->as.call_.fn_binding != fd->binding) return false;   /* self-call */
-    if (call->as.call_.n_args != fd->n_params || call->as.call_.fn_expr) return false;
-
-    const Expr *cond = b->as.if_.cond, *base = b->as.if_.then_;
-    if (!su_simple_expr(cond) || !su_simple_expr(base) || !su_simple_expr(after))
-        return false;
-    for (uint32_t i = 0; i < call->as.call_.n_args; i++)
-        if (!su_simple_expr(call->as.call_.args[i])) return false;
-
-    *out_cond = cond; *out_base = base; *out_call = call; *out_after = after;
-    *out_result_binding = r_binding;
+        if (!gs_param_class(ctx, fd->param_types[i], &k, &ct, &aggr)) return false;
     return true;
 }
 
-/* Emit the trampoline body for an eligible function.  The C parameter doubles as
- * the driver's scratch for the current DESCEND args and the restored per-level
- * param in the AFTER segment; the boundary + "return AFTER" continuation move
- * onto a heap `tur_cont` chain, so nesting is bounded by heap, not the C stack.
- * (Matches docs/upcoming/prototypes/d3-stackless-catch-unwind.c.) */
-static void emit_stackless_catch_body(EmitCtx *ctx, Buf *file, FnDef *fd,
-                                      TypeKind result_kind,
-                                      const Expr *cond, const Expr *base,
-                                      const Expr *call, const Expr *after,
-                                      const Binding *result_binding) {
-    uint8_t np = fd->n_params;
-    char **p = (char **)malloc(sizeof(char *) * np);   /* param C names = scratch */
-    for (uint8_t i = 0; i < np; i++) p[i] = atom_var(ctx, fd->params[i]);
-    int base_ind = ctx->indent;
-    #define SI(n) do { ctx->indent = base_ind + (n); indent_buf(file, ctx->indent); } while (0)
+static bool stackless_general_eligible(EmitCtx *ctx, const Expr *e, FnDef *fd,
+                                       TypeKind result_kind) {
+    if (!g_opt_stackless_catch_unwind) return false;
+    if (ctx->current_abi_specialization) return false;
+    if (!gs_basic_ok(ctx, fd)) return false;
+    (void)result_kind;
+    if (!ctx->current_fn_ret_ctype) return false;
+    /* Single-function (G3) view: only self-calls are trampolined. */
+    g_gs_mem[0] = fd; g_gs_nmem = 1;
+    const Expr *b = fd->body;
+    bool ok = gs_has_catch(b, fd) && gs_stmt_ok(b, fd);
+    g_gs_nmem = 0;
+    (void)e;
+    return ok;
+}
 
-    SI(0); buf_puts(file, "tur_cont *__k = (tur_cont*)malloc(sizeof(tur_cont));\n");
-    SI(0); buf_puts(file, "__k->tag = 0; __k->boundary = 0; __k->next = 0;\n");
-    SI(0); buf_puts(file, "int __act = 0;   /* 0 = DESCEND, 1 = RETURN */\n");
-    SI(0); buf_puts(file, "int64_t __v = 0;\n");
-    SI(0); buf_puts(file, "for (;;) {\n");
-    /* A pending panic unwinds to the innermost boundary (RETURN to current k). */
-    SI(1); buf_puts(file, "if (tur_panicking) __act = 1;\n");
-    SI(1); buf_puts(file, "if (__act == 0) {\n");
-    {   /* DESCEND */
-        ctx->indent = base_ind + 2;
-        char *cv = emit_value(ctx, file, cond);
-        SI(2); buf_printf(file, "if (%s) {\n", cv); free(cv);
-        ctx->indent = base_ind + 3;
-        char *bv = emit_value(ctx, file, base);
-        char *bsv = sc_save_expr(result_kind, bv);
-        SI(3); buf_printf(file, "__v = %s; __act = 1;\n", bsv); free(bv); free(bsv);
-        SI(2); buf_puts(file, "} else {\n");
-        ctx->indent = base_ind + 3;
-        SI(3); buf_puts(file, "tur_handler_node *__b = (tur_handler_node*)malloc(sizeof(tur_handler_node));\n");
-        SI(3); buf_puts(file, "__b->parent = tur_handler_chain; tur_handler_chain = __b;\n");
-        SI(3); buf_puts(file, "tur_cont *__k2 = (tur_cont*)malloc(sizeof(tur_cont));\n");
-        SI(3); buf_puts(file, "__k2->tag = 1; __k2->boundary = __b; __k2->next = __k;\n");
-        /* Save the level's params (as int64 bits) BEFORE reassigning them. */
-        for (uint8_t i = 0; i < np; i++) {
-            char *sv = sc_save_expr(fd->param_types[i].kind, p[i]);
-            SI(3); buf_printf(file, "__k2->saved[%d] = %s;\n", i, sv); free(sv);
+/* Populate the per-member var table (all members' params, recording pbase),
+ * collect hoisted let-vars + suspension temps, and emit each member's ENTRY
+ * segment.  Assumes gs->mem[..] / mem_ret / mem_retctype / mem_entry_tag are
+ * set and g_gs_mem mirrors them.  Returns false on overflow. */
+static bool gs_build(GsCtx *gs) {
+    EmitCtx *ctx = gs->ctx;
+    for (int m = 0; m < gs->n_mem; m++) {
+        FnDef *f = gs->mem[m];
+        gs->mem_pbase[m] = gs->n_vars;
+        for (uint8_t i = 0; i < f->n_params; i++) {
+            /* G6: an int64-carrier / opaque param rides the slot with kind
+             * TY_INT (intptr path); a by-value aggregate rides via heap-boxing. */
+            TypeKind k; const char *ct; bool aggr;
+            if (!gs_param_class(ctx, f->param_types[i], &k, &ct, &aggr)) { gs->overflow = true; return false; }
+            gs_add_var_a(gs, atom_var(ctx, f->params[i]), ct, k, aggr);
         }
-        /* Compute all recursion args into temps (their own types, via
-         * __auto_type) BEFORE reassigning params, since a later arg may read an
-         * earlier (not-yet-updated) param. */
-        char **rt = (char **)malloc(sizeof(char *) * np);
-        for (uint8_t i = 0; i < np; i++) {
-            char *rv = emit_value(ctx, file, call->as.call_.args[i]);
-            char tmp[48]; snprintf(tmp, sizeof tmp, "__r%d", i);
-            SI(3); buf_printf(file, "__auto_type %s = (%s);\n", tmp, rv); free(rv);
-            rt[i] = strdup(tmp);
-        }
-        for (uint8_t i = 0; i < np; i++) { SI(3); buf_printf(file, "%s = %s;\n", p[i], rt[i]); free(rt[i]); }
-        free(rt);
-        SI(3); buf_puts(file, "__k = __k2;\n");
-        SI(2); buf_puts(file, "}\n");
     }
-    SI(1); buf_puts(file, "} else {\n");
-    {   /* RETURN */
-        ctx->indent = base_ind + 2;
-        SI(2); buf_puts(file, "if (__k->tag == 0) {\n");
-        SI(3); buf_puts(file, "if (tur_panicking) { fprintf(stderr, \"panic (uncaught, stackless)\\n\"); fflush(NULL); abort(); }\n");
-        char *retv = sc_restore_expr(ctx->current_fn_ret_ctype, result_kind, "__v");
-        SI(3); buf_printf(file, "free(__k); return %s;\n", retv); free(retv);
-        SI(2); buf_puts(file, "}\n");
-        /* AFTER segment: pop this level's boundary, consume any caught panic,
-         * restore the level's params, compute AFTER, return to the parent cont. */
-        SI(2); buf_puts(file, "tur_handler_chain = __k->boundary->parent; free(__k->boundary);\n");
-        SI(2); buf_puts(file, "if (tur_panicking) { tur_panicking = 0; tur_panic_in_progress = 0;\n");
-        SI(3); buf_puts(file, "if (global_panic_payload) { panic_payload_free(global_panic_payload); global_panic_payload = 0; } }\n");
-        for (uint8_t i = 0; i < np; i++) {
-            char slot[48]; snprintf(slot, sizeof slot, "__k->saved[%d]", i);
-            char *rs = sc_restore_expr(emit_type_c_name(ctx, fd->param_types[i]), fd->param_types[i].kind, slot);
-            SI(2); buf_printf(file, "%s = %s;\n", p[i], rs); free(rs);
-        }
-        /* Result-using (`let`) form: bind the boxed ok(recursion value).  __v
-         * still holds the deeper level's return value (int) here; an eligible
-         * function is panic-free, so the box is always ok.  (The box leaks like
-         * the normal tur_catch_unwind_box result -- see the plan's note.) */
-        if (result_binding) {
-            char *rn = atom_var(ctx, result_binding);
-            SI(2); buf_printf(file, "int64_t %s = tur_box_ok(__v);\n", rn); free(rn);
-        }
-        char *av = emit_value(ctx, file, after);
-        char *asv = sc_save_expr(result_kind, av);
-        SI(2); buf_printf(file, "__v = %s;\n", asv); free(av); free(asv);
-        SI(2); buf_puts(file, "tur_cont *__kk = __k->next; free(__k); __k = __kk; __act = 1;\n");
+    gs->n_param_vars = gs->n_vars;
+    for (int m = 0; m < gs->n_mem && !gs->overflow; m++)
+        gs_collect(gs, gs->mem[m]->body);
+    if (gs->overflow) return false;
+
+    for (int m = 0; m < gs->n_mem; m++) {
+        Buf *entry = gs_add_seg(gs, gs->mem_entry_tag[m]);
+        if (!entry) return false;
+        gs->cur_ind = gs->base_ind + 3;
+        gs->ret_kind = gs->mem_ret[m]; gs->ret_ctype = gs->mem_retctype[m];
+        GsSink rs; memset(&rs, 0, sizeof rs);
+        rs.kind = GSK_RETURN; rs.ret_kind = gs->mem_ret[m];
+        cps_emit(gs, entry, gs->mem[m]->body, &rs);
+        if (gs->overflow) return false;
     }
-    SI(1); buf_puts(file, "}\n");
-    SI(0); buf_puts(file, "}\n");
-    #undef SI
-    ctx->indent = base_ind;
-    for (uint8_t i = 0; i < np; i++) free(p[i]);
-    free(p);
+    return true;
+}
+
+/* Emit the driver's `for(;;)` loop + `switch(__pc)` (the DONE case + one case
+ * per built segment) into `out` at indent `bi`.  The caller emits the __k /
+ * __pc / __v prologue.  `done_typed` chooses whether the DONE case returns the
+ * value cast to the (single) member's C return type (inline single-function
+ * body) or raw int64 bits (group driver; the shim casts). */
+static void gs_emit_driver(GsCtx *gs, Buf *out, int bi, bool done_typed) {
+    indent_buf(out, bi); buf_puts(out, "for (;;) {\n");
+    indent_buf(out, bi + 1); buf_puts(out, "if (tur_panicking) {\n");
+    indent_buf(out, bi + 2); buf_puts(out, "while (__k->boundary == 0 && __k->tag != 0) { tur_cont *__pk = __k->next; free(__k); __k = __pk; }\n");
+    /* G7: the panic escaped every boundary this trampoline owns (all popped in
+     * their resume segments, so tur_handler_chain now reflects the OUTER chain
+     * at entry).  Mirror native tur_panic's precedence: an outer handler ->
+     * propagate the signal by returning (the native caller's tur_panicking check
+     * or the outer catch consumes it); else a fiber panic jmpbuf -> longjmp into
+     * it; else it is genuinely uncaught -> abort. */
+    {
+        char *rz = done_typed ? sc_restore_expr(gs->mem_retctype[0], gs->mem_ret[0], "INT64_C(0)")
+                              : tur_strdup("INT64_C(0)");
+        indent_buf(out, bi + 2); buf_puts(out, "if (__k->tag == 0) {\n");
+        indent_buf(out, bi + 3); buf_puts(out, "free(__k);\n");
+        indent_buf(out, bi + 3); buf_printf(out, "if (tur_handler_chain) return %s;\n", rz);
+        indent_buf(out, bi + 3); buf_puts(out, "if (tur_current_fiber && tur_current_fiber->panic_jmpbuf_valid) longjmp(tur_current_fiber->panic_jmpbuf, 1);\n");
+        indent_buf(out, bi + 3); buf_puts(out, "fprintf(stderr, \"panic (uncaught, stackless)\\n\"); fflush(NULL); abort();\n");
+        indent_buf(out, bi + 2); buf_puts(out, "}\n");
+        free(rz);
+    }
+    indent_buf(out, bi + 2); buf_puts(out, "__pc = __k->tag;\n");
+    indent_buf(out, bi + 1); buf_puts(out, "}\n");
+    indent_buf(out, bi + 1); buf_puts(out, "switch (__pc) {\n");
+    if (done_typed) {
+        char *rv = sc_restore_expr(gs->mem_retctype[0], gs->mem_ret[0], "__v");
+        indent_buf(out, bi + 2); buf_printf(out, "case 0: { free(__k); return %s; }\n", rv); free(rv);
+    } else {
+        indent_buf(out, bi + 2); buf_puts(out, "case 0: { free(__k); return __v; }\n");
+    }
+    for (int s = 0; s < gs->n_segs; s++) {
+        indent_buf(out, bi + 2); buf_printf(out, "case %d: {\n", gs->tags[s]);
+        buf_write(out, gs->bufs[s]->data, gs->bufs[s]->len);
+        indent_buf(out, bi + 2); buf_puts(out, "}\n");
+    }
+    indent_buf(out, bi + 1); buf_puts(out, "}\n");
+    indent_buf(out, bi); buf_puts(out, "}\n");
+}
+
+static void gs_free(GsCtx *gs) {
+    for (int i = 0; i < gs->n_vars; i++) free(gs->vars[i].cname);
+    for (int s = 0; s < gs->n_segs; s++) { buf_free(gs->bufs[s]); free(gs->bufs[s]); }
+}
+
+/* Emit the general single-function trampoline as the function body (no shim).
+ * Returns false (leaving `file` untouched) if a hard limit is hit. */
+static bool emit_stackless_general_body(EmitCtx *ctx, Buf *file, FnDef *fd,
+                                        TypeKind result_kind) {
+    GsCtx gs; memset(&gs, 0, sizeof gs);
+    gs.ctx = ctx; gs.fd = fd; gs.base_ind = ctx->indent; gs.next_tag = 2;
+    gs.n_mem = 1; gs.mem[0] = fd; gs.mem_entry_tag[0] = 1;
+    gs.mem_ret[0] = result_kind; gs.mem_retctype[0] = ctx->current_fn_ret_ctype;
+    uint8_t saved_holes = ctx->n_sub_holes;
+    ctx->n_sub_holes = 0;
+    g_gs_mem[0] = fd; g_gs_nmem = 1;
+
+    bool ok = gs_build(&gs);
+    if (ok) {
+        int bi = gs.base_ind;
+        for (int i = gs.n_param_vars; i < gs.n_vars; i++) {
+            indent_buf(file, bi);
+            buf_printf(file, "%s %s = 0;\n", gs.vars[i].ctype, gs.vars[i].cname);
+        }
+        indent_buf(file, bi); buf_puts(file, "tur_cont *__k = (tur_cont*)malloc(sizeof(tur_cont));\n");
+        indent_buf(file, bi); buf_puts(file, "__k->tag = 0; __k->boundary = 0; __k->next = 0;\n");
+        indent_buf(file, bi); buf_puts(file, "int __pc = 1;\n");
+        indent_buf(file, bi); buf_puts(file, "int64_t __v = 0;\n");
+        gs_emit_driver(&gs, file, bi, /*done_typed=*/true);
+        ctx->indent = bi;
+    }
+
+    gs_free(&gs);
+    g_gs_nmem = 0;
+    ctx->n_sub_holes = saved_holes;
+    return ok;
+}
+
+/* ===== G4: cross-function / mutual recursion (shared group driver) ===== */
+
+static bool gs_is_pure_accessor(const Expr *e) {
+    if (!e || e->kind != EX_CALL || e->as.call_.fn_expr) return false;
+    Binding *fb = e->as.call_.fn_binding;
+    const char *nm = (fb && fb->name) ? fb->name->name : NULL;
+    static const char *const pure[] = { "ok?", "err?", "ok-val", "err-val", "some?", "none?", NULL };
+    for (int i = 0; nm && pure[i]; i++) if (strcmp(nm, pure[i]) == 0) return true;
+    return false;
+}
+
+/* Collect the distinct trampoline-candidate callees (direct calls resolvable to
+ * a top-level FnDef, excluding the pure accessors) reachable in e, descending
+ * into catch-unwind thunk bodies. */
+static void gs_callees(const Expr *e, FnDef **out, int *n, int cap) {
+    if (!e || *n >= cap) return;
+    if (e->kind == EX_CALL && !e->as.call_.fn_expr && !gs_is_pure_accessor(e)) {
+        Binding *fb = e->as.call_.fn_binding;
+        FnDef *g = (fb && fb->source_fn_def) ? fb->source_fn_def : NULL;
+        if (g) {
+            bool seen = false;
+            for (int i = 0; i < *n; i++) if (out[i] == g) seen = true;
+            if (!seen && *n < cap) out[(*n)++] = g;
+        }
+        for (uint32_t i = 0; i < e->as.call_.n_args; i++) gs_callees(e->as.call_.args[i], out, n, cap);
+        return;
+    }
+    if (e->kind == EX_CATCH_UNWIND) {
+        FnDef *tf = gs_thunk_fn(e);
+        if (tf && tf->body) gs_callees(tf->body, out, n, cap);
+        return;
+    }
+    switch (e->kind) {
+        case EX_IF: gs_callees(e->as.if_.cond, out, n, cap); gs_callees(e->as.if_.then_, out, n, cap);
+                    gs_callees(e->as.if_.else_or_null, out, n, cap); break;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++) { gs_callees(e->as.let_.bindings[i].init, out, n, cap); }
+            gs_callees(e->as.let_.body, out, n, cap); break;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++) { gs_callees(e->as.do_.items[i], out, n, cap); }
+            break;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++) { gs_callees(e->as.builtin.args[i], out, n, cap); }
+            break;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) { gs_callees(e->as.call_.args[i], out, n, cap); }
+            break;
+        case EX_CAST:       gs_callees(e->as.cast_.expr, out, n, cap); break;
+        case EX_ASCRIBE:    gs_callees(e->as.ascribe_.inner, out, n, cap); break;
+        case EX_PANIC_PAYLOAD_TYPE:  gs_callees(e->as.panic_payload_type_.payload, out, n, cap); break;
+        case EX_PANIC_PAYLOAD_VALUE: gs_callees(e->as.panic_payload_value_.payload, out, n, cap); break;
+        case EX_PANIC:      gs_callees(e->as.panic_.payload, out, n, cap); break;
+        case EX_PANIC_WITH: gs_callees(e->as.panic_with_.payload, out, n, cap); break;
+        default: break;
+    }
+}
+
+/* Compute the trampolined group containing fd: the greatest set of basic-eligible
+ * functions, reachable from fd via calls, such that every member's user-calls
+ * target only members (or pure accessors) and the group as a whole reaches a
+ * catch-unwind.  Returns the member count (fd first) or 0 if fd is not a valid
+ * group member.  Leaves g_gs_* cleared. */
+static int gs_find_group(EmitCtx *ctx, FnDef *fd, FnDef **group) {
+    FnDef *cand[GS_MAXMEM]; int nc = 0;
+    cand[nc++] = fd;
+    for (int i = 0; i < nc; i++) {
+        FnDef *cs[64]; int ncs = 0;
+        gs_callees(cand[i]->body, cs, &ncs, 64);
+        for (int j = 0; j < ncs; j++) {
+            if (!gs_basic_ok(ctx, cs[j])) continue;
+            bool seen = false;
+            for (int k = 0; k < nc; k++) if (cand[k] == cs[j]) seen = true;
+            if (!seen) { if (nc >= GS_MAXMEM) return 0; cand[nc++] = cs[j]; }
+        }
+    }
+    /* Refine to a fixpoint: drop any member whose body is not structurally
+     * handled under the current member set (e.g. it calls a non-member). */
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        g_gs_nmem = nc;
+        for (int i = 0; i < nc; i++) g_gs_mem[i] = cand[i];
+        for (int i = 0; i < nc; i++) {
+            if (!gs_stmt_ok(cand[i]->body, cand[i])) {
+                for (int k = i; k < nc - 1; k++) cand[k] = cand[k + 1];
+                nc--; i--; changed = true;
+            }
+        }
+        g_gs_nmem = 0;
+    }
+    bool has_fd = false;
+    for (int i = 0; i < nc; i++) if (cand[i] == fd) has_fd = true;
+    if (!has_fd || nc < 1) return 0;
+    g_gs_nmem = nc;
+    for (int i = 0; i < nc; i++) g_gs_mem[i] = cand[i];
+    bool has_catch = false;
+    for (int i = 0; i < nc; i++) if (gs_has_catch(cand[i]->body, cand[i])) has_catch = true;
+    g_gs_nmem = 0;
+    if (!has_catch) return 0;
+    for (int i = 0; i < nc; i++) group[i] = cand[i];
+    return nc;
+}
+
+/* Registry of emitted group drivers (reset per module in emit_module). */
+typedef struct {
+    FnDef *mem[GS_MAXMEM]; int n_mem;
+    int entry[GS_MAXMEM];
+    TypeKind ret[GS_MAXMEM];
+    const char *retctype[GS_MAXMEM];
+    char name[40];
+    int max_arity;
+} GsGroup;
+static GsGroup g_cu_groups[64];
+static int g_n_cu_groups;
+static int g_cu_driver_ctr;
+
+void gs_reset_group_registry(void) { g_n_cu_groups = 0; g_cu_driver_ctr = 0; }
+
+/* Emit the shared driver function for a built group into pending_handler_fns
+ * (so it lands at file scope before any member shim). */
+static void gs_emit_group_driver(EmitCtx *ctx, Buf *file, GsCtx *gs,
+                                 const char *name, int maxar) {
+    Buf *out = ctx->pending_handler_fns ? ctx->pending_handler_fns : file;
+    buf_printf(out, "static int64_t %s(int __pc", name);
+    for (int a = 0; a < maxar; a++) buf_printf(out, ", int64_t __a%d", a);
+    buf_puts(out, ") {\n");
+    int bi = 1;
+    for (int i = 0; i < gs->n_vars; i++) {
+        indent_buf(out, bi);
+        buf_printf(out, "%s %s = 0;\n", gs->vars[i].ctype, gs->vars[i].cname);
+    }
+    /* Seed the entering member's params from the __a bit-slots. */
+    indent_buf(out, bi); buf_puts(out, "switch (__pc) {\n");
+    for (int m = 0; m < gs->n_mem; m++) {
+        indent_buf(out, bi + 1);
+        buf_printf(out, "case %d: {\n", gs->mem_entry_tag[m]);
+        for (uint8_t p = 0; p < gs->mem[m]->n_params; p++) {
+            int vi = gs->mem_pbase[m] + p;
+            char slot[16]; snprintf(slot, sizeof slot, "__a%u", (unsigned)p);
+            char *rs = sc_restore_expr(gs->vars[vi].ctype, gs->vars[vi].kind, slot);
+            indent_buf(out, bi + 2); buf_printf(out, "%s = %s;\n", gs->vars[vi].cname, rs); free(rs);
+        }
+        indent_buf(out, bi + 2); buf_puts(out, "break; }\n");
+    }
+    indent_buf(out, bi); buf_puts(out, "}\n");
+    indent_buf(out, bi); buf_puts(out, "tur_cont *__k = (tur_cont*)malloc(sizeof(tur_cont));\n");
+    indent_buf(out, bi); buf_puts(out, "__k->tag = 0; __k->boundary = 0; __k->next = 0;\n");
+    indent_buf(out, bi); buf_puts(out, "int64_t __v = 0;\n");
+    gs_emit_driver(gs, out, bi, /*done_typed=*/false);
+    buf_puts(out, "}\n");
+}
+
+/* Emit fd as a member of a cross-function trampolined group: ensure the group's
+ * shared driver exists, then emit fd's body as a shim into that driver.  Returns
+ * false (nothing emitted) on overflow. */
+static bool emit_group_member(EmitCtx *ctx, Buf *file, FnDef *fd, TypeKind result_kind,
+                              FnDef **group, int ng) {
+    /* G6: the shared-driver shim marshals params through int64 __a slots, which
+     * cannot carry a by-value aggregate.  A group with an aggregate-param member
+     * bails to normal emission (aggregate params ride only the single-function
+     * path). */
+    for (int m = 0; m < ng; m++)
+        for (uint8_t i = 0; i < group[m]->n_params; i++) {
+            TypeKind k; const char *ct; bool aggr;
+            if (!gs_param_class(ctx, group[m]->param_types[i], &k, &ct, &aggr) || aggr)
+                return false;
+        }
+    GsGroup *g = NULL;
+    for (int i = 0; i < g_n_cu_groups && !g; i++)
+        for (int j = 0; j < g_cu_groups[i].n_mem; j++)
+            if (g_cu_groups[i].mem[j] == fd) { g = &g_cu_groups[i]; break; }
+
+    if (!g) {
+        if (g_n_cu_groups >= 64) return false;
+        /* The shared driver is at file scope, inside no closure/defer/handle/gen
+         * body: clear the capture context so member params resolve to plain
+         * driver locals, not env-slot accesses (captures share the outer binding,
+         * so a catch thunk that captures a param re-emits it as that local). */
+        struct Closure *sv_closure = ctx->closure;
+        const char *sv_envname = ctx->env_var_name;
+        Binding **sv_fnparams = ctx->fn_params; uint8_t sv_nfnparams = ctx->n_fn_params;
+        Binding **sv_defer = ctx->defer_captures; uint8_t sv_ndefer = ctx->n_defer_captures;
+        Binding **sv_handle = ctx->handle_captures; uint32_t sv_nhandle = ctx->n_handle_captures;
+        const char *sv_genvar = ctx->gen_var_name;
+        ctx->closure = NULL; ctx->env_var_name = NULL;
+        ctx->fn_params = NULL; ctx->n_fn_params = 0;
+        ctx->defer_captures = NULL; ctx->n_defer_captures = 0;
+        ctx->handle_captures = NULL; ctx->n_handle_captures = 0;
+        ctx->gen_var_name = NULL;
+        GsCtx gs; memset(&gs, 0, sizeof gs);
+        gs.ctx = ctx; gs.fd = group[0]; gs.base_ind = 1;
+        gs.n_mem = ng;
+        int maxar = 0;
+        for (int m = 0; m < ng; m++) {
+            gs.mem[m] = group[m];
+            gs.mem_entry_tag[m] = 1 + m;
+            gs.mem_ret[m] = group[m]->return_type.kind;
+            gs.mem_retctype[m] = emit_type_c_name(ctx, group[m]->return_type);
+            if (group[m]->n_params > maxar) maxar = group[m]->n_params;
+        }
+        gs.next_tag = ng + 1;
+        uint8_t sh = ctx->n_sub_holes; ctx->n_sub_holes = 0;
+        g_gs_nmem = ng; for (int m = 0; m < ng; m++) g_gs_mem[m] = group[m];
+        bool ok = gs_build(&gs);
+        if (!ok) { gs_free(&gs); ctx->n_sub_holes = sh; g_gs_nmem = 0; return false; }
+        char name[40]; snprintf(name, sizeof name, "__cu_group_%d", g_cu_driver_ctr++);
+        gs_emit_group_driver(ctx, file, &gs, name, maxar);
+        g = &g_cu_groups[g_n_cu_groups++];
+        g->n_mem = ng; g->max_arity = maxar;
+        snprintf(g->name, sizeof g->name, "%s", name);
+        for (int m = 0; m < ng; m++) {
+            g->mem[m] = group[m]; g->entry[m] = gs.mem_entry_tag[m];
+            g->ret[m] = gs.mem_ret[m]; g->retctype[m] = gs.mem_retctype[m];
+        }
+        gs_free(&gs); ctx->n_sub_holes = sh; g_gs_nmem = 0;
+        ctx->closure = sv_closure; ctx->env_var_name = sv_envname;
+        ctx->fn_params = sv_fnparams; ctx->n_fn_params = sv_nfnparams;
+        ctx->defer_captures = sv_defer; ctx->n_defer_captures = sv_ndefer;
+        ctx->handle_captures = sv_handle; ctx->n_handle_captures = sv_nhandle;
+        ctx->gen_var_name = sv_genvar;
+    }
+
+    int mi = -1;
+    for (int j = 0; j < g->n_mem; j++) if (g->mem[j] == fd) mi = j;
+    if (mi < 0) return false;
+
+    /* Shim: __cu_group_N(entry, <this fn's args as bit-slots>, 0-fill). */
+    Buf call; buf_init(&call);
+    buf_printf(&call, "%s(%d", g->name, g->entry[mi]);
+    for (uint8_t p = 0; p < fd->n_params; p++) {
+        char *cn = atom_var(ctx, fd->params[p]);
+        char *sv = sc_save_expr(fd->param_types[p].kind, cn);
+        buf_printf(&call, ", %s", sv);
+        free(cn); free(sv);
+    }
+    for (int p = fd->n_params; p < g->max_arity; p++) buf_puts(&call, ", 0");
+    buf_putc(&call, ')');
+    buf_putc(&call, '\0');
+    char *rv = sc_restore_expr(ctx->current_fn_ret_ctype, result_kind, call.data);
+    indent_buf(file, ctx->indent);
+    buf_printf(file, "return %s;\n", rv);
+    free(rv); buf_free(&call);
+    return true;
 }
 
 /* ------------ Phase 2: function emission ------------ */
@@ -1584,15 +2626,27 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         !(result_kind == TY_NIL && !is_main) && !is_main &&
         tco_params_simple(ctx, e, fd) && tco_mark(ctx, fd, fn_name, fd->body) > 0;
 
-    const Expr *__su_cond = NULL, *__su_base = NULL, *__su_call = NULL, *__su_after = NULL;
-    const Binding *__su_rbind = NULL;
+    bool did_general = false;
     if (!prereq6_synthesized_body && !m2b_carrier_synth &&
-        stackless_catch_eligible(ctx, e, fd, result_kind,
-                                 &__su_cond, &__su_base, &__su_call, &__su_after, &__su_rbind)) {
-        /* D3 (stackless-catch-unwind): emit the self-recursive catch-unwind
-         * function as a heap-continuation trampoline instead of native
-         * recursion, so nested catch-unwind runs with a flat C stack. */
-        emit_stackless_catch_body(ctx, file, fd, result_kind, __su_cond, __su_base, __su_call, __su_after, __su_rbind);
+        stackless_general_eligible(ctx, e, fd, result_kind)) {
+        /* G3 (compiled-catch-unwind-general-lowering): general segment splitter
+         * -- arbitrary catch-crossing bodies (multiple catch sites, non-tail
+         * self-recursion, nested if/let/do, a panicking thunk) as a flat-stack
+         * trampoline.  Returns false (falls through to normal emission) only if
+         * a hard limit is hit. */
+        did_general = emit_stackless_general_body(ctx, file, fd, result_kind);
+    }
+    /* G4 (cross-function / mutual recursion): a function that cross-calls other
+     * trampolined members lowers as a shim into a shared group driver. */
+    if (!did_general && !prereq6_synthesized_body && !m2b_carrier_synth &&
+        g_opt_stackless_catch_unwind && !ctx->current_abi_specialization &&
+        gs_basic_ok(ctx, fd) && sc_scalar_kind(result_kind) && ctx->current_fn_ret_ctype) {
+        FnDef *group[GS_MAXMEM];
+        int ng = gs_find_group(ctx, fd, group);
+        if (ng >= 2) did_general = emit_group_member(ctx, file, fd, result_kind, group, ng);
+    }
+    if (did_general) {
+        /* whole body emitted by the general splitter / group shim */
     } else if (prereq6_synthesized_body) {
         /* Prereq 6: the function body was already emitted as a synthesized
          * wrapper above (heap-spill + carrier helper call + cast back to

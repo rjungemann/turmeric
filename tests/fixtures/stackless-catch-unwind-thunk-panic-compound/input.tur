@@ -1,0 +1,15 @@
+;; G7 (compiled-catch-unwind-general-lowering-plan): a `panic` buried in a
+;; non-suspending compound (`do`/`if`/`let`) must route through the driver's
+;; unwind loop, not emit_value's bare `return`, which would leave the driver's C
+;; frame while a boundary is live -- so the enclosing catch-unwind would never
+;; see it.  Here the catch thunk panics via `(do (panic ...) 0)`; f's own
+;; catch-unwind catches it (err branch), so f(n) = n.
+(defn f [n : int] : int
+  (if (= n 0)
+    0
+    (let [r (catch-unwind (fn [] : int (do (panic "boom") 0)))]
+      (if (err? r) (+ 1 (f (- n 1))) 999))))
+
+(defn main [] : int
+  (println (f 200000))
+  0)
