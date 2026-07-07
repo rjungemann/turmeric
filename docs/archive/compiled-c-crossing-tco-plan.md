@@ -1,10 +1,17 @@
 ---
 title: C-crossing TCO in the compiled backend (heap-bounded catch-unwind / atomically / async) -- Plan
 category: Planning
-description: The compiled backend currently C-recurses through the same three boundary forms the interpreter's turi-c-scoped-forms-heap-bounding-plan.md targets -- `catch-unwind` (setjmp landing pad), `atomically` (STM tx C frame), and `async`/`await`/`handle` (ucontext fibers). A program that nests any of them ~200000 deep SIGSEGVs the compiled binary. This plan scopes the ABI-level work that would let the compiled path heap-bound them too, restoring semantic parity with the interpreter. The work is genuinely deep (touches the calling convention and unwinding path) and is deliberately not on the near-term roadmap; it exists so the interpreter's superset stance is documented as temporary, not permanent.
+description: Archived 2026-07-07. D1 (heap handler chain), D1a (panic-return-signal transport), and the stackless-catch-unwind lowering all shipped and graduated 2026-07-07 -- see docs/archive/catch-unwind-graduation-plan.md. D2 (atomically off the C stack) turned out to be a non-problem -- the compiled backend inlines the transaction loop into the caller's frame (src/compiler/emit_expr.c:5960) rather than calling a `tur_atomically(fn, env)` wrapper, so there is no per-atomically C frame to eliminate. The D3 direction (first-class continuations / CPS transform for async/await/handle) is deliberately deferred; the follow-up scoping lives at docs/upcoming/v1/compiled-first-class-continuations-plan.md. Preserved below for historical context.
 ---
 
 # C-crossing TCO in the compiled backend -- Plan
+
+> **ARCHIVED 2026-07-07.** See the resolution note in the frontmatter above.
+> D1 / D1a / stackless-catch-unwind graduated; D2 was a non-problem (the
+> compiled backend inlines the transaction loop, so no wrapper C frame
+> exists to eliminate -- see `src/compiler/emit_expr.c:5960`); the CPS
+> follow-up lives in
+> [`docs/upcoming/v1/compiled-first-class-continuations-plan.md`](../upcoming/v1/compiled-first-class-continuations-plan.md).
 
 ## Why this exists
 
@@ -163,16 +170,15 @@ requires the stackless-continuation work in
 
 ### Phase D2 -- `atomically` on a heap-anchored tx-log
 
-- Move `g_stm_tx` and the transaction log off the C stack onto a
-  heap-allocated transaction node, hung off the thread. The compiled
-  wrapper becomes a thin stub that pushes the node, tail-calls the body,
-  and handles retry by re-entering the body without a new C frame.
-- `retry` is a status like `tur_panicking`: raised on the return path,
-  consumed by the transaction node's owning stub, which re-drives the body.
-- Reconcile lifetime: the node lives as long as the transaction; nested
-  transactions push/pop the node chain.
-- Depends on D1's signal-transport choice (D1a) -- retry rides the same
-  mechanism as panic.
+**Split into its own plan:
+[compiled-atomically-stackless-plan.md](./compiled-atomically-stackless-plan.md).**
+The tx-log-off-the-C-stack half of D2 already exists in the compiled backend
+(`tur_atomically` heap-allocates its `STM_Transaction` and links it onto a
+thread-local chain; retry is a `while` loop, not a C recursion). What still
+lives on the C stack is the `atomically` *boundary* -- the codegen work to
+lift that onto a heap continuation, mirroring the graduated
+stackless-catch-unwind lowering, is scoped in the split plan. Depends on the
+graduated `panic-return-signal` transport (retry rides the same shape).
 
 ### Phase D3 -- `async` / `await` / `handle` continuations
 
