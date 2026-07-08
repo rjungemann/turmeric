@@ -473,6 +473,14 @@ Full suite: 1992 passed, 0 failed.
   (`--enable=cps-effects` from the parent plan then becomes "route colored
   effect programs through this backend"; it can depend on `cps-backend` or
   be folded into it -- decide at C4.)
+- **Graduation is gated on full non-scalar coverage + fallback removal.**
+  Per the owner-specified graduation gate in
+  [cps-backend-non-scalar-values-plan.md](cps-backend-non-scalar-values-plan.md#graduation-gate----what-must-hold-before-cps-backend-goes-always-on),
+  `cps-backend` does **not** graduate (go always-on, shed its `--enable`
+  gate) until Tiers A-C, owning pointers, narrow-int arithmetic shapes, and
+  carrier-ABI ADT forms all emit natively **and the whole-function fallback
+  is removed**. `expires_at` may need bumping (with a plan note) if that work
+  is still in flight at a release cut; it is not a licence to graduate early.
 - **Neutrality.** Off by default -> the suite is untouched; when a fixture
   opts in, direct-vs-CPS value equality is the correctness gate. Measure
   hot-path neutrality on any fixture that opts in, same bar the catch-unwind
@@ -507,9 +515,12 @@ Full suite: 1992 passed, 0 failed.
 - **Removing direct-style emit.** Uncolored functions keep their current,
   faster direct-style lowering permanently. This backend is only ever for
   colored functions.
-- **Full grammar coverage.** C5 closes the forms real colored code needs,
-  not the entire language; the whole-function fallback covers the rest
-  indefinitely.
+- **Full grammar coverage *during rollout*.** C5 closes the forms real
+  colored code needs first; while the tiers roll out the whole-function
+  fallback covers the rest. This is scaffolding, not permanent: the
+  owner-specified graduation gate (see the non-scalar-values plan) requires
+  the fallback removed before `cps-backend` graduates, so every
+  colored-reachable form must be emitted natively by then.
 - **Source-surface changes.** No changes to `defeffect` / `handle` /
   `perform` / `shift` / `reset` syntax or typing; this is codegen only.
 - **Retiring the standalone unit tests.** `tests/cps_prompt_unit.c` /

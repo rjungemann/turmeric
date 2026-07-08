@@ -241,6 +241,59 @@ Make the six DK boundaries carry the wider values end to end:
 - Fold the non-scalar rules into the `docs/guides/` ABI note (a C6 deliverable),
   documenting the tier table and the slot convention.
 
+### N6 -- remove the whole-function fallback (graduation prerequisite)
+
+Once N0-N5 leave no value representation a colored function can name still on
+the fallback path, delete the fallback itself:
+
+- Remove the `CT_UNSUPPORTED` whole-function bail-out and the direct-vs-CPS dual
+  path for colored functions from `emit_cps_ir.c` / the classifier
+  (`ensure_S`, `term_core_ok`, `slot_ty` / `atom_ok` / `fn_sig_ok` and the
+  perform/handle/shift subset predicates). A colored function is emitted through
+  the CPS backend, full stop -- there is no second lowering to fall back to.
+- Any form that still cannot be emitted becomes a hard compiler error at that
+  point, not a silent reroute to the fiber path. Reaching N6 means there are no
+  such forms for colored code; if one is discovered, it is a blocker to fix, not
+  a fallback to tolerate.
+- Re-run the full suite and the sign-off probe with the fallback gone; the CPS
+  backend is now the sole lowering for colored functions.
+
+This phase is what the graduation gate below turns on.
+
+## Graduation gate -- what must hold before `cps-backend` goes always-on
+
+**Policy (owner decision, supersedes the parent plan's "fallback covers the rest
+indefinitely" stance).** The `cps-backend` experiment does **not** graduate --
+does not go always-on and shed its `--enable` gate -- until every value
+representation a colored function can name is emitted natively **and the
+whole-function fallback is removed** (N6). The fallback is temporary scaffolding
+for the incremental rollout, not a permanent escape hatch. All of the following
+must be true at graduation:
+
+1. **Tier A complete** (N1) -- every `<=64`-bit integer/bool width, `cstr`, and
+   raw `ptr<void>` thread natively. *Done.*
+2. **Tier B complete** (N2) -- `float` / `double` / `float32` thread via the
+   bit-reinterpret slot convention.
+3. **Tier C complete** (N3) -- wide by-value aggregates cross the boundary by the
+   chosen boxing strategy.
+4. **Owning pointer types** -- `ref` / `rc` / `weak` / `lref` thread with correct
+   drop / refcount / linearity discipline across the slot (the ownership hook the
+   N1 status defers), not merely bit-copied.
+5. **Narrow-int arithmetic shapes** -- `+`, `-`, `*`, comparisons, etc. on the
+   sub-64-bit integer widths are in the supported builtin-shape set, so a colored
+   function that does narrow-int *math* (not just threads a narrow int) stays on
+   the CPS path.
+6. **Carrier-ABI ADT forms** (N3) -- `EX_MAKE_STRUCT` / `EX_GET_FIELD` /
+   `EX_DEFAULT_OF` for carrier-ABI Option/Result/map and friends are translated
+   and emitted, closing the ~1800 stdlib occurrences C5 measured.
+7. **Fallback removed** (N6) -- no `CT_UNSUPPORTED` whole-function bail-out
+   remains for colored functions; the direct-vs-CPS dual path is retired.
+
+Until all seven hold, the experiment stays gated. The C6 sign-off in the parent
+plan (`docs/upcoming/v1/cps-ir-to-c-backend-plan.md`) must not mark
+`cps-backend` graduated -- and the release-cut skills must not bump past its
+`expires_at` -- while any item above is open.
+
 ## Depends on / reuses
 
 - **Type -> C representation.** `type_c_name` / `emit_type_c_name`
@@ -262,5 +315,9 @@ Make the six DK boundaries carry the wider values end to end:
 - **Env capture.** Lifting a continuation that captures enclosing locals is a
   separate deferred item; non-scalar captured values simply get real-typed env
   struct fields when that lands (they never cross the slot).
-- **Full grammar coverage.** As with the parent plan, the whole-function
-  fallback covers any representation not yet tiered, indefinitely.
+- **Full grammar coverage *during rollout*.** While N0-N5 are in flight the
+  whole-function fallback covers any representation not yet tiered. This is
+  explicitly **not** permanent: per the graduation gate above, the fallback is
+  removed (N6) before `cps-backend` graduates. (This reverses the parent plan's
+  original "covers the rest indefinitely" wording, which that plan's own
+  out-of-scope note is updated to match.)
