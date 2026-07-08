@@ -6,13 +6,16 @@ description: Widen the by-const-pointer aggregate param support in the stackless
 
 # Stackless catch-unwind -- by-const-pointer aggregate params, widened eligibility (BR3) -- Plan
 
-> **Status:** BR3a LANDED. BR1 (detection + save/restore) and BR2 (box
-> ownership/free + valgrind balance) landed earlier -- see the archived
-> [by-const-pointer aggregate params plan](../../archive/catch-unwind-byref-aggregate-params-plan.md).
-> This plan covers BR3: widening the eligibility gate. BR3a (the read-only
-> use widening: `match`/destructure, `.field` reads, `@`-deref) is done and
-> shipped in the single-function trampoline; BR3b (the one-level callee
-> const-borrow proof) and BR3c (optional transitive summary) remain open.
+> **ARCHIVED -- COMPLETE (BR3a).** The read-only use widening
+> (`match`/destructure, `.field` reads, `@`-deref of a by-ref aggregate param
+> in the single-function trampoline) landed; details below. The remaining BR3
+> work -- BR3b (passing the param to a non-member pure const-by-ref reader,
+> which needs the mid-segment `tur_panicking` panic route, not just a gate
+> relaxation) and BR3c (the optional transitive summary) -- is split out into
+> [docs/upcoming/v1/catch-unwind-byref-aggregate-br3b-plan.md](../upcoming/v1/catch-unwind-byref-aggregate-br3b-plan.md).
+> BR1 (detection + save/restore) and BR2 (box ownership/free + valgrind
+> balance) landed earlier -- see the archived
+> [by-const-pointer aggregate params plan](./catch-unwind-byref-aggregate-params-plan.md).
 >
 > **BR3a landing (single-function only):** `gs_value_ok` in
 > `src/compiler/emit_fns.c` now admits `EX_MATCH` / `EX_GET_FIELD` /
@@ -34,14 +37,16 @@ description: Widen the by-const-pointer aggregate param support in the stackless
 > `.../stackless-catch-unwind-byref-aggregate-group-bail` (mutual `match`
 > regression guard -- must compile + run, proving the group path bails).
 >
-> **BR3b/BR3c remaining.** BR3b admits passing the param to a non-member
+> **BR3b/BR3c split out.** BR3b admits passing the param to a non-member
 > pure const-by-ref reader. That is NOT a near-free change: native codegen
 > hoists a fallible call into a temp and emits `if (tur_panicking) return;`
 > after it, so admitting such a call mid-segment requires the trampoline's
 > `cps_emit` to hoist the call and emit an `if (tur_panicking) break;`
 > unwind route -- a departure from the current "only pure values in value
 > position" invariant. Without a callee totality/no-panic proof, admitting
-> the call is unsound. Deferred until a fixture needs it.
+> the call is unsound. This (and the optional BR3c transitive summary) now
+> lives in its own plan:
+> [catch-unwind-byref-aggregate-br3b-plan.md](../upcoming/v1/catch-unwind-byref-aggregate-br3b-plan.md).
 >
 > **Prerequisites:** BR1+BR2. `gs_param_class` already classifies a by-ref
 > aggregate param (`type_struct_pass_by_ptr`) and flags it `is_ref`; save
@@ -154,12 +159,13 @@ Unsafe (BR3 must still reject):
   three). Verified: `.field`-read on a `Result` param and a `match` on a
   `(Box int)` param both run flat where native SIGSEGVs; the BR1 pure-accessor
   fixtures stay byte-identical.
-- **BR3b** -- the one-level callee const-borrow proof: admit passing the param
-  to a pure `const`-by-ref callee. Fixture: a recursion that threads a by-ref
-  aggregate and hands it to a non-member pure reader each level.
-- **BR3c** -- (optional) a transitive escape/mutation summary if a real
-  fixture needs deeper-than-one-level proof; otherwise leave BR3b's syntactic
-  check as the ceiling and document it.
+- **BR3b / BR3c** -- SPLIT OUT to
+  [catch-unwind-byref-aggregate-br3b-plan.md](../upcoming/v1/catch-unwind-byref-aggregate-br3b-plan.md).
+  BR3b (admit passing the param to a pure `const`-by-ref non-member reader)
+  is not a gate-only change like BR3a -- a native reader call can panic
+  mid-segment, so it needs `cps_emit` to hoist the call and emit
+  `if (tur_panicking) break;`. BR3c is the optional transitive
+  escape/mutation summary. See the split-out plan for the full design.
 
 ## Validation
 
