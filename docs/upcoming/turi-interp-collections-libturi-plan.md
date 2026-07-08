@@ -30,13 +30,19 @@ Verified empirically against this tree (`build/tur`, Debug):
   `tur run --interpret` and `tur run` both exit `9`. `map-new` constructs and
   reads back likewise.
 
-- **The element-type ascription is required, in BOTH modes.** Bare `(vec-new)`
-  fails elaboration identically under the compiler and the interpreter --
-  `function 'vec-push!' arg 1: expected (type-app Vec tyvar 'A'), got nil` --
-  because `vec-new : (Vec A)` has no value argument to fix `A`. The idiom is
-  `(:: (vec-new) (Vec T))` (see
-  `tests/fixtures/constrained-generic-dispatch-float-element/`). This is *not*
-  an interpreter bug; it is the documented carrier-helper idiom.
+- **Element type comes from context; ascription is only the no-context
+  fallback.** A zero-arg `vec-new : (Vec A)` has no value argument to fix `A`, so
+  it takes `A` from whatever typed position it flows into. A typed `let` binding
+  (`(let [v : (Vec int) (vec-new)] ...)`), a `defn` return type, a `def`
+  annotation, or a typed parameter at the call site (`(fill (vec-new))` where
+  `fill` takes `(Vec int)`) all pin `A` with no ascription -- verified in both
+  interpret and compiled modes. `(:: (vec-new) (Vec T))` (see
+  `tests/fixtures/constrained-generic-dispatch-float-element/`) is needed only
+  when nothing else constrains `A`: a bare/standalone expression, or an
+  unannotated binding. Bare `(vec-new)` fails elaboration identically under the
+  compiler and the interpreter (`function 'vec-push!' arg 1: expected
+  (type-app Vec tyvar 'A'), got nil`) -- this is ordinary bidirectional
+  inference, *not* an interpreter bug.
 
 - **Broken for `libturi` embedders.** The same program driven through the
   `turi_eval` C API (which links `libturi.a`, not `main.c`) fails at runtime:
@@ -113,16 +119,49 @@ Affected consumers today:
 - Removing the ascription idiom or adding element-type inference for zero-arg
   polymorphic constructors -- that is a shared elaborator change (it affects the
   compiler identically) and is out of scope here.
-- Reworking the collection *representation* (raw-`malloc` `{data,len,cap}` header
-  for `Vec`; HAMT box for `Set`/`Map`). Note these buffers are `malloc`-owned and
-  process-lifetime (not env-pool allocated), so they are orthogonal to the
-  value-pool scratch-promotion work
-  (`docs/upcoming/turi-value-pool-carrier-relocation-plan.md`); a vec/set/map
-  global does not grow `value_scratch`. Their reclamation is a separate concern.
+- Reworking the collection *representation* or fixing its memory management. The
+  `Vec` header (`{data,len,cap}`) and the `Set`/`Map` HAMT box are
+  raw-`malloc`-owned, not env-pool allocated, and never reclaimed in the
+  tree-walker (see "Known limitation" below). That leak is real, but it is the
+  *same* behavior the `tur` binary already ships; this availability change does
+  not touch it and does not make it worse.
 - New collection *operations*. This is a relocation/availability change, not an
   API expansion. If an op has an inline-C body but no native override even in the
   `tur` binary, it stays unsupported in the interpreter (call it out, do not
   paper over it).
+
+## Known limitation -- collections are never reclaimed in the interpreter
+
+In the tree-walking interpreter a `Vec` / `Set` / `Map` buffer is created with
+raw `calloc`/`malloc` (`main.c` `native_vec_new` etc.), is **not** drawn from the
+env value pool, is **not** tracked on the env, and is never reached by the
+interpreter's rc-drop path -- `EX_RC_DROP` / `turi_rc_drop_value` act only on the
+`__rc` `TURI_STRUCT` wrapper, never on the bare `TURI_INT` carrier a collection
+handle is. `turi_env_free` reclaims arenas, the scheduler, and spice images, not
+these buffers. There is no GC and no refcount for them. So **every collection a
+program builds persists until the process exits**, even after it leaves scope,
+unless the program explicitly calls `vec-free` / `set-free` / `map-free`.
+
+Measured in the tree-walker (`tur interpret`; transient vecs each grown to 200
+ints, then dropped from scope every iteration; peak `VmRSS`):
+
+| N collections created | peak VmRSS |
+| --- | --- |
+| 5,000  | 508 MB |
+| 20,000 | 1,039 MB |
+| 60,000 | 2,004 MB |
+| 60,000 (scalar control, no vec) | 133 MB |
+
+Peak grows ~linearly with the number of collections created; the scalar control
+stays flat. This is orthogonal to the value-pool scratch-promotion work
+(`docs/upcoming/turi-value-pool-carrier-relocation-plan.md`): the buffers live
+outside `value_scratch`, so promotion neither bounds them nor is endangered by
+them -- but it means a long-lived interpreter host that uses collections has an
+unbounded leak that scratch promotion does not address. Exposing collections
+through `libturi` (this plan) inherits the limitation unchanged. A real fix
+(env-tracked collection buffers freed at `turi_env_free`, or drop-glue for the
+collection carriers) is separate work; it is filed in
+`docs/reported/interp-collections-never-freed.md`.
 
 ## Design
 
