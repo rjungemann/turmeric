@@ -671,7 +671,12 @@ static HamtNode *node_delete(HamtNode *n, uint64_t hash, void *key, uint32_t lev
             }
 
             if (!new_child) {
-                tur_hamt_node_release(n->as.bitmap.children[idx]);
+                /* The deleted child is dropped from the result, but `n` is a
+                 * shared, immutable node that still owns children[idx]. Do NOT
+                 * release it here: node_delete must leave `n`'s refcounts
+                 * untouched (it returns a fresh node that retains only the
+                 * survivors). Releasing children[idx] under-retains it by one,
+                 * so freeing the whole lineage double-frees. */
                 uint32_t new_bitmap = bitmap & ~(UINT32_C(1) << chunk);
                 uint32_t new_child_count = popcount32(new_bitmap);
 
@@ -713,7 +718,10 @@ static HamtNode *node_delete(HamtNode *n, uint64_t hash, void *key, uint32_t lev
             }
 
             if (!new_child) {
-                tur_hamt_node_release(n->as.array.children[chunk]);
+                /* Same invariant as the bitmap arm: `n` is shared and still
+                 * owns children[chunk]. node_delete leaves `n`'s refcounts
+                 * untouched, retaining only the survivors into the fresh node,
+                 * so do NOT release the dropped child here. */
                 HamtNode *new_node = array_node_create();
                 for (uint32_t i = 0; i < HAMT_SLOTS_PER_LEVEL; i++) {
                     if (i == chunk) {

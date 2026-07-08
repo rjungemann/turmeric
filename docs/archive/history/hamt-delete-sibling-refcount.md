@@ -1,5 +1,26 @@
 # HAMT delete path under-retains a shared node (double-free on lineage free)
 
+> **Status:** RESOLVED (2026-07-08). The extra release was in the collapse
+>   arms of `node_delete` (`src/runtime/hamt.c`): when a child subtree collapses
+>   to empty, both the bitmap arm and the array arm released
+>   `n->as.bitmap.children[idx]` / `n->as.array.children[chunk]` -- but `n` is a
+>   shared, immutable node that still owns that child. `node_delete` returns a
+>   *fresh* node that retains only the survivors and must leave `n`'s refcounts
+>   untouched. The spurious release under-retained the dropped child by one, so
+>   freeing the whole lineage (parent + delete-derived map) freed that node
+>   twice. Fix: delete the two `tur_hamt_node_release` calls in the
+>   `if (!new_child)` collapse branches. The assoc path was never affected
+>   (it copies-and-retains without a collapse arm), which is why an assoc-only
+>   lineage freed cleanly.
+> **Regression guard:** `tests/test_hamt_del_lineage.c` (ctest
+>   `tur_hamt_del_lineage`, runner `tests/run-hamt-del-lineage.sh`) builds
+>   delete-derived lineages -- flat bitmap-slot collapse (the exact repro),
+>   nested bitmap collapse, and collapse-to-empty-root -- and frees every
+>   version under ASan/UBSan (+LSan on Linux). It reproduces the
+>   heap-use-after-free pre-fix and is clean post-fix. `bash tests/run.sh`: 0
+>   FAIL. Unblocks env-teardown reclaim of interpreter Set/Map buffers
+>   (`interp-collections-never-freed`, fix direction 1).
+
 **Severity:** medium (latent correctness; a genuine double-free / heap
 use-after-free, but only surfaces when a *whole* persistent-map lineage that
 includes a `tur_hamt_del`-produced map is freed. Programs that leak their maps
