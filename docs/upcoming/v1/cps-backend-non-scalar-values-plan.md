@@ -231,16 +231,34 @@ which would outlive their referent). Also still open: carrier-ABI ADTs (need
 full-`Type` info the IR does not yet carry -- folds into N3). The
 `slot_store`/`slot_load` seams are in place for Tier B/C to extend.
 
-### N2 -- Tier B floats
+### N2 -- Tier B floats -- **LANDED**
 
-- Add the reinterpret `slot_store` / `slot_load` for `double` / `float`.
-- Add `BS_PRINTLN_FLOAT` / `BS_PRINTLN_FLOAT32` and the float arithmetic
-  builtin shapes to the supported set; declare float binders `double` / `float`.
-- **Round-trip fixtures.** Per the STRICT float rule (CLAUDE.md), the first
-  probe uses a non-zero fractional literal (e.g. `7.1`, `3.25`), never `7.0`:
-  a colored function that performs an effect returning a `float` and does
-  `float` arithmetic on the resumed value, asserting the CPS result equals the
-  direct-style result to the last bit.
+- `slot_store` / `slot_load` now exist as helpers (`emit_cps_ir.c`) and are
+  applied at **all six** DK slot boundaries (deliver, lifted-frame value param,
+  handler-case arg, `dk_perform` arg, `dk_invoke` resume value + result, entry
+  unwrap). Tier A stays a plain cast; Tier B reinterprets a `double` through
+  `union { double d; int64_t i; }` and a `float32` through a `uint32_t` -- a
+  `(intptr_t)` cast would truncate the fractional part.
+- `TY_FLOAT` / `TY_FLOAT64` / `TY_FLOAT32` added to `slot_ty`; a new `CA_FLOAT`
+  atom carries the literal (`is_atomic` / `atom_of` produce it, `atom_str` emits
+  `atom_float` / `atom_float32`); `BS_PRINTLN_FLOAT` / `BS_PRINTLN_FLOAT32` added
+  to the supported/printable shapes; float binders declare `double` / `float`.
+  Float arithmetic already rode `BS_BIN_INFIX` / `BS_VARIADIC_FOLD`, so it works
+  once the atoms and binders are float-typed.
+- **Fixtures.** `cps-backend-float` (float arithmetic `3.5 + 4.25` threaded
+  through a shift/reset, `7.75`) and `cps-backend-float-effect` (a `:float`
+  effect through perform/handle/resume, `7.1 + 1.5 = 8.6`). Per the STRICT float
+  rule the literals are non-zero-fractional.
+- **Found a pre-existing bug.** The direct-style / fiber effect path *truncates*
+  a `:float` effect result to an integer (`7.1 -> 7`) -- it passes the value
+  through the slot with a numeric cast, not a reinterpret. The CPS backend does
+  it correctly, so a float-effect program now prints the right value under
+  `--enable=cps-backend` and the wrong one on the default path. Filed as
+  `docs/reported/fiber-effect-float-result-truncated.md`; the
+  `cps-backend-float-effect` fixture asserts the correct `8.6`. (Direct-vs-CPS
+  equality therefore does *not* hold for float effects until that bug is fixed --
+  the CPS side is the correct one.)
+- Full suite: 1999 passed, 0 failed (+2 float fixtures).
 
 ### N3 -- struct / ADT forms
 
@@ -307,7 +325,8 @@ must be true at graduation:
 1. **Tier A complete** (N1) -- every `<=64`-bit integer/bool width, `cstr`, and
    raw `ptr<void>` thread natively. *Done.*
 2. **Tier B complete** (N2) -- `float` / `double` / `float32` thread via the
-   bit-reinterpret slot convention.
+   bit-reinterpret slot convention. *Done* (`slot_store`/`slot_load` at all six
+   boundaries; `cps-backend-float` / `cps-backend-float-effect` fixtures).
 3. **Tier C complete** (N3) -- wide by-value aggregates cross the boundary by the
    chosen boxing strategy.
 4. **Owning pointers handled correctly on the CPS path** -- `ref` / `rc` /

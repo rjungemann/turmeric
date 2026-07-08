@@ -58,10 +58,41 @@ static bool slot_ty(TypeKind k) {
         case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
         case TY_CSTR:
         case TY_PTR_VOID:   /* raw pointer: Copy, non-owning -- casts through the slot */
+        case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32:  /* Tier B: bit-reinterpret */
             return true;
         default:
             return false;
     }
+}
+
+static const char *binder_ctype(EmitCtx *ctx, TypeKind ty);
+
+/* Tier B slot crossing: a float's bit pattern fits the 64-bit slot but is not an
+ * integer, so it crosses by *reinterpret*, not a numeric cast ((intptr_t)3.5
+ * would truncate to 3).  Tier A values cross by a plain cast.  Both return a
+ * malloc'd C expression. */
+static char *slot_store(TypeKind k, const char *e) {
+    Buf b; buf_init(&b);
+    if (k == TY_FLOAT || k == TY_FLOAT64)
+        buf_printf(&b, "(intptr_t)((union { double d; int64_t i; }){ .d = (%s) }).i", e);
+    else if (k == TY_FLOAT32)
+        buf_printf(&b, "(intptr_t)(uint32_t)((union { float f; uint32_t u; }){ .f = (%s) }).u", e);
+    else
+        buf_printf(&b, "(intptr_t)(%s)", e);
+    buf_putc(&b, '\0');
+    char *s = strdup(b.data); buf_free(&b); return s;
+}
+
+static char *slot_load(EmitCtx *ctx, TypeKind k, const char *s) {
+    Buf b; buf_init(&b);
+    if (k == TY_FLOAT || k == TY_FLOAT64)
+        buf_printf(&b, "((union { double d; int64_t i; }){ .i = (int64_t)(%s) }).d", s);
+    else if (k == TY_FLOAT32)
+        buf_printf(&b, "((union { float f; uint32_t u; }){ .u = (uint32_t)(%s) }).f", s);
+    else
+        buf_printf(&b, "(%s)(%s)", binder_ctype(ctx, k), s);
+    buf_putc(&b, '\0');
+    char *r = strdup(b.data); buf_free(&b); return r;
 }
 
 /* The C type used to declare a let-binder of type kind `ty` (TY_NIL binders are
@@ -78,15 +109,16 @@ static bool atom_ok(const CAtom *a) {
         case CA_BOOL: return true;
         case CA_UNIT: return true;   /* nil placeholder (0) */
         case CA_STR:  return true;   /* cstr literal (Tier A pointer) */
+        case CA_FLOAT: return true;  /* float/double literal (Tier B) */
         case CA_VAR:
         case CA_CVAR: return slot_ty(a->ty) || a->ty == TY_NIL;
-        default:      return false;  /* CA_OTHER: float/etc. */
+        default:      return false;  /* CA_OTHER */
     }
 }
 
 static bool is_println_shape(BuiltinShape s) {
     return s == BS_PRINTLN_INT || s == BS_PRINTLN_BOOL || s == BS_PRINTLN_UINT
-        || s == BS_PRINTLN_CSTR;
+        || s == BS_PRINTLN_CSTR || s == BS_PRINTLN_FLOAT || s == BS_PRINTLN_FLOAT32;
 }
 
 static bool shape_supported(const BuiltinSpec *sp) {
@@ -102,6 +134,8 @@ static bool shape_supported(const BuiltinSpec *sp) {
         case BS_PRINTLN_BOOL:
         case BS_PRINTLN_UINT:
         case BS_PRINTLN_CSTR:
+        case BS_PRINTLN_FLOAT:
+        case BS_PRINTLN_FLOAT32:
             return true;
         default:
             return false;
@@ -850,6 +884,7 @@ static char *atom_str(CE *ce, const CAtom *a) {
         case CA_BOOL: return atom_bool(a->b);
         case CA_UNIT: return strdup("0");
         case CA_STR:  return atom_cstr(a->str);
+        case CA_FLOAT: return a->ty == TY_FLOAT32 ? atom_float32(a->f) : atom_float(a->f);
         case CA_VAR:  return atom_var(ce->ctx, a->var);
         case CA_CVAR: return strdup(a->cvar_name ? a->cvar_name : "0");
         default:      return strdup("0");
@@ -936,17 +971,21 @@ static void emit_deliver(CE *ce, const CKont *kont, const char *v) {
         /* In a perform-continuation frame the delivered value IS the result --
          * return it (dk_perform routes it to the handler's outer continuation);
          * otherwise run the function's return continuation. */
+        char *sv = slot_store(kont->ty, v);
         if (ce->ret_mode)
-            ce_line(ce, "return (intptr_t)(%s);", v);
+            ce_line(ce, "return %s;", sv);
         else
-            ce_line(ce, "return dk_run(k, (intptr_t)(%s));", v);
+            ce_line(ce, "return dk_run(k, %s);", sv);
+        free(sv);
     } else if (kont->kind == KK_PROMPT) {
         /* Deliver to the innermost prompt.  In a shift-body helper the delivered
          * value IS the shift result -- return it; otherwise run the prompt chain. */
+        char *sv = slot_store(kont->ty, v);
         if (ce->shift_mode)
-            ce_line(ce, "return (intptr_t)(%s);", v);
+            ce_line(ce, "return %s;", sv);
         else
-            ce_line(ce, "return dk_run(%s, (intptr_t)(%s));", ce->cur_k, v);
+            ce_line(ce, "return dk_run(%s, %s);", ce->cur_k, sv);
+        free(sv);
     } else { /* KK_VAR: an inline join */
         ce_line(ce, "%s = %s;", join_param(ce, kont->id), v);
         ce_line(ce, "goto L%u;", kont->id);
@@ -966,6 +1005,12 @@ static void emit_println(CE *ce, BuiltinShape shape, const char *arg) {
             break;
         case BS_PRINTLN_CSTR:
             ce_line(ce, "puts(%s);", arg);
+            break;
+        case BS_PRINTLN_FLOAT:
+            ce_line(ce, "printf(\"%%g\\n\", (double)(%s));", arg);
+            break;
+        case BS_PRINTLN_FLOAT32:
+            ce_line(ce, "printf(\"%%.7g\\n\", (double)(%s));", arg);
             break;
         default: break;
     }
@@ -1209,17 +1254,22 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     /* Load the incoming value out of the one-word slot into a real-typed local
      * (reset/perform continuation), or bind the handler case's params/k. */
     if (mode == LH_RESET_CONT || mode == LH_PERFORM_CONT) {
+        char slotexpr[160];
+        snprintf(slotexpr, sizeof slotexpr, "%s__slot", xname);
+        char *ld = slot_load(ce->ctx, xty, slotexpr);
         indent_buf(&tmp, 4);
-        buf_printf(&tmp, "%s %s = (%s)(%s__slot);\n",
-                   binder_ctype(ce->ctx, xty), xname, binder_ctype(ce->ctx, xty), xname);
+        buf_printf(&tmp, "%s %s = %s;\n", binder_ctype(ce->ctx, xty), xname, ld);
+        free(ld);
     }
     if (mode == LH_HANDLER_CASE && hnode) {
         if (hnode->as.handle.n_params >= 1) {
             const Binding *pb = hnode->as.handle.params[0];
             char *pn = name_for_binding(ce->ctx, pb);
             const char *pty = binder_ctype(ce->ctx, pb->type.kind);
+            char *ld = slot_load(ce->ctx, pb->type.kind, "arg");
             indent_buf(&tmp, 4);
-            buf_printf(&tmp, "%s %s = (%s)arg;\n", pty, pn, pty);
+            buf_printf(&tmp, "%s %s = %s;\n", pty, pn, ld);
+            free(ld);
             free(pn);
         }
         if (hnode->as.handle.k) {
@@ -1332,17 +1382,20 @@ static void emit_perform(CE *ce, const CTerm *t) {
     /* argument: 0-arg effects pass 0; 1-arg pass the arg (subset). */
     char *arg = (t->as.perform.n >= 1)
         ? atom_str(ce, &t->as.perform.args[0]) : strdup("0");
+    TypeKind argty = (t->as.perform.n >= 1) ? t->as.perform.args[0].ty : TY_NIL;
+    char *sa = slot_store(argty, arg);
 
     if (perform_cont_trivial(t)) {
-        ce_line(ce, "return dk_perform(%d, (intptr_t)(%s), %s);", tag, arg, ce->cur_k);
+        ce_line(ce, "return dk_perform(%d, %s, %s);", tag, sa, ce->cur_k);
     } else {
         int id = (*ce->helper_ctr)++;
         char pname[256];
         snprintf(pname, sizeof(pname), "%s_pf%d", ce->fn_cn, id);
         emit_lifted(ce, pname, LH_PERFORM_CONT, t->as.perform.x.name, t->as.perform.x.ty, t->as.perform.body, NULL);
-        ce_line(ce, "return dk_perform(%d, (intptr_t)(%s), dk_frame(%s, 0, %s));",
-                tag, arg, pname, ce->cur_k);
+        ce_line(ce, "return dk_perform(%d, %s, dk_frame(%s, 0, %s));",
+                tag, sa, pname, ce->cur_k);
     }
+    free(sa);
     free(arg);
 }
 
@@ -1350,10 +1403,14 @@ static void emit_resume(CE *ce, const CTerm *t) {
     /* resume k v = dk_invoke((DK*)k, v); slot-load the result and continue. */
     char *kk = atom_str(ce, &t->as.resume.k);
     char *vv = atom_str(ce, &t->as.resume.v);
-    const char *rty = binder_ctype(ce->ctx, t->as.resume.x.ty);
-    ce_line(ce, "%s = (%s)dk_invoke((DK *)(%s), (intptr_t)(%s));",
-            t->as.resume.x.name, rty, kk, vv);
-    free(kk); free(vv);
+    char *sv = slot_store(t->as.resume.v.ty, vv);            /* resume value -> slot */
+    Buf inv; buf_init(&inv);
+    buf_printf(&inv, "dk_invoke((DK *)(%s), %s)", kk, sv);
+    buf_putc(&inv, '\0');
+    char *ld = slot_load(ce->ctx, t->as.resume.x.ty, inv.data);  /* result <- slot */
+    ce_line(ce, "%s = %s;", t->as.resume.x.name, ld);
+    buf_free(&inv);
+    free(ld); free(sv); free(kk); free(vv);
     emit_term(ce, t->as.resume.body);
 }
 
@@ -1464,7 +1521,9 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     buf_puts(file, "__root);\n");
     buf_puts(file, "    dk_free(__root);\n");
     /* slot-load the final delivered value back to the real return type. */
-    buf_printf(file, "    return (%s)(__r);\n}\n", rety);
+    char *ld = slot_load(ctx, fd->return_type.kind, "__r");
+    buf_printf(file, "    return %s;\n}\n", ld);
+    free(ld);
 
     free(cn);
     return true;

@@ -130,7 +130,7 @@ static CAtom atom_of(const Expr *e) {
         case EX_INT_LIT:   a.kind = CA_INT;  a.i = e->as.i; break;
         case EX_BOOL_LIT:  a.kind = CA_BOOL; a.b = e->as.b; break;
         case EX_NIL_LIT:   a.kind = CA_UNIT; break;
-        case EX_FLOAT_LIT: a.kind = CA_OTHER; break;
+        case EX_FLOAT_LIT: a.kind = CA_FLOAT; a.f = e->as.f; break;
         case EX_CSTR_LIT:  a.kind = CA_STR;  a.str = e->as.s; break;
         case EX_VAR:       a.kind = CA_VAR;  a.var = e->as.var.binding; break;
         default:           a.kind = CA_OTHER; break;
@@ -596,6 +596,7 @@ static void print_atom(const CAtom *a, FILE *out) {
         case CA_BOOL: fprintf(out, "%s", a->b ? "true" : "false"); break;
         case CA_UNIT: fprintf(out, "()"); break;
         case CA_STR:  fprintf(out, "\"%.*s\"", (int)a->str.len, a->str.p ? a->str.p : ""); break;
+        case CA_FLOAT: fprintf(out, "%g", a->f); break;
         default:      fprintf(out, "<val>"); break;
     }
 }
