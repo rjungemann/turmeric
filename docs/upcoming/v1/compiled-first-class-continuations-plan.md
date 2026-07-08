@@ -101,7 +101,9 @@ substrate" as landed dependencies. Two facts narrow that:
 So F1/F2/F3's substantive lowering depends on building CPS-IR-to-C emission
 for resumable cross-function capture. That is the real next step, and it is
 a plan of its own -- not a mechanical extension of the existing abortive DK
-path.
+path. It is scoped in
+[cps-ir-to-c-backend-plan.md](cps-ir-to-c-backend-plan.md); F1's `perform` /
+`resume` lowering lands as that plan's Phase C4.
 
 **Experiment registration deferred (deliberately).** Per the experiments
 STRICT RULE, an `EXPERIMENTS[]` row must point `opt_global` at a
