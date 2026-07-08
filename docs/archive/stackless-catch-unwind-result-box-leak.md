@@ -1,10 +1,33 @@
 ---
-status: open
+status: resolved
 severity: medium
 discovered: 2026-07-08
 discovered-by: catch-unwind-aggregate-returns-plan AR2 valgrind
+resolved: 2026-07-08
 area: compiled backend / runtime (stackless catch-unwind lowering)
 ---
+
+## Resolution (2026-07-08)
+
+Fixed in `gs_catch_descend` (`src/compiler/emit_fns.c`): when the stackless
+catch resume delivers its box directly to a `GSK_SEQ` sink (a statement-position
+/ discarded catch, `temp_vi < 0`), it now emits
+`tur_result_box_free((int64_t)(intptr_t)__box<id>)` before the `(void)` discard,
+mirroring the native statement-position free in `emit_stmt.c:177`. Reuses the
+existing `tur_result_box_free` helper (frees the box and, for an err box, the
+`tur_panic_payload` struct -- never `payload->value`).
+
+The report's primary repro (ok-result discarded, 50 levels) now reports
+`in use at exit: 0 bytes` under valgrind (was 1,200 bytes in 50 blocks). A
+caught-panic discard drops from ~72 bytes/level to 16 (the opaque
+`payload->value`, intentionally not freed -- may be an inline scalar; matches
+native). The `temp_vi >= 0` let-bound-box path is deliberately left untouched:
+that is the deferred escape-analysis case the report and
+`catch-unwind-thunk-closure-leak.md` flag, since such a box may flow into the
+function's returned Result.
+
+The 16 stackless-catch-unwind fixture snapshots were regenerated in the same
+change; `bash tests/run.sh` is green (1976 passed, 0 failed).
 
 # Stackless `catch-unwind` leaks the caught Result box per catch level, even when discarded
 

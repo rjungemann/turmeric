@@ -6014,6 +6014,7 @@ static int64_t cu_hyrec(int64_t n) {
            if (tur_panicking) { tur_panicking = 0; tur_panic_in_progress = 0; tur_panic_payload *__pp184 = global_panic_payload; global_panic_payload = 0; __box184 = tur_box_err((int64_t)(intptr_t)__pp184); }
            else { __box184 = tur_box_ok(__v); }
            { tur_cont *__pk = __k->next; free(__k); __k = __pk; }
+           tur_result_box_free((int64_t)(intptr_t)__box184);
            (void)(__box184);
            __v = (int64_t)(intptr_t)(n); __pc = __k->tag; break;
           }

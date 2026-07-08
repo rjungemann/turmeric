@@ -6039,6 +6039,7 @@ static int64_t __cu_group_0(int __pc, int64_t __a0) {
     if (tur_panicking) { tur_panicking = 0; tur_panic_in_progress = 0; tur_panic_payload *__pp186 = global_panic_payload; global_panic_payload = 0; __box186 = tur_box_err((int64_t)(intptr_t)__pp186); }
     else { __box186 = tur_box_ok(__v); }
     { tur_cont *__pk = __k->next; free(__k); __k = __pk; }
+    tur_result_box_free((int64_t)(intptr_t)__box186);
     (void)(__box186);
     __v = (int64_t)(intptr_t)((INT64_C(1)) + (n_1267)); __pc = __k->tag; break;
    }
