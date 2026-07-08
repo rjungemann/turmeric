@@ -1,0 +1,24 @@
+;; CPS-IR-to-C backend (cps-ir-to-c-backend-plan, Phase C3): resumable/general
+;; reset/shift, cross-function.  Built with --enable=cps-backend.
+;;
+;; The `shift` sits in `inner`, but its delimiting `reset` sits in `outer` -- a
+;; cross-function delimited-control edge that the syntactically-local
+;; emit_cps_reset cannot lower (it only walks a reset's own syntactic body, so
+;; it rejects this and the functions fall back to the fiber/abortive path).  The
+;; CPS backend threads the continuation across the call: `outer` installs the
+;; prompt into the DK chain it threads to `inner`, and `inner`'s shift captures
+;; up to that prompt and delivers its (identity-receiver) value there.
+;;
+;; reset(inner) = 5 (the shift's value escapes the reset); outer adds 1 => 6.
+;; The expected value is the direct-style result; the CPS build must reproduce
+;; it.
+
+(defn inner [] : int
+  (shift (fn [v] v) 5))
+
+(defn outer [] : int
+  (+ 1 (reset (inner))))
+
+(defn main [] : int
+  (println (outer))
+  0)

@@ -1,0 +1,2 @@
+DK continuation-chain nodes are intentionally leaked per reset/shift
+(DK is opaque; see docs/reported/cps-delimited-dk-node-leak.md).

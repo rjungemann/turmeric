@@ -298,6 +298,43 @@ cross-function `reset`/`shift` case that the current syntactically-local
 `emit_cps_reset` rejects (verify it falls back today, and lowers under the
 backend).
 
+### C3 result -- shipped (cross-function abortive subset)
+
+`CT_RESET` and `CT_SHIFT` now lower through the backend, so a `shift` in a
+callee reaches a `reset` in its caller across the threaded continuation.
+
+- **Receiver fix (prerequisite).** `cps_ir` previously discarded the shift
+  receiver `k_fn`, making the IR lossy (see
+  `docs/archive/cps-ir-shift-receiver-dropped.md`). It now translates
+  `(shift k_fn body)` as the CPS of `(k_fn body)` delivered to the prompt, so
+  the delivered value is the correct `receiver(body-value)`; a non-callable
+  receiver becomes `CT_UNSUPPORTED` (fallback, never a miscompile).
+- **`CT_RESET`** lifts its continuation `\x. body` to a file-scope `DKFrame`
+  helper (`<fn>_kN(env, x)`), installs `dk_prompt(1, dk_frame(helper, k,
+  dk_done()))`, and tail-emits the delimited body threading that prompt chain
+  as the current continuation (`KK_PROMPT` deliveries run it; `KK_PROMPT` tail
+  calls thread it). The reset stays in tail position (stackless).
+- **`CT_SHIFT`** lifts its body to a `DKBody` helper (`<fn>_sN(env, subk)`) that
+  computes the receiver-applied value and returns it, and emits
+  `dk_run(dk_shift(1, helper, 0, <cur_k>), 0)` -- capturing the real
+  sub-continuation up to the nearest enclosing prompt (which may sit in a
+  different function). The abortive body discards `subk`; the multi-shot
+  `dk_invoke` resume path is wired by C4 (`resume`).
+- **Subset (fallback-guarded).** Zero-capture only: a reset continuation or
+  shift body that would have to capture an enclosing local is rejected at
+  classification (`has_capture`) and falls back, as is a non-identity/indirect
+  receiver, a non-straight-line shift body, or a non-self-contained reset
+  continuation (`reset_body_ok`). Per-reset/shift DK nodes are leaked (DK is
+  opaque; `docs/reported/cps-delimited-dk-node-leak.md`), matching the abortive
+  path.
+- **Fixture** `tests/fixtures/cps-backend-xfn-reset/` (`--enable=cps-backend`,
+  `requires.no-leak-check`): the cross-function `reset`/`shift` case
+  `emit_cps_reset` rejects -- `inner` shifts, `outer` resets around the call --
+  reproducing the direct-style `6`. `escape-nested-reset`, `serial-reset-basic`,
+  and `shift-result-typing` remain green (they use `escape` / serial /
+  cloneable variants, which stay on their existing paths). Full suite: 1990
+  passed, 0 failed.
+
 ## Phase C4 -- `perform` / `handle` / `resume` as IR nodes
 
 The payoff phase, and the exact hinge the compiled-first-class-continuations

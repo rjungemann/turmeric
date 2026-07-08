@@ -141,6 +141,29 @@ static const char *builtin_name(const Expr *e) {
     return "?";
 }
 
+/* The value a `(shift k_fn body)` delivers to its prompt is `k_fn(body)` (the
+ * abortive-shift semantics: the receiver is applied to the body value, and the
+ * result becomes the enclosing reset's value; see eval_abortive_shift).  Model
+ * that by synthesizing the application `(k_fn body)` and CPS-translating it to
+ * the prompt continuation.  A receiver that is not a directly-callable binding
+ * leaves fn_binding NULL, so cps_tail yields CT_UNSUPPORTED and the backend
+ * falls back cleanly. */
+static CTerm *cps_shift_body(CpsB *b, Expr *e) {
+    Expr *recv = e->as.shift_.k_fn;
+    Expr *arg  = e->as.shift_.body;
+    Expr *call = arena_alloc(b->a, sizeof(Expr));
+    memset(call, 0, sizeof(Expr));
+    call->kind = EX_CALL;
+    call->type = e->type;
+    call->as.call_.fn_binding =
+        (recv && recv->kind == EX_VAR) ? recv->as.var.binding : NULL;
+    call->as.call_.fn_expr = recv;
+    call->as.call_.args = arena_alloc(b->a, sizeof(Expr *));
+    call->as.call_.args[0] = arg;
+    call->as.call_.n_args = 1;
+    return cps_tail(b, call, kont_prompt(e->type.kind));
+}
+
 /* ---- cps_tail: deliver e's value to `kont` ---------------------------- */
 
 static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
@@ -243,7 +266,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             k.name = "k'";
             CTerm *t = new_term(b, CT_SHIFT);
             t->as.shift.k = k;
-            t->as.shift.body = cps_tail(b, e->as.shift_.body, kont_prompt(e->type.kind));
+            t->as.shift.body = cps_shift_body(b, e);
             return t;
         }
         default: {
@@ -352,7 +375,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             k.name = "k'";
             CTerm *t = new_term(b, CT_SHIFT);
             t->as.shift.k = k;
-            t->as.shift.body = cps_tail(b, e->as.shift_.body, kont_prompt(e->type.kind));
+            t->as.shift.body = cps_shift_body(b, e);
             return t;
         }
         default: {

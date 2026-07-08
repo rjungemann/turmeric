@@ -1,8 +1,17 @@
 # CPS/ANF IR drops the shift receiver -- lossy for non-identity `(shift f body)`
 
-**Severity:** medium (latent miscompile for any IR consumer that delivers the
-shift body value directly; the CPS-IR-to-C backend guards against it, but the
-IR itself is lossy and `--dump-cps` is misleading).
+**Status:** RESOLVED (Phase C3, cps-ir-to-c-backend-plan). `cps_ir_translate_fn`
+now applies the receiver: `(shift k_fn body)` is translated as the CPS of the
+application `(k_fn body)` delivered to the prompt (`cps_shift_body`,
+`src/passes/cps_ir.c`). `--dump-cps` shows the receiver call (e.g.
+`shift k'. let t1 = call __fn_N(5) in (<prompt> t1)`), and a receiver that is not
+a directly-callable binding yields `CT_UNSUPPORTED` (honest fallback, never a
+silent miscompile). The interim `recv_identity` guard was removed. Verified:
+`(shift (fn[v]v) 10)` and `(shift (fn[v](* 2 v)) 10)` now dump differently and
+the CPS backend reproduces the direct-style `10` / `20`.
+
+**Severity (when open):** medium (latent miscompile for any IR consumer that
+delivered the shift body value directly).
 
 ## Summary
 
