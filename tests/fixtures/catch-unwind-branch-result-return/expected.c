@@ -6090,7 +6090,7 @@ static tur_adt_Result__int__int make_hyif(int64_t c) {
            { tur_cont *__pk = __k->next; free(__k); __k = __pk; }
            tur_result_box_t *__t184 = (tur_result_box_t *)(intptr_t)(__box183);
            tur_adt_Result__int__int __caggr183 = (tur_adt_Result__int__int){.is_ok = __t184->is_ok, .ok_val = __t184->ok_val, .err_val = __t184->err_val};
-           tur_result_box_free_shallow((int64_t)(intptr_t)__box183);
+           tur_result_box_free((int64_t)(intptr_t)__box183);
            { tur_adt_Result__int__int __rv = (__caggr183); void *__rb = malloc(sizeof(tur_adt_Result__int__int)); memcpy(__rb, &__rv, sizeof(tur_adt_Result__int__int)); __v = (int64_t)(intptr_t)__rb; }
            __pc = __k->tag; break;
           }
@@ -6108,7 +6108,7 @@ static tur_adt_Result__int__int make_hyif(int64_t c) {
            { tur_cont *__pk = __k->next; free(__k); __k = __pk; }
            tur_result_box_t *__t186 = (tur_result_box_t *)(intptr_t)(__box185);
            tur_adt_Result__int__int __caggr185 = (tur_adt_Result__int__int){.is_ok = __t186->is_ok, .ok_val = __t186->ok_val, .err_val = __t186->err_val};
-           tur_result_box_free_shallow((int64_t)(intptr_t)__box185);
+           tur_result_box_free((int64_t)(intptr_t)__box185);
            { tur_adt_Result__int__int __rv = (__caggr185); void *__rb = malloc(sizeof(tur_adt_Result__int__int)); memcpy(__rb, &__rv, sizeof(tur_adt_Result__int__int)); __v = (int64_t)(intptr_t)__rb; }
            __pc = __k->tag; break;
           }
@@ -6147,7 +6147,7 @@ static tur_adt_Result__int__int make_hymatch(int64_t p) {
                 int64_t __t194 = (int64_t)(intptr_t)(__t187);
         tur_result_box_t *__t195 = (tur_result_box_t *)(intptr_t)(__t194);
         tur_adt_Result__int__int __t196 = (tur_adt_Result__int__int){.is_ok = __t195->is_ok, .ok_val = __t195->ok_val, .err_val = __t195->err_val};
-        tur_result_box_free_shallow(__t194);
+        tur_result_box_free(__t194);
         return __t196;
 }
 
@@ -6209,7 +6209,7 @@ static tur_adt_Result__int__int make_hyif_hycaught(int64_t c) {
            { tur_cont *__pk = __k->next; free(__k); __k = __pk; }
            tur_result_box_t *__t200 = (tur_result_box_t *)(intptr_t)(__box199);
            tur_adt_Result__int__int __caggr199 = (tur_adt_Result__int__int){.is_ok = __t200->is_ok, .ok_val = __t200->ok_val, .err_val = __t200->err_val};
-           tur_result_box_free_shallow((int64_t)(intptr_t)__box199);
+           tur_result_box_free((int64_t)(intptr_t)__box199);
            { tur_adt_Result__int__int __rv = (__caggr199); void *__rb = malloc(sizeof(tur_adt_Result__int__int)); memcpy(__rb, &__rv, sizeof(tur_adt_Result__int__int)); __v = (int64_t)(intptr_t)__rb; }
            __pc = __k->tag; break;
           }
@@ -6227,7 +6227,7 @@ static tur_adt_Result__int__int make_hyif_hycaught(int64_t c) {
            { tur_cont *__pk = __k->next; free(__k); __k = __pk; }
            tur_result_box_t *__t202 = (tur_result_box_t *)(intptr_t)(__box201);
            tur_adt_Result__int__int __caggr201 = (tur_adt_Result__int__int){.is_ok = __t202->is_ok, .ok_val = __t202->ok_val, .err_val = __t202->err_val};
-           tur_result_box_free_shallow((int64_t)(intptr_t)__box201);
+           tur_result_box_free((int64_t)(intptr_t)__box201);
            { tur_adt_Result__int__int __rv = (__caggr201); void *__rb = malloc(sizeof(tur_adt_Result__int__int)); memcpy(__rb, &__rv, sizeof(tur_adt_Result__int__int)); __v = (int64_t)(intptr_t)__rb; }
            __pc = __k->tag; break;
           }

@@ -1507,7 +1507,13 @@ static void gs_catch_descend(GsCtx *gs, Buf *b, const Expr *S, const GsSink *sin
             indent_buf(rb, gs->cur_ind);
             buf_printf(rb, "%s %s = %s;\n", agg_cty, aggnm, bridged);
             indent_buf(rb, gs->cur_ind);
-            buf_printf(rb, "tur_result_box_free_shallow((int64_t)(intptr_t)%s);\n",
+            /* catch-unwind-returned-err-box-payload-leak: full free reclaims the
+             * 32 B payload when the err arm is a scalar (never aliases the
+             * payload); shallow otherwise. */
+            buf_printf(rb, "%s((int64_t)(intptr_t)%s);\n",
+                       result_err_arm_is_freeable_scalar(&ret_aggr_ty)
+                           ? "tur_result_box_free"
+                           : "tur_result_box_free_shallow",
                        boxnm);
             gs_deliver(gs, rb, aggnm, sink);
             free(bridged);
@@ -3475,7 +3481,16 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 indent_buf(file, ctx->indent);
                 buf_printf(file, "%s %s = %s;\n", agg_cty, ret_tmp, bridged);
                 indent_buf(file, ctx->indent);
-                buf_printf(file, "tur_result_box_free_shallow(%s);\n", box_tmp);
+                /* catch-unwind-returned-err-box-payload-leak: a scalar err arm
+                 * cannot alias the box's panic payload, so the full free
+                 * reclaims the 32 B payload too; else stay shallow (a
+                 * pointer/cstr/aggregate err field aliases the payload the
+                 * returned aggregate now owns). */
+                buf_printf(file, "%s(%s);\n",
+                           result_err_arm_is_freeable_scalar(&sink_rt)
+                               ? "tur_result_box_free"
+                               : "tur_result_box_free_shallow",
+                           box_tmp);
                 indent_buf(file, ctx->indent);
                 buf_printf(file, "return %s;\n", ret_tmp);
                 free(bridged); free(box_tmp); free(ret_tmp);

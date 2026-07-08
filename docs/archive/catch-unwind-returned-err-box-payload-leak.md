@@ -1,10 +1,33 @@
 ---
-status: open
+status: resolved
 severity: low
 discovered: 2026-07-08
 discovered-by: catch-unwind-return-bridge-residuals fix (Part B/C shallow free)
+resolved: 2026-07-08
 area: compiled backend / runtime (catch-unwind, carrier/by-value return bridge, box lifetime)
 ---
+
+## Resolution (2026-07-08)
+
+Fixed as the fix direction below prescribed, taking the caveat's guidance to
+avoid the resolve-time side effect. New helper
+`result_err_arm_is_freeable_scalar` (`emit_core.c`) reads the **already-resolved**
+return type's app args purely and structurally via `type_extract_adt_app` -- no
+`emit_resolve_type` / `type_adt_app_def` / `adt_field_type_for_app` call at the
+return site -- and returns true for a `(Result A B)` whose err arm B is an inline
+scalar. Both bridge free sites now emit the full `tur_result_box_free` (reclaims
+the 32 B payload) when that holds, else keep `tur_result_box_free_shallow`:
+
+- `emit_fns.c` native return bridge (gates on the resolved `sink_rt`).
+- `emit_fns.c` stackless CPS `gs_catch_descend` (gates on `ret_aggr_ty`).
+
+The minimal repro now reports `0 bytes in use at exit` under valgrind; the
+pointer/cstr/aggregate err arm correctly stays on the shallow free (documented
+residual, no dangling/double-free). The two `Result int int` fixtures
+(`catch-unwind-branch-result-return`, `catch-unwind-byvalue-result-return`)
+regenerated to the full free; full suite green. The side-effect-free probe did
+NOT reproduce the caveat's rc-elision perturbation (only those two fixtures
+moved).
 
 # A caught **err** box returned by value leaks its 32 B panic payload
 

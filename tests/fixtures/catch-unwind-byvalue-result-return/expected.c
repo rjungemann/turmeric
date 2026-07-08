@@ -6014,7 +6014,7 @@ static tur_adt_Result__int__int make_hylet() {
                 int64_t __t185 = (int64_t)(intptr_t)(__t181);
         tur_result_box_t *__t186 = (tur_result_box_t *)(intptr_t)(__t185);
         tur_adt_Result__int__int __t187 = (tur_adt_Result__int__int){.is_ok = __t186->is_ok, .ok_val = __t186->ok_val, .err_val = __t186->err_val};
-        tur_result_box_free_shallow(__t185);
+        tur_result_box_free(__t185);
         return __t187;
 }
 
@@ -6028,7 +6028,7 @@ static tur_adt_Result__int__int make_hydirect() {
                 int64_t __t191 = (int64_t)(intptr_t)(__catch_result_190);
         tur_result_box_t *__t192 = (tur_result_box_t *)(intptr_t)(__t191);
         tur_adt_Result__int__int __t193 = (tur_adt_Result__int__int){.is_ok = __t192->is_ok, .ok_val = __t192->ok_val, .err_val = __t192->err_val};
-        tur_result_box_free_shallow(__t191);
+        tur_result_box_free(__t191);
         return __t193;
 }
 
@@ -6048,7 +6048,7 @@ static tur_adt_Result__int__int make_hycaught() {
                 int64_t __t198 = (int64_t)(intptr_t)(__t194);
         tur_result_box_t *__t199 = (tur_result_box_t *)(intptr_t)(__t198);
         tur_adt_Result__int__int __t200 = (tur_adt_Result__int__int){.is_ok = __t199->is_ok, .ok_val = __t199->ok_val, .err_val = __t199->err_val};
-        tur_result_box_free_shallow(__t198);
+        tur_result_box_free(__t198);
         return __t200;
 }
 

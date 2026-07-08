@@ -457,6 +457,11 @@ const char *emit_inst_fn_return_carrier(const FnDef *fd, const Type *rft);
 /* KB-021: arbiter of which struct-valued types may use the int64_t carrier ABI
  * (see emit_core.c). */
 bool type_uses_carrier_abi(Type t);
+/* catch-unwind-returned-err-box-payload-leak: true when the already-resolved
+ * type is a `(Result A B)` whose err arm B is an inline scalar, so a caught
+ * result box returned by value can take the full (payload-reclaiming) free
+ * instead of the shallow struct-only free (see emit_core.c). */
+bool result_err_arm_is_freeable_scalar(const Type *t);
 /* M5 straddle (root cause C): every tail leaf of `e` is a carrier-int64
  * producer call (a #{Construct} helper or an __inst_ method).  Defined in
  * emit_fns.c; consumed there and in emit_module.c's forward-decl mirror. */
