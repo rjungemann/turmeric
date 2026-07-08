@@ -1,8 +1,12 @@
 # Plan: relocate carrier-encoded and control-flow values during scratch promotion
 
-**Status:** Part 2 partially landed (handler values + unstarted/completed
-generators); Part 1 re-scoped after investigation (see note below). **Area:**
-`src/turi/` (tree-walking interpreter).
+**Status:** Part 2 landed for every relocatable tagged shape (handler values,
+unstarted/completed generators, and escaping work-stack effect continuations);
+Part 1 re-scoped after investigation (see note below). The shapes that still
+bail are the non-relocatable ones (suspended generators / ucontext
+continuations with a live coroutine stack) and the type-erased `:int` carriers
+(`TuriCont`/TsFrame conts, `TuriTVar`) that belong to Part 1's provenance
+problem. **Area:** `src/turi/` (tree-walking interpreter).
 **Goal:** extend the landed scratch/permanent value-pool promotion so it can also
 relocate the value shapes it currently **bails on**, so a long-lived `TuriEnv`
 bounds its steady-state memory even when the live global set includes
@@ -26,13 +30,19 @@ reshaped both parts:
   cells, `TuriTVar`), which the plan already says keep bailing. So the
   type-directed carrier walk has essentially no remaining interpreter target;
   Part 1 is effectively closed by representation change.
-- **Part 2 (control-flow structs) landed for the two safe, tagged shapes:**
-  first-class **handler values** (`TURI_HANDLER`) and **unstarted / completed
-  generators** (`TURI_GEN`). See the Part 2 section for the safety argument and
-  the two supporting fixture cases. A *suspended* (started, not-done) generator
-  still bails -- its coroutine stack holds scratch pointers that cannot be
-  rewritten -- as do `TuriEffectCont` / `TuriCont` / `TuriThrow` / `TuriFuture`
-  and the type-erased carriers above.
+- **Part 2 (control-flow structs) landed for every relocatable tagged shape:**
+  first-class **handler values** (`TURI_HANDLER`), **unstarted / completed
+  generators** (`TURI_GEN`), and **escaping work-stack effect continuations**
+  (`TURI_EFFECT_CONT` with `ws != NULL`). See the Part 2 section for the safety
+  argument and the supporting fixture cases. The shapes that still bail are the
+  ones that genuinely cannot be relocated: a *suspended* (started, not-done)
+  generator or a *ucontext* effect continuation (`ws == NULL`), whose live
+  coroutine stack holds scratch pointers that cannot be rewritten; `TuriThrow`
+  (a dead value -- no path produces `TURI_THROW` after DEPR-D0) and `TuriFuture`
+  (the env-quiescence guard bails whenever any future is live, so a future root
+  never reaches the copy walk); and the type-erased `:int` carriers
+  (`TuriCont`/TsFrame conts boxed as `TURI_INT`, `TuriTVar`), which face Part
+  1's provenance problem rather than the tagged-struct path.
 
 This is the follow-up tail split out of
 `docs/archive/turi-value-pool-scratch-promotion-plan.md` (Phase A -- landed). That
@@ -149,9 +159,30 @@ map:
     metadata (walked at `turi_sched_free`); a scratch-resident node would be
     poisoned by `arena_reset` while `env->coro_stacks` still linked it, crashing
     teardown. Correct on the default (promotion-off) path too.
-- `TuriCont` / `TuriWsCont` / `TuriEffectCont`: **not yet** -- copy the `TsFrame`
-  / `DriveCont` arrays and the saved `EvalFrame`s they reference (reusing
-  `promo_copy_frame`). Still bail.
+- **`TuriEffectCont` (work-stack `ws`) -- LANDED.** An escaping capturable
+  handle hands its case a heap-owned continuation `k`: a `TuriEffectCont` whose
+  `ws` points at a `TuriWsCont` holding the captured `DriveCont` slice between
+  the perform and its prompt. All of it is plain value-pool memory the walk can
+  rewrite, so `promo_copy` relocates the graph: the `TuriEffectCont` struct, its
+  `TuriWsCont`, the `DriveCont` array (each frame's lexical `EvalFrame` via
+  `promo_copy_frame`, its `last` value via `promo_copy`, and the *live prefix*
+  --`[0, index)`-- of any argument accumulator, leaving the unfilled tail's raw
+  bytes as `clone_ws_slice` does), the handler frame, and -- for a
+  `with-handler` prompt, whose `HandleExpr` + `cases` array are pool-allocated
+  (`EX_WITH_HANDLER`) -- the `HandleExpr` itself. `promo_check` proves the slice
+  relocatable first and bails conservatively on anything it does not copy: a
+  ucontext continuation (`ws == NULL`, live coroutine stack), a saved defer
+  stack (`perf_defer`), or a `DriveCont` whose `aux` is not a plain argument
+  accumulator (a defer-stack mark, a *nested* prompt's `HandleExpr`, a
+  catch/stm/native-resume boundary, or a cont-fold state). A ucontext cont also
+  `calloc`s its struct off-pool, so `!PROMO_SCRATCH` already lets an escaped
+  fiber cont pass without blocking the rewind.
+  - Testing note: a top-level `(resume k v)` cannot resume a work-stack
+    continuation through a non-driver native frame (a base-interpreter limit),
+    so the fixture drives the resume from inside a called `use-k` -- exactly as
+    real code would -- and asserts promotion + steady state + multishot resume
+    correctness (`(+ 100 [])` resumed with 5 -> 105 and 20 -> 120) across 100+
+    rewinds under the poison, plus the nested-prompt conservative bail.
 - `TuriTVar`: **not yet** -- a `{value, version}` box, but it is a *type-erased
   `:int` carrier* (no `TURI_TVAR` tag), so it faces the same provenance problem
   as manual cons cells, not the tagged-struct path. Still bails.
@@ -160,7 +191,8 @@ Scope is values that are **reachable from a root and suspended** (the
 env-quiescence guard still bails on *in-flight* control state, so we never move a
 struct the C stack is mid-way through). Landed shapes ship behind the existing
 opt-in + poison with fixtures in `tests/turi/env-longlived.c`
-(`test_handler_relocation`, `test_gen_relocation`).
+(`test_handler_relocation`, `test_gen_relocation`,
+`test_effectcont_relocation`, `test_effectcont_bail`).
 
 Testing note: a pre-existing base-interpreter bug (generator resume is corrupted
 by *any* intervening top-level eval, promotion on or off --
@@ -192,8 +224,12 @@ pointer the type-directed walk dereferences, exactly as in Phase A.
     (`value_scratch.total_bytes == 0`), perm reaches a fixed point, and the
     collection still reads back correctly (length, membership, field access)
     after 100+ rewinds under the poison.
-  - Part 2: a generator (then a saved continuation) stored in a global, drained
-    across evals that each churn scratch -- assert correct resumption values.
+  - Part 2 (landed): a handler value, an unstarted generator, and an escaping
+    work-stack continuation stored in a global, churned across evals -- assert
+    promotion (scratch rewound), a perm fixed point, and correct
+    discharge/yield/resume across 100+ rewinds under the poison, plus the
+    conservative bail for the shapes that cannot move (a started generator, a
+    continuation slice carrying a nested prompt).
 - Keep the Phase A conservative-bail fixtures for the shapes not yet handled
   (they must still bail, not corrupt).
 - `tests/run.sh` (10-min timeout), `tur_env_teardown` leak gate, `run-turi.sh`.

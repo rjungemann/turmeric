@@ -17,15 +17,18 @@
  *      subsequent scratch rewinds.
  *
  *   3. Control-flow relocation (carrier-relocation-plan Part 2): a first-class
- *      handler value and an UNSTARTED generator, each stored as a global, now
- *      promote into value_perm (scratch rewinds) and stay correct across 100+
- *      rewinds -- the handler keeps discharging its effect, the generator keeps
- *      yielding.
+ *      handler value, an UNSTARTED generator, and an escaping work-stack effect
+ *      continuation, each stored as a global, now promote into value_perm
+ *      (scratch rewinds) and stay correct across 100+ rewinds -- the handler
+ *      keeps discharging its effect, the generator keeps yielding, the
+ *      continuation keeps resuming.
  *
- * It also checks the CONSERVATIVE guarantee for a shape that still cannot be
+ * It also checks the CONSERVATIVE guarantee for shapes that still cannot be
  * relocated: once a generator is STARTED (its suspended coroutine stack holds
- * scratch pointers the walk cannot rewrite), promotion declines to rewind that
- * cycle rather than corrupting it.
+ * scratch pointers the walk cannot rewrite) promotion declines to rewind that
+ * cycle, and a captured continuation slice that carries interpreter state the
+ * walk does not copy (a nested prompt) likewise blocks the rewind -- rather than
+ * corrupting it.
  *
  * Built via the tur_env_longlived CMake target. Run under ASan for
  * use-after-reset detection (the Debug build poisons the rewound scratch region,
@@ -262,6 +265,113 @@ static void test_gen_relocation(void) {
 }
 
 /* ---------------------------------------------------------------------------
+ * Part 4b (carrier-relocation-plan Part 2): relocate an escaping WORK-STACK
+ * effect continuation -- the heap-owned `k` a capturable handle hands to its
+ * case -- into perm and keep resuming it correctly across many scratch rewinds.
+ *
+ * A capturable `(with-handler ...)` runs its body on the driver work-stack
+ * behind a prompt; when the body performs, the driver captures the slice of
+ * work-stack frames between the perform and the prompt as a heap-owned
+ * TuriWsCont (`k`). Here the case returns `k` unresumed, so it escapes as a
+ * TURI_EFFECT_CONT (ws != NULL) global. Before this increment such a value was
+ * a conservative bail (its scratch DriveCont slice + captured frames could not
+ * be rewritten), pinning scratch forever. It now relocates: the continuation
+ * struct, its TuriWsCont, the captured DriveCont array (each frame's lexical
+ * EvalFrame, `last` value, and the live prefix of any argument accumulator), and
+ * the handler frame all deep-copy into perm. A driven `(resume k n)` then still
+ * reconstructs `(+ 100 [])`, multishot, after 100+ rewinds under the poison.
+ *
+ * (A top-level `(resume k n)` is a separate base-interpreter limitation -- a ws
+ * continuation cannot resume through a non-driver native frame -- so the resume
+ * is driven from inside a called `use-k`, exactly as real code would.)
+ * --------------------------------------------------------------------------- */
+static void test_effectcont_relocation(void) {
+    TuriEnv *env = turi_env_new();
+    turi_env_set_scratch_promotion(env, true);
+
+    static const char *SETUP =
+        "(defeffect Ask [] :int)\n"
+        "(defn grab [] : int\n"
+        "  (with-handler\n"
+        "    (handler (Ask [] ^multishot k) k)\n"
+        "    (+ 100 (perform (Ask)))))\n"
+        "(def saved-k (grab))\n"
+        "(defn use-k [n : int] : int (resume saved-k n))\n"
+        "0\n";
+    TuriValue s = turi_eval(env, SETUP);
+    if (s.tag == TURI_ERROR) {
+        fprintf(stderr, "note: effectcont-relocation setup skipped: %s\n",
+                s.as_error ? s.as_error : "?");
+        turi_env_free(env);
+        return;
+    }
+    /* The escaping ws continuation is reachable from a global but fully
+     * relocatable, so the defining eval must have promoted it and rewound. */
+    CHECK(env->value_scratch.total_bytes == 0,
+          "ws continuation not promoted: scratch was not rewound (total_bytes=%zu)",
+          env->value_scratch.total_bytes);
+
+    size_t perm_after_warmup = 0;
+    for (int i = 0; i < 100; i++) {
+        /* Build a transient, then resume the promoted continuation via a driven
+         * frame. A mis-copied slice would read poisoned scratch here (crash under
+         * ASan); a wrong value trips the CHECK. `k` captured (+ 100 []). */
+        CHECK(eval_int(env, "(let [z (+ 3 4)] z)", "cont-churn") == 7, "churn wrong at %d", i);
+        CHECK(eval_int(env, "(use-k 5)", "resume-k") == 105,
+              "promoted continuation resume wrong at %d", i);
+        CHECK(env->value_scratch.total_bytes == 0,
+              "scratch not rewound under a promoted continuation at %d (total_bytes=%zu)",
+              i, env->value_scratch.total_bytes);
+        if (i == 10) perm_after_warmup = env->value_perm.total_bytes;
+    }
+    CHECK(env->value_perm.total_bytes == perm_after_warmup,
+          "perm grew after warmup with a promoted continuation: %zu -> %zu",
+          perm_after_warmup, env->value_perm.total_bytes);
+    /* True multishot: a distinct resume value threads through the same relocated
+     * continuation independently. */
+    CHECK(eval_int(env, "(use-k 20)", "resume-k-2") == 120,
+          "promoted continuation second resume value wrong");
+    turi_env_free(env);
+}
+
+/* ---------------------------------------------------------------------------
+ * Part 4c (carrier-relocation-plan Part 2): the CONSERVATIVE bail for a
+ * continuation slice the walk cannot fully copy. A nested capturable handle
+ * between the outer prompt and the perform puts a nested prompt frame (whose
+ * `aux` is interpreter state the walk does not relocate) into the captured
+ * slice, so promotion must DECLINE to rewind rather than move a partial graph.
+ * --------------------------------------------------------------------------- */
+static void test_effectcont_bail(void) {
+    TuriEnv *env = turi_env_new();
+    turi_env_set_scratch_promotion(env, true);
+
+    static const char *SETUP =
+        "(defeffect Ask [] :int)\n"
+        "(defeffect Bee [] :int)\n"
+        "(defn grab [] : int\n"
+        "  (with-handler\n"
+        "    (handler (Ask [] ^multishot k) k)\n"
+        "    (+ 1 (with-handler\n"
+        "           (handler (Bee [] ^multishot k2) (resume k2 0))\n"
+        "           (+ 2 (perform (Ask)))))))\n"
+        "(def saved-k2 (grab))\n"
+        "0\n";
+    TuriValue s = turi_eval(env, SETUP);
+    if (s.tag == TURI_ERROR) {
+        fprintf(stderr, "note: effectcont-bail setup skipped: %s\n",
+                s.as_error ? s.as_error : "?");
+        turi_env_free(env);
+        return;
+    }
+    /* The captured slice holds a nested prompt the walk will not relocate, so
+     * promotion must keep scratch intact this cycle (bail, not corrupt). */
+    CHECK(env->value_scratch.total_bytes != 0,
+          "non-relocatable continuation slice did not block the rewind (total_bytes=%zu)",
+          env->value_scratch.total_bytes);
+    turi_env_free(env);
+}
+
+/* ---------------------------------------------------------------------------
  * Part 5 (interp-generator-resume-across-evals): a generator defined in one
  * turi_eval and drained across LATER evals must yield the full, correct
  * sequence even when unrelated top-level evals run in between.
@@ -315,6 +425,8 @@ int main(void) {
     test_cross_reset_correctness();
     test_handler_relocation();
     test_gen_relocation();
+    test_effectcont_relocation();
+    test_effectcont_bail();
     test_gen_drain_across_evals();
 
     if (failures) {

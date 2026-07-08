@@ -8636,6 +8636,57 @@ static bool promo_env_quiescent(const TuriEnv *env) {
  * Returns false as soon as a scratch-resident value cannot be safely relocated. */
 static bool promo_check(TuriEnv *env, TuriValue v, PromoMap *seen);
 
+/* A captured work-stack frame's `aux` is an OWNED TuriValue[] argument
+ * accumulator only for the three arg-evaluating kinds (mirrors the capture and
+ * clone_ws_slice logic).  For every other kind a non-NULL aux is a defer-stack
+ * mark, a nested prompt's HandleExpr, a catch/stm/native-resume boundary, or a
+ * cont-fold state -- none of which the walk relocates -- so returning 0 makes
+ * the wscont walk bail on any slice that carries one.  Only the first `index`
+ * slots of an accumulator are live (filled left-to-right, see DK_BUILTIN_ARG /
+ * DK_CALL_ARG / DK_MAKE_STRUCT); the caller uses `index`, not the returned
+ * capacity, to bound its relocation. */
+static size_t promo_wscont_aux_cap(const DriveCont *d) {
+    switch (d->kind) {
+    case DK_BUILTIN_ARG: return d->expr->as.builtin.n;
+    case DK_CALL_ARG:    return d->expr->as.call_.n_args;
+    case DK_MAKE_STRUCT: return d->expr->as.make_struct_.n_fields;
+    default:             return 0;
+    }
+}
+
+static bool promo_check_frame(TuriEnv *env, EvalFrame *f, PromoMap *seen);
+
+/* A heap-owned work-stack continuation (the escaping `k` of a capturable
+ * handle) is relocatable when every scratch pointer it reaches can be rewritten:
+ * its captured DriveCont slice (each frame's lexical EvalFrame, its `last`
+ * value, and the live prefix of any argument accumulator), plus the handler's
+ * lexical frame.  `handler` is elaborator/heap AST and `perf_module` is
+ * interned/AST text -- neither is walked here.  A saved defer stack
+ * (`perf_defer`) or any non-accumulator `aux` in the slice would need graph we
+ * do not copy, so those bail (conservative: keep scratch this cycle). */
+static bool promo_check_wscont(TuriEnv *env, TuriWsCont *wc, PromoMap *seen) {
+    if (!wc) return true;
+    if (PROMO_SCRATCH(env, wc)) {
+        if (promo_map_get(seen, wc)) return true;   /* cycle / shared */
+        promo_map_put(seen, wc, wc);
+    }
+    if (wc->perf_defer) return false;   /* saved defer chain not relocated */
+    if (!promo_check_frame(env, wc->handler_frame, seen)) return false;
+    for (size_t i = 0; i < wc->n_frames; i++) {
+        DriveCont *d = &wc->frames[i];
+        if (!promo_check_frame(env, d->frame, seen)) return false;
+        if (!promo_check(env, d->last, seen)) return false;
+        if (d->aux) {
+            size_t cap = promo_wscont_aux_cap(d);
+            if (!cap) return false;     /* non-accumulator aux -> bail */
+            TuriValue *acc = (TuriValue *)d->aux;
+            for (uint32_t j = 0; j < d->index && j < cap; j++)
+                if (!promo_check(env, acc[j], seen)) return false;
+        }
+    }
+    return true;
+}
+
 static bool promo_check_frame(TuriEnv *env, EvalFrame *f, PromoMap *seen) {
     while (f) {
         if (!PROMO_SCRATCH(env, f)) return true;   /* already permanent */
@@ -8684,7 +8735,23 @@ static bool promo_check(TuriEnv *env, TuriValue v, PromoMap *seen) {
     case TURI_REF:
         /* A mutable borrow into scratch aliases a slot we do not own -- unsafe. */
         return !PROMO_SCRATCH(env, v.as_ref);
-    case TURI_EFFECT_CONT: return !PROMO_SCRATCH(env, v.as_cont);
+    case TURI_EFFECT_CONT: {
+        /* carrier-relocation-plan Part 2: a heap-owned work-stack continuation
+         * (ws != NULL) is relocatable -- its captured DriveCont slice and saved
+         * frames are plain pool memory the walk can rewrite.  A ucontext body-
+         * fiber continuation (ws == NULL) owns a live coroutine stack whose C
+         * frames reference scratch and cannot be rewritten, so it keeps bailing
+         * (the same argument as a suspended generator); the fiber path also
+         * calloc's its TuriEffectCont off-pool, so !PROMO_SCRATCH already lets an
+         * escaped fiber cont pass without blocking the rewind. */
+        TuriEffectCont *c = v.as_cont;
+        if (!c) return true;
+        if (!c->ws) return !PROMO_SCRATCH(env, c);   /* fiber cont: unchanged */
+        if (!PROMO_SCRATCH(env, c)) return true;     /* already relocated whole */
+        if (promo_map_get(seen, c)) return true;
+        promo_map_put(seen, c, c);
+        return promo_check_wscont(env, c->ws, seen);
+    }
     case TURI_THROW:       return !PROMO_SCRATCH(env, v.as_throw);
     case TURI_FUTURE:      return !PROMO_SCRATCH(env, v.as_future);
     case TURI_GEN: {
@@ -8765,6 +8832,71 @@ static EvalFrame *promo_copy_frame(TuriEnv *env, EvalFrame *f, PromoMap *fwd) {
     return nf;
 }
 
+/* Relocate a work-stack continuation graph into value_perm.  Only runs after
+ * promo_check_wscont proved the whole slice relocatable, so every scratch
+ * pointer here has a safe copy.  The DriveCont slots copy verbatim (kind / expr
+ * / index / tail / *_module AST text) with the three scratch-reachable members
+ * rewritten: the lexical frame, the `last` value, and -- for the live prefix of
+ * an argument accumulator -- each filled slot.  Unfilled accumulator slots keep
+ * their raw bytes (overwritten before they are read on resume, exactly as
+ * clone_ws_slice leaves them). */
+static TuriWsCont *promo_copy_wscont(TuriEnv *env, TuriWsCont *wc, PromoMap *fwd) {
+    if (!wc || !PROMO_SCRATCH(env, wc)) return wc;
+    void *seen = promo_map_get(fwd, wc);
+    if (seen) return (TuriWsCont *)seen;
+    TuriWsCont *nw = (TuriWsCont *)turi_val_perm_alloc(env, sizeof *nw);
+    promo_map_put(fwd, wc, nw);
+    *nw = *wc;   /* perf_no_unwind, perf_defer(NULL); handler/module fixed below */
+    if (nw->perf_module && PROMO_SCRATCH(env, nw->perf_module))
+        nw->perf_module = turi_val_perm_strdup(env, nw->perf_module);
+    /* The outer prompt's HandleExpr: for an inline (handle ...) it is elaborator
+     * AST (permanent), but (with-handler hv body) heap-owns a fresh HandleExpr +
+     * cases array in the value pool (EX_WITH_HANDLER), so a scratch one must be
+     * relocated or it dangles into the rewound region.  Its cases carry only
+     * AST/interned pointers, so the struct + cases array copy verbatim; the fwd
+     * map shares one copy across every ws cont captured under the same prompt. */
+    if (nw->handler && PROMO_SCRATCH(env, nw->handler)) {
+        void *hseen = promo_map_get(fwd, nw->handler);
+        if (hseen) {
+            nw->handler = (HandleExpr *)hseen;
+        } else {
+            HandleExpr *nh = (HandleExpr *)turi_val_perm_alloc(env, sizeof *nh);
+            promo_map_put(fwd, wc->handler, nh);
+            *nh = *wc->handler;
+            if (wc->handler->n_cases && wc->handler->cases &&
+                PROMO_SCRATCH(env, wc->handler->cases)) {
+                size_t nb = (size_t)wc->handler->n_cases * sizeof(HandleCase);
+                HandleCase *ncs = (HandleCase *)turi_val_perm_alloc(env, nb);
+                memcpy(ncs, wc->handler->cases, nb);
+                nh->cases = ncs;
+            }
+            nw->handler = nh;
+        }
+    }
+    nw->handler_frame = promo_copy_frame(env, wc->handler_frame, fwd);
+    if (wc->n_frames && wc->frames) {
+        nw->frames = (DriveCont *)turi_val_perm_alloc(env, wc->n_frames * sizeof(DriveCont));
+        for (size_t i = 0; i < wc->n_frames; i++) {
+            DriveCont d = wc->frames[i];   /* verbatim: kind/expr/index/tail/... */
+            d.frame = promo_copy_frame(env, wc->frames[i].frame, fwd);
+            d.last  = promo_copy(env, wc->frames[i].last, fwd);
+            if (d.saved_module && PROMO_SCRATCH(env, d.saved_module))
+                d.saved_module = turi_val_perm_strdup(env, d.saved_module);
+            if (wc->frames[i].aux) {
+                size_t cap = promo_wscont_aux_cap(&wc->frames[i]);
+                TuriValue *oacc = (TuriValue *)wc->frames[i].aux;
+                TuriValue *nacc = (TuriValue *)turi_val_perm_alloc(env, cap * sizeof(TuriValue));
+                memcpy(nacc, oacc, cap * sizeof(TuriValue));   /* keep unfilled tail */
+                for (uint32_t j = 0; j < d.index && j < cap; j++)
+                    nacc[j] = promo_copy(env, oacc[j], fwd);   /* relocate live prefix */
+                d.aux = nacc;
+            }
+            nw->frames[i] = d;
+        }
+    }
+    return nw;
+}
+
 static TuriValue promo_copy(TuriEnv *env, TuriValue v, PromoMap *fwd) {
     switch (v.tag) {
     case TURI_CSTR:
@@ -8822,6 +8954,22 @@ static TuriValue promo_copy(TuriEnv *env, TuriValue v, PromoMap *fwd) {
         ng->frame     = promo_copy_frame(env, g->frame, fwd);
         ng->error_val = promo_copy(env, g->error_val, fwd);
         return turi_gen_val(ng);
+    }
+    case TURI_EFFECT_CONT: {
+        /* Part 2: relocate an escaping work-stack continuation.  promo_check
+         * already refused the ucontext (ws == NULL) variant, so any scratch
+         * cont reaching here is a heap-owned ws continuation.  Copy the struct
+         * verbatim (the ucontext/stack members are zero for a ws cont, and
+         * body_result/resume_val stay nil) and deep-copy the ws graph. */
+        TuriEffectCont *c = v.as_cont;
+        if (!c || !PROMO_SCRATCH(env, c)) return v;
+        void *seen = promo_map_get(fwd, c);
+        if (seen) return turi_effect_cont((TuriEffectCont *)seen);
+        TuriEffectCont *nc = (TuriEffectCont *)turi_val_perm_alloc(env, sizeof *nc);
+        promo_map_put(fwd, c, nc);
+        *nc = *c;
+        nc->ws = promo_copy_wscont(env, c->ws, fwd);
+        return turi_effect_cont(nc);
     }
     case TURI_HANDLER: {
         /* Part 2: relocate a detached handler value.  Its cases[] array is
