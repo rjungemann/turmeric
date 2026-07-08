@@ -8821,11 +8821,21 @@ static TuriValue vec_retag_cell(void *vec_key, int64_t cell) {
 }
 
 /* Vec layout: { int64_t *data; size_t len; size_t cap; }
- * Stored as int64_t[3]: [0]=data ptr (as int64_t), [1]=len, [2]=cap */
+ * Stored as int64_t[4]: [0]=data ptr (as int64_t), [1]=len, [2]=cap,
+ * [3]=TuriCollBuf* tracking node (interp-collections-never-freed) so the
+ * env-teardown pass and an explicit vec-free share one O(1) tombstone slot.
+ * Only vec-new produces this box and only vec-get/len/cap/push/pop/set/free
+ * read it, all of which touch [0..2] -- the extra slot is invisible to them. */
+static void vec_buf_destroy(void *box) {
+    int64_t *v = (int64_t *)box;
+    free((void *)(intptr_t)v[0]);   /* the growable data buffer */
+    free(v);
+}
 static TuriValue native_vec_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)a; (void)n; (void)ud;
-    int64_t *v = (int64_t *)calloc(3, sizeof(int64_t));
+    (void)a; (void)n; (void)ud;
+    int64_t *v = (int64_t *)calloc(4, sizeof(int64_t));
     if (!v) return turi_nil();
+    v[3] = (int64_t)(intptr_t)turi_env_track_collection(env, v, vec_buf_destroy);
     TuriValue r = {0}; r.tag = TURI_INT; r.as_int = (int64_t)(intptr_t)v; return r;
 }
 static TuriValue native_vec_len(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -8909,6 +8919,9 @@ static TuriValue native_vec_free(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     if (n < 1) return turi_nil();
     int64_t *v = (int64_t *)(intptr_t)a[0].as_int;
     if (!v) return turi_nil();
+    /* interp-collections-never-freed: tombstone the tracking node so the
+     * turi_env_free teardown pass does not free this buffer a second time. */
+    turi_env_untrack_collection((TuriCollBuf *)(intptr_t)v[3]);
     int64_t *data = (int64_t *)(intptr_t)v[0];
     free(data);
     free(v);

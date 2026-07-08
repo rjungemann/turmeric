@@ -4,6 +4,26 @@
 long-lived interpreter host that uses collections). Not a miscompile -- results
 are correct, memory is not.
 
+## Status (partial fix landed)
+
+- **Vec: fixed** via fix direction 1 (env-tracked buffers). Each interpreter
+  `Vec` box is registered on the env at `vec-new` time
+  (`turi_env_track_collection`) and freed at `turi_env_free`; an explicit
+  `vec-free` tombstones its entry in O(1) (a back-pointer slot in the box) so
+  teardown never double-frees. A `Vec` box uniquely owns its data buffer, so
+  bulk teardown-free is trivially safe. Verified: the repro's per-env leak is
+  now constant in N instead of linear (LSan reports the same residual bytes for
+  N=100 and N=4000; the residue is unrelated process-lifetime interpreter
+  allocations, not `Vec` buffers).
+- **Set/Map: deferred**, blocked on a HAMT bug this work uncovered. A bulk
+  `tur_hamt_free` over every tracked Set/Map box double-frees, because the HAMT
+  **delete** path under-retains a shared surviving node
+  (`docs/reported/hamt-delete-sibling-refcount.md`). Assoc-based structural
+  sharing is correctly refcounted; only `del`/`dissoc` lineages break. Once that
+  refcount bug is fixed, wiring Set/Map through the same
+  `turi_env_track_collection` list (fix direction 1 below) is safe and small --
+  the tracking infrastructure is already in place and general-purpose.
+
 ## Summary
 
 In the tree-walking interpreter (`tur interpret`, and every `turi_eval` /

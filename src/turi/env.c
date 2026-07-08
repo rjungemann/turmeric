@@ -282,6 +282,20 @@ void turi_env_free(TuriEnv *env) {
         node = next;
     }
 
+    /* interp-collections-never-freed: reclaim interpreter-created collection
+     * buffers (currently Vec) whose bare-int carriers no rc-drop path reclaims.
+     * Each `destroy` frees a raw malloc'd wrapper and the heap buffer it owns; a
+     * tombstoned node (box == NULL, from an explicit vec-free) is skipped.  This
+     * must run BEFORE value_perm is freed below -- the nodes live in that pool. */
+    {
+        TuriCollBuf *cb = env->coll_bufs;
+        while (cb) {
+            if (cb->box) { cb->destroy(cb->box); cb->box = NULL; }
+            cb = cb->next;
+        }
+        env->coll_bufs = NULL;
+    }
+
     /* turi-env-owned-value-arena-pool-plan: reclaim all escaping value payloads
      * (closures, structs, captured frames/bindings, cons cells, ...) in one
      * shot, plus the process-global fallback pool the error/rejection
@@ -419,6 +433,26 @@ void turi_env_register_native_ex(TuriEnv *env, const char *name,
         fin->next    = (NativeFinalizer *)env->native_finalizers;
         env->native_finalizers = fin;
     }
+}
+
+/* interp-collections-never-freed: see the header for the contract.  The node is
+ * allocated from value_perm (never the rewindable value_scratch pool): the
+ * coll_bufs list is walked at turi_env_free, so with scratch promotion enabled a
+ * scratch-allocated node would be poisoned by arena_reset while still linked.
+ * value_perm is present and freed at turi_env_free on every path. */
+TuriCollBuf *turi_env_track_collection(TuriEnv *env, void *box,
+                                       TuriCollBufFreeFn destroy) {
+    if (!env || !box || !destroy) return NULL;
+    TuriCollBuf *node = (TuriCollBuf *)turi_val_perm_alloc(env, sizeof(TuriCollBuf));
+    node->box     = box;
+    node->destroy = destroy;
+    node->next    = env->coll_bufs;
+    env->coll_bufs = node;
+    return node;
+}
+
+void turi_env_untrack_collection(TuriCollBuf *node) {
+    if (node) node->box = NULL;
 }
 
 void turi_env_set_interpret_mode(TuriEnv *env, bool interpret) {
