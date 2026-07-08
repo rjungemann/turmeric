@@ -1,0 +1,26 @@
+;; BR3b: the admitted reader is FALLIBLE.  `describe` panics (via the `boom`
+;; helper) when the Result is err.  In step's base case -- reached at the deepest
+;; recursion, INSIDE every level's catch-unwind boundary -- a describe panic must
+;; route via the hoist's `if (tur_panicking) break;` to the driver's unwind loop
+;; and be caught by the nearest enclosing catch-unwind, identically to native's
+;; return-signal unwind.  A driver-escaping `return` instead of the `break` would
+;; abandon the __k continuation chain and diverge.  The catch result is discarded
+;; and each level's tail is (+ n 100), so a caught base-case panic leaves the top
+;; result unchanged: both the ok and err inputs yield 103.  (`boom` ends in a
+;; catchable `panic`; the C build emits a benign -Wreturn-type note for it -- an
+;; unrelated pre-existing panic-return-signal codegen gap, see
+;; docs/reported/panic-in-value-if-branch.md -- not an error, and absent from the
+;; warning-free emit-c snapshot.)
+(defn boom [] : int (panic "boom"))
+(defn describe [r : (Result int int)] : int (if (.is-ok r) 10 (boom)))
+
+(defn step [acc : (Result int int) n : int] : int
+  (if (= n 0)
+    (describe acc)
+    (do (catch-unwind (fn [] : int (step acc (- n 1))))
+        (+ n 100))))
+
+(defn main [] : int
+  (println (step (ok 7) 3))
+  (println (step (err 9) 3))
+  0)

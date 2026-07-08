@@ -363,6 +363,13 @@ typedef struct EmitCtx {
     const Expr  *sub_holes[16];
     const char  *sub_names[16];
     uint8_t      n_sub_holes;
+    /* BR3b (catch-unwind-byref-aggregate-br3b-plan): while emitting a fallible
+     * reader call INSIDE the stackless trampoline driver, the post-call
+     * tur_panicking signal must route to the driver's unwind loop with a `break`,
+     * not the native `return` (which would escape the driver, abandoning the
+     * live continuation chain).  emit_panic_signal_return honors this flag; the
+     * BR3b pre-emit sets it around the reader call and clears it after. */
+    bool         panic_signal_is_break;
 } EmitCtx;
 
 /* Phase 4 v1: Defer thunk tracking */

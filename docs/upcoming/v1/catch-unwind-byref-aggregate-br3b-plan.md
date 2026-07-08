@@ -6,22 +6,52 @@ description: Admit passing a by-const-pointer aggregate param to a NON-member pu
 
 # Stackless catch-unwind -- by-ref aggregate param passed to a pure reader (BR3b/BR3c) -- Plan
 
-> **Status:** Not started. Split out from the BR3 plan when BR3a landed --
-> see the archived
+> **Status:** BR3b LANDED. BR3c remains open (optional). Split out from the
+> BR3 plan when BR3a landed -- see the archived
 > [BR3 (BR3a) plan](../../archive/catch-unwind-byref-aggregate-br3-plan.md).
 > BR3a widened the read gate to admit pure in-place reads (`match`
 > destructure, `.field` projection, `@`-deref) of a by-ref aggregate param
-> in the single-function trampoline. BR3b/BR3c cover the one remaining
-> rejected read-only use: **passing the param to another function** that
-> takes it `const`-by-ref and only reads it.
+> in the single-function trampoline. BR3b -- **passing the param to a
+> non-member pure const-by-ref reader** -- is now done; BR3c (a transitive
+> escape/mutation summary) stays deferred until a fixture needs it.
 >
-> **Prerequisites:** BR1+BR2 (by-ref param save/restore + box ownership) and
-> BR3a (the read-gate widening). `gs_param_class` classifies a by-ref
-> aggregate param (`type_struct_pass_by_ptr`, `is_ref`); save materializes
-> the pointee on the heap, restore re-homes it into `<cname>__agg`, and the
-> descend arg-pass re-homes each new arg's pointee with `memmove`. BR3a's
-> gate (`gs_value_ok` admits pure `EX_MATCH`/`EX_GET_FIELD`/`EX_DEREF` when
-> `g_gs_nmem == 1`) is the structural predecessor this plan extends.
+> **BR3b landing (single-function only):** `gs_value_ok` in
+> `src/compiler/emit_fns.c` now admits a call that hands fd's by-const-ptr
+> aggregate param to a pure reader -- `gs_is_br3b_reader_call`: the callee
+> resolves to a top-level defn whose matching param is `const`-by-ref, whose
+> return is a scalar slot (never the borrow), and whose body only READS that
+> param (`gs_reader_use_ok`: `.field` / `match` / `@` / pure-accessor uses,
+> a `panic` is allowed, no inline-C, no borrow/store/return of the param, no
+> handing it to a non-accessor callee -- that transitive case is BR3c). The
+> call is FALLIBLE, so emission (`cps_emit_br3b` / `gs_preemit_br3b`) hoists
+> it into a temp and emits `if (tur_panicking) break;` after it -- the
+> segment analogue of native's post-call `if (tur_panicking) return;`,
+> routing a reader panic to the driver unwind instead of a driver-escaping
+> return. The break is produced by flipping `emit_panic_signal_return` via
+> the new `ctx->panic_signal_is_break` flag, set only around the reader call.
+> Guards keep it sound: single-function only (`g_gs_nmem == 1`, like BR3a); a
+> reader call sharing a value expression with a suspension bails (it would be
+> reordered after the suspension's descend -- observable since a reader can
+> panic); and a reader call inside a value-position conditional bails (it
+> would be hoisted unconditionally). Fixtures:
+> `tests/fixtures/stackless-catch-unwind-byref-aggregate-reader` (Result
+> handed to a `.is-ok` reader, read after a descend, flat at 200000) and
+> `.../stackless-catch-unwind-byref-aggregate-reader-panic` (the reader
+> panics in the base case; the panic routes via the `break` to the enclosing
+> catch-unwind).
+>
+> **BR3c remaining (optional).** A transitive "does not escape / does not
+> mutate" summary so a reader may itself hand the borrow to a further pure
+> reader (BR3b rejects that -- `gs_reader_use_ok` admits the borrow as a call
+> arg only to a pure accessor). Build it only if a real fixture needs
+> deeper-than-one-level proof; otherwise the one-level check is the ceiling.
+>
+> **Prerequisites (landed):** BR1+BR2 (by-ref param save/restore + box
+> ownership) and BR3a (the read-gate widening). `gs_param_class` classifies a
+> by-ref aggregate param (`type_struct_pass_by_ptr`, `is_ref`); save
+> materializes the pointee on the heap, restore re-homes it into
+> `<cname>__agg`, and the descend arg-pass re-homes each new arg's pointee
+> with `memmove`.
 >
 > **Flag:** `--enable=stackless-catch-unwind` (unchanged; graduated to
 > always-on -- BR3b relaxes an existing structural gate, it adds no new one).
@@ -132,17 +162,22 @@ independent of BR3b; do not fold it in here.
 
 ## Phases
 
-- **BR3b** -- (1) the one-level callee const-borrow proof in `gs_value_ok`
-  (admit a non-member call whose aggregate arg is the by-ref param and whose
-  callee param is `const`-by-ref + the callee passes a cheap escape check);
-  (2) the codegen: hoist the admitted call into a segment temp and emit
-  `if (tur_panicking) break;` after it, in `cps_emit` / the value-hole path.
-  Fixture: a single-function recursion that threads a by-ref aggregate and
-  hands it to a non-member pure const-by-ref reader each level, read after a
-  `catch-unwind` descend, running flat where native SIGSEGVs.
+- **BR3b** -- DONE. (1) the one-level callee const-borrow proof in
+  `gs_value_ok` (`gs_is_br3b_reader_call` + `gs_reader_use_ok`: the by-ref arg
+  goes to a `const`-by-ref reader param, scalar return, param used only as a
+  read, no inline-C); (2) the codegen: `gs_preemit_br3b` hoists the call into a
+  temp and `emit_panic_signal_return` emits `if (tur_panicking) break;` via
+  `ctx->panic_signal_is_break`. Guards: single-function only; no reader call
+  sharing a value expression with a suspension (reorder hazard); no reader call
+  in a value-position conditional (unconditional-hoist hazard). Verified: a
+  reader-fed recursion runs flat at 200000 where native SIGSEGVs, a reader
+  panic in the trampolined region is caught by the enclosing catch-unwind, and
+  the negative shapes (aggregate return / transitive escape / inline-C reader /
+  reader-left-of-a-suspension) all bail to native. BR3a/BR1 fixtures stay
+  byte-identical; full suite 1983 passed, 0 failed.
 - **BR3c** -- (optional) a transitive escape/mutation summary if a real
-  fixture needs deeper-than-one-level proof; otherwise leave BR3b's syntactic
-  check as the ceiling and document it.
+  fixture needs deeper-than-one-level proof; otherwise leave BR3b's one-level
+  check as the ceiling and document it. Not yet needed.
 
 ## Validation
 

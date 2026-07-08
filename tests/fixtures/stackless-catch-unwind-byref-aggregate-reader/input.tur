@@ -1,0 +1,24 @@
+;; BR3b (catch-unwind-byref-aggregate-br3b-plan): hand the by-const-ptr Result
+;; param to a NON-member pure reader `describe`, which takes it `const`-by-ref and
+;; only READS it (via `.is-ok`), returning a scalar.  Before BR3b such a call
+;; forced the whole function to bail to native; BR3b admits it in the
+;; single-function trampoline.  Unlike BR3a's total in-place reads the call is
+;; FALLIBLE (the reader could panic), so emission hoists it into a temp followed
+;; by `if (tur_panicking) break;` -- the segment analogue of native's post-call
+;; return-signal check, routing a reader panic to the driver unwind instead of a
+;; driver-escaping return.  `acc` is read AFTER the catch-unwind descend (resume
+;; segment), so its borrow is materialized into `acc__agg` (is_ref, from BR1).
+;; Native (a non-flat recursion) SIGSEGVs deep; the trampoline runs flat.
+;; step(acc, n) = n + describe(acc).
+(defn describe [r : (Result int int)] : int (if (.is-ok r) 1 0))
+
+(defn step [acc : (Result int int) n : int] : int
+  (if (= n 0)
+    (describe acc)
+    (do (catch-unwind (fn [] : int (step acc (- n 1))))
+        (+ n (describe acc)))))
+
+(defn main [] : int
+  (println (step (ok 7) 200000))
+  (println (step (err 9) 7))
+  0)
