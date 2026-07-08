@@ -4,6 +4,41 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.27.2] -- 2026-07-08
+
+### Added
+
+- **Pure-reader admissibility (BR3b/c)**: by-ref aggregate params and
+  transitive pure-reader borrow chains are now admitted in the
+  catch-unwind trampoline.
+- **Stackless catch-unwind aggregate returns**: support aggregate
+  Result return types with correct box lifecycle and branching tails.
+
+### Changed
+
+- **Collection natives relocated into libturi** for interpreter /
+  compiled-backend parity.
+- **Effect-op seed locking** via mechanical coloring (F1) and the
+  effect-rec probe (F4).
+
+### Fixed
+
+- **Interpreter buffer reclamation**: Vec, Set, and Map buffers are
+  now reclaimed at env teardown (previously held for process
+  lifetime).
+- **HAMT delete**: refcount handling and double-free of shared
+  siblings on lineage free.
+- **Generator resume** no longer corrupted by intervening top-level
+  evaluations.
+- **Value-position if-branch** panic caused by miscompiled
+  `(null) = ((void)0);`.
+- **Panic / catch-unwind memory**: non-heap free of opaque panic
+  payload, free-nonheap-object warnings, discarded Result box leak,
+  and work-stack perform-capture on the panic path.
+- **Escaping work-stack effect continuations** relocated during
+  scratch promotion.
+- **Interpreter**: list-concat crash and Option heap-payload unwrap.
+
 ## [0.27.1] -- 2026-07-07
 
 ### Added

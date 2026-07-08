@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.27.1` -- Stackless catch-unwind graduates to always-on, plus van Laarhoven lenses via lowered nested-mapper dict dispatch.
+**Latest release:** `v0.27.2` -- Bug-fix release: the interpreter now reclaims Vec/Set/Map buffers at env teardown, catch-unwind supports aggregate Result returns, and several HAMT/panic memory bugs are fixed.
 
 ## What
 
