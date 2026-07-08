@@ -2295,6 +2295,14 @@ static char *emit_hkt_spec_ctor_suffix(EmitCtx *ctx, const Expr *e) {
  * return type when a panic signal is pending (panic-return-signal, always-on). */
 static void emit_panic_signal_return(EmitCtx *ctx, Buf *body) {
     const char *rt = ctx->current_fn_ret_ctype;
+    /* BR3b: inside the stackless trampoline a fallible reader call routes its
+     * panic to the driver's `for(;;)` unwind loop with `break`, never a `return`
+     * that would leave the driver mid-flight (leaking the __k chain). */
+    if (ctx->panic_signal_is_break) {
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "if (tur_panicking) break;\n");
+        return;
+    }
     indent_buf(body, ctx->indent);
     if (rt && strcmp(rt, "void") == 0) {
         buf_puts(body, "if (tur_panicking) return;\n");

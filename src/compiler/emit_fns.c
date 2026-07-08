@@ -686,6 +686,11 @@ static bool gs_param_class(EmitCtx *ctx, Type t, TypeKind *out_kind,
 #define GS_MAXMEM 8
 static FnDef *g_gs_mem[GS_MAXMEM];
 static int    g_gs_nmem;
+/* BR3b: the EmitCtx active while the trampoline gate/emission predicates run.
+ * Set alongside g_gs_nmem at each entry point.  The gate helpers gs_value_ok /
+ * gs_stmt_ok take only (Expr, FnDef), so the by-ref/reader classification --
+ * which needs gs_param_class(ctx, ...) -- reads the context from here. */
+static EmitCtx *g_gs_ctx;
 
 /* If e is a direct full-arity call to a group member, its index; else -1. */
 static int gs_call_member_idx(const Expr *e) {
@@ -762,11 +767,210 @@ static bool gs_suspends(const Expr *e, FnDef *fd) {
         case EX_ASCRIBE: return gs_suspends(e->as.ascribe_.inner, fd);
         case EX_PANIC_PAYLOAD_TYPE:  return gs_suspends(e->as.panic_payload_type_.payload, fd);
         case EX_PANIC_PAYLOAD_VALUE: return gs_suspends(e->as.panic_payload_value_.payload, fd);
+        /* BR3a: a match/field-read/deref is a pure read admitted in value
+         * position (gs_value_ok) only when it does not suspend -- so this walk
+         * must descend into their sub-expressions, or a suspension buried in a
+         * match arm would be missed and the whole form wrongly admitted. */
+        case EX_MATCH: {
+            if (gs_suspends(e->as.match_.scrutinee, fd)) return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (gs_suspends(e->as.match_.arms[i].body, fd)) return true;
+                if (gs_suspends(e->as.match_.arms[i].guard, fd)) return true;
+            }
+            return false;
+        }
+        case EX_GET_FIELD: return gs_suspends(e->as.get_field_.struct_expr, fd);
+        case EX_DEREF:     return gs_suspends(e->as.deref_.expr, fd);
         default:         return false;
     }
 }
 
 static bool gs_stmt_ok(const Expr *e, FnDef *fd);
+static bool gs_has_panic(const Expr *e);
+static bool gs_is_pure_accessor(const Expr *e);
+
+/* ===== BR3b: pass a by-ref aggregate param to a pure const-by-ref reader =====
+ *
+ * BR3a admits reading a by-ref aggregate param IN PLACE (match/.field/@).  BR3b
+ * admits the one remaining read-only use: handing the param to another function
+ * that takes it `const`-by-ref and only reads it.  Two facts make this sound:
+ *   - the callee receives a `const <struct> *` into the trampoline's stable
+ *     `<cname>__agg` buffer, which outlives the call (the borrow does not
+ *     escape as long as the callee only reads it -- gs_reader_use_ok proves so);
+ *   - the call is FALLIBLE (the reader can panic), unlike BR3a's total reads, so
+ *     emission pairs it with an `if (tur_panicking) break;` (see cps_emit_br3b).
+ */
+
+/* True iff every occurrence of binding `p` in `e` is a READ: p appears only as
+ * the receiver of a `.field`, a `match` scrutinee, a `@`-deref, or the arg of a
+ * pure accessor.  A bare use of p anywhere else -- returned, borrowed (`(& p)`),
+ * stored, handed to a non-accessor call (which could stash the borrow: that is
+ * BR3c's transitive proof, not admitted here), or reached through an
+ * unrecognized form -- rejects. */
+static bool gs_reader_use_ok(const Expr *e, Binding *p) {
+    if (!e) return true;
+    switch (e->kind) {
+        case EX_INT_LIT: case EX_BOOL_LIT: case EX_FLOAT_LIT:
+        case EX_CSTR_LIT: case EX_NIL_LIT:
+            return true;
+        case EX_VAR:
+            /* A bare p not consumed by a read context below -> escape. */
+            return e->as.var.binding != p;
+        case EX_GET_FIELD: {
+            const Expr *s = e->as.get_field_.struct_expr;
+            if (s && s->kind == EX_VAR && s->as.var.binding == p) return true;
+            return gs_reader_use_ok(s, p);
+        }
+        case EX_DEREF: {
+            const Expr *s = e->as.deref_.expr;
+            if (s && s->kind == EX_VAR && s->as.var.binding == p) return true;
+            return gs_reader_use_ok(s, p);
+        }
+        case EX_MATCH: {
+            const Expr *s = e->as.match_.scrutinee;
+            if (!(s && s->kind == EX_VAR && s->as.var.binding == p) &&
+                !gs_reader_use_ok(s, p)) return false;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (!gs_reader_use_ok(e->as.match_.arms[i].body, p)) return false;
+                if (!gs_reader_use_ok(e->as.match_.arms[i].guard, p)) return false;
+            }
+            return true;
+        }
+        case EX_IF:
+            return gs_reader_use_ok(e->as.if_.cond, p) &&
+                   gs_reader_use_ok(e->as.if_.then_, p) &&
+                   gs_reader_use_ok(e->as.if_.else_or_null, p);
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (!gs_reader_use_ok(e->as.let_.bindings[i].init, p)) return false;
+            return gs_reader_use_ok(e->as.let_.body, p);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (!gs_reader_use_ok(e->as.do_.items[i], p)) return false;
+            return true;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (!gs_reader_use_ok(e->as.builtin.args[i], p)) return false;
+            return true;
+        case EX_CALL: {
+            if (e->as.call_.fn_expr) return false;   /* indirect call: could stash p */
+            bool acc = gs_is_pure_accessor(e);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                const Expr *a = e->as.call_.args[i];
+                if (a && a->kind == EX_VAR && a->as.var.binding == p) {
+                    /* p handed to a call: only a pure accessor is a proven read;
+                     * a general callee could stash the borrow (BR3c territory). */
+                    if (!acc) return false;
+                } else if (!gs_reader_use_ok(a, p)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        case EX_CAST:    return gs_reader_use_ok(e->as.cast_.expr, p);
+        case EX_ASCRIBE: return gs_reader_use_ok(e->as.ascribe_.inner, p);
+        /* A reader may `panic` -- that fallibility is exactly what the BR3b
+         * post-call break check handles; only the payload could carry p out. */
+        case EX_PANIC:      return gs_reader_use_ok(e->as.panic_.payload, p);
+        case EX_PANIC_WITH: return gs_reader_use_ok(e->as.panic_with_.payload, p);
+        default:
+            /* Unrecognized form: cannot prove p is used only as a read. */
+            return false;
+    }
+}
+
+/* True iff `e` is a call that hands fd's by-const-ptr aggregate param to a
+ * non-member pure const-by-ref reader: the callee resolves to a top-level defn
+ * whose matching param is by-const-ptr, whose return is a scalar slot (never the
+ * aggregate borrow itself), and whose body only READS that param with no
+ * inline-C.  Such a call is a READ of the borrow; it rides the single-function
+ * trampoline behind a tur_panicking check.  Reads g_gs_ctx for the context. */
+static bool gs_is_br3b_reader_call(const Expr *e, FnDef *fd) {
+    if (!g_gs_ctx || !fd) return false;
+    if (!e || e->kind != EX_CALL || e->as.call_.fn_expr) return false;
+    if (gs_is_self_call(e, fd)) return false;      /* members descend, not BR3b */
+    if (gs_is_pure_accessor(e)) return false;      /* accessors already admitted */
+    Binding *fb = e->as.call_.fn_binding;
+    FnDef *g = (fb && fb->source_fn_def) ? fb->source_fn_def : NULL;
+    if (!g || !g->body || !g->param_types) return false;
+    if (g->is_variadic || g->n_params != e->as.call_.n_args) return false;
+    if (g->body->kind == EX_INLINE_C) return false;         /* raw pointer access */
+    /* scalar / int64-slot return: never the aggregate borrow the reader was lent */
+    TypeKind rk; const char *rct;
+    if (!gs_slot_type(g_gs_ctx, g->return_type, &rk, &rct)) return false;
+    bool passes_byref = false;
+    for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+        const Expr *a = e->as.call_.args[i];
+        bool is_fd_byref = false;
+        if (a && a->kind == EX_VAR && a->as.var.binding) {
+            for (uint8_t pp = 0; pp < fd->n_params; pp++) {
+                if (fd->params[pp] != a->as.var.binding) continue;
+                TypeKind k; const char *ct; bool aggr, ref;
+                if (gs_param_class(g_gs_ctx, fd->param_types[pp], &k, &ct, &aggr, &ref) && ref)
+                    is_fd_byref = true;
+            }
+        }
+        if (is_fd_byref) {
+            /* the callee must RECEIVE it by const-ptr, and only read it */
+            TypeKind k; const char *ct; bool aggr, ref;
+            if (!gs_param_class(g_gs_ctx, g->param_types[i], &k, &ct, &aggr, &ref) || !ref)
+                return false;
+            if (!gs_reader_use_ok(g->body, g->params[i])) return false;
+            passes_byref = true;
+        } else {
+            /* other args: plain non-suspending values (a suspension there would
+             * need the descend machinery, out of scope for a BR3b hoist) */
+            if (gs_suspends(a, fd)) return false;
+        }
+    }
+    return passes_byref;
+}
+
+/* Does `e` contain a BR3b reader call anywhere?  Used to keep a BR3b call out of
+ * a value-position conditional (an if-branch / match-arm), where emission would
+ * hoist it UNCONDITIONALLY -- wrong, and possibly a spurious panic.  Such an `e`
+ * bails to native; BR3b calls are admitted only in unconditional value contexts
+ * (directly, or under a builtin / call-arg / cast), or in a statement-position
+ * branch that cps_emit splits structurally down to an unconditional leaf. */
+static bool gs_has_br3b(const Expr *e, FnDef *fd) {
+    if (!e) return false;
+    if (gs_is_br3b_reader_call(e, fd)) return true;
+    switch (e->kind) {
+        case EX_IF:
+            return gs_has_br3b(e->as.if_.cond, fd) ||
+                   gs_has_br3b(e->as.if_.then_, fd) ||
+                   gs_has_br3b(e->as.if_.else_or_null, fd);
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (gs_has_br3b(e->as.let_.bindings[i].init, fd)) return true;
+            return gs_has_br3b(e->as.let_.body, fd);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (gs_has_br3b(e->as.do_.items[i], fd)) return true;
+            return false;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (gs_has_br3b(e->as.builtin.args[i], fd)) return true;
+            return false;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (gs_has_br3b(e->as.call_.args[i], fd)) return true;
+            return false;
+        case EX_MATCH: {
+            if (gs_has_br3b(e->as.match_.scrutinee, fd)) return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (gs_has_br3b(e->as.match_.arms[i].body, fd)) return true;
+                if (gs_has_br3b(e->as.match_.arms[i].guard, fd)) return true;
+            }
+            return false;
+        }
+        case EX_GET_FIELD: return gs_has_br3b(e->as.get_field_.struct_expr, fd);
+        case EX_DEREF:     return gs_has_br3b(e->as.deref_.expr, fd);
+        case EX_CAST:      return gs_has_br3b(e->as.cast_.expr, fd);
+        case EX_ASCRIBE:   return gs_has_br3b(e->as.ascribe_.inner, fd);
+        default:           return false;
+    }
+}
 
 /* e occupies a VALUE position: suspensions here are handled only by hole
  * hoisting (builtins / casts / self-call args / the suspension itself), never
@@ -774,6 +978,16 @@ static bool gs_stmt_ok(const Expr *e, FnDef *fd);
  * (it must sit in statement/tail position, checked by gs_stmt_ok). */
 static bool gs_value_ok(const Expr *e, FnDef *fd) {
     if (!e) return true;
+    /* BR3b: a reader call that shares a value expression with a suspension
+     * (a self-call / catch-unwind) would be REORDERED after the suspension's
+     * descend -- cps_emit_value_susp hoists the leftmost suspension first and
+     * re-emits the rest (including the reader) in the resume segment.  A pure
+     * accessor reorders harmlessly, but a reader can panic, so the reorder is
+     * observable.  Keep them apart: such an `e` bails to native.  (The common
+     * "read after a descend" -- `(+ n (describe acc))` sitting past a separate
+     * catch-unwind do-item -- has no suspension in this expression, so it is
+     * unaffected.) */
+    if (gs_has_br3b(e, fd) && gs_suspends(e, fd)) return false;
     switch (e->kind) {
         case EX_INT_LIT: case EX_BOOL_LIT: case EX_FLOAT_LIT:
         case EX_CSTR_LIT: case EX_NIL_LIT: case EX_VAR:
@@ -789,7 +1003,36 @@ static bool gs_value_ok(const Expr *e, FnDef *fd) {
                 if (!gs_value_ok(e->as.builtin.args[i], fd)) return false;
             return true;
         case EX_IF: case EX_LET: case EX_DO:
-            return !gs_suspends(e, fd);   /* pure nesting only in value position */
+            /* pure nesting only in value position; a BR3b call in a branch would
+             * be hoisted unconditionally (see gs_has_br3b), so keep it out here
+             * (statement-position if/let/do is split structurally instead). */
+            return !gs_suspends(e, fd) && !gs_has_br3b(e, fd);
+        /* BR3a (catch-unwind-byref-aggregate-br3-plan): widen the read gate past
+         * the pure-accessor whitelist.  A `match`/destructure, a `.field` read on
+         * a by-value product, and a `@`-deref are all identity-agnostic READS --
+         * exactly the read-only uses of a by-const-ptr aggregate param that the
+         * borrow-becomes-owned-copy contract permits.  Admit them in value
+         * position when they are fully pure: no suspension (which only a
+         * structural split, not the emit_value fast path, could handle) and no
+         * inline `panic` (which emit_value would emit as a bare `return`,
+         * escaping the driver -- gs_value_ok has no split for these forms, unlike
+         * the if/let/do arms above).  emit_value then emits the whole read
+         * atomically.  The unsound uses (address observation via `(& p)`, a
+         * borrow escape, mutation, or a raw-pointer inline-C body) all reach
+         * gs_value_ok's `default: return false` and bail the function to native.
+         *
+         * SINGLE-FUNCTION ONLY (g_gs_nmem == 1).  The shared cross-function group
+         * driver carries a by-ref aggregate param through the int64 `__a` shim,
+         * and its pbp-deref of these reads is only wired for the accessor path a
+         * group already admitted -- a `match`/`.field` on a group member's by-ref
+         * param mis-lowers (the pointee slot is read as a by-value struct).  The
+         * plan scopes BR3 to the single-function trampoline; widening the group
+         * path is a separate follow-up (aggregate-followups plan).  In a group
+         * context these forms fall through to `default: return false`, so the
+         * function bails to native exactly as it did before BR3a. */
+        case EX_MATCH: case EX_GET_FIELD: case EX_DEREF:
+            return g_gs_nmem == 1 && !gs_suspends(e, fd) && !gs_has_panic(e) &&
+                   !gs_has_br3b(e, fd);
         case EX_CATCH_UNWIND: {
             FnDef *tf = gs_thunk_fn(e);
             if (!tf || !tf->body) return false;
@@ -813,6 +1056,15 @@ static bool gs_value_ok(const Expr *e, FnDef *fd) {
                         return true;
                     }
             }
+            /* BR3b (catch-unwind-byref-aggregate-br3b-plan): a call that hands
+             * fd's by-const-ptr aggregate param to a pure const-by-ref reader is
+             * a READ of the borrow -- admit it (single-function only, like BR3a).
+             * Unlike BR3a's total reads it is FALLIBLE, so emission hoists it and
+             * emits `if (tur_panicking) break;` (cps_emit_br3b); admitting it here
+             * only declares eligibility.  The args are checked by
+             * gs_is_br3b_reader_call (the by-ref arg goes to a const-by-ref reader
+             * param; other args do not suspend). */
+            if (g_gs_nmem == 1 && gs_is_br3b_reader_call(e, fd)) return true;
             return false;   /* any other call could panic outside a boundary */
         }
         default:
@@ -879,6 +1131,20 @@ static bool gs_has_panic(const Expr *e) {
         case EX_ASCRIBE:             return gs_has_panic(e->as.ascribe_.inner);
         case EX_PANIC_PAYLOAD_TYPE:  return gs_has_panic(e->as.panic_payload_type_.payload);
         case EX_PANIC_PAYLOAD_VALUE: return gs_has_panic(e->as.panic_payload_value_.payload);
+        /* BR3a: match/field-read/deref are admitted in value position by
+         * gs_value_ok only when panic-free; this walk must see into their
+         * sub-expressions for that check to be sound (a `panic` in a match arm
+         * emitted via the emit_value fast path would escape the driver). */
+        case EX_MATCH: {
+            if (gs_has_panic(e->as.match_.scrutinee)) return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (gs_has_panic(e->as.match_.arms[i].body)) return true;
+                if (gs_has_panic(e->as.match_.arms[i].guard)) return true;
+            }
+            return false;
+        }
+        case EX_GET_FIELD: return gs_has_panic(e->as.get_field_.struct_expr);
+        case EX_DEREF:     return gs_has_panic(e->as.deref_.expr);
         default: return false;
     }
 }
@@ -1161,6 +1427,19 @@ static bool gs_suspends_live(GsCtx *gs, const Expr *e) {
         case EX_ASCRIBE: return gs_suspends_live(gs, e->as.ascribe_.inner);
         case EX_PANIC_PAYLOAD_TYPE:  return gs_suspends_live(gs, e->as.panic_payload_type_.payload);
         case EX_PANIC_PAYLOAD_VALUE: return gs_suspends_live(gs, e->as.panic_payload_value_.payload);
+        /* BR3a: mirror gs_suspends' descent into the pure-read forms so an
+         * emission-time hole check never treats a suspension buried in a match
+         * arm as absent (which would emit the enclosed self-call natively). */
+        case EX_MATCH: {
+            if (gs_suspends_live(gs, e->as.match_.scrutinee)) return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (gs_suspends_live(gs, e->as.match_.arms[i].body)) return true;
+                if (gs_suspends_live(gs, e->as.match_.arms[i].guard)) return true;
+            }
+            return false;
+        }
+        case EX_GET_FIELD: return gs_suspends_live(gs, e->as.get_field_.struct_expr);
+        case EX_DEREF:     return gs_suspends_live(gs, e->as.deref_.expr);
         default:         return false;
     }
 }
@@ -1525,6 +1804,91 @@ static void gs_catch_descend(GsCtx *gs, Buf *b, const Expr *S, const GsSink *sin
 }
 
 /* A value-position expression that contains a live suspension. */
+/* BR3b: does `e` contain an admitted reader call not already held as a hole? */
+static bool gs_has_br3b_live(GsCtx *gs, const Expr *e) {
+    if (!e || gs_is_hole(gs->ctx, e)) return false;
+    if (gs_is_br3b_reader_call(e, gs->fd)) return true;
+    switch (e->kind) {
+        case EX_IF:
+            return gs_has_br3b_live(gs, e->as.if_.cond) ||
+                   gs_has_br3b_live(gs, e->as.if_.then_) ||
+                   gs_has_br3b_live(gs, e->as.if_.else_or_null);
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (gs_has_br3b_live(gs, e->as.let_.bindings[i].init)) return true;
+            return gs_has_br3b_live(gs, e->as.let_.body);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (gs_has_br3b_live(gs, e->as.do_.items[i])) return true;
+            return false;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (gs_has_br3b_live(gs, e->as.builtin.args[i])) return true;
+            return false;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (gs_has_br3b_live(gs, e->as.call_.args[i])) return true;
+            return false;
+        case EX_CAST:    return gs_has_br3b_live(gs, e->as.cast_.expr);
+        case EX_ASCRIBE: return gs_has_br3b_live(gs, e->as.ascribe_.inner);
+        default:         return false;
+    }
+}
+
+/* BR3b: pre-emit every UNCONDITIONALLY-evaluated reader call in `e` (eval order,
+ * innermost first) into a segment-local temp, each followed by `if
+ * (tur_panicking) break;` so a reader panic routes to the driver's unwind loop
+ * before its garbage result is used -- the segment analogue of native's
+ * post-call `if (tur_panicking) return;`.  Each call is then registered as an
+ * emit_value hole so the residual expression reads the temp.  Only walks
+ * unconditional contexts (builtin/call args, cast); gs_value_ok kept BR3b calls
+ * out of value-position branches, so there are none to (wrongly) hoist here. */
+static void gs_preemit_br3b(GsCtx *gs, Buf *b, const Expr *e) {
+    if (!e || gs_is_hole(gs->ctx, e)) return;
+    switch (e->kind) {
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                gs_preemit_br3b(gs, b, e->as.builtin.args[i]);
+            return;
+        case EX_CAST:    gs_preemit_br3b(gs, b, e->as.cast_.expr); return;
+        case EX_ASCRIBE: gs_preemit_br3b(gs, b, e->as.ascribe_.inner); return;
+        case EX_CALL: {
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                gs_preemit_br3b(gs, b, e->as.call_.args[i]);
+            if (!gs_is_br3b_reader_call(e, gs->fd)) return;
+            if (gs->ctx->n_sub_holes >= 16) { gs->overflow = true; return; }
+            /* emit_value A-normalizes the call into an `__ps_N` temp; with the
+             * break flag set it follows it with `if (tur_panicking) break;`
+             * (routing a reader panic to the driver unwind, not a driver-escaping
+             * return).  The returned temp name becomes this call's hole. */
+            gs->ctx->indent = gs->cur_ind;
+            bool saved = gs->ctx->panic_signal_is_break;
+            gs->ctx->panic_signal_is_break = true;
+            char *cv = emit_value(gs->ctx, b, e);
+            gs->ctx->panic_signal_is_break = saved;
+            gs->ctx->sub_holes[gs->ctx->n_sub_holes] = e;
+            gs->ctx->sub_names[gs->ctx->n_sub_holes] = cv;   /* owned; freed by cps_emit_br3b */
+            gs->ctx->n_sub_holes++;
+            return;
+        }
+        default: return;
+    }
+}
+
+/* BR3b: emit a value expression that contains a reader call but no suspension --
+ * hoist the reader calls (with panic checks) then emit the residual via the fast
+ * path, the calls standing in as their temps. */
+static void cps_emit_br3b(GsCtx *gs, Buf *b, const Expr *e, const GsSink *sink) {
+    uint8_t base = gs->ctx->n_sub_holes;
+    gs_preemit_br3b(gs, b, e);
+    gs->ctx->indent = gs->cur_ind;
+    char *v = emit_value(gs->ctx, b, e);
+    gs_deliver(gs, b, v, sink); free(v);
+    for (uint8_t i = base; i < gs->ctx->n_sub_holes; i++)
+        free((void *)gs->ctx->sub_names[i]);
+    gs->ctx->n_sub_holes = base;
+}
+
 static void cps_emit_value_susp(GsCtx *gs, Buf *b, const Expr *e, const GsSink *sink) {
     const Expr *S = gs_leftmost(gs, e);
     if (!S) {
@@ -1533,6 +1897,9 @@ static void cps_emit_value_susp(GsCtx *gs, Buf *b, const Expr *e, const GsSink *
          * bare return -- emit the panic; it diverges, so the rest is dead. */
         const Expr *P = gs_leftmost_panic(e);
         if (P) { cps_emit(gs, b, P, sink); return; }
+        /* BR3b: a fallible reader call (no suspension) is hoisted with a panic
+         * check before the residual expression is emitted. */
+        if (gs_has_br3b_live(gs, e)) { cps_emit_br3b(gs, b, e, sink); return; }
         gs->ctx->indent = gs->cur_ind;
         char *v = emit_value(gs->ctx, b, e);
         gs_deliver(gs, b, v, sink); free(v); return;
@@ -1636,6 +2003,11 @@ static void cps_emit(GsCtx *gs, Buf *b, const Expr *e, const GsSink *sink) {
         return;
     }
     if (!gs_suspends_live(gs, e) && !gs_has_panic(e)) {
+        /* BR3b: a fallible reader call must be hoisted with a tur_panicking
+         * check -- it cannot ride the atomic emit_value fast path (which has no
+         * place for a statement-level check).  Route it through the value-susp
+         * path, which pre-emits the calls then emits the residual. */
+        if (gs_has_br3b_live(gs, e)) { cps_emit_value_susp(gs, b, e, sink); return; }
         gs->ctx->indent = gs->cur_ind;
         char *v = emit_value(gs->ctx, b, e);
         gs_deliver(gs, b, v, sink); free(v); return;
@@ -1700,7 +2072,7 @@ static bool stackless_general_eligible(EmitCtx *ctx, const Expr *e, FnDef *fd,
     (void)result_kind;
     if (!ctx->current_fn_ret_ctype) return false;
     /* Single-function (G3) view: only self-calls are trampolined. */
-    g_gs_mem[0] = fd; g_gs_nmem = 1;
+    g_gs_mem[0] = fd; g_gs_nmem = 1; g_gs_ctx = ctx;
     const Expr *b = fd->body;
     bool ok = gs_has_catch(b, fd) && gs_stmt_ok(b, fd);
     g_gs_nmem = 0;
@@ -1827,7 +2199,7 @@ static bool emit_stackless_general_body(EmitCtx *ctx, Buf *file, FnDef *fd,
     }
     uint8_t saved_holes = ctx->n_sub_holes;
     ctx->n_sub_holes = 0;
-    g_gs_mem[0] = fd; g_gs_nmem = 1;
+    g_gs_mem[0] = fd; g_gs_nmem = 1; g_gs_ctx = ctx;
 
     bool ok = gs_build(&gs);
     if (ok) {
@@ -1927,6 +2299,7 @@ static void gs_callees(const Expr *e, FnDef **out, int *n, int cap) {
  * catch-unwind.  Returns the member count (fd first) or 0 if fd is not a valid
  * group member.  Leaves g_gs_* cleared. */
 static int gs_find_group(EmitCtx *ctx, FnDef *fd, FnDef **group) {
+    g_gs_ctx = ctx;
     FnDef *cand[GS_MAXMEM]; int nc = 0;
     cand[nc++] = fd;
     for (int i = 0; i < nc; i++) {
@@ -2111,7 +2484,7 @@ static bool emit_group_member(EmitCtx *ctx, Buf *file, FnDef *fd, TypeKind resul
                 if (gs_param_class(ctx, group[m]->param_types[i], &k, &ct, &aggr, &ref) && ref)
                     ctx->pbp_param_ptrs[ctx->n_pbp_params++] = group[m]->params[i];
             }
-        g_gs_nmem = ng; for (int m = 0; m < ng; m++) g_gs_mem[m] = group[m];
+        g_gs_nmem = ng; g_gs_ctx = ctx; for (int m = 0; m < ng; m++) g_gs_mem[m] = group[m];
         bool ok = gs_build(&gs);
         if (!ok) { gs_free(&gs); ctx->n_sub_holes = sh; ctx->n_pbp_params = sv_npbp; g_gs_nmem = 0; return false; }
         char name[40]; snprintf(name, sizeof name, "__cu_group_%d", g_cu_driver_ctr++);

@@ -1,0 +1,26 @@
+;; BR3a (catch-unwind-byref-aggregate-br3-plan): a by-const-ptr aggregate param
+;; DESTRUCTURED via `match` across catch-unwind.  `(Box int)` is a single-ctor
+;; by-value product of three ints (24 bytes > 16), so it passes as
+;; `const tur_adt_Box__int *` (type_struct_pass_by_ptr) -- a borrow the trampoline
+;; turns into an owned copy for the trampolined region.  There is no whitelisted
+;; accessor for its fields, so before BR3a any `match`/destructure of it forced a
+;; bail to native.  A `match` is an identity-agnostic READ, exactly what the
+;; borrow-becomes-owned-copy contract permits, so BR3a admits it and the recursion
+;; runs on a flat stack.
+;;
+;; `w` is read via `match` AFTER the catch-unwind descend (in the resume segment),
+;; so the borrow is materialized into the stable `w__agg` buffer and re-homed on
+;; resume -- the same is_ref save/restore BR1 shipped, unchanged.  Native (a
+;; non-flat recursion) SIGSEGVs deep; the stackless lowering runs flat.
+;; step(w, n) = n + (second field of w).
+(defdata Box :copy [A] (MkBox A A A))
+
+(defn step [w : (Box int) n : int] : int
+  (if (= n 0)
+    (match w (MkBox a b c) a)
+    (do (catch-unwind (fn [] : int (step w (- n 1))))
+        (+ n (match w (MkBox a b c) b)))))
+
+(defn main [] : int
+  (println (step (MkBox 5 6 7) 200000))
+  0)

@@ -6,10 +6,47 @@ description: Widen the by-const-pointer aggregate param support in the stackless
 
 # Stackless catch-unwind -- by-const-pointer aggregate params, widened eligibility (BR3) -- Plan
 
-> **Status:** Not started. BR1 (detection + save/restore) and BR2 (box
-> ownership/free + valgrind balance) landed -- see the archived
-> [by-const-pointer aggregate params plan](../../archive/catch-unwind-byref-aggregate-params-plan.md).
-> This plan covers only BR3: widening the eligibility gate.
+> **ARCHIVED -- COMPLETE (BR3a).** The read-only use widening
+> (`match`/destructure, `.field` reads, `@`-deref of a by-ref aggregate param
+> in the single-function trampoline) landed; details below. The remaining BR3
+> work -- BR3b (passing the param to a non-member pure const-by-ref reader,
+> which needs the mid-segment `tur_panicking` panic route, not just a gate
+> relaxation) and BR3c (the optional transitive summary) -- is split out into
+> [docs/upcoming/v1/catch-unwind-byref-aggregate-br3b-plan.md](../upcoming/v1/catch-unwind-byref-aggregate-br3b-plan.md).
+> BR1 (detection + save/restore) and BR2 (box ownership/free + valgrind
+> balance) landed earlier -- see the archived
+> [by-const-pointer aggregate params plan](./catch-unwind-byref-aggregate-params-plan.md).
+>
+> **BR3a landing (single-function only):** `gs_value_ok` in
+> `src/compiler/emit_fns.c` now admits `EX_MATCH` / `EX_GET_FIELD` /
+> `EX_DEREF` in value position when they are fully pure (no suspension, no
+> inline `panic`) and the trampoline is single-function (`g_gs_nmem == 1`).
+> `gs_suspends`, `gs_suspends_live`, and `gs_has_panic` were taught to
+> descend into those three forms so the purity check is sound. The unsound
+> uses (address observation via `(& p)`, borrow escape, mutation via
+> `set!`, raw-pointer inline-C) stay at `gs_value_ok`'s `default: return
+> false` and bail to native, unchanged. The cross-function GROUP path is
+> deliberately excluded (see BR3b/group note below): a `match`/`.field` on a
+> group member's by-ref param mis-lowers today (the pointee int64 slot is
+> read as a by-value struct), so those cases bail to native exactly as they
+> did before BR3a. Fixtures:
+> `tests/fixtures/stackless-catch-unwind-byref-aggregate-field` (Result read
+> via `.is-ok`, `is_ref` re-home across a descend),
+> `.../stackless-catch-unwind-byref-aggregate-match` (`(Box int)`
+> destructured via `match`, `is_ref`), and
+> `.../stackless-catch-unwind-byref-aggregate-group-bail` (mutual `match`
+> regression guard -- must compile + run, proving the group path bails).
+>
+> **BR3b/BR3c split out.** BR3b admits passing the param to a non-member
+> pure const-by-ref reader. That is NOT a near-free change: native codegen
+> hoists a fallible call into a temp and emits `if (tur_panicking) return;`
+> after it, so admitting such a call mid-segment requires the trampoline's
+> `cps_emit` to hoist the call and emit an `if (tur_panicking) break;`
+> unwind route -- a departure from the current "only pure values in value
+> position" invariant. Without a callee totality/no-panic proof, admitting
+> the call is unsound. This (and the optional BR3c transitive summary) now
+> lives in its own plan:
+> [catch-unwind-byref-aggregate-br3b-plan.md](../upcoming/v1/catch-unwind-byref-aggregate-br3b-plan.md).
 >
 > **Prerequisites:** BR1+BR2. `gs_param_class` already classifies a by-ref
 > aggregate param (`type_struct_pass_by_ptr`) and flags it `is_ref`; save
@@ -111,16 +148,24 @@ Unsafe (BR3 must still reject):
 
 ## Phases
 
-- **BR3a** -- the use-analysis: walk the by-ref param's occurrences, classify
-  READ / ADDRESS-OBSERVED / ESCAPES, and reject inline-C bodies. Admit
-  field-read / `match` / copy-out uses that the accessor whitelist rejected.
-  Differential-check a `match`-on-`Result`-param recursion against native.
-- **BR3b** -- the one-level callee const-borrow proof: admit passing the param
-  to a pure `const`-by-ref callee. Fixture: a recursion that threads a by-ref
-  aggregate and hands it to a non-member pure reader each level.
-- **BR3c** -- (optional) a transitive escape/mutation summary if a real
-  fixture needs deeper-than-one-level proof; otherwise leave BR3b's syntactic
-  check as the ceiling and document it.
+- **BR3a** -- DONE. Widen the read gate: admit pure (non-suspending,
+  non-panicking) `match` / `.field` / `@`-deref reads of the by-ref param in
+  the single-function trampoline; the address-observe / escape / mutation /
+  inline-C forms stay at `default: return false` and bail. Implemented as an
+  enumerate-and-admit relaxation of `gs_value_ok` rather than a separate
+  occurrence classifier -- the existing whitelist structure means only the
+  three explicitly-added pure-read forms are newly admitted, so an
+  identity/mutation/escape use cannot be a false ADMIT (it is not one of the
+  three). Verified: `.field`-read on a `Result` param and a `match` on a
+  `(Box int)` param both run flat where native SIGSEGVs; the BR1 pure-accessor
+  fixtures stay byte-identical.
+- **BR3b / BR3c** -- SPLIT OUT to
+  [catch-unwind-byref-aggregate-br3b-plan.md](../upcoming/v1/catch-unwind-byref-aggregate-br3b-plan.md).
+  BR3b (admit passing the param to a pure `const`-by-ref non-member reader)
+  is not a gate-only change like BR3a -- a native reader call can panic
+  mid-segment, so it needs `cps_emit` to hoist the call and emit
+  `if (tur_panicking) break;`. BR3c is the optional transitive
+  escape/mutation summary. See the split-out plan for the full design.
 
 ## Validation
 
