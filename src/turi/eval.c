@@ -8687,8 +8687,39 @@ static bool promo_check(TuriEnv *env, TuriValue v, PromoMap *seen) {
     case TURI_EFFECT_CONT: return !PROMO_SCRATCH(env, v.as_cont);
     case TURI_THROW:       return !PROMO_SCRATCH(env, v.as_throw);
     case TURI_FUTURE:      return !PROMO_SCRATCH(env, v.as_future);
-    case TURI_GEN:         return !PROMO_SCRATCH(env, v.as_gen);
-    case TURI_HANDLER:     return !PROMO_SCRATCH(env, v.as_handler);
+    case TURI_GEN: {
+        /* turi-value-pool-carrier-relocation-plan Part 2: a generator is
+         * relocatable only when it holds NO live coroutine-stack state that
+         * points into scratch.  makecontext + the mmap/malloc stack are set up
+         * lazily on the first `gen-next` (see gen_advance), so an UNSTARTED
+         * generator has an empty stack and only its captured frame + error slot
+         * reach scratch -- both relocatable.  A COMPLETED generator never
+         * resumes (gen-next returns exhausted without touching the stack), so it
+         * is safe too.  A suspended generator (started, not done) has live
+         * interpreter C frames on its coroutine stack that reference scratch and
+         * cannot be rewritten -- it must keep bailing. */
+        TuriGen *g = v.as_gen;
+        if (!g) return true;
+        /* The started-not-done bail is checked BEFORE the perm short-circuit: a
+         * suspended generator holds scratch pointers on its coroutine stack even
+         * once the TuriGen struct itself has been promoted to perm, so it must
+         * block the rewind wherever it lives.  (An unstarted generator relocated
+         * to perm that a later gen-next starts would otherwise escape the bail
+         * via !PROMO_SCRATCH and let the next boundary rewind live coroutine
+         * state.) */
+        if (g->started && !g->done) return false;
+        if (!PROMO_SCRATCH(env, g)) return true;
+        if (promo_map_get(seen, g)) return true;
+        promo_map_put(seen, g, g);
+        if (!promo_check(env, g->error_val, seen)) return false;
+        return promo_check_frame(env, g->frame, seen);
+    }
+    case TURI_HANDLER: {
+        /* A detached handler value is just n_cases + an array of HandleCase
+         * pointers into the elaborator AST (permanent).  The struct itself is
+         * the only scratch object; copying it is always safe. */
+        return true;
+    }
     }
     return false;  /* unknown tag: refuse to rewind */
 }
@@ -8774,6 +8805,36 @@ static TuriValue promo_copy(TuriEnv *env, TuriValue v, PromoMap *fwd) {
         if (ns->name && PROMO_SCRATCH(env, ns->name))
             ns->name = turi_val_perm_strdup(env, ns->name);
         return turi_struct_val(ns);
+    }
+    case TURI_GEN: {
+        /* Part 2: relocate an unstarted/completed generator.  promo_check
+         * already refused any suspended (started, not-done) generator, so the
+         * coroutine stack here holds no live scratch pointers.  Copy the struct
+         * verbatim (env/body/stack/contexts/flags/box) and deep-copy the two
+         * members that reach scratch -- the captured frame and the error slot. */
+        TuriGen *g = v.as_gen;
+        if (!g || !PROMO_SCRATCH(env, g)) return v;
+        void *seen = promo_map_get(fwd, g);
+        if (seen) return turi_gen_val((TuriGen *)seen);
+        TuriGen *ng = (TuriGen *)turi_val_perm_alloc(env, sizeof *ng);
+        promo_map_put(fwd, g, ng);
+        *ng = *g;
+        ng->frame     = promo_copy_frame(env, g->frame, fwd);
+        ng->error_val = promo_copy(env, g->error_val, fwd);
+        return turi_gen_val(ng);
+    }
+    case TURI_HANDLER: {
+        /* Part 2: relocate a detached handler value.  Its cases[] array is
+         * embedded in the struct and points at permanent elaborator AST, so a
+         * verbatim struct copy is a complete relocation. */
+        TuriHandlerVal *hv = v.as_handler;
+        if (!hv || !PROMO_SCRATCH(env, hv)) return v;
+        void *seen = promo_map_get(fwd, hv);
+        if (seen) return turi_handler_val((TuriHandlerVal *)seen);
+        TuriHandlerVal *nhv = (TuriHandlerVal *)turi_val_perm_alloc(env, sizeof *nhv);
+        promo_map_put(fwd, hv, nhv);
+        *nhv = *hv;
+        return turi_handler_val(nhv);
     }
     default:
         /* Scalars and the shapes promo_check proved are non-scratch: unchanged. */

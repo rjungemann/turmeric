@@ -1,10 +1,38 @@
 # Plan: relocate carrier-encoded and control-flow values during scratch promotion
 
-**Status:** proposal (not started). **Area:** `src/turi/` (tree-walking interpreter).
+**Status:** Part 2 partially landed (handler values + unstarted/completed
+generators); Part 1 re-scoped after investigation (see note below). **Area:**
+`src/turi/` (tree-walking interpreter).
 **Goal:** extend the landed scratch/permanent value-pool promotion so it can also
 relocate the value shapes it currently **bails on**, so a long-lived `TuriEnv`
 bounds its steady-state memory even when the live global set includes
 carrier-encoded collections or suspended control-flow values.
+
+## Update -- what landed and what re-scoped (investigation, 2026-07)
+
+Empirical probing of the current interpreter (against `build/tur`, Debug)
+reshaped both parts:
+
+- **Part 1 (carriers) is largely already delivered or out of reach in the
+  interpreter.** The typed collections moved to a struct representation since this
+  plan was written: a typed list `(Cons A)` and an ADT-with-payload (`(Some 9)`,
+  `(Circle 5)`) are now `TURI_STRUCT` values, which Phase A already relocates --
+  a global cons list / ADT value promotes and rewinds scratch with no new code.
+  `Vec`/`Set`/`Map` are raw-`malloc` handles that live *outside* the value pool
+  (never in `value_scratch`), so promotion neither needs to nor can relocate them
+  (and they leak independently -- see
+  `docs/reported/interp-collections-never-freed.md`). The only carriers that
+  still bail are genuinely type-erased `:int` payloads (manual inline-C cons
+  cells, `TuriTVar`), which the plan already says keep bailing. So the
+  type-directed carrier walk has essentially no remaining interpreter target;
+  Part 1 is effectively closed by representation change.
+- **Part 2 (control-flow structs) landed for the two safe, tagged shapes:**
+  first-class **handler values** (`TURI_HANDLER`) and **unstarted / completed
+  generators** (`TURI_GEN`). See the Part 2 section for the safety argument and
+  the two supporting fixture cases. A *suspended* (started, not-done) generator
+  still bails -- its coroutine stack holds scratch pointers that cannot be
+  rewritten -- as do `TuriEffectCont` / `TuriCont` / `TuriThrow` / `TuriFuture`
+  and the type-erased carriers above.
 
 This is the follow-up tail split out of
 `docs/archive/turi-value-pool-scratch-promotion-plan.md` (Phase A -- landed). That
@@ -97,18 +125,49 @@ For each control-flow struct, add a copy routine that mirrors its allocation sit
 and deep-copies its reachable graph into `value_perm` via the shared forwarding
 map:
 
-- `TuriGen`: copy the struct + its captured `EvalFrame` graph and pending state;
-  leave the tracked coroutine stack in place (stable address), rebinding the
-  struct's pointer to it.
-- `TuriCont` / `TuriWsCont` / `TuriEffectCont`: copy the `TsFrame` / `DriveCont`
-  arrays and the saved `EvalFrame`s they reference (reusing `promo_copy_frame`).
-- `TuriHandlerVal`: copy the `HandleCase` array and captured frame.
-- `TuriTVar`: a plain `{value, version}` box -- copy directly.
+- **`TuriHandlerVal` -- LANDED.** A detached handler value is `n_cases` plus an
+  embedded array of `HandleCase*` pointing into the permanent elaborator AST
+  (`EX_HANDLER_LIT`: `hv->cases[i] = &h->cases[i]`, `h` in the AST). It has no
+  captured runtime frame and no coroutine stack, so `promo_copy` relocates it
+  with a verbatim struct copy through the forwarding map; nothing else moves.
+  `promo_check` returns relocatable unconditionally.
+- **`TuriGen` -- LANDED for unstarted/completed generators only.** `makecontext`
+  and the mmap/malloc coroutine stack are set up lazily on the first `gen-next`
+  (`gen_advance`), so an **unstarted** generator has no live coroutine state:
+  only its captured `EvalFrame` and `error_val` reach scratch, both relocatable
+  (`promo_copy_frame` + `promo_copy`); the struct is copied verbatim and its
+  `stack`/contexts stay as-is. A **completed** (`done`) generator never touches
+  its stack on resume, so it is safe too. A **suspended** (`started && !done`)
+  generator holds interpreter C frames on its coroutine stack that reference
+  scratch and cannot be rewritten -- it **keeps bailing**, and crucially the
+  `started && !done` check runs *before* the `arena_owns` short-circuit so it
+  bails even after the `TuriGen` struct itself has been promoted to perm (an
+  unstarted gen relocated to perm that a later `gen-next` starts must not let the
+  next boundary rewind live coroutine state).
+  - Companion fix: `turi_env_track_coro_stack` now allocates its `TuriCoroStack`
+    tracking node in `value_perm`, not `value_scratch`. The node is env-lifetime
+    metadata (walked at `turi_sched_free`); a scratch-resident node would be
+    poisoned by `arena_reset` while `env->coro_stacks` still linked it, crashing
+    teardown. Correct on the default (promotion-off) path too.
+- `TuriCont` / `TuriWsCont` / `TuriEffectCont`: **not yet** -- copy the `TsFrame`
+  / `DriveCont` arrays and the saved `EvalFrame`s they reference (reusing
+  `promo_copy_frame`). Still bail.
+- `TuriTVar`: **not yet** -- a `{value, version}` box, but it is a *type-erased
+  `:int` carrier* (no `TURI_TVAR` tag), so it faces the same provenance problem
+  as manual cons cells, not the tagged-struct path. Still bails.
 
-Scope this to values that are **reachable from a root and suspended** (the
+Scope is values that are **reachable from a root and suspended** (the
 env-quiescence guard still bails on *in-flight* control state, so we never move a
-struct the C stack is mid-way through). Land per struct kind, each with a fixture
-that stores the value in a global, churns scratch, then resumes/reads it.
+struct the C stack is mid-way through). Landed shapes ship behind the existing
+opt-in + poison with fixtures in `tests/turi/env-longlived.c`
+(`test_handler_relocation`, `test_gen_relocation`).
+
+Testing note: a pre-existing base-interpreter bug (generator resume is corrupted
+by *any* intervening top-level eval, promotion on or off --
+`docs/reported/interp-generator-resume-across-evals.md`) means a generator
+cannot be fully drained across churned evals. The generator fixture therefore
+asserts promotion + the relocated generator's **first** yield + the
+started-generator conservative bail, not a full cross-eval drain.
 
 ### "Is this pointer scratch?" stays the provenance primitive
 
