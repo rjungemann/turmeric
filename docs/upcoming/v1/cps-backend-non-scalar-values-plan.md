@@ -318,13 +318,16 @@ must be true at graduation:
    error), so there is **no `slot_ty` row to add**. They cross a continuation
    only as fields of a struct / ADT, so their discipline is the enclosing
    aggregate's drop glue and folds into item 6 / N3 (O2 there). The one
-   CPS-specific remainder is drop-node translation (O1: lower the
-   `(defer (drop! r))` / `rc/drop` nodes the front end already places, so a
-   colored function with a locally-bound owning value CPS-emits with its drop run
-   exactly once, LeakSanitizer-clean). The multi-shot double-free-via-capture
-   hazard is held off by the existing zero-capture cut. **Current state is safe:
-   every owning-pointer case falls back today, and the fallback handles ownership
-   correctly (verified LeakSanitizer-clean).**
+   CPS-specific remainder is owning-value locals (O1) -- **landed for explicit
+   `rc` ops** (`rc/of` / `rc/clone` / `rc/drop` / `rc/strong-count` / `rc->ptr`)
+   with atomic operands: a new `CT_LETRAW` IR node delegates their emission to
+   the direct emitter (`emit_value`), so a colored function with a local `rc`
+   CPS-emits with its drop run exactly once (fixture `cps-backend-rc-drop`,
+   LeakSanitizer-clean). The owning value stays a local and never crosses the
+   slot; the zero-capture cut holds off the multi-shot double-free hazard. O1
+   tail still open: `EX_DEFER` auto-drops (`ref<T>`) and non-atomic operands.
+   **Current state is safe: any owning-pointer case not yet handled falls back,
+   and the fallback handles ownership correctly (LeakSanitizer-clean).**
 5. **Narrow-int arithmetic shapes** -- `+`, `-`, `*`, comparisons, etc. on the
    sub-64-bit integer widths are in the supported builtin-shape set, so a colored
    function that does narrow-int *math* (not just threads a narrow int) stays on

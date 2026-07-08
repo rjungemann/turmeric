@@ -1,0 +1,28 @@
+;; CPS-IR-to-C backend: owning-value (rc) locals with drop discipline on the CPS
+;; path.  Built with --enable=cps-backend.
+;;
+;; Owning pointers (rc/ref/weak/lref) are never bare slot values -- they cannot be
+;; a function result or continuation payload in the source language (see
+;; docs/upcoming/v1/cps-backend-owning-pointers-plan.md).  They appear only as
+;; LOCALS inside a function.  This program creates an rc, clones it, then drops
+;; both, all inside a colored function's delimited body, and delivers a plain
+;; scalar through the shift.  The rc never crosses the DK slot.
+;;
+;; The CPS backend emits these owning-value ops (rc/of, rc/clone, rc/drop) by
+;; delegating to the direct emitter (CT_LETRAW -> emit_value), so they get the
+;; exact control-block / refcount / drop-glue discipline the direct path uses --
+;; no duplication.  The result must equal the direct-style result (7) and be
+;; LeakSanitizer-clean: rc_cb_alloc is balanced by two rc_strong_decrement calls
+;; (one per live handle), so the block is freed exactly once.
+
+(defn f [] : int
+  (reset
+    (let [r (rc/of 42)]
+      (let [r2 (rc/clone r)]
+        (rc/drop r2)
+        (rc/drop r)
+        (shift (fn [x] x) 7)))))
+
+(defn main [] : int
+  (println (f))
+  0)

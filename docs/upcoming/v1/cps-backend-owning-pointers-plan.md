@@ -117,23 +117,56 @@ open memory-safety bug here -- only missed CPS coverage.
 
 ## Plan
 
-### O1 -- drop-node translation (the CPS-specific remainder)
+### O1 -- owning-value locals via delegated emission -- **LANDED**
 
-- Translate `EX_DEFER` (whose body is a `drop!` / `rc/drop` builtin) and
-  `EX_RC_DROP` in `cps_ir.c` into a CPS-IR drop node (a `CT_LETPRIM`-shaped
-  eff?-free statement, or a dedicated `CT_DROP`), threaded so the drop runs after
-  the guarded value is last used and before the block's value is delivered to the
-  continuation.
-- Emit it in `emit_cps_ir.c` as the corresponding `rc_strong_decrement` /
-  `drop!` call.
-- Keep the move elision the front end already computed: only the non-elided drop
-  nodes are present in the tree, so faithfully translating "the drops that are
-  there" is correct by construction.
-- Guard: retain the zero-capture cut; a drop node inside a *captured* /
-  multi-shot continuation stays on the fallback until O3.
-- Round-trip fixture: a colored function that binds an `rc` locally, reads it,
-  drops it, and delivers a scalar through a `shift` -- direct-vs-CPS equal and
-  LeakSanitizer-clean.
+Refined during implementation. Investigation showed the owning-value operations
+are **distinct `Expr` kinds** (`EX_RC_OF` / `EX_RC_CLONE` / `EX_RC_DROP` /
+`EX_RC_COUNT` / `EX_RC_PTR`), not generic builtins, and that supporting a local
+`rc` needs the whole set (a lone drop unblocks nothing -- the producer/reader
+fall back too). Rather than re-implement the control-block / refcount / drop-glue
+emission in the CPS backend (duplication + drift risk), the backend **delegates**:
+
+- New `CT_LETRAW` IR node (`cps_ir.h`) carries the source `Expr`. `cps_ir.c`
+  translates each owning-value op to `CT_LETRAW` **only when its operand is
+  atomic** (`is_delegatable_owning`), so no control operator can hide in an
+  operand and get emitted in direct style inside a CPS function.
+- `emit_cps_ir.c` emits `CT_LETRAW` by calling the direct emitter,
+  `emit_value(ctx, out, e)` -- reusing the exact discipline the direct path uses,
+  correct by construction. The owning value stays a **local** and never crosses a
+  DK slot, so `slot_ty` still (correctly) excludes the owning types.
+- Naming: a `CT_LETRAW` binder that stands for a source `let` name is declared and
+  assigned via `name_for_binding` (the `CVar` now carries its source `Binding`),
+  matching every reference site -- including the references `emit_value` itself
+  emits for a later `rc/drop`. A nil-typed op (`rc/drop`) binds the unit
+  placeholder rather than assigning its void result.
+- Move elision is the front end's: only the non-elided `rc/clone` / `rc/drop`
+  nodes are in the tree, so faithfully emitting "the ops that are there" is
+  correct. The zero-capture cut keeps the owning value out of any multi-shot
+  continuation (a captured owning local makes the `reset`/`shift` fall back).
+- **Liveness-across-control guard (found during testing -- essential).** An
+  abortive `shift` *discards its continuation*: in the CPS IR the post-shift code
+  is not present. If an owning value is allocated before such a shift and its
+  balancing drop lives in that discarded continuation, the drop vanishes (leak)
+  and the value aborts past the code that used it (a real miscompile -- observed:
+  an `rc` used after a shift returned the shift value, not the computed one). The
+  guard `owning_dropped_before_control` in `term_core_ok` requires an allocating
+  op (`rc/of` / `rc/clone`) to be balanced by its `rc/drop` on a **straight-line
+  path before any control op, branch, or delivery**; otherwise the function falls
+  back. This is what makes the landed slice sound. The same guard also covers the
+  `perform`/`resume` multi-shot case (a control op before the drop -> fall back).
+- Fixture: `tests/fixtures/cps-backend-rc-drop/` -- a colored function creates an
+  `rc`, clones it, drops both, and delivers a scalar through a `shift`;
+  direct-vs-CPS equal (7) and LeakSanitizer-clean (one `rc_cb_alloc`, two
+  `rc_strong_decrement`, freed exactly once).
+
+**Still open in O1:** `EX_DEFER`-injected auto-drops (the `ref<T>` scope-exit
+`(defer (drop! r))` form) are not yet translated -- a colored function relying on
+an *auto*-dropped owning local still falls back. Non-atomic operands (e.g.
+`(rc/of (compute))`) also fall back, as does an owning value whose drop is behind
+a branch or a control op (the conservative liveness guard). All are safe
+(fallback); explicit `rc` ops dropped straight-line before any control op are the
+landed slice. Lifting the guard to allow drops across branches (drop present on
+every path before the control op) is the natural precision follow-up.
 
 ### O2 -- owning fields inside carrier / aggregate ADTs (rides N3)
 
@@ -156,8 +189,10 @@ long as the cut stands.
 Item 4 should read: **owning pointers are handled correctly on the CPS path** --
 which, given Findings 1-4, means:
 
-1. O1 (drop-node translation) has landed, so a colored function with a local
-   owning value CPS-emits with its drop run exactly once (LeakSanitizer-clean);
+1. O1 (owning-value locals) -- **landed for explicit `rc` ops with atomic
+   operands** (a colored function with a local `rc` CPS-emits with its drop run
+   exactly once, LeakSanitizer-clean). Remaining O1 tail: `EX_DEFER` auto-drops
+   (`ref<T>`) and non-atomic operands;
 2. O2 has landed *as part of N3*, so an aggregate containing an owning field runs
    its drop glue exactly once when it rides the slot;
 3. the zero-capture cut still guards O3, or O3 has landed.

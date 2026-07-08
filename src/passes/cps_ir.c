@@ -42,6 +42,7 @@ static CVar fresh_cvar(CpsB *b, TypeKind ty) {
     snprintf(buf, sizeof(buf), "t%u", v.id);
     v.name = arena_strdup(b->a, buf, strlen(buf));
     v.ty = ty;
+    v.bind = NULL;
     return v;
 }
 
@@ -50,6 +51,7 @@ static CVar cvar_of_binding(const Binding *bd) {
     v.id = bd->id;
     v.name = (bd->name ? bd->name->name : "_");
     v.ty = bd->type.kind;
+    v.bind = bd;
     return v;
 }
 
@@ -165,6 +167,38 @@ typedef struct { PendItem items[32]; uint32_t n; } Pending;
 static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont);
 static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest);
 
+/* An owning-value operation on a local rc handle (`rc/of`, `rc/clone`, `rc/drop`,
+ * `rc/strong-count`, `rc->ptr`).  These do not cross a DK slot -- the rc stays a
+ * local -- so the CPS backend delegates their emission to the direct emitter
+ * (`emit_value`), which already carries the correct control-block / refcount /
+ * drop-glue discipline.  Only a form whose operand is atomic (a var or literal)
+ * is delegated, so no control operator (`perform` / `shift`) can hide in an
+ * operand and get emitted in direct style inside a CPS function. */
+static const Expr *owning_operand(const Expr *e) {
+    if (!e) return NULL;
+    switch (e->kind) {
+        case EX_RC_OF:    return e->as.rc_of_.expr;
+        case EX_RC_CLONE: return e->as.rc_clone_.expr;
+        case EX_RC_DROP:  return e->as.rc_drop_.expr;
+        case EX_RC_COUNT: return e->as.rc_count_.expr;
+        case EX_RC_PTR:   return e->as.rc_ptr_.expr;
+        default:          return NULL;
+    }
+}
+
+static bool is_delegatable_owning(const Expr *e) {
+    const Expr *arg = owning_operand(e);
+    return arg != NULL && is_atomic(arg);
+}
+
+static CTerm *build_letraw(CpsB *b, Expr *e, CVar x, CTerm *rest) {
+    CTerm *t = new_term(b, CT_LETRAW);
+    t->as.letraw.x = x;
+    t->as.letraw.e = e;
+    t->as.letraw.body = rest;
+    return t;
+}
+
 static CAtom atomize(CpsB *b, Expr *e, Pending *p) {
     if (is_atomic(e)) return atom_of(e);
     CVar x = fresh_cvar(b, e ? e->type.kind : TY_UNKNOWN);
@@ -277,6 +311,13 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
         t->as.appcont.kont = kont;
         t->as.appcont.v = atom_of(e);
         return t;
+    }
+    if (is_delegatable_owning(e)) {
+        /* bind the owning-op result, then deliver it to the continuation. */
+        CVar x = fresh_cvar(b, e->type.kind);
+        CTerm *ac = new_term(b, CT_APPCONT);
+        ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+        return build_letraw(b, e, x, ac);
     }
     switch (e->kind) {
         case EX_BUILTIN: {
@@ -409,6 +450,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         t->as.letval.x = x; t->as.letval.v = atom_of(e); t->as.letval.body = rest;
         return t;
     }
+    if (is_delegatable_owning(e)) return build_letraw(b, e, x, rest);
     switch (e->kind) {
         case EX_BUILTIN: {
             Pending p = {0};
@@ -653,6 +695,12 @@ void cps_ir_print(const CTerm *t, FILE *out, int indent) {
             print_atom(&t->as.resume.k, out); fputc(' ', out);
             print_atom(&t->as.resume.v, out); fputs("\n", out);
             cps_ir_print(t->as.resume.body, out, indent);
+            break;
+        case CT_LETRAW:
+            fprintf(out, "let %s = <owning-op %s>  ; direct-emitted\n",
+                    t->as.letraw.x.name,
+                    t->as.letraw.e && owning_operand(t->as.letraw.e) ? "rc" : "?");
+            cps_ir_print(t->as.letraw.body, out, indent);
             break;
         case CT_UNSUPPORTED:
             fprintf(out, "<unsupported: %s>\n", t->as.unsupported.why ? t->as.unsupported.why : "?");

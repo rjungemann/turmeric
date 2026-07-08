@@ -314,6 +314,42 @@ static bool handle_case_ok(const CTerm *t) {
     }
 }
 
+/* An owning-value op that allocates or increments a refcount, i.e. creates a
+ * drop obligation (rc/of, rc/clone).  rc/strong-count / rc->ptr only read. */
+static bool owning_alloc_expr(const Expr *e) {
+    return e && (e->kind == EX_RC_OF || e->kind == EX_RC_CLONE);
+}
+
+/* True if `e` is `(rc/drop v)` where v is the binding with id `bid`. */
+static bool is_rc_drop_of(const Expr *e, uint32_t bid) {
+    if (!e || e->kind != EX_RC_DROP) return false;
+    const Expr *arg = e->as.rc_drop_.expr;
+    while (arg && arg->kind == EX_ASCRIBE) arg = arg->as.ascribe_.inner;
+    return arg && arg->kind == EX_VAR && arg->as.var.binding
+        && arg->as.var.binding->id == bid;
+}
+
+/* Is owning binding `bid` dropped on a straight-line path before any control op,
+ * branch, delivery, or the end of the term?  This is the soundness condition for
+ * emitting an rc alloc/clone on the CPS path: an abortive `shift` discards its
+ * continuation, so a drop that is not reached before the next control op would be
+ * dropped from the program (leak / miscompile).  Conservative: any branch
+ * (CT_IF / CT_LETCONT) or delivery before the drop returns false (fall back). */
+static bool owning_dropped_before_control(const CTerm *t, uint32_t bid) {
+    while (t) {
+        switch (t->kind) {
+            case CT_LETRAW:
+                if (is_rc_drop_of(t->as.letraw.e, bid)) return true;
+                t = t->as.letraw.body; break;
+            case CT_LETVAL:  t = t->as.letval.body;  break;
+            case CT_LETPRIM: t = t->as.letprim.body; break;
+            case CT_LETCALL: t = t->as.letcall.body; break;
+            default: return false;
+        }
+    }
+    return false;
+}
+
 /* Recursively check that every node lies in the C1 core subset.  Does not
  * consult the emittable set -- the cps->cps join clause is handled separately
  * by the fixpoint (needs_heap_join). */
@@ -339,6 +375,21 @@ static bool term_core_ok(const CTerm *t) {
                 if (!atom_ok(&t->as.letcall.args[i])) return false;
             return term_core_ok(t->as.letcall.body);
         }
+        case CT_LETRAW:
+            /* An owning-value op delegated to the direct emitter.  Its operand is
+             * atomic (guaranteed at translation) and its result is a local that
+             * never crosses a slot, so no slot_ty check applies to the binder.
+             * BUT an allocating/incrementing op (rc/of, rc/clone) creates a drop
+             * obligation.  An abortive `shift` discards its continuation -- so if
+             * the balancing drop is not on a straight-line path before the next
+             * control op, it would be discarded (leak) or the value would abort
+             * past the code that uses it (miscompile).  Require the drop up front;
+             * otherwise fall back. */
+            if (owning_alloc_expr(t->as.letraw.e) && t->as.letraw.x.bind
+                && !owning_dropped_before_control(t->as.letraw.body,
+                                                  t->as.letraw.x.bind->id))
+                return false;
+            return term_core_ok(t->as.letraw.body);
         case CT_TAILCALL: {
             /* KK_RET / KK_VAR / KK_PROMPT are all valid here: a KK_PROMPT tail
              * call threads the enclosing prompt chain (a reset's delimited
@@ -448,6 +499,7 @@ static bool needs_heap_join(const CTerm *t) {
         case CT_LETVAL:  return needs_heap_join(t->as.letval.body);
         case CT_LETPRIM: return needs_heap_join(t->as.letprim.body);
         case CT_LETCALL: return needs_heap_join(t->as.letcall.body);
+        case CT_LETRAW:  return needs_heap_join(t->as.letraw.body);
         case CT_TAILCALL:
             return t->as.tailcall.kont.kind == KK_VAR
                 && binding_in_s(t->as.tailcall.fn);
@@ -876,6 +928,7 @@ static void emit_shift(CE *ce, const CTerm *t);
 static void emit_handle(CE *ce, const CTerm *t);
 static void emit_perform(CE *ce, const CTerm *t);
 static void emit_resume(CE *ce, const CTerm *t);
+static void emit_letraw(CE *ce, const CTerm *t);
 
 /* Deliver value-string `v` to continuation `kont`. */
 static void emit_deliver(CE *ce, const CKont *kont, const char *v) {
@@ -1023,10 +1076,41 @@ static void emit_term(CE *ce, const CTerm *t) {
         case CT_HANDLE:  emit_handle(ce, t); break;
         case CT_PERFORM: emit_perform(ce, t); break;
         case CT_RESUME:  emit_resume(ce, t); break;
+        case CT_LETRAW:  emit_letraw(ce, t); break;
         default:
             ce_line(ce, "abort(); /* cps-backend: unreachable */");
             break;
     }
+}
+
+/* Emit an owning-value op (rc/of, rc/drop, ...) by delegating to the direct
+ * emitter.  The owning value is a local that never crosses a DK slot, so reusing
+ * emit_value gives it the exact control-block / refcount / drop-glue discipline
+ * the direct path uses -- no duplication, correct by construction. */
+/* Name a CT_LETRAW binder the way every reference site names it: through
+ * name_for_binding when it stands for a source Binding, else its fresh cvar
+ * name.  Returns a malloc'd string. */
+static char *letraw_binder_name(CE *ce, const CTerm *t) {
+    return t->as.letraw.x.bind
+        ? name_for_binding(ce->ctx, t->as.letraw.x.bind)
+        : strdup(t->as.letraw.x.name);
+}
+
+static void emit_letraw(CE *ce, const CTerm *t) {
+    int saved = ce->ctx->indent;
+    ce->ctx->indent = ce->indent;           /* line the delegated statements up */
+    char *rhs = emit_value(ce->ctx, ce->out, t->as.letraw.e);
+    ce->ctx->indent = saved;
+    char *bn = letraw_binder_name(ce, t);
+    /* A nil-typed op (rc/drop) yields a void/nil expression -- bind the unit
+     * placeholder rather than assigning a void value. */
+    if (t->as.letraw.x.ty == TY_NIL)
+        ce_line(ce, "%s = 0;", bn);
+    else
+        ce_line(ce, "%s = %s;", bn, rhs ? rhs : "0");
+    free(bn);
+    free(rhs);
+    emit_term(ce, t->as.letraw.body);
 }
 
 /* ---- binder pre-declaration ------------------------------------------ *
@@ -1049,6 +1133,15 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
             ce_line(ce, "%s %s;", binder_ctype(ce->ctx, t->as.letcall.x.ty), t->as.letcall.x.name);
             emit_binder_decls(ce, t->as.letcall.body);
             break;
+        case CT_LETRAW: {
+            char *bn = t->as.letraw.x.bind
+                ? name_for_binding(ce->ctx, t->as.letraw.x.bind)
+                : strdup(t->as.letraw.x.name);
+            ce_line(ce, "%s %s;", binder_ctype(ce->ctx, t->as.letraw.x.ty), bn);
+            free(bn);
+            emit_binder_decls(ce, t->as.letraw.body);
+            break;
+        }
         case CT_TAILCALL: break;
         case CT_LETCONT:
             ce_line(ce, "%s %s;", binder_ctype(ce->ctx, t->as.letcont.param.ty), t->as.letcont.param.name);

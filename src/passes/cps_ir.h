@@ -80,6 +80,10 @@ typedef enum CTermKind {
     CT_HANDLE,       /* handle: run delim under an effect handler; body is the continuation */
     CT_PERFORM,      /* perform: bind x = perform(effect, args), continue body */
     CT_RESUME,       /* resume: bind x = resume(k, v) [= dk_invoke], continue body */
+    CT_LETRAW,       /* bind x = <direct-emitted owning-value op>, continue body.
+                      * The RHS is a source Expr (rc/of, rc/drop, ...) emitted by
+                      * the direct emitter (emit_value); the owning value stays a
+                      * local and never crosses a DK slot. See emit_cps_ir.c. */
     CT_UNSUPPORTED,  /* a source form outside the CPS2 subset (carries a reason) */
 } CTermKind;
 
@@ -89,6 +93,10 @@ typedef struct CVar {     /* a CPS-introduced binder */
     uint32_t    id;
     const char *name;
     TypeKind    ty;
+    /* When this binder stands for a source Binding (a `let`-bound name), the
+     * emitter must name it via name_for_binding so it matches every reference
+     * site (which resolve through name_for_binding).  NULL for a fresh binder. */
+    const Binding *bind;
 } CVar;
 
 struct CTerm {
@@ -112,6 +120,7 @@ struct CTerm {
         struct { const Symbol *effect; CAtom *args; uint32_t n;
                  CVar x; CTerm *body; }                                   perform;
         struct { CAtom k; CAtom v; CVar x; CTerm *body; }                 resume;
+        struct { CVar x; const Expr *e; CTerm *body; }                    letraw;
         struct { const char *why; }                                       unsupported;
     } as;
 };
