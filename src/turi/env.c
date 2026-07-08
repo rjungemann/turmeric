@@ -3,6 +3,7 @@
 #include "fiber.h"
 #include "reader_macros.h"  /* RM Q#5: session-scoped reader-macro registry */
 #include "spice_loader.h"   /* RP3: env owns the loaded TurSpiceImage */
+#include "collections_native.h"  /* Vec/Set/Map/HAMT native overrides */
 #include "../runtime/globals.h"  /* g_interpret_mode (libturi-embed-interpret-mode-flag) */
 
 #include <limits.h>
@@ -202,6 +203,12 @@ TuriEnv *turi_env_new(void) {
     turi_async_register_builtins(env);
     /* Register eval-layer native builtins (panic?, etc.) */
     turi_eval_register_builtins(env);
+    /* Register Vec/Set/Map/HAMT collection native overrides so collections
+     * resolve for every interpreter env created through libturi (embedders,
+     * the WASM REPL, the test harnesses), not just the `tur` CLI.  Registered
+     * before install_default_natives so an embedder-seeded default of the same
+     * name still wins.  See docs/upcoming/turi-interp-collections-libturi-plan.md. */
+    turi_register_collection_natives(env);
     /* RM Q#5: persistent reader-macro registry for session semantics. */
     env->reader_macros = (ReaderMacroRegistry *)arena_alloc(
         &env->sym_arena, sizeof(ReaderMacroRegistry));
