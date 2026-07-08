@@ -80,6 +80,31 @@ typedef struct TuriCoroStack {
     struct TuriCoroStack *next;
 } TuriCoroStack;
 
+/* interp-collections-never-freed: an interpreter-created collection buffer
+ * (currently a Vec; see below re: Set/Map).  The tree-walker allocates these
+ * with raw calloc/malloc and hands back a bare TURI_INT carrier, so neither the
+ * rc-drop path nor turi_env_free reclaims them -- they leak for the process
+ * lifetime unless the program explicitly calls vec-free.  Each buffer is
+ * registered here at native_*_new time and its `destroy` runs at turi_env_free,
+ * bounding the create/teardown leak (and the interpreter harness leak gate).  An
+ * explicit vec-free tombstones its node (box = NULL) so teardown skips an
+ * already-freed buffer -- no double free.  The node itself is pool-allocated
+ * (reclaimed with the env).
+ *
+ * Only Vec is wired up: a Vec box uniquely owns its data buffer, so freeing each
+ * at teardown is trivially safe.  Set/Map (HAMT-backed) are deliberately NOT
+ * tracked here -- their persistent HAMTs share nodes across boxes, and the
+ * delete path under-retains a pulled-up sibling (docs/reported/hamt-delete-
+ * sibling-refcount.md), so a bulk teardown-free double-frees shared nodes.
+ * Wiring Set/Map through this list is safe only once that refcount bug is
+ * fixed. */
+typedef void (*TuriCollBufFreeFn)(void *box);
+typedef struct TuriCollBuf {
+    void                *box;      /* wrapper allocation; NULL once freed/tombstoned */
+    TuriCollBufFreeFn    destroy;  /* frees box (and any heap buffer it owns) */
+    struct TuriCollBuf  *next;
+} TuriCollBuf;
+
 /* SB4: Capability bits -- controls which operations are permitted in a
  * sandboxed environment.  TURI_CAP_ALL grants every capability (unrestricted).
  * TURI_CAP_NONE grants nothing (fully sandboxed). */
@@ -209,6 +234,10 @@ typedef struct TuriEnv {
     /* turi-value-pool-residual-sites: coroutine execution stacks (fiber +
      * generator), tracked so turi_env_free reclaims them. */
     TuriCoroStack *coro_stacks;
+    /* interp-collections-never-freed: interpreter-created collection buffers
+     * (currently Vec), tracked so turi_env_free reclaims the ones the program
+     * never freed. */
+    TuriCollBuf   *coll_bufs;
     /* All allocated futures (linked list for bulk free in turi_env_free) */
     TuriFuture *all_futures;
     /* Pipe fds for the built-in test I/O pipe (S7.7 tests) */
@@ -320,6 +349,20 @@ void turi_env_free(TuriEnv *env);
 /* Returns the tracking node so callers (async fibers) can hold a back-pointer
  * for early reclaim; generators may ignore the return value. */
 TuriCoroStack *turi_env_track_coro_stack(TuriEnv *env, void *base, size_t size);
+
+/* interp-collections-never-freed: register an interpreter-created collection
+ * buffer (a wrapper allocation, e.g. a Vec box) so turi_env_free reclaims it via
+ * `destroy` if the program never freed it explicitly.  Returns the tracking
+ * node; callers stash it inside the wrapper so an explicit free (e.g. vec-free)
+ * can tombstone it in O(1) via turi_env_untrack_collection.  Returns NULL
+ * (buffer untracked, no crash) when env or box is NULL. */
+TuriCollBuf *turi_env_track_collection(TuriEnv *env, void *box,
+                                       TuriCollBufFreeFn destroy);
+
+/* interp-collections-never-freed: tombstone a tracking node whose buffer is
+ * about to be freed explicitly, so the turi_env_free teardown walk skips it and
+ * does not double-free.  NULL-safe. */
+void turi_env_untrack_collection(TuriCollBuf *node);
 
 /* Gap 8 (libturi-per-embed-env-and-peripherals): share one loaded spice image
  * across many per-script envs read-only, instead of each env auto-discovering
