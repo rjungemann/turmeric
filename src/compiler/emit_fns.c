@@ -300,6 +300,69 @@ static bool fn_body_tail_returns_carrier_value(EmitCtx *ctx, const Expr *e) {
     }
 }
 
+/* Descend a function body to its linear tail expression, following let/do
+ * bodies and ascriptions.  Stops at a branching form (if/match) or a leaf. */
+static const Expr *fn_body_linear_tail(const Expr *e) {
+    while (e) {
+        if (e->kind == EX_ASCRIBE) { e = e->as.ascribe_.inner; continue; }
+        if (e->kind == EX_LET || e->kind == EX_LETREC) { e = e->as.let_.body; continue; }
+        if (e->kind == EX_DO && e->as.do_.n > 0) {
+            e = e->as.do_.items[e->as.do_.n - 1]; continue;
+        }
+        break;
+    }
+    return e;
+}
+
+/* Find the initializer of binding `b` in `e`'s enclosing let chain, or NULL. */
+static const Expr *fn_body_binding_init(const Expr *e, const Binding *b) {
+    while (e) {
+        if (e->kind == EX_ASCRIBE) { e = e->as.ascribe_.inner; continue; }
+        if (e->kind == EX_LET || e->kind == EX_LETREC) {
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (e->as.let_.bindings[i].binding == b)
+                    return e->as.let_.bindings[i].init;
+            e = e->as.let_.body; continue;
+        }
+        if (e->kind == EX_DO && e->as.do_.n > 0) {
+            e = e->as.do_.items[e->as.do_.n - 1]; continue;
+        }
+        break;
+    }
+    return NULL;
+}
+
+/* catch-unwind-byvalue-result-return-mismatch: true when the function returns a
+ * by-value Result/Option aggregate (`ret_ctype` is that struct) but its tail
+ * value is a `catch-unwind` / `catch-panic-of` heap box -- either returned
+ * directly or through a let-bound variable.  `tur_catch_unwind_box` ALWAYS
+ * yields the int64 heap box (never a by-value struct), and the declared by-value
+ * return type is a distinct monomorph, so `return <box>` is an int64->struct cc
+ * error without a carrier->concrete bridge.  Gating on the catch-box tail
+ * structurally -- rather than on emit_type_c_name, which reports "int64_t" for a
+ * by-value #{Construct} tail (`ok`/`err`/`some`/`none`) too -- is what keeps this
+ * from mis-firing on the ordinary Result constructors the M4c/M5 branches own. */
+static bool fn_return_needs_carrier_result_bridge(EmitCtx *ctx, const FnDef *fd,
+                                                  const char *ret_ctype,
+                                                  bool ret_is_int64_carrier) {
+    (void)ctx;
+    if (ret_is_int64_carrier || !ret_ctype || !fd || !fd->body) return false;
+    if (fd->body->type.kind == TY_NEVER) return false;
+    if (strchr(ret_ctype, '*') || strcmp(ret_ctype, "int64_t") == 0 ||
+        strcmp(ret_ctype, "void") == 0)
+        return false;
+    const Expr *tail = fn_body_linear_tail(fd->body);
+    if (!tail) return false;
+    if (tail->kind == EX_CATCH_UNWIND || tail->kind == EX_CATCH_PANIC_OF)
+        return true;
+    if (tail->kind == EX_VAR && tail->as.var.binding) {
+        const Expr *init = fn_body_binding_init(fd->body, tail->as.var.binding);
+        return init && (init->kind == EX_CATCH_UNWIND ||
+                        init->kind == EX_CATCH_PANIC_OF);
+    }
+    return false;
+}
+
 /* Emit `e` in tail position: every path ends in `return <v>;` or a backedge
  * `goto __tur_tailcall;`.  Only invoked for functions tco_mark flagged. */
 static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
@@ -3184,6 +3247,22 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * calls `run_id__spec__...Point`, already a pointer). */
             buf_printf(file, "return (%s)(intptr_t)%s;\n",
                        ctx->current_fn_ret_ctype, ret_val);
+        } else if (fn_return_needs_carrier_result_bridge(
+                       ctx, fd, ret_ctype, ret_is_int64_carrier)) {
+            /* catch-unwind-byvalue-result-return-mismatch: the body value is the
+             * int64 carrier (a heap Result box, e.g. a let-bound catch-unwind
+             * result returned directly) but the declared return is the by-value
+             * Result/Option struct.  Bridge carrier->concrete using the DECLARED
+             * return type (whose emit_type_c_name is the struct), so the canonical
+             * box readback reconstructs the aggregate field-by-field. */
+            Type sink_rt = (e->type.kind == TY_FN && e->type.as.fn.result_full_type)
+                ? emit_resolve_type(ctx, *e->type.as.fn.result_full_type)
+                : emit_resolve_type(ctx, fd->body->type);
+            char *bridged = emit_carrier_bridge(ctx, file, strdup(ret_val),
+                                                CK_CARRIER, CK_CONCRETE, sink_rt);
+            indent_buf(file, ctx->indent);
+            buf_printf(file, "return %s;\n", bridged);
+            free(bridged);
         } else {
             buf_printf(file, "return %s;\n", ret_val);
         }
