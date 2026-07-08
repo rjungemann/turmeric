@@ -1333,6 +1333,15 @@ static void gs_catch_descend(GsCtx *gs, Buf *b, const Expr *S, const GsSink *sin
         cps_emit(gs, rb, enc, sink);
         gs->ctx->n_sub_holes--;
     } else {
+        if (sink->kind == GSK_SEQ) {
+            /* Discarded catch (statement position): the box is (void)-cast and
+             * provably does not escape, so free it here -- the stackless
+             * counterpart to the native statement-position free in emit_stmt.c
+             * (catch-unwind-result-box-leak). Reuse tur_result_box_free so the
+             * err-branch payload-vs-value distinction stays in one place. */
+            indent_buf(rb, gs->cur_ind);
+            buf_printf(rb, "tur_result_box_free((int64_t)(intptr_t)%s);\n", boxnm);
+        }
         gs_deliver(gs, rb, boxnm, sink);
     }
     gs->cur_ind = saved_ind;

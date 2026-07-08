@@ -6054,6 +6054,7 @@ static int64_t step(tur_adt_Option__int acc, int64_t n) {
            if (tur_panicking) { tur_panicking = 0; tur_panic_in_progress = 0; tur_panic_payload *__pp187 = global_panic_payload; global_panic_payload = 0; __box187 = tur_box_err((int64_t)(intptr_t)__pp187); }
            else { __box187 = tur_box_ok(__v); }
            { tur_cont *__pk = __k->next; free(__k); __k = __pk; }
+           tur_result_box_free((int64_t)(intptr_t)__box187);
            (void)(__box187);
            int64_t __t189;
            __auto_type __ps_190 = (some___spec__bool_tur_adt_Option__int(acc));
