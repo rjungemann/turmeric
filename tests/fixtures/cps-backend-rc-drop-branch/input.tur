@@ -1,0 +1,25 @@
+;; CPS-IR-to-C backend, O1 tail: an owning (rc) local dropped on BOTH branches of
+;; an `if` before the function's control op.  Built with --enable=cps-backend.
+;;
+;; The straight-line O1 slice required the rc's drop to precede any control op on
+;; a single path.  This extends the liveness guard across branches: the rc is
+;; dropped in each arm of the `if`, so whichever arm runs, the value is dead
+;; before the shift that follows (the drops sit before the jump to the join that
+;; carries the shift).  If only one arm dropped it, the guard would (correctly)
+;; force a fallback -- but the front end already rejects dropping on only one
+;; path as a linearity error.
+;;
+;; direct-vs-CPS equal (7), LeakSanitizer-clean: rc_cb_alloc balanced by exactly
+;; one rc_strong_decrement on every path.
+
+(defn choose [g : bool] : int
+  (reset
+    (let [r (rc/of 42)]
+      (if g
+        (rc/drop r)
+        (rc/drop r))
+      (shift (fn [x] x) 7))))
+
+(defn main [] : int
+  (println (choose true))
+  0)

@@ -159,14 +159,28 @@ emission in the CPS backend (duplication + drift risk), the backend **delegates*
   direct-vs-CPS equal (7) and LeakSanitizer-clean (one `rc_cb_alloc`, two
   `rc_strong_decrement`, freed exactly once).
 
-**Still open in O1:** `EX_DEFER`-injected auto-drops (the `ref<T>` scope-exit
-`(defer (drop! r))` form) are not yet translated -- a colored function relying on
-an *auto*-dropped owning local still falls back. Non-atomic operands (e.g.
-`(rc/of (compute))`) also fall back, as does an owning value whose drop is behind
-a branch or a control op (the conservative liveness guard). All are safe
-(fallback); explicit `rc` ops dropped straight-line before any control op are the
-landed slice. Lifting the guard to allow drops across branches (drop present on
-every path before the control op) is the natural precision follow-up.
+**O1 tail -- cross-branch drops: LANDED.** The liveness guard
+(`owning_dropped_before_control`) now descends `CT_IF` (dropped-before-control iff
+dropped on *both* arms) and `CT_LETCONT` (execution proceeds in the body; the
+join's jbody is reached via an appcont, i.e. after the drop point). So an `rc`
+dropped in each arm of an `if` before a following `shift` CPS-emits (fixture
+`cps-backend-rc-drop-branch`, LeakSanitizer-clean). Dropping on only one arm is a
+front-end linearity error, so it never reaches the backend.
+
+**O1 tail -- `ref<T>` auto-drop (`EX_DEFER`): shown to be low-value, deferred.**
+Investigation found that `ref<T>`'s auto-drop is injected as `(defer (drop! r))`
+at **scope exit**, which in a colored function is *after* its control op. An
+abortive `shift` discards its continuation, so the scope-exit drop lands in the
+discarded region -- exactly the case the liveness guard rejects. A `ref` whose
+scope ends *before* the control op could work, but then the value it produced is
+typically captured by the continuation (fallback). So a `ref` local in a colored
+function almost always falls back regardless of `EX_DEFER` translation; the payoff
+does not justify implementing scope-exit defer semantics (LIFO, early-return) in
+the CPS backend now. Documented; `ref`/`weak`/`lref` locals stay on the fallback.
+
+**Still open in O1 (low priority):** non-atomic owning-op operands (e.g.
+`(rc/of (compute))`) still fall back -- delegating them needs a sound "operand
+has no control op" scan. Safe fallback meanwhile.
 
 ### O2 -- owning fields inside carrier / aggregate ADTs (rides N3)
 

@@ -378,6 +378,16 @@ static bool owning_dropped_before_control(const CTerm *t, uint32_t bid) {
             case CT_LETVAL:  t = t->as.letval.body;  break;
             case CT_LETPRIM: t = t->as.letprim.body; break;
             case CT_LETCALL: t = t->as.letcall.body; break;
+            case CT_LETCONT:
+                /* Execution proceeds in the body (which may jump to the join);
+                 * the join's jbody is reached via an appcont, i.e. after this
+                 * point, so a drop must appear in the body before that jump. */
+                t = t->as.letcont.body; break;
+            case CT_IF:
+                /* Dropped before control iff dropped on BOTH branches (whichever
+                 * runs, the value is dead before the branch's own control op). */
+                return owning_dropped_before_control(t->as.if_.then_, bid)
+                    && owning_dropped_before_control(t->as.if_.else_, bid);
             default: return false;
         }
     }
