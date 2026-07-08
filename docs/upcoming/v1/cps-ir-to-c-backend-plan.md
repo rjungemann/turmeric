@@ -113,6 +113,59 @@ C0 output: a short ABI note appended here (or a sibling doc) plus a
 throwaway hand-written C sketch of one colored function under the ABI,
 compiled and run, to de-risk the convention before the emitter is written.
 
+### C0 result -- ratified ABI
+
+The convention above is **confirmed**. Two throwaway, hand-written C sketches
+under `tests/probes/cps-abi-c0/` transcribe colored functions into the ABI
+node-for-node against `tur check --dump-cps`, compile against the real DK
+runtime (`src/runtime/cps_prompt.c`), and run to the expected value. Both are
+clean under `-Wall -Wextra` and under `-fsanitize=address,undefined` with
+LeakSanitizer proven live (a deliberate control leak is reported; the sketches
+are not). Build/run:
+
+```sh
+cd tests/probes/cps-abi-c0
+cc -std=c11 -Wall -Wextra mixed.c      ../../../src/runtime/cps_prompt.c -o /tmp/mixed      && /tmp/mixed        # prints 41
+cc -std=c11 -Wall -Wextra xfn_resume.c ../../../src/runtime/cps_prompt.c -o /tmp/xfn_resume && /tmp/xfn_resume   # prints 422
+```
+
+The ratified rules, keyed to the IR node kinds the emitter (`emit_cps_ir.c`,
+Phase C1+) will lower:
+
+| Concept | C ABI |
+| --- | --- |
+| Continuation value | `DK *` (the `cps_prompt.h` multi-prompt chain) |
+| Colored `f a b` | `int64_t f(int64_t a, int64_t b, DK *k)` -- return continuation `k` (`KK_RET`) appended as the last parameter |
+| `CT_TAILCALL f(args, kont)` (`cps->cps`) | `return f(args..., kont);` -- thread the continuation straight through, no trampoline |
+| `CT_APPCONT (k v)`, `k = KK_RET` | `return dk_run(k, (intptr_t)v);` -- deliver `v` to the threaded return continuation |
+| `CT_APPCONT (k v)`, `k` a captured sub | `dk_invoke(k, (intptr_t)v)` -- multi-shot resume of a captured `DK` |
+| `CT_LETCONT j(x)=jbody in body` | a join point: `DK *j = dk_frame(<jbody-as-frame>, env, <enclosing k>);` prepended onto the enclosing continuation; the chain flows into the outer `k` after `jbody` |
+| `CT_LETCALL x = g(args)` (`cps->direct`) | ordinary direct-style call; `g` uncolored, no continuation threaded in |
+| direct->cps entry | trampoline: seed a `dk_done()`-terminated root continuation, call the colored function passing it as `k` (`dk_run_root` when an undelimited capture must reach program entry) |
+| `CT_RESET` | `dk_prompt(tag, next)` marker pushed into the chain being built |
+| `CT_SHIFT` | `dk_shift(tag, body, env, next)`; the body receives the captured sub-continuation and may `dk_invoke` it (multi-shot) rather than discard it |
+
+**What the sketches prove.** `mixed.c` (the `cps-mixed-coloring` fixture) exercises
+all three direct<->CPS edges (`cps->cps` tail calls, a `cps->direct` call to the
+uncolored `twice`, and the `direct->cps` entry trampoline), the two `letcont` join
+points, and a syntactically-local `reset`/`shift`, computing `run(20) = 41`.
+`xfn_resume.c` proves the load-bearing claim the whole backend exists for and that
+the syntactically-local `emit_cps_reset` cannot do: a `shift` in a **callee**,
+delimited by a `reset` in its **caller**, capturing a sub-continuation that spans
+**both** functions' frames and **resuming it twice** (multi-shot) -- the caller
+threads a `k` already carrying its own post-call frame and the prompt (exactly
+`CT_TAILCALL`), the callee prepends its frame and shifts, and `dk_invoke` composes
+the arithmetic across the boundary to `422`. This is the capability Phases C3/C4
+generalize from hand-written to emitted C.
+
+**Open follow-ups deferred to the emitter (not blockers for C0):** (1) `letcont`
+join points whose `jbody` is not a single pure frame (contains its own calls or
+branches) need lowering to a helper function rather than a bare `dk_frame` -- the
+sketches only needed the frame form; (2) DK-node ownership/free discipline in
+emitted code (the sketches leak a couple of join frames harmlessly at process exit,
+which LSan tolerates as reachable-at-exit; a real emitter wants an arena or explicit
+frees). Neither disturbs the calling convention ratified here.
+
 ## Phase C1 -- emit the control/data core to C
 
 Emit the non-delimited `CTerm` kinds for a colored function whose body is
