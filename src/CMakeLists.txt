@@ -108,6 +108,7 @@ set(TUR_CORE_SOURCES
     compiler/mono_specs.c
     compiler/emit_core.c
     compiler/emit_cps.c
+    compiler/emit_cps_ir.c
     compiler/emit_effects.c
     compiler/emit_expr.c
     compiler/emit_stmt.c

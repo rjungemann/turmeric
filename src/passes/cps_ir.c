@@ -166,6 +166,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
             CTerm *t = new_term(b, CT_LETPRIM);
             t->as.letprim.x = x; t->as.letprim.op = builtin_name(e);
+            t->as.letprim.spec = e->as.builtin.spec;
             t->as.letprim.args = args; t->as.letprim.n = e->as.builtin.n;
             t->as.letprim.body = ac;
             return fold_pending(b, &p, t);
@@ -270,6 +271,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                 args[i] = atomize(b, e->as.builtin.args[i], &p);
             CTerm *t = new_term(b, CT_LETPRIM);
             t->as.letprim.x = x; t->as.letprim.op = builtin_name(e);
+            t->as.letprim.spec = e->as.builtin.spec;
             t->as.letprim.args = args; t->as.letprim.n = e->as.builtin.n;
             t->as.letprim.body = rest;
             return fold_pending(b, &p, t);

@@ -92,6 +92,13 @@ extern bool g_dump_effects;
  * colored user-level top-level defn */
 extern bool g_dump_cps;
 
+/* cps-backend (cps-ir-to-c-backend-plan): --enable=cps-backend gate.  When set,
+ * a colored function whose entire CTerm lies in the emittable subset is lowered
+ * to C through the DK-threading CPS backend (emit_cps_ir.c) instead of the
+ * direct-style path.  Off by default; the experiment row lives in
+ * src/runtime/experiments.c. */
+extern bool g_opt_cps_backend;
+
 /* Phase I: --emit-abi-trace flag — print the resolved ABI path (concrete-clone,
  * carrier, dictionary, polymorphic-wrapper) for each call site during emit-c */
 extern bool g_emit_abi_trace;

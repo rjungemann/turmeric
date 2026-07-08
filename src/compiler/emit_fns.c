@@ -1,5 +1,6 @@
 /* emit_fns.c -- function-definition C emission (emit_fn_def). */
 #include "emit_internal.h"
+#include "emit_cps_ir.h"  /* cps-ir-to-c-backend: colored-fn CPS lowering */
 #include "globals.h"   /* g_cps_path, g_panic_trace */
 
 /* ============================================================================
@@ -2605,6 +2606,11 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* forall-dict-pass-nested-lambda-dispatch-plan (Phase 2): a mapper's dead
      * poly-wrapper, orphaned when the mapper became a dict-capturing closure. */
     if (fd && fd->skip_emission) return;
+    /* cps-ir-to-c-backend-plan (C1): a colored function whose CTerm lies in the
+     * emittable subset is lowered through the DK-threading CPS backend under
+     * --enable=cps-backend.  Anything outside the subset returns false and keeps
+     * its direct-style emission below. */
+    if (emit_cps_ir_try_fn(ctx, file, e)) return;
     /* MB1 (constrained-hkt-forall-mode-b-plan): while this dict-clone's body is
      * emitted, route its class-method calls on the constrained var through the
      * dict param (emit_call_name).  emit_fn_def is single-exit (no early

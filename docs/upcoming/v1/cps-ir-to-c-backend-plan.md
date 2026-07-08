@@ -184,6 +184,44 @@ the CPS analogue of straight-line + branch + join + call code.
   body is core-only) must compute the identical value through the CPS
   backend as through direct-style. Assert equality, not just "compiles".
 
+### C1 result -- shipped
+
+Built in `src/compiler/emit_cps_ir.c` (+ `emit_cps_ir.h`), gated behind
+`--enable=cps-backend` (experiment row registered in
+`src/runtime/experiments.c`, `g_opt_cps_backend`, prototype, expires 0.29.0).
+
+- **Emittable-set classification.** `ensure_S` colors the program (the emit
+  pipeline has not colored by emit time) and selects the colored functions the
+  backend emits: those whose entire `CTerm` is in the C1 core subset (the seven
+  non-delimited kinds, scalar int/bool types, supported builtin shapes) **and**
+  which never need a join reified onto the heap chain -- i.e. no non-tail
+  cps->cps call. That last clause is a monotone fixpoint (dropping a function
+  only turns its callers' cps->cps edges into ordinary synchronous calls, which
+  never forces a heap join), so it converges. Everything else keeps its
+  direct-style emission, so coverage grows monotonically with zero regression.
+- **Emission.** Each emittable `f` becomes `int64_t f__cps(params..., DK *k)`
+  plus an `__attribute__((unused)) static int64_t f(params...)` entry wrapper
+  that seeds `dk_done()` -- so uncolored/direct callers reach the CPS body by
+  the plain name unchanged. `CT_TAILCALL` to another emittable fn threads `k`
+  (`return g__cps(args, k)`); to a fallback/uncolored fn it calls synchronously
+  and delivers the result to the continuation. `CT_APPCONT` to the return
+  continuation is `return dk_run(k, v)`. Join points (`CT_LETCONT`) lower to a
+  C local + forward label/goto: delivering to join `j` assigns the join
+  parameter and `goto L<j>`. `main` and exported bindings are held on the
+  direct-style path (their linkage is fixed).
+- **Round-trip fixture** `tests/fixtures/cps-backend-core/`: one program
+  exercising a cps->cps tail call between two emitted functions, a cps->direct
+  call, a synchronous fallback bridge to a delimited `seed`, `CT_IF`, an inline
+  join, and tail self-recursion. Built with `--enable=cps-backend`; its
+  `expected.stdout` (`18`) is the direct-style value, so the CPS build asserts
+  value equality. Full suite: 1988 passed, 0 failed (neutral when the gate is
+  off).
+
+De-risking of the general boundary trampolines (`dk_run_root`, final-value
+unwrapping, all three edges in the `cps-mixed-coloring` shape with cps->cps
+join reification) is Phase C2; C1 deliberately excludes the non-tail cps->cps
+join (it needs a real `dk_frame`) via the fallback guard.
+
 ## Phase C2 -- direct<->CPS boundary bridging in emitted C
 
 Make the two boundary edges real in C, matching the IR's existing

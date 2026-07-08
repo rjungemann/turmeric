@@ -1,6 +1,7 @@
 /* emit_module.c -- program/module assembly (emit_program, emit_header, emit_implementation). */
 #include "emit_internal.h"
 #include "emit_cps.h"   /* cps-transform-plan: DK substrate prelude + wiring */
+#include "emit_cps_ir.h"  /* cps-ir-to-c-backend: colored-fn emittable-set gate */
 #include "globals.h"   /* Phase I: g_emit_abi_trace */
 #include "mangle.h"    /* tur_mangle_ident (constrained-byval witness thunks) */
 #include "mono_specs.h" /* VBM2b: by-value van Laarhoven lens mono spec registry */
@@ -6710,7 +6711,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * emit_cps_reset / emit_cps_cloneable_reset lower onto dk_run/dk_shift. */
     if (shared || emit_cps_program_uses_delimited(program) ||
         emit_cps_program_uses_cloneable_dk(program) ||
-        emit_cps_program_contains_serial(program)) {
+        emit_cps_program_contains_serial(program) ||
+        emit_cps_ir_program_has_emittable(program)) {
         emit_cps_runtime_prelude(out);
     }
     /* CPS9: the cloneable-continuation <-> DK bridge needs both the cloneable

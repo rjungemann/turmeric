@@ -91,7 +91,7 @@ struct CTerm {
     union {
         struct { CKont kont; CAtom v; }                                   appcont;
         struct { CVar x; CAtom v; CTerm *body; }                          letval;
-        struct { CVar x; const char *op; CAtom *args; uint32_t n; CTerm *body; } letprim;
+        struct { CVar x; const char *op; const BuiltinSpec *spec; CAtom *args; uint32_t n; CTerm *body; } letprim;
         struct { CVar x; const Binding *fn; CAtom *args; uint32_t n; CTerm *body; } letcall;
         struct { const Binding *fn; CAtom *args; uint32_t n; CKont kont; } tailcall;
         struct { CVar j; CVar param; CTerm *jbody; CTerm *body; }         letcont;
