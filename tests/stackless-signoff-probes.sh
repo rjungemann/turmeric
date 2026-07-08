@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
 #
-# D4 sign-off probes for the (graduated) stackless catch-unwind lowering.
+# Sign-off probes for the stackless / heap-continuation control lowerings.
 #
-# Runs the five probe shapes from
-# docs/archive/catch-unwind-graduation-plan.md Part A at 1,000,000 depth
-# under a REDUCED stack (ulimit -s 256) and asserts each exits 0 with the
-# expected value.  At this depth the native (non-trampolined) lowering
-# exhausts the C stack for the catch-nesting shapes; the flat-stack
-# trampoline is what lets them complete.
+# Runs each probe shape at 1,000,000 depth under a REDUCED stack
+# (ulimit -s 256) and asserts each exits 0 with the expected value.
+#
+#   - cu-rec / cu-catch-deep / atom-rec / mutual-rec / fiber-rec are the five
+#     (graduated) stackless catch-unwind shapes from
+#     docs/archive/catch-unwind-graduation-plan.md Part A.  At this depth the
+#     native (non-trampolined) lowering exhausts the C stack for the
+#     catch-nesting shapes; the flat-stack trampoline is what lets them finish.
+#   - effect-rec is the Phase F4 probe from
+#     docs/upcoming/v1/compiled-first-class-continuations-plan.md: a nested
+#     effect handler around a deep perform/resume loop.  On the fiber-based
+#     effect runtime it already completes in bounded C stack (each handle body
+#     is its own fiber; resume re-enters it iteratively); it is the standing
+#     regression guard for that property once effects move onto heap
+#     continuations (Phase F1).
 #
 # These runs are slow / memory-heavy, so they are deliberately kept OUT of
 # the default `tests/run.sh` fast suite.  Invoke this script directly, or via
@@ -37,13 +46,14 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 # probe name -> expected stdout value
-names=(cu-rec cu-catch-deep atom-rec mutual-rec fiber-rec)
+names=(cu-rec cu-catch-deep atom-rec mutual-rec fiber-rec effect-rec)
 declare -A expect=(
     [cu-rec]=1000000
     [cu-catch-deep]=1000000
     [atom-rec]=1000000
     [mutual-rec]=1000001
     [fiber-rec]=1000000
+    [effect-rec]=1000000
 )
 
 fails=0

@@ -43,6 +43,74 @@ Meanwhile, the compiler already ships a full CPS substrate for the
 the last piece of the language that stays on the fiber / direct-style
 runtime while everything else moved onto CPS.
 
+## Status (2026-07-08)
+
+A codebase audit against this plan landed the two self-contained,
+substrate-independent artifacts and re-scoped the substantive lowering
+against what the tree actually provides. What changed and what it means:
+
+**Landed**
+
+- **F1 mechanical coloring -- already implemented, now locked.** The
+  may-capture coloring already seeds on the effect operators: both
+  `cps_expr_contains_shift` and `cps_directly_uses_control`
+  (`src/passes/cps.c`) treat `EX_PERFORM` / `EX_HANDLE` / `EX_RESUME` /
+  `EX_DISCONTINUE` as capture seeds, so a `perform`-reachable function is
+  colored exactly like a `shift`-reachable one, and the backward
+  fixed-point propagates transitively. This is the "mechanical part" the
+  F1 section calls for; it needed no change. It is now pinned by
+  `tests/fixtures/cps-effect-coloring/` and the `dump-cps-coloring-effects`
+  assertion in `tests/run-flags.sh` (`does-perform` seed + `calls-performer`
+  transitive + `has-handle` seed COLORED; the two pure fns uncolored).
+- **F4 effect-rec probe -- landed.** `tests/probes/stackless-signoff/effect-rec.tur`
+  drives a nested effect handler (`Outer`) around a 1,000,000-iteration
+  `Tick` perform/resume loop under `ulimit -s 256`, wired into
+  `tests/stackless-signoff-probes.sh` (all 6 probes pass, ~0.75s for the
+  effect probe). This was the plan's explicitly-named missing probe.
+
+**Correction to a premise.** "Each *active* fiber is one C stack" is true,
+but a deep perform/resume loop does **not** grow the C stack in proportion
+to depth on today's runtime: each `handle` body runs in its own fiber and
+every `resume` re-enters that *same* body fiber iteratively
+(`emit_effects.c` dispatch via `tur_fiber_block_resume`). So the compiled
+effect path does not SIGSEGV under deep perform/resume -- it is time/memory
+bound, not C-stack bound. The measured pressure point is ~1,000,000
+*distinct* nested handles (a fresh handle per recursion level), which
+*times out* on per-fiber allocation overhead rather than crashing. The F4
+probe therefore guards the "bounded C stack" property that already holds,
+so it stays green across the F1 move rather than starting red.
+
+**Remaining work is blocked on an unbuilt prerequisite.** The plan lists
+"CPS coloring + lowering pipeline (CPS1--CPS3)" and the "DK multi-prompt
+substrate" as landed dependencies. Two facts narrow that:
+
+- The DK machine *is* emitted into generated C (`emit_cps_runtime_prelude`,
+  `src/compiler/emit_cps.c`) and *does* drive `shift`/`reset` -- but
+  Turmeric's `shift` lowering is **abortive**: the emitted body
+  `__dk_abort_body` ignores the captured sub-continuation (Turmeric `shift`
+  never resumes it). There is no resumable-capture codegen path yet, which
+  is exactly what `perform`/`resume` require.
+- `emit_cps_reset` only lowers a **syntactically-local** delimited context
+  (`emit_first_shift` walks the reset body). The normal effect shape --
+  `perform` in a callee, `handle` in a caller -- is not syntactically
+  visible to the handle and cannot be captured by that machinery. Capturing
+  it means threading continuations across call boundaries, i.e. emitting the
+  ANF/CPS IR (`src/passes/cps_ir.c`) as C. That IR is **dump-only today**
+  (`--dump-cps`); the CPS-IR-to-C backend (CPS3 codegen) is unbuilt.
+
+So F1/F2/F3's substantive lowering depends on building CPS-IR-to-C emission
+for resumable cross-function capture. That is the real next step, and it is
+a plan of its own -- not a mechanical extension of the existing abortive DK
+path.
+
+**Experiment registration deferred (deliberately).** Per the experiments
+STRICT RULE, an `EXPERIMENTS[]` row must point `opt_global` at a
+`g_opt_<name>` bool that the feature's elaboration *reads*. Until the DK
+effect lowering exists there is nothing for `--enable=cps-effects` /
+`--enable=cps-async` to gate, so registering them now would be a hollow
+row. They should be added in the same change that lands the lowering, as
+the "Experiment mechanics" section describes.
+
 ## What this plan is not
 
 - Not a `ucontext` removal. Fibers stay a valid representation for the
@@ -110,11 +178,15 @@ invokes the captured chain; multi-shot resume is a `dk_invoke` per shot.
 
 ## Phase F4 -- sign-off probes
 
-- **Add** `tests/probes/stackless-signoff/effect-rec.tur`: nested `handle`
-  around a recursive `perform`/`resume` loop at 1,000,000 under
-  `ulimit -s 256`, no SIGSEGV, oracle-matched at small depth. This is the
-  missing probe -- the current `atom-rec` / `fiber-rec` files test
-  catch-unwind carriers, not effect nesting.
+- **LANDED (2026-07-08):** `tests/probes/stackless-signoff/effect-rec.tur` --
+  nested `handle` (`Outer`) around a `perform`/`resume` loop at 1,000,000
+  under `ulimit -s 256`, no SIGSEGV, oracle-matched at small depth; wired
+  into `tests/stackless-signoff-probes.sh` (expected `1000000`). This was
+  the missing probe -- the `atom-rec` / `fiber-rec` files test catch-unwind
+  carriers, not effect nesting. It is green on the current fiber runtime
+  (see Status: deep perform/resume is bounded-stack today) and stays the
+  regression guard for that property once F1 moves effects onto heap
+  continuations.
 - If F3 lands: `async-rec.tur` -- recursively-spawned suspended
   computations without proportional C-stack growth.
 - Non-effect hot-path neutrality: measured neutral-or-better on the suite,

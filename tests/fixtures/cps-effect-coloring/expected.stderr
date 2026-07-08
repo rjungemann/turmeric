@@ -1,0 +1,5 @@
+pure-arith: uncolored
+also-pure: uncolored
+does-perform: colored
+calls-performer: colored
+has-handle: colored

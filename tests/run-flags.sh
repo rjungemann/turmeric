@@ -857,6 +857,29 @@ else
     pass "dump-cps-coloring-no-output"
 fi
 
+# dump-cps-coloring-effects: F1 (compiled-first-class-continuations-plan) -- the
+# algebraic-effect operators must seed the may-capture coloring the same way
+# shift/reset do.  does-perform (direct `perform`) and has-handle (direct
+# `handle`) are seeds; calls-performer reaches `perform` transitively; the two
+# pure functions stay uncolored.  This locks the "mechanical part" of Phase F1.
+EFF_FIXTURE="tests/fixtures/cps-effect-coloring/input.tur"
+out=$("$TUR" --dump-cps-coloring emit-c "$EFF_FIXTURE" 2>/dev/null); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "dump-cps-coloring-effects" "non-zero exit ($rc)"
+elif [[ "$out" != *"cps-coloring: pure-arith uncolored"* ]]; then
+    fail "dump-cps-coloring-effects" "expected 'pure-arith uncolored'"
+elif [[ "$out" != *"cps-coloring: also-pure uncolored"* ]]; then
+    fail "dump-cps-coloring-effects" "expected 'also-pure uncolored'"
+elif [[ "$out" != *"cps-coloring: does-perform COLORED"* ]]; then
+    fail "dump-cps-coloring-effects" "expected 'does-perform COLORED' (perform seed)"
+elif [[ "$out" != *"cps-coloring: calls-performer COLORED"* ]]; then
+    fail "dump-cps-coloring-effects" "expected 'calls-performer COLORED' (transitive)"
+elif [[ "$out" != *"cps-coloring: has-handle COLORED"* ]]; then
+    fail "dump-cps-coloring-effects" "expected 'has-handle COLORED' (handle seed)"
+else
+    pass "dump-cps-coloring-effects"
+fi
+
 # ---------------------------------------------------------------------------
 # CPS2 (cps-transform-plan): --dump-cps ANF/CPS IR
 # ---------------------------------------------------------------------------

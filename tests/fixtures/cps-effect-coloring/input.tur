@@ -1,0 +1,39 @@
+;; F1 (compiled-first-class-continuations-plan) fixture: the may-capture
+;; coloring must treat the algebraic-effect operators (perform / handle /
+;; resume) as capture seeds, exactly as it treats shift / reset.
+;;
+;; Compiled with --dump-cps-coloring, the analysis must partition these
+;; top-level defns as follows:
+;;
+;;   pure-arith      -- provably control-op-free            -> uncolored
+;;   also-pure       -- only calls a control-op-free fn     -> uncolored
+;;   does-perform    -- body directly contains `perform`    -> COLORED (seed)
+;;   calls-performer -- transitively reaches `perform`      -> COLORED (propagated)
+;;   has-handle      -- body directly contains `handle`     -> COLORED (seed)
+;;
+;; This locks the "mechanical part" of Phase F1: a function reachable from a
+;; perform site is marked may-capture the same way a shift-reachable function
+;; is.  The seed set lives in cps_expr_contains_shift / cps_directly_uses_control
+;; (src/passes/cps.c); this fixture is its regression guard for the effect ops.
+
+(defeffect E [] :int)
+
+(defn pure-arith [x : int] : int
+  (* x x))
+
+(defn also-pure [n : int] : int
+  (pure-arith (+ n 1)))
+
+(defn does-perform [] : int
+  (perform (E)))
+
+(defn calls-performer [] : int
+  (+ 1 (does-perform)))
+
+(defn has-handle [] : int
+  (handle (calls-performer)
+    (E [] k) (resume k 0)))
+
+(defn main [] : int
+  (println (has-handle))
+  0)
