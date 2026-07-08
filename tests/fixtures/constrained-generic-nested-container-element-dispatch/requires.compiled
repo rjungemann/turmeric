@@ -1,0 +1,11 @@
+Compiled-path only. The compiled path passes (per-call-site instance
+specialization binds the Cons instance's element tyvar A = (Option int) from
+the receiver's static type, so the nested element dispatches to Enc[(Option A)]
+and prints 1107). The tree-walking interpreter has no equivalent: a bare-head
+constrained instance -- (definstance Tag [Cons] [(Tag A)] ...) -- carries A only
+in its [(Tag A)] constraint, not in its type_args, so at dispatch the
+interpreter never binds A to the receiver's concrete element type. The Cons
+instance body then calls (tag-head c) with A unbound, the inner
+(tag (:: (.head c) A)) finds A absent in the frame, and dispatch falls back to
+the int-carrier representative -- printing 1007 instead of 1107. See
+docs/reported/turi-interp-bare-head-instance-constraint-tyvar-unbound.md.
