@@ -6,6 +6,48 @@ description: Widen the trampoline's single int64 value register (__v) so a tramp
 
 # Stackless catch-unwind -- aggregate return types -- Plan
 
+> **Status: AR1 + AR2 DONE (single-function path). AR3 / AR4 deferred.** A
+> trampolined self-recursive function may now RETURN a by-value aggregate (a C
+> struct such as `(Option int)`). Option **(b)** from below was taken: the
+> return value is **heap-boxed into `__v`** on produce and unboxed (memcpy +
+> free) on every consume, mirroring the aggregate-PARAM solution (G6) -- `__v`
+> stays `int64_t`, no `MAX_AGG` constant, no C-compile-error UX. All five `__v`
+> consumers are aggregate-aware:
+>
+> 1. **`gs_deliver` `GSK_RETURN`** boxes an aggregate value (`malloc` +
+>    `memcpy` from a temp) instead of `sc_save_expr`; the sink carries
+>    `ret_ctype` + `ret_aggr`.
+> 2. **self-call resume** (`gs_self_descend`) unboxes `__v` into a fresh
+>    by-value local (`__ur<n>`) and frees the box.
+> 3. **catch resume** keeps `tur_box_ok(__v)` unchanged -- an aggregate *thunk*
+>    return is out of scope (AR3), gated out in `gs_collect` (bails to native)
+>    so `__v` at a catch resume is always a scalar/int64 thunk value. The `tk`
+>    fallback for a non-scalar (int64-carrier) thunk return is now `TY_INT`
+>    (was the enclosing member's ret kind, which may now be an aggregate).
+> 4. **DONE** unboxes `__v` into the C return struct and frees the box
+>    (single-function `done_typed` path).
+> 5. **propagate-zero** returns `(RetT){0}` on the escaping-panic path.
+>
+> A call-member suspension **temp** whose callee returns an aggregate is a
+> by-value struct marked `is_aggr`, so it relocates across a further descend via
+> the existing heap-box path and zero-inits as `= {0}`. Return classification
+> reuses `gs_param_class` (the plan's suggestion); `gs_basic_ok` accepts a
+> scalar / int64-carrier / by-value-aggregate return.
+>
+> **Group (AR4) stays deferred** for free: the G4 group path is gated by
+> `sc_scalar_kind(result_kind)`, so an aggregate-returning function never enters
+> the shared driver -- it takes the single-function path, or (if it needs mutual
+> recursion) falls back to native.
+>
+> Covered by `stackless-catch-unwind-aggregate-return` (an `(Option int)`
+> aggregate PARAM carried through recursion and RETURNED, with a non-tail
+> recursive `(Option int)` feeding `some?` so the descend-unbox path runs,
+> crossing a `catch-unwind`, 200,000-deep flat where a non-flat lowering would
+> SIGSEGV). Full suite: 1976 passed, 0 failed. valgrind: the aggregate-return
+> boxes are all freed on the happy path -- the run leaks byte-for-byte the same
+> as the aggregate-PARAM baseline (only the pre-existing `tur_box_ok` result-box
+> leak, matching native), i.e. AR adds zero new leak.
+
 ## Why this exists
 
 The general catch-unwind lowering
@@ -80,20 +122,28 @@ Every site below is in `src/compiler/emit_fns.c` (grep `__v`):
 
 ## Phases
 
-- **AR1 -- classify the return.** Add an `is_aggr` return flag alongside
-  `mem_ret`/`mem_retctype` (reuse `gs_param_class` for the return type). Keep the
-  int64/scalar path byte-identical when the return is not an aggregate.
-- **AR2 -- box on produce, unbox on consume (single-function path).** Wire the
-  five consumers above for the single-function driver. Differential-check
-  against native for value; valgrind for box balance (every produced box freed
-  on a normal return; note the panic-path leak, shared with the params plan).
-- **AR3 -- aggregate thunk values (optional).** Only if useful: a catch whose
-  thunk returns an aggregate needs the ok box to carry it (box-in-box or a
-  widened result repr). Defer unless a fixture needs it.
-- **AR4 -- group path.** Coordinate with the aggregate-param + group plan: the
-  shared driver returns `int64_t` and the shim restores; an aggregate return
-  needs the driver to hand back a box pointer and the shim to unbox. Land after
-  the single-function path.
+- **AR1 -- classify the return. DONE.** `GsCtx.mem_ret_aggr[]` flags an
+  aggregate-returning member; `GsSink` carries `ret_ctype` + `ret_aggr`.
+  Classification reuses `gs_param_class` on the return type. The int64/scalar
+  path is byte-identical when the return is not an aggregate (the whole suite is
+  green with no snapshot churn).
+- **AR2 -- box on produce, unbox on consume (single-function path). DONE.** All
+  five consumers wired (see the status block up top). Differential-checked:
+  `go(acc, 200000)` matches at small depth and runs flat where a non-flat
+  lowering SIGSEGVs. valgrind: aggregate-return boxes all freed on the happy
+  path -- byte-identical leak profile to the aggregate-param baseline (only the
+  known `tur_box_ok` result-box leak). The bounded panic-path box leak noted in
+  the params plan is unchanged (aggregate-param boxes on a popped self-call
+  resume node are freed via `aggr_mask`; the result box itself matches native).
+- **AR3 -- aggregate thunk values (optional). DEFERRED.** A catch whose thunk
+  returns an aggregate needs the ok box to carry it (box-in-box or a widened
+  result repr). Out of scope: `gs_collect` gates such a thunk out (bails to
+  native) rather than emitting an ill-typed cast. Land when a fixture needs it.
+- **AR4 -- group path. DEFERRED.** The shared driver returns `int64_t` and the
+  shim restores; an aggregate return needs the driver to hand back a box pointer
+  and the shim to unbox. Not yet wired -- the `sc_scalar_kind(result_kind)` gate
+  on the group path keeps aggregate returns on the single-function path (or
+  native for mutual recursion), so nothing mis-lowers in the meantime.
 
 ## Validation
 

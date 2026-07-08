@@ -1,0 +1,29 @@
+;; AR (catch-unwind-aggregate-returns-plan): a trampolined function whose RETURN
+;; type is a by-value AGGREGATE.  `(Option int)` is `struct { bool is_some;
+;; int64_t value }` -- too wide for the trampoline's single int64 `__v` value
+;; register.  The return value is relocated the way an aggregate PARAM already is
+;; (G6): heap-boxed into `__v` on produce and unboxed (memcpy + free) on consume
+;; -- at the self-call resume, at DONE, and on the escaping-panic zero path.
+;;
+;; `acc : (Option int)` is an aggregate param carried through the recursion and
+;; returned unchanged; the recursive `(go acc (- n 1))` sits in NON-TAIL position
+;; (its `(Option int)` result feeds the pure `some?` accessor), so it descends
+;; through the driver and its aggregate return is unboxed into a saved temp.  The
+;; recursion crosses a `catch-unwind`, so native (flag path retired -- this is
+;; always-on now) cannot flatten it and SIGSEGVs deep; the trampoline runs it
+;; flat.  go(acc, n) = acc for all n >= 0.
+(defn go [acc : (Option int) n : int] : (Option int)
+  (if (= n 0)
+    acc
+    (do
+      (catch-unwind (fn [] : int 0))
+      (if (some? (go acc (- n 1)))
+        acc
+        acc))))
+
+(defn main [] : int
+  (let [r (go (some 7) 200000)]
+    (if (some? r) (println (unwrap r)) (println -1)))
+  (let [s (go (none) 5)]
+    (if (some? s) (println (unwrap s)) (println -2)))
+  0)

@@ -857,6 +857,8 @@ typedef struct { char *cname; const char *ctype; TypeKind kind; bool is_aggr; bo
 typedef struct GsSink {
     int kind;
     TypeKind ret_kind;                                   /* GSK_RETURN */
+    const char *ret_ctype;                               /* GSK_RETURN (aggregate: struct name for sizeof) */
+    bool ret_aggr;                                       /* GSK_RETURN: value is a by-value aggregate, box it into __v */
     const char *dest;                                    /* GSK_ASSIGN */
     const LetBinding *binds; uint32_t bi, bn; const Expr *body;  /* GSK_ASSIGN */
     const Expr **items; uint32_t si, sn;                 /* GSK_SEQ */
@@ -882,6 +884,10 @@ typedef struct {
     int mem_pbase[GS_MAXMEM];
     TypeKind mem_ret[GS_MAXMEM];
     const char *mem_retctype[GS_MAXMEM];
+    /* AR (catch-unwind-aggregate-returns): member m returns a by-value aggregate
+     * (a C struct returned by value, too wide for the int64 __v register).  Its
+     * return value is heap-boxed into __v on produce and unboxed on consume. */
+    bool mem_ret_aggr[GS_MAXMEM];
     int n_param_vars;   /* count of leading vars[] that are member params */
 } GsCtx;
 
@@ -943,9 +949,12 @@ static void gs_collect(GsCtx *gs, const Expr *e) {
     }
     int cm = gs_call_member_idx(e);
     if (cm >= 0) {
-        /* Result temp typed by the CALLEE member's return type. */
+        /* Result temp typed by the CALLEE member's return type.  AR: if that
+         * return is a by-value aggregate, the temp is a struct held by value and
+         * is relocated across any further descend by heap-boxing (is_aggr). */
         char nm[32]; snprintf(nm, sizeof nm, "__t%d", gs->ctx->tmp_n++);
-        int vi = gs_add_var(gs, tur_strdup(nm), gs->mem_retctype[cm], gs->mem_ret[cm]);
+        int vi = gs_add_var_a(gs, tur_strdup(nm), gs->mem_retctype[cm], gs->mem_ret[cm],
+                              gs->mem_ret_aggr[cm], false);
         if (vi >= 0 && gs->n_susp < TUR_SC_MAXN) {
             gs->susp_expr[gs->n_susp] = e; gs->susp_idx[gs->n_susp] = vi; gs->n_susp++;
         }
@@ -954,6 +963,17 @@ static void gs_collect(GsCtx *gs, const Expr *e) {
         return;
     }
     if (e->kind == EX_CATCH_UNWIND) {
+        /* AR: the thunk's value is packed into __v as raw int64 bits and boxed
+         * with tur_box_ok(__v) at the catch resume.  An aggregate thunk return
+         * (a by-value struct) does not fit that path -- keep it out of scope
+         * (AR3) by bailing to native rather than emitting an ill-typed cast. */
+        FnDef *tfc = gs_thunk_fn(e);
+        if (tfc) {
+            TypeKind tk_; const char *tct_; bool taggr_; bool tref_;
+            if (gs_param_class(gs->ctx, tfc->return_type, &tk_, &tct_, &taggr_, &tref_) && taggr_) {
+                gs->overflow = true; return;
+            }
+        }
         char nm[32]; snprintf(nm, sizeof nm, "__t%d", gs->ctx->tmp_n++);
         int vi = gs_add_var(gs, tur_strdup(nm), "int64_t", TY_INT);
         if (vi >= 0 && gs->n_susp < TUR_SC_MAXN) {
@@ -1123,6 +1143,19 @@ static void cps_emit_do(GsCtx *gs, Buf *b, const Expr **items, uint32_t i,
 static void gs_deliver(GsCtx *gs, Buf *b, const char *val, const GsSink *sink) {
     switch (sink->kind) {
         case GSK_RETURN: {
+            if (sink->ret_aggr) {
+                /* AR: heap-box the returned aggregate; __v carries the box
+                 * pointer (like an aggregate param, but for the return value).
+                 * The matching consumer (self-call resume / DONE) unboxes and
+                 * frees.  A temp holds `val` so its address is taken safely. */
+                indent_buf(b, gs->cur_ind);
+                buf_printf(b, "{ %s __rv = (%s); void *__rb = malloc(sizeof(%s)); "
+                              "memcpy(__rb, &__rv, sizeof(%s)); __v = (int64_t)(intptr_t)__rb; }\n",
+                           sink->ret_ctype, val, sink->ret_ctype, sink->ret_ctype);
+                indent_buf(b, gs->cur_ind);
+                buf_puts(b, "__pc = __k->tag; break;\n");
+                return;
+            }
             char *sv = sc_save_expr(sink->ret_kind, val);
             indent_buf(b, gs->cur_ind);
             buf_printf(b, "__v = %s; __pc = __k->tag; break;\n", sv);
@@ -1196,7 +1229,20 @@ static void gs_self_descend(GsCtx *gs, Buf *b, const Expr *S, const GsSink *sink
     int saved_ind = gs->cur_ind;
     gs->cur_ind = gs->base_ind + 3;
     gs_restore(gs, rb);
-    char *rv = sc_restore_expr(gs->mem_retctype[m], gs->mem_ret[m], "__v");
+    char *rv;
+    if (gs->mem_ret_aggr[m]) {
+        /* AR: the callee boxed its aggregate return into __v; unbox it into a
+         * fresh by-value local and free the box.  rv is then that local. */
+        int uid = gs->ctx->tmp_n++;
+        char urnm[32]; snprintf(urnm, sizeof urnm, "__ur%d", uid);
+        indent_buf(rb, gs->cur_ind);
+        buf_printf(rb, "%s %s; { void *__rb = (void*)(intptr_t)__v; "
+                       "memcpy(&%s, __rb, sizeof(%s)); free(__rb); }\n",
+                   gs->mem_retctype[m], urnm, urnm, gs->mem_retctype[m]);
+        rv = tur_strdup(urnm);
+    } else {
+        rv = sc_restore_expr(gs->mem_retctype[m], gs->mem_ret[m], "__v");
+    }
     if (temp_vi >= 0) {
         indent_buf(rb, gs->cur_ind);
         buf_printf(rb, "%s = %s;\n", gs->vars[temp_vi].cname, rv);
@@ -1222,8 +1268,14 @@ static void gs_catch_descend(GsCtx *gs, Buf *b, const Expr *S, const GsSink *sin
                              int temp_vi, const Expr *enc) {
     int id = gs->ctx->tmp_n++;
     FnDef *tf = gs_thunk_fn(S);
+    /* The thunk value is packed into __v as raw int64 bits and boxed with
+     * tur_box_ok(__v).  A scalar thunk return uses its own kind (float via bit
+     * reinterpret); a non-scalar (int64-carrier) thunk return uses TY_INT (an
+     * intptr cast) -- NOT the enclosing member's ret kind, which may now be an
+     * aggregate (AR) and would mis-pack the carrier.  Aggregate thunk returns are
+     * already gated out in gs_collect. */
     TypeKind tk = (tf && tf->body && sc_scalar_kind(tf->body->type.kind))
-                  ? tf->body->type.kind : gs->ret_kind;
+                  ? tf->body->type.kind : TY_INT;
     int thunktag = gs->next_tag++;
     int rtag = gs->next_tag++;
     Buf *tb = gs_add_seg(gs, thunktag);
@@ -1249,6 +1301,7 @@ static void gs_catch_descend(GsCtx *gs, Buf *b, const Expr *S, const GsSink *sin
     gs->cur_ind = gs->base_ind + 3;
     GsSink tsink; memset(&tsink, 0, sizeof tsink);
     tsink.kind = GSK_RETURN; tsink.ret_kind = tk;
+    tsink.ret_ctype = "int64_t"; tsink.ret_aggr = false;
     cps_emit(gs, tb, tf ? tf->body : NULL, &tsink);
 
     /* resume segment: pop boundary, consume any caught panic, build the box. */
@@ -1443,11 +1496,12 @@ static bool gs_basic_ok(EmitCtx *ctx, FnDef *fd) {
     if (fd->closure) return false;
     if (fd->binding && fd->binding->name && fd->binding->name->name &&
         strcmp(fd->binding->name->name, "main") == 0) return false;
-    /* G6: the return type must be an int64-slot type (scalar / int64 carrier --
-     * aggregate returns are deferred, __v is int64).  Params may additionally be
-     * a by-value aggregate (heap-boxed across a descend). */
+    /* G6/AR: the return type must be an int64-slot type (scalar / int64 carrier)
+     * OR a by-value aggregate (AR -- catch-unwind-aggregate-returns: heap-boxed
+     * into __v on produce, unboxed on consume).  Params may likewise be a
+     * by-value aggregate (heap-boxed across a descend). */
     TypeKind k; const char *ct; bool aggr; bool ref;
-    if (!gs_slot_type(ctx, fd->return_type, &k, &ct)) return false;
+    if (!gs_param_class(ctx, fd->return_type, &k, &ct, &aggr, &ref)) return false;
     for (uint8_t i = 0; i < fd->n_params; i++)
         if (!gs_param_class(ctx, fd->param_types[i], &k, &ct, &aggr, &ref)) return false;
     return true;
@@ -1497,6 +1551,7 @@ static bool gs_build(GsCtx *gs) {
         gs->ret_kind = gs->mem_ret[m]; gs->ret_ctype = gs->mem_retctype[m];
         GsSink rs; memset(&rs, 0, sizeof rs);
         rs.kind = GSK_RETURN; rs.ret_kind = gs->mem_ret[m];
+        rs.ret_ctype = gs->mem_retctype[m]; rs.ret_aggr = gs->mem_ret_aggr[m];
         cps_emit(gs, entry, gs->mem[m]->body, &rs);
         if (gs->overflow) return false;
     }
@@ -1522,8 +1577,18 @@ static void gs_emit_driver(GsCtx *gs, Buf *out, int bi, bool done_typed) {
      * or the outer catch consumes it); else a fiber panic jmpbuf -> longjmp into
      * it; else it is genuinely uncaught -> abort. */
     {
-        char *rz = done_typed ? sc_restore_expr(gs->mem_retctype[0], gs->mem_ret[0], "INT64_C(0)")
-                              : tur_strdup("INT64_C(0)");
+        /* AR: an aggregate return propagates a zero-initialized struct on the
+         * escaping-panic path (the value is ignored by the caller but must
+         * type-check as the C return type). */
+        char *rz;
+        if (done_typed && gs->mem_ret_aggr[0]) {
+            size_t n = strlen(gs->mem_retctype[0]) + 8;
+            rz = (char *)malloc(n); snprintf(rz, n, "(%s){0}", gs->mem_retctype[0]);
+        } else if (done_typed) {
+            rz = sc_restore_expr(gs->mem_retctype[0], gs->mem_ret[0], "INT64_C(0)");
+        } else {
+            rz = tur_strdup("INT64_C(0)");
+        }
         indent_buf(out, bi + 2); buf_puts(out, "if (__k->tag == 0) {\n");
         indent_buf(out, bi + 3); buf_puts(out, "free(__k);\n");
         indent_buf(out, bi + 3); buf_printf(out, "if (tur_handler_chain) return %s;\n", rz);
@@ -1535,7 +1600,14 @@ static void gs_emit_driver(GsCtx *gs, Buf *out, int bi, bool done_typed) {
     indent_buf(out, bi + 2); buf_puts(out, "__pc = __k->tag;\n");
     indent_buf(out, bi + 1); buf_puts(out, "}\n");
     indent_buf(out, bi + 1); buf_puts(out, "switch (__pc) {\n");
-    if (done_typed) {
+    if (done_typed && gs->mem_ret_aggr[0]) {
+        /* AR: DONE unboxes the aggregate return from __v, frees the box, then
+         * returns the by-value struct. */
+        indent_buf(out, bi + 2);
+        buf_printf(out, "case 0: { void *__rb = (void*)(intptr_t)__v; %s __rr; "
+                        "memcpy(&__rr, __rb, sizeof(%s)); free(__rb); free(__k); return __rr; }\n",
+                   gs->mem_retctype[0], gs->mem_retctype[0]);
+    } else if (done_typed) {
         char *rv = sc_restore_expr(gs->mem_retctype[0], gs->mem_ret[0], "__v");
         indent_buf(out, bi + 2); buf_printf(out, "case 0: { free(__k); return %s; }\n", rv); free(rv);
     } else {
@@ -1563,6 +1635,10 @@ static bool emit_stackless_general_body(EmitCtx *ctx, Buf *file, FnDef *fd,
     gs.ctx = ctx; gs.fd = fd; gs.base_ind = ctx->indent; gs.next_tag = 2;
     gs.n_mem = 1; gs.mem[0] = fd; gs.mem_entry_tag[0] = 1;
     gs.mem_ret[0] = result_kind; gs.mem_retctype[0] = ctx->current_fn_ret_ctype;
+    {   /* AR: is this function's return a by-value aggregate? */
+        TypeKind rk; const char *rct; bool raggr; bool rref;
+        gs.mem_ret_aggr[0] = gs_param_class(ctx, fd->return_type, &rk, &rct, &raggr, &rref) && raggr;
+    }
     uint8_t saved_holes = ctx->n_sub_holes;
     ctx->n_sub_holes = 0;
     g_gs_mem[0] = fd; g_gs_nmem = 1;
@@ -1581,7 +1657,12 @@ static bool emit_stackless_general_body(EmitCtx *ctx, Buf *file, FnDef *fd,
         }
         for (int i = gs.n_param_vars; i < gs.n_vars; i++) {
             indent_buf(file, bi);
-            buf_printf(file, "%s %s = 0;\n", gs.vars[i].ctype, gs.vars[i].cname);
+            /* AR: an aggregate-return suspension temp is a by-value struct; a
+             * scalar `= 0` init is ill-typed, so zero-init with a compound. */
+            if (gs.vars[i].is_aggr)
+                buf_printf(file, "%s %s = {0};\n", gs.vars[i].ctype, gs.vars[i].cname);
+            else
+                buf_printf(file, "%s %s = 0;\n", gs.vars[i].ctype, gs.vars[i].cname);
         }
         indent_buf(file, bi); buf_puts(file, "tur_cont *__k = (tur_cont*)malloc(sizeof(tur_cont));\n");
         indent_buf(file, bi); buf_puts(file, "__k->tag = 0; __k->boundary = 0; __k->next = 0; __k->aggr_mask = 0;\n");
