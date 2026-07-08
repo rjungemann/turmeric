@@ -40,7 +40,17 @@
  * A type is "slot-representable at Tier A" when its value fits the one-word DK
  * slot by a plain cast: any <=64-bit integer/bool, or a cstr/pointer.  See
  * docs/upcoming/v1/cps-backend-non-scalar-values-plan.md.  Tier B (float, bit-
- * reinterpret) and Tier C (wide by-value aggregates, boxed) are not yet here. */
+ * reinterpret) and Tier C (wide by-value aggregates, boxed) are not yet here.
+ *
+ * Deliberately absent: the OWNING pointers TY_REF / TY_RC / TY_WEAK / TY_LREF.
+ * Do NOT add them here -- they are never bare slot values.  A bare owning
+ * pointer cannot even be a function result / continuation payload in the source
+ * language (`(defn f [] : rc<int> ...)` is a type error); owning values cross a
+ * continuation only as FIELDS of a struct / ADT, so their slot discipline is the
+ * enclosing aggregate's drop glue (N3), not a per-pointer cast.  The non-owning
+ * borrows TY_REF_IMMUT / TY_REF_MUT are also omitted: a borrow threaded through a
+ * continuation would outlive its referent, which the borrow checker rejects.
+ * See docs/upcoming/v1/cps-backend-owning-pointers-plan.md. */
 static bool slot_ty(TypeKind k) {
     switch (k) {
         case TY_INT: case TY_INT64: case TY_BOOL:

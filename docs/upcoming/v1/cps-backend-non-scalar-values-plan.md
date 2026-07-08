@@ -219,10 +219,15 @@ and `cps-backend-effect-under-match` (uncolored performer, effect hidden under
 `match`, coupled only dynamically). Archived report:
 `docs/archive/cps-backend-perform-handle-machine-split.md`.
 
-Still open in N1: owning pointer types (`ref`/`rc`/`weak`/`lref`) -- these carry
-drop/refcount discipline the DK slot's bit-copy would confuse (a copied `rc`
-handle needs an incref, an owning `ref` needs single-drop), so they wait until
-the slot convention grows an ownership hook; and carrier-ABI ADTs (need
+Still open in N1: owning pointer types (`ref`/`rc`/`weak`/`lref`) -- but **not**
+as a `slot_ty` addition. The owning-pointers investigation
+([cps-backend-owning-pointers-plan.md](cps-backend-owning-pointers-plan.md))
+found these are never bare slot values (a bare owning pointer cannot be a
+function result / continuation payload -- it is a source-level type error), so
+they cross a continuation only inside structs / ADTs and their discipline folds
+into carrier-ABI ADTs (N3) plus one CPS-specific remainder: drop-node
+translation (O1). `slot_ty` deliberately omits them (and the non-owning borrows,
+which would outlive their referent). Also still open: carrier-ABI ADTs (need
 full-`Type` info the IR does not yet carry -- folds into N3). The
 `slot_store`/`slot_load` seams are in place for Tier B/C to extend.
 
@@ -305,9 +310,21 @@ must be true at graduation:
    bit-reinterpret slot convention.
 3. **Tier C complete** (N3) -- wide by-value aggregates cross the boundary by the
    chosen boxing strategy.
-4. **Owning pointer types** -- `ref` / `rc` / `weak` / `lref` thread with correct
-   drop / refcount / linearity discipline across the slot (the ownership hook the
-   N1 status defers), not merely bit-copied.
+4. **Owning pointers handled correctly on the CPS path** -- `ref` / `rc` /
+   `weak` / `lref`. Investigation
+   ([cps-backend-owning-pointers-plan.md](cps-backend-owning-pointers-plan.md))
+   found these are **never bare slot values** (a bare owning pointer cannot be a
+   function result / continuation payload in the source language -- it is a type
+   error), so there is **no `slot_ty` row to add**. They cross a continuation
+   only as fields of a struct / ADT, so their discipline is the enclosing
+   aggregate's drop glue and folds into item 6 / N3 (O2 there). The one
+   CPS-specific remainder is drop-node translation (O1: lower the
+   `(defer (drop! r))` / `rc/drop` nodes the front end already places, so a
+   colored function with a locally-bound owning value CPS-emits with its drop run
+   exactly once, LeakSanitizer-clean). The multi-shot double-free-via-capture
+   hazard is held off by the existing zero-capture cut. **Current state is safe:
+   every owning-pointer case falls back today, and the fallback handles ownership
+   correctly (verified LeakSanitizer-clean).**
 5. **Narrow-int arithmetic shapes** -- `+`, `-`, `*`, comparisons, etc. on the
    sub-64-bit integer widths are in the supported builtin-shape set, so a colored
    function that does narrow-int *math* (not just threads a narrow int) stays on
