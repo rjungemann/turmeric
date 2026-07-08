@@ -4,7 +4,7 @@
 long-lived interpreter host that uses collections). Not a miscompile -- results
 are correct, memory is not.
 
-## Status (partial fix landed)
+## Status (RESOLVED -- fix direction 1 landed for all collections)
 
 - **Vec: fixed** via fix direction 1 (env-tracked buffers). Each interpreter
   `Vec` box is registered on the env at `vec-new` time
@@ -15,14 +15,28 @@ are correct, memory is not.
   now constant in N instead of linear (LSan reports the same residual bytes for
   N=100 and N=4000; the residue is unrelated process-lifetime interpreter
   allocations, not `Vec` buffers).
-- **Set/Map: deferred**, blocked on a HAMT bug this work uncovered. A bulk
-  `tur_hamt_free` over every tracked Set/Map box double-frees, because the HAMT
-  **delete** path under-retains a shared surviving node
-  (`docs/reported/hamt-delete-sibling-refcount.md`). Assoc-based structural
-  sharing is correctly refcounted; only `del`/`dissoc` lineages break. Once that
-  refcount bug is fixed, wiring Set/Map through the same
-  `turi_env_track_collection` list (fix direction 1 below) is safe and small --
-  the tracking infrastructure is already in place and general-purpose.
+- **Set/Map: fixed** via fix direction 1, once the blocking HAMT delete
+  refcount bug (`docs/archive/hamt-delete-sibling-refcount.md`) was resolved.
+  Each Set/Map box is a 2-word wrapper `[HAMT*, TuriCollBuf*]` registered on the
+  env at `set-new`/`map-new`/derive time (`set_wrap_tracked`) and released at
+  `turi_env_free` via `tur_hamt_free`; `set-free`/`map-free` tombstone the node
+  in O(1) (`set_free_box`). The invariant that makes bulk teardown-free safe is
+  **one HAMT reference per box**: `tur_hamt_set`/`tur_hamt_del` return `src`
+  *unretained* on a no-op (existing key / absent key), so `set_wrap_owned`
+  retains in that alias case; every other constructor (`tur_hamt_new`,
+  `tur_hamt_merge`, the iter-built intersect/diff result) already hands back a
+  caller-owned reference. Structural sharing across boxes is then reclaimed
+  correctly through the HAMT node refcounts. Verified: transient Set loops are
+  constant-residual in N (73 bytes for N=200 and N=4000 -- unrelated
+  process-lifetime allocations), delete-derived + aliased lineages plus mixed
+  explicit-free/teardown are double-free / use-after-free clean under ASan, and
+  the `tur_hamt_owned_keys` gate carries a new delete-collapse-lineage C unit
+  test guarding the underlying refcount fix.
+
+Fix direction 2 (drop-glue on scope exit, the steady-state bound for a single
+immortal env mid-run) remains an optional future optimization; it is not a leak
+or a correctness defect -- direction 1 already reclaims every buffer at teardown
+and closes the harness leak gate for all collection types.
 
 ## Summary
 

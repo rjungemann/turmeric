@@ -87,17 +87,16 @@ typedef struct TuriCoroStack {
  * lifetime unless the program explicitly calls vec-free.  Each buffer is
  * registered here at native_*_new time and its `destroy` runs at turi_env_free,
  * bounding the create/teardown leak (and the interpreter harness leak gate).  An
- * explicit vec-free tombstones its node (box = NULL) so teardown skips an
- * already-freed buffer -- no double free.  The node itself is pool-allocated
- * (reclaimed with the env).
+ * explicit vec-free / set-free / map-free tombstones its node (box = NULL) so
+ * teardown skips an already-freed buffer -- no double free.  The node itself is
+ * pool-allocated (reclaimed with the env).
  *
- * Only Vec is wired up: a Vec box uniquely owns its data buffer, so freeing each
- * at teardown is trivially safe.  Set/Map (HAMT-backed) are deliberately NOT
- * tracked here -- their persistent HAMTs share nodes across boxes, and the
- * delete path under-retains a pulled-up sibling (docs/reported/hamt-delete-
- * sibling-refcount.md), so a bulk teardown-free double-frees shared nodes.
- * Wiring Set/Map through this list is safe only once that refcount bug is
- * fixed. */
+ * Vec and Set/Map are both wired up.  A Vec box uniquely owns its data buffer,
+ * so freeing each at teardown is trivially safe.  Set/Map (HAMT-backed) share
+ * nodes across boxes, but each box owns exactly one reference to its persistent
+ * HAMT, so a per-box tur_hamt_free at teardown reclaims shared structure through
+ * the node refcounts (correct now that the delete path retains pulled-up
+ * siblings -- docs/archive/hamt-delete-sibling-refcount.md). */
 typedef void (*TuriCollBufFreeFn)(void *box);
 typedef struct TuriCollBuf {
     void                *box;      /* wrapper allocation; NULL once freed/tombstoned */

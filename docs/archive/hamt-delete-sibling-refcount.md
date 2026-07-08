@@ -3,7 +3,10 @@
 **Status:** RESOLVED. Root cause was an *over-release*, not a missing retain:
 `node_delete`'s collapse arms released the deleted child from the old, shared
 node. Fixed in `src/runtime/hamt.c` (bitmap + array collapse arms); regression
-guarded by `tests/test_hamt_del_lineage.c` (ctest `tur_hamt_del_lineage`). See
+guarded by `tests/test_hamt_del_lineage.c` (ctest `tur_hamt_del_lineage`, plain
+keys) and a complementary boxed-key `test_delete_collapse_lineage` case in the
+`tur_hamt_owned_keys` gate. Fixing this unblocked interpreter Set/Map
+teardown-reclaim (`docs/archive/interp-collections-never-freed.md`). See
 `docs/archive/history/hamt-delete-sibling-refcount.md` for the paper trail.
 
 **Severity:** medium (latent correctness; a genuine double-free / heap
@@ -11,7 +14,7 @@ use-after-free, but only surfaces when a *whole* persistent-map lineage that
 includes a `tur_hamt_del`-produced map is freed. Programs that leak their maps
 -- as the tree-walking interpreter did until now -- never hit it. Blocks
 teardown-reclaim of interpreter Set/Map buffers, see
-`docs/reported/interp-collections-never-freed.md`.)
+`docs/archive/interp-collections-never-freed.md`.)
 
 ## Summary
 
