@@ -125,7 +125,15 @@ typedef struct TuriEnv {
     Arena       sym_arena;       /* SymbolTable string storage — permanent */
     SymbolTable st;              /* Persistent symbol table */
     Buf         src_acc;         /* Accumulated prior source text */
-    uint32_t    prior_toplevel;  /* Count of top-level exprs from prior evals */
+    uint32_t    prior_toplevel;  /* Count of top-level PARSED forms from prior evals */
+    /* Count of already-evaluated non-file-scope-def PROGRAM items from prior
+     * evals. Distinct from prior_toplevel: a (load ...) form expands inline to
+     * many program items, so parsed-form count and program-item count diverge.
+     * The evaluation range must skip already-run PROGRAM items, so it is keyed
+     * off this, not the parsed count -- otherwise a re-elaborated (load ...)
+     * shifts the boundary and previously-run top-level forms get evaluated
+     * again (e.g. a prior (gen-next g) double-advances a suspended generator). */
+    uint32_t    prior_prog_items;
     ArenaNode  *eval_arenas;     /* Linked list of per-call arenas (never freed) */
     /* turi-env-owned-value-arena-pool-plan: dedicated pools for TuriValue heap
      * payloads (closures, structs, captured frames/bindings, cons cells, ...),

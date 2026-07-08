@@ -8929,9 +8929,10 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
             if (detected != env->reader_type) {
                 /* Reader type is changing: discard accumulated source so that
                  * prior input isn't re-parsed under an incompatible reader. */
-                env->src_acc.len    = 0;
-                env->prior_toplevel = 0;
-                env->reader_type    = detected;
+                env->src_acc.len       = 0;
+                env->prior_toplevel    = 0;
+                env->prior_prog_items  = 0;
+                env->reader_type       = detected;
             }
             src_body = rest;
             body_len = rest_len;
@@ -9098,17 +9099,21 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * beyond nforms without contributing to n_fsd.  We use the count returned
      * via out_n_file_scope_defs to correctly separate the two:
      *
-     *   [0 .. n_fsd-1]               <- file_scope_defs (imported modules)
-     *   [n_fsd .. n_fsd+prior-1]     <- previously-accumulated forms (already run)
-     *   [n_fsd+prior .. total-1]     <- new user forms (must run; includes load-expanded)
+     *   [0 .. n_fsd-1]                    <- file_scope_defs (imported modules)
+     *   [n_fsd .. n_fsd+prior_prog-1]     <- previously-accumulated items (already run)
+     *   [n_fsd+prior_prog .. total-1]     <- new user forms (must run; incl. load-expanded)
      *
      * We must also run the file_scope_defs on every call because they are
      * freshly elaborated and not yet registered in the runtime env.  Since
      * EX_FN_DEF is idempotent (just overwrites the env binding), re-running
      * them on subsequent calls is harmless.
      *
-     * prior_toplevel tracks *parsed* form count (not total), so the formula
-     * stays consistent across calls even as n_fsd fluctuates. */
+     * The skip boundary is prior_prog_items -- a count of already-run *program
+     * items* -- NOT prior_toplevel (a *parsed-form* count).  A (load ...) form
+     * expands inline to many program items, so the two diverge; keying the
+     * boundary off the parsed count let a re-expanded (load ...) shift it and
+     * re-run earlier top-level forms (interp-generator-resume-across-evals: a
+     * prior (gen-next g) double-advanced the suspended generator). */
     uint32_t total = prog->as.program.n;
     uint32_t n_fsd = actual_n_fsd;
 
@@ -9129,8 +9134,13 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
 } while (0)
 
     TuriValue last = turi_nil();
-    EVAL_TOPLEVEL_RANGE(0, n_fsd);              /* imported module bodies */
-    EVAL_TOPLEVEL_RANGE(n_fsd + prior, total);  /* new user forms         */
+    /* The already-run tail of the program is n_fsd file-scope defs followed by
+     * prior_prog non-fsd program items from earlier evals.  Skip exactly that
+     * many; everything after is genuinely new (see prior_prog_items above --
+     * parsed-form count is the wrong unit once (load ...) expands inline). */
+    uint32_t prior_prog = env->prior_prog_items;
+    EVAL_TOPLEVEL_RANGE(0, n_fsd);                   /* imported module bodies */
+    EVAL_TOPLEVEL_RANGE(n_fsd + prior_prog, total);  /* new user forms         */
 eval_done:;
 #undef EVAL_TOPLEVEL_RANGE
 
@@ -9142,10 +9152,15 @@ eval_done:;
         if (env->src_acc.len > 0) buf_putc(&env->src_acc, '\n');
         buf_write(&env->src_acc, src_body, body_len);
         env->prior_toplevel = nforms;  /* track parsed count, not total */
+        /* Every non-fsd program item run this call is "accumulated" next time.
+         * total = n_fsd + (all non-fsd items), so total - n_fsd is that count.
+         * Keying the skip off this (not the parsed nforms) is what keeps a
+         * re-expanded (load ...) from re-running earlier top-level forms. */
+        env->prior_prog_items = total - n_fsd;
         /* SI4: persist TypeClassEnv for turi_try_show dispatch. */
         env->last_tc_env = tc_env_slot;
         /* SI4: extract type tag from the last new top-level expression. */
-        if (out_type_tag && tag_cap > 0 && total > n_fsd + prior) {
+        if (out_type_tag && tag_cap > 0 && total > n_fsd + prior_prog) {
             Expr *last_expr = prog->as.program.items[total - 1];
             if (last_expr) extract_type_tag(last_expr->type, out_type_tag, tag_cap);
         }
@@ -9185,9 +9200,10 @@ TuriValue turi_eval_file(TuriEnv *env, const char *path) {
      * will detect and apply it, overriding the extension-derived type). */
     ReaderType ext_type = reader_type_from_extension(path);
     if (ext_type != READER_TURMERIC && ext_type != env->reader_type) {
-        env->reader_type    = ext_type;
-        env->src_acc.len    = 0;
-        env->prior_toplevel = 0;
+        env->reader_type      = ext_type;
+        env->src_acc.len      = 0;
+        env->prior_toplevel   = 0;
+        env->prior_prog_items = 0;
     }
 
     TuriValue v = turi_eval(env, buf);

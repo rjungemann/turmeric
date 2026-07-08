@@ -339,9 +339,10 @@ int turi_wasm_set_lang(const char *name) {
     if (rest == buf || rt == READER_UNKNOWN || rt == (ReaderType)-1) return 1;
 
     if (rt != g_env->reader_type) {
-        g_env->reader_type    = rt;
-        g_env->src_acc.len    = 0;
-        g_env->prior_toplevel = 0;
+        g_env->reader_type      = rt;
+        g_env->src_acc.len      = 0;
+        g_env->prior_toplevel   = 0;
+        g_env->prior_prog_items = 0;
     }
     return 0;
 }

@@ -335,8 +335,9 @@ void turi_env_reset(TuriEnv *env) {
     if (!env) return;
 
     /* Drop accumulated REPL/eval source so the next turi_eval starts fresh. */
-    env->src_acc.len    = 0;
-    env->prior_toplevel = 0;
+    env->src_acc.len      = 0;
+    env->prior_toplevel   = 0;
+    env->prior_prog_items = 0;
 
     /* Rebuild the globals list, keeping only native-closure bindings (the
      * builtins from turi_env_new plus the embedder's natives); free every

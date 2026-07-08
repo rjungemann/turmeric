@@ -1,5 +1,20 @@
 # Generator resume is corrupted by intervening top-level evals
 
+**Status:** RESOLVED. The root cause was top-level-form *re-evaluation* in
+`turi_eval`, not a coroutine/context problem. `turi_eval` re-elaborates the
+accumulated source each call and skips the already-run forms, but it keyed the
+skip boundary off the *parsed-form* count (`prior_toplevel`). A `(load ...)`
+form expands inline to ~10 extra *program items*, so parsed-form index and
+program-item index diverge: the boundary `n_fsd + prior` landed short of the
+truly-new form and previously-run top-level forms were evaluated again. Once a
+prior `(gen-next g)` fell inside that re-run window, each drain advanced the
+suspended generator an extra step, producing `10 30 0` for a 10/20/30
+generator. Fix: track already-run *program items* in a new
+`env->prior_prog_items` (updated to `total - n_fsd` on each successful eval)
+and use `[n_fsd + prior_prog_items, total)` as the new-forms range. Regression
+test: `test_gen_drain_across_evals` in `tests/turi/env-longlived.c`. Touched
+`src/turi/{eval.c,env.c,env.h,repl.c}` and `src/web/wasm_glue.c`.
+
 **Severity:** medium (wrong results, silent). Pre-existing; **independent of
 scratch promotion** (reproduces with promotion off).
 
