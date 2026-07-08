@@ -14,7 +14,6 @@
 ;; key/value mismatches.  Internal C layout of the carried pointer:
 ;; struct { void *hamt; } -- identical to the emitted Map__K__V, so the inline-C
 ;; bodies that cast to that anonymous struct stay byte-compatible.
-
 ;; Elaboration dependencies. Map[K V] needs Eq[K]/Hash[K] (the key typeclasses)
 ;; and the backing HAMT (the hamt/* iterator + comparator ops the Eq[Map]
 ;; instance walks); MapKey[K] is defined below in this file. The CLI auto-load
@@ -24,9 +23,10 @@
 ;; self-sufficient instead of tripping on unknown `hamt/*` names and an
 ;; undefined `Eq`. See docs/archive/interp-load-set-map-elaboration-gap.md.
 (load "stdlib/typeclass-eq.tur")
-(load "stdlib/typeclass-hash.tur")
-(load "stdlib/hamt.tur")
 
+(load "stdlib/typeclass-hash.tur")
+
+(load "stdlib/hamt.tur")
 ;;; Map -- parameterized persistent map with key type K and value type V.
 ;;;
 ;;; Map[K V] is a non-transparent :heap struct holding a single ptr<void> to
@@ -35,6 +35,7 @@
 ;;; Map__K__V so typed consumers receive a (Map__K__V *) by value.
 ;;;
 ;;; Since: Phase TM0
+
 (defstruct Map :heap [K V] (hamt :ptr<void>))
 ;;; map-new -- create a new empty typed map.
 ;;;
