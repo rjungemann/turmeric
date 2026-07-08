@@ -85,15 +85,26 @@ static bool term_core_ok(const CTerm *t);
 
 #define CC_MAX_BOUND 128
 
-/* True if `t` references a free variable that a lifted continuation/shift-body
- * helper would have to capture: a non-global source var, or a CPS var not bound
- * within `t` and not the excluded incoming value `exclude` (UINT32_MAX = none).
- * The zero-capture C3 cut falls back whenever this holds. */
+/* Source bindings that are NOT captures inside the lifted body being checked
+ * (an effect handler case's params and continuation `k`, bound by the DKHandler
+ * signature).  Set by has_capture() before each walk. */
+static const Binding *g_excl_b[8];
+static int            g_excl_n;
+
+static bool binding_excluded(const Binding *b) {
+    for (int i = 0; i < g_excl_n; i++) if (g_excl_b[i] == b) return true;
+    return false;
+}
+
+/* True if `t` references a free variable that a lifted continuation / shift /
+ * handler-case helper would have to capture: a non-global, non-excluded source
+ * var, or a CPS var not bound within `t` and not the excluded incoming value
+ * `exclude` (UINT32_MAX = none).  The zero-capture cut falls back when it holds. */
 static bool has_capture_rec(const CTerm *t, uint32_t exclude,
                             uint32_t *bound, int nb) {
     if (!t || nb >= CC_MAX_BOUND) return t ? true : false;
     #define CC_ATOM(a) do { const CAtom *_a = (a); \
-        if (_a->kind == CA_VAR) { if (_a->var && !_a->var->is_global) return true; } \
+        if (_a->kind == CA_VAR) { if (_a->var && !_a->var->is_global && !binding_excluded(_a->var)) return true; } \
         else if (_a->kind == CA_CVAR) { \
             if (_a->cvar_id != exclude) { bool _f = true; \
                 for (int _i = 0; _i < nb; _i++) if (bound[_i] == _a->cvar_id) { _f = false; break; } \
@@ -123,14 +134,33 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
             bound[nb] = t->as.letcont.param.id;
             return has_capture_rec(t->as.letcont.jbody, exclude, bound, nb + 1)
                 || has_capture_rec(t->as.letcont.body, exclude, bound, nb + 1);
-        default: return true;   /* reset/shift/unsupported inside a lifted body: bail */
+        case CT_RESUME:
+            CC_ATOM(&t->as.resume.k);   /* k is the handler's excluded continuation */
+            CC_ATOM(&t->as.resume.v);
+            bound[nb] = t->as.resume.x.id;
+            return has_capture_rec(t->as.resume.body, exclude, bound, nb + 1);
+        default: return true;   /* nested reset/shift/handle/perform in a lifted body: bail */
     }
     #undef CC_ATOM
 }
 
 static bool has_capture(const CTerm *t, uint32_t exclude) {
     uint32_t bound[CC_MAX_BOUND];
+    g_excl_n = 0;
     return has_capture_rec(t, exclude, bound, 0);
+}
+
+/* Like has_capture, but the handler case's params + continuation k are excluded
+ * (they are bound by the DKHandler signature, not captured). */
+static bool has_capture_case(const CTerm *t, const CTerm *hnode) {
+    uint32_t bound[CC_MAX_BOUND];
+    g_excl_n = 0;
+    for (uint32_t i = 0; i < hnode->as.handle.n_params && g_excl_n < 8; i++)
+        g_excl_b[g_excl_n++] = hnode->as.handle.params[i];
+    if (hnode->as.handle.k && g_excl_n < 8) g_excl_b[g_excl_n++] = hnode->as.handle.k;
+    bool r = has_capture_rec(t, UINT32_MAX, bound, 0);
+    g_excl_n = 0;
+    return r;
 }
 
 /* A reset continuation must be self-contained: every KK_VAR it delivers to must
@@ -162,6 +192,7 @@ static bool joins_closed_rec(const CTerm *t, uint32_t *def, int nd) {
             def[nd] = t->as.letcont.j.id;
             return joins_closed_rec(t->as.letcont.jbody, def, nd + 1)
                 && joins_closed_rec(t->as.letcont.body, def, nd + 1);
+        case CT_RESUME: return joins_closed_rec(t->as.resume.body, def, nd);
         default: return false;
     }
 }
@@ -192,6 +223,61 @@ static bool shift_body_ok(const CTerm *t) {
             for (uint32_t i = 0; i < t->as.letcall.n; i++)
                 if (!atom_ok(&t->as.letcall.args[i])) return false;
             return shift_body_ok(t->as.letcall.body);
+        default: return false;
+    }
+}
+
+/* A perform continuation (C4): straight-line, delivered to KK_RET as a scalar
+ * (the lifted DKFrame returns it).  No branches / tail calls / joins / nested
+ * control. */
+static bool perform_body_ok(const CTerm *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case CT_APPCONT:
+            /* Delivered to the function's return continuation (KK_RET) or, when
+             * the perform is the tail of a delimited body, to the enclosing
+             * prompt (KK_PROMPT); the lifted frame returns the value either way. */
+            return (t->as.appcont.kont.kind == KK_RET || t->as.appcont.kont.kind == KK_PROMPT)
+                && atom_ok(&t->as.appcont.v);
+        case CT_LETVAL:
+            return atom_ok(&t->as.letval.v) && perform_body_ok(t->as.letval.body);
+        case CT_LETPRIM:
+            if (!shape_supported(t->as.letprim.spec) || is_println_shape(t->as.letprim.spec->shape))
+                return false;
+            for (uint32_t i = 0; i < t->as.letprim.n; i++)
+                if (!atom_ok(&t->as.letprim.args[i])) return false;
+            return perform_body_ok(t->as.letprim.body);
+        case CT_LETCALL:
+            for (uint32_t i = 0; i < t->as.letcall.n; i++)
+                if (!atom_ok(&t->as.letcall.args[i])) return false;
+            return perform_body_ok(t->as.letcall.body);
+        default: return false;
+    }
+}
+
+/* A handler case body (C4): straight-line with `resume` (dk_invoke), delivered
+ * to the prompt (KK_PROMPT) as a scalar.  resume.k is the continuation binding
+ * (not scalar-checked); resume.v and other atoms are scalar. */
+static bool handle_case_ok(const CTerm *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case CT_APPCONT:
+            return t->as.appcont.kont.kind == KK_PROMPT && atom_ok(&t->as.appcont.v);
+        case CT_LETVAL:
+            return atom_ok(&t->as.letval.v) && handle_case_ok(t->as.letval.body);
+        case CT_LETPRIM:
+            if (!shape_supported(t->as.letprim.spec) || is_println_shape(t->as.letprim.spec->shape))
+                return false;
+            for (uint32_t i = 0; i < t->as.letprim.n; i++)
+                if (!atom_ok(&t->as.letprim.args[i])) return false;
+            return handle_case_ok(t->as.letprim.body);
+        case CT_LETCALL:
+            for (uint32_t i = 0; i < t->as.letcall.n; i++)
+                if (!atom_ok(&t->as.letcall.args[i])) return false;
+            return handle_case_ok(t->as.letcall.body);
+        case CT_RESUME:
+            return t->as.resume.k.kind == CA_VAR && atom_ok(&t->as.resume.v)
+                && handle_case_ok(t->as.resume.body);
         default: return false;
     }
 }
@@ -250,6 +336,25 @@ static bool term_core_ok(const CTerm *t) {
              * discarded here (abortive); resume lands in C4. */
             return shift_body_ok(t->as.shift.body)
                 && !has_capture(t->as.shift.body, UINT32_MAX);
+        case CT_HANDLE:
+            /* C4: single-case, <=1 effect param, self-contained zero-capture
+             * continuation, straight-line handler case. */
+            return t->as.handle.n_params <= 1
+                && (tk_scalar(t->as.handle.x.ty) || t->as.handle.x.ty == TY_NIL)
+                && term_core_ok(t->as.handle.delim)
+                && reset_body_ok(t->as.handle.body)
+                && !has_capture(t->as.handle.body, t->as.handle.x.id)
+                && handle_case_ok(t->as.handle.case_body)
+                && !has_capture_case(t->as.handle.case_body, t);
+        case CT_PERFORM:
+            /* C4: <=1 scalar arg; zero-capture straight-line continuation. */
+            return t->as.perform.n <= 1
+                && (t->as.perform.n == 0 || atom_ok(&t->as.perform.args[0]))
+                && perform_body_ok(t->as.perform.body)
+                && !has_capture(t->as.perform.body, t->as.perform.x.id);
+        case CT_RESUME:
+            return t->as.resume.k.kind == CA_VAR && atom_ok(&t->as.resume.v)
+                && term_core_ok(t->as.resume.body);
         default: /* CT_UNSUPPORTED */
             return false;
     }
@@ -272,6 +377,20 @@ static bool        g_arena_live;
 static SEnt       *g_ents;
 static size_t      g_ents_n;
 static bool        g_fwd_done;  /* __cps forward decls emitted for g_prog */
+
+/* Effect -> prompt-tag registry.  Tags start at 2 (reset/shift use 1); the same
+ * interned effect Symbol always maps to the same tag, so a handle and a matching
+ * perform agree.  Reset per program. */
+#define CPS_MAX_EFFECTS 128
+static const Symbol *g_eff_syms[CPS_MAX_EFFECTS];
+static int           g_eff_n;
+
+static int effect_tag(const Symbol *eff) {
+    for (int i = 0; i < g_eff_n; i++)
+        if (g_eff_syms[i] == eff) return i + 2;
+    if (g_eff_n < CPS_MAX_EFFECTS) { g_eff_syms[g_eff_n] = eff; return (g_eff_n++) + 2; }
+    return 2;
+}
 
 static bool binding_in_s(const Binding *b) {
     if (!b) return false;
@@ -304,6 +423,14 @@ static bool needs_heap_join(const CTerm *t) {
                 || needs_heap_join(t->as.reset.body);
         case CT_SHIFT:
             return needs_heap_join(t->as.shift.body);
+        case CT_HANDLE:
+            return needs_heap_join(t->as.handle.delim)
+                || needs_heap_join(t->as.handle.body)
+                || needs_heap_join(t->as.handle.case_body);
+        case CT_PERFORM:
+            return needs_heap_join(t->as.perform.body);
+        case CT_RESUME:
+            return needs_heap_join(t->as.resume.body);
         default: return false;
     }
 }
@@ -315,6 +442,7 @@ static void ensure_S(const Expr *program) {
     free(g_ents); g_ents = NULL; g_ents_n = 0;
     g_prog = program;
     g_fwd_done = false;
+    g_eff_n = 0;
     if (!program || program->kind != EX_PROGRAM) return;
 
     arena_init(&g_arena, 0);
@@ -383,7 +511,8 @@ typedef struct {
     const char *cur_k;       /* C expr for the innermost prompt chain (KK_PROMPT target) */
     const char *fn_cn;       /* enclosing function's mangled name (helper naming) */
     int        *helper_ctr;  /* per-function unique-helper counter */
-    bool        shift_mode;  /* true inside a shift-body helper: KK_PROMPT -> return value */
+    bool        shift_mode;  /* true inside a shift-body / handler-case helper: KK_PROMPT -> return */
+    bool        ret_mode;    /* true inside a perform-continuation frame: KK_RET -> return value */
 } CE;
 
 static void ce_line(CE *ce, const char *fmt, ...) {
@@ -481,11 +610,20 @@ static void emit_term(CE *ce, const CTerm *t);
 static void emit_binder_decls(CE *ce, const CTerm *t);
 static void emit_reset(CE *ce, const CTerm *t);
 static void emit_shift(CE *ce, const CTerm *t);
+static void emit_handle(CE *ce, const CTerm *t);
+static void emit_perform(CE *ce, const CTerm *t);
+static void emit_resume(CE *ce, const CTerm *t);
 
 /* Deliver value-string `v` to continuation `kont`. */
 static void emit_deliver(CE *ce, const CKont *kont, const char *v) {
     if (kont->kind == KK_RET) {
-        ce_line(ce, "return dk_run(k, (intptr_t)(%s));", v);
+        /* In a perform-continuation frame the delivered value IS the result --
+         * return it (dk_perform routes it to the handler's outer continuation);
+         * otherwise run the function's return continuation. */
+        if (ce->ret_mode)
+            ce_line(ce, "return (intptr_t)(%s);", v);
+        else
+            ce_line(ce, "return dk_run(k, (intptr_t)(%s));", v);
     } else if (kont->kind == KK_PROMPT) {
         /* Deliver to the innermost prompt.  In a shift-body helper the delivered
          * value IS the shift result -- return it; otherwise run the prompt chain. */
@@ -612,8 +750,11 @@ static void emit_term(CE *ce, const CTerm *t) {
             ce_line(ce, "}");
             break;
         }
-        case CT_RESET: emit_reset(ce, t); break;
-        case CT_SHIFT: emit_shift(ce, t); break;
+        case CT_RESET:   emit_reset(ce, t); break;
+        case CT_SHIFT:   emit_shift(ce, t); break;
+        case CT_HANDLE:  emit_handle(ce, t); break;
+        case CT_PERFORM: emit_perform(ce, t); break;
+        case CT_RESUME:  emit_resume(ce, t); break;
         default:
             ce_line(ce, "abort(); /* cps-backend: unreachable */");
             break;
@@ -656,6 +797,16 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
             emit_binder_decls(ce, t->as.reset.delim);
             break;
         case CT_SHIFT: break;   /* shift.body is lifted into a helper */
+        case CT_HANDLE:
+            /* Only the handled body lives here; the continuation and case are
+             * lifted into helpers. */
+            emit_binder_decls(ce, t->as.handle.delim);
+            break;
+        case CT_PERFORM: break;   /* terminal; the continuation is lifted */
+        case CT_RESUME:
+            ce_line(ce, "int64_t %s;", t->as.resume.x.name);
+            emit_binder_decls(ce, t->as.resume.body);
+            break;
         default: break;
     }
 }
@@ -667,33 +818,68 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
  * directly as the frame env; a body needing to capture other locals is rejected
  * at classification time (has_capture) and falls back. */
 
-/* Emit one lifted helper into ce->helpers.  `is_shift` selects the DKBody shape
- * (env, subk)->value with shift_mode delivery; otherwise the DKFrame shape
- * (env, xval)->value that unpacks k and runs `body`.  `xname` is the incoming
- * value parameter name (the reset result var; unused for shift). */
-static void emit_lifted_helper(CE *ce, const char *name, bool is_shift,
-                               const char *xname, const CTerm *body) {
-    /* Emit the body into a temporary buffer first, so any nested reset/shift
-     * appends its own (inner) helpers ahead of this one in ce->helpers. */
+/* The shape of a lifted helper. */
+typedef enum {
+    LH_RESET_CONT,    /* DKFrame (env=k, xval): reset continuation, KK_RET -> dk_run(k,..) */
+    LH_SHIFT_BODY,    /* DKBody  (env, subk):   shift body, KK_PROMPT -> return value */
+    LH_PERFORM_CONT,  /* DKFrame (env, xval):   perform continuation, KK_RET -> return value */
+    LH_HANDLER_CASE,  /* DKHandler (env, arg, subk): binds params+k, KK_PROMPT -> return */
+} LHMode;
+
+/* Emit one lifted helper into ce->helpers.  `xname` is the incoming value
+ * parameter name (reset/perform continuation result var).  `hnode` is the
+ * CT_HANDLE (for LH_HANDLER_CASE param/k binding), else NULL. */
+static void emit_lifted(CE *ce, const char *name, LHMode mode,
+                        const char *xname, const CTerm *body, const CTerm *hnode) {
+    /* Emit the body into a temporary buffer first, so any nested reset/shift/
+     * effect appends its own (inner) helpers ahead of this one in ce->helpers. */
     Buf tmp; buf_init(&tmp);
     CE hc = *ce;
     hc.out = &tmp;
     hc.indent = 4;
     hc.n_joins = 0;
     hc.cur_k = "k";
-    hc.shift_mode = is_shift;
+    /* A perform continuation returns its value however it is delivered (KK_RET
+     * or KK_PROMPT), so it sets both return modes. */
+    hc.shift_mode = (mode == LH_SHIFT_BODY || mode == LH_HANDLER_CASE || mode == LH_PERFORM_CONT);
+    hc.ret_mode   = (mode == LH_PERFORM_CONT);
+
+    /* Handler case: bind the effect param(s) from `arg` and `k` from `subk`. */
+    if (mode == LH_HANDLER_CASE && hnode) {
+        if (hnode->as.handle.n_params >= 1) {
+            char *pn = name_for_binding(ce->ctx, hnode->as.handle.params[0]);
+            indent_buf(&tmp, 4);
+            buf_printf(&tmp, "int64_t %s = (int64_t)arg;\n", pn);
+            free(pn);
+        }
+        if (hnode->as.handle.k) {
+            char *kn = name_for_binding(ce->ctx, hnode->as.handle.k);
+            indent_buf(&tmp, 4);
+            buf_printf(&tmp, "DK *%s = subk;\n", kn);
+            free(kn);
+        }
+    }
     emit_binder_decls(&hc, body);
     emit_term(&hc, body);
     buf_putc(&tmp, '\0');
 
-    if (is_shift) {
-        buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, DK *subk) {\n",
-                   name);
-        buf_puts(ce->helpers, "    (void)env; (void)subk;\n");
-    } else {
-        buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, intptr_t %s) {\n",
-                   name, xname);
-        buf_puts(ce->helpers, "    DK *k = (DK *)env;\n");
+    switch (mode) {
+        case LH_SHIFT_BODY:
+            buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, DK *subk) {\n", name);
+            buf_puts(ce->helpers, "    (void)env; (void)subk;\n");
+            break;
+        case LH_HANDLER_CASE:
+            buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, intptr_t arg, DK *subk) {\n", name);
+            buf_puts(ce->helpers, "    (void)env; (void)arg; (void)subk;\n");
+            break;
+        case LH_PERFORM_CONT:
+            buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, intptr_t %s) {\n", name, xname);
+            buf_puts(ce->helpers, "    (void)env;\n");
+            break;
+        case LH_RESET_CONT:
+            buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, intptr_t %s) {\n", name, xname);
+            buf_puts(ce->helpers, "    DK *k = (DK *)env;\n");
+            break;
     }
     buf_puts(ce->helpers, tmp.data);
     buf_puts(ce->helpers, "}\n");
@@ -708,8 +894,7 @@ static void emit_reset(CE *ce, const CTerm *t) {
     int id = (*ce->helper_ctr)++;
     char hname[256];
     snprintf(hname, sizeof(hname), "%s_k%d", ce->fn_cn, id);
-    emit_lifted_helper(ce, hname, /*is_shift=*/false,
-                       t->as.reset.x.name, t->as.reset.body);
+    emit_lifted(ce, hname, LH_RESET_CONT, t->as.reset.x.name, t->as.reset.body, NULL);
 
     char pchain[64];
     snprintf(pchain, sizeof(pchain), "__p%d", id);
@@ -724,14 +909,81 @@ static void emit_reset(CE *ce, const CTerm *t) {
 
 /* CT_SHIFT: capture the sub-continuation up to the nearest enclosing prompt and
  * run the shift body (abortive: the identity receiver delivers the body value,
- * ignoring the captured continuation).  The dk_invoke resume path is wired by
- * Phase C4 (perform/resume). */
+ * ignoring the captured continuation). */
 static void emit_shift(CE *ce, const CTerm *t) {
     int id = (*ce->helper_ctr)++;
     char hname[256];
     snprintf(hname, sizeof(hname), "%s_s%d", ce->fn_cn, id);
-    emit_lifted_helper(ce, hname, /*is_shift=*/true, NULL, t->as.shift.body);
+    emit_lifted(ce, hname, LH_SHIFT_BODY, NULL, t->as.shift.body, NULL);
     ce_line(ce, "return dk_run(dk_shift(1, %s, 0, %s), 0);", hname, ce->cur_k);
+}
+
+/* ---- C4: algebraic effects (handle / perform / resume) --------------- *
+ * handle mirrors reset: lift the handle continuation to a DKFrame, install a
+ * dk_handler (carrying the case as a DKHandler), and run the handled body
+ * threading that handler prompt.  perform mirrors shift: lift the perform
+ * continuation (a pure value transform) onto the chain and dk_perform against
+ * the effect's tag; the handler runs the case, and resume = dk_invoke. */
+static void emit_handle(CE *ce, const CTerm *t) {
+    int id = (*ce->helper_ctr)++;
+    char kname[256], cname[256];
+    snprintf(kname, sizeof(kname), "%s_hk%d", ce->fn_cn, id);
+    snprintf(cname, sizeof(cname), "%s_hc%d", ce->fn_cn, id);
+    /* lift the handle continuation (like a reset continuation) */
+    emit_lifted(ce, kname, LH_RESET_CONT, t->as.handle.x.name, t->as.handle.body, NULL);
+    /* lift the handler case as a DKHandler */
+    emit_lifted(ce, cname, LH_HANDLER_CASE, NULL, t->as.handle.case_body, t);
+
+    int tag = effect_tag(t->as.handle.effect);
+    char hchain[64];
+    snprintf(hchain, sizeof(hchain), "__h%d", id);
+    ce_line(ce,
+        "DK *%s = dk_handler(%d, %s, 0, dk_frame(%s, (intptr_t)%s, dk_done()));",
+        hchain, tag, cname, kname, ce->cur_k);
+
+    const char *save = ce->cur_k;
+    ce->cur_k = arena_strdup(&g_arena, hchain, strlen(hchain));
+    emit_term(ce, t->as.handle.delim);   /* body runs threading the handler prompt */
+    ce->cur_k = save;
+}
+
+/* Is the perform continuation trivial -- deliver the result straight to the
+ * function's return continuation (a tail perform)?  Then no frame is needed. */
+static bool perform_cont_trivial(const CTerm *t) {
+    const CTerm *b = t->as.perform.body;
+    return b && b->kind == CT_APPCONT
+        && (b->as.appcont.kont.kind == KK_RET || b->as.appcont.kont.kind == KK_PROMPT)
+        && b->as.appcont.v.kind == CA_CVAR
+        && b->as.appcont.v.cvar_id == t->as.perform.x.id;
+}
+
+static void emit_perform(CE *ce, const CTerm *t) {
+    int tag = effect_tag(t->as.perform.effect);
+    /* argument: 0-arg effects pass 0; 1-arg pass the arg (subset). */
+    char *arg = (t->as.perform.n >= 1)
+        ? atom_str(ce, &t->as.perform.args[0]) : strdup("0");
+
+    if (perform_cont_trivial(t)) {
+        ce_line(ce, "return dk_perform(%d, (intptr_t)(%s), %s);", tag, arg, ce->cur_k);
+    } else {
+        int id = (*ce->helper_ctr)++;
+        char pname[256];
+        snprintf(pname, sizeof(pname), "%s_pf%d", ce->fn_cn, id);
+        emit_lifted(ce, pname, LH_PERFORM_CONT, t->as.perform.x.name, t->as.perform.body, NULL);
+        ce_line(ce, "return dk_perform(%d, (intptr_t)(%s), dk_frame(%s, 0, %s));",
+                tag, arg, pname, ce->cur_k);
+    }
+    free(arg);
+}
+
+static void emit_resume(CE *ce, const CTerm *t) {
+    /* resume k v = dk_invoke((DK*)k, v); bind the result and continue. */
+    char *kk = atom_str(ce, &t->as.resume.k);
+    char *vv = atom_str(ce, &t->as.resume.v);
+    ce_line(ce, "%s = (int64_t)dk_invoke((DK *)(%s), (intptr_t)(%s));",
+            t->as.resume.x.name, kk, vv);
+    free(kk); free(vv);
+    emit_term(ce, t->as.resume.body);
 }
 
 /* ---- signatures ------------------------------------------------------ */

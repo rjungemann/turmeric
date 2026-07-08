@@ -1,5 +1,6 @@
 #include "cps_prompt.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 
 /* =========================================================================
@@ -13,16 +14,19 @@ typedef enum {
     DKK_PROMPT,
     DKK_SHIFT,
     DKK_SHIFT0,
+    DKK_HANDLER,
 } DKKind;
 
 struct DK {
-    DKKind   kind;
-    DKFrame  fn;        /* DKK_FRAME */
-    intptr_t env;       /* DKK_FRAME */
-    int      tag;       /* DKK_PROMPT / DKK_SHIFT* */
-    DKBody   body;      /* DKK_SHIFT* */
-    intptr_t body_env;  /* DKK_SHIFT* */
-    DK      *next;
+    DKKind    kind;
+    DKFrame   fn;        /* DKK_FRAME */
+    intptr_t  env;       /* DKK_FRAME */
+    int       tag;       /* DKK_PROMPT / DKK_SHIFT* / DKK_HANDLER */
+    DKBody    body;      /* DKK_SHIFT* */
+    intptr_t  body_env;  /* DKK_SHIFT* */
+    DKHandler handler;   /* DKK_HANDLER */
+    intptr_t  handler_env; /* DKK_HANDLER */
+    DK       *next;
 };
 
 static DK *dk_new(DKKind kind, DK *next) {
@@ -59,11 +63,18 @@ DK *dk_shift0(int tag, DKBody body, intptr_t env, DK *next) {
     return dk_shift_impl(DKK_SHIFT0, tag, body, env, next);
 }
 
+DK *dk_handler(int tag, DKHandler fn, intptr_t env, DK *next) {
+    DK *k = dk_new(DKK_HANDLER, next);
+    k->tag = tag; k->handler = fn; k->handler_env = env;
+    return k;
+}
+
 /* Shallow-copy one node (next set to NULL). */
 static DK *dk_copy_node(const DK *n) {
     DK *c = dk_new(n->kind, NULL);
     c->fn = n->fn; c->env = n->env; c->tag = n->tag;
     c->body = n->body; c->body_env = n->body_env;
+    c->handler = n->handler; c->handler_env = n->handler_env;
     return c;
 }
 
@@ -118,6 +129,7 @@ static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
             case DKK_DONE:
                 return v;
             case DKK_PROMPT:
+            case DKK_HANDLER:
                 k = k->next;            /* transparent to a returning value */
                 break;
             case DKK_FRAME:
@@ -163,4 +175,24 @@ intptr_t dk_invoke(DK *sub, intptr_t w) {
     intptr_t r = dk_run_impl(c, w, false);
     dk_free(c);
     return r;
+}
+
+intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
+    /* Find the nearest enclosing handler for this effect tag. */
+    DK *H = k;
+    while (H && !(H->kind == DKK_HANDLER && H->tag == tag) && H->kind != DKK_DONE)
+        H = H->next;
+    if (!H || H->kind == DKK_DONE) {
+        fprintf(stderr, "tur: unhandled effect (tag %d)\n", tag);
+        abort();
+    }
+    /* Reify the sub-continuation from the perform point up to the handler, then
+     * re-install the handler on the captured copy so a resume re-delimits (deep
+     * handler). */
+    DK *sub = dk_copy_range(k, H);
+    sub = dk_append(sub, dk_handler(tag, H->handler, H->handler_env, dk_done()));
+    intptr_t r = H->handler(H->handler_env, arg, sub);
+    dk_free(sub);
+    /* Deliver the handler-case result to the handler's outer continuation. */
+    return dk_run_impl(H->next, r, false);
 }

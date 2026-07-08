@@ -164,6 +164,61 @@ static CTerm *cps_shift_body(CpsB *b, Expr *e) {
     return cps_tail(b, call, kont_prompt(e->type.kind));
 }
 
+/* ---- algebraic effects: handle / perform / resume --------------------- *
+ * Lowered to CT_HANDLE / CT_PERFORM / CT_RESUME.  `cont` is the continuation
+ * term (an APPCONT to the enclosing kont in tail position, or the `rest` term in
+ * bind position).  perform/resume atomize their sub-expressions into `p`. */
+
+static CTerm *build_handle(CpsB *b, Expr *e, CVar x, CTerm *cont) {
+    HandleExpr *h = e->as.handle_.handle;
+    /* C4 subset: exactly one handler case. */
+    if (!h || h->n_cases != 1) {
+        CTerm *u = new_term(b, CT_UNSUPPORTED);
+        u->as.unsupported.why = "handle: only single-case handlers in CPS subset";
+        return u;
+    }
+    HandleCase *c = &h->cases[0];
+    CTerm *t = new_term(b, CT_HANDLE);
+    t->as.handle.x = x;
+    t->as.handle.delim = cps_tail(b, h->body, kont_prompt(e->type.kind));
+    t->as.handle.effect = c->effect_name;
+    t->as.handle.n_params = c->n_params;
+    if (c->n_params) {
+        const Binding **ps = arena_alloc(b->a, c->n_params * sizeof(const Binding *));
+        for (uint8_t i = 0; i < c->n_params; i++) ps[i] = c->param_bindings[i];
+        t->as.handle.params = ps;
+    }
+    t->as.handle.k = c->k_binding;
+    /* The case clause delivers its value by return (KK_PROMPT), which dk_perform
+     * routes to the handler's outer continuation. */
+    t->as.handle.case_body = cps_tail(b, c->body, kont_prompt(c->body ? c->body->type.kind : TY_INT));
+    t->as.handle.body = cont;
+    return t;
+}
+
+static CTerm *build_perform(CpsB *b, Expr *e, CVar x, CTerm *cont, Pending *p) {
+    PerformExpr *pf = e->as.perform_.perform;
+    CTerm *t = new_term(b, CT_PERFORM);
+    t->as.perform.effect = pf->effect_name;
+    t->as.perform.n = pf->n_args;
+    CAtom *args = arena_alloc(b->a, (pf->n_args ? pf->n_args : 1) * sizeof(CAtom));
+    for (uint8_t i = 0; i < pf->n_args; i++) args[i] = atomize(b, pf->args[i], p);
+    t->as.perform.args = args;
+    t->as.perform.x = x;
+    t->as.perform.body = cont;
+    return t;
+}
+
+static CTerm *build_resume(CpsB *b, Expr *e, CVar x, CTerm *cont, Pending *p) {
+    ResumeExpr *r = e->as.resume_.resume;
+    CTerm *t = new_term(b, CT_RESUME);
+    t->as.resume.k = atomize(b, r->k, p);
+    t->as.resume.v = atomize(b, r->value, p);
+    t->as.resume.x = x;
+    t->as.resume.body = cont;
+    return t;
+}
+
 /* ---- cps_tail: deliver e's value to `kont` ---------------------------- */
 
 static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
@@ -268,6 +323,28 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             t->as.shift.k = k;
             t->as.shift.body = cps_shift_body(b, e);
             return t;
+        }
+        case EX_HANDLE: {
+            CVar x = fresh_cvar(b, e->type.kind);
+            CTerm *ac = new_term(b, CT_APPCONT);
+            ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            return build_handle(b, e, x, ac);
+        }
+        case EX_PERFORM: {
+            Pending p = {0};
+            CVar x = fresh_cvar(b, e->type.kind);
+            CTerm *ac = new_term(b, CT_APPCONT);
+            ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            CTerm *core = build_perform(b, e, x, ac, &p);
+            return fold_pending(b, &p, core);
+        }
+        case EX_RESUME: {
+            Pending p = {0};
+            CVar x = fresh_cvar(b, e->type.kind);
+            CTerm *ac = new_term(b, CT_APPCONT);
+            ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            CTerm *core = build_resume(b, e, x, ac, &p);
+            return fold_pending(b, &p, core);
         }
         default: {
             CTerm *t = new_term(b, CT_UNSUPPORTED);
@@ -377,6 +454,18 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             t->as.shift.k = k;
             t->as.shift.body = cps_shift_body(b, e);
             return t;
+        }
+        case EX_HANDLE:
+            return build_handle(b, e, x, rest);
+        case EX_PERFORM: {
+            Pending p = {0};
+            CTerm *core = build_perform(b, e, x, rest, &p);
+            return fold_pending(b, &p, core);
+        }
+        case EX_RESUME: {
+            Pending p = {0};
+            CTerm *core = build_resume(b, e, x, rest, &p);
+            return fold_pending(b, &p, core);
         }
         default: {
             CTerm *t = new_term(b, CT_UNSUPPORTED);
@@ -488,6 +577,35 @@ void cps_ir_print(const CTerm *t, FILE *out, int indent) {
         case CT_SHIFT:
             fprintf(out, "shift %s.\n", t->as.shift.k.name);
             cps_ir_print(t->as.shift.body, out, indent + 1);
+            break;
+        case CT_HANDLE:
+            fprintf(out, "handle %s = {\n", t->as.handle.x.name);
+            cps_ir_print(t->as.handle.delim, out, indent + 1);
+            print_indent(out, indent);
+            fprintf(out, "} with %s(",
+                    t->as.handle.effect ? t->as.handle.effect->name : "?");
+            for (uint32_t i = 0; i < t->as.handle.n_params; i++) {
+                if (i) fputc(' ', out);
+                fputs(t->as.handle.params[i] && t->as.handle.params[i]->name
+                          ? t->as.handle.params[i]->name->name : "_", out);
+            }
+            fprintf(out, ") %s ->\n",
+                    t->as.handle.k && t->as.handle.k->name ? t->as.handle.k->name->name : "k");
+            cps_ir_print(t->as.handle.case_body, out, indent + 1);
+            print_indent(out, indent); fputs("in\n", out);
+            cps_ir_print(t->as.handle.body, out, indent);
+            break;
+        case CT_PERFORM:
+            fprintf(out, "let %s = perform %s(", t->as.perform.x.name,
+                    t->as.perform.effect ? t->as.perform.effect->name : "?");
+            print_atoms(t->as.perform.args, t->as.perform.n, out); fputs(")\n", out);
+            cps_ir_print(t->as.perform.body, out, indent);
+            break;
+        case CT_RESUME:
+            fprintf(out, "let %s = resume ", t->as.resume.x.name);
+            print_atom(&t->as.resume.k, out); fputc(' ', out);
+            print_atom(&t->as.resume.v, out); fputs("\n", out);
+            cps_ir_print(t->as.resume.body, out, indent);
             break;
         case CT_UNSUPPORTED:
             fprintf(out, "<unsupported: %s>\n", t->as.unsupported.why ? t->as.unsupported.why : "?");

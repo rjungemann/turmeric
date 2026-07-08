@@ -75,6 +75,9 @@ typedef enum CTermKind {
     CT_IF,           /* if atom then t else e */
     CT_RESET,        /* reset: bind x = <delimited body's value> in body */
     CT_SHIFT,        /* shift: capture current cont as k', run body to the prompt */
+    CT_HANDLE,       /* handle: run delim under an effect handler; body is the continuation */
+    CT_PERFORM,      /* perform: bind x = perform(effect, args), continue body */
+    CT_RESUME,       /* resume: bind x = resume(k, v) [= dk_invoke], continue body */
     CT_UNSUPPORTED,  /* a source form outside the CPS2 subset (carries a reason) */
 } CTermKind;
 
@@ -98,6 +101,15 @@ struct CTerm {
         struct { CAtom cond; CTerm *then_; CTerm *else_; }                if_;
         struct { CVar x; CTerm *delim; CTerm *body; }                     reset;
         struct { CVar k; CTerm *body; }                                   shift;
+        /* handle: delim = body threading the handler prompt; body = the handle's
+         * continuation; case_body = the single handler clause (delivered by
+         * return); k / params bound in case_body. */
+        struct { CVar x; CTerm *delim; CTerm *body;
+                 const Symbol *effect; const Binding **params; uint32_t n_params;
+                 const Binding *k; CTerm *case_body; }                    handle;
+        struct { const Symbol *effect; CAtom *args; uint32_t n;
+                 CVar x; CTerm *body; }                                   perform;
+        struct { CAtom k; CAtom v; CVar x; CTerm *body; }                 resume;
         struct { const char *why; }                                       unsupported;
     } as;
 };

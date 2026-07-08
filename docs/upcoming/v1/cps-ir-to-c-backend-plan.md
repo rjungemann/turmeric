@@ -363,6 +363,51 @@ a real heap continuation and `resume` invoking it -- the fiber runtime is
 no longer on the critical path for colored effect code (it stays as the
 uncolored/`async` fallback).
 
+### C4 result -- shipped (shallow single-effect subset)
+
+`perform` / `handle` / `resume` now lower onto heap continuations via a new
+runtime **handler-prompt** rather than the fiber runtime.
+
+- **Runtime.** `cps_prompt.{h,c}` (and the emitted prelude in `emit_cps.c`) gain
+  a `DKK_HANDLER` node carrying a `DKHandler` case, `dk_handler(tag, fn, env,
+  next)`, and `dk_perform(tag, arg, k)`: find the nearest enclosing handler for
+  `tag`, reify the sub-continuation from the perform site up to it (re-installing
+  the handler on the captured copy for deep-handler semantics), run the case with
+  `(arg, subk)`, and deliver its result to the handler's outer continuation.
+- **IR.** Dedicated nodes `CT_HANDLE` / `CT_PERFORM` / `CT_RESUME` (`cps_ir.h`,
+  translated in `cps_ir.c`; the effect is identified by its interned name Symbol,
+  which `emit_cps_ir.c` maps to a per-program prompt tag). A dedicated node was
+  chosen over lowering to shift/reset because the handler case carries
+  effect-specific param/`k` binding.
+- **Emission.** `handle` mirrors `reset`: it lifts the handle continuation to a
+  `DKFrame`, installs `dk_handler` (case as a `DKHandler`), and runs the handled
+  body threading the handler prompt (cross-function -- the `perform` may sit in
+  a callee). `perform` mirrors the reified capture: a tail perform is
+  `dk_perform(tag, arg, cur_k)`; a perform with post-work lifts that work as a
+  pure value-transform frame onto the chain. `resume k v` is `dk_invoke((DK*)k,
+  v)` -- **multi-shot for free** via the DK copy (verified: a `^multishot`
+  handler resuming twice sums correctly). The handle continuation runs exactly
+  once (no double-run).
+- **Subset (fallback-guarded).** Single handler case, effect arity <= 1,
+  zero-capture straight-line perform continuations and handler-case bodies.
+  Anything else -- multi-case handlers, `discontinue`, `(cont? k)`, env-capturing
+  or tail-call continuations -- falls back to the fiber path (correct, just not
+  accelerated). Per-perform/handle DK nodes are leaked (opaque `DK`; the open
+  leak report covers it), so effect fixtures carry `requires.no-leak-check`.
+- **Not yet stackless.** A deeply-recursive perform/resume loop (the
+  `effect-rec` sign-off probe) nests `dk_perform` -> handler -> `dk_invoke` in C
+  and would overflow under `ulimit -s 256`; that needs a trampoline driver (yield
+  to a top-level loop instead of nesting) and is deferred. `effect-rec` uses an
+  env-capturing accumulator continuation, so it falls back to fibers today and
+  the probe is unaffected. The C6 sign-off will need the trampoline before
+  routing deep effect recursion through this backend.
+- **Fixture** `tests/fixtures/cps-backend-effect/` (`--enable=cps-backend`,
+  `requires.no-leak-check`): a cross-function `perform`/`handle`/`resume` --
+  `use-ask` performs, `run` handles and resumes -- reproducing the direct-style
+  `420`, with the handle continuation (`* 10`) running once. All existing effect
+  fixtures produce identical values under the backend (CPS-emitted or fallback).
+  Full suite: 1991 passed, 0 failed.
+
 ## Phase C5 -- close the `CT_UNSUPPORTED` gaps that block real code
 
 `--dump-cps` today shows broad `<unsupported: form not in CPS2 subset>`
