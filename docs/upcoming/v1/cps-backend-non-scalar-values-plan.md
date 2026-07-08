@@ -172,13 +172,30 @@ real-typed local (lifted-frame value param `<x>__slot`, handler-case `arg`,
 synchronous call binds its result with `__auto_type` so a non-scalar-returning
 callee keeps its real type. Round-trip fixture `tests/fixtures/cps-backend-cstr/`
 threads a `cstr` through perform/handle/resume (result `world`); the widening
-also lets stdlib functions with `cstr` params CPS-emit. Full suite: 1993 passed,
-0 failed.
+also lets stdlib functions with `cstr` params CPS-emit.
 
-Still open in N1: pointer types beyond `cstr` (`ref`/`rc`/`ptr`, with the RC
-ownership discipline), carrier-ABI ADTs (need full-`Type` info the IR does not
-yet carry -- folds into N3), and the additional `ref`/narrow-int round-trip
-fixtures. The `slot_store`/`slot_load` seams are in place for Tier B/C to extend.
+**Update -- narrow int + raw pointer.** `slot_ty` also admits `TY_PTR_VOID`
+(`ptr<void>`), the last Copy, non-owning pointer shape -- a raw pointer casts
+through the slot exactly like a `cstr`, so bit-threading it is unambiguously
+correct. Two more round-trip fixtures landed:
+`tests/fixtures/cps-backend-narrow-int/` threads an `int32` through
+perform/handle/resume (the lifted handler frames slot-load `int32_t t0 =
+(int32_t)t0__slot` and the resume result as `int32`; result `41`), and
+`tests/fixtures/cps-backend-ptr/` threads a `ptr<void>` through an effect that
+hands back a raw buffer pointer, resumed and derefed on the CPS path (the
+perform-cont slot-loads `void * t0 = (void *)t0__slot`; result `7`). Note:
+narrow-int *arithmetic* shapes (e.g. `+` on `int32`) are not yet in the
+supported builtin set, so a colored function that does narrow-int math still
+falls back -- the fixture threads the value without arithmetic, which is the
+slot-boundary property under test. Full suite: 1993 passed, 0 failed (before
+the narrow-int/ptr fixtures; +2 with them).
+
+Still open in N1: owning pointer types (`ref`/`rc`/`weak`/`lref`) -- these carry
+drop/refcount discipline the DK slot's bit-copy would confuse (a copied `rc`
+handle needs an incref, an owning `ref` needs single-drop), so they wait until
+the slot convention grows an ownership hook; and carrier-ABI ADTs (need
+full-`Type` info the IR does not yet carry -- folds into N3). The
+`slot_store`/`slot_load` seams are in place for Tier B/C to extend.
 
 ### N2 -- Tier B floats
 

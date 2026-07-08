@@ -47,6 +47,7 @@ static bool slot_ty(TypeKind k) {
         case TY_INT8: case TY_INT16: case TY_INT32:
         case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
         case TY_CSTR:
+        case TY_PTR_VOID:   /* raw pointer: Copy, non-owning -- casts through the slot */
             return true;
         default:
             return false;
