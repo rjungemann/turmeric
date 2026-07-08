@@ -391,7 +391,14 @@ static bool fn_sig_ok(const FnDef *fd) {
 
 /* ---- whole-program classification cache ------------------------------ */
 
-typedef struct { const FnDef *fd; const Binding *bind; CTerm *term; bool in_s; } SEnt;
+/* `eff_lo`/`eff_hi` are a 128-bit set of the effect tags this function performs
+ * or handles (bit `effect_tag(sym)-2`).  `in_s` is whether the function is
+ * CPS-emitted; a non-candidate (main / exported / fell-back) is kept in the
+ * table with in_s=false so its effects taint any CPS peer sharing them. */
+typedef struct {
+    const FnDef *fd; const Binding *bind; CTerm *term; bool in_s;
+    uint64_t eff_lo, eff_hi;
+} SEnt;
 
 static const Expr *g_prog;      /* program the cache is keyed on */
 static Arena       g_arena;     /* owns the cached CTerms (+ coloring) */
@@ -457,6 +464,190 @@ static bool needs_heap_join(const CTerm *t) {
     }
 }
 
+/* Mark effect `eff` in a 128-bit set (bit index = effect_tag - 2). */
+static void mark_effect(const Symbol *eff, uint64_t *lo, uint64_t *hi) {
+    if (!eff) return;
+    int idx = effect_tag(eff) - 2;      /* >=0 */
+    if (idx < 64)       *lo |= (uint64_t)1 << idx;
+    else if (idx < 128) *hi |= (uint64_t)1 << (idx - 64);
+}
+
+/* Union into (*lo,*hi) the tags of every effect the *source* expression `e`
+ * performs or handles, walking the raw Expr (not the CTerm).  The raw walk is
+ * what makes co-classification sound: a `perform` / `handle` buried under a form
+ * the CPS translator does not lower (e.g. `match`) is invisible in the CTerm
+ * (it collapses to CT_UNSUPPORTED) but still emits a *fiber* effect op, so it
+ * must taint the effect for any CPS peer.  It also covers UNCOLORED performers
+ * (a function whose only control op is hidden from coloring never becomes a CPS
+ * candidate, yet still fiber-performs), which the CTerm view cannot see at all.
+ *
+ * Effects are dynamically scoped -- a `perform` and its `handle` must run on the
+ * same machine (both DK, or both fiber) -- so this set is what the fixpoint
+ * compares across every top-level function. */
+static void expr_collect_effects(const Expr *e, uint64_t *lo, uint64_t *hi) {
+    if (!e) return;
+    #define REC(x) expr_collect_effects((x), lo, hi)
+    switch (e->kind) {
+        /* --- the effect operations themselves --- */
+        case EX_PERFORM:
+            if (e->as.perform_.perform) {
+                mark_effect(e->as.perform_.perform->effect_name, lo, hi);
+                for (uint32_t i = 0; i < e->as.perform_.perform->n_args; i++)
+                    REC(e->as.perform_.perform->args[i]);
+            }
+            return;
+        case EX_HANDLE:
+        case EX_HANDLER_LIT:
+            if (e->as.handle_.handle) {
+                HandleExpr *h = e->as.handle_.handle;
+                REC(h->body);
+                for (uint8_t i = 0; i < h->n_cases; i++) {
+                    mark_effect(h->cases[i].effect_name, lo, hi);
+                    REC(h->cases[i].body);
+                }
+            }
+            return;
+        case EX_RESUME:
+            if (e->as.resume_.resume) { REC(e->as.resume_.resume->k); REC(e->as.resume_.resume->value); }
+            return;
+        case EX_DISCONTINUE:
+            if (e->as.discontinue_.discontinue) {
+                REC(e->as.discontinue_.discontinue->k);
+                REC(e->as.discontinue_.discontinue->exception);
+            }
+            return;
+        case EX_WITH_HANDLER:   REC(e->as.with_handler_.handler); REC(e->as.with_handler_.body); return;
+        case EX_COMPOSE_HANDLERS: REC(e->as.compose_handlers_.h1); REC(e->as.compose_handlers_.h2); return;
+        /* --- structural / binding forms: recurse into every sub-expression --- */
+        case EX_LET:
+        case EX_LETREC:   /* reuses the let_ union member */
+            for (uint32_t i = 0; i < e->as.let_.n; i++) REC(e->as.let_.bindings[i].init);
+            REC(e->as.let_.body); return;
+        case EX_IF:    REC(e->as.if_.cond); REC(e->as.if_.then_); REC(e->as.if_.else_or_null); return;
+        case EX_DO:    for (uint32_t i = 0; i < e->as.do_.n; i++) REC(e->as.do_.items[i]); return;
+        case EX_WHILE: REC(e->as.while_.cond); REC(e->as.while_.body); return;
+        case EX_SET:   REC(e->as.set_.value); return;
+        case EX_DEF:   REC(e->as.def_.init); return;
+        case EX_BUILTIN: for (uint32_t i = 0; i < e->as.builtin.n; i++) REC(e->as.builtin.args[i]); return;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) REC(e->as.call_.args[i]);
+            REC(e->as.call_.fn_expr); REC(e->as.call_.dict_arg); return;
+        case EX_RETURN: REC(e->as.return_.value); return;
+        case EX_MATCH:
+            REC(e->as.match_.scrutinee);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                REC(e->as.match_.arms[i].guard);
+                REC(e->as.match_.arms[i].body);
+            }
+            return;
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++) REC(e->as.make_struct_.field_values[i]);
+            return;
+        case EX_GET_FIELD: REC(e->as.get_field_.struct_expr); return;
+        case EX_SET_FIELD: REC(e->as.set_field_.receiver); REC(e->as.set_field_.value); return;
+        case EX_SET_DEREF: REC(e->as.set_deref_.ref); REC(e->as.set_deref_.value); return;
+        /* delimited-control */
+        case EX_RESET:            REC(e->as.reset_.body); return;
+        case EX_SHIFT:            REC(e->as.shift_.k_fn); REC(e->as.shift_.body); return;
+        case EX_SHIFT0:           REC(e->as.shift0_.k_fn); REC(e->as.shift0_.body); return;
+        case EX_CALLCC:           REC(e->as.callcc_.fn); return;
+        case EX_CLONEABLE_RESET:  REC(e->as.cloneable_reset_.body); return;
+        case EX_CLONEABLE_SHIFT:  REC(e->as.cloneable_shift_.k_fn); REC(e->as.cloneable_shift_.body); return;
+        case EX_SERIAL_RESET:     REC(e->as.serial_reset_.body); return;
+        case EX_SERIAL_SHIFT:     REC(e->as.serial_shift_.k_fn); REC(e->as.serial_shift_.body); return;
+        /* async / STM */
+        case EX_ASYNC:      REC(e->as.async_.fn_expr); return;
+        case EX_AWAIT:      REC(e->as.await_.fut_expr); return;
+        case EX_ATOMICALLY: REC(e->as.atomically_.stm_expr); return;
+        case EX_CHECK:      REC(e->as.check_.cond); return;
+        case EX_OR_ELSE:    REC(e->as.or_else_.stm1); REC(e->as.or_else_.stm2); return;
+        case EX_STM:        for (uint32_t i = 0; i < e->as.stm_.n_body; i++) REC(e->as.stm_.body[i]); return;
+        case EX_TVAR_NEW:    REC(e->as.tvar_new_.init); return;
+        case EX_TVAR_READ:   REC(e->as.tvar_read_.tvar); return;
+        case EX_TVAR_WRITE:  REC(e->as.tvar_write_.tvar); REC(e->as.tvar_write_.value); return;
+        case EX_TVAR_MODIFY: REC(e->as.tvar_modify_.tvar); REC(e->as.tvar_modify_.fn); return;
+        case EX_TVAR_SWAP:   REC(e->as.tvar_swap_.tvar); REC(e->as.tvar_swap_.new_val); return;
+        case EX_TVAR_CAS:    REC(e->as.tvar_cas_.tvar); REC(e->as.tvar_cas_.old_val); REC(e->as.tvar_cas_.new_val); return;
+        /* single-operand wrappers */
+        case EX_REF:          REC(e->as.ref_.expr); return;
+        case EX_DEREF:        REC(e->as.deref_.expr); return;
+        case EX_BORROW_IMMUT: REC(e->as.borrow_immut_.expr); return;
+        case EX_BORROW_MUT:   REC(e->as.borrow_mut_.expr); return;
+        case EX_ASCRIBE:      REC(e->as.ascribe_.inner); return;
+        case EX_REINTERPRET:  REC(e->as.reinterpret_.expr); return;
+        case EX_CAST:         REC(e->as.cast_.expr); return;
+        case EX_FN_TO_FAT:    REC(e->as.fn_to_fat_.inner); return;
+        case EX_POLY_TO_FAT:  REC(e->as.poly_to_fat_.inner); return;
+        case EX_POLY_WRAP:    REC(e->as.poly_wrap_.inner); return;
+        case EX_CONT_PRED:    REC(e->as.cont_pred_.expr); return;
+        case EX_RC_OF:        REC(e->as.rc_of_.expr); return;
+        case EX_RC_CLONE:     REC(e->as.rc_clone_.expr); return;
+        case EX_RC_DROP:      REC(e->as.rc_drop_.expr); return;
+        case EX_RC_PTR:       REC(e->as.rc_ptr_.expr); return;
+        case EX_RC_COUNT:     REC(e->as.rc_count_.expr); return;
+        case EX_RC_FROM_REF:  REC(e->as.rc_from_ref_.expr); return;
+        case EX_REF_FROM_RC:  REC(e->as.ref_from_rc_.expr); return;
+        case EX_WEAK:         REC(e->as.weak_.expr); return;
+        case EX_WEAK_UPGRADE: REC(e->as.weak_upgrade_.expr); return;
+        case EX_WEAK_PRED:    REC(e->as.weak_pred_.expr); return;
+        case EX_REF_PRED:     REC(e->as.ref_pred_.expr); return;
+        case EX_PANIC:        REC(e->as.panic_.payload); return;
+        case EX_PANIC_WITH:   REC(e->as.panic_with_.payload); return;
+        case EX_CATCH_UNWIND: REC(e->as.catch_unwind_.thunk); return;
+        case EX_CATCH_PANIC_OF: REC(e->as.catch_panic_of_.thunk); return;
+        case EX_UNION_INJECT: REC(e->as.union_inject_.value); return;
+        case EX_ANY_TYPE_OF:  REC(e->as.any_type_of_.value); return;
+        case EX_ANY_IS:       REC(e->as.any_is_.value); return;
+        case EX_EXISTS_PACK:  REC(e->as.exists_pack_.value); return;
+        case EX_EXISTS_OPEN:  REC(e->as.exists_open_.packed); REC(e->as.exists_open_.body); return;
+        case EX_EXISTS_DISPATCH:
+            for (uint32_t i = 0; i < e->as.exists_dispatch_.n_args; i++) REC(e->as.exists_dispatch_.args[i]);
+            return;
+        case EX_DEFER: REC(e->as.defer_.body); return;
+        /* generators, dynvars, list/set literals, checked cast, cont-app */
+        case EX_ANY_CAST:  REC(e->as.any_cast_.value); return;
+        case EX_CONS_LIST: for (uint32_t i = 0; i < e->as.cons_list_.n; i++) REC(e->as.cons_list_.items[i]); return;
+        case EX_SET_LIT:   for (uint32_t i = 0; i < e->as.set_lit_.n; i++) REC(e->as.set_lit_.items[i]); return;
+        case EX_YIELD:     REC(e->as.yield_.value); return;
+        case EX_GEN:       if (e->as.gen_.def) REC(e->as.gen_.def->body); return;
+        case EX_GEN_NEXT:  REC(e->as.gen_next_.gen_expr); return;
+        case EX_GEN_DONE:  REC(e->as.gen_done_.gen_expr); return;
+        case EX_DEFDYNAMIC:   REC(e->as.defdynamic_.root_expr); return;
+        case EX_DYNVAR_SET:   REC(e->as.dynvar_set_.value); return;
+        case EX_DYNVAR_BINDING:
+            for (uint32_t i = 0; i < e->as.dynvar_binding_.n_pairs; i++)
+                REC(e->as.dynvar_binding_.pairs[i].override_expr);
+            REC(e->as.dynvar_binding_.body); return;
+        case EX_CPS_CONT_APP: REC(e->as.cps_cont_app_.cont); REC(e->as.cps_cont_app_.value); return;
+        case EX_PANIC_PAYLOAD_TYPE:  REC(e->as.panic_payload_type_.payload); return;
+        case EX_PANIC_PAYLOAD_VALUE: REC(e->as.panic_payload_value_.payload); return;
+        case EX_PANIC_PAYLOAD_FILE:  REC(e->as.panic_payload_file_.payload); return;
+        case EX_PANIC_PAYLOAD_LINE:  REC(e->as.panic_payload_line_.payload); return;
+        case EX_PANIC_PAYLOAD_DOWNS: REC(e->as.panic_payload_downs_.payload); return;
+        /* nested function / closure: descend into its body so a lambda that
+         * performs an effect taints the effect for its enclosing function too. */
+        case EX_CLOSURE:
+            if (e->as.closure_.closure && e->as.closure_.closure->fn)
+                REC(e->as.closure_.closure->fn->body);
+            return;
+        case EX_FN_DEF: if (e->as.fn_def_.fn) REC(e->as.fn_def_.fn->body); return;
+        case EX_FN:     if (e->as.fn_.fn)     REC(e->as.fn_.fn->body);     return;
+        case EX_SELECT:
+            for (uint32_t i = 0; i < e->as.select_.n_clauses; i++) {
+                REC(e->as.select_.clauses[i].chan);
+                REC(e->as.select_.clauses[i].send_val);
+                REC(e->as.select_.clauses[i].body);
+            }
+            REC(e->as.select_.default_body);
+            return;
+        default:
+            /* Leaves (literals, var, dict, extern-c/inline-c, type/def decls) and
+             * panic-payload accessors carry no effect operation. */
+            return;
+    }
+    #undef REC
+}
+
 static void ensure_S(const Expr *program) {
     if (g_prog == program && g_ents) return;   /* cached */
 
@@ -473,38 +664,77 @@ static void ensure_S(const Expr *program) {
     /* Coloring is idempotent (cps.c resets first); guarantee it ran. */
     cps_color_program(&g_arena, (Expr *)program);
 
-    /* Collect candidates: colored top-level fns with a core-only CTerm and a
-     * scalar signature. */
+    /* Enter EVERY colored top-level fn into the table.  Candidates (scalar sig,
+     * core-only CTerm, not main/exported) start in S; non-candidates are kept
+     * with in_s=false so their effect set participates in co-classification --
+     * a `perform`/`handle` in a fallback function taints the effect for every
+     * CPS peer, since the two effect machines (DK vs fiber) do not interoperate.
+     * Uncolored functions never contain a control op, so they touch no effect
+     * and are skipped entirely. */
     uint32_t np = program->as.program.n;
     g_ents = (SEnt *)calloc(np ? np : 1, sizeof(SEnt));
+    /* base_taint: effects performed/handled by any top-level code that is NEVER
+     * CPS-emitted -- an uncolored function (whose sole control op is hidden from
+     * coloring but still emits a fiber effect op) or a top-level def initializer.
+     * These permanently taint their effects. */
+    uint64_t base_lo = 0, base_hi = 0;
     for (uint32_t i = 0; i < np; i++) {
         Expr *it = program->as.program.items[i];
-        if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
-        FnDef *fd = it->as.fn_def_.fn;
-        if (!fd->cps_colored || !fd->binding || !fd->body) continue;
-        /* `main` is the program entry point (int main(int, char**)); an exported
-         * binding names a fixed C symbol/linkage.  Neither can take the
-         * static int64_t entry-wrapper shape, so keep them direct-style. */
-        if (fd->binding->c_export_name) continue;
-        if (fd->binding->name && fd->binding->name->len == 4 &&
-            memcmp(fd->binding->name->name, "main", 4) == 0) continue;
-        if (!fn_sig_ok(fd)) continue;
-        CTerm *t = cps_ir_translate_fn(&g_arena, (Expr *)program, fd);
-        if (!term_core_ok(t)) continue;
-        g_ents[g_ents_n].fd = fd;
-        g_ents[g_ents_n].bind = fd->binding;
-        g_ents[g_ents_n].term = t;
-        g_ents[g_ents_n].in_s = true;
-        g_ents_n++;
+        if (!it) continue;
+        if (it->kind == EX_FN_DEF && it->as.fn_def_.fn) {
+            FnDef *fd = it->as.fn_def_.fn;
+            if (fd->cps_colored && fd->binding && fd->body) {
+                /* `main` is the program entry point (int main(int, char**)); an
+                 * exported binding names a fixed C symbol/linkage.  Neither can
+                 * take the static int64_t entry-wrapper shape, so they are never
+                 * CPS-emitted -- but a `handle`/`perform` in one still taints. */
+                bool candidate = true;
+                if (fd->binding->c_export_name) candidate = false;
+                if (fd->binding->name && fd->binding->name->len == 4 &&
+                    memcmp(fd->binding->name->name, "main", 4) == 0) candidate = false;
+                if (candidate && !fn_sig_ok(fd)) candidate = false;
+                CTerm *t = cps_ir_translate_fn(&g_arena, (Expr *)program, fd);
+                if (candidate && !term_core_ok(t)) candidate = false;
+                g_ents[g_ents_n].fd = fd;
+                g_ents[g_ents_n].bind = fd->binding;
+                g_ents[g_ents_n].term = t;
+                g_ents[g_ents_n].in_s = candidate;
+                g_ents[g_ents_n].eff_lo = g_ents[g_ents_n].eff_hi = 0;
+                expr_collect_effects(fd->body, &g_ents[g_ents_n].eff_lo, &g_ents[g_ents_n].eff_hi);
+                g_ents_n++;
+                continue;
+            }
+            /* uncolored (or binding-less) fn: its effects are always fiber. */
+            if (fd->body) expr_collect_effects(fd->body, &base_lo, &base_hi);
+            continue;
+        }
+        /* non-fn top-level item (e.g. a def whose init performs). */
+        expr_collect_effects(it, &base_lo, &base_hi);
     }
 
-    /* Fixpoint: drop any candidate that needs a heap-reified join.  Monotone
-     * (only removals), so it converges. */
+    /* Fixpoint (monotone -- only removals, so it converges):
+     *   Rule A: drop any candidate that needs a heap-reified join.
+     *   Rule B: co-classify effects.  An effect is "tainted" if it is touched by
+     *           base_taint (never-CPS code) or by any function NOT in S; evict
+     *           every in-S function that touches a tainted effect, so a
+     *           performer and its handler are never split across the DK and
+     *           fiber machines (which do not interoperate). */
     bool changed = true;
     while (changed) {
         changed = false;
         for (size_t i = 0; i < g_ents_n; i++) {
             if (g_ents[i].in_s && needs_heap_join(g_ents[i].term)) {
+                g_ents[i].in_s = false;
+                changed = true;
+            }
+        }
+        uint64_t taint_lo = base_lo, taint_hi = base_hi;
+        for (size_t i = 0; i < g_ents_n; i++) {
+            if (!g_ents[i].in_s) { taint_lo |= g_ents[i].eff_lo; taint_hi |= g_ents[i].eff_hi; }
+        }
+        for (size_t i = 0; i < g_ents_n; i++) {
+            if (g_ents[i].in_s &&
+                ((g_ents[i].eff_lo & taint_lo) || (g_ents[i].eff_hi & taint_hi))) {
                 g_ents[i].in_s = false;
                 changed = true;
             }

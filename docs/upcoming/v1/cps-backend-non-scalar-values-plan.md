@@ -200,17 +200,24 @@ literal fell back. New `cps-backend-uint64` fixture threads a `uint64` through
 perform/handle/resume with arithmetic (result `42`). Full suite: 1995 passed,
 0 failed (before these fixtures; +1 with `cps-backend-uint64`).
 
-**Correctness note (reported, open).** Fixing the reinterpret exposed a
-**general** hole: the backend classifies each colored function for CPS emission
-independently, but a `perform` and its `handle` must be on the *same* machine
-(both DK, or both fiber). When the classifier admits a performer to the CPS set
-while its handler falls back (or vice versa), `dk_perform` finds no DK handler
-and the program aborts with "unhandled effect". The uint64 reinterpret was one
-trigger (now fixed); the hole is general (any handler that falls back for any
-reason while its performer stays CPS). Filed as
-`docs/reported/cps-backend-perform-handle-machine-split.md` with a conservative
-co-classification fix direction; it is a **graduation blocker** (the gate below
-requires no miscompiles with the fallback removed).
+**Correctness note (resolved) -- perform/handle co-classification.** Fixing the
+reinterpret exposed a **general** hole: the backend classified each colored
+function for CPS emission independently, but a `perform` and its `handle` must be
+on the *same* machine (both DK, or both fiber). When the classifier admitted a
+performer to the CPS set while its handler fell back (or vice versa),
+`dk_perform` found no DK handler and the program aborted with "unhandled
+effect". Resolved by a **co-classification fixpoint** in `ensure_S`: every
+colored top-level function enters the table (non-candidates kept with
+`in_s=false`); each function's performed/handled effect set is collected by a
+**raw-Expr** walk (`expr_collect_effects`) so effects hidden under
+non-lowered forms like `match`, and effects in *uncolored* fiber performers, are
+still seen; effects reached only by never-CPS code fold into a `base_taint`.
+Rule B of the fixpoint evicts every in-S function that touches a tainted effect,
+so a performer and its handler are never split. Regression fixtures:
+`cps-backend-handler-fallback` (colored handler falls back on a captured param)
+and `cps-backend-effect-under-match` (uncolored performer, effect hidden under
+`match`, coupled only dynamically). Archived report:
+`docs/archive/cps-backend-perform-handle-machine-split.md`.
 
 Still open in N1: owning pointer types (`ref`/`rc`/`weak`/`lref`) -- these carry
 drop/refcount discipline the DK slot's bit-copy would confuse (a copied `rc`
@@ -311,12 +318,11 @@ must be true at graduation:
    `EX_DEFAULT_OF` for carrier-ABI Option/Result/map and friends are translated
    and emitted, closing the ~1800 stdlib occurrences C5 measured.
 7. **Fallback removed** (N6) -- no `CT_UNSUPPORTED` whole-function bail-out
-   remains for colored functions; the direct-vs-CPS dual path is retired. This
-   subsumes closing the **perform/handle machine-split** hole
-   (`docs/reported/cps-backend-perform-handle-machine-split.md`): with the
-   fallback gone there is only one machine, but the co-classification guard must
-   land *before* removal so no perform/handle pair is ever split while both paths
-   coexist.
+   remains for colored functions; the direct-vs-CPS dual path is retired. The
+   **perform/handle machine-split** hole
+   (`docs/archive/cps-backend-perform-handle-machine-split.md`) is already closed
+   by the co-classification fixpoint in `ensure_S`, so while both paths coexist
+   no perform/handle pair is split; N6 then removes the fallback entirely.
 
 Until all seven hold, the experiment stays gated. The C6 sign-off in the parent
 plan (`docs/upcoming/v1/cps-ir-to-c-backend-plan.md`) must not mark

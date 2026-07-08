@@ -1,8 +1,11 @@
 # CPS backend can split a perform/handle pair across the two effect machines (crash)
 
+**Status: RESOLVED** (co-classification guard in `ensure_S`,
+`src/compiler/emit_cps_ir.c`). Kept for the paper trail; see "Resolution" below.
+
 **Severity:** high (miscompile -> abort), but **gated**: only reachable under
-`--enable=cps-backend` (off by default), so the default suite is unaffected. It
-is a graduation blocker -- the `cps-backend` graduation gate requires no
+`--enable=cps-backend` (off by default), so the default suite was unaffected. It
+was a graduation blocker -- the `cps-backend` graduation gate requires no
 miscompiles with the fallback removed.
 
 ## Summary
@@ -85,22 +88,57 @@ Options, roughly in increasing precision:
    muddies the "one machine per colored region" model; likely undesirable.
 
 Option 1 is the smallest sound step and fits the existing whole-program fixpoint
-in `ensure_S`. It should land before the fallback is removed at graduation (the
-gate in `docs/upcoming/v1/cps-backend-non-scalar-values-plan.md`).
+in `ensure_S`.
 
-## Status
+## Resolution
 
-- The `(:: N :uint64)` / `(:: N :int64)` reinterpret trigger is **fixed**:
-  `src/passes/cps_ir.c` now peels a same-size Tier A `EX_REINTERPRET` (see
-  `is_tierA_reinterp` / `tierA_scalar_kind`), so a 64-bit ascribed literal no
-  longer forces the handler onto the fallback path. That closes the specific
-  crash above for the uint64/int64-literal shape.
-- The **general** coherence hole (handler falls back for any other reason while
-  the performer stays CPS) remains open and is the subject of this report.
+Implemented **Option 1, strengthened to be sound regardless of coloring
+completeness** (`ensure_S`, `src/compiler/emit_cps_ir.c`):
+
+1. **Every** colored top-level function now enters the classification table --
+   candidates start in S; main / exported / fell-back ones are kept with
+   `in_s=false` so their effects still participate.
+2. Each function's effect set (the tags it performs or handles) is collected by
+   `expr_collect_effects`, a **raw-Expr** walk -- not a CTerm walk. This is the
+   crucial part: an effect op buried under a form the CPS translator does not
+   lower (`match`, `for`, a closure body, ...) is invisible in the CTerm (it
+   collapses to `CT_UNSUPPORTED`) yet still emits a *fiber* op, and an UNCOLORED
+   performer (whose only control op is hidden from the coloring pass, so it
+   never becomes a candidate) is invisible to a CTerm view entirely. The raw
+   walk sees both. Effects reached only by never-CPS code (uncolored functions,
+   top-level `def` initializers) are folded into a `base_taint`.
+3. The `ensure_S` fixpoint gained Rule B: an effect is *tainted* if touched by
+   `base_taint` or by any function not in S; every in-S function touching a
+   tainted effect is evicted. Monotone (removals only), so it converges
+   alongside the existing needs-heap-join rule (Rule A).
+
+The result: a `perform` and its `handle` are never split across the DK and fiber
+machines. If any function touching an effect cannot be CPS-emitted, every
+function touching that effect falls back together, coherently.
+
+Regression fixtures: `tests/fixtures/cps-backend-handler-fallback/` (a colored
+handler forced to fall back by a captured param -- the performer co-evicts) and
+`tests/fixtures/cps-backend-effect-under-match/` (an uncolored performer whose
+`perform` hides under `match`, coupled to a colored handler only dynamically
+through an intermediary -- the raw-Expr walk + base-taint catch it). Both assert
+direct-vs-CPS value equality; before the guard the CPS build aborted with
+"unhandled effect". Full suite: 1998 passed, 0 failed.
+
+**Residual:** the raw-Expr walk covers every composite `Expr` kind (audited
+against the `EX_*` enum); only genuine leaves and type/def declarations are
+skipped. If a new effect-bearing `Expr` kind is added later, its case must be
+added to `expr_collect_effects` or the split could reappear for that form.
+
+The earlier `(:: N :uint64)` / `(:: N :int64)` reinterpret trigger was also
+fixed independently: `src/passes/cps_ir.c` peels a same-size Tier A
+`EX_REINTERPRET` (`is_tierA_reinterp` / `tierA_scalar_kind`), so a 64-bit
+ascribed literal no longer forces a fallback in the first place.
 
 ## Related
 
-- `docs/reported/cps-coloring-ascription-hides-control-op.md` -- a different
-  coloring-vs-backend gap (coverage, not a crash).
+- `docs/reported/cps-coloring-ascription-hides-control-op.md` -- the coloring
+  pass not descending into ascriptions (and, as this report found, `match` and
+  other forms). That is a *coverage* gap on its own; the co-classification guard
+  here is what keeps it from becoming a *crash* under the CPS backend.
 - Parent plans: `docs/upcoming/v1/cps-ir-to-c-backend-plan.md`,
   `docs/upcoming/v1/cps-backend-non-scalar-values-plan.md`.
