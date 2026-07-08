@@ -291,19 +291,19 @@ Two general fixes fell out and are independently valuable:
   the local case.
 - Full suite: 2002 passed, 0 failed.
 
+**Struct-builder helpers across effects -- now LANDED.** `some` / `ok` / user
+`make-struct` helpers were being force-colored (a constructor call set
+`has_indirect`), so a non-tail call to one evicted the caller. Fixed by not
+coloring constructor calls (`cps.c` `cps_collect_calls`; a constructor invokes
+nothing, so it cannot reach a control op) plus allowing `CT_IF` in the lifted
+perform/shift/handle subset predicates (so `Option`/`Result` destructuring
+branches on the CPS path). `Option`/`Result` constructed and destructured across
+an effect boundary now CPS-emit (fixtures `cps-backend-option-effect`,
+`cps-backend-struct-effect`), direct-vs-CPS equal + LeakSanitizer-clean. Details
++ residuals archived at
+`docs/archive/cps-coloring-overcolors-nonnode-calls.md`.
+
 **Still open in N3:**
-  - **Struct-returning helper functions are colored.** `some` / `mkwid` (any fn
-    whose body is essentially a `make-struct`) end up in the colored set, so a
-    *non-tail* call to one needs a heap-reified join (the pre-existing C1/C3
-    `needs_heap_join` limitation) and evicts the caller. That is why `(some v)`
-    across an effect still falls back while an *inline* `make-struct` works. Root
-    cause + fix directions filed as
-    `docs/reported/cps-coloring-overcolors-nonnode-calls.md`
-    (coloring sets `has_indirect` for any call to a non-node callee -- cps.c:340
-    -- so constructors/stdlib helpers over-color their callers). Two orthogonal
-    fixes unlock it: (a) not coloring calls to known-non-control callees
-    (constructors, externs), and (b) non-tail cps->cps heap-join support. Both
-    are separate from the emit-side N3 work landed here.
   - **Aggregates that actually CROSS the slot** (a struct as an effect payload,
     resume value, or function return): carrier (heap ADT, int64) = Tier A cast
     with the `Type` now available; by-value wide aggregate = **Tier C**
@@ -399,11 +399,13 @@ must be true at graduation:
    the `cps-backend-narrow-int` / `cps-backend-uint64` fixtures exercise int32 /
    uint64 math end to end).
 6. **Struct / ADT forms** (N3) -- `make-struct` / `.field` / `default-of` are
-   translated and emitted. *Landed for LOCALS* (delegated to the direct emitter;
-   fixture `cps-backend-struct-effect` constructs + destructures a record across
-   an effect boundary). Still open: struct-returning helper fns are colored (so
-   non-tail calls to them evict the caller -- coloring + heap-join limitation),
-   and aggregates that *cross* the slot need item 3's Tier C boxing.
+   translated and emitted for LOCALS (delegated to the direct emitter). *Landed*,
+   including `Option`/`Result`/record construction + destructuring across an
+   effect boundary (fixtures `cps-backend-option-effect`,
+   `cps-backend-struct-effect`): constructor calls no longer over-color their
+   callers, and the lifted-body predicates allow `CT_IF` for the destructuring
+   branch. Still open: aggregates that *cross* the slot need item 3's Tier C
+   boxing.
 7. **Fallback removed** (N6) -- no `CT_UNSUPPORTED` whole-function bail-out
    remains for colored functions; the direct-vs-CPS dual path is retired. The
    **perform/handle machine-split** hole

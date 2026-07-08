@@ -343,6 +343,9 @@ static bool shift_body_ok(const CTerm *t) {
             return shift_body_ok(t->as.letcall.body);
         case CT_LETRAW:
             return letraw_ok(t) && shift_body_ok(t->as.letraw.body);
+        case CT_IF:
+            return atom_ok(&t->as.if_.cond)
+                && shift_body_ok(t->as.if_.then_) && shift_body_ok(t->as.if_.else_);
         default: return false;
     }
 }
@@ -373,6 +376,9 @@ static bool perform_body_ok(const CTerm *t) {
             return perform_body_ok(t->as.letcall.body);
         case CT_LETRAW:
             return letraw_ok(t) && perform_body_ok(t->as.letraw.body);
+        case CT_IF:
+            return atom_ok(&t->as.if_.cond)
+                && perform_body_ok(t->as.if_.then_) && perform_body_ok(t->as.if_.else_);
         default: return false;
     }
 }
@@ -402,6 +408,9 @@ static bool handle_case_ok(const CTerm *t) {
                 && handle_case_ok(t->as.resume.body);
         case CT_LETRAW:
             return letraw_ok(t) && handle_case_ok(t->as.letraw.body);
+        case CT_IF:
+            return atom_ok(&t->as.if_.cond)
+                && handle_case_ok(t->as.if_.then_) && handle_case_ok(t->as.if_.else_);
         default: return false;
     }
 }

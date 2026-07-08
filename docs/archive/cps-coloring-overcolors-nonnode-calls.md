@@ -1,5 +1,10 @@
 # CPS coloring over-colors any function that calls a non-node callee (constructors, stdlib)
 
+**Status: RESOLVED for the impactful case** (constructor calls). Kept for the
+paper trail; see "Resolution" below. The remaining residuals (extern-c calls
+still conservatively colored; the general non-tail cps->cps heap-join
+limitation) are separate and lesser.
+
 **Severity:** medium -- a **coverage** limitation for the CPS-IR-to-C backend,
 not a miscompile. The over-coloring itself is safe (coloring more functions never
 produces wrong code); the cost is that needlessly-colored functions cannot be
@@ -81,6 +86,43 @@ Either fix alone unblocks the common case; both are worth doing.
 
 Landing (1) is the smaller step and directly unblocks Option/Result/record
 helpers; (2) is the broader capability.
+
+## Resolution
+
+Implemented fix direction (1) for **constructor calls** -- the impactful case
+(`src/passes/cps.c`, `cps_collect_calls`): an `EX_CALL` whose `call_.ctor` is
+non-NULL no longer sets `has_indirect`. A constructor stores its
+(independently-checked) argument values into a fresh aggregate and invokes
+nothing, so it cannot reach a control op; any control op in an argument is still
+caught by the seed scan and the argument recursion. This un-colors every pure
+`make-struct` builder (stdlib `some`/`none`/`ok`/`err`, map/list constructors,
+and user helpers like `mkwid`), so a caller can delegate the call cps->direct.
+
+A companion emit-side extension was needed for the destructuring side: the
+lifted-body subset predicates (`shift_body_ok` / `perform_body_ok` /
+`handle_case_ok` in `emit_cps_ir.c`) now allow a `CT_IF`, so an `Option`/`Result`
+`match`-on-`.is-some`/`.is-ok` inside a perform/shift/handle continuation stays
+on the CPS path (the emitter already lowered `CT_IF`).
+
+Verified end to end: a colored function that performs an effect, wraps the
+resumed value in an `Option` via stdlib `some`, then branches on `.is-some` and
+reads `.value`, now CPS-emits and is direct-vs-CPS equal + LeakSanitizer-clean.
+Same for `Result` (`ok` + `.is-ok`/`.ok-val`, which also exercises the delegated
+`default-of`). Fixtures: `tests/fixtures/cps-backend-option-effect` (and the
+earlier `cps-backend-struct-effect`). Full suite: 2003 passed, 0 failed.
+
+**Residuals (separate, not blocking the struct-builder case):**
+
+- **extern-c calls are still conservatively colored.** Skipping them was left out
+  deliberately: an extern may invoke a Turmeric callback passed as an argument,
+  which *could* reach a control op, so treating an extern call as non-coloring is
+  not obviously sound the way a constructor call is. Revisit with callback-aware
+  analysis if it proves to matter.
+- **Non-tail cps->cps heap join** (fix direction 2) is not implemented. It no
+  longer blocks struct builders (they are uncolored now, so their calls are
+  cps->direct), but it remains the general limitation for non-tail calls to
+  genuinely-colored callees. Tracked as the pre-existing `needs_heap_join`
+  subset limitation (parent plan C1/C3).
 
 ## Related
 

@@ -336,8 +336,20 @@ static void cps_collect_calls(const Expr *e, CpsNode *nodes, uint32_t n_nodes,
             } else {
                 /* Unresolved: indirect call, call through a local value, or an
                  * extern/builtin not in the top-level set. Conservatively treat
-                 * as possibly reaching a control op (CPS0.1 rule 3). */
-                self->has_indirect = true;
+                 * as possibly reaching a control op (CPS0.1 rule 3).
+                 *
+                 * Exception: a CONSTRUCTOR call cannot reach a control op -- it
+                 * stores its (independently-checked) argument values into a fresh
+                 * aggregate and invokes nothing.  Coloring on it needlessly
+                 * colors every pure struct/ADT builder (Option/Result/Pair/map
+                 * constructors and user `make-struct` helpers), which then cannot
+                 * be delegated as a cps->direct call.  Any control op in an
+                 * argument is still caught by the seed scan (cps_directly_uses_
+                 * control) and the arg recursion below, so skipping the call
+                 * itself is sound.  See
+                 * docs/archive/cps-coloring-overcolors-nonnode-calls.md. */
+                if (e->as.call_.ctor == NULL)
+                    self->has_indirect = true;
             }
             cps_collect_calls(e->as.call_.fn_expr, nodes, n_nodes, self);
             for (uint32_t i = 0; i < e->as.call_.n_args; i++)
