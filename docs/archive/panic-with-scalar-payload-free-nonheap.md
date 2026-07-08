@@ -1,10 +1,43 @@
 ---
-status: open
+status: resolved
 severity: low
 discovered: 2026-07-08
 discovered-by: catch-unwind-returned-err-box-payload-leak fix (valgrind repro build)
+resolved: 2026-07-08
 area: compiled backend / runtime (panic lowering, tur_panic_with abort paths, payload lifetime)
 ---
+
+## Resolution (2026-07-08)
+
+Fixed in `src/compiler/emit_module.c`. Three opaque-value frees removed, so no
+emitted `free()` ever targets the opaque panic value:
+
+- **Both `tur_panic_with` abort paths** -- dropped `free(payload)` before
+  `abort()` (double-panic path and uncaught-panic path). Strictly safe: the
+  next statement is `abort()`, so a heap payload is reclaimed by the OS and
+  nothing leaks, while a scalar/borrowed payload is no longer freed.
+- **`panic_payload_free`** (the sibling flagged by the sweep) -- now frees the
+  payload *record* only, never `p->value`. This matches the deliberate design
+  of `tur_result_box_free`, which already refuses to free the caught payload
+  value because it is opaque (may be an inline scalar or borrowed). Reached on
+  the non-abort catch/fiber cleanup paths, so the change removes the same
+  scalar-UB hazard there without gating on payload type (the value is opaque at
+  this ABI boundary, exactly why the box path refuses the free too).
+
+### Verification
+
+- Minimal repro (`(panic-with 7)` under `catch-unwind`): `gcc -O2 -Wall
+  -Wfree-nonheap-object` now emits **0** `-Wfree-nonheap-object` warnings
+  (previously fired twice); runs clean under `-fsanitize=address,undefined`.
+- **Warning sweep**: compiled the `emit-c` output of every fixture that
+  exercises `panic`/`panic-with`/`catch-unwind`/`catch-panic` (73 `.tur`
+  inputs) at `-O2 -Wall -Wfree-nonheap-object` in parallel. **Zero**
+  `free-nonheap-object` hits survive. Harness validated against a known
+  `free((void*)7)` (fires) and confirmed no `free(payload)` remains in emitted
+  output.
+- Full suite (`bash tests/run.sh`): **1978 passed, 0 failed** after
+  regenerating the 132 affected codegen snapshots (diff is exactly the three
+  removed frees plus the new `if (p) { free(p); }` body).
 
 # `tur_panic_with` frees an inline-scalar panic payload as if it were heap
 
