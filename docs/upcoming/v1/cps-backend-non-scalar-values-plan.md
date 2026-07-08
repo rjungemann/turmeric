@@ -159,6 +159,27 @@ ratified tier table to this doc.
   function over an `Option` (carrier ADT) constructed and matched on the scalar
   path -- each direct-vs-CPS equal.
 
+**Status -- started (strings + <=64-bit-int slice landed).** `emit_cps_ir.c`
+now declares each binder with its real C type (`binder_ctype` ->
+`emit_type_c_name`); `slot_ty` was widened from `{int,bool,int64}` to the Tier A
+set (all `<=64`-bit int/uint widths + `bool` + `cstr`); the entry wrapper returns
+the real type, and the six DK slot boundaries slot-load the incoming value into a
+real-typed local (lifted-frame value param `<x>__slot`, handler-case `arg`,
+`resume` result, entry unwrap) -- Tier A `slot_store` stays the existing
+`(intptr_t)(...)` cast and `slot_load` is `(<ctype>)(slot)`. Strings landed: a
+`CA_STR` atom carrying the `StrSlice`, `is_atomic`/`atom_of` produce it,
+`atom_str` emits `atom_cstr`, and `BS_PRINTLN_CSTR` is supported. A `cps->direct`
+synchronous call binds its result with `__auto_type` so a non-scalar-returning
+callee keeps its real type. Round-trip fixture `tests/fixtures/cps-backend-cstr/`
+threads a `cstr` through perform/handle/resume (result `world`); the widening
+also lets stdlib functions with `cstr` params CPS-emit. Full suite: 1993 passed,
+0 failed.
+
+Still open in N1: pointer types beyond `cstr` (`ref`/`rc`/`ptr`, with the RC
+ownership discipline), carrier-ABI ADTs (need full-`Type` info the IR does not
+yet carry -- folds into N3), and the additional `ref`/narrow-int round-trip
+fixtures. The `slot_store`/`slot_load` seams are in place for Tier B/C to extend.
+
 ### N2 -- Tier B floats
 
 - Add the reinterpret `slot_store` / `slot_load` for `double` / `float`.

@@ -1,0 +1,27 @@
+;; CPS-IR-to-C backend, non-scalar values Plan, Tier A: string (cstr) support.
+;; Built with --enable=cps-backend.
+;;
+;; A cstr is a Tier-A value -- a pointer that fits the one-word DK slot by a
+;; plain cast.  This program threads a cstr end to end through the CPS backend:
+;;   - `greet` performs the Name effect, whose result type is cstr;
+;;   - `run` handles it and resumes the captured continuation with a cstr
+;;     literal ("world");
+;;   - the resumed value flows back through the (lifted, cstr-typed) perform
+;;     continuation and is printed via println of a cstr.
+;;
+;; Before Tier A the backend threaded every value as int64_t and rejected any
+;; non-scalar type, so all three functions fell back to the fiber path.  The
+;; expected value is the direct-style result.
+
+(defeffect Name [] :cstr)
+
+(defn greet [] : cstr
+  (perform (Name)))
+
+(defn run [] : cstr
+  (handle (greet)
+    (Name [] k) (resume k "world")))
+
+(defn main [] : int
+  (println (run))
+  0)

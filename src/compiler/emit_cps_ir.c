@@ -36,26 +36,46 @@
  * back -- and lands in a later phase.
  * ========================================================================= */
 
-/* ---- the C1 emittable type set --------------------------------------- */
-
-static bool tk_scalar(TypeKind k) {
-    return k == TY_INT || k == TY_BOOL || k == TY_INT64;
+/* ---- the emittable value set (non-scalar Tier A) --------------------- *
+ * A type is "slot-representable at Tier A" when its value fits the one-word DK
+ * slot by a plain cast: any <=64-bit integer/bool, or a cstr/pointer.  See
+ * docs/upcoming/v1/cps-backend-non-scalar-values-plan.md.  Tier B (float, bit-
+ * reinterpret) and Tier C (wide by-value aggregates, boxed) are not yet here. */
+static bool slot_ty(TypeKind k) {
+    switch (k) {
+        case TY_INT: case TY_INT64: case TY_BOOL:
+        case TY_INT8: case TY_INT16: case TY_INT32:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_CSTR:
+            return true;
+        default:
+            return false;
+    }
 }
 
-/* Atom types we can materialize as a C scalar. */
+/* The C type used to declare a let-binder of type kind `ty` (TY_NIL binders are
+ * unit placeholders stored as int64_t). */
+static const char *binder_ctype(EmitCtx *ctx, TypeKind ty) {
+    if (ty == TY_NIL || ty == TY_UNKNOWN) return "int64_t";
+    return emit_type_c_name(ctx, emit_type_from_kind(ty));
+}
+
+/* Atom types we can materialize as a slot-representable value. */
 static bool atom_ok(const CAtom *a) {
     switch (a->kind) {
         case CA_INT:  return a->ty == TY_INT || a->ty == TY_INT64 || a->ty == TY_UNKNOWN;
         case CA_BOOL: return true;
         case CA_UNIT: return true;   /* nil placeholder (0) */
+        case CA_STR:  return true;   /* cstr literal (Tier A pointer) */
         case CA_VAR:
-        case CA_CVAR: return tk_scalar(a->ty) || a->ty == TY_NIL;
-        default:      return false;  /* CA_OTHER: float/str/etc. */
+        case CA_CVAR: return slot_ty(a->ty) || a->ty == TY_NIL;
+        default:      return false;  /* CA_OTHER: float/etc. */
     }
 }
 
 static bool is_println_shape(BuiltinShape s) {
-    return s == BS_PRINTLN_INT || s == BS_PRINTLN_BOOL || s == BS_PRINTLN_UINT;
+    return s == BS_PRINTLN_INT || s == BS_PRINTLN_BOOL || s == BS_PRINTLN_UINT
+        || s == BS_PRINTLN_CSTR;
 }
 
 static bool shape_supported(const BuiltinSpec *sp) {
@@ -70,6 +90,7 @@ static bool shape_supported(const BuiltinSpec *sp) {
         case BS_PRINTLN_INT:
         case BS_PRINTLN_BOOL:
         case BS_PRINTLN_UINT:
+        case BS_PRINTLN_CSTR:
             return true;
         default:
             return false;
@@ -291,7 +312,7 @@ static bool term_core_ok(const CTerm *t) {
         case CT_APPCONT:
             return t->as.appcont.kont.kind != KK_PROMPT && atom_ok(&t->as.appcont.v);
         case CT_LETVAL:
-            return (tk_scalar(t->as.letval.x.ty) || t->as.letval.x.ty == TY_NIL)
+            return (slot_ty(t->as.letval.x.ty) || t->as.letval.x.ty == TY_NIL)
                 && atom_ok(&t->as.letval.v)
                 && term_core_ok(t->as.letval.body);
         case CT_LETPRIM: {
@@ -301,7 +322,7 @@ static bool term_core_ok(const CTerm *t) {
             return term_core_ok(t->as.letprim.body);
         }
         case CT_LETCALL: {
-            if (!(tk_scalar(t->as.letcall.x.ty) || t->as.letcall.x.ty == TY_NIL))
+            if (!(slot_ty(t->as.letcall.x.ty) || t->as.letcall.x.ty == TY_NIL))
                 return false;
             for (uint32_t i = 0; i < t->as.letcall.n; i++)
                 if (!atom_ok(&t->as.letcall.args[i])) return false;
@@ -317,7 +338,7 @@ static bool term_core_ok(const CTerm *t) {
             return true;
         }
         case CT_LETCONT:
-            return (tk_scalar(t->as.letcont.param.ty) || t->as.letcont.param.ty == TY_NIL)
+            return (slot_ty(t->as.letcont.param.ty) || t->as.letcont.param.ty == TY_NIL)
                 && term_core_ok(t->as.letcont.jbody)
                 && term_core_ok(t->as.letcont.body);
         case CT_IF:
@@ -326,7 +347,7 @@ static bool term_core_ok(const CTerm *t) {
                 && term_core_ok(t->as.if_.else_);
         case CT_RESET:
             /* C3: delimited body + a self-contained, zero-capture continuation. */
-            return (tk_scalar(t->as.reset.x.ty) || t->as.reset.x.ty == TY_NIL)
+            return (slot_ty(t->as.reset.x.ty) || t->as.reset.x.ty == TY_NIL)
                 && term_core_ok(t->as.reset.delim)
                 && reset_body_ok(t->as.reset.body)
                 && !has_capture(t->as.reset.body, t->as.reset.x.id);
@@ -340,7 +361,7 @@ static bool term_core_ok(const CTerm *t) {
             /* C4: single-case, <=1 effect param, self-contained zero-capture
              * continuation, straight-line handler case. */
             return t->as.handle.n_params <= 1
-                && (tk_scalar(t->as.handle.x.ty) || t->as.handle.x.ty == TY_NIL)
+                && (slot_ty(t->as.handle.x.ty) || t->as.handle.x.ty == TY_NIL)
                 && term_core_ok(t->as.handle.delim)
                 && reset_body_ok(t->as.handle.body)
                 && !has_capture(t->as.handle.body, t->as.handle.x.id)
@@ -361,9 +382,9 @@ static bool term_core_ok(const CTerm *t) {
 }
 
 static bool fn_sig_ok(const FnDef *fd) {
-    if (!tk_scalar(fd->return_type.kind)) return false;   /* nil-return excluded in C1 */
+    if (!slot_ty(fd->return_type.kind)) return false;   /* nil-return excluded in C1 */
     for (uint8_t i = 0; i < fd->n_params; i++)
-        if (!tk_scalar(fd->params[i]->type.kind)) return false;
+        if (!slot_ty(fd->params[i]->type.kind)) return false;
     return true;
 }
 
@@ -535,6 +556,7 @@ static char *atom_str(CE *ce, const CAtom *a) {
         case CA_INT:  return atom_int_typed(a->i, TY_INT);
         case CA_BOOL: return atom_bool(a->b);
         case CA_UNIT: return strdup("0");
+        case CA_STR:  return atom_cstr(a->str);
         case CA_VAR:  return atom_var(ce->ctx, a->var);
         case CA_CVAR: return strdup(a->cvar_name ? a->cvar_name : "0");
         default:      return strdup("0");
@@ -648,6 +670,9 @@ static void emit_println(CE *ce, BuiltinShape shape, const char *arg) {
         case BS_PRINTLN_BOOL:
             ce_line(ce, "puts((%s) ? \"true\" : \"false\");", arg);
             break;
+        case BS_PRINTLN_CSTR:
+            ce_line(ce, "puts(%s);", arg);
+            break;
         default: break;
     }
 }
@@ -715,7 +740,9 @@ static void emit_term(CE *ce, const CTerm *t) {
                  * fell back to direct-style; call it synchronously and deliver
                  * the ordinary result value to the continuation. */
                 char *tmp = fresh_tmp(ce->ctx);
-                ce_line(ce, "int64_t %s = %s(%s); /* cps->direct */", tmp, fn, argv);
+                /* __auto_type keeps the callee's real return type (int, cstr,
+                 * ...); the slot cast at delivery narrows it to the word. */
+                ce_line(ce, "__auto_type %s = %s(%s); /* cps->direct */", tmp, fn, argv);
                 emit_deliver(ce, &t->as.tailcall.kont, tmp);
                 free(tmp);
             }
@@ -770,20 +797,20 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
     switch (t->kind) {
         case CT_APPCONT: break;
         case CT_LETVAL:
-            ce_line(ce, "int64_t %s;", t->as.letval.x.name);
+            ce_line(ce, "%s %s;", binder_ctype(ce->ctx, t->as.letval.x.ty), t->as.letval.x.name);
             emit_binder_decls(ce, t->as.letval.body);
             break;
         case CT_LETPRIM:
-            ce_line(ce, "int64_t %s;", t->as.letprim.x.name);
+            ce_line(ce, "%s %s;", binder_ctype(ce->ctx, t->as.letprim.x.ty), t->as.letprim.x.name);
             emit_binder_decls(ce, t->as.letprim.body);
             break;
         case CT_LETCALL:
-            ce_line(ce, "int64_t %s;", t->as.letcall.x.name);
+            ce_line(ce, "%s %s;", binder_ctype(ce->ctx, t->as.letcall.x.ty), t->as.letcall.x.name);
             emit_binder_decls(ce, t->as.letcall.body);
             break;
         case CT_TAILCALL: break;
         case CT_LETCONT:
-            ce_line(ce, "int64_t %s;", t->as.letcont.param.name);
+            ce_line(ce, "%s %s;", binder_ctype(ce->ctx, t->as.letcont.param.ty), t->as.letcont.param.name);
             emit_binder_decls(ce, t->as.letcont.body);
             emit_binder_decls(ce, t->as.letcont.jbody);
             break;
@@ -804,7 +831,7 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
             break;
         case CT_PERFORM: break;   /* terminal; the continuation is lifted */
         case CT_RESUME:
-            ce_line(ce, "int64_t %s;", t->as.resume.x.name);
+            ce_line(ce, "%s %s;", binder_ctype(ce->ctx, t->as.resume.x.ty), t->as.resume.x.name);
             emit_binder_decls(ce, t->as.resume.body);
             break;
         default: break;
@@ -830,7 +857,8 @@ typedef enum {
  * parameter name (reset/perform continuation result var).  `hnode` is the
  * CT_HANDLE (for LH_HANDLER_CASE param/k binding), else NULL. */
 static void emit_lifted(CE *ce, const char *name, LHMode mode,
-                        const char *xname, const CTerm *body, const CTerm *hnode) {
+                        const char *xname, TypeKind xty,
+                        const CTerm *body, const CTerm *hnode) {
     /* Emit the body into a temporary buffer first, so any nested reset/shift/
      * effect appends its own (inner) helpers ahead of this one in ce->helpers. */
     Buf tmp; buf_init(&tmp);
@@ -844,12 +872,20 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     hc.shift_mode = (mode == LH_SHIFT_BODY || mode == LH_HANDLER_CASE || mode == LH_PERFORM_CONT);
     hc.ret_mode   = (mode == LH_PERFORM_CONT);
 
-    /* Handler case: bind the effect param(s) from `arg` and `k` from `subk`. */
+    /* Load the incoming value out of the one-word slot into a real-typed local
+     * (reset/perform continuation), or bind the handler case's params/k. */
+    if (mode == LH_RESET_CONT || mode == LH_PERFORM_CONT) {
+        indent_buf(&tmp, 4);
+        buf_printf(&tmp, "%s %s = (%s)(%s__slot);\n",
+                   binder_ctype(ce->ctx, xty), xname, binder_ctype(ce->ctx, xty), xname);
+    }
     if (mode == LH_HANDLER_CASE && hnode) {
         if (hnode->as.handle.n_params >= 1) {
-            char *pn = name_for_binding(ce->ctx, hnode->as.handle.params[0]);
+            const Binding *pb = hnode->as.handle.params[0];
+            char *pn = name_for_binding(ce->ctx, pb);
+            const char *pty = binder_ctype(ce->ctx, pb->type.kind);
             indent_buf(&tmp, 4);
-            buf_printf(&tmp, "int64_t %s = (int64_t)arg;\n", pn);
+            buf_printf(&tmp, "%s %s = (%s)arg;\n", pty, pn, pty);
             free(pn);
         }
         if (hnode->as.handle.k) {
@@ -873,11 +909,11 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
             buf_puts(ce->helpers, "    (void)env; (void)arg; (void)subk;\n");
             break;
         case LH_PERFORM_CONT:
-            buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, intptr_t %s) {\n", name, xname);
+            buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, intptr_t %s__slot) {\n", name, xname);
             buf_puts(ce->helpers, "    (void)env;\n");
             break;
         case LH_RESET_CONT:
-            buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, intptr_t %s) {\n", name, xname);
+            buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, intptr_t %s__slot) {\n", name, xname);
             buf_puts(ce->helpers, "    DK *k = (DK *)env;\n");
             break;
     }
@@ -894,7 +930,7 @@ static void emit_reset(CE *ce, const CTerm *t) {
     int id = (*ce->helper_ctr)++;
     char hname[256];
     snprintf(hname, sizeof(hname), "%s_k%d", ce->fn_cn, id);
-    emit_lifted(ce, hname, LH_RESET_CONT, t->as.reset.x.name, t->as.reset.body, NULL);
+    emit_lifted(ce, hname, LH_RESET_CONT, t->as.reset.x.name, t->as.reset.x.ty, t->as.reset.body, NULL);
 
     char pchain[64];
     snprintf(pchain, sizeof(pchain), "__p%d", id);
@@ -914,7 +950,7 @@ static void emit_shift(CE *ce, const CTerm *t) {
     int id = (*ce->helper_ctr)++;
     char hname[256];
     snprintf(hname, sizeof(hname), "%s_s%d", ce->fn_cn, id);
-    emit_lifted(ce, hname, LH_SHIFT_BODY, NULL, t->as.shift.body, NULL);
+    emit_lifted(ce, hname, LH_SHIFT_BODY, NULL, TY_INT, t->as.shift.body, NULL);
     ce_line(ce, "return dk_run(dk_shift(1, %s, 0, %s), 0);", hname, ce->cur_k);
 }
 
@@ -930,9 +966,9 @@ static void emit_handle(CE *ce, const CTerm *t) {
     snprintf(kname, sizeof(kname), "%s_hk%d", ce->fn_cn, id);
     snprintf(cname, sizeof(cname), "%s_hc%d", ce->fn_cn, id);
     /* lift the handle continuation (like a reset continuation) */
-    emit_lifted(ce, kname, LH_RESET_CONT, t->as.handle.x.name, t->as.handle.body, NULL);
+    emit_lifted(ce, kname, LH_RESET_CONT, t->as.handle.x.name, t->as.handle.x.ty, t->as.handle.body, NULL);
     /* lift the handler case as a DKHandler */
-    emit_lifted(ce, cname, LH_HANDLER_CASE, NULL, t->as.handle.case_body, t);
+    emit_lifted(ce, cname, LH_HANDLER_CASE, NULL, TY_INT, t->as.handle.case_body, t);
 
     int tag = effect_tag(t->as.handle.effect);
     char hchain[64];
@@ -969,7 +1005,7 @@ static void emit_perform(CE *ce, const CTerm *t) {
         int id = (*ce->helper_ctr)++;
         char pname[256];
         snprintf(pname, sizeof(pname), "%s_pf%d", ce->fn_cn, id);
-        emit_lifted(ce, pname, LH_PERFORM_CONT, t->as.perform.x.name, t->as.perform.body, NULL);
+        emit_lifted(ce, pname, LH_PERFORM_CONT, t->as.perform.x.name, t->as.perform.x.ty, t->as.perform.body, NULL);
         ce_line(ce, "return dk_perform(%d, (intptr_t)(%s), dk_frame(%s, 0, %s));",
                 tag, arg, pname, ce->cur_k);
     }
@@ -977,11 +1013,12 @@ static void emit_perform(CE *ce, const CTerm *t) {
 }
 
 static void emit_resume(CE *ce, const CTerm *t) {
-    /* resume k v = dk_invoke((DK*)k, v); bind the result and continue. */
+    /* resume k v = dk_invoke((DK*)k, v); slot-load the result and continue. */
     char *kk = atom_str(ce, &t->as.resume.k);
     char *vv = atom_str(ce, &t->as.resume.v);
-    ce_line(ce, "%s = (int64_t)dk_invoke((DK *)(%s), (intptr_t)(%s));",
-            t->as.resume.x.name, kk, vv);
+    const char *rty = binder_ctype(ce->ctx, t->as.resume.x.ty);
+    ce_line(ce, "%s = (%s)dk_invoke((DK *)(%s), (intptr_t)(%s));",
+            t->as.resume.x.name, rty, kk, vv);
     free(kk); free(vv);
     emit_term(ce, t->as.resume.body);
 }
@@ -1077,7 +1114,8 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
      * the CPS body, and returns (unwraps) the value delivered to the root.  The
      * seed chain is freed after the body returns; the CPS body never retains it
      * (a captured sub-continuation is always a copy). */
-    buf_printf(file, "__attribute__((unused)) static int64_t %s(", cn);
+    const char *rety = binder_ctype(ctx, fd->return_type.kind);
+    buf_printf(file, "__attribute__((unused)) static %s %s(", rety, cn);
     emit_params(ctx, file, fd);
     buf_puts(file, ") {\n");
     buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
@@ -1091,7 +1129,8 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     if (fd->n_params) buf_puts(file, ", ");
     buf_puts(file, "__root);\n");
     buf_puts(file, "    dk_free(__root);\n");
-    buf_puts(file, "    return __r;\n}\n");
+    /* slot-load the final delivered value back to the real return type. */
+    buf_printf(file, "    return (%s)(__r);\n}\n", rety);
 
     free(cn);
     return true;

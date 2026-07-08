@@ -38,7 +38,8 @@ typedef enum CAtomKind {
     CA_INT,       /* integer literal */
     CA_BOOL,      /* boolean literal */
     CA_UNIT,      /* nil / unit literal */
-    CA_OTHER,     /* a trivial value we don't model precisely (e.g. float/str) */
+    CA_STR,       /* string literal (cstr) */
+    CA_OTHER,     /* a trivial value we don't model precisely (e.g. float) */
 } CAtomKind;
 
 typedef struct CAtom {
@@ -49,6 +50,7 @@ typedef struct CAtom {
     const char   *cvar_name;   /* CA_CVAR */
     int64_t       i;           /* CA_INT */
     bool          b;           /* CA_BOOL */
+    StrSlice      str;         /* CA_STR */
 } CAtom;
 
 /* ---- Continuations ---------------------------------------------------- */
