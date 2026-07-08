@@ -1,0 +1,25 @@
+;; BR3c negative: the transitive summary must still REJECT an escaping chain.
+;; Same shape as the -reader-transitive positive (step -> describe -> deeper
+;; callee), but the deeper callee `leak` RETURNS the borrow instead of reading
+;; it -- an escape (the trampoline reuses the buffer per resume, so a returned
+;; pointer would dangle / alias the wrong value on the next descend).  BR3c's
+;; recursion sees `leak`'s body is a bare return of its by-const-ref param and
+;; refuses to admit `describe` as a reader; `step` therefore BAILS to native
+;; (compiles + runs correctly, just not trampolined).  Depth is small so the
+;; native recursion does not overflow.  This is the deeper-than-one-level analogue
+;; of BR3b's one-level escape rejection: only the transitively-proven-read chain
+;; (the positive fixture) is trampolined.
+;; step(ok 3)=3+describe(ok)=3+1=4 ; step(err 3)=3+describe(err)=3+0=3.
+(defn leak [r : (Result int int)] : (Result int int) r)
+(defn describe [r : (Result int int)] : int (if (.is-ok (leak r)) 1 0))
+
+(defn step [acc : (Result int int) n : int] : int
+  (if (= n 0)
+    (describe acc)
+    (do (catch-unwind (fn [] : int (step acc (- n 1))))
+        (+ n (describe acc)))))
+
+(defn main [] : int
+  (println (step (ok 7) 3))
+  (println (step (err 9) 3))
+  0)

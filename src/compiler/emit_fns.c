@@ -801,13 +801,23 @@ static bool gs_is_pure_accessor(const Expr *e);
  *     emission pairs it with an `if (tur_panicking) break;` (see cps_emit_br3b).
  */
 
+/* BR3c: bound on the transitive reader-proof recursion (depth of the chain of
+ * pure readers a borrow may thread through).  `stack` holds the FnDefs on the
+ * current chain so a (mutually) recursive callee is detected and rejected
+ * conservatively rather than looping. */
+#define GS_READER_MAX_DEPTH 8
+static bool gs_callee_reads_arg_only(const Expr *e, uint32_t argidx,
+                                     FnDef **stack, int depth);
+
 /* True iff every occurrence of binding `p` in `e` is a READ: p appears only as
- * the receiver of a `.field`, a `match` scrutinee, a `@`-deref, or the arg of a
- * pure accessor.  A bare use of p anywhere else -- returned, borrowed (`(& p)`),
- * stored, handed to a non-accessor call (which could stash the borrow: that is
- * BR3c's transitive proof, not admitted here), or reached through an
- * unrecognized form -- rejects. */
-static bool gs_reader_use_ok(const Expr *e, Binding *p) {
+ * the receiver of a `.field`, a `match` scrutinee, a `@`-deref, the arg of a
+ * pure accessor, or (BR3c) the arg of a further callee that likewise only reads
+ * that borrow (proven transitively by gs_callee_reads_arg_only).  A bare use of
+ * p anywhere else -- returned, borrowed (`(& p)`), stored, handed to a callee
+ * that escapes/mutates it, or reached through an unrecognized form -- rejects.
+ * `stack`/`depth` carry the transitive-proof chain (see GS_READER_MAX_DEPTH). */
+static bool gs_reader_use_ok(const Expr *e, Binding *p,
+                             FnDef **stack, int depth) {
     if (!e) return true;
     switch (e->kind) {
         case EX_INT_LIT: case EX_BOOL_LIT: case EX_FLOAT_LIT:
@@ -819,38 +829,38 @@ static bool gs_reader_use_ok(const Expr *e, Binding *p) {
         case EX_GET_FIELD: {
             const Expr *s = e->as.get_field_.struct_expr;
             if (s && s->kind == EX_VAR && s->as.var.binding == p) return true;
-            return gs_reader_use_ok(s, p);
+            return gs_reader_use_ok(s, p, stack, depth);
         }
         case EX_DEREF: {
             const Expr *s = e->as.deref_.expr;
             if (s && s->kind == EX_VAR && s->as.var.binding == p) return true;
-            return gs_reader_use_ok(s, p);
+            return gs_reader_use_ok(s, p, stack, depth);
         }
         case EX_MATCH: {
             const Expr *s = e->as.match_.scrutinee;
             if (!(s && s->kind == EX_VAR && s->as.var.binding == p) &&
-                !gs_reader_use_ok(s, p)) return false;
+                !gs_reader_use_ok(s, p, stack, depth)) return false;
             for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
-                if (!gs_reader_use_ok(e->as.match_.arms[i].body, p)) return false;
-                if (!gs_reader_use_ok(e->as.match_.arms[i].guard, p)) return false;
+                if (!gs_reader_use_ok(e->as.match_.arms[i].body, p, stack, depth)) return false;
+                if (!gs_reader_use_ok(e->as.match_.arms[i].guard, p, stack, depth)) return false;
             }
             return true;
         }
         case EX_IF:
-            return gs_reader_use_ok(e->as.if_.cond, p) &&
-                   gs_reader_use_ok(e->as.if_.then_, p) &&
-                   gs_reader_use_ok(e->as.if_.else_or_null, p);
+            return gs_reader_use_ok(e->as.if_.cond, p, stack, depth) &&
+                   gs_reader_use_ok(e->as.if_.then_, p, stack, depth) &&
+                   gs_reader_use_ok(e->as.if_.else_or_null, p, stack, depth);
         case EX_LET:
             for (uint32_t i = 0; i < e->as.let_.n; i++)
-                if (!gs_reader_use_ok(e->as.let_.bindings[i].init, p)) return false;
-            return gs_reader_use_ok(e->as.let_.body, p);
+                if (!gs_reader_use_ok(e->as.let_.bindings[i].init, p, stack, depth)) return false;
+            return gs_reader_use_ok(e->as.let_.body, p, stack, depth);
         case EX_DO:
             for (uint32_t i = 0; i < e->as.do_.n; i++)
-                if (!gs_reader_use_ok(e->as.do_.items[i], p)) return false;
+                if (!gs_reader_use_ok(e->as.do_.items[i], p, stack, depth)) return false;
             return true;
         case EX_BUILTIN:
             for (uint32_t i = 0; i < e->as.builtin.n; i++)
-                if (!gs_reader_use_ok(e->as.builtin.args[i], p)) return false;
+                if (!gs_reader_use_ok(e->as.builtin.args[i], p, stack, depth)) return false;
             return true;
         case EX_CALL: {
             if (e->as.call_.fn_expr) return false;   /* indirect call: could stash p */
@@ -858,25 +868,67 @@ static bool gs_reader_use_ok(const Expr *e, Binding *p) {
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                 const Expr *a = e->as.call_.args[i];
                 if (a && a->kind == EX_VAR && a->as.var.binding == p) {
-                    /* p handed to a call: only a pure accessor is a proven read;
-                     * a general callee could stash the borrow (BR3c territory). */
-                    if (!acc) return false;
-                } else if (!gs_reader_use_ok(a, p)) {
+                    /* p handed to a call.  A pure accessor is a proven read.
+                     * Otherwise BR3c: prove the callee treats its matching param
+                     * as a read-only borrow too, transitively. */
+                    if (acc) continue;
+                    if (!gs_callee_reads_arg_only(e, i, stack, depth)) return false;
+                } else if (!gs_reader_use_ok(a, p, stack, depth)) {
                     return false;
                 }
             }
             return true;
         }
-        case EX_CAST:    return gs_reader_use_ok(e->as.cast_.expr, p);
-        case EX_ASCRIBE: return gs_reader_use_ok(e->as.ascribe_.inner, p);
+        case EX_CAST:    return gs_reader_use_ok(e->as.cast_.expr, p, stack, depth);
+        case EX_ASCRIBE: return gs_reader_use_ok(e->as.ascribe_.inner, p, stack, depth);
         /* A reader may `panic` -- that fallibility is exactly what the BR3b
          * post-call break check handles; only the payload could carry p out. */
-        case EX_PANIC:      return gs_reader_use_ok(e->as.panic_.payload, p);
-        case EX_PANIC_WITH: return gs_reader_use_ok(e->as.panic_with_.payload, p);
+        case EX_PANIC:      return gs_reader_use_ok(e->as.panic_.payload, p, stack, depth);
+        case EX_PANIC_WITH: return gs_reader_use_ok(e->as.panic_with_.payload, p, stack, depth);
         default:
             /* Unrecognized form: cannot prove p is used only as a read. */
             return false;
     }
+}
+
+/* BR3c: `e` is a non-accessor direct call, and the borrow being tracked is
+ * handed to it at argument `argidx`.  Prove the callee only READS that borrow.
+ * Resolve `e` to a top-level defn; then either
+ *   - the callee receives that arg by-VALUE (an independent aggregate copy is
+ *     made at the boundary, so the trampoline buffer cannot escape through it --
+ *     accept with no recursion), or
+ *   - the callee receives it by-const-REF (the same pointer): recurse with
+ *     gs_reader_use_ok on the callee body to prove that callee is itself a pure
+ *     reader of its param.
+ * Structural guards mirror gs_is_br3b_reader_call (resolvable top-level defn,
+ * fixed arity, no inline-C -- which could stash the raw pointer).  A cycle
+ * (mutual/self recursion) or a depth blowout is rejected conservatively rather
+ * than assuming read-only.  Reads g_gs_ctx for the classification context. */
+static bool gs_callee_reads_arg_only(const Expr *e, uint32_t argidx,
+                                     FnDef **stack, int depth) {
+    if (!g_gs_ctx || !e || e->kind != EX_CALL || e->as.call_.fn_expr) return false;
+    Binding *fb = e->as.call_.fn_binding;
+    FnDef *g = (fb && fb->source_fn_def) ? fb->source_fn_def : NULL;
+    if (!g || !g->body || !g->param_types) return false;
+    if (g->is_variadic || g->n_params != e->as.call_.n_args) return false;
+    if (g->body->kind == EX_INLINE_C) return false;         /* raw pointer access */
+    if (argidx >= g->n_params) return false;
+    TypeKind k; const char *ct; bool aggr, ref;
+    if (!gs_param_class(g_gs_ctx, g->param_types[argidx], &k, &ct, &aggr, &ref))
+        return false;
+    if (!ref)
+        /* by-value: an aggregate is copied at the call boundary (a scalar param
+         * would not type-check against the borrow); the copy cannot alias the
+         * trampoline buffer, so no transitive proof is needed. */
+        return aggr;
+    /* by-const-ref: the callee borrows the same pointer -- recurse, guarding
+     * against a cycle (co-recursion) and runaway depth. */
+    if (depth >= GS_READER_MAX_DEPTH) return false;
+    for (int i = 0; i < depth; i++) if (stack[i] == g) return false;
+    FnDef *nstack[GS_READER_MAX_DEPTH];
+    for (int i = 0; i < depth; i++) nstack[i] = stack[i];
+    nstack[depth] = g;
+    return gs_reader_use_ok(g->body, g->params[argidx], nstack, depth + 1);
 }
 
 /* True iff `e` is a call that hands fd's by-const-ptr aggregate param to a
@@ -915,7 +967,10 @@ static bool gs_is_br3b_reader_call(const Expr *e, FnDef *fd) {
             TypeKind k; const char *ct; bool aggr, ref;
             if (!gs_param_class(g_gs_ctx, g->param_types[i], &k, &ct, &aggr, &ref) || !ref)
                 return false;
-            if (!gs_reader_use_ok(g->body, g->params[i])) return false;
+            /* Seed the transitive-proof chain (BR3c) with the reader g itself so
+             * a callee that loops back to g is caught as a cycle. */
+            FnDef *rstack[GS_READER_MAX_DEPTH] = { g };
+            if (!gs_reader_use_ok(g->body, g->params[i], rstack, 1)) return false;
             passes_byref = true;
         } else {
             /* other args: plain non-suspending values (a suspension there would
