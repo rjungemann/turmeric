@@ -762,11 +762,26 @@ static bool gs_suspends(const Expr *e, FnDef *fd) {
         case EX_ASCRIBE: return gs_suspends(e->as.ascribe_.inner, fd);
         case EX_PANIC_PAYLOAD_TYPE:  return gs_suspends(e->as.panic_payload_type_.payload, fd);
         case EX_PANIC_PAYLOAD_VALUE: return gs_suspends(e->as.panic_payload_value_.payload, fd);
+        /* BR3a: a match/field-read/deref is a pure read admitted in value
+         * position (gs_value_ok) only when it does not suspend -- so this walk
+         * must descend into their sub-expressions, or a suspension buried in a
+         * match arm would be missed and the whole form wrongly admitted. */
+        case EX_MATCH: {
+            if (gs_suspends(e->as.match_.scrutinee, fd)) return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (gs_suspends(e->as.match_.arms[i].body, fd)) return true;
+                if (gs_suspends(e->as.match_.arms[i].guard, fd)) return true;
+            }
+            return false;
+        }
+        case EX_GET_FIELD: return gs_suspends(e->as.get_field_.struct_expr, fd);
+        case EX_DEREF:     return gs_suspends(e->as.deref_.expr, fd);
         default:         return false;
     }
 }
 
 static bool gs_stmt_ok(const Expr *e, FnDef *fd);
+static bool gs_has_panic(const Expr *e);
 
 /* e occupies a VALUE position: suspensions here are handled only by hole
  * hoisting (builtins / casts / self-call args / the suspension itself), never
@@ -790,6 +805,31 @@ static bool gs_value_ok(const Expr *e, FnDef *fd) {
             return true;
         case EX_IF: case EX_LET: case EX_DO:
             return !gs_suspends(e, fd);   /* pure nesting only in value position */
+        /* BR3a (catch-unwind-byref-aggregate-br3-plan): widen the read gate past
+         * the pure-accessor whitelist.  A `match`/destructure, a `.field` read on
+         * a by-value product, and a `@`-deref are all identity-agnostic READS --
+         * exactly the read-only uses of a by-const-ptr aggregate param that the
+         * borrow-becomes-owned-copy contract permits.  Admit them in value
+         * position when they are fully pure: no suspension (which only a
+         * structural split, not the emit_value fast path, could handle) and no
+         * inline `panic` (which emit_value would emit as a bare `return`,
+         * escaping the driver -- gs_value_ok has no split for these forms, unlike
+         * the if/let/do arms above).  emit_value then emits the whole read
+         * atomically.  The unsound uses (address observation via `(& p)`, a
+         * borrow escape, mutation, or a raw-pointer inline-C body) all reach
+         * gs_value_ok's `default: return false` and bail the function to native.
+         *
+         * SINGLE-FUNCTION ONLY (g_gs_nmem == 1).  The shared cross-function group
+         * driver carries a by-ref aggregate param through the int64 `__a` shim,
+         * and its pbp-deref of these reads is only wired for the accessor path a
+         * group already admitted -- a `match`/`.field` on a group member's by-ref
+         * param mis-lowers (the pointee slot is read as a by-value struct).  The
+         * plan scopes BR3 to the single-function trampoline; widening the group
+         * path is a separate follow-up (aggregate-followups plan).  In a group
+         * context these forms fall through to `default: return false`, so the
+         * function bails to native exactly as it did before BR3a. */
+        case EX_MATCH: case EX_GET_FIELD: case EX_DEREF:
+            return g_gs_nmem == 1 && !gs_suspends(e, fd) && !gs_has_panic(e);
         case EX_CATCH_UNWIND: {
             FnDef *tf = gs_thunk_fn(e);
             if (!tf || !tf->body) return false;
@@ -879,6 +919,20 @@ static bool gs_has_panic(const Expr *e) {
         case EX_ASCRIBE:             return gs_has_panic(e->as.ascribe_.inner);
         case EX_PANIC_PAYLOAD_TYPE:  return gs_has_panic(e->as.panic_payload_type_.payload);
         case EX_PANIC_PAYLOAD_VALUE: return gs_has_panic(e->as.panic_payload_value_.payload);
+        /* BR3a: match/field-read/deref are admitted in value position by
+         * gs_value_ok only when panic-free; this walk must see into their
+         * sub-expressions for that check to be sound (a `panic` in a match arm
+         * emitted via the emit_value fast path would escape the driver). */
+        case EX_MATCH: {
+            if (gs_has_panic(e->as.match_.scrutinee)) return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (gs_has_panic(e->as.match_.arms[i].body)) return true;
+                if (gs_has_panic(e->as.match_.arms[i].guard)) return true;
+            }
+            return false;
+        }
+        case EX_GET_FIELD: return gs_has_panic(e->as.get_field_.struct_expr);
+        case EX_DEREF:     return gs_has_panic(e->as.deref_.expr);
         default: return false;
     }
 }
@@ -1161,6 +1215,19 @@ static bool gs_suspends_live(GsCtx *gs, const Expr *e) {
         case EX_ASCRIBE: return gs_suspends_live(gs, e->as.ascribe_.inner);
         case EX_PANIC_PAYLOAD_TYPE:  return gs_suspends_live(gs, e->as.panic_payload_type_.payload);
         case EX_PANIC_PAYLOAD_VALUE: return gs_suspends_live(gs, e->as.panic_payload_value_.payload);
+        /* BR3a: mirror gs_suspends' descent into the pure-read forms so an
+         * emission-time hole check never treats a suspension buried in a match
+         * arm as absent (which would emit the enclosed self-call natively). */
+        case EX_MATCH: {
+            if (gs_suspends_live(gs, e->as.match_.scrutinee)) return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (gs_suspends_live(gs, e->as.match_.arms[i].body)) return true;
+                if (gs_suspends_live(gs, e->as.match_.arms[i].guard)) return true;
+            }
+            return false;
+        }
+        case EX_GET_FIELD: return gs_suspends_live(gs, e->as.get_field_.struct_expr);
+        case EX_DEREF:     return gs_suspends_live(gs, e->as.deref_.expr);
         default:         return false;
     }
 }

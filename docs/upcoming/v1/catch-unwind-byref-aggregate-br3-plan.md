@@ -6,10 +6,42 @@ description: Widen the by-const-pointer aggregate param support in the stackless
 
 # Stackless catch-unwind -- by-const-pointer aggregate params, widened eligibility (BR3) -- Plan
 
-> **Status:** Not started. BR1 (detection + save/restore) and BR2 (box
-> ownership/free + valgrind balance) landed -- see the archived
+> **Status:** BR3a LANDED. BR1 (detection + save/restore) and BR2 (box
+> ownership/free + valgrind balance) landed earlier -- see the archived
 > [by-const-pointer aggregate params plan](../../archive/catch-unwind-byref-aggregate-params-plan.md).
-> This plan covers only BR3: widening the eligibility gate.
+> This plan covers BR3: widening the eligibility gate. BR3a (the read-only
+> use widening: `match`/destructure, `.field` reads, `@`-deref) is done and
+> shipped in the single-function trampoline; BR3b (the one-level callee
+> const-borrow proof) and BR3c (optional transitive summary) remain open.
+>
+> **BR3a landing (single-function only):** `gs_value_ok` in
+> `src/compiler/emit_fns.c` now admits `EX_MATCH` / `EX_GET_FIELD` /
+> `EX_DEREF` in value position when they are fully pure (no suspension, no
+> inline `panic`) and the trampoline is single-function (`g_gs_nmem == 1`).
+> `gs_suspends`, `gs_suspends_live`, and `gs_has_panic` were taught to
+> descend into those three forms so the purity check is sound. The unsound
+> uses (address observation via `(& p)`, borrow escape, mutation via
+> `set!`, raw-pointer inline-C) stay at `gs_value_ok`'s `default: return
+> false` and bail to native, unchanged. The cross-function GROUP path is
+> deliberately excluded (see BR3b/group note below): a `match`/`.field` on a
+> group member's by-ref param mis-lowers today (the pointee int64 slot is
+> read as a by-value struct), so those cases bail to native exactly as they
+> did before BR3a. Fixtures:
+> `tests/fixtures/stackless-catch-unwind-byref-aggregate-field` (Result read
+> via `.is-ok`, `is_ref` re-home across a descend),
+> `.../stackless-catch-unwind-byref-aggregate-match` (`(Box int)`
+> destructured via `match`, `is_ref`), and
+> `.../stackless-catch-unwind-byref-aggregate-group-bail` (mutual `match`
+> regression guard -- must compile + run, proving the group path bails).
+>
+> **BR3b/BR3c remaining.** BR3b admits passing the param to a non-member
+> pure const-by-ref reader. That is NOT a near-free change: native codegen
+> hoists a fallible call into a temp and emits `if (tur_panicking) return;`
+> after it, so admitting such a call mid-segment requires the trampoline's
+> `cps_emit` to hoist the call and emit an `if (tur_panicking) break;`
+> unwind route -- a departure from the current "only pure values in value
+> position" invariant. Without a callee totality/no-panic proof, admitting
+> the call is unsound. Deferred until a fixture needs it.
 >
 > **Prerequisites:** BR1+BR2. `gs_param_class` already classifies a by-ref
 > aggregate param (`type_struct_pass_by_ptr`) and flags it `is_ref`; save
@@ -111,10 +143,17 @@ Unsafe (BR3 must still reject):
 
 ## Phases
 
-- **BR3a** -- the use-analysis: walk the by-ref param's occurrences, classify
-  READ / ADDRESS-OBSERVED / ESCAPES, and reject inline-C bodies. Admit
-  field-read / `match` / copy-out uses that the accessor whitelist rejected.
-  Differential-check a `match`-on-`Result`-param recursion against native.
+- **BR3a** -- DONE. Widen the read gate: admit pure (non-suspending,
+  non-panicking) `match` / `.field` / `@`-deref reads of the by-ref param in
+  the single-function trampoline; the address-observe / escape / mutation /
+  inline-C forms stay at `default: return false` and bail. Implemented as an
+  enumerate-and-admit relaxation of `gs_value_ok` rather than a separate
+  occurrence classifier -- the existing whitelist structure means only the
+  three explicitly-added pure-read forms are newly admitted, so an
+  identity/mutation/escape use cannot be a false ADMIT (it is not one of the
+  three). Verified: `.field`-read on a `Result` param and a `match` on a
+  `(Box int)` param both run flat where native SIGSEGVs; the BR1 pure-accessor
+  fixtures stay byte-identical.
 - **BR3b** -- the one-level callee const-borrow proof: admit passing the param
   to a pure `const`-by-ref callee. Fixture: a recursion that threads a by-ref
   aggregate and hands it to a non-member pure reader each level.

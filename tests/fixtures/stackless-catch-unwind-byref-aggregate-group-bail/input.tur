@@ -1,0 +1,28 @@
+;; BR3a (catch-unwind-byref-aggregate-br3-plan): a REGRESSION GUARD for the
+;; cross-function group path.  `ping`/`pong` mutually recurse across catch-unwind
+;; and read a by-const-ptr aggregate param via `match`.  BR3's widened read gate
+;; (match/field/deref) is SINGLE-FUNCTION only: the shared group driver carries a
+;; by-ref aggregate param through the int64 shim and has no per-form pbp deref for
+;; these reads, so a group-carried match/field on such a param would mis-lower (it
+;; once emitted a by-value struct init from an int64 pointer slot -- a C compile
+;; error).  The gate (g_gs_nmem == 1) keeps these forms out of the group path, so
+;; this program BAILS TO NATIVE: it compiles and runs correctly, just not
+;; trampolined.  A small depth keeps the native recursion within the stack.
+;; Widening the group path is a separate follow-up (aggregate-followups plan).
+(defdata Wide :copy (MkWide int int int int))
+
+(defn ping [w : Wide n : int] : int
+  (if (= n 0)
+    (match w (MkWide a b c d) a)
+    (do (catch-unwind (fn [] : int (pong w (- n 1))))
+        (+ n (match w (MkWide a b c d) b)))))
+
+(defn pong [w : Wide n : int] : int
+  (if (= n 0)
+    (match w (MkWide a b c d) c)
+    (do (catch-unwind (fn [] : int (ping w (- n 1))))
+        (+ n (match w (MkWide a b c d) d)))))
+
+(defn main [] : int
+  (println (ping (MkWide 5 6 7 8) 2000))
+  0)
