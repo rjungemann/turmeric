@@ -505,18 +505,44 @@ bool expr_contains_return_or_throw(const Expr *e) {
  * so the "callee position is fine" relaxation never leaks into a nested body.
  * EX_DEFER is treated as an escape because a deferred body runs at the same
  * scope-exit point as the free, making the ordering unsafe to reason about. */
+/* catch-unwind-return-bridge-residuals (Part A): true for a scalar `err-val`
+ * result type -- an integer/float/bool value the extraction copies out by value.
+ * For a caught box, err-val hands back box->err_val, which IS the panic-payload
+ * pointer; when the declared err arm is one of these scalar kinds the extracted
+ * value is a plain word (a truncated/reinterpreted pointer bit pattern), NEVER a
+ * live pointer INTO the payload, so freeing the box (payload included) at scope
+ * exit cannot dangle it.  A cstr/ptr/aggregate err arm WOULD alias the payload,
+ * so it stays excluded (the status-quo leak).  Broader than carrier_is_inline:
+ * that predicate excludes the pointer-sized int/int64/uint64 (no reinterpret
+ * needed), which are exactly the common err arms here and are equally safe. */
+static bool err_val_result_is_freeable_scalar(TypeKind k) {
+    switch (k) {
+        case TY_INT: case TY_INT64: case TY_UINT64:
+        case TY_INT32: case TY_UINT32: case TY_INT16: case TY_UINT16:
+        case TY_INT8: case TY_UINT8:
+        case TY_BOOL:
+        case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32:
+            return true;
+        default:
+            return false;
+    }
+}
+
 /* Shared walker for the two scoped-free escape analyses.  `allow_box_accessors`
  * selects the catch-unwind result-box variant (catch-unwind-thunk-closure-leak):
  * a use of `b` as the sole argument of a read-only Result accessor -- `ok?`,
  * `err?`, or `ok-val` -- does NOT count as an escape, because none of those
  * retain the box or hand back box-owned-and-freed memory (ok?/err? return a
  * bool; ok-val copies out box->ok_val, which tur_result_box_free never frees).
- * `err-val` is deliberately NOT whitelisted: it returns the box's panic-payload
- * pointer, which tur_result_box_free DOES free, so an extracted err payload
- * could dangle -- treating err-val (and every other use) as an escape keeps the
- * free sound.  With the flag off this is exactly the fat-closure-env analysis. */
+ * `err-val` is whitelisted ONLY when its result type is a scalar
+ * (err_val_result_is_freeable_scalar): it returns the box's panic-payload
+ * pointer, which tur_result_box_free DOES free, so a pointer/cstr/aggregate err
+ * arm could dangle an extracted payload and stays an escape; a scalar err arm
+ * copies out a plain word that never aliases the payload, so freeing the box is
+ * sound.  With the flag off this is exactly the fat-closure-env analysis. */
 static bool binding_escapes_impl(const Expr *e, const Binding *b,
-                                 bool allow_box_accessors) {
+                                 bool allow_box_accessors,
+                                 const Expr *ignore) {
     if (!e || !b) return true;
     size_t cap = 256;
     const Expr **stack = (const Expr **)malloc(cap * sizeof(const Expr *));
@@ -539,6 +565,9 @@ static bool binding_escapes_impl(const Expr *e, const Binding *b,
     ESC_PUSH(e);
     while (sp > 0) {
         const Expr *cur = stack[--sp];
+        /* Part B: the caller's return-tail use of `b` -- already accounted for
+         * (its value is copied out before the free) -- is not an escape. */
+        if (cur == ignore) continue;
         switch (cur->kind) {
             case EX_VAR:
                 if (cur->as.var.binding == b) { escapes = true; goto esc_done; }
@@ -563,6 +592,11 @@ static bool binding_escapes_impl(const Expr *e, const Binding *b,
                     box_accessor = nm && (strcmp(nm, "ok?") == 0 ||
                                           strcmp(nm, "err?") == 0 ||
                                           strcmp(nm, "ok-val") == 0);
+                    /* Part A: err-val is a non-escape only when its scalar result
+                     * cannot alias the payload tur_result_box_free reclaims. */
+                    if (!box_accessor && nm && strcmp(nm, "err-val") == 0 &&
+                        err_val_result_is_freeable_scalar(cur->type.kind))
+                        box_accessor = true;
                 }
                 for (uint32_t i = 0; i < cur->as.call_.n_args; i++) {
                     const Expr *arg = cur->as.call_.args[i];
@@ -686,6 +720,39 @@ static bool binding_escapes_impl(const Expr *e, const Binding *b,
             case EX_PANIC:
                 ESC_PUSH(cur->as.panic_.payload);
                 break;
+            /* A catch boundary's only sub-expression is its thunk closure; a
+             * reference to `b` there is caught via that closure's capture set
+             * (EX_CLOSURE/EX_FN_DEF).  Walking it -- rather than hitting the
+             * conservative default-escape below -- lets the catch-box analysis
+             * see through `b`'s own `(catch-unwind ...)` initializer (Part B
+             * sole-ownership), which the thunk never closes over.  Scoped to the
+             * catch-box variant so the fat-closure-env analysis (which does not
+             * reason about caught boxes) keeps its exact prior behavior. */
+            case EX_CATCH_UNWIND:
+                if (!allow_box_accessors) { escapes = true; goto esc_done; }
+                ESC_PUSH(cur->as.catch_unwind_.thunk);
+                break;
+            case EX_CATCH_PANIC_OF:
+                if (!allow_box_accessors) { escapes = true; goto esc_done; }
+                ESC_PUSH(cur->as.catch_panic_of_.thunk);
+                break;
+            /* Fn->fat / poly coercion wrappers erase to their inner fn/closure at
+             * codegen; a reference to `b` lives (if anywhere) in that inner
+             * closure's capture set.  A catch-unwind thunk reaches the analysis
+             * wrapped in EX_FN_TO_FAT, so the catch-box variant descends; the
+             * fat-closure-env variant keeps defaulting to escape (unchanged). */
+            case EX_FN_TO_FAT:
+                if (!allow_box_accessors) { escapes = true; goto esc_done; }
+                ESC_PUSH(cur->as.fn_to_fat_.inner);
+                break;
+            case EX_POLY_TO_FAT:
+                if (!allow_box_accessors) { escapes = true; goto esc_done; }
+                ESC_PUSH(cur->as.poly_to_fat_.inner);
+                break;
+            case EX_POLY_WRAP:
+                if (!allow_box_accessors) { escapes = true; goto esc_done; }
+                ESC_PUSH(cur->as.poly_wrap_.inner);
+                break;
             case EX_MATCH:
                 ESC_PUSH(cur->as.match_.scrutinee);
                 for (uint32_t i = 0; i < cur->as.match_.n_arms; i++) {
@@ -724,7 +791,7 @@ esc_done:
 }
 
 bool closure_binding_escapes(const Expr *e, const Binding *b) {
-    return binding_escapes_impl(e, b, /*allow_box_accessors=*/false);
+    return binding_escapes_impl(e, b, /*allow_box_accessors=*/false, NULL);
 }
 
 /* catch-unwind-thunk-closure-leak: true if the caught-Result binding `b` is used
@@ -733,7 +800,12 @@ bool closure_binding_escapes(const Expr *e, const Binding *b) {
  * scope exit.  Same soundness posture as closure_binding_escapes (only ever
  * greenlights a free). */
 bool catch_box_binding_escapes(const Expr *e, const Binding *b) {
-    return binding_escapes_impl(e, b, /*allow_box_accessors=*/true);
+    return binding_escapes_impl(e, b, /*allow_box_accessors=*/true, NULL);
+}
+
+bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
+                                      const Expr *ignore) {
+    return binding_escapes_impl(e, b, /*allow_box_accessors=*/true, ignore);
 }
 
 /* Check whether the fall-through point after `e` is unreachable -- i.e. every

@@ -796,6 +796,11 @@ static void tur_result_box_free(int64_t __r) {
     free(__b);
 }
 
+static void tur_result_box_free_shallow(int64_t __r) __attribute__((unused));
+static void tur_result_box_free_shallow(int64_t __r) {
+    free((tur_result_box_t *)(intptr_t)__r);
+}
+
 /* CPS substrate (cps-transform-plan): multi-prompt delimited-control machine.
  * Heap-reified continuation chains (DK); a reset is a prompt, a shift slices
  * the chain up to the nearest prompt. Faithful port of src/runtime/cps_prompt.c.

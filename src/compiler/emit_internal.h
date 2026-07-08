@@ -561,6 +561,12 @@ bool closure_binding_escapes(const Expr *e, const Binding *b);
  * closure_binding_escapes, but a use of `b` as a read-only ok?/err?/ok-val
  * argument is not an escape.  See emit_core.c. */
 bool catch_box_binding_escapes(const Expr *e, const Binding *b);
+/* catch-unwind-return-bridge-residuals (Part B): like catch_box_binding_escapes
+ * but the single occurrence `ignore` (the return-tail use the caller is about to
+ * copy out and free) is not counted as an escape.  Used to prove a returned
+ * caught box is sole-owned -- it escapes nowhere except that return. */
+bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
+                                      const Expr *ignore);
 bool expr_has_multishot_handler(const Expr *e);
 char *fresh_tmp(EmitCtx *ctx);
 char *fresh_frame(EmitCtx *ctx);

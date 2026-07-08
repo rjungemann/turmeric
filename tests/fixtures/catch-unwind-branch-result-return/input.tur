@@ -1,0 +1,33 @@
+;;; catch-unwind-return-bridge-residuals (Part C): a function whose by-value
+;;; (Result int int) return flows from an if/match ALL of whose arms are
+;;; catch-unwind boxes must bridge the carrier box to the aggregate at the
+;;; return -- through the stackless (if-tail) and native (match-tail) paths
+;;; alike -- rather than `return <int64>` (an int64->struct cc error).  The
+;;; sole-owned box is freed after the bridge copies its fields out (Part B).
+(defdata Pick (First) (Second))
+
+(defn make-if [c : int] : (Result int int)
+  (if (= c 0)
+    (catch-unwind (fn [] : int 5))
+    (catch-unwind (fn [] : int 7))))
+
+(defn make-match [p : Pick] : (Result int int)
+  (match p
+    (First)  (catch-unwind (fn [] : int 11))
+    (Second) (catch-unwind (fn [] : int 13))))
+
+(defn make-if-caught [c : int] : (Result int int)
+  (if (= c 0)
+    (catch-unwind (fn [] : int (panic "boom")))
+    (catch-unwind (fn [] : int 7))))
+
+(defn main [] : int
+  (let [a (make-if 0)]
+    (if (ok? a) (println "if-ok") (println "if-err")))
+  (let [b (make-if 1)]
+    (if (ok? b) (println "if-ok2") (println "if-err2")))
+  (let [m (make-match (First))]
+    (if (ok? m) (println "match-ok") (println "match-err")))
+  (let [d (make-if-caught 0)]
+    (if (err? d) (println "caught-err") (println "caught-ok")))
+  0)

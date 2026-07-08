@@ -332,16 +332,83 @@ static const Expr *fn_body_binding_init(const Expr *e, const Binding *b) {
     return NULL;
 }
 
+/* True when the linear tail of `e` is a `catch-unwind` / `catch-panic-of` heap
+ * box -- directly, through a let-bound variable whose initializer is one, or
+ * (catch-unwind-return-bridge-residuals Part C) through an `if`/`match` all of
+ * whose arms are themselves catch-box tails.  Every such tail hands back the
+ * int64 carrier box, so a by-value Result/Option return needs the same
+ * carrier->concrete bridge whether or not a branch sits between the tail and
+ * the return.  The `if`/`match` recursion requires EVERY arm to be a catch box
+ * (a mixed branch, where one arm is an ordinary constructor, is left to the
+ * M4c/M5 by-value-producer paths). */
+static bool expr_tail_is_catch_box(const Expr *fnbody, const Expr *e) {
+    const Expr *tail = fn_body_linear_tail(e);
+    if (!tail) return false;
+    if (tail->kind == EX_CATCH_UNWIND || tail->kind == EX_CATCH_PANIC_OF)
+        return true;
+    if (tail->kind == EX_VAR && tail->as.var.binding) {
+        const Expr *init = fn_body_binding_init(fnbody, tail->as.var.binding);
+        return init && (init->kind == EX_CATCH_UNWIND ||
+                        init->kind == EX_CATCH_PANIC_OF);
+    }
+    if (tail->kind == EX_IF && tail->as.if_.else_or_null)
+        return expr_tail_is_catch_box(fnbody, tail->as.if_.then_) &&
+               expr_tail_is_catch_box(fnbody, tail->as.if_.else_or_null);
+    if (tail->kind == EX_MATCH && tail->as.match_.n_arms > 0) {
+        for (uint32_t i = 0; i < tail->as.match_.n_arms; i++)
+            if (!expr_tail_is_catch_box(fnbody, tail->as.match_.arms[i].body))
+                return false;
+        return true;
+    }
+    return false;
+}
+
+/* catch-unwind-return-bridge-residuals (Part B): true when EVERY box the
+ * catch-box tail of `e` can produce is provably sole-owned, so the source box
+ * can be freed after the return bridge copies its fields out -- with no double
+ * free and no dangling alias.
+ *   - a DIRECT catch-unwind / catch-panic-of tail is a fresh anonymous box that
+ *     nothing else can reference -> always sole-owned;
+ *   - a let-bound VAR tail is sole-owned iff the box escapes nowhere but this
+ *     return (the escape walk ignoring the tail use finds no other reference);
+ *   - an if/match tail is sole-owned iff every arm is.
+ * Conservative: a shape it cannot prove returns false, preserving the leak. */
+static bool catch_box_tail_sole_owned(const Expr *fnbody, const Expr *e) {
+    const Expr *tail = fn_body_linear_tail(e);
+    if (!tail) return false;
+    if (tail->kind == EX_CATCH_UNWIND || tail->kind == EX_CATCH_PANIC_OF)
+        return true;
+    if (tail->kind == EX_VAR && tail->as.var.binding) {
+        const Expr *init = fn_body_binding_init(fnbody, tail->as.var.binding);
+        if (!init || (init->kind != EX_CATCH_UNWIND &&
+                      init->kind != EX_CATCH_PANIC_OF))
+            return false;
+        return !catch_box_binding_escapes_except(fnbody, tail->as.var.binding,
+                                                 tail);
+    }
+    if (tail->kind == EX_IF && tail->as.if_.else_or_null)
+        return catch_box_tail_sole_owned(fnbody, tail->as.if_.then_) &&
+               catch_box_tail_sole_owned(fnbody, tail->as.if_.else_or_null);
+    if (tail->kind == EX_MATCH && tail->as.match_.n_arms > 0) {
+        for (uint32_t i = 0; i < tail->as.match_.n_arms; i++)
+            if (!catch_box_tail_sole_owned(fnbody, tail->as.match_.arms[i].body))
+                return false;
+        return true;
+    }
+    return false;
+}
+
 /* catch-unwind-byvalue-result-return-mismatch: true when the function returns a
  * by-value Result/Option aggregate (`ret_ctype` is that struct) but its tail
- * value is a `catch-unwind` / `catch-panic-of` heap box -- either returned
- * directly or through a let-bound variable.  `tur_catch_unwind_box` ALWAYS
- * yields the int64 heap box (never a by-value struct), and the declared by-value
- * return type is a distinct monomorph, so `return <box>` is an int64->struct cc
- * error without a carrier->concrete bridge.  Gating on the catch-box tail
- * structurally -- rather than on emit_type_c_name, which reports "int64_t" for a
- * by-value #{Construct} tail (`ok`/`err`/`some`/`none`) too -- is what keeps this
- * from mis-firing on the ordinary Result constructors the M4c/M5 branches own. */
+ * value is a `catch-unwind` / `catch-panic-of` heap box -- returned directly,
+ * through a let-bound variable, or through an `if`/`match` whose arms are all
+ * catch boxes (Part C).  `tur_catch_unwind_box` ALWAYS yields the int64 heap
+ * box (never a by-value struct), and the declared by-value return type is a
+ * distinct monomorph, so `return <box>` is an int64->struct cc error without a
+ * carrier->concrete bridge.  Gating on the catch-box tail structurally --
+ * rather than on emit_type_c_name, which reports "int64_t" for a by-value
+ * #{Construct} tail (`ok`/`err`/`some`/`none`) too -- is what keeps this from
+ * mis-firing on the ordinary Result constructors the M4c/M5 branches own. */
 static bool fn_return_needs_carrier_result_bridge(EmitCtx *ctx, const FnDef *fd,
                                                   const char *ret_ctype,
                                                   bool ret_is_int64_carrier) {
@@ -351,16 +418,7 @@ static bool fn_return_needs_carrier_result_bridge(EmitCtx *ctx, const FnDef *fd,
     if (strchr(ret_ctype, '*') || strcmp(ret_ctype, "int64_t") == 0 ||
         strcmp(ret_ctype, "void") == 0)
         return false;
-    const Expr *tail = fn_body_linear_tail(fd->body);
-    if (!tail) return false;
-    if (tail->kind == EX_CATCH_UNWIND || tail->kind == EX_CATCH_PANIC_OF)
-        return true;
-    if (tail->kind == EX_VAR && tail->as.var.binding) {
-        const Expr *init = fn_body_binding_init(fd->body, tail->as.var.binding);
-        return init && (init->kind == EX_CATCH_UNWIND ||
-                        init->kind == EX_CATCH_PANIC_OF);
-    }
-    return false;
+    return expr_tail_is_catch_box(fd->body, fd->body);
 }
 
 /* Emit `e` in tail position: every path ends in `return <v>;` or a backedge
@@ -1325,6 +1383,27 @@ static void gs_self_descend(GsCtx *gs, Buf *b, const Expr *S, const GsSink *sink
     gs->cur_ind = saved_ind;
 }
 
+/* catch-unwind-return-bridge-residuals (Part C): the by-value aggregate return
+ * type behind a GSK_RETURN `ret_aggr` sink, or TY_UNKNOWN when it cannot be
+ * recovered.  A caught box delivered to such a sink is the int64 carrier, not
+ * the aggregate the sink heap-boxes, so it must be bridged carrier->concrete
+ * first (via this type).  The sink's ret_ctype string aliases the member's
+ * mem_retctype entry, so match on it to recover the member's declared return
+ * Type. */
+static Type gs_sink_return_aggr_type(GsCtx *gs, const GsSink *sink) {
+    Type unknown = type_simple(TY_UNKNOWN, CK_COPY);
+    if (!sink || sink->kind != GSK_RETURN || !sink->ret_aggr) return unknown;
+    for (int m = 0; m < gs->n_mem; m++) {
+        if (gs->mem_retctype[m] == sink->ret_ctype ||
+            (gs->mem_retctype[m] && sink->ret_ctype &&
+             strcmp(gs->mem_retctype[m], sink->ret_ctype) == 0)) {
+            if (gs->mem[m])
+                return emit_resolve_type(gs->ctx, gs->mem[m]->return_type);
+        }
+    }
+    return unknown;
+}
+
 /* Descend into a catch-unwind S: push a boundary, run the thunk body as its own
  * segment, resume by popping the boundary and building the ok/err result box. */
 static void gs_catch_descend(GsCtx *gs, Buf *b, const Expr *S, const GsSink *sink,
@@ -1405,7 +1484,36 @@ static void gs_catch_descend(GsCtx *gs, Buf *b, const Expr *S, const GsSink *sin
             indent_buf(rb, gs->cur_ind);
             buf_printf(rb, "tur_result_box_free((int64_t)(intptr_t)%s);\n", boxnm);
         }
-        gs_deliver(gs, rb, boxnm, sink);
+        /* catch-unwind-return-bridge-residuals (Part C): a caught box delivered
+         * as a function's by-value (Result/Option ...) return is the int64
+         * carrier, but the ret_aggr sink heap-boxes the value as if it were the
+         * aggregate -- `Result__int__int __rv = (__box)` is an invalid int64->
+         * struct initializer.  Bridge the carrier box to the concrete aggregate
+         * first (the same canonical field-by-field readback the native return
+         * bridge uses), so the sink boxes a real aggregate value. */
+        Type ret_aggr_ty = gs_sink_return_aggr_type(gs, sink);
+        if (ret_aggr_ty.kind != TY_UNKNOWN) {
+            gs->ctx->indent = gs->cur_ind;
+            char *bridged = emit_carrier_bridge(gs->ctx, rb, strdup(boxnm),
+                                                CK_CARRIER, CK_CONCRETE,
+                                                ret_aggr_ty);
+            /* Part B (stackless mirror): the resume-built box is fresh and
+             * delivered straight to the return, so it is sole-owned.  Materialize
+             * the aggregate into a temp, free the now-dead box struct (never the
+             * payload -- the returned err aggregate may alias it), then deliver
+             * the aggregate the sink heap-boxes. */
+            const char *agg_cty = emit_type_c_name(gs->ctx, ret_aggr_ty);
+            char aggnm[40]; snprintf(aggnm, sizeof aggnm, "__caggr%d", id);
+            indent_buf(rb, gs->cur_ind);
+            buf_printf(rb, "%s %s = %s;\n", agg_cty, aggnm, bridged);
+            indent_buf(rb, gs->cur_ind);
+            buf_printf(rb, "tur_result_box_free_shallow((int64_t)(intptr_t)%s);\n",
+                       boxnm);
+            gs_deliver(gs, rb, aggnm, sink);
+            free(bridged);
+        } else {
+            gs_deliver(gs, rb, boxnm, sink);
+        }
     }
     gs->cur_ind = saved_ind;
 }
@@ -3348,11 +3456,37 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             Type sink_rt = (e->type.kind == TY_FN && e->type.as.fn.result_full_type)
                 ? emit_resolve_type(ctx, *e->type.as.fn.result_full_type)
                 : emit_resolve_type(ctx, fd->body->type);
-            char *bridged = emit_carrier_bridge(ctx, file, strdup(ret_val),
-                                                CK_CARRIER, CK_CONCRETE, sink_rt);
-            indent_buf(file, ctx->indent);
-            buf_printf(file, "return %s;\n", bridged);
-            free(bridged);
+            if (catch_box_tail_sole_owned(fd->body, fd->body)) {
+                /* catch-unwind-return-bridge-residuals (Part B): the caught box
+                 * is sole-owned, so free it after the aggregate is materialized.
+                 * Capture the carrier in a stable temp (so it is not re-emitted),
+                 * read the box fields into a return temp, free the now-dead box
+                 * struct, then return -- freeing the struct only (never the
+                 * payload, which the returned err aggregate may alias). */
+                char *box_tmp = fresh_tmp(ctx);
+                indent_buf(file, ctx->indent);
+                buf_printf(file, "int64_t %s = (int64_t)(intptr_t)(%s);\n",
+                           box_tmp, ret_val);
+                char *bridged = emit_carrier_bridge(ctx, file, strdup(box_tmp),
+                                                    CK_CARRIER, CK_CONCRETE,
+                                                    sink_rt);
+                const char *agg_cty = emit_type_c_name(ctx, sink_rt);
+                char *ret_tmp = fresh_tmp(ctx);
+                indent_buf(file, ctx->indent);
+                buf_printf(file, "%s %s = %s;\n", agg_cty, ret_tmp, bridged);
+                indent_buf(file, ctx->indent);
+                buf_printf(file, "tur_result_box_free_shallow(%s);\n", box_tmp);
+                indent_buf(file, ctx->indent);
+                buf_printf(file, "return %s;\n", ret_tmp);
+                free(bridged); free(box_tmp); free(ret_tmp);
+            } else {
+                char *bridged = emit_carrier_bridge(ctx, file, strdup(ret_val),
+                                                    CK_CARRIER, CK_CONCRETE,
+                                                    sink_rt);
+                indent_buf(file, ctx->indent);
+                buf_printf(file, "return %s;\n", bridged);
+                free(bridged);
+            }
         } else {
             buf_printf(file, "return %s;\n", ret_val);
         }
