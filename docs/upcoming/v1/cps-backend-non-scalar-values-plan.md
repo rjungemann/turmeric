@@ -183,12 +183,34 @@ perform/handle/resume (the lifted handler frames slot-load `int32_t t0 =
 (int32_t)t0__slot` and the resume result as `int32`; result `41`), and
 `tests/fixtures/cps-backend-ptr/` threads a `ptr<void>` through an effect that
 hands back a raw buffer pointer, resumed and derefed on the CPS path (the
-perform-cont slot-loads `void * t0 = (void *)t0__slot`; result `7`). Note:
-narrow-int *arithmetic* shapes (e.g. `+` on `int32`) are not yet in the
-supported builtin set, so a colored function that does narrow-int math still
-falls back -- the fixture threads the value without arithmetic, which is the
-slot-boundary property under test. Full suite: 1993 passed, 0 failed (before
-the narrow-int/ptr fixtures; +2 with them).
+perform-cont slot-loads `void * t0 = (void *)t0__slot`; result `7`).
+
+**Update -- narrow-int arithmetic + the 64-bit reinterpret.** Narrow-int *math*
+also works on the CPS path: the arithmetic builtin shapes (`BS_BIN_INFIX`,
+`BS_VARIADIC_FOLD`, ...) already apply to the sub-64-bit widths, so a colored
+function that computes `(+ (perform ...) (:: 1 :int32))` stays CPS (the
+`cps-backend-narrow-int` fixture now does int32 arithmetic; result `42`). Two
+supporting fixes: `atom_ok`/`atom_str` accept and emit any `<=64`-bit integer
+literal (right `*_C()` suffix), and -- the substantive one -- `cps_ir.c` now
+peels a **same-size Tier A `EX_REINTERPRET`** (`is_tierA_reinterp` /
+`tierA_scalar_kind`). The frontend lowers `(:: N :uint64)` / `(:: N :int64)` as
+an `int -> {u}int64` reinterpret (both 64 bits, so bit-identical rather than a
+widening cast); without peeling it, a colored function using a 64-bit ascribed
+literal fell back. New `cps-backend-uint64` fixture threads a `uint64` through
+perform/handle/resume with arithmetic (result `42`). Full suite: 1995 passed,
+0 failed (before these fixtures; +1 with `cps-backend-uint64`).
+
+**Correctness note (reported, open).** Fixing the reinterpret exposed a
+**general** hole: the backend classifies each colored function for CPS emission
+independently, but a `perform` and its `handle` must be on the *same* machine
+(both DK, or both fiber). When the classifier admits a performer to the CPS set
+while its handler falls back (or vice versa), `dk_perform` finds no DK handler
+and the program aborts with "unhandled effect". The uint64 reinterpret was one
+trigger (now fixed); the hole is general (any handler that falls back for any
+reason while its performer stays CPS). Filed as
+`docs/reported/cps-backend-perform-handle-machine-split.md` with a conservative
+co-classification fix direction; it is a **graduation blocker** (the gate below
+requires no miscompiles with the fallback removed).
 
 Still open in N1: owning pointer types (`ref`/`rc`/`weak`/`lref`) -- these carry
 drop/refcount discipline the DK slot's bit-copy would confuse (a copied `rc`
@@ -282,12 +304,19 @@ must be true at graduation:
 5. **Narrow-int arithmetic shapes** -- `+`, `-`, `*`, comparisons, etc. on the
    sub-64-bit integer widths are in the supported builtin-shape set, so a colored
    function that does narrow-int *math* (not just threads a narrow int) stays on
-   the CPS path.
+   the CPS path. *Done* (the arithmetic shapes already covered the narrow widths;
+   the `cps-backend-narrow-int` / `cps-backend-uint64` fixtures exercise int32 /
+   uint64 math end to end).
 6. **Carrier-ABI ADT forms** (N3) -- `EX_MAKE_STRUCT` / `EX_GET_FIELD` /
    `EX_DEFAULT_OF` for carrier-ABI Option/Result/map and friends are translated
    and emitted, closing the ~1800 stdlib occurrences C5 measured.
 7. **Fallback removed** (N6) -- no `CT_UNSUPPORTED` whole-function bail-out
-   remains for colored functions; the direct-vs-CPS dual path is retired.
+   remains for colored functions; the direct-vs-CPS dual path is retired. This
+   subsumes closing the **perform/handle machine-split** hole
+   (`docs/reported/cps-backend-perform-handle-machine-split.md`): with the
+   fallback gone there is only one machine, but the co-classification guard must
+   land *before* removal so no perform/handle pair is ever split while both paths
+   coexist.
 
 Until all seven hold, the experiment stays gated. The C6 sign-off in the parent
 plan (`docs/upcoming/v1/cps-ir-to-c-backend-plan.md`) must not mark

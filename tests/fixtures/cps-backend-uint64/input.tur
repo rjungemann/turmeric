@@ -1,0 +1,30 @@
+;; CPS-IR-to-C backend, non-scalar values Plan, Tier A: 64-bit unsigned int with
+;; a same-size reinterpret.  Built with --enable=cps-backend.
+;;
+;; Ascribing an int literal to a 64-bit type -- `(:: 3 :uint64)` -- is lowered by
+;; the frontend as an EX_REINTERPRET (int and uint64 are both 64 bits, so it is a
+;; bit-identical retype rather than a widening EX_CAST).  The CPS translator peels
+;; that reinterpret like an ascription (bit-identical Tier A retype), so a uint64
+;; value threads through the DK slot end to end:
+;;   - the Acc effect's result type is uint64;
+;;   - `sum` performs it and adds a uint64 literal;
+;;   - `run` handles it and resumes with a uint64 literal.
+;;
+;; Regression guard: before the reinterpret was handled, `run`'s handler case
+;; (whose resume value is a reinterpret) fell back to the fiber path while `sum`
+;; stayed on the CPS/DK path -- a split perform/handle boundary that aborted with
+;; "unhandled effect".  Now both are CPS-emitted and coherent.  The expected
+;; value is the direct-style result: 40 + 2 = 42.
+
+(defeffect Acc [] :uint64)
+
+(defn sum [] : uint64
+  (+ (perform (Acc)) (:: 2 :uint64)))
+
+(defn run [] : uint64
+  (handle (sum)
+    (Acc [] k) (resume k (:: 40 :uint64))))
+
+(defn main [] : int
+  (println (:: (run) :int))
+  0)

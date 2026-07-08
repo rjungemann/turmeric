@@ -70,9 +70,34 @@ static const Expr *ascribe_peel(const Expr *e) {
     return e;
 }
 
+/* A Tier A scalar kind: an integer/bool/pointer that occupies its C width with a
+ * direct bit pattern.  A same-size reinterpret between two such kinds (e.g. the
+ * `int -> uint64` the frontend emits for `(:: 10 :uint64)`, since both are 64
+ * bits) is bit-identical, so it is a value-preserving retype the CPS translator
+ * can see through.  Floats are excluded -- an int<->double reinterpret changes
+ * bit meaning and is a Tier B concern, left to the fallback. */
+static bool tierA_scalar_kind(TypeKind k) {
+    switch (k) {
+        case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_BOOL: case TY_CSTR: case TY_PTR_VOID:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* True if `e` is a same-size Tier A reinterpret we can peel like an ascription. */
+static bool is_tierA_reinterp(const Expr *e) {
+    return e && e->kind == EX_REINTERPRET
+        && tierA_scalar_kind(e->as.reinterpret_.source_kind)
+        && tierA_scalar_kind(e->as.reinterpret_.target_kind);
+}
+
 static bool is_atomic(const Expr *e) {
     e = ascribe_peel(e);
     if (!e) return false;
+    if (is_tierA_reinterp(e)) return is_atomic(e->as.reinterpret_.expr);
     switch (e->kind) {
         case EX_INT_LIT:
         case EX_BOOL_LIT:
@@ -91,6 +116,14 @@ static CAtom atom_of(const Expr *e) {
     CAtom a; memset(&a, 0, sizeof(a));
     a.ty = e ? e->type.kind : TY_UNKNOWN;
     if (!e) { a.kind = CA_UNIT; return a; }
+    /* A Tier A reinterpret is a bit-identical retype: take the inner atom's
+     * value but keep the reinterpret's (retyped) result type. */
+    if (is_tierA_reinterp(e)) {
+        TypeKind tgt = e->as.reinterpret_.target_kind;
+        CAtom inner = atom_of(e->as.reinterpret_.expr);
+        inner.ty = tgt;
+        return inner;
+    }
     switch (e->kind) {
         case EX_INT_LIT:   a.kind = CA_INT;  a.i = e->as.i; break;
         case EX_BOOL_LIT:  a.kind = CA_BOOL; a.b = e->as.b; break;

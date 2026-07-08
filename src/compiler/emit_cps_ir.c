@@ -64,7 +64,7 @@ static const char *binder_ctype(EmitCtx *ctx, TypeKind ty) {
 /* Atom types we can materialize as a slot-representable value. */
 static bool atom_ok(const CAtom *a) {
     switch (a->kind) {
-        case CA_INT:  return a->ty == TY_INT || a->ty == TY_INT64 || a->ty == TY_UNKNOWN;
+        case CA_INT:  return slot_ty(a->ty) || a->ty == TY_UNKNOWN;  /* any <=64-bit int width */
         case CA_BOOL: return true;
         case CA_UNIT: return true;   /* nil placeholder (0) */
         case CA_STR:  return true;   /* cstr literal (Tier A pointer) */
@@ -554,7 +554,7 @@ static const char *join_param(CE *ce, uint32_t id) {
 /* Materialize an atom as a malloc'd C expression string. */
 static char *atom_str(CE *ce, const CAtom *a) {
     switch (a->kind) {
-        case CA_INT:  return atom_int_typed(a->i, TY_INT);
+        case CA_INT:  return atom_int_typed(a->i, a->ty);  /* real width -> matching *_C() suffix */
         case CA_BOOL: return atom_bool(a->b);
         case CA_UNIT: return strdup("0");
         case CA_STR:  return atom_cstr(a->str);
