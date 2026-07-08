@@ -1,0 +1,24 @@
+;; panic-in-value-if-branch: an `if` in value/tail position whose diverging
+;; (panic) branch sits opposite a value branch must emit the value branch into
+;; the merge temp and the panic as a plain statement -- not `(null) = ((void)0);`.
+;; Covers both orderings (panic in else, panic in then) plus a nested case.
+
+;; panic in the else-branch, value in the then-branch
+(defn describe [r : (Result int int)] : int
+  (if (ok? r) 10 (panic "boom")))
+
+;; panic in the then-branch, value in the else-branch (mirror)
+(defn describe2 [r : (Result int int)] : int
+  (if (ok? r) (panic "boom") 20))
+
+;; if in statement position (discarded do item) with a panic branch
+(defn describe3 [r : (Result int int)] : int
+  (do
+    (if (ok? r) 10 (panic "boom"))
+    99))
+
+(defn main [] : int
+  (println (describe (ok 1)))    ; => 10
+  (println (describe2 (err 1)))  ; => 20
+  (println (describe3 (ok 1)))   ; => 99
+  0)

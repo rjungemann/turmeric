@@ -1729,6 +1729,15 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     bool nil_result = (e->type.kind == TY_NIL);
     /* Phase R1: Also create temp if only then-branch has return/throw and else doesn't */
     bool else_no_return = e->as.if_.else_or_null ? !else_has_return_or_throw : false;
+    /* panic-in-value-if-branch: mirror of the Phase R1 case -- only the
+     * else-branch diverges (return/throw/panic) and the then-branch yields the
+     * value, e.g. `(if cond value (panic ...))`.  Without this the temp is not
+     * created, the value-producing then-branch is emitted as a discarded
+     * statement, and the diverging else-branch is (wrongly) emitted as a value
+     * assigned into the null temp -> `(null) = ((void)0);`. */
+    bool then_no_return = !then_has_return_or_throw;
+    bool only_then_diverges = then_has_return_or_throw && else_no_return;
+    bool only_else_diverges = else_has_return_or_throw && then_no_return;
     /* Phase 5 carrier-bridge deletion: if either arm is a by-value Option/Result
      * producer (a monomorphized #{Construct} spec), the merge temp must be that
      * by-value struct -- the if's own `e->type` is collapsed to the int64
@@ -1737,7 +1746,7 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * carrier-producing arm (carrier->concrete; a deref, never a dangling
      * stack spill). */
     Type if_bv = type_simple(TY_UNKNOWN, CK_COPY);
-    if (!nil_result && ( !any_has_return_or_throw || (then_has_return_or_throw && else_no_return))) {
+    if (!nil_result && ( !any_has_return_or_throw || only_then_diverges || only_else_diverges)) {
         tmp = fresh_tmp(ctx);
         if_bv = fn_body_tail_byvalue_carrier_type(ctx, e);
         if (if_bv.kind != TY_UNKNOWN)
@@ -1750,7 +1759,11 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     buf_printf(body, "if (%s) {\n", cond);
     free(cond);
     ctx->indent += 4;
-    if (nil_result || any_has_return_or_throw) {
+    /* Emit the then-branch as a discarded statement only when it itself
+     * diverges (return/throw/panic) or the whole `if` is nil-typed.  When only
+     * the *else*-branch diverges the then-branch still yields the merged value
+     * and must be assigned into the temp -- see panic-in-value-if-branch. */
+    if (nil_result || then_has_return_or_throw) {
         emit_stmt(ctx, body, e->as.if_.then_);
     } else {
         char *t = emit_value(ctx, body, e->as.if_.then_);
@@ -1800,7 +1813,7 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
          * If only the then-branch has return/throw, emit the else-branch as a value.
          * This allows the ? operator to work: (if (err? x) (return ...) (ok-val x))
          */
-        if (nil_result || (then_has_return_or_throw && else_has_return_or_throw)) {
+        if (nil_result || else_has_return_or_throw) {
             emit_stmt(ctx, body, e->as.if_.else_or_null);
         } else {
             char *el = emit_value(ctx, body, e->as.if_.else_or_null);
@@ -1838,7 +1851,11 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     ctx->indent -= 4;
     indent_buf(body, ctx->indent);
     buf_puts(body, "}\n");
-    return nil_result ? atom_nil() : tmp;
+    /* tmp is NULL when no merge temp was created: a nil-typed `if`, or a
+     * non-nil `if` in which both branches diverge (return/throw/panic) so no
+     * value ever flows out.  Yield the nil placeholder rather than a bare NULL
+     * (which would print as `(null)`). */
+    return tmp ? tmp : atom_nil();
 }
 
 /* Phase 4 v1: defer-aware do-block emission.

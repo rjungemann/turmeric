@@ -1,5 +1,14 @@
 # `panic` in a value-position `if`-branch emits `(null) = ((void)0);`
 
+> **Status:** Resolved (2026-07-08)
+> **Fix:** `src/compiler/emit_expr.c` `emit_if_value` -- handle the mirror
+> asymmetric case (only the else-branch diverges) symmetrically with the
+> existing then-branch (`?`-operator) case: create the merge temp, emit the
+> diverging branch as a plain statement, and assign the value branch. Also
+> return the nil placeholder instead of a bare NULL when no temp is created
+> (nil-typed `if`, or both branches diverge). Regression fixture:
+> `tests/fixtures/panic-value-if-branch/`.
+
 **Severity:** medium (miscompile -> C won't compile; blocks a natural `panic` shape)
 
 ## Summary
