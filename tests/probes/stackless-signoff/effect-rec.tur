@@ -1,0 +1,41 @@
+;; F4 sign-off probe (compiled-first-class-continuations-plan): effect-rec --
+;; a NESTED handle around a recursive perform/resume loop at 1,000,000 depth.
+;;
+;; The existing atom-rec / fiber-rec / cu-rec probes exercise catch-unwind
+;; carriers; none of them nest an effect handler around a deep perform/resume
+;; loop.  This probe fills that gap: it drives a 1,000,000-iteration Tick
+;; perform/resume loop under one inner handler, wrapped in an OUTER effect
+;; handler, all under `ulimit -s 256`.  It must exit 0 with no SIGSEGV.
+;;
+;; Substrate note: on the fiber-based effect runtime each `handle` body runs in
+;; its own fiber and every `resume` re-enters that same body fiber iteratively,
+;; so a deep perform/resume loop under a single handle does NOT grow the C
+;; stack in proportion to depth.  The probe therefore completes in bounded C
+;; stack today; it is the standing regression guard for the same property once
+;; `handle` / `perform` / `resume` move onto heap continuations (Phase F1).
+;;
+;; Oracle: replacing 1000000 with a small N yields N (each Tick resumes with 1,
+;; summed N times; the outer Outer resumes with 0, contributing nothing).
+
+(defeffect Outer [] :int)
+(defeffect Tick [] :int)
+
+;; Inner recursive perform/resume loop: perform Tick n times, accumulating each
+;; resumed value.  Tail-recursive so the loop itself is a flat iteration.
+(defn tick-loop [n : int acc : int] : int
+  (if (= n 0)
+    acc
+    (tick-loop (- n 1) (+ acc (perform (Tick))))))
+
+;; One inner handler resumes every Tick with 1.
+(defn run-ticks [n : int] : int
+  (handle (tick-loop n 0)
+    (Tick [] k) (resume k 1)))
+
+;; Nested handle: an outer Outer handler wraps the inner Tick loop.  The outer
+;; perform resumes with 0, so the total is exactly run-ticks(n).
+(defn main [] : int
+  (println
+    (handle (+ (perform (Outer)) (run-ticks 1000000))
+      (Outer [] k) (resume k 0)))
+  0)
