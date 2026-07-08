@@ -528,6 +528,35 @@ static bool err_val_result_is_freeable_scalar(TypeKind k) {
     }
 }
 
+/* catch-unwind-returned-err-box-payload-leak: true when `t` is an
+ * already-resolved `(Result A B)` whose err arm B is an inline scalar.  The
+ * return bridge frees a caught result box after the carrier->concrete readback
+ * copies its fields into the returned aggregate; a pointer/cstr/aggregate err
+ * arm leaves the aggregate's err field aliasing the box's panic payload, so the
+ * bridge must free only the box struct (shallow) and hand the payload to the
+ * aggregate.  For a scalar err arm the aggregate copies err_val out as a plain
+ * reinterpreted word that never points INTO the payload, so the FULL free
+ * (`tur_result_box_free`, which also reclaims the 32 B payload on the err
+ * branch) is safe -- and the ok branch has no payload, so it stays complete
+ * either way.
+ *
+ * `t` is the return type the bridge already resolved via emit_resolve_type, so
+ * this reads its app args purely and structurally (type_extract_adt_app -- no
+ * emit_resolve_type / adt_field_type_for_app / type_adt_app_def call at the
+ * return site).  That side-effect-free probe is deliberate: an earlier attempt
+ * that recomputed the err-field type via those calls perturbed unrelated
+ * rc-elision codegen (see the report). */
+bool result_err_arm_is_freeable_scalar(const Type *t) {
+    if (!t || t->kind != TY_APP) return false;
+    AdtDef *def = NULL;
+    Type args[16];
+    uint8_t n_args = 0;
+    if (!type_extract_adt_app(t, &def, args, &n_args) || !def) return false;
+    if (!def->name || strcmp(def->name, "Result") != 0 || n_args != 2)
+        return false;
+    return err_val_result_is_freeable_scalar(args[1].kind);
+}
+
 /* Shared walker for the two scoped-free escape analyses.  `allow_box_accessors`
  * selects the catch-unwind result-box variant (catch-unwind-thunk-closure-leak):
  * a use of `b` as the sole argument of a read-only Result accessor -- `ok?`,
