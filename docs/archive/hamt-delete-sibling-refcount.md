@@ -1,5 +1,11 @@
 # HAMT delete path under-retains a shared node (double-free on lineage free)
 
+**Status:** RESOLVED. Root cause was an *over-release*, not a missing retain:
+`node_delete`'s collapse arms released the deleted child from the old, shared
+node. Fixed in `src/runtime/hamt.c` (bitmap + array collapse arms); regression
+guarded by `tests/test_hamt_del_lineage.c` (ctest `tur_hamt_del_lineage`). See
+`docs/archive/history/hamt-delete-sibling-refcount.md` for the paper trail.
+
 **Severity:** medium (latent correctness; a genuine double-free / heap
 use-after-free, but only surfaces when a *whole* persistent-map lineage that
 includes a `tur_hamt_del`-produced map is freed. Programs that leak their maps

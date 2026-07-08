@@ -671,7 +671,13 @@ static HamtNode *node_delete(HamtNode *n, uint64_t hash, void *key, uint32_t lev
             }
 
             if (!new_child) {
-                tur_hamt_node_release(n->as.bitmap.children[idx]);
+                /* The deleted child is simply omitted from the freshly built
+                 * new_node below (only surviving siblings are copied + retained).
+                 * Do NOT release children[idx] here: it belongs to the old,
+                 * shared node `n`, which is persistent and still owns that
+                 * reference. Releasing it drops `n`'s ref and, once `n` is later
+                 * freed, node_free_recursive releases the child a second time --
+                 * a double free. */
                 uint32_t new_bitmap = bitmap & ~(UINT32_C(1) << chunk);
                 uint32_t new_child_count = popcount32(new_bitmap);
 
@@ -713,7 +719,11 @@ static HamtNode *node_delete(HamtNode *n, uint64_t hash, void *key, uint32_t lev
             }
 
             if (!new_child) {
-                tur_hamt_node_release(n->as.array.children[chunk]);
+                /* Same invariant as the bitmap collapse arm: the deleted child
+                 * is omitted from the freshly built new_node (surviving siblings
+                 * are copied + retained). Releasing children[chunk] here would
+                 * drop a reference the old, shared node `n` still owns, causing a
+                 * double free when `n` is later freed. */
                 HamtNode *new_node = array_node_create();
                 for (uint32_t i = 0; i < HAMT_SLOTS_PER_LEVEL; i++) {
                     if (i == chunk) {
