@@ -35,13 +35,14 @@ static CTerm *new_term(CpsB *b, CTermKind k) {
     return t;
 }
 
-static CVar fresh_cvar(CpsB *b, TypeKind ty) {
+static CVar fresh_cvar(CpsB *b, const Type *ty) {
     CVar v;
     v.id = b->counter++;
     char buf[24];
     snprintf(buf, sizeof(buf), "t%u", v.id);
     v.name = arena_strdup(b->a, buf, strlen(buf));
-    v.ty = ty;
+    v.ty = ty ? ty->kind : TY_UNKNOWN;
+    v.type = ty;
     v.bind = NULL;
     return v;
 }
@@ -51,6 +52,7 @@ static CVar cvar_of_binding(const Binding *bd) {
     v.id = bd->id;
     v.name = (bd->name ? bd->name->name : "_");
     v.ty = bd->type.kind;
+    v.type = &bd->type;
     v.bind = bd;
     return v;
 }
@@ -117,6 +119,7 @@ static CAtom atom_of(const Expr *e) {
     e = ascribe_peel(e);
     CAtom a; memset(&a, 0, sizeof(a));
     a.ty = e ? e->type.kind : TY_UNKNOWN;
+    a.type = e ? &e->type : NULL;
     if (!e) { a.kind = CA_UNIT; return a; }
     /* A Tier A reinterpret is a bit-identical retype: take the inner atom's
      * value but keep the reinterpret's (retyped) result type. */
@@ -140,7 +143,7 @@ static CAtom atom_of(const Expr *e) {
 
 static CAtom atom_cvar(CVar v) {
     CAtom a; memset(&a, 0, sizeof(a));
-    a.kind = CA_CVAR; a.ty = v.ty; a.cvar_id = v.id; a.cvar_name = v.name;
+    a.kind = CA_CVAR; a.ty = v.ty; a.type = v.type; a.cvar_id = v.id; a.cvar_name = v.name;
     return a;
 }
 
@@ -191,6 +194,36 @@ static bool is_delegatable_owning(const Expr *e) {
     return arg != NULL && is_atomic(arg);
 }
 
+/* A struct/ADT value op that stays a local -- construct (make-struct), read a
+ * field (.field), or a default value.  Like the owning ops, these do not need
+ * CPS lowering: the aggregate is a local (never crosses the DK slot -- a crossing
+ * use is rejected by atom_ok / fn_sig_ok), so emission is delegated to the direct
+ * emitter.  Delegated only when every operand is atomic, so no control operator
+ * hides in an operand. */
+static bool is_delegatable_struct(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_GET_FIELD:
+            return is_atomic(e->as.get_field_.struct_expr);
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                if (!is_atomic(e->as.make_struct_.field_values[i])) return false;
+            return true;
+        case EX_DEFAULT_OF:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* True if every argument of an EX_CALL is atomic (so the whole call can be
+ * delegated to the direct emitter without control ops hiding in an arg). */
+static bool call_args_atomic(const Expr *e) {
+    for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+        if (!is_atomic(e->as.call_.args[i])) return false;
+    return true;
+}
+
 static CTerm *build_letraw(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     CTerm *t = new_term(b, CT_LETRAW);
     t->as.letraw.x = x;
@@ -201,7 +234,7 @@ static CTerm *build_letraw(CpsB *b, Expr *e, CVar x, CTerm *rest) {
 
 static CAtom atomize(CpsB *b, Expr *e, Pending *p) {
     if (is_atomic(e)) return atom_of(e);
-    CVar x = fresh_cvar(b, e ? e->type.kind : TY_UNKNOWN);
+    CVar x = fresh_cvar(b, e ? &e->type : NULL);
     if (p->n < 32) { p->items[p->n].expr = e; p->items[p->n].x = x; p->n++; }
     return atom_cvar(x);
 }
@@ -312,9 +345,9 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
         t->as.appcont.v = atom_of(e);
         return t;
     }
-    if (is_delegatable_owning(e)) {
-        /* bind the owning-op result, then deliver it to the continuation. */
-        CVar x = fresh_cvar(b, e->type.kind);
+    if (is_delegatable_owning(e) || is_delegatable_struct(e)) {
+        /* bind the delegated op's result, then deliver it to the continuation. */
+        CVar x = fresh_cvar(b, &e->type);
         CTerm *ac = new_term(b, CT_APPCONT);
         ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
         return build_letraw(b, e, x, ac);
@@ -325,7 +358,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             CAtom *args = arena_alloc(b->a, (e->as.builtin.n ? e->as.builtin.n : 1) * sizeof(CAtom));
             for (uint32_t i = 0; i < e->as.builtin.n; i++)
                 args[i] = atomize(b, e->as.builtin.args[i], &p);
-            CVar x = fresh_cvar(b, e->type.kind);
+            CVar x = fresh_cvar(b, &e->type);
             CTerm *ac = new_term(b, CT_APPCONT);
             ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
             CTerm *t = new_term(b, CT_LETPRIM);
@@ -342,6 +375,16 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                 t->as.unsupported.why = "indirect call";
                 return t;
             }
+            /* A cps->direct call to an uncolored callee with atomic args is
+             * delegated to the direct emitter, which resolves the monomorphized
+             * callee name (constructors, specialized fns) the CPS backend's own
+             * naming does not.  Colored callees still thread the continuation. */
+            if (!callee_colored(b, fn) && call_args_atomic(e)) {
+                CVar x = fresh_cvar(b, &e->type);
+                CTerm *ac = new_term(b, CT_APPCONT);
+                ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+                return build_letraw(b, e, x, ac);
+            }
             Pending p = {0};
             uint32_t n = e->as.call_.n_args;
             CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
@@ -353,7 +396,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                 t->as.tailcall.n = n; t->as.tailcall.kont = kont;
                 return fold_pending(b, &p, t);
             } else {
-                CVar x = fresh_cvar(b, e->type.kind);
+                CVar x = fresh_cvar(b, &e->type);
                 CTerm *ac = new_term(b, CT_APPCONT);
                 ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
                 CTerm *t = new_term(b, CT_LETCALL);
@@ -385,7 +428,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             if (n == 0) return cps_tail(b, NULL, kont);
             CTerm *rest = cps_tail(b, e->as.do_.items[n - 1], kont);
             for (int i = (int)n - 2; i >= 0; i--) {
-                CVar discard = fresh_cvar(b, e->as.do_.items[i]->type.kind);
+                CVar discard = fresh_cvar(b, &e->as.do_.items[i]->type);
                 rest = cps_bind(b, e->as.do_.items[i], discard, rest);
             }
             return rest;
@@ -393,7 +436,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
         case EX_RETURN:
             return cps_tail(b, e->as.return_.value, b->retk);
         case EX_RESET: {
-            CVar x = fresh_cvar(b, e->type.kind);
+            CVar x = fresh_cvar(b, &e->type);
             CTerm *t = new_term(b, CT_RESET);
             t->as.reset.x = x;
             t->as.reset.delim = cps_tail(b, e->as.reset_.body, kont_prompt(e->type.kind));
@@ -403,7 +446,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             return t;
         }
         case EX_SHIFT: {
-            CVar k = fresh_cvar(b, e->type.kind);
+            CVar k = fresh_cvar(b, &e->type);
             k.name = "k'";
             CTerm *t = new_term(b, CT_SHIFT);
             t->as.shift.k = k;
@@ -411,14 +454,14 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             return t;
         }
         case EX_HANDLE: {
-            CVar x = fresh_cvar(b, e->type.kind);
+            CVar x = fresh_cvar(b, &e->type);
             CTerm *ac = new_term(b, CT_APPCONT);
             ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
             return build_handle(b, e, x, ac);
         }
         case EX_PERFORM: {
             Pending p = {0};
-            CVar x = fresh_cvar(b, e->type.kind);
+            CVar x = fresh_cvar(b, &e->type);
             CTerm *ac = new_term(b, CT_APPCONT);
             ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
             CTerm *core = build_perform(b, e, x, ac, &p);
@@ -426,7 +469,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
         }
         case EX_RESUME: {
             Pending p = {0};
-            CVar x = fresh_cvar(b, e->type.kind);
+            CVar x = fresh_cvar(b, &e->type);
             CTerm *ac = new_term(b, CT_APPCONT);
             ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
             CTerm *core = build_resume(b, e, x, ac, &p);
@@ -450,7 +493,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         t->as.letval.x = x; t->as.letval.v = atom_of(e); t->as.letval.body = rest;
         return t;
     }
-    if (is_delegatable_owning(e)) return build_letraw(b, e, x, rest);
+    if (is_delegatable_owning(e) || is_delegatable_struct(e)) return build_letraw(b, e, x, rest);
     switch (e->kind) {
         case EX_BUILTIN: {
             Pending p = {0};
@@ -471,13 +514,17 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                 t->as.unsupported.why = "indirect call";
                 return t;
             }
+            /* cps->direct call to an uncolored callee with atomic args: delegate
+             * to the direct emitter (monomorphized callee names). */
+            if (!callee_colored(b, fn) && call_args_atomic(e))
+                return build_letraw(b, e, x, rest);
             Pending p = {0};
             uint32_t n = e->as.call_.n_args;
             CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
             for (uint32_t i = 0; i < n; i++)
                 args[i] = atomize(b, e->as.call_.args[i], &p);
             if (callee_colored(b, fn)) {
-                CVar j = fresh_cvar(b, x.ty);
+                CVar j = fresh_cvar(b, x.type);
                 j.name = arena_strdup(b->a, "j", 1);
                 CTerm *call = new_term(b, CT_TAILCALL);
                 call->as.tailcall.fn = fn; call->as.tailcall.args = args;
@@ -496,7 +543,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         case EX_IF: {
             Pending p = {0};
             CAtom c = atomize(b, e->as.if_.cond, &p);
-            CVar j = fresh_cvar(b, x.ty);
+            CVar j = fresh_cvar(b, x.type);
             j.name = arena_strdup(b->a, "j", 1);
             CTerm *body = new_term(b, CT_IF);
             body->as.if_.cond = c;
@@ -521,7 +568,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             if (n == 0) { return cps_bind(b, NULL, x, rest); }
             CTerm *r = cps_bind(b, e->as.do_.items[n - 1], x, rest);
             for (int i = (int)n - 2; i >= 0; i--) {
-                CVar discard = fresh_cvar(b, e->as.do_.items[i]->type.kind);
+                CVar discard = fresh_cvar(b, &e->as.do_.items[i]->type);
                 r = cps_bind(b, e->as.do_.items[i], discard, r);
             }
             return r;
@@ -536,7 +583,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             return t;
         }
         case EX_SHIFT: {
-            CVar k = fresh_cvar(b, e->type.kind);
+            CVar k = fresh_cvar(b, &e->type);
             k.name = "k'";
             CTerm *t = new_term(b, CT_SHIFT);
             t->as.shift.k = k;

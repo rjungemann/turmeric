@@ -1,0 +1,29 @@
+;; CPS-IR-to-C backend, N3: construct and destructure a struct/ADT across an
+;; effect boundary.  Built with --enable=cps-backend.
+;;
+;; `f` performs the E effect, builds a Pair2 from the resumed value, then reads
+;; both fields and sums them.  The Pair2 is a LOCAL that never crosses the DK
+;; slot -- only the scalar sum does -- so it needs no Tier C boxing: the CPS
+;; backend delegates make-struct (the monomorphized constructor call) and the
+;; .fst/.snd field reads to the direct emitter (CT_LETRAW -> emit_value), which
+;; carries the real by-value aggregate representation.  The naming of the
+;; perform result (a source `let` binding) and every struct local is resolved
+;; through name_for_binding so the delegated emission matches.
+;;
+;; direct-vs-CPS equal (32 + 10 = 42), LeakSanitizer-clean.
+
+(defstruct Pair2 [A B] (fst A) (snd B))
+
+(defeffect E [] :int)
+
+(defn f [] : int
+  (let [v (perform (E))]
+    (let [p (make-struct Pair2 :fst v :snd 10)]
+      (+ (.fst p) (.snd p)))))
+
+(defn run [] : int
+  (handle (f) (E [] k) (resume k 32)))
+
+(defn main [] : int
+  (println (run))
+  0)

@@ -102,6 +102,17 @@ static const char *binder_ctype(EmitCtx *ctx, TypeKind ty) {
     return emit_type_c_name(ctx, emit_type_from_kind(ty));
 }
 
+/* Like binder_ctype, but uses the full Type when it is a struct / ADT so the
+ * local is declared with its real (monomorphized) C type -- e.g.
+ * tur_adt_Option__int -- rather than a bare, wrong fallback.  Such a value is a
+ * local that never crosses the DK slot (crossing is gated by atom_ok /
+ * fn_sig_ok, which reject non-slot types); only scalar fields it yields cross. */
+static const char *binder_ctype_full(EmitCtx *ctx, TypeKind ty, const Type *t) {
+    if (t && (ty == TY_STRUCT || ty == TY_ADT || ty == TY_APP))
+        return emit_type_c_name(ctx, *t);
+    return binder_ctype(ctx, ty);
+}
+
 /* Atom types we can materialize as a slot-representable value. */
 static bool atom_ok(const CAtom *a) {
     switch (a->kind) {
@@ -143,6 +154,7 @@ static bool shape_supported(const BuiltinSpec *sp) {
 }
 
 static bool term_core_ok(const CTerm *t);
+static bool letraw_ok(const CTerm *t);  /* CT_LETRAW soundness (owning-drop guard) */
 
 /* ---- C3 delimited-control subset predicates -------------------------- *
  * The C3 backend lowers a reset/shift only in a restricted, zero-capture,
@@ -170,7 +182,13 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
                             uint32_t *bound, int nb) {
     if (!t || nb >= CC_MAX_BOUND) return t ? true : false;
     #define CC_ATOM(a) do { const CAtom *_a = (a); \
-        if (_a->kind == CA_VAR) { if (_a->var && !_a->var->is_global && !binding_excluded(_a->var)) return true; } \
+        if (_a->kind == CA_VAR) { \
+            if (_a->var && !_a->var->is_global && !binding_excluded(_a->var)) { \
+                /* a source binding's cvar id is its binding id; the excluded */ \
+                /* incoming value and locally-bound names are not captures.   */ \
+                uint32_t _id = _a->var->id; bool _f = (_id != exclude); \
+                for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; } \
+                if (_f) return true; } } \
         else if (_a->kind == CA_CVAR) { \
             if (_a->cvar_id != exclude) { bool _f = true; \
                 for (int _i = 0; _i < nb; _i++) if (bound[_i] == _a->cvar_id) { _f = false; break; } \
@@ -205,6 +223,40 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
             CC_ATOM(&t->as.resume.v);
             bound[nb] = t->as.resume.x.id;
             return has_capture_rec(t->as.resume.body, exclude, bound, nb + 1);
+        case CT_LETRAW: {
+            /* The delegated Expr's operand variables are the only free names it
+             * references (its operands are atomic by construction).  Check each
+             * for a capture, the same test CC_ATOM applies to a source var. */
+            #define CC_VAREXPR(ve) do { const Expr *_e = (ve); \
+                while (_e && _e->kind == EX_ASCRIBE) _e = _e->as.ascribe_.inner; \
+                if (_e && _e->kind == EX_VAR && _e->as.var.binding \
+                    && !_e->as.var.binding->is_global \
+                    && !binding_excluded(_e->as.var.binding)) { \
+                    uint32_t _id = _e->as.var.binding->id; bool _f = (_id != exclude); \
+                    for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; } \
+                    if (_f) return true; } } while (0)
+            const Expr *le = t->as.letraw.e;
+            switch (le->kind) {
+                case EX_RC_OF:    CC_VAREXPR(le->as.rc_of_.expr); break;
+                case EX_RC_CLONE: CC_VAREXPR(le->as.rc_clone_.expr); break;
+                case EX_RC_DROP:  CC_VAREXPR(le->as.rc_drop_.expr); break;
+                case EX_RC_COUNT: CC_VAREXPR(le->as.rc_count_.expr); break;
+                case EX_RC_PTR:   CC_VAREXPR(le->as.rc_ptr_.expr); break;
+                case EX_GET_FIELD: CC_VAREXPR(le->as.get_field_.struct_expr); break;
+                case EX_MAKE_STRUCT:
+                    for (uint32_t i = 0; i < le->as.make_struct_.n_fields; i++)
+                        CC_VAREXPR(le->as.make_struct_.field_values[i]);
+                    break;
+                case EX_CALL:
+                    for (uint32_t i = 0; i < le->as.call_.n_args; i++)
+                        CC_VAREXPR(le->as.call_.args[i]);
+                    break;
+                default: break;   /* EX_DEFAULT_OF: no operand */
+            }
+            #undef CC_VAREXPR
+            bound[nb] = t->as.letraw.x.id;
+            return has_capture_rec(t->as.letraw.body, exclude, bound, nb + 1);
+        }
         default: return true;   /* nested reset/shift/handle/perform in a lifted body: bail */
     }
     #undef CC_ATOM
@@ -289,6 +341,8 @@ static bool shift_body_ok(const CTerm *t) {
             for (uint32_t i = 0; i < t->as.letcall.n; i++)
                 if (!atom_ok(&t->as.letcall.args[i])) return false;
             return shift_body_ok(t->as.letcall.body);
+        case CT_LETRAW:
+            return letraw_ok(t) && shift_body_ok(t->as.letraw.body);
         default: return false;
     }
 }
@@ -317,6 +371,8 @@ static bool perform_body_ok(const CTerm *t) {
             for (uint32_t i = 0; i < t->as.letcall.n; i++)
                 if (!atom_ok(&t->as.letcall.args[i])) return false;
             return perform_body_ok(t->as.letcall.body);
+        case CT_LETRAW:
+            return letraw_ok(t) && perform_body_ok(t->as.letraw.body);
         default: return false;
     }
 }
@@ -344,6 +400,8 @@ static bool handle_case_ok(const CTerm *t) {
         case CT_RESUME:
             return t->as.resume.k.kind == CA_VAR && atom_ok(&t->as.resume.v)
                 && handle_case_ok(t->as.resume.body);
+        case CT_LETRAW:
+            return letraw_ok(t) && handle_case_ok(t->as.letraw.body);
         default: return false;
     }
 }
@@ -394,6 +452,17 @@ static bool owning_dropped_before_control(const CTerm *t, uint32_t bid) {
     return false;
 }
 
+/* Soundness of a CT_LETRAW node in isolation: an allocating owning op (rc/of,
+ * rc/clone) must have its drop reachable before any control op (see
+ * owning_dropped_before_control).  Struct/ADT ops (make-struct, get-field,
+ * default-of) have no drop obligation and always pass. */
+static bool letraw_ok(const CTerm *t) {
+    if (owning_alloc_expr(t->as.letraw.e) && t->as.letraw.x.bind
+        && !owning_dropped_before_control(t->as.letraw.body, t->as.letraw.x.bind->id))
+        return false;
+    return true;
+}
+
 /* Recursively check that every node lies in the C1 core subset.  Does not
  * consult the emittable set -- the cps->cps join clause is handled separately
  * by the fixpoint (needs_heap_join). */
@@ -413,8 +482,10 @@ static bool term_core_ok(const CTerm *t) {
             return term_core_ok(t->as.letprim.body);
         }
         case CT_LETCALL: {
-            if (!(slot_ty(t->as.letcall.x.ty) || t->as.letcall.x.ty == TY_NIL))
-                return false;
+            /* The result binder may be a non-slot local (e.g. a struct/ADT read
+             * only via get-field); any crossing use is gated by atom_ok below /
+             * fn_sig_ok, so no slot check on the binder itself.  Args must still
+             * be slot-representable atoms. */
             for (uint32_t i = 0; i < t->as.letcall.n; i++)
                 if (!atom_ok(&t->as.letcall.args[i])) return false;
             return term_core_ok(t->as.letcall.body);
@@ -429,11 +500,7 @@ static bool term_core_ok(const CTerm *t) {
              * control op, it would be discarded (leak) or the value would abort
              * past the code that uses it (miscompile).  Require the drop up front;
              * otherwise fall back. */
-            if (owning_alloc_expr(t->as.letraw.e) && t->as.letraw.x.bind
-                && !owning_dropped_before_control(t->as.letraw.body,
-                                                  t->as.letraw.x.bind->id))
-                return false;
-            return term_core_ok(t->as.letraw.body);
+            return letraw_ok(t) && term_core_ok(t->as.letraw.body);
         case CT_TAILCALL: {
             /* KK_RET / KK_VAR / KK_PROMPT are all valid here: a KK_PROMPT tail
              * call threads the enclosing prompt chain (a reset's delimited
@@ -974,6 +1041,7 @@ static void emit_handle(CE *ce, const CTerm *t);
 static void emit_perform(CE *ce, const CTerm *t);
 static void emit_resume(CE *ce, const CTerm *t);
 static void emit_letraw(CE *ce, const CTerm *t);
+static char *cvar_cname(CE *ce, CVar x);
 
 /* Deliver value-string `v` to continuation `kont`. */
 static void emit_deliver(CE *ce, const CKont *kont, const char *v) {
@@ -1036,8 +1104,9 @@ static void emit_term(CE *ce, const CTerm *t) {
         }
         case CT_LETVAL: {
             char *v = atom_str(ce, &t->as.letval.v);
-            ce_line(ce, "%s = %s;", t->as.letval.x.name, v);
-            free(v);
+            char *bn = cvar_cname(ce, t->as.letval.x);
+            ce_line(ce, "%s = %s;", bn, v);
+            free(bn); free(v);
             emit_term(ce, t->as.letval.body);
             break;
         }
@@ -1046,14 +1115,16 @@ static void emit_term(CE *ce, const CTerm *t) {
             char **as = (char **)calloc(n ? n : 1, sizeof(char *));
             for (uint32_t i = 0; i < n; i++) as[i] = atom_str(ce, &t->as.letprim.args[i]);
             const BuiltinSpec *sp = t->as.letprim.spec;
+            char *bn = cvar_cname(ce, t->as.letprim.x);
             if (is_println_shape(sp->shape)) {
                 emit_println(ce, sp->shape, n ? as[0] : "0");
-                ce_line(ce, "%s = 0;", t->as.letprim.x.name);  /* nil result */
+                ce_line(ce, "%s = 0;", bn);  /* nil result */
             } else {
                 char *rhs = prim_expr(sp, as, n);
-                ce_line(ce, "%s = %s;", t->as.letprim.x.name, rhs);
+                ce_line(ce, "%s = %s;", bn, rhs);
                 free(rhs);
             }
+            free(bn);
             for (uint32_t i = 0; i < n; i++) free(as[i]);
             free(as);
             emit_term(ce, t->as.letprim.body);
@@ -1064,8 +1135,9 @@ static void emit_term(CE *ce, const CTerm *t) {
              * ordinary value; no continuation is threaded in. */
             char *fn = callee_name(t->as.letcall.fn);
             char *argv = atoms_csv(ce, t->as.letcall.args, t->as.letcall.n);
-            ce_line(ce, "%s = %s(%s); /* cps->direct */", t->as.letcall.x.name, fn, argv);
-            free(fn); free(argv);
+            char *bn = cvar_cname(ce, t->as.letcall.x);
+            ce_line(ce, "%s = %s(%s); /* cps->direct */", bn, fn, argv);
+            free(bn); free(fn); free(argv);
             emit_term(ce, t->as.letcall.body);
             break;
         }
@@ -1142,13 +1214,15 @@ static void emit_term(CE *ce, const CTerm *t) {
  * emitter.  The owning value is a local that never crosses a DK slot, so reusing
  * emit_value gives it the exact control-block / refcount / drop-glue discipline
  * the direct path uses -- no duplication, correct by construction. */
-/* Name a CT_LETRAW binder the way every reference site names it: through
- * name_for_binding when it stands for a source Binding, else its fresh cvar
- * name.  Returns a malloc'd string. */
+/* Name a CVar the way every reference site names it: through name_for_binding
+ * when it stands for a source Binding, else its fresh cvar name.  Malloc'd. */
+static char *cvar_cname(CE *ce, CVar x) {
+    return x.bind ? name_for_binding(ce->ctx, x.bind) : strdup(x.name);
+}
+
+/* Name a CT_LETRAW binder consistently (see cvar_cname). */
 static char *letraw_binder_name(CE *ce, const CTerm *t) {
-    return t->as.letraw.x.bind
-        ? name_for_binding(ce->ctx, t->as.letraw.x.bind)
-        : strdup(t->as.letraw.x.name);
+    return cvar_cname(ce, t->as.letraw.x);
 }
 
 static void emit_letraw(CE *ce, const CTerm *t) {
@@ -1176,23 +1250,32 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
     if (!t) return;
     switch (t->kind) {
         case CT_APPCONT: break;
-        case CT_LETVAL:
-            ce_line(ce, "%s %s;", binder_ctype(ce->ctx, t->as.letval.x.ty), t->as.letval.x.name);
+        case CT_LETVAL: {
+            char *bn = cvar_cname(ce, t->as.letval.x);
+            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letval.x.ty, t->as.letval.x.type), bn);
+            free(bn);
             emit_binder_decls(ce, t->as.letval.body);
             break;
-        case CT_LETPRIM:
-            ce_line(ce, "%s %s;", binder_ctype(ce->ctx, t->as.letprim.x.ty), t->as.letprim.x.name);
+        }
+        case CT_LETPRIM: {
+            char *bn = cvar_cname(ce, t->as.letprim.x);
+            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letprim.x.ty, t->as.letprim.x.type), bn);
+            free(bn);
             emit_binder_decls(ce, t->as.letprim.body);
             break;
-        case CT_LETCALL:
-            ce_line(ce, "%s %s;", binder_ctype(ce->ctx, t->as.letcall.x.ty), t->as.letcall.x.name);
+        }
+        case CT_LETCALL: {
+            char *bn = cvar_cname(ce, t->as.letcall.x);
+            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letcall.x.ty, t->as.letcall.x.type), bn);
+            free(bn);
             emit_binder_decls(ce, t->as.letcall.body);
             break;
+        }
         case CT_LETRAW: {
             char *bn = t->as.letraw.x.bind
                 ? name_for_binding(ce->ctx, t->as.letraw.x.bind)
                 : strdup(t->as.letraw.x.name);
-            ce_line(ce, "%s %s;", binder_ctype(ce->ctx, t->as.letraw.x.ty), bn);
+            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letraw.x.ty, t->as.letraw.x.type), bn);
             free(bn);
             emit_binder_decls(ce, t->as.letraw.body);
             break;
@@ -1219,10 +1302,13 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
             emit_binder_decls(ce, t->as.handle.delim);
             break;
         case CT_PERFORM: break;   /* terminal; the continuation is lifted */
-        case CT_RESUME:
-            ce_line(ce, "%s %s;", binder_ctype(ce->ctx, t->as.resume.x.ty), t->as.resume.x.name);
+        case CT_RESUME: {
+            char *bn = cvar_cname(ce, t->as.resume.x);
+            ce_line(ce, "%s %s;", binder_ctype(ce->ctx, t->as.resume.x.ty), bn);
+            free(bn);
             emit_binder_decls(ce, t->as.resume.body);
             break;
+        }
         default: break;
     }
 }
@@ -1324,7 +1410,9 @@ static void emit_reset(CE *ce, const CTerm *t) {
     int id = (*ce->helper_ctr)++;
     char hname[256];
     snprintf(hname, sizeof(hname), "%s_k%d", ce->fn_cn, id);
-    emit_lifted(ce, hname, LH_RESET_CONT, t->as.reset.x.name, t->as.reset.x.ty, t->as.reset.body, NULL);
+    char *rxn = cvar_cname(ce, t->as.reset.x);
+    emit_lifted(ce, hname, LH_RESET_CONT, rxn, t->as.reset.x.ty, t->as.reset.body, NULL);
+    free(rxn);
 
     char pchain[64];
     snprintf(pchain, sizeof(pchain), "__p%d", id);
@@ -1360,7 +1448,9 @@ static void emit_handle(CE *ce, const CTerm *t) {
     snprintf(kname, sizeof(kname), "%s_hk%d", ce->fn_cn, id);
     snprintf(cname, sizeof(cname), "%s_hc%d", ce->fn_cn, id);
     /* lift the handle continuation (like a reset continuation) */
-    emit_lifted(ce, kname, LH_RESET_CONT, t->as.handle.x.name, t->as.handle.x.ty, t->as.handle.body, NULL);
+    char *hxn = cvar_cname(ce, t->as.handle.x);
+    emit_lifted(ce, kname, LH_RESET_CONT, hxn, t->as.handle.x.ty, t->as.handle.body, NULL);
+    free(hxn);
     /* lift the handler case as a DKHandler */
     emit_lifted(ce, cname, LH_HANDLER_CASE, NULL, TY_INT, t->as.handle.case_body, t);
 
@@ -1401,7 +1491,9 @@ static void emit_perform(CE *ce, const CTerm *t) {
         int id = (*ce->helper_ctr)++;
         char pname[256];
         snprintf(pname, sizeof(pname), "%s_pf%d", ce->fn_cn, id);
-        emit_lifted(ce, pname, LH_PERFORM_CONT, t->as.perform.x.name, t->as.perform.x.ty, t->as.perform.body, NULL);
+        char *pxn = cvar_cname(ce, t->as.perform.x);
+        emit_lifted(ce, pname, LH_PERFORM_CONT, pxn, t->as.perform.x.ty, t->as.perform.body, NULL);
+        free(pxn);
         ce_line(ce, "return dk_perform(%d, %s, dk_frame(%s, 0, %s));",
                 tag, sa, pname, ce->cur_k);
     }
@@ -1418,9 +1510,10 @@ static void emit_resume(CE *ce, const CTerm *t) {
     buf_printf(&inv, "dk_invoke((DK *)(%s), %s)", kk, sv);
     buf_putc(&inv, '\0');
     char *ld = slot_load(ce->ctx, t->as.resume.x.ty, inv.data);  /* result <- slot */
-    ce_line(ce, "%s = %s;", t->as.resume.x.name, ld);
+    char *bn = cvar_cname(ce, t->as.resume.x);
+    ce_line(ce, "%s = %s;", bn, ld);
     buf_free(&inv);
-    free(ld); free(sv); free(kk); free(vv);
+    free(bn); free(ld); free(sv); free(kk); free(vv);
     emit_term(ce, t->as.resume.body);
 }
 

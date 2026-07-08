@@ -46,6 +46,7 @@ typedef enum CAtomKind {
 typedef struct CAtom {
     CAtomKind     kind;
     TypeKind      ty;          /* type kind of the value */
+    const Type   *type;        /* full type when known (for carrier-ABI ADT detection); may be NULL */
     const Binding *var;        /* CA_VAR */
     uint32_t      cvar_id;     /* CA_CVAR */
     const char   *cvar_name;   /* CA_CVAR */
@@ -95,6 +96,7 @@ typedef struct CVar {     /* a CPS-introduced binder */
     uint32_t    id;
     const char *name;
     TypeKind    ty;
+    const Type *type;      /* full type when known (carrier-ABI ADT detection); may be NULL */
     /* When this binder stands for a source Binding (a `let`-bound name), the
      * emitter must name it via name_for_binding so it matches every reference
      * site (which resolve through name_for_binding).  NULL for a fresh binder. */

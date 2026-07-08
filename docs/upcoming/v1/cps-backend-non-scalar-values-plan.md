@@ -260,17 +260,57 @@ full-`Type` info the IR does not yet carry -- folds into N3). The
   the CPS side is the correct one.)
 - Full suite: 1999 passed, 0 failed (+2 float fixtures).
 
-### N3 -- struct / ADT forms
+### N3 -- struct / ADT forms -- **local slice LANDED; crossing/coloring open**
 
-- Translate `EX_MAKE_STRUCT` / `EX_GET_FIELD` / `EX_DEFAULT_OF` in `cps_ir.c`
-  (new `CT_*` nodes or `CT_LETPRIM`-shaped lowerings) and emit them in
-  `emit_cps_ir.c` for **carrier-ABI** (Tier A) types first -- these are the
-  ~1800 stdlib option/result/map occurrences and are pointer-sized, so they need
-  translation + emission but no new slot machinery.
-- Then decide Tier C (box-at-boundary vs boxed-representation) for wide by-value
-  aggregates and implement the chosen path behind the classification guard.
-- **Round-trip fixtures.** A colored function constructing and destructuring an
-  `Option` / `Result` / a small record across an effect boundary.
+**Finding (corrects the plan's premise).** Most monomorphized parametric ADTs
+are **by-value aggregates** (`tur_adt_Option__int`, `tur_adt_Box__int`), *not*
+int64 carriers -- `type_uses_carrier_abi` returns false for them (only heap ADTs
+like Vec/Map/Set and genuinely-parametric applications ride the int64 carrier).
+So the "carrier ADTs are ~1800 easy Tier A occurrences" assumption is only
+partly right; the common case is by-value, whose *crossing* is Tier C.
+
+**Landed -- struct/ADT LOCALS via delegation.** Like `rc` locals, a struct that
+stays a local (constructed, field-read, only scalars cross the slot) needs no
+Tier C boxing. `cps_ir.c` now delegates `make-struct` / `.field` (get-field) /
+`default-of` -- and any cps->direct call with atomic args -- to the direct
+emitter via `CT_LETRAW`, which resolves the **monomorphized** constructor /
+field / callee names the CPS backend's own naming cannot. The full `Type` is
+threaded onto every `CVar`/`CAtom` (so `binder_ctype_full` declares the real
+aggregate C type), and every source-`let` binder is named through
+`name_for_binding` consistently (a latent mismatch this work exposed and fixed).
+Two general fixes fell out and are independently valuable:
+  - a `perform`/`reset` result bound by a **named `let`** and referenced by name
+    was wrongly treated as a capture (`CC_ATOM` only handled inline/fresh
+    results); now source-var references check `exclude`/`bound` like CVARs, so
+    `(let [v (perform ...)] ... v ...)` CPS-emits;
+  - all binder decls/assigns use `name_for_binding` for source bindings.
+- **Fixture.** `cps-backend-struct-effect`: a colored fn performs an effect,
+  builds a `Pair2` from the resumed value, reads both fields, sums them
+  (`32 + 10 = 42`) -- constructed and destructured across the effect boundary,
+  direct-vs-CPS equal, LeakSanitizer-clean. This is the N3 round-trip target for
+  the local case.
+- Full suite: 2002 passed, 0 failed.
+
+**Still open in N3:**
+  - **Struct-returning helper functions are colored.** `some` / `mkwid` (any fn
+    whose body is essentially a `make-struct`) end up in the colored set, so a
+    *non-tail* call to one needs a heap-reified join (the pre-existing C1/C3
+    `needs_heap_join` limitation) and evicts the caller. That is why `(some v)`
+    across an effect still falls back while an *inline* `make-struct` works. Two
+    orthogonal fixes would unlock it: (a) not coloring pure struct-builder fns,
+    and (b) the non-tail cps->cps heap-join support. Both are separate from the
+    emit-side N3 work landed here.
+  - **Aggregates that actually CROSS the slot** (a struct as an effect payload,
+    resume value, or function return): carrier (heap ADT, int64) = Tier A cast
+    with the `Type` now available; by-value wide aggregate = **Tier C**
+    box-at-boundary (heap-copy on store, deref+free on load). Deferred.
+
+### N3-TierC -- wide by-value aggregate crossing (box-at-boundary) -- deferred
+
+Decide box-at-boundary vs boxed-representation for by-value aggregates that cross
+the slot, and implement behind the classification guard (`slot_ok` already has
+the `Type` to distinguish carrier from by-value). Round-trip: an effect that
+produces/resumes with a by-value `Option`/`Result`/record.
 
 ### N4 -- non-scalar continuation payloads
 
@@ -327,8 +367,9 @@ must be true at graduation:
 2. **Tier B complete** (N2) -- `float` / `double` / `float32` thread via the
    bit-reinterpret slot convention. *Done* (`slot_store`/`slot_load` at all six
    boundaries; `cps-backend-float` / `cps-backend-float-effect` fixtures).
-3. **Tier C complete** (N3) -- wide by-value aggregates cross the boundary by the
-   chosen boxing strategy.
+3. **Tier C complete** (N3-TierC) -- wide by-value aggregates that *cross* the
+   slot (effect payload / resume value / return) box at the boundary. *Deferred*
+   (struct/ADT LOCALS that stay off the slot already work -- see item 6).
 4. **Owning pointers handled correctly on the CPS path** -- `ref` / `rc` /
    `weak` / `lref`. Investigation
    ([cps-backend-owning-pointers-plan.md](cps-backend-owning-pointers-plan.md))
@@ -353,9 +394,12 @@ must be true at graduation:
    the CPS path. *Done* (the arithmetic shapes already covered the narrow widths;
    the `cps-backend-narrow-int` / `cps-backend-uint64` fixtures exercise int32 /
    uint64 math end to end).
-6. **Carrier-ABI ADT forms** (N3) -- `EX_MAKE_STRUCT` / `EX_GET_FIELD` /
-   `EX_DEFAULT_OF` for carrier-ABI Option/Result/map and friends are translated
-   and emitted, closing the ~1800 stdlib occurrences C5 measured.
+6. **Struct / ADT forms** (N3) -- `make-struct` / `.field` / `default-of` are
+   translated and emitted. *Landed for LOCALS* (delegated to the direct emitter;
+   fixture `cps-backend-struct-effect` constructs + destructures a record across
+   an effect boundary). Still open: struct-returning helper fns are colored (so
+   non-tail calls to them evict the caller -- coloring + heap-join limitation),
+   and aggregates that *cross* the slot need item 3's Tier C boxing.
 7. **Fallback removed** (N6) -- no `CT_UNSUPPORTED` whole-function bail-out
    remains for colored functions; the direct-vs-CPS dual path is retired. The
    **perform/handle machine-split** hole
