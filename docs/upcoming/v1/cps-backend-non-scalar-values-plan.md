@@ -296,10 +296,14 @@ Two general fixes fell out and are independently valuable:
     whose body is essentially a `make-struct`) end up in the colored set, so a
     *non-tail* call to one needs a heap-reified join (the pre-existing C1/C3
     `needs_heap_join` limitation) and evicts the caller. That is why `(some v)`
-    across an effect still falls back while an *inline* `make-struct` works. Two
-    orthogonal fixes would unlock it: (a) not coloring pure struct-builder fns,
-    and (b) the non-tail cps->cps heap-join support. Both are separate from the
-    emit-side N3 work landed here.
+    across an effect still falls back while an *inline* `make-struct` works. Root
+    cause + fix directions filed as
+    `docs/reported/cps-coloring-overcolors-nonnode-calls.md`
+    (coloring sets `has_indirect` for any call to a non-node callee -- cps.c:340
+    -- so constructors/stdlib helpers over-color their callers). Two orthogonal
+    fixes unlock it: (a) not coloring calls to known-non-control callees
+    (constructors, externs), and (b) non-tail cps->cps heap-join support. Both
+    are separate from the emit-side N3 work landed here.
   - **Aggregates that actually CROSS the slot** (a struct as an effect payload,
     resume value, or function return): carrier (heap ADT, int64) = Tier A cast
     with the `Type` now available; by-value wide aggregate = **Tier C**
