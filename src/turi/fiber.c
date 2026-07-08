@@ -848,7 +848,13 @@ void turi_sched_init(TuriEnv *env) {
  * base pointer is munmap/free'd in the teardown walk below. */
 TuriCoroStack *turi_env_track_coro_stack(TuriEnv *env, void *base, size_t size) {
     if (!base) return NULL;
-    TuriCoroStack *node = (TuriCoroStack *)turi_val_alloc(env, sizeof(TuriCoroStack));
+    /* Env-lifetime metadata (the coro_stacks list is walked at turi_sched_free),
+     * so it must live in value_perm, never the rewindable value_scratch pool:
+     * with scratch promotion enabled, a scratch-allocated node would be poisoned
+     * by arena_reset while env->coro_stacks still linked it, crashing teardown.
+     * value_perm is present and freed at turi_env_free regardless of the
+     * promotion setting, so this is correct on the default path too. */
+    TuriCoroStack *node = (TuriCoroStack *)turi_val_perm_alloc(env, sizeof(TuriCoroStack));
     node->base = base;
     node->size = size;
     node->next = env->coro_stacks;

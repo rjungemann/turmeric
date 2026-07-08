@@ -16,10 +16,16 @@
  *      deeply nested structs -- remain valid and evaluate correctly after many
  *      subsequent scratch rewinds.
  *
- * It also checks the CONSERVATIVE guarantee: when an eval leaves a
- * carrier-encoded value behind (a cons list, a bare-int pointer the walk cannot
- * relocate), promotion declines to rewind that cycle rather than corrupting it,
- * and the value stays correct.
+ *   3. Control-flow relocation (carrier-relocation-plan Part 2): a first-class
+ *      handler value and an UNSTARTED generator, each stored as a global, now
+ *      promote into value_perm (scratch rewinds) and stay correct across 100+
+ *      rewinds -- the handler keeps discharging its effect, the generator keeps
+ *      yielding.
+ *
+ * It also checks the CONSERVATIVE guarantee for a shape that still cannot be
+ * relocated: once a generator is STARTED (its suspended coroutine stack holds
+ * scratch pointers the walk cannot rewrite), promotion declines to rewind that
+ * cycle rather than corrupting it.
  *
  * Built via the tur_env_longlived CMake target. Run under ASan for
  * use-after-reset detection (the Debug build poisons the rewound scratch region,
@@ -144,39 +150,114 @@ static void test_cross_reset_correctness(void) {
 }
 
 /* ---------------------------------------------------------------------------
- * Part 3: conservative bail -- a carrier value (cons list) blocks the rewind
- * rather than being corrupted, and stays correct.
+ * Part 3 (carrier-relocation-plan Part 2): relocate a suspended, coroutine-
+ * stack-free control-flow value -- a first-class handler value -- into perm and
+ * keep using it correctly across many scratch rewinds.
+ *
+ * A handler value (TURI_HANDLER) is a detached dispatch table: n_cases plus an
+ * array of HandleCase pointers into the permanent elaborator AST. It carries no
+ * coroutine stack and no env-level state, so it relocates with a verbatim struct
+ * copy. Stored as a global, it must now PROMOTE (scratch rewinds) and still
+ * discharge its effect after 100+ rewinds under the poison.
  * --------------------------------------------------------------------------- */
-static void test_conservative_bail(void) {
+static void test_handler_relocation(void) {
     TuriEnv *env = turi_env_new();
     turi_env_set_scratch_promotion(env, true);
 
-    /* A live generator is a TURI_GEN whose internal coroutine state the walk
-     * cannot relocate. Leaving one as a global must make promotion DECLINE to
-     * rewind scratch (the conservative bail) rather than corrupt it. */
+    static const char *SETUP =
+        "(defeffect Ask [] :int)\n"
+        "(def h (handler (Ask [] k) (resume k 41)))\n"
+        "0\n";
+    TuriValue s = turi_eval(env, SETUP);
+    if (s.tag == TURI_ERROR) {
+        /* Best-effort; don't fail the suite if the effect surface shifts. */
+        fprintf(stderr, "note: handler-relocation setup skipped: %s\n",
+                s.as_error ? s.as_error : "?");
+        turi_env_free(env);
+        return;
+    }
+    /* The handler value is reachable from a global but fully relocatable, so the
+     * defining eval must have promoted it and rewound scratch. */
+    CHECK(env->value_scratch.total_bytes == 0,
+          "handler value not promoted: scratch was not rewound (total_bytes=%zu)",
+          env->value_scratch.total_bytes);
+
+    size_t perm_after_warmup = 0;
+    for (int i = 0; i < 100; i++) {
+        /* Build a transient, then drive the promoted handler. A mis-copy would
+         * dereference poisoned scratch here and crash under ASan; a wrong result
+         * trips the CHECK. */
+        CHECK(eval_int(env, "(let [z (+ 1 1)] z)", "churn") == 2, "churn wrong at %d", i);
+        CHECK(eval_int(env, "(with-handler h (perform (Ask)))", "use-handler") == 41,
+              "promoted handler wrong at %d", i);
+        CHECK(env->value_scratch.total_bytes == 0,
+              "scratch not rewound under promoted handler at %d (total_bytes=%zu)",
+              i, env->value_scratch.total_bytes);
+        if (i == 10) perm_after_warmup = env->value_perm.total_bytes;
+    }
+    CHECK(env->value_perm.total_bytes == perm_after_warmup,
+          "perm grew after warmup with a promoted handler: %zu -> %zu",
+          perm_after_warmup, env->value_perm.total_bytes);
+    turi_env_free(env);
+}
+
+/* ---------------------------------------------------------------------------
+ * Part 4 (carrier-relocation-plan Part 2): an UNSTARTED generator relocates;
+ * once STARTED it keeps bailing (the conservative guarantee for the shape we
+ * cannot yet move).
+ *
+ * A generator's coroutine stack (and its makecontext state) is set up lazily on
+ * the first gen-next, so an unstarted generator holds no live scratch pointers
+ * and is relocatable (struct + captured frame). Once started-not-done, its
+ * suspended coroutine stack references scratch that cannot be rewritten, so the
+ * walk must decline the rewind wherever the TuriGen now lives.
+ * --------------------------------------------------------------------------- */
+static void test_gen_relocation(void) {
+    TuriEnv *env = turi_env_new();
+    turi_env_set_scratch_promotion(env, true);
+
     static const char *SETUP =
         "(load \"stdlib/gen.tur\")\n"
         "(def g (gen [] (yield 10) (yield 20) (yield 30)))\n"
         "0\n";
     TuriValue s = turi_eval(env, SETUP);
     if (s.tag == TURI_ERROR) {
-        /* Best-effort safety probe; don't fail the suite if gen.tur shifts. */
-        fprintf(stderr, "note: conservative-bail setup skipped: %s\n",
+        fprintf(stderr, "note: gen-relocation setup skipped: %s\n",
                 s.as_error ? s.as_error : "?");
         turi_env_free(env);
         return;
     }
-    /* The generator carrier lives in scratch and is reachable from a global, so
-     * the defining eval must NOT have rewound scratch. */
-    CHECK(env->value_scratch.total_bytes != 0,
-          "conservative bail failed: scratch was rewound under a live generator "
-          "(total_bytes=%zu)", env->value_scratch.total_bytes);
+    /* Unstarted generator as a global: must promote and rewind scratch. */
+    CHECK(env->value_scratch.total_bytes == 0,
+          "unstarted generator not promoted: scratch not rewound (total_bytes=%zu)",
+          env->value_scratch.total_bytes);
 
-    /* Draining the generator across further evals still yields the right values
-     * -- proof the bail kept it intact rather than freeing it under us. */
-    CHECK(eval_int(env, "(gen-unwrap (gen-next g))", "gen1") == 10, "gen value 1 wrong");
-    CHECK(eval_int(env, "(gen-unwrap (gen-next g))", "gen2") == 20, "gen value 2 wrong");
-    CHECK(eval_int(env, "(gen-unwrap (gen-next g))", "gen3") == 30, "gen value 3 wrong");
+    /* Churn scratch many times with the unstarted generator promoted in perm;
+     * scratch must stay rewound and perm must reach a fixed point. A mis-relocated
+     * captured frame would read poisoned scratch and crash under ASan. */
+    size_t perm_after_warmup = 0;
+    for (int i = 0; i < 100; i++) {
+        CHECK(eval_int(env, "(let [z (+ 2 3)] z)", "gen-churn") == 5, "gen churn wrong at %d", i);
+        CHECK(env->value_scratch.total_bytes == 0,
+              "scratch not rewound under a promoted unstarted generator at %d (total_bytes=%zu)",
+              i, env->value_scratch.total_bytes);
+        if (i == 10) perm_after_warmup = env->value_perm.total_bytes;
+    }
+    CHECK(env->value_perm.total_bytes == perm_after_warmup,
+          "perm grew after warmup with a promoted unstarted generator: %zu -> %zu",
+          perm_after_warmup, env->value_perm.total_bytes);
+
+    /* The relocated generator is still usable: its first yield is correct. */
+    CHECK(eval_int(env, "(gen-unwrap (gen-next g))", "gen1") == 10,
+          "relocated generator first yield wrong");
+
+    /* Now the generator is STARTED (its coroutine stack references scratch), so
+     * promotion must DECLINE to rewind -- the conservative bail for a shape we
+     * cannot relocate. Scratch must stay non-empty across further churns. */
+    (void)eval_int(env, "(let [z 0] z)", "post-start-churn");
+    CHECK(env->value_scratch.total_bytes != 0,
+          "started generator did not block the rewind (total_bytes=%zu)",
+          env->value_scratch.total_bytes);
     turi_env_free(env);
 }
 
@@ -184,7 +265,8 @@ int main(void) {
     turi_init(false);
     test_steady_state();
     test_cross_reset_correctness();
-    test_conservative_bail();
+    test_handler_relocation();
+    test_gen_relocation();
 
     if (failures) {
         fprintf(stderr, "env-longlived: %d failure(s).\n", failures);
