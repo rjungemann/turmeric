@@ -393,9 +393,11 @@ static void emit_term(CE *ce, const CTerm *t) {
             break;
         }
         case CT_LETCALL: {
+            /* cps->direct: an uncolored callee runs to completion and returns an
+             * ordinary value; no continuation is threaded in. */
             char *fn = callee_name(t->as.letcall.fn);
             char *argv = atoms_csv(ce, t->as.letcall.args, t->as.letcall.n);
-            ce_line(ce, "%s = %s(%s);", t->as.letcall.x.name, fn, argv);
+            ce_line(ce, "%s = %s(%s); /* cps->direct */", t->as.letcall.x.name, fn, argv);
             free(fn); free(argv);
             emit_term(ce, t->as.letcall.body);
             break;
@@ -404,18 +406,20 @@ static void emit_term(CE *ce, const CTerm *t) {
             char *fn = callee_name(t->as.tailcall.fn);
             char *argv = atoms_csv(ce, t->as.tailcall.args, t->as.tailcall.n);
             if (binding_in_s(t->as.tailcall.fn)) {
-                /* cps->cps: thread the continuation.  In the C1 subset the kont
-                 * is always KK_RET here (a KK_VAR would need a heap join, which
+                /* cps->cps: both colored and emitted -- thread the continuation
+                 * straight through, no trampoline.  In the C1 subset the kont is
+                 * always KK_RET here (a KK_VAR would need a heap join, which
                  * excludes the caller from the emittable set). */
                 if (t->as.tailcall.n)
-                    ce_line(ce, "return %s__cps(%s, k);", fn, argv);
+                    ce_line(ce, "return %s__cps(%s, k); /* cps->cps */", fn, argv);
                 else
-                    ce_line(ce, "return %s__cps(k);", fn);
+                    ce_line(ce, "return %s__cps(k); /* cps->cps */", fn);
             } else {
-                /* Synchronous call to a direct/fallback function, then deliver
-                 * the result to the continuation (cps->direct bridge). */
+                /* cps->direct: the callee is uncolored or a colored function that
+                 * fell back to direct-style; call it synchronously and deliver
+                 * the ordinary result value to the continuation. */
                 char *tmp = fresh_tmp(ce->ctx);
-                ce_line(ce, "int64_t %s = %s(%s);", tmp, fn, argv);
+                ce_line(ce, "int64_t %s = %s(%s); /* cps->direct */", tmp, fn, argv);
                 emit_deliver(ce, &t->as.tailcall.kont, tmp);
                 free(tmp);
             }
@@ -558,13 +562,20 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     emit_term(&ce, se->term);
     buf_puts(file, "}\n");
 
-    /* ---- direct-entry wrapper: int64_t <name>(<params>) ----
-     * Seeds a dk_done()-terminated root continuation so uncolored/direct
-     * callers reach the CPS body by the plain name unchanged. */
+    /* ---- direct->cps entry wrapper: int64_t <name>(<params>) ----
+     * The boundary trampoline for an uncolored/direct caller (including `main`)
+     * entering a colored function by its plain name unchanged.  It seeds the
+     * initial continuation as the implicit root prompt (CPS5.3, DK_ROOT_TAG) on
+     * a dk_done()-terminated chain -- the structural equivalent of dk_run_root,
+     * so an undelimited capture inside the CPS body reaches program entry -- runs
+     * the CPS body, and returns (unwraps) the value delivered to the root.  The
+     * seed chain is freed after the body returns; the CPS body never retains it
+     * (a captured sub-continuation is always a copy). */
     buf_printf(file, "__attribute__((unused)) static int64_t %s(", cn);
     emit_params(ctx, file, fd);
-    buf_puts(file, ") {\n    return ");
-    buf_printf(file, "%s__cps(", cn);
+    buf_puts(file, ") {\n");
+    buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
+    buf_printf(file, "    int64_t __r = %s__cps(", cn);
     for (uint8_t i = 0; i < fd->n_params; i++) {
         if (i) buf_puts(file, ", ");
         char *pn = name_for_binding(ctx, fd->params[i]);
@@ -572,7 +583,9 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         free(pn);
     }
     if (fd->n_params) buf_puts(file, ", ");
-    buf_puts(file, "dk_done());\n}\n");
+    buf_puts(file, "__root);\n");
+    buf_puts(file, "    dk_free(__root);\n");
+    buf_puts(file, "    return __r;\n}\n");
 
     free(cn);
     return true;

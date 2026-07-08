@@ -241,6 +241,41 @@ Fixture: `cps-mixed-coloring`'s runtime result (currently produced "via the
 existing fiber path" per its own comment) must be reproduced by the CPS
 backend, exercising all three edges in one program.
 
+### C2 result -- shipped
+
+All three edges are real in the emitted C and self-documenting (each emitted
+call carries a `/* cps->cps */` or `/* cps->direct */` marker matching the IR
+classification):
+
+- **cps->direct** (`CT_LETCALL`, and a `CT_TAILCALL` to an uncolored or
+  fallback callee): an ordinary synchronous call binds the result, then the
+  chain continues / the value is delivered to the continuation. No continuation
+  is threaded into the callee.
+- **direct->cps entry**: the entry trampoline emitted alongside every emittable
+  `f__cps` was upgraded from a bare `dk_done()` seed to a principled,
+  leak-clean root: it installs the CPS5.3 implicit root prompt
+  (`dk_prompt(DK_ROOT_TAG, dk_done())`) -- the structural equivalent of
+  `dk_run_root`, so an undelimited capture inside the body reaches program
+  entry -- runs the CPS body, `dk_free`s the seed chain, and returns (unwraps)
+  the delivered value. Uncolored callers (including `main`) reach the colored
+  function by its plain name unchanged.
+- **cps->cps** (`CT_TAILCALL` to another emitted fn): `k` is threaded straight
+  through (`return g__cps(args, k)`), no trampoline.
+
+Fixture `tests/fixtures/cps-backend-mixed/`: the `cps-mixed-coloring` program
+built under `--enable=cps-backend`, reproducing the historical fiber-path
+result (`41`). `run` is CPS-emitted and bridges synchronously (cps->direct) to
+the delimited-and-therefore-fallback `shift-then-twice`; `main` is the
+direct->cps entry. (The genuine cps->cps tail edge between two *emitted*
+functions is covered by `cps-backend-core` from C1 -- in `cps-mixed` the
+delimited `shift-then-twice` breaks the colored chain into a fallback, so no
+cps->cps edge survives there.) Full suite: 1989 passed, 0 failed.
+
+Note: a *non-tail* cps->cps call (a colored call whose result is consumed,
+needing the join reified onto the heap chain as a `dk_frame`) remains outside
+the emitted subset -- such a caller still falls back -- consistent with the C1
+scope. Closing it is future work layered on the C3 machinery.
+
 ## Phase C3 -- resumable `reset` / `shift` on the general backend
 
 With whole-function CPS emission in place, `reset` / `shift` stop being
