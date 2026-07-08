@@ -261,12 +261,61 @@ static void test_gen_relocation(void) {
     turi_env_free(env);
 }
 
+/* ---------------------------------------------------------------------------
+ * Part 5 (interp-generator-resume-across-evals): a generator defined in one
+ * turi_eval and drained across LATER evals must yield the full, correct
+ * sequence even when unrelated top-level evals run in between.
+ *
+ * Regression for the double-advance bug: turi_eval keyed its "already run"
+ * boundary off the parsed-form count, but (load ...) expands inline to many
+ * program items, so the boundary drifted and previously-run top-level forms --
+ * including an earlier (gen-next g) -- were evaluated again, silently advancing
+ * the suspended generator an extra step (the drain returned 10 30 0 for a
+ * 10/20/30 generator). This runs with promotion OFF (the report's default);
+ * the defect is in the base interpreter, independent of scratch promotion.
+ * --------------------------------------------------------------------------- */
+static void test_gen_drain_across_evals(void) {
+    TuriEnv *env = turi_env_new();  /* promotion OFF (default) */
+
+    static const char *SETUP =
+        "(load \"stdlib/gen.tur\")\n"
+        "(def g (gen [] (yield 10) (yield 20) (yield 30)))\n"
+        "0\n";
+    TuriValue s = turi_eval(env, SETUP);
+    if (s.tag == TURI_ERROR) {
+        fprintf(stderr, "note: gen-drain-across-evals setup skipped: %s\n",
+                s.as_error ? s.as_error : "?");
+        turi_env_free(env);
+        return;
+    }
+
+    /* Enough unrelated top-level evals to grow the accumulated source well past
+     * the (load ...) expansion delta -- this is what used to shift the
+     * evaluation boundary and re-run an earlier (gen-next g). */
+    for (int i = 0; i < 50; i++)
+        CHECK(eval_int(env, "(let [z 0] z)", "gen-drain-intervening") == 0,
+              "intervening eval wrong at %d", i);
+
+    /* Full drain: the yields must arrive in order, then NULL (exhausted). */
+    CHECK(eval_int(env, "(gen-unwrap (gen-next g))", "gen-drain-1") == 10,
+          "cross-eval drain: yield 1 wrong (want 10)");
+    CHECK(eval_int(env, "(gen-unwrap (gen-next g))", "gen-drain-2") == 20,
+          "cross-eval drain: yield 2 wrong (want 20 -- generator double-advanced)");
+    CHECK(eval_int(env, "(gen-unwrap (gen-next g))", "gen-drain-3") == 30,
+          "cross-eval drain: yield 3 wrong (want 30)");
+    CHECK(eval_int(env, "(gen-unwrap (gen-next g))", "gen-drain-4") == 0,
+          "cross-eval drain: exhausted sentinel wrong (want 0)");
+
+    turi_env_free(env);
+}
+
 int main(void) {
     turi_init(false);
     test_steady_state();
     test_cross_reset_correctness();
     test_handler_relocation();
     test_gen_relocation();
+    test_gen_drain_across_evals();
 
     if (failures) {
         fprintf(stderr, "env-longlived: %d failure(s).\n", failures);

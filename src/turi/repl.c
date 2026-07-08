@@ -1200,9 +1200,10 @@ int turi_repl_run(bool watch_mode) {
                 if (rt == READER_UNKNOWN || rt == (ReaderType)-1) {
                     fprintf(stderr, "unknown #lang: '%s'\n", line + 6);
                 } else if (rt != env->reader_type) {
-                    env->reader_type    = rt;
-                    env->src_acc.len    = 0;   /* accumulated source may be incompatible */
-                    env->prior_toplevel = 0;
+                    env->reader_type      = rt;
+                    env->src_acc.len      = 0;   /* accumulated source may be incompatible */
+                    env->prior_toplevel   = 0;
+                    env->prior_prog_items = 0;
                     printf("; reader set to %s (session reset)\n", reader_type_name(rt));
                 } else {
                     printf("; reader already set to %s\n", reader_type_name(rt));
