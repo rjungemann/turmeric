@@ -283,10 +283,12 @@ void turi_env_free(TuriEnv *env) {
     }
 
     /* interp-collections-never-freed: reclaim interpreter-created collection
-     * buffers (currently Vec) whose bare-int carriers no rc-drop path reclaims.
-     * Each `destroy` frees a raw malloc'd wrapper and the heap buffer it owns; a
-     * tombstoned node (box == NULL, from an explicit vec-free) is skipped.  This
-     * must run BEFORE value_perm is freed below -- the nodes live in that pool. */
+     * buffers (Vec and Set/Map) whose bare-int carriers no rc-drop path
+     * reclaims.  Each `destroy` frees a raw malloc'd wrapper (a Vec's data
+     * buffer, or a Set/Map box's persistent HAMT via tur_hamt_free); a
+     * tombstoned node (box == NULL, from an explicit vec-free/set-free/map-free)
+     * is skipped.  This must run BEFORE value_perm is freed below -- the nodes
+     * live in that pool. */
     {
         TuriCollBuf *cb = env->coll_bufs;
         while (cb) {

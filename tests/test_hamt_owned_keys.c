@@ -140,11 +140,68 @@ static void test_one_word_unchanged(void) {
     printf("  PASS: one-word keys untouched\n");
 }
 
+/* Regression for hamt-delete-sibling-refcount.md: a delete that collapses a
+ * child node (bitmap/array `!new_child` arm) must NOT release the original,
+ * shared node's reference to that child.  The original node is immutable and
+ * still points at the child; the child's reference lives on until the original
+ * is freed.  Releasing it during the delete under-retains the child, so freeing
+ * a whole delete-derived lineage double-frees it.  Distinct-hash keys land in
+ * different bitmap/array slots (single-entry collision leaves), so deleting one
+ * key collapses its leaf to NULL and drives exactly that arm -- unlike
+ * test_collision_sharing, whose delete stays inside a multi-entry collision
+ * chain and never collapses a child. */
+static void test_delete_collapse_lineage(void) {
+    printf("Testing delete-collapse lineage (child-collapse arm)...\n");
+    tur_hamt_key_ops ops = tur_hamt_box_key_ops();
+
+    /* base = {k0, k1, k2, k3}, each key in its own slot (distinct hashes). */
+    double keys[] = { 0.5, 1.5, 2.5, 3.5 };
+    int n = (int)(sizeof keys / sizeof keys[0]);
+    uint64_t hashes[] = { 0x1u, 0x2u, 0x40u, 0x800u };  /* differ at level 0 */
+
+    Hamt *base = tur_hamt_new();
+    for (int i = 0; i < n; i++) {
+        Hamt *next = tur_hamt_set_eq_owned(base, hashes[i], box_dbl(keys[i]),
+                                           &g_vals[i], dbl_key_eq, ops);
+        tur_hamt_free(base);
+        base = next;
+    }
+    assert(tur_hamt_count(base) == (uint32_t)n);
+
+    /* Fork delete-derived versions that each collapse a distinct leaf; every
+     * fork structurally shares surviving sibling leaves with `base`. */
+    Hamt *d0 = tur_hamt_del_eq_owned(base, hashes[0], box_dbl(keys[0]),
+                                     dbl_key_eq, ops);
+    Hamt *d1 = tur_hamt_del_eq_owned(base, hashes[1], box_dbl(keys[1]),
+                                     dbl_key_eq, ops);
+    /* Chain a second delete off a delete-derived version. */
+    Hamt *d01 = tur_hamt_del_eq_owned(d0, hashes[1], box_dbl(keys[1]),
+                                      dbl_key_eq, ops);
+
+    assert(tur_hamt_count(d0) == (uint32_t)n - 1);
+    assert(tur_hamt_count(d1) == (uint32_t)n - 1);
+    assert(tur_hamt_count(d01) == (uint32_t)n - 2);
+    /* base is unchanged; the surviving siblings are still reachable. */
+    assert(tur_hamt_count(base) == (uint32_t)n);
+    assert(tur_hamt_has_eq_owned(base, hashes[0], box_dbl(keys[0]), dbl_key_eq, ops));
+    assert(!tur_hamt_has_eq_owned(d0, hashes[0], box_dbl(keys[0]), dbl_key_eq, ops));
+    assert(tur_hamt_has_eq_owned(d0, hashes[2], box_dbl(keys[2]), dbl_key_eq, ops));
+
+    /* Free the entire lineage.  Before the fix this double-freed the collapsed
+     * child leaf (heap-use-after-free under ASan). */
+    tur_hamt_free(d0);
+    tur_hamt_free(base);   /* freed while d1/d01 still share its sibling leaves */
+    tur_hamt_free(d01);
+    tur_hamt_free(d1);
+    printf("  PASS: delete-collapse lineage (leak/double-free clean)\n");
+}
+
 int main(void) {
     printf("=== WKC2 boxed-key ownership tests ===\n");
     test_collision_sharing();
     test_spread_keys();
     test_one_word_unchanged();
+    test_delete_collapse_lineage();
     printf("=== all WKC2 tests passed ===\n");
     return 0;
 }

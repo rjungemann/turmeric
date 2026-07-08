@@ -6870,31 +6870,68 @@ static Hamt *set_hamt(TuriValue v) {
     if (v.tag != TURI_INT || v.as_int == 0) return NULL;
     return (Hamt *)((void **)(intptr_t)v.as_int)[0];
 }
-static TuriValue set_wrap(Hamt *h) {
-    void **s = (void **)malloc(sizeof(void *));
+/* interp-collections-never-freed: a Set/Map box is a 2-word wrapper --
+ * [0] = the persistent HAMT (what set_hamt reads), [1] = the TuriCollBuf
+ * tracking node so env-teardown and an explicit set-free/map-free share one
+ * O(1) tombstone slot (mirrors the Vec box's slot [3]).  Every box the
+ * interpreter hands out is registered on the env so its HAMT is released at
+ * turi_env_free; the persistent HAMT's own refcount keeps structural sharing
+ * across boxes correct, so freeing each tracked box once is safe now that the
+ * delete path retains shared siblings correctly (hamt-delete-sibling-refcount). */
+static void set_buf_destroy(void *box) {
+    void **s = (void **)box;
+    tur_hamt_free((Hamt *)s[0]);
+    free(s);
+}
+static TuriValue set_wrap_tracked(TuriEnv *env, Hamt *h) {
+    void **s = (void **)malloc(2 * sizeof(void *));
     if (!s) return turi_nil();
     s[0] = (void *)h;
+    s[1] = (void *)turi_env_track_collection(env, s, set_buf_destroy);
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)s; return v;
 }
+/* Wrap a HAMT that a persistent op derived from `src`.  tur_hamt_set/del (and
+ * their _eq* wrappers) return `src` itself *unretained* when the op is a no-op
+ * (key already present with the same value / key absent).  Retain in that alias
+ * case so this box owns an independent reference -- otherwise two boxes share
+ * src's single ref and teardown (or explicit free) of both double-frees the
+ * HAMT.  A genuinely fresh result already carries the caller's reference. */
+static TuriValue set_wrap_owned(TuriEnv *env, Hamt *src, Hamt *r) {
+    if (r == src) tur_hamt_retain(r);
+    return set_wrap_tracked(env, r);
+}
+/* interp-collections-never-freed: release a Set/Map box's HAMT and tombstone
+ * its tracking node so the turi_env_free teardown pass skips it (no double
+ * free).  Shared by set-free and map-free. */
+static TuriValue set_free_box(TuriValue v) {
+    if (v.tag != TURI_INT || v.as_int == 0) return turi_nil();
+    void **s = (void **)(intptr_t)v.as_int;
+    turi_env_untrack_collection((TuriCollBuf *)s[1]);
+    tur_hamt_free((Hamt *)s[0]);
+    free(s);
+    return turi_nil();
+}
 static TuriValue native_set_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)a; (void)n; (void)ud;
-    return set_wrap(tur_hamt_new());
+    (void)a; (void)n; (void)ud;
+    return set_wrap_tracked(env, tur_hamt_new());
 }
 /* (set-add s h x) -- persistent insert; returns a new set. */
 static TuriValue native_set_add(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
+    (void)ud;
     if (n < 3) return n >= 1 ? a[0] : turi_nil();
-    Hamt *r = tur_hamt_set(set_hamt(a[0]), (uint64_t)a[1].as_int,
+    Hamt *src = set_hamt(a[0]);
+    Hamt *r = tur_hamt_set(src, (uint64_t)a[1].as_int,
                            (void *)(intptr_t)a[2].as_int, (void *)1);
-    return set_wrap(r);
+    return set_wrap_owned(env, src, r);
 }
 /* (set-remove s h x) -- persistent delete; returns a new set. */
 static TuriValue native_set_remove(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
+    (void)ud;
     if (n < 3) return n >= 1 ? a[0] : turi_nil();
-    Hamt *r = tur_hamt_del(set_hamt(a[0]), (uint64_t)a[1].as_int,
+    Hamt *src = set_hamt(a[0]);
+    Hamt *r = tur_hamt_del(src, (uint64_t)a[1].as_int,
                            (void *)(intptr_t)a[2].as_int);
-    return set_wrap(r);
+    return set_wrap_owned(env, src, r);
 }
 /* (set-member? s h x) -- membership test. */
 static TuriValue native_set_member(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -6910,10 +6947,8 @@ static TuriValue native_set_count(TuriEnv *env, TuriValue *a, uint32_t n, void *
 }
 static TuriValue native_set_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
-    if (n < 1 || a[0].tag != TURI_INT || a[0].as_int == 0) return turi_nil();
-    tur_hamt_free(set_hamt(a[0]));
-    free((void *)(intptr_t)a[0].as_int);
-    return turi_nil();
+    if (n < 1) return turi_nil();
+    return set_free_box(a[0]);
 }
 /* set-eq-cmp? -- O(n*m) structural set equality with a user element comparator.
  * set.tur's body double-iterates the HAMTs and fat-dispatches cmp-fn through a C
@@ -6954,31 +6989,37 @@ static TuriValue native_set_eq_cmp(TuriEnv *env, TuriValue *a, uint32_t n, void 
     return turi_bool(ok);
 }
 static TuriValue native_set_union(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
+    (void)ud;
     if (n < 2) return n >= 1 ? a[0] : turi_nil();
-    return set_wrap(tur_hamt_merge(set_hamt(a[0]), set_hamt(a[1])));
+    /* tur_hamt_merge hands back a caller-owned reference (a retained input or a
+     * freshly built map), so the new box owns its own ref -- track directly. */
+    return set_wrap_tracked(env, tur_hamt_merge(set_hamt(a[0]), set_hamt(a[1])));
 }
 /* set-intersect / set-diff iterate `a` and keep keys (present | absent) in `b`. */
-static TuriValue set_iter_filter(TuriValue *a, bool keep_if_in_b) {
+static TuriValue set_iter_filter(TuriEnv *env, TuriValue *a, bool keep_if_in_b) {
     Hamt *ha = set_hamt(a[0]), *hb = set_hamt(a[1]);
     Hamt *result = tur_hamt_new();
     uint64_t iter_buf[32]; for (int i = 0; i < 32; i++) iter_buf[i] = 0;
     tur_hamt_iter_init((HamtIter *)iter_buf, ha);
     uint64_t h; void *key = NULL, *val = NULL;
     while (tur_hamt_iter_next((HamtIter *)iter_buf, &h, &key, &val)) {
-        if (tur_hamt_has(hb, h, key) == keep_if_in_b)
+        if (tur_hamt_has(hb, h, key) == keep_if_in_b) {
+            Hamt *old = result;
             result = tur_hamt_set(result, h, key, (void *)1);
+            if (old != result) tur_hamt_free(old);
+        }
     }
     tur_hamt_iter_free((HamtIter *)iter_buf);
-    return set_wrap(result);
+    /* `result` is a freshly built map the caller owns. */
+    return set_wrap_tracked(env, result);
 }
 static TuriValue native_set_intersect(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud; if (n < 2) return turi_nil();
-    return set_iter_filter(a, true);
+    (void)ud; if (n < 2) return turi_nil();
+    return set_iter_filter(env, a, true);
 }
 static TuriValue native_set_diff(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud; if (n < 2) return turi_nil();
-    return set_iter_filter(a, false);
+    (void)ud; if (n < 2) return turi_nil();
+    return set_iter_filter(env, a, false);
 }
 static TuriValue native_set_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -7131,20 +7172,21 @@ static TuriValue native_map_assoc_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, voi
     (void)ud;
     /* (m h key val keyeq owned) */
     if (n < 6) return n >= 1 ? a[0] : turi_nil();
+    Hamt *src = set_hamt(a[0]);
     if (a[4].tag == TURI_CLOSURE) {
         MapTuriEqCtx ctx = { e, a[4] };
-        Hamt *r = tur_hamt_set_eq_ctx(set_hamt(a[0]), (uint64_t)a[1].as_int,
+        Hamt *r = tur_hamt_set_eq_ctx(src, (uint64_t)a[1].as_int,
                                       (void *)(intptr_t)a[2].as_int,
                                       (void *)(intptr_t)a[3].as_int,
                                       map_turi_eq_tramp, &ctx);
-        return set_wrap(r);
+        return set_wrap_owned(e, src, r);
     }
-    Hamt *r = tur_hamt_set_eq_o(set_hamt(a[0]), (uint64_t)a[1].as_int,
+    Hamt *r = tur_hamt_set_eq_o(src, (uint64_t)a[1].as_int,
                                 (void *)(intptr_t)a[2].as_int,
                                 (void *)(intptr_t)a[3].as_int,
                                 (tur_hamt_keyeq_fn)(intptr_t)a[4].as_int,
                                 (int64_t)a[5].as_int);
-    return set_wrap(r);
+    return set_wrap_owned(e, src, r);
 }
 static TuriValue native_map_get_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -7180,18 +7222,19 @@ static TuriValue native_map_has_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void 
 static TuriValue native_map_dissoc_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 5) return n >= 1 ? a[0] : turi_nil();
+    Hamt *src = set_hamt(a[0]);
     if (a[3].tag == TURI_CLOSURE) {
         MapTuriEqCtx ctx = { e, a[3] };
-        Hamt *r = tur_hamt_del_eq_ctx(set_hamt(a[0]), (uint64_t)a[1].as_int,
+        Hamt *r = tur_hamt_del_eq_ctx(src, (uint64_t)a[1].as_int,
                                       (void *)(intptr_t)a[2].as_int,
                                       map_turi_eq_tramp, &ctx);
-        return set_wrap(r);
+        return set_wrap_owned(e, src, r);
     }
-    Hamt *r = tur_hamt_del_eq_o(set_hamt(a[0]), (uint64_t)a[1].as_int,
+    Hamt *r = tur_hamt_del_eq_o(src, (uint64_t)a[1].as_int,
                                 (void *)(intptr_t)a[2].as_int,
                                 (tur_hamt_keyeq_fn)(intptr_t)a[3].as_int,
                                 (int64_t)a[4].as_int);
-    return set_wrap(r);
+    return set_wrap_owned(e, src, r);
 }
 /* Explicit-hash content API (map-*-eq, no ownership flag) over tur_hamt_*_eq.
  * The comparator is mk-cmp's C address; the key is raw (:K, == carrier for
@@ -7200,19 +7243,20 @@ static TuriValue native_map_assoc_eq(TuriEnv *e, TuriValue *a, uint32_t n, void 
     (void)ud;
     /* (m h key val keyeq) */
     if (n < 5) return n >= 1 ? a[0] : turi_nil();
+    Hamt *src = set_hamt(a[0]);
     if (a[4].tag == TURI_CLOSURE) {
         MapTuriEqCtx ctx = { e, a[4] };
-        Hamt *r = tur_hamt_set_eq_ctx(set_hamt(a[0]), (uint64_t)a[1].as_int,
+        Hamt *r = tur_hamt_set_eq_ctx(src, (uint64_t)a[1].as_int,
                                       (void *)(intptr_t)a[2].as_int,
                                       (void *)(intptr_t)a[3].as_int,
                                       map_turi_eq_tramp, &ctx);
-        return set_wrap(r);
+        return set_wrap_owned(e, src, r);
     }
-    Hamt *r = tur_hamt_set_eq(set_hamt(a[0]), (uint64_t)a[1].as_int,
+    Hamt *r = tur_hamt_set_eq(src, (uint64_t)a[1].as_int,
                               (void *)(intptr_t)a[2].as_int,
                               (void *)(intptr_t)a[3].as_int,
                               (tur_hamt_keyeq_fn)(intptr_t)a[4].as_int);
-    return set_wrap(r);
+    return set_wrap_owned(e, src, r);
 }
 static TuriValue native_map_get_eq(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -7246,17 +7290,18 @@ static TuriValue native_map_has_eq(TuriEnv *e, TuriValue *a, uint32_t n, void *u
 static TuriValue native_map_dissoc_eq(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 4) return n >= 1 ? a[0] : turi_nil();
+    Hamt *src = set_hamt(a[0]);
     if (a[3].tag == TURI_CLOSURE) {
         MapTuriEqCtx ctx = { e, a[3] };
-        Hamt *r = tur_hamt_del_eq_ctx(set_hamt(a[0]), (uint64_t)a[1].as_int,
+        Hamt *r = tur_hamt_del_eq_ctx(src, (uint64_t)a[1].as_int,
                                       (void *)(intptr_t)a[2].as_int,
                                       map_turi_eq_tramp, &ctx);
-        return set_wrap(r);
+        return set_wrap_owned(e, src, r);
     }
-    Hamt *r = tur_hamt_del_eq(set_hamt(a[0]), (uint64_t)a[1].as_int,
+    Hamt *r = tur_hamt_del_eq(src, (uint64_t)a[1].as_int,
                               (void *)(intptr_t)a[2].as_int,
                               (tur_hamt_keyeq_fn)(intptr_t)a[3].as_int);
-    return set_wrap(r);
+    return set_wrap_owned(e, src, r);
 }
 static TuriValue native_map_count(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
@@ -7264,16 +7309,15 @@ static TuriValue native_map_count(TuriEnv *e, TuriValue *a, uint32_t n, void *ud
     return turi_int((int64_t)tur_hamt_count(set_hamt(a[0])));
 }
 static TuriValue native_map_merge(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
-    (void)e; (void)ud;
+    (void)ud;
     if (n < 2) return n >= 1 ? a[0] : turi_nil();
-    return set_wrap(tur_hamt_merge(set_hamt(a[0]), set_hamt(a[1])));
+    /* tur_hamt_merge returns a caller-owned reference -- track directly. */
+    return set_wrap_tracked(e, tur_hamt_merge(set_hamt(a[0]), set_hamt(a[1])));
 }
 static TuriValue native_map_free(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
-    if (n < 1 || a[0].tag != TURI_INT || a[0].as_int == 0) return turi_nil();
-    tur_hamt_free(set_hamt(a[0]));
-    free((void *)(intptr_t)a[0].as_int);
-    return turi_nil();
+    if (n < 1) return turi_nil();
+    return set_free_box(a[0]);
 }
 
 /* tur-map-homog__ -- compile-time homogeneity check; a :nil no-op at runtime
