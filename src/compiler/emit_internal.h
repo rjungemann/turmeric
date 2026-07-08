@@ -557,6 +557,10 @@ bool expr_tail_diverges(const Expr *e);
  * closure value) is used as a value rather than only as a direct-call callee
  * within `e`.  See emit_core.c. */
 bool closure_binding_escapes(const Expr *e, const Binding *b);
+/* catch-unwind-thunk-closure-leak scoped-free escape analysis: like
+ * closure_binding_escapes, but a use of `b` as a read-only ok?/err?/ok-val
+ * argument is not an escape.  See emit_core.c. */
+bool catch_box_binding_escapes(const Expr *e, const Binding *b);
 bool expr_has_multishot_handler(const Expr *e);
 char *fresh_tmp(EmitCtx *ctx);
 char *fresh_frame(EmitCtx *ctx);

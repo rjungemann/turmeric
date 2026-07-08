@@ -1,12 +1,60 @@
 ---
-status: open
+status: resolved
 severity: low
 discovered: 2026-07-07
 discovered-by: catch-unwind-result-box-leak follow-up
+resolved: 2026-07-07
 area: compiled backend / runtime (catch-unwind, closures)
 ---
 
 # `catch-unwind` still leaks its thunk fat-closure (and a let-bound caught Result box) per call
+
+## Resolution (2026-07-07)
+
+Both residual leaks are now closed on the native path.
+
+**1. Thunk fat-closure.** `emit_expr.c` `EX_CATCH_UNWIND` / `EX_CATCH_PANIC_OF`
+now `free`s the thunk fat box after `tur_catch_unwind_box` has consumed it, but
+only when the thunk argument is a closure literal this call site owns -- an
+`EX_CLOSURE`, an auto-shimmed bare fn (`EX_FN_TO_FAT`), or a boxed poly method
+(`EX_POLY_TO_FAT`).  A bare-variable thunk (`(catch-unwind my-shared-thunk)`) is
+left untouched: it may alias a closure the caller still owns.  `catch_thunk_owns_fat_box`
+gates this.  The thunk is invoked synchronously and never stored in the result
+box, so the free is not premature.  For `catch-panic-of` the free is emitted
+before the re-raise check, so it runs on both the caught and the propagate
+paths.  Because statement-position `catch-unwind` flows through the same
+`emit_value` dispatch, the discard case is covered too.
+
+**2. Let-bound caught Result box.** `emit_let_value` now `tur_result_box_free`s a
+let-bound caught Result at scope exit when it provably does not escape, using a
+box-aware escape analysis (`catch_box_binding_escapes`, a mode of the shared
+`binding_escapes_impl`).  The analysis whitelists reads of the box through the
+read-only accessors `ok?` / `err?` / `ok-val` -- none of which retain the box or
+hand back box-owned-and-freed memory -- and treats every other use (return,
+store, capture, `err-val`, an unknown call) as an escape that disables the free.
+`err-val` is deliberately excluded: it returns the box's panic-payload pointer,
+which `tur_result_box_free` frees, so a caught payload extracted via `err-val`
+could dangle.  A let whose caught Result is inspected only with `ok?`/`err?`/
+`ok-val` and then dropped is now fully reclaimed (box + err payload).
+
+Measured on the report's repros (valgrind): the discard case and the
+`(let [r ...] (if (ok? r) (ok-val r) 0))` case both drop from `definitely lost`
+to `0 bytes in use at exit`, with no `Invalid read/write` (no use-after-free).
+
+### Remaining (deliberate, sound tradeoff)
+
+A let-bound caught Result inspected via `err-val` is still not freed at scope
+exit -- freeing the box also frees the panic payload the extracted `err-val`
+pointer aliases, so the conservative analysis leaves it to leak rather than risk
+a use-after-free.  This is bounded per catch site and rare (the common inspect
+paths are `ok?`/`ok-val`).  The stackless-catch-unwind lowering keeps its own
+residual aggregate-box leak, tracked in
+`docs/upcoming/catch-unwind-aggregate-followups-plan.md` (Part B); the native
+frees added here do reach a stackless fixture's outer native catch, verified
+UAF-free.
+
+---
+
 
 ## Summary
 

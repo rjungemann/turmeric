@@ -1,0 +1,25 @@
+;;; catch-unwind-byvalue-result-return-mismatch: a function whose declared
+;;; result is a by-value (Result int int) but whose body returns a catch-unwind
+;;; heap box -- directly or through a let-bound variable -- must bridge the
+;;; carrier box to the by-value aggregate at the return, not `return <int64>`
+;;; (which was an int64->struct cc error).  Exercises both the let-bound and the
+;;; direct-return shapes, on the ok and the caught (err) paths.
+(defn make-let [] : (Result int int)
+  (let [r (catch-unwind (fn [] : int 5))]
+    r))
+
+(defn make-direct [] : (Result int int)
+  (catch-unwind (fn [] : int 7)))
+
+(defn make-caught [] : (Result int int)
+  (let [r (catch-unwind (fn [] : int (panic "boom")))]
+    r))
+
+(defn main [] : int
+  (let [a (make-let)]
+    (if (ok? a) (println "let-ok") (println "let-err")))
+  (let [b (make-direct)]
+    (if (ok? b) (println "direct-ok") (println "direct-err")))
+  (let [c (make-caught)]
+    (if (err? c) (println "caught-err") (println "caught-ok")))
+  0)
