@@ -63,7 +63,15 @@ static CKont kont_prompt(TypeKind ty) {
 
 /* ---- atoms ------------------------------------------------------------ */
 
+/* Type ascription `(:: e T)` is erased at codegen (its value is the inner
+ * expression's value), so peel it everywhere the translator inspects a form. */
+static const Expr *ascribe_peel(const Expr *e) {
+    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    return e;
+}
+
 static bool is_atomic(const Expr *e) {
+    e = ascribe_peel(e);
     if (!e) return false;
     switch (e->kind) {
         case EX_INT_LIT:
@@ -78,6 +86,7 @@ static bool is_atomic(const Expr *e) {
 }
 
 static CAtom atom_of(const Expr *e) {
+    e = ascribe_peel(e);
     CAtom a; memset(&a, 0, sizeof(a));
     a.ty = e ? e->type.kind : TY_UNKNOWN;
     if (!e) { a.kind = CA_UNIT; return a; }
@@ -222,6 +231,7 @@ static CTerm *build_resume(CpsB *b, Expr *e, CVar x, CTerm *cont, Pending *p) {
 /* ---- cps_tail: deliver e's value to `kont` ---------------------------- */
 
 static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
+    e = (Expr *)ascribe_peel(e);
     if (!e) {
         CTerm *t = new_term(b, CT_UNSUPPORTED);
         t->as.unsupported.why = "null";
@@ -357,6 +367,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
 /* ---- cps_bind: bind e's value to x, then run rest --------------------- */
 
 static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
+    e = (Expr *)ascribe_peel(e);
     if (!e) return rest;
     if (is_atomic(e)) {
         CTerm *t = new_term(b, CT_LETVAL);

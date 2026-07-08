@@ -1,0 +1,25 @@
+;; CPS-IR-to-C backend (cps-ir-to-c-backend-plan, Phase C5): close the
+;; CT_UNSUPPORTED gaps that block real colored code, driven by the effect +
+;; delimited fixture corpus.  Type ascription `(:: e T)` was the highest-count
+;; blocker (erased at codegen); cps_ir now peels it, so a colored function whose
+;; body carries an ascription lowers through the backend instead of falling back.
+;;
+;; Built with --enable=cps-backend.  `use-ask` is colored (it performs Ask) and
+;; its body carries a `(:: 1 :int)` ascription; before C5 that ascription made
+;; the whole function fall back to the fiber path.  Now it CPS-emits.
+;;
+;; use-ask = (:: 1 :int) + (resume 41) = 1 + 41 = 42; the handle value is 42;
+;; * 10 => 420.  The expected value is the direct-style result.
+
+(defeffect Ask [] :int)
+
+(defn use-ask [] : int
+  (+ (:: 1 :int) (perform (Ask))))
+
+(defn run [] : int
+  (* 10 (handle (use-ask)
+          (Ask [] k) (resume k 41))))
+
+(defn main [] : int
+  (println (run))
+  0)

@@ -422,6 +422,47 @@ so drive this phase by real programs, not by the whole grammar:
 - Anything still unsupported keeps the whole-function fallback, and
   `--dump-cps` remains the diagnostic that shows what is left.
 
+### C5 result -- shipped (top tractable gap closed; remainder measured)
+
+Drove this by measurement: tallying `<unsupported: ...>` (temporarily annotated
+with the source `ExprKind`) across the 120-fixture effect + delimited corpus
+ranked the blocking forms in colored functions:
+
+| form | count (before) | disposition |
+| --- | --- | --- |
+| `EX_ASCRIBE` `(:: e T)` | 717 | **closed** -- erased at codegen; `cps_ir.c` now peels it |
+| `EX_GET_FIELD` (struct/ADT read) | 1077 | deferred -- non-scalar value support |
+| `EX_MAKE_STRUCT` | 358 | deferred -- non-scalar |
+| `EX_DEFAULT_OF` | 357 | deferred -- non-scalar |
+| `EX_CSTR_LIT` (strings) | 42 | deferred -- non-scalar (pointer) values |
+| misc (`EX_PANIC`, `EX_WHILE`, ...) | <5 each | deferred -- low frequency |
+
+- **Closed: type ascription.** `ascribe_peel` in `cps_ir.c` unwraps `EX_ASCRIBE`
+  everywhere the translator inspects a form (`cps_tail`, `cps_bind`,
+  `is_atomic`, `atom_of`), so a colored function whose body carries an
+  ascription on a scalar sub-expression now lowers instead of falling back
+  (717 -> 0 in the corpus).
+- **Round-trip fixture** `tests/fixtures/cps-backend-ascribe/`: a colored effect
+  function (`use-ask` performs `Ask`) whose body carries `(:: 1 :int)` now
+  CPS-emits, reproducing the direct-style `420`.
+- **Deferred (kept behind the permanent fallback).** The remaining top blockers
+  are ADT/struct forms (`EX_GET_FIELD` / `EX_MAKE_STRUCT` / `EX_DEFAULT_OF`,
+  ~1800 combined) and strings (`EX_CSTR_LIT`), all requiring **non-scalar value
+  support** (the emitter currently threads everything as `int64_t`). They appear
+  overwhelmingly in stdlib option/result/map bodies that get colored transitively
+  but fall back harmlessly (direct-style is correct); the user effect/delimited
+  code on the critical path is already scalar and already lowers. Per this
+  phase's own scope ("the whole-function fallback covers the rest indefinitely")
+  these stay deferred until a program actually needs them.
+- **Related finding filed.** A control op nested *only* inside an ascription is
+  invisible to the coloring pass (`cps.c` lacks an `EX_ASCRIBE` case), so such a
+  function is never colored and the backend never sees it -- a coverage gap, not
+  a miscompile (direct-style still handles it). Not fixed here because coloring
+  is always-on and feeds decisions beyond this backend; see
+  `docs/reported/cps-coloring-ascription-hides-control-op.md`.
+
+Full suite: 1992 passed, 0 failed.
+
 ## Phase C6 -- experiment gate, sign-off, docs
 
 - **Gate.** Ship behind `--enable=cps-backend`, prototype lifecycle,
