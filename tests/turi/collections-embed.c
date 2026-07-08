@@ -147,6 +147,54 @@ int main(void) {
 
     turi_env_free(env);
 
+    /* --- High-level Set/Map stdlib API via `load` -------------------- */
+    /* interp-load-set-map-elaboration-gap: an isolated `(load "stdlib/set.tur")`
+     * / `(load "stdlib/map.tur")` used to fail elaboration -- the modules refer
+     * to hamt-module names and Eq/Hash that only exist once their dependencies
+     * are loaded, and the CLI-only auto-load prelude was the sole thing that
+     * loaded them in order.  Both files now self-declare those deps with
+     * `(load ...)` (deduped under the CLI prelude), so a bare libturi embedder
+     * can load them and use the public Set/Map surface, not just the relocated
+     * natives.  A fresh env models the real embedder flow (load the stdlib, then
+     * use it).  Requires cwd == repo root so the "stdlib/..." paths resolve. */
+    TuriEnv *senv = turi_env_new();
+    if (!senv) {
+        fprintf(stderr, "FATAL: second turi_env_new failed\n");
+        return 1;
+    }
+    TuriValue ls = turi_eval(senv, "(load \"stdlib/set.tur\")");
+    if (ls.tag == TURI_ERROR) {
+        fprintf(stderr, "FAIL [load stdlib/set.tur]: %s\n", ls.as_error);
+        failures++;
+    } else {
+        printf("PASS [load stdlib/set.tur]\n");
+    }
+    TuriValue lm = turi_eval(senv, "(load \"stdlib/map.tur\")");
+    if (lm.tag == TURI_ERROR) {
+        fprintf(stderr, "FAIL [load stdlib/map.tur]: %s\n", lm.as_error);
+        failures++;
+    } else {
+        printf("PASS [load stdlib/map.tur]\n");
+    }
+    /* set-add takes a precomputed element hash; the element doubles as its own
+     * hash for these int keys. */
+    check_int("Set count (loaded)",
+        2, turi_eval(senv,
+            "(let [s (set-add (set-add (set-new) 3 3) 5 5)] (set-count s))"));
+    check_bool("Set member? (loaded)",
+        1, turi_eval(senv, "(set-member? (set-add (set-new) 5 5) 5 5)"));
+    /* Public map-assoc / map-get / map-count macros over an ascribed map-new. */
+    check_int("Map count (loaded)",
+        2, turi_eval(senv,
+            "(let [m (:: (map-new) (Map int int))]"
+            "  (map-count (map-assoc (map-assoc m 1 10) 2 20)))"));
+    check_int("Map get (loaded)",
+        42, turi_eval(senv,
+            "(let [m (:: (map-new) (Map int int))]"
+            "  (map-get (map-assoc m 7 42) 7))"));
+
+    turi_env_free(senv);
+
     if (failures == 0) {
         printf("\nAll collection embedding tests passed.\n");
         return 0;
