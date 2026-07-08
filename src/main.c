@@ -6111,12 +6111,24 @@ static int cmd_image_verify(const char *path, const char *binary) {
  * ---------------------------------------------------------------------- */
 
 /* Option functions */
+static bool wk_result_payload_is_heap(TuriValue v); /* fwd: defined with native_ok */
 static TuriValue native_some(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
+    (void)ud;
+    TuriValue payload = (n > 0) ? a[0] : turi_int(0);
+    /* Mirror native_ok (R5): the int64[2] box flattens the payload to a bare
+     * int64, losing the tag of a *heap* value (a make-struct, cstr, closure,
+     * float).  `.value`/unwrap would then hand back a TURI_INT and a downstream
+     * field access reads garbage.  For a heap payload build a make-struct
+     * Option whose fields hold the full TuriValue; scalar payloads keep the
+     * carrier box unchanged.  option_field reads both reps. */
+    if (wk_result_payload_is_heap(payload)) {
+        TuriValue fields[2] = { turi_bool(true), payload };
+        return turi_make_struct(env, "Option", fields, 2);
+    }
     int64_t *opt = (int64_t *)malloc(2 * sizeof(int64_t));
     if (!opt) return turi_nil();
     opt[0] = 1; /* is_some = true */
-    opt[1] = (n > 0) ? a[0].as_int : 0;
+    opt[1] = payload.as_int;
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)opt;
     return v;
 }
@@ -8970,12 +8982,18 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "alloc-str",       native_alloc_str,       NULL);
     turi_env_register_native(env, "cstr-free",       native_cstr_free,       NULL);
     turi_env_register_native(env, "ptr=",            native_ptr_eq,          NULL);
-    /* Typed-list (list.tur) carrier-level ops: inline-C bodies the interpreter
-     * cannot run, bound to the { head, tail } cons-cell box natives.  tcons /
-     * list-head / list-tail reuse the existing native_cons / native_list_head /
-     * native_list_tail (same box layout as the untyped head/tail/cons surface);
-     * list-length is new. */
-    turi_env_register_native(env, "tcons",           native_cons,            NULL);
+    /* Typed-list (list.tur) carrier-level ops.  list-head / list-tail reuse the
+     * existing native_list_head / native_list_tail (which handle BOTH a real
+     * TuriStruct Cons and the { head, tail } carrier box); list-length is new.
+     *
+     * tcons is deliberately NOT overridden: its stdlib body is a plain
+     * `(make-struct Cons ...)` the interpreter runs directly, producing a
+     * TURI_STRUCT -- identical to tcons-of and to what the `list` macro builds.
+     * Shadowing it with native_cons (a malloc'd carrier box) made list-concat,
+     * which returns a struct-chain l2 unchanged at its base case and then wraps
+     * it with tcons, splice a struct value's bits into a carrier tail slot; a
+     * later list-length walked that garbage pointer and crashed.  Letting tcons
+     * resolve to its defn keeps every constructor on one representation. */
     turi_env_register_native(env, "list-head",       native_list_head,       NULL);
     turi_env_register_native(env, "list-tail",       native_list_tail,       NULL);
     turi_env_register_native(env, "list-length",     native_list_length,     NULL);

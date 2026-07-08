@@ -7,7 +7,6 @@
 ;; Persistent set backed by the HAMT. A must satisfy Hash[A] and Eq[A].
 ;; Elements are stored as HAMT keys; values are always 1 (sentinel).
 ;; Runtime layout: struct { void *hamt; }
-
 ;; Elaboration dependencies. Set[A] needs Eq[A]/Hash[A] (the element
 ;; typeclasses) and the backing HAMT (the hamt/* iterator + comparator ops the
 ;; Eq[Set] instance walks). The CLI auto-load prelude already loads these before
@@ -17,12 +16,14 @@
 ;; unknown `hamt/*` names and an undefined `Eq`.
 ;; See docs/archive/interp-load-set-map-elaboration-gap.md.
 (load "stdlib/typeclass-eq.tur")
-(load "stdlib/typeclass-hash.tur")
-(load "stdlib/hamt.tur")
 
+(load "stdlib/typeclass-hash.tur")
+
+(load "stdlib/hamt.tur")
 ;;; Set -- parameterized persistent set with element type A.
 ;;;
 ;;; Since: Phase TC2
+
 (defstruct Set :heap [A] (hamt :ptr<void>))
 ;;; set-new -- create a new empty Set[A].
 ;;;

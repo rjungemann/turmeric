@@ -720,10 +720,28 @@ typedef struct {
  * defns -- the "already defined by an auto-loaded stdlib module" hard error).
  * Falls back to the literal path when realpath() fails (e.g. an off-tree script
  * whose cwd-relative `stdlib/...` does not resolve until the stdlib fallback). */
-static const Symbol *load_path_key(SymbolTable *st, const char *path) {
+static const Symbol *load_path_key(SymbolTable *st, const char *path,
+                                   const char *stdlib_dir) {
     char resolved[4096];
     if (realpath(path, resolved) != NULL)
         return intern_cstr(st, resolved);
+    /* A cwd-relative `stdlib/<rest>` load does not resolve via realpath() when
+     * the build runs from a directory other than the repo root -- e.g. the REPL
+     * builds a spice from the project's cwd (spice_loader.c).  Canonicalize it
+     * through the resolved stdlib dir (the same fallback the read side uses at
+     * the elab_read_file recovery below) so its dedup key matches the ABSOLUTE
+     * key the auto-load prefix seeded (load_path_key(sf->path) over the absolute
+     * stdlib path).  Without this, map.tur's `(load "stdlib/hamt.tur")` misses
+     * the already-auto-loaded hamt and re-splices it -- a
+     * "'tur_hamt_new' is already defined" collision that is purely cwd-dependent.
+     * The stdlib dir already ends in ".../stdlib", so drop the leading
+     * "stdlib/" component to avoid ".../stdlib/stdlib/...". */
+    if (stdlib_dir && strncmp(path, "stdlib/", 7) == 0) {
+        char alt[4096];
+        int an = snprintf(alt, sizeof(alt), "%s/%s", stdlib_dir, path + 7);
+        if (an > 0 && (size_t)an < sizeof(alt) && realpath(alt, resolved) != NULL)
+            return intern_cstr(st, resolved);
+    }
     return intern_cstr(st, path);
 }
 
@@ -817,7 +835,7 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
         char path_buf[4096];
         memcpy(path_buf, path_f->as.s.p, plen);
         path_buf[plen] = '\0';
-        const Symbol *key = load_path_key(st, path_buf);
+        const Symbol *key = load_path_key(st, path_buf, e->module_stdlib_dir);
         /* The visited set is compilation-global (on the Elab) so a path the
          * entry already spliced is not re-spliced when an imported module loads
          * it too -- and vice versa. It is also seeded with the auto-loaded
@@ -1053,7 +1071,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
             seen_file = fid;
             const SourceFile *sf = diag_source_file(fid);
             if (sf && sf->path)
-                load_dedup_register(&e, load_path_key(st, sf->path));
+                load_dedup_register(&e, load_path_key(st, sf->path, e.module_stdlib_dir));
         }
     }
 
