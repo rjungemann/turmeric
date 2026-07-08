@@ -671,7 +671,7 @@ static tur_panic_payload *panic_payload_new(int type_tag, void *payload, const c
 }
 
 static void panic_payload_free(tur_panic_payload *p) {
-    if (p) { free(p->value); free(p); }
+    if (p) { free(p); }
 }
 
 static int tur_panic_payload_type(tur_panic_payload *p) {
@@ -860,7 +860,6 @@ static __thread FiberBlock *tur_current_fiber = NULL;
 static void tur_panic_with(int type_tag, void *payload, const char *file, int line) {
     if (tur_panic_in_progress) {
         fprintf(stderr, "double panic: aborting\n");
-        free(payload);
         abort();
     }
     tur_panic_in_progress = 1;
@@ -875,7 +874,6 @@ static void tur_panic_with(int type_tag, void *payload, const char *file, int li
         longjmp(tur_current_fiber->panic_jmpbuf, 1);
     }
     fprintf(stderr, "panic at %s:%d\n", file ? file : "(unknown)", line);
-    free(payload);
     abort();
 }
 

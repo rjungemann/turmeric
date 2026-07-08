@@ -1,0 +1,27 @@
+;; BR3c (catch-unwind-byref-aggregate-br3b-plan): the transitive escape/mutation
+;; summary.  `step` hands its by-const-ptr Result param `acc` to the reader
+;; `describe`, which -- instead of reading it in place -- hands that SAME borrow
+;; on to a FURTHER reader `inner`.  BR3b's one-level check rejected that (a
+;; reader passing the borrow to a non-accessor callee could stash it); BR3c
+;; proves it read-only transitively: `describe`'s param is by-const-ref, it is
+;; handed to `inner` whose param is ALSO by-const-ref and only READ (`.is-ok`),
+;; so the whole chain is a read of the borrow.  No new codegen -- `describe` and
+;; `inner` are native-emitted and propagate a panic via their own return-signal
+;; checks up to `step`'s hoisted `if (tur_panicking) break;` (unchanged from
+;; BR3b).  `acc` is read AFTER the catch-unwind descend (resume segment), so its
+;; borrow is materialized into `acc__agg`.  Native (a non-flat recursion)
+;; SIGSEGVs deep; the trampoline runs flat at 200000.
+;; step(acc, n) = n + describe(acc), describe(acc) = inner(acc), inner reads acc.
+(defn inner [r : (Result int int)] : int (if (.is-ok r) 1 0))
+(defn describe [r : (Result int int)] : int (inner r))
+
+(defn step [acc : (Result int int) n : int] : int
+  (if (= n 0)
+    (describe acc)
+    (do (catch-unwind (fn [] : int (step acc (- n 1))))
+        (+ n (describe acc)))))
+
+(defn main [] : int
+  (println (step (ok 7) 200000))
+  (println (step (err 9) 7))
+  0)

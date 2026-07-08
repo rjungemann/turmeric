@@ -6,14 +6,15 @@ description: Admit passing a by-const-pointer aggregate param to a NON-member pu
 
 # Stackless catch-unwind -- by-ref aggregate param passed to a pure reader (BR3b/BR3c) -- Plan
 
-> **Status:** BR3b LANDED. BR3c remains open (optional). Split out from the
+> **Status:** BR3b LANDED. BR3c LANDED. Split out from the
 > BR3 plan when BR3a landed -- see the archived
 > [BR3 (BR3a) plan](../../archive/catch-unwind-byref-aggregate-br3-plan.md).
 > BR3a widened the read gate to admit pure in-place reads (`match`
 > destructure, `.field` projection, `@`-deref) of a by-ref aggregate param
 > in the single-function trampoline. BR3b -- **passing the param to a
-> non-member pure const-by-ref reader** -- is now done; BR3c (a transitive
-> escape/mutation summary) stays deferred until a fixture needs it.
+> non-member pure const-by-ref reader** -- is done; BR3c -- **a reader may
+> now hand that borrow on to a FURTHER pure reader, proven read-only
+> transitively** -- is also done.
 >
 > **BR3b landing (single-function only):** `gs_value_ok` in
 > `src/compiler/emit_fns.c` now admits a call that hands fd's by-const-ptr
@@ -40,11 +41,27 @@ description: Admit passing a by-const-pointer aggregate param to a NON-member pu
 > panics in the base case; the panic routes via the `break` to the enclosing
 > catch-unwind).
 >
-> **BR3c remaining (optional).** A transitive "does not escape / does not
-> mutate" summary so a reader may itself hand the borrow to a further pure
-> reader (BR3b rejects that -- `gs_reader_use_ok` admits the borrow as a call
-> arg only to a pure accessor). Build it only if a real fixture needs
-> deeper-than-one-level proof; otherwise the one-level check is the ceiling.
+> **BR3c landing (transitive read proof).** `gs_reader_use_ok` no longer
+> rejects a reader that hands its borrow to a non-accessor callee: the new
+> `gs_callee_reads_arg_only` recurses through the callee to prove that
+> callee also only READS the borrow. When the callee receives the arg
+> by-const-ref it borrows the same pointer, so the proof recurses into the
+> callee body (`gs_reader_use_ok` on the callee's matching param); when it
+> receives the arg by-value an independent aggregate copy is made at the
+> boundary, so the copy cannot alias the trampoline buffer and no recursion
+> is needed. The chain is bounded by `GS_READER_MAX_DEPTH` and a
+> visited-FnDef stack (seeded with the BR3b reader itself), so a
+> (mutually) recursive reader is rejected conservatively rather than
+> looping. **No new codegen:** the transitive callees are native-emitted and
+> propagate a panic through their own post-call return-signal checks up to
+> the top-level reader, where BR3b's hoisted `if (tur_panicking) break;`
+> already routes it to the driver unwind. Fixtures:
+> `.../stackless-catch-unwind-byref-aggregate-reader-transitive` (`step` ->
+> `describe` -> `inner`; the borrow threads two levels of pure reader, flat
+> at 200000) and
+> `.../stackless-catch-unwind-byref-aggregate-reader-transitive-escape-bail`
+> (the deeper callee RETURNS the borrow -- an escape -- so the chain is
+> rejected and `step` bails to native, runs correctly at small depth).
 >
 > **Prerequisites (landed):** BR1+BR2 (by-ref param save/restore + box
 > ownership) and BR3a (the read-gate widening). `gs_param_class` classifies a
@@ -140,10 +157,15 @@ pointer dangles / aliases the wrong value).
   *refrains from stashing* it. Pair it with a cheap escape check on the callee
   body (no `EX_INLINE_C`, no return-position use of the param, no store of the
   param into a heap/struct field), or keep the admitted set small until BR3c.
-- **BR3c (optional transitive summary).** A "does not escape / does not
-  mutate" summary computed over the callee (and its callees) for
-  deeper-than-one-level proof. Only build this if a real fixture needs it;
-  otherwise leave BR3b's syntactic check as the documented ceiling.
+- **BR3c (transitive summary) -- LANDED.** `gs_callee_reads_arg_only`
+  extends the escape check across a call: when the reader body hands the
+  borrow to a further callee, resolve that callee and, if it takes the arg
+  by-const-ref, recurse `gs_reader_use_ok` on its matching param (a by-value
+  arg is an independent copy and needs no recursion). The recursion is
+  bounded by `GS_READER_MAX_DEPTH` and a visited-FnDef stack so a
+  (mutually) recursive callee is rejected rather than looping. This turns
+  BR3b's "no return-position use of the param, no store" escape check into a
+  transitive proof over the whole reader chain, not just one level.
 
 ## Also out of scope here (tracked separately): the group path
 
@@ -175,9 +197,16 @@ independent of BR3b; do not fold it in here.
   the negative shapes (aggregate return / transitive escape / inline-C reader /
   reader-left-of-a-suspension) all bail to native. BR3a/BR1 fixtures stay
   byte-identical; full suite 1983 passed, 0 failed.
-- **BR3c** -- (optional) a transitive escape/mutation summary if a real
-  fixture needs deeper-than-one-level proof; otherwise leave BR3b's one-level
-  check as the ceiling and document it. Not yet needed.
+- **BR3c** -- DONE. The transitive escape/mutation summary:
+  `gs_callee_reads_arg_only` lets a reader hand its borrow to a further
+  callee and proves that callee reads-only too (recurse on a by-const-ref
+  arg; accept a by-value copy without recursion), bounded by
+  `GS_READER_MAX_DEPTH` + a visited-FnDef cycle guard. No new codegen -- the
+  transitive callees are native and route panics through BR3b's existing
+  hoist-and-break. Verified: a two-level reader chain runs flat at 200000; a
+  chain whose deeper callee escapes the borrow bails to native and runs
+  correctly; the whole byref-aggregate family and full suite (1985 passed, 0
+  failed) stay green.
 
 ## Validation
 
