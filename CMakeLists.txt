@@ -231,6 +231,17 @@ add_test(
   COMMAND bash tests/run-hamt-eq-ctx.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# HAMT delete-path sibling refcount regression
+# (docs/archive/hamt-delete-sibling-refcount.md).  Compiles
+# tests/test_hamt_del_lineage.c with ASan/UBSan (+LSan on Linux) and asserts
+# that freeing a whole persistent-map lineage containing a tur_hamt_del-derived
+# map is double-free / use-after-free clean.  Pre-fix this tripped a
+# heap-use-after-free in tur_hamt_node_release.
+add_test(
+  NAME tur_hamt_del_lineage
+  COMMAND bash tests/run-hamt-del-lineage.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # RP0: `tur build --shared <dir>` produces a dlopen-able shared library.
 # The script builds tests/fixtures/build-shared-smoke as a .so and runs a
 # hand-written C harness that dlsyms the exported defn and calls it.
