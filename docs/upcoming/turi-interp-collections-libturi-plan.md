@@ -1,7 +1,25 @@
 # Plan: make Vec / Set / Map usable on the libturi interpreter path
 
-**Status:** proposal (not started). **Area:** `src/main.c`, `src/turi/`
-(tree-walking interpreter + embedding library).
+**Status:** Part 1 + Part 2 + Part 3 done (2026-07-08). **Area:** `src/main.c`,
+`src/turi/`, `stdlib/` (tree-walking interpreter + embedding library).
+
+**Done:** the collection natives (`native_vec_*` / `native_set_*` /
+`native_map_*` / `native_tur_hamt_*` / `native_hamt_*` + the `set_*`/`vec_*`
+helpers) were relocated verbatim from `src/main.c` into
+`src/turi/collections_native.c` (in `tur_core`, so they land in `libturi.a` /
+`libturi_wasm.a`), behind a single `turi_register_collection_natives(TuriEnv *)`
+entry point that `turi_env_new` (env.c) now calls for every interpreter env --
+so embedders, the WASM REPL, and the interpreter test harnesses resolve the same
+overrides as the `tur` CLI. Parity test: `tests/turi/collections-embed.c`
+(ctest `tur_collections_embed`). Part 3 (the `load`-path re-elaboration of
+set.tur/map.tur) turned out to be a missing-dependency issue, not the suspected
+carrier bridge: `set.tur`/`map.tur` reference `hamt/*` names and `Eq`/`Hash`
+that only the CLI-ordered auto-load prelude brought into scope. Both files now
+self-declare those deps with `(load "stdlib/...")` (deduped under auto-load), so
+an isolated `(load "stdlib/set.tur")` / `(load "stdlib/map.tur")` from a bare
+embedder elaborates cleanly and the public Set/Map surface round-trips through
+`turi_eval` -- resolved, see
+`docs/archive/interp-load-set-map-elaboration-gap.md`.
 **Goal:** make the `Vec` / `Set` / `Map` (and backing `hamt`) collection
 operations available to **every** consumer of the interpreter -- embedders using
 the `turi_eval` C API, the web/WASM REPL, and the interpreter test harnesses --

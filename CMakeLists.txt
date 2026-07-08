@@ -426,6 +426,17 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_eval_sandbox"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# turi-interp-collections-libturi: Vec/Set/HAMT parity through the libturi embed
+# API. Leak detection OFF -- the tree-walker's collection buffers are
+# process-lifetime (matching the other turi harnesses' policy).
+add_test(
+  NAME tur_collections_embed
+  COMMAND "${CMAKE_BINARY_DIR}/tur_collections_embed"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_collections_embed PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
+)
 # libturi-per-embed-env-and-peripherals: Gaps 1-4 embed-API harness. Runs with
 # leak detection FORCED ON -- the create/reset/free cycles plus the owned
 # module_base_dir copy must leave zero turi-attributable live allocations.

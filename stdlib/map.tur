@@ -14,6 +14,19 @@
 ;; key/value mismatches.  Internal C layout of the carried pointer:
 ;; struct { void *hamt; } -- identical to the emitted Map__K__V, so the inline-C
 ;; bodies that cast to that anonymous struct stay byte-compatible.
+
+;; Elaboration dependencies. Map[K V] needs Eq[K]/Hash[K] (the key typeclasses)
+;; and the backing HAMT (the hamt/* iterator + comparator ops the Eq[Map]
+;; instance walks); MapKey[K] is defined below in this file. The CLI auto-load
+;; prelude already loads these before map.tur, so an already-loaded stdlib
+;; module is deduped and these forms are no-ops there; declaring them here makes
+;; an isolated `(load "stdlib/map.tur")` -- e.g. from a libturi embedder --
+;; self-sufficient instead of tripping on unknown `hamt/*` names and an
+;; undefined `Eq`. See docs/archive/interp-load-set-map-elaboration-gap.md.
+(load "stdlib/typeclass-eq.tur")
+(load "stdlib/typeclass-hash.tur")
+(load "stdlib/hamt.tur")
+
 ;;; Map -- parameterized persistent map with key type K and value type V.
 ;;;
 ;;; Map[K V] is a non-transparent :heap struct holding a single ptr<void> to

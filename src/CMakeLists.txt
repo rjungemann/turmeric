@@ -44,6 +44,9 @@ set(TURI_EVAL_SOURCES
     turi/env.c
     turi/fiber.c
     turi/eval.c
+    # Vec/Set/Map/HAMT interpreter native overrides, relocated from main.c so
+    # they land in libturi for all interpreter consumers (turi-interp-collections).
+    turi/collections_native.c
     # dap.c -- Debug Adapter Protocol server (debugger Phase 3), a thin shell
     # over the Phase 2 interpreter debugger's control API in eval.c.
     turi/dap.c
@@ -352,6 +355,24 @@ target_link_options(tur_eval_basic PRIVATE -pthread
     $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
 )
 set_target_properties(tur_eval_basic PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
+# turi-interp-collections-libturi: Vec/Set/HAMT C-embedding parity harness
+# ---------------------------------------------------------------------------
+add_executable(tur_collections_embed ${CMAKE_SOURCE_DIR}/tests/turi/collections-embed.c)
+target_include_directories(tur_collections_embed PRIVATE ${TUR_INCLUDE_DIRS})
+target_link_libraries(tur_collections_embed PRIVATE libturi)
+target_compile_options(tur_collections_embed PRIVATE
+    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_collections_embed PRIVATE -pthread
+    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+)
+set_target_properties(tur_collections_embed PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 
