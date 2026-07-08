@@ -6616,6 +6616,19 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    free(__b);\n");
     buf_puts(out, "}\n\n");
 
+    /* catch-unwind-return-bridge-residuals (Part B/C): free ONLY the box struct,
+     * never the panic payload.  Used at a by-value (Result ...) return after the
+     * carrier->concrete bridge has copied the box fields into the returned
+     * aggregate: the aggregate's err field may alias the payload pointer (a
+     * pointer-typed err arm), so freeing the payload here could dangle it.  The
+     * caller has proven the box itself is sole-owned, so reclaiming the struct is
+     * safe.  A caught err box's payload is left to the returned aggregate (its
+     * new owner); an ok box has no payload, so the reclaim is complete. */
+    buf_puts(out, "static void tur_result_box_free_shallow(int64_t __r) __attribute__((unused));\n");
+    buf_puts(out, "static void tur_result_box_free_shallow(int64_t __r) {\n");
+    buf_puts(out, "    free((tur_result_box_t *)(intptr_t)__r);\n");
+    buf_puts(out, "}\n\n");
+
     /* Phase B2 / MS1: Cloneable continuation runtime (inline in generated C).
      * Emitted when the program uses cloneable-shift/reset OR any ^multishot handler
      * (which uses tur_cloneable_cont wrappers + tur_continuation_snapshot), or when

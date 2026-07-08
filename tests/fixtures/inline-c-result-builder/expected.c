@@ -797,6 +797,11 @@ static void tur_result_box_free(int64_t __r) {
     free(__b);
 }
 
+static void tur_result_box_free_shallow(int64_t __r) __attribute__((unused));
+static void tur_result_box_free_shallow(int64_t __r) {
+    free((tur_result_box_t *)(intptr_t)__r);
+}
+
 /* Phase 19: Algebraic effect handler chain */
 typedef struct { bool consumed; void *origin_fiber; } TurContK;
 
