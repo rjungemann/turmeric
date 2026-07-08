@@ -6472,8 +6472,15 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    p->type_tag = type_tag; p->value = payload; p->file = file; p->line = line;\n");
     buf_puts(out, "    return p;\n");
     buf_puts(out, "}\n\n");
+    /* Free the payload *record* only, never p->value: the panic value is
+     * opaque -- a user may (panic-with <scalar>) so p->value can be an inline
+     * scalar reinterpreted as a pointer (never heap), or a value borrowed
+     * elsewhere.  Freeing it is a nonheap-free / double-free hazard.  This
+     * matches tur_result_box_free's deliberate refusal to free the caught
+     * payload value (see its comment below and
+     * docs/archive/catch-unwind-returned-err-box-payload-leak.md). */
     buf_puts(out, "static void panic_payload_free(tur_panic_payload *p) {\n");
-    buf_puts(out, "    if (p) { free(p->value); free(p); }\n");
+    buf_puts(out, "    if (p) { free(p); }\n");
     buf_puts(out, "}\n\n");
     /* Phase R2: Panic payload accessors */
     buf_puts(out, "static int tur_panic_payload_type(tur_panic_payload *p) {\n");
@@ -6793,7 +6800,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "static void tur_panic_with(int type_tag, void *payload, const char *file, int line) {\n");
     buf_puts(out, "    if (tur_panic_in_progress) {\n");
     buf_puts(out, "        fprintf(stderr, \"double panic: aborting\\n\");\n");
-    buf_puts(out, "        free(payload);\n");
+    /* payload is opaque (may be an inline scalar reinterpreted as a pointer,
+     * e.g. (panic-with 7) -> (void*)7, or a value borrowed elsewhere), so we
+     * must not free it: freeing a non-heap pointer is UB (and -O2 gcc proves
+     * it and emits -Wfree-nonheap-object).  abort() follows immediately, so
+     * the OS reclaims a heap payload regardless -- there is nothing to leak. */
     buf_puts(out, "        abort();\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    tur_panic_in_progress = 1;\n");
@@ -6810,7 +6821,9 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        longjmp(tur_current_fiber->panic_jmpbuf, 1);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    fprintf(stderr, \"panic at %s:%d\\n\", file ? file : \"(unknown)\", line);\n");
-    buf_puts(out, "    free(payload);\n");
+    /* payload is opaque -- see the double-panic path above.  Do not free it:
+     * a scalar/borrowed payload must never be freed, and abort() reclaims a
+     * heap payload via the OS anyway. */
     buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n\n");
     /* Phase T22: Cooperative cancellation flag */
