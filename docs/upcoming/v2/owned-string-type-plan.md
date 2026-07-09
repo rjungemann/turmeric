@@ -132,6 +132,47 @@ an owned-string literal form only if churn warrants -- e.g. a reader prefix
 - `cstr <-> String` round-trips; `string/to-cstr` borrow is O(1).
 - Compiled vs `--interpret` parity for every op.
 
+## Follow-up: adoption audit (after `String` lands)
+
+Introducing `String` does not by itself fix any existing code -- the value comes
+from *adopting* it where a borrowed `cstr` is currently a latent
+lifetime/correctness bug (a stored/returned/collection-key string that outlives
+its buffer) or where owned semantics simply read better. Do **not** attempt a
+big-bang `cstr -> String` sweep; that would be churn, would pessimize the many
+sites where a borrowed literal is exactly right, and would break FFI/literal
+ergonomics. Instead, once `String` is implemented and stable, write three
+separate adoption-audit plans -- each surveys a corpus, classifies each `cstr`
+site as *keep-cstr* / *should-be-String* / *needs-judgment*, and proposes the
+concrete migrations:
+
+1. **Audit stdlib.** Sweep `stdlib/**` for `cstr` in stored fields, returned
+   values that outlive their source, and Map/Set key positions. Flag every
+   borrowed-key site (`MapKey[cstr]`, `mk-owned? = 0`) and every API that hands
+   back a `cstr` into a longer-lived structure. Output: a per-module
+   keep/migrate table and an ordered migration list (start with the
+   collection-key and returned-string sites, which are the real dangling
+   hazards).
+
+2. **Audit spices.** The same sweep over the spice ecosystem
+   (`../turmeric-spices/` and any in-tree spice sources), where third-party-style
+   API surface is most likely to leak a borrowed `cstr` across a lifetime
+   boundary. Because spices are a public surface, weight the audit toward API
+   signatures (parameters/returns) over internals. Output: per-spice
+   keep/migrate findings plus any `String`-shaped API additions worth proposing
+   upstream.
+
+3. **Audit guides / docs.** Sweep `docs/guides/**` (and tutorials/examples) for
+   places that teach `cstr` where `String` is now the better default -- string
+   handling, map/set keys, "returning a string" idioms, the strings/tiering
+   guidance itself. Output: doc edits and example rewrites so new code reaches
+   for `String` when ownership matters, plus the canonical "cstr vs str vs
+   String -- which do I use?" decision section.
+
+Each of the three is its own plan file under `docs/upcoming/`; they can run in
+parallel once `String` is stable, and each should land its migrations
+incrementally (audit table first, then batched edits) rather than as one
+sweeping change.
+
 ## Related
 
 - `stdlib/str.tur` -- the inert borrowed view to supersede or promote.
