@@ -59,6 +59,7 @@
 /* Phase S0: eval API for tur repl */
 #include "turi/eval.h"
 #include "turi/collections_native.h"
+#include "turi/preload.h"
 /* Phase S1: REPL with libedit, multi-line input, :type/:doc/:reload */
 #include "turi/repl.h"
 /* Phase PKG-1: Spice package manager */
@@ -5444,37 +5445,27 @@ static int cmd_eval_h(const char *path, bool use_color,
      * with it under "only one defmodule is allowed per file" (both forms shared
      * file_id 0, defeating the per-file reset).  The `(load ...)` path assigns
      * macros.tur its own file_id, so the defmodule-per-file boundary reset
-     * fires and a user defmodule no longer conflicts with the preloaded one. */
-    {
-        char path_buf[4096];
-        tur_stdlib_path("macros.tur", path_buf, sizeof(path_buf));
-        char load_form[4200];
-        snprintf(load_form, sizeof(load_form), "(load \"%s\")", path_buf);
-        TuriValue sv = turi_eval(env, load_form);
-        (void)sv;
-    }
-    /* Runtime contracts: loaded right after macros.tur (and, like it, in its own
-     * turi_eval so it lands at the very front of the accumulated source).
-     * contract.tur exports macros (assert!/require!/ensure!/invariant! + their
-     * -msg! variants); the Phase M7 promotion in elaborate_program nulls a
-     * tur/-prefixed module's macros' defining_module_name -- making them
-     * globally visible without an explicit import -- only for modules within
-     * the stdlib-prefix boundary, which (because load-expansion shifts form
-     * indices) effectively covers the earliest-loaded modules.  Loading
-     * contract.tur up front, next to macros.tur, keeps assert!/require!/... in
-     * that promoted region so user code sees them bare under --interpret.  Its
-     * inline-C tur-contract-check / tur-contract-check-inv bodies are overridden
-     * by native_contract_check[_inv] below; without this preload the elaborator
-     * never sees a tur-contract-check binding and silently drops every
-     * :pre/:post/:type check (a silent miscompile). */
-    {
-        char pb[4096];
-        tur_stdlib_path("contract.tur", pb, sizeof(pb));
-        char load_form[4200];
-        snprintf(load_form, sizeof(load_form), "(load \"%s\")", pb);
-        TuriValue sv = turi_eval(env, load_form);
-        (void)sv;
-    }
+     * fires and a user defmodule no longer conflicts with the preloaded one.
+     *
+     * Runtime contracts (contract.tur) are loaded right after macros.tur (and,
+     * like it, in its own turi_eval so it lands at the very front of the
+     * accumulated source).  contract.tur exports macros (assert!/require!/
+     * ensure!/invariant! + their -msg! variants); the Phase M7 promotion in
+     * elaborate_program nulls a tur/-prefixed module's macros'
+     * defining_module_name -- making them globally visible without an explicit
+     * import -- only for modules within the stdlib-prefix boundary, which
+     * (because load-expansion shifts form indices) effectively covers the
+     * earliest-loaded modules.  Loading contract.tur up front, next to
+     * macros.tur, keeps assert!/require!/... in that promoted region so user
+     * code sees them bare under --interpret.  Its inline-C tur-contract-check /
+     * tur-contract-check-inv bodies are overridden by native_contract_check[_inv]
+     * below; without this preload the elaborator never sees a tur-contract-check
+     * binding and silently drops every :pre/:post/:type check (a silent
+     * miscompile).
+     *
+     * turi_env_preload_macros (src/turi/preload.c) is the shared helper the WASM
+     * REPL also calls, so the two entry points cannot drift. */
+    turi_env_preload_macros(env, resolve_stdlib_root());
     /* Inject typed stubs so the elaborator knows the signatures of native
      * functions used by benchmark scripts.  The native shims registered below
      * replace these no-op closures at runtime. */
@@ -5555,70 +5546,20 @@ static int cmd_eval_h(const char *path, bool use_color,
      * own those names, and BEFORE wk_register_stdlib_natives so the native shims,
      * registered last, override any inline-C module body the interpreter cannot
      * execute.  Reader-backed modules (json/schema/sym) follow the same -X gates
-     * as the compiled path. */
-    {
-        /* W1/W1b conflict-free subset.  result.tur joined the prelude (W1b)
-         * once three pieces landed: the dual-rep Result readers
-         * (native_ok_val/...), native_result_eq (closure-caller), and the
-         * EX_GET_FIELD carrier-box path in eval.c (so result.tur's field-access
-         * accessors work on a Result that flowed as the :int carrier, e.g.
-         * `(:: carrier (Result A B))`).  hamt.tur joined once cmd_eval started
-         * registering the raw tur_hamt_* runtime wrappers (wk_register_hamt_-
-         * natives, above) -- its ops are thin wrappers over those.
-         *
-         * contract.tur is preloaded too, but NOT in this array -- it is loaded up
-         * front next to macros.tur (Phase M7 macro promotion is order-sensitive;
-         * see that load site).  Its inline-C tur-contract-check /
-         * tur-contract-check-inv bodies are overridden by native_contract_check
-         * / native_contract_check_inv (registered with the other natives below),
-         * so the :pre/:post/:type lowering and the assert!/require!/ensure!/
-         * invariant! macros actually enforce under --interpret instead of being
-         * silently dropped (the elaborator only injects a contract check when
-         * the tur-contract-check binding is visible -- without the preload it was
-         * unbound, so every :pre/:post became a no-op: a silent miscompile).
-         * mutmap.tur is now preloaded (below): its inline-C ops are re-implemented
-         * as native_mutmap_* overrides over its self-contained open-addressing
-         * layout (no tur_hamt_* dependency).  See
-         * docs/reported/turi-map-set-hamt-interpreter-gap.md. */
-        static const char *prelude[] = {
-            "safe.tur",
-            "typeclass-eq.tur", "typeclass-functor.tur", "typeclass-clone.tur",
-            "typeclass-hash.tur", "typeclass-applicative.tur",
-            "typeclass-alternative.tur", "typeclass-monad.tur",
-            "typeclass-monaderror.tur", "typeclass-bifunctor.tur",
-            "hamt.tur", "set.tur", "map.tur",
-            "vec.tur", "slice.tur", "option.tur", "result.tur",
-            "pair.tur", "tuple.tur", "list.tur", "grid.tur", "zipper.tur",
-            /* MutableMap: self-contained open-addressing table; its inline-C ops
-             * are re-implemented as native overrides (native_mutmap_*). */
-            "mutmap.tur",
-            /* Uniqueness-type pattern forms (with-unique / consume / replace).
-             * Pure-Turmeric wrappers over the ^unique discipline; the compiled
-             * path auto-loads it (g_stdlib_autoload_files), so the interpreter
-             * preloads it too or those forms read as unbound under --interpret. */
-            "unique.tur",
-            NULL
-        };
-        /* Build one (load A)(load B)... form so the whole prelude elaborates in
-         * a single turi_eval call -- distinct file_ids, deps resolved in order. */
-        Buf src; buf_init(&src);
-        for (int i = 0; prelude[i] != NULL; i++) {
-            char pb[4096];
-            tur_stdlib_path(prelude[i], pb, sizeof(pb));
-            buf_write(&src, "(load \"", 7);
-            buf_write(&src, pb, strlen(pb));
-            buf_write(&src, "\")\n", 3);
-        }
-        char pb[4096];
-        tur_stdlib_path("sym.tur", pb, sizeof(pb));
-        buf_write(&src, "(load \"", 7);
-        buf_write(&src, pb, strlen(pb));
-        buf_write(&src, "\")\n", 3);
-        buf_putc(&src, '\0');  /* turi_eval calls strlen; NUL-terminate */
-        TuriValue sv = turi_eval(env, src.data);
-        (void)sv;
-        buf_free(&src);
-    }
+     * as the compiled path.
+     *
+     * The array (safe, typeclass-*, hamt/set/map, vec/slice, option/result,
+     * pair/tuple/list, grid/zipper, mutmap, unique, sym) and its batched-load
+     * shape now live in turi_env_preload_collections (src/turi/preload.c), the
+     * shared helper the WASM REPL also calls so the two entry points cannot
+     * drift.  contract.tur is NOT in that list -- it is loaded up front next to
+     * macros.tur (Phase M7 macro promotion is order-sensitive; see that load
+     * site).  The inline-C bodies of these modules (map/set ops, contract
+     * checks, mutmap, ...) are overridden by the native_* shims registered below
+     * (wk_register_stdlib_natives et al.), which is why this preload runs BEFORE
+     * that registration.  See docs/reported/turi-map-set-hamt-interpreter-gap.md
+     * and docs/reported/web-repl-missing-stdlib-preload.md. */
+    turi_env_preload_collections(env, resolve_stdlib_root());
     /* JR0/RD (turi-json-schema-interpreter-plan, Layers 1-2): auto-load
      * json.tur, then schema.tur on top of it, so the #json(...) reader-macro
      * lowering's json node constructors (json/encode|decode|type|get) and the
@@ -5852,6 +5793,11 @@ static int cmd_repl(bool watch_mode) {
      * entry point -- flag it so the INT-1 reader conditional picks :turi and
      * so elab_call keeps the runtime-native dispatch fallback (UCH1). */
     g_interpret_mode = true;
+
+    /* Resolve (and export via TUR_STDLIB_DIR) the stdlib root so turi_repl_run's
+     * shared preload can (load ...) the prelude even when the REPL is launched
+     * from outside the repo tree. */
+    resolve_stdlib_root();
 
     /* UC-3 (user-config-experiments-plan): honor the user-level experiments
      * file for the interactive REPL, unless the enclosing project's build.tur

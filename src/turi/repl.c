@@ -24,6 +24,7 @@
 
 #include "repl.h"
 #include "eval.h"
+#include "preload.h"       /* shared stdlib preload (macros + typed collections) */
 #include "spice_loader.h"  /* RP3: auto-discover + load the enclosing spice */
 #include "ffi_thunk.h"     /* RP4: install per-export TuriNativeFn bindings */
 
@@ -956,6 +957,19 @@ int turi_repl_run(bool watch_mode) {
         return 1;
     }
     turi_env_set_diag_sink(env, repl_diag_sink, env);
+
+    /* Preload the core macros (when/cond/for/and/or + assert!/require!/...) and
+     * the typed-collection stdlib so the interactive prompt matches the
+     * `--interpret` path -- without this, `#map{...}`/`#set{...}` and every
+     * macro read as "unknown function or operator" (web-repl-missing-stdlib-
+     * preload; the report's fix direction 3 names the REPL as a drift point).
+     * TUR_STDLIB_DIR is set by main.c's resolve_stdlib_root(); the helper
+     * defaults to a cwd-relative "stdlib" when it is unset. */
+    {
+        const char *stdlib_root = getenv("TUR_STDLIB_DIR");
+        turi_env_preload_macros(env, stdlib_root);
+        turi_env_preload_collections(env, stdlib_root);
+    }
 
     /* RP5: register `(reload)` unconditionally so users always have
      * a callable handle, even outside a spice project (the native

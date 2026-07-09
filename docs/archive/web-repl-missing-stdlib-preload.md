@@ -4,6 +4,36 @@
 native `--interpret` path performs; user-visible as "unknown function or
 operator" for reader-macro lowerings).
 
+**Status:** RESOLVED. The interpreter stdlib preload was factored out of
+`src/main.c`'s `cmd_eval` into a shared helper (`src/turi/preload.c`,
+`turi_env_preload_macros` / `turi_env_preload_collections`) that lives in
+`libturi`/`tur_core`, so all three interpreter entry points now load the same
+list and cannot drift:
+
+- `src/main.c` (`tur --interpret`) calls the helper in place of its inline
+  macros/contract and prelude-array loads (behavior-preserving; the full suite
+  stays at `1987 passed, 0 failed`).
+- `src/turi/repl.c` (`tur repl`) calls it after `turi_env_new` -- previously the
+  interactive REPL had the *same* bug (`when`/`#map{}` -> "unknown function").
+- `src/web/wasm_glue.c` (`turi_wasm_init` / `turi_wasm_reset`) calls it with the
+  MEMFS root; `src/CMakeLists.txt` bundles `stdlib/` into the WASM virtual FS via
+  `--embed-file <src>/stdlib@/stdlib` so `(load ...)` resolves in the browser.
+
+The Vec/Set/Map/HAMT runtime ops are already registered as natives by
+`turi_env_new` (`turi_register_collection_natives`), so `#map{}` (empty),
+int/`cstr`/`bool`/`float`-keyed maps, `#set{...}`, and every core macro now
+resolve in the web REPL and in `tur repl`.
+
+Remaining bounded gap (tracked separately in
+`docs/reported/web-repl-repl-inline-c-native-gap.md`): stdlib ops whose bodies
+are inline-C and are overridden by the `wk_register_*` natives that still live in
+`src/main.c` (keyword/`:Sym`-keyed maps, contract panics, `json`/`schema`, lazy
+`seq`) surface "inline-C not supported in interpreter mode" in the WASM/REPL
+paths, because those native registrations are not yet compiled into
+`tur_core`. That is a strict improvement over the previous "unknown function or
+operator 'hamt-of'" hard error, and closing it is report direction 3's larger
+form (relocate the `wk_register_*` block into the core).
+
 ## Summary
 
 In the browser/WASM REPL (`web/` + `src/web/wasm_glue.c`), reader-macro
