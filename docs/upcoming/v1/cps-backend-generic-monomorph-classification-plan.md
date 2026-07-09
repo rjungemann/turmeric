@@ -155,13 +155,42 @@ enumerated spec set.
   probe (which keys on an active specialization) does not cover it; that is a
   separate carrier-generic sub-case, not part of the `TY_APP` monomorph surface.
 
-- **G2 -- shared monomorph-discovery pass.** Factor the direct emitter's spec
-  interning so the set of `(generic, arg_types, result_type)` monomorphs is
-  enumerable before the per-item emit. Feed it into `ensure_S` so the taint
-  fixpoint ranges over monomorphs as well as top-level fns. Still no emit change:
-  assert (under the dump flag) that the S-set including monomorphs is consistent
-  with today's fiber behavior (no monomorph that shares an effect with a fiber-
-  only peer is marked S).
+- **G2 -- accurate monomorph classification + discovery-timing findings.**
+  *Signature classification via materialized spec types LANDED (analysis-only).*
+  The probe now reads the direct emitter's MATERIALIZED concrete types
+  (`spec->result_type` / `spec->arg_types[]`) for the signature (`mono_sig_ok`)
+  instead of re-resolving the generic annotation. This closed the G1
+  false-negative half-way: `emit_resolve_type` can collapse `(Box A)` to the bare,
+  unapplied `TY_ADT Box` the by-value-product gate rejects (`byval_prod=0`), while
+  the spec's `result_type` is the fully-applied `TY_APP (Box int)` the gate
+  accepts (`byval_prod=1`, same `AdtDef`). Verified: `boxup`'s user-defstruct
+  return flips `sig=no` -> `sig=ok`; the stdlib cases stay ADMISSIBLE; full suite
+  2037/0 (the resolver hook + `mono_sig_ok` are used ONLY in the dump probe --
+  zero emit change).
+
+  *Remaining G2/G3 blockers, now pinned down:*
+
+  1. **Body-internal resolution of user-defstruct results.** `boxup` still reports
+     `body=no`: the generic body's `(make-struct Box ...)` result is elaborated as
+     a **bare `TY_ADT Box`** (no type arg), so `emit_resolve_type` -- pure tyvar
+     substitution -- has nothing to substitute and the by-value gate rejects it.
+     Stdlib constructors (`some`, `pair`) return an annotated `(Option A)` /
+     `(Pair A B)`, which is why their bodies resolve. Fixing this needs the
+     direct emitter's full materialization (`emit_abi_instantiate_type` + the
+     ADT's own `[A]` type-param scope), not just `emit_resolve_type`. The probe
+     only ever *under*-reports, so it stays a safe lower bound.
+
+  2. **The monomorph set is not complete when `ensure_S` runs (the ordering
+     knot).** `ensure_S` first fires inside the main function-emission loop
+     (emit_module.c ~9217, via the first colored fn's `emit_cps_ir_try_fn`), but
+     `emit_abi_register_call` interns specs *incrementally throughout* that emit
+     (and later scan passes at ~9410/9505). So a later function's monomorphs do
+     not exist yet when `ensure_S` builds its S-set and runs the effect-taint
+     fixpoint. Making the fixpoint range over monomorphs therefore requires a
+     **dedicated pre-emit discovery pass** -- run the full `emit_abi_scan_expr`
+     over the program to intern every spec *before* `ensure_S` -- or an
+     equivalent reordering. This is the load-bearing refactor for G3 and is
+     confirmed unavoidable.
 
 - **G3 -- emit the monomorph DK body + route the call site.** In
   `emit_cps_ir_try_fn`, when `current_abi_specialization` is set and the
@@ -180,18 +209,25 @@ enumerated spec set.
 
 ## Status / recommendation
 
-**G1 is landed** (analysis-only, zero emit change) -- the substitution-translation
-is proven for the stdlib-parametric-ADT surface, and G1 surfaced the concrete G2
-requirement: the type resolver must materialize the full monomorph ADT (not just
-`emit_resolve_type`) to cover user-defstruct generics.
+**G1 landed** (analysis-only): the substitution-translation is proven for the
+stdlib-parametric-ADT surface. **G2 partly landed** (analysis-only): monomorph
+*signature* classification now uses the materialized spec types (`mono_sig_ok`),
+so signature verdicts are accurate for all cases (including user-defstruct
+generics). Both are dump-only, zero emit change, suite 2037/0.
 
-G2-G4 remain a materially larger lift than the prior N6 slices (which were
-single-pass gate widenings). They touch classification ordering, the
-specialization pipeline, and emit routing -- G2 in particular refactors shared
-discovery logic and upgrades the resolver. This is the right next big lever *if*
-we want to close the generic surface, but it is not a one-sitting surgical
-change, and the current behavior is already sound (effect-taint keeps generic
-monomorphs on fiber without splitting any DK chain).
+G2 also pinned down the two remaining blockers precisely (see the G2 entry):
+(1) body-internal user-defstruct results are bare `TY_ADT` and need the full ADT
+materialization; (2) **the ordering knot is confirmed unavoidable** -- the
+monomorph set is not complete when `ensure_S` runs, so the effect-taint fixpoint
+cannot range over monomorphs without a dedicated pre-emit spec-discovery pass.
+
+G3 (the actual coverage win -- emitting `<clone>__cps` + routing DK-context call
+sites) is gated on that pre-emit discovery pass, which is the load-bearing
+refactor: run the full `emit_abi_scan_expr` over the program to intern every spec
+before `ensure_S`, then run the taint fixpoint over the complete set. This is a
+materially larger, higher-risk change than the prior N6 slices, and the current
+behavior is already sound (effect-taint keeps generic monomorphs on fiber without
+splitting any DK chain).
 
 Next-step options, in the spirit of the one-track-to-v1 priority:
 

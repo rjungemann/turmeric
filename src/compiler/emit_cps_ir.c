@@ -2349,14 +2349,40 @@ bool emit_cps_ir_program_has_emittable(const Expr *program) {
  * sig-rejects on the tyvar TY_APP and is never a candidate).  Substitution is via
  * emit_resolve_type through the active spec (the g_cps_mono_resolver hook that
  * slot_ok_t consults).  Changes no emitted code; a pure `stderr` report. */
+/* G2: monomorph signature admissibility using the direct emitter's MATERIALIZED
+ * concrete types (spec->result_type / arg_types[]) rather than re-resolving the
+ * generic annotation.  emit_resolve_type can collapse `(Box A)` to the bare,
+ * unapplied `TY_ADT Box` that the by-value-product gate rejects; the spec types
+ * are the fully-applied `TY_APP (Box int)` the gate recognizes.  Mirrors
+ * fn_sig_ok's per-binding checks (is_poly_fn / is_borrow / effect-free fn param /
+ * name clash) but reads the concrete type at each position. */
+static bool mono_sig_ok(const FnDef *fd, const EmitAbiSpecialization *spec) {
+    const Type *rt = (spec->result_type.kind != TY_UNKNOWN)
+                   ? &spec->result_type : fn_ret_type(fd);
+    if (rt->kind != TY_NIL && !slot_ok_t(rt, rt->kind)) return false;
+    for (uint8_t i = 0; i < fd->n_params; i++) {
+        const Binding *p = fd->params[i];
+        const Type *pt = (i < spec->n_args) ? &spec->arg_types[i] : &p->type;
+        bool fn_param_ok = pt->kind == TY_FN && effect_row_is_empty(pt->as.fn.effect_row);
+        if (!p->is_poly_fn && !p->is_borrow && !fn_param_ok
+            && !slot_ok_t(pt, pt->kind)) return false;
+        if (param_name_clashes_cps(p)) return false;
+    }
+    return true;
+}
+
 static void cps_dump_mono_admissible(EmitCtx *ctx, FnDef *fd) {
     const EmitAbiSpecialization *spec = ctx->current_abi_specialization;
     if (!spec || spec->fn != fd || !fd->body) return;
     if (!fd->cps_colored) return;   /* only colored generics are interesting */
     Arena tmp; arena_init(&tmp, 1 << 16);
     CTerm *t = cps_ir_translate_fn(&tmp, (Expr *)ctx->program_root, fd);
+    /* Signature: materialized spec types (no resolver hook needed -- they are
+     * already concrete).  Body: the generic binders are tyvar-typed, so the
+     * resolver hook substitutes each through the active spec while term_core_ok
+     * runs. */
+    bool sig  = mono_sig_ok(fd, spec);
     g_cps_mono_resolver = ctx;
-    bool sig  = fn_sig_ok(fd);
     bool body = t && term_core_ok(t);
     g_cps_mono_resolver = NULL;
     const char *nm = spec->clone_name ? spec->clone_name
