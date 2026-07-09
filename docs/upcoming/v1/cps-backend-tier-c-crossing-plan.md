@@ -1,0 +1,193 @@
+---
+title: "CPS backend Tier C -- wide by-value aggregate slot crossing: investigation + prerequisites"
+status: investigation
+description: Graduation gate item 3 (Tier C) asks that wide by-value aggregates crossing the DK slot as an effect payload / resume value / function return box at the boundary. The box-at-boundary emit design is settled and small. This document records what the investigation found when trying to LAND it: every source program that would route a by-value aggregate across the DK slot is blocked by an upstream prerequisite OUTSIDE the CPS backend's emit path (effect payload typing, the direct-path fiber crossing, the shift-body struct translation, and the function-return Type carrying a NULL ADT def with classification running before any EmitCtx exists to resolve it). Tier C cannot land a round-trip fixture until at least one of those crossings has a working direct baseline AND a populated crossing Type. This plan reframes Tier C as gated on those prerequisites and lays out the fix order.
+---
+
+## Why this exists
+
+The `cps-backend` graduation gate
+([cps-backend-non-scalar-values-plan.md](cps-backend-non-scalar-values-plan.md#graduation-gate----what-must-hold-before-cps-backend-goes-always-on),
+item 3) requires that **wide by-value aggregates that cross the one-word DK
+slot** -- as an effect payload, a resume value, or a function return -- are
+emitted natively (boxed at the boundary), not left on the whole-function
+fallback. N3 landed the *local* struct/ADT slice (a by-value aggregate that
+stays a local and never touches the slot); Tier C is the remaining *crossing*
+slice.
+
+The **emit design is settled and small** (see "The box-at-boundary design"
+below): thread the full `Type` to the six DK slot boundaries, and when it is an
+owning-free by-value product, heap-copy on store / deref on load. A prototype of
+exactly that was written and builds clean. The blocker is not the design -- it
+is that **no source program in the current pipeline actually routes a by-value
+aggregate across the DK slot with a working direct baseline**, so there is no
+round-trip fixture to assert `direct == cps` against (the discipline every
+CPS-backend phase follows). This document records the five prerequisites the
+investigation hit, each with a repro, so the next step is unambiguous.
+
+## The box-at-boundary design (settled)
+
+For a by-value aggregate type `T` (a `tur_adt_<Name>` struct that can exceed one
+word) crossing the DK slot:
+
+- **store** (`slot_store`): `(intptr_t)({ T *__bx = malloc(sizeof(T)); *__bx = (v); __bx; })`
+- **load** (`slot_load`): `(*(T *)(slot))`, and at a single-shot boundary
+  (the root entry unwrap) additionally `free` the box.
+
+Restricted to **owning-free** products (`AdtDef.needs_drop_glue == false`): the
+box is then a pure bitwise value copy with no refcount / drop concern, safe even
+under a multi-shot resume (each crossing gets its own copy). Aggregates with
+owning fields (rc / ref / weak) stay on the fallback -- their crossing needs
+retain-on-copy + drop glue (that is N3-O2 / gate item 4, not Tier C). Carrier
+ADTs (heap Vec/Map, parametric apps) also stay out: their bit pattern already IS
+the int64 carrier, and bit-copying an owning handle would duplicate its
+refcount.
+
+The predicate is `type_is_byvalue_adt_product(t) && !def->needs_drop_glue`. The
+six boundaries (deliver, lifted-frame value param, handler-case arg, perform arg,
+resume value + result, entry unwrap) already have `slot_store`/`slot_load` seams
+from Tier B; Tier C only widens them from `TypeKind` to the full `Type` and adds
+the box/unbox arm. Classification (`fn_sig_ok`, `atom_ok`, the subset predicates)
+widens from `slot_ty(kind)` to `slot_ty(kind) || slot_box_ty(type)` wherever the
+full `Type` is in hand (it is -- every `CVar`/`CAtom` carries it since N3).
+
+None of that is the hard part. The hard part is below.
+
+## The five prerequisites (each blocks a different crossing)
+
+Every way to route a by-value aggregate across the DK slot was tried. Each hits
+a distinct upstream gap. `Pr` below is `(defstruct Pr [first : int second : int])`
+-- a 16-byte owning-free by-value product, the ideal Tier C probe.
+
+### P1 -- effects cannot carry an aggregate *return* type
+
+```turmeric
+(defeffect Get [] :Pr)          ; error: defeffect: unknown return type 'Pr'
+```
+
+An effect's value type is restricted to the built-in/known set; a user struct is
+rejected at `defeffect`. So the "effect resumes with a by-value record" crossing
+(the N3-TierC round-trip target as literally written) is not expressible.
+**Fix locus:** effect declaration elaboration (accept ADT/struct value types).
+
+### P2 -- an aggregate returned *across an effect* breaks the direct/fiber path
+
+```turmeric
+(defn make-pr [] : Pr (let [v (perform (E))] (make-struct Pr :first v :second 10)))
+(defn run [] : Pr (handle (make-pr) (E [] k) (resume k 32)))
+```
+
+`tur run` (direct style) fails to **compile**:
+`tur_adt_Pr __t = (tur_adt_Pr)__dispatch(...)` -- the fiber effect path passes
+the continuation result as an `int64_t` and casts it back to the struct, which C
+rejects. So even where the CPS backend could box it correctly, there is **no
+direct baseline** to assert `direct == cps` against (the same class as the
+`fiber-effect-float-result-truncated` bug, but a hard compile error rather than a
+wrong value). **Fix locus:** the direct/fiber emitter's non-scalar
+continuation-result crossing.
+
+### P3 -- `make-struct` inside a `shift` body is untranslated (CT_UNSUPPORTED)
+
+```turmeric
+(defn inner [] : Pr (shift (fn [v : Pr] v) (make-struct Pr :first 32 :second 10)))
+```
+
+`--dump-cps` shows the shift body as `<unsupported: form not in CPS2 subset>`.
+The `CT_LETRAW` delegation that lets N3 emit `make-struct` as a local was wired
+for the main-body / perform-continuation positions, not for a shift body. So the
+"shift produces an aggregate delivered to the prompt" crossing never reaches the
+emit path. **Fix locus:** `cps_ir.c` -- delegate `make-struct`/get-field in the
+shift-body translation (`cps_shift_body`), same as the main body.
+
+### P4 -- a function's aggregate *return* Type carries a NULL ADT def, and classification runs before any `EmitCtx` exists
+
+This is the closest miss. A colored function that builds a `Pr` from constants
+*after* a `reset` and returns it has a **working direct baseline** and a clean,
+fully-translated CPS IR:
+
+```turmeric
+(defn inner [] : int (shift (fn [v : int] v) 32))
+(defn outer [] : Pr
+  (let [n (reset (inner))]
+    (make-struct Pr :first 40 :second 2)))        ; $ tur run  => 42  (direct works!)
+```
+
+```
+cps-fn outer [] k:cont<_>
+  reset n { tailcall inner(<prompt>) }
+  let t0 = <make-struct>          ; CT_LETRAW, real def
+  (k t0)                          ; deliver Pr to KK_RET
+```
+
+Yet `outer` is not admitted. Two coupled causes:
+
+1. **`fd->return_type` for an aggregate-returning fn is a `TY_ADT` with
+   `as.adt_.def == NULL`.** The value site (`make-struct`'s result) has the real
+   def, but the *return* Type does not, so the Tier C predicate cannot see it is
+   a by-value product -- and the entry-unwrap `slot_load` cannot name the C type
+   to box against.
+2. **Classification (`ensure_S` -> `fn_sig_ok`) runs from
+   `emit_runtime_preamble` (emit_module.c), which has no `EmitCtx`.** So it
+   cannot call `emit_resolve_type` to populate the def, and by the time
+   `emit_cps_ir_try_fn` runs (which does have `ctx`), the classification is
+   already cached.
+
+**Fix locus:** either populate `FnDef.return_type`'s ADT def during elaboration,
+or thread `EmitCtx` (or a resolve hook) into `emit_cps_ir_program_has_emittable`
+/ `ensure_S` so classification can resolve the crossing Type. P4 alone would
+unlock the *return-crossing* slice (a real round-trip fixture, since the direct
+baseline works), independent of P1/P2/P3/P5.
+
+### P5 -- an aggregate effect *argument* loses its type in the handler
+
+```turmeric
+(defeffect Put [p : Pr] :int)
+(defn run [] : int (handle (use-put) (Put [p] k) (resume k (+ (.first p) (.second p)))))
+;; error: no typeclass method found for 'first'   -- p's type is erased in the case
+```
+
+The handler-case param `p` does not retain its `Pr` type, so field access on it
+fails to elaborate. So the "aggregate as effect argument" crossing is blocked
+before codegen. **Fix locus:** handler-case param typing in elaboration.
+
+## Reframed Tier C plan
+
+Tier C's emit design is done-on-paper and cheap; it is gated on landing at least
+one crossing with (a) a populated crossing `Type` and (b) a working direct
+baseline. In ascending order of independence:
+
+- **T-C1 (smallest real slice): the return crossing.** Fix **P4** (resolve the
+  aggregate return def at classification time). Then a colored function that
+  returns an owning-free by-value product is admitted; wire the box at the
+  `KK_RET` deliver + the free at the entry unwrap. Round-trip fixture: the
+  `outer`/`inner` program above (`direct == cps == 42`), LeakSanitizer-clean
+  (the entry unwrap is single-shot, so the box is freed, not leaked). **This is
+  the recommended first step** -- it is self-contained and has a green baseline.
+- **T-C2: the reset/shift-result crossing.** Fix **P3** (delegate `make-struct`
+  in the shift body). Round-trip: a cross-function shift/reset whose result is a
+  by-value product.
+- **T-C3: the effect payload / resume-value crossings.** Fix **P1**, **P2**,
+  **P5** (effect ADT value/arg types + the direct-path fiber crossing). These
+  are the literal N3-TierC target but the most upstream-heavy; they also fix the
+  direct path, so the fixtures can assert true equality rather than "CPS is the
+  correct one."
+
+Until T-C1 lands, gate item 3 stays open and every aggregate-crossing colored
+function keeps the whole-function fallback (correct, just not native).
+
+## Depends on / reuses
+
+- Parent: [cps-backend-non-scalar-values-plan.md](cps-backend-non-scalar-values-plan.md)
+  (Tier tiering, the `slot_store`/`slot_load` seams, N3 local struct/ADT
+  delegation via `CT_LETRAW`).
+- `type_is_byvalue_adt_product` / `adt_is_byvalue_product` / `AdtDef.needs_drop_glue`
+  (types.c/.h) -- the settled Tier C predicate.
+- Sibling residual (not Tier C): owning-field aggregates cross via gate item 4 /
+  N3-O2 ([cps-backend-owning-pointers-plan.md](cps-backend-owning-pointers-plan.md)).
+
+## Out of scope
+
+- Owning-field aggregate crossing (retain-on-copy + drop glue) -- gate item 4.
+- Carrier ADTs (heap Vec/Map, parametric apps) crossing -- they ride the int64
+  carrier as Tier A once their owning-handle refcount discipline is settled,
+  which is again gate item 4, not Tier C.

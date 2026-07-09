@@ -309,12 +309,40 @@ an effect boundary now CPS-emit (fixtures `cps-backend-option-effect`,
     with the `Type` now available; by-value wide aggregate = **Tier C**
     box-at-boundary (heap-copy on store, deref+free on load). Deferred.
 
-### N3-TierC -- wide by-value aggregate crossing (box-at-boundary) -- deferred
+### N3-TierC -- wide by-value aggregate crossing (box-at-boundary) -- investigated; blocked on upstream prerequisites
 
-Decide box-at-boundary vs boxed-representation for by-value aggregates that cross
-the slot, and implement behind the classification guard (`slot_ok` already has
-the `Type` to distinguish carrier from by-value). Round-trip: an effect that
-produces/resumes with a by-value `Option`/`Result`/record.
+**Design settled (box-at-boundary), landing blocked on five upstream gaps.**
+The emit design is decided and small: `slot_store` heap-copies an owning-free
+by-value product and stores the pointer; `slot_load` derefs (and frees at the
+single-shot root boundary), guarded by
+`type_is_byvalue_adt_product(t) && !def->needs_drop_glue`. A prototype threading
+the full `Type` to all six DK boundaries + widening the classification predicates
+was written and builds clean.
+
+The blocker is **not** the design -- it is that no source program in the current
+pipeline routes a by-value aggregate across the DK slot with a working direct
+baseline, so there is no round-trip fixture to assert `direct == cps`. The
+investigation found five independent upstream prerequisites, each blocking a
+different crossing:
+
+1. **P1** -- effects cannot declare an aggregate value type (`defeffect Get [] :Pr`
+   is rejected).
+2. **P2** -- an aggregate returned *across an effect* fails to compile on the
+   direct/fiber path (`(tur_adt_Pr)(int64)` cast), so there is no baseline.
+3. **P3** -- `make-struct` in a `shift` body is untranslated (`CT_UNSUPPORTED`).
+4. **P4** -- a function's aggregate `return_type` carries a **NULL** ADT def, and
+   classification (`ensure_S`) runs from `emit_runtime_preamble` with **no
+   `EmitCtx`** to resolve it. (Closest miss: the return-crossing slice has a
+   working direct baseline and clean IR, blocked only by this.)
+5. **P5** -- an aggregate effect *argument* loses its type in the handler case
+   (`.first p` fails to elaborate).
+
+The prototype was **reverted** (untestable dead code, and a real regression risk
+under the flag if any function with a populated aggregate return def were
+admitted into an unwired crossing). The full investigation -- repros, root
+cause + file locus for each prerequisite, and the recommended fix order (T-C1 =
+fix P4 for the return crossing first: self-contained, green baseline) -- is in
+[cps-backend-tier-c-crossing-plan.md](cps-backend-tier-c-crossing-plan.md).
 
 ### N4 -- non-scalar continuation payloads
 
@@ -372,8 +400,15 @@ must be true at graduation:
    bit-reinterpret slot convention. *Done* (`slot_store`/`slot_load` at all six
    boundaries; `cps-backend-float` / `cps-backend-float-effect` fixtures).
 3. **Tier C complete** (N3-TierC) -- wide by-value aggregates that *cross* the
-   slot (effect payload / resume value / return) box at the boundary. *Deferred*
-   (struct/ADT LOCALS that stay off the slot already work -- see item 6).
+   slot (effect payload / resume value / return) box at the boundary. *Design
+   settled, landing blocked on five upstream prerequisites* (effect ADT value/arg
+   types, the direct-path fiber crossing, shift-body struct translation, and the
+   NULL aggregate-return def + no-EmitCtx-at-classification issue). The
+   box-at-boundary emit machinery is cheap; the recommended first slice is the
+   **return crossing** (fix P4), which has a working direct baseline. Full
+   investigation + fix order:
+   [cps-backend-tier-c-crossing-plan.md](cps-backend-tier-c-crossing-plan.md).
+   (struct/ADT LOCALS that stay off the slot already work -- see item 6.)
 4. **Owning pointers handled correctly on the CPS path** -- `ref` / `rc` /
    `weak` / `lref`. Investigation
    ([cps-backend-owning-pointers-plan.md](cps-backend-owning-pointers-plan.md))
