@@ -406,14 +406,33 @@ fallback can be deleted:
   body adds none) and round-trips. Fixture `cps-backend-owning-capture`. Full
   suite: 2026 passed, 0 failed. The resolved hazard report is archived.
 
+  *Drop-glue by-value ADT local consumed across a control op LANDED.* A
+  by-value struct/record-ADT local with an owning field (`needs_drop_glue`,
+  e.g. a `tur_adt_Own` with an `rc<int>` field) captured across a control op is
+  now admitted through the same single-shot owning path. Such a type is
+  deliberately excluded from `slot_box_ty` (it is NOT an owning-free product),
+  so `cap_ty_ok` rejects it; the `g_cap_single_shot` bypass in `cap_add` is what
+  lets it ride the handler frame env by value (a shallow struct copy carrying the
+  rc pointer, read once, never re-run -> no double-drop). Ownership matches the
+  direct path exactly: neither path drops the by-value ADT local (the shared leak
+  tracked in `docs/reported/byvalue-struct-local-owning-field-leak.md`), but
+  there is no double-free and the value is exact (`direct == cps == 109`).
+  Landing this required unifying the `CT_LETRAW` capture scan in
+  `collect_caps_rec`: the delegated `(.tag o)` inside `(+ v (.tag o))` is
+  delegated *whole* (via `call_args_delegatable`, which now delegates a call
+  whose args are themselves delegatable, and `safe_to_delegate` covering the rc
+  ops), so the old per-shape enumeration (which only found *top-level* direct-var
+  args) missed `o` nested inside the `+` call. The scan now runs the complete
+  free-var walker (`collect_free_vars`) on every delegated op regardless of
+  shape, so a complex operand like `(+ x 5)` or `(.tag o)` captures its enclosed
+  vars uniformly -- a missed var would be an undeclared C name (compile error),
+  never a silent miscompile. Fixture `cps-backend-owning-struct-capture`; the
+  earlier `cps-backend-capture-shift-body` (whose `(+ x 5)` shift body now
+  delegates whole) stays green as the regression guard. Full suite: 2027 passed,
+  0 failed.
+
   *Remaining N6.3:*
 
-  - **A drop-glue by-value ADT local consumed across a control op** (e.g. a
-    `tur_adt_Own` struct with an rc field) -- a separate coverage gap: its
-    `CT_LETCALL` / binder type fails the `slot_ok_t` gate (a by-value drop-glue
-    product is neither a scalar, a `slot_box` owning-free product, nor a heap
-    handle), so it falls back regardless of single-shot-ness. Admitting it is the
-    non-scalar-drop-glue-binder widening.
   - **Resuming SHIFT bodies.** The current shift lowering (`cps_shift_body`)
     applies the receiver to the *body value* and delivers to the prompt; the
     captured continuation `subk` is passed to the shift-body helper but ignored

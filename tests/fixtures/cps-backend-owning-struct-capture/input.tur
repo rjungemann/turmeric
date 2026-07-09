@@ -1,0 +1,36 @@
+;; CPS-IR-to-C backend, N6 tail: a by-value struct local with an OWNING field
+;; (drop glue) captured across a control op.  Built with --enable=cps-backend.
+;;
+;; `Own` has an `rc<int>` field, so `type_is_byvalue_adt_product` is true but the
+;; ADT `needs_drop_glue` (it is NOT owning-free) -- `slot_box_ty` deliberately
+;; excludes such a type, and `cap_ty_ok` would reject capturing it.  The capture
+;; is nonetheless admitted here because the handler continuation is *single-shot*
+;; (`g_cap_single_shot`): the value is moved into the handler frame env by value
+;; (a shallow copy of the struct, carrying the rc pointer), read once for its
+;; `.tag`, and never re-run -- so there is no duplication into a multi-shot env
+;; and no double-drop.  Ownership matches the direct path: neither path drops the
+;; by-value ADT local (the shared leak tracked in
+;; docs/reported/byvalue-struct-local-owning-field-leak.md), but there is no
+;; double-free, and the *value* is exact.
+;;
+;; The capture also exercises the delegated-op free-var scan: `(.tag o)` inside
+;; `(+ v (.tag o))` is delegated whole, and `o` is found by the complete
+;; free-var walker (not just top-level direct-var args), so `o` rides the env.
+;;
+;; direct-vs-CPS equal: resume delivers 100, tag = 9, result = 109.
+
+(defstruct Own [r : rc<int> tag : int])
+
+(defeffect E [] :int)
+
+(defn g [] : int
+  (perform (E)))
+
+(defn f [] : int
+  (let [o (make-struct Own :r (rc/of 7) :tag 9)]
+    (let [v (handle (g) (E [] k) (resume k 100))]
+      (+ v (.tag o)))))
+
+(defn main [] : int
+  (println (f))
+  0)

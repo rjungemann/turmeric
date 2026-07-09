@@ -335,9 +335,32 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
             return true;
         case EX_DEFAULT_OF:
             return true;
+        /* Owning-value ops (rc/of, rc/clone, rc/drop, rc/strong-count, rc->ptr)
+         * are control-op-free leaf ops the direct emitter already emits with the
+         * correct control-block / refcount / drop-glue discipline; delegating a
+         * form that contains one (e.g. `(make-struct S :field (rc/of x))`, a
+         * constructor call whose argument allocates) keeps the whole thing on the
+         * direct emitter -- which also resolves the monomorphized ctor name. */
+        case EX_RC_OF:    return safe_to_delegate(b, e->as.rc_of_.expr);
+        case EX_RC_CLONE: return safe_to_delegate(b, e->as.rc_clone_.expr);
+        case EX_RC_DROP:  return safe_to_delegate(b, e->as.rc_drop_.expr);
+        case EX_RC_COUNT: return safe_to_delegate(b, e->as.rc_count_.expr);
+        case EX_RC_PTR:   return safe_to_delegate(b, e->as.rc_ptr_.expr);
         default:
             return false;   /* conservative: unrecognized form -> not delegatable */
     }
+}
+
+/* Every argument of a call is control-op-free and colored-call-free, so the
+ * WHOLE call can be handed to the direct emitter (which emits the args inline and
+ * resolves the monomorphized callee name -- constructors, specialized fns).  This
+ * is a superset of call_args_atomic: it also delegates a call whose argument is a
+ * non-atomic-but-delegatable form (e.g. `(rc/of x)`, a nested make-struct), which
+ * would otherwise be atomized into a CT_LETCALL that mis-names the callee. */
+static bool call_args_delegatable(CpsB *b, const Expr *e) {
+    for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+        if (!safe_to_delegate(b, e->as.call_.args[i])) return false;
+    return true;
 }
 
 static CAtom atomize(CpsB *b, Expr *e, Pending *p) {
@@ -511,7 +534,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
              * delegated to the direct emitter, which resolves the monomorphized
              * callee name (constructors, specialized fns) the CPS backend's own
              * naming does not.  Colored callees still thread the continuation. */
-            if (!callee_colored(b, fn) && call_args_atomic(e)) {
+            if (!callee_colored(b, fn) && call_args_delegatable(b, e)) {
                 CVar x = fresh_cvar(b, &e->type);
                 CTerm *ac = new_term(b, CT_APPCONT);
                 ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
@@ -673,7 +696,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             }
             /* cps->direct call to an uncolored callee with atomic args: delegate
              * to the direct emitter (monomorphized callee names). */
-            if (!callee_colored(b, fn) && call_args_atomic(e))
+            if (!callee_colored(b, fn) && call_args_delegatable(b, e))
                 return build_letraw(b, e, x, rest);
             Pending p = {0};
             uint32_t n = e->as.call_.n_args;

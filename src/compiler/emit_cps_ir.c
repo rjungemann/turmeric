@@ -119,14 +119,14 @@ static bool slot_box_ty(const Type *t) {
  * it crosses the DK slot by a plain cast (like TY_PTR_VOID), never a box.  It is
  * an *owning* handle, so it is admitted through the slot / signature gate but NOT
  * through the capture gate (cap_ty_ok): a handle live across a control op is
- * captured into a continuation env, where a leaked, possibly multi-shot env would
- * share/duplicate the owning pointer -- so cap_add still bails on it and the
- * function falls back.  What this admits is a handle confined to a straight-line
- * delegated sequence (produced/consumed/returned without crossing into a lifted
- * continuation env): move semantics, no ownership split, matching the direct
- * emitter (whose owning ops are delegated via CT_LETRAW either way). */
+ * captured into a continuation env, where sharing the owning pointer is only
+ * sound in a single-shot continuation -- so cap_add gates a capture of it on
+ * g_cap_single_shot (a handler CASE body, which runs per-perform, still bails).
+ * As a slot value / atom / call-arg it just threads the pointer by move, matching
+ * the direct emitter (whose owning ops are delegated via CT_LETRAW either way). */
 static bool carrier_handle_ok(const Type *t) {
-    return t && (type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t));
+    if (!t) return false;
+    return (type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t));
 }
 
 /* A value can cross the DK slot at the current tier: a Tier A/B scalar, a Tier C
@@ -569,79 +569,30 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
              * the operand riding the env.  Composites this scan does not enumerate
              * bail to fallback (cs->ok = false), matching has_capture_rec's
              * conservative default. */
+            /* A delegated (direct-emitted) op.  Whatever its shape -- an rc op, a
+             * field read, a struct build, a direct/indirect call, or a delegated
+             * composite (match / while / for / do / let / ...) -- the complete set
+             * of enclosing names it references is exactly its free-variable set.
+             * Use the elaborator's free-var walker (the same complete analysis the
+             * closure-capture pass uses) so a complex operand like `(+ x 5)` inside
+             * a delegated call captures `x`, not just top-level direct-var args.
+             * Each free var is filtered against the CPS-bound set / exclude /
+             * globals and handed to cap_add, which admits Copy captures (scalar or
+             * owning-free by-value aggregate) and bails to fallback on a non-Copy
+             * capture.  If the walker ever missed a free var, that var would be an
+             * undeclared C name in the lifted helper -- a compile error, not a
+             * silent miscompile. */
             const Expr *le = t->as.letraw.e;
-            switch (le->kind) {
-                case EX_RC_OF:    COL_VAREXPR(le->as.rc_of_.expr); break;
-                case EX_RC_CLONE: COL_VAREXPR(le->as.rc_clone_.expr); break;
-                case EX_RC_DROP:  COL_VAREXPR(le->as.rc_drop_.expr); break;
-                case EX_RC_COUNT: COL_VAREXPR(le->as.rc_count_.expr); break;
-                case EX_RC_PTR:   COL_VAREXPR(le->as.rc_ptr_.expr); break;
-                case EX_GET_FIELD: COL_VAREXPR(le->as.get_field_.struct_expr); break;
-                case EX_MAKE_STRUCT:
-                    for (uint32_t i = 0; i < le->as.make_struct_.n_fields; i++)
-                        COL_VAREXPR(le->as.make_struct_.field_values[i]);
-                    break;
-                case EX_CALL: {
-                    /* The callee value can be a captured local: a NULL-binding
-                     * indirect call, or a call through a fn-value *parameter*
-                     * (carried in fn_binding when the frontend resolved it, else
-                     * fn_expr).  Capture it -- a fat-closure (poly fn) callee rides
-                     * the env as a `tur_poly_fn_t` by value (cap_add handles it).
-                     * A top-level direct call's callee is a global ref, not a
-                     * capture, so it is filtered out. */
-                    const Binding *fb = le->as.call_.fn_binding;
-                    if (fb && !fb->is_global) {
-                        bool _f = (fb->id != exclude);
-                        for (int _i = 0; _i < nb; _i++) if (bound[_i] == fb->id) { _f = false; break; }
-                        if (_f) cap_add(cs, fb, fb->type.kind, &fb->type);
-                    } else if (!fb) {
-                        COL_VAREXPR(le->as.call_.fn_expr);
-                    }
-                    for (uint32_t i = 0; i < le->as.call_.n_args; i++)
-                        COL_VAREXPR(le->as.call_.args[i]);
-                    break;
-                }
-                case EX_DEFAULT_OF:
-                case EX_FN_TO_FAT:
-                case EX_FN:
-                    break;   /* no free variables */
-                case EX_CLOSURE: {
-                    struct Closure *cl = le->as.closure_.closure;
-                    if (cl) for (uint8_t i = 0; i < cl->n_captures; i++) {
-                        const Binding *cb = cl->captures[i];
-                        if (cb && !cb->is_global && !binding_excluded(cb)) {
-                            uint32_t _id = cb->id; bool _f = (_id != exclude);
-                            for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
-                            if (_f) cap_add(cs, cb, cb->type.kind, &cb->type);
-                        }
-                    }
-                    break;
-                }
-                default: {
-                    /* A delegated composite (match / while / for / do / let /
-                     * set! / cast / ...) the enumerated cases above do not cover.
-                     * Use the elaborator's complete free-var walker to find every
-                     * enclosing var it references and capture each (filtered
-                     * against the CPS-bound set / exclude / globals).  The walker
-                     * is the same complete analysis the closure-capture pass uses;
-                     * and if it ever missed a free var, that var would be an
-                     * undeclared C name in the lifted helper -- a compile error,
-                     * not a silent miscompile.  A non-Copy capture (owning handle,
-                     * ...) still bails inside cap_add, keeping such a form as a
-                     * fallback. */
-                    uint32_t n_fv = 0;
-                    Binding **fv = collect_free_vars(le, NULL, 0, NULL, 0, &n_fv);
-                    for (uint32_t i = 0; i < n_fv && cs->ok; i++) {
-                        const Binding *b = fv[i];
-                        if (!b || b->is_global || binding_excluded(b)) continue;
-                        uint32_t _id = b->id; bool _f = (_id != exclude);
-                        for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
-                        if (_f) cap_add(cs, b, b->type.kind, &b->type);
-                    }
-                    free(fv);
-                    break;
-                }
+            uint32_t n_fv = 0;
+            Binding **fv = collect_free_vars(le, NULL, 0, NULL, 0, &n_fv);
+            for (uint32_t i = 0; i < n_fv && cs->ok; i++) {
+                const Binding *b = fv[i];
+                if (!b || b->is_global || binding_excluded(b)) continue;
+                uint32_t _id = b->id; bool _f = (_id != exclude);
+                for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
+                if (_f) cap_add(cs, b, b->type.kind, &b->type);
             }
+            free(fv);
             bound[nb] = t->as.letraw.x.id;
             collect_caps_rec(t->as.letraw.body, exclude, bound, nb + 1, cs); return;
         }
