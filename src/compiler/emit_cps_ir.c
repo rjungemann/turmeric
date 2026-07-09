@@ -323,7 +323,31 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
                     for (uint32_t i = 0; i < le->as.call_.n_args; i++)
                         CC_VAREXPR(le->as.call_.args[i]);
                     break;
-                default: break;   /* EX_DEFAULT_OF: no operand */
+                case EX_DEFAULT_OF:
+                case EX_FN_TO_FAT:
+                case EX_FN:
+                    break;   /* no free variables (bare fn / no operand) */
+                case EX_CLOSURE: {
+                    /* A capture-free closure has no free vars; any capture is a
+                     * binding in its captures[] -- check each like a source var. */
+                    struct Closure *cl = le->as.closure_.closure;
+                    if (cl) for (uint8_t i = 0; i < cl->n_captures; i++) {
+                        const Binding *cb = cl->captures[i];
+                        if (cb && !cb->is_global && !binding_excluded(cb)) {
+                            uint32_t _id = cb->id; bool _f = (_id != exclude);
+                            for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
+                            if (_f) return true;
+                        }
+                    }
+                    break;
+                }
+                default:
+                    /* N6.1: a delegated composite (match / while / set / ...) whose
+                     * free vars this scan does not enumerate.  Conservatively treat
+                     * it as capturing, so it is admitted only in the main function
+                     * body (where has_capture is not the gate), never in a lifted
+                     * zero-capture body it could not safely close over. */
+                    return true;
             }
             #undef CC_VAREXPR
             bound[nb] = t->as.letraw.x.id;

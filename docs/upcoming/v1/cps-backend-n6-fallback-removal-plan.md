@@ -144,10 +144,27 @@ fallback can be deleted:
   (its free vars need the `has_capture` cut -- that is N6.3). Fixture
   `cps-backend-closure-local`: a colored `f` builds a `Box` holding
   `(fn [n] (+ n 1))` in its perform continuation; the closure delegates and `f`
-  CPS-emits (`direct == cps == 10`) where it previously fell back. Full suite:
-  2009 passed, 0 failed. Remaining N6.1: the general control-op-free /
-  colored-call-free predicate (`match` / `while` / `panic` / `ref` / `set!` /
-  `defer` / inline-C) with the lifted-body subset-predicate widening.
+  CPS-emits (`direct == cps == 10`) where it previously fell back.
+
+  **General control-op-free delegation landed (main-body).** `safe_to_delegate`
+  (a sound recursive predicate: control-op-free AND no colored/indirect call,
+  with `default: false` for any unrecognized form) now routes `match` / `while` /
+  `do` / `let` / `if` / `set!` / `cast` / `deref` / `get-field` / `make-struct` /
+  builtins / uncolored calls through `CT_LETRAW` in the `cps_bind`/`cps_tail`
+  *default* cases (working paths untouched). Re-measuring the corpus, the "form
+  not in subset" surface collapsed from **402 to 18** (the 384 `EX_FN_TO_FAT`
+  from the fn-value slice; the rest from composite delegation). `has_capture`'s
+  `CT_LETRAW` scan was made **sound**: it scans fn-value captures precisely and
+  treats any un-enumerated delegated operand as capturing (`default: return
+  true`), so a delegated composite is admitted only in the main function body
+  (where `has_capture` is not the gate), never in a lifted zero-capture body it
+  could not close over. Fixture `cps-backend-delegate-match`: a colored `f`
+  performs `Put` with a `match` argument -- the match delegates and `f` CPS-emits
+  (`direct == cps == 105`). Full suite: 2010 passed, 0 failed.
+
+  **Remaining N6.1:** delegated composites in *lifted continuation* positions
+  (free vars flowing into a perform/shift/handler body) still fall back -- that
+  needs the free-var-aware capture handling of N6.3.
 
   **Entanglement to plan for (found while scoping):** a delegatable form in a
   colored function most often sits in a *continuation* -- the body of a

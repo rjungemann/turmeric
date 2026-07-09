@@ -254,6 +254,92 @@ static CTerm *build_letraw(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     return t;
 }
 
+/* N6.1: a subexpression that can be emitted wholesale by the direct emitter
+ * (via CT_LETRAW) because it neither threads a continuation nor could reach one:
+ * it contains no syntactic control op AND no call to a colored (may-capture)
+ * function AND no indirect call (unknown coloring).  Nested fn/closure bodies are
+ * call-graph boundaries -- not descended (a capture-free fn value is itself a
+ * delegatable leaf; a capturing one is rejected so the has_capture cut is not
+ * bypassed).  The scan is SOUND by construction: it returns true only for a
+ * closed set of forms whose children it fully recurses; any unrecognized form
+ * (or a control op / colored / indirect call) yields false and falls back.
+ *
+ * Delegating such a form in a lifted (zero-capture) body would still need the
+ * has_capture cut to see its free vars; has_capture conservatively rejects an
+ * un-scanned CT_LETRAW operand, so a delegated composite lands only where
+ * has_capture is not the gate (the main function body) -- exactly the safe set. */
+static bool safe_to_delegate(CpsB *b, const Expr *e) {
+    e = ascribe_peel(e);
+    if (!e) return false;
+    if (is_atomic(e)) return true;
+    if (is_delegatable_value(e)) return true;   /* capture-free fn value */
+    switch (e->kind) {
+        /* control operators: never delegatable (they thread a continuation). */
+        case EX_PERFORM: case EX_HANDLE: case EX_RESUME: case EX_DISCONTINUE:
+        case EX_RESET: case EX_SHIFT: case EX_SHIFT0:
+        case EX_CLONEABLE_RESET: case EX_CLONEABLE_SHIFT:
+        case EX_SERIAL_RESET: case EX_SERIAL_SHIFT:
+        case EX_ASYNC:
+            return false;
+        /* nested fn defs: call-graph boundaries, delegatable as values. */
+        case EX_FN_DEF: case EX_FN: case EX_CLOSURE:
+            return is_delegatable_value(e);
+        case EX_CALL: {
+            const Binding *fn = e->as.call_.fn_binding;
+            if (!fn) return false;                 /* indirect: unknown coloring */
+            if (callee_colored(b, fn)) return false;
+            if (e->as.call_.fn_expr && !safe_to_delegate(b, e->as.call_.fn_expr))
+                return false;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (!safe_to_delegate(b, e->as.call_.args[i])) return false;
+            return true;
+        }
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (!safe_to_delegate(b, e->as.builtin.args[i])) return false;
+            return true;
+        case EX_IF:
+            return safe_to_delegate(b, e->as.if_.cond)
+                && safe_to_delegate(b, e->as.if_.then_)
+                && (!e->as.if_.else_or_null || safe_to_delegate(b, e->as.if_.else_or_null));
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (!safe_to_delegate(b, e->as.do_.items[i])) return false;
+            return true;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (!safe_to_delegate(b, e->as.let_.bindings[i].init)) return false;
+            return safe_to_delegate(b, e->as.let_.body);
+        case EX_WHILE:
+            return safe_to_delegate(b, e->as.while_.cond)
+                && safe_to_delegate(b, e->as.while_.body);
+        case EX_MATCH:
+            if (!safe_to_delegate(b, e->as.match_.scrutinee)) return false;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (e->as.match_.arms[i].guard
+                    && !safe_to_delegate(b, e->as.match_.arms[i].guard)) return false;
+                if (!safe_to_delegate(b, e->as.match_.arms[i].body)) return false;
+            }
+            return true;
+        case EX_SET:
+            return safe_to_delegate(b, e->as.set_.value);
+        case EX_CAST:
+            return safe_to_delegate(b, e->as.cast_.expr);
+        case EX_DEREF:
+            return safe_to_delegate(b, e->as.deref_.expr);
+        case EX_GET_FIELD:
+            return safe_to_delegate(b, e->as.get_field_.struct_expr);
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                if (!safe_to_delegate(b, e->as.make_struct_.field_values[i])) return false;
+            return true;
+        case EX_DEFAULT_OF:
+            return true;
+        default:
+            return false;   /* conservative: unrecognized form -> not delegatable */
+    }
+}
+
 static CAtom atomize(CpsB *b, Expr *e, Pending *p) {
     if (is_atomic(e)) return atom_of(e);
     CVar x = fresh_cvar(b, e ? &e->type : NULL);
@@ -498,6 +584,14 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             return fold_pending(b, &p, core);
         }
         default: {
+            /* N6.1: a control-op-free, colored-call-free form -- emit it wholesale
+             * via the direct emitter, then deliver its result to the continuation. */
+            if (safe_to_delegate(b, e)) {
+                CVar x = fresh_cvar(b, &e->type);
+                CTerm *ac = new_term(b, CT_APPCONT);
+                ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+                return build_letraw(b, e, x, ac);
+            }
             CTerm *t = new_term(b, CT_UNSUPPORTED);
             t->as.unsupported.why = "form not in CPS2 subset";
             return t;
@@ -626,6 +720,10 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             return fold_pending(b, &p, core);
         }
         default: {
+            /* N6.1: delegate a control-op-free, colored-call-free form to the
+             * direct emitter (binds x, continues rest). */
+            if (safe_to_delegate(b, e))
+                return build_letraw(b, e, x, rest);
             CTerm *t = new_term(b, CT_UNSUPPORTED);
             t->as.unsupported.why = "form not in CPS2 subset";
             return t;
