@@ -319,15 +319,23 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
                     for (uint32_t i = 0; i < le->as.make_struct_.n_fields; i++)
                         CC_VAREXPR(le->as.make_struct_.field_values[i]);
                     break;
-                case EX_CALL:
-                    /* The callee value can be a free var (a NULL-binding indirect
-                     * call, or a call through a fn-value parameter): treat it as a
-                     * capture.  A top-level direct call's fn_expr is a global ref
-                     * that CC_VAREXPR filters out. */
-                    CC_VAREXPR(le->as.call_.fn_expr);
+                case EX_CALL: {
+                    /* The callee value can be a captured local (a NULL-binding
+                     * indirect call, or a call through a fn-value parameter carried
+                     * in fn_binding): treat it as a capture.  A top-level direct
+                     * call's callee is a global ref, filtered out. */
+                    const Binding *fb = le->as.call_.fn_binding;
+                    if (fb && !fb->is_global && !binding_excluded(fb)) {
+                        uint32_t _id = fb->id; bool _f = (_id != exclude);
+                        for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
+                        if (_f) return true;
+                    } else if (!fb) {
+                        CC_VAREXPR(le->as.call_.fn_expr);
+                    }
                     for (uint32_t i = 0; i < le->as.call_.n_args; i++)
                         CC_VAREXPR(le->as.call_.args[i]);
                     break;
+                }
                 case EX_DEFAULT_OF:
                 case EX_FN_TO_FAT:
                 case EX_FN:
@@ -389,6 +397,7 @@ typedef struct {
     uint32_t       cvid[CC_MAX_CAPS];
     TypeKind       ty[CC_MAX_CAPS];
     const Type    *type[CC_MAX_CAPS];   /* full type (Tier C by-value aggregate); may be NULL */
+    bool           polyfn[CC_MAX_CAPS]; /* a rank-2 poly fn value -- env field is tur_poly_fn_t */
     int n; bool ok;
 } CapSet;
 
@@ -401,11 +410,24 @@ static bool cap_ty_ok(TypeKind ty, const Type *type) {
 }
 
 static void cap_add(CapSet *cs, const Binding *b, TypeKind ty, const Type *type) {
-    if (!cap_ty_ok(ty, type)) { cs->ok = false; return; }
+    /* A rank-2 poly fn value is a fat closure (tur_poly_fn_t, wider than a slot).
+     * It is Copy -- a borrowed function value the callee never drops (its owner
+     * outlives the call) -- so it rides the env by value like a by-value
+     * aggregate, with `tur_poly_fn_t` as the env-field type.  Everything else
+     * goes through the scalar / by-value-aggregate gate. */
+    bool is_poly = (b && b->is_poly_fn);
+    if (!is_poly && !cap_ty_ok(ty, type)) { cs->ok = false; return; }
     for (int i = 0; i < cs->n; i++) if (cs->b[i] == b) return;
     if (cs->n >= CC_MAX_CAPS) { cs->ok = false; return; }
     cs->b[cs->n] = b; cs->cvname[cs->n] = NULL; cs->ty[cs->n] = ty;
-    cs->type[cs->n] = type; cs->n++;
+    cs->type[cs->n] = type; cs->polyfn[cs->n] = is_poly; cs->n++;
+}
+
+/* The C type of capture slot i: a fat closure is `tur_poly_fn_t`, everything
+ * else its scalar / by-value-aggregate binder type. */
+static const char *cap_ctype(EmitCtx *ctx, const CapSet *caps, int i) {
+    if (caps->polyfn[i]) return "tur_poly_fn_t";
+    return binder_ctype_full(ctx, caps->ty[i], caps->type[i]);
 }
 
 static void cap_add_cvar(CapSet *cs, uint32_t id, const char *name, TypeKind ty, const Type *type) {
@@ -413,7 +435,7 @@ static void cap_add_cvar(CapSet *cs, uint32_t id, const char *name, TypeKind ty,
     for (int i = 0; i < cs->n; i++) if (cs->cvname[i] && cs->cvid[i] == id) return;
     if (cs->n >= CC_MAX_CAPS) { cs->ok = false; return; }
     cs->b[cs->n] = NULL; cs->cvname[cs->n] = name; cs->cvid[cs->n] = id;
-    cs->ty[cs->n] = ty; cs->type[cs->n] = type; cs->n++;
+    cs->ty[cs->n] = ty; cs->type[cs->n] = type; cs->polyfn[cs->n] = false; cs->n++;
 }
 
 static void collect_caps_rec(const CTerm *t, uint32_t exclude,
@@ -441,12 +463,7 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             const Binding *_b = _e->as.var.binding; \
             uint32_t _id = _b->id; bool _f = (_id != exclude); \
             for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; } \
-            if (_f) { \
-                /* A rank-2 poly fn value is a fat closure (tur_poly_fn_t, wider */ \
-                /* than a slot) -- capturing it by the scalar-pointer path would */ \
-                /* truncate it, so bail to fallback rather than mis-capture. */ \
-                if (_b->is_poly_fn) { cs->ok = false; } \
-                else cap_add(cs, _b, _b->type.kind, &_b->type); } } } while (0)
+            if (_f) cap_add(cs, _b, _b->type.kind, &_b->type); } } while (0)
     switch (t->kind) {
         case CT_APPCONT: COL_ATOM(&t->as.appcont.v); return;
         case CT_LETVAL:
@@ -502,23 +519,21 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
                         COL_VAREXPR(le->as.make_struct_.field_values[i]);
                     break;
                 case EX_CALL: {
-                    /* A call whose callee is a captured local value -- a
-                     * NULL-binding indirect call, or a call through a fn-value
-                     * *parameter* (carried in fn_binding or fn_expr) -- cannot be
-                     * lifted: a fat-closure callee is wider than the scalar env
-                     * slot and its ABI is emitter-specific.  Bail so the enclosing
-                     * continuation falls back.  (A main-body indirect call is not
-                     * gated by collect_caps and still delegates.)  A top-level
-                     * direct call's callee is a global ref -- not a capture -- so
-                     * those pass through. */
+                    /* The callee value can be a captured local: a NULL-binding
+                     * indirect call, or a call through a fn-value *parameter*
+                     * (carried in fn_binding when the frontend resolved it, else
+                     * fn_expr).  Capture it -- a fat-closure (poly fn) callee rides
+                     * the env as a `tur_poly_fn_t` by value (cap_add handles it).
+                     * A top-level direct call's callee is a global ref, not a
+                     * capture, so it is filtered out. */
                     const Binding *fb = le->as.call_.fn_binding;
-                    const Expr *fe = le->as.call_.fn_expr;
-                    while (fe && fe->kind == EX_ASCRIBE) fe = fe->as.ascribe_.inner;
-                    bool captured_callee =
-                        (fb && !fb->is_global) ||
-                        (!fb && fe && fe->kind == EX_VAR && fe->as.var.binding
-                             && !fe->as.var.binding->is_global);
-                    if (captured_callee) { cs->ok = false; return; }
+                    if (fb && !fb->is_global) {
+                        bool _f = (fb->id != exclude);
+                        for (int _i = 0; _i < nb; _i++) if (bound[_i] == fb->id) { _f = false; break; }
+                        if (_f) cap_add(cs, fb, fb->type.kind, &fb->type);
+                    } else if (!fb) {
+                        COL_VAREXPR(le->as.call_.fn_expr);
+                    }
                     for (uint32_t i = 0; i < le->as.call_.n_args; i++)
                         COL_VAREXPR(le->as.call_.args[i]);
                     break;
@@ -1778,8 +1793,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         for (int i = 0; i < caps->n; i++) {
             char *cn = caps->b[i] ? name_for_binding(ce->ctx, caps->b[i]) : strdup(caps->cvname[i]);
             indent_buf(&tmp, 4);
-            buf_printf(&tmp, "%s %s = __cap->f%d;\n",
-                       binder_ctype_full(ce->ctx, caps->ty[i], caps->type[i]), cn, i);
+            buf_printf(&tmp, "%s %s = __cap->f%d;\n", cap_ctype(ce->ctx, caps, i), cn, i);
             free(cn);
         }
     }
@@ -1824,8 +1838,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         buf_printf(ce->helpers, "typedef struct {");
         if (mode == LH_RESET_CONT) buf_puts(ce->helpers, " DK *__k;");
         for (int i = 0; i < caps->n; i++)
-            buf_printf(ce->helpers, " %s f%d;",
-                       binder_ctype_full(ce->ctx, caps->ty[i], caps->type[i]), i);
+            buf_printf(ce->helpers, " %s f%d;", cap_ctype(ce->ctx, caps, i), i);
         buf_printf(ce->helpers, " } %s_env;\n", name);
     }
 

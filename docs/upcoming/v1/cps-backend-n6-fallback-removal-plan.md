@@ -286,6 +286,23 @@ fallback can be deleted:
   `(let [r (handle ...)] (+ r (.second p)))` CPS-emits (`direct == cps == 103`).
   Full suite: 2018 passed, 0 failed.
 
+  *Fat-closure (fn-value) captures landed too.* A continuation that captures a
+  rank-2 fn-value parameter and calls it -- e.g. `f`'s post-handle continuation
+  `(fnv r)` through the parameter `fnv : (fn [int] int)` -- now rides the env by
+  value. A fn value is a fat closure (`tur_poly_fn_t` = `{ fn ptr; env ptr }`):
+  16 bytes, wider than the scalar slot, but **Copy** -- a borrowed function value
+  the callee never drops (the direct emitter emits no drop for a fn-value param;
+  its owner outlives the call), so it needs no retain/drop even under a leaked
+  multi-shot env. `CapSet` grew a `polyfn` flag; `cap_add` admits an `is_poly_fn`
+  binding with `tur_poly_fn_t` as the env-field type (`cap_ctype`); and
+  `collect_caps_rec`'s `CT_LETRAW` `EX_CALL` arm captures the callee value
+  (fn_binding- or fn_expr-carried) instead of bailing. Fixture
+  `cps-backend-capture-fnvalue`:
+  `(let [r (handle ...)] (fnv r))` CPS-emits (`direct == cps == 100`). This also
+  **closes the lifted-position indirect-call residual** left by the N6.4
+  indirect-call slice -- a captured fat-closure callee no longer forces fallback.
+  Full suite: 2021 passed, 0 failed.
+
   *Remaining N6.3 (each root-caused; see the linked report):*
 
   - **Owning (non-Copy) captures** -- carrier ADTs / rc handles / by-value
@@ -319,10 +336,10 @@ fallback can be deleted:
     (`param_name_clashes_cps`) excluding a function whose param raw name collides
     with a CPS-synthesized identifier (`k` / `t<N>` / `__*`). Fixture
     `cps-backend-indirect-call` (`direct == cps == 70`). Full suite: 2020 passed,
-    0 failed. *Residual:* a *lifted-position* indirect call (callee captured into
-    a continuation env) still falls back -- a fat closure is wider than the
-    scalar env slot, so `collect_caps` bails on a captured callee; that is the
-    owning/wide-capture line item of N6.3. See
+    0 failed. *Lifted-position indirect calls* (callee captured into a
+    continuation env) subsequently landed too, via the fat-closure-capture slice
+    above (`cps-backend-capture-fnvalue`) -- a captured `tur_poly_fn_t` rides the
+    env by value. See
     [docs/archive/cps-backend-indirect-call-fatclosure-param-divergence.md](../../archive/cps-backend-indirect-call-fatclosure-param-divergence.md).
   - **cloneable / serial** reset/shift need the DK deep-clone (`dk_copy` exists
     in the runtime) plus the direct emitter's cloneable capture-environment glue
