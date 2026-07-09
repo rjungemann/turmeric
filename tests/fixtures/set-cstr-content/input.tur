@@ -1,0 +1,23 @@
+;; set-element-api-generalization: Set[cstr] is content-keyed.
+;; Two equal-text strings at distinct addresses are ONE member; membership,
+;; union, intersect, diff and Eq[Set] all compare element content, not pointer
+;; identity.  copystr forces a fresh heap string so the dedup is genuine (not
+;; literal interning).  (Has inline-C, so the turi runner carves it out; run
+;; compiled via tests/run.sh.)
+(load "stdlib/typeclass.tur")
+
+(defn copystr [s : cstr] : cstr
+  ```c
+  size_t n = strlen(s); char *p = (char *)malloc(n + 1); memcpy(p, s, n + 1);
+  return (const char *)p;
+  ```)
+
+(defn main [] : int
+  (println (set-count (set-of "a" "b" (copystr "a"))))
+  (println (if (set-member? (set-of "a" "b") (hash (copystr "a")) (copystr "a")) 1 0))
+  (println (if (set-member? (set-of "a" "b") (hash (copystr "z")) (copystr "z")) 1 0))
+  (println (if (eq? (set-of "a" "b") (set-of "b" (copystr "a"))) 1 0))
+  (println (set-count (set-union (set-of "x" "y") (set-of (copystr "y") "z"))))
+  (println (set-count (set-intersect (set-of "x" "y") (set-of (copystr "y") "z"))))
+  (println (set-count (set-diff (set-of "x" "y") (set-of (copystr "y") "z"))))
+  0)

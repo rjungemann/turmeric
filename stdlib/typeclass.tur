@@ -5,6 +5,13 @@
 ;;; Since: Phase 15
 ;; Phase 15: Typeclasses
 ;; Built-in typeclasses: Eq, Ord, Show, Num
+;; Show (the class, its primitive instances, and the Show[Vec]/Show[Set]/
+;; Show[Map] collection instances) lives in stdlib/typeclass-show.tur -- loaded
+;; here so `(load "stdlib/typeclass.tur")` still provides Show, but kept in its
+;; own file so the REPL can preload just Show without this file's
+;; Error[ptr<void>] / Display / Debug instances (whose inline-C bodies would
+;; shadow interpreter builtins such as the async error-message).
+(load "stdlib/typeclass-show.tur")
 ;;; Ord -- typeclass for total ordering.
 ;;;
 ;;; Parameters:
@@ -82,115 +89,8 @@
   (lte? [x y] (<= x y))
   (gt? [x y] (> x y))
   (gte? [x y] (>= x y)))
-;;; Show -- typeclass for string representation.
-;;;
-;;; Parameters:
-;;;   a -- the type to render
-;;;
-;;; Returns:
-;;;   A :cstr human-readable string.
-;;;
-;;; Since: Phase 15
-;; Show typeclass - string representation
-
-(defclass Show [a] (show [x] : cstr))
-;; Instances for primitive types
-;;; Show [int] -- Show instance for int.
-
-(definstance Show [int]
-  (show [x]
-    : cstr
-    ```c
-    char *buf = (char *)malloc(24);
-    snprintf(buf, 24, "%lld", (long long)x);
-    return (const char *)buf;
-    ```))
-;;; Show [cstr] -- Show instance for cstr (identity).
-
-(definstance Show [cstr] (show [x] x))
-;;; Show [bool] -- Show instance for bool.
-
-(definstance Show [bool] (show [x] : cstr (if x "true" "false")))
-;;; Show [int8] -- Show instance for int8.
-
-(definstance Show [int8]
-  (show [x]
-    : cstr
-    ```c
-    char *buf = (char *)malloc(8);
-    snprintf(buf, 8, "%d", (int)x);
-    return (const char *)buf;
-    ```))
-;;; Show [int16] -- Show instance for int16.
-
-(definstance Show [int16]
-  (show [x]
-    : cstr
-    ```c
-    char *buf = (char *)malloc(8);
-    snprintf(buf, 8, "%d", (int)x);
-    return (const char *)buf;
-    ```))
-;;; Show [int32] -- Show instance for int32.
-
-(definstance Show [int32]
-  (show [x]
-    : cstr
-    ```c
-    char *buf = (char *)malloc(16);
-    snprintf(buf, 16, "%d", x);
-    return (const char *)buf;
-    ```))
-;;; Show [uint8] -- Show instance for uint8.
-
-(definstance Show [uint8]
-  (show [x]
-    : cstr
-    ```c
-    char *buf = (char *)malloc(8);
-    snprintf(buf, 8, "%u", (unsigned)x);
-    return (const char *)buf;
-    ```))
-;;; Show [uint16] -- Show instance for uint16.
-
-(definstance Show [uint16]
-  (show [x]
-    : cstr
-    ```c
-    char *buf = (char *)malloc(8);
-    snprintf(buf, 8, "%u", (unsigned)x);
-    return (const char *)buf;
-    ```))
-;;; Show [uint32] -- Show instance for uint32.
-
-(definstance Show [uint32]
-  (show [x]
-    : cstr
-    ```c
-    char *buf = (char *)malloc(16);
-    snprintf(buf, 16, "%u", x);
-    return (const char *)buf;
-    ```))
-;;; Show [uint64] -- Show instance for uint64.
-
-(definstance Show [uint64]
-  (show [x]
-    : cstr
-    ```c
-    char *buf = (char *)malloc(24);
-    snprintf(buf, 24, "%llu", (unsigned long long)x);
-    return (const char *)buf;
-    ```))
-;;; Show [float32] -- Show instance for float32.
-
-(definstance Show [float32]
-  (show [x]
-    : cstr
-    ```c
-    char *buf = (char *)malloc(32);
-    snprintf(buf, 32, "%g", (double)x);
-    return (const char *)buf;
-    ```))
+;; Show class + primitive Show instances live in stdlib/typeclass-show.tur
+;; (loaded at the top of this file).
 ;;; Num -- typeclass for numeric arithmetic.
 ;;;
 ;;; Parameters:
@@ -550,22 +450,8 @@
     }
     return (const char *)buf;
     ```))
-;;; Show [ptr<void>] -- Show instance for result<T,E> represented as ptr<void>.
-
-(definstance Show [ptr<void>]
-  (show [x]
-    : cstr
-    ```c
-    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
-    if (res == NULL) return "err";
-    char *buf = (char *)malloc(48);
-    if (res->is_ok) {
-        snprintf(buf, 48, "ok(%lld)", (long long)res->ok_val);
-    } else {
-        snprintf(buf, 48, "err(%lld)", (long long)res->err_val);
-    }
-    return (const char *)buf;
-    ```))
+;; Show [ptr<void>] -- moved to stdlib/typeclass-show.tur alongside the Show
+;; class (loaded at the top of this file).
 ;;; Error [ptr<void>] -- Error instance for result<T,E> represented as ptr<void>.
 
 (definstance Error [ptr<void>]

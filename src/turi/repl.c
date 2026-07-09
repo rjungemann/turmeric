@@ -969,6 +969,13 @@ int turi_repl_run(bool watch_mode) {
         const char *stdlib_root = getenv("TUR_STDLIB_DIR");
         turi_env_preload_macros(env, stdlib_root);
         turi_env_preload_collections(env, stdlib_root);
+        /* REPL-only: load the full typeclass.tur so the prompt can render Vec /
+         * Set / Map results through their Show instances (turi_try_show_by_tag)
+         * and `(show x)` resolves without an explicit (load ...).  Kept out of
+         * the shared preload so --interpret and the fixture worker still treat
+         * Show/Ord/Num as opt-in (some fixtures define their own Show class or
+         * assert a missing-instance error). */
+        turi_env_preload_typeclasses(env, stdlib_root);
     }
 
     /* RP5: register `(reload)` unconditionally so users always have
@@ -1316,13 +1323,17 @@ int turi_repl_run(bool watch_mode) {
                     }
                 }
                 if (!type_sentinel) {
-                    /* SI4: three-tier display:
-                     *   1. turi_try_show   -- TURI_STRUCT with Show instance
-                     *   2. turi_show_result -- TURI_INT heap-pointer (Pair, Cons)
-                     *   3. repl_print_value -- default repr */
+                    /* SI4: four-tier display:
+                     *   1. turi_try_show        -- TURI_STRUCT with Show instance
+                     *   2. turi_show_result     -- TURI_INT heap-pointer (Pair, Cons)
+                     *   3. turi_try_show_by_tag -- TURI_INT named ADT/struct/coll
+                     *                              (Vec, Set, Map, ...) via its Show
+                     *   4. repl_print_value     -- default repr */
                     const char *show_str = turi_try_show(env, result);
                     if (!show_str)
                         show_str = turi_show_result(env, result, type_tag);
+                    if (!show_str)
+                        show_str = turi_try_show_by_tag(env, result, type_tag);
                     if (show_str) {
                         if (use_color)
                             printf("=> " COL_RESET "%s" COL_RESET "\n", show_str);

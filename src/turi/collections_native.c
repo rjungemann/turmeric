@@ -273,29 +273,43 @@ static TuriValue native_set_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud
     return set_wrap_tracked(env, tur_hamt_new());
 }
 /* (set-add s h x) -- persistent insert; returns a new set. */
-static TuriValue native_set_add(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+/* set-add / set-remove / set-member? no longer have plain natives -- they are
+ * pure-Turmeric MapKey-dispatching defns (stdlib/set.tur) over the -eq-o raw
+ * layer below (see the registration note). */
+/* Raw content-keyed set ops: (s h x keyeq owned) -- the interpreter overrides
+ * for stdlib/set.tur's set-add-eq-o / set-has-eq-o? / set-del-eq-o inline-C
+ * bodies (the value slot is the (void*)1 sentinel; a Set is a Map to unit).
+ * keyeq is a C function pointer (from MapKey[A].mk-cmp) carried as int -- Set
+ * comparators always come from MapKey instances (never a Turmeric closure), so
+ * unlike the map _eq_o natives there is no closure path. NULL keyeq (int/Sym
+ * identity sets) makes the _eq_o path behave like the plain path. */
+static TuriValue native_set_add_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
-    if (n < 3) return n >= 1 ? a[0] : turi_nil();
+    if (n < 5) return n >= 1 ? a[0] : turi_nil();
     Hamt *src = set_hamt(a[0]);
-    Hamt *r = tur_hamt_set(src, (uint64_t)a[1].as_int,
-                           (void *)(intptr_t)a[2].as_int, (void *)1);
-    return set_wrap_owned(env, src, r);
+    Hamt *r = tur_hamt_set_eq_o(src, (uint64_t)a[1].as_int,
+                                (void *)(intptr_t)a[2].as_int, (void *)1,
+                                (tur_hamt_keyeq_fn)(intptr_t)a[3].as_int,
+                                (int64_t)a[4].as_int);
+    return set_wrap_owned(e, src, r);
 }
-/* (set-remove s h x) -- persistent delete; returns a new set. */
-static TuriValue native_set_remove(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+static TuriValue native_set_has_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 5) return turi_bool(false);
+    return turi_bool(tur_hamt_has_eq_o(set_hamt(a[0]), (uint64_t)a[1].as_int,
+                                       (void *)(intptr_t)a[2].as_int,
+                                       (tur_hamt_keyeq_fn)(intptr_t)a[3].as_int,
+                                       (int64_t)a[4].as_int));
+}
+static TuriValue native_set_del_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
-    if (n < 3) return n >= 1 ? a[0] : turi_nil();
+    if (n < 5) return n >= 1 ? a[0] : turi_nil();
     Hamt *src = set_hamt(a[0]);
-    Hamt *r = tur_hamt_del(src, (uint64_t)a[1].as_int,
-                           (void *)(intptr_t)a[2].as_int);
-    return set_wrap_owned(env, src, r);
-}
-/* (set-member? s h x) -- membership test. */
-static TuriValue native_set_member(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
-    if (n < 3) return turi_bool(false);
-    return turi_bool(tur_hamt_has(set_hamt(a[0]), (uint64_t)a[1].as_int,
-                                 (void *)(intptr_t)a[2].as_int));
+    Hamt *r = tur_hamt_del_eq_o(src, (uint64_t)a[1].as_int,
+                                (void *)(intptr_t)a[2].as_int,
+                                (tur_hamt_keyeq_fn)(intptr_t)a[3].as_int,
+                                (int64_t)a[4].as_int);
+    return set_wrap_owned(e, src, r);
 }
 static TuriValue native_set_count(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -348,21 +362,44 @@ static TuriValue native_set_eq_cmp(TuriEnv *env, TuriValue *a, uint32_t n, void 
 static TuriValue native_set_union(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 2) return n >= 1 ? a[0] : turi_nil();
-    /* tur_hamt_merge hands back a caller-owned reference (a retained input or a
-     * freshly built map), so the new box owns its own ref -- track directly. */
-    return set_wrap_tracked(env, tur_hamt_merge(set_hamt(a[0]), set_hamt(a[1])));
+    /* Content-keyed union: start from a, insert each element of b through the
+     * source's stamped comparator (tur_hamt_keyeq) so content-equal elements
+     * (cstr, ...) collapse; NULL comparator (int/Sym) behaves like a plain
+     * merge. Mirrors the compiled set-union in stdlib/set.tur. */
+    Hamt *ha = set_hamt(a[0]), *hb = set_hamt(a[1]);
+    void *keyeq = tur_hamt_keyeq(ha);
+    if (!keyeq) keyeq = tur_hamt_keyeq(hb);
+    Hamt *result = tur_hamt_retain(ha);
+    uint64_t iter_buf[32]; for (int i = 0; i < 32; i++) iter_buf[i] = 0;
+    tur_hamt_iter_init((HamtIter *)iter_buf, hb);
+    uint64_t h; void *key = NULL, *val = NULL;
+    while (tur_hamt_iter_next((HamtIter *)iter_buf, &h, &key, &val)) {
+        Hamt *old = result;
+        result = tur_hamt_set_eq_o(result, h, key, (void *)1,
+                                   (tur_hamt_keyeq_fn)(intptr_t)keyeq, (int64_t)0);
+        if (old != result) tur_hamt_free(old);
+    }
+    tur_hamt_iter_free((HamtIter *)iter_buf);
+    return set_wrap_tracked(env, result);
 }
 /* set-intersect / set-diff iterate `a` and keep keys (present | absent) in `b`. */
 static TuriValue set_iter_filter(TuriEnv *env, TuriValue *a, bool keep_if_in_b) {
     Hamt *ha = set_hamt(a[0]), *hb = set_hamt(a[1]);
+    /* Content-keyed intersect/diff: membership in b via the stamped comparator
+     * (tur_hamt_has_dynamic) and re-insert through it, so content-equal elements
+     * match; NULL comparator (int/Sym) behaves like the plain path. Mirrors the
+     * compiled set-intersect / set-diff in stdlib/set.tur. */
+    void *keyeq = tur_hamt_keyeq(ha);
+    if (!keyeq) keyeq = tur_hamt_keyeq(hb);
     Hamt *result = tur_hamt_new();
     uint64_t iter_buf[32]; for (int i = 0; i < 32; i++) iter_buf[i] = 0;
     tur_hamt_iter_init((HamtIter *)iter_buf, ha);
     uint64_t h; void *key = NULL, *val = NULL;
     while (tur_hamt_iter_next((HamtIter *)iter_buf, &h, &key, &val)) {
-        if (tur_hamt_has(hb, h, key) == keep_if_in_b) {
+        if (tur_hamt_has_dynamic(hb, (int64_t)h, key, keyeq) == keep_if_in_b) {
             Hamt *old = result;
-            result = tur_hamt_set(result, h, key, (void *)1);
+            result = tur_hamt_set_eq_o(result, h, key, (void *)1,
+                                       (tur_hamt_keyeq_fn)(intptr_t)keyeq, (int64_t)0);
             if (old != result) tur_hamt_free(old);
         }
     }
@@ -1029,7 +1066,29 @@ static TuriValue native_vec_new_filled(TuriEnv *env, TuriValue *a, uint32_t n, v
  * override.  Called from turi_env_new (env.c) so collections resolve for any
  * interpreter env created through libturi.
  * ---------------------------------------------------------------------- */
+/* show-concat: interpreter override for the inline-C helper in
+ * stdlib/typeclass-show.tur.  Concatenates two NUL-terminated strings into a
+ * fresh buffer so the pure-Turmeric collection Show instances (Show[Vec] /
+ * Show[Set] / Show[Map]) run under the tree-walking interpreter and the REPL
+ * instead of tripping the "inline-C not supported" guard.  Registered here (at
+ * turi_env_new time, via turi_register_collection_natives) so it exists before
+ * typeclass-show.tur's defn is elaborated -- both the `tur repl` and
+ * `--interpret` entry points share this path.  Neither input is freed. */
+static TuriValue native_show_concat(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    const char *sa = (n > 0 && a[0].tag == TURI_CSTR && a[0].as_cstr) ? a[0].as_cstr : "";
+    const char *sb = (n > 1 && a[1].tag == TURI_CSTR && a[1].as_cstr) ? a[1].as_cstr : "";
+    size_t la = strlen(sa), lb = strlen(sb);
+    char *out = (char *)malloc(la + lb + 1);
+    if (!out) { TuriValue v = {0}; v.tag = TURI_NIL; return v; }
+    memcpy(out, sa, la);
+    memcpy(out + la, sb, lb);
+    out[la + lb] = '\0';
+    TuriValue v = {0}; v.tag = TURI_CSTR; v.as_cstr = out; return v;
+}
+
 void turi_register_collection_natives(TuriEnv *env) {
+    turi_env_register_native(env, "show-concat", native_show_concat, NULL);
     turi_env_register_native(env, "tur_hamt_new", native_tur_hamt_new, NULL);
     turi_env_register_native(env, "tur_hamt_free", native_tur_hamt_free, NULL);
     turi_env_register_native(env, "tur_hamt_retain", native_tur_hamt_retain, NULL);
@@ -1052,9 +1111,16 @@ void turi_register_collection_natives(TuriEnv *env) {
     turi_env_register_native(env, "tur_hamt_persistent", native_tur_hamt_persistent, NULL);
 
     turi_env_register_native(env, "set-new", native_set_new, NULL);
-    turi_env_register_native(env, "set-add", native_set_add, NULL);
-    turi_env_register_native(env, "set-remove", native_set_remove, NULL);
-    turi_env_register_native(env, "set-member?", native_set_member, NULL);
+    /* set-add / set-remove / set-member? are now pure-Turmeric defns in
+     * stdlib/set.tur that dispatch MapKey[A] and delegate to the content-keyed
+     * -eq-o raw layer below.  Registering the old plain-tur_hamt_set natives
+     * here would shadow those defns and silently drop the comparator (content
+     * dedup / membership would fall back to pointer identity), so they are not
+     * registered -- the interpreter runs the Turmeric bodies over the -eq-o
+     * natives, exactly like Map's macro layer over map-*-eq-o. */
+    turi_env_register_native(env, "set-add-eq-o", native_set_add_eq_o, NULL);
+    turi_env_register_native(env, "set-has-eq-o?", native_set_has_eq_o, NULL);
+    turi_env_register_native(env, "set-del-eq-o", native_set_del_eq_o, NULL);
     turi_env_register_native(env, "set-count", native_set_count, NULL);
     turi_env_register_native(env, "set-free", native_set_free, NULL);
     turi_env_register_native(env, "set-union", native_set_union, NULL);

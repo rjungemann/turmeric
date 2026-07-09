@@ -1,0 +1,8 @@
+;; set-element-api-generalization: Set[Sym] (keyword elements) -- content-keyed
+;; on the interned symbol.  No inline-C, so this runs under both the compiled
+;; and interpreter runners.
+(defn main [] : int
+  (println (set-count (set-of :x :y :x)))
+  (println (if (set-member? (set-of :a :b) (hash :a) :a) 1 0))
+  (println (if (set-member? (set-of :a :b) (hash :c) :c) 1 0))
+  0)

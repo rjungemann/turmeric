@@ -61,9 +61,26 @@ threaded through). The move should be validated on native first
 (`bash tests/run.sh` behavior-preserving) since the WASM half cannot be
 exercised without an Emscripten toolchain.
 
+## Confirmed (2026-07-09, during repl-show-collections)
+
+Re-verified the first bullet from the interactive `tur repl`:
+
+- `#map{:a 1}` at the prompt -> `eval: inline-C not supported in interpreter
+  mode`. `(hash :a)` / `(sym->str :a)` fail the same way, while `:type :a`
+  correctly reports `: Sym`.
+- The same program runs fine under `./build/tur --interpret` and
+  `./build/tur run` (both print the looked-up value), which pins the gap to
+  the two entry points that skip the `wk_register_*` block -- exactly this
+  report. Int-keyed maps at the REPL now also exercise the new collection
+  `Show` path and work, because their comparators come from
+  `turi_register_collection_natives`, which the REPL does get.
+
 ## Related
 
 - `docs/archive/web-repl-missing-stdlib-preload.md` -- the resolved parent report.
+- `docs/reported/wasm-repl-no-show-collection-preload.md` -- sibling WASM-REPL
+  parity gap (collection `Show` preload + `turi_try_show_by_tag` wiring); that
+  one is *not* a native-registration gap and is fixable independently.
 - `src/turi/preload.c` -- the shared preload helper (the load half of the fix).
 - `src/turi/env.c:211` -- `turi_register_collection_natives`, the core natives
   the two entry points already get.
