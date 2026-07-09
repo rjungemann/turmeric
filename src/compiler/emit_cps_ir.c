@@ -931,19 +931,30 @@ static bool term_core_ok(const CTerm *t) {
             for (uint32_t ci = 0; ci < t->as.handle.n_cases; ci++) {
                 const CHandleCase *c = &t->as.handle.cases[ci];
                 CapSet ccs;
-                if (c->n_params > 1) return false;              /* <=1 effect param */
+                /* A multi-arg effect delivers its args heap-packed as one word
+                 * (emit_perform); the handler case unpacks each param from the
+                 * array (emit_lifted).  Every param must be slot-representable so
+                 * the pack/unpack round-trips.  A single (or zero) param keeps the
+                 * original direct-in-`arg` path unchanged. */
+                if (c->n_params > 1)
+                    for (uint32_t pi = 0; pi < c->n_params; pi++)
+                        if (!slot_ok_t(&c->params[pi]->type, c->params[pi]->type.kind))
+                            return false;
                 if (!handle_case_ok(c->case_body)) return false;
                 if (!collect_caps_case(c->case_body, c, &ccs)) return false;
             }
             return true;
         }
         case CT_PERFORM: {
-            /* C4/N6.3: <=1 scalar arg; straight-line continuation whose captures
-             * (if any) are all scalar source vars -- lifted with a real env. */
-            if (t->as.perform.n > 1
-                || (t->as.perform.n == 1 && !atom_ok(&t->as.perform.args[0]))
-                || !perform_body_ok(t->as.perform.body))
+            /* C4/N6.3: straight-line continuation whose captures (if any) are all
+             * scalar source vars -- lifted with a real env.  A multi-arg effect
+             * (n>1) is heap-packed into one word (emit_perform) and unpacked at the
+             * handler case; every arg must be a slot-representable atom.  A single
+             * (or zero) arg keeps the original one-word-slot path. */
+            if (!perform_body_ok(t->as.perform.body))
                 return false;
+            for (uint32_t i = 0; i < t->as.perform.n; i++)
+                if (!atom_ok(&t->as.perform.args[i])) return false;
             CapSet cs;
             return collect_caps(t->as.perform.body, t->as.perform.x.id, &cs);
         }
@@ -1899,7 +1910,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         free(ld);
     }
     if (mode == LH_HANDLER_CASE && hcase) {
-        if (hcase->n_params >= 1) {
+        if (hcase->n_params == 1) {
             const Binding *pb = hcase->params[0];
             char *pn = name_for_binding(ce->ctx, pb);
             const char *pty = binder_ctype_full(ce->ctx, pb->type.kind, &pb->type);
@@ -1908,6 +1919,25 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
             buf_printf(&tmp, "%s %s = %s;\n", pty, pn, ld);
             free(ld);
             free(pn);
+        } else if (hcase->n_params > 1) {
+            /* Multi-arg effect: `arg` is a pointer to the heap-packed
+             * `int64_t[n]` slot-word array built at the perform site; unpack each
+             * param from its slot (value-load, consume=false -- a multi-shot
+             * resume may re-read the array). */
+            indent_buf(&tmp, 4);
+            buf_puts(&tmp, "int64_t *__eargs = (int64_t *)arg;\n");
+            for (uint32_t pi = 0; pi < hcase->n_params; pi++) {
+                const Binding *pb = hcase->params[pi];
+                char *pn = name_for_binding(ce->ctx, pb);
+                const char *pty = binder_ctype_full(ce->ctx, pb->type.kind, &pb->type);
+                char src[32];
+                snprintf(src, sizeof src, "__eargs[%u]", pi);
+                char *ld = slot_load(ce->ctx, pb->type.kind, &pb->type, src, false);
+                indent_buf(&tmp, 4);
+                buf_printf(&tmp, "%s %s = %s;\n", pty, pn, ld);
+                free(ld);
+                free(pn);
+            }
         }
         if (hcase->k) {
             char *kn = name_for_binding(ce->ctx, hcase->k);
@@ -2152,12 +2182,38 @@ static bool perform_cont_trivial(const CTerm *t) {
 
 static void emit_perform(CE *ce, const CTerm *t) {
     int tag = effect_tag(t->as.perform.effect);
-    /* argument: 0-arg effects pass 0; 1-arg pass the arg (subset). */
-    char *arg = (t->as.perform.n >= 1)
-        ? atom_str(ce, &t->as.perform.args[0]) : strdup("0");
-    TypeKind argty = (t->as.perform.n >= 1) ? t->as.perform.args[0].ty : TY_NIL;
-    const Type *argt = (t->as.perform.n >= 1) ? t->as.perform.args[0].type : NULL;
-    char *sa = slot_store(ce->ctx, argty, argt, arg);
+    /* effect value word: a 0-arg effect passes 0; a 1-arg effect passes the arg's
+     * slot value directly; a multi-arg effect (n>1) heap-packs each arg's slot
+     * word into an `int64_t[n]` and passes the array pointer -- the handler case
+     * unpacks each param from it (emit_lifted).  The array is leaked with the DK
+     * nodes (a multi-shot resume shares it read-only), matching the env-leak
+     * discipline. */
+    char *arg = NULL, *sa;
+    if (t->as.perform.n > 1) {
+        int aid = (*ce->helper_ctr)++;
+        char av[64];
+        snprintf(av, sizeof av, "__eargs%d", aid);
+        ce_line(ce, "int64_t *%s = (int64_t *)malloc(%u * sizeof(int64_t));",
+                av, (unsigned)t->as.perform.n);
+        for (uint32_t i = 0; i < t->as.perform.n; i++) {
+            char *ai = atom_str(ce, &t->as.perform.args[i]);
+            char *si = slot_store(ce->ctx, t->as.perform.args[i].ty,
+                                  t->as.perform.args[i].type, ai);
+            ce_line(ce, "%s[%u] = %s;", av, i, si);
+            free(si); free(ai);
+        }
+        Buf sb; buf_init(&sb);
+        buf_printf(&sb, "(intptr_t)%s", av);
+        buf_putc(&sb, '\0');
+        sa = strdup(sb.data); buf_free(&sb);
+    } else {
+        /* argument: 0-arg effects pass 0; 1-arg pass the arg (subset). */
+        arg = (t->as.perform.n >= 1)
+            ? atom_str(ce, &t->as.perform.args[0]) : strdup("0");
+        TypeKind argty = (t->as.perform.n >= 1) ? t->as.perform.args[0].ty : TY_NIL;
+        const Type *argt = (t->as.perform.n >= 1) ? t->as.perform.args[0].type : NULL;
+        sa = slot_store(ce->ctx, argty, argt, arg);
+    }
 
     if (perform_cont_trivial(t)) {
         ce_line(ce, "return dk_perform(%d, %s, %s);", tag, sa, ce->cur_k);

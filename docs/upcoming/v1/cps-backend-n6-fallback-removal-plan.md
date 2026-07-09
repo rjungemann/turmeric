@@ -73,7 +73,7 @@ dominated by the *types in the signature*:
 | `sig-param TY_FN` | 2504 | a plain (non-rank-2) function-typed parameter -- **effect-free ones now landed**; the residual is effectful callbacks |
 | `sig-ret TY_APP` | 625 | a parametric type-app return |
 | `sig-ret TY_NIL` | 2433 -> 206 | a nil/void return -- **now landed** (the residual 206 also have a bad param) |
-| `core:*` (nested perform, ...) | ~50 | genuine control-carrying gaps (small) |
+| `core:*` (multi-arg effect, ...) | ~50 | genuine control-carrying gaps (small) -- **multi-arg effects now landed** |
 
 So the next big levers are all *signature* types: parametric type-app params /
 returns (the non-scalar-parametric Tier-C work) and plain `TY_FN` params. The
@@ -259,9 +259,30 @@ fallback can be deleted:
   (`dk_handler(tag0, c0, 0, dk_handler(tag1, c1, 0, dk_frame(k-cont)))`), so
   `dk_perform` dispatches each effect to its own lifted case. term_core_ok /
   has_capture_case / needs_heap_join iterate all cases; each case still admits
-  `<=1` effect param and a zero-capture straight-line body. Fixture
+  a zero-capture straight-line body. Fixture
   `cps-backend-multi-handle`: `run` handles Ask + Add, `direct == cps`
   (`5` / `101`).
+
+  *Multi-argument effects LANDED.* The `<=1 effect param` / `<=1 perform arg`
+  limits are lifted: a multi-arg effect (`(defeffect Sum3 [a b c] ...)`) is
+  serviced by heap-packing the N arg slot-words into an `int64_t[n]` at the
+  perform site and passing the array pointer as the single `dk_perform` value
+  word; the handler case unpacks each param back out of the array
+  (`int64_t *__eargs = (int64_t *)arg; a = __eargs[0]; ...`). `emit_perform`
+  builds and populates the array (each arg through `slot_store`, so a `:float`
+  arg round-trips via the double<->int64 bitcast); `emit_lifted`'s
+  `LH_HANDLER_CASE` unpacks with the inverse `slot_load`. `term_core_ok` now
+  admits `n>1` when every arg is a slot-representable atom and every case param
+  is `slot_ok_t`; the `n<=1` path is byte-for-byte unchanged. The array is
+  leaked with the DK nodes (a multi-shot resume shares it read-only), matching
+  the env-leak discipline. Fixtures `cps-backend-multiarg-effect` (a 3-int-arg
+  effect whose continuation also captures an enclosing local, `direct == cps ==
+  1123`) and `cps-backend-multiarg-effect-float` (two `:float` args, CPS prints
+  the correct `10.6`). The float fixture also surfaced a pre-existing
+  direct/fiber bug -- a float effect arg is truncated to int on the ordinary
+  path (the CPS backend is correct) -- reported in
+  [docs/reported/direct-fiber-float-effect-arg-truncation.md](../../reported/direct-fiber-float-effect-arg-truncation.md).
+  Full suite: 2037 passed, 0 failed.
 
   *shift0 LANDED.* `shift0` differs from `shift` in exactly one way -- it does
   NOT reinstall the delimiting prompt when it captures the continuation -- so the

@@ -1,0 +1,33 @@
+;; CPS-IR-to-C backend, N6: a *multi-argument* effect.  Built with
+;; --enable=cps-backend.
+;;
+;; Before this slice, a `perform` with >1 arg and a handler case with >1 effect
+;; param both fell back (the DK value word carries a single slot).  N6 now
+;; heap-packs the N arg slot-words into an `int64_t[n]` at the perform site and
+;; passes the array pointer as the one effect value:
+;;   int64_t *__eargs = malloc(3 * sizeof(int64_t));
+;;   __eargs[0]=..; __eargs[1]=..; __eargs[2]=..;
+;;   dk_perform(tag, (intptr_t)__eargs, k);
+;; and the handler case unpacks each param back out of the array:
+;;   int64_t *__eargs = (int64_t *)arg;
+;;   int64_t a = __eargs[0];  int64_t b = __eargs[1];  int64_t c = __eargs[2];
+;; The array is leaked with the DK nodes (a multi-shot resume shares it
+;; read-only), matching the env-leak discipline.
+;;
+;; `add3` uses a 3-arg effect AND a continuation that captures the enclosing
+;; local `base` after the perform -- so it exercises both the multi-arg unpack
+;; and the scalar-capture env in one function.
+;;
+;; direct-vs-CPS equal: perform delivers a+b+c handled as a*100+b*10+c, resumed,
+;; then + base.  (1*100 + 2*10 + 3) + 1000 = 1123.
+
+(defeffect Sum3 [a :int b :int c :int] :int)
+
+(defn add3 [base : int] : int
+  (handle
+    {(perform (Sum3 1 2 3)) + base}
+    (Sum3 [a b c] k) (resume k {{{a * 100} + {b * 10}} + c})))
+
+(defn main [] : int
+  (println (add3 1000))
+  0)
