@@ -106,12 +106,29 @@ static bool slot_box_ty(const Type *t) {
     return d && !d->needs_drop_glue;
 }
 
-/* A value can cross the DK slot at the current tier: a Tier A/B scalar, or a
- * Tier C owning-free by-value aggregate (boxed).  This is the whole-Type gate
- * used by classification wherever the full Type is available (the bare-TypeKind
- * slot_ty stays for the scalar-only sites). */
+/* A heap-passed ADT / struct handle (`(Vec int)` -> `tur_adt_Vec__int *`, a heap
+ * ADT node, ...).  Its C representation IS a pointer -- the int64 carrier -- so
+ * it crosses the DK slot by a plain cast (like TY_PTR_VOID), never a box.  It is
+ * an *owning* handle, so it is admitted through the slot / signature gate but NOT
+ * through the capture gate (cap_ty_ok): a handle live across a control op is
+ * captured into a continuation env, where a leaked, possibly multi-shot env would
+ * share/duplicate the owning pointer -- so cap_add still bails on it and the
+ * function falls back.  What this admits is a handle confined to a straight-line
+ * delegated sequence (produced/consumed/returned without crossing into a lifted
+ * continuation env): move semantics, no ownership split, matching the direct
+ * emitter (whose owning ops are delegated via CT_LETRAW either way). */
+static bool carrier_handle_ok(const Type *t) {
+    return t && (type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t));
+}
+
+/* A value can cross the DK slot at the current tier: a Tier A/B scalar, a Tier C
+ * owning-free by-value aggregate (boxed), or a heap-ADT/struct handle (plain-cast
+ * int64 carrier).  This is the whole-Type gate used by classification wherever
+ * the full Type is available (the bare-TypeKind slot_ty stays for scalar-only
+ * sites).  It is deliberately WIDER than cap_ty_ok: a value may cross a slot by a
+ * single move even when it may not be duplicated into a capture env. */
 static bool slot_ok_t(const Type *t, TypeKind k) {
-    return slot_ty(k) || slot_box_ty(t);
+    return slot_ty(k) || slot_box_ty(t) || carrier_handle_ok(t);
 }
 
 /* Store a value into the one-word slot.  Returns a malloc'd C expression.
@@ -156,7 +173,9 @@ static char *slot_load(EmitCtx *ctx, TypeKind k, const Type *t, const char *s, b
     else if (k == TY_FLOAT32)
         buf_printf(&b, "((union { float f; uint32_t u; }){ .u = (uint32_t)(%s) }).f", s);
     else
-        buf_printf(&b, "(%s)(%s)", binder_ctype(ctx, k), s);
+        /* Plain cast to the value's real C type -- binder_ctype_full so a heap-ADT
+         * handle (TY_ADT/APP/STRUCT) casts back to its pointer type, not int64. */
+        buf_printf(&b, "(%s)(%s)", binder_ctype_full(ctx, k, t), s);
     buf_putc(&b, '\0');
     char *r = strdup(b.data); buf_free(&b); return r;
 }

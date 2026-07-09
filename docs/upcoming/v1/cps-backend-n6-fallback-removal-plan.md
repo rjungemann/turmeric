@@ -97,12 +97,27 @@ cloneable/serial, async) are now a small tail by count -- and the hardest.
   admitted the function and the return crossing boxed/unboxed the handle
   (`*(T**)__r; free(...)`), double-indirecting it -- a colored `mkvec` returned a
   garbage `vec-len` of 0. **Fixed** by excluding `type_is_heap_adt` /
-  `type_is_heap_struct` from `slot_box_ty`, so a heap ADT is neither admitted nor
-  boxed and falls back correctly (`mkvec` now `direct == cps`). Regression fixture
-  `cps-backend-heap-adt-return`. The genuine "heap-handle in the CPS subset"
-  support (admit an int64 handle as a plain-cast carrier, not a box) remains
-  future work and is ownership-sensitive (a handle live across a control op must
-  stay caught by the conservative capture bail).
+  `type_is_heap_struct` from `slot_box_ty`, so a heap ADT is never boxed.
+  **Heap-handle-in-subset support then LANDED** on top of that: a heap ADT/struct
+  is admitted as a plain-cast int64 *carrier* handle (`carrier_handle_ok` in
+  `slot_ok_t`, `slot_load` casting via `binder_ctype_full` back to the pointer
+  type), so a colored function that produces/returns/threads such a handle
+  through a straight-line delegated sequence CPS-emits and moves it correctly
+  (`mkvec` now emits, `direct == cps == 1`). The safety property is that
+  `carrier_handle_ok` is added to `slot_ok_t` but NOT to `cap_ty_ok`: a handle
+  live *across* a control op is captured into a leaked, possibly multi-shot
+  continuation env, where sharing the owning pointer would be unsound -- so
+  `cap_add` still bails on it and the function falls back (verified: `addto`,
+  whose `Vec` param is used after a `handle`, stays fallback). Regression fixture
+  `cps-backend-heap-adt-return`. Surfaced and required a separate fix along the
+  way: a nil/void *delegated call* (`vec-push!`) was dropping its side effect
+  (emit_letraw discarded the un-emitted void-call expression) -- fixed with
+  fixture `cps-backend-nil-delegated-call`.
+
+  *Remaining signature surface:* a heap handle *consumed across* a control op
+  (still falls back by design -- needs the affine/single-shot ownership analysis,
+  same gate as the consumed-owning-capture item), and effectful `TY_FN` callback
+  params (colored indirect calls).
 
 ## The key architectural lever -- delegate control-op-free subexpressions
 

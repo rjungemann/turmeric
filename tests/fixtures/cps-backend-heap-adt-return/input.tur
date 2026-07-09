@@ -10,14 +10,18 @@
 ;; `*(T**)__r; free(...)` -- double-indirecting the handle and freeing a non-box,
 ;; so the CPS path returned garbage (a `vec-len` of 0 instead of 1).
 ;;
-;; The fix excludes `type_is_heap_adt` / `type_is_heap_struct` from `slot_box_ty`,
-;; so a heap ADT is neither admitted through the by-value gate nor routed through
-;; the box/unbox crossing -- `mkvec` falls back to the direct emitter and returns
-;; the correct handle.  (A genuine by-value product like `(Option int)` =
-;; `tur_adt_Option__int` is unaffected and still CPS-emits.)
+;; Two things fixed this: (1) `slot_box_ty` excludes `type_is_heap_adt` /
+;; `type_is_heap_struct` (a heap ADT is never a by-value product to box), and
+;; (2) a heap ADT is instead admitted as a plain-cast int64 *carrier* handle
+;; (`carrier_handle_ok`), crossing the slot by a `(T *)__r` cast -- so `mkvec`
+;; now CPS-emits and returns the correct handle by move-out.  A heap handle is
+;; still kept OUT of the capture gate (`cap_ty_ok`): a handle live across a
+;; control op would be duplicated into a leaked, possibly multi-shot env, so such
+;; a function still falls back.  Here `v` is produced inside the handle
+;; continuation and returned (never captured), so it rides the subset cleanly.
 ;;
-;; This fixture asserts the *value* is correct (1), which is what regressed: if a
-;; heap ADT is ever boxed again, the output flips to 0.
+;; This fixture asserts the *value* is correct (1): if a heap ADT is ever boxed
+;; (double-indirected) or mis-crossed, the output flips to 0.
 
 (load "stdlib/vec.tur")
 
