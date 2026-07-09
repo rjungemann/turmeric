@@ -192,14 +192,45 @@ enumerated spec set.
      equivalent reordering. This is the load-bearing refactor for G3 and is
      confirmed unavoidable.
 
-- **G3 -- emit the monomorph DK body + route the call site.** In
-  `emit_cps_ir_try_fn`, when `current_abi_specialization` is set and the
-  monomorph is in S, emit `<clone_name>__cps` + the entry wrapper (mirroring the
-  top-level path but with the spec's concrete types), and make
-  `emit_abi_register_call`'s call->spec routing point DK-context callers at the
-  `__cps` clone. Gate the whole thing on `--enable=cps-backend`. Fixtures: the
-  cross-machine `emit-twice`/`run` case now CPS-emits end to end
-  (`direct == cps`), plus a self-contained generic monomorph.
+- **G3 -- emit the monomorph DK body. Investigated; two findings reshape it.**
+
+  *Finding A (major de-risk): the CPS emit path is ALREADY spec-aware.* The plan
+  feared G3 would have to thread type substitution through the whole CPS emitter.
+  It does not: the CPS type-spelling helpers (`binder_ctype_full`, `slot_store`,
+  `slot_load`, `emit_params`) all spell aggregate types via `emit_type_c_name`,
+  which is `type_c_name(emit_resolve_type(ctx, t))` -- and during the spec-body
+  emit loop `ctx->current_abi_specialization` is set, so those spellings already
+  resolve `(Box A)` -> `tur_adt_Box__int`. So a monomorph body reuses the
+  generic CTerm as-is (the forms are identical; only the type *spellings* differ,
+  and they resolve at emit). The emit plumbing is essentially ready.
+
+  *Finding B (the real remaining blocker): routing vs. the safety gate.* There
+  are two ways to reach a monomorph's DK body, with very different risk:
+
+  - **No routing needed for a self-contained island.** If a monomorph is emitted
+    as `<clone_name>__cps` + a `<clone_name>` entry wrapper (the wrapper installs
+    its own `dk_prompt` root), callers keep calling the SAME `<clone_name>(args)`
+    symbol -- no call-site routing, no whole-program taint change. But this is
+    only *sound* when the monomorph is a genuine island: every effect it performs
+    is handled within its own body (nothing escapes to a caller -- an escaping
+    `dk_perform` would search only the wrapper's fresh root and never reach the
+    caller's handler), AND it calls no colored function (else a fiber callee's
+    perform would miss this body's DK handler). Getting that **self-contained +
+    no-colored-callee** gate wrong is a silent runtime miscompile, so it needs a
+    validated escaping-effect analysis over the CTerm (performed-effects not
+    lexically enclosed by a matching handle = escaping; require empty), plus a
+    colored-callee check -- not yet built.
+
+  - **Cross-function DK chains need the taint surgery.** The valuable case (a
+    generic monomorph that performs an effect handled by a CPS peer) still
+    requires `ensure_S`'s taint fixpoint to range over the complete monomorph set
+    (the pre-emit discovery pass) AND to stop letting the non-emitted generic
+    *template* taint its own effect once its monomorphs are candidates.
+
+  So G3 splits: **G3a** = self-contained-island emit (bounded, but gated on a
+  new validated escaping-effect analysis); **G3b** = cross-function chains (the
+  pre-emit discovery + taint surgery). Neither is a rush job -- G3a's safety gate
+  and G3b's taint surgery are both correctness-critical.
 
 - **G4 -- widen `fn_sig_ok` for the concrete monomorph types.** With monomorphs
   classified under their concrete param/return types, the tyvar-`TY_APP`
@@ -221,13 +252,32 @@ materialization; (2) **the ordering knot is confirmed unavoidable** -- the
 monomorph set is not complete when `ensure_S` runs, so the effect-taint fixpoint
 cannot range over monomorphs without a dedicated pre-emit spec-discovery pass.
 
-G3 (the actual coverage win -- emitting `<clone>__cps` + routing DK-context call
-sites) is gated on that pre-emit discovery pass, which is the load-bearing
-refactor: run the full `emit_abi_scan_expr` over the program to intern every spec
-before `ensure_S`, then run the taint fixpoint over the complete set. This is a
-materially larger, higher-risk change than the prior N6 slices, and the current
-behavior is already sound (effect-taint keeps generic monomorphs on fiber without
-splitting any DK chain).
+G3 was investigated in depth this pass with two structural findings (see the G3
+entry): (A) the CPS emit path is **already spec-aware** (type spellings resolve
+via `emit_type_c_name` -> `emit_resolve_type(current_abi_specialization)`), so the
+feared "thread substitution through the emitter" work is already done -- a
+monomorph reuses the generic CTerm and the spellings resolve at emit; (B) the
+real blocker is the **safety gate**, not the emit plumbing.
+
+The cleanest G3 architecture that fell out of this: rather than build a new
+escaping-effect analysis, **reuse the existing (battle-tested) `ensure_S` taint
+fixpoint as the safety gate.** Make a colored generic *template* a taint
+participant whose candidacy is decided by the fixpoint (classify its body
+permissively for tyvar types; verify each concrete monomorph's signature via
+`mono_sig_ok` at emit and fall back per-monomorph if a specific instantiation is
+non-slot). If the template co-classifies (no fiber-only peer shares its effects),
+every monomorph is safe -- self-contained or cross-function -- because the
+fixpoint already guaranteed peers agree. Then emit each monomorph as
+`<clone>__cps` + wrapper (skipping the template body, which is never emitted).
+
+The risk is concentrated and real: making a template a taint participant changes
+whole-program classification (e.g. `run` in the cross-machine case stops being
+evicted), which flips emit output for those functions and must be staged with the
+fixture suite watched at each micro-step (forward-decl emission must exclude the
+never-defined template `<generic>__cps`; per-monomorph signature fallback must be
+correct). This is a materially larger, higher-risk change than the prior N6
+slices, and the current behavior is already sound (effect-taint keeps generic
+monomorphs on fiber without splitting any DK chain).
 
 Next-step options, in the spirit of the one-track-to-v1 priority:
 
