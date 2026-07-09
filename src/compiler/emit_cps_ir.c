@@ -20,6 +20,12 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                             Binding **self_exclude, uint32_t n_self_exclude,
                             uint32_t *n_out);
 
+/* True for a NULL or `{}` (ERK_EMPTY) effect row.  Used to distinguish a
+ * provably effect-free `TY_FN` param (safe to delegate an indirect call
+ * through) from an effectful callback (whose call would need DK threading).
+ * Defined in src/passes/effect.c. */
+bool effect_row_is_empty(struct EffectRow *row);
+
 /* =========================================================================
  * CPS-IR-to-C backend -- Phase C1.  See emit_cps_ir.h for the ABI and scope.
  *
@@ -980,10 +986,21 @@ static bool fn_sig_ok(const FnDef *fd) {
     for (uint8_t i = 0; i < fd->n_params; i++) {
         const Binding *p = fd->params[i];
         /* A poly fn param crosses as a fat closure (tur_poly_fn_t); a `^borrow`
-         * param is a read-only handle the callee never consumes -- both are passed
-         * by value in C and are admitted even when their type fails the scalar /
-         * by-value-aggregate slot gate. */
-        if (!p->is_poly_fn && !p->is_borrow
+         * param is a read-only handle the callee never consumes; a plain (non-
+         * rank-2) *effect-free* `TY_FN` param crosses as the direct emitter's
+         * function-pointer spelling (a `cfnptr` typedef, else the opaque `int64_t`
+         * carrier).  All three are passed by value in C and are admitted even when
+         * their type fails the scalar / by-value-aggregate slot gate -- emit_params
+         * emits the matching C type, and a call *through* such a param is an
+         * uncolored delegated indirect call (CT_LETRAW), which the direct emitter
+         * emits with the same spelling.  An *effectful* fn param
+         * (`(fn [..] #{E} ..)`) is deliberately NOT admitted: invoking it performs
+         * a Turmeric effect that would have to thread the DK continuation, but a
+         * delegated call runs on the fiber effect machine -- the two do not
+         * interoperate, so such a function must keep falling back. */
+        bool fn_param_ok = p->type.kind == TY_FN
+                        && effect_row_is_empty(p->type.as.fn.effect_row);
+        if (!p->is_poly_fn && !p->is_borrow && !fn_param_ok
             && !slot_ok_t(&p->type, p->type.kind)) return false;
         if (param_name_clashes_cps(p)) return false;
     }
@@ -2210,6 +2227,18 @@ static void emit_params(EmitCtx *ctx, Buf *file, const FnDef *fd) {
          * be declared as the fat closure, not an opaque pointer. */
         if (fd->params[i]->is_poly_fn)
             pty = "tur_poly_fn_t";
+        else if (fd->params[i]->type.kind == TY_FN) {
+            /* A plain (non-rank-2) fn param crosses as the direct emitter's
+             * function-pointer spelling: a typed C-ABI pointer becomes its
+             * registered `R (*)(A...)` typedef, an ordinary closure carrier the
+             * opaque `int64_t`.  type_c_name(TY_FN) leaks a bad spelling, so this
+             * mirrors emit_module.c's signature emission exactly -- otherwise a
+             * delegated call through the param (which the direct emitter emits)
+             * and the __cps declaration would disagree. */
+            const char *td = fd->params[i]->type.as.fn.cfnptr
+                ? register_fn_ptr_typedef(&fd->params[i]->type) : NULL;
+            pty = td ? td : "int64_t";
+        }
         else
             /* A by-value aggregate param needs its real (monomorphized) C type,
              * which emit_type_from_kind(TY_ADT/APP/STRUCT) loses -- use the full

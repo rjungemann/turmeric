@@ -1,0 +1,37 @@
+;; CPS-IR-to-C backend, N6 signature widening: a colored function with a plain
+;; (non-rank-2), *effect-free* TY_FN parameter.  Built with --enable=cps-backend.
+;;
+;; `run-with` handles E (so it is colored / DK-lowered) and takes a callback `h`
+;; typed `(fn [float] #fx{} float)`.  A monomorphic effect-free fn param usually
+;; becomes the tur_poly_fn_t typed carrier (is_poly_fn, already admitted); this
+;; one is `^fat`, so it keeps its nominal TY_FN type and crosses as the direct
+;; emitter's plain function-pointer spelling (`int64_t` for a non-cfnptr carrier).
+;; fn_sig_ok now admits such a param -- emit_params emits the matching C type, and
+;; the call `(h ...)` is an uncolored delegated indirect call (CT_LETRAW) that the
+;; direct emitter emits with the same fat-thunk convention, so it CPS-emits and
+;; rides the single-shot handler env by value (`int64_t f0 = h`).
+;;
+;; The soundness discriminator is the *effect row*: an EFFECTFUL fn param would
+;; perform a Turmeric effect when invoked, which must thread the DK continuation
+;; -- but a delegated call runs on the fiber effect machine, and the two do not
+;; interoperate.  So only NULL/`{}` effect rows are admitted; an effectful
+;; callback param keeps the whole function on the fallback path.
+;;
+;; direct-vs-CPS equal: resume delivers 1.0, so h(x+1.0) = (1.6+1.0)*2.0 = 5.2.
+;; A fractional result (5.2, not an integer) so a float miscompile would show.
+
+(defeffect E [] :float)
+
+(defn g [] : float
+  (perform (E)))
+
+(defn run-with [^fat h :(fn [float] #fx{} float) x : float] : float
+  (let [n (handle (g) (E [] k) (resume k 1.0))]
+    (h {x + n})))
+
+(defn make-scaler [k : float] : ptr<void>
+  (fn [x : float] : float (* x k)))
+
+(defn main [] : int
+  (println (run-with (make-scaler 2.0) 1.6))
+  0)

@@ -1,0 +1,35 @@
+;; CPS-IR-to-C backend, N6 signature widening (soundness guard): a colored
+;; function with an *effectful* TY_FN parameter must NOT be CPS-emitted -- it
+;; must keep falling back.  Built with --enable=cps-backend.
+;;
+;; `use-writer` handles E (colored) and takes a callback `f` typed
+;; `(fn [cstr] #fx{Write} nil)`.  Invoking `f` performs the Write effect, which
+;; on the CPS/DK path would have to thread the delimited continuation -- but a
+;; delegated indirect call runs the callee on the fiber effect machine, and the
+;; DK and fiber machines do not interoperate.  fn_sig_ok therefore rejects a
+;; non-empty effect row on a fn param (`effect_row_is_empty`), so this whole
+;; function stays on the fallback path and Write is serviced by the fiber
+;; handler in `main`.
+;;
+;; This fixture is the regression guard for that gate: it runs the effectful
+;; callback under --enable=cps-backend and asserts the exact output.  If a
+;; future change wrongly admits an effectful fn param, the split effect machines
+;; would crash or drop the Write, flipping this red.
+;;
+;; Expected: the callback performs Write("hi") (printed by main's handler), then
+;; use-writer returns the resume value 5.
+
+(defeffect Write [s :cstr] :nil)
+(defeffect E [] :int)
+
+(defn g [] : int
+  (perform (E)))
+
+(defn use-writer [f : (fn [cstr] #fx{Write} nil)] #fx{Write} : int
+  (let [n (handle (g) (E [] k) (resume k 5))]
+    (do (f "hi") n)))
+
+(defn main [] : int
+  (handle
+    (do (println (use-writer (fn [s] (perform (Write s))))) 0)
+    (Write [s] k) (do (println s) (resume k nil))))

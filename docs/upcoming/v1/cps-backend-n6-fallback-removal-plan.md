@@ -70,7 +70,7 @@ dominated by the *types in the signature*:
 | Reason | ~Count | Meaning |
 | --- | ---: | --- |
 | `sig-param TY_APP` | 4352 | a parametric type-app parameter (`option<T>`, `list<T>`, `Cons<int>`, ...) |
-| `sig-param TY_FN` | 2504 | a plain (non-rank-2) function-typed parameter |
+| `sig-param TY_FN` | 2504 | a plain (non-rank-2) function-typed parameter -- **effect-free ones now landed**; the residual is effectful callbacks |
 | `sig-ret TY_APP` | 625 | a parametric type-app return |
 | `sig-ret TY_NIL` | 2433 -> 206 | a nil/void return -- **now landed** (the residual 206 also have a bad param) |
 | `core:*` (nested perform, ...) | ~50 | genuine control-carrying gaps (small) |
@@ -476,10 +476,30 @@ fallback can be deleted:
     `7`). This alone cleared ~2200 of the measured sig-return fallbacks
     (void-returning loggers / writers / `record!`-style effects are common).
     Full suite: 2023 passed, 0 failed.
+  - **Effect-free plain `TY_FN` params LANDED.** A plain (non-rank-2)
+    function-typed parameter whose type carries **no effect row** (NULL or `{}`,
+    via `effect_row_is_empty`) is now admitted by `fn_sig_ok`. `emit_params`
+    emits it with the direct emitter's function-pointer spelling -- a `cfnptr`
+    becomes its registered `R (*)(A...)` typedef, an ordinary closure/fat carrier
+    the opaque `int64_t` -- so the `__cps` declaration and a delegated call
+    *through* the param (an uncolored `CT_LETRAW` the direct emitter emits with
+    the same convention) agree. The soundness discriminator is the effect row: an
+    **effectful** fn param (`(fn [..] #{E} ..)`), when invoked, performs a
+    Turmeric effect that would need DK threading, but a delegated call runs on the
+    fiber effect machine, which does not interoperate with DK -- so an effectful
+    fn param is deliberately *not* admitted and its function keeps falling back.
+    (Note: most monomorphic effect-free fn params are already the `is_poly_fn`
+    tur_poly_fn_t typed carrier; the newly-admitted set is `^fat` / cfnptr /
+    not-carrier-safe fn params that keep their nominal `TY_FN`.) Fixtures
+    `cps-backend-fn-param` (a `^fat` float callback, `direct == cps == 5.2`) and
+    `cps-backend-fn-param-effectful` (the effectful-callback soundness guard --
+    runs under the flag, stays on fallback, exact output). Full suite: 2035
+    passed, 0 failed.
   - **Remaining:** parametric type-app (`TY_APP`) params / returns -- the
-    non-scalar-parametric Tier-C work (carrier-ABI vs by-value apps) -- and plain
-    `TY_FN` params (a non-rank-2 function pointer, passed as `int64_t` / a cfnptr
-    typedef in the direct emitter; admit it the way `is_poly_fn` params are).
+    non-scalar-parametric Tier-C work (carrier-ABI vs by-value apps) -- and
+    **effectful** `TY_FN` callback params, which need genuine colored-indirect-call
+    support (the callee threads the caller's DK continuation) rather than
+    delegation.
 - **N6.5 -- delete the fallback.** Remove the `CT_UNSUPPORTED` whole-function
   bail-out and the direct-vs-CPS dual path from `emit_cps_ir.c` / the classifier.
   Any residual form becomes a hard error; give it a **form-named diagnostic**
