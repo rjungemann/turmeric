@@ -169,7 +169,18 @@ or thread `EmitCtx` (or a resolve hook) into `emit_cps_ir_program_has_emittable`
 unlock the *return-crossing* slice (a real round-trip fixture, since the direct
 baseline works), independent of P1/P2/P3/P5.
 
-### P5 -- an aggregate effect *argument* loses its type in the handler
+### P5 -- an aggregate effect *argument* loses its type in the handler -- **RESOLVED**
+
+**Resolved.** `defeffect` now resolves and stores the full parameter Types
+(`EffectConstructor.param_full_types`, populated when any param is an aggregate,
+resolving a keyword `:Pr` the same way as the result type), and the handler-case
+param binding uses the full Type instead of `type_from_kind(param_types[j])`, so
+`p` carries the real `Pr` def and field access elaborates. The aggregate effect
+argument then crosses the slot boxed at the `dk_perform` argument and is unboxed
+at the handler case. Fixture `tests/fixtures/cps-backend-tierc-effect-arg/`
+(`Put [p : Pr]`, CPS `== 42`; direct baseline blocked on P2). The original
+analysis is kept for the record:
+
 
 ```turmeric
 (defeffect Put [p : Pr] :int)
@@ -222,14 +233,14 @@ baseline. In ascending order of independence:
   `tests/fixtures/cps-backend-tierc-shift/` (`direct == cps == 42`). This box is
   loaded by the reset continuation without a free (`consume=false`, multi-shot
   safety) so it leaks alongside the DK nodes (`requires.no-leak-check`).
-- **T-C3: the effect payload / resume-value crossings.** The *effect-result*
-  crossing is **LANDED on the CPS path** (P1 resolved): an effect declaring an
-  aggregate result value threads it boxed through perform / resume
-  (`cps-backend-tierc-effect`). Remaining: **P5** (an aggregate effect *argument*
-  loses its type in the handler case -- the `Put [p : Pr]` form) and **P2** (the
-  direct/fiber baseline does not compile an aggregate effect crossing, so these
-  fixtures assert the CPS value rather than `direct == cps`, per the float-effect
-  precedent). P5 is CPS/elaboration-side; P2 is a direct-emitter fix.
+- **T-C3: the effect payload / resume-value crossings. -- LANDED on the CPS path
+  (P1 + P5 resolved).** An effect declaring an aggregate *result* value threads it
+  boxed through perform / resume (`cps-backend-tierc-effect`), and an aggregate
+  effect *argument* crosses boxed through `dk_perform` into the handler case
+  (`cps-backend-tierc-effect-arg`). Remaining: **P2** (the direct/fiber baseline
+  does not compile an aggregate effect crossing, so these fixtures assert the CPS
+  value rather than `direct == cps`, per the float-effect precedent). P2 is a
+  direct-emitter fix, independent of the CPS path.
 
 **Note on leak checking.** In some environments (including the one T-C1/T-C2 were
 developed in) LeakSanitizer is not active on the spawned fixture binary -- e.g.
