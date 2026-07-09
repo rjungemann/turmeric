@@ -121,14 +121,39 @@ enumerated spec set.
 
 ## Phased plan
 
-- **G1 -- carrier-ABI translation of a generic body under substitution.**
-  Teach `cps_ir_translate_fn` (or a wrapper) to accept an `EmitAbiSpecialization`
-  and translate the generic `fd->body` with `bindings[]` type substitution
-  applied, yielding a monomorph CTerm whose param/return types are the concrete
-  spec types. Unit: for a self-contained colored generic (perform+handle in the
-  same body, e.g. `choose-or`), the monomorph CTerm passes `term_core_ok`.
-  Landable behind a dump flag (`--dump-cps-mono`) with no emit change -- pure
-  analysis, zero risk to existing output.
+- **G1 -- translate a generic body under substitution + report admissibility.
+  LANDED (analysis-only).** Rather than deep-copy the body with substituted
+  types, the probe translates the generic body as-is (`cps_ir_translate_fn`) and
+  makes the *gate* substitution-aware: a `g_cps_mono_resolver` hook (an `EmitCtx
+  *`, non-NULL only during the probe) is consulted by `slot_ok_t`, which resolves
+  each type through the active `EmitAbiSpecialization` (`emit_resolve_type`)
+  before gating. So the existing `fn_sig_ok` / `term_core_ok` run **unchanged**
+  but see the monomorph's concrete types. Wired behind `--dump-cps-mono`
+  (`g_dump_cps_mono`), fired from `emit_cps_ir_try_fn` when
+  `ctx->current_abi_specialization` pins a colored generic; prints
+  `[cps-mono] <clone_name>: sig=.. body=.. => ADMISSIBLE|fallback`. The
+  `slot_ok_t` hook is a strict no-op when the flag is off (full suite: 2037
+  passed, 0 failed -- zero emit change). Verified: `choose-or` (`(Option A)`
+  param), `wrapit` (`(Option A)` return), and `firstish` (`(Pair A B)` param) all
+  report **ADMISSIBLE** at their `int` monomorphs -- the substitution-translation
+  works for the stdlib-parametric-ADT surface (the bulk of `sig-param TY_APP`).
+
+  *Finding for G2 (resolver completeness).* A **user-defstruct** generic
+  (`(defstruct Box [A] (val A) (tag :int))`, `boxup : (Box A)`) reports a **false
+  `fallback`**: its *concrete* analog (a `defstruct BoxI [val tag]` monomorphic
+  fn) CPS-emits fine, but `emit_resolve_type` resolves `(Box A)` to a `(Box int)`
+  `TY_APP` **without attaching the monomorphized `AdtDef`**, so `slot_box_ty`
+  cannot see it is an owning-free by-value product. Stdlib ADTs dodge this
+  because their monomorphs are pre-registered. G2/G3 must materialize the full
+  monomorph type (the direct emitter's `emit_abi_instantiate_type` + monomorph
+  ADT registration), not just `emit_resolve_type`, to admit user-defstruct
+  generics. The probe is honest about this: it *under*-reports (never claims a
+  fallback monomorph is admissible), so it is a safe lower bound on the surface.
+
+  Only a scalar-tyvar generic (`f [T] [x : T]`, `T`=int) has no distinct
+  `__spec__` clone -- it emits once as the int64-carrier base generic, so the
+  probe (which keys on an active specialization) does not cover it; that is a
+  separate carrier-generic sub-case, not part of the `TY_APP` monomorph surface.
 
 - **G2 -- shared monomorph-discovery pass.** Factor the direct emitter's spec
   interning so the set of `(generic, arg_types, result_type)` monomorphs is
@@ -153,21 +178,30 @@ enumerated spec set.
   carriers, already admitted). The generic *template* still sig-rejects and stays
   dead -- that is correct.
 
-## Recommendation
+## Status / recommendation
 
-This is a materially larger lift than the prior N6 slices (which were single-pass
-gate widenings). It touches classification ordering, the specialization pipeline,
-and emit routing -- G2 in particular refactors shared discovery logic. It is the
-right next big lever *if* we want to close the generic surface, but it is not a
-one-sitting surgical change, and the current behavior is already sound.
+**G1 is landed** (analysis-only, zero emit change) -- the substitution-translation
+is proven for the stdlib-parametric-ADT surface, and G1 surfaced the concrete G2
+requirement: the type resolver must materialize the full monomorph ADT (not just
+`emit_resolve_type`) to cover user-defstruct generics.
 
-Options, in the spirit of the one-track-to-v1 priority:
+G2-G4 remain a materially larger lift than the prior N6 slices (which were
+single-pass gate widenings). They touch classification ordering, the
+specialization pipeline, and emit routing -- G2 in particular refactors shared
+discovery logic and upgrades the resolver. This is the right next big lever *if*
+we want to close the generic surface, but it is not a one-sitting surgical
+change, and the current behavior is already sound (effect-taint keeps generic
+monomorphs on fiber without splitting any DK chain).
 
-- **Proceed with G1** first -- it is self-contained, zero-risk (dump-only), and
-  de-risks the rest by proving the substitution-translation works.
-- **Defer** and keep picking off smaller residuals (effect-free surface is
-  largely done; the remaining small items are effectful callbacks and the
-  delimited-control tail), returning to this once those are exhausted.
+Next-step options, in the spirit of the one-track-to-v1 priority:
+
+- **Proceed to G2** -- factor a shared monomorph-discovery pass that enumerates
+  specs before `ensure_S`'s taint fixpoint, and upgrade the probe's resolver to
+  the full monomorph-ADT materialization (closing the user-defstruct
+  false-negative). Still landable dump-only before any emit change.
+- **Defer G2-G4** and keep picking off smaller residuals (the remaining small
+  items are effectful callbacks and the delimited-control tail), returning to
+  this once those are exhausted.
 
 ## Depends on / reuses
 

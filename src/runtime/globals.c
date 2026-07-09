@@ -206,6 +206,10 @@ bool g_werror_inline_c_narrow_params = false;
  * with `--dump-mono-specs` (g_dump_mono_specs) to review the keying. */
 bool g_dump_mono_specs = false;
 
+/* --dump-cps-mono: report CPS-subset admissibility of colored-generic
+ * monomorphs (G1 of the generic-monomorph-classification plan).  Analysis only. */
+bool g_dump_cps_mono = false;
+
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signature registry (see globals.h).
  * --------------------------------------------------------------------------- */

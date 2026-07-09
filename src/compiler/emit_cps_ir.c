@@ -141,7 +141,19 @@ static bool carrier_handle_ok(const Type *t) {
  * the full Type is available (the bare-TypeKind slot_ty stays for scalar-only
  * sites).  It is deliberately WIDER than cap_ty_ok: a value may cross a slot by a
  * single move even when it may not be duplicated into a capture env. */
+/* G1 (cps-backend-generic-monomorph-classification-plan): when set (only during
+ * the --dump-cps-mono admissibility probe), slot_ok_t resolves a type through the
+ * active monomorph specialization before gating -- so a generic body's tyvar
+ * types (`A`, `(Option A)`) are checked at their CONCRETE monomorph types.  NULL
+ * in every real emit path, so this is a strict no-op outside the probe. */
+static EmitCtx *g_cps_mono_resolver = NULL;
+
 static bool slot_ok_t(const Type *t, TypeKind k) {
+    Type rt;
+    if (g_cps_mono_resolver && t) {
+        rt = emit_resolve_type(g_cps_mono_resolver, *(Type *)t);
+        t = &rt; k = rt.kind;
+    }
     return slot_ty(k) || slot_box_ty(t) || carrier_handle_ok(t);
 }
 
@@ -2329,7 +2341,36 @@ bool emit_cps_ir_program_has_emittable(const Expr *program) {
     return false;
 }
 
+/* G1 (cps-backend-generic-monomorph-classification-plan): analysis-only probe.
+ * When --dump-cps-mono is set and this call is emitting a colored-generic
+ * MONOMORPH body (ctx->current_abi_specialization pins fd to concrete type args),
+ * report whether that monomorph's concrete signature + body would land in the
+ * CPS-backend subset -- the information the generic template cannot give (it
+ * sig-rejects on the tyvar TY_APP and is never a candidate).  Substitution is via
+ * emit_resolve_type through the active spec (the g_cps_mono_resolver hook that
+ * slot_ok_t consults).  Changes no emitted code; a pure `stderr` report. */
+static void cps_dump_mono_admissible(EmitCtx *ctx, FnDef *fd) {
+    const EmitAbiSpecialization *spec = ctx->current_abi_specialization;
+    if (!spec || spec->fn != fd || !fd->body) return;
+    if (!fd->cps_colored) return;   /* only colored generics are interesting */
+    Arena tmp; arena_init(&tmp, 1 << 16);
+    CTerm *t = cps_ir_translate_fn(&tmp, (Expr *)ctx->program_root, fd);
+    g_cps_mono_resolver = ctx;
+    bool sig  = fn_sig_ok(fd);
+    bool body = t && term_core_ok(t);
+    g_cps_mono_resolver = NULL;
+    const char *nm = spec->clone_name ? spec->clone_name
+                   : (fd->binding && fd->binding->name ? fd->binding->name->name : "?");
+    fprintf(stderr, "[cps-mono] %s: sig=%s body=%s => %s\n",
+            nm, sig ? "ok" : "no", body ? "ok" : "no",
+            (sig && body) ? "ADMISSIBLE" : "fallback");
+    arena_free(&tmp);
+}
+
 bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
+    if (g_dump_cps_mono && e && e->kind == EX_FN_DEF && e->as.fn_def_.fn
+        && ctx->current_abi_specialization)
+        cps_dump_mono_admissible(ctx, e->as.fn_def_.fn);
     if (!g_opt_cps_backend) return false;
     if (!e || e->kind != EX_FN_DEF || !e->as.fn_def_.fn) return false;
     FnDef *fd = e->as.fn_def_.fn;

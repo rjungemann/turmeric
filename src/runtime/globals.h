@@ -202,6 +202,14 @@ extern bool g_werror_inline_c_narrow_params;
  * elaboration. */
 extern bool g_dump_mono_specs;
 
+/* `g_dump_cps_mono` (from `--dump-cps-mono`) prints, for each colored-generic
+ * MONOMORPH the direct emitter specializes, whether that monomorph's body +
+ * concrete signature would land in the CPS-backend subset (its generic template
+ * sig-rejects on the tyvar TY_APP, so the template is never a candidate).  See
+ * docs/upcoming/v1/cps-backend-generic-monomorph-classification-plan.md (G1).
+ * Analysis only -- it changes no emitted code. */
+extern bool g_dump_cps_mono;
+
 
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signatures
