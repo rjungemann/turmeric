@@ -216,6 +216,28 @@ static bool is_delegatable_struct(const Expr *e) {
     }
 }
 
+/* A capture-free fn-value wrapper -- a bare fn coerced to a fat/poly callable, or
+ * a closure literal with no captured free variables.  Such a value is not a call
+ * and not a control op, and (being capture-free) references no enclosing local,
+ * so it is safe to delegate to the direct emitter via CT_LETRAW anywhere,
+ * including inside a lifted zero-capture body.  A CAPTURING closure is NOT
+ * delegated here: its free vars would need the has_capture cut to see them, so it
+ * falls back conservatively.  The wrapped fn body is a call-graph boundary
+ * (colored on its own merits), never executed at this position. (N6.1) */
+static bool is_delegatable_value(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_FN_TO_FAT:
+        case EX_POLY_WRAP:
+        case EX_FN:
+            return true;
+        case EX_CLOSURE:
+            return e->as.closure_.closure && e->as.closure_.closure->n_captures == 0;
+        default:
+            return false;
+    }
+}
+
 /* True if every argument of an EX_CALL is atomic (so the whole call can be
  * delegated to the direct emitter without control ops hiding in an arg). */
 static bool call_args_atomic(const Expr *e) {
@@ -345,7 +367,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
         t->as.appcont.v = atom_of(e);
         return t;
     }
-    if (is_delegatable_owning(e) || is_delegatable_struct(e)) {
+    if (is_delegatable_owning(e) || is_delegatable_struct(e) || is_delegatable_value(e)) {
         /* bind the delegated op's result, then deliver it to the continuation. */
         CVar x = fresh_cvar(b, &e->type);
         CTerm *ac = new_term(b, CT_APPCONT);
@@ -493,7 +515,8 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         t->as.letval.x = x; t->as.letval.v = atom_of(e); t->as.letval.body = rest;
         return t;
     }
-    if (is_delegatable_owning(e) || is_delegatable_struct(e)) return build_letraw(b, e, x, rest);
+    if (is_delegatable_owning(e) || is_delegatable_struct(e) || is_delegatable_value(e))
+        return build_letraw(b, e, x, rest);
     switch (e->kind) {
         case EX_BUILTIN: {
             Pending p = {0};

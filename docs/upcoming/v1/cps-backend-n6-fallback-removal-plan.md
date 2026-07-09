@@ -136,6 +136,19 @@ fallback can be deleted:
   Round-trip fixtures: a colored function whose body wraps an effect in a
   `match` / `while` / closure, `direct == cps`. Re-measure the surface.
 
+  **Started -- capture-free fn-values landed.** `is_delegatable_value` (bare fn /
+  `EX_FN_TO_FAT` / `EX_POLY_WRAP`, and an `EX_CLOSURE` with `n_captures == 0`) now
+  delegates through `CT_LETRAW` in both `cps_bind` and `cps_tail`. A capture-free
+  fn value references no enclosing local, so it is sound to delegate anywhere
+  (including a lifted zero-capture body); a capturing closure still falls back
+  (its free vars need the `has_capture` cut -- that is N6.3). Fixture
+  `cps-backend-closure-local`: a colored `f` builds a `Box` holding
+  `(fn [n] (+ n 1))` in its perform continuation; the closure delegates and `f`
+  CPS-emits (`direct == cps == 10`) where it previously fell back. Full suite:
+  2009 passed, 0 failed. Remaining N6.1: the general control-op-free /
+  colored-call-free predicate (`match` / `while` / `panic` / `ref` / `set!` /
+  `defer` / inline-C) with the lifted-body subset-predicate widening.
+
   **Entanglement to plan for (found while scoping):** a delegatable form in a
   colored function most often sits in a *continuation* -- the body of a
   `perform` / `shift` / `reset` / handler case -- not the straight-line main
