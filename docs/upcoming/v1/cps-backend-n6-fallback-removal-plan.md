@@ -224,9 +224,19 @@ fallback can be deleted:
   performs `Put` with a `match` argument -- the match delegates and `f` CPS-emits
   (`direct == cps == 105`). Full suite: 2010 passed, 0 failed.
 
-  **Remaining N6.1:** delegated composites in *lifted continuation* positions
-  (free vars flowing into a perform/shift/handler body) still fall back -- that
-  needs the free-var-aware capture handling of N6.3.
+  **N6.1 tail LANDED (delegated composites in lifted positions).** A delegated
+  composite (`while` / `for` / `match` / `do` / `let` / `set!` / `cast` / ...) in
+  a lifted continuation used to fall back: `collect_caps` only enumerated a fixed
+  set of simple delegated ops (rc/*, get-field, make-struct, call, closure) and
+  bailed on anything else. It now reuses the elaborator's complete free-variable
+  walker (`collect_free_vars`, the same analysis the closure-capture pass uses)
+  for the un-enumerated forms, capturing every enclosing var the composite
+  references (filtered against the CPS-bound set / exclude / globals). Soundness
+  is self-checking: a missed free var becomes an undeclared C name in the lifted
+  helper -- a compile error, not a silent miscompile -- and a non-Copy capture
+  still bails in `cap_add`. Fixture `cps-backend-composite-in-continuation`: a
+  post-handle `while` loop that reads the enclosing `base` and mutates a `^mut`
+  local CPS-emits (`direct == cps == 40`). Full suite: 2025 passed, 0 failed.
 
   **Entanglement to plan for (found while scoping):** a delegatable form in a
   colored function most often sits in a *continuation* -- the body of a

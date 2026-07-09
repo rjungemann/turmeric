@@ -12,6 +12,14 @@
 #include "arena.h"
 #include "expr.h"
 
+/* The elaborator's complete free-variable walker (backs the closure-capture
+ * pass).  Reused here to find every enclosing var a delegated *composite*
+ * (match / while / for / do / let / set! / ...) references, so such a form can be
+ * lifted into a continuation env.  Declared in elab_internal.h. */
+Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
+                            Binding **self_exclude, uint32_t n_self_exclude,
+                            uint32_t *n_out);
+
 /* =========================================================================
  * CPS-IR-to-C backend -- Phase C1.  See emit_cps_ir.h for the ABI and scope.
  *
@@ -590,8 +598,30 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
                     }
                     break;
                 }
-                default:
-                    cs->ok = false; return;
+                default: {
+                    /* A delegated composite (match / while / for / do / let /
+                     * set! / cast / ...) the enumerated cases above do not cover.
+                     * Use the elaborator's complete free-var walker to find every
+                     * enclosing var it references and capture each (filtered
+                     * against the CPS-bound set / exclude / globals).  The walker
+                     * is the same complete analysis the closure-capture pass uses;
+                     * and if it ever missed a free var, that var would be an
+                     * undeclared C name in the lifted helper -- a compile error,
+                     * not a silent miscompile.  A non-Copy capture (owning handle,
+                     * ...) still bails inside cap_add, keeping such a form as a
+                     * fallback. */
+                    uint32_t n_fv = 0;
+                    Binding **fv = collect_free_vars(le, NULL, 0, NULL, 0, &n_fv);
+                    for (uint32_t i = 0; i < n_fv && cs->ok; i++) {
+                        const Binding *b = fv[i];
+                        if (!b || b->is_global || binding_excluded(b)) continue;
+                        uint32_t _id = b->id; bool _f = (_id != exclude);
+                        for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
+                        if (_f) cap_add(cs, b, b->type.kind, &b->type);
+                    }
+                    free(fv);
+                    break;
+                }
             }
             bound[nb] = t->as.letraw.x.id;
             collect_caps_rec(t->as.letraw.body, exclude, bound, nb + 1, cs); return;
