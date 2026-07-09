@@ -309,9 +309,22 @@ an effect boundary now CPS-emit (fixtures `cps-backend-option-effect`,
     with the `Type` now available; by-value wide aggregate = **Tier C**
     box-at-boundary (heap-copy on store, deref+free on load). Deferred.
 
-### N3-TierC -- wide by-value aggregate crossing (box-at-boundary) -- investigated; blocked on upstream prerequisites
+### N3-TierC -- wide by-value aggregate crossing (box-at-boundary) -- return crossing (T-C1) LANDED; effect/reset crossings blocked on P1-P3,P5
 
-**Design settled (box-at-boundary), landing blocked on five upstream gaps.**
+**T-C1 (return crossing) landed.** A colored function that RETURNS an owning-free
+by-value product is CPS-emitted: the box-at-boundary machinery
+(`slot_store`/`slot_load` with the full `Type`) heap-copies it into the slot at
+the `KK_RET` boundary and unboxes+frees it at the single-shot entry. P4 (the NULL
+aggregate-return def) was resolved by taking the crossing Type from
+`fd->body->type` (which carries the real def) rather than `fd->return_type`, so
+no `EmitCtx` threading into classification was needed; a missing `CT_LETRAW` case
+in `joins_closed_rec` (a pre-existing N3 gap) was fixed alongside. Fixture
+`cps-backend-tierc-return` (`direct == cps == 42`, LeakSanitizer-clean). The
+remaining crossings (effect payload / resume value; reset/shift result) stay
+blocked on P1-P3, P5 -- see
+[cps-backend-tier-c-crossing-plan.md](cps-backend-tier-c-crossing-plan.md).
+
+**Design settled (box-at-boundary); original five-gap investigation follows.**
 The emit design is decided and small: `slot_store` heap-copies an owning-free
 by-value product and stores the pointer; `slot_load` derefs (and frees at the
 single-shot root boundary), guarded by
@@ -400,13 +413,15 @@ must be true at graduation:
    bit-reinterpret slot convention. *Done* (`slot_store`/`slot_load` at all six
    boundaries; `cps-backend-float` / `cps-backend-float-effect` fixtures).
 3. **Tier C complete** (N3-TierC) -- wide by-value aggregates that *cross* the
-   slot (effect payload / resume value / return) box at the boundary. *Design
-   settled, landing blocked on five upstream prerequisites* (effect ADT value/arg
-   types, the direct-path fiber crossing, shift-body struct translation, and the
-   NULL aggregate-return def + no-EmitCtx-at-classification issue). The
-   box-at-boundary emit machinery is cheap; the recommended first slice is the
-   **return crossing** (fix P4), which has a working direct baseline. Full
-   investigation + fix order:
+   slot (effect payload / resume value / return) box at the boundary. *Return
+   crossing (T-C1) LANDED*; the remaining crossings (effect payload / resume
+   value, and reset/shift result) are blocked on prerequisites P1-P3, P5. The
+   box-at-boundary machinery is in place and threaded to all six DK boundaries
+   (`slot_store`/`slot_load` box an owning-free by-value product); a colored
+   function returning such a product is CPS-emitted, boxed at the `KK_RET`
+   boundary and unboxed+freed at the single-shot entry (fixture
+   `cps-backend-tierc-return`, `direct == cps == 42`, LeakSanitizer-clean). Full
+   investigation + fix order + landed status:
    [cps-backend-tier-c-crossing-plan.md](cps-backend-tier-c-crossing-plan.md).
    (struct/ADT LOCALS that stay off the slot already work -- see item 6.)
 4. **Owning pointers handled correctly on the CPS path** -- `ref` / `rc` /

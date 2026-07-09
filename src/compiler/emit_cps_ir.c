@@ -66,14 +66,58 @@ static bool slot_ty(TypeKind k) {
 }
 
 static const char *binder_ctype(EmitCtx *ctx, TypeKind ty);
+static const char *binder_ctype_full(EmitCtx *ctx, TypeKind ty, const Type *t);
 
-/* Tier B slot crossing: a float's bit pattern fits the 64-bit slot but is not an
- * integer, so it crosses by *reinterpret*, not a numeric cast ((intptr_t)3.5
- * would truncate to 3).  Tier A values cross by a plain cast.  Both return a
- * malloc'd C expression. */
-static char *slot_store(TypeKind k, const char *e) {
+/* The AdtDef at the head of a struct / ADT / ADT-app type, or NULL. */
+static const AdtDef *slot_agg_def(const Type *t) {
+    if (!t) return NULL;
+    if (t->kind == TY_ADT) return t->as.adt_.def;
+    if (t->kind == TY_APP) return type_adt_app_def((Type *)t);
+    return NULL;
+}
+
+/* Tier C: a by-value aggregate that must be BOXED (heap-copied) to cross the
+ * one-word DK slot -- as opposed to a carrier-ABI aggregate whose bit pattern
+ * already IS the int64 carrier (would ride the slot by a plain cast) or a scalar
+ * (Tier A/B).
+ *
+ * Restricted to owning-free flat products (`needs_drop_glue == false`): the box
+ * is then a pure bitwise value copy with no refcount / drop concern, so it is
+ * safe to heap-copy on store and deref on load even under a multi-shot
+ * continuation (each crossing gets its own independent copy).  Aggregates with
+ * owning fields (rc / ref / weak) still fall back -- their crossing needs
+ * retain-on-copy plus drop glue (N3-O2).  Carrier heap-ADT / parametric-app
+ * handles also stay out (bit-copying an owning int64 handle would duplicate its
+ * refcount).  The def must be present: a bare surface annotation (e.g. a NULL
+ * `return_type` def) is not enough -- callers pass the body/value Type, which
+ * carries the real monomorphized def. */
+static bool slot_box_ty(const Type *t) {
+    if (!t) return false;
+    if (!type_is_byvalue_adt_product(*(Type *)t)) return false;
+    const AdtDef *d = slot_agg_def(t);
+    return d && !d->needs_drop_glue;
+}
+
+/* A value can cross the DK slot at the current tier: a Tier A/B scalar, or a
+ * Tier C owning-free by-value aggregate (boxed).  This is the whole-Type gate
+ * used by classification wherever the full Type is available (the bare-TypeKind
+ * slot_ty stays for the scalar-only sites). */
+static bool slot_ok_t(const Type *t, TypeKind k) {
+    return slot_ty(k) || slot_box_ty(t);
+}
+
+/* Store a value into the one-word slot.  Returns a malloc'd C expression.
+ *   Tier A: plain cast.
+ *   Tier B: bit-reinterpret ((intptr_t)3.5 would truncate the fraction).
+ *   Tier C: heap-copy the aggregate and store the pointer (unboxed on load). */
+static char *slot_store(EmitCtx *ctx, TypeKind k, const Type *t, const char *e) {
     Buf b; buf_init(&b);
-    if (k == TY_FLOAT || k == TY_FLOAT64)
+    if (slot_box_ty(t)) {
+        const char *cty = emit_type_c_name(ctx, *(Type *)t);
+        buf_printf(&b,
+            "(intptr_t)({ %s *__bx = (%s *)malloc(sizeof(%s)); *__bx = (%s); __bx; })",
+            cty, cty, cty, e);
+    } else if (k == TY_FLOAT || k == TY_FLOAT64)
         buf_printf(&b, "(intptr_t)((union { double d; int64_t i; }){ .d = (%s) }).i", e);
     else if (k == TY_FLOAT32)
         buf_printf(&b, "(intptr_t)(uint32_t)((union { float f; uint32_t u; }){ .f = (%s) }).u", e);
@@ -83,9 +127,23 @@ static char *slot_store(TypeKind k, const char *e) {
     char *s = strdup(b.data); buf_free(&b); return s;
 }
 
-static char *slot_load(EmitCtx *ctx, TypeKind k, const char *s) {
+/* Load a value out of the one-word slot.  Returns a malloc'd C expression.
+ *   Tier C: deref the boxed pointer to a value copy.  `consume` additionally
+ *   frees the box -- only sound at a single-shot boundary (the root entry
+ *   unwrap).  The continuation-internal boundaries pass consume=false and leak
+ *   the box (matching the intentional DK-node leak): a multi-shot continuation
+ *   could load the same slot more than once, so freeing there would double-free. */
+static char *slot_load(EmitCtx *ctx, TypeKind k, const Type *t, const char *s, bool consume) {
     Buf b; buf_init(&b);
-    if (k == TY_FLOAT || k == TY_FLOAT64)
+    if (slot_box_ty(t)) {
+        const char *cty = emit_type_c_name(ctx, *(Type *)t);
+        if (consume)
+            buf_printf(&b,
+                "({ %s *__bx = (%s *)(%s); %s __v = *__bx; free(__bx); __v; })",
+                cty, cty, s, cty);
+        else
+            buf_printf(&b, "(*(%s *)(%s))", cty, s);
+    } else if (k == TY_FLOAT || k == TY_FLOAT64)
         buf_printf(&b, "((union { double d; int64_t i; }){ .i = (int64_t)(%s) }).d", s);
     else if (k == TY_FLOAT32)
         buf_printf(&b, "((union { float f; uint32_t u; }){ .u = (uint32_t)(%s) }).f", s);
@@ -93,6 +151,20 @@ static char *slot_load(EmitCtx *ctx, TypeKind k, const char *s) {
         buf_printf(&b, "(%s)(%s)", binder_ctype(ctx, k), s);
     buf_putc(&b, '\0');
     char *r = strdup(b.data); buf_free(&b); return r;
+}
+
+/* The Type a colored function's value has when delivered to KK_RET.  fd->return_type
+ * can carry a NULL ADT def (the surface annotation is not def-resolved); the body's
+ * type carries the real monomorphized def and the body's value is exactly what is
+ * delivered, so prefer it for an aggregate return. */
+static const Type *fn_ret_type(const FnDef *fd) {
+    if (fd->body) {
+        TypeKind bk = fd->body->type.kind;
+        if ((bk == TY_ADT || bk == TY_APP || bk == TY_STRUCT)
+            && slot_agg_def(&fd->body->type))
+            return &fd->body->type;
+    }
+    return &fd->return_type;
 }
 
 /* The C type used to declare a let-binder of type kind `ty` (TY_NIL binders are
@@ -122,7 +194,7 @@ static bool atom_ok(const CAtom *a) {
         case CA_STR:  return true;   /* cstr literal (Tier A pointer) */
         case CA_FLOAT: return true;  /* float/double literal (Tier B) */
         case CA_VAR:
-        case CA_CVAR: return slot_ty(a->ty) || a->ty == TY_NIL;
+        case CA_CVAR: return slot_ok_t(a->type, a->ty) || a->ty == TY_NIL;
         default:      return false;  /* CA_OTHER */
     }
 }
@@ -297,6 +369,7 @@ static bool joins_closed_rec(const CTerm *t, uint32_t *def, int nd) {
         case CT_LETVAL:  return joins_closed_rec(t->as.letval.body, def, nd);
         case CT_LETPRIM: return joins_closed_rec(t->as.letprim.body, def, nd);
         case CT_LETCALL: return joins_closed_rec(t->as.letcall.body, def, nd);
+        case CT_LETRAW:  return joins_closed_rec(t->as.letraw.body, def, nd);
         case CT_TAILCALL:
             if (t->as.tailcall.kont.kind == KK_VAR) {
                 for (int i = 0; i < nd; i++) if (def[i] == t->as.tailcall.kont.id) return true;
@@ -481,7 +554,7 @@ static bool term_core_ok(const CTerm *t) {
         case CT_APPCONT:
             return t->as.appcont.kont.kind != KK_PROMPT && atom_ok(&t->as.appcont.v);
         case CT_LETVAL:
-            return (slot_ty(t->as.letval.x.ty) || t->as.letval.x.ty == TY_NIL)
+            return (slot_ok_t(t->as.letval.x.type, t->as.letval.x.ty) || t->as.letval.x.ty == TY_NIL)
                 && atom_ok(&t->as.letval.v)
                 && term_core_ok(t->as.letval.body);
         case CT_LETPRIM: {
@@ -520,7 +593,7 @@ static bool term_core_ok(const CTerm *t) {
             return true;
         }
         case CT_LETCONT:
-            return (slot_ty(t->as.letcont.param.ty) || t->as.letcont.param.ty == TY_NIL)
+            return (slot_ok_t(t->as.letcont.param.type, t->as.letcont.param.ty) || t->as.letcont.param.ty == TY_NIL)
                 && term_core_ok(t->as.letcont.jbody)
                 && term_core_ok(t->as.letcont.body);
         case CT_IF:
@@ -529,7 +602,7 @@ static bool term_core_ok(const CTerm *t) {
                 && term_core_ok(t->as.if_.else_);
         case CT_RESET:
             /* C3: delimited body + a self-contained, zero-capture continuation. */
-            return (slot_ty(t->as.reset.x.ty) || t->as.reset.x.ty == TY_NIL)
+            return (slot_ok_t(t->as.reset.x.type, t->as.reset.x.ty) || t->as.reset.x.ty == TY_NIL)
                 && term_core_ok(t->as.reset.delim)
                 && reset_body_ok(t->as.reset.body)
                 && !has_capture(t->as.reset.body, t->as.reset.x.id);
@@ -543,7 +616,7 @@ static bool term_core_ok(const CTerm *t) {
             /* C4: single-case, <=1 effect param, self-contained zero-capture
              * continuation, straight-line handler case. */
             return t->as.handle.n_params <= 1
-                && (slot_ty(t->as.handle.x.ty) || t->as.handle.x.ty == TY_NIL)
+                && (slot_ok_t(t->as.handle.x.type, t->as.handle.x.ty) || t->as.handle.x.ty == TY_NIL)
                 && term_core_ok(t->as.handle.delim)
                 && reset_body_ok(t->as.handle.body)
                 && !has_capture(t->as.handle.body, t->as.handle.x.id)
@@ -564,9 +637,15 @@ static bool term_core_ok(const CTerm *t) {
 }
 
 static bool fn_sig_ok(const FnDef *fd) {
-    if (!slot_ty(fd->return_type.kind)) return false;   /* nil-return excluded in C1 */
+    /* Return crosses the slot (Tier A/B scalar or Tier C boxed aggregate);
+     * nil-return excluded in C1.  fn_ret_type prefers the body Type, which
+     * carries the real def a NULL-def return annotation lacks.  A by-value
+     * aggregate param passes by value in C directly (never rides the slot) but is
+     * admitted through the same gate -- an owning-field aggregate stays out. */
+    const Type *rt = fn_ret_type(fd);
+    if (!slot_ok_t(rt, rt->kind)) return false;
     for (uint8_t i = 0; i < fd->n_params; i++)
-        if (!slot_ty(fd->params[i]->type.kind)) return false;
+        if (!slot_ok_t(&fd->params[i]->type, fd->params[i]->type.kind)) return false;
     return true;
 }
 
@@ -970,6 +1049,12 @@ typedef struct {
     int        *helper_ctr;  /* per-function unique-helper counter */
     bool        shift_mode;  /* true inside a shift-body / handler-case helper: KK_PROMPT -> return */
     bool        ret_mode;    /* true inside a perform-continuation frame: KK_RET -> return value */
+    /* Full Type a value has when it crosses the slot at each continuation target,
+     * so Tier C by-value aggregates box/unbox with their real (monomorphized) C
+     * type.  ret_ty = the function's return type (KK_RET); cur_ty = the innermost
+     * prompt's result type (KK_PROMPT).  NULL => scalar (Tier A/B). */
+    const Type *ret_ty;
+    const Type *cur_ty;
 } CE;
 
 static void ce_line(CE *ce, const char *fmt, ...) {
@@ -1076,13 +1161,24 @@ static void emit_letraw(CE *ce, const CTerm *t);
 static void emit_heap_join(CE *ce, const CTerm *t);
 static char *cvar_cname(CE *ce, CVar x);
 
-/* Deliver value-string `v` to continuation `kont`. */
+/* The full Type a value has when delivered to continuation `kont` (the target's
+ * result type), or NULL for a scalar / inline join.  Single source of truth for
+ * Tier C boxing at every deliver site. */
+static const Type *deliver_ty(CE *ce, const CKont *kont) {
+    if (kont->kind == KK_RET)    return ce->ret_ty;
+    if (kont->kind == KK_PROMPT) return ce->cur_ty;
+    return NULL;   /* KK_VAR: inline join, a plain C-local assignment */
+}
+
+/* Deliver value-string `v` to continuation `kont`.  A Tier C by-value aggregate
+ * is boxed into the slot on the way out (deliver_ty supplies its Type). */
 static void emit_deliver(CE *ce, const CKont *kont, const char *v) {
+    const Type *vty = deliver_ty(ce, kont);
     if (kont->kind == KK_RET) {
         /* In a perform-continuation frame the delivered value IS the result --
          * return it (dk_perform routes it to the handler's outer continuation);
          * otherwise run the function's return continuation. */
-        char *sv = slot_store(kont->ty, v);
+        char *sv = slot_store(ce->ctx, kont->ty, vty, v);
         if (ce->ret_mode)
             ce_line(ce, "return %s;", sv);
         else
@@ -1091,7 +1187,7 @@ static void emit_deliver(CE *ce, const CKont *kont, const char *v) {
     } else if (kont->kind == KK_PROMPT) {
         /* Deliver to the innermost prompt.  In a shift-body helper the delivered
          * value IS the shift result -- return it; otherwise run the prompt chain. */
-        char *sv = slot_store(kont->ty, v);
+        char *sv = slot_store(ce->ctx, kont->ty, vty, v);
         if (ce->shift_mode)
             ce_line(ce, "return %s;", sv);
         else
@@ -1364,10 +1460,11 @@ typedef enum {
 } LHMode;
 
 /* Emit one lifted helper into ce->helpers.  `xname` is the incoming value
- * parameter name (reset/perform continuation result var).  `hnode` is the
- * CT_HANDLE (for LH_HANDLER_CASE param/k binding), else NULL. */
+ * parameter name (reset/perform continuation result var); `xt` its full Type
+ * (may be NULL for a scalar) so a Tier C aggregate value-param unboxes.  `hnode`
+ * is the CT_HANDLE (for LH_HANDLER_CASE param/k binding), else NULL. */
 static void emit_lifted(CE *ce, const char *name, LHMode mode,
-                        const char *xname, TypeKind xty,
+                        const char *xname, TypeKind xty, const Type *xt,
                         const CTerm *body, const CTerm *hnode) {
     /* Emit the body into a temporary buffer first, so any nested reset/shift/
      * effect appends its own (inner) helpers ahead of this one in ce->helpers. */
@@ -1383,21 +1480,23 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     hc.ret_mode   = (mode == LH_PERFORM_CONT);
 
     /* Load the incoming value out of the one-word slot into a real-typed local
-     * (reset/perform continuation), or bind the handler case's params/k. */
+     * (reset/perform continuation), or bind the handler case's params/k.  The
+     * value-param load leaks a Tier C box (consume=false): this frame can run
+     * more than once under a multi-shot resume. */
     if (mode == LH_RESET_CONT || mode == LH_PERFORM_CONT) {
         char slotexpr[160];
         snprintf(slotexpr, sizeof slotexpr, "%s__slot", xname);
-        char *ld = slot_load(ce->ctx, xty, slotexpr);
+        char *ld = slot_load(ce->ctx, xty, xt, slotexpr, false);
         indent_buf(&tmp, 4);
-        buf_printf(&tmp, "%s %s = %s;\n", binder_ctype(ce->ctx, xty), xname, ld);
+        buf_printf(&tmp, "%s %s = %s;\n", binder_ctype_full(ce->ctx, xty, xt), xname, ld);
         free(ld);
     }
     if (mode == LH_HANDLER_CASE && hnode) {
         if (hnode->as.handle.n_params >= 1) {
             const Binding *pb = hnode->as.handle.params[0];
             char *pn = name_for_binding(ce->ctx, pb);
-            const char *pty = binder_ctype(ce->ctx, pb->type.kind);
-            char *ld = slot_load(ce->ctx, pb->type.kind, "arg");
+            const char *pty = binder_ctype_full(ce->ctx, pb->type.kind, &pb->type);
+            char *ld = slot_load(ce->ctx, pb->type.kind, &pb->type, "arg", false);
             indent_buf(&tmp, 4);
             buf_printf(&tmp, "%s %s = %s;\n", pty, pn, ld);
             free(ld);
@@ -1457,7 +1556,7 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
     snprintf(jname, sizeof(jname), "%s_j%d", ce->fn_cn, id);
     char *xn = cvar_cname(ce, t->as.letcont.param);
     emit_lifted(ce, jname, LH_PERFORM_CONT, xn, t->as.letcont.param.ty,
-                t->as.letcont.jbody, NULL);
+                t->as.letcont.param.type, t->as.letcont.jbody, NULL);
     free(xn);
 
     char *fn = callee_name(call->as.tailcall.fn);
@@ -1480,7 +1579,8 @@ static void emit_reset(CE *ce, const CTerm *t) {
     char hname[256];
     snprintf(hname, sizeof(hname), "%s_k%d", ce->fn_cn, id);
     char *rxn = cvar_cname(ce, t->as.reset.x);
-    emit_lifted(ce, hname, LH_RESET_CONT, rxn, t->as.reset.x.ty, t->as.reset.body, NULL);
+    emit_lifted(ce, hname, LH_RESET_CONT, rxn, t->as.reset.x.ty, t->as.reset.x.type,
+                t->as.reset.body, NULL);
     free(rxn);
 
     char pchain[64];
@@ -1489,9 +1589,12 @@ static void emit_reset(CE *ce, const CTerm *t) {
             pchain, hname, ce->cur_k);
 
     const char *save = ce->cur_k;
+    const Type *save_ty = ce->cur_ty;
     ce->cur_k = arena_strdup(&g_arena, pchain, strlen(pchain));
+    ce->cur_ty = t->as.reset.x.type;    /* KK_PROMPT crossing type = reset result */
     emit_term(ce, t->as.reset.delim);   /* delivers to the prompt chain, tail */
     ce->cur_k = save;
+    ce->cur_ty = save_ty;
 }
 
 /* CT_SHIFT: capture the sub-continuation up to the nearest enclosing prompt and
@@ -1501,7 +1604,7 @@ static void emit_shift(CE *ce, const CTerm *t) {
     int id = (*ce->helper_ctr)++;
     char hname[256];
     snprintf(hname, sizeof(hname), "%s_s%d", ce->fn_cn, id);
-    emit_lifted(ce, hname, LH_SHIFT_BODY, NULL, TY_INT, t->as.shift.body, NULL);
+    emit_lifted(ce, hname, LH_SHIFT_BODY, NULL, TY_INT, NULL, t->as.shift.body, NULL);
     ce_line(ce, "return dk_run(dk_shift(1, %s, 0, %s), 0);", hname, ce->cur_k);
 }
 
@@ -1518,10 +1621,11 @@ static void emit_handle(CE *ce, const CTerm *t) {
     snprintf(cname, sizeof(cname), "%s_hc%d", ce->fn_cn, id);
     /* lift the handle continuation (like a reset continuation) */
     char *hxn = cvar_cname(ce, t->as.handle.x);
-    emit_lifted(ce, kname, LH_RESET_CONT, hxn, t->as.handle.x.ty, t->as.handle.body, NULL);
+    emit_lifted(ce, kname, LH_RESET_CONT, hxn, t->as.handle.x.ty, t->as.handle.x.type,
+                t->as.handle.body, NULL);
     free(hxn);
     /* lift the handler case as a DKHandler */
-    emit_lifted(ce, cname, LH_HANDLER_CASE, NULL, TY_INT, t->as.handle.case_body, t);
+    emit_lifted(ce, cname, LH_HANDLER_CASE, NULL, TY_INT, NULL, t->as.handle.case_body, t);
 
     int tag = effect_tag(t->as.handle.effect);
     char hchain[64];
@@ -1531,9 +1635,12 @@ static void emit_handle(CE *ce, const CTerm *t) {
         hchain, tag, cname, kname, ce->cur_k);
 
     const char *save = ce->cur_k;
+    const Type *save_ty = ce->cur_ty;
     ce->cur_k = arena_strdup(&g_arena, hchain, strlen(hchain));
+    ce->cur_ty = t->as.handle.x.type;    /* KK_PROMPT crossing type = handle result */
     emit_term(ce, t->as.handle.delim);   /* body runs threading the handler prompt */
     ce->cur_k = save;
+    ce->cur_ty = save_ty;
 }
 
 /* Is the perform continuation trivial -- deliver the result straight to the
@@ -1552,7 +1659,8 @@ static void emit_perform(CE *ce, const CTerm *t) {
     char *arg = (t->as.perform.n >= 1)
         ? atom_str(ce, &t->as.perform.args[0]) : strdup("0");
     TypeKind argty = (t->as.perform.n >= 1) ? t->as.perform.args[0].ty : TY_NIL;
-    char *sa = slot_store(argty, arg);
+    const Type *argt = (t->as.perform.n >= 1) ? t->as.perform.args[0].type : NULL;
+    char *sa = slot_store(ce->ctx, argty, argt, arg);
 
     if (perform_cont_trivial(t)) {
         ce_line(ce, "return dk_perform(%d, %s, %s);", tag, sa, ce->cur_k);
@@ -1561,7 +1669,8 @@ static void emit_perform(CE *ce, const CTerm *t) {
         char pname[256];
         snprintf(pname, sizeof(pname), "%s_pf%d", ce->fn_cn, id);
         char *pxn = cvar_cname(ce, t->as.perform.x);
-        emit_lifted(ce, pname, LH_PERFORM_CONT, pxn, t->as.perform.x.ty, t->as.perform.body, NULL);
+        emit_lifted(ce, pname, LH_PERFORM_CONT, pxn, t->as.perform.x.ty, t->as.perform.x.type,
+                    t->as.perform.body, NULL);
         free(pxn);
         ce_line(ce, "return dk_perform(%d, %s, dk_frame(%s, 0, %s));",
                 tag, sa, pname, ce->cur_k);
@@ -1574,11 +1683,12 @@ static void emit_resume(CE *ce, const CTerm *t) {
     /* resume k v = dk_invoke((DK*)k, v); slot-load the result and continue. */
     char *kk = atom_str(ce, &t->as.resume.k);
     char *vv = atom_str(ce, &t->as.resume.v);
-    char *sv = slot_store(t->as.resume.v.ty, vv);            /* resume value -> slot */
+    char *sv = slot_store(ce->ctx, t->as.resume.v.ty, t->as.resume.v.type, vv);  /* resume value -> slot */
     Buf inv; buf_init(&inv);
     buf_printf(&inv, "dk_invoke((DK *)(%s), %s)", kk, sv);
     buf_putc(&inv, '\0');
-    char *ld = slot_load(ce->ctx, t->as.resume.x.ty, inv.data);  /* result <- slot */
+    /* result <- slot; leak a Tier C box (the resumed continuation may be re-run). */
+    char *ld = slot_load(ce->ctx, t->as.resume.x.ty, t->as.resume.x.type, inv.data, false);
     char *bn = cvar_cname(ce, t->as.resume.x);
     ce_line(ce, "%s = %s;", bn, ld);
     buf_free(&inv);
@@ -1591,7 +1701,9 @@ static void emit_resume(CE *ce, const CTerm *t) {
 static void emit_params(EmitCtx *ctx, Buf *file, const FnDef *fd) {
     for (uint8_t i = 0; i < fd->n_params; i++) {
         if (i) buf_puts(file, ", ");
-        const char *pty = emit_type_c_name(ctx, emit_type_from_kind(fd->params[i]->type.kind));
+        /* A by-value aggregate param needs its real (monomorphized) C type, which
+         * emit_type_from_kind(TY_ADT/APP/STRUCT) loses -- use the full Type. */
+        const char *pty = binder_ctype_full(ctx, fd->params[i]->type.kind, &fd->params[i]->type);
         char *pn = name_for_binding(ctx, fd->params[i]);
         buf_printf(file, "%s %s", pty, pn);
         free(pn);
@@ -1651,6 +1763,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     CE ce; memset(&ce, 0, sizeof(ce));
     ce.ctx = ctx; ce.out = &body_buf; ce.helpers = &helpers; ce.indent = 4;
     ce.cur_k = "k"; ce.fn_cn = cn; ce.helper_ctr = &helper_ctr;
+    ce.ret_ty = fn_ret_type(fd);   /* KK_RET crossing type (Tier C aggregate return) */
     emit_binder_decls(&ce, se->term);
     emit_term(&ce, se->term);
     buf_putc(&body_buf, '\0');
@@ -1677,7 +1790,8 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
      * the CPS body, and returns (unwraps) the value delivered to the root.  The
      * seed chain is freed after the body returns; the CPS body never retains it
      * (a captured sub-continuation is always a copy). */
-    const char *rety = binder_ctype(ctx, fd->return_type.kind);
+    const Type *rt = fn_ret_type(fd);
+    const char *rety = binder_ctype_full(ctx, rt->kind, rt);
     buf_printf(file, "__attribute__((unused)) static %s %s(", rety, cn);
     emit_params(ctx, file, fd);
     buf_puts(file, ") {\n");
@@ -1692,8 +1806,9 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     if (fd->n_params) buf_puts(file, ", ");
     buf_puts(file, "__root);\n");
     buf_puts(file, "    dk_free(__root);\n");
-    /* slot-load the final delivered value back to the real return type. */
-    char *ld = slot_load(ctx, fd->return_type.kind, "__r");
+    /* slot-load the final delivered value back to the real return type.  This is
+     * the single-shot root boundary, so a Tier C box is consumed (freed) here. */
+    char *ld = slot_load(ctx, rt->kind, rt, "__r", true);
     buf_printf(file, "    return %s;\n}\n", ld);
     free(ld);
 

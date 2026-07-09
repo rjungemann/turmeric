@@ -99,7 +99,13 @@ for the main-body / perform-continuation positions, not for a shift body. So the
 emit path. **Fix locus:** `cps_ir.c` -- delegate `make-struct`/get-field in the
 shift-body translation (`cps_shift_body`), same as the main body.
 
-### P4 -- a function's aggregate *return* Type carries a NULL ADT def, and classification runs before any `EmitCtx` exists
+### P4 -- a function's aggregate *return* Type carries a NULL ADT def, and classification runs before any `EmitCtx` exists -- **RESOLVED (T-C1)**
+
+**Resolved** by `fn_ret_type(fd)` preferring `fd->body->type` (which carries the
+real def and is the value delivered to `KK_RET`) over the NULL-def
+`return_type`, so no `EmitCtx` is needed at classification time. See T-C1 in the
+reframed plan below. The original analysis is kept for the record:
+
 
 This is the closest miss. A colored function that builds a `Pr` from constants
 *after* a `reset` and returns it has a **working direct baseline** and a clean,
@@ -156,13 +162,32 @@ Tier C's emit design is done-on-paper and cheap; it is gated on landing at least
 one crossing with (a) a populated crossing `Type` and (b) a working direct
 baseline. In ascending order of independence:
 
-- **T-C1 (smallest real slice): the return crossing.** Fix **P4** (resolve the
-  aggregate return def at classification time). Then a colored function that
-  returns an owning-free by-value product is admitted; wire the box at the
-  `KK_RET` deliver + the free at the entry unwrap. Round-trip fixture: the
-  `outer`/`inner` program above (`direct == cps == 42`), LeakSanitizer-clean
-  (the entry unwrap is single-shot, so the box is freed, not leaked). **This is
-  the recommended first step** -- it is self-contained and has a green baseline.
+- **T-C1 (smallest real slice): the return crossing. -- LANDED.** The full
+  box-at-boundary machinery is wired: `slot_store`/`slot_load` take the full
+  `Type` and box/unbox an owning-free by-value product
+  (`type_is_byvalue_adt_product && !needs_drop_glue`); the `Type` is threaded to
+  all six DK boundaries (deliver via `CE.ret_ty`/`cur_ty`, lifted-frame value
+  param, handler-case arg, perform arg, resume value + result, entry unwrap);
+  `atom_ok` / `fn_sig_ok` / the subset predicates widen from `slot_ty(kind)` to
+  `slot_ty(kind) || slot_box_ty(type)`.
+
+  **P4 resolved without ctx threading.** The insight: `fd->return_type`'s NULL
+  ADT def is a surface-annotation artifact, but `fd->body->type` carries the
+  real monomorphized def and is *exactly* the value delivered to `KK_RET`. A new
+  `fn_ret_type(fd)` prefers the body Type for an aggregate return, so
+  classification (which runs at preamble time, before any `EmitCtx`) sees the
+  real def -- no signature churn needed. Two small fixes fell out: `emit_params`
+  / the entry return type now use the full param/return `Type`
+  (`emit_type_from_kind(TY_ADT)` loses the def), and **`joins_closed_rec` gained
+  a `CT_LETRAW` case** (it was missing, so any reset/handle continuation
+  containing a delegated `make-struct`/get-field was wrongly rejected -- a
+  pre-existing N3 gap this surfaced).
+
+  Round-trip fixture `tests/fixtures/cps-backend-tierc-return/`: `outer` returns
+  a `Pr` built after a cross-function `reset`; the reset-cont helper boxes it
+  (`dk_run(k, (intptr_t)malloc-copy)`) and the entry wrapper unboxes + **frees**
+  it (single-shot root). `direct == cps == 42`, LeakSanitizer-clean (no
+  `requires.no-leak-check`). Full suite: 2006 passed, 0 failed.
 - **T-C2: the reset/shift-result crossing.** Fix **P3** (delegate `make-struct`
   in the shift body). Round-trip: a cross-function shift/reset whose result is a
   by-value product.

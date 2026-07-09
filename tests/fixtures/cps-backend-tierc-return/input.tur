@@ -1,0 +1,30 @@
+;; CPS-IR-to-C backend, Tier C (T-C1): a colored function RETURNS a wide by-value
+;; aggregate that crosses the DK slot.  Built with --enable=cps-backend.
+;;
+;; `outer` is colored (it delimits a cross-function shift via `reset (inner)`),
+;; and its return value is a `Pr` -- a 16-byte by-value product that does not fit
+;; the one-word DK slot.  Tier C boxes it at the boundary: the reset-continuation
+;; helper heap-copies the `Pr` and stores the pointer in the slot
+;; (`dk_run(k, (intptr_t)malloc-copy)`); the direct->cps entry wrapper unboxes it
+;; and frees the box (a single-shot root boundary, so no leak).
+;;
+;; Owning-free product (`needs_drop_glue == false`), so the box is a pure value
+;; copy -- no refcount / drop concern.  `fd->return_type` carries a NULL ADT def
+;; (surface annotation), so the crossing Type is taken from the body's type,
+;; which carries the real monomorphized def (P4 fix).
+;;
+;; direct-vs-CPS equal (40 + 2 = 42), LeakSanitizer-clean.
+
+(defstruct Pr [first : int second : int])
+
+(defn inner [] : int
+  (shift (fn [v : int] v) 32))
+
+(defn outer [] : Pr
+  (let [n (reset (inner))]
+    (make-struct Pr :first 40 :second 2)))
+
+(defn main [] : int
+  (let [p (outer)]
+    (println (+ (.first p) (.second p))))
+  0)
