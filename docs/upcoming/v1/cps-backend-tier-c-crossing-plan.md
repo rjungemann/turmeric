@@ -59,7 +59,20 @@ Every way to route a by-value aggregate across the DK slot was tried. Each hits
 a distinct upstream gap. `Pr` below is `(defstruct Pr [first : int second : int])`
 -- a 16-byte owning-free by-value product, the ideal Tier C probe.
 
-### P1 -- effects cannot carry an aggregate *return* type
+### P1 -- effects cannot carry an aggregate *return* type -- **RESOLVED**
+
+**Resolved.** `defeffect` now resolves a user-type return annotation (a keyword
+`:Pr` is given an `F_SYM` view and routed through `type_expr_from_form`) instead
+of rejecting it, and records the full result Type on the effect constructor
+(`EffectConstructor.result_full_type`, set post-registration). `perform` reads it
+so the perform result carries the real monomorphized `Pr` def rather than a
+def-less `TY_ADT`. With the CPS binder declarations also using the full Type
+(`binder_ctype_full` for `CT_RESUME` / `CT_LETCONT`), a by-value aggregate crosses
+the effect boundary (perform result, resume value, resume result) boxed. Fixture
+`tests/fixtures/cps-backend-tierc-effect/` (`Get [] :Pr`, CPS `== 42`). The direct
+baseline still fails to compile (P2 below), so the fixture asserts the CPS value
+(the float-effect precedent). The original analysis is kept for the record:
+
 
 ```turmeric
 (defeffect Get [] :Pr)          ; error: defeffect: unknown return type 'Pr'
@@ -209,13 +222,14 @@ baseline. In ascending order of independence:
   `tests/fixtures/cps-backend-tierc-shift/` (`direct == cps == 42`). This box is
   loaded by the reset continuation without a free (`consume=false`, multi-shot
   safety) so it leaks alongside the DK nodes (`requires.no-leak-check`).
-- **T-C3: the effect payload / resume-value crossings.** Fix **P1**, **P2**,
-  **P5** (effect ADT value/arg types + the direct-path fiber crossing). These
-  are the literal N3-TierC target but the most upstream-heavy; they also fix the
-  direct path, so the fixtures can assert true equality rather than "CPS is the
-  correct one."  P1+P2+P5 are a *coupled* change: a Tier C effect crossing only
-  becomes end-to-end testable once all three land (P1 lets the effect carry the
-  aggregate, P5 types the handler binding, P2 gives a compiling direct baseline).
+- **T-C3: the effect payload / resume-value crossings.** The *effect-result*
+  crossing is **LANDED on the CPS path** (P1 resolved): an effect declaring an
+  aggregate result value threads it boxed through perform / resume
+  (`cps-backend-tierc-effect`). Remaining: **P5** (an aggregate effect *argument*
+  loses its type in the handler case -- the `Put [p : Pr]` form) and **P2** (the
+  direct/fiber baseline does not compile an aggregate effect crossing, so these
+  fixtures assert the CPS value rather than `direct == cps`, per the float-effect
+  precedent). P5 is CPS/elaboration-side; P2 is a direct-emitter fix.
 
 **Note on leak checking.** In some environments (including the one T-C1/T-C2 were
 developed in) LeakSanitizer is not active on the spawned fixture binary -- e.g.

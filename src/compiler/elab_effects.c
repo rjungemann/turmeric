@@ -606,13 +606,24 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
     }
 
     TypeKind result_type;
+    Type *result_ann = NULL;   /* Tier C: full result Type when resolved */
     if (ret_f->tag == F_TYPE_ANN) {
-        Type *ann = (ret_f->as.list.len > 0)
+        result_ann = (ret_f->as.list.len > 0)
             ? type_expr_from_form(e, ret_f->as.list.items[0], NULL, NULL, NULL, 0)
             : NULL;
-        result_type = ann ? ann->kind : TY_UNKNOWN;
+        result_type = result_ann ? result_ann->kind : TY_UNKNOWN;
     } else {
         result_type = typekind_from_symbol(ret_f->as.sym->name);
+        if (result_type == TY_UNKNOWN) {
+            /* Tier C: not a builtin type keyword -- try resolving it as a
+             * user type name (a by-value struct/ADT).  A keyword `:Pr` and a
+             * bare symbol `Pr` both carry the name in as.sym; type_expr_from_form
+             * resolves an F_SYM, so present a symbol view of the form. */
+            Form sym_view = *ret_f;
+            sym_view.tag = F_SYM;
+            result_ann = type_expr_from_form(e, &sym_view, NULL, NULL, NULL, 0);
+            if (result_ann) result_type = result_ann->kind;
+        }
     }
     if (result_type == TY_UNKNOWN) {
         diag_emit(DIAG_ERROR, ret_f->span,
@@ -655,6 +666,16 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
                                           e->current_module_name, is_private);
     if (!effect) return NULL;
     effect->is_capability = is_capability;
+    /* Tier C: record the full result Type when it is a by-value aggregate whose
+     * bare TypeKind loses the def -- perform reads it so the perform result
+     * carries the real monomorphized type. */
+    if (effect->constructor && result_ann &&
+        (result_ann->kind == TY_ADT || result_ann->kind == TY_APP ||
+         result_ann->kind == TY_STRUCT)) {
+        Type *stored = arena_alloc(e->arena, sizeof(Type));
+        *stored = *result_ann;
+        effect->constructor->result_full_type = stored;
+    }
 
     /* ET4: Resolve parent effect if ^extends was specified */
     if (parent_name) {
@@ -794,9 +815,14 @@ Expr *elab_perform(Elab *e, const Form *call) {
     perform->args = args;
     perform->n_args = n_args;
     
-    /* The return type of perform is the result type of the effect */
-    Type result_type = type_from_kind(effect->constructor->result_type);
-    
+    /* The return type of perform is the result type of the effect.  Tier C: when
+     * the effect declares a by-value aggregate result, use the full Type (which
+     * carries the real def) rather than type_from_kind (which would yield a
+     * def-less TY_ADT). */
+    Type result_type = effect->constructor->result_full_type
+        ? *effect->constructor->result_full_type
+        : type_from_kind(effect->constructor->result_type);
+
     Expr *out = expr_new(e->arena, EX_PERFORM, result_type, call->span);
     out->as.perform_.perform = perform;
     return out;

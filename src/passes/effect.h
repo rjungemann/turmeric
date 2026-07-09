@@ -24,6 +24,13 @@ struct EffectConstructor {
     uint8_t n_params;
     TypeKind result_type;        /* Result type of the effect operation */
     Effect *effect;              /* Parent effect (for now, 1:1 effect:constructor) */
+    /* Tier C (cps-backend): the full result / parameter Types, when they are
+     * aggregates whose `TypeKind` above loses the def (a by-value struct/ADT).
+     * NULL when scalar (the TypeKind is sufficient).  Set post-registration by
+     * defeffect elaboration; read by perform (result) and handle (params) so a
+     * by-value aggregate effect value carries its real monomorphized def. */
+    const struct Type *result_full_type;
+    const struct Type **param_full_types;
 };
 
 /* Effect represents a user-defined effect type.

@@ -1425,7 +1425,9 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
         case CT_TAILCALL: break;
         case CT_LETCONT:
             if (letcont_is_heap_join(t)) break;  /* param + jbody are lifted into a frame helper */
-            ce_line(ce, "%s %s;", binder_ctype(ce->ctx, t->as.letcont.param.ty), t->as.letcont.param.name);
+            /* Keep param.name here: the inline-join delivery (join_param) names the
+             * slot by param.name, so the decl must match it. */
+            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letcont.param.ty, t->as.letcont.param.type), t->as.letcont.param.name);
             emit_binder_decls(ce, t->as.letcont.body);
             emit_binder_decls(ce, t->as.letcont.jbody);
             break;
@@ -1447,7 +1449,7 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
         case CT_PERFORM: break;   /* terminal; the continuation is lifted */
         case CT_RESUME: {
             char *bn = cvar_cname(ce, t->as.resume.x);
-            ce_line(ce, "%s %s;", binder_ctype(ce->ctx, t->as.resume.x.ty), bn);
+            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.resume.x.ty, t->as.resume.x.type), bn);
             free(bn);
             emit_binder_decls(ce, t->as.resume.body);
             break;

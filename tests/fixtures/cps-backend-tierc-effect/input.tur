@@ -1,0 +1,36 @@
+;; CPS-IR-to-C backend, Tier C (T-C3): a wide by-value aggregate is an effect
+;; RESULT that crosses the DK slot as a perform result / resume value.  Built
+;; with --enable=cps-backend.
+;;
+;; `Get` is an effect returning `Pr` (a 16-byte by-value product).  `use-get`
+;; performs it and returns the resulting `Pr`; `run` handles it and resumes with
+;; a concrete `Pr`.  The aggregate crosses the slot boxed at three boundaries:
+;; the perform result, the resume value (dk_invoke arg), and the resume result.
+;; Both `use-get` (performer) and `run` (handler) are CPS-emitted (co-classified),
+;; so the DK handler-prompt machine carries the boxed aggregate end to end.
+;;
+;; P1 makes the effect declare an aggregate value type: the effect's
+;; result_full_type carries the real monomorphized `Pr` def, so the perform
+;; result is a real `Pr` rather than a def-less TY_ADT.
+;;
+;; NOTE: the direct-style / fiber path does NOT compile this (it passes the
+;; continuation result as int64 and casts it back to the struct -- prerequisite
+;; P2, see docs/upcoming/v1/cps-backend-tier-c-crossing-plan.md).  The CPS path
+;; is the correct one; this fixture asserts its value (32 + 10 = 42), mirroring
+;; the cps-backend-float-effect precedent.
+
+(defstruct Pr [first : int second : int])
+
+(defeffect Get [] :Pr)
+
+(defn use-get [] : Pr
+  (perform (Get)))
+
+(defn run [] : Pr
+  (handle (use-get)
+    (Get [] k) (resume k (make-struct Pr :first 32 :second 10))))
+
+(defn main [] : int
+  (let [p (run)]
+    (println (+ (.first p) (.second p))))
+  0)

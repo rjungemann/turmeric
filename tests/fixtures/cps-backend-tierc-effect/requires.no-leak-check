@@ -1,0 +1,5 @@
+Algebraic effects on the CPS backend leak their heap DK nodes per perform/handle
+(DK is opaque; see docs/reported/cps-delimited-dk-node-leak.md), and the Tier C
+boxes crossing the effect boundary (perform result / resume value) are loaded
+without a free (consume=false, multi-shot safety) -- the same intentional-leak
+posture as the DK nodes.
