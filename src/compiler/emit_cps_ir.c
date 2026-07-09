@@ -383,22 +383,32 @@ typedef struct {
     const char    *cvname[CC_MAX_CAPS];
     uint32_t       cvid[CC_MAX_CAPS];
     TypeKind       ty[CC_MAX_CAPS];
+    const Type    *type[CC_MAX_CAPS];   /* full type (Tier C by-value aggregate); may be NULL */
     int n; bool ok;
 } CapSet;
 
-static void cap_add(CapSet *cs, const Binding *b, TypeKind ty) {
-    if (!slot_ty(ty)) { cs->ok = false; return; }   /* scalar-only for now */
-    for (int i = 0; i < cs->n; i++) if (cs->b[i] == b) return;
-    if (cs->n >= CC_MAX_CAPS) { cs->ok = false; return; }
-    cs->b[cs->n] = b; cs->cvname[cs->n] = NULL; cs->ty[cs->n] = ty; cs->n++;
+/* A capture rides the env by value: a scalar (Tier A/B) or an owning-free
+ * by-value aggregate (Tier C, slot_box_ty).  Both are Copy, so a leaked env
+ * storing them is multi-shot-safe with no retain/drop.  Owning handles / carrier
+ * ADTs are rejected (their copy would duplicate a refcount). */
+static bool cap_ty_ok(TypeKind ty, const Type *type) {
+    return slot_ty(ty) || slot_box_ty(type);
 }
 
-static void cap_add_cvar(CapSet *cs, uint32_t id, const char *name, TypeKind ty) {
-    if (!slot_ty(ty) || !name) { cs->ok = false; return; }
+static void cap_add(CapSet *cs, const Binding *b, TypeKind ty, const Type *type) {
+    if (!cap_ty_ok(ty, type)) { cs->ok = false; return; }
+    for (int i = 0; i < cs->n; i++) if (cs->b[i] == b) return;
+    if (cs->n >= CC_MAX_CAPS) { cs->ok = false; return; }
+    cs->b[cs->n] = b; cs->cvname[cs->n] = NULL; cs->ty[cs->n] = ty;
+    cs->type[cs->n] = type; cs->n++;
+}
+
+static void cap_add_cvar(CapSet *cs, uint32_t id, const char *name, TypeKind ty, const Type *type) {
+    if (!cap_ty_ok(ty, type) || !name) { cs->ok = false; return; }
     for (int i = 0; i < cs->n; i++) if (cs->cvname[i] && cs->cvid[i] == id) return;
     if (cs->n >= CC_MAX_CAPS) { cs->ok = false; return; }
     cs->b[cs->n] = NULL; cs->cvname[cs->n] = name; cs->cvid[cs->n] = id;
-    cs->ty[cs->n] = ty; cs->n++;
+    cs->ty[cs->n] = ty; cs->type[cs->n] = type; cs->n++;
 }
 
 static void collect_caps_rec(const CTerm *t, uint32_t exclude,
@@ -410,11 +420,23 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             if (_a->var && !_a->var->is_global && !binding_excluded(_a->var)) { \
                 uint32_t _id = _a->var->id; bool _f = (_id != exclude); \
                 for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; } \
-                if (_f) cap_add(cs, _a->var, _a->ty); } } \
+                if (_f) cap_add(cs, _a->var, _a->ty, _a->type); } } \
         else if (_a->kind == CA_CVAR) { \
             if (_a->cvar_id != exclude) { bool _f = true; \
                 for (int _i = 0; _i < nb; _i++) if (bound[_i] == _a->cvar_id) { _f = false; break; } \
-                if (_f) cap_add_cvar(cs, _a->cvar_id, _a->cvar_name, _a->ty); } } } while (0)
+                if (_f) cap_add_cvar(cs, _a->cvar_id, _a->cvar_name, _a->ty, _a->type); } } } while (0)
+    /* A free source var referenced inside a delegated (direct-emitted) Expr: the
+     * same test COL_ATOM applies to a CA_VAR, but reaching through an EX_VAR node
+     * to its binding.  Its Type carries the monomorphized def (for slot_box_ty). */
+    #define COL_VAREXPR(ve) do { const Expr *_e = (ve); \
+        while (_e && _e->kind == EX_ASCRIBE) _e = _e->as.ascribe_.inner; \
+        if (_e && _e->kind == EX_VAR && _e->as.var.binding \
+            && !_e->as.var.binding->is_global \
+            && !binding_excluded(_e->as.var.binding)) { \
+            const Binding *_b = _e->as.var.binding; \
+            uint32_t _id = _b->id; bool _f = (_id != exclude); \
+            for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; } \
+            if (_f) cap_add(cs, _b, _b->type.kind, &_b->type); } } while (0)
     switch (t->kind) {
         case CT_APPCONT: COL_ATOM(&t->as.appcont.v); return;
         case CT_LETVAL:
@@ -448,12 +470,59 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             COL_ATOM(&t->as.resume.v);
             bound[nb] = t->as.resume.x.id;
             collect_caps_rec(t->as.resume.body, exclude, bound, nb + 1, cs); return;
+        case CT_LETRAW: {
+            /* A delegated (direct-emitted) owning-value op.  Its operand vars are
+             * the only free names it references (operands are atomic).  Collect
+             * each -- the same enumeration has_capture_rec walks -- so a lifted
+             * body containing a delegated op that captures a Copy value (scalar or
+             * owning-free by-value aggregate, e.g. `(.field p)`) is admitted with
+             * the operand riding the env.  Composites this scan does not enumerate
+             * bail to fallback (cs->ok = false), matching has_capture_rec's
+             * conservative default. */
+            const Expr *le = t->as.letraw.e;
+            switch (le->kind) {
+                case EX_RC_OF:    COL_VAREXPR(le->as.rc_of_.expr); break;
+                case EX_RC_CLONE: COL_VAREXPR(le->as.rc_clone_.expr); break;
+                case EX_RC_DROP:  COL_VAREXPR(le->as.rc_drop_.expr); break;
+                case EX_RC_COUNT: COL_VAREXPR(le->as.rc_count_.expr); break;
+                case EX_RC_PTR:   COL_VAREXPR(le->as.rc_ptr_.expr); break;
+                case EX_GET_FIELD: COL_VAREXPR(le->as.get_field_.struct_expr); break;
+                case EX_MAKE_STRUCT:
+                    for (uint32_t i = 0; i < le->as.make_struct_.n_fields; i++)
+                        COL_VAREXPR(le->as.make_struct_.field_values[i]);
+                    break;
+                case EX_CALL:
+                    for (uint32_t i = 0; i < le->as.call_.n_args; i++)
+                        COL_VAREXPR(le->as.call_.args[i]);
+                    break;
+                case EX_DEFAULT_OF:
+                case EX_FN_TO_FAT:
+                case EX_FN:
+                    break;   /* no free variables */
+                case EX_CLOSURE: {
+                    struct Closure *cl = le->as.closure_.closure;
+                    if (cl) for (uint8_t i = 0; i < cl->n_captures; i++) {
+                        const Binding *cb = cl->captures[i];
+                        if (cb && !cb->is_global && !binding_excluded(cb)) {
+                            uint32_t _id = cb->id; bool _f = (_id != exclude);
+                            for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
+                            if (_f) cap_add(cs, cb, cb->type.kind, &cb->type);
+                        }
+                    }
+                    break;
+                }
+                default:
+                    cs->ok = false; return;
+            }
+            bound[nb] = t->as.letraw.x.id;
+            collect_caps_rec(t->as.letraw.body, exclude, bound, nb + 1, cs); return;
+        }
         default:
-            /* CT_LETRAW (delegated operand free vars) and nested control ops are
-             * out of this collector's scope -- bail to fallback. */
+            /* Nested control ops in a lifted body: out of this collector's scope. */
             cs->ok = false; return;
     }
     #undef COL_ATOM
+    #undef COL_VAREXPR
 }
 
 /* Collect the scalar source captures of `body` (excluding the value param
@@ -1661,7 +1730,8 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         for (int i = 0; i < caps->n; i++) {
             char *cn = caps->b[i] ? name_for_binding(ce->ctx, caps->b[i]) : strdup(caps->cvname[i]);
             indent_buf(&tmp, 4);
-            buf_printf(&tmp, "%s %s = __cap->f%d;\n", binder_ctype(ce->ctx, caps->ty[i]), cn, i);
+            buf_printf(&tmp, "%s %s = __cap->f%d;\n",
+                       binder_ctype_full(ce->ctx, caps->ty[i], caps->type[i]), cn, i);
             free(cn);
         }
     }
@@ -1706,7 +1776,8 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         buf_printf(ce->helpers, "typedef struct {");
         if (mode == LH_RESET_CONT) buf_puts(ce->helpers, " DK *__k;");
         for (int i = 0; i < caps->n; i++)
-            buf_printf(ce->helpers, " %s f%d;", binder_ctype(ce->ctx, caps->ty[i]), i);
+            buf_printf(ce->helpers, " %s f%d;",
+                       binder_ctype_full(ce->ctx, caps->ty[i], caps->type[i]), i);
         buf_printf(ce->helpers, " } %s_env;\n", name);
     }
 

@@ -1,0 +1,33 @@
+;; CPS-IR-to-C backend, N6.3 tail: a *non-scalar capture* -- a continuation
+;; captures an owning-free by-value aggregate (Tier C).  Built with
+;; --enable=cps-backend.
+;;
+;; `f`'s post-handle continuation is `(+ r (.second p))`, which references the
+;; parameter `p : Pr` -- a flat, owning-free by-value product.  Such a value is
+;; Copy (slot_box_ty: no drop glue), so it rides the continuation env by value
+;; exactly like a scalar, with no retain/drop even though the env is leaked and
+;; the continuation may be multi-shot:
+;;   typedef struct { DK *__k; tur_adt_Pr f0; } f_hk0_env;   // f0 = p
+;;   e->f0 = p;   and the helper reads `Pr p = e->f0;`.
+;; Two pieces land for this: CapSet now carries the full Type (so the env field
+;; is emitted via binder_ctype_full and slot_box_ty admits the aggregate), and
+;; collect_caps grew a CT_LETRAW arm that gathers a delegated op's operand vars
+;; (here `(.second p)` = a get-field on `p`).  Before, `p` in a delegated op hit
+;; the collector's default bail and `f` fell back.
+;;
+;; direct-vs-CPS equal: handle resumes 100, p.second = 3 -> 100 + 3 = 103.
+
+(defstruct Pr [first : int second : int])
+
+(defeffect E [] :int)
+
+(defn g [] : int
+  (perform (E)))
+
+(defn f [p : Pr] : int
+  (let [r (handle (g) (E [] k) (resume k 100))]
+    (+ r (.second p))))
+
+(defn main [] : int
+  (println (f (make-struct Pr :first 7 :second 3)))
+  0)

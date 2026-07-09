@@ -255,9 +255,27 @@ fallback can be deleted:
   `(shift (fn [v] v) (+ x 5))` delimited by an outer `reset` CPS-emits
   (`direct == cps == 105`). Full suite: 2017 passed, 0 failed.
 
-  *Remaining N6.3:* non-scalar captures, a *resuming* SHIFT body (whose env would
-  carry subk for multi-shot re-entry), and multi-shot with owning captures
-  (refcount on copy).
+  *Non-scalar (by-value aggregate) captures landed too.* A continuation that
+  captures an owning-free by-value product -- e.g. `f`'s post-handle continuation
+  `(+ r (.second p))` captures the parameter `p : Pr` -- now rides the env by
+  value instead of falling back. Such a value is Copy (`slot_box_ty`: no drop
+  glue), so it needs no retain/drop even though the env is leaked and the
+  continuation may be multi-shot; each read is an independent value copy. Two
+  pieces: `CapSet` now carries the full `Type` alongside the `TypeKind`, so the
+  env field is emitted via `binder_ctype_full` (`tur_adt_Pr f0;`) and `cap_add`
+  admits a `slot_box_ty` aggregate; and `collect_caps_rec` grew a `CT_LETRAW` arm
+  that gathers a delegated op's operand vars (the same enumeration
+  `has_capture_rec` walks -- rc/of, get-field, make-struct, call, closure
+  captures), so a lifted body containing a delegated op that captures a Copy
+  value is admitted instead of hitting the collector's default bail. Fixture
+  `cps-backend-capture-nonscalar`:
+  `(let [r (handle ...)] (+ r (.second p)))` CPS-emits (`direct == cps == 103`).
+  Full suite: 2018 passed, 0 failed.
+
+  *Remaining N6.3:* owning (non-Copy) captures -- carrier ADTs / rc handles / by-
+  value products with drop glue -- which need retain-on-copy into the env plus
+  drop glue; a *resuming* SHIFT body (whose env would carry subk for multi-shot
+  re-entry).
 - **N6.4 -- the long tail** -- cloneable/serial reset, async, indirect calls, per
   the re-measured surface.
 - **N6.5 -- delete the fallback.** Remove the `CT_UNSUPPORTED` whole-function
