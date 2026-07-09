@@ -189,10 +189,24 @@ fallback can be deleted:
   has_capture_case / needs_heap_join iterate all cases; each case still admits
   `<=1` effect param and a zero-capture straight-line body. Fixture
   `cps-backend-multi-handle`: `run` handles Ask + Add, `direct == cps`
-  (`5` / `101`). *Remaining:* `shift0` and the cloneable/serial reset/shift
-  variants; and multi-case handlers whose body performs *multiple sequential*
-  effects (a nested perform in a perform continuation) still fall back -- that is
-  the perform-continuation-can-perform widening, adjacent to N6.3.
+  (`5` / `101`).
+
+  *shift0 LANDED.* `shift0` differs from `shift` in exactly one way -- it does
+  NOT reinstall the delimiting prompt when it captures the continuation -- so the
+  CPS IR reuses the `CT_SHIFT` node with a `shift0` flag (set by the `EX_SHIFT0`
+  arms in `cps_bind`/`cps_tail`, which share `cps_shift_body_kf` with plain
+  shift), and `emit_shift` lowers it to `dk_shift0` instead of `dk_shift`. The
+  lifted shift-body helper, its capture env, and the receiver application are all
+  shared with plain shift, so shift0 automatically inherits the N6.3 capturing-
+  shift-body support. Fixture `cps-backend-shift0`: nested resets, `deep`'s
+  shift0 delimited by `deep`'s reset under `outer`'s reset, `direct == cps`
+  (`105`).
+
+  *Remaining:* the cloneable/serial reset/shift variants (deep-clone capture
+  environments / serialization -- N6.4); and multi-case handlers whose body
+  performs *multiple sequential* effects (a nested perform in a perform
+  continuation) still fall back -- that is the perform-continuation-can-perform
+  widening, adjacent to N6.3.
 - **N6.3 -- capturing / multi-shot continuations** -- lift with a real env;
   removes the zero-capture cut's fallbacks. *Started -- capturing PERFORM
   continuations (scalar source captures) landed.* The `LH_PERFORM_CONT` frame's

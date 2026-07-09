@@ -124,7 +124,9 @@ struct CTerm {
         struct { CVar j; CVar param; CTerm *jbody; CTerm *body; }         letcont;
         struct { CAtom cond; CTerm *then_; CTerm *else_; }                if_;
         struct { CVar x; CTerm *delim; CTerm *body; }                     reset;
-        struct { CVar k; CTerm *body; }                                   shift;
+        /* shift0 == true lowers to dk_shift0 (does NOT reinstall the prompt);
+         * false is a plain shift (dk_shift, prompt stays installed). */
+        struct { CVar k; CTerm *body; bool shift0; }                      shift;
         /* handle: delim = body threading the handler prompt; body = the handle's
          * continuation; cases = the N handler clauses (each delivered by return),
          * one per handled effect.  Each case's k / params are bound in its body. */

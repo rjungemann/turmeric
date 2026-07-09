@@ -367,20 +367,26 @@ static const char *builtin_name(const Expr *e) {
  * the prompt continuation.  A receiver that is not a directly-callable binding
  * leaves fn_binding NULL, so cps_tail yields CT_UNSUPPORTED and the backend
  * falls back cleanly. */
-static CTerm *cps_shift_body(CpsB *b, Expr *e) {
-    Expr *recv = e->as.shift_.k_fn;
-    Expr *arg  = e->as.shift_.body;
+/* A shift / shift0 body: apply the receiver `recv` (the (fn [k] ...) that gets
+ * the captured continuation) to the delimited body expression `arg`, delivered
+ * to the prompt.  Shared by both the plain and shift0 lowerings (which differ
+ * only in the emitted dk_shift vs dk_shift0). */
+static CTerm *cps_shift_body_kf(CpsB *b, Expr *recv, Expr *arg, Type *ty) {
     Expr *call = arena_alloc(b->a, sizeof(Expr));
     memset(call, 0, sizeof(Expr));
     call->kind = EX_CALL;
-    call->type = e->type;
+    call->type = *ty;
     call->as.call_.fn_binding =
         (recv && recv->kind == EX_VAR) ? recv->as.var.binding : NULL;
     call->as.call_.fn_expr = recv;
     call->as.call_.args = arena_alloc(b->a, sizeof(Expr *));
     call->as.call_.args[0] = arg;
     call->as.call_.n_args = 1;
-    return cps_tail(b, call, kont_prompt(e->type.kind));
+    return cps_tail(b, call, kont_prompt(ty->kind));
+}
+
+static CTerm *cps_shift_body(CpsB *b, Expr *e) {
+    return cps_shift_body_kf(b, e->as.shift_.k_fn, e->as.shift_.body, &e->type);
 }
 
 /* ---- algebraic effects: handle / perform / resume --------------------- *
@@ -566,6 +572,16 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             t->as.shift.body = cps_shift_body(b, e);
             return t;
         }
+        case EX_SHIFT0: {
+            CVar k = fresh_cvar(b, &e->type);
+            k.name = "k'";
+            CTerm *t = new_term(b, CT_SHIFT);
+            t->as.shift.k = k;
+            t->as.shift.shift0 = true;
+            t->as.shift.body = cps_shift_body_kf(b, e->as.shift0_.k_fn,
+                                                 e->as.shift0_.body, &e->type);
+            return t;
+        }
         case EX_HANDLE: {
             CVar x = fresh_cvar(b, &e->type);
             CTerm *ac = new_term(b, CT_APPCONT);
@@ -712,6 +728,16 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             t->as.shift.body = cps_shift_body(b, e);
             return t;
         }
+        case EX_SHIFT0: {
+            CVar k = fresh_cvar(b, &e->type);
+            k.name = "k'";
+            CTerm *t = new_term(b, CT_SHIFT);
+            t->as.shift.k = k;
+            t->as.shift.shift0 = true;
+            t->as.shift.body = cps_shift_body_kf(b, e->as.shift0_.k_fn,
+                                                 e->as.shift0_.body, &e->type);
+            return t;
+        }
         case EX_HANDLE:
             return build_handle(b, e, x, rest);
         case EX_PERFORM: {
@@ -838,7 +864,8 @@ void cps_ir_print(const CTerm *t, FILE *out, int indent) {
             cps_ir_print(t->as.reset.body, out, indent);
             break;
         case CT_SHIFT:
-            fprintf(out, "shift %s.\n", t->as.shift.k.name);
+            fprintf(out, "%s %s.\n", t->as.shift.shift0 ? "shift0" : "shift",
+                    t->as.shift.k.name);
             cps_ir_print(t->as.shift.body, out, indent + 1);
             break;
         case CT_HANDLE:

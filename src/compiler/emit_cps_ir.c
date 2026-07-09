@@ -1914,7 +1914,9 @@ static void emit_shift(CE *ce, const CTerm *t) {
     const CapSet *caps = (ok && cs.n > 0) ? &cs : NULL;
     emit_lifted(ce, hname, LH_SHIFT_BODY, NULL, TY_INT, NULL, t->as.shift.body, NULL, caps);
     char *env = emit_cont_env(ce, hname, caps, NULL);   /* k-less env */
-    ce_line(ce, "return dk_run(dk_shift(1, %s, %s, %s), 0);", hname, env, ce->cur_k);
+    /* shift0 does NOT reinstall the delimiting prompt; plain shift does. */
+    ce_line(ce, "return dk_run(%s(1, %s, %s, %s), 0);",
+            t->as.shift.shift0 ? "dk_shift0" : "dk_shift", hname, env, ce->cur_k);
     free(env);
 }
 
