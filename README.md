@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.27.3` -- The WASM (Try Turmeric) and `tur repl` REPLs now preload the stdlib on startup, and a new web deploy-gate CI catches stale wasm regressions.
+**Latest release:** `v0.27.4` -- Legible character literals (`#\a`, `#\space`, `#\u41`) now read as their Unicode code-point ints.
 
 ## What
 

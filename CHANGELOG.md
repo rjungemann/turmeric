@@ -4,6 +4,19 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.27.4] -- 2026-07-09
+
+### Added
+
+- **Legible character literals**: `#\a`, `#\space`, `#\newline`,
+  `#\u41`, and friends now read as ints holding the Unicode code
+  point, matching Scheme-style character-literal syntax (#647).
+
+### Docs
+
+- Parser combinators tutorial refresh; new plan doc for legible
+  character literals under `docs/upcoming/v1/`.
+
 ## [0.27.3] -- 2026-07-08
 
 ### Added
