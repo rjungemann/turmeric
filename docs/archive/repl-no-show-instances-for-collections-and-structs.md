@@ -166,10 +166,17 @@ Show class or assert a missing-instance error are unaffected.
   int64-carrier element-recovery limitation `Eq [Vec]` / `Eq [Set]` /
   `Eq [Map]` already carry; a real fix needs typed element recovery through
   the carrier and should be tackled alongside the Eq instances.
-- **Keyword/`:Sym`-keyed maps** (`#map{:a 1}`) still cannot even be
-  *constructed* under the interpreter (`map-empty-for`/Sym MapKey inline-C has
-  no native override) -- a separate interpreter gap, unrelated to Show.
-- **WASM REPL** does not yet preload the Show slice; `src/web/wasm_glue.c`
-  would need to call `turi_env_preload_typeclasses` for parity with `tur repl`.
+- **Keyword/`:Sym`-keyed maps** (`#map{:a 1}`) fail at the interactive `tur
+  repl` with "inline-C not supported" -- but they work fine under
+  `--interpret` and `tur run`. The gap is that the REPL entry point does not
+  register the `wk_register_*` native-override families (here `Hash[Sym]` /
+  `Eq[Sym]`) that `cmd_eval` does. This is NOT specific to Show and is already
+  tracked in `docs/reported/web-repl-repl-inline-c-native-gap.md` (re-confirmed
+  during this work). Int-keyed maps at the REPL are fine (their comparators
+  come from the core `turi_register_collection_natives`).
+- **WASM REPL** does not yet render collections: `src/web/wasm_glue.c` neither
+  preloads the Show slice (`turi_env_preload_typeclasses`) nor calls the new
+  `turi_try_show_by_tag` display tier. Filed as
+  `docs/reported/wasm-repl-no-show-collection-preload.md`.
 - **Auto-deriving struct Show** at `defstruct` time (so structs print without
   an explicit `derive-show`) was left out; `derive-show` remains opt-in.
