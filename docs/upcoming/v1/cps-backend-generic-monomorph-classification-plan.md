@@ -272,9 +272,47 @@ enumerated spec set.
   (`7.5`) where the fiber path is not (a pre-existing float-through-effect bug).
   Fixture `cps-backend-generic-island`; full suite 2038 passed, 0 failed.
 
-  *Still G3b (deferred):* cross-function DK chains (a monomorph that performs an
-  effect handled by a CPS peer) -- the per-instantiation taint problem the
-  tag-level fixpoint can't express. Islands are the safe, self-contained subset.
+- **G3b -- cross-function DK chains (investigated; full spec below, not landed).**
+  The remaining case: a colored generic monomorph that PERFORMS an effect handled
+  by a CPS peer (or HANDLES an effect a CPS callee performs), e.g. `getit@int`
+  performs `E` and `run` handles it. Unlike G3a's islands, this is **not** a
+  self-contained subset -- it needs whole-program taint + per-call-site routing,
+  and (confirmed this pass) **no piece is independently verifiable**. The five
+  interlocking requirements:
+
+  1. **CPS-IR carries the resolved callee spec.** `CT_TAILCALL` / `CT_LETCALL`
+     store only the callee `Binding` (`cps_ir.c` ~709-720); the call `Expr` -- and
+     thus the per-call-site instantiation -- is dropped. Add the call `Expr` (or
+     the resolved `clone_name`) to those nodes so emit can pick the monomorph.
+  2. **Emit routing.** `callee_name` (emit_cps_ir.c ~1599) returns
+     `raw_name_for_binding(fn)` = the *generic* name (`getit__cps`), never the
+     monomorph (`getit__spec__int__cps`). Resolve via `find_matched_abi_spec` on
+     the stored call to emit `<clone>__cps`.
+  3. **Taint surgery.** A colored generic template is in `g_ents` with
+     `in_s=false` (it sig-rejects), so its effect `E` is tainted and every CPS
+     peer handling `E` (like `run`) is evicted. A mono-candidate template must
+     stop tainting `E` so `run` stays DK.
+  4. **Pre-emit discovery.** The taint fixpoint (`ensure_S`) runs inside the main
+     emit loop, but `emit_abi_register_call` interns specs incrementally *during*
+     emit -- so the monomorph set is incomplete when the fixpoint runs. Making the
+     fixpoint range over monomorphs needs a dedicated pre-emit
+     `emit_abi_scan_expr` pass (order-sensitivity is a risk; the spec-intern
+     comments warn of realloc/dict-clone ordering).
+  5. **The wrapper hazard.** A non-island monomorph (escaping perform) emitted
+     with a `<clone>` entry wrapper BREAKS if any uncolored/fiber caller invokes
+     it -- the wrapper installs a fresh `dk_prompt` root with no handler for the
+     escaping effect. So every caller must be proven DK-context (which is exactly
+     what the taint fixpoint over the complete monomorph set decides).
+
+  Why there is no safe partial: the taint surgery (3) is a silent miscompile
+  without routing (1,2) and emit; routing is untestable without a DK caller, which
+  (3) gates; and (3) is unsound without (4)'s completeness. It is all-or-nothing
+  on the specialization pipeline + CPS IR + classifier. This is a dedicated
+  multi-part pass, correctness-critical, with real regression risk on the 2038
+  fixtures -- and the current behavior is already sound (these monomorphs run on
+  fiber via effect-taint, no chain split). G3a already captured the safe,
+  self-contained subset, so G3b's marginal reach (cross-function chains through a
+  colored generic) is the narrower, riskier remainder.
 
 - **G4 -- widen `fn_sig_ok` for the concrete monomorph types.** With monomorphs
   classified under their concrete param/return types, the tyvar-`TY_APP`
@@ -302,10 +340,19 @@ cannot range over monomorphs without a dedicated pre-emit spec-discovery pass.
 routing change. The carrier-crossing that blocked a first attempt is fixed (set
 `emit_byvalue_carrier_abi` on concrete by-value ADT-app spec params in the
 island-emit path, mirroring the fiber `emit_params`). Fixture
-`cps-backend-generic-island`; suite 2038/0. See the G3a entry for details. What
-remains is **G3b** -- cross-function DK chains, which the tag-level taint fixpoint
-cannot express (per-instantiation problem); islands are the safe subset that needs
-no taint change.
+`cps-backend-generic-island`; suite 2038/0. See the G3a entry for details.
+
+**G3b** (cross-function DK chains) was investigated this pass and its full,
+five-part implementation spec is in the G3b entry -- but it is NOT landed and,
+unlike G1/G2/G3a, has **no safe incremental slice**: taint surgery, per-call-site
+routing, a CPS-IR change, and a pre-emit discovery pass are all interlocking
+(the taint change is a silent miscompile without routing+emit; routing is
+untestable without a DK caller that the taint gates). It is a dedicated
+correctness-critical pass with real regression risk on the 2038 fixtures. The
+current behavior is sound (these monomorphs run on fiber via effect-taint). Since
+G3a already captured the safe self-contained subset, the recommendation is to
+schedule G3b as its own focused effort rather than fold it into an incremental
+pass.
 
 G3 was investigated in depth this pass with two structural findings (see the G3
 entry): (A) the CPS emit path is **already spec-aware** (type spellings resolve
