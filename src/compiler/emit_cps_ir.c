@@ -923,13 +923,15 @@ static bool param_name_clashes_cps(const Binding *b) {
 }
 
 static bool fn_sig_ok(const FnDef *fd) {
-    /* Return crosses the slot (Tier A/B scalar or Tier C boxed aggregate);
-     * nil-return excluded in C1.  fn_ret_type prefers the body Type, which
-     * carries the real def a NULL-def return annotation lacks.  A by-value
-     * aggregate param passes by value in C directly (never rides the slot) but is
-     * admitted through the same gate -- an owning-field aggregate stays out. */
+    /* Return crosses the slot (Tier A/B scalar or Tier C boxed aggregate).  A
+     * nil/void return is admitted too: the body still delivers a unit (0) to the
+     * return continuation, and the entry wrapper is emitted `void` (see below).
+     * fn_ret_type prefers the body Type, which carries the real def a NULL-def
+     * return annotation lacks.  A by-value aggregate param passes by value in C
+     * directly (never rides the slot) but is admitted through the same gate -- an
+     * owning-field aggregate stays out. */
     const Type *rt = fn_ret_type(fd);
-    if (!slot_ok_t(rt, rt->kind)) return false;
+    if (rt->kind != TY_NIL && !slot_ok_t(rt, rt->kind)) return false;
     for (uint8_t i = 0; i < fd->n_params; i++) {
         const Binding *p = fd->params[i];
         /* A poly fn param crosses as a fat closure (tur_poly_fn_t); a `^borrow`
@@ -2259,12 +2261,16 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
      * seed chain is freed after the body returns; the CPS body never retains it
      * (a captured sub-continuation is always a copy). */
     const Type *rt = fn_ret_type(fd);
-    const char *rety = binder_ctype_full(ctx, rt->kind, rt);
+    /* A nil/void return: the entry wrapper is declared `void` (matching the
+     * direct emitter's forward decl) and discards the unit the CPS body delivers,
+     * rather than returning an int64. */
+    bool void_ret = (rt->kind == TY_NIL);
+    const char *rety = void_ret ? "void" : binder_ctype_full(ctx, rt->kind, rt);
     buf_printf(file, "__attribute__((unused)) static %s %s(", rety, cn);
     emit_params(ctx, file, fd);
     buf_puts(file, ") {\n");
     buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
-    buf_printf(file, "    int64_t __r = %s__cps(", cn);
+    buf_printf(file, "    %s%s__cps(", void_ret ? "(void)" : "int64_t __r = ", cn);
     for (uint8_t i = 0; i < fd->n_params; i++) {
         if (i) buf_puts(file, ", ");
         char *pn = name_for_binding(ctx, fd->params[i]);
@@ -2274,11 +2280,15 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     if (fd->n_params) buf_puts(file, ", ");
     buf_puts(file, "__root);\n");
     buf_puts(file, "    dk_free(__root);\n");
-    /* slot-load the final delivered value back to the real return type.  This is
-     * the single-shot root boundary, so a Tier C box is consumed (freed) here. */
-    char *ld = slot_load(ctx, rt->kind, rt, "__r", true);
-    buf_printf(file, "    return %s;\n}\n", ld);
-    free(ld);
+    if (void_ret) {
+        buf_puts(file, "    return;\n}\n");
+    } else {
+        /* slot-load the final delivered value back to the real return type.  This
+         * is the single-shot root boundary, so a Tier C box is consumed here. */
+        char *ld = slot_load(ctx, rt->kind, rt, "__r", true);
+        buf_printf(file, "    return %s;\n}\n", ld);
+        free(ld);
+    }
 
     ctx->fn_params   = saved_fn_params;
     ctx->n_fn_params = saved_n_fn_params;

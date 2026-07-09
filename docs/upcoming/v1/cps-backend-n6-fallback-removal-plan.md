@@ -57,6 +57,29 @@ turn all 411 sites into hard errors -- the suite would fail to compile broadly
 (the `EX_FN_TO_FAT` count alone spans the higher-order stdlib that any effect
 program pulls in). The fallback must stay until coverage is complete.
 
+### Re-measurement (after the N6.1-N6.3 slices + indirect calls + nil return)
+
+Re-tallying the fallback reasons for every *colored* top-level function across
+the 311 control-op fixtures (a temporary `TUR_CPS_MEASURE` instrument; counts are
+inflated by per-fixture stdlib re-emission but the relative shape is what
+matters), the surface has shifted decisively from "form not in subset" to
+**signature rejection** (`fn_sig_ok`): the body-form coverage from the delegation
++ capturing-continuation work absorbed almost all of the old 402. What remains is
+dominated by the *types in the signature*:
+
+| Reason | ~Count | Meaning |
+| --- | ---: | --- |
+| `sig-param TY_APP` | 4352 | a parametric type-app parameter (`option<T>`, `list<T>`, `Cons<int>`, ...) |
+| `sig-param TY_FN` | 2504 | a plain (non-rank-2) function-typed parameter |
+| `sig-ret TY_APP` | 625 | a parametric type-app return |
+| `sig-ret TY_NIL` | 2433 -> 206 | a nil/void return -- **now landed** (the residual 206 also have a bad param) |
+| `core:*` (nested perform, ...) | ~50 | genuine control-carrying gaps (small) |
+
+So the next big levers are all *signature* types: parametric type-app params /
+returns (the non-scalar-parametric Tier-C work) and plain `TY_FN` params. The
+control-carrying core gaps (nested sequential performs, resuming shift bodies,
+cloneable/serial, async) are now a small tail by count -- and the hardest.
+
 ## The key architectural lever -- delegate control-op-free subexpressions
 
 Most of the surface is not control flow at all: `EX_FN_TO_FAT`, `EX_CLOSURE`,
@@ -361,6 +384,20 @@ fallback can be deleted:
     (`live_captures` / `capture_clone_fns` / `capture_drop_fns`), which is
     direct-path-specific today.
   - **async** needs scheduler-backed continuation capture.
+- **Signature widening (the dominant remaining surface).** The re-measurement
+  above shows `fn_sig_ok` -- not body-form coverage -- is now the main gate.
+  - **Nil/void return LANDED.** `fn_sig_ok` admits a `TY_NIL` return; the CPS
+    body already delivers a unit (0) to the return continuation, and the
+    direct->cps entry wrapper is emitted `void` (matching the direct emitter's
+    forward decl) and discards that unit rather than returning an int64. Fixture
+    `cps-backend-void-return` (`f : void` performs E, `direct == cps`, both print
+    `7`). This alone cleared ~2200 of the measured sig-return fallbacks
+    (void-returning loggers / writers / `record!`-style effects are common).
+    Full suite: 2023 passed, 0 failed.
+  - **Remaining:** parametric type-app (`TY_APP`) params / returns -- the
+    non-scalar-parametric Tier-C work (carrier-ABI vs by-value apps) -- and plain
+    `TY_FN` params (a non-rank-2 function pointer, passed as `int64_t` / a cfnptr
+    typedef in the direct emitter; admit it the way `is_poly_fn` params are).
 - **N6.5 -- delete the fallback.** Remove the `CT_UNSUPPORTED` whole-function
   bail-out and the direct-vs-CPS dual path from `emit_cps_ir.c` / the classifier.
   Any residual form becomes a hard error; give it a **form-named diagnostic**
