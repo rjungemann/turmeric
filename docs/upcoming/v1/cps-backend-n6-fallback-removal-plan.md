@@ -286,12 +286,40 @@ fallback can be deleted:
   `(let [r (handle ...)] (+ r (.second p)))` CPS-emits (`direct == cps == 103`).
   Full suite: 2018 passed, 0 failed.
 
-  *Remaining N6.3:* owning (non-Copy) captures -- carrier ADTs / rc handles / by-
-  value products with drop glue -- which need retain-on-copy into the env plus
-  drop glue; a *resuming* SHIFT body (whose env would carry subk for multi-shot
-  re-entry).
+  *Remaining N6.3 (each root-caused; see the linked report):*
+
+  - **Owning (non-Copy) captures** -- carrier ADTs / rc handles / by-value
+    products with drop glue. The blocker is not just the retain: the
+    drop-insertion pass sinks the captured value's `rc/drop` *into the
+    continuation body*, so a single clone-on-capture into the leaked, multi-shot
+    env is dropped once per resume -> underflow. Needs a single-shot/affine
+    proof or per-shot cloning. `collect_caps` correctly bails today (so it is
+    sound, just conservative). See
+    [docs/reported/cps-backend-owning-capture-multishot-double-free.md](../../reported/cps-backend-owning-capture-multishot-double-free.md).
+  - **Resuming SHIFT bodies.** The current shift lowering (`cps_shift_body`)
+    applies the receiver to the *body value* and delivers to the prompt; the
+    captured continuation `subk` is passed to the shift-body helper but ignored
+    (abortive only). A shift whose receiver actually invokes the continuation
+    needs a different lowering that binds `subk` and threads it into the
+    receiver -- not expressible in the receiver-applied-to-body form.
 - **N6.4 -- the long tail** -- cloneable/serial reset, async, indirect calls, per
   the re-measured surface.
+
+  - **Indirect calls** are sound to delegate in principle (the fn value is the
+    callee's direct entry, which never joins the caller's delimited-control
+    chain), but delegation miscompiles today: the CPS backend types a fn-value
+    parameter as `void *` and names it `<name>_<id>`, while the direct emitter
+    that generates the delegated body expects `tur_poly_fn_t` and the bare
+    source name (`fnv.fn` / `fnv.env`). `fn_sig_ok` admits fn-value params as
+    scalar `TY_PTR_VOID`, masking the divergence. The fix is to align the CPS
+    backend's fat-closure parameter typing + naming with the direct emitter.
+    See
+    [docs/reported/cps-backend-indirect-call-fatclosure-param-divergence.md](../../reported/cps-backend-indirect-call-fatclosure-param-divergence.md).
+  - **cloneable / serial** reset/shift need the DK deep-clone (`dk_copy` exists
+    in the runtime) plus the direct emitter's cloneable capture-environment glue
+    (`live_captures` / `capture_clone_fns` / `capture_drop_fns`), which is
+    direct-path-specific today.
+  - **async** needs scheduler-backed continuation capture.
 - **N6.5 -- delete the fallback.** Remove the `CT_UNSUPPORTED` whole-function
   bail-out and the direct-vs-CPS dual path from `emit_cps_ir.c` / the classifier.
   Any residual form becomes a hard error; give it a **form-named diagnostic**
