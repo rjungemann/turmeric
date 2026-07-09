@@ -6,7 +6,7 @@
 //     revalidation), network-first for HTML navigations and /docs/*.
 //
 // Bump CACHE_VERSION on each release so old caches are evicted in activate.
-const CACHE_VERSION = 'tur-try-v1-0.25.3';
+const CACHE_VERSION = 'tur-try-v1-0.27.2';
 const PRECACHE = `${CACHE_VERSION}-precache`;
 const RUNTIME  = `${CACHE_VERSION}-runtime`;
 

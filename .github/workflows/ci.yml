@@ -84,3 +84,70 @@ jobs:
 
       - name: Check for snapshot drift
         run: ./build/tur run regen-snapshots -- --check
+
+  web-smoke:
+    name: Try Turmeric smoke test (browser)
+    runs-on: ubuntu-latest
+    # Pre-deploy gate for try.turmeric-lang.com: builds the wasm bundle and
+    # drives the browser REPL through one evaluation.  If this fails, the
+    # branch is not safe to `npm run deploy` from web/.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (Linux)
+        run: sudo apt-get update && sudo apt-get install -y libedit-dev
+
+      - name: Set up Python (for gendocs)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          # Pinned to a modern release; bump alongside the wasm build if the
+          # emcc surface changes (currently only the -sSTACK_SIZE / INITIAL_MEMORY
+          # link flags are load-bearing -- see src/CMakeLists.txt).
+          version: latest
+          actions-cache-folder: 'emsdk-cache'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Configure (Debug, native tur)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+      - name: Build native tur (needed for docs / doc-names.json)
+        run: cmake --build build -j --target tur
+
+      - name: Generate stdlib docs (writes web/public/doc-names.json)
+        run: ./build/tur run docs
+
+      - name: Configure + build WASM
+        run: |
+          cmake -S . -B build-wasm -DTUR_WASM=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          cmake --build build-wasm -j --target tur_wasm
+
+      - name: Install web deps
+        working-directory: web
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Run deploy-gate smoke test
+        working-directory: web
+        run: npx playwright test deploy-gate.spec.js --project=desktop
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: web/playwright-report/
+          retention-days: 7

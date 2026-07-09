@@ -257,6 +257,38 @@ parity test); no big-bang cutover.
 - **WASM link + size**: confirm `libturi_wasm` still links and measure the
   `.wasm` size delta (Part 2 boundary note); confirm the web REPL resolves the
   new natives.
+- **Browser smoke tests (Playwright, new).** Today the only signal that the
+  `Try Turmeric` REPL works is a human reloading the tab and pasting console
+  output -- the reason `#map{}` staying broken after fbf138669 went unnoticed
+  until a user hit it, and the reason the `if`-in-`definstance` hang
+  ([`docs/reported/wasm-interp-hang-if-in-definstance-bool.md`](../reported/wasm-interp-hang-if-in-definstance-bool.md))
+  and the `set.tur` OOB
+  ([`docs/reported/wasm-interp-set-tur-oob-trap.md`](../reported/wasm-interp-set-tur-oob-trap.md))
+  both hid behind a silent `_turi_wasm_init` hang. Scaffold `web/tests/e2e/`
+  with Playwright (Chromium already honors the Vite dev server's COOP/COEP
+  headers, so `SharedArrayBuffer` / the pthreads worker just work):
+
+  Batch 0 (do first, before any relocation batch lands):
+  - `pnpm add -D @playwright/test` in `web/`; commit `playwright.config.ts`
+    that boots `vite preview` on a random port with the COOP/COEP headers.
+  - `smoke.spec.ts` -- one spec covering: navigate to `/try/`, wait for
+    `#wasm-status-text` to read `Ready` (or the loading overlay to hide),
+    evaluate `(+ 1 2)` -> `3`, `#map{}` -> a HAMT handle, `(println "hi")`
+    -> `hi` in the console pane. Set the Monaco editor via
+    `page.evaluate((v) => monaco.editor.getEditors()[0].setValue(v), src)`,
+    click the Run button, and read the REPL output pane.
+  - Wire into `tur run test` (or a new `tur run test-web` task) and add a CI
+    job. Cache the Playwright browser download so CI cost stays flat.
+
+  Batch N testing gate (repeat per relocation batch): the smoke spec is the
+  fastest signal that a moved native didn't break the browser path. Add a
+  batch-specific case only when the batch exposes a new op the smoke spec
+  can't already reach transitively (rare -- `hamt-of` covers most of the
+  collection surface).
+
+  This is scoped as a scaffold, not a full e2e suite. Coverage grows as the
+  known-broken paths (the two reported hangs, plus any that surface as
+  natives move) get fixed and become regressable.
 
 ## Risks
 
