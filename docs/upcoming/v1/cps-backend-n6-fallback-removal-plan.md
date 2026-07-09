@@ -220,10 +220,16 @@ fallback can be deleted:
   CPS-emits (`direct == cps == 107`); a capturing `reset` continuation verified
   the same way. Full suite: 2013 passed, 0 failed.
 
-  *Remaining N6.3:* captured CPS vars (intermediate results, e.g.
-  `(+ (+ x y) (perform E))`), non-scalar captures, capturing SHIFT bodies /
-  HANDLER cases (their env carries subk / handler state), and multi-shot with
-  owning captures (refcount on copy).
+  *Captured CPS vars (intermediate results) landed too.* The collector now
+  handles a captured CPS result var (`(+ (+ x y) (perform E))` captures the fresh
+  `(+ x y)` result) as well as source-var captures: a fresh CPS var is named the
+  same way (`tN`) at its declaration and every reference, so `CapSet` carries it
+  by name and it rides the continuation env like a source capture. Fixture
+  `cps-backend-capture-intermediate` (`direct == cps == 107`).
+
+  *Remaining N6.3:* non-scalar captures, capturing SHIFT bodies / HANDLER cases
+  (their env carries subk / handler state), and multi-shot with owning captures
+  (refcount on copy).
 - **N6.4 -- the long tail** -- cloneable/serial reset, async, indirect calls, per
   the re-measured surface.
 - **N6.5 -- delete the fallback.** Remove the `CT_UNSUPPORTED` whole-function

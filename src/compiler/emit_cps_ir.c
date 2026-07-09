@@ -375,13 +375,30 @@ static bool has_capture(const CTerm *t, uint32_t exclude) {
  * zero-capture fallback.  Mirrors has_capture_rec's traversal exactly so no
  * capture is missed (a missed capture would emit an undeclared reference). */
 #define CC_MAX_CAPS 16
-typedef struct { const Binding *b[CC_MAX_CAPS]; TypeKind ty[CC_MAX_CAPS]; int n; bool ok; } CapSet;
+/* A capture is either a source binding (`b`, named via name_for_binding) or a
+ * CPS-introduced result var (`cvname`, a fresh "tN" name that is both its
+ * declaration and its reference).  Exactly one of b / cvname is set. */
+typedef struct {
+    const Binding *b[CC_MAX_CAPS];
+    const char    *cvname[CC_MAX_CAPS];
+    uint32_t       cvid[CC_MAX_CAPS];
+    TypeKind       ty[CC_MAX_CAPS];
+    int n; bool ok;
+} CapSet;
 
 static void cap_add(CapSet *cs, const Binding *b, TypeKind ty) {
     if (!slot_ty(ty)) { cs->ok = false; return; }   /* scalar-only for now */
     for (int i = 0; i < cs->n; i++) if (cs->b[i] == b) return;
     if (cs->n >= CC_MAX_CAPS) { cs->ok = false; return; }
-    cs->b[cs->n] = b; cs->ty[cs->n] = ty; cs->n++;
+    cs->b[cs->n] = b; cs->cvname[cs->n] = NULL; cs->ty[cs->n] = ty; cs->n++;
+}
+
+static void cap_add_cvar(CapSet *cs, uint32_t id, const char *name, TypeKind ty) {
+    if (!slot_ty(ty) || !name) { cs->ok = false; return; }
+    for (int i = 0; i < cs->n; i++) if (cs->cvname[i] && cs->cvid[i] == id) return;
+    if (cs->n >= CC_MAX_CAPS) { cs->ok = false; return; }
+    cs->b[cs->n] = NULL; cs->cvname[cs->n] = name; cs->cvid[cs->n] = id;
+    cs->ty[cs->n] = ty; cs->n++;
 }
 
 static void collect_caps_rec(const CTerm *t, uint32_t exclude,
@@ -397,7 +414,7 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
         else if (_a->kind == CA_CVAR) { \
             if (_a->cvar_id != exclude) { bool _f = true; \
                 for (int _i = 0; _i < nb; _i++) if (bound[_i] == _a->cvar_id) { _f = false; break; } \
-                if (_f) cs->ok = false; } } } while (0)   /* captured CPS var: bail */
+                if (_f) cap_add_cvar(cs, _a->cvar_id, _a->cvar_name, _a->ty); } } } while (0)
     switch (t->kind) {
         case CT_APPCONT: COL_ATOM(&t->as.appcont.v); return;
         case CT_LETVAL:
@@ -1628,7 +1645,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
             buf_puts(&tmp, "DK *k = __cap->__k;\n");
         }
         for (int i = 0; i < caps->n; i++) {
-            char *cn = name_for_binding(ce->ctx, caps->b[i]);
+            char *cn = caps->b[i] ? name_for_binding(ce->ctx, caps->b[i]) : strdup(caps->cvname[i]);
             indent_buf(&tmp, 4);
             buf_printf(&tmp, "%s %s = __cap->f%d;\n", binder_ctype(ce->ctx, caps->ty[i]), cn, i);
             free(cn);
@@ -1751,7 +1768,7 @@ static char *emit_cont_env(CE *ce, const char *hname, const CapSet *caps, const 
     ce_line(ce, "%s_env *%s = (%s_env *)malloc(sizeof(%s_env));", hname, envv, hname, hname);
     ce_line(ce, "%s->__k = %s;", envv, k_expr);
     for (int i = 0; i < caps->n; i++) {
-        char *cn = name_for_binding(ce->ctx, caps->b[i]);
+        char *cn = caps->b[i] ? name_for_binding(ce->ctx, caps->b[i]) : strdup(caps->cvname[i]);
         ce_line(ce, "%s->f%d = %s;", envv, i, cn);
         free(cn);
     }
@@ -1908,7 +1925,7 @@ static void emit_perform(CE *ce, const CTerm *t) {
             snprintf(envv, sizeof envv, "__pfe%d", id);
             ce_line(ce, "%s_env *%s = (%s_env *)malloc(sizeof(%s_env));", pname, envv, pname, pname);
             for (int i = 0; i < cs.n; i++) {
-                char *cn = name_for_binding(ce->ctx, cs.b[i]);
+                char *cn = cs.b[i] ? name_for_binding(ce->ctx, cs.b[i]) : strdup(cs.cvname[i]);
                 ce_line(ce, "%s->f%d = %s;", envv, i, cn);
                 free(cn);
             }
