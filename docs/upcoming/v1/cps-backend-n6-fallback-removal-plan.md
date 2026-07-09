@@ -516,11 +516,20 @@ fallback can be deleted:
     `cps-backend-fn-param-effectful` (the effectful-callback soundness guard --
     runs under the flag, stays on fallback, exact output). Full suite: 2035
     passed, 0 failed.
-  - **Remaining:** parametric type-app (`TY_APP`) params / returns -- the
-    non-scalar-parametric Tier-C work (carrier-ABI vs by-value apps) -- and
-    **effectful** `TY_FN` callback params, which need genuine colored-indirect-call
-    support (the callee threads the caller's DK continuation) rather than
-    delegation.
+  - **Remaining:** parametric type-app (`TY_APP`) params / returns -- but the
+    *concrete* case already CPS-emits (a `(Option int)` monomorphizes to a
+    by-value ADT on the Tier C box path); what is left is **colored-generic
+    monomorphs**. A colored generic is CPS-classified only as its template (which
+    sig-rejects on the tyvar `TY_APP`); the concrete monomorphs the direct emitter
+    generates (`choose_or__spec__...`) run on the fiber machine and are never
+    CPS-emitted, so any DK effect chain touching one collapses to fiber (sound via
+    effect-taint, but uncovered). This is an architectural change -- monomorphs
+    are emit-time `EmitAbiSpecialization`s, invisible to the pre-emit CPS
+    classifier -- scoped in
+    [cps-backend-generic-monomorph-classification-plan.md](cps-backend-generic-monomorph-classification-plan.md).
+    The other residual is **effectful** `TY_FN` callback params, which need
+    genuine colored-indirect-call support (the callee threads the caller's DK
+    continuation) rather than delegation.
 - **N6.5 -- delete the fallback.** Remove the `CT_UNSUPPORTED` whole-function
   bail-out and the direct-vs-CPS dual path from `emit_cps_ir.c` / the classifier.
   Any residual form becomes a hard error; give it a **form-named diagnostic**
