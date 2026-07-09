@@ -13,11 +13,9 @@
 ;; result_full_type carries the real monomorphized `Pr` def, so the perform
 ;; result is a real `Pr` rather than a def-less TY_ADT.
 ;;
-;; NOTE: the direct-style / fiber path does NOT compile this (it passes the
-;; continuation result as int64 and casts it back to the struct -- prerequisite
-;; P2, see docs/upcoming/v1/cps-backend-tier-c-crossing-plan.md).  The CPS path
-;; is the correct one; this fixture asserts its value (32 + 10 = 42), mirroring
-;; the cps-backend-float-effect precedent.
+;; The direct/fiber path now boxes the aggregate across its int64 effect ABI too
+;; (prerequisite P2), so direct-vs-CPS are equal (32 + 10 = 42) -- the fixture's
+;; expected value is the direct-style result.
 
 (defstruct Pr [first : int second : int])
 

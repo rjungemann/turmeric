@@ -83,7 +83,23 @@ rejected at `defeffect`. So the "effect resumes with a by-value record" crossing
 (the N3-TierC round-trip target as literally written) is not expressible.
 **Fix locus:** effect declaration elaboration (accept ADT/struct value types).
 
-### P2 -- an aggregate returned *across an effect* breaks the direct/fiber path
+### P2 -- an aggregate returned *across an effect* breaks the direct/fiber path -- **RESOLVED**
+
+**Resolved.** The fiber effect ABI is int64-based (`tur_effect_perform` /
+`tur_effect_cont_resume` / the dispatch fn all pass/return `int64_t`), so a
+by-value aggregate could not ride it by a cast. `emit_effects.c` now boxes it at
+every fiber-effect boundary (heap-copy + pointer, `eff_box_expr`, gated on
+`eff_type_boxed` = owning-free by-value product) and unboxes on the consuming
+side: the perform argument (box) and result (unbox), the handler-case param
+(unbox) and return (box), the body fiber's result slot (box), the resume value
+(box) and result (unbox), and the handle-site dispatch result (unbox). The
+fiber handler/body functions' `current_fn_ret_ctype` is set to the real ABI
+type (`int64_t` / `void`) so a pending-panic propagation return is well-typed.
+This is **purely additive** -- an aggregate effect value was a parse error
+before P1, so no existing (scalar) effect path changed; the full suite is green.
+Now `direct == cps` for aggregate effect crossings (`cps-backend-tierc-effect`,
+`cps-backend-tierc-effect-arg`). The original analysis is kept for the record:
+
 
 ```turmeric
 (defn make-pr [] : Pr (let [v (perform (E))] (make-struct Pr :first v :second 10)))
@@ -233,14 +249,18 @@ baseline. In ascending order of independence:
   `tests/fixtures/cps-backend-tierc-shift/` (`direct == cps == 42`). This box is
   loaded by the reset continuation without a free (`consume=false`, multi-shot
   safety) so it leaks alongside the DK nodes (`requires.no-leak-check`).
-- **T-C3: the effect payload / resume-value crossings. -- LANDED on the CPS path
-  (P1 + P5 resolved).** An effect declaring an aggregate *result* value threads it
-  boxed through perform / resume (`cps-backend-tierc-effect`), and an aggregate
-  effect *argument* crosses boxed through `dk_perform` into the handler case
-  (`cps-backend-tierc-effect-arg`). Remaining: **P2** (the direct/fiber baseline
-  does not compile an aggregate effect crossing, so these fixtures assert the CPS
-  value rather than `direct == cps`, per the float-effect precedent). P2 is a
-  direct-emitter fix, independent of the CPS path.
+- **T-C3: the effect payload / resume-value crossings. -- LANDED (P1 + P5 + P2
+  resolved).** An effect declaring an aggregate *result* value threads it boxed
+  through perform / resume (`cps-backend-tierc-effect`), and an aggregate effect
+  *argument* crosses boxed through `dk_perform` into the handler case
+  (`cps-backend-tierc-effect-arg`). P2 boxed the same crossings on the direct/
+  fiber path, so both fixtures are true `direct == cps` equalities.
+
+**All five prerequisites (P1-P5) are resolved.** The owning-free by-value
+aggregate crosses the DK slot -- and the fiber int64 effect ABI -- boxed, in
+every position: function return (T-C1), reset/shift result (T-C2), and effect
+result / argument (T-C3). Gate item 3 (Tier C) is complete for owning-free
+products; owning-field aggregates and carrier handles remain gate item 4.
 
 **Note on leak checking.** In some environments (including the one T-C1/T-C2 were
 developed in) LeakSanitizer is not active on the spawned fixture binary -- e.g.

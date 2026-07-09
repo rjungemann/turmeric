@@ -11,9 +11,8 @@
 ;; param_full_types carry the real monomorphized `Pr` def, so the handler-case
 ;; param binding is a real `Pr` and field access (`.first p`) elaborates.
 ;;
-;; NOTE: like cps-backend-tierc-effect, the direct/fiber path does not compile an
-;; aggregate effect crossing (prerequisite P2); this fixture asserts the CPS
-;; value (32 + 10 = 42).
+;; The direct/fiber path now boxes the aggregate across its int64 effect ABI too
+;; (prerequisite P2), so direct-vs-CPS are equal (32 + 10 = 42).
 
 (defstruct Pr [first : int second : int])
 

@@ -413,17 +413,22 @@ must be true at graduation:
    bit-reinterpret slot convention. *Done* (`slot_store`/`slot_load` at all six
    boundaries; `cps-backend-float` / `cps-backend-float-effect` fixtures).
 3. **Tier C complete** (N3-TierC) -- wide by-value aggregates that *cross* the
-   slot (effect payload / resume value / return) box at the boundary. *Return
-   crossing (T-C1) and reset/shift-result crossing (T-C2) LANDED*; the remaining
-   effect-payload / resume-value crossing (T-C3) is blocked on the coupled
-   prerequisites P1+P2+P5. The box-at-boundary machinery is in place and threaded
-   to all six DK boundaries (`slot_store`/`slot_load` box an owning-free by-value
-   product; the crossing Type is taken from the delivered atom / body Type, which
-   carries the real def). Fixtures `cps-backend-tierc-return` (KK_RET boxing,
-   freed at entry) and `cps-backend-tierc-shift` (shift/reset prompt boxing),
-   both `direct == cps == 42`. Full investigation + fix order + landed status:
+   slot (effect payload / resume value / return) box at the boundary. *Done* for
+   owning-free by-value products, in every crossing position: function return
+   (T-C1), reset/shift result (T-C2), and effect result / argument (T-C3). The
+   box-at-boundary machinery is threaded to all six DK boundaries
+   (`slot_store`/`slot_load` box an owning-free by-value product; the crossing
+   Type is taken from the delivered atom / body Type, which carries the real def)
+   and to the fiber int64 effect ABI (`emit_effects.c`, so the direct baseline
+   compiles too). Fixtures `cps-backend-tierc-return`, `cps-backend-tierc-shift`,
+   `cps-backend-tierc-effect`, `cps-backend-tierc-effect-arg`, all `direct == cps
+   == 42`. The five prerequisites P1-P5 (effect ADT value/arg types, the
+   direct-path fiber crossing, shift-body struct translation, the NULL
+   aggregate-return def) are all resolved. Full history + fix order:
    [cps-backend-tier-c-crossing-plan.md](cps-backend-tier-c-crossing-plan.md).
-   (struct/ADT LOCALS that stay off the slot already work -- see item 6.)
+   *Remaining:* owning-field aggregates and carrier handles (they need
+   retain-on-copy + drop glue) fold into gate item 4, not Tier C. (struct/ADT
+   LOCALS that stay off the slot already work -- see item 6.)
 4. **Owning pointers handled correctly on the CPS path** -- `ref` / `rc` /
    `weak` / `lref`. Investigation
    ([cps-backend-owning-pointers-plan.md](cps-backend-owning-pointers-plan.md))
