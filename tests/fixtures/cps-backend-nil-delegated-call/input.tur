@@ -1,0 +1,30 @@
+;; CPS-IR-to-C backend: a nil/void delegated CALL must keep its side effect.
+;; Built with --enable=cps-backend.
+;;
+;; `log2` is a void function; `(log2 v)` in `f` is a cps->direct delegated call
+;; (CT_LETRAW).  emit_value returns a nil/void EX_CALL as an UN-emitted expression
+;; (a void result is never hoisted into a temp), so emit_letraw must emit it as a
+;; statement for its side effect -- previously it bound the unit placeholder
+;; (`t = 0`) and discarded the call, so `f`'s `(log2 v)` was silently dropped and
+;; the `10` never printed on the CPS path.  Other nil ops (rc/drop, set!, ...)
+;; already emit their statements, so only a nil EX_CALL is emitted here.
+;;
+;; direct-vs-CPS equal: log2 prints 2*5=10, then f returns 99 -- both paths print
+;; `10` then `99`.
+
+(defeffect E [] :int)
+
+(defn g [] : int
+  (perform (E)))
+
+(defn log2 [x : int] : void
+  (println (* x 2)))
+
+(defn f [] : int
+  (let [v (handle (g) (E [] k) (resume k 5))]
+    (log2 v)
+    99))
+
+(defn main [] : int
+  (println (f))
+  0)

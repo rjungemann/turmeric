@@ -1680,11 +1680,20 @@ static void emit_letraw(CE *ce, const CTerm *t) {
     char *rhs = emit_value(ce->ctx, ce->out, t->as.letraw.e);
     ce->ctx->indent = saved;
     char *bn = letraw_binder_name(ce, t);
-    /* A nil-typed op (rc/drop) yields a void/nil expression -- bind the unit
-     * placeholder rather than assigning a void value. */
-    if (t->as.letraw.x.ty == TY_NIL)
+    /* A nil-typed op yields a void/nil expression -- bind the unit placeholder
+     * rather than assigning a void value.  But a nil/void EX_CALL is a special
+     * case: emit_value returns the call as an UN-emitted expression (a void
+     * result is not hoisted into a temp -- see emit_value), so its side effect is
+     * only realized if we emit it as a statement here.  Other nil ops (rc/drop,
+     * set!, while, ...) already emitted their statements and return a unit
+     * placeholder, so they must NOT be re-emitted (that would double the effect). */
+    if (t->as.letraw.x.ty == TY_NIL) {
+        const Expr *le = t->as.letraw.e;
+        while (le && le->kind == EX_ASCRIBE) le = le->as.ascribe_.inner;
+        if (le && le->kind == EX_CALL && rhs && rhs[0])
+            ce_line(ce, "%s;", rhs);
         ce_line(ce, "%s = 0;", bn);
-    else
+    } else
         ce_line(ce, "%s = %s;", bn, rhs ? rhs : "0");
     free(bn);
     free(rhs);
