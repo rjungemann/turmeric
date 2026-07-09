@@ -25,7 +25,7 @@ The runnable end-to-end version of every snippet here lives in
 > **Note.** The snippets below use the `#\<char>` character-literal
 > syntax (`#\+` reads as `43`, `#\0` as `48`, `#\space` as `32`).
 > That syntax is a v1 legibility slice; see
-> [`docs/upcoming/v1/legible-char-literals-plan.md`](../upcoming/v1/legible-char-literals-plan.md).
+> [`docs/archive/legible-char-literals-plan.md`](../archive/legible-char-literals-plan.md).
 > A `#\<char>` literal is just an `:int` -- the reader emits the byte
 > code, so it composes with `=` and arithmetic exactly like the raw
 > integer it replaces. The runnable fixture uses `#\` throughout.

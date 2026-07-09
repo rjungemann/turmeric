@@ -2768,7 +2768,7 @@ static Form *try_read_user_macro(Reader *r) {
 /* Legible character literals: `#\a`, `#\space`, `#\u41`.  The reader emits a
  * plain :int literal whose value is the character's byte code -- no new type,
  * no ABI change, no runtime work.  See
- * docs/upcoming/v1/legible-char-literals-plan.md. */
+ * docs/archive/legible-char-literals-plan.md. */
 static bool char_lit_is_delim(int c) {
     /* A reader delimiter terminates a char literal: EOF, whitespace (including
      * the reader's comma-as-whitespace), and the closing/comment bytes. */

@@ -242,8 +242,8 @@ lands.
 
 ## Related
 
-- [parser-combinators-tutorial.md](../../guides/parser-combinators-tutorial.md)
+- [parser-combinators-tutorial.md](../guides/parser-combinators-tutorial.md)
   -- the primary consumer; already written against the `#\` syntax.
-- [data-literals-guide.md](../../guides/data-literals-guide.md) --
+- [data-literals-guide.md](../guides/data-literals-guide.md) --
   companion reader-dispatch feature (`#map{}`, `#set{}`, `#row{}`)
   whose implementation `#\` slots next to.
