@@ -80,6 +80,30 @@ returns (the non-scalar-parametric Tier-C work) and plain `TY_FN` params. The
 control-carrying core gaps (nested sequential performs, resuming shift bodies,
 cloneable/serial, async) are now a small tail by count -- and the hardest.
 
+**Caveat found while scoping these (and a latent miscompile fixed).** The raw
+`TY_APP` counts overstate the *real* remaining surface, in two ways:
+
+- A **concrete** parametric type-app is often already handled. `(Option int)`
+  monomorphizes to a *by-value* owning-free ADT (`tur_adt_Option__int`) and rides
+  the existing Tier C by-value box path -- a colored function taking/returning it
+  already CPS-emits correctly (verified: `direct == cps`). Much of the measured
+  `sig-param TY_APP` count is *generic templates* (`(Option A)` with a type
+  variable, which is carrier-ABI only pre-monomorphization); their monomorphs
+  emit. So the true parametric surface is smaller than the raw count.
+- A **heap-passed** parametric ADT (`(Vec int)` -> `tur_adt_Vec__int *`) is a
+  different case, and it exposed a **pre-existing miscompile**: a heap ADT def
+  still has product *shape*, so `type_is_byvalue_adt_product` reported true and
+  `slot_box_ty` wrongly classified it as a boxable Tier C value. `fn_sig_ok`
+  admitted the function and the return crossing boxed/unboxed the handle
+  (`*(T**)__r; free(...)`), double-indirecting it -- a colored `mkvec` returned a
+  garbage `vec-len` of 0. **Fixed** by excluding `type_is_heap_adt` /
+  `type_is_heap_struct` from `slot_box_ty`, so a heap ADT is neither admitted nor
+  boxed and falls back correctly (`mkvec` now `direct == cps`). Regression fixture
+  `cps-backend-heap-adt-return`. The genuine "heap-handle in the CPS subset"
+  support (admit an int64 handle as a plain-cast carrier, not a box) remains
+  future work and is ownership-sensitive (a handle live across a control op must
+  stay caught by the conservative capture bail).
+
 ## The key architectural lever -- delegate control-op-free subexpressions
 
 Most of the surface is not control flow at all: `EX_FN_TO_FAT`, `EX_CLOSURE`,

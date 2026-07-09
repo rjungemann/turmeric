@@ -93,6 +93,14 @@ static const AdtDef *slot_agg_def(const Type *t) {
  * carries the real monomorphized def. */
 static bool slot_box_ty(const Type *t) {
     if (!t) return false;
+    /* A heap-passed ADT / struct (`(Vec int)` -> `tur_adt_Vec__int *`, ...) is
+     * already a pointer (the int64 carrier), NOT a by-value product to heap-copy.
+     * Some heap ADT defs still have product *shape* (`{ len; cap; data }`), so
+     * type_is_byvalue_adt_product can report true for them -- but boxing one would
+     * double-indirect the handle (store a T** where a T* is expected) and later
+     * free a non-box.  Exclude them here so they are neither admitted through the
+     * Tier C by-value gate nor routed through slot_store/slot_load's box/unbox. */
+    if (type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t)) return false;
     if (!type_is_byvalue_adt_product(*(Type *)t)) return false;
     const AdtDef *d = slot_agg_def(t);
     return d && !d->needs_drop_glue;

@@ -1,0 +1,37 @@
+;; CPS-IR-to-C backend, N6: a colored function returning a heap-allocated ADT
+;; handle must NOT be treated as a by-value boxed aggregate.  Built with
+;; --enable=cps-backend.
+;;
+;; `(Vec int)` lowers to a heap handle (`tur_adt_Vec__int *`) -- already a pointer
+;; (the int64 carrier), passed by pointer.  Its ADT def still has product *shape*
+;; (`{ len; cap; data }`), so `type_is_byvalue_adt_product` reported true and
+;; `slot_box_ty` wrongly classified it as a Tier C by-value product: `fn_sig_ok`
+;; admitted the function, and the return crossing boxed/unboxed it --
+;; `*(T**)__r; free(...)` -- double-indirecting the handle and freeing a non-box,
+;; so the CPS path returned garbage (a `vec-len` of 0 instead of 1).
+;;
+;; The fix excludes `type_is_heap_adt` / `type_is_heap_struct` from `slot_box_ty`,
+;; so a heap ADT is neither admitted through the by-value gate nor routed through
+;; the box/unbox crossing -- `mkvec` falls back to the direct emitter and returns
+;; the correct handle.  (A genuine by-value product like `(Option int)` =
+;; `tur_adt_Option__int` is unaffected and still CPS-emits.)
+;;
+;; This fixture asserts the *value* is correct (1), which is what regressed: if a
+;; heap ADT is ever boxed again, the output flips to 0.
+
+(load "stdlib/vec.tur")
+
+(defeffect E [] :int)
+
+(defn g [] : int
+  (perform (E)))
+
+(defn mkvec [] : (Vec int)
+  (let [n (handle (g) (E [] k) (resume k 3))]
+    (let [v (vec-new)]
+      (vec-push! v n)
+      v)))
+
+(defn main [] : int
+  (println (vec-len (mkvec)))
+  0)
