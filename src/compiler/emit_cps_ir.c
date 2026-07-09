@@ -1416,6 +1416,74 @@ static SEnt *ent_of(const FnDef *fd) {
     return NULL;
 }
 
+/* True when `fn` names a COLORED top-level function (g_ents holds exactly the
+ * colored fns).  Used by the island analysis: a call to a colored callee couples
+ * this body to that callee's effect machine, so it disqualifies an island. */
+static bool binding_is_colored(const Binding *fn) {
+    if (!fn) return false;
+    for (size_t i = 0; i < g_ents_n; i++)
+        if (g_ents[i].bind == fn) return true;
+    return false;
+}
+
+/* G3a: is the CTerm a self-contained DK ISLAND -- safe to CPS-emit as
+ * `<clone>__cps` + entry wrapper with NO whole-program taint/routing change?
+ * Sufficient (conservative) conditions:
+ *   - every `perform` is lexically enclosed by a `handle` for its effect (no
+ *     effect escapes to a caller -- an escaping dk_perform would search only the
+ *     wrapper's fresh root and never reach the caller's handler);
+ *   - no colored callee (CT_TAILCALL / CT_LETCALL to a colored fn -- that would
+ *     couple this body to the callee's machine);
+ *   - no raw reset/shift (delimited control that could escape a missing prompt).
+ * `handled` carries the effect Symbols of the enclosing handlers in scope. */
+static bool sym_in(const Symbol *s, const Symbol **set, int n) {
+    for (int i = 0; i < n; i++) if (set[i] == s) return true;
+    return false;
+}
+static bool is_cps_island(const CTerm *t, const Symbol **handled, int nh) {
+    if (!t) return true;
+    switch (t->kind) {
+        case CT_APPCONT: return true;
+        case CT_LETVAL:  return is_cps_island(t->as.letval.body, handled, nh);
+        case CT_LETPRIM: return is_cps_island(t->as.letprim.body, handled, nh);
+        case CT_LETRAW:  return is_cps_island(t->as.letraw.body, handled, nh);
+        case CT_LETCALL:
+            if (binding_is_colored(t->as.letcall.fn)) return false;
+            return is_cps_island(t->as.letcall.body, handled, nh);
+        case CT_TAILCALL:
+            return !binding_is_colored(t->as.tailcall.fn);
+        case CT_LETCONT:
+            return is_cps_island(t->as.letcont.jbody, handled, nh)
+                && is_cps_island(t->as.letcont.body, handled, nh);
+        case CT_IF:
+            return is_cps_island(t->as.if_.then_, handled, nh)
+                && is_cps_island(t->as.if_.else_, handled, nh);
+        case CT_HANDLE: {
+            /* delim runs under this handle's effects (+ enclosing); continuation
+             * and case bodies run outside them. */
+            const Symbol *ext[32];
+            int ne = nh;
+            for (int i = 0; i < nh && i < 32; i++) ext[i] = handled[i];
+            for (uint32_t ci = 0; ci < t->as.handle.n_cases && ne < 32; ci++)
+                ext[ne++] = t->as.handle.cases[ci].effect;
+            if (!is_cps_island(t->as.handle.delim, ext, ne)) return false;
+            if (!is_cps_island(t->as.handle.body, handled, nh)) return false;
+            for (uint32_t ci = 0; ci < t->as.handle.n_cases; ci++)
+                if (!is_cps_island(t->as.handle.cases[ci].case_body, handled, nh)) return false;
+            return true;
+        }
+        case CT_PERFORM:
+            if (!sym_in(t->as.perform.effect, handled, nh)) return false;  /* escapes */
+            return is_cps_island(t->as.perform.body, handled, nh);
+        case CT_RESUME:
+            return is_cps_island(t->as.resume.body, handled, nh);
+        case CT_RESET:
+        case CT_SHIFT:
+        default:
+            return false;   /* raw delimited control / unsupported: not an island */
+    }
+}
+
 /* ---- emission -------------------------------------------------------- */
 
 #define MAX_JOINS 64
@@ -2385,11 +2453,14 @@ static void cps_dump_mono_admissible(EmitCtx *ctx, FnDef *fd) {
     g_cps_mono_resolver = ctx;
     bool body = t && term_core_ok(t);
     g_cps_mono_resolver = NULL;
+    const Symbol *handled0[1];
+    bool island = t && is_cps_island(t, handled0, 0);
     const char *nm = spec->clone_name ? spec->clone_name
                    : (fd->binding && fd->binding->name ? fd->binding->name->name : "?");
-    fprintf(stderr, "[cps-mono] %s: sig=%s body=%s => %s\n",
-            nm, sig ? "ok" : "no", body ? "ok" : "no",
-            (sig && body) ? "ADMISSIBLE" : "fallback");
+    bool admissible = sig && body;
+    fprintf(stderr, "[cps-mono] %s: sig=%s body=%s island=%s => %s\n",
+            nm, sig ? "ok" : "no", body ? "ok" : "no", island ? "yes" : "no",
+            admissible ? (island ? "ISLAND-EMITTABLE" : "ADMISSIBLE(cross-fn)") : "fallback");
     arena_free(&tmp);
 }
 
