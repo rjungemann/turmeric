@@ -47,6 +47,10 @@ set(TURI_EVAL_SOURCES
     # Vec/Set/Map/HAMT interpreter native overrides, relocated from main.c so
     # they land in libturi for all interpreter consumers (turi-interp-collections).
     turi/collections_native.c
+    # preload.c -- shared stdlib preload sequence (macros + typed collections),
+    # relocated from main.c so the native --interpret path and the WASM REPL
+    # load the same list (web-repl-missing-stdlib-preload).
+    turi/preload.c
     # dap.c -- Debug Adapter Protocol server (debugger Phase 3), a thin shell
     # over the Phase 2 interpreter debugger's control API in eval.c.
     turi/dap.c
@@ -826,6 +830,12 @@ if(TUR_WASM)
                 -I${CMAKE_CURRENT_SOURCE_DIR}/async
                 -I${CMAKE_CURRENT_SOURCE_DIR}/web
                 ${WASM_SOURCES}
+                # Bundle the stdlib into the module's virtual FS at /stdlib so the
+                # interpreter can (load ...) macros + typed collections at init.
+                # The default cwd is "/", so a cwd-relative "stdlib/<file>" load
+                # (the form the stdlib modules use internally) resolves here too.
+                # web-repl-missing-stdlib-preload.
+                --embed-file ${CMAKE_SOURCE_DIR}/stdlib@/stdlib
                 -o ${CMAKE_BINARY_DIR}/wasm/turmeric.js
                 -sMODULARIZE=1
                 -sALLOW_MEMORY_GROWTH=1

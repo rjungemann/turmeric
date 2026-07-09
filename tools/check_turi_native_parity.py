@@ -44,6 +44,10 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MAIN_C = os.path.join(ROOT, "src", "main.c")
+# The interpreter prelude array was relocated from cmd_eval (main.c) into the
+# shared preload helper so the native --interpret path and the WASM REPL load
+# one list (web-repl-missing-stdlib-preload).
+PRELOAD_C = os.path.join(ROOT, "src", "turi", "preload.c")
 STDLIB = os.path.join(ROOT, "stdlib")
 CARVE_OUT = os.path.join(ROOT, "docs", "artifacts", "turi-preload-carve-out.txt")
 
@@ -74,15 +78,15 @@ def compiled_autoload():
 
 
 def interpreter_prelude():
-    """The interpreter preload set.  cmd_eval loads macros.tur first, then the
-    `prelude[]` array, then contract.tur and sym.tur in their own load passes --
-    so the parity set is that union.  macros.tur and contract.tur both export
-    macros that must register before the user file is read, so they are loaded
-    outside the array; sym.tur is gated on -Xsymbols but counts as 'reachable
-    under --interpret'.  All three are counted explicitly here."""
-    src = read(MAIN_C)
+    """The interpreter preload set.  The shared helper (src/turi/preload.c,
+    called by both cmd_eval and the WASM REPL) loads macros.tur first, then the
+    `prelude[]` array (which itself ends with sym.tur), plus contract.tur in the
+    macros pass.  macros.tur and contract.tur both export macros that must
+    register before the user file is read, so they are loaded outside the array
+    (turi_env_preload_macros); they are counted explicitly here."""
+    src = read(PRELOAD_C)
     base = _module_array(src, r"static const char\s*\*prelude\[\]")
-    return ["macros.tur"] + base + ["contract.tur", "sym.tur"]
+    return ["macros.tur"] + base + ["contract.tur"]
 
 
 # Top-level definer forms whose name becomes a public stdlib binding.

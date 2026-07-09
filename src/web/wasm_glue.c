@@ -24,6 +24,7 @@
 #include "fmt.h"
 #include "reader.h"
 #include "symbols.h"
+#include "turi/preload.h"
 #include "turi/repl.h"
 #include "elab.h"
 #include "expr.h"
@@ -69,6 +70,29 @@ void turi_wasm_free(void *p) {
     free(p);
 }
 
+/* Root of the stdlib inside the WASM MEMFS.  The Emscripten link step bundles
+ * the host `stdlib/` tree here via `--embed-file <src>/stdlib@/stdlib`, and the
+ * module's default working directory is "/", so a cwd-relative `stdlib/<file>`
+ * load (the form the stdlib modules use internally for their transitive loads)
+ * and this top-level root resolve to the same `/stdlib/<file>` -- keeping the
+ * (load ...) dedup keys consistent. */
+#define WASM_STDLIB_ROOT "stdlib"
+
+/* Bring a freshly-created env up to interpreter parity with the native
+ * `tur --interpret` entry point: load the core macros (when/cond/for/and/or +
+ * assert!/require!/...) and the typed-collection stdlib so reader-macro data
+ * literals (`#map{...}`, `#set{...}`, `[...]`) and the rest of the stdlib
+ * resolve instead of failing "unknown function or operator 'hamt-of'".  The
+ * underlying Vec/Set/Map/HAMT runtime ops are already registered as natives by
+ * turi_env_new (turi_register_collection_natives).  Shares the load list with
+ * src/main.c via src/turi/preload.c so the two entry points cannot drift.
+ * See docs/reported/web-repl-missing-stdlib-preload.md. */
+static void wasm_preload_stdlib(TuriEnv *env) {
+    if (!env) return;
+    turi_env_preload_macros(env, WASM_STDLIB_ROOT);
+    turi_env_preload_collections(env, WASM_STDLIB_ROOT);
+}
+
 /* ---------------------------------------------------------------------------
  * Public API functions (exported to WASM)
  * ---------------------------------------------------------------------------
@@ -86,10 +110,15 @@ int turi_wasm_init(void) {
     g_env = turi_env_new();
     if (!g_env) return 1;
     turi_env_set_diag_sink(g_env, wasm_diag_sink, g_env);
-    
+
     /* Initialize diagnostics (no color in WASM - output goes to JS console) */
     turi_init(false);
-    
+
+    /* Preload the stdlib (macros + typed collections) so the REPL matches the
+     * native --interpret path -- without this, `#map{}`/`#set{}` and every
+     * macro (when/cond/for/...) failed as "unknown function or operator". */
+    wasm_preload_stdlib(g_env);
+
     return 0;
 }
 
@@ -101,6 +130,8 @@ void turi_wasm_reset(void) {
         g_env = turi_env_new();
         if (g_env) {
             turi_env_set_diag_sink(g_env, wasm_diag_sink, g_env);
+            /* Re-establish stdlib parity on the fresh env (matches init). */
+            wasm_preload_stdlib(g_env);
         }
     }
 }
