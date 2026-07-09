@@ -2765,6 +2765,126 @@ static Form *try_read_user_macro(Reader *r) {
                                  full_site);
 }
 
+/* Legible character literals: `#\a`, `#\space`, `#\u41`.  The reader emits a
+ * plain :int literal whose value is the character's byte code -- no new type,
+ * no ABI change, no runtime work.  See
+ * docs/upcoming/v1/legible-char-literals-plan.md. */
+static bool char_lit_is_delim(int c) {
+    /* A reader delimiter terminates a char literal: EOF, whitespace (including
+     * the reader's comma-as-whitespace), and the closing/comment bytes. */
+    return c == -1 || c == ' ' || c == '\t' || c == '\r' || c == '\n' ||
+           c == ',' || c == ')' || c == ']' || c == '}' || c == ';';
+}
+
+/* Named-char table (CH1).  Hard-coded, reader-side; no runtime dependency. */
+static bool char_lit_named(const char *name, int64_t *out) {
+    if      (strcmp(name, "space")     == 0) { *out = 32;  return true; }
+    else if (strcmp(name, "newline")   == 0) { *out = 10;  return true; }
+    else if (strcmp(name, "tab")       == 0) { *out = 9;   return true; }
+    else if (strcmp(name, "return")    == 0) { *out = 13;  return true; }
+    else if (strcmp(name, "null")      == 0) { *out = 0;   return true; }
+    else if (strcmp(name, "backspace") == 0) { *out = 8;   return true; }
+    else if (strcmp(name, "delete")    == 0) { *out = 127; return true; }
+    else if (strcmp(name, "escape")    == 0) { *out = 27;  return true; }
+    return false;
+}
+
+static Form *read_char_literal(Reader *r) {
+    uint32_t start_line = r->line;
+    uint32_t start_col = r->col;
+    size_t start_off = r->pos;
+    advance(r); /* consume '#' */
+    advance(r); /* consume '\\' */
+
+    int first = peek(r);
+    if (first == -1) {
+        Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+        diag_emit(DIAG_ERROR, s,
+                  "unterminated character literal: '#\\' at end of input");
+        r->error = true;
+        return NULL;
+    }
+
+    int64_t value;
+
+    /* Escape form (CH2): #\u<hex>, 1-4 hex digits, value 0..0xFF.  Checked
+     * before the named form so `#\uf` reads as codepoint 0x0F rather than an
+     * unknown two-letter name. */
+    if (first == 'u' && hex_digit(peek2(r)) >= 0) {
+        advance(r); /* consume 'u' */
+        int64_t v = 0;
+        int ndigits = 0;
+        int d;
+        while (ndigits < 4 && (d = hex_digit(peek(r))) >= 0) {
+            v = v * 16 + d;
+            advance(r);
+            ndigits++;
+        }
+        if (!char_lit_is_delim(peek(r))) {
+            Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+            diag_emit(DIAG_ERROR, s,
+                      "malformed '#\\u' codepoint escape: expected 1-4 hex "
+                      "digits followed by a delimiter");
+            r->error = true;
+            return NULL;
+        }
+        if (v > 0xFF) {
+            Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+            diag_emit(DIAG_ERROR, s,
+                      "character codepoint escape '#\\u%llx' out of range "
+                      "(0..0xFF)", (unsigned long long)v);
+            r->error = true;
+            return NULL;
+        }
+        value = v;
+    }
+    /* Named form (CH1): two consecutive ASCII letters enter name mode. */
+    else if (isalpha(first) && isalpha(peek2(r))) {
+        char name[16];
+        size_t n = 0;
+        while (isalpha(peek(r))) {
+            if (n < sizeof(name) - 1) name[n] = (char)advance(r);
+            else advance(r);
+            n++;
+        }
+        if (n >= sizeof(name) || !char_lit_is_delim(peek(r))) {
+            Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+            diag_emit(DIAG_ERROR, s,
+                      "malformed character-name literal '#\\...': a name must be "
+                      "ASCII letters terminated by a delimiter");
+            r->error = true;
+            return NULL;
+        }
+        name[n] = '\0';
+        if (!char_lit_named(name, &value)) {
+            Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+            diag_emit(DIAG_ERROR, s,
+                      "unknown character name '#\\%s' (known: space, newline, "
+                      "tab, return, null, backspace, delete, escape)", name);
+            r->error = true;
+            return NULL;
+        }
+    }
+    /* Base form (CH0): exactly one character, which must be followed by a
+     * delimiter.  A trailing non-delimiter (e.g. `#\a2`) is ambiguous and
+     * rejected -- write `#\a` and `#\2` separately, or use an escape. */
+    else {
+        value = (int64_t)advance(r);
+        if (!char_lit_is_delim(peek(r))) {
+            Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+            diag_emit(DIAG_ERROR, s,
+                      "ambiguous character literal: '#\\' names exactly one "
+                      "character and must be followed by a delimiter -- write "
+                      "'#\\<char>' separately or use a '#\\u' escape");
+            r->error = true;
+            return NULL;
+        }
+    }
+
+    Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
+    return form_int(r->arena, span, value);
+}
+
 static Form *read_form(Reader *r) {
     skip_ws_and_comments(r);
     if (r->error) return NULL;
@@ -2811,6 +2931,12 @@ static Form *read_form(Reader *r) {
         }
         (void)discarded;
         return read_form(r);
+    }
+    /* Legible character literals: `#\a`, `#\space`, `#\u41`.  The backslash
+     * after `#` is unambiguous -- no other reader dispatch starts with `#\`.
+     * Emits a plain :int literal (the byte code). */
+    if (c == '#' && peek2(r) == '\\') {
+        return read_char_literal(r);
     }
     /* fx-row-syntax-rename-plan Phase 1: `#fx{...}` -- explicit effect row.
      * Must be checked BEFORE the generic `#` + `{` map dispatch, otherwise

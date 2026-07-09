@@ -1,0 +1,36 @@
+;; Legible character literals (#\a) -- reader emits a plain :int byte code.
+;; See docs/upcoming/v1/legible-char-literals-plan.md.
+
+(defn main [] : int
+  ;; Base form: printable ASCII.
+  (println #\A)        ;; 65
+  (println #\a)        ;; 97
+  (println #\0)        ;; 48
+  (println #\+)        ;; 43
+  (println #\-)        ;; 45
+  (println #\*)        ;; 42
+  (println #\/)        ;; 47
+  (println #\()        ;; 40
+  (println #\))        ;; 41
+  (println #\;)        ;; 59
+  (println #\")        ;; 34
+  (println #\\)        ;; 92
+  ;; Named form.
+  (println #\space)    ;; 32
+  (println #\newline)  ;; 10
+  (println #\tab)      ;; 9
+  (println #\return)   ;; 13
+  (println #\null)     ;; 0
+  (println #\backspace);; 8
+  (println #\delete)   ;; 127
+  (println #\escape)   ;; 27
+  ;; Codepoint escape.
+  (println #\u41)      ;; 65
+  (println #\uFF)      ;; 255
+  (println #\u0)       ;; 0
+  ;; Char literal is just an :int -- composes with = and arithmetic.
+  (println (= #\a 97))         ;; true
+  (println (- #\7 #\0))        ;; 7  (ASCII '7' - '0')
+  ;; A char literal reads exactly like the equivalent numeric literal.
+  (println (if (= #\+ 43) #\y #\n))  ;; 121 (ASCII 'y')
+  0)

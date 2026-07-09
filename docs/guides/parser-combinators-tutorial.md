@@ -26,10 +26,9 @@ The runnable end-to-end version of every snippet here lives in
 > syntax (`#\+` reads as `43`, `#\0` as `48`, `#\space` as `32`).
 > That syntax is a v1 legibility slice; see
 > [`docs/upcoming/v1/legible-char-literals-plan.md`](../upcoming/v1/legible-char-literals-plan.md).
-> Until it ships, the runnable fixture still spells the ASCII codes
-> as raw integers (`43`, `48`, ...); the guide is written against the
-> target syntax because the byte-comparison-heavy code is what the
-> feature is *for*.
+> A `#\<char>` literal is just an `:int` -- the reader emits the byte
+> code, so it composes with `=` and arithmetic exactly like the raw
+> integer it replaces. The runnable fixture uses `#\` throughout.
 
 ---
 

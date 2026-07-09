@@ -34,10 +34,10 @@
   (EDiv (Expr int) (Expr int)   : (Expr int)))
 
 (defn apply-op [op : int lhs : Expr rhs : Expr] : Expr
-  (if (= op 43) (EAdd lhs rhs)
-    (if (= op 45) (ESub lhs rhs)
-      (if (= op 42) (EMul lhs rhs)
-        (if (= op 47) (EDiv lhs rhs)
+  (if (= op #\+) (EAdd lhs rhs)
+    (if (= op #\-) (ESub lhs rhs)
+      (if (= op #\*) (EMul lhs rhs)
+        (if (= op #\/) (EDiv lhs rhs)
           (ENum 0))))))
 
 ;; ---- Char-list helpers ------------------------------------------------------
@@ -45,7 +45,7 @@
 (defn at-end?  [xs : int] : bool (= xs 0))
 
 (defn is-digit? [c : int] : bool
-  (if (< c 48) false (if (> c 57) false true)))
+  (if (< c #\0) false (if (> c #\9) false true)))
 
 ;; ---- Primitive: consume one char matching a predicate -----------------------
 
@@ -99,14 +99,14 @@
     (POK acc xs)
     (let [c (list-head xs)]
       (if (is-digit? c)
-        (digits-int-loop (list-tail xs) (+ (* acc 10) (- c 48)))
+        (digits-int-loop (list-tail xs) (+ (* acc 10) (- c #\0)))
         (POK acc xs)))))
 
 ;; number: require at least one digit, then fold the rest.
 (defn number [xs : int] : (PRes int)
   (match (digit xs)
     (PFail)      (PFail)
-    (POK d rest) (digits-int-loop rest (- d 48))))
+    (POK d rest) (digits-int-loop rest (- d #\0))))
 
 ;; ---- Grammar ----------------------------------------------------------------
 ;;
@@ -134,13 +134,13 @@
   (if (at-end? xs)
     (PFail)
     (let [c (list-head xs)]
-      (if (= c 40)
+      (if (= c #\()
         (match (expr-parse (list-tail xs))
           (PFail)          (PFail)
           (POK inner rest)
           (if (at-end? rest)
             (PFail)
-            (if (= (list-head rest) 41)
+            (if (= (list-head rest) #\))
               (:: (POK inner (list-tail rest)) (PRes Expr))
               (PFail))))
         (PFail)))))
@@ -154,7 +154,7 @@
   (if (at-end? xs)
     (POK lhs xs)
     (let [c (list-head xs)]
-      (if (if (= c 42) true (= c 47))
+      (if (if (= c #\*) true (= c #\/))
         (match (factor (list-tail xs))
           (PFail)          (PFail)
           (POK rhs rest)   (term-tail rest (apply-op c lhs rhs)))
@@ -170,7 +170,7 @@
   (if (at-end? xs)
     (POK lhs xs)
     (let [c (list-head xs)]
-      (if (if (= c 43) true (= c 45))
+      (if (if (= c #\+) true (= c #\-))
         (match (term (list-tail xs))
           (PFail)          (PFail)
           (POK rhs rest)   (expr-tail rest (apply-op c lhs rhs)))
@@ -194,8 +194,8 @@
 ;; ---- Runner + main ----------------------------------------------------------
 
 (defn main [] : int
-  ;; "1+2*(3+4)" as ASCII codes
-  (let [input (list 49 43 50 42 40 51 43 52 41)]
+  ;; "1+2*(3+4)" as character literals
+  (let [input (list #\1 #\+ #\2 #\* #\( #\3 #\+ #\4 #\))]
     (match (expr-parse input)
       (PFail)          (do (println 0) 1)
       (POK ast rest)   (do (println (eval-expr ast)) 0))))

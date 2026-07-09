@@ -1,0 +1,3 @@
+(defn main [] : int
+  (println #\u200)
+  0)
