@@ -1,0 +1,29 @@
+;; CPS-IR-to-C backend, N6.3: a perform continuation that CAPTURES an enclosing
+;; local is lifted with a real env, not the zero-capture shortcut.  Built with
+;; --enable=cps-backend.
+;;
+;; `f` performs E and its continuation is `(+ x <result>)` -- it references the
+;; parameter `x`, which the lifted perform-continuation helper cannot see through
+;; the DK frame's env=0 convention.  N6.3 collects the continuation's scalar
+;; source captures and carries them in a heap env struct passed as the frame env:
+;;   typedef struct { int64_t f0; } f_pf0_env;   // f0 = x
+;;   f_pf0_env *e = malloc(...); e->f0 = x;
+;;   dk_perform(E, arg, dk_frame(f_pf0, (intptr_t)e, k));
+;; and the helper reads `int64_t x = e->f0;` before running the continuation.
+;; Scalar captures are Copy, so the shared env is multi-shot-safe (read-only);
+;; it is leaked with the DK nodes.  Before N6.3 this `f` fell back (the zero-
+;; capture cut rejected the reference to `x`).
+;;
+;; direct-vs-CPS equal: x=7, resume 100 -> 7 + 100 = 107.
+
+(defeffect E [] :int)
+
+(defn f [x : int] : int
+  (+ x (perform (E))))
+
+(defn run [x : int] : int
+  (handle (f x) (E [] k) (resume k 100)))
+
+(defn main [] : int
+  (println (run 7))
+  0)

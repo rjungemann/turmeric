@@ -194,7 +194,24 @@ fallback can be deleted:
   effects (a nested perform in a perform continuation) still fall back -- that is
   the perform-continuation-can-perform widening, adjacent to N6.3.
 - **N6.3 -- capturing / multi-shot continuations** -- lift with a real env;
-  removes the zero-capture cut's fallbacks.
+  removes the zero-capture cut's fallbacks. *Started -- capturing PERFORM
+  continuations (scalar source captures) landed.* The `LH_PERFORM_CONT` frame's
+  env slot (previously unused / `0`) now carries a heap struct of the
+  continuation's captured scalar source vars: `collect_caps` gathers them
+  (exhaustive-or-bails, mirroring `has_capture_rec`; bails on a captured CPS var,
+  a non-scalar capture, or a delegated/nested-control body), `emit_perform`
+  allocates + populates a `<helper>_env` struct and passes it as the frame env,
+  and the lifted helper reads the captures back into real-typed locals named via
+  `name_for_binding`. Scalar captures are Copy, so the shared env is
+  multi-shot-safe (read-only) and leaked with the DK nodes. `term_core_ok`'s
+  perform check uses `collect_caps` instead of `!has_capture`. Fixture
+  `cps-backend-capture-perform`: `(+ x (perform E))` now CPS-emits
+  (`direct == cps == 107`), single and multi-scalar captures verified. Full
+  suite: 2012 passed, 0 failed. *Remaining N6.3:* captured CPS vars (intermediate
+  results, e.g. `(+ (+ x y) (perform E))`), non-scalar captures, and capturing
+  RESET/SHIFT/HANDLER continuations (their env slot already carries `k` /
+  handler state, so it must widen to `{k, captures...}`); and multi-shot with
+  owning captures (refcount on copy).
 - **N6.4 -- the long tail** -- cloneable/serial reset, async, indirect calls, per
   the re-measured surface.
 - **N6.5 -- delete the fallback.** Remove the `CT_UNSUPPORTED` whole-function

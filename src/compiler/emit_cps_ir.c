@@ -364,6 +364,83 @@ static bool has_capture(const CTerm *t, uint32_t exclude) {
     return has_capture_rec(t, exclude, bound, 0);
 }
 
+/* ---- N6.3: capture collection for a lifted perform continuation ---------- *
+ * A perform continuation that references enclosing locals is lifted with a real
+ * env (a heap struct of the captured values), not the zero-capture shortcut.
+ * This collector gathers the distinct captured SOURCE bindings a body needs,
+ * and is exhaustive-or-bails: it collects a scalar (Copy, multi-shot-safe)
+ * CA_VAR capture, and sets `ok=false` for anything it cannot represent in an env
+ * (a captured CPS var, a non-scalar capture, a delegated composite with a
+ * capture, or a nested control op).  A false `ok` means the caller keeps the
+ * zero-capture fallback.  Mirrors has_capture_rec's traversal exactly so no
+ * capture is missed (a missed capture would emit an undeclared reference). */
+#define CC_MAX_CAPS 16
+typedef struct { const Binding *b[CC_MAX_CAPS]; TypeKind ty[CC_MAX_CAPS]; int n; bool ok; } CapSet;
+
+static void cap_add(CapSet *cs, const Binding *b, TypeKind ty) {
+    if (!slot_ty(ty)) { cs->ok = false; return; }   /* scalar-only for now */
+    for (int i = 0; i < cs->n; i++) if (cs->b[i] == b) return;
+    if (cs->n >= CC_MAX_CAPS) { cs->ok = false; return; }
+    cs->b[cs->n] = b; cs->ty[cs->n] = ty; cs->n++;
+}
+
+static void collect_caps_rec(const CTerm *t, uint32_t exclude,
+                             uint32_t *bound, int nb, CapSet *cs) {
+    if (!cs->ok) return;
+    if (!t || nb >= CC_MAX_BOUND) { if (!t) return; cs->ok = false; return; }
+    #define COL_ATOM(a) do { const CAtom *_a = (a); \
+        if (_a->kind == CA_VAR) { \
+            if (_a->var && !_a->var->is_global && !binding_excluded(_a->var)) { \
+                uint32_t _id = _a->var->id; bool _f = (_id != exclude); \
+                for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; } \
+                if (_f) cap_add(cs, _a->var, _a->ty); } } \
+        else if (_a->kind == CA_CVAR) { \
+            if (_a->cvar_id != exclude) { bool _f = true; \
+                for (int _i = 0; _i < nb; _i++) if (bound[_i] == _a->cvar_id) { _f = false; break; } \
+                if (_f) cs->ok = false; } } } while (0)   /* captured CPS var: bail */
+    switch (t->kind) {
+        case CT_APPCONT: COL_ATOM(&t->as.appcont.v); return;
+        case CT_LETVAL:
+            COL_ATOM(&t->as.letval.v);
+            bound[nb] = t->as.letval.x.id;
+            collect_caps_rec(t->as.letval.body, exclude, bound, nb + 1, cs); return;
+        case CT_LETPRIM:
+            for (uint32_t i = 0; i < t->as.letprim.n; i++) COL_ATOM(&t->as.letprim.args[i]);
+            bound[nb] = t->as.letprim.x.id;
+            collect_caps_rec(t->as.letprim.body, exclude, bound, nb + 1, cs); return;
+        case CT_LETCALL:
+            for (uint32_t i = 0; i < t->as.letcall.n; i++) COL_ATOM(&t->as.letcall.args[i]);
+            bound[nb] = t->as.letcall.x.id;
+            collect_caps_rec(t->as.letcall.body, exclude, bound, nb + 1, cs); return;
+        case CT_TAILCALL:
+            for (uint32_t i = 0; i < t->as.tailcall.n; i++) COL_ATOM(&t->as.tailcall.args[i]);
+            return;
+        case CT_IF:
+            COL_ATOM(&t->as.if_.cond);
+            collect_caps_rec(t->as.if_.then_, exclude, bound, nb, cs);
+            collect_caps_rec(t->as.if_.else_, exclude, bound, nb, cs); return;
+        case CT_LETCONT:
+            bound[nb] = t->as.letcont.param.id;
+            collect_caps_rec(t->as.letcont.jbody, exclude, bound, nb + 1, cs);
+            collect_caps_rec(t->as.letcont.body, exclude, bound, nb + 1, cs); return;
+        default:
+            /* CT_LETRAW (delegated operand free vars), CT_RESUME, and nested
+             * control ops are out of this collector's scope -- bail to fallback. */
+            cs->ok = false; return;
+    }
+    #undef COL_ATOM
+}
+
+/* Collect the scalar source captures of `body` (excluding the value param
+ * `exclude`).  Returns true and fills `cs` when every capture is collectable;
+ * false means the zero-capture fallback must be kept. */
+static bool collect_caps(const CTerm *body, uint32_t exclude, CapSet *cs) {
+    uint32_t bound[CC_MAX_BOUND];
+    cs->n = 0; cs->ok = true;
+    collect_caps_rec(body, exclude, bound, 0, cs);
+    return cs->ok;
+}
+
 /* Like has_capture, but the handler case's params + continuation k are excluded
  * (they are bound by the DKHandler signature, not captured). */
 static bool has_capture_case(const CTerm *t, const CHandleCase *hc) {
@@ -651,12 +728,16 @@ static bool term_core_ok(const CTerm *t) {
                 if (has_capture_case(c->case_body, c)) return false;
             }
             return true;
-        case CT_PERFORM:
-            /* C4: <=1 scalar arg; zero-capture straight-line continuation. */
-            return t->as.perform.n <= 1
-                && (t->as.perform.n == 0 || atom_ok(&t->as.perform.args[0]))
-                && perform_body_ok(t->as.perform.body)
-                && !has_capture(t->as.perform.body, t->as.perform.x.id);
+        case CT_PERFORM: {
+            /* C4/N6.3: <=1 scalar arg; straight-line continuation whose captures
+             * (if any) are all scalar source vars -- lifted with a real env. */
+            if (t->as.perform.n > 1
+                || (t->as.perform.n == 1 && !atom_ok(&t->as.perform.args[0]))
+                || !perform_body_ok(t->as.perform.body))
+                return false;
+            CapSet cs;
+            return collect_caps(t->as.perform.body, t->as.perform.x.id, &cs);
+        }
         case CT_RESUME:
             return t->as.resume.k.kind == CA_VAR && atom_ok(&t->as.resume.v)
                 && term_core_ok(t->as.resume.body);
@@ -1508,10 +1589,15 @@ typedef enum {
 /* Emit one lifted helper into ce->helpers.  `xname` is the incoming value
  * parameter name (reset/perform continuation result var); `xt` its full Type
  * (may be NULL for a scalar) so a Tier C aggregate value-param unboxes.  `hcase`
- * is the handler clause (for LH_HANDLER_CASE param/k binding), else NULL. */
+ * is the handler clause (for LH_HANDLER_CASE param/k binding), else NULL.
+ * `caps` (N6.3) is the set of scalar source captures this body needs; when
+ * non-empty (LH_PERFORM_CONT only, for now) the `env` slot carries a heap struct
+ * of those values, which the helper reads back into real-typed locals. */
 static void emit_lifted(CE *ce, const char *name, LHMode mode,
                         const char *xname, TypeKind xty, const Type *xt,
-                        const CTerm *body, const CHandleCase *hcase) {
+                        const CTerm *body, const CHandleCase *hcase,
+                        const CapSet *caps) {
+    bool has_caps = (caps && caps->n > 0);
     /* Emit the body into a temporary buffer first, so any nested reset/shift/
      * effect appends its own (inner) helpers ahead of this one in ce->helpers. */
     Buf tmp; buf_init(&tmp);
@@ -1524,6 +1610,19 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
      * or KK_PROMPT), so it sets both return modes. */
     hc.shift_mode = (mode == LH_SHIFT_BODY || mode == LH_HANDLER_CASE || mode == LH_PERFORM_CONT);
     hc.ret_mode   = (mode == LH_PERFORM_CONT);
+
+    /* N6.3: read the captured values out of the env struct into locals named the
+     * same way the body references them (name_for_binding). */
+    if (has_caps) {
+        indent_buf(&tmp, 4);
+        buf_printf(&tmp, "%s_env *__cap = (%s_env *)(intptr_t)env;\n", name, name);
+        for (int i = 0; i < caps->n; i++) {
+            char *cn = name_for_binding(ce->ctx, caps->b[i]);
+            indent_buf(&tmp, 4);
+            buf_printf(&tmp, "%s %s = __cap->f%d;\n", binder_ctype(ce->ctx, caps->ty[i]), cn, i);
+            free(cn);
+        }
+    }
 
     /* Load the incoming value out of the one-word slot into a real-typed local
      * (reset/perform continuation), or bind the handler case's params/k.  The
@@ -1559,6 +1658,14 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     emit_term(&hc, body);
     buf_putc(&tmp, '\0');
 
+    /* N6.3: the env struct type (named <name>_env) shared with the alloc site. */
+    if (has_caps) {
+        buf_printf(ce->helpers, "typedef struct {");
+        for (int i = 0; i < caps->n; i++)
+            buf_printf(ce->helpers, " %s f%d;", binder_ctype(ce->ctx, caps->ty[i]), i);
+        buf_printf(ce->helpers, " } %s_env;\n", name);
+    }
+
     switch (mode) {
         case LH_SHIFT_BODY:
             buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, DK *subk) {\n", name);
@@ -1570,7 +1677,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
             break;
         case LH_PERFORM_CONT:
             buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, intptr_t %s__slot) {\n", name, xname);
-            buf_puts(ce->helpers, "    (void)env;\n");
+            if (!has_caps) buf_puts(ce->helpers, "    (void)env;\n");
             break;
         case LH_RESET_CONT:
             buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, intptr_t %s__slot) {\n", name, xname);
@@ -1602,7 +1709,7 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
     snprintf(jname, sizeof(jname), "%s_j%d", ce->fn_cn, id);
     char *xn = cvar_cname(ce, t->as.letcont.param);
     emit_lifted(ce, jname, LH_PERFORM_CONT, xn, t->as.letcont.param.ty,
-                t->as.letcont.param.type, t->as.letcont.jbody, NULL);
+                t->as.letcont.param.type, t->as.letcont.jbody, NULL, NULL);
     free(xn);
 
     char *fn = callee_name(call->as.tailcall.fn);
@@ -1626,7 +1733,7 @@ static void emit_reset(CE *ce, const CTerm *t) {
     snprintf(hname, sizeof(hname), "%s_k%d", ce->fn_cn, id);
     char *rxn = cvar_cname(ce, t->as.reset.x);
     emit_lifted(ce, hname, LH_RESET_CONT, rxn, t->as.reset.x.ty, t->as.reset.x.type,
-                t->as.reset.body, NULL);
+                t->as.reset.body, NULL, NULL);
     free(rxn);
 
     char pchain[64];
@@ -1650,7 +1757,7 @@ static void emit_shift(CE *ce, const CTerm *t) {
     int id = (*ce->helper_ctr)++;
     char hname[256];
     snprintf(hname, sizeof(hname), "%s_s%d", ce->fn_cn, id);
-    emit_lifted(ce, hname, LH_SHIFT_BODY, NULL, TY_INT, NULL, t->as.shift.body, NULL);
+    emit_lifted(ce, hname, LH_SHIFT_BODY, NULL, TY_INT, NULL, t->as.shift.body, NULL, NULL);
     ce_line(ce, "return dk_run(dk_shift(1, %s, 0, %s), 0);", hname, ce->cur_k);
 }
 
@@ -1667,7 +1774,7 @@ static void emit_handle(CE *ce, const CTerm *t) {
     /* lift the handle continuation (like a reset continuation) */
     char *hxn = cvar_cname(ce, t->as.handle.x);
     emit_lifted(ce, kname, LH_RESET_CONT, hxn, t->as.handle.x.ty, t->as.handle.x.type,
-                t->as.handle.body, NULL);
+                t->as.handle.body, NULL, NULL);
     free(hxn);
 
     /* Lift each handler case as its own DKHandler and chain a dk_handler per case
@@ -1680,7 +1787,7 @@ static void emit_handle(CE *ce, const CTerm *t) {
         cnames[ci] = (char *)malloc(256);
         snprintf(cnames[ci], 256, "%s_hc%d_%u", ce->fn_cn, id, ci);
         emit_lifted(ce, cnames[ci], LH_HANDLER_CASE, NULL, TY_INT, NULL,
-                    t->as.handle.cases[ci].case_body, &t->as.handle.cases[ci]);
+                    t->as.handle.cases[ci].case_body, &t->as.handle.cases[ci], NULL);
     }
 
     char hchain[64];
@@ -1738,11 +1845,32 @@ static void emit_perform(CE *ce, const CTerm *t) {
         char pname[256];
         snprintf(pname, sizeof(pname), "%s_pf%d", ce->fn_cn, id);
         char *pxn = cvar_cname(ce, t->as.perform.x);
+        /* N6.3: collect the continuation's scalar captures; when present, carry
+         * them in a heap env struct passed as the frame env. */
+        CapSet cs;
+        bool ok = collect_caps(t->as.perform.body, t->as.perform.x.id, &cs);
+        const CapSet *caps = (ok && cs.n > 0) ? &cs : NULL;
         emit_lifted(ce, pname, LH_PERFORM_CONT, pxn, t->as.perform.x.ty, t->as.perform.x.type,
-                    t->as.perform.body, NULL);
+                    t->as.perform.body, NULL, caps);
         free(pxn);
-        ce_line(ce, "return dk_perform(%d, %s, dk_frame(%s, 0, %s));",
-                tag, sa, pname, ce->cur_k);
+        if (caps) {
+            /* Allocate + populate the env from the enclosing locals (same names).
+             * The struct is leaked with the DK nodes (a multi-shot resume shares
+             * it read-only). */
+            char envv[64];
+            snprintf(envv, sizeof envv, "__pfe%d", id);
+            ce_line(ce, "%s_env *%s = (%s_env *)malloc(sizeof(%s_env));", pname, envv, pname, pname);
+            for (int i = 0; i < cs.n; i++) {
+                char *cn = name_for_binding(ce->ctx, cs.b[i]);
+                ce_line(ce, "%s->f%d = %s;", envv, i, cn);
+                free(cn);
+            }
+            ce_line(ce, "return dk_perform(%d, %s, dk_frame(%s, (intptr_t)%s, %s));",
+                    tag, sa, pname, envv, ce->cur_k);
+        } else {
+            ce_line(ce, "return dk_perform(%d, %s, dk_frame(%s, 0, %s));",
+                    tag, sa, pname, ce->cur_k);
+        }
     }
     free(sa);
     free(arg);
