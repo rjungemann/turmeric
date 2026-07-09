@@ -1,0 +1,39 @@
+;; CPS-IR-to-C backend, N6.3: an OWNING value consumed across a control op.
+;; Built with --enable=cps-backend.
+;;
+;; `f` allocates an `rc<int>` `r`, then a `handle` runs, and `r` is read and
+;; DROPPED in the post-handle continuation.  So `r` -- an owning handle -- is live
+;; ACROSS the control op and its `rc/drop` is sunk into the continuation.
+;;
+;; This is sound because the admitted subset is SINGLE-SHOT: a continuation `k` is
+;; resumed at most once (a second resume is a hard error, TUR-E0201; multi-shot
+;; needs cloneable-shift, which the backend falls back on), so a reset / handle /
+;; perform continuation runs at most once.  `r` therefore rides the continuation
+;; env by a shallow value copy (no clone), and its single sunk `rc/drop` runs
+;; exactly once -- balanced, no double-free, no leak (verified by inspecting the
+;; emitted C: the env holds the handle, the continuation does exactly one
+;; rc_strong_decrement, and f__cps's main body does none).
+;;
+;; The safety net: an owning capture is admitted only for a single-shot
+;; continuation (collect_caps).  A handler CASE body runs once per perform
+;; (potentially many times in a loop), so owning captures there still bail
+;; (collect_caps_case) and the function falls back.
+;;
+;; direct-vs-CPS equal: r has strong-count 1 across the handle; handle resumes
+;; 100; 100 + 1 = 101.
+
+(defeffect E [] :int)
+
+(defn g [] : int
+  (perform (E)))
+
+(defn f [] : int
+  (let [r (rc/of 5)]
+    (let [v (handle (g) (E [] k) (resume k 100))]
+      (let [c (rc/strong-count r)]
+        (rc/drop r)
+        (+ v c)))))
+
+(defn main [] : int
+  (println (f))
+  0)

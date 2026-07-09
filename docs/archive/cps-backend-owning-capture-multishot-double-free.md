@@ -1,15 +1,31 @@
 # CPS backend: owning (non-Copy) capture double-frees under a multi-shot continuation
 
-**Severity:** medium (blocks the *non-`^borrow`* owning-capture sub-slice; no
-miscompile today because the case falls back to the direct emitter).
+**Status: RESOLVED (the hazard is now correctly gated).** The double-free below
+is only possible under a *multi-shot* continuation.  The admitted subset is
+**single-shot**: a continuation `k` is resumed at most once (a second resume is a
+hard error, TUR-E0201; multi-shot needs `cloneable-shift`, which the backend
+falls back on).  So the fix is a single-shot gate, not a clone:
 
-**Partially resolved.** The safe subset -- a `^borrow` owning value -- now rides
-the env by a shallow value copy with no retain/drop: the type checker guarantees
-the function never consumes it, so the shared handle is never released here and
-the refcount matches the direct path even under a multi-shot read (`cap_add` /
-`fn_sig_ok` admit `is_borrow`; fixture `cps-backend-capture-borrow`). This report
-stays open only for a *consumed* owning capture (the function drops/moves the
-value), where the double-free below is real and still forces fallback.
+- A reset / handle / perform continuation (single-shot) now admits an *owning*
+  capture -- an rc handle, a heap handle -- by a shallow value copy with no
+  clone (`cap_add` under `g_cap_single_shot`; `owning_dropped_before_control`
+  relaxed to allow the value to cross into the continuation).  The value's sunk
+  `rc/drop` runs exactly once, balanced -- verified by inspecting the emitted C
+  (one `rc_strong_decrement`; a `clone` + two drops nets to two, balanced; the
+  main body adds none).  Fixtures `cps-backend-owning-capture`,
+  `cps-backend-capture-borrow` (the `^borrow` subset).
+- A handler CASE body runs once *per perform* (potentially many times in a
+  loop), i.e. NOT single-shot, so owning captures there still bail
+  (`collect_caps_case` keeps `g_cap_single_shot` false) and the function falls
+  back -- exactly the double-free case below, which stays a correct fallback.
+- A non-Copy binder that is not an rc/heap handle (a drop-glue by-value ADT
+  local, `tur_adt_Own`) is a separate coverage gap: its `CT_LETCALL` binder
+  fails the `slot_ok_t` gate, so it falls back too. Not the double-free hazard.
+
+Original report follows.
+
+**Severity:** medium (no miscompile today because the case falls back to the
+direct emitter).
 
 ## Summary
 

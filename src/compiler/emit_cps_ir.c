@@ -276,6 +276,19 @@ static bool letraw_ok(const CTerm *t);  /* CT_LETRAW soundness (owning-drop guar
 static const Binding *g_excl_b[8];
 static int            g_excl_n;
 
+/* True while collecting captures for a SINGLE-SHOT continuation (a reset / handle
+ * / perform continuation, or a shift body).  In the admitted subset a
+ * continuation `k` is resumed AT MOST ONCE (a second resume is a hard error,
+ * TUR-E0201; multi-shot needs cloneable-shift, which falls back), so such a
+ * continuation runs at most once.  That makes it safe to capture an OWNING value
+ * (an rc handle, a drop-glue aggregate, a heap handle) by a shallow value copy
+ * with no clone: the value's drop -- which the drop-insertion pass sinks into the
+ * continuation -- then runs exactly once, balanced, no double-free.  A handler
+ * CASE body is NOT single-shot (it runs once per perform, potentially many times
+ * in a loop), so this stays false for collect_caps_case and owning captures there
+ * still bail. */
+static bool g_cap_single_shot;
+
 static bool binding_excluded(const Binding *b) {
     for (int i = 0; i < g_excl_n; i++) if (g_excl_b[i] == b) return true;
     return false;
@@ -460,7 +473,13 @@ static void cap_add(CapSet *cs, const Binding *b, TypeKind ty, const Type *type)
      * never released by this function, so no double-free, and the refcount is
      * unchanged from the direct path (multi-shot reads stay read-only). */
     bool borrowed = (b && b->is_borrow);
-    if (!is_poly && !borrowed && !cap_ty_ok(ty, type)) { cs->ok = false; return; }
+    /* In a single-shot continuation any value -- including an owning one -- may
+     * ride the env by a shallow value copy: the continuation runs at most once,
+     * so a drop it performs on the captured value runs at most once (balanced).
+     * (A fn value still routes through the poly path for its tur_poly_fn_t env
+     * type; a by-value aggregate through slot_box for its unbox.) */
+    bool owning_ok = g_cap_single_shot;
+    if (!is_poly && !borrowed && !owning_ok && !cap_ty_ok(ty, type)) { cs->ok = false; return; }
     for (int i = 0; i < cs->n; i++) if (cs->b[i] == b) return;
     if (cs->n >= CC_MAX_CAPS) { cs->ok = false; return; }
     cs->b[cs->n] = b; cs->cvname[cs->n] = NULL; cs->ty[cs->n] = ty;
@@ -640,7 +659,9 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
 static bool collect_caps(const CTerm *body, uint32_t exclude, CapSet *cs) {
     uint32_t bound[CC_MAX_BOUND];
     cs->n = 0; cs->ok = true;
+    g_cap_single_shot = true;   /* a reset/handle/perform continuation or shift body */
     collect_caps_rec(body, exclude, bound, 0, cs);
+    g_cap_single_shot = false;
     return cs->ok;
 }
 
@@ -654,6 +675,7 @@ static bool collect_caps_case(const CTerm *body, const CHandleCase *hc, CapSet *
     if (hc->k && g_excl_n < 8) g_excl_b[g_excl_n++] = hc->k;
     uint32_t bound[CC_MAX_BOUND];
     cs->n = 0; cs->ok = true;
+    g_cap_single_shot = false;   /* a handler case body runs once per perform, not single-shot */
     collect_caps_rec(body, UINT32_MAX, bound, 0, cs);
     g_excl_n = 0;
     return cs->ok;
@@ -834,7 +856,22 @@ static bool owning_dropped_before_control(const CTerm *t, uint32_t bid) {
                  * runs, the value is dead before the branch's own control op). */
                 return owning_dropped_before_control(t->as.if_.then_, bid)
                     && owning_dropped_before_control(t->as.if_.else_, bid);
-            default: return false;
+            case CT_RESET:
+            case CT_HANDLE:
+            case CT_PERFORM:
+                /* The owning value crosses into a SINGLE-SHOT continuation (the
+                 * reset/handle/perform continuation runs at most once -- a second
+                 * resume is a hard error, TUR-E0201).  It is now captured into
+                 * that continuation's env and dropped there exactly once (or moved
+                 * out), which is sound -- so the drop no longer has to precede the
+                 * control op.  The capture-admission gates enforce this: an owning
+                 * capture is admitted for a single-shot continuation (collect_caps)
+                 * but bails for a handler CASE body (collect_caps_case, which runs
+                 * per-perform), so a value consumed in a multi-run case still falls
+                 * back.  A missed capture surfaces as an undeclared C name (compile
+                 * error), never a silent leak/double-free. */
+                return true;
+            default: return false;   /* shift (abortive) / unexpected: conservative */
         }
     }
     return false;

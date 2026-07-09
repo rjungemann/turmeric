@@ -389,17 +389,31 @@ fallback can be deleted:
   `rc<int>` field) by value (`tur_adt_Own f0`), `direct == cps == 59`. Full
   suite: 2022 passed, 0 failed.
 
-  *Remaining N6.3 (each root-caused; see the linked report):*
+  *Owning values consumed across a control op LANDED.* An owning value (an rc
+  handle, a heap handle) that is live *across* a control op and whose `rc/drop`
+  is sunk into the continuation is now captured by a shallow value copy with no
+  clone. The soundness rests on the admitted subset being **single-shot**: a
+  continuation `k` is resumed at most once (a second resume is TUR-E0201;
+  multi-shot needs cloneable-shift, which falls back), so a reset/handle/perform
+  continuation runs at most once and the sunk drop runs exactly once -- balanced.
+  `cap_add` admits owning captures under a `g_cap_single_shot` flag (set by
+  `collect_caps`, the single-shot continuation collector), and
+  `owning_dropped_before_control` was relaxed to let the value cross into such a
+  continuation. The safety net: a handler CASE body runs once per perform (NOT
+  single-shot), so `collect_caps_case` keeps the flag false and owning captures
+  there still bail -> fallback. Verified by C inspection (one `rc_strong_decrement`
+  for a captured-and-dropped rc; a `clone` + two drops nets balanced; the main
+  body adds none) and round-trips. Fixture `cps-backend-owning-capture`. Full
+  suite: 2026 passed, 0 failed. The resolved hazard report is archived.
 
-  - **Owning (non-Copy) captures without `^borrow`** -- carrier ADTs / rc handles
-    / by-value products with drop glue that the function *does* consume. The
-    blocker is not just the retain: the drop-insertion pass sinks the captured
-    value's `rc/drop` *into the continuation body*, so a single clone-on-capture
-    into the leaked, multi-shot env is dropped once per resume -> underflow.
-    Needs a single-shot/affine proof or per-shot cloning. `collect_caps`
-    correctly bails today (so it is sound, just conservative); the `^borrow`
-    slice above is the safe subset that needs no such analysis. See
-    [docs/reported/cps-backend-owning-capture-multishot-double-free.md](../../reported/cps-backend-owning-capture-multishot-double-free.md).
+  *Remaining N6.3:*
+
+  - **A drop-glue by-value ADT local consumed across a control op** (e.g. a
+    `tur_adt_Own` struct with an rc field) -- a separate coverage gap: its
+    `CT_LETCALL` / binder type fails the `slot_ok_t` gate (a by-value drop-glue
+    product is neither a scalar, a `slot_box` owning-free product, nor a heap
+    handle), so it falls back regardless of single-shot-ness. Admitting it is the
+    non-scalar-drop-glue-binder widening.
   - **Resuming SHIFT bodies.** The current shift lowering (`cps_shift_body`)
     applies the receiver to the *body value* and delivers to the prompt; the
     captured continuation `subk` is passed to the shift-body helper but ignored
