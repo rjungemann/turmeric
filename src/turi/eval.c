@@ -8472,7 +8472,15 @@ static void extract_type_tag(Type t, char *buf, size_t cap) {
     case TY_CSTR:    snprintf(buf, cap, "cstr");     break;
     case TY_PTR_VOID: snprintf(buf, cap, "ptr<void>"); break;
     case TY_FN:      snprintf(buf, cap, "fn");       break;
-    default:         snprintf(buf, cap, "unknown");  break;
+    default: {
+        /* Named ADT / struct / record / parameterised head (Vec, Set, Map, a
+         * user defstruct/defgadt): emit the surface constructor name so the
+         * REPL can route it through its Show instance (turi_try_show_by_tag). */
+        const char *hn = gde_type_head_name(&t);
+        if (hn) snprintf(buf, cap, "%s", hn);
+        else    snprintf(buf, cap, "unknown");
+        break;
+    }
     }
 }
 
@@ -10332,11 +10340,14 @@ void turi_debug_disable(TuriEnv *env) {
  * SI4: turi_try_show — call Show typeclass instance for TURI_STRUCT values
  * ---------------------------------------------------------------------- */
 
-const char *turi_try_show(TuriEnv *env, TuriValue val) {
-    if (!env || !env->last_tc_env) return NULL;
-    if (val.tag != TURI_STRUCT || !val.as_struct || !val.as_struct->name)
-        return NULL;
-    const char *struct_name = val.as_struct->name;
+/* Look up Show [<type_name>] and invoke its `show` method on `val`.  Shared by
+ * turi_try_show (TURI_STRUCT receiver, name from the struct tag) and
+ * turi_try_show_by_tag (TURI_INT heap pointer, name from the elaborated type
+ * tag).  Returns a strdup'd string, or NULL when no matching instance exists
+ * or the method does not return a cstr. */
+static const char *turi_call_show_named(TuriEnv *env, const char *type_name,
+                                        TuriValue val) {
+    if (!env || !env->last_tc_env || !type_name) return NULL;
     TypeClassEnv *tc_env = (TypeClassEnv *)env->last_tc_env;
 
     /* Find the Show typeclass in the registry. */
@@ -10362,18 +10373,15 @@ const char *turi_try_show(TuriEnv *env, TuriValue val) {
     }
     if (!found_method) return NULL;
 
-    /* Find the Show [StructType] instance. */
+    /* Find the Show [<type_name>] instance.  gde_type_head_name descends a
+     * parameterised head (TY_APP) and reads a TY_ADT/TY_REC name, so Vec, Set,
+     * Map and user structs/GADTs all match by their surface constructor name. */
     FnDef *show_impl = NULL;
     for (TypeClassInstance *inst = tc_env->instances; inst; inst = inst->next) {
         if (inst->typeclass != show_tc) continue;
         if (inst->n_type_args < 1) continue;
-        /* structdef-retirement DS-D: a lowered struct is a record TY_ADT, so an
-         * instance head no longer carries a TY_STRUCT def -- match the ADT-headed
-         * instance against the struct's name (the lowered ADT shares it). */
-        Type t = inst->type_args[0];
-        const char *inst_name = (t.kind == TY_ADT && t.as.adt_.def)
-                                    ? t.as.adt_.def->name : NULL;
-        if (!inst_name || strcmp(inst_name, struct_name) != 0) continue;
+        const char *inst_name = gde_type_head_name(&inst->type_args[0]);
+        if (!inst_name || strcmp(inst_name, type_name) != 0) continue;
         if (show_mi < inst->n_method_impls && inst->method_impls[show_mi])
             show_impl = inst->method_impls[show_mi];
         break;
@@ -10392,6 +10400,36 @@ const char *turi_try_show(TuriEnv *env, TuriValue val) {
 
     if (result.tag != TURI_CSTR || !result.as_cstr) return NULL;
     return strdup(result.as_cstr);
+}
+
+const char *turi_try_show(TuriEnv *env, TuriValue val) {
+    if (!env || !env->last_tc_env) return NULL;
+    if (val.tag != TURI_STRUCT || !val.as_struct || !val.as_struct->name)
+        return NULL;
+    return turi_call_show_named(env, val.as_struct->name, val);
+}
+
+/* Tags that must NOT route through a Show-instance lookup: primitives (their
+ * default repr is already correct and cheaper) and ptr<void> (its Show reads
+ * the pointer as a result<T,E>, which is wrong for an arbitrary heap value).
+ * Pair/Cons are handled ahead of this by turi_show_result. */
+static bool show_tag_is_skipped(const char *tag) {
+    static const char *const skip[] = {
+        "int", "int8", "int16", "int32", "int64",
+        "uint8", "uint16", "uint32", "uint64",
+        "float", "float32", "float64", "bool", "cstr", "nil", "fn", "sym",
+        "ptr<void>", "unknown", "Pair", "PairPtr", "Cons", "ConsPtr", NULL
+    };
+    for (int i = 0; skip[i]; i++)
+        if (strcmp(tag, skip[i]) == 0) return true;
+    return false;
+}
+
+const char *turi_try_show_by_tag(TuriEnv *env, TuriValue val,
+                                 const char *type_tag) {
+    if (!env || val.tag != TURI_INT || !type_tag || !type_tag[0]) return NULL;
+    if (show_tag_is_skipped(type_tag)) return NULL;
+    return turi_call_show_named(env, type_tag, val);
 }
 
 /* -------------------------------------------------------------------------

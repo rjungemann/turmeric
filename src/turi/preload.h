@@ -38,4 +38,20 @@ void turi_env_preload_macros(TuriEnv *env, const char *stdlib_root);
  * array `cmd_eval` loads; keep the two in sync.  `stdlib_root` as above. */
 void turi_env_preload_collections(TuriEnv *env, const char *stdlib_root);
 
+/* Load `stdlib/typeclass-show.tur` (the Show class, its primitive instances,
+ * and the Show[Vec]/Show[Set]/Show[Map] collection instances).  This is a
+ * REPL-only convenience: it lets the interactive prompt render a collection
+ * result through its Show instance (turi_try_show_by_tag) and resolve a bare
+ * `(show x)` without an explicit `(load ...)`.
+ *
+ * It is deliberately NOT part of turi_env_preload_collections: that helper
+ * backs `--interpret` and the fixture worker too, and globally installing the
+ * Show instances there would change instance resolution for programs that
+ * define their own Show class or assert a "missing instance" error.  Only the
+ * Show slice is loaded (not the full typeclass.tur) so the interpreter's async
+ * error-message builtin is not shadowed by typeclass.tur's inline-C
+ * Error[ptr<void>] instance.  Call this only from the interactive REPL, after
+ * turi_env_preload_collections.  `stdlib_root` as above. */
+void turi_env_preload_typeclasses(TuriEnv *env, const char *stdlib_root);
+
 #endif /* TURI_PRELOAD_H */

@@ -70,6 +70,16 @@ const char *turi_try_show(TuriEnv *env, TuriValue val);
  * the type_tag is not a known heap-pointer type. */
 const char *turi_show_result(TuriEnv *env, TuriValue val, const char *type_tag);
 
+/* Attempt to call the Show typeclass instance for a heap-pointer (TURI_INT)
+ * value whose elaborated type is a named ADT/struct/record (e.g. Vec, Set,
+ * Map, or a user defstruct/defgadt).  `type_tag` comes from turi_eval_typed.
+ * Lets the REPL display `(vec-of 1 2 3)` as "[1 2 3]" via the stdlib
+ * Show[Vec] instance without an explicit (show ...).  Primitive and
+ * ptr<void> tags are skipped (the ptr<void> Show reads any pointer as a
+ * result<T,E>, which would be wrong for an arbitrary heap value).
+ * Returns a heap-allocated C string (caller must free() it), or NULL. */
+const char *turi_try_show_by_tag(TuriEnv *env, TuriValue val, const char *type_tag);
+
 /* ---------------------------------------------------------------------------
  * Debugger Phase 2: interactive interpreter debugger
  * --------------------------------------------------------------------------- */

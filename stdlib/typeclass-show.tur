@@ -1,0 +1,334 @@
+;;; tur/typeclass-show -- the Show typeclass, its primitive instances, and the
+;;; Show instances for the typed collections (Vec / Set / Map).
+;;;
+;;; This is NOT auto-loaded.  It is pulled in on demand by stdlib/typeclass.tur
+;;; (so `(load "stdlib/typeclass.tur")` still provides Show + the collection
+;;; instances for compiled programs) and preloaded by the interactive REPL
+;;; (src/turi/preload.c, turi_env_preload_typeclasses) so the prompt can render
+;;; collections through their Show instance.
+;;;
+;;; Kept OUT of the compiled auto-load list on purpose:
+;;;   - Auto-loading the Show *class* breaks `derive-show`: its macro-emitted
+;;;     instance would orphan (TUR-E0013) against a foreign Show module.
+;;;   - It would add Show machinery to every compiled program's prelude.
+;;; Kept separate from the rest of typeclass.tur (Ord/Num/Clone/Display/Debug/
+;;; Error) so the REPL can preload just Show without the Error[ptr<void>]
+;;; instance, whose inline-C error-message would shadow the interpreter's async
+;;; error-message builtin.
+;;;
+;;; Since: Phase repl-show-collections
+;;; Show -- typeclass for string representation.
+;;;
+;;; Parameters:
+;;;   a -- the type to render
+;;;
+;;; Returns:
+;;;   A :cstr human-readable string.
+;;;
+;;; Since: Phase 15
+(defclass Show [a] (show [x] : cstr))
+;; Instances for primitive types
+;;; Show [int] -- Show instance for int.
+
+(definstance Show [int]
+  (show [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "%lld", (long long)x);
+    return (const char *)buf;
+    ```))
+;;; Show [cstr] -- Show instance for cstr (identity).
+
+(definstance Show [cstr] (show [x] x))
+;;; Show [bool] -- Show instance for bool.
+
+(definstance Show [bool] (show [x] : cstr (if x "true" "false")))
+;;; Show [int8] -- Show instance for int8.
+
+(definstance Show [int8]
+  (show [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(8);
+    snprintf(buf, 8, "%d", (int)x);
+    return (const char *)buf;
+    ```))
+;;; Show [int16] -- Show instance for int16.
+
+(definstance Show [int16]
+  (show [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(8);
+    snprintf(buf, 8, "%d", (int)x);
+    return (const char *)buf;
+    ```))
+;;; Show [int32] -- Show instance for int32.
+
+(definstance Show [int32]
+  (show [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(16);
+    snprintf(buf, 16, "%d", x);
+    return (const char *)buf;
+    ```))
+;;; Show [uint8] -- Show instance for uint8.
+
+(definstance Show [uint8]
+  (show [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(8);
+    snprintf(buf, 8, "%u", (unsigned)x);
+    return (const char *)buf;
+    ```))
+;;; Show [uint16] -- Show instance for uint16.
+
+(definstance Show [uint16]
+  (show [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(8);
+    snprintf(buf, 8, "%u", (unsigned)x);
+    return (const char *)buf;
+    ```))
+;;; Show [uint32] -- Show instance for uint32.
+
+(definstance Show [uint32]
+  (show [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(16);
+    snprintf(buf, 16, "%u", x);
+    return (const char *)buf;
+    ```))
+;;; Show [uint64] -- Show instance for uint64.
+
+(definstance Show [uint64]
+  (show [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "%llu", (unsigned long long)x);
+    return (const char *)buf;
+    ```))
+;;; Show [float] -- Show instance for float (double).
+
+(definstance Show [float]
+  (show [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(32);
+    snprintf(buf, 32, "%g", (double)x);
+    return (const char *)buf;
+    ```))
+;;; Show [float32] -- Show instance for float32.
+
+(definstance Show [float32]
+  (show [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(32);
+    snprintf(buf, 32, "%g", (double)x);
+    return (const char *)buf;
+    ```))
+;;; Show [ptr<void>] -- Show instance for result<T,E> represented as ptr<void>.
+
+(definstance Show [ptr<void>]
+  (show [x]
+    : cstr
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
+    if (res == NULL) return "err";
+    char *buf = (char *)malloc(48);
+    if (res->is_ok) {
+        snprintf(buf, 48, "ok(%lld)", (long long)res->ok_val);
+    } else {
+        snprintf(buf, 48, "err(%lld)", (long long)res->err_val);
+    }
+    return (const char *)buf;
+    ```))
+;;; ============================================================================
+;;; Show instances for the typed collections (Vec / Set / Map).
+;;;
+;;; They live here, in Show's own module, so the orphan rule (TUR-E0013) is
+;;; satisfied without touching vec.tur / set.tur / map.tur.  Vec/Set/Map, the
+;;; HAMT iterator ops, and vec-get/vec-len are always auto-loaded, so they are
+;;; in scope by the time this file is loaded (on demand via typeclass.tur, or
+;;; the REPL preload).
+;;;
+;;; Element-type recovery goes through the int64 carrier (as in Eq[Vec] /
+;;; Eq[Set] / Eq[Map]): scalar element types whose display value equals their
+;;; carrier (int, bool) render exactly; content-boxed types (cstr) currently
+;;; show their carrier -- the same limitation those Eq instances carry.
+;;;
+;;; Since: Phase repl-show-collections
+;;; ============================================================================
+;;; show-concat -- internal: concatenate two NUL-terminated strings.
+;;;
+;;; A private copy of str-concat (stdlib/str.tur is not auto-loaded) so the
+;;; collection Show instances can build their output with no extra dependency.
+;;; The interpreter registers a matching native (turi_register_collection_natives)
+;;; so the pure-Turmeric Show bodies also run under --interpret and at the REPL.
+;;; Neither input is freed; both may be string literals.
+;;;
+;;; Since: Phase repl-show-collections
+
+(defn show-concat [a : cstr b : cstr] : cstr
+  ```c
+  const char *sa = (const char*)a;
+  const char *sb = (const char*)b;
+  size_t la = strlen(sa), lb = strlen(sb);
+  char *out = malloc(la + lb + 1);
+  memcpy(out, sa, la);
+  memcpy(out + la, sb, lb);
+  out[la + lb] = '\0';
+  return (const char *)out;
+  ```)
+;;; vec-show-loop -- accumulate the space-separated element repr for Show[Vec].
+;;;
+;;; The `^Show A` constraint puts the element Show dictionary in scope so
+;;; `(show (vec-get v i))` dispatches on the concrete element type.  The
+;;; `(:: ... A)` recovers the element type from vec-get's int64 carrier.
+;;; Self-tail-recursive so Path A can TCO it inside its spec.
+;;;
+;;; Parameters:
+;;;   v   -- Vec[A]
+;;;   i   -- current index (start at 0)
+;;;   len -- element count (vec-len v)
+;;;   acc -- repr accumulated so far ("" at the start)
+;;;
+;;; Returns:
+;;;   The space-separated concatenation of (show v[i]) for i in [i, len).
+;;;
+;;; Since: Phase repl-show-collections
+
+(defn vec-show-loop [^Show A]
+  [v : (Vec A) i : int len : int acc : cstr]
+  : cstr
+  (if (= i len)
+    acc
+    (vec-show-loop v
+      (+ i 1)
+      len
+      (show-concat acc
+        (show-concat (if (= i 0) "" " ") (show (:: (vec-get v i) A)))))))
+;;; Show [Vec] -- render a Vec[A] as "[a b c]" using the element's Show instance.
+;;;
+;;; Mirrors the vec-of / [...] literal surface, so the repr round-trips
+;;; visually.  An empty Vec shows as "[]".
+;;;
+;;; Example:
+;;;   (show (vec-of 1 2 3))  ; => "[1 2 3]"
+;;;   (show (vec-new))       ; => "[]"
+;;;
+;;; Since: Phase repl-show-collections
+
+(definstance Show [Vec]
+  [(Show A)]
+  (show [x]
+    (show-concat "["
+      (show-concat
+        (vec-show-loop (:: x (Vec A)) 0 (vec-len (:: x (Vec A))) "")
+        "]"))))
+;;; set-show-loop -- accumulate the space-separated element repr for Show[Set].
+;;;
+;;; Walks the set's HAMT via the pure-Turmeric iterator (each element is a
+;;; HAMT key).  The `^Show A` constraint scopes the element Show dictionary.
+;;;
+;;; Parameters:
+;;;   iter  -- hamt/iter-alloc-allocated handle scanning the set
+;;;   first -- true until the first element is emitted (separator control)
+;;;   acc   -- repr accumulated so far
+;;;
+;;; Returns:
+;;;   The space-separated concatenation of (show elem) over the set.
+;;;
+;;; Since: Phase repl-show-collections
+
+(defn set-show-loop [^Show A]
+  [iter : ptr<void> first : bool acc : cstr]
+  : cstr
+  (if (hamt/iter-advance! iter)
+    (set-show-loop iter
+      false
+      (show-concat acc
+        (show-concat (if first "" " ") (show (:: (hamt/iter-cur-key iter) A)))))
+    acc))
+;;; set-show-driver -- allocate the iter box, run set-show-loop, free.
+;;;
+;;; Since: Phase repl-show-collections
+
+(defn set-show-driver [^Show A]
+  [s (Set A)]
+  : cstr
+  (let [iter (hamt/iter-alloc (set-hamt s))
+        body (set-show-loop iter true "")]
+    (do (hamt/iter-destroy! iter) body)))
+;;; Show [Set] -- render a Set[A] as "#set{a b c}" using the element's Show
+;;; instance.  Mirrors the #set{...} / set-of literal surface.  An empty Set
+;;; shows as "#set{}".
+;;;
+;;; Example:
+;;;   (show (set-of 1 2 3))  ; => "#set{1 2 3}"
+;;;
+;;; Since: Phase repl-show-collections
+
+(definstance Show [Set]
+  [(Show A)]
+  (show [x]
+    (show-concat "#set{"
+      (show-concat (set-show-driver (:: x (Set A))) "}"))))
+;;; map-show-loop -- accumulate the "k v" pairs repr for Show[Map].
+;;;
+;;; Walks the map's HAMT via the pure-Turmeric iterator, formatting each entry
+;;; as "key value".  The `^Show K` / `^Show V` constraints scope both element
+;;; Show dictionaries.
+;;;
+;;; Parameters:
+;;;   iter  -- hamt/iter-alloc-allocated handle scanning the map
+;;;   first -- true until the first entry is emitted (separator control)
+;;;   acc   -- repr accumulated so far
+;;;
+;;; Returns:
+;;;   The space-separated "k v" pairs over the map.
+;;;
+;;; Since: Phase repl-show-collections
+
+(defn map-show-loop [^Show K ^Show V]
+  [iter : ptr<void> first : bool acc : cstr]
+  : cstr
+  (if (hamt/iter-advance! iter)
+    (map-show-loop iter
+      false
+      (show-concat acc
+        (show-concat
+          (show-concat (if first "" " ") (show (:: (hamt/iter-cur-key iter) K)))
+          (show-concat " " (show (:: (map-iter-cur-val-as iter) V))))))
+    acc))
+;;; map-show-driver -- allocate the iter box, run map-show-loop, free.
+;;;
+;;; Since: Phase repl-show-collections
+
+(defn map-show-driver [^Show K ^Show V]
+  [m (Map K V)]
+  : cstr
+  (let [iter (hamt/iter-alloc (map-hamt m))
+        body (map-show-loop iter true "")]
+    (do (hamt/iter-destroy! iter) body)))
+;;; Show [Map] -- render a Map[K V] as "#map{k1 v1 k2 v2}" using the key and
+;;; value Show instances.  Mirrors the #map{...} / hamt-of literal surface.
+;;; An empty Map shows as "#map{}".
+;;;
+;;; Example:
+;;;   (show (hamt-of 1 10 2 20))  ; => "#map{1 10 2 20}"
+;;;
+;;; Since: Phase repl-show-collections
+
+(definstance Show [Map]
+  [(Show K) (Show V)]
+  (show [x]
+    (show-concat "#map{"
+      (show-concat (map-show-driver (:: x (Map K V))) "}"))))

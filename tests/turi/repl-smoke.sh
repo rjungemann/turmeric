@@ -33,6 +33,17 @@ check "(+ 1 2)"       "=> 3"       "$(repl_out '(+ 1 2)')"
 check "(* 6 7)"       "=> 42"      "$(repl_out '(* 6 7)')"
 check "string literal" '"hello"'   "$(repl_out '"hello"')"
 
+# --- Collection results render via their Show instance (repl-show-collections) ---
+# The REPL preloads typeclass-show.tur so a bare Vec/Set/Map result prints its
+# contents instead of an opaque pointer (turi_try_show_by_tag).
+check "vec display"   "=> [1 2 3]"         "$(repl_out '(vec-of 1 2 3)')"
+check "vec literal"   "=> [9 8 7]"         "$(repl_out '[9 8 7]')"
+check "empty vec"     "=> []"              "$(repl_out '(vec-new)')"
+check "set display"   "=> #set{7 8 9}"     "$(repl_out '(set-of 7 8 9)')"
+check "map display"   "=> #map{1 10 2 20}" "$(repl_out '#map{1 10 2 20}')"
+# (show 5) yields the cstr "5", which the prompt prints quoted.
+check "show int"      '=> "5"'             "$(repl_out '(show 5)')"
+
 # --- Multi-line: split across two input lines ---
 check "multi-line +"  "=> 3"  "$(repl_out '(+' '1 2)')"
 check "multi-line let" "=> 7" "$(repl_out '(let [x 3' '      y 4] (+ x y))')"

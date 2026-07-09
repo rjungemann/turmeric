@@ -1029,7 +1029,29 @@ static TuriValue native_vec_new_filled(TuriEnv *env, TuriValue *a, uint32_t n, v
  * override.  Called from turi_env_new (env.c) so collections resolve for any
  * interpreter env created through libturi.
  * ---------------------------------------------------------------------- */
+/* show-concat: interpreter override for the inline-C helper in
+ * stdlib/typeclass-show.tur.  Concatenates two NUL-terminated strings into a
+ * fresh buffer so the pure-Turmeric collection Show instances (Show[Vec] /
+ * Show[Set] / Show[Map]) run under the tree-walking interpreter and the REPL
+ * instead of tripping the "inline-C not supported" guard.  Registered here (at
+ * turi_env_new time, via turi_register_collection_natives) so it exists before
+ * typeclass-show.tur's defn is elaborated -- both the `tur repl` and
+ * `--interpret` entry points share this path.  Neither input is freed. */
+static TuriValue native_show_concat(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    const char *sa = (n > 0 && a[0].tag == TURI_CSTR && a[0].as_cstr) ? a[0].as_cstr : "";
+    const char *sb = (n > 1 && a[1].tag == TURI_CSTR && a[1].as_cstr) ? a[1].as_cstr : "";
+    size_t la = strlen(sa), lb = strlen(sb);
+    char *out = (char *)malloc(la + lb + 1);
+    if (!out) { TuriValue v = {0}; v.tag = TURI_NIL; return v; }
+    memcpy(out, sa, la);
+    memcpy(out + la, sb, lb);
+    out[la + lb] = '\0';
+    TuriValue v = {0}; v.tag = TURI_CSTR; v.as_cstr = out; return v;
+}
+
 void turi_register_collection_natives(TuriEnv *env) {
+    turi_env_register_native(env, "show-concat", native_show_concat, NULL);
     turi_env_register_native(env, "tur_hamt_new", native_tur_hamt_new, NULL);
     turi_env_register_native(env, "tur_hamt_free", native_tur_hamt_free, NULL);
     turi_env_register_native(env, "tur_hamt_retain", native_tur_hamt_retain, NULL);

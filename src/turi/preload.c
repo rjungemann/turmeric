@@ -78,3 +78,15 @@ void turi_env_preload_collections(TuriEnv *env, const char *stdlib_root) {
     (void)sv;
     buf_free(&src);
 }
+
+void turi_env_preload_typeclasses(TuriEnv *env, const char *stdlib_root) {
+    if (!env) return;
+    /* Load ONLY typeclass-show.tur (Show class + primitive instances +
+     * Show[Vec]/Show[Set]/Show[Map]), not the full typeclass.tur.  The rest of
+     * typeclass.tur (Error/Display/Debug[ptr<void>]) has inline-C instance
+     * methods -- notably Error's error-message -- that would shadow interpreter
+     * builtins the async runtime relies on.  Loaded after
+     * turi_env_preload_collections so the collection Show instances see their
+     * backing Vec/Set/Map types. */
+    preload_one(env, preload_root(stdlib_root), "typeclass-show.tur");
+}
