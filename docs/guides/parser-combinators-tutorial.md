@@ -22,6 +22,15 @@ Turmeric with `defdata`, `defgadt`, `match`, and no inline C.
 The runnable end-to-end version of every snippet here lives in
 [`tests/fixtures/parsec-tutorial/input.tur`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/parsec-tutorial/input.tur).
 
+> **Note.** The snippets below use the `#\<char>` character-literal
+> syntax (`#\+` reads as `43`, `#\0` as `48`, `#\space` as `32`).
+> That syntax is a v1 legibility slice; see
+> [`docs/upcoming/v1/legible-char-literals-plan.md`](../upcoming/v1/legible-char-literals-plan.md).
+> Until it ships, the runnable fixture still spells the ASCII codes
+> as raw integers (`43`, `48`, ...); the guide is written against the
+> target syntax because the byte-comparison-heavy code is what the
+> feature is *for*.
+
 ---
 
 ## Why combinators?
@@ -47,18 +56,17 @@ equivalent Haskell tutorial would have handed us.
 ## Modelling the input
 
 For a **byte-oriented** parser we want to walk the source one character
-at a time. The natural Turmeric type would be a `:cstr` plus a
-`(cstr-nth s i)` primitive, but that primitive isn't autoloaded yet
-(see
-[docs/reported/no-cstr-byte-primitives-pure-turmeric.md](../reported/no-cstr-byte-primitives-pure-turmeric.md)).
-
-So the input is a **list of ASCII codes** -- a plain
+at a time. The natural Turmeric type is a `:cstr` plus `cstr-nth` from
+`stdlib/cstr` (shipped 2026-07-01; not autoloaded, so it takes a
+`(import cstr :refer [cstr-len cstr-nth])`). For the tutorial we keep
+the input as a **list of character codes** instead -- a plain
 `(cons int (cons int ...))` built with `stdlib/list`'s `list-head` and
-`list-tail`. The string `"1+2*(3+4)"` becomes:
+`list-tail` -- because it lets every combinator work on a single value
+type (`int`) without threading an index alongside the source. The
+string `"1+2*(3+4)"` becomes:
 
 ```turmeric
-(list 49 43 50 42 40 51 43 52 41)
-;;    '1' '+' '2' '*' '(' '3' '+' '4' ')'
+(list #\1 #\+ #\2 #\* #\( #\3 #\+ #\4 #\))
 ```
 
 Two helpers make the rest of the code read cleanly. End-of-input is a
@@ -68,7 +76,7 @@ Two helpers make the rest of the code read cleanly. End-of-input is a
 (defn at-end? [xs : int] : bool (= xs 0))
 
 (defn is-digit? [c : int] : bool
-  (if (< c 48) false (if (> c 57) false true)))
+  (if (< c #\0) false (if (> c #\9) false true)))
 ```
 
 `list-head xs` returns the current byte and `list-tail xs` advances the
@@ -142,12 +150,15 @@ eta-expands the result so it can be used as a plain top-level parser.
 The combinators are the recurring shapes -- alternation, mapping,
 sequencing -- lifted out of ad-hoc grammar code so we can compose them
 freely. The tutorial spells each one *monomorphically* (one instance
-per element type: `or-int` / `or-expr`, `map-int-to-expr`) because
-Turmeric's codegen currently has an open bug on polymorphic-`defn`
-bodies that return an inner lambda; see
-[docs/reported/poly-defn-inner-lambda-codegen.md](../reported/poly-defn-inner-lambda-codegen.md).
-Both spellings would elaborate; only the monomorphic ones compile
-end-to-end today.
+per element type: `or-int` / `or-expr`, `map-int-to-expr`) as a
+pedagogical choice -- the shapes are easier to read when the element
+type is spelled out. The polymorphic spelling `(or-parser [A] p q)`
+also works: both the codegen drop
+([archived](../archive/history/poly-defn-inner-lambda-codegen.md))
+and the follow-on call-site element inference
+([archived](../archive/history/poly-combinator-application-element-inference.md))
+were resolved on 2026-07-02, and the compiler now infers `A` through
+the returned closure at the application site.
 
 ### Alternation -- `or-*`
 
@@ -169,8 +180,24 @@ end-to-end today.
       (PFail)      (q xs))))
 ```
 
-The two are line-for-line identical except for the element type. In a
-future Turmeric they'd collapse to one `(or-parser [A] ...)` `defn`.
+The two are line-for-line identical except for the element type. They
+collapse to a single polymorphic `defn`:
+
+```turmeric
+(defn or-parser [A] [p : (fn [int] (PRes A)) q : (fn [int] (PRes A))]
+    : (fn [int] (PRes A))
+  (fn [xs : int] : (PRes A)
+    (match (p xs)
+      (POK v rest) (POK v rest)
+      (PFail)      (q xs))))
+```
+
+`A` is a type parameter declared right after the name; it appears in
+both the argument closures and the returned closure, and the compiler
+grounds it at each application site (e.g. `(or-parser paren-expr
+number-as-expr)` grounds `A = Expr`). The tutorial keeps the
+monomorphic pair below for readability, but any call to `or-int` or
+`or-expr` can be replaced with `or-parser` verbatim.
 
 ### Mapping -- `map-*-to-*`
 
@@ -189,6 +216,22 @@ Note the bare `(PFail)` on the failure arm: the enclosing
 `fn`'s declared return `(PRes Expr)` propagates into the arm body, so
 no `(:: (PFail) (PRes Expr))` ascription is needed. Same for the
 `(PFail)` inside `or-*`.
+
+The polymorphic spelling factors the same way:
+
+```turmeric
+(defn map-parser [A B] [f : (fn [A] B) p : (fn [int] (PRes A))]
+    : (fn [int] (PRes B))
+  (fn [xs : int] : (PRes B)
+    (match (p xs)
+      (PFail)      (PFail)
+      (POK v rest) (POK (f v) rest))))
+```
+
+Two type parameters this time -- the input element `A` and the mapped
+output `B` -- because `map` is where the element type actually changes
+shape. `(map-parser to-enum number)` grounds `A = int`, `B = Expr` and
+gives back exactly `number-as-expr`.
 
 ---
 
@@ -209,14 +252,14 @@ representable.
   (EDiv (Expr int) (Expr int)   : (Expr int)))
 
 (defn apply-op [op : int lhs : Expr rhs : Expr] : Expr
-  (if (= op 43) (EAdd lhs rhs)
-    (if (= op 45) (ESub lhs rhs)
-      (if (= op 42) (EMul lhs rhs)
-        (if (= op 47) (EDiv lhs rhs)
+  (if (= op #\+) (EAdd lhs rhs)
+    (if (= op #\-) (ESub lhs rhs)
+      (if (= op #\*) (EMul lhs rhs)
+        (if (= op #\/) (EDiv lhs rhs)
           (ENum 0))))))
 ```
 
-`apply-op` dispatches on the ASCII operator code. It falls through to
+`apply-op` dispatches on the operator byte. It falls through to
 `(ENum 0)` on an unknown byte, which never happens if the grammar is
 correct -- and if it does, `eval-expr` will still produce a defined
 value.
@@ -243,13 +286,13 @@ The two-level `expr` / `term` split is what buys precedence: `*` and
     (POK acc xs)
     (let [c (list-head xs)]
       (if (is-digit? c)
-        (digits-int-loop (list-tail xs) (+ (* acc 10) (- c 48)))
+        (digits-int-loop (list-tail xs) (+ (* acc 10) (- c #\0)))
         (POK acc xs)))))
 
 (defn number [xs : int] : (PRes int)
   (match (digit xs)
     (PFail)      (PFail)
-    (POK d rest) (digits-int-loop rest (- d 48))))
+    (POK d rest) (digits-int-loop rest (- d #\0))))
 ```
 
 `digit` (from earlier) is the "at-least-one" gate; `digits-int-loop`
@@ -269,13 +312,13 @@ iteration -- no stack growth, no O(n) intermediate allocations.
   (if (at-end? xs)
     (PFail)
     (let [c (list-head xs)]
-      (if (= c 40)
+      (if (= c #\()
         (match (expr-parse (list-tail xs))
           (PFail)          (PFail)
           (POK inner rest)
           (if (at-end? rest)
             (PFail)
-            (if (= (list-head rest) 41)
+            (if (= (list-head rest) #\))
               (:: (POK inner (list-tail rest)) (PRes Expr))
               (PFail))))
         (PFail)))))
@@ -294,12 +337,13 @@ and `map-int-to-expr` lifts it into a `Parser<Expr>`.
 handling; not every one-off pattern collapses into a combinator.
 
 One `(:: (POK inner (list-tail rest)) (PRes Expr))` ascription lingers
-in `paren-expr`. It's load-bearing: `expr-parse` is defined *later* in
-the file (mutual recursion), so when `paren-expr` is elaborated the
-callee's parametric return type isn't yet visible; the match binder
-falls back to a placeholder element type and the bare `(POK ...)`
-needs a hint. Tracked in
-[docs/reported/defdata-parametric-forward-decl-inference.md](../reported/defdata-parametric-forward-decl-inference.md).
+in `paren-expr`. It was originally load-bearing because `expr-parse`
+is defined *later* in the file (mutual recursion) and the forward-decl
+pass didn't yet record the compound parametric return type, so the
+match binder fell back to a placeholder. That gap is resolved
+([archived](../archive/history/defdata-parametric-forward-decl-inference.md),
+2026-07-02); the ascription is now optional but the tutorial fixture
+still carries it verbatim.
 
 ### Left-associative chains -- `term` and `expr`
 
@@ -311,7 +355,7 @@ inlined `many` over `(op, factor)` pairs, folded left-to-right:
   (if (at-end? xs)
     (POK lhs xs)
     (let [c (list-head xs)]
-      (if (if (= c 42) true (= c 47))
+      (if (if (= c #\*) true (= c #\/))
         (match (factor (list-tail xs))
           (PFail)          (PFail)
           (POK rhs rest)   (term-tail rest (apply-op c lhs rhs)))
@@ -333,7 +377,7 @@ inlined `many` over `(op, factor)` pairs, folded left-to-right:
   (if (at-end? xs)
     (POK lhs xs)
     (let [c (list-head xs)]
-      (if (if (= c 43) true (= c 45))
+      (if (if (= c #\+) true (= c #\-))
         (match (term (list-tail xs))
           (PFail)          (PFail)
           (POK rhs rest)   (expr-tail rest (apply-op c lhs rhs)))
@@ -372,7 +416,7 @@ handled:
 
 ```turmeric
 (defn main [] : int
-  (let [input (list 49 43 50 42 40 51 43 52 41)]   ;; "1+2*(3+4)"
+  (let [input (list #\1 #\+ #\2 #\* #\( #\3 #\+ #\4 #\))]   ;; "1+2*(3+4)"
     (match (expr-parse input)
       (PFail)          (do (println 0) 1)
       (POK ast rest)   (do (println (eval-expr ast)) 0))))
@@ -415,14 +459,18 @@ even for a tutorial-sized parser.
   has performance-tuned versions of every combinator plus `pstring`,
   `parse-value`, and friends -- built on top of inline-C for the tight
   loops.
-- **Real strings:** once
-  [docs/reported/no-cstr-byte-primitives-pure-turmeric.md](../reported/no-cstr-byte-primitives-pure-turmeric.md)
-  closes, the input list of ASCII ints goes away and the parser takes
-  a `:cstr` directly.
-- **Polymorphic combinators:** once
-  [docs/reported/poly-defn-inner-lambda-codegen.md](../reported/poly-defn-inner-lambda-codegen.md)
-  closes, the `or-int` / `or-expr` (and every other monomorphic pair
-  in the tutorial) collapses to a single `(or-parser [A] p q)`.
+- **Real strings:** add `(import cstr :refer [cstr-len cstr-nth])` and
+  the input list of ASCII ints goes away -- the parser takes a `:cstr`
+  directly. `stdlib/cstr.tur` shipped 2026-07-01
+  ([archived report](../archive/history/no-cstr-byte-primitives-pure-turmeric.md)).
+- **Polymorphic combinators:** the `or-int` / `or-expr` (and every
+  other monomorphic pair in the tutorial) can be collapsed to a single
+  `(or-parser [A] p q)`. Both the codegen drop and the call-site
+  element inference gap that used to block this were resolved 2026-07-02
+  ([codegen](../archive/history/poly-defn-inner-lambda-codegen.md),
+  [inference](../archive/history/poly-combinator-application-element-inference.md));
+  keeping the monomorphic spelling in the tutorial is a pedagogical
+  choice, not a compiler limit.
 - **Error positions and recovery:** the current library returns "no
   result" on failure. A production parser threads the furthest position
   reached, so error messages can say *where* parsing died.
