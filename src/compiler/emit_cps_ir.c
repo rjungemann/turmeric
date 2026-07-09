@@ -82,6 +82,22 @@ static bool slot_ty(TypeKind k) {
 static const char *binder_ctype(EmitCtx *ctx, TypeKind ty);
 static const char *binder_ctype_full(EmitCtx *ctx, TypeKind ty, const Type *t);
 
+/* G3a: when set (while a colored-generic MONOMORPH is being CPS-emitted as a
+ * self-contained island, and during the --dump-cps-mono probe), the slot-tier and
+ * signature gates resolve a type through the active monomorph specialization
+ * before reading it -- so the generic body's tyvar types (`A`, `(Option A)`) are
+ * classified / boxed / bit-reinterpreted at their CONCRETE monomorph types.  NULL
+ * in every ordinary emit path, so all of this is a strict no-op there. */
+static EmitCtx *g_cps_mono_resolver = NULL;
+
+/* Resolve `*t` through the active monomorph spec when the hook is on; else return
+ * `*t` unchanged.  `out` provides storage for the resolved Type.  Returns the
+ * type to use (either `out` or `t`). */
+static const Type *cps_resolve_ty(const Type *t, Type *out) {
+    if (g_cps_mono_resolver && t) { *out = emit_resolve_type(g_cps_mono_resolver, *(Type *)t); return out; }
+    return t;
+}
+
 /* The AdtDef at the head of a struct / ADT / ADT-app type, or NULL. */
 static const AdtDef *slot_agg_def(const Type *t) {
     if (!t) return NULL;
@@ -107,6 +123,7 @@ static const AdtDef *slot_agg_def(const Type *t) {
  * carries the real monomorphized def. */
 static bool slot_box_ty(const Type *t) {
     if (!t) return false;
+    Type _r; t = cps_resolve_ty(t, &_r);
     /* A heap-passed ADT / struct (`(Vec int)` -> `tur_adt_Vec__int *`, ...) is
      * already a pointer (the int64 carrier), NOT a by-value product to heap-copy.
      * Some heap ADT defs still have product *shape* (`{ len; cap; data }`), so
@@ -141,20 +158,10 @@ static bool carrier_handle_ok(const Type *t) {
  * the full Type is available (the bare-TypeKind slot_ty stays for scalar-only
  * sites).  It is deliberately WIDER than cap_ty_ok: a value may cross a slot by a
  * single move even when it may not be duplicated into a capture env. */
-/* G1 (cps-backend-generic-monomorph-classification-plan): when set (only during
- * the --dump-cps-mono admissibility probe), slot_ok_t resolves a type through the
- * active monomorph specialization before gating -- so a generic body's tyvar
- * types (`A`, `(Option A)`) are checked at their CONCRETE monomorph types.  NULL
- * in every real emit path, so this is a strict no-op outside the probe. */
-static EmitCtx *g_cps_mono_resolver = NULL;
-
 static bool slot_ok_t(const Type *t, TypeKind k) {
-    Type rt;
-    if (g_cps_mono_resolver && t) {
-        rt = emit_resolve_type(g_cps_mono_resolver, *(Type *)t);
-        t = &rt; k = rt.kind;
-    }
-    return slot_ty(k) || slot_box_ty(t) || carrier_handle_ok(t);
+    Type rt; const Type *r = cps_resolve_ty(t, &rt);
+    if (r != t) k = r->kind;
+    return slot_ty(k) || slot_box_ty(r) || carrier_handle_ok(r);
 }
 
 /* Store a value into the one-word slot.  Returns a malloc'd C expression.
@@ -163,6 +170,7 @@ static bool slot_ok_t(const Type *t, TypeKind k) {
  *   Tier C: heap-copy the aggregate and store the pointer (unboxed on load). */
 static char *slot_store(EmitCtx *ctx, TypeKind k, const Type *t, const char *e) {
     Buf b; buf_init(&b);
+    Type _r; const Type *rt = cps_resolve_ty(t, &_r); if (rt != t) k = rt->kind; t = rt;
     if (slot_box_ty(t)) {
         const char *cty = emit_type_c_name(ctx, *(Type *)t);
         buf_printf(&b,
@@ -186,6 +194,7 @@ static char *slot_store(EmitCtx *ctx, TypeKind k, const Type *t, const char *e) 
  *   could load the same slot more than once, so freeing there would double-free. */
 static char *slot_load(EmitCtx *ctx, TypeKind k, const Type *t, const char *s, bool consume) {
     Buf b; buf_init(&b);
+    Type _r; const Type *rt = cps_resolve_ty(t, &_r); if (rt != t) k = rt->kind; t = rt;
     if (slot_box_ty(t)) {
         const char *cty = emit_type_c_name(ctx, *(Type *)t);
         if (consume)
@@ -233,7 +242,11 @@ static const char *binder_ctype(EmitCtx *ctx, TypeKind ty) {
  * local that never crosses the DK slot (crossing is gated by atom_ok /
  * fn_sig_ok, which reject non-slot types); only scalar fields it yields cross. */
 static const char *binder_ctype_full(EmitCtx *ctx, TypeKind ty, const Type *t) {
-    if (t && (ty == TY_STRUCT || ty == TY_ADT || ty == TY_APP))
+    /* TY_TYVAR: a monomorph body's generic binder (`A`) -- keep the named Type so
+     * emit_type_c_name resolves it through the active spec to its concrete C type
+     * (a scalar tyvar reaches this path; binder_ctype would drop the name and
+     * mis-spell it).  Only occurs while a monomorph is emitted (spec active). */
+    if (t && (ty == TY_STRUCT || ty == TY_ADT || ty == TY_APP || ty == TY_TYVAR))
         return emit_type_c_name(ctx, *t);
     return binder_ctype(ctx, ty);
 }
@@ -2480,13 +2493,53 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
      * fd->cps_colored / g_ents. */
     ensure_S(program);
     SEnt *se = ent_of(fd);
-    if (!se || !se->in_s) return false;   /* not emittable -> caller falls back */
+
+    /* G3a: a colored-generic MONOMORPH emitted as a self-contained DK island.
+     * The generic template sig-rejects (tyvar TY_APP) so `se->in_s` is false, but
+     * this specific monomorph -- concrete signature admissible, body core, and a
+     * self-contained island (is_cps_island: every effect handled within, no
+     * colored callee) -- is safe to CPS-emit standalone: its entry wrapper keeps
+     * the SAME `<clone>` symbol callers already call, and its effects never touch
+     * another function's machine.  No taint/routing change. */
+    const EmitAbiSpecialization *spec = ctx->current_abi_specialization;
+    bool island_mono = false;
+    if (spec && spec->fn == fd && fd->cps_colored && se && se->term
+        && spec->clone_name) {
+        g_cps_mono_resolver = ctx;
+        bool ok = mono_sig_ok(fd, spec) && term_core_ok(se->term);
+        g_cps_mono_resolver = NULL;
+        const Symbol *h0[1];
+        island_mono = ok && is_cps_island(se->term, h0, 0);
+    }
+
+    if (!island_mono && (!se || !se->in_s)) return false;   /* fall back */
 
     experiment_warn_if_used("cps-backend");
 
     if (!g_fwd_done) { emit_forward_decls(ctx, file); g_fwd_done = true; }
 
-    char *cn = raw_name_for_binding(fd->binding);
+    /* An island monomorph is emitted under its concrete clone name; the type
+     * spellings + slot tiers in the reused generic CTerm resolve through the
+     * active spec (g_cps_mono_resolver, set around the emit below). */
+    char *cn = island_mono ? strdup(spec->clone_name) : raw_name_for_binding(fd->binding);
+    const Type *mono_ret = NULL;
+    if (island_mono) {
+        g_cps_mono_resolver = ctx;
+        mono_ret = &spec->result_type;
+        /* Mirror emit_fns.c's by-value spec-param flagging: a concrete by-value
+         * ADT-app param (`tur_adt_Option__int`) is passed by value, so a delegated
+         * call *through* it (unwrap-or o ...) must NOT re-cross it as the int64
+         * carrier.  The CPS emit_params does not set this, so set it here for each
+         * such param -- otherwise the direct emitter reconstructs the aggregate
+         * from a bogus `(intptr_t)(o)` carrier cast. */
+        for (uint8_t i = 0; i < fd->n_params && i < spec->n_args; i++) {
+            Type rat = emit_resolve_type(ctx, spec->arg_types[i]);
+            const char *pc = emit_type_c_name(ctx, rat);
+            if (fd->params[i] && pc && strcmp(pc, "int64_t") != 0
+                && (type_uses_carrier_abi(rat) || type_app_is_concrete_adt(&rat)))
+                fd->params[i]->emit_byvalue_carrier_abi = true;
+        }
+    }
 
     /* Set the function-parameter context so every reference to a parameter --
      * whether emitted by the CPS backend (name_for_binding) or by the direct
@@ -2510,7 +2563,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     CE ce; memset(&ce, 0, sizeof(ce));
     ce.ctx = ctx; ce.out = &body_buf; ce.helpers = &helpers; ce.indent = 4;
     ce.cur_k = "k"; ce.fn_cn = cn; ce.helper_ctr = &helper_ctr;
-    ce.ret_ty = fn_ret_type(fd);   /* KK_RET crossing type (Tier C aggregate return) */
+    ce.ret_ty = mono_ret ? mono_ret : fn_ret_type(fd);   /* KK_RET crossing type (Tier C aggregate return) */
     emit_binder_decls(&ce, se->term);
     emit_term(&ce, se->term);
     buf_putc(&body_buf, '\0');
@@ -2537,7 +2590,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
      * the CPS body, and returns (unwraps) the value delivered to the root.  The
      * seed chain is freed after the body returns; the CPS body never retains it
      * (a captured sub-continuation is always a copy). */
-    const Type *rt = fn_ret_type(fd);
+    const Type *rt = mono_ret ? mono_ret : fn_ret_type(fd);
     /* A nil/void return: the entry wrapper is declared `void` (matching the
      * direct emitter's forward decl) and discards the unit the CPS body delivers,
      * rather than returning an int64. */
@@ -2569,6 +2622,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
 
     ctx->fn_params   = saved_fn_params;
     ctx->n_fn_params = saved_n_fn_params;
+    g_cps_mono_resolver = NULL;   /* G3a: end of island-monomorph emit (no-op otherwise) */
     free(cn);
     return true;
 }

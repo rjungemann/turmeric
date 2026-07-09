@@ -232,51 +232,49 @@ enumerated spec set.
   pre-emit discovery + taint surgery). Neither is a rush job -- G3a's safety gate
   and G3b's taint surgery are both correctness-critical.
 
-- **G3a implementation pass (attempted; reverted at a green checkpoint) -- the
-  island EMIT is blocked by a carrier-crossing interaction.**
+- **G3a -- self-contained-island monomorph DK emit LANDED.** A colored-generic
+  monomorph that is a self-contained island now CPS-emits (DK) instead of fiber.
 
-  *What landed and stuck:* the safety gate. `is_cps_island(term)` -- no perform
-  escapes a matching enclosing handle, no colored callee (`binding_is_colored`),
-  no raw reset/shift -- was implemented and **validated both ways**: self-contained
-  (`choose-or`, `wrapit`, `firstish`) -> island=yes; escaping perform handled by
-  a caller, a case body calling a colored fn, and "handle A but perform B" ->
-  island=no. Wired into `--dump-cps-mono` (`ISLAND-EMITTABLE` vs
-  `ADMISSIBLE(cross-fn)`). Analysis-only, committed, suite 2037/0.
+  *The safety gate.* `is_cps_island(term)` -- no perform escapes a matching
+  enclosing handle, no colored callee (`binding_is_colored`), no raw reset/shift
+  -- validated both ways: self-contained (`choose-or`, `wrapit`, `firstish`) ->
+  island=yes; escaping perform handled by a caller, a case body calling a colored
+  fn, "handle A but perform B" -> island=no. Reported by `--dump-cps-mono` as
+  `ISLAND-EMITTABLE` vs `ADMISSIBLE(cross-fn)`.
 
-  *What was tried and reverted:* the actual island emit. Wiring `emit_cps_ir_try_fn`
-  to emit an island monomorph as `<clone>__cps` + `<clone>` wrapper (reusing the
-  generic CTerm; resolving scalar tyvars via `binder_ctype_full` + a
-  `cps_resolve_ty` hook so `slot_store`/`slot_load`/`slot_box_ty` tier floats and
-  boxes at the concrete type; `ce.ret_ty` / wrapper return = `spec->result_type`)
-  **did** produce a DK body with no fiber markers, and the full suite stayed green
-  (no fixture exercises the pattern). But it **miscompiled** the flagship
-  `choose-or`: the delimited continuation captures `o : (Option A)` (a by-value
-  `tur_adt_Option__int`) into the handler-frame env, then the delegated
-  `(unwrap-or o dflt)` -- a call to a carrier-ABI generic -- is emitted by the
-  direct emitter as a **carrier->by-value reconstruction**
-  `(tur_option_t *)(intptr_t)(o)`, casting the aggregate to `intptr_t`
-  ("aggregate value used where an integer was expected"). The FIBER emit of the
-  same call passes `o` directly (`unwrap_or__spec__(o, dflt)`); only the CPS
-  capture path routes it through the carrier crossing.
+  *The emit.* When `emit_cps_ir_try_fn` runs for a monomorph
+  (`ctx->current_abi_specialization` pins the generic) that is admissible
+  (`mono_sig_ok` + `term_core_ok`) and an island, it emits `<clone>__cps` + a
+  `<clone>` entry wrapper (installing its own `dk_prompt` root), reusing the
+  generic CTerm. Callers keep calling the SAME `<clone>(args)` symbol -- no
+  whole-program taint change, no call-site routing. The reused CTerm's type
+  spellings resolve to the concrete monomorph types via the active spec; scalar
+  tyvars resolve through `binder_ctype_full` (extended for `TY_TYVAR`); floats and
+  boxes tier at the concrete type via a `cps_resolve_ty` hook in
+  `slot_store`/`slot_load`/`slot_box_ty`; `ce.ret_ty` / wrapper return =
+  `spec->result_type`. All of that is a strict no-op when the hook is off (every
+  ordinary emit path), so existing output is byte-identical.
 
-  *Why this has no non-trivial safe subset:* a spec-clone monomorph exists
-  precisely because its type arg is WIDE/aggregate (a scalar-tyvar generic emits
-  the int64-carrier base body with no `__spec__` clone, so the emit hook never
-  fires for it). So every island monomorph the hook can reach carries an
-  aggregate, and a captured aggregate used in a delegated carrier-ABI generic call
-  hits this crossing. Gating it out empties the feature.
+  *The carrier-crossing fix (the blocker a first attempt hit).* The delimited
+  continuation captures `o : (Option A)` (a by-value `tur_adt_Option__int`) into
+  the handler-frame env, then the delegated `(unwrap-or o dflt)` -- a carrier-ABI
+  generic call -- was emitted by the direct emitter as a carrier->by-value
+  reconstruction `(tur_option_t *)(intptr_t)(o)`, casting the aggregate to
+  `intptr_t`. Root cause: the fiber `emit_params` (emit_fns.c) sets
+  `param->emit_byvalue_carrier_abi = true` on a concrete by-value ADT-app spec
+  param so the delegated call passes it by value, but the CPS `emit_params` did
+  not. Fix: the island-emit path sets that flag on each such param (mirroring
+  emit_fns.c), so `(unwrap-or o dflt)` now emits `unwrap_or__spec__(o, dflt)` --
+  by value, no crossing.
 
-  *The concrete blocker for a future pass:* when a by-value aggregate is captured
-  into a CPS continuation/handler env and then used as an argument to a
-  carrier-ABI (generic/`__spec__`) callee inside a delegated `CT_LETRAW`, the
-  direct emitter emits a carrier->by-value crossing that assumes the value is the
-  int64 carrier, but the env holds it by value. Island emit needs either (a) the
-  capture to store the value in the form the delegated call expects (the carrier),
-  or (b) the delegated-call emit to see the captured value as already by-value and
-  skip the crossing (the R4 carrier-crossing-recovery routing must treat a
-  CPS-env-loaded aggregate as by-value, not carrier). This is the real G3a work;
-  it was reverted rather than shipped because a silent aggregate miscompile is
-  exactly the failure class to avoid, even behind the experimental flag.
+  *Result.* `choose-or`/`wrapit`/`firstish` monomorphs CPS-emit with 0 fiber
+  markers and round-trip (`direct == cps`). A float instantiation is CPS-correct
+  (`7.5`) where the fiber path is not (a pre-existing float-through-effect bug).
+  Fixture `cps-backend-generic-island`; full suite 2038 passed, 0 failed.
+
+  *Still G3b (deferred):* cross-function DK chains (a monomorph that performs an
+  effect handled by a CPS peer) -- the per-instantiation taint problem the
+  tag-level fixpoint can't express. Islands are the safe, self-contained subset.
 
 - **G4 -- widen `fn_sig_ok` for the concrete monomorph types.** With monomorphs
   classified under their concrete param/return types, the tyvar-`TY_APP`
@@ -298,18 +296,16 @@ materialization; (2) **the ordering knot is confirmed unavoidable** -- the
 monomorph set is not complete when `ensure_S` runs, so the effect-taint fixpoint
 cannot range over monomorphs without a dedicated pre-emit spec-discovery pass.
 
-G3a's island EMIT was attempted this pass and **reverted at a green checkpoint**:
-the safety gate (`is_cps_island`, validated both ways) is landed and analysis-only,
-but the actual emit miscompiles the flagship `choose-or` via a carrier-crossing
-interaction (a by-value aggregate captured into a CPS env, then used in a delegated
-carrier-ABI generic call, is emitted as a wrong-direction carrier->by-value
-reconstruction). Since spec-clone monomorphs are *exactly* the aggregate ones,
-there is no non-trivial safe subset to gate down to -- so it was reverted rather
-than shipped (silent aggregate miscompile is the failure class to avoid). The
-concrete fix for a future pass is documented in the G3a entry: make the capture
-store the carrier form, or make the delegated-call emit treat a CPS-env-loaded
-aggregate as by-value (R4 carrier-crossing-recovery routing). Current tree: island
-analysis only, suite 2037/0.
+**G3a is landed**: a colored-generic monomorph that is a self-contained island
+(every effect handled within, no colored callee) now CPS-emits (DK) as
+`<clone>__cps` + a `<clone>` wrapper, callers unchanged, no whole-program taint or
+routing change. The carrier-crossing that blocked a first attempt is fixed (set
+`emit_byvalue_carrier_abi` on concrete by-value ADT-app spec params in the
+island-emit path, mirroring the fiber `emit_params`). Fixture
+`cps-backend-generic-island`; suite 2038/0. See the G3a entry for details. What
+remains is **G3b** -- cross-function DK chains, which the tag-level taint fixpoint
+cannot express (per-instantiation problem); islands are the safe subset that needs
+no taint change.
 
 G3 was investigated in depth this pass with two structural findings (see the G3
 entry): (A) the CPS emit path is **already spec-aware** (type spellings resolve

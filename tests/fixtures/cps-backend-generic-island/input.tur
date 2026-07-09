@@ -1,0 +1,38 @@
+;; CPS-IR-to-C backend, N6 G3a: a colored *generic* function whose concrete
+;; MONOMORPH is a self-contained DK island.  Built with --enable=cps-backend.
+;;
+;; A colored generic is CPS-classified only as its generic template, which
+;; sig-rejects on the tyvar TY_APP (`(Option A)`); the concrete monomorph the
+;; direct emitter generates (choose_or__spec__..._tur_adt_Option__int_...) was
+;; therefore always emitted on the fiber effect machine, never DK.
+;;
+;; G3a lifts that for a self-contained ISLAND monomorph -- one where every effect
+;; it performs is handled within its own body (nothing escapes to a caller) and
+;; it calls no colored function (is_cps_island).  Such a monomorph is safe to
+;; CPS-emit standalone: emit_cps_ir_try_fn emits `<clone>__cps` + a `<clone>`
+;; entry wrapper (installing its own dk_prompt root), so callers keep calling the
+;; SAME `<clone>(args)` symbol -- no whole-program taint or call-site routing
+;; change.  The reused generic CTerm's type spellings + slot tiers resolve to the
+;; concrete monomorph types through the active specialization.
+;;
+;; `choose-or` handles E internally (island), takes an aggregate `(Option A)`
+;; param + a scalar tyvar `A` param, and returns `A`.  The `(Option int)` param
+;; is captured into the handler-frame env by value and passed by value to the
+;; delegated `(unwrap-or o dflt)` (a carrier-ABI generic) -- the emit_byvalue_
+;; carrier_abi flag is set on the by-value ADT-app param so it is NOT re-crossed
+;; as the int64 carrier.
+;;
+;; direct-vs-CPS equal: the handler resumes k with x, so (choose-or (some 42) 0)
+;; unwraps to 42.
+
+(load "stdlib/option.tur")
+
+(defeffect E [] :int)
+
+(defn choose-or [A] [o : (Option A) dflt : A] : A
+  (let [x (handle (perform (E)) (E [] k) (resume k 42))]
+    (unwrap-or o dflt)))
+
+(defn main [] : int
+  (println (choose-or (some 42) 0))
+  0)
