@@ -272,9 +272,42 @@ delimited `shift-then-twice` breaks the colored chain into a fallback, so no
 cps->cps edge survives there.) Full suite: 1989 passed, 0 failed.
 
 Note: a *non-tail* cps->cps call (a colored call whose result is consumed,
-needing the join reified onto the heap chain as a `dk_frame`) remains outside
-the emitted subset -- such a caller still falls back -- consistent with the C1
-scope. Closing it is future work layered on the C3 machinery.
+needing the join reified onto the heap chain as a `dk_frame`) was originally
+outside the emitted subset -- such a caller fell back. **This is now emitted for
+the zero-capture direct-body form** (see "Non-tail cps->cps heap join" below);
+capturing joins still fall back.
+
+### Non-tail cps->cps heap join -- shipped (zero-capture direct-body form)
+
+A non-tail colored call `let x = g(args) in jbody` is translated as a
+`CT_LETCONT{j, param=x, jbody, body=CT_TAILCALL(g, kont=KK_VAR j)}`: the join
+`j` names the continuation that consumes g's result. `letcont_is_heap_join`
+(`src/compiler/emit_cps_ir.c`) recognizes this shape (letcont body is a tailcall
+to an emittable colored callee threading this exact join). `emit_heap_join`
+lifts `jbody` into a DK **value-transform frame** (`LH_PERFORM_CONT`: it
+*returns* jbody's value) and calls `return g__cps(args, dk_frame(jname, 0,
+cur_k))` -- so the join frame is chained onto the *enclosing* continuation
+`cur_k`, keeping any effect handler installed above the call reachable in g's
+continuation chain. (A reset-cont-style frame with `next=dk_done()` would hide
+the handler from g and abort on a `perform` -- an earlier attempt did exactly
+that.) `needs_heap_join` now returns false for this shape unless `jbody`
+captures a local other than the join parameter, in which case the frame would
+need an env and the caller still falls back.
+
+Fixture `tests/fixtures/cps-backend-heap-join/`: `g` performs `Ask` and adds 1;
+`f` non-tail-calls g (`(+ (g) 10)`); `run` handles `Ask` and resumes 5. All
+three functions are CPS-emitted and the DK chain stays unbroken through the
+non-tail call; the CPS build reproduces the direct-style value (`16`). Before
+this, `f` fell back, putting a fiber intermediary between the CPS handler and
+CPS performer and aborting with "unhandled effect".
+
+**Residual:** a *capturing* heap join (or any other trigger that forces an
+intermediary to fall back) between a CPS handler and CPS performer still severs
+the DK chain and aborts -- see
+`docs/reported/cps-backend-fallback-intermediary-splits-effect-chain.md`. This
+heap-join change strictly reduces that residual's incidence (the non-capturing
+case no longer falls back); it is not a regression. Closing the general case
+needs call-path taint in the co-classification fixpoint.
 
 ## Phase C3 -- resumable `reset` / `shift` on the general backend
 

@@ -609,9 +609,24 @@ static bool binding_in_s(const Binding *b) {
     return false;
 }
 
-/* Does `t` contain a non-tail cps->cps call -- a CT_TAILCALL whose result is
- * bound by a join (kont is a KK_VAR) and whose callee is currently emittable?
- * Such a call must reify the join onto the heap chain, which C1 does not do. */
+/* True when this CT_LETCONT is a non-tail cps->cps call: its body is directly a
+ * tailcall to an emittable colored callee that threads this join as the callee's
+ * continuation.  Such a join is reified as a DK frame (emit_heap_join) rather
+ * than an inline goto-join. */
+static bool letcont_is_heap_join(const CTerm *t) {
+    const CTerm *b = t->as.letcont.body;
+    return b && b->kind == CT_TAILCALL
+        && b->as.tailcall.kont.kind == KK_VAR
+        && b->as.tailcall.kont.id == t->as.letcont.j.id
+        && binding_in_s(b->as.tailcall.fn);
+}
+
+/* Does `t` contain a heap join the backend CANNOT emit?  A non-tail cps->cps
+ * call reifies its join continuation as a DK frame; that is now supported for
+ * the direct CT_LETCONT-body form, provided the join body is zero-capture (the
+ * frame carries only the enclosing continuation).  This returns true only for
+ * the cases still unhandled: a capturing heap join, or a KK_VAR cps->cps tail
+ * call not sitting directly under its CT_LETCONT (e.g. inside an if branch). */
 static bool needs_heap_join(const CTerm *t) {
     if (!t) return false;
     switch (t->kind) {
@@ -624,6 +639,14 @@ static bool needs_heap_join(const CTerm *t) {
             return t->as.tailcall.kont.kind == KK_VAR
                 && binding_in_s(t->as.tailcall.fn);
         case CT_LETCONT:
+            if (letcont_is_heap_join(t)) {
+                /* The join is lifted into a DK frame; the handled tailcall (body)
+                 * is not walked.  The frame carries only the enclosing
+                 * continuation, so the join body must not capture other locals. */
+                if (has_capture(t->as.letcont.jbody, t->as.letcont.param.id))
+                    return true;
+                return needs_heap_join(t->as.letcont.jbody);
+            }
             return needs_heap_join(t->as.letcont.jbody)
                 || needs_heap_join(t->as.letcont.body);
         case CT_IF:
@@ -1050,6 +1073,7 @@ static void emit_handle(CE *ce, const CTerm *t);
 static void emit_perform(CE *ce, const CTerm *t);
 static void emit_resume(CE *ce, const CTerm *t);
 static void emit_letraw(CE *ce, const CTerm *t);
+static void emit_heap_join(CE *ce, const CTerm *t);
 static char *cvar_cname(CE *ce, CVar x);
 
 /* Deliver value-string `v` to continuation `kont`. */
@@ -1180,6 +1204,7 @@ static void emit_term(CE *ce, const CTerm *t) {
             break;
         }
         case CT_LETCONT: {
+            if (letcont_is_heap_join(t)) { emit_heap_join(ce, t); break; }
             if (ce->n_joins < MAX_JOINS) {
                 ce->joins[ce->n_joins].id = t->as.letcont.j.id;
                 ce->joins[ce->n_joins].param = t->as.letcont.param.name;
@@ -1291,6 +1316,7 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
         }
         case CT_TAILCALL: break;
         case CT_LETCONT:
+            if (letcont_is_heap_join(t)) break;  /* param + jbody are lifted into a frame helper */
             ce_line(ce, "%s %s;", binder_ctype(ce->ctx, t->as.letcont.param.ty), t->as.letcont.param.name);
             emit_binder_decls(ce, t->as.letcont.body);
             emit_binder_decls(ce, t->as.letcont.jbody);
@@ -1409,6 +1435,40 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     buf_puts(ce->helpers, tmp.data);
     buf_puts(ce->helpers, "}\n");
     buf_free(&tmp);
+}
+
+/* A non-tail cps->cps call `let x = g(args) in jbody`, represented as a
+ * CT_LETCONT whose body tailcalls g threading this join.  The join continuation
+ * (jbody, parameterized by x) is reified as a DK frame chained onto the enclosing
+ * continuation (`cur_k`), and g is called with that chain.  When g finishes it
+ * `dk_run`s its result through the chain: the join frame transforms it (runs
+ * jbody, returning jbody's value) and dk_run then delivers that to `cur_k`.
+ *
+ * The frame is a value-transform frame (LH_PERFORM_CONT: it *returns* jbody's
+ * value rather than delivering it itself), and its `next` is `cur_k` -- so the
+ * enclosing continuation, including any effect handler installed above this call,
+ * stays reachable in g's continuation chain.  (A reset-cont-style frame with
+ * next=dk_done would hide the handler from g and abort on a perform.)  The join
+ * body is zero-capture (checked by needs_heap_join), so the frame carries no env. */
+static void emit_heap_join(CE *ce, const CTerm *t) {
+    const CTerm *call = t->as.letcont.body;   /* CT_TAILCALL to the colored callee */
+    int id = (*ce->helper_ctr)++;
+    char jname[256];
+    snprintf(jname, sizeof(jname), "%s_j%d", ce->fn_cn, id);
+    char *xn = cvar_cname(ce, t->as.letcont.param);
+    emit_lifted(ce, jname, LH_PERFORM_CONT, xn, t->as.letcont.param.ty,
+                t->as.letcont.jbody, NULL);
+    free(xn);
+
+    char *fn = callee_name(call->as.tailcall.fn);
+    char *argv = atoms_csv(ce, call->as.tailcall.args, call->as.tailcall.n);
+    char frame[512];
+    snprintf(frame, sizeof frame, "dk_frame(%s, 0, %s)", jname, ce->cur_k);
+    if (call->as.tailcall.n)
+        ce_line(ce, "return %s__cps(%s, %s); /* cps->cps heap join */", fn, argv, frame);
+    else
+        ce_line(ce, "return %s__cps(%s); /* cps->cps heap join */", fn, frame);
+    free(fn); free(argv);
 }
 
 /* CT_RESET: install a prompt whose outer continuation is the lifted reset body

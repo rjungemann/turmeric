@@ -1,0 +1,34 @@
+;; CPS-IR-to-C backend: NON-TAIL cps->cps call across an effect boundary
+;; (a heap join).  Built with --enable=cps-backend.
+;;
+;; `g` performs Ask and adds 1; `f` NON-TAIL-calls g -- `(+ (g) 10)` needs
+;; g's result before it can finish, so the "+ 10" continuation must be reified
+;; and threaded to g.  In direct style that is just a stack frame; on the CPS
+;; backend the join is lifted into a DK value-transform frame (dk_frame) chained
+;; onto f's own continuation, so g runs with the enclosing handler still in its
+;; continuation chain.  `run` handles Ask and resumes with 5.
+;;
+;; Before non-tail heap-join support, `f` fell back (needs_heap_join), which put
+;; a fiber intermediary between the CPS handler (run) and CPS performer (g) and
+;; aborted with "unhandled effect".  Now all three are CPS-emitted and the DK
+;; chain stays unbroken.
+;;
+;;   g  = 1 + (resume 5)   ; Ask resumes with 5 -> 6
+;;   f  = (g) + 10         ; 6 + 10 = 16
+;;   run handles -> 16
+
+(defeffect Ask [] :int)
+
+(defn g [] : int
+  (+ 1 (perform (Ask))))
+
+(defn f [] : int
+  (+ (g) 10))
+
+(defn run [] : int
+  (handle (f)
+    (Ask [] k) (resume k 5)))
+
+(defn main [] : int
+  (println (run))
+  0)
