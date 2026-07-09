@@ -366,12 +366,12 @@ static bool has_capture(const CTerm *t, uint32_t exclude) {
 
 /* Like has_capture, but the handler case's params + continuation k are excluded
  * (they are bound by the DKHandler signature, not captured). */
-static bool has_capture_case(const CTerm *t, const CTerm *hnode) {
+static bool has_capture_case(const CTerm *t, const CHandleCase *hc) {
     uint32_t bound[CC_MAX_BOUND];
     g_excl_n = 0;
-    for (uint32_t i = 0; i < hnode->as.handle.n_params && g_excl_n < 8; i++)
-        g_excl_b[g_excl_n++] = hnode->as.handle.params[i];
-    if (hnode->as.handle.k && g_excl_n < 8) g_excl_b[g_excl_n++] = hnode->as.handle.k;
+    for (uint32_t i = 0; i < hc->n_params && g_excl_n < 8; i++)
+        g_excl_b[g_excl_n++] = hc->params[i];
+    if (hc->k && g_excl_n < 8) g_excl_b[g_excl_n++] = hc->k;
     bool r = has_capture_rec(t, UINT32_MAX, bound, 0);
     g_excl_n = 0;
     return r;
@@ -639,13 +639,18 @@ static bool term_core_ok(const CTerm *t) {
         case CT_HANDLE:
             /* C4: single-case, <=1 effect param, self-contained zero-capture
              * continuation, straight-line handler case. */
-            return t->as.handle.n_params <= 1
-                && (slot_ok_t(t->as.handle.x.type, t->as.handle.x.ty) || t->as.handle.x.ty == TY_NIL)
-                && term_core_ok(t->as.handle.delim)
-                && reset_body_ok(t->as.handle.body)
-                && !has_capture(t->as.handle.body, t->as.handle.x.id)
-                && handle_case_ok(t->as.handle.case_body)
-                && !has_capture_case(t->as.handle.case_body, t);
+            if (!(slot_ok_t(t->as.handle.x.type, t->as.handle.x.ty) || t->as.handle.x.ty == TY_NIL)
+                || !term_core_ok(t->as.handle.delim)
+                || !reset_body_ok(t->as.handle.body)
+                || has_capture(t->as.handle.body, t->as.handle.x.id))
+                return false;
+            for (uint32_t ci = 0; ci < t->as.handle.n_cases; ci++) {
+                const CHandleCase *c = &t->as.handle.cases[ci];
+                if (c->n_params > 1) return false;              /* <=1 effect param */
+                if (!handle_case_ok(c->case_body)) return false;
+                if (has_capture_case(c->case_body, c)) return false;
+            }
+            return true;
         case CT_PERFORM:
             /* C4: <=1 scalar arg; zero-capture straight-line continuation. */
             return t->as.perform.n <= 1
@@ -760,10 +765,13 @@ static bool needs_heap_join(const CTerm *t) {
                 || needs_heap_join(t->as.reset.body);
         case CT_SHIFT:
             return needs_heap_join(t->as.shift.body);
-        case CT_HANDLE:
-            return needs_heap_join(t->as.handle.delim)
-                || needs_heap_join(t->as.handle.body)
-                || needs_heap_join(t->as.handle.case_body);
+        case CT_HANDLE: {
+            if (needs_heap_join(t->as.handle.delim) || needs_heap_join(t->as.handle.body))
+                return true;
+            for (uint32_t ci = 0; ci < t->as.handle.n_cases; ci++)
+                if (needs_heap_join(t->as.handle.cases[ci].case_body)) return true;
+            return false;
+        }
         case CT_PERFORM:
             return needs_heap_join(t->as.perform.body);
         case CT_RESUME:
@@ -1499,11 +1507,11 @@ typedef enum {
 
 /* Emit one lifted helper into ce->helpers.  `xname` is the incoming value
  * parameter name (reset/perform continuation result var); `xt` its full Type
- * (may be NULL for a scalar) so a Tier C aggregate value-param unboxes.  `hnode`
- * is the CT_HANDLE (for LH_HANDLER_CASE param/k binding), else NULL. */
+ * (may be NULL for a scalar) so a Tier C aggregate value-param unboxes.  `hcase`
+ * is the handler clause (for LH_HANDLER_CASE param/k binding), else NULL. */
 static void emit_lifted(CE *ce, const char *name, LHMode mode,
                         const char *xname, TypeKind xty, const Type *xt,
-                        const CTerm *body, const CTerm *hnode) {
+                        const CTerm *body, const CHandleCase *hcase) {
     /* Emit the body into a temporary buffer first, so any nested reset/shift/
      * effect appends its own (inner) helpers ahead of this one in ce->helpers. */
     Buf tmp; buf_init(&tmp);
@@ -1529,9 +1537,9 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         buf_printf(&tmp, "%s %s = %s;\n", binder_ctype_full(ce->ctx, xty, xt), xname, ld);
         free(ld);
     }
-    if (mode == LH_HANDLER_CASE && hnode) {
-        if (hnode->as.handle.n_params >= 1) {
-            const Binding *pb = hnode->as.handle.params[0];
+    if (mode == LH_HANDLER_CASE && hcase) {
+        if (hcase->n_params >= 1) {
+            const Binding *pb = hcase->params[0];
             char *pn = name_for_binding(ce->ctx, pb);
             const char *pty = binder_ctype_full(ce->ctx, pb->type.kind, &pb->type);
             char *ld = slot_load(ce->ctx, pb->type.kind, &pb->type, "arg", false);
@@ -1540,8 +1548,8 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
             free(ld);
             free(pn);
         }
-        if (hnode->as.handle.k) {
-            char *kn = name_for_binding(ce->ctx, hnode->as.handle.k);
+        if (hcase->k) {
+            char *kn = name_for_binding(ce->ctx, hcase->k);
             indent_buf(&tmp, 4);
             buf_printf(&tmp, "DK *%s = subk;\n", kn);
             free(kn);
@@ -1654,23 +1662,46 @@ static void emit_shift(CE *ce, const CTerm *t) {
  * the effect's tag; the handler runs the case, and resume = dk_invoke. */
 static void emit_handle(CE *ce, const CTerm *t) {
     int id = (*ce->helper_ctr)++;
-    char kname[256], cname[256];
+    char kname[256];
     snprintf(kname, sizeof(kname), "%s_hk%d", ce->fn_cn, id);
-    snprintf(cname, sizeof(cname), "%s_hc%d", ce->fn_cn, id);
     /* lift the handle continuation (like a reset continuation) */
     char *hxn = cvar_cname(ce, t->as.handle.x);
     emit_lifted(ce, kname, LH_RESET_CONT, hxn, t->as.handle.x.ty, t->as.handle.x.type,
                 t->as.handle.body, NULL);
     free(hxn);
-    /* lift the handler case as a DKHandler */
-    emit_lifted(ce, cname, LH_HANDLER_CASE, NULL, TY_INT, NULL, t->as.handle.case_body, t);
 
-    int tag = effect_tag(t->as.handle.effect);
+    /* Lift each handler case as its own DKHandler and chain a dk_handler per case
+     * onto the continuation.  dk_perform searches the chain by effect tag, so N
+     * chained handlers dispatch N effects; the innermost `next` is the handle
+     * continuation frame carrying the enclosing continuation `k`. */
+    uint32_t nc = t->as.handle.n_cases;
+    char **cnames = (char **)calloc(nc ? nc : 1, sizeof(char *));
+    for (uint32_t ci = 0; ci < nc; ci++) {
+        cnames[ci] = (char *)malloc(256);
+        snprintf(cnames[ci], 256, "%s_hc%d_%u", ce->fn_cn, id, ci);
+        emit_lifted(ce, cnames[ci], LH_HANDLER_CASE, NULL, TY_INT, NULL,
+                    t->as.handle.cases[ci].case_body, &t->as.handle.cases[ci]);
+    }
+
     char hchain[64];
     snprintf(hchain, sizeof(hchain), "__h%d", id);
-    ce_line(ce,
-        "DK *%s = dk_handler(%d, %s, 0, dk_frame(%s, (intptr_t)%s, dk_done()));",
-        hchain, tag, cname, kname, ce->cur_k);
+    /* Build the chain inside-out: base is the continuation frame; wrap each case
+     * as dk_handler(tag_i, case_i, 0, <inner>). */
+    Buf chain; buf_init(&chain);
+    buf_printf(&chain, "dk_frame(%s, (intptr_t)%s, dk_done())", kname, ce->cur_k);
+    for (int ci = (int)nc - 1; ci >= 0; ci--) {
+        int tag = effect_tag(t->as.handle.cases[ci].effect);
+        Buf nxt; buf_init(&nxt);
+        buf_printf(&nxt, "dk_handler(%d, %s, 0, %.*s)", tag, cnames[ci],
+                   (int)chain.len, chain.data);
+        buf_free(&chain);
+        chain = nxt;
+    }
+    buf_putc(&chain, '\0');
+    ce_line(ce, "DK *%s = %s;", hchain, chain.data);
+    buf_free(&chain);
+    for (uint32_t ci = 0; ci < nc; ci++) free(cnames[ci]);
+    free(cnames);
 
     const char *save = ce->cur_k;
     const Type *save_ty = ce->cur_ty;

@@ -180,8 +180,19 @@ fallback can be deleted:
   them, which the current cut rejects (that is the N6.3 capturing-continuation
   work). Net: N6.1 delivers real coverage in the *main body* immediately, and
   full continuation-position coverage lands together with N6.3.
-- **N6.2 -- multi-case handle + shift0** -- the highest-frequency real control
-  gaps after delegation.
+- **N6.2 -- multi-case handle + shift0.** *Multi-case handle LANDED.* `CT_HANDLE`
+  now holds an array of `CHandleCase` (effect / params / k / body) instead of a
+  single clause; `build_handle` translates all cases, and `emit_handle` installs
+  one `dk_handler` per case chained by effect tag onto the handle continuation
+  (`dk_handler(tag0, c0, 0, dk_handler(tag1, c1, 0, dk_frame(k-cont)))`), so
+  `dk_perform` dispatches each effect to its own lifted case. term_core_ok /
+  has_capture_case / needs_heap_join iterate all cases; each case still admits
+  `<=1` effect param and a zero-capture straight-line body. Fixture
+  `cps-backend-multi-handle`: `run` handles Ask + Add, `direct == cps`
+  (`5` / `101`). *Remaining:* `shift0` and the cloneable/serial reset/shift
+  variants; and multi-case handlers whose body performs *multiple sequential*
+  effects (a nested perform in a perform continuation) still fall back -- that is
+  the perform-continuation-can-perform widening, adjacent to N6.3.
 - **N6.3 -- capturing / multi-shot continuations** -- lift with a real env;
   removes the zero-capture cut's fallbacks.
 - **N6.4 -- the long tail** -- cloneable/serial reset, async, indirect calls, per

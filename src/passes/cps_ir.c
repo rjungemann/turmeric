@@ -390,27 +390,32 @@ static CTerm *cps_shift_body(CpsB *b, Expr *e) {
 
 static CTerm *build_handle(CpsB *b, Expr *e, CVar x, CTerm *cont) {
     HandleExpr *h = e->as.handle_.handle;
-    /* C4 subset: exactly one handler case. */
-    if (!h || h->n_cases != 1) {
+    if (!h || h->n_cases < 1) {
         CTerm *u = new_term(b, CT_UNSUPPORTED);
-        u->as.unsupported.why = "handle: only single-case handlers in CPS subset";
+        u->as.unsupported.why = "handle: no cases";
         return u;
     }
-    HandleCase *c = &h->cases[0];
     CTerm *t = new_term(b, CT_HANDLE);
     t->as.handle.x = x;
     t->as.handle.delim = cps_tail(b, h->body, kont_prompt(e->type.kind));
-    t->as.handle.effect = c->effect_name;
-    t->as.handle.n_params = c->n_params;
-    if (c->n_params) {
-        const Binding **ps = arena_alloc(b->a, c->n_params * sizeof(const Binding *));
-        for (uint8_t i = 0; i < c->n_params; i++) ps[i] = c->param_bindings[i];
-        t->as.handle.params = ps;
+    t->as.handle.n_cases = h->n_cases;
+    CHandleCase *cs = arena_alloc(b->a, h->n_cases * sizeof(CHandleCase));
+    for (uint32_t ci = 0; ci < h->n_cases; ci++) {
+        HandleCase *c = &h->cases[ci];
+        cs[ci].effect = c->effect_name;
+        cs[ci].n_params = c->n_params;
+        cs[ci].params = NULL;
+        if (c->n_params) {
+            const Binding **ps = arena_alloc(b->a, c->n_params * sizeof(const Binding *));
+            for (uint8_t i = 0; i < c->n_params; i++) ps[i] = c->param_bindings[i];
+            cs[ci].params = ps;
+        }
+        cs[ci].k = c->k_binding;
+        /* The case clause delivers its value by return (KK_PROMPT), which
+         * dk_perform routes to the handler's outer continuation. */
+        cs[ci].case_body = cps_tail(b, c->body, kont_prompt(c->body ? c->body->type.kind : TY_INT));
     }
-    t->as.handle.k = c->k_binding;
-    /* The case clause delivers its value by return (KK_PROMPT), which dk_perform
-     * routes to the handler's outer continuation. */
-    t->as.handle.case_body = cps_tail(b, c->body, kont_prompt(c->body ? c->body->type.kind : TY_INT));
+    t->as.handle.cases = cs;
     t->as.handle.body = cont;
     return t;
 }
@@ -839,17 +844,18 @@ void cps_ir_print(const CTerm *t, FILE *out, int indent) {
         case CT_HANDLE:
             fprintf(out, "handle %s = {\n", t->as.handle.x.name);
             cps_ir_print(t->as.handle.delim, out, indent + 1);
-            print_indent(out, indent);
-            fprintf(out, "} with %s(",
-                    t->as.handle.effect ? t->as.handle.effect->name : "?");
-            for (uint32_t i = 0; i < t->as.handle.n_params; i++) {
-                if (i) fputc(' ', out);
-                fputs(t->as.handle.params[i] && t->as.handle.params[i]->name
-                          ? t->as.handle.params[i]->name->name : "_", out);
+            print_indent(out, indent); fputs("}\n", out);
+            for (uint32_t ci = 0; ci < t->as.handle.n_cases; ci++) {
+                const CHandleCase *c = &t->as.handle.cases[ci];
+                print_indent(out, indent);
+                fprintf(out, "with %s(", c->effect ? c->effect->name : "?");
+                for (uint32_t i = 0; i < c->n_params; i++) {
+                    if (i) fputc(' ', out);
+                    fputs(c->params[i] && c->params[i]->name ? c->params[i]->name->name : "_", out);
+                }
+                fprintf(out, ") %s ->\n", c->k && c->k->name ? c->k->name->name : "k");
+                cps_ir_print(c->case_body, out, indent + 1);
             }
-            fprintf(out, ") %s ->\n",
-                    t->as.handle.k && t->as.handle.k->name ? t->as.handle.k->name->name : "k");
-            cps_ir_print(t->as.handle.case_body, out, indent + 1);
             print_indent(out, indent); fputs("in\n", out);
             cps_ir_print(t->as.handle.body, out, indent);
             break;

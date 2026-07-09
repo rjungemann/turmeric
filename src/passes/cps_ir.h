@@ -92,6 +92,16 @@ typedef enum CTermKind {
 
 typedef struct CTerm CTerm;
 
+/* One clause of a (possibly multi-case) handle: an effect and its handler body,
+ * binding the effect's params + the resumable continuation `k`. */
+typedef struct CHandleCase {
+    const Symbol   *effect;
+    const Binding **params;
+    uint32_t        n_params;
+    const Binding  *k;
+    CTerm          *case_body;
+} CHandleCase;
+
 typedef struct CVar {     /* a CPS-introduced binder */
     uint32_t    id;
     const char *name;
@@ -116,11 +126,10 @@ struct CTerm {
         struct { CVar x; CTerm *delim; CTerm *body; }                     reset;
         struct { CVar k; CTerm *body; }                                   shift;
         /* handle: delim = body threading the handler prompt; body = the handle's
-         * continuation; case_body = the single handler clause (delivered by
-         * return); k / params bound in case_body. */
+         * continuation; cases = the N handler clauses (each delivered by return),
+         * one per handled effect.  Each case's k / params are bound in its body. */
         struct { CVar x; CTerm *delim; CTerm *body;
-                 const Symbol *effect; const Binding **params; uint32_t n_params;
-                 const Binding *k; CTerm *case_body; }                    handle;
+                 CHandleCase *cases; uint32_t n_cases; }                  handle;
         struct { const Symbol *effect; CAtom *args; uint32_t n;
                  CVar x; CTerm *body; }                                   perform;
         struct { CAtom k; CAtom v; CVar x; CTerm *body; }                 resume;
