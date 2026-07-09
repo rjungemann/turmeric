@@ -241,8 +241,23 @@ fallback can be deleted:
   `(handle (work) (E [] k) (resume k (+ base 1)))` CPS-emits
   (`direct == cps == 41`). Full suite: 2016 passed, 0 failed.
 
-  *Remaining N6.3:* non-scalar captures, capturing SHIFT bodies (their env
-  carries subk), and multi-shot with owning captures (refcount on copy).
+  *Capturing SHIFT bodies landed too.* A shift's delimited body that references
+  an enclosing local -- e.g. `inner`'s body `(+ x 5)` captures the parameter `x`
+  -- is now lifted with its scalar captures in the LH_SHIFT_BODY helper's env,
+  exactly as the reset/handle continuations are:
+  `typedef struct { int64_t f0; } inner_s0_env;` with `dk_shift(1, inner_s0,
+  (intptr_t)e, k)` and the helper reading `int64_t x = e->f0;`. The captured
+  continuation is excluded from the env (it is the shift's `k`, delivered as the
+  DK* `subk` arg, not an env slot); this admits abortive capturing shift bodies
+  (the common shape) that discard `subk`. `emit_shift` collects the body's caps
+  (excluding `shift.k`), builds a k-less env via `emit_cont_env`, and passes it
+  as the `dk_shift` env. Fixture `cps-backend-capture-shift-body`:
+  `(shift (fn [v] v) (+ x 5))` delimited by an outer `reset` CPS-emits
+  (`direct == cps == 105`). Full suite: 2017 passed, 0 failed.
+
+  *Remaining N6.3:* non-scalar captures, a *resuming* SHIFT body (whose env would
+  carry subk for multi-shot re-entry), and multi-shot with owning captures
+  (refcount on copy).
 - **N6.4 -- the long tail** -- cloneable/serial reset, async, indirect calls, per
   the re-measured surface.
 - **N6.5 -- delete the fallback.** Remove the `CT_UNSUPPORTED` whole-function

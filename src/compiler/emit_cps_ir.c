@@ -737,12 +737,15 @@ static bool term_core_ok(const CTerm *t) {
                 && reset_body_ok(t->as.reset.body)
                 && collect_caps(t->as.reset.body, t->as.reset.x.id, &cs);
         }
-        case CT_SHIFT:
-            /* C3: straight-line, zero-capture shift body (which already applies
-             * the receiver -- cps_shift_body).  The captured continuation is
-             * discarded here (abortive); resume lands in C4. */
+        case CT_SHIFT: {
+            /* C3/N6.3: straight-line shift body (which already applies the
+             * receiver -- cps_shift_body).  The captured continuation is
+             * discarded here (abortive); resume lands in C4.  The body's scalar
+             * captures (if any) ride the shift-body helper's env. */
+            CapSet scs;
             return shift_body_ok(t->as.shift.body)
-                && !has_capture(t->as.shift.body, UINT32_MAX);
+                && collect_caps(t->as.shift.body, t->as.shift.k.id, &scs);
+        }
         case CT_HANDLE: {
             /* C4/N6.2/N6.3: N-case handler; each case <=1 effect param + zero-
              * capture straight-line body; the continuation may carry scalar
@@ -1710,7 +1713,8 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     switch (mode) {
         case LH_SHIFT_BODY:
             buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, DK *subk) {\n", name);
-            buf_puts(ce->helpers, "    (void)env; (void)subk;\n");
+            if (has_caps) buf_puts(ce->helpers, "    (void)subk;\n");
+            else          buf_puts(ce->helpers, "    (void)env; (void)subk;\n");
             break;
         case LH_HANDLER_CASE:
             buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, intptr_t arg, DK *subk) {\n", name);
@@ -1831,8 +1835,16 @@ static void emit_shift(CE *ce, const CTerm *t) {
     int id = (*ce->helper_ctr)++;
     char hname[256];
     snprintf(hname, sizeof(hname), "%s_s%d", ce->fn_cn, id);
-    emit_lifted(ce, hname, LH_SHIFT_BODY, NULL, TY_INT, NULL, t->as.shift.body, NULL, NULL);
-    ce_line(ce, "return dk_run(dk_shift(1, %s, 0, %s), 0);", hname, ce->cur_k);
+    /* N6.3: the shift body's scalar captures (source vars / CPS vars) ride the
+     * shift-body helper's env struct; the captured continuation k is excluded
+     * (it is `subk`, not an env slot). */
+    CapSet cs;
+    bool ok = collect_caps(t->as.shift.body, t->as.shift.k.id, &cs);
+    const CapSet *caps = (ok && cs.n > 0) ? &cs : NULL;
+    emit_lifted(ce, hname, LH_SHIFT_BODY, NULL, TY_INT, NULL, t->as.shift.body, NULL, caps);
+    char *env = emit_cont_env(ce, hname, caps, NULL);   /* k-less env */
+    ce_line(ce, "return dk_run(dk_shift(1, %s, %s, %s), 0);", hname, env, ce->cur_k);
+    free(env);
 }
 
 /* ---- C4: algebraic effects (handle / perform / resume) --------------- *
