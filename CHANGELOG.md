@@ -4,6 +4,24 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.27.3] -- 2026-07-08
+
+### Added
+
+- **Stdlib preload for REPLs**: the WASM (Try Turmeric) REPL and
+  `tur repl` now preload the stdlib on startup, so `(head ...)`,
+  `(tail ...)`, and other stdlib forms are available at the prompt
+  without a manual import.
+- **Web deploy-gate CI**: a new CI workflow runs a Playwright smoke
+  spec against the deployed web REPL to catch stale wasm /
+  cache-version drift.
+
+### Fixed
+
+- **Try Turmeric stdlib gap**: the deployed web REPL was missing
+  stdlib natives; the preload path and `sw.js` `CACHE_VERSION` bump
+  restore parity with the CLI REPL.
+
 ## [0.27.2] -- 2026-07-08
 
 ### Added

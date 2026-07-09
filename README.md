@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.27.2` -- Bug-fix release: the interpreter now reclaims Vec/Set/Map buffers at env teardown, catch-unwind supports aggregate Result returns, and several HAMT/panic memory bugs are fixed.
+**Latest release:** `v0.27.3` -- The WASM (Try Turmeric) and `tur repl` REPLs now preload the stdlib on startup, and a new web deploy-gate CI catches stale wasm regressions.
 
 ## What
 
