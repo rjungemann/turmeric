@@ -93,57 +93,85 @@ The gap is exactly the seam between "receiver dispatches by value" (done) and
 element read (`vec-get`, HAMT key/val) dispatches the element's method on `T`,
 not on the int64 carrier.
 
-The whole bug reduces to ground truth #3: make `(:: <carrier-returning-call> A)`
-(A a constraint tyvar grounded to concrete `T` in the active spec) resolve, for
-dispatch purposes, to `T`.
+**How dispatch actually works (traced, current build).** There is **no runtime
+dictionary passing** -- dispatch is statically monomorphized in two phases:
 
-Relevant code already located:
+1. **Elaboration** (`elab_method_call`, `src/compiler/elab_typeclasses.c:4707`)
+   selects an instance from the receiver expression's static `type.kind` and
+   tags the `EX_CALL` with an `EX_DICT` node. For a `KIND_STAR` receiver the
+   match is exact on `type.kind` (`elab_typeclasses.c:5468`): a `TY_CSTR`
+   receiver picks `Show[cstr]`; a **carrier (`TY_INT`) receiver picks
+   `Show[int]`** -- and a carrier-collapsed element read is indistinguishable
+   from a genuine `int`. An *abstract-tyvar* receiver takes a shortcut
+   (`elab_typeclasses.c:5369`) that picks the int representative **but tags the
+   call** for emit-side re-resolution.
+2. **Emit** (`emit_reresolve_disp_type`, `emit_core.c:1486`) re-resolves the
+   tag per ABI specialization -- but **only if `emit_dispatch_tyvar`
+   (`emit_core.c:1455`) can recover a dispatch tyvar** from the call, and it
+   looks in exactly three syntactic places: an `EX_ASCRIBE` receiver whose
+   ascribed type is `TY_TYVAR`, a bare `TY_TYVAR` receiver, or a `TY_TYVAR`
+   call result (plus an `EX_GET_FIELD` special case).
 
-- `src/compiler/emit_expr.c:~300-375` -- the ascription / carrier-vs-by-value
-  representation decision (`call_returns_byvalue_aggregate`,
-  `emit_binding_repr_c_name`, `expr_emits_byvalue_carrier_abi`). Note the
-  comment at `emit_expr.c:335-339`: the former "ascribe a plain `TY_INT` to a
-  `TY_APP` that resolves to a concrete struct" bridge was **removed** under
-  structdef-retirement DS-D because a parametric aggregate is now a record ADT
-  -- so the path that would have re-typed a carrier read to its concrete type
-  no longer fires.
-- `docs/archive/m4-final-state-bridge-still-essential-for-collection-eq.md`
-  §"Probed alternative" -- the same class of ascription (`(:: t (Cons A))`)
-  was probed and found to (a) need the ascription-bridge gate
-  (`emit_expr.c` EX_ASCRIBE path, gated on
-  `type_kind_is_aggregate && !type_uses_carrier_abi`) to widen past plain
-  `TY_INT` handles, and (b) hit a **clone-name / signature consistency bug**:
-  `emit_abi_clone_name` -> `type_c_name` on a `TY_APP` returns `int64_t` on one
-  path and `Cons__int` on another, so one `(arg_types)` mints two disagreeing
-  specs. That bug is the documented blocker and must be fixed first.
+**Why the collection instances mis-dispatch (three concrete erasure points):**
 
-Two candidate levers -- **spike both on `Show [Vec]` at `(Vec cstr)` before
-committing**:
+- **The instance receiver loses `A`.** In `Show [Vec] [(Show A)]`, definstance
+  pass 1 substitutes the head `[Vec]` for the class var and lowers a `TY_APP`
+  receiver to the carrier (`elab_typeclasses.c:3505-3552`,
+  `if (elab_param_type.kind == TY_APP) param_type = TYPE_INT;`). So the
+  receiver `x` is typed **bare `Vec` / carrier, not `(Vec A)`** -- the
+  constraint var `A` from `[(Show A)]` is a *separate* tyvar never attached to
+  `x`. This is exactly why every stdlib collection instance re-ascribes
+  `(:: x (Vec A))` (`typeclass-show.tur:234`, `vec.tur:385-390`) to
+  reconstruct the type the receiver lost.
+- **`vec-get`'s result collapses to the carrier.** `vec-get [A] ... : A` has
+  `result_full_type = TY_TYVAR(A)` but `result_kind = TY_INT`; the call's type
+  is taken from `result_kind` (`elab_call.c:741`), and the G3/LT4 branches
+  deliberately decline to restore a bare-tyvar return (`elab_call.c:2556-2600`)
+  because doing so would erase the per-call-site instantiation. With no
+  argument carrying `A`, `(vec-get x i)` is `TY_INT`.
+- **The `Eq` comparator lambda collapses.** `Eq [Vec]` passes
+  `(fn [a b] (eq? a b))` (`vec.tur:390`); the **untyped lambda params `a`,`b`
+  default to the int64 carrier**, so `(eq? a b)` bakes `__inst_Eq_eq_qu_int` at
+  elaboration -- the emitted `Vec__cstr` spec correctly specializes the *loop*
+  but passes a comparator box that hard-codes `Eq[int]` (pointer compare).
 
-- **(a) Return-specialize the element accessors.** Make `vec-get [A] : A`
-  (and the HAMT typed key/val readers) produce, in the `A = cstr` spec, a value
-  the dispatcher sees as `cstr` -- i.e. the spec's result is the concrete
-  element type, read out of the int64 slot with a reinterpret. `vec-get-byval`
-  already exists as the pure-Turmeric by-value twin; the spec-redirect that
-  swaps `vec-get -> vec-get-byval` inside specs is already wired. The remaining
-  work is ensuring the redirected accessor's *result* grounds to `T` for the
-  enclosing `show`/`eq?` dispatch (today it still bottoms out in `(:: _ A)`).
+Net: for `int` elements the carrier word *is* the value so `Eq[int]`/`Show[int]`
+are accidentally correct; for `cstr` they are wrong. Note the stdlib
+`(:: x (Vec A))` idiom re-types the *receiver of the loop helper* but does not
+rescue the *element* read/compare inside the helper -- which is why the bug
+survives it (verified: `(show (vec-of "hi" "yo"))` -> `[<ptr> <ptr>]`,
+`Eq[Vec]` on cstr compares by pointer).
 
-- **(b) Widen the ascription relabel.** Teach the EX_ASCRIBE emit path to fire
-  the carrier->concrete relabel when the ascription target resolves
-  (post-substitution, in the active spec) to a concrete `*`-kind type --
-  including scalars like `cstr`, not just aggregates -- and set the ascribed
-  expression's dispatch type to that concrete `T`. This is the narrower,
-  more local change and directly matches the m4 doc's "ascription bridge gate
-  widening" direction, extended from raw-int-handle-> struct-deref to
-  carrier-call-> scalar/opaque.
+**Fix candidates (from the trace; spike on `Show/Eq [Vec]` at `(Vec cstr)`):**
 
-Recommendation: land the **clone-name/signature consistency fix first** (it
-gates everything), then pursue **(b)** as the primary lever, using **(a)** only
-where an accessor can cleanly be return-specialized. Prove correctness on
-`cstr` first, then confirm `bool`, `float`, and an opaque `defopaque` element,
-then cascade the same fix through `Eq` (via the `(fn [a b] (eq? a b))` closure
-form) and through `Set`/`Map` (HAMT key/val reads).
+- **(1) Attach the constraint var to the receiver's applied type** -- narrowest.
+  In definstance lowering (`elab_typeclasses.c:3505-3552`) give the receiver of
+  `Show [Vec] [(Show A)]` type `(Vec A_tyvar)` instead of bare `Vec`/carrier.
+  Then `emit_dispatch_tyvar` recovers `A` from the element read without a
+  hand-written ascription, and the existing carrier-representative +
+  re-resolution machinery grounds it per spec.
+- **(2) Broaden dispatch-tyvar recovery** in `emit_dispatch_tyvar`
+  (`emit_core.c:1455`) and its elab twin `obj_is_unascribed_carrier_elem`
+  (`elab_typeclasses.c:4683`) to also cover (a) an inline-C generic accessor
+  read whose *declared* `result_full_type` is a tyvar even when `result_kind`
+  erased it, and (b) **untyped lambda params bound in a constrained instance
+  body** whose declared comparator type is `(fn [A A] bool)` -- propagate `A`
+  into the lambda params instead of defaulting them to the carrier. (b) is
+  required for the `Eq` comparator case specifically.
+- **(3) Thread a real per-constraint dictionary** (an element-method pointer per
+  `[(C A)]`) as the general fallback for cases where `A` is recoverable from no
+  syntactic position. Larger; only if (1)+(2) leave gaps.
+
+Recommendation: pursue **(1) + (2)** together (they are the narrowest and cover
+both `Show` reads and `Eq` comparator lambdas). Watch for the **clone-name /
+signature consistency issue** the `Eq Cons` probe hit
+(`docs/archive/m4-final-state-bridge-still-essential-for-collection-eq.md`
+§"Probed alternative": `emit_abi_clone_name` -> `type_c_name` on a `TY_APP`
+returned `int64_t` on one path and `Cons__int` on another, minting two
+disagreeing specs) -- if it resurfaces once the receiver carries `(Vec A)`, it
+gates the cascade and must be fixed alongside. Prove `cstr` first, then `bool`,
+`float`, and an opaque `defopaque` element, then cascade through `Eq` and the
+`Set`/`Map` HAMT key/val reads.
 
 **Phase 1 exit criteria:**
 - `(eq? (vec-of "a" "b") (vec-of "a" "c"))` -> `false`; `(= ... same)` -> `true`.
@@ -238,6 +266,29 @@ fix so the gap can never silently reopen:
 2. **cstr ownership** (Phase 3) -- ship v1 on borrowed `cstr` keys with
    documented semantics, or invest in an owned `String` now? Recommendation:
    borrowed for v1, `String` as a fast-follow.
+
+## Dispatch code map (for the implementer)
+
+- `src/compiler/elab_typeclasses.c:4707` -- `elab_method_call` (instance
+  selection); `:5455-5469` (match on `obj->type.kind`); `:5369` (abstract-tyvar
+  shortcut that tags for re-resolution); `:4683` (`obj_is_unascribed_carrier_elem`);
+  `:3505-3552` (definstance receiver class-var substitution + `TY_APP`->carrier
+  lowering -- **fix (1) site**); `:4154` (`make_dict_expr`, the static tag).
+- `src/compiler/elab_call.c:741` (call type = `result_kind`); `:2556-2600`
+  (bare-tyvar return deliberately not patched -- the carrier-collapse point).
+- `src/compiler/elab_types.c:2476-2561` -- `elab_ascribe` (how `(:: e A)` vs
+  `(:: e cstr)` resolve).
+- `src/compiler/emit_core.c:1455-1468` -- `emit_dispatch_tyvar` (**fix (2) site**);
+  `:1486-1575` -- `emit_reresolve_disp_type` (per-spec re-resolution).
+- `stdlib/vec.tur:101` (`vec-get`), `:362-390` (`vec-eq-loop` + the
+  `(fn [a b] (eq? a b))` comparator), `stdlib/typeclass-show.tur:208-235`
+  (`vec-show-loop` + the `(:: x (Vec A))` idiom).
+
+*Investigation note:* a sub-agent trace of the above initially concluded the
+current build "already works" for the ascribed-receiver form; direct
+reproduction disproves that (`Show[Vec]`/`Eq[Vec]` over `cstr` remain broken as
+in Ground Truth). Trust the repros -- the `(:: x (Vec A))` idiom re-types the
+loop *receiver* but not the element read/compare *inside* the loop.
 
 ## Related
 
