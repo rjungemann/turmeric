@@ -1,0 +1,27 @@
+;; CPS-IR-to-C backend, N6.3: the continuation AFTER a `handle` captures an
+;; enclosing local.  Built with --enable=cps-backend.
+;;
+;; `f` = `(+ x (handle (g) ...))` -- the handle continuation is `(+ x <result>)`,
+;; which references the parameter `x`.  A handle/reset continuation is lifted as a
+;; DK frame whose env already carries the enclosing continuation `k`; N6.3 widens
+;; that env to `{ DK *__k; <captures...> }` so it also carries the captured scalar
+;; source vars:
+;;   typedef struct { DK *__k; int64_t f0; } f_hk0_env;   // f0 = x
+;;   e->__k = k; e->f0 = x;
+;;   dk_handler(E, ..., dk_frame(f_hk0, (intptr_t)e, dk_done()));
+;; and the helper reads `DK *k = e->__k; int64_t x = e->f0;`.  Before N6.3 the
+;; zero-capture cut rejected the reference to `x` and `f` fell back.
+;;
+;; direct-vs-CPS equal: x=7, handle resumes 100 -> 7 + 100 = 107.
+
+(defeffect E [] :int)
+
+(defn g [] : int
+  (perform (E)))
+
+(defn f [x : int] : int
+  (+ x (handle (g) (E [] k) (resume k 100))))
+
+(defn main [] : int
+  (println (f 7))
+  0)

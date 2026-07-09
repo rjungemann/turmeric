@@ -206,11 +206,23 @@ fallback can be deleted:
   multi-shot-safe (read-only) and leaked with the DK nodes. `term_core_ok`'s
   perform check uses `collect_caps` instead of `!has_capture`. Fixture
   `cps-backend-capture-perform`: `(+ x (perform E))` now CPS-emits
-  (`direct == cps == 107`), single and multi-scalar captures verified. Full
-  suite: 2012 passed, 0 failed. *Remaining N6.3:* captured CPS vars (intermediate
-  results, e.g. `(+ (+ x y) (perform E))`), non-scalar captures, and capturing
-  RESET/SHIFT/HANDLER continuations (their env slot already carries `k` /
-  handler state, so it must widen to `{k, captures...}`); and multi-shot with
+  (`direct == cps == 107`), single and multi-scalar captures verified.
+
+  *Capturing RESET / HANDLE continuations landed too.* The `LH_RESET_CONT` env
+  slot (which already carries the enclosing continuation `k`) now widens to a
+  `{ DK *__k; <captures...> }` struct when the continuation captures scalar source
+  vars: `emit_reset` / `emit_handle` collect the caps, and `emit_cont_env`
+  allocates + populates the struct (`__k = k`, `fN = capN`) and passes it as the
+  frame env (was plain `(intptr_t)k`); the helper reads `k` and the captures back
+  from it. `term_core_ok`'s CT_RESET / CT_HANDLE checks use `collect_caps` instead
+  of `!has_capture`. Fixture `cps-backend-capture-handle`:
+  `(+ x (handle (g) ...))` -- the continuation after the handle captures `x` --
+  CPS-emits (`direct == cps == 107`); a capturing `reset` continuation verified
+  the same way. Full suite: 2013 passed, 0 failed.
+
+  *Remaining N6.3:* captured CPS vars (intermediate results, e.g.
+  `(+ (+ x y) (perform E))`), non-scalar captures, capturing SHIFT bodies /
+  HANDLER cases (their env carries subk / handler state), and multi-shot with
   owning captures (refcount on copy).
 - **N6.4 -- the long tail** -- cloneable/serial reset, async, indirect calls, per
   the re-measured surface.
