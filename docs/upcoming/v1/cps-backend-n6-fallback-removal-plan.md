@@ -305,16 +305,25 @@ fallback can be deleted:
 - **N6.4 -- the long tail** -- cloneable/serial reset, async, indirect calls, per
   the re-measured surface.
 
-  - **Indirect calls** are sound to delegate in principle (the fn value is the
-    callee's direct entry, which never joins the caller's delimited-control
-    chain), but delegation miscompiles today: the CPS backend types a fn-value
-    parameter as `void *` and names it `<name>_<id>`, while the direct emitter
-    that generates the delegated body expects `tur_poly_fn_t` and the bare
-    source name (`fnv.fn` / `fnv.env`). `fn_sig_ok` admits fn-value params as
-    scalar `TY_PTR_VOID`, masking the divergence. The fix is to align the CPS
-    backend's fat-closure parameter typing + naming with the direct emitter.
-    See
-    [docs/reported/cps-backend-indirect-call-fatclosure-param-divergence.md](../../reported/cps-backend-indirect-call-fatclosure-param-divergence.md).
+  - **Indirect calls (main body) LANDED.** A call through a fn *value* (a
+    NULL-binding indirect call, or a call through a fn-value parameter) is the
+    callee's direct entry point, which installs its own root prompt and never
+    joins the caller's delimited-control chain -- so it is sound to delegate to
+    the direct emitter via `CT_LETRAW`, exactly as an uncolored direct call is.
+    The blocker was a fn-value *parameter* spelling divergence: the CPS backend
+    typed it `void *` / id-suffixed while the direct emitter (which generates the
+    delegated body, `fnv.fn` / `fnv.env`) uses `tur_poly_fn_t` / bare source
+    name. Fixed by (1) setting `ctx->fn_params` during CPS emission so every
+    parameter reference resolves to the raw id-less name, (2) emitting a rank-2
+    poly fn param as `tur_poly_fn_t` in `emit_params`, and (3) a candidacy guard
+    (`param_name_clashes_cps`) excluding a function whose param raw name collides
+    with a CPS-synthesized identifier (`k` / `t<N>` / `__*`). Fixture
+    `cps-backend-indirect-call` (`direct == cps == 70`). Full suite: 2020 passed,
+    0 failed. *Residual:* a *lifted-position* indirect call (callee captured into
+    a continuation env) still falls back -- a fat closure is wider than the
+    scalar env slot, so `collect_caps` bails on a captured callee; that is the
+    owning/wide-capture line item of N6.3. See
+    [docs/archive/cps-backend-indirect-call-fatclosure-param-divergence.md](../../archive/cps-backend-indirect-call-fatclosure-param-divergence.md).
   - **cloneable / serial** reset/shift need the DK deep-clone (`dk_copy` exists
     in the runtime) plus the direct emitter's cloneable capture-environment glue
     (`live_captures` / `capture_clone_fns` / `capture_drop_fns`), which is

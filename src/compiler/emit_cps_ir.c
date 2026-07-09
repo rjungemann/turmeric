@@ -320,6 +320,11 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
                         CC_VAREXPR(le->as.make_struct_.field_values[i]);
                     break;
                 case EX_CALL:
+                    /* The callee value can be a free var (a NULL-binding indirect
+                     * call, or a call through a fn-value parameter): treat it as a
+                     * capture.  A top-level direct call's fn_expr is a global ref
+                     * that CC_VAREXPR filters out. */
+                    CC_VAREXPR(le->as.call_.fn_expr);
                     for (uint32_t i = 0; i < le->as.call_.n_args; i++)
                         CC_VAREXPR(le->as.call_.args[i]);
                     break;
@@ -436,7 +441,12 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             const Binding *_b = _e->as.var.binding; \
             uint32_t _id = _b->id; bool _f = (_id != exclude); \
             for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; } \
-            if (_f) cap_add(cs, _b, _b->type.kind, &_b->type); } } while (0)
+            if (_f) { \
+                /* A rank-2 poly fn value is a fat closure (tur_poly_fn_t, wider */ \
+                /* than a slot) -- capturing it by the scalar-pointer path would */ \
+                /* truncate it, so bail to fallback rather than mis-capture. */ \
+                if (_b->is_poly_fn) { cs->ok = false; } \
+                else cap_add(cs, _b, _b->type.kind, &_b->type); } } } while (0)
     switch (t->kind) {
         case CT_APPCONT: COL_ATOM(&t->as.appcont.v); return;
         case CT_LETVAL:
@@ -491,10 +501,28 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
                     for (uint32_t i = 0; i < le->as.make_struct_.n_fields; i++)
                         COL_VAREXPR(le->as.make_struct_.field_values[i]);
                     break;
-                case EX_CALL:
+                case EX_CALL: {
+                    /* A call whose callee is a captured local value -- a
+                     * NULL-binding indirect call, or a call through a fn-value
+                     * *parameter* (carried in fn_binding or fn_expr) -- cannot be
+                     * lifted: a fat-closure callee is wider than the scalar env
+                     * slot and its ABI is emitter-specific.  Bail so the enclosing
+                     * continuation falls back.  (A main-body indirect call is not
+                     * gated by collect_caps and still delegates.)  A top-level
+                     * direct call's callee is a global ref -- not a capture -- so
+                     * those pass through. */
+                    const Binding *fb = le->as.call_.fn_binding;
+                    const Expr *fe = le->as.call_.fn_expr;
+                    while (fe && fe->kind == EX_ASCRIBE) fe = fe->as.ascribe_.inner;
+                    bool captured_callee =
+                        (fb && !fb->is_global) ||
+                        (!fb && fe && fe->kind == EX_VAR && fe->as.var.binding
+                             && !fe->as.var.binding->is_global);
+                    if (captured_callee) { cs->ok = false; return; }
                     for (uint32_t i = 0; i < le->as.call_.n_args; i++)
                         COL_VAREXPR(le->as.call_.args[i]);
                     break;
+                }
                 case EX_DEFAULT_OF:
                 case EX_FN_TO_FAT:
                 case EX_FN:
@@ -852,6 +880,24 @@ static bool term_core_ok(const CTerm *t) {
     }
 }
 
+/* A source parameter's raw C name (used unchanged now that fn_params is set
+ * during CPS emission) must not collide with a name the CPS backend synthesizes:
+ * the continuation `k`, a fresh temporary `t<N>`, or any `__`-prefixed internal
+ * (`__root`, `__r`, `__cap`, `__h<N>`, ...).  A colliding param would shadow or
+ * be shadowed by a generated identifier; exclude such a function from CPS
+ * candidacy so it falls back to the direct emitter (which owns its own naming). */
+static bool param_name_clashes_cps(const Binding *b) {
+    if (!b || !b->name || !b->name->name) return false;
+    const char *n = b->name->name;
+    if (strcmp(n, "k") == 0) return true;
+    if (n[0] == '_' && n[1] == '_') return true;
+    if (n[0] == 't' && n[1] != '\0') {
+        for (const char *p = n + 1; *p; p++) if (*p < '0' || *p > '9') return false;
+        return true;   /* t followed by all digits */
+    }
+    return false;
+}
+
 static bool fn_sig_ok(const FnDef *fd) {
     /* Return crosses the slot (Tier A/B scalar or Tier C boxed aggregate);
      * nil-return excluded in C1.  fn_ret_type prefers the body Type, which
@@ -860,8 +906,10 @@ static bool fn_sig_ok(const FnDef *fd) {
      * admitted through the same gate -- an owning-field aggregate stays out. */
     const Type *rt = fn_ret_type(fd);
     if (!slot_ok_t(rt, rt->kind)) return false;
-    for (uint8_t i = 0; i < fd->n_params; i++)
+    for (uint8_t i = 0; i < fd->n_params; i++) {
         if (!slot_ok_t(&fd->params[i]->type, fd->params[i]->type.kind)) return false;
+        if (param_name_clashes_cps(fd->params[i])) return false;
+    }
     return true;
 }
 
@@ -2070,9 +2118,19 @@ static void emit_resume(CE *ce, const CTerm *t) {
 static void emit_params(EmitCtx *ctx, Buf *file, const FnDef *fd) {
     for (uint8_t i = 0; i < fd->n_params; i++) {
         if (i) buf_puts(file, ", ");
-        /* A by-value aggregate param needs its real (monomorphized) C type, which
-         * emit_type_from_kind(TY_ADT/APP/STRUCT) loses -- use the full Type. */
-        const char *pty = binder_ctype_full(ctx, fd->params[i]->type.kind, &fd->params[i]->type);
+        const char *pty;
+        /* A rank-2 poly fn value crosses as a fat closure (`tur_poly_fn_t`),
+         * matching the direct emitter's signature -- not the `void *` its scalar-
+         * pointer type kind would otherwise pick.  A delegated indirect call
+         * (`fnv.fn` / `fnv.env`) reads the struct's fields, so the parameter must
+         * be declared as the fat closure, not an opaque pointer. */
+        if (fd->params[i]->is_poly_fn)
+            pty = "tur_poly_fn_t";
+        else
+            /* A by-value aggregate param needs its real (monomorphized) C type,
+             * which emit_type_from_kind(TY_ADT/APP/STRUCT) loses -- use the full
+             * Type. */
+            pty = binder_ctype_full(ctx, fd->params[i]->type.kind, &fd->params[i]->type);
         char *pn = name_for_binding(ctx, fd->params[i]);
         buf_printf(file, "%s %s", pty, pn);
         free(pn);
@@ -2122,6 +2180,19 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     if (!g_fwd_done) { emit_forward_decls(ctx, file); g_fwd_done = true; }
 
     char *cn = raw_name_for_binding(fd->binding);
+
+    /* Set the function-parameter context so every reference to a parameter --
+     * whether emitted by the CPS backend (name_for_binding) or by the direct
+     * emitter inside a delegated CT_LETRAW body (emit_call_name / emit_value) --
+     * resolves to the same raw (id-less) C name the direct emitter uses.  Without
+     * this a fn-value parameter's declaration (id-suffixed) and its delegated use
+     * (raw, e.g. `fnv.fn`) diverge; see
+     * docs/reported/cps-backend-indirect-call-fatclosure-param-divergence.md.
+     * Saved/restored around the whole emission (body + signature + wrapper). */
+    Binding **saved_fn_params   = ctx->fn_params;
+    uint8_t    saved_n_fn_params = ctx->n_fn_params;
+    ctx->fn_params   = fd->params;
+    ctx->n_fn_params = fd->n_params;
 
     /* Emit the body into a temporary buffer, accumulating any lifted reset/shift
      * helpers into `helpers`; then write helpers (which must precede their uses),
@@ -2181,6 +2252,8 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     buf_printf(file, "    return %s;\n}\n", ld);
     free(ld);
 
+    ctx->fn_params   = saved_fn_params;
+    ctx->n_fn_params = saved_n_fn_params;
     free(cn);
     return true;
 }

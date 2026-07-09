@@ -490,9 +490,22 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
         case EX_CALL: {
             const Binding *fn = e->as.call_.fn_binding;
             if (!fn) {
-                CTerm *t = new_term(b, CT_UNSUPPORTED);
-                t->as.unsupported.why = "indirect call";
-                return t;
+                /* Indirect call: the fn VALUE is the callee's direct entry point
+                 * (a colored fn's value points at its direct wrapper, which
+                 * installs its own root prompt), so an indirect call never
+                 * participates in the caller's delimited-control chain -- its
+                 * behaviour is identical whether the surrounding code is CPS- or
+                 * direct-emitted.  Delegate it to the direct emitter with atomic
+                 * args, exactly as an uncolored direct call is delegated. */
+                if (!call_args_atomic(e)) {
+                    CTerm *t = new_term(b, CT_UNSUPPORTED);
+                    t->as.unsupported.why = "indirect call (non-atomic args)";
+                    return t;
+                }
+                CVar x = fresh_cvar(b, &e->type);
+                CTerm *ac = new_term(b, CT_APPCONT);
+                ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+                return build_letraw(b, e, x, ac);
             }
             /* A cps->direct call to an uncolored callee with atomic args is
              * delegated to the direct emitter, which resolves the monomorphized
@@ -648,9 +661,15 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         case EX_CALL: {
             const Binding *fn = e->as.call_.fn_binding;
             if (!fn) {
-                CTerm *t = new_term(b, CT_UNSUPPORTED);
-                t->as.unsupported.why = "indirect call";
-                return t;
+                /* Indirect call: the fn value is the callee's direct entry, which
+                 * never joins the caller's delimited-control chain -- delegate to
+                 * the direct emitter with atomic args (see cps_tail). */
+                if (!call_args_atomic(e)) {
+                    CTerm *t = new_term(b, CT_UNSUPPORTED);
+                    t->as.unsupported.why = "indirect call (non-atomic args)";
+                    return t;
+                }
+                return build_letraw(b, e, x, rest);
             }
             /* cps->direct call to an uncolored callee with atomic args: delegate
              * to the direct emitter (monomorphized callee names). */

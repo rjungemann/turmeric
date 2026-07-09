@@ -1,5 +1,19 @@
 # CPS backend: fn-value (fat-closure) parameters diverge in name and C type from the direct emitter
 
+**Status: RESOLVED.** The CPS backend now sets `ctx->fn_params` during emission
+(so a parameter reference -- CPS-emitted or delegated -- resolves to the same
+raw id-less C name the direct emitter uses) and `emit_params` emits a rank-2
+poly fn parameter as `tur_poly_fn_t` instead of `void *`. A candidacy guard
+(`param_name_clashes_cps`) excludes functions whose param raw name would collide
+with a CPS-synthesized identifier (`k`, `t<N>`, `__*`). Main-body indirect calls
+now delegate and CPS-emit; fixture `cps-backend-indirect-call` (`direct == cps ==
+70`). A *lifted-position* indirect call (callee captured into a continuation
+env) still falls back on purpose -- a fat closure is wider than the scalar env
+slot -- so `collect_caps` bails on a captured callee; that residual is the
+"owning/wide capture" line item of N6.3, not this divergence bug.
+
+Original report follows.
+
 **Severity:** medium (blocks the N6.4 "indirect calls" sub-slice; no miscompile
 today because an indirect call forces whole-function fallback).
 
