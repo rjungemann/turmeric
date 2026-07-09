@@ -227,9 +227,22 @@ fallback can be deleted:
   by name and it rides the continuation env like a source capture. Fixture
   `cps-backend-capture-intermediate` (`direct == cps == 107`).
 
-  *Remaining N6.3:* non-scalar captures, capturing SHIFT bodies / HANDLER cases
-  (their env carries subk / handler state), and multi-shot with owning captures
-  (refcount on copy).
+  *Capturing HANDLER cases landed too.* A handler case body that references an
+  enclosing local -- e.g. `run`'s case `(resume k (+ base 1))` captures the
+  parameter `base` -- is now lifted with an env carrying its scalar source
+  captures. Two pieces: `collect_caps_case` gathers the case body's captures
+  while excluding the case's own params + `k` (bound by the DKHandler signature),
+  and `emit_cont_env` grew a k-less mode (`k_expr == NULL`) so a handler-case env
+  is `{ f0; ... }` with no `__k` slot; the LH_HANDLER_CASE helper reads its
+  captures back the same way LH_RESET_CONT does. The collector also grew a
+  `CT_RESUME` arm -- a *resuming* case body (the common shape) previously hit the
+  `default:` bail and fell back; now `resume k v` threads its operands and binds
+  its result var like any other node. Fixture `cps-backend-capture-handler-case`:
+  `(handle (work) (E [] k) (resume k (+ base 1)))` CPS-emits
+  (`direct == cps == 41`). Full suite: 2016 passed, 0 failed.
+
+  *Remaining N6.3:* non-scalar captures, capturing SHIFT bodies (their env
+  carries subk), and multi-shot with owning captures (refcount on copy).
 - **N6.4 -- the long tail** -- cloneable/serial reset, async, indirect calls, per
   the re-measured surface.
 - **N6.5 -- delete the fallback.** Remove the `CT_UNSUPPORTED` whole-function

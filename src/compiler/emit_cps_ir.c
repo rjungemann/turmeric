@@ -440,9 +440,17 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             bound[nb] = t->as.letcont.param.id;
             collect_caps_rec(t->as.letcont.jbody, exclude, bound, nb + 1, cs);
             collect_caps_rec(t->as.letcont.body, exclude, bound, nb + 1, cs); return;
+        case CT_RESUME:
+            /* resume k v: k and v are captured/threaded like any operand; the
+             * result binder x is bound for the continuation body.  A capturing
+             * handler case resumes, so this must be collectable. */
+            COL_ATOM(&t->as.resume.k);
+            COL_ATOM(&t->as.resume.v);
+            bound[nb] = t->as.resume.x.id;
+            collect_caps_rec(t->as.resume.body, exclude, bound, nb + 1, cs); return;
         default:
-            /* CT_LETRAW (delegated operand free vars), CT_RESUME, and nested
-             * control ops are out of this collector's scope -- bail to fallback. */
+            /* CT_LETRAW (delegated operand free vars) and nested control ops are
+             * out of this collector's scope -- bail to fallback. */
             cs->ok = false; return;
     }
     #undef COL_ATOM
@@ -458,17 +466,19 @@ static bool collect_caps(const CTerm *body, uint32_t exclude, CapSet *cs) {
     return cs->ok;
 }
 
-/* Like has_capture, but the handler case's params + continuation k are excluded
- * (they are bound by the DKHandler signature, not captured). */
-static bool has_capture_case(const CTerm *t, const CHandleCase *hc) {
-    uint32_t bound[CC_MAX_BOUND];
+/* Collect a handler case body's scalar captures, excluding the case's own params
+ * and continuation k (bound by the DKHandler signature).  Same collect-or-bail
+ * contract as collect_caps. */
+static bool collect_caps_case(const CTerm *body, const CHandleCase *hc, CapSet *cs) {
     g_excl_n = 0;
     for (uint32_t i = 0; i < hc->n_params && g_excl_n < 8; i++)
         g_excl_b[g_excl_n++] = hc->params[i];
     if (hc->k && g_excl_n < 8) g_excl_b[g_excl_n++] = hc->k;
-    bool r = has_capture_rec(t, UINT32_MAX, bound, 0);
+    uint32_t bound[CC_MAX_BOUND];
+    cs->n = 0; cs->ok = true;
+    collect_caps_rec(body, UINT32_MAX, bound, 0, cs);
     g_excl_n = 0;
-    return r;
+    return cs->ok;
 }
 
 /* A reset continuation must be self-contained: every KK_VAR it delivers to must
@@ -745,9 +755,10 @@ static bool term_core_ok(const CTerm *t) {
                 return false;
             for (uint32_t ci = 0; ci < t->as.handle.n_cases; ci++) {
                 const CHandleCase *c = &t->as.handle.cases[ci];
+                CapSet ccs;
                 if (c->n_params > 1) return false;              /* <=1 effect param */
                 if (!handle_case_ok(c->case_body)) return false;
-                if (has_capture_case(c->case_body, c)) return false;
+                if (!collect_caps_case(c->case_body, c, &ccs)) return false;
             }
             return true;
         }
@@ -1703,7 +1714,8 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
             break;
         case LH_HANDLER_CASE:
             buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, intptr_t arg, DK *subk) {\n", name);
-            buf_puts(ce->helpers, "    (void)env; (void)arg; (void)subk;\n");
+            if (has_caps) buf_puts(ce->helpers, "    (void)arg; (void)subk;\n");
+            else          buf_puts(ce->helpers, "    (void)env; (void)arg; (void)subk;\n");
             break;
         case LH_PERFORM_CONT:
             buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, intptr_t %s__slot) {\n", name, xname);
@@ -1754,19 +1766,23 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
     free(fn); free(argv);
 }
 
-/* N6.3: emit the alloc+populate of a reset/handle continuation's env (carrying
- * the enclosing continuation `k` plus the body's scalar captures) and return a
- * malloc'd C expr for the DK frame env -- the env struct pointer when there are
- * captures, else plain (intptr_t)k.  The struct is leaked with the DK nodes. */
+/* N6.3: emit the alloc+populate of a lifted continuation's env (the body's
+ * scalar captures, plus the enclosing continuation `k` when `k_expr` != NULL --
+ * reset/handle continuations carry k in the env; a handler case gets k via subk,
+ * so it passes k_expr = NULL and its env is caps-only).  Returns a malloc'd C
+ * expr for the DK frame env: the env struct pointer when there are captures, else
+ * plain (intptr_t)k (or 0 when k-less).  The struct is leaked with the DK nodes. */
 static char *emit_cont_env(CE *ce, const char *hname, const CapSet *caps, const char *k_expr) {
     if (!caps || caps->n == 0) {
-        Buf b; buf_init(&b); buf_printf(&b, "(intptr_t)%s", k_expr); buf_putc(&b, '\0');
+        Buf b; buf_init(&b);
+        if (k_expr) buf_printf(&b, "(intptr_t)%s", k_expr); else buf_puts(&b, "0");
+        buf_putc(&b, '\0');
         char *s = strdup(b.data); buf_free(&b); return s;
     }
     char envv[300];
     snprintf(envv, sizeof envv, "__ce_%s", hname);
     ce_line(ce, "%s_env *%s = (%s_env *)malloc(sizeof(%s_env));", hname, envv, hname, hname);
-    ce_line(ce, "%s->__k = %s;", envv, k_expr);
+    if (k_expr) ce_line(ce, "%s->__k = %s;", envv, k_expr);
     for (int i = 0; i < caps->n; i++) {
         char *cn = caps->b[i] ? name_for_binding(ce->ctx, caps->b[i]) : strdup(caps->cvname[i]);
         ce_line(ce, "%s->f%d = %s;", envv, i, cn);
@@ -1846,23 +1862,30 @@ static void emit_handle(CE *ce, const CTerm *t) {
      * continuation frame carrying the enclosing continuation `k`. */
     uint32_t nc = t->as.handle.n_cases;
     char **cnames = (char **)calloc(nc ? nc : 1, sizeof(char *));
+    char **cenvs  = (char **)calloc(nc ? nc : 1, sizeof(char *));  /* per-case env expr */
     for (uint32_t ci = 0; ci < nc; ci++) {
         cnames[ci] = (char *)malloc(256);
         snprintf(cnames[ci], 256, "%s_hc%d_%u", ce->fn_cn, id, ci);
+        /* A handler case may capture enclosing scalars (beyond its params + k),
+         * carried in a caps-only env (k arrives via subk). */
+        CapSet ccs;
+        bool cok = collect_caps_case(t->as.handle.cases[ci].case_body, &t->as.handle.cases[ci], &ccs);
+        const CapSet *ccaps = (cok && ccs.n > 0) ? &ccs : NULL;
         emit_lifted(ce, cnames[ci], LH_HANDLER_CASE, NULL, TY_INT, NULL,
-                    t->as.handle.cases[ci].case_body, &t->as.handle.cases[ci], NULL);
+                    t->as.handle.cases[ci].case_body, &t->as.handle.cases[ci], ccaps);
+        cenvs[ci] = emit_cont_env(ce, cnames[ci], ccaps, NULL);   /* k-less env */
     }
 
     char hchain[64];
     snprintf(hchain, sizeof(hchain), "__h%d", id);
     /* Build the chain inside-out: base is the continuation frame; wrap each case
-     * as dk_handler(tag_i, case_i, 0, <inner>). */
+     * as dk_handler(tag_i, case_i, case_env_i, <inner>). */
     Buf chain; buf_init(&chain);
     buf_printf(&chain, "dk_frame(%s, %s, dk_done())", kname, hkenv);
     for (int ci = (int)nc - 1; ci >= 0; ci--) {
         int tag = effect_tag(t->as.handle.cases[ci].effect);
         Buf nxt; buf_init(&nxt);
-        buf_printf(&nxt, "dk_handler(%d, %s, 0, %.*s)", tag, cnames[ci],
+        buf_printf(&nxt, "dk_handler(%d, %s, %s, %.*s)", tag, cnames[ci], cenvs[ci],
                    (int)chain.len, chain.data);
         buf_free(&chain);
         chain = nxt;
@@ -1871,8 +1894,8 @@ static void emit_handle(CE *ce, const CTerm *t) {
     ce_line(ce, "DK *%s = %s;", hchain, chain.data);
     buf_free(&chain);
     free(hkenv);
-    for (uint32_t ci = 0; ci < nc; ci++) free(cnames[ci]);
-    free(cnames);
+    for (uint32_t ci = 0; ci < nc; ci++) { free(cnames[ci]); free(cenvs[ci]); }
+    free(cnames); free(cenvs);
 
     const char *save = ce->cur_k;
     const Type *save_ty = ce->cur_ty;
