@@ -416,7 +416,16 @@ static void cap_add(CapSet *cs, const Binding *b, TypeKind ty, const Type *type)
      * aggregate, with `tur_poly_fn_t` as the env-field type.  Everything else
      * goes through the scalar / by-value-aggregate gate. */
     bool is_poly = (b && b->is_poly_fn);
-    if (!is_poly && !cap_ty_ok(ty, type)) { cs->ok = false; return; }
+    /* A `^borrow` parameter (is_borrow) is a type-system-guaranteed non-consuming
+     * value: the callee reads it but never drops or moves it (the caller owns it
+     * and outlives the call, including any deferred continuation, which runs
+     * inside this function's dynamic extent).  So an owning `^borrow` value (an
+     * rc handle, a drop-glue aggregate) that fails the Copy gate above still rides
+     * the env by a shallow value copy with NO retain/drop: the shared handle is
+     * never released by this function, so no double-free, and the refcount is
+     * unchanged from the direct path (multi-shot reads stay read-only). */
+    bool borrowed = (b && b->is_borrow);
+    if (!is_poly && !borrowed && !cap_ty_ok(ty, type)) { cs->ok = false; return; }
     for (int i = 0; i < cs->n; i++) if (cs->b[i] == b) return;
     if (cs->n >= CC_MAX_CAPS) { cs->ok = false; return; }
     cs->b[cs->n] = b; cs->cvname[cs->n] = NULL; cs->ty[cs->n] = ty;
@@ -922,8 +931,14 @@ static bool fn_sig_ok(const FnDef *fd) {
     const Type *rt = fn_ret_type(fd);
     if (!slot_ok_t(rt, rt->kind)) return false;
     for (uint8_t i = 0; i < fd->n_params; i++) {
-        if (!slot_ok_t(&fd->params[i]->type, fd->params[i]->type.kind)) return false;
-        if (param_name_clashes_cps(fd->params[i])) return false;
+        const Binding *p = fd->params[i];
+        /* A poly fn param crosses as a fat closure (tur_poly_fn_t); a `^borrow`
+         * param is a read-only handle the callee never consumes -- both are passed
+         * by value in C and are admitted even when their type fails the scalar /
+         * by-value-aggregate slot gate. */
+        if (!p->is_poly_fn && !p->is_borrow
+            && !slot_ok_t(&p->type, p->type.kind)) return false;
+        if (param_name_clashes_cps(p)) return false;
     }
     return true;
 }

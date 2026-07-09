@@ -1,7 +1,15 @@
 # CPS backend: owning (non-Copy) capture double-frees under a multi-shot continuation
 
-**Severity:** medium (blocks the N6.3 "owning captures" sub-slice; no
+**Severity:** medium (blocks the *non-`^borrow`* owning-capture sub-slice; no
 miscompile today because the case falls back to the direct emitter).
+
+**Partially resolved.** The safe subset -- a `^borrow` owning value -- now rides
+the env by a shallow value copy with no retain/drop: the type checker guarantees
+the function never consumes it, so the shared handle is never released here and
+the refcount matches the direct path even under a multi-shot read (`cap_add` /
+`fn_sig_ok` admit `is_borrow`; fixture `cps-backend-capture-borrow`). This report
+stays open only for a *consumed* owning capture (the function drops/moves the
+value), where the double-free below is real and still forces fallback.
 
 ## Summary
 

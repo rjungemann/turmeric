@@ -303,15 +303,30 @@ fallback can be deleted:
   indirect-call slice -- a captured fat-closure callee no longer forces fallback.
   Full suite: 2021 passed, 0 failed.
 
+  *Borrowed (`^borrow`) owning captures landed.* An owning value (an rc handle,
+  a drop-glue by-value aggregate) that fails the Copy slot gate is still safe to
+  capture *by value* when its binding is `^borrow`: the type checker guarantees
+  the callee only reads it -- never drops or moves it -- so the shared shallow
+  copy in the (leaked, possibly multi-shot) env is never released by this
+  function, giving no double-free and a refcount identical to the direct path.
+  `cap_add` admits an `is_borrow` binding; `fn_sig_ok` admits an `is_borrow`
+  *parameter* even when its type fails the slot gate. This is the sound
+  admission signal -- a type-system guarantee, not a fragile whole-function
+  consumption scan. Fixture `cps-backend-capture-borrow`: `f`'s post-handle
+  continuation `(+ v (.tag o))` captures the `^borrow o : Own` (a struct with an
+  `rc<int>` field) by value (`tur_adt_Own f0`), `direct == cps == 59`. Full
+  suite: 2022 passed, 0 failed.
+
   *Remaining N6.3 (each root-caused; see the linked report):*
 
-  - **Owning (non-Copy) captures** -- carrier ADTs / rc handles / by-value
-    products with drop glue. The blocker is not just the retain: the
-    drop-insertion pass sinks the captured value's `rc/drop` *into the
-    continuation body*, so a single clone-on-capture into the leaked, multi-shot
-    env is dropped once per resume -> underflow. Needs a single-shot/affine
-    proof or per-shot cloning. `collect_caps` correctly bails today (so it is
-    sound, just conservative). See
+  - **Owning (non-Copy) captures without `^borrow`** -- carrier ADTs / rc handles
+    / by-value products with drop glue that the function *does* consume. The
+    blocker is not just the retain: the drop-insertion pass sinks the captured
+    value's `rc/drop` *into the continuation body*, so a single clone-on-capture
+    into the leaked, multi-shot env is dropped once per resume -> underflow.
+    Needs a single-shot/affine proof or per-shot cloning. `collect_caps`
+    correctly bails today (so it is sound, just conservative); the `^borrow`
+    slice above is the safe subset that needs no such analysis. See
     [docs/reported/cps-backend-owning-capture-multishot-double-free.md](../../reported/cps-backend-owning-capture-multishot-double-free.md).
   - **Resuming SHIFT bodies.** The current shift lowering (`cps_shift_body`)
     applies the receiver to the *body value* and delivers to the prompt; the
