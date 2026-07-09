@@ -467,6 +467,19 @@ must be true at graduation:
    (`docs/archive/cps-backend-perform-handle-machine-split.md`) is already closed
    by the co-classification fixpoint in `ensure_S`, so while both paths coexist
    no perform/handle pair is split; N6 then removes the fallback entirely.
+   *Open -- the terminal item, gated on 100% form coverage for colored
+   functions.* Measured, planned, and phased in
+   [cps-backend-n6-fallback-removal-plan.md](cps-backend-n6-fallback-removal-plan.md):
+   the CPS translator handles 11 `Expr` kinds today, and the corpus shows 400+
+   fallback sites (dominated by `EX_FN_TO_FAT` in the higher-order stdlib, plus
+   `while`/`match`/closure/`panic`/`shift0`/multi-case-handle). The path is
+   (N6.1) delegate every control-op-free, colored-call-free subexpression to the
+   direct emitter via `CT_LETRAW` -- widening the lifted-body subset predicates
+   in lockstep -- then (N6.2-N6.4) handle the residual control-carrying forms
+   (multi-case handle, `shift0`, cloneable/serial reset, async, capturing/multi-
+   shot continuations), then (N6.5) delete the fallback and turn any residual
+   into a form-named hard error. Removing the fallback before that coverage lands
+   would turn the 400+ sites into hard errors, so it stays until N6.5.
 
 Until all seven hold, the experiment stays gated. The C6 sign-off in the parent
 plan (`docs/upcoming/v1/cps-ir-to-c-backend-plan.md`) must not mark
