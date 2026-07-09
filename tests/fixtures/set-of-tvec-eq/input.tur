@@ -14,15 +14,16 @@
     (vec-push! v1 42)
     (vec-push! v2 42)
     (vec-push! v3 99)
-    ;; set-add takes (s hash x); for non-primitive elements we
-    ;; supply the pointer as the hash.  The dispatcher's
-    ;; comparator handles structural comparison element-by-element.
-    ;; (set-add returns a fresh Set, so its result still needs the
-    ;; `(:: ... (Set (Vec int)))` ascription -- the typed-empty-literal
-    ;; sugar only applies to a bare `[]` / `#set{}` collection literal.)
-    (let [s1 (:: (set-add (set-new) v1 v1) (Set (Vec int)))
-          s2 (:: (set-add (set-new) v2 v2) (Set (Vec int)))
-          s3 (:: (set-add (set-new) v3 v3) (Set (Vec int)))]
+    ;; Vec[int] has no MapKey/Hash instance, so the content-keyed public
+    ;; set-add (which dispatches MapKey[A]) does not apply.  A pointer-keyed set
+    ;; of a non-hashable element uses the raw layer directly:
+    ;; (set-add-eq-o s hash x keyeq owned) with the element pointer as both the
+    ;; hash and the boxed key, a NULL comparator, and owned=0.  Structural
+    ;; comparison is still handled by the compiler-synthesized Eq[Set[Vec int]]
+    ;; dispatch (set-eq-cmp?), element-by-element, independent of construction.
+    (let [s1 (:: (set-add-eq-o (set-new) v1 v1 0 0) (Set (Vec int)))
+          s2 (:: (set-add-eq-o (set-new) v2 v2 0 0) (Set (Vec int)))
+          s3 (:: (set-add-eq-o (set-new) v3 v3 0 0) (Set (Vec int)))]
       (println (.eq? s1 s2))   ; true:  {[42]} == {[42]}
       (println (.eq? s1 s3)))) ; false: {[42]} vs {[99]}
   0)

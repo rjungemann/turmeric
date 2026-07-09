@@ -2,10 +2,58 @@
 title: Generalize the Set element API off :int (Set must hold any hashable type)
 category: stdlib / typed collections
 description: Set's public API types its element as :int and hashes each element as its own identity, so Set[cstr] / Set[Sym] / Set[struct] are not expressible and content-equal elements at distinct addresses are treated as distinct members. Map already solved this (Hash[K] + MapKey[K] dispatch over the _eq_o HAMT path); Set must mirror it. Vec and Map are already correctly typed -- this plan is Set-only, with a verification pass on the other two.
-status: proposed
+status: implemented
 ---
 
 # Set must hold any hashable type, not just int
+
+## Implemented (set-element-api-generalization)
+
+Landed. `Set[cstr]`, `Set[Sym]`, and any `Set[A]` with `Hash[A]` + `MapKey[A]`
+are now content-keyed (verified: two equal-text strings at distinct addresses
+are one member; membership / union / intersect / diff / `Eq[Set]` all compare
+content). `Set[int]` is byte-for-byte unchanged. Green across `run.sh` (1995),
+`run-turi.sh` (1469), `run-flags.sh` (78), `run-stdlib-checks.sh` (32).
+
+What shipped, and where it deviated from the sketch below:
+
+- **Raw layer** `set-add-eq-o` / `set-has-eq-o?` / `set-del-eq-o` in
+  `stdlib/set.tur` over `tur_hamt_{set,has,del}_eq_o`, plus interpreter natives
+  in `src/turi/collections_native.c`.
+- **Public surface as MACROS, not defns** (this is the key correction).
+  `set-add` / `set-remove` / `set-member?` are macros that dispatch
+  `mk-box`/`mk-cmp`/`mk-owned?` on the concrete element EXPRESSION at the call
+  site (a let-bound `__tur_se__`), exactly like `map-assoc`. A generic *defn*
+  dispatching on an abstract `:A` param compiles fine but the tree-walking
+  interpreter grounds `mk-cmp` to the int carrier and silently drops content
+  equality -- so the macro form is required for compiled/interpreter parity.
+- **Signature kept 3-arg** `(s h x)` (explicit hash), NOT the 2-arg form
+  sketched below, so all ~57 existing call sites keep working unchanged (only
+  `x`'s type widened `:int -> :A`). The auto-hash convenience stays in
+  `set-add1` / `set-of` / `#set{...}`.
+- **`set-empty-for`** (new) pins `A` from the first element so `set-of` /
+  `#set{...}` seed a typed empty set (mirrors `map-empty-for`); a bare
+  `(set-new)` seed left `A` unpinned and defaulted the element dispatch to the
+  carrier.
+- **`set.tur` now `(load "stdlib/map.tur")`** for the `MapKey` class (no cycle;
+  map does not load set); the interpreter preload orders set before map, so the
+  explicit load is required there.
+- **union / intersect / diff** thread the source's stamped comparator
+  (`tur_hamt_keyeq` + `tur_hamt_has_dynamic` / `tur_hamt_set_eq_o`), compiled
+  and interpreter both.
+- **Non-`MapKey` elements** (e.g. `Set[Vec[int]]`, structural-`Eq` via the
+  compiler-synthesized `set-eq-cmp?` dispatch) now use the raw `set-add-eq-o`
+  directly -- the public `set-add` requires `MapKey[A]`. `set-of-tvec-eq` was
+  updated accordingly.
+- **Owned-key elements** (a future owned `String`, `mk-owned? = 1`): the scalar
+  `owned=0` path is wired; union/intersect/diff pass `owned=0` and would need to
+  retain boxes for an owned element type (noted inline; out of scope until the
+  owned-String plan).
+
+The remainder of this document is the original plan; the sketch's 2-arg macro
+was superseded by the non-breaking 3-arg macro above.
+
+# (original plan follows)
 
 ## Scope check: Set is the outlier; Vec and Map are fine
 
