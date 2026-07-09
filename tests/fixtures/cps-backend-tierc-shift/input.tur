@@ -1,0 +1,26 @@
+;; CPS-IR-to-C backend, Tier C (T-C2): a wide by-value aggregate crosses a
+;; cross-function shift/reset prompt.  Built with --enable=cps-backend.
+;;
+;; `inner`'s shift produces a `Pr` (a 16-byte by-value product) and delivers it
+;; to the prompt; the shift is delimited by `outer`'s `reset`, a cross-function
+;; delimited-control edge.  The `Pr` crosses the DK slot at the prompt boundary:
+;; the shift-body helper boxes it (heap-copy + store the pointer) and the
+;; reset-continuation helper unboxes it.  The delivered atom carries the real
+;; monomorphized `Pr` type, which is what selects the box (the enclosing cur_ty
+;; does not know a cross-function prompt's result type).
+;;
+;; Owning-free product, so the box is a pure value copy.  direct-vs-CPS equal
+;; (32 + 10 = 42).
+
+(defstruct Pr [first : int second : int])
+
+(defn inner [] : Pr
+  (shift (fn [v : Pr] v) (make-struct Pr :first 32 :second 10)))
+
+(defn outer [] : Pr
+  (reset (inner)))
+
+(defn main [] : int
+  (let [p (outer)]
+    (println (+ (.first p) (.second p))))
+  0)

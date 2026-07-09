@@ -86,7 +86,19 @@ direct baseline** to assert `direct == cps` against (the same class as the
 wrong value). **Fix locus:** the direct/fiber emitter's non-scalar
 continuation-result crossing.
 
-### P3 -- `make-struct` inside a `shift` body is untranslated (CT_UNSUPPORTED)
+### P3 -- `make-struct` inside a `shift` body is untranslated (CT_UNSUPPORTED) -- **RESOLVED (T-C2)**
+
+**Resolved.** The translation was actually *two* gaps, both now closed:
+(1) `joins_closed_rec` was missing a `CT_LETRAW` case, so a shift/reset body
+containing a delegated `make-struct` was rejected (fixed in T-C1); (2) the
+shift-body helper delivered its aggregate value to the prompt (`KK_PROMPT`)
+without boxing, because a *cross-function* shift's prompt result type is not
+carried by the enclosing `cur_ty`. Fixed by having `CT_APPCONT` pass the
+delivered atom's own `Type` to `emit_deliver` (the atom carries the real `Pr`
+type); the box is then selected from that. Fixture
+`tests/fixtures/cps-backend-tierc-shift/` (`direct == cps == 42`). The original
+analysis is kept for the record:
+
 
 ```turmeric
 (defn inner [] : Pr (shift (fn [v : Pr] v) (make-struct Pr :first 32 :second 10)))
@@ -186,19 +198,35 @@ baseline. In ascending order of independence:
   Round-trip fixture `tests/fixtures/cps-backend-tierc-return/`: `outer` returns
   a `Pr` built after a cross-function `reset`; the reset-cont helper boxes it
   (`dk_run(k, (intptr_t)malloc-copy)`) and the entry wrapper unboxes + **frees**
-  it (single-shot root). `direct == cps == 42`, LeakSanitizer-clean (no
-  `requires.no-leak-check`). Full suite: 2006 passed, 0 failed.
-- **T-C2: the reset/shift-result crossing.** Fix **P3** (delegate `make-struct`
-  in the shift body). Round-trip: a cross-function shift/reset whose result is a
-  by-value product.
+  it (single-shot root). `direct == cps == 42`. The return box is freed; the
+  delimited-control DK nodes leak (`requires.no-leak-check`, same as
+  `cps-backend-xfn-reset`). Full suite: 2006 passed, 0 failed.
+- **T-C2: the reset/shift-result crossing. -- LANDED (P3 resolved).** A
+  cross-function shift produces a `Pr` and delivers it to the prompt; the
+  shift-body helper boxes it and the reset continuation unboxes it. The box is
+  selected from the delivered atom's Type (a cross-function prompt's result type
+  is not in the enclosing `cur_ty`). Fixture
+  `tests/fixtures/cps-backend-tierc-shift/` (`direct == cps == 42`). This box is
+  loaded by the reset continuation without a free (`consume=false`, multi-shot
+  safety) so it leaks alongside the DK nodes (`requires.no-leak-check`).
 - **T-C3: the effect payload / resume-value crossings.** Fix **P1**, **P2**,
   **P5** (effect ADT value/arg types + the direct-path fiber crossing). These
   are the literal N3-TierC target but the most upstream-heavy; they also fix the
   direct path, so the fixtures can assert true equality rather than "CPS is the
-  correct one."
+  correct one."  P1+P2+P5 are a *coupled* change: a Tier C effect crossing only
+  becomes end-to-end testable once all three land (P1 lets the effect carry the
+  aggregate, P5 types the handler binding, P2 gives a compiling direct baseline).
 
-Until T-C1 lands, gate item 3 stays open and every aggregate-crossing colored
-function keeps the whole-function fallback (correct, just not native).
+**Note on leak checking.** In some environments (including the one T-C1/T-C2 were
+developed in) LeakSanitizer is not active on the spawned fixture binary -- e.g.
+removing `cps-backend-xfn-reset`'s `requires.no-leak-check` still passes. So the
+leak posture of these fixtures is reasoned about manually, not certified by the
+harness here: any fixture using `reset`/`shift`/`handle` leaks DK nodes and
+carries the marker (matching the pre-existing delimited-control fixtures).
+
+Gate item 3 stays open until T-C3 lands; until then every effect-payload
+aggregate-crossing colored function keeps the whole-function fallback (correct,
+just not native). The return (T-C1) and reset/shift (T-C2) crossings are native.
 
 ## Depends on / reuses
 

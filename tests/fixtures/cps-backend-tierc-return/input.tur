@@ -13,7 +13,9 @@
 ;; (surface annotation), so the crossing Type is taken from the body's type,
 ;; which carries the real monomorphized def (P4 fix).
 ;;
-;; direct-vs-CPS equal (40 + 2 = 42), LeakSanitizer-clean.
+;; direct-vs-CPS equal (40 + 2 = 42).  The return box is freed at the single-shot
+;; entry unwrap; only the delimited-control DK nodes leak (requires.no-leak-check),
+;; the same intentional posture as cps-backend-xfn-reset.
 
 (defstruct Pr [first : int second : int])
 

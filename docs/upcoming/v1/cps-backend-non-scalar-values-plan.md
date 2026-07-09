@@ -414,14 +414,14 @@ must be true at graduation:
    boundaries; `cps-backend-float` / `cps-backend-float-effect` fixtures).
 3. **Tier C complete** (N3-TierC) -- wide by-value aggregates that *cross* the
    slot (effect payload / resume value / return) box at the boundary. *Return
-   crossing (T-C1) LANDED*; the remaining crossings (effect payload / resume
-   value, and reset/shift result) are blocked on prerequisites P1-P3, P5. The
-   box-at-boundary machinery is in place and threaded to all six DK boundaries
-   (`slot_store`/`slot_load` box an owning-free by-value product); a colored
-   function returning such a product is CPS-emitted, boxed at the `KK_RET`
-   boundary and unboxed+freed at the single-shot entry (fixture
-   `cps-backend-tierc-return`, `direct == cps == 42`, LeakSanitizer-clean). Full
-   investigation + fix order + landed status:
+   crossing (T-C1) and reset/shift-result crossing (T-C2) LANDED*; the remaining
+   effect-payload / resume-value crossing (T-C3) is blocked on the coupled
+   prerequisites P1+P2+P5. The box-at-boundary machinery is in place and threaded
+   to all six DK boundaries (`slot_store`/`slot_load` box an owning-free by-value
+   product; the crossing Type is taken from the delivered atom / body Type, which
+   carries the real def). Fixtures `cps-backend-tierc-return` (KK_RET boxing,
+   freed at entry) and `cps-backend-tierc-shift` (shift/reset prompt boxing),
+   both `direct == cps == 42`. Full investigation + fix order + landed status:
    [cps-backend-tier-c-crossing-plan.md](cps-backend-tier-c-crossing-plan.md).
    (struct/ADT LOCALS that stay off the slot already work -- see item 6.)
 4. **Owning pointers handled correctly on the CPS path** -- `ref` / `rc` /

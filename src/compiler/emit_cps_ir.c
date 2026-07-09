@@ -1162,8 +1162,8 @@ static void emit_heap_join(CE *ce, const CTerm *t);
 static char *cvar_cname(CE *ce, CVar x);
 
 /* The full Type a value has when delivered to continuation `kont` (the target's
- * result type), or NULL for a scalar / inline join.  Single source of truth for
- * Tier C boxing at every deliver site. */
+ * result type), or NULL for a scalar / inline join.  Used as a fallback when the
+ * delivered value's own Type is not in hand (a cps->direct tail result). */
 static const Type *deliver_ty(CE *ce, const CKont *kont) {
     if (kont->kind == KK_RET)    return ce->ret_ty;
     if (kont->kind == KK_PROMPT) return ce->cur_ty;
@@ -1171,9 +1171,12 @@ static const Type *deliver_ty(CE *ce, const CKont *kont) {
 }
 
 /* Deliver value-string `v` to continuation `kont`.  A Tier C by-value aggregate
- * is boxed into the slot on the way out (deliver_ty supplies its Type). */
-static void emit_deliver(CE *ce, const CKont *kont, const char *v) {
-    const Type *vty = deliver_ty(ce, kont);
+ * is boxed into the slot on the way out.  `explicit_vty` is the delivered value's
+ * own Type when the caller has it (a CT_APPCONT atom) -- it is the most precise
+ * source (e.g. a cross-function shift delivers to a prompt whose result type the
+ * enclosing function's cur_ty does not carry); NULL falls back to deliver_ty. */
+static void emit_deliver_ty(CE *ce, const CKont *kont, const char *v, const Type *explicit_vty) {
+    const Type *vty = explicit_vty ? explicit_vty : deliver_ty(ce, kont);
     if (kont->kind == KK_RET) {
         /* In a perform-continuation frame the delivered value IS the result --
          * return it (dk_perform routes it to the handler's outer continuation);
@@ -1197,6 +1200,12 @@ static void emit_deliver(CE *ce, const CKont *kont, const char *v) {
         ce_line(ce, "%s = %s;", join_param(ce, kont->id), v);
         ce_line(ce, "goto L%u;", kont->id);
     }
+}
+
+/* Deliver with no explicit value Type (the crossing type comes from the
+ * continuation target -- ret_ty / cur_ty). */
+static void emit_deliver(CE *ce, const CKont *kont, const char *v) {
+    emit_deliver_ty(ce, kont, v, NULL);
 }
 
 static void emit_println(CE *ce, BuiltinShape shape, const char *arg) {
@@ -1227,7 +1236,10 @@ static void emit_term(CE *ce, const CTerm *t) {
     switch (t->kind) {
         case CT_APPCONT: {
             char *v = atom_str(ce, &t->as.appcont.v);
-            emit_deliver(ce, &t->as.appcont.kont, v);
+            /* The delivered atom carries its own Type -- the most precise source
+             * for Tier C boxing (a cross-function shift delivers to a prompt whose
+             * result type the enclosing cur_ty does not know). */
+            emit_deliver_ty(ce, &t->as.appcont.kont, v, t->as.appcont.v.type);
             free(v);
             break;
         }
