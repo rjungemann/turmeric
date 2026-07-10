@@ -74,11 +74,6 @@ void emit_cps_cloneable_bridge_prelude(Buf *out);
  * holding the result, or NULL to fall back to the legacy lowering. */
 char *emit_cps_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e);
 
-/* CPS10 (CPS5.4): true iff `program` has a (serial-reset ...) whose body is a
- * supported context around a serial-shift -- the gate for emitting the DK
- * machine + the serial marshaling runtime. */
-bool emit_cps_program_uses_serial_dk(const Expr *program);
-
 /* True if the program contains any serial-shift/serial-reset node, lowerable or
  * not. Gates the DK machine + serial marshaling runtime preludes so the stdlib
  * save-cont!/resume-cont! references resolve even when a context cannot lower. */

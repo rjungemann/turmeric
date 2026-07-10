@@ -1784,13 +1784,6 @@ static bool uses_serial_dk(const Expr *e) {
     }
 }
 
-bool emit_cps_program_uses_serial_dk(const Expr *program) {
-    g_sk_scan_root = program;   /* so sk_can_lower can scan for Serializable instances */
-    bool r = uses_serial_dk(program);
-    g_sk_scan_root = NULL;
-    return r;
-}
-
 /* True if the program contains any serial-shift/serial-reset, lowerable or not.
  * Gates emission of the DK machine + serial marshaling runtime so the stdlib
  * save-cont!/resume-cont! references never dangle. */
@@ -1805,7 +1798,7 @@ bool emit_cps_program_contains_serial(const Expr *program) {
 
 /* Serial marshaling runtime: the fixed tagged context frames + the resume /
  * serialize / deserialize builtins. Emitted after the DK machine prelude,
- * gated on emit_cps_program_uses_serial_dk. */
+ * gated on emit_cps_program_contains_serial. */
 void emit_cps_serial_runtime_prelude(Buf *out) {
     buf_puts(out,
 "/* cps-transform-plan (CPS10 / CPS5.4): serializable continuations.\n"

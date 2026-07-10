@@ -485,6 +485,20 @@ fallback until the final phase removes it.
   (~6712-6720). Delete the N6.5 delimited-control carve-out. Graduate the
   experiment if the backend is otherwise ready to be always-on (separate
   decision -- see N6 plan).
+  **Readiness assessed -- framing corrected.** "Delete the file" is imprecise:
+  `emit_cps.c` holds two separable bodies -- the direct-style *lowering* functions
+  the CT-IR backend replaces (deletable once native coverage is total) *and* the
+  *runtime prelude* emitters + shared helpers the **native CT-IR emit itself
+  depends on** (`emit_cps_runtime_prelude` defines the `dk_shift`/`dk_copy_range`
+  /`__sk_frame_for_tag` that native `emit_cloneable`/serial call). So U7 is: delete
+  the lowering, **relocate** the runtime. The lowering functions still fire for
+  callcc (100% delegated -- no native emit), cloneable/serial closure receivers +
+  serial 2-arg/Shape 1, and base reset/shift outside `delim_ok`. First cleanup:
+  the dead `emit_cps_program_uses_serial_dk` (defined, never called) is removed.
+  Full surface map, the per-lowering gap table, and the cut sequence (relocate
+  runtime first -- the one safe bounded step -- then close the native gaps, then
+  delete) are in
+  [cps-backend-unification-u7-readiness-plan.md](cps-backend-unification-u7-readiness-plan.md).
 
 Each of U1-U5 flips its family's fallback only after its oracle fixtures pass
 under the CT-IR emit; a family whose port is not ready simply keeps falling back
