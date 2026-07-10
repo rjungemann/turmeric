@@ -106,6 +106,16 @@ typedef struct CloneFrame {
     bool        hole_left;
 } CloneFrame;
 
+/* U3 Shape 2 (let-bearing context): one pure `let` binding sitting in the
+ * cloneable context spine.  `init` is a shift-free scalar expression evaluated
+ * once at the reset site (direct-emitted); `binding` names the C local so the
+ * captured frame operands that reference it resolve.  Recorded outermost-first
+ * (source order). */
+typedef struct CloneLet {
+    const Binding *binding;
+    const Expr    *init;
+} CloneLet;
+
 /* One clause of a (possibly multi-case) handle: an effect and its handler body,
  * binding the effect's params + the resumable continuation `k`. */
 typedef struct CHandleCase {
@@ -156,9 +166,18 @@ struct CTerm {
          *   n_frames == 0: Shape 1 -- identity continuation, no dk_copy_range.
          *   n_frames >= 1: Shape 2 -- an arithmetic context `(<op> <operand> ...
          *     [])` around the shift (outermost-first), each frame reified as a DK
-         *     frame so the captured continuation deep-clones (dk_copy_range). */
+         *     frame so the captured continuation deep-clones (dk_copy_range).
+         * Optional context enrichers (both fall through to delegation otherwise):
+         *   lets / n_lets: pure `let` prelude bindings emitted as C locals at the
+         *     reset site before the frame operands (which may reference them).
+         *   if_cond != NULL: a single `if` branch point in the context.  The
+         *     shift-bearing arm rides the frame chain; the pure arm (if_pure) is
+         *     direct-emitted on the other branch.  if_when true => the shift arm is
+         *     the `then` arm (C test `if (cond)`), false => `if (!(cond))`. */
         struct { CVar x; const Binding *receiver;
+                 CloneLet *lets; uint32_t n_lets;
                  CloneFrame *frames; uint32_t n_frames;
+                 const Expr *if_cond; const Expr *if_pure; bool if_when;
                  CTerm *body; }                                           cloneable;
         struct { const char *why; }                                       unsupported;
     } as;

@@ -301,11 +301,27 @@ fallback until the final phase removes it.
   binop chain, `emit_cloneable` emits one frame fn per level. Oracle:
   `cps-oracle-cloneable-native-shape2-nested` (30/26 across two frames).
 
-  *Remaining (the risky core, narrowing):* `if` / `let`-bearing contexts (where
-  reusing the direct `collect_ctx` -- and relocating it out of `emit_cps.c` --
-  pays off) and closure/colored receivers, each behind its own oracle (the
-  delegation fallback still catches everything not yet native), plus the
-  multi-shot classification axis. Mapped in the native-emit note.
+  Shape 2 also admits **`let`-bearing** and **`if`-bearing** contexts. A pure
+  scalar `let` binding in the spine (`(cloneable-reset (let [a (* base 2)] (+ a
+  (cloneable-shift k 0))))`) is direct-emitted as a C local at the reset site
+  ahead of the frame operands that reference it; a single pure-conditioned `if`
+  branch point (`(cloneable-reset (if (> n 0) (+ 100 (cloneable-shift k 0)) 42))`)
+  runs the DK chain on the shift-bearing arm and yields the direct-emitted pure
+  arm on the other branch. `build_cloneable` walks the context spine in one loop,
+  mirroring `collect_ctx` / `ctx_if_branch` *inline* (descending the shift arm past
+  a recorded `if` yields one flat frame chain -- no `clone_spine`); the capture
+  walkers surface the free vars of the direct-emitted sub-exprs via
+  `collect_free_vars` (node `let` bindings excluded), so a cloneable inside a
+  lifted continuation captures correctly. Oracles
+  `cps-oracle-cloneable-native-shape2-let` / `-if`. `let` and `if` are kept
+  mutually exclusive per lowering (the mix falls through to the still-correct
+  delegation).
+
+  *Remaining (the risky core, narrowing):* closure/colored receivers and the
+  non-arithmetic `let` shapes (`do`-prelude / call frames) the direct
+  `collect_ctx` also handles, each behind its own oracle (the delegation fallback
+  still catches everything not yet native), plus the multi-shot classification
+  axis. Mapped in the native-emit note.
 - **U4 -- Serial.** Port `emit_cps_serial_runtime_prelude` + serial placement.
 - **U5 -- Async / await.** Port the scheduler wiring on top of the now-unified
   cloneable/serial base.

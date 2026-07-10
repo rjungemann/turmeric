@@ -82,11 +82,39 @@ sub-continuation into a `tur_cloneable_cont`, and
 byte-for-byte. Oracle: `cps-oracle-cloneable-native-shape2` (15/110); verified
 across all four operators and both hole sides.
 
-Remaining in step 5: multi-frame / nested contexts (a second `dk_frame` per
-operator), `if`- and `let`-bearing contexts (reuse the direct `collect_ctx`
-structure -- consider relocating it out of `emit_cps.c` for sharing), non-literal
-(captured) operands, and closure/colored receivers. Steps 6-7 (multi-shot
-classification axis + retire delegation) follow.
+**Step 5 (Shape 2) extended -- multi-frame, captured operands, `let`- and
+`if`-bearing contexts LANDED.** `CT_CLONEABLE` now carries a `CloneFrame[]`
+array (0 frames = Shape 1, N = an N-deep arithmetic context, outermost-first),
+an optional `CloneLet[]` prelude, and an optional single `if` branch point
+(`if_cond` / `if_pure` / `if_when`). `build_cloneable` (`cps_ir.c`) walks the
+context spine in one loop, mirroring the direct emitter's `collect_ctx` /
+`reaches_shift_kind` / `ctx_if_branch` logic *inline* (no `clone_spine` needed:
+descending the shift-bearing arm past a recorded `if` naturally produces one flat
+frame chain). Coverage:
+
+- **Multi-frame nested contexts** -- `(* 2 (+ 10 (cloneable-shift ...)))` etc.,
+  all four operators, both hole sides. Oracle `-nested`.
+- **Captured (var) operands** -- a frame operand naming a param/local rides the
+  frame env. Oracle `-var`.
+- **`let`-bearing** -- pure scalar `let` bindings in the spine are direct-emitted
+  as C locals at the reset site ahead of the frame operands (which may reference
+  them); the init may itself capture (`(* base 2)`). Oracle `-let`.
+- **`if`-bearing** -- one pure-conditioned `if` branch point; the shift-bearing
+  arm rides the frame chain, the pure arm is direct-emitted on the other branch
+  (`if (cond) { <chain> } else { <pure> }`); the condition may capture. Oracle
+  `-if`. `let` and `if` are kept mutually exclusive in one native lowering (a
+  `let` above an `if` would be referenced by the pure arm but declared only in the
+  shift branch); the mix falls through to the still-correct delegation.
+
+The capture walkers (`collect_caps_rec` / `has_capture_rec`) surface the free
+vars of the direct-emitted sub-exprs (each `let` init, the `if` cond/pure arm)
+via `collect_free_vars` -- the node's own `let` bindings excluded -- so a
+cloneable node inside a lifted continuation captures correctly (the same complete
+analysis `CT_LETRAW` uses).
+
+Remaining in step 5: closure/colored receivers, and non-arithmetic `let` shapes
+(the `do`-prelude and call-frame variants the direct `collect_ctx` also handles).
+Steps 6-7 (multi-shot classification axis + retire delegation) follow.
 
 1. **CT nodes.** Add `CT_CLONEABLE_SHIFT` (receiver + captured-cont, distinct
    from abortive `CT_SHIFT` -- the receiver takes a *handle*, not the value) and

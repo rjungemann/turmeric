@@ -331,6 +331,47 @@ static bool binding_excluded(const Binding *b) {
     return false;
 }
 
+/* True if `b` is one of a CT_CLONEABLE node's own `let` prelude bindings -- a C
+ * local emitted at the reset site, hence not a capture of any enclosing frame. */
+static bool cloneable_is_local(const CTerm *t, const Binding *b) {
+    for (uint32_t i = 0; i < t->as.cloneable.n_lets; i++)
+        if (t->as.cloneable.lets[i].binding == b) return true;
+    return false;
+}
+
+/* The free variables of a CT_CLONEABLE node's direct-emitted context sub-exprs
+ * (each `let` init, and -- if present -- the `if` condition and pure arm), with
+ * the node's own `let` bindings excluded (they are locals at the reset site).
+ * Returns a malloc'd array the caller frees; *n_out is the count (0 => NULL).
+ * The same complete free-var analysis CT_LETRAW uses, so a capturing context
+ * sub-expr surfaces its enclosing locals for the lifted-helper env. */
+static Binding **cloneable_ctx_free_vars(const CTerm *t, uint32_t *n_out) {
+    *n_out = 0;
+    Binding *locals[16];
+    uint8_t n_locals = 0;
+    for (uint32_t i = 0; i < t->as.cloneable.n_lets && n_locals < 16; i++)
+        if (t->as.cloneable.lets[i].binding)
+            locals[n_locals++] = (Binding *)t->as.cloneable.lets[i].binding;
+
+    Binding **acc = NULL;
+    uint32_t n_acc = 0, cap = 0;
+    #define CLONE_ADD_FV(ex) do { const Expr *_e = (ex); \
+        if (_e) { uint32_t _nf = 0; \
+            Binding **_fv = collect_free_vars(_e, locals, n_locals, NULL, 0, &_nf); \
+            for (uint32_t _i = 0; _i < _nf; _i++) { \
+                if (n_acc == cap) { cap = cap ? cap * 2 : 8; \
+                    acc = realloc(acc, cap * sizeof(Binding *)); } \
+                acc[n_acc++] = _fv[_i]; } \
+            free(_fv); } } while (0)
+    for (uint32_t i = 0; i < t->as.cloneable.n_lets; i++)
+        CLONE_ADD_FV(t->as.cloneable.lets[i].init);
+    CLONE_ADD_FV(t->as.cloneable.if_cond);
+    CLONE_ADD_FV(t->as.cloneable.if_pure);
+    #undef CLONE_ADD_FV
+    *n_out = n_acc;
+    return acc;
+}
+
 /* True if `t` references a free variable that a lifted continuation / shift /
  * handler-case helper would have to capture: a non-global, non-excluded source
  * var, or a CPS var not bound within `t` and not the excluded incoming value
@@ -380,13 +421,30 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
             CC_ATOM(&t->as.resume.v);
             bound[nb] = t->as.resume.x.id;
             return has_capture_rec(t->as.resume.body, exclude, bound, nb + 1);
-        case CT_CLONEABLE:
+        case CT_CLONEABLE: {
             /* receiver is a global fn -- no capture; Shape 2 frame operands may
-             * be captured vars (they ride the frame env). */
-            for (uint32_t _i = 0; _i < t->as.cloneable.n_frames; _i++)
-                CC_ATOM(&t->as.cloneable.frames[_i].operand);
+             * be captured vars (they ride the frame env), except those naming the
+             * node's own `let` prelude locals. */
+            for (uint32_t _i = 0; _i < t->as.cloneable.n_frames; _i++) {
+                const CAtom *_op = &t->as.cloneable.frames[_i].operand;
+                if (_op->kind == CA_VAR && cloneable_is_local(t, _op->var)) continue;
+                CC_ATOM(_op);
+            }
+            /* Direct-emitted context sub-exprs (let inits, if cond/pure arm): a
+             * non-local free var they reference is a capture too. */
+            uint32_t _nfv = 0;
+            Binding **_fv = cloneable_ctx_free_vars(t, &_nfv);
+            for (uint32_t _i = 0; _i < _nfv; _i++) {
+                const Binding *_bb = _fv[_i];
+                if (!_bb || _bb->is_global || binding_excluded(_bb)) continue;
+                uint32_t _id = _bb->id; bool _f = (_id != exclude);
+                for (int _j = 0; _j < nb; _j++) if (bound[_j] == _id) { _f = false; break; }
+                if (_f) { free(_fv); return true; }
+            }
+            free(_fv);
             bound[nb] = t->as.cloneable.x.id;
             return has_capture_rec(t->as.cloneable.body, exclude, bound, nb + 1);
+        }
         case CT_LETRAW: {
             /* The delegated Expr's operand variables are the only free names it
              * references (its operands are atomic by construction).  Check each
@@ -604,14 +662,31 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             COL_ATOM(&t->as.resume.v);
             bound[nb] = t->as.resume.x.id;
             collect_caps_rec(t->as.resume.body, exclude, bound, nb + 1, cs); return;
-        case CT_CLONEABLE:
+        case CT_CLONEABLE: {
             /* The receiver is a named global fn (no capture); Shape 2 frame
-             * operands may be captured vars (they ride the frame env).  Bind the
-             * result binder for the continuation body and collect its captures. */
-            for (uint32_t _i = 0; _i < t->as.cloneable.n_frames; _i++)
-                COL_ATOM(&t->as.cloneable.frames[_i].operand);
+             * operands may be captured vars (they ride the frame env), except
+             * those naming the node's own `let` prelude locals.  The direct-
+             * emitted context sub-exprs (let inits, if cond/pure) contribute their
+             * non-local free vars as captures too.  Bind the result binder for the
+             * continuation body and collect its captures. */
+            for (uint32_t _i = 0; _i < t->as.cloneable.n_frames; _i++) {
+                const CAtom *_op = &t->as.cloneable.frames[_i].operand;
+                if (_op->kind == CA_VAR && cloneable_is_local(t, _op->var)) continue;
+                COL_ATOM(_op);
+            }
+            uint32_t _nfv = 0;
+            Binding **_fv = cloneable_ctx_free_vars(t, &_nfv);
+            for (uint32_t _i = 0; _i < _nfv && cs->ok; _i++) {
+                const Binding *_bb = _fv[_i];
+                if (!_bb || _bb->is_global || binding_excluded(_bb)) continue;
+                uint32_t _id = _bb->id; bool _f = (_id != exclude);
+                for (int _j = 0; _j < nb; _j++) if (bound[_j] == _id) { _f = false; break; }
+                if (_f) cap_add(cs, _bb, _bb->type.kind, &_bb->type);
+            }
+            free(_fv);
             bound[nb] = t->as.cloneable.x.id;
             collect_caps_rec(t->as.cloneable.body, exclude, bound, nb + 1, cs); return;
+        }
         case CT_LETRAW: {
             /* A delegated (direct-emitted) owning-value op.  Its operand vars are
              * the only free names it references (operands are atomic).  Collect
@@ -2430,10 +2505,46 @@ static const char *cloneable_frame_expr(const char *op, bool hole_left) {
  *   Shape 2 (n_frames >= 1): reify the `(<op> <operand> ... [])` context as DK
  *     frame; the shift body deep-clones the captured sub-continuation into a
  *     cloneable_cont and hands it to receiver.  Mirrors emit_cloneable_ctx. */
+/* Direct-emit a self-contained (shift-free) context Expr -- a `let` init, an
+ * `if` condition, or an `if` pure arm -- at the reset site, honoring the CT
+ * emitter's current indent.  Returns the malloc'd C expression string. */
+static char *emit_cloneable_direct(CE *ce, const Expr *e) {
+    int saved = ce->ctx->indent;
+    ce->ctx->indent = ce->indent;
+    char *v = emit_value(ce->ctx, ce->out, e);
+    ce->ctx->indent = saved;
+    return v;
+}
+
 static void emit_cloneable(CE *ce, const CTerm *t) {
     int id = (*ce->helper_ctr)++;
     char *xn  = cvar_cname(ce, t->as.cloneable.x);
     char *rfn = callee_name(t->as.cloneable.receiver);
+
+    /* Pure `let` prelude (Shape 2, let-bearing): lay each binding down as a C
+     * local at the reset site, ahead of the frame-operand evaluations that may
+     * reference it.  (`let` and `if` are mutually exclusive per build_cloneable,
+     * so n_lets > 0 implies no branch point below.) */
+    for (uint32_t li = 0; li < t->as.cloneable.n_lets; li++) {
+        const CloneLet *cl = &t->as.cloneable.lets[li];
+        char *iv = emit_cloneable_direct(ce, cl->init);
+        char *bn = name_for_binding(ce->ctx, cl->binding);
+        ce_line(ce, "%s %s = %s;", emit_type_c_name(ce->ctx, cl->binding->type), bn, iv);
+        ce_line(ce, "(void)%s;", bn);
+        free(bn);
+        free(iv);
+    }
+
+    /* One `if` branch point (Shape 2, if-bearing): evaluate the pure condition
+     * once, run the DK chain on the shift-bearing arm, and yield the direct-
+     * emitted pure arm on the other branch. */
+    bool has_if = (t->as.cloneable.if_cond != NULL);
+    if (has_if) {
+        char *cv = emit_cloneable_direct(ce, t->as.cloneable.if_cond);
+        ce_line(ce, "if (%s(%s)) {", t->as.cloneable.if_when ? "" : "!", cv);
+        free(cv);
+        ce->indent++;
+    }
 
     if (t->as.cloneable.n_frames == 0) {
         /* Shape 1: identity continuation. */
@@ -2481,6 +2592,18 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         ce_line(ce, "%s = (int64_t)dk_run(%s, 0);", xn, dv);
         ce_line(ce, "dk_free(%s);", dv);
     }
+
+    if (has_if) {
+        ce->indent--;
+        ce_line(ce, "} else {");
+        ce->indent++;
+        char *pv = emit_cloneable_direct(ce, t->as.cloneable.if_pure);
+        ce_line(ce, "%s = %s;", xn, pv);
+        free(pv);
+        ce->indent--;
+        ce_line(ce, "}");
+    }
+
     free(xn);
     free(rfn);
     emit_term(ce, t->as.cloneable.body);
