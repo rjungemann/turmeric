@@ -529,7 +529,14 @@ fallback can be deleted:
     [cps-backend-generic-monomorph-classification-plan.md](cps-backend-generic-monomorph-classification-plan.md).
     The other residual is **effectful** `TY_FN` callback params, which need
     genuine colored-indirect-call support (the callee threads the caller's DK
-    continuation) rather than delegation.
+    continuation) rather than delegation. This is the largest *and* heaviest
+    remaining lever: it requires DK-callable first-class closures with a
+    context-polymorphic (DK-vs-fiber) calling convention -- a new subsystem, not
+    an extension of existing machinery. The key finding (fiber uses *dynamic*
+    effect dispatch so a callback is a bare fn pointer with no continuation, while
+    DK needs *static* threading), the mechanism, the ABI/design problem, and why
+    there is no cheap incremental slice are scoped in
+    [cps-backend-effectful-callbacks-plan.md](cps-backend-effectful-callbacks-plan.md).
 - **N6.5 -- delete the fallback.** Remove the `CT_UNSUPPORTED` whole-function
   bail-out and the direct-vs-CPS dual path from `emit_cps_ir.c` / the classifier.
   Any residual form becomes a hard error; give it a **form-named diagnostic**
