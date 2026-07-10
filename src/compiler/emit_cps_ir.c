@@ -297,6 +297,7 @@ static bool shape_supported(const BuiltinSpec *sp) {
 }
 
 static bool term_core_ok(const CTerm *t);
+static bool delim_ok(const CTerm *t);   /* reset-delim admission (permits KK_PROMPT delivery) */
 static bool letraw_ok(const CTerm *t);  /* CT_LETRAW soundness (owning-drop guard) */
 
 /* ---- C3 delimited-control subset predicates -------------------------- *
@@ -935,7 +936,7 @@ static bool term_core_ok(const CTerm *t) {
              * captures (if any) are all scalar source vars (carried in the env). */
             CapSet cs;
             return (slot_ok_t(t->as.reset.x.type, t->as.reset.x.ty) || t->as.reset.x.ty == TY_NIL)
-                && term_core_ok(t->as.reset.delim)
+                && delim_ok(t->as.reset.delim)
                 && reset_body_ok(t->as.reset.body)
                 && collect_caps(t->as.reset.body, t->as.reset.x.id, &cs);
         }
@@ -993,6 +994,83 @@ static bool term_core_ok(const CTerm *t) {
                 && term_core_ok(t->as.resume.body);
         default: /* CT_UNSUPPORTED */
             return false;
+    }
+}
+
+/* ---- reset-delim admission (U1) ------------------------------------------
+ * A reset's *delimited body* is emitted (emit_reset) with the enclosing prompt
+ * chain as `cur_k`, so its tail positions deliver the delimited value to the
+ * prompt (emit_deliver: `return dk_run(cur_k, v)`), and an interior join
+ * (KK_VAR) delivers via goto.  That is exactly the delivery `term_core_ok`
+ * forbids in *core* position (its CT_APPCONT case rejects KK_PROMPT), which is
+ * why a reset body with control flow around the shift -- `(reset (if c (shift
+ * ...) v))`, `(reset (+ e (if c (shift ...) v)))` -- was evicted even though
+ * both the shifting and the normal-return branch are individually emittable.
+ *
+ * delim_ok mirrors term_core_ok but admits KK_PROMPT/KK_VAR delivery of the
+ * delimited value at every tail position, recursing through the straight-line
+ * (letval/letprim/letcall/letraw) and branch (if) structure.  A nested `shift`
+ * keeps its existing straight-line admission (shift_body_ok + scalar-capture
+ * collect).
+ *
+ * What is deliberately NOT relaxed:
+ *   - CT_LETCONT (a join) falls through to term_core_ok, which rejects a join
+ *     whose jbody delivers to the prompt.  Such a join is exactly the "non-empty
+ *     delimited continuation that an abortive shift discards" -- e.g.
+ *     `(reset (+ 10 (if c (shift ...) 5)))` builds `letcont j(t){+10; prompt}`
+ *     and the shift branch discards j.  Admitting it would make the CPS path
+ *     abort (correct: the shift result, ignoring +10) while the direct/legacy
+ *     path degrades an out-of-subset reset to plain body-eval (a DIFFERENT
+ *     value).  Keeping such shapes evicted preserves direct == cps across the
+ *     flip (the migration safety property); the degraded direct semantics is
+ *     tracked separately (docs/reported).
+ *   - A nested delimiter (reset/handle/perform/resume) also falls through to
+ *     term_core_ok, so delivering an *outer* prompt through an inner delimiter
+ *     stays out of this slice's scope. */
+static bool delim_ok(const CTerm *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case CT_APPCONT:
+            /* Deliver the delimited value to the enclosing prompt (KK_PROMPT,
+             * the tail) or to an interior inline join (KK_VAR).  Both are
+             * emitted by emit_deliver; unlike core position, KK_PROMPT here is
+             * the correct delimited-body result. */
+            return atom_ok(&t->as.appcont.v);
+        case CT_LETVAL:
+            return (slot_ok_t(t->as.letval.x.type, t->as.letval.x.ty) || t->as.letval.x.ty == TY_NIL)
+                && atom_ok(&t->as.letval.v)
+                && delim_ok(t->as.letval.body);
+        case CT_LETPRIM:
+            if (!shape_supported(t->as.letprim.spec)) return false;
+            for (uint32_t i = 0; i < t->as.letprim.n; i++)
+                if (!atom_ok(&t->as.letprim.args[i])) return false;
+            return delim_ok(t->as.letprim.body);
+        case CT_LETCALL:
+            for (uint32_t i = 0; i < t->as.letcall.n; i++)
+                if (!atom_ok(&t->as.letcall.args[i])) return false;
+            return delim_ok(t->as.letcall.body);
+        case CT_LETRAW:
+            return letraw_ok(t) && delim_ok(t->as.letraw.body);
+        case CT_IF:
+            return atom_ok(&t->as.if_.cond)
+                && delim_ok(t->as.if_.then_)
+                && delim_ok(t->as.if_.else_);
+        case CT_TAILCALL: {
+            /* A KK_PROMPT tail call threads the prompt chain (same as term_core_ok). */
+            for (uint32_t i = 0; i < t->as.tailcall.n; i++)
+                if (!atom_ok(&t->as.tailcall.args[i])) return false;
+            return true;
+        }
+        case CT_SHIFT: {
+            /* An abortive shift in the delimited body: same admission as core. */
+            CapSet scs;
+            return shift_body_ok(t->as.shift.body)
+                && collect_caps(t->as.shift.body, t->as.shift.k.id, &scs);
+        }
+        default:
+            /* Nested reset/handle/perform/resume/unsupported: keep the stricter
+             * core admission -- not relaxed by this slice. */
+            return term_core_ok(t);
     }
 }
 

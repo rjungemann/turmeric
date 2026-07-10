@@ -167,7 +167,27 @@ fallback until the final phase removes it.
   translation + emit for single-shot delimited control. Extend `ensure_S` to
   place these on DK instead of evicting them. Flip the fallback for exactly
   these shapes. Keep cloneable/serial/callcc/async still routed to
-  `emit_cps.c`.
+  `emit_cps.c`. **Partially landed.** The CT nodes (`CT_RESET`/`CT_SHIFT`,
+  `shift0` flag), `cps_ir.c` translation, and DK emit (`emit_reset`/
+  `emit_shift` -> `dk_shift`/`dk_shift0`/`dk_run`) already existed and covered a
+  restricted zero/scalar-capture subset; the remaining eviction was the
+  *admission predicate*. This slice adds `delim_ok` (`src/compiler/
+  emit_cps_ir.c`), a reset-delim admission that permits KK_PROMPT delivery
+  through straight-line + branch (`if`) structure, so the canonical
+  branch-and-escape patterns -- `(reset (if c (shift ...) v))`, nested-if
+  escapes, `do`-sequenced shifts -- now lower on DK instead of evicting. Oracle
+  pairs: `cps-oracle-reset-if-escape`, `-reset-if-straightline-else`,
+  `-reset-nested-if-escape` (direct == cps).
+
+  *Deliberately still evicted (blocker for the full flip):* a reset delim with a
+  `letcont` join whose jbody delivers to the prompt -- i.e. a shift under a
+  *non-empty* delimited continuation, `(reset (+ 10 (if c (shift ...) 5)))`.
+  There the CT-IR path is correctly abortive but the default/`emit_cps.c` path
+  *degrades* an out-of-subset reset to plain body-eval, yielding a different
+  value; admitting it would break the `direct == cps` invariant. Tracked in
+  [docs/reported/direct-reset-shift-degrades-out-of-subset.md](../../reported/direct-reset-shift-degrades-out-of-subset.md);
+  closing it (fix the direct degradation, or U7 retires `emit_cps.c`) unblocks
+  admitting the join-bearing shapes.
 - **U2 -- call/cc + escape.** Port the `emit_cps_callcc_prelude` machinery.
 - **U3 -- Cloneable (multi-shot) capture.** Port `dk_copy_range` deep-clone +
   capture clone/drop glue driven from CT-IR emit; add the multi-shot
