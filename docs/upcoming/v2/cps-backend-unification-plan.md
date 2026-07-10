@@ -383,11 +383,28 @@ fallback until the final phase removes it.
   instead of evicting; `direct == cps`. Oracle `cps-oracle-serial-placement`; all
   21 serial fixtures green.
 
-  *Remaining for U4:* native serial-context emission (the `collect_ctx` frame
-  chain is identical to cloneable, but the frames marshal the continuation via the
-  Serializable instances rather than `dk_copy_range` deep-clone) -- a larger native
-  port paralleling the cloneable Shape 2 work, with the delegation as the safety
-  net until then.
+  **Second slice landed (native arithmetic serial).** The `CT_CLONEABLE` node
+  gains a `serial` flag; `build_serial` (`cps_ir.c`) recognizes an arithmetic
+  serial context `(serial-reset (<op> <int> ... (serial-shift receiver v)))` with
+  a named uncolored receiver, and `emit_cloneable` (`emit_cps_ir.c`) emits it
+  natively -- a `_skbody` shift helper that `dk_copy_range`s the sub-continuation
+  and hands the receiver the copied DK chain directly, plus the arithmetic frames
+  reified through the shared tagged marshaler `__sk_frame_for_tag(tag)`
+  (`sk_tag_for_frame`). Because the frames use the same fixed tag table as the
+  direct emitter, the captured continuation round-trips through a real
+  serialize -> bytes -> deserialize with no per-site registry. Verified across
+  `+ - *` and multi-frame contexts with an actual
+  `tur_serial_cont_serialize`/`deserialize` round-trip; oracle
+  `cps-oracle-serial-native-arith`; `direct == cps`.
+
+  *Remaining for U4:* the marshaling-**registry** shapes -- call frames
+  (`(dbl (serial-shift ...))`), `let`/`if`/do-prelude serial contexts, and Shape 1
+  (identity) -- stay on the delegation. These need the per-site `SkReg` +
+  `__attribute__((constructor))` self-registration the direct emitter emits so the
+  marshaler can map a call frame to a stable name; porting them natively is the
+  larger parallel to the cloneable call/let/if/do work, deferred like the
+  cloneable closure-receiver case until the coordinated U6/U7 (the delegation is
+  the principled interim home).
 - **U5 -- Async / await.** Port the scheduler wiring on top of the now-unified
   cloneable/serial base.
 - **U6 -- Prelude consolidation.** Fold the four `emit_cps_*_prelude` emitters

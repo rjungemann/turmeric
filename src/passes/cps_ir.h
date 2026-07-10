@@ -185,7 +185,14 @@ struct CTerm {
          *     shift-bearing arm rides the frame chain; the pure arm (if_pure) is
          *     direct-emitted on the other branch.  if_when true => the shift arm is
          *     the `then` arm (C test `if (cond)`), false => `if (!(cond))`. */
-        struct { CVar x; const Binding *receiver;
+        /* `serial` selects the marshalable (serial-reset) lowering instead of the
+         * multi-shot (cloneable-reset) one: same frame chain, but the frames use
+         * the shared tagged marshaler (`__sk_frame_for_tag`) and the shift body
+         * hands the receiver the copied DK chain directly (no cloneable_cont wrap),
+         * so the captured continuation round-trips through save-cont!/resume-cont!.
+         * The native serial path currently covers only arithmetic-frame contexts
+         * (n_frames >= 1, no lets/if/call frames); everything else delegates. */
+        struct { CVar x; const Binding *receiver; bool serial;
                  CloneLet *lets; uint32_t n_lets;
                  CloneFrame *frames; uint32_t n_frames;
                  const Expr *if_cond; const Expr *if_pure; bool if_when;

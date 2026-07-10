@@ -2495,6 +2495,18 @@ static const char *cloneable_frame_expr(const char *op, bool hole_left) {
     return "(value) ? (env / value) : (fprintf(stderr, \"division by zero\\n\"), abort(), 0)";
 }
 
+/* U4 serial: the stable marshaler tag for an arithmetic context frame (op + hole
+ * side), mirroring emit_cps.c's sk_tag_for_frame.  The serial runtime prelude
+ * emits `__sk_frame_for_tag(tag)` returning the matching DKFrame, and the
+ * marshaler maps frame <-> tag by this table so save-cont!/resume-cont! round-
+ * trips.  1=ADD 2=MUL 3=SUBR(env-v) 4=SUBL(v-env) 5=DIVR(env/v) 6=DIVL(v/env). */
+static int sk_tag_for_frame(const CloneFrame *fr) {
+    if (strcmp(fr->op, "+") == 0) return 1;
+    if (strcmp(fr->op, "*") == 0) return 2;
+    if (strcmp(fr->op, "-") == 0) return fr->hole_left ? 4 : 3;
+    return fr->hole_left ? 6 : 5;   /* "/" */
+}
+
 /* CT_CLONEABLE (U3): (cloneable-reset (cloneable-shift receiver val)) and its
  * single-arithmetic-frame Shape 2 form.  Emits the cloneable multi-shot machinery
  * natively (no emit_cps.c), reusing the shared DK runtime (dk_copy_range,
@@ -2563,6 +2575,33 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         ce_line(ce, "tur_cloneable_cont *%s = tur_cloneable_cont_alloc(%s, NULL, NULL, NULL);",
                 cv, cfn);
         ce_line(ce, "%s = %s((int64_t)(intptr_t)%s);", xn, rfn, cv);
+    } else if (t->as.cloneable.serial) {
+        /* U4 Shape 2 (serial): an arithmetic context marshaled via the shared
+         * tagged frames (`__sk_frame_for_tag`), and a shift body that hands the
+         * receiver the copied DK chain directly so the captured continuation
+         * round-trips through save-cont!/resume-cont!.  No per-site frame fns. */
+        uint32_t nf = t->as.cloneable.n_frames;
+        char bodyfn[256];
+        snprintf(bodyfn, sizeof(bodyfn), "%s_skbody%d", ce->fn_cn, id);
+        buf_printf(ce->helpers,
+            "static intptr_t %s(intptr_t env, DK *subk) {\n"
+            "    DK *__cap = dk_copy_range(subk, NULL);\n"
+            "    return (intptr_t)((int64_t (*)(int64_t))(intptr_t)env)((int64_t)(intptr_t)__cap);\n}\n",
+            bodyfn);
+        char dv[48];
+        snprintf(dv, sizeof(dv), "__skd%d", id);
+        ce_line(ce, "DK *%s = dk_prompt(1, dk_done());", dv);
+        /* Push frames outermost-first (frames[0] deepest, closest to the prompt). */
+        for (uint32_t i = 0; i < nf; i++) {
+            const CloneFrame *fr = &t->as.cloneable.frames[i];
+            char *opv = atom_str(ce, &fr->operand);
+            ce_line(ce, "%s = dk_frame(__sk_frame_for_tag(%d), (intptr_t)(%s), %s);",
+                    dv, sk_tag_for_frame(fr), opv, dv);
+            free(opv);
+        }
+        ce_line(ce, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);", dv, bodyfn, rfn, dv);
+        ce_line(ce, "%s = (int64_t)dk_run(%s, 0);", xn, dv);
+        ce_line(ce, "dk_free(%s);", dv);
     } else {
         /* Shape 2: an arithmetic context (1+ frames) + dk_copy_range capture. */
         uint32_t nf = t->as.cloneable.n_frames;

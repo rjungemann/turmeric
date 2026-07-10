@@ -542,6 +542,75 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     return t;
 }
 
+/* U4 native serial: (serial-reset <arith-ctx> (serial-shift receiver v)) with a
+ * named uncolored fn receiver, arithmetic context frames only.  Structurally
+ * identical to the cloneable arithmetic Shape 2, but marshalable: the frames use
+ * the shared tagged marshaler and the shift hands the receiver the copied DK
+ * chain so save-cont!/resume-cont! round-trips.  Returns NULL for any richer
+ * shape (let/if/call/do context, non-atom or non-int operand, Shape 1 identity,
+ * a closure/colored receiver) -- the caller then falls back to the CT_LETRAW
+ * delegation, which owns the marshaling-registry (call-frame) cases. */
+static bool serial_reaches_shift(const Expr *e) {
+    e = ascribe_peel(e);
+    if (!e) return false;
+    if (e->kind == EX_SERIAL_SHIFT) return true;
+    if (e->kind == EX_BUILTIN)
+        for (uint32_t i = 0; i < e->as.builtin.n; i++)
+            if (serial_reaches_shift(e->as.builtin.args[i])) return true;
+    return false;
+}
+
+static const Binding *serial_named_receiver(CpsB *b, const Expr *shift) {
+    const Expr *kf = ascribe_peel(shift->as.serial_shift_.k_fn);
+    if (!kf || kf->kind != EX_VAR || !kf->as.var.binding) return NULL;
+    const Binding *recv = kf->as.var.binding;
+    if (recv->type.kind != TY_FN) return NULL;       /* a function value */
+    if (recv->closure_fn_binding) return NULL;       /* not a fat closure */
+    if (recv->is_global && callee_colored(b, recv)) return NULL;  /* uncolored global */
+    return recv;
+}
+
+static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
+    const Expr *cur = ascribe_peel(e->as.serial_reset_.body);
+    CloneFrame frames[CL_IR_MAX_FRAMES];
+    uint32_t nf = 0;
+
+    while (cur && cur->kind == EX_BUILTIN && cur->as.builtin.n == 2
+           && cur->as.builtin.spec && cur->type.kind == TY_INT
+           && cloneable_op_supported(cur->as.builtin.spec->c_op)) {
+        const Expr *a0 = ascribe_peel(cur->as.builtin.args[0]);
+        const Expr *a1 = ascribe_peel(cur->as.builtin.args[1]);
+        bool h0 = serial_reaches_shift(a0);
+        bool h1 = serial_reaches_shift(a1);
+        if (h0 == h1) return NULL;                  /* need exactly one hole side */
+        const Expr *other = h0 ? a1 : a0;
+        if (!other || !is_atomic(other) || other->type.kind != TY_INT) return NULL;
+        if (nf >= CL_IR_MAX_FRAMES) return NULL;
+        memset(&frames[nf], 0, sizeof(CloneFrame));
+        frames[nf].op        = cur->as.builtin.spec->c_op;   /* stable string */
+        frames[nf].operand   = atom_of(other);
+        frames[nf].hole_left = h0;
+        nf++;
+        cur = h0 ? a0 : a1;                          /* descend the hole side */
+    }
+
+    if (nf == 0) return NULL;                        /* Shape 1 serial -> delegate */
+    if (!cur || cur->kind != EX_SERIAL_SHIFT) return NULL;
+    const Binding *recv = serial_named_receiver(b, cur);
+    if (!recv) return NULL;
+
+    CTerm *t = new_term(b, CT_CLONEABLE);
+    t->as.cloneable.serial = true;
+    t->as.cloneable.x = x;
+    t->as.cloneable.receiver = recv;
+    t->as.cloneable.n_frames = nf;
+    CloneFrame *fa = arena_alloc(b->a, nf * sizeof(CloneFrame));
+    memcpy(fa, frames, nf * sizeof(CloneFrame));
+    t->as.cloneable.frames = fa;
+    t->as.cloneable.body = rest;
+    return t;
+}
+
 /* N6.1: a subexpression that can be emitted wholesale by the direct emitter
  * (via CT_LETRAW) because it neither threads a continuation nor could reach one:
  * it contains no syntactic control op AND no call to a colored (may-capture)
@@ -962,13 +1031,14 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             return nat ? nat : build_letraw(b, e, x, ac);
         }
         case EX_SERIAL_RESET: {
-            /* U4: delegate the marshalable serial region to the direct emitter so
-             * a colored function containing it stays CPS-emitted rather than
-             * wholly evicting. */
+            /* U4: native arithmetic serial context, else delegate the marshalable
+             * region so a colored function containing it stays CPS-emitted rather
+             * than wholly evicting. */
             CVar x = fresh_cvar(b, &e->type);
             CTerm *ac = new_term(b, CT_APPCONT);
             ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
-            return build_letraw(b, e, x, ac);
+            CTerm *nat = build_serial(b, e, x, ac);
+            return nat ? nat : build_letraw(b, e, x, ac);
         }
         case EX_HANDLE: {
             CVar x = fresh_cvar(b, &e->type);
@@ -1137,9 +1207,11 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             CTerm *nat = build_cloneable(b, e, x, rest);
             return nat ? nat : build_letraw(b, e, x, rest);
         }
-        case EX_SERIAL_RESET:
-            /* U4: delegate the marshalable serial region (see cps_tail). */
-            return build_letraw(b, e, x, rest);
+        case EX_SERIAL_RESET: {
+            /* U4: native arithmetic serial context, else delegate (see cps_tail). */
+            CTerm *nat = build_serial(b, e, x, rest);
+            return nat ? nat : build_letraw(b, e, x, rest);
+        }
         case EX_HANDLE:
             return build_handle(b, e, x, rest);
         case EX_PERFORM: {
@@ -1307,11 +1379,13 @@ void cps_ir_print(const CTerm *t, FILE *out, int indent) {
             cps_ir_print(t->as.letraw.body, out, indent);
             break;
         case CT_CLONEABLE:
-            fprintf(out, "let %s = cloneable-cont -> %s(<cont>)  ; U3 %s"
+            fprintf(out, "let %s = %s-cont -> %s(<cont>)  ; %s %s"
                          "[%u frame(s), %u let(s)%s]\n",
                     t->as.cloneable.x.name,
+                    t->as.cloneable.serial ? "serial" : "cloneable",
                     t->as.cloneable.receiver && t->as.cloneable.receiver->name
                         ? t->as.cloneable.receiver->name->name : "?",
+                    t->as.cloneable.serial ? "U4" : "U3",
                     t->as.cloneable.n_frames == 0 ? "Shape 1 " : "Shape 2 ",
                     t->as.cloneable.n_frames, t->as.cloneable.n_lets,
                     t->as.cloneable.if_cond ? ", if" : "");
