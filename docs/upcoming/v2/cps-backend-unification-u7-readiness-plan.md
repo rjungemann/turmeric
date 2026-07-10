@@ -57,14 +57,32 @@ flagged as deferred.
 
 ## The cut sequence
 
-1. **Relocate the runtime (safe, available now).** Move the prelude emitters +
-   shared DK/marshaling helpers out of `emit_cps.c` into a neutral module that
-   both the direct emitter and the CT-IR backend include. Mechanical and
+1. **Relocate the runtime (safe, available now). [DONE]** Move the prelude
+   emitters out of `emit_cps.c` into a neutral module (`emit_dk_runtime.{c,h}`)
+   that both the direct emitter and the CT-IR backend include. Mechanical and
    behavior-preserving (the emitted C is byte-identical; only the emitter's C file
-   location changes). This shrinks `emit_cps.c` to just the four lowering functions
-   and their private helpers, making the remaining delete surface explicit and
-   decoupling the runtime's lifetime from the lowering's. **This is the one
-   U7-enabling slice that does not wait on any native gap.**
+   location changes). This decouples the runtime's lifetime from the lowering's,
+   converting "delete a 2.1k-line file with load-bearing runtime in it" into
+   "delete four functions with no callers." **This is the one U7-enabling slice
+   that does not wait on any native gap.**
+
+   *Refinement discovered during the cut:* the only code the surviving runtime
+   needs is the **four prelude emitters** (`emit_cps_runtime_prelude`,
+   `emit_cps_callcc_prelude`, `emit_cps_cloneable_bridge_prelude`,
+   `emit_cps_serial_runtime_prelude`) -- pure string emitters with zero
+   dependency on `emit_cps.c`'s analysis state. The framing above listed the
+   shared analysis helpers (`collect_ctx`, `cl_can_lower`, `frame_c_expr`,
+   `sk_tag_for_frame`, `ctx_if_branch`, ...) as also needing relocation on the
+   belief that the native CT-IR emit depends on them; in fact `emit_cps_ir.c`
+   carries its **own byte-for-byte copies** (see its `sk_tag_for_frame` /
+   `frame_c_expr` mirrors) and depends only on the *emitted* runtime
+   (`dk_copy_range`, `dk_invoke`, `__sk_frame_for_tag`, ...), not on the C-level
+   helpers. So the analysis helpers are private to the lowering functions and
+   die with them in step 3; they were correctly left in `emit_cps.c`. The
+   `emit_cps_program_uses_*` gates that decide whether to emit each prelude also
+   stay in `emit_cps.h` for now (step 5 retires them in favor of the CT-IR
+   classification). `emit_cps.c` is now the four lowering functions + their
+   private analysis helpers + the uses-gates.
 2. **Close the native gaps**, each its own slice, each removing one lowering fn's
    last caller:
    - callcc: native `CT_CALLCC` emit (the largest single gap).
@@ -93,13 +111,23 @@ flagged as deferred.
   native, so the delegation into `emit_cps_cloneable_reset` / `_serial_reset` now
   fires only for the residual hard shapes named above -- the deletes are closer,
   just gated on the hard tail.
+- **Step 1 (runtime relocation) is landed.** The four DK prelude emitters now live
+  in `emit_dk_runtime.{c,h}`; `emit_module.c` includes the new header and the
+  emitted C is byte-identical (verified against the `continuation-*` snapshots;
+  full suite green). The runtime no longer shares a translation unit with the
+  lowering functions U7 deletes, so steps 2-5 delete lowering without touching the
+  runtime.
 
 ## Recommendation
 
-Do the **runtime relocation (step 1) next** -- it is the only safe, bounded,
-high-leverage U7 step available before the native gaps close, and it converts
-"delete a 2.1k-line file with load-bearing runtime in it" into "delete four
-functions with no callers." The native gaps (callcc especially) are real projects
-sized like the U3/U4 native ports, not one-turn slices, and should be scheduled as
-such. Until then the delegation + eviction fallbacks are correct and the tree
-ships.
+The **runtime relocation (step 1) is now landed** -- `emit_cps.c` no longer holds
+the load-bearing runtime, so the eventual delete is "remove four lowering
+functions with no callers," not "carve runtime out of a 2.1k-line file."
+
+The remaining U7 work is step 2's **native gaps**, and those are real projects
+sized like the U3/U4 native ports, not one-turn slices: native `CT_CALLCC` emit
+(the largest, 100% delegated today), the cloneable/serial closure receivers +
+serial 2-arg/Shape 1 tail, and base reset/shift shapes outside `delim_ok`. They
+should be scheduled as their own slices. Until each gap's last caller is gone the
+delegation + eviction fallbacks are correct and the tree ships; the deletes
+(steps 3-5) follow mechanically once coverage is total.
