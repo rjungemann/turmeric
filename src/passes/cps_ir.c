@@ -260,19 +260,64 @@ static CTerm *build_letraw(CpsB *b, Expr *e, CVar x, CTerm *rest) {
  * Restricted to a named, uncolored top-level fn receiver; returns NULL for any
  * other shape (a non-trivial continuation, a closure/indirect receiver, a
  * colored receiver), so the caller falls back to the CT_LETRAW delegation. */
-static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
-    const Expr *rb = ascribe_peel(e->as.cloneable_reset_.body);
-    if (!rb || rb->kind != EX_CLONEABLE_SHIFT) return NULL;
-    const Expr *kf = ascribe_peel(rb->as.cloneable_shift_.k_fn);
+/* A named, uncolored top-level fn receiver of a cloneable-shift; NULL otherwise. */
+static const Binding *cloneable_named_receiver(CpsB *b, const Expr *shift) {
+    const Expr *kf = ascribe_peel(shift->as.cloneable_shift_.k_fn);
     if (!kf || kf->kind != EX_VAR || !kf->as.var.binding) return NULL;
     const Binding *recv = kf->as.var.binding;
     if (!recv->is_global) return NULL;          /* a top-level fn */
     if (callee_colored(b, recv)) return NULL;   /* uncolored receiver only */
-    CTerm *t = new_term(b, CT_CLONEABLE);
-    t->as.cloneable.x = x;
-    t->as.cloneable.receiver = recv;
-    t->as.cloneable.body = rest;
-    return t;
+    return recv;
+}
+
+static bool cloneable_op_supported(const char *op) {
+    return op && (strcmp(op, "+") == 0 || strcmp(op, "-") == 0 ||
+                  strcmp(op, "*") == 0 || strcmp(op, "/") == 0);
+}
+
+static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
+    const Expr *rb = ascribe_peel(e->as.cloneable_reset_.body);
+    if (!rb) return NULL;
+
+    /* Shape 1: the shift IS the whole reset body -- identity continuation. */
+    if (rb->kind == EX_CLONEABLE_SHIFT) {
+        const Binding *recv = cloneable_named_receiver(b, rb);
+        if (!recv) return NULL;
+        CTerm *t = new_term(b, CT_CLONEABLE);
+        t->as.cloneable.x = x;
+        t->as.cloneable.receiver = recv;
+        t->as.cloneable.ctx_op = NULL;
+        t->as.cloneable.body = rest;
+        return t;
+    }
+
+    /* Shape 2 (single frame): (<op> <int-literal> (cloneable-shift recv val)) or
+     * the symmetric hole-left form.  The literal operand rides the DK frame env;
+     * the captured continuation deep-clones (dk_copy_range) at emit. */
+    if (rb->kind == EX_BUILTIN && rb->as.builtin.n == 2 && rb->as.builtin.spec
+        && rb->type.kind == TY_INT
+        && cloneable_op_supported(rb->as.builtin.spec->c_op)) {
+        const Expr *a0 = ascribe_peel(rb->as.builtin.args[0]);
+        const Expr *a1 = ascribe_peel(rb->as.builtin.args[1]);
+        bool h0 = a0 && a0->kind == EX_CLONEABLE_SHIFT;
+        bool h1 = a1 && a1->kind == EX_CLONEABLE_SHIFT;
+        if (h0 == h1) return NULL;                    /* exactly one shift operand */
+        const Expr *shift = h0 ? a0 : a1;
+        const Expr *other = h0 ? a1 : a0;
+        if (!other || other->kind != EX_INT_LIT) return NULL;   /* literal operand only */
+        const Binding *recv = cloneable_named_receiver(b, shift);
+        if (!recv) return NULL;
+        CTerm *t = new_term(b, CT_CLONEABLE);
+        t->as.cloneable.x = x;
+        t->as.cloneable.receiver = recv;
+        t->as.cloneable.ctx_op = rb->as.builtin.spec->c_op;   /* stable string */
+        t->as.cloneable.ctx_operand = other->as.i;
+        t->as.cloneable.ctx_hole_left = h0;
+        t->as.cloneable.body = rest;
+        return t;
+    }
+
+    return NULL;   /* other shapes fall back to the CT_LETRAW delegation */
 }
 
 /* N6.1: a subexpression that can be emitted wholesale by the direct emitter

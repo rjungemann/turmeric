@@ -69,8 +69,24 @@ receiver and falls through to the `CT_LETRAW` delegation otherwise;
 `emit_cloneable` (`emit_cps_ir.c`) emits the identity cont fn +
 `tur_cloneable_cont_alloc(id, NULL, NULL, NULL)` + receiver call; admitted in
 `term_core_ok` and threaded through the scan walkers. Oracle:
-`cps-oracle-cloneable-native-shape1` (native multi-shot resume, 10/20). Steps
-5-7 (Shape 2 + classification + retire delegation) remain.
+`cps-oracle-cloneable-native-shape1` (native multi-shot resume, 10/20).
+
+**Step 5 (Shape 2, single frame) LANDED.** `CT_CLONEABLE` extended with an
+optional single arithmetic context frame (`ctx_op` / `ctx_operand` /
+`ctx_hole_left`): `(cloneable-reset (<op> <int-lit> (cloneable-shift receiver
+val)))` for `op` in `+ - * /`, either hole side. `emit_cloneable` emits the DK
+chain natively -- an arithmetic frame fn (`cloneable_frame_expr`, mirroring
+`frame_c_expr`), a shift-body helper that `dk_copy_range`s the captured
+sub-continuation into a `tur_cloneable_cont`, and
+`dk_prompt`/`dk_frame`/`dk_shift`/`dk_run`/`dk_free` -- reusing the DK runtime
+byte-for-byte. Oracle: `cps-oracle-cloneable-native-shape2` (15/110); verified
+across all four operators and both hole sides.
+
+Remaining in step 5: multi-frame / nested contexts (a second `dk_frame` per
+operator), `if`- and `let`-bearing contexts (reuse the direct `collect_ctx`
+structure -- consider relocating it out of `emit_cps.c` for sharing), non-literal
+(captured) operands, and closure/colored receivers. Steps 6-7 (multi-shot
+classification axis + retire delegation) follow.
 
 1. **CT nodes.** Add `CT_CLONEABLE_SHIFT` (receiver + captured-cont, distinct
    from abortive `CT_SHIFT` -- the receiver takes a *handle*, not the value) and

@@ -1,0 +1,15 @@
+;; U3 oracle: native CT-IR emission of a Shape 2 (non-trivial continuation) cloneable.
+;; Backend: --enable=cps-backend (native CT-IR cloneable Shape 2 -- dk_copy_range)
+;; make is a colored non-main fn: (cloneable-reset (+ 10 (cloneable-shift k-id 0))).
+;; The (+ 10 []) context is reified as a DK frame and the captured continuation
+;; deep-clones via dk_copy_range -- emitted natively (make_ccctx/make_ccbody +
+;; dk_prompt/dk_frame/dk_shift/dk_run), NOT delegated to emit_cps.c.  Multi-shot:
+;; clone+resume 5 -> 10+5 = 15, then resume 100 -> 10+100 = 110.  direct == cps.
+;;
+(defn k-id [k] : int k)
+(defn make [] : int (cloneable-reset (+ 10 (cloneable-shift k-id 0))))
+(defn main [] : int
+  (let [c (make)]
+    (println (tur_cloneable_cont_resume (tur_cloneable_cont_clone c) 5))
+    (println (tur_cloneable_cont_resume c 100)))
+  0)

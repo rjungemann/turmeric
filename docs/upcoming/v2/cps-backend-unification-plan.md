@@ -280,10 +280,24 @@ fallback until the final phase removes it.
   cloneable-basic-style fixtures now emit Shape 1 natively; everything else keeps
   delegating.
 
-  *Remaining (the risky core):* Shape 2 -- a *non-trivial* continuation
-  (`dk_copy_range` deep-clone + clone/drop glue) driven from CT-IR emit, ported
-  one context form at a time behind its own oracle -- plus the multi-shot
-  classification axis. Mapped in the native-emit note.
+  **Native emit -- Shape 2 (single frame) landed.** The first non-trivial
+  continuation now emits natively: `(cloneable-reset (<op> <int-lit>
+  (cloneable-shift receiver val)))` for `op` in `+ - * /` (either hole side).
+  `build_cloneable` reifies the `(<op> operand [])` context and `emit_cloneable`
+  emits the DK chain directly -- an arithmetic frame fn, a shift-body helper that
+  `dk_copy_range`s the captured sub-continuation into a `tur_cloneable_cont`, and
+  `dk_prompt`/`dk_frame`/`dk_shift`/`dk_run`/`dk_free` -- reusing the shared DK
+  runtime (`dk_copy_range`, `__dk_cont_fn`/`__dk_env_clone`/`__dk_env_drop`)
+  byte-for-byte, no `emit_cps.c`. Multi-shot verified natively across all four
+  operators and both hole sides; oracle `cps-oracle-cloneable-native-shape2`
+  (clone + two resumes -> 15/110).
+
+  *Remaining (the risky core, narrowing):* multi-frame / nested contexts
+  (`(* a (+ b []))`), `if` / `let`-bearing contexts, non-literal (captured)
+  operands, and closure/colored receivers -- ported one form at a time behind
+  its own oracle (the delegation fallback still catches everything not yet
+  native) -- plus the multi-shot classification axis. Mapped in the native-emit
+  note.
 - **U4 -- Serial.** Port `emit_cps_serial_runtime_prelude` + serial placement.
 - **U5 -- Async / await.** Port the scheduler wiring on top of the now-unified
   cloneable/serial base.

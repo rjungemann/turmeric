@@ -139,10 +139,18 @@ struct CTerm {
                  CVar x; CTerm *body; }                                   perform;
         struct { CAtom k; CAtom v; CVar x; CTerm *body; }                 resume;
         struct { CVar x; const Expr *e; CTerm *body; }                    letraw;
-        /* U3 Shape 1: identity-continuation cloneable.  `receiver` is a named,
-         * uncolored top-level fn called with the fresh cloneable_cont handle;
-         * its result is the reset value bound to x; then run body. */
-        struct { CVar x; const Binding *receiver; CTerm *body; }          cloneable;
+        /* U3 cloneable (multi-shot).  `receiver` is a named, uncolored top-level
+         * fn called with the fresh cloneable_cont handle; its result is the reset
+         * value bound to x; then run body.
+         *   Shape 1 (ctx_op == NULL): identity continuation -- no dk_copy_range.
+         *   Shape 2 (ctx_op != NULL): a single arithmetic context frame
+         *     `(<op> <operand> [])` around the shift, reified as a DK frame so the
+         *     captured continuation deep-clones (dk_copy_range).  ctx_op is the
+         *     "+"/"-"/"*"/"/" C operator; ctx_operand is the literal-int other
+         *     operand; ctx_hole_left is true iff the shift is the left operand. */
+        struct { CVar x; const Binding *receiver;
+                 const char *ctx_op; int64_t ctx_operand; bool ctx_hole_left;
+                 CTerm *body; }                                           cloneable;
         struct { const char *why; }                                       unsupported;
     } as;
 };

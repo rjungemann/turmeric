@@ -2398,27 +2398,67 @@ static void emit_reset(CE *ce, const CTerm *t) {
     ce->cur_ty = save_ty;
 }
 
-/* CT_CLONEABLE (U3 Shape 1): (cloneable-reset (cloneable-shift receiver val))
- * with a TRIVIAL (identity) continuation.  The shift is the whole reset body, so
- * the captured continuation is the identity -- no dk_copy_range.  Emit an
- * identity continuation fn, alloc a tur_cloneable_cont over it (NULL env / clone
- * / drop -- the identity is stateless, so multi-shot resume is trivially
- * correct), call the receiver with the cont handle, bind the reset value to x,
- * then run the continuation.  Mirrors emit_effects_cloneable_reset's Case 1. */
+/* The C body expression of a single arithmetic context frame `(<op> <operand>
+ * [])` -- `env` is the captured operand, `value` the resumed value.  Mirrors
+ * emit_cps.c's frame_c_expr byte-for-byte (the proven generator). */
+static const char *cloneable_frame_expr(const char *op, bool hole_left) {
+    if (strcmp(op, "+") == 0) return "env + value";
+    if (strcmp(op, "*") == 0) return "env * value";
+    if (strcmp(op, "-") == 0) return hole_left ? "value - env" : "env - value";
+    if (hole_left)  /* "/" hole-left: value / env */
+        return "(env) ? (value / env) : (fprintf(stderr, \"division by zero\\n\"), abort(), 0)";
+    return "(value) ? (env / value) : (fprintf(stderr, \"division by zero\\n\"), abort(), 0)";
+}
+
+/* CT_CLONEABLE (U3): (cloneable-reset (cloneable-shift receiver val)) and its
+ * single-arithmetic-frame Shape 2 form.  Emits the cloneable multi-shot machinery
+ * natively (no emit_cps.c), reusing the shared DK runtime (dk_copy_range,
+ * __dk_cont_fn / __dk_env_clone / __dk_env_drop) byte-for-byte.
+ *
+ *   Shape 1 (ctx_op == NULL): identity continuation -- no dk_copy_range.  Alloc a
+ *     tur_cloneable_cont over an identity fn (NULL env), call receiver, bind x.
+ *   Shape 2 (ctx_op != NULL): reify the `(<op> <operand> [])` context as a DK
+ *     frame; the shift body deep-clones the captured sub-continuation into a
+ *     cloneable_cont and hands it to receiver.  Mirrors emit_cloneable_ctx. */
 static void emit_cloneable(CE *ce, const CTerm *t) {
     int id = (*ce->helper_ctr)++;
-    char cfn[256];
-    snprintf(cfn, sizeof(cfn), "%s_clc%d", ce->fn_cn, id);
-    buf_printf(ce->helpers,
-        "static int64_t %s(void *__e, int64_t __v) { (void)__e; return __v; }\n", cfn);
-
     char *xn  = cvar_cname(ce, t->as.cloneable.x);
     char *rfn = callee_name(t->as.cloneable.receiver);
-    char cv[64];
-    snprintf(cv, sizeof(cv), "__clc%d", id);
-    ce_line(ce, "tur_cloneable_cont *%s = tur_cloneable_cont_alloc(%s, NULL, NULL, NULL);",
-            cv, cfn);
-    ce_line(ce, "%s = %s((int64_t)(intptr_t)%s);", xn, rfn, cv);
+
+    if (t->as.cloneable.ctx_op == NULL) {
+        /* Shape 1: identity continuation. */
+        char cfn[256];
+        snprintf(cfn, sizeof(cfn), "%s_clc%d", ce->fn_cn, id);
+        buf_printf(ce->helpers,
+            "static int64_t %s(void *__e, int64_t __v) { (void)__e; return __v; }\n", cfn);
+        char cv[64];
+        snprintf(cv, sizeof(cv), "__clc%d", id);
+        ce_line(ce, "tur_cloneable_cont *%s = tur_cloneable_cont_alloc(%s, NULL, NULL, NULL);",
+                cv, cfn);
+        ce_line(ce, "%s = %s((int64_t)(intptr_t)%s);", xn, rfn, cv);
+    } else {
+        /* Shape 2: single arithmetic context frame + dk_copy_range capture. */
+        char ctxfn[256], bodyfn[256];
+        snprintf(ctxfn,  sizeof(ctxfn),  "%s_ccctx%d",  ce->fn_cn, id);
+        snprintf(bodyfn, sizeof(bodyfn), "%s_ccbody%d", ce->fn_cn, id);
+        buf_printf(ce->helpers,
+            "static intptr_t %s(intptr_t env, intptr_t value) { return %s; }\n",
+            ctxfn, cloneable_frame_expr(t->as.cloneable.ctx_op, t->as.cloneable.ctx_hole_left));
+        buf_printf(ce->helpers,
+            "static intptr_t %s(intptr_t env, DK *subk) {\n"
+            "    DK *__cap = dk_copy_range(subk, NULL);\n"
+            "    tur_cloneable_cont *__k = tur_cloneable_cont_alloc(__dk_cont_fn, __cap, __dk_env_clone, __dk_env_drop);\n"
+            "    return (intptr_t)((int64_t (*)(int64_t))(intptr_t)env)((int64_t)(intptr_t)__k);\n}\n",
+            bodyfn);
+        char dv[48];
+        snprintf(dv, sizeof(dv), "__ccd%d", id);
+        ce_line(ce, "DK *%s = dk_prompt(1, dk_done());", dv);
+        ce_line(ce, "%s = dk_frame(%s, (intptr_t)(%lldLL), %s);",
+                dv, ctxfn, (long long)t->as.cloneable.ctx_operand, dv);
+        ce_line(ce, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);", dv, bodyfn, rfn, dv);
+        ce_line(ce, "%s = (int64_t)dk_run(%s, 0);", xn, dv);
+        ce_line(ce, "dk_free(%s);", dv);
+    }
     free(xn);
     free(rfn);
     emit_term(ce, t->as.cloneable.body);
