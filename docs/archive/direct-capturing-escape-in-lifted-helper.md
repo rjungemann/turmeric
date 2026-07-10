@@ -2,13 +2,25 @@
 
 **Severity:** low (contrived nesting; a compile error, not a silent miscompile).
 
-**Status:** partially resolved. The **shift-body** (and perform-continuation)
-variant is fixed: `collect_free_vars` now descends into a `(call/cc f)`/`(escape
-f)` receiver (`elab_core.c`, `EX_CALLCC` case -- both an `EX_CLOSURE` and a raw
-`EX_FN` receiver), so the escape's enclosing captures are threaded into the
-lifted helper env on the direct path, and the CT-IR backend admits these
-positions (the `shift_body_ok` / `perform_body_ok` carve-out guards were
-removed). The **effect handler case** variant below is still open.
+**Status:** RESOLVED. Two independent capture walkers each lacked an
+`EX_CALLCC` case:
+
+- `collect_free_vars` (`elab_core.c`) -- fixed to descend into a `(call/cc
+  f)`/`(escape f)` receiver (both an `EX_CLOSURE`, whose captures are folded,
+  and a raw `EX_FN`, whose body free vars are collected excluding its params).
+  This threads the escape's enclosing captures into the **shift-body** and
+  **perform-continuation** lifted helper envs.
+- `collect_handle_captures` (`emit_core.c`) -- fixed to push a callcc receiver
+  so its `EX_CLOSURE` case folds the receiver's captures into the fiber
+  **handler case** env.
+
+With both walkers complete, all three CT-IR carve-out guards
+(`shift_body_ok` / `perform_body_ok` / `handle_case_ok`) were removed, so a
+capturing `call/cc`/`escape` in any lifted helper position lowers on DK with
+`direct == cps`. Oracles: `cps-oracle-escape-capture-in-shift-body`,
+`cps-oracle-escape-capture-after-handle`,
+`cps-oracle-escape-capture-in-handler-case`. (An owning-value capture still
+bails to the direct emitter -- it is not a Copy capture.)
 
 ## Remaining repro (handler case)
 

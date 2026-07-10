@@ -1,5 +1,4 @@
 #include "emit_cps_ir.h"
-#include "emit_cps.h"   /* emit_cps_program_uses_callcc (delegated-escape guard) */
 
 #include <stdarg.h>
 #include <stdlib.h>
@@ -717,22 +716,6 @@ static bool reset_body_ok(const CTerm *t) {
     return joins_closed_rec(t, def, 0);
 }
 
-/* U2: true if a CT_LETRAW delegates an expr that CONTAINS a (call/cc f)/(escape
- * f) (possibly nested inside a delegated composite like `(+ 1 (escape ...))`).
- * Used only by handle_case_ok: a handler CASE body is emitted as a fiber handler
- * function whose captures are collected by a *separate* walker
- * (`collect_handle_captures`, emit_core.c) that -- unlike the now-fixed
- * `collect_free_vars` -- does not descend into a callcc receiver, so a capturing
- * escape there references an undeclared C name.  Rejecting a callcc-bearing
- * handler case evicts the function to the direct emitter (which shares the same
- * gap -- tracked in docs/reported).  The shift-body / perform-continuation
- * positions no longer need this guard: `collect_free_vars` now walks the escape
- * receiver's captures into their lifted env, so a capturing escape lowers on DK
- * correctly there. */
-static bool letraw_has_callcc(const CTerm *t) {
-    return emit_cps_program_uses_callcc(t->as.letraw.e);
-}
-
 /* A shift body in the C3 subset: straight-line (letval/letprim/letcall) ending
  * in delivery of a scalar atom to the prompt.  No branches, tail calls, joins,
  * or nested delimiters. */
@@ -819,7 +802,7 @@ static bool handle_case_ok(const CTerm *t) {
             return t->as.resume.k.kind == CA_VAR && atom_ok(&t->as.resume.v)
                 && handle_case_ok(t->as.resume.body);
         case CT_LETRAW:
-            return letraw_ok(t) && !letraw_has_callcc(t) && handle_case_ok(t->as.letraw.body);
+            return letraw_ok(t) && handle_case_ok(t->as.letraw.body);
         case CT_IF:
             return atom_ok(&t->as.if_.cond)
                 && handle_case_ok(t->as.if_.then_) && handle_case_ok(t->as.if_.else_);

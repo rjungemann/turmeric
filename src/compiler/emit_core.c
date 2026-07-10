@@ -3359,6 +3359,18 @@ Binding **collect_handle_captures(const Expr *body, uint32_t *n_out) {
                 PUSH_EXPR(cur->as.cont_pred_.expr);
                 break;
             }
+            case EX_CALLCC: {
+                /* (call/cc f) / (escape f): the receiver `f` (a closure at emit
+                 * time) captures enclosing locals through its env, and its
+                 * env-init (`__t->field = <name>`) references those names in the
+                 * CURRENT function -- so they must be threaded into the handler
+                 * body's env just like any other free variable.  Push the
+                 * receiver so the EX_CLOSURE case folds its pre-computed captures
+                 * (mirrors EX_FN_TO_FAT / EX_CLOSURE).  Without this a capturing
+                 * escape in a handler case references an undeclared C name. */
+                PUSH_EXPR(cur->as.callcc_.fn);
+                break;
+            }
             case EX_FN_TO_FAT: {
                 /* A#1 auto-shim wrapper: descend to the inner fn so its closure
                  * captures are collected (KB-IDIOM-1). */
