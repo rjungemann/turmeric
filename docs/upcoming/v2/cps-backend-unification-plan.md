@@ -418,11 +418,23 @@ fallback until the final phase removes it.
   and `(if (> n 0) (+ 100 (shift)) 42)` with a real serialize round-trip; oracle
   `cps-oracle-serial-native-letif`; `direct == cps`.
 
-  *Remaining for U4:* do-prelude serial (needs the `$0` ignore-value wrapper +
-  `SkReg` side, a small emit addition), 2-arg call frames (serialized env
-  operand), and Shape 1 (identity).  Native serial now owns the same
-  arithmetic + call + `let` + `if` subset the cloneable native port reached; the
-  two `build_*` walks are near-identical and are a natural future unification.
+  **Fifth slice landed (native serial do-prelude).** `build_serial` gains the
+  do-sequence branch (prelude items as binding-less `CloneLet`s, 0-arg tails as
+  ignore-value frames), mirroring the cloneable do branch; `emit_cloneable`'s
+  serial branch now emits an ignore-value call frame as a `_skcall` wrapper
+  `return f()` registered under the `"<fn>$0"` side (vs `"$L"` for a 1-arg hole
+  call). Verified single- and multi-tail (`(do (shift) (tick) (tock))` yields
+  `tock`) with a real serialize round-trip; oracle
+  `cps-oracle-serial-native-doprelude`; `direct == cps`.
+
+  With this, **native serial owns the entire value-typed subset the cloneable
+  native port reached** -- arithmetic (any depth), 1-arg call frames, `let`, `if`,
+  and do-prelude. Remaining serial shapes: 2-arg call frames (serialized env
+  operand, real new machinery) and Shape 1 (identity), each on the delegation.
+
+  The two `build_*` walks are now byte-for-byte parallel and slated for
+  unification into one `build_marshal_reset(..., serial)` -- see
+  [cps-backend-unification-marshal-reset-unification-plan.md](cps-backend-unification-marshal-reset-unification-plan.md).
 - **U5 -- Async / await.** Port the scheduler wiring on top of the now-unified
   cloneable/serial base.
 - **U6 -- Prelude consolidation.** Fold the four `emit_cps_*_prelude` emitters

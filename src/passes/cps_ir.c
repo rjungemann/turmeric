@@ -691,6 +691,55 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             continue;
         }
 
+        /* do-sequence with a statement-position shift (mirrors the cloneable do
+         * branch): prelude items run once at capture (binding-less lets), 0-arg
+         * tail calls become ignore-value frames (marshaled under the "<fn>$0"
+         * side).  Whole reset body, no outer frames, no `if`. */
+        if (cur->kind == EX_DO && nf == 0 && !saw_if) {
+            uint32_t N = cur->as.do_.n;
+            int32_t m = -1;
+            for (uint32_t i = 0; i < N; i++) {
+                if (serial_reaches_shift(cur->as.do_.items[i])) {
+                    if (m >= 0) return NULL;             /* at most one hole */
+                    m = (int32_t)i;
+                }
+            }
+            if (m < 0) return NULL;
+            const Expr *shift_item = ascribe_peel(cur->as.do_.items[m]);
+            if (!shift_item || shift_item->kind != EX_SERIAL_SHIFT) return NULL;
+            for (int32_t i = 0; i < m; i++) {
+                const Expr *pre = cur->as.do_.items[i];
+                if (serial_reaches_shift(pre)) return NULL;
+                if (!safe_to_delegate(b, pre)) return NULL;
+                if (nl >= CL_IR_MAX_LETS) return NULL;
+                lets[nl].binding = NULL;                 /* side-effect prelude */
+                lets[nl].init    = pre;
+                nl++;
+            }
+            for (int32_t i = (int32_t)N - 1; i > m; i--) {
+                const Expr *tail = ascribe_peel(cur->as.do_.items[i]);
+                if (!tail || tail->kind != EX_CALL ||
+                    !tail->as.call_.fn_binding || tail->as.call_.fn_expr) return NULL;
+                const Binding *fb = tail->as.call_.fn_binding;
+                if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 0) return NULL;
+                if (tail->as.call_.n_args != 0) return NULL;
+                if (fb->closure_fn_binding) return NULL;    /* not a fat closure */
+                if (callee_colored(b, fb)) return NULL;     /* uncolored target */
+                if (tail->type.kind != TY_INT) return NULL; /* result: int */
+                if (nf >= CL_IR_MAX_FRAMES) return NULL;
+                memset(&frames[nf], 0, sizeof(CloneFrame));
+                frames[nf].op           = NULL;
+                frames[nf].call_fn      = fb;
+                frames[nf].ignore_value = true;
+                frames[nf].operand.kind = CA_INT;   /* unused (env passed as 0) */
+                frames[nf].operand.ty   = TY_INT;
+                frames[nf].hole_left    = true;
+                nf++;
+            }
+            cur = shift_item;                       /* the shift; loop exits below */
+            continue;
+        }
+
         break;
     }
 

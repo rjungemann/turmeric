@@ -2596,13 +2596,22 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
             const CloneFrame *fr = &t->as.cloneable.frames[i];
             if (!fr->call_fn) continue;
             char *cfn = callee_name(fr->call_fn);
+            /* A do-tail ignore-value frame runs f() regardless of the resumed
+             * value and marshals under the "$0" side; a 1-arg hole call applies f
+             * to the resumed value under "$L". */
+            if (fr->ignore_value)
+                buf_printf(ce->helpers,
+                    "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { (void)env; (void)value; return (intptr_t)%s(); }\n",
+                    ce->fn_cn, id, i, cfn);
+            else
+                buf_printf(ce->helpers,
+                    "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s((int64_t)value); }\n",
+                    ce->fn_cn, id, i, cfn);
+            const char *side = fr->ignore_value ? "$0" : "$L";
             buf_printf(ce->helpers,
-                "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s((int64_t)value); }\n",
-                ce->fn_cn, id, i, cfn);
-            buf_printf(ce->helpers,
-                "static SkReg %s_skreg%d_%u = { \"%s$L\", %s_skcall%d_%u, 0, 0, 0, 0 };\n"
+                "static SkReg %s_skreg%d_%u = { \"%s%s\", %s_skcall%d_%u, 0, 0, 0, 0 };\n"
                 "__attribute__((constructor)) static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
-                ce->fn_cn, id, i, cfn, ce->fn_cn, id, i,
+                ce->fn_cn, id, i, cfn, side, ce->fn_cn, id, i,
                 ce->fn_cn, id, i, ce->fn_cn, id, i);
             free(cfn);
         }
