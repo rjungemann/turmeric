@@ -1,0 +1,11 @@
+;; Oracle (cps-backend-unification): a cloneable-reset nested under an operator.
+;; Backend: default backend (emit_cps.c)
+;; The cloneable-shift is nested inside (+ 1 ...); the prelude gate
+;; (cps_expr_contains_cloneable_shift) now descends into EX_BUILTIN and other
+;; forms, so the tur_cloneable_cont runtime is emitted on both backends.
+;;
+(defn f [n : int] : int
+  (+ 1 (cloneable-reset (cloneable-shift (fn [k] (+ n 5)) 0))))
+(defn main [] : int
+  (println (f 10))
+  0)

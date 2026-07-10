@@ -1,0 +1,29 @@
+;; U0 oracle (cps-backend-unification-plan): direct-vs-CPS value-equality net.
+;; Backend: --enable=cps-backend (CT-IR; falls back to emit_cps.c today)
+;; This program is one of a cps-oracle-shift0 / cps-oracle-shift0-cps twin pair sharing one input
+;; expected.stdout; the value MUST stay equal under both backends across every
+;; phase of the port. See docs/upcoming/v2/cps-backend-unification-u0-inventory.md.
+;;
+;; CPS-IR-to-C backend, N6.2 tail: shift0.  Built with --enable=cps-backend.
+;;
+;; shift0 differs from shift in exactly one way: it does NOT reinstall the
+;; delimiting prompt when it captures the continuation.  The CPS IR reuses the
+;; CT_SHIFT node with a `shift0` flag; emit_shift lowers it to `dk_shift0`
+;; instead of `dk_shift`.  Everything else (the lifted shift-body helper, its
+;; env, the receiver application) is shared with plain shift.
+;;
+;; Two nested resets exercise the delimiter behaviour: `deep`'s shift0 is
+;; delimited by `deep`'s own reset, and `deep` runs under `outer`'s reset.  The
+;; graduation invariant is direct == cps -- the CPS lowering must reproduce the
+;; direct emitter's shift0 semantics exactly -- and it holds here (both paths
+;; print 105).
+
+(defn deep [] : int
+  (reset (+ 10 (shift0 (fn [v : int] v) 5))))
+
+(defn outer [] : int
+  (reset (+ 100 (deep))))
+
+(defn main [] : int
+  (println (outer))
+  0)

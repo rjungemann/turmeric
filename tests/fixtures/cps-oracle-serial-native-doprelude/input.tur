@@ -1,0 +1,24 @@
+;; U4 oracle: NATIVE serial do-prelude context in a colored helper.
+;; Backend: default backend (emit_cps.c)
+;; The prelude (println "prelude-ran") runs once at capture time; the 0-arg tail
+;; calls (tick), (tock) become ignore-value frames marshaled under the "<fn>$0"
+;; side (a _skcall wrapper `return f()` + a _skreg SkReg).  On resume each runs
+;; its call regardless of the resumed value; the sequence runs tick then tock,
+;; and the reset yields tock's value.  rt5 forces a real serialize round-trip.
+;;   run-it: clone-free save/resume -> tock() = 2 (resume value 5 ignored).
+;;
+(defn tick [] : int 1)
+(defn tock [] : int 2)
+(defn rt5 [k] : int
+  (tur_serial_cont_resume
+    (tur_serial_cont_deserialize (tur_serial_cont_serialize k)) 5))
+(defn run-it [] : int
+  (serial-reset
+    (do
+      (println "prelude-ran")
+      (serial-shift rt5 0)
+      (tick)
+      (tock))))
+(defn main [] : int
+  (println (run-it))
+  0)

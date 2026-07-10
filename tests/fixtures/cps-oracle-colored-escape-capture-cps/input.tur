@@ -1,0 +1,13 @@
+;; U2 oracle (cps-backend-unification): a COLORED fn with a CAPTURING escape.
+;; Backend: --enable=cps-backend (capturing escape delegated via CT_LETRAW -- U2)
+;; The escape receiver (fn [k] (+ 1 (k n))) captures the enclosing param n.
+;; The fn is colored by its reset/shift and CPS-emitted; the escape is
+;; delegated to the direct emitter via CT_LETRAW, and collect_caps walks the
+;; receiver free vars (n) into the lifted continuation env.  direct == cps.
+;;
+(defn f [n : int] : int
+  (+ (reset (shift (fn [v] v) 10))
+     (escape (fn [k] (+ 1 (k n))))))
+(defn main [] : int
+  (println (f 5))
+  0)

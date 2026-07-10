@@ -87,10 +87,45 @@ typedef enum CTermKind {
                       * The RHS is a source Expr (rc/of, rc/drop, ...) emitted by
                       * the direct emitter (emit_value); the owning value stays a
                       * local and never crosses a DK slot. See emit_cps_ir.c. */
+    CT_CLONEABLE,    /* U3 Shape 1: (cloneable-reset (cloneable-shift receiver val))
+                      * with a TRIVIAL (identity) continuation -- alloc an identity
+                      * cloneable_cont, call receiver, bind reset value, continue. */
     CT_UNSUPPORTED,  /* a source form outside the CPS2 subset (carries a reason) */
 } CTermKind;
 
 typedef struct CTerm CTerm;
+
+/* U3 Shape 2: one context frame around a cloneable-shift, reified as a DK frame.
+ * Two frame kinds, distinguished by which of `op` / `call_fn` is set:
+ *   - Arithmetic frame (`op` != NULL, `call_fn` == NULL): `(<op> <operand> [])`
+ *     for `op` in "+"/"-"/"*"/"/"; `operand` is the other (int-atom) operand
+ *     captured into the frame env; `hole_left` is true iff the shift is the left
+ *     operand.
+ *   - Call frame (`call_fn` != NULL, `op` == NULL): a call to a top-level
+ *     uncolored int-returning fn.  `ignore_value` distinguishes two forms:
+ *       * false -- a 1-arg hole call `(f [])`: the hole is the sole argument
+ *         (no captured env, env passed as 0), `hole_left` true.
+ *       * true  -- a 0-arg ignore-value tail `(f)` from a do-sequence: the frame
+ *         runs `f()` on resume regardless of the resumed value (no env).
+ * Only an arithmetic frame carries a captured env operand; call frames pass env
+ * 0.  Frames are stored outermost-first (matching the dk_frame push order). */
+typedef struct CloneFrame {
+    const char    *op;
+    const Binding *call_fn;
+    bool           ignore_value;
+    CAtom          operand;
+    bool           hole_left;
+} CloneFrame;
+
+/* U3 Shape 2 (let-bearing context): one pure `let` binding sitting in the
+ * cloneable context spine.  `init` is a shift-free scalar expression evaluated
+ * once at the reset site (direct-emitted); `binding` names the C local so the
+ * captured frame operands that reference it resolve.  Recorded outermost-first
+ * (source order). */
+typedef struct CloneLet {
+    const Binding *binding;
+    const Expr    *init;
+} CloneLet;
 
 /* One clause of a (possibly multi-case) handle: an effect and its handler body,
  * binding the effect's params + the resumable continuation `k`. */
@@ -136,6 +171,32 @@ struct CTerm {
                  CVar x; CTerm *body; }                                   perform;
         struct { CAtom k; CAtom v; CVar x; CTerm *body; }                 resume;
         struct { CVar x; const Expr *e; CTerm *body; }                    letraw;
+        /* U3 cloneable (multi-shot).  `receiver` is a named, uncolored top-level
+         * fn called with the fresh cloneable_cont handle; its result is the reset
+         * value bound to x; then run body.
+         *   n_frames == 0: Shape 1 -- identity continuation, no dk_copy_range.
+         *   n_frames >= 1: Shape 2 -- an arithmetic context `(<op> <operand> ...
+         *     [])` around the shift (outermost-first), each frame reified as a DK
+         *     frame so the captured continuation deep-clones (dk_copy_range).
+         * Optional context enrichers (both fall through to delegation otherwise):
+         *   lets / n_lets: pure `let` prelude bindings emitted as C locals at the
+         *     reset site before the frame operands (which may reference them).
+         *   if_cond != NULL: a single `if` branch point in the context.  The
+         *     shift-bearing arm rides the frame chain; the pure arm (if_pure) is
+         *     direct-emitted on the other branch.  if_when true => the shift arm is
+         *     the `then` arm (C test `if (cond)`), false => `if (!(cond))`. */
+        /* `serial` selects the marshalable (serial-reset) lowering instead of the
+         * multi-shot (cloneable-reset) one: same frame chain, but the frames use
+         * the shared tagged marshaler (`__sk_frame_for_tag`) and the shift body
+         * hands the receiver the copied DK chain directly (no cloneable_cont wrap),
+         * so the captured continuation round-trips through save-cont!/resume-cont!.
+         * The native serial path currently covers only arithmetic-frame contexts
+         * (n_frames >= 1, no lets/if/call frames); everything else delegates. */
+        struct { CVar x; const Binding *receiver; bool serial;
+                 CloneLet *lets; uint32_t n_lets;
+                 CloneFrame *frames; uint32_t n_frames;
+                 const Expr *if_cond; const Expr *if_pure; bool if_when;
+                 CTerm *body; }                                           cloneable;
         struct { const char *why; }                                       unsupported;
     } as;
 };

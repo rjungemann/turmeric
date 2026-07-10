@@ -1,0 +1,14 @@
+;; U3 oracle: native Shape 2 cloneable with a CAPTURED (var) frame operand.
+;; Backend: --enable=cps-backend (native Shape 2, captured var operand)
+;; (cloneable-reset (+ n (cloneable-shift k-id 0))) -- the frame operand n is a
+;; parameter (not a literal); it is read once at the reset site and rides the DK
+;; frame env.  Emitted natively (dk_frame(ccctx, (intptr_t)(n), ...)).  Multi-shot:
+;; make 3, clone+resume 5 -> 3+5 = 8, then resume 100 -> 3+100 = 103.  direct == cps.
+;;
+(defn k-id [k] : int k)
+(defn make [n : int] : int (cloneable-reset (+ n (cloneable-shift k-id 0))))
+(defn main [] : int
+  (let [c (make 3)]
+    (println (tur_cloneable_cont_resume (tur_cloneable_cont_clone c) 5))
+    (println (tur_cloneable_cont_resume c 100)))
+  0)

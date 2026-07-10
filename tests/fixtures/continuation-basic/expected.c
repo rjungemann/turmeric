@@ -905,6 +905,15 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
  * ignoring the captured sub-continuation (Turmeric shift never resumes it). */
 static intptr_t __dk_abort_body(intptr_t env, DK *subk) { (void)subk; return env; }
 
+/* base-shift escape-reset context (setjmp/longjmp abort) */
+typedef struct tur_shift_reset_ctx {
+    jmp_buf buf;
+    int64_t result;  /* f(operand), set by an abortive shift before longjmp */
+    struct tur_shift_reset_ctx *prev; /* nested resets */
+} tur_shift_reset_ctx;
+
+static __thread tur_shift_reset_ctx *tur_cur_shift_reset = NULL;
+
 /* Phase 19: Algebraic effect handler chain */
 typedef struct { bool consumed; void *origin_fiber; } TurContK;
 

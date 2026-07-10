@@ -131,7 +131,68 @@ static bool uses_callcc(const Expr *e) {
         case EX_CALL:
             for (uint32_t i = 0; i < e->as.call_.n_args; i++)
                 if (uses_callcc(e->as.call_.args[i])) return true;
+            return uses_callcc(e->as.call_.fn_expr);
+        /* Control forms and value wrappers that can nest a (call/cc f)/(escape f)
+         * -- omitting any of these left the escape-continuation prelude ungated
+         * (an "unknown type name 'tur_escape_cont'" build error) when an escape
+         * hid inside a shift body, handler case, match arm, etc.  Mirrors the
+         * complete expr walk (expr_collect_effects). */
+        case EX_MATCH:
+            if (uses_callcc(e->as.match_.scrutinee)) return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                if (uses_callcc(e->as.match_.arms[i].guard) ||
+                    uses_callcc(e->as.match_.arms[i].body)) return true;
             return false;
+        case EX_SHIFT:  return uses_callcc(e->as.shift_.k_fn)  || uses_callcc(e->as.shift_.body);
+        case EX_SHIFT0: return uses_callcc(e->as.shift0_.k_fn) || uses_callcc(e->as.shift0_.body);
+        case EX_CLONEABLE_RESET: return uses_callcc(e->as.cloneable_reset_.body);
+        case EX_CLONEABLE_SHIFT: return uses_callcc(e->as.cloneable_shift_.k_fn) ||
+                                        uses_callcc(e->as.cloneable_shift_.body);
+        case EX_SERIAL_RESET:    return uses_callcc(e->as.serial_reset_.body);
+        case EX_SERIAL_SHIFT:    return uses_callcc(e->as.serial_shift_.k_fn) ||
+                                        uses_callcc(e->as.serial_shift_.body);
+        case EX_PERFORM:
+            if (e->as.perform_.perform)
+                for (uint32_t i = 0; i < e->as.perform_.perform->n_args; i++)
+                    if (uses_callcc(e->as.perform_.perform->args[i])) return true;
+            return false;
+        case EX_HANDLE:
+        case EX_HANDLER_LIT:
+            if (e->as.handle_.handle) {
+                HandleExpr *h = e->as.handle_.handle;
+                if (uses_callcc(h->body)) return true;
+                for (uint8_t i = 0; i < h->n_cases; i++)
+                    if (uses_callcc(h->cases[i].body)) return true;
+            }
+            return false;
+        case EX_RESUME:
+            return e->as.resume_.resume &&
+                   (uses_callcc(e->as.resume_.resume->k) || uses_callcc(e->as.resume_.resume->value));
+        case EX_DISCONTINUE:
+            return e->as.discontinue_.discontinue &&
+                   (uses_callcc(e->as.discontinue_.discontinue->k) ||
+                    uses_callcc(e->as.discontinue_.discontinue->exception));
+        case EX_WITH_HANDLER:  return uses_callcc(e->as.with_handler_.handler) ||
+                                      uses_callcc(e->as.with_handler_.body);
+        case EX_ASYNC:  return uses_callcc(e->as.async_.fn_expr);
+        case EX_AWAIT:  return uses_callcc(e->as.await_.fut_expr);
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                if (uses_callcc(e->as.make_struct_.field_values[i])) return true;
+            return false;
+        case EX_GET_FIELD: return uses_callcc(e->as.get_field_.struct_expr);
+        case EX_SET_FIELD: return uses_callcc(e->as.set_field_.receiver) ||
+                                  uses_callcc(e->as.set_field_.value);
+        case EX_REF:          return uses_callcc(e->as.ref_.expr);
+        case EX_DEREF:        return uses_callcc(e->as.deref_.expr);
+        case EX_BORROW_IMMUT: return uses_callcc(e->as.borrow_immut_.expr);
+        case EX_BORROW_MUT:   return uses_callcc(e->as.borrow_mut_.expr);
+        case EX_ASCRIBE:      return uses_callcc(e->as.ascribe_.inner);
+        case EX_REINTERPRET:  return uses_callcc(e->as.reinterpret_.expr);
+        case EX_CAST:         return uses_callcc(e->as.cast_.expr);
+        case EX_FN_TO_FAT:    return uses_callcc(e->as.fn_to_fat_.inner);
+        case EX_POLY_TO_FAT:  return uses_callcc(e->as.poly_to_fat_.inner);
+        case EX_POLY_WRAP:    return uses_callcc(e->as.poly_wrap_.inner);
         default:
             return false;
     }
@@ -333,28 +394,92 @@ static char *emit_first_shift(EmitCtx *ctx, Buf *body, const Expr *e,
     return NULL;
 }
 
+/* Out-of-subset (branch-bearing) base reset -> setjmp/longjmp escape lowering.
+ * The DK abort-value model (emit_first_shift) only handles a statically-first
+ * shift; a shift inside an `if` branch needs to abort C control flow from
+ * inside the branch, which base shift's abortive semantics licenses.  The reset
+ * establishes a setjmp landing pushed on the tur_cur_shift_reset stack; the body
+ * runs with ctx->in_shift_escape set so each base shift computes f(operand),
+ * stores it, and longjmps here.  A body that completes without shifting delivers
+ * its ordinary value.  Returns NULL (caller degrades) when the delimited value
+ * would not round-trip through the int64 result slot (e.g. a float reset). */
+static char *emit_cps_reset_escape(EmitCtx *ctx, Buf *body, const Expr *e) {
+    const Expr *rb = e->as.reset_.body;
+    if (!ty_intptr_safe(e->type.kind)) return NULL;
+    const char *rty = emit_type_c_name(ctx, e->type);
+    char *cv  = fresh_tmp(ctx);   /* the reset context */
+    char *res = fresh_tmp(ctx);   /* the reset result */
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_shift_reset_ctx %s;\n", cv);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s.prev = tur_cur_shift_reset;\n", cv);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_cur_shift_reset = &%s;\n", cv);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s %s;\n", rty, res);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "if (setjmp(%s.buf) == 0) {\n", cv);
+    ctx->indent++;
+    ctx->in_shift_escape = true;    /* base shifts in rb now abort to `cv` */
+    char *bv = emit_value(ctx, body, rb);
+    ctx->in_shift_escape = false;
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s = %s;\n", res, bv);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_cur_shift_reset = %s.prev;\n", cv);
+    free(bv);
+    ctx->indent--;
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "} else {\n");
+    ctx->indent++;
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s = (%s)%s.result;\n", res, rty, cv);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_cur_shift_reset = %s.prev;\n", cv);
+    ctx->indent--;
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "}\n");
+    free(cv);
+    return res;
+}
+
 char *emit_cps_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
     const Expr *rb = e->as.reset_.body;
     /* No shift bound to this reset -> nothing for the substrate to do. */
     if (!reaches_shift(rb)) return NULL;
-    /* Outside the supported subset -> let the caller fall back cleanly. */
-    if (!can_lower(rb)) return NULL;
 
-    bool is_shift0 = false;
-    char *fv = emit_first_shift(ctx, body, rb, &is_shift0);
-    if (!fv) return NULL;   /* defensive: should not happen after can_lower */
+    /* A base reset establishes a fresh delimited context: shifts inside it are
+     * bound to THIS reset, not to any enclosing escape-reset.  Clear the escape
+     * flag for the duration (so a nested DK-lowered reset computes its abort
+     * value via emit_first_shift, not a longjmp) and restore it on exit. */
+    bool saved_escape = ctx->in_shift_escape;
+    ctx->in_shift_escape = false;
+    char *result;
 
-    /* Run the delimited computation on the substrate: a single prompt and a
-     * shift node whose body returns the precomputed abort value. */
-    const char *shift_ctor = is_shift0 ? "dk_shift0" : "dk_shift";
-    char *result = fresh_tmp(ctx);
-    indent_buf(body, ctx->indent);
-    buf_printf(body,
-        "%s %s = (%s)dk_run(%s(1, __dk_abort_body, (intptr_t)(%s), "
-        "dk_prompt(1, dk_done())), 0);\n",
-        emit_type_c_name(ctx, e->type), result, emit_type_c_name(ctx, e->type),
-        shift_ctor, fv);
-    free(fv);
+    if (can_lower(rb)) {
+        /* Run the delimited computation on the substrate: a single prompt and a
+         * shift node whose body returns the precomputed abort value. */
+        bool is_shift0 = false;
+        char *fv = emit_first_shift(ctx, body, rb, &is_shift0);
+        if (!fv) { ctx->in_shift_escape = saved_escape; return NULL; }
+        const char *shift_ctor = is_shift0 ? "dk_shift0" : "dk_shift";
+        result = fresh_tmp(ctx);
+        indent_buf(body, ctx->indent);
+        buf_printf(body,
+            "%s %s = (%s)dk_run(%s(1, __dk_abort_body, (intptr_t)(%s), "
+            "dk_prompt(1, dk_done())), 0);\n",
+            emit_type_c_name(ctx, e->type), result, emit_type_c_name(ctx, e->type),
+            shift_ctor, fv);
+        free(fv);
+    } else {
+        /* Branch-bearing reset: the abort-value model can't pin the shift, so
+         * lower via the setjmp/longjmp escape path (correct abortive semantics)
+         * instead of degrading to plain body-eval.  Returns NULL for a non-
+         * int-slot reset, and the caller then degrades as before. */
+        result = emit_cps_reset_escape(ctx, body, e);
+    }
+
+    ctx->in_shift_escape = saved_escape;
     return result;
 }
 
@@ -1659,13 +1784,6 @@ static bool uses_serial_dk(const Expr *e) {
     }
 }
 
-bool emit_cps_program_uses_serial_dk(const Expr *program) {
-    g_sk_scan_root = program;   /* so sk_can_lower can scan for Serializable instances */
-    bool r = uses_serial_dk(program);
-    g_sk_scan_root = NULL;
-    return r;
-}
-
 /* True if the program contains any serial-shift/serial-reset, lowerable or not.
  * Gates emission of the DK machine + serial marshaling runtime so the stdlib
  * save-cont!/resume-cont! references never dangle. */
@@ -1680,7 +1798,7 @@ bool emit_cps_program_contains_serial(const Expr *program) {
 
 /* Serial marshaling runtime: the fixed tagged context frames + the resume /
  * serialize / deserialize builtins. Emitted after the DK machine prelude,
- * gated on emit_cps_program_uses_serial_dk. */
+ * gated on emit_cps_program_contains_serial. */
 void emit_cps_serial_runtime_prelude(Buf *out) {
     buf_puts(out,
 "/* cps-transform-plan (CPS10 / CPS5.4): serializable continuations.\n"

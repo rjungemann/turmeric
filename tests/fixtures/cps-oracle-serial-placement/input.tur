@@ -1,0 +1,19 @@
+;; U4 oracle: serial-reset in a non-main HELPER function (placement, not eviction).
+;; Backend: default backend (emit_cps.c)
+;; Before U4, a colored function containing a serial-reset hit CT_UNSUPPORTED and
+;; the WHOLE function evicted to direct emit.  U4 makes the serial region
+;; delegatable via CT_LETRAW (reusing the proven serial marshaling runtime), so
+;; the enclosing colored function stays CPS-emitted (its serial region delegated)
+;; instead of wholly evicting.  The observable result is identical (direct == cps);
+;; the change is placement, verified by the value round-trip.
+;; run-it: serial-reset (dbl (serial-shift rt5 0)) -> dbl(5) = 10.
+;;
+(load "stdlib/workflow.tur")
+(defn dbl [x : int] : int (* x 2))
+(defn rt5 [k : ptr<void>] : int
+  (resume-cont! (save-cont! k) 5))
+(defn run-it [] : int
+  (serial-reset (dbl (serial-shift rt5 0))))
+(defn main [] : int
+  (println (run-it))
+  0)

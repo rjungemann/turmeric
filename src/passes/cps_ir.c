@@ -254,6 +254,523 @@ static CTerm *build_letraw(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     return t;
 }
 
+/* U3 Shape 1: try to build a native (identity-continuation) cloneable node for
+ * (cloneable-reset (cloneable-shift receiver val)) -- the shift IS the whole
+ * reset body, so the captured continuation is the identity (no dk_copy_range).
+ * Restricted to a named, uncolored top-level fn receiver; returns NULL for any
+ * other shape (a non-trivial continuation, a closure/indirect receiver, a
+ * colored receiver), so the caller falls back to the CT_LETRAW delegation. */
+/* A named, uncolored top-level fn receiver of a cloneable-shift; NULL otherwise. */
+static const Binding *cloneable_named_receiver(CpsB *b, const Expr *shift) {
+    const Expr *kf = ascribe_peel(shift->as.cloneable_shift_.k_fn);
+    if (!kf || kf->kind != EX_VAR || !kf->as.var.binding) return NULL;
+    const Binding *recv = kf->as.var.binding;
+    if (!recv->is_global) return NULL;          /* a top-level fn */
+    if (callee_colored(b, recv)) return NULL;   /* uncolored receiver only */
+    return recv;
+}
+
+static bool cloneable_op_supported(const char *op) {
+    return op && (strcmp(op, "+") == 0 || strcmp(op, "-") == 0 ||
+                  strcmp(op, "*") == 0 || strcmp(op, "/") == 0);
+}
+
+static bool safe_to_delegate(CpsB *b, const Expr *e);   /* fwd (defined below) */
+
+/* True if `e` contains a cloneable-shift reachable through the supported context
+ * spine -- arithmetic binops, calls, pure lets, and an if branch point --
+ * mirroring the direct emitter's reaches_shift_kind for EX_CLONEABLE_SHIFT.  Any
+ * nested control form (a further reset/shift, an fn/closure body) self-delimits
+ * and stops the descent, so a nested cloneable-reset is not descended. */
+static bool cloneable_ctx_reaches_shift(const Expr *e) {
+    e = ascribe_peel(e);
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_CLONEABLE_SHIFT:
+            return true;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (cloneable_ctx_reaches_shift(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (cloneable_ctx_reaches_shift(e->as.call_.args[i])) return true;
+            return false;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (cloneable_ctx_reaches_shift(e->as.let_.bindings[i].init)) return true;
+            return cloneable_ctx_reaches_shift(e->as.let_.body);
+        case EX_IF:
+            return cloneable_ctx_reaches_shift(e->as.if_.cond)
+                || cloneable_ctx_reaches_shift(e->as.if_.then_)
+                || cloneable_ctx_reaches_shift(e->as.if_.else_or_null);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (cloneable_ctx_reaches_shift(e->as.do_.items[i])) return true;
+            return false;
+        default:
+            return false;
+    }
+}
+
+#define CL_IR_MAX_FRAMES 8
+#define CL_IR_MAX_LETS   8
+
+/* A pure `let` binding is admissible as cloneable-context prelude iff its type is
+ * a simple scalar local (int/bool/nil/cstr/float) -- matching the direct
+ * emitter's ty_simple_local gate. */
+static bool clone_let_ty_ok(TypeKind k) {
+    return k == TY_INT || k == TY_BOOL || k == TY_NIL ||
+           k == TY_CSTR || k == TY_FLOAT;
+}
+
+/* U3 native cloneable: (cloneable-reset <ctx>) where <ctx> is a context spine
+ * bottoming out in a (cloneable-shift receiver val) with a named uncolored
+ * receiver.  The spine may contain, in any nesting:
+ *   - arithmetic frames `(<op> <operand> ... [])` reified as DK frames
+ *     (outermost-first); n_frames == 0 is Shape 1 (identity continuation, no
+ *     dk_copy_range), >= 1 is Shape 2 (dk_copy_range);
+ *   - pure `let` bindings (shift-free scalar inits, direct-emitted at the reset
+ *     site as C locals so captured frame operands referencing them resolve);
+ *   - one `if` branch point (pure condition; the shift-bearing arm rides the
+ *     frame chain, the other arm is direct-emitted on the opposite branch).
+ * Returns NULL for any richer shape (closure/colored receiver, non-atom or
+ * non-int operand, a second `if`, a non-delegatable init/cond/pure arm, or
+ * overflow of the frame/let caps) -- the caller then falls back to the CT_LETRAW
+ * delegation. */
+static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
+    const Expr *cur = ascribe_peel(e->as.cloneable_reset_.body);
+    CloneFrame frames[CL_IR_MAX_FRAMES];
+    CloneLet   lets[CL_IR_MAX_LETS];
+    uint32_t nf = 0, nl = 0;
+    const Expr *if_cond = NULL, *if_pure = NULL;
+    bool if_when = true, saw_if = false;
+
+    for (;;) {
+        cur = ascribe_peel(cur);
+        if (!cur) return NULL;
+
+        /* Arithmetic frame: single-hole int binop. */
+        if (cur->kind == EX_BUILTIN && cur->as.builtin.n == 2
+            && cur->as.builtin.spec && cur->type.kind == TY_INT
+            && cloneable_op_supported(cur->as.builtin.spec->c_op)) {
+            const Expr *a0 = ascribe_peel(cur->as.builtin.args[0]);
+            const Expr *a1 = ascribe_peel(cur->as.builtin.args[1]);
+            bool h0 = cloneable_ctx_reaches_shift(a0);
+            bool h1 = cloneable_ctx_reaches_shift(a1);
+            if (h0 == h1) return NULL;               /* need exactly one hole side */
+            const Expr *other = h0 ? a1 : a0;
+            if (!other || !is_atomic(other) || other->type.kind != TY_INT) return NULL;
+            if (nf >= CL_IR_MAX_FRAMES) return NULL;
+            frames[nf].op           = cur->as.builtin.spec->c_op;  /* stable string */
+            frames[nf].call_fn      = NULL;
+            frames[nf].ignore_value = false;
+            frames[nf].operand      = atom_of(other);
+            frames[nf].hole_left    = h0;
+            nf++;
+            cur = h0 ? a0 : a1;                       /* descend the hole side */
+            continue;
+        }
+
+        /* Call frame: a 1-arg call `(f [])` to a top-level uncolored int->int fn;
+         * the hole is the sole argument, so there is no captured env.  (The direct
+         * emitter drops a 2-arg call context onto the legacy identity path, so we
+         * leave those to the delegation to keep direct == cps.) */
+        if (cur->kind == EX_CALL && cur->as.call_.n_args == 1
+            && cur->as.call_.fn_binding && !cur->as.call_.fn_expr) {
+            const Binding *fb = cur->as.call_.fn_binding;
+            if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 1) return NULL;
+            if (fb->closure_fn_binding) return NULL;         /* not a fat closure */
+            if (callee_colored(b, fb)) return NULL;          /* uncolored target */
+            if (cur->type.kind != TY_INT) return NULL;       /* result: int */
+            if (fb->type.as.fn.arg_kinds[0] != TY_INT) return NULL;  /* arg: int */
+            const Expr *a0 = ascribe_peel(cur->as.call_.args[0]);
+            if (!cloneable_ctx_reaches_shift(a0)) return NULL;   /* sole arg is the hole */
+            if (nf >= CL_IR_MAX_FRAMES) return NULL;
+            memset(&frames[nf], 0, sizeof(CloneFrame));
+            frames[nf].op        = NULL;
+            frames[nf].call_fn   = fb;
+            frames[nf].operand.kind = CA_INT;   /* unused placeholder (env passed as 0) */
+            frames[nf].operand.ty   = TY_INT;
+            frames[nf].hole_left = true;         /* the hole is the sole arg */
+            nf++;
+            cur = a0;                            /* descend into the hole arg */
+            continue;
+        }
+
+        /* do-sequence with a statement-position shift:
+         *   (do PRELUDE... (cloneable-shift receiver v) TAIL...)
+         * The prelude items run once at capture time (side-effect-only, binding-
+         * less lets); the shift must be the do-item itself; each tail item is a
+         * 0-arg call to a top-level uncolored int fn, reified as an ignore-value
+         * frame (runs `f()` on resume regardless of the resumed value).  Restricted
+         * to the whole reset body (no outer frames yet) and no `if`, matching the
+         * shape the direct emitter supports; the 1-arg ignore-value tail crashes
+         * the direct backend, so it stays on delegation. */
+        if (cur->kind == EX_DO && nf == 0 && !saw_if) {
+            uint32_t N = cur->as.do_.n;
+            int32_t m = -1;
+            for (uint32_t i = 0; i < N; i++) {
+                if (cloneable_ctx_reaches_shift(cur->as.do_.items[i])) {
+                    if (m >= 0) return NULL;             /* at most one hole */
+                    m = (int32_t)i;
+                }
+            }
+            if (m < 0) return NULL;
+            const Expr *shift_item = ascribe_peel(cur->as.do_.items[m]);
+            if (!shift_item || shift_item->kind != EX_CLONEABLE_SHIFT) return NULL;
+            /* Prelude items [0, m): direct-emitted for side effect at the reset site. */
+            for (int32_t i = 0; i < m; i++) {
+                const Expr *pre = cur->as.do_.items[i];
+                if (cloneable_ctx_reaches_shift(pre)) return NULL;
+                if (!safe_to_delegate(b, pre)) return NULL;
+                if (nl >= CL_IR_MAX_LETS) return NULL;
+                lets[nl].binding = NULL;                 /* side-effect prelude */
+                lets[nl].init    = pre;
+                nl++;
+            }
+            /* Tail items (m, N): 0-arg ignore-value frames.  Record in reverse so
+             * the first tail item is innermost (runs first on resume) and the last
+             * is outermost (runs last, its value is the reset's value). */
+            for (int32_t i = (int32_t)N - 1; i > m; i--) {
+                const Expr *tail = ascribe_peel(cur->as.do_.items[i]);
+                if (!tail || tail->kind != EX_CALL ||
+                    !tail->as.call_.fn_binding || tail->as.call_.fn_expr) return NULL;
+                const Binding *fb = tail->as.call_.fn_binding;
+                if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 0) return NULL;
+                if (tail->as.call_.n_args != 0) return NULL;
+                if (fb->closure_fn_binding) return NULL;    /* not a fat closure */
+                if (callee_colored(b, fb)) return NULL;     /* uncolored target */
+                if (tail->type.kind != TY_INT) return NULL; /* result: int */
+                if (nf >= CL_IR_MAX_FRAMES) return NULL;
+                memset(&frames[nf], 0, sizeof(CloneFrame));
+                frames[nf].op           = NULL;
+                frames[nf].call_fn      = fb;
+                frames[nf].ignore_value = true;
+                frames[nf].operand.kind = CA_INT;   /* unused (env passed as 0) */
+                frames[nf].operand.ty   = TY_INT;
+                frames[nf].hole_left    = true;
+                nf++;
+            }
+            cur = shift_item;                       /* the shift; loop exits below */
+            continue;
+        }
+
+        /* Pure `let` prelude: inits shift-free + scalar, body carries the hole. */
+        if (cur->kind == EX_LET) {
+            /* Keep `let` and `if` mutually exclusive in one native lowering: a
+             * `let` above an `if` has its binding referenced by the pure arm, but
+             * the prelude local is emitted only inside the shift branch -- the
+             * mixed shape falls through to the (still correct) delegation. */
+            if (saw_if) return NULL;
+            const Expr *lbody = cur->as.let_.body;
+            if (!cloneable_ctx_reaches_shift(lbody)) return NULL;
+            for (uint32_t i = 0; i < cur->as.let_.n; i++) {
+                const Expr    *init = cur->as.let_.bindings[i].init;
+                const Binding *bd   = cur->as.let_.bindings[i].binding;
+                if (cloneable_ctx_reaches_shift(init)) return NULL;
+                if (!bd || !clone_let_ty_ok(bd->type.kind)) return NULL;
+                if (!safe_to_delegate(b, init)) return NULL;   /* pure, emit_value-able */
+                if (nl >= CL_IR_MAX_LETS) return NULL;
+                lets[nl].binding = bd;
+                lets[nl].init    = init;
+                nl++;
+            }
+            cur = lbody;
+            continue;
+        }
+
+        /* One `if` branch point: pure condition, exactly one shift-bearing arm. */
+        if (cur->kind == EX_IF) {
+            if (saw_if) return NULL;                  /* only one branch point */
+            if (nl > 0) return NULL;                  /* let+if mix -> delegation */
+            const Expr *cond = cur->as.if_.cond;
+            const Expr *thn  = cur->as.if_.then_;
+            const Expr *els  = cur->as.if_.else_or_null;
+            if (!cond || !thn || !els) return NULL;   /* need both arms */
+            if (cloneable_ctx_reaches_shift(cond)) return NULL;
+            if (!safe_to_delegate(b, cond)) return NULL;
+            bool ht = cloneable_ctx_reaches_shift(thn);
+            bool he = cloneable_ctx_reaches_shift(els);
+            if (ht == he) return NULL;                /* exactly one shift arm */
+            const Expr *shift_arm = ht ? thn : els;
+            const Expr *pure_arm  = ht ? els : thn;
+            if (cloneable_ctx_reaches_shift(pure_arm)) return NULL;   /* defensive */
+            if (!safe_to_delegate(b, pure_arm)) return NULL;
+            if_cond = cond; if_pure = pure_arm; if_when = ht; saw_if = true;
+            cur = shift_arm;
+            continue;
+        }
+
+        break;
+    }
+
+    if (!cur || cur->kind != EX_CLONEABLE_SHIFT) return NULL;
+    /* The shared DK runtime prelude (__dk_cont_fn / __dk_env_clone / __dk_env_drop,
+     * dk_copy_range) that native Shape 2 emits is gated by the direct emitter's
+     * cl_can_lower, which requires the shift to have no live captures at its site.
+     * Match that constraint: lowering a shift with live captures natively would
+     * reference prelude helpers the gate never emits (undeclared C names).  Such a
+     * shape stays on the delegation path, which matches the direct backend. */
+    if (cur->as.cloneable_shift_.n_live_captures != 0) return NULL;
+    const Binding *recv = cloneable_named_receiver(b, cur);
+    if (!recv) return NULL;
+
+    CTerm *t = new_term(b, CT_CLONEABLE);
+    t->as.cloneable.x = x;
+    t->as.cloneable.receiver = recv;
+    t->as.cloneable.n_frames = nf;
+    if (nf) {
+        CloneFrame *fa = arena_alloc(b->a, nf * sizeof(CloneFrame));
+        memcpy(fa, frames, nf * sizeof(CloneFrame));
+        t->as.cloneable.frames = fa;
+    } else {
+        t->as.cloneable.frames = NULL;
+    }
+    t->as.cloneable.n_lets = nl;
+    if (nl) {
+        CloneLet *la = arena_alloc(b->a, nl * sizeof(CloneLet));
+        memcpy(la, lets, nl * sizeof(CloneLet));
+        t->as.cloneable.lets = la;
+    } else {
+        t->as.cloneable.lets = NULL;
+    }
+    t->as.cloneable.if_cond = if_cond;
+    t->as.cloneable.if_pure = if_pure;
+    t->as.cloneable.if_when = if_when;
+    t->as.cloneable.body = rest;
+    return t;
+}
+
+/* U4 native serial: (serial-reset <arith-ctx> (serial-shift receiver v)) with a
+ * named uncolored fn receiver, arithmetic context frames only.  Structurally
+ * identical to the cloneable arithmetic Shape 2, but marshalable: the frames use
+ * the shared tagged marshaler and the shift hands the receiver the copied DK
+ * chain so save-cont!/resume-cont! round-trips.  Returns NULL for any richer
+ * shape (let/if/call/do context, non-atom or non-int operand, Shape 1 identity,
+ * a closure/colored receiver) -- the caller then falls back to the CT_LETRAW
+ * delegation, which owns the marshaling-registry (call-frame) cases. */
+static bool serial_reaches_shift(const Expr *e) {
+    e = ascribe_peel(e);
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_SERIAL_SHIFT:
+            return true;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (serial_reaches_shift(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (serial_reaches_shift(e->as.call_.args[i])) return true;
+            return false;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (serial_reaches_shift(e->as.let_.bindings[i].init)) return true;
+            return serial_reaches_shift(e->as.let_.body);
+        case EX_IF:
+            return serial_reaches_shift(e->as.if_.cond)
+                || serial_reaches_shift(e->as.if_.then_)
+                || serial_reaches_shift(e->as.if_.else_or_null);
+        default:
+            return false;
+    }
+}
+
+static const Binding *serial_named_receiver(CpsB *b, const Expr *shift) {
+    const Expr *kf = ascribe_peel(shift->as.serial_shift_.k_fn);
+    if (!kf || kf->kind != EX_VAR || !kf->as.var.binding) return NULL;
+    const Binding *recv = kf->as.var.binding;
+    if (recv->type.kind != TY_FN) return NULL;       /* a function value */
+    if (recv->closure_fn_binding) return NULL;       /* not a fat closure */
+    if (recv->is_global && callee_colored(b, recv)) return NULL;  /* uncolored global */
+    return recv;
+}
+
+static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
+    const Expr *cur = ascribe_peel(e->as.serial_reset_.body);
+    CloneFrame frames[CL_IR_MAX_FRAMES];
+    CloneLet   lets[CL_IR_MAX_LETS];
+    uint32_t nf = 0, nl = 0;
+    const Expr *if_cond = NULL, *if_pure = NULL;
+    bool if_when = true, saw_if = false;
+
+    for (;;) {
+        cur = ascribe_peel(cur);
+        if (!cur) return NULL;
+
+        /* Arithmetic frame: single-hole int binop -> shared tagged marshaler. */
+        if (cur->kind == EX_BUILTIN && cur->as.builtin.n == 2
+            && cur->as.builtin.spec && cur->type.kind == TY_INT
+            && cloneable_op_supported(cur->as.builtin.spec->c_op)) {
+            const Expr *a0 = ascribe_peel(cur->as.builtin.args[0]);
+            const Expr *a1 = ascribe_peel(cur->as.builtin.args[1]);
+            bool h0 = serial_reaches_shift(a0);
+            bool h1 = serial_reaches_shift(a1);
+            if (h0 == h1) return NULL;               /* need exactly one hole side */
+            const Expr *other = h0 ? a1 : a0;
+            if (!other || !is_atomic(other) || other->type.kind != TY_INT) return NULL;
+            if (nf >= CL_IR_MAX_FRAMES) return NULL;
+            memset(&frames[nf], 0, sizeof(CloneFrame));
+            frames[nf].op        = cur->as.builtin.spec->c_op;   /* stable string */
+            frames[nf].operand   = atom_of(other);
+            frames[nf].hole_left = h0;
+            nf++;
+            cur = h0 ? a0 : a1;                       /* descend the hole side */
+            continue;
+        }
+
+        /* Call frame: a 1-arg call `(f [])` to a top-level uncolored int->int fn;
+         * the hole is the sole argument (no captured env).  Emitted with a per-site
+         * wrapper + SkReg registration keyed by "<fn>$L" so the marshaler round-
+         * trips it.  (2-arg call frames need a serialized env operand and stay on
+         * the delegation for now.) */
+        if (cur->kind == EX_CALL && cur->as.call_.n_args == 1
+            && cur->as.call_.fn_binding && !cur->as.call_.fn_expr) {
+            const Binding *fb = cur->as.call_.fn_binding;
+            if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 1) return NULL;
+            if (fb->closure_fn_binding) return NULL;         /* not a fat closure */
+            if (callee_colored(b, fb)) return NULL;          /* uncolored target */
+            if (cur->type.kind != TY_INT) return NULL;       /* result: int */
+            if (fb->type.as.fn.arg_kinds[0] != TY_INT) return NULL;  /* arg: int */
+            const Expr *a0 = ascribe_peel(cur->as.call_.args[0]);
+            if (!serial_reaches_shift(a0)) return NULL;      /* sole arg is the hole */
+            if (nf >= CL_IR_MAX_FRAMES) return NULL;
+            memset(&frames[nf], 0, sizeof(CloneFrame));
+            frames[nf].op        = NULL;
+            frames[nf].call_fn   = fb;
+            frames[nf].operand.kind = CA_INT;   /* unused placeholder (env passed as 0) */
+            frames[nf].operand.ty   = TY_INT;
+            frames[nf].hole_left = true;         /* the hole is the sole arg */
+            nf++;
+            cur = a0;                            /* descend into the hole arg */
+            continue;
+        }
+
+        /* Pure `let` prelude (emit shared with cloneable): inits shift-free +
+         * scalar, body carries the hole.  Kept mutually exclusive with `if`. */
+        if (cur->kind == EX_LET) {
+            if (saw_if) return NULL;
+            const Expr *lbody = cur->as.let_.body;
+            if (!serial_reaches_shift(lbody)) return NULL;
+            for (uint32_t i = 0; i < cur->as.let_.n; i++) {
+                const Expr    *init = cur->as.let_.bindings[i].init;
+                const Binding *bd   = cur->as.let_.bindings[i].binding;
+                if (serial_reaches_shift(init)) return NULL;
+                if (!bd || !clone_let_ty_ok(bd->type.kind)) return NULL;
+                if (!safe_to_delegate(b, init)) return NULL;
+                if (nl >= CL_IR_MAX_LETS) return NULL;
+                lets[nl].binding = bd;
+                lets[nl].init    = init;
+                nl++;
+            }
+            cur = lbody;
+            continue;
+        }
+
+        /* One `if` branch point (emit shared with cloneable): pure condition,
+         * exactly one shift-bearing arm; the pure arm is direct-emitted. */
+        if (cur->kind == EX_IF) {
+            if (saw_if) return NULL;
+            if (nl > 0) return NULL;                  /* let+if mix -> delegation */
+            const Expr *cond = cur->as.if_.cond;
+            const Expr *thn  = cur->as.if_.then_;
+            const Expr *els  = cur->as.if_.else_or_null;
+            if (!cond || !thn || !els) return NULL;
+            if (serial_reaches_shift(cond)) return NULL;
+            if (!safe_to_delegate(b, cond)) return NULL;
+            bool ht = serial_reaches_shift(thn);
+            bool he = serial_reaches_shift(els);
+            if (ht == he) return NULL;                /* exactly one shift arm */
+            const Expr *shift_arm = ht ? thn : els;
+            const Expr *pure_arm  = ht ? els : thn;
+            if (serial_reaches_shift(pure_arm)) return NULL;
+            if (!safe_to_delegate(b, pure_arm)) return NULL;
+            if_cond = cond; if_pure = pure_arm; if_when = ht; saw_if = true;
+            cur = shift_arm;
+            continue;
+        }
+
+        /* do-sequence with a statement-position shift (mirrors the cloneable do
+         * branch): prelude items run once at capture (binding-less lets), 0-arg
+         * tail calls become ignore-value frames (marshaled under the "<fn>$0"
+         * side).  Whole reset body, no outer frames, no `if`. */
+        if (cur->kind == EX_DO && nf == 0 && !saw_if) {
+            uint32_t N = cur->as.do_.n;
+            int32_t m = -1;
+            for (uint32_t i = 0; i < N; i++) {
+                if (serial_reaches_shift(cur->as.do_.items[i])) {
+                    if (m >= 0) return NULL;             /* at most one hole */
+                    m = (int32_t)i;
+                }
+            }
+            if (m < 0) return NULL;
+            const Expr *shift_item = ascribe_peel(cur->as.do_.items[m]);
+            if (!shift_item || shift_item->kind != EX_SERIAL_SHIFT) return NULL;
+            for (int32_t i = 0; i < m; i++) {
+                const Expr *pre = cur->as.do_.items[i];
+                if (serial_reaches_shift(pre)) return NULL;
+                if (!safe_to_delegate(b, pre)) return NULL;
+                if (nl >= CL_IR_MAX_LETS) return NULL;
+                lets[nl].binding = NULL;                 /* side-effect prelude */
+                lets[nl].init    = pre;
+                nl++;
+            }
+            for (int32_t i = (int32_t)N - 1; i > m; i--) {
+                const Expr *tail = ascribe_peel(cur->as.do_.items[i]);
+                if (!tail || tail->kind != EX_CALL ||
+                    !tail->as.call_.fn_binding || tail->as.call_.fn_expr) return NULL;
+                const Binding *fb = tail->as.call_.fn_binding;
+                if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 0) return NULL;
+                if (tail->as.call_.n_args != 0) return NULL;
+                if (fb->closure_fn_binding) return NULL;    /* not a fat closure */
+                if (callee_colored(b, fb)) return NULL;     /* uncolored target */
+                if (tail->type.kind != TY_INT) return NULL; /* result: int */
+                if (nf >= CL_IR_MAX_FRAMES) return NULL;
+                memset(&frames[nf], 0, sizeof(CloneFrame));
+                frames[nf].op           = NULL;
+                frames[nf].call_fn      = fb;
+                frames[nf].ignore_value = true;
+                frames[nf].operand.kind = CA_INT;   /* unused (env passed as 0) */
+                frames[nf].operand.ty   = TY_INT;
+                frames[nf].hole_left    = true;
+                nf++;
+            }
+            cur = shift_item;                       /* the shift; loop exits below */
+            continue;
+        }
+
+        break;
+    }
+
+    if (nf == 0) return NULL;                        /* Shape 1 serial -> delegate */
+    if (!cur || cur->kind != EX_SERIAL_SHIFT) return NULL;
+    const Binding *recv = serial_named_receiver(b, cur);
+    if (!recv) return NULL;
+
+    CTerm *t = new_term(b, CT_CLONEABLE);
+    t->as.cloneable.serial = true;
+    t->as.cloneable.x = x;
+    t->as.cloneable.receiver = recv;
+    t->as.cloneable.n_frames = nf;
+    CloneFrame *fa = arena_alloc(b->a, nf * sizeof(CloneFrame));
+    memcpy(fa, frames, nf * sizeof(CloneFrame));
+    t->as.cloneable.frames = fa;
+    t->as.cloneable.n_lets = nl;
+    if (nl) {
+        CloneLet *la = arena_alloc(b->a, nl * sizeof(CloneLet));
+        memcpy(la, lets, nl * sizeof(CloneLet));
+        t->as.cloneable.lets = la;
+    } else {
+        t->as.cloneable.lets = NULL;
+    }
+    t->as.cloneable.if_cond = if_cond;
+    t->as.cloneable.if_pure = if_pure;
+    t->as.cloneable.if_when = if_when;
+    t->as.cloneable.body = rest;
+    return t;
+}
+
 /* N6.1: a subexpression that can be emitted wholesale by the direct emitter
  * (via CT_LETRAW) because it neither threads a continuation nor could reach one:
  * it contains no syntactic control op AND no call to a colored (may-capture)
@@ -277,13 +794,70 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
         /* control operators: never delegatable (they thread a continuation). */
         case EX_PERFORM: case EX_HANDLE: case EX_RESUME: case EX_DISCONTINUE:
         case EX_RESET: case EX_SHIFT: case EX_SHIFT0:
-        case EX_CLONEABLE_RESET: case EX_CLONEABLE_SHIFT:
-        case EX_SERIAL_RESET: case EX_SERIAL_SHIFT:
-        case EX_ASYNC:
+        case EX_CLONEABLE_SHIFT:
+        case EX_SERIAL_SHIFT:
             return false;
+        /* U5 (cps-backend-unification): (async f) and (await fut) are self-
+         * contained runtime calls (tur_async_fiber / tur_await_future) -- they do
+         * NOT thread the caller's DK continuation (the future/result is an ordinary
+         * value, and the async thunk's own effects are handled in its fiber scope).
+         * Delegating them via CT_LETRAW reuses the proven fiber runtime and lets a
+         * colored function that ALSO awaits stay CPS-emitted instead of wholly
+         * evicting.  The delegated region is emitted by the direct emitter
+         * (emit_value -> EX_ASYNC/EX_AWAIT), the bound future/result becomes a local,
+         * and the CPS continuation runs after. */
+        case EX_ASYNC: case EX_AWAIT:
+            return true;
+        /* U3 (cps-backend-unification): a (cloneable-reset body) is a
+         * SELF-CONTAINED multi-shot delimited region.  The bare cloneable-shift
+         * captures the rest of its reset body (a continuation that escapes the
+         * shift expression), so it stays non-delegatable above; but the whole
+         * cloneable-reset is emitted as a unit by the direct emitter
+         * (emit_effects_cloneable_reset -> emit_cps_cloneable_reset), which owns
+         * the dk_copy_range deep-clone + capture clone/drop glue.  Delegating the
+         * reset via CT_LETRAW therefore reuses the proven multi-shot runtime and
+         * lets a colored function that contains a cloneable-reset stay CPS-emitted
+         * instead of wholly evicting.  The reset's value (often a continuation
+         * handle resumed later) is bound and the CPS continuation runs after. */
+        case EX_CLONEABLE_RESET:
+            return true;
+        /* U4 (cps-backend-unification): a (serial-reset body) is a SELF-CONTAINED
+         * marshalable delimited region, analogous to cloneable-reset but with the
+         * continuation serialized (save-cont!/resume-cont!) rather than deep-cloned.
+         * The whole region is emitted as a unit by the direct emitter
+         * (emit_effects_serial_reset -> emit_cps_serial_reset), which owns the
+         * serial marshaling runtime.  Delegating the reset via CT_LETRAW reuses
+         * that proven runtime and lets a colored function that contains a
+         * serial-reset stay CPS-emitted instead of wholly evicting (the serial
+         * runtime prelude is gated on *presence* of serial syntax, so the delegated
+         * helpers are always in scope).  The bare serial-shift stays non-delegatable
+         * above (it captures the rest of its reset body). */
+        case EX_SERIAL_RESET:
+            return true;
         /* nested fn defs: call-graph boundaries, delegatable as values. */
         case EX_FN_DEF: case EX_FN: case EX_CLOSURE:
             return is_delegatable_value(e);
+        /* U2 (cps-backend-unification): (call/cc f) / (escape f) is an
+         * UNDELIMITED escape whose continuation is captured at a *local* setjmp
+         * landing that emit_cps_callcc establishes inline -- it does NOT thread
+         * the DK continuation the way shift/perform do.  So delegating it via
+         * CT_LETRAW is sound: the escape's setjmp/longjmp landing sits before the
+         * bound result, and "the rest of the computation" from the call/cc site
+         * is exactly the CPS continuation that runs after the binding.  This lets
+         * a colored function that ALSO contains a call/cc/escape stay on the
+         * CT-IR path instead of wholly evicting to the direct emitter.
+         *
+         * The receiver `f` is emitted by emit_cps_callcc regardless.  A capture-
+         * free receiver (a plain fn, a fat-boxed fn, or a zero-capture closure)
+         * delegates via the normal is-delegatable-value check.  A CAPTURING
+         * closure also delegates: collect_caps (CT_LETRAW) walks the receiver's
+         * free vars into the lifted continuation's env, and cap_add admits a
+         * scalar (Copy) capture while a non-Copy capture bails to fallback. */
+        case EX_CALLCC: {
+            const Expr *f = ascribe_peel(e->as.callcc_.fn);
+            return safe_to_delegate(b, e->as.callcc_.fn)
+                || (f && f->kind == EX_CLOSURE);
+        }
         case EX_CALL: {
             const Binding *fn = e->as.call_.fn_binding;
             if (!fn) return false;                 /* indirect: unknown coloring */
@@ -618,6 +1192,33 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                                                  e->as.shift0_.body, &e->type);
             return t;
         }
+        case EX_CLONEABLE_RESET: {
+            /* U3 Shape 1 native, else fall back to the CT_LETRAW delegation. */
+            CVar x = fresh_cvar(b, &e->type);
+            CTerm *ac = new_term(b, CT_APPCONT);
+            ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            CTerm *nat = build_cloneable(b, e, x, ac);
+            return nat ? nat : build_letraw(b, e, x, ac);
+        }
+        case EX_SERIAL_RESET: {
+            /* U4: native arithmetic serial context, else delegate the marshalable
+             * region so a colored function containing it stays CPS-emitted rather
+             * than wholly evicting. */
+            CVar x = fresh_cvar(b, &e->type);
+            CTerm *ac = new_term(b, CT_APPCONT);
+            ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            CTerm *nat = build_serial(b, e, x, ac);
+            return nat ? nat : build_letraw(b, e, x, ac);
+        }
+        case EX_ASYNC: case EX_AWAIT: {
+            /* U5: delegate the self-contained async region (async spawn / await)
+             * so a colored function containing it stays CPS-emitted rather than
+             * wholly evicting. */
+            CVar x = fresh_cvar(b, &e->type);
+            CTerm *ac = new_term(b, CT_APPCONT);
+            ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            return build_letraw(b, e, x, ac);
+        }
         case EX_HANDLE: {
             CVar x = fresh_cvar(b, &e->type);
             CTerm *ac = new_term(b, CT_APPCONT);
@@ -780,6 +1381,19 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                                                  e->as.shift0_.body, &e->type);
             return t;
         }
+        case EX_CLONEABLE_RESET: {
+            /* U3 Shape 1 native, else fall back to the CT_LETRAW delegation. */
+            CTerm *nat = build_cloneable(b, e, x, rest);
+            return nat ? nat : build_letraw(b, e, x, rest);
+        }
+        case EX_SERIAL_RESET: {
+            /* U4: native arithmetic serial context, else delegate (see cps_tail). */
+            CTerm *nat = build_serial(b, e, x, rest);
+            return nat ? nat : build_letraw(b, e, x, rest);
+        }
+        case EX_ASYNC: case EX_AWAIT:
+            /* U5: delegate the self-contained async region (see cps_tail). */
+            return build_letraw(b, e, x, rest);
         case EX_HANDLE:
             return build_handle(b, e, x, rest);
         case EX_PERFORM: {
@@ -945,6 +1559,19 @@ void cps_ir_print(const CTerm *t, FILE *out, int indent) {
                     t->as.letraw.x.name,
                     t->as.letraw.e && owning_operand(t->as.letraw.e) ? "rc" : "?");
             cps_ir_print(t->as.letraw.body, out, indent);
+            break;
+        case CT_CLONEABLE:
+            fprintf(out, "let %s = %s-cont -> %s(<cont>)  ; %s %s"
+                         "[%u frame(s), %u let(s)%s]\n",
+                    t->as.cloneable.x.name,
+                    t->as.cloneable.serial ? "serial" : "cloneable",
+                    t->as.cloneable.receiver && t->as.cloneable.receiver->name
+                        ? t->as.cloneable.receiver->name->name : "?",
+                    t->as.cloneable.serial ? "U4" : "U3",
+                    t->as.cloneable.n_frames == 0 ? "Shape 1 " : "Shape 2 ",
+                    t->as.cloneable.n_frames, t->as.cloneable.n_lets,
+                    t->as.cloneable.if_cond ? ", if" : "");
+            cps_ir_print(t->as.cloneable.body, out, indent);
             break;
         case CT_UNSUPPORTED:
             fprintf(out, "<unsupported: %s>\n", t->as.unsupported.why ? t->as.unsupported.why : "?");

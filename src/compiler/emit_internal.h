@@ -239,6 +239,13 @@ typedef struct EmitCtx {
      * causes EX_PANIC/EX_PANIC_WITH to emit tur_panic_abort instead of
      * tur_panic so that no setjmp/longjmp unwinding is attempted. */
     bool no_unwind;
+    /* direct-reset-shift-degrades fix: true while emitting the body of a base
+     * (reset ...) that is lowered via the setjmp/longjmp escape path (branch-
+     * capable).  A base `shift`/`shift0` emitted with this set aborts to the
+     * innermost reset (tur_cur_shift_reset) instead of returning its operand.
+     * Cleared across a nested DK-lowered reset (emit_cps_reset) so its shifts
+     * still feed the DK abort-value model. */
+    bool in_shift_escape;
     /* Phase M3: when true, each module is compiled to its own .c/.h pair;
      * exported functions are not static and headers are export-filtered. */
     bool separate_compilation;

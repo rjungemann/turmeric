@@ -1,0 +1,22 @@
+;; U4 oracle: NATIVE serial let-bearing and if-bearing contexts.
+;; Backend: --enable=cps-backend (native serial let/if contexts; shared prelude/branch emit)
+;; The serial let-prelude and if-branch-point emit share the cloneable machinery
+;; (a C-local prelude / a branch wrapper) with the marshalable serial frame chain
+;; underneath, so a colored helper emits them natively (a _skbody shift helper,
+;; no emit_cps.c delegation).  rt5 forces a real serialize -> deserialize round-trip.
+;;   run-let 10: (serial-reset (let [a (* base 2)] (+ a (serial-shift rt5 0)))) -> 20+5 = 25
+;;   run-if  1:  (serial-reset (if (> n 0) (+ 100 (serial-shift rt5 0)) 42))    -> 100+5 = 105
+;;   run-if  0:  pure arm                                                        -> 42
+;;
+(defn rt5 [k] : int
+  (tur_serial_cont_resume
+    (tur_serial_cont_deserialize (tur_serial_cont_serialize k)) 5))
+(defn run-let [base : int] : int
+  (serial-reset (let [a (* base 2)] (+ a (serial-shift rt5 0)))))
+(defn run-if [n : int] : int
+  (serial-reset (if (> n 0) (+ 100 (serial-shift rt5 0)) 42)))
+(defn main [] : int
+  (println (run-let 10))
+  (println (run-if 1))
+  (println (run-if 0))
+  0)

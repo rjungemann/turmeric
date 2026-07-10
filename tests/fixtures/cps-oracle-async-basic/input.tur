@@ -1,0 +1,19 @@
+;; U0 oracle (cps-backend-unification-plan): direct-vs-CPS value-equality net.
+;; Backend: default backend (emit_cps.c whole-program transform)
+;; This program is one of a cps-oracle-async-basic / cps-oracle-async-basic-cps twin pair sharing one input
+;; expected.stdout; the value MUST stay equal under both backends across every
+;; phase of the port. See docs/upcoming/v2/cps-backend-unification-u0-inventory.md.
+;;
+;; T21-F: async/await basic test
+;; (async fn) launches fn in a background thread and returns a future (ptr<void>)
+;; (await fut) blocks until the future is ready and returns the int64 result
+
+(defn compute [] : int
+  ```c
+  return (int64_t)42;
+  ```)
+
+(defn main [] : nil
+  (let [fut (async compute)]
+    (let [result (await fut)]
+      (println result))))

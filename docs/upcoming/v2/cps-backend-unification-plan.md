@@ -160,27 +160,345 @@ fallback until the final phase removes it.
   into a round-trip fixture asserting direct-vs-CPS value equality, run under
   *both* backends today (CT-IR falls back to `emit_cps.c`, so both are the same
   emit now -- these fixtures become the regression net for the port). No code
-  change.
+  change. **Landed** -- see
+  [cps-backend-unification-u0-inventory.md](cps-backend-unification-u0-inventory.md)
+  (12 shapes, 24 `cps-oracle-*` twin fixtures).
 - **U1 -- Raw reset/shift/shift0 into CT-IR.** Add the CT nodes + `cps_ir.c`
   translation + emit for single-shot delimited control. Extend `ensure_S` to
   place these on DK instead of evicting them. Flip the fallback for exactly
   these shapes. Keep cloneable/serial/callcc/async still routed to
-  `emit_cps.c`.
+  `emit_cps.c`. **Partially landed.** The CT nodes (`CT_RESET`/`CT_SHIFT`,
+  `shift0` flag), `cps_ir.c` translation, and DK emit (`emit_reset`/
+  `emit_shift` -> `dk_shift`/`dk_shift0`/`dk_run`) already existed and covered a
+  restricted zero/scalar-capture subset; the remaining eviction was the
+  *admission predicate*. This slice adds `delim_ok` (`src/compiler/
+  emit_cps_ir.c`), a reset-delim admission that permits KK_PROMPT delivery
+  through straight-line + branch (`if`) structure, so the canonical
+  branch-and-escape patterns -- `(reset (if c (shift ...) v))`, nested-if
+  escapes, `do`-sequenced shifts -- now lower on DK instead of evicting. Oracle
+  pairs: `cps-oracle-reset-if-escape`, `-reset-if-straightline-else`,
+  `-reset-nested-if-escape` (direct == cps).
+
+  **Join-bearing shapes now also landed.** A reset delim with a `letcont` join
+  whose jbody delivers to the prompt -- a shift under a *non-empty* delimited
+  continuation, `(reset (+ 10 (if c (shift ...) 5)))` -- was initially left
+  evicted because the default/`emit_cps.c` path *degraded* it to plain body-eval
+  (a different value), which would have broken `direct == cps`. That direct-path
+  degradation is now fixed: `emit_cps_reset` lowers a branch-bearing base reset
+  via a `setjmp`/`longjmp` escape path (`emit_cps_reset_escape`), giving correct
+  abortive semantics from inside a branch. With direct corrected, `delim_ok`
+  re-admitted the join-bearing shapes (the `CT_LETCONT` case), so they lower on
+  DK under the experiment with `direct == cps`. Oracles:
+  `cps-oracle-reset-join-escape`, `cps-oracle-reset-both-branch-shift`. Resolved
+  report: [docs/archive/direct-reset-shift-degrades-out-of-subset.md](../../archive/direct-reset-shift-degrades-out-of-subset.md).
 - **U2 -- call/cc + escape.** Port the `emit_cps_callcc_prelude` machinery.
+  **Landed.** `(call/cc f)` / `(escape f)` (both `EX_CALLCC`) is an *undelimited*
+  escape: its continuation is captured at a **local setjmp landing** that
+  `emit_cps_callcc` establishes inline, so -- unlike shift/perform -- it does not
+  thread the DK continuation. A *colored* function that also contains a
+  call/cc/escape used to evict wholesale (the `EX_CALLCC` hit `safe_to_delegate`'s
+  conservative `default: false`). `EX_CALLCC` is now added to `safe_to_delegate`
+  (`src/passes/cps_ir.c`), so the escape is delegated to the direct emitter via
+  `CT_LETRAW` and the enclosing colored function stays CPS-emitted.
+
+  - **Capture-free receivers** delegate via the normal is-delegatable-value
+    check (a plain fn, fat-boxed fn, or zero-capture closure). Oracles:
+    `cps-oracle-colored-escape`, `cps-oracle-colored-callcc`.
+  - **Capturing receivers** also delegate: `collect_caps` (`collect_caps_rec`
+    `CT_LETRAW`) walks the callcc receiver's free vars into the lifted
+    continuation env, so an enclosing capture (a scalar) rides the env; a
+    non-Copy capture bails to fallback. Oracle: `cps-oracle-colored-escape-capture`.
+  - **Lifted-helper positions (fully landed):** a capturing escape inside a
+    DK-lifted helper used to be evicted because the helper env did not carry the
+    receiver's captures. Two independent capture walkers each lacked an
+    `EX_CALLCC` case: `collect_free_vars` (`elab_core.c`, for the **shift body**
+    and **perform continuation** helpers) and `collect_handle_captures`
+    (`emit_core.c`, for the fiber **handler case** helper). Both now descend into
+    the `(call/cc/escape)` receiver (folding an `EX_CLOSURE`'s captures, or
+    collecting a raw `EX_FN` body's free vars minus its params), so all three
+    carve-out guards were removed -- a capturing escape in any lifted position
+    lowers on DK with `direct == cps`. Oracles:
+    `cps-oracle-escape-capture-in-shift-body`, `cps-oracle-escape-capture-after-handle`,
+    `cps-oracle-escape-capture-in-handler-case`. (An owning-value capture still
+    bails to the direct emitter -- not a Copy capture.) Resolved report:
+    [docs/archive/direct-capturing-escape-in-lifted-helper.md](../../archive/direct-capturing-escape-in-lifted-helper.md).
+  - **Prelude gate hardened:** `uses_callcc` (the escape-continuation prelude
+    gate) was missing many control/value forms (`shift`, `handle`, `perform`,
+    `resume`, `match`, `async`, casts, ...), so an escape nested in one lost its
+    `tur_escape_cont` prelude and failed to build on *both* backends. Now
+    complete (additive -- it only ever emits the prelude when a callcc is
+    actually present).
+
+  The change only affects CT-IR emission plus the (additive) prelude gate, so
+  default-backend codegen is byte-identical for callcc-free programs.
+
+  *Follow-on (U6/U7):* physically relocating `emit_cps_callcc` +
+  `emit_cps_callcc_prelude` out of `emit_cps.c` (prelude consolidation / file
+  deletion). No call/cc/escape shapes remain evicted on capture grounds.
 - **U3 -- Cloneable (multi-shot) capture.** Port `dk_copy_range` deep-clone +
   capture clone/drop glue driven from CT-IR emit; add the multi-shot
   classification axis. This is the highest-risk phase (capture correctness).
+  **First slice landed (delegation).** A `(cloneable-reset body)` is a
+  self-contained multi-shot delimited region owned end-to-end by the direct
+  emitter (`emit_effects_cloneable_reset` -> `emit_cps_cloneable_reset`, which
+  drives `dk_copy_range` + the capture clone/drop glue). `EX_CLONEABLE_RESET` is
+  now delegatable via `CT_LETRAW` (`safe_to_delegate`, `src/passes/cps_ir.c`) --
+  the bare `cloneable-shift` stays non-delegatable (it captures the rest of its
+  reset body) -- so a colored function containing a cloneable-reset stays
+  CPS-emitted (the region direct-emitted as a unit) instead of wholly evicting,
+  reusing the proven multi-shot runtime. Multi-shot resume is exercised by
+  `cps-oracle-cloneable-multi-resume`; the mixed case (base reset/shift + a
+  cloneable-reset in one function) by `cps-oracle-cloneable-mixed`.
+
+  This slice also fixed a CPS-backend infrastructure bug: a `CT_LETRAW`
+  delegation emits its file-scope helper fns into `ctx->pending_handler_fns`,
+  which the direct-function path flushes ahead of the using function but the
+  `__cps` function path did not -- so a delegated cloneable-reset's `__cont_fn`
+  was defined after its use (`'__cont_fn_N' undeclared`). The CPS emitter now
+  flushes `pending_handler_fns` before each `__cps` body (a general fix for any
+  helper-emitting delegation).
+
+  Also fixed the cloneable prelude-gate gap: `cps_expr_contains_cloneable_shift`
+  (`src/passes/cps.c`) now descends into `EX_BUILTIN` and the other missing
+  control/value forms, so a `cloneable-shift` nested under an operator
+  (`(+ 1 (cloneable-reset ...))`) emits its `tur_cloneable_cont` prelude on both
+  backends. Oracle: `cps-oracle-cloneable-nested-op`. Resolved report:
+  [docs/archive/cloneable-prelude-gate-misses-nested-shift.md](../../archive/cloneable-prelude-gate-misses-nested-shift.md).
+
+  **Native emit -- Shape 1 landed.** The staged native port (see
+  [cps-backend-unification-u3-native-emit-plan.md](cps-backend-unification-u3-native-emit-plan.md))
+  begins with the trivial (identity) continuation: `(cloneable-reset
+  (cloneable-shift receiver val))` where the shift is the whole reset body, so
+  there is no `dk_copy_range`. A new `CT_CLONEABLE` node (`cps_ir.h`) is
+  translated for that shape with a named uncolored receiver (`build_cloneable`,
+  `cps_ir.c`; other shapes fall through to the delegation) and emitted natively
+  (`emit_cloneable`, `emit_cps_ir.c`): an identity continuation fn +
+  `tur_cloneable_cont_alloc(id, NULL, NULL, NULL)` + the receiver call -- no
+  `emit_cps.c` involvement. Multi-shot resume is trivially correct (the identity
+  continuation is stateless), verified natively by
+  `cps-oracle-cloneable-native-shape1` (clone + two resumes -> 10/20). All
+  cloneable-basic-style fixtures now emit Shape 1 natively; everything else keeps
+  delegating.
+
+  **Native emit -- Shape 2 (single frame) landed.** The first non-trivial
+  continuation now emits natively: `(cloneable-reset (<op> <int-lit>
+  (cloneable-shift receiver val)))` for `op` in `+ - * /` (either hole side).
+  `build_cloneable` reifies the `(<op> operand [])` context and `emit_cloneable`
+  emits the DK chain directly -- an arithmetic frame fn, a shift-body helper that
+  `dk_copy_range`s the captured sub-continuation into a `tur_cloneable_cont`, and
+  `dk_prompt`/`dk_frame`/`dk_shift`/`dk_run`/`dk_free` -- reusing the shared DK
+  runtime (`dk_copy_range`, `__dk_cont_fn`/`__dk_env_clone`/`__dk_env_drop`)
+  byte-for-byte, no `emit_cps.c`. Multi-shot verified natively across all four
+  operators and both hole sides; oracle `cps-oracle-cloneable-native-shape2`
+  (clone + two resumes -> 15/110).
+
+  Shape 2 now admits a **captured (var) frame operand** (`(+ n (cloneable-shift
+  k 0))` with `n` a parameter; oracle `cps-oracle-cloneable-native-shape2-var`)
+  and **multi-frame nested arithmetic contexts** -- `(cloneable-reset (* a (+ b
+  (cloneable-shift k 0))))` -- reified as a chain of DK frames pushed
+  outermost-first. `CT_CLONEABLE` now carries a `CloneFrame[]` (0 frames = Shape
+  1, N frames = an N-deep arithmetic context); `build_cloneable` walks the nested
+  binop chain, `emit_cloneable` emits one frame fn per level. Oracle:
+  `cps-oracle-cloneable-native-shape2-nested` (30/26 across two frames).
+
+  Shape 2 also admits **`let`-bearing** and **`if`-bearing** contexts. A pure
+  scalar `let` binding in the spine (`(cloneable-reset (let [a (* base 2)] (+ a
+  (cloneable-shift k 0))))`) is direct-emitted as a C local at the reset site
+  ahead of the frame operands that reference it; a single pure-conditioned `if`
+  branch point (`(cloneable-reset (if (> n 0) (+ 100 (cloneable-shift k 0)) 42))`)
+  runs the DK chain on the shift-bearing arm and yields the direct-emitted pure
+  arm on the other branch. `build_cloneable` walks the context spine in one loop,
+  mirroring `collect_ctx` / `ctx_if_branch` *inline* (descending the shift arm past
+  a recorded `if` yields one flat frame chain -- no `clone_spine`); the capture
+  walkers surface the free vars of the direct-emitted sub-exprs via
+  `collect_free_vars` (node `let` bindings excluded), so a cloneable inside a
+  lifted continuation captures correctly. Oracles
+  `cps-oracle-cloneable-native-shape2-let` / `-if`. `let` and `if` are kept
+  mutually exclusive per lowering (the mix falls through to the still-correct
+  delegation).
+
+  Shape 2 also admits a **1-arg call frame** (`(cloneable-reset (dbl
+  (cloneable-shift k 0)))`, `dbl` a top-level `int -> int` fn): `CloneFrame` gains
+  a `call_fn` alternative to the arithmetic `op`, emitting the frame as
+  `(intptr_t)dbl((int64_t)value)` with a 0 env; call frames nest with arithmetic
+  frames in one chain. Oracle `cps-oracle-cloneable-native-shape2-callframe`.
+  2-arg call frames stay delegated: the direct emitter drops them onto the legacy
+  identity path (context not reified), so native+correct emission would break
+  `direct == cps`.
+
+  Shape 2 also admits a **do-prelude** context (`(cloneable-reset (do PRELUDE
+  (cloneable-shift k v) TAIL...))`): the prelude items are direct-emitted once at
+  the reset site for side effect (binding-less `CloneLet`s), and each 0-arg tail
+  call becomes an **ignore-value frame** (`CloneFrame.ignore_value`) that runs
+  `f()` on resume regardless of the resumed value (tails run first-innermost /
+  last-outermost). Oracle `cps-oracle-cloneable-native-shape2-doprelude`. 1-arg
+  ignore-value tails stay delegated (they crash the direct emitter). A key
+  robustness fix landed here: `build_cloneable` now requires the shift to have no
+  live captures (`n_live_captures == 0`), matching `cl_can_lower` -- the gate that
+  emits the shared DK runtime prelude native Shape 2 references; without it, a
+  live-capture shape lowered natively would name undeclared DK helpers.
+
+  **Receivers investigated -- nothing to port.** A capture-free lambda receiver
+  (`(fn [k] k)`) already emits natively (it lifts to a top-level fn; oracle
+  `cps-oracle-cloneable-native-lambda-recv`). Fat-closure and colored receivers
+  are unsupported by the *direct* emitter too (miscompile / segfault), so they
+  stay on the delegation path with `direct == cps` preserved. Local-var receivers
+  are blocked upstream (an fn-valued `let` binding reverts the function to direct
+  emission), a separate future item -- not a cloneable-receiver concern. Detail in
+  the native-emit note.
+
+  **U3 native port complete at its stable boundary.** Native CT-IR owns the
+  value-typed cloneable subset: a bare-fn-pointer receiver (named top-level fn or
+  capture-free lambda) with any context built from arithmetic frames (any depth),
+  1-arg call frames, `let` preludes, one `if` branch point, or a do-prelude with
+  0-arg ignore-value tails -- all at `n_live_captures == 0`. The `CT_LETRAW`
+  delegation retains **closure/complex-receiver** shapes: those that use their
+  continuation crash the direct emitter too (bug-compatible delegation), and the
+  one that ignores it (`nested-op`) direct handles via its closure lowering --
+  porting it would duplicate emit_cps.c's closure machinery rather than eliminate
+  it. So the delegation is the *principled* home for closure receivers, not a
+  transitional scaffold.
+
+  *Steps 6-7 re-scoped (detail in the native-emit note):* the multi-shot
+  classification axis needs **no `ensure_S` change for cloneable** -- cloneable is
+  never evicted (the region delegates; the function stays colored), its captures
+  are scalar (multi-shot-safe by restriction), and the `n_live_captures` gate pins
+  the native subset under `cl_can_lower`'s prelude gate. Retiring the cloneable
+  delegation (`emit_cps_cloneable_reset`) is gated on U6/U7: it needs either
+  unified closure lowering in the CT-IR backend or a clean diagnostic for the
+  broken-on-both shapes -- larger cross-cutting changes, not bounded slices. The
+  fuller owning-value multi-shot axis lands with U4/U5, where eviction and the
+  clone/drop glue are actually exercised.
 - **U4 -- Serial.** Port `emit_cps_serial_runtime_prelude` + serial placement.
+  **First slice landed (placement, not eviction).** Before U4, a colored function
+  containing a `serial-reset` hit `CT_UNSUPPORTED` and the *whole* function evicted
+  to direct emit. U4 makes `serial-reset` delegatable per-region via `CT_LETRAW`
+  (`safe_to_delegate` + `EX_SERIAL_RESET` cases in `cps_tail`/`cps_bind`,
+  mirroring the cloneable U3 first slice), so the enclosing colored function stays
+  CPS-emitted with just the serial region delegated to the proven marshaling
+  runtime (`emit_effects_serial_reset` -> `emit_cps_serial_reset`). The serial
+  runtime prelude is gated on *presence* of serial syntax, so no
+  gating-mismatch (unlike the cloneable `cl_can_lower` coupling). Verified: a
+  helper `run-it` with a `serial-reset` now emits `run_hyit__cps` (colored, CT-IR)
+  instead of evicting; `direct == cps`. Oracle `cps-oracle-serial-placement`; all
+  21 serial fixtures green.
+
+  **Second slice landed (native arithmetic serial).** The `CT_CLONEABLE` node
+  gains a `serial` flag; `build_serial` (`cps_ir.c`) recognizes an arithmetic
+  serial context `(serial-reset (<op> <int> ... (serial-shift receiver v)))` with
+  a named uncolored receiver, and `emit_cloneable` (`emit_cps_ir.c`) emits it
+  natively -- a `_skbody` shift helper that `dk_copy_range`s the sub-continuation
+  and hands the receiver the copied DK chain directly, plus the arithmetic frames
+  reified through the shared tagged marshaler `__sk_frame_for_tag(tag)`
+  (`sk_tag_for_frame`). Because the frames use the same fixed tag table as the
+  direct emitter, the captured continuation round-trips through a real
+  serialize -> bytes -> deserialize with no per-site registry. Verified across
+  `+ - *` and multi-frame contexts with an actual
+  `tur_serial_cont_serialize`/`deserialize` round-trip; oracle
+  `cps-oracle-serial-native-arith`; `direct == cps`.
+
+  **Third slice landed (native serial call frames + `SkReg` registry).**
+  `build_serial` now also admits a 1-arg call frame `(f [])` (top-level uncolored
+  `int -> int`), and `emit_cloneable`'s serial branch emits the per-site
+  marshaling registry natively: a `_skcall` wrapper fn plus a `_skreg` `SkReg`
+  self-registered by an `__attribute__((constructor))` under the stable name
+  `"<fn>$L"`, exactly as the direct emitter does -- so the frame round-trips
+  through save/restore by name. Call frames compose with arithmetic frames in one
+  chain (`(+ 100 (dbl []))`, `(dbl (+ 1 []))`). Verified with a real
+  serialize -> bytes -> deserialize; oracle `cps-oracle-serial-native-callframe`;
+  `direct == cps`.
+
+  **Fourth slice landed (native serial `let` / `if` contexts).** `build_serial`'s
+  spine walk now also admits a pure `let` prelude and one `if` branch point
+  (mutually exclusive, mirroring `build_cloneable`).  No emit change was needed:
+  `emit_cloneable`'s `let`-prelude loop and `if`-branch wrapper run before/after
+  the shape branches and are shape-agnostic, so they bracket the serial chain for
+  free; the capture walkers already scan the node's `lets`/`if_cond`/`if_pure`
+  regardless of the `serial` flag.  Verified `(let [a (* base 2)] (+ a (shift)))`
+  and `(if (> n 0) (+ 100 (shift)) 42)` with a real serialize round-trip; oracle
+  `cps-oracle-serial-native-letif`; `direct == cps`.
+
+  **Fifth slice landed (native serial do-prelude).** `build_serial` gains the
+  do-sequence branch (prelude items as binding-less `CloneLet`s, 0-arg tails as
+  ignore-value frames), mirroring the cloneable do branch; `emit_cloneable`'s
+  serial branch now emits an ignore-value call frame as a `_skcall` wrapper
+  `return f()` registered under the `"<fn>$0"` side (vs `"$L"` for a 1-arg hole
+  call). Verified single- and multi-tail (`(do (shift) (tick) (tock))` yields
+  `tock`) with a real serialize round-trip; oracle
+  `cps-oracle-serial-native-doprelude`; `direct == cps`.
+
+  With this, **native serial owns the entire value-typed subset the cloneable
+  native port reached** -- arithmetic (any depth), 1-arg call frames, `let`, `if`,
+  and do-prelude. Remaining serial shapes: 2-arg call frames (serialized env
+  operand, real new machinery) and Shape 1 (identity), each on the delegation.
+
+  The two `build_*` walks are now byte-for-byte parallel and slated for
+  unification into one `build_marshal_reset(..., serial)` -- see
+  [cps-backend-unification-marshal-reset-unification-plan.md](cps-backend-unification-marshal-reset-unification-plan.md).
 - **U5 -- Async / await.** Port the scheduler wiring on top of the now-unified
   cloneable/serial base.
+  **First slice landed (placement, not eviction).** Finding: `async` / `await` do
+  NOT color a function (they are absent from `cps_expr_contains_shift`) -- they
+  lower to self-contained runtime calls (`tur_async_fiber` / `tur_await_future`)
+  that do not thread the caller's DK continuation. So eviction only bit the *mix*
+  case: a function colored by an effect/shift that *also* awaits hit
+  `CT_UNSUPPORTED` on `EX_ASYNC`/`EX_AWAIT` and evicted wholesale. U5 makes both
+  delegatable via `CT_LETRAW` (`safe_to_delegate` + `cps_tail`/`cps_bind` cases),
+  so the colored parts stay on the CT-IR DK machine while the async region
+  delegates to the proven fiber runtime; `collect_free_vars` already descends
+  `EX_ASYNC`/`EX_AWAIT`, so a delegated await riding a lifted continuation
+  surfaces its captures correctly. Verified: a `worker` with `(reset (shift ...))`
+  + `(await (async compute))` now emits `worker__cps` (colored) instead of
+  evicting; oracle `cps-oracle-async-placement`; `direct == cps`; all 34 async
+  fixtures green.
+
+  *Remaining for U5 -- and a correction:* the U0 inventory's claim that async
+  "rides the cloneable/serial machinery" is **inaccurate**. Async/await lower to a
+  *separate stackful `ucontext` fiber runtime* (`FiberBlock`, `TurScheduler`) in
+  `emit_module.c`, not the DK machine. Crucially, that runtime is **untouched by
+  the `emit_cps.c` retirement** (U6/U7) -- so the deeper "port the scheduler onto
+  cloneable/serial" goal is a *decoupled* stackful->stackless migration, not a
+  blocker for the unification's finish line. Full architecture, scope, the
+  stackful-vs-stackless trade, and a recommendation to treat the substrate port as
+  out of scope for this plan are in
+  [cps-backend-unification-u5-async-substrate-plan.md](cps-backend-unification-u5-async-substrate-plan.md).
 - **U6 -- Prelude consolidation.** Fold the four `emit_cps_*_prelude` emitters
   into one "emit the preludes the program uses" pass driven by the unified
   classification.
+  **First slice landed (classify once).** The delimited/concurrency prelude gates
+  are each a full-program walk, and several were recomputed at multiple emission
+  sites (cloneable-DK 3x, base-delimited 2x, serial 2x). They are now computed
+  once into named `const bool cps_uses_*` flags at the top of the prelude region
+  (`emit_module.c`), and every prelude gates on those flags -- one classification
+  pass per family, the redundant traversals removed. Behavior-identical (each flag
+  still uses the exact per-family predicate); full suite green across every family.
+
+  *Remaining for U6:* (a) merge the per-family walks into a *single* traversal
+  computing all flags at once -- deferred because the walks have subtly different
+  recursion skeletons, so a single traversal risks changing a flag value; it needs
+  each skeleton reconciled first. (b) The plan's deeper intent -- drive prelude
+  gating from the CT-IR taint classification (`ensure_S`) instead of the syntactic
+  `emit_cps_program_uses_*` scans -- is the larger change and lands with U7, when
+  the second (form-presence) classifier is retired alongside `emit_cps.c`.
 - **U7 -- Retire `emit_cps.c`.** Delete the file, its gates
   (`emit_cps_program_uses_*`), and the routing in `emit_module.c`
   (~6712-6720). Delete the N6.5 delimited-control carve-out. Graduate the
   experiment if the backend is otherwise ready to be always-on (separate
   decision -- see N6 plan).
+  **Readiness assessed -- framing corrected.** "Delete the file" is imprecise:
+  `emit_cps.c` holds two separable bodies -- the direct-style *lowering* functions
+  the CT-IR backend replaces (deletable once native coverage is total) *and* the
+  *runtime prelude* emitters + shared helpers the **native CT-IR emit itself
+  depends on** (`emit_cps_runtime_prelude` defines the `dk_shift`/`dk_copy_range`
+  /`__sk_frame_for_tag` that native `emit_cloneable`/serial call). So U7 is: delete
+  the lowering, **relocate** the runtime. The lowering functions still fire for
+  callcc (100% delegated -- no native emit), cloneable/serial closure receivers +
+  serial 2-arg/Shape 1, and base reset/shift outside `delim_ok`. First cleanup:
+  the dead `emit_cps_program_uses_serial_dk` (defined, never called) is removed.
+  Full surface map, the per-lowering gap table, and the cut sequence (relocate
+  runtime first -- the one safe bounded step -- then close the native gaps, then
+  delete) are in
+  [cps-backend-unification-u7-readiness-plan.md](cps-backend-unification-u7-readiness-plan.md).
 
 Each of U1-U5 flips its family's fallback only after its oracle fixtures pass
 under the CT-IR emit; a family whose port is not ready simply keeps falling back

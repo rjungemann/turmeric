@@ -297,6 +297,7 @@ static bool shape_supported(const BuiltinSpec *sp) {
 }
 
 static bool term_core_ok(const CTerm *t);
+static bool delim_ok(const CTerm *t);   /* reset-delim admission (permits KK_PROMPT delivery) */
 static bool letraw_ok(const CTerm *t);  /* CT_LETRAW soundness (owning-drop guard) */
 
 /* ---- C3 delimited-control subset predicates -------------------------- *
@@ -328,6 +329,47 @@ static bool g_cap_single_shot;
 static bool binding_excluded(const Binding *b) {
     for (int i = 0; i < g_excl_n; i++) if (g_excl_b[i] == b) return true;
     return false;
+}
+
+/* True if `b` is one of a CT_CLONEABLE node's own `let` prelude bindings -- a C
+ * local emitted at the reset site, hence not a capture of any enclosing frame. */
+static bool cloneable_is_local(const CTerm *t, const Binding *b) {
+    for (uint32_t i = 0; i < t->as.cloneable.n_lets; i++)
+        if (t->as.cloneable.lets[i].binding == b) return true;
+    return false;
+}
+
+/* The free variables of a CT_CLONEABLE node's direct-emitted context sub-exprs
+ * (each `let` init, and -- if present -- the `if` condition and pure arm), with
+ * the node's own `let` bindings excluded (they are locals at the reset site).
+ * Returns a malloc'd array the caller frees; *n_out is the count (0 => NULL).
+ * The same complete free-var analysis CT_LETRAW uses, so a capturing context
+ * sub-expr surfaces its enclosing locals for the lifted-helper env. */
+static Binding **cloneable_ctx_free_vars(const CTerm *t, uint32_t *n_out) {
+    *n_out = 0;
+    Binding *locals[16];
+    uint8_t n_locals = 0;
+    for (uint32_t i = 0; i < t->as.cloneable.n_lets && n_locals < 16; i++)
+        if (t->as.cloneable.lets[i].binding)
+            locals[n_locals++] = (Binding *)t->as.cloneable.lets[i].binding;
+
+    Binding **acc = NULL;
+    uint32_t n_acc = 0, cap = 0;
+    #define CLONE_ADD_FV(ex) do { const Expr *_e = (ex); \
+        if (_e) { uint32_t _nf = 0; \
+            Binding **_fv = collect_free_vars(_e, locals, n_locals, NULL, 0, &_nf); \
+            for (uint32_t _i = 0; _i < _nf; _i++) { \
+                if (n_acc == cap) { cap = cap ? cap * 2 : 8; \
+                    acc = realloc(acc, cap * sizeof(Binding *)); } \
+                acc[n_acc++] = _fv[_i]; } \
+            free(_fv); } } while (0)
+    for (uint32_t i = 0; i < t->as.cloneable.n_lets; i++)
+        CLONE_ADD_FV(t->as.cloneable.lets[i].init);
+    CLONE_ADD_FV(t->as.cloneable.if_cond);
+    CLONE_ADD_FV(t->as.cloneable.if_pure);
+    #undef CLONE_ADD_FV
+    *n_out = n_acc;
+    return acc;
 }
 
 /* True if `t` references a free variable that a lifted continuation / shift /
@@ -379,6 +421,30 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
             CC_ATOM(&t->as.resume.v);
             bound[nb] = t->as.resume.x.id;
             return has_capture_rec(t->as.resume.body, exclude, bound, nb + 1);
+        case CT_CLONEABLE: {
+            /* receiver is a global fn -- no capture; Shape 2 frame operands may
+             * be captured vars (they ride the frame env), except those naming the
+             * node's own `let` prelude locals. */
+            for (uint32_t _i = 0; _i < t->as.cloneable.n_frames; _i++) {
+                const CAtom *_op = &t->as.cloneable.frames[_i].operand;
+                if (_op->kind == CA_VAR && cloneable_is_local(t, _op->var)) continue;
+                CC_ATOM(_op);
+            }
+            /* Direct-emitted context sub-exprs (let inits, if cond/pure arm): a
+             * non-local free var they reference is a capture too. */
+            uint32_t _nfv = 0;
+            Binding **_fv = cloneable_ctx_free_vars(t, &_nfv);
+            for (uint32_t _i = 0; _i < _nfv; _i++) {
+                const Binding *_bb = _fv[_i];
+                if (!_bb || _bb->is_global || binding_excluded(_bb)) continue;
+                uint32_t _id = _bb->id; bool _f = (_id != exclude);
+                for (int _j = 0; _j < nb; _j++) if (bound[_j] == _id) { _f = false; break; }
+                if (_f) { free(_fv); return true; }
+            }
+            free(_fv);
+            bound[nb] = t->as.cloneable.x.id;
+            return has_capture_rec(t->as.cloneable.body, exclude, bound, nb + 1);
+        }
         case CT_LETRAW: {
             /* The delegated Expr's operand variables are the only free names it
              * references (its operands are atomic by construction).  Check each
@@ -596,6 +662,31 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             COL_ATOM(&t->as.resume.v);
             bound[nb] = t->as.resume.x.id;
             collect_caps_rec(t->as.resume.body, exclude, bound, nb + 1, cs); return;
+        case CT_CLONEABLE: {
+            /* The receiver is a named global fn (no capture); Shape 2 frame
+             * operands may be captured vars (they ride the frame env), except
+             * those naming the node's own `let` prelude locals.  The direct-
+             * emitted context sub-exprs (let inits, if cond/pure) contribute their
+             * non-local free vars as captures too.  Bind the result binder for the
+             * continuation body and collect its captures. */
+            for (uint32_t _i = 0; _i < t->as.cloneable.n_frames; _i++) {
+                const CAtom *_op = &t->as.cloneable.frames[_i].operand;
+                if (_op->kind == CA_VAR && cloneable_is_local(t, _op->var)) continue;
+                COL_ATOM(_op);
+            }
+            uint32_t _nfv = 0;
+            Binding **_fv = cloneable_ctx_free_vars(t, &_nfv);
+            for (uint32_t _i = 0; _i < _nfv && cs->ok; _i++) {
+                const Binding *_bb = _fv[_i];
+                if (!_bb || _bb->is_global || binding_excluded(_bb)) continue;
+                uint32_t _id = _bb->id; bool _f = (_id != exclude);
+                for (int _j = 0; _j < nb; _j++) if (bound[_j] == _id) { _f = false; break; }
+                if (_f) cap_add(cs, _bb, _bb->type.kind, &_bb->type);
+            }
+            free(_fv);
+            bound[nb] = t->as.cloneable.x.id;
+            collect_caps_rec(t->as.cloneable.body, exclude, bound, nb + 1, cs); return;
+        }
         case CT_LETRAW: {
             /* A delegated (direct-emitted) owning-value op.  Its operand vars are
              * the only free names it references (operands are atomic).  Collect
@@ -619,6 +710,12 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
              * undeclared C name in the lifted helper -- a compile error, not a
              * silent miscompile. */
             const Expr *le = t->as.letraw.e;
+            /* U2: a delegated (call/cc f)/(escape f) references its enclosing
+             * captures through the receiver `f`; collect_free_vars now descends
+             * into an EX_CALLCC receiver (elab_core.c), so a capturing receiver's
+             * enclosing locals are surfaced here and ride the lifted continuation
+             * env (a scalar capture is admitted by cap_add; a non-Copy capture
+             * bails to fallback). */
             uint32_t n_fv = 0;
             Binding **fv = collect_free_vars(le, NULL, 0, NULL, 0, &n_fv);
             for (uint32_t i = 0; i < n_fv && cs->ok; i++) {
@@ -699,6 +796,7 @@ static bool joins_closed_rec(const CTerm *t, uint32_t *def, int nd) {
             return joins_closed_rec(t->as.letcont.jbody, def, nd + 1)
                 && joins_closed_rec(t->as.letcont.body, def, nd + 1);
         case CT_RESUME: return joins_closed_rec(t->as.resume.body, def, nd);
+        case CT_CLONEABLE: return joins_closed_rec(t->as.cloneable.body, def, nd);
         default: return false;
     }
 }
@@ -935,7 +1033,7 @@ static bool term_core_ok(const CTerm *t) {
              * captures (if any) are all scalar source vars (carried in the env). */
             CapSet cs;
             return (slot_ok_t(t->as.reset.x.type, t->as.reset.x.ty) || t->as.reset.x.ty == TY_NIL)
-                && term_core_ok(t->as.reset.delim)
+                && delim_ok(t->as.reset.delim)
                 && reset_body_ok(t->as.reset.body)
                 && collect_caps(t->as.reset.body, t->as.reset.x.id, &cs);
         }
@@ -991,8 +1089,99 @@ static bool term_core_ok(const CTerm *t) {
         case CT_RESUME:
             return t->as.resume.k.kind == CA_VAR && atom_ok(&t->as.resume.v)
                 && term_core_ok(t->as.resume.body);
+        case CT_CLONEABLE:
+            /* U3: cloneable with a named uncolored global receiver (checked at
+             * translation).  Shape 1 has no context; Shape 2's operand atom
+             * (n_frames >= 1) must each be slot-representable (they ride the frame
+             * env).  Admission needs a slot-representable result + core body. */
+            if (!(slot_ok_t(t->as.cloneable.x.type, t->as.cloneable.x.ty) || t->as.cloneable.x.ty == TY_NIL))
+                return false;
+            for (uint32_t i = 0; i < t->as.cloneable.n_frames; i++)
+                if (!atom_ok(&t->as.cloneable.frames[i].operand)) return false;
+            return term_core_ok(t->as.cloneable.body);
         default: /* CT_UNSUPPORTED */
             return false;
+    }
+}
+
+/* ---- reset-delim admission (U1) ------------------------------------------
+ * A reset's *delimited body* is emitted (emit_reset) with the enclosing prompt
+ * chain as `cur_k`, so its tail positions deliver the delimited value to the
+ * prompt (emit_deliver: `return dk_run(cur_k, v)`), and an interior join
+ * (KK_VAR) delivers via goto.  That is exactly the delivery `term_core_ok`
+ * forbids in *core* position (its CT_APPCONT case rejects KK_PROMPT), which is
+ * why a reset body with control flow around the shift -- `(reset (if c (shift
+ * ...) v))`, `(reset (+ e (if c (shift ...) v)))` -- was evicted even though
+ * both the shifting and the normal-return branch are individually emittable.
+ *
+ * delim_ok mirrors term_core_ok but admits KK_PROMPT/KK_VAR delivery of the
+ * delimited value at every tail position, recursing through the straight-line
+ * (letval/letprim/letcall/letraw), branch (if), and join (letcont) structure.
+ * A nested `shift` keeps its existing straight-line admission (shift_body_ok +
+ * scalar-capture collect).
+ *
+ * CT_LETCONT (a join whose jbody may deliver to the prompt) IS admitted: it is
+ * the "non-empty delimited continuation that an abortive shift discards" --
+ * `(reset (+ 10 (if c (shift ...) 5)))` builds `letcont j(t){+10; prompt}` and
+ * the shift branch discards j.  The CPS path lowers this correctly (the shift
+ * aborts, ignoring +10); the direct/legacy path now lowers it correctly too
+ * (emit_cps_reset's setjmp/longjmp escape path -- see emit_cps.c), so direct ==
+ * cps holds and there is no backend divergence.
+ *
+ * A nested delimiter (reset/handle/perform/resume) still falls through to
+ * term_core_ok, so delivering an *outer* prompt through an inner delimiter
+ * stays out of scope. */
+static bool delim_ok(const CTerm *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case CT_APPCONT:
+            /* Deliver the delimited value to the enclosing prompt (KK_PROMPT,
+             * the tail) or to an interior inline join (KK_VAR).  Both are
+             * emitted by emit_deliver; unlike core position, KK_PROMPT here is
+             * the correct delimited-body result. */
+            return atom_ok(&t->as.appcont.v);
+        case CT_LETVAL:
+            return (slot_ok_t(t->as.letval.x.type, t->as.letval.x.ty) || t->as.letval.x.ty == TY_NIL)
+                && atom_ok(&t->as.letval.v)
+                && delim_ok(t->as.letval.body);
+        case CT_LETPRIM:
+            if (!shape_supported(t->as.letprim.spec)) return false;
+            for (uint32_t i = 0; i < t->as.letprim.n; i++)
+                if (!atom_ok(&t->as.letprim.args[i])) return false;
+            return delim_ok(t->as.letprim.body);
+        case CT_LETCALL:
+            for (uint32_t i = 0; i < t->as.letcall.n; i++)
+                if (!atom_ok(&t->as.letcall.args[i])) return false;
+            return delim_ok(t->as.letcall.body);
+        case CT_LETRAW:
+            return letraw_ok(t) && delim_ok(t->as.letraw.body);
+        case CT_IF:
+            return atom_ok(&t->as.if_.cond)
+                && delim_ok(t->as.if_.then_)
+                && delim_ok(t->as.if_.else_);
+        case CT_LETCONT:
+            /* A join in the delim: its jbody may deliver to the prompt (a
+             * discarded delimited continuation).  Recurse via delim_ok so that
+             * prompt delivery is admitted in both the join body and the term. */
+            return (slot_ok_t(t->as.letcont.param.type, t->as.letcont.param.ty) || t->as.letcont.param.ty == TY_NIL)
+                && delim_ok(t->as.letcont.jbody)
+                && delim_ok(t->as.letcont.body);
+        case CT_TAILCALL: {
+            /* A KK_PROMPT tail call threads the prompt chain (same as term_core_ok). */
+            for (uint32_t i = 0; i < t->as.tailcall.n; i++)
+                if (!atom_ok(&t->as.tailcall.args[i])) return false;
+            return true;
+        }
+        case CT_SHIFT: {
+            /* An abortive shift in the delimited body: same admission as core. */
+            CapSet scs;
+            return shift_body_ok(t->as.shift.body)
+                && collect_caps(t->as.shift.body, t->as.shift.k.id, &scs);
+        }
+        default:
+            /* Nested reset/handle/perform/resume/unsupported: keep the stricter
+             * core admission -- not relaxed by this slice. */
+            return term_core_ok(t);
     }
 }
 
@@ -1165,6 +1354,8 @@ static bool needs_heap_join(const CTerm *t) {
             return needs_heap_join(t->as.perform.body);
         case CT_RESUME:
             return needs_heap_join(t->as.resume.body);
+        case CT_CLONEABLE:
+            return needs_heap_join(t->as.cloneable.body);
         default: return false;
     }
 }
@@ -1723,6 +1914,7 @@ static void emit_term(CE *ce, const CTerm *t);
 static void emit_binder_decls(CE *ce, const CTerm *t);
 static void emit_reset(CE *ce, const CTerm *t);
 static void emit_shift(CE *ce, const CTerm *t);
+static void emit_cloneable(CE *ce, const CTerm *t);
 static void emit_handle(CE *ce, const CTerm *t);
 static void emit_perform(CE *ce, const CTerm *t);
 static void emit_resume(CE *ce, const CTerm *t);
@@ -1923,6 +2115,7 @@ static void emit_term(CE *ce, const CTerm *t) {
         case CT_PERFORM: emit_perform(ce, t); break;
         case CT_RESUME:  emit_resume(ce, t); break;
         case CT_LETRAW:  emit_letraw(ce, t); break;
+        case CT_CLONEABLE: emit_cloneable(ce, t); break;
         default:
             ce_line(ce, "abort(); /* cps-backend: unreachable */");
             break;
@@ -2038,6 +2231,13 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
             ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.resume.x.ty, t->as.resume.x.type), bn);
             free(bn);
             emit_binder_decls(ce, t->as.resume.body);
+            break;
+        }
+        case CT_CLONEABLE: {
+            char *bn = cvar_cname(ce, t->as.cloneable.x);
+            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.cloneable.x.ty, t->as.cloneable.x.type), bn);
+            free(bn);
+            emit_binder_decls(ce, t->as.cloneable.body);
             break;
         }
         default: break;
@@ -2281,6 +2481,229 @@ static void emit_reset(CE *ce, const CTerm *t) {
     emit_term(ce, t->as.reset.delim);   /* delivers to the prompt chain, tail */
     ce->cur_k = save;
     ce->cur_ty = save_ty;
+}
+
+/* The C body expression of a single arithmetic context frame `(<op> <operand>
+ * [])` -- `env` is the captured operand, `value` the resumed value.  Mirrors
+ * emit_cps.c's frame_c_expr byte-for-byte (the proven generator). */
+static const char *cloneable_frame_expr(const char *op, bool hole_left) {
+    if (strcmp(op, "+") == 0) return "env + value";
+    if (strcmp(op, "*") == 0) return "env * value";
+    if (strcmp(op, "-") == 0) return hole_left ? "value - env" : "env - value";
+    if (hole_left)  /* "/" hole-left: value / env */
+        return "(env) ? (value / env) : (fprintf(stderr, \"division by zero\\n\"), abort(), 0)";
+    return "(value) ? (env / value) : (fprintf(stderr, \"division by zero\\n\"), abort(), 0)";
+}
+
+/* U4 serial: the stable marshaler tag for an arithmetic context frame (op + hole
+ * side), mirroring emit_cps.c's sk_tag_for_frame.  The serial runtime prelude
+ * emits `__sk_frame_for_tag(tag)` returning the matching DKFrame, and the
+ * marshaler maps frame <-> tag by this table so save-cont!/resume-cont! round-
+ * trips.  1=ADD 2=MUL 3=SUBR(env-v) 4=SUBL(v-env) 5=DIVR(env/v) 6=DIVL(v/env). */
+static int sk_tag_for_frame(const CloneFrame *fr) {
+    if (strcmp(fr->op, "+") == 0) return 1;
+    if (strcmp(fr->op, "*") == 0) return 2;
+    if (strcmp(fr->op, "-") == 0) return fr->hole_left ? 4 : 3;
+    return fr->hole_left ? 6 : 5;   /* "/" */
+}
+
+/* CT_CLONEABLE (U3): (cloneable-reset (cloneable-shift receiver val)) and its
+ * single-arithmetic-frame Shape 2 form.  Emits the cloneable multi-shot machinery
+ * natively (no emit_cps.c), reusing the shared DK runtime (dk_copy_range,
+ * __dk_cont_fn / __dk_env_clone / __dk_env_drop) byte-for-byte.
+ *
+ *   Shape 1 (n_frames == 0): identity continuation -- no dk_copy_range.  Alloc a
+ *     tur_cloneable_cont over an identity fn (NULL env), call receiver, bind x.
+ *   Shape 2 (n_frames >= 1): reify the `(<op> <operand> ... [])` context as DK
+ *     frame; the shift body deep-clones the captured sub-continuation into a
+ *     cloneable_cont and hands it to receiver.  Mirrors emit_cloneable_ctx. */
+/* Direct-emit a self-contained (shift-free) context Expr -- a `let` init, an
+ * `if` condition, or an `if` pure arm -- at the reset site, honoring the CT
+ * emitter's current indent.  Returns the malloc'd C expression string. */
+static char *emit_cloneable_direct(CE *ce, const Expr *e) {
+    int saved = ce->ctx->indent;
+    ce->ctx->indent = ce->indent;
+    char *v = emit_value(ce->ctx, ce->out, e);
+    ce->ctx->indent = saved;
+    return v;
+}
+
+static void emit_cloneable(CE *ce, const CTerm *t) {
+    int id = (*ce->helper_ctr)++;
+    char *xn  = cvar_cname(ce, t->as.cloneable.x);
+    char *rfn = callee_name(t->as.cloneable.receiver);
+
+    /* Pure `let` prelude (Shape 2, let-bearing): lay each binding down as a C
+     * local at the reset site, ahead of the frame-operand evaluations that may
+     * reference it.  (`let` and `if` are mutually exclusive per build_cloneable,
+     * so n_lets > 0 implies no branch point below.) */
+    for (uint32_t li = 0; li < t->as.cloneable.n_lets; li++) {
+        const CloneLet *cl = &t->as.cloneable.lets[li];
+        char *iv = emit_cloneable_direct(ce, cl->init);
+        if (!cl->binding) {
+            /* Side-effect prelude (do-sequence prefix): emit for effect only. */
+            ce_line(ce, "(void)(%s);", iv);
+            free(iv);
+            continue;
+        }
+        char *bn = name_for_binding(ce->ctx, cl->binding);
+        ce_line(ce, "%s %s = %s;", emit_type_c_name(ce->ctx, cl->binding->type), bn, iv);
+        ce_line(ce, "(void)%s;", bn);
+        free(bn);
+        free(iv);
+    }
+
+    /* One `if` branch point (Shape 2, if-bearing): evaluate the pure condition
+     * once, run the DK chain on the shift-bearing arm, and yield the direct-
+     * emitted pure arm on the other branch. */
+    bool has_if = (t->as.cloneable.if_cond != NULL);
+    if (has_if) {
+        char *cv = emit_cloneable_direct(ce, t->as.cloneable.if_cond);
+        ce_line(ce, "if (%s(%s)) {", t->as.cloneable.if_when ? "" : "!", cv);
+        free(cv);
+        ce->indent++;
+    }
+
+    if (t->as.cloneable.n_frames == 0) {
+        /* Shape 1: identity continuation. */
+        char cfn[256];
+        snprintf(cfn, sizeof(cfn), "%s_clc%d", ce->fn_cn, id);
+        buf_printf(ce->helpers,
+            "static int64_t %s(void *__e, int64_t __v) { (void)__e; return __v; }\n", cfn);
+        char cv[64];
+        snprintf(cv, sizeof(cv), "__clc%d", id);
+        ce_line(ce, "tur_cloneable_cont *%s = tur_cloneable_cont_alloc(%s, NULL, NULL, NULL);",
+                cv, cfn);
+        ce_line(ce, "%s = %s((int64_t)(intptr_t)%s);", xn, rfn, cv);
+    } else if (t->as.cloneable.serial) {
+        /* U4 Shape 2 (serial): an arithmetic context marshaled via the shared
+         * tagged frames (`__sk_frame_for_tag`), and a shift body that hands the
+         * receiver the copied DK chain directly so the captured continuation
+         * round-trips through save-cont!/resume-cont!.  No per-site frame fns. */
+        uint32_t nf = t->as.cloneable.n_frames;
+        char bodyfn[256];
+        snprintf(bodyfn, sizeof(bodyfn), "%s_skbody%d", ce->fn_cn, id);
+        buf_printf(ce->helpers,
+            "static intptr_t %s(intptr_t env, DK *subk) {\n"
+            "    DK *__cap = dk_copy_range(subk, NULL);\n"
+            "    return (intptr_t)((int64_t (*)(int64_t))(intptr_t)env)((int64_t)(intptr_t)__cap);\n}\n",
+            bodyfn);
+        /* A 1-arg call frame gets a per-site wrapper fn plus a SkReg entry that
+         * self-registers (constructor) so the marshaler maps the frame <-> a stable
+         * name ("<fn>$L") for save/restore.  Arithmetic frames need no per-site
+         * emission -- they ride the shared tagged marshaler. */
+        for (uint32_t i = 0; i < nf; i++) {
+            const CloneFrame *fr = &t->as.cloneable.frames[i];
+            if (!fr->call_fn) continue;
+            char *cfn = callee_name(fr->call_fn);
+            /* A do-tail ignore-value frame runs f() regardless of the resumed
+             * value and marshals under the "$0" side; a 1-arg hole call applies f
+             * to the resumed value under "$L". */
+            if (fr->ignore_value)
+                buf_printf(ce->helpers,
+                    "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { (void)env; (void)value; return (intptr_t)%s(); }\n",
+                    ce->fn_cn, id, i, cfn);
+            else
+                buf_printf(ce->helpers,
+                    "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s((int64_t)value); }\n",
+                    ce->fn_cn, id, i, cfn);
+            const char *side = fr->ignore_value ? "$0" : "$L";
+            buf_printf(ce->helpers,
+                "static SkReg %s_skreg%d_%u = { \"%s%s\", %s_skcall%d_%u, 0, 0, 0, 0 };\n"
+                "__attribute__((constructor)) static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
+                ce->fn_cn, id, i, cfn, side, ce->fn_cn, id, i,
+                ce->fn_cn, id, i, ce->fn_cn, id, i);
+            free(cfn);
+        }
+        char dv[48];
+        snprintf(dv, sizeof(dv), "__skd%d", id);
+        ce_line(ce, "DK *%s = dk_prompt(1, dk_done());", dv);
+        /* Push frames outermost-first (frames[0] deepest, closest to the prompt).
+         * Arithmetic -> shared tagged frame + operand; call frame -> per-site
+         * wrapper, no env (0). */
+        for (uint32_t i = 0; i < nf; i++) {
+            const CloneFrame *fr = &t->as.cloneable.frames[i];
+            if (fr->call_fn) {
+                ce_line(ce, "%s = dk_frame(%s_skcall%d_%u, (intptr_t)(0), %s);",
+                        dv, ce->fn_cn, id, i, dv);
+            } else {
+                char *opv = atom_str(ce, &fr->operand);
+                ce_line(ce, "%s = dk_frame(__sk_frame_for_tag(%d), (intptr_t)(%s), %s);",
+                        dv, sk_tag_for_frame(fr), opv, dv);
+                free(opv);
+            }
+        }
+        ce_line(ce, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);", dv, bodyfn, rfn, dv);
+        ce_line(ce, "%s = (int64_t)dk_run(%s, 0);", xn, dv);
+        ce_line(ce, "dk_free(%s);", dv);
+    } else {
+        /* Shape 2: an arithmetic context (1+ frames) + dk_copy_range capture. */
+        uint32_t nf = t->as.cloneable.n_frames;
+        char bodyfn[256];
+        snprintf(bodyfn, sizeof(bodyfn), "%s_ccbody%d", ce->fn_cn, id);
+        /* One frame fn per context frame: an arithmetic op, or a 1-arg call to a
+         * top-level fn applied to the resumed value (no captured env). */
+        for (uint32_t i = 0; i < nf; i++) {
+            char ctxfn[256];
+            snprintf(ctxfn, sizeof(ctxfn), "%s_ccctx%d_%u", ce->fn_cn, id, i);
+            const CloneFrame *fr = &t->as.cloneable.frames[i];
+            if (fr->call_fn) {
+                char *cfn = callee_name(fr->call_fn);
+                if (fr->ignore_value)
+                    /* 0-arg ignore-value tail: run f() regardless of resume value. */
+                    buf_printf(ce->helpers,
+                        "static intptr_t %s(intptr_t env, intptr_t value) { (void)env; (void)value; return (intptr_t)%s(); }\n",
+                        ctxfn, cfn);
+                else
+                    /* 1-arg hole call: apply f to the resumed value. */
+                    buf_printf(ce->helpers,
+                        "static intptr_t %s(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s((int64_t)value); }\n",
+                        ctxfn, cfn);
+                free(cfn);
+            } else {
+                buf_printf(ce->helpers,
+                    "static intptr_t %s(intptr_t env, intptr_t value) { return %s; }\n",
+                    ctxfn, cloneable_frame_expr(fr->op, fr->hole_left));
+            }
+        }
+        buf_printf(ce->helpers,
+            "static intptr_t %s(intptr_t env, DK *subk) {\n"
+            "    DK *__cap = dk_copy_range(subk, NULL);\n"
+            "    tur_cloneable_cont *__k = tur_cloneable_cont_alloc(__dk_cont_fn, __cap, __dk_env_clone, __dk_env_drop);\n"
+            "    return (intptr_t)((int64_t (*)(int64_t))(intptr_t)env)((int64_t)(intptr_t)__k);\n}\n",
+            bodyfn);
+        char dv[48];
+        snprintf(dv, sizeof(dv), "__ccd%d", id);
+        ce_line(ce, "DK *%s = dk_prompt(1, dk_done());", dv);
+        /* Push frames outermost-first (frames[0] deepest, closest to the prompt).
+         * A call frame has no captured env -- pass 0. */
+        for (uint32_t i = 0; i < nf; i++) {
+            char ctxfn[256];
+            snprintf(ctxfn, sizeof(ctxfn), "%s_ccctx%d_%u", ce->fn_cn, id, i);
+            const CloneFrame *fr = &t->as.cloneable.frames[i];
+            char *opv = fr->call_fn ? strdup("0") : atom_str(ce, &fr->operand);
+            ce_line(ce, "%s = dk_frame(%s, (intptr_t)(%s), %s);", dv, ctxfn, opv, dv);
+            free(opv);
+        }
+        ce_line(ce, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);", dv, bodyfn, rfn, dv);
+        ce_line(ce, "%s = (int64_t)dk_run(%s, 0);", xn, dv);
+        ce_line(ce, "dk_free(%s);", dv);
+    }
+
+    if (has_if) {
+        ce->indent--;
+        ce_line(ce, "} else {");
+        ce->indent++;
+        char *pv = emit_cloneable_direct(ce, t->as.cloneable.if_pure);
+        ce_line(ce, "%s = %s;", xn, pv);
+        free(pv);
+        ce->indent--;
+        ce_line(ce, "}");
+    }
+
+    free(xn);
+    free(rfn);
+    emit_term(ce, t->as.cloneable.body);
 }
 
 /* CT_SHIFT: capture the sub-continuation up to the nearest enclosing prompt and
@@ -2711,6 +3134,18 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     buf_putc(&helpers, '\0');
 
     if (helpers.len > 1) buf_puts(file, helpers.data);
+
+    /* A CT_LETRAW delegation to the direct emitter (e.g. a cloneable-reset)
+     * emits its file-scope helper fns into ctx->pending_handler_fns, which the
+     * direct-function path flushes ahead of the using function.  A CPS function
+     * has its own emission path, so flush those helpers here too -- before the
+     * __cps body that references them -- otherwise the helper is defined after
+     * its use ('<helper>' undeclared). */
+    if (ctx->pending_handler_fns && ctx->pending_handler_fns->len > 0) {
+        buf_write(file, ctx->pending_handler_fns->data, ctx->pending_handler_fns->len);
+        buf_free(ctx->pending_handler_fns);
+        buf_init(ctx->pending_handler_fns);
+    }
 
     /* ---- CPS body: int64_t <name>__cps(<params>, DK *k) ---- */
     buf_printf(file, "static int64_t %s__cps(", cn);

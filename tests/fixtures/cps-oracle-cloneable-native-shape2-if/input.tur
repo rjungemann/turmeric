@@ -1,0 +1,18 @@
+;; U3 oracle: native Shape 2 cloneable with an IF-bearing context.
+;; Backend: default backend (emit_cps.c)
+;; (cloneable-reset (if (> n 0) (+ 100 (cloneable-shift k-id 0)) 42))
+;; The pure condition is evaluated once at the reset site; the shift-bearing arm
+;; rides the DK frame chain, the pure arm (42) is yielded directly on the other
+;; branch.  Emitted natively.
+;; Multi-shot: make 1 -> shift arm; clone+resume 5 -> 100+5 = 105, resume 3 -> 103.
+;; make 0 -> pure arm -> 42 (no capture).
+;;
+(defn k-id [k : int] : int k)
+(defn make [n : int] : int
+  (cloneable-reset (if (> n 0) (+ 100 (cloneable-shift k-id 0)) 42)))
+(defn main [] : int
+  (let [c (make 1)]
+    (println (tur_cloneable_cont_resume (tur_cloneable_cont_clone c) 5))
+    (println (tur_cloneable_cont_resume c 3)))
+  (println (make 0))
+  0)
