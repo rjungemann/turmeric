@@ -333,28 +333,92 @@ static char *emit_first_shift(EmitCtx *ctx, Buf *body, const Expr *e,
     return NULL;
 }
 
+/* Out-of-subset (branch-bearing) base reset -> setjmp/longjmp escape lowering.
+ * The DK abort-value model (emit_first_shift) only handles a statically-first
+ * shift; a shift inside an `if` branch needs to abort C control flow from
+ * inside the branch, which base shift's abortive semantics licenses.  The reset
+ * establishes a setjmp landing pushed on the tur_cur_shift_reset stack; the body
+ * runs with ctx->in_shift_escape set so each base shift computes f(operand),
+ * stores it, and longjmps here.  A body that completes without shifting delivers
+ * its ordinary value.  Returns NULL (caller degrades) when the delimited value
+ * would not round-trip through the int64 result slot (e.g. a float reset). */
+static char *emit_cps_reset_escape(EmitCtx *ctx, Buf *body, const Expr *e) {
+    const Expr *rb = e->as.reset_.body;
+    if (!ty_intptr_safe(e->type.kind)) return NULL;
+    const char *rty = emit_type_c_name(ctx, e->type);
+    char *cv  = fresh_tmp(ctx);   /* the reset context */
+    char *res = fresh_tmp(ctx);   /* the reset result */
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_shift_reset_ctx %s;\n", cv);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s.prev = tur_cur_shift_reset;\n", cv);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_cur_shift_reset = &%s;\n", cv);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s %s;\n", rty, res);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "if (setjmp(%s.buf) == 0) {\n", cv);
+    ctx->indent++;
+    ctx->in_shift_escape = true;    /* base shifts in rb now abort to `cv` */
+    char *bv = emit_value(ctx, body, rb);
+    ctx->in_shift_escape = false;
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s = %s;\n", res, bv);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_cur_shift_reset = %s.prev;\n", cv);
+    free(bv);
+    ctx->indent--;
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "} else {\n");
+    ctx->indent++;
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s = (%s)%s.result;\n", res, rty, cv);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_cur_shift_reset = %s.prev;\n", cv);
+    ctx->indent--;
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "}\n");
+    free(cv);
+    return res;
+}
+
 char *emit_cps_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
     const Expr *rb = e->as.reset_.body;
     /* No shift bound to this reset -> nothing for the substrate to do. */
     if (!reaches_shift(rb)) return NULL;
-    /* Outside the supported subset -> let the caller fall back cleanly. */
-    if (!can_lower(rb)) return NULL;
 
-    bool is_shift0 = false;
-    char *fv = emit_first_shift(ctx, body, rb, &is_shift0);
-    if (!fv) return NULL;   /* defensive: should not happen after can_lower */
+    /* A base reset establishes a fresh delimited context: shifts inside it are
+     * bound to THIS reset, not to any enclosing escape-reset.  Clear the escape
+     * flag for the duration (so a nested DK-lowered reset computes its abort
+     * value via emit_first_shift, not a longjmp) and restore it on exit. */
+    bool saved_escape = ctx->in_shift_escape;
+    ctx->in_shift_escape = false;
+    char *result;
 
-    /* Run the delimited computation on the substrate: a single prompt and a
-     * shift node whose body returns the precomputed abort value. */
-    const char *shift_ctor = is_shift0 ? "dk_shift0" : "dk_shift";
-    char *result = fresh_tmp(ctx);
-    indent_buf(body, ctx->indent);
-    buf_printf(body,
-        "%s %s = (%s)dk_run(%s(1, __dk_abort_body, (intptr_t)(%s), "
-        "dk_prompt(1, dk_done())), 0);\n",
-        emit_type_c_name(ctx, e->type), result, emit_type_c_name(ctx, e->type),
-        shift_ctor, fv);
-    free(fv);
+    if (can_lower(rb)) {
+        /* Run the delimited computation on the substrate: a single prompt and a
+         * shift node whose body returns the precomputed abort value. */
+        bool is_shift0 = false;
+        char *fv = emit_first_shift(ctx, body, rb, &is_shift0);
+        if (!fv) { ctx->in_shift_escape = saved_escape; return NULL; }
+        const char *shift_ctor = is_shift0 ? "dk_shift0" : "dk_shift";
+        result = fresh_tmp(ctx);
+        indent_buf(body, ctx->indent);
+        buf_printf(body,
+            "%s %s = (%s)dk_run(%s(1, __dk_abort_body, (intptr_t)(%s), "
+            "dk_prompt(1, dk_done())), 0);\n",
+            emit_type_c_name(ctx, e->type), result, emit_type_c_name(ctx, e->type),
+            shift_ctor, fv);
+        free(fv);
+    } else {
+        /* Branch-bearing reset: the abort-value model can't pin the shift, so
+         * lower via the setjmp/longjmp escape path (correct abortive semantics)
+         * instead of degrading to plain body-eval.  Returns NULL for a non-
+         * int-slot reset, and the caller then degrades as before. */
+        result = emit_cps_reset_escape(ctx, body, e);
+    }
+
+    ctx->in_shift_escape = saved_escape;
     return result;
 }
 

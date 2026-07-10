@@ -179,15 +179,18 @@ fallback until the final phase removes it.
   pairs: `cps-oracle-reset-if-escape`, `-reset-if-straightline-else`,
   `-reset-nested-if-escape` (direct == cps).
 
-  *Deliberately still evicted (blocker for the full flip):* a reset delim with a
-  `letcont` join whose jbody delivers to the prompt -- i.e. a shift under a
-  *non-empty* delimited continuation, `(reset (+ 10 (if c (shift ...) 5)))`.
-  There the CT-IR path is correctly abortive but the default/`emit_cps.c` path
-  *degrades* an out-of-subset reset to plain body-eval, yielding a different
-  value; admitting it would break the `direct == cps` invariant. Tracked in
-  [docs/reported/direct-reset-shift-degrades-out-of-subset.md](../../reported/direct-reset-shift-degrades-out-of-subset.md);
-  closing it (fix the direct degradation, or U7 retires `emit_cps.c`) unblocks
-  admitting the join-bearing shapes.
+  **Join-bearing shapes now also landed.** A reset delim with a `letcont` join
+  whose jbody delivers to the prompt -- a shift under a *non-empty* delimited
+  continuation, `(reset (+ 10 (if c (shift ...) 5)))` -- was initially left
+  evicted because the default/`emit_cps.c` path *degraded* it to plain body-eval
+  (a different value), which would have broken `direct == cps`. That direct-path
+  degradation is now fixed: `emit_cps_reset` lowers a branch-bearing base reset
+  via a `setjmp`/`longjmp` escape path (`emit_cps_reset_escape`), giving correct
+  abortive semantics from inside a branch. With direct corrected, `delim_ok`
+  re-admitted the join-bearing shapes (the `CT_LETCONT` case), so they lower on
+  DK under the experiment with `direct == cps`. Oracles:
+  `cps-oracle-reset-join-escape`, `cps-oracle-reset-both-branch-shift`. Resolved
+  report: [docs/archive/direct-reset-shift-degrades-out-of-subset.md](../../archive/direct-reset-shift-degrades-out-of-subset.md).
 - **U2 -- call/cc + escape.** Port the `emit_cps_callcc_prelude` machinery.
   **Partially landed.** `(call/cc f)` / `(escape f)` (both `EX_CALLCC`) is an
   *undelimited* escape: its continuation is captured at a **local setjmp

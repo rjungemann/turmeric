@@ -1009,24 +1009,21 @@ static bool term_core_ok(const CTerm *t) {
  *
  * delim_ok mirrors term_core_ok but admits KK_PROMPT/KK_VAR delivery of the
  * delimited value at every tail position, recursing through the straight-line
- * (letval/letprim/letcall/letraw) and branch (if) structure.  A nested `shift`
- * keeps its existing straight-line admission (shift_body_ok + scalar-capture
- * collect).
+ * (letval/letprim/letcall/letraw), branch (if), and join (letcont) structure.
+ * A nested `shift` keeps its existing straight-line admission (shift_body_ok +
+ * scalar-capture collect).
  *
- * What is deliberately NOT relaxed:
- *   - CT_LETCONT (a join) falls through to term_core_ok, which rejects a join
- *     whose jbody delivers to the prompt.  Such a join is exactly the "non-empty
- *     delimited continuation that an abortive shift discards" -- e.g.
- *     `(reset (+ 10 (if c (shift ...) 5)))` builds `letcont j(t){+10; prompt}`
- *     and the shift branch discards j.  Admitting it would make the CPS path
- *     abort (correct: the shift result, ignoring +10) while the direct/legacy
- *     path degrades an out-of-subset reset to plain body-eval (a DIFFERENT
- *     value).  Keeping such shapes evicted preserves direct == cps across the
- *     flip (the migration safety property); the degraded direct semantics is
- *     tracked separately (docs/reported).
- *   - A nested delimiter (reset/handle/perform/resume) also falls through to
- *     term_core_ok, so delivering an *outer* prompt through an inner delimiter
- *     stays out of this slice's scope. */
+ * CT_LETCONT (a join whose jbody may deliver to the prompt) IS admitted: it is
+ * the "non-empty delimited continuation that an abortive shift discards" --
+ * `(reset (+ 10 (if c (shift ...) 5)))` builds `letcont j(t){+10; prompt}` and
+ * the shift branch discards j.  The CPS path lowers this correctly (the shift
+ * aborts, ignoring +10); the direct/legacy path now lowers it correctly too
+ * (emit_cps_reset's setjmp/longjmp escape path -- see emit_cps.c), so direct ==
+ * cps holds and there is no backend divergence.
+ *
+ * A nested delimiter (reset/handle/perform/resume) still falls through to
+ * term_core_ok, so delivering an *outer* prompt through an inner delimiter
+ * stays out of scope. */
 static bool delim_ok(const CTerm *t) {
     if (!t) return false;
     switch (t->kind) {
@@ -1055,6 +1052,13 @@ static bool delim_ok(const CTerm *t) {
             return atom_ok(&t->as.if_.cond)
                 && delim_ok(t->as.if_.then_)
                 && delim_ok(t->as.if_.else_);
+        case CT_LETCONT:
+            /* A join in the delim: its jbody may deliver to the prompt (a
+             * discarded delimited continuation).  Recurse via delim_ok so that
+             * prompt delivery is admitted in both the join body and the term. */
+            return (slot_ok_t(t->as.letcont.param.type, t->as.letcont.param.ty) || t->as.letcont.param.ty == TY_NIL)
+                && delim_ok(t->as.letcont.jbody)
+                && delim_ok(t->as.letcont.body);
         case CT_TAILCALL: {
             /* A KK_PROMPT tail call threads the prompt chain (same as term_core_ok). */
             for (uint32_t i = 0; i < t->as.tailcall.n; i++)

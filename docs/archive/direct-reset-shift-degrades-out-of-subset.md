@@ -1,5 +1,15 @@
 # Direct backend degrades out-of-subset `reset`/`shift` to plain body-eval
 
+**Status:** RESOLVED. `emit_cps_reset` now lowers a branch-bearing base reset
+via a `setjmp`/`longjmp` escape path (`emit_cps_reset_escape` in
+`src/compiler/emit_cps.c`) instead of degrading to plain body-eval: a base
+`shift`/`shift0` under such a reset (`ctx->in_shift_escape`) computes
+`f(operand)`, stores it on the `tur_cur_shift_reset` stack, and longjmps to the
+innermost reset landing -- correct abortive semantics from inside an `if`
+branch. With the direct path corrected, the CT-IR `delim_ok` re-admitted the
+join-bearing shapes (the `CT_LETCONT` case), so `direct == cps` holds. Oracles:
+`cps-oracle-reset-join-escape`, `cps-oracle-reset-both-branch-shift`.
+
 **Severity:** medium (silent wrong value on the default backend; the value
 differs from the documented abortive-shift semantics).
 

@@ -1434,6 +1434,21 @@ char *emit_effects_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
     return emit_value(ctx, body, rb);
 }
 
+/* direct-reset-shift-degrades fix: when a base shift/shift0 is emitted inside a
+ * setjmp-lowered reset (ctx->in_shift_escape), it is abortive -- deliver the
+ * computed abort value `result` (= f(operand)) to the innermost reset landing
+ * and longjmp there, discarding the delimited continuation from wherever the
+ * shift sits (including inside an `if` branch).  Outside escape mode this is a
+ * no-op and the shift's value flows on as before (the DK abort-value model, or
+ * the legacy degrade). */
+static void emit_shift_escape_abort(EmitCtx *ctx, Buf *body, const char *result) {
+    if (!ctx->in_shift_escape) return;
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_cur_shift_reset->result = (int64_t)(%s);\n", result);
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "longjmp(tur_cur_shift_reset->buf, 1);\n");
+}
+
 char *emit_effects_shift(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* (shift k body) - shift with continuation handler k and value body
      *
@@ -1474,6 +1489,7 @@ char *emit_effects_shift(EmitCtx *ctx, Buf *body, const Expr *e) {
     }
     free(k_fn);
     free(body_val);
+    emit_shift_escape_abort(ctx, body, result);
     return result;
 }
 
@@ -1509,6 +1525,7 @@ char *emit_effects_shift0(EmitCtx *ctx, Buf *body, const Expr *e) {
     }
     free(k_fn);
     free(body_val);
+    emit_shift_escape_abort(ctx, body, result);
     return result;
 }
 
