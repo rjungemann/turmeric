@@ -2,10 +2,56 @@
 title: Make data structures Eq- and Show-able (element-type dispatch off the carrier)
 category: Type system / Codegen / stdlib
 description: Vec/Set/Map are not correctly Eq- or Show-able for any element type whose display/equality value differs from its int64 carrier (cstr, and eventually multi-word types). The container ABI already moved off the carrier (end-to-end monomorphization, 2026-06-19), but element-level typeclass dispatch inside constrained-generic container instances still grounds the element to the int64 carrier instead of the concrete element type. This plan fixes that, retypes the Set element API off :int, and settles the cstr/String question.
-status: proposed
+status: landed (compiled path); interpreter Set/Map cstr-key Show tracked as follow-up
 ---
 
 # Containers must be Eq- and Show-able for every element type
+
+## Resolution (2026-07-10)
+
+By the time this plan was executed, the heavy compiler lifting it describes had
+already landed on `main` (end-to-end by-value monomorphization; the
+`constrained-generic-instance-vec-element-dispatch` /
+`constrained-instance-element-dispatch` fixtures; the Phase-2 `Set` element-API
+generalization off `:int`, now content-keyed via `MapKey[A]`). What remained was
+a set of **stdlib-level** element-dispatch holes that no fixture exercised, all
+fixed here without touching the carrier/codegen:
+
+- **`Eq[Vec]` over cstr compared by pointer (ground truth #1, #3).** The
+  instance threaded an untyped comparator lambda `(fn [a b] (eq? a b))` whose
+  params defaulted to the int64 carrier, baking a single non-specialized
+  `Eq[int]` closure. `vec-eq-loop` now dispatches `(eq? (:: (vec-get x i) A) ...)`
+  directly on `A` -- mirroring the working `vec-show-loop` -- so no
+  carrier-collapsing closure is threaded. (`stdlib/vec.tur`)
+- **`Show[Vec]` over cstr/bool/float printed carrier words (ground truth #2).**
+  `(vec-of ...)` bound its result to a carrier-typed `(vec-new)`, freezing the
+  element type at the int64 carrier so `Show[Vec]` could not specialize. `vec-of`
+  now binds the first element once and threads it through `vec-empty-like__`, so
+  the literal's static type is a genuine `(Vec A)` whose head carries the
+  concrete element type. Each element is now evaluated exactly once (an
+  improvement over the old double-eval). (`stdlib/vec.tur`)
+- **`Show[Set]` / `Show[Map]` over cstr printed carrier words (ground truth #2).**
+  The show-loops walked the HAMT via an untyped `ptr<void>` iterator, so their
+  `^Show A` constraint was a phantom the specializer could not ground. Each loop
+  now carries a `(Set A)` / `(Map K V)` witness parameter (the same structural
+  handle `vec-show-loop` already had), so the element dispatches on its concrete
+  type. (`stdlib/typeclass-show.tur`)
+
+**Exit criteria met on the compiled path** for `cstr`, `bool`, `float`, and
+`int` (regression) across `Vec`, `Set`, and `Map`. New fixtures:
+`show-collections-content`, `show-collections-content-hamt` (compiled-only),
+`vec-eq-cstr-content`; the pre-existing `eqmap-cstr-content` / `set-cstr-content`
+cover Set/Map content-Eq. Full `run.sh` and `run-turi.sh` are green.
+
+**Follow-up (interpreter):** the tree-walking interpreter dispatches typeclass
+methods on a value's *runtime* carrier word, not by monomorphization, so it
+still renders cstr HAMT keys (`Show[Set]`/`Show[Map]` over cstr) as pointers --
+`hamt/iter-cur-key` hands back an untagged `int64`. `Show[Vec]` and `Eq[Vec]`
+over cstr work in the interpreter (the vec element read carries its type). The
+Set/Map interpreter gap is tracked in
+`docs/reported/interp-hamt-key-show-dispatches-on-carrier.md`; the
+compiled-only fixture carries a `requires.compiled` marker so the harness stays
+green. Phase 3b (owned `String`) remains deferred as the plan recommends.
 
 ## Why this matters
 

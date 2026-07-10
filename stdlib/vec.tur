@@ -229,6 +229,21 @@
       (list do
         (list tur-vec-homog__ (first xs) (second xs))
         (list vec-homog-chain__ ~@(rest xs))))))
+;;; vec-empty-like__ -- internal: a fresh empty Vec[A] whose element type A
+;;; is grounded by a type-witness value.
+;;;
+;;; `(vec-new)` on its own returns a bare `:A` result that summarizes to the
+;;; int64 carrier, so a `(let [v (vec-new)] ...)` binding freezes at the
+;;; carrier and later element reads (`show`/`eq?` dispatch) cannot recover the
+;;; concrete element type -- a Vec[cstr] then shows/compares by pointer.  By
+;;; threading one already-typed element through `witness : A`, the returned
+;;; `(:: (vec-new) (Vec A))` is a genuine `(Vec A)` whose head carries the
+;;; concrete element type, so the vec-of result dispatches element typeclass
+;;; methods correctly.  The witness value itself is unused (only its type is
+;;; consumed), so it never widens or truncates the stored data.
+
+(defn vec-empty-like__ [A] [witness : A] : (Vec A)
+  (:: (vec-new) (Vec A)))
 ;;; vec-of -- variadic Vec[A] literal.
 ;;;
 ;;; Parameters:
@@ -236,17 +251,24 @@
 ;;;
 ;;; Returns:
 ;;;   A fresh Vec[A] populated with xs in order. The element type A may be
-;;;   any scalar (:int, :cstr, :bool, :nil, :float); elements are stored
-;;;   through an :int carrier slot, so a :float element round-trips as a
-;;;   bit-reinterpret. The handle composes with vec-len, vec-get, vec-push!,
-;;;   etc. Reads recover the element type: vec-get returns :A, so a non-int
-;;;   element is read with an ascription, e.g. (:: (vec-get v 0) :float).
+;;;   any single-word type (:int, :cstr, :bool, :nil, :float, an opaque
+;;;   handle, or a heap struct/ADT pointer); elements are stored through an
+;;;   :int carrier slot, so a :float element round-trips as a bit-reinterpret.
+;;;   The result's static type is a genuine (Vec A) -- its head carries the
+;;;   concrete element type -- so `(show (vec-of "a" "b"))` renders "[a b]" and
+;;;   `(eq? (vec-of "a") (vec-of "b"))` compares by the element's Eq instance
+;;;   rather than by carrier identity. The handle composes with vec-len,
+;;;   vec-get, vec-push!, etc.; vec-get returns :A, so a non-int element is
+;;;   read with an ascription, e.g. (:: (vec-get v 0) :float).
 ;;;
 ;;; Note: all elements must unify to a single type. Mixing types -- e.g.
 ;;;   (vec-of 1 "x" 3.14) -- is a type error (TUR-E0001 on the offending
 ;;;   element). For heterogeneous fixed-arity collections, use tupleN.
 ;;;   Aggregate (multi-word struct/ADT) element types are not supported by
 ;;;   the carrier slot; those need a per-element typed layout (see TS3b).
+;;;
+;;; Note: each element expression is evaluated exactly once (the first is
+;;;   bound once and reused as both the type witness and the first push).
 ;;;
 ;;; Note: under -Xdata-literals, a [...] vector in expression position lowers
 ;;;   to this macro, so [1 2 3] is sugar for (vec-of 1 2 3).  See
@@ -262,9 +284,20 @@
 (defmacro vec-of [& xs]
   (if (empty? xs)
     (list vec-new)
+    ;; Bind the first element once; use it both as the (Vec A) type witness
+    ;; and as the first push, so the vec's head carries the concrete element
+    ;; type A.  A carrier-typed `(vec-new)` binding would freeze at the int64
+    ;; carrier and lose element-typeclass dispatch (Show/Eq over cstr, etc.).
+    ;; Homogeneity is enforced by vec-push!'s `(Vec A)` element type: a
+    ;; mismatched element is a TUR-E0001 at the offending push.
     (list let
-      `[__v (vec-new)]
-      (list do (list vec-homog-chain__ ~@xs) (list vec-push-each__ __v ~@xs)))))
+      `[__vw ~(first xs)]
+      (list let
+        `[__v (vec-empty-like__ __vw)]
+        (list do
+          (list vec-push! __v __vw)
+          (list vec-push-each__ __v ~@(rest xs))
+          __v)))))
 ;;; vec-eq? -- compare two Vec[A] element-wise using a comparator.
 ;;;
 ;;; Parameters:
@@ -344,28 +377,37 @@
 ;;; `(:: x :int)` relabel and no concrete->carrier bridge is minted at the
 ;;; `Eq [Vec]` dispatch site.
 ;;;
+;;; The `^Eq A` constraint scopes the element Eq dictionary and each pair is
+;;; compared with `(eq? (:: (vec-get x i) A) (:: (vec-get y i) A))` directly --
+;;; mirroring vec-show-loop's element dispatch.  This is deliberately NOT a
+;;; comparator-closure design: an `(fn [a b] (eq? a b))` lambda passed in from
+;;; the Eq[Vec] instance defaults its params to the int64 carrier and bakes a
+;;; single non-specialized Eq[int] closure (pointer/word comparison), which is
+;;; a silent miscompare for cstr and every other content type.  Reading and
+;;; ascribing the element to A here re-drives dispatch per ABI specialization,
+;;; so Eq[cstr] (strcmp), Eq[bool], etc. are threaded correctly.
+;;;
 ;;; Parameters:
 ;;;   x   -- first Vec[A]
 ;;;   y   -- second Vec[A]
 ;;;   i   -- current index (start at 0)
 ;;;   len -- shared length (both vecs are known equal-length by the caller)
-;;;   cmp -- element comparator fn [a :A b :A] :bool
 ;;;
 ;;; Returns:
-;;;   true if x[i..len) equals y[i..len) under cmp.
+;;;   true if x[i..len) equals y[i..len) under Eq[A].
 ;;;
 ;;; Example:
-;;;   (vec-eq-loop a b 0 (vec-len a) (fn [p q] (eq? p q)))  ; => true
+;;;   (vec-eq-loop a b 0 (vec-len a))  ; => true
 ;;;
 ;;; Since: Phase M4c (TCO-in-ABI-specs)
 
-(defn vec-eq-loop [A]
-  [x : (Vec A) y : (Vec A) i : int len : int ^fat cmp : (fn [A A] bool)]
+(defn vec-eq-loop [^Eq A]
+  [x : (Vec A) y : (Vec A) i : int len : int]
   : bool
   (if (= i len)
     true
-    (if (cmp (vec-get x i) (vec-get y i))
-      (vec-eq-loop x y (+ i 1) len cmp)
+    (if (eq? (:: (vec-get x i) A) (:: (vec-get y i) A))
+      (vec-eq-loop x y (+ i 1) len)
       false)))
 ;;; Eq [Vec] -- element-wise equality using the element type's Eq instance.
 ;; M4c (TCO-in-ABI-specs): the instance body is now pure Turmeric.  Path A
@@ -377,7 +419,9 @@
 ;; #377 (when `(Vec A)` was a by-value `Vec__int` and the relabel was a
 ;; struct widening); that no longer holds, and TCO inside ABI specs (gate
 ;; lifted in emit_fns.c) lets the pure-Turmeric body iterate without a
-;; carrier helper at all.
+;; carrier helper at all.  vec-eq-loop dispatches the element `eq?` directly
+;; on A, so no carrier-collapsing comparator closure is threaded (that closure
+;; hard-coded Eq[int] and silently pointer-compared cstr elements).
 
 (definstance Eq [Vec]
   [(Eq A)]
@@ -386,5 +430,4 @@
       (vec-eq-loop (:: x (Vec A))
         (:: y (Vec A))
         0
-        (vec-len (:: x (Vec A)))
-        (fn [a b] (eq? a b))))))
+        (vec-len (:: x (Vec A)))))))

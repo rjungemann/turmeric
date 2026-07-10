@@ -1,0 +1,21 @@
+;; containers-eq-show-element-dispatch: Show[Vec] must render the element's
+;; concrete value, not its int64 carrier word, for any single-word element
+;; type whose value differs from its carrier.  Before the vec-of element-type
+;; fix a cstr Vec showed raw pointers, a bool Vec showed 1/0, and a float Vec
+;; showed the double's int64 bit pattern -- because the vec-of literal froze
+;; its binding at the carrier and lost the element type.
+;;
+;; The int case is kept as a regression: int carrier == value is the
+;; coincidence that kept the bug invisible for years.
+;;
+;; Show + the collection instances live in stdlib/typeclass-show.tur, pulled in
+;; on demand via typeclass.tur (not auto-loaded).  Runs on both the compiled
+;; and interpreter paths.
+(load "stdlib/typeclass.tur")
+
+(defn main [] : int
+  (println (show (vec-of "alpha" "beta" "gamma")))  ;; cstr: was pointers
+  (println (show (vec-of true false true)))         ;; bool: was 1/0
+  (println (show (vec-of 1 2 3)))                    ;; int: regression
+  (println (show (vec-of 1.5 3.25)))                ;; float: was bit patterns
+  0)

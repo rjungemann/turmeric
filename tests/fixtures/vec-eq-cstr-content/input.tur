@@ -1,0 +1,29 @@
+;; containers-eq-show-element-dispatch: Eq[Vec] over cstr elements must compare
+;; by the element's Eq instance (strcmp content), not by carrier (pointer)
+;; identity.  Ground truth #1 of the plan: (eq? (vec-of "a" "b") (vec-of "a" "c"))
+;; used to return true because elements were compared by pointer.  The vec-of
+;; literal now carries the concrete element type, so Eq[Vec] threads Eq[cstr].
+;;
+;; `dupe` forces content-distinct pointers so a pointer-identity comparison
+;; would (wrongly) report inequality for equal content -- proving the compare
+;; is by value.
+
+(defn dupe [s : cstr] : cstr
+  ```c
+  size_t n = strlen((const char *)s) + 1;
+  char *b = (char *)malloc(n);
+  memcpy(b, (const char *)s, n);
+  return (const char *)b;
+  ```)
+
+(defn main [] : int
+  ;; content-equal, distinct element pointers -> true
+  (println (if (.eq? (vec-of "a" "b") (vec-of (dupe "a") (dupe "b"))) 1 0))
+  ;; last element differs -> false
+  (println (if (.eq? (vec-of "a" "b") (vec-of "a" "c")) 1 0))
+  ;; length differs -> false
+  (println (if (.eq? (vec-of "a" "b") (vec-of "a")) 1 0))
+  ;; reflexive -> true
+  (let [v (vec-of "hello" "world")]
+    (println (if (.eq? v v) 1 0)))
+  0)
