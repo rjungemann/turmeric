@@ -408,11 +408,21 @@ fallback until the final phase removes it.
   serialize -> bytes -> deserialize; oracle `cps-oracle-serial-native-callframe`;
   `direct == cps`.
 
-  *Remaining for U4:* `let`/`if`/do-prelude serial contexts, 2-arg call frames
-  (serialized env operand), and Shape 1 (identity) -- the direct parallels to the
-  corresponding cloneable slices, each still on the delegation until ported.
-  Native serial now owns the arithmetic + 1-arg-call subset, matching where the
-  cloneable native port started before its let/if/do extensions.
+  **Fourth slice landed (native serial `let` / `if` contexts).** `build_serial`'s
+  spine walk now also admits a pure `let` prelude and one `if` branch point
+  (mutually exclusive, mirroring `build_cloneable`).  No emit change was needed:
+  `emit_cloneable`'s `let`-prelude loop and `if`-branch wrapper run before/after
+  the shape branches and are shape-agnostic, so they bracket the serial chain for
+  free; the capture walkers already scan the node's `lets`/`if_cond`/`if_pure`
+  regardless of the `serial` flag.  Verified `(let [a (* base 2)] (+ a (shift)))`
+  and `(if (> n 0) (+ 100 (shift)) 42)` with a real serialize round-trip; oracle
+  `cps-oracle-serial-native-letif`; `direct == cps`.
+
+  *Remaining for U4:* do-prelude serial (needs the `$0` ignore-value wrapper +
+  `SkReg` side, a small emit addition), 2-arg call frames (serialized env
+  operand), and Shape 1 (identity).  Native serial now owns the same
+  arithmetic + call + `let` + `if` subset the cloneable native port reached; the
+  two `build_*` walks are near-identical and are a natural future unification.
 - **U5 -- Async / await.** Port the scheduler wiring on top of the now-unified
   cloneable/serial base.
 - **U6 -- Prelude consolidation.** Fold the four `emit_cps_*_prelude` emitters

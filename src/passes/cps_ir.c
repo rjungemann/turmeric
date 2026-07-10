@@ -553,11 +553,28 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
 static bool serial_reaches_shift(const Expr *e) {
     e = ascribe_peel(e);
     if (!e) return false;
-    if (e->kind == EX_SERIAL_SHIFT) return true;
-    if (e->kind == EX_BUILTIN)
-        for (uint32_t i = 0; i < e->as.builtin.n; i++)
-            if (serial_reaches_shift(e->as.builtin.args[i])) return true;
-    return false;
+    switch (e->kind) {
+        case EX_SERIAL_SHIFT:
+            return true;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (serial_reaches_shift(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (serial_reaches_shift(e->as.call_.args[i])) return true;
+            return false;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (serial_reaches_shift(e->as.let_.bindings[i].init)) return true;
+            return serial_reaches_shift(e->as.let_.body);
+        case EX_IF:
+            return serial_reaches_shift(e->as.if_.cond)
+                || serial_reaches_shift(e->as.if_.then_)
+                || serial_reaches_shift(e->as.if_.else_or_null);
+        default:
+            return false;
+    }
 }
 
 static const Binding *serial_named_receiver(CpsB *b, const Expr *shift) {
@@ -573,7 +590,10 @@ static const Binding *serial_named_receiver(CpsB *b, const Expr *shift) {
 static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     const Expr *cur = ascribe_peel(e->as.serial_reset_.body);
     CloneFrame frames[CL_IR_MAX_FRAMES];
-    uint32_t nf = 0;
+    CloneLet   lets[CL_IR_MAX_LETS];
+    uint32_t nf = 0, nl = 0;
+    const Expr *if_cond = NULL, *if_pure = NULL;
+    bool if_when = true, saw_if = false;
 
     for (;;) {
         cur = ascribe_peel(cur);
@@ -627,6 +647,50 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             continue;
         }
 
+        /* Pure `let` prelude (emit shared with cloneable): inits shift-free +
+         * scalar, body carries the hole.  Kept mutually exclusive with `if`. */
+        if (cur->kind == EX_LET) {
+            if (saw_if) return NULL;
+            const Expr *lbody = cur->as.let_.body;
+            if (!serial_reaches_shift(lbody)) return NULL;
+            for (uint32_t i = 0; i < cur->as.let_.n; i++) {
+                const Expr    *init = cur->as.let_.bindings[i].init;
+                const Binding *bd   = cur->as.let_.bindings[i].binding;
+                if (serial_reaches_shift(init)) return NULL;
+                if (!bd || !clone_let_ty_ok(bd->type.kind)) return NULL;
+                if (!safe_to_delegate(b, init)) return NULL;
+                if (nl >= CL_IR_MAX_LETS) return NULL;
+                lets[nl].binding = bd;
+                lets[nl].init    = init;
+                nl++;
+            }
+            cur = lbody;
+            continue;
+        }
+
+        /* One `if` branch point (emit shared with cloneable): pure condition,
+         * exactly one shift-bearing arm; the pure arm is direct-emitted. */
+        if (cur->kind == EX_IF) {
+            if (saw_if) return NULL;
+            if (nl > 0) return NULL;                  /* let+if mix -> delegation */
+            const Expr *cond = cur->as.if_.cond;
+            const Expr *thn  = cur->as.if_.then_;
+            const Expr *els  = cur->as.if_.else_or_null;
+            if (!cond || !thn || !els) return NULL;
+            if (serial_reaches_shift(cond)) return NULL;
+            if (!safe_to_delegate(b, cond)) return NULL;
+            bool ht = serial_reaches_shift(thn);
+            bool he = serial_reaches_shift(els);
+            if (ht == he) return NULL;                /* exactly one shift arm */
+            const Expr *shift_arm = ht ? thn : els;
+            const Expr *pure_arm  = ht ? els : thn;
+            if (serial_reaches_shift(pure_arm)) return NULL;
+            if (!safe_to_delegate(b, pure_arm)) return NULL;
+            if_cond = cond; if_pure = pure_arm; if_when = ht; saw_if = true;
+            cur = shift_arm;
+            continue;
+        }
+
         break;
     }
 
@@ -643,6 +707,17 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     CloneFrame *fa = arena_alloc(b->a, nf * sizeof(CloneFrame));
     memcpy(fa, frames, nf * sizeof(CloneFrame));
     t->as.cloneable.frames = fa;
+    t->as.cloneable.n_lets = nl;
+    if (nl) {
+        CloneLet *la = arena_alloc(b->a, nl * sizeof(CloneLet));
+        memcpy(la, lets, nl * sizeof(CloneLet));
+        t->as.cloneable.lets = la;
+    } else {
+        t->as.cloneable.lets = NULL;
+    }
+    t->as.cloneable.if_cond = if_cond;
+    t->as.cloneable.if_pure = if_pure;
+    t->as.cloneable.if_when = if_when;
     t->as.cloneable.body = rest;
     return t;
 }
