@@ -1,136 +1,75 @@
 ---
 title: CPS backend -- effectful TY_FN callback params
-status: scoping
-description: The last major N6 fallback lever after the generic-monomorph work. A colored function that INVOKES an effectful fn-value parameter (a callback whose type carries an effect row, e.g. (fn [cstr] #{Write} nil)) cannot be CPS-emitted, because calling it must thread the DK continuation but a first-class fn value has no DK entry point. This doc scopes the mechanism, the core design problem (context-polymorphic DK/fiber calling convention for first-class closures), and why -- unlike G1-G3b -- there is no cheap path.
+status: landed
+description: A colored function that INVOKES an effectful fn-value parameter (a callback whose type carries an effect row, e.g. (fn [cstr] #{Write} nil)) now CPS-emits. The initial scoping predicted a large DK-callable-closure subsystem; a spike disproved that -- the effect rides the fiber machine's dynamic dispatch transparently, so admitting the param is sound with no new mechanism.
 ---
 
 # CPS backend -- effectful TY_FN callback params
 
-## The gap
+## Outcome: a one-gate change, not a subsystem
 
-An *effect-free* plain `TY_FN` param already CPS-emits (its call is a delegated
-indirect call -- the callback runs on its own entry, no continuation). An
-*effectful* callback -- a param whose fn type carries a non-empty effect row,
-`(fn [cstr] #{Write} nil)` -- is deliberately rejected by `fn_sig_ok`
-(`effect_row_is_empty` gate), so a function that takes and *invokes* one falls
-back to fiber:
+The initial scoping of this doc predicted the largest, heaviest remaining N6
+lever -- a new "DK-callable first-class closure" subsystem with a
+context-polymorphic (DK-vs-fiber) calling convention. **A spike disproved that.**
+The actual change is a single gate: `fn_sig_ok` (and `mono_sig_ok`) now admit an
+effectful `TY_FN` param (`fn_param_ok = p->type.kind == TY_FN`, dropping the
+`effect_row_is_empty` requirement). No CPS-IR change, no closure ABI change, no
+routing.
 
-```turmeric
-(defn call-writer [f : (fn [cstr] #fx{Write} nil)] #fx{Write} : nil
-  (f "hi"))                              ; invoking f performs Write, escaping to the caller
-```
+## Why it is sound (the spike's finding)
 
-## The core finding: fiber uses DYNAMIC dispatch, DK uses STATIC threading
+The wrong assumption was that invoking an effectful callback must thread the DK
+continuation. It does not. The **fiber effect machine dispatches DYNAMICALLY**
+through a global handler chain (`tur_current_fiber->effect_handler_chain`), so an
+effectful callback is a plain fiber call whose effect propagates with no
+continuation passed. The CPS backend already **delegates** an indirect fn-param
+call (a `CT_LETRAW` emitted as a plain call `f(args)`), so the effect rides the
+fiber machine and never touches DK. That is sound because:
 
-On the **fiber** path an effectful callback is trivial: `f` is a bare `int64`
-function pointer and the call is a plain C call `f("hi")` -- the `Write` it
-performs propagates through the runtime's *global effect-handler chain*
-(`tur_current_fiber->effect_handler_chain`) at run time. No continuation is
-passed; effect dispatch is dynamic.
+- **The whole-program taint keeps performer and handler co-fiber.** The effect is
+  performed by the (fiber) callback body, which taints it, so any DK function
+  handling that effect is evicted -- the handler stays fiber, reachable by the
+  fiber chain. A DK function that would itself perform the effect *on DK* is
+  likewise evicted (verified: a higher-order fn that both invokes an effectful
+  callback and performs a second effect directly falls back to fiber, `apply-cb
+  DK?=0`).
+- **The DK higher-order function's continuation survives the fiber suspend.** Its
+  frame lives on the fiber's C stack; a single-shot resume preserves it. Verified
+  with real post-call work: `{(f) * 2} + base` = 27, apply-cb genuinely DK.
+- **A fiber context is always present.** In a well-typed program an effectful
+  callback is only reached within a handler for its effect, and that handler is
+  fiber (by the taint), so `tur_current_fiber` is set when the callback performs.
+- **Multi-shot is not a new hazard.** Resuming a continuation captured through a
+  callback more than once is a hard error on BOTH paths (`TUR-E0201`), so it is
+  out of scope here, not a regression.
 
-The **DK** machine threads continuations *statically*: `dk_perform(tag, arg, k)`
-delivers to the handler reached through the explicit `k`. So for the DK machine
-to call an effectful callback, that callback's function must accept the
-continuation -- `f(args, k)` -- and `f` must be a pointer to a **DK-shaped**
-function. A plain fn pointer (fiber shape, no `k`) cannot participate.
+## What landed
 
-This is why effectful callbacks are categorically harder than the
-generic-monomorph work (G1-G3b): those reused *named-function* machinery and DK
-threading between named functions. Effectful callbacks need DK threading through
-a *first-class value*.
+- `fn_sig_ok` / `mono_sig_ok`: admit an effectful `TY_FN` param.
+- Fixtures: `cps-backend-effectful-callback` (higher-order `apply-cb` with real
+  continuation work after the effectful call, `direct == cps == 27`);
+  `cps-backend-fn-param-effectful` (repurposed from the old fallback guard into a
+  positive test -- an effectful `#{Write}` callback invoked from a DK function
+  that also handles a *different* effect on DK, `hi` / `5`).
+- Verified across mixing DK+fiber effects, continuation-after-callback, named and
+  nested callbacks. Full suite: 2040 passed, 0 failed.
 
-## What a DK-callable closure needs
+## Bounds / related
 
-The lambda `(fn [s] (perform (Write s)))` is already lifted to a top-level
-function (`__fn_1267(int64_t s)` in the emitted C), so it is classifiable. The
-pieces:
-
-1. **Emit a DK variant of the colored lifted closure**: `__fn_N__cps(args, k)`
-   that performs `dk_perform(...)`. This reuses the `emit_cps_ir_try_fn`
-   machinery *if* the lifted closure fn reaches it as a classifiable entry --
-   which needs checking (lifted closures are synthesized during closure-lifting;
-   whether they appear as program items `ensure_S` walks, or only in the emit
-   stream, determines how they get classified).
-2. **The indirect DK call**: in a colored (DK) function, invoking `f` emits
-   `((R (*)(A..., DK *))f)(args, k)` -- threading the caller's continuation.
-3. **fn_sig_ok**: admit an effectful `TY_FN` param.
-4. **Effect taint**: the callback's effect must be clean (the callback, the
-   higher-order fn, and the handler all DK) -- the same whole-program taint the
-   G3b `mono_template` work established, extended to callback effects.
-
-## The core design problem: context-polymorphic calling convention
-
-Piece 2 hides the real difficulty. A first-class fn *value* is
-**context-polymorphic in its calling convention**: the *same* closure, passed to
-a DK higher-order function, must present its DK entry `__fn_N__cps` (takes `k`);
-passed to fiber code, its fiber entry `__fn_N` (no `k`). The value's *type*
-(`(fn [cstr] #{Write} nil)`) does not distinguish them.
-
-Concretely, in
-
-```turmeric
-(defn run [] : int
-  (handle (call-writer (fn [s] (perform (Write s))))   ; closure created here
-    (Write [s] k) (do (println s) (resume k nil))))
-```
-
-if `run` and `call-writer` are DK, the closure passed to `call-writer` must be
-the DK pointer; but the *same closure expression* in a fiber caller must be the
-fiber pointer. Resolving this needs one of:
-
-- **A fn-value ABI carrying both entries** -- e.g. `{ void *env; fiber_fn;
-  dk_fn; }` -- so the callee picks the entry matching its machine. This grows the
-  carrier (today a bare `int64` pointer for a plain `TY_FN`, or the 2-word
-  `tur_poly_fn_t` for a poly carrier) and touches every closure-creation and
-  indirect-call site in both emitters -- an ABI change to a pervasively-used
-  representation.
-- **Per-convention closure monomorphization** -- lift a colored closure twice
-  (fiber `__fn_N`, DK `__fn_N__cps`) and pick the pointer at each creation site
-  by the surrounding function's machine. Avoids growing the carrier but needs the
-  closure-creation emit to be machine-aware and the taint to decide each closure's
-  convention.
-
-Either way it is a cross-cutting change to closure representation + creation +
-indirect-call in both the direct and CPS emitters -- a new subsystem, materially
-larger than G3b (which added a flag + routing to existing named-function paths).
-
-## Also: some effectful-callback patterns are pre-existing DIRECT bugs
-
-A callback that is both invoked and *handled within the same function* does not
-even compile on the direct path today:
-
-```turmeric
-(defn run-with [f : (fn [] #fx{E} int)] : int
-  (handle (f) (E [] k) (resume k 5)))        ; 'f' undeclared -- direct emitter error
-```
-
-So the DK work here also depends on the direct emitter's effectful-fn-param
-handling being sound for the patterns targeted (the propagate-up pattern
-`call-writer` does compile; the handle-in-same-fn pattern does not). Worth a
-separate `docs/reported/` note if pursued.
-
-## Recommendation
-
-This is the largest remaining N6 lever and the only one requiring a new
-subsystem (DK-callable first-class closures with a context-polymorphic calling
-convention) rather than an extension of existing machinery. It carries real ABI
-/ design risk to a pervasively-used representation, and the current behavior is
-sound (fiber handles effectful callbacks correctly via dynamic dispatch). Unlike
-G1-G3b it has no cheap path and no safe incremental slice -- the calling-
-convention decision is global.
-
-Recommendation: schedule it as a dedicated design-first effort (choose the
-carrier-both-entries vs per-convention-monomorph approach, prototype the
-closure-creation + indirect-call change behind the experimental flag, verify the
-fn-value ABI change does not regress the suite), rather than fold it into an
-incremental pass. The generic-monomorph lever (G1-G3b, landed) already moved the
-dominant `sig-param TY_APP` surface; effectful callbacks are the next-largest but
-heaviest remaining item.
+- A callback that is invoked and *handled within the same function* does not
+  compile on the direct path either (a pre-existing direct-emitter bug), tracked
+  in
+  [docs/reported/direct-effectful-fn-param-handled-in-same-fn.md](../../reported/direct-effectful-fn-param-handled-in-same-fn.md).
+  The CPS path inherits that limit (it delegates to the direct emitter), so that
+  shape is out of scope until the direct bug is fixed.
+- True DK-native effectful callbacks (threading the DK continuation through a
+  first-class value) remain unbuilt and unneeded: the fiber-dynamic-dispatch route
+  is correct and simpler. The subsystem the initial scoping described is a
+  non-goal.
 
 ## Depends on / reuses
 
-- The G3b whole-program effect-taint over monomorphs (`mono_template`) -- the
-  callback-effect taint would extend the same fixpoint.
-- `emit_cps_ir_try_fn` + the DK emit machinery -- for the lifted-closure `__cps`
-  body.
+- The whole-program effect-taint (`ensure_S`), which keeps the delegated effect
+  co-fiber -- the load-bearing soundness mechanism.
+- The existing `CT_LETRAW` indirect-call delegation.
 - Parent: [cps-backend-n6-fallback-removal-plan.md](cps-backend-n6-fallback-removal-plan.md).

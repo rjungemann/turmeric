@@ -1034,13 +1034,23 @@ static bool fn_sig_ok(const FnDef *fd) {
          * their type fails the scalar / by-value-aggregate slot gate -- emit_params
          * emits the matching C type, and a call *through* such a param is an
          * uncolored delegated indirect call (CT_LETRAW), which the direct emitter
-         * emits with the same spelling.  An *effectful* fn param
-         * (`(fn [..] #{E} ..)`) is deliberately NOT admitted: invoking it performs
-         * a Turmeric effect that would have to thread the DK continuation, but a
-         * delegated call runs on the fiber effect machine -- the two do not
-         * interoperate, so such a function must keep falling back. */
-        bool fn_param_ok = p->type.kind == TY_FN
-                        && effect_row_is_empty(p->type.as.fn.effect_row);
+         * emits with the same spelling.
+         *
+         * An *effectful* fn param (`(fn [..] #{E} ..)`) is ALSO admitted.  The key
+         * realization: the fiber effect machine dispatches DYNAMICALLY (a global
+         * handler chain), so invoking an effectful callback is a plain fiber call
+         * whose effect propagates without any continuation threading.  Delegating
+         * it is therefore SOUND -- the effect never touches the DK machine.  What
+         * keeps a DK function from splitting is the whole-program taint: the effect
+         * is performed by the (fiber) callback body, which taints it, so its
+         * handler stays co-fiber, and any DK function that would itself perform
+         * that effect on DK is evicted.  The DK higher-order function's own
+         * continuation survives the fiber suspend (it lives on the fiber's C
+         * stack).  Multi-shot resume through a callback is a hard error on BOTH
+         * paths (TUR-E0201), so it is not a new hazard.  Verified across mixing
+         * DK+fiber effects, continuation-after-callback, named + nested callbacks,
+         * and the full suite. */
+        bool fn_param_ok = p->type.kind == TY_FN;
         if (!p->is_poly_fn && !p->is_borrow && !fn_param_ok
             && !slot_ok_t(&p->type, p->type.kind)) return false;
         if (param_name_clashes_cps(p)) return false;
@@ -2567,7 +2577,7 @@ static bool mono_sig_ok(const FnDef *fd, const EmitAbiSpecialization *spec) {
     for (uint8_t i = 0; i < fd->n_params; i++) {
         const Binding *p = fd->params[i];
         const Type *pt = (i < spec->n_args) ? &spec->arg_types[i] : &p->type;
-        bool fn_param_ok = pt->kind == TY_FN && effect_row_is_empty(pt->as.fn.effect_row);
+        bool fn_param_ok = pt->kind == TY_FN;   /* effectful admitted -- see fn_sig_ok */
         if (!p->is_poly_fn && !p->is_borrow && !fn_param_ok
             && !slot_ok_t(pt, pt->kind)) return false;
         if (param_name_clashes_cps(p)) return false;
