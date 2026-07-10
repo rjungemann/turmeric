@@ -1,0 +1,29 @@
+;; U7 reset/shift native gap (cps-backend-unification): NESTED reset.
+;; A `reset` inside another reset's delimited body -- in tail position, in an
+;; arithmetic context, under a `let`, with an `if` in the inner body, and three
+;; deep.  The DK machine is multi-prompt (a shift binds to the nearest enclosing
+;; prompt), so emit_reset's prompt simply nests; the only thing that had evicted
+;; these to the direct emitter was delim_ok falling through to the stricter
+;; term_core_ok on a nested CT_RESET (whose continuation delivers the nested
+;; value OUT to the enclosing prompt -- a KK_PROMPT delivery term_core_ok
+;; forbids).  delim_ok now admits CT_RESET, so these lower natively onto nested
+;; dk_prompt/dk_run.  direct == cps holds: shift is abortive and binds to the
+;; nearest reset, so the outer delimited context is unaffected.
+(defn tail-nested [n : int] : int
+  (reset (reset (shift (fn [v] v) 100))))
+(defn arith-ctx [n : int] : int
+  (reset (* 2 (reset (+ 100 (shift (fn [v] v) 5))))))
+(defn let-capture [n : int] : int
+  (reset (let [a 7] (+ a (reset (shift (fn [v] v) 3))))))
+(defn inner-if [n : int] : int
+  (reset (+ 1 (reset (if (= n 0) (shift (fn [v] v) 5) 9)))))
+(defn three-deep [n : int] : int
+  (reset (reset (reset (shift (fn [v] v) 42)))))
+(defn main [] : int
+  (println (tail-nested 0))
+  (println (arith-ctx 0))
+  (println (let-capture 0))
+  (println (inner-if 0))
+  (println (inner-if 1))
+  (println (three-deep 0))
+  0)

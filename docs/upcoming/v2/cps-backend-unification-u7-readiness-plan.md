@@ -43,7 +43,7 @@ must be total:
 
 | Lowering fn | Reached from | Native CT-IR status | Gap to delete |
 |---|---|---|---|
-| `emit_cps_reset` | `emit_effects_reset` (emit_effects.c:1218) | `CT_RESET`/`CT_SHIFT` native for the `delim_ok` subset | shapes outside `delim_ok` (setjmp/longjmp escape path, non-admitted join shapes) still evict to direct -> this fn |
+| `emit_cps_reset` | `emit_effects_reset` (emit_effects.c:1218) | `CT_RESET`/`CT_SHIFT` native for the `delim_ok` subset, now incl. **nested reset** | reset/shift-specific tail is **closed** (escape/branch native since U1; nested reset admitted -- see resetshift-gap note); only the generic **heap-reified join** case (multiple non-tail delimited operands) still evicts, shared with the rest of the C1 subset |
 | `emit_cps_cloneable_reset` | `emit_effects_cloneable_reset` (:1239) + delegation | value-typed subset native (arith/call/let/if/do) | **closure/colored receivers** delegate here (porting them duplicates this fn's closure machinery -- see U3 steps 6-7 note) |
 | `emit_cps_serial_reset` | `emit_effects_serial_reset` (:1703) + delegation | value-typed subset native (arith/call/let/if/do) | **2-arg call frames** (serialized env codec), **Shape 1 identity**, closure receivers delegate here |
 | `emit_cps_callcc` | `EX_CALLCC` dispatch (emit_expr.c:2826) + delegation | **none -- 100% delegated** (U2 CT_LETRAW) | all of call/cc + escape has no native CT-IR emit |
@@ -89,7 +89,13 @@ flagged as deferred.
    - cloneable/serial closure receivers + serial 2-arg/Shape 1 (accepting the
      duplication, or a shared closure-lowering helper the runtime relocation could
      also host).
-   - base reset/shift shapes outside `delim_ok`.
+   - base reset/shift shapes outside `delim_ok` -- **the reset/shift-specific tail
+     is now closed**: escape/branch shapes went native in U1, and nested reset is
+     admitted (`delim_ok` grew a `CT_RESET` case; see
+     [cps-backend-unification-u7-resetshift-gap.md](cps-backend-unification-u7-resetshift-gap.md)).
+     The only residual is the generic heap-reified join (multiple non-tail
+     delimited operands), which is shared with the rest of the C1 subset, not
+     reset-specific.
 3. **Delete the lowering functions** once each has zero callers: remove
    `emit_cps_reset` / `_cloneable_reset` / `_serial_reset` / `emit_cps_callcc`, the
    `emit_effects_*` dispatch wrappers, and the `EX_CALLCC` direct dispatch; drop

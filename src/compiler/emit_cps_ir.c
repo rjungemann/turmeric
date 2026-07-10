@@ -1178,9 +1178,27 @@ static bool delim_ok(const CTerm *t) {
             return shift_body_ok(t->as.shift.body)
                 && collect_caps(t->as.shift.body, t->as.shift.k.id, &scs);
         }
+        case CT_RESET: {
+            /* U7-reset (nested-reset slice): a `reset` inside the enclosing
+             * delimited body.  emit_reset installs a fresh prompt (the DK machine
+             * is multi-prompt; a shift binds to the nearest enclosing prompt, so
+             * the nesting is correct), threads the inner delimited body under it,
+             * and lifts the inner reset's continuation as a RESET_CONT that
+             * delivers the nested value onward -- in tail position, to the OUTER
+             * prompt (KK_PROMPT).  That outward KK_PROMPT delivery is exactly what
+             * the stricter reset_body_ok (via term_core_ok) forbids, which is why
+             * a nested reset used to evict to the direct emitter.  Admit the inner
+             * delimited body AND its continuation via delim_ok (both may deliver
+             * to a prompt), with scalar-only captures riding the lifted env. */
+            CapSet cs;
+            return (slot_ok_t(t->as.reset.x.type, t->as.reset.x.ty) || t->as.reset.x.ty == TY_NIL)
+                && delim_ok(t->as.reset.delim)
+                && delim_ok(t->as.reset.body)
+                && collect_caps(t->as.reset.body, t->as.reset.x.id, &cs);
+        }
         default:
-            /* Nested reset/handle/perform/resume/unsupported: keep the stricter
-             * core admission -- not relaxed by this slice. */
+            /* Nested handle/perform/resume/unsupported: keep the stricter core
+             * admission -- not relaxed by this slice. */
             return term_core_ok(t);
     }
 }
