@@ -2562,14 +2562,23 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         uint32_t nf = t->as.cloneable.n_frames;
         char bodyfn[256];
         snprintf(bodyfn, sizeof(bodyfn), "%s_ccbody%d", ce->fn_cn, id);
-        /* One frame fn per context frame. */
+        /* One frame fn per context frame: an arithmetic op, or a 1-arg call to a
+         * top-level fn applied to the resumed value (no captured env). */
         for (uint32_t i = 0; i < nf; i++) {
             char ctxfn[256];
             snprintf(ctxfn, sizeof(ctxfn), "%s_ccctx%d_%u", ce->fn_cn, id, i);
-            buf_printf(ce->helpers,
-                "static intptr_t %s(intptr_t env, intptr_t value) { return %s; }\n",
-                ctxfn, cloneable_frame_expr(t->as.cloneable.frames[i].op,
-                                            t->as.cloneable.frames[i].hole_left));
+            const CloneFrame *fr = &t->as.cloneable.frames[i];
+            if (fr->call_fn) {
+                char *cfn = callee_name(fr->call_fn);
+                buf_printf(ce->helpers,
+                    "static intptr_t %s(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s((int64_t)value); }\n",
+                    ctxfn, cfn);
+                free(cfn);
+            } else {
+                buf_printf(ce->helpers,
+                    "static intptr_t %s(intptr_t env, intptr_t value) { return %s; }\n",
+                    ctxfn, cloneable_frame_expr(fr->op, fr->hole_left));
+            }
         }
         buf_printf(ce->helpers,
             "static intptr_t %s(intptr_t env, DK *subk) {\n"
@@ -2580,11 +2589,13 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         char dv[48];
         snprintf(dv, sizeof(dv), "__ccd%d", id);
         ce_line(ce, "DK *%s = dk_prompt(1, dk_done());", dv);
-        /* Push frames outermost-first (frames[0] deepest, closest to the prompt). */
+        /* Push frames outermost-first (frames[0] deepest, closest to the prompt).
+         * A call frame has no captured env -- pass 0. */
         for (uint32_t i = 0; i < nf; i++) {
             char ctxfn[256];
             snprintf(ctxfn, sizeof(ctxfn), "%s_ccctx%d_%u", ce->fn_cn, id, i);
-            char *opv = atom_str(ce, &t->as.cloneable.frames[i].operand);
+            const CloneFrame *fr = &t->as.cloneable.frames[i];
+            char *opv = fr->call_fn ? strdup("0") : atom_str(ce, &fr->operand);
             ce_line(ce, "%s = dk_frame(%s, (intptr_t)(%s), %s);", dv, ctxfn, opv, dv);
             free(opv);
         }

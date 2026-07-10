@@ -317,6 +317,15 @@ fallback until the final phase removes it.
   mutually exclusive per lowering (the mix falls through to the still-correct
   delegation).
 
+  Shape 2 also admits a **1-arg call frame** (`(cloneable-reset (dbl
+  (cloneable-shift k 0)))`, `dbl` a top-level `int -> int` fn): `CloneFrame` gains
+  a `call_fn` alternative to the arithmetic `op`, emitting the frame as
+  `(intptr_t)dbl((int64_t)value)` with a 0 env; call frames nest with arithmetic
+  frames in one chain. Oracle `cps-oracle-cloneable-native-shape2-callframe`.
+  2-arg call frames stay delegated: the direct emitter drops them onto the legacy
+  identity path (context not reified), so native+correct emission would break
+  `direct == cps`.
+
   **Receivers investigated -- nothing to port.** A capture-free lambda receiver
   (`(fn [k] k)`) already emits natively (it lifts to a top-level fn; oracle
   `cps-oracle-cloneable-native-lambda-recv`). Fat-closure and colored receivers

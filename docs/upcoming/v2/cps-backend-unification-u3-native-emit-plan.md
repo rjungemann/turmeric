@@ -139,8 +139,23 @@ a `(cloneable-shift receiver val)` is called through the indirect fn-pointer for
 Net: the receiver shapes the direct backend supports already emit natively; the
 shapes it does not are correctly delegated. No receiver change is warranted.
 
-Remaining in step 5: non-arithmetic `let` shapes (the `do`-prelude and call-frame
-variants the direct `collect_ctx` also handles). Steps 6-7 (multi-shot
+**Step 5 (Shape 2) extended -- 1-arg call frames LANDED.** `CloneFrame` gains a
+`call_fn` alternative (mutually exclusive with the arithmetic `op`): a context
+frame `(f [])` where `f` is a top-level uncolored `int -> int` fn and the hole is
+its sole argument (no captured env).  `build_cloneable` admits it in the same
+spine walk; `emit_cloneable` emits the frame fn as `return (intptr_t)f((int64_t)
+value)` and pushes it with a 0 env.  Call frames nest with arithmetic frames
+(`(+ 1 (dbl []))`, `(dbl (dbl []))`) in one chain.  Oracle
+`cps-oracle-cloneable-native-shape2-callframe`.
+
+Deliberately *not* native: **2-arg call frames** (`(f env [])`).  The direct
+emitter drops a 2-arg call context onto the legacy identity path (it does not
+reify the frame -- the resumed value is returned unchanged), so making it native
+and correct would make `direct != cps`.  It stays on the delegation path to match
+the direct backend's behavior byte-for-byte.
+
+Remaining in step 5: the `do`-prelude shape (side-effecting prelude + ignore-value
+tail frames) the direct `collect_ctx` also handles.  Steps 6-7 (multi-shot
 classification axis + retire delegation) follow.
 
 1. **CT nodes.** Add `CT_CLONEABLE_SHIFT` (receiver + captured-cont, distinct

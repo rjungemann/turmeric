@@ -95,15 +95,22 @@ typedef enum CTermKind {
 
 typedef struct CTerm CTerm;
 
-/* U3 Shape 2: one arithmetic context frame `(<op> <operand> [])` around a
- * cloneable-shift, reified as a DK frame.  `op` is the "+"/"-"/"*"/"/" C
- * operator; `operand` is the other (int-atom) operand captured into the frame
- * env; `hole_left` is true iff the shift is the left operand.  Frames are stored
- * outermost-first (matching the dk_frame push order). */
+/* U3 Shape 2: one context frame around a cloneable-shift, reified as a DK frame.
+ * Two frame kinds, distinguished by which of `op` / `call_fn` is set:
+ *   - Arithmetic frame (`op` != NULL, `call_fn` == NULL): `(<op> <operand> [])`
+ *     for `op` in "+"/"-"/"*"/"/"; `operand` is the other (int-atom) operand
+ *     captured into the frame env; `hole_left` is true iff the shift is the left
+ *     operand.
+ *   - Call frame (`call_fn` != NULL, `op` == NULL): a 1-arg call `(f [])` to a
+ *     top-level uncolored int->int fn; the hole is the sole argument, so there is
+ *     no captured env (`operand` unused, env passed as 0), and `hole_left` is
+ *     true.
+ * Frames are stored outermost-first (matching the dk_frame push order). */
 typedef struct CloneFrame {
-    const char *op;
-    CAtom       operand;
-    bool        hole_left;
+    const char    *op;
+    const Binding *call_fn;
+    CAtom          operand;
+    bool           hole_left;
 } CloneFrame;
 
 /* U3 Shape 2 (let-bearing context): one pure `let` binding sitting in the
