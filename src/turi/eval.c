@@ -4420,6 +4420,46 @@ static void frame_record_abi(TuriEnv *env, EvalFrame *callee, EvalFrame *caller,
     }
 }
 
+/* Bind a bare-head constrained instance's constraint tyvars onto the instance
+ * body frame.  A `(definstance C [Cons] [(C A)] ...)` head pins only the class
+ * param `a = Cons`; its element tyvar `A` lives solely in the `[(C A)]`
+ * constraint and never appears in the call's abi_bindings, so a nested
+ * typeclass dispatch inside the body (e.g. `(tag-head c)` ->
+ * `(tag (:: (.head c) A))`) would find `A` unbound and fall back to the
+ * int-carrier representative instance.  The compiled path recovers `A`
+ * per-specialization from the receiver's static type (emit_reresolve_disp_type
+ * -> emit_abi_constraint_var_bindings); mirror that here.  `recv_ty` is the
+ * receiver argument's static type at the dispatch site (`(Cons (Option int))`);
+ * its type-args index each constraint's `param_idx` (the same convention the
+ * shared emit kernel uses). */
+static void frame_bind_instance_constraint_tyvars(TuriEnv *env, EvalFrame *callee,
+                                                  const FnDef *fn, const Type *recv_ty) {
+    if (!fn || !fn->owner_instance || !recv_ty) return;
+    const TypeClassInstance *inst = fn->owner_instance;
+    if (inst->n_type_param_constraints == 0) return;
+    AdtDef *def = NULL;
+    Type args[16];
+    uint8_t n_args = 0;
+    if (!type_extract_adt_app(recv_ty, &def, args, &n_args) || !def) return;
+    for (uint8_t ci = 0; ci < inst->n_type_param_constraints; ci++) {
+        const TypeConstraint *tc = &inst->type_param_constraints[ci];
+        if (!tc->tyvar || !tc->tyvar->name) continue;
+        if (tc->param_idx < 0 || (uint8_t)tc->param_idx >= n_args) continue;
+        Type bound = args[tc->param_idx];
+        if (bound.kind == TY_TYVAR) continue;  /* still abstract: nothing to pin */
+        /* Don't clobber a binding the call's own abi_bindings already pinned. */
+        Type existing;
+        if (frame_lookup_tyvar(callee, tc->tyvar->name, &existing) &&
+            existing.kind != TY_TYVAR)
+            continue;
+        TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+        tb->name = tc->tyvar->name;
+        tb->type = bound;
+        tb->next = callee->tyvars;
+        callee->tyvars = tb;
+    }
+}
+
 /* -------------------------------------------------------------------------
  * T2 (turi-eval-trampoline-plan): explicit-stack driver for the linear control
  * forms.  Flattens directly-nested EX_IF branch chains and EX_DO/EX_PROGRAM
@@ -6365,6 +6405,13 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * method call inside the body can re-resolve its instance. */
                 if (top->expr->as.call_.n_abi_bindings > 0)
                     frame_record_abi(env, call_frame, top->frame, top->expr);
+                /* Bare-head constrained instance: bind its constraint tyvars
+                 * (`(C A)`'s `A`) from the receiver arg's static type so a nested
+                 * dispatch inside the body resolves the element's real instance
+                 * instead of the baked int-carrier representative. */
+                if (fn->owner_instance && n > 0 && top->expr->as.call_.args)
+                    frame_bind_instance_constraint_tyvars(
+                        env, call_frame, fn, &top->expr->as.call_.args[0]->type);
 
                 if (top->tail) {
                     /* F3: tail call -- REUSE the enclosing activation's
