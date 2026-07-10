@@ -91,6 +91,11 @@ static void wasm_preload_stdlib(TuriEnv *env) {
     if (!env) return;
     turi_env_preload_macros(env, WASM_STDLIB_ROOT);
     turi_env_preload_collections(env, WASM_STDLIB_ROOT);
+    /* Preload the REPL-only Show slice (Show [Vec] / [Set] / [Map]) so a
+     * collection result renders through its Show instance via
+     * turi_try_show_by_tag below, matching the native `tur repl`
+     * (src/turi/repl.c, right after turi_env_preload_collections). */
+    turi_env_preload_typeclasses(env, WASM_STDLIB_ROOT);
 }
 
 /* ---------------------------------------------------------------------------
@@ -156,10 +161,17 @@ char *turi_wasm_eval(const char *input) {
     char type_tag[64] = {0};
     TuriValue result = turi_eval_typed(g_env, input, type_tag, sizeof(type_tag));
 
-    /* SI4: three-tier display: turi_try_show → turi_show_result → repr */
+    /* SI4: four-tier display:
+     *   1. turi_try_show        -- TURI_STRUCT with Show instance
+     *   2. turi_show_result     -- TURI_INT heap-pointer (Pair, Cons)
+     *   3. turi_try_show_by_tag -- TURI_INT named ADT/struct/coll
+     *                              (Vec, Set, Map, ...) via its Show
+     *   4. turi_value_repr      -- default repr (fallback below) */
     const char *show_str = turi_try_show(g_env, result);
     if (!show_str)
         show_str = turi_show_result(g_env, result, type_tag);
+    if (!show_str)
+        show_str = turi_try_show_by_tag(g_env, result, type_tag);
     if (show_str) {
         char *ret = turi_wasm_strdup(show_str);
         free((char *)show_str);
@@ -214,10 +226,17 @@ int turi_wasm_eval_ex(const char *input, char **out_result, char **out_error) {
         return 1;
     }
 
-    /* SI4: three-tier display: turi_try_show → turi_show_result → repr */
+    /* SI4: four-tier display:
+     *   1. turi_try_show        -- TURI_STRUCT with Show instance
+     *   2. turi_show_result     -- TURI_INT heap-pointer (Pair, Cons)
+     *   3. turi_try_show_by_tag -- TURI_INT named ADT/struct/coll
+     *                              (Vec, Set, Map, ...) via its Show
+     *   4. turi_value_repr      -- default repr (fallback below) */
     const char *show_str = turi_try_show(g_env, result);
     if (!show_str)
         show_str = turi_show_result(g_env, result, type_tag);
+    if (!show_str)
+        show_str = turi_try_show_by_tag(g_env, result, type_tag);
     if (show_str) {
         *out_result = turi_wasm_strdup(show_str);
         free((char *)show_str);
