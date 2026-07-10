@@ -60,13 +60,24 @@ SpiceMeta = dict  # {name, description, tier, c_dep}
 
 
 def discover_spices() -> list[Path]:
-    """Return sorted spice directories under ../turmeric-spices/spices/."""
+    """Return sorted spice directories under ../turmeric-spices/spices/.
+
+    Returns an empty list (with a stderr warning) when the sibling repo is
+    absent, so `tur run docs` degrades gracefully in environments without the
+    optional ../turmeric-spices/ checkout (e.g. CI) -- matching the codebase's
+    "spices absent -> skip, don't fail" convention. Callers that emit JSON
+    still write an empty array so the downstream gendocs --extra-json step
+    finds its file.
+    """
     root = SPICES_REPO / 'spices'
     if not root.is_dir():
-        sys.exit(
-            f'error: sibling repo not found at {SPICES_REPO.resolve()}. '
-            f'Clone it next to this checkout, or run `tur fetch`.'
+        print(
+            f'warning: sibling spices repo not found at {SPICES_REPO.resolve()}; '
+            f'skipping spice docs. Clone it next to this checkout, or run '
+            f'`tur fetch`, to include them.',
+            file=sys.stderr,
         )
+        return []
     return sorted(p for p in root.iterdir() if p.is_dir())
 
 
