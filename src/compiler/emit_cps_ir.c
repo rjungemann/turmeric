@@ -98,6 +98,11 @@ static const Type *cps_resolve_ty(const Type *t, Type *out) {
     return t;
 }
 
+/* Forward decls used by ensure_S's G3b mono-template classification (defined
+ * below). */
+static bool mono_sig_ok(const FnDef *fd, const EmitAbiSpecialization *spec);
+static bool is_cps_island(const CTerm *t, const Symbol **handled, int nh);
+
 /* The AdtDef at the head of a struct / ADT / ADT-app type, or NULL. */
 static const AdtDef *slot_agg_def(const Type *t) {
     if (!t) return NULL;
@@ -1052,9 +1057,18 @@ static bool fn_sig_ok(const FnDef *fd) {
 typedef struct {
     const FnDef *fd; const Binding *bind; CTerm *term; bool in_s;
     uint64_t eff_lo, eff_hi;
+    /* G3b: a colored GENERIC template whose monomorphs are all CPS-admissible.
+     * It sig-rejects itself (tyvar TY_APP) so in_s stays false and it is never
+     * emitted directly, but while mono_template is true it does NOT taint its
+     * effects -- its monomorphs stand in for it, and they emit DK.  The taint
+     * fixpoint evicts it (mono_template=false, reverting to tainting) if its
+     * effect is tainted by a genuine fiber peer. */
+    bool mono_template;
 } SEnt;
 
 static const Expr *g_prog;      /* program the cache is keyed on */
+static EmitCtx    *g_emit_ctx;  /* G3b: ctx of the active emission, for ctx->abi_specializations */
+static EmitCtx    *g_ents_ctx;  /* G3b: the g_emit_ctx the cached g_ents were classified under */
 static Arena       g_arena;     /* owns the cached CTerms (+ coloring) */
 static bool        g_arena_live;
 static SEnt       *g_ents;
@@ -1329,8 +1343,36 @@ static void expr_collect_effects(const Expr *e, uint64_t *lo, uint64_t *hi) {
     #undef REC
 }
 
+/* G3b: is `fd` a colored GENERIC whose EVERY monomorph spec is CPS-admissible
+ * (concrete signature ok + body core)?  Enumerated from the complete spec set
+ * (ctx->abi_specializations, populated by the pre-emit scan before ensure_S).
+ * `term` is the generic body's CTerm; each monomorph reuses it and resolves its
+ * tyvar types through that monomorph's spec.  Returns false when the generic has
+ * no monomorph specs (a dead generic taints nothing anyway). */
+static bool mono_template_all_admissible(EmitCtx *ctx, const FnDef *fd, CTerm *term) {
+    if (!ctx || !term) return false;
+    bool any = false;
+    for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
+        const EmitAbiSpecialization *spec = &ctx->abi_specializations[i];
+        if (spec->fn != fd || !spec->fn_expr || !spec->clone_name) continue;
+        any = true;
+        const EmitAbiSpecialization *saved = ctx->current_abi_specialization;
+        ctx->current_abi_specialization = (EmitAbiSpecialization *)spec;
+        g_cps_mono_resolver = ctx;
+        bool ok = mono_sig_ok(fd, spec) && term_core_ok(term);
+        g_cps_mono_resolver = NULL;
+        ctx->current_abi_specialization = saved;
+        if (!ok) return false;
+    }
+    return any;
+}
+
 static void ensure_S(const Expr *program) {
-    if (g_prog == program && g_ents) return;   /* cached */
+    /* Cached -- but G3b's mono-template classification needs g_emit_ctx (the
+     * spec set).  If a prior run classified under a different ctx (e.g. a NULL
+     * ctx from emit_cps_ir_program_has_emittable running before the first
+     * try_fn), recompute so mono-templates are populated. */
+    if (g_prog == program && g_ents && g_ents_ctx == g_emit_ctx) return;
 
     if (g_arena_live) { arena_free(&g_arena); g_arena_live = false; }
     free(g_ents); g_ents = NULL; g_ents_n = 0;
@@ -1376,10 +1418,17 @@ static void ensure_S(const Expr *program) {
                 if (candidate && !fn_sig_ok(fd)) candidate = false;
                 CTerm *t = cps_ir_translate_fn(&g_arena, (Expr *)program, fd);
                 if (candidate && !term_core_ok(t)) candidate = false;
+                /* G3b: a colored generic sig-rejects (candidate=false) but if all
+                 * its monomorphs are CPS-admissible it is a mono-template -- it
+                 * stands in for its DK monomorphs and must NOT taint its effects.
+                 * Only meaningful when it is not itself a direct candidate. */
+                bool mono_tmpl = !candidate
+                    && mono_template_all_admissible(g_emit_ctx, fd, t);
                 g_ents[g_ents_n].fd = fd;
                 g_ents[g_ents_n].bind = fd->binding;
                 g_ents[g_ents_n].term = t;
                 g_ents[g_ents_n].in_s = candidate;
+                g_ents[g_ents_n].mono_template = mono_tmpl;
                 g_ents[g_ents_n].eff_lo = g_ents[g_ents_n].eff_hi = 0;
                 expr_collect_effects(fd->body, &g_ents[g_ents_n].eff_lo, &g_ents[g_ents_n].eff_hi);
                 g_ents_n++;
@@ -1409,24 +1458,69 @@ static void ensure_S(const Expr *program) {
                 changed = true;
             }
         }
+        /* An effect is tainted by any entry that is NEITHER an S candidate NOR a
+         * mono-template: those are the genuinely fiber functions.  A mono-template
+         * stands in for its DK monomorphs, so it does not taint while it holds. */
         uint64_t taint_lo = base_lo, taint_hi = base_hi;
         for (size_t i = 0; i < g_ents_n; i++) {
-            if (!g_ents[i].in_s) { taint_lo |= g_ents[i].eff_lo; taint_hi |= g_ents[i].eff_hi; }
+            if (!g_ents[i].in_s && !g_ents[i].mono_template) {
+                taint_lo |= g_ents[i].eff_lo; taint_hi |= g_ents[i].eff_hi;
+            }
         }
         for (size_t i = 0; i < g_ents_n; i++) {
-            if (g_ents[i].in_s &&
-                ((g_ents[i].eff_lo & taint_lo) || (g_ents[i].eff_hi & taint_hi))) {
+            bool tainted = (g_ents[i].eff_lo & taint_lo) || (g_ents[i].eff_hi & taint_hi);
+            if (g_ents[i].in_s && tainted) {
                 g_ents[i].in_s = false;
+                changed = true;
+            }
+            /* G3b: a mono-template whose effect is tainted by a genuine fiber peer
+             * can no longer stand in for DK monomorphs -- evict it so it reverts
+             * to tainting (monotone: only removals). */
+            if (g_ents[i].mono_template && tainted) {
+                g_ents[i].mono_template = false;
                 changed = true;
             }
         }
     }
+    g_ents_ctx = g_emit_ctx;   /* G3b: record the ctx this classification used */
 }
 
 static SEnt *ent_of(const FnDef *fd) {
     for (size_t i = 0; i < g_ents_n; i++)
         if (g_ents[i].fd == fd) return &g_ents[i];
     return NULL;
+}
+
+static SEnt *ent_of_binding(const Binding *b) {
+    if (!b) return NULL;
+    for (size_t i = 0; i < g_ents_n; i++)
+        if (g_ents[i].bind == b) return &g_ents[i];
+    return NULL;
+}
+
+/* G3b: resolve a colored-generic callee at a specific CPS call site to its
+ * MONOMORPH clone name, so a cps->cps tail call to a mono-template emits
+ * `<clone>__cps` rather than the unresolved generic `<callee>__cps`.  Matches the
+ * spec whose callee binding is `fn` and whose concrete arg types (C spelling)
+ * equal the call's atom types.  Returns NULL when 0 or >1 specs match (fall back
+ * -- never guess a wrong monomorph). */
+static const char *find_mono_clone_for_call(EmitCtx *ctx, const Binding *fn,
+                                            const CAtom *args, uint32_t n) {
+    if (!ctx || !fn) return NULL;
+    const char *hit = NULL; int n_hit = 0;
+    for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
+        const EmitAbiSpecialization *spec = &ctx->abi_specializations[i];
+        if (spec->binding != fn || !spec->clone_name || spec->n_args != n) continue;
+        bool ok = true;
+        for (uint32_t j = 0; j < n && ok; j++) {
+            if (!args[j].type) continue;   /* untyped scalar atom: not discriminating */
+            const char *ac = emit_type_c_name(ctx, *(Type *)args[j].type);
+            const char *sc = emit_type_c_name(ctx, spec->arg_types[j]);
+            if (!ac || !sc || strcmp(ac, sc) != 0) ok = false;
+        }
+        if (ok) { hit = spec->clone_name; n_hit++; }
+    }
+    return (n_hit == 1) ? hit : NULL;
 }
 
 /* True when `fn` names a COLORED top-level function (g_ents holds exactly the
@@ -1748,9 +1842,17 @@ static void emit_term(CE *ce, const CTerm *t) {
             break;
         }
         case CT_TAILCALL: {
-            char *fn = callee_name(t->as.tailcall.fn);
+            /* G3b: a colored-generic mono-template callee -- resolve this call
+             * site to the monomorph clone so we thread `<clone>__cps` (the DK
+             * monomorph), not the unresolved generic name. */
+            const char *mclone = NULL;
+            SEnt *fe = ent_of_binding(t->as.tailcall.fn);
+            if (fe && fe->mono_template)
+                mclone = find_mono_clone_for_call(ce->ctx, t->as.tailcall.fn,
+                                                  t->as.tailcall.args, t->as.tailcall.n);
+            char *fn = mclone ? strdup(mclone) : callee_name(t->as.tailcall.fn);
             char *argv = atoms_csv(ce, t->as.tailcall.args, t->as.tailcall.n);
-            if (binding_in_s(t->as.tailcall.fn)) {
+            if (binding_in_s(t->as.tailcall.fn) || mclone) {
                 /* cps->cps: both colored and emitted -- thread the continuation
                  * straight through, no trampoline.  The threaded continuation is
                  * the function's own k (KK_RET) or, inside a reset's delimited
@@ -2412,6 +2514,27 @@ static void emit_forward_decls(EmitCtx *ctx, Buf *file) {
         buf_puts(file, "DK *k);\n");
         free(cn);
     }
+    /* G3b: forward-declare each mono-template monomorph's `<clone>__cps`, since a
+     * cps->cps caller (a DK peer) references it before the spec-body emit loop
+     * defines it.  emit_params + the return type resolve to concrete types under
+     * the active spec. */
+    for (size_t i = 0; i < g_ents_n; i++) {
+        if (!g_ents[i].mono_template) continue;
+        FnDef *fd = (FnDef *)g_ents[i].fd;
+        for (uint32_t s = 0; s < ctx->n_abi_specializations; s++) {
+            EmitAbiSpecialization *spec = &ctx->abi_specializations[s];
+            if (spec->fn != fd || !spec->clone_name) continue;
+            const EmitAbiSpecialization *saved = ctx->current_abi_specialization;
+            ctx->current_abi_specialization = spec;
+            g_cps_mono_resolver = ctx;
+            buf_printf(file, "static int64_t %s__cps(", spec->clone_name);
+            emit_params(ctx, file, fd);
+            if (fd->n_params) buf_puts(file, ", ");
+            buf_puts(file, "DK *k);\n");
+            g_cps_mono_resolver = NULL;
+            ctx->current_abi_specialization = saved;
+        }
+    }
 }
 
 bool emit_cps_ir_program_has_emittable(const Expr *program) {
@@ -2490,7 +2613,9 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
 
     /* ensure_S colors the program (idempotently) and classifies it; the
      * pipeline has not colored by emit time, so this must precede any read of
-     * fd->cps_colored / g_ents. */
+     * fd->cps_colored / g_ents.  g_emit_ctx gives it the complete spec set
+     * (ctx->abi_specializations) for the G3b mono-template classification. */
+    g_emit_ctx = ctx;
     ensure_S(program);
     SEnt *se = ent_of(fd);
 
@@ -2502,7 +2627,8 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
      * the SAME `<clone>` symbol callers already call, and its effects never touch
      * another function's machine.  No taint/routing change. */
     const EmitAbiSpecialization *spec = ctx->current_abi_specialization;
-    bool island_mono = false;
+    bool island_mono = false;   /* G3a: self-contained island (callers use wrapper) */
+    bool mono_emit = false;     /* G3a or G3b: this monomorph is CPS-emitted */
     if (spec && spec->fn == fd && fd->cps_colored && se && se->term
         && spec->clone_name) {
         g_cps_mono_resolver = ctx;
@@ -2510,9 +2636,14 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         g_cps_mono_resolver = NULL;
         const Symbol *h0[1];
         island_mono = ok && is_cps_island(se->term, h0, 0);
+        /* G3b: a NON-island monomorph (an escaping perform / colored callee) is
+         * also DK-emittable when its generic is a surviving mono-template -- the
+         * taint fixpoint proved its effect stays clean (all monomorphs admissible,
+         * no fiber peer shares the effect).  Colored callers route to `__cps`. */
+        mono_emit = ok && (island_mono || se->mono_template);
     }
 
-    if (!island_mono && (!se || !se->in_s)) return false;   /* fall back */
+    if (!mono_emit && (!se || !se->in_s)) return false;   /* fall back */
 
     experiment_warn_if_used("cps-backend");
 
@@ -2521,9 +2652,9 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* An island monomorph is emitted under its concrete clone name; the type
      * spellings + slot tiers in the reused generic CTerm resolve through the
      * active spec (g_cps_mono_resolver, set around the emit below). */
-    char *cn = island_mono ? strdup(spec->clone_name) : raw_name_for_binding(fd->binding);
+    char *cn = mono_emit ? strdup(spec->clone_name) : raw_name_for_binding(fd->binding);
     const Type *mono_ret = NULL;
-    if (island_mono) {
+    if (mono_emit) {
         g_cps_mono_resolver = ctx;
         mono_ret = &spec->result_type;
         /* Mirror emit_fns.c's by-value spec-param flagging: a concrete by-value

@@ -272,47 +272,49 @@ enumerated spec set.
   (`7.5`) where the fiber path is not (a pre-existing float-through-effect bug).
   Fixture `cps-backend-generic-island`; full suite 2038 passed, 0 failed.
 
-- **G3b -- cross-function DK chains (investigated; full spec below, not landed).**
-  The remaining case: a colored generic monomorph that PERFORMS an effect handled
-  by a CPS peer (or HANDLES an effect a CPS callee performs), e.g. `getit@int`
-  performs `E` and `run` handles it. Unlike G3a's islands, this is **not** a
-  self-contained subset -- it needs whole-program taint + per-call-site routing,
-  and (confirmed this pass) **no piece is independently verifiable**. The five
-  interlocking requirements:
+- **G3b -- cross-function DK chains LANDED.** A colored generic monomorph that
+  PERFORMS an effect handled by a CPS peer (e.g. `ask-plus@int` performs `Ask`,
+  `run` handles it) now runs the whole chain on DK. The five requirements the
+  earlier pass identified all resolved more cheaply than feared:
 
-  1. **CPS-IR carries the resolved callee spec.** `CT_TAILCALL` / `CT_LETCALL`
-     store only the callee `Binding` (`cps_ir.c` ~709-720); the call `Expr` -- and
-     thus the per-call-site instantiation -- is dropped. Add the call `Expr` (or
-     the resolved `clone_name`) to those nodes so emit can pick the monomorph.
-  2. **Emit routing.** `callee_name` (emit_cps_ir.c ~1599) returns
-     `raw_name_for_binding(fn)` = the *generic* name (`getit__cps`), never the
-     monomorph (`getit__spec__int__cps`). Resolve via `find_matched_abi_spec` on
-     the stored call to emit `<clone>__cps`.
-  3. **Taint surgery.** A colored generic template is in `g_ents` with
-     `in_s=false` (it sig-rejects), so its effect `E` is tainted and every CPS
-     peer handling `E` (like `run`) is evicted. A mono-candidate template must
-     stop tainting `E` so `run` stays DK.
-  4. **Pre-emit discovery.** The taint fixpoint (`ensure_S`) runs inside the main
-     emit loop, but `emit_abi_register_call` interns specs incrementally *during*
-     emit -- so the monomorph set is incomplete when the fixpoint runs. Making the
-     fixpoint range over monomorphs needs a dedicated pre-emit
-     `emit_abi_scan_expr` pass (order-sensitivity is a risk; the spec-intern
-     comments warn of realloc/dict-clone ordering).
-  5. **The wrapper hazard.** A non-island monomorph (escaping perform) emitted
-     with a `<clone>` entry wrapper BREAKS if any uncolored/fiber caller invokes
-     it -- the wrapper installs a fresh `dk_prompt` root with no handler for the
-     escaping effect. So every caller must be proven DK-context (which is exactly
-     what the taint fixpoint over the complete monomorph set decides).
+  1. **Pre-emit discovery is FREE.** The feared ordering knot does not exist:
+     `emit_abi_scan_program` (emit_module.c ~8802) runs a full-program spec scan
+     *before* the main emit loop, so `ctx->abi_specializations` is already
+     complete when `ensure_S` first runs. `ensure_S` just needed the ctx
+     (`g_emit_ctx`, set in `emit_cps_ir_try_fn`; `g_ents_ctx` invalidates the
+     cache if a prior `program_has_emittable` classified under a NULL ctx).
+  2. **Taint surgery = mono-template.** A colored generic template whose EVERY
+     monomorph spec is CPS-admissible (`mono_template_all_admissible`:
+     `mono_sig_ok` + `term_core_ok` per spec) is flagged `mono_template` and does
+     NOT taint its effects -- its monomorphs stand in for it. The fixpoint evicts
+     it (reverting to tainting) if a genuine fiber peer taints its effect. The
+     "all monomorphs admissible" condition makes the tag-level taint sound (every
+     instantiation is DK), so the per-instantiation problem dissolves.
+  3. **Emit.** A non-island monomorph of a surviving mono-template emits
+     `<clone>__cps` + wrapper (the G3a machinery, condition widened from
+     `island` to `island || se->mono_template`).
+  4. **Routing.** A cps->cps `CT_TAILCALL` to a mono-template callee resolves the
+     call site to the monomorph clone (`find_mono_clone_for_call`: match a spec by
+     callee binding + concrete arg-type C-spelling; NULL if 0 or >1 match, never
+     guess) and threads `<clone>__cps(args, k)`. Each mono-template monomorph's
+     `<clone>__cps` is forward-declared (a DK caller references it before the
+     spec-body loop defines it).
+  5. **Wrapper hazard is a non-issue.** The type system forbids an uncolored
+     caller from calling an unhandled-effect function, so a non-island monomorph's
+     entry wrapper is only ever reached from a context that handles the effect;
+     colored callers route to `__cps`, so the wrapper is typically dead.
 
-  Why there is no safe partial: the taint surgery (3) is a silent miscompile
-  without routing (1,2) and emit; routing is untestable without a DK caller, which
-  (3) gates; and (3) is unsound without (4)'s completeness. It is all-or-nothing
-  on the specialization pipeline + CPS IR + classifier. This is a dedicated
-  multi-part pass, correctness-critical, with real regression risk on the 2038
-  fixtures -- and the current behavior is already sound (these monomorphs run on
-  fiber via effect-taint, no chain split). G3a already captured the safe,
-  self-contained subset, so G3b's marginal reach (cross-function chains through a
-  colored generic) is the narrower, riskier remainder.
+  Verified: `ask_plus@int__cps` performs `dk_perform(Ask)`, and `run__cps` calls
+  `ask_plus__spec__..._cps(tag, base, __h0)` threading its own handler prompt --
+  a genuine two-function DK chain, one end a generic monomorph. The result
+  depends on the effect (`5 + 100 = 105`), so a machine split would give a wrong
+  value. Fixture `cps-backend-generic-cross-fn`. Full suite: 2039 passed, 0
+  failed (the taint change over every colored generic regressed nothing).
+
+  *Residual:* `find_mono_clone_for_call` returns NULL for an ambiguous call (all
+  args untyped scalars at >1 monomorph); that call then falls to cps->direct on
+  the unresolved generic name -> a link error (loud, not silent), acceptable
+  under the experimental flag. No fixture hits it.
 
 - **G4 -- widen `fn_sig_ok` for the concrete monomorph types.** With monomorphs
   classified under their concrete param/return types, the tyvar-`TY_APP`
@@ -322,17 +324,26 @@ enumerated spec set.
 
 ## Status / recommendation
 
-**G1 landed** (analysis-only): the substitution-translation is proven for the
-stdlib-parametric-ADT surface. **G2 partly landed** (analysis-only): monomorph
-*signature* classification now uses the materialized spec types (`mono_sig_ok`),
-so signature verdicts are accurate for all cases (including user-defstruct
-generics). Both are dump-only, zero emit change, suite 2037/0.
+**G1-G3b all landed.** The colored-generic-monomorph lever is essentially
+complete: a colored generic monomorph now CPS-emits (DK) whether it is a
+self-contained island (G3a) or participates in a cross-function effect chain with
+a CPS peer (G3b). The earlier-feared blockers dissolved:
 
-G2 also pinned down the two remaining blockers precisely (see the G2 entry):
-(1) body-internal user-defstruct results are bare `TY_ADT` and need the full ADT
-materialization; (2) **the ordering knot is confirmed unavoidable** -- the
-monomorph set is not complete when `ensure_S` runs, so the effect-taint fixpoint
-cannot range over monomorphs without a dedicated pre-emit spec-discovery pass.
+- **G1** (analysis probe) + **G2** (materialized-spec `mono_sig_ok` signature
+  classification) -- the analysis foundation.
+- **G3a** -- self-contained island monomorphs emit `<clone>__cps` + wrapper,
+  callers unchanged, no taint/routing change. Fixture `cps-backend-generic-island`.
+- **G3b** -- cross-function chains. The "ordering knot" turned out to be a
+  non-issue (`emit_abi_scan_program` completes the spec set before `ensure_S`),
+  so the taint fixpoint ranges over monomorphs via a `mono_template` flag (a
+  generic whose every monomorph is admissible does not taint), non-island
+  monomorphs emit DK, and cps->cps callers route to `<clone>__cps`. Fixture
+  `cps-backend-generic-cross-fn`. Full suite 2039/0.
+
+Remaining tails: the G2 body-resolution note (user-defstruct-result bare `TY_ADT`
+still under-reports in the probe, a narrow analysis gap) and the G3b ambiguous-
+call routing residual (loud link error, no fixture hits it). Both are documented
+in their entries; neither blocks the landed emit.
 
 **G3a is landed**: a colored-generic monomorph that is a self-contained island
 (every effect handled within, no colored callee) now CPS-emits (DK) as
