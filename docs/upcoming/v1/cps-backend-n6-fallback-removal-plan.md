@@ -482,11 +482,21 @@ fallback can be deleted:
     above (`cps-backend-capture-fnvalue`) -- a captured `tur_poly_fn_t` rides the
     env by value. See
     [docs/archive/cps-backend-indirect-call-fatclosure-param-divergence.md](../../archive/cps-backend-indirect-call-fatclosure-param-divergence.md).
-  - **cloneable / serial** reset/shift need the DK deep-clone (`dk_copy` exists
-    in the runtime) plus the direct emitter's cloneable capture-environment glue
-    (`live_captures` / `capture_clone_fns` / `capture_drop_fns`), which is
-    direct-path-specific today.
-  - **async** needs scheduler-backed continuation capture.
+  - **cloneable / serial / async are a CARVE-OUT, not a required port (finding).**
+    These are **not broken** and need no N6 work for correctness: they are handled
+    by the *older* whole-program CPS transform in `emit_cps.c` (gated on the
+    program using cloneable/serial/delimited/async forms via
+    `emit_cps_program_uses_cloneable_dk` / `_uses_delimited` / `_contains_serial`),
+    which already carries the DK deep-clone (`dk_copy_range`) and the capture
+    clone/drop glue. Verified under `--enable=cps-backend`: `cloneable-context-if`,
+    `serial-context-do`, and `async-await-basic` all match the direct path
+    (`cps == direct`). The N6 IR backend (`emit_cps_ir.c`) does not emit these
+    forms and does not need to -- the program-level `emit_cps.c` pass owns them.
+    Porting them into the N6 CT-IR backend would be a large multi-part effort
+    (new CT forms + `cps_ir.c` translation + `dk_copy` emit + capture-clone glue +
+    an async scheduler) with **no correctness benefit** -- pure backend
+    unification. It should therefore be a *documented carve-out* at N6.5 (route
+    these forms to `emit_cps.c`), not a blocker for deleting the N6 fallback.
 - **Signature widening (the dominant remaining surface).** The re-measurement
   above shows `fn_sig_ok` -- not body-form coverage -- is now the main gate.
   - **Nil/void return LANDED.** `fn_sig_ok` admits a `TY_NIL` return; the CPS
@@ -538,12 +548,21 @@ fallback can be deleted:
     param. Fixtures `cps-backend-effectful-callback` and
     `cps-backend-fn-param-effectful`. Full suite 2040/0. See
     [cps-backend-effectful-callbacks-plan.md](cps-backend-effectful-callbacks-plan.md).
-- **N6.5 -- delete the fallback.** Remove the `CT_UNSUPPORTED` whole-function
-  bail-out and the direct-vs-CPS dual path from `emit_cps_ir.c` / the classifier.
-  Any residual form becomes a hard error; give it a **form-named diagnostic**
-  (the measurement patch that annotates `CT_UNSUPPORTED` with the `Expr` kind is
-  the seed for this). Re-run the full suite and the sign-off probe with the
-  fallback gone.
+- **N6.5 -- delete the fallback (with an explicit delimited-control carve-out).**
+  Remove the `CT_UNSUPPORTED` whole-function bail-out and the direct-vs-CPS dual
+  path from `emit_cps_ir.c` / the classifier. Any residual form becomes a hard
+  error; give it a **form-named diagnostic** (the measurement patch that annotates
+  `CT_UNSUPPORTED` with the `Expr` kind is the seed for this).
+
+  **The one deliberate exception is the delimited-control tail** (cloneable /
+  serial / async, and the raw multi-shot reset/shift they build on): those are
+  owned by the program-level `emit_cps.c` transform, not the N6 IR backend, and
+  work correctly there (see N6.4). N6.5 keeps routing *those specific forms* to
+  `emit_cps.c` -- a named, intentional carve-out -- rather than either porting
+  them (a large no-correctness-benefit effort) or hard-erroring them. So "delete
+  the fallback" means: delete the *general* whole-function fallback for colored
+  functions, leaving only the delimited-control forms on their existing owner.
+  Re-run the full suite and the sign-off probe with the general fallback gone.
 
 Only after N6.5 does `cps-backend` satisfy gate item 7. Until then the fallback
 stays and coverage grows monotonically under the flag.
