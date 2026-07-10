@@ -120,11 +120,16 @@ a `(cloneable-shift receiver val)` is called through the indirect fn-pointer for
 - **Capture-free lambda receiver** (`(fn [k] k)`) -- **already native**: the
   lambda captures nothing, so it is lifted to a top-level fn and the shift calls
   it through the same indirect form. Oracle `cps-oracle-cloneable-native-lambda-recv`.
-- **Fat-closure receiver** (a lambda capturing a scalar, `(fn [k] (+ k bump))`) --
-  **unsupported by the direct emitter itself** (it passes the closure env where an
-  `int64_t` is expected -> C type error / miscompile). Out of native scope; the
-  CT-IR gate rejects it (`closure_fn_binding`) and it stays on the delegation path,
-  which fails identically -- `direct == cps` preserved, no regression.
+- **Fat-closure receiver** (a lambda capturing a scalar). Two sub-cases:
+  * *Uses the continuation* (`(fn [k] (+ k bump))`, Shape 1 or Shape 2) --
+    **crashes the direct emitter too** (`Aborted` / type-error). Out of native
+    scope; the CT-IR gate rejects it (`closure_fn_binding`) and it stays on the
+    delegation path, which fails identically -- `direct == cps` preserved.
+  * *Ignores the continuation* (`(fn [k] (+ n 5))`, oracle
+    `cps-oracle-cloneable-nested-op`) -- direct handles it correctly via its
+    closure lowering (env struct + thunk); native delegates. Porting it would
+    duplicate emit_cps.c's closure machinery for a corner case (see the Steps 6-7
+    assessment below), so it stays on the delegation by design.
 - **Colored receiver** (a receiver fn that itself shifts) -- **unsupported by the
   direct emitter itself** (it calls the receiver without threading a continuation
   -> segfault). Out of native scope for the same reason; the gate rejects it
@@ -180,42 +185,86 @@ DK runtime helpers (`__dk_cont_fn` / `__dk_env_clone` / `__dk_env_drop`,
 now checks `n_live_captures == 0` so it never lowers a shape whose prelude the
 gate would omit (which would leave undeclared C names).
 
-Remaining in step 5: none of the `collect_ctx` context shapes are outstanding for
-the common cases.  Steps 6-7 (multi-shot classification axis + retire delegation)
-follow.
+**Step 5 native port is complete for the value-typed subset.** Native CT-IR now
+owns every cloneable shape whose receiver is a *bare fn pointer* (named top-level
+fn or capture-free lambda) and whose context is built from arithmetic frames (any
+depth), 1-arg call frames, `let` preludes, one `if` branch point, or a do-prelude
+with 0-arg ignore-value tails -- all with `n_live_captures == 0`. Everything else
+stays on the `CT_LETRAW` delegation.
 
-1. **CT nodes.** Add `CT_CLONEABLE_SHIFT` (receiver + captured-cont, distinct
-   from abortive `CT_SHIFT` -- the receiver takes a *handle*, not the value) and
-   either reuse `CT_RESET` with a `cloneable` flag or add `CT_CLONEABLE_RESET`.
-2. **Translation (`cps_ir.c`).** `EX_CLONEABLE_RESET`/`EX_CLONEABLE_SHIFT` ->
-   the new nodes, reusing `collect_free_vars` for the receiver/body captures
-   (now EX_CALLCC-complete; add the cloneable forms too). Gate: translate only
-   Shape 1 natively at first; fall through to the `CT_LETRAW` delegation (still
-   in place) for Shape 2.
-3. **Emit (`emit_cps_ir.c`).** `emit_cloneable_shift` for Shape 1: emit the
-   identity `__cont_fn`, `tur_cloneable_cont_alloc(..., NULL, NULL, NULL)`, the
-   receiver call, deliver the result. Reuse the existing helper/`pending_handler_fns`
-   flush (already fixed in the first slice).
-4. **Admission + oracle.** Admit Shape 1 in `term_core_ok`; the U0 oracles
-   (`cps-oracle-cloneable-basic`, `-multi-resume`) plus `-cloneable-mixed`
-   assert direct == cps. Verify multi-resume specifically.
-5. **Shape 2 (the risk), incrementally.** Port `emit_cloneable_ctx`'s frame-fn +
-   `dk_copy_range` emission to CT-IR, one context form at a time
-   (`+`/operator context, then `if`, then `let`), each behind its own oracle and
-   with the delegation fallback catching anything not yet native. Port the
-   clone/drop glue **byte-for-byte first** (same C), changing only *who emits the
-   calls* -- the mitigation the parent plan calls for.
-6. **Multi-shot classification axis.** Once native, extend `ensure_S` so a
-   multi-shot (cloneable) continuation is placed on DK-with-clone and its
-   receiver/handler stays co-located, distinct from the single-shot abortive
-   `shift` axis (parent plan section 5).
-7. **Retire delegation.** When every cloneable shape emits natively, remove the
-   `EX_CLONEABLE_RESET` `CT_LETRAW` delegation; `emit_cps_cloneable_reset` +
-   `emit_cloneable_ctx` become dead and move out of `emit_cps.c` (U6/U7).
+## Steps 6-7 -- assessment (why the delegation stays, and what "retire" means)
+
+Steps 6-7 as originally written -- "add the multi-shot classification axis, then
+delete `emit_cps_cloneable_reset`" -- were premised on *every* cloneable shape
+eventually emitting natively. That premise does not hold, and the investigation
+below re-scopes both steps.
+
+### What the delegation still covers (and why it should)
+
+Auditing every direct-supported cloneable shape against native emission (via the
+`cps-oracle-cloneable-*` twins) shows the native path already owns all of them
+**except closure/complex receivers**, which fall into two buckets:
+
+- **Closure receivers that USE the continuation** (`(fn [k] (+ k bump))`, in
+  Shape 1 *or* Shape 2) -- these **crash the direct emitter too** (`Aborted` /
+  type-error): a genuinely unsupported shape on both backends. The delegation is
+  *bug-compatible* here (native and direct fail identically), preserving
+  `direct == cps`.
+- **Closure receivers that IGNORE the continuation** (`(fn [k] (+ n 5))`, oracle
+  `cps-oracle-cloneable-nested-op`) -- direct handles these correctly *via its
+  closure lowering* (env struct + statically-known thunk), and native delegates.
+  Porting this natively means the CT-IR backend allocating the receiver's closure
+  env and calling its thunk -- i.e. **re-implementing emit_cps.c's closure
+  machinery inside emit_cps_ir.c**. That duplicates the code we want to retire
+  rather than eliminating it, and buys only a corner case (a receiver that
+  discards its own continuation).
+
+So the delegation is not merely a transitional scaffold -- for closure-receiver
+cloneable it is the *principled* home, reusing the proven direct closure lowering.
+Full deletion of `emit_cps_cloneable_reset` is therefore **not** the U3 end-state.
+
+### Step 6 -- multi-shot classification axis: satisfied by construction
+
+No `ensure_S` change is needed for cloneable, for three reasons:
+
+- **No eviction to invert.** Unlike serial/async (which the classifier evicts from
+  CT-IR ownership, the case the parent plan's "invert eviction into placement"
+  targets), a cloneable-reset is **never evicted**: its enclosing function stays
+  colored and the cloneable *region* delegates via `CT_LETRAW`. There is no
+  cloneable placement rule to add.
+- **Multi-shot capture is safe by restriction.** Native cloneable admits only
+  scalar (int) frame operands / captures, which are Copy and thus multi-shot-safe
+  with no clone/drop; the sub-continuation itself is deep-cloned by `dk_copy_range`
+  in the emitted body. The single-shot-vs-multi-shot axis (`g_cap_single_shot`,
+  which gates owning-value move-capture) already exists and is never tripped by
+  the native cloneable subset.
+- **The prelude gate is the one real coupling, and it is pinned.** Native Shape 2
+  references the shared DK helpers whose definitions `cl_can_lower` gates; the
+  `n_live_captures == 0` check in `build_cloneable` keeps the native gate a subset
+  of `cl_can_lower`, so the prelude is always present. This is the invariant to
+  preserve as new shapes are considered.
+
+A fuller multi-shot axis (owning-value captures on DK-with-clone) is real work,
+but it belongs to **U4/serial + U5/async**, where eviction *does* happen and the
+clone/drop glue is actually exercised -- not to cloneable, whose subset is scalar.
+
+### Step 7 -- retire delegation: re-scoped, and gated on U6/U7
+
+The `CT_LETRAW` cloneable delegation stays. It is the correct fallback for
+closure-receiver shapes and the bug-compatible fallback for shapes broken on both
+backends. `emit_cps_cloneable_reset` / `emit_cloneable_ctx` can only be deleted
+as part of the coordinated `emit_cps.c` retirement (U7), and only once either (a)
+closure lowering is unified so the CT-IR backend can allocate a receiver closure
+env itself, or (b) the genuinely-unsupported shapes are turned into a clean
+compile-time diagnostic instead of bug-compatible codegen. Both are larger,
+cross-cutting changes -- not bounded slices -- and are tracked under U6/U7, not
+U3. U3's native port is done at its stable boundary: **native owns the value-typed
+subset; the delegation owns the closure/complex subset.**
 
 ## Why staged this way
 
-The delegation fallback stays the safety net throughout: a shape not yet ported
-natively keeps lowering through the proven direct emit, so the tree is always
-shippable and `direct == cps` holds at every step. Shape 1 is a safe foothold
-(no deep-clone); Shape 2 is where the care goes, gated per context form.
+The delegation fallback stays the safety net throughout: a shape not owned by the
+native path keeps lowering through the proven direct emit, so the tree is always
+shippable and `direct == cps` holds. Shape 1 was the safe foothold (no
+deep-clone); Shape 2 was gated per context form; and the boundary between native
+and delegation now falls exactly where the direct backend's own support ends.

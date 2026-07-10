@@ -347,10 +347,28 @@ fallback until the final phase removes it.
   emission), a separate future item -- not a cloneable-receiver concern. Detail in
   the native-emit note.
 
-  *Remaining (the risky core, narrowing):* the non-arithmetic `let` shapes
-  (`do`-prelude / call frames) the direct `collect_ctx` also handles, each behind
-  its own oracle (the delegation fallback still catches everything not yet native),
-  plus the multi-shot classification axis. Mapped in the native-emit note.
+  **U3 native port complete at its stable boundary.** Native CT-IR owns the
+  value-typed cloneable subset: a bare-fn-pointer receiver (named top-level fn or
+  capture-free lambda) with any context built from arithmetic frames (any depth),
+  1-arg call frames, `let` preludes, one `if` branch point, or a do-prelude with
+  0-arg ignore-value tails -- all at `n_live_captures == 0`. The `CT_LETRAW`
+  delegation retains **closure/complex-receiver** shapes: those that use their
+  continuation crash the direct emitter too (bug-compatible delegation), and the
+  one that ignores it (`nested-op`) direct handles via its closure lowering --
+  porting it would duplicate emit_cps.c's closure machinery rather than eliminate
+  it. So the delegation is the *principled* home for closure receivers, not a
+  transitional scaffold.
+
+  *Steps 6-7 re-scoped (detail in the native-emit note):* the multi-shot
+  classification axis needs **no `ensure_S` change for cloneable** -- cloneable is
+  never evicted (the region delegates; the function stays colored), its captures
+  are scalar (multi-shot-safe by restriction), and the `n_live_captures` gate pins
+  the native subset under `cl_can_lower`'s prelude gate. Retiring the cloneable
+  delegation (`emit_cps_cloneable_reset`) is gated on U6/U7: it needs either
+  unified closure lowering in the CT-IR backend or a clean diagnostic for the
+  broken-on-both shapes -- larger cross-cutting changes, not bounded slices. The
+  fuller owning-value multi-shot axis lands with U4/U5, where eviction and the
+  clone/drop glue are actually exercised.
 - **U4 -- Serial.** Port `emit_cps_serial_runtime_prelude` + serial placement.
 - **U5 -- Async / await.** Port the scheduler wiring on top of the now-unified
   cloneable/serial base.
