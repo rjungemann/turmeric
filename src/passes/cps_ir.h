@@ -197,7 +197,13 @@ struct CTerm {
          * so the captured continuation round-trips through save-cont!/resume-cont!.
          * The native serial path currently covers only arithmetic-frame contexts
          * (n_frames >= 1, no lets/if/call frames); everything else delegates. */
-        struct { CVar x; const Binding *receiver; bool serial;
+        /* receiver: a named uncolored top-level fn (the common case).
+         * receiver_expr (U7): a CLOSURE receiver emitted as a value -- its thunk
+         * is called with (closure-env, cont) instead of a bare fn ptr.  Exactly
+         * one of receiver / receiver_expr is set.  Currently a closure receiver is
+         * admitted for Shape 1 (n_frames == 0) only; Shape 2 keeps delegating. */
+        struct { CVar x; const Binding *receiver; const Expr *receiver_expr;
+                 bool serial;
                  CloneLet *lets; uint32_t n_lets;
                  CloneFrame *frames; uint32_t n_frames;
                  const Expr *if_cond; const Expr *if_pure; bool if_when;

@@ -547,11 +547,22 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
      * shape stays on the delegation path, which matches the direct backend. */
     if (cur->as.cloneable_shift_.n_live_captures != 0) return NULL;
     const Binding *recv = cloneable_named_receiver(b, cur);
-    if (!recv) return NULL;
+    const Expr *recv_expr = NULL;
+    if (!recv) {
+        /* U7: a CLOSURE receiver (capturing or not).  Shape 1 (nf == 0) only for
+         * now -- it is called directly at the reset site, so its thunk + env are
+         * emitted inline; Shape 2 threads the receiver through a dk_shift env and
+         * still delegates.  A zero-capture closure is already lifted to a named
+         * global (handled above); this is the capturing case. */
+        const Expr *kf = ascribe_peel(cur->as.cloneable_shift_.k_fn);
+        if (nf == 0 && kf && kf->kind == EX_CLOSURE) recv_expr = kf;
+        else return NULL;
+    }
 
     CTerm *t = new_term(b, CT_CLONEABLE);
     t->as.cloneable.x = x;
     t->as.cloneable.receiver = recv;
+    t->as.cloneable.receiver_expr = recv_expr;
     t->as.cloneable.n_frames = nf;
     if (nf) {
         CloneFrame *fa = arena_alloc(b->a, nf * sizeof(CloneFrame));
@@ -1617,8 +1628,9 @@ void cps_ir_print(const CTerm *t, FILE *out, int indent) {
                          "[%u frame(s), %u let(s)%s]\n",
                     t->as.cloneable.x.name,
                     t->as.cloneable.serial ? "serial" : "cloneable",
-                    t->as.cloneable.receiver && t->as.cloneable.receiver->name
-                        ? t->as.cloneable.receiver->name->name : "?",
+                    t->as.cloneable.receiver_expr ? "<closure>"
+                        : (t->as.cloneable.receiver && t->as.cloneable.receiver->name
+                           ? t->as.cloneable.receiver->name->name : "?"),
                     t->as.cloneable.serial ? "U4" : "U3",
                     t->as.cloneable.n_frames == 0 ? "Shape 1 " : "Shape 2 ",
                     t->as.cloneable.n_frames, t->as.cloneable.n_lets,

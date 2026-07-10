@@ -442,6 +442,20 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
                 if (_f) { free(_fv); return true; }
             }
             free(_fv);
+            /* U7: a closure receiver's free vars are captures too. */
+            if (t->as.cloneable.receiver_expr) {
+                uint32_t _rn = 0;
+                Binding **_rfv = collect_free_vars(t->as.cloneable.receiver_expr, NULL, 0, NULL, 0, &_rn);
+                for (uint32_t _i = 0; _i < _rn; _i++) {
+                    const Binding *_bb = _rfv[_i];
+                    if (_bb && !_bb->is_global && !binding_excluded(_bb)) {
+                        uint32_t _id = _bb->id; bool _f = (_id != exclude);
+                        for (int _j = 0; _j < nb; _j++) if (bound[_j] == _id) { _f = false; break; }
+                        if (_f) { free(_rfv); return true; }
+                    }
+                }
+                free(_rfv);
+            }
             bound[nb] = t->as.cloneable.x.id;
             return has_capture_rec(t->as.cloneable.body, exclude, bound, nb + 1);
         }
@@ -703,6 +717,21 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
                 if (_f) cap_add(cs, _bb, _bb->type.kind, &_bb->type);
             }
             free(_fv);
+            /* U7: a closure receiver (receiver_expr) contributes its own captures
+             * -- collect_free_vars surfaces the closure's free vars so each scalar
+             * capture rides the lifted env (non-Copy bails to fallback). */
+            if (t->as.cloneable.receiver_expr) {
+                uint32_t _rn = 0;
+                Binding **_rfv = collect_free_vars(t->as.cloneable.receiver_expr, NULL, 0, NULL, 0, &_rn);
+                for (uint32_t _i = 0; _i < _rn && cs->ok; _i++) {
+                    const Binding *_bb = _rfv[_i];
+                    if (!_bb || _bb->is_global || binding_excluded(_bb)) continue;
+                    uint32_t _id = _bb->id; bool _f = (_id != exclude);
+                    for (int _j = 0; _j < nb; _j++) if (bound[_j] == _id) { _f = false; break; }
+                    if (_f) cap_add(cs, _bb, _bb->type.kind, &_bb->type);
+                }
+                free(_rfv);
+            }
             bound[nb] = t->as.cloneable.x.id;
             collect_caps_rec(t->as.cloneable.body, exclude, bound, nb + 1, cs); return;
         }
@@ -2627,7 +2656,9 @@ static char *emit_cloneable_direct(CE *ce, const Expr *e) {
 static void emit_cloneable(CE *ce, const CTerm *t) {
     int id = (*ce->helper_ctr)++;
     char *xn  = cvar_cname(ce, t->as.cloneable.x);
-    char *rfn = callee_name(t->as.cloneable.receiver);
+    /* Named-fn receiver: its C name.  A closure receiver (receiver_expr, Shape 1)
+     * has no bare fn name -- it is emitted as a value + thunk call below. */
+    char *rfn = t->as.cloneable.receiver ? callee_name(t->as.cloneable.receiver) : NULL;
 
     /* Pure `let` prelude (Shape 2, let-bearing): lay each binding down as a C
      * local at the reset site, ahead of the frame-operand evaluations that may
@@ -2673,7 +2704,31 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         snprintf(cv, sizeof(cv), "__clc%d", id);
         ce_line(ce, "tur_cloneable_cont *%s = tur_cloneable_cont_alloc(%s, NULL, NULL, NULL);",
                 cv, cfn);
-        ce_line(ce, "%s = %s((int64_t)(intptr_t)%s);", xn, rfn, cv);
+        if (t->as.cloneable.receiver_expr) {
+            /* U7 closure receiver: emit the closure value (its captures ride the
+             * env -- visible locals in the main body, or env-carried in a lifted
+             * body per collect_caps), then call its thunk with (closure-env, cont),
+             * mirroring emit_callcc's closure call. */
+            const Expr *f = t->as.cloneable.receiver_expr;
+            int saved = ce->ctx->indent;
+            ce->ctx->indent = ce->indent;
+            char *fval = emit_value(ce->ctx, ce->out, f);
+            ce->ctx->indent = saved;
+            struct Closure *closure = f->as.closure_.closure;
+            char *thunk_name;
+            if (closure->fn->binding) {
+                thunk_name = raw_name_for_binding(closure->fn->binding);
+            } else {
+                thunk_name = malloc(64);
+                snprintf(thunk_name, 64, "__fn_anon_%d",
+                         closure->fn->n_params > 0 ? closure->fn->params[0]->id : 0);
+            }
+            ce_line(ce, "%s = %s(%s, (int64_t)(intptr_t)%s);", xn, thunk_name, fval, cv);
+            free(thunk_name);
+            free(fval);
+        } else {
+            ce_line(ce, "%s = %s((int64_t)(intptr_t)%s);", xn, rfn, cv);
+        }
     } else if (t->as.cloneable.serial) {
         /* U4 Shape 2 (serial): an arithmetic context marshaled via the shared
          * tagged frames (`__sk_frame_for_tag`), and a shift body that hands the
