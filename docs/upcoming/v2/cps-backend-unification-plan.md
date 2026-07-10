@@ -452,11 +452,16 @@ fallback until the final phase removes it.
   evicting; oracle `cps-oracle-async-placement`; `direct == cps`; all 34 async
   fixtures green.
 
-  *Remaining for U5:* the deeper "port the scheduler wiring onto cloneable/serial"
-  goal -- today `async`/`await` ride a separate fiber runtime
-  (`tur_async_fiber`), not the DK/cloneable machine, so unifying the substrates is
-  a larger architectural change (its own slice), with the delegation as the
-  correct interim home exactly as for the other families.
+  *Remaining for U5 -- and a correction:* the U0 inventory's claim that async
+  "rides the cloneable/serial machinery" is **inaccurate**. Async/await lower to a
+  *separate stackful `ucontext` fiber runtime* (`FiberBlock`, `TurScheduler`) in
+  `emit_module.c`, not the DK machine. Crucially, that runtime is **untouched by
+  the `emit_cps.c` retirement** (U6/U7) -- so the deeper "port the scheduler onto
+  cloneable/serial" goal is a *decoupled* stackful->stackless migration, not a
+  blocker for the unification's finish line. Full architecture, scope, the
+  stackful-vs-stackless trade, and a recommendation to treat the substrate port as
+  out of scope for this plan are in
+  [cps-backend-unification-u5-async-substrate-plan.md](cps-backend-unification-u5-async-substrate-plan.md).
 - **U6 -- Prelude consolidation.** Fold the four `emit_cps_*_prelude` emitters
   into one "emit the preludes the program uses" pass driven by the unified
   classification.

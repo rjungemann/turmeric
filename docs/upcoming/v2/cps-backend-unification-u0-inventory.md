@@ -111,10 +111,14 @@ its value.
 
 ### 5. Async / await -- `async` / `await`
 
-- **Gate:** no dedicated gate -- async/await *rides the cloneable/serial
-  machinery*. Surface forms elaborate to `EX_ASYNC` / `EX_AWAIT`
+- **Gate:** no dedicated gate. Surface forms elaborate to `EX_ASYNC` / `EX_AWAIT`
   (`src/compiler/elab_concurrent.c:107,145`) and lower via the scheduler in
   `src/compiler/emit_expr.c:5785` (`EX_ASYNC`) / `:5866` (`EX_AWAIT`).
+  **Correction (U5):** an earlier draft said async "rides the cloneable/serial
+  machinery" -- it does not. Async/await lower to a *separate stackful `ucontext`
+  fiber runtime* (`FiberBlock` / `TurScheduler`, `emit_module.c`), independent of
+  the DK machine and of `emit_cps.c`. See
+  [cps-backend-unification-u5-async-substrate-plan.md](cps-backend-unification-u5-async-substrate-plan.md).
 
 | Oracle pair | Program shape | Value |
 | --- | --- | --- |
