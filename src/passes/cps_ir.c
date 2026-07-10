@@ -796,8 +796,18 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
         case EX_RESET: case EX_SHIFT: case EX_SHIFT0:
         case EX_CLONEABLE_SHIFT:
         case EX_SERIAL_SHIFT:
-        case EX_ASYNC:
             return false;
+        /* U5 (cps-backend-unification): (async f) and (await fut) are self-
+         * contained runtime calls (tur_async_fiber / tur_await_future) -- they do
+         * NOT thread the caller's DK continuation (the future/result is an ordinary
+         * value, and the async thunk's own effects are handled in its fiber scope).
+         * Delegating them via CT_LETRAW reuses the proven fiber runtime and lets a
+         * colored function that ALSO awaits stay CPS-emitted instead of wholly
+         * evicting.  The delegated region is emitted by the direct emitter
+         * (emit_value -> EX_ASYNC/EX_AWAIT), the bound future/result becomes a local,
+         * and the CPS continuation runs after. */
+        case EX_ASYNC: case EX_AWAIT:
+            return true;
         /* U3 (cps-backend-unification): a (cloneable-reset body) is a
          * SELF-CONTAINED multi-shot delimited region.  The bare cloneable-shift
          * captures the rest of its reset body (a continuation that escapes the
@@ -1200,6 +1210,15 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             CTerm *nat = build_serial(b, e, x, ac);
             return nat ? nat : build_letraw(b, e, x, ac);
         }
+        case EX_ASYNC: case EX_AWAIT: {
+            /* U5: delegate the self-contained async region (async spawn / await)
+             * so a colored function containing it stays CPS-emitted rather than
+             * wholly evicting. */
+            CVar x = fresh_cvar(b, &e->type);
+            CTerm *ac = new_term(b, CT_APPCONT);
+            ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            return build_letraw(b, e, x, ac);
+        }
         case EX_HANDLE: {
             CVar x = fresh_cvar(b, &e->type);
             CTerm *ac = new_term(b, CT_APPCONT);
@@ -1372,6 +1391,9 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             CTerm *nat = build_serial(b, e, x, rest);
             return nat ? nat : build_letraw(b, e, x, rest);
         }
+        case EX_ASYNC: case EX_AWAIT:
+            /* U5: delegate the self-contained async region (see cps_tail). */
+            return build_letraw(b, e, x, rest);
         case EX_HANDLE:
             return build_handle(b, e, x, rest);
         case EX_PERFORM: {

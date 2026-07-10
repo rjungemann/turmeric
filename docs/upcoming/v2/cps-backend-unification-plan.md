@@ -437,6 +437,26 @@ fallback until the final phase removes it.
   [cps-backend-unification-marshal-reset-unification-plan.md](cps-backend-unification-marshal-reset-unification-plan.md).
 - **U5 -- Async / await.** Port the scheduler wiring on top of the now-unified
   cloneable/serial base.
+  **First slice landed (placement, not eviction).** Finding: `async` / `await` do
+  NOT color a function (they are absent from `cps_expr_contains_shift`) -- they
+  lower to self-contained runtime calls (`tur_async_fiber` / `tur_await_future`)
+  that do not thread the caller's DK continuation. So eviction only bit the *mix*
+  case: a function colored by an effect/shift that *also* awaits hit
+  `CT_UNSUPPORTED` on `EX_ASYNC`/`EX_AWAIT` and evicted wholesale. U5 makes both
+  delegatable via `CT_LETRAW` (`safe_to_delegate` + `cps_tail`/`cps_bind` cases),
+  so the colored parts stay on the CT-IR DK machine while the async region
+  delegates to the proven fiber runtime; `collect_free_vars` already descends
+  `EX_ASYNC`/`EX_AWAIT`, so a delegated await riding a lifted continuation
+  surfaces its captures correctly. Verified: a `worker` with `(reset (shift ...))`
+  + `(await (async compute))` now emits `worker__cps` (colored) instead of
+  evicting; oracle `cps-oracle-async-placement`; `direct == cps`; all 34 async
+  fixtures green.
+
+  *Remaining for U5:* the deeper "port the scheduler wiring onto cloneable/serial"
+  goal -- today `async`/`await` ride a separate fiber runtime
+  (`tur_async_fiber`), not the DK/cloneable machine, so unifying the substrates is
+  a larger architectural change (its own slice), with the delegation as the
+  correct interim home exactly as for the other families.
 - **U6 -- Prelude consolidation.** Fold the four `emit_cps_*_prelude` emitters
   into one "emit the preludes the program uses" pass driven by the unified
   classification.
