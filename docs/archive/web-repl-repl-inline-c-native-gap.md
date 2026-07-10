@@ -1,5 +1,35 @@
 # WASM / `tur repl`: inline-C stdlib ops need the `wk_register_*` natives
 
+## Resolved (2026-07-10)
+
+Fixed via fix-direction 1 (the relocation). The ~3900-line `wk_register_*` /
+`native_*` block moved out of `src/main.c` into a new `tur_core` source,
+`src/turi/interpreter_natives.c` (mirroring `turi/collections_native.c` /
+`turi/preload.c`), exposing a single
+`turi_env_register_interpreter_natives(env)` in `src/turi/interpreter_natives.h`.
+
+All three interpreter entry points now call it after `turi_env_preload_*`:
+
+- `src/main.c` `cmd_eval_h` (the `--interpret` path) -- the inline sequence it
+  used to run is now the body of the shared helper.
+- `src/turi/repl.c` (interactive `tur repl`) -- after the preload block.
+- `src/web/wasm_glue.c` `wasm_preload_stdlib` -- covers both `turi_wasm_init`
+  and `turi_wasm_reset`.
+
+The fixture-runner helpers (`wk_apply_flags` / `wk_write_result` /
+`wk_drain_pipes` / `wk_eval_fixture`, which `fork`/`pipe`) stayed in
+`src/main.c`; `wk_eval_fixture` still links the narrower subset it needs
+(`wk_register_{safe,typeclass,stdlib}_natives` + the contract natives), now
+exported from the header. No main-only `g_*` diagnostic globals were referenced
+inside the moved block, so nothing had to be threaded through.
+
+Verified: `(map-get #map{:a 1} :a)` and `(sym->str :hello)` and `(assert!
+(= 1 2))` now evaluate at the `tur repl` prompt (previously `eval: inline-C not
+supported in interpreter mode`); `bash tests/run.sh` is green
+(2123 passed, 0 failed), confirming the native path is behavior-preserving.
+The WASM half was validated on native only (no Emscripten toolchain here) but
+shares the exact same `turi_env_register_interpreter_natives` call.
+
 **Severity:** low (follow-up carved out of
 `docs/archive/web-repl-missing-stdlib-preload.md`; a bounded, well-understood
 subset of stdlib is still unavailable in the two interpreter entry points that

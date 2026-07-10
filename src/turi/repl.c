@@ -25,6 +25,7 @@
 #include "repl.h"
 #include "eval.h"
 #include "preload.h"       /* shared stdlib preload (macros + typed collections) */
+#include "interpreter_natives.h"  /* wk_register_* interpreter native overrides */
 #include "spice_loader.h"  /* RP3: auto-discover + load the enclosing spice */
 #include "ffi_thunk.h"     /* RP4: install per-export TuriNativeFn bindings */
 
@@ -977,6 +978,16 @@ int turi_repl_run(bool watch_mode) {
          * assert a missing-instance error). */
         turi_env_preload_typeclasses(env, stdlib_root);
     }
+
+    /* Register the interpreter native overrides (sym/:Sym, contracts, seq,
+     * json/schema, safe box/unbox, comonad/mutex/future/chan/... ) so the
+     * prompt can evaluate ops whose stdlib body is inline-C -- e.g. `#map{:a 1}`
+     * needs the Hash[Sym]/Eq[Sym] natives, `assert!` needs the contract natives.
+     * Relocated from src/main.c into tur_core so the REPL and the WASM REPL
+     * register the same block as --interpret and cannot drift
+     * (web-repl-repl-inline-c-native-gap).  Runs AFTER the preload so the native
+     * shims win over the loaded inline-C bodies. */
+    turi_env_register_interpreter_natives(env);
 
     /* RP5: register `(reload)` unconditionally so users always have
      * a callable handle, even outside a spice project (the native
