@@ -850,6 +850,48 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                 stack[sp++] = cur->as.discontinue_.discontinue->k;
                 stack[sp++] = cur->as.discontinue_.discontinue->exception;
                 break;
+            /* (call/cc f) / (escape f): the receiver `f` references enclosing
+             * locals, which must be surfaced as free vars of the enclosing scope
+             * -- otherwise a capturing escape inside a lifted helper (a handler
+             * case, a shift body, an async block) would reference an enclosing
+             * local that was never threaded into the helper's env ('<name>'
+             * undeclared).  Two receiver shapes occur depending on elaboration
+             * order: an already-closure-converted EX_CLOSURE (its captures are
+             * folded by the EX_CLOSURE case), or a still-raw EX_FN/EX_FN_DEF
+             * (e.g. a handler case whose captures are computed before the escape
+             * lambda is closure-converted).  For the raw form, recursively
+             * collect the receiver body's free vars excluding its own params and
+             * merge them. */
+            case EX_CALLCC: {
+                const Expr *rf = cur->as.callcc_.fn;
+                while (rf && rf->kind == EX_ASCRIBE) rf = rf->as.ascribe_.inner;
+                FnDef *rfn = NULL;
+                if (rf && rf->kind == EX_FN)     rfn = rf->as.fn_.fn;
+                else if (rf && rf->kind == EX_FN_DEF) rfn = rf->as.fn_def_.fn;
+                if (rfn && rfn->body) {
+                    uint32_t sub_n = 0;
+                    Binding **sub = collect_free_vars(rfn->body, rfn->params, rfn->n_params,
+                                                      self_exclude, n_self_exclude, &sub_n);
+                    for (uint32_t si = 0; si < sub_n; si++) {
+                        Binding *sb = sub[si];
+                        if (!sb || sb->is_global) continue;
+                        bool skip = false;
+                        for (uint8_t i = 0; i < n_params; i++) if (params[i] == sb) { skip = true; break; }
+                        for (uint32_t i = 0; !skip && i < n_local; i++) if (local_defs[i] == sb) skip = true;
+                        for (uint32_t i = 0; !skip && i < n; i++) if (result[i] == sb) skip = true;
+                        if (skip) continue;
+                        if (n >= cap) {
+                            cap = cap ? cap * 2 : 8;
+                            result = (Binding **)realloc(result, cap * sizeof(Binding *));
+                        }
+                        result[n++] = sb;
+                    }
+                    free(sub);
+                } else {
+                    stack[sp++] = cur->as.callcc_.fn;   /* EX_CLOSURE folds captures */
+                }
+                break;
+            }
             /* Phase T21: Async/await */
             case EX_ASYNC:
                 stack[sp++] = cur->as.async_.fn_expr;

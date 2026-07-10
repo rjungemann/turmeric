@@ -1,0 +1,11 @@
+;; Oracle (cps-backend-unification): capturing escape in a lifted position.
+;; Backend: default backend (emit_cps.c)
+;; A capturing escape inside a shift body (a DK-lifted straight-line helper).
+;; collect_free_vars now walks the (call/cc/escape) receiver captures into the
+;; lifted helper env, so this CPS-emits with direct == cps (previously evicted).
+;;
+(defn f [n : int] : int
+  (reset (shift (fn [v] v) (+ 1 (escape (fn [k] (k n)))))))
+(defn main [] : int
+  (println (f 5))
+  0)

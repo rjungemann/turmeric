@@ -208,14 +208,19 @@ fallback until the final phase removes it.
     `CT_LETRAW`) walks the callcc receiver's free vars into the lifted
     continuation env, so an enclosing capture (a scalar) rides the env; a
     non-Copy capture bails to fallback. Oracle: `cps-oracle-colored-escape-capture`.
-  - **Guarded positions:** a callcc-bearing `CT_LETRAW` inside a DK-lifted
-    straight-line helper -- a `shift` body, a `perform` continuation, or an
-    effect handler case (`shift_body_ok` / `perform_body_ok` / `handle_case_ok`,
-    via `letraw_has_callcc`) -- is rejected, so such shapes evict to the direct
-    emitter. The direct path has a pre-existing capture-in-lifted-helper defect
-    there ([docs/reported/direct-capturing-escape-in-lifted-helper.md](../../reported/direct-capturing-escape-in-lifted-helper.md));
-    evicting keeps `direct == cps` (both take the direct path) rather than
-    diverging.
+  - **Lifted-helper positions:** a capturing escape inside a DK-lifted helper
+    used to be evicted because the helper env did not carry the receiver's
+    captures. `collect_free_vars` now descends into a `(call/cc/escape)` receiver
+    (`elab_core.c`, both an `EX_CLOSURE` and a raw `EX_FN` receiver), so the
+    **shift body** and **perform continuation** positions lower on DK directly --
+    the `shift_body_ok` / `perform_body_ok` guards were removed. Oracles:
+    `cps-oracle-escape-capture-in-shift-body`, `cps-oracle-escape-capture-after-handle`.
+    Only the **effect handler case** stays guarded (`handle_case_ok`, via
+    `letraw_has_callcc`): its capture set is built by a separate walker
+    (`collect_handle_captures`) with the same `EX_CALLCC` gap, so such a shape
+    evicts to the direct emitter (which shares the gap) -- keeping `direct == cps`
+    rather than diverging. Tracked in
+    [docs/reported/direct-capturing-escape-in-lifted-helper.md](../../reported/direct-capturing-escape-in-lifted-helper.md).
   - **Prelude gate hardened:** `uses_callcc` (the escape-continuation prelude
     gate) was missing many control/value forms (`shift`, `handle`, `perform`,
     `resume`, `match`, `async`, casts, ...), so an escape nested in one lost its
@@ -228,8 +233,9 @@ fallback until the final phase removes it.
 
   *Follow-on (U6/U7):* physically relocating `emit_cps_callcc` +
   `emit_cps_callcc_prelude` out of `emit_cps.c` (prelude consolidation / file
-  deletion), and teaching the lifted-helper envs to carry escape captures so the
-  guarded positions can lower on the CPS path directly.
+  deletion), and teaching `collect_handle_captures` (`emit_core.c`) to carry an
+  escape receiver's captures so the one remaining guarded position -- a capturing
+  escape in an effect handler case -- can lower on the CPS path directly.
 - **U3 -- Cloneable (multi-shot) capture.** Port `dk_copy_range` deep-clone +
   capture clone/drop glue driven from CT-IR emit; add the multi-shot
   classification axis. This is the highest-risk phase (capture correctness).
