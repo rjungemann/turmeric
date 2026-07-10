@@ -277,10 +277,23 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
         /* control operators: never delegatable (they thread a continuation). */
         case EX_PERFORM: case EX_HANDLE: case EX_RESUME: case EX_DISCONTINUE:
         case EX_RESET: case EX_SHIFT: case EX_SHIFT0:
-        case EX_CLONEABLE_RESET: case EX_CLONEABLE_SHIFT:
+        case EX_CLONEABLE_SHIFT:
         case EX_SERIAL_RESET: case EX_SERIAL_SHIFT:
         case EX_ASYNC:
             return false;
+        /* U3 (cps-backend-unification): a (cloneable-reset body) is a
+         * SELF-CONTAINED multi-shot delimited region.  The bare cloneable-shift
+         * captures the rest of its reset body (a continuation that escapes the
+         * shift expression), so it stays non-delegatable above; but the whole
+         * cloneable-reset is emitted as a unit by the direct emitter
+         * (emit_effects_cloneable_reset -> emit_cps_cloneable_reset), which owns
+         * the dk_copy_range deep-clone + capture clone/drop glue.  Delegating the
+         * reset via CT_LETRAW therefore reuses the proven multi-shot runtime and
+         * lets a colored function that contains a cloneable-reset stay CPS-emitted
+         * instead of wholly evicting.  The reset's value (often a continuation
+         * handle resumed later) is bound and the CPS continuation runs after. */
+        case EX_CLONEABLE_RESET:
+            return true;
         /* nested fn defs: call-graph boundaries, delegatable as values. */
         case EX_FN_DEF: case EX_FN: case EX_CLOSURE:
             return is_delegatable_value(e);

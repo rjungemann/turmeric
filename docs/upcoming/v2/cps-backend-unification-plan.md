@@ -238,6 +238,32 @@ fallback until the final phase removes it.
 - **U3 -- Cloneable (multi-shot) capture.** Port `dk_copy_range` deep-clone +
   capture clone/drop glue driven from CT-IR emit; add the multi-shot
   classification axis. This is the highest-risk phase (capture correctness).
+  **First slice landed (delegation).** A `(cloneable-reset body)` is a
+  self-contained multi-shot delimited region owned end-to-end by the direct
+  emitter (`emit_effects_cloneable_reset` -> `emit_cps_cloneable_reset`, which
+  drives `dk_copy_range` + the capture clone/drop glue). `EX_CLONEABLE_RESET` is
+  now delegatable via `CT_LETRAW` (`safe_to_delegate`, `src/passes/cps_ir.c`) --
+  the bare `cloneable-shift` stays non-delegatable (it captures the rest of its
+  reset body) -- so a colored function containing a cloneable-reset stays
+  CPS-emitted (the region direct-emitted as a unit) instead of wholly evicting,
+  reusing the proven multi-shot runtime. Multi-shot resume is exercised by
+  `cps-oracle-cloneable-multi-resume`; the mixed case (base reset/shift + a
+  cloneable-reset in one function) by `cps-oracle-cloneable-mixed`.
+
+  This slice also fixed a CPS-backend infrastructure bug: a `CT_LETRAW`
+  delegation emits its file-scope helper fns into `ctx->pending_handler_fns`,
+  which the direct-function path flushes ahead of the using function but the
+  `__cps` function path did not -- so a delegated cloneable-reset's `__cont_fn`
+  was defined after its use (`'__cont_fn_N' undeclared`). The CPS emitter now
+  flushes `pending_handler_fns` before each `__cps` body (a general fix for any
+  helper-emitting delegation).
+
+  *Remaining (the risky core):* teaching the CT-IR backend to *emit* the
+  cloneable multi-shot machinery itself (deep-clone + clone/drop glue driven from
+  CT-IR emit) and add the multi-shot classification axis, rather than delegating
+  the region. Also a pre-existing cloneable prelude-gate gap for a
+  `cloneable-shift` nested under an operator
+  ([docs/reported/cloneable-prelude-gate-misses-nested-shift.md](../../reported/cloneable-prelude-gate-misses-nested-shift.md)).
 - **U4 -- Serial.** Port `emit_cps_serial_runtime_prelude` + serial placement.
 - **U5 -- Async / await.** Port the scheduler wiring on top of the now-unified
   cloneable/serial base.

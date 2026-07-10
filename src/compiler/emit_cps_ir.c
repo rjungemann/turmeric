@@ -2800,6 +2800,18 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
 
     if (helpers.len > 1) buf_puts(file, helpers.data);
 
+    /* A CT_LETRAW delegation to the direct emitter (e.g. a cloneable-reset)
+     * emits its file-scope helper fns into ctx->pending_handler_fns, which the
+     * direct-function path flushes ahead of the using function.  A CPS function
+     * has its own emission path, so flush those helpers here too -- before the
+     * __cps body that references them -- otherwise the helper is defined after
+     * its use ('<helper>' undeclared). */
+    if (ctx->pending_handler_fns && ctx->pending_handler_fns->len > 0) {
+        buf_write(file, ctx->pending_handler_fns->data, ctx->pending_handler_fns->len);
+        buf_free(ctx->pending_handler_fns);
+        buf_init(ctx->pending_handler_fns);
+    }
+
     /* ---- CPS body: int64_t <name>__cps(<params>, DK *k) ---- */
     buf_printf(file, "static int64_t %s__cps(", cn);
     emit_params(ctx, file, fd);
