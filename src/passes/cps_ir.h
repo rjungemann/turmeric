@@ -146,10 +146,11 @@ struct CTerm {
          *   Shape 2 (ctx_op != NULL): a single arithmetic context frame
          *     `(<op> <operand> [])` around the shift, reified as a DK frame so the
          *     captured continuation deep-clones (dk_copy_range).  ctx_op is the
-         *     "+"/"-"/"*"/"/" C operator; ctx_operand is the literal-int other
-         *     operand; ctx_hole_left is true iff the shift is the left operand. */
+         *     "+"/"-"/"*"/"/" C operator; ctx_operand is the other (int-atom)
+         *     operand -- a literal or a var, captured into the frame env at the
+         *     reset site; ctx_hole_left is true iff the shift is the left operand. */
         struct { CVar x; const Binding *receiver;
-                 const char *ctx_op; int64_t ctx_operand; bool ctx_hole_left;
+                 const char *ctx_op; CAtom ctx_operand; bool ctx_hole_left;
                  CTerm *body; }                                           cloneable;
         struct { const char *why; }                                       unsupported;
     } as;

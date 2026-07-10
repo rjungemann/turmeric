@@ -304,14 +304,16 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         if (h0 == h1) return NULL;                    /* exactly one shift operand */
         const Expr *shift = h0 ? a0 : a1;
         const Expr *other = h0 ? a1 : a0;
-        if (!other || other->kind != EX_INT_LIT) return NULL;   /* literal operand only */
+        /* The other operand rides the frame env: an int atom (literal or var).
+         * A var is read once at the reset site and captured into the frame. */
+        if (!other || !is_atomic(other) || other->type.kind != TY_INT) return NULL;
         const Binding *recv = cloneable_named_receiver(b, shift);
         if (!recv) return NULL;
         CTerm *t = new_term(b, CT_CLONEABLE);
         t->as.cloneable.x = x;
         t->as.cloneable.receiver = recv;
         t->as.cloneable.ctx_op = rb->as.builtin.spec->c_op;   /* stable string */
-        t->as.cloneable.ctx_operand = other->as.i;
+        t->as.cloneable.ctx_operand = atom_of(other);
         t->as.cloneable.ctx_hole_left = h0;
         t->as.cloneable.body = rest;
         return t;
