@@ -131,7 +131,68 @@ static bool uses_callcc(const Expr *e) {
         case EX_CALL:
             for (uint32_t i = 0; i < e->as.call_.n_args; i++)
                 if (uses_callcc(e->as.call_.args[i])) return true;
+            return uses_callcc(e->as.call_.fn_expr);
+        /* Control forms and value wrappers that can nest a (call/cc f)/(escape f)
+         * -- omitting any of these left the escape-continuation prelude ungated
+         * (an "unknown type name 'tur_escape_cont'" build error) when an escape
+         * hid inside a shift body, handler case, match arm, etc.  Mirrors the
+         * complete expr walk (expr_collect_effects). */
+        case EX_MATCH:
+            if (uses_callcc(e->as.match_.scrutinee)) return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                if (uses_callcc(e->as.match_.arms[i].guard) ||
+                    uses_callcc(e->as.match_.arms[i].body)) return true;
             return false;
+        case EX_SHIFT:  return uses_callcc(e->as.shift_.k_fn)  || uses_callcc(e->as.shift_.body);
+        case EX_SHIFT0: return uses_callcc(e->as.shift0_.k_fn) || uses_callcc(e->as.shift0_.body);
+        case EX_CLONEABLE_RESET: return uses_callcc(e->as.cloneable_reset_.body);
+        case EX_CLONEABLE_SHIFT: return uses_callcc(e->as.cloneable_shift_.k_fn) ||
+                                        uses_callcc(e->as.cloneable_shift_.body);
+        case EX_SERIAL_RESET:    return uses_callcc(e->as.serial_reset_.body);
+        case EX_SERIAL_SHIFT:    return uses_callcc(e->as.serial_shift_.k_fn) ||
+                                        uses_callcc(e->as.serial_shift_.body);
+        case EX_PERFORM:
+            if (e->as.perform_.perform)
+                for (uint32_t i = 0; i < e->as.perform_.perform->n_args; i++)
+                    if (uses_callcc(e->as.perform_.perform->args[i])) return true;
+            return false;
+        case EX_HANDLE:
+        case EX_HANDLER_LIT:
+            if (e->as.handle_.handle) {
+                HandleExpr *h = e->as.handle_.handle;
+                if (uses_callcc(h->body)) return true;
+                for (uint8_t i = 0; i < h->n_cases; i++)
+                    if (uses_callcc(h->cases[i].body)) return true;
+            }
+            return false;
+        case EX_RESUME:
+            return e->as.resume_.resume &&
+                   (uses_callcc(e->as.resume_.resume->k) || uses_callcc(e->as.resume_.resume->value));
+        case EX_DISCONTINUE:
+            return e->as.discontinue_.discontinue &&
+                   (uses_callcc(e->as.discontinue_.discontinue->k) ||
+                    uses_callcc(e->as.discontinue_.discontinue->exception));
+        case EX_WITH_HANDLER:  return uses_callcc(e->as.with_handler_.handler) ||
+                                      uses_callcc(e->as.with_handler_.body);
+        case EX_ASYNC:  return uses_callcc(e->as.async_.fn_expr);
+        case EX_AWAIT:  return uses_callcc(e->as.await_.fut_expr);
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                if (uses_callcc(e->as.make_struct_.field_values[i])) return true;
+            return false;
+        case EX_GET_FIELD: return uses_callcc(e->as.get_field_.struct_expr);
+        case EX_SET_FIELD: return uses_callcc(e->as.set_field_.receiver) ||
+                                  uses_callcc(e->as.set_field_.value);
+        case EX_REF:          return uses_callcc(e->as.ref_.expr);
+        case EX_DEREF:        return uses_callcc(e->as.deref_.expr);
+        case EX_BORROW_IMMUT: return uses_callcc(e->as.borrow_immut_.expr);
+        case EX_BORROW_MUT:   return uses_callcc(e->as.borrow_mut_.expr);
+        case EX_ASCRIBE:      return uses_callcc(e->as.ascribe_.inner);
+        case EX_REINTERPRET:  return uses_callcc(e->as.reinterpret_.expr);
+        case EX_CAST:         return uses_callcc(e->as.cast_.expr);
+        case EX_FN_TO_FAT:    return uses_callcc(e->as.fn_to_fat_.inner);
+        case EX_POLY_TO_FAT:  return uses_callcc(e->as.poly_to_fat_.inner);
+        case EX_POLY_WRAP:    return uses_callcc(e->as.poly_wrap_.inner);
         default:
             return false;
     }

@@ -1,4 +1,5 @@
 #include "emit_cps_ir.h"
+#include "emit_cps.h"   /* emit_cps_program_uses_callcc (delegated-escape guard) */
 
 #include <stdarg.h>
 #include <stdlib.h>
@@ -620,8 +621,18 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
              * undeclared C name in the lifted helper -- a compile error, not a
              * silent miscompile. */
             const Expr *le = t->as.letraw.e;
+            /* U2: a delegated (call/cc f)/(escape f) references its enclosing
+             * captures through the receiver `f` (a closure), which the shared
+             * free-var walker does not descend into for EX_CALLCC.  Walk the
+             * receiver directly so a capturing receiver's enclosing locals ride
+             * the lifted continuation's env (a scalar capture is admitted by
+             * cap_add; a non-Copy capture bails to fallback).  Without this the
+             * captured name would be undeclared in the lifted helper. */
+            const Expr *lep = le;
+            while (lep && lep->kind == EX_ASCRIBE) lep = lep->as.ascribe_.inner;
+            const Expr *walk = (lep && lep->kind == EX_CALLCC) ? lep->as.callcc_.fn : le;
             uint32_t n_fv = 0;
-            Binding **fv = collect_free_vars(le, NULL, 0, NULL, 0, &n_fv);
+            Binding **fv = collect_free_vars(walk, NULL, 0, NULL, 0, &n_fv);
             for (uint32_t i = 0; i < n_fv && cs->ok; i++) {
                 const Binding *b = fv[i];
                 if (!b || b->is_global || binding_excluded(b)) continue;
@@ -710,6 +721,20 @@ static bool reset_body_ok(const CTerm *t) {
     return joins_closed_rec(t, def, 0);
 }
 
+/* U2: true if a CT_LETRAW delegates an expr that CONTAINS a (call/cc f)/(escape
+ * f) (possibly nested inside a delegated composite like `(+ 1 (escape ...))`).
+ * A DK-lifted straight-line helper -- a shift body or perform continuation --
+ * does not thread the escape receiver's captures into its env, so a capturing
+ * escape there references an undeclared C name in the helper.  shift_body_ok /
+ * perform_body_ok reject a callcc-bearing delegation so the enclosing function
+ * evicts to the direct emitter, which handles the escape (and its capture)
+ * natively.  A reset continuation / core / handler-case position is not gated by
+ * these predicates, so a capturing escape there stays admitted (collect_caps
+ * walks the receiver's free vars into the lifted env). */
+static bool letraw_has_callcc(const CTerm *t) {
+    return emit_cps_program_uses_callcc(t->as.letraw.e);
+}
+
 /* A shift body in the C3 subset: straight-line (letval/letprim/letcall) ending
  * in delivery of a scalar atom to the prompt.  No branches, tail calls, joins,
  * or nested delimiters. */
@@ -731,7 +756,7 @@ static bool shift_body_ok(const CTerm *t) {
                 if (!atom_ok(&t->as.letcall.args[i])) return false;
             return shift_body_ok(t->as.letcall.body);
         case CT_LETRAW:
-            return letraw_ok(t) && shift_body_ok(t->as.letraw.body);
+            return letraw_ok(t) && !letraw_has_callcc(t) && shift_body_ok(t->as.letraw.body);
         case CT_IF:
             return atom_ok(&t->as.if_.cond)
                 && shift_body_ok(t->as.if_.then_) && shift_body_ok(t->as.if_.else_);
@@ -764,7 +789,7 @@ static bool perform_body_ok(const CTerm *t) {
                 if (!atom_ok(&t->as.letcall.args[i])) return false;
             return perform_body_ok(t->as.letcall.body);
         case CT_LETRAW:
-            return letraw_ok(t) && perform_body_ok(t->as.letraw.body);
+            return letraw_ok(t) && !letraw_has_callcc(t) && perform_body_ok(t->as.letraw.body);
         case CT_IF:
             return atom_ok(&t->as.if_.cond)
                 && perform_body_ok(t->as.if_.then_) && perform_body_ok(t->as.if_.else_);
@@ -796,7 +821,7 @@ static bool handle_case_ok(const CTerm *t) {
             return t->as.resume.k.kind == CA_VAR && atom_ok(&t->as.resume.v)
                 && handle_case_ok(t->as.resume.body);
         case CT_LETRAW:
-            return letraw_ok(t) && handle_case_ok(t->as.letraw.body);
+            return letraw_ok(t) && !letraw_has_callcc(t) && handle_case_ok(t->as.letraw.body);
         case CT_IF:
             return atom_ok(&t->as.if_.cond)
                 && handle_case_ok(t->as.if_.then_) && handle_case_ok(t->as.if_.else_);

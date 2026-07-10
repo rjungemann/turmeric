@@ -292,12 +292,19 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
          * bound result, and "the rest of the computation" from the call/cc site
          * is exactly the CPS continuation that runs after the binding.  This lets
          * a colored function that ALSO contains a call/cc/escape stay on the
-         * CT-IR path instead of wholly evicting to the direct emitter.  The
-         * receiver `f` is emitted by emit_cps_callcc regardless; require it to be
-         * a delegatable value (a capture-free receiver) so a capturing receiver
-         * stays conservatively evicted. */
-        case EX_CALLCC:
-            return safe_to_delegate(b, e->as.callcc_.fn);
+         * CT-IR path instead of wholly evicting to the direct emitter.
+         *
+         * The receiver `f` is emitted by emit_cps_callcc regardless.  A capture-
+         * free receiver (a plain fn, a fat-boxed fn, or a zero-capture closure)
+         * delegates via the normal is-delegatable-value check.  A CAPTURING
+         * closure also delegates: collect_caps (CT_LETRAW) walks the receiver's
+         * free vars into the lifted continuation's env, and cap_add admits a
+         * scalar (Copy) capture while a non-Copy capture bails to fallback. */
+        case EX_CALLCC: {
+            const Expr *f = ascribe_peel(e->as.callcc_.fn);
+            return safe_to_delegate(b, e->as.callcc_.fn)
+                || (f && f->kind == EX_CLOSURE);
+        }
         case EX_CALL: {
             const Binding *fn = e->as.call_.fn_binding;
             if (!fn) return false;                 /* indirect: unknown coloring */

@@ -192,25 +192,44 @@ fallback until the final phase removes it.
   `cps-oracle-reset-join-escape`, `cps-oracle-reset-both-branch-shift`. Resolved
   report: [docs/archive/direct-reset-shift-degrades-out-of-subset.md](../../archive/direct-reset-shift-degrades-out-of-subset.md).
 - **U2 -- call/cc + escape.** Port the `emit_cps_callcc_prelude` machinery.
-  **Partially landed.** `(call/cc f)` / `(escape f)` (both `EX_CALLCC`) is an
-  *undelimited* escape: its continuation is captured at a **local setjmp
-  landing** that `emit_cps_callcc` establishes inline, so -- unlike shift/perform
-  -- it does not thread the DK continuation. A *colored* function that also
-  contains a call/cc/escape therefore used to evict wholesale (the `EX_CALLCC`
-  hit `safe_to_delegate`'s conservative `default: false`). This slice adds
-  `EX_CALLCC` to `safe_to_delegate` (`src/passes/cps_ir.c`) so a call/cc with a
-  **capture-free** receiver is delegated to the direct emitter via `CT_LETRAW`
-  and the enclosing colored function stays CPS-emitted. Oracle pairs:
-  `cps-oracle-colored-escape`, `cps-oracle-colored-callcc` (direct == cps).
+  **Landed.** `(call/cc f)` / `(escape f)` (both `EX_CALLCC`) is an *undelimited*
+  escape: its continuation is captured at a **local setjmp landing** that
+  `emit_cps_callcc` establishes inline, so -- unlike shift/perform -- it does not
+  thread the DK continuation. A *colored* function that also contains a
+  call/cc/escape used to evict wholesale (the `EX_CALLCC` hit `safe_to_delegate`'s
+  conservative `default: false`). `EX_CALLCC` is now added to `safe_to_delegate`
+  (`src/passes/cps_ir.c`), so the escape is delegated to the direct emitter via
+  `CT_LETRAW` and the enclosing colored function stays CPS-emitted.
 
-  *Deliberately still evicted:* a **capturing** receiver (`(escape (fn [k] ...
-  n ...))`). An experiment confirmed delegating it miscompiles (the captured
-  enclosing local is not reliably in scope at the delegated setjmp site), so the
-  gate requires `is_delegatable_value` (capture-free). The remaining decoupling
-  from `emit_cps.c` -- relocating `emit_cps_callcc` + `emit_cps_callcc_prelude`
-  out of the file so U7 can delete it, and admitting capturing receivers -- is
-  follow-on U2/U7 work. This slice only affects CT-IR emission, so
-  default-backend codegen is byte-identical (no snapshot churn).
+  - **Capture-free receivers** delegate via the normal is-delegatable-value
+    check (a plain fn, fat-boxed fn, or zero-capture closure). Oracles:
+    `cps-oracle-colored-escape`, `cps-oracle-colored-callcc`.
+  - **Capturing receivers** also delegate: `collect_caps` (`collect_caps_rec`
+    `CT_LETRAW`) walks the callcc receiver's free vars into the lifted
+    continuation env, so an enclosing capture (a scalar) rides the env; a
+    non-Copy capture bails to fallback. Oracle: `cps-oracle-colored-escape-capture`.
+  - **Guarded positions:** a callcc-bearing `CT_LETRAW` inside a DK-lifted
+    straight-line helper -- a `shift` body, a `perform` continuation, or an
+    effect handler case (`shift_body_ok` / `perform_body_ok` / `handle_case_ok`,
+    via `letraw_has_callcc`) -- is rejected, so such shapes evict to the direct
+    emitter. The direct path has a pre-existing capture-in-lifted-helper defect
+    there ([docs/reported/direct-capturing-escape-in-lifted-helper.md](../../reported/direct-capturing-escape-in-lifted-helper.md));
+    evicting keeps `direct == cps` (both take the direct path) rather than
+    diverging.
+  - **Prelude gate hardened:** `uses_callcc` (the escape-continuation prelude
+    gate) was missing many control/value forms (`shift`, `handle`, `perform`,
+    `resume`, `match`, `async`, casts, ...), so an escape nested in one lost its
+    `tur_escape_cont` prelude and failed to build on *both* backends. Now
+    complete (additive -- it only ever emits the prelude when a callcc is
+    actually present).
+
+  The change only affects CT-IR emission plus the (additive) prelude gate, so
+  default-backend codegen is byte-identical for callcc-free programs.
+
+  *Follow-on (U6/U7):* physically relocating `emit_cps_callcc` +
+  `emit_cps_callcc_prelude` out of `emit_cps.c` (prelude consolidation / file
+  deletion), and teaching the lifted-helper envs to carry escape captures so the
+  guarded positions can lower on the CPS path directly.
 - **U3 -- Cloneable (multi-shot) capture.** Port `dk_copy_range` deep-clone +
   capture clone/drop glue driven from CT-IR emit; add the multi-shot
   classification axis. This is the highest-risk phase (capture correctness).
