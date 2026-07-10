@@ -1,0 +1,14 @@
+;; U3 oracle: native Shape 2 cloneable with a NESTED (multi-frame) context.
+;; Backend: default backend (emit_cps.c)
+;; (cloneable-reset (* 2 (+ 10 (cloneable-shift k-id 0)))) -- two arithmetic frames
+;; ((* 2 []) outer, (+ 10 []) inner) reified as two DK frames pushed outermost-first;
+;; the captured continuation deep-clones (dk_copy_range).  Emitted natively.
+;; Multi-shot: clone+resume 5 -> 2*(10+5) = 30, then resume 3 -> 2*(10+3) = 26.
+;;
+(defn k-id [k] : int k)
+(defn make [] : int (cloneable-reset (* 2 (+ 10 (cloneable-shift k-id 0)))))
+(defn main [] : int
+  (let [c (make)]
+    (println (tur_cloneable_cont_resume (tur_cloneable_cont_clone c) 5))
+    (println (tur_cloneable_cont_resume c 3)))
+  0)

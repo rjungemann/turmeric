@@ -95,6 +95,17 @@ typedef enum CTermKind {
 
 typedef struct CTerm CTerm;
 
+/* U3 Shape 2: one arithmetic context frame `(<op> <operand> [])` around a
+ * cloneable-shift, reified as a DK frame.  `op` is the "+"/"-"/"*"/"/" C
+ * operator; `operand` is the other (int-atom) operand captured into the frame
+ * env; `hole_left` is true iff the shift is the left operand.  Frames are stored
+ * outermost-first (matching the dk_frame push order). */
+typedef struct CloneFrame {
+    const char *op;
+    CAtom       operand;
+    bool        hole_left;
+} CloneFrame;
+
 /* One clause of a (possibly multi-case) handle: an effect and its handler body,
  * binding the effect's params + the resumable continuation `k`. */
 typedef struct CHandleCase {
@@ -142,15 +153,12 @@ struct CTerm {
         /* U3 cloneable (multi-shot).  `receiver` is a named, uncolored top-level
          * fn called with the fresh cloneable_cont handle; its result is the reset
          * value bound to x; then run body.
-         *   Shape 1 (ctx_op == NULL): identity continuation -- no dk_copy_range.
-         *   Shape 2 (ctx_op != NULL): a single arithmetic context frame
-         *     `(<op> <operand> [])` around the shift, reified as a DK frame so the
-         *     captured continuation deep-clones (dk_copy_range).  ctx_op is the
-         *     "+"/"-"/"*"/"/" C operator; ctx_operand is the other (int-atom)
-         *     operand -- a literal or a var, captured into the frame env at the
-         *     reset site; ctx_hole_left is true iff the shift is the left operand. */
+         *   n_frames == 0: Shape 1 -- identity continuation, no dk_copy_range.
+         *   n_frames >= 1: Shape 2 -- an arithmetic context `(<op> <operand> ...
+         *     [])` around the shift (outermost-first), each frame reified as a DK
+         *     frame so the captured continuation deep-clones (dk_copy_range). */
         struct { CVar x; const Binding *receiver;
-                 const char *ctx_op; CAtom ctx_operand; bool ctx_hole_left;
+                 CloneFrame *frames; uint32_t n_frames;
                  CTerm *body; }                                           cloneable;
         struct { const char *why; }                                       unsupported;
     } as;

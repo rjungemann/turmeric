@@ -292,16 +292,20 @@ fallback until the final phase removes it.
   operators and both hole sides; oracle `cps-oracle-cloneable-native-shape2`
   (clone + two resumes -> 15/110).
 
-  Shape 2 also now admits a **captured (var) frame operand** -- `(cloneable-reset
-  (+ n (cloneable-shift k 0)))` with `n` a parameter -- read once at the reset
-  site and threaded into the frame env (`ctx_operand` generalized to a `CAtom`,
-  collected by the capture walkers). Oracle: `cps-oracle-cloneable-native-shape2-var`.
+  Shape 2 now admits a **captured (var) frame operand** (`(+ n (cloneable-shift
+  k 0))` with `n` a parameter; oracle `cps-oracle-cloneable-native-shape2-var`)
+  and **multi-frame nested arithmetic contexts** -- `(cloneable-reset (* a (+ b
+  (cloneable-shift k 0))))` -- reified as a chain of DK frames pushed
+  outermost-first. `CT_CLONEABLE` now carries a `CloneFrame[]` (0 frames = Shape
+  1, N frames = an N-deep arithmetic context); `build_cloneable` walks the nested
+  binop chain, `emit_cloneable` emits one frame fn per level. Oracle:
+  `cps-oracle-cloneable-native-shape2-nested` (30/26 across two frames).
 
-  *Remaining (the risky core, narrowing):* multi-frame / nested contexts
-  (`(* a (+ b []))`), `if` / `let`-bearing contexts, and closure/colored
-  receivers -- ported one form at a time behind its own oracle (the delegation
-  fallback still catches everything not yet native) -- plus the multi-shot
-  classification axis. Mapped in the native-emit note.
+  *Remaining (the risky core, narrowing):* `if` / `let`-bearing contexts (where
+  reusing the direct `collect_ctx` -- and relocating it out of `emit_cps.c` --
+  pays off) and closure/colored receivers, each behind its own oracle (the
+  delegation fallback still catches everything not yet native), plus the
+  multi-shot classification axis. Mapped in the native-emit note.
 - **U4 -- Serial.** Port `emit_cps_serial_runtime_prelude` + serial placement.
 - **U5 -- Async / await.** Port the scheduler wiring on top of the now-unified
   cloneable/serial base.

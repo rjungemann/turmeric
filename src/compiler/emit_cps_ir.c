@@ -381,9 +381,10 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
             bound[nb] = t->as.resume.x.id;
             return has_capture_rec(t->as.resume.body, exclude, bound, nb + 1);
         case CT_CLONEABLE:
-            /* receiver is a global fn -- no capture; a Shape 2 operand atom may
-             * be a captured var (rides the frame env). */
-            if (t->as.cloneable.ctx_op) CC_ATOM(&t->as.cloneable.ctx_operand);
+            /* receiver is a global fn -- no capture; Shape 2 frame operands may
+             * be captured vars (they ride the frame env). */
+            for (uint32_t _i = 0; _i < t->as.cloneable.n_frames; _i++)
+                CC_ATOM(&t->as.cloneable.frames[_i].operand);
             bound[nb] = t->as.cloneable.x.id;
             return has_capture_rec(t->as.cloneable.body, exclude, bound, nb + 1);
         case CT_LETRAW: {
@@ -604,10 +605,11 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             bound[nb] = t->as.resume.x.id;
             collect_caps_rec(t->as.resume.body, exclude, bound, nb + 1, cs); return;
         case CT_CLONEABLE:
-            /* The receiver is a named global fn (no capture); a Shape 2 operand
-             * atom may be a captured var (rides the frame env).  Bind the result
-             * binder for the continuation body and collect its captures. */
-            if (t->as.cloneable.ctx_op) COL_ATOM(&t->as.cloneable.ctx_operand);
+            /* The receiver is a named global fn (no capture); Shape 2 frame
+             * operands may be captured vars (they ride the frame env).  Bind the
+             * result binder for the continuation body and collect its captures. */
+            for (uint32_t _i = 0; _i < t->as.cloneable.n_frames; _i++)
+                COL_ATOM(&t->as.cloneable.frames[_i].operand);
             bound[nb] = t->as.cloneable.x.id;
             collect_caps_rec(t->as.cloneable.body, exclude, bound, nb + 1, cs); return;
         case CT_LETRAW: {
@@ -1015,11 +1017,13 @@ static bool term_core_ok(const CTerm *t) {
         case CT_CLONEABLE:
             /* U3: cloneable with a named uncolored global receiver (checked at
              * translation).  Shape 1 has no context; Shape 2's operand atom
-             * (ctx_op != NULL) must be slot-representable (it rides the frame
+             * (n_frames >= 1) must each be slot-representable (they ride the frame
              * env).  Admission needs a slot-representable result + core body. */
-            return (slot_ok_t(t->as.cloneable.x.type, t->as.cloneable.x.ty) || t->as.cloneable.x.ty == TY_NIL)
-                && (!t->as.cloneable.ctx_op || atom_ok(&t->as.cloneable.ctx_operand))
-                && term_core_ok(t->as.cloneable.body);
+            if (!(slot_ok_t(t->as.cloneable.x.type, t->as.cloneable.x.ty) || t->as.cloneable.x.ty == TY_NIL))
+                return false;
+            for (uint32_t i = 0; i < t->as.cloneable.n_frames; i++)
+                if (!atom_ok(&t->as.cloneable.frames[i].operand)) return false;
+            return term_core_ok(t->as.cloneable.body);
         default: /* CT_UNSUPPORTED */
             return false;
     }
@@ -2421,9 +2425,9 @@ static const char *cloneable_frame_expr(const char *op, bool hole_left) {
  * natively (no emit_cps.c), reusing the shared DK runtime (dk_copy_range,
  * __dk_cont_fn / __dk_env_clone / __dk_env_drop) byte-for-byte.
  *
- *   Shape 1 (ctx_op == NULL): identity continuation -- no dk_copy_range.  Alloc a
+ *   Shape 1 (n_frames == 0): identity continuation -- no dk_copy_range.  Alloc a
  *     tur_cloneable_cont over an identity fn (NULL env), call receiver, bind x.
- *   Shape 2 (ctx_op != NULL): reify the `(<op> <operand> [])` context as a DK
+ *   Shape 2 (n_frames >= 1): reify the `(<op> <operand> ... [])` context as DK
  *     frame; the shift body deep-clones the captured sub-continuation into a
  *     cloneable_cont and hands it to receiver.  Mirrors emit_cloneable_ctx. */
 static void emit_cloneable(CE *ce, const CTerm *t) {
@@ -2431,7 +2435,7 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
     char *xn  = cvar_cname(ce, t->as.cloneable.x);
     char *rfn = callee_name(t->as.cloneable.receiver);
 
-    if (t->as.cloneable.ctx_op == NULL) {
+    if (t->as.cloneable.n_frames == 0) {
         /* Shape 1: identity continuation. */
         char cfn[256];
         snprintf(cfn, sizeof(cfn), "%s_clc%d", ce->fn_cn, id);
@@ -2443,13 +2447,19 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                 cv, cfn);
         ce_line(ce, "%s = %s((int64_t)(intptr_t)%s);", xn, rfn, cv);
     } else {
-        /* Shape 2: single arithmetic context frame + dk_copy_range capture. */
-        char ctxfn[256], bodyfn[256];
-        snprintf(ctxfn,  sizeof(ctxfn),  "%s_ccctx%d",  ce->fn_cn, id);
+        /* Shape 2: an arithmetic context (1+ frames) + dk_copy_range capture. */
+        uint32_t nf = t->as.cloneable.n_frames;
+        char bodyfn[256];
         snprintf(bodyfn, sizeof(bodyfn), "%s_ccbody%d", ce->fn_cn, id);
-        buf_printf(ce->helpers,
-            "static intptr_t %s(intptr_t env, intptr_t value) { return %s; }\n",
-            ctxfn, cloneable_frame_expr(t->as.cloneable.ctx_op, t->as.cloneable.ctx_hole_left));
+        /* One frame fn per context frame. */
+        for (uint32_t i = 0; i < nf; i++) {
+            char ctxfn[256];
+            snprintf(ctxfn, sizeof(ctxfn), "%s_ccctx%d_%u", ce->fn_cn, id, i);
+            buf_printf(ce->helpers,
+                "static intptr_t %s(intptr_t env, intptr_t value) { return %s; }\n",
+                ctxfn, cloneable_frame_expr(t->as.cloneable.frames[i].op,
+                                            t->as.cloneable.frames[i].hole_left));
+        }
         buf_printf(ce->helpers,
             "static intptr_t %s(intptr_t env, DK *subk) {\n"
             "    DK *__cap = dk_copy_range(subk, NULL);\n"
@@ -2458,11 +2468,16 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
             bodyfn);
         char dv[48];
         snprintf(dv, sizeof(dv), "__ccd%d", id);
-        char *opv = atom_str(ce, &t->as.cloneable.ctx_operand);
         ce_line(ce, "DK *%s = dk_prompt(1, dk_done());", dv);
-        ce_line(ce, "%s = dk_frame(%s, (intptr_t)(%s), %s);", dv, ctxfn, opv, dv);
+        /* Push frames outermost-first (frames[0] deepest, closest to the prompt). */
+        for (uint32_t i = 0; i < nf; i++) {
+            char ctxfn[256];
+            snprintf(ctxfn, sizeof(ctxfn), "%s_ccctx%d_%u", ce->fn_cn, id, i);
+            char *opv = atom_str(ce, &t->as.cloneable.frames[i].operand);
+            ce_line(ce, "%s = dk_frame(%s, (intptr_t)(%s), %s);", dv, ctxfn, opv, dv);
+            free(opv);
+        }
         ce_line(ce, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);", dv, bodyfn, rfn, dv);
-        free(opv);
         ce_line(ce, "%s = (int64_t)dk_run(%s, 0);", xn, dv);
         ce_line(ce, "dk_free(%s);", dv);
     }

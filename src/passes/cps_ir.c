@@ -275,51 +275,68 @@ static bool cloneable_op_supported(const char *op) {
                   strcmp(op, "*") == 0 || strcmp(op, "/") == 0);
 }
 
+/* True if `e` contains a cloneable-shift reachable through the arithmetic
+ * context (binops / ascriptions); stops at any other form (a nested cloneable-
+ * reset self-delimits and is not descended). */
+static bool cloneable_ctx_reaches_shift(const Expr *e) {
+    e = ascribe_peel(e);
+    if (!e) return false;
+    if (e->kind == EX_CLONEABLE_SHIFT) return true;
+    if (e->kind == EX_BUILTIN)
+        for (uint32_t i = 0; i < e->as.builtin.n; i++)
+            if (cloneable_ctx_reaches_shift(e->as.builtin.args[i])) return true;
+    return false;
+}
+
+#define CL_IR_MAX_FRAMES 8
+
+/* U3 native cloneable: (cloneable-reset <ctx>) where <ctx> is an arithmetic
+ * context `(<op> <operand> ... [])` (outermost-first, 0+ frames) bottoming out
+ * in a (cloneable-shift receiver val) with a named uncolored receiver.  n_frames
+ * == 0 is Shape 1 (identity continuation); >= 1 is Shape 2 (dk_copy_range).
+ * Returns NULL for any richer shape (closure/colored receiver, non-atom or
+ * non-int operand, if/let context, > CL_IR_MAX_FRAMES) -- the caller then falls
+ * back to the CT_LETRAW delegation. */
 static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
-    const Expr *rb = ascribe_peel(e->as.cloneable_reset_.body);
-    if (!rb) return NULL;
+    const Expr *cur = ascribe_peel(e->as.cloneable_reset_.body);
+    CloneFrame frames[CL_IR_MAX_FRAMES];
+    uint32_t nf = 0;
 
-    /* Shape 1: the shift IS the whole reset body -- identity continuation. */
-    if (rb->kind == EX_CLONEABLE_SHIFT) {
-        const Binding *recv = cloneable_named_receiver(b, rb);
-        if (!recv) return NULL;
-        CTerm *t = new_term(b, CT_CLONEABLE);
-        t->as.cloneable.x = x;
-        t->as.cloneable.receiver = recv;
-        t->as.cloneable.ctx_op = NULL;
-        t->as.cloneable.body = rest;
-        return t;
-    }
-
-    /* Shape 2 (single frame): (<op> <int-literal> (cloneable-shift recv val)) or
-     * the symmetric hole-left form.  The literal operand rides the DK frame env;
-     * the captured continuation deep-clones (dk_copy_range) at emit. */
-    if (rb->kind == EX_BUILTIN && rb->as.builtin.n == 2 && rb->as.builtin.spec
-        && rb->type.kind == TY_INT
-        && cloneable_op_supported(rb->as.builtin.spec->c_op)) {
-        const Expr *a0 = ascribe_peel(rb->as.builtin.args[0]);
-        const Expr *a1 = ascribe_peel(rb->as.builtin.args[1]);
-        bool h0 = a0 && a0->kind == EX_CLONEABLE_SHIFT;
-        bool h1 = a1 && a1->kind == EX_CLONEABLE_SHIFT;
-        if (h0 == h1) return NULL;                    /* exactly one shift operand */
-        const Expr *shift = h0 ? a0 : a1;
+    while (cur && cur->kind == EX_BUILTIN && cur->as.builtin.n == 2
+           && cur->as.builtin.spec && cur->type.kind == TY_INT
+           && cloneable_op_supported(cur->as.builtin.spec->c_op)) {
+        const Expr *a0 = ascribe_peel(cur->as.builtin.args[0]);
+        const Expr *a1 = ascribe_peel(cur->as.builtin.args[1]);
+        bool h0 = cloneable_ctx_reaches_shift(a0);
+        bool h1 = cloneable_ctx_reaches_shift(a1);
+        if (h0 == h1) return NULL;                  /* need exactly one hole side */
         const Expr *other = h0 ? a1 : a0;
-        /* The other operand rides the frame env: an int atom (literal or var).
-         * A var is read once at the reset site and captured into the frame. */
         if (!other || !is_atomic(other) || other->type.kind != TY_INT) return NULL;
-        const Binding *recv = cloneable_named_receiver(b, shift);
-        if (!recv) return NULL;
-        CTerm *t = new_term(b, CT_CLONEABLE);
-        t->as.cloneable.x = x;
-        t->as.cloneable.receiver = recv;
-        t->as.cloneable.ctx_op = rb->as.builtin.spec->c_op;   /* stable string */
-        t->as.cloneable.ctx_operand = atom_of(other);
-        t->as.cloneable.ctx_hole_left = h0;
-        t->as.cloneable.body = rest;
-        return t;
+        if (nf >= CL_IR_MAX_FRAMES) return NULL;
+        frames[nf].op        = cur->as.builtin.spec->c_op;   /* stable string */
+        frames[nf].operand   = atom_of(other);
+        frames[nf].hole_left = h0;
+        nf++;
+        cur = h0 ? a0 : a1;                          /* descend the hole side */
     }
 
-    return NULL;   /* other shapes fall back to the CT_LETRAW delegation */
+    if (!cur || cur->kind != EX_CLONEABLE_SHIFT) return NULL;
+    const Binding *recv = cloneable_named_receiver(b, cur);
+    if (!recv) return NULL;
+
+    CTerm *t = new_term(b, CT_CLONEABLE);
+    t->as.cloneable.x = x;
+    t->as.cloneable.receiver = recv;
+    t->as.cloneable.n_frames = nf;
+    if (nf) {
+        CloneFrame *fa = arena_alloc(b->a, nf * sizeof(CloneFrame));
+        memcpy(fa, frames, nf * sizeof(CloneFrame));
+        t->as.cloneable.frames = fa;
+    } else {
+        t->as.cloneable.frames = NULL;
+    }
+    t->as.cloneable.body = rest;
+    return t;
 }
 
 /* N6.1: a subexpression that can be emitted wholesale by the direct emitter
