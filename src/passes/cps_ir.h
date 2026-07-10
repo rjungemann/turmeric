@@ -101,14 +101,18 @@ typedef struct CTerm CTerm;
  *     for `op` in "+"/"-"/"*"/"/"; `operand` is the other (int-atom) operand
  *     captured into the frame env; `hole_left` is true iff the shift is the left
  *     operand.
- *   - Call frame (`call_fn` != NULL, `op` == NULL): a 1-arg call `(f [])` to a
- *     top-level uncolored int->int fn; the hole is the sole argument, so there is
- *     no captured env (`operand` unused, env passed as 0), and `hole_left` is
- *     true.
- * Frames are stored outermost-first (matching the dk_frame push order). */
+ *   - Call frame (`call_fn` != NULL, `op` == NULL): a call to a top-level
+ *     uncolored int-returning fn.  `ignore_value` distinguishes two forms:
+ *       * false -- a 1-arg hole call `(f [])`: the hole is the sole argument
+ *         (no captured env, env passed as 0), `hole_left` true.
+ *       * true  -- a 0-arg ignore-value tail `(f)` from a do-sequence: the frame
+ *         runs `f()` on resume regardless of the resumed value (no env).
+ * Only an arithmetic frame carries a captured env operand; call frames pass env
+ * 0.  Frames are stored outermost-first (matching the dk_frame push order). */
 typedef struct CloneFrame {
     const char    *op;
     const Binding *call_fn;
+    bool           ignore_value;
     CAtom          operand;
     bool           hole_left;
 } CloneFrame;

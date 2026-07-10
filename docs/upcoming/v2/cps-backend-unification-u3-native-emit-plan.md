@@ -154,9 +154,35 @@ reify the frame -- the resumed value is returned unchanged), so making it native
 and correct would make `direct != cps`.  It stays on the delegation path to match
 the direct backend's behavior byte-for-byte.
 
-Remaining in step 5: the `do`-prelude shape (side-effecting prelude + ignore-value
-tail frames) the direct `collect_ctx` also handles.  Steps 6-7 (multi-shot
-classification axis + retire delegation) follow.
+**Step 5 (Shape 2) extended -- do-prelude contexts LANDED.** `(cloneable-reset
+(do PRELUDE... (cloneable-shift receiver v) TAIL...))`:
+
+- **Prelude items** [0, m) are direct-emitted for side effect at the reset site
+  (recorded as binding-less `CloneLet`s, emitted as `(void)(<expr>);`) -- they run
+  once at capture time.
+- Each **tail item** (m, N) is a 0-arg call to a top-level uncolored int fn,
+  reified as an **ignore-value frame** (`CloneFrame.ignore_value`): on resume it
+  runs `f()` regardless of the resumed value.  Tail items are recorded in reverse
+  so the first runs innermost (first on resume) and the last outermost (its value
+  is the reset's).
+
+Restricted to the whole reset body (no outer frames) and no `if`.  Oracle
+`cps-oracle-cloneable-native-shape2-doprelude` (prelude runs once; `tick`/`tock`
+tails yield 2/2 across a clone + resume).
+
+Deliberately *not* native (kept on delegation, matching the direct backend):
+**1-arg ignore-value tails** (`(f env)`) -- the direct emitter crashes on them
+(illegal instruction); and any shift with **live captures at its site**
+(`n_live_captures != 0`), which the direct emitter's `cl_can_lower` also rejects.
+The latter is a *shared-prelude* constraint: native Shape 2 emits references to the
+DK runtime helpers (`__dk_cont_fn` / `__dk_env_clone` / `__dk_env_drop`,
+`dk_copy_range`) whose definitions are gated by `cl_can_lower`; `build_cloneable`
+now checks `n_live_captures == 0` so it never lowers a shape whose prelude the
+gate would omit (which would leave undeclared C names).
+
+Remaining in step 5: none of the `collect_ctx` context shapes are outstanding for
+the common cases.  Steps 6-7 (multi-shot classification axis + retire delegation)
+follow.
 
 1. **CT nodes.** Add `CT_CLONEABLE_SHIFT` (receiver + captured-cont, distinct
    from abortive `CT_SHIFT` -- the receiver takes a *handle*, not the value) and

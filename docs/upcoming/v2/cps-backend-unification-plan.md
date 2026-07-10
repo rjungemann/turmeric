@@ -326,6 +326,18 @@ fallback until the final phase removes it.
   identity path (context not reified), so native+correct emission would break
   `direct == cps`.
 
+  Shape 2 also admits a **do-prelude** context (`(cloneable-reset (do PRELUDE
+  (cloneable-shift k v) TAIL...))`): the prelude items are direct-emitted once at
+  the reset site for side effect (binding-less `CloneLet`s), and each 0-arg tail
+  call becomes an **ignore-value frame** (`CloneFrame.ignore_value`) that runs
+  `f()` on resume regardless of the resumed value (tails run first-innermost /
+  last-outermost). Oracle `cps-oracle-cloneable-native-shape2-doprelude`. 1-arg
+  ignore-value tails stay delegated (they crash the direct emitter). A key
+  robustness fix landed here: `build_cloneable` now requires the shift to have no
+  live captures (`n_live_captures == 0`), matching `cl_can_lower` -- the gate that
+  emits the shared DK runtime prelude native Shape 2 references; without it, a
+  live-capture shape lowered natively would name undeclared DK helpers.
+
   **Receivers investigated -- nothing to port.** A capture-free lambda receiver
   (`(fn [k] k)`) already emits natively (it lifts to a top-level fn; oracle
   `cps-oracle-cloneable-native-lambda-recv`). Fat-closure and colored receivers

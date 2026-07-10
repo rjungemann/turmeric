@@ -304,6 +304,10 @@ static bool cloneable_ctx_reaches_shift(const Expr *e) {
             return cloneable_ctx_reaches_shift(e->as.if_.cond)
                 || cloneable_ctx_reaches_shift(e->as.if_.then_)
                 || cloneable_ctx_reaches_shift(e->as.if_.else_or_null);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (cloneable_ctx_reaches_shift(e->as.do_.items[i])) return true;
+            return false;
         default:
             return false;
     }
@@ -358,10 +362,11 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             const Expr *other = h0 ? a1 : a0;
             if (!other || !is_atomic(other) || other->type.kind != TY_INT) return NULL;
             if (nf >= CL_IR_MAX_FRAMES) return NULL;
-            frames[nf].op        = cur->as.builtin.spec->c_op;   /* stable string */
-            frames[nf].call_fn   = NULL;
-            frames[nf].operand   = atom_of(other);
-            frames[nf].hole_left = h0;
+            frames[nf].op           = cur->as.builtin.spec->c_op;  /* stable string */
+            frames[nf].call_fn      = NULL;
+            frames[nf].ignore_value = false;
+            frames[nf].operand      = atom_of(other);
+            frames[nf].hole_left    = h0;
             nf++;
             cur = h0 ? a0 : a1;                       /* descend the hole side */
             continue;
@@ -390,6 +395,64 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             frames[nf].hole_left = true;         /* the hole is the sole arg */
             nf++;
             cur = a0;                            /* descend into the hole arg */
+            continue;
+        }
+
+        /* do-sequence with a statement-position shift:
+         *   (do PRELUDE... (cloneable-shift receiver v) TAIL...)
+         * The prelude items run once at capture time (side-effect-only, binding-
+         * less lets); the shift must be the do-item itself; each tail item is a
+         * 0-arg call to a top-level uncolored int fn, reified as an ignore-value
+         * frame (runs `f()` on resume regardless of the resumed value).  Restricted
+         * to the whole reset body (no outer frames yet) and no `if`, matching the
+         * shape the direct emitter supports; the 1-arg ignore-value tail crashes
+         * the direct backend, so it stays on delegation. */
+        if (cur->kind == EX_DO && nf == 0 && !saw_if) {
+            uint32_t N = cur->as.do_.n;
+            int32_t m = -1;
+            for (uint32_t i = 0; i < N; i++) {
+                if (cloneable_ctx_reaches_shift(cur->as.do_.items[i])) {
+                    if (m >= 0) return NULL;             /* at most one hole */
+                    m = (int32_t)i;
+                }
+            }
+            if (m < 0) return NULL;
+            const Expr *shift_item = ascribe_peel(cur->as.do_.items[m]);
+            if (!shift_item || shift_item->kind != EX_CLONEABLE_SHIFT) return NULL;
+            /* Prelude items [0, m): direct-emitted for side effect at the reset site. */
+            for (int32_t i = 0; i < m; i++) {
+                const Expr *pre = cur->as.do_.items[i];
+                if (cloneable_ctx_reaches_shift(pre)) return NULL;
+                if (!safe_to_delegate(b, pre)) return NULL;
+                if (nl >= CL_IR_MAX_LETS) return NULL;
+                lets[nl].binding = NULL;                 /* side-effect prelude */
+                lets[nl].init    = pre;
+                nl++;
+            }
+            /* Tail items (m, N): 0-arg ignore-value frames.  Record in reverse so
+             * the first tail item is innermost (runs first on resume) and the last
+             * is outermost (runs last, its value is the reset's value). */
+            for (int32_t i = (int32_t)N - 1; i > m; i--) {
+                const Expr *tail = ascribe_peel(cur->as.do_.items[i]);
+                if (!tail || tail->kind != EX_CALL ||
+                    !tail->as.call_.fn_binding || tail->as.call_.fn_expr) return NULL;
+                const Binding *fb = tail->as.call_.fn_binding;
+                if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 0) return NULL;
+                if (tail->as.call_.n_args != 0) return NULL;
+                if (fb->closure_fn_binding) return NULL;    /* not a fat closure */
+                if (callee_colored(b, fb)) return NULL;     /* uncolored target */
+                if (tail->type.kind != TY_INT) return NULL; /* result: int */
+                if (nf >= CL_IR_MAX_FRAMES) return NULL;
+                memset(&frames[nf], 0, sizeof(CloneFrame));
+                frames[nf].op           = NULL;
+                frames[nf].call_fn      = fb;
+                frames[nf].ignore_value = true;
+                frames[nf].operand.kind = CA_INT;   /* unused (env passed as 0) */
+                frames[nf].operand.ty   = TY_INT;
+                frames[nf].hole_left    = true;
+                nf++;
+            }
+            cur = shift_item;                       /* the shift; loop exits below */
             continue;
         }
 
@@ -443,6 +506,13 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     }
 
     if (!cur || cur->kind != EX_CLONEABLE_SHIFT) return NULL;
+    /* The shared DK runtime prelude (__dk_cont_fn / __dk_env_clone / __dk_env_drop,
+     * dk_copy_range) that native Shape 2 emits is gated by the direct emitter's
+     * cl_can_lower, which requires the shift to have no live captures at its site.
+     * Match that constraint: lowering a shift with live captures natively would
+     * reference prelude helpers the gate never emits (undeclared C names).  Such a
+     * shape stays on the delegation path, which matches the direct backend. */
+    if (cur->as.cloneable_shift_.n_live_captures != 0) return NULL;
     const Binding *recv = cloneable_named_receiver(b, cur);
     if (!recv) return NULL;
 

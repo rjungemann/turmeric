@@ -2528,6 +2528,12 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
     for (uint32_t li = 0; li < t->as.cloneable.n_lets; li++) {
         const CloneLet *cl = &t->as.cloneable.lets[li];
         char *iv = emit_cloneable_direct(ce, cl->init);
+        if (!cl->binding) {
+            /* Side-effect prelude (do-sequence prefix): emit for effect only. */
+            ce_line(ce, "(void)(%s);", iv);
+            free(iv);
+            continue;
+        }
         char *bn = name_for_binding(ce->ctx, cl->binding);
         ce_line(ce, "%s %s = %s;", emit_type_c_name(ce->ctx, cl->binding->type), bn, iv);
         ce_line(ce, "(void)%s;", bn);
@@ -2570,9 +2576,16 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
             const CloneFrame *fr = &t->as.cloneable.frames[i];
             if (fr->call_fn) {
                 char *cfn = callee_name(fr->call_fn);
-                buf_printf(ce->helpers,
-                    "static intptr_t %s(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s((int64_t)value); }\n",
-                    ctxfn, cfn);
+                if (fr->ignore_value)
+                    /* 0-arg ignore-value tail: run f() regardless of resume value. */
+                    buf_printf(ce->helpers,
+                        "static intptr_t %s(intptr_t env, intptr_t value) { (void)env; (void)value; return (intptr_t)%s(); }\n",
+                        ctxfn, cfn);
+                else
+                    /* 1-arg hole call: apply f to the resumed value. */
+                    buf_printf(ce->helpers,
+                        "static intptr_t %s(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s((int64_t)value); }\n",
+                        ctxfn, cfn);
                 free(cfn);
             } else {
                 buf_printf(ce->helpers,

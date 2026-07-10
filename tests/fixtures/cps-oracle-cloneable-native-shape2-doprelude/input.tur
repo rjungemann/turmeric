@@ -1,0 +1,25 @@
+;; U3 oracle: native Shape 2 cloneable with a do-PRELUDE context.
+;; Backend: default backend (emit_cps.c)
+;; (cloneable-reset (do (println "prelude-ran") (cloneable-shift k-id 0) (tick) (tock)))
+;; The prelude `(println "prelude-ran")` runs ONCE at capture time (a binding-
+;; less side-effect item at the reset site).  The tail items (tick), (tock) are
+;; 0-arg ignore-value frames: on resume each runs its call regardless of the
+;; resumed value; the sequence runs tick then tock, and the reset yields tock's
+;; value.  Emitted natively (two DK frames + the prelude side effect).
+;; Multi-shot: clone+resume 5 -> tock() = 2, then resume 3 -> 2 (value ignored).
+;;
+(defn k-id [k : int] : int k)
+(defn tick [] : int 1)
+(defn tock [] : int 2)
+(defn make [] : int
+  (cloneable-reset
+    (do
+      (println "prelude-ran")
+      (cloneable-shift k-id 0)
+      (tick)
+      (tock))))
+(defn main [] : int
+  (let [c (make)]
+    (println (tur_cloneable_cont_resume (tur_cloneable_cont_clone c) 5))
+    (println (tur_cloneable_cont_resume c 3)))
+  0)
