@@ -178,7 +178,7 @@ bool cps_expr_contains_cloneable_shift(const Expr *e) {
                 if (cps_expr_contains_cloneable_shift(e->as.call_.args[i]))
                     return true;
             }
-            return false;
+            return cps_expr_contains_cloneable_shift(e->as.call_.fn_expr);
         case EX_CLOSURE:
             return cps_fn_needs_cloneable_transform(e->as.closure_.closure->fn);
         case EX_RETURN:
@@ -190,6 +190,76 @@ bool cps_expr_contains_cloneable_shift(const Expr *e) {
                     return true;
             }
             return false;
+        /* Control / value forms that can nest a cloneable-reset/-shift.  Omitting
+         * any left the tur_cloneable_cont prelude ungated when the cloneable form
+         * hid under it -- e.g. `(+ 1 (cloneable-reset ...))` -- an "unknown type
+         * name 'tur_cloneable_cont'" build error.  Additive: this only ever emits
+         * the prelude when a cloneable form is actually present. */
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (cps_expr_contains_cloneable_shift(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_MATCH:
+            if (cps_expr_contains_cloneable_shift(e->as.match_.scrutinee)) return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                if (cps_expr_contains_cloneable_shift(e->as.match_.arms[i].guard) ||
+                    cps_expr_contains_cloneable_shift(e->as.match_.arms[i].body)) return true;
+            return false;
+        case EX_RESET:  return cps_expr_contains_cloneable_shift(e->as.reset_.body);
+        case EX_SHIFT:  return cps_expr_contains_cloneable_shift(e->as.shift_.k_fn) ||
+                               cps_expr_contains_cloneable_shift(e->as.shift_.body);
+        case EX_SHIFT0: return cps_expr_contains_cloneable_shift(e->as.shift0_.k_fn) ||
+                               cps_expr_contains_cloneable_shift(e->as.shift0_.body);
+        case EX_SERIAL_RESET: return cps_expr_contains_cloneable_shift(e->as.serial_reset_.body);
+        case EX_SERIAL_SHIFT: return cps_expr_contains_cloneable_shift(e->as.serial_shift_.k_fn) ||
+                                     cps_expr_contains_cloneable_shift(e->as.serial_shift_.body);
+        case EX_CALLCC: return cps_expr_contains_cloneable_shift(e->as.callcc_.fn);
+        case EX_PERFORM:
+            if (e->as.perform_.perform)
+                for (uint32_t i = 0; i < e->as.perform_.perform->n_args; i++)
+                    if (cps_expr_contains_cloneable_shift(e->as.perform_.perform->args[i])) return true;
+            return false;
+        case EX_HANDLE:
+        case EX_HANDLER_LIT:
+            if (e->as.handle_.handle) {
+                HandleExpr *h = e->as.handle_.handle;
+                if (cps_expr_contains_cloneable_shift(h->body)) return true;
+                for (uint8_t i = 0; i < h->n_cases; i++)
+                    if (cps_expr_contains_cloneable_shift(h->cases[i].body)) return true;
+            }
+            return false;
+        case EX_RESUME:
+            return e->as.resume_.resume &&
+                   (cps_expr_contains_cloneable_shift(e->as.resume_.resume->k) ||
+                    cps_expr_contains_cloneable_shift(e->as.resume_.resume->value));
+        case EX_DISCONTINUE:
+            return e->as.discontinue_.discontinue &&
+                   (cps_expr_contains_cloneable_shift(e->as.discontinue_.discontinue->k) ||
+                    cps_expr_contains_cloneable_shift(e->as.discontinue_.discontinue->exception));
+        case EX_WITH_HANDLER: return cps_expr_contains_cloneable_shift(e->as.with_handler_.handler) ||
+                                     cps_expr_contains_cloneable_shift(e->as.with_handler_.body);
+        case EX_ASYNC:  return cps_expr_contains_cloneable_shift(e->as.async_.fn_expr);
+        case EX_AWAIT:  return cps_expr_contains_cloneable_shift(e->as.await_.fut_expr);
+        case EX_SET:    return cps_expr_contains_cloneable_shift(e->as.set_.value);
+        case EX_DEF:    return e->as.def_.init && cps_expr_contains_cloneable_shift(e->as.def_.init);
+        case EX_DEFER:  return cps_expr_contains_cloneable_shift(e->as.defer_.body);
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                if (cps_expr_contains_cloneable_shift(e->as.make_struct_.field_values[i])) return true;
+            return false;
+        case EX_GET_FIELD: return cps_expr_contains_cloneable_shift(e->as.get_field_.struct_expr);
+        case EX_SET_FIELD: return cps_expr_contains_cloneable_shift(e->as.set_field_.receiver) ||
+                                  cps_expr_contains_cloneable_shift(e->as.set_field_.value);
+        case EX_REF:          return cps_expr_contains_cloneable_shift(e->as.ref_.expr);
+        case EX_DEREF:        return cps_expr_contains_cloneable_shift(e->as.deref_.expr);
+        case EX_BORROW_IMMUT: return cps_expr_contains_cloneable_shift(e->as.borrow_immut_.expr);
+        case EX_BORROW_MUT:   return cps_expr_contains_cloneable_shift(e->as.borrow_mut_.expr);
+        case EX_ASCRIBE:      return cps_expr_contains_cloneable_shift(e->as.ascribe_.inner);
+        case EX_REINTERPRET:  return cps_expr_contains_cloneable_shift(e->as.reinterpret_.expr);
+        case EX_CAST:         return cps_expr_contains_cloneable_shift(e->as.cast_.expr);
+        case EX_FN_TO_FAT:    return cps_expr_contains_cloneable_shift(e->as.fn_to_fat_.inner);
+        case EX_POLY_TO_FAT:  return cps_expr_contains_cloneable_shift(e->as.poly_to_fat_.inner);
+        case EX_POLY_WRAP:    return cps_expr_contains_cloneable_shift(e->as.poly_wrap_.inner);
         default:
             return false;
     }

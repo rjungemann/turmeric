@@ -1,5 +1,12 @@
 # Cloneable prelude gate misses a `cloneable-shift` nested under an operator
 
+**Status:** RESOLVED. `cps_expr_contains_cloneable_shift` (`src/passes/cps.c`)
+now descends into `EX_BUILTIN` and the other previously-missing control/value
+forms (match, handle, perform, resume, reset/shift, async, casts, wrappers, the
+call callee), so the `tur_cloneable_cont` prelude is gated correctly on both
+backends. Additive -- it only ever emits the prelude when a cloneable form is
+actually present. Oracle: `cps-oracle-cloneable-nested-op`.
+
 **Severity:** low (contrived nesting; a compile error, not a silent miscompile;
 affects both backends).
 

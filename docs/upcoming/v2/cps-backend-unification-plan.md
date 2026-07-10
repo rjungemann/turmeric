@@ -258,12 +258,20 @@ fallback until the final phase removes it.
   flushes `pending_handler_fns` before each `__cps` body (a general fix for any
   helper-emitting delegation).
 
+  Also fixed the cloneable prelude-gate gap: `cps_expr_contains_cloneable_shift`
+  (`src/passes/cps.c`) now descends into `EX_BUILTIN` and the other missing
+  control/value forms, so a `cloneable-shift` nested under an operator
+  (`(+ 1 (cloneable-reset ...))`) emits its `tur_cloneable_cont` prelude on both
+  backends. Oracle: `cps-oracle-cloneable-nested-op`. Resolved report:
+  [docs/archive/cloneable-prelude-gate-misses-nested-shift.md](../../archive/cloneable-prelude-gate-misses-nested-shift.md).
+
   *Remaining (the risky core):* teaching the CT-IR backend to *emit* the
-  cloneable multi-shot machinery itself (deep-clone + clone/drop glue driven from
-  CT-IR emit) and add the multi-shot classification axis, rather than delegating
-  the region. Also a pre-existing cloneable prelude-gate gap for a
-  `cloneable-shift` nested under an operator
-  ([docs/reported/cloneable-prelude-gate-misses-nested-shift.md](../../reported/cloneable-prelude-gate-misses-nested-shift.md)).
+  cloneable multi-shot machinery itself (`dk_copy_range` deep-clone + clone/drop
+  glue driven from CT-IR emit) and add the multi-shot classification axis, rather
+  than delegating the region. The native emit is mapped -- the two emit shapes
+  (trivial vs. `dk_copy_range` continuation), where the capture-correctness risk
+  lives, and a staged suite-green path -- in
+  [cps-backend-unification-u3-native-emit-plan.md](cps-backend-unification-u3-native-emit-plan.md).
 - **U4 -- Serial.** Port `emit_cps_serial_runtime_prelude` + serial placement.
 - **U5 -- Async / await.** Port the scheduler wiring on top of the now-unified
   cloneable/serial base.
