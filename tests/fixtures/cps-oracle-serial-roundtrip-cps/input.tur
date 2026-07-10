@@ -1,0 +1,47 @@
+;; U0 oracle (cps-backend-unification-plan): direct-vs-CPS value-equality net.
+;; Backend: --enable=cps-backend (CT-IR; falls back to emit_cps.c today)
+;; This program is one of a cps-oracle-serial-roundtrip / cps-oracle-serial-roundtrip-cps twin pair sharing one input
+;; expected.stdout; the value MUST stay equal under both backends across every
+;; phase of the port. See docs/upcoming/v2/cps-backend-unification-u0-inventory.md.
+;;
+;; Phase 21: Serializable typeclass -- primitive round-trip test
+;;
+;; Tests that serialize + deserialize is the identity for int, bool, and cstr.
+
+(load "stdlib/serial.tur")
+
+(extern-c printf [^cstr fmt ^int v] :int)
+(extern-c printf_s [^cstr fmt ^cstr s] :int)
+
+;; Helper: check int round-trip
+(defn check-int [expected : int] : int
+  (let [b (.serialize expected)]
+    (let [got (__inst_Serializable_deserialize_int b)]
+      (if (= got expected)
+        (do
+          (printf "int ok: %lld\n" expected)
+          1)
+        (do
+          (printf "int FAIL: expected %lld got %lld\n" expected)
+          0)))))
+
+;; Helper: check bool round-trip
+(defn check-bool [expected : bool] : int
+  (let [b (.serialize expected)]
+    (let [got (__inst_Serializable_deserialize_bool b)]
+      (if (= got expected)
+        (do
+          (printf "bool ok: %lld\n" (if expected 1 0))
+          1)
+        (do
+          (printf "bool FAIL\n")
+          0)))))
+
+(defn main [] : int
+  (do
+    (check-int 0)
+    (check-int 42)
+    (check-int -1)
+    (check-bool true)
+    (check-bool false)
+    0))

@@ -1,0 +1,31 @@
+;; U0 oracle (cps-backend-unification-plan): direct-vs-CPS value-equality net.
+;; Backend: default backend (emit_cps.c whole-program transform)
+;; This program is one of a cps-oracle-shift-capture-body / cps-oracle-shift-capture-body-cps twin pair sharing one input
+;; expected.stdout; the value MUST stay equal under both backends across every
+;; phase of the port. See docs/upcoming/v2/cps-backend-unification-u0-inventory.md.
+;;
+;; CPS-IR-to-C backend, N6.3 tail: a *capturing shift body* -- the delimited
+;; body run by `shift` references an enclosing local.  Built with
+;; --enable=cps-backend.
+;;
+;; `inner`'s shift body is `(+ x 5)`, which references the parameter `x`.  A shift
+;; body is lifted as an LH_SHIFT_BODY helper `(intptr_t env, DK *subk)`; N6.3
+;; widens that helper's env to carry the body's scalar source captures:
+;;   typedef struct { int64_t f0; } inner_s0_env;   // f0 = x
+;;   e->f0 = x;  dk_shift(1, inner_s0, (intptr_t)e, k);
+;; and the helper reads `int64_t x = e->f0;`.  The captured continuation `subk`
+;; is excluded from the env (it is the shift's k, delivered as the DK* arg); this
+;; shift is abortive, so subk is discarded.  Before N6.3 the zero-capture cut
+;; rejected the reference to `x` and `inner` fell back.
+;;
+;; direct-vs-CPS equal: x=100, shift delivers (x+5)=105 to outer's reset.
+
+(defn inner [x : int] : int
+  (shift (fn [v : int] v) (+ x 5)))
+
+(defn outer [x : int] : int
+  (reset (inner x)))
+
+(defn main [] : int
+  (println (outer 100))
+  0)

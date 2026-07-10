@@ -1,0 +1,46 @@
+;; U0 oracle (cps-backend-unification-plan): direct-vs-CPS value-equality net.
+;; Backend: --enable=cps-backend (CT-IR; falls back to emit_cps.c today)
+;; This program is one of a cps-oracle-shift-under-handle / cps-oracle-shift-under-handle-cps twin pair sharing one input
+;; expected.stdout; the value MUST stay equal under both backends across every
+;; phase of the port. See docs/upcoming/v2/cps-backend-unification-u0-inventory.md.
+;;
+;; CPS-IR-to-C backend, N6: a delegated *composite* (while / set! / for / match /
+;; do / let) in a lifted continuation, capturing an enclosing local.  Built with
+;; --enable=cps-backend.
+;;
+;; `f`'s post-handle continuation runs a `while` loop that reads the enclosing
+;; parameter `base` and mutates a `^mut` local.  A composite delegates to the
+;; direct emitter via CT_LETRAW; earlier, `collect_caps` only enumerated a fixed
+;; set of simple ops (rc/*, get-field, make-struct, call, closure) and bailed on
+;; any other form (`while`, `for`, `match`, `do`, `let`, `set!`), so such a
+;; composite in a lifted position forced the whole function to fall back.
+;;
+;; Now the collector reuses the elaborator's complete free-variable walker
+;; (collect_free_vars -- the same analysis the closure-capture pass uses) to find
+;; every enclosing var the composite references and captures each into the
+;; continuation env (filtered against the CPS-bound set / exclude / globals).
+;; Soundness is self-checking: if the walker ever missed a free var, that var
+;; would be an undeclared C name in the lifted helper -- a compile error, not a
+;; silent miscompile.  A non-Copy capture (owning handle) still bails in cap_add,
+;; keeping such a form a fallback.
+;;
+;; direct-vs-CPS equal: base=10, handle resumes 3; acc starts at base and adds
+;; base three times -> 10 + 10*3 = 40.
+
+(defeffect E [] :int)
+
+(defn g [] : int
+  (perform (E)))
+
+(defn f [base : int] : int
+  (let [n (handle (g) (E [] k) (resume k 3))]
+    (let [^mut acc base]
+      (let [^mut i 0]
+        (while (< i n)
+          (set! acc (+ acc base))
+          (set! i (+ i 1)))
+        acc))))
+
+(defn main [] : int
+  (println (f 10))
+  0)

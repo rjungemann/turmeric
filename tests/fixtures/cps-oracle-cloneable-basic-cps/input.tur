@@ -1,0 +1,29 @@
+;; U0 oracle (cps-backend-unification-plan): direct-vs-CPS value-equality net.
+;; Backend: --enable=cps-backend (CT-IR; falls back to emit_cps.c today)
+;; This program is one of a cps-oracle-cloneable-basic / cps-oracle-cloneable-basic-cps twin pair sharing one input
+;; expected.stdout; the value MUST stay equal under both backends across every
+;; phase of the port. See docs/upcoming/v2/cps-backend-unification-u0-inventory.md.
+;;
+;; Phase B2: Cloneable continuations -- basic test (full CPS semantics)
+;;
+;; In full CPS, (cloneable-shift k_fn val) creates a cloneable continuation
+;; and calls k_fn with it.  The reset's result is whatever k_fn returns.
+;; (cloneable-reset body) evaluates body and returns k_fn's return value.
+
+;; k-returns-15: receives the continuation k (as int64_t), ignores it, returns 15
+(defn k-returns-15 [k] : int 15)
+
+;; test-basic: shift creates a trivial continuation and calls k-returns-15(cont).
+;; k-returns-15 ignores the continuation and returns 15.
+(defn test-basic [] : int
+  (cloneable-reset
+    (cloneable-shift k-returns-15 0)))
+
+;; cloneable-reset with no shift just evaluates its body.
+(defn test-reset-passthrough [] : int
+  (cloneable-reset 42))
+
+(defn main [] : int
+  (println (test-basic))
+  (println (test-reset-passthrough))
+  0)

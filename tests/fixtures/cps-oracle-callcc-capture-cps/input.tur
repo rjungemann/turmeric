@@ -1,0 +1,25 @@
+;; U0 oracle (cps-backend-unification-plan): direct-vs-CPS value-equality net.
+;; Backend: --enable=cps-backend (CT-IR; falls back to emit_cps.c today)
+;; This program is one of a cps-oracle-callcc-capture / cps-oracle-callcc-capture-cps twin pair sharing one input
+;; expected.stdout; the value MUST stay equal under both backends across every
+;; phase of the port. See docs/upcoming/v2/cps-backend-unification-u0-inventory.md.
+;;
+;; call-cc-completion (CC1.4): undelimited call/cc against the implicit prompt.
+;; No enclosing reset.  Invoking k via the (k v) application sugar returns its
+;; argument at the call/cc site, abandoning f's pending (+ 100 ...); the outer
+;; (+ 1 ...) then makes 42.  k is unannotated -- it defaults to the escape
+;; continuation flavor (CC4.2), so (k v) lowers to tur_escape_resume.
+
+(extern-c printf [^cstr fmt ^int v] :int)
+
+(defn t-capture [] : int
+  (+ 1 (call/cc (fn [k] (+ 100 (k 41))))))
+
+;; f that ignores k returns its body value normally.
+(defn t-ignore [] : int
+  (+ 1 (call/cc (fn [k] 10))))
+
+(defn main [] : int
+  (printf "capture=%lld\n" (t-capture))
+  (printf "ignore=%lld\n" (t-ignore))
+  0)

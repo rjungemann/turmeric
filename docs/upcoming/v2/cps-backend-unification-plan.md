@@ -160,7 +160,9 @@ fallback until the final phase removes it.
   into a round-trip fixture asserting direct-vs-CPS value equality, run under
   *both* backends today (CT-IR falls back to `emit_cps.c`, so both are the same
   emit now -- these fixtures become the regression net for the port). No code
-  change.
+  change. **Landed** -- see
+  [cps-backend-unification-u0-inventory.md](cps-backend-unification-u0-inventory.md)
+  (12 shapes, 24 `cps-oracle-*` twin fixtures).
 - **U1 -- Raw reset/shift/shift0 into CT-IR.** Add the CT nodes + `cps_ir.c`
   translation + emit for single-shot delimited control. Extend `ensure_S` to
   place these on DK instead of evicting them. Flip the fallback for exactly

@@ -1,0 +1,5 @@
+int ok: 0
+int ok: 42
+int ok: -1
+bool ok: 1
+bool ok: 0
