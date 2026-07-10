@@ -25,6 +25,7 @@
 #include "reader.h"
 #include "symbols.h"
 #include "turi/preload.h"
+#include "turi/interpreter_natives.h"
 #include "turi/repl.h"
 #include "elab.h"
 #include "expr.h"
@@ -96,6 +97,15 @@ static void wasm_preload_stdlib(TuriEnv *env) {
      * turi_try_show_by_tag below, matching the native `tur repl`
      * (src/turi/repl.c, right after turi_env_preload_collections). */
     turi_env_preload_typeclasses(env, WASM_STDLIB_ROOT);
+    /* Register the interpreter native overrides (sym/:Sym, contracts, seq,
+     * json/schema, safe box/unbox, comonad/mutex/future/chan/...) so the WASM
+     * REPL can evaluate ops whose stdlib body is inline-C -- e.g. `#map{:a 1}`
+     * needs the Hash[Sym]/Eq[Sym] natives, `assert!` needs the contract natives.
+     * Relocated from src/main.c into tur_core so this entry point registers the
+     * same block as --interpret and cannot drift (web-repl-repl-inline-c-native-
+     * gap).  Runs AFTER the preload so the native shims win over the loaded
+     * inline-C bodies. */
+    turi_env_register_interpreter_natives(env);
 }
 
 /* ---------------------------------------------------------------------------

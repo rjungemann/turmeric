@@ -51,6 +51,10 @@ set(TURI_EVAL_SOURCES
     # relocated from main.c so the native --interpret path and the WASM REPL
     # load the same list (web-repl-missing-stdlib-preload).
     turi/preload.c
+    # interpreter_natives.c -- the wk_register_* / native_* inline-C override
+    # block relocated from main.c so `tur repl` and the WASM REPL register the
+    # same interpreter natives as --interpret (web-repl-repl-inline-c-native-gap).
+    turi/interpreter_natives.c
     # dap.c -- Debug Adapter Protocol server (debugger Phase 3), a thin shell
     # over the Phase 2 interpreter debugger's control API in eval.c.
     turi/dap.c
