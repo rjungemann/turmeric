@@ -254,16 +254,20 @@ static CTerm *build_letraw(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     return t;
 }
 
-/* U7 callcc: a (call/cc f)/(escape f) whose receiver `f` is CAPTURE-FREE -- a
- * named top-level fn, or a zero-capture fn value (fat/poly/closure literal).
- * Such a receiver references no enclosing local, so the native escape landing
- * (emit_callcc) needs no captured env and is safe even inside a lifted body.  A
- * capturing closure receiver returns NULL so the caller keeps the CT_LETRAW
- * delegation (which walks the receiver's free vars into the lifted env). */
-static bool callcc_capturefree_recv(const Expr *f) {
+/* U7 callcc: a (call/cc f)/(escape f) receiver `f` the native escape landing
+ * (emit_callcc) can emit as a value -- a named top-level fn, a fat/poly/fn value,
+ * or a closure literal (capturing OR not).  A CAPTURING closure's free vars are
+ * surfaced by collect_free_vars (through the EX_CALLCC receiver) and ride the
+ * lifted continuation's env exactly like the CT_LETRAW path: in a lifted body a
+ * non-scalar capture bails to fallback (the enclosing continuation's collect_caps
+ * sets cs.ok=false and evicts), and in the main body emit_value captures the
+ * visible local directly.  A non-fn-value receiver returns NULL so the caller
+ * keeps the CT_LETRAW delegation. */
+static bool callcc_native_recv(const Expr *f) {
     f = ascribe_peel(f);
     if (!f) return false;
     if (is_delegatable_value(f)) return true;          /* fat/poly/fn/zero-cap closure */
+    if (f->kind == EX_CLOSURE) return true;            /* a closure literal (capturing too) */
     if (f->kind == EX_VAR && f->as.var.binding
         && f->as.var.binding->is_global
         && f->as.var.binding->type.kind == TY_FN)
@@ -272,9 +276,10 @@ static bool callcc_capturefree_recv(const Expr *f) {
 }
 
 /* Build a native CT_CALLCC (binds x = the call/cc value, continues body) for a
- * capture-free receiver; NULL otherwise so the caller falls back to CT_LETRAW. */
+ * receiver emit_callcc can emit; NULL otherwise so the caller falls back to the
+ * CT_LETRAW delegation. */
 static CTerm *build_callcc(CpsB *b, Expr *e, CVar x, CTerm *body) {
-    if (!callcc_capturefree_recv(e->as.callcc_.fn)) return NULL;
+    if (!callcc_native_recv(e->as.callcc_.fn)) return NULL;
     CTerm *t = new_term(b, CT_CALLCC);
     t->as.callcc.x = x;
     t->as.callcc.e = e;

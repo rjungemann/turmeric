@@ -46,17 +46,18 @@ must be total:
 | `emit_cps_reset` | `emit_effects_reset` (emit_effects.c:1218) | `CT_RESET`/`CT_SHIFT` native for the `delim_ok` subset, now incl. **nested + sibling-nested reset** | reset/shift-specific gap is **closed** (escape/branch native since U1; nested reset + sibling nested resets admitted -- see resetshift-gap note). The only nestings still evicting do so via the *generic* `needs_heap_join` boundary (a non-tail cps->cps **call** on the heap chain), shared with the whole C1 subset -- not reset/shift-specific |
 | `emit_cps_cloneable_reset` | `emit_effects_cloneable_reset` (:1239) + delegation | value-typed subset native (arith/call/let/if/do) | **closure/colored receivers** delegate here (porting them duplicates this fn's closure machinery -- see U3 steps 6-7 note) |
 | `emit_cps_serial_reset` | `emit_effects_serial_reset` (:1703) + delegation | value-typed subset native (arith/call/let/if/do), now incl. **Shape 1 identity** | **2-arg call frames** (serialized env codec) and **closure receivers** delegate here (Shape 1 identity now native -- `build_serial` admits `nf==0`, routed to the marshalable serial emit branch) |
-| `emit_cps_callcc` | `EX_CALLCC` dispatch (emit_expr.c:2826) + delegation | **native `CT_CALLCC`** for a capture-free receiver; capturing receivers delegate | remaining: **capturing-closure receivers** (need the receiver's free vars in a lifted env, like the CT_LETRAW path); plus the direct-dispatch caller for uncolored/`main` functions |
+| `emit_cps_callcc` | `EX_CALLCC` dispatch (emit_expr.c:2826) + delegation | **native `CT_CALLCC`**, incl. **capturing-closure receivers** (scalar captures ride the escape landing) | remaining: only the `EX_CALLCC` direct-dispatch caller for uncolored/`main`/exported functions (goes away at CPS-backend graduation), and a non-scalar capture in a *lifted* callcc (bails to delegation) |
 
-Callcc now has a native `CT_CALLCC` IR node + emit for **capture-free
-receivers** (a named fn or a zero-capture fn value); a capturing-closure receiver
-still delegates via `CT_LETRAW`.  The remaining native gaps are **capturing
-receivers** (callcc, cloneable, and serial all share this -- the receiver's free
-vars must ride a lifted env) and **serial 2-arg call frames**.  Base reset/shift
-is closed (nested + sibling-nested resets), and serial Shape 1 identity is
-native.  These gaps are the real content of "finish U3/U4 + do callcc natively,"
-and the capturing-receiver cases are the "would duplicate emit_cps.c" work the U3
-steps-6-7 note flagged as deferred.
+Callcc now has a native `CT_CALLCC` IR node + emit covering **both capture-free
+and capturing-closure receivers** -- its native coverage matches what the
+delegation covered.  The remaining native gaps are **cloneable/serial capturing
+receivers** (same free-var-into-lifted-env pattern callcc now uses, but their
+receiver is invoked through the cloneable-cont / marshalable-chain machinery, not
+a plain synchronous call) and **serial 2-arg call frames**.  Base reset/shift is
+closed (nested + sibling-nested resets), and serial Shape 1 identity is native.
+The cloneable/serial capturing-receiver cases are the "would duplicate
+emit_cps.c" work the U3 steps-6-7 note flagged as deferred; callcc's capturing
+path (walk `collect_free_vars` -> `cap_add` -> lifted env) is the template.
 
 ## The cut sequence
 
@@ -88,10 +89,14 @@ steps-6-7 note flagged as deferred.
    private analysis helpers + the uses-gates.
 2. **Close the native gaps**, each its own slice, each removing one lowering fn's
    last caller:
-   - callcc: native `CT_CALLCC` emit -- **capture-free receivers landed** (new
-     `CT_CALLCC` IR node + `emit_callcc`, a local setjmp escape landing; oracle
-     `cps-oracle-callcc-native{,-cps}`).  Remaining: capturing-closure receivers
-     (share the lifted-env capture machinery with cloneable/serial receivers).
+   - callcc: native `CT_CALLCC` emit -- **capture-free AND capturing-closure
+     receivers landed** (new `CT_CALLCC` IR node + `emit_callcc` local setjmp
+     escape landing; `collect_caps_rec`/`has_capture_rec` walk the receiver's free
+     vars via `collect_free_vars`, so scalar captures ride the landing exactly like
+     the CT_LETRAW path; oracles `cps-oracle-callcc-native{,-cps}` +
+     `cps-oracle-callcc-capturing-recv{,-cps}`).  callcc's native coverage now
+     matches the delegation's; its only remaining caller is the direct dispatch
+     for uncolored/`main`/exported fns (removed at graduation).
    - cloneable/serial closure receivers + serial 2-arg call frames (accepting the
      duplication, or a shared closure-lowering helper the runtime relocation could
      also host). **Serial Shape 1 identity is now native** (`build_serial` admits
@@ -141,13 +146,14 @@ the load-bearing runtime, so the eventual delete is "remove four lowering
 functions with no callers," not "carve runtime out of a 2.1k-line file."
 
 The remaining U7 work is step 2's **native gaps**. Landed so far: base reset/shift
-(nested + sibling), serial Shape 1 identity, and **callcc for capture-free
-receivers** (native `CT_CALLCC`). What is left converges on one shared capability
--- **capturing receivers** (callcc / cloneable / serial all need the receiver's
-free vars lifted into an env) -- plus serial 2-arg call frames. A shared
-closure-lowering helper would close all three receiver gaps at once. Until each
-gap's last caller is gone the delegation + eviction fallbacks are correct and the
-tree ships; the deletes (steps 3-5) follow mechanically once coverage is total.
+(nested + sibling), serial Shape 1 identity, and **callcc (native `CT_CALLCC`) for
+both capture-free and capturing receivers** -- callcc's native coverage now
+matches its delegation. What is left: **cloneable and serial capturing receivers**
+(callcc's `collect_free_vars` -> `cap_add` -> lifted-env pattern is the template,
+adapted to their cloneable-cont / marshalable-chain receiver invocation) and
+**serial 2-arg call frames**. Until each gap's last caller is gone the delegation
++ eviction fallbacks are correct and the tree ships; the deletes (steps 3-5)
+follow mechanically once coverage is total.
 
 Note: a native `CT_CALLCC` does NOT by itself remove `emit_cps_callcc`'s last
 caller -- the `EX_CALLCC` direct dispatch (emit_expr.c:2826) still lowers callcc

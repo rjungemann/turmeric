@@ -5,7 +5,8 @@
 ;; top-level fn or a zero-capture fn value): a local setjmp escape landing
 ;; (tur_escape_cont) whose receiver gets the landing handle as its continuation.
 ;; It does NOT thread the DK chain, so it composes with a sibling reset/shift.
-;; A CAPTURING receiver still delegates (capturing-recv below).  direct == cps.
+;; A CAPTURING closure receiver is native too (capturing-recv below): its free
+;; vars ride the escape landing via emit_value in the main body.  direct == cps.
 ;;
 ;; Each fn is colored by a reset/shift; the call/cc is a sibling `+` operand so
 ;; the enclosing function is CPS-emitted and the call/cc lowers via CT_CALLCC.

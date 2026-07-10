@@ -516,11 +516,25 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
             bound[nb] = t->as.letraw.x.id;
             return has_capture_rec(t->as.letraw.body, exclude, bound, nb + 1);
         }
-        case CT_CALLCC:
-            /* The receiver is capture-free (build_callcc guarantees it), so the
-             * escape landing closes over nothing; bind x and recurse the body. */
+        case CT_CALLCC: {
+            /* A capturing receiver makes the escape landing capture its free vars;
+             * surface them (collect_free_vars descends into the EX_CALLCC receiver)
+             * and report a capture so the zero-capture join cut sees it.  Then bind
+             * x and recurse the body. */
+            uint32_t n_fv = 0;
+            Binding **fv = collect_free_vars(t->as.callcc.e, NULL, 0, NULL, 0, &n_fv);
+            for (uint32_t i = 0; i < n_fv; i++) {
+                const Binding *cb = fv[i];
+                if (cb && !cb->is_global && !binding_excluded(cb)) {
+                    uint32_t _id = cb->id; bool _f = (_id != exclude);
+                    for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
+                    if (_f) { free(fv); return true; }
+                }
+            }
+            free(fv);
             bound[nb] = t->as.callcc.x.id;
             return has_capture_rec(t->as.callcc.body, exclude, bound, nb + 1);
+        }
         default: return true;   /* nested reset/shift/handle/perform in a lifted body: bail */
     }
     #undef CC_ATOM
@@ -751,11 +765,25 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
              * its body's captures ride the shift-body helper's env.  Walk it so a
              * capture threaded through the enclosing continuation is not missed. */
             collect_caps_rec(t->as.shift.body, exclude, bound, nb, cs); return;
-        case CT_CALLCC:
-            /* Capture-free receiver (build_callcc): the escape landing collects no
-             * captures of its own.  Bind x and walk the continuation body. */
+        case CT_CALLCC: {
+            /* The receiver f may capture enclosing locals (build_callcc admits a
+             * capturing closure).  Surface its free vars -- collect_free_vars
+             * descends into the EX_CALLCC receiver -- and ride each scalar capture
+             * in the lifted env (a non-Copy capture bails to fallback via cap_add),
+             * mirroring the CT_LETRAW-delegated callcc.  Then bind x and walk body. */
+            uint32_t n_fv = 0;
+            Binding **fv = collect_free_vars(t->as.callcc.e, NULL, 0, NULL, 0, &n_fv);
+            for (uint32_t i = 0; i < n_fv && cs->ok; i++) {
+                const Binding *cb = fv[i];
+                if (!cb || cb->is_global || binding_excluded(cb)) continue;
+                uint32_t _id = cb->id; bool _f = (_id != exclude);
+                for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
+                if (_f) cap_add(cs, cb, cb->type.kind, &cb->type);
+            }
+            free(fv);
             bound[nb] = t->as.callcc.x.id;
             collect_caps_rec(t->as.callcc.body, exclude, bound, nb + 1, cs); return;
+        }
         default:
             /* Nested control ops in a lifted body: out of this collector's scope. */
             cs->ok = false; return;
