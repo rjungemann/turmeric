@@ -743,7 +743,11 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         break;
     }
 
-    if (nf == 0) return NULL;                        /* Shape 1 serial -> delegate */
+    /* Shape 1 serial: an empty context (nf == 0) -- the serial-shift IS the whole
+     * reset body.  The receiver gets the identity continuation (a bare
+     * dk_prompt(1, dk_done()) chain, marshalable like any deeper chain), so
+     * emit_cloneable's serial branch handles nf == 0 with empty frame loops.
+     * Mirrors the cloneable Shape 1 already supported natively. */
     if (!cur || cur->kind != EX_SERIAL_SHIFT) return NULL;
     const Binding *recv = serial_named_receiver(b, cur);
     if (!recv) return NULL;

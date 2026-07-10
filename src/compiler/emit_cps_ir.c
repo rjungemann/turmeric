@@ -2599,8 +2599,11 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         ce->indent++;
     }
 
-    if (t->as.cloneable.n_frames == 0) {
-        /* Shape 1: identity continuation. */
+    if (t->as.cloneable.n_frames == 0 && !t->as.cloneable.serial) {
+        /* Shape 1 (cloneable): identity continuation.  The serial Shape 1
+         * (n_frames == 0 && serial) falls through to the serial branch below,
+         * where the empty frame loops produce a bare marshalable prompt chain --
+         * a cloneable_cont would not round-trip through save-cont!/resume-cont!. */
         char cfn[256];
         snprintf(cfn, sizeof(cfn), "%s_clc%d", ce->fn_cn, id);
         buf_printf(ce->helpers,

@@ -1,0 +1,31 @@
+;; U7 native gap (cps-backend-unification): SERIAL Shape 1 identity.
+;; A (serial-reset (serial-shift recv v)) with an EMPTY context -- the shift is
+;; the whole reset body, so the captured continuation is the identity (a bare
+;; dk_prompt(1, dk_done()) chain).  The cloneable path has always emitted its
+;; Shape 1 natively; the serial builder rejected nf == 0 (`Shape 1 serial ->
+;; delegate`) and fell back to emit_cps_serial_reset via CT_LETRAW.  build_serial
+;; now admits nf == 0 and emit_cloneable routes serial Shape 1 to the marshalable
+;; serial branch (empty frame loops -> bare prompt + dk_shift), NOT the cloneable
+;; tur_cloneable_cont path (which would not round-trip save-cont!/resume-cont!).
+;; direct == cps holds, verified through a save + resume of the captured cont.
+(load "stdlib/workflow.tur")
+;; identity: save + resume the captured continuation with 7 -> 7.
+(defn rt7 [k : ptr<void>] : int
+  (resume-cont! (save-cont! k) 7))
+(defn run-id [] : int
+  (serial-reset (serial-shift rt7 0)))
+;; resume the captured cont twice (marshalable + re-runnable): 3 + 4 = 7.
+(defn rt-twice [k : ptr<void>] : int
+  (+ (resume-cont! (save-cont! k) 3)
+     (resume-cont! (save-cont! k) 4)))
+(defn run-twice [] : int
+  (serial-reset (serial-shift rt-twice 0)))
+;; receiver that ignores the continuation and returns a constant.
+(defn rt-const [k : ptr<void>] : int 99)
+(defn run-const [] : int
+  (serial-reset (serial-shift rt-const 0)))
+(defn main [] : int
+  (println (run-id))
+  (println (run-twice))
+  (println (run-const))
+  0)

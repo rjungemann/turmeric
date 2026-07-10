@@ -45,15 +45,18 @@ must be total:
 |---|---|---|---|
 | `emit_cps_reset` | `emit_effects_reset` (emit_effects.c:1218) | `CT_RESET`/`CT_SHIFT` native for the `delim_ok` subset, now incl. **nested + sibling-nested reset** | reset/shift-specific gap is **closed** (escape/branch native since U1; nested reset + sibling nested resets admitted -- see resetshift-gap note). The only nestings still evicting do so via the *generic* `needs_heap_join` boundary (a non-tail cps->cps **call** on the heap chain), shared with the whole C1 subset -- not reset/shift-specific |
 | `emit_cps_cloneable_reset` | `emit_effects_cloneable_reset` (:1239) + delegation | value-typed subset native (arith/call/let/if/do) | **closure/colored receivers** delegate here (porting them duplicates this fn's closure machinery -- see U3 steps 6-7 note) |
-| `emit_cps_serial_reset` | `emit_effects_serial_reset` (:1703) + delegation | value-typed subset native (arith/call/let/if/do) | **2-arg call frames** (serialized env codec), **Shape 1 identity**, closure receivers delegate here |
+| `emit_cps_serial_reset` | `emit_effects_serial_reset` (:1703) + delegation | value-typed subset native (arith/call/let/if/do), now incl. **Shape 1 identity** | **2-arg call frames** (serialized env codec) and **closure receivers** delegate here (Shape 1 identity now native -- `build_serial` admits `nf==0`, routed to the marshalable serial emit branch) |
 | `emit_cps_callcc` | `EX_CALLCC` dispatch (emit_expr.c:2826) + delegation | **none -- 100% delegated** (U2 CT_LETRAW) | all of call/cc + escape has no native CT-IR emit |
 
-The two biggest gaps are **callcc** (no native emit at all) and **cloneable/serial
-closure receivers** (whose native port duplicates the very machinery being
-retired). Base reset/shift is the smallest gap (a bounded set of non-`delim_ok`
-shapes). These gaps are the real content of "finish U3/U4 + do callcc natively,"
-and some are the "would duplicate emit_cps.c" cases the U3 steps-6-7 note already
-flagged as deferred.
+The two biggest remaining gaps are **callcc** (no native emit at all -- there is
+no `CT_CALLCC` IR node; it is 100% delegated via `CT_LETRAW`) and **cloneable/
+serial closure receivers** (whose native port duplicates the very machinery being
+retired). Base reset/shift is now closed (nested + sibling-nested resets landed),
+and the bounded serial sub-gaps are shrinking: **serial Shape 1 identity is
+native**, leaving serial 2-arg call frames and the closure receivers. These gaps
+are the real content of "finish U3/U4 + do callcc natively," and some are the
+"would duplicate emit_cps.c" cases the U3 steps-6-7 note already flagged as
+deferred.
 
 ## The cut sequence
 
@@ -86,9 +89,12 @@ flagged as deferred.
 2. **Close the native gaps**, each its own slice, each removing one lowering fn's
    last caller:
    - callcc: native `CT_CALLCC` emit (the largest single gap).
-   - cloneable/serial closure receivers + serial 2-arg/Shape 1 (accepting the
+   - cloneable/serial closure receivers + serial 2-arg call frames (accepting the
      duplication, or a shared closure-lowering helper the runtime relocation could
-     also host).
+     also host). **Serial Shape 1 identity is now native** (`build_serial` admits
+     `nf==0`, emitted via the marshalable serial branch -- mirrors the cloneable
+     Shape 1; oracle `cps-oracle-serial-shape1{,-cps}`), leaving 2-arg call frames
+     and closure receivers on this fn.
    - base reset/shift shapes outside `delim_ok` -- **the reset/shift-specific gap
      is now closed**: escape/branch shapes went native in U1; nested reset
      (`delim_ok` CT_RESET case) and sibling nested resets (`collect_caps_rec`
