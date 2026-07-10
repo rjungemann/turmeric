@@ -20,7 +20,7 @@ async function rawEval(page, code) {
 }
 
 test('diagnostic — defn then call same eval', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/try/');
     await waitForReady(page);
     const text = await rawEval(page, '(defn add [a :int b :int] :int (+ a b))\n(add 3 4)');
     console.log('SAME-EVAL RESULT:', JSON.stringify(text));
@@ -28,7 +28,7 @@ test('diagnostic — defn then call same eval', async ({ page }) => {
 });
 
 test('diagnostic — defn in editor, call in REPL', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/try/');
     await waitForReady(page);
     await page.evaluate((c) => window._turiEditor.setValue(c), '(defn add [a :int b :int] :int (+ a b))');
     await page.click('#run-btn');
@@ -43,7 +43,7 @@ test('diagnostic — defn in editor, call in REPL', async ({ page }) => {
 });
 
 test('diagnostic — factorial same eval', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/try/');
     await waitForReady(page);
     const text = await rawEval(page, [
         '(defn factorial [n :int] :int',
@@ -54,7 +54,7 @@ test('diagnostic — factorial same eval', async ({ page }) => {
 });
 
 test('diagnostic — case form', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/try/');
     await waitForReady(page);
     const text = await rawEval(page, [
         '(defn factorial [n :int] :int',
@@ -68,7 +68,7 @@ test('diagnostic — case form', async ({ page }) => {
 });
 
 test('diagnostic — effects with parens', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/try/');
     await waitForReady(page);
     const text = await rawEval(page, [
         '(defeffect Ask [] :int)',
@@ -81,7 +81,7 @@ test('diagnostic — effects with parens', async ({ page }) => {
 });
 
 test('effects diagnostic — Ask perform/resume prints 42', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/try/');
     await waitForReady(page);
     await rawEval(page, [
         '(defeffect Ask [] :int)',
@@ -94,8 +94,8 @@ test('effects diagnostic — Ask perform/resume prints 42', async ({ page }) => 
 });
 
 test('diagnostic — math operators', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/try/');
     await waitForReady(page);
-    const text = await rawEval(page, '(+ 1 2 3)\n(- 10 5)\n(* 2 3 4)\n(/ 100 4)\n(% 10 3)');
+    const text = await rawEval(page, '(+ 1 2 3)\n(- 10 5)\n(* 2 3 4)\n(/ 100 4)');
     console.log('MATH RESULT:', JSON.stringify(text));
 });

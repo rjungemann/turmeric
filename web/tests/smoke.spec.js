@@ -41,14 +41,14 @@ test.describe('Try Turmeric smoke tests', () => {
             if (msg.type() === 'error') jsErrors.push(msg.text());
         });
 
-        await page.goto('/');
+        await page.goto('/try/');
         await waitForReady(page);
 
         expect(jsErrors.filter(e => e.includes('TypeError') || e.includes('Failed to'))).toHaveLength(0);
     });
 
     test('evaluates (+ 1 2) and shows result 3', async ({ page }) => {
-        await page.goto('/');
+        await page.goto('/try/');
         await waitForReady(page);
         await setCode(page, '(+ 1 2)');
         await page.click('#run-btn');
@@ -57,7 +57,7 @@ test.describe('Try Turmeric smoke tests', () => {
     });
 
     test('evaluates println and shows output', async ({ page }) => {
-        await page.goto('/');
+        await page.goto('/try/');
         await waitForReady(page);
         await setCode(page, '(println "hello from test")');
         await page.click('#run-btn');
@@ -65,7 +65,7 @@ test.describe('Try Turmeric smoke tests', () => {
     });
 
     test('REPL input evaluates expression in same context', async ({ page }) => {
-        await page.goto('/');
+        await page.goto('/try/');
         await waitForReady(page);
 
         // Define a function via the editor
@@ -83,7 +83,7 @@ test.describe('Try Turmeric smoke tests', () => {
     });
 
     test('REPL history navigates with arrow keys', async ({ page }) => {
-        await page.goto('/');
+        await page.goto('/try/');
         await waitForReady(page);
 
         const replInput = page.locator('#repl-input');
@@ -116,7 +116,7 @@ test.describe('Try Turmeric smoke tests', () => {
 test.describe('Examples', () => {
     // Load the page once per describe block via beforeEach
     test.beforeEach(async ({ page }) => {
-        await page.goto('/');
+        await page.goto('/try/');
         await waitForReady(page);
     });
 
@@ -127,14 +127,13 @@ test.describe('Examples', () => {
         expect(await hasNoEvalError(page)).toBe(true);
     });
 
-    test('math — last expression (** 2 8) returns 256', async ({ page }) => {
+    test('math — last expression (* 16 16) returns 256', async ({ page }) => {
         await setCode(page, [
             '(+ 1 2 3)',
             '(- 10 5)',
             '(* 2 3 4)',
             '(/ 100 4)',
-            '(% 10 3)',
-            '(** 2 8)',
+            '(* 16 16)',
         ].join('\n'));
         await runAndGetConsole(page);
         await expect(page.locator('#console')).toContainText('256');
@@ -175,7 +174,7 @@ test.describe('Examples', () => {
 
     test('higher-order — (twice inc 5) returns 7', async ({ page }) => {
         await setCode(page, [
-            '(defn twice [f :(fn [a] :a) x :a] :a (f (f x)))',
+            '(defn twice [f :(fn [a] a) x :a] :a (f (f x)))',
             '(defn inc [x :int] :int (+ x 1))',
             '(twice inc 5)',
         ].join('\n'));

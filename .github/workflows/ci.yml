@@ -144,6 +144,17 @@ jobs:
         working-directory: web
         run: npx playwright test deploy-gate.spec.js --project=desktop
 
+      - name: Run broader smoke suite (desktop, non-blocking)
+        working-directory: web
+        continue-on-error: true
+        run: npx playwright test --project=desktop
+          smoke.spec.js diag.spec.js guide-toggle.spec.js meta-commands.spec.js
+
+      - name: Run mobile smoke suite (non-blocking)
+        working-directory: web
+        continue-on-error: true
+        run: npx playwright test --project=mobile
+
       - name: Upload Playwright report on failure
         if: failure()
         uses: actions/upload-artifact@v4
