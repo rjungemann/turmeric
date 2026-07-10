@@ -1,0 +1,30 @@
+;; CPS-IR-to-C backend, N6.1: a control-op-free composite form (here a `match`)
+;; in a colored function's MAIN body is delegated wholesale to the direct emitter
+;; via CT_LETRAW, rather than falling the whole function back.  Built with
+;; --enable=cps-backend.
+;;
+;; `f` performs the Put effect (so it is colored); the effect argument is a
+;; `match` on x.  The match contains no control op and no colored call, so
+;; safe_to_delegate admits it and it is emitted by emit_value as one local.  It
+;; is a perform ARGUMENT -- evaluated in the main body before the perform -- so
+;; the perform continuation does not capture it (a delegated composite whose
+;; result crosses into a lifted continuation is still conservatively rejected by
+;; has_capture; that is the N6.3 capturing-continuation work).
+;;
+;; Before N6.1's general delegation, the match was <unsupported: form not in CPS2
+;; subset> and `f` fell back.  direct-vs-CPS equal: match 0 -> 100, resume adds 5
+;; -> 105.
+
+(defeffect Put [n : int] :int)
+
+(defn f [x : int] : int
+  (perform (Put (match x
+                  0 100
+                  _ 200))))
+
+(defn run [] : int
+  (handle (f 0) (Put [n] k) (resume k (+ n 5))))
+
+(defn main [] : int
+  (println (run))
+  0)

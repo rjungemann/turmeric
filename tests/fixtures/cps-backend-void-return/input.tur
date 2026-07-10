@@ -1,0 +1,27 @@
+;; CPS-IR-to-C backend, N6: a colored function with a nil/void return.  Built
+;; with --enable=cps-backend.
+;;
+;; `f` performs effect E (so it is colored) and returns `void` -- previously
+;; `fn_sig_ok` rejected any non-scalar return, including nil, so every colored
+;; void function fell back.  A nil return needs no slot representation: the CPS
+;; body still delivers a unit (0) to the return continuation, and the direct->cps
+;; entry wrapper is emitted `void` (matching the direct emitter's forward decl)
+;; and discards that unit -- `(void)f__cps(...); return;` -- instead of returning
+;; an int64.  This is a large coverage lever: void-returning colored functions
+;; (loggers, writers, `record!`-style effects) are common.
+;;
+;; direct-vs-CPS equal: the handle resumes 7, and f prints it -- both paths emit
+;; the single line `7`.
+
+(defeffect E [] :int)
+
+(defn g [] : int
+  (perform (E)))
+
+(defn f [] : void
+  (let [v (handle (g) (E [] k) (resume k 7))]
+    (println v)))
+
+(defn main [] : int
+  (f)
+  0)

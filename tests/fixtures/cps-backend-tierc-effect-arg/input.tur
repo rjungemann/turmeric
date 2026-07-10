@@ -1,0 +1,30 @@
+;; CPS-IR-to-C backend, Tier C (T-C3 / P5): a wide by-value aggregate is an
+;; effect ARGUMENT that crosses the DK slot.  Built with --enable=cps-backend.
+;;
+;; `Put` is an effect taking a `Pr` argument (a 16-byte by-value product).
+;; `use-put` performs it with a concrete `Pr`; `run` handles it, binds the `Pr`
+;; argument as the handler-case param `p`, reads both fields and sums them.  The
+;; aggregate crosses the slot boxed at the perform-argument boundary
+;; (`dk_perform` arg) and is unboxed at the handler-case argument.
+;;
+;; P5 makes the effect declare an aggregate PARAM type: the effect's
+;; param_full_types carry the real monomorphized `Pr` def, so the handler-case
+;; param binding is a real `Pr` and field access (`.first p`) elaborates.
+;;
+;; The direct/fiber path now boxes the aggregate across its int64 effect ABI too
+;; (prerequisite P2), so direct-vs-CPS are equal (32 + 10 = 42).
+
+(defstruct Pr [first : int second : int])
+
+(defeffect Put [p : Pr] :int)
+
+(defn use-put [] : int
+  (perform (Put (make-struct Pr :first 32 :second 10))))
+
+(defn run [] : int
+  (handle (use-put)
+    (Put [p] k) (resume k (+ (.first p) (.second p)))))
+
+(defn main [] : int
+  (println (run))
+  0)

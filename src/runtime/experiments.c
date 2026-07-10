@@ -88,6 +88,14 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * flat-stack heap-continuation trampoline.  The gates in emit_expr.c /
      * emit_fns.c / emit_module.c are removed; the feature is unconditional.  See
      * docs/archive/catch-unwind-graduation-plan.md. */
+    { "cps-backend",
+      "lower a colored function's ANF/CPS IR to C through the DK-threading "
+      "backend (heap continuations) instead of the direct-style path",
+      "docs/upcoming/v1/cps-ir-to-c-backend-plan.md",
+      "0.27.1",                  /* introduced */
+      "0.29.0",                  /* expires_at (two minor releases; hard contract) */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_cps_backend },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

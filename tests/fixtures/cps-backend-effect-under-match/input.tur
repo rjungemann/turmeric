@@ -1,0 +1,39 @@
+;; CPS-IR-to-C backend: co-classification must see effects the coloring pass and
+;; the CPS translator both miss.  Built with --enable=cps-backend.
+;;
+;; `pick` performs Choose, but the perform sits under a `match` arm.  The CPS
+;; translator does not lower `match` (it becomes CT_UNSUPPORTED), and the
+;; coloring pass likewise does not descend into the match, so `pick` is never
+;; even colored -- it emits a direct-style / FIBER perform.  `run` handles
+;; Choose and, being a straight-line handler, is a CPS candidate that would
+;; install a DK handler.  It reaches `pick` only dynamically, through `route`,
+;; so call-graph coupling alone does not connect them.
+;;
+;; Without co-classification the CPS `dk_perform` in a DK handler and the fiber
+;; perform in `pick` would not meet, aborting with "unhandled effect".  The
+;; co-classification fixpoint scans the RAW expression tree of every top-level
+;; function (colored or not) for perform/handle, so `pick`'s hidden fiber
+;; perform taints the Choose effect; `run` is evicted and both run on the fiber
+;; machine.  The expected value is the direct-style result: 7 + 1 = 8.
+
+(defdata Box
+  (Empty)
+  (Full :int))
+
+(defeffect Choose [] :int)
+
+(defn pick [b : Box] : int
+  (match b
+    (Full v) (+ v (perform (Choose)))
+    (Empty)  0))
+
+(defn route [] : int
+  (pick (Full 7)))
+
+(defn run [] : int
+  (handle (route)
+    (Choose [] k) (resume k 1)))
+
+(defn main [] : int
+  (println (run))
+  0)

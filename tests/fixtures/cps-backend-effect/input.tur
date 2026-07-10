@@ -1,0 +1,30 @@
+;; CPS-IR-to-C backend (cps-ir-to-c-backend-plan, Phase C4): algebraic effects
+;; on heap continuations.  Built with --enable=cps-backend.
+;;
+;; `use-ask` performs Ask; `run` handles it and `resume`s the captured
+;; continuation.  perform / handle / resume lower to the DK handler-prompt
+;; runtime (dk_handler / dk_perform / dk_invoke), NOT the fiber runtime:
+;;
+;;   - handle installs a dk_handler prompt keyed by the effect and threads it
+;;     into the handled body (cross-function: the perform is in `use-ask`).
+;;   - perform captures the real heap sub-continuation (the `+ 1` after the
+;;     perform, up to the handler) and runs the handler case with it.
+;;   - resume = dk_invoke, replaying that captured continuation (multi-shot for
+;;     free via copy).
+;;
+;; The `* 10` wraps the handle so a double-run of the handle continuation would
+;; be visible; it runs exactly once.  use-ask returns 1 + (resume 41) = 42; the
+;; handle value is 42; * 10 => 420.
+
+(defeffect Ask [] :int)
+
+(defn use-ask [] : int
+  (+ 1 (perform (Ask))))
+
+(defn run [] : int
+  (* 10 (handle (use-ask)
+          (Ask [] k) (resume k 41))))
+
+(defn main [] : int
+  (println (run))
+  0)

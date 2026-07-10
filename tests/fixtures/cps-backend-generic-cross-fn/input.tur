@@ -1,0 +1,39 @@
+;; CPS-IR-to-C backend, N6 G3b: a CROSS-FUNCTION DK chain through a colored
+;; generic monomorph.  Built with --enable=cps-backend.
+;;
+;; `ask-plus` is a colored GENERIC (its `(Option A)` param gets a `__spec__`
+;; clone) that PERFORMS `Ask` -- an effect that ESCAPES to its caller `run`,
+;; which handles it.  This is not an island (the effect crosses the function
+;; boundary), so G3a's self-contained-island emit does not cover it.
+;;
+;; G3b makes the whole chain DK.  The taint fixpoint is extended so a colored
+;; generic template whose EVERY monomorph is CPS-admissible becomes a
+;; MONO-TEMPLATE that does NOT taint its effects (its monomorphs stand in for it
+;; and emit DK).  With `Ask` no longer tainted by ask-plus's template, `run`
+;; stays a CPS candidate.  Each monomorph emits `<clone>__cps`, and a colored
+;; cps->cps caller routes to it: `run__cps` calls
+;; `ask_plus__spec__..._cps(tag, base, __h0)`, threading its OWN handler prompt
+;; `__h0`, so ask-plus's `dk_perform(Ask)` is caught by run's `dk_handler` --
+;; a genuine DK effect chain spanning two functions, one of them a generic
+;; monomorph.  The "all monomorphs admissible" condition makes the tag-level
+;; taint sound (every instantiation is DK); the fixpoint evicts the mono-template
+;; if a genuine fiber peer ever shares the effect.
+;;
+;; The result DEPENDS on the effect (perform Ask -> resumed with 5, + base 100),
+;; so a machine split (fiber ask-plus vs DK run) would give the wrong value:
+;; 5 + 100 = 105.
+
+(load "stdlib/option.tur")
+
+(defeffect Ask [] :int)
+
+(defn ask-plus [A] [tag : (Option A) base : int] : int
+  {(perform (Ask)) + base})
+
+(defn run [] : int
+  (handle (ask-plus (some 7) 100)
+    (Ask [] k) (resume k 5)))
+
+(defn main [] : int
+  (println (run))
+  0)

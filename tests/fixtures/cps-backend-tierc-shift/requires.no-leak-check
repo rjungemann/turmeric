@@ -1,0 +1,5 @@
+Delimited control on the CPS backend leaks its heap DK nodes per prompt/shift
+(DK is opaque; see docs/reported/cps-delimited-dk-node-leak.md), and the Tier C
+box crossing the shift/reset prompt is loaded by the reset continuation without
+a free (consume=false: a multi-shot resume could reload it) -- both are the same
+intentional-leak posture as the DK nodes.

@@ -1,0 +1,22 @@
+;; CPS-IR-to-C backend, non-scalar values Plan, Tier B: float / double.
+;; Built with --enable=cps-backend.
+;;
+;; A float's bit pattern fits the one-word DK slot but is NOT an integer, so it
+;; crosses the slot by bit-REINTERPRET (through union { double d; int64_t i; }),
+;; not a numeric cast -- (intptr_t)7.75 would truncate to 7.  This program does
+;; float arithmetic and threads the result through a shift/reset delimited
+;; boundary:
+;;   - the shift's value is (+ 3.5 4.25), evaluated in the CPS-emitted shift body
+;;     (double-typed letprim);
+;;   - it is delivered to the prompt via slot_store (double -> slot reinterpret)
+;;     and the reset value comes back via slot_load.
+;;
+;; Per the STRICT float rule the literals have non-zero fractional parts.  The
+;; expected value is the direct-style result: 3.5 + 4.25 = 7.75.
+
+(defn compute [] : float
+  (reset (shift (fn [x : float] x) (+ 3.5 4.25))))
+
+(defn main [] : int
+  (println (compute))
+  0)

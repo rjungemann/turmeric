@@ -117,6 +117,9 @@ bool g_dump_effects = false;
 /* CPS2: --dump-cps flag */
 bool g_dump_cps = false;
 
+/* cps-backend (cps-ir-to-c-backend-plan): --enable=cps-backend enable bit */
+bool g_opt_cps_backend = false;
+
 /* Phase I: --emit-abi-trace flag */
 bool g_emit_abi_trace = false;
 
@@ -202,6 +205,10 @@ bool g_werror_inline_c_narrow_params = false;
  * to the Path A carrier bridge (mono_specs.c lens_is_simple_for_pathb).  Paired
  * with `--dump-mono-specs` (g_dump_mono_specs) to review the keying. */
 bool g_dump_mono_specs = false;
+
+/* --dump-cps-mono: report CPS-subset admissibility of colored-generic
+ * monomorphs (G1 of the generic-monomorph-classification plan).  Analysis only. */
+bool g_dump_cps_mono = false;
 
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signature registry (see globals.h).

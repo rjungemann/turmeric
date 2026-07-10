@@ -18,6 +18,28 @@
  * Region C -- algebraic effects
  * ========================================================================= */
 
+/* Tier C (P2): a by-value aggregate effect value cannot ride the int64 fiber-
+ * effect ABI by a cast (a struct is not convertible to int64).  It crosses
+ * boxed -- heap-copy + pointer -- exactly as it crosses the DK slot on the CPS
+ * backend, and is unboxed on the consuming side.  Restricted to owning-free
+ * flat products (needs_drop_glue == false), so the box is a pure value copy;
+ * owning-field aggregates stay unsupported (as on the CPS path). */
+static bool eff_type_boxed(Type t) {
+    if (!type_is_byvalue_adt_product(t)) return false;
+    const AdtDef *d = (t.kind == TY_ADT) ? t.as.adt_.def
+                    : (t.kind == TY_APP) ? type_adt_app_def(&t) : NULL;
+    return d && !d->needs_drop_glue;
+}
+
+/* Box `expr` (of aggregate C type `cty`) into an int64 heap pointer. Malloc'd. */
+static char *eff_box_expr(const char *cty, const char *expr) {
+    Buf b; buf_init(&b);
+    buf_printf(&b, "(int64_t)(intptr_t)({ %s *__eb = (%s *)malloc(sizeof(%s)); *__eb = (%s); __eb; })",
+               cty, cty, cty, expr);
+    buf_putc(&b, '\0');
+    char *s = strdup(b.data); buf_free(&b); return s;
+}
+
 char *emit_effects_defect(EmitCtx *ctx, Buf *body, const Expr *e) {
     (void)ctx; (void)body; (void)e;
     /* Effect definitions are compile-time only - no runtime code */
@@ -42,7 +64,15 @@ char *emit_effects_perform(EmitCtx *ctx, Buf *body, const Expr *e) {
         for (uint8_t i = 0; i < perf->n_args; i++) {
             char *av = emit_value(ctx, body, perf->args[i]);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "%s[%d] = (int64_t)%s;\n", args_var_str, i, av);
+            /* Tier C (P2): a by-value aggregate argument crosses the int64 ABI
+             * boxed; the handler case unboxes it. */
+            if (eff_type_boxed(perf->args[i]->type)) {
+                char *bx = eff_box_expr(type_c_name(perf->args[i]->type), av);
+                buf_printf(body, "%s[%d] = %s;\n", args_var_str, i, bx);
+                free(bx);
+            } else {
+                buf_printf(body, "%s[%d] = (int64_t)%s;\n", args_var_str, i, av);
+            }
             free(av);
         }
     }
@@ -61,7 +91,13 @@ char *emit_effects_perform(EmitCtx *ctx, Buf *body, const Expr *e) {
         indent_buf(body, ctx->indent);
         const char *res_ctype = type_c_name(e->type);
         bool needs_cast = (e->type.kind != TY_INT && e->type.kind != TY_UNKNOWN);
-        if (needs_cast) {
+        if (eff_type_boxed(e->type)) {
+            /* Tier C (P2): the perform result is a boxed aggregate pointer
+             * (the resume side boxed it) -- deref to the value. */
+            buf_printf(body, "%s %s = *(%s *)(intptr_t)tur_effect_perform(\"%s\", %s, %d);\n",
+                       res_ctype, result, res_ctype,
+                       perf->effect_name->name, args_arg, n_args);
+        } else if (needs_cast) {
             buf_printf(body, "%s %s = (%s)tur_effect_perform(\"%s\", %s, %d);\n",
                        res_ctype, result, res_ctype,
                        perf->effect_name->name, args_arg, n_args);
@@ -273,9 +309,16 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (c->param_bindings && c->param_bindings[j]) {
                     const char *ctype = type_c_name(c->param_bindings[j]->type);
                     char *raw = raw_name_for_binding(c->param_bindings[j]);
-                    buf_printf(&hfn_buf,
-                        "    %s %s_%u = (%s)__effect_args[%d];\n",
-                        ctype, raw, (unsigned)c->param_bindings[j]->id, ctype, j);
+                    /* Tier C (P2): a by-value aggregate argument arrived boxed
+                     * (the perform side boxed it) -- deref to the value. */
+                    if (eff_type_boxed(c->param_bindings[j]->type))
+                        buf_printf(&hfn_buf,
+                            "    %s %s_%u = *(%s *)(intptr_t)__effect_args[%d];\n",
+                            ctype, raw, (unsigned)c->param_bindings[j]->id, ctype, j);
+                    else
+                        buf_printf(&hfn_buf,
+                            "    %s %s_%u = (%s)__effect_args[%d];\n",
+                            ctype, raw, (unsigned)c->param_bindings[j]->id, ctype, j);
                     free(raw);
                 }
             }
@@ -304,6 +347,10 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
             hctx.handle_captures = has_captures ? all_caps : NULL;
             hctx.n_handle_captures = has_captures ? n_all_caps : 0;
             hctx.handle_env_name = has_captures ? env_var_name : NULL;
+            /* Tier C (P2): this fiber handler fn returns the int64 effect ABI, not
+             * the outer function's C return type -- so a pending-panic propagation
+             * return is `(int64_t){0}`, and an aggregate result is boxed below. */
+            hctx.current_fn_ret_ctype = "int64_t";
 
             /* Emit handler case body.
              * Phase 19D: for non-never, non-nil bodies, or nil bodies ending in
@@ -323,6 +370,12 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
                     /* Body is nil-typed and doesn't produce a fiber result */
                     free(hret);
                     buf_puts(&hfn_buf, "    return 0;\n");
+                } else if (eff_type_boxed(c->body->type)) {
+                    /* Tier C (P2): the handle result is a by-value aggregate --
+                     * box it into the int64 ABI (the resume/perform side unboxes). */
+                    char *bx = eff_box_expr(type_c_name(c->body->type), hret);
+                    buf_printf(&hfn_buf, "    return %s;\n", bx);
+                    free(bx); free(hret);
                 } else {
                     buf_printf(&hfn_buf, "    return (int64_t)%s;\n", hret);
                     free(hret);
@@ -386,13 +439,25 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
         bctx.handle_captures = has_captures ? all_caps : NULL;
         bctx.n_handle_captures = has_captures ? n_all_caps : 0;
         bctx.handle_env_name = has_captures ? env_var_name : NULL;
+        /* Tier C (P2): the body fiber fn is void (it stores into
+         * tur_current_fiber->result), so a pending-panic propagation is a bare
+         * `return;`, not a typed zero of the outer function's return type. */
+        bctx.current_fn_ret_ctype = "void";
 
         if (h->body->type.kind == TY_NIL || h->body->type.kind == TY_NEVER) {
             emit_stmt(&bctx, &fn_buf, h->body);
             buf_puts(&fn_buf, "    tur_current_fiber->result = 0;\n");
         } else {
             char *bret = emit_value(&bctx, &fn_buf, h->body);
-            buf_printf(&fn_buf, "    tur_current_fiber->result = (int64_t)%s;\n", bret);
+            /* Tier C (P2): box a by-value aggregate body result into the int64
+             * fiber result slot; the handle-site unboxes it. */
+            if (eff_type_boxed(h->body->type)) {
+                char *bx = eff_box_expr(type_c_name(h->body->type), bret);
+                buf_printf(&fn_buf, "    tur_current_fiber->result = %s;\n", bx);
+                free(bx);
+            } else {
+                buf_printf(&fn_buf, "    tur_current_fiber->result = (int64_t)%s;\n", bret);
+            }
             free(bret);
         }
 
@@ -649,7 +714,13 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
 
     /* Start the dispatch loop -- first call resumes with 0 to start body */
     indent_buf(body, ctx->indent);
-    if (returns_value) {
+    if (returns_value && eff_type_boxed(e->type)) {
+        /* Tier C (P2): the dispatch loop returns the handle result boxed in the
+         * int64 ABI -- deref it to the aggregate value. */
+        buf_printf(body, "%s %s = *(%s *)(intptr_t)%s(&%s, (int64_t)(intptr_t)%s, 0);\n",
+                   type_c_name(e->type), result, type_c_name(e->type),
+                   dispatch_fn_name, cap_var, fiber_var);
+    } else if (returns_value) {
         buf_printf(body, "%s %s = (%s)%s(&%s, (int64_t)(intptr_t)%s, 0);\n",
                    type_c_name(e->type), result, type_c_name(e->type),
                    dispatch_fn_name, cap_var, fiber_var);
@@ -1083,13 +1154,23 @@ char *emit_effects_resume(EmitCtx *ctx, Buf *body, const Expr *e) {
             char *tmp = fresh_tmp(ctx);
             Type vtype = e->as.resume_.resume->value->type;
             bool v_is_nil = (vtype.kind == TY_NIL || vtype.kind == TY_NEVER);
+            /* Tier C (P2): box a by-value aggregate resume value into the int64
+             * ABI (the perform result unboxes it). */
+            char *v_arg;
+            if (v_is_nil)                       v_arg = strdup("(int64_t)0");
+            else if (eff_type_boxed(vtype))     v_arg = eff_box_expr(type_c_name(vtype), v_var);
+            else { Buf vb; buf_init(&vb); buf_printf(&vb, "(int64_t)%s", v_var); buf_putc(&vb,'\0'); v_arg = strdup(vb.data); buf_free(&vb); }
             indent_buf(body, ctx->indent);
-            if (v_is_nil)
-                buf_printf(body, "int64_t %s = tur_effect_cont_resume((int64_t)(intptr_t)%s, (int64_t)0);\n",
-                           tmp, k_var);
-            else
-                buf_printf(body, "int64_t %s = tur_effect_cont_resume((int64_t)(intptr_t)%s, (int64_t)%s);\n",
-                           tmp, k_var, v_var);
+            if (eff_type_boxed(e->type)) {
+                /* Tier C (P2): the fiber's final result is a boxed aggregate
+                 * pointer -- deref it to the aggregate value. */
+                buf_printf(body, "%s %s = *(%s *)(intptr_t)tur_effect_cont_resume((int64_t)(intptr_t)%s, %s);\n",
+                           type_c_name(e->type), tmp, type_c_name(e->type), k_var, v_arg);
+            } else {
+                buf_printf(body, "int64_t %s = tur_effect_cont_resume((int64_t)(intptr_t)%s, %s);\n",
+                           tmp, k_var, v_arg);
+            }
+            free(v_arg);
             free(k_var);
             free(v_var);
             return tmp;

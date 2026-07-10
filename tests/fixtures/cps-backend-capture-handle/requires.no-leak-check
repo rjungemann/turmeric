@@ -1,0 +1,3 @@
+Algebraic effects on the CPS backend leak their heap DK nodes per perform/handle
+(DK is opaque; see docs/reported/cps-delimited-dk-node-leak.md); the N6.3
+continuation env struct is leaked with them.

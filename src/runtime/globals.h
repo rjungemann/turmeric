@@ -92,6 +92,13 @@ extern bool g_dump_effects;
  * colored user-level top-level defn */
 extern bool g_dump_cps;
 
+/* cps-backend (cps-ir-to-c-backend-plan): --enable=cps-backend gate.  When set,
+ * a colored function whose entire CTerm lies in the emittable subset is lowered
+ * to C through the DK-threading CPS backend (emit_cps_ir.c) instead of the
+ * direct-style path.  Off by default; the experiment row lives in
+ * src/runtime/experiments.c. */
+extern bool g_opt_cps_backend;
+
 /* Phase I: --emit-abi-trace flag — print the resolved ABI path (concrete-clone,
  * carrier, dictionary, polymorphic-wrapper) for each call site during emit-c */
 extern bool g_emit_abi_trace;
@@ -194,6 +201,14 @@ extern bool g_werror_inline_c_narrow_params;
  * `g_dump_mono_specs` (from `--dump-mono-specs`) prints the registry after
  * elaboration. */
 extern bool g_dump_mono_specs;
+
+/* `g_dump_cps_mono` (from `--dump-cps-mono`) prints, for each colored-generic
+ * MONOMORPH the direct emitter specializes, whether that monomorph's body +
+ * concrete signature would land in the CPS-backend subset (its generic template
+ * sig-rejects on the tyvar TY_APP, so the template is never a candidate).  See
+ * docs/upcoming/v1/cps-backend-generic-monomorph-classification-plan.md (G1).
+ * Analysis only -- it changes no emitted code. */
+extern bool g_dump_cps_mono;
 
 
 /* ---------------------------------------------------------------------------

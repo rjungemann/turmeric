@@ -38,17 +38,22 @@ typedef enum CAtomKind {
     CA_INT,       /* integer literal */
     CA_BOOL,      /* boolean literal */
     CA_UNIT,      /* nil / unit literal */
-    CA_OTHER,     /* a trivial value we don't model precisely (e.g. float/str) */
+    CA_STR,       /* string literal (cstr) */
+    CA_FLOAT,     /* float / double literal (Tier B) */
+    CA_OTHER,     /* a trivial value we don't model precisely */
 } CAtomKind;
 
 typedef struct CAtom {
     CAtomKind     kind;
     TypeKind      ty;          /* type kind of the value */
+    const Type   *type;        /* full type when known (for carrier-ABI ADT detection); may be NULL */
     const Binding *var;        /* CA_VAR */
     uint32_t      cvar_id;     /* CA_CVAR */
     const char   *cvar_name;   /* CA_CVAR */
     int64_t       i;           /* CA_INT */
     bool          b;           /* CA_BOOL */
+    StrSlice      str;         /* CA_STR */
+    double        f;           /* CA_FLOAT */
 } CAtom;
 
 /* ---- Continuations ---------------------------------------------------- */
@@ -75,15 +80,37 @@ typedef enum CTermKind {
     CT_IF,           /* if atom then t else e */
     CT_RESET,        /* reset: bind x = <delimited body's value> in body */
     CT_SHIFT,        /* shift: capture current cont as k', run body to the prompt */
+    CT_HANDLE,       /* handle: run delim under an effect handler; body is the continuation */
+    CT_PERFORM,      /* perform: bind x = perform(effect, args), continue body */
+    CT_RESUME,       /* resume: bind x = resume(k, v) [= dk_invoke], continue body */
+    CT_LETRAW,       /* bind x = <direct-emitted owning-value op>, continue body.
+                      * The RHS is a source Expr (rc/of, rc/drop, ...) emitted by
+                      * the direct emitter (emit_value); the owning value stays a
+                      * local and never crosses a DK slot. See emit_cps_ir.c. */
     CT_UNSUPPORTED,  /* a source form outside the CPS2 subset (carries a reason) */
 } CTermKind;
 
 typedef struct CTerm CTerm;
 
+/* One clause of a (possibly multi-case) handle: an effect and its handler body,
+ * binding the effect's params + the resumable continuation `k`. */
+typedef struct CHandleCase {
+    const Symbol   *effect;
+    const Binding **params;
+    uint32_t        n_params;
+    const Binding  *k;
+    CTerm          *case_body;
+} CHandleCase;
+
 typedef struct CVar {     /* a CPS-introduced binder */
     uint32_t    id;
     const char *name;
     TypeKind    ty;
+    const Type *type;      /* full type when known (carrier-ABI ADT detection); may be NULL */
+    /* When this binder stands for a source Binding (a `let`-bound name), the
+     * emitter must name it via name_for_binding so it matches every reference
+     * site (which resolve through name_for_binding).  NULL for a fresh binder. */
+    const Binding *bind;
 } CVar;
 
 struct CTerm {
@@ -91,13 +118,24 @@ struct CTerm {
     union {
         struct { CKont kont; CAtom v; }                                   appcont;
         struct { CVar x; CAtom v; CTerm *body; }                          letval;
-        struct { CVar x; const char *op; CAtom *args; uint32_t n; CTerm *body; } letprim;
+        struct { CVar x; const char *op; const BuiltinSpec *spec; CAtom *args; uint32_t n; CTerm *body; } letprim;
         struct { CVar x; const Binding *fn; CAtom *args; uint32_t n; CTerm *body; } letcall;
         struct { const Binding *fn; CAtom *args; uint32_t n; CKont kont; } tailcall;
         struct { CVar j; CVar param; CTerm *jbody; CTerm *body; }         letcont;
         struct { CAtom cond; CTerm *then_; CTerm *else_; }                if_;
         struct { CVar x; CTerm *delim; CTerm *body; }                     reset;
-        struct { CVar k; CTerm *body; }                                   shift;
+        /* shift0 == true lowers to dk_shift0 (does NOT reinstall the prompt);
+         * false is a plain shift (dk_shift, prompt stays installed). */
+        struct { CVar k; CTerm *body; bool shift0; }                      shift;
+        /* handle: delim = body threading the handler prompt; body = the handle's
+         * continuation; cases = the N handler clauses (each delivered by return),
+         * one per handled effect.  Each case's k / params are bound in its body. */
+        struct { CVar x; CTerm *delim; CTerm *body;
+                 CHandleCase *cases; uint32_t n_cases; }                  handle;
+        struct { const Symbol *effect; CAtom *args; uint32_t n;
+                 CVar x; CTerm *body; }                                   perform;
+        struct { CAtom k; CAtom v; CVar x; CTerm *body; }                 resume;
+        struct { CVar x; const Expr *e; CTerm *body; }                    letraw;
         struct { const char *why; }                                       unsupported;
     } as;
 };

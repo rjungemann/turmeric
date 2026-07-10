@@ -5904,6 +5904,7 @@ static void wk_apply_flags(const char *flags_str) {
         else if (strcmp(tok, "--dump-cps-coloring") == 0) g_dump_cps_coloring        = true;
         else if (strcmp(tok, "--dump-cps")          == 0) g_dump_cps                 = true;
         else if (strcmp(tok, "--dump-mono-specs")   == 0) g_dump_mono_specs          = true;
+        else if (strcmp(tok, "--dump-cps-mono")     == 0) g_dump_cps_mono            = true;
         else if (strcmp(tok, "--dump-sizes")        == 0) g_dump_sizes               = true;
         else if (strcmp(tok, "--emit-abi-trace")    == 0) g_emit_abi_trace           = true;
         else if (strcmp(tok, "--lint-effects")      == 0) g_lint_effects             = true;
@@ -11436,6 +11437,15 @@ int main(int argc, char **argv) {
             /* VBM1 (van-laarhoven-monomorphization-plan): print the by-value HKT
              * monomorphization spec registry after elaboration. */
             g_dump_mono_specs = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--dump-cps-mono") == 0) {
+            /* G1 (cps-backend-generic-monomorph-classification-plan): report CPS-
+             * subset admissibility of each colored-generic monomorph. */
+            g_dump_cps_mono = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

@@ -1,0 +1,38 @@
+;; CPS-IR-to-C backend, N6.3: a *borrowed owning capture* -- a continuation
+;; captures a `^borrow` parameter of an owning (drop-glue) type.  Built with
+;; --enable=cps-backend.
+;;
+;; `f`'s parameter `o : Own` is a by-value struct with an owning `rc<int>` field
+;; (so it has drop glue and fails the Copy slot gate), but it is declared
+;; `^borrow`: the type checker guarantees `f` only READS it -- never drops or
+;; moves it.  The caller owns `o` and it outlives `f`'s whole execution, including
+;; the deferred handle continuation (which runs inside `f`'s dynamic extent).  So
+;; the post-handle continuation `(+ v (.tag o))` may capture `o` by a shallow
+;; value copy into its env with NO retain/drop:
+;;   typedef struct { DK *__k; tur_adt_Own f0; } f_hk0_env;   // f0 = o
+;;   e->f0 = o;   and the helper reads `tur_adt_Own o = e->f0;`
+;; The shared rc handle inside the copy is never released by `f`, so there is no
+;; double-free, and the refcount is identical to the direct path (a multi-shot
+;; read stays read-only) -- direct == cps holds exactly.
+;;
+;; Without `^borrow`, an owning capture conservatively falls back (it might be
+;; dropped, which under a multi-shot resume would double-free): `is_borrow` is the
+;; sound admission signal, not a whole-function consumption scan.
+;;
+;; direct-vs-CPS equal: handle resumes 50; o.tag = 9; 50 + 9 = 59.
+
+(defstruct Own [r : rc<int> tag : int])
+
+(defeffect E [] :int)
+
+(defn g [] : int
+  (perform (E)))
+
+(defn f [^borrow o : Own] : int
+  (let [v (handle (g) (E [] k) (resume k 50))]
+    (+ v (.tag o))))
+
+(defn main [] : int
+  (let [o (make-struct Own :r (rc/of 7) :tag 9)]
+    (println (f o)))
+  0)

@@ -809,10 +809,12 @@ static void tur_result_box_free_shallow(int64_t __r) {
 typedef struct DK DK;
 typedef intptr_t (*DKFrame)(intptr_t env, intptr_t value);
 typedef intptr_t (*DKBody)(intptr_t env, DK *subk);
-typedef enum { DKK_DONE, DKK_FRAME, DKK_PROMPT, DKK_SHIFT, DKK_SHIFT0 } DKKind;
+typedef intptr_t (*DKHandler)(intptr_t env, intptr_t arg, DK *subk);
+typedef enum { DKK_DONE, DKK_FRAME, DKK_PROMPT, DKK_SHIFT, DKK_SHIFT0, DKK_HANDLER } DKKind;
 struct DK {
     DKKind kind; DKFrame fn; intptr_t env; int tag;
-    DKBody body; intptr_t body_env; DK *next;
+    DKBody body; intptr_t body_env;
+    DKHandler handler; intptr_t handler_env; DK *next;
 };
 static DK *dk_new(DKKind kind, DK *next) {
     DK *k = (DK *)calloc(1, sizeof(DK)); k->kind = kind; k->next = next; return k;
@@ -833,9 +835,13 @@ static DK *dk_shift(int tag, DKBody body, intptr_t env, DK *next) {
 static DK *dk_shift0(int tag, DKBody body, intptr_t env, DK *next) {
     return dk_shift_impl(DKK_SHIFT0, tag, body, env, next);
 }
+static DK *dk_handler(int tag, DKHandler fn, intptr_t env, DK *next) {
+    DK *k = dk_new(DKK_HANDLER, next); k->tag = tag; k->handler = fn; k->handler_env = env; return k;
+}
 static DK *dk_copy_node(const DK *n) {
     DK *c = dk_new(n->kind, NULL); c->fn = n->fn; c->env = n->env; c->tag = n->tag;
-    c->body = n->body; c->body_env = n->body_env; return c;
+    c->body = n->body; c->body_env = n->body_env;
+    c->handler = n->handler; c->handler_env = n->handler_env; return c;
 }
 static DK *dk_copy_range(const DK *from, const DK *stop) {
     DK *head = NULL, *tail = NULL;
@@ -857,7 +863,7 @@ static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
     while (k) {
         switch (k->kind) {
             case DKK_DONE: return v;
-            case DKK_PROMPT: k = k->next; break;
+            case DKK_PROMPT: case DKK_HANDLER: k = k->next; break;
             case DKK_FRAME: v = k->fn(k->env, v); k = k->next; break;
             case DKK_SHIFT:
             case DKK_SHIFT0: {
@@ -884,6 +890,16 @@ static intptr_t dk_run_root(DK *k, intptr_t v) { return dk_run_impl(k, v, true);
 static intptr_t dk_invoke(DK *sub, intptr_t w) {
     DK *c = dk_copy_range(sub, NULL); intptr_t r = dk_run_impl(c, w, false);
     dk_free(c); return r;
+}
+static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
+    DK *H = k;
+    while (H && !(H->kind == DKK_HANDLER && H->tag == tag) && H->kind != DKK_DONE) H = H->next;
+    if (!H || H->kind == DKK_DONE) { fprintf(stderr, "tur: unhandled effect (tag %d)\n", tag); abort(); }
+    DK *sub = dk_copy_range(k, H);
+    sub = dk_append(sub, dk_handler(tag, H->handler, H->handler_env, dk_done()));
+    intptr_t r = H->handler(H->handler_env, arg, sub);
+    dk_free(sub);
+    return dk_run_impl(H->next, r, false);
 }
 /* Abortive shift body: deliver the precomputed receiver result f(v),
  * ignoring the captured sub-continuation (Turmeric shift never resumes it). */

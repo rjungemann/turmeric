@@ -1,0 +1,29 @@
+;; CPS-IR-to-C backend (cps-ir-to-c-backend-plan, Phase C2): direct<->CPS
+;; boundary bridging.  This is the cps-mixed-coloring program built under
+;; --enable=cps-backend; its runtime result (41) -- historically produced via
+;; the fiber path -- must be reproduced by the CPS backend, exercising the
+;; boundary edges in one program:
+;;
+;;   twice            -- uncolored, pure.
+;;   shift-then-twice -- colored + delimited (reset/shift) -> stays direct-style
+;;                       (fallback); a CPS-emitted caller bridges to it as a
+;;                       cps->direct synchronous call.
+;;   run              -- colored, core-only body -> CPS-emitted; calls
+;;                       shift-then-twice (cps->direct), joins, delivers to k.
+;;   main             -- colored; a direct->CPS *entry* -- it reaches `run`
+;;                       through the entry trampoline (implicit root prompt).
+;;
+;; twice(reset(shift id 20)) = 40; run adds 1 => 41.
+
+(defn twice [x : int] : int
+  (* 2 x))
+
+(defn shift-then-twice [x : int] : int
+  (twice (reset (shift (fn [v] v) x))))
+
+(defn run [n : int] : int
+  (+ 1 (shift-then-twice n)))
+
+(defn main [] : int
+  (println (run 20))
+  0)

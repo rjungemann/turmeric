@@ -1,0 +1,28 @@
+;; CPS-IR-to-C backend, Tier B: a float threaded through perform / handle /
+;; resume.  Built with --enable=cps-backend.
+;;
+;; The Sample effect's result type is float.  `measure` performs it and does
+;; float arithmetic on the resumed value; `run` handles it and resumes with a
+;; float literal.  On the CPS path the float crosses the four effect boundaries
+;; (dk_perform arg, handler-case arg, dk_invoke resume value + result) by
+;; bit-reinterpret through the DK slot.  Per the STRICT float rule the literals
+;; have non-zero fractional parts; the expected value is 7.1 + 1.5 = 8.6.
+;;
+;; NOTE: the direct-style (fiber) effect path currently TRUNCATES a float effect
+;; result to an integer (prints 8), a pre-existing bug tracked in
+;; docs/reported/fiber-effect-float-result-truncated.md.  The CPS backend does
+;; NOT have that bug -- it reinterprets the float bits correctly -- so this
+;; fixture asserts the correct value (8.6), which the CPS build produces.
+
+(defeffect Sample [] :float)
+
+(defn measure [] : float
+  (+ (perform (Sample)) 1.5))
+
+(defn run [] : float
+  (handle (measure)
+    (Sample [] k) (resume k 7.1)))
+
+(defn main [] : int
+  (println (run))
+  0)

@@ -1,0 +1,28 @@
+;; CPS-IR-to-C backend, N6: a multi-argument effect whose args are FLOATs.
+;; Built with --enable=cps-backend.
+;;
+;; This locks in that the multi-arg heap-pack round-trips a float slot word
+;; correctly: each arg is stored via the double<->int64 union bitcast into the
+;; `int64_t[n]` array (slot_store) and read back with the inverse bitcast at the
+;; handler case (slot_load), so no float bits are lost crossing the effect.
+;;
+;; NOTE: the direct/fiber emitter has a SEPARATE, pre-existing bug that truncates
+;; a float effect argument to an int (both single- and multi-arg) -- see
+;; docs/reported/direct-fiber-float-effect-arg-truncation.md.  So the *direct*
+;; build of this program prints a wrong (truncated) 10, while the CPS backend
+;; prints the correct 10.6.  This fixture runs the CPS path (--enable=cps-backend)
+;; and asserts the correct value; it is a guard that the CPS multi-arg path does
+;; NOT inherit that truncation.
+;;
+;; a + b = 3.5 + 7.1 = 10.6 (a fractional result, so a float miscompile shows).
+
+(defeffect Mix [a :float b :float] :float)
+
+(defn mix [] : float
+  (handle
+    (perform (Mix 3.5 7.1))
+    (Mix [a b] k) (resume k {a + b})))
+
+(defn main [] : int
+  (println (mix))
+  0)

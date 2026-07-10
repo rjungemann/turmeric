@@ -1,0 +1,30 @@
+;; CPS-IR-to-C backend, non-scalar values Plan, Tier A: narrow-int (int32) with
+;; arithmetic.  Built with --enable=cps-backend.
+;;
+;; A narrow int (int32/int16/int8 and the unsigned widths) fits the one-word DK
+;; slot by a plain cast, exactly like a full-width int.  This program threads an
+;; int32 end to end through the CPS backend AND does int32 arithmetic on the
+;; resumed value -- the arithmetic builtin shapes (BS_BIN_INFIX etc.) apply to
+;; the sub-64-bit widths, so a colored function that does narrow-int math stays
+;; on the CPS path:
+;;   - the Tick effect's result type is int32;
+;;   - `bump` performs it and adds an int32 literal (the lifted perform-cont
+;;     slot-loads `int32_t t0 = (int32_t)t0__slot` then computes `t0 + 1`);
+;;   - `run` handles it and resumes the captured continuation with an int32
+;;     literal (41);
+;;   - the int32 result (42) is widened to int for printing.
+;;
+;; The expected value is the direct-style result.
+
+(defeffect Tick [] :int32)
+
+(defn bump [] : int32
+  (+ (perform (Tick)) (:: 1 :int32)))
+
+(defn run [] : int32
+  (handle (bump)
+    (Tick [] k) (resume k (:: 41 :int32))))
+
+(defn main [] : int
+  (println (:: (run) :int))
+  0)

@@ -1,0 +1,40 @@
+;; CPS-IR-to-C backend, N6.4: an indirect call (a call through a fn *value*)
+;; inside a colored function.  Built with --enable=cps-backend.
+;;
+;; `f` performs effect E (via `g` under a handle) -- so it is colored -- and also
+;; calls its fn-value parameter `fnv` indirectly.  An indirect call is the
+;; callee's direct entry point, which installs its own root prompt and never
+;; joins the caller's delimited-control chain, so its behaviour is identical
+;; whether the surrounding code is CPS- or direct-emitted.  It therefore delegates
+;; to the direct emitter via CT_LETRAW, exactly as an uncolored direct call does.
+;;
+;; Making this compile required aligning the CPS backend's fn-value *parameter*
+;; spelling with the direct emitter's: (1) set ctx->fn_params during CPS emission
+;; so a parameter reference resolves to the same raw (id-less) C name the direct
+;; emitter and the delegated body (`fnv.fn` / `fnv.env`) use; and (2) emit a
+;; rank-2 poly fn param as `tur_poly_fn_t`, not the `void *` its scalar-pointer
+;; type kind would pick.  See
+;; docs/reported/cps-backend-indirect-call-fatclosure-param-divergence.md.
+;;
+;; A lifted-position indirect call (callee captured into a continuation env) still
+;; falls back -- a fat closure is wider than the scalar env slot -- so collect_caps
+;; bails on a captured callee.  Here the indirect call `(fnv 10)` is in the main
+;; body (not a lifted continuation), so it delegates and `f` CPS-emits.
+;;
+;; direct-vs-CPS equal: fnv=dbl, dbl(10)=20; handle resumes 50; 20 + 50 = 70.
+
+(defeffect E [] :int)
+
+(defn g [] : int
+  (perform (E)))
+
+(defn dbl [n : int] : int
+  (* n 2))
+
+(defn f [fnv : (fn [int] int)] : int
+  (let [base (fnv 10)]
+    (+ base (handle (g) (E [] k) (resume k 50)))))
+
+(defn main [] : int
+  (println (f dbl))
+  0)

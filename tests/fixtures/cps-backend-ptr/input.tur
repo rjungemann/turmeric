@@ -1,0 +1,41 @@
+;; CPS-IR-to-C backend, non-scalar values Plan, Tier A: raw pointer (ptr<void>).
+;; Built with --enable=cps-backend.
+;;
+;; A raw pointer is Copy and non-owning, so bit-threading it through the one-word
+;; DK slot by a plain cast is unambiguously correct -- Tier A adds TY_PTR_VOID to
+;; slot_ty alongside the integer widths and cstr.  This program threads a
+;; ptr<void> end to end through the CPS backend:
+;;   - the Buf effect's result type is ptr<void>;
+;;   - `use-buf` performs it and derefs the resumed pointer (the perform-cont
+;;     slot-loads `void * t0 = (void *)t0__slot` before calling read-buf);
+;;   - `run-buf` handles it and resumes the captured continuation with a raw
+;;     buffer pointer (the handler case stores the ptr to the slot as intptr_t
+;;     and dk_invoke loads it back as void *).
+;;
+;; Before Tier A a colored function whose continuation payload was a pointer fell
+;; back to the fiber path.  The expected value is the direct-style result: the
+;; buffer holds 7.
+
+(defeffect Buf [] :ptr<void>)
+
+(defn provide-buf [] : :ptr<void>
+  ```c
+  static int64_t storage = 7;
+  return (void*)&storage;
+  ```)
+
+(defn read-buf [p : :ptr<void>] : int
+  ```c
+  return (int)*(int64_t*)p;
+  ```)
+
+(defn use-buf [] : int
+  (read-buf (perform (Buf))))
+
+(defn run-buf [] : int
+  (handle (use-buf)
+    (Buf [] k) (resume k (provide-buf))))
+
+(defn main [] : int
+  (println (run-buf))
+  0)

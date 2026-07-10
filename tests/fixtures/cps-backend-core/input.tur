@@ -1,0 +1,38 @@
+;; CPS-IR-to-C backend (cps-ir-to-c-backend-plan, Phase C1) round-trip fixture.
+;;
+;; Built with --enable=cps-backend, so the colored functions whose bodies lie in
+;; the C1 emittable subset are lowered through the DK-threading CPS backend
+;; (emit_cps_ir.c) instead of the direct-style path.  The expected value is the
+;; direct-style result; the CPS build must reproduce it exactly (value equality,
+;; not just "compiles").
+;;
+;; Coverage in one program:
+;;   seed  -- colored + delimited (reset/shift) -> stays on the direct-style
+;;            (fallback) path; the CPS-emitted callers bridge to it synchronously.
+;;   bump  -- uncolored, pure -> a cps->direct call (CT_LETCALL) from `scale`.
+;;   scale -- colored (reaches seed), core-only body -> CPS-emitted; exercises
+;;            the synchronous fallback bridge to `seed`, a cps->direct call to
+;;            `bump`, an inline join, and arithmetic.
+;;   loop  -- colored (reaches scale), core-only body -> CPS-emitted; exercises
+;;            CT_IF, a cps->cps tail call to `scale` (a different emitted fn,
+;;            threading the continuation), and a cps->cps self tail call.
+;;
+;; loop 4 0 = ((1+2+3+4) accumulated) -> scale 10 = bump(10 + seed) = 10+7+1 = 18.
+
+(defn seed [] : int
+  (reset (shift (fn [v] v) 7)))
+
+(defn bump [x : int] : int
+  (+ x 1))
+
+(defn scale [x : int] : int
+  (bump (+ x (seed))))
+
+(defn loop [n : int acc : int] : int
+  (if (= n 0)
+    (scale acc)
+    (loop (- n 1) (+ acc n))))
+
+(defn main [] : int
+  (println (loop 4 0))
+  0)

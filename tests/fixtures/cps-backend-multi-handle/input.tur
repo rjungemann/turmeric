@@ -1,0 +1,31 @@
+;; CPS-IR-to-C backend, N6.2: a handle with MULTIPLE cases (one per effect).
+;; Built with --enable=cps-backend.
+;;
+;; `work` performs Ask or Add (each a tail perform in an if branch); `run`
+;; handles BOTH with a two-case handler.  On the CPS backend a multi-case handle
+;; installs one dk_handler per case, chained by effect tag onto the handle
+;; continuation:  dk_handler(Ask, ..., dk_handler(Add, ..., dk_frame(k-cont))).
+;; dk_perform searches the chain by tag, so each effect dispatches to its own
+;; lifted case.  Before N6.2 only single-case handlers were in the CPS subset.
+;;
+;; run(true)  -> Ask resumes 5              -> 5
+;; run(false) -> Add(100) resumes (100+1)   -> 101
+;; direct-vs-CPS equal.
+
+(defeffect Ask [] :int)
+(defeffect Add [n : int] :int)
+
+(defn work [b : bool] : int
+  (if b
+    (perform (Ask))
+    (perform (Add 100))))
+
+(defn run [b : bool] : int
+  (handle (work b)
+    (Ask [] k)  (resume k 5)
+    (Add [n] k) (resume k (+ n 1))))
+
+(defn main [] : int
+  (println (run true))
+  (println (run false))
+  0)

@@ -38,12 +38,22 @@ typedef intptr_t (*DKFrame)(intptr_t env, intptr_t value);
  * prompt's outer continuation. */
 typedef intptr_t (*DKBody)(intptr_t env, DK *subk);
 
+/* An algebraic-effect handler case, carried by a handler-prompt marker: receives
+ * the effect argument and the captured sub-continuation `subk` (from the perform
+ * site up to this handler), and returns the value delivered to the handler's
+ * outer continuation.  A `resume` inside the case is dk_invoke(subk, v). */
+typedef intptr_t (*DKHandler)(intptr_t env, intptr_t arg, DK *subk);
+
 /* ---- chain constructors (each returns a fresh heap node) -------------- */
 DK *dk_done(void);
 DK *dk_frame(DKFrame fn, intptr_t env, DK *next);
 DK *dk_prompt(int tag, DK *next);
 DK *dk_shift(int tag, DKBody body, intptr_t body_env, DK *next);
 DK *dk_shift0(int tag, DKBody body, intptr_t body_env, DK *next);
+/* A handler-prompt for algebraic effects: a marker keyed by effect `tag` that
+ * carries the handler case `fn` (with env).  Transparent to a returning value
+ * (like dk_prompt); a matching dk_perform runs `fn`. */
+DK *dk_handler(int tag, DKHandler fn, intptr_t env, DK *next);
 
 /* ---- evaluation ------------------------------------------------------- */
 /* Run chain `k` with seed value `v` (no implicit root prompt). */
@@ -54,6 +64,14 @@ intptr_t dk_run_root(DK *k, intptr_t v);
 
 /* Invoke a captured sub-continuation with `w` (multi-shot: copies internally). */
 intptr_t dk_invoke(DK *sub, intptr_t w);
+
+/* Perform effect `tag` with argument `arg` against continuation `k`: find the
+ * nearest enclosing dk_handler with a matching tag, reify the sub-continuation
+ * from the perform point up to that handler (re-installing the handler on the
+ * captured copy, for deep-handler semantics), run the handler case with (arg,
+ * subk), and deliver its result to the handler's outer continuation.  Aborts on
+ * an unhandled effect. */
+intptr_t dk_perform(int tag, intptr_t arg, DK *k);
 
 /* Does the chain contain a prompt marker? (used to assert re-install). */
 bool dk_has_prompt(const DK *k);

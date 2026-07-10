@@ -1,0 +1,29 @@
+;; CPS-IR-to-C backend, N3: construct and DESTRUCTURE an Option across an effect
+;; boundary.  Built with --enable=cps-backend.
+;;
+;; `f` performs the Ask effect, wraps the resumed value in an Option via the
+;; stdlib `some` helper, then branches on `.is-some` and reads `.value`.  This is
+;; the canonical Option round-trip.  It works because:
+;;   - `some` (a pure make-struct helper) is no longer force-colored: a
+;;     constructor call cannot reach a control op, so coloring does not mark its
+;;     callers indirect (see docs/archive/cps-coloring-overcolors-nonnode-calls.md).
+;;     `some` is therefore uncolored and its call is delegated cps->direct.
+;;   - the Option local is destructured with an `if` in the perform continuation,
+;;     now allowed by the lifted-body subset predicates.
+;;
+;; The Option stays a local (only the scalar result crosses the DK slot), so no
+;; Tier C boxing is needed.  direct-vs-CPS equal (42), LeakSanitizer-clean.
+
+(defeffect Ask [] :int)
+
+(defn f [] : int
+  (let [v (perform (Ask))]
+    (let [o (some v)]
+      (if (.is-some o) (.value o) 0))))
+
+(defn run [] : int
+  (handle (f) (Ask [] k) (resume k 42)))
+
+(defn main [] : int
+  (println (run))
+  0)

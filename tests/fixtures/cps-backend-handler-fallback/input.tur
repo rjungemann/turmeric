@@ -1,0 +1,29 @@
+;; CPS-IR-to-C backend: perform/handle machine-split coherence guard.
+;; Built with --enable=cps-backend.
+;;
+;; `perform` and `handle` are dynamically scoped, so a performer and its handler
+;; must run on the SAME machine: both the DK/CPS continuation machine, or both
+;; the fiber runtime.  The backend classifies each colored function for CPS
+;; emission independently, so without a coherence guard it could CPS-emit the
+;; performer (`ask`, which lowers `perform` to `dk_perform`) while its handler
+;; (`run`) falls back to the fiber path -- and then `dk_perform` finds no DK
+;; handler in the chain and the program aborts with "unhandled effect".
+;;
+;; Here `run`'s handler case captures the function parameter `x`, which is
+;; outside the zero-capture CPS handler subset, so `run` must fall back.  The
+;; co-classification fixpoint in ensure_S taints effect `Ask` (a non-CPS function
+;; touches it) and evicts `ask` too, so BOTH run on the fiber machine and the
+;; effect is caught.  The expected value is the direct-style result: 5.
+
+(defeffect Ask [] :int)
+
+(defn ask [] : int
+  (perform (Ask)))
+
+(defn run [x : int] : int
+  (handle (ask)
+    (Ask [] k) (resume k x)))
+
+(defn main [] : int
+  (println (run 5))
+  0)

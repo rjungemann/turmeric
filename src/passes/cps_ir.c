@@ -35,13 +35,15 @@ static CTerm *new_term(CpsB *b, CTermKind k) {
     return t;
 }
 
-static CVar fresh_cvar(CpsB *b, TypeKind ty) {
+static CVar fresh_cvar(CpsB *b, const Type *ty) {
     CVar v;
     v.id = b->counter++;
     char buf[24];
     snprintf(buf, sizeof(buf), "t%u", v.id);
     v.name = arena_strdup(b->a, buf, strlen(buf));
-    v.ty = ty;
+    v.ty = ty ? ty->kind : TY_UNKNOWN;
+    v.type = ty;
+    v.bind = NULL;
     return v;
 }
 
@@ -50,6 +52,8 @@ static CVar cvar_of_binding(const Binding *bd) {
     v.id = bd->id;
     v.name = (bd->name ? bd->name->name : "_");
     v.ty = bd->type.kind;
+    v.type = &bd->type;
+    v.bind = bd;
     return v;
 }
 
@@ -63,13 +67,47 @@ static CKont kont_prompt(TypeKind ty) {
 
 /* ---- atoms ------------------------------------------------------------ */
 
+/* Type ascription `(:: e T)` is erased at codegen (its value is the inner
+ * expression's value), so peel it everywhere the translator inspects a form. */
+static const Expr *ascribe_peel(const Expr *e) {
+    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    return e;
+}
+
+/* A Tier A scalar kind: an integer/bool/pointer that occupies its C width with a
+ * direct bit pattern.  A same-size reinterpret between two such kinds (e.g. the
+ * `int -> uint64` the frontend emits for `(:: 10 :uint64)`, since both are 64
+ * bits) is bit-identical, so it is a value-preserving retype the CPS translator
+ * can see through.  Floats are excluded -- an int<->double reinterpret changes
+ * bit meaning and is a Tier B concern, left to the fallback. */
+static bool tierA_scalar_kind(TypeKind k) {
+    switch (k) {
+        case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_BOOL: case TY_CSTR: case TY_PTR_VOID:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* True if `e` is a same-size Tier A reinterpret we can peel like an ascription. */
+static bool is_tierA_reinterp(const Expr *e) {
+    return e && e->kind == EX_REINTERPRET
+        && tierA_scalar_kind(e->as.reinterpret_.source_kind)
+        && tierA_scalar_kind(e->as.reinterpret_.target_kind);
+}
+
 static bool is_atomic(const Expr *e) {
+    e = ascribe_peel(e);
     if (!e) return false;
+    if (is_tierA_reinterp(e)) return is_atomic(e->as.reinterpret_.expr);
     switch (e->kind) {
         case EX_INT_LIT:
         case EX_BOOL_LIT:
         case EX_NIL_LIT:
         case EX_FLOAT_LIT:
+        case EX_CSTR_LIT:
         case EX_VAR:
             return true;
         default:
@@ -78,14 +116,25 @@ static bool is_atomic(const Expr *e) {
 }
 
 static CAtom atom_of(const Expr *e) {
+    e = ascribe_peel(e);
     CAtom a; memset(&a, 0, sizeof(a));
     a.ty = e ? e->type.kind : TY_UNKNOWN;
+    a.type = e ? &e->type : NULL;
     if (!e) { a.kind = CA_UNIT; return a; }
+    /* A Tier A reinterpret is a bit-identical retype: take the inner atom's
+     * value but keep the reinterpret's (retyped) result type. */
+    if (is_tierA_reinterp(e)) {
+        TypeKind tgt = e->as.reinterpret_.target_kind;
+        CAtom inner = atom_of(e->as.reinterpret_.expr);
+        inner.ty = tgt;
+        return inner;
+    }
     switch (e->kind) {
         case EX_INT_LIT:   a.kind = CA_INT;  a.i = e->as.i; break;
         case EX_BOOL_LIT:  a.kind = CA_BOOL; a.b = e->as.b; break;
         case EX_NIL_LIT:   a.kind = CA_UNIT; break;
-        case EX_FLOAT_LIT: a.kind = CA_OTHER; break;
+        case EX_FLOAT_LIT: a.kind = CA_FLOAT; a.f = e->as.f; break;
+        case EX_CSTR_LIT:  a.kind = CA_STR;  a.str = e->as.s; break;
         case EX_VAR:       a.kind = CA_VAR;  a.var = e->as.var.binding; break;
         default:           a.kind = CA_OTHER; break;
     }
@@ -94,7 +143,7 @@ static CAtom atom_of(const Expr *e) {
 
 static CAtom atom_cvar(CVar v) {
     CAtom a; memset(&a, 0, sizeof(a));
-    a.kind = CA_CVAR; a.ty = v.ty; a.cvar_id = v.id; a.cvar_name = v.name;
+    a.kind = CA_CVAR; a.ty = v.ty; a.type = v.type; a.cvar_id = v.id; a.cvar_name = v.name;
     return a;
 }
 
@@ -121,9 +170,202 @@ typedef struct { PendItem items[32]; uint32_t n; } Pending;
 static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont);
 static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest);
 
+/* An owning-value operation on a local rc handle (`rc/of`, `rc/clone`, `rc/drop`,
+ * `rc/strong-count`, `rc->ptr`).  These do not cross a DK slot -- the rc stays a
+ * local -- so the CPS backend delegates their emission to the direct emitter
+ * (`emit_value`), which already carries the correct control-block / refcount /
+ * drop-glue discipline.  Only a form whose operand is atomic (a var or literal)
+ * is delegated, so no control operator (`perform` / `shift`) can hide in an
+ * operand and get emitted in direct style inside a CPS function. */
+static const Expr *owning_operand(const Expr *e) {
+    if (!e) return NULL;
+    switch (e->kind) {
+        case EX_RC_OF:    return e->as.rc_of_.expr;
+        case EX_RC_CLONE: return e->as.rc_clone_.expr;
+        case EX_RC_DROP:  return e->as.rc_drop_.expr;
+        case EX_RC_COUNT: return e->as.rc_count_.expr;
+        case EX_RC_PTR:   return e->as.rc_ptr_.expr;
+        default:          return NULL;
+    }
+}
+
+static bool is_delegatable_owning(const Expr *e) {
+    const Expr *arg = owning_operand(e);
+    return arg != NULL && is_atomic(arg);
+}
+
+/* A struct/ADT value op that stays a local -- construct (make-struct), read a
+ * field (.field), or a default value.  Like the owning ops, these do not need
+ * CPS lowering: the aggregate is a local (never crosses the DK slot -- a crossing
+ * use is rejected by atom_ok / fn_sig_ok), so emission is delegated to the direct
+ * emitter.  Delegated only when every operand is atomic, so no control operator
+ * hides in an operand. */
+static bool is_delegatable_struct(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_GET_FIELD:
+            return is_atomic(e->as.get_field_.struct_expr);
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                if (!is_atomic(e->as.make_struct_.field_values[i])) return false;
+            return true;
+        case EX_DEFAULT_OF:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* A capture-free fn-value wrapper -- a bare fn coerced to a fat/poly callable, or
+ * a closure literal with no captured free variables.  Such a value is not a call
+ * and not a control op, and (being capture-free) references no enclosing local,
+ * so it is safe to delegate to the direct emitter via CT_LETRAW anywhere,
+ * including inside a lifted zero-capture body.  A CAPTURING closure is NOT
+ * delegated here: its free vars would need the has_capture cut to see them, so it
+ * falls back conservatively.  The wrapped fn body is a call-graph boundary
+ * (colored on its own merits), never executed at this position. (N6.1) */
+static bool is_delegatable_value(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_FN_TO_FAT:
+        case EX_POLY_WRAP:
+        case EX_FN:
+            return true;
+        case EX_CLOSURE:
+            return e->as.closure_.closure && e->as.closure_.closure->n_captures == 0;
+        default:
+            return false;
+    }
+}
+
+/* True if every argument of an EX_CALL is atomic (so the whole call can be
+ * delegated to the direct emitter without control ops hiding in an arg). */
+static bool call_args_atomic(const Expr *e) {
+    for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+        if (!is_atomic(e->as.call_.args[i])) return false;
+    return true;
+}
+
+static CTerm *build_letraw(CpsB *b, Expr *e, CVar x, CTerm *rest) {
+    CTerm *t = new_term(b, CT_LETRAW);
+    t->as.letraw.x = x;
+    t->as.letraw.e = e;
+    t->as.letraw.body = rest;
+    return t;
+}
+
+/* N6.1: a subexpression that can be emitted wholesale by the direct emitter
+ * (via CT_LETRAW) because it neither threads a continuation nor could reach one:
+ * it contains no syntactic control op AND no call to a colored (may-capture)
+ * function AND no indirect call (unknown coloring).  Nested fn/closure bodies are
+ * call-graph boundaries -- not descended (a capture-free fn value is itself a
+ * delegatable leaf; a capturing one is rejected so the has_capture cut is not
+ * bypassed).  The scan is SOUND by construction: it returns true only for a
+ * closed set of forms whose children it fully recurses; any unrecognized form
+ * (or a control op / colored / indirect call) yields false and falls back.
+ *
+ * Delegating such a form in a lifted (zero-capture) body would still need the
+ * has_capture cut to see its free vars; has_capture conservatively rejects an
+ * un-scanned CT_LETRAW operand, so a delegated composite lands only where
+ * has_capture is not the gate (the main function body) -- exactly the safe set. */
+static bool safe_to_delegate(CpsB *b, const Expr *e) {
+    e = ascribe_peel(e);
+    if (!e) return false;
+    if (is_atomic(e)) return true;
+    if (is_delegatable_value(e)) return true;   /* capture-free fn value */
+    switch (e->kind) {
+        /* control operators: never delegatable (they thread a continuation). */
+        case EX_PERFORM: case EX_HANDLE: case EX_RESUME: case EX_DISCONTINUE:
+        case EX_RESET: case EX_SHIFT: case EX_SHIFT0:
+        case EX_CLONEABLE_RESET: case EX_CLONEABLE_SHIFT:
+        case EX_SERIAL_RESET: case EX_SERIAL_SHIFT:
+        case EX_ASYNC:
+            return false;
+        /* nested fn defs: call-graph boundaries, delegatable as values. */
+        case EX_FN_DEF: case EX_FN: case EX_CLOSURE:
+            return is_delegatable_value(e);
+        case EX_CALL: {
+            const Binding *fn = e->as.call_.fn_binding;
+            if (!fn) return false;                 /* indirect: unknown coloring */
+            if (callee_colored(b, fn)) return false;
+            if (e->as.call_.fn_expr && !safe_to_delegate(b, e->as.call_.fn_expr))
+                return false;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (!safe_to_delegate(b, e->as.call_.args[i])) return false;
+            return true;
+        }
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (!safe_to_delegate(b, e->as.builtin.args[i])) return false;
+            return true;
+        case EX_IF:
+            return safe_to_delegate(b, e->as.if_.cond)
+                && safe_to_delegate(b, e->as.if_.then_)
+                && (!e->as.if_.else_or_null || safe_to_delegate(b, e->as.if_.else_or_null));
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (!safe_to_delegate(b, e->as.do_.items[i])) return false;
+            return true;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (!safe_to_delegate(b, e->as.let_.bindings[i].init)) return false;
+            return safe_to_delegate(b, e->as.let_.body);
+        case EX_WHILE:
+            return safe_to_delegate(b, e->as.while_.cond)
+                && safe_to_delegate(b, e->as.while_.body);
+        case EX_MATCH:
+            if (!safe_to_delegate(b, e->as.match_.scrutinee)) return false;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (e->as.match_.arms[i].guard
+                    && !safe_to_delegate(b, e->as.match_.arms[i].guard)) return false;
+                if (!safe_to_delegate(b, e->as.match_.arms[i].body)) return false;
+            }
+            return true;
+        case EX_SET:
+            return safe_to_delegate(b, e->as.set_.value);
+        case EX_CAST:
+            return safe_to_delegate(b, e->as.cast_.expr);
+        case EX_DEREF:
+            return safe_to_delegate(b, e->as.deref_.expr);
+        case EX_GET_FIELD:
+            return safe_to_delegate(b, e->as.get_field_.struct_expr);
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                if (!safe_to_delegate(b, e->as.make_struct_.field_values[i])) return false;
+            return true;
+        case EX_DEFAULT_OF:
+            return true;
+        /* Owning-value ops (rc/of, rc/clone, rc/drop, rc/strong-count, rc->ptr)
+         * are control-op-free leaf ops the direct emitter already emits with the
+         * correct control-block / refcount / drop-glue discipline; delegating a
+         * form that contains one (e.g. `(make-struct S :field (rc/of x))`, a
+         * constructor call whose argument allocates) keeps the whole thing on the
+         * direct emitter -- which also resolves the monomorphized ctor name. */
+        case EX_RC_OF:    return safe_to_delegate(b, e->as.rc_of_.expr);
+        case EX_RC_CLONE: return safe_to_delegate(b, e->as.rc_clone_.expr);
+        case EX_RC_DROP:  return safe_to_delegate(b, e->as.rc_drop_.expr);
+        case EX_RC_COUNT: return safe_to_delegate(b, e->as.rc_count_.expr);
+        case EX_RC_PTR:   return safe_to_delegate(b, e->as.rc_ptr_.expr);
+        default:
+            return false;   /* conservative: unrecognized form -> not delegatable */
+    }
+}
+
+/* Every argument of a call is control-op-free and colored-call-free, so the
+ * WHOLE call can be handed to the direct emitter (which emits the args inline and
+ * resolves the monomorphized callee name -- constructors, specialized fns).  This
+ * is a superset of call_args_atomic: it also delegates a call whose argument is a
+ * non-atomic-but-delegatable form (e.g. `(rc/of x)`, a nested make-struct), which
+ * would otherwise be atomized into a CT_LETCALL that mis-names the callee. */
+static bool call_args_delegatable(CpsB *b, const Expr *e) {
+    for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+        if (!safe_to_delegate(b, e->as.call_.args[i])) return false;
+    return true;
+}
+
 static CAtom atomize(CpsB *b, Expr *e, Pending *p) {
     if (is_atomic(e)) return atom_of(e);
-    CVar x = fresh_cvar(b, e ? e->type.kind : TY_UNKNOWN);
+    CVar x = fresh_cvar(b, e ? &e->type : NULL);
     if (p->n < 32) { p->items[p->n].expr = e; p->items[p->n].x = x; p->n++; }
     return atom_cvar(x);
 }
@@ -141,9 +383,99 @@ static const char *builtin_name(const Expr *e) {
     return "?";
 }
 
+/* The value a `(shift k_fn body)` delivers to its prompt is `k_fn(body)` (the
+ * abortive-shift semantics: the receiver is applied to the body value, and the
+ * result becomes the enclosing reset's value; see eval_abortive_shift).  Model
+ * that by synthesizing the application `(k_fn body)` and CPS-translating it to
+ * the prompt continuation.  A receiver that is not a directly-callable binding
+ * leaves fn_binding NULL, so cps_tail yields CT_UNSUPPORTED and the backend
+ * falls back cleanly. */
+/* A shift / shift0 body: apply the receiver `recv` (the (fn [k] ...) that gets
+ * the captured continuation) to the delimited body expression `arg`, delivered
+ * to the prompt.  Shared by both the plain and shift0 lowerings (which differ
+ * only in the emitted dk_shift vs dk_shift0). */
+static CTerm *cps_shift_body_kf(CpsB *b, Expr *recv, Expr *arg, Type *ty) {
+    Expr *call = arena_alloc(b->a, sizeof(Expr));
+    memset(call, 0, sizeof(Expr));
+    call->kind = EX_CALL;
+    call->type = *ty;
+    call->as.call_.fn_binding =
+        (recv && recv->kind == EX_VAR) ? recv->as.var.binding : NULL;
+    call->as.call_.fn_expr = recv;
+    call->as.call_.args = arena_alloc(b->a, sizeof(Expr *));
+    call->as.call_.args[0] = arg;
+    call->as.call_.n_args = 1;
+    return cps_tail(b, call, kont_prompt(ty->kind));
+}
+
+static CTerm *cps_shift_body(CpsB *b, Expr *e) {
+    return cps_shift_body_kf(b, e->as.shift_.k_fn, e->as.shift_.body, &e->type);
+}
+
+/* ---- algebraic effects: handle / perform / resume --------------------- *
+ * Lowered to CT_HANDLE / CT_PERFORM / CT_RESUME.  `cont` is the continuation
+ * term (an APPCONT to the enclosing kont in tail position, or the `rest` term in
+ * bind position).  perform/resume atomize their sub-expressions into `p`. */
+
+static CTerm *build_handle(CpsB *b, Expr *e, CVar x, CTerm *cont) {
+    HandleExpr *h = e->as.handle_.handle;
+    if (!h || h->n_cases < 1) {
+        CTerm *u = new_term(b, CT_UNSUPPORTED);
+        u->as.unsupported.why = "handle: no cases";
+        return u;
+    }
+    CTerm *t = new_term(b, CT_HANDLE);
+    t->as.handle.x = x;
+    t->as.handle.delim = cps_tail(b, h->body, kont_prompt(e->type.kind));
+    t->as.handle.n_cases = h->n_cases;
+    CHandleCase *cs = arena_alloc(b->a, h->n_cases * sizeof(CHandleCase));
+    for (uint32_t ci = 0; ci < h->n_cases; ci++) {
+        HandleCase *c = &h->cases[ci];
+        cs[ci].effect = c->effect_name;
+        cs[ci].n_params = c->n_params;
+        cs[ci].params = NULL;
+        if (c->n_params) {
+            const Binding **ps = arena_alloc(b->a, c->n_params * sizeof(const Binding *));
+            for (uint8_t i = 0; i < c->n_params; i++) ps[i] = c->param_bindings[i];
+            cs[ci].params = ps;
+        }
+        cs[ci].k = c->k_binding;
+        /* The case clause delivers its value by return (KK_PROMPT), which
+         * dk_perform routes to the handler's outer continuation. */
+        cs[ci].case_body = cps_tail(b, c->body, kont_prompt(c->body ? c->body->type.kind : TY_INT));
+    }
+    t->as.handle.cases = cs;
+    t->as.handle.body = cont;
+    return t;
+}
+
+static CTerm *build_perform(CpsB *b, Expr *e, CVar x, CTerm *cont, Pending *p) {
+    PerformExpr *pf = e->as.perform_.perform;
+    CTerm *t = new_term(b, CT_PERFORM);
+    t->as.perform.effect = pf->effect_name;
+    t->as.perform.n = pf->n_args;
+    CAtom *args = arena_alloc(b->a, (pf->n_args ? pf->n_args : 1) * sizeof(CAtom));
+    for (uint8_t i = 0; i < pf->n_args; i++) args[i] = atomize(b, pf->args[i], p);
+    t->as.perform.args = args;
+    t->as.perform.x = x;
+    t->as.perform.body = cont;
+    return t;
+}
+
+static CTerm *build_resume(CpsB *b, Expr *e, CVar x, CTerm *cont, Pending *p) {
+    ResumeExpr *r = e->as.resume_.resume;
+    CTerm *t = new_term(b, CT_RESUME);
+    t->as.resume.k = atomize(b, r->k, p);
+    t->as.resume.v = atomize(b, r->value, p);
+    t->as.resume.x = x;
+    t->as.resume.body = cont;
+    return t;
+}
+
 /* ---- cps_tail: deliver e's value to `kont` ---------------------------- */
 
 static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
+    e = (Expr *)ascribe_peel(e);
     if (!e) {
         CTerm *t = new_term(b, CT_UNSUPPORTED);
         t->as.unsupported.why = "null";
@@ -155,17 +487,25 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
         t->as.appcont.v = atom_of(e);
         return t;
     }
+    if (is_delegatable_owning(e) || is_delegatable_struct(e) || is_delegatable_value(e)) {
+        /* bind the delegated op's result, then deliver it to the continuation. */
+        CVar x = fresh_cvar(b, &e->type);
+        CTerm *ac = new_term(b, CT_APPCONT);
+        ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+        return build_letraw(b, e, x, ac);
+    }
     switch (e->kind) {
         case EX_BUILTIN: {
             Pending p = {0};
             CAtom *args = arena_alloc(b->a, (e->as.builtin.n ? e->as.builtin.n : 1) * sizeof(CAtom));
             for (uint32_t i = 0; i < e->as.builtin.n; i++)
                 args[i] = atomize(b, e->as.builtin.args[i], &p);
-            CVar x = fresh_cvar(b, e->type.kind);
+            CVar x = fresh_cvar(b, &e->type);
             CTerm *ac = new_term(b, CT_APPCONT);
             ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
             CTerm *t = new_term(b, CT_LETPRIM);
             t->as.letprim.x = x; t->as.letprim.op = builtin_name(e);
+            t->as.letprim.spec = e->as.builtin.spec;
             t->as.letprim.args = args; t->as.letprim.n = e->as.builtin.n;
             t->as.letprim.body = ac;
             return fold_pending(b, &p, t);
@@ -173,9 +513,32 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
         case EX_CALL: {
             const Binding *fn = e->as.call_.fn_binding;
             if (!fn) {
-                CTerm *t = new_term(b, CT_UNSUPPORTED);
-                t->as.unsupported.why = "indirect call";
-                return t;
+                /* Indirect call: the fn VALUE is the callee's direct entry point
+                 * (a colored fn's value points at its direct wrapper, which
+                 * installs its own root prompt), so an indirect call never
+                 * participates in the caller's delimited-control chain -- its
+                 * behaviour is identical whether the surrounding code is CPS- or
+                 * direct-emitted.  Delegate it to the direct emitter with atomic
+                 * args, exactly as an uncolored direct call is delegated. */
+                if (!call_args_atomic(e)) {
+                    CTerm *t = new_term(b, CT_UNSUPPORTED);
+                    t->as.unsupported.why = "indirect call (non-atomic args)";
+                    return t;
+                }
+                CVar x = fresh_cvar(b, &e->type);
+                CTerm *ac = new_term(b, CT_APPCONT);
+                ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+                return build_letraw(b, e, x, ac);
+            }
+            /* A cps->direct call to an uncolored callee with atomic args is
+             * delegated to the direct emitter, which resolves the monomorphized
+             * callee name (constructors, specialized fns) the CPS backend's own
+             * naming does not.  Colored callees still thread the continuation. */
+            if (!callee_colored(b, fn) && call_args_delegatable(b, e)) {
+                CVar x = fresh_cvar(b, &e->type);
+                CTerm *ac = new_term(b, CT_APPCONT);
+                ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+                return build_letraw(b, e, x, ac);
             }
             Pending p = {0};
             uint32_t n = e->as.call_.n_args;
@@ -188,7 +551,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                 t->as.tailcall.n = n; t->as.tailcall.kont = kont;
                 return fold_pending(b, &p, t);
             } else {
-                CVar x = fresh_cvar(b, e->type.kind);
+                CVar x = fresh_cvar(b, &e->type);
                 CTerm *ac = new_term(b, CT_APPCONT);
                 ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
                 CTerm *t = new_term(b, CT_LETCALL);
@@ -220,7 +583,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             if (n == 0) return cps_tail(b, NULL, kont);
             CTerm *rest = cps_tail(b, e->as.do_.items[n - 1], kont);
             for (int i = (int)n - 2; i >= 0; i--) {
-                CVar discard = fresh_cvar(b, e->as.do_.items[i]->type.kind);
+                CVar discard = fresh_cvar(b, &e->as.do_.items[i]->type);
                 rest = cps_bind(b, e->as.do_.items[i], discard, rest);
             }
             return rest;
@@ -228,7 +591,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
         case EX_RETURN:
             return cps_tail(b, e->as.return_.value, b->retk);
         case EX_RESET: {
-            CVar x = fresh_cvar(b, e->type.kind);
+            CVar x = fresh_cvar(b, &e->type);
             CTerm *t = new_term(b, CT_RESET);
             t->as.reset.x = x;
             t->as.reset.delim = cps_tail(b, e->as.reset_.body, kont_prompt(e->type.kind));
@@ -238,14 +601,54 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             return t;
         }
         case EX_SHIFT: {
-            CVar k = fresh_cvar(b, e->type.kind);
+            CVar k = fresh_cvar(b, &e->type);
             k.name = "k'";
             CTerm *t = new_term(b, CT_SHIFT);
             t->as.shift.k = k;
-            t->as.shift.body = cps_tail(b, e->as.shift_.body, kont_prompt(e->type.kind));
+            t->as.shift.body = cps_shift_body(b, e);
             return t;
         }
+        case EX_SHIFT0: {
+            CVar k = fresh_cvar(b, &e->type);
+            k.name = "k'";
+            CTerm *t = new_term(b, CT_SHIFT);
+            t->as.shift.k = k;
+            t->as.shift.shift0 = true;
+            t->as.shift.body = cps_shift_body_kf(b, e->as.shift0_.k_fn,
+                                                 e->as.shift0_.body, &e->type);
+            return t;
+        }
+        case EX_HANDLE: {
+            CVar x = fresh_cvar(b, &e->type);
+            CTerm *ac = new_term(b, CT_APPCONT);
+            ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            return build_handle(b, e, x, ac);
+        }
+        case EX_PERFORM: {
+            Pending p = {0};
+            CVar x = fresh_cvar(b, &e->type);
+            CTerm *ac = new_term(b, CT_APPCONT);
+            ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            CTerm *core = build_perform(b, e, x, ac, &p);
+            return fold_pending(b, &p, core);
+        }
+        case EX_RESUME: {
+            Pending p = {0};
+            CVar x = fresh_cvar(b, &e->type);
+            CTerm *ac = new_term(b, CT_APPCONT);
+            ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            CTerm *core = build_resume(b, e, x, ac, &p);
+            return fold_pending(b, &p, core);
+        }
         default: {
+            /* N6.1: a control-op-free, colored-call-free form -- emit it wholesale
+             * via the direct emitter, then deliver its result to the continuation. */
+            if (safe_to_delegate(b, e)) {
+                CVar x = fresh_cvar(b, &e->type);
+                CTerm *ac = new_term(b, CT_APPCONT);
+                ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+                return build_letraw(b, e, x, ac);
+            }
             CTerm *t = new_term(b, CT_UNSUPPORTED);
             t->as.unsupported.why = "form not in CPS2 subset";
             return t;
@@ -256,12 +659,15 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
 /* ---- cps_bind: bind e's value to x, then run rest --------------------- */
 
 static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
+    e = (Expr *)ascribe_peel(e);
     if (!e) return rest;
     if (is_atomic(e)) {
         CTerm *t = new_term(b, CT_LETVAL);
         t->as.letval.x = x; t->as.letval.v = atom_of(e); t->as.letval.body = rest;
         return t;
     }
+    if (is_delegatable_owning(e) || is_delegatable_struct(e) || is_delegatable_value(e))
+        return build_letraw(b, e, x, rest);
     switch (e->kind) {
         case EX_BUILTIN: {
             Pending p = {0};
@@ -270,6 +676,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                 args[i] = atomize(b, e->as.builtin.args[i], &p);
             CTerm *t = new_term(b, CT_LETPRIM);
             t->as.letprim.x = x; t->as.letprim.op = builtin_name(e);
+            t->as.letprim.spec = e->as.builtin.spec;
             t->as.letprim.args = args; t->as.letprim.n = e->as.builtin.n;
             t->as.letprim.body = rest;
             return fold_pending(b, &p, t);
@@ -277,17 +684,27 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         case EX_CALL: {
             const Binding *fn = e->as.call_.fn_binding;
             if (!fn) {
-                CTerm *t = new_term(b, CT_UNSUPPORTED);
-                t->as.unsupported.why = "indirect call";
-                return t;
+                /* Indirect call: the fn value is the callee's direct entry, which
+                 * never joins the caller's delimited-control chain -- delegate to
+                 * the direct emitter with atomic args (see cps_tail). */
+                if (!call_args_atomic(e)) {
+                    CTerm *t = new_term(b, CT_UNSUPPORTED);
+                    t->as.unsupported.why = "indirect call (non-atomic args)";
+                    return t;
+                }
+                return build_letraw(b, e, x, rest);
             }
+            /* cps->direct call to an uncolored callee with atomic args: delegate
+             * to the direct emitter (monomorphized callee names). */
+            if (!callee_colored(b, fn) && call_args_delegatable(b, e))
+                return build_letraw(b, e, x, rest);
             Pending p = {0};
             uint32_t n = e->as.call_.n_args;
             CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
             for (uint32_t i = 0; i < n; i++)
                 args[i] = atomize(b, e->as.call_.args[i], &p);
             if (callee_colored(b, fn)) {
-                CVar j = fresh_cvar(b, x.ty);
+                CVar j = fresh_cvar(b, x.type);
                 j.name = arena_strdup(b->a, "j", 1);
                 CTerm *call = new_term(b, CT_TAILCALL);
                 call->as.tailcall.fn = fn; call->as.tailcall.args = args;
@@ -306,7 +723,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         case EX_IF: {
             Pending p = {0};
             CAtom c = atomize(b, e->as.if_.cond, &p);
-            CVar j = fresh_cvar(b, x.ty);
+            CVar j = fresh_cvar(b, x.type);
             j.name = arena_strdup(b->a, "j", 1);
             CTerm *body = new_term(b, CT_IF);
             body->as.if_.cond = c;
@@ -331,7 +748,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             if (n == 0) { return cps_bind(b, NULL, x, rest); }
             CTerm *r = cps_bind(b, e->as.do_.items[n - 1], x, rest);
             for (int i = (int)n - 2; i >= 0; i--) {
-                CVar discard = fresh_cvar(b, e->as.do_.items[i]->type.kind);
+                CVar discard = fresh_cvar(b, &e->as.do_.items[i]->type);
                 r = cps_bind(b, e->as.do_.items[i], discard, r);
             }
             return r;
@@ -346,14 +763,40 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             return t;
         }
         case EX_SHIFT: {
-            CVar k = fresh_cvar(b, e->type.kind);
+            CVar k = fresh_cvar(b, &e->type);
             k.name = "k'";
             CTerm *t = new_term(b, CT_SHIFT);
             t->as.shift.k = k;
-            t->as.shift.body = cps_tail(b, e->as.shift_.body, kont_prompt(e->type.kind));
+            t->as.shift.body = cps_shift_body(b, e);
             return t;
         }
+        case EX_SHIFT0: {
+            CVar k = fresh_cvar(b, &e->type);
+            k.name = "k'";
+            CTerm *t = new_term(b, CT_SHIFT);
+            t->as.shift.k = k;
+            t->as.shift.shift0 = true;
+            t->as.shift.body = cps_shift_body_kf(b, e->as.shift0_.k_fn,
+                                                 e->as.shift0_.body, &e->type);
+            return t;
+        }
+        case EX_HANDLE:
+            return build_handle(b, e, x, rest);
+        case EX_PERFORM: {
+            Pending p = {0};
+            CTerm *core = build_perform(b, e, x, rest, &p);
+            return fold_pending(b, &p, core);
+        }
+        case EX_RESUME: {
+            Pending p = {0};
+            CTerm *core = build_resume(b, e, x, rest, &p);
+            return fold_pending(b, &p, core);
+        }
         default: {
+            /* N6.1: delegate a control-op-free, colored-call-free form to the
+             * direct emitter (binds x, continues rest). */
+            if (safe_to_delegate(b, e))
+                return build_letraw(b, e, x, rest);
             CTerm *t = new_term(b, CT_UNSUPPORTED);
             t->as.unsupported.why = "form not in CPS2 subset";
             return t;
@@ -393,6 +836,8 @@ static void print_atom(const CAtom *a, FILE *out) {
         case CA_INT:  fprintf(out, "%lld", (long long)a->i); break;
         case CA_BOOL: fprintf(out, "%s", a->b ? "true" : "false"); break;
         case CA_UNIT: fprintf(out, "()"); break;
+        case CA_STR:  fprintf(out, "\"%.*s\"", (int)a->str.len, a->str.p ? a->str.p : ""); break;
+        case CA_FLOAT: fprintf(out, "%g", a->f); break;
         default:      fprintf(out, "<val>"); break;
     }
 }
@@ -461,8 +906,45 @@ void cps_ir_print(const CTerm *t, FILE *out, int indent) {
             cps_ir_print(t->as.reset.body, out, indent);
             break;
         case CT_SHIFT:
-            fprintf(out, "shift %s.\n", t->as.shift.k.name);
+            fprintf(out, "%s %s.\n", t->as.shift.shift0 ? "shift0" : "shift",
+                    t->as.shift.k.name);
             cps_ir_print(t->as.shift.body, out, indent + 1);
+            break;
+        case CT_HANDLE:
+            fprintf(out, "handle %s = {\n", t->as.handle.x.name);
+            cps_ir_print(t->as.handle.delim, out, indent + 1);
+            print_indent(out, indent); fputs("}\n", out);
+            for (uint32_t ci = 0; ci < t->as.handle.n_cases; ci++) {
+                const CHandleCase *c = &t->as.handle.cases[ci];
+                print_indent(out, indent);
+                fprintf(out, "with %s(", c->effect ? c->effect->name : "?");
+                for (uint32_t i = 0; i < c->n_params; i++) {
+                    if (i) fputc(' ', out);
+                    fputs(c->params[i] && c->params[i]->name ? c->params[i]->name->name : "_", out);
+                }
+                fprintf(out, ") %s ->\n", c->k && c->k->name ? c->k->name->name : "k");
+                cps_ir_print(c->case_body, out, indent + 1);
+            }
+            print_indent(out, indent); fputs("in\n", out);
+            cps_ir_print(t->as.handle.body, out, indent);
+            break;
+        case CT_PERFORM:
+            fprintf(out, "let %s = perform %s(", t->as.perform.x.name,
+                    t->as.perform.effect ? t->as.perform.effect->name : "?");
+            print_atoms(t->as.perform.args, t->as.perform.n, out); fputs(")\n", out);
+            cps_ir_print(t->as.perform.body, out, indent);
+            break;
+        case CT_RESUME:
+            fprintf(out, "let %s = resume ", t->as.resume.x.name);
+            print_atom(&t->as.resume.k, out); fputc(' ', out);
+            print_atom(&t->as.resume.v, out); fputs("\n", out);
+            cps_ir_print(t->as.resume.body, out, indent);
+            break;
+        case CT_LETRAW:
+            fprintf(out, "let %s = <owning-op %s>  ; direct-emitted\n",
+                    t->as.letraw.x.name,
+                    t->as.letraw.e && owning_operand(t->as.letraw.e) ? "rc" : "?");
+            cps_ir_print(t->as.letraw.body, out, indent);
             break;
         case CT_UNSUPPORTED:
             fprintf(out, "<unsupported: %s>\n", t->as.unsupported.why ? t->as.unsupported.why : "?");

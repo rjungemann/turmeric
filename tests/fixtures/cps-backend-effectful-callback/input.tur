@@ -1,0 +1,32 @@
+;; CPS-IR-to-C backend, N6: a colored higher-order function that INVOKES an
+;; effectful callback, with real work in its continuation AFTER the call.  Built
+;; with --enable=cps-backend.
+;;
+;; `apply-cb` takes `f : (fn [] #fx{Ask} int)` -- a callback that performs Ask --
+;; and computes `{(f) * 2} + base`.  The call `(f)` is a delegated indirect call
+;; (a plain fiber call); Ask propagates through the fiber machine's DYNAMIC global
+;; handler chain to `run`'s handler, with no DK continuation threaded.  That is
+;; sound: the effect never touches the DK machine, and the whole-program taint
+;; keeps Ask's handler co-fiber (the fiber callback body performs Ask, tainting
+;; it).
+;;
+;; The point of this fixture: apply-cb is CPS-emitted (DK), and its continuation
+;; `{... * 2} + base` runs AFTER the effectful call returns -- so it exercises the
+;; DK function's continuation surviving the fiber suspend/resume (the frame lives
+;; on the fiber's C stack).  A miscompile there would corrupt `base` or the
+;; multiply.
+;;
+;; direct-vs-CPS equal: Ask resumes with 10, so (10 * 2) + 7 = 27.
+
+(defeffect Ask [] :int)
+
+(defn apply-cb [f : (fn [] #fx{Ask} int) base : int] #fx{Ask} : int
+  {{(f) * 2} + base})
+
+(defn run [] : int
+  (handle (apply-cb (fn [] (perform (Ask))) 7)
+    (Ask [] k) (resume k 10)))
+
+(defn main [] : int
+  (println (run))
+  0)
