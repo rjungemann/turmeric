@@ -4,6 +4,27 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.27.5] -- 2026-07-09
+
+### Added
+
+- **Show instances for typed collections**: `Vec`, `Set`, and `Map`
+  now have `Show` instances (in a new opt-in
+  `stdlib/typeclass-show.tur`), and the REPL renders bare collection
+  results as `[1 2 3]` / `#set{...}` / `#map{...}` instead of raw
+  handles (#648).
+- **Content-keyed `Set[A]`**: `Set`'s element API is generalized off
+  `:int` and dispatches `Hash`/`MapKey` on the concrete element type,
+  so `Set[cstr]`, `Set[Sym]`, and content-equal elements at distinct
+  addresses now behave correctly. `Set[int]` output is byte-for-byte
+  unchanged.
+
+### Docs
+
+- New plans for container Eq/Show element dispatch, boxed multi-word
+  elements, and an owned `String` type; new reports on the WASM REPL
+  Show-preload gap and the web REPL inline-C native gap.
+
 ## [0.27.4] -- 2026-07-09
 
 ### Added

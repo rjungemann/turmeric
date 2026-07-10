@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.27.4` -- Legible character literals (`#\a`, `#\space`, `#\u41`) now read as their Unicode code-point ints.
+**Latest release:** `v0.27.5` -- `Show` instances for `Vec`/`Set`/`Map` plus content-keyed `Set[A]` (`Set[cstr]`/`Set[Sym]` now work).
 
 ## What
 
