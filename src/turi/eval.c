@@ -4860,6 +4860,25 @@ static bool unary_operand(const Expr *e, const Expr **operand) {
     }
 }
 
+/* The concrete TypeKind an EX_ASCRIBE / EX_REINTERPRET should re-tag to.
+ * Normally this is just `ty->kind`, but inside a generic body an ascription to
+ * a bare type variable `A` (`(:: e A)`) reaches the interpreter with
+ * `ty->kind == TY_TYVAR` -- the tree-walker never monomorphizes, so A is still
+ * abstract in the elaborated AST.  Resolve it through the frame's tyvar
+ * bindings (pinned per call site by frame_record_abi /
+ * frame_bind_instance_constraint_tyvars) so the primitive re-tag fires on the
+ * grounded type, mirroring the compiled path's per-specialization re-dispatch.
+ * An unbound or still-abstract tyvar keeps TY_TYVAR (the switch's transparent
+ * default). */
+static TypeKind ascribe_effective_kind(EvalFrame *frame, const Type *ty) {
+    if (ty->kind == TY_TYVAR && ty->as.tyvar_.name) {
+        Type rt;
+        if (frame_lookup_tyvar(frame, ty->as.tyvar_.name, &rt) && rt.kind != TY_TYVAR)
+            return rt.kind;
+    }
+    return ty->kind;
+}
+
 /* Apply the post-operand logic of a single-operand form whose inner expression
  * has already evaluated to `v` (assumed non-signalled; callers check
  * error/returning/throwing first).  Transparent shims fall through to `return
@@ -4917,15 +4936,30 @@ static TuriValue eval_unary_post(TuriEnv *env, EvalFrame *frame,
         default:
             return v;
         }
-    case EX_REINTERPRET:
-        if ((e->type.kind == TY_FLOAT || e->type.kind == TY_FLOAT64) &&
-            v.tag == TURI_INT) {
+    case EX_REINTERPRET: {
+        /* A `::`/reinterpret to a bare tyvar `A` inside a generic body carries no
+         * concrete kind in the interpreter (no monomorphization).  Ground it
+         * through the frame's tyvar bindings so the int-carrier->float re-tag
+         * still fires when A resolves to a concrete float. */
+        TypeKind rk = ascribe_effective_kind(frame, &e->type);
+        if ((rk == TY_FLOAT || rk == TY_FLOAT64) && v.tag == TURI_INT) {
             union { int64_t i; double d; } u; u.i = v.as_int;
             return turi_float(u.d);
         }
         return v;
+    }
     case EX_ASCRIBE:
-        switch (e->type.kind) {
+        /* `(:: e A)` inside a generic body: the tree-walker does not
+         * monomorphize, so A is still a TY_TYVAR in the elaborated AST and the
+         * primitive re-tag below would be skipped (default: transparent),
+         * leaving the value on its int64 carrier.  Ground A through the frame's
+         * tyvar bindings (pinned per call by frame_record_abi /
+         * frame_bind_instance_constraint_tyvars) so a concrete element type
+         * recovered at the call site re-tags the carrier, matching the compiled
+         * path's monomorphized re-dispatch.  This is what lets Show[Set] /
+         * Show[Map] over cstr keys render the string rather than the raw HAMT
+         * carrier word (docs/reported/interp-hamt-key-show-dispatches-on-carrier). */
+        switch (ascribe_effective_kind(frame, &e->type)) {
         case TY_BOOL:
             if (v.tag == TURI_INT) return turi_bool(v.as_int != 0);
             return v;
