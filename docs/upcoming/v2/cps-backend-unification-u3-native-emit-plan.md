@@ -112,9 +112,36 @@ via `collect_free_vars` -- the node's own `let` bindings excluded -- so a
 cloneable node inside a lifted continuation captures correctly (the same complete
 analysis `CT_LETRAW` uses).
 
-Remaining in step 5: closure/colored receivers, and non-arithmetic `let` shapes
-(the `do`-prelude and call-frame variants the direct `collect_ctx` also handles).
-Steps 6-7 (multi-shot classification axis + retire delegation) follow.
+**Receivers -- investigated; nothing further to natively port.** The receiver of
+a `(cloneable-shift receiver val)` is called through the indirect fn-pointer form
+`((int64_t(*)(int64_t))(intptr_t)recv)(cont)`. Empirically, across both backends:
+
+- **Named top-level fn receiver** (`k-id`) -- native (the original slice).
+- **Capture-free lambda receiver** (`(fn [k] k)`) -- **already native**: the
+  lambda captures nothing, so it is lifted to a top-level fn and the shift calls
+  it through the same indirect form. Oracle `cps-oracle-cloneable-native-lambda-recv`.
+- **Fat-closure receiver** (a lambda capturing a scalar, `(fn [k] (+ k bump))`) --
+  **unsupported by the direct emitter itself** (it passes the closure env where an
+  `int64_t` is expected -> C type error / miscompile). Out of native scope; the
+  CT-IR gate rejects it (`closure_fn_binding`) and it stays on the delegation path,
+  which fails identically -- `direct == cps` preserved, no regression.
+- **Colored receiver** (a receiver fn that itself shifts) -- **unsupported by the
+  direct emitter itself** (it calls the receiver without threading a continuation
+  -> segfault). Out of native scope for the same reason; the gate rejects it
+  (`callee_colored`).
+- **Local-var / indirect receiver** (`(let [r k-id] ... (cloneable-shift r 0))`)
+  -- blocked *upstream* of the receiver gate: the fn-valued `let` binding makes
+  the CT-IR translation revert the whole function to direct emission (the function
+  never reaches the colored CT-IR path), so relaxing the receiver gate alone has
+  no effect. A separate future item (fn-valued `let` bindings in CT-IR), not a
+  cloneable-receiver concern.
+
+Net: the receiver shapes the direct backend supports already emit natively; the
+shapes it does not are correctly delegated. No receiver change is warranted.
+
+Remaining in step 5: non-arithmetic `let` shapes (the `do`-prelude and call-frame
+variants the direct `collect_ctx` also handles). Steps 6-7 (multi-shot
+classification axis + retire delegation) follow.
 
 1. **CT nodes.** Add `CT_CLONEABLE_SHIFT` (receiver + captured-cont, distinct
    from abortive `CT_SHIFT` -- the receiver takes a *handle*, not the value) and

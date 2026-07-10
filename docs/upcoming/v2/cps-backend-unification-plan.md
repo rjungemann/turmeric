@@ -317,11 +317,19 @@ fallback until the final phase removes it.
   mutually exclusive per lowering (the mix falls through to the still-correct
   delegation).
 
-  *Remaining (the risky core, narrowing):* closure/colored receivers and the
-  non-arithmetic `let` shapes (`do`-prelude / call frames) the direct
-  `collect_ctx` also handles, each behind its own oracle (the delegation fallback
-  still catches everything not yet native), plus the multi-shot classification
-  axis. Mapped in the native-emit note.
+  **Receivers investigated -- nothing to port.** A capture-free lambda receiver
+  (`(fn [k] k)`) already emits natively (it lifts to a top-level fn; oracle
+  `cps-oracle-cloneable-native-lambda-recv`). Fat-closure and colored receivers
+  are unsupported by the *direct* emitter too (miscompile / segfault), so they
+  stay on the delegation path with `direct == cps` preserved. Local-var receivers
+  are blocked upstream (an fn-valued `let` binding reverts the function to direct
+  emission), a separate future item -- not a cloneable-receiver concern. Detail in
+  the native-emit note.
+
+  *Remaining (the risky core, narrowing):* the non-arithmetic `let` shapes
+  (`do`-prelude / call frames) the direct `collect_ctx` also handles, each behind
+  its own oracle (the delegation fallback still catches everything not yet native),
+  plus the multi-shot classification axis. Mapped in the native-emit note.
 - **U4 -- Serial.** Port `emit_cps_serial_runtime_prelude` + serial placement.
 - **U5 -- Async / await.** Port the scheduler wiring on top of the now-unified
   cloneable/serial base.
