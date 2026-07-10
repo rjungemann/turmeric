@@ -2,7 +2,7 @@
 title: "U7 step 2 -- the base reset/shift native gap, mapped and sliced"
 status: in-progress
 parent: cps-backend-unification-u7-readiness-plan.md
-description: An empirically-grounded map of which base reset/shift shapes the CT-IR backend already emits natively vs still evicts to emit_cps.c's emit_cps_reset, correcting the readiness plan's stale "setjmp/longjmp escape path" framing. The escape/branch shapes are already native (U1); the real residual is NESTED reset. First slice (nested reset via delim_ok CT_RESET admission) is landed; the remaining sub-gap is operand-position multiple non-tail nested resets that need a heap-reified join.
+description: An empirically-grounded map of which base reset/shift shapes the CT-IR backend already emits natively vs still evicts to emit_cps.c's emit_cps_reset, correcting the readiness plan's stale "setjmp/longjmp escape path" framing. The escape/branch shapes are already native (U1); the residual was NESTED reset. Two slices landed: (1) nested reset via delim_ok CT_RESET admission, (2) SIBLING nested resets via collect_caps_rec walking CT_RESET/CT_SHIFT -- which corrected an earlier wrong guess that the sibling case needed a heap-reified join. The base reset/shift-specific gap is now closed.
 ---
 
 # U7 step 2 -- base reset/shift, what actually still evicts
@@ -66,32 +66,46 @@ Now native, verified `direct == cps` byte-for-byte on output:
 
 Oracle pair: `tests/fixtures/cps-oracle-reset-nested{,-cps}`.
 
-## What still evicts (the next sub-gap): operand-position multi-join
+## Slice 2 (landed): SIBLING nested resets
 
-A nesting where **two or more nested resets are non-tail operands** of the same
-context still evicts -- e.g.
+The doubly-nested shape -- **two or more nested resets as non-tail operands** of
+the same context, so the second lands in the first's *continuation* -- e.g.
 
 ```
 (reset (+ (reset (shift (fn [v] v) 3))
           (reset (shift (fn [v] v) 4))))
 ```
 
-The first inner reset's value must be held live while the second inner reset
-runs, then both are combined. That is a **heap-reified join** (`needs_heap_join`
-true), which is the same C1 boundary that evicts any non-tail cps->cps call --
-not specific to reset. Closing it is the general "heap join reification" work,
-not a reset/shift-specific slice; it is correctly left evicting (the direct
-fallback keeps `direct == cps`). A single non-tail nested reset combined with a
-*pure* context (`(reset (+ 1 (reset (shift ...))))`) is fine and native -- only
-*multiple* non-tail delimited operands trip the join.
+still evicted after slice 1. **The reason was NOT a heap-reified join** (an
+earlier guess in this note, empirically disproved with `TUR_CPS_WHY`
+instrumentation): the eviction was `!term_core_ok`, tripped by `collect_caps`.
+In the CPS IR this shape is a nested `CT_RESET` (`reset t1`) whose *continuation*
+holds another nested `CT_RESET` (`reset t2`) before the `(+ t1 t2)` delivery.
+`collect_caps_rec` -- which enumerates the scalar captures a lifted RESET_CONT
+helper carries in its env -- had no `CT_RESET`/`CT_SHIFT` arm and hit its
+conservative `default: cs->ok = false`, so the whole enclosing function evicted.
+
+Fix: `collect_caps_rec` grows `CT_RESET` (walk `delim` + `body`, binding the
+reset value) and `CT_SHIFT` (walk the shift body) arms. `emit_reset` already
+nests prompts correctly and lifts each nested reset's continuation as its own
+RESET_CONT helper, so **no emitter change was needed** -- only the capture
+enumerator was over-conservative. `needs_heap_join` still walks these nestings,
+so a nesting that genuinely needs a heap-reified join (e.g. a non-tail cps->cps
+*call* threaded through the continuation) is still correctly evicted by the
+fixpoint -- that remains the shared C1 boundary, unrelated to reset/shift.
+
+Now native and `direct == cps` verified: sibling pairs and triples, sibling
+arithmetic contexts, a capture threaded *between* two sibling resets, a param
+capture into an inner shift value, and a single nested reset wrapping a sibling
+pair. Oracle pair: `tests/fixtures/cps-oracle-reset-nested-siblings{,-cps}`.
 
 ## Sequencing note
 
-With nested reset admitted, the residual base reset/shift eviction is the
-generic heap-join case, shared with the rest of the C1 subset. So the base
-reset/shift row of U7's table is effectively closed *except* for whatever the
-general heap-join reification work later admits -- there is no reset-specific
-tail left. `emit_cps_reset`'s remaining live callers are then the heap-join
-nestings (until that lands) and any base shape a future coloring change routes
-through it; its deletion (U7 step 3) still waits on the heap-join slice, but the
-reset/shift-specific gap named in the readiness table is closed.
+With both slices in, the base reset/shift-specific gap is **closed**: every
+delimited nesting of base reset/shift lowers natively; the only nestings that
+still evict do so via the *generic* `needs_heap_join` boundary (a non-tail
+cps->cps call reified onto the heap chain), which is shared with the whole C1
+subset and is not reset/shift-specific. `emit_cps_reset`'s remaining live
+callers are those generic heap-join shapes (until that separate slice lands) and
+any base shape a future coloring change routes through it; its deletion (U7
+step 3) waits on the heap-join work, not on anything reset-specific.

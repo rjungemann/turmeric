@@ -1,0 +1,36 @@
+;; U7 reset/shift native gap (cps-backend-unification): SIBLING nested resets.
+;; Two-or-more nested resets that are non-tail OPERANDS of the same context --
+;; the second lands in the first's continuation, e.g.
+;;   (reset (+ (reset (shift ...)) (reset (shift ...))))
+;; A single non-tail nested reset was already native; a sibling pair evicted --
+;; not for a heap-reified join (the earlier guess) but because collect_caps_rec
+;; bailed (cs.ok=false) the moment a reset's lifted continuation itself held
+;; another nested reset/shift.  collect_caps_rec now walks CT_RESET/CT_SHIFT, so
+;; the captures the nested RESET_CONT helpers ride are enumerated instead of the
+;; whole function evicting.  emit_reset already nests prompts correctly, so no
+;; emitter change was needed.  direct == cps holds (each shift is abortive and
+;; binds to its own nearest reset).
+(defn two-op [n : int] : int
+  (reset (+ (reset (shift (fn [v] v) 3))
+            (reset (shift (fn [v] v) 4)))))
+(defn three-op [n : int] : int
+  (reset (+ (reset (shift (fn [v] v) 3))
+            (+ (reset (shift (fn [v] v) 4))
+               (reset (shift (fn [v] v) 5))))))
+(defn sibling-ctx [n : int] : int
+  (reset (* (reset (+ 1 (shift (fn [v] v) 3)))
+            (reset (+ 2 (shift (fn [v] v) 4))))))
+(defn cap-between [n : int] : int
+  (reset (let [a 100]
+           (+ (reset (shift (fn [v] v) 3))
+              (+ a (reset (shift (fn [v] v) 4)))))))
+(defn nested-then-siblings [n : int] : int
+  (reset (+ 1 (reset (+ (reset (shift (fn [v] v) 2))
+                        (reset (shift (fn [v] v) 3)))))))
+(defn main [] : int
+  (println (two-op 0))
+  (println (three-op 0))
+  (println (sibling-ctx 0))
+  (println (cap-between 0))
+  (println (nested-then-siblings 0))
+  0)

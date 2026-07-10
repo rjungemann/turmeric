@@ -729,6 +729,23 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             bound[nb] = t->as.letraw.x.id;
             collect_caps_rec(t->as.letraw.body, exclude, bound, nb + 1, cs); return;
         }
+        case CT_RESET:
+            /* A nested reset sitting in a lifted continuation (two sibling nested
+             * resets: the second lands in the first's continuation, e.g.
+             * `(reset (+ (reset (shift ...)) (reset (shift ...))))`).  Its
+             * delimited body runs under its own (separately lifted) prompt and its
+             * continuation continues in this same helper, so collect the free
+             * captures of both -- binding the reset value for the continuation --
+             * rather than bailing.  emit_reset recurses to emit the nested prompt;
+             * this just enumerates the captures its lifted helpers ride. */
+            collect_caps_rec(t->as.reset.delim, exclude, bound, nb, cs);
+            bound[nb] = t->as.reset.x.id;
+            collect_caps_rec(t->as.reset.body, exclude, bound, nb + 1, cs); return;
+        case CT_SHIFT:
+            /* The delimited body under a nested reset ends in an (abortive) shift;
+             * its body's captures ride the shift-body helper's env.  Walk it so a
+             * capture threaded through the enclosing continuation is not missed. */
+            collect_caps_rec(t->as.shift.body, exclude, bound, nb, cs); return;
         default:
             /* Nested control ops in a lifted body: out of this collector's scope. */
             cs->ok = false; return;
