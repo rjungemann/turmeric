@@ -1,5 +1,16 @@
 # Interpreter: Show[Set]/Show[Map] over cstr keys renders the carrier pointer
 
+> **RESOLVED 2026-07-10 -- archived.** Fixed via direction 2: the interpreter
+> now grounds an `(:: e A)` ascription's tyvar `A` through the frame's tyvar
+> bindings before the primitive re-tag runs (`ascribe_effective_kind` in
+> `src/turi/eval.c`, applied in both the `EX_ASCRIBE` and `EX_REINTERPRET`
+> post-operand cases). The set/map show-loops recover the cstr key / non-int
+> value on the tree-walking path exactly as monomorphization does on the
+> compiled path, so `(show (set-of "x" "y"))` prints `#set{x y}` under
+> `--interpret`. The coverage fixture `tests/fixtures/show-collections-content-hamt/`
+> lost its `requires.compiled` marker and now runs under both `tests/run.sh`
+> and `tests/run-turi.sh` (both green). No open items remain.
+
 **Severity:** low (interpreter-only display defect; the compiled path is
 correct). Blocks full interpreter parity for the "containers are Show-able"
 requirement, not the requirement itself.

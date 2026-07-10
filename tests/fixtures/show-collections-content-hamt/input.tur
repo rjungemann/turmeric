@@ -5,10 +5,11 @@
 ;; parameter (see stdlib/typeclass-show.tur) that lets monomorphization ground
 ;; the element dispatch per ABI specialization.
 ;;
-;; requires.compiled: this recovery is a compile-time monomorphization; the
-;; tree-walking interpreter dispatches Show on the runtime carrier value of a
-;; HAMT key (an untagged int64), so it still renders cstr keys as pointers.
-;; That interpreter gap is tracked separately; the compiled path is correct.
+;; The compiled path recovers the element type by monomorphization.  The
+;; tree-walking interpreter recovers it by grounding the `(:: e A)` ascription's
+;; tyvar A through the frame's tyvar bindings (see ascribe_effective_kind in
+;; src/turi/eval.c), so it renders cstr keys/values as their string on both
+;; paths -- this fixture now runs under run.sh and run-turi.sh alike.
 (load "stdlib/typeclass.tur")
 
 (defn main [] : int
