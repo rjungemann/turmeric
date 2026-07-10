@@ -397,14 +397,22 @@ fallback until the final phase removes it.
   `tur_serial_cont_serialize`/`deserialize` round-trip; oracle
   `cps-oracle-serial-native-arith`; `direct == cps`.
 
-  *Remaining for U4:* the marshaling-**registry** shapes -- call frames
-  (`(dbl (serial-shift ...))`), `let`/`if`/do-prelude serial contexts, and Shape 1
-  (identity) -- stay on the delegation. These need the per-site `SkReg` +
-  `__attribute__((constructor))` self-registration the direct emitter emits so the
-  marshaler can map a call frame to a stable name; porting them natively is the
-  larger parallel to the cloneable call/let/if/do work, deferred like the
-  cloneable closure-receiver case until the coordinated U6/U7 (the delegation is
-  the principled interim home).
+  **Third slice landed (native serial call frames + `SkReg` registry).**
+  `build_serial` now also admits a 1-arg call frame `(f [])` (top-level uncolored
+  `int -> int`), and `emit_cloneable`'s serial branch emits the per-site
+  marshaling registry natively: a `_skcall` wrapper fn plus a `_skreg` `SkReg`
+  self-registered by an `__attribute__((constructor))` under the stable name
+  `"<fn>$L"`, exactly as the direct emitter does -- so the frame round-trips
+  through save/restore by name. Call frames compose with arithmetic frames in one
+  chain (`(+ 100 (dbl []))`, `(dbl (+ 1 []))`). Verified with a real
+  serialize -> bytes -> deserialize; oracle `cps-oracle-serial-native-callframe`;
+  `direct == cps`.
+
+  *Remaining for U4:* `let`/`if`/do-prelude serial contexts, 2-arg call frames
+  (serialized env operand), and Shape 1 (identity) -- the direct parallels to the
+  corresponding cloneable slices, each still on the delegation until ported.
+  Native serial now owns the arithmetic + 1-arg-call subset, matching where the
+  cloneable native port started before its let/if/do extensions.
 - **U5 -- Async / await.** Port the scheduler wiring on top of the now-unified
   cloneable/serial base.
 - **U6 -- Prelude consolidation.** Fold the four `emit_cps_*_prelude` emitters

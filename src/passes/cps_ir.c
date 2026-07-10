@@ -575,23 +575,59 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     CloneFrame frames[CL_IR_MAX_FRAMES];
     uint32_t nf = 0;
 
-    while (cur && cur->kind == EX_BUILTIN && cur->as.builtin.n == 2
-           && cur->as.builtin.spec && cur->type.kind == TY_INT
-           && cloneable_op_supported(cur->as.builtin.spec->c_op)) {
-        const Expr *a0 = ascribe_peel(cur->as.builtin.args[0]);
-        const Expr *a1 = ascribe_peel(cur->as.builtin.args[1]);
-        bool h0 = serial_reaches_shift(a0);
-        bool h1 = serial_reaches_shift(a1);
-        if (h0 == h1) return NULL;                  /* need exactly one hole side */
-        const Expr *other = h0 ? a1 : a0;
-        if (!other || !is_atomic(other) || other->type.kind != TY_INT) return NULL;
-        if (nf >= CL_IR_MAX_FRAMES) return NULL;
-        memset(&frames[nf], 0, sizeof(CloneFrame));
-        frames[nf].op        = cur->as.builtin.spec->c_op;   /* stable string */
-        frames[nf].operand   = atom_of(other);
-        frames[nf].hole_left = h0;
-        nf++;
-        cur = h0 ? a0 : a1;                          /* descend the hole side */
+    for (;;) {
+        cur = ascribe_peel(cur);
+        if (!cur) return NULL;
+
+        /* Arithmetic frame: single-hole int binop -> shared tagged marshaler. */
+        if (cur->kind == EX_BUILTIN && cur->as.builtin.n == 2
+            && cur->as.builtin.spec && cur->type.kind == TY_INT
+            && cloneable_op_supported(cur->as.builtin.spec->c_op)) {
+            const Expr *a0 = ascribe_peel(cur->as.builtin.args[0]);
+            const Expr *a1 = ascribe_peel(cur->as.builtin.args[1]);
+            bool h0 = serial_reaches_shift(a0);
+            bool h1 = serial_reaches_shift(a1);
+            if (h0 == h1) return NULL;               /* need exactly one hole side */
+            const Expr *other = h0 ? a1 : a0;
+            if (!other || !is_atomic(other) || other->type.kind != TY_INT) return NULL;
+            if (nf >= CL_IR_MAX_FRAMES) return NULL;
+            memset(&frames[nf], 0, sizeof(CloneFrame));
+            frames[nf].op        = cur->as.builtin.spec->c_op;   /* stable string */
+            frames[nf].operand   = atom_of(other);
+            frames[nf].hole_left = h0;
+            nf++;
+            cur = h0 ? a0 : a1;                       /* descend the hole side */
+            continue;
+        }
+
+        /* Call frame: a 1-arg call `(f [])` to a top-level uncolored int->int fn;
+         * the hole is the sole argument (no captured env).  Emitted with a per-site
+         * wrapper + SkReg registration keyed by "<fn>$L" so the marshaler round-
+         * trips it.  (2-arg call frames need a serialized env operand and stay on
+         * the delegation for now.) */
+        if (cur->kind == EX_CALL && cur->as.call_.n_args == 1
+            && cur->as.call_.fn_binding && !cur->as.call_.fn_expr) {
+            const Binding *fb = cur->as.call_.fn_binding;
+            if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 1) return NULL;
+            if (fb->closure_fn_binding) return NULL;         /* not a fat closure */
+            if (callee_colored(b, fb)) return NULL;          /* uncolored target */
+            if (cur->type.kind != TY_INT) return NULL;       /* result: int */
+            if (fb->type.as.fn.arg_kinds[0] != TY_INT) return NULL;  /* arg: int */
+            const Expr *a0 = ascribe_peel(cur->as.call_.args[0]);
+            if (!serial_reaches_shift(a0)) return NULL;      /* sole arg is the hole */
+            if (nf >= CL_IR_MAX_FRAMES) return NULL;
+            memset(&frames[nf], 0, sizeof(CloneFrame));
+            frames[nf].op        = NULL;
+            frames[nf].call_fn   = fb;
+            frames[nf].operand.kind = CA_INT;   /* unused placeholder (env passed as 0) */
+            frames[nf].operand.ty   = TY_INT;
+            frames[nf].hole_left = true;         /* the hole is the sole arg */
+            nf++;
+            cur = a0;                            /* descend into the hole arg */
+            continue;
+        }
+
+        break;
     }
 
     if (nf == 0) return NULL;                        /* Shape 1 serial -> delegate */

@@ -2588,16 +2588,41 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
             "    DK *__cap = dk_copy_range(subk, NULL);\n"
             "    return (intptr_t)((int64_t (*)(int64_t))(intptr_t)env)((int64_t)(intptr_t)__cap);\n}\n",
             bodyfn);
+        /* A 1-arg call frame gets a per-site wrapper fn plus a SkReg entry that
+         * self-registers (constructor) so the marshaler maps the frame <-> a stable
+         * name ("<fn>$L") for save/restore.  Arithmetic frames need no per-site
+         * emission -- they ride the shared tagged marshaler. */
+        for (uint32_t i = 0; i < nf; i++) {
+            const CloneFrame *fr = &t->as.cloneable.frames[i];
+            if (!fr->call_fn) continue;
+            char *cfn = callee_name(fr->call_fn);
+            buf_printf(ce->helpers,
+                "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s((int64_t)value); }\n",
+                ce->fn_cn, id, i, cfn);
+            buf_printf(ce->helpers,
+                "static SkReg %s_skreg%d_%u = { \"%s$L\", %s_skcall%d_%u, 0, 0, 0, 0 };\n"
+                "__attribute__((constructor)) static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
+                ce->fn_cn, id, i, cfn, ce->fn_cn, id, i,
+                ce->fn_cn, id, i, ce->fn_cn, id, i);
+            free(cfn);
+        }
         char dv[48];
         snprintf(dv, sizeof(dv), "__skd%d", id);
         ce_line(ce, "DK *%s = dk_prompt(1, dk_done());", dv);
-        /* Push frames outermost-first (frames[0] deepest, closest to the prompt). */
+        /* Push frames outermost-first (frames[0] deepest, closest to the prompt).
+         * Arithmetic -> shared tagged frame + operand; call frame -> per-site
+         * wrapper, no env (0). */
         for (uint32_t i = 0; i < nf; i++) {
             const CloneFrame *fr = &t->as.cloneable.frames[i];
-            char *opv = atom_str(ce, &fr->operand);
-            ce_line(ce, "%s = dk_frame(__sk_frame_for_tag(%d), (intptr_t)(%s), %s);",
-                    dv, sk_tag_for_frame(fr), opv, dv);
-            free(opv);
+            if (fr->call_fn) {
+                ce_line(ce, "%s = dk_frame(%s_skcall%d_%u, (intptr_t)(0), %s);",
+                        dv, ce->fn_cn, id, i, dv);
+            } else {
+                char *opv = atom_str(ce, &fr->operand);
+                ce_line(ce, "%s = dk_frame(__sk_frame_for_tag(%d), (intptr_t)(%s), %s);",
+                        dv, sk_tag_for_frame(fr), opv, dv);
+                free(opv);
+            }
         }
         ce_line(ce, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);", dv, bodyfn, rfn, dv);
         ce_line(ce, "%s = (int64_t)dk_run(%s, 0);", xn, dv);
