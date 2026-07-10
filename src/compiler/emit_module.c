@@ -6637,14 +6637,28 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    free((tur_result_box_t *)(intptr_t)__r);\n");
     buf_puts(out, "}\n\n");
 
+    /* U6 (cps-backend-unification): the delimited-control / concurrency prelude
+     * gates are each a full-program walk, and several were recomputed at multiple
+     * emission sites below (cloneable-DK 3x, base-delimited 2x, serial 2x).
+     * Compute each once here -- one classification pass per family -- and gate the
+     * preludes on these flags.  Behavior is identical to the per-site calls; this
+     * only removes the redundant traversals. */
+    const bool cps_uses_delimited    = emit_cps_program_uses_delimited(program);
+    const bool cps_uses_cloneable_dk = emit_cps_program_uses_cloneable_dk(program);
+    const bool cps_uses_serial       = emit_cps_program_contains_serial(program);
+    const bool cps_uses_callcc       = emit_cps_program_uses_callcc(program);
+    const bool cps_ir_emittable      = emit_cps_ir_program_has_emittable(program);
+    const bool cps_uses_cloneable_rt = cps_expr_contains_cloneable_shift(program)
+                                    || expr_has_multishot_handler(program)
+                                    || cps_uses_cloneable_dk;
+
     /* Phase B2 / MS1: Cloneable continuation runtime (inline in generated C).
      * Emitted when the program uses cloneable-shift/reset OR any ^multishot handler
      * (which uses tur_cloneable_cont wrappers + tur_continuation_snapshot), or when
      * a cloneable-reset lowers onto the DK machine (CPS9): the DK bridge wraps the
      * captured context in a tur_cloneable_cont. (cps_expr_contains_cloneable_shift
      * does not look inside builtins, so a context-nested shift needs this gate.) */
-    if (shared || cps_expr_contains_cloneable_shift(program) || expr_has_multishot_handler(program) ||
-        emit_cps_program_uses_cloneable_dk(program)) {
+    if (shared || cps_uses_cloneable_rt) {
     buf_puts(out, "/* Phase B2: Cloneable continuation runtime */\n");
     buf_puts(out, "typedef struct tur_cloneable_cont tur_cloneable_cont;\n");
     buf_puts(out, "struct tur_cloneable_cont {\n");
@@ -6703,16 +6717,14 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "} tur_cloneable_reset_ctx;\n\n");
     emit_rt_global(out, shared, "__thread tur_cloneable_reset_ctx *tur_current_reset_ctx = NULL;\n\n", "__thread tur_cloneable_reset_ctx *tur_current_reset_ctx");
 
-    } /* end if (cps_expr_contains_cloneable_shift(program)) */
+    } /* end if (cps_uses_cloneable_rt) */
 
     /* cps-transform-plan: emit the heap-reified CPS substrate (DK multi-prompt
      * machine) when the program uses base delimited control (reset/shift/
      * shift0), or when a cloneable-reset lowers onto the DK machine (CPS9).
      * emit_cps_reset / emit_cps_cloneable_reset lower onto dk_run/dk_shift. */
-    if (shared || emit_cps_program_uses_delimited(program) ||
-        emit_cps_program_uses_cloneable_dk(program) ||
-        emit_cps_program_contains_serial(program) ||
-        emit_cps_ir_program_has_emittable(program)) {
+    if (shared || cps_uses_delimited || cps_uses_cloneable_dk ||
+        cps_uses_serial || cps_ir_emittable) {
         emit_cps_runtime_prelude(out);
     }
     /* Base-shift escape-reset context (direct-reset-shift-degrades fix): the
@@ -6724,7 +6736,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * innermost reset landing, discarding the delimited continuation from
      * anywhere -- including inside a branch.  The thread-local stack targets the
      * innermost reset; `prev` restores the enclosing one. */
-    if (shared || emit_cps_program_uses_delimited(program)) {
+    if (shared || cps_uses_delimited) {
         buf_puts(out, "/* base-shift escape-reset context (setjmp/longjmp abort) */\n");
         buf_puts(out, "typedef struct tur_shift_reset_ctx {\n");
         buf_puts(out, "    jmp_buf buf;\n");
@@ -6735,20 +6747,20 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     }
     /* CPS9: the cloneable-continuation <-> DK bridge needs both the cloneable
      * runtime (emitted above) and the DK machine (just emitted) in scope. */
-    if (shared || emit_cps_program_uses_cloneable_dk(program)) {
+    if (shared || cps_uses_cloneable_dk) {
         emit_cps_cloneable_bridge_prelude(out);
     }
     /* CPS10 (CPS5.4): the serial marshaling runtime needs the DK machine. Gate
      * on *presence* of serial syntax (not just lowerable resets) so stdlib
      * save-cont!/resume-cont! never reference an unemitted builtin -- an
      * unsupported context then degrades cleanly instead of miscompiling. */
-    if (shared || emit_cps_program_contains_serial(program)) {
+    if (shared || cps_uses_serial) {
         emit_cps_serial_runtime_prelude(out);
     }
 
     /* call-cc-completion: emit the undelimited escape-continuation runtime when
      * the program uses (call/cc f) / (escape f). */
-    if (shared || emit_cps_program_uses_callcc(program)) {
+    if (shared || cps_uses_callcc) {
         emit_cps_callcc_prelude(out);
     }
 

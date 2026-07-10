@@ -465,6 +465,21 @@ fallback until the final phase removes it.
 - **U6 -- Prelude consolidation.** Fold the four `emit_cps_*_prelude` emitters
   into one "emit the preludes the program uses" pass driven by the unified
   classification.
+  **First slice landed (classify once).** The delimited/concurrency prelude gates
+  are each a full-program walk, and several were recomputed at multiple emission
+  sites (cloneable-DK 3x, base-delimited 2x, serial 2x). They are now computed
+  once into named `const bool cps_uses_*` flags at the top of the prelude region
+  (`emit_module.c`), and every prelude gates on those flags -- one classification
+  pass per family, the redundant traversals removed. Behavior-identical (each flag
+  still uses the exact per-family predicate); full suite green across every family.
+
+  *Remaining for U6:* (a) merge the per-family walks into a *single* traversal
+  computing all flags at once -- deferred because the walks have subtly different
+  recursion skeletons, so a single traversal risks changing a flag value; it needs
+  each skeleton reconciled first. (b) The plan's deeper intent -- drive prelude
+  gating from the CT-IR taint classification (`ensure_S`) instead of the syntactic
+  `emit_cps_program_uses_*` scans -- is the larger change and lands with U7, when
+  the second (form-presence) classifier is retired alongside `emit_cps.c`.
 - **U7 -- Retire `emit_cps.c`.** Delete the file, its gates
   (`emit_cps_program_uses_*`), and the routing in `emit_module.c`
   (~6712-6720). Delete the N6.5 delimited-control carve-out. Graduate the
