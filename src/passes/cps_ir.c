@@ -549,13 +549,14 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     const Binding *recv = cloneable_named_receiver(b, cur);
     const Expr *recv_expr = NULL;
     if (!recv) {
-        /* U7: a CLOSURE receiver (capturing or not).  Shape 1 (nf == 0) only for
-         * now -- it is called directly at the reset site, so its thunk + env are
-         * emitted inline; Shape 2 threads the receiver through a dk_shift env and
-         * still delegates.  A zero-capture closure is already lifted to a named
-         * global (handled above); this is the capturing case. */
+        /* U7: a CLOSURE receiver (capturing or not).  Shape 1 (nf == 0) calls it
+         * directly at the reset site; Shape 2 (nf >= 1) threads it through the
+         * dk_shift body env -- emit_cloneable bakes the closure's thunk into the
+         * per-site body fn and passes the closure env as the shift env.  A
+         * zero-capture closure is already lifted to a named global (handled above);
+         * this is the capturing case. */
         const Expr *kf = ascribe_peel(cur->as.cloneable_shift_.k_fn);
-        if (nf == 0 && kf && kf->kind == EX_CLOSURE) recv_expr = kf;
+        if (kf && kf->kind == EX_CLOSURE) recv_expr = kf;
         else return NULL;
     }
 
@@ -794,12 +795,22 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
      * Mirrors the cloneable Shape 1 already supported natively. */
     if (!cur || cur->kind != EX_SERIAL_SHIFT) return NULL;
     const Binding *recv = serial_named_receiver(b, cur);
-    if (!recv) return NULL;
+    const Expr *recv_expr = NULL;
+    if (!recv) {
+        /* U7: a CLOSURE receiver -- Shape 1 (called at the reset site) or Shape 2
+         * (threaded through the dk_shift body env, thunk baked into the body fn).
+         * The receiver runs once at capture; only the continuation is marshaled,
+         * so a capturing closure receiver keeps save-cont!/resume-cont! sound. */
+        const Expr *kf = ascribe_peel(cur->as.serial_shift_.k_fn);
+        if (kf && kf->kind == EX_CLOSURE) recv_expr = kf;
+        else return NULL;
+    }
 
     CTerm *t = new_term(b, CT_CLONEABLE);
     t->as.cloneable.serial = true;
     t->as.cloneable.x = x;
     t->as.cloneable.receiver = recv;
+    t->as.cloneable.receiver_expr = recv_expr;
     t->as.cloneable.n_frames = nf;
     CloneFrame *fa = arena_alloc(b->a, nf * sizeof(CloneFrame));
     memcpy(fa, frames, nf * sizeof(CloneFrame));

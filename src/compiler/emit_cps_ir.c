@@ -2653,6 +2653,52 @@ static char *emit_cloneable_direct(CE *ce, const Expr *e) {
     return v;
 }
 
+/* Emit the Shape 2 shift-body helper `bodyfn`.  `cont_setup` is the C that builds
+ * the continuation the receiver is handed (a raw DK chain for serial, a
+ * cloneable_cont for cloneable); `cont_arg` names it.  For a named-fn receiver the
+ * dk_shift env carries the fn ptr and the body calls it as one; for a CLOSURE
+ * receiver (receiver_expr) the closure's thunk is baked in here and the dk_shift
+ * env carries the closure env instead (see emit_cl_shift_env). */
+static void emit_cl_shift_bodyfn(CE *ce, const char *bodyfn, const CTerm *t,
+                                 const char *cont_setup, const char *cont_arg) {
+    if (t->as.cloneable.receiver_expr) {
+        const Expr *f = t->as.cloneable.receiver_expr;
+        struct Closure *closure = f->as.closure_.closure;
+        char *thunk_name;
+        if (closure->fn->binding) {
+            thunk_name = raw_name_for_binding(closure->fn->binding);
+        } else {
+            thunk_name = malloc(64);
+            snprintf(thunk_name, 64, "__fn_anon_%d",
+                     closure->fn->n_params > 0 ? closure->fn->params[0]->id : 0);
+        }
+        buf_printf(ce->helpers,
+            "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
+            "    return (intptr_t)%s((int64_t)env, (int64_t)(intptr_t)%s);\n}\n",
+            bodyfn, cont_setup, thunk_name, cont_arg);
+        free(thunk_name);
+    } else {
+        buf_printf(ce->helpers,
+            "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
+            "    return (intptr_t)((int64_t (*)(int64_t))(intptr_t)env)((int64_t)(intptr_t)%s);\n}\n",
+            bodyfn, cont_setup, cont_arg);
+    }
+}
+
+/* The dk_shift env expression (malloc'd) for a Shape 2 node: a closure receiver's
+ * env value -- emitted at the reset site so its captures are read from the visible
+ * locals / lifted env -- else the named receiver's fn name. */
+static char *emit_cl_shift_env(CE *ce, const CTerm *t, const char *rfn) {
+    if (t->as.cloneable.receiver_expr) {
+        int saved = ce->ctx->indent;
+        ce->ctx->indent = ce->indent;
+        char *fval = emit_value(ce->ctx, ce->out, t->as.cloneable.receiver_expr);
+        ce->ctx->indent = saved;
+        return fval;
+    }
+    return strdup(rfn);
+}
+
 static void emit_cloneable(CE *ce, const CTerm *t) {
     int id = (*ce->helper_ctr)++;
     char *xn  = cvar_cname(ce, t->as.cloneable.x);
@@ -2737,11 +2783,8 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         uint32_t nf = t->as.cloneable.n_frames;
         char bodyfn[256];
         snprintf(bodyfn, sizeof(bodyfn), "%s_skbody%d", ce->fn_cn, id);
-        buf_printf(ce->helpers,
-            "static intptr_t %s(intptr_t env, DK *subk) {\n"
-            "    DK *__cap = dk_copy_range(subk, NULL);\n"
-            "    return (intptr_t)((int64_t (*)(int64_t))(intptr_t)env)((int64_t)(intptr_t)__cap);\n}\n",
-            bodyfn);
+        emit_cl_shift_bodyfn(ce, bodyfn, t,
+            "    DK *__cap = dk_copy_range(subk, NULL);\n", "__cap");
         /* A 1-arg call frame gets a per-site wrapper fn plus a SkReg entry that
          * self-registers (constructor) so the marshaler maps the frame <-> a stable
          * name ("<fn>$L") for save/restore.  Arithmetic frames need no per-site
@@ -2787,7 +2830,9 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                 free(opv);
             }
         }
-        ce_line(ce, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);", dv, bodyfn, rfn, dv);
+        char *senv = emit_cl_shift_env(ce, t, rfn);
+        ce_line(ce, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);", dv, bodyfn, senv, dv);
+        free(senv);
         ce_line(ce, "%s = (int64_t)dk_run(%s, 0);", xn, dv);
         ce_line(ce, "dk_free(%s);", dv);
     } else {
@@ -2820,12 +2865,10 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                     ctxfn, cloneable_frame_expr(fr->op, fr->hole_left));
             }
         }
-        buf_printf(ce->helpers,
-            "static intptr_t %s(intptr_t env, DK *subk) {\n"
+        emit_cl_shift_bodyfn(ce, bodyfn, t,
             "    DK *__cap = dk_copy_range(subk, NULL);\n"
-            "    tur_cloneable_cont *__k = tur_cloneable_cont_alloc(__dk_cont_fn, __cap, __dk_env_clone, __dk_env_drop);\n"
-            "    return (intptr_t)((int64_t (*)(int64_t))(intptr_t)env)((int64_t)(intptr_t)__k);\n}\n",
-            bodyfn);
+            "    tur_cloneable_cont *__k = tur_cloneable_cont_alloc(__dk_cont_fn, __cap, __dk_env_clone, __dk_env_drop);\n",
+            "__k");
         char dv[48];
         snprintf(dv, sizeof(dv), "__ccd%d", id);
         ce_line(ce, "DK *%s = dk_prompt(1, dk_done());", dv);
@@ -2839,7 +2882,9 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
             ce_line(ce, "%s = dk_frame(%s, (intptr_t)(%s), %s);", dv, ctxfn, opv, dv);
             free(opv);
         }
-        ce_line(ce, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);", dv, bodyfn, rfn, dv);
+        char *senv = emit_cl_shift_env(ce, t, rfn);
+        ce_line(ce, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);", dv, bodyfn, senv, dv);
+        free(senv);
         ce_line(ce, "%s = (int64_t)dk_run(%s, 0);", xn, dv);
         ce_line(ce, "dk_free(%s);", dv);
     }

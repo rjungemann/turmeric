@@ -44,23 +44,24 @@ must be total:
 | Lowering fn | Reached from | Native CT-IR status | Gap to delete |
 |---|---|---|---|
 | `emit_cps_reset` | `emit_effects_reset` (emit_effects.c:1218) | `CT_RESET`/`CT_SHIFT` native for the `delim_ok` subset, now incl. **nested + sibling-nested reset** | reset/shift-specific gap is **closed** (escape/branch native since U1; nested reset + sibling nested resets admitted -- see resetshift-gap note). The only nestings still evicting do so via the *generic* `needs_heap_join` boundary (a non-tail cps->cps **call** on the heap chain), shared with the whole C1 subset -- not reset/shift-specific |
-| `emit_cps_cloneable_reset` | `emit_effects_cloneable_reset` (:1239) + delegation | value-typed subset native (arith/call/let/if/do), now incl. **Shape 1 closure receivers** | **Shape 2 (arith-context) closure receivers** (receiver threaded through a dk_shift env) and **colored receivers** still delegate |
-| `emit_cps_serial_reset` | `emit_effects_serial_reset` (:1703) + delegation | value-typed subset native (arith/call/let/if/do), now incl. **Shape 1 identity** | **2-arg call frames** (serialized env codec) and **closure receivers** delegate here (Shape 1 identity now native -- `build_serial` admits `nf==0`, routed to the marshalable serial emit branch) |
+| `emit_cps_cloneable_reset` | `emit_effects_cloneable_reset` (:1239) + delegation | value-typed subset native (arith/call/let/if/do), incl. **Shape 1 + Shape 2 closure receivers** | only **colored receivers** and shapes outside the arith/call/let/if/do context still delegate |
+| `emit_cps_serial_reset` | `emit_effects_serial_reset` (:1703) + delegation | value-typed subset native (arith/call/let/if/do), incl. **Shape 1 identity + Shape 1/2 closure receivers** | **2-arg call frames** (serialized env codec) still delegate; closure receivers are native (thunk baked into the shift body fn, closure env on the dk_shift env) |
 | `emit_cps_callcc` | `EX_CALLCC` dispatch (emit_expr.c:2826) + delegation | **native `CT_CALLCC`**, incl. **capturing-closure receivers** (scalar captures ride the escape landing) | remaining: only the `EX_CALLCC` direct-dispatch caller for uncolored/`main`/exported functions (goes away at CPS-backend graduation), and a non-scalar capture in a *lifted* callcc (bails to delegation) |
 
 Callcc has a native `CT_CALLCC` covering both capture-free and capturing-closure
-receivers.  Cloneable now takes a **Shape 1 closure receiver** natively too
-(`receiver_expr` on the CT_CLONEABLE node; the closure value + its thunk are
-emitted at the reset site, `(closure-env, cont)`, exactly like callcc; the
-receiver's captures ride the lifted env via the same `collect_free_vars` ->
-`cap_add` path).  The `n_live_captures == 0` native gate does NOT block this: the
-live-capture scan does not recurse into a closure body, so the receiver's own
-captures are not counted as shift-site live captures.  Remaining native gaps:
-**cloneable/serial Shape 2 closure receivers** (the receiver is threaded through a
-`dk_shift` env, so the thunk must be baked into the per-site body fn and the
-closure env passed as the shift env -- more than the Shape 1 direct call) and
-**serial 2-arg call frames**.  Base reset/shift is closed (nested + sibling), and
-serial Shape 1 identity is native.
+receivers.  Cloneable AND serial now take a **closure receiver** natively across
+BOTH shapes (`receiver_expr` on the CT_CLONEABLE node): Shape 1 calls the closure
+thunk at the reset site with `(closure-env, cont)`; Shape 2 bakes the thunk into
+the per-site shift body fn (`emit_cl_shift_bodyfn`) and passes the closure env as
+the `dk_shift` env (`emit_cl_shift_env`).  The receiver's captures ride the lifted
+env via the same `collect_free_vars` -> `cap_add` path callcc uses.  The
+`n_live_captures == 0` gate does not block this: the live-capture scan does not
+recurse into a closure body, so the receiver's own captures are not shift-site
+live captures.  The multi-shot (cloneable) and marshalable (serial) semantics are
+preserved -- the receiver runs once at capture; only the continuation is
+cloned/marshaled.  **Remaining native gap: serial 2-arg call frames** (a
+serialized env codec).  Base reset/shift is closed (nested + sibling), serial
+Shape 1 identity is native, and colored receivers stay on the delegation.
 
 ## The cut sequence
 
@@ -101,11 +102,11 @@ serial Shape 1 identity is native.
      matches the delegation's; its only remaining caller is the direct dispatch
      for uncolored/`main`/exported fns (removed at graduation).
    - cloneable/serial closure receivers + serial 2-arg call frames. **Serial
-     Shape 1 identity** and **cloneable Shape 1 closure receivers** are now native
-     (`receiver_expr` on CT_CLONEABLE; oracles `cps-oracle-serial-shape1{,-cps}`,
-     `cps-oracle-cloneable-closure-recv{,-cps}`).  Remaining: Shape 2 closure
-     receivers (thread the closure through the `dk_shift` env) and serial 2-arg
-     call frames.
+     Shape 1 identity** and **cloneable/serial Shape 1 + Shape 2 closure
+     receivers** are now native (`receiver_expr` on CT_CLONEABLE; oracles
+     `cps-oracle-serial-shape1{,-cps}`, `cps-oracle-cloneable-closure-recv{,-cps}`,
+     `cps-oracle-cloneable-closure-shape2{,-cps}`).  Remaining: serial 2-arg call
+     frames.
    - base reset/shift shapes outside `delim_ok` -- **the reset/shift-specific gap
      is now closed**: escape/branch shapes went native in U1; nested reset
      (`delim_ok` CT_RESET case) and sibling nested resets (`collect_caps_rec`
@@ -150,11 +151,11 @@ functions with no callers," not "carve runtime out of a 2.1k-line file."
 
 The remaining U7 work is step 2's **native gaps**. Landed so far: base reset/shift
 (nested + sibling), serial Shape 1 identity, callcc (native `CT_CALLCC`, capture-
-free + capturing receivers), and **cloneable Shape 1 closure receivers**. What is
-left: **cloneable/serial Shape 2 closure receivers** (the receiver rides a
-`dk_shift` env, so the per-site body fn bakes the thunk and passes the closure env
--- the Shape 1 work is the template, the threading is the new part) and **serial
-2-arg call frames**. Until each gap's last caller is gone the delegation +
+free + capturing receivers), and **cloneable/serial closure receivers across both
+shapes** (Shape 1 direct call + Shape 2 `dk_shift`-env threading). The last named
+native gap is **serial 2-arg call frames** (a serialized env codec); after that,
+the only residual delegations are colored receivers and shapes outside the
+supported context grammar. Until each gap's last caller is gone the delegation +
 eviction fallbacks are correct and the tree ships; the deletes (steps 3-5) follow
 mechanically once coverage is total.
 
