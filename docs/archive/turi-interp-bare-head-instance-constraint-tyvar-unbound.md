@@ -2,6 +2,19 @@
 
 **Severity:** medium (interpreter-parity gap; compiled path is correct).
 
+**Status: RESOLVED.** At instance-method dispatch the interpreter now binds a
+bare-head constrained instance's constraint tyvars from the receiver argument's
+static type, mirroring the compiled path's per-call-site specialization. New
+helper `frame_bind_instance_constraint_tyvars` (`src/turi/eval.c`) runs right
+after `frame_record_abi` in the `DK_CALL_ARG` handler: for a callee whose
+`FnDef.owner_instance` carries `type_param_constraints`, it extracts the
+receiver arg's ADT-app type-args (`type_extract_adt_app`) and pins each
+constraint's `tyvar -> type_args[param_idx]` onto the instance body frame (the
+same `param_idx` convention the shared emit kernel
+`emit_abi_constraint_var_bindings` uses). The nested repr now prints `1107`
+under `--interpret`, matching the compiled path, so the fixture's
+`requires.compiled` marker was removed and `tests/run-turi.sh` exercises it.
+
 ## Summary
 
 Under `tur --interpret`, a typeclass method dispatched to a *bare-head*
