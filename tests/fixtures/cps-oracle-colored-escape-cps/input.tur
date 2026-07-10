@@ -1,0 +1,14 @@
+;; U2 oracle (cps-backend-unification-plan): call/cc / escape inside a COLORED fn.
+;; Backend: --enable=cps-backend (call/cc-escape delegated via CT_LETRAW -- U2)
+;; The fn is colored by its reset/shift and is CPS-emitted; the undelimited
+;; (call/cc f)/(escape f) with a capture-free receiver is delegated to the
+;; direct emitter (emit_cps_callcc) via CT_LETRAW instead of forcing the whole
+;; function to evict.  direct == cps (the escape landing is a local setjmp;
+;; the rest of the computation is the CPS continuation after the bound result).
+;;
+(defn f [] : int
+  (+ (reset (shift (fn [v] v) 10))
+     (escape (fn [k] (+ 1 (k 5))))))
+(defn main [] : int
+  (println (f))
+  0)

@@ -284,6 +284,20 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
         /* nested fn defs: call-graph boundaries, delegatable as values. */
         case EX_FN_DEF: case EX_FN: case EX_CLOSURE:
             return is_delegatable_value(e);
+        /* U2 (cps-backend-unification): (call/cc f) / (escape f) is an
+         * UNDELIMITED escape whose continuation is captured at a *local* setjmp
+         * landing that emit_cps_callcc establishes inline -- it does NOT thread
+         * the DK continuation the way shift/perform do.  So delegating it via
+         * CT_LETRAW is sound: the escape's setjmp/longjmp landing sits before the
+         * bound result, and "the rest of the computation" from the call/cc site
+         * is exactly the CPS continuation that runs after the binding.  This lets
+         * a colored function that ALSO contains a call/cc/escape stay on the
+         * CT-IR path instead of wholly evicting to the direct emitter.  The
+         * receiver `f` is emitted by emit_cps_callcc regardless; require it to be
+         * a delegatable value (a capture-free receiver) so a capturing receiver
+         * stays conservatively evicted. */
+        case EX_CALLCC:
+            return safe_to_delegate(b, e->as.callcc_.fn);
         case EX_CALL: {
             const Binding *fn = e->as.call_.fn_binding;
             if (!fn) return false;                 /* indirect: unknown coloring */

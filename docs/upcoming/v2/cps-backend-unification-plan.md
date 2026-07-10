@@ -189,6 +189,25 @@ fallback until the final phase removes it.
   closing it (fix the direct degradation, or U7 retires `emit_cps.c`) unblocks
   admitting the join-bearing shapes.
 - **U2 -- call/cc + escape.** Port the `emit_cps_callcc_prelude` machinery.
+  **Partially landed.** `(call/cc f)` / `(escape f)` (both `EX_CALLCC`) is an
+  *undelimited* escape: its continuation is captured at a **local setjmp
+  landing** that `emit_cps_callcc` establishes inline, so -- unlike shift/perform
+  -- it does not thread the DK continuation. A *colored* function that also
+  contains a call/cc/escape therefore used to evict wholesale (the `EX_CALLCC`
+  hit `safe_to_delegate`'s conservative `default: false`). This slice adds
+  `EX_CALLCC` to `safe_to_delegate` (`src/passes/cps_ir.c`) so a call/cc with a
+  **capture-free** receiver is delegated to the direct emitter via `CT_LETRAW`
+  and the enclosing colored function stays CPS-emitted. Oracle pairs:
+  `cps-oracle-colored-escape`, `cps-oracle-colored-callcc` (direct == cps).
+
+  *Deliberately still evicted:* a **capturing** receiver (`(escape (fn [k] ...
+  n ...))`). An experiment confirmed delegating it miscompiles (the captured
+  enclosing local is not reliably in scope at the delegated setjmp site), so the
+  gate requires `is_delegatable_value` (capture-free). The remaining decoupling
+  from `emit_cps.c` -- relocating `emit_cps_callcc` + `emit_cps_callcc_prelude`
+  out of the file so U7 can delete it, and admitting capturing receivers -- is
+  follow-on U2/U7 work. This slice only affects CT-IR emission, so
+  default-backend codegen is byte-identical (no snapshot churn).
 - **U3 -- Cloneable (multi-shot) capture.** Port `dk_copy_range` deep-clone +
   capture clone/drop glue driven from CT-IR emit; add the multi-shot
   classification axis. This is the highest-risk phase (capture correctness).
