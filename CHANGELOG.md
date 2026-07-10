@@ -4,6 +4,18 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.27.6] -- 2026-07-09
+
+### Added
+
+- **CPS-IR-to-C backend (experimental)**: new emitter lowers a colored
+  function's ANF/CPS IR directly to C under a ratified DK-threading
+  ABI, covering the direct<->CPS boundary edges, letcont join points,
+  and the load-bearing shift/reset case where a callee's shift is
+  delimited by a caller's reset. Gated behind `--enable=cps-backend`;
+  off by default and neutral to the suite until a fixture opts in
+  (#649).
+
 ## [0.27.5] -- 2026-07-09
 
 ### Added

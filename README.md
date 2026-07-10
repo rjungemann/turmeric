@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.27.5` -- `Show` instances for `Vec`/`Set`/`Map` plus content-keyed `Set[A]` (`Set[cstr]`/`Set[Sym]` now work).
+**Latest release:** `v0.27.6` -- Experimental CPS-IR-to-C backend (`--enable=cps-backend`) lowers colored functions directly to C under a ratified DK-threading ABI.
 
 ## What
 
