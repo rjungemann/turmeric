@@ -1,0 +1,15 @@
+;; U3 oracle: native CT-IR emission of a Shape 1 (identity-continuation) cloneable.
+;; Backend: default backend (emit_cps.c)
+;; make is a colored non-main fn whose (cloneable-reset (cloneable-shift k-id 0))
+;; is the whole body -- the trivial continuation.  Under the experiment it lowers
+;; via the native CT_CLONEABLE node (tur_cloneable_cont_alloc + identity cont fn,
+;; NO dk_copy_range), not the delegation.  Multi-shot resume (clone + two resumes)
+;; is trivially correct (the identity continuation is stateless).  direct == cps.
+;;
+(defn k-id [k] : int k)
+(defn make [] : int (cloneable-reset (cloneable-shift k-id 0)))
+(defn main [] : int
+  (let [c (make)]
+    (println (tur_cloneable_cont_resume (tur_cloneable_cont_clone c) 10))
+    (println (tur_cloneable_cont_resume c 20)))
+  0)

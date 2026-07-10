@@ -265,13 +265,25 @@ fallback until the final phase removes it.
   backends. Oracle: `cps-oracle-cloneable-nested-op`. Resolved report:
   [docs/archive/cloneable-prelude-gate-misses-nested-shift.md](../../archive/cloneable-prelude-gate-misses-nested-shift.md).
 
-  *Remaining (the risky core):* teaching the CT-IR backend to *emit* the
-  cloneable multi-shot machinery itself (`dk_copy_range` deep-clone + clone/drop
-  glue driven from CT-IR emit) and add the multi-shot classification axis, rather
-  than delegating the region. The native emit is mapped -- the two emit shapes
-  (trivial vs. `dk_copy_range` continuation), where the capture-correctness risk
-  lives, and a staged suite-green path -- in
-  [cps-backend-unification-u3-native-emit-plan.md](cps-backend-unification-u3-native-emit-plan.md).
+  **Native emit -- Shape 1 landed.** The staged native port (see
+  [cps-backend-unification-u3-native-emit-plan.md](cps-backend-unification-u3-native-emit-plan.md))
+  begins with the trivial (identity) continuation: `(cloneable-reset
+  (cloneable-shift receiver val))` where the shift is the whole reset body, so
+  there is no `dk_copy_range`. A new `CT_CLONEABLE` node (`cps_ir.h`) is
+  translated for that shape with a named uncolored receiver (`build_cloneable`,
+  `cps_ir.c`; other shapes fall through to the delegation) and emitted natively
+  (`emit_cloneable`, `emit_cps_ir.c`): an identity continuation fn +
+  `tur_cloneable_cont_alloc(id, NULL, NULL, NULL)` + the receiver call -- no
+  `emit_cps.c` involvement. Multi-shot resume is trivially correct (the identity
+  continuation is stateless), verified natively by
+  `cps-oracle-cloneable-native-shape1` (clone + two resumes -> 10/20). All
+  cloneable-basic-style fixtures now emit Shape 1 natively; everything else keeps
+  delegating.
+
+  *Remaining (the risky core):* Shape 2 -- a *non-trivial* continuation
+  (`dk_copy_range` deep-clone + clone/drop glue) driven from CT-IR emit, ported
+  one context form at a time behind its own oracle -- plus the multi-shot
+  classification axis. Mapped in the native-emit note.
 - **U4 -- Serial.** Port `emit_cps_serial_runtime_prelude` + serial placement.
 - **U5 -- Async / await.** Port the scheduler wiring on top of the now-unified
   cloneable/serial base.

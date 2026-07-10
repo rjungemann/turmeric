@@ -87,6 +87,9 @@ typedef enum CTermKind {
                       * The RHS is a source Expr (rc/of, rc/drop, ...) emitted by
                       * the direct emitter (emit_value); the owning value stays a
                       * local and never crosses a DK slot. See emit_cps_ir.c. */
+    CT_CLONEABLE,    /* U3 Shape 1: (cloneable-reset (cloneable-shift receiver val))
+                      * with a TRIVIAL (identity) continuation -- alloc an identity
+                      * cloneable_cont, call receiver, bind reset value, continue. */
     CT_UNSUPPORTED,  /* a source form outside the CPS2 subset (carries a reason) */
 } CTermKind;
 
@@ -136,6 +139,10 @@ struct CTerm {
                  CVar x; CTerm *body; }                                   perform;
         struct { CAtom k; CAtom v; CVar x; CTerm *body; }                 resume;
         struct { CVar x; const Expr *e; CTerm *body; }                    letraw;
+        /* U3 Shape 1: identity-continuation cloneable.  `receiver` is a named,
+         * uncolored top-level fn called with the fresh cloneable_cont handle;
+         * its result is the reset value bound to x; then run body. */
+        struct { CVar x; const Binding *receiver; CTerm *body; }          cloneable;
         struct { const char *why; }                                       unsupported;
     } as;
 };

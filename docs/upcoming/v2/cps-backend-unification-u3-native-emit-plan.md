@@ -62,6 +62,16 @@ miscompiles silently (wrong resumed state / double free), not at compile time.
 
 ## Staged native port (each step suite-green behind delegation)
 
+**Steps 1-4 (Shape 1) LANDED.** A single `CT_CLONEABLE` node (`cps_ir.h`) models
+the identity-continuation shape; `build_cloneable` (`cps_ir.c`) translates
+`(cloneable-reset (cloneable-shift receiver val))` with a named uncolored
+receiver and falls through to the `CT_LETRAW` delegation otherwise;
+`emit_cloneable` (`emit_cps_ir.c`) emits the identity cont fn +
+`tur_cloneable_cont_alloc(id, NULL, NULL, NULL)` + receiver call; admitted in
+`term_core_ok` and threaded through the scan walkers. Oracle:
+`cps-oracle-cloneable-native-shape1` (native multi-shot resume, 10/20). Steps
+5-7 (Shape 2 + classification + retire delegation) remain.
+
 1. **CT nodes.** Add `CT_CLONEABLE_SHIFT` (receiver + captured-cont, distinct
    from abortive `CT_SHIFT` -- the receiver takes a *handle*, not the value) and
    either reuse `CT_RESET` with a `cloneable` flag or add `CT_CLONEABLE_RESET`.

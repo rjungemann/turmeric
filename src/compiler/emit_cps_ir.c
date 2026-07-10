@@ -380,6 +380,9 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
             CC_ATOM(&t->as.resume.v);
             bound[nb] = t->as.resume.x.id;
             return has_capture_rec(t->as.resume.body, exclude, bound, nb + 1);
+        case CT_CLONEABLE:
+            bound[nb] = t->as.cloneable.x.id;   /* receiver is a global fn -- no capture */
+            return has_capture_rec(t->as.cloneable.body, exclude, bound, nb + 1);
         case CT_LETRAW: {
             /* The delegated Expr's operand variables are the only free names it
              * references (its operands are atomic by construction).  Check each
@@ -597,6 +600,11 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             COL_ATOM(&t->as.resume.v);
             bound[nb] = t->as.resume.x.id;
             collect_caps_rec(t->as.resume.body, exclude, bound, nb + 1, cs); return;
+        case CT_CLONEABLE:
+            /* The receiver is a named global fn (no capture); bind the result
+             * binder for the continuation body and collect its captures. */
+            bound[nb] = t->as.cloneable.x.id;
+            collect_caps_rec(t->as.cloneable.body, exclude, bound, nb + 1, cs); return;
         case CT_LETRAW: {
             /* A delegated (direct-emitted) owning-value op.  Its operand vars are
              * the only free names it references (operands are atomic).  Collect
@@ -706,6 +714,7 @@ static bool joins_closed_rec(const CTerm *t, uint32_t *def, int nd) {
             return joins_closed_rec(t->as.letcont.jbody, def, nd + 1)
                 && joins_closed_rec(t->as.letcont.body, def, nd + 1);
         case CT_RESUME: return joins_closed_rec(t->as.resume.body, def, nd);
+        case CT_CLONEABLE: return joins_closed_rec(t->as.cloneable.body, def, nd);
         default: return false;
     }
 }
@@ -998,6 +1007,13 @@ static bool term_core_ok(const CTerm *t) {
         case CT_RESUME:
             return t->as.resume.k.kind == CA_VAR && atom_ok(&t->as.resume.v)
                 && term_core_ok(t->as.resume.body);
+        case CT_CLONEABLE:
+            /* U3 Shape 1: identity-continuation cloneable.  The receiver is a
+             * named uncolored global fn (checked at translation) and there is no
+             * captured context (the shift is the whole reset body), so admission
+             * just needs a slot-representable result and a core continuation. */
+            return (slot_ok_t(t->as.cloneable.x.type, t->as.cloneable.x.ty) || t->as.cloneable.x.ty == TY_NIL)
+                && term_core_ok(t->as.cloneable.body);
         default: /* CT_UNSUPPORTED */
             return false;
     }
@@ -1253,6 +1269,8 @@ static bool needs_heap_join(const CTerm *t) {
             return needs_heap_join(t->as.perform.body);
         case CT_RESUME:
             return needs_heap_join(t->as.resume.body);
+        case CT_CLONEABLE:
+            return needs_heap_join(t->as.cloneable.body);
         default: return false;
     }
 }
@@ -1811,6 +1829,7 @@ static void emit_term(CE *ce, const CTerm *t);
 static void emit_binder_decls(CE *ce, const CTerm *t);
 static void emit_reset(CE *ce, const CTerm *t);
 static void emit_shift(CE *ce, const CTerm *t);
+static void emit_cloneable(CE *ce, const CTerm *t);
 static void emit_handle(CE *ce, const CTerm *t);
 static void emit_perform(CE *ce, const CTerm *t);
 static void emit_resume(CE *ce, const CTerm *t);
@@ -2011,6 +2030,7 @@ static void emit_term(CE *ce, const CTerm *t) {
         case CT_PERFORM: emit_perform(ce, t); break;
         case CT_RESUME:  emit_resume(ce, t); break;
         case CT_LETRAW:  emit_letraw(ce, t); break;
+        case CT_CLONEABLE: emit_cloneable(ce, t); break;
         default:
             ce_line(ce, "abort(); /* cps-backend: unreachable */");
             break;
@@ -2126,6 +2146,13 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
             ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.resume.x.ty, t->as.resume.x.type), bn);
             free(bn);
             emit_binder_decls(ce, t->as.resume.body);
+            break;
+        }
+        case CT_CLONEABLE: {
+            char *bn = cvar_cname(ce, t->as.cloneable.x);
+            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.cloneable.x.ty, t->as.cloneable.x.type), bn);
+            free(bn);
+            emit_binder_decls(ce, t->as.cloneable.body);
             break;
         }
         default: break;
@@ -2369,6 +2396,32 @@ static void emit_reset(CE *ce, const CTerm *t) {
     emit_term(ce, t->as.reset.delim);   /* delivers to the prompt chain, tail */
     ce->cur_k = save;
     ce->cur_ty = save_ty;
+}
+
+/* CT_CLONEABLE (U3 Shape 1): (cloneable-reset (cloneable-shift receiver val))
+ * with a TRIVIAL (identity) continuation.  The shift is the whole reset body, so
+ * the captured continuation is the identity -- no dk_copy_range.  Emit an
+ * identity continuation fn, alloc a tur_cloneable_cont over it (NULL env / clone
+ * / drop -- the identity is stateless, so multi-shot resume is trivially
+ * correct), call the receiver with the cont handle, bind the reset value to x,
+ * then run the continuation.  Mirrors emit_effects_cloneable_reset's Case 1. */
+static void emit_cloneable(CE *ce, const CTerm *t) {
+    int id = (*ce->helper_ctr)++;
+    char cfn[256];
+    snprintf(cfn, sizeof(cfn), "%s_clc%d", ce->fn_cn, id);
+    buf_printf(ce->helpers,
+        "static int64_t %s(void *__e, int64_t __v) { (void)__e; return __v; }\n", cfn);
+
+    char *xn  = cvar_cname(ce, t->as.cloneable.x);
+    char *rfn = callee_name(t->as.cloneable.receiver);
+    char cv[64];
+    snprintf(cv, sizeof(cv), "__clc%d", id);
+    ce_line(ce, "tur_cloneable_cont *%s = tur_cloneable_cont_alloc(%s, NULL, NULL, NULL);",
+            cv, cfn);
+    ce_line(ce, "%s = %s((int64_t)(intptr_t)%s);", xn, rfn, cv);
+    free(xn);
+    free(rfn);
+    emit_term(ce, t->as.cloneable.body);
 }
 
 /* CT_SHIFT: capture the sub-continuation up to the nearest enclosing prompt and

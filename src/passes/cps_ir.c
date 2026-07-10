@@ -254,6 +254,27 @@ static CTerm *build_letraw(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     return t;
 }
 
+/* U3 Shape 1: try to build a native (identity-continuation) cloneable node for
+ * (cloneable-reset (cloneable-shift receiver val)) -- the shift IS the whole
+ * reset body, so the captured continuation is the identity (no dk_copy_range).
+ * Restricted to a named, uncolored top-level fn receiver; returns NULL for any
+ * other shape (a non-trivial continuation, a closure/indirect receiver, a
+ * colored receiver), so the caller falls back to the CT_LETRAW delegation. */
+static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
+    const Expr *rb = ascribe_peel(e->as.cloneable_reset_.body);
+    if (!rb || rb->kind != EX_CLONEABLE_SHIFT) return NULL;
+    const Expr *kf = ascribe_peel(rb->as.cloneable_shift_.k_fn);
+    if (!kf || kf->kind != EX_VAR || !kf->as.var.binding) return NULL;
+    const Binding *recv = kf->as.var.binding;
+    if (!recv->is_global) return NULL;          /* a top-level fn */
+    if (callee_colored(b, recv)) return NULL;   /* uncolored receiver only */
+    CTerm *t = new_term(b, CT_CLONEABLE);
+    t->as.cloneable.x = x;
+    t->as.cloneable.receiver = recv;
+    t->as.cloneable.body = rest;
+    return t;
+}
+
 /* N6.1: a subexpression that can be emitted wholesale by the direct emitter
  * (via CT_LETRAW) because it neither threads a continuation nor could reach one:
  * it contains no syntactic control op AND no call to a colored (may-capture)
@@ -652,6 +673,14 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                                                  e->as.shift0_.body, &e->type);
             return t;
         }
+        case EX_CLONEABLE_RESET: {
+            /* U3 Shape 1 native, else fall back to the CT_LETRAW delegation. */
+            CVar x = fresh_cvar(b, &e->type);
+            CTerm *ac = new_term(b, CT_APPCONT);
+            ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            CTerm *nat = build_cloneable(b, e, x, ac);
+            return nat ? nat : build_letraw(b, e, x, ac);
+        }
         case EX_HANDLE: {
             CVar x = fresh_cvar(b, &e->type);
             CTerm *ac = new_term(b, CT_APPCONT);
@@ -813,6 +842,11 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             t->as.shift.body = cps_shift_body_kf(b, e->as.shift0_.k_fn,
                                                  e->as.shift0_.body, &e->type);
             return t;
+        }
+        case EX_CLONEABLE_RESET: {
+            /* U3 Shape 1 native, else fall back to the CT_LETRAW delegation. */
+            CTerm *nat = build_cloneable(b, e, x, rest);
+            return nat ? nat : build_letraw(b, e, x, rest);
         }
         case EX_HANDLE:
             return build_handle(b, e, x, rest);
@@ -979,6 +1013,13 @@ void cps_ir_print(const CTerm *t, FILE *out, int indent) {
                     t->as.letraw.x.name,
                     t->as.letraw.e && owning_operand(t->as.letraw.e) ? "rc" : "?");
             cps_ir_print(t->as.letraw.body, out, indent);
+            break;
+        case CT_CLONEABLE:
+            fprintf(out, "let %s = cloneable-cont -> %s(<cont>)  ; U3 Shape 1\n",
+                    t->as.cloneable.x.name,
+                    t->as.cloneable.receiver && t->as.cloneable.receiver->name
+                        ? t->as.cloneable.receiver->name->name : "?");
+            cps_ir_print(t->as.cloneable.body, out, indent);
             break;
         case CT_UNSUPPORTED:
             fprintf(out, "<unsupported: %s>\n", t->as.unsupported.why ? t->as.unsupported.why : "?");
