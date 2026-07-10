@@ -238,7 +238,19 @@
 ;;; Walks the set's HAMT via the pure-Turmeric iterator (each element is a
 ;;; HAMT key).  The `^Show A` constraint scopes the element Show dictionary.
 ;;;
+;;; The `s : (Set A)` parameter is threaded purely to pin the element type A
+;;; on the loop's own signature.  The HAMT iterator handle is an untyped
+;;; `ptr<void>`, so without a parameter that mentions A the loop's `^Show A`
+;;; would be a phantom type variable: monomorphization has nothing to ground
+;;; it against, the element read `(show (:: (hamt/iter-cur-key iter) A))`
+;;; bakes the int64-carrier representative Show[int], and a cstr/bool/float
+;;; element shows as its raw carrier word.  Carrying `(Set A)` gives the
+;;; specializer the same structural handle it already uses for Show[Vec]
+;;; (whose loop carries `v : (Vec A)`), so the element dispatches on its
+;;; concrete type per ABI specialization.
+;;;
 ;;; Parameters:
+;;;   s     -- the Set[A] being shown (type witness for A; not otherwise read)
 ;;;   iter  -- hamt/iter-alloc-allocated handle scanning the set
 ;;;   first -- true until the first element is emitted (separator control)
 ;;;   acc   -- repr accumulated so far
@@ -249,10 +261,10 @@
 ;;; Since: Phase repl-show-collections
 
 (defn set-show-loop [^Show A]
-  [iter : ptr<void> first : bool acc : cstr]
+  [s : (Set A) iter : ptr<void> first : bool acc : cstr]
   : cstr
   (if (hamt/iter-advance! iter)
-    (set-show-loop iter
+    (set-show-loop s iter
       false
       (show-concat acc
         (show-concat (if first "" " ") (show (:: (hamt/iter-cur-key iter) A)))))
@@ -265,7 +277,7 @@
   [s (Set A)]
   : cstr
   (let [iter (hamt/iter-alloc (set-hamt s))
-        body (set-show-loop iter true "")]
+        body (set-show-loop s iter true "")]
     (do (hamt/iter-destroy! iter) body)))
 ;;; Show [Set] -- render a Set[A] as "#set{a b c}" using the element's Show
 ;;; instance.  Mirrors the #set{...} / set-of literal surface.  An empty Set
@@ -287,7 +299,17 @@
 ;;; as "key value".  The `^Show K` / `^Show V` constraints scope both element
 ;;; Show dictionaries.
 ;;;
+;;; The `m : (Map K V)` parameter is threaded purely to pin the key/value
+;;; types K and V on the loop's own signature.  As with set-show-loop, the
+;;; HAMT iterator handle is an untyped `ptr<void>`; without a parameter that
+;;; mentions K and V the loop's `^Show K`/`^Show V` are phantom variables the
+;;; specializer cannot ground, and cstr keys / non-int values would show as
+;;; their raw carrier words.  Carrying `(Map K V)` gives monomorphization the
+;;; structural handle it needs to dispatch each key and value on its concrete
+;;; type.
+;;;
 ;;; Parameters:
+;;;   m     -- the Map[K V] being shown (type witness for K and V; not read)
 ;;;   iter  -- hamt/iter-alloc-allocated handle scanning the map
 ;;;   first -- true until the first entry is emitted (separator control)
 ;;;   acc   -- repr accumulated so far
@@ -298,10 +320,10 @@
 ;;; Since: Phase repl-show-collections
 
 (defn map-show-loop [^Show K ^Show V]
-  [iter : ptr<void> first : bool acc : cstr]
+  [m : (Map K V) iter : ptr<void> first : bool acc : cstr]
   : cstr
   (if (hamt/iter-advance! iter)
-    (map-show-loop iter
+    (map-show-loop m iter
       false
       (show-concat acc
         (show-concat
@@ -316,7 +338,7 @@
   [m (Map K V)]
   : cstr
   (let [iter (hamt/iter-alloc (map-hamt m))
-        body (map-show-loop iter true "")]
+        body (map-show-loop m iter true "")]
     (do (hamt/iter-destroy! iter) body)))
 ;;; Show [Map] -- render a Map[K V] as "#map{k1 v1 k2 v2}" using the key and
 ;;; value Show instances.  Mirrors the #map{...} / hamt-of literal surface.

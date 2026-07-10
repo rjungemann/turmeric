@@ -1,0 +1,3 @@
+#set{x y}
+#map{k v}
+#map{n 7}
