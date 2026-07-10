@@ -1,5 +1,13 @@
 # WASM REPL: collection results still print as opaque pointers (no Show wiring)
 
+**Status:** RESOLVED 2026-07-10. Both gaps closed in `src/web/wasm_glue.c`:
+`wasm_preload_stdlib` now calls `turi_env_preload_typeclasses` after
+`turi_env_preload_collections`, and both eval paths (`turi_wasm_eval`,
+`turi_wasm_eval_ex`) gained the fourth display tier
+`turi_try_show_by_tag(g_env, result, type_tag)` between `turi_show_result`
+and the `turi_value_repr` fallback -- matching the native `tur repl`
+four-tier dispatch in `src/turi/repl.c`.
+
 **Severity:** low (usability paper cut, browser REPL only; a follow-up carved
 out of the `repl-show-collections` work -- see
 `docs/archive/repl-no-show-instances-for-collections-and-structs.md`).
