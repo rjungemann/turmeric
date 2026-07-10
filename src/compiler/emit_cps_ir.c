@@ -516,6 +516,11 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
             bound[nb] = t->as.letraw.x.id;
             return has_capture_rec(t->as.letraw.body, exclude, bound, nb + 1);
         }
+        case CT_CALLCC:
+            /* The receiver is capture-free (build_callcc guarantees it), so the
+             * escape landing closes over nothing; bind x and recurse the body. */
+            bound[nb] = t->as.callcc.x.id;
+            return has_capture_rec(t->as.callcc.body, exclude, bound, nb + 1);
         default: return true;   /* nested reset/shift/handle/perform in a lifted body: bail */
     }
     #undef CC_ATOM
@@ -746,6 +751,11 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
              * its body's captures ride the shift-body helper's env.  Walk it so a
              * capture threaded through the enclosing continuation is not missed. */
             collect_caps_rec(t->as.shift.body, exclude, bound, nb, cs); return;
+        case CT_CALLCC:
+            /* Capture-free receiver (build_callcc): the escape landing collects no
+             * captures of its own.  Bind x and walk the continuation body. */
+            bound[nb] = t->as.callcc.x.id;
+            collect_caps_rec(t->as.callcc.body, exclude, bound, nb + 1, cs); return;
         default:
             /* Nested control ops in a lifted body: out of this collector's scope. */
             cs->ok = false; return;
@@ -814,6 +824,7 @@ static bool joins_closed_rec(const CTerm *t, uint32_t *def, int nd) {
                 && joins_closed_rec(t->as.letcont.body, def, nd + 1);
         case CT_RESUME: return joins_closed_rec(t->as.resume.body, def, nd);
         case CT_CLONEABLE: return joins_closed_rec(t->as.cloneable.body, def, nd);
+        case CT_CALLCC: return joins_closed_rec(t->as.callcc.body, def, nd);
         default: return false;
     }
 }
@@ -1116,6 +1127,12 @@ static bool term_core_ok(const CTerm *t) {
             for (uint32_t i = 0; i < t->as.cloneable.n_frames; i++)
                 if (!atom_ok(&t->as.cloneable.frames[i].operand)) return false;
             return term_core_ok(t->as.cloneable.body);
+        case CT_CALLCC:
+            /* U7: a local setjmp escape landing (emit_callcc).  The receiver is
+             * capture-free (build_callcc) and emitted as a value; admission needs a
+             * slot-representable call/cc result and a core continuation body. */
+            return (slot_ok_t(t->as.callcc.x.type, t->as.callcc.x.ty) || t->as.callcc.x.ty == TY_NIL)
+                && term_core_ok(t->as.callcc.body);
         default: /* CT_UNSUPPORTED */
             return false;
     }
@@ -1391,6 +1408,8 @@ static bool needs_heap_join(const CTerm *t) {
             return needs_heap_join(t->as.resume.body);
         case CT_CLONEABLE:
             return needs_heap_join(t->as.cloneable.body);
+        case CT_CALLCC:
+            return needs_heap_join(t->as.callcc.body);
         default: return false;
     }
 }
@@ -1820,6 +1839,11 @@ static bool is_cps_island(const CTerm *t, const Symbol **handled, int nh) {
             return is_cps_island(t->as.perform.body, handled, nh);
         case CT_RESUME:
             return is_cps_island(t->as.resume.body, handled, nh);
+        case CT_CALLCC:
+            /* A local setjmp escape performs/handles no effect (pure control), so
+             * it is transparent to effect co-classification -- recurse the body
+             * (matching the prior CT_LETRAW-delegated behavior). */
+            return is_cps_island(t->as.callcc.body, handled, nh);
         case CT_RESET:
         case CT_SHIFT:
         default:
@@ -1954,6 +1978,7 @@ static void emit_handle(CE *ce, const CTerm *t);
 static void emit_perform(CE *ce, const CTerm *t);
 static void emit_resume(CE *ce, const CTerm *t);
 static void emit_letraw(CE *ce, const CTerm *t);
+static void emit_callcc(CE *ce, const CTerm *t);
 static void emit_heap_join(CE *ce, const CTerm *t);
 static char *cvar_cname(CE *ce, CVar x);
 
@@ -2151,6 +2176,7 @@ static void emit_term(CE *ce, const CTerm *t) {
         case CT_RESUME:  emit_resume(ce, t); break;
         case CT_LETRAW:  emit_letraw(ce, t); break;
         case CT_CLONEABLE: emit_cloneable(ce, t); break;
+        case CT_CALLCC:  emit_callcc(ce, t); break;
         default:
             ce_line(ce, "abort(); /* cps-backend: unreachable */");
             break;
@@ -2273,6 +2299,13 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
             ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.cloneable.x.ty, t->as.cloneable.x.type), bn);
             free(bn);
             emit_binder_decls(ce, t->as.cloneable.body);
+            break;
+        }
+        case CT_CALLCC: {
+            char *bn = cvar_cname(ce, t->as.callcc.x);
+            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.callcc.x.ty, t->as.callcc.x.type), bn);
+            free(bn);
+            emit_binder_decls(ce, t->as.callcc.body);
             break;
         }
         default: break;
@@ -2934,6 +2967,62 @@ static void emit_resume(CE *ce, const CTerm *t) {
     buf_free(&inv);
     free(bn); free(ld); free(sv); free(kk); free(vv);
     emit_term(ce, t->as.resume.body);
+}
+
+/* CT_CALLCC (U7): (call/cc f)/(escape f) as a LOCAL setjmp escape landing --
+ * a native port of emit_cps_callcc.  Establish a tur_escape_cont landing, run
+ * the (capture-free) receiver f with the landing handle as its continuation,
+ * and bind x to f's normal return; an upward (tur_escape_resume &cc v) longjmps
+ * back and delivers v instead.  Does NOT thread the DK continuation, so the
+ * enclosing prompt chain is untouched.  The escape runtime (tur_escape_cont /
+ * tur_escape_resume) is emitted by emit_cps_callcc_prelude, gated on the
+ * program containing EX_CALLCC (fires regardless of backend). */
+static void emit_callcc(CE *ce, const CTerm *t) {
+    const Expr *e = t->as.callcc.e;
+    const Expr *f = e->as.callcc_.fn;
+    while (f && f->kind == EX_ASCRIBE) f = f->as.ascribe_.inner;   /* peel like build_callcc */
+    char *xn = cvar_cname(ce, t->as.callcc.x);
+    const char *rty = binder_ctype_full(ce->ctx, t->as.callcc.x.ty, t->as.callcc.x.type);
+    int id = (*ce->helper_ctr)++;
+    char cc[48];
+    snprintf(cc, sizeof(cc), "__cc%d", id);
+
+    ce_line(ce, "tur_escape_cont %s;", cc);
+    ce_line(ce, "%s.valid = 1;", cc);
+    ce_line(ce, "if (setjmp(%s.buf) == 0) {", cc);
+    ce->indent += 4;
+    /* Normal path: emit the receiver value, then call it with &cc. */
+    int saved = ce->ctx->indent;
+    ce->ctx->indent = ce->indent;
+    char *fval = emit_value(ce->ctx, ce->out, f);
+    ce->ctx->indent = saved;
+    if (f->kind == EX_CLOSURE) {
+        struct Closure *closure = f->as.closure_.closure;
+        char *thunk_name;
+        if (closure->fn->binding) {
+            thunk_name = raw_name_for_binding(closure->fn->binding);
+        } else {
+            thunk_name = malloc(64);
+            snprintf(thunk_name, 64, "__fn_anon_%d",
+                     closure->fn->n_params > 0 ? closure->fn->params[0]->id : 0);
+        }
+        ce_line(ce, "%s = (%s)%s(%s, (int64_t)(intptr_t)&%s);", xn, rty, thunk_name, fval, cc);
+        free(thunk_name);
+    } else {
+        ce_line(ce, "%s = (%s)%s((int64_t)(intptr_t)&%s);", xn, rty, fval, cc);
+    }
+    /* f returned normally: the captured continuation is now dead. */
+    ce_line(ce, "%s.valid = 0;", cc);
+    free(fval);
+    ce->indent -= 4;
+    ce_line(ce, "} else {");
+    ce->indent += 4;
+    /* Resumed path: an upward (tur_escape_resume &cc v) delivered v here. */
+    ce_line(ce, "%s = (%s)%s.result;", xn, rty, cc);
+    ce->indent -= 4;
+    ce_line(ce, "}");
+    free(xn);
+    emit_term(ce, t->as.callcc.body);
 }
 
 /* ---- signatures ------------------------------------------------------ */

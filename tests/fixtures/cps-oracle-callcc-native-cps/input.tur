@@ -1,0 +1,33 @@
+;; U7 native gap (cps-backend-unification): CALL/CC / ESCAPE emitted natively.
+;; Before U7 a colored function's (call/cc f)/(escape f) was 100% delegated to
+;; the direct emitter (emit_cps_callcc) via CT_LETRAW -- there was no CT_CALLCC
+;; IR node.  U7 adds a native CT_CALLCC for a CAPTURE-FREE receiver f (a named
+;; top-level fn or a zero-capture fn value): a local setjmp escape landing
+;; (tur_escape_cont) whose receiver gets the landing handle as its continuation.
+;; It does NOT thread the DK chain, so it composes with a sibling reset/shift.
+;; A CAPTURING receiver still delegates (capturing-recv below).  direct == cps.
+;;
+;; Each fn is colored by a reset/shift; the call/cc is a sibling `+` operand so
+;; the enclosing function is CPS-emitted and the call/cc lowers via CT_CALLCC.
+(defn ret-k7   [k : escape-cont] : int (k 7))       ; escapes upward with 7
+(defn ret-const [k : escape-cont] : int 15)         ; ignores k, returns 15
+(defn deep     [k : escape-cont] : int (ret-k7 k))  ; escapes from one frame deeper
+
+(defn via-named [] : int
+  (+ (reset (shift (fn [v] v) 10)) (call/cc ret-k7)))         ; 10 + 7  = 17
+(defn via-const [] : int
+  (+ (reset (shift (fn [v] v) 10)) (call/cc ret-const)))      ; 10 + 15 = 25
+(defn via-closure [] : int
+  (+ (reset (shift (fn [v] v) 3)) (call/cc (fn [k] (+ 100 (k 8))))))  ; 3 + 8 = 11
+(defn via-deep [] : int
+  (+ (reset (shift (fn [v] v) 100)) (call/cc deep)))          ; 100 + 7 = 107
+(defn capturing-recv [x : int] : int
+  (+ (reset (shift (fn [v] v) 1)) (call/cc (fn [k] (+ x (k 9))))))    ; 1 + 9 = 10
+
+(defn main [] : int
+  (println (via-named))
+  (println (via-const))
+  (println (via-closure))
+  (println (via-deep))
+  (println (capturing-recv 100))
+  0)

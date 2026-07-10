@@ -254,6 +254,34 @@ static CTerm *build_letraw(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     return t;
 }
 
+/* U7 callcc: a (call/cc f)/(escape f) whose receiver `f` is CAPTURE-FREE -- a
+ * named top-level fn, or a zero-capture fn value (fat/poly/closure literal).
+ * Such a receiver references no enclosing local, so the native escape landing
+ * (emit_callcc) needs no captured env and is safe even inside a lifted body.  A
+ * capturing closure receiver returns NULL so the caller keeps the CT_LETRAW
+ * delegation (which walks the receiver's free vars into the lifted env). */
+static bool callcc_capturefree_recv(const Expr *f) {
+    f = ascribe_peel(f);
+    if (!f) return false;
+    if (is_delegatable_value(f)) return true;          /* fat/poly/fn/zero-cap closure */
+    if (f->kind == EX_VAR && f->as.var.binding
+        && f->as.var.binding->is_global
+        && f->as.var.binding->type.kind == TY_FN)
+        return true;                                    /* a named top-level fn */
+    return false;
+}
+
+/* Build a native CT_CALLCC (binds x = the call/cc value, continues body) for a
+ * capture-free receiver; NULL otherwise so the caller falls back to CT_LETRAW. */
+static CTerm *build_callcc(CpsB *b, Expr *e, CVar x, CTerm *body) {
+    if (!callcc_capturefree_recv(e->as.callcc_.fn)) return NULL;
+    CTerm *t = new_term(b, CT_CALLCC);
+    t->as.callcc.x = x;
+    t->as.callcc.e = e;
+    t->as.callcc.body = body;
+    return t;
+}
+
 /* U3 Shape 1: try to build a native (identity-continuation) cloneable node for
  * (cloneable-reset (cloneable-shift receiver val)) -- the shift IS the whole
  * reset body, so the captured continuation is the identity (no dk_copy_range).
@@ -1245,6 +1273,15 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             CTerm *core = build_resume(b, e, x, ac, &p);
             return fold_pending(b, &p, core);
         }
+        case EX_CALLCC: {
+            /* U7: native local-escape landing for a capture-free receiver, else
+             * fall back to the CT_LETRAW delegation (emit_cps_callcc). */
+            CVar x = fresh_cvar(b, &e->type);
+            CTerm *ac = new_term(b, CT_APPCONT);
+            ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            CTerm *nat = build_callcc(b, e, x, ac);
+            return nat ? nat : build_letraw(b, e, x, ac);
+        }
         default: {
             /* N6.1: a control-op-free, colored-call-free form -- emit it wholesale
              * via the direct emitter, then deliver its result to the continuation. */
@@ -1409,6 +1446,12 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             Pending p = {0};
             CTerm *core = build_resume(b, e, x, rest, &p);
             return fold_pending(b, &p, core);
+        }
+        case EX_CALLCC: {
+            /* U7: native local-escape landing for a capture-free receiver, else
+             * fall back to the CT_LETRAW delegation (see cps_tail). */
+            CTerm *nat = build_callcc(b, e, x, rest);
+            return nat ? nat : build_letraw(b, e, x, rest);
         }
         default: {
             /* N6.1: delegate a control-op-free, colored-call-free form to the
@@ -1576,6 +1619,11 @@ void cps_ir_print(const CTerm *t, FILE *out, int indent) {
                     t->as.cloneable.n_frames, t->as.cloneable.n_lets,
                     t->as.cloneable.if_cond ? ", if" : "");
             cps_ir_print(t->as.cloneable.body, out, indent);
+            break;
+        case CT_CALLCC:
+            fprintf(out, "let %s = call/cc(<recv>)  ; U7 native escape landing\n",
+                    t->as.callcc.x.name);
+            cps_ir_print(t->as.callcc.body, out, indent);
             break;
         case CT_UNSUPPORTED:
             fprintf(out, "<unsupported: %s>\n", t->as.unsupported.why ? t->as.unsupported.why : "?");

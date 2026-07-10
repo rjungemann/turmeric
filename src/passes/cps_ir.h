@@ -90,6 +90,11 @@ typedef enum CTermKind {
     CT_CLONEABLE,    /* U3 Shape 1: (cloneable-reset (cloneable-shift receiver val))
                       * with a TRIVIAL (identity) continuation -- alloc an identity
                       * cloneable_cont, call receiver, bind reset value, continue. */
+    CT_CALLCC,       /* (call/cc f) / (escape f): a LOCAL setjmp escape landing --
+                      * bind x = the call/cc value (f's normal return, or the value
+                      * an upward tur_escape_resume delivers), continue body.  Does
+                      * NOT thread the DK continuation.  Native for a capture-free
+                      * receiver f; a capturing receiver still delegates via LETRAW. */
     CT_UNSUPPORTED,  /* a source form outside the CPS2 subset (carries a reason) */
 } CTermKind;
 
@@ -197,6 +202,11 @@ struct CTerm {
                  CloneFrame *frames; uint32_t n_frames;
                  const Expr *if_cond; const Expr *if_pure; bool if_when;
                  CTerm *body; }                                           cloneable;
+        /* (call/cc f) / (escape f): `e` is the original EX_CALLCC expr (the
+         * receiver f = e->as.callcc_.fn is emitted as a value; the call/cc result
+         * type = e->type).  The receiver is capture-free (a named fn or a
+         * zero-capture fn value), so no env rides the escape landing. */
+        struct { CVar x; const Expr *e; CTerm *body; }                    callcc;
         struct { const char *why; }                                       unsupported;
     } as;
 };
