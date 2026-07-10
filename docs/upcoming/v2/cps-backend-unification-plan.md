@@ -370,6 +370,24 @@ fallback until the final phase removes it.
   fuller owning-value multi-shot axis lands with U4/U5, where eviction and the
   clone/drop glue are actually exercised.
 - **U4 -- Serial.** Port `emit_cps_serial_runtime_prelude` + serial placement.
+  **First slice landed (placement, not eviction).** Before U4, a colored function
+  containing a `serial-reset` hit `CT_UNSUPPORTED` and the *whole* function evicted
+  to direct emit. U4 makes `serial-reset` delegatable per-region via `CT_LETRAW`
+  (`safe_to_delegate` + `EX_SERIAL_RESET` cases in `cps_tail`/`cps_bind`,
+  mirroring the cloneable U3 first slice), so the enclosing colored function stays
+  CPS-emitted with just the serial region delegated to the proven marshaling
+  runtime (`emit_effects_serial_reset` -> `emit_cps_serial_reset`). The serial
+  runtime prelude is gated on *presence* of serial syntax, so no
+  gating-mismatch (unlike the cloneable `cl_can_lower` coupling). Verified: a
+  helper `run-it` with a `serial-reset` now emits `run_hyit__cps` (colored, CT-IR)
+  instead of evicting; `direct == cps`. Oracle `cps-oracle-serial-placement`; all
+  21 serial fixtures green.
+
+  *Remaining for U4:* native serial-context emission (the `collect_ctx` frame
+  chain is identical to cloneable, but the frames marshal the continuation via the
+  Serializable instances rather than `dk_copy_range` deep-clone) -- a larger native
+  port paralleling the cloneable Shape 2 work, with the delegation as the safety
+  net until then.
 - **U5 -- Async / await.** Port the scheduler wiring on top of the now-unified
   cloneable/serial base.
 - **U6 -- Prelude consolidation.** Fold the four `emit_cps_*_prelude` emitters

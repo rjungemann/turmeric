@@ -566,7 +566,7 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
         case EX_PERFORM: case EX_HANDLE: case EX_RESUME: case EX_DISCONTINUE:
         case EX_RESET: case EX_SHIFT: case EX_SHIFT0:
         case EX_CLONEABLE_SHIFT:
-        case EX_SERIAL_RESET: case EX_SERIAL_SHIFT:
+        case EX_SERIAL_SHIFT:
         case EX_ASYNC:
             return false;
         /* U3 (cps-backend-unification): a (cloneable-reset body) is a
@@ -581,6 +581,19 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
          * instead of wholly evicting.  The reset's value (often a continuation
          * handle resumed later) is bound and the CPS continuation runs after. */
         case EX_CLONEABLE_RESET:
+            return true;
+        /* U4 (cps-backend-unification): a (serial-reset body) is a SELF-CONTAINED
+         * marshalable delimited region, analogous to cloneable-reset but with the
+         * continuation serialized (save-cont!/resume-cont!) rather than deep-cloned.
+         * The whole region is emitted as a unit by the direct emitter
+         * (emit_effects_serial_reset -> emit_cps_serial_reset), which owns the
+         * serial marshaling runtime.  Delegating the reset via CT_LETRAW reuses
+         * that proven runtime and lets a colored function that contains a
+         * serial-reset stay CPS-emitted instead of wholly evicting (the serial
+         * runtime prelude is gated on *presence* of serial syntax, so the delegated
+         * helpers are always in scope).  The bare serial-shift stays non-delegatable
+         * above (it captures the rest of its reset body). */
+        case EX_SERIAL_RESET:
             return true;
         /* nested fn defs: call-graph boundaries, delegatable as values. */
         case EX_FN_DEF: case EX_FN: case EX_CLOSURE:
@@ -948,6 +961,15 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             CTerm *nat = build_cloneable(b, e, x, ac);
             return nat ? nat : build_letraw(b, e, x, ac);
         }
+        case EX_SERIAL_RESET: {
+            /* U4: delegate the marshalable serial region to the direct emitter so
+             * a colored function containing it stays CPS-emitted rather than
+             * wholly evicting. */
+            CVar x = fresh_cvar(b, &e->type);
+            CTerm *ac = new_term(b, CT_APPCONT);
+            ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            return build_letraw(b, e, x, ac);
+        }
         case EX_HANDLE: {
             CVar x = fresh_cvar(b, &e->type);
             CTerm *ac = new_term(b, CT_APPCONT);
@@ -1115,6 +1137,9 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             CTerm *nat = build_cloneable(b, e, x, rest);
             return nat ? nat : build_letraw(b, e, x, rest);
         }
+        case EX_SERIAL_RESET:
+            /* U4: delegate the marshalable serial region (see cps_tail). */
+            return build_letraw(b, e, x, rest);
         case EX_HANDLE:
             return build_handle(b, e, x, rest);
         case EX_PERFORM: {
