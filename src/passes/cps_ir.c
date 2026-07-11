@@ -238,6 +238,22 @@ static bool is_delegatable_value(const Expr *e) {
     }
 }
 
+/* A CAPTURING closure is NOT a bare "direct entry point" value.  The direct
+ * emitter's indirect-call path (emit_expr.c, the `fn_expr` block ~2950) casts
+ * the callee VALUE to a bare function pointer and calls it -- but a fat
+ * closure's value is its ENV pointer, so the cast jumps into the heap-allocated
+ * env struct as if it were code (segfault).  Only a bare fn / 0-capture closure
+ * / fn-pointer value is a valid indirect callee there.  A `shift`/`shift0` whose
+ * receiver is a capturing closure lowers via a synthesized `(recv val)` that
+ * hits exactly this path (cps_shift_body_kf), so such a shift must EVICT to the
+ * direct shift lowering (emit_cps.c), which handles a capturing receiver
+ * correctly (verified: continuation-substrate t-deep).  Returns true for a
+ * callee the indirect delegation can safely emit. */
+static bool indirect_callee_ok(const Expr *fe) {
+    return !(fe && fe->kind == EX_CLOSURE && fe->as.closure_.closure
+             && fe->as.closure_.closure->n_captures > 0);
+}
+
 /* True if every argument of an EX_CALL is atomic (so the whole call can be
  * delegated to the direct emitter without control ops hiding in an arg). */
 static bool call_args_atomic(const Expr *e) {
@@ -1186,6 +1202,11 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                  * behaviour is identical whether the surrounding code is CPS- or
                  * direct-emitted.  Delegate it to the direct emitter with atomic
                  * args, exactly as an uncolored direct call is delegated. */
+                if (!indirect_callee_ok(e->as.call_.fn_expr)) {
+                    CTerm *t = new_term(b, CT_UNSUPPORTED);
+                    t->as.unsupported.why = "indirect call through capturing closure";
+                    return t;
+                }
                 if (!call_args_atomic(e)) {
                     CTerm *t = new_term(b, CT_UNSUPPORTED);
                     t->as.unsupported.why = "indirect call (non-atomic args)";
@@ -1389,6 +1410,11 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                 /* Indirect call: the fn value is the callee's direct entry, which
                  * never joins the caller's delimited-control chain -- delegate to
                  * the direct emitter with atomic args (see cps_tail). */
+                if (!indirect_callee_ok(e->as.call_.fn_expr)) {
+                    CTerm *t = new_term(b, CT_UNSUPPORTED);
+                    t->as.unsupported.why = "indirect call through capturing closure";
+                    return t;
+                }
                 if (!call_args_atomic(e)) {
                     CTerm *t = new_term(b, CT_UNSUPPORTED);
                     t->as.unsupported.why = "indirect call (non-atomic args)";

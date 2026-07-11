@@ -88,17 +88,40 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * flat-stack heap-continuation trampoline.  The gates in emit_expr.c /
      * emit_fns.c / emit_module.c are removed; the feature is unconditional.  See
      * docs/archive/catch-unwind-graduation-plan.md. */
-    { "cps-backend",
-      "lower a colored function's ANF/CPS IR to C through the DK-threading "
-      "backend (heap continuations) instead of the direct-style path",
-      "docs/upcoming/v1/cps-ir-to-c-backend-plan.md",
-      "0.27.1",                  /* introduced */
-      "0.29.0",                  /* expires_at (two minor releases; hard contract) */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_cps_backend },
+    /* cps-backend GRADUATED 2026-07-11 -- the CT-IR CPS backend
+     * (emit_cps_ir.c) now lowers every emittable colored function to C
+     * through the DK-threading heap-continuation path unconditionally; the
+     * `g_opt_cps_backend` gate is retired and `emit_cps_ir_try_fn` /
+     * `emit_cps_ir_program_has_emittable` run always-on (the direct emitter
+     * stays as the eviction fallback).  The correctness bar was met across
+     * the whole fixture corpus (zero behavior failures forced-on); see
+     * docs/upcoming/v2/cps-backend-unification-graduation-readiness.md.
+     * `--enable=cps-backend` is now an accept-and-warn no-op (GRADUATED[]
+     * below).  Retiring emit_cps.c's direct lowering is the separate,
+     * larger milestone tracked in
+     * docs/upcoming/v2/cps-backend-direct-lowering-removal-plan.md. */
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };
+
+/* Graduated experiments: names that WERE gated behind `--enable=` and are now
+ * unconditionally on.  A CLI / manifest / user-config reference to one is
+ * accepted as a no-op (TUR-W0063) rather than the hard TUR-E0310 an unknown
+ * name gets, so a downstream build.tur or experiments.tur that opted in keeps
+ * compiling across the graduation boundary.  This mirrors the retired -X<name>
+ * accept-and-warn no-ops (drop-x-flags-plan).  Entries can age out one minor
+ * line after graduation, once downstream configs have dropped the flag. */
+static const char *const GRADUATED[] = {
+    "cps-backend",   /* graduated 0.27.x -> always-on */
+    NULL,
+};
+
+static bool experiment_is_graduated(const char *name) {
+    if (!name) return false;
+    for (size_t i = 0; GRADUATED[i]; i++)
+        if (strcmp(GRADUATED[i], name) == 0) return true;
+    return false;
+}
 
 /* Number of real entries (excluding the trailing { 0 } sentinel). */
 size_t experiment_count(void) {
@@ -135,9 +158,29 @@ static long experiment_index(const char *name) {
     return -1;
 }
 
+/* Once-per-process dedup for the graduated-experiment notice.  A CLI enable is
+ * applied in both the parent and each worker, so warn only the first time. */
+static bool g_grad_warned;
+
 bool experiment_enable(const char *name, ExperimentSource src) {
     long idx = experiment_index(name);
-    if (idx < 0 || idx >= XF_MAX) return false;
+    if (idx < 0) {
+        /* Not a live experiment.  If it graduated, accept it as an always-on
+         * no-op with a one-time deprecation notice; otherwise the caller
+         * reports TUR-E0310 for an unknown name. */
+        if (experiment_is_graduated(name)) {
+            if (!g_grad_warned) {
+                g_grad_warned = true;
+                fprintf(stderr,
+                        "warning [TUR-W0063]: experiment '%s' graduated and is "
+                        "now on by default; --enable is no longer needed\n",
+                        name);
+            }
+            return true;
+        }
+        return false;
+    }
+    if (idx >= XF_MAX) return false;
     const ExperimentDescriptor *d = &EXPERIMENTS[idx];
     if (d->opt_global) *d->opt_global = true;
     /* Higher-numbered source wins.  CLI beats manifest beats user-config

@@ -25,15 +25,23 @@
  * existing direct-style emission.  Coverage grows monotonically as later phases
  * close the gaps.
  *
- * The whole backend is gated behind --enable=cps-backend (g_opt_cps_backend);
- * off by default, so the fixture suite is untouched until a fixture opts in.
+ * The backend is always-on as of the cps-backend graduation (2026-07-11): a
+ * colored function in the emittable subset is CPS-emitted here, and everything
+ * else falls back to the direct emitter.  It was previously gated behind
+ * --enable=cps-backend (g_opt_cps_backend, now retired).
  * ========================================================================= */
 
 /* True if `program` has at least one colored function the C1 backend will emit.
  * Self-contained (colors the program and computes the emittable set with its
- * own arena); used to gate the DK runtime prelude.  Returns false when the
- * experiment is off. */
+ * own arena); used to gate the DK runtime prelude.  Returns false when no
+ * colored function lands in the emittable subset. */
 bool emit_cps_ir_program_has_emittable(const Expr *program);
+
+/* Whether the CT-IR CPS backend emits `b`'s function as `<b>__cps(..., DK*)`.
+ * The legacy CPS3 `--cps-path` wrapper path uses this to skip a colored function
+ * the cps-backend already emits (else the two declare the same `__cps` symbol
+ * with different signatures -- a `conflicting types` error). */
+bool emit_cps_ir_emits_binding(const Expr *program, const Binding *b);
 
 /* If `fn_def_expr`'s FnDef is colored and lies in the C1 emittable subset, emit
  * its CPS body + direct-entry wrapper into `file` and return true.  Otherwise
