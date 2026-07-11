@@ -3023,13 +3023,26 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
              * to the resumed value under "$L"; a 2-arg call applies f to the
              * resumed value + the captured int env (source order per hole side)
              * under "$2L"/"$2R", the env serialized inline. */
-            bool two_arg = !fr->ignore_value && fr->call_fn->type.as.fn.arity == 2;
+            uint32_t ar = fr->call_fn->type.as.fn.arity;
+            bool two_arg = !fr->ignore_value && ar == 2;
+            bool env1    = fr->ignore_value && ar == 1;  /* 1-arg captured-config tail */
+            bool has_env = two_arg || env1;
+            /* Env marshal kind (SK_ENV_INT / SK_ENV_CSTR), keyed off the captured
+             * operand's type; int/cstr use the inline codec (no ser/deser). */
+            int ekc = (has_env && fr->operand.ty == TY_CSTR) ? 1 : 0;
+            const char *ecast = ekc == 1 ? "(const char *)" : "(int64_t)";
             const char *side;
-            if (fr->ignore_value) {
+            if (fr->ignore_value && ar == 0) {
                 buf_printf(ce->helpers,
                     "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { (void)env; (void)value; return (intptr_t)%s(); }\n",
                     ce->fn_cn, id, i, cfn);
                 side = "$0";
+            } else if (env1) {
+                /* Run f(cap) on resume, ignoring the resumed value; cap = the env. */
+                buf_printf(ce->helpers,
+                    "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { (void)value; return (intptr_t)%s(%senv); }\n",
+                    ce->fn_cn, id, i, cfn, ecast);
+                side = "$E";
             } else if (two_arg) {
                 buf_printf(ce->helpers,
                     "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { return (intptr_t)%s(%s); }\n",
@@ -3043,9 +3056,9 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                 side = "$L";
             }
             buf_printf(ce->helpers,
-                "static SkReg %s_skreg%d_%u = { \"%s%s\", %s_skcall%d_%u, 0, 0, 0, 0 };\n"
+                "static SkReg %s_skreg%d_%u = { \"%s%s\", %s_skcall%d_%u, %d, 0, 0, 0 };\n"
                 "__attribute__((constructor)) static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
-                ce->fn_cn, id, i, cfn, side, ce->fn_cn, id, i,
+                ce->fn_cn, id, i, cfn, side, ce->fn_cn, id, i, ekc,
                 ce->fn_cn, id, i, ce->fn_cn, id, i);
             free(cfn);
         }
@@ -3058,10 +3071,13 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         for (uint32_t i = 0; i < nf; i++) {
             const CloneFrame *fr = &t->as.cloneable.frames[i];
             if (fr->call_fn) {
-                /* A 2-arg call frame carries the captured int env; 1-arg / do-tail
-                 * frames pass 0.  The env rides q->env and is marshaled inline. */
-                bool two_arg = !fr->ignore_value && fr->call_fn->type.as.fn.arity == 2;
-                char *opv = two_arg ? atom_str(ce, &fr->operand) : NULL;
+                /* A 2-arg hole call or a 1-arg captured-config do-tail frame carries
+                 * the captured env; a 1-arg hole call / 0-arg do-tail pass 0.  The
+                 * env rides q->env and is marshaled inline (int/cstr). */
+                uint32_t ar = fr->call_fn->type.as.fn.arity;
+                bool has_env = (!fr->ignore_value && ar == 2)
+                            || (fr->ignore_value && ar == 1);
+                char *opv = has_env ? atom_str(ce, &fr->operand) : NULL;
                 ce_line(ce, "%s = dk_frame(%s_skcall%d_%u, (intptr_t)(%s), %s);",
                         dv, ce->fn_cn, id, i, opv ? opv : "0", dv);
                 free(opv);

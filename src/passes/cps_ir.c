@@ -854,19 +854,42 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                 if (!tail || tail->kind != EX_CALL ||
                     !tail->as.call_.fn_binding || tail->as.call_.fn_expr) return NULL;
                 const Binding *fb = tail->as.call_.fn_binding;
-                if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 0) return NULL;
-                if (tail->as.call_.n_args != 0) return NULL;
+                if (fb->type.kind != TY_FN) return NULL;
                 if (fb->closure_fn_binding) return NULL;    /* not a fat closure */
                 if (callee_colored(b, fb)) return NULL;     /* uncolored target */
                 if (tail->type.kind != TY_INT) return NULL; /* result: int */
                 if (nf >= CL_IR_MAX_FRAMES) return NULL;
-                memset(&frames[nf], 0, sizeof(CloneFrame));
-                frames[nf].op           = NULL;
-                frames[nf].call_fn      = fb;
-                frames[nf].ignore_value = true;
-                frames[nf].operand.kind = CA_INT;   /* unused (env passed as 0) */
-                frames[nf].operand.ty   = TY_INT;
-                frames[nf].hole_left    = true;
+                if (fb->type.as.fn.arity == 0 && tail->as.call_.n_args == 0) {
+                    /* 0-arg ignore-value tail `(f)`: run f() on resume, no env. */
+                    memset(&frames[nf], 0, sizeof(CloneFrame));
+                    frames[nf].op           = NULL;
+                    frames[nf].call_fn      = fb;
+                    frames[nf].ignore_value = true;
+                    frames[nf].operand.kind = CA_INT;   /* unused (env passed as 0) */
+                    frames[nf].operand.ty   = TY_INT;
+                    frames[nf].hole_left    = true;
+                } else if (fb->type.as.fn.arity == 1 && tail->as.call_.n_args == 1) {
+                    /* 1-arg captured-config tail `(f cap)`: cap is a pure atomic
+                     * value captured at the reset site (int inline / cstr length-
+                     * prefixed) and applied to f on resume, ignoring the resumed
+                     * value -- what lets a real loop `(loop cfg)` receive its config
+                     * through the saved continuation.  (Serializable / non-atomic
+                     * caps still delegate.) */
+                    const Expr *cap = ascribe_peel(tail->as.call_.args[0]);
+                    if (!cap || serial_reaches_shift(cap)) return NULL;
+                    if (!is_atomic(cap)) return NULL;
+                    TypeKind ek = cap->type.kind;
+                    if (ek != TY_INT && ek != TY_CSTR) return NULL;   /* inline codec */
+                    if (fb->type.as.fn.arg_kinds[0] != ek) return NULL;
+                    memset(&frames[nf], 0, sizeof(CloneFrame));
+                    frames[nf].op           = NULL;
+                    frames[nf].call_fn      = fb;
+                    frames[nf].ignore_value = true;
+                    frames[nf].operand      = atom_of(cap);   /* real captured env */
+                    frames[nf].hole_left    = true;
+                } else {
+                    return NULL;
+                }
                 nf++;
             }
             cur = shift_item;                       /* the shift; loop exits below */
