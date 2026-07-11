@@ -640,6 +640,29 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     return t;
 }
 
+/* Pure existence check: does `program` declare a Serializable instance for the
+ * nominal (TY_ADT) type `t`?  Lets build_serial admit a SER-env frame; the
+ * emitter (emit_cps_ir.c) resolves the instance's serialize/deserialize method
+ * C names.  Kept in the pass (no emit helpers), mirroring the existence path of
+ * emit_cps.c's sk_find_serializable. */
+static bool cps_serializable_exists(const Expr *program, Type t) {
+    if (!program || program->kind != EX_PROGRAM) return false;
+    if (t.kind != TY_ADT || !t.as.adt_.def || !t.as.adt_.def->name) return false;
+    const char *tname = t.as.adt_.def->name;
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        const Expr *it = program->as.program.items[i];
+        if (!it || it->kind != EX_INSTANCE_DEF) continue;
+        const TypeClassInstance *inst = it->as.instance_def_.instance;
+        if (!inst || !inst->typeclass || !inst->typeclass->name) continue;
+        if (strcmp(inst->typeclass->name->name, "Serializable") != 0) continue;
+        if (inst->n_type_args < 1) continue;
+        Type at = inst->type_args[0];
+        if (at.kind == TY_ADT && at.as.adt_.def && at.as.adt_.def->name &&
+            strcmp(at.as.adt_.def->name, tname) == 0) return true;
+    }
+    return false;
+}
+
 /* U4 native serial: (serial-reset <arith-ctx> (serial-shift receiver v)) with a
  * named uncolored fn receiver, arithmetic context frames only.  Structurally
  * identical to the cloneable arithmetic Shape 2, but marshalable: the frames use
@@ -879,7 +902,10 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                     if (!cap || serial_reaches_shift(cap)) return NULL;
                     if (!is_atomic(cap)) return NULL;
                     TypeKind ek = cap->type.kind;
-                    if (ek != TY_INT && ek != TY_CSTR) return NULL;   /* inline codec */
+                    bool inline_ok = (ek == TY_INT || ek == TY_CSTR);  /* inline codec */
+                    bool ser_ok = !inline_ok
+                        && cps_serializable_exists(b->program, cap->type);  /* SER codec */
+                    if (!inline_ok && !ser_ok) return NULL;
                     if (fb->type.as.fn.arg_kinds[0] != ek) return NULL;
                     memset(&frames[nf], 0, sizeof(CloneFrame));
                     frames[nf].op           = NULL;

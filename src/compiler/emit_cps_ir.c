@@ -2801,6 +2801,44 @@ static int sk_tag_for_frame(const CloneFrame *fr) {
     return fr->hole_left ? 6 : 5;   /* "/" */
 }
 
+/* Resolve the Serializable instance's serialize/deserialize C names for a nominal
+ * (TY_ADT) serial call-frame env type `t`.  Returns malloc'd names via out-params
+ * and true, or false if no instance.  Mirrors emit_cps.c's sk_find_serializable
+ * name path, kept in the native path so the CT-IR serial emitter owns its env
+ * marshaling (the runtime Sk registry already encodes SK_ENV_SER). */
+static bool serial_env_ser_names(CE *ce, const Type *t,
+                                 char **ser_out, char **deser_out) {
+    const Expr *program = ce->ctx->program_root;
+    if (!program || program->kind != EX_PROGRAM) return false;
+    if (!t || t->kind != TY_ADT || !t->as.adt_.def || !t->as.adt_.def->name) return false;
+    const char *tname = t->as.adt_.def->name;
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        const Expr *it = program->as.program.items[i];
+        if (!it || it->kind != EX_INSTANCE_DEF) continue;
+        const TypeClassInstance *inst = it->as.instance_def_.instance;
+        if (!inst || !inst->typeclass || !inst->typeclass->name) continue;
+        if (strcmp(inst->typeclass->name->name, "Serializable") != 0) continue;
+        if (inst->n_type_args < 1) continue;
+        Type at = inst->type_args[0];
+        if (at.kind != TY_ADT || !at.as.adt_.def || !at.as.adt_.def->name) continue;
+        if (strcmp(at.as.adt_.def->name, tname) != 0) continue;
+        char *ser = NULL, *deser = NULL;
+        const TypeClass *tc = inst->typeclass;
+        for (uint8_t j = 0; j < tc->n_methods && j < inst->n_method_impls; j++) {
+            if (!inst->method_impls[j] || !inst->method_impls[j]->binding) continue;
+            const char *mn = tc->methods[j].name ? tc->methods[j].name->name : "";
+            char *cn = raw_name_for_binding(inst->method_impls[j]->binding);
+            if (strcmp(mn, "serialize") == 0) ser = cn;
+            else if (strcmp(mn, "deserialize") == 0) deser = cn;
+            else free(cn);
+        }
+        if (ser && deser) { *ser_out = ser; *deser_out = deser; return true; }
+        free(ser); free(deser);
+        return false;
+    }
+    return false;
+}
+
 /* CT_CLONEABLE (U3): (cloneable-reset (cloneable-shift receiver val)) and its
  * single-arithmetic-frame Shape 2 form.  Emits the cloneable multi-shot machinery
  * natively (no emit_cps.c), reusing the shared DK runtime (dk_copy_range,
@@ -3027,9 +3065,17 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
             bool two_arg = !fr->ignore_value && ar == 2;
             bool env1    = fr->ignore_value && ar == 1;  /* 1-arg captured-config tail */
             bool has_env = two_arg || env1;
-            /* Env marshal kind (SK_ENV_INT / SK_ENV_CSTR), keyed off the captured
-             * operand's type; int/cstr use the inline codec (no ser/deser). */
-            int ekc = (has_env && fr->operand.ty == TY_CSTR) ? 1 : 0;
+            /* Env marshal kind: SK_ENV_INT (0) / SK_ENV_CSTR (1) inline codec, or
+             * SK_ENV_SER (2) via the env type's Serializable instance.  Keyed off
+             * the captured operand's type. */
+            int ekc = 0;
+            char *eser = NULL, *edeser = NULL;
+            if (has_env) {
+                if (fr->operand.ty == TY_CSTR) ekc = 1;
+                else if (fr->operand.type
+                         && serial_env_ser_names(ce, fr->operand.type, &eser, &edeser))
+                    ekc = 2;
+            }
             const char *ecast = ekc == 1 ? "(const char *)" : "(int64_t)";
             const char *side;
             if (fr->ignore_value && ar == 0) {
@@ -3055,11 +3101,22 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                     ce->fn_cn, id, i, cfn);
                 side = "$L";
             }
-            buf_printf(ce->helpers,
-                "static SkReg %s_skreg%d_%u = { \"%s%s\", %s_skcall%d_%u, %d, 0, 0, 0 };\n"
-                "__attribute__((constructor)) static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
-                ce->fn_cn, id, i, cfn, side, ce->fn_cn, id, i, ekc,
-                ce->fn_cn, id, i, ce->fn_cn, id, i);
+            if (ekc == 2) {
+                /* SER env: carry the instance serialize/deserialize fn pointers. */
+                buf_printf(ce->helpers,
+                    "static SkReg %s_skreg%d_%u = { \"%s%s\", %s_skcall%d_%u, %d,"
+                    " (void *(*)(int64_t))%s, (int64_t (*)(void *))%s, 0 };\n"
+                    "__attribute__((constructor)) static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
+                    ce->fn_cn, id, i, cfn, side, ce->fn_cn, id, i, ekc, eser, edeser,
+                    ce->fn_cn, id, i, ce->fn_cn, id, i);
+            } else {
+                buf_printf(ce->helpers,
+                    "static SkReg %s_skreg%d_%u = { \"%s%s\", %s_skcall%d_%u, %d, 0, 0, 0 };\n"
+                    "__attribute__((constructor)) static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
+                    ce->fn_cn, id, i, cfn, side, ce->fn_cn, id, i, ekc,
+                    ce->fn_cn, id, i, ce->fn_cn, id, i);
+            }
+            free(eser); free(edeser);
             free(cfn);
         }
         char dv[48];
