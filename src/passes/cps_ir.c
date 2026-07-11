@@ -539,13 +539,15 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
 
         /* Pure `let` prelude: inits shift-free + scalar, body carries the hole. */
         if (cur->kind == EX_LET) {
-            /* A `let` UNDER a branch point (nested in the shift arm) is not
-             * supported -- its prelude local would be emitted at the reset site
-             * (ahead of the `if`) yet only be in scope for one arm.  A `let`
-             * ABOVE the `if` is fine: emit_cloneable lays every prelude local
-             * down at the reset site before the branch, so both the outer frame
-             * operands and the pure arm see it. */
-            if (saw_if) return NULL;
+            /* emit_cloneable lays every prelude local down at the reset site,
+             * ahead of the `if` branch and the frame-operand pushes, so a `let`
+             * either ABOVE the `if` (referenced by outer frames + the pure arm) or
+             * nested in the shift-bearing arm (referenced by inner frames) is in
+             * scope where it is used.  Hoisting a shift-arm let out of its branch
+             * is sound because its init is pure and scalar (shift-free,
+             * safe_to_delegate below); a binding the shift BODY itself needs would
+             * be a live capture, which the shift admission rejects (n_live_captures
+             * != 0), so it never reaches here. */
             const Expr *lbody = cur->as.let_.body;
             if (!cloneable_ctx_reaches_shift(lbody)) return NULL;
             for (uint32_t i = 0; i < cur->as.let_.n; i++) {
@@ -778,9 +780,10 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         }
 
         /* Pure `let` prelude (emit shared with cloneable): inits shift-free +
-         * scalar, body carries the hole.  Kept mutually exclusive with `if`. */
+         * scalar, body carries the hole.  A `let` above or nested in the shift arm
+         * is hoisted to the reset site (see build_cloneable's note); a binding the
+         * shift body needs is a live capture the shift admission already rejects. */
         if (cur->kind == EX_LET) {
-            if (saw_if) return NULL;
             const Expr *lbody = cur->as.let_.body;
             if (!serial_reaches_shift(lbody)) return NULL;
             for (uint32_t i = 0; i < cur->as.let_.n; i++) {
