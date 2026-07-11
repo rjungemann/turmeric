@@ -25,10 +25,9 @@
  * existing direct-style emission.  Coverage grows monotonically as later phases
  * close the gaps.
  *
- * The backend is always-on as of the cps-backend graduation (2026-07-11): a
- * colored function in the emittable subset is CPS-emitted here, and everything
- * else falls back to the direct emitter.  It was previously gated behind
- * --enable=cps-backend (g_opt_cps_backend, now retired).
+ * The backend is always-on (graduated 2026-07-11): a colored function in the
+ * emittable subset is CPS-emitted here, and everything else falls back to the
+ * direct emitter.
  * ========================================================================= */
 
 /* True if `program` has at least one colored function the C1 backend will emit.
@@ -46,7 +45,8 @@ bool emit_cps_ir_emits_binding(const Expr *program, const Binding *b);
 /* If `fn_def_expr`'s FnDef is colored and lies in the C1 emittable subset, emit
  * its CPS body + direct-entry wrapper into `file` and return true.  Otherwise
  * emit nothing and return false, so the caller falls back to the direct-style
- * path (emit_fn_def).  A no-op returning false when the experiment is off. */
+ * path (emit_fn_def).  Returns false (a no-op) for any function outside the
+ * emittable subset. */
 bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *fn_def_expr);
 
 #endif
