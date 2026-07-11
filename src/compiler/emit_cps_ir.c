@@ -2921,8 +2921,9 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
 
     /* Pure `let` prelude (Shape 2, let-bearing): lay each binding down as a C
      * local at the reset site, ahead of the frame-operand evaluations that may
-     * reference it.  (`let` and `if` are mutually exclusive per build_cloneable,
-     * so n_lets > 0 implies no branch point below.) */
+     * reference it.  Emitted before any `if` branch point below, so a `let` above
+     * an `if` is in scope for both the outer frame operands (shift arm) and the
+     * pure arm. */
     for (uint32_t li = 0; li < t->as.cloneable.n_lets; li++) {
         const CloneLet *cl = &t->as.cloneable.lets[li];
         char *iv = emit_cloneable_direct(ce, cl->init);

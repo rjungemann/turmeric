@@ -508,10 +508,12 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
 
         /* Pure `let` prelude: inits shift-free + scalar, body carries the hole. */
         if (cur->kind == EX_LET) {
-            /* Keep `let` and `if` mutually exclusive in one native lowering: a
-             * `let` above an `if` has its binding referenced by the pure arm, but
-             * the prelude local is emitted only inside the shift branch -- the
-             * mixed shape falls through to the (still correct) delegation. */
+            /* A `let` UNDER a branch point (nested in the shift arm) is not
+             * supported -- its prelude local would be emitted at the reset site
+             * (ahead of the `if`) yet only be in scope for one arm.  A `let`
+             * ABOVE the `if` is fine: emit_cloneable lays every prelude local
+             * down at the reset site before the branch, so both the outer frame
+             * operands and the pure arm see it. */
             if (saw_if) return NULL;
             const Expr *lbody = cur->as.let_.body;
             if (!cloneable_ctx_reaches_shift(lbody)) return NULL;
@@ -533,7 +535,6 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         /* One `if` branch point: pure condition, exactly one shift-bearing arm. */
         if (cur->kind == EX_IF) {
             if (saw_if) return NULL;                  /* only one branch point */
-            if (nl > 0) return NULL;                  /* let+if mix -> delegation */
             const Expr *cond = cur->as.if_.cond;
             const Expr *thn  = cur->as.if_.then_;
             const Expr *els  = cur->as.if_.else_or_null;
@@ -770,7 +771,6 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
          * exactly one shift-bearing arm; the pure arm is direct-emitted. */
         if (cur->kind == EX_IF) {
             if (saw_if) return NULL;
-            if (nl > 0) return NULL;                  /* let+if mix -> delegation */
             const Expr *cond = cur->as.if_.cond;
             const Expr *thn  = cur->as.if_.then_;
             const Expr *els  = cur->as.if_.else_or_null;
