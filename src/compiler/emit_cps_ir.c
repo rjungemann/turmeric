@@ -1052,6 +1052,13 @@ static bool handle_case_ok(const CTerm *t) {
                 && handle_case_ok(t->as.resume.body);
         case CT_LETRAW:
             return letraw_ok(t) && handle_case_ok(t->as.letraw.body);
+        case CT_CALLCC:
+            /* A call/cc / escape hoisted into a handler case body (e.g. `(resume k
+             * (+ 1 (escape f)))`): emit_lifted emits the case through emit_term,
+             * which lowers CT_CALLCC via the native setjmp landing (emit_callcc),
+             * so it stays in the CT-IR path rather than delegating to emit_cps.c. */
+            return (slot_ok_t(t->as.callcc.x.type, t->as.callcc.x.ty) || t->as.callcc.x.ty == TY_NIL)
+                && handle_case_ok(t->as.callcc.body);
         case CT_IF:
             return atom_ok(&t->as.if_.cond)
                 && handle_case_ok(t->as.if_.then_) && handle_case_ok(t->as.if_.else_);
