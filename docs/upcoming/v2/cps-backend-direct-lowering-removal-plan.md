@@ -315,25 +315,32 @@ the `EX_CALLCC` dispatch (`emit_expr.c` :2826). The wrappers either collapse to
 their now-sole remaining behavior or are deleted with their callers.
 
 *Progress toward the exit.* Population 1 is at zero (see Phase D1). Population 2
-has fallen from its post-D2b peak to **7** genuine `-emit` reaches across 5
-fixtures: the `EX_CALLCC` coloring seed (above) closed callcc 28 -> 2, and
-admitting call-frame envs in `term_core_ok` (a non-atomic or Serializable
-captured env rides `env_expr` / the marshaler, so it skips the operand-slot
-`atom_ok` gate) closed the serial-in-`main` fixtures (`serial-struct-env`,
-`serial-context-do-struct`). The remaining 7 are emittable-subset gaps, each a
-distinct shape term_core_ok still rejects:
-- **capturing-receiver base shift** (`continuation-advanced`
-  `test-deeply-nested-shift`, `continuation-substrate` `t-deep`): `(shift (fn [v]
-  ... captures ...) v)` -- the shift receiver captures enclosing locals; the
-  native shift-body path does not yet lift a capturing receiver (the D1a
-  "colored/lifted receivers" item), so it stays direct. `2` reset reaches.
-- **cloneable + `call/cc*`** (`callcc-star-context`): a cloneable-reset shape
-  outside the native context grammar. `3` cloneable reaches.
-- **escape in a handler case** (`cps-oracle-escape-capture-in-handler-case` +
-  twin): an `escape` captured inside a `handle` case body. `2` callcc reaches.
+has fallen from its post-D2b peak to **2** genuine `-emit` reaches. The closures:
+- the `EX_CALLCC` coloring seed closed callcc `28 -> 2`;
+- accepting `CT_CALLCC` in `handle_case_ok` (mirroring the `shift_body_ok` fix)
+  closed the last 2 callcc via native `emit_callcc` (`cps-oracle-escape-capture-
+  in-handler-case` + twin);
+- admitting call-frame envs in `term_core_ok` (a non-atomic / Serializable
+  captured env rides `env_expr` / the marshaler, skipping the operand-slot
+  `atom_ok` gate) closed the serial-in-`main` fixtures (`serial-struct-env`,
+  `serial-context-do-struct`);
+- admitting `BS_FUNC_CALL` builtins in the emittable subset (`shape_supported` +
+  `prim_expr` emit `c_op(args)`) closed `callcc-star-context` -- a `main` that
+  captures continuations and resumes them via `tur_cloneable_cont_resume`/`_clone`
+  outside the reset (`3` reaches).
 
-These are the five emittable-subset gap plans' territory. The wrapper/dispatch
-removal (exit) waits on driving them to zero.
+**The only Population-2 shape left is the capturing-receiver base shift** --
+`(reset (let [a b c] (shift (fn [v] (+ a (+ b (+ c v)))) 10)))`, in
+`continuation-advanced` (`test-deeply-nested-shift`) and `continuation-substrate`
+(`t-deep`), `2` reset reaches. The `shift` receiver is a closure that captures
+enclosing locals; after closure conversion it is an `EX_CLOSURE` with an env
+param, so `cps_shift_body_kf`'s synthesized `(closure arg)` is an indirect call
+`indirect_callee_ok` rejects, and the whole function stays direct. Closing it
+needs the native base-shift path to emit a closure receiver as a value and call
+its thunk -- the U7 mechanism the cloneable path already has (`receiver_expr`),
+ported to `CT_SHIFT`. This is the D1a "colored/lifted receivers" item and the
+last thing between the corpus and **zero** direct-lowering reaches (which
+unblocks D3).
 
 ### Phase D3 -- delete the lowering functions
 
