@@ -2780,6 +2780,13 @@ static void emit_reset(CE *ce, const CTerm *t) {
 /* The C body expression of a single arithmetic context frame `(<op> <operand>
  * [])` -- `env` is the captured operand, `value` the resumed value.  Mirrors
  * emit_cps.c's frame_c_expr byte-for-byte (the proven generator). */
+/* The C cast applied to an intptr-carried frame env/value handed to a call
+ * target, keyed by the target's param kind.  A cstr rides the carrier like an
+ * int (CC4 value-typed cont<cstr>); mirrors emit_cps.c's c_cast_for_kind. */
+static const char *cc_cast_for_kind(TypeKind k) {
+    return (k == TY_CSTR) ? "(const char *)" : "(int64_t)";
+}
+
 static const char *cloneable_frame_expr(const char *op, bool hole_left) {
     if (strcmp(op, "+") == 0) return "env + value";
     if (strcmp(op, "*") == 0) return "env * value";
@@ -3090,15 +3097,19 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                     ce->fn_cn, id, i, cfn, ecast);
                 side = "$E";
             } else if (two_arg) {
+                TypeKind k0 = fr->call_fn->type.as.fn.arg_kinds[0];
+                TypeKind k1 = fr->call_fn->type.as.fn.arg_kinds[1];
+                const char *a0 = fr->hole_left ? "value" : "env";
+                const char *a1 = fr->hole_left ? "env" : "value";
                 buf_printf(ce->helpers,
-                    "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { return (intptr_t)%s(%s); }\n",
+                    "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { return (intptr_t)%s(%s%s, %s%s); }\n",
                     ce->fn_cn, id, i, cfn,
-                    fr->hole_left ? "(int64_t)value, (int64_t)env" : "(int64_t)env, (int64_t)value");
+                    cc_cast_for_kind(k0), a0, cc_cast_for_kind(k1), a1);
                 side = fr->hole_left ? "$2L" : "$2R";
             } else {
                 buf_printf(ce->helpers,
-                    "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s((int64_t)value); }\n",
-                    ce->fn_cn, id, i, cfn);
+                    "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s(%svalue); }\n",
+                    ce->fn_cn, id, i, cfn, cc_cast_for_kind(fr->call_fn->type.as.fn.arg_kinds[0]));
                 side = "$L";
             }
             if (ekc == 2) {
@@ -3153,7 +3164,8 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         char *senv = emit_cl_shift_env(ce, t, rfn);
         ce_line(ce, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);", dv, bodyfn, senv, dv);
         free(senv);
-        ce_line(ce, "%s = (int64_t)dk_run(%s, 0);", xn, dv);
+        ce_line(ce, "%s = (%s)dk_run(%s, 0);", xn,
+                binder_ctype_full(ce->ctx, t->as.cloneable.x.ty, t->as.cloneable.x.type), dv);
         ce_line(ce, "dk_free(%s);", dv);
     } else {
         /* Shape 2: an arithmetic context (1+ frames) + dk_copy_range capture. */
@@ -3176,18 +3188,21 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                     buf_printf(ce->helpers,
                         "static intptr_t %s(intptr_t env, intptr_t value) { (void)env; (void)value; return (intptr_t)%s(); }\n",
                         ctxfn, cfn);
-                else if (two_arg)
+                else if (two_arg) {
                     /* 2-arg call: apply f to (value, env) in source order (env =
-                     * the captured non-hole arg). */
+                     * the captured non-hole arg), casting each to its param kind. */
+                    TypeKind k0 = fr->call_fn->type.as.fn.arg_kinds[0];
+                    TypeKind k1 = fr->call_fn->type.as.fn.arg_kinds[1];
+                    const char *a0 = fr->hole_left ? "value" : "env";
+                    const char *a1 = fr->hole_left ? "env" : "value";
                     buf_printf(ce->helpers,
-                        "static intptr_t %s(intptr_t env, intptr_t value) { return (intptr_t)%s(%s); }\n",
-                        ctxfn, cfn,
-                        fr->hole_left ? "(int64_t)value, (int64_t)env" : "(int64_t)env, (int64_t)value");
-                else
+                        "static intptr_t %s(intptr_t env, intptr_t value) { return (intptr_t)%s(%s%s, %s%s); }\n",
+                        ctxfn, cfn, cc_cast_for_kind(k0), a0, cc_cast_for_kind(k1), a1);
+                } else
                     /* 1-arg hole call: apply f to the resumed value. */
                     buf_printf(ce->helpers,
-                        "static intptr_t %s(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s((int64_t)value); }\n",
-                        ctxfn, cfn);
+                        "static intptr_t %s(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s(%svalue); }\n",
+                        ctxfn, cfn, cc_cast_for_kind(fr->call_fn->type.as.fn.arg_kinds[0]));
                 free(cfn);
             } else {
                 buf_printf(ce->helpers,
@@ -3218,7 +3233,8 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         char *senv = emit_cl_shift_env(ce, t, rfn);
         ce_line(ce, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);", dv, bodyfn, senv, dv);
         free(senv);
-        ce_line(ce, "%s = (int64_t)dk_run(%s, 0);", xn, dv);
+        ce_line(ce, "%s = (%s)dk_run(%s, 0);", xn,
+                binder_ctype_full(ce->ctx, t->as.cloneable.x.ty, t->as.cloneable.x.type), dv);
         ce_line(ce, "dk_free(%s);", dv);
     }
 

@@ -387,6 +387,12 @@ static bool clone_let_ty_ok(TypeKind k) {
  * non-int operand, a second `if`, a non-delegatable init/cond/pure arm, or
  * overflow of the frame/let caps) -- the caller then falls back to the CT_LETRAW
  * delegation. */
+/* A scalar kind a delimited context frame's hole / env / result can carry: int
+ * or cstr.  Both fit the intptr_t carrier the DK machine threads, so a value-
+ * typed cont<cstr> (CC4) rides the same machinery as cont<int>, with the frame
+ * wrapper casting to the real kind at the call boundary. */
+static bool cps_scalar_kind_ok(TypeKind k) { return k == TY_INT || k == TY_CSTR; }
+
 static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     const Expr *cur = ascribe_peel(e->as.cloneable_reset_.body);
     CloneFrame frames[CL_IR_MAX_FRAMES];
@@ -422,16 +428,16 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             continue;
         }
 
-        /* Call frame: a 1-arg call `(f [])` to a top-level uncolored int->int fn;
-         * the hole is the sole argument, so there is no captured env. */
+        /* Call frame: a 1-arg call `(f [])` to a top-level uncolored scalar->scalar
+         * fn; the hole is the sole argument, so there is no captured env. */
         if (cur->kind == EX_CALL && cur->as.call_.n_args == 1
             && cur->as.call_.fn_binding && !cur->as.call_.fn_expr) {
             const Binding *fb = cur->as.call_.fn_binding;
             if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 1) return NULL;
             if (fb->closure_fn_binding) return NULL;         /* not a fat closure */
             if (callee_colored(b, fb)) return NULL;          /* uncolored target */
-            if (cur->type.kind != TY_INT) return NULL;       /* result: int */
-            if (fb->type.as.fn.arg_kinds[0] != TY_INT) return NULL;  /* arg: int */
+            if (!cps_scalar_kind_ok(cur->type.kind)) return NULL;         /* result */
+            if (!cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[0])) return NULL;  /* arg */
             const Expr *a0 = ascribe_peel(cur->as.call_.args[0]);
             if (!cloneable_ctx_reaches_shift(a0)) return NULL;   /* sole arg is the hole */
             if (nf >= CL_IR_MAX_FRAMES) return NULL;
@@ -458,21 +464,27 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 2) return NULL;
             if (fb->closure_fn_binding) return NULL;         /* not a fat closure */
             if (callee_colored(b, fb)) return NULL;          /* uncolored target */
-            if (cur->type.kind != TY_INT) return NULL;       /* result: int */
-            if (fb->type.as.fn.arg_kinds[0] != TY_INT ||
-                fb->type.as.fn.arg_kinds[1] != TY_INT) return NULL;  /* both args int */
+            /* result + both param kinds are scalars (int / cstr): a cstr rides the
+             * carrier like an int, and the value-typed cont<cstr> lets the frame
+             * hole + env carry a string (CC4).  The env is captured by value; for
+             * cstr that is the immutable string pointer, deep-cloned with the chain
+             * (cloneable is single-owner, no marshaling). */
+            if (!cps_scalar_kind_ok(cur->type.kind)) return NULL;
+            if (!cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[0]) ||
+                !cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[1])) return NULL;
             const Expr *a0 = ascribe_peel(cur->as.call_.args[0]);
             const Expr *a1 = ascribe_peel(cur->as.call_.args[1]);
             bool h0 = cloneable_ctx_reaches_shift(a0);
             bool h1 = cloneable_ctx_reaches_shift(a1);
             if (h0 == h1) return NULL;               /* exactly one hole side */
             const Expr *other = h0 ? a1 : a0;        /* the captured env operand */
-            if (!other || !is_atomic(other) || other->type.kind != TY_INT) return NULL;
+            if (!other || !is_atomic(other) ||
+                !cps_scalar_kind_ok(other->type.kind)) return NULL;
             if (nf >= CL_IR_MAX_FRAMES) return NULL;
             memset(&frames[nf], 0, sizeof(CloneFrame));
             frames[nf].op        = NULL;
             frames[nf].call_fn   = fb;
-            frames[nf].operand   = atom_of(other);   /* real captured int env */
+            frames[nf].operand   = atom_of(other);   /* captured scalar env */
             frames[nf].hole_left = h0;                /* hole is the left arg? */
             nf++;
             cur = h0 ? a0 : a1;                        /* descend into the hole side */
@@ -753,8 +765,8 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 1) return NULL;
             if (fb->closure_fn_binding) return NULL;         /* not a fat closure */
             if (callee_colored(b, fb)) return NULL;          /* uncolored target */
-            if (cur->type.kind != TY_INT) return NULL;       /* result: int */
-            if (fb->type.as.fn.arg_kinds[0] != TY_INT) return NULL;  /* arg: int */
+            if (!cps_scalar_kind_ok(cur->type.kind)) return NULL;         /* result */
+            if (!cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[0])) return NULL;  /* arg */
             const Expr *a0 = ascribe_peel(cur->as.call_.args[0]);
             if (!serial_reaches_shift(a0)) return NULL;      /* sole arg is the hole */
             if (nf >= CL_IR_MAX_FRAMES) return NULL;
@@ -781,22 +793,21 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 2) return NULL;
             if (fb->closure_fn_binding) return NULL;         /* not a fat closure */
             if (callee_colored(b, fb)) return NULL;          /* uncolored target */
-            if (cur->type.kind != TY_INT) return NULL;       /* result: int */
+            if (!cps_scalar_kind_ok(cur->type.kind)) return NULL;   /* result: scalar */
             const Expr *a0 = ascribe_peel(cur->as.call_.args[0]);
             const Expr *a1 = ascribe_peel(cur->as.call_.args[1]);
             bool h0 = serial_reaches_shift(a0);
             bool h1 = serial_reaches_shift(a1);
             if (h0 == h1) return NULL;               /* exactly one hole side */
-            /* the hole slot's param is the resume value -- must be int */
-            if (fb->type.as.fn.arg_kinds[h0 ? 0 : 1] != TY_INT) return NULL;
+            /* the hole slot's param is the resume value -- a scalar (int/cstr) */
+            if (!cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[h0 ? 0 : 1])) return NULL;
             const Expr *other = h0 ? a1 : a0;        /* the captured env operand */
             if (!other || serial_reaches_shift(other)) return NULL;
-            /* env: an int (inline codec) or a nominal type with a Serializable
-             * instance (SER codec via its serialize/deserialize).  cstr 2-arg envs
-             * still delegate (the fixed int cast on the wrapper does not carry the
-             * cstr result typing they come paired with). */
+            /* env: int / cstr (inline codec) or a nominal type with a Serializable
+             * instance (SER codec via its serialize/deserialize). */
             TypeKind ek = other->type.kind;
-            if (ek != TY_INT && !cps_serializable_exists(b->program, other->type))
+            if (!cps_scalar_kind_ok(ek)
+                && !cps_serializable_exists(b->program, other->type))
                 return NULL;
             /* An atomic env rides `operand`; a non-atomic pure env (e.g. a
              * `(mk-rec ...)` constructor) is emit_value'd at the reset site. */
