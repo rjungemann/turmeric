@@ -61,13 +61,17 @@ now-always-on cps-backend's `int64_t <fn>__cps(..., DK*)`. The CPS3 forward decl
 now skips any function the cps-backend emits (`emit_cps_ir_emits_binding`), so
 the superseded `--cps-path` path no longer double-declares the symbol.
 
-**3 residual failures are NOT eviction-subset gaps** -- they are CPS
-*lowering/emit* bugs the gate cannot address, filed under `docs/reported/`:
+The residual failures were **NOT eviction-subset gaps** -- they are CPS
+*lowering/emit* bugs the gate cannot address:
 
-- `continuation-substrate` -- the CPS backend miscompiles core `reset`/`shift`/
-  `shift0` (empty output / segfault; direct is correct). A **behavior** bug, the
-  most serious of the three. See
-  [cps-continuation-substrate-miscompile.md](../../reported/cps-continuation-substrate-miscompile.md).
+- `continuation-substrate` -- **RESOLVED.** The CPS backend miscompiled core
+  `reset`/`shift`/`shift0` when the shift *receiver* was a capturing closure: the
+  synthesized `(recv val)` delegated a raw `EX_CLOSURE` callee, which the direct
+  emitter's indirect-call block cast the fat-closure ENV pointer to a bare
+  function pointer and jumped into (segfault). A capturing-closure shift receiver
+  now evicts to the direct shift lowering (`indirect_callee_ok`, src/passes/cps_ir.c),
+  which handles it correctly. See
+  [docs/archive/cps-continuation-substrate-miscompile.md](../../archive/cps-continuation-substrate-miscompile.md).
 - `contract-nested` -- a lifted heap-join helper references the enclosing
   continuation `k` it never receives (`'k' undeclared`). See
   [cps-heap-join-references-enclosing-k.md](../../reported/cps-heap-join-references-enclosing-k.md).
@@ -75,10 +79,12 @@ the superseded `--cps-path` path no longer double-declares the symbol.
   kebab-case name that disagrees with its mangled use-site spelling. See
   [cps-delegated-binder-raw-kebab-name.md](../../reported/cps-delegated-binder-raw-kebab-name.md).
 
-So the corrected headline is: graduation ships with **3 known-red fixtures**
-(down from 24), all pre-existing CPS lowering/naming bugs orthogonal to the
-eviction subset. The "zero behavior failures" claim is false in the
-`continuation-substrate` case and should be treated as the priority follow-up.
+So the corrected headline is: graduation ships with **2 known-red fixtures**
+(down from 24), both pre-existing CPS *codegen* bugs (build failures, not
+behavior) orthogonal to the eviction subset. The one behavior failure the
+forced-on probe's "zero behavior failures" claim missed
+(`continuation-substrate`) is now fixed; the two residuals are `contract-nested`
+and `hkt-stdlib-parser-instances`, both build-time only.
 
 ## Two distinct milestones (do not conflate)
 
