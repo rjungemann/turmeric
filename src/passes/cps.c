@@ -302,6 +302,11 @@ static bool cps_directly_uses_control(const Expr *e) {
         case EX_HANDLE:
         case EX_RESUME:
         case EX_DISCONTINUE:
+        /* (call/cc f) / (escape f): the native CT-IR path (build_callcc /
+         * emit_callcc) lowers these on the DK-threaded backend, so a function that
+         * uses them is a CPS candidate -- color it so ensure_S classifies it and it
+         * emits natively instead of wholly direct-emitting through emit_cps_callcc. */
+        case EX_CALLCC:
             return true;
         /* Structural recursion (no descent into nested fn bodies). */
         case EX_LET:
