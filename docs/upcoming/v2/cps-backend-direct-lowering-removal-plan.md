@@ -315,7 +315,7 @@ the `EX_CALLCC` dispatch (`emit_expr.c` :2826). The wrappers either collapse to
 their now-sole remaining behavior or are deleted with their callers.
 
 *Progress toward the exit.* Population 1 is at zero (see Phase D1). Population 2
-has fallen from its post-D2b peak to **2** genuine `-emit` reaches. The closures:
+has fallen from its post-D2b peak to **zero** genuine `-emit` reaches. The closures:
 - the `EX_CALLCC` coloring seed closed callcc `28 -> 2`;
 - accepting `CT_CALLCC` in `handle_case_ok` (mirroring the `shift_body_ok` fix)
   closed the last 2 callcc via native `emit_callcc` (`cps-oracle-escape-capture-
@@ -329,18 +329,32 @@ has fallen from its post-D2b peak to **2** genuine `-emit` reaches. The closures
   captures continuations and resumes them via `tur_cloneable_cont_resume`/`_clone`
   outside the reset (`3` reaches).
 
-**The only Population-2 shape left is the capturing-receiver base shift** --
-`(reset (let [a b c] (shift (fn [v] (+ a (+ b (+ c v)))) 10)))`, in
-`continuation-advanced` (`test-deeply-nested-shift`) and `continuation-substrate`
+**The last Population-2 shape -- the capturing-receiver base shift -- is now
+closed.** The shape was `(reset (let [a b c] (shift (fn [v] (+ a (+ b (+ c v)))) 10)))`,
+in `continuation-advanced` (`test-deeply-nested-shift`) and `continuation-substrate`
 (`t-deep`), `2` reset reaches. The `shift` receiver is a closure that captures
 enclosing locals; after closure conversion it is an `EX_CLOSURE` with an env
-param, so `cps_shift_body_kf`'s synthesized `(closure arg)` is an indirect call
-`indirect_callee_ok` rejects, and the whole function stays direct. Closing it
-needs the native base-shift path to emit a closure receiver as a value and call
-its thunk -- the U7 mechanism the cloneable path already has (`receiver_expr`),
-ported to `CT_SHIFT`. This is the D1a "colored/lifted receivers" item and the
-last thing between the corpus and **zero** direct-lowering reaches (which
-unblocks D3).
+param, so `cps_shift_body_kf`'s synthesized `(closure arg)` was an indirect call
+`indirect_callee_ok` rejects, and the whole function stayed direct.
+
+The fix beta-reduces the receiver instead of synthesizing a call: abortive-shift
+value is `receiver(arg)` = `body[v := arg]`, so `cps_shift_body_kf` now
+recognizes an `EX_CLOSURE` receiver and inlines it as `(let [v arg] body)`
+delivered to the prompt. The closure body still references its captured source
+bindings by their original names (closure conversion prepends the env param but
+leaves the body's capture references intact, resolving them only when the thunk
+is emitted), so inlining resolves them to the visible reset-context locals, which
+the lifted shift body captures via `collect_caps`. A non-capturing lambda is
+already lifted to a named global (an `EX_VAR` here), so this fires only for the
+capturing case that otherwise evicts. This ports the U7 receiver mechanism to
+`CT_SHIFT` without introducing an indirect call.
+
+**With this landed, a corpus scan reports zero genuine `-emit` reaches** into
+`emit_cps.c` (the four lowering functions) across every fixture -- both
+Population 1 (eviction) and Population 2 (direct-dispatch) are at zero. The
+residual `-fallback` lines that remain (`reset`/`cloneable`/`serial`) are the
+inline legacy paths in `emit_effects.c`, **not** `emit_cps.c` callers, and do not
+gate D3. **D3 is unblocked.**
 
 ### Phase D3 -- delete the lowering functions
 

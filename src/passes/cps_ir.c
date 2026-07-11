@@ -1198,6 +1198,39 @@ static const char *builtin_name(const Expr *e) {
  * to the prompt.  Shared by both the plain and shift0 lowerings (which differ
  * only in the emitted dk_shift vs dk_shift0). */
 static CTerm *cps_shift_body_kf(CpsB *b, Expr *recv, Expr *arg, Type *ty) {
+    /* A CLOSURE receiver `(fn [v] body)` -- the abortive-shift value is
+     * `receiver(arg)` = `body[v := arg]`.  A capturing closure's value is its env
+     * pointer, so a synthesized `(closure arg)` is an indirect call the direct
+     * emitter cannot lower (indirect_callee_ok rejects it) and the whole function
+     * evicts.  Beta-reduce instead: bind the user param to arg and deliver the
+     * closure body to the prompt directly.  The body still references its captured
+     * source bindings (closure conversion prepends the env param but leaves the
+     * body's capture references as the original bindings, resolved to env fields
+     * only when the thunk is emitted -- so inlining resolves them to the visible
+     * reset-context locals, which the lifted shift body captures via collect_caps).
+     * A non-capturing lambda is already lifted to a named global (an EX_VAR here),
+     * so this fires only for the capturing case that otherwise evicts. */
+    {
+        const Expr *rp = recv ? ascribe_peel(recv) : NULL;
+        if (rp && rp->kind == EX_CLOSURE && rp->as.closure_.closure
+            && rp->as.closure_.closure->fn && rp->as.closure_.closure->fn->body
+            && rp->as.closure_.closure->fn->n_params >= 1) {
+            FnDef *cfn = rp->as.closure_.closure->fn;
+            /* The user param is the last one (the env, if any, is prepended). */
+            Expr *let = arena_alloc(b->a, sizeof(Expr));
+            memset(let, 0, sizeof(Expr));
+            let->kind = EX_LET;
+            let->type = *ty;
+            LetBinding *lb = arena_alloc(b->a, sizeof(LetBinding));
+            memset(lb, 0, sizeof(LetBinding));
+            lb->binding = cfn->params[cfn->n_params - 1];
+            lb->init = arg;
+            let->as.let_.bindings = lb;
+            let->as.let_.n = 1;
+            let->as.let_.body = cfn->body;
+            return cps_tail(b, let, kont_prompt(ty->kind));
+        }
+    }
     Expr *call = arena_alloc(b->a, sizeof(Expr));
     memset(call, 0, sizeof(Expr));
     call->kind = EX_CALL;
