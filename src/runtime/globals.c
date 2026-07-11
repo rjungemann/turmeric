@@ -117,9 +117,6 @@ bool g_dump_effects = false;
 /* CPS2: --dump-cps flag */
 bool g_dump_cps = false;
 
-/* cps-backend (cps-ir-to-c-backend-plan): --enable=cps-backend enable bit */
-bool g_opt_cps_backend = false;
-
 /* Phase I: --emit-abi-trace flag */
 bool g_emit_abi_trace = false;
 

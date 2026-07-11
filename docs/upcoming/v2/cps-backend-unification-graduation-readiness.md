@@ -7,6 +7,79 @@ description: A measurement-grounded assessment of what remains for the CT-IR CPS
 
 # CPS backend graduation readiness
 
+## Status: milestone 1 LANDED (2026-07-11)
+
+**The `cps-backend` experiment graduated.** The row is removed from
+`EXPERIMENTS[]`, `g_opt_cps_backend` is retired (`globals.{c,h}`), and
+`emit_cps_ir_try_fn` / `emit_cps_ir_program_has_emittable` run unconditionally --
+the CT-IR CPS backend is the default lowering for every emittable colored
+function, with the direct emitter kept as the eviction fallback.
+`--enable=cps-backend` is now an accept-and-warn no-op (TUR-W0063). The flip was
+verified faithful: default-off output is byte-identical to the prior
+`--enable=cps-backend` output (139 `expected.c` snapshots regenerated; the 96
+now-redundant `--enable=cps-backend` fixture `flags` files and 48 TUR-W0060
+`expected.stderr` files were removed). **Milestone 2** (retire the direct
+lowering) is the separate, larger effort sequenced in
+[cps-backend-direct-lowering-removal-plan.md](cps-backend-direct-lowering-removal-plan.md).
+
+### Correction to the "zero build failures" headline + the eviction-gate hardening
+
+The pre-graduation forced-on probe reported "278 codegen-mismatch, **zero**
+build failures." On the tree at graduation that did **not** hold: forcing the
+CPS path on by default surfaced **24** failures the probe missed -- programs
+where a colored function was CPS-emitted with a signature/ABI that diverges from
+the carrier/dict ABI the rest of the compiler dispatches it through. These were
+real, pre-existing CPS-backend bugs (identical under the old `--enable` flag),
+not graduation regressions; the probe's "eviction is safe" premise had a hole:
+the emittable-subset gate *admitted* shapes it should have evicted.
+
+**20 of the 24 were closed by tightening the eviction gate** (the
+`emit_cps_ir.c` admission predicates), so those functions now evict cleanly to
+the direct emitter instead of emitting broken C:
+
+- **Signature gate -> scalars only** (`sig_slot_ok` for params/return). A
+  colored function whose signature contains a heap-ADT/struct HANDLE (`(Set
+  cstr)`) or a by-value ADT aggregate (`tur_adt_H`) is specialized both
+  concretely and through the int64 carrier/dict ABI; the CPS wrapper + `__cps`
+  re-emit the concrete signature and collide on the base name (`conflicting
+  types for 'run'` / `set_hyeq_hyfull`). Restricting CPS-emitted signatures to
+  scalars keeps the ABI single-valued.
+- **Poly-fat params evict** (`is_poly_fn` in `fn_sig_ok`/`mono_sig_ok`). A
+  `tur_poly_fn_t` (rank-2) param is a multi-word aggregate the CPS slot / mono
+  path types as `void*` when threaded (`void* = tur_poly_fn_t`).
+- **Call-argument gate** (`call_arg_ok`). A by-value ADT arg into a cps->direct
+  call would be handed as a bare struct where the callee's carrier ABI expects
+  an int64 (`incompatible type for argument`); it now evicts.
+
+Verified: no regressions (every one of the 24 was pre-existing; the gate change
+only moved the 20 from "mis-emitted" to "evicted-and-correct").
+
+A **21st** (`cps-mixed-coloring`) was closed by a separate fix: the legacy CPS3
+`--cps-path` mechanism (`emit_module.c` forward-decl pass) emits its own
+`void <fn>__cps(tur_cps_cont_t*, ...)` prototype, which collided with the
+now-always-on cps-backend's `int64_t <fn>__cps(..., DK*)`. The CPS3 forward decl
+now skips any function the cps-backend emits (`emit_cps_ir_emits_binding`), so
+the superseded `--cps-path` path no longer double-declares the symbol.
+
+**3 residual failures are NOT eviction-subset gaps** -- they are CPS
+*lowering/emit* bugs the gate cannot address, filed under `docs/reported/`:
+
+- `continuation-substrate` -- the CPS backend miscompiles core `reset`/`shift`/
+  `shift0` (empty output / segfault; direct is correct). A **behavior** bug, the
+  most serious of the three. See
+  [cps-continuation-substrate-miscompile.md](../../reported/cps-continuation-substrate-miscompile.md).
+- `contract-nested` -- a lifted heap-join helper references the enclosing
+  continuation `k` it never receives (`'k' undeclared`). See
+  [cps-heap-join-references-enclosing-k.md](../../reported/cps-heap-join-references-enclosing-k.md).
+- `hkt-stdlib-parser-instances` -- a delegated (`CT_LETRAW`) binder emits a raw
+  kebab-case name that disagrees with its mangled use-site spelling. See
+  [cps-delegated-binder-raw-kebab-name.md](../../reported/cps-delegated-binder-raw-kebab-name.md).
+
+So the corrected headline is: graduation ships with **3 known-red fixtures**
+(down from 24), all pre-existing CPS lowering/naming bugs orthogonal to the
+eviction subset. The "zero behavior failures" claim is false in the
+`continuation-substrate` case and should be treated as the priority follow-up.
+
 ## Two distinct milestones (do not conflate)
 
 1. **Graduate the experiment ("become the default").** Make `emit_cps_ir_try_fn`

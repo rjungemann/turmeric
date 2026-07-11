@@ -8,7 +8,6 @@
 #include "cps.h"
 #include "builtins.h"
 #include "globals.h"
-#include "experiments.h"
 #include "arena.h"
 #include "expr.h"
 
@@ -169,6 +168,28 @@ static bool slot_ok_t(const Type *t, TypeKind k) {
     return slot_ty(k) || slot_box_ty(r) || carrier_handle_ok(r);
 }
 
+/* Signature-position slot gate (a colored function's PARAMS and RETURN).  It is
+ * stricter than slot_ok_t: only a SCALAR (Tier A/B) type is admitted.  A
+ * non-scalar signature -- a heap-ADT/struct HANDLE (`(Set cstr)` ->
+ * `tur_adt_Set__cstr *`) OR a by-value ADT aggregate (`slot_box_ty`, e.g. a
+ * `tur_adt_H` record) -- is rejected.  The CPS backend emits a colored function
+ * as `f__cps(<concrete params>, DK*)` plus a direct-entry wrapper
+ * `f(<concrete params>)`; when the same base name is ALSO reached through the
+ * uniform carrier/dict ABI (a typeclass method dict is `_Bool(int64_t,int64_t)`,
+ * and the base name is specialized both concretely and as an int64 carrier), the
+ * CPS wrapper + `__cps` re-emit the concrete signature and collide with the
+ * carrier specialization -- a `conflicting types` / duplicate-definition C error.
+ * A scalar signature has a single int64/bool/double ABI that never diverges
+ * between the carrier and concrete paths, so it is safe; a non-scalar-signature
+ * colored function evicts to the direct emitter, which owns the carrier bridge.
+ * (Non-scalars still cross DK slots fine as INTERNAL values via slot_ok_t -- this
+ * gate is signature-only.) */
+static bool sig_slot_ok(const Type *t, TypeKind k) {
+    Type rt; const Type *r = cps_resolve_ty(t, &rt);
+    if (r != t) k = r->kind;
+    return slot_ty(k);
+}
+
 /* Store a value into the one-word slot.  Returns a malloc'd C expression.
  *   Tier A: plain cast.
  *   Tier B: bit-reinterpret ((intptr_t)3.5 would truncate the fraction).
@@ -265,6 +286,14 @@ static bool atom_ok(const CAtom *a) {
         case CA_STR:  return true;   /* cstr literal (Tier A pointer) */
         case CA_FLOAT: return true;  /* float/double literal (Tier B) */
         case CA_VAR:
+            /* A poly-fat closure (`tur_poly_fn_t`) is a multi-word aggregate that
+             * cannot ride the one-word slot / a `void*` temp: spilling it (`t2 =
+             * f;`) or crossing it into a slot miscompiles.  Calling such a param
+             * goes through a CT_LETRAW delegation (collect_free_vars, not atom_ok),
+             * so rejecting it here only blocks the unsound slot-crossing use and
+             * evicts a function that threads a poly-fn value as a plain value. */
+            if (a->var && a->var->is_poly_fn) return false;
+            return slot_ok_t(a->type, a->ty) || a->ty == TY_NIL;
         case CA_CVAR: return slot_ok_t(a->type, a->ty) || a->ty == TY_NIL;
         default:      return false;  /* CA_OTHER */
     }
@@ -299,6 +328,40 @@ static bool shape_supported(const BuiltinSpec *sp) {
 static bool term_core_ok(const CTerm *t);
 static bool delim_ok(const CTerm *t);   /* reset-delim admission (permits KK_PROMPT delivery) */
 static bool letraw_ok(const CTerm *t);  /* CT_LETRAW soundness (owning-drop guard) */
+static bool binding_in_s(const Binding *b);  /* callee CPS-emitted? (cps->cps vs cps->direct) */
+
+/* A poly-fat closure (`tur_poly_fn_t`) is a multi-word aggregate.  When such a
+ * value is THREADED as a call argument the CT-IR spills it to an intermediate
+ * one-word slot / `void*` temp first (`t2 = f;`), which cannot hold the fat
+ * struct -- a hard C error (`incompatible types ... from 'tur_poly_fn_t'`).  A
+ * function that only CALLS its poly-fn param (a delegated indirect call, never
+ * re-threading it as an arg) is fine, so this is an arg-position check, not a
+ * signature reject: fn_sig_ok still admits a poly-fn PARAM. */
+static bool atom_is_fat_fn(const CAtom *a) {
+    return a->kind == CA_VAR && a->var && a->var->is_poly_fn;
+}
+
+/* Whether an atom may cross into a call ARGUMENT slot.
+ *
+ *  - A poly-fat closure never can (spilling it to a temp slot miscompiles),
+ *    regardless of whether the call is cps->cps or cps->direct.
+ *  - A Tier C by-value-aggregate atom (slot_box_ty, e.g. `tur_adt_Option__int`)
+ *    can cross a cps->cps call (the callee's `__cps` params match the CPS ABI)
+ *    but NOT a cps->DIRECT call: there the delegated call emits the arg RAW to
+ *    the callee's direct-emitter C signature, which takes a by-value ADT through
+ *    the CARRIER ABI (int64_t) -- so a bare-struct arg where an int64 carrier is
+ *    expected is a hard C error.  The direct emitter boxes such an arg
+ *    (emit_byvalue_carrier_abi); the CPS delegation does not, so the function
+ *    must EVICT.  Scalars and heap-handle carriers already ARE the int64 carrier
+ *    and cross either way. */
+static bool call_arg_ok(const CAtom *a, bool cps_to_direct) {
+    if (!atom_ok(a)) return false;
+    if (atom_is_fat_fn(a)) return false;
+    if (cps_to_direct && (a->kind == CA_VAR || a->kind == CA_CVAR)
+        && slot_box_ty(a->type))
+        return false;
+    return true;
+}
 
 /* ---- C3 delimited-control subset predicates -------------------------- *
  * The C3 backend lowers a reset/shift only in a restricted, zero-capture,
@@ -1079,10 +1142,13 @@ static bool term_core_ok(const CTerm *t) {
         case CT_LETCALL: {
             /* The result binder may be a non-slot local (e.g. a struct/ADT read
              * only via get-field); any crossing use is gated by atom_ok below /
-             * fn_sig_ok, so no slot check on the binder itself.  Args must still
-             * be slot-representable atoms. */
+             * fn_sig_ok, so no slot check on the binder itself.  A CT_LETCALL is
+             * always a cps->direct call to an uncolored callee, so a by-value ADT
+             * arg must ride the callee's carrier ABI -- reject it (call_arg_ok
+             * cps_to_direct=true) so the function evicts rather than emit a
+             * raw-struct-for-int64 arg. */
             for (uint32_t i = 0; i < t->as.letcall.n; i++)
-                if (!atom_ok(&t->as.letcall.args[i])) return false;
+                if (!call_arg_ok(&t->as.letcall.args[i], true)) return false;
             return term_core_ok(t->as.letcall.body);
         }
         case CT_LETRAW:
@@ -1100,9 +1166,16 @@ static bool term_core_ok(const CTerm *t) {
             /* KK_RET / KK_VAR / KK_PROMPT are all valid here: a KK_PROMPT tail
              * call threads the enclosing prompt chain (a reset's delimited
              * body); a KK_VAR is only reifiable when the callee is not emittable
-             * (handled by needs_heap_join). */
+             * (handled by needs_heap_join).  A cps->direct tail call (callee not
+             * CPS-emitted) passes its args RAW to the callee's direct-emitter C
+             * signature, so a by-value ADT arg must ride the carrier ABI -- reject
+             * it (evict).  A cps->cps tail call threads through `f__cps`, whose
+             * params the CPS backend emits with the matching ABI, so the wider
+             * atom_ok admits the by-value aggregate there. */
+            bool cps_to_direct = !binding_in_s(t->as.tailcall.fn);
             for (uint32_t i = 0; i < t->as.tailcall.n; i++)
-                if (!atom_ok(&t->as.tailcall.args[i])) return false;
+                if (!call_arg_ok(&t->as.tailcall.args[i], cps_to_direct))
+                    return false;
             return true;
         }
         case CT_LETCONT:
@@ -1321,7 +1394,7 @@ static bool fn_sig_ok(const FnDef *fd) {
      * directly (never rides the slot) but is admitted through the same gate -- an
      * owning-field aggregate stays out. */
     const Type *rt = fn_ret_type(fd);
-    if (rt->kind != TY_NIL && !slot_ok_t(rt, rt->kind)) return false;
+    if (rt->kind != TY_NIL && !sig_slot_ok(rt, rt->kind)) return false;
     for (uint8_t i = 0; i < fd->n_params; i++) {
         const Binding *p = fd->params[i];
         /* A poly fn param crosses as a fat closure (tur_poly_fn_t); a `^borrow`
@@ -1348,9 +1421,17 @@ static bool fn_sig_ok(const FnDef *fd) {
          * paths (TUR-E0201), so it is not a new hazard.  Verified across mixing
          * DK+fiber effects, continuation-after-callback, named + nested callbacks,
          * and the full suite. */
+        /* A poly-fat (rank-2) closure param (`tur_poly_fn_t`) is a multi-word
+         * aggregate.  The CPS backend threads it through one-word slots / mono
+         * specialization paths that cannot hold the fat struct (`void* =
+         * tur_poly_fn_t`), so a function taking one must EVICT to the direct
+         * emitter (which owns the fat-closure ABI).  A plain effect-free `TY_FN`
+         * param -- a bare function pointer that fits the int64 carrier -- stays
+         * admitted below (the delegated indirect call the comment describes). */
+        if (p->is_poly_fn) return false;
         bool fn_param_ok = p->type.kind == TY_FN;
-        if (!p->is_poly_fn && !p->is_borrow && !fn_param_ok
-            && !slot_ok_t(&p->type, p->type.kind)) return false;
+        if (!p->is_borrow && !fn_param_ok
+            && !sig_slot_ok(&p->type, p->type.kind)) return false;
         if (param_name_clashes_cps(p)) return false;
     }
     return true;
@@ -3243,11 +3324,23 @@ static void emit_forward_decls(EmitCtx *ctx, Buf *file) {
 }
 
 bool emit_cps_ir_program_has_emittable(const Expr *program) {
-    if (!g_opt_cps_backend) return false;
     ensure_S(program);
     for (size_t i = 0; i < g_ents_n; i++)
         if (g_ents[i].in_s) return true;
     return false;
+}
+
+/* Whether the CT-IR CPS backend emits `b`'s function as `<b>__cps(..., DK*)`.
+ * The legacy CPS3 `--cps-path` wrapper path (emit_module.c / emit_fns.c) uses
+ * this to skip a colored function the cps-backend already emits -- otherwise the
+ * two mechanisms declare the same `__cps` symbol with different signatures
+ * (`void(tur_cps_cont_t*, ...)` vs `int64_t(..., DK*)`), a `conflicting types`
+ * error.  Post-graduation the cps-backend is always-on, so this guard is what
+ * keeps `--cps-path` from colliding with it. */
+bool emit_cps_ir_emits_binding(const Expr *program, const Binding *b) {
+    if (!program || !b) return false;
+    ensure_S(program);
+    return binding_in_s(b);
 }
 
 /* G1 (cps-backend-generic-monomorph-classification-plan): analysis-only probe.
@@ -3268,13 +3361,14 @@ bool emit_cps_ir_program_has_emittable(const Expr *program) {
 static bool mono_sig_ok(const FnDef *fd, const EmitAbiSpecialization *spec) {
     const Type *rt = (spec->result_type.kind != TY_UNKNOWN)
                    ? &spec->result_type : fn_ret_type(fd);
-    if (rt->kind != TY_NIL && !slot_ok_t(rt, rt->kind)) return false;
+    if (rt->kind != TY_NIL && !sig_slot_ok(rt, rt->kind)) return false;
     for (uint8_t i = 0; i < fd->n_params; i++) {
         const Binding *p = fd->params[i];
         const Type *pt = (i < spec->n_args) ? &spec->arg_types[i] : &p->type;
+        if (p->is_poly_fn) return false;   /* poly-fat param -- evict (see fn_sig_ok) */
         bool fn_param_ok = pt->kind == TY_FN;   /* effectful admitted -- see fn_sig_ok */
-        if (!p->is_poly_fn && !p->is_borrow && !fn_param_ok
-            && !slot_ok_t(pt, pt->kind)) return false;
+        if (!p->is_borrow && !fn_param_ok
+            && !sig_slot_ok(pt, pt->kind)) return false;
         if (param_name_clashes_cps(p)) return false;
     }
     return true;
@@ -3309,7 +3403,6 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     if (g_dump_cps_mono && e && e->kind == EX_FN_DEF && e->as.fn_def_.fn
         && ctx->current_abi_specialization)
         cps_dump_mono_admissible(ctx, e->as.fn_def_.fn);
-    if (!g_opt_cps_backend) return false;
     if (!e || e->kind != EX_FN_DEF || !e->as.fn_def_.fn) return false;
     FnDef *fd = e->as.fn_def_.fn;
     if (!fd->binding) return false;
@@ -3349,8 +3442,6 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
 
     if (!mono_emit && (!se || !se->in_s)) return false;   /* fall back */
-
-    experiment_warn_if_used("cps-backend");
 
     if (!g_fwd_done) { emit_forward_decls(ctx, file); g_fwd_done = true; }
 

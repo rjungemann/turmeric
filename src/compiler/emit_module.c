@@ -5187,6 +5187,11 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
             if (!fd->is_cps) continue;
             if (fd->closure) continue;
             if (strcmp(fd->binding->name->name, "main") == 0) continue;
+            /* Post-graduation the always-on cps-backend emits `<fn>__cps(...,
+             * DK*)` for a colored function it owns; the legacy CPS3 forward decl
+             * `void <fn>__cps(tur_cps_cont_t*, ...)` would collide with it.  Skip
+             * any function the cps-backend emits. */
+            if (emit_cps_ir_emits_binding(ctx->program_root, fd->binding)) continue;
             const char *fn_name = raw_name_for_binding(fd->binding);
             buf_printf(out, "static void %s__cps(tur_cps_cont_t *__k", fn_name);
             for (uint8_t j = 0; j < fd->n_params; j++) {
