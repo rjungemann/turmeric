@@ -172,6 +172,16 @@ default, because the direct-dispatch callers (uncolored / `main` / exported fns)
 of the lowering functions only disappear then. Until then the delegation +
 eviction fallbacks are correct and the tree ships.
 
+That graduation is assessed in
+[cps-backend-unification-graduation-readiness.md](cps-backend-unification-graduation-readiness.md).
+Headline: with `cps-backend` forced on across the whole suite, all 2142 fixtures
+still build and run correctly -- the only failures (278) are `expected.c` codegen
+churn, zero behavior failures. So "become the default" (flip the experiment; direct
+stays as fallback) is gated on snapshot regeneration + a perf spot check + a
+maintainer decision before the `expires_at` 0.29.0 contract, NOT on more native
+coverage. Retiring `emit_cps.c` (this note's deletes) is the separate, larger
+milestone that does need the eviction plans closed.
+
 Note: a native `CT_CALLCC` does NOT by itself remove `emit_cps_callcc`'s last
 caller -- the `EX_CALLCC` direct dispatch (emit_expr.c:2826) still lowers callcc
 for uncolored / `main` / exported functions (which are never CPS-emitted). That
