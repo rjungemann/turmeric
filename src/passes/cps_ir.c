@@ -392,6 +392,7 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     CloneFrame frames[CL_IR_MAX_FRAMES];
     CloneLet   lets[CL_IR_MAX_LETS];
     uint32_t nf = 0, nl = 0;
+    uint32_t n_outer = 0;   /* frames collected before the `if` (outer context) */
     const Expr *if_cond = NULL, *if_pure = NULL;
     bool if_when = true, saw_if = false;
 
@@ -547,6 +548,7 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             if (cloneable_ctx_reaches_shift(pure_arm)) return NULL;   /* defensive */
             if (!safe_to_delegate(b, pure_arm)) return NULL;
             if_cond = cond; if_pure = pure_arm; if_when = ht; saw_if = true;
+            n_outer = nf;   /* frames so far are OUTSIDE the if; later frames are inner */
             cur = shift_arm;
             continue;
         }
@@ -596,6 +598,7 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     } else {
         t->as.cloneable.lets = NULL;
     }
+    t->as.cloneable.n_outer_frames = n_outer;
     t->as.cloneable.if_cond = if_cond;
     t->as.cloneable.if_pure = if_pure;
     t->as.cloneable.if_when = if_when;
@@ -653,6 +656,7 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     CloneFrame frames[CL_IR_MAX_FRAMES];
     CloneLet   lets[CL_IR_MAX_LETS];
     uint32_t nf = 0, nl = 0;
+    uint32_t n_outer = 0;   /* frames collected before the `if` (outer context) */
     const Expr *if_cond = NULL, *if_pure = NULL;
     bool if_when = true, saw_if = false;
 
@@ -781,6 +785,7 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             if (serial_reaches_shift(pure_arm)) return NULL;
             if (!safe_to_delegate(b, pure_arm)) return NULL;
             if_cond = cond; if_pure = pure_arm; if_when = ht; saw_if = true;
+            n_outer = nf;   /* frames so far are OUTSIDE the if; later frames are inner */
             cur = shift_arm;
             continue;
         }
@@ -872,6 +877,7 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     } else {
         t->as.cloneable.lets = NULL;
     }
+    t->as.cloneable.n_outer_frames = n_outer;
     t->as.cloneable.if_cond = if_cond;
     t->as.cloneable.if_pure = if_pure;
     t->as.cloneable.if_when = if_when;

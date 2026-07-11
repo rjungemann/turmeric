@@ -1457,6 +1457,27 @@ typedef struct {
     bool mono_template;
 } SEnt;
 
+/* The program entry point `main` (never module-prefixed). */
+static bool fn_is_main(const FnDef *fd) {
+    return fd && fd->binding && fd->binding->name
+        && fd->binding->name->len == 4
+        && memcmp(fd->binding->name->name, "main", 4) == 0;
+}
+
+/* cps-backend-direct-lowering-removal-plan (D2b): is this a `main` that should
+ * be CPS-emitted with a fixed-ABI entry wrapper?  A zero-arg `main` whose body
+ * directly uses delimited control (reset/shift/shift0, cloneable/serial reset)
+ * is otherwise excluded from S purely because of its entry-point ABI; admitting
+ * it (subject to the same fn_sig_ok/term_core_ok subset gates) lets its delimited
+ * ops emit through the native CT-IR path instead of the direct emitter, and the
+ * `int main(...)` wrapper trampolines into `main__cps`.  Effect-only mains (no
+ * delimited op) stay excluded -- CPS-emitting them is pure overhead and removes
+ * no direct-lowering caller. */
+static bool fn_is_d2b_main(const FnDef *fd) {
+    return fn_is_main(fd) && fd->n_params == 0
+        && fd->body && cps_expr_contains_shift(fd->body);
+}
+
 static const Expr *g_prog;      /* program the cache is keyed on */
 static EmitCtx    *g_emit_ctx;  /* G3b: ctx of the active emission, for ctx->abi_specializations */
 static EmitCtx    *g_ents_ctx;  /* G3b: the g_emit_ctx the cached g_ents were classified under */
@@ -1837,13 +1858,14 @@ static void ensure_S(const Expr *program) {
             FnDef *fd = it->as.fn_def_.fn;
             if (fd->cps_colored && fd->binding && fd->body) {
                 /* `main` is the program entry point (int main(int, char**)); an
-                 * exported binding names a fixed C symbol/linkage.  Neither can
-                 * take the static int64_t entry-wrapper shape, so they are never
-                 * CPS-emitted -- but a `handle`/`perform` in one still taints. */
+                 * exported binding names a fixed C symbol/linkage.  Neither takes
+                 * the plain static int64_t entry-wrapper shape.  Exported bindings
+                 * stay excluded; a delimited zero-arg `main` is admitted (D2b) with
+                 * a fixed-ABI `int main` wrapper (emitted in emit_cps_ir_try_fn).
+                 * Either way a `handle`/`perform` in an excluded fn still taints. */
                 bool candidate = true;
                 if (fd->binding->c_export_name) candidate = false;
-                if (fd->binding->name && fd->binding->name->len == 4 &&
-                    memcmp(fd->binding->name->name, "main", 4) == 0) candidate = false;
+                if (fn_is_main(fd) && !fn_is_d2b_main(fd)) candidate = false;
                 if (candidate && !fn_sig_ok(fd)) candidate = false;
                 CTerm *t = cps_ir_translate_fn(&g_arena, (Expr *)program, fd);
                 if (candidate && !term_core_ok(t)) candidate = false;
@@ -2800,6 +2822,50 @@ static char *emit_cloneable_direct(CE *ce, const Expr *e) {
     return v;
 }
 
+/* Build the pure-arm value of an if-split cloneable/serial context: the direct
+ * value of `if_pure` with the OUTER context frames re-applied (frames[0..
+ * n_outer_frames), applied innermost-outer first).  The shift-bearing arm rides
+ * the full frame chain through the DK machine; the pure arm carries no shift, so
+ * its outer frames must be applied here as plain C.  Inner frames
+ * (frames[n_outer_frames..n_frames)) live inside the shift arm and do NOT apply
+ * to the pure arm.  Mirrors cloneable_frame_expr's per-op semantics (env =
+ * operand, value = the hole).  Returns a malloc'd C expression. */
+static char *emit_cloneable_pure_arm(CE *ce, const CTerm *t) {
+    char *acc = emit_cloneable_direct(ce, t->as.cloneable.if_pure);
+    for (int i = (int)t->as.cloneable.n_outer_frames - 1; i >= 0; i--) {
+        const CloneFrame *fr = &t->as.cloneable.frames[i];
+        Buf b; buf_init(&b);
+        if (fr->call_fn) {
+            /* 1-arg outer call frame: apply f to the pure value. */
+            char *cfn = callee_name(fr->call_fn);
+            buf_printf(&b, "((int64_t)%s((int64_t)(%s)))", cfn, acc);
+            free(cfn);
+        } else {
+            char *opv = atom_str(ce, &fr->operand);
+            const char *op = fr->op;
+            if (strcmp(op, "+") == 0)
+                buf_printf(&b, "((%s) + (%s))", opv, acc);
+            else if (strcmp(op, "*") == 0)
+                buf_printf(&b, "((%s) * (%s))", opv, acc);
+            else if (strcmp(op, "-") == 0)
+                buf_printf(&b, fr->hole_left ? "((%s) - (%s))" : "((%s) - (%s))",
+                           fr->hole_left ? acc : opv, fr->hole_left ? opv : acc);
+            else /* "/" -- guard div-by-zero exactly like cloneable_frame_expr */
+                buf_printf(&b,
+                    "((%s) ? ((%s) / (%s)) : (fprintf(stderr, \"division by zero\\n\"), abort(), 0))",
+                    fr->hole_left ? opv : acc,
+                    fr->hole_left ? acc : opv,
+                    fr->hole_left ? opv : acc);
+            free(opv);
+        }
+        char *nv = strdup(b.data);
+        buf_free(&b);
+        free(acc);
+        acc = nv;
+    }
+    return acc;
+}
+
 /* Emit the Shape 2 shift-body helper `bodyfn`.  `cont_setup` is the C that builds
  * the continuation the receiver is handed (a raw DK chain for serial, a
  * cloneable_cont for cloneable); `cont_arg` names it.  For a named-fn receiver the
@@ -3057,7 +3123,9 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         ce->indent--;
         ce_line(ce, "} else {");
         ce->indent++;
-        char *pv = emit_cloneable_direct(ce, t->as.cloneable.if_pure);
+        /* The pure arm re-applies the OUTER context frames (those outside the
+         * `if`); inner frames belong to the shift-bearing arm only. */
+        char *pv = emit_cloneable_pure_arm(ce, t);
         ce_line(ce, "%s = %s;", xn, pv);
         free(pv);
         ce->indent--;
@@ -3585,6 +3653,45 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     buf_puts(file, "}\n");
     buf_free(&body_buf);
     buf_free(&helpers);
+
+    /* ---- D2b fixed-ABI entry wrapper: int main(int argc, char **argv) ----
+     * A delimited zero-arg `main` (cps-backend-direct-lowering-removal-plan D2b)
+     * keeps the program's fixed entry ABI: the wrapper reproduces the direct
+     * emitter's `main` prologue (panic-trace flag + the *args* cons build from
+     * argv, mirroring emit_fns.c / emit_module.c), seeds the root prompt exactly
+     * like the generic wrapper below, trampolines into `main__cps`, and returns
+     * the delivered value as the process exit code. */
+    if (fn_is_d2b_main(fd)) {
+        const Type *mrt = mono_ret ? mono_ret : fn_ret_type(fd);
+        bool mvoid = (mrt->kind == TY_NIL);
+        buf_puts(file, "int main(int argc, char **argv) {\n");
+        if (g_emit_panic_trace)
+            buf_puts(file, "    g_panic_trace = 1;\n");
+        buf_puts(file, "    /* *args*: build cons list from argv[1..argc-1] */\n");
+        buf_puts(file, "    g_tur_args = 0;\n");
+        buf_puts(file, "    for (int _ai = argc - 1; _ai >= 1; _ai--) {\n");
+        buf_puts(file, "        typedef struct { int64_t value; int64_t next; } __tur_args_cell;\n");
+        buf_puts(file, "        __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));\n");
+        buf_puts(file, "        _c->value = (int64_t)(intptr_t)argv[_ai];\n");
+        buf_puts(file, "        _c->next = g_tur_args;\n");
+        buf_puts(file, "        g_tur_args = (int64_t)(intptr_t)_c;\n");
+        buf_puts(file, "    }\n");
+        buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
+        buf_printf(file, "    %s%s__cps(__root);\n", mvoid ? "(void)" : "int64_t __r = ", cn);
+        buf_puts(file, "    dk_free(__root);\n");
+        if (mvoid) {
+            buf_puts(file, "    return 0;\n}\n");
+        } else {
+            char *ld = slot_load(ctx, mrt->kind, mrt, "__r", true);
+            buf_printf(file, "    return (int)(%s);\n}\n", ld);
+            free(ld);
+        }
+        ctx->fn_params   = saved_fn_params;
+        ctx->n_fn_params = saved_n_fn_params;
+        g_cps_mono_resolver = NULL;
+        free(cn);
+        return true;
+    }
 
     /* ---- direct->cps entry wrapper: int64_t <name>(<params>) ----
      * The boundary trampoline for an uncolored/direct caller (including `main`)

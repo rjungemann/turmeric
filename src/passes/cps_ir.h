@@ -206,6 +206,13 @@ struct CTerm {
                  bool serial;
                  CloneLet *lets; uint32_t n_lets;
                  CloneFrame *frames; uint32_t n_frames;
+                 /* Count of leading `frames` that sit OUTSIDE the `if` branch point
+                  * (collected before it during the outside-in context walk).  The
+                  * shift arm rides the whole `frames` chain; the pure arm (if_pure)
+                  * must re-apply exactly these outer frames -- frames[n_outer_frames..)
+                  * are inside the shift-bearing arm and do NOT apply to the pure arm.
+                  * 0 when there is no `if` or no outer frames. */
+                 uint32_t n_outer_frames;
                  const Expr *if_cond; const Expr *if_pure; bool if_when;
                  CTerm *body; }                                           cloneable;
         /* (call/cc f) / (escape f): `e` is the original EX_CALLCC expr (the

@@ -175,14 +175,62 @@ function that uses delimited control **regardless of effect-coloring**:
   `main__cps(dk_done())`, and each exported `f(args)` calling `f__cps(args,
   dk_done())`. This is the mechanism the graduation-readiness note flagged as
   missing ("cannot take the `f__cps(args, DK*)` + wrapper shape").
+
+  **Landed (main only; exported deferred).** `emit_cps_ir_try_fn` now admits a
+  zero-arg `main` whose body directly uses delimited control and passes the same
+  `fn_sig_ok`/`term_core_ok` subset gates (`fn_is_d2b_main` in `emit_cps_ir.c`;
+  the `in_s` classifier lifts the `main` exclusion for it). For such a `main` the
+  wrapper is a fixed-ABI `int main(int argc, char **argv)` that reproduces the
+  direct emitter's `main` prologue (panic-trace flag + the `*args*` cons build),
+  seeds the root prompt, trampolines into `main__cps`, and returns the delivered
+  value as the exit code. Effect-only mains (no delimited op) stay excluded --
+  CPS-emitting them is pure overhead and removes no direct-lowering caller.
+  Exported (`c_export_name`) functions stay excluded: none appear in the corpus
+  and the extern-linkage ABI is left as a follow-up.
+
+  *Effect on the caller count (corpus scan): total genuine `-emit` reaches
+  **109 -> 51**; distinct fixtures with any reach **43 -> 28**; **15** former
+  Population-2 fixtures fully cleared.* Base `reset`/`shift` in a CPS-emitted
+  `main` emit **natively** (caller removed). `cloneable`/`serial`/`callcc` in a
+  CPS-emitted `main` mostly emit natively too, but a residual delegates via
+  `CT_LETRAW` -- this **reclassifies** those reaches from Population 2 to
+  Population 1 (the after-scan shows 7 `eviction cloneable` + 9 `eviction serial`
+  where before there were none). D2b does not by itself zero those; closing them
+  is D1's native-emission + delegation-removal work. `callcc`-only mains are not
+  admitted (call/cc is not a coloring seed, so such a `main` never reaches the
+  classifier loop) and stay on the direct emitter unchanged.
+
+  **Native context-grammar fix landed alongside.** CPS-emitting `main` first
+  exposed a latent miscompile in the **native** cloneable/serial if-split
+  emitter (`emit_cloneable`): the pure arm of `(cloneable-reset OUTER[if cond
+  THEN[shift] ELSE])` dropped the OUTER context frames (emitting `ELSE` instead
+  of `OUTER[ELSE]`). The `CloneFrame` chain conflated outer frames with then-arm
+  frames. Fixed by recording `n_outer_frames` (frames collected before the `if`
+  during the outside-in walk, in `build_cloneable`/`build_serial`) and
+  re-applying exactly those to the pure arm (`emit_cloneable_pure_arm`). This is a
+  general correctness fix (a colored helper with the same shape would have
+  miscompiled too), verified by `cloneable-context-if-outer-frames` /
+  `serial-context-if-outer-frames`.
+
 - **D2c -- verify against the direct output.** Each uncolored/`main`/exported
   delimited shape gets a `direct == cps` oracle (the direct output is the current
   baseline; the CPS output must match it) before its dispatch is removed.
+
+  *Status:* the D2b mains are covered by their existing `expected.stdout`
+  fixtures (all green); the two if-split-outer-frames fixtures pin the
+  context-grammar fix. A dedicated `--force-direct-lowering` oracle knob is not
+  yet added.
 
 **Exit:** with D2a-D2b landed and the oracles green, remove the `emit_cps_*`
 calls from the `emit_effects_*` wrappers (`emit_effects.c` :1209/:1223/:1696) and
 the `EX_CALLCC` dispatch (`emit_expr.c` :2826). The wrappers either collapse to
 their now-sole remaining behavior or are deleted with their callers.
+
+*Not yet reached:* the exit is gated on **both** populations hitting zero
+`-emit`. D2b left `direct-dispatch callcc` (28), `direct-dispatch cloneable` (3),
+`direct-dispatch reset` (2) and the D2b-introduced `eviction cloneable/serial`
+(16) still live, so the wrapper/dispatch removal waits on D1 (native
+cloneable/serial/callcc + delegation-arm removal) and the callcc admission path.
 
 ### Phase D3 -- delete the lowering functions
 
