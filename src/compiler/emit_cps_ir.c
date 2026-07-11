@@ -1266,9 +1266,12 @@ static bool term_core_ok(const CTerm *t) {
                 return false;
             for (uint32_t i = 0; i < t->as.cloneable.n_frames; i++) {
                 const CloneFrame *fr = &t->as.cloneable.frames[i];
-                /* A non-atomic env rides `env_expr` (emit_value'd at the reset
-                 * site), not the operand slot, so it need not be a slot-atom. */
-                if (!fr->env_expr && !atom_ok(&fr->operand)) return false;
+                /* Arithmetic frames ride their operand in the frame-env slot, so it
+                 * must be a slot-atom.  A CALL frame's captured env is validated and
+                 * marshaled by the builder/emitter (int/cstr inline, Serializable
+                 * via its instance, or a non-atomic env on env_expr), so it does not
+                 * go through the operand-slot check. */
+                if (!fr->call_fn && !atom_ok(&fr->operand)) return false;
             }
             return term_core_ok(t->as.cloneable.body);
         case CT_CALLCC:
