@@ -76,4 +76,11 @@ bool emit_cps_program_contains_serial(const Expr *program);
  * holding the result, or NULL to fall back to the legacy lowering. */
 char *emit_cps_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e);
 
+/* cps-backend-direct-lowering-removal-plan (verification): emit one
+ * --dump-direct-lowering-callers line for a codegen reach into the direct-style
+ * lowering.  `family` is "reset"/"callcc"/"cloneable"/"serial"; `emitted` is
+ * whether the lowering actually emitted (returned non-NULL) vs fell back to the
+ * inline path.  No-op unless g_dump_direct_lowering_callers is set. */
+void emit_cps_note_direct_caller(const char *family, bool emitted);
+
 #endif

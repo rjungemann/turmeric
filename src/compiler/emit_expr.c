@@ -2823,7 +2823,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_CLONEABLE_RESET:  return emit_effects_cloneable_reset(ctx, body, e);
         case EX_SHIFT:            return emit_effects_shift(ctx, body, e);
         case EX_SHIFT0:           return emit_effects_shift0(ctx, body, e);
-        case EX_CALLCC:           return emit_cps_callcc(ctx, body, e);
+        case EX_CALLCC:           emit_cps_note_direct_caller("callcc", true); return emit_cps_callcc(ctx, body, e);
         case EX_CLONEABLE_SHIFT:  return emit_effects_cloneable_shift(ctx, body, e);
         /* Phase 21: Serializable continuations */
         case EX_SERIAL_RESET:     return emit_effects_serial_reset(ctx, body, e);

@@ -207,6 +207,11 @@ bool g_dump_mono_specs = false;
  * monomorphs (G1 of the generic-monomorph-classification plan).  Analysis only. */
 bool g_dump_cps_mono = false;
 
+/* --dump-direct-lowering-callers: report every codegen reach into the direct-
+ * style delimited-control lowering (emit_cps.c), tagged by population + family.
+ * The cps-backend-direct-lowering-removal-plan's caller counter.  Analysis only. */
+bool g_dump_direct_lowering_callers = false;
+
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signature registry (see globals.h).
  * --------------------------------------------------------------------------- */

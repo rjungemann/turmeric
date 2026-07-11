@@ -1216,6 +1216,7 @@ char *emit_effects_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
      * reset just evaluates and returns its body (correct when the body has no
      * shift, or when an inner reset/operator self-delimits it). */
     char *cps = emit_cps_reset(ctx, body, e);
+    emit_cps_note_direct_caller("reset", cps != NULL);
     if (cps) return cps;
     return emit_value(ctx, body, e->as.reset_.body);
 }
@@ -1237,6 +1238,7 @@ char *emit_effects_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
      * via dk_invoke). Outside that subset emit_cps_cloneable_reset returns NULL
      * and we fall back to the legacy lowering below (byte-identical). */
     char *cps = emit_cps_cloneable_reset(ctx, body, e);
+    emit_cps_note_direct_caller("cloneable", cps != NULL);
     if (cps) return cps;
 
     if (rb->kind == EX_CLONEABLE_SHIFT) {
@@ -1701,6 +1703,7 @@ char *emit_effects_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
      * returns NULL and we fall back to the legacy lowering: serial-reset with no
      * shift just evaluates its body. */
     char *cps = emit_cps_serial_reset(ctx, body, e);
+    emit_cps_note_direct_caller("serial", cps != NULL);
     if (cps) return cps;
     return emit_value(ctx, body, e->as.serial_reset_.body);
 }

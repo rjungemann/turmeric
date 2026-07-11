@@ -5837,6 +5837,7 @@ static void wk_apply_flags(const char *flags_str) {
         else if (strcmp(tok, "--dump-cps")          == 0) g_dump_cps                 = true;
         else if (strcmp(tok, "--dump-mono-specs")   == 0) g_dump_mono_specs          = true;
         else if (strcmp(tok, "--dump-cps-mono")     == 0) g_dump_cps_mono            = true;
+        else if (strcmp(tok, "--dump-direct-lowering-callers") == 0) g_dump_direct_lowering_callers = true;
         else if (strcmp(tok, "--dump-sizes")        == 0) g_dump_sizes               = true;
         else if (strcmp(tok, "--emit-abi-trace")    == 0) g_emit_abi_trace           = true;
         else if (strcmp(tok, "--lint-effects")      == 0) g_lint_effects             = true;
@@ -6612,6 +6613,7 @@ static int usage(void) {
         "  --backtrack-depth <N>            cap run-backtrack at N results (0=unlimited) (Phase B5)\n"
         "  --dump-clone-plan                dump cloneable capture plan after CPS (Phase B5)\n"
         "  --dump-cps-coloring              dump CPS coloring (colored/uncolored) per top-level defn (CPS1)\n"
+        "  --dump-direct-lowering-callers   count codegen reaches into the direct delimited-control lowering (emit_cps.c)\n"
         "  --cps-path                       emit CPS wrappers for colored functions (CPS3)\n"
         "  --emit-abi-trace                 print the resolved ABI path per call site during emit-c (Phase I)\n"
         "  --no-abi-cache                   disable the persistent cross-module ABI cache (.tur-abi-cache/) (Phase J6)\n"
@@ -7457,6 +7459,16 @@ int main(int argc, char **argv) {
             /* G1 (cps-backend-generic-monomorph-classification-plan): report CPS-
              * subset admissibility of each colored-generic monomorph. */
             g_dump_cps_mono = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--dump-direct-lowering-callers") == 0) {
+            /* cps-backend-direct-lowering-removal-plan (verification): count every
+             * codegen reach into the direct-style delimited-control lowering
+             * (emit_cps.c), tagged by caller population + control family. */
+            g_dump_direct_lowering_callers = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

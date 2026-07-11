@@ -236,6 +236,55 @@ without exception.
   caller population to zero; instrument with a one-line `--dump-*` counter (or a
   grep over emitted C for the direct lowering's signature symbols) so "residual
   delegations = 0" and "direct-dispatch callers = 0" are measured, not asserted.
+  **Landed:** `--dump-direct-lowering-callers` (a codegen knob in `globals.{c,h}`,
+  wired in `main.c`; the emit hook is `emit_cps_note_direct_caller` in
+  `emit_cps_ir.c`, called from the three `emit_effects_*` wrappers and the
+  `EX_CALLCC` dispatch). It prints one line per reach into the direct lowering:
+
+  ```
+  direct-lowering-caller: <eviction|direct-dispatch> <family>-<emit|fallback>
+  ```
+
+  where `eviction` = Population 1 (colored function evicting a sub-shape via
+  CT_LETRAW -- attributed via the `g_cps_delegating` bracket in `emit_letraw`),
+  `direct-dispatch` = Population 2 (function not in `S`, emitted wholly by the
+  direct emitter), and `emit` = the lowering actually emitted (a genuine
+  emit_cps.c caller; the delete target) vs `fallback` = returned NULL and the
+  inline path in `emit_effects.c` ran (NOT an emit_cps.c caller). Run it across
+  the corpus with `emit-c --dump-direct-lowering-callers <file> 2>&1 >/dev/null`.
+
+  ### Measured baseline (corpus scan, 2026-07-11)
+
+  Scanning `emit-c` over every fixture input, counting only genuine `-emit`
+  reaches (the live callers of the four lowering functions):
+
+  | Population | Family | `-emit` reaches | Distinct fixtures |
+  |---|---|---:|---:|
+  | **eviction** (P1) | callcc | 2 | `cps-oracle-escape-capture-in-shift-body`(+`-cps` twin) |
+  | **direct-dispatch** (P2) | serial | 42 | 17 |
+  | **direct-dispatch** (P2) | cloneable | 34 | 10 |
+  | **direct-dispatch** (P2) | callcc | 29 | 17 |
+  | **direct-dispatch** (P2) | reset | 2 | 2 |
+
+  This materially updates the plan's premise. **Population 1 (Phase D1) is
+  essentially closed**: the U7 work
+  ([U7 readiness](cps-backend-unification-u7-readiness-plan.md)) drove the
+  cloneable / serial / reset colored-eviction residue to zero; the *only*
+  remaining P1 reach is `call/cc` captured inside a `shift` body (one logical
+  fixture + its `-cps` twin). D1a-D1c as written are therefore already landed
+  for everything except this narrow callcc-in-shift-body tail.
+
+  **Population 2 (Phase D2) is the dominant blocker** -- 41 distinct fixtures.
+  `in_s` (`emit_cps_ir.c` ~:1841) is false, and the function wholly direct-emits,
+  for four reasons; P2 splits along them:
+  - `main` / `c_export_name` -- excluded by construction; the fix is the D2b
+    fixed-ABI entry wrapper (`main__cps(dk_done())` / `f__cps(args, dk_done())`).
+  - `fn_sig_ok` / `term_core_ok` reject -- the emittable-subset boundary (the
+    five v1 gap plans + D1c context-grammar widening + D1d `needs_heap_join`).
+
+  D3-D5 (deleting the lowering, the carve-out, the files) stay gated on **both**
+  populations reaching zero `-emit`, i.e. on closing the callcc-in-shift-body P1
+  tail *and* the full D2 uncolored/main/subset-reject population.
 - **Snapshot churn** regenerates in the same PR as each phase that moves codegen
   (D2 in particular re-emits every uncolored delimited function), per the
   CLAUDE.md fixture-regen recipe.
