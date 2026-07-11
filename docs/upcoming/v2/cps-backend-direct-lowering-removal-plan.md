@@ -390,16 +390,66 @@ backend, and reaching the direct emitter is an invariant violation. The
 gate declarations and the `emit_cps_note_direct_caller` verification hook stay.
 Suite: 2142 passed, 0 failed.
 
-### Phase D4 -- delete the N6.5 delimited-control carve-out
+### Phase D4 -- delete the N6.5 delimited-control carve-out -- LANDED
 
 The N6 fallback-removal plan retained a **named carve-out** (N6.5) that keeps the
 delimited-control family routed to `emit_cps.c` because it was the sole emitter
 for those shapes (see
-[N6 plan](../v1/cps-backend-n6-fallback-removal-plan.md) N6.5). Once D1-D3 remove
-that sole-emitter status, delete the carve-out: the routing that special-cases
-the delimited family in the coloring/eviction path is no longer needed, and "the
-CT-IR backend is the sole lowering for every colored function" becomes true
-without exception.
+[N6 plan](../v1/cps-backend-n6-fallback-removal-plan.md) N6.5). The goal: delete
+the routing so "the CT-IR backend is the sole lowering for every colored
+function" becomes true without exception.
+
+**The carve-out, concretely.** It is the `build_letraw` (`CT_LETRAW`) delegation
+fallback for `EX_CLONEABLE_RESET`/`EX_SERIAL_RESET` in `cps_ir.c`'s translation,
+plus the `safe_to_delegate` `return true` for those two forms (U3/U4). When the
+native `build_cloneable`/`build_serial` returned NULL, the whole delimited region
+was delegated to the direct emitter, keeping the colored function CPS-emitted.
+(Note: after D3, the delegation no longer reaches `emit_cps.c` -- it reaches the
+*legacy* `emit_effects.c` lowering, which D3 kept.)
+
+**The plan's premise was wrong.** D1-D3 targeted base reset/shift and call/cc;
+they did **not** make the CT-IR backend cover the cloneable/serial subset. A
+corpus scan found the carve-out still load-bearing for two shapes (serial: zero;
+cloneable: four fixtures):
+- **No-shift resets** (`(cloneable-reset 42)`) -- the reset trivially equals its
+  body.
+- **Shape-1 live-capture cloneable-shift** (`cloneable-drop-rc`:
+  `(cloneable-reset (let [n result] (cloneable-shift k 0)))`) -- `build_cloneable`
+  rejected any shift with live captures.
+
+Simply deleting the carve-out (proved by experiment) keeps the suite green but
+makes those functions *wholly evict* to the direct emitter -- **reducing** CT-IR
+coverage, the opposite of the goal. So the two shapes were ported natively first:
+
+- **No-shift native path.** When `build_cloneable`/`build_serial` returns NULL and
+  the body has no reachable shift, translate the body directly (`cps_tail`) rather
+  than delegating -- a no-shift reset has nothing to delimit.
+- **Shape-1 live-capture, a one-line gate relaxation.** `build_cloneable` rejected
+  `n_live_captures != 0` unconditionally, but a **Shape 1** (`nf == 0`) captured
+  continuation is the IDENTITY (the shift sits at the reset tail; no context to
+  re-run), so it never reads a captured local. `emit_cloneable`'s Shape-1 arm
+  already allocates the trivial cont with a **NULL env**
+  (`tur_cloneable_cont_alloc(cfn, NULL, NULL, NULL)`) -- byte-identical to the
+  legacy `has_env == false` path. So a conservatively-marked live capture on a
+  Shape-1 shift is emit-time dead; the gate now rejects only `nf != 0` captures.
+  `cloneable-drop-rc` emits **zero `__clenv`** structs natively and is leak-clean
+  under LeakSanitizer.
+
+**Carve-out deleted.** With both shapes native, the `safe_to_delegate` U3/U4 cases
+were removed (they fall to `default: return false`, forcing decomposition to a
+bind position), and the `build_letraw` delegation fallback in the translation was
+replaced by `CT_UNSUPPORTED` -- a shift-bearing reset outside the native subset
+now evicts the *whole function* rather than routing a sub-region out. A corpus
+scan confirms **zero delegations and zero evictions** for cloneable/serial resets:
+every one is now natively CT-IR-lowered. Suite: 2142 passed, 0 failed.
+
+**Left standing (deliberately).** The legacy `emit_effects.c` cloneable/serial
+lowering (`emit_effects_cloneable_reset` Case-1/Case-2, `emit_effects_cloneable_shift`,
+`emit_effects_serial_*`) remains as the whole-function *eviction* fallback for
+shapes outside the native subset (Shape-2-with-captures, and cloneable/serial in a
+non-CPS-candidate function). No corpus fixture reaches it, so it is corpus-dead but
+not deleted: removing it would hard-error those untested shapes. That deletion is
+a separate, evidence-gated step (D5-adjacent), not folded into D4.
 
 ### Phase D5 -- retire the gates and the files
 

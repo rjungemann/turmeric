@@ -603,13 +603,17 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     }
 
     if (!cur || cur->kind != EX_CLONEABLE_SHIFT) return NULL;
-    /* The shared DK runtime prelude (__dk_cont_fn / __dk_env_clone / __dk_env_drop,
-     * dk_copy_range) that native Shape 2 emits is gated by the direct emitter's
-     * cl_can_lower, which requires the shift to have no live captures at its site.
-     * Match that constraint: lowering a shift with live captures natively would
-     * reference prelude helpers the gate never emits (undeclared C names).  Such a
-     * shape stays on the delegation path, which matches the direct backend. */
-    if (cur->as.cloneable_shift_.n_live_captures != 0) return NULL;
+    /* Shape 2 (nf >= 1) reifies the delimited context as a DK frame chain, so a
+     * captured continuation genuinely re-runs the context and references the
+     * captured locals -- native Shape 2 has no env-carrying prelude, so a
+     * live-capture Shape 2 still delegates.  Shape 1 (nf == 0) is different: its
+     * captured continuation is the IDENTITY (the shift sits at the reset tail, no
+     * context to re-run), which returns its delivered value and never reads a
+     * captured local.  emit_cloneable's Shape 1 arm allocates the trivial cont
+     * with a NULL env (tur_cloneable_cont_alloc(cfn, NULL, NULL, NULL)), exactly
+     * like the legacy has_env==false path -- so a conservatively-marked live
+     * capture on a Shape 1 shift is emit-time dead and safe to admit natively. */
+    if (nf != 0 && cur->as.cloneable_shift_.n_live_captures != 0) return NULL;
     const Binding *recv = cloneable_named_receiver(b, cur);
     const Expr *recv_expr = NULL;
     if (!recv) {
@@ -1028,32 +1032,15 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
          * and the CPS continuation runs after. */
         case EX_ASYNC: case EX_AWAIT:
             return true;
-        /* U3 (cps-backend-unification): a (cloneable-reset body) is a
-         * SELF-CONTAINED multi-shot delimited region.  The bare cloneable-shift
-         * captures the rest of its reset body (a continuation that escapes the
-         * shift expression), so it stays non-delegatable above; but the whole
-         * cloneable-reset is emitted as a unit by the direct emitter
-         * (emit_effects_cloneable_reset -> emit_cps_cloneable_reset), which owns
-         * the dk_copy_range deep-clone + capture clone/drop glue.  Delegating the
-         * reset via CT_LETRAW therefore reuses the proven multi-shot runtime and
-         * lets a colored function that contains a cloneable-reset stay CPS-emitted
-         * instead of wholly evicting.  The reset's value (often a continuation
-         * handle resumed later) is bound and the CPS continuation runs after. */
-        case EX_CLONEABLE_RESET:
-            return true;
-        /* U4 (cps-backend-unification): a (serial-reset body) is a SELF-CONTAINED
-         * marshalable delimited region, analogous to cloneable-reset but with the
-         * continuation serialized (save-cont!/resume-cont!) rather than deep-cloned.
-         * The whole region is emitted as a unit by the direct emitter
-         * (emit_effects_serial_reset -> emit_cps_serial_reset), which owns the
-         * serial marshaling runtime.  Delegating the reset via CT_LETRAW reuses
-         * that proven runtime and lets a colored function that contains a
-         * serial-reset stay CPS-emitted instead of wholly evicting (the serial
-         * runtime prelude is gated on *presence* of serial syntax, so the delegated
-         * helpers are always in scope).  The bare serial-shift stays non-delegatable
-         * above (it captures the rest of its reset body). */
-        case EX_SERIAL_RESET:
-            return true;
+        /* D4 (cps-backend-direct-lowering-removal): the cloneable-reset (U3) and
+         * serial-reset (U4) delimited-control carve-out is deleted.  These regions
+         * are now lowered natively by the CT-IR backend (build_cloneable /
+         * build_serial, plus the no-shift-reset and Shape-1 live-capture paths), so
+         * they are no longer delegated to the direct emitter via CT_LETRAW.  They
+         * fall to the `default: return false` below -- non-delegatable, forcing the
+         * enclosing form to decompose so the reset lands at a bind position where
+         * cps_tail emits it natively (or evicts the whole function for a shape
+         * outside the native subset, rather than routing a sub-region out). */
         /* nested fn defs: call-graph boundaries, delegatable as values. */
         case EX_FN_DEF: case EX_FN: case EX_CLOSURE:
             return is_delegatable_value(e);
@@ -1460,22 +1447,40 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             return t;
         }
         case EX_CLONEABLE_RESET: {
-            /* U3 Shape 1 native, else fall back to the CT_LETRAW delegation. */
+            /* U3 native cloneable context (Shape 1/2, incl. no-shift and Shape-1
+             * live-capture), else (D4) evict rather than delegate. */
             CVar x = fresh_cvar(b, &e->type);
             CTerm *ac = new_term(b, CT_APPCONT);
             ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
             CTerm *nat = build_cloneable(b, e, x, ac);
-            return nat ? nat : build_letraw(b, e, x, ac);
+            if (nat) return nat;
+            /* No cloneable-shift is bound to this reset -> its value is just the
+             * body (nothing to delimit).  Translate the body directly. */
+            if (!cloneable_ctx_reaches_shift(e->as.cloneable_reset_.body))
+                return cps_tail(b, e->as.cloneable_reset_.body, kont);
+            /* D4: the delimited-control carve-out (delegate the reset to the direct
+             * emitter via CT_LETRAW) is deleted.  A shift-bearing reset outside the
+             * native build_cloneable subset now evicts the whole function to the
+             * direct emitter instead of routing a sub-region to it -- so no colored
+             * function delegates a delimited region.  (No corpus fixture reaches
+             * here; the native subset covers every cloneable reset in the suite.) */
+            return new_term(b, CT_UNSUPPORTED);
         }
         case EX_SERIAL_RESET: {
-            /* U4: native arithmetic serial context, else delegate the marshalable
-             * region so a colored function containing it stays CPS-emitted rather
-             * than wholly evicting. */
+            /* U4: native arithmetic serial context, else (D4) handle a no-shift
+             * reset as its plain body, else evict rather than delegate. */
             CVar x = fresh_cvar(b, &e->type);
             CTerm *ac = new_term(b, CT_APPCONT);
             ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
             CTerm *nat = build_serial(b, e, x, ac);
-            return nat ? nat : build_letraw(b, e, x, ac);
+            if (nat) return nat;
+            if (!serial_reaches_shift(e->as.serial_reset_.body))
+                return cps_tail(b, e->as.serial_reset_.body, kont);
+            /* D4: carve-out deleted -- a shift-bearing serial reset outside the
+             * native build_serial subset evicts the whole function to the direct
+             * emitter rather than delegating the region.  (No corpus fixture
+             * reaches here.) */
+            return new_term(b, CT_UNSUPPORTED);
         }
         case EX_ASYNC: case EX_AWAIT: {
             /* U5: delegate the self-contained async region (async spawn / await)
