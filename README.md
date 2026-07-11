@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.27.6` -- Experimental CPS-IR-to-C backend (`--enable=cps-backend`) lowers colored functions directly to C under a ratified DK-threading ABI.
+**Latest release:** `v0.27.7` -- `Vec`/`Set`/`Map` gain `Eq`/`Show` over any single-word element type, and the delimited-continuation runtime closes its `reset`/`shift` and `call/cc` gaps.
 
 ## What
 

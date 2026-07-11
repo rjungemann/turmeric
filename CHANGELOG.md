@@ -4,6 +4,31 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.27.7] -- 2026-07-10
+
+### Added
+
+- **Eq/Show for every single-word collection element type**: `Vec`,
+  `Set`, and `Map` are now `Eq`- and `Show`-able over any single-word
+  element type, not just `:int` (#654).
+- **Collection Show in the WASM REPL**: the Try Turmeric REPL renders
+  bare collection results via `Show` instead of raw handles (#651).
+
+### Changed
+
+- **Delimited-continuation runtime relocated**: the DK runtime moves
+  into place and the `reset`/`shift` and `call/cc` implementations
+  close previously open gaps (#656).
+
+### Fixed
+
+- **Grounded tyvar ascriptions for string keys**: `Show[Set]` and
+  `Show[Map]` over `cstr` keys now render the strings instead of raw
+  values (#655).
+- **Bare-head constrained instance dispatch**: the interpreter binds
+  constraint tyvars for bare-head constrained instances at dispatch
+  time (#652).
+
 ## [0.27.6] -- 2026-07-09
 
 ### Added
