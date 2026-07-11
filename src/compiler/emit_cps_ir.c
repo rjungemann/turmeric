@@ -1264,8 +1264,12 @@ static bool term_core_ok(const CTerm *t) {
              * env).  Admission needs a slot-representable result + core body. */
             if (!(slot_ok_t(t->as.cloneable.x.type, t->as.cloneable.x.ty) || t->as.cloneable.x.ty == TY_NIL))
                 return false;
-            for (uint32_t i = 0; i < t->as.cloneable.n_frames; i++)
-                if (!atom_ok(&t->as.cloneable.frames[i].operand)) return false;
+            for (uint32_t i = 0; i < t->as.cloneable.n_frames; i++) {
+                const CloneFrame *fr = &t->as.cloneable.frames[i];
+                /* A non-atomic env rides `env_expr` (emit_value'd at the reset
+                 * site), not the operand slot, so it need not be a slot-atom. */
+                if (!fr->env_expr && !atom_ok(&fr->operand)) return false;
+            }
             return term_core_ok(t->as.cloneable.body);
         case CT_CALLCC:
             /* U7: a local setjmp escape landing (emit_callcc).  The receiver is
