@@ -315,6 +315,7 @@ static bool shape_supported(const BuiltinSpec *sp) {
         case BS_PREFIX_UNARY:
         case BS_AND_SC:
         case BS_OR_SC:
+        case BS_FUNC_CALL:   /* a plain C runtime call c_op(args); prim_expr emits it */
         case BS_PRINTLN_INT:
         case BS_PRINTLN_BOOL:
         case BS_PRINTLN_UINT:
@@ -2156,6 +2157,17 @@ static char *prim_expr(const BuiltinSpec *sp, char **as, uint32_t n) {
                 buf_printf(&b, "(%s)", as[i]);
             }
             if (n == 0) buf_puts(&b, (sp->shape == BS_AND_SC) ? "1" : "0");
+            break;
+        }
+        case BS_FUNC_CALL: {
+            /* A plain C runtime call `c_op(args)` -- e.g. cons, the continuation
+             * resume/clone/drop/serialize primitives.  Args are slot carriers. */
+            buf_printf(&b, "%s(", sp->c_op);
+            for (uint32_t i = 0; i < n; i++) {
+                if (i) buf_puts(&b, ", ");
+                buf_printf(&b, "(%s)", as[i]);
+            }
+            buf_putc(&b, ')');
             break;
         }
         default:
