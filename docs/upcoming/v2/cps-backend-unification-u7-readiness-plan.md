@@ -45,7 +45,7 @@ must be total:
 |---|---|---|---|
 | `emit_cps_reset` | `emit_effects_reset` (emit_effects.c:1218) | `CT_RESET`/`CT_SHIFT` native for the `delim_ok` subset, now incl. **nested + sibling-nested reset** | reset/shift-specific gap is **closed** (escape/branch native since U1; nested reset + sibling nested resets admitted -- see resetshift-gap note). The only nestings still evicting do so via the *generic* `needs_heap_join` boundary (a non-tail cps->cps **call** on the heap chain), shared with the whole C1 subset -- not reset/shift-specific |
 | `emit_cps_cloneable_reset` | `emit_effects_cloneable_reset` (:1239) + delegation | value-typed subset native (arith/call/let/if/do), incl. **Shape 1 + Shape 2 closure receivers** | only **colored receivers** and shapes outside the arith/call/let/if/do context still delegate |
-| `emit_cps_serial_reset` | `emit_effects_serial_reset` (:1703) + delegation | value-typed subset native (arith/call/let/if/do), incl. **Shape 1 identity + Shape 1/2 closure receivers** | **2-arg call frames** (serialized env codec) still delegate; closure receivers are native (thunk baked into the shift body fn, closure env on the dk_shift env) |
+| `emit_cps_serial_reset` | `emit_effects_serial_reset` (:1703) + delegation | value-typed subset native (arith/call/let/if/do), incl. **Shape 1 identity, Shape 1/2 closure receivers, and 2-arg call frames (int env)** | only **cstr/Serializable 2-arg envs** and **colored receivers** still delegate; int 2-arg call frames marshal inline (SK_ENV_INT, "$2L"/"$2R" keys) |
 | `emit_cps_callcc` | `EX_CALLCC` dispatch (emit_expr.c:2826) + delegation | **native `CT_CALLCC`**, incl. **capturing-closure receivers** (scalar captures ride the escape landing) | remaining: only the `EX_CALLCC` direct-dispatch caller for uncolored/`main`/exported functions (goes away at CPS-backend graduation), and a non-scalar capture in a *lifted* callcc (bails to delegation) |
 
 Callcc has a native `CT_CALLCC` covering both capture-free and capturing-closure
@@ -59,9 +59,15 @@ env via the same `collect_free_vars` -> `cap_add` path callcc uses.  The
 recurse into a closure body, so the receiver's own captures are not shift-site
 live captures.  The multi-shot (cloneable) and marshalable (serial) semantics are
 preserved -- the receiver runs once at capture; only the continuation is
-cloned/marshaled.  **Remaining native gap: serial 2-arg call frames** (a
-serialized env codec).  Base reset/shift is closed (nested + sibling), serial
-Shape 1 identity is native, and colored receivers stay on the delegation.
+cloned/marshaled.  **Serial 2-arg call frames** (int env) are now native too: the
+per-site wrapper applies the callee in source order (hole side), and the captured
+int env is marshaled inline (SK_ENV_INT), keyed "$2L"/"$2R" so save-cont!/
+resume-cont! round-trips it through bytes -- no marshaler change was needed since
+the env-codec already serialized SK_ENV_INT.  With that, **every native gap the
+readiness table named is closed.**  The only residual delegations are now
+narrower, un-named tails: colored receivers, cstr/Serializable 2-arg call-frame
+envs, and shapes outside the supported context grammar.  Base reset/shift is
+closed (nested + sibling).
 
 ## The cut sequence
 
@@ -101,12 +107,14 @@ Shape 1 identity is native, and colored receivers stay on the delegation.
      `cps-oracle-callcc-capturing-recv{,-cps}`).  callcc's native coverage now
      matches the delegation's; its only remaining caller is the direct dispatch
      for uncolored/`main`/exported fns (removed at graduation).
-   - cloneable/serial closure receivers + serial 2-arg call frames. **Serial
-     Shape 1 identity** and **cloneable/serial Shape 1 + Shape 2 closure
-     receivers** are now native (`receiver_expr` on CT_CLONEABLE; oracles
+   - cloneable/serial closure receivers + serial 2-arg call frames -- **all
+     landed**. Serial Shape 1 identity, cloneable/serial Shape 1 + Shape 2 closure
+     receivers (`receiver_expr` on CT_CLONEABLE), and serial 2-arg call frames with
+     an int env (marshaled inline) are native (oracles
      `cps-oracle-serial-shape1{,-cps}`, `cps-oracle-cloneable-closure-recv{,-cps}`,
-     `cps-oracle-cloneable-closure-shape2{,-cps}`).  Remaining: serial 2-arg call
-     frames.
+     `cps-oracle-cloneable-closure-shape2{,-cps}`,
+     `cps-oracle-serial-callframe-2arg{,-cps}`).  Residual (un-named) tails: colored
+     receivers, cstr/Serializable 2-arg envs, shapes outside the context grammar.
    - base reset/shift shapes outside `delim_ok` -- **the reset/shift-specific gap
      is now closed**: escape/branch shapes went native in U1; nested reset
      (`delim_ok` CT_RESET case) and sibling nested resets (`collect_caps_rec`
@@ -149,15 +157,20 @@ The **runtime relocation (step 1) is now landed** -- `emit_cps.c` no longer hold
 the load-bearing runtime, so the eventual delete is "remove four lowering
 functions with no callers," not "carve runtime out of a 2.1k-line file."
 
-The remaining U7 work is step 2's **native gaps**. Landed so far: base reset/shift
+**Every native gap the readiness table named is now closed**: base reset/shift
 (nested + sibling), serial Shape 1 identity, callcc (native `CT_CALLCC`, capture-
-free + capturing receivers), and **cloneable/serial closure receivers across both
-shapes** (Shape 1 direct call + Shape 2 `dk_shift`-env threading). The last named
-native gap is **serial 2-arg call frames** (a serialized env codec); after that,
-the only residual delegations are colored receivers and shapes outside the
-supported context grammar. Until each gap's last caller is gone the delegation +
-eviction fallbacks are correct and the tree ships; the deletes (steps 3-5) follow
-mechanically once coverage is total.
+free + capturing receivers), cloneable/serial closure receivers across both shapes
+(Shape 1 direct call + Shape 2 `dk_shift`-env threading), and serial 2-arg call
+frames (int env marshaled inline). The residual delegations are now narrower,
+un-named tails -- colored receivers, cstr/Serializable 2-arg call-frame envs, and
+shapes outside the supported context grammar -- each an incremental extension of
+an existing native path, not a structural gap.
+
+The next structural question for U7 is no longer a coverage gap but **graduation**:
+the deletes (steps 3-5) still wait on the CPS backend becoming the whole-program
+default, because the direct-dispatch callers (uncolored / `main` / exported fns)
+of the lowering functions only disappear then. Until then the delegation +
+eviction fallbacks are correct and the tree ships.
 
 Note: a native `CT_CALLCC` does NOT by itself remove `emit_cps_callcc`'s last
 caller -- the `EX_CALLCC` direct dispatch (emit_expr.c:2826) still lowers callcc

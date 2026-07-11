@@ -2795,16 +2795,28 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
             char *cfn = callee_name(fr->call_fn);
             /* A do-tail ignore-value frame runs f() regardless of the resumed
              * value and marshals under the "$0" side; a 1-arg hole call applies f
-             * to the resumed value under "$L". */
-            if (fr->ignore_value)
+             * to the resumed value under "$L"; a 2-arg call applies f to the
+             * resumed value + the captured int env (source order per hole side)
+             * under "$2L"/"$2R", the env serialized inline. */
+            bool two_arg = !fr->ignore_value && fr->call_fn->type.as.fn.arity == 2;
+            const char *side;
+            if (fr->ignore_value) {
                 buf_printf(ce->helpers,
                     "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { (void)env; (void)value; return (intptr_t)%s(); }\n",
                     ce->fn_cn, id, i, cfn);
-            else
+                side = "$0";
+            } else if (two_arg) {
+                buf_printf(ce->helpers,
+                    "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { return (intptr_t)%s(%s); }\n",
+                    ce->fn_cn, id, i, cfn,
+                    fr->hole_left ? "(int64_t)value, (int64_t)env" : "(int64_t)env, (int64_t)value");
+                side = fr->hole_left ? "$2L" : "$2R";
+            } else {
                 buf_printf(ce->helpers,
                     "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s((int64_t)value); }\n",
                     ce->fn_cn, id, i, cfn);
-            const char *side = fr->ignore_value ? "$0" : "$L";
+                side = "$L";
+            }
             buf_printf(ce->helpers,
                 "static SkReg %s_skreg%d_%u = { \"%s%s\", %s_skcall%d_%u, 0, 0, 0, 0 };\n"
                 "__attribute__((constructor)) static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
@@ -2821,8 +2833,13 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         for (uint32_t i = 0; i < nf; i++) {
             const CloneFrame *fr = &t->as.cloneable.frames[i];
             if (fr->call_fn) {
-                ce_line(ce, "%s = dk_frame(%s_skcall%d_%u, (intptr_t)(0), %s);",
-                        dv, ce->fn_cn, id, i, dv);
+                /* A 2-arg call frame carries the captured int env; 1-arg / do-tail
+                 * frames pass 0.  The env rides q->env and is marshaled inline. */
+                bool two_arg = !fr->ignore_value && fr->call_fn->type.as.fn.arity == 2;
+                char *opv = two_arg ? atom_str(ce, &fr->operand) : NULL;
+                ce_line(ce, "%s = dk_frame(%s_skcall%d_%u, (intptr_t)(%s), %s);",
+                        dv, ce->fn_cn, id, i, opv ? opv : "0", dv);
+                free(opv);
             } else {
                 char *opv = atom_str(ce, &fr->operand);
                 ce_line(ce, "%s = dk_frame(__sk_frame_for_tag(%d), (intptr_t)(%s), %s);",

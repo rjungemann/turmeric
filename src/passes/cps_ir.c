@@ -692,6 +692,39 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             continue;
         }
 
+        /* Call frame (2-arg): `(f other [])` / `(f [] other)` to a top-level
+         * uncolored (int,int)->int fn; the hole is one arg, the other is a captured
+         * INT env.  The per-site wrapper applies f to (value, env) in source order;
+         * the env is serialized inline (SK_ENV_INT) by the marshaler, keyed by the
+         * "<fn>$2L"/"<fn>$2R" side so save-cont!/resume-cont! round-trips.  (Non-int
+         * envs -- cstr / Serializable -- still delegate.) */
+        if (cur->kind == EX_CALL && cur->as.call_.n_args == 2
+            && cur->as.call_.fn_binding && !cur->as.call_.fn_expr) {
+            const Binding *fb = cur->as.call_.fn_binding;
+            if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 2) return NULL;
+            if (fb->closure_fn_binding) return NULL;         /* not a fat closure */
+            if (callee_colored(b, fb)) return NULL;          /* uncolored target */
+            if (cur->type.kind != TY_INT) return NULL;       /* result: int */
+            if (fb->type.as.fn.arg_kinds[0] != TY_INT ||
+                fb->type.as.fn.arg_kinds[1] != TY_INT) return NULL;  /* both args int */
+            const Expr *a0 = ascribe_peel(cur->as.call_.args[0]);
+            const Expr *a1 = ascribe_peel(cur->as.call_.args[1]);
+            bool h0 = serial_reaches_shift(a0);
+            bool h1 = serial_reaches_shift(a1);
+            if (h0 == h1) return NULL;               /* exactly one hole side */
+            const Expr *other = h0 ? a1 : a0;        /* the captured env operand */
+            if (!other || !is_atomic(other) || other->type.kind != TY_INT) return NULL;
+            if (nf >= CL_IR_MAX_FRAMES) return NULL;
+            memset(&frames[nf], 0, sizeof(CloneFrame));
+            frames[nf].op        = NULL;
+            frames[nf].call_fn   = fb;
+            frames[nf].operand   = atom_of(other);   /* real captured int env */
+            frames[nf].hole_left = h0;                /* hole is arg 0 iff h0 */
+            nf++;
+            cur = h0 ? a0 : a1;                       /* descend the hole side */
+            continue;
+        }
+
         /* Pure `let` prelude (emit shared with cloneable): inits shift-free +
          * scalar, body carries the hole.  Kept mutually exclusive with `if`. */
         if (cur->kind == EX_LET) {
