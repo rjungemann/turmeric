@@ -452,19 +452,39 @@ not deleted: removing it would either need the Shape-2-with-captures tail ported
 natively or hard-error those untested shapes. That work is **Phase D6** below --
 tracked as its own step, not folded into D4.
 
-### Phase D5 -- retire the gates and the files
+### Phase D5 -- retire the gates and the files -- LANDED
 
-- Replace the syntactic `emit_cps_program_uses_*` prelude gates
-  (`emit_module.c` :6647-6651) with the CT-IR taint classification (`ensure_S`),
-  the deeper U6 move: prelude emission is driven by which families the
-  *classification* proves are used, not by a second form-presence scan. (The
-  preludes themselves stay in `emit_dk_runtime.{c,h}` -- they are the shared
-  runtime both the fixed-ABI wrappers and the colored bodies call.)
-- Delete `emit_cps_program_uses_delimited` / `_callcc` / `_cloneable_dk` and
-  their declarations in `emit_cps.h`.
-- `emit_cps.c` is now empty (runtime relocated in step 1, lowering deleted in D3,
-  gates deleted here) -> remove `emit_cps.c` and `emit_cps.h`, drop the
-  `#include "emit_cps.h"` sites and the CMake source entry.
+- **Deviation from the planned method (classification-driven -> presence-scan
+  relocation), deliberately.** The plan proposed driving prelude emission off the
+  CT-IR taint classification (`ensure_S`) -- prelude emitted iff the
+  *classification* proves the family is used. But D4 left a whole-function
+  eviction fallback (D6): a delimited form in a function that evicts to the direct
+  emitter is **not** in the classification's emittable set, so a classification-only
+  gate would drop its prelude and miscompile the evicted body. The syntactic
+  form-presence scan does not have that blind spot. So D5 keeps presence gating and
+  simply **relocates** the four scans off the deleted `emit_cps.c`:
+  - `preamble_uses_base_delimited`, `preamble_uses_callcc`, `preamble_uses_serial`
+    are now `static` in `emit_module.c` (verbatim from the old `uses_base_delimited`
+    / `uses_callcc`, and `uses_serial_dk` minus its always-true `g_sk` flag).
+  - the cloneable gate reuses cps.c's complete `cps_expr_contains_cloneable_shift`
+    presence scan, dropping the old `cl_can_lower` "would the direct emitter lower
+    it" subset check. Verified **byte-identical corpus-wide** (regenerated every
+    `expected.c`, zero diff): post-D4 every cloneable reset lowers natively, so
+    presence == can-lower for gating. Dropping `cl_can_lower` also let the entire
+    ~700-line lowerability-analysis helper tree (`collect_ctx`, `ctx_if_branch`,
+    `clone_spine`, `sk_can_lower`, ...) die with the file.
+  (Full classification-driven gating stays possible later, but only once D6 removes
+  the eviction fallback so the classification sees every delimited function.)
+- **Files deleted.** `emit_cps.c` and `emit_cps.h` are removed (runtime was
+  relocated to `emit_dk_runtime.{c,h}` in U7; the lowering in D3; the carve-out
+  routing in D4; the gates relocated here). Dropped the four `#include
+  "emit_cps.h"` sites (`emit_module.c`, `emit_expr.c`, `emit_effects.c`,
+  `emit_cps_ir.c`) and the CMake source entry (`src/CMakeLists.txt`).
+- **Verification scaffolding retired too.** The D1-D4 caller counter is now fully
+  dead (D3 removed its last call sites): deleted `emit_cps_note_direct_caller`, the
+  `g_cps_delegating` bracket in `emit_letraw`, the `g_dump_direct_lowering_callers`
+  global, and the `--dump-direct-lowering-callers` flag (both `main.c` parse sites
+  + help text). Suite: 2142 passed, 0 failed.
 
 ### Phase D6 -- retire the legacy `emit_effects.c` delimited-control lowering
 

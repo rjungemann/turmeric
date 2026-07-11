@@ -12,7 +12,6 @@
  * emit_module.c -- see emit-effects-extraction-plan.md §EE4 for rationale.
  */
 #include "emit_internal.h"
-#include "emit_cps.h"
 
 /* =========================================================================
  * Region C -- algebraic effects

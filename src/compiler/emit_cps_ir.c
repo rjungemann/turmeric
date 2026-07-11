@@ -5,7 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "emit_cps.h"
 #include "cps_ir.h"
 #include "cps.h"
 #include "builtins.h"
@@ -2438,25 +2437,10 @@ static char *letraw_binder_name(CE *ce, const CTerm *t) {
     return cvar_cname(ce, t->as.letraw.x);
 }
 
-/* Non-zero while a colored, CPS-emitted function is emitting a delegated
- * (direct-emitter) CT_LETRAW operand.  Read by the --dump-direct-lowering-callers
- * counter to attribute a direct-lowering reach to Population 1 (eviction) vs
- * Population 2 (whole-function direct dispatch).  See globals.h. */
-int g_cps_delegating = 0;
-
-void emit_cps_note_direct_caller(const char *family, bool emitted) {
-    if (!g_dump_direct_lowering_callers) return;
-    fprintf(stderr, "direct-lowering-caller: %s %s-%s\n",
-            g_cps_delegating ? "eviction" : "direct-dispatch",
-            family, emitted ? "emit" : "fallback");
-}
-
 static void emit_letraw(CE *ce, const CTerm *t) {
     int saved = ce->ctx->indent;
     ce->ctx->indent = ce->indent;           /* line the delegated statements up */
-    g_cps_delegating++;
     char *rhs = emit_value(ce->ctx, ce->out, t->as.letraw.e);
-    g_cps_delegating--;
     ce->ctx->indent = saved;
     char *bn = letraw_binder_name(ce, t);
     /* A nil-typed op yields a void/nil expression -- bind the unit placeholder

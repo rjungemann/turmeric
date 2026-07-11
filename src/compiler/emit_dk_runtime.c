@@ -63,7 +63,7 @@ void emit_cps_cloneable_bridge_prelude(Buf *out) {
 
 /* Serial marshaling runtime: the fixed tagged context frames + the resume /
  * serialize / deserialize builtins. Emitted after the DK machine prelude,
- * gated on emit_cps_program_contains_serial. */
+ * gated on preamble_uses_serial (emit_module.c). */
 void emit_cps_serial_runtime_prelude(Buf *out) {
     buf_puts(out,
 "/* cps-transform-plan (CPS10 / CPS5.4): serializable continuations.\n"

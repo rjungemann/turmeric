@@ -203,30 +203,6 @@ extern bool g_dump_mono_specs;
  * Analysis only -- it changes no emitted code. */
 extern bool g_dump_cps_mono;
 
-/* `g_dump_direct_lowering_callers` (from `--dump-direct-lowering-callers`)
- * prints one stderr line every time codegen reaches the direct-style
- * delimited-control lowering in emit_cps.c (the emit_cps_reset / _callcc /
- * _cloneable_reset / _serial_reset functions the cps-backend-direct-lowering-
- * removal-plan is retiring).  Each line records the caller POPULATION and the
- * control family:
- *
- *   direct-lowering-caller: <eviction|direct-dispatch> <reset|callcc|cloneable|serial>-<emit|fallback>
- *
- * - eviction     = Population 1: a colored, CPS-emitted function evicting a
- *                  residual delimited sub-shape via CT_LETRAW.
- * - direct-dispatch = Population 2: a function not in the emittable subset S
- *                  (main / exported / sig- or term-reject) emitted wholly by the
- *                  direct emitter.
- * - emit  = the emit_cps.c lowering actually emitted (returned non-NULL) --
- *           a genuine direct-lowering use, the delete target's live caller.
- * - fallback = the lowering returned NULL and the inline fallback in
- *           emit_effects.c ran (NOT an emit_cps.c use).
- *
- * This is the plan's verification-strategy caller counter: run it across the
- * corpus and "residual delegations = 0" / "direct-dispatch callers = 0" become
- * measured, not asserted.  Analysis only -- it changes no emitted code. */
-extern bool g_dump_direct_lowering_callers;
-
 
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signatures
