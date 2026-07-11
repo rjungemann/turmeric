@@ -132,10 +132,37 @@ Extend native CT-IR emit until no colored function delegates a delimited shape:
   semantics already established for closure receivers extend to colored ones).
   This also fixes the direct emitter's miscompile, so it is a net correctness
   gain, not just a port.
-- **D1b -- serial `cstr`/`Serializable` 2-arg envs.** Extend the inline env
-  marshaler (`SK_ENV_INT` today) to the non-int env codec so a 2-arg call frame
-  with a `cstr` / `Serializable` env round-trips through
-  `save-cont!`/`resume-cont!` natively.
+- **D1b -- serial `cstr`/`Serializable` envs.** Extend the inline env marshaler
+  (`SK_ENV_INT` today) to the non-int env codec so a captured call-frame env
+  round-trips through `save-cont!`/`resume-cont!` natively.
+
+  **Landed.** The runtime marshaler already encoded all three env kinds
+  (`SK_ENV_INT`/`_CSTR`/`_SER` in `emit_dk_runtime.c`, built for the direct
+  emitter); the native CT-IR serial path now *produces* the matching `SkReg`
+  entries. Covered shapes:
+  - *do-tail captured-config frame* `(loop cfg)` -- a 1-arg tail whose argument
+    is a captured value applied on resume (the resume value ignored). `int`
+    (inline), `cstr` (length-prefixed), and `Serializable` (nominal, via its
+    instance's serialize/deserialize) envs. Closes `serial-context-do-cfg`,
+    `serial-context-do-struct`.
+  - *2-arg hole-call frame* `(f other [])` with a `Serializable` env (in
+    addition to `int`), including a non-atomic env (`(mk-rec ...)`) emit_value'd
+    at the reset site (`CloneFrame.env_expr`). Only the hole slot must be `int`.
+    Closes `serial-struct-env`.
+  - The env-kind decision keys off the captured operand's type; the
+    Serializable instance is gated at build time by a pure `cps_serializable_exists`
+    scan (in the pass) and its serialize/deserialize C names resolved at emit
+    time by `serial_env_ser_names` (in `emit_cps_ir.c`, mirroring
+    `sk_find_serializable`) -- no coupling to `emit_cps.c`.
+  - The `cloneable` side needed no marshaling for these: a captured env rides the
+    `dk_frame` slot and is deep-cloned with the sub-continuation (2-arg cloneable
+    call frames landed under D1c above).
+
+  **Still delegating (not env marshaling):** a **value-typed `cont<T>`**
+  continuation whose *result* is non-int (`cont-value-typed` -- a `cstr`-valued
+  continuation; this also pairs a `cstr` 2-arg env, which the fixed int cast on
+  the 2-arg wrapper can't carry until the value typing lands). That is the CC4
+  value-typing axis, orthogonal to env marshaling.
 - **D1c -- context-grammar generalization.** Widen `collect_ctx` /
   `build_marshal_reset` to reify the remaining context shapes (the
   [marshal-reset unification](cps-backend-unification-marshal-reset-unification-plan.md)
@@ -157,12 +184,9 @@ Extend native CT-IR emit until no colored function delegates a delimited shape:
     slot, deep-cloned with the sub-continuation on resume, so multi-shot is
     correct with no marshaling. Closes all four evictions in `context-call-frame`.
 
-  **Still delegating (the marshaling / value-typing machinery):** `cstr` /
-  `Serializable` frame envs (`cont-value-typed`, `serial-struct-env`), the serial
-  do-tail 1-arg captured-config frame (`serial-context-do-cfg` /
-  `-do-struct` -- int-env marshaling for a `(loop cfg)` tail), and value-typed
-  `cont<T>` results. These need the non-int env codec (D1b) and are the natural
-  home of the marshal-reset unification.
+  The `serial` do-tail / 2-arg env-marshaling shapes are now handled here (see
+  D1b); what remains delegating on the context-grammar axis is only the
+  value-typed `cont<T>` shape, which is CC4 value-typing, not context grammar.
 - **D1d -- the `needs_heap_join` boundary.** This is the shared C1-subset item;
   it advances through the five emittable-subset gap plans, not as
   delimited-specific work. D1 is *complete for delimited control* when D1a-D1c
@@ -170,12 +194,13 @@ Extend native CT-IR emit until no colored function delegates a delimited shape:
 
 **Progress (eviction `-emit` reaches, corpus scan):** D2b introduced 16
 Population-1 evictions (cloneable/serial residue in CPS-emitted mains); the
-D1c work above brought the total residue to **12** -- `2` callcc
-(`escape`-in-lifted-`shift`-body, `cps-oracle-escape-capture-in-shift-body`
-+twin, needs D1a), `1` cloneable + `2` serial value-typed (`cont-value-typed`),
-`7` serial int/`Serializable`-env marshaling (`serial-context-do-*`,
-`serial-struct-env`). All remaining evictions are D1a (colored/lifted receivers)
-or D1b (non-int env marshaling); the D1c context-grammar shapes reachable
+D1c (let+if, let-under-if, 2-arg cloneable call frames) and D1b (serial
+cstr/Serializable do-tail + 2-arg env marshaling) work above brought the total
+residue down to **5** -- `2` callcc (`escape`-in-lifted-`shift`-body,
+`cps-oracle-escape-capture-in-shift-body` +twin, needs D1a) and `3` value-typed
+`cont<T>` (`cont-value-typed`: `1` cloneable + `2` serial, needs CC4). Both
+remaining shapes are separate features (D1a lifted receivers, CC4 value typing),
+not env marshaling or context grammar; the D1c context-grammar shapes reachable
 without new marshaling are closed.
 
 **Exit:** with D1a-D1c landed, remove the `CT_LETRAW` delegation arms for
