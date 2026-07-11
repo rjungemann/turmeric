@@ -499,41 +499,66 @@ function -- reaching `emit_effects_cloneable_reset` (Case-1/Case-2),
 reaches this path** (D4 measured zero delegations *and* zero evictions), so it is
 corpus-dead but still a live fallback for the long tail. D6 owns removing it.
 
-The lowering covers shapes the native backend does not yet emit -- chiefly a
-**Shape-2 (context-bearing) cloneable/serial shift with live captures**, where the
-captured continuation genuinely re-runs the delimited context and reads the
-captured locals (unlike the D4 Shape-1 identity case, whose captures were
-emit-time dead). Removing the fallback therefore forces a fork:
+**Evidence-gathering changed the picture -- the "corpus-dead fallback" was a
+silent miscompile.** Probing valid shapes that `build_cloneable` rejects revealed
+that the legacy cloneable Case-2 (setjmp) path does not preserve the context: it
+lowers the captured continuation as the IDENTITY. So `(+ (id 3) (cloneable-shift
+k 0))` -- an ordinary program with a non-atomic (function-call) operand next to
+the shift -- printed **100** instead of **103**, silently. Verified a **D3
+regression**: pre-D3 the DK direct lowering (`emit_cps_cloneable_reset`) reified
+the context correctly (103); deleting it dropped these shapes onto the buggy
+legacy path. D3's "0 corpus reaches" gate had a coverage blind spot (no fixture
+of the form `(op (non-atomic) (cloneable-shift))`). Full write-up:
+[docs/archive/cloneable-shift-nonatomic-operand-context-dropped.md](../../archive/cloneable-shift-nonatomic-operand-context-dropped.md).
 
-- **D6a -- port the tail natively.** Extend `build_cloneable`/`build_serial` to
-  emit the live-capture env (the `__clenv` struct + per-field `Clone`-instance
-  deep-clone + drop that `emit_effects_cloneable_shift` builds today) as a native
-  CT node. This makes eviction for these forms impossible, after which the legacy
-  lowering is provably unreachable and deletes cleanly. This is the "large
-  no-correctness-benefit port" N6.5 flagged -- new IR fields on `CT_CLONEABLE`
-  (a capture list), env emission in `emit_cloneable`, and the Shape-2 prelude
-  gating rework the line-612 comment describes.
-- **D6b -- hard-error instead.** Replace the eviction fallback with a form-named
-  diagnostic (a `TUR-E07xx`, mirroring `TUR_E0706_SERIAL_CONTEXT_NOT_CAPTURABLE`):
-  a Shape-2-with-captures cloneable/serial shift is rejected at compile time rather
-  than silently lowered by a legacy path. Cheaper, but narrows the language's
-  accepted surface -- only sound if no real program needs the shape. **Gate on
-  evidence:** add a fixture exercising the shape first and confirm what it costs.
+This makes "retain the fallback" untenable and reframes the fork as
+correctness-first: fix the reachable shapes, and make anything still unsupported
+fail loudly rather than silently.
 
-Either way, once the fallback is gone, delete `emit_effects_cloneable_reset` /
-`emit_effects_cloneable_shift` / `emit_effects_serial_reset` /
-`emit_effects_serial_shift` and their private helpers, and re-check the cloneable
+#### Phase D6a -- LANDED (native fix for the common case + hard-error the rest)
+
+- **Native port of the common case.** `build_cloneable`'s single-hole arithmetic
+  frame now admits a **non-atomic pure int operand** (shift-free + `safe_to_delegate`)
+  via the existing `env_expr` mechanism (already used by serial's 2-arg call
+  frame): the operand is `emit_value`'d once at the reset site and its value rides
+  the frame's `dk_frame` env, deep-cloned with the chain on each resume, so
+  `(+ (compute) [])` reifies correctly and multi-shot is correct. `term_core_ok`'s
+  CT_CLONEABLE gate skips the operand-slot `atom_ok` check when `env_expr` is set
+  (matching the call-frame env exemption). `(+ (id 3) (cloneable-shift ...))` and
+  friends now lower natively and print the right number; regression fixture
+  `cloneable-shift-nonatomic-context` (single/multiplication/nested/multi-shot).
+- **Hard-error the residual (closes the silent-miscompile class).** The legacy
+  cloneable Case-2 setjmp path -- reached by *any* context-bearing cloneable shift
+  `build_cloneable` still rejects (deep contexts, colored-callee operands, ...),
+  whether via whole-function eviction or a non-CPS-candidate function -- is
+  replaced by a **`TUR-E0710`** diagnostic (`CLONEABLE_CONTEXT_NOT_CAPTURABLE`),
+  mirroring the serial `TUR-E0706` fix. So an unsupported cloneable context is now
+  rejected at codegen instead of silently dropping the context. Negative fixture
+  `errors/cloneable-context-not-capturable`. Case-1 (trivial `(cloneable-reset
+  (cloneable-shift k v))`, identity continuation -- correct) and the no-shift
+  passthrough are unchanged. Suite: 2143 passed, 0 failed.
+
+**Serial parity.** Serial already had this fix (`emit_effects_serial_shift` emits
+`TUR-E0706` for unsupported contexts -- no silent miscompile). Serial's arithmetic
+frame still requires an atomic operand (a non-atomic operand cleanly errors, not
+miscompiles); extending serial with the same `env_expr` native admission is a
+symmetric follow-up, not a correctness gap.
+
+#### Phase D6b -- remaining: delete the now-provably-safe legacy lowering
+
+With D6a done, the legacy cloneable/serial lowering only ever runs the correct
+Case-1 / no-shift paths or emits a diagnostic -- it never silently miscompiles.
+The remaining cleanup: delete the dead Case-2 machinery and, once the
+`emit_effects_cloneable_*` / `_serial_*` emitters are provably unreachable except
+for the diagnostic + Case-1 + passthrough, collapse them. Re-check the cloneable
 runtime-prelude gate (`cps_uses_cloneable_rt`, `emit_module.c` ~:6657) -- it keys
-off `cps_expr_contains_cloneable_shift` (in `cps.c`), independent of the deleted
-`emit_cps_program_uses_*` gates, so the *native* path keeps its runtime; confirm no
-gate still assumes the legacy emitter is present.
+off `cps_expr_contains_cloneable_shift` (in `cps.c`), so the native path keeps its
+runtime. This is bounded cleanup, no longer gated on a correctness question.
 
-**Not a blocker for D3-D5.** D6 is independent: D3 (delete `emit_cps.c` lowering),
-D4 (delete the carve-out), and D5 (delete the gates + `emit_cps.c`/`.h` files) all
-concern `emit_cps.c`, a different file. The legacy lowering lives in
-`emit_effects.c` and can be retired before or after the file deletion. D6 is the
-last rung: with it done, the CT-IR backend is the sole delimited-control lowering
-with **no** fallback of any kind.
+**Not a blocker for D3-D5.** D6 is independent: D3/D4/D5 all concern `emit_cps.c`;
+the legacy lowering lives in `emit_effects.c`. With D6a landed the CT-IR backend is
+the sole *correct* delimited-control lowering; the legacy path is now only a
+diagnostic + the trivial correct fallbacks.
 
 ## Verification strategy
 

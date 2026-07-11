@@ -1,0 +1,39 @@
+;; D6a regression: a cloneable-shift whose delimited context has a NON-ATOMIC
+;; operand -- a function-call operand next to the shift, e.g. (+ (id 3) []).
+;; The operand is emit_value'd once at the reset site and its value rides the
+;; frame env (deep-cloned per resume), so the context reifies correctly.
+;;
+;; Before D6a this evicted to the legacy setjmp lowering, which dropped the
+;; context and silently printed the wrong number (see
+;; docs/archive/cloneable-shift-nonatomic-operand-context-dropped.md).
+
+(defn id [x : int] : int x)
+
+;; single resume: continuation (+ (id 3) []) resumed with 100 -> 103
+(defn k-add [k] : int (tur_cloneable_cont_resume k 100))
+(defn t-add [] : int
+  (cloneable-reset (+ (id 3) (cloneable-shift k-add 0))))
+
+;; multiplication context: (* (id 5) []) resumed with 10 -> 50
+(defn k-mul [k] : int (tur_cloneable_cont_resume k 10))
+(defn t-mul [] : int
+  (cloneable-reset (* (id 5) (cloneable-shift k-mul 0))))
+
+;; nested non-atomic operands: (+ (id 3) (+ (id 4) [])) resumed with 100 -> 107
+(defn t-nested [] : int
+  (cloneable-reset (+ (id 3) (+ (id 4) (cloneable-shift k-add 0)))))
+
+;; multi-shot: clone + resume twice; the (id 3) context applies both times
+;; (+ 3 100) + (+ 3 200) = 103 + 203 = 306
+(defn k-two [k] : int
+  (+ (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 100)
+     (tur_cloneable_cont_resume k 200)))
+(defn t-multishot [] : int
+  (cloneable-reset (+ (id 3) (cloneable-shift k-two 0))))
+
+(defn main [] : int
+  (println (t-add))
+  (println (t-mul))
+  (println (t-nested))
+  (println (t-multishot))
+  0)

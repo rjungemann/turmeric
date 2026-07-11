@@ -2,6 +2,19 @@
 
 **Severity: HIGH (silent wrong output on valid code; D3 regression).**
 
+**RESOLVED (D6a).** The common case -- a non-atomic pure arithmetic operand
+(`(+ (id 3) [])`) -- now lowers natively: `build_cloneable` admits it via
+`env_expr` (emit_value'd once at the reset site, deep-cloned per resume), and
+`term_core_ok` skips the operand-slot check for an env_expr frame. The whole
+residual class of unsupported cloneable contexts (deep contexts, colored callees,
+...) that the legacy setjmp path silently miscompiled is now rejected at codegen
+with **TUR-E0710** (mirroring the serial TUR-E0706 fix), so nothing drops the
+context silently. Regression fixture `cloneable-shift-nonatomic-context` and
+negative fixture `errors/cloneable-context-not-capturable` close the blind spot.
+Original report below.
+
+---
+
 ## Summary
 
 A `(cloneable-reset CTX[(cloneable-shift k v)])` whose delimited context has a

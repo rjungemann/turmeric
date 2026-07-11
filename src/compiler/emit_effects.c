@@ -1381,48 +1381,38 @@ char *emit_effects_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
         return result;
     }
     /* CPS-CL4 Case 2: body contains cloneable-shift somewhere inside
-     * (not as the direct body).  Emit a setjmp boundary so that
-     * cloneable-shift can longjmp back to return k_fn's result. */
+     * (not as the direct body).
+     *
+     * cloneable-shift-unsupported-context-miscompile (D6a): reaching this point
+     * means the cloneable-reset could not lower its context-bearing shift onto
+     * the native DK machine (build_cloneable rejected the shape) and evicted to
+     * the direct emitter.  The historical legacy lowering here was a setjmp
+     * boundary whose captured continuation was the IDENTITY -- it silently
+     * DROPPED the delimited context, so `(+ (compute) (cloneable-shift ...))`
+     * returned the wrong value with no error (see
+     * docs/archive/cloneable-shift-nonatomic-operand-context-dropped.md).  The
+     * common case (a non-atomic pure arithmetic operand) now lowers natively;
+     * any residual shape is rejected here with a real diagnostic instead of the
+     * silent miscompile, mirroring the serial TUR-E0706 path. */
     if (cps_expr_contains_cloneable_shift(rb)) {
-        char *rctx_var = fresh_tmp(ctx);
-        char *result   = fresh_tmp(ctx);
-
-        /* Push a new reset context */
+        diag_emit_with_code(DIAG_ERROR, e->span,
+                            TUR_E0710_CLONEABLE_CONTEXT_NOT_CAPTURABLE,
+                            "cloneable-shift context is not capturable\n"
+                            "  = note: the delimited context falls outside the "
+                            "native build_cloneable grammar, so the continuation "
+                            "cannot be reified into a multi-shot cloneable cont\n"
+                            "  = help: restructure into a supported shape (scalar "
+                            "let prelude / arithmetic with an atomic or pure "
+                            "operand / 1- or 2-arg call / if), or move the "
+                            "non-capturable work outside the cloneable-reset; run "
+                            "`tur explain TUR-E0710` for details");
+        /* Typed placeholder so downstream codegen does not crash; the C output is
+         * discarded because diag_had_error() now fails the build. */
+        char *tmp = fresh_tmp(ctx);
         indent_buf(body, ctx->indent);
-        buf_printf(body, "tur_cloneable_reset_ctx %s;\n", rctx_var);
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "%s.result = 0;\n", rctx_var);
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "%s.prev = tur_current_reset_ctx;\n", rctx_var);
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "tur_current_reset_ctx = &%s;\n", rctx_var);
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "%s %s;\n", type_c_name(e->type), result);
-
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "if (setjmp(%s.jmp) == 0) {\n", rctx_var);
-        ctx->indent++;
-        /* Normal path: evaluate body */
-        char *body_val = emit_value(ctx, body, rb);
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "%s = %s;\n", result, body_val);
-        free(body_val);
-        ctx->indent--;
-        indent_buf(body, ctx->indent);
-        buf_puts(body, "} else {\n");
-        ctx->indent++;
-        /* Shift fired -- k_fn's return value is in ctx.result */
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "%s = %s.result;\n", result, rctx_var);
-        ctx->indent--;
-        indent_buf(body, ctx->indent);
-        buf_puts(body, "}\n");
-        /* Pop reset context */
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "tur_current_reset_ctx = %s.prev;\n", rctx_var);
-
-        free(rctx_var);
-        return result;
+        buf_printf(body, "%s %s = 0; /* cloneable-shift: rejected (TUR-E0710) */\n",
+                   type_c_name(e->type), tmp);
+        return tmp;
     }
 
     /* Fallback: no shift in body -- just evaluate and return */

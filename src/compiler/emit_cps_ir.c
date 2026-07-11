@@ -1274,11 +1274,13 @@ static bool term_core_ok(const CTerm *t) {
             for (uint32_t i = 0; i < t->as.cloneable.n_frames; i++) {
                 const CloneFrame *fr = &t->as.cloneable.frames[i];
                 /* Arithmetic frames ride their operand in the frame-env slot, so it
-                 * must be a slot-atom.  A CALL frame's captured env is validated and
-                 * marshaled by the builder/emitter (int/cstr inline, Serializable
+                 * must be a slot-atom -- UNLESS it is a non-atomic pure operand on
+                 * env_expr (D6a), which is emit_value'd at the reset site like a
+                 * call-frame env.  A CALL frame's captured env is likewise validated
+                 * and marshaled by the builder/emitter (int/cstr inline, Serializable
                  * via its instance, or a non-atomic env on env_expr), so it does not
                  * go through the operand-slot check. */
-                if (!fr->call_fn && !atom_ok(&fr->operand)) return false;
+                if (!fr->call_fn && !fr->env_expr && !atom_ok(&fr->operand)) return false;
             }
             return term_core_ok(t->as.cloneable.body);
         case CT_CALLCC:
@@ -3244,7 +3246,12 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
             const CloneFrame *fr = &t->as.cloneable.frames[i];
             bool two_arg = fr->call_fn && !fr->ignore_value
                 && fr->call_fn->type.as.fn.arity == 2;
-            char *opv = (fr->call_fn && !two_arg) ? strdup("0") : atom_str(ce, &fr->operand);
+            /* D6a: a non-atomic arithmetic operand (fr->env_expr set) is
+             * emit_value'd at the reset site; otherwise ride the atom / pass 0
+             * for a 1-arg call frame that carries no env. */
+            char *opv = (fr->call_fn && !two_arg) ? strdup("0")
+                      : (!fr->call_fn && fr->env_expr) ? emit_cloneable_direct(ce, fr->env_expr)
+                      : atom_str(ce, &fr->operand);
             ce_line(ce, "%s = dk_frame(%s, (intptr_t)(%s), %s);", dv, ctxfn, opv, dv);
             free(opv);
         }

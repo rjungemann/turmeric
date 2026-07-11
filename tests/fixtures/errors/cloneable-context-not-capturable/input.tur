@@ -1,0 +1,16 @@
+;; cloneable-shift-unsupported-context-miscompile: negative fixture for TUR-E0710.
+;;
+;; The shift sits inside a 3-arg call, which falls outside the native
+;; build_cloneable grammar (scalar let preludes, arithmetic binops, 1- and
+;; 2-arg calls, one if).  Such a context cannot be reified into a multi-shot
+;; cloneable continuation, so it must be rejected at codegen rather than
+;; silently lowered to an identity continuation that drops the context (the
+;; pre-D6a silent miscompile).
+
+(defn add3 [a : int b : int c : int] : int (+ a (+ b c)))
+
+(defn k-r [k] : int (tur_cloneable_cont_resume k 0))
+
+(defn main [] : int
+  (println (cloneable-reset (add3 1 (cloneable-shift k-r 0) 2)))
+  0)

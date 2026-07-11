@@ -416,12 +416,23 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             bool h1 = cloneable_ctx_reaches_shift(a1);
             if (h0 == h1) return NULL;               /* need exactly one hole side */
             const Expr *other = h0 ? a1 : a0;
-            if (!other || !is_atomic(other) || other->type.kind != TY_INT) return NULL;
+            if (!other || other->type.kind != TY_INT) return NULL;
+            /* D6a: the non-hole operand may be non-atomic (e.g. a call `(id 3)`)
+             * as long as it is shift-free and pure/emit_value-able.  It is
+             * emit_value'd once at the reset site (cold-start capture) and its
+             * value rides the frame's dk_frame env, deep-cloned with the chain on
+             * each resume -- so `(+ (id 3) [])` reifies its context correctly for
+             * multi-shot, matching the atomic-operand twin.  (An atomic operand
+             * still rides `operand` directly; env_expr stays NULL for it.) */
+            bool cl_arith_atom = is_atomic(other);
+            if (!cl_arith_atom && (cloneable_ctx_reaches_shift(other)
+                          || !safe_to_delegate(b, other))) return NULL;
             if (nf >= CL_IR_MAX_FRAMES) return NULL;
             frames[nf].op           = cur->as.builtin.spec->c_op;  /* stable string */
             frames[nf].call_fn      = NULL;
             frames[nf].ignore_value = false;
             frames[nf].operand      = atom_of(other);
+            frames[nf].env_expr     = cl_arith_atom ? NULL : other;
             frames[nf].hole_left    = h0;
             nf++;
             cur = h0 ? a0 : a1;                       /* descend the hole side */
