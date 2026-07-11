@@ -158,11 +158,15 @@ Extend native CT-IR emit until no colored function delegates a delimited shape:
     `dk_frame` slot and is deep-cloned with the sub-continuation (2-arg cloneable
     call frames landed under D1c above).
 
-  **Still delegating (not env marshaling):** a **value-typed `cont<T>`**
-  continuation whose *result* is non-int (`cont-value-typed` -- a `cstr`-valued
-  continuation; this also pairs a `cstr` 2-arg env, which the fixed int cast on
-  the 2-arg wrapper can't carry until the value typing lands). That is the CC4
-  value-typing axis, orthogonal to env marshaling.
+  **CC4 value typing landed alongside.** A value-typed `cont<T>` whose result
+  (and resumed value, and a call-frame env/operand) is a non-int scalar (`cstr`)
+  now emits natively: `cstr` rides the same intptr_t carrier as int, so the
+  builders admit any scalar kind (`cps_scalar_kind_ok`) for the call-frame
+  result / hole-param / env, and the emitter casts to the real kind at each call
+  boundary (`cc_cast_for_kind`) and casts the reset result to the binder's C
+  type (`binder_ctype_full`) instead of `int64_t` -- both no-ops for int, so int
+  fixtures stay byte-identical. This also unblocked the `cstr` 2-arg env that
+  paired with the value typing. Closes `cont-value-typed`.
 - **D1c -- context-grammar generalization.** Widen `collect_ctx` /
   `build_marshal_reset` to reify the remaining context shapes (the
   [marshal-reset unification](cps-backend-unification-marshal-reset-unification-plan.md)
@@ -193,15 +197,15 @@ Extend native CT-IR emit until no colored function delegates a delimited shape:
   land; D1d raises the native fraction generally and is tracked there.
 
 **Progress (eviction `-emit` reaches, corpus scan):** D2b introduced 16
-Population-1 evictions (cloneable/serial residue in CPS-emitted mains); the
-D1c (let+if, let-under-if, 2-arg cloneable call frames) and D1b (serial
-cstr/Serializable do-tail + 2-arg env marshaling) work above brought the total
-residue down to **5** -- `2` callcc (`escape`-in-lifted-`shift`-body,
-`cps-oracle-escape-capture-in-shift-body` +twin, needs D1a) and `3` value-typed
-`cont<T>` (`cont-value-typed`: `1` cloneable + `2` serial, needs CC4). Both
-remaining shapes are separate features (D1a lifted receivers, CC4 value typing),
-not env marshaling or context grammar; the D1c context-grammar shapes reachable
-without new marshaling are closed.
+Population-1 evictions (cloneable/serial residue in CPS-emitted mains); the D1c
+(let+if, let-under-if, 2-arg cloneable call frames), D1b (serial cstr/
+Serializable do-tail + 2-arg env marshaling), and CC4 (value-typed `cont<cstr>`)
+work above brought the total residue down to **2** -- both the *same* logical
+case: `escape` captured inside a lifted `shift` body
+(`cps-oracle-escape-capture-in-shift-body` + its `-cps` twin), which needs D1a
+(lifted callcc receivers).  Every cloneable/serial delimited shape in the corpus
+now emits natively; the sole remaining Population-1 eviction is that one callcc
+shape.
 
 **Exit:** with D1a-D1c landed, remove the `CT_LETRAW` delegation arms for
 `EX_RESET`/`EX_SHIFT`/`EX_SHIFT0`, `EX_CLONEABLE_RESET`, `EX_SERIAL_RESET`, and
