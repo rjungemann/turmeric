@@ -122,16 +122,28 @@ The two populations close independently; neither blocks the other. Each closes
 by *extending native coverage*, verified per-shape (`direct == cps`), then the
 now-dead caller is removed.
 
-### Phase D1 -- close the colored-function eviction residue (Population 1)
+### Phase D1 -- close the colored-function eviction residue (Population 1) -- DONE
 
-Extend native CT-IR emit until no colored function delegates a delimited shape:
+Extend native CT-IR emit until no colored function delegates a delimited shape.
+**Complete: the Population-1 eviction residue is zero** -- every cloneable /
+serial / callcc delimited shape a colored function contains now emits through the
+native CT-IR path; no colored function delegates a delimited shape via CT_LETRAW.
 
-- **D1a -- colored receivers.** Teach `emit_cloneable` / the callcc landing to
-  emit a colored (fat-closure) receiver natively (the receiver runs once at
-  capture; only the continuation is cloned/marshaled -- the multi-shot / serial
-  semantics already established for closure receivers extend to colored ones).
-  This also fixes the direct emitter's miscompile, so it is a net correctness
-  gain, not just a port.
+- **D1a -- colored / lifted receivers.** Teach `emit_cloneable` / the callcc
+  landing to emit a colored (fat-closure) receiver natively (the receiver runs
+  once at capture; only the continuation is cloned/marshaled -- the multi-shot /
+  serial semantics already established for closure receivers extend to colored
+  ones).
+
+  **Landed** for the one shape the corpus exercised: a capturing `escape` nested
+  in a `shift` body's abort value (`cps-oracle-escape-capture-in-shift-body`).
+  `safe_to_delegate` treated a call/cc / escape whose receiver `build_callcc` can
+  emit (`callcc_native_recv` -- a capturing closure included) as delegatable, so
+  the whole `(+ 1 (escape ...))` rode a CT_LETRAW delegation into `emit_cps.c`'s
+  `setjmp`/`tur_escape_cont` lowering. Reporting such a call/cc *non*-delegatable
+  forces the enclosing form to decompose, so the callcc lands at a bind position
+  and lowers to a native `CT_CALLCC`; only a receiver `build_callcc` cannot emit
+  still delegates. Closes the last eviction.
 - **D1b -- serial `cstr`/`Serializable` envs.** Extend the inline env marshaler
   (`SK_ENV_INT` today) to the non-int env codec so a captured call-frame env
   round-trips through `save-cont!`/`resume-cont!` natively.
@@ -196,21 +208,25 @@ Extend native CT-IR emit until no colored function delegates a delimited shape:
   delimited-specific work. D1 is *complete for delimited control* when D1a-D1c
   land; D1d raises the native fraction generally and is tracked there.
 
-**Progress (eviction `-emit` reaches, corpus scan):** D2b introduced 16
-Population-1 evictions (cloneable/serial residue in CPS-emitted mains); the D1c
-(let+if, let-under-if, 2-arg cloneable call frames), D1b (serial cstr/
-Serializable do-tail + 2-arg env marshaling), and CC4 (value-typed `cont<cstr>`)
-work above brought the total residue down to **2** -- both the *same* logical
-case: `escape` captured inside a lifted `shift` body
-(`cps-oracle-escape-capture-in-shift-body` + its `-cps` twin), which needs D1a
-(lifted callcc receivers).  Every cloneable/serial delimited shape in the corpus
-now emits natively; the sole remaining Population-1 eviction is that one callcc
-shape.
+**Progress (eviction `-emit` reaches, corpus scan): Population 1 is at ZERO.**
+D2b introduced 16 Population-1 evictions (cloneable/serial residue in CPS-emitted
+mains); the D1c (let+if, let-under-if, 2-arg cloneable call frames), D1b (serial
+cstr/Serializable do-tail + 2-arg env marshaling), CC4 (value-typed
+`cont<cstr>`), and D1a (native callcc/escape with a `build_callcc`-emittable
+receiver) work above drove the residue **18 -> 0**. No colored function delegates
+a delimited shape any longer. The remaining direct-lowering `-emit` reaches in
+the corpus (**41**) are entirely Population 2 (`direct-dispatch`): uncolored /
+`main` / exported / subset-reject functions that wholly direct-emit -- chiefly
+callcc-in-`main` (call/cc is not a coloring seed, so those mains never reach the
+CPS classifier) and delimited helpers outside the emittable subset `S`.
 
-**Exit:** with D1a-D1c landed, remove the `CT_LETRAW` delegation arms for
-`EX_RESET`/`EX_SHIFT`/`EX_SHIFT0`, `EX_CLONEABLE_RESET`, `EX_SERIAL_RESET`, and
-`EX_CALLCC` from `safe_to_delegate` and the `cps_bind`/`cps_tail` cases in
-`cps_ir.c`. (`EX_ASYNC`/`EX_AWAIT` stay delegated -- they ride a *separate*
+**Exit:** with D1a-D1c landed **and Population 1 at zero**, the `CT_LETRAW`
+delegation arms for `EX_RESET`/`EX_SHIFT`/`EX_SHIFT0`, `EX_CLONEABLE_RESET`,
+`EX_SERIAL_RESET`, and `EX_CALLCC` in `safe_to_delegate` and the
+`cps_bind`/`cps_tail` cases in `cps_ir.c` are now **dead for colored functions**
+and can be removed (a mechanical cleanup, gated on re-confirming the zero with
+`--dump-direct-lowering-callers`). (`EX_ASYNC`/`EX_AWAIT` stay delegated -- they
+ride a *separate*
 stackful fiber runtime in `emit_module.c`, untouched by the `emit_cps.c` delete;
 see the [U5 async-substrate note](cps-backend-unification-u5-async-substrate-plan.md).
 Their delegation targets the fiber runtime, not the four lowering functions, so
