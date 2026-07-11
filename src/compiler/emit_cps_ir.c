@@ -2836,9 +2836,20 @@ static char *emit_cloneable_pure_arm(CE *ce, const CTerm *t) {
         const CloneFrame *fr = &t->as.cloneable.frames[i];
         Buf b; buf_init(&b);
         if (fr->call_fn) {
-            /* 1-arg outer call frame: apply f to the pure value. */
             char *cfn = callee_name(fr->call_fn);
-            buf_printf(&b, "((int64_t)%s((int64_t)(%s)))", cfn, acc);
+            if (!fr->ignore_value && fr->call_fn->type.as.fn.arity == 2) {
+                /* 2-arg outer call frame: apply f to (pure, env) in source order
+                 * (hole side = the pure value; the other arg is the captured env). */
+                char *opv = atom_str(ce, &fr->operand);
+                if (fr->hole_left)
+                    buf_printf(&b, "((int64_t)%s((int64_t)(%s), (int64_t)(%s)))", cfn, acc, opv);
+                else
+                    buf_printf(&b, "((int64_t)%s((int64_t)(%s), (int64_t)(%s)))", cfn, opv, acc);
+                free(opv);
+            } else {
+                /* 1-arg outer call frame: apply f to the pure value. */
+                buf_printf(&b, "((int64_t)%s((int64_t)(%s)))", cfn, acc);
+            }
             free(cfn);
         } else {
             char *opv = atom_str(ce, &fr->operand);
@@ -3071,19 +3082,29 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         uint32_t nf = t->as.cloneable.n_frames;
         char bodyfn[256];
         snprintf(bodyfn, sizeof(bodyfn), "%s_ccbody%d", ce->fn_cn, id);
-        /* One frame fn per context frame: an arithmetic op, or a 1-arg call to a
-         * top-level fn applied to the resumed value (no captured env). */
+        /* One frame fn per context frame: an arithmetic op, a 1-arg call to a
+         * top-level fn applied to the resumed value (no captured env), or a 2-arg
+         * call whose non-hole arg rides the frame env (deep-cloned with the chain
+         * on each resume, so multi-shot is correct without any marshaling). */
         for (uint32_t i = 0; i < nf; i++) {
             char ctxfn[256];
             snprintf(ctxfn, sizeof(ctxfn), "%s_ccctx%d_%u", ce->fn_cn, id, i);
             const CloneFrame *fr = &t->as.cloneable.frames[i];
             if (fr->call_fn) {
                 char *cfn = callee_name(fr->call_fn);
+                bool two_arg = !fr->ignore_value && fr->call_fn->type.as.fn.arity == 2;
                 if (fr->ignore_value)
                     /* 0-arg ignore-value tail: run f() regardless of resume value. */
                     buf_printf(ce->helpers,
                         "static intptr_t %s(intptr_t env, intptr_t value) { (void)env; (void)value; return (intptr_t)%s(); }\n",
                         ctxfn, cfn);
+                else if (two_arg)
+                    /* 2-arg call: apply f to (value, env) in source order (env =
+                     * the captured non-hole arg). */
+                    buf_printf(ce->helpers,
+                        "static intptr_t %s(intptr_t env, intptr_t value) { return (intptr_t)%s(%s); }\n",
+                        ctxfn, cfn,
+                        fr->hole_left ? "(int64_t)value, (int64_t)env" : "(int64_t)env, (int64_t)value");
                 else
                     /* 1-arg hole call: apply f to the resumed value. */
                     buf_printf(ce->helpers,
@@ -3104,12 +3125,15 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         snprintf(dv, sizeof(dv), "__ccd%d", id);
         ce_line(ce, "DK *%s = dk_prompt(1, dk_done());", dv);
         /* Push frames outermost-first (frames[0] deepest, closest to the prompt).
-         * A call frame has no captured env -- pass 0. */
+         * A 2-arg call frame carries its captured int env; 1-arg / 0-arg call and
+         * do-tail frames pass 0. */
         for (uint32_t i = 0; i < nf; i++) {
             char ctxfn[256];
             snprintf(ctxfn, sizeof(ctxfn), "%s_ccctx%d_%u", ce->fn_cn, id, i);
             const CloneFrame *fr = &t->as.cloneable.frames[i];
-            char *opv = fr->call_fn ? strdup("0") : atom_str(ce, &fr->operand);
+            bool two_arg = fr->call_fn && !fr->ignore_value
+                && fr->call_fn->type.as.fn.arity == 2;
+            char *opv = (fr->call_fn && !two_arg) ? strdup("0") : atom_str(ce, &fr->operand);
             ce_line(ce, "%s = dk_frame(%s, (intptr_t)(%s), %s);", dv, ctxfn, opv, dv);
             free(opv);
         }
