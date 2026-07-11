@@ -246,6 +246,17 @@ function that uses delimited control **regardless of effect-coloring**:
   An uncolored function with *no* delimited control stays on the direct emitter
   as before -- CPS-emitting a genuinely pure function is pure overhead and must
   not be triggered.
+
+  **Landed for `call/cc` / `escape` via coloring.** `reset`/`shift`/`shift0` and
+  `cloneable`/`serial` reset were already coloring seeds (`cps_directly_uses_
+  control` in `cps.c`), so a function using them was already classified. `call/cc`
+  / `escape` was NOT a seed -- a function whose only control op was a call/cc /
+  escape stayed uncolored and wholly direct-emitted through `emit_cps_callcc`.
+  Adding `EX_CALLCC` to the seeds colors those functions; `ensure_S` classifies
+  them and (native receiver + emittable body) CPS-emits with the call/cc lowered
+  natively (`emit_callcc`), the callable symbol preserved by the direct-entry
+  wrapper so uncolored callers (a `main` calling them) are unchanged. This closed
+  the bulk of Population 2: **callcc direct-dispatch reaches 28 -> 2**.
 - **D2b -- fixed-ABI entry wrappers.** The CPS backend already emits a
   direct-entry wrapper that preserves a colored function's callable symbol; make
   that wrapper cover the fixed entry-point ABIs -- `int main(void)` calling
@@ -303,11 +314,26 @@ calls from the `emit_effects_*` wrappers (`emit_effects.c` :1209/:1223/:1696) an
 the `EX_CALLCC` dispatch (`emit_expr.c` :2826). The wrappers either collapse to
 their now-sole remaining behavior or are deleted with their callers.
 
-*Not yet reached:* the exit is gated on **both** populations hitting zero
-`-emit`. D2b left `direct-dispatch callcc` (28), `direct-dispatch cloneable` (3),
-`direct-dispatch reset` (2) and the D2b-introduced `eviction cloneable/serial`
-(16) still live, so the wrapper/dispatch removal waits on D1 (native
-cloneable/serial/callcc + delegation-arm removal) and the callcc admission path.
+*Progress toward the exit.* Population 1 is at zero (see Phase D1). Population 2
+has fallen from its post-D2b peak to **7** genuine `-emit` reaches across 5
+fixtures: the `EX_CALLCC` coloring seed (above) closed callcc 28 -> 2, and
+admitting call-frame envs in `term_core_ok` (a non-atomic or Serializable
+captured env rides `env_expr` / the marshaler, so it skips the operand-slot
+`atom_ok` gate) closed the serial-in-`main` fixtures (`serial-struct-env`,
+`serial-context-do-struct`). The remaining 7 are emittable-subset gaps, each a
+distinct shape term_core_ok still rejects:
+- **capturing-receiver base shift** (`continuation-advanced`
+  `test-deeply-nested-shift`, `continuation-substrate` `t-deep`): `(shift (fn [v]
+  ... captures ...) v)` -- the shift receiver captures enclosing locals; the
+  native shift-body path does not yet lift a capturing receiver (the D1a
+  "colored/lifted receivers" item), so it stays direct. `2` reset reaches.
+- **cloneable + `call/cc*`** (`callcc-star-context`): a cloneable-reset shape
+  outside the native context grammar. `3` cloneable reaches.
+- **escape in a handler case** (`cps-oracle-escape-capture-in-handler-case` +
+  twin): an `escape` captured inside a `handle` case body. `2` callcc reaches.
+
+These are the five emittable-subset gap plans' territory. The wrapper/dispatch
+removal (exit) waits on driving them to zero.
 
 ### Phase D3 -- delete the lowering functions
 
