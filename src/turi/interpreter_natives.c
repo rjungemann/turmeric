@@ -29,7 +29,13 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#ifndef __EMSCRIPTEN__
+/* <sys/wait.h> transitively pulls <signal.h>, whose emscripten build defines
+ * its own ucontext_t -- colliding with the WASM fiber-stub ucontext_t in
+ * turi/env.h. Process spawn/wait is a no-op under emscripten (no fork/exec in
+ * the browser), so the header is only needed off the WASM build. */
 #include <sys/wait.h>
+#endif
 
 
 /* -------------------------------------------------------------------------
@@ -3477,10 +3483,15 @@ static TuriValue native_process_spawn(TuriEnv *env, TuriValue *a, uint32_t n, vo
 static TuriValue native_process_wait(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1) return turi_int(-1);
+#ifdef __EMSCRIPTEN__
+    /* No process reaping in the browser; process/spawn already returns -1. */
+    return turi_int(-1);
+#else
     int status = 0;
     if (waitpid((pid_t)a[0].as_int, &status, 0) < 0) return turi_int(-1);
     if (WIFEXITED(status)) return turi_int((int64_t)WEXITSTATUS(status));
     return turi_int(-1);
+#endif
 }
 static TuriValue native_fs_tmpfile(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)a; (void)n; (void)ud;
