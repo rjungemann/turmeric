@@ -448,8 +448,9 @@ lowering (`emit_effects_cloneable_reset` Case-1/Case-2, `emit_effects_cloneable_
 `emit_effects_serial_*`) remains as the whole-function *eviction* fallback for
 shapes outside the native subset (Shape-2-with-captures, and cloneable/serial in a
 non-CPS-candidate function). No corpus fixture reaches it, so it is corpus-dead but
-not deleted: removing it would hard-error those untested shapes. That deletion is
-a separate, evidence-gated step (D5-adjacent), not folded into D4.
+not deleted: removing it would either need the Shape-2-with-captures tail ported
+natively or hard-error those untested shapes. That work is **Phase D6** below --
+tracked as its own step, not folded into D4.
 
 ### Phase D5 -- retire the gates and the files
 
@@ -464,6 +465,55 @@ a separate, evidence-gated step (D5-adjacent), not folded into D4.
 - `emit_cps.c` is now empty (runtime relocated in step 1, lowering deleted in D3,
   gates deleted here) -> remove `emit_cps.c` and `emit_cps.h`, drop the
   `#include "emit_cps.h"` sites and the CMake source entry.
+
+### Phase D6 -- retire the legacy `emit_effects.c` delimited-control lowering
+
+D4 deleted the *carve-out* -- the `CT_LETRAW` delegation that routed a
+cloneable/serial reset **sub-region** to the direct emitter. It did **not** delete
+the direct emitter's delimited-control lowering itself, which now survives one rung
+lower as the **whole-function eviction fallback**: a colored function whose
+cloneable/serial reset falls outside the native `build_cloneable`/`build_serial`
+subset emits `CT_UNSUPPORTED`, evicts, and the direct emitter re-emits the whole
+function -- reaching `emit_effects_cloneable_reset` (Case-1/Case-2),
+`emit_effects_cloneable_shift`, and `emit_effects_serial_*`. **No corpus fixture
+reaches this path** (D4 measured zero delegations *and* zero evictions), so it is
+corpus-dead but still a live fallback for the long tail. D6 owns removing it.
+
+The lowering covers shapes the native backend does not yet emit -- chiefly a
+**Shape-2 (context-bearing) cloneable/serial shift with live captures**, where the
+captured continuation genuinely re-runs the delimited context and reads the
+captured locals (unlike the D4 Shape-1 identity case, whose captures were
+emit-time dead). Removing the fallback therefore forces a fork:
+
+- **D6a -- port the tail natively.** Extend `build_cloneable`/`build_serial` to
+  emit the live-capture env (the `__clenv` struct + per-field `Clone`-instance
+  deep-clone + drop that `emit_effects_cloneable_shift` builds today) as a native
+  CT node. This makes eviction for these forms impossible, after which the legacy
+  lowering is provably unreachable and deletes cleanly. This is the "large
+  no-correctness-benefit port" N6.5 flagged -- new IR fields on `CT_CLONEABLE`
+  (a capture list), env emission in `emit_cloneable`, and the Shape-2 prelude
+  gating rework the line-612 comment describes.
+- **D6b -- hard-error instead.** Replace the eviction fallback with a form-named
+  diagnostic (a `TUR-E07xx`, mirroring `TUR_E0706_SERIAL_CONTEXT_NOT_CAPTURABLE`):
+  a Shape-2-with-captures cloneable/serial shift is rejected at compile time rather
+  than silently lowered by a legacy path. Cheaper, but narrows the language's
+  accepted surface -- only sound if no real program needs the shape. **Gate on
+  evidence:** add a fixture exercising the shape first and confirm what it costs.
+
+Either way, once the fallback is gone, delete `emit_effects_cloneable_reset` /
+`emit_effects_cloneable_shift` / `emit_effects_serial_reset` /
+`emit_effects_serial_shift` and their private helpers, and re-check the cloneable
+runtime-prelude gate (`cps_uses_cloneable_rt`, `emit_module.c` ~:6657) -- it keys
+off `cps_expr_contains_cloneable_shift` (in `cps.c`), independent of the deleted
+`emit_cps_program_uses_*` gates, so the *native* path keeps its runtime; confirm no
+gate still assumes the legacy emitter is present.
+
+**Not a blocker for D3-D5.** D6 is independent: D3 (delete `emit_cps.c` lowering),
+D4 (delete the carve-out), and D5 (delete the gates + `emit_cps.c`/`.h` files) all
+concern `emit_cps.c`, a different file. The legacy lowering lives in
+`emit_effects.c` and can be retired before or after the file deletion. D6 is the
+last rung: with it done, the CT-IR backend is the sole delimited-control lowering
+with **no** fallback of any kind.
 
 ## Verification strategy
 
@@ -554,8 +604,13 @@ a separate, evidence-gated step (D5-adjacent), not folded into D4.
 graduation (DONE) ──► D1 (colored residue) ──┐
                                               ├─► D3 (delete lowering) ─► D4 (delete carve-out) ─► D5 (delete files)
                       D2 (uncolored/main) ────┘
+
+D6 (retire legacy emit_effects.c delimited lowering) -- independent of D3-D5
 ```
 
 D1 and D2 are independent and can land in either order (or interleaved); D3 waits
 on both reaching zero callers. D4 waits on D3. D5 waits on D4 and folds in the
-deeper U6 classification-driven prelude gating.
+deeper U6 classification-driven prelude gating. D6 is independent of D3-D5 (it
+concerns `emit_effects.c`, not `emit_cps.c`) and can land in any order relative to
+them; it removes the whole-function eviction fallback D4 left standing, either by
+porting the Shape-2-with-captures tail natively (D6a) or hard-erroring it (D6b).
