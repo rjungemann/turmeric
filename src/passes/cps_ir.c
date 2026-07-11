@@ -1075,6 +1075,15 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
          * scalar (Copy) capture while a non-Copy capture bails to fallback. */
         case EX_CALLCC: {
             const Expr *f = ascribe_peel(e->as.callcc_.fn);
+            /* A call/cc / escape whose receiver the native escape landing can emit
+             * (build_callcc, via callcc_native_recv) is NOT delegated: reporting it
+             * non-delegatable forces the enclosing form to decompose, so the callcc
+             * lands at a bind position and lowers to a native CT_CALLCC instead of
+             * riding a CT_LETRAW delegation (which would drag emit_cps.c's escape
+             * lowering into an otherwise-native function -- e.g. a capturing escape
+             * nested in a shift body's abort value).  A receiver build_callcc cannot
+             * emit still delegates, keeping the colored function CPS-emitted. */
+            if (callcc_native_recv(e->as.callcc_.fn)) return false;
             return safe_to_delegate(b, e->as.callcc_.fn)
                 || (f && f->kind == EX_CLOSURE);
         }
