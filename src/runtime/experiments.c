@@ -88,18 +88,6 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * flat-stack heap-continuation trampoline.  The gates in emit_expr.c /
      * emit_fns.c / emit_module.c are removed; the feature is unconditional.  See
      * docs/archive/catch-unwind-graduation-plan.md. */
-    /* cps-backend GRADUATED 2026-07-11 -- the CT-IR CPS backend
-     * (emit_cps_ir.c) now lowers every emittable colored function to C
-     * through the DK-threading heap-continuation path unconditionally; the
-     * `g_opt_cps_backend` gate is retired and `emit_cps_ir_try_fn` /
-     * `emit_cps_ir_program_has_emittable` run always-on (the direct emitter
-     * stays as the eviction fallback).  The correctness bar was met across
-     * the whole fixture corpus (zero behavior failures forced-on); see
-     * docs/upcoming/v2/cps-backend-unification-graduation-readiness.md.
-     * `--enable=cps-backend` is now an accept-and-warn no-op (GRADUATED[]
-     * below).  Retiring emit_cps.c's direct lowering is the separate,
-     * larger milestone tracked in
-     * docs/upcoming/v2/cps-backend-direct-lowering-removal-plan.md. */
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };
@@ -112,7 +100,11 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
  * accept-and-warn no-ops (drop-x-flags-plan).  Entries can age out one minor
  * line after graduation, once downstream configs have dropped the flag. */
 static const char *const GRADUATED[] = {
-    "cps-backend",   /* graduated 0.27.x -> always-on */
+    /* Empty until the next experiment graduates.  A graduated name is added
+     * here so a lingering --enable/build.tur/experiments.tur reference to it
+     * is accepted as a no-op (TUR-W0063) for one minor line, rather than the
+     * hard TUR-E0310 an unknown name gets.  cps-backend graduated 2026-07-11
+     * and its shim was retired once no config referenced it. */
     NULL,
 };
 
