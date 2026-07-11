@@ -3130,11 +3130,16 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
             if (fr->call_fn) {
                 /* A 2-arg hole call or a 1-arg captured-config do-tail frame carries
                  * the captured env; a 1-arg hole call / 0-arg do-tail pass 0.  The
-                 * env rides q->env and is marshaled inline (int/cstr). */
+                 * env rides q->env and is marshaled by kind (int/cstr inline, or a
+                 * Serializable instance).  A non-atomic env is emit_value'd here at
+                 * the reset site (once, cold-start capture). */
                 uint32_t ar = fr->call_fn->type.as.fn.arity;
                 bool has_env = (!fr->ignore_value && ar == 2)
                             || (fr->ignore_value && ar == 1);
-                char *opv = has_env ? atom_str(ce, &fr->operand) : NULL;
+                char *opv = NULL;
+                if (has_env)
+                    opv = fr->env_expr ? emit_cloneable_direct(ce, fr->env_expr)
+                                       : atom_str(ce, &fr->operand);
                 ce_line(ce, "%s = dk_frame(%s_skcall%d_%u, (intptr_t)(%s), %s);",
                         dv, ce->fn_cn, id, i, opv ? opv : "0", dv);
                 free(opv);

@@ -119,6 +119,11 @@ typedef struct CloneFrame {
     const Binding *call_fn;
     bool           ignore_value;
     CAtom          operand;
+    /* A captured call-frame env that is not a simple atom (e.g. a `(mk-rec ...)`
+     * constructor) -- the emitter emit_value's it at the reset site instead of
+     * reading `operand`.  NULL for atomic / no-env frames.  `operand.type` still
+     * carries the env's type for the serial marshal-kind decision. */
+    const Expr    *env_expr;
     bool           hole_left;
 } CloneFrame;
 

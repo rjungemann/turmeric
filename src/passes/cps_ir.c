@@ -782,20 +782,32 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             if (fb->closure_fn_binding) return NULL;         /* not a fat closure */
             if (callee_colored(b, fb)) return NULL;          /* uncolored target */
             if (cur->type.kind != TY_INT) return NULL;       /* result: int */
-            if (fb->type.as.fn.arg_kinds[0] != TY_INT ||
-                fb->type.as.fn.arg_kinds[1] != TY_INT) return NULL;  /* both args int */
             const Expr *a0 = ascribe_peel(cur->as.call_.args[0]);
             const Expr *a1 = ascribe_peel(cur->as.call_.args[1]);
             bool h0 = serial_reaches_shift(a0);
             bool h1 = serial_reaches_shift(a1);
             if (h0 == h1) return NULL;               /* exactly one hole side */
+            /* the hole slot's param is the resume value -- must be int */
+            if (fb->type.as.fn.arg_kinds[h0 ? 0 : 1] != TY_INT) return NULL;
             const Expr *other = h0 ? a1 : a0;        /* the captured env operand */
-            if (!other || !is_atomic(other) || other->type.kind != TY_INT) return NULL;
+            if (!other || serial_reaches_shift(other)) return NULL;
+            /* env: an int (inline codec) or a nominal type with a Serializable
+             * instance (SER codec via its serialize/deserialize).  cstr 2-arg envs
+             * still delegate (the fixed int cast on the wrapper does not carry the
+             * cstr result typing they come paired with). */
+            TypeKind ek = other->type.kind;
+            if (ek != TY_INT && !cps_serializable_exists(b->program, other->type))
+                return NULL;
+            /* An atomic env rides `operand`; a non-atomic pure env (e.g. a
+             * `(mk-rec ...)` constructor) is emit_value'd at the reset site. */
+            bool atom = is_atomic(other);
+            if (!atom && !safe_to_delegate(b, other)) return NULL;
             if (nf >= CL_IR_MAX_FRAMES) return NULL;
             memset(&frames[nf], 0, sizeof(CloneFrame));
             frames[nf].op        = NULL;
             frames[nf].call_fn   = fb;
-            frames[nf].operand   = atom_of(other);   /* real captured int env */
+            frames[nf].operand   = atom_of(other);   /* carries .type + atomic value */
+            frames[nf].env_expr  = atom ? NULL : other;
             frames[nf].hole_left = h0;                /* hole is arg 0 iff h0 */
             nf++;
             cur = h0 ? a0 : a1;                       /* descend the hole side */
