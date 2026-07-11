@@ -141,10 +141,42 @@ Extend native CT-IR emit until no colored function delegates a delimited shape:
   [marshal-reset unification](cps-backend-unification-marshal-reset-unification-plan.md)
   is the natural home -- one `build_marshal_reset(..., serial)` covering both
   families).
+
+  **Partially landed** (in `build_cloneable`/`build_serial` + `emit_cloneable`):
+  - *`let`+`if` mix.* Lifted the `nl > 0`-at-`if` rejection: `emit_cloneable`
+    lays every `let` prelude local at the reset site ahead of the branch, so a
+    `let` above the `if` is in scope for the outer frame operands and the pure
+    arm. Also lifted the `saw_if`-at-`let` rejection: a `let` nested in the
+    shift-bearing arm is hoisted to the reset site (sound -- its init is pure and
+    scalar; a binding the shift body needs is a live capture the shift admission
+    already rejects). Closes the eviction in `cloneable-context-if` /
+    `-outer-frames`.
+  - *2-arg call frames in cloneable contexts.* `build_cloneable`/`emit_cloneable`
+    now reify a `(f other [])` / `(f [] other)` frame (uncolored (int,int)->int,
+    int env) natively, matching `build_serial`. The env rides the `dk_frame`
+    slot, deep-cloned with the sub-continuation on resume, so multi-shot is
+    correct with no marshaling. Closes all four evictions in `context-call-frame`.
+
+  **Still delegating (the marshaling / value-typing machinery):** `cstr` /
+  `Serializable` frame envs (`cont-value-typed`, `serial-struct-env`), the serial
+  do-tail 1-arg captured-config frame (`serial-context-do-cfg` /
+  `-do-struct` -- int-env marshaling for a `(loop cfg)` tail), and value-typed
+  `cont<T>` results. These need the non-int env codec (D1b) and are the natural
+  home of the marshal-reset unification.
 - **D1d -- the `needs_heap_join` boundary.** This is the shared C1-subset item;
   it advances through the five emittable-subset gap plans, not as
   delimited-specific work. D1 is *complete for delimited control* when D1a-D1c
   land; D1d raises the native fraction generally and is tracked there.
+
+**Progress (eviction `-emit` reaches, corpus scan):** D2b introduced 16
+Population-1 evictions (cloneable/serial residue in CPS-emitted mains); the
+D1c work above brought the total residue to **12** -- `2` callcc
+(`escape`-in-lifted-`shift`-body, `cps-oracle-escape-capture-in-shift-body`
++twin, needs D1a), `1` cloneable + `2` serial value-typed (`cont-value-typed`),
+`7` serial int/`Serializable`-env marshaling (`serial-context-do-*`,
+`serial-struct-env`). All remaining evictions are D1a (colored/lifted receivers)
+or D1b (non-int env marshaling); the D1c context-grammar shapes reachable
+without new marshaling are closed.
 
 **Exit:** with D1a-D1c landed, remove the `CT_LETRAW` delegation arms for
 `EX_RESET`/`EX_SHIFT`/`EX_SHIFT0`, `EX_CLONEABLE_RESET`, `EX_SERIAL_RESET`, and
