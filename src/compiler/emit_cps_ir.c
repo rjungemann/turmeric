@@ -442,6 +442,20 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
                 if (_f) { free(_fv); return true; }
             }
             free(_fv);
+            /* U7: a closure receiver's free vars are captures too. */
+            if (t->as.cloneable.receiver_expr) {
+                uint32_t _rn = 0;
+                Binding **_rfv = collect_free_vars(t->as.cloneable.receiver_expr, NULL, 0, NULL, 0, &_rn);
+                for (uint32_t _i = 0; _i < _rn; _i++) {
+                    const Binding *_bb = _rfv[_i];
+                    if (_bb && !_bb->is_global && !binding_excluded(_bb)) {
+                        uint32_t _id = _bb->id; bool _f = (_id != exclude);
+                        for (int _j = 0; _j < nb; _j++) if (bound[_j] == _id) { _f = false; break; }
+                        if (_f) { free(_rfv); return true; }
+                    }
+                }
+                free(_rfv);
+            }
             bound[nb] = t->as.cloneable.x.id;
             return has_capture_rec(t->as.cloneable.body, exclude, bound, nb + 1);
         }
@@ -515,6 +529,25 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
             #undef CC_VAREXPR
             bound[nb] = t->as.letraw.x.id;
             return has_capture_rec(t->as.letraw.body, exclude, bound, nb + 1);
+        }
+        case CT_CALLCC: {
+            /* A capturing receiver makes the escape landing capture its free vars;
+             * surface them (collect_free_vars descends into the EX_CALLCC receiver)
+             * and report a capture so the zero-capture join cut sees it.  Then bind
+             * x and recurse the body. */
+            uint32_t n_fv = 0;
+            Binding **fv = collect_free_vars(t->as.callcc.e, NULL, 0, NULL, 0, &n_fv);
+            for (uint32_t i = 0; i < n_fv; i++) {
+                const Binding *cb = fv[i];
+                if (cb && !cb->is_global && !binding_excluded(cb)) {
+                    uint32_t _id = cb->id; bool _f = (_id != exclude);
+                    for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
+                    if (_f) { free(fv); return true; }
+                }
+            }
+            free(fv);
+            bound[nb] = t->as.callcc.x.id;
+            return has_capture_rec(t->as.callcc.body, exclude, bound, nb + 1);
         }
         default: return true;   /* nested reset/shift/handle/perform in a lifted body: bail */
     }
@@ -684,6 +717,21 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
                 if (_f) cap_add(cs, _bb, _bb->type.kind, &_bb->type);
             }
             free(_fv);
+            /* U7: a closure receiver (receiver_expr) contributes its own captures
+             * -- collect_free_vars surfaces the closure's free vars so each scalar
+             * capture rides the lifted env (non-Copy bails to fallback). */
+            if (t->as.cloneable.receiver_expr) {
+                uint32_t _rn = 0;
+                Binding **_rfv = collect_free_vars(t->as.cloneable.receiver_expr, NULL, 0, NULL, 0, &_rn);
+                for (uint32_t _i = 0; _i < _rn && cs->ok; _i++) {
+                    const Binding *_bb = _rfv[_i];
+                    if (!_bb || _bb->is_global || binding_excluded(_bb)) continue;
+                    uint32_t _id = _bb->id; bool _f = (_id != exclude);
+                    for (int _j = 0; _j < nb; _j++) if (bound[_j] == _id) { _f = false; break; }
+                    if (_f) cap_add(cs, _bb, _bb->type.kind, &_bb->type);
+                }
+                free(_rfv);
+            }
             bound[nb] = t->as.cloneable.x.id;
             collect_caps_rec(t->as.cloneable.body, exclude, bound, nb + 1, cs); return;
         }
@@ -728,6 +776,42 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             free(fv);
             bound[nb] = t->as.letraw.x.id;
             collect_caps_rec(t->as.letraw.body, exclude, bound, nb + 1, cs); return;
+        }
+        case CT_RESET:
+            /* A nested reset sitting in a lifted continuation (two sibling nested
+             * resets: the second lands in the first's continuation, e.g.
+             * `(reset (+ (reset (shift ...)) (reset (shift ...))))`).  Its
+             * delimited body runs under its own (separately lifted) prompt and its
+             * continuation continues in this same helper, so collect the free
+             * captures of both -- binding the reset value for the continuation --
+             * rather than bailing.  emit_reset recurses to emit the nested prompt;
+             * this just enumerates the captures its lifted helpers ride. */
+            collect_caps_rec(t->as.reset.delim, exclude, bound, nb, cs);
+            bound[nb] = t->as.reset.x.id;
+            collect_caps_rec(t->as.reset.body, exclude, bound, nb + 1, cs); return;
+        case CT_SHIFT:
+            /* The delimited body under a nested reset ends in an (abortive) shift;
+             * its body's captures ride the shift-body helper's env.  Walk it so a
+             * capture threaded through the enclosing continuation is not missed. */
+            collect_caps_rec(t->as.shift.body, exclude, bound, nb, cs); return;
+        case CT_CALLCC: {
+            /* The receiver f may capture enclosing locals (build_callcc admits a
+             * capturing closure).  Surface its free vars -- collect_free_vars
+             * descends into the EX_CALLCC receiver -- and ride each scalar capture
+             * in the lifted env (a non-Copy capture bails to fallback via cap_add),
+             * mirroring the CT_LETRAW-delegated callcc.  Then bind x and walk body. */
+            uint32_t n_fv = 0;
+            Binding **fv = collect_free_vars(t->as.callcc.e, NULL, 0, NULL, 0, &n_fv);
+            for (uint32_t i = 0; i < n_fv && cs->ok; i++) {
+                const Binding *cb = fv[i];
+                if (!cb || cb->is_global || binding_excluded(cb)) continue;
+                uint32_t _id = cb->id; bool _f = (_id != exclude);
+                for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
+                if (_f) cap_add(cs, cb, cb->type.kind, &cb->type);
+            }
+            free(fv);
+            bound[nb] = t->as.callcc.x.id;
+            collect_caps_rec(t->as.callcc.body, exclude, bound, nb + 1, cs); return;
         }
         default:
             /* Nested control ops in a lifted body: out of this collector's scope. */
@@ -797,6 +881,7 @@ static bool joins_closed_rec(const CTerm *t, uint32_t *def, int nd) {
                 && joins_closed_rec(t->as.letcont.body, def, nd + 1);
         case CT_RESUME: return joins_closed_rec(t->as.resume.body, def, nd);
         case CT_CLONEABLE: return joins_closed_rec(t->as.cloneable.body, def, nd);
+        case CT_CALLCC: return joins_closed_rec(t->as.callcc.body, def, nd);
         default: return false;
     }
 }
@@ -1099,6 +1184,12 @@ static bool term_core_ok(const CTerm *t) {
             for (uint32_t i = 0; i < t->as.cloneable.n_frames; i++)
                 if (!atom_ok(&t->as.cloneable.frames[i].operand)) return false;
             return term_core_ok(t->as.cloneable.body);
+        case CT_CALLCC:
+            /* U7: a local setjmp escape landing (emit_callcc).  The receiver is
+             * capture-free (build_callcc) and emitted as a value; admission needs a
+             * slot-representable call/cc result and a core continuation body. */
+            return (slot_ok_t(t->as.callcc.x.type, t->as.callcc.x.ty) || t->as.callcc.x.ty == TY_NIL)
+                && term_core_ok(t->as.callcc.body);
         default: /* CT_UNSUPPORTED */
             return false;
     }
@@ -1178,9 +1269,27 @@ static bool delim_ok(const CTerm *t) {
             return shift_body_ok(t->as.shift.body)
                 && collect_caps(t->as.shift.body, t->as.shift.k.id, &scs);
         }
+        case CT_RESET: {
+            /* U7-reset (nested-reset slice): a `reset` inside the enclosing
+             * delimited body.  emit_reset installs a fresh prompt (the DK machine
+             * is multi-prompt; a shift binds to the nearest enclosing prompt, so
+             * the nesting is correct), threads the inner delimited body under it,
+             * and lifts the inner reset's continuation as a RESET_CONT that
+             * delivers the nested value onward -- in tail position, to the OUTER
+             * prompt (KK_PROMPT).  That outward KK_PROMPT delivery is exactly what
+             * the stricter reset_body_ok (via term_core_ok) forbids, which is why
+             * a nested reset used to evict to the direct emitter.  Admit the inner
+             * delimited body AND its continuation via delim_ok (both may deliver
+             * to a prompt), with scalar-only captures riding the lifted env. */
+            CapSet cs;
+            return (slot_ok_t(t->as.reset.x.type, t->as.reset.x.ty) || t->as.reset.x.ty == TY_NIL)
+                && delim_ok(t->as.reset.delim)
+                && delim_ok(t->as.reset.body)
+                && collect_caps(t->as.reset.body, t->as.reset.x.id, &cs);
+        }
         default:
-            /* Nested reset/handle/perform/resume/unsupported: keep the stricter
-             * core admission -- not relaxed by this slice. */
+            /* Nested handle/perform/resume/unsupported: keep the stricter core
+             * admission -- not relaxed by this slice. */
             return term_core_ok(t);
     }
 }
@@ -1356,6 +1465,8 @@ static bool needs_heap_join(const CTerm *t) {
             return needs_heap_join(t->as.resume.body);
         case CT_CLONEABLE:
             return needs_heap_join(t->as.cloneable.body);
+        case CT_CALLCC:
+            return needs_heap_join(t->as.callcc.body);
         default: return false;
     }
 }
@@ -1785,6 +1896,11 @@ static bool is_cps_island(const CTerm *t, const Symbol **handled, int nh) {
             return is_cps_island(t->as.perform.body, handled, nh);
         case CT_RESUME:
             return is_cps_island(t->as.resume.body, handled, nh);
+        case CT_CALLCC:
+            /* A local setjmp escape performs/handles no effect (pure control), so
+             * it is transparent to effect co-classification -- recurse the body
+             * (matching the prior CT_LETRAW-delegated behavior). */
+            return is_cps_island(t->as.callcc.body, handled, nh);
         case CT_RESET:
         case CT_SHIFT:
         default:
@@ -1919,6 +2035,7 @@ static void emit_handle(CE *ce, const CTerm *t);
 static void emit_perform(CE *ce, const CTerm *t);
 static void emit_resume(CE *ce, const CTerm *t);
 static void emit_letraw(CE *ce, const CTerm *t);
+static void emit_callcc(CE *ce, const CTerm *t);
 static void emit_heap_join(CE *ce, const CTerm *t);
 static char *cvar_cname(CE *ce, CVar x);
 
@@ -2116,6 +2233,7 @@ static void emit_term(CE *ce, const CTerm *t) {
         case CT_RESUME:  emit_resume(ce, t); break;
         case CT_LETRAW:  emit_letraw(ce, t); break;
         case CT_CLONEABLE: emit_cloneable(ce, t); break;
+        case CT_CALLCC:  emit_callcc(ce, t); break;
         default:
             ce_line(ce, "abort(); /* cps-backend: unreachable */");
             break;
@@ -2238,6 +2356,13 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
             ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.cloneable.x.ty, t->as.cloneable.x.type), bn);
             free(bn);
             emit_binder_decls(ce, t->as.cloneable.body);
+            break;
+        }
+        case CT_CALLCC: {
+            char *bn = cvar_cname(ce, t->as.callcc.x);
+            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.callcc.x.ty, t->as.callcc.x.type), bn);
+            free(bn);
+            emit_binder_decls(ce, t->as.callcc.body);
             break;
         }
         default: break;
@@ -2528,10 +2653,58 @@ static char *emit_cloneable_direct(CE *ce, const Expr *e) {
     return v;
 }
 
+/* Emit the Shape 2 shift-body helper `bodyfn`.  `cont_setup` is the C that builds
+ * the continuation the receiver is handed (a raw DK chain for serial, a
+ * cloneable_cont for cloneable); `cont_arg` names it.  For a named-fn receiver the
+ * dk_shift env carries the fn ptr and the body calls it as one; for a CLOSURE
+ * receiver (receiver_expr) the closure's thunk is baked in here and the dk_shift
+ * env carries the closure env instead (see emit_cl_shift_env). */
+static void emit_cl_shift_bodyfn(CE *ce, const char *bodyfn, const CTerm *t,
+                                 const char *cont_setup, const char *cont_arg) {
+    if (t->as.cloneable.receiver_expr) {
+        const Expr *f = t->as.cloneable.receiver_expr;
+        struct Closure *closure = f->as.closure_.closure;
+        char *thunk_name;
+        if (closure->fn->binding) {
+            thunk_name = raw_name_for_binding(closure->fn->binding);
+        } else {
+            thunk_name = malloc(64);
+            snprintf(thunk_name, 64, "__fn_anon_%d",
+                     closure->fn->n_params > 0 ? closure->fn->params[0]->id : 0);
+        }
+        buf_printf(ce->helpers,
+            "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
+            "    return (intptr_t)%s((int64_t)env, (int64_t)(intptr_t)%s);\n}\n",
+            bodyfn, cont_setup, thunk_name, cont_arg);
+        free(thunk_name);
+    } else {
+        buf_printf(ce->helpers,
+            "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
+            "    return (intptr_t)((int64_t (*)(int64_t))(intptr_t)env)((int64_t)(intptr_t)%s);\n}\n",
+            bodyfn, cont_setup, cont_arg);
+    }
+}
+
+/* The dk_shift env expression (malloc'd) for a Shape 2 node: a closure receiver's
+ * env value -- emitted at the reset site so its captures are read from the visible
+ * locals / lifted env -- else the named receiver's fn name. */
+static char *emit_cl_shift_env(CE *ce, const CTerm *t, const char *rfn) {
+    if (t->as.cloneable.receiver_expr) {
+        int saved = ce->ctx->indent;
+        ce->ctx->indent = ce->indent;
+        char *fval = emit_value(ce->ctx, ce->out, t->as.cloneable.receiver_expr);
+        ce->ctx->indent = saved;
+        return fval;
+    }
+    return strdup(rfn);
+}
+
 static void emit_cloneable(CE *ce, const CTerm *t) {
     int id = (*ce->helper_ctr)++;
     char *xn  = cvar_cname(ce, t->as.cloneable.x);
-    char *rfn = callee_name(t->as.cloneable.receiver);
+    /* Named-fn receiver: its C name.  A closure receiver (receiver_expr, Shape 1)
+     * has no bare fn name -- it is emitted as a value + thunk call below. */
+    char *rfn = t->as.cloneable.receiver ? callee_name(t->as.cloneable.receiver) : NULL;
 
     /* Pure `let` prelude (Shape 2, let-bearing): lay each binding down as a C
      * local at the reset site, ahead of the frame-operand evaluations that may
@@ -2564,8 +2737,11 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         ce->indent++;
     }
 
-    if (t->as.cloneable.n_frames == 0) {
-        /* Shape 1: identity continuation. */
+    if (t->as.cloneable.n_frames == 0 && !t->as.cloneable.serial) {
+        /* Shape 1 (cloneable): identity continuation.  The serial Shape 1
+         * (n_frames == 0 && serial) falls through to the serial branch below,
+         * where the empty frame loops produce a bare marshalable prompt chain --
+         * a cloneable_cont would not round-trip through save-cont!/resume-cont!. */
         char cfn[256];
         snprintf(cfn, sizeof(cfn), "%s_clc%d", ce->fn_cn, id);
         buf_printf(ce->helpers,
@@ -2574,7 +2750,31 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         snprintf(cv, sizeof(cv), "__clc%d", id);
         ce_line(ce, "tur_cloneable_cont *%s = tur_cloneable_cont_alloc(%s, NULL, NULL, NULL);",
                 cv, cfn);
-        ce_line(ce, "%s = %s((int64_t)(intptr_t)%s);", xn, rfn, cv);
+        if (t->as.cloneable.receiver_expr) {
+            /* U7 closure receiver: emit the closure value (its captures ride the
+             * env -- visible locals in the main body, or env-carried in a lifted
+             * body per collect_caps), then call its thunk with (closure-env, cont),
+             * mirroring emit_callcc's closure call. */
+            const Expr *f = t->as.cloneable.receiver_expr;
+            int saved = ce->ctx->indent;
+            ce->ctx->indent = ce->indent;
+            char *fval = emit_value(ce->ctx, ce->out, f);
+            ce->ctx->indent = saved;
+            struct Closure *closure = f->as.closure_.closure;
+            char *thunk_name;
+            if (closure->fn->binding) {
+                thunk_name = raw_name_for_binding(closure->fn->binding);
+            } else {
+                thunk_name = malloc(64);
+                snprintf(thunk_name, 64, "__fn_anon_%d",
+                         closure->fn->n_params > 0 ? closure->fn->params[0]->id : 0);
+            }
+            ce_line(ce, "%s = %s(%s, (int64_t)(intptr_t)%s);", xn, thunk_name, fval, cv);
+            free(thunk_name);
+            free(fval);
+        } else {
+            ce_line(ce, "%s = %s((int64_t)(intptr_t)%s);", xn, rfn, cv);
+        }
     } else if (t->as.cloneable.serial) {
         /* U4 Shape 2 (serial): an arithmetic context marshaled via the shared
          * tagged frames (`__sk_frame_for_tag`), and a shift body that hands the
@@ -2583,11 +2783,8 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         uint32_t nf = t->as.cloneable.n_frames;
         char bodyfn[256];
         snprintf(bodyfn, sizeof(bodyfn), "%s_skbody%d", ce->fn_cn, id);
-        buf_printf(ce->helpers,
-            "static intptr_t %s(intptr_t env, DK *subk) {\n"
-            "    DK *__cap = dk_copy_range(subk, NULL);\n"
-            "    return (intptr_t)((int64_t (*)(int64_t))(intptr_t)env)((int64_t)(intptr_t)__cap);\n}\n",
-            bodyfn);
+        emit_cl_shift_bodyfn(ce, bodyfn, t,
+            "    DK *__cap = dk_copy_range(subk, NULL);\n", "__cap");
         /* A 1-arg call frame gets a per-site wrapper fn plus a SkReg entry that
          * self-registers (constructor) so the marshaler maps the frame <-> a stable
          * name ("<fn>$L") for save/restore.  Arithmetic frames need no per-site
@@ -2598,16 +2795,28 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
             char *cfn = callee_name(fr->call_fn);
             /* A do-tail ignore-value frame runs f() regardless of the resumed
              * value and marshals under the "$0" side; a 1-arg hole call applies f
-             * to the resumed value under "$L". */
-            if (fr->ignore_value)
+             * to the resumed value under "$L"; a 2-arg call applies f to the
+             * resumed value + the captured int env (source order per hole side)
+             * under "$2L"/"$2R", the env serialized inline. */
+            bool two_arg = !fr->ignore_value && fr->call_fn->type.as.fn.arity == 2;
+            const char *side;
+            if (fr->ignore_value) {
                 buf_printf(ce->helpers,
                     "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { (void)env; (void)value; return (intptr_t)%s(); }\n",
                     ce->fn_cn, id, i, cfn);
-            else
+                side = "$0";
+            } else if (two_arg) {
+                buf_printf(ce->helpers,
+                    "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { return (intptr_t)%s(%s); }\n",
+                    ce->fn_cn, id, i, cfn,
+                    fr->hole_left ? "(int64_t)value, (int64_t)env" : "(int64_t)env, (int64_t)value");
+                side = fr->hole_left ? "$2L" : "$2R";
+            } else {
                 buf_printf(ce->helpers,
                     "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s((int64_t)value); }\n",
                     ce->fn_cn, id, i, cfn);
-            const char *side = fr->ignore_value ? "$0" : "$L";
+                side = "$L";
+            }
             buf_printf(ce->helpers,
                 "static SkReg %s_skreg%d_%u = { \"%s%s\", %s_skcall%d_%u, 0, 0, 0, 0 };\n"
                 "__attribute__((constructor)) static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
@@ -2624,8 +2833,13 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         for (uint32_t i = 0; i < nf; i++) {
             const CloneFrame *fr = &t->as.cloneable.frames[i];
             if (fr->call_fn) {
-                ce_line(ce, "%s = dk_frame(%s_skcall%d_%u, (intptr_t)(0), %s);",
-                        dv, ce->fn_cn, id, i, dv);
+                /* A 2-arg call frame carries the captured int env; 1-arg / do-tail
+                 * frames pass 0.  The env rides q->env and is marshaled inline. */
+                bool two_arg = !fr->ignore_value && fr->call_fn->type.as.fn.arity == 2;
+                char *opv = two_arg ? atom_str(ce, &fr->operand) : NULL;
+                ce_line(ce, "%s = dk_frame(%s_skcall%d_%u, (intptr_t)(%s), %s);",
+                        dv, ce->fn_cn, id, i, opv ? opv : "0", dv);
+                free(opv);
             } else {
                 char *opv = atom_str(ce, &fr->operand);
                 ce_line(ce, "%s = dk_frame(__sk_frame_for_tag(%d), (intptr_t)(%s), %s);",
@@ -2633,7 +2847,9 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                 free(opv);
             }
         }
-        ce_line(ce, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);", dv, bodyfn, rfn, dv);
+        char *senv = emit_cl_shift_env(ce, t, rfn);
+        ce_line(ce, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);", dv, bodyfn, senv, dv);
+        free(senv);
         ce_line(ce, "%s = (int64_t)dk_run(%s, 0);", xn, dv);
         ce_line(ce, "dk_free(%s);", dv);
     } else {
@@ -2666,12 +2882,10 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                     ctxfn, cloneable_frame_expr(fr->op, fr->hole_left));
             }
         }
-        buf_printf(ce->helpers,
-            "static intptr_t %s(intptr_t env, DK *subk) {\n"
+        emit_cl_shift_bodyfn(ce, bodyfn, t,
             "    DK *__cap = dk_copy_range(subk, NULL);\n"
-            "    tur_cloneable_cont *__k = tur_cloneable_cont_alloc(__dk_cont_fn, __cap, __dk_env_clone, __dk_env_drop);\n"
-            "    return (intptr_t)((int64_t (*)(int64_t))(intptr_t)env)((int64_t)(intptr_t)__k);\n}\n",
-            bodyfn);
+            "    tur_cloneable_cont *__k = tur_cloneable_cont_alloc(__dk_cont_fn, __cap, __dk_env_clone, __dk_env_drop);\n",
+            "__k");
         char dv[48];
         snprintf(dv, sizeof(dv), "__ccd%d", id);
         ce_line(ce, "DK *%s = dk_prompt(1, dk_done());", dv);
@@ -2685,7 +2899,9 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
             ce_line(ce, "%s = dk_frame(%s, (intptr_t)(%s), %s);", dv, ctxfn, opv, dv);
             free(opv);
         }
-        ce_line(ce, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);", dv, bodyfn, rfn, dv);
+        char *senv = emit_cl_shift_env(ce, t, rfn);
+        ce_line(ce, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);", dv, bodyfn, senv, dv);
+        free(senv);
         ce_line(ce, "%s = (int64_t)dk_run(%s, 0);", xn, dv);
         ce_line(ce, "dk_free(%s);", dv);
     }
@@ -2896,6 +3112,62 @@ static void emit_resume(CE *ce, const CTerm *t) {
     buf_free(&inv);
     free(bn); free(ld); free(sv); free(kk); free(vv);
     emit_term(ce, t->as.resume.body);
+}
+
+/* CT_CALLCC (U7): (call/cc f)/(escape f) as a LOCAL setjmp escape landing --
+ * a native port of emit_cps_callcc.  Establish a tur_escape_cont landing, run
+ * the (capture-free) receiver f with the landing handle as its continuation,
+ * and bind x to f's normal return; an upward (tur_escape_resume &cc v) longjmps
+ * back and delivers v instead.  Does NOT thread the DK continuation, so the
+ * enclosing prompt chain is untouched.  The escape runtime (tur_escape_cont /
+ * tur_escape_resume) is emitted by emit_cps_callcc_prelude, gated on the
+ * program containing EX_CALLCC (fires regardless of backend). */
+static void emit_callcc(CE *ce, const CTerm *t) {
+    const Expr *e = t->as.callcc.e;
+    const Expr *f = e->as.callcc_.fn;
+    while (f && f->kind == EX_ASCRIBE) f = f->as.ascribe_.inner;   /* peel like build_callcc */
+    char *xn = cvar_cname(ce, t->as.callcc.x);
+    const char *rty = binder_ctype_full(ce->ctx, t->as.callcc.x.ty, t->as.callcc.x.type);
+    int id = (*ce->helper_ctr)++;
+    char cc[48];
+    snprintf(cc, sizeof(cc), "__cc%d", id);
+
+    ce_line(ce, "tur_escape_cont %s;", cc);
+    ce_line(ce, "%s.valid = 1;", cc);
+    ce_line(ce, "if (setjmp(%s.buf) == 0) {", cc);
+    ce->indent += 4;
+    /* Normal path: emit the receiver value, then call it with &cc. */
+    int saved = ce->ctx->indent;
+    ce->ctx->indent = ce->indent;
+    char *fval = emit_value(ce->ctx, ce->out, f);
+    ce->ctx->indent = saved;
+    if (f->kind == EX_CLOSURE) {
+        struct Closure *closure = f->as.closure_.closure;
+        char *thunk_name;
+        if (closure->fn->binding) {
+            thunk_name = raw_name_for_binding(closure->fn->binding);
+        } else {
+            thunk_name = malloc(64);
+            snprintf(thunk_name, 64, "__fn_anon_%d",
+                     closure->fn->n_params > 0 ? closure->fn->params[0]->id : 0);
+        }
+        ce_line(ce, "%s = (%s)%s(%s, (int64_t)(intptr_t)&%s);", xn, rty, thunk_name, fval, cc);
+        free(thunk_name);
+    } else {
+        ce_line(ce, "%s = (%s)%s((int64_t)(intptr_t)&%s);", xn, rty, fval, cc);
+    }
+    /* f returned normally: the captured continuation is now dead. */
+    ce_line(ce, "%s.valid = 0;", cc);
+    free(fval);
+    ce->indent -= 4;
+    ce_line(ce, "} else {");
+    ce->indent += 4;
+    /* Resumed path: an upward (tur_escape_resume &cc v) delivered v here. */
+    ce_line(ce, "%s = (%s)%s.result;", xn, rty, cc);
+    ce->indent -= 4;
+    ce_line(ce, "}");
+    free(xn);
+    emit_term(ce, t->as.callcc.body);
 }
 
 /* ---- signatures ------------------------------------------------------ */

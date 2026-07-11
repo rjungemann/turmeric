@@ -1,0 +1,23 @@
+;; U7 (cps-backend-unification): native call/cc with a CAPTURING closure receiver.
+;; The receiver `(fn [k] ... x ...)` closes over enclosing locals.  Before this
+;; slice a capturing receiver forced the CT_LETRAW delegation; now build_callcc
+;; admits it and collect_caps_rec / has_capture_rec walk the receiver's free vars
+;; (collect_free_vars descends into the EX_CALLCC receiver) so each scalar capture
+;; rides the escape landing -- emit_value captures the visible local in the main
+;; body; in a lifted continuation a scalar capture rides the env, a non-Copy one
+;; bails to the delegation.  Mirrors how the CT_LETRAW path already handled it.
+;; direct == cps.  Each fn is colored by a sibling reset/shift.
+(defn use-x [x : int] : int
+  (+ (reset (shift (fn [v] v) 1)) (call/cc (fn [k] (+ x (k 9))))))     ; 1 + 9 = 10
+(defn escape-with-x [x : int] : int
+  (+ (reset (shift (fn [v] v) 1)) (call/cc (fn [k] (k x)))))           ; 1 + x
+(defn two-caps [x : int y : int] : int
+  (+ (reset (shift (fn [v] v) 0)) (call/cc (fn [k] (+ (+ x y) (k 0)))))) ; 0 + 0 = 0
+(defn cap-and-const [x : int] : int
+  (+ (reset (shift (fn [v] v) 2)) (call/cc (fn [k] (+ x 100)))))       ; ignores k -> 2 + (x+100)
+(defn main [] : int
+  (println (use-x 100))
+  (println (escape-with-x 40))
+  (println (two-caps 3 4))
+  (println (cap-and-const 5))
+  0)

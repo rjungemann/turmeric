@@ -43,35 +43,86 @@ must be total:
 
 | Lowering fn | Reached from | Native CT-IR status | Gap to delete |
 |---|---|---|---|
-| `emit_cps_reset` | `emit_effects_reset` (emit_effects.c:1218) | `CT_RESET`/`CT_SHIFT` native for the `delim_ok` subset | shapes outside `delim_ok` (setjmp/longjmp escape path, non-admitted join shapes) still evict to direct -> this fn |
-| `emit_cps_cloneable_reset` | `emit_effects_cloneable_reset` (:1239) + delegation | value-typed subset native (arith/call/let/if/do) | **closure/colored receivers** delegate here (porting them duplicates this fn's closure machinery -- see U3 steps 6-7 note) |
-| `emit_cps_serial_reset` | `emit_effects_serial_reset` (:1703) + delegation | value-typed subset native (arith/call/let/if/do) | **2-arg call frames** (serialized env codec), **Shape 1 identity**, closure receivers delegate here |
-| `emit_cps_callcc` | `EX_CALLCC` dispatch (emit_expr.c:2826) + delegation | **none -- 100% delegated** (U2 CT_LETRAW) | all of call/cc + escape has no native CT-IR emit |
+| `emit_cps_reset` | `emit_effects_reset` (emit_effects.c:1218) | `CT_RESET`/`CT_SHIFT` native for the `delim_ok` subset, now incl. **nested + sibling-nested reset** | reset/shift-specific gap is **closed** (escape/branch native since U1; nested reset + sibling nested resets admitted -- see resetshift-gap note). The only nestings still evicting do so via the *generic* `needs_heap_join` boundary (a non-tail cps->cps **call** on the heap chain), shared with the whole C1 subset -- not reset/shift-specific |
+| `emit_cps_cloneable_reset` | `emit_effects_cloneable_reset` (:1239) + delegation | value-typed subset native (arith/call/let/if/do), incl. **Shape 1 + Shape 2 closure receivers** | only **colored receivers** and shapes outside the arith/call/let/if/do context still delegate |
+| `emit_cps_serial_reset` | `emit_effects_serial_reset` (:1703) + delegation | value-typed subset native (arith/call/let/if/do), incl. **Shape 1 identity, Shape 1/2 closure receivers, and 2-arg call frames (int env)** | only **cstr/Serializable 2-arg envs** and **colored receivers** still delegate; int 2-arg call frames marshal inline (SK_ENV_INT, "$2L"/"$2R" keys) |
+| `emit_cps_callcc` | `EX_CALLCC` dispatch (emit_expr.c:2826) + delegation | **native `CT_CALLCC`**, incl. **capturing-closure receivers** (scalar captures ride the escape landing) | remaining: only the `EX_CALLCC` direct-dispatch caller for uncolored/`main`/exported functions (goes away at CPS-backend graduation), and a non-scalar capture in a *lifted* callcc (bails to delegation) |
 
-The two biggest gaps are **callcc** (no native emit at all) and **cloneable/serial
-closure receivers** (whose native port duplicates the very machinery being
-retired). Base reset/shift is the smallest gap (a bounded set of non-`delim_ok`
-shapes). These gaps are the real content of "finish U3/U4 + do callcc natively,"
-and some are the "would duplicate emit_cps.c" cases the U3 steps-6-7 note already
-flagged as deferred.
+Callcc has a native `CT_CALLCC` covering both capture-free and capturing-closure
+receivers.  Cloneable AND serial now take a **closure receiver** natively across
+BOTH shapes (`receiver_expr` on the CT_CLONEABLE node): Shape 1 calls the closure
+thunk at the reset site with `(closure-env, cont)`; Shape 2 bakes the thunk into
+the per-site shift body fn (`emit_cl_shift_bodyfn`) and passes the closure env as
+the `dk_shift` env (`emit_cl_shift_env`).  The receiver's captures ride the lifted
+env via the same `collect_free_vars` -> `cap_add` path callcc uses.  The
+`n_live_captures == 0` gate does not block this: the live-capture scan does not
+recurse into a closure body, so the receiver's own captures are not shift-site
+live captures.  The multi-shot (cloneable) and marshalable (serial) semantics are
+preserved -- the receiver runs once at capture; only the continuation is
+cloned/marshaled.  **Serial 2-arg call frames** (int env) are now native too: the
+per-site wrapper applies the callee in source order (hole side), and the captured
+int env is marshaled inline (SK_ENV_INT), keyed "$2L"/"$2R" so save-cont!/
+resume-cont! round-trips it through bytes -- no marshaler change was needed since
+the env-codec already serialized SK_ENV_INT.  With that, **every native gap the
+readiness table named is closed.**  The only residual delegations are now
+narrower, un-named tails: colored receivers, cstr/Serializable 2-arg call-frame
+envs, and shapes outside the supported context grammar.  Base reset/shift is
+closed (nested + sibling).
 
 ## The cut sequence
 
-1. **Relocate the runtime (safe, available now).** Move the prelude emitters +
-   shared DK/marshaling helpers out of `emit_cps.c` into a neutral module that
-   both the direct emitter and the CT-IR backend include. Mechanical and
+1. **Relocate the runtime (safe, available now). [DONE]** Move the prelude
+   emitters out of `emit_cps.c` into a neutral module (`emit_dk_runtime.{c,h}`)
+   that both the direct emitter and the CT-IR backend include. Mechanical and
    behavior-preserving (the emitted C is byte-identical; only the emitter's C file
-   location changes). This shrinks `emit_cps.c` to just the four lowering functions
-   and their private helpers, making the remaining delete surface explicit and
-   decoupling the runtime's lifetime from the lowering's. **This is the one
-   U7-enabling slice that does not wait on any native gap.**
+   location changes). This decouples the runtime's lifetime from the lowering's,
+   converting "delete a 2.1k-line file with load-bearing runtime in it" into
+   "delete four functions with no callers." **This is the one U7-enabling slice
+   that does not wait on any native gap.**
+
+   *Refinement discovered during the cut:* the only code the surviving runtime
+   needs is the **four prelude emitters** (`emit_cps_runtime_prelude`,
+   `emit_cps_callcc_prelude`, `emit_cps_cloneable_bridge_prelude`,
+   `emit_cps_serial_runtime_prelude`) -- pure string emitters with zero
+   dependency on `emit_cps.c`'s analysis state. The framing above listed the
+   shared analysis helpers (`collect_ctx`, `cl_can_lower`, `frame_c_expr`,
+   `sk_tag_for_frame`, `ctx_if_branch`, ...) as also needing relocation on the
+   belief that the native CT-IR emit depends on them; in fact `emit_cps_ir.c`
+   carries its **own byte-for-byte copies** (see its `sk_tag_for_frame` /
+   `frame_c_expr` mirrors) and depends only on the *emitted* runtime
+   (`dk_copy_range`, `dk_invoke`, `__sk_frame_for_tag`, ...), not on the C-level
+   helpers. So the analysis helpers are private to the lowering functions and
+   die with them in step 3; they were correctly left in `emit_cps.c`. The
+   `emit_cps_program_uses_*` gates that decide whether to emit each prelude also
+   stay in `emit_cps.h` for now (step 5 retires them in favor of the CT-IR
+   classification). `emit_cps.c` is now the four lowering functions + their
+   private analysis helpers + the uses-gates.
 2. **Close the native gaps**, each its own slice, each removing one lowering fn's
    last caller:
-   - callcc: native `CT_CALLCC` emit (the largest single gap).
-   - cloneable/serial closure receivers + serial 2-arg/Shape 1 (accepting the
-     duplication, or a shared closure-lowering helper the runtime relocation could
-     also host).
-   - base reset/shift shapes outside `delim_ok`.
+   - callcc: native `CT_CALLCC` emit -- **capture-free AND capturing-closure
+     receivers landed** (new `CT_CALLCC` IR node + `emit_callcc` local setjmp
+     escape landing; `collect_caps_rec`/`has_capture_rec` walk the receiver's free
+     vars via `collect_free_vars`, so scalar captures ride the landing exactly like
+     the CT_LETRAW path; oracles `cps-oracle-callcc-native{,-cps}` +
+     `cps-oracle-callcc-capturing-recv{,-cps}`).  callcc's native coverage now
+     matches the delegation's; its only remaining caller is the direct dispatch
+     for uncolored/`main`/exported fns (removed at graduation).
+   - cloneable/serial closure receivers + serial 2-arg call frames -- **all
+     landed**. Serial Shape 1 identity, cloneable/serial Shape 1 + Shape 2 closure
+     receivers (`receiver_expr` on CT_CLONEABLE), and serial 2-arg call frames with
+     an int env (marshaled inline) are native (oracles
+     `cps-oracle-serial-shape1{,-cps}`, `cps-oracle-cloneable-closure-recv{,-cps}`,
+     `cps-oracle-cloneable-closure-shape2{,-cps}`,
+     `cps-oracle-serial-callframe-2arg{,-cps}`).  Residual (un-named) tails: colored
+     receivers, cstr/Serializable 2-arg envs, shapes outside the context grammar.
+   - base reset/shift shapes outside `delim_ok` -- **the reset/shift-specific gap
+     is now closed**: escape/branch shapes went native in U1; nested reset
+     (`delim_ok` CT_RESET case) and sibling nested resets (`collect_caps_rec`
+     CT_RESET/CT_SHIFT arms) are admitted (see
+     [cps-backend-unification-u7-resetshift-gap.md](cps-backend-unification-u7-resetshift-gap.md)).
+     The only residual is the generic `needs_heap_join` boundary (a non-tail
+     cps->cps *call* on the heap chain), shared with the whole C1 subset, not
+     reset-specific.
 3. **Delete the lowering functions** once each has zero callers: remove
    `emit_cps_reset` / `_cloneable_reset` / `_serial_reset` / `emit_cps_callcc`, the
    `emit_effects_*` dispatch wrappers, and the `EX_CALLCC` direct dispatch; drop
@@ -93,13 +144,46 @@ flagged as deferred.
   native, so the delegation into `emit_cps_cloneable_reset` / `_serial_reset` now
   fires only for the residual hard shapes named above -- the deletes are closer,
   just gated on the hard tail.
+- **Step 1 (runtime relocation) is landed.** The four DK prelude emitters now live
+  in `emit_dk_runtime.{c,h}`; `emit_module.c` includes the new header and the
+  emitted C is byte-identical (verified against the `continuation-*` snapshots;
+  full suite green). The runtime no longer shares a translation unit with the
+  lowering functions U7 deletes, so steps 2-5 delete lowering without touching the
+  runtime.
 
 ## Recommendation
 
-Do the **runtime relocation (step 1) next** -- it is the only safe, bounded,
-high-leverage U7 step available before the native gaps close, and it converts
-"delete a 2.1k-line file with load-bearing runtime in it" into "delete four
-functions with no callers." The native gaps (callcc especially) are real projects
-sized like the U3/U4 native ports, not one-turn slices, and should be scheduled as
-such. Until then the delegation + eviction fallbacks are correct and the tree
-ships.
+The **runtime relocation (step 1) is now landed** -- `emit_cps.c` no longer holds
+the load-bearing runtime, so the eventual delete is "remove four lowering
+functions with no callers," not "carve runtime out of a 2.1k-line file."
+
+**Every native gap the readiness table named is now closed**: base reset/shift
+(nested + sibling), serial Shape 1 identity, callcc (native `CT_CALLCC`, capture-
+free + capturing receivers), cloneable/serial closure receivers across both shapes
+(Shape 1 direct call + Shape 2 `dk_shift`-env threading), and serial 2-arg call
+frames (int env marshaled inline). The residual delegations are now narrower,
+un-named tails -- colored receivers, cstr/Serializable 2-arg call-frame envs, and
+shapes outside the supported context grammar -- each an incremental extension of
+an existing native path, not a structural gap.
+
+The next structural question for U7 is no longer a coverage gap but **graduation**:
+the deletes (steps 3-5) still wait on the CPS backend becoming the whole-program
+default, because the direct-dispatch callers (uncolored / `main` / exported fns)
+of the lowering functions only disappear then. Until then the delegation +
+eviction fallbacks are correct and the tree ships.
+
+That graduation is assessed in
+[cps-backend-unification-graduation-readiness.md](cps-backend-unification-graduation-readiness.md).
+Headline: with `cps-backend` forced on across the whole suite, all 2142 fixtures
+still build and run correctly -- the only failures (278) are `expected.c` codegen
+churn, zero behavior failures. So "become the default" (flip the experiment; direct
+stays as fallback) is gated on snapshot regeneration + a perf spot check + a
+maintainer decision before the `expires_at` 0.29.0 contract, NOT on more native
+coverage. Retiring `emit_cps.c` (this note's deletes) is the separate, larger
+milestone that does need the eviction plans closed.
+
+Note: a native `CT_CALLCC` does NOT by itself remove `emit_cps_callcc`'s last
+caller -- the `EX_CALLCC` direct dispatch (emit_expr.c:2826) still lowers callcc
+for uncolored / `main` / exported functions (which are never CPS-emitted). That
+caller only disappears when the CPS backend graduates to whole-program default;
+the native emit is a prerequisite for graduation, not a standalone delete-enabler.

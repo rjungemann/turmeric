@@ -254,6 +254,39 @@ static CTerm *build_letraw(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     return t;
 }
 
+/* U7 callcc: a (call/cc f)/(escape f) receiver `f` the native escape landing
+ * (emit_callcc) can emit as a value -- a named top-level fn, a fat/poly/fn value,
+ * or a closure literal (capturing OR not).  A CAPTURING closure's free vars are
+ * surfaced by collect_free_vars (through the EX_CALLCC receiver) and ride the
+ * lifted continuation's env exactly like the CT_LETRAW path: in a lifted body a
+ * non-scalar capture bails to fallback (the enclosing continuation's collect_caps
+ * sets cs.ok=false and evicts), and in the main body emit_value captures the
+ * visible local directly.  A non-fn-value receiver returns NULL so the caller
+ * keeps the CT_LETRAW delegation. */
+static bool callcc_native_recv(const Expr *f) {
+    f = ascribe_peel(f);
+    if (!f) return false;
+    if (is_delegatable_value(f)) return true;          /* fat/poly/fn/zero-cap closure */
+    if (f->kind == EX_CLOSURE) return true;            /* a closure literal (capturing too) */
+    if (f->kind == EX_VAR && f->as.var.binding
+        && f->as.var.binding->is_global
+        && f->as.var.binding->type.kind == TY_FN)
+        return true;                                    /* a named top-level fn */
+    return false;
+}
+
+/* Build a native CT_CALLCC (binds x = the call/cc value, continues body) for a
+ * receiver emit_callcc can emit; NULL otherwise so the caller falls back to the
+ * CT_LETRAW delegation. */
+static CTerm *build_callcc(CpsB *b, Expr *e, CVar x, CTerm *body) {
+    if (!callcc_native_recv(e->as.callcc_.fn)) return NULL;
+    CTerm *t = new_term(b, CT_CALLCC);
+    t->as.callcc.x = x;
+    t->as.callcc.e = e;
+    t->as.callcc.body = body;
+    return t;
+}
+
 /* U3 Shape 1: try to build a native (identity-continuation) cloneable node for
  * (cloneable-reset (cloneable-shift receiver val)) -- the shift IS the whole
  * reset body, so the captured continuation is the identity (no dk_copy_range).
@@ -514,11 +547,23 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
      * shape stays on the delegation path, which matches the direct backend. */
     if (cur->as.cloneable_shift_.n_live_captures != 0) return NULL;
     const Binding *recv = cloneable_named_receiver(b, cur);
-    if (!recv) return NULL;
+    const Expr *recv_expr = NULL;
+    if (!recv) {
+        /* U7: a CLOSURE receiver (capturing or not).  Shape 1 (nf == 0) calls it
+         * directly at the reset site; Shape 2 (nf >= 1) threads it through the
+         * dk_shift body env -- emit_cloneable bakes the closure's thunk into the
+         * per-site body fn and passes the closure env as the shift env.  A
+         * zero-capture closure is already lifted to a named global (handled above);
+         * this is the capturing case. */
+        const Expr *kf = ascribe_peel(cur->as.cloneable_shift_.k_fn);
+        if (kf && kf->kind == EX_CLOSURE) recv_expr = kf;
+        else return NULL;
+    }
 
     CTerm *t = new_term(b, CT_CLONEABLE);
     t->as.cloneable.x = x;
     t->as.cloneable.receiver = recv;
+    t->as.cloneable.receiver_expr = recv_expr;
     t->as.cloneable.n_frames = nf;
     if (nf) {
         CloneFrame *fa = arena_alloc(b->a, nf * sizeof(CloneFrame));
@@ -647,6 +692,39 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             continue;
         }
 
+        /* Call frame (2-arg): `(f other [])` / `(f [] other)` to a top-level
+         * uncolored (int,int)->int fn; the hole is one arg, the other is a captured
+         * INT env.  The per-site wrapper applies f to (value, env) in source order;
+         * the env is serialized inline (SK_ENV_INT) by the marshaler, keyed by the
+         * "<fn>$2L"/"<fn>$2R" side so save-cont!/resume-cont! round-trips.  (Non-int
+         * envs -- cstr / Serializable -- still delegate.) */
+        if (cur->kind == EX_CALL && cur->as.call_.n_args == 2
+            && cur->as.call_.fn_binding && !cur->as.call_.fn_expr) {
+            const Binding *fb = cur->as.call_.fn_binding;
+            if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 2) return NULL;
+            if (fb->closure_fn_binding) return NULL;         /* not a fat closure */
+            if (callee_colored(b, fb)) return NULL;          /* uncolored target */
+            if (cur->type.kind != TY_INT) return NULL;       /* result: int */
+            if (fb->type.as.fn.arg_kinds[0] != TY_INT ||
+                fb->type.as.fn.arg_kinds[1] != TY_INT) return NULL;  /* both args int */
+            const Expr *a0 = ascribe_peel(cur->as.call_.args[0]);
+            const Expr *a1 = ascribe_peel(cur->as.call_.args[1]);
+            bool h0 = serial_reaches_shift(a0);
+            bool h1 = serial_reaches_shift(a1);
+            if (h0 == h1) return NULL;               /* exactly one hole side */
+            const Expr *other = h0 ? a1 : a0;        /* the captured env operand */
+            if (!other || !is_atomic(other) || other->type.kind != TY_INT) return NULL;
+            if (nf >= CL_IR_MAX_FRAMES) return NULL;
+            memset(&frames[nf], 0, sizeof(CloneFrame));
+            frames[nf].op        = NULL;
+            frames[nf].call_fn   = fb;
+            frames[nf].operand   = atom_of(other);   /* real captured int env */
+            frames[nf].hole_left = h0;                /* hole is arg 0 iff h0 */
+            nf++;
+            cur = h0 ? a0 : a1;                       /* descend the hole side */
+            continue;
+        }
+
         /* Pure `let` prelude (emit shared with cloneable): inits shift-free +
          * scalar, body carries the hole.  Kept mutually exclusive with `if`. */
         if (cur->kind == EX_LET) {
@@ -743,15 +821,29 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         break;
     }
 
-    if (nf == 0) return NULL;                        /* Shape 1 serial -> delegate */
+    /* Shape 1 serial: an empty context (nf == 0) -- the serial-shift IS the whole
+     * reset body.  The receiver gets the identity continuation (a bare
+     * dk_prompt(1, dk_done()) chain, marshalable like any deeper chain), so
+     * emit_cloneable's serial branch handles nf == 0 with empty frame loops.
+     * Mirrors the cloneable Shape 1 already supported natively. */
     if (!cur || cur->kind != EX_SERIAL_SHIFT) return NULL;
     const Binding *recv = serial_named_receiver(b, cur);
-    if (!recv) return NULL;
+    const Expr *recv_expr = NULL;
+    if (!recv) {
+        /* U7: a CLOSURE receiver -- Shape 1 (called at the reset site) or Shape 2
+         * (threaded through the dk_shift body env, thunk baked into the body fn).
+         * The receiver runs once at capture; only the continuation is marshaled,
+         * so a capturing closure receiver keeps save-cont!/resume-cont! sound. */
+        const Expr *kf = ascribe_peel(cur->as.serial_shift_.k_fn);
+        if (kf && kf->kind == EX_CLOSURE) recv_expr = kf;
+        else return NULL;
+    }
 
     CTerm *t = new_term(b, CT_CLONEABLE);
     t->as.cloneable.serial = true;
     t->as.cloneable.x = x;
     t->as.cloneable.receiver = recv;
+    t->as.cloneable.receiver_expr = recv_expr;
     t->as.cloneable.n_frames = nf;
     CloneFrame *fa = arena_alloc(b->a, nf * sizeof(CloneFrame));
     memcpy(fa, frames, nf * sizeof(CloneFrame));
@@ -1241,6 +1333,15 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             CTerm *core = build_resume(b, e, x, ac, &p);
             return fold_pending(b, &p, core);
         }
+        case EX_CALLCC: {
+            /* U7: native local-escape landing for a capture-free receiver, else
+             * fall back to the CT_LETRAW delegation (emit_cps_callcc). */
+            CVar x = fresh_cvar(b, &e->type);
+            CTerm *ac = new_term(b, CT_APPCONT);
+            ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            CTerm *nat = build_callcc(b, e, x, ac);
+            return nat ? nat : build_letraw(b, e, x, ac);
+        }
         default: {
             /* N6.1: a control-op-free, colored-call-free form -- emit it wholesale
              * via the direct emitter, then deliver its result to the continuation. */
@@ -1406,6 +1507,12 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             CTerm *core = build_resume(b, e, x, rest, &p);
             return fold_pending(b, &p, core);
         }
+        case EX_CALLCC: {
+            /* U7: native local-escape landing for a capture-free receiver, else
+             * fall back to the CT_LETRAW delegation (see cps_tail). */
+            CTerm *nat = build_callcc(b, e, x, rest);
+            return nat ? nat : build_letraw(b, e, x, rest);
+        }
         default: {
             /* N6.1: delegate a control-op-free, colored-call-free form to the
              * direct emitter (binds x, continues rest). */
@@ -1565,13 +1672,19 @@ void cps_ir_print(const CTerm *t, FILE *out, int indent) {
                          "[%u frame(s), %u let(s)%s]\n",
                     t->as.cloneable.x.name,
                     t->as.cloneable.serial ? "serial" : "cloneable",
-                    t->as.cloneable.receiver && t->as.cloneable.receiver->name
-                        ? t->as.cloneable.receiver->name->name : "?",
+                    t->as.cloneable.receiver_expr ? "<closure>"
+                        : (t->as.cloneable.receiver && t->as.cloneable.receiver->name
+                           ? t->as.cloneable.receiver->name->name : "?"),
                     t->as.cloneable.serial ? "U4" : "U3",
                     t->as.cloneable.n_frames == 0 ? "Shape 1 " : "Shape 2 ",
                     t->as.cloneable.n_frames, t->as.cloneable.n_lets,
                     t->as.cloneable.if_cond ? ", if" : "");
             cps_ir_print(t->as.cloneable.body, out, indent);
+            break;
+        case CT_CALLCC:
+            fprintf(out, "let %s = call/cc(<recv>)  ; U7 native escape landing\n",
+                    t->as.callcc.x.name);
+            cps_ir_print(t->as.callcc.body, out, indent);
             break;
         case CT_UNSUPPORTED:
             fprintf(out, "<unsupported: %s>\n", t->as.unsupported.why ? t->as.unsupported.why : "?");

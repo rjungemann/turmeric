@@ -32,19 +32,15 @@
  * NOT count cloneable-/serial-/effect forms (those keep the legacy runtime). */
 bool emit_cps_program_uses_delimited(const Expr *program);
 
-/* Emit the self-contained DK multi-prompt machine (a faithful C port of
- * src/runtime/cps_prompt.c) into the generated program's preamble. Call once,
- * gated on emit_cps_program_uses_delimited(). */
-void emit_cps_runtime_prelude(Buf *out);
-
 /* call-cc-completion: true iff `program` uses (call/cc f) or (escape f)
  * (EX_CALLCC) -- the gate for emitting the escape-continuation runtime. */
 bool emit_cps_program_uses_callcc(const Expr *program);
 
-/* Emit the undelimited escape-continuation runtime (tur_escape_cont +
- * tur_escape_resume) into the generated preamble. Call once, gated on
- * emit_cps_program_uses_callcc(). */
-void emit_cps_callcc_prelude(Buf *out);
+/* NOTE: the DK runtime prelude emitters (emit_cps_runtime_prelude,
+ * emit_cps_callcc_prelude, emit_cps_cloneable_bridge_prelude,
+ * emit_cps_serial_runtime_prelude) were relocated to emit_dk_runtime.h
+ * (cps-backend-unification U7, step 1). The emit_cps_program_uses_* gates that
+ * decide whether to emit each prelude stay here. */
 
 /* Lower (call/cc f) / (escape f) (EX_CALLCC): establish a setjmp landing at
  * this site (the implicit-prompt capture point), hand f the landing handle,
@@ -63,11 +59,6 @@ char *emit_cps_reset(EmitCtx *ctx, Buf *body, const Expr *e);
  * emitting the DK machine + the cloneable<->DK bridge for cloneable conts. */
 bool emit_cps_program_uses_cloneable_dk(const Expr *program);
 
-/* CPS9: emit the cloneable-continuation <-> DK bridge (__dk_cont_fn /
- * __dk_env_clone / __dk_env_drop). Call once, after both the cloneable
- * runtime and the DK machine prelude, gated on the predicate above. */
-void emit_cps_cloneable_bridge_prelude(Buf *out);
-
 /* CPS9: lower (cloneable-reset CTX[cloneable-shift f v]) onto the DK machine,
  * reifying the delimited context CTX as DK frames and the captured
  * sub-continuation as a multi-shot cloneable cont. Returns the C expression
@@ -78,11 +69,6 @@ char *emit_cps_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e);
  * not. Gates the DK machine + serial marshaling runtime preludes so the stdlib
  * save-cont!/resume-cont! references resolve even when a context cannot lower. */
 bool emit_cps_program_contains_serial(const Expr *program);
-
-/* CPS10: emit the serial marshaling runtime (fixed tagged context frames +
- * tur_serial_cont_resume / _serialize / _deserialize). Call once, after the DK
- * machine prelude, gated on the predicate above. */
-void emit_cps_serial_runtime_prelude(Buf *out);
 
 /* CPS10: lower (serial-reset CTX[serial-shift f v]) onto the DK machine,
  * reifying the delimited context as tagged DK frames and the captured
