@@ -42,39 +42,23 @@ bool emit_cps_program_uses_callcc(const Expr *program);
  * (cps-backend-unification U7, step 1). The emit_cps_program_uses_* gates that
  * decide whether to emit each prelude stay here. */
 
-/* Lower (call/cc f) / (escape f) (EX_CALLCC): establish a setjmp landing at
- * this site (the implicit-prompt capture point), hand f the landing handle,
- * and return the C expression holding the call/cc value -- either f's normal
- * return, or the value delivered by an upward (tur_escape_resume k v). */
-char *emit_cps_callcc(EmitCtx *ctx, Buf *body, const Expr *e);
-
-/* Lower (reset BODY). When BODY can reach a base shift bound to this reset,
- * emits a dk_run-driven evaluation on the substrate and returns the C
- * expression holding the result. Otherwise returns NULL, signalling the
- * caller to fall back to the legacy lowering (plain emit_value of the body). */
-char *emit_cps_reset(EmitCtx *ctx, Buf *body, const Expr *e);
+/* NOTE (cps-backend-direct-lowering-removal D3): the direct-style lowering
+ * functions emit_cps_reset, emit_cps_callcc, emit_cps_cloneable_reset, and
+ * emit_cps_serial_reset were deleted once both caller populations reached zero
+ * genuine reaches. Delimited control (base reset/shift, call/cc, cloneable, and
+ * serial) is now lowered exclusively by the CT-IR backend (emit_cps_ir.c). The
+ * emit_cps_program_uses_* gates below remain until D5 folds prelude gating into
+ * the CT-IR taint classification. */
 
 /* CPS9: true iff `program` has a (cloneable-reset ...) whose body is a
  * supported delimited context around a cloneable-shift -- the gate for
  * emitting the DK machine + the cloneable<->DK bridge for cloneable conts. */
 bool emit_cps_program_uses_cloneable_dk(const Expr *program);
 
-/* CPS9: lower (cloneable-reset CTX[cloneable-shift f v]) onto the DK machine,
- * reifying the delimited context CTX as DK frames and the captured
- * sub-continuation as a multi-shot cloneable cont. Returns the C expression
- * holding the result, or NULL to fall back to the legacy lowering. */
-char *emit_cps_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e);
-
 /* True if the program contains any serial-shift/serial-reset node, lowerable or
  * not. Gates the DK machine + serial marshaling runtime preludes so the stdlib
  * save-cont!/resume-cont! references resolve even when a context cannot lower. */
 bool emit_cps_program_contains_serial(const Expr *program);
-
-/* CPS10: lower (serial-reset CTX[serial-shift f v]) onto the DK machine,
- * reifying the delimited context as tagged DK frames and the captured
- * sub-continuation as a marshalable serial cont. Returns the C expression
- * holding the result, or NULL to fall back to the legacy lowering. */
-char *emit_cps_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e);
 
 /* cps-backend-direct-lowering-removal-plan (verification): emit one
  * --dump-direct-lowering-callers line for a codegen reach into the direct-style

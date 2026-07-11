@@ -356,14 +356,39 @@ residual `-fallback` lines that remain (`reset`/`cloneable`/`serial`) are the
 inline legacy paths in `emit_effects.c`, **not** `emit_cps.c` callers, and do not
 gate D3. **D3 is unblocked.**
 
-### Phase D3 -- delete the lowering functions
+### Phase D3 -- delete the lowering functions -- LANDED
 
-With both populations at zero callers, delete from `emit_cps.c`:
-`emit_cps_reset` (+ `emit_cps_reset_escape`), `emit_cps_callcc`,
-`emit_cps_cloneable_reset`, `emit_cps_serial_reset`, and their private analysis
-helpers (`frame_c_expr`, `collect_ctx`, `ctx_if_branch`, `cl_can_lower`,
-`sk_tag_for_frame`). Delete the `emit_effects_*` dispatch wrappers and the
-`EX_CALLCC` dispatch arm that D2's exit made dead.
+With both populations at zero callers, the direct-style lowering functions were
+deleted from `emit_cps.c`: `emit_cps_reset` (+ `emit_cps_reset_escape`),
+`emit_cps_callcc`, `emit_cps_cloneable_reset`, `emit_cps_serial_reset`, plus the
+helper trees each one exclusively owned -- `emit_first_shift`, `can_lower`,
+`reaches_shift` (base-reset analysis); `emit_cloneable_ctx`, `emit_serial_ctx`,
+`cl_emit_frame_body`, `cl_emit_frame_fn`, `frame_c_expr`, `c_cast_for_kind`
+(cloneable/serial frame emission); and `sk_tag_for_frame`. The orphan cascade
+was driven by the build's `-Werror=unused-function`: delete the public
+functions, rebuild, delete whatever the compiler proves unused, repeat until
+clean. `emit_cps.c` fell from 1758 to 1014 lines.
+
+**Correction to the plan's helper list.** Of the five helpers this plan
+originally named for deletion (`frame_c_expr`, `collect_ctx`, `ctx_if_branch`,
+`cl_can_lower`, `sk_tag_for_frame`), only `frame_c_expr` and `sk_tag_for_frame`
+were lowering-private. `collect_ctx`, `ctx_if_branch`, and `cl_can_lower` are
+**shared with the surviving `emit_cps_program_uses_*` gates**
+(`uses_cloneable_dk` -> `cl_can_lower` -> `collect_ctx`/`ctx_if_branch`;
+`uses_serial_dk` -> `sk_can_lower` -> the same), so they stay until D5 replaces
+the gates with CT-IR taint classification and the whole analysis subtree becomes
+deletable.
+
+The call sites were retired: `emit_effects_reset` /
+`emit_effects_cloneable_reset` / `emit_effects_serial_reset` collapsed to their
+sole surviving behavior (the legacy no-shift / Case-1 fallback -- these
+`-fallback` reaches never entered `emit_cps.c`), and the `EX_CALLCC` dispatch arm
+in `emit_expr.c` (which `emit_cps_callcc` alone handled) now `abort()`s: call/cc
+is a coloring seed, so every use is colored and emitted natively by the CT-IR
+backend, and reaching the direct emitter is an invariant violation. The
+`emit_cps.h` declarations of the four deleted functions were removed; the four
+gate declarations and the `emit_cps_note_direct_caller` verification hook stay.
+Suite: 2142 passed, 0 failed.
 
 ### Phase D4 -- delete the N6.5 delimited-control carve-out
 

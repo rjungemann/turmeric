@@ -2823,7 +2823,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_CLONEABLE_RESET:  return emit_effects_cloneable_reset(ctx, body, e);
         case EX_SHIFT:            return emit_effects_shift(ctx, body, e);
         case EX_SHIFT0:           return emit_effects_shift0(ctx, body, e);
-        case EX_CALLCC:           emit_cps_note_direct_caller("callcc", true); return emit_cps_callcc(ctx, body, e);
+        case EX_CALLCC:
+            /* cps-backend-direct-lowering-removal D3: the CPS lowering of
+             * call/cc (emit_cps_callcc) is deleted. EX_CALLCC is a coloring
+             * seed (cps_directly_uses_control), so any function using call/cc is
+             * colored and emitted natively by the CT-IR backend, never reaching
+             * this direct-style dispatch. Reaching it is an invariant violation. */
+            fprintf(stderr, "tur: emit: EX_CALLCC reached the direct emitter "
+                            "(should be handled by the CT-IR backend)\n");
+            abort();
         case EX_CLONEABLE_SHIFT:  return emit_effects_cloneable_shift(ctx, body, e);
         /* Phase 21: Serializable continuations */
         case EX_SERIAL_RESET:     return emit_effects_serial_reset(ctx, body, e);

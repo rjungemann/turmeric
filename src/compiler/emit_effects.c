@@ -1209,15 +1209,12 @@ char *emit_effects_discontinue(EmitCtx *ctx, Buf *body, const Expr *e) {
 char *emit_effects_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* (reset body) - establish a continuation boundary and run body.
      *
-     * cps-transform-plan: when the body can dynamically reach a base shift
-     * bound to this reset, lower the delimited computation onto the CPS
-     * substrate's multi-prompt machine (emit_cps_reset). Outside that subset
-     * emit_cps_reset returns NULL and we fall back to the legacy lowering:
-     * reset just evaluates and returns its body (correct when the body has no
-     * shift, or when an inner reset/operator self-delimits it). */
-    char *cps = emit_cps_reset(ctx, body, e);
-    emit_cps_note_direct_caller("reset", cps != NULL);
-    if (cps) return cps;
+     * cps-backend-direct-lowering-removal D3: the CPS lowering of a base reset
+     * (emit_cps_reset) is deleted. Every reset whose body can dynamically reach
+     * a base shift bound to it is now colored and emitted natively by the CT-IR
+     * backend (emit_cps_ir.c), so it never reaches this wrapper. What remains
+     * here is the sole surviving behavior: a reset with no reachable shift (or
+     * one self-delimited by an inner reset/operator) just evaluates its body. */
     return emit_value(ctx, body, e->as.reset_.body);
 }
 
@@ -1232,15 +1229,12 @@ char *emit_effects_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
      */
     const Expr *rb = e->as.cloneable_reset_.body;
 
-    /* cps-transform-plan (CPS9): when the reset body wraps a cloneable-shift in
-     * a supported delimited context, lower onto the DK multi-prompt machine so
-     * the captured continuation reifies and replays that context (multi-shot
-     * via dk_invoke). Outside that subset emit_cps_cloneable_reset returns NULL
-     * and we fall back to the legacy lowering below (byte-identical). */
-    char *cps = emit_cps_cloneable_reset(ctx, body, e);
-    emit_cps_note_direct_caller("cloneable", cps != NULL);
-    if (cps) return cps;
-
+    /* cps-backend-direct-lowering-removal D3: the CPS lowering of a
+     * cloneable-reset (emit_cps_cloneable_reset) is deleted. A cloneable-reset
+     * wrapping a cloneable-shift in a supported delimited context is now colored
+     * and emitted natively by the CT-IR backend, so it never reaches this
+     * wrapper. What remains here is the legacy Case-1 lowering (shift is the
+     * entire reset body) plus the no-shift fallback. */
     if (rb->kind == EX_CLONEABLE_SHIFT) {
         /* Full CPS: shift is the entire reset body (Case 1 -- trivial continuation). */
         const Expr *shift = rb;
@@ -1696,15 +1690,12 @@ char *emit_effects_cloneable_shift(EmitCtx *ctx, Buf *body, const Expr *e) {
 }
 
 char *emit_effects_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
-    /* cps-transform-plan (CPS10 / CPS5.4): when the body wraps a serial-shift in
-     * a supported delimited context, lower onto the DK multi-prompt machine so
-     * the captured continuation is reified as a marshalable DK chain (resume /
-     * serialize / deserialize). Outside that subset emit_cps_serial_reset
-     * returns NULL and we fall back to the legacy lowering: serial-reset with no
-     * shift just evaluates its body. */
-    char *cps = emit_cps_serial_reset(ctx, body, e);
-    emit_cps_note_direct_caller("serial", cps != NULL);
-    if (cps) return cps;
+    /* cps-backend-direct-lowering-removal D3: the CPS lowering of a serial-reset
+     * (emit_cps_serial_reset) is deleted. A serial-reset wrapping a serial-shift
+     * in a supported delimited context is now colored and emitted natively by
+     * the CT-IR backend, so it never reaches this wrapper. What remains is the
+     * sole surviving behavior: a serial-reset with no reachable shift just
+     * evaluates its body. */
     return emit_value(ctx, body, e->as.serial_reset_.body);
 }
 
