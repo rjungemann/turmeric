@@ -1,8 +1,14 @@
-# CPS lifted heap-join helper references the enclosing continuation `k` (contract-nested)
+# CPS lifted heap-join helper references the enclosing continuation `k` (contract-nested) -- RESOLVED
 
 **Severity:** medium (build failure on a nested-contract program under the CPS
 backend; the direct emitter compiles it).  Surfaced by the `cps-backend`
 graduation.
+
+**Status: RESOLVED** -- `needs_heap_join` now rejects a heap-join whose join
+body itself contains a cps->cps tail call (`jbody_has_cps_tailcall`,
+src/compiler/emit_cps_ir.c), so such a function evicts to the direct emitter
+instead of emitting a frame fn that references an out-of-scope `k`.
+`contract-nested` is green; suite 2142/2142.
 
 ## Summary
 
@@ -45,11 +51,17 @@ enclosing continuation `k`.  Either the heap-join lift must carry `k` into the
 frame env (so the helper can thread it), or a join body that references `k` must
 be rejected by `needs_heap_join` so the function evicts to the direct emitter.
 
-## Status
+## Resolution
 
-Carried red.  One of three residual `cps-backend`-graduation failures that are
-CPS lowering/emit bugs rather than emittable-subset ABI gaps (the eviction-gate
-work closed the ABI-divergence class; see the direct-lowering-removal plan and
-the graduation-readiness note).  The "reject in `needs_heap_join`" option would
-fold this into the eviction path; the "carry `k` into the frame env" option
-makes it native.
+Took the "reject in `needs_heap_join`" option.  The precise trigger was narrower
+than "references `k`": a heap-join jbody that is *itself* a cps->cps tail call
+(here `inner__cps(t0, k)`, KK_RET to a colored callee).  The lifted frame fn is a
+value-transform `(env, value)` with NO continuation in scope, so it cannot thread
+any continuation into a nested colored call.  `jbody_has_cps_tailcall` walks the
+jbody's tail spine (`if`/`let` chains to their tail positions) and, if it finds a
+tail call to an `in_s` callee, `needs_heap_join` rejects the join -> the enclosing
+function evicts to the direct emitter, which handles `(inner (inner x))`
+correctly.  (`needs_heap_join`'s existing `CT_TAILCALL` case caught only a KK_VAR
+cps->cps call at the top level; a KK_RET cps->cps call is legitimate at a
+function's top level but not inside a lifted join body -- exactly the gap.)
+`continuation-substrate`, `contract-nested`, and the full suite are green.

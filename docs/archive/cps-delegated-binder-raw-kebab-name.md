@@ -1,7 +1,24 @@
-# CPS delegated binder emits a raw kebab-case name (delegation-boundary naming desync)
+# CPS join-param slot emits a raw kebab-case name (naming desync) -- RESOLVED
 
 **Severity:** low (one fixture; a pre-existing CPS-backend emit bug, surfaced
 by the `cps-backend` graduation making the CPS path the default).
+
+**Status: RESOLVED** -- the `CT_LETCONT` join-param SLOT is now named through
+`cvar_cname` (src/compiler/emit_cps_ir.c) at both its decl and its delivery, so a
+source-`Binding` param mangles the same way the join body's atom references do.
+`hkt-stdlib-parser-instances` is green; suite 2142/2142.
+
+> **Correction to the original diagnosis below:** this is NOT a `CT_LETRAW`
+> binder -- it is a `CT_LETCONT` **join param**.  `(let [first-results ...] (if
+> (= first-results 0) ...))` lowers the `let` binder into an inline-join
+> continuation param; its slot was declared and delivered via the raw
+> `param.name` (`first-results`, an invalid C identifier), while the join body's
+> uses referenced the same source `Binding` via `name_for_binding`
+> (`first_hyresults_1470`) -- so decl/delivery and use disagreed.  The fix names
+> the slot via `cvar_cname` (-> `name_for_binding` for a source-`Binding` param)
+> at the two slot sites (the emit CT_LETCONT case + `emit_binder_decls`), which
+> now match the body.  Synthetic (bind-less) join params are unaffected
+> (`cvar_cname` returns their fresh name unchanged), so no snapshot churned.
 
 ## Summary
 

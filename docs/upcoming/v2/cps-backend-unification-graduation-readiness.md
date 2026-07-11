@@ -61,30 +61,34 @@ now-always-on cps-backend's `int64_t <fn>__cps(..., DK*)`. The CPS3 forward decl
 now skips any function the cps-backend emits (`emit_cps_ir_emits_binding`), so
 the superseded `--cps-path` path no longer double-declares the symbol.
 
-The residual failures were **NOT eviction-subset gaps** -- they are CPS
-*lowering/emit* bugs the gate cannot address:
+The residual failures were **NOT eviction-subset gaps** -- they were CPS
+*lowering/emit* bugs the gate could not address. **All three are now fixed; the
+full suite is green (2142/2142).**
 
 - `continuation-substrate` -- **RESOLVED.** The CPS backend miscompiled core
   `reset`/`shift`/`shift0` when the shift *receiver* was a capturing closure: the
   synthesized `(recv val)` delegated a raw `EX_CLOSURE` callee, which the direct
   emitter's indirect-call block cast the fat-closure ENV pointer to a bare
   function pointer and jumped into (segfault). A capturing-closure shift receiver
-  now evicts to the direct shift lowering (`indirect_callee_ok`, src/passes/cps_ir.c),
-  which handles it correctly. See
-  [docs/archive/cps-continuation-substrate-miscompile.md](../../archive/cps-continuation-substrate-miscompile.md).
-- `contract-nested` -- a lifted heap-join helper references the enclosing
-  continuation `k` it never receives (`'k' undeclared`). See
-  [cps-heap-join-references-enclosing-k.md](../../reported/cps-heap-join-references-enclosing-k.md).
-- `hkt-stdlib-parser-instances` -- a delegated (`CT_LETRAW`) binder emits a raw
-  kebab-case name that disagrees with its mangled use-site spelling. See
-  [cps-delegated-binder-raw-kebab-name.md](../../reported/cps-delegated-binder-raw-kebab-name.md).
+  now evicts to the direct shift lowering (`indirect_callee_ok`, src/passes/cps_ir.c).
+  See [docs/archive/cps-continuation-substrate-miscompile.md](../../archive/cps-continuation-substrate-miscompile.md).
+- `contract-nested` -- **RESOLVED.** A heap-join whose join body is itself a
+  cps->cps tail call (`inner__cps(t0, k)`) lifted into a value-transform frame fn
+  that has no `k` in scope (`'k' undeclared`). `needs_heap_join` now rejects a
+  jbody containing a cps->cps tail call (`jbody_has_cps_tailcall`, emit_cps_ir.c),
+  evicting the function to the direct emitter. See
+  [docs/archive/cps-heap-join-references-enclosing-k.md](../../archive/cps-heap-join-references-enclosing-k.md).
+- `hkt-stdlib-parser-instances` -- **RESOLVED.** A `CT_LETCONT` join-param SLOT
+  was named by its raw `param.name` (a kebab-case `let` binder `first-results`,
+  an invalid C identifier) while the join body referenced the same source binding
+  via `name_for_binding` (mangled). The slot is now named via `cvar_cname`,
+  matching the body. See
+  [docs/archive/cps-delegated-binder-raw-kebab-name.md](../../archive/cps-delegated-binder-raw-kebab-name.md).
 
-So the corrected headline is: graduation ships with **2 known-red fixtures**
-(down from 24), both pre-existing CPS *codegen* bugs (build failures, not
-behavior) orthogonal to the eviction subset. The one behavior failure the
-forced-on probe's "zero behavior failures" claim missed
-(`continuation-substrate`) is now fixed; the two residuals are `contract-nested`
-and `hkt-stdlib-parser-instances`, both build-time only.
+So the corrected headline is: graduation shipped with 3 pre-existing CPS
+lowering/emit bugs surfaced by making the CPS path the default (all orthogonal to
+the eviction subset), and **all three are now fixed** -- the full fixture suite
+passes with the cps-backend always-on.
 
 ## Two distinct milestones (do not conflate)
 

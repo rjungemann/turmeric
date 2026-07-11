@@ -1497,12 +1497,42 @@ static bool letcont_is_heap_join(const CTerm *t) {
         && binding_in_s(b->as.tailcall.fn);
 }
 
+/* A heap-join jbody is lowered into a value-transform frame fn `(env, value)`
+ * that RETURNS jbody's value (emit_lifted LH_PERFORM_CONT); the DK machine then
+ * delivers that return through the frame's `next` (cur_k).  The frame fn thus
+ * has NO continuation in scope -- neither the enclosing `k` (KK_RET) nor a join
+ * var (KK_VAR) -- so a jbody that tail-calls another colored function is
+ * unemittable: the lowered `g__cps(args, k)` would reference an undeclared `k`.
+ * (needs_heap_join's own CT_TAILCALL case catches a KK_VAR cps->cps call, but a
+ * KK_RET cps->cps call is legitimate at a function's TOP level -- where `k` is a
+ * real param -- and only unemittable once buried in a lifted join body, which is
+ * exactly what this scan detects.)  A nested if/let spine is walked to its tail
+ * positions; control ops and plain value deliveries carry no bare cps->cps tail
+ * call. */
+static bool jbody_has_cps_tailcall(const CTerm *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case CT_TAILCALL: return binding_in_s(t->as.tailcall.fn);
+        case CT_LETVAL:   return jbody_has_cps_tailcall(t->as.letval.body);
+        case CT_LETPRIM:  return jbody_has_cps_tailcall(t->as.letprim.body);
+        case CT_LETCALL:  return jbody_has_cps_tailcall(t->as.letcall.body);
+        case CT_LETRAW:   return jbody_has_cps_tailcall(t->as.letraw.body);
+        case CT_IF:       return jbody_has_cps_tailcall(t->as.if_.then_)
+                              || jbody_has_cps_tailcall(t->as.if_.else_);
+        case CT_LETCONT:  return jbody_has_cps_tailcall(t->as.letcont.jbody)
+                              || jbody_has_cps_tailcall(t->as.letcont.body);
+        default:          return false;
+    }
+}
+
 /* Does `t` contain a heap join the backend CANNOT emit?  A non-tail cps->cps
  * call reifies its join continuation as a DK frame; that is now supported for
  * the direct CT_LETCONT-body form, provided the join body is zero-capture (the
  * frame carries only the enclosing continuation).  This returns true only for
- * the cases still unhandled: a capturing heap join, or a KK_VAR cps->cps tail
- * call not sitting directly under its CT_LETCONT (e.g. inside an if branch). */
+ * the cases still unhandled: a capturing heap join, a jbody that itself contains
+ * a cps->cps tail call (the lifted frame fn has no `k` to thread), or a KK_VAR
+ * cps->cps tail call not sitting directly under its CT_LETCONT (e.g. inside an
+ * if branch). */
 static bool needs_heap_join(const CTerm *t) {
     if (!t) return false;
     switch (t->kind) {
@@ -1518,8 +1548,12 @@ static bool needs_heap_join(const CTerm *t) {
             if (letcont_is_heap_join(t)) {
                 /* The join is lifted into a DK frame; the handled tailcall (body)
                  * is not walked.  The frame carries only the enclosing
-                 * continuation, so the join body must not capture other locals. */
+                 * continuation, so the join body must not capture other locals,
+                 * nor itself contain a cps->cps tail call (the frame fn has no `k`
+                 * to thread -- see jbody_has_cps_tailcall). */
                 if (has_capture(t->as.letcont.jbody, t->as.letcont.param.id))
+                    return true;
+                if (jbody_has_cps_tailcall(t->as.letcont.jbody))
                     return true;
                 return needs_heap_join(t->as.letcont.jbody);
             }
@@ -2280,17 +2314,27 @@ static void emit_term(CE *ce, const CTerm *t) {
         }
         case CT_LETCONT: {
             if (letcont_is_heap_join(t)) { emit_heap_join(ce, t); break; }
-            if (ce->n_joins < MAX_JOINS) {
+            /* Name the join-param SLOT the way every reference to it is named
+             * (cvar_cname -> name_for_binding when the param carries a source
+             * Binding, so a kebab-case `let` binder like `first-results` mangles
+             * to `first_hyresults_<id>` at the decl, the delivery, AND the join
+             * body's uses).  Using the raw `param.name` here desynced the slot
+             * (`first-results`, an invalid C identifier) from the body's mangled
+             * atom references.  Must match emit_binder_decls' CT_LETCONT decl. */
+            char *pn = cvar_cname(ce, t->as.letcont.param);
+            bool pushed = ce->n_joins < MAX_JOINS;
+            if (pushed) {
                 ce->joins[ce->n_joins].id = t->as.letcont.j.id;
-                ce->joins[ce->n_joins].param = t->as.letcont.param.name;
+                ce->joins[ce->n_joins].param = pn;
                 ce->n_joins++;
             }
             emit_term(ce, t->as.letcont.body);
-            if (ce->n_joins > 0) ce->n_joins--;
+            if (pushed && ce->n_joins > 0) ce->n_joins--;
             /* the join landing pad */
             indent_buf(ce->out, ce->indent);
             buf_printf(ce->out, "L%u:;\n", t->as.letcont.j.id);
             emit_term(ce, t->as.letcont.jbody);
+            free(pn);
             break;
         }
         case CT_IF: {
@@ -2401,14 +2445,19 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
             break;
         }
         case CT_TAILCALL: break;
-        case CT_LETCONT:
+        case CT_LETCONT: {
             if (letcont_is_heap_join(t)) break;  /* param + jbody are lifted into a frame helper */
-            /* Keep param.name here: the inline-join delivery (join_param) names the
-             * slot by param.name, so the decl must match it. */
-            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letcont.param.ty, t->as.letcont.param.type), t->as.letcont.param.name);
+            /* Name the slot via cvar_cname so a source-Binding param mangles
+             * consistently with the delivery + the join body's references (see
+             * the CT_LETCONT emit in emit_term); the raw param.name would be an
+             * invalid C identifier for a kebab-case `let` binder. */
+            char *pn = cvar_cname(ce, t->as.letcont.param);
+            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letcont.param.ty, t->as.letcont.param.type), pn);
+            free(pn);
             emit_binder_decls(ce, t->as.letcont.body);
             emit_binder_decls(ce, t->as.letcont.jbody);
             break;
+        }
         case CT_IF:
             emit_binder_decls(ce, t->as.if_.then_);
             emit_binder_decls(ce, t->as.if_.else_);
