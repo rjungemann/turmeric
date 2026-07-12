@@ -1475,6 +1475,15 @@ static bool fn_sig_ok(const FnDef *fd) {
 typedef struct {
     const FnDef *fd; const Binding *bind; CTerm *term; bool in_s;
     uint64_t eff_lo, eff_hi;
+    /* Split of eff_* into effects this fn PERFORMS vs HANDLES, and its colored
+     * call graph -- backing the call-path taint (below).  `edges` is a bitset
+     * over g_ents indices of directly-called colored peers; `edges_all` marks a
+     * fn that makes an indirect/over-cap call (conservatively reaches every
+     * colored peer). */
+    uint64_t perf_lo, perf_hi;
+    uint64_t hand_lo, hand_hi;
+    uint64_t *edges;   /* NULL until the call graph is built (see ensure_S) */
+    bool      edges_all;
     /* G3b: a colored GENERIC template whose monomorphs are all CPS-admissible.
      * It sig-rejects itself (tyvar TY_APP) so in_s stays false and it is never
      * emitted directly, but while mono_template is true it does NOT taint its
@@ -1644,26 +1653,54 @@ static void mark_effect(const Symbol *eff, uint64_t *lo, uint64_t *hi) {
     else if (idx < 128) *hi |= (uint64_t)1 << (idx - 64);
 }
 
-/* Union into (*lo,*hi) the tags of every effect the *source* expression `e`
- * performs or handles, walking the raw Expr (not the CTerm).  The raw walk is
- * what makes co-classification sound: a `perform` / `handle` buried under a form
- * the CPS translator does not lower (e.g. `match`) is invisible in the CTerm
- * (it collapses to CT_UNSUPPORTED) but still emits a *fiber* effect op, so it
- * must taint the effect for any CPS peer.  It also covers UNCOLORED performers
- * (a function whose only control op is hidden from coloring never becomes a CPS
- * candidate, yet still fiber-performs), which the CTerm view cannot see at all.
+/* Accumulator for the raw-Expr effect/call walk.  `plo/phi` collect the tags of
+ * effects the expression *performs*; `hlo/hhi` collect the tags it *handles*
+ * (installs a prompt for).  When `callees` is non-NULL, every direct call's
+ * `fn_binding` is appended (deduped) up to `cap_callees`; an indirect call, or
+ * an overflow past the cap, sets `*callee_overflow` (the caller then treats the
+ * function as reaching every colored peer -- sound over-approximation).  The
+ * combined "performs-or-handles" wrapper aliases plo==hlo and phi==hhi. */
+typedef struct {
+    uint64_t *plo, *phi;      /* performed effects */
+    uint64_t *hlo, *hhi;      /* handled effects   */
+    const Binding **callees;  /* optional: direct-call bindings (deduped)      */
+    int       *n_callees;
+    int        cap_callees;
+    bool      *callee_overflow;
+} EffAcc;
+
+static void eff_acc_add_callee(EffAcc *acc, const Binding *b) {
+    if (!acc->callees) return;
+    if (!b) { if (acc->callee_overflow) *acc->callee_overflow = true; return; }
+    for (int k = 0; k < *acc->n_callees; k++)
+        if (acc->callees[k] == b) return;
+    if (*acc->n_callees < acc->cap_callees) acc->callees[(*acc->n_callees)++] = b;
+    else if (acc->callee_overflow) *acc->callee_overflow = true;
+}
+
+/* Walk the *source* expression `e`, recording (a) the effects it performs and
+ * handles, and (b) its direct callees -- both over the raw Expr (not the CTerm).
+ * The raw walk is what makes co-classification sound: a `perform` / `handle`
+ * buried under a form the CPS translator does not lower (e.g. `match`) is
+ * invisible in the CTerm (it collapses to CT_UNSUPPORTED) but still emits a
+ * *fiber* effect op, so it must taint the effect for any CPS peer.  It also
+ * covers UNCOLORED performers (a function whose only control op is hidden from
+ * coloring never becomes a CPS candidate, yet still fiber-performs), which the
+ * CTerm view cannot see at all.  The callee walk backs the call-path taint: an
+ * intermediary that neither performs nor handles E, but conducts a call from a
+ * CPS handler of E down to a CPS performer of E, is still a DK-chain link.
  *
  * Effects are dynamically scoped -- a `perform` and its `handle` must run on the
  * same machine (both DK, or both fiber) -- so this set is what the fixpoint
  * compares across every top-level function. */
-static void expr_collect_effects(const Expr *e, uint64_t *lo, uint64_t *hi) {
+static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
     if (!e) return;
-    #define REC(x) expr_collect_effects((x), lo, hi)
+    #define REC(x) expr_collect_effects_acc((x), acc)
     switch (e->kind) {
         /* --- the effect operations themselves --- */
         case EX_PERFORM:
             if (e->as.perform_.perform) {
-                mark_effect(e->as.perform_.perform->effect_name, lo, hi);
+                mark_effect(e->as.perform_.perform->effect_name, acc->plo, acc->phi);
                 for (uint32_t i = 0; i < e->as.perform_.perform->n_args; i++)
                     REC(e->as.perform_.perform->args[i]);
             }
@@ -1674,7 +1711,7 @@ static void expr_collect_effects(const Expr *e, uint64_t *lo, uint64_t *hi) {
                 HandleExpr *h = e->as.handle_.handle;
                 REC(h->body);
                 for (uint8_t i = 0; i < h->n_cases; i++) {
-                    mark_effect(h->cases[i].effect_name, lo, hi);
+                    mark_effect(h->cases[i].effect_name, acc->hlo, acc->hhi);
                     REC(h->cases[i].body);
                 }
             }
@@ -1702,6 +1739,12 @@ static void expr_collect_effects(const Expr *e, uint64_t *lo, uint64_t *hi) {
         case EX_DEF:   REC(e->as.def_.init); return;
         case EX_BUILTIN: for (uint32_t i = 0; i < e->as.builtin.n; i++) REC(e->as.builtin.args[i]); return;
         case EX_CALL:
+            /* Direct call -> record the callee; indirect call -> overflow (may
+             * reach any colored peer).  fn_expr is NULL for a resolved direct
+             * call, non-NULL only for the indirect/higher-order case. */
+            if (e->as.call_.fn_binding) eff_acc_add_callee(acc, e->as.call_.fn_binding);
+            else if (e->as.call_.fn_expr && acc->callees && acc->callee_overflow)
+                *acc->callee_overflow = true;
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) REC(e->as.call_.args[i]);
             REC(e->as.call_.fn_expr); REC(e->as.call_.dict_arg); return;
         case EX_RETURN: REC(e->as.return_.value); return;
@@ -1820,6 +1863,13 @@ static void expr_collect_effects(const Expr *e, uint64_t *lo, uint64_t *hi) {
     #undef REC
 }
 
+/* Combined "performs-or-handles" effect set (no callee collection) -- the shape
+ * every existing caller uses.  Perform and handle tags fold into the same set. */
+static void expr_collect_effects(const Expr *e, uint64_t *lo, uint64_t *hi) {
+    EffAcc acc = { lo, hi, lo, hi, NULL, NULL, 0, NULL };
+    expr_collect_effects_acc(e, &acc);
+}
+
 /* G3b: is `fd` a colored GENERIC whose EVERY monomorph spec is CPS-admissible
  * (concrete signature ok + body core)?  Enumerated from the complete spec set
  * (ctx->abi_specializations, populated by the pre-emit scan before ensure_S).
@@ -1842,6 +1892,54 @@ static bool mono_template_all_admissible(EmitCtx *ctx, const FnDef *fd, CTerm *t
         if (!ok) return false;
     }
     return any;
+}
+
+/* Bitset helpers over g_ents indices (word = index>>6, bit = index&63). */
+static inline bool ent_bit(const uint64_t *bs, size_t i) {
+    return (bs[i >> 6] >> (i & 63)) & 1u;
+}
+static inline void ent_bit_set(uint64_t *bs, size_t i) {
+    bs[i >> 6] |= (uint64_t)1 << (i & 63);
+}
+
+/* Forward transitive closure over the colored call graph: grow `set` to every
+ * entry reachable from a seed via `edges` (or everything, once an `edges_all`
+ * conduit is reached).  Monotone; iterates to a fixed point. */
+static void reach_forward(uint64_t *set, size_t n, size_t nwords) {
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (size_t i = 0; i < n; i++) {
+            if (!ent_bit(set, i)) continue;
+            if (g_ents[i].edges_all) {
+                for (size_t j = 0; j < n; j++)
+                    if (!ent_bit(set, j)) { ent_bit_set(set, j); changed = true; }
+            } else if (g_ents[i].edges) {
+                for (size_t w = 0; w < nwords; w++) {
+                    uint64_t add = g_ents[i].edges[w] & ~set[w];
+                    if (add) { set[w] |= add; changed = true; }
+                }
+            }
+        }
+    }
+}
+
+/* Backward transitive closure: grow `set` (seeded with the performers) to every
+ * entry that can reach one of them -- an entry with a direct edge into `set`, or
+ * one that calls indirectly (`edges_all`, so it reaches any performer). */
+static void reach_backward(uint64_t *set, size_t n, size_t nwords) {
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (size_t j = 0; j < n; j++) {
+            if (ent_bit(set, j)) continue;
+            bool reaches = g_ents[j].edges_all;
+            if (!reaches && g_ents[j].edges)
+                for (size_t w = 0; w < nwords && !reaches; w++)
+                    if (g_ents[j].edges[w] & set[w]) reaches = true;
+            if (reaches) { ent_bit_set(set, j); changed = true; }
+        }
+    }
 }
 
 static void ensure_S(const Expr *program) {
@@ -1907,8 +2005,14 @@ static void ensure_S(const Expr *program) {
                 g_ents[g_ents_n].term = t;
                 g_ents[g_ents_n].in_s = candidate;
                 g_ents[g_ents_n].mono_template = mono_tmpl;
-                g_ents[g_ents_n].eff_lo = g_ents[g_ents_n].eff_hi = 0;
-                expr_collect_effects(fd->body, &g_ents[g_ents_n].eff_lo, &g_ents[g_ents_n].eff_hi);
+                SEnt *en = &g_ents[g_ents_n];
+                en->perf_lo = en->perf_hi = en->hand_lo = en->hand_hi = 0;
+                en->edges = NULL; en->edges_all = false;
+                EffAcc acc = { &en->perf_lo, &en->perf_hi,
+                               &en->hand_lo, &en->hand_hi, NULL, NULL, 0, NULL };
+                expr_collect_effects_acc(fd->body, &acc);
+                en->eff_lo = en->perf_lo | en->hand_lo;
+                en->eff_hi = en->perf_hi | en->hand_hi;
                 g_ents_n++;
                 continue;
             }
@@ -1920,13 +2024,71 @@ static void ensure_S(const Expr *program) {
         expr_collect_effects(it, &base_lo, &base_hi);
     }
 
+    /* Build the colored call graph backing the call-path taint.  Each entry's
+     * `edges` bitset names the directly-called colored peers; `edges_all` marks
+     * an entry whose body makes an indirect / over-cap call (conservatively
+     * reaching every colored peer). */
+    size_t nwords = (g_ents_n + 63) / 64;
+    if (nwords == 0) nwords = 1;
+    for (size_t i = 0; i < g_ents_n; i++) {
+        g_ents[i].edges = (uint64_t *)arena_alloc(&g_arena, nwords * sizeof(uint64_t));
+        memset(g_ents[i].edges, 0, nwords * sizeof(uint64_t));
+        g_ents[i].edges_all = false;
+        if (!g_ents[i].fd || !g_ents[i].fd->body) continue;
+        enum { CALLEE_CAP = 256 };
+        const Binding *cbuf[CALLEE_CAP];
+        int ncb = 0; bool overflow = false;
+        uint64_t scratch_lo = 0, scratch_hi = 0;
+        EffAcc acc = { &scratch_lo, &scratch_hi, &scratch_lo, &scratch_hi,
+                       cbuf, &ncb, CALLEE_CAP, &overflow };
+        expr_collect_effects_acc(g_ents[i].fd->body, &acc);
+        g_ents[i].edges_all = overflow;
+        for (int k = 0; k < ncb; k++)
+            for (size_t j = 0; j < g_ents_n; j++)
+                if (g_ents[j].bind == cbuf[k]) { ent_bit_set(g_ents[i].edges, j); break; }
+    }
+
+    /* Precompute, per effect bit, the CALL-PATH node set: entries that lie on a
+     * call path from a colored handler of the effect down to a colored performer
+     * of it (forward-reachable from a handler AND backward-reachable to a
+     * performer).  Fixed across the fixpoint -- only whether a node is currently a
+     * fallback changes.  NULL for bits with no handler/performer pairing. */
+    uint64_t *path_nodes[CPS_MAX_EFFECTS];
+    for (int b = 0; b < CPS_MAX_EFFECTS; b++) {
+        path_nodes[b] = NULL;
+        uint64_t bl = (b < 64) ? ((uint64_t)1 << b) : 0;
+        uint64_t bh = (b < 64) ? 0 : ((uint64_t)1 << (b - 64));
+        bool has_h = false, has_p = false;
+        for (size_t i = 0; i < g_ents_n && !(has_h && has_p); i++) {
+            if ((g_ents[i].hand_lo & bl) || (g_ents[i].hand_hi & bh)) has_h = true;
+            if ((g_ents[i].perf_lo & bl) || (g_ents[i].perf_hi & bh)) has_p = true;
+        }
+        if (!has_h || !has_p) continue;
+        uint64_t *fwd = (uint64_t *)arena_alloc(&g_arena, nwords * sizeof(uint64_t));
+        uint64_t *bwd = (uint64_t *)arena_alloc(&g_arena, nwords * sizeof(uint64_t));
+        memset(fwd, 0, nwords * sizeof(uint64_t));
+        memset(bwd, 0, nwords * sizeof(uint64_t));
+        for (size_t i = 0; i < g_ents_n; i++) {
+            if ((g_ents[i].hand_lo & bl) || (g_ents[i].hand_hi & bh)) ent_bit_set(fwd, i);
+            if ((g_ents[i].perf_lo & bl) || (g_ents[i].perf_hi & bh)) ent_bit_set(bwd, i);
+        }
+        reach_forward(fwd, g_ents_n, nwords);
+        reach_backward(bwd, g_ents_n, nwords);
+        for (size_t w = 0; w < nwords; w++) fwd[w] &= bwd[w];  /* path = F & B */
+        path_nodes[b] = fwd;
+    }
+
     /* Fixpoint (monotone -- only removals, so it converges):
      *   Rule A: drop any candidate that needs a heap-reified join.
      *   Rule B: co-classify effects.  An effect is "tainted" if it is touched by
      *           base_taint (never-CPS code) or by any function NOT in S; evict
      *           every in-S function that touches a tainted effect, so a
      *           performer and its handler are never split across the DK and
-     *           fiber machines (which do not interoperate). */
+     *           fiber machines (which do not interoperate).
+     *   Rule C: call-path taint.  If any call-path node between a colored handler
+     *           of E and a colored performer of E is a genuine fallback, the DK
+     *           chain is severed at that cps->direct frame -- taint E so the
+     *           handler + performer fall back coherently with the conduit. */
     bool changed = true;
     while (changed) {
         changed = false;
@@ -1943,6 +2105,22 @@ static void ensure_S(const Expr *program) {
         for (size_t i = 0; i < g_ents_n; i++) {
             if (!g_ents[i].in_s && !g_ents[i].mono_template) {
                 taint_lo |= g_ents[i].eff_lo; taint_hi |= g_ents[i].eff_hi;
+            }
+        }
+        /* Rule C: taint an effect whose handler->performer call path routes through
+         * a genuine fallback intermediary (severed DK chain). */
+        for (int b = 0; b < CPS_MAX_EFFECTS; b++) {
+            if (!path_nodes[b]) continue;
+            bool already = (b < 64) ? ((taint_lo >> b) & 1)
+                                    : ((taint_hi >> (b - 64)) & 1);
+            if (already) continue;
+            for (size_t i = 0; i < g_ents_n; i++) {
+                if (!ent_bit(path_nodes[b], i)) continue;
+                if (!g_ents[i].in_s && !g_ents[i].mono_template) {
+                    if (b < 64) taint_lo |= (uint64_t)1 << b;
+                    else        taint_hi |= (uint64_t)1 << (b - 64);
+                    break;
+                }
             }
         }
         for (size_t i = 0; i < g_ents_n; i++) {
