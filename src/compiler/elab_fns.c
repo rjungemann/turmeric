@@ -545,10 +545,9 @@ static bool fn_type_is_carrier_safe(const Type *ft) {
     if (!fn_kind_is_carrier_scalar(ft->as.fn.result_kind)) return false;
     for (uint8_t i = 0; i < ft->as.fn.arity; i++) {
         if (!fn_kind_is_carrier_scalar(ft->as.fn.arg_kinds[i])) return false;
-        if (ft->as.fn.arg_linear[i] || ft->as.fn.arg_unique[i] ||
-            ft->as.fn.arg_unique_mut[i] || ft->as.fn.arg_affine[i] ||
-            ft->as.fn.arg_relevant[i] || ft->as.fn.arg_borrow[i] ||
-            ft->as.fn.arg_fat[i])
+        if ((ft->as.fn.arg_flags[i] &
+             (FA_LINEAR | FA_UNIQUE | FA_UNIQUE_MUT | FA_AFFINE |
+              FA_RELEVANT | FA_BORROW | FA_FAT)) != 0)
             return false;
     }
     return true;
@@ -1791,6 +1790,15 @@ Expr *elab_defn(Elab *e, const Form *call) {
             /* params is arena-allocated, no need to free */
             return NULL;
         }
+        /* arbitrary-fn-arity Phase 6: exceeding the historical soft ceiling of
+         * 16 positional params is a lint nudge, not an error.  Fire once, on the
+         * 17th positional param. */
+        if (n_params == HIGH_ARITY_SOFT_LIMIT) {
+            diag_emit_with_code(DIAG_WARNING, p->span, TUR_W0041_HIGH_ARITY,
+                      "defn has more than %d positional parameters; prefer a defstruct "
+                      "options value or a '& rest :type' variadic (see the Function "
+                      "Arity Style Guide)", HIGH_ARITY_SOFT_LIMIT);
+        }
         /* For phase 2, default to int */
         param_kinds[n_params] = TY_INT;
         Binding *b = binding_new(e, p->as.sym, TYPE_INT, false, false, p->span);
@@ -2307,10 +2315,10 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * to the final fn_type below.  Without this a self-call would fall back to
          * the generic int64/void* arg cast and miscompile (aggregate-as-integer). */
         for (uint8_t _ei = 0; _ei < n_params; _ei++) {
-            existing->type.as.fn.arg_poly_fn[_ei] =
+            FN_ARG_SET(existing->type.as.fn, _ei, FA_POLY_FN,
                 params[_ei]->is_poly_fn &&
                 (params[_ei]->poly_type == NULL ||
-                 params[_ei]->poly_type->kind == TY_FN);
+                 params[_ei]->poly_type->kind == TY_FN));
         }
         /* A#1 (recursion): propagate the ^fat param markers early too, so a
          * *recursive* call inside the body that passes a :ptr<void> fat box
@@ -2320,7 +2328,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * rejects the argument with a spurious "(fn []), got ptr<void>" mismatch.
          * Mirrors the final fn_type.arg_fat / result_fat assignment below. */
         for (uint8_t _ei = 0; _ei < n_params; _ei++) {
-            existing->type.as.fn.arg_fat[_ei] = params[_ei]->is_fat;
+            FN_ARG_SET(existing->type.as.fn, _ei, FA_FAT, params[_ei]->is_fat);
         }
         existing->type.as.fn.result_fat = result_fat;
         /* LB1 (recursion): propagate the ^borrow param markers early too, so a
@@ -2336,13 +2344,13 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * complete discipline signature, mirroring the final fn_type assignment
          * below. */
         for (uint8_t _ei = 0; _ei < n_params; _ei++) {
-            existing->type.as.fn.arg_borrow[_ei]     = params[_ei]->is_borrow;
-            existing->type.as.fn.arg_linear[_ei]     = params[_ei]->is_linear;
-            existing->type.as.fn.arg_affine[_ei]     = params[_ei]->is_affine;
-            existing->type.as.fn.arg_relevant[_ei]   = params[_ei]->is_relevant;
-            existing->type.as.fn.arg_unique[_ei]     = params[_ei]->is_unique;
-            existing->type.as.fn.arg_unique_mut[_ei] = params[_ei]->is_unique &&
-                                                       params[_ei]->is_mut;
+            FN_ARG_SET(existing->type.as.fn, _ei, FA_BORROW,     params[_ei]->is_borrow);
+            FN_ARG_SET(existing->type.as.fn, _ei, FA_LINEAR,     params[_ei]->is_linear);
+            FN_ARG_SET(existing->type.as.fn, _ei, FA_AFFINE,     params[_ei]->is_affine);
+            FN_ARG_SET(existing->type.as.fn, _ei, FA_RELEVANT,   params[_ei]->is_relevant);
+            FN_ARG_SET(existing->type.as.fn, _ei, FA_UNIQUE,     params[_ei]->is_unique);
+            FN_ARG_SET(existing->type.as.fn, _ei, FA_UNIQUE_MUT, params[_ei]->is_unique &&
+                                                                 params[_ei]->is_mut);
         }
         /* RR1 (recursion): propagate the *result* shape early too.  Without
          * this, a recursive self-call inside the body reads the stale pass-1
@@ -3186,7 +3194,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
         if (any_linear) {
             for (uint8_t i = 0; i < n_params; i++) {
-                fn_type.as.fn.arg_linear[i] = params[i]->is_linear;
+                FN_ARG_SET(fn_type.as.fn, i, FA_LINEAR, params[i]->is_linear);
             }
         }
     }
@@ -3199,7 +3207,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
         if (any_unique) {
             for (uint8_t i = 0; i < n_params; i++) {
-                fn_type.as.fn.arg_unique[i] = params[i]->is_unique;
+                FN_ARG_SET(fn_type.as.fn, i, FA_UNIQUE, params[i]->is_unique);
             }
         }
     }
@@ -3211,7 +3219,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
         if (any_unique_mut) {
             for (uint8_t i = 0; i < n_params; i++) {
-                fn_type.as.fn.arg_unique_mut[i] = params[i]->is_unique && params[i]->is_mut;
+                FN_ARG_SET(fn_type.as.fn, i, FA_UNIQUE_MUT, params[i]->is_unique && params[i]->is_mut);
             }
         }
     }
@@ -3223,7 +3231,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
         if (any_affine) {
             for (uint8_t i = 0; i < n_params; i++) {
-                fn_type.as.fn.arg_affine[i] = params[i]->is_affine;
+                FN_ARG_SET(fn_type.as.fn, i, FA_AFFINE, params[i]->is_affine);
             }
         }
     }
@@ -3235,7 +3243,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
         if (any_relevant) {
             for (uint8_t i = 0; i < n_params; i++) {
-                fn_type.as.fn.arg_relevant[i] = params[i]->is_relevant;
+                FN_ARG_SET(fn_type.as.fn, i, FA_RELEVANT, params[i]->is_relevant);
             }
         }
     }
@@ -3248,7 +3256,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
         if (any_borrow) {
             for (uint8_t i = 0; i < n_params; i++) {
-                fn_type.as.fn.arg_borrow[i] = params[i]->is_borrow;
+                FN_ARG_SET(fn_type.as.fn, i, FA_BORROW, params[i]->is_borrow);
             }
         }
     }
@@ -3261,7 +3269,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
         if (any_fat) {
             for (uint8_t i = 0; i < n_params; i++) {
-                fn_type.as.fn.arg_fat[i] = params[i]->is_fat;
+                FN_ARG_SET(fn_type.as.fn, i, FA_FAT, params[i]->is_fat);
             }
         }
     }
@@ -3275,7 +3283,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
         if (params[i]->is_poly_fn &&
             (params[i]->poly_type == NULL ||
              params[i]->poly_type->kind == TY_FN)) {
-            fn_type.as.fn.arg_poly_fn[i] = true;
+            FN_ARG_SET(fn_type.as.fn, i, FA_POLY_FN, true);
         }
     }
     /* A#1 (return position): propagate the ^fat result marker into fn_type so
@@ -3824,6 +3832,13 @@ Expr *elab_fn(Elab *e, const Form *call) {
             /* params is arena-allocated, no need to free */
             return NULL;
         }
+        /* arbitrary-fn-arity Phase 6: lint nudge past the historical 16 cap. */
+        if (n_params == HIGH_ARITY_SOFT_LIMIT) {
+            diag_emit_with_code(DIAG_WARNING, p->span, TUR_W0041_HIGH_ARITY,
+                      "fn has more than %d positional parameters; prefer a defstruct "
+                      "options value or a '& rest :type' variadic (see the Function "
+                      "Arity Style Guide)", HIGH_ARITY_SOFT_LIMIT);
+        }
         /* Untyped fn params preserve the existing int default. */
         param_kinds[n_params] = TY_INT;
         Binding *b = binding_new(e, p->as.sym, TYPE_INT, false, false, p->span);
@@ -4261,7 +4276,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
         }
         if (any_fat) {
             for (uint8_t i = 0; i < n_params; i++) {
-                fn_type.as.fn.arg_fat[i] = params[i]->is_fat;
+                FN_ARG_SET(fn_type.as.fn, i, FA_FAT, params[i]->is_fat);
             }
         }
     }
@@ -4273,7 +4288,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
         if (params[i]->is_poly_fn &&
             (params[i]->poly_type == NULL ||
              params[i]->poly_type->kind == TY_FN)) {
-            fn_type.as.fn.arg_poly_fn[i] = true;
+            FN_ARG_SET(fn_type.as.fn, i, FA_POLY_FN, true);
         }
     }
     /* LB1: propagate ^borrow param flags into the lambda's fn_type. */
@@ -4284,7 +4299,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
         }
         if (any_borrow) {
             for (uint8_t i = 0; i < n_params; i++) {
-                fn_type.as.fn.arg_borrow[i] = params[i]->is_borrow;
+                FN_ARG_SET(fn_type.as.fn, i, FA_BORROW, params[i]->is_borrow);
             }
         }
     }
@@ -4435,7 +4450,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
          * consumer (slot-0 read of code bytes -> SEGV).  arg_full_types above is
          * shifted for exactly the same reason; arg_fat must travel with it. */
         for (uint8_t i = 0; i < n_params; i++) {
-            new_fn_type.as.fn.arg_fat[i + 1] = b->type.as.fn.arg_fat[i];
+            FN_ARG_SET(new_fn_type.as.fn, i + 1, FA_FAT, FN_ARG_FLAG(b->type.as.fn, i, FA_FAT));
         }
         new_fn_type.as.fn.result_fat = b->type.as.fn.result_fat;
         b->type = new_fn_type;
@@ -4693,7 +4708,7 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
     Type fn_type = type_fn(param_kinds, n_params, return_kind);
     /* A#1: propagate ^fat parameter flags into the fn type for call-site shimming. */
     for (uint8_t i = 0; i < n_params; i++) {
-        if (params[i]->is_fat) fn_type.as.fn.arg_fat[i] = true;
+        if (params[i]->is_fat) FN_ARG_SET(fn_type.as.fn, i, FA_FAT, true);
     }
 
     /* Create a binding for the extern-c function so it can be looked up and called */

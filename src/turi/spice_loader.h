@@ -22,8 +22,12 @@ extern "C" {
 
 /* Maximum positional arity tracked per export. Mirrors MAX_FN_ARITY in
  * the compiler; defns with more positional args are rejected by the
- * elaborator long before this loader sees them. */
-#define TUR_SPICE_MAX_ARITY 16
+ * elaborator long before this loader sees them.  Raised to 64 alongside
+ * MAX_FN_ARITY (arbitrary-fn-arity Phase 1).  The exports.manifest arg-class
+ * string is naturally variable-length, so a manifest whose export exceeds this
+ * bound is cleanly rejected (parse returns -1) rather than misread -- see
+ * spice_loader.c.  A fully version-gated variable-length descriptor is Phase 4. */
+#define TUR_SPICE_MAX_ARITY 64
 
 /* One row from exports.manifest, post-parse. The dispatcher class chars
  * use the encoding shared with src/runtime/ffi_dispatch.h:

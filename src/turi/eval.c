@@ -87,10 +87,10 @@
 /* T1: language-wide function/effect arity cap (mirrors MAX_FN_ARITY in
  * compiler/types.h).  Used as a fixed inline buffer size where the arity is
  * provably bounded -- closure-application TCO buffers and effect-perform args --
- * so those scratch arrays drop from MAX_EVAL_ARGS (1 KB) to 256 B with no heap
- * spill.  A defensive guard rejects anything above it (unreachable for
- * elaboration-checked programs). */
-#define EVAL_MAX_FN_ARITY 16
+ * so those scratch arrays stay a fixed size with no heap spill.  A defensive
+ * guard rejects anything above it (unreachable for elaboration-checked
+ * programs).  Raised to 64 alongside MAX_FN_ARITY (arbitrary-fn-arity Phase 1). */
+#define EVAL_MAX_FN_ARITY 64  /* mirrors MAX_FN_ARITY (arbitrary-fn-arity Phase 1) */
 
 /* -------------------------------------------------------------------------
  * Internal closure representation

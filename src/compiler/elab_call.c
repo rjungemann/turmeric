@@ -1057,7 +1057,7 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
                     Type *aft = tmp_b->type.as.fn.arg_full_types[ai];
                     if ((aft && aft->kind == TY_FN && !aft->as.fn.cfnptr) ||
                         (!aft && tmp_b->type.as.fn.arg_kinds[ai] == TY_FN))
-                        tmp_b->type.as.fn.arg_fat[ai] = true;
+                        FN_ARG_SET(tmp_b->type.as.fn, ai, FA_FAT, true);
                 }
             }
         }
@@ -3367,10 +3367,7 @@ static Expr *try_eta_expand_generic_fn_arg(Elab *e, const Form *arg_form,
      * excluded so the enclosing-generic case stays abstract. */
     bool pins_concrete = false;
     for (uint8_t k = 0; k < ar; k++) {
-        if (vt->as.fn.arg_linear[k] || vt->as.fn.arg_affine[k] ||
-            vt->as.fn.arg_borrow[k] || vt->as.fn.arg_unique[k] ||
-            vt->as.fn.arg_unique_mut[k] || vt->as.fn.arg_relevant[k] ||
-            vt->as.fn.arg_fat[k] || vt->as.fn.arg_poly_fn[k])
+        if (vt->as.fn.arg_flags[k] != 0)  /* any per-arg ownership/cc marker set */
             return NULL;
         const Type *gt = vt->as.fn.arg_full_types[k];
         const Type *ct = expected->as.fn.arg_full_types[k];
@@ -4166,7 +4163,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
              * parameter still rejects a bare :ptr<void>. */
             uint32_t fn_arg_idx_fp = fn_binding->closure_fn_binding ? i + 1 : i;
             if (fn_type.kind == TY_FN && fn_arg_idx_fp < fn_type.as.fn.arity &&
-                fn_type.as.fn.arg_fat[fn_arg_idx_fp]) {
+                FN_ARG_FLAG(fn_type.as.fn, fn_arg_idx_fp, FA_FAT)) {
                 arg_ok = true;
             }
         }
@@ -4712,7 +4709,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         if (!is_rank2_param && fn_type.kind == TY_FN) {
             uint32_t fn_arg_idx_pf = fn_binding->closure_fn_binding ? i + 1 : i;
             if (fn_arg_idx_pf < fn_type.as.fn.arity &&
-                fn_type.as.fn.arg_poly_fn[fn_arg_idx_pf]) {
+                FN_ARG_FLAG(fn_type.as.fn, fn_arg_idx_pf, FA_POLY_FN)) {
                 Binding *inner_fn_b = poly_arg_fn_binding(args[i]);
                 /* F5: a *typed* `:fn` carrier (the param's full type is a concrete
                  * TY_FN signature) stores a natively typed thunk -- make_poly_wrapper
@@ -4808,7 +4805,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         if (!is_rank2_param && fn_type.kind == TY_FN) {
             uint32_t fn_arg_idx_fat = fn_binding->closure_fn_binding ? i + 1 : i;
             if (fn_arg_idx_fat < fn_type.as.fn.arity &&
-                fn_type.as.fn.arg_fat[fn_arg_idx_fat]) {
+                FN_ARG_FLAG(fn_type.as.fn, fn_arg_idx_fat, FA_FAT)) {
                 /* fat-closure-ascription: an *already-fat* closure value that is
                  * carried as a one-word :int/:ptr<void> (e.g. a list-head result,
                  * or a handler threaded around as :int) and ascribed to a (fn ...)
@@ -4943,7 +4940,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
 
         /* UT1: TUR_E0200 -- reject aliased value passed to ^unique parameter */
         if (fn_type.kind == TY_FN &&
-            i < fn_type.as.fn.arity && fn_type.as.fn.arg_unique[i] &&
+            i < fn_type.as.fn.arity && FN_ARG_FLAG(fn_type.as.fn, i, FA_UNIQUE) &&
             args[i]->kind == EX_VAR) {
             Binding *arg_b = args[i]->as.var.binding;
             if (arg_b->alias_state == AS_ALIASED) {
@@ -4966,7 +4963,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
          * A ^unique ^mut parameter requires exclusive mutable access; any live borrow
          * (&T or &mut T) on the same binding would violate that guarantee. */
         if (fn_type.kind == TY_FN &&
-            i < fn_type.as.fn.arity && fn_type.as.fn.arg_unique_mut[i] &&
+            i < fn_type.as.fn.arity && FN_ARG_FLAG(fn_type.as.fn, i, FA_UNIQUE_MUT) &&
             args[i]->kind == EX_VAR) {
             Binding *arg_b = args[i]->as.var.binding;
             if (scope_borrow_conflicts(e->scope, arg_b, BK_MUT)) {
@@ -4989,7 +4986,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         if (args[i]->kind == EX_VAR && type_is_move(args[i]->as.var.binding->type)) {
             Binding *arg_b2 = args[i]->as.var.binding;
             bool param_is_unique_mut = fn_type.kind == TY_FN &&
-                i < fn_type.as.fn.arity && fn_type.as.fn.arg_unique_mut[i];
+                i < fn_type.as.fn.arity && FN_ARG_FLAG(fn_type.as.fn, i, FA_UNIQUE_MUT);
             bool arg_is_unique_mut = arg_b2->is_unique && arg_b2->is_mut;
             /* LB1: a ^borrow parameter reads its argument without taking
              * ownership, so it must NOT move (poison) the binding -- otherwise a
@@ -5001,7 +4998,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             if (fn_type.kind == TY_FN) {
                 uint32_t fn_borrow_idx = fn_binding->closure_fn_binding ? i + 1 : i;
                 if (fn_borrow_idx < fn_type.as.fn.arity)
-                    param_is_borrow = fn_type.as.fn.arg_borrow[fn_borrow_idx];
+                    param_is_borrow = FN_ARG_FLAG(fn_type.as.fn, fn_borrow_idx, FA_BORROW);
             }
             if (!param_is_unique_mut && !arg_is_unique_mut && !param_is_borrow) {
                 binding_mark_moved(arg_b2, args[i]->span);
@@ -5019,7 +5016,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         if (args[i]->kind == EX_VAR && fn_type.kind == TY_FN) {
             uint32_t fn_borrow_idx = fn_binding->closure_fn_binding ? i + 1 : i;
             if (fn_borrow_idx < fn_type.as.fn.arity &&
-                    fn_type.as.fn.arg_borrow[fn_borrow_idx]) {
+                    FN_ARG_FLAG(fn_type.as.fn, fn_borrow_idx, FA_BORROW)) {
                 Binding *arg_b3 = args[i]->as.var.binding;
                 if (arg_b3->is_linear) {
                     arg_b3->is_linear_consumed = false;
@@ -5344,7 +5341,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         fn_binding->type.kind == TY_FN) {
         for (uint32_t i = 0; i < n_args; i++) {
             if (i >= fn_binding->type.as.fn.arity ||
-                !fn_binding->type.as.fn.arg_fat[i])
+                !FN_ARG_FLAG(fn_binding->type.as.fn, i, FA_FAT))
                 continue;
             TypeKind rk = bare_fat_arg_result_kind(args[i]);
             if (rk != TY_UNKNOWN) {
@@ -5777,25 +5774,13 @@ static bool convert_mapper_to_dict_closure(Elab *e, Expr *pw, FnDef *M,
     Type new_ty = mapper_ty;
     new_ty.as.fn.arity = new_np;
     for (uint8_t i = old_arity; i >= 1; i--) {
-        new_ty.as.fn.arg_kinds[i]      = new_ty.as.fn.arg_kinds[i - 1];
-        new_ty.as.fn.arg_linear[i]     = new_ty.as.fn.arg_linear[i - 1];
-        new_ty.as.fn.arg_unique[i]     = new_ty.as.fn.arg_unique[i - 1];
-        new_ty.as.fn.arg_unique_mut[i] = new_ty.as.fn.arg_unique_mut[i - 1];
-        new_ty.as.fn.arg_affine[i]     = new_ty.as.fn.arg_affine[i - 1];
-        new_ty.as.fn.arg_relevant[i]   = new_ty.as.fn.arg_relevant[i - 1];
-        new_ty.as.fn.arg_borrow[i]     = new_ty.as.fn.arg_borrow[i - 1];
-        new_ty.as.fn.arg_fat[i]        = new_ty.as.fn.arg_fat[i - 1];
-        new_ty.as.fn.arg_poly_fn[i]    = new_ty.as.fn.arg_poly_fn[i - 1];
+        new_ty.as.fn.arg_kinds[i] = new_ty.as.fn.arg_kinds[i - 1];
+        /* One packed byte carries every per-arg flag, so the whole flag set
+         * shifts up in a single move (was eight parallel bool-array shifts). */
+        new_ty.as.fn.arg_flags[i] = new_ty.as.fn.arg_flags[i - 1];
     }
-    new_ty.as.fn.arg_kinds[0]      = TY_PTR_VOID;
-    new_ty.as.fn.arg_linear[0]     = false;
-    new_ty.as.fn.arg_unique[0]     = false;
-    new_ty.as.fn.arg_unique_mut[0] = false;
-    new_ty.as.fn.arg_affine[0]     = false;
-    new_ty.as.fn.arg_relevant[0]   = false;
-    new_ty.as.fn.arg_borrow[0]     = false;
-    new_ty.as.fn.arg_fat[0]        = false;
-    new_ty.as.fn.arg_poly_fn[0]    = false;
+    new_ty.as.fn.arg_kinds[0] = TY_PTR_VOID;
+    new_ty.as.fn.arg_flags[0] = 0;  /* env slot carries no per-arg markers */
     if (mapper_ty.as.fn.arg_full_types) {
         Type **shifted = (Type **)arena_alloc(e->arena, new_np * sizeof(Type *));
         shifted[0] = NULL;

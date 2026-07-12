@@ -276,7 +276,7 @@ int fn_type_subtype(Type actual, Type expected) {
     if (actual.kind != TY_FN || expected.kind != TY_FN) return 1;
     if (actual.as.fn.arity != expected.as.fn.arity) return 1; /* arity mismatch caught elsewhere */
     for (uint8_t i = 0; i < actual.as.fn.arity; i++) {
-        if (actual.as.fn.arg_linear[i] != expected.as.fn.arg_linear[i]) return 0;
+        if (FN_ARG_FLAG(actual.as.fn, i, FA_LINEAR) != FN_ARG_FLAG(expected.as.fn, i, FA_LINEAR)) return 0;
     }
     return 1;
 }

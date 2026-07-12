@@ -1,0 +1,16 @@
+;; fn-arity-20-partial -- partial application (auto-curry) of a 20-param defn.
+;; Binding the first 10 args produces a 10-arg closure that captures them; the
+;; closure is then saturated.  Exercises closure env capture at scale
+;; (arbitrary-fn-arity Phase 5).
+(extern-c printf [^cstr fmt ^int v] :int)
+
+(defn sum20 [a : int b : int c : int d : int e : int
+             f : int g : int h : int i : int j : int
+             k : int l : int m : int n : int o : int
+             p : int q : int r : int s : int t : int] : int
+  {a + b + c + d + e + f + g + h + i + j + k + l + m + n + o + p + q + r + s + t})
+
+(defn main [] : int
+  (let [add-tail (sum20 1 2 3 4 5 6 7 8 9 10)]
+    (printf "%lld\n" (add-tail 11 12 13 14 15 16 17 18 19 20)))
+  0)

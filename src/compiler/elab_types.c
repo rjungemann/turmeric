@@ -1521,7 +1521,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 }
                 if (any_lin) {
                     for (uint8_t i = 0; i < n_args; i++) {
-                        fn_t->as.fn.arg_linear[i] = arg_linear_local[i];
+                        FN_ARG_SET(fn_t->as.fn, i, FA_LINEAR, arg_linear_local[i]);
                     }
                 }
             }
@@ -1534,7 +1534,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 }
                 if (any_uniq) {
                     for (uint8_t i = 0; i < n_args; i++) {
-                        fn_t->as.fn.arg_unique[i] = arg_unique_local[i];
+                        FN_ARG_SET(fn_t->as.fn, i, FA_UNIQUE, arg_unique_local[i]);
                     }
                 }
             }
@@ -1547,7 +1547,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 }
                 if (any_uniq_mut) {
                     for (uint8_t i = 0; i < n_args; i++) {
-                        fn_t->as.fn.arg_unique_mut[i] = arg_unique_mut_local[i];
+                        FN_ARG_SET(fn_t->as.fn, i, FA_UNIQUE_MUT, arg_unique_mut_local[i]);
                     }
                 }
             }
@@ -1560,7 +1560,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 }
                 if (any_aff) {
                     for (uint8_t i = 0; i < n_args; i++) {
-                        fn_t->as.fn.arg_affine[i] = arg_affine_local[i];
+                        FN_ARG_SET(fn_t->as.fn, i, FA_AFFINE, arg_affine_local[i]);
                     }
                 }
             }
@@ -1573,7 +1573,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 }
                 if (any_rel) {
                     for (uint8_t i = 0; i < n_args; i++) {
-                        fn_t->as.fn.arg_relevant[i] = arg_relevant_local[i];
+                        FN_ARG_SET(fn_t->as.fn, i, FA_RELEVANT, arg_relevant_local[i]);
                     }
                 }
             }

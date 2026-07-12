@@ -25,7 +25,7 @@ typedef struct {
     const char *clone_name;          /* unique mangled clone name */
     const char *fn_symbol;           /* binding name to look up in owner module */
     TypeKind    result_kind;
-    TypeKind    arg_kinds[16];       /* MAX_FN_ARITY */
+    TypeKind    arg_kinds[MAX_FN_ARITY];
     uint8_t     n_args;
 } ForcedAbiSpec;
 
@@ -38,7 +38,7 @@ typedef struct {
     char       *owning_module;       /* malloc'd (strdup of binding->defining_module_name) */
     char       *fn_symbol;           /* malloc'd (strdup of binding->name->name) */
     TypeKind    result_kind;
-    TypeKind    arg_kinds[16];
+    TypeKind    arg_kinds[MAX_FN_ARITY];
     uint8_t     n_args;
 } BorrowSpecInfo;
 

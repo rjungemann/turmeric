@@ -1,7 +1,29 @@
 # Functions with arbitrary parameter count (raising / removing MAX_FN_ARITY)
 
-**Status:** Proposed (not started). Lifts the hard `MAX_FN_ARITY = 16` cap so a
-function may declare any number of positional parameters. The cap is not an ABI
+**Status:** Partially landed. `MAX_FN_ARITY` is now **64** (was 16), the emit
+loops that were hard-capped at 16 are uncapped to `n_params`, the interpreter
+(`EVAL_MAX_FN_ARITY`) and spice-FFI (`TUR_SPICE_MAX_ARITY`) caps track it, and
+exceeding the historical 16 is a soft `TUR-W0041` lint nudge rather than a hard
+error (Phase 6). Crucially, `sizeof(Type)` was *reduced* below its pre-change
+value -- the eight inline `bool arg_*[MAX_FN_ARITY]` per-arg arrays were packed
+into one `uint8_t arg_flags[]` byte, and `arg_kinds` narrowed from the 4-byte
+`TypeKind` enum to `uint8_t` -- so raising the cap 4x carries no memory/stack
+regression (a naive constant bump tripled `Type` and overflowed the codegen's
+deep by-value-`Type` recursion; packing avoids that). Full suite green.
+
+**Remaining for truly unbounded arity:** the per-arg storage is still *inline*
+fixed-size arrays, so 64 is a hard mechanical bound. Reaching arbitrary
+(`uint32_t`-bounded) arity still needs the §2a restructure -- moving the packed
+per-arg record and `arg_kinds` out of line to arena-allocated pointers and
+widening `arity` to `uint32_t` -- plus the §2d spice-FFI descriptor *versioning*
+(the current cap raise is backward-compatible: an over-cap manifest is cleanly
+rejected, never misread, but a versioned variable-length descriptor is still
+future work). The 64-param ceiling covers realistic generated/interop code; the
+restructure removes the ceiling entirely.
+
+Lifts the hard `MAX_FN_ARITY` cap so a
+function may declare (up to 64, and eventually any number of) positional
+parameters. The cap is not an ABI
 limit -- emitted C functions already take an arbitrary number of parameters --
 it is an artifact of fixed-size inline arrays in the compiler's `Type`
 representation and fixed stack buffers in elaboration, emission, the interpreter,

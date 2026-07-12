@@ -4555,7 +4555,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     fn_binding->body_is_inline_c) {
                     uint8_t n_fnparams = fn_binding->type.as.fn.arity;
                     uint8_t param_idx = (i < n_fnparams) ? i : (uint32_t)(n_fnparams > 0 ? n_fnparams - 1 : 0);
-                    if (fn_binding->type.as.fn.arg_fat[param_idx])
+                    if (FN_ARG_FLAG(fn_binding->type.as.fn, param_idx, FA_FAT))
                         cast_to_void_ptr = false;
                 }
                 if (needs_fn_cast) {

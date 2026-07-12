@@ -527,7 +527,22 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
             return CK_MOVE;
     }
 }
-#define MAX_FN_ARITY 16
+/* Mechanical ceiling on positional fn parameters.  This is NOT an ABI limit
+ * (an emitted C function takes an arbitrary number of params); it bounds the
+ * fixed-size inline per-arg arrays in Type.as.fn and the fixed stack buffers in
+ * elaboration/emission/the interpreter.  Raised from the historical 16 to 64
+ * (arbitrary-fn-arity-plan Phase 1): generated code, macro expansions, and wide
+ * interop shims legitimately exceed 16.  Hand-written high-arity APIs remain a
+ * code smell -- exceeding 16 is a soft TUR-W0102 warning (Phase 6), not a hard
+ * error.  Phase 2 replaces these inline arrays with an arena-allocated FnArg
+ * record to lift the ceiling entirely; until then 64 is the hard bound. */
+#define MAX_FN_ARITY 64
+
+/* arbitrary-fn-arity Phase 6: the historical hard cap of 16.  Declaring more
+ * than this many positional params is no longer an error (the mechanical bound
+ * is MAX_FN_ARITY), but it emits the TUR-W0041 lint nudge toward the Function
+ * Arity Style Guide.  Keep <= MAX_FN_ARITY. */
+#define HIGH_ARITY_SOFT_LIMIT 16
 
 /* forall-dict-pass-multi-constraint-hkt-plan (Task 1.1): maximum number of
  * typeclass constraints carried on a single dict-clone frame -- one leading
@@ -562,7 +577,13 @@ typedef struct Type {
     uint8_t c_num_spelling;
     union {
         struct {
-            TypeKind arg_kinds[MAX_FN_ARITY];
+            /* Per-arg fast kind cache.  Stored as uint8_t (TypeKind has < 256
+             * enumerators) rather than the 4-byte enum so the inline array is
+             * a quarter the size -- every Type (fn or not) carries this union,
+             * so shrinking it shrinks all Types and keeps deep by-value-Type
+             * recursion (codegen's nested-let lowering) off the stack ceiling
+             * as MAX_FN_ARITY grows (arbitrary-fn-arity Phase 1). */
+            uint8_t arg_kinds[MAX_FN_ARITY];
             TypeKind result_kind;
             uint8_t arity;
             /* Future-proofing for v3 effects: effect row slot.
@@ -574,31 +595,27 @@ typedef struct Type {
              * arg_full_types[i] is NULL for monomorphic args, non-NULL for poly. */
             struct Type **arg_full_types;
             struct Type  *result_full_type; /* NULL or full result type for poly results */
-            bool arg_linear[MAX_FN_ARITY];     /* LT2: true if the i-th param is ^linear */
-            bool arg_unique[MAX_FN_ARITY];     /* UT0: true if the i-th param is ^unique */
-            bool arg_unique_mut[MAX_FN_ARITY]; /* UT2: true if the i-th param is ^unique ^mut */
-            bool arg_affine[MAX_FN_ARITY];     /* ST0: true if the i-th param is ^affine */
-            bool arg_relevant[MAX_FN_ARITY];   /* ST0: true if the i-th param is ^relevant */
-            /* LB1: true if the i-th param is ^borrow -- it reads its linear/affine
-             * argument without consuming it.  A linear binding passed to a ^borrow
-             * param is borrowed (the single-consumption obligation is preserved for
-             * a later consuming op).  Borrowing an already-consumed value is still a
-             * TUR-E0101.  See docs/reported/stdlib-linear-handle-borrows.md. */
-            bool arg_borrow[MAX_FN_ARITY];
-            /* A#1: true if the i-th param is ^fat -- it consumes its argument via
-             * the fat-closure calling convention (thunk = slot 0, env = the heap
-             * struct).  A bare non-capturing fn passed here is auto-shimmed into a
-             * fat closure at the call site (see EX_FN_TO_FAT); a non-fn argument is
-             * a typed error.  Distinguishes fat consumers (reactor cb, free-bind
-             * kont) from raw-C-callback params (hamt fn) that share the same kind. */
-            bool arg_fat[MAX_FN_ARITY];
-            /* Phase CCL (fn-first-class-application): true if the i-th param is a
-             * first-class `:fn` poly-closure carrier (tur_poly_fn_t {env, fn}),
-             * i.e. a hand-written `:fn` parameter outside a typeclass method.
-             * Distinct from a rank-2 forall (whose full type is carried in
-             * arg_full_types[i]); a function/lambda/closure argument is boxed
-             * into the carrier via EX_POLY_WRAP at the call site. */
-            bool arg_poly_fn[MAX_FN_ARITY];
+            /* Per-arg ownership/linearity/calling-convention markers, bit-packed
+             * into one byte per parameter (arbitrary-fn-arity Phase 1).  Formerly
+             * eight separate bool[MAX_FN_ARITY] arrays -- packing cuts the inline
+             * per-arg footprint from 8 bytes to 1, which (with the uint8_t
+             * arg_kinds above) keeps sizeof(Type) below its pre-64 value so the
+             * deep by-value-Type recursion in codegen stays off the stack ceiling.
+             * Read/written only through the FN_ARG_* accessors below -- never poke
+             * arg_flags[i] directly at call sites.  Flag meanings:
+             *   FA_LINEAR      LT2: the i-th param is ^linear
+             *   FA_UNIQUE      UT0: ^unique
+             *   FA_UNIQUE_MUT  UT2: ^unique ^mut
+             *   FA_AFFINE      ST0: ^affine
+             *   FA_RELEVANT    ST0: ^relevant
+             *   FA_BORROW      LB1: ^borrow -- reads a linear/affine arg without
+             *                  consuming it (see stdlib-linear-handle-borrows.md)
+             *   FA_FAT         A#1: consumes its arg via the fat-closure calling
+             *                  convention (thunk slot 0, env heap struct); a bare
+             *                  non-capturing fn is auto-shimmed (EX_FN_TO_FAT)
+             *   FA_POLY_FN     CCL: a first-class :fn poly-closure carrier
+             *                  (tur_poly_fn_t {env, fn}); boxed via EX_POLY_WRAP */
+            uint8_t arg_flags[MAX_FN_ARITY];
             /* A#1 (return position): true when the result type carries the
              * ^fat marker.  A bare non-capturing fn returned from this
              * function is auto-shimmed into a fat closure (EX_FN_TO_FAT) at
@@ -840,6 +857,31 @@ typedef struct Type {
         } generator_;
     } as;
 } Type;
+
+/* Per-arg flag bits packed into Type.as.fn.arg_flags[i] (see the field comment).
+ * Access ONLY through the FN_ARG_* accessors -- they keep the packing an
+ * implementation detail so call sites read/write named flags, not raw bits. */
+enum {
+    FA_LINEAR     = 1u << 0,
+    FA_UNIQUE     = 1u << 1,
+    FA_UNIQUE_MUT = 1u << 2,
+    FA_AFFINE     = 1u << 3,
+    FA_RELEVANT   = 1u << 4,
+    FA_BORROW     = 1u << 5,
+    FA_FAT        = 1u << 6,
+    FA_POLY_FN    = 1u << 7
+};
+
+/* Read a per-arg flag.  `fn` is a `Type.as.fn` lvalue, `i` the param index.
+ * Yields a bool (0/1). */
+#define FN_ARG_FLAG(fn, i, bit)  (((fn).arg_flags[(i)] & (uint8_t)(bit)) != 0)
+
+/* Set a per-arg flag to a bool value `v` (clears the bit when v is false). */
+#define FN_ARG_SET(fn, i, bit, v)                                             \
+    do {                                                                      \
+        if (v) (fn).arg_flags[(i)] |= (uint8_t)(bit);                         \
+        else   (fn).arg_flags[(i)] &= (uint8_t)~(uint8_t)(bit);               \
+    } while (0)
 
 /* CONV-S1 (defstruct-as-defadt): the runtime `any`-box tag for a type.  A
  * struct-origin lowered ADT boxes / casts / is?-tests as TY_STRUCT, so the
@@ -1223,14 +1265,10 @@ static inline Type type_fn(TypeKind arg_kinds[], uint8_t arity, TypeKind result_
     t.as.fn.effect_row = NULL;
     t.as.fn.arg_full_types = NULL;
     t.as.fn.result_full_type = NULL;
-    for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_linear[i] = false;
-    for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_unique[i] = false;
-    for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_unique_mut[i] = false;
-    for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_affine[i] = false;
-    for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_relevant[i] = false;
-    for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_borrow[i] = false;
-    for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_fat[i] = false;
-    for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_poly_fn[i] = false;  /* CCL: must initialise or UBSan fires on bool read (macOS miscompile) */
+    /* All per-arg flags default clear.  `Type t = {0}` already zeroed arg_flags;
+     * the explicit sweep documents the invariant and stays correct if the union
+     * initialiser ever changes. */
+    for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_flags[i] = 0;
     t.as.fn.result_fat = false;  /* A#1: must initialise or UBSan fires on bool read */
     t.as.fn.boxed = false;  /* CRU B-1: must initialise or UBSan fires on bool read */
     t.as.fn.cfnptr = false; /* typed-c-abi-function-pointers: default to a Turmeric closure type */

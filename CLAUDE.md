@@ -835,8 +835,12 @@ The doc panel in the web REPL calls `turi_doc_lookup(name)` (exported from
 
 ### Hard parameter limit
 
-`MAX_FN_ARITY` is **16**. Functions with more than ~5 positional parameters
-are a code smell; 16 is an emergency escape hatch, not a target.
+`MAX_FN_ARITY` is **64**. Functions with more than ~5 positional parameters
+are a code smell, and declaring more than **16** now emits the `TUR-W0041`
+lint nudge back to this guide -- 64 is an emergency escape hatch for generated
+code, macro expansions, and wide interop shims, not a target. Prefer a
+`defstruct` options value or a `& rest :type` variadic long before you get near
+it.
 
 ### More than 5 params -- reach for `defstruct`
 

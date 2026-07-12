@@ -2535,7 +2535,7 @@ static bool emit_group_member(EmitCtx *ctx, Buf *file, FnDef *fd, TypeKind resul
          * member's params. */
         uint8_t sv_npbp = ctx->n_pbp_params; ctx->n_pbp_params = 0;
         for (int m = 0; m < ng; m++)
-            for (uint8_t i = 0; i < group[m]->n_params && ctx->n_pbp_params < 16; i++) {
+            for (uint8_t i = 0; i < group[m]->n_params && ctx->n_pbp_params < MAX_FN_ARITY; i++) {
                 TypeKind k; const char *ct; bool aggr; bool ref;
                 if (gs_param_class(ctx, group[m]->param_types[i], &k, &ct, &aggr, &ref) && ref)
                     ctx->pbp_param_ptrs[ctx->n_pbp_params++] = group[m]->params[i];
@@ -3080,8 +3080,8 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * a pointer and produces the int64 carrier the call site expects.
      * No source-level annotation: the recognizer is purely structural.
      * See docs/reported/polymorphic-ok-fails-for-value-struct-payload.md. */
-    bool needs_box_spill[16];
-    for (uint8_t i = 0; i < 16; i++) needs_box_spill[i] = false;
+    bool needs_box_spill[MAX_FN_ARITY];
+    for (uint8_t i = 0; i < MAX_FN_ARITY; i++) needs_box_spill[i] = false;
     /* The box-spill recognizer keyed on a value-struct parameter (a Type of
      * kind TY_STRUCT).  No Type ever carries that kind now -- value records
      * lower to TY_ADT/TY_APP -- so the population never fired and has been
@@ -3098,10 +3098,10 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * only borrows it -- no free here.  Restricted to closures: a top-level fn
      * taking a wide by-value ADT uses the ordinary pass-by-ptr ABI, not the fat
      * carrier. */
-    bool needs_box_load[16];
-    for (uint8_t i = 0; i < 16; i++) needs_box_load[i] = false;
+    bool needs_box_load[MAX_FN_ARITY];
+    for (uint8_t i = 0; i < MAX_FN_ARITY; i++) needs_box_load[i] = false;
     if (fd->closure) {
-        for (uint8_t i = 0; i < fd->n_params && i < 16; i++) {
+        for (uint8_t i = 0; i < fd->n_params && i < MAX_FN_ARITY; i++) {
             if (fd->params[i]->is_poly_fn ||
                 fd->param_types[i].kind == TY_FN) continue;
             Type pty = use_abi_spec
@@ -3115,7 +3115,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     for (uint8_t i = 0; i < fd->n_params; i++) {
         if (i > 0) buf_puts(file, ", ");
         /* B4 slice 2: wide by-value ADT closure param arrives as int64 box ptr. */
-        if (i < 16 && needs_box_load[i]) {
+        if (i < MAX_FN_ARITY && needs_box_load[i]) {
             const char *pn = raw_name_for_binding(fd->params[i]);
             buf_printf(file, "int64_t __tur_b4box_%s", pn);
             free((void*)pn);
@@ -3217,7 +3217,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             }
         }
         const char *pn = raw_name_for_binding(fd->params[i]);
-        if (i < 16 && needs_box_spill[i]) {
+        if (i < MAX_FN_ARITY && needs_box_spill[i]) {
             /* Prereq 6: rename the parameter so the inline-C body's
              * `<orig>` identifier can be redeclared as a heap pointer
              * inside the function. */
@@ -3240,7 +3240,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * ADT closure param from its int64 heap box at entry -- deref + copy into
      * the by-value aggregate `<orig>` the body expects.  Borrow only: the box is
      * owned by the carrier node that produced it, so no free here. */
-    for (uint8_t i = 0; i < fd->n_params && i < 16; i++) {
+    for (uint8_t i = 0; i < fd->n_params && i < MAX_FN_ARITY; i++) {
         if (!needs_box_load[i]) continue;
         Type pty = use_abi_spec
             ? ctx->current_abi_specialization->arg_types[i]
@@ -3333,7 +3333,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
          * cast their params via `(int64_t)(intptr_t)x`.  Stdlib has none,
          * but the safety net is cheap and future user code can rely on it. */
         {
-            for (uint8_t i = 0; i < fd->n_params && i < 16; i++) {
+            for (uint8_t i = 0; i < fd->n_params && i < MAX_FN_ARITY; i++) {
                 if (!needs_box_spill[i]) continue;
                 Type pty = ctx->current_abi_specialization->arg_types[i];
                 const char *ctype = emit_type_c_name(ctx, pty);
@@ -3400,7 +3400,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     uint8_t saved_n_pbp = ctx->n_pbp_params;
     ctx->n_pbp_params = 0;
     if (!fd->closure && !body_is_inline_c) {
-        for (uint8_t _pi = 0; _pi < fd->n_params && ctx->n_pbp_params < 16; _pi++) {
+        for (uint8_t _pi = 0; _pi < fd->n_params && ctx->n_pbp_params < MAX_FN_ARITY; _pi++) {
             Type pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[_pi])
                 ? *e->type.as.fn.arg_full_types[_pi] : fd->param_types[_pi];
             if (type_struct_pass_by_ptr(pty))

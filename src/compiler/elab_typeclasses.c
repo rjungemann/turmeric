@@ -3718,7 +3718,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
          * type so call sites auto-shim a bare function argument into a fat box
          * (the same arg_fat plumbing the regular defn path uses for `^fat`). */
         for (uint8_t j = 0; j < n_method_params; j++) {
-            if (method_params[j]->is_fat) fn_type.as.fn.arg_fat[j] = true;
+            if (method_params[j]->is_fat) FN_ARG_SET(fn_type.as.fn, j, FA_FAT, true);
         }
         /* Closure-returning instance methods: a method whose declared return
          * type is a function type (e.g. (arr-of [f] : (fn [:int] :int))) must
