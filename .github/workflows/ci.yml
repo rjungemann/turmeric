@@ -32,6 +32,26 @@ jobs:
       - name: Build
         run: cmake --build build -j
 
+      - name: Smoke check (tur --version must not hang)
+        run: |
+          # A fresh `tur --version` returns effectively instantly. If a startup
+          # regression ever makes it hang, catch it here under a tight timeout
+          # instead of stalling the whole job. `perl -e 'alarm ...'` is the
+          # portable timeout that works on both Linux and macOS runners
+          # (macOS ships no coreutils `timeout`); SIGALRM terminates the child,
+          # so a hang surfaces as a non-zero exit rather than an indefinite wait.
+          out=$(perl -e 'alarm 10; exec @ARGV' ./build/tur --version)
+          rc=$?
+          echo "$out"
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::tur --version failed or hung (exit $rc)"
+            exit 1
+          fi
+          case "$out" in
+            *"the Turmeric compiler"*) ;;
+            *) echo "::error::unexpected tur --version output"; exit 1 ;;
+          esac
+
       - name: Run tests
         run: ctest --output-on-failure --progress --test-dir build
 
