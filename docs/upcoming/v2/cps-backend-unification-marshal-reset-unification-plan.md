@@ -7,14 +7,31 @@ description: The U3 (cloneable, multi-shot) and U4 (serial, marshalable) native 
 
 # Unify the cloneable / serial native spine walk
 
-## Status (2026-07-12, v0.28.2): STILL OPEN -- the last CPS-unification follow-up
+## Status (2026-07-12, v0.28.2): LANDED -- build walk unified
 
-Verified against the tree: `build_cloneable` (`src/passes/cps_ir.c:401`) and
-`build_serial` (`:753`) remain two separate spine walks; **`build_marshal_reset`
-does not exist**. This is a pure code-health refactor and the one remaining open
-item from the broader CPS-backend unification (which is otherwise landed --
-`emit_cps.c` is deleted; see the
-[umbrella plan](../../archive/cps-backend-unification-plan.md)).
+The build-side unification (staging steps 1-4 below) is done:
+`build_marshal_reset(b, e, x, rest, serial)` (`src/passes/cps_ir.c`) is now the
+single spine walk; `build_cloneable` / `build_serial` are one-line wrappers that
+call it with `serial=false` / `serial=true`. The two reach tests collapsed into
+`ctx_reaches_shift(e, shift_kind)` and the two receiver finders into
+`marshal_named_receiver(b, shift, serial)`. The cloneable-only `n_live_captures`
+Shape-2 gate is guarded with `!serial`; the per-family carve-outs that genuinely
+differ (the serial 2-arg call frame's Serializable-ADT env + hole-param-only
+gate, the serial do-tail's 1-arg captured-config frame) branch on `serial`
+inline. The node is unchanged (`CT_CLONEABLE` with the `serial` flag), so the
+emit path, binder decls, capture walkers, and the ok/join predicates were
+untouched.
+
+Verified: every `*cloneable*` / `*serial*` fixture's `emit-c` output is
+byte-identical before/after, and the full suite is green (2111 passed, 0
+failed). Each new context shape now gets written once for both families.
+
+The remaining items are the *emit*-side shape additions in "Interaction with the
+remaining U4 shapes" below (serial do-prelude, 2-arg call frames, Shape 1
+identity) -- separate slices that the unification makes single-write on the build
+side but that still need their own emit work. This was the last open item from
+the broader CPS-backend unification (otherwise landed -- `emit_cps.c` is deleted;
+see the [umbrella plan](../../archive/cps-backend-unification-plan.md)).
 
 Two references below are now stale in their surrounding context (the refactor
 itself is unaffected):
