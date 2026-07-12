@@ -1,8 +1,8 @@
 ---
 title: Owning pointers on the CPS-IR-to-C backend -- remaining follow-ups
 category: Planning
-status: open (low priority)
-description: The owning-pointer analysis + landing (O1 owning-value locals, O2 owning fields inside aggregates via N3, O3 guarded by the zero-capture cut) shipped and re-scoped graduation gate item 4; see the archived parent. This doc carries the small, deliberately-deferred remainder -- non-atomic owning-op operand delegation, ref<T> scope-exit auto-drop (EX_DEFER), and captured owning values -- each safe on the fallback today, none on the critical path for cps-backend graduation.
+status: open (low priority) -- O1-a landed; O1-b and O3 remain deferred
+description: The owning-pointer analysis + landing (O1 owning-value locals, O2 owning fields inside aggregates via N3, O3 guarded by the zero-capture cut) shipped and re-scoped graduation gate item 4; see the archived parent. This doc carries the small, deliberately-deferred remainder. O1-a (non-atomic owning-op operand delegation) has now landed; ref<T> scope-exit auto-drop (EX_DEFER) and captured owning values remain documented deferrals -- each safe on the fallback today, none on the critical path for cps-backend graduation.
 ---
 
 # Owning pointers on the CPS backend -- remaining follow-ups
@@ -31,25 +31,32 @@ are missed-coverage items, not correctness gaps.
 
 ## Task O1-a -- non-atomic owning-op operands
 
-**State: open, low priority.** `cps_ir.c` translates an owning-value op
+**State: landed.** `cps_ir.c` translated an owning-value op
 (`EX_RC_OF` / `EX_RC_CLONE` / `EX_RC_DROP` / `EX_RC_COUNT` / `EX_RC_PTR`) to a
 `CT_LETRAW` delegated node **only when its operand is atomic**
-(`is_delegatable_owning`, `src/passes/cps_ir.c` ~197). The atomic restriction is
-what guarantees no control operator hides inside the operand and gets emitted in
+(`is_delegatable_owning`, `src/passes/cps_ir.c`). The atomic restriction is what
+guaranteed no control operator hides inside the operand and gets emitted in
 direct style inside a CPS function. So `(rc/of (compute))` -- a non-atomic but
-often control-op-free operand -- still falls back whole.
+often control-op-free operand -- fell back whole.
 
-**Approach.** Add a sound "operand contains no control op" scan (reuse the same
-control-op seed enumeration `cps_directly_uses_control` mirrors, with a
-conservative not-delegatable default), and widen `is_delegatable_owning` to admit
-a non-atomic operand that passes it. A missed control op must fall back, never
-delegate -- the existing liveness guard
-(`owning_dropped_before_control`) still applies to the resulting node, so the
-straight-line-drop-before-control invariant is preserved.
+**Landed.** `operand_uses_control` (`src/passes/cps_ir.c`) is a sound
+"operand MIGHT contain a control op" scan that mirrors the control-op seed set
+and structural recursion of `cps_directly_uses_control` (`src/passes/cps.c`) but
+inverts the default -- a node kind it does not positively recognize as
+control-free is treated as possibly-control (not delegatable). `is_delegatable_owning`
+now admits a non-atomic operand that passes it (`!operand_uses_control(arg)`). A
+missed control op falls back, never delegates -- the existing liveness guard
+(`owning_dropped_before_control` / `letraw_ok`, `emit_cps_ir.c`) still applies to
+the resulting node, so the straight-line-drop-before-control invariant is
+preserved. The `has_capture_rec` CT_LETRAW case (`emit_cps_ir.c`) was switched
+from the shallow direct-var enumeration to the complete `collect_free_vars`
+walker (matching `collect_caps_rec`), so a non-atomic operand's nested free vars
+are seen and a genuinely-capturing op is never wrongly admitted into a lifted
+zero-capture body.
 
-**Fixture.** A colored function that does `(rc/of (+ a b))` (or a small call
-operand) before a `shift`, drops it on the straight-line path, delivers a scalar;
-`direct == cps` and LeakSanitizer-clean.
+**Fixture.** `tests/fixtures/cps-backend-rc-nonatomic-operand`: a colored
+function does `(rc/of (+ a b))` before a `shift`, drops it on the straight-line
+path, delivers a scalar; `direct == cps` (7) and LeakSanitizer-clean.
 
 ## Task O1-b -- `ref<T>` scope-exit auto-drop (`EX_DEFER`)
 

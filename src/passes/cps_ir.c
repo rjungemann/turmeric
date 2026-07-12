@@ -179,9 +179,11 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest);
  * `rc/strong-count`, `rc->ptr`).  These do not cross a DK slot -- the rc stays a
  * local -- so the CPS backend delegates their emission to the direct emitter
  * (`emit_value`), which already carries the correct control-block / refcount /
- * drop-glue discipline.  Only a form whose operand is atomic (a var or literal)
- * is delegated, so no control operator (`perform` / `shift`) can hide in an
- * operand and get emitted in direct style inside a CPS function. */
+ * drop-glue discipline.  A form whose operand is atomic (a var or literal) is
+ * always delegated; O1-a widens this to a non-atomic operand that is provably
+ * free of control operators (`operand_uses_control` below), so no control
+ * operator (`perform` / `shift`) can hide in an operand and get emitted in
+ * direct style inside a CPS function. */
 static const Expr *owning_operand(const Expr *e) {
     if (!e) return NULL;
     switch (e->kind) {
@@ -194,9 +196,94 @@ static const Expr *owning_operand(const Expr *e) {
     }
 }
 
+/* O1-a: does `e` (an owning-op operand delegated whole to the direct emitter)
+ * MIGHT contain a control operator?  A delegated operand is emitted in direct
+ * style inside a CPS function, so any control operator lexically inside it would
+ * be direct-emitted where the DK-threaded discipline expects a CPS lowering --
+ * unsound.  This mirrors the control-op SEED set and structural recursion of
+ * `cps_directly_uses_control` (src/passes/cps.c) but INVERTS the default: a node
+ * kind this scan does not positively recognize as control-free is treated as if
+ * it might hide a control op (return true -> not delegatable), so a missed
+ * control op falls back rather than delegating.  Nested fn / closure bodies are
+ * call-graph boundaries -- a control op inside one is colored on its own merits
+ * and never emitted at this position -- so they contribute no control op here,
+ * exactly as the coloring scan treats them. */
+static bool operand_uses_control(const Expr *e) {
+    e = ascribe_peel(e);
+    if (!e) return false;
+    if (is_atomic(e)) return false;
+    switch (e->kind) {
+        /* Control-op seeds (mirror cps_directly_uses_control). */
+        case EX_RESET:
+        case EX_SHIFT:
+        case EX_SHIFT0:
+        case EX_CLONEABLE_RESET:
+        case EX_CLONEABLE_SHIFT:
+        case EX_SERIAL_RESET:
+        case EX_SERIAL_SHIFT:
+        case EX_PERFORM:
+        case EX_HANDLE:
+        case EX_RESUME:
+        case EX_DISCONTINUE:
+        case EX_CALLCC:
+            return true;
+        /* Structural recursion into value-position children. */
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (operand_uses_control(e->as.let_.bindings[i].init)) return true;
+            return operand_uses_control(e->as.let_.body);
+        case EX_IF:
+            return operand_uses_control(e->as.if_.cond)
+                || operand_uses_control(e->as.if_.then_)
+                || operand_uses_control(e->as.if_.else_or_null);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (operand_uses_control(e->as.do_.items[i])) return true;
+            return false;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (operand_uses_control(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_CALL:
+            if (operand_uses_control(e->as.call_.fn_expr)) return true;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (operand_uses_control(e->as.call_.args[i])) return true;
+            return false;
+        case EX_GET_FIELD:
+            return operand_uses_control(e->as.get_field_.struct_expr);
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                if (operand_uses_control(e->as.make_struct_.field_values[i])) return true;
+            return false;
+        case EX_DEFAULT_OF:
+            return false;
+        case EX_RC_OF:    return operand_uses_control(e->as.rc_of_.expr);
+        case EX_RC_CLONE: return operand_uses_control(e->as.rc_clone_.expr);
+        case EX_RC_DROP:  return operand_uses_control(e->as.rc_drop_.expr);
+        case EX_RC_COUNT: return operand_uses_control(e->as.rc_count_.expr);
+        case EX_RC_PTR:   return operand_uses_control(e->as.rc_ptr_.expr);
+        case EX_REINTERPRET:
+            return operand_uses_control(e->as.reinterpret_.expr);
+        /* Nested fn boundaries: a control op inside is emitted elsewhere. */
+        case EX_FN_DEF:
+        case EX_FN:
+        case EX_CLOSURE:
+            return false;
+        /* Conservative default: an un-modeled node kind might hide a control op
+         * -- do not delegate. */
+        default:
+            return true;
+    }
+}
+
 static bool is_delegatable_owning(const Expr *e) {
     const Expr *arg = owning_operand(e);
-    return arg != NULL && is_atomic(arg);
+    if (!arg) return false;
+    if (is_atomic(arg)) return true;
+    /* O1-a: a non-atomic operand delegates only when provably control-free.  The
+     * straight-line-drop-before-control invariant on the resulting node is still
+     * enforced by owning_dropped_before_control (letraw_ok, emit_cps_ir.c). */
+    return !operand_uses_control(arg);
 }
 
 /* A struct/ADT value op that stays a local -- construct (make-struct), read a
