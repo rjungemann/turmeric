@@ -525,73 +525,26 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
             return has_capture_rec(t->as.cloneable.body, exclude, bound, nb + 1);
         }
         case CT_LETRAW: {
-            /* The delegated Expr's operand variables are the only free names it
-             * references (its operands are atomic by construction).  Check each
-             * for a capture, the same test CC_ATOM applies to a source var. */
-            #define CC_VAREXPR(ve) do { const Expr *_e = (ve); \
-                while (_e && _e->kind == EX_ASCRIBE) _e = _e->as.ascribe_.inner; \
-                if (_e && _e->kind == EX_VAR && _e->as.var.binding \
-                    && !_e->as.var.binding->is_global \
-                    && !binding_excluded(_e->as.var.binding)) { \
-                    uint32_t _id = _e->as.var.binding->id; bool _f = (_id != exclude); \
-                    for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; } \
-                    if (_f) return true; } } while (0)
+            /* The complete set of enclosing names the delegated Expr references is
+             * exactly its free-variable set -- the same complete walker
+             * collect_caps_rec uses.  A non-atomic operand (O1-a: e.g.
+             * `(rc/of (+ a b))`) references locals nested BELOW a top-level var, so
+             * walk the whole operand rather than only direct-var operands;
+             * otherwise a real capture would be missed and the term wrongly
+             * admitted into a lifted zero-capture body (an undeclared C name).  A
+             * composite the walker cannot analyze surfaces no free vars, matching
+             * the collect_caps_rec / cap_add fallback path. */
             const Expr *le = t->as.letraw.e;
-            switch (le->kind) {
-                case EX_RC_OF:    CC_VAREXPR(le->as.rc_of_.expr); break;
-                case EX_RC_CLONE: CC_VAREXPR(le->as.rc_clone_.expr); break;
-                case EX_RC_DROP:  CC_VAREXPR(le->as.rc_drop_.expr); break;
-                case EX_RC_COUNT: CC_VAREXPR(le->as.rc_count_.expr); break;
-                case EX_RC_PTR:   CC_VAREXPR(le->as.rc_ptr_.expr); break;
-                case EX_GET_FIELD: CC_VAREXPR(le->as.get_field_.struct_expr); break;
-                case EX_MAKE_STRUCT:
-                    for (uint32_t i = 0; i < le->as.make_struct_.n_fields; i++)
-                        CC_VAREXPR(le->as.make_struct_.field_values[i]);
-                    break;
-                case EX_CALL: {
-                    /* The callee value can be a captured local (a NULL-binding
-                     * indirect call, or a call through a fn-value parameter carried
-                     * in fn_binding): treat it as a capture.  A top-level direct
-                     * call's callee is a global ref, filtered out. */
-                    const Binding *fb = le->as.call_.fn_binding;
-                    if (fb && !fb->is_global && !binding_excluded(fb)) {
-                        uint32_t _id = fb->id; bool _f = (_id != exclude);
-                        for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
-                        if (_f) return true;
-                    } else if (!fb) {
-                        CC_VAREXPR(le->as.call_.fn_expr);
-                    }
-                    for (uint32_t i = 0; i < le->as.call_.n_args; i++)
-                        CC_VAREXPR(le->as.call_.args[i]);
-                    break;
-                }
-                case EX_DEFAULT_OF:
-                case EX_FN_TO_FAT:
-                case EX_FN:
-                    break;   /* no free variables (bare fn / no operand) */
-                case EX_CLOSURE: {
-                    /* A capture-free closure has no free vars; any capture is a
-                     * binding in its captures[] -- check each like a source var. */
-                    struct Closure *cl = le->as.closure_.closure;
-                    if (cl) for (uint8_t i = 0; i < cl->n_captures; i++) {
-                        const Binding *cb = cl->captures[i];
-                        if (cb && !cb->is_global && !binding_excluded(cb)) {
-                            uint32_t _id = cb->id; bool _f = (_id != exclude);
-                            for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
-                            if (_f) return true;
-                        }
-                    }
-                    break;
-                }
-                default:
-                    /* N6.1: a delegated composite (match / while / set / ...) whose
-                     * free vars this scan does not enumerate.  Conservatively treat
-                     * it as capturing, so it is admitted only in the main function
-                     * body (where has_capture is not the gate), never in a lifted
-                     * zero-capture body it could not safely close over. */
-                    return true;
+            uint32_t n_fv = 0;
+            Binding **fv = collect_free_vars(le, NULL, 0, NULL, 0, &n_fv);
+            for (uint32_t i = 0; i < n_fv; i++) {
+                const Binding *b = fv[i];
+                if (!b || b->is_global || binding_excluded(b)) continue;
+                uint32_t _id = b->id; bool _f = (_id != exclude);
+                for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
+                if (_f) { free(fv); return true; }
             }
-            #undef CC_VAREXPR
+            free(fv);
             bound[nb] = t->as.letraw.x.id;
             return has_capture_rec(t->as.letraw.body, exclude, bound, nb + 1);
         }

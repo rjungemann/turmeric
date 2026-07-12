@@ -1,0 +1,26 @@
+;; CPS-IR-to-C backend, O1-a: an owning-value op (rc/of) whose operand is
+;; NON-ATOMIC but control-op-free, in a colored function's delimited body.
+;;
+;; The straight-line O1 slice delegated an owning op (rc/of, rc/clone, rc/drop)
+;; to the direct emitter (CT_LETRAW -> emit_value) only when its operand was
+;; atomic (a var or literal), so no control operator could hide in an operand and
+;; get emitted in direct style inside a CPS function.  O1-a widens that: a
+;; non-atomic operand that is PROVABLY free of control ops (operand_uses_control,
+;; src/passes/cps.c mirror) also delegates.  Here (rc/of (+ a b)) computes 42 from
+;; a small arithmetic operand, clones it, drops both, then delivers a plain scalar
+;; through the shift.  The rc never crosses the DK slot.
+;;
+;; direct-vs-CPS equal (7), LeakSanitizer-clean: rc_cb_alloc is balanced by two
+;; rc_strong_decrement calls (one per live handle), so the block is freed once.
+
+(defn f [a : int b : int] : int
+  (reset
+    (let [r (rc/of (+ a b))]
+      (let [r2 (rc/clone r)]
+        (rc/drop r2)
+        (rc/drop r)
+        (shift (fn [x] x) 7)))))
+
+(defn main [] : int
+  (println (f 20 22))
+  0)
