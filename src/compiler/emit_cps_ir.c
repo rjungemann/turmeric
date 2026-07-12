@@ -2237,7 +2237,7 @@ static void emit_deliver_ty(CE *ce, const CKont *kont, const char *v, const Type
         if (ce->ret_mode)
             ce_line(ce, "return %s;", sv);
         else
-            ce_line(ce, "return dk_run(k, %s);", sv);
+            ce_line(ce, "return dk_run(__kont, %s);", sv);
         free(sv);
     } else if (kont->kind == KK_PROMPT) {
         /* Deliver to the innermost prompt.  In a shift-body helper the delivered
@@ -2352,7 +2352,7 @@ static void emit_term(CE *ce, const CTerm *t) {
                  * body, the enclosing prompt chain (KK_PROMPT).  A KK_VAR here
                  * would need a heap join, which excludes the caller. */
                 const char *thread = (t->as.tailcall.kont.kind == KK_PROMPT)
-                    ? ce->cur_k : "k";
+                    ? ce->cur_k : "__kont";
                 if (t->as.tailcall.n)
                     ce_line(ce, "return %s__cps(%s, %s); /* cps->cps */", fn, argv, thread);
                 else
@@ -2592,7 +2592,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     hc.out = &tmp;
     hc.indent = 4;
     hc.n_joins = 0;
-    hc.cur_k = "k";
+    hc.cur_k = "__kont";
     /* A perform continuation returns its value however it is delivered (KK_RET
      * or KK_PROMPT), so it sets both return modes. */
     hc.shift_mode = (mode == LH_SHIFT_BODY || mode == LH_HANDLER_CASE || mode == LH_PERFORM_CONT);
@@ -2606,7 +2606,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         buf_printf(&tmp, "%s_env *__cap = (%s_env *)(intptr_t)env;\n", name, name);
         if (mode == LH_RESET_CONT) {
             indent_buf(&tmp, 4);
-            buf_puts(&tmp, "DK *k = __cap->__k;\n");
+            buf_puts(&tmp, "DK *__kont = __cap->__k;\n");
         }
         for (int i = 0; i < caps->n; i++) {
             char *cn = caps->b[i] ? name_for_binding(ce->ctx, caps->b[i]) : strdup(caps->cvname[i]);
@@ -2697,7 +2697,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         case LH_RESET_CONT:
             buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, intptr_t %s__slot) {\n", name, xname);
             /* With caps, `k` is read from the env struct (above); else env IS k. */
-            if (!has_caps) buf_puts(ce->helpers, "    DK *k = (DK *)env;\n");
+            if (!has_caps) buf_puts(ce->helpers, "    DK *__kont = (DK *)env;\n");
             break;
     }
     buf_puts(ce->helpers, tmp.data);
@@ -3579,7 +3579,7 @@ static void emit_forward_decls(EmitCtx *ctx, Buf *file) {
         buf_printf(file, "static int64_t %s__cps(", cn);
         emit_params(ctx, file, fd);
         if (fd->n_params) buf_puts(file, ", ");
-        buf_puts(file, "DK *k);\n");
+        buf_puts(file, "DK *__kont);\n");
         free(cn);
     }
     /* G3b: forward-declare each mono-template monomorph's `<clone>__cps`, since a
@@ -3598,7 +3598,7 @@ static void emit_forward_decls(EmitCtx *ctx, Buf *file) {
             buf_printf(file, "static int64_t %s__cps(", spec->clone_name);
             emit_params(ctx, file, fd);
             if (fd->n_params) buf_puts(file, ", ");
-            buf_puts(file, "DK *k);\n");
+            buf_puts(file, "DK *__kont);\n");
             g_cps_mono_resolver = NULL;
             ctx->current_abi_specialization = saved;
         }
@@ -3771,7 +3771,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     int helper_ctr = 0;
     CE ce; memset(&ce, 0, sizeof(ce));
     ce.ctx = ctx; ce.out = &body_buf; ce.helpers = &helpers; ce.indent = 4;
-    ce.cur_k = "k"; ce.fn_cn = cn; ce.helper_ctr = &helper_ctr;
+    ce.cur_k = "__kont"; ce.fn_cn = cn; ce.helper_ctr = &helper_ctr;
     ce.ret_ty = mono_ret ? mono_ret : fn_ret_type(fd);   /* KK_RET crossing type (Tier C aggregate return) */
     emit_binder_decls(&ce, se->term);
     emit_term(&ce, se->term);
@@ -3796,7 +3796,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     buf_printf(file, "static int64_t %s__cps(", cn);
     emit_params(ctx, file, fd);
     if (fd->n_params) buf_puts(file, ", ");
-    buf_puts(file, "DK *k) {\n");
+    buf_puts(file, "DK *__kont) {\n");
     buf_puts(file, body_buf.data);
     buf_puts(file, "}\n");
     buf_free(&body_buf);

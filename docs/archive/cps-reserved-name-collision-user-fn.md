@@ -3,6 +3,18 @@
 **Severity: MEDIUM (segfault on valid code; niche -- requires naming a function
 `k` / `t<N>` / `__*`).**
 
+**RESOLVED (namespacing fix).** The CPS backend's synthesized continuation was
+renamed from `k` to `__kont` (`emit_cps_ir.c`) -- the signature `DK *k`, the
+`cur_k` default, the KK_RET return-delivery `dk_run(k, ...)`, and the lifted-body
+continuation locals all now use `__kont`. A user function named `k` no longer
+collides, so the valid program compiles and runs correctly (prints 11) instead of
+crashing. Regression fixture `cps-reserved-name-receiver`. The `k` case is the
+common one and is fully closed; a user identifier named `t<N>` or `__*` (far
+rarer) still relies on the `param_name_clashes_cps` param guard and would need the
+same namespacing treatment if it ever bites. Original report below.
+
+---
+
 ## Summary
 
 A top-level function whose name collides with a CPS-synthesized identifier
