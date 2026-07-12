@@ -188,6 +188,17 @@ void  tur_hamt_box_release(void *boxed_key);
 /* Convenience: the standard ops vector for tur_hamt_box_key-allocated keys. */
 tur_hamt_key_ops tur_hamt_box_key_ops(void);
 
+/* Generic content comparator for two tur_hamt_box_key-allocated payloads.  Reads
+ * each payload's byte length from its box header and compares the bytes, so a
+ * SINGLE comparator serves every multi-word by-value key type (struct/ADT) --
+ * no per-type comparator or C type name is needed.  The signature matches
+ * tur_hamt_keyeq_fn (a MapKey `mk-cmp` carrier comparator): the two int64 args
+ * are the boxed-key PAYLOAD pointers threaded through the HAMT on a hash
+ * collision.  POD-safe for :copy structs; padding bytes are copied verbatim by
+ * tur_hamt_box_key so two structurally-equal keys built the same way compare
+ * equal. */
+bool tur_hamt_box_key_eq(int64_t a, int64_t b);
+
 /* Ownership-aware variants of the _eq family.  Identical to the _eq calls,
  * except `ops` installs key retain/release for the duration of the operation
  * (so structural copies retain the box and freed entries release it) and is

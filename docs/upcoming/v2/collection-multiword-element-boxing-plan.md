@@ -2,15 +2,17 @@
 title: Multi-word by-value struct/ADT elements in Vec/Set/Map (element boxing)
 category: Codegen / runtime / typed collections -- frontier
 description: The element buffer of every heap collection is int64[] (Vec) or a single void* slot (HAMT), and that is a locked decision for interpreter parity and float/cstr reinterpret. So a multi-word by-value struct/ADT element (a :copy struct wider than one word, or a payload-carrying ADT) cannot be stored. This plan boxes such elements -- heap copy + refcount, pointer in the slot -- reusing the existing boxed-key (WKC2) machinery, rather than the ruled-out typed element buffer. It depends on the v1 element-dispatch fix.
-status: in progress (v2 frontier) -- Vec elements + Map values landed; Map keys / Set remain
+status: in progress (v2 frontier) -- Vec elements + Map values + Map keys/Set landed (compiled); interpreter parity + Vec/Map-value box-free lifecycle remain
 ---
 
 # Multi-word by-value elements need boxing, not a typed buffer
 
 ## Progress (2026-07-12)
 
-Landed the **element boxing** for the two carrier-slot cases; the **key** case
-(Map key / Set element) remains, gated on struct `Hash`/`MapKey` instances.
+Landed all three plan targets: **Vec elements**, **Map values**, and the **key**
+case (**Map keys / Set elements**). The remaining follow-ups are the interpreter
+parity gaps and the box release-on-free lifecycle for Vec/Map-value (the KEY box
+lifecycle IS done -- `mk-owned? = 1` makes it LSan-clean).
 
 **Done -- Vec multi-word elements (compiled + interpreter).**
 `(vec-of (Point 1 2) (Point 3 4))` for `(defstruct Point :copy [x : int y : int])`
@@ -51,15 +53,35 @@ onto the carrier through `map-assoc-eq-o`'s inline-C `val : V` param; the
    longer excludes a concrete-layout aggregate when the accessor's result is a
    bare tyvar.
 
-**Remaining -- Map keys / Set elements.**
-A multi-word Map KEY (`(Map Point int)`) or Set element needs `Hash[Point]` +
-`MapKey[Point]` instances -- `mk-box` boxing via `tur_hamt_box_key`,
-`mk-owned? = 1`, `mk-cmp` a byte comparator -- which do not exist for structs
-today (`MapKey` has only primitive instances). This is the "boxed key
-generalized" path the runtime already supports (`owned` flag threaded through
-`tur_hamt_set_eq_o`), but it depends on deriving/authoring struct
-`Hash`/`MapKey` instances, plus the box release-on-free lifecycle. `set-add` is
-still the 3-arg explicit-hash macro (not yet auto-`:A`). Not started.
+**Done -- Map multi-word keys and Set multi-word elements (compiled).**
+A multi-word Map KEY (`(Map Point int)`) and Set element are content-keyed
+through the existing WKC2 boxed-key path: a per-struct `MapKey[Point]` +
+`Hash[Point]` instance boxes the key via `tur_hamt_box_key(&p, sizeof(p))` (from
+its monomorphic concrete param `p`), `mk-owned? = 1` retains/releases the box
+across structural sharing (freed exactly once -- **LSan clean**, so the KEY
+lifecycle deliverable is met), and `map-assoc` / `set-add` already thread these.
+Set needed no work: it retyped to `:A` with `MapKey[A]` at the v1 Set
+generalization, so a struct element is just a boxed key (`set-add1` / `set-of` /
+`set-member?` all dispatch `MapKey[A]`). Structural `Eq[Map]` / `Eq[Set]` thread
+the stamped comparator, so content-equal collections compare equal.
+
+The one reusable addition is a **generic size-aware comparator**
+`tur_hamt_box_key_eq` (`src/runtime/hamt.c`, exposed via `hamt.tur`): it reads
+each boxed payload's length from the box header and byte-compares, so a SINGLE
+comparator serves every multi-word key type -- `mk-cmp` just returns its address
+(`&tur_hamt_box_key_eq`), removing the per-struct comparator + C-type-name
+boilerplate the earlier `eqmap-struct-content` fixture carried. Fixtures:
+`map-multiword-struct-key`, `set-multiword-struct-element` (inline-c carve-out --
+auto-skipped by `run-turi.sh`, see below).
+
+The three key/`MapKey` instance methods (`hash`, `mk-box`, `mk-cmp`) are inline-C
+one-liners (`hash`/`mk-box` need `sizeof(p)`/`&p` on the concrete param, which is
+inline-C-only -- `sizeof` is not a Turmeric form). A `derive-struct-key` MACRO to
+stamp them per struct is NOT feasible today: a `defmacro` cannot template an
+inline-C block (a string body is emitted as a returned `const char *`, not a C
+block), so a clean auto-derive needs reader/macro support for inline-C
+templating. Until then the ~8-line instance pattern is the interface; the generic
+comparator keeps it type-name-free.
 
 **Interpreter parity gaps (compiled-only fixtures document these):**
 - `Eq[Vec]` / `Eq`/`Show` over a struct element in the tree-walking interpreter
@@ -67,11 +89,16 @@ still the 3-arg explicit-hash macro (not yet auto-`:A`). Not started.
   than content-compare (same class as the cstr HAMT-key gap).
 - Map struct VALUES read back as the raw carrier word in the interpreter -- its
   map natives lack the value box/retag the Vec natives have.
+- Map struct KEYS / Set struct elements are compiled-only because the interpreter
+  cannot run the user's inline-C `Hash`/`MapKey` instance bodies (no native
+  override) -- `run-turi.sh` auto-skips them as inline-c carve-outs, exactly like
+  the pre-existing `eqmap-struct-content`.
 
-**Lifecycle (not yet done):** boxed Vec elements / Map values are `malloc`'d and
-not released on `vec-free` / map teardown (process-lifetime leak). The plan's
-refcount-box (`tur_hamt_box_retain`/`release`) discipline for LSan-clean
-persistence is future work; the compiled fixtures run under the default
+**Lifecycle:** the KEY box lifecycle is done (`mk-owned? = 1` ->
+`tur_hamt_box_retain`/`release`, LSan clean). Boxed **Vec elements / Map values**
+are still `malloc`'d and not released on `vec-free` / map teardown
+(process-lifetime leak); routing those through the same refcount-box discipline
+is the remaining lifecycle follow-up. The compiled fixtures run under the default
 leak-detection-off program policy.
 
 ## The problem, and why it is not just the dispatch bug

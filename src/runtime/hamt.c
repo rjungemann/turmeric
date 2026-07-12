@@ -340,6 +340,19 @@ tur_hamt_key_ops tur_hamt_box_key_ops(void) {
     return ops;
 }
 
+bool tur_hamt_box_key_eq(int64_t a, int64_t b) {
+    void *pa = (void *)(intptr_t)a;
+    void *pb = (void *)(intptr_t)b;
+    if (pa == pb) return true;
+    if (!pa || !pb) return false;
+    const tur_hamt_box_hdr *ha =
+        (const tur_hamt_box_hdr *)((const char *)pa - sizeof(tur_hamt_box_hdr));
+    const tur_hamt_box_hdr *hb =
+        (const tur_hamt_box_hdr *)((const char *)pb - sizeof(tur_hamt_box_hdr));
+    if (ha->size != hb->size) return false;
+    return memcmp(pa, pb, (size_t)ha->size) == 0;
+}
+
 /* Thread-local key-ownership hook, mirroring g_hamt_key_eq: saved/restored
  * around each _eq_owned call and around tur_hamt_free so nested operations
  * (and the deferred free of structurally-shared nodes) see the right ops. */
