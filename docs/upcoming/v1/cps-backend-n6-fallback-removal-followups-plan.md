@@ -1,11 +1,22 @@
 ---
 title: CPS backend N6 (gate item 7) -- remaining work to delete the fallback
 category: Planning
-status: open (N6.1-N6.4 landed; open: resuming-shift lowering, N6.5 fallback deletion)
+status: STALE -- see cps-backend-n6-fallback-removal-followups-findings.md. A
+  re-measurement found both tasks rest on premises that no longer hold: Task 1
+  (resuming-shift) is vacuous (base shift is abortive-only; a resuming base shift
+  is not expressible), and Task 2 (delete the fallback) would hard-error ~130+
+  fixtures of ordinary effect/tier-C/sized/session programs, not just the
+  delimited-control carve-out. Rescope before resuming.
 description: N6.1-N6.4 landed -- general control-op-free delegation, multi-case handle, multi-arg effects, shift0, capturing continuations (N6.3a-h), indirect calls, and the signature widening (nil/void return, effect-free and effectful TY_FN params). The colored-generic-monomorph lever shipped in its own plan. Two items remain before cps-backend satisfies graduation gate item 7: the resuming-SHIFT-body lowering (the sole open control-flow shape), and N6.5 -- deleting the general whole-function fallback with an explicit delimited-control carve-out.
 ---
 
 # CPS backend N6 -- remaining work
+
+> **STALE (2026-07-12).** A re-measurement against the graduated, always-on
+> cps-backend found both tasks below rest on premises that no longer hold. Task 1
+> is vacuous and Task 2 would break ~130+ fixtures. Read
+> [cps-backend-n6-fallback-removal-followups-findings.md](cps-backend-n6-fallback-removal-followups-findings.md)
+> and rescope before doing any work here.
 
 ## Context
 
