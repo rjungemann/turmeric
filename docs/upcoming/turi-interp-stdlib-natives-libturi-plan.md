@@ -1,7 +1,44 @@
 # Plan: relocate the remaining stdlib inline-C natives into libturi
 
-**Status:** proposal (not started). **Area:** `src/main.c`, `src/turi/`
+**Status:** core landed. **Area:** `src/main.c`, `src/turi/`
 (tree-walking interpreter + embedding library).
+
+> **Update (landed).** The premise below -- that the `native_*` functions and
+> their `wk_register_*` wrappers still live in `src/main.c` -- was already
+> superseded: the `web-repl-repl-inline-c-native-gap` work relocated the entire
+> block into `src/turi/interpreter_natives.c` (in `tur_core`/`libturi`) and
+> exposed `turi_env_register_interpreter_natives(TuriEnv *)`. So Part 1 (get the
+> natives into `libturi`) was effectively already done, just as one TU rather
+> than the five domain files proposed here -- and re-splitting an
+> already-relocated file is pure churn with no embedder benefit, so it was not
+> done.
+>
+> What was missing was **Part 2**: those natives were only registered by the
+> explicit `turi_env_register_interpreter_natives` calls in `cmd_eval` (main.c),
+> `tur repl` (repl.c), and the WASM glue -- **not** by `turi_env_new`. So a bare
+> `turi_eval` embedder still hit "unknown function" the moment an op bottomed out
+> in one (verified: `(c-abs -5)` -> `unknown function or operator 'c-abs'`).
+>
+> Landed change: `turi_env_new` (`src/turi/env.c`) now calls
+> `turi_env_register_interpreter_natives(env)` immediately after
+> `turi_register_collection_natives(env)` -- before any preload, relying on the
+> same `EX_FN_DEF` "keep native override" branch the collection natives use, so
+> the shim wins when a module's inline-C body of the same name loads later. This
+> closes the embedder gap for every `libturi` consumer and, because
+> `wk_eval_fixture` also builds its env via `turi_env_new`, converges the
+> fixture-runner path onto the full native set (it previously lacked
+> `seq`/`json`/`schema`/`sym`/concurrency). `libturi` now propagates `-lm` (the
+> auto-pulled `interpreter_natives.c` references `sqrt`/`floor`). A parity embed
+> harness (`tests/turi/stdlib-natives-embed.c`, ctest `tur_stdlib_natives_embed`)
+> drives option/result/str/math ops through `turi_eval` on a pristine env.
+>
+> Kept (not converged away): the explicit post-preload
+> `turi_env_register_interpreter_natives` calls in main.c/repl.c/wasm_glue.c --
+> they are idempotent (same name -> same fn pointer) and keeping them guarantees
+> the `tur`/REPL/WASM observable behavior is byte-identical (registration still
+> has the last word after their preload). Not done here: the Part 1 five-file
+> split (cosmetic; natives already in `libturi`) and the Batch-0 Playwright
+> browser smoke scaffold (separate web-infra work).
 **Goal:** make the rest of the stdlib -- `option` / `result` / `list` / `str` /
 math, the typeclass-instance overrides, `seq`, `json` / `schema`, the
 concurrency + OS handle modules, and `sym` -- usable on **every** libturi
