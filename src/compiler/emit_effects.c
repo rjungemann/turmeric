@@ -188,6 +188,28 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
         return emit_value(ctx, body, h->body);
     }
 
+    /* F2: shallow handlers (handle-shallow) lower only onto the DK/CPS backend,
+     * whose no-reinstall dk_handler_shallow path is the shallow substrate.  If a
+     * shallow handle reaches this fiber emitter, its enclosing function was not
+     * CPS-lowered, and the fiber dispatch loop is hardwired deep -- emitting it
+     * here would silently produce DEEP semantics.  Reject instead of miscompile;
+     * the shape needs the CPS/DK backend (a single tail perform under a
+     * CPS-eligible function).  Extending the fiber path to shallow is tracked as
+     * the cps-effects graduation gate. */
+    if (h->shallow) {
+        diag_emit(DIAG_ERROR, e->span,
+                  "'handle-shallow' is not supported for this handle shape yet: "
+                  "shallow handlers are only lowered by the CPS/DK backend, which "
+                  "this handle does not reach\n"
+                  "  = help: restrict the handle body to a single tail 'perform' "
+                  "(a CPS-eligible shape), or use a deep 'handle'");
+        char *tmp = fresh_tmp(ctx);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s %s = 0; /* handle-shallow: rejected (not CPS-lowered) */\n",
+                   type_c_name(e->type), tmp);
+        return tmp;
+    }
+
     bool returns_value = (e->type.kind != TY_NIL);
 
     /* Allocate unique IDs for this handle expression */

@@ -88,6 +88,20 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * flat-stack heap-continuation trampoline.  The gates in emit_expr.c /
      * emit_fns.c / emit_module.c are removed; the feature is unconditional.  See
      * docs/archive/history/catch-unwind-graduation-plan.md. */
+    /* cps-effects (F2 of compiled-first-class-continuations-followups): the
+     * experimental `handle-shallow` surface.  A shallow handler lowers onto the
+     * DK substrate's no-reinstall (shift0-twin) `dk_handler_shallow` path, so a
+     * resume runs outside the handler instead of re-delimiting.  Deep `handle`
+     * stays always-on (it rides the graduated cps-backend path); only the new
+     * shallow surface is gated here.  g_opt_cps_effects is read by elab_handle.
+     * Graduate on the fiber-path shallow extension + hot-path neutrality. */
+    { "cps-effects",
+      "shallow effect handlers ((handle-shallow ...)) on the DK substrate",
+      "docs/upcoming/v1/compiled-first-class-continuations-followups-plan.md",
+      "0.29.0",                  /* introduced */
+      "0.31.0",                  /* expires_at (two releases out) */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_cps_effects },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

@@ -700,6 +700,12 @@ typedef struct HandleExpr {
      * (preserving the body's real C type).  A dedicated flag avoids reading
      * post-lowering case data, which is not reliably populated at emit time. */
     bool is_unsafe_marker;
+    /* F2 (compiled-first-class-continuations-followups): a `handle-shallow`
+     * form.  A shallow handler lowers onto the DK substrate's no-reinstall
+     * path (dk_handler_shallow), so a resume runs outside the handler.  Gated
+     * behind --enable=cps-effects; only the CPS/DK backend honors it (the fiber
+     * emitter rejects it rather than silently producing deep semantics). */
+    bool shallow;
 } HandleExpr;
 
 /* Resume expression: (resume k value) */

@@ -52,8 +52,17 @@ DK *dk_shift(int tag, DKBody body, intptr_t body_env, DK *next);
 DK *dk_shift0(int tag, DKBody body, intptr_t body_env, DK *next);
 /* A handler-prompt for algebraic effects: a marker keyed by effect `tag` that
  * carries the handler case `fn` (with env).  Transparent to a returning value
- * (like dk_prompt); a matching dk_perform runs `fn`. */
+ * (like dk_prompt); a matching dk_perform runs `fn`.
+ *
+ * dk_handler installs a DEEP handler: dk_perform re-installs it on the captured
+ * sub-continuation, so a `resume` re-delimits and a re-perform inside the
+ * resumed computation is caught by the same handler (the reinstall-on-resume
+ * branch, mirroring `shift`).  dk_handler_shallow installs a SHALLOW handler:
+ * dk_perform does NOT re-install it, so the handler fires at most once per
+ * activation and the resumed computation runs outside it (the no-reinstall
+ * branch, mirroring `shift0`).  Both share the one dk_perform primitive. */
 DK *dk_handler(int tag, DKHandler fn, intptr_t env, DK *next);
+DK *dk_handler_shallow(int tag, DKHandler fn, intptr_t env, DK *next);
 
 /* ---- evaluation ------------------------------------------------------- */
 /* Run chain `k` with seed value `v` (no implicit root prompt). */
@@ -75,6 +84,9 @@ intptr_t dk_perform(int tag, intptr_t arg, DK *k);
 
 /* Does the chain contain a prompt marker? (used to assert re-install). */
 bool dk_has_prompt(const DK *k);
+/* Does the chain contain a handler marker for `tag`? (used to assert
+ * deep vs shallow handler re-install on a captured sub-continuation). */
+bool dk_has_handler(const DK *k, int tag);
 
 /* ---- memory ----------------------------------------------------------- */
 DK *dk_copy(const DK *k);   /* deep copy a chain */

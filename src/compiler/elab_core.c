@@ -1431,6 +1431,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_defeffect = intern_cstr(st, "defeffect");
     e->sym_perform = intern_cstr(st, "perform");
     e->sym_handle = intern_cstr(st, "handle");
+    e->sym_handle_shallow = intern_cstr(st, "handle-shallow");
     e->sym_try_with = intern_cstr(st, "try-with");
     e->sym_with_handler = intern_cstr(st, "with-handler");
     e->sym_with = intern_cstr(st, "with"); /* WITH-V0 */

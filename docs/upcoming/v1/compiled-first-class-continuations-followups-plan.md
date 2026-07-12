@@ -1,8 +1,8 @@
 ---
 title: First-class continuations -- deep/shallow handlers + async on heap continuations (F2/F3)
 category: Planning
-status: open (F1/F4 landed; F2 next, F3 optional)
-description: F1 (lift handle / perform / resume onto the DK heap-continuation substrate) landed as the CPS-IR-to-C backend's Phase C4 and graduated with cps-backend always-on; F4's effect-rec sign-off probe landed. What remains of the first-class-continuations work is F2 (deep vs shallow handlers on the same substrate, plus multi-shot effect resume), F3 (async / await on heap continuations, optional, behind --enable=cps-async), and the deferred experiment registration those two need.
+status: open (F1/F4 landed; F2 substrate + cps-effects gate landed; F2 fiber-path shallow + F3 remaining)
+description: F1 (lift handle / perform / resume onto the DK heap-continuation substrate) landed as the CPS-IR-to-C backend's Phase C4 and graduated with cps-backend always-on; F4's effect-rec sign-off probe landed. F2's substrate slice landed -- shallow handlers on the DK machine (dk_handler_shallow, no reinstall = shift0-twin), a handle-shallow surface behind --enable=cps-effects lowered by the CPS/DK backend, and the cps-effects experiment row. What remains is extending shallow to the deep-only fiber path (the cps-effects graduation gate), F3 (async / await on heap continuations, optional, behind --enable=cps-async), and multi-shot default relaxation (kept guarded by the O3 owning-capture hazard).
 ---
 
 # First-class continuations -- remaining follow-ups (F2 / F3)
@@ -35,19 +35,57 @@ it. This remains a *substrate-coherence* item, not a stack-wall fix.
 **Goal.** Deep and shallow handlers share the one DK substrate, and multi-shot
 effect resume is permitted where the source opts in.
 
-- Map the DK machine's reinstall-on-resume vs no-reinstall distinction (`shift`
-  vs `shift0`) onto deep vs shallow handlers. Confirm the mapping against
-  `tests/fixtures/effect-deep-handler/`; add a shallow-handler fixture/probe if
-  one is missing.
-- Multi-shot resume falls out for free (DK continuations are already multi-shot).
-  Update the elaborator gate that today rejects multi-shot effect resume to permit
-  it under the CPS lowering, mirroring the `^multishot` annotation the
-  delimited-control surface already uses.
+### Landed (substrate slice)
+
+- **Reinstall-on-resume vs no-reinstall mapped onto deep vs shallow.**
+  `dk_perform` (`src/runtime/cps_prompt.c`, mirrored in the emitted preamble
+  `src/compiler/emit_dk_runtime.c`) now branches on a `shallow` bit on the
+  handler node: deep re-installs the handler on the captured sub-continuation
+  (a resume re-delimits); shallow appends `dk_done()` instead (the resume runs
+  outside the handler) -- the handler-side twin of the `shift`/`shift0` branch
+  already in `dk_run_impl`. Constructed via `dk_handler` vs `dk_handler_shallow`.
+- **Substrate probe.** `tests/cps_prompt_unit.c` pins the distinction directly
+  where it is observable (`dk-deep-handler-reinstall` /
+  `dk-shallow-handler-no-reinstall`), alongside the existing shift/shift0
+  reinstall tests. The deep mapping is also confirmed against
+  `tests/fixtures/effect-deep-handler/`.
+- **Surface + gate.** `handle-shallow` (elaborated by `elab_handle_impl` with
+  `shallow=true`) is gated behind `--enable=cps-effects` (`g_opt_cps_effects`),
+  threaded `HandleExpr.shallow -> CT_HANDLE.handle.shallow`, and lowered by the
+  CPS/DK backend (`emit_cps_ir.c` `emit_handle` emits `dk_handler_shallow`).
+  Fixtures: `tests/fixtures/effect-shallow-handler/`,
+  `tests/fixtures/errors/effect-shallow-no-flag/`.
+
+### Remaining (graduation gate)
+
+- **Fiber-path shallow.** The CPS/DK backend only fires for CPS-eligible handles
+  (single tail `perform`), where deep and shallow are behaviourally identical.
+  Every shape that makes the difference *observable* (>=2 performs) falls to the
+  deep-only fiber path, which currently **rejects** a shallow handle rather than
+  miscompiling it (`emit_effects_handle`, `h->shallow` guard;
+  `tests/fixtures/errors/effect-shallow-fiber-shape/`). Teaching the fiber
+  dispatch loop to pop a shallow handler frame before the resumed fiber
+  continues is the `cps-effects` graduation gate. See
+  `docs/reported/shallow-handlers-fiber-path-not-supported.md`.
+
+### Multi-shot effect resume
+
+- Multi-shot resume already works where the source opts in via `^multishot`
+  (`CK_MULTISHOT`, exempt from the `cont_check_double_use` gate in
+  `elab_effects.c`; DK continuations are inherently multi-shot via `dk_invoke`'s
+  copy). The un-annotated default stays affine (`CK_UNIQUE`, TUR-E0201 on a
+  second resume): relaxing it globally is **not** done here.
 - **Interaction with the owning/capture cut:** a multi-shot effect resume that
   captures an owning value is the O3 hazard from the owning-pointers follow-ups --
-  keep it behind the same guard until the env-capture / deep-clone story lands.
+  the default stays guarded (and the `^multishot` MS2 capture check, TUR-E0500,
+  rejects capturing a non-copyable value) until the env-capture / deep-clone
+  story lands.
 
 ## Phase F3 -- `async` / `await` on heap continuations (optional)
+
+**Status: not started** (optional; must not block F2). The fiber scheduler stays
+the default and no `cps-async` lowering exists yet, so no experiment row lands
+until it does (experiments STRICT RULE).
 
 **Goal.** An alternate, heap-continuation representation for `async` / `await`
 that decouples "how many suspended computations are live" from "how many C stacks
@@ -69,18 +107,20 @@ Per the experiments STRICT RULE, an `EXPERIMENTS[]` row's `opt_global` must poin
 at a `g_opt_<name>` bool the feature's elaboration reads -- so a row may only land
 once there is real lowering to gate. F1's lowering now exists, so:
 
-- **`cps-effects`** (F1 + F2): register the `EXPERIMENTS[]` row in
-  `src/runtime/experiments.c` with all descriptor fields, a `g_opt_cps_effects`
-  the effect elaboration reads, `plan_path` pointing at this doc,
-  `experiment_warn_if_used("cps-effects")` at the entry point, and an `expires_at`
-  two releases out. Graduate on F2 sign-off + hot-path neutrality.
+- **`cps-effects`** (F2): **registered** as a live `EXPERIMENTS[]` row in
+  `src/runtime/experiments.c` (all descriptor fields; `g_opt_cps_effects` read by
+  `elab_handle_impl`; `plan_path` -> this doc; `experiment_warn_if_used(
+  "cps-effects")` at the shallow-handle entry point; `introduced` 0.29.0,
+  `expires_at` 0.31.0). The **first F2 sub-task -- whether effects need their own
+  gate -- resolved as: deep `handle` stays always-on (it rides the graduated
+  `cps-backend` path), and only the *new* `handle-shallow` surface is gated by
+  `cps-effects`.** So the row is live (not a doc-only note): the flag gates real
+  elaboration. Graduate on the fiber-path shallow extension + hot-path
+  neutrality.
 - **`cps-async`** (F3): a separate, independently-expirable
-  `--enable=cps-async` gate. Do not bundle with `cps-effects`.
-
-(Note: F1's effect lowering currently rides the graduated `cps-backend` path
-rather than a dedicated `cps-effects` gate. Deciding whether F2 needs its own gate
-or extends the always-on path is the first F2 sub-task; if effects stay always-on,
-`cps-effects` may collapse into a doc-only note rather than a live row.)
+  `--enable=cps-async` gate. Do not bundle with `cps-effects`. **Not yet
+  registered** -- per the experiments STRICT RULE a row lands only once there is
+  real lowering to gate, and F3 lowering is not built.
 
 ## Phase F4 tail -- sign-off probes (if F3 lands)
 

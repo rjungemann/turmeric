@@ -3485,12 +3485,16 @@ static void emit_handle(CE *ce, const CTerm *t) {
     snprintf(hchain, sizeof(hchain), "__h%d", id);
     /* Build the chain inside-out: base is the continuation frame; wrap each case
      * as dk_handler(tag_i, case_i, case_env_i, <inner>). */
+    /* F2: a shallow handle installs each case as a no-reinstall handler, so a
+     * resume runs outside it (dk_perform does not re-delimit).  Deep is the
+     * default reinstall-on-resume path. */
+    const char *hctor = t->as.handle.shallow ? "dk_handler_shallow" : "dk_handler";
     Buf chain; buf_init(&chain);
     buf_printf(&chain, "dk_frame(%s, %s, dk_done())", kname, hkenv);
     for (int ci = (int)nc - 1; ci >= 0; ci--) {
         int tag = effect_tag(t->as.handle.cases[ci].effect);
         Buf nxt; buf_init(&nxt);
-        buf_printf(&nxt, "dk_handler(%d, %s, %s, %.*s)", tag, cnames[ci], cenvs[ci],
+        buf_printf(&nxt, "%s(%d, %s, %s, %.*s)", hctor, tag, cnames[ci], cenvs[ci],
                    (int)chain.len, chain.data);
         buf_free(&chain);
         chain = nxt;

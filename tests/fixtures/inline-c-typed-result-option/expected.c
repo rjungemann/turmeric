@@ -815,7 +815,7 @@ typedef enum { DKK_DONE, DKK_FRAME, DKK_PROMPT, DKK_SHIFT, DKK_SHIFT0, DKK_HANDL
 struct DK {
     DKKind kind; DKFrame fn; intptr_t env; int tag;
     DKBody body; intptr_t body_env;
-    DKHandler handler; intptr_t handler_env; DK *next;
+    DKHandler handler; intptr_t handler_env; bool shallow; DK *next;
 };
 static DK *dk_new(DKKind kind, DK *next) {
     DK *k = (DK *)calloc(1, sizeof(DK)); k->kind = kind; k->next = next; return k;
@@ -839,10 +839,13 @@ static DK *dk_shift0(int tag, DKBody body, intptr_t env, DK *next) {
 static DK *dk_handler(int tag, DKHandler fn, intptr_t env, DK *next) {
     DK *k = dk_new(DKK_HANDLER, next); k->tag = tag; k->handler = fn; k->handler_env = env; return k;
 }
+static DK *dk_handler_shallow(int tag, DKHandler fn, intptr_t env, DK *next) {
+    DK *k = dk_handler(tag, fn, env, next); k->shallow = true; return k;
+}
 static DK *dk_copy_node(const DK *n) {
     DK *c = dk_new(n->kind, NULL); c->fn = n->fn; c->env = n->env; c->tag = n->tag;
     c->body = n->body; c->body_env = n->body_env;
-    c->handler = n->handler; c->handler_env = n->handler_env; return c;
+    c->handler = n->handler; c->handler_env = n->handler_env; c->shallow = n->shallow; return c;
 }
 static DK *dk_copy_range(const DK *from, const DK *stop) {
     DK *head = NULL, *tail = NULL;
@@ -897,7 +900,9 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
     while (H && !(H->kind == DKK_HANDLER && H->tag == tag) && H->kind != DKK_DONE) H = H->next;
     if (!H || H->kind == DKK_DONE) { fprintf(stderr, "tur: unhandled effect (tag %d)\n", tag); abort(); }
     DK *sub = dk_copy_range(k, H);
-    sub = dk_append(sub, dk_handler(tag, H->handler, H->handler_env, dk_done()));
+    DK *tail = H->shallow ? dk_done()
+                          : dk_handler(tag, H->handler, H->handler_env, dk_done());
+    sub = dk_append(sub, tail);
     intptr_t r = H->handler(H->handler_env, arg, sub);
     dk_free(sub);
     return dk_run_impl(H->next, r, false);

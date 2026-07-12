@@ -1,0 +1,19 @@
+;; F2 (compiled-first-class-continuations-followups): a shallow effect handler.
+;; `handle-shallow` installs the handler on the DK substrate's no-reinstall
+;; (shift0-twin) path -- dk_handler_shallow -- so a resume runs OUTSIDE the
+;; handler instead of re-delimiting.  Gated behind --enable=cps-effects (see the
+;; sibling `flags` file).
+;;
+;; This handle is a single tail `perform` (the CPS/DK-eligible shape): the
+;; handler resumes the captured continuation with 42, which the DK machine
+;; delivers as the handle result.  For a single perform, deep and shallow are
+;; behaviourally identical -- the observable deep-vs-shallow reinstall
+;; difference is pinned directly on the substrate in tests/cps_prompt_unit.c
+;; (dk-deep-handler-reinstall / dk-shallow-handler-no-reinstall).  This fixture
+;; confirms the surface form parses, gates, and lowers through the shallow path.
+(defeffect Ask [] :int)
+
+(defn main [] : int
+  (println (handle-shallow (perform (Ask))
+    (Ask [] k) (resume k 42)))
+  0)

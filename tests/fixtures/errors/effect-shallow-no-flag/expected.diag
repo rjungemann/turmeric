@@ -1,0 +1,2 @@
+'handle-shallow' (shallow effect handlers) is experimental
+enable it with --enable=cps-effects

@@ -1745,6 +1745,7 @@ Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_defeffect) return elab_defeffect(e, call);
     if (name == e->sym_perform)   return elab_perform(e, call);
     if (name == e->sym_handle)       return elab_handle(e, call);
+    if (name == e->sym_handle_shallow) return elab_handle_shallow(e, call);
     if (name == e->sym_try_with)     return elab_try_with(e, call);
     /* FH2: (handler (E [params] k) body) in value position is a handler literal.
      * A local binding named `handler` (e.g. a higher-order function parameter)

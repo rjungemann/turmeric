@@ -59,6 +59,18 @@ static intptr_t body_root(intptr_t env, DK *sub) {
     return dk_invoke(sub, 100) + 1000;
 }
 
+/* ---- effect handler cases (F2: deep vs shallow) ---- */
+
+/* Probe whether dk_perform re-installed the handler on the captured sub: a
+ * deep handler's sub carries a fresh TAG handler (a re-perform re-finds it); a
+ * shallow handler's sub does not. */
+static bool g_handler_reinstalled;
+static intptr_t handler_probe(intptr_t env, intptr_t arg, DK *sub) {
+    (void)env; (void)arg;
+    g_handler_reinstalled = dk_has_handler(sub, TAG);
+    return 42;
+}
+
 int main(void) {
     /* ---- CPS5.1: reset/shift capture + compose ---- */
     {
@@ -111,6 +123,28 @@ int main(void) {
         check(r == 1101, "cps5-root-prompt",
               "undelimited capture to the implicit root prompt != 1101");
         dk_free(chain);
+    }
+
+    /* ---- F2: a DEEP handler re-installs itself on the captured sub ---- */
+    {
+        g_handler_reinstalled = false;
+        DK *k = dk_frame(add1, 0, dk_handler(TAG, handler_probe, 0, dk_done()));
+        intptr_t r = dk_perform(TAG, 0, k);
+        check(g_handler_reinstalled, "dk-deep-handler-reinstall",
+              "deep dk_perform did not re-install the handler on the sub");
+        check(r == 42, "dk-deep-handler-result", "deep handler result != 42");
+        dk_free(k);
+    }
+
+    /* ---- F2: a SHALLOW handler does NOT re-install itself (shift0 twin) ---- */
+    {
+        g_handler_reinstalled = true;
+        DK *k = dk_frame(add1, 0, dk_handler_shallow(TAG, handler_probe, 0, dk_done()));
+        intptr_t r = dk_perform(TAG, 0, k);
+        check(!g_handler_reinstalled, "dk-shallow-handler-no-reinstall",
+              "shallow dk_perform wrongly re-installed the handler on the sub");
+        check(r == 42, "dk-shallow-handler-result", "shallow handler result != 42");
+        dk_free(k);
     }
 
     printf("cps_prompt summary: %d passed, %d failed\n", g_pass, g_fail);

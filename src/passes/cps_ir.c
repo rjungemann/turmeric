@@ -1391,6 +1391,7 @@ static CTerm *build_handle(CpsB *b, Expr *e, CVar x, CTerm *cont) {
     }
     t->as.handle.cases = cs;
     t->as.handle.body = cont;
+    t->as.handle.shallow = h->shallow;
     return t;
 }
 

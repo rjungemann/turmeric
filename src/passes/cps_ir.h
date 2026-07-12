@@ -176,7 +176,8 @@ struct CTerm {
          * continuation; cases = the N handler clauses (each delivered by return),
          * one per handled effect.  Each case's k / params are bound in its body. */
         struct { CVar x; CTerm *delim; CTerm *body;
-                 CHandleCase *cases; uint32_t n_cases; }                  handle;
+                 CHandleCase *cases; uint32_t n_cases;
+                 bool shallow; /* F2: dk_handler_shallow (no reinstall on resume) */ } handle;
         struct { const Symbol *effect; CAtom *args; uint32_t n;
                  CVar x; CTerm *body; }                                   perform;
         struct { CAtom k; CAtom v; CVar x; CTerm *body; }                 resume;

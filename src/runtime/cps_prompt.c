@@ -26,6 +26,7 @@ struct DK {
     intptr_t  body_env;  /* DKK_SHIFT* */
     DKHandler handler;   /* DKK_HANDLER */
     intptr_t  handler_env; /* DKK_HANDLER */
+    bool      shallow;   /* DKK_HANDLER: shallow (no reinstall on resume) */
     DK       *next;
 };
 
@@ -69,12 +70,19 @@ DK *dk_handler(int tag, DKHandler fn, intptr_t env, DK *next) {
     return k;
 }
 
+DK *dk_handler_shallow(int tag, DKHandler fn, intptr_t env, DK *next) {
+    DK *k = dk_handler(tag, fn, env, next);
+    k->shallow = true;
+    return k;
+}
+
 /* Shallow-copy one node (next set to NULL). */
 static DK *dk_copy_node(const DK *n) {
     DK *c = dk_new(n->kind, NULL);
     c->fn = n->fn; c->env = n->env; c->tag = n->tag;
     c->body = n->body; c->body_env = n->body_env;
     c->handler = n->handler; c->handler_env = n->handler_env;
+    c->shallow = n->shallow;
     return c;
 }
 
@@ -118,6 +126,12 @@ void dk_free(DK *k) {
 bool dk_has_prompt(const DK *k) {
     for (const DK *p = k; p; p = p->next)
         if (p->kind == DKK_PROMPT) return true;
+    return false;
+}
+
+bool dk_has_handler(const DK *k, int tag) {
+    for (const DK *p = k; p; p = p->next)
+        if (p->kind == DKK_HANDLER && p->tag == tag) return true;
     return false;
 }
 
@@ -186,11 +200,16 @@ intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
         fprintf(stderr, "tur: unhandled effect (tag %d)\n", tag);
         abort();
     }
-    /* Reify the sub-continuation from the perform point up to the handler, then
-     * re-install the handler on the captured copy so a resume re-delimits (deep
-     * handler). */
+    /* Reify the sub-continuation from the perform point up to the handler.  For
+     * a deep handler, re-install the handler on the captured copy so a resume
+     * re-delimits (a re-perform in the resumed computation re-finds it); for a
+     * shallow handler, do not -- the resumed computation runs outside it.  This
+     * is the handler-side twin of the shift/shift0 reinstall branch in
+     * dk_run_impl. */
     DK *sub = dk_copy_range(k, H);
-    sub = dk_append(sub, dk_handler(tag, H->handler, H->handler_env, dk_done()));
+    DK *tail = H->shallow ? dk_done()
+                          : dk_handler(tag, H->handler, H->handler_env, dk_done());
+    sub = dk_append(sub, tail);
     intptr_t r = H->handler(H->handler_env, arg, sub);
     dk_free(sub);
     /* Deliver the handler-case result to the handler's outer continuation. */

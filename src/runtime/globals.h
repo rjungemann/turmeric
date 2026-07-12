@@ -88,6 +88,11 @@ extern bool g_strict_effects;
 /* ER6: --dump-effects flag — print inferred effect row for each top-level defn */
 extern bool g_dump_effects;
 
+/* F2 (compiled-first-class-continuations-followups): --enable=cps-effects.
+ * Enables the experimental `handle-shallow` surface, which lowers onto the DK
+ * substrate's no-reinstall (shallow) handler path.  Read by elab_handle. */
+extern bool g_opt_cps_effects;
+
 /* CPS2 (cps-transform-plan): --dump-cps flag — print the ANF/CPS IR for each
  * colored user-level top-level defn */
 extern bool g_dump_cps;

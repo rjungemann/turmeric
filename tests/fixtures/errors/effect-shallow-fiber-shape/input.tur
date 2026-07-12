@@ -1,0 +1,9 @@
+;; F2: a shallow handle whose body performs the effect more than once is not
+;; CPS/DK-eligible -- it would fall to the deep-only fiber emitter.  Rather than
+;; silently produce DEEP semantics, the compiler rejects it.  (Extending the
+;; fiber path to shallow is the cps-effects graduation gate.)
+(defeffect E [] :int)
+(defn body [] : int (+ (perform (E)) (perform (E))))
+(defn main [] : int
+  (println (handle-shallow (body) (E [] k) (resume k 1)))
+  0)

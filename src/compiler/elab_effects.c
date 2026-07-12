@@ -1,5 +1,6 @@
 /* elab_effects.c -- delimited continuations and algebraic effects. */
 #include "elab_internal.h"
+#include "experiments.h"  /* F2: experiment_warn_if_used("cps-effects") */
 
 /* ---- file-local helper forward declarations ---- */
 static void check_cloneable_capture(Elab *e, Span span);
@@ -855,11 +856,26 @@ Expr *elab_perform(Elab *e, const Form *call) {
 /* (handle expr case1 case2 ...)
  * Handle algebraic effects with cases.
  * Each case: (EffectName [param1 param2 ...] k) body ...
+ *
+ * `shallow` selects a shallow handler (F2): the handler fires at most once per
+ * activation and the resumed computation runs outside it, lowering onto the DK
+ * substrate's no-reinstall path.  It is gated behind --enable=cps-effects and
+ * is only honored by the CPS/DK backend (the fiber emitter rejects it rather
+ * than silently producing deep semantics).
  */
-Expr *elab_handle(Elab *e, const Form *call) {
+static Expr *elab_handle_impl(Elab *e, const Form *call, bool shallow) {
+    const char *form = shallow ? "handle-shallow" : "handle";
+    if (shallow && !g_opt_cps_effects) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "'handle-shallow' (shallow effect handlers) is experimental; "
+                  "enable it with --enable=cps-effects");
+        return NULL;
+    }
+    if (shallow)
+        experiment_warn_if_used("cps-effects");
     if (call->as.list.len < 2) {
         diag_emit(DIAG_ERROR, call->span,
-                  "handle requires (handle expr case1 case2 ...)");
+                  "%s requires (%s expr case1 case2 ...)", form, form);
         return NULL;
     }
     
@@ -1159,11 +1175,20 @@ Expr *elab_handle(Elab *e, const Form *call) {
     handle->cases = cases;
     handle->n_cases = n_cases;
     handle->is_unsafe_marker = false;
+    handle->shallow = shallow;
 
     /* The return type of handle is the same as the body's type */
     Expr *out = expr_new(e->arena, EX_HANDLE, body->type, call->span);
     out->as.handle_.handle = handle;
     return out;
+}
+
+Expr *elab_handle(Elab *e, const Form *call) {
+    return elab_handle_impl(e, call, false);
+}
+
+Expr *elab_handle_shallow(Elab *e, const Form *call) {
+    return elab_handle_impl(e, call, true);
 }
 
 /* FH2: (handler (E [params] k) body) -- a single-effect handler value literal.

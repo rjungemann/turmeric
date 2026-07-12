@@ -114,6 +114,9 @@ bool g_strict_effects = false;
 /* ER6: --dump-effects flag */
 bool g_dump_effects = false;
 
+/* F2: --enable=cps-effects (experimental shallow handlers). */
+bool g_opt_cps_effects = false;
+
 /* CPS2: --dump-cps flag */
 bool g_dump_cps = false;
 

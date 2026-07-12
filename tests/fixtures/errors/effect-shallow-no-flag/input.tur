@@ -1,0 +1,7 @@
+;; F2: `handle-shallow` is experimental and requires --enable=cps-effects.
+;; Without the flag it is rejected at elaboration (this fixture carries no
+;; `flags` file, so the gate fires).
+(defeffect Ask [] :int)
+(defn main [] : int
+  (println (handle-shallow (perform (Ask)) (Ask [] k) (resume k 42)))
+  0)
