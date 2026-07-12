@@ -26,12 +26,36 @@ Verified: every `*cloneable*` / `*serial*` fixture's `emit-c` output is
 byte-identical before/after, and the full suite is green (2111 passed, 0
 failed). Each new context shape now gets written once for both families.
 
-The remaining items are the *emit*-side shape additions in "Interaction with the
-remaining U4 shapes" below (serial do-prelude, 2-arg call frames, Shape 1
-identity) -- separate slices that the unification makes single-write on the build
-side but that still need their own emit work. This was the last open item from
-the broader CPS-backend unification (otherwise landed -- `emit_cps.c` is deleted;
-see the [umbrella plan](../../archive/cps-backend-unification-plan.md)).
+The *emit*-side shape additions in "Interaction with the remaining U4 shapes"
+below (serial do-prelude, 2-arg call frames, Shape 1 identity) are **already
+landed and native** in the tree, each with a passing oracle fixture
+(`cps-oracle-serial-native-doprelude`, `cps-oracle-serial-callframe-2arg`,
+`cps-oracle-serial-shape1`) -- confirmed no delegation markers, only the native
+`_skreg` / `_skcall` / `dk_shift` machinery. The unification made them
+single-write on the build side; their emit work was done independently.
+
+### Follow-up slice (2026-07-12): serial closure-receiver parity + warning-clean emit
+
+Probing the unification's promise ("serial gains any context shape cloneable
+already had") surfaced that the U7 **closure receiver** path had no serial oracle
+coverage and that `emit_cl_shift_bodyfn` (`src/compiler/emit_cps_ir.c`) -- the
+shared Shape-2 closure-receiver body emitter for both families -- cast the baked-in
+closure thunk's arguments with a blanket `(int64_t)`, ignoring the thunk's real
+param types. That produced `-Wint-conversion` warnings (harmless only because
+int64_t and pointers are same-width): the closure env param is always `void *`,
+and the continuation param `k` is `void *` for a serial `ptr<void>` receiver vs
+the `int64_t` carrier for a cloneable `:cont` receiver (both share kind
+`TY_PTR_VOID`, so the family flag -- not the param kind -- is the reliable signal).
+The body emit now casts env to `void *` and `k` to `int64_t` / `void *` per the
+`serial` flag, so the generated closure-receiver call is warning-clean for both
+families (cloneable-closure-shape2 went 7 warnings -> 0). Added
+`cps-oracle-serial-closure-recv` (Shape 1 identity + Shape 2 arithmetic/call
+frames, capturing + non-capturing receivers, round-tripped through
+`save-cont!`/`resume-cont!`). Full suite green (2112 passed, 0 failed).
+
+This was the last open item from the broader CPS-backend unification (otherwise
+landed -- `emit_cps.c` is deleted; see the
+[umbrella plan](../../archive/cps-backend-unification-plan.md)).
 
 Two references below are now stale in their surrounding context (the refactor
 itself is unaffected):
