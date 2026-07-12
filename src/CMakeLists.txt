@@ -238,7 +238,7 @@ target_compile_options(tur_core PRIVATE
 )
 # Per-build-type flags
 target_compile_options(tur_core PRIVATE
-    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
     $<$<CONFIG:TSan>:    -O1 -g -fsanitize=thread>
 )
@@ -272,7 +272,7 @@ target_compile_options(tur PRIVATE
 
 # Per-build-type flags
 target_compile_options(tur PRIVATE
-    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
     $<$<CONFIG:TSan>:    -O1 -g -fsanitize=thread>
 )
@@ -287,7 +287,7 @@ target_link_libraries(tur PRIVATE m)
 target_link_libraries(tur PRIVATE ${CMAKE_DL_LIBS})
 
 target_link_options(tur PRIVATE
-    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
     $<$<CONFIG:TSan>:    -fsanitize=thread>
 )
 
@@ -357,11 +357,11 @@ target_include_directories(tur_eval_basic PRIVATE ${TUR_INCLUDE_DIRS})
 target_link_libraries(tur_eval_basic PRIVATE libturi)
 target_compile_options(tur_eval_basic PRIVATE
     -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
-    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
 target_link_options(tur_eval_basic PRIVATE -pthread
-    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 set_target_properties(tur_eval_basic PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
@@ -375,11 +375,11 @@ target_include_directories(tur_collections_embed PRIVATE ${TUR_INCLUDE_DIRS})
 target_link_libraries(tur_collections_embed PRIVATE libturi)
 target_compile_options(tur_collections_embed PRIVATE
     -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
-    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
 target_link_options(tur_collections_embed PRIVATE -pthread
-    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 set_target_properties(tur_collections_embed PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
@@ -393,11 +393,11 @@ target_include_directories(tur_env_teardown PRIVATE ${TUR_INCLUDE_DIRS})
 target_link_libraries(tur_env_teardown PRIVATE libturi)
 target_compile_options(tur_env_teardown PRIVATE
     -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
-    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
 target_link_options(tur_env_teardown PRIVATE -pthread
-    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 set_target_properties(tur_env_teardown PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
@@ -411,11 +411,11 @@ target_include_directories(tur_env_longlived PRIVATE ${TUR_INCLUDE_DIRS})
 target_link_libraries(tur_env_longlived PRIVATE libturi)
 target_compile_options(tur_env_longlived PRIVATE
     -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
-    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
 target_link_options(tur_env_longlived PRIVATE -pthread
-    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 set_target_properties(tur_env_longlived PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
@@ -429,11 +429,11 @@ target_include_directories(tur_embed_peripherals PRIVATE ${TUR_INCLUDE_DIRS})
 target_link_libraries(tur_embed_peripherals PRIVATE libturi)
 target_compile_options(tur_embed_peripherals PRIVATE
     -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
-    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
 target_link_options(tur_embed_peripherals PRIVATE -pthread
-    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 set_target_properties(tur_embed_peripherals PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
@@ -447,11 +447,11 @@ target_include_directories(tur_eval_sandbox PRIVATE ${TUR_INCLUDE_DIRS})
 target_link_libraries(tur_eval_sandbox PRIVATE libturi)
 target_compile_options(tur_eval_sandbox PRIVATE
     -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
-    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
 target_link_options(tur_eval_sandbox PRIVATE -pthread
-    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 set_target_properties(tur_eval_sandbox PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
@@ -471,11 +471,11 @@ add_executable(tur_ffi_dispatch_unit
 target_include_directories(tur_ffi_dispatch_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_ffi_dispatch_unit PRIVATE
     -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
-    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
 target_link_options(tur_ffi_dispatch_unit PRIVATE -pthread
-    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 target_link_libraries(tur_ffi_dispatch_unit PRIVATE m)
 if(HAVE_EDITLINE)
@@ -498,11 +498,11 @@ add_executable(tur_experiments_user_config
 target_include_directories(tur_experiments_user_config PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_experiments_user_config PRIVATE
     -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
-    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
 target_link_options(tur_experiments_user_config PRIVATE -pthread
-    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 target_link_libraries(tur_experiments_user_config PRIVATE m)
 if(HAVE_EDITLINE)
@@ -523,11 +523,11 @@ add_executable(tur_codegen_carrier_bridge
 target_include_directories(tur_codegen_carrier_bridge PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_codegen_carrier_bridge PRIVATE
     -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
-    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
 target_link_options(tur_codegen_carrier_bridge PRIVATE -pthread
-    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 target_link_libraries(tur_codegen_carrier_bridge PRIVATE m)
 if(HAVE_EDITLINE)
@@ -548,11 +548,11 @@ add_executable(tur_kind_arity_unit
 target_include_directories(tur_kind_arity_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_kind_arity_unit PRIVATE
     -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
-    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
 target_link_options(tur_kind_arity_unit PRIVATE -pthread
-    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 target_link_libraries(tur_kind_arity_unit PRIVATE m)
 if(HAVE_EDITLINE)
@@ -581,11 +581,11 @@ add_executable(tur_kind_row_unit
 target_include_directories(tur_kind_row_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_kind_row_unit PRIVATE
     -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
-    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
 target_link_options(tur_kind_row_unit PRIVATE -pthread
-    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 target_link_libraries(tur_kind_row_unit PRIVATE m)
 if(HAVE_EDITLINE)
@@ -606,11 +606,11 @@ add_executable(tur_typerow_unit
 target_include_directories(tur_typerow_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_typerow_unit PRIVATE
     -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
-    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
 target_link_options(tur_typerow_unit PRIVATE -pthread
-    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 target_link_libraries(tur_typerow_unit PRIVATE m)
 if(HAVE_EDITLINE)
@@ -631,11 +631,11 @@ add_executable(tur_codegen_reinterpret
 target_include_directories(tur_codegen_reinterpret PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_codegen_reinterpret PRIVATE
     -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
-    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
 target_link_options(tur_codegen_reinterpret PRIVATE -pthread
-    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 target_link_libraries(tur_codegen_reinterpret PRIVATE m)
 if(HAVE_EDITLINE)
@@ -656,11 +656,11 @@ add_executable(tur_lifetime_unit
 target_include_directories(tur_lifetime_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_lifetime_unit PRIVATE
     -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
-    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
 target_link_options(tur_lifetime_unit PRIVATE -pthread
-    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 target_link_libraries(tur_lifetime_unit PRIVATE m)
 if(HAVE_EDITLINE)
@@ -681,11 +681,11 @@ add_executable(tur_cps_rt_unit
 target_include_directories(tur_cps_rt_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_cps_rt_unit PRIVATE
     -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
-    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
 target_link_options(tur_cps_rt_unit PRIVATE -pthread
-    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 target_link_libraries(tur_cps_rt_unit PRIVATE m)
 if(HAVE_EDITLINE)
@@ -704,11 +704,11 @@ add_executable(tur_cps_prompt_unit
 target_include_directories(tur_cps_prompt_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_cps_prompt_unit PRIVATE
     -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
-    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
 target_link_options(tur_cps_prompt_unit PRIVATE -pthread
-    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 target_link_libraries(tur_cps_prompt_unit PRIVATE m)
 if(HAVE_EDITLINE)
@@ -727,11 +727,11 @@ add_executable(tur_image_unit
 target_include_directories(tur_image_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_image_unit PRIVATE
     -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
-    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
 target_link_options(tur_image_unit PRIVATE -pthread
-    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 target_link_libraries(tur_image_unit PRIVATE m)
 if(HAVE_EDITLINE)
@@ -753,11 +753,11 @@ add_executable(tur_docscanner_unit
 target_include_directories(tur_docscanner_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_docscanner_unit PRIVATE
     -Wall -Wextra -Wno-unused-parameter -std=c11
-    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
 target_link_options(tur_docscanner_unit PRIVATE
-    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 set_target_properties(tur_docscanner_unit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
@@ -772,11 +772,11 @@ add_executable(tur_mangle_unit
 target_include_directories(tur_mangle_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_mangle_unit PRIVATE
     -Wall -Wextra -Wno-unused-parameter -std=c11
-    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
 target_link_options(tur_mangle_unit PRIVATE
-    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 set_target_properties(tur_mangle_unit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"

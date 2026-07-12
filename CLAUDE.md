@@ -186,6 +186,43 @@ default to `ASAN_OPTIONS=detect_leaks=0`. Override with
 `ASAN_OPTIONS=detect_leaks=1 bash tests/<harness>.sh` to opt back in. See
 [docs/asan-debug-leaks-plan.md](docs/asan-debug-leaks-plan.md).
 
+#### macOS startup hang -- outdated ASan runtime
+
+On some newer macOS/dyld the clang ASan runtime can **deadlock at startup** --
+it spins forever in a spinlock inside `InitializeShadowMemory` while walking the
+dyld shared cache, *before* `main()` runs. The symptom is that **every** `tur`
+invocation hangs, including `tur --version`. This is a toolchain/OS runtime bug,
+not a bug in `tur`: the ASan runtime is baked into the binary by the compiler at
+link time, so an old clang links an old runtime that predates the current dyld
+layout. It reproduces with a bare `int main(){}` compiled `-fsanitize=address`,
+and it is triggered by *rebuilding* with the outdated toolchain -- not by any
+turmeric source change.
+
+`TUR_DEBUG_SANITIZE` defaults **ON on every platform** (macOS included) -- we do
+not auto-disable anywhere, because a silent, permanent loss of sanitizer
+coverage in CI is worse than a loud hang (the `tur --version` CI smoke check
+catches a real deadlock). Two ways to deal with it locally:
+
+- **Real fix (keeps ASan/UBSan coverage):** build with a current LLVM whose ASan
+  runtime understands the new dyld cache -- e.g. Homebrew LLVM:
+
+  ```sh
+  brew install llvm
+  cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug \
+        -DCMAKE_C_COMPILER="$(brew --prefix llvm)/bin/clang"
+  ```
+
+- **Escape hatch (drops leak/UB detection):** explicitly opt out. This strips
+  `-fsanitize=address,undefined` from the whole Debug build (and the
+  `eval_import` test's fixture compile):
+
+  ```sh
+  cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DTUR_DEBUG_SANITIZE=OFF
+  ```
+
+The Release build never carries the sanitizers, so `tur --version` on a Release
+build always works regardless.
+
 ## CLI Argument Parsing -- STRICT RULE
 
 Reading CLI arguments via any mechanism other than `*args*` or `stdlib/args.tur` is
