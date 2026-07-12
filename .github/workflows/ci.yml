@@ -8,12 +8,17 @@ on:
 
 jobs:
   test:
-    name: Test (${{ matrix.os }})
+    name: Test (${{ matrix.os }}, shard ${{ matrix.shard }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        # Split the big tur_tests fixture suite (~2100 fixtures) across N runners
+        # via TUR_TEST_SHARD; run.sh partitions round-robin by fixture ordinal so
+        # the shards are balanced and their union is the full corpus. Tune the
+        # shard count by editing this list (and the "/N" denominators below).
+        shard: ['1/4', '2/4', '3/4', '4/4']
 
     steps:
       - uses: actions/checkout@v4
@@ -52,8 +57,14 @@ jobs:
             *) echo "::error::unexpected tur --version output"; exit 1 ;;
           esac
 
-      - name: Run tests
-        run: ctest --output-on-failure --progress --test-dir build
+      - name: Run fixture suite (shard ${{ matrix.shard }})
+        env:
+          TUR_TEST_SHARD: ${{ matrix.shard }}
+        run: ctest --output-on-failure --progress --test-dir build -R '^tur_tests$'
+
+      - name: Run auxiliary suites (once per OS, on the first shard)
+        if: matrix.shard == '1/4'
+        run: ctest --output-on-failure --progress --test-dir build -E '^tur_tests$'
 
   check-guides:
     name: Check guide toggle pairs

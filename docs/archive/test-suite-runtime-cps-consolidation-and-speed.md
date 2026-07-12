@@ -12,11 +12,16 @@ section stands alone and can be picked up piecemeal.**
 >   [`docs/upcoming/v2/tur-link-and-build-split-plan.md`](../upcoming/v2/tur-link-and-build-split-plan.md)**
 >   (which folds in the corrected finding that installing ccache is a no-op until
 >   `tur build` splits compile from link).
-> - **Section 2 (suite splitting / CI `TUR_TEST_SHARD` matrix): still OPEN.** It is
->   an independent, tractable follow-up (cross-machine parallelism via `ci.yml`,
->   needs none of the build-split work). Details are in Section 2 below; not yet
->   started. If resumed, it can be re-filed as its own report or picked up directly
->   from here.
+> - **Section 2 (suite splitting): LANDED (2026-07-12).** Two pieces:
+>   (a) **named sub-suites** in `tests/run.sh` -- a `TUR_TEST_SUITE` knob with
+>   robust file-based groups (`happy`/`errors`/`snapshots`/`all`), validated
+>   (`snapshots`=139, `errors`=372, unknown->exit 2), composes with
+>   `TUR_TEST_FILTER` + `TUR_TEST_SHARD`. (b) **CI matrix sharding** in
+>   `.github/workflows/ci.yml` -- the `test` job now fans the big `tur_tests`
+>   suite across a 4-way `TUR_TEST_SHARD` matrix per OS (aux suites run once on
+>   shard `1/4`). Sharding partition verified locally: 4 shards = 527/527/527/526
+>   = 2107 total, and one real shard ran in **2m21s** vs ~9 min full. This is the
+>   cross-machine parallelism win; it needed none of the build-split work.
 
 > **Progress (2026-07-12):**
 > - **Section 1 landed.** Deleted the 48 duplicate `cps-oracle-*-cps` twins and
