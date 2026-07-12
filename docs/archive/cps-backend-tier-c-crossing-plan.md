@@ -1,6 +1,6 @@
 ---
 title: "CPS backend Tier C -- wide by-value aggregate slot crossing: investigation + prerequisites"
-status: investigation
+status: done
 description: Graduation gate item 3 (Tier C) asks that wide by-value aggregates crossing the DK slot as an effect payload / resume value / function return box at the boundary. The box-at-boundary emit design is settled and small. This document records what the investigation found when trying to LAND it: every source program that would route a by-value aggregate across the DK slot is blocked by an upstream prerequisite OUTSIDE the CPS backend's emit path (effect payload typing, the direct-path fiber crossing, the shift-body struct translation, and the function-return Type carrying a NULL ADT def with classification running before any EmitCtx exists to resolve it). Tier C cannot land a round-trip fixture until at least one of those crossings has a working direct baseline AND a populated crossing Type. This plan reframes Tier C as gated on those prerequisites and lays out the fix order.
 ---
 

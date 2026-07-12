@@ -1,6 +1,6 @@
 ---
 title: CPS backend -- classify colored-generic monomorphs
-status: scoping
+status: done
 description: The last large N6 fallback lever. A colored *generic* (polymorphic) function is CPS-classified only as its generic template, which sig-rejects on a TY_APP-with-tyvar param/return; the concrete monomorphs the direct emitter actually generates (choose_or__spec__...) are never CPS-emitted, so any DK effect chain that touches one collapses to the fiber machine. This doc scopes the architecture, the soundness situation, the real value, and a phased implementation path.
 ---
 

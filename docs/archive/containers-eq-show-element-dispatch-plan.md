@@ -2,7 +2,7 @@
 title: Make data structures Eq- and Show-able (element-type dispatch off the carrier)
 category: Type system / Codegen / stdlib
 description: Vec/Set/Map are not correctly Eq- or Show-able for any element type whose display/equality value differs from its int64 carrier (cstr, and eventually multi-word types). The container ABI already moved off the carrier (end-to-end monomorphization, 2026-06-19), but element-level typeclass dispatch inside constrained-generic container instances still grounds the element to the int64 carrier instead of the concrete element type. This plan fixes that, retypes the Set element API off :int, and settles the cstr/String question.
-status: landed (compiled path); interpreter Set/Map cstr-key Show tracked as follow-up
+status: done (compiled + interpreter paths landed 2026-07-10)
 ---
 
 # Containers must be Eq- and Show-able for every element type

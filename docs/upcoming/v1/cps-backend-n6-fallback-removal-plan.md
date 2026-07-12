@@ -1,6 +1,6 @@
 ---
 title: "CPS backend N6 (gate item 7): remove the whole-function fallback -- readiness, measurement, and phased plan"
-status: planning
+status: in progress (N6.1-N6.4 landed; open: N6.3 resuming-shift bodies, N6.5 fallback deletion)
 description: Graduation gate item 7 makes the CPS backend the SOLE lowering for colored (may-capture) functions -- no CT_UNSUPPORTED whole-function bail-out, no direct-vs-CPS dual path. This document measures the current fallback surface (which colored functions still bail out and on which forms), shows that removing the fallback today would turn 400+ sites into hard errors, and lays out the phased path: (1) delegate every control-op-free, colored-call-free subexpression to the direct emitter (the big coverage lever, reusing CT_LETRAW), then (2) handle the remaining control-carrying forms (multi-case handle, shift0, cloneable/serial reset, async, capturing/multi-shot continuations), then (3) delete the fallback and turn any residual into a hard error with a form-named diagnostic.
 ---
 
