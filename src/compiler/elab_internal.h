@@ -259,6 +259,12 @@ typedef struct Elab {
     /* Phase B2: Cloneable continuations */
     const Symbol *sym_cloneable_reset;   /* cloneable-reset */
     const Symbol *sym_cloneable_shift;   /* cloneable-shift */
+    /* Resumable delimited control (one-substrate plan): k-reset / k-shift, the
+     * canonical resumable shift/reset.  Slice 1 aliases them onto the proven
+     * cloneable pipeline (the shared DK / TuriCont substrate); abortive shift +
+     * serial retire into these over later slices. */
+    const Symbol *sym_k_reset;           /* k-reset */
+    const Symbol *sym_k_shift;           /* k-shift */
     const Symbol *sym_call_cc_star;       /* call/cc* (sugar for cloneable call/cc) */
     /* Phase 21: Serializable continuations */
     const Symbol *sym_serial_reset;      /* serial-reset */
