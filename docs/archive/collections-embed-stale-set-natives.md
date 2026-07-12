@@ -1,5 +1,15 @@
 # `tur_collections_embed` harness calls `set-add`/`set-member?` as natives that no longer exist
 
+**RESOLVED (2026-07-12):** Fixed the stale harness per the preferred fix
+(option a). `tests/turi/collections-embed.c` now `(load "stdlib/set.tur")` on the
+first embed env before exercising `set-add`/`set-member?`, matching the second
+block and how a real embedder reaches the public Set surface. The pristine raw-
+native HAMT block was reordered to run *before* the load, since loading
+stdlib/set.tur pulls in the hamt/map modules and re-elaborates those names.
+`ASAN_OPTIONS=detect_leaks=0 ./build/tur_collections_embed` -> "All collection
+embedding tests passed." (exit 0). No product code touched.
+
+
 **Severity: LOW (stale test, no product defect; CI red only. The interpreter
 change is intentional and correct -- the harness's expectations went stale).**
 
