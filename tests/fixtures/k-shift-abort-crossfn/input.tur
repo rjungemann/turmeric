@@ -1,0 +1,30 @@
+;; Surface unification (one-substrate plan): ONE k-shift, two lowerings.
+;;
+;; A k-shift whose receiver IGNORES its continuation is an abortive shift, and is
+;; lowered via the dynamic-abort path -- so it works CROSS-FUNCTION (shift in a
+;; callee, k-reset in a caller) and under arbitrary contexts, exactly like the
+;; legacy abortive `shift`.  A resuming receiver (uses `k`) keeps the reified,
+;; lexically-scoped path.  The routing is by whether the receiver uses `k`.
+;;
+;; Here `inner`'s receiver ignores k and returns (+ x 5); the k-shift is in a
+;; callee and the k-reset is in the caller -- the reified path would reject this
+;; with TUR-E0016, but the abort path handles it dynamically.
+;;
+;; direct == cps == turi.
+
+;; ignore-k receiver, cross-function: abortive-mode k-shift delivers (+ x 5)=105
+(defn inner [x : int] : int
+  (k-shift (fn [k : cont] (+ x 5)) 0))
+
+(defn outer [x : int] : int
+  (k-reset (inner x)))
+
+;; ignore-k under a non-trivial context: the abortive shift discards (+ 100 []),
+;; delivering 7 to the reset.
+(defn discard-ctx [] : int
+  (k-reset (+ 100 (k-shift (fn [k : cont] 7) 0))))
+
+(defn main [] : int
+  (println (outer 100))    ; 105
+  (println (discard-ctx))  ; 7
+  0)

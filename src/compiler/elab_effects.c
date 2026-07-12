@@ -277,18 +277,37 @@ Expr *elab_cloneable_reset(Elab *e, const Form *call) {
  * All captured environment values must implement Clone.
  * k is a function that receives the cloneable continuation as its first argument.
  */
+/* Unification (resuming-shift plan): does this shift receiver PROVABLY ignore
+ * its captured continuation?  A receiver `(fn [k] EXPR)` whose body never
+ * references `k` discards the continuation -- semantically an abortive shift,
+ * which can lower via the dynamic-abort path (cross-function, any context)
+ * instead of the reified-context path (lexically scoped, subset-restricted).
+ * Conservative: returns true ONLY for a lambda/closure receiver we can see
+ * through and prove `k` unused; every other case returns false and keeps the
+ * reified lowering, so the routing is purely additive. */
+static bool receiver_ignores_continuation(const Expr *k_expr) {
+    const FnDef *fn = NULL;
+    if (k_expr->kind == EX_FN) fn = k_expr->as.fn_.fn;
+    else if (k_expr->kind == EX_CLOSURE && k_expr->as.closure_.closure)
+        fn = k_expr->as.closure_.closure->fn;
+    if (!fn || !fn->body || fn->n_params == 0) return false;
+    /* The continuation is the receiver's last param (an env, if any, is
+     * prepended for a closure thunk). */
+    const Binding *kparam = fn->params[fn->n_params - 1];
+    if (!kparam) return false;
+    uint32_t n_out = 0;
+    Binding **fvs = collect_free_vars(fn->body, NULL, 0, NULL, 0, &n_out);
+    bool uses_k = false;
+    for (uint32_t i = 0; i < n_out; i++)
+        if (fvs[i] == kparam) { uses_k = true; break; }
+    if (fvs) free(fvs);
+    return !uses_k;
+}
+
 Expr *elab_cloneable_shift(Elab *e, const Form *call) {
     if (call->as.list.len != 3) {
         diag_emit(DIAG_ERROR, call->span,
                   "(cloneable-shift k body) requires exactly two arguments");
-        return NULL;
-    }
-
-    /* CPS-CL7: cloneable-shift must be inside a cloneable-reset */
-    if (e->cloneable_reset_depth == 0) {
-        diag_emit_with_code(DIAG_ERROR, call->span,
-                            TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET,
-                            "cloneable-shift used outside of any cloneable-reset boundary");
         return NULL;
     }
 
@@ -310,6 +329,37 @@ Expr *elab_cloneable_shift(Elab *e, const Form *call) {
     if (!is_function) {
         diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
                   "cloneable-shift requires a function as first argument");
+        return NULL;
+    }
+
+    /* Unification (resuming-shift plan): a `k-shift` whose receiver provably
+     * ignores its continuation IS an abortive shift.  Lower it via the dynamic-
+     * abort path (an abortive EX_SHIFT), which works cross-function and under
+     * arbitrary contexts -- so it does NOT require a lexical cloneable-reset
+     * (TUR-E0016) or a build_cloneable-subset context (TUR-E0710).  The receiver
+     * expects a `cont`, but ignores it, so we hand it a null (0) continuation of
+     * the right type.  Gated on `k-shift` (the unified surface) and a see-through
+     * lambda/closure receiver, so `cloneable-shift` and resuming k-shifts are
+     * unaffected. */
+    bool is_kshift = call->as.list.items[0]->tag == F_SYM
+                     && call->as.list.items[0]->as.sym == e->sym_k_shift;
+    Type kdomain, kcodomain;
+    if (is_kshift && receiver_ignores_continuation(k_expr)
+        && shift_fn_domain_codomain(k_expr, &kdomain, &kcodomain)) {
+        Expr *zero = expr_new(e->arena, EX_INT_LIT, kdomain, call->span);
+        zero->as.i = 0;
+        Expr *out = expr_new(e->arena, EX_SHIFT, kcodomain, call->span);
+        out->as.shift_.k_fn = k_expr;
+        out->as.shift_.body = zero;
+        return out;
+    }
+
+    /* CPS-CL7: a RESUMING cloneable-shift / k-shift must be inside a
+     * cloneable-reset / k-reset (the reified-context path is lexically scoped). */
+    if (e->cloneable_reset_depth == 0) {
+        diag_emit_with_code(DIAG_ERROR, call->span,
+                            TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET,
+                            "cloneable-shift used outside of any cloneable-reset boundary");
         return NULL;
     }
 

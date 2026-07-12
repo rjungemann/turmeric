@@ -1,7 +1,7 @@
 ---
 title: Resumable delimited control -- one substrate (k-reset / k-shift)
 category: Planning
-status: in progress -- slices 1-4 LANDED (k-reset/k-shift on the cloneable substrate; (k v) sugar via `k : cont`; single-shot via `^linear k : cont`, compile-time TUR-E0101; typed `Cont<BodyT,ResetT>` via `(cont BodyT ResetT)`, resume-value checked). Consolidation OPEN: abortive shift CANNOT be simply retired (it is the dynamic-abort lowering; a desugar to k-shift regresses cross-function + non-subset contexts -- see docs/reported/abortive-shift-retirement-blocked.md); cloneable/serial folding is a genuine unification; optional lighter single-shot runtime.
+status: in progress -- slices 1-4 LANDED (k-reset/k-shift on the cloneable substrate; (k v) sugar via `k : cont`; single-shot via `^linear k : cont`, compile-time TUR-E0101; typed `Cont<BodyT,ResetT>` via `(cont BodyT ResetT)`, resume-value checked). Consolidation IN PROGRESS: unification slice 1 LANDED -- k-shift now routes an ignore-k receiver to the dynamic-abort path (cross-function, any context), so ONE k-shift covers both abort and resume (dual lowering). Open: named-fn ignore-k analysis, collapsing shift/reset keywords, cross-function resume, cloneable/serial folding, optional lighter single-shot runtime.
 description: Split out of cps-backend-n6-fallback-removal-followups-plan.md (Task 1). Rather than reinterpret the abortive `shift` (breaking ~36 fixtures + the interpreter), add a NEW resumable delimited-control surface (`k-reset` / `k-shift`) that lowers to the SAME substrate the cloneable/serial variants already use -- the DK machine in compiled code, the reified-context TuriCont in the interpreter. `cloneable-*` and `serial-*` are capability-specializations that fold into this primitive; abortive `shift`/`shift0` is a distinct dynamic-abort lowering that the unified SURFACE routes to (not deletes) -- see Consolidation.
 ---
 
@@ -148,6 +148,27 @@ so every existing signature is unaffected.
   lexically scoped) or the CT-IR DK-subk threading for cross-function resume.
   Both runtimes stay; only the surface collapses. This is a real design effort,
   not a fixture migration.
+
+  **Unification slice 1 -- LANDED.** `k-shift` now IS this dual-lowering surface.
+  When its receiver provably ignores `k` (a see-through lambda/closure whose body
+  never references the continuation param), `elab_cloneable_shift` routes it to an
+  abortive `EX_SHIFT` (dynamic-abort path) instead of the reified path -- so an
+  ignore-`k` `k-shift` works **cross-function** and under **arbitrary contexts**,
+  no `TUR-E0016` / `TUR-E0710`. Enabled by two proven facts: abortive `shift`
+  aborts to a `k-reset` prompt (the DK prompts are compatible), including
+  cross-function. The routing is **purely additive** -- gated on `k-shift` (not
+  `cloneable-shift`) and on a receiver we can prove ignores `k`; resuming k-shifts
+  and all `cloneable-*` are untouched. Impl: `receiver_ignores_continuation` +
+  the desugar in `elab_effects.c` (`(k-shift R body)` with ignore-`k` `R` ->
+  `(shift R <null-cont>)`, reusing the working abortive lowering -- no new
+  lowering sites). Fixture `k-shift-abort-crossfn` (cross-function + context-
+  discard, `direct == cps == turi == 105 / 7`).
+
+  Remaining on this axis: (a) extend the ignore-`k` analysis to named-fn
+  receivers (today only see-through lambdas/closures route; named receivers keep
+  the reified path -- conservative, still correct); (b) collapse the *keywords*
+  (`shift`/`reset` <- `k-shift`/`k-reset`) once k-shift subsumes abortive's reach;
+  (c) cross-function *resume* (not just abort) via the CT-IR DK-subk threading.
 - **cloneable-shift / serial-shift** become `k-shift` with a *continuation
   capability* (cloneable = multi-shot clone; serial = marshalable). The capture
   machinery is already shared; only the capability annotation differs. Collapse
