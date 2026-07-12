@@ -1,7 +1,7 @@
 ---
 title: Resumable delimited control -- one substrate (k-reset / k-shift)
 category: Planning
-status: in progress -- slices 1-3 LANDED (k-reset/k-shift on the cloneable substrate; (k v) sugar via `k : cont`; single-shot via `^linear k : cont`, compile-time TUR-E0101). Open: fully-typed Cont<BodyT,ResetT> (slice 4), retiring abortive shift + cloneable/serial into this surface, optional lighter single-shot runtime.
+status: in progress -- slices 1-4 LANDED (k-reset/k-shift on the cloneable substrate; (k v) sugar via `k : cont`; single-shot via `^linear k : cont`, compile-time TUR-E0101; typed `Cont<BodyT,ResetT>` via `(cont BodyT ResetT)`, resume-value checked). Open: retiring abortive shift + cloneable/serial into this surface, optional lighter single-shot runtime.
 description: Split out of cps-backend-n6-fallback-removal-followups-plan.md (Task 1). Rather than reinterpret the abortive `shift` (breaking ~36 fixtures + the interpreter), add a NEW resumable delimited-control surface (`k-reset` / `k-shift`) that lowers to the SAME substrate the cloneable/serial variants already use -- the DK machine in compiled code, the reified-context TuriCont in the interpreter. Abortive `shift`/`shift0`, `cloneable-*`, and `serial-*` are then capability-specializations that retire into this one primitive over time.
 ---
 
@@ -76,9 +76,9 @@ out of the existing continuation-type spellings (`cont` / `serial-cont` /
   lighter representation (plain `dk_shift`/`dk_invoke`, no `dk_copy_range` clone
   glue) is a pure optimization, tracked separately -- it is not needed for
   single-shot *semantics*, which linear typing already guarantees.
-- **Typed continuation (slice 4, partial).** `k : cont` already types the
-  handle; a fully parametric `Cont<BodyT,ResetT>` with a checked resume-value
-  type is the remaining refinement.
+- **Typed continuation (slice 4) -- LANDED.** `(cont BodyT ResetT)` pins the
+  resume-value type; `(k v)` checks `v : BodyT` (`TUR-E0001` on mismatch).
+  `k : cont` / `(cont R)` stay unchecked for backward compatibility.
 
 ## Work plan (incremental, each slice testable)
 
@@ -112,10 +112,19 @@ substrate with no new lowering. Fixtures: `k-shift-single-shot` (resume once,
 (`TUR-E0101`). A lighter single-shot *runtime* (no `dk_copy_range` clone glue)
 remains an optional optimization, not a semantics blocker.
 
-**Slice 4 -- OPEN (partial) -- fully typed continuation.** `k : cont` already
-types the handle enough for `(k v)`; the remaining refinement is a parametric
-`Cont<BodyT,ResetT>` whose resume-value type is checked against `BodyT`. Done
-when a mismatched resume value is a compile error.
+**Slice 4 -- LANDED -- fully typed continuation `Cont<BodyT,ResetT>`.** The
+two-arg annotation `(cont BodyT ResetT)` now pins the resume-value type: the
+`cont` type carries an `arg` (BodyT) alongside `returns` (ResetT), and the
+`(k v)` sugar checks `v : BodyT`, rejecting a mismatch with `TUR-E0001`. The
+one-arg `(cont R)` / bare `cont` spellings keep `arg = TY_UNKNOWN` (unchecked),
+so every existing signature is unaffected.
+
+- `types.h`: `cont.arg` field + `type_cont_arg_flavored`.
+- `elab_fns.c`: parse `(cont BodyT ResetT)` (three-form list).
+- `elab_call.c`: the `(k v)` resume-value type check.
+- Fixtures: `k-shift-typed-cont` (`(cont int int)`, resume with int,
+  `direct == cps == turi == 15`); `errors/k-shift-typed-cont-mismatch`
+  (resume with cstr -> `TUR-E0001`).
 
 ## Consolidation (the retirement path -- OPEN, larger)
 

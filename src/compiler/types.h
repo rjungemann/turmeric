@@ -711,7 +711,8 @@ typedef struct Type {
          *   CONT_ESCAPE    -- call/cc / escape   (tur_escape_resume)
          *   CONT_SERIAL    -- serial-shift       (tur_serial_cont_resume)  */
         struct {
-            TypeKind returns;  /* The type T that cont<T> returns */
+            TypeKind returns;  /* ResetT: the type (k v) yields (the delimited result) */
+            TypeKind arg;      /* BodyT: the resume-value type (k) expects; TY_UNKNOWN = unchecked */
             int      flavor;   /* ContFlavor; 0 = CONT_CLONEABLE (default) */
         } cont;
         /* Phase HKT-P1: Type application — (type-app F A) */
@@ -1395,6 +1396,7 @@ static inline Type type_cont(TypeKind returns) {
     t.copy_kind = CK_MOVE;  /* Continuations are move-only (one-shot) */
     t.n_lifetimes = 0;
     t.as.cont.returns = returns;
+    t.as.cont.arg = TY_UNKNOWN;   /* resume-value type unknown/unchecked by default */
     t.as.cont.flavor = CONT_CLONEABLE;
     t.hkt_kind = KIND_STAR;
     return t;
@@ -1404,6 +1406,16 @@ static inline Type type_cont(TypeKind returns) {
 static inline Type type_cont_flavored(TypeKind returns, ContFlavor flavor) {
     Type t = type_cont(returns);
     t.as.cont.flavor = flavor;
+    return t;
+}
+
+/* slice 4 (resuming-shift plan): a fully-typed continuation Cont<BodyT,ResetT> --
+ * `arg` is the resume-value type (k) expects, `returns` is what (k v) yields.
+ * arg == TY_UNKNOWN leaves the resume value unchecked (backward compatible). */
+static inline Type type_cont_arg_flavored(TypeKind arg, TypeKind returns,
+                                          ContFlavor flavor) {
+    Type t = type_cont_flavored(returns, flavor);
+    t.as.cont.arg = arg;
     return t;
 }
 

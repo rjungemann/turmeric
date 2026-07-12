@@ -133,16 +133,30 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
         if (has_pipe || has_amp) {
             return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
         }
-        /* CC4 / value-typed cont: (cont T) / (escape-cont T) / (serial-cont T)
-         * -- a flavored continuation whose result type is T. `cont` is not a
-         * generic arrow-kind constructor, so handle the application here. */
+        /* CC4 / value-typed cont: (cont R) / (escape-cont R) / (serial-cont R)
+         * -- a flavored continuation whose result type is R. `cont` is not a
+         * generic arrow-kind constructor, so handle the application here.
+         *
+         * slice 4: the two-arg form (cont BodyT ResetT) additionally pins the
+         * resume-value type BodyT, so (k v) checks `v : BodyT`. The one-arg form
+         * leaves BodyT unknown (unchecked), preserving existing signatures. */
         {
             int cflav = cont_flavor_from_name(head->name);
             if (cflav >= 0 && form->as.list.len == 2) {
-                Type *arg = fn_type_from_form_impl(e, form->as.list.items[1],
+                Type *ret = fn_type_from_form_impl(e, form->as.list.items[1],
                                               type_params, type_param_kinds, n_type_params);
                 Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-                *t = type_cont_flavored(arg ? arg->kind : TY_INT, (ContFlavor)cflav);
+                *t = type_cont_flavored(ret ? ret->kind : TY_INT, (ContFlavor)cflav);
+                return t;
+            }
+            if (cflav >= 0 && form->as.list.len == 3) {
+                Type *bt = fn_type_from_form_impl(e, form->as.list.items[1],
+                                              type_params, type_param_kinds, n_type_params);
+                Type *rt = fn_type_from_form_impl(e, form->as.list.items[2],
+                                              type_params, type_param_kinds, n_type_params);
+                Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *t = type_cont_arg_flavored(bt ? bt->kind : TY_UNKNOWN,
+                                            rt ? rt->kind : TY_INT, (ContFlavor)cflav);
                 return t;
             }
         }

@@ -3524,6 +3524,20 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         }
         Expr *karg = elab_form(e, call->as.list.items[1]);
         if (!karg) return NULL;
+        /* slice 4 (resuming-shift plan): for a fully-typed continuation
+         * `Cont<BodyT,ResetT>` = (cont BodyT ResetT), the resume value must have
+         * type BodyT.  An untyped-arg cont (the one-arg `(cont R)` / bare `cont`
+         * spellings, arg == TY_UNKNOWN) stays unchecked, as before. */
+        if (fn_type.as.cont.arg != TY_UNKNOWN
+            && karg->type.kind != TY_UNKNOWN
+            && karg->type.kind != fn_type.as.cont.arg) {
+            diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0001_TYPE_MISMATCH,
+                                "continuation '%s' expects a resume value of type %s, got %s",
+                                fn_binding->name->name,
+                                type_name(type_from_kind(fn_type.as.cont.arg)),
+                                type_name(type_from_kind(karg->type.kind)));
+            return NULL;
+        }
         /* CC4.4: (k v) consumes the continuation.  This sugar builds the EX_VAR
          * by hand (below), bypassing the shared var-use consumption path, so
          * account for linearity here: invoking a ^linear k marks it consumed, and

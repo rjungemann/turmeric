@@ -1,0 +1,9 @@
+;; Fully-typed continuation (one-substrate plan, slice 4): the resume value must
+;; match BodyT.  k is `(cont int int)`, so resuming with a cstr is a compile-time
+;; type error (TUR-E0001).
+(defn bad [^linear k : (cont int int)] : int
+  (k "oops"))
+
+(defn main [] : int
+  (println (k-reset (+ 10 (k-shift bad 0))))
+  0)
