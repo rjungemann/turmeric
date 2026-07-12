@@ -914,12 +914,36 @@ Type fn_body_tail_byvalue_carrier_type(EmitCtx *ctx, const Expr *e) {
              * aggregate element read through the int64 carrier gets the
              * carrier->concrete deref bridge.  Gated on the declared result being
              * a bare tyvar, so concrete inline-C results are untouched. */
+            bool tyvar_recovered_concrete = false;
             if (cb->type.as.fn.result_full_type->kind == TY_TYVAR &&
                 (sr.kind == TY_TYVAR ||
                  strcmp(emit_type_c_name(ctx, sr), "int64_t") == 0)) {
                 Type cr = emit_resolve_type(ctx, x->type);
-                if (cr.kind == TY_APP || cr.kind == TY_ADT) sr = cr;
+                if (cr.kind == TY_APP || cr.kind == TY_ADT) {
+                    sr = cr;
+                    tyvar_recovered_concrete = true;
+                }
             }
+            /* multiword-element-boxing: a WIDE (> 8 byte) by-value ADT element
+             * read through a generic `: A` inline-C accessor (`vec-get`, the
+             * HAMT val readers) whose declared result_full_type is a BARE TYVAR
+             * is EMITTED as the int64 carrier -- a heap-box pointer -- for every
+             * A, because a tyvar-result inline-C body is never return-specialized
+             * (vec.tur: "Inline-C bodies are not return-specialized").  The
+             * concrete element type recovered from x->type (`Point`) nonetheless
+             * has a concrete codegen layout, so the default carrier-producer test
+             * below (which excludes concrete-layout aggregates -- they normally
+             * return BY VALUE) misses it and the field access / method dispatch
+             * reads `.x` straight off the int64 carrier (a hard cc error).  When
+             * the recovery fired AND the element is a wide by-value ADT, report it
+             * as a carrier producer so the carrier->concrete deref-unbox bridge
+             * fires.  Gated on the tyvar recovery, so a genuinely by-value
+             * concrete accessor result (`Pos`, result_full_type not a tyvar) is
+             * untouched. */
+            if (tyvar_recovered_concrete &&
+                !type_is_heap_struct(sr) && !type_is_heap_adt(sr) &&
+                type_is_wide_byval_adt(sr))
+                return sr;
             /* Gate on !type_uses_carrier_abi(sr): the by-value-temp strategy only
              * applies when the lowered aggregate flows by value.  At default the
              * same `(Result cstr cstr)` IS the carrier (type_uses_carrier_abi
@@ -4760,10 +4784,64 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         TypeKind pk = fn_binding->type.as.fn.arg_kinds[param_idx];
                         if ((pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS) &&
                             (fn_binding->body_is_inline_c || !matched_spec)) {
-                            raw = emit_carrier_bridge(ctx, body, raw,
-                                                      CK_CONCRETE, CK_CARRIER,
-                                                      rarg);
+                            /* multiword-element-boxing: a WIDE (> 8 byte) by-value
+                             * ADT stored into a heap container through an inline-C
+                             * `val : A` carrier param (vec-push! / the HAMT
+                             * inserters) OUTLIVES the push frame -- the element
+                             * lives as long as the collection.  The default
+                             * (non-escaping) bridge spills the aggregate to a stack
+                             * local and hands back `(int64_t)(intptr_t)(&tmp)`, a
+                             * dangling stack address once this frame returns.  Use
+                             * the escaping variant so the element is heap-promoted
+                             * (malloc + copy); the collection owns its boxed copy
+                             * (value semantics -- mutating the source after insert
+                             * does not change the stored element).  The narrow
+                             * (transient, non-storing) inline-C carrier crossings
+                             * keep the cheaper stack spill. */
+                            if (fn_binding->body_is_inline_c &&
+                                type_is_wide_byval_adt(rarg))
+                                raw = emit_carrier_bridge_escaping(
+                                          ctx, body, raw,
+                                          CK_CONCRETE, CK_CARRIER, rarg);
+                            else
+                                raw = emit_carrier_bridge(ctx, body, raw,
+                                                          CK_CONCRETE, CK_CARRIER,
+                                                          rarg);
                         }
+                    }
+                }
+                /* multiword-element-boxing (Map value / spec'd inline-C carrier
+                 * insert): map-assoc-eq-o and the other HAMT inserters are inline-C
+                 * `defn`s WITH an ABI spec, so the `!matched_spec`-gated block above
+                 * skips them -- but an inline-C body takes a tyvar `val : V` param
+                 * as the int64 carrier regardless of the spec (inline-C bodies are
+                 * not param-specialized).  A WIDE by-value aggregate value must
+                 * still be heap-boxed to the carrier: the map stores the value
+                 * pointer, which outlives the insert frame, so a stack spill would
+                 * dangle.  The read side (`(:: (map-get m k) Point)`) reinterprets
+                 * the stored carrier as the box pointer and loads by value. */
+                if (!needs_fn_cast && matched_spec && emit_arg &&
+                    i < matched_spec->n_args &&
+                    /* Only when THIS spec actually lowers the param to the int64
+                     * carrier.  Some inline-C specs DO specialize a param to the
+                     * concrete by-value aggregate (`__dense_set__...(tur_adt_Pos)`)
+                     * -- boxing to the carrier there is a hard type mismatch. */
+                    strcmp(emit_type_c_name(ctx, matched_spec->arg_types[i]),
+                           "int64_t") == 0 &&
+                    fn_binding->type.kind == TY_FN &&
+                    fn_binding->body_is_inline_c &&
+                    !expr_is_pbp_param(ctx, emit_arg)) {
+                    Type rarg = emit_resolve_type(ctx, emit_arg->type);
+                    uint8_t n_fnparams = fn_binding->type.as.fn.arity;
+                    uint8_t param_idx = (i < n_fnparams) ? (uint8_t)i
+                        : (uint8_t)(n_fnparams > 0 ? n_fnparams - 1 : 0);
+                    TypeKind pk = fn_binding->type.as.fn.arg_kinds[param_idx];
+                    if ((pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS) &&
+                        !type_is_heap_struct(rarg) && !type_is_heap_adt(rarg) &&
+                        type_is_wide_byval_adt(rarg)) {
+                        raw = emit_carrier_bridge_escaping(ctx, body, raw,
+                                                           CK_CONCRETE, CK_CARRIER,
+                                                           rarg);
                     }
                 }
                 /* ACB (KB-004): when a specialized call expects a concrete aggregate
@@ -5072,6 +5150,88 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     free(raw);
                     raw = strdup(_db.data);
                     buf_free(&_db);
+                }
+                /* multiword-element-boxing (non-spec callee arg): a CONCRETE
+                 * function or typeclass instance method whose declared param is a
+                 * WIDE (> 8 byte) by-value ADT -- e.g. `__inst_Show_show_Point(
+                 * tur_adt_Point)` -- fed a carrier-producing `(vec-get v i)` arg
+                 * receives the int64 box pointer where the aggregate is expected.
+                 * The matched_spec ACB bridge (above) covers a spec-call sink; this
+                 * is its no-matched_spec companion (a monomorphic user fn or a
+                 * concrete instance method has no ABI spec).  Deref-unbox the
+                 * carrier into the by-value param.  Gated on the arg being a wide-
+                 * byval carrier producer that does NOT already emit the aggregate,
+                 * so an arg already materialized by value is untouched. */
+                /* The element read is often ascribed to the constraint tyvar
+                 * (`(show (:: (vec-get x i) A))` in vec-show-loop), so strip
+                 * ascriptions to reach the carrier-producing call. */
+                const Expr *mwb_arg = emit_arg;
+                while (mwb_arg && mwb_arg->kind == EX_ASCRIBE)
+                    mwb_arg = mwb_arg->as.ascribe_.inner;
+                /* The callee's CONCRETE param type: for a re-dispatched method
+                 * (`show` -> `__inst_Show_show_Point`) the resolved FnDef carries
+                 * `param_types[i]` = `Point`; a direct concrete instance method
+                 * has no arg_full_types but its arg_kinds[i] is the by-value
+                 * aggregate kind, so fall back to the arg's own recovered type. */
+                Type mwb_param_ty = {0};
+                bool mwb_param_wide = false;
+                if (reresolved_callee && i < reresolved_callee->n_params &&
+                    reresolved_callee->param_types) {
+                    mwb_param_ty = emit_resolve_type(ctx,
+                                       reresolved_callee->param_types[i]);
+                } else if (fn_binding->type.kind == TY_FN &&
+                           i < fn_binding->type.as.fn.arity &&
+                           (fn_binding->type.as.fn.arg_kinds[i] == TY_ADT ||
+                            fn_binding->type.as.fn.arg_kinds[i] == TY_APP ||
+                            fn_binding->type.as.fn.arg_kinds[i] == TY_STRUCT) &&
+                           mwb_arg && mwb_arg->kind == EX_CALL) {
+                    /* A direct concrete instance method has no reresolved FnDef and
+                     * no arg_full_types; recover the target concrete type from the
+                     * carrier-producing arg itself. */
+                    mwb_param_ty = fn_body_tail_byvalue_carrier_type(ctx, mwb_arg);
+                }
+                mwb_param_wide = mwb_param_ty.kind != TY_UNKNOWN &&
+                                 !type_is_heap_struct(mwb_param_ty) &&
+                                 !type_is_heap_adt(mwb_param_ty) &&
+                                 type_is_wide_byval_adt(mwb_param_ty);
+                /* The arg must actually EMIT the int64 box carrier: a generic
+                 * `: A` inline-C accessor (`vec-get`, HAMT val readers) whose
+                 * declared result is a bare tyvar and that has no by-value ABI
+                 * spec.  This is the storage side of multiword-element-boxing --
+                 * the value came out of the collection's int64 element slot. */
+                bool mwb_arg_is_carrier_accessor = false;
+                if (mwb_arg && mwb_arg->kind == EX_CALL &&
+                    mwb_arg->as.call_.fn_binding) {
+                    const Binding *acb = mwb_arg->as.call_.fn_binding;
+                    if (acb->body_is_inline_c && acb->type.kind == TY_FN &&
+                        acb->type.as.fn.result_full_type &&
+                        acb->type.as.fn.result_full_type->kind == TY_TYVAR &&
+                        !find_matched_abi_spec(ctx, mwb_arg, acb))
+                        mwb_arg_is_carrier_accessor = true;
+                }
+                if (!needs_fn_cast && !matched_spec && !pbp_carrier_cast &&
+                    mwb_param_wide && mwb_arg_is_carrier_accessor &&
+                    emit_arg && !expr_is_pbp_param(ctx, emit_arg)) {
+                    /* A wide (> 16 byte) by-value aggregate param is taken
+                     * pass-by-pointer (`const T *`); hand it the box pointer cast
+                     * to that pointer (no deref).  A 9..16 byte aggregate is taken
+                     * by value; deref-unbox the box to the value. */
+                    bool pbp = (mwb_param_ty.kind == TY_ADT)
+                        ? adt_byval_pass_by_ptr(mwb_param_ty.as.adt_.def)
+                        : adt_app_byval_pass_by_ptr(mwb_param_ty);
+                    if (pbp) {
+                        const char *cn = emit_type_c_name(ctx, mwb_param_ty);
+                        Buf pb; buf_init(&pb);
+                        buf_printf(&pb, "(const %s *)(intptr_t)(%s)", cn, raw);
+                        buf_putc(&pb, '\0');
+                        free(raw);
+                        raw = strdup(pb.data);
+                        buf_free(&pb);
+                    } else {
+                        raw = emit_carrier_bridge(ctx, body, raw,
+                                                  CK_CARRIER, CK_CONCRETE,
+                                                  mwb_param_ty);
+                    }
                 }
                 /* Phase H §1: direct call to a typeclass instance impl (dict_arg
                  * is set by elab to mark statically-resolved typeclass dispatch).
@@ -6689,12 +6849,37 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * cc error) is wrong; the field reads directly off the aggregate.
                  * Suppress the stale flag for this emission. */
                 if (recv_spec_byval_adt) recv_held_as_carrier = false;
-                bool recv_carrier_byval = recv_held_as_carrier &&
-                    emit_type_is_byvalue_adt(ctx, e->as.get_field_.struct_expr->type);
+                /* multiword-element-boxing: the receiver is a CALL to a generic
+                 * `: A` inline-C accessor (`(vec-get v i)`, the HAMT val readers)
+                 * whose result is a WIDE (> 8 byte) by-value ADT.  Such a call
+                 * EMITS the int64 carrier (a heap-box pointer), not the aggregate
+                 * -- so `sv` here is the box pointer, and reading `.x` straight off
+                 * it (the adt_recv_byvalue path) is a hard cc error.  Detect it and
+                 * route into the recv_carrier_byval deref path (cast the int64 to
+                 * the receiver's concrete monomorph pointer and read `->field`).
+                 * Excludes a receiver that already emits the aggregate by value. */
+                bool recv_call_carrier_byval = false;
+                {
+                    const Expr *rv = e->as.get_field_.struct_expr;
+                    while (rv && rv->kind == EX_ASCRIBE) rv = rv->as.ascribe_.inner;
+                    if (rv && rv->kind == EX_CALL &&
+                        !fn_body_tail_emits_byvalue_carrier_abi(ctx, rv)) {
+                        Type bvt = fn_body_tail_byvalue_carrier_type(ctx, rv);
+                        if (bvt.kind != TY_UNKNOWN &&
+                            !type_is_heap_struct(bvt) && !type_is_heap_adt(bvt) &&
+                            type_is_wide_byval_adt(bvt))
+                            recv_call_carrier_byval = true;
+                    }
+                }
+                bool recv_carrier_byval =
+                    (recv_held_as_carrier &&
+                     emit_type_is_byvalue_adt(ctx,
+                         e->as.get_field_.struct_expr->type)) ||
+                    recv_call_carrier_byval;
                 bool adt_recv_byvalue =
                     (emit_type_is_byvalue_adt(ctx, e->as.get_field_.struct_expr->type)
                      || recv_spec_byval_adt) &&
-                    !recv_held_as_carrier;
+                    !recv_held_as_carrier && !recv_call_carrier_byval;
                 /* CONV-S1 seam 4 (:heap ADT receiver, concrete element): a
                  * `(defstruct Cons :heap [A] (head A) (tail :int))` lowers to a
                  * :heap record ADT whose monomorph cell stores a by-value

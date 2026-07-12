@@ -1,0 +1,33 @@
+;; collection-multiword-element-boxing (Map value): a Map[K V] whose VALUE type
+;; V is a MULTI-WORD by-value :copy struct (Point is 16 bytes) cannot ride the
+;; single int64 value carrier.  map-assoc heap-boxes the value (malloc + copy)
+;; and stores the box pointer as the carrier; map-get returns the carrier, and
+;; the `(:: (map-get m k) Point)` read reinterprets it as the box pointer and
+;; loads the aggregate by value.  Before the boxing fix the by-value Point value
+;; reached map-assoc-eq-o's int64 `val` carrier param as a hard cc type error.
+;;
+;; Compiled-only (requires.compiled): the tree-walking interpreter's map natives
+;; carry a value through the int64 slot without the struct box/retag the Vec
+;; natives do (vec_retag_cell), so a struct map value reads back as the raw
+;; carrier word -- a separate interpreter parity gap, tracked alongside the
+;; interpreter Eq/Show-on-carrier gaps.
+(load "stdlib/typeclass.tur")
+
+(defstruct Point :copy [x : int y : int])
+
+(definstance Show [Point]
+  (show [p]
+    (show-concat "("
+      (show-concat (show (.x p))
+        (show-concat "," (show-concat (show (.y p)) ")"))))))
+
+(defn main [] : int
+  (let [m (map-assoc
+            (map-assoc (:: (map-new) (Map int Point)) 1 (Point 7 8))
+            2 (Point 30 40))]
+    ;; field projection out of a boxed multi-word value
+    (println (show (.x (:: (map-get m 1) Point))))   ;; 7
+    (println (show (.y (:: (map-get m 2) Point))))   ;; 40
+    ;; whole-value read-back + Show[Point]
+    (println (show (:: (map-get m 1) Point)))        ;; (7,8)
+    0))

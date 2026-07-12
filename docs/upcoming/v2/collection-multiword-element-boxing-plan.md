@@ -2,10 +2,77 @@
 title: Multi-word by-value struct/ADT elements in Vec/Set/Map (element boxing)
 category: Codegen / runtime / typed collections -- frontier
 description: The element buffer of every heap collection is int64[] (Vec) or a single void* slot (HAMT), and that is a locked decision for interpreter parity and float/cstr reinterpret. So a multi-word by-value struct/ADT element (a :copy struct wider than one word, or a payload-carrying ADT) cannot be stored. This plan boxes such elements -- heap copy + refcount, pointer in the slot -- reusing the existing boxed-key (WKC2) machinery, rather than the ruled-out typed element buffer. It depends on the v1 element-dispatch fix.
-status: proposed (v2 frontier)
+status: in progress (v2 frontier) -- Vec elements + Map values landed; Map keys / Set remain
 ---
 
 # Multi-word by-value elements need boxing, not a typed buffer
+
+## Progress (2026-07-12)
+
+Landed the **element boxing** for the two carrier-slot cases; the **key** case
+(Map key / Set element) remains, gated on struct `Hash`/`MapKey` instances.
+
+**Done -- Vec multi-word elements (compiled + interpreter).**
+`(vec-of (Point 1 2) (Point 3 4))` for `(defstruct Point :copy [x : int y : int])`
+now stores each element heap-boxed (malloc + copy: value semantics, the Vec owns
+its copy) with the box pointer on the int64 carrier; `vec-get` reinterprets the
+carrier as the box pointer and loads the aggregate by value. Field projection
+(`.x`), `Show[Vec]`, and `Eq[Vec]` all recover the concrete element through the
+carrier. The fix is entirely in the carrier-bridge dispatch (`emit_expr.c`),
+keyed on `type_is_wide_byval_adt` (the pre-existing ">8 byte by-value ADT"
+predicate) -- the element buffer stays `int64[]` as the ABI matrix requires.
+Interpreter parity is free: `native_vec_*` already boxes a struct element as a
+`TURI_STRUCT` pointer (`vec_retag_cell`), so field-projection and `Show` agree
+bit-for-bit. Fixtures: `vec-multiword-struct-element` (both paths),
+`vec-multiword-struct-eq` (compiled-only; see interpreter gap below).
+
+**Done -- Map multi-word values (compiled).**
+`(map-assoc (:: (map-new) (Map int Point)) 1 (Point 7 8))` heap-boxes the value
+onto the carrier through `map-assoc-eq-o`'s inline-C `val : V` param; the
+`(:: (map-get m k) Point)` read derefs the box. Fixture:
+`map-multiword-struct-value` (compiled-only).
+
+**The four codegen seams (all in `src/compiler/emit_expr.c`):**
+1. *Vec push (store).* The `!matched_spec` bare-TY_ADT-byvalue -> tyvar-carrier
+   block routes a WIDE by-value element through `emit_carrier_bridge_escaping`
+   (heap-promote) instead of the stack-spill bridge (which dangled).
+2. *Map value push (store).* A sibling block for the `matched_spec` + inline-C
+   carrier insert, gated on the spec's param actually lowering to `int64_t` (some
+   inline-C specs specialize the param to the concrete aggregate -- boxing there
+   is a type error; that guard is load-bearing, it fixed the `dense_set`
+   regression).
+3. *Get + field access (read).* `EX_GET_FIELD` detects a carrier-producing
+   wide-byval accessor receiver (`recv_call_carrier_byval`) and routes it into
+   the existing deref path.
+4. *Get + method/fn arg (read).* A carrier->concrete deref-unbox for a wide-byval
+   arg fed to a concrete param (via `reresolved_callee->param_types[i]` for a
+   re-dispatched method, or the arg's own recovered type for a direct concrete
+   instance method); plus the `fn_body_tail_byvalue_carrier_type` recovery no
+   longer excludes a concrete-layout aggregate when the accessor's result is a
+   bare tyvar.
+
+**Remaining -- Map keys / Set elements.**
+A multi-word Map KEY (`(Map Point int)`) or Set element needs `Hash[Point]` +
+`MapKey[Point]` instances -- `mk-box` boxing via `tur_hamt_box_key`,
+`mk-owned? = 1`, `mk-cmp` a byte comparator -- which do not exist for structs
+today (`MapKey` has only primitive instances). This is the "boxed key
+generalized" path the runtime already supports (`owned` flag threaded through
+`tur_hamt_set_eq_o`), but it depends on deriving/authoring struct
+`Hash`/`MapKey` instances, plus the box release-on-free lifecycle. `set-add` is
+still the 3-arg explicit-hash macro (not yet auto-`:A`). Not started.
+
+**Interpreter parity gaps (compiled-only fixtures document these):**
+- `Eq[Vec]` / `Eq`/`Show` over a struct element in the tree-walking interpreter
+  dispatches on the runtime carrier, so struct elements pointer-compare rather
+  than content-compare (same class as the cstr HAMT-key gap).
+- Map struct VALUES read back as the raw carrier word in the interpreter -- its
+  map natives lack the value box/retag the Vec natives have.
+
+**Lifecycle (not yet done):** boxed Vec elements / Map values are `malloc`'d and
+not released on `vec-free` / map teardown (process-lifetime leak). The plan's
+refcount-box (`tur_hamt_box_retain`/`release`) discipline for LSan-clean
+persistence is future work; the compiled fixtures run under the default
+leak-detection-off program policy.
 
 ## The problem, and why it is not just the dispatch bug
 

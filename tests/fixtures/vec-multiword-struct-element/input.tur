@@ -1,0 +1,34 @@
+;; collection-multiword-element-boxing: a Vec[A] whose element A is a MULTI-WORD
+;; by-value :copy struct (Point is two ints = 16 bytes) cannot fit the int64
+;; element slot.  The element is heap-boxed on vec-push! (malloc + copy: value
+;; semantics -- the collection owns its copy) and the box pointer rides the
+;; int64 carrier; vec-get reinterprets the carrier as the box pointer and loads
+;; the aggregate back by value.  Field projection (.x/.y) and Show[Vec] must
+;; recover the concrete Point through the carrier -- before the boxing fix a
+;; field read applied `.x` straight to the int64 carrier (a hard cc error) and
+;; the pushed element spilled to a dangling stack address.
+;;
+;; Runs on both the compiled and interpreter paths: the tree-walking interpreter
+;; already boxes a struct element as a TURI_STRUCT pointer (vec_retag_cell), so
+;; field projection and Show agree bit-for-bit.  (Content Eq[Vec] over a struct
+;; element is compiled-only -- the interpreter dispatches Eq on the runtime
+;; carrier, so it pointer-compares struct elements; see
+;; vec-multiword-struct-eq.)
+(load "stdlib/typeclass.tur")
+
+(defstruct Point :copy [x : int y : int])
+
+(definstance Show [Point]
+  (show [p]
+    (show-concat "("
+      (show-concat (show (.x p))
+        (show-concat "," (show-concat (show (.y p)) ")"))))))
+
+(defn main [] : int
+  (let [v (vec-of (Point 1 2) (Point 3 4))]
+    ;; field projection through the boxed carrier
+    (println (show (.x (vec-get v 0))))            ;; 1
+    (println (show (.y (vec-get v 1))))            ;; 4
+    ;; Show[Vec] dispatches Show[Point] on each element read
+    (println (show v))                              ;; [(1,2) (3,4)]
+    0))

@@ -1,0 +1,24 @@
+;; collection-multiword-element-boxing (Eq): Eq[Vec] over a MULTI-WORD by-value
+;; struct element compares element-by-element via Eq[Point] (content), proving
+;; the pushed element is a heap-boxed COPY read back by value -- two
+;; independently-constructed vecs of content-equal Points are equal, and a
+;; differing element makes them unequal.
+;;
+;; Compiled-only (requires.compiled): the tree-walking interpreter dispatches
+;; Eq on a value's runtime carrier, so it pointer-compares the two distinct
+;; TuriStruct element boxes and reports content-equal Points as unequal -- the
+;; same interpreter Eq-dispatch-on-carrier gap tracked for cstr HAMT keys.  The
+;; compiled path grounds the element to Point and threads Eq[Point].
+(load "stdlib/typeclass.tur")
+
+(defstruct Point :copy [x : int y : int])
+
+(definstance Eq [Point]
+  (eq? [a b] (and (= (.x a) (.x b)) (= (.y a) (.y b)))))
+
+(defn main [] : int
+  ;; content-equal, independently constructed -> equal (value semantics)
+  (println (if (.eq? (vec-of (Point 1 2)) (vec-of (Point 1 2))) "eq" "ne"))
+  ;; a differing element -> unequal
+  (println (if (.eq? (vec-of (Point 1 2)) (vec-of (Point 9 9))) "eq" "ne"))
+  0)
