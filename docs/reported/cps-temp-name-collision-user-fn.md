@@ -13,7 +13,7 @@ is shadowed by the synthesized temporary, so the reference dispatches through th
 wrong value and crashes.
 
 This is the same class as the now-fixed continuation-name collision
-([docs/archive/cps-reserved-name-collision-user-fn.md](../archive/cps-reserved-name-collision-user-fn.md)):
+([docs/archive/history/cps-reserved-name-collision-user-fn.md](../archive/cps-reserved-name-collision-user-fn.md)):
 that fix namespaced the continuation `k -> __kont`, but the `t<N>` temporaries
 (and various un-namespaced `__*` internals) were left as-is.
 

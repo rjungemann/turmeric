@@ -111,7 +111,7 @@ capture-cast improvement also removed a latent `-Wint-conversion` there).
 
 Even with the codegen fixed, the current implementation gates itself down to
 **one** constraint and a **`* -> *`** method receiver. From
-[docs/archive/constrained-hkt-forall-mode-b-plan.md](constrained-hkt-forall-mode-b-plan.md)
+[docs/archive/history/constrained-hkt-forall-mode-b-plan.md](constrained-hkt-forall-mode-b-plan.md)
 (the "Not yet" note, ~line 161):
 
 > Not yet: multiple constraints and HKT `(f a)` method receivers -- both

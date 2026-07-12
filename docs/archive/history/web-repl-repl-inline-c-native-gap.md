@@ -31,7 +31,7 @@ The WASM half was validated on native only (no Emscripten toolchain here) but
 shares the exact same `turi_env_register_interpreter_natives` call.
 
 **Severity:** low (follow-up carved out of
-`docs/archive/web-repl-missing-stdlib-preload.md`; a bounded, well-understood
+`docs/archive/history/web-repl-missing-stdlib-preload.md`; a bounded, well-understood
 subset of stdlib is still unavailable in the two interpreter entry points that
 do not link `src/main.c`).
 
@@ -107,7 +107,7 @@ Re-verified the first bullet from the interactive `tur repl`:
 
 ## Related
 
-- `docs/archive/web-repl-missing-stdlib-preload.md` -- the resolved parent report.
+- `docs/archive/history/web-repl-missing-stdlib-preload.md` -- the resolved parent report.
 - `docs/reported/wasm-repl-no-show-collection-preload.md` -- sibling WASM-REPL
   parity gap (collection `Show` preload + `turi_try_show_by_tag` wiring); that
   one is *not* a native-registration gap and is fixable independently.

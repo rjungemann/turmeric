@@ -1,6 +1,6 @@
 # Fix paper trail -- catch-unwind result-box / payload leak
 
-Resolved 2026-07-07. Report: `docs/archive/catch-unwind-result-box-leak.md`.
+Resolved 2026-07-07. Report: `docs/archive/history/catch-unwind-result-box-leak-report.md`.
 
 ## Change
 

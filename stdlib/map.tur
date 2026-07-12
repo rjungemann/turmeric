@@ -21,7 +21,7 @@
 ;; module is deduped and these forms are no-ops there; declaring them here makes
 ;; an isolated `(load "stdlib/map.tur")` -- e.g. from a libturi embedder --
 ;; self-sufficient instead of tripping on unknown `hamt/*` names and an
-;; undefined `Eq`. See docs/archive/interp-load-set-map-elaboration-gap.md.
+;; undefined `Eq`. See docs/archive/history/interp-load-set-map-elaboration-gap.md.
 (load "stdlib/typeclass-eq.tur")
 
 (load "stdlib/typeclass-hash.tur")

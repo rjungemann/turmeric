@@ -10,8 +10,8 @@ area: compiled backend / runtime (catch-unwind, carrier/by-value bridge, box lif
 # `catch-unwind` residuals: `err-val` box leak, returned-box leak, and unbridged if/match catch-box return
 
 Three bounded residuals left behind by the two landed catch-unwind fixes
-(`docs/archive/catch-unwind-thunk-closure-leak.md`,
-`docs/archive/catch-unwind-byvalue-result-return-mismatch.md`). All are
+(`docs/archive/history/catch-unwind-thunk-closure-leak-report.md`,
+`docs/archive/history/catch-unwind-byvalue-result-return-mismatch-report.md`). All are
 long-standing, per-catch-site bounded, and uncommon; grouped here so they are not
 forgotten. None block v1.
 
@@ -153,4 +153,4 @@ to run and returning the raw Result).
 The stackless-catch-unwind lowering keeps its own per-iteration aggregate-box
 leak (a tail-recursive catch loop leaks 24 B/iter); that path is separate from
 the native fixes above and was scoped under the now-archived
-`docs/archive/catch-unwind-aggregate-followups-plan.md` (Part B).
+`docs/archive/history/catch-unwind-aggregate-followups-plan.md` (Part B).

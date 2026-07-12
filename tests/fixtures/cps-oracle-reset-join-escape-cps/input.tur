@@ -4,7 +4,7 @@
 ;; Previously this DEGRADED on the default backend (reset->body-eval, shift->
 ;; operand) and was evicted by the CT-IR backend.  The direct path now lowers
 ;; it via setjmp/longjmp (correct abortive semantics) and the CT-IR delim_ok
-;; admits it, so direct == cps.  See docs/archive/direct-reset-shift-degrades-out-of-subset.md.
+;; admits it, so direct == cps.  See docs/archive/history/direct-reset-shift-degrades-out-of-subset.md.
 ;;
 (defn f [c : bool] : int
   (reset (+ 10 (if c (shift (fn [v] v) 1) 5))))

@@ -66,7 +66,7 @@ at that lambda boundary (elab_call.c:5639), so the dispatch is never found for
 conversion, and the residual falls through to the TUR-E0311 guard
 (`dict_clone_dispatch_in_nested_lambda`, elab_call.c ~6210). This is a design
 boundary of the by-value HKT lowering, not a miscompile -- Phases 1-3 of
-`docs/archive/forall-dict-pass-nested-mapper-general-plan.md` cover every mapper
+`docs/archive/history/forall-dict-pass-nested-mapper-general-plan.md` cover every mapper
 shape reachable through a poly-wrap.
 
 ## Fix directions

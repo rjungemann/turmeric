@@ -509,7 +509,7 @@ regression**: pre-D3 the DK direct lowering (`emit_cps_cloneable_reset`) reified
 the context correctly (103); deleting it dropped these shapes onto the buggy
 legacy path. D3's "0 corpus reaches" gate had a coverage blind spot (no fixture
 of the form `(op (non-atomic) (cloneable-shift))`). Full write-up:
-[docs/archive/cloneable-shift-nonatomic-operand-context-dropped.md](../../archive/cloneable-shift-nonatomic-operand-context-dropped.md).
+[docs/archive/history/cloneable-shift-nonatomic-operand-context-dropped.md](../../archive/cloneable-shift-nonatomic-operand-context-dropped.md).
 
 This makes "retain the fallback" untenable and reframes the fork as
 correctness-first: fix the reachable shapes, and make anything still unsupported

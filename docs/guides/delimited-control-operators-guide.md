@@ -222,6 +222,34 @@ runtime structures are in
 [`src/runtime/runtime.h`](../../src/runtime/runtime.h) (`tur_cont`,
 `tur_cloneable_cont`, `tur_frame`).
 
+### Abortive shift and the direct/CPS oracle
+
+A base `shift` is **abortive**: it discards its delimited context. The value
+delivered to the enclosing `reset` is `f(body-value)`, where `f` is the shift's
+receiver -- not the body value itself. Two invariants fall out of this, and both
+have been the root cause of silent miscompiles:
+
+1. **The receiver must be applied.** Lowering `(shift f body)` as merely the CPS
+   of the body value -- dropping `f` -- makes `(shift (fn [v] v) x)` and
+   `(shift (fn [v] (* 2 v)) x)` produce identical IR. The receiver is part of
+   the semantics, so the IR must lower it as "apply `f` to the body value."
+2. **An out-of-subset `reset` must not degrade to plain body-eval.** If a
+   backend cannot lower a given reset shape and falls back to
+   `emit_value(body)`, the enclosed `shift` collapses to "return its operand"
+   and the reset yields the wrong value (the abortive continuation is never
+   discarded). The direct backend instead lowers a branch-bearing base reset
+   through a `setjmp`/`longjmp` escape (`emit_cps_reset_escape`) to the
+   innermost reset landing.
+
+Because the direct and CPS backends lower these shapes independently, they are
+cross-checked by `cps-oracle-*` fixtures (e.g. `cps-oracle-reset-join-escape`,
+`cps-oracle-reset-both-branch-shift`) that assert `direct == cps` on the same
+program. When you extend the admitted reset/shift subset, add or re-admit the
+matching oracle -- a lowering retired or narrowed on a usage metric alone can
+silently drop the sole correct emitter for a shape, so guard the shapes you stop
+handling with a hard codegen error (as TUR-E0710 does for cloneable contexts)
+rather than a fallback.
+
 ## See Also
 
 - [Effects System Guide](effects-system-guide.md) -- Algebraic effects, which lower to `shift`/`reset`

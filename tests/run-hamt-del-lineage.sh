@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tests/run-hamt-del-lineage.sh -- regression gate for the HAMT delete-path
-# sibling refcount bug (docs/archive/hamt-delete-sibling-refcount.md).
+# sibling refcount bug (docs/archive/history/hamt-delete-sibling-refcount-report.md).
 #
 # Compiles the HAMT runtime + tests/test_hamt_del_lineage.c with AddressSanitizer
 # + UndefinedBehaviorSanitizer (and LeakSanitizer on Linux) and runs it.  The

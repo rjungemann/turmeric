@@ -338,7 +338,7 @@ callee reaches a `reset` in its caller across the threaded continuation.
 
 - **Receiver fix (prerequisite).** `cps_ir` previously discarded the shift
   receiver `k_fn`, making the IR lossy (see
-  `docs/archive/cps-ir-shift-receiver-dropped.md`). It now translates
+  `docs/archive/history/cps-ir-shift-receiver-dropped.md`). It now translates
   `(shift k_fn body)` as the CPS of `(k_fn body)` delivered to the prompt, so
   the delivered value is the correct `receiver(body-value)`; a non-callable
   receiver becomes `CT_UNSUPPORTED` (fallback, never a miscompile).

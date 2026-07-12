@@ -7,7 +7,7 @@
 #
 #   - cu-rec / cu-catch-deep / atom-rec / mutual-rec / fiber-rec are the five
 #     (graduated) stackless catch-unwind shapes from
-#     docs/archive/catch-unwind-graduation-plan.md Part A.  At this depth the
+#     docs/archive/history/catch-unwind-graduation-plan.md Part A.  At this depth the
 #     native (non-trampolined) lowering exhausts the C stack for the
 #     catch-nesting shapes; the flat-stack trampoline is what lets them finish.
 #   - effect-rec is the Phase F4 probe from

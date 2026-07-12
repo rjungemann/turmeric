@@ -71,19 +71,19 @@ full suite is green (2142/2142).**
   emitter's indirect-call block cast the fat-closure ENV pointer to a bare
   function pointer and jumped into (segfault). A capturing-closure shift receiver
   now evicts to the direct shift lowering (`indirect_callee_ok`, src/passes/cps_ir.c).
-  See [docs/archive/cps-continuation-substrate-miscompile.md](../../archive/cps-continuation-substrate-miscompile.md).
+  See [docs/archive/history/cps-continuation-substrate-miscompile.md](../../archive/cps-continuation-substrate-miscompile.md).
 - `contract-nested` -- **RESOLVED.** A heap-join whose join body is itself a
   cps->cps tail call (`inner__cps(t0, k)`) lifted into a value-transform frame fn
   that has no `k` in scope (`'k' undeclared`). `needs_heap_join` now rejects a
   jbody containing a cps->cps tail call (`jbody_has_cps_tailcall`, emit_cps_ir.c),
   evicting the function to the direct emitter. See
-  [docs/archive/cps-heap-join-references-enclosing-k.md](../../archive/cps-heap-join-references-enclosing-k.md).
+  [docs/archive/history/cps-heap-join-references-enclosing-k.md](../../archive/cps-heap-join-references-enclosing-k.md).
 - `hkt-stdlib-parser-instances` -- **RESOLVED.** A `CT_LETCONT` join-param SLOT
   was named by its raw `param.name` (a kebab-case `let` binder `first-results`,
   an invalid C identifier) while the join body referenced the same source binding
   via `name_for_binding` (mangled). The slot is now named via `cvar_cname`,
   matching the body. See
-  [docs/archive/cps-delegated-binder-raw-kebab-name.md](../../archive/cps-delegated-binder-raw-kebab-name.md).
+  [docs/archive/history/cps-delegated-binder-raw-kebab-name.md](../../archive/cps-delegated-binder-raw-kebab-name.md).
 
 So the corrected headline is: graduation shipped with 3 pre-existing CPS
 lowering/emit bugs surfaced by making the CPS path the default (all orthogonal to

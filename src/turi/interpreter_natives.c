@@ -5,7 +5,7 @@
  * interpreter entry point -- not just the `tur` CLI.  The two entry points that
  * do not link main.c (the WASM REPL and the interactive `tur repl`) previously
  * could not evaluate any op whose body resolved to one of these natives.  See
- * interpreter_natives.h and docs/archive/web-repl-repl-inline-c-native-gap.md.
+ * interpreter_natives.h and docs/archive/history/web-repl-repl-inline-c-native-gap.md.
  *
  * The fixture-runner helpers (wk_apply_flags / wk_write_result / wk_drain_pipes
  * / wk_eval_fixture) that fork/pipe stay in src/main.c; only the native

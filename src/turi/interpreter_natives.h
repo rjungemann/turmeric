@@ -13,7 +13,7 @@
  * Relocating it into tur_core (mirroring turi/collections_native.c and
  * turi/preload.c) exposes turi_env_register_interpreter_natives(env), which the
  * three entry points call after turi_env_preload_*.  See
- * docs/archive/web-repl-repl-inline-c-native-gap.md.
+ * docs/archive/history/web-repl-repl-inline-c-native-gap.md.
  */
 #ifndef TURI_INTERPRETER_NATIVES_H
 #define TURI_INTERPRETER_NATIVES_H

@@ -153,6 +153,39 @@ process-lifetime closures, so the harnesses that exercise it default to
 
 ---
 
+## Embedding the interpreter: keep every entry point in sync
+
+`tur --interpret`, `tur repl`, and the WASM REPL are three separate entry points
+into the same tree-walker. A capability wired into only one of them is a parity
+bug that the `tools/check_turi_*` ratchets do **not** catch (they check
+elaboration coverage, not embedder wiring). Three rules keep them from drifting;
+each has bitten in practice.
+
+- **Native overrides live in `tur_core`, never in `main.c`.** The C
+  implementations that shadow stdlib inline-C bodies -- collection ops
+  (`collections_native.c`), keyword/`:Sym`-keyed maps, contract panics,
+  json/schema, lazy seqs -- must compile into `tur_core` (reached through one
+  `turi_env_register_interpreter_natives`), because that is what lands in
+  `libturi.a` / `libturi_wasm.a`. Anything registered from `main.c` compiles
+  only into the `tur` executable, so an embedder or the WASM REPL that does not
+  link `main.c` gets no override and hits `inline-C not supported in interpreter
+  mode` for exactly those ops.
+- **Stdlib preload goes through one shared helper.** Reader-macro data literals
+  lower unconditionally (`#map{...}` -> `hamt-of`, `#set{...}` -> `set-of`)
+  onto stdlib `defmacro`s, so any entry point that builds a bare env without
+  preloading stdlib fails them with "unknown function." Route all three entry
+  points through the shared `turi_env_preload_*` helper (`src/turi/preload.c`)
+  so they cannot diverge.
+- **Result display is a four-tier dispatch -- carry all four tiers.** REPL /
+  auto-display value printing cascades `turi_try_show` (TURI_STRUCT) ->
+  `turi_show_result` (Pair/Cons) -> `turi_try_show_by_tag` (named ADT / struct /
+  heap collection: Vec/Set/Map/user struct via its Show instance) ->
+  `turi_value_repr` (raw-pointer fallback). Vec/Set/Map are `TURI_INT` heap
+  pointers to the tree-walker, so an entry point missing the `by_tag` tier
+  prints collections as raw pointers instead of dispatching their Show instance.
+
+---
+
 ## Performance note
 
 `turi` is a tree walker: expect a **roughly 10-100x slowdown** versus compiled

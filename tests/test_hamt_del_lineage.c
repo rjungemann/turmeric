@@ -1,6 +1,6 @@
 /* test_hamt_del_lineage.c -- regression for the delete-path sibling refcount bug.
  *
- * Bug (docs/archive/hamt-delete-sibling-refcount.md): node_delete's collapse
+ * Bug (docs/archive/history/hamt-delete-sibling-refcount-report.md): node_delete's collapse
  * arms (bitmap and array) build a fresh node holding only the surviving
  * siblings, but also released the *deleted* child from the OLD, shared node
  * `n`.  That old node is persistent and still owns that reference, so once the

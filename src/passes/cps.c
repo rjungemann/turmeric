@@ -422,7 +422,7 @@ static void cps_collect_calls(const Expr *e, CpsNode *nodes, uint32_t n_nodes,
                  * argument is still caught by the seed scan (cps_directly_uses_
                  * control) and the arg recursion below, so skipping the call
                  * itself is sound.  See
-                 * docs/archive/cps-coloring-overcolors-nonnode-calls.md. */
+                 * docs/archive/history/cps-coloring-overcolors-nonnode-calls.md. */
                 if (e->as.call_.ctor == NULL)
                     self->has_indirect = true;
             }

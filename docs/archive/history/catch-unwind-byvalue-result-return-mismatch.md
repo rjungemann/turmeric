@@ -1,7 +1,7 @@
 # Fix paper trail -- catch-unwind by-value Result return mismatch
 
 Resolved 2026-07-08. Report:
-`docs/archive/catch-unwind-byvalue-result-return-mismatch.md`.
+`docs/archive/history/catch-unwind-byvalue-result-return-mismatch-report.md`.
 
 ## Symptom
 

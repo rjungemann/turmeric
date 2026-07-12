@@ -16,7 +16,7 @@ are correct, memory is not.
   N=100 and N=4000; the residue is unrelated process-lifetime interpreter
   allocations, not `Vec` buffers).
 - **Set/Map: fixed** via fix direction 1, once the blocking HAMT delete
-  refcount bug (`docs/archive/hamt-delete-sibling-refcount.md`) was resolved.
+  refcount bug (`docs/archive/history/hamt-delete-sibling-refcount-report.md`) was resolved.
   Each Set/Map box is a 2-word wrapper `[HAMT*, TuriCollBuf*]` registered on the
   env at `set-new`/`map-new`/derive time (`set_wrap_tracked`) and released at
   `turi_env_free` via `tur_hamt_free`; `set-free`/`map-free` tombstone the node

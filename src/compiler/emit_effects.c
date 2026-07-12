@@ -1312,7 +1312,7 @@ char *emit_effects_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
      * boundary whose captured continuation was the IDENTITY -- it silently
      * DROPPED the delimited context, so `(+ (compute) (cloneable-shift ...))`
      * returned the wrong value with no error (see
-     * docs/archive/cloneable-shift-nonatomic-operand-context-dropped.md).  The
+     * docs/archive/history/cloneable-shift-nonatomic-operand-context-dropped.md).  The
      * common case (a non-atomic pure arithmetic operand) now lowers natively;
      * any residual shape is rejected here with a real diagnostic instead of the
      * silent miscompile, mirroring the serial TUR-E0706 path. */

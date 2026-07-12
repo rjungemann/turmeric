@@ -5,7 +5,7 @@
 ;;
 ;; Before D6a this evicted to the legacy setjmp lowering, which dropped the
 ;; context and silently printed the wrong number (see
-;; docs/archive/cloneable-shift-nonatomic-operand-context-dropped.md).
+;; docs/archive/history/cloneable-shift-nonatomic-operand-context-dropped.md).
 
 (defn id [x : int] : int x)
 

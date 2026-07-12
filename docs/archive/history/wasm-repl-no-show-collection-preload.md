@@ -10,7 +10,7 @@ four-tier dispatch in `src/turi/repl.c`.
 
 **Severity:** low (usability paper cut, browser REPL only; a follow-up carved
 out of the `repl-show-collections` work -- see
-`docs/archive/repl-no-show-instances-for-collections-and-structs.md`).
+`docs/archive/history/repl-no-show-instances-for-collections-and-structs.md`).
 
 ## Summary
 

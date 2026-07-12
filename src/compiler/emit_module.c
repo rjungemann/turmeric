@@ -6715,7 +6715,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * elsewhere.  Freeing it is a nonheap-free / double-free hazard.  This
      * matches tur_result_box_free's deliberate refusal to free the caught
      * payload value (see its comment below and
-     * docs/archive/catch-unwind-returned-err-box-payload-leak.md). */
+     * docs/archive/history/catch-unwind-returned-err-box-payload-leak.md). */
     buf_puts(out, "static void panic_payload_free(tur_panic_payload *p) {\n");
     buf_puts(out, "    if (p) { free(p); }\n");
     buf_puts(out, "}\n\n");

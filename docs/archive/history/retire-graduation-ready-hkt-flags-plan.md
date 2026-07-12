@@ -1,7 +1,7 @@
 ---
 title: Retire the four graduation-ready HKT/forall experiment flags -- Plan
 category: Planning
-description: Four of the five remaining `--enable=<name>` experiment flags (forall-kinds, forall-constraints, hkt-hrt, hrt-curried-result) have no visible feature deficit -- their gated code paths pass fixtures, their plan-doc TODO sections are drained, and they are only held back by inertia. This plan graduates them to always-on in a single change, deletes the `g_opt_*` bits and the disable-side branches, and archives the plan docs. The fifth flag (forall-dict-pass) had a codegen deficit (now fixed, archived at docs/archive/forall-dict-pass-codegen-and-scope.md) plus a remaining scope deficit (multi-constraint / HKT-receiver dicts) tracked in docs/upcoming/v1/forall-dict-pass-multi-constraint-hkt-plan.md; it stays experimental behind a bumped expires_at.
+description: Four of the five remaining `--enable=<name>` experiment flags (forall-kinds, forall-constraints, hkt-hrt, hrt-curried-result) have no visible feature deficit -- their gated code paths pass fixtures, their plan-doc TODO sections are drained, and they are only held back by inertia. This plan graduates them to always-on in a single change, deletes the `g_opt_*` bits and the disable-side branches, and archives the plan docs. The fifth flag (forall-dict-pass) had a codegen deficit (now fixed, archived at docs/archive/history/forall-dict-pass-codegen-and-scope.md) plus a remaining scope deficit (multi-constraint / HKT-receiver dicts) tracked in docs/upcoming/v1/forall-dict-pass-multi-constraint-hkt-plan.md; it stays experimental behind a bumped expires_at.
 ---
 
 # Retire the four graduation-ready HKT/forall experiment flags -- Plan
@@ -56,7 +56,7 @@ recipe:
    /* forall-kinds GRADUATED 2026-07-XX -- explicit kind annotations on
     * forall/exists bound vars (e.g. (f :: * -> *)) are always accepted;
     * the gate at elab_types.c:1115 is removed.  See
-    * docs/archive/constrained-hkt-forall-plan.md. */
+    * docs/archive/history/constrained-hkt-forall-plan.md. */
    ```
 
 2. **Delete the global** in `src/runtime/globals.{c,h}` (`g_opt_forall_kinds`)
@@ -112,7 +112,7 @@ the gate site whose disable branch collapses.
     fat dispatch) and `elab_call.c:6144` (instantiates the inner `TY_FN`
     result). Drop both guards; both paths become unconditional.
   - Plan: the mode-B plan is archived at
-    `docs/archive/constrained-hkt-forall-mode-b-plan.md`; the live tracking for
+    `docs/archive/history/constrained-hkt-forall-mode-b-plan.md`; the live tracking for
     the surviving `forall-dict-pass` row is
     `docs/upcoming/v1/forall-dict-pass-multi-constraint-hkt-plan.md`.
 

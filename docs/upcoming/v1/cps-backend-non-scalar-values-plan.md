@@ -217,7 +217,7 @@ so a performer and its handler are never split. Regression fixtures:
 `cps-backend-handler-fallback` (colored handler falls back on a captured param)
 and `cps-backend-effect-under-match` (uncolored performer, effect hidden under
 `match`, coupled only dynamically). Archived report:
-`docs/archive/cps-backend-perform-handle-machine-split.md`.
+`docs/archive/history/cps-backend-perform-handle-machine-split.md`.
 
 Still open in N1: owning pointer types (`ref`/`rc`/`weak`/`lref`) -- but **not**
 as a `slot_ty` addition. The owning-pointers investigation
@@ -301,7 +301,7 @@ branches on the CPS path). `Option`/`Result` constructed and destructured across
 an effect boundary now CPS-emit (fixtures `cps-backend-option-effect`,
 `cps-backend-struct-effect`), direct-vs-CPS equal + LeakSanitizer-clean. Details
 + residuals archived at
-`docs/archive/cps-coloring-overcolors-nonnode-calls.md`.
+`docs/archive/history/cps-coloring-overcolors-nonnode-calls.md`.
 
 **Still open in N3:**
   - **Aggregates that actually CROSS the slot** (a struct as an effect payload,
@@ -464,7 +464,7 @@ must be true at graduation:
 7. **Fallback removed** (N6) -- no `CT_UNSUPPORTED` whole-function bail-out
    remains for colored functions; the direct-vs-CPS dual path is retired. The
    **perform/handle machine-split** hole
-   (`docs/archive/cps-backend-perform-handle-machine-split.md`) is already closed
+   (`docs/archive/history/cps-backend-perform-handle-machine-split.md`) is already closed
    by the co-classification fixpoint in `ensure_S`, so while both paths coexist
    no perform/handle pair is split; N6 then removes the fallback entirely.
    *Open -- the terminal item, gated on 100% form coverage for colored

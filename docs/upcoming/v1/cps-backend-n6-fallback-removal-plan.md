@@ -481,7 +481,7 @@ fallback can be deleted:
     continuation env) subsequently landed too, via the fat-closure-capture slice
     above (`cps-backend-capture-fnvalue`) -- a captured `tur_poly_fn_t` rides the
     env by value. See
-    [docs/archive/cps-backend-indirect-call-fatclosure-param-divergence.md](../../archive/cps-backend-indirect-call-fatclosure-param-divergence.md).
+    [docs/archive/history/cps-backend-indirect-call-fatclosure-param-divergence.md](../../archive/cps-backend-indirect-call-fatclosure-param-divergence.md).
   - **cloneable / serial / async are a CARVE-OUT, not a required port (finding).**
     These are **not broken** and need no N6 work for correctness: they are handled
     by the *older* whole-program CPS transform in `emit_cps.c` (gated on the

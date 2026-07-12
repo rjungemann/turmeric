@@ -1,4 +1,4 @@
-;; forall-dict-pass GRADUATED (docs/archive/forall-dict-pass-multi-constraint-hkt-plan.md):
+;; forall-dict-pass GRADUATED (docs/archive/history/forall-dict-pass-multi-constraint-hkt-plan.md):
 ;; a genuinely polymorphic constrained function CAN now be passed as a rank-2
 ;; argument -- when the rank-2 parameter's forall type DECLARES the matching
 ;; constraint, so the carrier threads one runtime dictionary per constraint (see

@@ -7,9 +7,9 @@ capturing mapper, or a dispatch in a deeper nested lambda), covered by the
 negative fixture `tests/fixtures/errors/forall-dict-nested-lambda-multiclass/`.
 Positive fixture: `tests/fixtures/van-laarhoven-lens-show-mapper/`.  Phase 4's
 "remove the guard entirely" is deferred to the residual follow-up below.
-**Predecessor:** `docs/archive/forall-dict-pass-multi-constraint-hkt-plan.md`
+**Predecessor:** `docs/archive/history/forall-dict-pass-multi-constraint-hkt-plan.md`
 (graduated the flag; this shape was guarded with TUR-E0311 rather than lowered).
-**Tracked bug:** `docs/archive/forall-dict-pass-nested-lambda-method.md` (resolved).
+**Tracked bug:** `docs/archive/history/forall-dict-pass-nested-lambda-method.md` (resolved).
 
 ## Residual follow-up (RESOLVED 2026-07-06)
 
@@ -19,7 +19,7 @@ TUR-E0311 -- a **multi-class mapper** (N dicts), a **capturing mapper**, and
 **deeper nesting** -- and were broken out into their own tracked plan.  All three
 now lower; see the resolved plan:
 
-**->** `docs/archive/forall-dict-pass-nested-mapper-general-plan.md`.
+**->** `docs/archive/history/forall-dict-pass-nested-mapper-general-plan.md`.
 
 Only one residual remains guarded by TUR-E0311: a dispatch inside a lifted lambda
 that is DIRECTLY APPLIED in place (`((fn [y] (show y)) x)`), which has no closure

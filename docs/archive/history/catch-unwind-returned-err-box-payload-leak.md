@@ -36,7 +36,7 @@ When a function returns a `catch-unwind` / `catch-panic-of` box as a by-value
 return bridge frees only the 24 B box struct and leaves the 32 B
 `tur_panic_payload` behind: a bounded per-return leak. This is the deliberate
 residual left by the `catch-unwind-return-bridge-residuals` fix
-(`docs/archive/catch-unwind-return-bridge-residuals.md`, Parts B/C), split out
+(`docs/archive/history/catch-unwind-return-bridge-residuals.md`, Parts B/C), split out
 here so it is not forgotten. Long-standing shape, uncommon (catching then
 directly returning the raw Result), does not block v1.
 

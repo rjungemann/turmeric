@@ -175,16 +175,16 @@ bool g_werror_inline_c_narrow_params = false;
 
 /* forall-kinds / forall-constraints / hkt-hrt GRADUATED 2026-07-06 -- always-on;
  * their enable bits and elaboration gates are gone.  See
- * docs/archive/constrained-hkt-forall-plan.md. */
+ * docs/archive/history/constrained-hkt-forall-plan.md. */
 
 /* forall-dict-pass GRADUATED 2026-07-06 -- always-on; runtime dictionary
  * passing for a polymorphic constrained function used as a rank-2 argument
  * (mode B) no longer has an enable bit.  See
- * docs/archive/forall-dict-pass-multi-constraint-hkt-plan.md. */
+ * docs/archive/history/forall-dict-pass-multi-constraint-hkt-plan.md. */
 
 /* hrt-curried-result GRADUATED 2026-07-06 -- always-on; the curried rank-2
  * result-is-a-function elaboration ((l x) yields a callable closure) no longer
- * needs an enable bit.  See docs/archive/constrained-hkt-forall-mode-b-plan.md. */
+ * needs an enable bit.  See docs/archive/history/constrained-hkt-forall-mode-b-plan.md. */
 
 /* vl-wide-functor GRADUATED 2026-07-04 (VBM4 of van-laarhoven-monomorphization-
  * plan) -- a van Laarhoven lens may now focus through a WIDE by-value aggregate

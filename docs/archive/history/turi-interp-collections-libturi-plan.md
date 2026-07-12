@@ -19,7 +19,7 @@ self-declare those deps with `(load "stdlib/...")` (deduped under auto-load), so
 an isolated `(load "stdlib/set.tur")` / `(load "stdlib/map.tur")` from a bare
 embedder elaborates cleanly and the public Set/Map surface round-trips through
 `turi_eval` -- resolved, see
-`docs/archive/interp-load-set-map-elaboration-gap.md`.
+`docs/archive/history/interp-load-set-map-elaboration-gap.md`.
 **Goal:** make the `Vec` / `Set` / `Map` (and backing `hamt`) collection
 operations available to **every** consumer of the interpreter -- embedders using
 the `turi_eval` C API, the web/WASM REPL, and the interpreter test harnesses --

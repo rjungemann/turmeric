@@ -14,7 +14,7 @@ This is the direct follow-on to
 [turi-interp-collections-libturi-plan.md](turi-interp-collections-libturi-plan.md),
 which moved the `Vec` / `Set` / `Map` / `HAMT` natives into `tur_core`, and to
 the `set.tur`/`map.tur` `(load ...)` dependency fix
-([docs/archive/interp-load-set-map-elaboration-gap.md](../archive/interp-load-set-map-elaboration-gap.md)).
+([docs/archive/history/interp-load-set-map-elaboration-gap.md](../archive/interp-load-set-map-elaboration-gap.md)).
 Those made `Set`/`Map` elaborate and round-trip through an embedder; but any
 stdlib op whose inline-C body is backed by a *still-CLI-only* native (e.g.
 `option-map`, `result-flat-map`, a `seq` transform, a `json` decode) remains

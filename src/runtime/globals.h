@@ -154,21 +154,21 @@ extern bool g_werror_inline_c_narrow_params;
 /* forall-kinds GRADUATED 2026-07-06 -- explicit kind annotations on
  * forall/exists bound variables ((f :: * -> *)) are always accepted; the enable
  * bit and its elab_types.c gate are gone.  forall-constraints and hkt-hrt
- * graduated the same day (see docs/archive/constrained-hkt-forall-plan.md). */
+ * graduated the same day (see docs/archive/history/constrained-hkt-forall-plan.md). */
 
 /* forall-dict-pass GRADUATED 2026-07-06 -- always-on.  A genuinely polymorphic
  * constrained function passed as a rank-2 argument is compiled to dispatch its
  * class methods through a runtime dictionary threaded via the poly carrier (a
  * dict-clone of the function + one leading dict argument per constraint,
  * resolved at each invocation).  The enable bit is gone.  See
- * docs/archive/forall-dict-pass-multi-constraint-hkt-plan.md. */
+ * docs/archive/history/forall-dict-pass-multi-constraint-hkt-plan.md. */
 
 /* hrt-curried-result GRADUATED 2026-07-06 -- a rank-2 poly fn whose forall body
  * RESULT is itself a function type (e.g. `forall a. a -> (a -> a)`) always
  * instantiates that result to a concrete callable closure, so `(l x)` yields a
  * closure `((l x) y)` can apply (van Laarhoven optic composition).  The enable
  * bit and its two elab_call.c gates are gone.  See
- * docs/archive/constrained-hkt-forall-mode-b-plan.md. */
+ * docs/archive/history/constrained-hkt-forall-mode-b-plan.md. */
 
 /* vl-wide-functor GRADUATED 2026-07-04 (VBM4).  A van Laarhoven lens may focus
  * through a WIDE by-value aggregate functor (a `:copy` struct / single-variant

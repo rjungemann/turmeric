@@ -7,7 +7,7 @@
 #
 # As of 2026-07-06 the experiment registry is EMPTY: forall-dict-pass -- the
 # last surviving flag, and the probe this test used to key on -- graduated to
-# always-on (docs/archive/forall-dict-pass-multi-constraint-hkt-plan.md).  With
+# always-on (docs/archive/history/forall-dict-pass-multi-constraint-hkt-plan.md).  With
 # no experiment registered, the "enabling a flag changes compile behavior"
 # scenarios (a gated source that only compiles with --enable=<x>) are not
 # expressible -- there is no gated feature to probe.  This test therefore

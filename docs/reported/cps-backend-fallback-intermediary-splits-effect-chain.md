@@ -9,7 +9,7 @@ miscompiles with the fallback removed.
 
 The perform/handle co-classification guard (`ensure_S` in
 `src/compiler/emit_cps_ir.c`, Rule B; see
-`docs/archive/cps-backend-perform-handle-machine-split.md`) keeps a `perform E`
+`docs/archive/history/cps-backend-perform-handle-machine-split.md`) keeps a `perform E`
 and its `handle E` on the same machine by tying together every colored function
 that **syntactically performs or handles** E. It does not account for an
 **intermediary** function that neither performs nor handles E but sits on the
@@ -103,7 +103,7 @@ strictly more common; the heap-join change reduced its incidence.
 
 ## Related
 
-- `docs/archive/cps-backend-perform-handle-machine-split.md` -- the
+- `docs/archive/history/cps-backend-perform-handle-machine-split.md` -- the
   direct performer<->handler split, resolved by the co-classification guard this
   report extends.
 - `docs/reported/cps-coloring-ascription-hides-control-op.md` -- a coloring

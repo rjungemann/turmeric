@@ -59,7 +59,7 @@ UAF-free.
 ## Summary
 
 Two residual per-catch-site leaks remain after the result-box / payload leak was
-fixed (`docs/archive/catch-unwind-result-box-leak.md`):
+fixed (`docs/archive/history/catch-unwind-result-box-leak-report.md`):
 
 1. **Thunk fat-closure (16 bytes / catch).** `(catch-unwind (fn [] ...))`
    materializes the `(fn ...)` argument into a 2-slot fat closure

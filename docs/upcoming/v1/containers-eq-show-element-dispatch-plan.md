@@ -346,6 +346,6 @@ loop *receiver* but not the element read/compare *inside* the loop.
   collection Eq off-carrier (the "done" half this builds on).
 - `docs/archive/phase4-carrier-helper-inventory.md` -- which helpers are
   carrier-essential vs retypeable.
-- `docs/archive/repl-no-show-instances-for-collections-and-structs.md` -- the
+- `docs/archive/history/repl-no-show-instances-for-collections-and-structs.md` -- the
   resolved REPL-display report whose "cstr shows carrier" limitation this plan
   removes at the root.

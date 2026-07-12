@@ -26,7 +26,7 @@
 ;; by-value-aggregate inspection point this fixture asserts requires the concrete
 ;; form.  The pretty-printer's `^(tur_adt_)?Result(__.*)?$` regex matches the
 ;; monomorphized name.  See
-;; docs/archive/phase5-gdb-bare-result-lowered-to-int64-carrier.md.
+;; docs/archive/history/phase5-gdb-bare-result-lowered-to-int64-carrier.md.
 ;;
 ;; See docs/upcoming/debugger-plan.md (Phase 5) and
 ;; docs/upcoming/debugger-native-types-plan.md.

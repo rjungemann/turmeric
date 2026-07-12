@@ -190,7 +190,7 @@ fallback until the final phase removes it.
   re-admitted the join-bearing shapes (the `CT_LETCONT` case), so they lower on
   DK under the experiment with `direct == cps`. Oracles:
   `cps-oracle-reset-join-escape`, `cps-oracle-reset-both-branch-shift`. Resolved
-  report: [docs/archive/direct-reset-shift-degrades-out-of-subset.md](../../archive/direct-reset-shift-degrades-out-of-subset.md).
+  report: [docs/archive/history/direct-reset-shift-degrades-out-of-subset.md](../../archive/direct-reset-shift-degrades-out-of-subset.md).
 - **U2 -- call/cc + escape.** Port the `emit_cps_callcc_prelude` machinery.
   **Landed.** `(call/cc f)` / `(escape f)` (both `EX_CALLCC`) is an *undelimited*
   escape: its continuation is captured at a **local setjmp landing** that
@@ -221,7 +221,7 @@ fallback until the final phase removes it.
     `cps-oracle-escape-capture-in-shift-body`, `cps-oracle-escape-capture-after-handle`,
     `cps-oracle-escape-capture-in-handler-case`. (An owning-value capture still
     bails to the direct emitter -- not a Copy capture.) Resolved report:
-    [docs/archive/direct-capturing-escape-in-lifted-helper.md](../../archive/direct-capturing-escape-in-lifted-helper.md).
+    [docs/archive/history/direct-capturing-escape-in-lifted-helper.md](../../archive/direct-capturing-escape-in-lifted-helper.md).
   - **Prelude gate hardened:** `uses_callcc` (the escape-continuation prelude
     gate) was missing many control/value forms (`shift`, `handle`, `perform`,
     `resume`, `match`, `async`, casts, ...), so an escape nested in one lost its
@@ -263,7 +263,7 @@ fallback until the final phase removes it.
   control/value forms, so a `cloneable-shift` nested under an operator
   (`(+ 1 (cloneable-reset ...))`) emits its `tur_cloneable_cont` prelude on both
   backends. Oracle: `cps-oracle-cloneable-nested-op`. Resolved report:
-  [docs/archive/cloneable-prelude-gate-misses-nested-shift.md](../../archive/cloneable-prelude-gate-misses-nested-shift.md).
+  [docs/archive/history/cloneable-prelude-gate-misses-nested-shift.md](../../archive/cloneable-prelude-gate-misses-nested-shift.md).
 
   **Native emit -- Shape 1 landed.** The staged native port (see
   [cps-backend-unification-u3-native-emit-plan.md](cps-backend-unification-u3-native-emit-plan.md))

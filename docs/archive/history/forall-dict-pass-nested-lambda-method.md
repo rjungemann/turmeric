@@ -5,7 +5,7 @@
 that dispatches a SINGLE constraint method (the canonical van Laarhoven
 `(fn [x] (show x))`) is now LOWERED: the mapper is converted into a closure that
 captures the constraint's runtime dict and dispatches through the env-loaded dict
-(`docs/archive/forall-dict-pass-nested-lambda-dispatch-plan.md`). Positive fixture
+(`docs/archive/history/forall-dict-pass-nested-lambda-dispatch-plan.md`). Positive fixture
 `tests/fixtures/van-laarhoven-lens-show-mapper/`. A narrow residual (a mapper
 that dispatches >1 class, or a capturing mapper, or a dispatch in a deeper nested
 lambda) is still guarded with TUR-E0311 -- negative fixture

@@ -45,7 +45,7 @@ reshaped both parts:
   1's provenance problem rather than the tagged-struct path.
 
 This is the follow-up tail split out of
-`docs/archive/turi-value-pool-scratch-promotion-plan.md` (Phase A -- landed). That
+`docs/archive/history/turi-value-pool-scratch-promotion-plan.md` (Phase A -- landed). That
 work delivered the two-region split (`value_scratch` + `value_perm`), the
 `arena_reset`/`arena_owns` primitives, poison-on-reset, the opt-in
 `turi_env_set_scratch_promotion` API, and a conservative promotion walk that

@@ -2,7 +2,7 @@
 ;;; result.  The caught value is surfaced as (Result ThunkRet Panic), so the
 ;;; Result accessors -- declared over (Result A B) -- typecheck against it (they
 ;;; previously rejected the bare :int carrier with TUR-E0001).  See
-;;; docs/archive/ok-val-on-catch-unwind-result-fails-infer.md.
+;;; docs/archive/history/ok-val-on-catch-unwind-result-fails-infer.md.
 (defn main [] : int
   (let [r (catch-unwind (fn [] : int 42))]
     (if (ok? r)

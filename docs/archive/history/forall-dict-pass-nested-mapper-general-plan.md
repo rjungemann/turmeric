@@ -26,7 +26,7 @@ Landed pieces:
 - **Phase 4:** guard narrowed + documented; negative fixture repointed to the
   direct-application residual: `tests/fixtures/errors/forall-dict-nested-lambda-direct-apply/`.
 
-**Predecessor:** `docs/archive/forall-dict-pass-nested-lambda-dispatch-plan.md`
+**Predecessor:** `docs/archive/history/forall-dict-pass-nested-lambda-dispatch-plan.md`
 (landed the *primary* case -- a captureless mapper dispatching a SINGLE
 constraint class -- and narrowed the TUR-E0311 guard to the residual this plan
 covered).

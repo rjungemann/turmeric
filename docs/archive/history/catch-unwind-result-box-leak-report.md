@@ -128,7 +128,7 @@ RC-drop the box once its last use is past)? Options:
 
 For the `stackless-catch-unwind` lowering specifically, the same fix was the
 deferred "no-leak" item under G5 of the now-archived general lowering
-(`docs/archive/compiled-catch-unwind-general-lowering-plan.md`); the stackless
+(`docs/archive/history/compiled-catch-unwind-general-lowering-plan.md`); the stackless
 resume segment is a natural place to RC-drop the box once it is known not to
 escape, but it inherits this native behavior today on purpose (native is the
 correctness oracle for drop behavior, and a premature free would be a

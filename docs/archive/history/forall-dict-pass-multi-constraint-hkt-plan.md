@@ -12,8 +12,8 @@ nested lambda in the dict-clone body -- is rejected with a specific diagnostic
 its negative fixture is `tests/fixtures/errors/forall-dict-nested-lambda-method/`.
 
 **Original status:** OPEN -- graduation blocker for `--enable=forall-dict-pass`.
-**Split from:** `docs/archive/forall-dict-pass-codegen-and-scope.md` (Deficit 2).
-**Predecessor:** `docs/archive/constrained-hkt-forall-mode-b-plan.md` (MB1/MB2 landed
+**Split from:** `docs/archive/history/forall-dict-pass-codegen-and-scope.md` (Deficit 2).
+**Predecessor:** `docs/archive/history/constrained-hkt-forall-mode-b-plan.md` (MB1/MB2 landed
 single-constraint; this plan finishes the "Not yet" note at its line ~161).
 **Experiment:** `forall-dict-pass` in `src/runtime/experiments.c` (prototype,
 `expires_at` 0.28.0, `g_opt_forall_dict_pass`).
@@ -207,7 +207,7 @@ Once Phases 1-2 land and the suite is green:
   always-on -- following the retirement pattern in
   `docs/upcoming/retire-graduation-ready-hkt-flags-plan.md`.
 - Update `tur experiments` expectations and any test asserting the row exists.
-- Move this plan and `docs/archive/constrained-hkt-forall-mode-b-plan.md`'s
+- Move this plan and `docs/archive/history/constrained-hkt-forall-mode-b-plan.md`'s
   remaining live references to reflect graduation; archive this plan to
   `docs/archive/`.
 

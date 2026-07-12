@@ -43,15 +43,15 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
     /* forall-kinds GRADUATED 2026-07-06 -- explicit kind annotations on
      * forall/exists bound variables (e.g. (f :: * -> *)) are always accepted;
      * the pre-elaboration gate at elab_types.c is removed.  See
-     * docs/archive/constrained-hkt-forall-plan.md. */
+     * docs/archive/history/constrained-hkt-forall-plan.md. */
     /* forall-constraints GRADUATED 2026-07-06 -- typeclass constraint vectors
      * on forall types (e.g. (forall [a] [(Show a)] (-> a cstr))) are always
      * parsed and always enforced at each rank-2 instantiation site; the gate in
-     * elab_types.c is removed.  See docs/archive/constrained-hkt-forall-plan.md. */
+     * elab_types.c is removed.  See docs/archive/history/constrained-hkt-forall-plan.md. */
     /* hkt-hrt GRADUATED 2026-07-06 -- a rank-2 forall over a higher-kinded
      * variable (e.g. (forall [(f :: * -> *)] (-> (f int) int))) is always
      * validated at instantiation sites; the gate in elab_call.c is removed.
-     * See docs/archive/constrained-hkt-forall-plan.md. */
+     * See docs/archive/history/constrained-hkt-forall-plan.md. */
     /* forall-dict-pass GRADUATED 2026-07-06 -- runtime dictionary passing for a
      * polymorphic constrained function used as a rank-2 argument (mode B) is
      * always-on.  Deficit 1 (dict-clone method return-type threading) and
@@ -62,12 +62,12 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * a constraint method dispatched from inside a nested lambda -- is rejected
      * with TUR-E0311 (never miscompiled) and tracked in
      * docs/reported/forall-dict-pass-nested-lambda-method.md.  See
-     * docs/archive/forall-dict-pass-multi-constraint-hkt-plan.md. */
+     * docs/archive/history/forall-dict-pass-multi-constraint-hkt-plan.md. */
     /* hrt-curried-result GRADUATED 2026-07-06 -- a curried rank-2 poly fn whose
      * forall body result is itself a function (e.g. (forall [a] (-> a (-> a a))))
      * always instantiates the result to a concrete callable closure, so (l x)
      * yields a callable; the two gates in elab_call.c are removed.  See
-     * docs/archive/constrained-hkt-forall-mode-b-plan.md. */
+     * docs/archive/history/constrained-hkt-forall-mode-b-plan.md. */
     /* vl-wide-functor GRADUATED 2026-07-04 (VBM4 of van-laarhoven-monomorphization-
      * plan) -- a van Laarhoven lens now focuses through a WIDE by-value functor
      * (a :copy struct / flat-product ADT wider than the one-int64 carrier)
@@ -87,7 +87,7 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * boundary), and a catch-crossing recursive function is always emitted as a
      * flat-stack heap-continuation trampoline.  The gates in emit_expr.c /
      * emit_fns.c / emit_module.c are removed; the feature is unconditional.  See
-     * docs/archive/catch-unwind-graduation-plan.md. */
+     * docs/archive/history/catch-unwind-graduation-plan.md. */
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

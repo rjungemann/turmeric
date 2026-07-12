@@ -341,7 +341,7 @@ Expr *elab_panic_with(Elab *e, const Form *call) {
  * result helpers -- exactly as a stdlib `(ok x)` value does.  Surfacing the
  * Result type additionally lets the ok-val/err-val accessors (declared over
  * (Result A B)) extract the payload, which the bare :int carrier blocked (see
- * docs/archive/ok-val-on-catch-unwind-result-fails-infer.md).
+ * docs/archive/history/ok-val-on-catch-unwind-result-fails-infer.md).
  *
  * A = the thunk's return type (the ok payload); B = the opaque Panic handle
  * (:ptr<void>).  Falls back to the bare :int carrier when the Result head is

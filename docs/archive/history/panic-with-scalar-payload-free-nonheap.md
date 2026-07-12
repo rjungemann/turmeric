@@ -87,7 +87,7 @@ This is the same opacity the caught-box path already respects:
 `tur_result_box_free` deliberately does NOT `free(p->value)` "since the value is
 opaque and may be an inline scalar or borrowed elsewhere"
 (`emit_module.c` comment; see also the "Related" note in
-`docs/archive/catch-unwind-returned-err-box-payload-leak.md`). The abort paths
+`docs/archive/history/catch-unwind-returned-err-box-payload-leak.md`). The abort paths
 in `tur_panic_with` never got that same treatment: they still `free(payload)`.
 
 ## Fix direction
@@ -134,7 +134,7 @@ Fold whatever survives into this report (or its fix) before archiving.
 
 ## Related
 
-- `docs/archive/catch-unwind-returned-err-box-payload-leak.md` -- sibling fix;
+- `docs/archive/history/catch-unwind-returned-err-box-payload-leak.md` -- sibling fix;
   its "Related" section first noted that the opaque panic value is never freed by
   `tur_result_box_free` by design. This report is that residual's other half, on
   the panic-emit / abort side.

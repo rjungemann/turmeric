@@ -6421,7 +6421,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * receiver's runtime value (gde_reresolve_method_by_value), so
                  * those leading dict actuals are redundant here.  Skip them and
                  * bind only the callee's declared value params.  See
-                 * docs/archive/turi-interp-forall-dict-wide-consumer-arity.md. */
+                 * docs/archive/history/turi-interp-forall-dict-wide-consumer-arity.md. */
                 uint32_t arg_base = 0;
                 if (top->expr->as.call_.is_poly_call && n > effective_params)
                     arg_base = n - effective_params;

@@ -41,7 +41,7 @@ for) this is bounded per catch site but **unbounded over depth**: 50 levels leak
 50 boxes, a 200,000-deep run leaks 200,000.
 
 The finding is the **asymmetry with the native path**. The resolved report
-`docs/archive/catch-unwind-result-box-leak.md` added a statement-position
+`docs/archive/history/catch-unwind-result-box-leak-report.md` added a statement-position
 `tur_result_box_free` so a native `catch-unwind` whose Result is *provably
 discarded* frees its box. The stackless lowering never got that counterpart:
 `gs_catch_descend` emits the box and delivers it into the sink (including a
@@ -135,6 +135,6 @@ There is no stackless counterpart to the native statement-position free at
 
 ## Related
 
-- Parent (resolved, native half): `docs/archive/catch-unwind-result-box-leak.md`.
+- Parent (resolved, native half): `docs/archive/history/catch-unwind-result-box-leak-report.md`.
 - Sibling (native thunk closure + let-bound box): `docs/reported/catch-unwind-thunk-closure-leak.md`.
 - Distinct stackless aggregate-box panic-unwind leak (Part B): `docs/upcoming/catch-unwind-aggregate-followups-plan.md`.

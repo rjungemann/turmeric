@@ -6,7 +6,7 @@
 ;; the canonical Option round-trip.  It works because:
 ;;   - `some` (a pure make-struct helper) is no longer force-colored: a
 ;;     constructor call cannot reach a control op, so coloring does not mark its
-;;     callers indirect (see docs/archive/cps-coloring-overcolors-nonnode-calls.md).
+;;     callers indirect (see docs/archive/history/cps-coloring-overcolors-nonnode-calls.md).
 ;;     `some` is therefore uncolored and its call is delegated cps->direct.
 ;;   - the Option local is destructured with an `if` in the perform continuation,
 ;;     now allowed by the lifted-body subset predicates.

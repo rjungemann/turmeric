@@ -100,7 +100,7 @@ int main(void) {
 
     /* The reader is exercised against whatever experiment happens to be
      * registered first.  forall-dict-pass -- the last surviving flag -- itself
-     * graduated 2026-07-06 (docs/archive/forall-dict-pass-multi-constraint-hkt-plan.md),
+     * graduated 2026-07-06 (docs/archive/history/forall-dict-pass-multi-constraint-hkt-plan.md),
      * so the registry may now be EMPTY ("empty by design", experiments.c).  The
      * enable/source/CLI checks that need a live experiment run only when one is
      * registered and use its real name; the registry-independent paths (absent

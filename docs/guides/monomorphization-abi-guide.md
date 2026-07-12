@@ -264,6 +264,26 @@ module is the prelude, fall back to `static`.
   pruned. If a spec mysteriously vanishes, check whether the only
   references were behind a mangled C symbol (needs `#[used]`) or were
   themselves DCE'd.
+- **Bare generic ADT rides the carrier; only concrete gets a struct.**
+  An unparameterized `Result`/`Option` with no type args pinned lowers
+  to the `int64_t` boxed carrier; the by-value aggregate struct
+  (`tur_adt_Result__int__cstr`) exists *only* for a concrete
+  monomorphized instantiation. So only concrete instantiations get
+  struct DWARF and struct pretty-printers, and any construct that
+  yields a bare Result (e.g. `catch-unwind` handing back
+  `(Result ThunkRet Panic)` with an intentionally-open err arm) returns
+  the carrier. Bridging that carrier into a declared by-value aggregate
+  return needs a *structural* field-by-field rebuild from the box -- a
+  *representational* `emit_type_c_name(...) == "int64_t"` test misfires,
+  because `ok`/`err`/`some`/`none` constructors also collapse to the
+  int64 carrier under `emit_type_c_name` yet emit the aggregate directly.
+- **Aggregate param pass-mode: read the `Type`, not the C-name.**
+  `type_c_name` yields the bare struct name for *both* small (by-value)
+  and large (by-ref, `const T*`) products, so classifying an aggregate
+  param's pass-mode by C-name string alone misclassifies a by-ref param
+  as by-value (and e.g. emits `memcpy(box, &ptrvar, ...)`, copying the
+  pointer's address). Classify from the `Type` / `type_struct_pass_by_ptr`,
+  never from the ctype string.
 
 ## Where to look next
 

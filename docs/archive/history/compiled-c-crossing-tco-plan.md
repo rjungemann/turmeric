@@ -1,7 +1,7 @@
 ---
 title: C-crossing TCO in the compiled backend (heap-bounded catch-unwind / atomically / async) -- Plan
 category: Planning
-description: Archived 2026-07-07. D1 (heap handler chain), D1a (panic-return-signal transport), and the stackless-catch-unwind lowering all shipped and graduated 2026-07-07 -- see docs/archive/catch-unwind-graduation-plan.md. D2 (atomically off the C stack) turned out to be a non-problem -- the compiled backend inlines the transaction loop into the caller's frame (src/compiler/emit_expr.c:5960) rather than calling a `tur_atomically(fn, env)` wrapper, so there is no per-atomically C frame to eliminate. The D3 direction (first-class continuations / CPS transform for async/await/handle) is deliberately deferred; the follow-up scoping lives at docs/upcoming/v1/compiled-first-class-continuations-plan.md. Preserved below for historical context.
+description: Archived 2026-07-07. D1 (heap handler chain), D1a (panic-return-signal transport), and the stackless-catch-unwind lowering all shipped and graduated 2026-07-07 -- see docs/archive/history/catch-unwind-graduation-plan.md. D2 (atomically off the C stack) turned out to be a non-problem -- the compiled backend inlines the transaction loop into the caller's frame (src/compiler/emit_expr.c:5960) rather than calling a `tur_atomically(fn, env)` wrapper, so there is no per-atomically C frame to eliminate. The D3 direction (first-class continuations / CPS transform for async/await/handle) is deliberately deferred; the follow-up scoping lives at docs/upcoming/v1/compiled-first-class-continuations-plan.md. Preserved below for historical context.
 ---
 
 # C-crossing TCO in the compiled backend -- Plan

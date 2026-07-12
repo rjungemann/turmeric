@@ -96,7 +96,7 @@ typedef struct TuriCoroStack {
  * nodes across boxes, but each box owns exactly one reference to its persistent
  * HAMT, so a per-box tur_hamt_free at teardown reclaims shared structure through
  * the node refcounts (correct now that the delete path retains pulled-up
- * siblings -- docs/archive/hamt-delete-sibling-refcount.md). */
+ * siblings -- docs/archive/history/hamt-delete-sibling-refcount-report.md). */
 typedef void (*TuriCollBufFreeFn)(void *box);
 typedef struct TuriCollBuf {
     void                *box;      /* wrapper allocation; NULL once freed/tombstoned */
