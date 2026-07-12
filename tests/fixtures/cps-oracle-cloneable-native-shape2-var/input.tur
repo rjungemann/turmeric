@@ -1,5 +1,4 @@
 ;; U3 oracle: native Shape 2 cloneable with a CAPTURED (var) frame operand.
-;; Backend: default backend (emit_cps.c)
 ;; (cloneable-reset (+ n (cloneable-shift k-id 0))) -- the frame operand n is a
 ;; parameter (not a literal); it is read once at the reset site and rides the DK
 ;; frame env.  Emitted natively (dk_frame(ccctx, (intptr_t)(n), ...)).  Multi-shot:

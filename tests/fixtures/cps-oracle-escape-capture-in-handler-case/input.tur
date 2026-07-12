@@ -1,5 +1,4 @@
 ;; Oracle (cps-backend-unification): capturing escape inside an effect handler case.
-;; Backend: default backend (emit_cps.c)
 ;; The escape receiver (fn [j] (j n)) captures n; the handler case is emitted as
 ;; a fiber handler function.  collect_handle_captures now threads the receiver
 ;; captures into the handler env, so this CPS-emits with direct == cps.

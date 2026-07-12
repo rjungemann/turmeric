@@ -1,5 +1,4 @@
 ;; U3 oracle (cps-backend-unification): a colored fn containing a cloneable-reset.
-;; Backend: default backend (emit_cps.c)
 ;; f is colored by its base reset/shift and CPS-emitted; the self-contained
 ;; cloneable-reset (multi-shot delimited region) is delegated to the direct
 ;; emitter via CT_LETRAW (reusing the dk_copy_range multi-shot runtime) instead

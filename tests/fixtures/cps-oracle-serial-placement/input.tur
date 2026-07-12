@@ -1,5 +1,4 @@
 ;; U4 oracle: serial-reset in a non-main HELPER function (placement, not eviction).
-;; Backend: default backend (emit_cps.c)
 ;; Before U4, a colored function containing a serial-reset hit CT_UNSUPPORTED and
 ;; the WHOLE function evicted to direct emit.  U4 makes the serial region
 ;; delegatable via CT_LETRAW (reusing the proven serial marshaling runtime), so

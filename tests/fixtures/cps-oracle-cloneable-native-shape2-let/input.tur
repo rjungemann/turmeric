@@ -1,5 +1,4 @@
 ;; U3 oracle: native Shape 2 cloneable with a LET-bearing context.
-;; Backend: default backend (emit_cps.c)
 ;; (cloneable-reset (let [a (* base 2)] (+ a (cloneable-shift k-id 0))))
 ;; The pure `let` binding is evaluated once at the reset site as a C local; the
 ;; arithmetic frame (+ a []) captures it into the frame env.  Emitted natively.

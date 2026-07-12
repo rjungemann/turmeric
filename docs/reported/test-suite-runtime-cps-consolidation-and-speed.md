@@ -5,6 +5,18 @@ grab-bag of concrete, mostly-independent improvements to suite run time. Filed
 in response to "consolidate CPS tests / split the suite / speed it up" -- each
 section stands alone and can be picked up piecemeal.**
 
+> **Progress (2026-07-12):** **Section 1 landed.** Deleted the 48 duplicate
+> `cps-oracle-*-cps` twins and cleaned the now-stale oracle header on the 48
+> surviving base fixtures (dropped the dangling twin references and the moot
+> `;; Backend: default backend (emit_cps.c...)` annotations). Full suite still
+> green: **2107 passed, 0 failed**. **Sections 2 (suite splitting) and 3 (speed
+> levers -- ccache, stamp-cache priming, prebuilt runtime archive, JOBS cap)
+> remain open.** One small residual under Section 1: a handful of surviving base
+> fixtures still mention `--enable=cps-backend`/`emit_cps.c` in *body* prose
+> (explanatory, not dangling) -- left as-is to avoid rewriting varied comments;
+> the plan docs in `docs/upcoming/v2/cps-backend-unification-*` also still name
+> the removed twins (historical).
+
 ## Context / measurements
 
 `bash tests/run.sh` on this 4-core Linux container (Debug build,

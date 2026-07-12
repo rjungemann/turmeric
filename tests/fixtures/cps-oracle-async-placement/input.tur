@@ -1,5 +1,4 @@
 ;; U5 oracle: async/await in a COLORED function (placement, not eviction).
-;; Backend: default backend (emit_cps.c)
 ;; `worker` is colored by the reset/shift AND also awaits a spawned future.
 ;; Before U5 the whole function evicted to direct emit (EX_ASYNC/EX_AWAIT hit
 ;; CT_UNSUPPORTED).  U5 makes async/await delegatable via CT_LETRAW -- they are

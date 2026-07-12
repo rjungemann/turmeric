@@ -1,5 +1,4 @@
 ;; U2 oracle (cps-backend-unification-plan): call/cc / escape inside a COLORED fn.
-;; Backend: default backend (emit_cps.c)
 ;; The fn is colored by its reset/shift and is CPS-emitted; the undelimited
 ;; (call/cc f)/(escape f) with a capture-free receiver is delegated to the
 ;; direct emitter (emit_cps_callcc) via CT_LETRAW instead of forcing the whole

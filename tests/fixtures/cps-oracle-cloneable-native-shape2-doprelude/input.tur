@@ -1,5 +1,4 @@
 ;; U3 oracle: native Shape 2 cloneable with a do-PRELUDE context.
-;; Backend: default backend (emit_cps.c)
 ;; (cloneable-reset (do (println "prelude-ran") (cloneable-shift k-id 0) (tick) (tock)))
 ;; The prelude `(println "prelude-ran")` runs ONCE at capture time (a binding-
 ;; less side-effect item at the reset site).  The tail items (tick), (tock) are

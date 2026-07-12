@@ -1,6 +1,5 @@
 ;; Oracle (cps-backend-unification): reset with a shift under a NON-empty
 ;; delimited continuation (a join the abortive shift discards).
-;; Backend: default backend (emit_cps.c setjmp/longjmp escape lowering)
 ;; Previously this DEGRADED on the default backend (reset->body-eval, shift->
 ;; operand) and was evicted by the CT-IR backend.  The direct path now lowers
 ;; it via setjmp/longjmp (correct abortive semantics) and the CT-IR delim_ok
