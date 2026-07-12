@@ -5,17 +5,19 @@ grab-bag of concrete, mostly-independent improvements to suite run time. Filed
 in response to "consolidate CPS tests / split the suite / speed it up" -- each
 section stands alone and can be picked up piecemeal.**
 
-> **Progress (2026-07-12):** **Section 1 landed.** Deleted the 48 duplicate
-> `cps-oracle-*-cps` twins and cleaned the now-stale oracle header on the 48
-> surviving base fixtures (dropped the dangling twin references and the moot
-> `;; Backend: default backend (emit_cps.c...)` annotations). Full suite still
-> green: **2107 passed, 0 failed**. **Sections 2 (suite splitting) and 3 (speed
-> levers -- ccache, stamp-cache priming, prebuilt runtime archive, JOBS cap)
-> remain open.** One small residual under Section 1: a handful of surviving base
-> fixtures still mention `--enable=cps-backend`/`emit_cps.c` in *body* prose
-> (explanatory, not dangling) -- left as-is to avoid rewriting varied comments;
-> the plan docs in `docs/upcoming/v2/cps-backend-unification-*` also still name
-> the removed twins (historical).
+> **Progress (2026-07-12):**
+> - **Section 1 landed.** Deleted the 48 duplicate `cps-oracle-*-cps` twins and
+>   cleaned the now-stale oracle header on the 48 surviving base fixtures. Full
+>   suite green: **2107 passed, 0 failed**. Residual: a few survivors still
+>   mention `--enable=cps-backend`/`emit_cps.c` in *body* prose (explanatory, not
+>   dangling), and the `docs/upcoming/v2/cps-backend-unification-*` plans still
+>   name the removed twins (historical) -- both left as-is.
+> - **Section 3 partially landed + corrected.** Fixed the `TUR_TEST_JOBS` clamp
+>   (explicit override now honored uncapped). **Empirically disproved the
+>   "install ccache" recommendation**: `tur build` compiles+links in one `cc`
+>   call (uncacheable -- measured 0% cacheable), so ccache is a no-op until the
+>   build splits `-c` compile from link. Section 3 rewritten accordingly.
+> - **Section 2 (suite splitting) remains open.**
 
 ## Context / measurements
 
@@ -107,39 +109,58 @@ named suite, so:
 ## 3. Other run-time levers (grounded in this container's profile)
 
 Per-fixture cost is dominated by the **build phase**: `tur build` emits C that
-`#pragma`-autolinks ~19 runtime source files (`src/runtime/hamt.c`, ...) and
-`cc` recompiles them **every fixture** (`run.sh:22`, autolink confirmed in
-emitted C). Measured ~1.0s for one `tur build`. With ~1442 build+run fixtures /
-4 cores that is the bulk of the 9 minutes.
+`#pragma`-autolinks runtime source files (`src/runtime/hamt.c`, ...) and `cc`
+compiles+links them **every fixture**. Measured ~1.0s for one `tur build`. With
+~1442 build+run fixtures / 4 cores that is the bulk of the 9 minutes.
 
-- **Install `ccache` in the container (biggest lever, zero code change).**
-  `run.sh:85` already prepends `ccache` when present and sets
-  `CCACHE_NOHASHDIR=1` for cross-run hits -- but `ccache` is **not installed
-  here** (`which ccache` -> not found). The archived `test-perf-plan.md` measured
-  warm runs at **~3.4s** with ccache available. Add it to the environment setup /
-  container image.
+> **Investigated 2026-07-12 -- the "install ccache" idea below is a NO-OP as-is;
+> corrected in place.** `run.sh:85` prepends `ccache` when present, and I
+> installed ccache and re-ran a 48-fixture subset (`TUR_FORCE=1`, stamp cache
+> bypassed): **`ccache -s` reported 48/48 calls "Uncacheable", 0 hits/misses.**
+> Reason (confirmed by logging `cc` argv): `tur build` runs a **single `cc`
+> invocation with multiple `.c` sources and NO `-c`** -- i.e. it compiles AND
+> links in one call, e.g.
+> `cc /tmp/tur-build/<name>.c src/runtime/hamt.c -o <exe>`. ccache cannot cache a
+> combined compile+link. So **installing ccache alone changes nothing** on the
+> current build path; the archived `test-perf-plan.md` ~3.4s figure must have
+> come from the stamp cache and/or a `-c`-split build mode, not this path. Do
+> **not** add a bare `ccache` step to CI expecting a speedup.
+
+Corrected levers, in rough value order:
+
+- **Split `tur build`'s `cc` call into `-c` compile + link (unlocks ccache).**
+  Compile each autolinked runtime `.c` (and the generated program `.c`) with
+  `-c` to a `.o`, then link the `.o`s. Only then can ccache cache the runtime
+  object compiles across fixtures. This is a build-driver change in the compiler
+  (where `tur build` assembles the `cc` command), not a run.sh tweak. Biggest
+  structural win but the largest change -- scope before committing.
+- **Prebuilt runtime archive.** A lighter variant of the above that skips ccache
+  entirely: compile the runtime `.c` set **once** per suite run into a static
+  `.a`/`.o` set and link every fixture against it, instead of recompiling the
+  autolinked sources per fixture. Helps even a cold, ccache-less run (this
+  container).
 - **Persist / prime the stamp cache in CI.** `tests/.stamp-cache/` skips an
-  unchanged fixture on a repeat run (`:245-254`) but is gitignored and therefore
-  **cold on every fresh container** -- so each session pays a full cold run.
-  Caching this dir between CI runs (keyed on `tur` binary hash + fixture content)
-  makes incremental runs near-instant.
-- **Prebuilt runtime archive.** Even with ccache, recompiling the autolinked
-  runtime per fixture is wasteful. Building the runtime once into a static lib
-  and linking fixtures against it would cut the structural cost and help the
-  cold, ccache-less case (this container). Larger change; worth scoping.
-- **Raise the `JOBS` cap on many-core CI.** Hard-capped at 8 (`:155`); a 16/32-core
-  runner is left idle. Make the cap configurable (it already reads
-  `TUR_TEST_JOBS`, but the `>8 -> 8` clamp overrides upward intent).
+  unchanged fixture on a repeat run (`:245-254`) but is gitignored and cold on
+  every fresh container. Caching it between CI runs helps *incremental* runs --
+  but note it keys on fixture content **and** the `tur` binary, so a PR that
+  changes `src/` (the common case) invalidates every stamp and gets no benefit.
+  Value is real but narrower than it first appears.
+- **[DONE 2026-07-12] Honor an explicit `TUR_TEST_JOBS` above the auto-cap.**
+  Was: `JOBS` hard-clamped to 8 even when a user set `TUR_TEST_JOBS=16`. Fixed in
+  `tests/run.sh` -- the `>8 -> 8` clamp now applies only to the *auto-detected*
+  core count; an explicit `TUR_TEST_JOBS` is honored uncapped (unit-tested:
+  explicit 16/32 pass through, auto still caps at 8, bad/zero sanitize to 4/1).
+  A many-core CI runner can now use its cores via `TUR_TEST_JOBS`.
 - **`TUR_WORKER_POOL=1`** (Tier 3 of `test-process-reduction-plan.md`) exists as
   opt-in; evaluate making it default if it is stable.
 
 ## Scope / non-goals
 
-Sections are independent. Section 1 is a clean, verifiable delete-and-verify.
-Section 2 is ergonomics + CI scaling on existing primitives. Section 3's top
-item (install ccache) is an environment change, not a code change, and is the
-highest speed-to-effort ratio. None of this blocks correctness work; it is
-developer-experience and CI throughput. Prior archived plans already landed
-parallelism, the stamp cache, ccache *support*, and the worker pool -- this
-report is the residual (unused-in-container caches + post-unification dead
-fixtures), not a re-proposal of that work.
+Sections are independent. Section 1 (landed) is a clean delete-and-verify.
+Section 2 is ergonomics + CI scaling on existing primitives. Section 3's
+remaining items are real code changes: the ccache/prebuilt-runtime work is the
+only thing that meaningfully cuts a *cold single-machine* run, and it requires
+splitting `tur build`'s compile from its link -- **not** merely installing
+ccache (verified no-op). None of this blocks correctness work. Prior archived
+plans landed parallelism, the stamp cache, ccache *support* (dormant on this
+path), and the worker pool -- this report is the residual.

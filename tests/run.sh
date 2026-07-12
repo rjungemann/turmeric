@@ -133,8 +133,11 @@ TUR_EMIT_C_MODE="${TUR_EMIT_C_MODE:-snapshot-only}"
 
 # Performance plan item #2: parallel fixture execution.
 # Override with TUR_TEST_JOBS=<n>; defaults to physical core count (capped at 8).
-# Capped at physical cores (not 2x) to avoid flooding syspolicyd on macOS with
-# simultaneous new-binary executions from requires.compiled fixtures.
+# The auto-detected default is capped at physical cores (not 2x) to avoid
+# flooding syspolicyd on macOS with simultaneous new-binary executions from
+# requires.compiled fixtures.  An *explicit* TUR_TEST_JOBS is an intentional
+# override and is honored uncapped -- a 16/32-core CI runner should be able to
+# use its cores.
 if [ -n "${TUR_TEST_JOBS:-}" ]; then
     JOBS="$TUR_TEST_JOBS"
 else
@@ -146,13 +149,14 @@ else
         _nproc=4
     fi
     JOBS=$(( _nproc ))
+    # Cap the auto-detected value only; an explicit TUR_TEST_JOBS bypasses this.
+    if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 fi
 
 case "$JOBS" in
     ''|*[!0-9]*) JOBS=4 ;;
 esac
 if [ "$JOBS" -lt 1 ]; then JOBS=1; fi
-if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 
 RESULTS_DIR="$(mktemp -d -t tur-tests-results-XXXXXX)"
 trap 'rm -rf "$RESULTS_DIR" "$_TUR_EMPTY_XDG"' EXIT
