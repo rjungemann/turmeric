@@ -1,0 +1,35 @@
+;; CPS-IR-to-C backend: a FALLBACK intermediary between a CPS handler and a CPS
+;; performer must not sever the DK continuation chain.
+;;
+;; `g` performs Ask (CPS performer -> dk_perform); `run` handles Ask (CPS handler
+;; -> dk_handler).  The intermediary `f` neither performs nor handles Ask, but
+;; sits on the call path between them and is forced to FALL BACK by a CAPTURING
+;; non-tail cps->cps join -- `(+ a (g))` captures the parameter `a`, so its join
+;; continuation cannot be lifted into a zero-capture DK frame.
+;;
+;; If `f` fell back while `run`/`g` stayed CPS-emitted, `run__cps` would install
+;; dk_handler then invoke `f(100)` as a plain C call (cps->direct), dropping the
+;; DK chain, and `g__cps`'s dk_perform would never see the handler --
+;; "unhandled effect (tag 2)" / abort.  The call-path taint (ensure_S Rule C)
+;; detects the fallback conduit and co-evicts the handler + performer, so the
+;; whole region falls back to the fiber machine coherently.
+;;
+;;   g   = 1 + (resume 5)   ; Ask resumes with 5 -> 6
+;;   f a = a + (g)          ; 100 + 6 = 106
+;;   run handles -> 106
+
+(defeffect Ask [] :int)
+
+(defn g [] : int
+  (+ 1 (perform (Ask))))
+
+(defn f [a : int] : int
+  (+ a (g)))
+
+(defn run [] : int
+  (handle (f 100)
+    (Ask [] k) (resume k 5)))
+
+(defn main [] : int
+  (println (run))
+  0)

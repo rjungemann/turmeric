@@ -1,5 +1,17 @@
 # CPS backend: a fallback intermediary between a CPS handler and CPS performer breaks the DK chain (crash)
 
+> **RESOLVED (2026-07-12):** Fixed via **Fix direction 1 (call-path taint)** in
+> `src/compiler/emit_cps_ir.c`. `ensure_S` now builds the colored call graph
+> (`SEnt.edges`/`edges_all`, collected by the extended `expr_collect_effects_acc`
+> raw-Expr walk) and splits each function's effect set into what it PERFORMS
+> (`perf_lo/hi`) vs HANDLES (`hand_lo/hi`). A new fixpoint rule (Rule C) taints an
+> effect E whenever any call-path node between a colored handler of E and a colored
+> performer of E (forward-reachable from the handler AND backward-reachable to the
+> performer) is a genuine fallback (`!in_s && !mono_template`), co-evicting the
+> handler+performer so the whole region falls back to the fiber machine coherently.
+> Regression fixture: `tests/fixtures/cps-backend-fallback-intermediary/`. The
+> minimal repro below now prints `106` on the default (CPS) path.
+
 > **Graduation status (2026-07-12):** The `cps-backend` experiment is **fully
 > graduated** -- it went always-on in #657 (2026-07-11) and the
 > `--enable=cps-backend` flag was removed in #658. `tur experiments` now lists
