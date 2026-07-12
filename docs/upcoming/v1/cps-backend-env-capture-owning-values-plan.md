@@ -10,7 +10,7 @@ description: The N6 CT-IR backend lifts a continuation body into a leaked, shall
 ## Why this document exists
 
 O3 in
-[cps-backend-owning-pointers-followups-plan.md](cps-backend-owning-pointers-followups-plan.md)
+[cps-backend-owning-pointers-followups-plan.md](../../archive/cps-backend-owning-pointers-followups-plan.md)
 ("captured owning values") is deferred with the words *"rides the env-capture
 story ... owned by whichever plan lifts the zero-capture cut."* That story had
 **no document** -- the same phrase recurs in
