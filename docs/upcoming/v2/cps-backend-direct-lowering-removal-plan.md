@@ -544,16 +544,35 @@ frame still requires an atomic operand (a non-atomic operand cleanly errors, not
 miscompiles); extending serial with the same `env_expr` native admission is a
 symmetric follow-up, not a correctness gap.
 
-#### Phase D6b -- remaining: delete the now-provably-safe legacy lowering
+#### Phase D6b -- LANDED (delete the now-dead legacy machinery)
 
-With D6a done, the legacy cloneable/serial lowering only ever runs the correct
-Case-1 / no-shift paths or emits a diagnostic -- it never silently miscompiles.
-The remaining cleanup: delete the dead Case-2 machinery and, once the
-`emit_effects_cloneable_*` / `_serial_*` emitters are provably unreachable except
-for the diagnostic + Case-1 + passthrough, collapse them. Re-check the cloneable
-runtime-prelude gate (`cps_uses_cloneable_rt`, `emit_module.c` ~:6657) -- it keys
-off `cps_expr_contains_cloneable_shift` (in `cps.c`), so the native path keeps its
-runtime. This is bounded cleanup, no longer gated on a correctness question.
+A corpus reachability scan (instrumented probes across every fixture) confirmed:
+`emit_effects_cloneable_shift` and `emit_effects_cloneable_reset` Case-1 have
+**zero reaches**; `emit_effects_serial_shift` is reached only to emit its
+`TUR-E0706` diagnostic. Cleanup, three parts:
+
+- **`emit_effects_cloneable_shift` (162 -> 24 lines).** This was the standalone
+  cloneable-shift emitter that cooperated with the old Case-2 via
+  `longjmp(tur_current_reset_ctx->jmp)`. D6a removed Case-2's setjmp landing, so
+  this function's longjmp target no longer exists -- it was dead **and broken**.
+  Replaced its body (env-struct + trivial cont + longjmp) with a `TUR-E0710`
+  diagnostic: a bare cloneable-shift that escapes its reset now errors cleanly
+  instead of jumping to an unestablished landing.
+- **The `tur_cloneable_reset_ctx` / `tur_current_reset_ctx` setjmp-landing
+  runtime** (`emit_module.c`) is deleted -- nothing pushes or longjmps to it
+  anymore, so it was an unused typedef + `__thread` global in every cloneable
+  program.
+- **Case-1's dead `has_env` env-struct block (~84 lines).** `has_env` was
+  hardcoded `false` (the trivial identity continuation ignores its env), so the
+  `__clenv` struct + clone/drop emission never ran. Removed; the cont is
+  allocated with a NULL env, matching the native Shape-1 path.
+
+Kept (all correct + reachable): Case-1's trivial `(cloneable-reset
+(cloneable-shift <non-native-receiver> v))` path (verified reachable via a colored
+receiver -> evicts -> identity cont -> correct), the no-shift passthroughs, and
+the serial `TUR-E0706` diagnostic. The cloneable runtime-prelude gate
+(`cps_uses_cloneable_rt`) is unchanged and keeps the native path's
+`tur_cloneable_cont` runtime. Suite: 2147 passed, 0 failed; no snapshot churn.
 
 **Not a blocker for D3-D5.** D6 is independent: D3/D4/D5 all concern `emit_cps.c`;
 the legacy lowering lives in `emit_effects.c`. With D6a landed the CT-IR backend is

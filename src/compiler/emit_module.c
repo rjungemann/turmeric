@@ -6948,16 +6948,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    if (cont->env && cont->drop_env) cont->drop_env(cont->env);\n");
     buf_puts(out, "    free(cont);\n");
     buf_puts(out, "}\n\n");
-    /* CPS-CL4: Reset context for setjmp/longjmp-based cloneable continuations.
-     * Each cloneable-reset pushes a context on this thread-local stack;
-     * cloneable-shift stores k_fn's return value and longjmps back. */
-    buf_puts(out, "/* CPS-CL4: cloneable-reset context */\n");
-    buf_puts(out, "typedef struct tur_cloneable_reset_ctx {\n");
-    buf_puts(out, "    jmp_buf jmp;\n");
-    buf_puts(out, "    int64_t result;  /* k_fn return value, set by shift before longjmp */\n");
-    buf_puts(out, "    struct tur_cloneable_reset_ctx *prev; /* for nested resets */\n");
-    buf_puts(out, "} tur_cloneable_reset_ctx;\n\n");
-    emit_rt_global(out, shared, "__thread tur_cloneable_reset_ctx *tur_current_reset_ctx = NULL;\n\n", "__thread tur_cloneable_reset_ctx *tur_current_reset_ctx");
+    /* cps-backend-direct-lowering-removal D6b: the setjmp/longjmp cloneable-reset
+     * context (tur_cloneable_reset_ctx / tur_current_reset_ctx) is deleted.  It
+     * was the landing for the legacy emit_effects_cloneable_shift longjmp (Case-2),
+     * which D6a replaced with a TUR-E0710 diagnostic and D6b removed -- nothing in
+     * the generated program pushes or longjmps to it anymore, so emitting the
+     * typedef + thread-local left an unused struct and __thread global in every
+     * cloneable program. */
 
     } /* end if (cps_uses_cloneable_rt) */
 

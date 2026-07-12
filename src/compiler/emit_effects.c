@@ -1253,90 +1253,12 @@ char *emit_effects_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
         char *clone_fn_str = NULL;
         char *drop_fn_str  = NULL;
         char *env_var = NULL;
-        /* Case 1: the continuation body is trivially `return __value` and ignores
-         * __env.  Never allocate an env struct here: the live_captures list may
-         * contain the very binding that is being introduced by the enclosing let
-         * (i.e., the shift result), which is not yet declared in C at this point.
-         * Passing NULL for the env is correct -- __cont_fn_N ignores it. */
-        bool has_env = false;
-        if (has_env) {
-            /* Emit a struct with one field per live capture */
-            Buf *hb = ctx->pending_handler_fns;
-            buf_printf(hb, "typedef struct { ");
-            for (uint32_t ci = 0;
-                 ci < shift->as.cloneable_shift_.n_live_captures; ci++) {
-                Binding *cap = shift->as.cloneable_shift_.live_captures[ci];
-                char *rn = raw_name_for_binding(cap);
-                /* A captured fn value is the int64_t fn-ABI carrier, not its
-                 * result type's C name (type_c_name(TY_FN) -> "double" for a
-                 * :float result would alias the closure pointer through a
-                 * floating-point field). */
-                const char *cap_ctype = cap->type.kind == TY_FN
-                    ? "int64_t"
-                    : type_c_name(cap->type);
-                buf_printf(hb, "%s %s; ", cap_ctype, rn);
-                free(rn);
-            }
-            buf_printf(hb, "} __clenv_%d;\n", cont_id);
-            /* CPS-CL11: per-field deep clone using each binding's
-             * Clone instance method (recorded by
-             * cps_emit_capture_environment in src/cps.c).  Falls
-             * back to bitwise copy for fields whose binding has no
-             * recorded clone fn (e.g. primitives without a Clone
-             * instance, or when tc_env was not threaded). */
-            buf_printf(hb,
-                "static void *__clenv_%d_clone(const void *src) {\n"
-                "    __clenv_%d *copy = malloc(sizeof(__clenv_%d));\n"
-                "    if (!copy) abort();\n"
-                "    const __clenv_%d *s = (const __clenv_%d *)src;\n",
-                cont_id, cont_id, cont_id, cont_id, cont_id);
-            for (uint32_t ci = 0;
-                 ci < shift->as.cloneable_shift_.n_live_captures; ci++) {
-                Binding *cap = shift->as.cloneable_shift_.live_captures[ci];
-                char *rn = raw_name_for_binding(cap);
-                const char *clone_fn =
-                    shift->as.cloneable_shift_.capture_clone_fns
-                    ? shift->as.cloneable_shift_.capture_clone_fns[ci]
-                    : NULL;
-                if (clone_fn) {
-                    buf_printf(hb,
-                        "    copy->%s = %s(s->%s);\n",
-                        rn, clone_fn, rn);
-                } else {
-                    buf_printf(hb,
-                        "    copy->%s = s->%s;\n", rn, rn);
-                }
-                free(rn);
-            }
-            buf_printf(hb,
-                "    return copy;\n"
-                "}\n"
-                "static void __clenv_%d_drop(void *p) { free(p); }\n\n",
-                cont_id);
-
-            /* Alloc env in the function body */
-            env_var = fresh_tmp(ctx);
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "__clenv_%d *%s = malloc(sizeof(__clenv_%d));\n",
-                       cont_id, env_var, cont_id);
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "if (!%s) abort();\n", env_var);
-            for (uint32_t ci = 0;
-                 ci < shift->as.cloneable_shift_.n_live_captures; ci++) {
-                Binding *cap = shift->as.cloneable_shift_.live_captures[ci];
-                char *rn = raw_name_for_binding(cap);
-                char *cn = name_for_binding(ctx, cap);
-                indent_buf(body, ctx->indent);
-                buf_printf(body, "%s->%s = %s;\n", env_var, rn, cn);
-                free(rn);
-                free(cn);
-            }
-            clone_fn_str = malloc(32);
-            drop_fn_str  = malloc(32);
-            snprintf(clone_fn_str, 32, "__clenv_%d_clone", cont_id);
-            snprintf(drop_fn_str,  32, "__clenv_%d_drop",  cont_id);
-            env_val_str = env_var;
-        }
+        /* CPS-CL2 / D6b: the Case-1 continuation is the trivial identity
+         * (`return __value`, ignoring its env), so it never carries a captured
+         * env -- allocate the cont with a NULL env below.  (The always-dead
+         * has_env env-struct emission -- has_env was hardcoded false, since the
+         * live_captures list may name the not-yet-declared shift-result binding
+         * and the trivial cont ignores it anyway -- was removed here.) */
 
         /* CPS-CL5: Alloc the continuation */
         char *cont_var = fresh_tmp(ctx);
@@ -1515,167 +1437,28 @@ char *emit_effects_shift0(EmitCtx *ctx, Buf *body, const Expr *e) {
 }
 
 char *emit_effects_cloneable_shift(EmitCtx *ctx, Buf *body, const Expr *e) {
-    /* CPS-CL2+CL3+CL5: Full cloneable-shift emission.
-     *
-     * When reached outside of the direct-reset-body Case 1 (which is
-     * handled in emit_effects_cloneable_reset above), this is a standalone
-     * shift inside a setjmp-based reset boundary (Case 2).
-     *
-     * Flow:
-     *   1. Emit env struct + clone/drop helpers (CPS-CL2)
-     *   2. Emit trivial continuation function (CPS-CL3)
-     *   3. Pack live captures, alloc tur_cloneable_cont (CPS-CL5)
-     *   4. Call k_fn with continuation
-     *   5. Store k_fn result in reset ctx and longjmp
-     */
-    int cont_id = ctx->tmp_n++;
-
-    /* CPS-CL3: Emit trivial continuation function.
-     * For the standalone shift case, the continuation function is identity
-     * (the post-shift code is handled by the setjmp return path in reset). */
-    if (ctx->pending_handler_fns) {
-        buf_printf(ctx->pending_handler_fns,
-            "static int64_t __cont_fn_%d(void *__env, int64_t __value) {"
-            " (void)__env; return __value; }\n\n", cont_id);
-    }
-
-    /* CPS-CL2: Emit env struct + clone/drop if live captures exist */
-    char *env_val_str  = NULL;
-    char *clone_fn_str = NULL;
-    char *drop_fn_str  = NULL;
-    char *env_var = NULL;
-    bool has_env = (e->as.cloneable_shift_.n_live_captures > 0
-                    && ctx->pending_handler_fns != NULL);
-    if (has_env) {
-        Buf *hb = ctx->pending_handler_fns;
-        buf_printf(hb, "typedef struct { ");
-        for (uint32_t ci = 0;
-             ci < e->as.cloneable_shift_.n_live_captures; ci++) {
-            Binding *cap = e->as.cloneable_shift_.live_captures[ci];
-            char *rn = raw_name_for_binding(cap);
-            buf_printf(hb, "%s %s; ", type_c_name(cap->type), rn);
-            free(rn);
-        }
-        buf_printf(hb, "} __clenv_%d;\n", cont_id);
-        /* CPS-CL11: per-field deep clone using recorded Clone fns. */
-        buf_printf(hb,
-            "static void *__clenv_%d_clone(const void *src) {\n"
-            "    __clenv_%d *copy = malloc(sizeof(__clenv_%d));\n"
-            "    if (!copy) abort();\n"
-            "    const __clenv_%d *s = (const __clenv_%d *)src;\n",
-            cont_id, cont_id, cont_id, cont_id, cont_id);
-        for (uint32_t ci = 0;
-             ci < e->as.cloneable_shift_.n_live_captures; ci++) {
-            Binding *cap = e->as.cloneable_shift_.live_captures[ci];
-            char *rn = raw_name_for_binding(cap);
-            const char *clone_fn =
-                e->as.cloneable_shift_.capture_clone_fns
-                ? e->as.cloneable_shift_.capture_clone_fns[ci]
-                : NULL;
-            if (clone_fn) {
-                buf_printf(hb,
-                    "    copy->%s = %s(s->%s);\n",
-                    rn, clone_fn, rn);
-            } else {
-                buf_printf(hb,
-                    "    copy->%s = s->%s;\n", rn, rn);
-            }
-            free(rn);
-        }
-        buf_printf(hb,
-            "    return copy;\n"
-            "}\n"
-            "static void __clenv_%d_drop(void *p) {\n"
-            "    __clenv_%d *s = (__clenv_%d *)p;\n",
-            cont_id, cont_id, cont_id);
-        /* CF7.2: emit per-field drop for owned types before freeing env */
-        for (uint32_t ci = 0;
-             ci < e->as.cloneable_shift_.n_live_captures; ci++) {
-            Binding *cap = e->as.cloneable_shift_.live_captures[ci];
-            if (cap->type.kind == TY_RC) {
-                char *rn = raw_name_for_binding(cap);
-                buf_printf(hb,
-                    "    if (s->%s) { rc_strong_decrement(s->%s);"
-                    " rc_free_queue_drain(); }\n",
-                    rn, rn);
-                free(rn);
-            }
-        }
-        buf_printf(hb, "    free(s);\n}\n\n");
-
-        /* Alloc env in function body */
-        env_var = fresh_tmp(ctx);
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "__clenv_%d *%s = malloc(sizeof(__clenv_%d));\n",
-                   cont_id, env_var, cont_id);
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "if (!%s) abort();\n", env_var);
-        for (uint32_t ci = 0;
-             ci < e->as.cloneable_shift_.n_live_captures; ci++) {
-            Binding *cap = e->as.cloneable_shift_.live_captures[ci];
-            char *rn = raw_name_for_binding(cap);
-            char *cn = name_for_binding(ctx, cap);
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "%s->%s = %s;\n", env_var, rn, cn);
-            free(rn);
-            free(cn);
-        }
-        clone_fn_str = malloc(32);
-        drop_fn_str  = malloc(32);
-        snprintf(clone_fn_str, 32, "__clenv_%d_clone", cont_id);
-        snprintf(drop_fn_str,  32, "__clenv_%d_drop",  cont_id);
-        env_val_str = env_var;
-    }
-
-    /* CPS-CL5: Alloc the continuation */
-    char *cont_var = fresh_tmp(ctx);
+    /* cps-backend-direct-lowering-removal D6b: the legacy standalone cloneable-
+     * shift emission -- a setjmp/longjmp cooperation with the old
+     * emit_effects_cloneable_reset Case-2 -- is deleted.  D6a replaced Case-2
+     * with a TUR-E0710 diagnostic (a context-bearing cloneable shift outside the
+     * native build_cloneable subset is rejected, not silently miscompiled), so
+     * this emitter's longjmp landing (tur_current_reset_ctx) no longer exists and
+     * the function is unreachable in the corpus: a cloneable-shift is always
+     * either the whole reset body (Case-1, native-first) or inside a context
+     * Case-2 already rejected.  Reaching here means a bare cloneable-shift escaped
+     * its reset -- reject it cleanly rather than longjmp to a landing that is no
+     * longer established. */
+    diag_emit_with_code(DIAG_ERROR, e->span,
+                        TUR_E0710_CLONEABLE_CONTEXT_NOT_CAPTURABLE,
+                        "cloneable-shift is not in a capturable reset context\n"
+                        "  = note: a cloneable-shift must sit inside a "
+                        "cloneable-reset whose delimited context the native "
+                        "backend can reify; run `tur explain TUR-E0710` for details");
+    char *tmp = fresh_tmp(ctx);
     indent_buf(body, ctx->indent);
-    buf_printf(body,
-        "tur_cloneable_cont *%s = tur_cloneable_cont_alloc("
-        "__cont_fn_%d, %s, %s, %s);\n",
-        cont_var, cont_id,
-        env_val_str  ? env_val_str  : "NULL",
-        clone_fn_str ? clone_fn_str : "NULL",
-        drop_fn_str  ? drop_fn_str  : "NULL");
-
-    /* CPS-CL5: Call k_fn with the continuation */
-    char *k_fn_val = emit_value(ctx, body, e->as.cloneable_shift_.k_fn);
-    char *k_result = fresh_tmp(ctx);
-    indent_buf(body, ctx->indent);
-    if (e->as.cloneable_shift_.k_fn->kind == EX_CLOSURE) {
-        struct Closure *closure =
-            e->as.cloneable_shift_.k_fn->as.closure_.closure;
-        char *thunk_name;
-        if (closure->fn->binding) {
-            thunk_name = raw_name_for_binding(closure->fn->binding);
-        } else {
-            thunk_name = malloc(64);
-            snprintf(thunk_name, 64, "__fn_anon_%d",
-                     closure->fn->n_params > 0
-                         ? closure->fn->params[0]->id : 0);
-        }
-        buf_printf(body, "int64_t %s = %s(%s, (int64_t)(intptr_t)%s);\n",
-                   k_result, thunk_name, k_fn_val, cont_var);
-        free(thunk_name);
-    } else {
-        buf_printf(body, "int64_t %s = %s((int64_t)(intptr_t)%s);\n",
-                   k_result, k_fn_val, cont_var);
-    }
-
-    /* CPS-CL5: Store k_fn result in reset context and longjmp back */
-    indent_buf(body, ctx->indent);
-    buf_printf(body, "tur_current_reset_ctx->result = %s;\n", k_result);
-    indent_buf(body, ctx->indent);
-    buf_puts(body, "longjmp(tur_current_reset_ctx->jmp, 1);\n");
-
-    /* The shift never "returns" normally (longjmp jumps past it).
-     * Return k_result as the nominal value for type-checking purposes. */
-    free(cont_var);
-    free(k_fn_val);
-    if (env_var)      free(env_var);
-    if (clone_fn_str) free(clone_fn_str);
-    if (drop_fn_str)  free(drop_fn_str);
-    return k_result;
+    buf_printf(body, "%s %s = 0; /* cloneable-shift: rejected (TUR-E0710) */\n",
+               type_c_name(e->type), tmp);
+    return tmp;
 }
 
 char *emit_effects_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
