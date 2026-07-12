@@ -1,5 +1,17 @@
 # Direct backend: `(do (reset (shift ...)) <tail>)` crashes (SIGILL)
 
+> **Graduation status (2026-07-12):** The `cps-backend` experiment is **fully
+> graduated** -- always-on since #657 (2026-07-11), flag removed in #658.
+> `--enable=cps-backend` now hard-errors (TUR-E0310). This report is a
+> **direct/fiber** (evicted-path) defect, still valid, but the flag-based framing
+> is stale: there is no longer a flag to toggle backends. "The DIRECT backend
+> (no `--enable=cps-backend`)" vs "the `--enable=cps-backend` path" now describes
+> the always-on split -- a colored function lowers through the CPS-IR backend,
+> an evicted one through direct/fiber. The bug lives on the **evicted** path, so
+> reproduce it with a function shape that evicts (as the repro does); plain
+> `tur run repro.tur` is correct as written. (`emit_cps_reset` still exists in
+> the tree -- that reference is fine.)
+
 **Severity:** medium (crash, direct backend; narrow shape)
 
 ## Summary

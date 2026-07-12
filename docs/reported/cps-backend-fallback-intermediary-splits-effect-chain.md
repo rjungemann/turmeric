@@ -1,5 +1,21 @@
 # CPS backend: a fallback intermediary between a CPS handler and CPS performer breaks the DK chain (crash)
 
+> **Graduation status (2026-07-12):** The `cps-backend` experiment is **fully
+> graduated** -- it went always-on in #657 (2026-07-11) and the
+> `--enable=cps-backend` flag was removed in #658. `tur experiments` now lists
+> nothing and passing `--enable=cps-backend` hard-errors (TUR-E0310); the
+> CPS-IR-to-C backend (`src/compiler/emit_cps_ir.c`) is the default lowering.
+> This changes how the report below must be read:
+> - The "**gated** / off by default / default suite unaffected" caveat and the
+>   "**graduation blocker**" framing are **stale**. This shape is now on the
+>   **default** path, so re-assess it as an always-on crash, not a gated one.
+> - In the repro, drop `--enable=cps-backend` (it now errors) -- plain `tur run`
+>   IS the CPS path.
+> - Graduation shipped with the fallback-eviction gate hardened in #657, so
+>   whether this exact intermediary-fallback shape still reproduces post-#658
+>   should be **re-verified** before picking it up; it may be fixed, still live,
+>   or moved. (Not re-checked as part of this status annotation.)
+
 **Severity:** high (miscompile -> abort), but **gated**: only reachable under
 `--enable=cps-backend` (off by default), so the default suite is unaffected. It
 is a graduation blocker -- the `cps-backend` graduation gate requires no

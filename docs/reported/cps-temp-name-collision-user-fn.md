@@ -1,5 +1,15 @@
 # CPS synthesized temporaries `t<N>` collide with user names (residual after the `k` fix)
 
+> **Graduation status (2026-07-12):** The `cps-backend` experiment is **fully
+> graduated** -- always-on since #657 (2026-07-11), flag removed in #658.
+> `--enable=cps-backend` now hard-errors (TUR-E0310) and `tur experiments` lists
+> nothing; `src/passes/cps_ir.c` + `src/compiler/emit_cps_ir.c` are the default
+> lowering. So this segfault is reachable on the **default** path (whenever the
+> function is colored), not behind any flag -- the repro below already uses a
+> bare `tur run`, which is correct. The root cause (`cps_ir.c:42` unnamespaced
+> `t%u`) and fix directions are unaffected by graduation; the snapshot-churn note
+> still applies. (Bug itself not re-verified as part of this status annotation.)
+
 **Severity: MEDIUM (segfault on valid code; niche -- requires naming a function
 `t0` / `t1` / ... , or an `__cps`-body-scoped `__*` internal).**
 
