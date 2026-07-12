@@ -1,5 +1,9 @@
 # Codegen: a by-value struct/ADT local with an owning field leaks it at scope exit
 
+**Status:** RESOLVED. `elab_let` now injects a scope-exit auto-drop for every
+by-value ADT/record local carrying an owning `rc`/`ref` field, mirroring the
+existing bare-`rc` auto-drop. See "Resolution" below.
+
 **Severity:** medium (memory leak; no crash / miscompile). Mainline codegen --
 not CPS-backend-specific. Likely part of the deferred owning-pointer lifecycle
 work (graduation-gate "item 4"), but not currently tracked anywhere.
@@ -66,6 +70,54 @@ the existing `TY_REF` count + inject loops: inject a scope-exit
 lowers to it), guarded by the same moved / explicitly-consumed / consumed-by-use
 filters so it does not double-drop a value that escapes or is passed to a
 consuming call.
+
+## Resolution
+
+`src/compiler/elab_forms.c` (`elab_let`) gained a new scope-exit auto-drop
+injection immediately after the existing bare-`rc` injection, gated by a
+file-local helper `elab_byval_drop_adt(Type)`.  The helper mirrors the emit-side
+predicate for `emit_adt_byval_drop_glue`: a non-`:heap`, `needs_drop_glue`,
+single-ctor product laid out by value (`adt_is_byvalue_product` for a bare
+`TY_ADT`; `adt_app_is_byvalue_product` for a concrete `TY_APP` monomorph).
+
+For each such local, one scope-exit `defer` is injected per owning field, reusing
+the existing drop nodes so no new expr kind / pass plumbing was needed:
+
+- `rc` field -> `(defer (rc/drop (.f o)))`  (lowers to `rc_strong_decrement` +
+  `rc_free_queue_drain`, exactly what `drop_glue_tur_adt_<T>` emits).
+- `ref`/`lref` field -> `(defer (drop! (.f o)))`  (lowers to `free`, matching the
+  glue).
+
+The injection is guarded by the same moved / consumed / consumed-by-use filters
+the bare-`rc` path uses (`binding_moved_during_init`, `Binding.is_moved`,
+`is_binding_consumed`), so a value that escapes -- returned in tail position,
+moved into a consuming call, or explicitly dropped -- is not double-dropped.
+Wrapping a by-value local in `rc/of` is separately rejected by the uniqueness
+checker (TUR-E0202), so that double-free path cannot arise.
+
+The defer reuses the ordinary defer/frame machinery, so the release fires on
+early-return paths too, and the local is captured into the defer env by value
+(the copied aggregate shares the same `RcControlBlock *`, so the decrement lands
+on the live block).
+
+Intentionally out of scope (unchanged, matching the shallow `drop_glue`):
+
+- `weak` fields -- non-owning (they carry no payload); there is no scope-exit
+  `weak`-decrement primitive to reuse, and the reported defect is about *owning*
+  fields.  The `rc/of` drop-glue path still decrements them via
+  `rc_weak_decrement`.
+- Nested by-value aggregate fields (a struct field that is itself a by-value
+  drop-gluey ADT).  `emit_adt_byval_drop_glue` is itself shallow (it releases
+  only direct `rc`/`ref`/`weak` fields), so the local-drop mirrors it exactly;
+  deep nested release is a separate, pre-existing gap.
+- By-value ADT **parameters** with owning fields.  Parameter ownership is a
+  distinct injection site (function-body elaboration, not `elab_let`) with its
+  own caller/callee double-free considerations; this report is specifically the
+  *local* case.
+
+Regression fixture: `tests/fixtures/byval-adt-local-owning-field-drop/` -- a
+by-value `Own` local that does not escape; its `rc` field's strong count returns
+to 1 at scope exit (would stay at 2 = leak without the fix).
 
 ## Relationship to the CPS backend
 
