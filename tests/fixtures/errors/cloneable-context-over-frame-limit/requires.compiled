@@ -1,0 +1,4 @@
+The >8-frame (CL_IR_MAX_FRAMES) limit is a compiler codegen constraint; the
+tree-walking interpreter has no frame limit and evaluates this context fine (it
+does not emit TUR-E0710), so the diagnostic is validated on the compiled path
+only.
