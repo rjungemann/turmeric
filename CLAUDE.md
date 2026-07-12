@@ -186,6 +186,28 @@ default to `ASAN_OPTIONS=detect_leaks=0`. Override with
 `ASAN_OPTIONS=detect_leaks=1 bash tests/<harness>.sh` to opt back in. See
 [docs/asan-debug-leaks-plan.md](docs/asan-debug-leaks-plan.md).
 
+#### macOS startup hang -- disable the sanitizers
+
+On newer macOS/dyld (observed on Darwin >= 27 / macOS 26+) the clang ASan
+runtime can **deadlock at startup** -- it spins forever in a spinlock inside
+`InitializeShadowMemory` while walking the dyld shared cache, *before* `main()`
+runs. The symptom is that **every** `tur` invocation hangs, including
+`tur --version`. This is a runtime/OS incompatibility, not a bug in `tur`.
+
+The CMake build detects those Darwin versions and defaults `TUR_DEBUG_SANITIZE`
+**OFF** there, so a plain Debug build stays usable. Anywhere else it defaults
+ON. To force a specific choice:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DTUR_DEBUG_SANITIZE=OFF  # no ASan/UBSan
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DTUR_DEBUG_SANITIZE=ON   # force ASan/UBSan
+```
+
+`OFF` strips `-fsanitize=address,undefined` from the whole Debug build (and the
+`eval_import` test's fixture compile), so you lose leak detection -- use it only
+when the ASan runtime itself is broken on your host. The Release build never
+carries the sanitizers, so `tur --version` on a Release build always works.
+
 ## CLI Argument Parsing -- STRICT RULE
 
 Reading CLI arguments via any mechanism other than `*args*` or `stdlib/args.tur` is

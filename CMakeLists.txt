@@ -5,6 +5,42 @@ project(turmeric LANGUAGES C ASM)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ---------------------------------------------------------------------------
+# Debug-build sanitizers (AddressSanitizer + UBSan)
+# ---------------------------------------------------------------------------
+# The Debug build instruments `tur` (and, in the eval_import test, the C it
+# generates) with -fsanitize=address,undefined. On newer macOS/dyld the clang
+# ASan runtime can deadlock in InitializeShadowMemory while walking the dyld
+# shared cache -- it spins forever in a startup spinlock *before* main(), so
+# every `tur` invocation (even `tur --version`) hangs. This is a runtime/OS
+# incompatibility, not a bug in `tur`.
+#
+# Provide a single opt-out that strips ASan+UBSan from the whole Debug build:
+#
+#     cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DTUR_DEBUG_SANITIZE=OFF
+#
+# It defaults ON everywhere the runtime is known-good, and auto-defaults OFF on
+# the Darwin versions where the deadlock has been observed (Darwin >= 27 /
+# macOS 26+) so a plain Debug build stays usable there. Force it back on with
+# -DTUR_DEBUG_SANITIZE=ON if your local toolchain's ASan runtime is fixed.
+set(_tur_debug_sanitize_default ON)
+if(APPLE AND CMAKE_SYSTEM_VERSION VERSION_GREATER_EQUAL "27")
+  set(_tur_debug_sanitize_default OFF)
+  message(STATUS
+    "tur: macOS/dyld (Darwin ${CMAKE_SYSTEM_VERSION}) is known to deadlock the "
+    "ASan runtime at startup; defaulting TUR_DEBUG_SANITIZE=OFF. "
+    "Override with -DTUR_DEBUG_SANITIZE=ON.")
+endif()
+option(TUR_DEBUG_SANITIZE
+  "Instrument the Debug build with AddressSanitizer + UBSan"
+  ${_tur_debug_sanitize_default})
+if(TUR_DEBUG_SANITIZE)
+  set(TUR_ASAN_FLAGS "-fsanitize=address,undefined")
+else()
+  set(TUR_ASAN_FLAGS "")
+  message(STATUS "tur: Debug sanitizers disabled (TUR_DEBUG_SANITIZE=OFF)")
+endif()
+
+# ---------------------------------------------------------------------------
 # CPM: package manager for fetching Raylib (and any future C dependencies).
 # ---------------------------------------------------------------------------
 include(cmake/CPM.cmake)
@@ -406,9 +442,11 @@ add_test(
 )
 # Set TUR_CC_FLAGS so the generated C can find turi/eval.h and libturi.a.
 # In Debug builds libturi.a is ASAN-instrumented so we must also pass
-# -fsanitize=address,undefined to avoid undefined ASAN symbol errors.
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-  set(_eval_import_asan " -fsanitize=address,undefined")
+# -fsanitize=address,undefined to avoid undefined ASAN symbol errors. When the
+# Debug sanitizers are disabled (TUR_DEBUG_SANITIZE=OFF) libturi.a is clean, so
+# the fixture compile must stay clean too -- gate on the same flag.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND TUR_ASAN_FLAGS)
+  set(_eval_import_asan " ${TUR_ASAN_FLAGS}")
 else()
   set(_eval_import_asan "")
 endif()
