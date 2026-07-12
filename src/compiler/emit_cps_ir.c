@@ -3175,7 +3175,11 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                         dv, ce->fn_cn, id, i, opv ? opv : "0", dv);
                 free(opv);
             } else {
-                char *opv = atom_str(ce, &fr->operand);
+                /* D6a parity: a non-atomic pure arithmetic operand (env_expr) is
+                 * emit_value'd at the reset site; its int value rides the tagged
+                 * frame env, serialized inline by the shared marshaler. */
+                char *opv = fr->env_expr ? emit_cloneable_direct(ce, fr->env_expr)
+                                         : atom_str(ce, &fr->operand);
                 ce_line(ce, "%s = dk_frame(__sk_frame_for_tag(%d), (intptr_t)(%s), %s);",
                         dv, sk_tag_for_frame(fr), opv, dv);
                 free(opv);

@@ -758,11 +758,20 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             bool h1 = serial_reaches_shift(a1);
             if (h0 == h1) return NULL;               /* need exactly one hole side */
             const Expr *other = h0 ? a1 : a0;
-            if (!other || !is_atomic(other) || other->type.kind != TY_INT) return NULL;
+            if (!other || other->type.kind != TY_INT) return NULL;
+            /* D6a parity: like the cloneable arithmetic frame, admit a non-atomic
+             * pure int operand (shift-free + safe_to_delegate) via env_expr -- it
+             * is emit_value'd once at the reset site and its int value rides the
+             * tagged frame env, which the shared marshaler serializes inline like
+             * an atomic operand, so save-cont!/resume-cont! round-trips. */
+            bool sk_arith_atom = is_atomic(other);
+            if (!sk_arith_atom && (serial_reaches_shift(other)
+                          || !safe_to_delegate(b, other))) return NULL;
             if (nf >= CL_IR_MAX_FRAMES) return NULL;
             memset(&frames[nf], 0, sizeof(CloneFrame));
             frames[nf].op        = cur->as.builtin.spec->c_op;   /* stable string */
             frames[nf].operand   = atom_of(other);
+            frames[nf].env_expr  = sk_arith_atom ? NULL : other;
             frames[nf].hole_left = h0;
             nf++;
             cur = h0 ? a0 : a1;                       /* descend the hole side */
