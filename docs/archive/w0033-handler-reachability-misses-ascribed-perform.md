@@ -1,5 +1,26 @@
 # TUR-W0033 handler-reachability misses a `perform` hidden inside a type ascription (false "unreachable clause")
 
+**RESOLVED (2026-07-12):** Root cause was one level up from the W0033 emitter:
+`collect_effects_in_expr` in `src/passes/effect_check.c` (which builds the
+handled body's effect row *and* every function's `inferred_effect_row`) had no
+`EX_ASCRIBE` case and a non-descending `default`, so a `perform` reachable only
+through `(:: (perform ...) T)` never entered the row. Added an `EX_ASCRIBE`
+case that recurses into `ascribe_.inner` to all four traversals in that file
+(`collect_effects_in_expr`, `check_closures_in_expr`,
+`check_call_site_rows_in_expr`, `check_unreachable_handlers_in_expr`), mirroring
+the coloring fix in `src/passes/cps.c`. This fixes the false W0033 *and* a
+sibling soundness hole: the declared-row check (TUR-E0009) previously
+under-inferred an ascribed-only `perform`.
+
+Verified: the repro now prints `42` with no W0033; a genuinely unreachable
+clause still warns (true positive preserved); an ascribed perform nested in a
+`let` is tracked. Since the harness has no "warning must be absent" assertion,
+the mechanical guard is a negative fixture
+(`tests/fixtures/errors/effect-ascribed-perform-undeclared/`): a `#fx{}`-declared
+function performing an ascribed `Ask` now raises TUR-E0009 (it compiled clean
+before the fix). Full suite: 2154 passed, 0 failed.
+
+
 **Severity: LOW (spurious warning, no miscompile -- the handler runs correctly;
 the diagnostic is just a false positive). Sibling of the now-fixed CPS-coloring
 ascription-descent gap

@@ -568,6 +568,15 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
         row = collect_effects_in_expr(a, e->as.discontinue_.discontinue->k,         row, idx, env, subst);
         return collect_effects_in_expr(a, e->as.discontinue_.discontinue->exception, row, idx, env, subst);
 
+    case EX_ASCRIBE:
+        /* A type ascription `(:: <inner> T)` is erased at codegen; descend into
+         * the inner expression so a `perform` (or effectful call) that appears
+         * ONLY inside an ascription is still tracked.  Without this the
+         * function's inferred row omits the effect -- causing a false
+         * TUR-W0033 "handler clause is unreachable" and under-inferring the
+         * declared-row check (TUR-E0009). */
+        return collect_effects_in_expr(a, e->as.ascribe_.inner, row, idx, env, subst);
+
     default:
         return row;
     }
@@ -835,6 +844,10 @@ static int check_closures_in_expr(Arena *a, Expr *e,
         /* Inner defn: processed separately at the top-level. */
         return 0;
 
+    case EX_ASCRIBE:
+        /* Ascription is erased at codegen; descend into the inner expression. */
+        return check_closures_in_expr(a, e->as.ascribe_.inner, idx, env);
+
     default:
         return 0;
     }
@@ -989,6 +1002,10 @@ static int check_call_site_rows_in_expr(Arena *a, Expr *e,
     case EX_FN_DEF:
         return 0;
 
+    case EX_ASCRIBE:
+        /* Ascription is erased at codegen; descend into the inner expression. */
+        return check_call_site_rows_in_expr(a, e->as.ascribe_.inner, idx, env);
+
     default:
         return 0;
     }
@@ -1064,6 +1081,11 @@ static void check_unreachable_handlers_in_expr(
         return;
     case EX_RETURN:
         check_unreachable_handlers_in_expr(a, e->as.return_.value, idx, env);
+        return;
+    case EX_ASCRIBE:
+        /* Ascription is erased at codegen; descend so a nested handle inside an
+         * ascription is still checked. */
+        check_unreachable_handlers_in_expr(a, e->as.ascribe_.inner, idx, env);
         return;
     default:
         return;
