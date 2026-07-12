@@ -3250,11 +3250,11 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
             const CloneFrame *fr = &t->as.cloneable.frames[i];
             bool two_arg = fr->call_fn && !fr->ignore_value
                 && fr->call_fn->type.as.fn.arity == 2;
-            /* D6a: a non-atomic arithmetic operand (fr->env_expr set) is
-             * emit_value'd at the reset site; otherwise ride the atom / pass 0
-             * for a 1-arg call frame that carries no env. */
+            /* A non-atomic env operand (fr->env_expr set -- an arithmetic frame
+             * or a 2-arg call frame) is emit_value'd at the reset site; a 1-arg
+             * call frame carries no env (pass 0); everything else rides the atom. */
             char *opv = (fr->call_fn && !two_arg) ? strdup("0")
-                      : (!fr->call_fn && fr->env_expr) ? emit_cloneable_direct(ce, fr->env_expr)
+                      : fr->env_expr ? emit_cloneable_direct(ce, fr->env_expr)
                       : atom_str(ce, &fr->operand);
             ce_line(ce, "%s = dk_frame(%s, (intptr_t)(%s), %s);", dv, ctxfn, opv, dv);
             free(opv);

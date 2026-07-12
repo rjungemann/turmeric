@@ -464,11 +464,12 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         }
 
         /* Call frame (2-arg): `(f other [])` / `(f [] other)` to a top-level
-         * uncolored (int,int)->int fn; the hole is one arg, the other is a captured
-         * INT env.  The env rides the frame's dk_frame slot -- deep-cloned with the
-         * chain on each resume -- so multi-shot is correct with no marshaling (unlike
-         * serial, which registers a per-site skcall for save/restore).  (Non-int
-         * envs -- cstr / Serializable -- still delegate.) */
+         * uncolored scalar (int/cstr) fn; the hole is one arg, the other is the
+         * captured env -- an atomic operand on `operand`, or (D6a) a non-atomic
+         * pure operand on `env_expr`.  The env value rides the frame's dk_frame
+         * slot -- deep-cloned with the chain on each resume -- so multi-shot is
+         * correct with no marshaling (unlike serial, which registers a per-site
+         * skcall for save/restore). */
         if (cur->kind == EX_CALL && cur->as.call_.n_args == 2
             && cur->as.call_.fn_binding && !cur->as.call_.fn_expr) {
             const Binding *fb = cur->as.call_.fn_binding;
@@ -489,13 +490,22 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             bool h1 = cloneable_ctx_reaches_shift(a1);
             if (h0 == h1) return NULL;               /* exactly one hole side */
             const Expr *other = h0 ? a1 : a0;        /* the captured env operand */
-            if (!other || !is_atomic(other) ||
-                !cps_scalar_kind_ok(other->type.kind)) return NULL;
+            if (!other || !cps_scalar_kind_ok(other->type.kind)) return NULL;
+            /* D6a parity (2-arg call frame): admit a non-atomic pure scalar env
+             * (a call `(id 3)`, shift-free + safe_to_delegate) via env_expr, like
+             * the arithmetic frame and serial's 2-arg frame.  It is emit_value'd
+             * once at the reset site; its scalar value rides the frame's dk_frame
+             * env, deep-cloned with the chain on each resume (cloneable is
+             * single-owner, no marshaling). */
+            bool env_atom = is_atomic(other);
+            if (!env_atom && (cloneable_ctx_reaches_shift(other)
+                          || !safe_to_delegate(b, other))) return NULL;
             if (nf >= CL_IR_MAX_FRAMES) return NULL;
             memset(&frames[nf], 0, sizeof(CloneFrame));
             frames[nf].op        = NULL;
             frames[nf].call_fn   = fb;
             frames[nf].operand   = atom_of(other);   /* captured scalar env */
+            frames[nf].env_expr  = env_atom ? NULL : other;
             frames[nf].hole_left = h0;                /* hole is the left arg? */
             nf++;
             cur = h0 ? a0 : a1;                        /* descend into the hole side */
