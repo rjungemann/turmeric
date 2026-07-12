@@ -1395,10 +1395,13 @@ static bool delim_ok(const CTerm *t) {
 
 /* A source parameter's raw C name (used unchanged now that fn_params is set
  * during CPS emission) must not collide with a name the CPS backend synthesizes:
- * the continuation `k`, a fresh temporary `t<N>`, or any `__`-prefixed internal
- * (`__root`, `__r`, `__cap`, `__h<N>`, ...).  A colliding param would shadow or
- * be shadowed by a generated identifier; exclude such a function from CPS
- * candidacy so it falls back to the direct emitter (which owns its own naming). */
+ * the continuation `k`, or any `__`-prefixed internal (`__root`, `__r`, `__cap`,
+ * `__h<N>`, and the fresh result temporaries `__t<N>`).  A colliding param would
+ * shadow or be shadowed by a generated identifier; exclude such a function from
+ * CPS candidacy so it falls back to the direct emitter (which owns its own
+ * naming).  The `t<N>` branch below is retained defensively: temporaries are now
+ * `__t<N>` (caught by the `__` rule), but an un-prefixed `t<N>` param remains
+ * cheap to keep off the CPS path. */
 static bool param_name_clashes_cps(const Binding *b) {
     if (!b || !b->name || !b->name->name) return false;
     const char *n = b->name->name;

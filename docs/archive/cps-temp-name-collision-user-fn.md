@@ -1,5 +1,22 @@
 # CPS synthesized temporaries `t<N>` collide with user names (residual after the `k` fix)
 
+**RESOLVED (2026-07-12):** Applied the preferred fix -- namespaced the CVar
+result temporary at `src/passes/cps_ir.c:42` from `"t%u"` to `"__t%u"`, a
+`__`-reserved form no user identifier can produce, closing the `t<N>` collision
+completely (mirrors the earlier `k -> __kont` fix). Updated the
+`param_name_clashes_cps` comment in `emit_cps_ir.c` to match. Verified: the repro
+prints `11` (was SIGSEGV); regenerated all 139 `expected.c` snapshots (pure
+`t<N>` -> `__t<N>` naming churn, no behavior change); full suite 2154 passed,
+0 failed. Regression fixture: `tests/fixtures/cps-temp-name-collision-user-fn/`.
+
+Not addressed (out of scope, low-risk): the `__*` internals note below --
+situational collisions between other synthesized `__cap`/`__ccd<N>`/`__ps_<N>`
+names and an identically-named user global referenced in the same `__cps` body.
+No repro produced; a full audit would namespace every synthesized name behind a
+prefix no user identifier can produce.
+
+---
+
 > **Graduation status (2026-07-12):** The `cps-backend` experiment is **fully
 > graduated** -- always-on since #657 (2026-07-11), flag removed in #658.
 > `--enable=cps-backend` now hard-errors (TUR-E0310) and `tur experiments` lists

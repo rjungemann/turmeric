@@ -1,0 +1,18 @@
+;; CPS synthesized result temporaries must not collide with user identifiers.
+;; The user function `t0` is referenced as a cloneable-shift receiver from a
+;; colored context.  Before the fix the CPS backend synthesized a temporary
+;; literally named `t0` in the same C scope (`int64_t t0; ...`), shadowing the
+;; user function; the shift-env reference `(intptr_t)(t0)` then cast the
+;; temporary instead of the function and segfaulted.  Temporaries are now
+;; `__t<N>` (a `__`-reserved form no user identifier can produce), so `t0`
+;; resolves correctly.  See
+;; docs/archive/cps-temp-name-collision-user-fn.md.
+
+(defn t0 [c : int] : int c)
+
+(defn make [] : int
+  (cloneable-reset (+ 1 (cloneable-shift t0 0))))
+
+(defn main [] : int
+  (println (tur_cloneable_cont_resume (make) 10))
+  0)
