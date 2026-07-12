@@ -76,13 +76,15 @@ CPS backend is not justified by the payoff now. **Non-goal unless** a real
 
 ## Task O3 -- captured owning values
 
-**State: deferred, rides the env-capture story.** If a future phase lifts the
-zero-capture cut and lets a continuation capture live locals, an owning capture
-must be deep-cloned / incref'd per `dk_copy` (DK continuations are multi-shot, so
-a shallow copy of a frame holding an owning pointer would double-free). Until the
-cut is lifted this is unreachable, so O3 stays off the critical path for
-graduation. Tracked here so it is not lost; owned by whichever plan lifts the
-zero-capture cut (the env-capture work, out of scope in the parent plans).
+**State: deferred, planned in
+[cps-backend-env-capture-owning-values-plan.md](cps-backend-env-capture-owning-values-plan.md).**
+If a future phase lifts the zero-capture cut and lets a continuation capture live
+locals, an owning capture must be deep-cloned / incref'd per `dk_copy` (DK
+continuations are multi-shot, so a shallow copy of a frame holding an owning
+pointer would double-free). Until the cut is lifted this is unreachable, so O3
+stays off the critical path for graduation. The env-capture work that owns O3 now
+has a concrete plan (gate relaxation + per-capture clone/drop glue in the CT-IR
+backend, phased E1-E4); see that document.
 
 ## Depends on / reuses
 
@@ -97,5 +99,7 @@ zero-capture cut (the env-capture work, out of scope in the parent plans).
 
 - Adding `ref` / `rc` / `weak` / `lref` to `slot_ty` -- Findings 1-2 show there is
   nothing to hook; owning pointers never cross the slot bare.
-- Lifting the zero-capture cut itself -- that is the env-capture story; O3 rides
-  it.
+- Lifting the zero-capture cut itself -- that is the env-capture story, planned
+  in
+  [cps-backend-env-capture-owning-values-plan.md](cps-backend-env-capture-owning-values-plan.md);
+  O3 rides it.
