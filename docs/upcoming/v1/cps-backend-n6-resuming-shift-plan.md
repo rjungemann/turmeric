@@ -1,7 +1,7 @@
 ---
 title: Resumable delimited control -- one substrate (k-reset / k-shift)
 category: Planning
-status: in progress -- slice 1 LANDED (k-reset/k-shift aliased onto the cloneable pipeline, multi-shot, resumed via tur_cloneable_cont_resume). Open: (k v) resume sugar, single-shot specialization, retiring abortive shift + cloneable/serial into this surface.
+status: in progress -- slices 1-3 LANDED (k-reset/k-shift on the cloneable substrate; (k v) sugar via `k : cont`; single-shot via `^linear k : cont`, compile-time TUR-E0101). Open: fully-typed Cont<BodyT,ResetT> (slice 4), retiring abortive shift + cloneable/serial into this surface, optional lighter single-shot runtime.
 description: Split out of cps-backend-n6-fallback-removal-followups-plan.md (Task 1). Rather than reinterpret the abortive `shift` (breaking ~36 fixtures + the interpreter), add a NEW resumable delimited-control surface (`k-reset` / `k-shift`) that lowers to the SAME substrate the cloneable/serial variants already use -- the DK machine in compiled code, the reified-context TuriCont in the interpreter. Abortive `shift`/`shift0`, `cloneable-*`, and `serial-*` are then capability-specializations that retire into this one primitive over time.
 ---
 
@@ -53,16 +53,32 @@ context subset is supported (arithmetic binops, calls, pure lets, one `if`
 branch point); a context outside it is rejected with `TUR-E0710`, not
 miscompiled. The 2nd operand (`0` above) is the cloneable-shift seed/hole slot.
 
-### The intended surface (follow-on slices)
+### The intended surface -- mostly already composes from existing features
 
-- **`(k v)` resume sugar.** Make the captured continuation directly applicable --
-  `(k 1)` instead of `(tur_cloneable_cont_resume k 1)` -- so `step` reads as
-  `(+ (k 1) (k 2))`. This is elaboration sugar over the resume primitive.
-- **Single-shot `k-shift`.** A lighter variant whose continuation is single-shot
-  (plain `dk_shift`/`dk_invoke`, no `dk_copy_range` clone glue); resuming twice
-  is a runtime error. Multi-shot stays available as the cloneable capability.
-- **Typed continuation.** `receiver : (-> Cont<BodyT,ResetT> ResetT)` rather than
-  the bare int handle the cloneable alias exposes today.
+The ergonomic and single-shot surfaces do **not** need new machinery: they fall
+out of the existing continuation-type spellings (`cont` / `serial-cont` /
+`escape-cont`), the `(k v)` application sugar (CC4, `elab_call.c:3512`), and
+`^linear` one-shot enforcement.
+
+- **`(k v)` resume sugar -- WORKS.** Type the receiver param `k : cont` and
+  `(k v)` resumes it directly: `(defn step [k : cont] : int (+ (k 1) (k 2)))`.
+  No need for `tur_cloneable_cont_resume`. (It only failed earlier because an
+  *untyped* `k` is not a `cont`.)
+- **Single-shot `k-shift` -- LANDED (slice 3).** A single-shot continuation is a
+  `^linear` one: `(defn f [^linear k : cont] : int (k 5))`. Resuming twice is a
+  **compile-time** error (`TUR-E0101`, use-after-consume) -- strictly stronger
+  than the runtime error originally envisioned, and enforced on all three paths
+  because the program never compiles. Reuses the shared substrate unchanged.
+  Fixtures: `k-shift-single-shot` (resume once, `direct == cps == turi`) and
+  `errors/k-shift-single-shot-double-resume` (double `(k v)` -> `TUR-E0101`).
+- **Lighter single-shot RUNTIME (optional, not required).** A single-shot
+  `k-shift` still resumes over the cloneable-capable runtime today; a genuinely
+  lighter representation (plain `dk_shift`/`dk_invoke`, no `dk_copy_range` clone
+  glue) is a pure optimization, tracked separately -- it is not needed for
+  single-shot *semantics*, which linear typing already guarantees.
+- **Typed continuation (slice 4, partial).** `k : cont` already types the
+  handle; a fully parametric `Cont<BodyT,ResetT>` with a checked resume-value
+  type is the remaining refinement.
 
 ## Work plan (incremental, each slice testable)
 
@@ -82,24 +98,24 @@ The trade-off this bought: the surface is exactly cloneable's today (multi-shot,
 explicit resume primitive, `TUR-E0710` context subset). Slices 2-4 make it
 ergonomic and add the single-shot/typed variants.
 
-**Slice 2 -- OPEN -- `(k v)` resume sugar.** Elaborate an application of a
-captured continuation `(k v)` to the resume primitive, so a `k-shift` receiver
-reads as `(fn [k] (+ (k 1) (k 2)))`. Today `(k 1)` errors. Reuse the escape/call
-application-lowering path (`elab_call.c`) that already special-cases continuation
-application for `call/cc`. Done when the sugar and the explicit
-`tur_cloneable_cont_resume` form both compile to the same result and
-`k-shift-resumable-basic` can be rewritten with `(k v)`.
+**Slice 2 -- ALREADY AVAILABLE -- `(k v)` resume sugar.** Works today by typing
+the receiver param `k : cont`; the CC4 sugar (`elab_call.c:3512`) resumes the
+handle. No new code was needed -- the earlier `(k 1)` failure was only because
+an untyped `k` is not a `cont`. Exercised by both slice-3 fixtures.
 
-**Slice 3 -- OPEN -- single-shot `k-shift`.** A variant whose continuation is
-single-shot: plain `dk_shift`/`dk_invoke`, no `dk_copy_range` clone glue;
-resuming a second time is a runtime error (not silent). Lighter than the
-cloneable alias. Done when a single-shot fixture (`direct == cps == turi`) works
-and a double-resume yields a clean error on all three paths, LeakSanitizer-clean.
+**Slice 3 -- LANDED -- single-shot `k-shift`.** A `^linear k : cont` receiver is
+single-shot: `(k v)` resumes once, a second `(k v)` is a compile-time
+`TUR-E0101` use-after-consume. This is stronger than a runtime error (the
+program never compiles, so all three paths agree) and reuses the shared
+substrate with no new lowering. Fixtures: `k-shift-single-shot` (resume once,
+`direct == cps == turi == 15 / 12`); `errors/k-shift-single-shot-double-resume`
+(`TUR-E0101`). A lighter single-shot *runtime* (no `dk_copy_range` clone glue)
+remains an optional optimization, not a semantics blocker.
 
-**Slice 4 -- OPEN -- typed continuation.** Expose `k` as
-`Cont<BodyT,ResetT>` instead of the bare int handle the cloneable alias yields,
-so the receiver signature is checkable. Done when a mismatched resume value is a
-compile error and the handle is no longer an untyped `:int`.
+**Slice 4 -- OPEN (partial) -- fully typed continuation.** `k : cont` already
+types the handle enough for `(k v)`; the remaining refinement is a parametric
+`Cont<BodyT,ResetT>` whose resume-value type is checked against `BodyT`. Done
+when a mismatched resume value is a compile error.
 
 ## Consolidation (the retirement path -- OPEN, larger)
 
