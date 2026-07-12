@@ -4,6 +4,16 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.28.2] -- 2026-07-12
+
+### Fixed
+
+- **CPS backend temporaries are now `__`-prefixed to avoid user-code
+  collisions**: the CPS-IR-to-C backend previously emitted temporary
+  variables under bare names that could collide with identifiers from user
+  code; every generated temporary is now `__`-prefixed, closing that
+  namespace hazard (#661).
+
 ## [0.28.1] -- 2026-07-11
 
 ### Added

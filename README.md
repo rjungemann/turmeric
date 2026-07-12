@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.28.1` -- Debug sanitizers become configurable through a new `TUR_DEBUG_SANITIZE` CMake option, routing the ~40 hardcoded ASan/UBSan sites through one toggle, plus a tight-timeout `tur --version` CI smoke check on Linux and macOS.
+**Latest release:** `v0.28.2` -- CPS backend temporaries are now `__`-prefixed so generated code can no longer collide with user-code identifiers.
 
 ## What
 
