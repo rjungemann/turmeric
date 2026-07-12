@@ -1,5 +1,23 @@
 # Direct/fiber emitter: a float effect argument is truncated to int
 
+**RESOLVED (2026-07-12):** Fixed in `src/compiler/emit_effects.c`. The direct/
+fiber effect emitter now threads a `:float`/`:float64`/`:float32` value across
+the int64 effect-ABI slot by a **bit-reinterpret** (`union { double d; int64_t
+i; }`) instead of a numeric `(int64_t)` cast, mirroring emit_cps_ir.c's
+`slot_store`/`slot_load`. Two new static helpers -- `eff_slot_store` /
+`eff_slot_load` -- centralize the store/load convention (float bitcast, Tier-C
+aggregate box/unbox, or plain cast) and were applied to every effect-slot
+boundary: the perform arg-in and result-out, the handler-case param unpack and
+return, the body-fiber result, the resume value-in and result-out, and the
+`handler-lit` / `with-handler` mirrors. Verified: `(perform (One 7.1))` handled
+by `(resume k {a + 1.0})` now prints `8.1` (was `8`); a two-`:float`-arg effect
+prints `10.6`; `:float64` round-trips. Regression fixture:
+`tests/fixtures/direct-fiber-effect-float-arg/`. (Note: a bare `:float32`
+*effect* still misbehaves due to an orthogonal, pre-existing literal-typing gap
+-- a bare `3.25` resume literal is inferred `:float`/double, so it is packed via
+the double union while the `:float32` result is unpacked via the 32-bit union;
+this reproduces identically on the CPS backend and is not part of this slot fix.)
+
 **Severity:** medium (silent miscompile; wrong value, no crash). Mainline
 direct/fiber effect codegen -- NOT CPS-backend-specific. Surfaced while adding
 multi-arg effect support to the CPS backend (which handles floats correctly).

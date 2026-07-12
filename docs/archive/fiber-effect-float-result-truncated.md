@@ -1,5 +1,18 @@
 # Direct-style (fiber) effect with a `:float` result truncates to an integer
 
+**RESOLVED (2026-07-12):** Fixed in `src/compiler/emit_effects.c` alongside the
+sibling arg-truncation report. The direct/fiber `resume` value is now stored
+into the int64 slot via a `union { double d; int64_t i; }` bit-reinterpret (was
+`(int64_t)v`, which truncated `7.1 -> 7`), and the fiber's final result is
+loaded back into a genuine `double` local via the inverse reinterpret before it
+flows on (was `(double)i`, a numeric conversion of the bit pattern). The shared
+`eff_slot_store` / `eff_slot_load` helpers apply the same convention at the
+body-fiber result store and the `perform`/`handle` result-out sites, so every
+edge round-trips. Verified: `(handle (perform (Sample)) (Sample [] k) (resume k
+7.1))` now prints `7.1` (was `7`) on the default path, matching what the CPS
+backend produces. Regression fixture:
+`tests/fixtures/direct-fiber-effect-float-result/`.
+
 **Severity:** medium (silent wrong value for float-typed effects on the default
 / direct-style path). Not gated -- this is the normal compile path, independent
 of `--enable=cps-backend`.
