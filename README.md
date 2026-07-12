@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.27.7` -- `Vec`/`Set`/`Map` gain `Eq`/`Show` over any single-word element type, and the delimited-continuation runtime closes its `reset`/`shift` and `call/cc` gaps.
+**Latest release:** `v0.28.0` -- the CPS-IR-to-C backend graduates to the always-on codegen path: `emit-c` lowers ANF/CPS IR directly to C under the DK-threading ABI with no flag, and the last `--enable=cps-backend` surface is removed.
 
 ## What
 

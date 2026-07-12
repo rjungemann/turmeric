@@ -4,6 +4,33 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.28.0] -- 2026-07-11
+
+### Changed
+
+- **CPS-IR-to-C backend is now the always-on codegen path**: the emitter
+  that lowers a colored function's ANF/CPS IR directly to C -- under the
+  ratified DK-threading ABI, covering the direct<->CPS boundary edges,
+  letcont join points, and the load-bearing shift/reset case where a
+  callee's shift is delimited by a caller's reset -- is no longer
+  experimental. `emit-c` emits `__cps` bodies unconditionally, with no
+  flag required. This release retires the last of its experiment-flag
+  surface (#658), completing the graduation begun in the previous cycle.
+
+### Removed
+
+- **`--enable=cps-backend` flag surface fully removed**: with the backend
+  always-on, the residual experiment-flag plumbing is gone.
+  `--enable=cps-backend` now reports the standard unknown-experiment error
+  (TUR-E0310) instead of an accept-and-warn shim (#658).
+
+### Added
+
+- **`--dump-direct-lowering-callers` metric**: new diagnostic counter
+  reports the residual eviction and direct-dispatch caller populations
+  reaching the direct-style delimited-control lowering, measuring progress
+  toward retiring the legacy direct lowering (#659).
+
 ## [0.27.7] -- 2026-07-10
 
 ### Added
