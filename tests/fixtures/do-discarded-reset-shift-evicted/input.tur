@@ -1,0 +1,18 @@
+;; do-discarded-reset-shift-crash: a `(reset (shift ...))` in statement position
+;; (its value discarded -- a non-final `do` item) must be LOWERED on the direct/
+;; fiber emitter, not replaced by __builtin_trap().  `f` performs a shift so it is
+;; colored, but its owning-field aggregate return (the rc<int> field) evicts it
+;; from the CPS backend onto the direct emitter -- exactly the path that used to
+;; emit __builtin_trap() and SIGILL (exit 132).  Now the discarded reset runs and
+;; the `do` tail produces the struct.  See
+;; docs/archive/do-discarded-reset-shift-crash.md.
+(defstruct Own [r : rc<int> tag : int])
+
+(defn f [n : int] : Own
+  (do (reset (shift (fn [v] v) 1))
+      (Own (rc/of 7) n)))
+
+(defn main [] : int
+  (let [o (f 42)]
+    (println (.tag o)))
+  0)

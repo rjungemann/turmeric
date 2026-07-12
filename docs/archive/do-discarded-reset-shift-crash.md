@@ -1,5 +1,26 @@
 # Direct backend: `(do (reset (shift ...)) <tail>)` crashes (SIGILL)
 
+**RESOLVED (2026-07-12):** Localized and fixed. Root cause: `src/compiler/emit_stmt.c`
+handled `EX_RESET`/`EX_SHIFT`/`EX_SHIFT0` in **statement position** (value
+discarded) by emitting a bare `__builtin_trap();` ("full impl deferred") -- so a
+`(reset (shift ...))` whose value is discarded (a non-final `do` item) compiled
+to a trap and SIGILL'd at runtime on the direct/fiber emitter. Fix: lower a
+statement-position `EX_RESET` through `emit_value` (which owns the DK lowering)
+and `(void)`-discard the result, mirroring the adjacent `EX_SERIAL_RESET` case.
+The emitted `f` now lowers the reset (`__fn(1); (void)...;`) and runs the tail.
+
+Post-graduation reproduction note: the original scalar-return repro no longer
+crashes -- `f` is now colored and lowered by the always-on CPS backend, which is
+correct. To hit the buggy direct path, `f` must be **evicted** from CPS; the
+regression fixture (`tests/fixtures/do-discarded-reset-shift-evicted/`) forces
+this with an owning-field aggregate return (`rc<int>` field). Verified: was
+SIGILL (exit 132), now prints `42`; full suite 2107 passed, 0 failed.
+
+(Bare `EX_SHIFT`/`EX_SHIFT0` in statement position -- a shift with no enclosing
+reset to reify a continuation -- remain a placeholder trap; that shape is
+degenerate and out of scope for this fix.)
+
+
 > **Graduation status (2026-07-12):** The `cps-backend` experiment is **fully
 > graduated** -- always-on since #657 (2026-07-11), flag removed in #658.
 > `--enable=cps-backend` now hard-errors (TUR-E0310). This report is a

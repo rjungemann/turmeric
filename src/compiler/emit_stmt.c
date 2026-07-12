@@ -391,11 +391,26 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             free(v);
             return;
         }
-        /* Phase 18: Delimited continuations */
-        case EX_RESET:
+        /* Phase 18: Delimited continuations.
+         * A `reset` in statement position (its value discarded, e.g. a non-final
+         * `do` item) is lowered through emit_value -- which owns the DK machine
+         * lowering (emit_cps_reset) -- and its result is discarded.  This mirrors
+         * EX_SERIAL_RESET below.  Emitting a bare __builtin_trap() here was a
+         * silent-compile/runtime-SIGILL bug (do-discarded-reset-shift-crash):
+         * it fired whenever a `(do (reset (shift ...)) <tail>)` landed on the
+         * direct/fiber emitter (e.g. a colored function evicted from the CPS
+         * backend by an owning-field aggregate return). */
+        case EX_RESET: {
+            char *v = emit_value(ctx, body, e);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "(void)(%s);\n", v);
+            free(v);
+            return;
+        }
         case EX_SHIFT:
         case EX_SHIFT0:
-            /* For now, emit a placeholder - full impl deferred */
+            /* A bare shift in statement position (no enclosing reset to reify a
+             * continuation into) is not lowerable; emit a placeholder trap. */
             buf_puts(body, "__builtin_trap();");
             return;
         /* Phase B2: Cloneable continuations */
