@@ -1,5 +1,4 @@
 ;; U4 oracle: NATIVE serial CALL-frame context in a colored helper.
-;; Backend: default backend (emit_cps.c)
 ;; A 1-arg call frame (dbl []) in a serial context needs the per-site SkReg
 ;; marshaling registry so the frame maps to a stable name ("dbl$L") across a
 ;; serialize/deserialize.  Under --enable=cps-backend the colored helper emits

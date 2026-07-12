@@ -1,5 +1,4 @@
 ;; U3 oracle: native cloneable with a CAPTURE-FREE LAMBDA receiver.
-;; Backend: default backend (emit_cps.c)
 ;; The receiver `(fn [k : int] : int k)` captures nothing, so it is lifted to a
 ;; top-level fn; the cloneable-shift then calls it through the same indirect
 ;; fn-pointer form as a named receiver.  Emitted natively (no per-site closure).

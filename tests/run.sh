@@ -133,8 +133,11 @@ TUR_EMIT_C_MODE="${TUR_EMIT_C_MODE:-snapshot-only}"
 
 # Performance plan item #2: parallel fixture execution.
 # Override with TUR_TEST_JOBS=<n>; defaults to physical core count (capped at 8).
-# Capped at physical cores (not 2x) to avoid flooding syspolicyd on macOS with
-# simultaneous new-binary executions from requires.compiled fixtures.
+# The auto-detected default is capped at physical cores (not 2x) to avoid
+# flooding syspolicyd on macOS with simultaneous new-binary executions from
+# requires.compiled fixtures.  An *explicit* TUR_TEST_JOBS is an intentional
+# override and is honored uncapped -- a 16/32-core CI runner should be able to
+# use its cores.
 if [ -n "${TUR_TEST_JOBS:-}" ]; then
     JOBS="$TUR_TEST_JOBS"
 else
@@ -146,13 +149,14 @@ else
         _nproc=4
     fi
     JOBS=$(( _nproc ))
+    # Cap the auto-detected value only; an explicit TUR_TEST_JOBS bypasses this.
+    if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 fi
 
 case "$JOBS" in
     ''|*[!0-9]*) JOBS=4 ;;
 esac
 if [ "$JOBS" -lt 1 ]; then JOBS=1; fi
-if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 
 RESULTS_DIR="$(mktemp -d -t tur-tests-results-XXXXXX)"
 trap 'rm -rf "$RESULTS_DIR" "$_TUR_EMPTY_XDG"' EXIT
@@ -179,6 +183,36 @@ trap _abort_on_signal INT TERM
 # Optional regex filter for fixture names (relative path under tests/fixtures).
 # Example: TUR_TEST_FILTER='^rc-auto-drop|^rc-ref-conversion$'
 TUR_TEST_FILTER="${TUR_TEST_FILTER:-}"
+
+# Optional named sub-suite for faster developer feedback / CI fan-out.
+# Groups are defined by file/dir presence (robust), not fragile name regexes:
+#   all|<empty> -- everything (default)
+#   happy       -- positive fixtures only (tests/fixtures/* minus errors/)
+#   errors      -- negative fixtures only (tests/fixtures/errors/*)
+#   snapshots   -- positive fixtures carrying a codegen snapshot (expected.c)
+# Compose freely with TUR_TEST_FILTER (regex) and TUR_TEST_SHARD.
+TUR_TEST_SUITE="${TUR_TEST_SUITE:-}"
+case "$TUR_TEST_SUITE" in
+    ''|all|happy|errors|snapshots) ;;
+    *)
+        echo "run.sh: unknown TUR_TEST_SUITE='$TUR_TEST_SUITE'" >&2
+        echo "  valid: all (default), happy, errors, snapshots" >&2
+        exit 2
+        ;;
+esac
+
+# Admit a fixture into the current suite.  $1 = kind (happy|error); $2 = dir.
+# Ordinals are still assigned over the FULL discovery order (see below), so
+# suite selection composes with sharding without shifting shard membership.
+suite_admits() {
+    case "$TUR_TEST_SUITE" in
+        ''|all)    return 0 ;;
+        happy)     [ "$1" = "happy" ] ;;
+        errors)    [ "$1" = "error" ] ;;
+        snapshots) [ "$1" = "happy" ] && [ -f "$2/expected.c" ] ;;
+        *)         return 0 ;;
+    esac
+}
 
 # Optional sharding to split full suite across bounded timeout runs.
 # Format: TUR_TEST_SHARD="1/8" (1-based index/total).
@@ -683,7 +717,7 @@ for d in tests/fixtures/*/; do
     [ "$d" = "tests/fixtures/errors" ] && continue
     [ -d "$d" ] || continue
     name="${d#tests/fixtures/}"
-    if matches_filter "$name" && matches_shard "$fixture_ordinal"; then
+    if suite_admits happy "$d" && matches_filter "$name" && matches_shard "$fixture_ordinal"; then
         HAPPY_DIRS+=("$d")
     fi
     fixture_ordinal=$((fixture_ordinal + 1))
@@ -706,7 +740,7 @@ for d in tests/fixtures/errors/*/; do
     d="${d%/}"
     [ -d "$d" ] || continue
     name="${d#tests/fixtures/}"
-    if matches_filter "$name" && matches_shard "$error_ordinal"; then
+    if suite_admits error "$d" && matches_filter "$name" && matches_shard "$error_ordinal"; then
         ERROR_DIRS+=("$d")
     fi
     error_ordinal=$((error_ordinal + 1))

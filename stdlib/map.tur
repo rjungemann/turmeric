@@ -788,7 +788,8 @@
    : (fn [V V] bool)]
   : bool
   (if (hamt/iter-advance! iter)
-    (let [h (hamt/iter-cur-hash iter) k (hamt/iter-cur-key iter)]
+    (let [h (hamt/iter-cur-hash iter)
+          k (hamt/iter-cur-key iter)]
       (if (hamt/has-dynamic? m2-hamt h k keyeq)
         (if (val-cmp (map-iter-cur-val-as iter)
               (map-get-dynamic-as m2-hamt h k keyeq))

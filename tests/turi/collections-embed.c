@@ -117,7 +117,36 @@ int main(void) {
             "(let [v (:: (vec-new) (Vec float))]"
             "  (vec-push! v 3.25) (vec-get v 0))"));
 
-    /* --- Set (int-keyed low-level natives: key == hash == element) ---- */
+    /* --- HAMT (the runtime backing Map[K V]; pointer/int carrier ABI) - */
+    /* Exercised on the pristine env, before any stdlib load, so these raw
+     * natives are resolved directly (loading stdlib/set.tur pulls in the
+     * hamt/map modules, which re-elaborate these names -- keep that off this
+     * block). */
+    check_int("hamt set/get",
+        42, turi_eval(env,
+            "(tur_hamt_get (tur_hamt_set (tur_hamt_new) 5 5 42) 5 5)"));
+    check_bool("hamt has",
+        1, turi_eval(env,
+            "(tur_hamt_has (tur_hamt_set (tur_hamt_new) 7 7 1) 7 7)"));
+    check_int("hamt count",
+        2, turi_eval(env,
+            "(tur_hamt_count"
+            "  (tur_hamt_set (tur_hamt_set (tur_hamt_new) 1 1 100) 2 2 200))"));
+
+    /* --- Set (int-keyed public API: key == hash == element) ----------- */
+    /* set-add / set-remove / set-member? are pure-Turmeric defns in
+     * stdlib/set.tur (they dispatch MapKey[A] and delegate to the content-keyed
+     * -eq-o raw natives), not interpreter natives -- so a bare embed env must
+     * load the stdlib module before using them, mirroring the second block and
+     * how a real embedder reaches the public Set surface.  set-new / set-count /
+     * set-union remain natives.  This load comes last on `env` because it
+     * re-elaborates the raw HAMT names exercised above. */
+    TuriValue lset = turi_eval(env, "(load \"stdlib/set.tur\")");
+    if (lset.tag == TURI_ERROR) {
+        fprintf(stderr, "FAIL [load stdlib/set.tur (first env)]: %s\n",
+                lset.as_error);
+        failures++;
+    }
     check_int("set count",
         2, turi_eval(env,
             "(let [s (set-add (set-add (set-new) 10 10) 20 20)] (set-count s))"));
@@ -132,18 +161,6 @@ int main(void) {
             "(let [a (set-add (set-add (set-new) 1 1) 2 2)"
             "      b (set-add (set-add (set-new) 2 2) 3 3)]"
             "  (set-count (set-union a b)))"));
-
-    /* --- HAMT (the runtime backing Map[K V]; pointer/int carrier ABI) - */
-    check_int("hamt set/get",
-        42, turi_eval(env,
-            "(tur_hamt_get (tur_hamt_set (tur_hamt_new) 5 5 42) 5 5)"));
-    check_bool("hamt has",
-        1, turi_eval(env,
-            "(tur_hamt_has (tur_hamt_set (tur_hamt_new) 7 7 1) 7 7)"));
-    check_int("hamt count",
-        2, turi_eval(env,
-            "(tur_hamt_count"
-            "  (tur_hamt_set (tur_hamt_set (tur_hamt_new) 1 1 100) 2 2 200))"));
 
     turi_env_free(env);
 

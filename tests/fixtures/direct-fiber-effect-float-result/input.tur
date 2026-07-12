@@ -1,0 +1,12 @@
+;; Direct/fiber effect path: a :float effect RESULT must round-trip, not
+;; truncate.  `run` has a scalar (float) signature so on the default (non-CPS)
+;; build it is emitted through the direct/fiber effect emitter.  The resume
+;; value 7.1 crosses the int64 result slot; the path used to cast it straight to
+;; int64 (7.1 -> 7) rather than bit-reinterpreting it, so perform read back 7.
+;; Now both directions use a union bitcast.  Expected: 7.1.
+;; Regression for docs/archive/fiber-effect-float-result-truncated.md.
+(defeffect Sample [] :float)
+(defn run [] : float
+  (handle (perform (Sample))
+    (Sample [] k) (resume k 7.1)))
+(defn main [] : int (println (run)) 0)

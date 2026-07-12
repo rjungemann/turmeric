@@ -1,5 +1,4 @@
 ;; U3 oracle: native Shape 2 cloneable with a 1-arg CALL-frame context.
-;; Backend: default backend (emit_cps.c)
 ;; (cloneable-reset (+ 1 (dbl (cloneable-shift k-id 0)))) -- an arithmetic frame
 ;; (+ 1 []) wrapping a call frame (dbl []); the call frame applies the top-level
 ;; int->int fn `dbl` to the resumed value (no captured env), reified as a DK

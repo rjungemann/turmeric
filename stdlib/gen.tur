@@ -156,7 +156,9 @@
 ;;; Since: GF2
 
 (defmacro gen-collect [g]
-  (let [gv (gensym gv) res (gensym res) it (gensym it)]
+  (let [gv  (gensym gv)
+        res (gensym res)
+        it  (gensym it)]
     (list let
       (vec gv g res (list gen-arr-new))
       (list while
@@ -179,7 +181,8 @@
 ;;; Since: GF2
 
 (defmacro gen-for-each [f g]
-  (let [gv (gensym gv) it (gensym it)]
+  (let [gv (gensym gv)
+        it (gensym it)]
     (list let
       (vec gv g)
       (list while
@@ -205,7 +208,8 @@
 ;;; Since: GF2
 
 (defmacro gen-nth [n g]
-  (let [gv (gensym gv) i (gensym i)]
+  (let [gv (gensym gv)
+        i  (gensym i)]
     (list let
       (vec gv g ^mut i 0)
       (list while
@@ -226,7 +230,8 @@
 ;;; Since: GF2
 
 (defmacro yield* [inner]
-  (let [gv (gensym gv) v (gensym v)]
+  (let [gv (gensym gv)
+        v  (gensym v)]
     (list let
       (vec gv inner)
       (list while

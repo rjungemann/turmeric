@@ -1,5 +1,4 @@
 ;; U3 oracle: native Shape 2 cloneable with an IF-bearing context.
-;; Backend: default backend (emit_cps.c)
 ;; (cloneable-reset (if (> n 0) (+ 100 (cloneable-shift k-id 0)) 42))
 ;; The pure condition is evaluated once at the reset site; the shift-bearing arm
 ;; rides the DK frame chain, the pure arm (42) is yielded directly on the other

@@ -1,0 +1,20 @@
+;; Direct/fiber path: a colored fn-value PARAMETER invoked inside a `handle`
+;; in the SAME function that receives it. The delimited body `(f)` runs in a
+;; fiber block; the parameter `f` must be captured into that fiber block's env
+;; or the emitted handle-body fn references `f` undeclared at C-compile time.
+;; Regression for docs/archive/direct-effectful-fn-param-handled-in-same-fn.md.
+
+(defeffect E [] :int)
+
+(defn run-with [f : (fn [] #fx{E} int)] : int
+  (handle (f)
+    (E [] k) (resume k 5)))
+
+(defn my-eff [] : int (perform (E)))
+
+(defn main [] : int
+  ;; lambda argument
+  (println (run-with (fn [] (perform (E)))))
+  ;; named colored-fn argument
+  (println (run-with my-eff))
+  0)

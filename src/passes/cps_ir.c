@@ -39,7 +39,12 @@ static CVar fresh_cvar(CpsB *b, const Type *ty) {
     CVar v;
     v.id = b->counter++;
     char buf[24];
-    snprintf(buf, sizeof(buf), "t%u", v.id);
+    /* `__`-reserved so a synthesized result temporary can never collide with a
+     * user identifier (globals are not name-guarded like params are -- a `t<N>`
+     * form shadowed a user fn/global `t0` referenced from a colored context and
+     * segfaulted).  The reader/param guard treat `__`-prefixed names as
+     * off-limits for user code. */
+    snprintf(buf, sizeof(buf), "__t%u", v.id);
     v.name = arena_strdup(b->a, buf, strlen(buf));
     v.ty = ty ? ty->kind : TY_UNKNOWN;
     v.type = ty;

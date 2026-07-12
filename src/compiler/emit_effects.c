@@ -39,6 +39,49 @@ static char *eff_box_expr(const char *cty, const char *expr) {
     char *s = strdup(b.data); buf_free(&b); return s;
 }
 
+/* Store a value of Turmeric type `t` into the int64 fiber-effect ABI slot
+ * (an effect arg, a resume value, an effect/handle result).  Mirrors
+ * emit_cps_ir.c's slot_store so the direct/fiber path agrees bit-for-bit with
+ * the CPS backend:
+ *   - a FLOAT is bit-REINTERPRETED into the int64 slot -- a plain `(int64_t)d`
+ *     cast truncates the fraction (7.1 -> 7); the union pun preserves the bits.
+ *   - a by-value aggregate is boxed (heap-copy + pointer).
+ *   - everything else rides the slot by a plain integer cast.
+ * The bit-exact inverse of eff_slot_load. */
+static char *eff_slot_store(Type t, const char *e) {
+    if (eff_type_boxed(t))
+        return eff_box_expr(type_c_name(t), e);
+    Buf b; buf_init(&b);
+    if (t.kind == TY_FLOAT || t.kind == TY_FLOAT64)
+        buf_printf(&b, "(int64_t)((union { double d; int64_t i; }){ .d = (%s) }).i", e);
+    else if (t.kind == TY_FLOAT32)
+        buf_printf(&b, "(int64_t)(uint32_t)((union { float f; uint32_t u; }){ .f = (%s) }).u", e);
+    else
+        buf_printf(&b, "(int64_t)%s", e);
+    buf_putc(&b, '\0');
+    char *s = strdup(b.data); buf_free(&b); return s;
+}
+
+/* Load a value of Turmeric type `t` out of the int64 fiber-effect ABI slot.
+ * The bit-exact inverse of eff_slot_store: a FLOAT is bit-reinterpreted (not
+ * numeric-converted), a by-value aggregate is unboxed, everything else is a
+ * plain cast back to its C type. `s` is always a call/subscript (binds tighter
+ * than the cast), so no wrapping parens are needed -- keeping the non-float
+ * output byte-identical to the pre-fix emission. */
+static char *eff_slot_load(Type t, const char *s) {
+    Buf b; buf_init(&b);
+    if (eff_type_boxed(t))
+        buf_printf(&b, "*(%s *)(intptr_t)%s", type_c_name(t), s);
+    else if (t.kind == TY_FLOAT || t.kind == TY_FLOAT64)
+        buf_printf(&b, "((union { double d; int64_t i; }){ .i = (int64_t)(%s) }).d", s);
+    else if (t.kind == TY_FLOAT32)
+        buf_printf(&b, "((union { float f; uint32_t u; }){ .u = (uint32_t)(%s) }).f", s);
+    else
+        buf_printf(&b, "(%s)%s", type_c_name(t), s);
+    buf_putc(&b, '\0');
+    char *r = strdup(b.data); buf_free(&b); return r;
+}
+
 char *emit_effects_defect(EmitCtx *ctx, Buf *body, const Expr *e) {
     (void)ctx; (void)body; (void)e;
     /* Effect definitions are compile-time only - no runtime code */
@@ -63,15 +106,13 @@ char *emit_effects_perform(EmitCtx *ctx, Buf *body, const Expr *e) {
         for (uint8_t i = 0; i < perf->n_args; i++) {
             char *av = emit_value(ctx, body, perf->args[i]);
             indent_buf(body, ctx->indent);
-            /* Tier C (P2): a by-value aggregate argument crosses the int64 ABI
-             * boxed; the handler case unboxes it. */
-            if (eff_type_boxed(perf->args[i]->type)) {
-                char *bx = eff_box_expr(type_c_name(perf->args[i]->type), av);
-                buf_printf(body, "%s[%d] = %s;\n", args_var_str, i, bx);
-                free(bx);
-            } else {
-                buf_printf(body, "%s[%d] = (int64_t)%s;\n", args_var_str, i, av);
-            }
+            /* Store the arg into the int64 slot: Tier C by-value aggregate boxed,
+             * a float bit-reinterpreted (a plain cast would truncate the
+             * fraction), everything else a plain cast. The handler case unpacks
+             * with the inverse eff_slot_load. */
+            char *sv = eff_slot_store(perf->args[i]->type, av);
+            buf_printf(body, "%s[%d] = %s;\n", args_var_str, i, sv);
+            free(sv);
             free(av);
         }
     }
@@ -90,20 +131,21 @@ char *emit_effects_perform(EmitCtx *ctx, Buf *body, const Expr *e) {
         indent_buf(body, ctx->indent);
         const char *res_ctype = type_c_name(e->type);
         bool needs_cast = (e->type.kind != TY_INT && e->type.kind != TY_UNKNOWN);
-        if (eff_type_boxed(e->type)) {
-            /* Tier C (P2): the perform result is a boxed aggregate pointer
-             * (the resume side boxed it) -- deref to the value. */
-            buf_printf(body, "%s %s = *(%s *)(intptr_t)tur_effect_perform(\"%s\", %s, %d);\n",
-                       res_ctype, result, res_ctype,
-                       perf->effect_name->name, args_arg, n_args);
-        } else if (needs_cast) {
-            buf_printf(body, "%s %s = (%s)tur_effect_perform(\"%s\", %s, %d);\n",
-                       res_ctype, result, res_ctype,
-                       perf->effect_name->name, args_arg, n_args);
+        Buf pcall; buf_init(&pcall);
+        buf_printf(&pcall, "tur_effect_perform(\"%s\", %s, %d)",
+                   perf->effect_name->name, args_arg, n_args);
+        buf_putc(&pcall, '\0');
+        if (needs_cast) {
+            /* Load the result out of the int64 slot: a boxed aggregate is
+             * deref'd, a float is bit-reinterpreted (a plain cast would read the
+             * double's bits as an integer), everything else is a plain cast. */
+            char *ld = eff_slot_load(e->type, pcall.data);
+            buf_printf(body, "%s %s = %s;\n", res_ctype, result, ld);
+            free(ld);
         } else {
-            buf_printf(body, "int64_t %s = tur_effect_perform(\"%s\", %s, %d);\n",
-                       result, perf->effect_name->name, args_arg, n_args);
+            buf_printf(body, "int64_t %s = %s;\n", result, pcall.data);
         }
+        buf_free(&pcall);
         free(args_var_str);
         return result;
     }
@@ -308,16 +350,17 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (c->param_bindings && c->param_bindings[j]) {
                     const char *ctype = type_c_name(c->param_bindings[j]->type);
                     char *raw = raw_name_for_binding(c->param_bindings[j]);
-                    /* Tier C (P2): a by-value aggregate argument arrived boxed
-                     * (the perform side boxed it) -- deref to the value. */
-                    if (eff_type_boxed(c->param_bindings[j]->type))
-                        buf_printf(&hfn_buf,
-                            "    %s %s_%u = *(%s *)(intptr_t)__effect_args[%d];\n",
-                            ctype, raw, (unsigned)c->param_bindings[j]->id, ctype, j);
-                    else
-                        buf_printf(&hfn_buf,
-                            "    %s %s_%u = (%s)__effect_args[%d];\n",
-                            ctype, raw, (unsigned)c->param_bindings[j]->id, ctype, j);
+                    /* Unpack the effect arg from the int64 slot: a by-value
+                     * aggregate arrived boxed (deref), a float was
+                     * bit-reinterpreted by the perform side (reinterpret back --
+                     * a plain cast would numerically convert the bits),
+                     * everything else is a plain cast. */
+                    char src[48];
+                    snprintf(src, sizeof(src), "__effect_args[%d]", j);
+                    char *ld = eff_slot_load(c->param_bindings[j]->type, src);
+                    buf_printf(&hfn_buf, "    %s %s_%u = %s;\n",
+                               ctype, raw, (unsigned)c->param_bindings[j]->id, ld);
+                    free(ld);
                     free(raw);
                 }
             }
@@ -369,15 +412,13 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
                     /* Body is nil-typed and doesn't produce a fiber result */
                     free(hret);
                     buf_puts(&hfn_buf, "    return 0;\n");
-                } else if (eff_type_boxed(c->body->type)) {
-                    /* Tier C (P2): the handle result is a by-value aggregate --
-                     * box it into the int64 ABI (the resume/perform side unboxes). */
-                    char *bx = eff_box_expr(type_c_name(c->body->type), hret);
-                    buf_printf(&hfn_buf, "    return %s;\n", bx);
-                    free(bx); free(hret);
                 } else {
-                    buf_printf(&hfn_buf, "    return (int64_t)%s;\n", hret);
-                    free(hret);
+                    /* Store the handle result into the int64 ABI: a by-value
+                     * aggregate boxed, a float bit-reinterpreted (the
+                     * resume/perform/handle side unpacks with the inverse). */
+                    char *sv = eff_slot_store(c->body->type, hret);
+                    buf_printf(&hfn_buf, "    return %s;\n", sv);
+                    free(sv); free(hret);
                 }
             }
 
@@ -448,15 +489,12 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_puts(&fn_buf, "    tur_current_fiber->result = 0;\n");
         } else {
             char *bret = emit_value(&bctx, &fn_buf, h->body);
-            /* Tier C (P2): box a by-value aggregate body result into the int64
-             * fiber result slot; the handle-site unboxes it. */
-            if (eff_type_boxed(h->body->type)) {
-                char *bx = eff_box_expr(type_c_name(h->body->type), bret);
-                buf_printf(&fn_buf, "    tur_current_fiber->result = %s;\n", bx);
-                free(bx);
-            } else {
-                buf_printf(&fn_buf, "    tur_current_fiber->result = (int64_t)%s;\n", bret);
-            }
+            /* Store the body result into the int64 fiber result slot: a by-value
+             * aggregate boxed, a float bit-reinterpreted (a plain cast would
+             * truncate the fraction); the handle-site / resume unpacks it. */
+            char *sv = eff_slot_store(h->body->type, bret);
+            buf_printf(&fn_buf, "    tur_current_fiber->result = %s;\n", sv);
+            free(sv);
             free(bret);
         }
 
@@ -713,16 +751,18 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
 
     /* Start the dispatch loop -- first call resumes with 0 to start body */
     indent_buf(body, ctx->indent);
-    if (returns_value && eff_type_boxed(e->type)) {
-        /* Tier C (P2): the dispatch loop returns the handle result boxed in the
-         * int64 ABI -- deref it to the aggregate value. */
-        buf_printf(body, "%s %s = *(%s *)(intptr_t)%s(&%s, (int64_t)(intptr_t)%s, 0);\n",
-                   type_c_name(e->type), result, type_c_name(e->type),
+    if (returns_value) {
+        /* Load the handle result out of the int64 ABI returned by dispatch: a
+         * boxed aggregate deref'd, a float bit-reinterpreted (a plain cast would
+         * numerically convert the double's bits), everything else a plain cast. */
+        Buf dcall; buf_init(&dcall);
+        buf_printf(&dcall, "%s(&%s, (int64_t)(intptr_t)%s, 0)",
                    dispatch_fn_name, cap_var, fiber_var);
-    } else if (returns_value) {
-        buf_printf(body, "%s %s = (%s)%s(&%s, (int64_t)(intptr_t)%s, 0);\n",
-                   type_c_name(e->type), result, type_c_name(e->type),
-                   dispatch_fn_name, cap_var, fiber_var);
+        buf_putc(&dcall, '\0');
+        char *ld = eff_slot_load(e->type, dcall.data);
+        buf_printf(body, "%s %s = %s;\n", type_c_name(e->type), result, ld);
+        free(ld);
+        buf_free(&dcall);
     } else {
         buf_printf(body, "%s(&%s, (int64_t)(intptr_t)%s, 0);\n",
                    dispatch_fn_name, cap_var, fiber_var);
@@ -836,8 +876,14 @@ char *emit_effects_handler_lit(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (c->param_bindings && c->param_bindings[j]) {
                 const char *ct = type_c_name(c->param_bindings[j]->type);
                 char *raw = raw_name_for_binding(c->param_bindings[j]);
-                buf_printf(&fn, "    %s %s_%u = (%s)__effect_args[%d];\n",
-                           ct, raw, (unsigned)c->param_bindings[j]->id, ct, j);
+                /* Unpack from the int64 slot with the perform-side inverse
+                 * (float bit-reinterpret / aggregate unbox / plain cast). */
+                char src[48];
+                snprintf(src, sizeof(src), "__effect_args[%d]", j);
+                char *ld = eff_slot_load(c->param_bindings[j]->type, src);
+                buf_printf(&fn, "    %s %s_%u = %s;\n",
+                           ct, raw, (unsigned)c->param_bindings[j]->id, ld);
+                free(ld);
                 free(raw);
             }
         }
@@ -866,7 +912,11 @@ char *emit_effects_handler_lit(EmitCtx *ctx, Buf *body, const Expr *e) {
                 free(hret);
                 buf_puts(&fn, "    return 0;\n");
             } else {
-                buf_printf(&fn, "    return (int64_t)%s;\n", hret);
+                /* Pack the handler result into the int64 slot (float
+                 * bit-reinterpret / aggregate box / plain cast). */
+                char *sv = eff_slot_store(c->body->type, hret);
+                buf_printf(&fn, "    return %s;\n", sv);
+                free(sv);
                 free(hret);
             }
         }
@@ -995,7 +1045,11 @@ char *emit_effects_with_handler(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_puts(&fn, "    tur_current_fiber->result = 0;\n");
         } else {
             char *bret = emit_value(&bc, &fn, hbody);
-            buf_printf(&fn, "    tur_current_fiber->result = (int64_t)%s;\n", bret);
+            /* Pack the body result into the int64 fiber result slot (float
+             * bit-reinterpret / aggregate box / plain cast). */
+            char *sv = eff_slot_store(hbody->type, bret);
+            buf_printf(&fn, "    tur_current_fiber->result = %s;\n", sv);
+            free(sv);
             free(bret);
         }
         ctx->tmp_n = bc.tmp_n;
@@ -1077,8 +1131,16 @@ char *emit_effects_with_handler(EmitCtx *ctx, Buf *body, const Expr *e) {
 
     indent_buf(body, ctx->indent);
     if (returns_value) {
-        buf_printf(body, "%s %s = (%s)tur_handler_dispatch(&%s, (int64_t)(intptr_t)%s, 0);\n",
-                   type_c_name(e->type), result, type_c_name(e->type), cap_var, fiber_var);
+        /* Load the with-handler result out of the int64 ABI (float
+         * bit-reinterpret / aggregate unbox / plain cast). */
+        Buf dcall; buf_init(&dcall);
+        buf_printf(&dcall, "tur_handler_dispatch(&%s, (int64_t)(intptr_t)%s, 0)",
+                   cap_var, fiber_var);
+        buf_putc(&dcall, '\0');
+        char *ld = eff_slot_load(e->type, dcall.data);
+        buf_printf(body, "%s %s = %s;\n", type_c_name(e->type), result, ld);
+        free(ld);
+        buf_free(&dcall);
     } else {
         buf_printf(body, "tur_handler_dispatch(&%s, (int64_t)(intptr_t)%s, 0);\n",
                    cap_var, fiber_var);
@@ -1134,13 +1196,12 @@ char *emit_effects_resume(EmitCtx *ctx, Buf *body, const Expr *e) {
             char *tmp = fresh_tmp(ctx);
             Type vtype = e->as.resume_.resume->value->type;
             bool v_is_nil = (vtype.kind == TY_NIL || vtype.kind == TY_NEVER);
+            char *v_arg = v_is_nil ? strdup("(int64_t)0")
+                                   : eff_slot_store(vtype, v_var);
             indent_buf(body, ctx->indent);
-            if (v_is_nil)
-                buf_printf(body, "int64_t %s = tur_cloneable_cont_resume(tur_continuation_snapshot(%s), (int64_t)0);\n",
-                           tmp, k_var);
-            else
-                buf_printf(body, "int64_t %s = tur_cloneable_cont_resume(tur_continuation_snapshot(%s), (int64_t)%s);\n",
-                           tmp, k_var, v_var);
+            buf_printf(body, "int64_t %s = tur_cloneable_cont_resume(tur_continuation_snapshot(%s), %s);\n",
+                       tmp, k_var, v_arg);
+            free(v_arg);
             free(k_var);
             free(v_var);
             return tmp;
@@ -1153,22 +1214,31 @@ char *emit_effects_resume(EmitCtx *ctx, Buf *body, const Expr *e) {
             char *tmp = fresh_tmp(ctx);
             Type vtype = e->as.resume_.resume->value->type;
             bool v_is_nil = (vtype.kind == TY_NIL || vtype.kind == TY_NEVER);
-            /* Tier C (P2): box a by-value aggregate resume value into the int64
-             * ABI (the perform result unboxes it). */
-            char *v_arg;
-            if (v_is_nil)                       v_arg = strdup("(int64_t)0");
-            else if (eff_type_boxed(vtype))     v_arg = eff_box_expr(type_c_name(vtype), v_var);
-            else { Buf vb; buf_init(&vb); buf_printf(&vb, "(int64_t)%s", v_var); buf_putc(&vb,'\0'); v_arg = strdup(vb.data); buf_free(&vb); }
+            /* Store the resume value into the int64 ABI: a by-value aggregate
+             * boxed (the perform result unboxes it), a float bit-reinterpreted
+             * (a plain cast would truncate the fraction), else a plain cast. */
+            char *v_arg = v_is_nil ? strdup("(int64_t)0")
+                                   : eff_slot_store(vtype, v_var);
             indent_buf(body, ctx->indent);
-            if (eff_type_boxed(e->type)) {
-                /* Tier C (P2): the fiber's final result is a boxed aggregate
-                 * pointer -- deref it to the aggregate value. */
-                buf_printf(body, "%s %s = *(%s *)(intptr_t)tur_effect_cont_resume((int64_t)(intptr_t)%s, %s);\n",
-                           type_c_name(e->type), tmp, type_c_name(e->type), k_var, v_arg);
+            Buf rcall; buf_init(&rcall);
+            buf_printf(&rcall, "tur_effect_cont_resume((int64_t)(intptr_t)%s, %s)", k_var, v_arg);
+            buf_putc(&rcall, '\0');
+            /* tur_effect_cont_resume returns the fiber's final result in the
+             * int64 ABI.  Load it back to the resume expr's real type: a boxed
+             * aggregate deref'd, a float bit-reinterpreted into a genuine double
+             * local (so a downstream store re-packs it correctly rather than
+             * re-reinterpreting an int as a double).  Plain scalars stay in an
+             * int64_t local, matching the pre-fix ABI the callers expect. */
+            bool res_is_float = (e->type.kind == TY_FLOAT || e->type.kind == TY_FLOAT64
+                                 || e->type.kind == TY_FLOAT32);
+            if (eff_type_boxed(e->type) || res_is_float) {
+                char *ld = eff_slot_load(e->type, rcall.data);
+                buf_printf(body, "%s %s = %s;\n", type_c_name(e->type), tmp, ld);
+                free(ld);
             } else {
-                buf_printf(body, "int64_t %s = tur_effect_cont_resume((int64_t)(intptr_t)%s, %s);\n",
-                           tmp, k_var, v_arg);
+                buf_printf(body, "int64_t %s = %s;\n", tmp, rcall.data);
             }
+            buf_free(&rcall);
             free(v_arg);
             free(k_var);
             free(v_var);

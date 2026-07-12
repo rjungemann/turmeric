@@ -242,6 +242,27 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Regression: a let/loop binding vector with two or more pairs must break
+# one pair per line, even when the whole form fits in the line width -- the
+# house style keeps each binding pair on its own line (a single pair may inline).
+# ---------------------------------------------------------------------------
+NAME="fmt-let-multipair-broken"
+LET_INPUT='(defn g [s] : int (let [iter (alloc s) body (loop s iter)] (destroy iter)))'
+ACTUAL=$(printf '%s\n' "$LET_INPUT" | "$TUR" fmt --stdin 2>/dev/null)
+ROUNDTRIP=$(printf '%s\n' "$ACTUAL" | "$TUR" fmt --stdin 2>/dev/null)
+# The two pairs must land on separate lines: after the fix `body` starts a line.
+# A single-pair let must still inline (guards against over-breaking).
+SINGLE=$(printf '(defn f [] : int (let [a 1] a))\n' | "$TUR" fmt --stdin 2>/dev/null)
+if printf '%s\n' "$ACTUAL" | grep -qE "^[[:space:]]+body " \
+   && ! printf '%s\n' "$ACTUAL" | grep -qE "iter \(alloc s\) body" \
+   && printf '%s\n' "$SINGLE" | grep -qE "\(let \[a 1\] a\)" \
+   && [ "$ACTUAL" = "$ROUNDTRIP" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "multi-pair let not broken / single-pair over-broken / not idempotent; got: $ACTUAL"
+fi
+
+# ---------------------------------------------------------------------------
 # FT7: bootstrap -- every hand-authored stdlib file is already self-formatted.
 # docstrings.tur is excluded: it is an auto-generated artifact (gendocs.py
 # --emit-tur) whose inline-C literal bodies the formatter does not round-trip,

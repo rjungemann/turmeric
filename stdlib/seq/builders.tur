@@ -84,7 +84,8 @@
 
 (defn seq/range [start : int end : int] : int
   (seq-new (fn []
-             (let [^mut i start]
+             (let [^mut i
+                   start]
                (gen [] (while (< i end) (yield i) (set! i (+ i 1))))))))
 ;;; seq/range-step -- integer range with a custom step.
 ;;;
@@ -105,7 +106,8 @@
 
 (defn seq/range-step [start : int end : int step : int] : int
   (seq-new (fn []
-             (let [^mut i start]
+             (let [^mut i
+                   start]
                (gen []
                  (if (> step 0)
                    (while (< i end) (yield i) (set! i (+ i step)))
@@ -160,11 +162,13 @@
 ;;; Since: LZ1
 
 (defn seq/cycle [s : int] : int
-  (let [arr (seq-collect s) n (gen-arr-len arr)]
+  (let [arr (seq-collect s)
+        n   (gen-arr-len arr)]
     (if (= n 0)
       (empty-seq)
       (seq-new (fn []
-                 (let [^mut i 0]
+                 (let [^mut i
+                       0]
                    (gen []
                      (while true
                        (yield (gen-arr-get arr i))
@@ -186,7 +190,8 @@
 
 (defn seq/iterate [init : int f : int] : int
   (seq-new (fn []
-             (let [^mut cur init]
+             (let [^mut cur
+                   init]
                (gen [] (while true (yield cur) (set! cur (seq-call-fn1 f cur))))))))
 ;;; seq/unfold -- build a Seq by unfolding from a seed value.
 ;;;
@@ -207,7 +212,8 @@
 
 (defn seq/unfold [seed : int f : int] : int
   (seq-new (fn []
-             (let [^mut s seed]
+             (let [^mut s
+                   seed]
                (gen []
                  (while true
                    (let [r (seq-call-fn1 f s)]

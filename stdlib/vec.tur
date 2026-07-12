@@ -242,8 +242,7 @@
 ;;; methods correctly.  The witness value itself is unused (only its type is
 ;;; consumed), so it never widens or truncates the stored data.
 
-(defn vec-empty-like__ [A] [witness : A] : (Vec A)
-  (:: (vec-new) (Vec A)))
+(defn vec-empty-like__ [A] [witness : A] : (Vec A) (:: (vec-new) (Vec A)))
 ;;; vec-of -- variadic Vec[A] literal.
 ;;;
 ;;; Parameters:
@@ -427,7 +426,4 @@
   [(Eq A)]
   (eq? [x y]
     (and (= (vec-len (:: x (Vec A))) (vec-len (:: y (Vec A))))
-      (vec-eq-loop (:: x (Vec A))
-        (:: y (Vec A))
-        0
-        (vec-len (:: x (Vec A)))))))
+      (vec-eq-loop (:: x (Vec A)) (:: y (Vec A)) 0 (vec-len (:: x (Vec A)))))))

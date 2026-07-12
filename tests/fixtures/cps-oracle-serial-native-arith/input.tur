@@ -1,5 +1,4 @@
 ;; U4 oracle: NATIVE arithmetic serial context in a colored helper.
-;; Backend: default backend (emit_cps.c)
 ;; The serial-reset lives in a non-main colored helper, so under --enable=cps-backend
 ;; it emits natively (a _skbody shift helper + __sk_frame_for_tag tagged frames),
 ;; not via the emit_cps.c delegation.  rt5 forces a real serialize -> bytes ->

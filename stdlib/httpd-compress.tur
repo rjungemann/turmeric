@@ -100,7 +100,8 @@
 
 
 (defn mw-compress-with [min-bytes : int ^fat next : int] : ptr<void>
-  (let [_min min-bytes _n next]
+  (let [_min min-bytes
+        _n   next]
     (fn [c : ptr<void>] : nil (httpd-call _n c) (httpd-mw-compress-step c _min))))
 ;;; mw-compress -- mw-compress-with default 256-byte threshold.
 ;;;

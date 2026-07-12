@@ -279,9 +279,16 @@ static void fmt_form_flat(Buf *b, const Form *f) {
     }
 }
 
+static bool form_contains_multipair_let(const Form *f);
+
 /* Measure the flat width of a form.
- * Returns UINT32_MAX if the form contains a literal newline character. */
+ * Returns UINT32_MAX if the form contains a literal newline character, or if it
+ * contains a multi-pair `let`/`loop` -- such a form must never be emitted flat
+ * (the house style keeps each binding pair on its own line), so reporting it as
+ * unmeasurable forces every enclosing inline check to break and recurse down to
+ * fmt_let. */
 static uint32_t fmt_measure(const Form *f) {
+    if (form_contains_multipair_let(f)) return UINT32_MAX;
     Buf tmp;
     buf_init(&tmp);
     fmt_form_flat(&tmp, f);
@@ -352,6 +359,28 @@ static SpecialForm classify_list(const Form *f) {
     if (sym_eq(h, "definstance")) return SF_DEFINSTANCE;
     if (sym_eq(h, "defeffect"))   return SF_DEFEFFECT;
     return SF_NONE;
+}
+
+/* True if f is -- or contains anywhere in its subtree -- a `let`/`let*`/`loop`
+ * whose binding vector has two or more pairs (len > 2).  Used by fmt_measure to
+ * mark such forms unmeasurable so they are never joined onto one line. */
+static bool form_contains_multipair_let(const Form *f) {
+    if (!f) return false;
+    if (f->tag == F_LIST) {
+        const Symbol *h = list_head_sym(f);
+        if (h && (sym_eq(h, "let") || sym_eq(h, "let*") || sym_eq(h, "loop")) &&
+            f->as.list.len >= 2) {
+            const Form *b = f->as.list.items[1];
+            if (b->tag == F_VEC && b->as.list.len > 2) return true;
+        }
+    }
+    /* Recurse into the child forms of list/vector nodes (a multi-pair let can be
+     * nested inside a call, an if-branch, or a binding value). */
+    if (f->tag == F_LIST || f->tag == F_VEC) {
+        for (uint32_t i = 0; i < f->as.list.len; i++)
+            if (form_contains_multipair_let(f->as.list.items[i])) return true;
+    }
+    return false;
 }
 
 /* ---------------------------------------------------------------------------
@@ -556,15 +585,19 @@ static void fmt_let(FmtState *s, const Form *f) {
     /* Head: 'let' / 'loop' */
     if (n >= 1) fmt_form(s, f->as.list.items[0]);
 
-    /* Bindings vector: try inline; if it overflows the line width, break
-     * pair-per-line rather than letting the generic vector formatter split
-     * every element onto its own line. */
+    /* Bindings vector: a single pair (or empty vector) may sit inline when it
+     * fits; a vector with two or more pairs is always broken pair-per-line, per
+     * the house style ("keep each binding pair on its own line").  Overflow of a
+     * single pair also falls to the pair-per-line formatter rather than letting
+     * the generic vector formatter split every element onto its own line. */
     if (n >= 2) {
         fs_putc(s, ' ');
         const Form *bindings = f->as.list.items[1];
         if (bindings->tag == F_VEC) {
             uint32_t w = fmt_measure(bindings);
-            if (w != UINT32_MAX && s->col + w <= s->opts.line_width) {
+            bool single_pair = bindings->as.list.len <= 2;
+            if (single_pair && w != UINT32_MAX &&
+                s->col + w <= s->opts.line_width) {
                 fmt_emit_inline(s, bindings);
             } else {
                 fmt_vec_let_bindings_broken(s, bindings);

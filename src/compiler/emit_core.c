@@ -3151,7 +3151,11 @@ void collect_defined(const Expr *e, Binding ***defs, uint32_t *ndefs, uint32_t *
  * Shared by the nested-handle merge below. */
 static void cap_append(Binding *b, Binding ***caps, uint32_t *ncaps, uint32_t *ccaps,
                        Binding **defs, uint32_t ndefs) {
-    if (!b || b->is_global || b->type.kind == TY_FN) return;
+    /* Skip globals only. A non-global TY_FN binding is a genuine local
+     * fn-value (a colored fn-value parameter or a let-bound closure) and
+     * must be captured into the handle body/handler env like any other
+     * local -- see collect_handle_captures EX_VAR/EX_CALL. */
+    if (!b || b->is_global) return;
     for (uint32_t i = 0; i < ndefs; i++)
         if (defs[i] == b) return;
     for (uint32_t i = 0; i < *ncaps; i++)
@@ -3216,7 +3220,14 @@ Binding **collect_handle_captures(const Expr *body, uint32_t *n_out) {
         switch (cur->kind) {
             case EX_VAR: {
                 Binding *b = cur->as.var.binding;
-                if (!b || b->is_global || b->type.kind == TY_FN) break;
+                /* Skip globals (top-level named fns/vars emit as bare C
+                 * symbols and need no env slot). A TY_FN binding that is NOT
+                 * global is a genuine local fn-value -- a colored fn-value
+                 * PARAMETER (e.g. `f : (fn [] #fx{E} int)`) or a let-bound
+                 * closure -- referenced from the delimited body. It must be
+                 * captured into the fiber body's env like any other local, or
+                 * the emitted handle-body fn references it undeclared. */
+                if (!b || b->is_global) break;
                 /* Check if defined within body */
                 bool in_defs = false;
                 for (uint32_t i = 0; i < ndefs; i++) {
@@ -3263,7 +3274,9 @@ Binding **collect_handle_captures(const Expr *body, uint32_t *n_out) {
                 /* The target binding is also a reference (it's being mutated) */
                 if (cur->as.set_.target) {
                     Binding *b = cur->as.set_.target;
-                    if (!b->is_global && b->type.kind != TY_FN) {
+                    /* Mirror EX_VAR: a non-global TY_FN target is a local
+                     * fn-value being reassigned; it still needs an env slot. */
+                    if (!b->is_global) {
                         /* Check if defined within body */
                         bool in_defs = false;
                         for (uint32_t i = 0; i < ndefs; i++) {
@@ -3291,6 +3304,14 @@ Binding **collect_handle_captures(const Expr *body, uint32_t *n_out) {
                 for (uint32_t i = 0; i < cur->as.call_.n_args; i++)
                     PUSH_EXPR(cur->as.call_.args[i]);
                 PUSH_EXPR(cur->as.call_.fn_expr);
+                /* A direct call through a fn-value binding (e.g. `(f)` where
+                 * `f` is a colored fn-value parameter) stores the callee in
+                 * `fn_binding`, not `fn_expr`, so it is never seen as an
+                 * EX_VAR by this walk. Capture it explicitly: when it is a
+                 * non-global local it must be threaded into the handle body's
+                 * env, or the emitted fiber body references it undeclared. */
+                cap_append(cur->as.call_.fn_binding, &caps, &ncaps, &ccaps,
+                           defs, ndefs);
                 break;
             }
             case EX_BUILTIN: {

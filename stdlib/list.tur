@@ -213,7 +213,8 @@
   [c1 : (Cons A) c2 : (Cons A)]
   : bool
   (if (eq? (.head c1) (.head c2))
-    (let [t1 (.tail c1) t2 (.tail c2)]
+    (let [t1 (.tail c1)
+          t2 (.tail c2)]
       (if (= t1 0)
         (= t2 0)
         (if (= t2 0) false (cons-eq-go (:: t1 (Cons A)) (:: t2 (Cons A))))))
@@ -226,7 +227,8 @@
 (definstance Eq [Cons]
   [(Eq A)]
   (eq? [x y]
-    (let [t1 (:: x :int) t2 (:: y :int)]
+    (let [t1 (:: x :int)
+          t2 (:: y :int)]
       (if (= t1 0)
         (= t2 0)
         (if (= t2 0) false (cons-eq-go (:: t1 (Cons A)) (:: t2 (Cons A))))))))

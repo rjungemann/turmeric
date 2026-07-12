@@ -4098,11 +4098,11 @@ static int64_t hamt_sltransient_hydel_ex__cps(void * t_574, int64_t hash_575, vo
 static int64_t hamt_slpersistent_ex__cps(void * t_577, DK *__kont);
 static int64_t list_hyeq_qu__cps(int64_t l1_979, int64_t l2_980, int64_t cmp_fn, DK *__kont);
 static int64_t hamt_slnew__cps(DK *__kont) {
-    void * t0;
+    void * __t0;
     __auto_type __ps_74 = (tur_hamt_new());
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_74;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_74;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static void * hamt_slnew() {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4111,10 +4111,10 @@ __attribute__((unused)) static void * hamt_slnew() {
     return (void *)(__r);
 }
 static int64_t hamt_slfree__cps(void * m, DK *__kont) {
-    int64_t t0;
+    int64_t __t0;
     tur_hamt_free((void *)(intptr_t)(m));
-    t0 = 0;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = 0;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static void hamt_slfree(void * m) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4123,11 +4123,11 @@ __attribute__((unused)) static void hamt_slfree(void * m) {
     return;
 }
 static int64_t hamt_slretain__cps(void * m, DK *__kont) {
-    void * t0;
+    void * __t0;
     __auto_type __ps_75 = (tur_hamt_retain((void *)(intptr_t)(m)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_75;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_75;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static void * hamt_slretain(void * m) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4136,11 +4136,11 @@ __attribute__((unused)) static void * hamt_slretain(void * m) {
     return (void *)(__r);
 }
 static int64_t hamt_slset__cps(void * m, int64_t hash, void * key, void * val, DK *__kont) {
-    void * t0;
+    void * __t0;
     __auto_type __ps_76 = (tur_hamt_set((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key), (void *)(intptr_t)(val)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_76;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_76;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static void * hamt_slset(void * m, int64_t hash, void * key, void * val) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4149,11 +4149,11 @@ __attribute__((unused)) static void * hamt_slset(void * m, int64_t hash, void * 
     return (void *)(__r);
 }
 static int64_t hamt_sldel__cps(void * m, int64_t hash, void * key, DK *__kont) {
-    void * t0;
+    void * __t0;
     __auto_type __ps_77 = (tur_hamt_del((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_77;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_77;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static void * hamt_sldel(void * m, int64_t hash, void * key) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4162,11 +4162,11 @@ __attribute__((unused)) static void * hamt_sldel(void * m, int64_t hash, void * 
     return (void *)(__r);
 }
 static int64_t hamt_slget__cps(void * m, int64_t hash, void * key, DK *__kont) {
-    void * t0;
+    void * __t0;
     __auto_type __ps_78 = (tur_hamt_get((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_78;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_78;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static void * hamt_slget(void * m, int64_t hash, void * key) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4175,11 +4175,11 @@ __attribute__((unused)) static void * hamt_slget(void * m, int64_t hash, void * 
     return (void *)(__r);
 }
 static int64_t hamt_slhas_qu__cps(void * m, int64_t hash, void * key, DK *__kont) {
-    bool t0;
+    bool __t0;
     __auto_type __ps_79 = (tur_hamt_has((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_79;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_79;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static bool hamt_slhas_qu(void * m, int64_t hash, void * key) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4188,11 +4188,11 @@ __attribute__((unused)) static bool hamt_slhas_qu(void * m, int64_t hash, void *
     return (bool)(__r);
 }
 static int64_t hamt_slcount__cps(void * m, DK *__kont) {
-    int64_t t0;
+    int64_t __t0;
     __auto_type __ps_80 = (tur_hamt_count((void *)(intptr_t)(m)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_80;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_80;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static int64_t hamt_slcount(void * m) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4201,11 +4201,11 @@ __attribute__((unused)) static int64_t hamt_slcount(void * m) {
     return (int64_t)(__r);
 }
 static int64_t hamt_slmerge__cps(void * a, void * b, DK *__kont) {
-    void * t0;
+    void * __t0;
     __auto_type __ps_81 = (tur_hamt_merge((void *)(intptr_t)(a), (void *)(intptr_t)(b)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_81;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_81;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static void * hamt_slmerge(void * a, void * b) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4214,11 +4214,11 @@ __attribute__((unused)) static void * hamt_slmerge(void * a, void * b) {
     return (void *)(__r);
 }
 static int64_t hamt_slhash_hystr__cps(const char * str, DK *__kont) {
-    int64_t t0;
+    int64_t __t0;
     __auto_type __ps_82 = (tur_hamt_hash_str(str));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_82;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_82;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static int64_t hamt_slhash_hystr(const char * str) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4227,11 +4227,11 @@ __attribute__((unused)) static int64_t hamt_slhash_hystr(const char * str) {
     return (int64_t)(__r);
 }
 static int64_t hamt_slhash_hyptr__cps(void * ptr, DK *__kont) {
-    int64_t t0;
+    int64_t __t0;
     __auto_type __ps_83 = (tur_hamt_hash_ptr((void *)(intptr_t)(ptr)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_83;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_83;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static int64_t hamt_slhash_hyptr(void * ptr) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4240,10 +4240,10 @@ __attribute__((unused)) static int64_t hamt_slhash_hyptr(void * ptr) {
     return (int64_t)(__r);
 }
 static int64_t hamt_sliter_hyinit__cps(void * iter, void * m, DK *__kont) {
-    int64_t t0;
+    int64_t __t0;
     tur_hamt_iter_init((void *)(intptr_t)(iter), (void *)(intptr_t)(m));
-    t0 = 0;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = 0;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static void hamt_sliter_hyinit(void * iter, void * m) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4252,10 +4252,10 @@ __attribute__((unused)) static void hamt_sliter_hyinit(void * iter, void * m) {
     return;
 }
 static int64_t hamt_sliter_hyfree__cps(void * iter, DK *__kont) {
-    int64_t t0;
+    int64_t __t0;
     tur_hamt_iter_free((void *)(intptr_t)(iter));
-    t0 = 0;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = 0;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static void hamt_sliter_hyfree(void * iter) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4264,11 +4264,11 @@ __attribute__((unused)) static void hamt_sliter_hyfree(void * iter) {
     return;
 }
 static int64_t hamt_sliter_hynext__cps(void * iter, void * hash_out, void * key_out, void * val_out, DK *__kont) {
-    bool t0;
+    bool __t0;
     __auto_type __ps_84 = (tur_hamt_iter_next((void *)(intptr_t)(iter), (void *)(intptr_t)(hash_out), (void *)(intptr_t)(key_out), (void *)(intptr_t)(val_out)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_84;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_84;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static bool hamt_sliter_hynext(void * iter, void * hash_out, void * key_out, void * val_out) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4277,11 +4277,11 @@ __attribute__((unused)) static bool hamt_sliter_hynext(void * iter, void * hash_
     return (bool)(__r);
 }
 static int64_t hamt_sliter_hyalloc__cps(void * m, DK *__kont) {
-    void * t0;
+    void * __t0;
     __auto_type __ps_85 = (tur_hamt_iter_alloc((void *)(intptr_t)(m)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_85;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_85;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static void * hamt_sliter_hyalloc(void * m) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4290,10 +4290,10 @@ __attribute__((unused)) static void * hamt_sliter_hyalloc(void * m) {
     return (void *)(__r);
 }
 static int64_t hamt_sliter_hydestroy_ex__cps(void * box, DK *__kont) {
-    int64_t t0;
+    int64_t __t0;
     tur_hamt_iter_destroy((void *)(intptr_t)(box));
-    t0 = 0;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = 0;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static void hamt_sliter_hydestroy_ex(void * box) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4302,11 +4302,11 @@ __attribute__((unused)) static void hamt_sliter_hydestroy_ex(void * box) {
     return;
 }
 static int64_t hamt_sliter_hyadvance_ex__cps(void * box, DK *__kont) {
-    bool t0;
+    bool __t0;
     __auto_type __ps_86 = (tur_hamt_iter_advance((void *)(intptr_t)(box)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_86;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_86;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static bool hamt_sliter_hyadvance_ex(void * box) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4315,11 +4315,11 @@ __attribute__((unused)) static bool hamt_sliter_hyadvance_ex(void * box) {
     return (bool)(__r);
 }
 static int64_t hamt_sliter_hycur_hyhash__cps(void * box, DK *__kont) {
-    int64_t t0;
+    int64_t __t0;
     __auto_type __ps_87 = (tur_hamt_iter_cur_hash((void *)(intptr_t)(box)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_87;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_87;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static int64_t hamt_sliter_hycur_hyhash(void * box) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4328,11 +4328,11 @@ __attribute__((unused)) static int64_t hamt_sliter_hycur_hyhash(void * box) {
     return (int64_t)(__r);
 }
 static int64_t hamt_sliter_hycur_hykey__cps(void * box, DK *__kont) {
-    void * t0;
+    void * __t0;
     __auto_type __ps_88 = (tur_hamt_iter_cur_key((void *)(intptr_t)(box)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_88;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_88;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static void * hamt_sliter_hycur_hykey(void * box) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4341,11 +4341,11 @@ __attribute__((unused)) static void * hamt_sliter_hycur_hykey(void * box) {
     return (void *)(__r);
 }
 static int64_t hamt_sliter_hycur_hyval__cps(void * box, DK *__kont) {
-    void * t0;
+    void * __t0;
     __auto_type __ps_89 = (tur_hamt_iter_cur_val((void *)(intptr_t)(box)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_89;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_89;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static void * hamt_sliter_hycur_hyval(void * box) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4354,11 +4354,11 @@ __attribute__((unused)) static void * hamt_sliter_hycur_hyval(void * box) {
     return (void *)(__r);
 }
 static int64_t hamt_slkeyeq__cps(void * m, DK *__kont) {
-    void * t0;
+    void * __t0;
     __auto_type __ps_90 = (tur_hamt_keyeq((void *)(intptr_t)(m)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_90;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_90;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static void * hamt_slkeyeq(void * m) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4367,11 +4367,11 @@ __attribute__((unused)) static void * hamt_slkeyeq(void * m) {
     return (void *)(__r);
 }
 static int64_t hamt_slget_hydynamic__cps(void * m, int64_t hash, void * key, void * keyeq, DK *__kont) {
-    void * t0;
+    void * __t0;
     __auto_type __ps_91 = (tur_hamt_get_dynamic((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key), (void *)(intptr_t)(keyeq)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_91;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_91;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static void * hamt_slget_hydynamic(void * m, int64_t hash, void * key, void * keyeq) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4380,11 +4380,11 @@ __attribute__((unused)) static void * hamt_slget_hydynamic(void * m, int64_t has
     return (void *)(__r);
 }
 static int64_t hamt_slhas_hydynamic_qu__cps(void * m, int64_t hash, void * key, void * keyeq, DK *__kont) {
-    bool t0;
+    bool __t0;
     __auto_type __ps_92 = (tur_hamt_has_dynamic((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key), (void *)(intptr_t)(keyeq)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_92;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_92;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static bool hamt_slhas_hydynamic_qu(void * m, int64_t hash, void * key, void * keyeq) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4393,11 +4393,11 @@ __attribute__((unused)) static bool hamt_slhas_hydynamic_qu(void * m, int64_t ha
     return (bool)(__r);
 }
 static int64_t hamt_slmap__cps(void * m, void * fn, void * ctx, DK *__kont) {
-    void * t0;
+    void * __t0;
     __auto_type __ps_93 = (tur_hamt_map((void *)(intptr_t)(m), (void *)(intptr_t)(fn), (void *)(intptr_t)(ctx)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_93;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_93;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static void * hamt_slmap(void * m, void * fn, void * ctx) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4406,11 +4406,11 @@ __attribute__((unused)) static void * hamt_slmap(void * m, void * fn, void * ctx
     return (void *)(__r);
 }
 static int64_t hamt_slfilter__cps(void * m, void * fn, void * ctx, DK *__kont) {
-    void * t0;
+    void * __t0;
     __auto_type __ps_94 = (tur_hamt_filter((void *)(intptr_t)(m), (void *)(intptr_t)(fn), (void *)(intptr_t)(ctx)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_94;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_94;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static void * hamt_slfilter(void * m, void * fn, void * ctx) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4419,11 +4419,11 @@ __attribute__((unused)) static void * hamt_slfilter(void * m, void * fn, void * 
     return (void *)(__r);
 }
 static int64_t hamt_slreduce__cps(void * m, void * fn, void * init, void * ctx, DK *__kont) {
-    void * t0;
+    void * __t0;
     __auto_type __ps_95 = (tur_hamt_reduce((void *)(intptr_t)(m), (void *)(intptr_t)(fn), (void *)(intptr_t)(init), (void *)(intptr_t)(ctx)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_95;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_95;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static void * hamt_slreduce(void * m, void * fn, void * init, void * ctx) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4432,11 +4432,11 @@ __attribute__((unused)) static void * hamt_slreduce(void * m, void * fn, void * 
     return (void *)(__r);
 }
 static int64_t hamt_slmerge_hywith__cps(void * a, void * b, void * fn, void * ctx, DK *__kont) {
-    void * t0;
+    void * __t0;
     __auto_type __ps_96 = (tur_hamt_merge_with((void *)(intptr_t)(a), (void *)(intptr_t)(b), (void *)(intptr_t)(fn), (void *)(intptr_t)(ctx)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_96;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_96;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static void * hamt_slmerge_hywith(void * a, void * b, void * fn, void * ctx) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4445,11 +4445,11 @@ __attribute__((unused)) static void * hamt_slmerge_hywith(void * a, void * b, vo
     return (void *)(__r);
 }
 static int64_t hamt_slshow__cps(void * m, DK *__kont) {
-    const char * t0;
+    const char * __t0;
     __auto_type __ps_97 = (tur_hamt_show((void *)(intptr_t)(m)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_97;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_97;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static const char * hamt_slshow(void * m) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4458,10 +4458,10 @@ __attribute__((unused)) static const char * hamt_slshow(void * m) {
     return (const char *)(__r);
 }
 static int64_t hamt_sldump__cps(void * m, DK *__kont) {
-    int64_t t0;
+    int64_t __t0;
     tur_hamt_dump_dot_stderr((void *)(intptr_t)(m));
-    t0 = 0;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = 0;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static void hamt_sldump(void * m) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4470,11 +4470,11 @@ __attribute__((unused)) static void hamt_sldump(void * m) {
     return;
 }
 static int64_t hamt_sltransient__cps(void * m, DK *__kont) {
-    void * t0;
+    void * __t0;
     __auto_type __ps_98 = (tur_hamt_transient((void *)(intptr_t)(m)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_98;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_98;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static void * hamt_sltransient(void * m) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4483,10 +4483,10 @@ __attribute__((unused)) static void * hamt_sltransient(void * m) {
     return (void *)(__r);
 }
 static int64_t hamt_sltransient_hyset_ex__cps(void * t, int64_t hash, void * key, void * val, DK *__kont) {
-    int64_t t0;
+    int64_t __t0;
     tur_hamt_transient_set((void *)(intptr_t)(t), hash, (void *)(intptr_t)(key), (void *)(intptr_t)(val));
-    t0 = 0;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = 0;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static void hamt_sltransient_hyset_ex(void * t, int64_t hash, void * key, void * val) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4495,10 +4495,10 @@ __attribute__((unused)) static void hamt_sltransient_hyset_ex(void * t, int64_t 
     return;
 }
 static int64_t hamt_sltransient_hydel_ex__cps(void * t, int64_t hash, void * key, DK *__kont) {
-    int64_t t0;
+    int64_t __t0;
     tur_hamt_transient_del((void *)(intptr_t)(t), hash, (void *)(intptr_t)(key));
-    t0 = 0;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = 0;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static void hamt_sltransient_hydel_ex(void * t, int64_t hash, void * key) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4507,11 +4507,11 @@ __attribute__((unused)) static void hamt_sltransient_hydel_ex(void * t, int64_t 
     return;
 }
 static int64_t hamt_slpersistent_ex__cps(void * t, DK *__kont) {
-    void * t0;
+    void * __t0;
     __auto_type __ps_99 = (tur_hamt_persistent((void *)(intptr_t)(t)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_99;
-    return dk_run(__kont, (intptr_t)(t0));
+    __t0 = __ps_99;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static void * hamt_slpersistent_ex(void * t) {
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
@@ -4953,25 +4953,25 @@ static int64_t list_hylength(int64_t l) {
 }
 
 static int64_t list_hyeq_qu__cps(int64_t l1, int64_t l2, int64_t cmp_fn, DK *__kont) {
-    bool t0;
-    bool t1;
-    bool t2;
-    bool t3;
-    int64_t t4;
-    int64_t t5;
+    bool __t0;
+    bool __t1;
+    bool __t2;
+    bool __t3;
+    int64_t __t4;
+    int64_t __t5;
     __auto_type __ps_127 = (tnil_qu(l1));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    t0 = __ps_127;
-    if (t0) {
+    __t0 = __ps_127;
+    if (__t0) {
         __auto_type __ps_128 = (tnil_qu(l2));
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        t1 = __ps_128;
-        return dk_run(__kont, (intptr_t)(t1));
+        __t1 = __ps_128;
+        return dk_run(__kont, (intptr_t)(__t1));
     } else {
         __auto_type __ps_129 = (tnil_qu(l2));
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        t2 = __ps_129;
-        if (t2) {
+        __t2 = __ps_129;
+        if (__t2) {
             return dk_run(__kont, (intptr_t)(false));
         } else {
             __auto_type __ps_130 = (list_hyhead(l1));
@@ -4980,15 +4980,15 @@ static int64_t list_hyeq_qu__cps(int64_t l1, int64_t l2, int64_t cmp_fn, DK *__k
             /* panic-return-signal: ret ctype unknown; no propagation here */
             __auto_type __ps_132 = ((*( tur_thunk_bool_int64_t_int64_t_t *)((void *)(intptr_t)(cmp_fn)))((void *)(intptr_t)(cmp_fn), __ps_130, __ps_131));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            t3 = __ps_132;
-            if (t3) {
+            __t3 = __ps_132;
+            if (__t3) {
                 __auto_type __ps_133 = (list_hytail(l1));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                t4 = __ps_133;
+                __t4 = __ps_133;
                 __auto_type __ps_134 = (list_hytail(l2));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                t5 = __ps_134;
-                return list_hyeq_qu__cps(t4, t5, cmp_fn, __kont); /* cps->cps */
+                __t5 = __ps_134;
+                return list_hyeq_qu__cps(__t4, __t5, cmp_fn, __kont); /* cps->cps */
             } else {
                 return dk_run(__kont, (intptr_t)(false));
             }

@@ -61,18 +61,24 @@
   (defmacro for [binding-vec & body]
     (if (empty? binding-vec)
       (list .pure (list do ~@body))
-      (let [first-b (first binding-vec) rest-bv (rest binding-vec)]
+      (let [first-b (first binding-vec)
+            rest-bv (rest binding-vec)]
         (if (= first-b :when)
-          (let [pred (first rest-bv) more (rest rest-bv)]
+          (let [pred (first rest-bv)
+                more (rest rest-bv)]
             (if (empty? more)
               (list if pred (list .pure (list do ~@body)) (list .empty 0))
               (list if pred (list for (list ~@more) ~@body) (list .empty 0))))
-          (let [var first-b coll (first rest-bv) more (rest rest-bv)]
+          (let [var  first-b
+                coll (first rest-bv)
+                more (rest rest-bv)]
             (if (empty? more)
               (list .bind coll (list fn `[~var] (list .pure (list do ~@body))))
-              (let [next-first (first more) next-rest (rest more)]
+              (let [next-first (first more)
+                    next-rest  (rest more)]
                 (if (= next-first :when)
-                  (let [pred (first next-rest) after (rest next-rest)]
+                  (let [pred  (first next-rest)
+                        after (rest next-rest)]
                     (if (empty? after)
                       (list .bind
                         coll
@@ -98,7 +104,8 @@
     (let [entry (doc-lookup name)]
       (if (not (= entry 0)) (println entry) (println "No documentation found."))))
   (defmacro with-resource [binding & body]
-    (let [bname (first binding) binit (second binding)]
+    (let [bname (first binding)
+          binit (second binding)]
       (list let `[~bname ~binit] (list do ~@body))))
   (defmacro must-use [expr]
     (list let

@@ -1,5 +1,4 @@
 ;; U4 oracle: NATIVE serial do-prelude context in a colored helper.
-;; Backend: default backend (emit_cps.c)
 ;; The prelude (println "prelude-ran") runs once at capture time; the 0-arg tail
 ;; calls (tick), (tock) become ignore-value frames marshaled under the "<fn>$0"
 ;; side (a _skcall wrapper `return f()` + a _skreg SkReg).  On resume each runs

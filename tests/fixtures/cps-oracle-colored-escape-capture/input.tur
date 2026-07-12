@@ -1,5 +1,4 @@
 ;; U2 oracle (cps-backend-unification): a COLORED fn with a CAPTURING escape.
-;; Backend: default backend (emit_cps.c)
 ;; The escape receiver (fn [k] (+ 1 (k n))) captures the enclosing param n.
 ;; The fn is colored by its reset/shift and CPS-emitted; the escape is
 ;; delegated to the direct emitter via CT_LETRAW, and collect_caps walks the

@@ -1,5 +1,4 @@
 ;; U3 oracle: native CT-IR emission of a Shape 2 (non-trivial continuation) cloneable.
-;; Backend: default backend (emit_cps.c)
 ;; make is a colored non-main fn: (cloneable-reset (+ 10 (cloneable-shift k-id 0))).
 ;; The (+ 10 []) context is reified as a DK frame and the captured continuation
 ;; deep-clones via dk_copy_range -- emitted natively (make_ccctx/make_ccbody +

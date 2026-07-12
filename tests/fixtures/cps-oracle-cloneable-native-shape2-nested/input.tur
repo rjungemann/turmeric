@@ -1,5 +1,4 @@
 ;; U3 oracle: native Shape 2 cloneable with a NESTED (multi-frame) context.
-;; Backend: default backend (emit_cps.c)
 ;; (cloneable-reset (* 2 (+ 10 (cloneable-shift k-id 0)))) -- two arithmetic frames
 ;; ((* 2 []) outer, (+ 10 []) inner) reified as two DK frames pushed outermost-first;
 ;; the captured continuation deep-clones (dk_copy_range).  Emitted natively.

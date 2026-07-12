@@ -1,0 +1,15 @@
+;; Effect inference must descend into type ascriptions.  `use-ask` declares an
+;; EMPTY effect row (#fx{}) but its only `perform (Ask)` sits inside a
+;; `(:: (perform (Ask)) :int)` ascription.  collect_effects_in_expr must peel
+;; the ascription so the inferred row includes Ask and the declared-row check
+;; (TUR-E0009) fires.  Before the EX_ASCRIBE fix in src/passes/effect_check.c
+;; the perform was invisible, the inferred row was empty, and this compiled
+;; clean (the same gap produced a false TUR-W0033 "unreachable handler").
+;; See docs/archive/w0033-handler-reachability-misses-ascribed-perform.md.
+
+(defeffect Ask [] :int)
+
+(defn use-ask [] #fx{} : int
+  (+ 1 (:: (perform (Ask)) :int)))
+
+(defn main [] : int 0)

@@ -38,7 +38,8 @@
   ;;;
   ;;; Since: UT3
   (defmacro with-unique [binding & body]
-    (let [bname (first binding) binit (second binding)]
+    (let [bname (first binding)
+          binit (second binding)]
       (list let `[^unique ~bname ~binit] (list do ~@body))))
   ;;; consume -- thread a unique value through a single transforming call.
   ;;;

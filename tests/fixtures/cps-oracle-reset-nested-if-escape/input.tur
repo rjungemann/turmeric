@@ -1,5 +1,4 @@
 ;; U1 oracle (cps-backend-unification-plan): raw reset/shift branch-escape on DK.
-;; Backend: default backend (emit_cps.c whole-program transform)
 ;; A reset delimited body with control flow (if / nested if / do) around a
 ;; tail-position shift.  Before U1 the CT-IR backend evicted these to
 ;; emit_cps.c; now delim_ok admits them and they lower onto dk_shift/dk_run.

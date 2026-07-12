@@ -145,7 +145,9 @@
 
 (defn seq/take [n : int s : int] : int
   (seq-new (fn []
-             (let [g (seq-iter s) ^mut count 0]
+             (let [g    (seq-iter s)
+                   ^mut count
+                   0]
                (gen []
                  (while (and (< count n) (not (seq-gen-done g)))
                    (let [v (seq-gen-next g)]
@@ -170,7 +172,9 @@
 
 (defn seq/drop [n : int s : int] : int
   (seq-new (fn []
-             (let [g (seq-iter s) ^mut skipped 0]
+             (let [g    (seq-iter s)
+                   ^mut skipped
+                   0]
                (gen []
                  (while (not (seq-gen-done g))
                    (let [v (seq-gen-next g)]
@@ -226,7 +230,9 @@
 
 (defn seq/drop-while [^fat pred : int s : int] : int
   (seq-new (fn []
-             (let [g (seq-iter s) ^mut dropping true]
+             (let [g    (seq-iter s)
+                   ^mut dropping
+                   true]
                (gen []
                  (while (not (seq-gen-done g))
                    (let [v (seq-gen-next g)]
@@ -254,7 +260,9 @@
 
 (defn seq/map-indexed [^fat f : int s : int] : int
   (seq-new (fn []
-             (let [g (seq-iter s) ^mut idx 0]
+             (let [g    (seq-iter s)
+                   ^mut idx
+                   0]
                (gen []
                  (while (not (seq-gen-done g))
                    (let [v (seq-gen-next g)]
@@ -307,7 +315,9 @@
 
 (defn seq/flat-map [^fat f : int s : int] : int
   (seq-new (fn []
-             (let [g (seq-iter s) ^mut ig 0]
+             (let [g    (seq-iter s)
+                   ^mut ig
+                   0]
                (gen []
                  (while (not (seq-gen-done g))
                    (let [v (seq-gen-next g)]
@@ -335,7 +345,9 @@
 
 (defn seq/flatten [s : int] : int
   (seq-new (fn []
-             (let [g (seq-iter s) ^mut ig 0]
+             (let [g    (seq-iter s)
+                   ^mut ig
+                   0]
                (gen []
                  (while (not (seq-gen-done g))
                    (let [v (seq-gen-next g)]

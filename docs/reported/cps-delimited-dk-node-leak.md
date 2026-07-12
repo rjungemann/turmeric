@@ -1,5 +1,20 @@
 # Delimited-control lowering leaks DK chain nodes per reset/shift
 
+> **Graduation status (2026-07-12):** The `cps-backend` experiment is **fully
+> graduated** -- always-on since #657 (2026-07-11), flag removed in #658.
+> `--enable=cps-backend` now hard-errors (TUR-E0310); `src/compiler/emit_cps_ir.c`
+> is the default lowering. Two consequences for this report:
+> - Drop `--enable=cps-backend` from the "CPS-IR-to-C backend" bullet -- that
+>   backend is now the default path.
+> - The `src/compiler/emit_cps.c` line references (`:352-357`, `:1198`, `:1539`)
+>   are **stale**: `emit_cps.c` (the old direct/abortive CPS lowering) was
+>   **removed** alongside graduation, so it no longer exists in the tree. The
+>   live delimited-control lowering to examine is `emit_cps_ir.c`. Re-locate the
+>   abortive `dk_shift`/`dk_prompt`/`dk_frame`/`dk_done` emission there and
+>   re-confirm the leak before picking this up -- the fix directions
+>   (`dk_free_node` / arena) still apply in spirit, but against the current file.
+>   (Leak not re-verified as part of this status annotation.)
+
 **Severity:** low (bounded, per-reset/shift-execution leak; not a correctness
 bug). Blocks running affected programs under LeakSanitizer without a
 `requires.no-leak-check` marker.

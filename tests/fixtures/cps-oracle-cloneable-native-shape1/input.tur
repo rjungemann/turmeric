@@ -1,5 +1,4 @@
 ;; U3 oracle: native CT-IR emission of a Shape 1 (identity-continuation) cloneable.
-;; Backend: default backend (emit_cps.c)
 ;; make is a colored non-main fn whose (cloneable-reset (cloneable-shift k-id 0))
 ;; is the whole body -- the trivial continuation.  Under the experiment it lowers
 ;; via the native CT_CLONEABLE node (tur_cloneable_cont_alloc + identity cont fn,

@@ -66,7 +66,9 @@
 (defn >>> [A B C]
   [^fat f : (fn [A] #fx{} B) ^fat g : (fn [B] #fx{} C)]
   : ptr<void>
-  (let [fv f gv g] (fn [x : A] : C (gv (fv x)))))
+  (let [fv f
+        gv g]
+    (fn [x : A] : C (gv (fv x)))))
 ;; The arrow-pair helpers operate on heap two-slot pairs.  They use a local
 ;; layout-compatible struct `P { int64_t e1; int64_t e2; }` rather than
 ;; tuple.tur's `Tuple2` typedef so this module stays self-contained: a
@@ -170,7 +172,9 @@
 ;;;   ((par-comp inc double) (tuple2 1 2))  ; => Tuple2(2, 4)
 
 (defn par-comp [a b c d ^fat f ^fat g]
-  (let [fv f gv g] (fn [p] (__arrow_pair_par fv gv p))))
+  (let [fv f
+        gv g]
+    (fn [p] (__arrow_pair_par fv gv p))))
 ;;; arrow-split -- duplicate input and apply two functions, returning a Tuple2.
 ;;;
 ;;; Parameters:
@@ -184,7 +188,9 @@
 ;;;   ((arrow-split inc double) 3)  ; => Tuple2(4, 6)
 
 (defn arrow-split [a b c ^fat f ^fat g]
-  (let [fv f gv g] (fn [x] (__arrow_pair_split fv gv x))))
+  (let [fv f
+        gv g]
+    (fn [x] (__arrow_pair_split fv gv x))))
 ;; No bare <<< (reverse composition) free defn: write (>>> f g) with the
 ;; arguments in the order you want them applied. Reverse composition is
 ;; available through the typeclass surface instead -- the Arrow [(->)] instance

@@ -368,7 +368,9 @@
     (list mzero)
     (if (empty? (rest forms))
       (first forms)
-      (let [var (first forms) ma (second forms) rest-forms (rest (rest forms))]
+      (let [var        (first forms)
+            ma         (second forms)
+            rest-forms (rest (rest forms))]
         (list let
           `[~ctx 0]
           (list mbind
@@ -425,7 +427,8 @@
   (let [lxs xs]
     (mbind fs
       (fn [f]
-        (let [lxs2 lxs lf f]
+        (let [lxs2 lxs
+              lf   f]
           (mbind lxs2 (fn [x] (let [_ lf] (mreturn (bt-apply-fat lf x))))))))))
 ;;; Functor [Backtrack] -- map a function over every result value.
 ;;;

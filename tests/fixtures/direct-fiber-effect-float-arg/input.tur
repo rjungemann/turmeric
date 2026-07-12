@@ -1,0 +1,13 @@
+;; Direct/fiber effect path: a :float effect ARGUMENT must round-trip, not
+;; truncate.  `f` has a scalar (float) signature so on the default (non-CPS)
+;; build it is emitted through the direct/fiber effect emitter -- the path that
+;; used to cast the float straight to int64 (7.1 -> 7) instead of
+;; bit-reinterpreting it across the int64 effect-arg slot.  Per the STRICT float
+;; rule the literal has a non-zero fraction; expected is 7.1 + 1.0 = 8.1.
+;; Regression for docs/archive/direct-fiber-float-effect-arg-truncation.md.
+(defeffect One [a :float] :float)
+(defn f [] : float
+  (handle
+    (perform (One 7.1))
+    (One [a] k) (resume k {a + 1.0})))
+(defn main [] : int (println (f)) 0)

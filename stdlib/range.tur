@@ -459,7 +459,8 @@
 (defn range-bound-strictly-before? [u : Bound l : Bound] : bool
   (if (or (bound-unbounded? u) (bound-unbounded? l))
     false
-    (let [uv (range-bound-value u) lv (range-bound-value l)]
+    (let [uv (range-bound-value u)
+          lv (range-bound-value l)]
       (if (< uv lv)
         true
         (if (= uv lv)
@@ -473,7 +474,8 @@
 (defn range-bound-has-gap? [u : Bound l : Bound] : bool
   (if (or (bound-unbounded? u) (bound-unbounded? l))
     false
-    (let [uv (range-bound-value u) lv (range-bound-value l)]
+    (let [uv (range-bound-value u)
+          lv (range-bound-value l)]
       (if (< uv lv)
         true
         (if (= uv lv)
@@ -641,7 +643,8 @@
 ;;; Since: LZ4
 
 (defn singleton-range? [r : int] : bool
-  (let [lo (range-lower r) hi (range-upper r)]
+  (let [lo (range-lower r)
+        hi (range-upper r)]
     (if (or (bound-unbounded? lo) (bound-unbounded? hi))
       false
       (and (range-bound-inclusive? lo)
@@ -658,10 +661,12 @@
 ;;; Since: LZ4
 
 (defn empty-range? [r : int] : bool
-  (let [lo (range-lower r) hi (range-upper r)]
+  (let [lo (range-lower r)
+        hi (range-upper r)]
     (if (or (bound-unbounded? lo) (bound-unbounded? hi))
       false
-      (let [lv (range-bound-value lo) hv (range-bound-value hi)]
+      (let [lv (range-bound-value lo)
+            hv (range-bound-value hi)]
         (if (> lv hv)
           true
           (if (= lv hv)
@@ -688,7 +693,8 @@
     b1
     (if (bound-unbounded? b2)
       b2
-      (let [v1 (range-bound-value b1) v2 (range-bound-value b2)]
+      (let [v1 (range-bound-value b1)
+            v2 (range-bound-value b2)]
         (if (< v1 v2)
           b1
           (if (> v1 v2) b2 (if (range-bound-inclusive? b1) b1 b2)))))))
@@ -700,7 +706,8 @@
     b1
     (if (bound-unbounded? b2)
       b2
-      (let [v1 (range-bound-value b1) v2 (range-bound-value b2)]
+      (let [v1 (range-bound-value b1)
+            v2 (range-bound-value b2)]
         (if (> v1 v2)
           b1
           (if (< v1 v2) b2 (if (range-bound-inclusive? b1) b1 b2)))))))
@@ -712,7 +719,8 @@
     b2
     (if (bound-unbounded? b2)
       b1
-      (let [v1 (range-bound-value b1) v2 (range-bound-value b2)]
+      (let [v1 (range-bound-value b1)
+            v2 (range-bound-value b2)]
         (if (> v1 v2)
           b1
           (if (< v1 v2) b2 (if (not (range-bound-inclusive? b1)) b1 b2)))))))
@@ -724,7 +732,8 @@
     b2
     (if (bound-unbounded? b2)
       b1
-      (let [v1 (range-bound-value b1) v2 (range-bound-value b2)]
+      (let [v1 (range-bound-value b1)
+            v2 (range-bound-value b2)]
         (if (< v1 v2)
           b1
           (if (> v1 v2) b2 (if (not (range-bound-inclusive? b1)) b1 b2)))))))
@@ -839,9 +848,12 @@
                       (- (range-bound-value hi) 1))
                     0)]
         (seq-new (fn []
-                   (let [s start b hb e he]
+                   (let [s start
+                         b hb
+                         e he]
                      (gen []
-                       (let [^mut i s]
+                       (let [^mut i
+                             s]
                          (while (if b (<= i e) true) (yield i) (set! i (+ i 1))))))))))))
 ;;; seq/from-range-step -- convert a bounded integer Range to a Seq with a custom step.
 ;;;
@@ -881,9 +893,13 @@
                         (+ (range-bound-value hi) 1)))
                     0)]
         (seq-new (fn []
-                   (let [s start st step b hb e he]
+                   (let [s  start
+                         st step
+                         b  hb
+                         e  he]
                      (gen []
-                       (let [^mut i s]
+                       (let [^mut i
+                             s]
                          (while (if b (if (> st 0) (<= i e) (>= i e)) true)
                            (yield i)
                            (set! i (+ i st))))))))))))

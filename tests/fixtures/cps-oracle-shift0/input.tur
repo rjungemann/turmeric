@@ -1,8 +1,5 @@
-;; U0 oracle (cps-backend-unification-plan): direct-vs-CPS value-equality net.
-;; Backend: default backend (emit_cps.c whole-program transform)
-;; This program is one of a cps-oracle-shift0 / cps-oracle-shift0-cps twin pair sharing one input
-;; expected.stdout; the value MUST stay equal under both backends across every
-;; phase of the port. See docs/upcoming/v2/cps-backend-unification-u0-inventory.md.
+;; CPS regression oracle (cps-backend-unification): pins the runtime value.
+;; See docs/upcoming/v2/cps-backend-unification-u0-inventory.md.
 ;;
 ;; CPS-IR-to-C backend, N6.2 tail: shift0.  Built with --enable=cps-backend.
 ;;

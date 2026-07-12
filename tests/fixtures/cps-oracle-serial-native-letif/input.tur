@@ -1,5 +1,4 @@
 ;; U4 oracle: NATIVE serial let-bearing and if-bearing contexts.
-;; Backend: default backend (emit_cps.c)
 ;; The serial let-prelude and if-branch-point emit share the cloneable machinery
 ;; (a C-local prelude / a branch wrapper) with the marshalable serial frame chain
 ;; underneath, so a colored helper emits them natively (a _skbody shift helper,
