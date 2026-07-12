@@ -6,11 +6,12 @@
 ;; loads the aggregate by value.  Before the boxing fix the by-value Point value
 ;; reached map-assoc-eq-o's int64 `val` carrier param as a hard cc type error.
 ;;
-;; Compiled-only (requires.compiled): the tree-walking interpreter's map natives
-;; carry a value through the int64 slot without the struct box/retag the Vec
-;; natives do (vec_retag_cell), so a struct map value reads back as the raw
-;; carrier word -- a separate interpreter parity gap, tracked alongside the
-;; interpreter Eq/Show-on-carrier gaps.
+;; Runs on BOTH paths.  In the interpreter the struct value rides the int64 slot
+;; as a TuriStruct pointer; `(:: (map-get m k) Point)` now retags that carrier to
+;; a struct (eval.c try_retag_carrier_struct -- gated on a multi-word, >= 2 field
+;; single-ctor record so a defopaque int newtype / single-word value is never
+;; wrongly dereferenced), so field access reads the TuriStruct rather than its
+;; raw header.
 (load "stdlib/typeclass.tur")
 
 (defstruct Point :copy [x : int y : int])

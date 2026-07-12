@@ -2,7 +2,7 @@
 title: Multi-word by-value struct/ADT elements in Vec/Set/Map (element boxing)
 category: Codegen / runtime / typed collections -- frontier
 description: The element buffer of every heap collection is int64[] (Vec) or a single void* slot (HAMT), and that is a locked decision for interpreter parity and float/cstr reinterpret. So a multi-word by-value struct/ADT element (a :copy struct wider than one word, or a payload-carrying ADT) cannot be stored. This plan boxes such elements -- heap copy + refcount, pointer in the slot -- reusing the existing boxed-key (WKC2) machinery, rather than the ruled-out typed element buffer. It depends on the v1 element-dispatch fix.
-status: in progress (v2 frontier) -- Vec elements + Map values + Map keys/Set landed; Map keys/Set work on BOTH paths (reader conditionals); Vec-Eq / Map-value interpreter parity + Vec/Map-value box-free lifecycle remain
+status: in progress (v2 frontier) -- Vec elements + Map values + Map keys/Set landed and working on BOTH the compiled and interpreter paths (incl. structural Eq/Show); only the Vec-element / Map-value box-free lifecycle (process-lifetime leak) remains
 ---
 
 # Multi-word by-value elements need boxing, not a typed buffer
@@ -10,9 +10,12 @@ status: in progress (v2 frontier) -- Vec elements + Map values + Map keys/Set la
 ## Progress (2026-07-12)
 
 Landed all three plan targets: **Vec elements**, **Map values**, and the **key**
-case (**Map keys / Set elements**). The remaining follow-ups are the interpreter
-parity gaps and the box release-on-free lifecycle for Vec/Map-value (the KEY box
-lifecycle IS done -- `mk-owned? = 1` makes it LSan-clean).
+case (**Map keys / Set elements**), each working on BOTH the compiled and
+interpreter paths -- including structural `Eq`/`Show`. The interpreter parity
+gaps are all closed (see the resolved list below). The only remaining follow-up
+is the box release-on-free lifecycle for the Vec-element / Map-value boxes (a
+process-lifetime leak; the KEY box lifecycle IS done -- `mk-owned? = 1` makes it
+LSan-clean).
 
 **Done -- Vec multi-word elements (compiled + interpreter).**
 `(vec-of (Point 1 2) (Point 3 4))` for `(defstruct Point :copy [x : int y : int])`
@@ -99,19 +102,28 @@ C block), so the ~10-line reader-conditional pattern is the interface; the
 generic runtime + interpreter comparators/hashes keep it type-name-free and
 per-field-free.
 
-**Interpreter parity gaps (compiled-only fixtures document these):**
-- `Eq[Vec]` over a struct element in the tree-walking interpreter compares
-  elements by carrier/pointer rather than content (`vec-multiword-struct-eq` is
-  compiled-only). A reader-conditional fix analogous to the Map-key one is
-  plausible but not yet done.
-- Map struct VALUES read back as the raw carrier word in the interpreter -- its
-  map natives lack the value box/retag the Vec natives have
-  (`map-multiword-struct-value` compiled-only).
-- (RESOLVED) Map struct KEYS / Set struct elements: earlier documented as
-  compiled-only "no native override". That was wrong -- `#?(:tur ... :turi ...)`
+**Interpreter parity gaps -- ALL RESOLVED.** Every multi-word-struct collection
+case now runs on BOTH the compiled and interpreter paths, bit-for-bit:
+- (RESOLVED) Map struct KEYS / Set struct elements: `#?(:tur ... :turi ...)`
   reader conditionals let the interpreter run pure-Turmeric `:turi` bodies backed
-  by the new `struct-hash` / `struct-key-cmp` natives, so both now run on both
-  paths (including structural `Eq`).
+  by the `struct-hash` / `struct-key-cmp` natives, including structural `Eq`.
+- (RESOLVED) `Eq[Vec]` / `Show[Vec]` over a struct element: the interpreter's
+  generic-dict-dispatch re-resolver (`gde_reresolve_method`, `eval.c`) pointer-
+  matched instances, but the auto-loaded `vec-eq-loop`/`vec-show-loop` bake a
+  `dict_arg` under a DUPLICATE `Eq`/`Show` typeclass object (the class is
+  declared in the auto-loaded stub AND again when the program loads
+  typeclass.tur), so no instance matched and it kept the carrier `Eq[int]`,
+  pointer-comparing the elements.  The re-resolver now falls back to matching a
+  class's instances BY NAME for a non-primitive concrete (primitives keep their
+  exact prior dispatch), so `Eq[Point]`/`Show[Point]` are threaded.
+  (`vec-multiword-struct-eq` now runs on both paths.)
+- (RESOLVED) Map struct VALUES: the value rides the int64 carrier as a
+  `TuriStruct` pointer, which `get_field_extract` read as a compiled raw int64[]
+  field buffer.  `(:: (map-get m k) T)` now retags that carrier to `TURI_STRUCT`
+  (`try_retag_carrier_struct`, `eval.c`), gated on a multi-word (>= 2 field)
+  single-ctor record so a `defopaque` int newtype / single-word value is never
+  dereferenced as a pointer.  (`map-multiword-struct-value` now runs on both
+  paths.)
 
 **Lifecycle:** the KEY box lifecycle is done (`mk-owned? = 1` ->
 `tur_hamt_box_retain`/`release`, LSan clean). Boxed **Vec elements / Map values**

@@ -4,11 +4,13 @@
 ;; independently-constructed vecs of content-equal Points are equal, and a
 ;; differing element makes them unequal.
 ;;
-;; Compiled-only (requires.compiled): the tree-walking interpreter dispatches
-;; Eq on a value's runtime carrier, so it pointer-compares the two distinct
-;; TuriStruct element boxes and reports content-equal Points as unequal -- the
-;; same interpreter Eq-dispatch-on-carrier gap tracked for cstr HAMT keys.  The
-;; compiled path grounds the element to Point and threads Eq[Point].
+;; Runs on BOTH paths.  The interpreter previously mis-dispatched: the
+;; auto-loaded `vec-eq-loop` baked a `dict_arg` under a DUPLICATE `Eq` typeclass
+;; object, so the runtime re-resolver (which pointer-matched instances) kept the
+;; carrier `Eq[int]` and pointer-compared the struct elements.  The re-resolver
+;; now falls back to matching this class's instances BY NAME for a non-primitive
+;; element (eval.c gde_reresolve_method), so `Eq[Point]` is threaded and content
+;; comparison agrees with the compiled path.
 (load "stdlib/typeclass.tur")
 
 (defstruct Point :copy [x : int y : int])
