@@ -8,17 +8,21 @@ on:
 
 jobs:
   test:
-    name: Test (${{ matrix.os }}, shard ${{ matrix.shard }})
+    name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        # Sharding is temporarily disabled: the fixture suite runs in a single
+        # shard per OS for now. To re-enable, restore the `shard` matrix axis
+        # below (and the shard-specific `env`/`if` uses further down).
+        #
         # Split the big tur_tests fixture suite (~2100 fixtures) across N runners
         # via TUR_TEST_SHARD; run.sh partitions round-robin by fixture ordinal so
         # the shards are balanced and their union is the full corpus. Tune the
         # shard count by editing this list (and the "/N" denominators below).
-        shard: ['1/4', '2/4', '3/4', '4/4']
+        # shard: ['1/4', '2/4', '3/4', '4/4']
 
     steps:
       - uses: actions/checkout@v4
@@ -57,13 +61,17 @@ jobs:
             *) echo "::error::unexpected tur --version output"; exit 1 ;;
           esac
 
-      - name: Run fixture suite (shard ${{ matrix.shard }})
-        env:
-          TUR_TEST_SHARD: ${{ matrix.shard }}
+      - name: Run fixture suite (single shard)
+        # Sharding temporarily disabled -- run the whole fixture corpus in one
+        # shard. To re-enable, restore the shard matrix axis above and add back:
+        #   env:
+        #     TUR_TEST_SHARD: ${{ matrix.shard }}
         run: ctest --output-on-failure --progress --test-dir build -R '^tur_tests$'
 
-      - name: Run auxiliary suites (once per OS, on the first shard)
-        if: matrix.shard == '1/4'
+      - name: Run auxiliary suites (once per OS)
+        # Sharding temporarily disabled -- previously gated on `matrix.shard == '1/4'`
+        # so the auxiliary suites ran only on the first shard. With a single shard
+        # this runs unconditionally once per OS.
         run: ctest --output-on-failure --progress --test-dir build -E '^tur_tests$'
 
   check-guides:
