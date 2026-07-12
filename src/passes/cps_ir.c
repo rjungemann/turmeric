@@ -1118,7 +1118,7 @@ static CTerm *build_handle(CpsB *b, Expr *e, CVar x, CTerm *cont) {
         cs[ci].params = NULL;
         if (c->n_params) {
             const Binding **ps = arena_alloc(b->a, c->n_params * sizeof(const Binding *));
-            for (uint8_t i = 0; i < c->n_params; i++) ps[i] = c->param_bindings[i];
+            for (uint32_t i = 0; i < c->n_params; i++) ps[i] = c->param_bindings[i];
             cs[ci].params = ps;
         }
         cs[ci].k = c->k_binding;
@@ -1137,7 +1137,7 @@ static CTerm *build_perform(CpsB *b, Expr *e, CVar x, CTerm *cont, Pending *p) {
     t->as.perform.effect = pf->effect_name;
     t->as.perform.n = pf->n_args;
     CAtom *args = arena_alloc(b->a, (pf->n_args ? pf->n_args : 1) * sizeof(CAtom));
-    for (uint8_t i = 0; i < pf->n_args; i++) args[i] = atomize(b, pf->args[i], p);
+    for (uint32_t i = 0; i < pf->n_args; i++) args[i] = atomize(b, pf->args[i], p);
     t->as.perform.args = args;
     t->as.perform.x = x;
     t->as.perform.body = cont;
@@ -1812,7 +1812,7 @@ void cps_ir_dump_program(Arena *a, Expr *program, FILE *out) {
         if (!fd->binding || !fd->binding->name) continue;
         if (fd->binding->defining_module_name) continue;
         fprintf(out, "cps-fn %s [", fd->binding->name->name);
-        for (uint8_t pi = 0; pi < fd->n_params; pi++) {
+        for (uint32_t pi = 0; pi < fd->n_params; pi++) {
             if (pi) fputc(' ', out);
             fprintf(out, "%s", fd->params[pi]->name ? fd->params[pi]->name->name : "_");
         }

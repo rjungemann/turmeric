@@ -14,7 +14,7 @@
 
 /* D3 (compiled-catch-unwind-stackless-plan): max int params a stackless
  * self-recursive catch-unwind function may carry (the tur_cont saved[] width).
- * >5 positional params is already a code smell (MAX_FN_ARITY is 16), so 8 is a
+ * >5 positional params is already a code smell (MAX_FN_ARITY is 64), so 8 is a
  * generous cap; functions above it fall back to the normal lowering. */
 #define TUR_SC_MAXP 8
 
@@ -188,7 +188,7 @@ typedef struct EmitCtx {
     /* Phase 2: when emitting a function body, these are the parameter bindings
      * that should use raw names (without ID suffix) when referenced. */
     Binding **fn_params;
-    uint8_t   n_fn_params;
+    uint32_t  n_fn_params;
     /* Phase 3: Track emitted env struct names to avoid duplicates */
     const Symbol **env_struct_names;
     uint8_t   n_env_struct_names;
@@ -332,8 +332,12 @@ typedef struct EmitCtx {
     /* Phase D: pass-by-ptr param bindings for the current function.
      * Populated by emit_fn_def before body emission; cleared after.
      * expr_is_pbp_param checks this to decide whether a receiver uses -> . */
-    Binding     *pbp_param_ptrs[16]; /* MAX_FN_ARITY */
-    uint8_t      n_pbp_params;
+    /* Pass-by-ptr param bindings for the current fn (or specialization group).
+     * Growable (realloc) rather than fixed-[MAX_FN_ARITY] so a function with an
+     * arbitrary number of by-const-ptr struct params is handled without a cap. */
+    Binding    **pbp_param_ptrs;
+    uint32_t     n_pbp_params;
+    uint32_t     cap_pbp_params;
     /* ASan/LSan plan (Option C): arena for the transient Type nodes that
      * emit_resolve_type / emit_abi_instantiate_type clone while resolving
      * generic type variables to concrete types for ABI specialization. These

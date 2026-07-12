@@ -1,11 +1,66 @@
 # Functions with arbitrary parameter count (raising / removing MAX_FN_ARITY)
 
-**Status:** Proposed (not started). Lifts the hard `MAX_FN_ARITY = 16` cap so a
-function may declare any number of positional parameters. The cap is not an ABI
-limit -- emitted C functions already take an arbitrary number of parameters --
-it is an artifact of fixed-size inline arrays in the compiler's `Type`
-representation and fixed stack buffers in elaboration, emission, the interpreter,
-and the spice FFI.
+**Status:** Landed. There is **no hard cap** on positional parameters -- a defn,
+fn, or extern-c may declare an arbitrary number, bounded only by `uint32_t`,
+matching the emitted C. Verified end to end (compiled path) at 100, 300, 500,
+and 1000 ordinary params, an 80-param generic function, and a 70-param
+struct-by-value function; full suite green.
+
+What shipped:
+
+- **Out-of-line per-arg storage (§2a).** `Type.as.fn.arg_kinds` and `arg_flags`
+  are arena pointers (from a process-lifetime global type arena,
+  `tur_fn_args_alloc`) instead of inline `[MAX_FN_ARITY]` arrays; `arity` is
+  `uint32_t`. `sizeof(Type)` fell from 304 (pre-change) to 128 -- the fn variant
+  no longer dominates the union -- so deep by-value-`Type` codegen recursion has
+  more headroom, not less. The handful of sites that rebuild a fn type at a
+  different arity (dict/env injection, poly instantiation, struct-field
+  instantiation, forward-decl growth) allocate fresh arrays rather than mutate a
+  shared one.
+- **Packed per-arg flags.** The eight `bool arg_*[]` arrays became one
+  `uint8_t arg_flags[]` behind `FN_ARG_FLAG` / `FN_ARG_SET`; `arg_kinds` is
+  `uint8_t` (TypeKind has < 256 enumerators).
+- **Dynamic buffers + widened carriers (§2b/2c).** The elaboration per-param
+  scratch (defn/fn/extern-c), the emit param/thunk/pbp buffers (pbp is now a
+  realloc-grown array), the ABI-instantiation scratch, and the `uint8_t`
+  arity/param loop counters and count fields (`FnDef.n_params`,
+  `ExternC.n_params`, `EmitCtx.n_fn_params`, ...) were made count-sized /
+  `uint32_t`. The `>= MAX_FN_ARITY` hard-reject guards are gone.
+- **Soft lint (§2f).** Exceeding the historical 16 is a `TUR-W0041` nudge, never
+  an error.
+- **64-bit arg bitmasks.** `poly_arg_mask` / `poly_agg_arg_mask` are `uint64_t`
+  indexed via `ARG_IDX_BIT(i)` (0 for i >= 64), so ordinary high-arity calls
+  never hit an undefined shift; the poly-carrier feature itself flags up to 64
+  such args per call.
+
+`MAX_FN_ARITY` (64) survives only as the default size of a few internal codegen
+fast-path buffers (ABI specialization; interpreter effect-perform args), each of
+which falls back gracefully / errors cleanly for wider functions rather than
+miscompiling.
+
+**Spice FFI descriptor (§2d) -- landed.** The REPL spice loader's in-memory
+export descriptor is now unbounded: `TurSpiceExport.arg_classes` is a heap array
+of length `n_args` (was a fixed `char[TUR_SPICE_MAX_ARITY]`), `n_args` is
+`uint32_t`, the manifest reader grows its arg-class buffer and reads lines with
+`getline` (no 4 KB line cap), and the FFI marshalling scratch uses a small-arity
+inline fast path (`TUR_SPICE_ARITY_FASTPATH`, 16) with a heap spill above it.
+The manifest writer already emitted all `n_params` tags.  Net effect: a spice
+that exports a >64-param symbol now loads cleanly and its sibling exports stay
+callable, where previously one over-cap row made the whole manifest parse fail.
+The exports.manifest is plain variable-length text, so no binary format version
+gate is needed -- an older `tur` still cleanly rejects a wider row instead of
+misreading it.  The one remaining limit is orthogonal to the descriptor: the
+interpreter's generated shape dispatcher (`tur_ffi_thunk_call`) only covers
+arg-shapes up to `tools/gen_ffi_dispatch.py --max-arity` (6 by default), so a
+REPL call whose shape exceeds that fails at call time with a
+regenerate-the-table diagnostic.  Lifting that needs a wider generated table or
+libffi and is a separate interpreter-FFI concern; the compiled path calls spice
+exports directly and has no such limit.
+
+The cap was never an ABI limit -- emitted C functions already take an arbitrary
+number of parameters -- it was an artifact of fixed-size inline arrays in the
+compiler's `Type` representation and fixed stack buffers in elaboration,
+emission, the interpreter, and the spice FFI.
 
 **Relationship to the arity style guide.** CLAUDE.md's "Function Arity Style
 Guide" says >5 positional params is a code smell and 16 is "an emergency escape

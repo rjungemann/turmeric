@@ -422,11 +422,22 @@ Type adt_field_instantiate_type(Elab *e, const AdtDef *def, const Type *t,
              * (which lower to the int64 carrier and fail untyped overload
              * resolution).  Mirrors struct_field_instantiate_type's TY_FN arm. */
             Type out = *t;
-            uint8_t arity = t->as.fn.arity;
+            uint32_t arity = t->as.fn.arity;
+            /* out shares t's out-of-line arg arrays; give it a private arg_kinds
+             * (and a copied arg_flags) before overwriting per-arg kinds below. */
+            if (arity) {
+                uint8_t *ok = tur_fn_args_alloc(arity), *of = tur_fn_args_alloc(arity);
+                for (uint32_t i = 0; i < arity; i++) {
+                    ok[i] = t->as.fn.arg_kinds[i];
+                    of[i] = t->as.fn.arg_flags[i];
+                }
+                out.as.fn.arg_kinds = ok;
+                out.as.fn.arg_flags = of;
+            }
             struct Type **new_args = arity
                 ? (struct Type **)arena_alloc(e->arena, arity * sizeof(struct Type *))
                 : NULL;
-            for (uint8_t i = 0; i < arity; i++) {
+            for (uint32_t i = 0; i < arity; i++) {
                 Type slot = (t->as.fn.arg_full_types && t->as.fn.arg_full_types[i])
                     ? *t->as.fn.arg_full_types[i]
                     : type_from_kind(t->as.fn.arg_kinds[i]);
@@ -495,7 +506,7 @@ bool adt_field_collect_type_args(const char **tps, uint8_t n_tps,
         case TY_FN: {
             if (actual.kind != TY_FN) return false;
             if (expected->as.fn.arity != actual.as.fn.arity) return false;
-            for (uint8_t i = 0; i < expected->as.fn.arity; i++) {
+            for (uint32_t i = 0; i < expected->as.fn.arity; i++) {
                 Type exp_arg = (expected->as.fn.arg_full_types &&
                                 expected->as.fn.arg_full_types[i])
                     ? *expected->as.fn.arg_full_types[i]

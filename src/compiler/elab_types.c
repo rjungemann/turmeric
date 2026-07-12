@@ -1253,7 +1253,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             bool any_compound_arg = false;
             memset(fn_arg_kinds, 0, sizeof(fn_arg_kinds));
             memset(fn_arg_full, 0, sizeof(fn_arg_full));
-            for (uint8_t pi2 = 0; pi2 < n_fn_args && pi2 < MAX_FN_ARITY; pi2++) {
+            for (uint32_t pi2 = 0; pi2 < n_fn_args && pi2 < MAX_FN_ARITY; pi2++) {
                 reject_fn_type_colon(e, params_vec->as.list.items[pi2]);
                 Type *at = type_expr_from_form(e, params_vec->as.list.items[pi2],
                                                rec_name, type_params, type_param_kinds, n_type_params);
@@ -1353,7 +1353,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             }
             if (any_compound_arg) {
                 Type **aFT = (Type **)arena_alloc(e->arena, n_fn_args * sizeof(Type *));
-                for (uint8_t i = 0; i < n_fn_args; i++) aFT[i] = fn_arg_full[i];
+                for (uint32_t i = 0; i < n_fn_args; i++) aFT[i] = fn_arg_full[i];
                 fn_t->as.fn.arg_full_types = aFT;
             }
             /* typed-c-abi-function-pointers: a (c-fn ...) is a bare C function
@@ -1508,7 +1508,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             /* Store full type info if any polymorphic args or an aggregate/poly result */
             if (any_poly_arg || any_app_arg || poly_result || aggregate_result) {
                 Type **aFT = (Type **)arena_alloc(e->arena, n_args * sizeof(Type *));
-                for (uint8_t i = 0; i < n_args; i++) aFT[i] = arg_full_types_local[i];
+                for (uint32_t i = 0; i < n_args; i++) aFT[i] = arg_full_types_local[i];
                 fn_t->as.fn.arg_full_types = aFT;
                 if (poly_result || aggregate_result) fn_t->as.fn.result_full_type = result_type;
             }
@@ -1516,12 +1516,12 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             /* LT2: Store arg_linear flags if any were annotated */
             {
                 bool any_lin = false;
-                for (uint8_t i = 0; i < n_args; i++) {
+                for (uint32_t i = 0; i < n_args; i++) {
                     if (arg_linear_local[i]) { any_lin = true; break; }
                 }
                 if (any_lin) {
-                    for (uint8_t i = 0; i < n_args; i++) {
-                        fn_t->as.fn.arg_linear[i] = arg_linear_local[i];
+                    for (uint32_t i = 0; i < n_args; i++) {
+                        FN_ARG_SET(fn_t->as.fn, i, FA_LINEAR, arg_linear_local[i]);
                     }
                 }
             }
@@ -1529,12 +1529,12 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             /* UT0: Store arg_unique flags if any were annotated */
             {
                 bool any_uniq = false;
-                for (uint8_t i = 0; i < n_args; i++) {
+                for (uint32_t i = 0; i < n_args; i++) {
                     if (arg_unique_local[i]) { any_uniq = true; break; }
                 }
                 if (any_uniq) {
-                    for (uint8_t i = 0; i < n_args; i++) {
-                        fn_t->as.fn.arg_unique[i] = arg_unique_local[i];
+                    for (uint32_t i = 0; i < n_args; i++) {
+                        FN_ARG_SET(fn_t->as.fn, i, FA_UNIQUE, arg_unique_local[i]);
                     }
                 }
             }
@@ -1542,12 +1542,12 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             /* UT2: Store arg_unique_mut flags if any were annotated */
             {
                 bool any_uniq_mut = false;
-                for (uint8_t i = 0; i < n_args; i++) {
+                for (uint32_t i = 0; i < n_args; i++) {
                     if (arg_unique_mut_local[i]) { any_uniq_mut = true; break; }
                 }
                 if (any_uniq_mut) {
-                    for (uint8_t i = 0; i < n_args; i++) {
-                        fn_t->as.fn.arg_unique_mut[i] = arg_unique_mut_local[i];
+                    for (uint32_t i = 0; i < n_args; i++) {
+                        FN_ARG_SET(fn_t->as.fn, i, FA_UNIQUE_MUT, arg_unique_mut_local[i]);
                     }
                 }
             }
@@ -1555,12 +1555,12 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             /* ST0: Store arg_affine flags if any were annotated */
             {
                 bool any_aff = false;
-                for (uint8_t i = 0; i < n_args; i++) {
+                for (uint32_t i = 0; i < n_args; i++) {
                     if (arg_affine_local[i]) { any_aff = true; break; }
                 }
                 if (any_aff) {
-                    for (uint8_t i = 0; i < n_args; i++) {
-                        fn_t->as.fn.arg_affine[i] = arg_affine_local[i];
+                    for (uint32_t i = 0; i < n_args; i++) {
+                        FN_ARG_SET(fn_t->as.fn, i, FA_AFFINE, arg_affine_local[i]);
                     }
                 }
             }
@@ -1568,12 +1568,12 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             /* ST0: Store arg_relevant flags if any were annotated */
             {
                 bool any_rel = false;
-                for (uint8_t i = 0; i < n_args; i++) {
+                for (uint32_t i = 0; i < n_args; i++) {
                     if (arg_relevant_local[i]) { any_rel = true; break; }
                 }
                 if (any_rel) {
-                    for (uint8_t i = 0; i < n_args; i++) {
-                        fn_t->as.fn.arg_relevant[i] = arg_relevant_local[i];
+                    for (uint32_t i = 0; i < n_args; i++) {
+                        FN_ARG_SET(fn_t->as.fn, i, FA_RELEVANT, arg_relevant_local[i]);
                     }
                 }
             }
@@ -1833,7 +1833,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                               head_sym->name);
                     return NULL;
                 }
-                for (uint8_t i = 0; i < n_args; i++) {
+                for (uint32_t i = 0; i < n_args; i++) {
                     Type *a = type_expr_from_form(e, form->as.list.items[i + 1], rec_name,
                                                   type_params, type_param_kinds, n_type_params);
                     if (!a) return NULL;

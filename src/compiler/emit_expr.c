@@ -1099,7 +1099,7 @@ void emit_temp_decl(EmitCtx *ctx, Buf *body, Type type, const char *name, const 
         if (type.as.fn.arity == 0) {
             buf_puts(&argbuf, "void");
         } else {
-            for (uint8_t i = 0; i < type.as.fn.arity; i++) {
+            for (uint32_t i = 0; i < type.as.fn.arity; i++) {
                 if (i > 0) buf_puts(&argbuf, ", ");
                 buf_puts(&argbuf,
                          type_c_name(emit_type_from_kind(type.as.fn.arg_kinds[i])));
@@ -1340,7 +1340,7 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* For function pointer types, emit: <result> (*<name>)(<args...>) = <init>; */
             const char *ret_c = type_c_name(emit_type_from_kind(b->type.as.fn.result_kind));
             Buf argbuf; buf_init(&argbuf);
-            for (uint8_t j = 0; j < b->type.as.fn.arity; j++) {
+            for (uint32_t j = 0; j < b->type.as.fn.arity; j++) {
                 if (j > 0) buf_puts(&argbuf, ", ");
                 buf_puts(&argbuf,
                          type_c_name(emit_type_from_kind(b->type.as.fn.arg_kinds[j])));
@@ -1581,7 +1581,7 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         if (b->type.kind == TY_FN) {
             buf_printf(body, "%s (*%s)(",
                        type_c_name(emit_type_from_kind(b->type.as.fn.result_kind)), bn);
-            for (uint8_t j = 0; j < b->type.as.fn.arity; j++) {
+            for (uint32_t j = 0; j < b->type.as.fn.arity; j++) {
                 if (j > 0) buf_puts(body, ", ");
                 buf_printf(body, "%s",
                            type_c_name(emit_type_from_kind(b->type.as.fn.arg_kinds[j])));
@@ -2243,7 +2243,7 @@ static bool expr_is_pbp_param(EmitCtx *ctx, const Expr *struct_expr) {
     if (!ctx || !struct_expr || struct_expr->kind != EX_VAR) return false;
     Binding *b = struct_expr->as.var.binding;
     if (!b) return false;
-    for (uint8_t _i = 0; _i < ctx->n_pbp_params; _i++) {
+    for (uint32_t _i = 0; _i < ctx->n_pbp_params; _i++) {
         if (ctx->pbp_param_ptrs[_i] == b) return true;
     }
     return false;
@@ -2264,7 +2264,7 @@ bool emit_spec_arg_type_for_binding(EmitCtx *ctx, const struct Binding *b,
     const EmitAbiSpecialization *aspec = ctx->current_abi_specialization;
     if (!aspec || !aspec->fn) return false;
     FnDef *fd = aspec->fn;
-    for (uint8_t pi = 0; pi < fd->n_params && pi < aspec->n_args; pi++) {
+    for (uint32_t pi = 0; pi < fd->n_params && pi < aspec->n_args; pi++) {
         if (fd->params[pi] == b) {
             *out = aspec->arg_types[pi];
             /* R3 gate: a spec's monomorphized arg type must be concrete.  A
@@ -3187,7 +3187,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     char *raw = emit_value(ctx, body, e->as.call_.args[i]);
                     if (!phase_f_concrete) {
                         /* Generic carrier path: apply poly_arg_mask / needs_cast wrapping */
-                        if (e->as.call_.poly_arg_mask & (1u << i)) {
+                        if (e->as.call_.poly_arg_mask & ARG_IDX_BIT(i)) {
                             /* Phase HRT3: nested poly fn arg — pass by pointer as int64_t */
                             Buf cast; buf_init(&cast);
                             buf_printf(&cast, "(int64_t)(intptr_t)(&(%s))", raw);
@@ -4437,7 +4437,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * requires (void*)(intptr_t) coercion. Occurs when persistent-map
                  * lowering passes a map handle (int64_t) to hamt/count etc. */
                 if (!needs_fn_cast && fn_binding->type.kind == TY_FN) {
-                    uint8_t n_fnparams = fn_binding->type.as.fn.arity;
+                    uint32_t n_fnparams = fn_binding->type.as.fn.arity;
                     uint8_t param_idx = (i < n_fnparams) ? i : (uint32_t)(n_fnparams > 0 ? n_fnparams - 1 : 0);
                     TypeKind _pk = fn_binding->type.as.fn.arg_kinds[param_idx];
                     /* Bridge int64_t carrier to pointer when callee param is a pointer
@@ -4477,7 +4477,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
                 }
                 if (needs_fn_cast && fn_binding->type.kind == TY_FN) {
-                    uint8_t n_fnparams = fn_binding->type.as.fn.arity;
+                    uint32_t n_fnparams = fn_binding->type.as.fn.arity;
                     uint8_t param_idx = (i < n_fnparams) ? i : (uint32_t)(n_fnparams > 0 ? n_fnparams - 1 : 0);
                     TypeKind pk = fn_binding->type.as.fn.arg_kinds[param_idx];
                     /* Apply cast when param is int64_t in C: TY_INT, opaque TY_STRUCT
@@ -4553,9 +4553,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * void* fat carrier and the typeclass-dictionary slot types. */
                 if (needs_fn_cast && fn_binding->type.kind == TY_FN &&
                     fn_binding->body_is_inline_c) {
-                    uint8_t n_fnparams = fn_binding->type.as.fn.arity;
+                    uint32_t n_fnparams = fn_binding->type.as.fn.arity;
                     uint8_t param_idx = (i < n_fnparams) ? i : (uint32_t)(n_fnparams > 0 ? n_fnparams - 1 : 0);
-                    if (fn_binding->type.as.fn.arg_fat[param_idx])
+                    if (FN_ARG_FLAG(fn_binding->type.as.fn, param_idx, FA_FAT))
                         cast_to_void_ptr = false;
                 }
                 if (needs_fn_cast) {
@@ -4581,7 +4581,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
                 /* Phase HRT3: arg is a nested poly fn passed via int64_t pointer —
                  * dereference it back to tur_poly_fn_t for the direct call. */
-                if (e->as.call_.poly_arg_mask & (1u << i)) {
+                if (e->as.call_.poly_arg_mask & ARG_IDX_BIT(i)) {
                     Buf cast; buf_init(&cast);
                     buf_printf(&cast, "*(tur_poly_fn_t*)(intptr_t)(%s)", raw);
                     buf_putc(&cast, '\0');
@@ -4594,7 +4594,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * heap-box pointer to a by-value aggregate -- deref it back to
                  * the aggregate the callee parameter expects.  The target C type
                  * is the callee's own parameter full type. */
-                if (e->as.call_.poly_agg_arg_mask & (1u << i) &&
+                if (e->as.call_.poly_agg_arg_mask & ARG_IDX_BIT(i) &&
                     fn_binding && fn_binding->type.kind == TY_FN &&
                     fn_binding->type.as.fn.arg_full_types &&
                     i < fn_binding->type.as.fn.arity &&
@@ -4631,7 +4631,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * (carrier->concrete) bridges, so it is excluded here. */
                 if (!needs_fn_cast && fn_binding->type.kind == TY_FN && emit_arg &&
                     expr_emits_byvalue_carrier_abi(ctx, emit_arg)) {
-                    uint8_t n_fnparams = fn_binding->type.as.fn.arity;
+                    uint32_t n_fnparams = fn_binding->type.as.fn.arity;
                     uint8_t param_idx = (i < n_fnparams) ? i
                         : (uint32_t)(n_fnparams > 0 ? n_fnparams - 1 : 0);
                     TypeKind pk = fn_binding->type.as.fn.arg_kinds[param_idx];
@@ -4678,7 +4678,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     fn_binding->type.kind == TY_FN && emit_arg &&
                     emit_arg->type.kind == TY_APP &&
                     adt_app_is_byvalue_product(emit_arg->type)) {
-                    uint8_t n_fnparams = fn_binding->type.as.fn.arity;
+                    uint32_t n_fnparams = fn_binding->type.as.fn.arity;
                     uint8_t param_idx = (i < n_fnparams) ? (uint8_t)i
                         : (uint8_t)(n_fnparams > 0 ? n_fnparams - 1 : 0);
                     TypeKind pk = fn_binding->type.as.fn.arg_kinds[param_idx];
@@ -4754,7 +4754,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     fn_binding->type.kind == TY_FN && emit_arg) {
                     Type rarg = emit_resolve_type(ctx, emit_arg->type);
                     if (rarg.kind == TY_ADT && emit_type_is_byvalue_adt(ctx, rarg)) {
-                        uint8_t n_fnparams = fn_binding->type.as.fn.arity;
+                        uint32_t n_fnparams = fn_binding->type.as.fn.arity;
                         uint8_t param_idx = (i < n_fnparams) ? (uint8_t)i
                             : (uint8_t)(n_fnparams > 0 ? n_fnparams - 1 : 0);
                         TypeKind pk = fn_binding->type.as.fn.arg_kinds[param_idx];
@@ -5450,7 +5450,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             if (!already_emitted) {
                 Type thunk_result = emit_resolve_type(ctx, emit_fn_result_type_from_type(closure->fn->binding->type));
-                uint8_t thunk_arity = closure->fn->n_params > 0 ? (uint8_t)(closure->fn->n_params - 1) : 0;
+                uint32_t thunk_arity = closure->fn->n_params > 0 ? (uint32_t)(closure->fn->n_params - 1) : 0;
                 Type _rtp[MAX_FN_ARITY];
                 Type *thunk_params = closure->fn->n_params > 1 ? &closure->fn->param_types[1] : NULL;
                 if (thunk_params && thunk_sym_override) {
@@ -5514,7 +5514,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              *   thunk = (int64_t(*)(void*,int64_t))(intptr_t)fat->__fn
              * and invoke it as thunk(fat_ptr, arg). */
             Type thunk_result = emit_resolve_type(ctx, emit_fn_result_type_from_type(closure->fn->binding->type));
-            uint8_t thunk_arity = closure->fn->n_params > 0 ? (uint8_t)(closure->fn->n_params - 1) : 0;
+            uint32_t thunk_arity = closure->fn->n_params > 0 ? (uint32_t)(closure->fn->n_params - 1) : 0;
             Type _rtp2[MAX_FN_ARITY];
             Type *thunk_params = closure->fn->n_params > 1 ? &closure->fn->param_types[1] : NULL;
             if (thunk_params && thunk_sym_override) {
@@ -5573,7 +5573,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * caller's pointer (which would dangle once the frame returns).
                  * See docs/upcoming/stdlib-type-erasure-cleanup-plan.md (B5). */
                 bool captured_is_pbp = false;
-                for (uint8_t _p = 0; _p < ctx->n_pbp_params; _p++) {
+                for (uint32_t _p = 0; _p < ctx->n_pbp_params; _p++) {
                     if (ctx->pbp_param_ptrs[_p] == captured) {
                         captured_is_pbp = true;
                         break;
@@ -6964,7 +6964,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * shim's concrete-layout check recognizes a by-value aggregate
                  * return (a raw TY_APP has no by-value layout on its own). */
                 wres = emit_resolve_type(ctx, wres);
-                uint8_t warity = wbnd->type.as.fn.arity;
+                uint32_t warity = wbnd->type.as.fn.arity;
                 /* params after the env slot (index 0) */
                 Type wparams[MAX_FN_ARITY];
                 uint8_t nwp = 0;
@@ -6994,7 +6994,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_FN_TO_FAT: {
             const Expr *inner = e->as.fn_to_fat_.inner;
             Type fnty = inner->type;
-            uint8_t arity = (fnty.kind == TY_FN) ? fnty.as.fn.arity : 0;
+            uint32_t arity = (fnty.kind == TY_FN) ? fnty.as.fn.arity : 0;
 
             /* Emit the bare fn pointer value (typically the lifted fn's C name). */
             char *fnptr = emit_value(ctx, body, inner);
@@ -7614,7 +7614,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * with a NULL def) erases to the int64 carrier; anything else keeps
              * its concrete C type. */
             Buf sig; buf_init(&sig);
-            for (uint8_t j = 0; j < m->n_params; j++) {
+            for (uint32_t j = 0; j < m->n_params; j++) {
                 if (j > 0) buf_puts(&sig, ", ");
                 Type pt = m->param_types[j];
                 bool is_classvar =

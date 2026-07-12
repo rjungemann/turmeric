@@ -13,6 +13,13 @@
 #include "typeclass.h"  /* Phase 15: Typeclass constraints */
 #include "effect.h"    /* Phase 19: Algebraic effects */
 
+/* Bit for argument index `i` in a per-arg uint64 bitmask (poly_arg_mask,
+ * poly_agg_arg_mask).  Yields 0 for i >= 64 so ordinary functions with more
+ * than 64 parameters do not trigger an undefined shift -- their masks are 0,
+ * so no bit is ever needed past 63.  Only rank-2-poly/aggregate-carrier args
+ * set bits, and a single call carries at most 64 of those. */
+#define ARG_IDX_BIT(i) ((i) < 64 ? ((uint64_t)1 << (i)) : (uint64_t)0)
+
 /* Forward declarations. */
 typedef struct Expr        Expr;
 typedef struct Binding     Binding;
@@ -480,7 +487,7 @@ typedef enum ExprKind {
 struct FnDef {
     Binding        *binding;     /* name binding */
     Binding       **params;      /* param bindings */
-    uint8_t        n_params;
+    uint32_t       n_params;     /* bounded only by uint32_t -- no fixed arity cap */
     Type          *param_types;  /* param types (for codegen) */
     /* LS2: full declared return Type, including borrow lifetimes (&'a T).  The
      * binding's TY_FN only carries result_kind (a bare TypeKind), which loses
@@ -602,7 +609,7 @@ struct ExternC {
     Binding       *binding;     /* Turmeric binding (optional) */
     Type           return_type;
     Type          *param_types;
-    uint8_t        n_params;
+    uint32_t       n_params;     /* bounded only by uint32_t -- no fixed arity cap */
     bool           is_variadic;
     /* CT4: Contract pre/post-conditions on extern-c calls — NULL if not specified */
     const struct Form *pre_cond;   /* :pre predicate form, or NULL */
@@ -816,10 +823,15 @@ struct Expr {
                  struct Expr *fn_expr;
                  struct Expr *dict_arg;
                  bool is_poly_call;   /* Phase HRT1: call through rank-2 poly fn param */
-                 uint32_t poly_arg_mask; /* Phase HRT3: bitmask of args that are nested poly fns.
+                 /* Bitmasks over argument index.  64-bit: ordinary parameters
+                  * are unbounded (these masks stay 0 for non-poly calls), but a
+                  * single call can flag at most 64 rank-2-poly / aggregate-carrier
+                  * arguments.  Always index via ARG_IDX_BIT(i) so i >= 64 yields 0
+                  * rather than an undefined shift. */
+                 uint64_t poly_arg_mask; /* Phase HRT3: bitmask of args that are nested poly fns.
                                           * In poly_call: bit i → pass arg by pointer (stack-alloc).
                                           * In direct call: bit i → deref int64_t arg as tur_poly_fn_t*. */
-                 uint32_t poly_agg_arg_mask; /* Slice 3 (constrained-hkt-forall): in a poly-wrapper's
+                 uint64_t poly_agg_arg_mask; /* Slice 3 (constrained-hkt-forall): in a poly-wrapper's
                                               * direct inner call, bit i → the int64 arg is a heap-box
                                               * pointer to a by-value aggregate; deref it to the param type. */
                  AbiTypeBinding *abi_bindings; /* GS5/CS3: named-tyvar substitution captured at the call site;

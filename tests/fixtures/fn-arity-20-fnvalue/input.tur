@@ -1,0 +1,19 @@
+;; fn-arity-20-fnvalue -- pass a 20-arg function as a first-class fn value to a
+;; higher-order function, which saturates it.  Exercises a 20-slot :(fn [...] T)
+;; parameter type and the fn-value calling convention at high arity
+;; (arbitrary-fn-arity Phase 1/2 surface).
+(extern-c printf [^cstr fmt ^int v] :int)
+
+(defn sum20 [a : int b : int c : int d : int e : int
+             f : int g : int h : int i : int j : int
+             k : int l : int m : int n : int o : int
+             p : int q : int r : int s : int t : int] : int
+  {a + b + c + d + e + f + g + h + i + j + k + l + m + n + o + p + q + r + s + t})
+
+(defn apply20-ones [f : (fn [int int int int int int int int int int
+                             int int int int int int int int int int] int)] : int
+  (f 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1))
+
+(defn main [] : int
+  (printf "%lld\n" (apply20-ones sum20))
+  0)

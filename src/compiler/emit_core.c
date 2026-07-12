@@ -1617,7 +1617,7 @@ bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
                 ft->as.fn.result_full_type->kind == TY_TYVAR &&
                 ft->as.fn.result_full_type->as.tyvar_.name) {
                 const char *rname = ft->as.fn.result_full_type->as.tyvar_.name;
-                uint8_t np = ft->as.fn.arity;
+                uint32_t np = ft->as.fn.arity;
                 for (uint8_t pi = 0;
                      pi < np && pi < recv->as.call_.n_args; pi++) {
                     const Type *pft = ft->as.fn.arg_full_types[pi];
@@ -2225,7 +2225,7 @@ char *name_for_binding(EmitCtx *ctx, const Binding *b) {
     }
     /* Check if this binding is a function parameter in the current context */
     if (ctx->fn_params) {
-        for (uint8_t i = 0; i < ctx->n_fn_params; i++) {
+        for (uint32_t i = 0; i < ctx->n_fn_params; i++) {
             if (ctx->fn_params[i] == b) {
                 return raw_name_for_binding(b);
             }
@@ -3351,7 +3351,7 @@ Binding **collect_handle_captures(const Expr *body, uint32_t *n_out) {
                         for (uint32_t j = 0; j < n_icaps; j++) {
                             Binding *ib = icaps[j];
                             bool inner_local = (icase->k_binding && ib == icase->k_binding);
-                            for (uint8_t p = 0; p < icase->n_params && !inner_local; p++)
+                            for (uint32_t p = 0; p < icase->n_params && !inner_local; p++)
                                 if (icase->param_bindings && icase->param_bindings[p] == ib)
                                     inner_local = true;
                             if (!inner_local)

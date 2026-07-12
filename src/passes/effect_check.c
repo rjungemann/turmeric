@@ -144,7 +144,7 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
             row = effect_row_merge(a, row, single);
         }
         /* Also recurse into arguments. */
-        for (uint8_t i = 0; i < p->n_args; i++) {
+        for (uint32_t i = 0; i < p->n_args; i++) {
             row = collect_effects_in_expr(a, p->args[i], row, idx, env, subst);
         }
         return row;
@@ -224,7 +224,7 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
          * then apply the updated substitution when merging the callee's row. */
         if (callee && callee->params && callee->n_params > 0 &&
             e->as.call_.n_args > 0) {
-            uint8_t n_check = callee->n_params < (uint8_t)e->as.call_.n_args
+            uint32_t n_check = callee->n_params < (uint8_t)e->as.call_.n_args
                                 ? callee->n_params : (uint8_t)e->as.call_.n_args;
             for (uint8_t pi = 0; pi < n_check; pi++) {
                 Binding *param = callee->params[pi];
@@ -309,8 +309,14 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
         } else if (e->as.call_.fn_binding) {
             /* Callee not in the top-level index (e.g., a higher-order param).
              * If the binding's declared effect row has been resolved via the
-             * current substitution, contribute those effects. */
-            EffectRow *decl_row = e->as.call_.fn_binding->type.as.fn.effect_row;
+             * current substitution, contribute those effects.  Guard on TY_FN:
+             * a higher-order param may be a rank-N poly value (TY_FORALL), whose
+             * union member is not the fn record -- reading .as.fn.effect_row off
+             * a non-fn type yields a garbage pointer (surfaced when the Type
+             * union shrank under out-of-line fn arg storage). */
+            EffectRow *decl_row = e->as.call_.fn_binding->type.kind == TY_FN
+                ? e->as.call_.fn_binding->type.as.fn.effect_row
+                : NULL;
             if (decl_row) {
                 EffectRow *resolved = effect_row_apply_subst(decl_row, subst, a);
                 if (resolved && resolved->kind == ERK_CONCRETE) {
@@ -869,7 +875,7 @@ static int check_call_site_rows_in_expr(Arena *a, Expr *e,
         FnDef *callee = fn_index_lookup(idx, e->as.call_.fn_binding);
         if (callee && callee->params && callee->n_params > 0 &&
             e->as.call_.n_args > 0) {
-            uint8_t n_check = (callee->n_params < (uint8_t)e->as.call_.n_args)
+            uint32_t n_check = (callee->n_params < (uint8_t)e->as.call_.n_args)
                                 ? callee->n_params : (uint8_t)e->as.call_.n_args;
             for (uint8_t pi = 0; pi < n_check; pi++) {
                 Binding *param = callee->params[pi];
@@ -1160,7 +1166,7 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
          * When a parameter is annotated with :(fn [] #{e} :T), its type carries
          * an ERK_UNRESOLVED effect row that must be resolved here so that the
          * row-variable unification in collect_effects_in_expr can see ERK_VAR. */
-        for (uint8_t pi = 0; pi < fn->n_params; pi++) {
+        for (uint32_t pi = 0; pi < fn->n_params; pi++) {
             Binding *param = fn->params[pi];
             if (!param || param->type.kind != TY_FN) continue;
             EffectRow *pr = param->type.as.fn.effect_row;

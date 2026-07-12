@@ -1,0 +1,16 @@
+;; fn-arity-20-param -- a 20-positional-parameter defn.  Exercises the raised
+;; mechanical arity ceiling (arbitrary-fn-arity Phase 1: MAX_FN_ARITY = 64) and
+;; the TUR-W0041 soft-limit lint nudge for exceeding the historical cap of 16
+;; (Phase 6).  High hand-written arity stays discouraged -- this only verifies
+;; the escape hatch compiles, runs, and warns rather than hard-erroring.
+(extern-c printf [^cstr fmt ^int v] :int)
+
+(defn sum20 [a : int b : int c : int d : int e : int
+             f : int g : int h : int i : int j : int
+             k : int l : int m : int n : int o : int
+             p : int q : int r : int s : int t : int] : int
+  {a + b + c + d + e + f + g + h + i + j + k + l + m + n + o + p + q + r + s + t})
+
+(defn main [] : int
+  (printf "%lld\n" (sum20 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20))
+  0)

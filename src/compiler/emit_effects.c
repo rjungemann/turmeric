@@ -103,7 +103,7 @@ char *emit_effects_perform(EmitCtx *ctx, Buf *body, const Expr *e) {
         args_var_str = fresh_tmp(ctx);
         indent_buf(body, ctx->indent);
         buf_printf(body, "int64_t %s[%d];\n", args_var_str, perf->n_args);
-        for (uint8_t i = 0; i < perf->n_args; i++) {
+        for (uint32_t i = 0; i < perf->n_args; i++) {
             char *av = emit_value(ctx, body, perf->args[i]);
             indent_buf(body, ctx->indent);
             /* Store the arg into the int64 slot: Tier C by-value aggregate boxed,
@@ -230,7 +230,7 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
             Binding *b = case_caps[ci][j];
             bool is_local = false;
             if (c->k_binding && b == c->k_binding) is_local = true;
-            for (uint8_t p = 0; p < c->n_params && !is_local; p++)
+            for (uint32_t p = 0; p < c->n_params && !is_local; p++)
                 if (c->param_bindings && c->param_bindings[p] == b) is_local = true;
             if (!is_local) case_caps[ci][filtered++] = b;
         }
@@ -284,7 +284,7 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * pointer. */
                 bool is_param = false;
                 if (ctx->fn_params) {
-                    for (uint8_t pi = 0; pi < ctx->n_fn_params; pi++) {
+                    for (uint32_t pi = 0; pi < ctx->n_fn_params; pi++) {
                         if (ctx->fn_params[pi] == b) { is_param = true; break; }
                     }
                 }
@@ -346,7 +346,7 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
 
             /* Unpack effect arguments into named locals */
-            for (uint8_t j = 0; j < c->n_params; j++) {
+            for (uint32_t j = 0; j < c->n_params; j++) {
                 if (c->param_bindings && c->param_bindings[j]) {
                     const char *ctype = type_c_name(c->param_bindings[j]->type);
                     char *raw = raw_name_for_binding(c->param_bindings[j]);
@@ -841,7 +841,7 @@ char *emit_effects_handler_lit(EmitCtx *ctx, Buf *body, const Expr *e) {
     for (uint32_t j = 0; j < n_caps; j++) {
         Binding *b = caps[j];
         bool is_local = (c->k_binding && b == c->k_binding);
-        for (uint8_t p = 0; p < c->n_params && !is_local; p++)
+        for (uint32_t p = 0; p < c->n_params && !is_local; p++)
             if (c->param_bindings && c->param_bindings[p] == b) is_local = true;
         if (!is_local) caps[filtered++] = b;
     }
@@ -872,7 +872,7 @@ char *emit_effects_handler_lit(EmitCtx *ctx, Buf *body, const Expr *e) {
         Buf pend; buf_init(&pend);
         if (has_caps)
             buf_printf(&fn, "    %s *%s = (%s *)__env;\n", env_type, env_var, env_type);
-        for (uint8_t j = 0; j < c->n_params; j++) {
+        for (uint32_t j = 0; j < c->n_params; j++) {
             if (c->param_bindings && c->param_bindings[j]) {
                 const char *ct = type_c_name(c->param_bindings[j]->type);
                 char *raw = raw_name_for_binding(c->param_bindings[j]);

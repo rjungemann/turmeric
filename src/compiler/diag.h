@@ -114,6 +114,11 @@ typedef enum DiagCode {
      * call runs.  Likely a typo.  See
      * docs/archive/eval-mode-unknown-call-deferred-to-runtime.md. */
     TUR_W0040_EVAL_UNKNOWN_CALL_RUNTIME_DISPATCH,
+    /* arbitrary-fn-arity Phase 6: a defn/fn declares more positional parameters
+     * than the historical soft ceiling of 16.  Not an error -- the mechanical
+     * bound is now MAX_FN_ARITY (64) -- but a lint nudge toward the arity style
+     * guide (a defstruct options value or a `& rest :type` variadic). */
+    TUR_W0041_HIGH_ARITY,
     /* MS2: Multi-shot continuation capture analysis */
     TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,       /* ^multishot handler captures a unique/linear value */
     TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER,  /* ^multishot annotation outside a handler continuation */

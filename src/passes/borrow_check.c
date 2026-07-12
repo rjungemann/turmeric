@@ -152,7 +152,7 @@ static bool lifetime_check_fn_def(FnDef *fn) {
      * be an uninitialised value for a synthetic FnDef. */
     LifetimeContext lc;
     lifetime_context_init(&lc);
-    for (uint8_t i = 0; i < fn->n_params; i++) {
+    for (uint32_t i = 0; i < fn->n_params; i++) {
         collect_borrow_constraints(&lc, &fn->param_types[i]);
     }
     collect_borrow_constraints(&lc, &return_type);
@@ -221,7 +221,7 @@ static bool borrow_check_var(BorrowCheckCtx *ctx, const Expr *e) {
         if (hc->k_binding && b == hc->k_binding) {
             is_local = true;
         }
-        for (uint8_t i = 0; i < hc->n_params && !is_local; i++) {
+        for (uint32_t i = 0; i < hc->n_params && !is_local; i++) {
             if (hc->param_bindings && hc->param_bindings[i] == b) {
                 is_local = true;
             }
@@ -610,7 +610,7 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
         }
         case EX_PERFORM:
             /* Check perform arguments */
-            for (uint8_t i = 0; i < e->as.perform_.perform->n_args; i++) {
+            for (uint32_t i = 0; i < e->as.perform_.perform->n_args; i++) {
                 if (!borrow_check_expr_recursive(ctx, e->as.perform_.perform->args[i])) {
                     return false;
                 }
@@ -816,7 +816,7 @@ bool borrow_check_fn(BorrowCheckCtx *ctx, const FnDef *fn) {
 bool borrow_check_fn_signature(const FnDef *fn) {
     /* Validate that all borrow parameters have valid types */
     Span fn_span = fn->binding ? fn->binding->span : SPAN_UNKNOWN;
-    for (uint8_t i = 0; i < fn->n_params; i++) {
+    for (uint32_t i = 0; i < fn->n_params; i++) {
         Type param_type = fn->param_types[i];
         
         /* Check if parameter type is valid */
@@ -865,7 +865,7 @@ bool borrow_check_return_type(const FnDef *fn) {
             
             /* Check if this lifetime appears in any input parameter */
             bool found = false;
-            for (uint8_t j = 0; j < fn->n_params; j++) {
+            for (uint32_t j = 0; j < fn->n_params; j++) {
                 Type param_type = fn->param_types[j];
                 LifetimeId param_lifetimes[MAX_TYPE_LIFETIMES];
                 uint8_t n_param = 0;

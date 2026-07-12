@@ -214,7 +214,7 @@ static void audit_expr(const Expr *e, bool is_top,
 
     case EX_PERFORM: {
         const PerformExpr *p = e->as.perform_.perform;
-        if (p) for (uint8_t i = 0; i < p->n_args; i++) REC(p->args[i]);
+        if (p) for (uint32_t i = 0; i < p->n_args; i++) REC(p->args[i]);
         return;
     }
     case EX_RESUME:
