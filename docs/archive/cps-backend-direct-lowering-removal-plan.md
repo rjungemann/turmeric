@@ -1,13 +1,38 @@
 ---
 title: "Removing the direct lowering -- retiring emit_cps.c after cps-backend graduation"
-status: proposed
+status: landed
 parent: cps-backend-unification-plan.md
 description: The cps-backend experiment graduated (2026-07-11) -- the CT-IR CPS backend is now the default lowering for every emittable colored function, with the direct emitter (emit_cps.c) kept only as the eviction fallback. This plan sequences the SECOND, larger milestone: deleting the direct-style delimited-control LOWERING entirely. It is not one delete. Two distinct caller populations still reach the four lowering functions -- colored functions that evict residual shapes via CT_LETRAW, and uncolored/main/exported functions that dispatch straight to them because they are never CPS-emitted at all. This note names both, sequences closing them, and lists the exact deletes that follow.
 ---
 
 # Removing the direct lowering (emit_cps.c)
 
-## Where we are: graduation landed, deletion did not
+## Status (2026-07-12, v0.28.2): LANDED -- the direct lowering is deleted
+
+This plan is **complete**. Verified against the tree: `emit_cps.c` and
+`emit_cps.h` no longer exist; the four direct-style lowering functions
+(`emit_cps_reset`, `emit_cps_callcc`, `emit_cps_cloneable_reset`,
+`emit_cps_serial_reset`) are gone; the runtime lives in `emit_dk_runtime.{c,h}`;
+the syntactic prelude gates were relocated into `emit_module.c`
+(`preamble_uses_base_delimited` / `_callcc` / `_serial`); the
+`--dump-direct-lowering-callers` metric and `emit_cps_note_direct_caller` hook are
+removed. All phases below landed:
+
+- **D1** (colored-function eviction residue -> zero) -- DONE.
+- **D2** (CPS-emit uncolored/`main` delimited functions) -- DONE (both populations
+  at zero `-emit` reaches).
+- **D3** (delete the lowering functions) -- LANDED.
+- **D4** (delete the N6.5 carve-out) -- LANDED.
+- **D5** (retire the gates + delete `emit_cps.c` / `emit_cps.h`) -- LANDED.
+- **D6a/D6b** (retire/hard-error the legacy `emit_effects.c` delimited lowering,
+  `TUR-E0710` diagnostic) -- LANDED.
+
+The narrative below is retained as the historical record. The one deliberate
+survivor is the legacy `emit_effects.c` delimited path, now reduced to a
+diagnostic (`TUR-E0710`/`TUR-E0706`) plus the trivial correct fallbacks -- it is
+no longer a silent-miscompile risk (D6a) and is corpus-dead.
+
+## Where we are (historical): graduation landed, deletion did not
 
 The `cps-backend` experiment **graduated** on 2026-07-11
 ([graduation-readiness note](cps-backend-unification-graduation-readiness.md)):
@@ -92,11 +117,11 @@ gap is closed; the residual delegations are narrower, un-named tails:
 - **The generic `needs_heap_join` boundary** -- a non-tail cps->cps *call* on the
   heap chain. This is **not** delimited-control-specific: it is the whole C1
   emittable-subset boundary, shared with the five emittable-subset gap plans
-  ([non-scalar-values](../v1/cps-backend-non-scalar-values-plan.md),
-  [owning-pointers](../v1/cps-backend-owning-pointers-plan.md),
-  [tier-c-crossing](../v1/cps-backend-tier-c-crossing-plan.md),
-  [effectful-callbacks](../v1/cps-backend-effectful-callbacks-plan.md),
-  [generic-monomorph-classification](../v1/cps-backend-generic-monomorph-classification-plan.md)).
+  ([non-scalar-values](cps-backend-non-scalar-values-plan.md),
+  [owning-pointers](cps-backend-owning-pointers-plan.md),
+  [tier-c-crossing](cps-backend-tier-c-crossing-plan.md),
+  [effectful-callbacks](cps-backend-effectful-callbacks-plan.md),
+  [generic-monomorph-classification](cps-backend-generic-monomorph-classification-plan.md)).
 
 ### Population 2 -- uncolored / `main` / exported direct dispatch
 
@@ -181,7 +206,7 @@ native CT-IR path; no colored function delegates a delimited shape via CT_LETRAW
   paired with the value typing. Closes `cont-value-typed`.
 - **D1c -- context-grammar generalization.** Widen `collect_ctx` /
   `build_marshal_reset` to reify the remaining context shapes (the
-  [marshal-reset unification](cps-backend-unification-marshal-reset-unification-plan.md)
+  [marshal-reset unification](../upcoming/v2/cps-backend-unification-marshal-reset-unification-plan.md)
   is the natural home -- one `build_marshal_reset(..., serial)` covering both
   families).
 
@@ -395,7 +420,7 @@ Suite: 2142 passed, 0 failed.
 The N6 fallback-removal plan retained a **named carve-out** (N6.5) that keeps the
 delimited-control family routed to `emit_cps.c` because it was the sole emitter
 for those shapes (see
-[N6 plan](../v1/cps-backend-n6-fallback-removal-plan.md) N6.5). The goal: delete
+[N6 plan](cps-backend-n6-fallback-removal-plan.md) N6.5). The goal: delete
 the routing so "the CT-IR backend is the sole lowering for every colored
 function" becomes true without exception.
 
@@ -509,7 +534,7 @@ regression**: pre-D3 the DK direct lowering (`emit_cps_cloneable_reset`) reified
 the context correctly (103); deleting it dropped these shapes onto the buggy
 legacy path. D3's "0 corpus reaches" gate had a coverage blind spot (no fixture
 of the form `(op (non-atomic) (cloneable-shift))`). Full write-up:
-[docs/archive/history/cloneable-shift-nonatomic-operand-context-dropped.md](../../archive/cloneable-shift-nonatomic-operand-context-dropped.md).
+[docs/archive/history/cloneable-shift-nonatomic-operand-context-dropped.md](history/cloneable-shift-nonatomic-operand-context-dropped.md).
 
 This makes "retain the fallback" untenable and reframes the fork as
 correctness-first: fix the reachable shapes, and make anything still unsupported

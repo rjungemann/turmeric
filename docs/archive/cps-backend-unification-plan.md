@@ -1,10 +1,52 @@
 ---
 title: Unifying the two CPS backends (emit_cps.c + emit_cps_ir.c)
-status: proposed
+status: landed
 description: The compiler carries two independent CPS lowerings onto the shared DK multi-prompt runtime -- emit_cps.c (older whole-program transform owning the delimited-control family) and emit_cps_ir.c (newer per-function CT-IR backend owning colored effect functions). This plan folds emit_cps.c's delimited-control family into the CT-IR backend so there is one lowering, one classification, and one place the DK runtime is driven -- which also closes the N6.5 delimited-control fallback carve-out.
 ---
 
 # Unifying the two CPS backends
+
+## Status (2026-07-12, v0.28.2): LANDED -- the unification is done
+
+The umbrella goal is achieved: **`emit_cps.c` and `emit_cps.h` are deleted**, the
+CT-IR backend (`emit_cps_ir.c`) is the sole lowering for every colored function,
+and the N6.5 delimited-control carve-out is gone. Concretely, verified against the
+tree:
+
+- **U0** landed (inventory + oracle net) -- see
+  [u0-inventory](cps-backend-unification-u0-inventory.md).
+- **U1** (base reset/shift/shift0), **U2** (call/cc + escape), **U3** (cloneable),
+  **U4** (serial) native CT-IR emit all landed for the value-typed subset; the
+  base reset/shift gap is fully closed (nested + sibling resets) -- see
+  [u7-resetshift-gap](cps-backend-unification-u7-resetshift-gap.md).
+- **U5** landed as *placement only* -- async/await stay delegated via `CT_LETRAW`
+  onto the separate stackful fiber runtime; the stackless substrate migration is
+  out of scope -- see [u5-async-substrate](cps-backend-unification-u5-async-substrate-plan.md).
+- **U6/U7** landed: runtime relocated to `emit_dk_runtime.{c,h}`, the four
+  lowering functions deleted, the carve-out removed, and `emit_cps.c` deleted.
+  The `cps-backend` experiment **graduated 2026-07-11** (removed from
+  `EXPERIMENTS[]`; `g_opt_cps_backend` retired; `--enable=cps-backend` is now a
+  TUR-W0063 no-op) -- see
+  [graduation-readiness](cps-backend-unification-graduation-readiness.md) and the
+  full deletion sequence in
+  [direct-lowering-removal](cps-backend-direct-lowering-removal-plan.md) (phases
+  D1-D6 all landed).
+
+**Remaining follow-ups (code-health / out-of-scope, not unification blockers):**
+
+- The two native spine walks `build_cloneable` / `build_serial` are still
+  duplicated -- folding them into one `build_marshal_reset` is an open code-health
+  item (still `proposed`):
+  [marshal-reset-unification](../upcoming/v2/cps-backend-unification-marshal-reset-unification-plan.md).
+- The async stackful->stackless substrate migration is a decoupled, out-of-scope
+  initiative (U5 note).
+- Residual `CT_LETRAW` delegations (colored receivers, cstr/Serializable 2-arg
+  envs, and shapes outside the native context grammar) now fall to the legacy
+  `emit_effects.c` lowering, not `emit_cps.c` -- narrowing them further is
+  incremental, not structural.
+
+The phased narrative below is retained as the historical record of how the
+unification was carried out.
 
 ## 1. Where we are: two lowerings, one runtime
 
@@ -190,7 +232,7 @@ fallback until the final phase removes it.
   re-admitted the join-bearing shapes (the `CT_LETCONT` case), so they lower on
   DK under the experiment with `direct == cps`. Oracles:
   `cps-oracle-reset-join-escape`, `cps-oracle-reset-both-branch-shift`. Resolved
-  report: [docs/archive/history/direct-reset-shift-degrades-out-of-subset.md](../../archive/direct-reset-shift-degrades-out-of-subset.md).
+  report: [docs/archive/history/direct-reset-shift-degrades-out-of-subset.md](history/direct-reset-shift-degrades-out-of-subset.md).
 - **U2 -- call/cc + escape.** Port the `emit_cps_callcc_prelude` machinery.
   **Landed.** `(call/cc f)` / `(escape f)` (both `EX_CALLCC`) is an *undelimited*
   escape: its continuation is captured at a **local setjmp landing** that
@@ -221,7 +263,7 @@ fallback until the final phase removes it.
     `cps-oracle-escape-capture-in-shift-body`, `cps-oracle-escape-capture-after-handle`,
     `cps-oracle-escape-capture-in-handler-case`. (An owning-value capture still
     bails to the direct emitter -- not a Copy capture.) Resolved report:
-    [docs/archive/history/direct-capturing-escape-in-lifted-helper.md](../../archive/direct-capturing-escape-in-lifted-helper.md).
+    [docs/archive/history/direct-capturing-escape-in-lifted-helper.md](history/direct-capturing-escape-in-lifted-helper.md).
   - **Prelude gate hardened:** `uses_callcc` (the escape-continuation prelude
     gate) was missing many control/value forms (`shift`, `handle`, `perform`,
     `resume`, `match`, `async`, casts, ...), so an escape nested in one lost its
@@ -263,7 +305,7 @@ fallback until the final phase removes it.
   control/value forms, so a `cloneable-shift` nested under an operator
   (`(+ 1 (cloneable-reset ...))`) emits its `tur_cloneable_cont` prelude on both
   backends. Oracle: `cps-oracle-cloneable-nested-op`. Resolved report:
-  [docs/archive/history/cloneable-prelude-gate-misses-nested-shift.md](../../archive/cloneable-prelude-gate-misses-nested-shift.md).
+  [docs/archive/history/cloneable-prelude-gate-misses-nested-shift.md](history/cloneable-prelude-gate-misses-nested-shift.md).
 
   **Native emit -- Shape 1 landed.** The staged native port (see
   [cps-backend-unification-u3-native-emit-plan.md](cps-backend-unification-u3-native-emit-plan.md))
@@ -434,7 +476,7 @@ fallback until the final phase removes it.
 
   The two `build_*` walks are now byte-for-byte parallel and slated for
   unification into one `build_marshal_reset(..., serial)` -- see
-  [cps-backend-unification-marshal-reset-unification-plan.md](cps-backend-unification-marshal-reset-unification-plan.md).
+  [cps-backend-unification-marshal-reset-unification-plan.md](../upcoming/v2/cps-backend-unification-marshal-reset-unification-plan.md).
 - **U5 -- Async / await.** Port the scheduler wiring on top of the now-unified
   cloneable/serial base.
   **First slice landed (placement, not eviction).** Finding: `async` / `await` do
@@ -565,4 +607,4 @@ that N6 approaches asymptotically while the second backend exists.
 - The shared DK multi-prompt runtime -- unchanged.
 - `cps_ir.c` ANF/CPS IR + `collect_free_vars` / `collect_caps_rec` capture
   analysis -- extended with the new control forms.
-- Parent (v1): [cps-backend-n6-fallback-removal-plan.md](../v1/cps-backend-n6-fallback-removal-plan.md).
+- Parent (v1): [cps-backend-n6-fallback-removal-plan.md](cps-backend-n6-fallback-removal-plan.md).

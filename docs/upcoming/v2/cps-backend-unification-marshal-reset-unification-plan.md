@@ -7,6 +7,26 @@ description: The U3 (cloneable, multi-shot) and U4 (serial, marshalable) native 
 
 # Unify the cloneable / serial native spine walk
 
+## Status (2026-07-12, v0.28.2): STILL OPEN -- the last CPS-unification follow-up
+
+Verified against the tree: `build_cloneable` (`src/passes/cps_ir.c:401`) and
+`build_serial` (`:753`) remain two separate spine walks; **`build_marshal_reset`
+does not exist**. This is a pure code-health refactor and the one remaining open
+item from the broader CPS-backend unification (which is otherwise landed --
+`emit_cps.c` is deleted; see the
+[umbrella plan](../../archive/cps-backend-unification-plan.md)).
+
+Two references below are now stale in their surrounding context (the refactor
+itself is unaffected):
+
+- The "Interaction with the remaining U4 shapes" and "Non-goals" sections speak of
+  the `CT_LETRAW` cloneable/serial delegation as the fallback. That carve-out was
+  **removed in phase D4** ([direct-lowering-removal](../../archive/cps-backend-direct-lowering-removal-plan.md)):
+  a cloneable/serial shape outside the native subset now evicts the whole function
+  or emits `TUR-E0710`/`TUR-E0706`, and closure receivers went native. The
+  duplication this note targets is still real; only the "what the delegation
+  covers" framing changed.
+
 ## Why
 
 The native CT-IR emission of `cloneable-reset` (U3, multi-shot) and `serial-reset`

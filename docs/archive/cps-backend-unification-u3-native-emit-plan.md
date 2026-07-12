@@ -1,11 +1,31 @@
 ---
 title: "U3 core -- native CT-IR emission of cloneable (multi-shot) continuations"
-status: proposed
+status: landed
 parent: cps-backend-unification-plan.md
 description: The remaining core of U3 -- teaching the CT-IR backend to EMIT the cloneable multi-shot machinery itself (rather than delegating the whole cloneable-reset region to the direct emitter). Maps the two emit shapes, where the dk_copy_range multi-shot risk lives, and a staged path that keeps each step suite-green behind the delegation fallback.
 ---
 
 # U3 core -- native cloneable emission
+
+## Status (2026-07-12, v0.28.2): LANDED, and later superseded past its boundary
+
+U3's native port landed at the boundary described below (native owns the
+value-typed bare-fn-receiver subset; closure/colored receivers delegate). **Two
+of this note's forward-looking conclusions were later overtaken and are no longer
+accurate:**
+
+- The "Steps 6-7" conclusion that *"the `CT_LETRAW` cloneable delegation stays"*
+  and closure receivers are its principled permanent home was superseded by the
+  post-graduation removal work: **native closure receivers landed** (Shape 1 + Shape 2,
+  `receiver_expr` on `CT_CLONEABLE`; see the
+  [u7-readiness note](cps-backend-unification-u7-readiness-plan.md)), and the
+  cloneable/serial `CT_LETRAW` carve-out was **removed in phase D4** (see
+  [direct-lowering-removal](cps-backend-direct-lowering-removal-plan.md)). A
+  cloneable shape outside the native subset now evicts the whole function or emits
+  `TUR-E0710`, rather than routing a sub-region to `emit_cps.c` -- which no longer
+  exists.
+
+The staged-port narrative below is retained as U3's historical record.
 
 The U3 first slice delegates a whole `(cloneable-reset ...)` region to the
 direct emitter via `CT_LETRAW` (see the parent plan). That keeps colored

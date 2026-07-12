@@ -1,6 +1,6 @@
 ---
 title: "U5 async substrate: port await suspension onto the DK continuation machine"
-status: proposed
+status: "landed (placement slice); substrate migration out-of-scope / deferred"
 parent: cps-backend-unification-plan.md
 description: The U5 first slice (placement, not eviction) landed -- async/await delegate via CT_LETRAW so a colored function that awaits stays on the CT-IR path. The parent plan's deeper U5 goal ("port the scheduler wiring on top of the now-unified cloneable/serial base") turns out, on investigation, to be a large stackful->stackless coroutine migration that is DECOUPLED from the emit_cps.c retirement the rest of the plan drives. This note records the actual async architecture, corrects the inventory's inaccurate "rides cloneable/serial" claim, scopes the real port, and flags the open decision of whether it should happen at all.
 ---

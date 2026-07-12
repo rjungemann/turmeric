@@ -1,11 +1,23 @@
 ---
 title: "U7 readiness -- the emit_cps.c dependency surface and the cut sequence"
-status: proposed
+status: landed
 parent: cps-backend-unification-plan.md
 description: A call-graph-grounded assessment of what still depends on emit_cps.c, correcting the framing of U7. "Retire emit_cps.c" is not one delete -- the file holds TWO kinds of code: the direct-style LOWERING functions the CT-IR backend is replacing (deletable once native coverage is complete), and the RUNTIME PRELUDE emitters + shared helpers that the NATIVE CT-IR emit itself depends on (must be RELOCATED, not deleted). This note maps both, sequences the cut, and identifies the one U7-enabling slice that is safe today (relocating the runtime) vs the native gaps that are the real blockers (callcc, closure receivers).
 ---
 
 # U7 readiness -- cutting the emit_cps.c dependency
+
+## Status (2026-07-12, v0.28.2): LANDED -- the whole cut sequence completed
+
+Every step this note sequenced is done. Step 1 (relocate the runtime to
+`emit_dk_runtime.{c,h}`) landed; the native gaps in the readiness table are all
+closed; the `cps-backend` experiment **graduated 2026-07-11**, which removed the
+direct-dispatch callers this note flagged as the last blocker; and steps 3-5
+(delete the four lowering functions, remove the carve-out, delete `emit_cps.c` /
+`emit_cps.h`, retire the gates) landed as phases D3-D5 in the
+[direct-lowering-removal plan](cps-backend-direct-lowering-removal-plan.md).
+`emit_cps.c` no longer exists in the tree. The assessment below is the historical
+readiness map.
 
 ## The framing correction
 

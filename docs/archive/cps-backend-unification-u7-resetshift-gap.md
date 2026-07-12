@@ -1,6 +1,6 @@
 ---
 title: "U7 step 2 -- the base reset/shift native gap, mapped and sliced"
-status: in-progress
+status: landed
 parent: cps-backend-unification-u7-readiness-plan.md
 description: An empirically-grounded map of which base reset/shift shapes the CT-IR backend already emits natively vs still evicts to emit_cps.c's emit_cps_reset, correcting the readiness plan's stale "setjmp/longjmp escape path" framing. The escape/branch shapes are already native (U1); the residual was NESTED reset. Two slices landed: (1) nested reset via delim_ok CT_RESET admission, (2) SIBLING nested resets via collect_caps_rec walking CT_RESET/CT_SHIFT -- which corrected an earlier wrong guess that the sibling case needed a heap-reified join. The base reset/shift-specific gap is now closed.
 ---

@@ -1,6 +1,6 @@
 ---
 title: "CPS backend graduation readiness -- flip the default, then retire emit_cps.c"
-status: proposed
+status: landed
 parent: cps-backend-unification-plan.md
 description: A measurement-grounded assessment of what remains for the CT-IR CPS backend to become the DEFAULT (graduate the `cps-backend` experiment), and how that differs from RETIRING emit_cps.c. Headline finding: with `cps-backend` forced on across the entire fixture suite, every program still builds and runs correctly -- all 278 failures are `expected.c` codegen-snapshot churn, ZERO behavior/runtime/build failures. Graduation is gated on snapshot regeneration + a maintainer decision, not on correctness; the `expires_at` 0.29.0 contract is the forcing function.
 ---
@@ -71,19 +71,19 @@ full suite is green (2142/2142).**
   emitter's indirect-call block cast the fat-closure ENV pointer to a bare
   function pointer and jumped into (segfault). A capturing-closure shift receiver
   now evicts to the direct shift lowering (`indirect_callee_ok`, src/passes/cps_ir.c).
-  See [docs/archive/history/cps-continuation-substrate-miscompile.md](../../archive/cps-continuation-substrate-miscompile.md).
+  See [docs/archive/history/cps-continuation-substrate-miscompile.md](history/cps-continuation-substrate-miscompile.md).
 - `contract-nested` -- **RESOLVED.** A heap-join whose join body is itself a
   cps->cps tail call (`inner__cps(t0, k)`) lifted into a value-transform frame fn
   that has no `k` in scope (`'k' undeclared`). `needs_heap_join` now rejects a
   jbody containing a cps->cps tail call (`jbody_has_cps_tailcall`, emit_cps_ir.c),
   evicting the function to the direct emitter. See
-  [docs/archive/history/cps-heap-join-references-enclosing-k.md](../../archive/cps-heap-join-references-enclosing-k.md).
+  [docs/archive/history/cps-heap-join-references-enclosing-k.md](history/cps-heap-join-references-enclosing-k.md).
 - `hkt-stdlib-parser-instances` -- **RESOLVED.** A `CT_LETCONT` join-param SLOT
   was named by its raw `param.name` (a kebab-case `let` binder `first-results`,
   an invalid C identifier) while the join body referenced the same source binding
   via `name_for_binding` (mangled). The slot is now named via `cvar_cname`,
   matching the body. See
-  [docs/archive/history/cps-delegated-binder-raw-kebab-name.md](../../archive/cps-delegated-binder-raw-kebab-name.md).
+  [docs/archive/history/cps-delegated-binder-raw-kebab-name.md](history/cps-delegated-binder-raw-kebab-name.md).
 
 So the corrected headline is: graduation shipped with 3 pre-existing CPS
 lowering/emit bugs surfaced by making the CPS path the default (all orthogonal to
@@ -145,10 +145,17 @@ delivers more *value* and how milestone 2 becomes *possible*.
 
 ## The forcing function
 
-`cps-backend` is `XF_LIFECYCLE_PROTOTYPE`, introduced 0.27.1, **`expires_at`
-0.29.0** (current tree: 0.27.6). `expires_at` is a hard contract -- the release-cut
-skills refuse to bump past it until the row is graduated (deleted; feature always-on)
-or shelved. So the decision is due within ~2 minor releases: graduate, or shelve.
+`cps-backend` was `XF_LIFECYCLE_PROTOTYPE`, introduced 0.27.1, `expires_at`
+0.29.0. **This forcing function has been discharged: the row was graduated on
+2026-07-11** (removed from `EXPERIMENTS[]`; feature always-on; `--enable=cps-backend`
+now a TUR-W0063 no-op), well ahead of the 0.29.0 expiry (current tree: v0.28.2).
+`expires_at` is a hard contract -- the release-cut skills refuse to bump past it
+until the row is graduated or shelved -- and graduation satisfied it.
+
+Both milestones this note tracked are now landed: milestone 1 (become the default)
+graduated here, and milestone 2 (retire `emit_cps.c`) landed in full -- see
+[direct-lowering-removal](cps-backend-direct-lowering-removal-plan.md) (phases
+D1-D6). The material below is retained as the historical readiness assessment.
 
 ## Sequenced next steps toward graduation (milestone 1)
 
