@@ -1,0 +1,23 @@
+;; byvalue-struct-field-leak: a *bare* by-value struct/record local carrying an
+;; owning rc field must release that field at scope exit.  The `rc/of`-wrapped
+;; path gets this through the control block's drop_fn (see conv-byval-adt-rc-drop),
+;; but a plain by-value local never invoked drop glue -- so its rc field leaked
+;; (strong count stayed at 2).  This fixture pins the local-drop path: `use-it`
+;; binds a by-value `Own` local that does NOT escape, so its rc field is released
+;; when the let scope exits.
+
+(defstruct Own [r : rc<int> tag : int])
+
+;; o is a by-value local (needs_drop_glue via the rc field) that does not escape,
+;; so scope exit must release o.r.
+(defn use-it [ir : rc<int>] : int
+  (let [o (make-struct Own :r ir :tag 9)]
+    (.tag o)))
+
+(defn main [] : int
+  (let [inner (rc/of 10)]
+    (let [kept (rc/clone inner)]
+      (println (rc/strong-count kept))   ; 2 (inner + kept)
+      (use-it inner)                      ; inner moved into Own; released at scope exit
+      (println (rc/strong-count kept))   ; 1 if scope-exit drop fired (else 2 = leak)
+      0)))

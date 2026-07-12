@@ -4,6 +4,34 @@
 /* ---- file-local helper forward declarations ---- */
 static Expr *elab_set_deref(Elab *e, const Form *call, const Form *deref_form);
 
+/* byvalue-struct-field-leak: resolve a let-binding type to the by-value ADT
+ * (single-variant record product) whose owned rc/ref fields need a scope-exit
+ * release, or NULL when the type is not such a product.
+ *
+ * A bare by-value struct/record local carrying an `rc`/`ref`/`weak` field
+ * (needs_drop_glue) never invokes drop glue on its own -- only the
+ * `rc/of`-wrapped path does, through the control block's drop_fn.  So its owned
+ * fields leak at scope exit.  This gate mirrors the emit-side predicate for
+ * `emit_adt_byval_drop_glue`: a non-:heap, drop-gluey, single-ctor product laid
+ * out by value (adt_is_byvalue_product for a bare TY_ADT, or
+ * adt_app_is_byvalue_product for a concrete TY_APP monomorph).  A :heap ADT is a
+ * typed pointer whose fields are released elsewhere, so it is excluded. */
+static const AdtDef *elab_byval_drop_adt(Type t) {
+    const AdtDef *def = NULL;
+    if (t.kind == TY_ADT) {
+        def = t.as.adt_.def;
+        if (!def || !adt_is_byvalue_product(def)) return NULL;
+    } else if (t.kind == TY_APP) {
+        def = type_adt_app_def(&t);
+        if (!def || !adt_app_is_byvalue_product(t)) return NULL;
+    } else {
+        return NULL;
+    }
+    if (!def->needs_drop_glue || def->is_heap) return NULL;
+    if (def->n_ctors != 1) return NULL;
+    return def;
+}
+
 /* ---- internal define splicing ---- */
 
 /* splice_internal_defines -- rewrite a body window that may contain
@@ -1156,6 +1184,146 @@ Expr *elab_let(Elab *e, const Form *call) {
             }
             
             /* Update the body with new items */
+            body->as.do_.items = new_items;
+            body->as.do_.n = new_n;
+        }
+    }
+
+    /* byvalue-struct-field-leak: a *bare* by-value ADT/record local carrying
+     * owning rc/ref fields is never released at scope exit -- the drop glue that
+     * frees those fields (`drop_glue_tur_adt_<T>`) is only wired up on the
+     * `rc/of`-wrapped path, through the control block's drop_fn.  Mirror the
+     * rc-drop injection above and emit one scope-exit defer per owning field:
+     * `(defer (rc/drop (.f o)))` for an rc field, `(defer (drop! (.f o)))` for a
+     * ref field.  Guarded by the same moved / consumed filters so a local that
+     * escapes (returned, moved into a call, or explicitly consumed) is not
+     * double-dropped.  This path is disjoint from the rc-binding path above: a
+     * value wrapped in `rc/of` binds at type TY_RC and is handled there.
+     *
+     * `weak` fields are intentionally left to leak their control-block weak
+     * count: a weak reference is non-owning (it holds no payload), there is no
+     * scope-exit `weak`-decrement primitive to reuse here, and the reported
+     * defect is specifically about *owning* fields.  The rc/of drop-glue path
+     * still decrements weak fields via rc_weak_decrement. */
+    bool has_byval_drop_bindings = false;
+    for (uint32_t k = 0; k < n_binds; k++) {
+        if (elab_byval_drop_adt(binds[k].binding->type)) {
+            has_byval_drop_bindings = true;
+            break;
+        }
+    }
+
+    if (has_byval_drop_bindings && body && body->kind != EX_DO) {
+        Expr **items = (Expr **)arena_alloc(e->arena, 1 * sizeof(Expr *));
+        items[0] = body;
+        body = expr_new(e->arena, EX_DO, body->type, call->span);
+        body->as.do_.items = items;
+        body->as.do_.n = 1;
+    }
+
+    if (has_byval_drop_bindings && body && body->kind == EX_DO) {
+        /* Count owning fields across every eligible by-value local. */
+        uint32_t n_field_drops = 0;
+        for (uint32_t k = 0; k < n_binds; k++) {
+            const AdtDef *ad = elab_byval_drop_adt(binds[k].binding->type);
+            if (!ad) continue;
+            if (binding_moved_during_init[k] || binds[k].binding->is_moved ||
+                is_binding_consumed(body, binds[k].binding))
+                continue;
+            const CtorDef *ctor = ad->ctors[0];
+            for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                TypeKind fk = ctor->fields[fi].kind;
+                if (fk == TY_RC || fk == TY_REF || fk == TY_LREF)
+                    n_field_drops++;
+            }
+        }
+
+        if (n_field_drops > 0) {
+            uint32_t new_n = body->as.do_.n + n_field_drops;
+            Expr **new_items =
+                (Expr **)arena_alloc(e->arena, new_n * sizeof(Expr *));
+            memcpy(new_items, body->as.do_.items,
+                   body->as.do_.n * sizeof(Expr *));
+            uint32_t defer_idx = body->as.do_.n;
+
+            for (uint32_t k = 0; k < n_binds; k++) {
+                const AdtDef *ad = elab_byval_drop_adt(binds[k].binding->type);
+                if (!ad) continue;
+                if (binding_moved_during_init[k] || binds[k].binding->is_moved ||
+                    is_binding_consumed(body, binds[k].binding))
+                    continue;
+                const CtorDef *ctor = ad->ctors[0];
+                for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                    TypeKind fk = ctor->fields[fi].kind;
+                    if (fk != TY_RC && fk != TY_REF && fk != TY_LREF)
+                        continue;
+
+                    /* (.f o) -- read the owning field off the by-value local. */
+                    Type fld_ty = ctor->fields[fi].full_type
+                                      ? *ctor->fields[fi].full_type
+                                      : type_from_kind(fk);
+                    Expr *var_expr = expr_new(e->arena, EX_VAR,
+                                              binds[k].binding->type, call->span);
+                    var_expr->as.var.binding = binds[k].binding;
+                    Expr *get_field =
+                        expr_new(e->arena, EX_GET_FIELD, fld_ty, call->span);
+                    get_field->as.get_field_.struct_expr = var_expr;
+                    get_field->as.get_field_.field_idx = fi;
+                    get_field->as.get_field_.adt_def = ad;
+                    get_field->as.get_field_.adt_ctor = ctor;
+
+                    /* rc field -> (rc/drop (.f o)); ref field -> (drop! (.f o)).
+                     * Both mirror exactly what drop_glue_tur_adt_<T> emits for the
+                     * field (rc_strong_decrement + drain, or free). */
+                    Expr *drop_body = NULL;
+                    if (fk == TY_RC) {
+                        drop_body =
+                            expr_new(e->arena, EX_RC_DROP, TYPE_NIL, call->span);
+                        drop_body->as.rc_drop_.expr = get_field;
+                    } else {
+                        const BuiltinSpec *spec =
+                            builtin_lookup(e->sym_drop, fld_ty, 1);
+                        if (!spec) {
+                            diag_emit(DIAG_ERROR, call->span,
+                                      "internal error: drop! builtin not found "
+                                      "for by-value ADT owning field");
+                            rc = -1;
+                            break;
+                        }
+                        drop_body = expr_new(e->arena, EX_BUILTIN, TYPE_NIL,
+                                             call->span);
+                        drop_body->as.builtin.spec = spec;
+                        drop_body->as.builtin.n = 1;
+                        drop_body->as.builtin.args =
+                            (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+                        drop_body->as.builtin.args[0] = get_field;
+                    }
+
+                    Expr *defer_expr =
+                        expr_new(e->arena, EX_DEFER, TYPE_NIL, call->span);
+                    defer_expr->as.defer_.body = drop_body;
+
+                    /* Capture analysis: the drop body references the local. */
+                    uint32_t n_free = 0;
+                    Binding **free_vars =
+                        collect_free_vars(drop_body, NULL, 0, NULL, 0, &n_free);
+                    Binding **captures = NULL;
+                    uint8_t n_captures = 0;
+                    if (n_free > 0) {
+                        captures = (Binding **)arena_alloc(
+                            e->arena, n_free * sizeof(Binding *));
+                        memcpy(captures, free_vars, n_free * sizeof(Binding *));
+                        n_captures = (uint8_t)n_free;
+                    }
+                    free(free_vars);
+                    defer_expr->as.defer_.captures = captures;
+                    defer_expr->as.defer_.n_captures = n_captures;
+
+                    new_items[defer_idx++] = defer_expr;
+                }
+                if (rc != 0) break;
+            }
+
             body->as.do_.items = new_items;
             body->as.do_.n = new_n;
         }
