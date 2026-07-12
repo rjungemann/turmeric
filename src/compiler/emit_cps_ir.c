@@ -327,6 +327,45 @@ static bool shape_supported(const BuiltinSpec *sp) {
     }
 }
 
+/* Measurement helper (TUR_TRACE_EVICT readiness gate): find the first
+ * CT_UNSUPPORTED node in a translated function, so the eviction trace can name
+ * the residual form.  Not part of the admission logic (term_core_ok owns that);
+ * this only walks the tree to surface a `why` for the trace. */
+static const CTerm *first_unsupported(const CTerm *t) {
+    if (!t) return NULL;
+    const CTerm *r = NULL;
+    switch (t->kind) {
+        case CT_UNSUPPORTED: return t;
+        case CT_LETVAL:   return first_unsupported(t->as.letval.body);
+        case CT_LETPRIM:  return first_unsupported(t->as.letprim.body);
+        case CT_LETCALL:  return first_unsupported(t->as.letcall.body);
+        case CT_LETRAW:   return first_unsupported(t->as.letraw.body);
+        case CT_LETCONT:
+            r = first_unsupported(t->as.letcont.jbody);
+            return r ? r : first_unsupported(t->as.letcont.body);
+        case CT_IF:
+            r = first_unsupported(t->as.if_.then_);
+            return r ? r : first_unsupported(t->as.if_.else_);
+        case CT_RESET:
+            r = first_unsupported(t->as.reset.delim);
+            return r ? r : first_unsupported(t->as.reset.body);
+        case CT_SHIFT:    return first_unsupported(t->as.shift.body);
+        case CT_HANDLE:
+            r = first_unsupported(t->as.handle.delim);
+            if (r) return r;
+            for (uint32_t i = 0; i < t->as.handle.n_cases; i++) {
+                r = first_unsupported(t->as.handle.cases[i].case_body);
+                if (r) return r;
+            }
+            return first_unsupported(t->as.handle.body);
+        case CT_PERFORM:  return first_unsupported(t->as.perform.body);
+        case CT_RESUME:   return first_unsupported(t->as.resume.body);
+        case CT_CLONEABLE: return first_unsupported(t->as.cloneable.body);
+        case CT_CALLCC:   return first_unsupported(t->as.callcc.body);
+        default: return NULL;   /* CT_APPCONT / CT_TAILCALL: leaves */
+    }
+}
+
 static bool term_core_ok(const CTerm *t);
 static bool delim_ok(const CTerm *t);   /* reset-delim admission (permits KK_PROMPT delivery) */
 static bool letraw_ok(const CTerm *t);  /* CT_LETRAW soundness (owning-drop guard) */
@@ -3726,7 +3765,31 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         mono_emit = ok && (island_mono || se->mono_template);
     }
 
-    if (!mono_emit && (!se || !se->in_s)) return false;   /* fall back */
+    if (!mono_emit && (!se || !se->in_s)) {
+        /* N6.5 readiness measurement (TUR_TRACE_EVICT): for every COLORED function
+         * that falls back to the direct emitter, report WHY it was not admitted to
+         * the CPS set S, in a category that says whether the general whole-function
+         * fallback is being exercised (BODY-*) or the function is on a permanent,
+         * non-fallback routing (SIG-*: exported symbol / program entry / ABI-
+         * incompatible signature the direct emitter owns).  Deleting the general
+         * fallback (gate item 7) is only safe once BODY-* is empty modulo the
+         * delimited-control carve-out; this trace is how that gate is checked.
+         * Off by default (one getenv per evicted colored fn); no codegen effect. */
+        if (getenv("TUR_TRACE_EVICT") && fd->cps_colored) {
+            const char *nm = (fd->binding && fd->binding->name) ? fd->binding->name->name : "?";
+            const char *cat; const char *why = "";
+            if (fd->binding->c_export_name)                cat = "SIG-EXPORT";
+            else if (fn_is_main(fd) && !fn_is_d2b_main(fd)) cat = "SIG-MAIN";
+            else if (!fn_sig_ok(fd))                        cat = "SIG-REJECT";
+            else {
+                const CTerm *u = se ? first_unsupported(se->term) : NULL;
+                if (u) { cat = "BODY-UNSUPPORTED"; why = u->as.unsupported.why ? u->as.unsupported.why : "?"; }
+                else   cat = "BODY-STRUCT-OR-TAINT";
+            }
+            fprintf(stderr, "[EVICT] %-22s %s %s\n", cat, nm, why);
+        }
+        return false;   /* fall back */
+    }
 
     if (!g_fwd_done) { emit_forward_decls(ctx, file); g_fwd_done = true; }
 

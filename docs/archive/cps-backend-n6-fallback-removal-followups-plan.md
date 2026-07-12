@@ -1,19 +1,55 @@
 ---
 title: CPS backend N6 (gate item 7) -- remaining work to delete the fallback
 category: Planning
-status: open (N6.1-N6.4 landed; open: resuming-shift lowering, N6.5 fallback deletion)
-description: N6.1-N6.4 landed -- general control-op-free delegation, multi-case handle, multi-arg effects, shift0, capturing continuations (N6.3a-h), indirect calls, and the signature widening (nil/void return, effect-free and effectful TY_FN params). The colored-generic-monomorph lever shipped in its own plan. Two items remain before cps-backend satisfies graduation gate item 7: the resuming-SHIFT-body lowering (the sole open control-flow shape), and N6.5 -- deleting the general whole-function fallback with an explicit delimited-control carve-out.
+status: ARCHIVED / SUPERSEDED -- split into two follow-on plans (see "Findings 2026-07"). N6.1-N6.4 landed.
+description: ARCHIVED. N6.1-N6.4 landed. The two remaining items were found blocked as scoped and were split into their own plans -- resuming SHIFT (docs/upcoming/v1/cps-backend-n6-resuming-shift-plan.md) and N6.5 fallback deletion (docs/upcoming/v1/cps-backend-n6-fallback-deletion-plan.md). Full analysis in docs/reported/cps-backend-n6-fallback-followups-blocked.md.
 ---
 
-# CPS backend N6 -- remaining work
+# CPS backend N6 -- remaining work (ARCHIVED)
+
+## Findings 2026-07 -- both remaining tasks split into their own plans
+
+Executing this plan established that both remaining items are blocked as
+originally scoped; each is now its own follow-on plan:
+
+- **Task 1 -> [cps-backend-n6-resuming-shift-plan.md](../upcoming/v1/cps-backend-n6-resuming-shift-plan.md)**
+- **Task 2 (N6.5) -> [cps-backend-n6-fallback-deletion-plan.md](../upcoming/v1/cps-backend-n6-fallback-deletion-plan.md)**
+
+Full analysis + measurements:
+[cps-backend-n6-fallback-followups-blocked.md](../reported/cps-backend-n6-fallback-followups-blocked.md).
+
+- **Task 1 (resuming SHIFT) is not expressible.** Turmeric `shift` is abortive
+  on every path (interp `eval_abortive_shift`, direct `emit_effects_shift`,
+  CT-IR `cps_shift_body_kf` -- all emit `receiver(body_value)`), and the type
+  rule enforces the receiver's param type == the *body's* type, not a
+  continuation type. A receiver that invokes the continuation fails to
+  type-check (`TUR-E0001`). Making it work requires a non-abortive `shift`
+  across the type rule + interpreter + direct emitter -- the separate
+  first-class-continuations plan, not a CT-IR extension. No `direct == cps`
+  fixture is constructible until that lands.
+
+- **Task 2 (N6.5 delete the general fallback) is premature.** The general
+  whole-function fallback is still load-bearing for ~100 distinct colored
+  functions across the corpus (measured via the new `TUR_TRACE_EVICT` trace):
+  86 `BODY-STRUCT-OR-TAINT` + 15 `BODY-UNSUPPORTED`, whose residual forms are
+  ordinary (`while`/`set!` loops, capturing closures, `match`, ...) -- none are
+  resuming shifts or the delimited-control carve-out. (Plus ~428 permanent
+  `SIG-*` routings, which are ABI, not the fallback.) Deleting the fallback now
+  would hard-error ~100 working functions. N6.5 is gated on first closing the
+  `BODY-*` coverage gap; the trace is the readiness gate.
+
+Seed work that DID land: form-named `CT_UNSUPPORTED` diagnostics
+(`cps_form_name`/`unsupported_form`, `src/passes/cps_ir.c`) and the
+`TUR_TRACE_EVICT` categorized eviction trace (`src/compiler/emit_cps_ir.c`) --
+both internal, no codegen/fixture change.
 
 ## Context
 
 The measurement, the delegation lever, and the N6.1-N6.4 landings live in the
 archived parent,
-[cps-backend-n6-fallback-removal-plan.md](../../archive/cps-backend-n6-fallback-removal-plan.md).
+[cps-backend-n6-fallback-removal-plan.md](cps-backend-n6-fallback-removal-plan.md).
 Gate item 7 (from
-[cps-backend-non-scalar-values-plan.md](../../archive/cps-backend-non-scalar-values-plan.md))
+[cps-backend-non-scalar-values-plan.md](cps-backend-non-scalar-values-plan.md))
 makes the CPS backend the **sole** lowering for colored (may-capture) functions:
 no `CT_UNSUPPORTED` whole-function bail-out, no direct-vs-CPS dual path.
 
@@ -26,9 +62,9 @@ What already landed (all green, full suite passing at each slice):
   handler-case / shift-body / non-scalar / fn-value / owning captures).
 - **N6.4** indirect calls; signature widening -- nil/void return, effect-free
   `TY_FN` params, and effectful `TY_FN` callback params
-  ([archived](../../archive/cps-backend-effectful-callbacks-plan.md)). The
+  ([archived](cps-backend-effectful-callbacks-plan.md)). The
   colored-generic-monomorph classification (the last large sig lever) shipped in
-  its own [archived plan](../../archive/cps-backend-generic-monomorph-classification-plan.md).
+  its own [archived plan](cps-backend-generic-monomorph-classification-plan.md).
 
 Until N6.5 lands the fallback stays and coverage grows monotonically under the
 (now graduated, always-on) backend.
