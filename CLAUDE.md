@@ -43,17 +43,17 @@ If you find a resolved report sitting in `docs/reported/` (or a stray
 
 ## Test Suite Timeout -- STRICT RULE
 
-**Every single test suite run, NO EXCEPTIONS, MUST be invoked with a 10
-minute (600000ms) timeout.** This applies to `bash tests/run.sh`, any
+**Every single test suite run, NO EXCEPTIONS, MUST be invoked with a 12
+minute (720000ms) timeout.** This applies to `bash tests/run.sh`, any
 ctest invocation, any spice-side suite, any subset run, every time.
 
-- `Bash` tool: pass `timeout: 600000`.
-- Shell directly: wrap in `timeout 600 ...` (or platform equivalent).
+- `Bash` tool: pass `timeout: 720000`.
+- Shell directly: wrap in `timeout 720 ...` (or platform equivalent).
 
-If a test suite run is invoked without a 10-minute timeout, you have
+If a test suite run is invoked without a 12-minute timeout, you have
 failed the rule -- stop, cancel, and re-run with the timeout. No
 exceptions for "quick" runs, no exceptions for "just one fixture", no
-exceptions for "I'll be fast." Always 10 minutes.
+exceptions for "I'll be fast." Always 12 minutes.
 
 ## No Lazy `:int` Stand-Ins -- STRICT RULE
 
