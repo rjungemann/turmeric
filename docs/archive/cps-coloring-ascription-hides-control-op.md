@@ -1,5 +1,25 @@
 # CPS coloring does not see a control op nested inside a type ascription
 
+**RESOLVED (2026-07-12):** Added an `EX_ASCRIBE` case that descends into
+`e->as.ascribe_.inner` to the three coloring traversals in
+`src/passes/cps.c` -- `cps_expr_contains_shift`, `cps_directly_uses_control`
+(the seed scan), and `cps_collect_calls` (call-graph edges). A control op
+reachable only through `(:: <control-op> T)` is now seen: the seed scan colors
+the enclosing function, and a call inside an ascription now contributes a
+call-graph edge. Verified with the report's repro: before, `use-ask`
+(whose only `perform` sits inside `(:: (perform (Ask)) :int)`) dumped as
+`use-ask uncolored`; after, `use-ask COLORED`. The CPS-IR-to-C backend has
+since graduated to always-on (the `--enable=cps-backend` flag was removed in
+#658), so the fixture guards the fix with `--dump-cps-coloring` (asserting
+`use-ask: colored`) rather than the retired flag; the program prints `42` on
+both the CPS and fiber paths. Regression fixture:
+`tests/fixtures/cps-backend-ascribe-only-control/`.
+
+Note: this fix covers the CPS *coloring* traversals only. The sibling
+handler-reachability analysis (TUR-W0033) has the same ascription-descent gap
+-- it still warns "handler clause for 'Ask' is unreachable" on this shape, a
+false positive filed separately.
+
 **Severity:** low (coverage gap for the CPS-IR-to-C backend, not a miscompile:
 the direct-style / fiber path still handles such functions correctly).
 

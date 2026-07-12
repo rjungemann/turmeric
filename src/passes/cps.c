@@ -130,6 +130,10 @@ bool cps_expr_contains_shift(const Expr *e) {
                 if (cps_expr_contains_shift(e->as.program.items[i])) return true;
             }
             return false;
+        case EX_ASCRIBE:
+            /* Type ascription is erased at codegen; a control op reachable only
+             * through (:: <control-op> T) must still be seen by coloring. */
+            return cps_expr_contains_shift(e->as.ascribe_.inner);
         default:
             return false;
     }
@@ -361,6 +365,10 @@ static bool cps_directly_uses_control(const Expr *e) {
                 if (cps_directly_uses_control(e->as.dynvar_binding_.pairs[i].override_expr))
                     return true;
             return cps_directly_uses_control(e->as.dynvar_binding_.body);
+        case EX_ASCRIBE:
+            /* Ascription is erased at codegen; seed on a control op that is
+             * only reachable through (:: <control-op> T). */
+            return cps_directly_uses_control(e->as.ascribe_.inner);
         /* Nested function definitions are call-graph boundaries. */
         case EX_FN_DEF:
         case EX_FN:
@@ -494,6 +502,11 @@ static void cps_collect_calls(const Expr *e, CpsNode *nodes, uint32_t n_nodes,
             return;
         case EX_CATCH_PANIC_OF:
             cps_collect_calls(e->as.catch_panic_of_.thunk, nodes, n_nodes, self);
+            return;
+        case EX_ASCRIBE:
+            /* Ascription is erased at codegen; descend so a call inside
+             * (:: <expr> T) still contributes a call-graph edge. */
+            cps_collect_calls(e->as.ascribe_.inner, nodes, n_nodes, self);
             return;
         /* Nested function definitions are call-graph boundaries. */
         case EX_FN_DEF:

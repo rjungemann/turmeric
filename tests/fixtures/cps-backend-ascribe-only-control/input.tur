@@ -1,0 +1,25 @@
+;; CPS coloring coverage: a control op reachable ONLY through a type ascription.
+;;
+;; `use-ask` performs Ask, but the ONLY occurrence of `perform` sits inside a
+;; `(:: (perform (Ask)) :int)` ascription -- there is no sibling control op to
+;; seed the function.  Ascription is erased at codegen, so cps.c's coloring
+;; traversals (cps_directly_uses_control / cps_expr_contains_shift /
+;; cps_collect_calls) must descend into `ascribe_.inner`; otherwise the
+;; function is left uncolored and the (always-on) CPS-IR-to-C backend never
+;; considers it (it silently stays on the fiber path).  See
+;; docs/archive/cps-coloring-ascription-hides-control-op.md.
+;;
+;; use-ask = 1 + (resume 41) = 1 + 41 = 42; the handle value is 42.
+
+(defeffect Ask [] :int)
+
+(defn use-ask [] : int
+  (+ 1 (:: (perform (Ask)) :int)))
+
+(defn run [] : int
+  (handle (use-ask)
+    (Ask [] k) (resume k 41)))
+
+(defn main [] : int
+  (println (run))
+  0)
