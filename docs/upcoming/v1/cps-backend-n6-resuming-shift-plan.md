@@ -1,8 +1,8 @@
 ---
 title: Resumable delimited control -- one substrate (k-reset / k-shift)
 category: Planning
-status: in progress -- slices 1-4 LANDED (k-reset/k-shift on the cloneable substrate; (k v) sugar via `k : cont`; single-shot via `^linear k : cont`, compile-time TUR-E0101; typed `Cont<BodyT,ResetT>` via `(cont BodyT ResetT)`, resume-value checked). Open: retiring abortive shift + cloneable/serial into this surface, optional lighter single-shot runtime.
-description: Split out of cps-backend-n6-fallback-removal-followups-plan.md (Task 1). Rather than reinterpret the abortive `shift` (breaking ~36 fixtures + the interpreter), add a NEW resumable delimited-control surface (`k-reset` / `k-shift`) that lowers to the SAME substrate the cloneable/serial variants already use -- the DK machine in compiled code, the reified-context TuriCont in the interpreter. Abortive `shift`/`shift0`, `cloneable-*`, and `serial-*` are then capability-specializations that retire into this one primitive over time.
+status: in progress -- slices 1-4 LANDED (k-reset/k-shift on the cloneable substrate; (k v) sugar via `k : cont`; single-shot via `^linear k : cont`, compile-time TUR-E0101; typed `Cont<BodyT,ResetT>` via `(cont BodyT ResetT)`, resume-value checked). Consolidation OPEN: abortive shift CANNOT be simply retired (it is the dynamic-abort lowering; a desugar to k-shift regresses cross-function + non-subset contexts -- see docs/reported/abortive-shift-retirement-blocked.md); cloneable/serial folding is a genuine unification; optional lighter single-shot runtime.
+description: Split out of cps-backend-n6-fallback-removal-followups-plan.md (Task 1). Rather than reinterpret the abortive `shift` (breaking ~36 fixtures + the interpreter), add a NEW resumable delimited-control surface (`k-reset` / `k-shift`) that lowers to the SAME substrate the cloneable/serial variants already use -- the DK machine in compiled code, the reified-context TuriCont in the interpreter. `cloneable-*` and `serial-*` are capability-specializations that fold into this primitive; abortive `shift`/`shift0` is a distinct dynamic-abort lowering that the unified SURFACE routes to (not deletes) -- see Consolidation.
 ---
 
 # Resumable delimited control -- one substrate
@@ -12,17 +12,19 @@ description: Split out of cps-backend-n6-fallback-removal-followups-plan.md (Tas
 The abortive `shift` is not made resumable in place -- that would reinterpret
 every existing `(shift (fn [v] ...) body)` site (~36 fixtures + the turi
 interpreter tests) and change core semantics. Instead we add a **new resumable
-surface** and, over time, retire the older forms into it.
+surface** and, over time, unify the surfaces.
 
 Guiding realization (the whole reason this is one plan, not four): resumable
 delimited control is **already one substrate**. In compiled code the DK machine
 (`dk_shift` / `dk_invoke` / `dk_copy_range`, `src/compiler/emit_dk_runtime.c`)
-backs abortive shift, cloneable, and serial alike -- the differences are
-*properties of the captured continuation* (single-shot vs cloneable/multi-shot
-vs marshalable), not different mechanisms. In the interpreter the reified-context
-`TuriCont` / `TsFrame` capture (`src/turi/eval.c:1601+`) already backs both
-cloneable and serial. The new surface reuses both; it does not add a fifth
-machine.
+backs abortive shift, cloneable, and serial alike. But note the two *lowerings*
+are genuinely different in reach: abortive is a **dynamic abort** (works
+cross-function, any context, no reification), while cloneable/serial/k-shift
+**reify the context syntactically** to make `k` resumable (lexically scoped,
+subset-restricted). So the continuation *capability* (single-shot / clone /
+marshal) is one axis, but abort-vs-reify is a second, real axis -- unifying the
+surface keeps **both** lowerings underneath (see Consolidation). The new surface
+reuses the existing machinery; it does not add a fifth machine.
 
 ## The new surface -- `k-reset` / `k-shift`
 
@@ -128,24 +130,36 @@ so every existing signature is unaffected.
 
 ## Consolidation (the retirement path -- OPEN, larger)
 
-Once slices 2-4 land and `k-reset`/`k-shift` are the ergonomic primitive:
+- **Abortive `shift` -- NOT a simple desugar (investigated 2026-07; see
+  [abortive-shift-retirement-blocked.md](../../reported/abortive-shift-retirement-blocked.md)).**
+  The naive "abortive shift == k-shift whose receiver ignores `k`" desugar
+  regresses well over a third of the abortive corpus: abortive aborts
+  *dynamically* (works cross-function and under arbitrary contexts), whereas
+  k-shift/cloneable reifies the context *syntactically* -- so a cross-function
+  abortive shift becomes `TUR-E0016` and a non-subset context becomes
+  `TUR-E0710` (both proven empirically; ~13 of ~36 fixtures are cross-function
+  alone). The abortive lowering is therefore **load-bearing, not redundant**;
+  deleting `eval_abortive_shift` / `emit_effects_shift` is wrong.
 
-- **Abortive `shift`** becomes sugar: an abortive shift is a `k-shift` whose
-  receiver ignores `k` and whose value aborts the prompt. Steps: (a) re-express
-  `elab_shift`/`elab_shift0` in terms of the k-shift path, (b) migrate the ~36
-  abortive fixtures + the turi tests, (c) delete the abortive-specific interp
-  (`eval_abortive_shift`) and emit (`emit_effects_shift`) paths. Done when no
-  abortive-specific lowering remains and the suite is green.
+  The correct end state is **surface unification with dual lowering**: one
+  `shift`/`reset` keyword pair, routed by whether the receiver uses its
+  continuation -- ignore-`k` -> the abortive DK fast-path (dynamic,
+  cross-function); resume-`k` -> the reified-context path (today's cloneable,
+  lexically scoped) or the CT-IR DK-subk threading for cross-function resume.
+  Both runtimes stay; only the surface collapses. This is a real design effort,
+  not a fixture migration.
 - **cloneable-shift / serial-shift** become `k-shift` with a *continuation
   capability* (cloneable = multi-shot clone; serial = marshalable). The capture
   machinery is already shared; only the capability annotation differs. Collapse
   the three receiver-lowering paths into one. Done when `cloneable-*`/`serial-*`
   are thin capability annotations over the k-shift path, not separate pipelines.
+  (This one is a genuine unification -- all three already use the reified-context
+  path -- unlike the abortive case above.)
 
-The end state is a single delimited-control primitive with a capability knob on
-the continuation -- the "one substrate" this plan is named for. Each retirement
-step is independently landable and suite-gated; none is a prerequisite for the
-others.
+The end state is a single delimited-control *surface* with a capability knob on
+the continuation and two lowerings underneath (dynamic-abort vs reified-resume) --
+the "one substrate" this plan is named for. Each step is independently landable
+and suite-gated.
 
 ## Where this came from
 
