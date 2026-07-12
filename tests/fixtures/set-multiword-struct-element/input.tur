@@ -1,28 +1,30 @@
 ;; collection-multiword-element-boxing (Set element): a MULTI-WORD by-value
-;; :copy struct element (Point, 16 bytes) in a Set is just a boxed MapKey -- Set
-;; content-keys its elements through Hash[A] + MapKey[A] exactly like a Map key,
-;; so a struct element falls out of the same WKC2 boxed-key + owned=1 path with
-;; no Set-specific work.  mk-cmp uses the GENERIC size-aware comparator
-;; tur_hamt_box_key_eq (no per-struct comparator).  Content-equal elements dedup
-;; to one member; Eq[Set] threads the same comparator (all LSan clean).
+;; :copy struct element (Point, 16 bytes) in a Set is a boxed MapKey -- Set
+;; content-keys through Hash[A] + MapKey[A] exactly like a Map key.  Works on
+;; BOTH the compiled and interpreter paths via #?(:tur ... :turi ...) reader
+;; conditionals (see map-multiword-struct-key for the mechanism).  The set _eq_o
+;; interpreter natives handle the struct comparator symmetrically with the map
+;; natives, so membership, dedup, and structural Eq[Set] all agree bit-for-bit.
 ;;
-;; Inline-c carve-out: the interpreter cannot run the inline-C instance bodies,
-;; so run-turi.sh skips this fixture automatically.
+;; Runs on both paths (whitelisted in tests/run-turi.sh TURI_INLINEC_RUN).
 (load "stdlib/typeclass.tur")
 
 (defstruct Point :copy [x : int y : int])
 
 (definstance Hash [Point]
   (hash [p] : int
-    ```c return (int64_t)tur_hamt_hash_xxh64((const void*)&p, sizeof(p)); ```))
+    #?(:tur ```c return (int64_t)tur_hamt_hash_xxh64((const void*)&p, sizeof(p)); ```
+       :turi (struct-hash p))))
 (definstance Eq [Point]
   (eq? [a b] (and (= (.x a) (.x b)) (= (.y a) (.y b)))))
 (definstance MapKey [Point]
   (mk-box [p] : int
-    ```c return (int64_t)(intptr_t)tur_hamt_box_key((const void*)&p, sizeof(p)); ```)
+    #?(:tur ```c return (int64_t)(intptr_t)tur_hamt_box_key((const void*)&p, sizeof(p)); ```
+       :turi p))
   (mk-cmp [p] : int
-    ```c return (int64_t)(intptr_t)&tur_hamt_box_key_eq; ```)
-  (mk-owned? [p] 1))
+    #?(:tur ```c return (int64_t)(intptr_t)&tur_hamt_box_key_eq; ```
+       :turi (struct-key-cmp)))
+  (mk-owned? [p] #?(:tur 1 :turi 0)))
 
 (defn main [] : int
   (let [s (set-add1 (set-add1 (:: (set-new) (Set Point)) (Point 1 2)) (Point 3 4))]
@@ -30,9 +32,7 @@
     (println (if (set-member? s (hash (Point 3 4)) (Point 3 4)) "in" "out"))   ;; in
     (println (if (set-member? s (hash (Point 9 9)) (Point 9 9)) "in" "out"))   ;; out
     (println (show (set-count s)))                                             ;; 2
-    ;; content dedup: re-adding an equal-content element does not grow the set
-    (println (show (set-count (set-add1 s (Point 1 2)))))                       ;; 2
-    ;; structural Eq[Set]
+    (println (show (set-count (set-add1 s (Point 1 2)))))                       ;; 2 -- dedup
     (let [a (set-add1 (:: (set-new) (Set Point)) (Point 5 6))
           b (set-add1 (:: (set-new) (Set Point)) (Point 5 6))
           c (set-add1 (:: (set-new) (Set Point)) (Point 7 8))]

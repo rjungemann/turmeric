@@ -65,6 +65,7 @@
 #include "arena.h"
 #include "buf.h"
 #include "builtins.h"
+#include "runtime/hamt.h"   /* tur_hamt_hash_str -- struct-key content hash */
 #include "diag.h"
 #include "elab.h"
 #include "expr.h"
@@ -566,6 +567,87 @@ static TuriValue make_struct_val_def(TuriEnv *env, const char *name, uint32_t n,
     s->fields   = n ? (TuriValue *)turi_val_alloc(env, n * sizeof(TuriValue)) : NULL;
     for (uint32_t i = 0; i < n; i++) s->fields[i] = fields[i];
     return turi_struct_val(s);
+}
+
+/* collection-multiword-element-boxing (interpreter parity): a GENERIC content
+ * comparator for two struct/ADT KEYS, the interpreter analogue of the compiled
+ * runtime's tur_hamt_box_key_eq.  A multi-word struct Map key / Set element uses
+ * a `MapKey` `mk-cmp` #?(:turi ...) branch that returns the ADDRESS of this
+ * function (via the `struct-key-cmp` native), so it is a stampable
+ * bool(int64,int64) C function pointer -- exactly like the primitive cstr/float
+ * comparators.  Being a real C fn ptr (not a Turmeric closure) means it is
+ * stamped on the HAMT root by the _eq_o path and RECOVERED by tur_hamt_keyeq, so
+ * structural Eq[Map]/Eq[Set] over struct keys work in the interpreter, not just
+ * assoc/get/member.  The two int64 args are the stored key carriers, which for a
+ * struct key (mk-box :turi returns the struct itself) are TuriStruct pointers;
+ * compare their field content recursively (mirroring the compiled byte compare
+ * over the copied key bytes). */
+static bool turi_key_content_eq(TuriValue x, TuriValue y) {
+    if (x.tag != y.tag) return false;
+    switch (x.tag) {
+        case TURI_INT:    return x.as_int == y.as_int;
+        case TURI_BOOL:   return x.as_bool == y.as_bool;
+        case TURI_FLOAT:  return x.as_float == y.as_float;
+        case TURI_NIL:    return true;
+        case TURI_CSTR:
+            return x.as_cstr == y.as_cstr ||
+                   (x.as_cstr && y.as_cstr && strcmp(x.as_cstr, y.as_cstr) == 0);
+        case TURI_STRUCT: {
+            const TuriStruct *sa = x.as_struct, *sb = y.as_struct;
+            if (sa == sb) return true;
+            if (!sa || !sb || sa->n_fields != sb->n_fields) return false;
+            if (sa->name && sb->name && strcmp(sa->name, sb->name) != 0)
+                return false;
+            for (uint32_t i = 0; i < sa->n_fields; i++)
+                if (!turi_key_content_eq(sa->fields[i], sb->fields[i]))
+                    return false;
+            return true;
+        }
+        default:          return x.as_int == y.as_int;   /* pointer identity */
+    }
+}
+
+bool turi_struct_key_eq_c(int64_t a, int64_t b) {
+    if (a == b) return true;
+    if (!a || !b) return false;
+    TuriValue x = turi_struct_val((TuriStruct *)(intptr_t)a);
+    TuriValue y = turi_struct_val((TuriStruct *)(intptr_t)b);
+    return turi_key_content_eq(x, y);
+}
+
+/* Companion generic content hash for a struct/ADT KEY (the interpreter analogue
+ * of the compiled `tur_hamt_hash_xxh64(&p, sizeof p)`).  A `Hash` :turi branch
+ * returns `(struct-hash p)` so the interpreter hash is uniform per struct -- no
+ * per-field expression.  A splitmix64-style fold over each field's content; the
+ * exact value need only be deterministic within an interpreter run (hashes never
+ * cross the compiled/interpreted boundary, and equal-content keys hash equally
+ * because equal fields fold identically). */
+static uint64_t turi_key_content_hash(TuriValue v) {
+    uint64_t h;
+    switch (v.tag) {
+        case TURI_INT:   h = (uint64_t)v.as_int; break;
+        case TURI_BOOL:  h = v.as_bool ? 1u : 0u; break;
+        case TURI_FLOAT: { union { double d; uint64_t u; } u; u.d = v.as_float; h = u.u; break; }
+        case TURI_NIL:   h = 0; break;
+        case TURI_CSTR:  h = v.as_cstr ? tur_hamt_hash_str(v.as_cstr) : 0; break;
+        case TURI_STRUCT: {
+            const TuriStruct *s = v.as_struct;
+            h = s && s->name ? tur_hamt_hash_str(s->name) : 0;
+            if (s) for (uint32_t i = 0; i < s->n_fields; i++) {
+                h ^= turi_key_content_hash(s->fields[i]) + 0x9e3779b97f4a7c15ULL +
+                     (h << 6) + (h >> 2);
+            }
+            break;
+        }
+        default:         h = (uint64_t)v.as_int; break;
+    }
+    h ^= h >> 30; h *= 0xbf58476d1ce4e5b9ULL;
+    h ^= h >> 27; h *= 0x94d049bb133111ebULL; h ^= h >> 31;
+    return h;
+}
+
+int64_t turi_struct_hash_c(TuriValue v) {
+    return (int64_t)turi_key_content_hash(v);
 }
 
 /* M2b: build a zero-valued TuriValue for a type T -- the interpreter's analogue

@@ -400,6 +400,20 @@ void turi_run_pending_defers(TuriEnv *env);
  * *found to false and returns nil otherwise. */
 TuriValue turi_struct_field(TuriValue v, uint32_t idx, bool *found);
 
+/* collection-multiword-element-boxing: generic content comparator for two
+ * struct/ADT KEY carriers (TuriStruct pointers as int64).  A multi-word struct
+ * Map key / Set element's MapKey `mk-cmp` :turi branch returns this function's
+ * address (via the `struct-key-cmp` native), making it a stampable
+ * bool(int64,int64) C fn ptr so structural Eq[Map]/Eq[Set] recover it -- the
+ * interpreter analogue of the compiled runtime's tur_hamt_box_key_eq. */
+bool turi_struct_key_eq_c(int64_t a, int64_t b);
+
+/* Companion generic content hash for a struct/ADT key value: a `Hash` :turi
+ * branch returns `(struct-hash p)` (the `struct-hash` native) so the interpreter
+ * hash is uniform per struct.  Deterministic within a run; equal-content keys
+ * hash equally. */
+int64_t turi_struct_hash_c(TuriValue v);
+
 /* Returns the constructor/struct name of a TURI_STRUCT value (e.g. "PureFree"),
  * or NULL when v is not a struct.  Lets natives in main.c dispatch on an ADT
  * constructor without the opaque TuriStruct layout. */

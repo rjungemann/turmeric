@@ -126,6 +126,8 @@ fixture_has_inline_c() {
 # entry belongs here only if it is verified to interpret correctly.
 TURI_INLINEC_RUN="
 inline-c-binop
+map-multiword-struct-key
+set-multiword-struct-element
 clone-list
 clone-option
 clone-pair

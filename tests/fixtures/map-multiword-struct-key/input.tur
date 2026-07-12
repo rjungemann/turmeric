@@ -1,38 +1,47 @@
 ;; collection-multiword-element-boxing (Map key): a MULTI-WORD by-value :copy
-;; struct KEY (Point, 16 bytes) is content-keyed in a Map via the WKC2 boxed-key
-;; path -- MapKey[Point].mk-box copies the key into a tur_hamt_box_key refcount
-;; box, mk-owned? = 1 makes the map retain/release the box across structural
-;; sharing (freed exactly once -- LSan clean), and mk-cmp returns the GENERIC
-;; size-aware comparator tur_hamt_box_key_eq (reads each boxed payload's length
-;; from its box header), so NO per-struct comparator or C type name is needed.
-;; Two content-equal keys built at distinct box addresses collapse to one entry;
-;; Eq[Map] threads the same comparator so content-equal maps compare equal.
+;; struct KEY (Point, 16 bytes) is content-keyed in a Map on BOTH the compiled
+;; and interpreter paths via #?(:tur ... :turi ...) reader conditionals.
 ;;
-;; Inline-c carve-out: the interpreter cannot run the inline-C instance bodies
-;; (no native override), so run-turi.sh skips this fixture automatically.
+;; Compiled (:tur): WKC2 boxed-key path -- mk-box copies the key into a
+;; tur_hamt_box_key refcount box (mk-owned? = 1 frees it exactly once, LSan
+;; clean), and mk-cmp returns the GENERIC size-aware comparator
+;; tur_hamt_box_key_eq (reads each boxed payload's length from its header).
+;;
+;; Interpreter (:turi): the tree-walking interpreter stores the struct key as a
+;; TuriStruct value; hash / mk-cmp use the generic interpreter natives
+;; (struct-hash / struct-key-cmp) -- the interpreter analogues of the compiled
+;; xxh64 / tur_hamt_box_key_eq.  Because struct-key-cmp returns a stampable C fn
+;; pointer (not a closure), it is recovered by tur_hamt_keyeq, so structural
+;; Eq[Map] over struct keys works too, not just assoc/get.  Both :turi bodies are
+;; generic (no per-field code); only Eq[Point] mentions fields.
+;;
+;; Runs on both paths (whitelisted in tests/run-turi.sh TURI_INLINEC_RUN): the
+;; two paths agree bit-for-bit.
 (load "stdlib/typeclass.tur")
 
 (defstruct Point :copy [x : int y : int])
 
 (definstance Hash [Point]
   (hash [p] : int
-    ```c return (int64_t)tur_hamt_hash_xxh64((const void*)&p, sizeof(p)); ```))
+    #?(:tur ```c return (int64_t)tur_hamt_hash_xxh64((const void*)&p, sizeof(p)); ```
+       :turi (struct-hash p))))
 (definstance Eq [Point]
   (eq? [a b] (and (= (.x a) (.x b)) (= (.y a) (.y b)))))
 (definstance MapKey [Point]
   (mk-box [p] : int
-    ```c return (int64_t)(intptr_t)tur_hamt_box_key((const void*)&p, sizeof(p)); ```)
+    #?(:tur ```c return (int64_t)(intptr_t)tur_hamt_box_key((const void*)&p, sizeof(p)); ```
+       :turi p))
   (mk-cmp [p] : int
-    ```c return (int64_t)(intptr_t)&tur_hamt_box_key_eq; ```)
-  (mk-owned? [p] 1))
+    #?(:tur ```c return (int64_t)(intptr_t)&tur_hamt_box_key_eq; ```
+       :turi (struct-key-cmp)))
+  (mk-owned? [p] #?(:tur 1 :turi 0)))
 
 (defn main [] : int
-  (let [m  (map-assoc (map-assoc (:: (map-new) (Map Point int)) (Point 1 2) 99)
-                                                                 (Point 3 4) 77)]
+  (let [m (map-assoc (map-assoc (:: (map-new) (Map Point int)) (Point 1 2) 99)
+                                                               (Point 3 4) 77)]
     (println (show (map-get m (Point 1 2))))   ;; 99 -- content key hit (distinct box)
     (println (show (map-get m (Point 3 4))))   ;; 77
     (println (show (map-get m (Point 9 9))))   ;; 0  -- miss
-    ;; structural Eq[Map] via the threaded MapKey comparator
     (let [a (map-assoc (:: (map-new) (Map Point int)) (Point 1 2) 5)
           b (map-assoc (:: (map-new) (Map Point int)) (Point 1 2) 5)
           c (map-assoc (:: (map-new) (Map Point int)) (Point 1 2) 6)]
